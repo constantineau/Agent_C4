@@ -74,6 +74,8 @@ two-way chat channel, both over Starlink.
 | TimescaleDB schema | `vps/db/` | **built** | telemetry + ais_targets hypertables; polars, waypoints, race_info, crew_notes, agent_summaries |
 | Ingestion API | `vps/ingestion/` | **built** | FastAPI, bearer-token `/ingest`, `/health`; writes batches |
 | Agent — SQL tools | `vps/agent/app/tools.py` | **built** | all 7 tools query the DB and return real data |
+| Boat-speed gospel | `vps/agent/knowledge/` | **built** | SR33 "C4" ORC Speed Guide; verbatim cert + distilled Best-Performance polar loaded into the agent's cached context; `build_speed_guide.py` regenerates it |
+| Polars (real data) | `vps/db/seed/polars_sr33.sql` | **built** | 126 real ORC polar points (TWS 4–24); replaces the synthetic placeholder |
 | Agent — chat loop | `vps/agent/app/agent.py` | **built (key-gated)** | Claude tool-use loop runs when `ANTHROPIC_API_KEY` is set; otherwise a deterministic tool-grounded fallback |
 | Agent — WebSocket | `vps/agent/app/main.py` | **built** | shared crew thread; `/conditions` REST mirror |
 | Web app | `vps/web/` | **built** | mobile-first chat: instrument strip, quick actions, night mode; password gate is a Phase-0 stub |
@@ -166,10 +168,10 @@ Pi, no shore loop) is feasible if required. Data collection and non-racing use a
 
 ## 9. Open items (owner input needed)
 
-Domain name · VPS specs confirm · **Anthropic API key** (flips the agent from fallback to
-live) · SR33 polar data (currently synthetic placeholder) · race route waypoints
-(placeholder) · Starlink/Tailscale on the Pi · Pi local archive (SQLite default) · crew
-scale + optional Grafana · GRIB/forecast source · boat-install date.
+Domain name · VPS specs confirm · ~~Anthropic API key~~ (done) · ~~SR33 polar data~~ (done —
+real ORC Speed Guide) · race route waypoints (placeholder) · Starlink/Tailscale on the Pi ·
+Pi local archive (SQLite default) · crew scale + optional Grafana · GRIB/forecast source ·
+boat-install date.
 
 ---
 

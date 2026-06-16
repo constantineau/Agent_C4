@@ -15,6 +15,15 @@ BOAT_ID = os.environ.get("BOAT_ID", "sr33")
 MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-8")
 API_KEY = os.environ.get("ANTHROPIC_API_KEY", "").strip()
 
+# The SR33's ORC Speed Guide (Best Performance polar) — the boat-speed "gospel". Loaded
+# as standing context so the agent can judge performance against target boatspeed (BTV),
+# optimum beat/run angles, target AWA, heel, and when to reef/flatten.
+_GUIDE_PATH = os.path.join(os.path.dirname(__file__), "..", "knowledge", "sr33_speed_guide.md")
+try:
+    SPEED_GUIDE = open(_GUIDE_PATH).read()
+except OSError:
+    SPEED_GUIDE = ""
+
 SYSTEM_PROMPT = f"""You are the SR33 AI Navigator — navigator, coach, and data historian
 for the racing yacht {BOAT_ID}. You answer the crew over a shared chat thread during
 distance races and practice.
@@ -22,7 +31,25 @@ distance races and practice.
 Ground every factual claim in the tools; never invent telemetry. Always note data
 freshness — if get_current_conditions reports stale=true, say so and caveat the answer.
 Be terse and VHF-brief: crew read you on a phone, often at night, often wet. Lead with
-the number, then one line of context. Units: knots, degrees true unless told otherwise."""
+the number, then one line of context. Units: knots, degrees true unless told otherwise.
+
+COACHING — judge speed against the SR33 ORC Speed Guide provided below (the boat-speed
+gospel). It is the source of truth for target boatspeed (BTV) at a given TWS/TWA, the
+optimum beat/run angles (best VMG), target AWA for trim reference, expected heel, and the
+Reef/Flat depowering points. When asked about performance, compare live STW to the BTV at
+the current TWS/TWA, and live heel/AWA to the targets. The polar tool returns the same data
+numerically; the guide gives you the full curve and the surrounding context. If true wind
+(TWS/TWA) is unavailable, say so — without it you cannot place the boat on the polar."""
+
+# System sent to the API: instructions + the speed guide as a cached block (it's large and
+# unchanging, so caching it keeps per-message cost low).
+SYSTEM_BLOCKS = [{"type": "text", "text": SYSTEM_PROMPT}]
+if SPEED_GUIDE:
+    SYSTEM_BLOCKS.append({
+        "type": "text",
+        "text": "## SR33 ORC SPEED GUIDE (reference)\n\n" + SPEED_GUIDE,
+        "cache_control": {"type": "ephemeral"},
+    })
 
 
 def _fallback(message: str) -> str:
@@ -69,7 +96,7 @@ def _claude_loop(message: str, history: list) -> str:
     messages = list(history) + [{"role": "user", "content": message}]
     for _ in range(8):  # bounded tool-use turns
         resp = client.messages.create(
-            model=MODEL, max_tokens=1024, system=SYSTEM_PROMPT,
+            model=MODEL, max_tokens=1024, system=SYSTEM_BLOCKS,
             tools=AGENT_TOOLS, messages=messages,
         )
         if resp.stop_reason != "tool_use":

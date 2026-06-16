@@ -8,6 +8,7 @@ COPY vps/agent/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY shared/ ./shared/
+COPY vps/agent/knowledge/ ./knowledge/
 COPY vps/agent/app/ ./app/
 
 EXPOSE 8000

@@ -111,9 +111,14 @@ aside before any risky branch operation.
 
 ## Open items still owed (brief §9 — don't guess)
 
-domain name · VPS specs confirm · **Anthropic API key** · SR33 polar data · race route
-waypoints · Starlink/Tailscale on Pi · Pi archive (SQLite default) · crew scale + Grafana? ·
-GRIB source · boat-install date.
+domain name · VPS specs confirm · ~~Anthropic API key~~ (done) · ~~SR33 polar data~~ (done —
+ORC Speed Guide in `vps/agent/knowledge/`) · race route waypoints · Starlink/Tailscale on Pi ·
+Pi archive (SQLite default) · crew scale + Grafana? · GRIB source · boat-install date.
+
+**Boat-speed gospel:** the SR33 "C4" ORC Speed Guide lives in `vps/agent/knowledge/`
+(`boatspeed_gospel.md` = verbatim cert; `sr33_speed_guide.md` = distilled Best-Performance
+polar, loaded into the agent's cached system context; `polars_sr33.sql` = real polars for
+the DB). Regenerate after a cert update: `python3 vps/agent/knowledge/build_speed_guide.py`.
 
 ## Racing-rules caveat (RRS 41 / Bayview Mackinac NOR)
 

@@ -8,7 +8,10 @@ COMPOSE="docker compose -f compose.dev.yml"
 PGUSER="${POSTGRES_USER:-sr33}"
 PGDB="${POSTGRES_DB:-sr33_dev}"
 
-echo "==> loading placeholder metadata (polars, waypoints, AIS) into ${PGDB}"
+echo "==> loading real SR33 ORC polars into ${PGDB}"
+$COMPOSE exec -T timescaledb psql -U "$PGUSER" -d "$PGDB" < vps/db/seed/polars_sr33.sql
+
+echo "==> loading placeholder metadata (waypoints, AIS) into ${PGDB}"
 $COMPOSE exec -T timescaledb psql -U "$PGUSER" -d "$PGDB" < vps/db/seed/dev_seed.sql
 
 echo "==> posting fake telemetry through the ingestion API"
