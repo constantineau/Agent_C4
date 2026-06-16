@@ -54,6 +54,7 @@ Ports chosen to avoid conflicts with the other apps on this VM (DreamCRM, racert
 | ingestion   | 8000           | **8101**   |
 | agent       | 8000           | **8102**   |
 | web         | 80             | **8090**   |
+| Signal K    | 3010 (host net)| **3010**   |
 
 ```bash
 cd ~/Agent_C4
@@ -66,6 +67,25 @@ python3 vps/db/seed/fake_telemetry.py      # POST fake 15-s aggregates through i
 # agent docs:     http://localhost:8102/docs
 docker compose -f compose.dev.yml down     # (add -v to wipe the dev DB volume)
 ```
+
+### Pi stack (Signal K + uplink) — bench or boat
+
+Same `compose.pi.yml` runs on the VPS bench (`CAN_IFACE=vcan0`) and the real Pi
+(`CAN_IFACE=can0`). Signal K on **:3010** (host networking, to read the host CAN iface).
+`vcan0` on the VPS is a persistent systemd service (`vcan0.service`).
+
+```bash
+# bench with built-in sample N2K data (no boat/log needed):
+docker compose -f compose.pi.yml -f compose.pi.sample.yml up -d --build
+docker logs -f sr33-pi-uplink-1                 # 15-s aggregates POSTing to ingestion
+docker compose -f compose.pi.yml down
+
+# bench replaying a recorded log:  bash pi/bench/replay.sh pi/logs/<log>  then compose.pi.yml up
+# on the Pi:  CAN_IFACE=can0 VPS_URL=https://nav... docker compose -f compose.pi.yml up -d
+```
+
+Notes: true wind (TWS/TWA/TWD) needs the `signalk-derived-data` plugin (not yet enabled —
+those channels are null until then). Signal K port 3010 avoids DreamCRM's :3000 on this VM.
 
 ## Phased build (each phase has a clear exit test)
 

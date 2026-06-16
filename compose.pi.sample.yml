@@ -1,0 +1,10 @@
+# Bench override: feed Signal K with built-in sample NMEA 2000 data so the whole
+# Pi -> cloud pipeline is testable with no boat and no recorded log.
+#   docker compose -f compose.pi.yml -f compose.pi.sample.yml up
+# Remove this override (and replay a real candump onto vcan0) once a boat log exists.
+name: sr33-pi
+
+services:
+  signalk:
+    entrypoint: /home/node/signalk/node_modules/.bin/signalk-server
+    command: ["--sample-n2k-data"]

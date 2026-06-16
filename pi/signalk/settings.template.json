@@ -1,0 +1,18 @@
+{
+  "comment": "Rendered to settings.json at container start by signalk-init; the CAN device placeholder is replaced with the CAN_IFACE env value (vcan0 bench / can0 boat) — the single portability switch.",
+  "ssl": false,
+  "pipedProviders": [
+    {
+      "id": "n2k-socketcan",
+      "enabled": true,
+      "pipeElements": [
+        {
+          "type": "providers/canbus",
+          "options": { "canDevice": "__CAN_IFACE__" }
+        },
+        { "type": "providers/canboatjs" },
+        { "type": "providers/n2k-signalk" }
+      ]
+    }
+  ]
+}

@@ -79,9 +79,10 @@ two-way chat channel, both over Starlink.
 | Web app | `vps/web/` | **built** | mobile-first chat: instrument strip, quick actions, night mode; password gate is a Phase-0 stub |
 | Dev/prod compose | `compose.{dev,prod}.yml` | **built** | isolated stacks, separate DBs (`sr33_dev`/`sr33_prod`) and ports |
 | Fake-data seed | `vps/db/seed/` | **built** | posts realistic 15-s aggregates through the ingestion API + placeholder polars/waypoints/AIS |
-| Pi bench (vcan0) | `pi/bench/` | **built** | virtual CAN on the VPS: setup, canplayer replay, cangen smoke traffic |
-| Pi uplink | `pi/uplink/uplink.py` | **skeleton** | aggregation + store-and-forward shape wired; Signal K subscription + N2K decode TODO (Phase 3) |
-| Signal K config | `pi/signalk/` | **planned** | Phase 1 — CAN provider bound to `$CAN_IFACE` |
+| Pi bench (vcan0) | `pi/bench/` | **built** | virtual CAN on the VPS (persistent `vcan0.service`): setup, canplayer replay, cangen smoke traffic |
+| Signal K | `compose.pi.yml` + `pi/signalk/` | **built** | official image, host-net, SocketCAN provider bound to `$CAN_IFACE`, port 3010; settings rendered from template at start |
+| Pi uplink | `pi/uplink/uplink.py` | **built** | WebSocket subscribe → SI→units map → 15-s aggregates (circular mean for compass) → ingestion; disk-backed store-and-forward |
+| signalk-derived-data | `pi/signalk/` | **planned** | true wind (TWS/TWA/TWD), VMG, current set/drift — follow-up so those channels populate |
 | Alerting / summarizer | `vps/agent/` | **planned** | Phase 6 |
 | Forecast tool | `vps/agent/app/tools.py` | **stub** | `fetch_forecast` returns "not wired" pending §9 GRIB source |
 | Deploy scripts | `deploy/` | **built (untested)** | `deploy_prod.sh`, `push_pi.sh` (Tailscale) |
@@ -177,7 +178,7 @@ scale + optional Grafana · GRIB/forecast source · boat-install date.
 | Phase | Deliverable | Exit test | State |
 |-------|-------------|-----------|-------|
 | 0 | Repo + dev stack + schema + stubs + fake data | `compose.dev.yml up`; DB reachable; data loads | ✅ done |
-| 1 | Pi base + CAN bench + Signal K | sample N2K flows; Signal K dashboard populated | 🔧 bench done; Signal K next |
+| 1 | Pi base + CAN bench + Signal K | sample N2K flows; Signal K dashboard populated | ✅ done — SK+uplink containerized; verified SK→uplink→DB→agent on the bench |
 | 2 | Pi local archive | day-length replay at full res; survives reboot | ⬜ |
 | 3 | Ingestion + uplink store-and-forward | forced 30-min outage backfills cleanly | ⬜ |
 | 4 | Agent core + SQL tools (live LLM) | accurate answers vs live dev data | ⬜ (tools done; needs API key) |

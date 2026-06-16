@@ -24,19 +24,29 @@ bash vps/db/seed/seed_dev.sh                       # placeholder polars/waypoint
 Without an `ANTHROPIC_API_KEY` the agent runs a deterministic, tool-grounded fallback so
 the full pipeline works with no LLM. Add the key to switch on the real Claude tool-use loop.
 
-## Developing the Pi software on the VPS (no boat)
+## The Pi software (Signal K + uplink) — runs on the VPS bench and the boat
 
-The Pi software is developed here against a **virtual CAN interface** (`vcan0`) in place of
-the boat's `can0` — the single `CAN_IFACE` switch from the portability rule. On this VPS
-`vcan0` is provided by a persistent systemd service (`vcan0.service`); on a fresh host:
+The Pi stack is Docker too, so it's identical on the VPS bench and the real Pi — the only
+difference is `CAN_IFACE` (`vcan0` bench / `can0` boat). Signal K decodes NMEA 2000 → the
+uplink subscribes over WebSocket, builds 15-s aggregates, and POSTs to the ingestion API
+(disk-backed store-and-forward survives link loss). Signal K runs on **:3010** (`:3000` is
+taken on this VM).
 
 ```bash
-bash pi/bench/setup_vcan.sh        # create + up vcan0 (sudo; needs vcan module + can-utils)
-bash pi/bench/gen_traffic.sh       # smoke-test frames, OR:
-bash pi/bench/replay.sh pi/logs/candump-<date>.log   # replay a recorded boat log (can0->vcan0)
+# Bench, no boat log yet — feed Signal K its built-in sample N2K data:
+docker compose -f compose.pi.yml -f compose.pi.sample.yml up -d --build
+docker logs -f sr33-pi-uplink-1            # watch 15-s aggregates POST to the cloud
+
+# Bench, replaying a real recorded log onto vcan0:
+bash pi/bench/replay.sh pi/logs/candump-<date>.log
+docker compose -f compose.pi.yml up -d --build
+
+# On the actual Pi:
+CAN_IFACE=can0 VPS_URL=https://nav.example.com docker compose -f compose.pi.yml up -d
 ```
 
-See `pi/bench/README.md` for the full bench workflow.
+`vcan0` on the VPS is provided by a persistent `vcan0.service`. See `pi/bench/README.md`
+for the CAN bench (setup/replay/generate) and `pi/README.md` for the onboard stack.
 
 ## Layout
 
@@ -57,8 +67,11 @@ compose.{dev,prod}.yml
 - **Phase 0 — done.** Repo + dev compose stack + TimescaleDB schema + functional ingestion +
   SQL-backed agent tools + WebSocket chat + mobile web app + fake-data seed. Verified
   end-to-end (481 fake points → DB → live agent answers).
-- **Phase 1 — in progress.** Pi bench on the VPS via `vcan0` + `can-utils` (replay/generate
-  N2K frames). Next: wire Signal K into the pipeline.
+- **Phase 1 — done (core).** Pi stack containerized: Signal K (SocketCAN on `$CAN_IFACE`,
+  port 3010) → uplink (WebSocket subscribe → 15-s aggregates → ingestion, with
+  store-and-forward). Verified end-to-end on the bench with sample N2K data:
+  Signal K → uplink → TimescaleDB → live agent answers. Follow-up: `signalk-derived-data`
+  plugin for true wind (TWS/TWA/TWD) + record a real boat log for `canplayer` replay.
 
 Agent's Claude tool-use loop is wired but gated on an `ANTHROPIC_API_KEY` (set it to go
 live; Phase 4). See **DESIGN.md** for built-vs-planned and **CLAUDE.md** for the phased plan

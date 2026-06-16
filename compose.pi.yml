@@ -1,0 +1,62 @@
+# Agent_C4 Pi stack — Signal K + telemetry uplink. Runs on the VPS bench (CAN_IFACE=vcan0)
+# AND on the real boat computer (CAN_IFACE=can0) unchanged — the portability rule.
+#
+#   bench, no boat log yet:  docker compose -f compose.pi.yml -f compose.pi.sample.yml up
+#   bench, replaying a log:  bash pi/bench/replay.sh <log>  (then this stack reads vcan0)
+#   on the Pi:               CAN_IFACE=can0 VPS_URL=https://nav... docker compose -f compose.pi.yml up -d
+#
+# Host networking is required so the Signal K container can read the host's SocketCAN
+# interface (CAN interfaces live in the host network namespace). Signal K runs on :3010
+# because :3000 is taken on this VM (DreamCRM).
+name: sr33-pi
+
+services:
+  # Renders settings.json from the template, substituting the single CAN_IFACE switch,
+  # and hands ownership to the signalk runtime user (uid 1000).
+  signalk-init:
+    image: alpine:3.20
+    environment:
+      CAN_IFACE: ${CAN_IFACE:-vcan0}
+    volumes:
+      - ./pi/signalk:/src:ro
+      - sk_config:/config
+    command:
+      - sh
+      - -c
+      - |
+        sed "s/__CAN_IFACE__/${CAN_IFACE:-vcan0}/g" /src/settings.template.json > /config/settings.json
+        chown -R 1000:1000 /config
+        echo "[init] rendered /home/node/.signalk/settings.json for CAN_IFACE=${CAN_IFACE:-vcan0}:"
+        cat /config/settings.json
+
+  signalk:
+    image: cr.signalk.io/signalk/signalk-server:latest
+    init: true
+    network_mode: host
+    environment:
+      - PORT=3010
+    volumes:
+      - sk_config:/home/node/.signalk
+    depends_on:
+      signalk-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  uplink:
+    build:
+      context: .
+      dockerfile: pi/uplink/Dockerfile
+    network_mode: host
+    environment:
+      CAN_IFACE: ${CAN_IFACE:-vcan0}
+      SIGNALK_WS: ${SIGNALK_WS:-ws://localhost:3010/signalk/v1/stream?subscribe=all}
+      VPS_URL: ${VPS_URL:-http://localhost:8101}
+      INGEST_TOKEN: ${INGEST_TOKEN:-dev-ingest-token}
+      BOAT_ID: ${BOAT_ID:-sr33}
+      AGG_SECONDS: ${AGG_SECONDS:-15}
+    depends_on:
+      - signalk
+    restart: unless-stopped
+
+volumes:
+  sk_config:

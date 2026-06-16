@@ -20,11 +20,16 @@ Stack (brief §4):
 Set it once (env / config); everything else is identical.
 
 ## Phase status
-- Phase 1–3 live here and are **not built yet**. `uplink/uplink.py` is a runnable skeleton
-  with the store-and-forward shape sketched; the Signal K subscription + N2K decode are TODO.
-- Develop against simulated data first: `vcan0` + replayed N2K logs (or Signal K
-  `--sample-n2k-data`). First dockside visit: record an hour of `candump can0` as the
-  gold-standard bench fixture.
+- **Phase 1 — built.** Signal K (`compose.pi.yml` + `signalk/settings.template.json`) and
+  `uplink/uplink.py` are containerized and verified end-to-end on the bench with sample
+  N2K data (Signal K → uplink → ingestion → TimescaleDB → agent). Run with:
+  `docker compose -f compose.pi.yml -f compose.pi.sample.yml up -d --build` (from repo root).
+- **uplink** subscribes to the Signal K WS delta stream, maps SK paths (SI) → our channels
+  (kn/deg/m), builds 15-s aggregates (circular mean for compass headings), and POSTs to the
+  ingestion API with a disk-backed store-and-forward queue.
+- **Follow-ups:** enable `signalk-derived-data` for true wind (TWS/TWA/TWD), VMG, current;
+  record an hour of `candump -l can0` dockside as the gold-standard `canplayer` fixture
+  (Phase 2 local archive, Phase 3 outage backfill testing).
 
 ## Bench safety
 During development the PICAN-M's 12 V terminals stay **disconnected** — power the Pi from
