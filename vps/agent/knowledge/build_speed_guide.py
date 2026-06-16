@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""Distill the ORC certificate export (boatspeed_gospel.md) into clean artifacts.
+"""Distill the ORC certificate export (C4_boatspeed_gospel.md) into clean artifacts.
 
-The raw export (data.orc.org Speed Guide for SR33 "C4", CAN100) contains, among the
-polar-curve graphics, machine-readable "Best Performance" tables — one per TWS — with
-columns TWA, BTV (target boatspeed), VMG, AWS, AWA, Heel, Reef, Flat. This script extracts
-the Best Performance envelope (the optimal sail-selection polar) and emits:
+The raw export (data.orc.org Speed Guide for SR33 "C4", CAN100) contains five sets of
+per-TWS tables: a "Best Performance" envelope plus one per sail in the inventory
+(Headsail J1-A, Symmetric S2-A, Asymmetric A2-A/A3-A). Each table has columns
+TWA, BTV (target boatspeed), VMG, AWS, AWA, Heel, Reef, Flat.
 
-  1. sr33_speed_guide.md  — a clean reference loaded into the agent's standing context.
-  2. ../../db/seed/polars_sr33.sql — real polar data (target_stw=BTV, target_vmg=VMG) to
-     replace the synthetic placeholder polars in the DB.
+This script emits:
+  1. sr33_speed_guide.md  — clean reference loaded into the agent's standing context. Adds,
+     per Best-Performance row, the OPTIMAL SAIL (derived by matching the per-sail polars) so
+     the agent can advise sail selection and call crossovers / sail changes.
+  2. ../../db/seed/polars_sr33.sql — real polars (target_stw=BTV, target_vmg=VMG).
 
 Re-run if the ORC certificate is updated:  python3 vps/agent/knowledge/build_speed_guide.py
 """
@@ -16,79 +18,145 @@ import os
 import re
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SRC = os.path.join(HERE, "boatspeed_gospel.md")
+SRC = os.path.join(HERE, "C4_boatspeed_gospel.md")
 GUIDE = os.path.join(HERE, "sr33_speed_guide.md")
 SEED = os.path.abspath(os.path.join(HERE, "..", "..", "db", "seed", "polars_sr33.sql"))
 
 NUM = lambda s: float(s.replace("°", "").strip())
 
+# Sail id -> crew-friendly label.
+SAIL_NAMES = {
+    "J1-A": "Headsail/jib (J1)",
+    "S2-A": "Symmetric kite (S2)",
+    "A2-A": "Asym A2 (76%)",
+    "A3-A": "Asym A3",
+}
 
-def parse_best_performance(text):
+
+def parse_groups(text):
+    """Return {group_key: {"label": str, "blocks": {tws: [rows]}}} for the data section."""
     lines = text.splitlines()
     start = next(i for i, l in enumerate(lines) if "**Best Performance**" in l)
-    blocks = {}          # tws -> list of row dicts
-    tws = None
+    groups, key, tws = {}, None, None
     for l in lines[start:]:
         s = l.strip()
-        if "Headsail," in s:               # next group begins — stop
-            break
-        m = re.match(r"TWS = (\d+)kts", s)
-        if m:
-            tws = int(m.group(1))
-            blocks[tws] = []
+        if "**Best Performance**" in s:
+            key, tws = "best", None
+            groups[key] = {"label": "Best Performance", "blocks": {}}
             continue
-        if tws is not None and s.startswith("|"):
+        m_id = re.search(r"\(id\s*=\s*([A-Z0-9-]+)\)", s)
+        if m_id and s.startswith("**"):
+            key = m_id.group(1)
+            tws = None
+            groups[key] = {"label": s.strip("* "), "blocks": {}}
+            continue
+        m_tws = re.match(r"TWS = (\d+)kts", s)
+        if m_tws and key is not None:
+            tws = int(m_tws.group(1))
+            groups[key]["blocks"][tws] = []
+            continue
+        if key is not None and tws is not None and s.startswith("|"):
             cells = [c.strip() for c in s.strip("|").split("|")]
             if len(cells) == 8 and re.match(r"^[\d.]+°?$", cells[0]):
-                twa, btv, vmg, aws, awa, heel, reef, flat = cells
-                blocks[tws].append({
-                    "twa": NUM(twa), "btv": NUM(btv), "vmg": NUM(vmg),
-                    "aws": NUM(aws), "awa": NUM(awa), "heel": NUM(heel),
-                    "reef": NUM(reef), "flat": NUM(flat),
+                groups[key]["blocks"][tws].append({
+                    "twa": NUM(cells[0]), "btv": NUM(cells[1]), "vmg": NUM(cells[2]),
+                    "aws": NUM(cells[3]), "awa": NUM(cells[4]), "heel": NUM(cells[5]),
+                    "reef": NUM(cells[6]), "flat": NUM(cells[7]),
                 })
-    return blocks
+    return groups
 
 
-def write_guide(blocks):
-    out = []
-    out.append("# SR33 \"C4\" — ORC Speed Guide (Best Performance polar)\n")
-    out.append("Boat: SR33 *C4*, sail #CAN100 (ORC ref 03430004T3F). Source of truth for "
-               "target boat speed. **BTV** = target boatspeed through water (kn); **VMG** = "
-               "velocity made good (kn); **AWS/AWA** = expected apparent wind at the target; "
-               "**Heel** = target heel (°); **Reef/Flat** = sail depowering factors "
-               "(1.00 = full power; <1.00 = reef/flatten). Per true wind speed (TWS).\n")
-    for tws in sorted(blocks):
-        rows = blocks[tws]
+def _interp_btv(rows, twa):
+    """Interpolate a sail's BTV at twa; None if outside the sail's TWA domain."""
+    pts = sorted((r["twa"], r["btv"]) for r in rows)
+    if not pts or twa < pts[0][0] or twa > pts[-1][0]:
+        return None
+    for (a0, b0), (a1, b1) in zip(pts, pts[1:]):
+        if a0 <= twa <= a1:
+            if a1 == a0:
+                return b0
+            return b0 + (b1 - b0) * (twa - a0) / (a1 - a0)
+    return pts[-1][1]
+
+
+def optimal_sail(sails, tws, twa):
+    """Among sails whose domain covers (tws, twa), the one with the highest BTV."""
+    best_id, best_btv = None, -1.0
+    for sid, blocks in sails.items():
+        rows = blocks.get(tws)
         if not rows:
             continue
-        # Highlight upwind & downwind optimum VMG angles.
+        b = _interp_btv(rows, twa)
+        if b is not None and b > best_btv:
+            best_id, best_btv = sid, b
+    return best_id
+
+
+def sail_plan(sails, tws, best_rows):
+    """Collapse the per-row optimal sail into TWA ranges for a quick sail plan."""
+    segs = []
+    for r in best_rows:
+        sid = optimal_sail(sails, tws, r["twa"])
+        if segs and segs[-1][0] == sid:
+            segs[-1][2] = r["twa"]
+        else:
+            segs.append([sid, r["twa"], r["twa"]])
+    parts = []
+    for sid, lo, hi in segs:
+        name = SAIL_NAMES.get(sid, sid or "—")
+        parts.append(f"{name} TWA {lo:.0f}–{hi:.0f}°")
+    return "  →  ".join(parts), {r["twa"]: optimal_sail(sails, tws, r["twa"]) for r in best_rows}
+
+
+def write_guide(groups):
+    best = groups["best"]["blocks"]
+    sails = {sid: g["blocks"] for sid, g in groups.items() if sid != "best"}
+    out = ["# SR33 \"C4\" — ORC Speed Guide (Best Performance polar + sail selection)\n"]
+    out.append("Boat: SR33 *C4*, sail #CAN100 (ORC ref 03430004T3F). Source of truth for "
+               "target boat speed AND sail selection. **BTV** = target boatspeed through "
+               "water (kn); **VMG** = velocity made good; **AWS/AWA** = expected apparent "
+               "wind at target; **Heel** = target heel (°); **Reef/Flat** = depowering "
+               "(1.00 = full power, <1.00 = reef/flatten). **Sail** = the inventory sail that "
+               "produces best performance at that TWS/TWA — use it to advise sail changes "
+               "(when the optimal sail changes between angles, that's a crossover / peel).\n")
+    out.append("## Sail inventory")
+    for sid in ("J1-A", "A2-A", "A3-A", "S2-A"):
+        if sid in groups:
+            out.append(f"- **{sid}** — {groups[sid]['label']}")
+    out.append("")
+    for tws in sorted(best):
+        rows = best[tws]
+        if not rows:
+            continue
         up = max((r for r in rows if r["twa"] <= 90), key=lambda r: r["vmg"], default=None)
         dn = max((r for r in rows if r["twa"] > 90), key=lambda r: r["vmg"], default=None)
+        plan, row_sail = sail_plan(sails, tws, rows)
         out.append(f"\n## TWS {tws} kn")
         if up and dn:
             out.append(f"*Optimum beat: TWA {up['twa']:.1f}° → {up['btv']:.2f} kn "
                        f"(VMG {up['vmg']:.2f}). Optimum run: TWA {dn['twa']:.1f}° → "
                        f"{dn['btv']:.2f} kn (VMG {dn['vmg']:.2f}).*")
-        out.append("\n| TWA | BTV | VMG | AWS | AWA | Heel | Reef | Flat |")
-        out.append("|----:|----:|----:|----:|----:|-----:|-----:|-----:|")
+        out.append(f"*Sail plan: {plan}.*")
+        out.append("\n| TWA | BTV | VMG | AWS | AWA | Heel | Reef | Flat | Sail |")
+        out.append("|----:|----:|----:|----:|----:|-----:|-----:|-----:|:-----|")
         for r in rows:
+            sid = row_sail.get(r["twa"]) or "—"
             out.append(f"| {r['twa']:.1f}° | {r['btv']:.2f} | {r['vmg']:.2f} | "
                        f"{r['aws']:.2f} | {r['awa']:.1f}° | {r['heel']:.1f}° | "
-                       f"{r['reef']:.2f} | {r['flat']:.2f} |")
+                       f"{r['reef']:.2f} | {r['flat']:.2f} | {sid} |")
     open(GUIDE, "w").write("\n".join(out) + "\n")
     return GUIDE
 
 
-def write_seed(blocks):
+def write_seed(groups):
+    best = groups["best"]["blocks"]
     out = ["-- SR33 \"C4\" real ORC polar (Best Performance envelope). Generated by",
            "-- vps/agent/knowledge/build_speed_guide.py from the ORC certificate.",
            "-- Replaces synthetic placeholder polars. Idempotent.",
-           "DELETE FROM polars WHERE boat_id = 'sr33';"]
-    vals = []
-    for tws in sorted(blocks):
-        for r in blocks[tws]:
-            vals.append(f"  ('sr33', {tws}, {r['twa']:.1f}, {r['btv']:.2f}, {r['vmg']:.2f})")
-    out.append("INSERT INTO polars (boat_id, tws, twa, target_stw, target_vmg) VALUES")
+           "DELETE FROM polars WHERE boat_id = 'sr33';",
+           "INSERT INTO polars (boat_id, tws, twa, target_stw, target_vmg) VALUES"]
+    vals = [f"  ('sr33', {tws}, {r['twa']:.1f}, {r['btv']:.2f}, {r['vmg']:.2f})"
+            for tws in sorted(best) for r in best[tws]]
     out.append(",\n".join(vals))
     out.append("ON CONFLICT (boat_id, tws, twa) DO UPDATE")
     out.append("  SET target_stw = EXCLUDED.target_stw, target_vmg = EXCLUDED.target_vmg;")
@@ -97,9 +165,7 @@ def write_seed(blocks):
 
 
 if __name__ == "__main__":
-    text = open(SRC).read()
-    blocks = parse_best_performance(text)
-    n = sum(len(v) for v in blocks.values())
-    print(f"parsed Best Performance: {len(blocks)} TWS tables, {n} polar points")
-    print("wrote", write_guide(blocks))
-    print("wrote", write_seed(blocks))
+    groups = parse_groups(open(SRC).read())
+    print("parsed groups:", {k: f"{len(v['blocks'])} TWS" for k, v in groups.items()})
+    print("wrote", write_guide(groups))
+    print("wrote", write_seed(groups))

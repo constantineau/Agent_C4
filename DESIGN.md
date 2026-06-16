@@ -74,7 +74,7 @@ two-way chat channel, both over Starlink.
 | TimescaleDB schema | `vps/db/` | **built** | telemetry + ais_targets hypertables; polars, waypoints, race_info, crew_notes, agent_summaries |
 | Ingestion API | `vps/ingestion/` | **built** | FastAPI, bearer-token `/ingest`, `/health`; writes batches |
 | Agent — SQL tools | `vps/agent/app/tools.py` | **built** | all 7 tools query the DB and return real data |
-| Boat-speed gospel | `vps/agent/knowledge/` | **built** | SR33 "C4" ORC Speed Guide; verbatim cert + distilled Best-Performance polar loaded into the agent's cached context; `build_speed_guide.py` regenerates it |
+| Boat-speed gospel | `vps/agent/knowledge/` | **built** | SR33 "C4" ORC Speed Guide; verbatim cert (`C4_boatspeed_gospel.md`) + distilled Best-Performance polar with per-row optimal **sail** + per-TWS **sail plan** (crossovers), loaded into the agent's cached context; agent advises sail changes/peels; `build_speed_guide.py` regenerates it |
 | Polars (real data) | `vps/db/seed/polars_sr33.sql` | **built** | 126 real ORC polar points (TWS 4–24); replaces the synthetic placeholder |
 | Agent — chat loop | `vps/agent/app/agent.py` | **built (key-gated)** | Claude tool-use loop runs when `ANTHROPIC_API_KEY` is set; otherwise a deterministic tool-grounded fallback |
 | Agent — WebSocket | `vps/agent/app/main.py` | **built** | shared crew thread; `/conditions` REST mirror |

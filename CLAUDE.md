@@ -116,9 +116,11 @@ ORC Speed Guide in `vps/agent/knowledge/`) · race route waypoints · Starlink/T
 Pi archive (SQLite default) · crew scale + Grafana? · GRIB source · boat-install date.
 
 **Boat-speed gospel:** the SR33 "C4" ORC Speed Guide lives in `vps/agent/knowledge/`
-(`boatspeed_gospel.md` = verbatim cert; `sr33_speed_guide.md` = distilled Best-Performance
-polar, loaded into the agent's cached system context; `polars_sr33.sql` = real polars for
-the DB). Regenerate after a cert update: `python3 vps/agent/knowledge/build_speed_guide.py`.
+(`C4_boatspeed_gospel.md` = verbatim cert; `sr33_speed_guide.md` = distilled Best-Performance
+polar + per-row optimal sail + per-TWS sail plan, loaded into the agent's cached system
+context; `polars_sr33.sql` = real polars for the DB). The agent advises sail selection and
+crossovers/peels from the sail plan. Regenerate after a cert update:
+`python3 vps/agent/knowledge/build_speed_guide.py`.
 
 ## Racing-rules caveat (RRS 41 / Bayview Mackinac NOR)
 

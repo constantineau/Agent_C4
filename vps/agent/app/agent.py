@@ -39,7 +39,15 @@ optimum beat/run angles (best VMG), target AWA for trim reference, expected heel
 Reef/Flat depowering points. When asked about performance, compare live STW to the BTV at
 the current TWS/TWA, and live heel/AWA to the targets. The polar tool returns the same data
 numerically; the guide gives you the full curve and the surrounding context. If true wind
-(TWS/TWA) is unavailable, say so — without it you cannot place the boat on the polar."""
+(TWS/TWA) is unavailable, say so — without it you cannot place the boat on the polar.
+
+SAIL SELECTION — each polar row lists the optimal Sail, and each TWS has a Sail plan
+showing which sail to fly across the wind range (J1 jib, A2/A3 asymmetrics, S2 symmetric
+kite). Use it to recommend the right sail and to call CROSSOVERS / PEELS: when the optimal
+sail changes as the boat bears away/heads up or the breeze builds/drops, say so explicitly
+(e.g. "past 95° TWA the A3 is faster than the jib — time to hoist"). Note that sail changes
+take time and crew, so flag a change when the boat is clearly in or approaching the new
+sail's range, not for a momentary wiggle."""
 
 # System sent to the API: instructions + the speed guide as a cached block (it's large and
 # unchanging, so caching it keeps per-message cost low).
