@@ -104,6 +104,9 @@ two-way chat channel, both over Starlink.
 **Metadata adds**
 - `source_notes` — curated reliability per sensor (`high`/`medium`/`needs-calibration`/
   `unreliable` + note); the agent reads it so it knows which sources may be uncalibrated.
+- `source_priority` — preferred source order **per quantity** (rank 1 = lead, e.g. Orca for
+  heel/true-wind, masthead for apparent wind, dedicated GPS for position). All sources are
+  still kept; this only picks the default + automatic-failover order.
 
 **Metadata (plain tables)**
 - `polars` — target boatspeed/VMG by `(tws, twa)` bucket.

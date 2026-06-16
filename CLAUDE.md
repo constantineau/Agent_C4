@@ -113,6 +113,13 @@ lists active sensors with curated reliability (`source_notes`). The agent is pro
 skeptical: cross-check redundant sources, flag disagreement/stale/uncalibrated, never trust a
 lone value. Migration `002_telemetry_raw.sql`; the older wide `telemetry` table is legacy.
 
+**Source priority + failover (migration 003):** `source_priority` ranks a preferred source
+per channel (e.g. Orca for heel/true-wind, gWind masthead for apparent, 24xd GPS for
+position). `get_current_conditions` adds a `preferred` reading per channel and automatically
+fails over to the next rank when the preferred source is stale (>45 s) / absent, setting
+`fell_back=true` so the agent announces it's on a backup. All sources stay visible — priority
+only picks the lead + fallback order. Matchers are `$source` substrings (refine on real bus).
+
 ## Database safety
 
 Never run destructive DB ops or migrations against `sr33_prod` without explicit go-ahead.

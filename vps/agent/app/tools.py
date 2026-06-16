@@ -43,6 +43,36 @@ PRESENT = {
 CHANNEL_TO_PATH = {ch: p for p, (ch, _, _) in PRESENT.items()}
 # "sensors disagree" threshold by display unit (spread beyond expected noise)
 DISAGREE = {"°": 6.0, "kn": 0.6, "m": 1.0, "°C": 2.0, "°/s": 5.0}
+# A ranked source must be fresher than this to be used before falling back to the next.
+FAILOVER_AGE_S = 45
+
+
+def _load_priority():
+    """channel -> ordered list of source matchers (rank 1 first)."""
+    with pool.connection() as conn:
+        rows = conn.execute(
+            "SELECT channel, match FROM source_priority WHERE boat_id = %s ORDER BY channel, rank",
+            (BOAT_ID,),
+        ).fetchall()
+    prio = {}
+    for r in rows:
+        prio.setdefault(r["channel"], []).append(r["match"].lower())
+    return prio
+
+
+def _choose_preferred(channel, readings, prio):
+    """Pick the lead reading by priority, failing over when the preferred source is stale/absent.
+    Returns (reading, reason, fell_back)."""
+    matchers = prio.get(channel, [])
+    for i, m in enumerate(matchers):
+        fresh = [r for r in readings if m in r["source"].lower() and r["age_s"] <= FAILOVER_AGE_S]
+        if fresh:
+            best = min(fresh, key=lambda r: r["age_s"])
+            return best, f"priority rank {i+1} ({m})", i > 0
+    best = min(readings, key=lambda r: r["age_s"])
+    if matchers:
+        return best, "no preferred source fresh — using freshest available", True
+    return best, "no priority set — freshest available", False
 
 
 def _age(ts):
@@ -67,6 +97,7 @@ def get_current_conditions(max_age_minutes: int = 5):
     """Every live quantity, from EVERY reporting source, with freshness and a
     disagreement flag. Redundant sources are intentional — cross-check them."""
     rows = _latest_per_source(PRESENT.keys(), max_age_minutes)
+    prio = _load_priority()
     channels = {}
     for r in rows:
         ch, unit, conv = PRESENT[r["path"]]
@@ -81,14 +112,22 @@ def get_current_conditions(max_age_minutes: int = 5):
         if len(vals) > 1:
             c["spread"] = round(max(vals) - min(vals), 3)
             c["disagreement"] = c["spread"] > DISAGREE.get(c["unit"], 1e9)
+        # preferred source (with automatic failover) — keeps all readings visible
+        best, reason, fell_back = _choose_preferred(ch, c["readings"], prio)
+        c["preferred"] = {"source": best["source"], "value": best["value"],
+                          "age_s": best["age_s"]}
+        c["preferred_reason"] = reason
+        if fell_back:
+            c["fell_back"] = True   # preferred source stale/absent — on a backup
     if not channels:
         return {"available": False, "note": "no telemetry in window"}
     return {
         "available": True,
         "as_of": datetime.now(timezone.utc).isoformat(),
         "channels": channels,
-        "note": ("Multiple sources per channel are redundant by design — cross-check them, "
-                 "flag disagreement/stale/uncalibrated; see get_sources for reliability."),
+        "note": ("All sources are kept; `preferred` is the priority-ranked lead source with "
+                 "automatic failover. `fell_back=true` means the preferred sensor was "
+                 "stale/absent and a backup is in use — say so. Still cross-check disagreement."),
     }
 
 
@@ -103,7 +142,7 @@ def get_strip():
         c = ch.get(name)
         if not c:
             return None
-        return min(c["readings"], key=lambda r: r["age_s"])["value"]
+        return c["preferred"]["value"]   # priority-ranked lead source (with failover)
 
     ages = [c["freshest_age_s"] for c in ch.values()]
     heading = best("heading_true")
