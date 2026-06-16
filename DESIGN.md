@@ -2,7 +2,9 @@
 
 **Product:** SR33 AI Navigator
 **Vessel:** SR33 sailing yacht — distance racing (Bayview Mackinac; Port Huron → Mackinac Island)
-**Status:** Phase 0 complete (cloud pipeline scaffolded & running); Phase 1 in progress (Pi bench on the VPS)
+**Status:** Phases 0–4 built & bench-verified (cloud pipeline, Pi bench, full-res archive,
+real Claude agent); true wind via signalk-derived-data; helm fatigue index added. Phase 5 web
+app and Phase 6 alerting/summarizer still ahead.
 **Last updated:** 2026-06-16
 
 This document describes *what the product is and how it is built today*. The original
@@ -126,9 +128,22 @@ the model calls SQL-backed tools, then composes a grounded reply. Tool contracts
 
 **Tools (all implemented against the DB):** `get_current_conditions` (multi-source — every
 quantity from every reporting source, with per-source freshness + disagreement flag),
-`get_sources` (active sensors + curated reliability), `get_history` (per-channel or raw path,
-optionally one source), `get_polar_target`, `get_ais_targets`, `get_route_status`,
-`fetch_forecast` (stub), `log_note`.
+`get_sources` (active sensors + curated reliability), `get_fatigue` (helm fatigue index — see
+below), `get_history` (per-channel or raw path, optionally one source), `get_polar_target`,
+`get_ais_targets`, `get_route_status`, `fetch_forecast` (stub), `log_note`.
+
+**Helm fatigue index (`get_fatigue`):** a 0–100 score that detects a tiring driver and
+recommends a crew rotation, since a tired helm both *wanders* (more steering variance) and
+sails *slower* than the boat's potential. `vps/agent/app/fatigue.py` blends heading instability,
+steering-reversal rate, heel instability, AWA wander (de-trended by TWD so a shifty breeze isn't
+mistaken for the driver), and boatspeed deficit vs. polar — each scored as a recent 8-min window
+against the boat's own ~40-min trailing baseline. **Anonymous current-helm:** no driver identity;
+baselining against the boat's own recent steering auto-normalises for conditions and skill and
+needs no crew input — it measures *degradation within a stint*. A weighted composite with
+per-component floors and maneuver exclusion (tacks/gybes dropped) yields levels
+`fresh`/`watch`/`rotate_soon`/`rotate_now`; the agent leads with the index + level and relays the
+rotation call. v1 isn't wind-strength normalised beyond the baseline (a fast breeze-build can read
+high) and its thresholds are meant to be tuned against the Phase-2 full-resolution race archive.
 
 **Grounding rules (system prompt):** never invent telemetry; always report data freshness
 and caveat stale answers; be VHF-brief (crew read on a phone, at night, often wet).
@@ -150,8 +165,8 @@ telemetry). Alerts are deliberately rare so the crew listens.
 Mobile-first single page over a WebSocket to the agent. Single shared boat password
 (server-side, TLS — currently a Phase-0 client-side stub). One shared crew thread so every
 watch sees the same history. Live instrument strip pinned to the header (STW, TWA, TWS,
-polar %, data-freshness). Quick-action buttons for the five common questions. True night
-mode (red-on-black). Large touch targets, high contrast.
+polar %, **helm fatigue index** coloured by level, data-freshness). Quick-action buttons for
+the five common questions. True night mode (red-on-black). Large touch targets, high contrast.
 
 ---
 

@@ -49,6 +49,16 @@ sail changes as the boat bears away/heads up or the breeze builds/drops, say so 
 take time and crew, so flag a change when the boat is clearly in or approaching the new
 sail's range, not for a momentary wiggle.
 
+CREW FATIGUE — get_fatigue returns a 0–100 helm fatigue index for the current (anonymous)
+driver with a level (fresh/watch/rotate_soon/rotate_now) and a rotation recommendation. It
+reads steering quality (heading/heel/apparent-wind variance, steering reversals) and speed
+vs polar, each measured against the boat's OWN recent baseline. When the crew asks how the
+driver is doing or whether to rotate, lead with the index + level and relay the
+recommendation; name the biggest contributing component (e.g. "heading wander up, speed off
+target"). Proactively flag rotate_soon/rotate_now if it comes up. It's advisory and
+baseline-relative — if it reports warming_up, say the index isn't ready yet. A high index in
+a big breeze-build can be conditions, not the driver — caveat when wind is climbing fast.
+
 DATA / SENSOR SKEPTICISM — by design the boat carries redundant sensors, so
 get_current_conditions returns MULTIPLE sources per quantity (e.g. heel from the Orca Core
 and the GPS 24xd; heading from several). Never treat one number as truth:
@@ -95,6 +105,13 @@ def _fallback(message: str) -> str:
         nm = r["next_mark"]
         return (f"Next mark {nm['name']}: {nm['distance_nm']} nm, brg {nm['bearing_deg']}°"
                 + (f", ETA {nm['eta_hours']} h." if nm["eta_hours"] else "."))
+    if any(w in m for w in ("fatigue", "tired", "rotate", "helm change", "driver", "shift change")):
+        r = tools.get_fatigue()
+        if not r.get("available"):
+            return f"Fatigue index not ready: {r.get('note', r.get('status', 'unavailable'))}."
+        worst = max(r["components"].items(), key=lambda kv: kv[1]["score"], default=(None, None))
+        lead = f" (biggest factor: {worst[0]})" if worst[0] else ""
+        return f"Helm fatigue {r['index']}/100 — {r['level']}. {r['recommendation']}{lead}"
     if "source" in m or "sensor" in m:
         r = tools.get_sources()
         if not r["count"]:

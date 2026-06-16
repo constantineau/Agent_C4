@@ -137,6 +137,31 @@ fails over to the next rank when the preferred source is stale (>45 s) / absent,
 `fell_back=true` so the agent announces it's on a backup. All sources stay visible — priority
 only picks the lead + fallback order. Matchers are `$source` substrings (refine on real bus).
 
+## Helm fatigue index
+
+A 0–100 index that flags a tiring driver and recommends a crew rotation, on the principle
+that a tired helm both **wanders** (more steering variance) and goes **slower** vs. the
+boat's own potential. `vps/agent/app/fatigue.py` blends several "tells" — heading instability
+(circular stdev), steering-reversal rate, heel instability, AWA wander **de-trended by TWD**
+(so a shifty breeze isn't blamed on the driver), and boatspeed deficit vs. the polar — each
+scored as a **recent window (8 min) vs. the boat's own trailing baseline (~40 min)**.
+
+Key design choices:
+- **Anonymous current-helm.** No driver identity; baselining against the boat's own recent
+  steering auto-normalises for sea state, breeze, and skill, and needs zero crew input. The
+  signal is *degradation within a stint*, not an absolute number.
+- **Multi-signal composite with floors** so one spike can't trip it and a very tight baseline
+  can't make normal wander look catastrophic; `rotate_now` (≥80) effectively needs more than
+  one component elevated. Levels: `fresh` <35, `watch` <60, `rotate_soon` <80, `rotate_now`.
+- **Maneuver-aware:** samples during high heading-rate turns (tacks/gybes, >8°/s) are excluded.
+- Surfaced as the **Fatigue** cell on the web strip (`get_strip` adds `fatigue`/`fatigue_level`),
+  the **`GET /fatigue`** endpoint, and the **`get_fatigue`** agent tool (the agent leads with the
+  index + level and relays the rotation call). Cached ~20 s so the 5-s strip poll is cheap.
+- **v1 limits / tuning:** not wind-strength normalised beyond the baseline (a fast breeze-build
+  can read high — caveat it); thresholds/weights (`FATIGUE_*` env) are first-cut and meant to be
+  tuned against **real race archives** (the Phase 2 full-res log is the training set). No stored
+  target *heel* yet, so heel uses stability not error-vs-target.
+
 ## Database safety
 
 Never run destructive DB ops or migrations against `sr33_prod` without explicit go-ahead.

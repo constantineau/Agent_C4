@@ -74,6 +74,7 @@
       <div class="cell"><div class="lbl">TWA</div><div class="val" id="m-twa">–</div></div>
       <div class="cell"><div class="lbl">TWS</div><div class="val" id="m-tws">–</div></div>
       <div class="cell"><div class="lbl">Polar%</div><div class="val" id="m-polar">–</div></div>
+      <div class="cell"><div class="lbl">Fatigue</div><div class="val" id="m-fatigue">–</div></div>
     </div>
     <div id="freshness">no data</div>
   </header>
@@ -138,11 +139,22 @@
       document.getElementById('m-stw').textContent = fmt(c.stw);
       document.getElementById('m-twa').textContent = fmt(c.twa) + '°';
       document.getElementById('m-tws').textContent = fmt(c.tws);
+      setFatigue(c.fatigue, c.fatigue_level);
       f.textContent = `data age ${c.data_age_seconds}s`;
       f.className = c.stale ? 'stale' : '';
     } catch (e) { /* leave last values */ }
   }
   const fmt = (v) => (v === null || v === undefined) ? '–' : (Math.round(v * 10) / 10);
+
+  // Helm fatigue 0–100, colored by level (green→yellow→red). '–' while warming up.
+  function setFatigue(index, level) {
+    const el = document.getElementById('m-fatigue');
+    if (index === null || index === undefined) { el.textContent = '–'; el.style.color = ''; return; }
+    el.textContent = Math.round(index);
+    const color = { fresh: 'var(--ok)', watch: 'var(--warn)',
+                    rotate_soon: 'var(--bad)', rotate_now: 'var(--bad)' }[level] || '';
+    el.style.color = color;
+  }
 </script>
 </body>
 </html>

@@ -10,6 +10,7 @@ import os
 from datetime import datetime, timezone
 
 from .db import pool
+from . import fatigue
 
 BOAT_ID = os.environ.get("BOAT_ID", "sr33")
 
@@ -148,6 +149,7 @@ def get_strip():
     heading = best("heading_true")
     if heading is None:
         heading = best("heading_mag")
+    fi = fatigue.compute_fatigue_index()
     return {
         "available": True, "as_of": cc["as_of"],
         "data_age_seconds": min(ages) if ages else None,
@@ -155,7 +157,15 @@ def get_strip():
         "stw": best("stw"), "sog": best("sog"), "tws": best("tws"), "twa": best("twa"),
         "twd": best("twd"), "aws": best("aws"), "awa": best("awa"), "heading": heading,
         "heel": best("heel"), "depth": best("depth"),
+        # Helm fatigue index (0–100) for the strip; null while warming up / unavailable.
+        "fatigue": fi.get("index"),
+        "fatigue_level": fi.get("level"),
     }
+
+
+def get_fatigue():
+    """Helm fatigue index (0–100) with per-component breakdown and a rotation recommendation."""
+    return fatigue.compute_fatigue_index()
 
 
 def get_sources(max_age_minutes: int = 10):
@@ -309,6 +319,7 @@ def log_note(text: str, author: str = None):
 DISPATCH = {
     "get_current_conditions": get_current_conditions,
     "get_sources": get_sources,
+    "get_fatigue": get_fatigue,
     "get_history": get_history,
     "get_polar_target": get_polar_target,
     "get_ais_targets": get_ais_targets,

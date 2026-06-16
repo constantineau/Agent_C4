@@ -38,6 +38,19 @@ AGENT_TOOLS = [
         },
     },
     {
+        "name": "get_fatigue",
+        "description": (
+            "Helm fatigue index (0–100) for the CURRENT driver (anonymous), with a rotation "
+            "recommendation. Blends steering instability (heading/heel/AWA variance), steering "
+            "reversal rate, and boatspeed deficit vs polar, each scored against the boat's own "
+            "recent baseline so it auto-normalises for conditions. Use when asked how the driver "
+            "is doing, whether to rotate the helm, or when proactively advising a crew change. "
+            "Returns components, level (fresh/watch/rotate_soon/rotate_now) and a recommendation; "
+            "may report available=false with status 'warming_up' early in a sail."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
         "name": "get_history",
         "description": "Trend/stats for one channel (or raw Signal K path) over a window, "
                        "optionally restricted to a single source.",

@@ -20,9 +20,16 @@ bash vps/db/seed/seed_dev.sh                       # placeholder polars/waypoint
 - Ingestion docs:  http://localhost:8101/docs
 - Agent docs:      http://localhost:8102/docs
 - Live readout:    `curl -s localhost:8102/conditions | python3 -m json.tool`
+- Helm fatigue:    `curl -s localhost:8102/fatigue | python3 -m json.tool`
 
 Without an `ANTHROPIC_API_KEY` the agent runs a deterministic, tool-grounded fallback so
 the full pipeline works with no LLM. Add the key to switch on the real Claude tool-use loop.
+
+The agent also computes a **helm fatigue index** (0–100): it watches steering quality
+(heading/heel/apparent-wind variance, steering reversals) and boatspeed vs. polar against the
+boat's own recent baseline, and recommends a crew rotation as the driver tires. It shows on the
+web instrument strip, at `GET /fatigue`, and via the `get_fatigue` agent tool. See CLAUDE.md
+("Helm fatigue index") and DESIGN.md §5.
 
 ## The Pi software (Signal K + uplink) — runs on the VPS bench and the boat
 
@@ -54,7 +61,7 @@ for the CAN bench (setup/replay/generate) and `pi/README.md` for the onboard sta
 pi/        onboard Pi: Signal K config, uplink service (systemd), CAN_IFACE switch
 vps/
   ingestion/  FastAPI token-auth ingest -> TimescaleDB
-  agent/      Claude tool-use loop + SQL-backed tools + WebSocket chat
+  agent/      Claude tool-use loop + SQL-backed tools + helm fatigue index + WebSocket chat
   web/        mobile-first chat app (nginx)
   db/         schema/migrations + dev seed
 shared/    units + agent tool contracts

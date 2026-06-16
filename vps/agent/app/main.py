@@ -57,6 +57,12 @@ def sources():
     return tools.get_sources()
 
 
+@app.get("/fatigue")
+def fatigue():
+    """Helm fatigue index (0–100) + components + rotation recommendation."""
+    return tools.get_fatigue()
+
+
 @app.websocket("/ws")
 async def ws(websocket: WebSocket):
     await websocket.accept()
