@@ -42,8 +42,19 @@ def list_tools():
 
 @app.get("/conditions")
 def conditions():
-    """Convenience REST mirror of the live instrument strip."""
+    """Compact best-value-per-channel for the web instrument strip."""
+    return tools.get_strip()
+
+
+@app.get("/conditions/full")
+def conditions_full():
+    """All sources per channel (the multi-source view the agent reasons over)."""
     return tools.get_current_conditions()
+
+
+@app.get("/sources")
+def sources():
+    return tools.get_sources()
 
 
 @app.websocket("/ws")

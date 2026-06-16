@@ -39,6 +39,20 @@ class TelemetryBatch(BaseModel):
     points: list[TelemetryPoint] = Field(..., min_length=1)
 
 
+class Reading(BaseModel):
+    """One (source, path) reading — the collect-everything unit."""
+    time: datetime
+    source: str
+    path: str
+    value: Optional[float] = None
+    str_value: Optional[str] = None
+
+
+class RawBatch(BaseModel):
+    boat_id: str = "sr33"
+    readings: list[Reading] = Field(..., min_length=1)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     pool.open(wait=True, timeout=30)
@@ -77,6 +91,20 @@ def ingest(batch: TelemetryBatch):
 
     placeholders = "(" + ", ".join(["%s"] * len(_COLS)) + ")"
     sql = f"INSERT INTO telemetry ({', '.join(_COLS)}) VALUES {placeholders}"
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.executemany(sql, rows)
+        conn.commit()
+    return {"accepted": len(rows), "boat_id": batch.boat_id}
+
+
+@app.post("/ingest/raw", dependencies=[Depends(require_token)])
+def ingest_raw(batch: RawBatch):
+    """Collect-everything endpoint: store every (source, path) reading verbatim."""
+    rows = [(r.time, batch.boat_id, r.source, r.path, r.value, r.str_value)
+            for r in batch.readings]
+    sql = ("INSERT INTO telemetry_raw (time, boat_id, source, path, value, str_value) "
+           "VALUES (%s, %s, %s, %s, %s, %s)")
     with pool.connection() as conn:
         with conn.cursor() as cur:
             cur.executemany(sql, rows)

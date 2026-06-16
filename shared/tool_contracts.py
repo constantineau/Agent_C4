@@ -10,24 +10,48 @@ AGENT_TOOLS = [
     {
         "name": "get_current_conditions",
         "description": (
-            "Latest wind (AWS/AWA/TWS/TWA/TWD), STW, SOG/COG, heading, position, and "
-            "data freshness. Use for 'what's it doing right now' questions."
+            "Every live quantity (wind AWS/AWA/TWS/TWA/TWD, STW, SOG/COG, heading, heel, "
+            "pitch, rate-of-turn, rudder, depth, water temp, position) from EVERY reporting "
+            "source, with per-source freshness and a disagreement flag. Sources are redundant "
+            "by design — cross-check them; don't trust a single value."
         ),
-        "input_schema": {"type": "object", "properties": {}, "required": []},
-    },
-    {
-        "name": "get_history",
-        "description": "Trend/stats for one channel over a time window.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "channel": {"type": "string", "description": "e.g. tws, twd, stw, sog"},
+                "max_age_minutes": {"type": "integer", "default": 5,
+                                    "description": "only include readings newer than this"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "get_sources",
+        "description": (
+            "List the sensor sources currently reporting — which device, how fresh, how many "
+            "paths, and curated RELIABILITY notes (e.g. 'needs-calibration', 'unreliable'). "
+            "Use to decide which source to trust when readings disagree."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"max_age_minutes": {"type": "integer", "default": 10}},
+            "required": [],
+        },
+    },
+    {
+        "name": "get_history",
+        "description": "Trend/stats for one channel (or raw Signal K path) over a window, "
+                       "optionally restricted to a single source.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "channel": {"type": "string", "description": "e.g. tws, stw, heel, heading_mag"},
                 "window_minutes": {"type": "integer", "description": "look-back in minutes"},
                 "aggregation": {
                     "type": "string",
-                    "enum": ["avg", "min", "max", "last", "series"],
+                    "enum": ["avg", "min", "max", "series"],
                     "default": "avg",
                 },
+                "source": {"type": "string", "description": "optional: restrict to one source"},
             },
             "required": ["channel", "window_minutes"],
         },

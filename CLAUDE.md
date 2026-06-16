@@ -103,6 +103,16 @@ those channels are null until then). Signal K port 3010 avoids DreamCRM's :3000 
 **Current status:** Phase 0 in progress (scaffold + dev stack + schema + functional
 ingestion/tools stubs + fake-data seed). Agent's Claude tool-use loop is stubbed (Phase 4).
 
+## Data paradigm — collect everything, per source
+
+Live telemetry uses the **collect-everything** model: the uplink forwards *every* Signal K
+`(source, path)` reading — all sensors, including redundant ones — to ingestion `/ingest/raw`,
+stored in **`telemetry_raw(time, source, path, value)`**. The agent's `get_current_conditions`
+returns every quantity from every source with freshness + a disagreement flag; `get_sources`
+lists active sensors with curated reliability (`source_notes`). The agent is prompted to be
+skeptical: cross-check redundant sources, flag disagreement/stale/uncalibrated, never trust a
+lone value. Migration `002_telemetry_raw.sql`; the older wide `telemetry` table is legacy.
+
 ## Database safety
 
 Never run destructive DB ops or migrations against `sr33_prod` without explicit go-ahead.

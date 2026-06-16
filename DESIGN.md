@@ -94,10 +94,16 @@ two-way chat channel, both over Starlink.
 ## 4. Data model
 
 **Time-series (TimescaleDB hypertables)**
-- `telemetry` — one wide row per 15-s aggregate: `aws awa tws twa twd stw sog cog heading
-  lat lon depth`, keyed `(boat_id, time)`. Stored in sailing units (kn, deg, m).
-- `ais_targets` — one row per target observation: position, SOG/COG, range, bearing,
-  CPA, TCPA.
+- `telemetry_raw` — **the primary live store (collect-everything paradigm).** One row per
+  `(time, source, path, value)` — every Signal K path from *every* source, including
+  redundant sensors, stored verbatim in SI with full provenance. New sensors/paths need no
+  schema change. This is what the agent reasons over (cross-checking sources).
+- `telemetry` — legacy wide single-value-per-channel table (kept; superseded by `telemetry_raw`).
+- `ais_targets` — one row per target observation: position, SOG/COG, range, bearing, CPA, TCPA.
+
+**Metadata adds**
+- `source_notes` — curated reliability per sensor (`high`/`medium`/`needs-calibration`/
+  `unreliable` + note); the agent reads it so it knows which sources may be uncalibrated.
 
 **Metadata (plain tables)**
 - `polars` — target boatspeed/VMG by `(tws, twa)` bucket.
@@ -115,12 +121,17 @@ two-way chat channel, both over Starlink.
 the model calls SQL-backed tools, then composes a grounded reply. Tool contracts live in
 `shared/tool_contracts.py` (single source of truth shared by the loop and any client).
 
-**Tools (all implemented against the DB):** `get_current_conditions`, `get_history`,
-`get_polar_target`, `get_ais_targets`, `get_route_status`, `fetch_forecast` (stub),
-`log_note`.
+**Tools (all implemented against the DB):** `get_current_conditions` (multi-source — every
+quantity from every reporting source, with per-source freshness + disagreement flag),
+`get_sources` (active sensors + curated reliability), `get_history` (per-channel or raw path,
+optionally one source), `get_polar_target`, `get_ais_targets`, `get_route_status`,
+`fetch_forecast` (stub), `log_note`.
 
 **Grounding rules (system prompt):** never invent telemetry; always report data freshness
 and caveat stale answers; be VHF-brief (crew read on a phone, at night, often wet).
+**Sensor skepticism:** sources are redundant by design — cross-check them, flag
+disagreement/stale/uncalibrated readings, prefer reliable sources, never present one number
+as truth when sources conflict. The agent is the crew's sanity-check on the instruments.
 
 **Fallback:** with no API key, a deterministic responder keyword-routes to the right tool
 and formats the result — so the whole pipeline is demoable with no LLM and no boat.

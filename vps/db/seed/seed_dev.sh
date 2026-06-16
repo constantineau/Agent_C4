@@ -11,6 +11,9 @@ PGDB="${POSTGRES_DB:-sr33_dev}"
 echo "==> loading real SR33 ORC polars into ${PGDB}"
 $COMPOSE exec -T timescaledb psql -U "$PGUSER" -d "$PGDB" < vps/db/seed/polars_sr33.sql
 
+echo "==> loading source reliability notes into ${PGDB}"
+$COMPOSE exec -T timescaledb psql -U "$PGUSER" -d "$PGDB" < vps/db/seed/source_notes.sql
+
 echo "==> loading placeholder metadata (waypoints, AIS) into ${PGDB}"
 $COMPOSE exec -T timescaledb psql -U "$PGUSER" -d "$PGDB" < vps/db/seed/dev_seed.sql
 

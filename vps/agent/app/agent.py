@@ -47,7 +47,19 @@ kite). Use it to recommend the right sail and to call CROSSOVERS / PEELS: when t
 sail changes as the boat bears away/heads up or the breeze builds/drops, say so explicitly
 (e.g. "past 95° TWA the A3 is faster than the jib — time to hoist"). Note that sail changes
 take time and crew, so flag a change when the boat is clearly in or approaching the new
-sail's range, not for a momentary wiggle."""
+sail's range, not for a momentary wiggle.
+
+DATA / SENSOR SKEPTICISM — by design the boat carries redundant sensors, so
+get_current_conditions returns MULTIPLE sources per quantity (e.g. heel from the Orca Core
+and the GPS 24xd; heading from several). Never treat one number as truth:
+- When sources for a channel AGREE, you can state the value with confidence.
+- When they DISAGREE (the tool flags `disagreement`/`spread`), say so, give the range, and
+  prefer the more reliable source — call get_sources for curated reliability (some sensors
+  are uncalibrated or flaky, e.g. an uncalibrated paddlewheel speed or a Core that hasn't
+  been calibrated). Don't average blindly.
+- Flag STALE (large `age_s`), MISSING, or implausible readings rather than reporting them
+  as fact. A sensor that's silent or wildly off is itself useful information — surface it.
+Your job is to be the crew's sanity-check on the instruments, not just a readout."""
 
 # System sent to the API: instructions + the speed guide as a cached block (it's large and
 # unchanging, so caching it keeps per-message cost low).
@@ -78,23 +90,30 @@ def _fallback(message: str) -> str:
         nm = r["next_mark"]
         return (f"Next mark {nm['name']}: {nm['distance_nm']} nm, brg {nm['bearing_deg']}°"
                 + (f", ETA {nm['eta_hours']} h." if nm["eta_hours"] else "."))
+    if "source" in m or "sensor" in m:
+        r = tools.get_sources()
+        if not r["count"]:
+            return "No sensor sources reporting right now."
+        return f"{r['count']} sources reporting: " + ", ".join(
+            f"{s.get('device') or s['source']} ({s['reliability']}, {s['last_seen_s']}s ago)"
+            for s in r["sources"])
+    s = tools.get_strip()
+    if not s.get("available"):
+        return "No telemetry recorded yet."
     if "polar" in m or "target" in m:
-        c = tools.get_current_conditions()
-        if not c.get("available"):
-            return "No telemetry yet — can't compare to polar."
-        p = tools.get_polar_target(c["tws"] or 0, c["twa"] or 0)
+        if s.get("tws") is None or s.get("twa") is None:
+            return "No true wind (TWS/TWA) yet — can't place us on the polar."
+        p = tools.get_polar_target(s["tws"], s["twa"])
         if not p.get("available"):
             return p.get("note", "No polar data loaded.")
-        pct = round(100 * (c["stw"] or 0) / p["target_stw"], 1) if p["target_stw"] else None
-        return (f"STW {c['stw']} kn vs target {p['target_stw']} kn"
+        pct = round(100 * (s["stw"] or 0) / p["target_stw"], 1) if p.get("target_stw") else None
+        return (f"STW {s['stw']} kn vs target {p['target_stw']} kn"
                 + (f" — {pct}% of polar." if pct else "."))
-    # default: current conditions snapshot
-    c = tools.get_current_conditions()
-    if not c.get("available"):
-        return "No telemetry recorded yet."
-    stale = " (STALE)" if c.get("stale") else ""
-    return (f"TWS {c['tws']} kn, TWA {c['twa']}°, TWD {c['twd']}°T, STW {c['stw']} kn, "
-            f"SOG {c['sog']} kn, HDG {c['heading']}°T. Data age {c['data_age_seconds']}s{stale}.")
+    # default: best-value snapshot (use the chat/LLM path for multi-source detail)
+    stale = " (STALE)" if s.get("stale") else ""
+    return (f"TWS {s.get('tws')} kn, TWA {s.get('twa')}°, STW {s.get('stw')} kn, "
+            f"SOG {s.get('sog')} kn, HDG {s.get('heading')}°, heel {s.get('heel')}°. "
+            f"Data age {s.get('data_age_seconds')}s{stale}. (ask for sources to cross-check)")
 
 
 def _claude_loop(message: str, history: list) -> str:
