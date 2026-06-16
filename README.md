@@ -4,8 +4,9 @@ LLM-powered navigator / coach / long-term data archive for the SR33 racing yacht
 Boat NMEA 2000 → Raspberry Pi (Signal K) → 15-s telemetry over Starlink → cloud VPS
 (TimescaleDB + Claude-API agent) → mobile web chat for the crew.
 
-See **CLAUDE.md** for the full operational guide and the project brief
-(Google Doc `1lUqXt3JZ8Cao467CfGT9CP3O75wtuO6z3CvoMr56v5Y`) for the why.
+- **DESIGN.md** — product design description: architecture + what's built vs. planned today.
+- **CLAUDE.md** — operational runbook (ports, commands, deploy, conventions).
+- Project brief (Google Doc `1lUqXt3JZ8Cao467CfGT9CP3O75wtuO6z3CvoMr56v5Y`) — the long-form why.
 
 ## Quick start (dev stack — no boat needed)
 
@@ -23,6 +24,20 @@ bash vps/db/seed/seed_dev.sh                       # placeholder polars/waypoint
 Without an `ANTHROPIC_API_KEY` the agent runs a deterministic, tool-grounded fallback so
 the full pipeline works with no LLM. Add the key to switch on the real Claude tool-use loop.
 
+## Developing the Pi software on the VPS (no boat)
+
+The Pi software is developed here against a **virtual CAN interface** (`vcan0`) in place of
+the boat's `can0` — the single `CAN_IFACE` switch from the portability rule. On this VPS
+`vcan0` is provided by a persistent systemd service (`vcan0.service`); on a fresh host:
+
+```bash
+bash pi/bench/setup_vcan.sh        # create + up vcan0 (sudo; needs vcan module + can-utils)
+bash pi/bench/gen_traffic.sh       # smoke-test frames, OR:
+bash pi/bench/replay.sh pi/logs/candump-<date>.log   # replay a recorded boat log (can0->vcan0)
+```
+
+See `pi/bench/README.md` for the full bench workflow.
+
 ## Layout
 
 ```
@@ -37,8 +52,14 @@ deploy/    deploy_prod.sh, push_pi.sh
 compose.{dev,prod}.yml
 ```
 
-## Status — Phase 0 (scaffold)
+## Status
 
-Repo + dev compose stack + schema + functional ingestion + SQL tools + web app +
-fake-data seed. Agent's Claude loop is wired but gated on an API key (Phase 4). See the
-phased plan and open items in CLAUDE.md.
+- **Phase 0 — done.** Repo + dev compose stack + TimescaleDB schema + functional ingestion +
+  SQL-backed agent tools + WebSocket chat + mobile web app + fake-data seed. Verified
+  end-to-end (481 fake points → DB → live agent answers).
+- **Phase 1 — in progress.** Pi bench on the VPS via `vcan0` + `can-utils` (replay/generate
+  N2K frames). Next: wire Signal K into the pipeline.
+
+Agent's Claude tool-use loop is wired but gated on an `ANTHROPIC_API_KEY` (set it to go
+live; Phase 4). See **DESIGN.md** for built-vs-planned and **CLAUDE.md** for the phased plan
+and open items.
