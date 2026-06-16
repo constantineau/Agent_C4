@@ -29,6 +29,40 @@ services:
         echo "[init] rendered /home/node/.signalk/settings.json for CAN_IFACE=${CAN_IFACE:-vcan0}:"
         cat /config/settings.json
 
+  # Installs + enables the signalk-derived-data plugin into the config volume so true wind
+  # (TWS/TWA/TWD) and VMG are computed from apparent wind — without it those paths are null
+  # and the agent can't coach against the polars. Idempotent: the npm install needs network
+  # only on the first boot with a fresh volume; afterwards it's cached in sk_config. Uses the
+  # signalk image (it has npm/node) and runs after signalk-init has chowned the volume.
+  signalk-derived:
+    image: cr.signalk.io/signalk/signalk-server:latest
+    user: "1000:1000"
+    volumes:
+      - ./pi/signalk:/src:ro
+      - sk_config:/home/node/.signalk
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        cd /home/node/.signalk
+        if [ ! -d node_modules/signalk-derived-data ]; then
+          echo "[derived] installing signalk-derived-data into the config volume..."
+          npm install --prefix /home/node/.signalk signalk-derived-data
+        else
+          echo "[derived] signalk-derived-data already installed"
+        fi
+        mkdir -p plugin-config-data
+        if [ ! -f plugin-config-data/derived-data.json ]; then
+          cp /src/derived-data.json plugin-config-data/derived-data.json
+          echo "[derived] enabled derived-data plugin config:"
+          cat plugin-config-data/derived-data.json
+        else
+          echo "[derived] derived-data.json already present (leaving as-is)"
+        fi
+    depends_on:
+      signalk-init:
+        condition: service_completed_successfully
+
   signalk:
     image: cr.signalk.io/signalk/signalk-server:latest
     init: true
@@ -39,6 +73,8 @@ services:
       - sk_config:/home/node/.signalk
     depends_on:
       signalk-init:
+        condition: service_completed_successfully
+      signalk-derived:
         condition: service_completed_successfully
     restart: unless-stopped
 
@@ -54,9 +90,37 @@ services:
       INGEST_TOKEN: ${INGEST_TOKEN:-dev-ingest-token}
       BOAT_ID: ${BOAT_ID:-sr33}
       AGG_SECONDS: ${AGG_SECONDS:-15}
+      QUEUE_DIR: /var/lib/sr33/queue
+    # Store-and-forward queue on a named volume so a reboot mid-outage doesn't drop the
+    # batches waiting to be replayed to the cloud ("link outage loses nothing").
+    volumes:
+      - sk_queue:/var/lib/sr33/queue
+    depends_on:
+      - signalk
+    restart: unless-stopped
+
+  # Phase 2 — full-resolution onboard archive. A second, independent Signal K subscriber
+  # that records EVERY delta to a durable local SQLite DB on a named volume (survives
+  # reboots and container rebuilds). The boat is the source of truth; nothing here depends
+  # on the cloud link being up. backfill.py later pushes this full-res log to the VPS.
+  archiver:
+    build:
+      context: .
+      dockerfile: pi/archiver/Dockerfile
+    network_mode: host
+    environment:
+      SIGNALK_WS: ${SIGNALK_WS:-ws://localhost:3010/signalk/v1/stream?subscribe=all}
+      BOAT_ID: ${BOAT_ID:-sr33}
+      ARCHIVE_DB: /var/lib/sr33/archive/archive.db
+      VPS_URL: ${VPS_URL:-http://localhost:8101}
+      INGEST_TOKEN: ${INGEST_TOKEN:-dev-ingest-token}
+    volumes:
+      - sk_archive:/var/lib/sr33/archive
     depends_on:
       - signalk
     restart: unless-stopped
 
 volumes:
   sk_config:
+  sk_archive:
+  sk_queue:

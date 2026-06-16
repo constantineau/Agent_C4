@@ -22,7 +22,7 @@ NMEA — it reads facts through SQL-backed tools.
 ## Repo layout (monorepo)
 
 ```
-pi/                 Signal K config, vcan/systemd units, uplink service
+pi/                 Signal K config, vcan/systemd units, uplink + full-res archiver
 vps/ingestion/      FastAPI ingestion API (token-auth, writes batches to TimescaleDB)
 vps/agent/          Claude tool-use service + alerting + summarizer + WebSocket chat
 vps/web/            mobile web chat app (nginx static)
@@ -78,14 +78,25 @@ Same `compose.pi.yml` runs on the VPS bench (`CAN_IFACE=vcan0`) and the real Pi
 # bench with built-in sample N2K data (no boat/log needed):
 docker compose -f compose.pi.yml -f compose.pi.sample.yml up -d --build
 docker logs -f sr33-pi-uplink-1                 # 15-s aggregates POSTing to ingestion
+docker logs -f sr33-pi-archiver-1               # full-res rows landing in onboard SQLite
 docker compose -f compose.pi.yml down
 
 # bench replaying a recorded log:  bash pi/bench/replay.sh pi/logs/<log>  then compose.pi.yml up
 # on the Pi:  CAN_IFACE=can0 VPS_URL=https://nav... docker compose -f compose.pi.yml up -d
 ```
 
-Notes: true wind (TWS/TWA/TWD) needs the `signalk-derived-data` plugin (not yet enabled —
-those channels are null until then). Signal K port 3010 avoids DreamCRM's :3000 on this VM.
+Notes: true wind (TWS/TWA/TWD) + VMG come from the `signalk-derived-data` plugin, which the
+`signalk-derived` init service installs + enables into the config volume automatically (config
+`pi/signalk/derived-data.json`; output `$source` is `derived-data`). Signal K port 3010 avoids
+DreamCRM's :3000 on this VM.
+
+**Full-resolution onboard archive (Phase 2):** the `archiver` service is a *second*,
+independent Signal K subscriber that records **every** delta at full resolution to a durable
+local SQLite DB (`sk_archive` named volume, WAL + `synchronous=FULL`) — schema mirrors the
+cloud `telemetry_raw`. It owns its own subscription and crash-safe store, so a crashed uplink
+or a dropped link never costs archived data ("link outage loses nothing"). `pi/archiver/
+backfill.py` pushes the full-res log to the cloud `/ingest/raw` post-passage; it's resumable
+via a `sync_state` cursor (re-runs send only new rows). See `pi/archiver/README.md`.
 
 ## Phased build (each phase has a clear exit test)
 
@@ -93,15 +104,21 @@ those channels are null until then). Signal K port 3010 avoids DreamCRM's :3000 
 |-------|-------------|-----------|
 | **0** | Repo + dev compose + schema + stubs + fake data | `compose.dev.yml up`; DB reachable; fake data loads |
 | 1 | Pi base + PICAN-M + vcan0 + Signal K | sample N2K flows; Signal K dashboard populated |
-| 2 | Pi local archive | day-length replay captured at full res; survives reboot |
-| 3 | Ingestion + uplink store-and-forward | telemetry on VPS; forced 30-min outage backfills cleanly |
+| **2** ✅ | Pi local archive | full-res capture verified on bench; survives reboot; backfill lands in cloud `telemetry_raw` |
+| **3** ✅ | Ingestion + uplink store-and-forward | forced-outage test passed: batches queue to a named volume, survive a reboot mid-outage, drain with no loss |
 | 4 | Agent core + SQL tools | accurate answers on conditions/perf/AIS vs live dev data |
 | 5 | Web app (strip, quick actions, night mode, shared pw) | full practice sail used without instruction |
 | 6 | Alerting + summarizer + polar tooling | acceptable alert false-positive rate over 2 practice sails |
 | 7 | Prod stack + deploy + rules review + soak | NOR compliance determined; 48-h unattended soak passes |
 
-**Current status:** Phase 0 in progress (scaffold + dev stack + schema + functional
-ingestion/tools stubs + fake-data seed). Agent's Claude tool-use loop is stubbed (Phase 4).
+**Current status:** Phases 0–4 built and bench-verified. Phase 1 (Signal K + uplink) end-to-end;
+Phase 2 (full-res onboard archive + backfill); Phase 3 uplink store-and-forward (disk-backed
+queue on a named volume — forced-outage test passed, survives reboot mid-outage, drains with no
+loss); Phase 4 agent runs the *real* Claude tool-use loop (`vps/agent/app/agent.py`, not stubbed)
+with the boat-speed gospel + per-source skepticism + source priority/failover. True wind/VMG now
+flow via the auto-enabled `signalk-derived-data` plugin. Remaining: Phase 5 web app (only a
+static page so far), Phase 6 alerting/summarizer, Phase 7 prod/soak; still owed — a real
+`candump -l can0` replay fixture (the canned sample stands in for now).
 
 ## Data paradigm — collect everything, per source
 

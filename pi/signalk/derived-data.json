@@ -1,0 +1,14 @@
+{
+  "comment": "Enable config for the signalk-derived-data plugin (id 'derived-data'). Copied into the Signal K config volume (plugin-config-data/derived-data.json) by the signalk-derived init service if absent. Computes true wind + VMG from apparent wind + STW/heading/COG so polar coaching has TWS/TWA/TWD instead of nulls. On the boat this is one of several true-wind sources (Orca Core publishes heel-compensated true wind too); the collect-everything paradigm keeps all of them, distinguished by $source ('derived-data' here).",
+  "enabled": true,
+  "configuration": {
+    "wind": {
+      "angleTrueWater": true,
+      "directionTrue": true,
+      "groundWind": true
+    },
+    "course data": {
+      "vmg_Wind": true
+    }
+  }
+}
