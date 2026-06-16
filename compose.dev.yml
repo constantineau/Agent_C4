@@ -1,0 +1,70 @@
+# Agent_C4 development stack. Separate DB + ports from prod; safe to tear down.
+#   docker compose -f compose.dev.yml up -d --build
+name: sr33-dev
+
+services:
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-sr33}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sr33-dev}
+      POSTGRES_DB: ${POSTGRES_DB:-sr33_dev}
+    ports:
+      - "5433:5432"
+    volumes:
+      - sr33_dev_pgdata:/var/lib/postgresql/data
+      # migrations in this dir run in filename order on first init
+      - ./vps/db/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sr33} -d ${POSTGRES_DB:-sr33_dev}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  ingestion:
+    build:
+      context: .
+      dockerfile: vps/ingestion/Dockerfile
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://sr33:sr33-dev@timescaledb:5432/sr33_dev}
+      INGEST_TOKEN: ${INGEST_TOKEN:-dev-ingest-token}
+    ports:
+      - "8101:8000"
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    restart: unless-stopped
+
+  agent:
+    build:
+      context: .
+      dockerfile: vps/agent/Dockerfile
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://sr33:sr33-dev@timescaledb:5432/sr33_dev}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-4-8}
+      BOAT_ID: ${BOAT_ID:-sr33}
+    ports:
+      - "8102:8000"
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: vps/web/Dockerfile
+    environment:
+      # nginx templates these into the served config
+      AGENT_HOST: agent
+      AGENT_PORT: "8000"
+    ports:
+      - "8090:80"
+    depends_on:
+      - agent
+    restart: unless-stopped
+
+volumes:
+  sr33_dev_pgdata:

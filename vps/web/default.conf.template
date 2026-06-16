@@ -1,0 +1,27 @@
+server {
+    listen 80;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # WebSocket chat to the agent service.
+    location /ws {
+        proxy_pass http://${AGENT_HOST}:${AGENT_PORT}/ws;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_read_timeout 3600s;
+    }
+
+    # REST mirrors (live instrument strip, health).
+    location /api/ {
+        proxy_pass http://${AGENT_HOST}:${AGENT_PORT}/;
+        proxy_set_header Host $host;
+    }
+}

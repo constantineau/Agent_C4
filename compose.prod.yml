@@ -1,0 +1,67 @@
+# Agent_C4 production stack. Managed/auto-restart — leave alone except to deploy.
+# Separate DB (sr33_prod) and ports from dev so dev work can never corrupt the archive.
+# TLS/nginx termination + real ports are wired up in Phase 7; this is the skeleton.
+name: sr33-prod
+
+services:
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-sr33}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in prod .env}
+      POSTGRES_DB: ${POSTGRES_DB:-sr33_prod}
+    volumes:
+      - sr33_prod_pgdata:/var/lib/postgresql/data
+      - ./vps/db/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sr33} -d ${POSTGRES_DB:-sr33_prod}"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    restart: always
+
+  ingestion:
+    build:
+      context: .
+      dockerfile: vps/ingestion/Dockerfile
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?set in prod .env}
+      INGEST_TOKEN: ${INGEST_TOKEN:?set in prod .env}
+    expose:
+      - "8000"
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    restart: always
+
+  agent:
+    build:
+      context: .
+      dockerfile: vps/agent/Dockerfile
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?set in prod .env}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?set in prod .env}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-4-8}
+      BOAT_ID: ${BOAT_ID:-sr33}
+    expose:
+      - "8000"
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    restart: always
+
+  web:
+    build:
+      context: .
+      dockerfile: vps/web/Dockerfile
+    environment:
+      AGENT_HOST: agent
+      AGENT_PORT: "8000"
+    expose:
+      - "80"
+    depends_on:
+      - agent
+    restart: always
+
+volumes:
+  sr33_prod_pgdata:

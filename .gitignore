@@ -1,0 +1,22 @@
+# secrets / local config
+.env
+*.env
+!.env.example
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# data / logs
+*.log
+*.sqlite
+*.db
+data/
+*.candump
+*.n2k
+
+# os / editor
+.DS_Store
+*.swp
