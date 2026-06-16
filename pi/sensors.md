@@ -21,7 +21,8 @@ not reverse-engineered).
 | 4 | **Garmin GST 43** | Speed thru water + temp | **analog → GST 10 → N2K** | 128259 Speed Water Ref; 130312 Temp (Sea) | `navigation.speedThroughWater`; `environment.water.temperature` | `stw`; `water_temp` | ✅ handled (needs **GST 10** module) |
 | 5 | **Garmin GPSMAP 943** | Chartplotter / GPS map; **calibration console** | N2K + 0183 + Marine Net + WiFi | 129025,129026,129029,127250,129283 XTE,129284 Nav | position/COG/SOG/heading; `navigation.courseGreatCircle.*` | redundant nav source; **route/XTE** optional | ✅ handled; key calibration role (below) |
 | 6 | **em‑trak B951** | Class B AIS (5 W) + internal GPS | N2K + 0183(38400) + USB | 129038,129039,129040,129041,129794,129809,129810,… | AIS targets as separate `vessels.urn:mrn:imo:mmsi:*` contexts | **`ais_targets` table** (needs uplink ingestion) | 🔧 decoded by SK; uplink AIS ingestion = new work |
-| 7 | **Garmin Reactor 40** | Autopilot (CCU 9‑axis AHRS) | N2K | 127245 Rudder, 127251 ROT, 127257 Attitude (126720 proprietary) | `steering.rudderAngle`,`navigation.rateOfTurn`,`navigation.attitude` | **`rudder_angle`**,**`rate_of_turn`**,`heel`/`pitch` new | ✅ rudder/ROT/attitude; ❌ pilot mode (proprietary) |
+| 7 | **Garmin Reactor 40** | Autopilot (CCU 9‑axis AHRS) | N2K | 127245 Rudder, 127251 ROT, 127257 Attitude (126720 proprietary) | `steering.rudderAngle`,`navigation.rateOfTurn`,`navigation.attitude` | **`rudder_angle`**,**`rate_of_turn`**,`heel`/`pitch` new | ✅ rudder/ROT/attitude; ❌ pilot mode (proprietary); **see racing note** |
+| 8 | **Garmin gWind Race** | Masthead wind sensor (feeds device 1) | Nexus FDX → GND 10 | (via GND 10) 130306 | `environment.wind.speedApparent`,`angleApparent` | `aws`,`awa` → `tws`/`twa`/`twd` derived | ✅ apparent wind; **heel-uncompensated** |
 
 ## Per-device notes (key gotchas only)
 
@@ -73,6 +74,21 @@ state (the `signalk-autopilot-garmin` plugin is command-only). **READ-ONLY SAFET
 ingest — never command the pilot. Defense in depth: (a) load no N2K *write* plugins in Signal
 K; (b) optionally bring `can0` up `listen-only on` (controller can't transmit/ACK). Worth
 logging raw 126720 frames now in case we ever reverse-engineer pilot state later.
+**RACING REALITY (important):** the boat is hand-steered while racing, so the pilot won't be
+*engaged* — but the CCU's AHRS publishes heading/ROT/attitude/rudder whenever the CCU is
+**powered**, independent of engage/standby. So *keep the Reactor CCU powered (standby) during
+racing* and we still get heel/ROT/rudder. If the autopilot breaker is switched fully OFF to
+save power, we lose our primary **heel** source exactly when coaching needs it most — see the
+heel-source decision below.
+
+**8. gWind Race (masthead wind).** The actual wind sensor feeding device 1 (GND 10) over the
+Nexus FDX bus; reaches us as PGN 130306 → `aws`/`awa`. **It measures APPARENT wind only and
+is NOT heel/motion-compensated** — a heeled/pitching masthead reads AWA/AWS errors (worst
+upwind in breeze). It supports good static calibration (angle offset, speed gain ~70% for the
+3-blade prop, per-angle TWA/TWS race tables) via **NexusRace over USB or a Garmin display** —
+not from the Pi. The "Race" version adds the per-angle correction tables and a factory cal
+certificate; set wind-angle offset and speed gain before trusting AWA/AWS. The GND 10 forwards
+**apparent** wind on N2K (true wind is computed downstream), so we compute true wind ourselves.
 
 ## New telemetry this package unlocks (beyond the current schema)
 
@@ -80,7 +96,11 @@ Current `telemetry` channels: `aws awa tws twa twd stw sog cog heading lat lon d
 real sensors add:
 
 - **`heel`** (= `navigation.attitude.roll`) — directly comparable to the Speed Guide's target
-  heel per TWS/TWA. High coaching value.
+  heel per TWS/TWA. High coaching value, AND needed to correct the masthead wind for heel (see
+  below). **Source = Reactor 40 CCU** (the 24xd's attitude output is uncertain/limited and it
+  has no ROT). ⚠️ **Heel-source decision:** if the autopilot breaker is OFF during racing we
+  lose heel — so either keep the CCU powered in standby, or add a dedicated heel/attitude
+  sensor. This matters for both coaching and true-wind accuracy.
 - **`pitch`** (`navigation.attitude.pitch`) — fore/aft trim, sea-state proxy.
 - **`rate_of_turn`** (`navigation.rateOfTurn`) — from the Reactor 40; useful for maneuver/tack detection.
 - **`rudder_angle`** (`steering.rudderAngle`) — helm load / autopilot activity proxy.
@@ -93,7 +113,9 @@ or `signalk-derived-data`.
 
 ## Implementation impact (planned)
 
-1. **`signalk-derived-data` plugin** → true wind (TWS/TWA/TWD), VMG, current set/drift. (Next step.)
+1. **`signalk-derived-data` plugin** → true wind (TWS/TWA/TWD), VMG, current set/drift. (Next
+   step.) Note the gWind Race gives apparent only and is heel-uncompensated, so true-wind
+   accuracy improves markedly once `heel` is fed into the calc — tie this to the heel source.
 2. **Extend `telemetry`** with `heel, pitch, rate_of_turn, rudder_angle, water_temp`; extend the
    uplink `PATH_MAP` + `shared/units`/`tool_contracts` accordingly.
 3. **AIS ingestion:** uplink subscribes to other-vessel contexts → `ais_targets`; compute CPA/TCPA.
