@@ -47,7 +47,25 @@ kite). Use it to recommend the right sail and to call CROSSOVERS / PEELS: when t
 sail changes as the boat bears away/heads up or the breeze builds/drops, say so explicitly
 (e.g. "past 95° TWA the A3 is faster than the jib — time to hoist"). Note that sail changes
 take time and crew, so flag a change when the boat is clearly in or approaching the new
-sail's range, not for a momentary wiggle.
+sail's range, not for a momentary wiggle. The get_sail_advice tool returns this structured
+(optimal sail, the TWA zones, the next crossover, and whether the crew's hoisted sail is
+wrong) — use it for precise peel calls and crossover distances.
+
+ROUTING / WEATHER — get_route returns the isochrone optimal route to the next mark or finish
+(ETA, tacks, recommended first heading/tack) computed on the polars through the wind forecast;
+fetch_forecast gives the wind outlook. Use for "best way / which tack first / routing / ETA".
+Same RRS 41 caveat as tactics — practice/debrief unless the RC clears shore routing.
+
+TACTICS — get_tactics reads the beat: lifted/headed on the current tack, oscillating vs a
+persistent trend, the favored side, and banked leverage. Use it for "which way / which tack /
+favored side / are we lifted" questions. This is shore tactical advice — say it's for
+practice/debrief and may be "outside help" under RRS 41 in a race unless the RC has cleared it.
+
+NAVIGATOR — get_navigator gives the next mark (bearing/distance/ETA), the leg type
+(beat/reach/run) and the laylines with a layline call. Use it for "what's next / can we lay
+the mark / which tack / ETA" questions. Marks/laylines/ETA are navigation and fine to give
+any time; deeper tactics (favored side, shifts, leverage) are practice/debrief unless the RC
+has cleared shore help (RRS 41).
 
 CREW FATIGUE — get_fatigue returns a 0–100 helm fatigue index for the current (anonymous)
 driver with a level (fresh/watch/rotate_soon/rotate_now) and a rotation recommendation. It
@@ -98,13 +116,40 @@ def _fallback(message: str) -> str:
         return (f"{r['count']} AIS target(s). Nearest: {t.get('name') or t['mmsi']} "
                 f"range {t.get('range_nm')} nm, CPA {t.get('cpa_nm')} nm in "
                 f"{t.get('tcpa_min')} min.")
-    if any(w in m for w in ("mark", "finish", "eta", "distance", "route")):
-        r = tools.get_route_status()
+    if any(w in m for w in ("route", "routing", "best way", "weather route", "fastest", "which tack first")):
+        r = tools.get_route()
         if not r.get("available"):
-            return r.get("note", "Route status unavailable.")
+            return r.get("note", "Routing unavailable.")
+        return (f"Route to {r['target']}: ETA ~{r['eta_min']} min, {r['sailed_nm']} nm sailed "
+                f"({r['direct_nm']} direct), {r['tacks']} tack(s). Start on {r['first_tack']} "
+                f"heading {r['recommended_heading']}°. ({r['wind_source']}; practice/debrief — RRS 41)")
+    if "forecast" in m or "weather" in m:
+        r = tools.fetch_forecast()
+        if not r.get("available"):
+            return r.get("note", "Forecast unavailable.")
+        h = r["hours"]
+        nxt = h[1] if len(h) > 1 else (h[0] if h else None)
+        return ("Forecast: " + (f"now ~{h[0]['tws']} kn @ {h[0]['twd']}°, "
+                f"in {nxt['in_h']} h ~{nxt['tws']} kn @ {nxt['twd']}°." if nxt else "no data."))
+    if any(w in m for w in ("favored", "favoured", "which side", "which way", "lifted", "headed", "shift", "leverage", "tactic")):
+        r = tools.get_tactics()
+        if not r.get("available"):
+            return r.get("note", "Tactics unavailable.")
+        return r["recommendation"] + "  (practice/debrief — RRS 41)"
+    if any(w in m for w in ("mark", "finish", "eta", "distance", "layline", "lay ", "tack", "next leg")):
+        r = tools.get_navigator()
+        if not r.get("available"):
+            return r.get("note", "Navigator unavailable.")
         nm = r["next_mark"]
-        return (f"Next mark {nm['name']}: {nm['distance_nm']} nm, brg {nm['bearing_deg']}°"
-                + (f", ETA {nm['eta_hours']} h." if nm["eta_hours"] else "."))
+        eta = f", ETA {nm['eta_min']} min" if nm.get("eta_min") else ""
+        lay = f" {r['layline_call']}" if r.get("layline_call") else ""
+        return (f"Next: {nm['name']} {nm['distance_nm']} nm, brg {nm['bearing_deg']}° "
+                f"({r['leg']['type']}){eta}.{lay}")
+    if any(w in m for w in ("sail", "peel", "kite", "spinnaker", "jib", "hoist", "change up", "change down")):
+        r = tools.get_sail_advice()
+        if not r.get("available"):
+            return r.get("note", "Sail advice unavailable (need live TWS/TWA).")
+        return r["recommendation"]
     if any(w in m for w in ("fatigue", "tired", "rotate", "helm change", "driver", "shift change")):
         r = tools.get_fatigue()
         if not r.get("available"):

@@ -62,7 +62,7 @@ pi/        onboard Pi: Signal K config, uplink service (systemd), CAN_IFACE swit
 vps/
   ingestion/  FastAPI token-auth ingest -> TimescaleDB
   agent/      Claude tool-use loop + SQL-backed tools + helm fatigue index + WebSocket chat
-  web/        mobile-first chat app (nginx)
+  web/        iPad navigator UI (nginx): day/night, sail dial, course plot, tactics, routing
   db/         schema/migrations + dev seed
 shared/    units + agent tool contracts
 deploy/    deploy_prod.sh, push_pi.sh

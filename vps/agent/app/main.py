@@ -12,7 +12,7 @@ from fastapi.concurrency import run_in_threadpool
 
 from shared.tool_contracts import AGENT_TOOLS
 from .db import pool
-from . import agent, tools
+from . import agent, tools, navigator
 
 API_KEY_PRESENT = bool(os.environ.get("ANTHROPIC_API_KEY", "").strip())
 
@@ -61,6 +61,49 @@ def sources():
 def fatigue():
     """Helm fatigue index (0–100) + components + rotation recommendation."""
     return tools.get_fatigue()
+
+
+@app.get("/sail")
+def sail(tws: float | None = None, twa: float | None = None, hoisted: str | None = None):
+    """Sail-range advice for the dial: zones, optimal sail, position, next crossover.
+    tws/twa default to the latest live values; hoisted is the crew-reported sail."""
+    return tools.get_sail_advice(tws=tws, twa=twa, hoisted=hoisted)
+
+
+@app.get("/course")
+def course(route: str | None = None):
+    """The active course: marks + per-leg bearing/distance (for the schematic plot)."""
+    return navigator.get_course(route)
+
+
+@app.get("/navigator")
+def nav(route: str | None = None):
+    """Next mark, ETA, leg type, and laylines from live position + wind."""
+    return navigator.get_navigator(route)
+
+
+@app.post("/course/practice")
+def practice_course(leg_nm: float = 1.0):
+    """Drop a windward/leeward practice course from the live position + wind (route 'practice')."""
+    return navigator.make_practice_course(leg_nm)
+
+
+@app.get("/tactics")
+def tactics_ep(route: str | None = None):
+    """Tactical read: lifted/headed, favored side, leverage (practice/debrief — RRS 41)."""
+    return tools.get_tactics(route)
+
+
+@app.get("/forecast")
+def forecast_ep(lat: float | None = None, lon: float | None = None, hours: int = 12):
+    """Wind forecast (Open-Meteo) for a position; defaults to the live position."""
+    return tools.fetch_forecast(lat, lon, hours)
+
+
+@app.get("/route")
+def route_ep(route: str | None = None, target: str = "next"):
+    """Isochrone optimal route to the next mark (or 'finish') through the forecast wind."""
+    return tools.get_route(route, target)
 
 
 @app.websocket("/ws")

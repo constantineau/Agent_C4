@@ -11,6 +11,11 @@ from datetime import datetime, timezone
 
 from .db import pool
 from . import fatigue
+from . import sails
+from . import navigator
+from . import tactics
+from . import weather
+from . import routing
 
 BOAT_ID = os.environ.get("BOAT_ID", "sr33")
 
@@ -157,6 +162,7 @@ def get_strip():
         "stw": best("stw"), "sog": best("sog"), "tws": best("tws"), "twa": best("twa"),
         "twd": best("twd"), "aws": best("aws"), "awa": best("awa"), "heading": heading,
         "heel": best("heel"), "depth": best("depth"),
+        "cog": best("cog"), "lat": best("lat"), "lon": best("lon"),
         # Helm fatigue index (0–100) for the strip; null while warming up / unavailable.
         "fatigue": fi.get("index"),
         "fatigue_level": fi.get("level"),
@@ -166,6 +172,26 @@ def get_strip():
 def get_fatigue():
     """Helm fatigue index (0–100) with per-component breakdown and a rotation recommendation."""
     return fatigue.compute_fatigue_index()
+
+
+def get_sail_advice(tws: float = None, twa: float = None, hoisted: str = None):
+    """Sail-range advice: optimal sail, position within the sail's TWA band, next crossover.
+    Falls back to the latest live TWS/TWA when not supplied."""
+    if tws is None or twa is None:
+        s = get_strip()
+        tws = tws if tws is not None else s.get("tws")
+        twa = twa if twa is not None else s.get("twa")
+    return sails.get_sail_advice(tws, twa, hoisted)
+
+
+def get_navigator(route: str = None):
+    """Next mark (bearing/distance/ETA), leg type, and laylines from live position + wind."""
+    return navigator.get_navigator(route)
+
+
+def get_tactics(route: str = None):
+    """Tactical read: lifted/headed, favored side, leverage from the wind-shift trend."""
+    return tactics.get_tactics(route)
 
 
 def get_sources(max_age_minutes: int = 10):
@@ -301,9 +327,20 @@ def get_route_status(route: str = "default"):
             "finish": legs[-1], "legs": legs}
 
 
-def fetch_forecast(lat: float, lon: float):
-    return {"available": False, "note": "forecast fetch not wired yet (Phase 4 / GRIB source)",
-            "query": {"lat": lat, "lon": lon}}
+def fetch_forecast(lat: float = None, lon: float = None, hours: int = 12):
+    """Wind forecast for a position (defaults to live position) — next N hours, Open-Meteo."""
+    if lat is None or lon is None:
+        s = get_strip()
+        lat = lat if lat is not None else s.get("lat")
+        lon = lon if lon is not None else s.get("lon")
+    if lat is None or lon is None:
+        return {"available": False, "note": "no position to forecast for"}
+    return weather.get_forecast(lat, lon, hours)
+
+
+def get_route(route: str = None, target: str = "next"):
+    """Isochrone optimal route to the next mark (or 'finish') through the forecast wind."""
+    return routing.get_route(route, target)
 
 
 def log_note(text: str, author: str = None):
@@ -320,6 +357,10 @@ DISPATCH = {
     "get_current_conditions": get_current_conditions,
     "get_sources": get_sources,
     "get_fatigue": get_fatigue,
+    "get_sail_advice": get_sail_advice,
+    "get_navigator": get_navigator,
+    "get_tactics": get_tactics,
+    "get_route": get_route,
     "get_history": get_history,
     "get_polar_target": get_polar_target,
     "get_ais_targets": get_ais_targets,

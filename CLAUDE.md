@@ -107,7 +107,7 @@ via a `sync_state` cursor (re-runs send only new rows). See `pi/archiver/README.
 | **2** ✅ | Pi local archive | full-res capture verified on bench; survives reboot; backfill lands in cloud `telemetry_raw` |
 | **3** ✅ | Ingestion + uplink store-and-forward | forced-outage test passed: batches queue to a named volume, survive a reboot mid-outage, drain with no loss |
 | 4 | Agent core + SQL tools | accurate answers on conditions/perf/AIS vs live dev data |
-| 5 | Web app (strip, quick actions, night mode, shared pw) | full practice sail used without instruction |
+| **5** ✅ | iPad nav companion: day/night, sail dial, course plot, navigator, tactics, routing | bench-verified end-to-end; server-side shared-pw auth still a stub |
 | 6 | Alerting + summarizer + polar tooling | acceptable alert false-positive rate over 2 practice sails |
 | 7 | Prod stack + deploy + rules review + soak | NOR compliance determined; 48-h unattended soak passes |
 
@@ -116,9 +116,11 @@ Phase 2 (full-res onboard archive + backfill); Phase 3 uplink store-and-forward 
 queue on a named volume — forced-outage test passed, survives reboot mid-outage, drains with no
 loss); Phase 4 agent runs the *real* Claude tool-use loop (`vps/agent/app/agent.py`, not stubbed)
 with the boat-speed gospel + per-source skepticism + source priority/failover. True wind/VMG now
-flow via the auto-enabled `signalk-derived-data` plugin. Remaining: Phase 5 web app (only a
-static page so far), Phase 6 alerting/summarizer, Phase 7 prod/soak; still owed — a real
-`candump -l can0` replay fixture (the canned sample stands in for now).
+flow via the auto-enabled `signalk-derived-data` plugin. Phase 5 ✅ the iPad crew interface is
+built (day/night, sail dial, course plot + navigator, tactics, weather/isochrone routing — see
+"iPad crew interface"). Remaining: Phase 6 alerting/summarizer, Phase 7 prod/soak; still owed —
+a real `candump -l can0` replay fixture and server-side web auth (the canned sample + client-stub
+gate stand in for now).
 
 ## Data paradigm — collect everything, per source
 
@@ -136,6 +138,32 @@ position). `get_current_conditions` adds a `preferred` reading per channel and a
 fails over to the next rank when the preferred source is stale (>45 s) / absent, setting
 `fell_back=true` so the agent announces it's on a backup. All sources stay visible — priority
 only picks the lead + fallback order. Matchers are `$source` substrings (refine on real bus).
+
+## iPad crew interface (Phase 5)
+
+`vps/web` is an iPad-landscape **navigator companion** (not an instrument repeater — the boat
+already has those). Vanilla JS over nginx (`/api/*` + `/ws` proxy to the agent), no build step,
+offline-friendly. Pieces:
+- **Auto day/night** (`sun.js`) — switches on local sunrise/sunset from GPS position + time
+  (Safari has no light sensor); manual AUTO/DAY/NIGHT override. Night = red-on-black.
+- **Sail-range dial** (`sail.js` + `sails.py`, `GET /sail`, `get_sail_advice`) — point-of-sail
+  gauge with the J1/A2/A3/S2 zones for the current TWS, crossover ticks, live TWA needle, and a
+  crew "what's hoisted" selector that flags wrong-sail / imminent peel.
+- **Schematic course plot** (`plot.js`) — boat/marks/legs/laylines/wind/track on a local
+  projection (no chart tiles), N↑/Crs↑. `navigator.py` (`/course`, `/navigator`, `get_navigator`)
+  computes next mark/ETA/leg-type/laylines; a practice-course generator (`POST /course/practice`)
+  drops a W/L course from live position+wind. Active route is shared in-process so chat matches
+  the screen.
+- **Tactical layer** (`tactics.py`, `/tactics`, `get_tactics`) — lifted/headed, oscillating vs
+  persistent shift, favored side, leverage.
+- **Weather routing** (`weather.py` Open-Meteo + `routing.py` isochrone, `/forecast`, `/route`,
+  `fetch_forecast`/`get_route`) — optimal route on the polars through the forecast wind (falls
+  back to live measured wind); ETA, tacks, recommended first tack, route overlay.
+- **Race/Practice toggle** gates tactics + routing in the UI (RRS 41); the agent caveats them.
+  **All-channels** slide-over reuses the multi-source `/conditions/full` view.
+
+Server-side shared-password auth is still a client stub (pairs with Phase 7 TLS). Routing is
+CPU-bound but cached (~25 s); the LLM may take 45–90 s when it chains several tool calls.
 
 ## Helm fatigue index
 

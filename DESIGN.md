@@ -129,8 +129,10 @@ the model calls SQL-backed tools, then composes a grounded reply. Tool contracts
 **Tools (all implemented against the DB):** `get_current_conditions` (multi-source — every
 quantity from every reporting source, with per-source freshness + disagreement flag),
 `get_sources` (active sensors + curated reliability), `get_fatigue` (helm fatigue index — see
-below), `get_history` (per-channel or raw path, optionally one source), `get_polar_target`,
-`get_ais_targets`, `get_route_status`, `fetch_forecast` (stub), `log_note`.
+below), `get_sail_advice` (sail-range + crossovers), `get_navigator` (next mark/ETA/laylines),
+`get_tactics` (lifted-headed/favored-side/leverage), `get_route` (isochrone weather routing),
+`get_history` (per-channel or raw path, optionally one source), `get_polar_target`,
+`get_ais_targets`, `get_route_status`, `fetch_forecast` (Open-Meteo wind), `log_note`.
 
 **Helm fatigue index (`get_fatigue`):** a 0–100 score that detects a tiring driver and
 recommends a crew rotation, since a tired helm both *wanders* (more steering variance) and
@@ -162,11 +164,19 @@ telemetry). Alerts are deliberately rare so the crew listens.
 
 ## 6. Web interface
 
-Mobile-first single page over a WebSocket to the agent. Single shared boat password
-(server-side, TLS — currently a Phase-0 client-side stub). One shared crew thread so every
-watch sees the same history. Live instrument strip pinned to the header (STW, TWA, TWS,
-polar %, **helm fatigue index** coloured by level, data-freshness). Quick-action buttons for
-the five common questions. True night mode (red-on-black). Large touch targets, high contrast.
+**iPad-landscape navigator companion** (Phase 5) — deliberately NOT an instrument repeater
+(the boat already has instruments); the big numbers live behind an all-channels submenu.
+Vanilla JS over nginx (`/api/*` + `/ws` proxy), no build step, offline-friendly. Elements:
+**automatic day/night** from GPS-derived sunrise/sunset (manual override; night = red-on-black);
+a **sail-range dial** (point-of-sail gauge with the J1/A2/A3/S2 zones, crossover/peel markers,
+live TWA needle, crew "what's hoisted" selector flagging wrong sail); a **schematic course
+plot** (boat/marks/legs/laylines/wind/track, north-up/course-up, no chart tiles); a
+**Navigator** panel (next mark, ETA, leg type, layline call); a **tactical** read (lifted/headed,
+favored side, leverage); and **weather routing** (isochrone optimal route on the polars through
+an Open-Meteo wind forecast — ETA, tacks, recommended first tack, route overlay). A
+**Race/Practice toggle** gates the tactical + routing layers in the UI for RRS 41. The
+**helm fatigue index** shows in the top bar. One shared crew thread + chat to the agent. Single
+shared boat password (server-side + TLS is still a client-side stub, lands with Phase 7).
 
 ---
 

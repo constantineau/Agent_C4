@@ -51,6 +51,55 @@ AGENT_TOOLS = [
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
+        "name": "get_sail_advice",
+        "description": (
+            "Sail-range advice from the SR33 Speed Guide: the optimal sail for the current "
+            "TWS/TWA, where the boat sits within that sail's TWA band, and the next crossover/peel. "
+            "Pass the crew's currently hoisted sail (J1/A2/A3/S2) to flag flying the wrong one. "
+            "tws/twa default to the latest live values. Use when asked what sail to fly, whether "
+            "to peel, or how close a crossover is."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "tws": {"type": "number", "description": "true wind speed (kn); omit to use live"},
+                "twa": {"type": "number", "description": "true wind angle (deg); omit to use live"},
+                "hoisted": {"type": "string", "description": "currently hoisted sail: J1/A2/A3/S2"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "get_navigator",
+        "description": (
+            "Where the boat is on the course: the next mark (bearing, distance, ETA), the leg "
+            "type (beat/reach/run), the windward/leeward laylines, and a layline call (on the "
+            "layline / how far below it). Computed from live position + wind. Use when asked "
+            "what's next, distance/ETA to a mark, whether we can lay it, or which tack."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"route": {"type": "string", "default": "default",
+                                     "description": "course/route name (e.g. 'practice')"}},
+            "required": [],
+        },
+    },
+    {
+        "name": "get_tactics",
+        "description": (
+            "Tactical read of the beat: whether the current tack is LIFTED or HEADED, whether "
+            "the breeze is oscillating or in a persistent trend (and which SIDE is favored), and "
+            "how much LEVERAGE the boat has banked (cross-track from the rhumb line). Use for "
+            "'which way / which tack / are we lifted / favored side' questions. Note RRS 41: this "
+            "is practice/debrief advice unless the RC has cleared shore help — caveat in a race."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"route": {"type": "string", "description": "course/route name"}},
+            "required": [],
+        },
+    },
+    {
         "name": "get_history",
         "description": "Trend/stats for one channel (or raw Signal K path) over a window, "
                        "optionally restricted to a single source.",
@@ -103,11 +152,30 @@ AGENT_TOOLS = [
     },
     {
         "name": "fetch_forecast",
-        "description": "Publicly available GFS/NOAA forecast guidance for a position.",
+        "description": ("Wind forecast (Open-Meteo GFS, 10 m) for a position — next N hours of "
+                        "TWS/TWD. Defaults to the live position if lat/lon omitted."),
         "input_schema": {
             "type": "object",
-            "properties": {"lat": {"type": "number"}, "lon": {"type": "number"}},
-            "required": ["lat", "lon"],
+            "properties": {"lat": {"type": "number"}, "lon": {"type": "number"},
+                           "hours": {"type": "integer", "default": 12}},
+            "required": [],
+        },
+    },
+    {
+        "name": "get_route",
+        "description": (
+            "Isochrone optimal weather route from the boat to the next mark (target='next') or "
+            "the course finish (target='finish'), computed on the polars through the forecast "
+            "wind (falls back to current measured wind). Returns ETA, distance sailed vs direct, "
+            "number of tacks/gybes, the recommended first heading/tack, and the route path. Use "
+            "for 'best way to the mark / which tack first / routing / ETA'. Practice/debrief — "
+            "RRS 41 in a race."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"route": {"type": "string"},
+                           "target": {"type": "string", "enum": ["next", "finish"], "default": "next"}},
+            "required": [],
         },
     },
     {
