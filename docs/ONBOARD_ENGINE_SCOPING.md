@@ -92,14 +92,32 @@ narration ≈ 15 s — usable on a boat.
 3. **Thermal** — Super numbers assume cooling; a hot enclosed nav box will throttle without an active
    heatsink/fan. Budget cooling.
 
-**Design rule:** the engine computes; the local model **narrates + answers single-shot** over the
-engine's structured facts — no math, no inventing tactics, only short/optional tool loops. Keeps it
-accurate and fast and prevents hallucinated tactics.
+**Role: a bounded decision-support copilot, not just a narrator.** Nothing in RRS 41 limits the Orin
+to narration — it's the boat's own computer, so it may *reason and help decide* in-race (the
+narrate-only guidance is a **reliability** guardrail for a 7B, not a legal one). Division of cognitive
+labor: **Opus** builds the strategy space pre-race (unbounded); the **deterministic engine** owns the
+numbers in-race (exact); the **Orin** is the in-race *judgment* layer — it interprets the engine's
+numbers + live obs against the pre-loaded playbook, handles the gray/conflicting cases crisp rules
+miss, and recommends with confidence + caveats.
 
-**9.4 — Local LLM narrator.** Stand up the Orin with Qwen2.5-7B (A/B vs Qwen3-4B for speed), fed the
-engine's facts + the crew question, single-shot.
-*Exit test:* an onboard NL answer grounded in the engine's facts at usable latency, offline from any
-cloud.
+What it does for decisions: match live obs to each scenario's signature; flag the borderline/conflicting
+case ("rule says east, but obs are on the line and the up-course buoy says the shift is early"); answer
+follow-ups from the pre-loaded rationale; produce a single-shot structured brief at a decision gate
+(scenario-tracking + confidence → recommended variant + why → caveats/what-flips-it → conflict flag).
+
+**Guardrails (keep a 7B trustworthy):** the LLM **never does the math** (routing/ETA/CPA/laylines stay
+in the engine — it *consumes* those numbers); **never invents strategy outside the playbook** (decision
+space bounded to Opus's pre-authored variants + engine outputs — selects/interprets/flags, doesn't
+freelance); **never the sole authority** (surfaces to the crew with the deterministic recommendation
+alongside, so divergence is visible — crew decides). Inputs are pre-digested + the option space is
+bounded → reliable for a 7B. Short/optional tool loops only.
+
+**9.4 — Local LLM copilot.** Stand up the Orin with Qwen2.5-7B (A/B vs Qwen3-4B for speed), fed the
+engine's facts + the playbook + live obs. Start with narration (single-shot), then add the bounded
+decision-support brief (Lab-3).
+*Exit test:* (narration) an onboard NL answer grounded in the engine's facts at usable latency, offline
+from any cloud; (decision support) at a decision gate, a correct scenario-match + variant recommendation
++ conflict flag vs a replayed obs stream, alongside the deterministic recommendation.
 
 ---
 
