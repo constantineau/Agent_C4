@@ -90,6 +90,16 @@ function send() {
 }
 function ask(q) { addMsg('user', q); if (App.ws && App.ws.readyState === 1) App.ws.send(q); }
 
+/* On-demand debrief: POST the window report and drop the narrative into the chat log. */
+async function runDebrief() {
+  addMsg('user', 'Debrief the last session.');
+  addMsg('system', 'Generating debrief…');
+  try {
+    const r = await (await fetch('/api/debrief', { method: 'POST' })).json();
+    addMsg('assistant', r.available ? r.summary : 'No telemetry in the window to debrief yet.');
+  } catch (e) { addMsg('system', 'Debrief failed.'); }
+}
+
 /* ---------- live poll: link health, fatigue, position ---------- */
 async function refresh() {
   try {

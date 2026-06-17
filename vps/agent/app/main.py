@@ -13,7 +13,7 @@ from fastapi.concurrency import run_in_threadpool
 
 from shared.tool_contracts import AGENT_TOOLS
 from .db import pool
-from . import agent, tools, navigator, alerts
+from . import agent, tools, navigator, alerts, summarizer
 
 API_KEY_PRESENT = bool(os.environ.get("ANTHROPIC_API_KEY", "").strip())
 
@@ -147,6 +147,24 @@ def route_ep(route: str | None = None, target: str = "next"):
 def alerts_ep():
     """Currently-active alerts (collision/safety/performance), most severe first."""
     return tools.get_alerts()
+
+
+@app.post("/summary")
+async def summary_ep(minutes: float | None = None):
+    """On-demand short recap of the recent window; stored in agent_summaries."""
+    return await run_in_threadpool(summarizer.make_summary, minutes)
+
+
+@app.post("/debrief")
+async def debrief_ep(minutes: float | None = None):
+    """On-demand fuller window report (speed vs polar, wind, alerts fired); stored."""
+    return await run_in_threadpool(summarizer.make_debrief, minutes)
+
+
+@app.get("/summaries")
+def summaries_ep(limit: int = 5):
+    """Recent stored summaries / debriefs (newest first)."""
+    return tools.get_summaries(limit)
 
 
 @app.websocket("/ws")

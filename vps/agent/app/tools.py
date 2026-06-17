@@ -18,6 +18,7 @@ from . import weather
 from . import routing
 from . import ais
 from . import alerts as _alerts
+from . import summarizer as _summarizer
 
 BOAT_ID = os.environ.get("BOAT_ID", "sr33")
 
@@ -308,6 +309,11 @@ def get_alerts():
     return _alerts.get_alerts()
 
 
+def get_summaries(limit: int = 5):
+    """Recent stored on-demand summaries / debriefs (newest first)."""
+    return _summarizer.get_summaries(limit)
+
+
 def get_route_status(route: str = "default"):
     lat, lon = _latest_value("navigation.position.latitude"), _latest_value("navigation.position.longitude")
     with pool.connection() as conn:
@@ -365,6 +371,7 @@ DISPATCH = {
     "get_polar_target": get_polar_target,
     "get_ais_targets": get_ais_targets,
     "get_alerts": get_alerts,
+    "get_summaries": get_summaries,
     "get_route_status": get_route_status,
     "fetch_forecast": fetch_forecast,
     "log_note": log_note,

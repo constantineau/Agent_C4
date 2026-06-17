@@ -150,6 +150,18 @@ AGENT_TOOLS = [
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
+        "name": "get_summaries",
+        "description": ("Recent stored race summaries / debriefs (newest first). Use to recall "
+                        "'what did the last debrief say', 'summary of the last session', or to "
+                        "reference an earlier window report. Debriefs are generated on demand "
+                        "(POST /summary or /debrief), not on a timer."),
+        "input_schema": {
+            "type": "object",
+            "properties": {"limit": {"type": "integer", "default": 5}},
+            "required": [],
+        },
+    },
+    {
         "name": "get_route_status",
         "description": "Distance/bearing/ETA to the next mark and to the finish.",
         "input_schema": {

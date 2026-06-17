@@ -118,10 +118,10 @@ loss); Phase 4 agent runs the *real* Claude tool-use loop (`vps/agent/app/agent.
 with the boat-speed gospel + per-source skepticism + source priority/failover. True wind/VMG now
 flow via the auto-enabled `signalk-derived-data` plugin. Phase 5 ✅ the iPad crew interface is
 built (day/night, sail dial, course plot + navigator, tactics, weather/isochrone routing — see
-"iPad crew interface"). Phase 6 IN PROGRESS — **6.0 live AIS done** (see "Live AIS") and
-**6.1 alerting done** (see "Alerting"); next are 6.2 summarizer/debrief, 6.3 polar mining.
-Remaining: Phase 7 prod/soak; still owed — a real `candump -l can0` replay fixture and
-server-side web auth (the canned sample + client-stub gate stand in for now).
+"iPad crew interface"). Phase 6 IN PROGRESS — **6.0 live AIS** (see "Live AIS"), **6.1 alerting**
+(see "Alerting") and **6.2 summarizer/debrief done** (see "Summaries / debrief"); next is 6.3
+polar mining. Remaining: Phase 7 prod/soak; still owed — a real `candump -l can0` replay fixture
+and server-side web auth (the canned sample + client-stub gate stand in for now).
 
 ## Live AIS (Phase 6.0)
 
@@ -159,6 +159,23 @@ auto-run only on first DB init** — apply 004 to the running dev DB by hand:
 `docker compose -f compose.dev.yml exec -T timescaledb psql -U sr33 -d sr33_dev < vps/db/migrations/004_alerts.sql`.
 Bench-verified end-to-end with `ais_inject.py`: AIS + polar_deficit alerts raised after debounce,
 streamed live `updated` pushes, and cleared — banner screenshot confirmed.
+
+## Summaries / debrief (Phase 6.2)
+
+`vps/agent/app/summarizer.py` rolls up a time window of telemetry into a performance report and
+stores it in the existing `agent_summaries` table. **On-demand only — no background timer** (by
+decision). `compute_window(start,end)` aggregates `telemetry_raw` (boatspeed avg/max vs polar,
+TWS range, TWD circular mean + oscillation, heel, SOG-integrated distance) plus every alert that
+fired in the window (the 6.1 `alerts` debrief history). The narrative is written by Claude from
+the metrics when `ANTHROPIC_API_KEY` is set, else a deterministic template — so it works with no
+LLM. Two entry points differing only by default window + framing: `make_summary` (short recap,
+`SUMMARY_MIN`=20) and `make_debrief` (fuller report, `DEBRIEF_MIN`=120). Surfaced as **`POST
+/summary`**, **`POST /debrief`** (both accept `?minutes=`, both store), **`GET /summaries`** +
+the `get_summaries` tool (recall newest-first) + a DEBRIEFS/SUMMARIES prompt section + fallback
+route, and a **Debrief** quick button in the web chat (POSTs `/api/debrief`, drops the narrative
+into the log). Caveat: aggregates span ALL sources for a path (collect-everything) so a flaky
+sensor can nudge an average — fine for v1. **Note:** the summarizer reads `telemetry_raw` (Pi
+uplink / sample stack), NOT the legacy `telemetry` table that `fake_telemetry.py` writes to.
 
 ## Data paradigm — collect everything, per source
 

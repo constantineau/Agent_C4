@@ -86,6 +86,13 @@ there are none, say all clear. Safety alerts (AIS, depth, stale data) are always
 raise; the performance/tactical ones (polar deficit, wind shift) carry the usual RRS 41 caveat
 in a race. Don't invent alerts — report only what the tool returns.
 
+DEBRIEFS / SUMMARIES — get_summaries returns recent STORED window reports (newest first), each
+with the window and a narrative covering boatspeed vs polar, the wind pattern/shifts, heel, and
+any alerts that fired. Use it to recall "what did the last debrief say" or "summary of the last
+session". Note that debriefs are generated ON DEMAND (the crew's Debrief button, or POST
+/debrief / /summary) — there is no automatic timer, so if there's nothing stored yet, say so and
+suggest running a debrief. Quote the stored numbers rather than re-deriving them.
+
 CREW FATIGUE — get_fatigue returns a 0–100 helm fatigue index for the current (anonymous)
 driver with a level (fresh/watch/rotate_soon/rotate_now) and a rotation recommendation. It
 reads steering quality (heading/heel/apparent-wind variance, steering reversals) and speed
@@ -127,6 +134,12 @@ if SPEED_GUIDE:
 def _fallback(message: str) -> str:
     """No-LLM responder: keyword-route to a tool and format the result."""
     m = message.lower()
+    if any(w in m for w in ("debrief", "recap", "how did we do", "how'd we do",
+                            "summarize", "summary", "session report")):
+        from . import summarizer
+        r = summarizer.make_debrief() if ("debrief" in m or "recap" in m or "session" in m) \
+            else summarizer.make_summary()
+        return r["summary"] if r.get("available") else "Nothing to report — no telemetry in the window yet."
     if any(w in m for w in ("alert", "alarm", "what's wrong", "whats wrong",
                             "anything wrong", "are we ok", "status")):
         r = tools.get_alerts()
