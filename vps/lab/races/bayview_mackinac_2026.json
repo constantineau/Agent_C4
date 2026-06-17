@@ -1,0 +1,126 @@
+{
+  "schema_version": "0.1",
+  "race_id": "bayview-mackinac-2026",
+  "name": "2026 Bayview Mackinac Race",
+  "year": 2026,
+  "organizing_authority": "Bayview Yacht Club Mackinac Race Authority (OA), affiliated with US Sailing",
+  "start_date": "2026-07-18",
+  "start_area": "Lower Lake Huron, off Port Huron, MI",
+  "region": "Lake Huron (Great Lakes)",
+
+  "divisions": [
+    {"id": "I",   "name": "Racing Monohull — Division I (Cove Island)", "course_ref": "cove_island", "boat_type": "Monohull, fixed + movable ballast"},
+    {"id": "II",  "name": "Racing Monohull + Double-Handed — Division II (Shore)", "course_ref": "shore", "boat_type": "Monohull, fixed + movable ballast"},
+    {"id": "III", "name": "Cruising — Division III (Shore)", "course_ref": "shore", "boat_type": "Monohull"},
+    {"id": "IV",  "name": "Multihull — Division IV (Cove Island)", "course_ref": "cove_island", "boat_type": "Multihull"}
+  ],
+
+  "courses": [
+    {
+      "id": "cove_island",
+      "name": "Cove Island Course",
+      "applies_to_divisions": ["I", "IV"],
+      "distance_nm": null,
+      "note": "NOR §11.1. Distance not stated in NOR (historically ~259 nm) — confirm from SI/chart.",
+      "start": {"type": "line", "ref": "Lower Lake Huron start line — exact line in SI", "coords_source": "si_pending"},
+      "marks": [
+        {"seq": 1, "name": "Cove Island Virtual Gate", "type": "gate", "rounding": "gate",
+         "lat": 45.3333333, "lon": -81.85, "lat2": 45.338, "lon2": -81.8271667,
+         "coords_source": "nor",
+         "note": "NOR §11.1. Virtual gate ~1 nm long; SW end N45°20.00' W081°51.00', NE mark N45°20.28' W081°49.63'; Cove Island virtual mark bears ~263° from the NE gate mark. Pass through from the direction of the previous mark (Appendix WP). GPS photo required at passage."},
+        {"seq": 2, "name": "Duck Islands", "type": "island", "rounding": "starboard",
+         "lat": null, "lon": null, "coords_source": "needs_review",
+         "note": "NOR §11.1: leave to starboard on the approach to the finish. Physical island — geocode + human review against chart."},
+        {"seq": 3, "name": "Bois Blanc Island", "type": "island", "rounding": "port",
+         "lat": null, "lon": null, "coords_source": "needs_review",
+         "note": "NOR §11.1: leave to port on the approach to the finish. Physical island — geocode + human review."}
+      ],
+      "finish": {
+        "type": "virtual_gps_line",
+        "points": [
+          {"name": "Round Island Lighthouse SE corner", "lat": 45.8372333, "lon": -84.6168667},
+          {"name": "Point on Mackinac Island", "lat": 45.8460833, "lon": -84.6184167}
+        ],
+        "crossing": "East to West",
+        "coords_source": "nor",
+        "note": "NOR §11.3. Virtual GPS finish; Round Island Light bears 180° magnetic upon finishing. Finish recorded by position transponder; GPS photo required (NOR §2.1(f), changes def. of Finish per RRS 86.3)."
+      }
+    },
+    {
+      "id": "shore",
+      "name": "Shore Course",
+      "applies_to_divisions": ["II", "III"],
+      "distance_nm": null,
+      "note": "NOR §11.2. Distance not stated in NOR (historically ~204 nm) — confirm from SI/chart.",
+      "start": {"type": "line", "ref": "Lower Lake Huron start line — exact line in SI", "coords_source": "si_pending"},
+      "marks": [
+        {"seq": 1, "name": "Thunder Bay Island", "type": "island", "rounding": "port",
+         "lat": null, "lon": null, "coords_source": "needs_review",
+         "note": "NOR §11.2: leave to port. Physical island (off Alpena, MI) — geocode + human review."},
+        {"seq": 2, "name": "Bois Blanc Island", "type": "island", "rounding": "port",
+         "lat": null, "lon": null, "coords_source": "needs_review",
+         "note": "NOR §11.2: leave to port. Physical island — geocode + human review."}
+      ],
+      "finish": {
+        "type": "virtual_gps_line",
+        "points": [
+          {"name": "Round Island Lighthouse SE corner", "lat": 45.8372333, "lon": -84.6168667},
+          {"name": "Point on Mackinac Island", "lat": 45.8460833, "lon": -84.6184167}
+        ],
+        "crossing": "East to West",
+        "coords_source": "nor",
+        "note": "NOR §11.3. Same finish line as the Cove Island Course."
+      }
+    }
+  ],
+
+  "zones": [
+    {"name": "Lake Huron shipping lanes / traffic separation", "type": "tss", "geometry": null,
+     "note": "Not specified in the NOR; commercial shipping lanes exist in Lake Huron — source from SI/chart and human review before the optimizer treats them as exclusion zones."}
+  ],
+
+  "rules_profile": {
+    "rrs_edition": "2025-2028",
+    "info_available_to_all_permitted": true,
+    "customized_advice_while_underway_prohibited": true,
+    "appendix_wp": true,
+    "tracker_permitted": true,
+    "modifications": [
+      {"ref": "NOR §2.1(a)", "rule": "US Sailing prescription RRS 63.1", "summary": "shall not apply"},
+      {"ref": "NOR §2.1(d)", "rule": "RRS 41(c)", "summary": "Help in the form of information available to all boats is permitted even if only at cost; but 'at cost' help shall NOT include private forecast or tactical advice or information customized for a particular boat or group of boats while underway. (This is the basis of the three-tier architecture.)"},
+      {"ref": "NOR §2.1(e)", "rule": "RRS 47", "summary": "trash definition excludes biodegradable sail ties used while setting sails"},
+      {"ref": "NOR §2.1(f)", "rule": "Definition of Finish (RRS 86.3)", "summary": "a boat finishes when its position transponder crosses the finish line from the course side; GPS photo required"},
+      {"ref": "NOR §2.1(i)", "rule": "ORC rules / ORC 206.1", "summary": "ORC governs monohull racing; +1 spinnaker allowance with conditions; storm/heavy-weather sails excluded from the sail count"},
+      {"ref": "NOR §2.1(j)", "rule": "GLMRA rules", "summary": "Great Lakes Multihull Racing Association rules for multihulls"},
+      {"ref": "NOR §2.1(k)", "rule": "Cruising Division Rules", "summary": "apply to Cruising Division entrants (Division III)"},
+      {"ref": "NOR §2.1(m)", "rule": "World Sailing Appendix WP", "summary": "Rules for Racing Around Waypoints apply (gate/waypoint passing, electronic position fixing — primary nav system precedence)"},
+      {"ref": "NOR §2.1(n)", "rule": "RRS 60.1", "summary": "[NP] breaches are not grounds for a protest by a boat"},
+      {"ref": "NOR §2.2", "rule": "RRS 60.4(a)(2)", "summary": "changed re: protests by boats not involved in / did not see the incident"}
+    ],
+    "scoring": {
+      "system": "ORC",
+      "method": "Single-Number Time-on-Time (ToT)",
+      "options": [
+        "BYC Mack Cove custom wind mix (Cove Island Course)",
+        "BYC Mack Shore custom wind mix (Shore Course)",
+        "ORC Weather Routing Scoring (WRS)"
+      ],
+      "decided": "OA decides/announces the custom-wind-mix vs WRS option no later than the 0800 weather briefing race morning; if WRS, the TCF is published no later than 3 hours before the start.",
+      "ref": "NOR §13"
+    }
+  },
+
+  "fleet": [],
+
+  "provenance": {
+    "sources": [
+      {"label": "2026 Bayview Mackinac Notice of Race (NOR), V6 approved 11/19/25",
+       "url": "https://bycmack.com/Assets/pdf/2026NOR%20V6%20111925%20Approved_Post.pdf",
+       "retrieved": "2026-06-17"},
+      {"label": "Race tracking", "url": "https://bycmack.com/tracking/", "retrieved": "2026-06-17"}
+    ],
+    "si_status": "2026 Sailing Instructions NOT yet posted (~July 2026). The SI will fix the exact start line, any turning marks/zones beyond the NOR, and confirm distances. Re-ingest when posted (https://bycmack.com/sis/).",
+    "review_status": "machine-extracted from the NOR — NEEDS HUMAN REVIEW: island coordinates are null (Duck Islands / Bois Blanc / Thunder Bay Island), course distances unconfirmed, start line + TSS pending the SI.",
+    "extracted_by": "Lab-0 manual extraction (schema-first slice), 2026-06-17"
+  }
+}
