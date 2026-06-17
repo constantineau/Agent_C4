@@ -347,5 +347,8 @@ boat's **own** instrument readout, **safety** alerts (AIS/depth/stale), and all-
 Practice/delivery/debrief use is unrestricted. Two compliant paths: (A) make the Phase-5 Race/Practice
 toggle a **server-side** gate so the agent *withholds* tactical/routing/coaching in race mode (today
 it only gates the UI — recommended follow-up); (B) an **all-onboard local-model** agent (no cloud API)
-for full in-race coaching, since the boat's own gear isn't an "outside source". Confirm with the
-OA/RC in writing + re-check the Sailing Instructions (published ~July 2026) before race use.
+for full in-race coaching, since the boat's own gear isn't an "outside source". **Making the service
+or its outputs public does NOT cure it** (memo §3): §2.1(d) excludes advice "customized for a
+particular boat *or group of boats* while underway", so publishing per-boat advice is still caught —
+publicity defeats "private" but not "customized", and the "outside source" prohibition is untouched.
+Confirm with the OA/RC in writing + re-check the Sailing Instructions (published ~July 2026) before race use.

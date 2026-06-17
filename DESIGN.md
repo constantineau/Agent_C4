@@ -207,8 +207,11 @@ and all-boats info verbatim. Two compliant modes: (A) a **server-side** Race-mod
 agent withholds tactical/routing/coaching while racing (today the Race toggle only gates the UI —
 recommended follow-up to enforce it on the agent); (B) an **all-onboard, local-model** agent (no
 cloud API) for full in-race coaching, since the boat's own equipment isn't an "outside source".
-**Confirm with the OA/RC in writing and re-check the SIs before race use.** Practice, deliveries,
-and debriefs are unrestricted.
+**Making the service or its outputs public does not cure it** (memo §3): §2.1(d) excludes advice
+"customized for a particular boat *or group of boats* while underway", so a public per-boat tactical
+feed is still caught — publicity defeats "private" but not "customized", and the "outside source"
+prohibition stands. **Confirm with the OA/RC in writing and re-check the SIs before race use.**
+Practice, deliveries, and debriefs are unrestricted.
 
 ---
 

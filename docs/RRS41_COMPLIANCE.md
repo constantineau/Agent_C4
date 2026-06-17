@@ -62,7 +62,71 @@ Safety, own-instrument readout, verbatim all-boats info, and all non-racing use 
 
 ---
 
-## 3. Two compliant operating modes
+## 3. Considered and rejected: the "make it public" loopholes
+
+A natural idea is to dissolve the "customized for a particular boat" problem by making the *service*
+or its *outputs* public. Two versions were evaluated; **both fail**, and the rule text forecloses
+them almost word-for-word.
+
+**Version A — a public multi-tenant service.** "Anyone can sign up, upload their own polars, and use
+the same system; the channels (TWS/AWA/GPS…) are universal — so isn't it 'information available to
+all boats'?"
+
+**Version B — a public tactical feed.** "Publish every boat's AI tactical advice with no password,
+so all competitors can see all the advice — now the information really is available to all boats."
+
+### Why both fail
+
+1. **The decisive hook — "or group of boats."** §2.1(d) excludes advice "customized for a particular
+   boat **or group of boats** while underway." The drafters explicitly anticipated the "make it for
+   everyone / a group" move and wrote it out. So:
+   - *"It's still per-boat advice, just published"* → customized for **a particular boat**. Caught.
+   - *"It's one public tactical feed for the whole fleet / all our users"* → customized for **a group
+     of boats** while underway. Caught.
+   There is no third framing — boat-specific or group-specific, while underway, from an outside
+   source, both are named exclusions.
+
+2. **"Customized" is about how the advice is computed, not who can read it.** "Boat X at position P
+   should tack now" is customized whether one person or ten thousand can see it. Publicity defeats the
+   word *private* (prong 1), but not *customized* (prong 2) — and prong 2 is independent.
+
+3. **RRS 41's root prohibition is untouched by publicity.** "A boat shall not receive help from any
+   outside source." A boat that acts on the shore agent's bespoke call **received outside help** —
+   that a competitor could also read the instruction is irrelevant to whether *this* boat received
+   it. The protest question is "did this boat receive outside help that improved its position?", not
+   "was the help secret?"
+
+4. **"Available to all boats" means *common information*, not a public bucket of individualized
+   advice.** The exception is meant for one product identical for everyone — a GRIB, an NWS forecast,
+   a race-committee weather broadcast. A public wall of 200 boats' individual instructions is 200
+   customized advices sharing a URL; each boat still consumes the one made for it.
+
+5. **Self-defeating anyway.** If the feed were truly equal and public it confers no competitive edge
+   (rivals see your plan too) — yet you'd still be acting on an outside source's bespoke call, which
+   is the violation. RRS 41 is "no outside help," not "no advantage."
+
+### The legitimate public lane (where the instinct *does* land)
+
+There **is** a compliant in-race public lane, upstream of the tactical call: **conditions-level,
+non-boat-specific information that is genuinely the same for everyone** — a public wind / pressure /
+shift observation feed for the race area, general forecasts, a shared buoy/observation layer. "The
+left side has more pressure" is arguably common racecourse information; **"you, boat X, go left now"
+is not.** Even here, keep it to objective *data* (wind obs, forecasts); *AI tactical opinion* about
+the fleet edges back toward "tactical advice." A public service can broadcast common race-area
+**data** to all in-race; the instant it computes *your boat's* move, public or not, it is back over
+the line.
+
+### Bottom line
+
+Publishing the outputs does not cure the in-race problem. **This is ultimately a rules
+interpretation, not an engineering choice** — if the public-feed theory is to be pursued, put the
+exact proposal to the OA/RC in writing and get a ruling; do not rely on this reading. The risk is
+asymmetric (a wrong call on a 200+ nm race is a DSQ, not a tactical regret), so default conservative.
+The compliant paths in §4 are unchanged.
+
+---
+
+## 4. Two compliant operating modes
 
 **A. Cloud agent in a race → "compliant race mode" (restrict the advice channel).**
 During racing, the shore agent must deliver only: (1) safety/collision information, (2) the boat's
@@ -85,17 +149,17 @@ inference is the compliant form; it's a larger build (model + hardware) and is d
 
 ---
 
-## 4. Action items
+## 5. Action items
 
 1. **Before any race use, confirm with the OA/RC in writing** how they read §2.1(d) for an
-   onboard/AI navigator, and re-check the **Sailing Instructions** when published — they can change
-   the NOR and take precedence.
+   onboard/AI navigator (and, if pursuing the public-feed theory in §3, that exact proposal), and
+   re-check the **Sailing Instructions** when published — they can change the NOR and take precedence.
 2. **Default to safe:** in a race with the cloud agent, restrict to passive collection + safety +
    own-data; use full coaching only for **practice, deliveries, and debriefs**.
-3. **Recommended code follow-up:** make Race mode a **server-side** compliance gate (see §3A), not
+3. **Recommended code follow-up:** make Race mode a **server-side** compliance gate (see §4A), not
    just a UI gate, with an explicit "racing — outside tactical help withheld (RRS 41)" response.
 4. **Longer term, if full in-race coaching is wanted:** pursue the **all-onboard, local-model**
-   path (§3B).
+   path (§4B).
 5. Carriage of the **position transponder** and the **primary-nav-GPS finish/gate photos** are
    required by the NOR (§2.1(f), §8) — orthogonal to RRS 41, but note the boat must carry/operate
    them.
