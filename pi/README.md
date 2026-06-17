@@ -19,6 +19,12 @@ Stack (brief §4):
 **Portability rule:** the ONLY bench↔boat difference is `CAN_IFACE` (`vcan0` vs `can0`).
 Set it once (env / config); everything else is identical.
 
+**Coming (Phase 9 — the three-tier pivot):** the Pi also becomes the **onboard deterministic engine**
+host — `routing/tactics/sails/polars/nav/fatigue` run here (the boat's own gear → legal in-race under
+RRS 41, no LLM), and the iPad talks to the Pi in race mode. An optional **Jetson Orin Nano** companion
+adds a local LLM (Qwen2.5-7B) for in-race chat. The cloud stays the between-races prep/debrief/learning
+"performance lab." See `docs/RRS41_COMPLIANCE.md` and `docs/ONBOARD_ENGINE_SCOPING.md`.
+
 ## Phase status
 - **Phase 1 — built.** Signal K (`compose.pi.yml` + `signalk/settings.template.json`) and
   `uplink/uplink.py` are containerized and verified end-to-end on the bench with sample

@@ -2,10 +2,13 @@
 
 **Product:** SR33 AI Navigator
 **Vessel:** SR33 sailing yacht — distance racing (Bayview Mackinac; Port Huron → Mackinac Island)
-**Status:** Phases 0–4 built & bench-verified (cloud pipeline, Pi bench, full-res archive,
-real Claude agent); true wind via signalk-derived-data; helm fatigue index added. Phase 5 web
-app and Phase 6 alerting/summarizer still ahead.
-**Last updated:** 2026-06-16
+**Status:** Phases 0–6 built & bench-verified (cloud pipeline, Pi bench + full-res archive, real
+Claude agent, iPad navigator, alerting/summarizer/polar mining); Phase 7 started (server-side web
+auth + TLS scaffolding). **Pivot (2026-06-17): a three-tier architecture** driven by RRS 41 — an
+onboard deterministic engine for legal in-race use, an optional onboard LLM, and cloud frontier
+Opus 4.8 for between-races prep/debrief/learning (see §2, §8, §10, and
+`docs/ONBOARD_ENGINE_SCOPING.md`).
+**Last updated:** 2026-06-17
 
 This document describes *what the product is and how it is built today*. The original
 project brief (Google Doc `1lUqXt3JZ8Cao467CfGT9CP3O75wtuO6z3CvoMr56v5Y`) holds the long-form
@@ -66,6 +69,16 @@ two-way chat channel, both over Starlink.
   against TimescaleDB.
 - **One CAN_IFACE switch.** The only difference between bench and boat is the CAN interface
   name — `vcan0` (bench, on the VPS) vs `can0` (boat). Everything else is identical.
+
+**Evolving to three tiers (RRS 41 pivot, 2026-06-17).** The diagram above is the *cloud-centric* v1.
+RRS 41 (§8) forbids customized tactical advice computed off-boat while racing, so the architecture is
+gaining an **onboard tier**: the deterministic engine (routing/tactics/sails/polars/nav/fatigue —
+plain physics on the boat's own sensors, *not* an LLM, Expedition-class) moves onto the Pi (legal
+in-race); an optional **Jetson Orin Nano** runs a local LLM (Qwen2.5-7B) for in-race chat over the
+engine's facts; and the cloud (frontier **Opus 4.8**) becomes the **between-races performance lab** —
+prep, debrief, and write-back learning (refined polars/crossovers/calibration) loaded onboard *before
+the start* and frozen at the gun. The three tiers, the legal reasoning, and the build plan are in
+`docs/RRS41_COMPLIANCE.md` and `docs/ONBOARD_ENGINE_SCOPING.md` (the proposed Phase 9 track).
 
 ---
 
@@ -197,21 +210,32 @@ Git mirrors this: develop on `dev`, merge to `main`, deploy `main` via
 
 ## 8. Racing-rules compliance (RRS 41 / Bayview Mackinac NOR)
 
-**Reviewed 2026-06-17 — see `docs/RRS41_COMPLIANCE.md` for the full memo.** The 2026 NOR
-**§2.1(d) changes RRS 41(c)**: information available to all boats is allowed even at cost, *but
-that "shall not include private forecast or tactical advice or information customized for a
-particular boat … while underway."* So with the **cloud architecture**, every customized
-tactical/routing/coaching answer delivered while racing is **prohibited outside help**. Allowed
-in-race: passive collection, the boat's **own** instrument readout, **safety** (AIS/depth/stale),
-and all-boats info verbatim. Two compliant modes: (A) a **server-side** Race-mode gate so the shore
-agent withholds tactical/routing/coaching while racing (today the Race toggle only gates the UI —
-recommended follow-up to enforce it on the agent); (B) an **all-onboard, local-model** agent (no
-cloud API) for full in-race coaching, since the boat's own equipment isn't an "outside source".
-**Making the service or its outputs public does not cure it** (memo §3): §2.1(d) excludes advice
-"customized for a particular boat *or group of boats* while underway", so a public per-boat tactical
-feed is still caught — publicity defeats "private" but not "customized", and the "outside source"
-prohibition stands. **Confirm with the OA/RC in writing and re-check the SIs before race use.**
-Practice, deliveries, and debriefs are unrestricted.
+**Reviewed 2026-06-17 — full memo `docs/RRS41_COMPLIANCE.md`; build plan
+`docs/ONBOARD_ENGINE_SCOPING.md`.** The 2026 NOR **§2.1(d) changes RRS 41(c)**: information available
+to all boats is allowed even at cost, *but that "shall not include private forecast or tactical advice
+or information customized for a particular boat … while underway."* So **any customized
+tactical/routing/polar/sail/fatigue advice computed off-boat and delivered while racing is prohibited
+outside help** — and making the service or its outputs public does **not** cure it (memo §3). The memo
+rebuts three loopholes: publishing per-boat advice (still "customized for a particular boat *or group
+of boats*"), and the "Claude is available to all boats" framing (*"available to all"* is about the
+**product**, not the **provider**; and "customized for a particular boat" is an independent, unbeatable
+prong; orchestrator location is cosmetic). Allowed in-race: passive collection, the boat's **own**
+instrument readout, **safety** alerts (AIS/depth/stale), all-boats info verbatim.
+
+**The fix = separate the deterministic engine from the LLM → the three-tier architecture (§2, memo §4):**
+- **(1) Onboard deterministic engine (Pi 4)** — routing/tactics/sails/polars/nav/fatigue on the boat's
+  own sensors. Expedition-class, legal in-race, **no LLM needed** (~80% of the value). The iPad talks
+  to the Pi in race mode.
+- **(2) Onboard LLM (optional, Jetson Orin Nano 8GB)** — Qwen2.5-7B for in-race NL chat, single-shot
+  narration over the engine's facts (no tactical invention).
+- **(3) Cloud frontier Opus 4.8 (between races only)** — prep, debrief, and the **performance lab**:
+  write-back learning (refined polars/crossovers/calibration/fatigue) loaded onboard before the start,
+  frozen at the gun, never re-derived mid-race.
+
+**Minimum-now:** a **server-side, fail-closed** Race-mode gate on the cloud agent (today the Phase-5
+toggle gates only the UI). This is the proposed **Phase 9 / Onboard + Performance-Lab track** (§10).
+**Confirm with the OA/RC in writing and re-check the SIs (~July 2026) before race use.** Practice,
+deliveries, and debriefs are unrestricted.
 
 ---
 
@@ -229,16 +253,22 @@ boat-install date.
 | Phase | Deliverable | Exit test | State |
 |-------|-------------|-----------|-------|
 | 0 | Repo + dev stack + schema + stubs + fake data | `compose.dev.yml up`; DB reachable; data loads | ✅ done |
-| 1 | Pi base + CAN bench + Signal K | sample N2K flows; Signal K dashboard populated | ✅ done — SK+uplink containerized; verified SK→uplink→DB→agent on the bench |
-| 2 | Pi local archive | day-length replay at full res; survives reboot | ⬜ |
-| 3 | Ingestion + uplink store-and-forward | forced 30-min outage backfills cleanly | ⬜ |
-| 4 | Agent core + SQL tools (live LLM) | accurate answers vs live dev data | ⬜ (tools done; needs API key) |
-| 5 | Web app polish + real auth | full practice sail used without instruction | ⬜ |
-| 6 | Alerting + summarizer + polar tooling | acceptable false-positive rate over 2 sails | ⬜ |
-| 7 | Prod + deploy + rules review + soak | NOR compliance determined; 48-h soak passes | ⬜ |
+| 1 | Pi base + CAN bench + Signal K | sample N2K flows; Signal K dashboard populated | ✅ done — SK+uplink containerized; SK→uplink→DB→agent on the bench |
+| 2 | Pi local archive | full-res replay; survives reboot; backfill lands in cloud | ✅ done |
+| 3 | Ingestion + uplink store-and-forward | forced outage backfills cleanly | ✅ done — survives reboot mid-outage, no loss |
+| 4 | Agent core + SQL tools (live LLM) | accurate answers vs live dev data | ✅ done — real Claude tool-use loop + boat-speed gospel + source skepticism/failover |
+| 5 | iPad navigator UI | full practice sail used without instruction | ✅ done — day/night, sail dial, course plot, navigator, tactics, routing |
+| 6 | Alerting + summarizer + polar tooling | acceptable false-positive rate over 2 sails | ✅ bench-complete; 2-sail false-positive gate awaits real sailing |
+| 7 | Prod + deploy + rules review + soak | NOR compliance determined; 48-h soak passes | 🔶 started — server-side web auth + TLS scaffolding done; rules review done (§8); prod deploy/soak gated on domain + prod `.env` |
+| **9** | **Onboard + Performance-Lab track (the three-tier pivot)** | onboard engine renders nav/sail/tactics on the Pi; race mode reaches no cloud; a sail → refined polars loaded back onboard | ⬜ proposed — see `docs/ONBOARD_ENGINE_SCOPING.md` |
+
+(Phase 8 was an interim "navigation & optimization" wishlist — real marks/GRIB/current/rounding-planner — now folded into the Phase 9 onboard track and the performance lab.)
 
 ## 11. Future work
 
-Empirical polar generation from logs; automated post-race debrief reports; onboard-only
-agent mode for rules-restricted racing; engine/battery PGN capture for deliveries; Telegram
-bot as a second interface; shore-crew read-only tracker.
+Folded into the **Phase 9 onboard track + performance lab** (§8, §10): empirical polar generation from
+logs (write-back), automated post-race debrief reports, the onboard deterministic engine + optional
+onboard LLM for rules-compliant in-race coaching, refined sail crossovers/calibration. Still loose:
+real marks via N2K PGN 129284/129285 + course import; true GRIB routing (spatially-varying wind);
+current/tide + buoy obs; start-line strategy; engine/battery PGN capture for deliveries; a second
+interface (Telegram) and a shore-crew read-only tracker.

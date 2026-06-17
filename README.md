@@ -4,6 +4,15 @@ LLM-powered navigator / coach / long-term data archive for the SR33 racing yacht
 Boat NMEA 2000 → Raspberry Pi (Signal K) → 15-s telemetry over Starlink → cloud VPS
 (TimescaleDB + Claude-API agent) → mobile web chat for the crew.
 
+> **Architecture pivot (2026-06-17): a three-tier design**, driven by racing-rules compliance
+> (RRS 41 forbids customized tactical advice computed off-boat *while racing*):
+> **(1) onboard deterministic engine** on the Pi (routing/tactics/sails/polars/nav/fatigue —
+> Expedition-class, legal in-race, no LLM); **(2) optional onboard LLM** (Jetson Orin Nano,
+> Qwen2.5-7B) for in-race chat; **(3) cloud frontier Opus 4.8** for *between-races* prep,
+> debrief, and a write-back **performance lab**. See `docs/RRS41_COMPLIANCE.md` (the why) and
+> `docs/ONBOARD_ENGINE_SCOPING.md` (the proposed Phase 9 build). The cloud stack below is v1
+> and remains the practice/cruising/debrief product.
+
 - **DESIGN.md** — product design description: architecture + what's built vs. planned today.
 - **CLAUDE.md** — operational runbook (ports, commands, deploy, conventions).
 - Project brief (Google Doc `1lUqXt3JZ8Cao467CfGT9CP3O75wtuO6z3CvoMr56v5Y`) — the long-form why.
@@ -71,15 +80,16 @@ compose.{dev,prod}.yml
 
 ## Status
 
-- **Phase 0 — done.** Repo + dev compose stack + TimescaleDB schema + functional ingestion +
-  SQL-backed agent tools + WebSocket chat + mobile web app + fake-data seed. Verified
-  end-to-end (481 fake points → DB → live agent answers).
-- **Phase 1 — done (core).** Pi stack containerized: Signal K (SocketCAN on `$CAN_IFACE`,
-  port 3010) → uplink (WebSocket subscribe → 15-s aggregates → ingestion, with
-  store-and-forward). Verified end-to-end on the bench with sample N2K data:
-  Signal K → uplink → TimescaleDB → live agent answers. Follow-up: `signalk-derived-data`
-  plugin for true wind (TWS/TWA/TWD) + record a real boat log for `canplayer` replay.
+- **Phases 0–6 — done & bench-verified.** Cloud pipeline (ingestion → TimescaleDB → Claude
+  tool-use agent → WebSocket chat), Pi stack (Signal K + uplink + full-res archive, store-and-forward,
+  true wind via `signalk-derived-data`), the iPad navigator UI (day/night, sail dial, course plot,
+  navigator, tactics, routing), and alerting + on-demand summarizer/debrief + polar mining.
+- **Phase 7 — started.** Server-side shared-password web auth + TLS scaffolding (bench-verified);
+  remaining: prod deploy + domain/TLS + 48-h soak + the RRS 41 review (done — see below).
+- **Phase 9 (proposed) — the three-tier pivot.** Onboard deterministic engine on the Pi +
+  performance lab on cloud Opus 4.8 (+ optional Orin Nano LLM). Design in
+  `docs/ONBOARD_ENGINE_SCOPING.md`; the *why* in `docs/RRS41_COMPLIANCE.md`.
 
-Agent's Claude tool-use loop is wired but gated on an `ANTHROPIC_API_KEY` (set it to go
-live; Phase 4). See **DESIGN.md** for built-vs-planned and **CLAUDE.md** for the phased plan
+The agent runs the real Claude tool-use loop when `ANTHROPIC_API_KEY` is set, else a deterministic
+tool-grounded fallback. See **DESIGN.md** for built-vs-planned and **CLAUDE.md** for the phased plan
 and open items.

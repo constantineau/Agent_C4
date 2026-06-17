@@ -19,6 +19,15 @@ This file is the operational summary (brief §§1–8); read the doc for full co
 Tailscale). Boat is source of truth (link outage loses nothing). The LLM never sees raw
 NMEA — it reads facts through SQL-backed tools.
 
+**Direction — the three-tier pivot (2026-06-17; see "Racing-rules caveat" + `docs/ONBOARD_ENGINE_SCOPING.md`):**
+RRS 41 forces *customized in-race* coaching to be computed **onboard**, so the roadmap adds a
+**Phase 9 / Onboard + Performance-Lab track**: (1) relocate the deterministic engine
+(routing/tactics/sails/polars/nav/fatigue — plain physics, no LLM, Expedition-class) onto the Pi so
+it's legal in-race; (2) optionally add a **Jetson Orin Nano** local LLM (Qwen2.5-7B) for in-race chat
+over the engine's facts; (3) keep cloud **frontier Opus 4.8** for *between-races* prep, debrief, and a
+write-back **performance lab**. The cloud stack above stays the practice/cruising/debrief product and
+the performance lab.
+
 ## Repo layout (monorepo)
 
 ```
@@ -336,19 +345,31 @@ context; `polars_sr33.sql` = real polars for the DB). The agent advises sail sel
 crossovers/peels from the sail plan. Regenerate after a cert update:
 `python3 vps/agent/knowledge/build_speed_guide.py`.
 
-## Racing-rules caveat (RRS 41 / Bayview Mackinac NOR)
+## Racing-rules caveat (RRS 41 / Bayview Mackinac NOR) — drives the three-tier pivot
 
-**Reviewed 2026-06-17 — full memo in `docs/RRS41_COMPLIANCE.md`.** The 2026 Bayview Mackinac NOR
-**§2.1(d) changes RRS 41(c)**: info available to all boats is OK even at cost, but *"shall not
-include private forecast or tactical advice or information customized for a particular boat … while
-underway."* So with the **cloud agent**, customized tactical/routing/polar/sail/fatigue advice
-delivered **while racing is prohibited outside help**. **Allowed in-race:** passive collection, the
-boat's **own** instrument readout, **safety** alerts (AIS/depth/stale), and all-boats info verbatim.
-Practice/delivery/debrief use is unrestricted. Two compliant paths: (A) make the Phase-5 Race/Practice
-toggle a **server-side** gate so the agent *withholds* tactical/routing/coaching in race mode (today
-it only gates the UI — recommended follow-up); (B) an **all-onboard local-model** agent (no cloud API)
-for full in-race coaching, since the boat's own gear isn't an "outside source". **Making the service
-or its outputs public does NOT cure it** (memo §3): §2.1(d) excludes advice "customized for a
-particular boat *or group of boats* while underway", so publishing per-boat advice is still caught —
-publicity defeats "private" but not "customized", and the "outside source" prohibition is untouched.
-Confirm with the OA/RC in writing + re-check the Sailing Instructions (published ~July 2026) before race use.
+**Reviewed 2026-06-17 — full memo `docs/RRS41_COMPLIANCE.md`; onboard build plan `docs/ONBOARD_ENGINE_SCOPING.md`.**
+The 2026 NOR **§2.1(d) changes RRS 41(c)**: info available to all boats is OK even at cost, but *"shall
+not include private forecast or tactical advice or information customized for a particular boat … while
+underway."* So **customized tactical/routing/polar/sail/fatigue advice computed off-boat and delivered
+while racing is prohibited outside help** — and that's true even if it comes from a public service.
+The memo rebuts three loopholes (§3): publishing per-boat advice (still "customized for a particular
+boat *or group of boats*"); a public fleet feed; and the "Claude is available to all boats" framing —
+*"available to all"* is about the **product**, not the **provider**, and "customized for a particular
+boat" is an independent, unbeatable prong (orchestrator location is cosmetic). **Allowed in-race:**
+passive collection, the boat's **own** instrument readout, **safety** alerts (AIS/depth/stale),
+all-boats info verbatim. Practice/delivery/debrief is unrestricted.
+
+**The fix = separate the deterministic engine from the LLM → a three-tier architecture (memo §4):**
+- **Onboard deterministic engine (Pi 4):** `navigator/routing/tactics/sails/polar_tool/fatigue` are
+  plain physics on the boat's own sensors — Expedition-class, legal in-race, **no LLM needed** (~80% of
+  the value). Move them to the Pi; the iPad talks to the Pi in race mode.
+- **Onboard LLM (optional, Jetson Orin Nano 8GB):** Qwen2.5-7B (~21.8 tok/s INT4/MLC) for in-race NL
+  coaching over the engine's facts — single-shot narration, no tactical invention.
+- **Cloud frontier Opus 4.8 (between races only):** prep, debrief, and the **performance lab** —
+  write-back learning that refines polars/crossovers/calibration/fatigue, loaded onboard *before the
+  start* (frozen at the gun; never re-derived mid-race).
+
+**Minimum-now:** a **server-side, fail-closed** Race-mode gate on the cloud agent (today the Phase-5
+toggle gates only the UI — chat/LLM still answers). This is the proposed **Phase 9 / Onboard +
+Performance-Lab track** (scoping doc). **Confirm with the OA/RC in writing + re-check the Sailing
+Instructions (~July 2026) before race use.**
