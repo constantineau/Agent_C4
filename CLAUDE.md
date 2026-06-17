@@ -338,6 +338,14 @@ crossovers/peels from the sail plan. Regenerate after a cert update:
 
 ## Racing-rules caveat (RRS 41 / Bayview Mackinac NOR)
 
-Real-time shore tactical/routing advice may be prohibited "outside help." Confirm with the
-race committee before race use. Passive collection + practice/delivery/debrief use is fine;
-an all-onboard fallback (agent on the Pi, no shore loop) is feasible if required.
+**Reviewed 2026-06-17 — full memo in `docs/RRS41_COMPLIANCE.md`.** The 2026 Bayview Mackinac NOR
+**§2.1(d) changes RRS 41(c)**: info available to all boats is OK even at cost, but *"shall not
+include private forecast or tactical advice or information customized for a particular boat … while
+underway."* So with the **cloud agent**, customized tactical/routing/polar/sail/fatigue advice
+delivered **while racing is prohibited outside help**. **Allowed in-race:** passive collection, the
+boat's **own** instrument readout, **safety** alerts (AIS/depth/stale), and all-boats info verbatim.
+Practice/delivery/debrief use is unrestricted. Two compliant paths: (A) make the Phase-5 Race/Practice
+toggle a **server-side** gate so the agent *withholds* tactical/routing/coaching in race mode (today
+it only gates the UI — recommended follow-up); (B) an **all-onboard local-model** agent (no cloud API)
+for full in-race coaching, since the boat's own gear isn't an "outside source". Confirm with the
+OA/RC in writing + re-check the Sailing Instructions (published ~July 2026) before race use.

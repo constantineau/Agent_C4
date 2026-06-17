@@ -197,11 +197,18 @@ Git mirrors this: develop on `dev`, merge to `main`, deploy `main` via
 
 ## 8. Racing-rules compliance (RRS 41 / Bayview Mackinac NOR)
 
-Real-time tactical/routing advice from a shore agent **may be prohibited outside
-assistance**. Before race use: review the current NOR/SIs and, if ambiguous, ask the race
-committee. Absent approval, restrict in-race use to passive collection + crew logging; use
-full coaching for practice, deliveries, and debriefs. An all-onboard fallback (agent on the
-Pi, no shore loop) is feasible if required. Data collection and non-racing use are unrestricted.
+**Reviewed 2026-06-17 — see `docs/RRS41_COMPLIANCE.md` for the full memo.** The 2026 NOR
+**§2.1(d) changes RRS 41(c)**: information available to all boats is allowed even at cost, *but
+that "shall not include private forecast or tactical advice or information customized for a
+particular boat … while underway."* So with the **cloud architecture**, every customized
+tactical/routing/coaching answer delivered while racing is **prohibited outside help**. Allowed
+in-race: passive collection, the boat's **own** instrument readout, **safety** (AIS/depth/stale),
+and all-boats info verbatim. Two compliant modes: (A) a **server-side** Race-mode gate so the shore
+agent withholds tactical/routing/coaching while racing (today the Race toggle only gates the UI —
+recommended follow-up to enforce it on the agent); (B) an **all-onboard, local-model** agent (no
+cloud API) for full in-race coaching, since the boat's own equipment isn't an "outside source".
+**Confirm with the OA/RC in writing and re-check the SIs before race use.** Practice, deliveries,
+and debriefs are unrestricted.
 
 ---
 
