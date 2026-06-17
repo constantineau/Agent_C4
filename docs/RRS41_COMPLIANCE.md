@@ -105,6 +105,34 @@ so all competitors can see all the advice — now the information really is avai
    (rivals see your plan too) — yet you'd still be acting on an outside source's bespoke call, which
    is the violation. RRS 41 is "no outside help," not "no advantage."
 
+### Version C — the "public-utility LLM"
+
+A third framing (raised 2026-06-17): the **Claude API itself is a service available to all boats** —
+anyone can pay for it, like the "at cost" GRIB the NOR expressly permits — so isn't an answer it
+returns "information available to all boats," especially if the agent "lives" onboard the Pi and
+merely *calls out* to the model? **It fails, for reasons distinct from A/B:**
+
+6. **"Available to all" is about the *product*, not the *provider*.** The exception saves a common
+   product identical for everyone (a GRIB, an NWS forecast, an RC broadcast). A weather *service* is
+   also available to all — yet a **customized routing call** from it while racing is the textbook RRS
+   41 violation. The provider being open does not launder a bespoke output. When the Pi sends "boat
+   C4 at P, TWS 12, TWA 45 — tack?", the *answer is customized for this boat and this moment*; the
+   model's universal availability is irrelevant.
+7. **The "customized for a particular boat" prong is independent and unbeatable here.** Even granting
+   the model is "available to all" (defeating *private*), any boat-specific answer is still "tactical
+   advice customized for a particular boat while underway" — separately excluded by §2.1(d). You must
+   clear *both* prongs; customization cannot be cleared for a per-boat answer. (Same structure as the
+   "or group of boats" kill shot above, aimed at a different loophole.)
+8. **Orchestrator location is cosmetic.** Compliance turns on *where the customized reasoning is
+   computed*, not where the calling code runs. A satphone "lives on the boat" too; calling a shore
+   router with it is still outside help. A Pi that ships your specifics to Claude and receives a
+   customized answer **received outside help over the link** — the advice originated off-boat.
+
+The legitimate residue: the cloud LLM may serve as a **generic reference** (common sailing knowledge,
+no boat specifics) or a **dumb pipe for common data** (verbatim public GRIB/forecast). The instant
+your position/wind/boat enters the prompt and a customized answer comes back, you are over the line —
+which is precisely why boat-specific in-race NL coaching must run on an **onboard** model (§4C).
+
 ### The legitimate public lane (where the instinct *does* land)
 
 There **is** a compliant in-race public lane, upstream of the tactical call: **conditions-level,
@@ -126,43 +154,128 @@ The compliant paths in §4 are unchanged.
 
 ---
 
-## 4. Two compliant operating modes
+## 4. The compliant architecture — separate *computation* from *the LLM*
 
-**A. Cloud agent in a race → "compliant race mode" (restrict the advice channel).**
-During racing, the shore agent must deliver only: (1) safety/collision information, (2) the boat's
-own instrument data, and (3) information equally available to all boats *verbatim* (no customized
-routing/forecast). It must **decline** tactics, routing, polar/sail coaching, and fatigue calls
-while racing. The Phase-5 **Race/Practice toggle** is the natural control, but today it only gates
-those panels in the **UI** — the chat/LLM can still answer a tactical question. **Recommended
-follow-up:** enforce the gate **server-side** (in race mode the agent refuses customized
-tactical/forecast/routing/coaching and answers only safety + own-data + all-boats-info), so
-compliance doesn't depend on the crew avoiding a button. This is a concrete, buildable change.
+The earlier framing (cloud agent = illegal; all-onboard local model = legal-but-huge) conflated two
+different things. Compliance turns on **where the customized reasoning is computed**, not whether an
+LLM is involved:
 
-**B. All-onboard for full in-race coaching (no shore loop).**
-Run the agent **on the boat** (on the Pi) using a **local model with no external API call**, fed
-only by the boat's own sensors. The boat's own equipment and onboard computation are **not an
-"outside source"** — this is the same category as widely-used onboard nav/routing software
-(Expedition, etc.). This is the only way to keep the full tactical/routing/coaching value **legally
-in a race**. Note: an "onboard" agent that still calls the **cloud Claude API** is **not** clearly
-compliant — the customized advice would originate from an outside source over the link. Local
-inference is the compliant form; it's a larger build (model + hardware) and is deferred.
+- **The deterministic engine** — `navigator.py`, `routing.py`, `tactics.py`, `sails.py`,
+  `polar_tool.py`, `fatigue.py` — is plain physics/geometry on the boat's own sensors + the published
+  course. It is *not* an LLM. **This is exactly what Expedition is**, and Expedition is legal in-race
+  because it is the boat's own computer crunching the boat's own data. Nothing about it is
+  intrinsically cloud — it runs on the VPS today only by accident of where the stack was stood up.
+  **Run it on the Pi → it is the boat's own gear → legal in-race.**
+- **The conversational LLM** — the Claude call that turns numbers into language and answers free-form
+  questions. *This* is the genuinely off-boat part RRS 41 bites. Most in-race value (laylines,
+  routing, sail crossovers, tactics math, polar targets, fatigue) does not need it.
+
+So the corrected picture is **three layers**:
+
+| Layer | Runs where | In-race | Role |
+|---|---|---|---|
+| Deterministic engine (routing/polars/tactics/sails/nav/fatigue) | **Onboard (Pi 4)** | ✅ legal | Expedition-class; boat's own gear + published marks |
+| Common-data fetch (GRIB/forecast/AIS/buoys) | cloud or onboard | ✅ legal | "Information available to all boats" — even at cost |
+| Conversational coaching / NL Q&A | **onboard local LLM** in-race; **cloud Opus** otherwise | onboard ✅ / cloud ❌ | Narrate the engine's facts; deep Q&A |
+
+**Operating modes that fall out:**
+
+**A — Cloud race gate (minimum-now).** Until the onboard engine exists, the current cloud-only build
+must enforce a **server-side, fail-closed** race-mode gate: in race mode the cloud agent answers only
+safety + own-instrument readout + all-boats info verbatim, and *refuses* tactics/routing/polar/sail/
+fatigue with an explicit "racing — outside tactical help withheld (RRS 41)" reply. The Phase-5
+Race/Practice toggle gates only the UI today; this moves enforcement server-side so compliance does
+not depend on the crew avoiding a button. Build this regardless — smallest change that makes the
+present build safe to take racing.
+
+**B — Onboard engine (the real unlock).** Relocate the six deterministic modules to the Pi 4 with an
+onboard API; in race mode the iPad talks to the Pi, not the cloud. Legal **today**, needs **no LLM at
+all** — ~80% of the racing value. See `docs/ONBOARD_ENGINE_SCOPING.md`.
+
+**C — Onboard conversational coaching (optional, hardware).** Add a local LLM on a **Jetson Orin Nano
+(8GB, Super mode)** for in-race natural-language coaching over the engine's facts. Confirmed feasible:
+**Qwen2.5-7B INT4 via MLC ≈ 21.8 tok/s, ~4.8 GB** (Llama-3.1-8B ≈ 19; Llama-3.2-3B ≈ 43 for headroom;
+NVIDIA JetPack 6.2 benchmarks). Design rule: the engine computes; the local model only *narrates +
+answers* single-shot (no math, no inventing tactics, short tool loops only). All onboard → legal
+in-race.
+
+The earlier "all-onboard needs a local model (deferred, big)" reading was too pessimistic: a local LLM
+is only layer C; layers A and B require no new model and no new hardware.
 
 ---
 
-## 5. Action items
+## 5. Implementation patterns for the gate
 
-1. **Before any race use, confirm with the OA/RC in writing** how they read §2.1(d) for an
-   onboard/AI navigator (and, if pursuing the public-feed theory in §3, that exact proposal), and
-   re-check the **Sailing Instructions** when published — they can change the NOR and take precedence.
+- **Pre-loaded "homework."** Before the start, the cloud (Opus) produces the customized work — route,
+  sail plan, polar targets, contingencies — and it is *loaded onto the onboard system*. In-race the
+  onboard engine executes/recomputes it off the boat's own sensors. Consulting a plan made before
+  racing is your own preparation (like a tide table or pre-marked chart), not in-race outside help.
+  **Bright line: the plan freezes at the gun.** Re-running the cloud mid-race to *update* it with a
+  fresh forecast is new outside help and prohibited.
+- **Physical channel separation, not a software flag.** In race mode the iPad reaches *only* the Pi;
+  the cloud route is disabled at the network/config level. Provable and fails closed — "the cloud was
+  unreachable during the race" beats "we promise we didn't ask it anything."
+- **Fail-closed, auto-engaging race mode.** Default to *restricted*; auto-engage from a
+  race-window/geofence (the boat already must carry the position transponder per NOR §8 — tie to it).
+  If mode is uncertain, withhold.
+- **Audit trail.** Log race-mode on/off (timestamped, geofenced), the cloud channel state, and the
+  request/refusal record — a tamper-evident artifact for a protest committee.
+
+---
+
+## 6. The performance lab — frontier models between races (fully unrestricted)
+
+Everything *not while underway* — preparation, debrief, and learning — is RRS-41-unrestricted, and is
+where frontier **Opus 4.8** belongs. The cloud becomes the **shore-based analyst/designer** that
+improves the onboard system between races (the "homework" producer), closing a learning loop:
+
+1. **On the water:** onboard engine + local LLM execute on the *currently loaded*
+   polars/crossovers/calibration; the Phase-2 full-res archive captures everything.
+2. **Post-race (Opus):** backfill the log → cloud → deep debrief + **write-back refinements**.
+3. **Pre-next-race (Opus):** generate the frozen race plan from forecast + the refined polars.
+4. **Load onboard** before the start. Repeat — the boat gets faster each race while the in-race system
+   stays clean (it only runs pre-loaded, onboard-computed data).
+
+Frontier-model write-back capabilities (all between-races):
+- **Polar refinement** — extend Phase 6.3 `polar_tool.py` (today read-only observed-vs-ORC) to
+  aggregate across many sails and *emit an updated polar table* (`target_stw`/`target_vmg`) replacing
+  the generic ORC cert. Using your own measured polars in-race is fine — own performance reference,
+  frozen pre-start.
+- **Crossover refinement** — refine the J1/A2/A3/S2 sail-change points from observed performance →
+  updated `sr33_speed_guide.md`. **Prerequisite (data gap):** the hoisted sail is currently only in
+  browser `localStorage` (`sr33.hoisted`) and passed transiently to `/sail`; it is **not persisted to
+  the archive**. Crossover-learning needs a timestamped hoisted-sail log — add that capture. (Polar +
+  calibration learning work without it.)
+- **Calibration learning** — detect speedo/wind/heel offset + drift by comparing redundant sources
+  across sails → calibration factors / `source_notes`.
+- **Fatigue tuning** — tune the first-cut `FATIGUE_*` thresholds against labeled real archives.
+
+**Bright line repeated:** all refinement is computed *between races* and loaded as static reference;
+never re-derived from the cloud mid-race.
+
+---
+
+## 7. Action items
+
+1. **Before any race use, confirm with the OA/RC in writing.** Put precise, easy-to-say-yes-to
+   questions: (a) an onboard computer with no off-boat link running deterministic routing/polars on
+   the boat's own sensors + the published course (this is Expedition — near-certain yes); (b) the same
+   pulling public GRIB/forecast in-race but computing the route *onboard*; (c) a plan generated
+   off-boat *before the start* and merely consulted during the race (the homework model). Re-check the
+   **Sailing Instructions** when published — they can change the NOR and take precedence.
 2. **Default to safe:** in a race with the cloud agent, restrict to passive collection + safety +
-   own-data; use full coaching only for **practice, deliveries, and debriefs**.
-3. **Recommended code follow-up:** make Race mode a **server-side** compliance gate (see §4A), not
-   just a UI gate, with an explicit "racing — outside tactical help withheld (RRS 41)" response.
-4. **Longer term, if full in-race coaching is wanted:** pursue the **all-onboard, local-model**
-   path (§4B).
-5. Carriage of the **position transponder** and the **primary-nav-GPS finish/gate photos** are
-   required by the NOR (§2.1(f), §8) — orthogonal to RRS 41, but note the boat must carry/operate
-   them.
+   own-data; full coaching only for **practice, deliveries, and debriefs**.
+3. **Build the server-side, fail-closed race gate (§4A)** — the minimum-now change; refuse
+   tactics/routing/polar/sail/fatigue in race mode with an explicit RRS-41 message, and log it.
+4. **Scope/build the onboard deterministic engine (§4B)** — relocate the six modules to the Pi with an
+   onboard API; iPad → Pi in race mode. Legal in-race, no LLM. See `docs/ONBOARD_ENGINE_SCOPING.md`.
+5. **Optional layer C:** Jetson Orin Nano (8GB) + Qwen2.5-7B for in-race conversational coaching
+   (confirmed ~21.8 tok/s INT4/MLC). Single-shot narration over the engine's facts.
+6. **Stand up the performance lab (§6):** add timestamped **hoisted-sail logging** to the archive
+   (prerequisite for crossover learning), extend `polar_tool.py` to *write back* refined polars, and
+   wire the prep/debrief/learning loop on cloud Opus.
+7. Carriage of the **position transponder** and **primary-nav-GPS finish/gate photos** is required by
+   the NOR (§2.1(f), §8) — orthogonal to RRS 41, but the boat must carry/operate them.
 
 ---
 
