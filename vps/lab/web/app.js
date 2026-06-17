@@ -1,9 +1,10 @@
 /* C4 Performance Lab shell — shared team login, hash-routed sections, the Races library +
-   RaceDefinition review view. Vanilla JS, no build. Slice 1: Races is functional; the other
-   sections are placeholders that describe what they'll do. */
+   RaceDefinition review view + dual-input ingestion (URL / paste-link / upload → Opus → review →
+   save). Vanilla JS, no build. */
 "use strict";
 
-const Lab = { token: sessionStorage.getItem("c4lab.token") || null, races: null, sel: null };
+const Lab = { token: sessionStorage.getItem("c4lab.token") || null,
+  races: null, sel: null, sources: [], draft: null };
 
 const PHASE_ORDER = ["pre_entry", "pre_start", "start", "in_race", "at_gate", "at_finish", "post_race"];
 const PHASE_LABEL = {
@@ -13,7 +14,7 @@ const PHASE_LABEL = {
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
-/* ---------- auth ---------- */
+/* ---------- auth + api ---------- */
 async function unlock() {
   const err = document.getElementById("gateErr");
   const pw = document.getElementById("pw").value.trim();
@@ -30,21 +31,20 @@ async function unlock() {
   } catch (e) { err.textContent = "Login failed — Lab unreachable."; }
 }
 function logout() { sessionStorage.removeItem("c4lab.token"); Lab.token = null; location.reload(); }
-async function apiFetch(path) {
-  const res = await fetch(path, { headers: Lab.token ? { Authorization: "Bearer " + Lab.token } : {} });
+async function api(path, opts = {}) {
+  const headers = Object.assign({}, opts.headers, Lab.token ? { Authorization: "Bearer " + Lab.token } : {});
+  const res = await fetch(path, Object.assign({}, opts, { headers }));
   if (res.status === 401) { logout(); throw new Error("unauthorized"); }
   return res;
 }
-function boot() {
-  if (Lab.token) { document.getElementById("gate").style.display = "none"; start(); }
-}
+const apiGet = (p) => api(p);
+const apiPost = (p, body) => api(p, { method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify(body) });
+function boot() { if (Lab.token) { document.getElementById("gate").style.display = "none"; start(); } }
 window.addEventListener("DOMContentLoaded", boot);
 
 /* ---------- router ---------- */
-function start() {
-  window.addEventListener("hashchange", route);
-  route();
-}
+function start() { window.addEventListener("hashchange", route); route(); }
 function route() {
   const sec = (location.hash || "#races").slice(1);
   document.querySelectorAll("#tabs a").forEach((a) =>
@@ -58,54 +58,137 @@ async function renderRaces() {
   const view = document.getElementById("view");
   if (!Lab.races) {
     view.innerHTML = '<div class="loading">Loading race library…</div>';
-    try { Lab.races = (await (await apiFetch("/api/races")).json()).races || []; }
+    try { Lab.races = (await (await apiGet("/api/races")).json()).races || []; }
     catch (e) { view.innerHTML = '<div class="placeholder">Failed to load races.</div>'; return; }
   }
   if (!Lab.sel && Lab.races.length) Lab.sel = Lab.races[0].race_id;
   view.innerHTML = `<div class="races">
-    <div><div class="card"><h3>Race library</h3>
-      <div class="racelist">${Lab.races.map(raceItem).join("") ||
-        '<div class="muted">No races yet — ingest one (coming next).</div>'}</div>
-      <div class="muted" style="margin-top:12px;font-size:12px">Ingest a new race (auto-find URL ·
-        paste link · upload PDF) — coming next.</div>
-    </div></div>
+    <div>
+      ${ingestCard()}
+      <div class="card"><h3>Race library</h3>
+        <div class="racelist" id="racelist">${Lab.races.map(raceItem).join("") ||
+          '<div class="muted">No races yet — ingest one above.</div>'}</div></div>
+    </div>
     <div id="raceDetail" class="detail"><div class="placeholder">Select a race.</div></div>
   </div>`;
+  renderSources();
   if (Lab.sel) loadRace(Lab.sel);
 }
 function raceItem(r) {
   const rev = r.errors ? `<span class="pill bad">${r.errors} errors</span>`
     : (r.warnings ? `<span class="pill warn">${r.warnings} to review</span>`
       : `<span class="pill ok">reviewed</span>`);
-  return `<div class="raceitem ${r.race_id === Lab.sel ? "sel" : ""}" onclick="selectRace('${esc(r.race_id)}')">
+  return `<div class="raceitem ${r.race_id === Lab.sel ? "sel" : ""}" data-id="${esc(r.race_id)}"
+      onclick="selectRace('${esc(r.race_id)}')">
     <div class="nm">${esc(r.name)}</div>
     <div class="meta">${esc(r.region || "")} · ${esc(r.start_date || r.year)}</div>
     <div class="pills"><span class="pill">${r.courses} courses</span>
       <span class="pill">${r.requirements} checklist</span>
       <span class="pill">${r.ipad_items} →iPad</span>${rev}</div></div>`;
 }
-function selectRace(id) { Lab.sel = id; renderRaces(); }
+function selectRace(id) {
+  Lab.sel = id; Lab.draft = null;
+  document.querySelectorAll(".raceitem").forEach((el) =>
+    el.classList.toggle("sel", el.dataset.id === id));
+  loadRace(id);
+}
 
 async function loadRace(id) {
   const box = document.getElementById("raceDetail");
   if (!box) return;
   box.innerHTML = '<div class="loading">Loading…</div>';
   try {
-    const d = await (await apiFetch("/api/races/" + encodeURIComponent(id))).json();
-    const v = await (await apiFetch("/api/races/" + encodeURIComponent(id) + "/validate")).json();
+    const d = await (await apiGet("/api/races/" + encodeURIComponent(id))).json();
+    const v = await (await apiGet("/api/races/" + encodeURIComponent(id) + "/validate")).json();
     box.innerHTML = renderDetail(d, v);
   } catch (e) { box.innerHTML = '<div class="placeholder">Failed to load race.</div>'; }
 }
 
+/* ---------- ingestion ---------- */
+function ingestCard() {
+  return `<div class="card"><h3>Ingest a race</h3>
+    <div class="ing-row"><input id="ingUrl" placeholder="Race or document URL (auto-find)">
+      <button class="mini" onclick="discover()">Find docs</button></div>
+    <div id="ingCands" class="ing-cands"></div>
+    <div class="ing-row"><input id="ingLink" placeholder="…or paste a direct PDF link">
+      <button class="mini" onclick="addLink()">Add</button></div>
+    <ul id="ingList" class="ing-list"></ul>
+    <div class="ing-row"><label class="muted" style="font-size:12px">Or upload PDF(s):</label>
+      <input type="file" id="ingFiles" multiple accept="application/pdf"></div>
+    <button onclick="extractDraft()" id="ingBtn">Extract →</button>
+    <div id="ingMsg" class="muted" style="font-size:12px;margin-top:8px"></div></div>`;
+}
+function renderSources() {
+  const el = document.getElementById("ingList"); if (!el) return;
+  el.innerHTML = Lab.sources.map((u, i) =>
+    `<li>${esc(u)} <span class="rm" onclick="rmSource(${i})">✕</span></li>`).join("");
+}
+function addSource(u) { if (u && !Lab.sources.includes(u)) { Lab.sources.push(u); renderSources(); } }
+function rmSource(i) { Lab.sources.splice(i, 1); renderSources(); }
+function addLink() {
+  const inp = document.getElementById("ingLink"); addSource(inp.value.trim()); inp.value = "";
+}
+async function discover() {
+  const url = document.getElementById("ingUrl").value.trim();
+  const cands = document.getElementById("ingCands");
+  if (!url) return;
+  cands.innerHTML = '<div class="muted" style="font-size:12px">Searching…</div>';
+  try {
+    const r = await (await apiPost("/api/ingest/discover", { url })).json();
+    const list = r.candidates || [];
+    cands.innerHTML = list.length
+      ? list.slice(0, 12).map((c) =>
+        `<div class="cand"><span>${esc(c.label)}</span>
+         <button class="mini" onclick="addSource('${esc(c.url)}')">Add</button></div>`).join("")
+      : '<div class="muted" style="font-size:12px">No PDFs found — paste a direct link or upload.</div>';
+  } catch (e) { cands.innerHTML = '<div class="muted" style="font-size:12px">Discover failed.</div>'; }
+}
+async function extractDraft() {
+  const msg = document.getElementById("ingMsg");
+  const btn = document.getElementById("ingBtn");
+  const files = document.getElementById("ingFiles").files;
+  if (!Lab.sources.length && !files.length) { msg.textContent = "Add a document URL or upload a PDF first."; return; }
+  btn.disabled = true; msg.textContent = "Extracting with Opus… (reading the documents, ~30–60s)";
+  try {
+    let resp;
+    if (files.length) {
+      const fd = new FormData();
+      for (const f of files) fd.append("files", f);
+      resp = await (await api("/api/ingest/upload", { method: "POST", body: fd })).json();
+    } else {
+      resp = await (await apiPost("/api/ingest", { urls: Lab.sources })).json();
+    }
+    if (resp.detail) { msg.textContent = "Ingest failed: " + resp.detail; btn.disabled = false; return; }
+    Lab.draft = resp; msg.textContent = "Draft extracted — review it on the right, then save.";
+    document.getElementById("raceDetail").innerHTML = renderDraft(resp);
+  } catch (e) { msg.textContent = "Ingest failed."; }
+  btn.disabled = false;
+}
+function renderDraft(resp) {
+  return `<div class="banner draft"><b>DRAFT — machine-extracted, needs human review.</b>
+      Check the geometry and checklist, then save to the library.
+      <button class="mini" onclick="saveDraft()">Save to library</button></div>
+    ${renderDetail(resp.definition, resp)}`;
+}
+async function saveDraft() {
+  if (!Lab.draft) return;
+  try {
+    const r = await (await apiPost("/api/races", { definition: Lab.draft.definition })).json();
+    if (!r.saved) { alert("Save failed: " + (r.detail || "unknown")); return; }
+    Lab.races = null; Lab.sel = r.race_id; Lab.draft = null; Lab.sources = [];
+    renderRaces();
+  } catch (e) { alert("Save failed."); }
+}
+
+/* ---------- detail rendering ---------- */
 function renderDetail(d, v) {
   const errs = (v.errors || []), warns = (v.warnings || []);
   const banner = errs.length
-    ? `<div class="banner review"><b>${errs.length} errors</b> — must be fixed before activation.</div>`
+    ? `<div class="banner review"><b>${errs.length} errors</b>: ${errs.map(esc).join(" · ")}</div>`
     : warns.length
       ? `<div class="banner review"><b>Needs human review (${warns.length}):</b> ${warns.map(esc).join(" · ")}</div>`
       : `<div class="banner ok">Validated — ready for review sign-off.</div>`;
-  return `<div class="dhead">
-      <h2>${esc(d.name)}</h2>
+  return `<div class="dhead"><h2>${esc(d.name || "(unnamed)")}</h2>
       <div class="dmeta">${esc(d.organizing_authority || "")}<br>
         Start ${esc(d.start_date || "")} · ${esc(d.start_area || "")} · ${esc(d.region || "")}</div>
     </div>${banner}
@@ -114,7 +197,6 @@ function renderDetail(d, v) {
     ${rulesCard(d.rules_profile || {})}
     ${provenanceCard(d.provenance || {})}`;
 }
-
 function courseCard(c) {
   const marks = (c.marks || []).map((m) => `<tr>
     <td class="mono">${m.seq}</td><td>${esc(m.name)}</td><td>${esc(m.type)}</td>
@@ -123,21 +205,22 @@ function courseCard(c) {
       : esc(m.lat.toFixed(4) + ", " + m.lon.toFixed(4))}</td></tr>`).join("");
   const fin = c.finish ? `<tr><td class="mono">F</td><td>Finish (${esc(c.finish.type)})</td>
     <td>finish</td><td>${esc(c.finish.crossing || "")}</td>
-    <td class="mono">${(c.finish.points || []).map((p) => esc(p.lat.toFixed(4) + "," + p.lon.toFixed(4))).join(" → ")}</td></tr>` : "";
+    <td class="mono">${(c.finish.points || []).map((p) =>
+      p && p.lat != null ? esc(p.lat.toFixed(4) + "," + p.lon.toFixed(4)) : "—").join(" → ")}</td></tr>` : "";
   return `<div class="card"><h3>Course — ${esc(c.name)}</h3>
     <div class="muted" style="margin-bottom:8px">Divisions ${esc((c.applies_to_divisions || []).join(", "))}${
       c.distance_nm ? " · " + c.distance_nm + " nm" : ""}</div>
     <table><thead><tr><th>#</th><th>Mark</th><th>Type</th><th>Leave</th><th>Lat, Lon</th></tr></thead>
     <tbody>${marks}${fin}</tbody></table></div>`;
 }
-
 function checklistCard(reqs) {
   if (!reqs.length) return "";
   const byPhase = {};
   reqs.forEach((r) => (byPhase[r.phase] = byPhase[r.phase] || []).push(r));
-  const groups = PHASE_ORDER.filter((p) => byPhase[p]).map((p) => `<div class="phasegrp">
-    <h4>${PHASE_LABEL[p] || p}</h4>
-    ${byPhase[p].map(reqRow).join("")}</div>`).join("");
+  const phases = PHASE_ORDER.filter((p) => byPhase[p])
+    .concat(Object.keys(byPhase).filter((p) => !PHASE_ORDER.includes(p)));
+  const groups = phases.map((p) => `<div class="phasegrp">
+    <h4>${PHASE_LABEL[p] || p}</h4>${byPhase[p].map(reqRow).join("")}</div>`).join("");
   const ipad = reqs.filter((r) => r.deliver_to_ipad).length;
   return `<div class="card"><h3>Rules, Safety &amp; Checklists — ${reqs.length} items
     (${ipad} pushed to the iPad)</h3>${groups}</div>`;
@@ -151,7 +234,6 @@ function reqRow(r) {
     <div class="src">${esc(r.source || "")}</div></div>
     <div class="pills">${tags.join("")}</div></div>`;
 }
-
 function rulesCard(rp) {
   const mods = (rp.modifications || []).map((m) =>
     `<tr><td>${esc(m.ref)}</td><td>${esc(m.rule)}</td><td>${esc(m.summary)}</td></tr>`).join("");
@@ -162,11 +244,9 @@ function rulesCard(rp) {
       Tracker permitted: ${rp.tracker_permitted === true ? "yes" : rp.tracker_permitted === false ? "no" : "—"}</div>
     <table><thead><tr><th>Ref</th><th>Rule</th><th>Modification</th></tr></thead>
       <tbody>${mods}</tbody></table>
-    <div style="margin-top:12px"><b>Scoring:</b> ${esc(sc.system || "")} —
-      ${esc(sc.method || "")}<div class="muted" style="font-size:12px">${esc(sc.decided || "")}</div></div>
-    </div>`;
+    <div style="margin-top:12px"><b>Scoring:</b> ${esc(sc.system || "")} — ${esc(sc.method || "")}
+      <div class="muted" style="font-size:12px">${esc(sc.decided || "")}</div></div></div>`;
 }
-
 function provenanceCard(p) {
   const srcs = (p.sources || []).map((s) =>
     `<li><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.label)}</a>
@@ -192,5 +272,5 @@ function renderPlaceholder(sec) {
   const [title, desc] = SOON[sec] || ["Section", "Coming soon."];
   document.getElementById("view").innerHTML =
     `<div class="placeholder"><h2>${esc(title)}</h2><p>${esc(desc)}</p>
-     <p class="muted">Coming soon — the Races tab is live now.</p></div>`;
+     <p class="muted">Coming soon — the Races tab (ingest + review) is live now.</p></div>`;
 }

@@ -71,9 +71,21 @@ python3 -m shared.race_def vps/lab/races/bayview_mackinac_2026.json
   phase with category/critical/→iPad badges + source cites, rules & scoring, provenance, and the
   validation banner (the human-review items). Other sections are descriptive placeholders. Run:
   `docker compose -f compose.dev.yml up -d --build lab` → `http://localhost:8103` (dev pw `lab-dev`).
-- **Next:** the dual-input **ingestion** (auto-find URL / paste-link / upload PDF → Opus extraction
-  → review → save to the library), then wire the RaceDefinition into the navigator's course loader
-  and the race gate's `rules_profile`, and the Course & Marks map review.
+- **Dual-input ingestion: live.** The Races tab ingests a race three ways → Opus extraction →
+  a **draft** RaceDefinition → the review view → **Save to library**:
+  - **auto-find** — `POST /api/ingest/discover {url}` scrapes a race page for candidate PDFs;
+  - **paste a direct PDF link** / **upload PDF(s)** — `POST /api/ingest {urls}` / `POST /api/ingest/upload`;
+  - extraction (`app/extract.py`) pulls text with pypdf and a frontier model (Opus,
+    `ANTHROPIC_MODEL`) emits a RaceDefinition matching the schema — coordinates only when the docs
+    state them (else `needs_review`), a comprehensive `requirements` checklist with the race-time
+    items flagged `deliver_to_ipad`, and the `rules_profile`. `POST /api/races` saves the
+    (reviewed) draft to the `lab_ingested` volume.
+  - *Verified on the real 2026 NOR + SER:* 0 errors, **56 requirements** (8 →iPad), the Cove Island
+    gate + finish coordinates, 13 RRS modifications, ORC ToT scoring — a draft more complete than
+    the hand-built instance. Always a DRAFT pending human review before it's relied on.
+- **Next:** the **Course & Marks** map review (geocode the islands flagged `needs_review`, sign-off),
+  then wire the RaceDefinition into the navigator's course loader + the race gate's `rules_profile`,
+  then **Lab-1** (the multi-model optimizer).
 
 ## Race documents (found 2026-06-17)
 
