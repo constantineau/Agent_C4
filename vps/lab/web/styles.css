@@ -108,3 +108,15 @@ button.mini:hover { border-color: var(--accent); }
 .rm { color: var(--bad); cursor: pointer; }
 .banner.draft { background: rgba(54,179,255,.12); border: 1px solid var(--accent); color: var(--ink); }
 .banner.draft button { margin-left: 8px; }
+
+/* ---------- course & marks review ---------- */
+.coursemap { width: 100%; max-width: 640px; height: auto; background: var(--bg);
+  border: 1px solid var(--line); border-radius: 10px; margin-bottom: 12px; }
+.cin { width: 92px; padding: 4px 6px; border-radius: 6px; border: 1px solid var(--line);
+  background: var(--panel2); color: var(--ink); font-size: 12px; font-variant-numeric: tabular-nums; }
+td select { background: var(--panel2); color: var(--ink); border: 1px solid var(--line);
+  border-radius: 6px; padding: 4px; font-size: 12px; }
+tr.needrow { background: rgba(245,196,81,.07); }
+#saveCourseBtn { padding: 10px 18px; border: none; border-radius: 8px; background: var(--accent);
+  color: #04121f; font-weight: 700; cursor: pointer; }
+#saveCourseBtn:disabled { opacity: .6; }

@@ -134,6 +134,18 @@ async def ingest_upload(files: list[UploadFile] = File(...)):
         return JSONResponse({"detail": f"ingest failed: {exc}"}, status_code=502)
 
 
+@app.post("/api/geocode")
+async def geocode_ep(body: dict):
+    """Place name → candidate coordinates (Nominatim), for the human to confirm during review."""
+    q = (body or {}).get("q", "").strip()
+    if not q:
+        return JSONResponse({"detail": "q required"}, status_code=400)
+    try:
+        return {"results": await run_in_threadpool(extract.geocode, q)}
+    except Exception as exc:
+        return JSONResponse({"detail": f"geocode failed: {exc}"}, status_code=502)
+
+
 @app.post("/api/races")
 async def save_race(body: dict):
     """Save a (human-reviewed) RaceDefinition to the library. Errors don't block saving a draft —

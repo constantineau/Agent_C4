@@ -127,6 +127,19 @@ def extract_race_definition(docs: list[tuple[str, str]], retrieved: str = "") ->
     return _parse_json(text)
 
 
+def geocode(q: str) -> list[dict]:
+    """Look up a place name → candidate coordinates (OpenStreetMap Nominatim). For the human to
+    confirm in the Course & Marks review — we never auto-apply a geocode to a mark."""
+    from urllib.parse import urlencode
+    url = "https://nominatim.openstreetmap.org/search?" + urlencode(
+        {"q": q, "format": "json", "limit": 5})
+    _ctype, raw = fetch(url)
+    data = json.loads(raw.decode("utf-8", "ignore"))
+    return [{"display_name": d.get("display_name"),
+             "lat": round(float(d["lat"]), 6), "lon": round(float(d["lon"]), 6)}
+            for d in data if d.get("lat") and d.get("lon")]
+
+
 def _parse_json(text: str) -> dict:
     text = text.strip()
     if text.startswith("```"):

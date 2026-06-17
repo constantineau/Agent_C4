@@ -50,8 +50,10 @@ function route() {
   document.querySelectorAll("#tabs a").forEach((a) =>
     a.classList.toggle("active", a.getAttribute("href") === "#" + sec));
   if (sec === "races") return renderRaces();
+  if (sec === "course") return renderCourse();
   renderPlaceholder(sec);
 }
+const clone = (o) => JSON.parse(JSON.stringify(o));
 
 /* ---------- Races ---------- */
 async function renderRaces() {
@@ -257,9 +259,137 @@ function provenanceCard(p) {
     <div class="need" style="font-size:12px;margin-top:6px">${esc(p.review_status || "")}</div></div>`;
 }
 
+/* ---------- Course & Marks review (map + edit + geocode + save) ---------- */
+async function renderCourse() {
+  const view = document.getElementById("view");
+  if (!Lab.races) { try { Lab.races = (await (await apiGet("/api/races")).json()).races || []; } catch (e) {} }
+  if (!Lab.sel && Lab.races && Lab.races.length) Lab.sel = Lab.races[0].race_id;
+  if (!Lab.sel) { view.innerHTML = '<div class="placeholder">No race — ingest one in the Races tab.</div>'; return; }
+  view.innerHTML = '<div class="loading">Loading course…</div>';
+  try { Lab.editDef = await (await apiGet("/api/races/" + encodeURIComponent(Lab.sel))).json(); }
+  catch (e) { view.innerHTML = '<div class="placeholder">Failed to load.</div>'; return; }
+  paintCourse();
+}
+/* Render the Course & Marks view from the in-memory Lab.editDef (no server refetch — so edits and
+   geocoded coords are preserved). Callers set #courseMsg AFTER calling this. */
+function paintCourse() {
+  const d = Lab.editDef;
+  document.getElementById("view").innerHTML = `<div class="dhead">
+      <h2>Course &amp; Marks — ${esc(d.name)}</h2>
+      <div class="dmeta">Review the geometry; fill any <span class="need">needs review</span> marks
+        (type a lat/lon or Geocode), then Save. Reviewed copies override the bundled seed.</div></div>
+    <div id="courseMsg" class="muted" style="font-size:12px;margin-bottom:10px"></div>
+    ${(d.courses || []).map((c, i) => courseEditCard(c, i)).join("")}
+    <button id="saveCourseBtn" onclick="saveCourse()">Save course geometry</button>`;
+  (d.courses || []).forEach((c, i) => drawCourseMap("map" + i, c));
+}
+function courseEditCard(c, ci) {
+  const rows = (c.marks || []).map((m, mi) => {
+    const need = m.lat == null || m.coords_source === "needs_review";
+    return `<tr class="${need ? "needrow" : ""}">
+      <td class="mono">${m.seq}</td><td>${esc(m.name)}</td><td>${esc(m.type)}</td>
+      <td><select onchange="editMark(${ci},${mi},'rounding',this.value)">
+        ${["none", "port", "starboard", "gate"].map((r) =>
+          `<option ${m.rounding === r ? "selected" : ""}>${r}</option>`).join("")}</select></td>
+      <td><input class="cin" value="${m.lat == null ? "" : m.lat}" placeholder="lat"
+        onchange="editMark(${ci},${mi},'lat',this.value)"></td>
+      <td><input class="cin" value="${m.lon == null ? "" : m.lon}" placeholder="lon"
+        onchange="editMark(${ci},${mi},'lon',this.value)"></td>
+      <td>${esc(m.coords_source || "")}</td>
+      <td>${need ? `<button class="mini" onclick="geocodeMark(${ci},${mi})">Geocode</button>` : ""}</td>
+    </tr>`;
+  }).join("");
+  return `<div class="card"><h3>${esc(c.name)}</h3>
+    <canvas id="map${ci}" class="coursemap" width="640" height="360"></canvas>
+    <table><thead><tr><th>#</th><th>Mark</th><th>Type</th><th>Leave</th><th>Lat</th><th>Lon</th>
+      <th>Source</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+function editMark(ci, mi, field, val) {
+  const m = Lab.editDef.courses[ci].marks[mi];
+  if (field === "lat" || field === "lon") {
+    const n = parseFloat(val);
+    m[field] = isNaN(n) ? null : n;
+    if (m.lat != null && m.lon != null && m.coords_source === "needs_review") m.coords_source = "approx";
+  } else { m[field] = val; }
+  paintCourse();   // re-render from Lab.editDef (updates source cell + map; onchange = after blur)
+}
+async function geocodeMark(ci, mi) {
+  const m = Lab.editDef.courses[ci].marks[mi];
+  const msg = document.getElementById("courseMsg");
+  msg.textContent = `Geocoding "${m.name}"…`;
+  try {
+    // Query the place name alone — appending the body of water (e.g. "Lake Huron") makes Nominatim
+    // miss. The human verifies the proposed hit on the map (the display_name is shown) before saving.
+    const r = await (await apiPost("/api/geocode", { q: m.name })).json();
+    const hit = (r.results || [])[0];
+    if (!hit) { msg.textContent = `No geocode match for "${m.name}" — enter coords manually.`; return; }
+    m.lat = hit.lat; m.lon = hit.lon; m.coords_source = "approx";
+    paintCourse();   // re-render from Lab.editDef (preserves the edit) — then set the message
+    document.getElementById("courseMsg").textContent =
+      `"${m.name}" → ${hit.lat}, ${hit.lon} (${hit.display_name}). VERIFY on the map, then Save.`;
+  } catch (e) { msg.textContent = "Geocode failed."; }
+}
+async function saveCourse() {
+  const btn = document.getElementById("saveCourseBtn");
+  const msg = document.getElementById("courseMsg");
+  btn.disabled = true; msg.textContent = "Saving…";
+  // mark the review touched in provenance
+  Lab.editDef.provenance = Lab.editDef.provenance || {};
+  Lab.editDef.provenance.review_status =
+    "human-reviewed in the Course & Marks tab — verify before race use.";
+  try {
+    const r = await (await apiPost("/api/races", { definition: Lab.editDef })).json();
+    Lab.races = null;
+    msg.textContent = r.saved ? `Saved. ${r.warnings.length} item(s) still flagged for review.`
+      : ("Save failed: " + (r.detail || ""));
+  } catch (e) { msg.textContent = "Save failed."; }
+  btn.disabled = false;
+}
+function drawCourseMap(id, course) {
+  const cv = document.getElementById(id); if (!cv) return;
+  const ctx = cv.getContext("2d"); const W = cv.width, H = cv.height;
+  ctx.clearRect(0, 0, W, H);
+  const pts = [];
+  (course.marks || []).forEach((m) => {
+    if (m.lat != null) pts.push({ lat: m.lat, lon: m.lon, label: m.name, kind: m.type });
+    if (m.lat2 != null) pts.push({ lat: m.lat2, lon: m.lon2, label: m.name + " (NE)", kind: "gate" });
+  });
+  ((course.finish || {}).points || []).forEach((p) => {
+    if (p && p.lat != null) pts.push({ lat: p.lat, lon: p.lon, label: "Finish", kind: "finish" });
+  });
+  ctx.fillStyle = "#8aa0b4"; ctx.font = "12px system-ui";
+  if (pts.length < 1) { ctx.fillText("No coordinates yet — fill marks below.", 16, 24); return; }
+  const lats = pts.map((p) => p.lat), lons = pts.map((p) => p.lon);
+  const meanlat = (Math.min(...lats) + Math.max(...lats)) / 2;
+  const kx = Math.cos(meanlat * Math.PI / 180);
+  const xs = pts.map((p) => p.lon * kx), ys = pts.map((p) => p.lat);
+  let minx = Math.min(...xs), maxx = Math.max(...xs), miny = Math.min(...ys), maxy = Math.max(...ys);
+  const pad = 50, spanx = (maxx - minx) || 0.01, spany = (maxy - miny) || 0.01;
+  const sc = Math.min((W - 2 * pad) / spanx, (H - 2 * pad) / spany);
+  const X = (p) => pad + (p.lon * kx - minx) * sc;
+  const Y = (p) => H - (pad + (p.lat - miny) * sc);   // north up
+  // gate / finish lines (pairs sharing a name)
+  ctx.strokeStyle = "#7ee0a8"; ctx.lineWidth = 2;
+  (course.marks || []).forEach((m) => {
+    if (m.lat != null && m.lat2 != null) {
+      ctx.beginPath(); ctx.moveTo(X({ lon: m.lon }), Y({ lat: m.lat }));
+      ctx.lineTo(X({ lon: m.lon2 }), Y({ lat: m.lat2 })); ctx.stroke();
+    }
+  });
+  const fp = ((course.finish || {}).points || []).filter((p) => p && p.lat != null);
+  if (fp.length === 2) {
+    ctx.strokeStyle = "#f5c451";
+    ctx.beginPath(); ctx.moveTo(X(fp[0]), Y(fp[0])); ctx.lineTo(X(fp[1]), Y(fp[1])); ctx.stroke();
+  }
+  pts.forEach((p) => {
+    ctx.fillStyle = p.kind === "finish" ? "#f5c451" : p.kind === "gate" ? "#7ee0a8" : "#36b3ff";
+    ctx.beginPath(); ctx.arc(X(p), Y(p), 5, 0, 7); ctx.fill();
+    ctx.fillStyle = "#e8eef4"; ctx.fillText(p.label, X(p) + 8, Y(p) + 4);
+  });
+}
+
 /* ---------- placeholders ---------- */
 const SOON = {
-  course: ["Course & Marks", "Map view to review and sign off the extracted geometry (gate/finish/marks/zones), geocode the islands flagged for review, and set rounding sides."],
   rules: ["Rules, Safety & Checklists", "The full prep checklist the team works through — every SER + procedural item, with the race-time subset flagged to push to the iPad."],
   fleet: ["Fleet", "Competitor roster + ORC handicaps (entry-list import, MMSI matching) for handicap-aware, corrected-time tactics."],
   learnings: ["Learnings", "The boat-level library (refined polars, crossovers, calibration, fatigue/helm-skill) and what's applied to this regatta."],

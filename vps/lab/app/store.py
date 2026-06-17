@@ -1,17 +1,19 @@
 """Race library — load RaceDefinition instances from disk.
 
-Bundled definitions ship in the image (`/srv/races`); ingested/reviewed ones land on a writable
-volume (`/srv/ingested`) — that's where the ingestion service (next slice) will write. Read-only
-here. Validation reuses the shared schema validator.
+Bundled definitions ship in the image (`/srv/races`) as seeds; ingested/reviewed ones land on a
+writable volume (`/srv/ingested`). The ingested dir takes PRECEDENCE — a reviewed/edited copy of a
+race (same `race_id`) overrides the bundled seed — so the Course & Marks review can persist edits.
+Validation reuses the shared schema validator.
 """
 import glob
 import json
 import os
 
-from shared import race_def
+# Ingested (reviewed/edited) first so it overrides the bundled seed of the same race_id.
+RACES_DIRS = [os.environ.get("INGESTED_DIR", "/srv/ingested"),
+              os.environ.get("RACES_DIR", "/srv/races")]
 
-RACES_DIRS = [os.environ.get("RACES_DIR", "/srv/races"),
-              os.environ.get("INGESTED_DIR", "/srv/ingested")]
+from shared import race_def
 
 
 def _files():
