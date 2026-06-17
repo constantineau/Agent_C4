@@ -214,14 +214,18 @@ class OnboardSource:
         ).fetchall()
         return [dict(r) for r in rows]
 
-    def save_practice_course(self, marks):
-        """Replace the 'practice' route with these [(seq, name, lat, lon)] marks."""
-        self._engine.execute("DELETE FROM marks WHERE route='practice'")
+    def save_course(self, route, marks):
+        """Replace `route` with these [(seq, name, lat, lon)] marks."""
+        self._engine.execute("DELETE FROM marks WHERE route=?", (route,))
         self._engine.executemany(
-            "INSERT INTO marks (route, seq, name, lat, lon) VALUES ('practice',?,?,?,?)",
-            [(seq, name, mlat, mlon) for seq, name, mlat, mlon in marks],
+            "INSERT INTO marks (route, seq, name, lat, lon) VALUES (?,?,?,?,?)",
+            [(route, seq, name, mlat, mlon) for seq, name, mlat, mlon in marks],
         )
         self._engine.commit()
+
+    def save_practice_course(self, marks):
+        """Replace the 'practice' route with these [(seq, name, lat, lon)] marks."""
+        self.save_course("practice", marks)
 
     # --- onboard-only helpers for the live instrument strip ---------------
     # (the cloud builds these in tools.py off Postgres; onboard we read the archive + live cache)

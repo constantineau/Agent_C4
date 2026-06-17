@@ -23,7 +23,7 @@ os.environ.setdefault("DATA_SOURCE", "onboard")  # this service is always the on
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app import navigator, tactics, routing, weather, sails, fatigue, onboard_conditions
+from app import navigator, tactics, routing, weather, sails, fatigue, onboard_conditions, datasource
 
 app = FastAPI(title="Agent_C4 Onboard Engine", version="0.1.0")
 # The iPad reaches the Pi directly over boat-local Wi-Fi in race mode; allow cross-origin so a
@@ -87,6 +87,21 @@ def nav(route: str | None = None):
 def practice_course(leg_nm: float = 1.0):
     """Drop a windward/leeward practice course from the live position + wind (route 'practice')."""
     return navigator.make_practice_course(leg_nm)
+
+
+@app.post("/course/load")
+def course_load(body: dict):
+    """Load a RaceDefinition course into the onboard navigator (the deployed homework). Body:
+    {definition, course_id?, route?}. Writes the flattened marks to the Pi marks store + activates."""
+    from shared.race_def import course_to_marks
+    definition = (body or {}).get("definition") or {}
+    marks, skipped, cid = course_to_marks(definition, (body or {}).get("course_id"))
+    if not marks:
+        return {"loaded": False, "detail": "no usable marks (need coordinates)"}
+    route = (body or {}).get("route") or definition.get("race_id") or "race"
+    datasource.active().save_course(route, marks)
+    navigator.set_active(route)
+    return {"loaded": True, "route": route, "course_id": cid, "marks": len(marks), "skipped": skipped}
 
 
 @app.get("/tactics")

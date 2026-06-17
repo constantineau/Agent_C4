@@ -83,9 +83,17 @@ python3 -m shared.race_def vps/lab/races/bayview_mackinac_2026.json
   - *Verified on the real 2026 NOR + SER:* 0 errors, **56 requirements** (8 →iPad), the Cove Island
     gate + finish coordinates, 13 RRS modifications, ORC ToT scoring — a draft more complete than
     the hand-built instance. Always a DRAFT pending human review before it's relied on.
-- **Next:** the **Course & Marks** map review (geocode the islands flagged `needs_review`, sign-off),
-  then wire the RaceDefinition into the navigator's course loader + the race gate's `rules_profile`,
-  then **Lab-1** (the multi-model optimizer).
+- **Course & Marks review: live.** The Course & Marks tab renders each course on a schematic map +
+  an editable marks table; fill any `needs_review` mark by hand or **Geocode** (Nominatim,
+  human-confirmed), then Save — the reviewed copy lands on the `lab_ingested` volume and **overrides
+  the bundled seed**, so the validator's review warnings drop as marks are filled.
+- **Course loader (homework→onboard): wired.** `shared.race_def.course_to_marks()` flattens a course
+  (gate→midpoint, finish→midpoint; un-geocoded marks skipped + reported) and `POST /course/load`
+  (on the cloud agent **and** the onboard engine) writes it to the marks store + activates it, so the
+  navigator/plot use the real course. Verified on Mackinac (cloud + onboard). The per-race
+  `rules_profile`→gate wiring is deferred until a consumer exists (tracker access / optimizer scoring).
+- **Next:** **Lab-1** — the multi-model GRIB optimizer core (a `WindField` + isochrone on the refined
+  polars → one optimal route + briefing on a real RaceDefinition).
 
 ## Race documents (found 2026-06-17)
 

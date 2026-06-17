@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse
 
 from shared.tool_contracts import AGENT_TOOLS
 from .db import pool
-from . import agent, tools, navigator, alerts, summarizer, auth, race_mode
+from . import agent, tools, navigator, alerts, summarizer, auth, race_mode, datasource
 
 
 def _race_gated(channel: str):
@@ -173,6 +173,23 @@ def nav(route: str | None = None):
 def practice_course(leg_nm: float = 1.0):
     """Drop a windward/leeward practice course from the live position + wind (route 'practice')."""
     return navigator.make_practice_course(leg_nm)
+
+
+@app.post("/course/load")
+def course_load(body: dict):
+    """Load a RaceDefinition course into the navigator (the homework→onboard link). Body:
+    {definition, course_id?, route?}. Writes the flattened marks to the waypoints store and makes
+    the route active so the navigator/plot use the real course. Pre-race setup — not gated."""
+    from shared.race_def import course_to_marks
+    definition = (body or {}).get("definition") or {}
+    marks, skipped, cid = course_to_marks(definition, (body or {}).get("course_id"))
+    if not marks:
+        return JSONResponse({"detail": "no usable marks (need coordinates)"}, status_code=400)
+    route = (body or {}).get("route") or definition.get("race_id") or "race"
+    datasource.active().save_course(route, marks)
+    navigator.set_active(route)
+    return {"loaded": True, "route": route, "course_id": cid, "marks": len(marks),
+            "skipped": skipped}
 
 
 @app.get("/tactics")

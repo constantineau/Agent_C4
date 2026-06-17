@@ -12,6 +12,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # so sails.py finds knowledge/sr33_speed_guide.md. polars_sr33.sql is the canonical polar source
 # OnboardSource parses (no psycopg, no LLM in this image).
 COPY vps/agent/app/ ./app/
+COPY shared/ ./shared/
 COPY vps/agent/knowledge/ ./knowledge/
 COPY vps/db/seed/polars_sr33.sql ./polars_sr33.sql
 COPY pi/engine/engine_app.py ./engine_app.py

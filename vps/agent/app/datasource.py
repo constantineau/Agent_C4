@@ -96,14 +96,18 @@ class CloudSource:
             ).fetchall()
         return [dict(r) for r in rows]
 
-    def save_practice_course(self, marks):
-        """Replace the 'practice' route with these [(seq, name, lat, lon)] marks."""
+    def save_course(self, route, marks):
+        """Replace `route` with these [(seq, name, lat, lon)] marks."""
         with pool.connection() as conn:
-            conn.execute("DELETE FROM waypoints WHERE route='practice'")
+            conn.execute("DELETE FROM waypoints WHERE route=%s", (route,))
             for seq, name, mlat, mlon in marks:
                 conn.execute("INSERT INTO waypoints (route, seq, name, lat, lon) VALUES "
-                             "('practice',%s,%s,%s,%s)", (seq, name, mlat, mlon))
+                             "(%s,%s,%s,%s,%s)", (route, seq, name, mlat, mlon))
             conn.commit()
+
+    def save_practice_course(self, marks):
+        """Replace the 'practice' route with these [(seq, name, lat, lon)] marks."""
+        self.save_course("practice", marks)
 
 
 _SOURCE = None

@@ -536,7 +536,15 @@ Bundled `vps/lab/races/bayview_mackinac_2026.json` is the hand-curated reference
 **Verified on the real 2026 Bayview Mackinac NOR + SER:** 0 errors, **56 requirements (8 →iPad)**, the
 Cove Island gate + finish coordinates, 13 RRS modifications, ORC ToT scoring — a draft more complete
 than the hand-built one; discover returned 39 candidates; save round-trips; UI Playwright-verified.
-**Drafts are always machine-extracted → human review before they're relied on.** **Next:** the Course
-& Marks map review (geocode `needs_review` islands) + wire the RaceDefinition into the navigator's
-course loader and the race gate's `rules_profile`; then Lab-1 (multi-model optimizer). See
-`vps/lab/README.md`.
+**Drafts are always machine-extracted → human review before they're relied on.**
+
+**Course & Marks review + course loader (built).** The Lab's Course & Marks tab renders each course on
+a schematic map + an editable marks table; fill any `needs_review` mark by hand or **Geocode**
+(`POST /api/geocode` → Nominatim, human-confirmed) and Save — the reviewed copy lands on `lab_ingested`
+and **overrides the bundled seed** (store precedence). The **homework→onboard course loader**:
+`shared.race_def.course_to_marks()` flattens a course (gate→midpoint, finish→midpoint; un-geocoded
+marks skipped + reported) and **`POST /course/load`** (on BOTH the cloud agent and the onboard engine)
+writes it via `datasource.save_course(route, marks)` + activates the route, so the navigator/plot use
+the real course. Bench-verified on Mackinac cloud + onboard (gate+finish midpoints, Duck/Bois-Blanc
+skipped). The per-race `rules_profile`→gate wiring is deferred until a consumer exists (tracker access
+/ optimizer scoring). **Next:** Lab-1 — the multi-model GRIB optimizer core. See `vps/lab/README.md`.

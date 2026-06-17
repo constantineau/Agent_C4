@@ -239,6 +239,43 @@ def validate(d: dict) -> tuple[list, list]:
     return errors, warnings
 
 
+def _mid(a, b):
+    return ((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0)
+
+
+def course_to_marks(definition: dict, course_id: str = None):
+    """Flatten a RaceDefinition course into the navigator's ordered marks: [(seq, name, lat, lon)].
+
+    A gate → its midpoint (the nav target to pass between); the finish line → its midpoint; marks
+    with no coordinates (e.g. un-geocoded islands) are skipped and returned so the caller can warn.
+    Returns (marks, skipped_names, course_id). This is the homework→onboard link: the same marks are
+    written to the cloud `waypoints` (CloudSource) or the Pi marks store (OnboardSource)."""
+    courses = definition.get("courses", []) or []
+    course = next((c for c in courses if c.get("id") == course_id), None) or (courses[0] if courses else None)
+    if not course:
+        return [], [], None
+    marks, skipped, seq = [], [], 1
+    start = course.get("start") or {}
+    if start.get("lat") is not None:
+        marks.append((seq, "Start", start["lat"], start["lon"])); seq += 1
+    for m in course.get("marks", []):
+        name = m.get("name", "mark")
+        if m.get("type") == "gate" and m.get("lat") is not None and m.get("lat2") is not None:
+            la, lo = _mid((m["lat"], m["lon"]), (m["lat2"], m["lon2"]))
+            marks.append((seq, name, la, lo)); seq += 1
+        elif m.get("lat") is not None:
+            marks.append((seq, name, m["lat"], m["lon"])); seq += 1
+        else:
+            skipped.append(name)
+    pts = [p for p in ((course.get("finish") or {}).get("points") or []) if p and p.get("lat") is not None]
+    if len(pts) >= 2:
+        la, lo = _mid((pts[0]["lat"], pts[0]["lon"]), (pts[1]["lat"], pts[1]["lon"]))
+        marks.append((seq, "Finish", la, lo))
+    elif len(pts) == 1:
+        marks.append((seq, "Finish", pts[0]["lat"], pts[0]["lon"]))
+    return marks, skipped, course.get("id")
+
+
 if __name__ == "__main__":
     import sys
     path = sys.argv[1] if len(sys.argv) > 1 else None
