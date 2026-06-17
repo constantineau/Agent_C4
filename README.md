@@ -16,7 +16,10 @@ analysis and the practice/cruising/debrief product.
 >   (→ a pre-loaded playbook) + write-back learning; race-gated in a race.
 >
 > See `docs/RRS41_COMPLIANCE.md` (the why) and `docs/ONBOARD_ENGINE_SCOPING.md` (the Phase 9 build).
-> **Phase 9.2 — the server-side race gate — is shipped**; the onboard engine (9.0/9.1) is next.
+> **Shipped:** 9.0 data-access abstraction, 9.1 onboard engine (`pi/engine`), 9.2 server-side race
+> gate + iPad onboard console (`pi/console`), and the C4 Performance Lab (`vps/lab`) with **Lab-0 race
+> ingestion** (NOR/SI/SER → a reviewable RaceDefinition). Next: Course & Marks review + wiring, then
+> Lab-1 (multi-model optimizer). 9.4 Orin LLM is on hold (no hardware yet).
 
 - **DESIGN.md** — product design description: architecture + what's built vs. planned today.
 - **CLAUDE.md** — operational runbook (ports, commands, deploy, conventions).
@@ -25,16 +28,20 @@ analysis and the practice/cruising/debrief product.
 ## Quick start (dev stack — no boat needed)
 
 ```bash
-cp .env.example .env                              # fill ANTHROPIC_API_KEY for live agent
-docker compose -f compose.dev.yml up -d --build   # Timescale + ingestion + agent + web
+cp .env.example .env                              # fill ANTHROPIC_API_KEY for live agent + Lab ingestion
+docker compose -f compose.dev.yml up -d --build   # Timescale + ingestion + agent + web + lab
 bash vps/db/seed/seed_dev.sh                       # placeholder polars/waypoints + fake telemetry
 ```
 
-- Web chat:        http://localhost:8090  (password gate is a Phase-0 stub)
-- Ingestion docs:  http://localhost:8101/docs
-- Agent docs:      http://localhost:8102/docs
-- Live readout:    `curl -s localhost:8102/conditions | python3 -m json.tool`
-- Helm fatigue:    `curl -s localhost:8102/fatigue | python3 -m json.tool`
+- Web chat (iPad):     http://localhost:8090   (server-side shared password; dev pw `sr33-dev`)
+- C4 Performance Lab:  http://localhost:8103   (prep/debrief; dev pw `lab-dev`)
+- Ingestion docs:      http://localhost:8101/docs
+- Agent docs:          http://localhost:8102/docs
+- Live readout:        `curl -s localhost:8102/conditions | python3 -m json.tool`
+- Helm fatigue:        `curl -s localhost:8102/fatigue | python3 -m json.tool`
+
+The **onboard tier** runs in the Pi stack (below): the deterministic engine on **:8200** and the
+race-day onboard console on **:8091**.
 
 Without an `ANTHROPIC_API_KEY` the agent runs a deterministic, tool-grounded fallback so
 the full pipeline works with no LLM. Add the key to switch on the real Claude tool-use loop.

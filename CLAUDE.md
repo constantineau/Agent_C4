@@ -45,11 +45,14 @@ reads facts through tools). Full design: `docs/RRS41_COMPLIANCE.md` + `docs/ONBO
 
 ```
 pi/                 Signal K config, vcan/systemd units, uplink + full-res archiver
+pi/engine/          onboard deterministic engine service (Tier 1, 9.1) — no LLM, :8200
+pi/console/         onboard race console (9.2) — the iPad app served from the Pi, :8091
 vps/ingestion/      FastAPI ingestion API (token-auth, writes batches to TimescaleDB)
 vps/agent/          Claude tool-use service + alerting + summarizer + WebSocket chat
 vps/web/            mobile web chat app (nginx static)
+vps/lab/            C4 Performance Lab (cloud) — browser prep/debrief app + race ingestion, :8103
 vps/db/             TimescaleDB schema + migrations + fake-data seed
-shared/             data schemas, tool contracts, units
+shared/             data schemas, tool contracts, units, race_def (RaceDefinition schema)
 deploy/             scripts: deploy vps→prod, push pi→Pi over Tailscale
 compose.dev.yml     dev stack (run by hand during sessions)
 compose.prod.yml    prod stack (managed, leave alone)
@@ -75,8 +78,11 @@ Ports chosen to avoid conflicts with the other apps on this VM (DreamCRM, racert
 | TimescaleDB | 5432           | **5433**   |
 | ingestion   | 8000           | **8101**   |
 | agent       | 8000           | **8102**   |
+| lab (C4 Performance Lab) | 8000 | **8103** |
 | web         | 80             | **8090**   |
 | Signal K    | 3010 (host net)| **3010**   |
+| onboard engine (pi)      | 8200 (host net) | **8200** |
+| onboard console (pi)     | 8091 (host net) | **8091** |
 
 ```bash
 cd ~/Agent_C4
@@ -138,12 +144,13 @@ via `OnboardSource`. It comes up with the rest of the Pi stack; quick check:
 | **5** ✅ | iPad nav companion: day/night, sail dial, course plot, navigator, tactics, routing | bench-verified end-to-end |
 | **6** ✅ | Alerting + summarizer + polar tooling | bench-complete; 2-practice-sail false-positive gate awaits real sailing |
 | 7 🔶 | Prod stack + deploy + rules review + soak | rules review done; server auth + TLS scaffolding done; prod deploy/soak gated on domain + prod `.env` |
-| **9** 🔶 | Onboard + C4 Performance Lab (three-tier pivot) | **9.0 data-access abstraction ✅ · 9.1 onboard engine service ✅ · 9.2 race gate + iPad onboard console ✅**; 9.4 Orin LLM (HW not in hand — on hold); Lab-0→4 — see `docs/ONBOARD_ENGINE_SCOPING.md` |
+| **9** 🔶 | Onboard + C4 Performance Lab (three-tier pivot) | **9.0 data-access abstraction ✅ · 9.1 onboard engine service ✅ · 9.2 race gate + iPad onboard console ✅ · C4 Performance Lab Lab-0 race ingestion ✅**; next Course&Marks + wiring → Lab-1; 9.4 Orin LLM (HW not in hand — on hold) — see `docs/ONBOARD_ENGINE_SCOPING.md` |
 
 **Current status:** Phases 0–6 built and bench-verified; Phase 7 started; **Phase 9 in progress
 (9.0 data-access abstraction ✅, 9.1 onboard engine service ✅ — see "Onboard engine service",
 9.2 server-side race gate ✅ + iPad onboard console ✅ — see "Race-mode gate" / "Onboard race
-console"; next is the C4 Performance Lab track Lab-0→4 — 9.4 Orin LLM is on hold, no hardware yet).**
+console"; the C4 Performance Lab (`vps/lab`) is live with **Lab-0 race ingestion ✅** — see "C4
+Performance Lab"; next is Course&Marks review + wiring → Lab-1; 9.4 Orin LLM is on hold, no HW yet).**
 Detail: Phase 1
 (Signal K + uplink) end-to-end;
 Phase 2 (full-res onboard archive + backfill); Phase 3 uplink store-and-forward (disk-backed
@@ -500,3 +507,36 @@ recommendation). **Bench gotcha:** `--sample-n2k-data` replays a 2014 log, so th
 *source* timestamps fall outside any wall-clock window — history endpoints look empty on the bench
 even though live ones work (on the real boat SK timestamps are current); `/sources` therefore
 merges the live cache. Cloud path unaffected (`active: CloudSource`, `pool` still set).
+
+## C4 Performance Lab (cloud) — Phase 9 / Lab-0
+
+`vps/lab/` is the browser-based, between-races **prep + debrief** surface (the race-day surface is the
+deliberately-simple `pi/console`). One FastAPI container serves the Lab web shell + a race-library API;
+shared **team** login (`LAB_PASSWORD`, dev `lab-dev`) gates `/api/*`, the static shell is public. Dev
+**:8103**. The Lab is organized into hash-routed tabs across the three phases (PREP: Races, Course &
+Marks, Rules/Safety/Checklists, Fleet, Learnings, Gameplan, Lock-in & Deploy · RACE: Monitor · DEBRIEF)
+so each opens in its own browser tab; the **Races** tab is live, the rest are descriptive placeholders.
+
+**RaceDefinition** (`shared/race_def.py`) is the portable artifact a race's NOR/SI/SER distil into —
+course geometry (marks/gates/finish, **decimal-degrees WGS84**), a **comprehensive `requirements`
+checklist** (safety/SER + procedural; each tagged phase + trigger, race-time items flagged
+`deliver_to_ipad` so they compile into the playbook for the onboard console), and the `rules_profile`
+(rule modifications incl. the RRS-41 carve-out + scoring). It feeds **both** the optimizer/navigator
+and the race gate. A dependency-free validator (`python3 -m shared.race_def <json>`) separates errors
+(block) from warnings (human-review items, e.g. `needs_review` coordinates).
+
+**Lab-0 race ingestion (live).** Dual input → Opus extraction → a **draft** → review → save:
+`POST /api/ingest/discover` (auto-find PDF links on a race page), `/api/ingest` (URLs — auto-find
+selections or pasted direct links), `/api/ingest/upload` (multipart PDFs — for JS-rendered hubs a
+crawler can't reach), `/api/races` (save the reviewed draft to the `lab_ingested` volume).
+`app/extract.py` pulls text with pypdf and Opus (`ANTHROPIC_MODEL`, `max_tokens` 32k) emits a
+schema-conformant RaceDefinition — coordinates **only when stated** (else `needs_review`; never
+guessed). The lab image carries `anthropic`+`pypdf`; the dev compose passes `ANTHROPIC_API_KEY`.
+Bundled `vps/lab/races/bayview_mackinac_2026.json` is the hand-curated reference instance.
+**Verified on the real 2026 Bayview Mackinac NOR + SER:** 0 errors, **56 requirements (8 →iPad)**, the
+Cove Island gate + finish coordinates, 13 RRS modifications, ORC ToT scoring — a draft more complete
+than the hand-built one; discover returned 39 candidates; save round-trips; UI Playwright-verified.
+**Drafts are always machine-extracted → human review before they're relied on.** **Next:** the Course
+& Marks map review (geocode `needs_review` islands) + wire the RaceDefinition into the navigator's
+course loader and the race gate's `rules_profile`; then Lab-1 (multi-model optimizer). See
+`vps/lab/README.md`.

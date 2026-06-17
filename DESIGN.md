@@ -6,8 +6,12 @@
 Claude agent, iPad navigator, alerting/summarizer/polar mining); Phase 7 started (server-side web
 auth + TLS scaffolding). **Pivot (2026-06-17): a three-tier architecture** driven by RRS 41 — an
 onboard deterministic engine for legal in-race use, an optional onboard LLM copilot, and cloud
-frontier Opus 4.8 as the between-races C4 Performance Lab. **Phase 9.2 (server-side race gate) is
-built**; 9.0/9.1 (onboard engine) next (see §2, §8, §10, and `docs/ONBOARD_ENGINE_SCOPING.md`).
+frontier Opus 4.8 as the between-races C4 Performance Lab. **Phase 9 in progress:** **9.0 data-access
+abstraction ✅, 9.1 onboard engine service ✅ (`pi/engine`), 9.2 server-side race gate ✅ + iPad onboard
+console ✅ (`pi/console`)**, and the **C4 Performance Lab (`vps/lab`) is live — Lab-0 race ingestion ✅**
+(NOR/SI/SER → a structured, reviewable RaceDefinition; verified on the real 2026 Bayview Mackinac NOR).
+Next: Course&Marks review + wiring the RaceDefinition through, then Lab-1 (multi-model optimizer). 9.4
+Orin LLM is on hold (no hardware yet). See §2, §8, §10, and `docs/ONBOARD_ENGINE_SCOPING.md`.
 **Last updated:** 2026-06-17
 
 This document describes *what the product is and how it is built today*. The original
@@ -130,9 +134,12 @@ build plan: onboard engine 9.0/9.1, race gate 9.2 ✅, Orin LLM 9.4, the C4 Perf
 | Web auth + TLS | `vps/agent/app/auth.py` + `vps/web/` | **built / scaffolded** | shared-password bearer (Phase 7); TLS nginx+certbot scaffolding awaiting a domain |
 | Pi stack | `pi/` + `compose.pi.yml` | **built** | Signal K (SocketCAN, :3010, `$CAN_IFACE`) + uplink (15-s aggregates, store-and-forward) + full-res archiver (SQLite) + backfill; `signalk-derived-data` true wind/VMG auto-enabled |
 | Dev/prod compose | `compose.{dev,prod}.yml` | **built** | isolated stacks, separate DBs (`sr33_dev`/`sr33_prod`) + ports |
-| **Tier 1 — Onboard engine** | `pi/` | **planned (9.0/9.1)** | relocate the 6 deterministic modules to the Pi behind a pluggable data source; onboard API; iPad→Pi in race mode |
-| **Tier 2 — Orin Nano LLM** | Jetson Orin Nano | **planned (9.4)** | Qwen2.5-7B copilot: narrate + bounded decision support |
-| **Tier 3 — C4 Performance Lab** | `vps/agent/` | **planned (Lab-1→4)** | strategy studio → playbook + write-back learning; GRIB/buoy ingestion; iPad Strategy card |
+| Data-access abstraction | `vps/agent/app/datasource.py` | **built (9.0)** | engine modules read via `datasource.active()` — `CloudSource` (Timescale) or `OnboardSource` (Pi SQLite archive + SK live) |
+| **Tier 1 — Onboard engine** | `pi/engine/` | **built (9.0/9.1)** | the deterministic modules served onboard from the boat's own data (`OnboardSource`), no LLM, port 8200; bench-verified |
+| Onboard race console | `pi/console/` | **built (9.2)** | the iPad app served from the Pi, pointed only at the engine over boat-local Wi-Fi (no cloud/auth/chat), port 8091 |
+| **Tier 2 — Orin Nano LLM** | Jetson Orin Nano | **planned (9.4) — HW on hold** | Qwen2.5-7B copilot: narrate + bounded decision support |
+| **Tier 3 — C4 Performance Lab** | `vps/lab/` | **Lab-0 built; Lab-1→4 planned** | browser prep/debrief app + race ingestion (NOR/SI/SER → RaceDefinition; dual-input + Opus extraction + review, port 8103). Lab-1→4: optimizer → playbook → onboard executor → judge loop |
+| RaceDefinition schema | `shared/race_def.py` | **built (Lab-0)** | course/marks/gates/finish + comprehensive `requirements` checklist (race-time items → iPad) + `rules_profile` + fleet; validator |
 | Deploy scripts | `deploy/` | **built (untested)** | `deploy_prod.sh`, `push_pi.sh` (Tailscale), `init_tls.sh` |
 
 ---
@@ -200,9 +207,10 @@ as truth when sources conflict. The agent is the crew's sanity-check on the inst
 **Fallback:** with no API key, a deterministic responder keyword-routes to the right tool
 and formats the result — so the whole pipeline is demoable with no LLM and no boat.
 
-**Planned (Phase 6):** a 30–60-min summarizer job and a conservative alerting loop
-(sustained wind shift, polar % depressed > N min, AIS CPA inside guard radius, stale
-telemetry). Alerts are deliberately rare so the crew listens.
+**Built (Phase 6):** an on-demand summarizer/debrief (`summarizer.py`), a conservative debounced
+alerting loop with live WebSocket push (`alerts.py` — sustained wind shift, polar deficit, AIS CPA
+inside guard, stale telemetry, shoaling, helm `rotate_now`), and observed-vs-ORC polar mining
+(`polar_tool.py`). Alerts are deliberately rare so the crew listens.
 
 ---
 
@@ -218,9 +226,10 @@ plot** (boat/marks/legs/laylines/wind/track, north-up/course-up, no chart tiles)
 **Navigator** panel (next mark, ETA, leg type, layline call); a **tactical** read (lifted/headed,
 favored side, leverage); and **weather routing** (isochrone optimal route on the polars through
 an Open-Meteo wind forecast — ETA, tacks, recommended first tack, route overlay). A
-**Race/Practice toggle** gates the tactical + routing layers in the UI for RRS 41. The
-**helm fatigue index** shows in the top bar. One shared crew thread + chat to the agent. Single
-shared boat password (server-side + TLS is still a client-side stub, lands with Phase 7).
+**Race/Practice toggle** is the authoritative server-side RRS-41 gate (9.2). The
+**helm fatigue index** shows in the top bar. One shared crew thread + chat to the agent.
+Server-side shared-password auth is **built** (Phase 7; TLS scaffolding awaits a domain). In race
+mode the iPad is served from the Pi (`pi/console`) and talks only to the onboard engine — no cloud.
 
 ---
 
@@ -294,14 +303,16 @@ boat-install date.
 | 5 | iPad navigator UI | full practice sail used without instruction | ✅ done — day/night, sail dial, course plot, navigator, tactics, routing |
 | 6 | Alerting + summarizer + polar tooling | acceptable false-positive rate over 2 sails | ✅ bench-complete; 2-sail false-positive gate awaits real sailing |
 | 7 | Prod + deploy + rules review + soak | NOR compliance determined; 48-h soak passes | 🔶 started — server-side web auth + TLS scaffolding done; rules review done (§8); prod deploy/soak gated on domain + prod `.env` |
-| **9** | **Onboard + C4 Performance Lab track (the three-tier pivot)** | onboard engine renders nav/sail/tactics on the Pi; race mode reaches no cloud; a sail → refined polars loaded back onboard | 🔶 in progress — **9.2 race gate ✅**; 9.0/9.1 onboard engine next, 9.4 Orin LLM (HW ~06-18), Lab-1→4 C4 Performance Lab. See `docs/ONBOARD_ENGINE_SCOPING.md` |
+| **9** | **Onboard + C4 Performance Lab track (the three-tier pivot)** | onboard engine renders nav/sail/tactics on the Pi; race mode reaches no cloud; a sail → refined polars loaded back onboard | 🔶 in progress — **9.0 ✅, 9.1 onboard engine ✅, 9.2 race gate + onboard console ✅; C4 Performance Lab Lab-0 ingestion ✅.** Next: Course&Marks review + wiring → Lab-1. 9.4 Orin on hold (no HW). See `docs/ONBOARD_ENGINE_SCOPING.md` |
 
 (Phase 8 was an interim "navigation & optimization" wishlist — real marks/GRIB/current/rounding-planner — now folded into the Phase 9 onboard track and the C4 Performance Lab.)
 
-**Phase 9 sub-steps:** 9.0 data-access abstraction → 9.1 onboard engine service (Pi) → **9.2 server-side
-fail-closed race gate ✅** → 9.4 Orin Nano LLM copilot → Lab-1 (GRIB+buoy+single-scenario routing) →
-Lab-2 (multi-scenario + playbook) → Lab-3 (onboard executor + iPad Strategy card) → Lab-4 (post-race
-validation). 9.3 = the C4 Performance Lab learning loop (hoisted-sail logging, polar write-back).
+**Phase 9 sub-steps:** 9.0 data-access abstraction ✅ → 9.1 onboard engine service (Pi) ✅ → **9.2
+server-side fail-closed race gate ✅ + iPad onboard console ✅** → 9.4 Orin Nano LLM copilot (HW on hold)
+→ **Lab-0 race ingestion ✅** (NOR/SI/SER → RaceDefinition) → Lab-1 (GRIB+buoy+single-scenario routing)
+→ Lab-2 (multi-scenario + branching playbook) → Lab-3 (onboard executor + iPad Strategy card) → Lab-4
+(post-race judge loop). 9.3 = the C4 Performance Lab learning loop (hoisted-sail logging, polar
+write-back).
 
 ## 11. Future work
 
