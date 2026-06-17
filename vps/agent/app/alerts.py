@@ -139,7 +139,7 @@ def _active_rows():
     with pool.connection() as conn:
         rows = conn.execute(
             "SELECT id, key, kind, severity, message, "
-            "extract(epoch FROM raised_at) AS raised_epoch "
+            "extract(epoch FROM raised_at)::float8 AS raised_epoch "  # ::float8: extract() returns Decimal
             "FROM alerts WHERE boat_id=%s AND cleared_at IS NULL ORDER BY raised_at",
             (BOAT_ID,),
         ).fetchall()

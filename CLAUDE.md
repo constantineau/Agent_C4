@@ -119,9 +119,14 @@ with the boat-speed gospel + per-source skepticism + source priority/failover. T
 flow via the auto-enabled `signalk-derived-data` plugin. Phase 5 ✅ the iPad crew interface is
 built (day/night, sail dial, course plot + navigator, tactics, weather/isochrone routing — see
 "iPad crew interface"). Phase 6 IN PROGRESS — **6.0 live AIS** (see "Live AIS"), **6.1 alerting**
-(see "Alerting"), **6.2 summarizer/debrief** (see "Summaries / debrief") and **6.3 polar mining
-done** (see "Polar mining"); next is 6.4 (final contracts/prompt sweep + 2-practice-sail false-
-positive verify). Remaining: Phase 7 prod/soak; still owed — a real `candump -l can0` replay fixture
+(see "Alerting"), **6.2 summarizer/debrief** (see "Summaries / debrief"), **6.3 polar mining**
+(see "Polar mining") and **6.4 done** — the final contracts/prompt sweep (all 16 tools consistent
+across dispatch/contracts/schema/prompt/fallback) + a full bench verify (closing-AIS raise→update→
+clear over the WebSocket, history retention, debrief alert-integration, banner shot; caught + fixed
+the `active_alerts` Decimal bug). The Phase-6 EXIT TEST proper — an acceptable alert false-positive
+rate over **2 real practice sails** — still awaits real sailing (bench baseline: 0 spurious alerts
+in steady reaching; AIS/polar_deficit fired only on genuine sustained conditions). **Phase 6
+COMPLETE on the bench.** Remaining: Phase 7 prod/soak; still owed — a real `candump -l can0` replay fixture
 and server-side web auth (the canned sample + client-stub gate stand in for now).
 
 ## Live AIS (Phase 6.0)
@@ -159,7 +164,10 @@ day/night aware; a fresh client gets the active set as a snapshot on connect). *
 auto-run only on first DB init** — apply 004 to the running dev DB by hand:
 `docker compose -f compose.dev.yml exec -T timescaledb psql -U sr33 -d sr33_dev < vps/db/migrations/004_alerts.sql`.
 Bench-verified end-to-end with `ais_inject.py`: AIS + polar_deficit alerts raised after debounce,
-streamed live `updated` pushes, and cleared — banner screenshot confirmed.
+streamed live `updated` pushes, and cleared — banner screenshot confirmed. (**Gotcha fixed in 6.4:**
+`active_alerts()` did `time.time() - extract(epoch …)`, and `extract(epoch …)` returns a `Decimal`,
+so `GET /alerts` 500'd whenever any alert was active — now cast `::float8` in SQL. Same Decimal
+trap fatigue/tactics already guard against.)
 
 ## Summaries / debrief (Phase 6.2)
 
