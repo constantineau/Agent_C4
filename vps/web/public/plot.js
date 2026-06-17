@@ -18,24 +18,24 @@ const Plot = (function () {
     document.getElementById("routeName").textContent = r; loadCourse(); }
 
   async function loadCourse() {
-    try { course = await (await fetch("/api/course?route=" + route)).json(); }
+    try { course = await (await apiFetch("/api/course?route=" + route)).json(); }
     catch (e) { course = null; }
     document.getElementById("routeName").textContent = route;
     draw();
   }
   async function loadNav() {
-    try { nav = await (await fetch("/api/navigator?route=" + route)).json(); }
+    try { nav = await (await apiFetch("/api/navigator?route=" + route)).json(); }
     catch (e) { nav = null; }
     // tactical layer is gated by race/practice mode (RRS 41) — only fetch in practice
     if (!racing()) {
-      try { tactics = await (await fetch("/api/tactics?route=" + route)).json(); }
+      try { tactics = await (await apiFetch("/api/tactics?route=" + route)).json(); }
       catch (e) { tactics = null; }
     } else { tactics = null; }
     renderPanel(); draw();
   }
   async function fetchRoute() {
     if (!routeOn || racing()) { routeData = null; return; }
-    try { routeData = await (await fetch("/api/route?target=next&route=" + route)).json(); }
+    try { routeData = await (await apiFetch("/api/route?target=next&route=" + route)).json(); }
     catch (e) { routeData = null; }
     renderPanel(); draw();
   }
@@ -47,7 +47,7 @@ const Plot = (function () {
   }
   async function dropPractice() {
     try {
-      await fetch("/api/course/practice?leg_nm=1.0", { method: "POST" });
+      await apiFetch("/api/course/practice?leg_nm=1.0", { method: "POST" });
       setRoute("practice"); await loadNav();
     } catch (e) {}
   }

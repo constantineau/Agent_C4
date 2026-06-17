@@ -45,6 +45,8 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-4-8}
       BOAT_ID: ${BOAT_ID:-sr33}
+      BOAT_PASSWORD: ${BOAT_PASSWORD:-sr33-dev}   # shared-password web auth (Phase 7)
+      AUTH_ENABLED: ${AUTH_ENABLED:-true}
     ports:
       - "8102:8000"
     depends_on:

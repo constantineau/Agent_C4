@@ -94,7 +94,7 @@
     if (!c || c.tws == null || c.twa == null) { last = { available: false, note: "No true wind yet." }; render(); return; }
     try {
       const q = `tws=${c.tws}&twa=${c.twa}` + (hoisted ? `&hoisted=${hoisted}` : "");
-      last = await (await fetch("/api/sail?" + q)).json();
+      last = await (await apiFetch("/api/sail?" + q)).json();
     } catch (e) { last = { available: false, note: "Sail advice unavailable." }; }
     render();
   }

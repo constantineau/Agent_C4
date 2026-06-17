@@ -43,6 +43,9 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?set in prod .env}
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-4-8}
       BOAT_ID: ${BOAT_ID:-sr33}
+      BOAT_PASSWORD: ${BOAT_PASSWORD:?set in prod .env}   # shared crew web password
+      AUTH_SECRET: ${AUTH_SECRET:?set in prod .env}       # token signing secret (fresh, random)
+      AUTH_TTL_HOURS: ${AUTH_TTL_HOURS:-720}
     expose:
       - "8000"
     depends_on:

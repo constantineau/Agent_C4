@@ -10,17 +10,59 @@ const App = {
   theme: localStorage.getItem('sr33.theme') || 'auto',   // auto | day | night
   mode: localStorage.getItem('sr33.mode') || 'practice',  // practice | race
   pollTimer: null,
+  token: sessionStorage.getItem('sr33.token') || null,    // shared-password bearer token
 };
 
-/* ---------- gate ---------- */
-function unlock() {
-  // Client-side stub for now (real shared-password auth is the 5.0 follow-up). Accept any
-  // non-empty entry so the bench is usable; structure is here for a server check later.
+/* ---------- gate (server-side shared-password auth) ---------- */
+async function unlock() {
+  const errEl = document.getElementById('gateErr');
   const pw = document.getElementById('pw').value.trim();
-  if (!pw) { document.getElementById('gateErr').textContent = 'Enter the boat password.'; return; }
-  document.getElementById('gate').style.display = 'none';
-  start();
+  if (!pw) { errEl.textContent = 'Enter the boat password.'; return; }
+  errEl.textContent = 'Checking…';
+  try {
+    const res = await fetch('/api/auth', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: pw }),
+    });
+    if (!res.ok) { errEl.textContent = 'Wrong boat password.'; return; }
+    const data = await res.json();
+    App.token = data.token;
+    sessionStorage.setItem('sr33.token', App.token);
+    errEl.textContent = '';
+    document.getElementById('pw').value = '';
+    document.getElementById('gate').style.display = 'none';
+    start();
+  } catch (e) {
+    errEl.textContent = 'Login failed — agent unreachable.';
+  }
 }
+
+/* Authenticated REST helper: inject the bearer token; on 401 (missing/expired) re-gate. */
+async function apiFetch(path, opts = {}) {
+  const headers = Object.assign({}, opts.headers,
+    App.token ? { Authorization: 'Bearer ' + App.token } : {});
+  const res = await fetch(path, Object.assign({}, opts, { headers }));
+  if (res.status === 401) { relock('Session expired — sign in again.'); throw new Error('unauthorized'); }
+  return res;
+}
+
+/* Drop the session and return to the gate (token expired or rejected). */
+function relock(msg) {
+  App.token = null;
+  sessionStorage.removeItem('sr33.token');
+  if (App.pollTimer) { clearInterval(App.pollTimer); App.pollTimer = null; }
+  if (App.ws) { try { App.ws.close(); } catch (e) {} App.ws = null; }
+  const gate = document.getElementById('gate');
+  if (gate) gate.style.display = '';
+  const errEl = document.getElementById('gateErr');
+  if (errEl) errEl.textContent = msg || '';
+}
+
+/* Auto-resume a stored session on load (a stale token re-gates on the first 401). */
+function boot() {
+  if (App.token) { document.getElementById('gate').style.display = 'none'; start(); }
+}
+window.addEventListener('DOMContentLoaded', boot);
 
 function start() {
   applyTheme();
@@ -68,13 +110,18 @@ function tacticsAllowed() { return App.mode !== 'race'; }
 
 /* ---------- websocket chat ---------- */
 function connect() {
+  if (!App.token) return;   // locked — nothing to connect with
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  App.ws = new WebSocket(`${proto}://${location.host}/ws`);
+  App.ws = new WebSocket(`${proto}://${location.host}/ws?token=${encodeURIComponent(App.token)}`);
   App.ws.onmessage = (e) => {
     const m = JSON.parse(e.data);
     if (m.role === 'alert') handleAlert(m); else addMsg(m.role, m.text);
   };
-  App.ws.onclose = () => { addMsg('system', 'disconnected — reconnecting…'); setTimeout(connect, 2000); };
+  App.ws.onclose = () => {
+    if (!App.token) return;   // re-gated — don't reconnect-loop against a closed (1008) socket
+    addMsg('system', 'disconnected — reconnecting…');
+    setTimeout(connect, 2000);
+  };
 }
 function addMsg(role, text) {
   const log = document.getElementById('log');
@@ -95,7 +142,7 @@ async function runDebrief() {
   addMsg('user', 'Debrief the last session.');
   addMsg('system', 'Generating debrief…');
   try {
-    const r = await (await fetch('/api/debrief', { method: 'POST' })).json();
+    const r = await (await apiFetch('/api/debrief', { method: 'POST' })).json();
     addMsg('assistant', r.available ? r.summary : 'No telemetry in the window to debrief yet.');
   } catch (e) { addMsg('system', 'Debrief failed.'); }
 }
@@ -103,7 +150,7 @@ async function runDebrief() {
 /* ---------- live poll: link health, fatigue, position ---------- */
 async function refresh() {
   try {
-    const c = await (await fetch('/api/conditions')).json();
+    const c = await (await apiFetch('/api/conditions')).json();
     const link = document.getElementById('link');
     if (!c.available) { link.className = 'dot down'; setFatigue(null, null); return; }
     link.className = 'dot ' + (c.stale ? 'stale' : 'live');
@@ -160,7 +207,7 @@ function closeChannels() {
 async function renderChannels() {
   const body = document.getElementById('channelsBody');
   try {
-    const c = await (await fetch('/api/conditions/full')).json();
+    const c = await (await apiFetch('/api/conditions/full')).json();
     if (!c.available) { body.innerHTML = '<div class="placeholder">No telemetry in window.</div>'; return; }
     const rows = Object.entries(c.channels).sort((a, b) => a[0].localeCompare(b[0])).map(([name, ch]) => {
       const pref = ch.preferred || {};

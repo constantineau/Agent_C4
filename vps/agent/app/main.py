@@ -8,12 +8,13 @@ import asyncio
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import JSONResponse
 
 from shared.tool_contracts import AGENT_TOOLS
 from .db import pool
-from . import agent, tools, navigator, alerts, summarizer
+from . import agent, tools, navigator, alerts, summarizer, auth
 
 API_KEY_PRESENT = bool(os.environ.get("ANTHROPIC_API_KEY", "").strip())
 
@@ -62,6 +63,27 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Agent_C4 Agent Service", version="0.1.0", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def require_auth(request: Request, call_next):
+    """Gate every REST route behind the shared-password bearer token, except OPEN_PATHS.
+    (WebSocket handshakes are scope 'websocket' and bypass HTTP middleware — /ws checks inline.)"""
+    if request.method == "OPTIONS" or request.url.path in auth.OPEN_PATHS:
+        return await call_next(request)
+    header = request.headers.get("authorization", "")
+    token = header[7:] if header.lower().startswith("bearer ") else None
+    if not auth.verify_token(token):
+        return JSONResponse({"detail": "unauthorized"}, status_code=401)
+    return await call_next(request)
+
+
+@app.post("/auth")
+async def authenticate(body: dict):
+    """Exchange the shared boat password for a signed, time-limited bearer token."""
+    if not auth.check_password((body or {}).get("password")):
+        return JSONResponse({"detail": "invalid password"}, status_code=401)
+    return {"token": auth.issue_token(), "ttl_hours": auth.AUTH_TTL_HOURS}
 
 
 @app.get("/health")
@@ -176,6 +198,11 @@ async def polar_analysis_ep(hours: float | None = None, min_samples: int | None 
 
 @app.websocket("/ws")
 async def ws(websocket: WebSocket):
+    # HTTP middleware doesn't see WS handshakes — check the token (passed as a query param,
+    # since browsers can't set headers on a WebSocket from JS) before accepting.
+    if not auth.verify_token(websocket.query_params.get("token")):
+        await websocket.close(code=1008)  # policy violation
+        return
     await websocket.accept()
     q = hub.register()
     history: list = []

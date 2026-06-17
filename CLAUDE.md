@@ -126,8 +126,10 @@ clear over the WebSocket, history retention, debrief alert-integration, banner s
 the `active_alerts` Decimal bug). The Phase-6 EXIT TEST proper — an acceptable alert false-positive
 rate over **2 real practice sails** — still awaits real sailing (bench baseline: 0 spurious alerts
 in steady reaching; AIS/polar_deficit fired only on genuine sustained conditions). **Phase 6
-COMPLETE on the bench.** Remaining: Phase 7 prod/soak; still owed — a real `candump -l can0` replay fixture
-and server-side web auth (the canned sample + client-stub gate stand in for now).
+COMPLETE on the bench.** **Phase 7 STARTED — server-side shared-password web auth done + bench-verified
+(see "Web auth"), retiring the client stub.** Remaining Phase 7: prod deploy + TLS/domain + 48-h soak
+(gated on a prod `.env` w/ `sr33_prod` DB + fresh secrets, and a domain name) + RRS 41/NOR review.
+Still owed — a real `candump -l can0` replay fixture (the canned sample stands in for now).
 
 ## Live AIS (Phase 6.0)
 
@@ -246,8 +248,27 @@ offline-friendly. Pieces:
 - **Race/Practice toggle** gates tactics + routing in the UI (RRS 41); the agent caveats them.
   **All-channels** slide-over reuses the multi-source `/conditions/full` view.
 
-Server-side shared-password auth is still a client stub (pairs with Phase 7 TLS). Routing is
-CPU-bound but cached (~25 s); the LLM may take 45–90 s when it chains several tool calls.
+Routing is CPU-bound but cached (~25 s); the LLM may take 45–90 s when it chains several tool calls.
+
+## Web auth (Phase 7)
+
+The crew share ONE boat password (project decision). `vps/agent/app/auth.py` replaces the old
+client-stub gate with a real server check: **`POST /auth {password}`** verifies against
+`BOAT_PASSWORD` (constant-time) and issues a **stateless signed bearer token** — `"<exp>.<hmac>"`,
+HMAC-SHA256 over the expiry with `AUTH_SECRET` (defaults to a value derived from `BOAT_PASSWORD`,
+so changing the password rotates tokens; set a fresh random value in prod). An **HTTP middleware**
+(`require_auth`) gates every REST route except `OPEN_PATHS` (`/health`, `/auth`); the **`/ws`**
+handler checks the token inline (passed as `?token=` since browsers can't set headers on a WS
+handshake) and closes 1008 if absent/bad. Token TTL is `AUTH_TTL_HOURS` (default 720 h / 30 days so
+the crew don't re-auth mid-passage); `AUTH_ENABLED=false` disables the check (open bench only).
+The web app POSTs the password to `/api/auth`, stores the token in `sessionStorage`, and routes all
+calls through a single `apiFetch` helper (injects `Authorization: Bearer`, re-gates on 401) + the
+WS URL `?token=`; a stored token auto-resumes on reload. Dev password is `sr33-dev` (compose
+default + screenshot harness). Prod compose requires `BOAT_PASSWORD` + `AUTH_SECRET` in the `.env`.
+Bench-verified end-to-end through the nginx proxy: `/health` open; data/chat/WS all 401/reject
+without a token; wrong password 401; correct password connects; tamper/expiry/garbage tokens
+rejected; reload auto-resumes. **Note:** this is a shared-secret bearer behind TLS (still TODO,
+same Phase 7) — not per-user identity; appropriate for a boat iPad, not a public app.
 
 ## Helm fatigue index
 
