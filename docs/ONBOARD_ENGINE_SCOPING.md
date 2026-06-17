@@ -296,7 +296,11 @@ learning loop is between-races.
    must respect + the fleet) **and the RRS-41 race gate** (the per-race `rules_profile` — e.g. the
    Bayview Mackinac NOR §2.1(d) change to Rule 41). Different races → different gate config
    automatically; this automates/generalizes the hand-written `docs/RRS41_COMPLIANCE.md`. Target the
-   **2026 Bayview Mackinac** first; generalize to any race (e.g. **Mills Trophy 2026**).
+   **2026 Bayview Mackinac** first; generalize to any race (e.g. **Mills Trophy 2026**). **Dual input:**
+   the setup lets users either (a) **auto-find/fetch** the docs from a race URL (works for static-doc
+   sites like bycmack.com) or (b) **paste a direct link / upload the PDF** — many race hubs are
+   JS-rendered (e.g. Mills on YachtScoring) where an auto-crawler can't reach the PDFs, so paste/upload
+   is the required fallback. The human-review step on extracted geometry/rules applies either way.
 
 7. **Public race tracker as a common-data source (Bayview Mackinac).** The official public tracker
    (bycmack.com/tracking — a separate YB/TracTrac-style system, public with a deliberate delay) is, by
@@ -320,7 +324,7 @@ learning loop is between-races.
 | 9.2 ✅ | iPad race-mode → Pi only; server-side fail-closed cloud gate + audit log | **done** — cloud-gate half (race mode 403s advice + chat refuses + audit_log) AND iPad-side: the `pi/console` race console serves the app pointed only at the onboard engine (:8091→:8200), onboard mode (no auth/chat/cloud, all panels available); bench-verified (no /auth, no /ws, zero cloud calls) | none |
 | 9.3 | C4 Performance Lab — learning loop: hoisted-sail logging, polar write-back, prep/debrief | a sail → refined polars loaded back onboard | none |
 | 9.4 *(opt)* | Orin Nano local LLM narrator | grounded onboard NL answer, offline, usable latency | Orin Nano 8GB |
-| Lab-0 | **Race ingestion**: NOR/SI → RaceDefinition (course/marks/gates/zones/scoring + `rules_profile`) + the `fleet` block (ORC + entry list) + human review | Bayview Mackinac course + zones + rules profile + fleet load cleanly; feeds optimizer *and* the race gate; generalizes (Mills Trophy) | none |
+| Lab-0 | **Race ingestion** (input: auto-find from a race URL **or** a pasted link / uploaded PDF): NOR/SI → RaceDefinition (course/marks/gates/zones/scoring + `rules_profile`) + the `fleet` block (ORC + entry list) + human review | Bayview Mackinac course + zones + rules profile + fleet load cleanly from the NOR; feeds optimizer *and* the race gate; generalizes (Mills Trophy via paste-link) | none |
 | Lab-1 | GRIB + buoy ingestion (full multi-model `WindField`) + single-scenario isochrone routing on refined polars (cloud) | one optimal route + briefing from real GRIB on a real RaceDefinition | none |
 | Lab-2 | Multi-scenario/ensemble optimization + cluster + Opus robust synthesis + the **branching playbook bundle** (variants + branch tree on deviation+drift, pre-authored children, rationale) | a multi-variant branching playbook (routes + branch tree + rationale/tradeoffs) | none |
 | Lab-3 | Onboard executor: relocate routing to engine, onboard GRIB+buoy(+tracker) fetch, **fuzzy** branch evaluator (soft triggers/hysteresis/EV) + selector + graceful degradation, fleet/corrected-time intelligence, iPad Strategy card (confidence + adherence gauge), LLM divergence-detection + reasoned suggestions | onboard tracks scenarios from live GRIB+buoys+fleet, surfaces favored variant + tradeoffs + confidence, recomputes route — offline from cloud | LLM layer uses Orin |
