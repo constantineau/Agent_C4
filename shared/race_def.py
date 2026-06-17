@@ -1,11 +1,18 @@
 """RaceDefinition — the structured output of C4 Performance Lab race ingestion (Lab-0).
 
-A race's published NOR + SI (+ ORC data + entry list) are distilled into ONE portable
-RaceDefinition that feeds two consumers:
+A race's published NOR + SI + SER (+ ORC data + entry list) are distilled into ONE portable
+RaceDefinition that feeds three consumers:
   - the **optimizer / navigator** — course geometry (marks/gates/finish, WGS84), zones the route
     must respect, scoring objective, and the fleet;
-  - the **RRS-41 race gate** — the per-race `rules_profile` (rule modifications, e.g. the 2026
-    Bayview Mackinac NOR §2.1(d) change to RRS 41(c) that drove the three-tier architecture).
+  - the **race checklists** — `requirements`: the COMPREHENSIVE set of things the boat must do or
+    carry (safety/SER equipment, registration, navigation lights, the finish/gate procedures, ...),
+    each tagged with the phase + trigger it applies at. Pre-race items are the prep checklist the
+    team works through; race-time items (`deliver_to_ipad=true`) are compiled into the playbook and
+    surfaced on the onboard console at the right moment (e.g. nav lights at sunset; the GPS photo +
+    displaying registration/sail numbers at the finish).
+  - the **rules / scoring layer** — `rules_profile` (rule modifications + scoring). The RRS-41
+    carve-out (NOR §2.1(d)) is just ONE modification the race gate reads; it is not the focus —
+    comprehensive requirement-checking is.
 
 Ingestion is dual-input (auto-find from a race URL OR a pasted link / uploaded PDF) and ALWAYS
 ends in a human-review step — a wrong waypoint is dangerous and coordinate formats vary. This
@@ -26,6 +33,14 @@ SCHEMA_VERSION = "0.1"
 ROUNDINGS = {"port", "starboard", "gate", "none"}
 MARK_TYPES = {"start", "waypoint", "gate", "island", "buoy", "finish"}
 COORDS_SOURCES = {"nor", "si", "chart", "orc", "approx", "needs_review", "si_pending"}
+
+# Comprehensive race-requirement checklist taxonomy.
+REQ_CATEGORIES = {"safety", "structural", "crew_safety", "navigation", "communications",
+                  "registration", "procedure", "reporting", "environmental", "rules"}
+# The phase of the regatta a requirement applies at.
+REQ_PHASES = {"pre_entry", "pre_start", "start", "in_race", "at_gate", "at_finish", "post_race"}
+# What surfaces a race-time requirement on the onboard console.
+TRIGGER_TYPES = {"none", "time", "event", "location"}
 
 
 def dm_to_dd(deg: float, minutes: float, hemi: str) -> float:
@@ -100,6 +115,24 @@ class RulesProfile:
 
 
 @dataclass
+class Requirement:
+    """One comprehensive race-requirement / checklist item (from NOR / SI / SER).
+
+    Pre-race items form the prep checklist the team works through in the Lab; items with
+    `deliver_to_ipad=True` are compiled into the playbook and surfaced on the onboard console at
+    their trigger (e.g. nav lights at sunset; the finish procedure on the finish approach)."""
+    id: str
+    category: str                  # REQ_CATEGORIES
+    phase: str                     # REQ_PHASES
+    text: str
+    trigger_type: str = "none"     # TRIGGER_TYPES — how it surfaces in-race
+    trigger_detail: str = ""       # e.g. "sunset->sunrise", "finishing", "Cove Island gate"
+    deliver_to_ipad: bool = False  # push to the onboard console (a race-time action item)
+    critical: bool = False         # safety/DSQ-critical
+    source: str = ""               # e.g. "NOR §11.3", "SER 3.3.1"
+
+
+@dataclass
 class Zone:
     name: str
     type: str                      # "exclusion" | "tss" | "hazard"
@@ -138,7 +171,8 @@ class RaceDefinition:
     divisions: list = field(default_factory=list)      # [Division]
     courses: list = field(default_factory=list)        # [Course]
     zones: list = field(default_factory=list)          # [Zone]
-    rules_profile: dict = field(default_factory=dict)  # RulesProfile
+    requirements: list = field(default_factory=list)   # [Requirement] — comprehensive checklists
+    rules_profile: dict = field(default_factory=dict)  # RulesProfile (rule mods + scoring)
     fleet: list = field(default_factory=list)          # [FleetEntry]
     provenance: dict = field(default_factory=dict)     # Provenance
     schema_version: str = SCHEMA_VERSION
@@ -186,6 +220,19 @@ def validate(d: dict) -> tuple[list, list]:
                                 f"— needs review")
             if m.get("coords_source") == "needs_review":
                 warnings.append(f"mark {m.get('name')!r}: coords need review")
+    reqs = d.get("requirements", [])
+    if not reqs:
+        warnings.append("no requirements/checklist items — comprehensive rules not yet captured")
+    for r in reqs:
+        if r.get("category") not in REQ_CATEGORIES:
+            errors.append(f"requirement {r.get('id')!r}: bad category {r.get('category')!r}")
+        if r.get("phase") not in REQ_PHASES:
+            errors.append(f"requirement {r.get('id')!r}: bad phase {r.get('phase')!r}")
+        if r.get("trigger_type", "none") not in TRIGGER_TYPES:
+            errors.append(f"requirement {r.get('id')!r}: bad trigger_type {r.get('trigger_type')!r}")
+        if r.get("deliver_to_ipad") and r.get("trigger_type", "none") == "none":
+            warnings.append(f"requirement {r.get('id')!r} is delivered to the iPad but has no "
+                            f"trigger — when should it surface?")
     rp = d.get("rules_profile", {})
     if rp.get("tracker_permitted") is None:
         warnings.append("rules_profile.tracker_permitted unset — confirm per-race (SI)")
@@ -201,8 +248,11 @@ if __name__ == "__main__":
     data = load(path)
     errs, warns = validate(data)
     print(f"RaceDefinition: {data.get('name')} (schema {data.get('schema_version')})")
+    reqs = data.get("requirements", [])
+    ipad = [r for r in reqs if r.get("deliver_to_ipad")]
     print(f"  courses={len(data.get('courses', []))} divisions={len(data.get('divisions', []))} "
-          f"zones={len(data.get('zones', []))} fleet={len(data.get('fleet', []))}")
+          f"zones={len(data.get('zones', []))} requirements={len(reqs)} "
+          f"(→iPad {len(ipad)}) fleet={len(data.get('fleet', []))}")
     for w in warns:
         print(f"  WARN: {w}")
     for e in errs:

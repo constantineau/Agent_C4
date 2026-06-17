@@ -2,14 +2,21 @@
 
 The C4 Performance Lab is the between-races, frontier-model side of the project (strategy studio +
 learning loop). **Lab-0** is its foundation: turn a race's published documents into a structured,
-reusable **RaceDefinition** that feeds two consumers —
+reusable **RaceDefinition** (from NOR + SI + **SER**) that feeds three consumers —
 
 - the **optimizer / navigator**: course geometry (marks/gates/finish in WGS84), zones the route
   must respect, the scoring objective, and the fleet;
-- the **RRS-41 race gate**: the per-race `rules_profile` (rule modifications — e.g. the 2026
-  Bayview Mackinac NOR **§2.1(d)** change to RRS 41(c) that drove the whole three-tier architecture).
+- the **race checklists** (`requirements`): the **comprehensive** set of things the boat must do or
+  carry — safety/SER equipment, registration, navigation lights, the gate/finish procedures — each
+  tagged with the phase + trigger it applies at. Pre-race items are the **prep checklist** the team
+  works through; race-time items (`deliver_to_ipad=true`) are compiled into the playbook and
+  **surfaced on the onboard console at the right moment** (nav lights at sunset; the GPS photo +
+  displaying registration/sail numbers at the finish);
+- the **rules / scoring layer** (`rules_profile`): rule modifications + scoring. The **RRS-41**
+  carve-out (NOR §2.1(d)) is just *one* modification the race gate reads — comprehensive
+  requirement-checking is the point, not RRS-41.
 
-One ingestion, both consumers. Full design: `docs/ONBOARD_ENGINE_SCOPING.md` §4.7-6 and
+One ingestion, three consumers. Full design: `docs/ONBOARD_ENGINE_SCOPING.md` §4.7-6 and
 `docs/RRS41_COMPLIANCE.md`.
 
 ## Dual input (required) + human review
@@ -45,12 +52,18 @@ python3 -m shared.race_def vps/lab/races/bayview_mackinac_2026.json
   **Cove Island virtual gate** (SW N45°20.00′ W081°51.00′, NE N45°20.28′ W081°49.63′) and the
   **virtual GPS finish** at Round Island / Mackinac — plus both courses (Cove Island, Shore), the
   four divisions, the ORC Single-Number ToT scoring (BYC Mack Cove/Shore wind mix or WRS, fixed at
-  the race-morning briefing), and the full `rules_profile` (incl. §2.1(d), the §2.1(f) transponder
-  finish, and Appendix WP).
+  the race-morning briefing), the `rules_profile` (incl. §2.1(d), the §2.1(f) transponder finish,
+  and Appendix WP), and a **22-item `requirements` checklist** spanning safety/SER, registration,
+  navigation, procedure, reporting and environmental — **6 flagged `deliver_to_ipad`** (nav lights
+  at sunset, sponsor flag, the Cove gate GPS photo, and the finish procedure / GPS photo /
+  displaying numbers).
 - **Pending (flagged in the instance):** island coordinates (Duck Islands / Bois Blanc / Thunder
-  Bay Island) need geocoding + human review; course distances unconfirmed; the **2026 SI is not yet
-  posted (~July 2026)** — it fixes the exact start line and any zones/marks beyond the NOR, so
-  re-ingest when it lands (`https://bycmack.com/sis/`).
+  Bay Island) need geocoding + human review; course distances unconfirmed; the `requirements`
+  checklist is a **representative subset** — the full SER (~40 equipment items) + SI procedural
+  items must be ingested completely before the prep checklist is relied on (and `display-numbers`
+  needs SI verification); the **2026 SI is not yet posted (~July 2026)** — it fixes the exact start
+  line, zones/marks beyond the NOR, and procedural requirements, so re-ingest when it lands
+  (`https://bycmack.com/sis/`).
 - **Next:** the ingestion service (dual-input + Opus extraction + storage + the review UI), then
   wire the RaceDefinition into the navigator's course loader and the race gate's `rules_profile`.
 

@@ -288,9 +288,13 @@ learning loop is between-races.
 
 6. **Fleet ingestion + race ingestion (a new Lab-0).** Teams upload a race (NOR + SI URLs/PDFs); Opus
    extracts a structured **RaceDefinition**: course/marks (WGS84), gates (e.g. Cove Island, rounding
-   direction), start/finish, schedule, class splits, scoring, **rule modifications**, exclusion zones
-   (shipping lanes/TSS, shoals, islands), and a **fleet** block (boat name, class, ORC rating/GPH,
-   MMSI where available) assembled from public ORC data + the race entry/sign-up list. Mandatory
+   direction), start/finish, schedule, class splits, scoring, a **comprehensive requirements
+   checklist** (safety/SER equipment + registration + procedural items — each tagged with the
+   phase/trigger it applies at, and the race-time ones pushed to the iPad, e.g. nav lights at sunset,
+   the gate GPS photo, the finish procedure + displaying numbers), **rule modifications** (RRS-41 is
+   just one of these — comprehensive checking is the point), exclusion zones (shipping lanes/TSS,
+   shoals, islands), and a **fleet** block (boat name, class, ORC rating/GPH, MMSI where available)
+   assembled from public ORC data + the race entry/sign-up list. Mandatory
    **human-review** step on extracted geometry (a wrong waypoint is dangerous; coordinate formats
    vary). Key unification: the **same ingestion feeds both the optimizer** (geometry + zones the route
    must respect + the fleet) **and the RRS-41 race gate** (the per-race `rules_profile` — e.g. the
