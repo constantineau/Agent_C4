@@ -250,8 +250,24 @@ Frontier-model write-back capabilities (all between-races):
   across sails → calibration factors / `source_notes`.
 - **Fatigue tuning** — tune the first-cut `FATIGUE_*` thresholds against labeled real archives.
 
-**Bright line repeated:** all refinement is computed *between races* and loaded as static reference;
-never re-derived from the cloud mid-race.
+**Route-strategy studio + onboard playbook (see `docs/ONBOARD_ENGINE_SCOPING.md` §4).** The Lab also
+compiles, *pre-race*, a **playbook** of N pre-optimized routing variants + a deterministic decision
+tree; in-race the **onboard** executor selects/recomputes among them. Compliance hinges on three points:
+- **Public GRIB *and buoy* obs are "information available to all boats"** (§2.1(d) first clause — even
+  at cost). Fetching NOAA NDBC / GLOS buoy obs + GRIB **in-race** and processing them **onboard** is
+  legal — it is common data, identical for everyone, not advice computed off-boat. (Same lane as a
+  shore weather broadcast.)
+- **The in-race optimizer/selector runs onboard.** Picking among pre-loaded variants by fixed rules, or
+  re-running the isochrone optimizer onboard on the latest public GRIB, is the boat's own computation
+  (Expedition core). Never phone the cloud mid-race for a fresh customized route.
+- **Glass-box rationale is compliance-clean** because the *why/tradeoffs* are **authored by Opus before
+  the start** (baked into the playbook) and merely **surfaced + narrated onboard** in-race — not a fresh
+  cloud call. Showing the crew the tradeoffs strengthens, not weakens, the RRS-41 posture: the boat
+  presents its own pre-made plan + public data, and the crew decides.
+
+**Bright line repeated:** all refinement + strategy is computed *before the start* (or onboard in-race
+on own-data + common public data) and loaded as static reference; never re-derived from the cloud
+mid-race.
 
 ---
 

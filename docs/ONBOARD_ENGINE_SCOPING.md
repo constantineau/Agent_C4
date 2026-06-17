@@ -16,7 +16,7 @@ not change Phases 0–7; it adds a compliant in-race execution path and a betwee
 | **A. Deterministic engine** | **Onboard (Pi 4)** | ✅ legal | `navigator`, `routing`, `tactics`, `sails`, `polar_tool`, `fatigue` — physics/geometry on the boat's own sensors + published course. No LLM. Expedition-class. |
 | **B. Common-data fetch** | cloud or onboard | ✅ legal | GRIB / forecast / AIS / buoys — "information available to all boats" (verbatim, no per-boat processing). |
 | **C. Conversational coaching** | onboard local LLM (in-race) / cloud Opus (otherwise) | onboard ✅ / cloud ❌ | Narrate the engine's facts; free-form crew Q&A. |
-| **D. C4 Performance Lab** | **Cloud Opus 4.8** | n/a (between races) | Prep, debrief, and *write-back* learning (refined polars / crossovers / calibration / fatigue). Unrestricted — not "while underway". |
+| **D. C4 Performance Lab** | **Cloud Opus 4.8 ashore** (studio) → **onboard executor** (Pi+Orin) | studio: pre-race ✅ / executor: in-race ✅ | Shore studio compiles a multi-variant **playbook** (routes + decision tree + rationale) + write-back learning (polars/crossovers/calibration/fatigue); onboard executor tracks live GRIB+buoys, picks/recomputes variants, and shows the tradeoffs (glass-box) on the iPad. |
 
 Connective tissue = the **"homework" pattern**: Opus produces artifacts off-boat *before the start*,
 they are **loaded onto the boat**, and the onboard system merely executes/recomputes them. The plan
@@ -103,31 +103,92 @@ cloud.
 
 ---
 
-## 4. Layer D — the C4 Performance Lab (cloud Opus 4.8, between races)
+## 4. Layer D — the C4 Performance Lab (cloud Opus 4.8 ashore + onboard executor)
 
-Unrestricted (not "while underway"). Closes the learning loop: **race → debrief → refine → load →
-race**. See RRS41 §6.
+The C4 Performance Lab is a **frontier-model race-strategy studio** that, *before the start*, compiles
+an **onboard playbook**; the boat then *executes* that playbook in-race using onboard computation on
+its own data + genuinely-common public data. All Opus/cloud work is pre-start (unrestricted); all
+in-race computation is onboard (legal). See RRS41 §6.
 
-**9.3 — C4 Performance Lab.**
+### 4.1 Between-races learning loop (makes everything below more accurate)
 - **Hoisted-sail logging (prerequisite).** Today the hoisted sail is only in browser `localStorage`
-  (`sr33.hoisted`), passed transiently to `/sail` — **not persisted**. Add a timestamped hoisted-sail
-  log to the archive so crossover-learning has labels. (Polar + calibration learning work without it.)
+  (`sr33.hoisted`), passed transiently to `/sail` — **not persisted**. Add a timestamped log so
+  crossover-learning has labels. (Polar + calibration learning work without it.)
 - **Polar refinement.** Extend `polar_tool.py` (today read-only observed-vs-ORC p90) to aggregate
-  across many sails and **write back** an updated polar table (`target_stw`/`target_vmg`), replacing
-  the generic ORC cert with the boat's measured polars.
-- **Crossover refinement.** From hoisted-sail × achieved-speed history, refine the J1/A2/A3/S2
-  crossover points → updated `sr33_speed_guide.md`.
-- **Calibration learning.** Cross-source comparison across sails → speedo/wind/heel offset + drift →
-  calibration factors / `source_notes`.
-- **Fatigue tuning.** Tune `FATIGUE_*` against labeled real archives.
-- **Prep + debrief.** Opus generates the frozen pre-race plan (forecast + refined polars) and the deep
-  post-race debrief (extends the 6.2 summarizer).
+  across many sails and **write back** refined polars (`target_stw`/`target_vmg`) — *review-before-replace*.
+- **Crossover refinement** (needs the sail log), **calibration learning** (cross-source offset/drift),
+  **fatigue tuning** (`FATIGUE_*` vs labeled archives).
 
-*Exit test:* a real (or replayed) sail produces refined polars/crossovers via Opus, loaded back onboard
-and visibly used by the engine on the next sail.
+### 4.2 Route-strategy studio (shore, Opus 4.8, pre-race)
+1. **Multi-scenario optimization.** Ingest *several* weather outcomes — multi-model (GFS/ECMWF/HRRR)
+   and/or ensemble members — and isochrone-optimize each over the real course on the refined polars →
+   an optimal route per scenario with leverage/decision points marked.
+2. **Frontier-model strategic synthesis** (where Opus earns its keep):
+   - **Robust strategy** across scenarios — the regret-minimizing play when models disagree, not just
+     the single-GRIB optimum.
+   - **Qualitative reasoning the optimizer misses** — Cove Island gate, shipping lanes / traffic
+     separation, Lake Huron/Michigan thermal & shoreline effects, current/tide gates, day↔night
+     transitions, the cost of a sail change / extra tack for this crew.
+   - **Executable decision tree** — compiled into deterministic, onboard-runnable rules (so the boat
+     needs no LLM to choose), each carrying a plain-language **rationale + tradeoffs**.
+3. **Playbook artifact.** N pre-optimized variants + the decision tree + per-leg sail plan + decision
+   gates (with trigger conditions) + the rationale/tradeoffs text, packaged into one portable file.
+   Loaded onboard, **frozen at the gun**.
 
-**Bright line:** all refinement is computed between races and loaded as static reference; never
-re-derived from the cloud mid-race (RRS 41).
+### 4.3 Onboard playbook executor (Pi engine + Orin, in-race — all legal)
+- **Public-data monitor.** Onboard fetch of *common* public data in-race: GRIB updates +
+  **NOAA NDBC / Great Lakes (GLOS) buoy obs** + NWS + CO-OPS water level — all "available to all
+  boats". Treated skeptically (staleness/outage) like any source.
+- **Scenario tracker.** Scores live signals — latest GRIB, **buoy obs (ground truth, often up-course of
+  the boat = a leading indicator)**, the boat's own masthead wind — against each pre-loaded scenario →
+  "reality is tracking scenario B".
+- **Variant selector + onboard re-optimizer.** Deterministically (a) pick the live-best variant by the
+  pre-loaded rules, and/or (b) **re-run the isochrone optimizer onboard** on the latest public GRIB
+  from the current position (the Expedition core, relocated into the engine).
+- **Decision-gate alerts.** "Gate at WP3 in ~18 min: buoy+GRIB favor the west variant." The Orin's
+  local LLM narrates from the engine's facts + the pre-loaded rationale.
+
+### 4.4 Glass-box, not a black box (design principle)
+The crew must see *why*, with the tradeoffs — and this is compliance-clean because the **rationale is
+pre-authored by Opus before the start** and merely **surfaced + narrated onboard** in-race (no fresh
+cloud call). Two layers:
+- **Pre-race (rich):** Opus writes, into the playbook, each variant's rationale, the tradeoffs (ETA vs
+  distance vs risk vs pressure vs gate position), and what would flip each decision.
+- **In-race (onboard, iPad Strategy card):** the **currently-favored variant + one-line why**, a
+  **compare view** (variants side-by-side with tradeoffs), the **decision-gate countdown + what flips
+  it**, a **live-signal panel** (GRIB vs buoys vs own wind: agreement/divergence + provenance), and a
+  **confidence** read (how much scenarios diverge / obs match forecast). The Orin answers "why west?"
+  from the pre-loaded rationale + live facts. The crew stays in command and can override.
+
+This extends the project's existing self-explaining / skeptical-source ethos to strategy, and it
+strengthens RRS-41 defensibility (the boat presents its own pre-made plan + public data; the crew decides).
+
+### 4.5 New dependencies
+- **Real GRIB ingestion** (multi-model/ensemble) — today only Open-Meteo *point* forecast (old Phase
+  8.1, now central).
+- **Buoy/obs ingestion** — NDBC / GLOS / CO-OPS onboard fetch + store (new; small public feeds).
+- **Onboard routing** — relocate `routing.py` into the engine + onboard GRIB fetch/store (rides with
+  9.0/9.1).
+- **Real course/marks** — old Phase 8.0; the Mackinac course is known and loadable.
+- **Playbook artifact format + onboard scenario-tracker/selector** — new components.
+
+### 4.6 Phasing (Lab-1 → Lab-4)
+- **Lab-1** — GRIB + buoy ingestion + single-scenario isochrone routing on refined polars (cloud) →
+  one optimal route + briefing.
+- **Lab-2** — multi-scenario/ensemble optimization + Opus robust-strategy synthesis + the **playbook
+  artifact** (N variants + decision tree + rationale/tradeoffs).
+- **Lab-3** — the **onboard executor**: relocate routing to the engine, onboard GRIB+buoy fetch,
+  scenario tracker + variant selector + decision-gate alerts (Orin narration) + the iPad Strategy card.
+- **Lab-4** — post-race validation (which variant/obs paid → feeds 4.1 learning).
+
+*Exit test:* a real/replayed passage → Opus produces a multi-variant playbook; onboard, the executor
+tracks scenarios from live GRIB+buoys, surfaces the favored variant with its rationale/tradeoffs on the
+iPad, and recomputes the route onboard — all offline from the cloud.
+
+**Bright line:** every frontier-model/cloud step is pre-start; in-race the optimizer, selector, and
+narration run **onboard** on own-data + common public data. The cloud is **never** consulted mid-race
+for a fresh customized route. Pre-loaded variants + onboard re-optimization from public GRIB/buoys =
+the legal mechanism.
 
 ---
 
@@ -138,11 +199,16 @@ re-derived from the cloud mid-race (RRS 41).
 | 9.0 | Data-access abstraction (cloud ↔ onboard backend) for the 6 modules | identical outputs from local data on bench | none |
 | 9.1 | Onboard engine service + API in `compose.pi.yml` | iPad → Pi renders all nav/sail/plot/tactics screens | none |
 | 9.2 | iPad race-mode → Pi only; server-side fail-closed cloud gate + audit log | race mode reaches no cloud; gated topics refused + logged | none |
-| 9.3 | C4 Performance Lab: hoisted-sail logging, polar write-back, prep/debrief/learning loop | a sail → refined polars loaded back onboard | none |
+| 9.3 | C4 Performance Lab — learning loop: hoisted-sail logging, polar write-back, prep/debrief | a sail → refined polars loaded back onboard | none |
 | 9.4 *(opt)* | Orin Nano local LLM narrator | grounded onboard NL answer, offline, usable latency | Orin Nano 8GB |
+| Lab-1 | GRIB + buoy ingestion + single-scenario isochrone routing on refined polars (cloud) | one optimal route + briefing from real GRIB | none |
+| Lab-2 | Multi-scenario/ensemble optimization + Opus robust-strategy synthesis + playbook artifact | a multi-variant playbook (routes + decision tree + rationale/tradeoffs) | none |
+| Lab-3 | Onboard executor: relocate routing to engine, onboard GRIB+buoy fetch, scenario tracker + variant selector + decision-gate alerts + iPad Strategy card | onboard tracks scenarios from live GRIB+buoys, surfaces favored variant + tradeoffs, recomputes route — offline from cloud | uses Orin |
+| Lab-4 | Post-race validation (which variant/obs paid → feeds the learning loop) | debrief attributes outcome to variant + obs | none |
 
-9.0 → 9.2 is the compliance-critical path (legal in-race, no hardware). 9.3 is the high-value learning
-loop. 9.4 is the optional NL polish that needs the Orin.
+9.0 → 9.2 is the compliance-critical path (legal in-race, no hardware). 9.3 is the learning loop. 9.4
+is the optional NL polish that needs the Orin. **Lab-1 → Lab-4 build the C4 Performance Lab studio +
+onboard playbook executor** (§4); Lab-3 depends on the onboard engine (9.0/9.1) and the Orin (9.4).
 
 ---
 
