@@ -69,5 +69,22 @@ services:
       - agent
     restart: unless-stopped
 
+  # C4 Performance Lab (cloud) — the browser-based prep/debrief surface. Serves the Lab web
+  # shell + the race-library API from one container. No DB dependency yet (race definitions are
+  # JSON artifacts: bundled in the image + ingested ones on the lab_ingested volume).
+  lab:
+    build:
+      context: .
+      dockerfile: vps/lab/Dockerfile
+    environment:
+      LAB_PASSWORD: ${LAB_PASSWORD:-lab-dev}
+      LAB_AUTH_ENABLED: ${LAB_AUTH_ENABLED:-true}
+    ports:
+      - "8103:8000"
+    volumes:
+      - lab_ingested:/srv/ingested
+    restart: unless-stopped
+
 volumes:
   sr33_dev_pgdata:
+  lab_ingested:

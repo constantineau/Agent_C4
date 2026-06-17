@@ -1,0 +1,88 @@
+/* C4 Performance Lab — clean, responsive prep/debrief UI (daylight/office tool; the night-
+   optimized surface is the onboard console). Works on iPad and desktop. Vanilla, no build. */
+:root {
+  --bg: #0f1419; --panel: #19212b; --panel2: #1f2935; --line: #2b3947;
+  --ink: #e8eef4; --muted: #8aa0b4; --accent: #36b3ff; --accent2: #7ee0a8;
+  --warn: #f5c451; --bad: #ff6b6b; --crit: #ff8042; --ipad: #36b3ff;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--bg); color: var(--ink); font: 15px/1.5 -apple-system, system-ui, sans-serif; }
+
+/* gate */
+.gate { position: fixed; inset: 0; background: var(--bg); display: flex; align-items: center;
+  justify-content: center; z-index: 50; }
+.gatebox { background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+  padding: 32px; width: min(360px, 90vw); text-align: center; }
+.gatebox h1 { margin: 0 0 4px; font-size: 22px; }
+.gatebox .sub { color: var(--muted); margin: 0 0 20px; font-size: 13px; }
+.gatebox input { width: 100%; padding: 12px; border-radius: 9px; border: 1px solid var(--line);
+  background: var(--panel2); color: var(--ink); font-size: 16px; margin-bottom: 12px; }
+.gatebox button { width: 100%; padding: 12px; border: none; border-radius: 9px;
+  background: var(--accent); color: #04121f; font-weight: 700; font-size: 15px; cursor: pointer; }
+.err { color: var(--bad); font-size: 13px; min-height: 18px; margin-top: 10px; }
+
+/* top bar + tabs */
+.topbar { display: flex; align-items: center; gap: 16px; padding: 10px 16px;
+  background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 10;
+  flex-wrap: wrap; }
+.brand { font-weight: 800; font-size: 16px; white-space: nowrap; }
+.brand span { color: var(--accent); font-weight: 600; }
+.tabs { display: flex; gap: 4px; flex-wrap: wrap; flex: 1; }
+.tabs a { color: var(--muted); text-decoration: none; padding: 6px 11px; border-radius: 8px;
+  font-size: 13px; white-space: nowrap; }
+.tabs a:hover { background: var(--panel2); color: var(--ink); }
+.tabs a.active { background: var(--accent); color: #04121f; font-weight: 700; }
+.ghost { background: transparent; color: var(--muted); border: 1px solid var(--line);
+  border-radius: 8px; padding: 6px 12px; cursor: pointer; font-size: 13px; }
+
+main { padding: 18px; max-width: 1200px; margin: 0 auto; }
+.loading, .placeholder { color: var(--muted); padding: 40px; text-align: center; }
+.placeholder h2 { color: var(--ink); }
+
+/* races: list + detail */
+.races { display: grid; grid-template-columns: 320px 1fr; gap: 18px; align-items: start; }
+@media (max-width: 820px) { .races { grid-template-columns: 1fr; } }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px;
+  margin-bottom: 16px; }
+.card h3 { margin: 0 0 12px; font-size: 14px; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--muted); }
+
+.racelist { display: flex; flex-direction: column; gap: 8px; }
+.raceitem { background: var(--panel2); border: 1px solid var(--line); border-radius: 10px;
+  padding: 12px; cursor: pointer; }
+.raceitem:hover { border-color: var(--accent); }
+.raceitem.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.raceitem .nm { font-weight: 700; }
+.raceitem .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.pills { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.pill { font-size: 11px; padding: 2px 8px; border-radius: 20px; background: var(--bg);
+  border: 1px solid var(--line); color: var(--muted); }
+.pill.warn { color: var(--warn); border-color: var(--warn); }
+.pill.bad { color: var(--bad); border-color: var(--bad); }
+.pill.ok { color: var(--accent2); border-color: var(--accent2); }
+
+.detail h2 { margin: 0 0 4px; }
+.detail .dmeta { color: var(--muted); font-size: 13px; margin-bottom: 14px; }
+.banner { border-radius: 10px; padding: 10px 14px; font-size: 13px; margin-bottom: 16px; }
+.banner.review { background: rgba(245,196,81,.12); border: 1px solid var(--warn); color: var(--warn); }
+.banner.ok { background: rgba(126,224,168,.1); border: 1px solid var(--accent2); color: var(--accent2); }
+
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: 12px; }
+.mono { font-variant-numeric: tabular-nums; }
+.muted { color: var(--muted); }
+.need { color: var(--warn); }
+
+/* checklist */
+.phasegrp { margin-bottom: 14px; }
+.phasegrp h4 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--accent); }
+.req { display: flex; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.req .body { flex: 1; }
+.req .src { color: var(--muted); font-size: 11px; }
+.tag { font-size: 10px; padding: 1px 7px; border-radius: 5px; white-space: nowrap; height: fit-content; }
+.tag.ipad { background: rgba(54,179,255,.15); color: var(--ipad); border: 1px solid var(--ipad); }
+.tag.crit { background: rgba(255,128,66,.14); color: var(--crit); border: 1px solid var(--crit); }
+.tag.cat { background: var(--panel2); color: var(--muted); border: 1px solid var(--line); }

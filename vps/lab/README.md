@@ -64,8 +64,16 @@ python3 -m shared.race_def vps/lab/races/bayview_mackinac_2026.json
   needs SI verification); the **2026 SI is not yet posted (~July 2026)** — it fixes the exact start
   line, zones/marks beyond the NOR, and procedural requirements, so re-ingest when it lands
   (`https://bycmack.com/sis/`).
-- **Next:** the ingestion service (dual-input + Opus extraction + storage + the review UI), then
-  wire the RaceDefinition into the navigator's course loader and the race gate's `rules_profile`.
+- **Lab shell + race library + review view: live (dev :8103).** `vps/lab/` is a FastAPI service
+  that serves the browser-based Lab (shared team login, tabbed sections) + the race-library API
+  (`/api/races`, `/api/races/{id}`, `/api/races/{id}/validate`). The **Races** tab lists the library
+  and renders a RaceDefinition for review — courses/marks, the requirements checklist grouped by
+  phase with category/critical/→iPad badges + source cites, rules & scoring, provenance, and the
+  validation banner (the human-review items). Other sections are descriptive placeholders. Run:
+  `docker compose -f compose.dev.yml up -d --build lab` → `http://localhost:8103` (dev pw `lab-dev`).
+- **Next:** the dual-input **ingestion** (auto-find URL / paste-link / upload PDF → Opus extraction
+  → review → save to the library), then wire the RaceDefinition into the navigator's course loader
+  and the race gate's `rules_profile`, and the Course & Marks map review.
 
 ## Race documents (found 2026-06-17)
 

@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>C4 Performance Lab</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <!-- shared team login -->
+  <div id="gate" class="gate">
+    <div class="gatebox">
+      <h1>C4 Performance Lab</h1>
+      <p class="sub">Race prep &amp; debrief — shared team login</p>
+      <input id="pw" type="password" placeholder="Team password" autocomplete="current-password">
+      <button onclick="unlock()">Enter</button>
+      <div id="gateErr" class="err"></div>
+    </div>
+  </div>
+
+  <header class="topbar">
+    <div class="brand">C4 <span>Performance Lab</span></div>
+    <nav class="tabs" id="tabs">
+      <a href="#races" data-phase="prep">Races</a>
+      <a href="#course" data-phase="prep">Course &amp; Marks</a>
+      <a href="#rules" data-phase="prep">Rules, Safety &amp; Checklists</a>
+      <a href="#fleet" data-phase="prep">Fleet</a>
+      <a href="#learnings" data-phase="prep">Learnings</a>
+      <a href="#gameplan" data-phase="prep">Gameplan</a>
+      <a href="#deploy" data-phase="prep">Lock-in &amp; Deploy</a>
+      <a href="#monitor" data-phase="race">Monitor</a>
+      <a href="#debrief" data-phase="debrief">Debrief</a>
+    </nav>
+    <button class="ghost" onclick="logout()">Sign out</button>
+  </header>
+
+  <main id="view"><div class="loading">Loading…</div></main>
+
+  <script src="/app.js"></script>
+</body>
+</html>
