@@ -16,6 +16,7 @@ from . import navigator
 from . import tactics
 from . import weather
 from . import routing
+from . import ais
 
 BOAT_ID = os.environ.get("BOAT_ID", "sr33")
 
@@ -297,15 +298,8 @@ def get_polar_target(tws: float, twa: float):
 
 
 def get_ais_targets(max_range_nm: float = 12):
-    with pool.connection() as conn:
-        rows = conn.execute(
-            "SELECT DISTINCT ON (mmsi) mmsi, name, range_nm, bearing, cpa_nm, tcpa_min, sog, cog "
-            "FROM ais_targets WHERE boat_id=%s AND time > now()-interval '5 minutes' "
-            "ORDER BY mmsi, time DESC", (BOAT_ID,),
-        ).fetchall()
-    targets = [dict(r) for r in rows if r["range_nm"] is None or r["range_nm"] <= max_range_nm]
-    targets.sort(key=lambda t: (t["cpa_nm"] is None, t["cpa_nm"] or 1e9))
-    return {"count": len(targets), "max_range_nm": max_range_nm, "targets": targets}
+    """AIS traffic with range/bearing and CPA/TCPA computed live vs own ship (see ais.py)."""
+    return ais.get_ais_targets(max_range_nm)
 
 
 def get_route_status(route: str = "default"):

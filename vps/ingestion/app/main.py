@@ -53,6 +53,26 @@ class RawBatch(BaseModel):
     readings: list[Reading] = Field(..., min_length=1)
 
 
+class AisObservation(BaseModel):
+    """One raw AIS target observation as heard on the boat's bus (B951 Class B).
+
+    The boat forwards only what it heard — identity + position + motion. Geometry
+    (range/bearing/CPA/TCPA) is NOT sent: the agent recomputes it cloud-side against
+    own-ship's freshest fix, in keeping with collect-everything (the boat is dumb)."""
+    time: datetime
+    mmsi: int
+    name: Optional[str] = None
+    lat: Optional[float] = None
+    lon: Optional[float] = None
+    sog: Optional[float] = None   # kn
+    cog: Optional[float] = None   # deg true
+
+
+class AisBatch(BaseModel):
+    boat_id: str = "sr33"
+    targets: list[AisObservation] = Field(..., min_length=1)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     pool.open(wait=True, timeout=30)
@@ -91,6 +111,21 @@ def ingest(batch: TelemetryBatch):
 
     placeholders = "(" + ", ".join(["%s"] * len(_COLS)) + ")"
     sql = f"INSERT INTO telemetry ({', '.join(_COLS)}) VALUES {placeholders}"
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.executemany(sql, rows)
+        conn.commit()
+    return {"accepted": len(rows), "boat_id": batch.boat_id}
+
+
+@app.post("/ingest/ais", dependencies=[Depends(require_token)])
+def ingest_ais(batch: AisBatch):
+    """Store raw AIS target observations. Geometry columns stay NULL — the agent's
+    ais.py recomputes range/bearing/CPA/TCPA live against own-ship position."""
+    rows = [(t.time, batch.boat_id, t.mmsi, t.name, t.lat, t.lon, t.sog, t.cog)
+            for t in batch.targets]
+    sql = ("INSERT INTO ais_targets (time, boat_id, mmsi, name, lat, lon, sog, cog) "
+           "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)")
     with pool.connection() as conn:
         with conn.cursor() as cur:
             cur.executemany(sql, rows)

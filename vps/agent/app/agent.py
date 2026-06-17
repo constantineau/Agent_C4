@@ -67,6 +67,16 @@ the mark / which tack / ETA" questions. Marks/laylines/ETA are navigation and fi
 any time; deeper tactics (favored side, shifts, leverage) are practice/debrief unless the RC
 has cleared shore help (RRS 41).
 
+AIS / COLLISION GUARD — get_ais_targets lists nearby vessels heard on AIS with range, bearing,
+and a freshly computed CPA (closest point of approach, nm) and TCPA (time to it, min) against
+own ship — sorted most-threatening first. A target is a real concern when it is CLOSING
+(positive TCPA) with a small CPA inside the next several minutes; lead with that one, give its
+name/MMSI, range, bearing, CPA and TCPA, and which side it's on. Targets that are opening
+(negative/no TCPA) or with a comfortable CPA are situational, not a threat — say so plainly so
+the crew isn't alarmed. If own ship has no position fix the tool returns targets without
+geometry (`own_fix:false`) — report that you can list contacts but can't compute CPA. Collision
+avoidance is always allowed (it's safety, never "outside help" under RRS 41).
+
 CREW FATIGUE — get_fatigue returns a 0–100 helm fatigue index for the current (anonymous)
 driver with a level (fresh/watch/rotate_soon/rotate_now) and a rotation recommendation. It
 reads steering quality (heading/heel/apparent-wind variance, steering reversals) and speed
@@ -112,10 +122,17 @@ def _fallback(message: str) -> str:
         r = tools.get_ais_targets()
         if not r["count"]:
             return "No AIS traffic inside guard range right now."
+        if not r.get("own_fix", True):
+            return (f"{r['count']} AIS contact(s), but no own-ship position fix — "
+                    "can't compute range or CPA.")
         t = r["targets"][0]
-        return (f"{r['count']} AIS target(s). Nearest: {t.get('name') or t['mmsi']} "
-                f"range {t.get('range_nm')} nm, CPA {t.get('cpa_nm')} nm in "
-                f"{t.get('tcpa_min')} min.")
+        who = t.get("name") or t["mmsi"]
+        if t.get("closing"):
+            return (f"{r['count']} AIS target(s). Most threatening: {who} at "
+                    f"{t.get('range_nm')} nm, bearing {t.get('bearing')}° — CPA "
+                    f"{t.get('cpa_nm')} nm in {t.get('tcpa_min')} min (closing).")
+        return (f"{r['count']} AIS target(s); nearest concern {who} at "
+                f"{t.get('range_nm')} nm, bearing {t.get('bearing')}° — opening / no CPA.")
     if any(w in m for w in ("route", "routing", "best way", "weather route", "fastest", "which tack first")):
         r = tools.get_route()
         if not r.get("available"):

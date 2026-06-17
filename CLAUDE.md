@@ -118,9 +118,26 @@ loss); Phase 4 agent runs the *real* Claude tool-use loop (`vps/agent/app/agent.
 with the boat-speed gospel + per-source skepticism + source priority/failover. True wind/VMG now
 flow via the auto-enabled `signalk-derived-data` plugin. Phase 5 ✅ the iPad crew interface is
 built (day/night, sail dial, course plot + navigator, tactics, weather/isochrone routing — see
-"iPad crew interface"). Remaining: Phase 6 alerting/summarizer, Phase 7 prod/soak; still owed —
+"iPad crew interface"). Phase 6 IN PROGRESS — **6.0 live AIS done** (see "Live AIS"); next are
+6.1 alerting, 6.2 summarizer/debrief, 6.3 polar mining. Remaining: Phase 7 prod/soak; still owed —
 a real `candump -l can0` replay fixture and server-side web auth (the canned sample + client-stub
 gate stand in for now).
+
+## Live AIS (Phase 6.0)
+
+Collision-avoidance traffic follows the collect-everything model: the boat (em-trak B951)
+forwards only RAW target observations (mmsi/name/lat/lon/sog/cog) and the cloud reasons. The Pi
+uplink routes Signal K deltas by `context` — own-ship deltas go to `telemetry_raw` as before;
+other-vessel contexts are accumulated per-MMSI and POSTed to ingestion **`/ingest/ais`** →
+`ais_targets` (geometry columns left NULL). AIS is sent best-effort (NOT disk-queued like
+telemetry — replaying stale positions after a link outage would be wrong). `vps/agent/app/ais.py`
+computes range/bearing + **CPA/TCPA live** against own-ship's freshest fix from `telemetry_raw`
+(equirectangular relative-motion model, nm) — so geometry always reflects the current situation,
+not when the target was heard. `get_ais_targets` returns targets threat-sorted (closing, smallest
+CPA first); the agent prompt has an AIS / COLLISION GUARD section (always allowed — safety, never
+RRS 41 "outside help"). **Bench:** `python3 vps/db/seed/ais_inject.py` injects a stable synthetic
+own ship + three moving targets (one deliberate closing near-miss) so CPA/TCPA are deterministic
+without the teleporting Signal K sample boat; doubles as the closing-target scenario for 6.1 alerts.
 
 ## Data paradigm — collect everything, per source
 
