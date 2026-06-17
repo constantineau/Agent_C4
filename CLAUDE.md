@@ -267,8 +267,30 @@ WS URL `?token=`; a stored token auto-resumes on reload. Dev password is `sr33-d
 default + screenshot harness). Prod compose requires `BOAT_PASSWORD` + `AUTH_SECRET` in the `.env`.
 Bench-verified end-to-end through the nginx proxy: `/health` open; data/chat/WS all 401/reject
 without a token; wrong password 401; correct password connects; tamper/expiry/garbage tokens
-rejected; reload auto-resumes. **Note:** this is a shared-secret bearer behind TLS (still TODO,
-same Phase 7) — not per-user identity; appropriate for a boat iPad, not a public app.
+rejected; reload auto-resumes. **Note:** this is a shared-secret bearer behind TLS — not per-user
+identity; appropriate for a boat iPad, not a public app.
+
+### TLS scaffolding (prod, awaiting a domain)
+
+The web nginx terminates TLS in prod via a standard **nginx + certbot (webroot)** setup, built but
+not yet deployed (needs a domain + DNS). The image stages two configs in `/etc/nginx/template-src/`
+and an entrypoint selector **`docker-entrypoint.d/10-tls-select.sh`** (runs before the stock
+envsubst step) picks one into `/etc/nginx/templates/`:
+- **`default.conf.template`** (HTTP-only) — used in dev and during prod bootstrap; serves the
+  `/.well-known/acme-challenge/` docroot so certbot can issue.
+- **`default.ssl.conf.template`** — selected only when `TLS_ENABLED=true` AND the cert for
+  `$SERVER_NAME` exists: port 80 redirects to HTTPS (+ keeps the ACME location), port 443 does
+  TLS 1.2/1.3 + HSTS and proxies `/` + `/api` + `/ws`. The cert-existence check means prod web
+  always starts (HTTP first) and flips to HTTPS on the next restart once the cert lands — **dev is
+  unaffected** (no `TLS_ENABLED` → HTTP-only, same as before; verified, and `nginx -t` passes on
+  the rendered TLS config).
+`compose.prod.yml` gains a long-running **`certbot`** service (renews every 12 h) sharing
+`letsencrypt` + `certbot_webroot` volumes with web, and the web service publishes 80/443.
+**`deploy/init_tls.sh`** does the one-time issuance: starts web HTTP-only, runs `certbot certonly
+--webroot` for `$SERVER_NAME`, then recreates web on TLS (`--staging` flag for dry runs). Prod
+`.env` adds `SERVER_NAME`, `CERTBOT_EMAIL`, `TLS_ENABLED`. **Deploy caveat:** ports 80/443 must be
+free on this shared VM (DreamCRM/racertracer also run here) — check before deploy, or front
+everything with one shared reverse proxy.
 
 ## Helm fatigue index
 

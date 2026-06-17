@@ -1,0 +1,56 @@
+# Prod TLS server (Phase 7). Selected by docker-entrypoint.d/10-tls-select.sh only when
+# TLS_ENABLED=true AND a Let's Encrypt cert for ${SERVER_NAME} exists; otherwise the HTTP-only
+# default.conf.template is used (so first boot can serve the ACME challenge before the cert exists).
+# envsubst fills ${SERVER_NAME} / ${AGENT_HOST} / ${AGENT_PORT}; nginx runtime vars ($host, $uri,
+# $http_upgrade, …) are not env vars so they pass through untouched.
+
+# Port 80: serve the ACME http-01 challenge, redirect everything else to HTTPS.
+server {
+    listen 80;
+    server_name ${SERVER_NAME};
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+# Port 443: terminate TLS, serve the app, proxy /api + /ws to the agent.
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name ${SERVER_NAME};
+
+    ssl_certificate     /etc/letsencrypt/live/${SERVER_NAME}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${SERVER_NAME}/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 1d;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # WebSocket chat to the agent service (auth token rides as a ?token= query param).
+    location /ws {
+        proxy_pass http://${AGENT_HOST}:${AGENT_PORT}/ws;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_read_timeout 3600s;
+    }
+
+    # REST mirrors. Authorization: Bearer is forwarded to the agent by default.
+    location /api/ {
+        proxy_pass http://${AGENT_HOST}:${AGENT_PORT}/;
+        proxy_set_header Host $host;
+    }
+}

@@ -60,11 +60,32 @@ services:
     environment:
       AGENT_HOST: agent
       AGENT_PORT: "8000"
-    expose:
-      - "80"
+      SERVER_NAME: ${SERVER_NAME:?set in prod .env}   # the public domain (TLS cert CN)
+      TLS_ENABLED: ${TLS_ENABLED:-true}               # HTTP-only until certbot has issued, then HTTPS
+    # Terminates TLS for the crew. NOTE: ports 80/443 must be free on the host (this box also
+    # runs DreamCRM / racertracer — check before deploy; front with a shared proxy if taken).
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - letsencrypt:/etc/letsencrypt:ro       # certs (written by the certbot service)
+      - certbot_webroot:/var/www/certbot:ro   # ACME http-01 challenge docroot
     depends_on:
       - agent
     restart: always
 
+  # Let's Encrypt issuance/renewal (webroot mode). Issue once via deploy/init_tls.sh; this
+  # long-running form renews every 12h. Shares the cert + webroot volumes with web.
+  certbot:
+    image: certbot/certbot:latest
+    volumes:
+      - letsencrypt:/etc/letsencrypt
+      - certbot_webroot:/var/www/certbot
+    entrypoint: /bin/sh
+    command: -c 'trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot --quiet; sleep 12h & wait $${!}; done'
+    restart: always
+
 volumes:
   sr33_prod_pgdata:
+  letsencrypt:
+  certbot_webroot:
