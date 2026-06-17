@@ -142,6 +142,14 @@ AGENT_TOOLS = [
         },
     },
     {
+        "name": "get_alerts",
+        "description": ("Active automated alerts the system is currently raising — closing AIS "
+                        "traffic, stale telemetry, shallow/shoaling water, boatspeed well under "
+                        "polar, a persistent wind shift, or helm fatigue — most severe first. "
+                        "Use for 'any alerts / what's wrong / are we OK / status'."),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
         "name": "get_route_status",
         "description": "Distance/bearing/ETA to the next mark and to the finish.",
         "input_schema": {

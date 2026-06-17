@@ -118,10 +118,10 @@ loss); Phase 4 agent runs the *real* Claude tool-use loop (`vps/agent/app/agent.
 with the boat-speed gospel + per-source skepticism + source priority/failover. True wind/VMG now
 flow via the auto-enabled `signalk-derived-data` plugin. Phase 5 ✅ the iPad crew interface is
 built (day/night, sail dial, course plot + navigator, tactics, weather/isochrone routing — see
-"iPad crew interface"). Phase 6 IN PROGRESS — **6.0 live AIS done** (see "Live AIS"); next are
-6.1 alerting, 6.2 summarizer/debrief, 6.3 polar mining. Remaining: Phase 7 prod/soak; still owed —
-a real `candump -l can0` replay fixture and server-side web auth (the canned sample + client-stub
-gate stand in for now).
+"iPad crew interface"). Phase 6 IN PROGRESS — **6.0 live AIS done** (see "Live AIS") and
+**6.1 alerting done** (see "Alerting"); next are 6.2 summarizer/debrief, 6.3 polar mining.
+Remaining: Phase 7 prod/soak; still owed — a real `candump -l can0` replay fixture and
+server-side web auth (the canned sample + client-stub gate stand in for now).
 
 ## Live AIS (Phase 6.0)
 
@@ -138,6 +138,27 @@ CPA first); the agent prompt has an AIS / COLLISION GUARD section (always allowe
 RRS 41 "outside help"). **Bench:** `python3 vps/db/seed/ais_inject.py` injects a stable synthetic
 own ship + three moving targets (one deliberate closing near-miss) so CPA/TCPA are deterministic
 without the teleporting Signal K sample boat; doubles as the closing-target scenario for 6.1 alerts.
+
+## Alerting (Phase 6.1)
+
+`vps/agent/app/alerts.py` raises conservative, **debounced** alerts on a background loop. Each
+rule reports the conditions true *right now* (closing AIS with CPA/TCPA in the guard, persistent
+wind shift via tactics, boatspeed well under polar, stale telemetry, depth shoaling, helm
+`rotate_now`); a condition must hold continuously for its per-rule window before it RAISES, and
+CLEARS as soon as it goes false — **raise slow, clear fast** (thresholds are env-tunable
+`ALERT_*`, first-cut — exit test is an acceptable false-positive rate over two practice sails).
+The agent lifespan runs `alerts.evaluate()` every `ALERT_EVAL_SECONDS` (15) in a threadpool; it
+diffs the firing set against the DB and **pushes new/updated/cleared deltas over the existing
+`/ws`** to all clients (a `Hub` fans out; each connection drains its own queue so a push and a
+chat reply never race). Migration **`004_alerts.sql`** = one `alerts` table that is both live
+state (`cleared_at IS NULL`) and the **debrief history** (cleared rows retained). Surfaced as
+`GET /alerts`, the `get_alerts` tool (+ ALERTS prompt section + fallback route), and a
+severity-colored **dismissible web banner** (`#alerts`; warn/danger via theme vars so it's
+day/night aware; a fresh client gets the active set as a snapshot on connect). **Migrations
+auto-run only on first DB init** — apply 004 to the running dev DB by hand:
+`docker compose -f compose.dev.yml exec -T timescaledb psql -U sr33 -d sr33_dev < vps/db/migrations/004_alerts.sql`.
+Bench-verified end-to-end with `ais_inject.py`: AIS + polar_deficit alerts raised after debounce,
+streamed live `updated` pushes, and cleared — banner screenshot confirmed.
 
 ## Data paradigm — collect everything, per source
 

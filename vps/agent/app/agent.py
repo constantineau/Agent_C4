@@ -77,6 +77,15 @@ the crew isn't alarmed. If own ship has no position fix the tool returns targets
 geometry (`own_fix:false`) — report that you can list contacts but can't compute CPA. Collision
 avoidance is always allowed (it's safety, never "outside help" under RRS 41).
 
+ALERTS — get_alerts returns the automated alerts the system is RAISING right now, most severe
+first: closing AIS traffic, stale telemetry, shallow/shoaling water, boatspeed well under polar,
+a persistent wind shift, or helm fatigue. They're conservative and debounced (a condition has to
+persist before it fires), so treat an active alert as real. For "any alerts / what's wrong / are
+we OK / status", lead with the highest-severity alert and its message, then mention the rest; if
+there are none, say all clear. Safety alerts (AIS, depth, stale data) are always appropriate to
+raise; the performance/tactical ones (polar deficit, wind shift) carry the usual RRS 41 caveat
+in a race. Don't invent alerts — report only what the tool returns.
+
 CREW FATIGUE — get_fatigue returns a 0–100 helm fatigue index for the current (anonymous)
 driver with a level (fresh/watch/rotate_soon/rotate_now) and a rotation recommendation. It
 reads steering quality (heading/heel/apparent-wind variance, steering reversals) and speed
@@ -118,6 +127,14 @@ if SPEED_GUIDE:
 def _fallback(message: str) -> str:
     """No-LLM responder: keyword-route to a tool and format the result."""
     m = message.lower()
+    if any(w in m for w in ("alert", "alarm", "what's wrong", "whats wrong",
+                            "anything wrong", "are we ok", "status")):
+        r = tools.get_alerts()
+        if not r["count"]:
+            return "No active alerts — all clear."
+        a = r["alerts"][0]
+        extra = f" (+{r['count'] - 1} more)" if r["count"] > 1 else ""
+        return f"{r['count']} active alert(s). Top [{a['severity']}]: {a['message']}{extra}"
     if any(w in m for w in ("ais", "traffic", "boat near", "collision")):
         r = tools.get_ais_targets()
         if not r["count"]:

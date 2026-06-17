@@ -39,6 +39,9 @@
     <button class="pill" onclick="openChannels()" title="All channels">CHANNELS</button>
   </div>
 
+  <!-- alert banner (server-pushed over /ws; severity-colored, dismissible; day/night aware) -->
+  <div id="alerts" class="alerts"></div>
+
   <!-- main stage -->
   <div class="stage">
     <div class="main">
@@ -79,6 +82,7 @@
         <h2>Navigator chat</h2>
         <div id="log"></div>
         <div class="quick">
+          <button onclick="ask('Any active alerts?')">Alerts</button>
           <button onclick="ask('How is the driver doing?')">Helm</button>
           <button onclick="ask('What sail should we have up?')">Sail</button>
           <button onclick="ask('Any AIS traffic?')">AIS</button>

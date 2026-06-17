@@ -4,6 +4,7 @@ The web app opens a WebSocket to /ws and exchanges JSON messages with the shared
 thread. Each inbound message runs the agent loop (agent.answer) in a threadpool because
 the tools use a synchronous DB pool.
 """
+import asyncio
 import os
 from contextlib import asynccontextmanager
 
@@ -12,15 +13,51 @@ from fastapi.concurrency import run_in_threadpool
 
 from shared.tool_contracts import AGENT_TOOLS
 from .db import pool
-from . import agent, tools, navigator
+from . import agent, tools, navigator, alerts
 
 API_KEY_PRESENT = bool(os.environ.get("ANTHROPIC_API_KEY", "").strip())
+
+
+class Hub:
+    """Fan-out to every connected web client. Each connection drains its own queue, so an
+    alert push and a chat reply never race on the same socket."""
+    def __init__(self):
+        self.queues: set[asyncio.Queue] = set()
+
+    def register(self) -> asyncio.Queue:
+        q: asyncio.Queue = asyncio.Queue()
+        self.queues.add(q)
+        return q
+
+    def unregister(self, q: asyncio.Queue):
+        self.queues.discard(q)
+
+    async def broadcast(self, payload: dict):
+        for q in list(self.queues):
+            q.put_nowait(payload)
+
+
+hub = Hub()
+
+
+async def alert_loop():
+    """Evaluate alert rules every ALERT_EVAL_SECONDS and push new/updated/cleared deltas."""
+    while True:
+        try:
+            changes = await run_in_threadpool(alerts.evaluate)
+            for ch in changes:
+                await hub.broadcast({"role": "alert", **ch})
+        except Exception as exc:  # never let the loop die
+            print(f"[alerts] eval error: {exc}", flush=True)
+        await asyncio.sleep(alerts.EVAL_SECONDS)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     pool.open(wait=True, timeout=30)
+    task = asyncio.create_task(alert_loop())
     yield
+    task.cancel()
     pool.close()
 
 
@@ -106,18 +143,43 @@ def route_ep(route: str | None = None, target: str = "next"):
     return tools.get_route(route, target)
 
 
+@app.get("/alerts")
+def alerts_ep():
+    """Currently-active alerts (collision/safety/performance), most severe first."""
+    return tools.get_alerts()
+
+
 @app.websocket("/ws")
 async def ws(websocket: WebSocket):
     await websocket.accept()
+    q = hub.register()
     history: list = []
     await websocket.send_json({"role": "system", "text": "Navigator online."})
+    # Push the current active alerts so a freshly opened client shows the live banner state.
     try:
+        for a in await run_in_threadpool(alerts.active_alerts):
+            await websocket.send_json({"role": "alert", "event": "new", "alert": a})
+    except Exception:
+        pass
+
+    async def reader():
         while True:
             msg = await websocket.receive_text()
             reply = await run_in_threadpool(agent.answer, msg, history)
             history.append({"role": "user", "content": msg})
             history.append({"role": "assistant", "content": reply})
             history[:] = history[-20:]  # cap thread memory
-            await websocket.send_json({"role": "assistant", "text": reply})
-    except WebSocketDisconnect:
-        return
+            q.put_nowait({"role": "assistant", "text": reply})
+
+    async def writer():
+        while True:
+            await websocket.send_json(await q.get())
+
+    rt = asyncio.create_task(reader())
+    wt = asyncio.create_task(writer())
+    try:
+        await asyncio.wait({rt, wt}, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        rt.cancel()
+        wt.cancel()
+        hub.unregister(q)

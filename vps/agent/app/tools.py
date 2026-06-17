@@ -17,6 +17,7 @@ from . import tactics
 from . import weather
 from . import routing
 from . import ais
+from . import alerts as _alerts
 
 BOAT_ID = os.environ.get("BOAT_ID", "sr33")
 
@@ -302,6 +303,11 @@ def get_ais_targets(max_range_nm: float = 12):
     return ais.get_ais_targets(max_range_nm)
 
 
+def get_alerts():
+    """Currently-active automated alerts (collision/safety/performance), most severe first."""
+    return _alerts.get_alerts()
+
+
 def get_route_status(route: str = "default"):
     lat, lon = _latest_value("navigation.position.latitude"), _latest_value("navigation.position.longitude")
     with pool.connection() as conn:
@@ -358,6 +364,7 @@ DISPATCH = {
     "get_history": get_history,
     "get_polar_target": get_polar_target,
     "get_ais_targets": get_ais_targets,
+    "get_alerts": get_alerts,
     "get_route_status": get_route_status,
     "fetch_forecast": fetch_forecast,
     "log_note": log_note,

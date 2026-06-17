@@ -47,6 +47,25 @@ body {
 #fatigueChip[data-level="rotate_soon"] .fval,
 #fatigueChip[data-level="rotate_now"] .fval { color:var(--bad); }
 
+/* ---- alert banner (server-pushed; severity-colored; theme vars handle day/night) ---- */
+.alerts { display:flex; flex-direction:column; gap:6px; padding:8px 12px 0; }
+.alerts:empty { display:none; }
+.alert { display:flex; align-items:center; gap:10px; padding:9px 13px; border-radius:11px;
+  font-size:14px; font-weight:600; border:1px solid var(--line); background:var(--panel2);
+  color:var(--text); }
+.alert .akind { font-size:10px; letter-spacing:1px; text-transform:uppercase; opacity:.75;
+  white-space:nowrap; }
+.alert .amsg { flex:1; }
+.alert .ax { background:transparent; border:none; color:inherit; font-size:20px; line-height:1;
+  font-weight:800; opacity:.6; padding:0 4px; cursor:pointer; }
+.alert .ax:hover { opacity:1; }
+.alert[data-sev="warn"] { border-color:var(--warn); color:var(--warn);
+  background:color-mix(in srgb, var(--warn) 14%, var(--panel)); }
+.alert[data-sev="danger"] { border-color:var(--bad); color:var(--bad);
+  background:color-mix(in srgb, var(--bad) 16%, var(--panel)); }
+:root[data-theme="night"] .alert[data-sev="danger"] { animation:alertPulse 1.4s ease-in-out infinite; }
+@keyframes alertPulse { 50% { opacity:.6; } }
+
 /* ---- main grid (landscape): plot/main | right rail ---- */
 .stage { flex:1; display:grid; grid-template-columns: 1fr 360px; gap:12px;
   padding:12px; min-height:0; }

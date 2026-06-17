@@ -70,7 +70,10 @@ function tacticsAllowed() { return App.mode !== 'race'; }
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   App.ws = new WebSocket(`${proto}://${location.host}/ws`);
-  App.ws.onmessage = (e) => { const m = JSON.parse(e.data); addMsg(m.role, m.text); };
+  App.ws.onmessage = (e) => {
+    const m = JSON.parse(e.data);
+    if (m.role === 'alert') handleAlert(m); else addMsg(m.role, m.text);
+  };
   App.ws.onclose = () => { addMsg('system', 'disconnected — reconnecting…'); setTimeout(connect, 2000); };
 }
 function addMsg(role, text) {
@@ -108,6 +111,30 @@ function setFatigue(index, level) {
   document.getElementById('fatigueVal').textContent =
     (index === null || index === undefined) ? '–' : Math.round(index);
   chip.dataset.level = level || '';
+}
+
+/* ---------- alert banner (server-pushed) ---------- */
+App.alerts = {};                 // key -> banner element
+App.dismissed = new Set();       // keys the crew dismissed; suppressed until they clear
+function handleAlert(m) {
+  const a = m.alert; if (!a || !a.key) return;
+  if (m.event === 'cleared') { removeAlert(a.key); App.dismissed.delete(a.key); return; }
+  if (App.dismissed.has(a.key)) return;   // dismissed and still active — keep it hidden
+  renderAlert(a);
+}
+function renderAlert(a) {
+  const box = document.getElementById('alerts');
+  let el = App.alerts[a.key];
+  if (!el) { el = document.createElement('div'); el.className = 'alert'; App.alerts[a.key] = el; box.appendChild(el); }
+  el.dataset.sev = a.severity || 'info';
+  el.innerHTML = `<span class="akind"></span><span class="amsg"></span><button class="ax" title="dismiss">×</button>`;
+  el.querySelector('.akind').textContent = (a.kind || '').replace(/_/g, ' ');
+  el.querySelector('.amsg').textContent = a.message || '';
+  el.querySelector('.ax').onclick = () => { App.dismissed.add(a.key); removeAlert(a.key); };
+}
+function removeAlert(key) {
+  const el = App.alerts[key];
+  if (el) { el.remove(); delete App.alerts[key]; }
 }
 
 /* ---------- all-channels slide-over ---------- */
