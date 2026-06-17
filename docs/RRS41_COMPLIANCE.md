@@ -223,7 +223,7 @@ is only layer C; layers A and B require no new model and no new hardware.
 
 ---
 
-## 6. The performance lab — frontier models between races (fully unrestricted)
+## 6. The C4 Performance Lab — frontier models between races (fully unrestricted)
 
 Everything *not while underway* — preparation, debrief, and learning — is RRS-41-unrestricted, and is
 where frontier **Opus 4.8** belongs. The cloud becomes the **shore-based analyst/designer** that
@@ -271,7 +271,7 @@ never re-derived from the cloud mid-race.
    onboard API; iPad → Pi in race mode. Legal in-race, no LLM. See `docs/ONBOARD_ENGINE_SCOPING.md`.
 5. **Optional layer C:** Jetson Orin Nano (8GB) + Qwen2.5-7B for in-race conversational coaching
    (confirmed ~21.8 tok/s INT4/MLC). Single-shot narration over the engine's facts.
-6. **Stand up the performance lab (§6):** add timestamped **hoisted-sail logging** to the archive
+6. **Stand up the C4 Performance Lab (§6):** add timestamped **hoisted-sail logging** to the archive
    (prerequisite for crossover learning), extend `polar_tool.py` to *write back* refined polars, and
    wire the prep/debrief/learning loop on cloud Opus.
 7. Carriage of the **position transponder** and **primary-nav-GPS finish/gate photos** is required by

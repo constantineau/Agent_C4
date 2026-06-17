@@ -9,7 +9,7 @@ Boat NMEA 2000 → Raspberry Pi (Signal K) → 15-s telemetry over Starlink → 
 > **(1) onboard deterministic engine** on the Pi (routing/tactics/sails/polars/nav/fatigue —
 > Expedition-class, legal in-race, no LLM); **(2) optional onboard LLM** (Jetson Orin Nano,
 > Qwen2.5-7B) for in-race chat; **(3) cloud frontier Opus 4.8** for *between-races* prep,
-> debrief, and a write-back **performance lab**. See `docs/RRS41_COMPLIANCE.md` (the why) and
+> debrief, and a write-back **C4 Performance Lab**. See `docs/RRS41_COMPLIANCE.md` (the why) and
 > `docs/ONBOARD_ENGINE_SCOPING.md` (the proposed Phase 9 build). The cloud stack below is v1
 > and remains the practice/cruising/debrief product.
 
@@ -87,7 +87,7 @@ compose.{dev,prod}.yml
 - **Phase 7 — started.** Server-side shared-password web auth + TLS scaffolding (bench-verified);
   remaining: prod deploy + domain/TLS + 48-h soak + the RRS 41 review (done — see below).
 - **Phase 9 (proposed) — the three-tier pivot.** Onboard deterministic engine on the Pi +
-  performance lab on cloud Opus 4.8 (+ optional Orin Nano LLM). Design in
+  C4 Performance Lab on cloud Opus 4.8 (+ optional Orin Nano LLM). Design in
   `docs/ONBOARD_ENGINE_SCOPING.md`; the *why* in `docs/RRS41_COMPLIANCE.md`.
 
 The agent runs the real Claude tool-use loop when `ANTHROPIC_API_KEY` is set, else a deterministic

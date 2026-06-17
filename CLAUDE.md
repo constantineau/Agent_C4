@@ -21,12 +21,12 @@ NMEA — it reads facts through SQL-backed tools.
 
 **Direction — the three-tier pivot (2026-06-17; see "Racing-rules caveat" + `docs/ONBOARD_ENGINE_SCOPING.md`):**
 RRS 41 forces *customized in-race* coaching to be computed **onboard**, so the roadmap adds a
-**Phase 9 / Onboard + Performance-Lab track**: (1) relocate the deterministic engine
+**Phase 9 / Onboard + C4 Performance Lab track**: (1) relocate the deterministic engine
 (routing/tactics/sails/polars/nav/fatigue — plain physics, no LLM, Expedition-class) onto the Pi so
 it's legal in-race; (2) optionally add a **Jetson Orin Nano** local LLM (Qwen2.5-7B) for in-race chat
 over the engine's facts; (3) keep cloud **frontier Opus 4.8** for *between-races* prep, debrief, and a
-write-back **performance lab**. The cloud stack above stays the practice/cruising/debrief product and
-the performance lab.
+write-back **C4 Performance Lab**. The cloud stack above stays the practice/cruising/debrief product and
+the C4 Performance Lab.
 
 ## Repo layout (monorepo)
 
@@ -365,11 +365,11 @@ all-boats info verbatim. Practice/delivery/debrief is unrestricted.
   the value). Move them to the Pi; the iPad talks to the Pi in race mode.
 - **Onboard LLM (optional, Jetson Orin Nano 8GB):** Qwen2.5-7B (~21.8 tok/s INT4/MLC) for in-race NL
   coaching over the engine's facts — single-shot narration, no tactical invention.
-- **Cloud frontier Opus 4.8 (between races only):** prep, debrief, and the **performance lab** —
+- **Cloud frontier Opus 4.8 (between races only):** prep, debrief, and the **C4 Performance Lab** —
   write-back learning that refines polars/crossovers/calibration/fatigue, loaded onboard *before the
   start* (frozen at the gun; never re-derived mid-race).
 
 **Minimum-now:** a **server-side, fail-closed** Race-mode gate on the cloud agent (today the Phase-5
 toggle gates only the UI — chat/LLM still answers). This is the proposed **Phase 9 / Onboard +
-Performance-Lab track** (scoping doc). **Confirm with the OA/RC in writing + re-check the Sailing
+C4 Performance Lab track** (scoping doc). **Confirm with the OA/RC in writing + re-check the Sailing
 Instructions (~July 2026) before race use.**

@@ -75,7 +75,7 @@ RRS 41 (§8) forbids customized tactical advice computed off-boat while racing, 
 gaining an **onboard tier**: the deterministic engine (routing/tactics/sails/polars/nav/fatigue —
 plain physics on the boat's own sensors, *not* an LLM, Expedition-class) moves onto the Pi (legal
 in-race); an optional **Jetson Orin Nano** runs a local LLM (Qwen2.5-7B) for in-race chat over the
-engine's facts; and the cloud (frontier **Opus 4.8**) becomes the **between-races performance lab** —
+engine's facts; and the cloud (frontier **Opus 4.8**) becomes the **between-races C4 Performance Lab** —
 prep, debrief, and write-back learning (refined polars/crossovers/calibration) loaded onboard *before
 the start* and frozen at the gun. The three tiers, the legal reasoning, and the build plan are in
 `docs/RRS41_COMPLIANCE.md` and `docs/ONBOARD_ENGINE_SCOPING.md` (the proposed Phase 9 track).
@@ -228,12 +228,12 @@ instrument readout, **safety** alerts (AIS/depth/stale), all-boats info verbatim
   to the Pi in race mode.
 - **(2) Onboard LLM (optional, Jetson Orin Nano 8GB)** — Qwen2.5-7B for in-race NL chat, single-shot
   narration over the engine's facts (no tactical invention).
-- **(3) Cloud frontier Opus 4.8 (between races only)** — prep, debrief, and the **performance lab**:
+- **(3) Cloud frontier Opus 4.8 (between races only)** — prep, debrief, and the **C4 Performance Lab**:
   write-back learning (refined polars/crossovers/calibration/fatigue) loaded onboard before the start,
   frozen at the gun, never re-derived mid-race.
 
 **Minimum-now:** a **server-side, fail-closed** Race-mode gate on the cloud agent (today the Phase-5
-toggle gates only the UI). This is the proposed **Phase 9 / Onboard + Performance-Lab track** (§10).
+toggle gates only the UI). This is the proposed **Phase 9 / Onboard + C4 Performance Lab track** (§10).
 **Confirm with the OA/RC in writing and re-check the SIs (~July 2026) before race use.** Practice,
 deliveries, and debriefs are unrestricted.
 
@@ -260,13 +260,13 @@ boat-install date.
 | 5 | iPad navigator UI | full practice sail used without instruction | ✅ done — day/night, sail dial, course plot, navigator, tactics, routing |
 | 6 | Alerting + summarizer + polar tooling | acceptable false-positive rate over 2 sails | ✅ bench-complete; 2-sail false-positive gate awaits real sailing |
 | 7 | Prod + deploy + rules review + soak | NOR compliance determined; 48-h soak passes | 🔶 started — server-side web auth + TLS scaffolding done; rules review done (§8); prod deploy/soak gated on domain + prod `.env` |
-| **9** | **Onboard + Performance-Lab track (the three-tier pivot)** | onboard engine renders nav/sail/tactics on the Pi; race mode reaches no cloud; a sail → refined polars loaded back onboard | ⬜ proposed — see `docs/ONBOARD_ENGINE_SCOPING.md` |
+| **9** | **Onboard + C4 Performance Lab track (the three-tier pivot)** | onboard engine renders nav/sail/tactics on the Pi; race mode reaches no cloud; a sail → refined polars loaded back onboard | ⬜ proposed — see `docs/ONBOARD_ENGINE_SCOPING.md` |
 
-(Phase 8 was an interim "navigation & optimization" wishlist — real marks/GRIB/current/rounding-planner — now folded into the Phase 9 onboard track and the performance lab.)
+(Phase 8 was an interim "navigation & optimization" wishlist — real marks/GRIB/current/rounding-planner — now folded into the Phase 9 onboard track and the C4 Performance Lab.)
 
 ## 11. Future work
 
-Folded into the **Phase 9 onboard track + performance lab** (§8, §10): empirical polar generation from
+Folded into the **Phase 9 onboard track + C4 Performance Lab** (§8, §10): empirical polar generation from
 logs (write-back), automated post-race debrief reports, the onboard deterministic engine + optional
 onboard LLM for rules-compliant in-race coaching, refined sail crossovers/calibration. Still loose:
 real marks via N2K PGN 129284/129285 + course import; true GRIB routing (spatially-varying wind);

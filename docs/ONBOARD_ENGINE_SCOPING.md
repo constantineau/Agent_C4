@@ -1,10 +1,10 @@
-# Onboard Engine + Performance Lab — Scoping
+# Onboard Engine + C4 Performance Lab — Scoping
 
 **Status:** design / scoping only (2026-06-17). No code written yet. Companion to
 `docs/RRS41_COMPLIANCE.md` (the *why*); this is the *how*. Supersedes the old "all-onboard needs a
 local LLM (big build, deferred)" framing — see RRS41 §4.
 
-This is a **scope extension**, provisionally a **Phase 9 / Onboard + Performance-Lab track**. It does
+This is a **scope extension**, provisionally a **Phase 9 / Onboard + C4 Performance Lab track**. It does
 not change Phases 0–7; it adds a compliant in-race execution path and a between-races learning loop.
 
 ---
@@ -16,7 +16,7 @@ not change Phases 0–7; it adds a compliant in-race execution path and a betwee
 | **A. Deterministic engine** | **Onboard (Pi 4)** | ✅ legal | `navigator`, `routing`, `tactics`, `sails`, `polar_tool`, `fatigue` — physics/geometry on the boat's own sensors + published course. No LLM. Expedition-class. |
 | **B. Common-data fetch** | cloud or onboard | ✅ legal | GRIB / forecast / AIS / buoys — "information available to all boats" (verbatim, no per-boat processing). |
 | **C. Conversational coaching** | onboard local LLM (in-race) / cloud Opus (otherwise) | onboard ✅ / cloud ❌ | Narrate the engine's facts; free-form crew Q&A. |
-| **D. Performance lab** | **Cloud Opus 4.8** | n/a (between races) | Prep, debrief, and *write-back* learning (refined polars / crossovers / calibration / fatigue). Unrestricted — not "while underway". |
+| **D. C4 Performance Lab** | **Cloud Opus 4.8** | n/a (between races) | Prep, debrief, and *write-back* learning (refined polars / crossovers / calibration / fatigue). Unrestricted — not "while underway". |
 
 Connective tissue = the **"homework" pattern**: Opus produces artifacts off-boat *before the start*,
 they are **loaded onto the boat**, and the onboard system merely executes/recomputes them. The plan
@@ -103,12 +103,12 @@ cloud.
 
 ---
 
-## 4. Layer D — the performance lab (cloud Opus 4.8, between races)
+## 4. Layer D — the C4 Performance Lab (cloud Opus 4.8, between races)
 
 Unrestricted (not "while underway"). Closes the learning loop: **race → debrief → refine → load →
 race**. See RRS41 §6.
 
-**9.3 — Performance lab.**
+**9.3 — C4 Performance Lab.**
 - **Hoisted-sail logging (prerequisite).** Today the hoisted sail is only in browser `localStorage`
   (`sr33.hoisted`), passed transiently to `/sail` — **not persisted**. Add a timestamped hoisted-sail
   log to the archive so crossover-learning has labels. (Polar + calibration learning work without it.)
@@ -138,7 +138,7 @@ re-derived from the cloud mid-race (RRS 41).
 | 9.0 | Data-access abstraction (cloud ↔ onboard backend) for the 6 modules | identical outputs from local data on bench | none |
 | 9.1 | Onboard engine service + API in `compose.pi.yml` | iPad → Pi renders all nav/sail/plot/tactics screens | none |
 | 9.2 | iPad race-mode → Pi only; server-side fail-closed cloud gate + audit log | race mode reaches no cloud; gated topics refused + logged | none |
-| 9.3 | Performance lab: hoisted-sail logging, polar write-back, prep/debrief/learning loop | a sail → refined polars loaded back onboard | none |
+| 9.3 | C4 Performance Lab: hoisted-sail logging, polar write-back, prep/debrief/learning loop | a sail → refined polars loaded back onboard | none |
 | 9.4 *(opt)* | Orin Nano local LLM narrator | grounded onboard NL answer, offline, usable latency | Orin Nano 8GB |
 
 9.0 → 9.2 is the compliance-critical path (legal in-race, no hardware). 9.3 is the high-value learning
