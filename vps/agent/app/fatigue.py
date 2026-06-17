@@ -27,7 +27,7 @@ import time
 from collections import Counter
 from datetime import datetime, timezone
 
-from .db import pool
+from . import datasource
 
 BOAT_ID = os.environ.get("BOAT_ID", "sr33")
 
@@ -77,18 +77,11 @@ _cache = {"t": 0.0, "value": None}
 # --- data access -------------------------------------------------------------
 def _series(path, since_min):
     """[(epoch_s, value)] for the dominant source of a path over the window, time-ordered."""
-    with pool.connection() as conn:
-        rows = conn.execute(
-            "SELECT source, value, extract(epoch FROM time) AS t FROM telemetry_raw "
-            "WHERE boat_id=%s AND path=%s AND time > now() - %s::interval AND value IS NOT NULL "
-            "ORDER BY time",
-            (BOAT_ID, path, f"{since_min} minutes"),
-        ).fetchall()
+    rows = datasource.active().series_by_source(path, since_min)   # [(source, t, value)], raw SI
     if not rows:
         return []
-    dom = Counter(r["source"] for r in rows).most_common(1)[0][0]
-    # extract(epoch ...) comes back as Decimal — cast to float for arithmetic.
-    return [(float(r["t"]), float(r["value"])) for r in rows if r["source"] == dom]
+    dom = Counter(r[0] for r in rows).most_common(1)[0][0]
+    return [(t, v) for (src, t, v) in rows if src == dom]
 
 
 def _heading_series(since_min):
@@ -100,13 +93,8 @@ def _heading_series(since_min):
 
 
 def _target_stw(tws_kn, twa_deg):
-    with pool.connection() as conn:
-        row = conn.execute(
-            "SELECT target_stw FROM polars WHERE boat_id=%s "
-            "ORDER BY abs(tws-%s)+abs(twa-%s) LIMIT 1",
-            (BOAT_ID, tws_kn, abs(twa_deg)),
-        ).fetchone()
-    return row["target_stw"] if row and row["target_stw"] else None
+    row = datasource.active().polar_nearest(tws_kn, twa_deg)
+    return row["target_stw"] if row and row.get("target_stw") else None
 
 
 # --- stats helpers -----------------------------------------------------------

@@ -10,6 +10,7 @@ import os
 from datetime import datetime, timezone
 
 from .db import pool
+from . import datasource
 from . import fatigue
 from . import sails
 from . import navigator
@@ -287,12 +288,7 @@ def _bearing(a, b, c, d):
 
 
 def get_polar_target(tws: float, twa: float):
-    with pool.connection() as conn:
-        row = conn.execute(
-            "SELECT tws, twa, target_stw, target_vmg, (abs(tws-%s)+abs(twa-%s)) AS dist "
-            "FROM polars WHERE boat_id=%s ORDER BY dist LIMIT 1",
-            (tws, abs(twa), BOAT_ID),
-        ).fetchone()
+    row = datasource.active().polar_nearest(tws, twa)
     if not row:
         return {"available": False, "note": "no polar data loaded"}
     return {"available": True, "query": {"tws": tws, "twa": twa},

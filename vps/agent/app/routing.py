@@ -14,9 +14,9 @@ shore tactical advice — practice/debrief unless the RC clears it; the UI gates
 import math
 import time
 
-from .db import pool
 from . import navigator as NAV
 from . import weather
+from . import datasource
 
 HSTEP = 12          # heading fan resolution (deg)
 DT_H = 0.2          # time step (hours)
@@ -31,10 +31,7 @@ _POLARS = None
 def _polars():
     global _POLARS
     if _POLARS is None:
-        with pool.connection() as c:
-            rows = c.execute("SELECT tws, twa, target_stw FROM polars WHERE boat_id=%s",
-                             (NAV.BOAT_ID,)).fetchall()
-        _POLARS = [(r["tws"], r["twa"], r["target_stw"]) for r in rows if r["target_stw"]]
+        _POLARS = [(tws, twa, stw) for (tws, twa, stw) in datasource.active().polars_stw() if stw]
     return _POLARS
 
 

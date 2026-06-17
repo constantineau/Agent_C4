@@ -11,7 +11,7 @@ shifts, leverage in 5.3) is what the race/practice toggle gates for RRS 41.
 import math
 import os
 
-from .db import pool
+from . import datasource
 
 BOAT_ID = os.environ.get("BOAT_ID", "sr33")
 ROUND_NM = 0.06            # within this of a mark = rounded; advance to the next
@@ -66,14 +66,8 @@ _PATHS = {
 
 def _latest():
     """Freshest value (any source) for the navigation/wind paths we need, in SI."""
-    out = {}
-    with pool.connection() as conn:
-        for key, path in _PATHS.items():
-            r = conn.execute(
-                "SELECT value FROM telemetry_raw WHERE boat_id=%s AND path=%s "
-                "AND value IS NOT NULL ORDER BY time DESC LIMIT 1", (BOAT_ID, path),
-            ).fetchone()
-            out[key] = r["value"] if r else None
+    src = datasource.active()
+    out = {key: src.latest_value(path) for key, path in _PATHS.items()}
     # convert
     for k in ("cog", "heading", "twd"):
         if out[k] is not None:
@@ -89,22 +83,12 @@ def _best_angles(tws_kn):
     """Optimal upwind and downwind TWA (deg) from the polar at the nearest TWS."""
     if tws_kn is None:
         return 42.0, 150.0
-    with pool.connection() as conn:
-        up = conn.execute(
-            "SELECT twa FROM polars WHERE boat_id=%s AND twa<90 "
-            "ORDER BY abs(tws-%s), target_vmg DESC LIMIT 1", (BOAT_ID, tws_kn)).fetchone()
-        dn = conn.execute(
-            "SELECT twa FROM polars WHERE boat_id=%s AND twa>90 "
-            "ORDER BY abs(tws-%s), target_vmg DESC LIMIT 1", (BOAT_ID, tws_kn)).fetchone()
-    return (up["twa"] if up else 42.0), (dn["twa"] if dn else 150.0)
+    up, dn = datasource.active().best_angles(tws_kn)
+    return (up if up is not None else 42.0), (dn if dn is not None else 150.0)
 
 
 def _marks(route):
-    with pool.connection() as conn:
-        rows = conn.execute(
-            "SELECT seq, name, lat, lon FROM waypoints WHERE route=%s ORDER BY seq", (route,),
-        ).fetchall()
-    return [dict(r) for r in rows]
+    return datasource.active().marks(route)
 
 
 def get_course(route: str = None):
@@ -206,12 +190,7 @@ def make_practice_course(leg_nm: float = 1.0):
     wlon = lon + d_rad * math.sin(math.radians(twd)) / max(0.1, math.cos(math.radians(lat)))
     marks = [(1, "Leeward (start)", lat, lon), (2, "Windward", wlat, wlon),
              (3, "Leeward (finish)", lat, lon)]
-    with pool.connection() as conn:
-        conn.execute("DELETE FROM waypoints WHERE route='practice'")
-        for seq, name, mlat, mlon in marks:
-            conn.execute("INSERT INTO waypoints (route, seq, name, lat, lon) VALUES "
-                         "('practice',%s,%s,%s,%s)", (seq, name, mlat, mlon))
-        conn.commit()
+    datasource.active().save_practice_course(marks)
     set_active("practice")
     return {"available": True, "route": "practice", "leg_nm": leg_nm,
             "twd": round(twd, 1), "marks": len(marks)}

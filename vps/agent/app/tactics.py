@@ -11,21 +11,16 @@ the agent caveats it. Computation always runs so debriefs have the data.
 """
 import math
 
-from .db import pool
 from . import navigator as NAV
+from . import datasource
 
 WINDOW_MIN = 12
 SR33_LEN_FT = 33.0      # ~10 m → boatlengths of leverage
 
 
 def _twd_series(minutes):
-    with pool.connection() as conn:
-        rows = conn.execute(
-            "SELECT extract(epoch FROM time) AS t, value FROM telemetry_raw "
-            "WHERE boat_id=%s AND path='environment.wind.directionTrue' AND value IS NOT NULL "
-            "AND time > now() - %s::interval ORDER BY time", (NAV.BOAT_ID, f"{minutes} minutes"),
-        ).fetchall()
-    return [(float(r["t"]), math.degrees(float(r["value"])) % 360) for r in rows]
+    series = datasource.active().series("environment.wind.directionTrue", minutes)
+    return [(t, math.degrees(v) % 360) for t, v in series]
 
 
 def _circ_mean(degs):

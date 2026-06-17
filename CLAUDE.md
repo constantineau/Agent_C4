@@ -17,7 +17,7 @@ deterministic computation from the LLM** across three tiers:
   archive; uplink POSTs 15-s aggregates to the VPS (Orca Core/app unchanged — the Pi is a silent extra
   listener). The deterministic modules (routing/tactics/sails/polars/nav/fatigue — plain physics, *no
   LLM*) run here so they're legal in-race. The iPad talks to the Pi over boat-local Wi-Fi in race mode.
-  *(engine relocation = Phase 9.0/9.1, in progress.)*
+  *(9.0 data-access abstraction ✅ — modules read via `datasource.active()`; 9.1 onboard service next.)*
 - **Tier 2 — Onboard LLM copilot (Jetson Orin Nano, optional):** Qwen2.5-7B narrates the engine's facts
   + bounded decision support (never does the math, never invents strategy). *(Phase 9.4; HW ~06-18.)*
 - **Tier 3 — Cloud (this VPS):** nginx+TLS → FastAPI ingestion → TimescaleDB → agent (Opus tool-use,
@@ -132,7 +132,7 @@ via a `sync_state` cursor (re-runs send only new rows). See `pi/archiver/README.
 | **5** ✅ | iPad nav companion: day/night, sail dial, course plot, navigator, tactics, routing | bench-verified end-to-end |
 | **6** ✅ | Alerting + summarizer + polar tooling | bench-complete; 2-practice-sail false-positive gate awaits real sailing |
 | 7 🔶 | Prod stack + deploy + rules review + soak | rules review done; server auth + TLS scaffolding done; prod deploy/soak gated on domain + prod `.env` |
-| **9** 🔶 | Onboard + C4 Performance Lab (three-tier pivot) | **9.2 race gate ✅**; 9.0/9.1 onboard engine next; 9.4 Orin LLM; Lab-1→4 — see `docs/ONBOARD_ENGINE_SCOPING.md` |
+| **9** 🔶 | Onboard + C4 Performance Lab (three-tier pivot) | **9.0 data-access abstraction ✅ · 9.2 race gate ✅**; 9.1 onboard engine service next; 9.4 Orin LLM; Lab-1→4 — see `docs/ONBOARD_ENGINE_SCOPING.md` |
 
 **Current status:** Phases 0–6 built and bench-verified; Phase 7 started; **Phase 9 in progress
 (9.2 server-side race gate ✅ — see "Race-mode gate"; 9.0/9.1 onboard engine next).** Detail: Phase 1
@@ -418,3 +418,19 @@ Bench-verified through nginx: practice → all 200; race → tactics/route/navig
 polar-analysis/debrief 403, conditions/alerts/forecast 200, chat refuses tactical Qs + answers safety,
 audit_log populated; toggle round-trips. **This is the cloud STOPGAP** — the real fix is the onboard
 engine (9.0/9.1), where the boat's own gear isn't an "outside source".
+
+## Onboard engine — data-access abstraction (Phase 9.0)
+
+The deterministic engine modules (navigator/routing/tactics/sails/fatigue + the live `get_polar_target`)
+no longer query TimescaleDB directly — they read through `vps/agent/app/datasource.py` so the **same
+engine code runs in the cloud or onboard the Pi**. `datasource.active()` returns the backend chosen by
+env **`DATA_SOURCE`** (`cloud` | `onboard`, default `cloud`); methods return **raw SI** values + epoch
+timestamps, and the unit conversions stay in the modules (so behavior is byte-identical to pre-9.0).
+`CloudSource` reproduces the exact prior SQL: `latest_value`, `series`, `series_by_source`,
+`best_angles`, `polars_stw`, `polar_nearest`, `marks`, `save_practice_course`. **`OnboardSource`
+(SQLite archive + Signal K live) is Phase 9.1** — `active()` imports it lazily only when
+`DATA_SOURCE=onboard`. `sails.py` needs no data source (it parses the speed guide); `polar_tool.py`
+(archive mining via Timescale `time_bucket`) stays **cloud-only** — it's a between-races C4 Performance
+Lab tool, not part of the in-race onboard engine. Bench-verified: every engine endpoint
+(conditions/navigator/tactics/sail/fatigue, route on a practice course, practice-course generation)
+returns real data through the abstraction; cloud path unchanged.
