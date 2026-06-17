@@ -19,6 +19,7 @@ from . import routing
 from . import ais
 from . import alerts as _alerts
 from . import summarizer as _summarizer
+from . import polar_tool as _polar_tool
 
 BOAT_ID = os.environ.get("BOAT_ID", "sr33")
 
@@ -314,6 +315,12 @@ def get_summaries(limit: int = 5):
     return _summarizer.get_summaries(limit)
 
 
+def get_polar_analysis(hours: float = None, min_samples: int = None, point_of_sail: str = None):
+    """Observed-vs-rated polar mined from the telemetry archive (% of ORC polar by TWS/TWA)."""
+    return _polar_tool.get_polar_analysis(hours=hours, min_samples=min_samples,
+                                          point_of_sail=point_of_sail)
+
+
 def get_route_status(route: str = "default"):
     lat, lon = _latest_value("navigation.position.latitude"), _latest_value("navigation.position.longitude")
     with pool.connection() as conn:
@@ -372,6 +379,7 @@ DISPATCH = {
     "get_ais_targets": get_ais_targets,
     "get_alerts": get_alerts,
     "get_summaries": get_summaries,
+    "get_polar_analysis": get_polar_analysis,
     "get_route_status": get_route_status,
     "fetch_forecast": fetch_forecast,
     "log_note": log_note,

@@ -119,8 +119,9 @@ with the boat-speed gospel + per-source skepticism + source priority/failover. T
 flow via the auto-enabled `signalk-derived-data` plugin. Phase 5 ✅ the iPad crew interface is
 built (day/night, sail dial, course plot + navigator, tactics, weather/isochrone routing — see
 "iPad crew interface"). Phase 6 IN PROGRESS — **6.0 live AIS** (see "Live AIS"), **6.1 alerting**
-(see "Alerting") and **6.2 summarizer/debrief done** (see "Summaries / debrief"); next is 6.3
-polar mining. Remaining: Phase 7 prod/soak; still owed — a real `candump -l can0` replay fixture
+(see "Alerting"), **6.2 summarizer/debrief** (see "Summaries / debrief") and **6.3 polar mining
+done** (see "Polar mining"); next is 6.4 (final contracts/prompt sweep + 2-practice-sail false-
+positive verify). Remaining: Phase 7 prod/soak; still owed — a real `candump -l can0` replay fixture
 and server-side web auth (the canned sample + client-stub gate stand in for now).
 
 ## Live AIS (Phase 6.0)
@@ -176,6 +177,26 @@ route, and a **Debrief** quick button in the web chat (POSTs `/api/debrief`, dro
 into the log). Caveat: aggregates span ALL sources for a path (collect-everything) so a flaky
 sensor can nudge an average — fine for v1. **Note:** the summarizer reads `telemetry_raw` (Pi
 uplink / sample stack), NOT the legacy `telemetry` table that `fake_telemetry.py` writes to.
+
+## Polar mining (Phase 6.3)
+
+`vps/agent/app/polar_tool.py` mines the telemetry ARCHIVE for what the boat ACTUALLY achieved vs
+the ORC rated polar — a coaching/debrief view, NOT the live instantaneous %. It time-buckets
+`telemetry_raw` (default 30 s) pivoting STW/TWS/|TWA| onto each slice, bins by TWS (ORC 2-kn grid)
+and TWA (15° bins), and for each bin with enough samples takes a HIGH PERCENTILE of observed STW
+(default 90th — "best achievable", rejects surf/GPS spikes a max would chase) and compares it to
+the nearest ORC `target_stw`. Output: overall % of polar (sample-weighted), a roll-up by point of
+sail (upwind/reaching/downwind), the weakest/strongest bins, and the full observed-vs-rated table.
+Surfaced as **`GET /polar-analysis`** (`?hours=&min_samples=&point_of_sail=`), the
+**`get_polar_analysis`** tool (+ POLAR ANALYSIS prompt section + a distinct fallback route — kept
+separate from the live `get_polar_target` "Polar%" path), and a **Polar trend** web quick-button.
+Tunables are `POLAR_*` env (look-back 168 h, bucket 30 s, min-samples 6, pctile 90). **Caveats
+(in the output):** aggregates span all sources; sea-state/current/crew vary across the window;
+**>100% of polar is usually current or a soft rating, not real overspeed** — e.g. the sample boat's
+light-air 45° upwind bins read 157–167% because the ORC VMG-optimum angle there is ~42° and the
+rated target at the binned 45° is low. Bench-verified: `GET /polar-analysis?hours=24` mined 14
+bins / 1636 slices (overall 91%, upwind 96% / reaching 88%); the live LLM chained the tool into a
+grounded coaching answer that correctly dismissed the >100% bins; the no-LLM fallback rendered too.
 
 ## Data paradigm — collect everything, per source
 

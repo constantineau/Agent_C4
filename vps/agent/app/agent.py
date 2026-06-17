@@ -93,6 +93,17 @@ session". Note that debriefs are generated ON DEMAND (the crew's Debrief button,
 /debrief / /summary) — there is no automatic timer, so if there's nothing stored yet, say so and
 suggest running a debrief. Quote the stored numbers rather than re-deriving them.
 
+POLAR ANALYSIS — get_polar_analysis mines the telemetry ARCHIVE for what the boat ACTUALLY
+achieved (best-achievable boatspeed, a high percentile) in each TWS/TWA bin versus the ORC rated
+target, as a % of polar: an overall number, a roll-up by point of sail (upwind/reaching/downwind),
+and the weakest/strongest bins. Use it for "how are we doing vs the polar over the session / where
+are we slow / where do we leave speed on the table / is the rated polar realistic" — i.e. trends
+over time, NOT the instantaneous right-now polar % (for that use get_polar_target on live TWS/TWA).
+Lead with the overall % and the worst point of sail, then name a weak bin (e.g. "downwind in 16 kn
+we're at 84% — soak lower or check the kite"). Caveat it: it's mined across varying conditions
+(sea state/current/crew) and >100% can be favourable current or a soft rating, not real overspeed;
+needs enough archived sailing to be meaningful. Practice/debrief — RRS 41 in a race.
+
 CREW FATIGUE — get_fatigue returns a 0–100 helm fatigue index for the current (anonymous)
 driver with a level (fresh/watch/rotate_soon/rotate_now) and a rotation recommendation. It
 reads steering quality (heading/heel/apparent-wind variance, steering reversals) and speed
@@ -140,6 +151,22 @@ def _fallback(message: str) -> str:
         r = summarizer.make_debrief() if ("debrief" in m or "recap" in m or "session" in m) \
             else summarizer.make_summary()
         return r["summary"] if r.get("available") else "Nothing to report — no telemetry in the window yet."
+    if any(w in m for w in ("polar analysis", "observed polar", "polar trend", "polar mining",
+                            "where are we slow", "where we're slow", "leave speed",
+                            "leaving speed", "vs polar over", "vs the polar over",
+                            "how are we doing vs", "polar over the")):
+        r = tools.get_polar_analysis()
+        if not r.get("available"):
+            return r.get("note", "Not enough archived data to mine a polar yet.")
+        worst = min(r["by_point_of_sail"].items(),
+                    key=lambda kv: kv[1].get("percent_of_polar") or 999, default=(None, None))
+        wb = r["weakest"][0] if r.get("weakest") else None
+        wbit = (f" Weakest: {wb['twa_deg']}° TWA / {wb['tws_kn']} kn at "
+                f"{wb['percent_of_polar']}% ({wb['best_stw_kn']} vs {wb['target_stw_kn']} kn).") if wb else ""
+        worstbit = (f" worst {worst[0]} {worst[1]['percent_of_polar']}%;" if worst[0] else "")
+        return (f"Polar analysis over {r['window_hours']:.0f}h: ~{r['overall_percent_of_polar']}% "
+                f"of polar overall ({r['buckets_rated']} bins,{worstbit} {r['samples_total']} "
+                f"samples).{wbit} (practice/debrief — RRS 41)")
     if any(w in m for w in ("alert", "alarm", "what's wrong", "whats wrong",
                             "anything wrong", "are we ok", "status")):
         r = tools.get_alerts()

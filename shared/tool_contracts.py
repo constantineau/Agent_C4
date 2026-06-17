@@ -162,6 +162,31 @@ AGENT_TOOLS = [
         },
     },
     {
+        "name": "get_polar_analysis",
+        "description": (
+            "Observed-vs-rated polar mined from the telemetry ARCHIVE: how the boat ACTUALLY "
+            "performed (best-achievable boatspeed, a high percentile) in each (TWS, TWA) bin "
+            "versus the ORC rated target, as a % of polar — overall, rolled up by point of sail "
+            "(upwind/reaching/downwind), and the weakest/strongest bins. Use for 'how are we "
+            "doing vs the polar over time / where are we slow / where do we leave speed on the "
+            "table / is the polar realistic'. This is a coaching/debrief analysis over history, "
+            "NOT the live instantaneous polar % (use get_polar_target / get_current_conditions "
+            "for right-now). Practice/debrief — RRS 41 in a race."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "hours": {"type": "number",
+                          "description": "archive look-back in hours (default ~7 days)"},
+                "min_samples": {"type": "integer",
+                                "description": "min slices to trust a bin (default 6)"},
+                "point_of_sail": {"type": "string", "enum": ["upwind", "reaching", "downwind"],
+                                  "description": "optional: only list bins for this point of sail"},
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "get_route_status",
         "description": "Distance/bearing/ETA to the next mark and to the finish.",
         "input_schema": {

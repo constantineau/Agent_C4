@@ -167,6 +167,13 @@ def summaries_ep(limit: int = 5):
     return tools.get_summaries(limit)
 
 
+@app.get("/polar-analysis")
+async def polar_analysis_ep(hours: float | None = None, min_samples: int | None = None,
+                            point_of_sail: str | None = None):
+    """Observed-vs-rated polar mined from the archive (% of polar by TWS/TWA)."""
+    return await run_in_threadpool(tools.get_polar_analysis, hours, min_samples, point_of_sail)
+
+
 @app.websocket("/ws")
 async def ws(websocket: WebSocket):
     await websocket.accept()
