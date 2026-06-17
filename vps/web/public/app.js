@@ -66,7 +66,7 @@ window.addEventListener('DOMContentLoaded', boot);
 
 function start() {
   applyTheme();
-  applyMode();
+  syncMode();
   connect();
   refresh();
   App.pollTimer = setInterval(refresh, 5000);
@@ -94,9 +94,25 @@ function applyTheme() {
     App.theme === 'auto' ? `AUTO·${r === 'day' ? '☀' : '☾'}` : App.theme.toUpperCase();
 }
 
-/* ---------- race / practice mode ---------- */
-function toggleMode() {
-  App.mode = App.mode === 'race' ? 'practice' : 'race';
+/* ---------- race / practice mode (server is the authoritative RRS-41 gate) ---------- */
+/* The agent enforces the gate server-side; the toggle just sets that flag. Sync on load so the
+   UI reflects the server, and POST changes so the agent (not just the UI) withholds in a race. */
+async function syncMode() {
+  try {
+    const r = await (await apiFetch('/api/mode')).json();
+    if (r && r.mode) { App.mode = r.mode; localStorage.setItem('sr33.mode', App.mode); }
+  } catch (e) { /* keep cached mode; server still enforces */ }
+  applyMode();
+}
+async function toggleMode() {
+  const next = App.mode === 'race' ? 'practice' : 'race';
+  try {
+    const r = await (await apiFetch('/api/mode', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: next }),
+    })).json();
+    App.mode = (r && r.mode) ? r.mode : next;
+  } catch (e) { App.mode = next; }   // optimistic — the agent still enforces regardless
   localStorage.setItem('sr33.mode', App.mode);
   applyMode();
 }
@@ -143,7 +159,8 @@ async function runDebrief() {
   addMsg('system', 'Generating debrief…');
   try {
     const r = await (await apiFetch('/api/debrief', { method: 'POST' })).json();
-    addMsg('assistant', r.available ? r.summary : 'No telemetry in the window to debrief yet.');
+    addMsg('assistant', r.withheld ? r.detail
+      : (r.available ? r.summary : 'No telemetry in the window to debrief yet.'));
   } catch (e) { addMsg('system', 'Debrief failed.'); }
 }
 

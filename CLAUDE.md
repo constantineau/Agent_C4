@@ -369,7 +369,36 @@ all-boats info verbatim. Practice/delivery/debrief is unrestricted.
   write-back learning that refines polars/crossovers/calibration/fatigue, loaded onboard *before the
   start* (frozen at the gun; never re-derived mid-race).
 
-**Minimum-now:** a **server-side, fail-closed** Race-mode gate on the cloud agent (today the Phase-5
-toggle gates only the UI — chat/LLM still answers). This is the proposed **Phase 9 / Onboard +
-C4 Performance Lab track** (scoping doc). **Confirm with the OA/RC in writing + re-check the Sailing
-Instructions (~July 2026) before race use.**
+**Minimum-now: DONE — see "Race-mode gate" below.** **Confirm with the OA/RC in writing + re-check
+the Sailing Instructions (~July 2026) before race use.**
+
+## Race-mode gate (Phase 9.2) — server-side, fail-closed RRS 41 enforcement
+
+Race/practice mode used to live only in the browser (`localStorage`) and gate the UI; the chat/LLM
+and every REST route still answered tactical questions. **9.2 moves the gate server-side.**
+`vps/agent/app/race_mode.py` is the single source of truth: an authoritative flag persisted in
+`app_state` (key `race_mode`, value `race|practice`), **fail-closed** (missing/unreadable → treat as
+RACING; default from `RACE_MODE_DEFAULT` — dev compose sets `practice`, prod omits it → `race`).
+`GATED_TOOLS` = the customized-advice tools withheld while racing: `get_tactics`, `get_route`,
+`get_polar_analysis`, `get_polar_target`, `get_sail_advice`, `get_fatigue`, `get_navigator`,
+`get_route_status`. **Allowed in-race:** own instruments (`get_current_conditions`/`get_strip`/
+`get_sources`/`get_history`), safety (`get_ais_targets`/`get_alerts`), common data verbatim
+(`fetch_forecast`), recall (`get_summaries`), `log_note`.
+- **Agent (`agent.py`):** in race mode the Claude loop gets only the allowed tools + a RACE_MODE
+  directive, and `dispatch` refuses any gated tool (defense in depth); the no-LLM fallback early-returns
+  the refusal on a gated intent. Refusal text is the RRS-41 message.
+- **REST (`main.py`):** `GET/POST /mode` (authoritative, audited); the 7 advice endpoints + `POST
+  /summary` + `POST /debrief` return **403 `{withheld,detail,mode}`** while racing via `_race_gated`.
+  `/health` now reports `mode`.
+- **Audit trail:** `audit_log` records every `mode_change` and every `refusal` (channel/tool) — a
+  tamper-evident record for a protest committee.
+- **Web:** the mode toggle is now authoritative — `POST /api/mode` + `syncMode()` on load (server wins);
+  the sail dial + plot navigator skip their (now-gated) fetches in race and show a withheld note; the
+  Debrief button surfaces the withheld message.
+- **Migration `005_race_mode.sql`** (`app_state` + `audit_log`). Migrations auto-run only on first DB
+  init — apply to a running dev DB by hand:
+  `docker compose -f compose.dev.yml exec -T timescaledb psql -U sr33 -d sr33_dev < vps/db/migrations/005_race_mode.sql`.
+Bench-verified through nginx: practice → all 200; race → tactics/route/navigator/sail/fatigue/
+polar-analysis/debrief 403, conditions/alerts/forecast 200, chat refuses tactical Qs + answers safety,
+audit_log populated; toggle round-trips. **This is the cloud STOPGAP** — the real fix is the onboard
+engine (9.0/9.1), where the boat's own gear isn't an "outside source".

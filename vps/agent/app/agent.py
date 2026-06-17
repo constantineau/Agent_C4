@@ -9,7 +9,19 @@ import json
 import os
 
 from shared.tool_contracts import AGENT_TOOLS
-from . import tools
+from . import tools, race_mode
+
+# Prepended to the system prompt while RACING — withhold customized outside help (RRS 41).
+RACE_MODE_NOTE = (
+    "RACE MODE IS ACTIVE (RRS 41 / NOR §2.1(d)). The boat is racing, so you MUST withhold "
+    "customized tactical, routing, weather-routing, polar/performance, sail-selection, helm-fatigue, "
+    "and navigation (mark/ETA/layline) advice — that is prohibited outside help while underway. "
+    "You MAY still answer: safety (AIS/collision, depth, alerts), the boat's OWN instrument readings "
+    "(conditions/sources/history), and information available to all boats (e.g. a public forecast) "
+    "stated verbatim without boat-specific interpretation. The performance/tactical/routing/sail/"
+    "navigation tools are not available to you now. If the crew asks for any withheld advice, reply "
+    f"exactly: \"{race_mode.REFUSAL}\""
+)
 
 BOAT_ID = os.environ.get("BOAT_ID", "sr33")
 MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-8")
@@ -145,6 +157,11 @@ if SPEED_GUIDE:
 def _fallback(message: str) -> str:
     """No-LLM responder: keyword-route to a tool and format the result."""
     m = message.lower()
+    # RRS 41: while racing, withhold customized tactical/routing/perf/sail/fatigue/nav advice.
+    # (Allowed intents — alerts/AIS/conditions/sources/forecast — fall through to their routes.)
+    if race_mode.racing() and race_mode.gated_intent(m):
+        race_mode.audit_refusal("chat_fallback", intent=m[:120])
+        return race_mode.REFUSAL
     if any(w in m for w in ("debrief", "recap", "how did we do", "how'd we do",
                             "summarize", "summary", "session report")):
         from . import summarizer
@@ -261,11 +278,17 @@ def _claude_loop(message: str, history: list) -> str:
     import anthropic
 
     client = anthropic.Anthropic(api_key=API_KEY)
+    # RRS 41 race gate: withhold the gated tools from the model and add the race directive. The
+    # dispatch-level refusal below is defense in depth (the model can't call what it can't see, but
+    # if it ever names a gated tool anyway, it gets the refusal, not data).
+    racing = race_mode.racing()
+    system = ([{"type": "text", "text": RACE_MODE_NOTE}] + SYSTEM_BLOCKS) if racing else SYSTEM_BLOCKS
+    tool_list = race_mode.allowed_tools(AGENT_TOOLS)
     messages = list(history) + [{"role": "user", "content": message}]
     for _ in range(8):  # bounded tool-use turns
         resp = client.messages.create(
-            model=MODEL, max_tokens=1024, system=SYSTEM_BLOCKS,
-            tools=AGENT_TOOLS, messages=messages,
+            model=MODEL, max_tokens=1024, system=system,
+            tools=tool_list, messages=messages,
         )
         if resp.stop_reason != "tool_use":
             return "".join(b.text for b in resp.content if b.type == "text").strip()
@@ -273,7 +296,11 @@ def _claude_loop(message: str, history: list) -> str:
         results = []
         for block in resp.content:
             if block.type == "tool_use":
-                out = tools.dispatch(block.name, block.input)
+                if race_mode.is_gated(block.name):
+                    race_mode.audit_refusal("chat_llm", tool=block.name)
+                    out = {"withheld": True, "reason": race_mode.REFUSAL}
+                else:
+                    out = tools.dispatch(block.name, block.input)
                 results.append({"type": "tool_result", "tool_use_id": block.id,
                                 "content": json.dumps(out, default=str)})
         messages.append({"role": "user", "content": results})

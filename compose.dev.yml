@@ -47,6 +47,7 @@ services:
       BOAT_ID: ${BOAT_ID:-sr33}
       BOAT_PASSWORD: ${BOAT_PASSWORD:-sr33-dev}   # shared-password web auth (Phase 7)
       AUTH_ENABLED: ${AUTH_ENABLED:-true}
+      RACE_MODE_DEFAULT: ${RACE_MODE_DEFAULT:-practice}   # 9.2 gate: dev opens; prod omits -> fail-closed 'race'
     ports:
       - "8102:8000"
     depends_on:

@@ -24,13 +24,14 @@ const Plot = (function () {
     draw();
   }
   async function loadNav() {
+    // Navigator (next mark/ETA/laylines) + tactics are gated by race mode (RRS 41) — withheld
+    // server-side in a race, so don't fetch them. The course marks (/api/course) stay: they're
+    // the published course, available to all.
+    if (racing()) { nav = null; tactics = null; renderPanel(); draw(); return; }
     try { nav = await (await apiFetch("/api/navigator?route=" + route)).json(); }
     catch (e) { nav = null; }
-    // tactical layer is gated by race/practice mode (RRS 41) — only fetch in practice
-    if (!racing()) {
-      try { tactics = await (await apiFetch("/api/tactics?route=" + route)).json(); }
-      catch (e) { tactics = null; }
-    } else { tactics = null; }
+    try { tactics = await (await apiFetch("/api/tactics?route=" + route)).json(); }
+    catch (e) { tactics = null; }
     renderPanel(); draw();
   }
   async function fetchRoute() {

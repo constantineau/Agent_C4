@@ -14,7 +14,18 @@ from fastapi.responses import JSONResponse
 
 from shared.tool_contracts import AGENT_TOOLS
 from .db import pool
-from . import agent, tools, navigator, alerts, summarizer, auth
+from . import agent, tools, navigator, alerts, summarizer, auth, race_mode
+
+
+def _race_gated(channel: str):
+    """RRS 41: if racing, return a 403 refusal (and audit it); else None. Used to gate the REST
+    endpoints that serve customized tactical/routing/perf/sail/fatigue/navigation advice."""
+    if race_mode.racing():
+        race_mode.audit_refusal(channel)
+        return JSONResponse(
+            {"withheld": True, "detail": race_mode.REFUSAL, "mode": "race"}, status_code=403
+        )
+    return None
 
 API_KEY_PRESENT = bool(os.environ.get("ANTHROPIC_API_KEY", "").strip())
 
@@ -90,7 +101,24 @@ async def authenticate(body: dict):
 def health():
     with pool.connection() as conn:
         conn.execute("SELECT 1")
-    return {"status": "ok", "llm": "live" if API_KEY_PRESENT else "fallback (no API key)"}
+    return {"status": "ok", "llm": "live" if API_KEY_PRESENT else "fallback (no API key)",
+            "mode": race_mode.current_mode()}
+
+
+@app.get("/mode")
+def get_mode():
+    """The authoritative race/practice mode (RRS 41 gate)."""
+    return {"mode": race_mode.current_mode()}
+
+
+@app.post("/mode")
+def set_mode_ep(body: dict):
+    """Set race/practice mode server-side. Body: {"mode": "race"|"practice"}. Audited."""
+    try:
+        mode = race_mode.set_mode((body or {}).get("mode"), actor="web")
+    except ValueError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=400)
+    return {"mode": mode}
 
 
 @app.get("/tools")
@@ -119,14 +147,14 @@ def sources():
 @app.get("/fatigue")
 def fatigue():
     """Helm fatigue index (0–100) + components + rotation recommendation."""
-    return tools.get_fatigue()
+    return _race_gated("/fatigue") or tools.get_fatigue()
 
 
 @app.get("/sail")
 def sail(tws: float | None = None, twa: float | None = None, hoisted: str | None = None):
     """Sail-range advice for the dial: zones, optimal sail, position, next crossover.
     tws/twa default to the latest live values; hoisted is the crew-reported sail."""
-    return tools.get_sail_advice(tws=tws, twa=twa, hoisted=hoisted)
+    return _race_gated("/sail") or tools.get_sail_advice(tws=tws, twa=twa, hoisted=hoisted)
 
 
 @app.get("/course")
@@ -138,7 +166,7 @@ def course(route: str | None = None):
 @app.get("/navigator")
 def nav(route: str | None = None):
     """Next mark, ETA, leg type, and laylines from live position + wind."""
-    return navigator.get_navigator(route)
+    return _race_gated("/navigator") or navigator.get_navigator(route)
 
 
 @app.post("/course/practice")
@@ -150,7 +178,7 @@ def practice_course(leg_nm: float = 1.0):
 @app.get("/tactics")
 def tactics_ep(route: str | None = None):
     """Tactical read: lifted/headed, favored side, leverage (practice/debrief — RRS 41)."""
-    return tools.get_tactics(route)
+    return _race_gated("/tactics") or tools.get_tactics(route)
 
 
 @app.get("/forecast")
@@ -162,7 +190,7 @@ def forecast_ep(lat: float | None = None, lon: float | None = None, hours: int =
 @app.get("/route")
 def route_ep(route: str | None = None, target: str = "next"):
     """Isochrone optimal route to the next mark (or 'finish') through the forecast wind."""
-    return tools.get_route(route, target)
+    return _race_gated("/route") or tools.get_route(route, target)
 
 
 @app.get("/alerts")
@@ -174,13 +202,13 @@ def alerts_ep():
 @app.post("/summary")
 async def summary_ep(minutes: float | None = None):
     """On-demand short recap of the recent window; stored in agent_summaries."""
-    return await run_in_threadpool(summarizer.make_summary, minutes)
+    return _race_gated("/summary") or await run_in_threadpool(summarizer.make_summary, minutes)
 
 
 @app.post("/debrief")
 async def debrief_ep(minutes: float | None = None):
     """On-demand fuller window report (speed vs polar, wind, alerts fired); stored."""
-    return await run_in_threadpool(summarizer.make_debrief, minutes)
+    return _race_gated("/debrief") or await run_in_threadpool(summarizer.make_debrief, minutes)
 
 
 @app.get("/summaries")
@@ -193,7 +221,8 @@ def summaries_ep(limit: int = 5):
 async def polar_analysis_ep(hours: float | None = None, min_samples: int | None = None,
                             point_of_sail: str | None = None):
     """Observed-vs-rated polar mined from the archive (% of polar by TWS/TWA)."""
-    return await run_in_threadpool(tools.get_polar_analysis, hours, min_samples, point_of_sail)
+    return _race_gated("/polar-analysis") or \
+        await run_in_threadpool(tools.get_polar_analysis, hours, min_samples, point_of_sail)
 
 
 @app.websocket("/ws")
