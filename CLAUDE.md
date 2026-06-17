@@ -7,26 +7,39 @@ Raspberry Pi (Signal K) → 15-s telemetry aggregates pushed over Starlink → t
 Full project brief: Google Doc `1lUqXt3JZ8Cao467CfGT9CP3O75wtuO6z3CvoMr56v5Y`.
 This file is the operational summary (brief §§1–8); read the doc for full context.
 
-## Architecture (two halves, linked over Starlink)
+## Architecture — three tiers (driven by RRS 41)
 
-- **Boat:** NMEA 2000 backbone → Pi 4 + PICAN-M HAT. Signal K decodes N2K → JSON;
-  full-resolution local archive; a Python uplink service POSTs 15-s aggregates to the VPS.
-  Orca Core/app stay unchanged — the Pi is a silent additional listener.
-- **Cloud (this VPS):** nginx+TLS → FastAPI ingestion API → TimescaleDB → agent service
-  (Claude tool-use loop, alerting, summarizer) → web app.
+Compliance forces the split: the boat's own computer crunching its own sensors is Expedition-class and
+legal in-race; only *customized advice arriving from off the boat* is "outside help". So **separate the
+deterministic computation from the LLM** across three tiers:
 
-**Design principles:** push-only from the boat (Starlink CGNAT, no inbound; admin via
-Tailscale). Boat is source of truth (link outage loses nothing). The LLM never sees raw
-NMEA — it reads facts through SQL-backed tools.
+- **Tier 1 — Onboard deterministic engine (Pi 4):** Signal K decodes N2K → JSON; full-res local
+  archive; uplink POSTs 15-s aggregates to the VPS (Orca Core/app unchanged — the Pi is a silent extra
+  listener). The deterministic modules (routing/tactics/sails/polars/nav/fatigue — plain physics, *no
+  LLM*) run here so they're legal in-race. The iPad talks to the Pi over boat-local Wi-Fi in race mode.
+  *(engine relocation = Phase 9.0/9.1, in progress.)*
+- **Tier 2 — Onboard LLM copilot (Jetson Orin Nano, optional):** Qwen2.5-7B narrates the engine's facts
+  + bounded decision support (never does the math, never invents strategy). *(Phase 9.4; HW ~06-18.)*
+- **Tier 3 — Cloud (this VPS):** nginx+TLS → FastAPI ingestion → TimescaleDB → agent (Opus tool-use,
+  alerting, summarizer) → web. Between races it's the **C4 Performance Lab** (strategy studio → playbook
+  + write-back learning) and the practice/cruising/debrief product; in a race it is **race-gated (9.2)**
+  and the boat doesn't use it.
 
-**Direction — the three-tier pivot (2026-06-17; see "Racing-rules caveat" + `docs/ONBOARD_ENGINE_SCOPING.md`):**
-RRS 41 forces *customized in-race* coaching to be computed **onboard**, so the roadmap adds a
-**Phase 9 / Onboard + C4 Performance Lab track**: (1) relocate the deterministic engine
-(routing/tactics/sails/polars/nav/fatigue — plain physics, no LLM, Expedition-class) onto the Pi so
-it's legal in-race; (2) optionally add a **Jetson Orin Nano** local LLM (Qwen2.5-7B) for in-race chat
-over the engine's facts; (3) keep cloud **frontier Opus 4.8** for *between-races* prep, debrief, and a
-write-back **C4 Performance Lab**. The cloud stack above stays the practice/cruising/debrief product and
-the C4 Performance Lab.
+```
+  BOAT (in-race, legal)                         CLOUD (between races / practice)
+  NMEA2000 → Pi4: SignalK + archive + uplink ──telemetry push──► ingestion → TimescaleDB
+              │  + ONBOARD ENGINE (T1, no LLM)                         │  → agent (Opus, RACE-GATED 9.2)
+              │  + Orin LLM copilot (T2)        ◄──playbook (frozen────┤  → alerting/summarizer → web
+   iPad ──boat-local Wi-Fi──┘                       at the gun)        ▼
+   public data IN: GRIB + NOAA/GLOS buoys (avail. to all)         C4 PERFORMANCE LAB (T3):
+                                                                  studio→playbook · learning→polars
+```
+
+**Design principles:** customized in-race advice is computed **onboard** (the cloud is between-races or
+race-gated); push-only from the boat (Starlink CGNAT, no inbound; admin via Tailscale); boat is source
+of truth (link outage loses nothing); the **homework pattern** — the frontier model's work is loaded
+onboard pre-start and frozen at the gun, never re-derived mid-race; the LLM never sees raw NMEA (it
+reads facts through tools). Full design: `docs/RRS41_COMPLIANCE.md` + `docs/ONBOARD_ENGINE_SCOPING.md`.
 
 ## Repo layout (monorepo)
 
@@ -111,23 +124,26 @@ via a `sync_state` cursor (re-runs send only new rows). See `pi/archiver/README.
 
 | Phase | Deliverable | Exit test |
 |-------|-------------|-----------|
-| **0** | Repo + dev compose + schema + stubs + fake data | `compose.dev.yml up`; DB reachable; fake data loads |
-| 1 | Pi base + PICAN-M + vcan0 + Signal K | sample N2K flows; Signal K dashboard populated |
+| **0** ✅ | Repo + dev compose + schema + stubs + fake data | `compose.dev.yml up`; DB reachable; fake data loads |
+| **1** ✅ | Pi base + PICAN-M + vcan0 + Signal K | sample N2K flows; Signal K dashboard populated |
 | **2** ✅ | Pi local archive | full-res capture verified on bench; survives reboot; backfill lands in cloud `telemetry_raw` |
 | **3** ✅ | Ingestion + uplink store-and-forward | forced-outage test passed: batches queue to a named volume, survive a reboot mid-outage, drain with no loss |
-| 4 | Agent core + SQL tools | accurate answers on conditions/perf/AIS vs live dev data |
-| **5** ✅ | iPad nav companion: day/night, sail dial, course plot, navigator, tactics, routing | bench-verified end-to-end; server-side shared-pw auth still a stub |
-| 6 | Alerting + summarizer + polar tooling | acceptable alert false-positive rate over 2 practice sails |
-| 7 | Prod stack + deploy + rules review + soak | NOR compliance determined; 48-h unattended soak passes |
+| **4** ✅ | Agent core + SQL tools | accurate answers on conditions/perf/AIS vs live dev data |
+| **5** ✅ | iPad nav companion: day/night, sail dial, course plot, navigator, tactics, routing | bench-verified end-to-end |
+| **6** ✅ | Alerting + summarizer + polar tooling | bench-complete; 2-practice-sail false-positive gate awaits real sailing |
+| 7 🔶 | Prod stack + deploy + rules review + soak | rules review done; server auth + TLS scaffolding done; prod deploy/soak gated on domain + prod `.env` |
+| **9** 🔶 | Onboard + C4 Performance Lab (three-tier pivot) | **9.2 race gate ✅**; 9.0/9.1 onboard engine next; 9.4 Orin LLM; Lab-1→4 — see `docs/ONBOARD_ENGINE_SCOPING.md` |
 
-**Current status:** Phases 0–4 built and bench-verified. Phase 1 (Signal K + uplink) end-to-end;
+**Current status:** Phases 0–6 built and bench-verified; Phase 7 started; **Phase 9 in progress
+(9.2 server-side race gate ✅ — see "Race-mode gate"; 9.0/9.1 onboard engine next).** Detail: Phase 1
+(Signal K + uplink) end-to-end;
 Phase 2 (full-res onboard archive + backfill); Phase 3 uplink store-and-forward (disk-backed
 queue on a named volume — forced-outage test passed, survives reboot mid-outage, drains with no
 loss); Phase 4 agent runs the *real* Claude tool-use loop (`vps/agent/app/agent.py`, not stubbed)
 with the boat-speed gospel + per-source skepticism + source priority/failover. True wind/VMG now
 flow via the auto-enabled `signalk-derived-data` plugin. Phase 5 ✅ the iPad crew interface is
 built (day/night, sail dial, course plot + navigator, tactics, weather/isochrone routing — see
-"iPad crew interface"). Phase 6 IN PROGRESS — **6.0 live AIS** (see "Live AIS"), **6.1 alerting**
+"iPad crew interface"). Phase 6 ✅ (bench-complete) — **6.0 live AIS** (see "Live AIS"), **6.1 alerting**
 (see "Alerting"), **6.2 summarizer/debrief** (see "Summaries / debrief"), **6.3 polar mining**
 (see "Polar mining") and **6.4 done** — the final contracts/prompt sweep (all 16 tools consistent
 across dispatch/contracts/schema/prompt/fallback) + a full bench verify (closing-AIS raise→update→

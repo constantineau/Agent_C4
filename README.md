@@ -1,17 +1,22 @@
 # Agent_C4 — SR33 AI Navigator
 
-LLM-powered navigator / coach / long-term data archive for the SR33 racing yacht.
-Boat NMEA 2000 → Raspberry Pi (Signal K) → 15-s telemetry over Starlink → cloud VPS
-(TimescaleDB + Claude-API agent) → mobile web chat for the crew.
+LLM-powered navigator / coach / long-term data archive for the SR33 racing yacht. Boat NMEA 2000 →
+Raspberry Pi (Signal K + onboard engine) → iPad crew navigator over boat-local Wi-Fi in a race; full
+telemetry pushed over Starlink to a cloud VPS (TimescaleDB + Claude/Opus agent) for between-races
+analysis and the practice/cruising/debrief product.
 
-> **Architecture pivot (2026-06-17): a three-tier design**, driven by racing-rules compliance
-> (RRS 41 forbids customized tactical advice computed off-boat *while racing*):
-> **(1) onboard deterministic engine** on the Pi (routing/tactics/sails/polars/nav/fatigue —
-> Expedition-class, legal in-race, no LLM); **(2) optional onboard LLM** (Jetson Orin Nano,
-> Qwen2.5-7B) for in-race chat; **(3) cloud frontier Opus 4.8** for *between-races* prep,
-> debrief, and a write-back **C4 Performance Lab**. See `docs/RRS41_COMPLIANCE.md` (the why) and
-> `docs/ONBOARD_ENGINE_SCOPING.md` (the proposed Phase 9 build). The cloud stack below is v1
-> and remains the practice/cruising/debrief product.
+> **A three-tier architecture (pivot 2026-06-17)**, driven by racing-rules compliance — RRS 41 forbids
+> customized tactical advice computed *off-boat while racing*, so the boat's own computer does the
+> in-race work:
+> - **Tier 1 — onboard deterministic engine** on the Pi (routing/tactics/sails/polars/nav/fatigue —
+>   Expedition-class, legal in-race, no LLM);
+> - **Tier 2 — optional onboard LLM copilot** (Jetson Orin Nano, Qwen2.5-7B) — narrate + bounded
+>   decision support;
+> - **Tier 3 — cloud frontier Opus 4.8 = the C4 Performance Lab** — between-races strategy studio
+>   (→ a pre-loaded playbook) + write-back learning; race-gated in a race.
+>
+> See `docs/RRS41_COMPLIANCE.md` (the why) and `docs/ONBOARD_ENGINE_SCOPING.md` (the Phase 9 build).
+> **Phase 9.2 — the server-side race gate — is shipped**; the onboard engine (9.0/9.1) is next.
 
 - **DESIGN.md** — product design description: architecture + what's built vs. planned today.
 - **CLAUDE.md** — operational runbook (ports, commands, deploy, conventions).
@@ -86,9 +91,14 @@ compose.{dev,prod}.yml
   navigator, tactics, routing), and alerting + on-demand summarizer/debrief + polar mining.
 - **Phase 7 — started.** Server-side shared-password web auth + TLS scaffolding (bench-verified);
   remaining: prod deploy + domain/TLS + 48-h soak + the RRS 41 review (done — see below).
-- **Phase 9 (proposed) — the three-tier pivot.** Onboard deterministic engine on the Pi +
-  C4 Performance Lab on cloud Opus 4.8 (+ optional Orin Nano LLM). Design in
-  `docs/ONBOARD_ENGINE_SCOPING.md`; the *why* in `docs/RRS41_COMPLIANCE.md`.
+- **Phase 9 — the three-tier pivot, in progress.**
+  - **9.2 server-side race gate — ✅ shipped & bench-verified.** In a race the cloud agent + advice
+    endpoints withhold tactical/routing/polar/sail/fatigue/navigation (RRS 41) and log every refusal;
+    safety + own-instrument data + verbatim common data still flow. Fail-closed.
+  - **9.0/9.1 onboard engine — next.** Relocate the deterministic engine to the Pi (legal in-race, no LLM).
+  - **9.4 Orin Nano LLM copilot** (HW arriving) and the **C4 Performance Lab** (Lab-1→4: GRIB/buoy
+    ingestion, strategy studio → playbook, onboard executor, write-back learning) follow.
+  - Design in `docs/ONBOARD_ENGINE_SCOPING.md`; the *why* in `docs/RRS41_COMPLIANCE.md`.
 
 The agent runs the real Claude tool-use loop when `ANTHROPIC_API_KEY` is set, else a deterministic
 tool-grounded fallback. See **DESIGN.md** for built-vs-planned and **CLAUDE.md** for the phased plan
