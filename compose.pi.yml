@@ -144,6 +144,19 @@ services:
       - signalk
     restart: unless-stopped
 
+  # Phase 9.2 (iPad-side) — onboard race console. Serves the SAME iPad app as the cloud web,
+  # but pointed ONLY at the onboard engine (:8200) over boat-local Wi-Fi: no cloud, no auth,
+  # no LLM chat, every panel available. In race mode the iPad connects to THIS (network-level
+  # channel separation) instead of the cloud. Listens on :8091 (host net). http://<pi-ip>:8091
+  console:
+    build:
+      context: .
+      dockerfile: pi/console/Dockerfile
+    network_mode: host
+    depends_on:
+      - engine
+    restart: unless-stopped
+
 volumes:
   sk_config:
   sk_archive:

@@ -11,6 +11,10 @@ const App = {
   mode: localStorage.getItem('sr33.mode') || 'practice',  // practice | race
   pollTimer: null,
   token: sessionStorage.getItem('sr33.token') || null,    // shared-password bearer token
+  // Onboard race console (pi/console): the iPad talks ONLY to the Pi engine over boat-local
+  // Wi-Fi — no cloud, no auth, no LLM chat, and every panel available (the boat's own
+  // computer is legal in-race, so the RRS-41 race gate doesn't apply here). Set by config.js.
+  onboard: !!window.SR33_ONBOARD,
 };
 
 /* ---------- gate (server-side shared-password auth) ---------- */
@@ -40,9 +44,10 @@ async function unlock() {
 /* Authenticated REST helper: inject the bearer token; on 401 (missing/expired) re-gate. */
 async function apiFetch(path, opts = {}) {
   const headers = Object.assign({}, opts.headers,
-    App.token ? { Authorization: 'Bearer ' + App.token } : {});
+    (App.token && !App.onboard) ? { Authorization: 'Bearer ' + App.token } : {});
   const res = await fetch(path, Object.assign({}, opts, { headers }));
-  if (res.status === 401) { relock('Session expired — sign in again.'); throw new Error('unauthorized'); }
+  // Onboard the engine has no auth, so never re-gate on a 401 (there's nothing to sign into).
+  if (res.status === 401 && !App.onboard) { relock('Session expired — sign in again.'); throw new Error('unauthorized'); }
   return res;
 }
 
@@ -60,6 +65,13 @@ function relock(msg) {
 
 /* Auto-resume a stored session on load (a stale token re-gates on the first 401). */
 function boot() {
+  // Onboard race console: no password gate — go straight in (the engine has no auth).
+  if (App.onboard) {
+    document.body.dataset.onboard = 'true';
+    const gate = document.getElementById('gate'); if (gate) gate.style.display = 'none';
+    start();
+    return;
+  }
   if (App.token) { document.getElementById('gate').style.display = 'none'; start(); }
 }
 window.addEventListener('DOMContentLoaded', boot);
@@ -67,7 +79,7 @@ window.addEventListener('DOMContentLoaded', boot);
 function start() {
   applyTheme();
   syncMode();
-  connect();
+  if (!App.onboard) connect();   // onboard engine has no /ws chat
   refresh();
   App.pollTimer = setInterval(refresh, 5000);
   // Re-evaluate auto day/night a couple times a minute (cheap; catches dusk/dawn).
@@ -98,6 +110,9 @@ function applyTheme() {
 /* The agent enforces the gate server-side; the toggle just sets that flag. Sync on load so the
    UI reflects the server, and POST changes so the agent (not just the UI) withholds in a race. */
 async function syncMode() {
+  // Onboard the engine has no race gate (the boat's own computer is legal in-race), so there's
+  // no /api/mode and every panel is available — don't sync, just reflect the onboard state.
+  if (App.onboard) { applyMode(); return; }
   try {
     const r = await (await apiFetch('/api/mode')).json();
     if (r && r.mode) { App.mode = r.mode; localStorage.setItem('sr33.mode', App.mode); }
@@ -117,12 +132,21 @@ async function toggleMode() {
   applyMode();
 }
 function applyMode() {
+  if (App.onboard) {
+    // No cloud race gate onboard — the toggle is meaningless; show a static ONBOARD badge.
+    document.getElementById('modeLbl').textContent = 'ONBOARD';
+    const btn = document.getElementById('modeBtn');
+    btn.classList.remove('on'); btn.onclick = null; btn.title = 'On-boat engine (Pi) — no cloud';
+    document.body.dataset.mode = 'practice';   // panels un-gated (engine is legal in-race)
+    window.dispatchEvent(new CustomEvent('sr33:mode', { detail: 'practice' }));
+    return;
+  }
   document.getElementById('modeLbl').textContent = App.mode.toUpperCase();
   document.getElementById('modeBtn').classList.toggle('on', App.mode === 'race');
   document.body.dataset.mode = App.mode;   // tactical/routing panels read this (RRS 41 gate)
   window.dispatchEvent(new CustomEvent('sr33:mode', { detail: App.mode }));
 }
-function tacticsAllowed() { return App.mode !== 'race'; }
+function tacticsAllowed() { return App.onboard || App.mode !== 'race'; }
 
 /* ---------- websocket chat ---------- */
 function connect() {

@@ -92,7 +92,8 @@
 
   async function update(c) {
     // Sail-selection coaching is gated by race mode (RRS 41) — withheld server-side in a race.
-    if (typeof App !== "undefined" && App.mode === "race") {
+    // Onboard (Pi engine) it's always available: the boat's own computer is legal in-race.
+    if (typeof tacticsAllowed === "function" && !tacticsAllowed()) {
       last = { available: false, note: "Sail advice withheld — RACE mode (RRS 41)." }; render(); return;
     }
     if (!c || c.tws == null || c.twa == null) { last = { available: false, note: "No true wind yet." }; render(); return; }

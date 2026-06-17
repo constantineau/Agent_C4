@@ -138,11 +138,13 @@ via `OnboardSource`. It comes up with the rest of the Pi stack; quick check:
 | **5** ✅ | iPad nav companion: day/night, sail dial, course plot, navigator, tactics, routing | bench-verified end-to-end |
 | **6** ✅ | Alerting + summarizer + polar tooling | bench-complete; 2-practice-sail false-positive gate awaits real sailing |
 | 7 🔶 | Prod stack + deploy + rules review + soak | rules review done; server auth + TLS scaffolding done; prod deploy/soak gated on domain + prod `.env` |
-| **9** 🔶 | Onboard + C4 Performance Lab (three-tier pivot) | **9.0 data-access abstraction ✅ · 9.1 onboard engine service ✅ · 9.2 race gate ✅**; 9.4 Orin LLM; Lab-1→4 — see `docs/ONBOARD_ENGINE_SCOPING.md` |
+| **9** 🔶 | Onboard + C4 Performance Lab (three-tier pivot) | **9.0 data-access abstraction ✅ · 9.1 onboard engine service ✅ · 9.2 race gate + iPad onboard console ✅**; 9.4 Orin LLM (HW not in hand — on hold); Lab-0→4 — see `docs/ONBOARD_ENGINE_SCOPING.md` |
 
 **Current status:** Phases 0–6 built and bench-verified; Phase 7 started; **Phase 9 in progress
 (9.0 data-access abstraction ✅, 9.1 onboard engine service ✅ — see "Onboard engine service",
-9.2 server-side race gate ✅ — see "Race-mode gate"; next is 9.4 Orin LLM / Lab-1).** Detail: Phase 1
+9.2 server-side race gate ✅ + iPad onboard console ✅ — see "Race-mode gate" / "Onboard race
+console"; next is the C4 Performance Lab track Lab-0→4 — 9.4 Orin LLM is on hold, no hardware yet).**
+Detail: Phase 1
 (Signal K + uplink) end-to-end;
 Phase 2 (full-res onboard archive + backfill); Phase 3 uplink store-and-forward (disk-backed
 queue on a named volume — forced-outage test passed, survives reboot mid-outage, drains with no
@@ -441,6 +443,25 @@ timestamps, and the unit conversions stay in the modules (so behavior is byte-id
 Lab tool, not part of the in-race onboard engine. Bench-verified: every engine endpoint
 (conditions/navigator/tactics/sail/fatigue, route on a practice course, practice-course generation)
 returns real data through the abstraction; cloud path unchanged.
+
+## Onboard race console (Phase 9.2, iPad-side)
+
+The iPad-side of the race-mode channel separation. In race mode the iPad connects to the **Pi**, not
+the cloud — at the network level (boat-local Wi-Fi, no WAN), which is the strong compliance posture.
+The console (`pi/console/`) is an nginx that serves the **same web app** (`vps/web/public`) but pointed
+only at the onboard engine (`/api/` → `127.0.0.1:8200`, no `/ws`), on **:8091** (host net). The app
+runs in an **onboard mode** flipped by a one-line `config.js` (the cloud serves `window.SR33_ONBOARD =
+false`; the console overrides `/config.js` to `true`). Onboard mode (in `app.js`): no password gate
+(the engine has no auth), no LLM chat WebSocket, `apiFetch` drops the bearer and never re-gates on 401,
+the chat card is hidden, and the mode pill becomes a static **ONBOARD** badge — and crucially **every
+panel is available** (sail/navigator/tactics/route ungate, since the boat's own computer is legal
+in-race; `tacticsAllowed()`/`plot.racing()` are onboard-aware). The cloud web is unchanged (it serves
+the static `config.js=false` and stays auth-gated + LLM-chat + RRS-41-toggle as before). Bench-verified
+with Playwright pointed at `:8091`: loads with no gate, `SR33_ONBOARD=true`, chat hidden, **zero
+`/auth` and zero WebSocket calls**, all panels (incl. the gated ones) fetched through the engine proxy,
+and the course/sail/navigator render. Cloud regression check: `:8090/config.js`=false and
+`/api/conditions` without a token still 401s. **So in a race the iPad uses `http://<pi-ip>:8091`
+(onboard, legal); between races it uses the cloud app (full LLM + debrief).**
 
 ## Onboard engine service (Phase 9.1)
 

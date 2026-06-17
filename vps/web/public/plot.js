@@ -12,7 +12,9 @@ const Plot = (function () {
   const track = [];                                // recent {lat,lon}
   let lastNav = 0;
 
-  function racing() { return (typeof App !== "undefined" && App.mode === "race"); }
+  // Onboard (Pi engine) is never "racing" for gating purposes — the boat's own computer is
+  // legal in-race, so navigator/tactics/route stay available.
+  function racing() { return (typeof App !== "undefined" && !App.onboard && App.mode === "race"); }
 
   function setRoute(r) { route = r; localStorage.setItem("sr33.route", r);
     document.getElementById("routeName").textContent = r; loadCourse(); }
