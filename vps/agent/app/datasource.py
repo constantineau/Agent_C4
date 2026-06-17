@@ -16,7 +16,13 @@ abstracted here.
 """
 import os
 
-from .db import pool
+# CloudSource needs the TimescaleDB pool; OnboardSource (Pi) does not — and the onboard image
+# ships no psycopg. Guard the import so `DATA_SOURCE=onboard` can run without a Postgres driver.
+# In the cloud, psycopg is present and behavior is identical to a direct import.
+try:
+    from .db import pool
+except ImportError:
+    pool = None
 
 BOAT_ID = os.environ.get("BOAT_ID", "sr33")
 

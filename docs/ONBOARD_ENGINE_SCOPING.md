@@ -215,7 +215,7 @@ the legal mechanism.
 | Step | Deliverable | Exit test | New HW |
 |---|---|---|---|
 | 9.0 ✅ | Data-access abstraction (`datasource.py`: CloudSource now; OnboardSource = 9.1) for the engine modules | **done** — cloud path byte-identical via `datasource.active()`; engine endpoints bench-verified | none |
-| 9.1 | Onboard engine service + API in `compose.pi.yml` (+ `OnboardSource`: SQLite archive + Signal K live) | iPad → Pi renders all nav/sail/plot/tactics screens | none |
+| 9.1 ✅ | Onboard engine service + API in `compose.pi.yml` (+ `OnboardSource`: SQLite archive + Signal K live) | **done** — `pi/engine/` serves all engine endpoints onboard via `OnboardSource`; bench-verified (live cache + archive-history paths). iPad→Pi pairs with 9.2 | none |
 | 9.2 ✅ | iPad race-mode → Pi only; server-side fail-closed cloud gate + audit log | **done** (cloud-gate half) — race mode 403s advice endpoints + chat refuses + audit_log; iPad→Pi-only pairs with 9.1 | none |
 | 9.3 | C4 Performance Lab — learning loop: hoisted-sail logging, polar write-back, prep/debrief | a sail → refined polars loaded back onboard | none |
 | 9.4 *(opt)* | Orin Nano local LLM narrator | grounded onboard NL answer, offline, usable latency | Orin Nano 8GB |

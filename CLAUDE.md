@@ -120,6 +120,12 @@ or a dropped link never costs archived data ("link outage loses nothing"). `pi/a
 backfill.py` pushes the full-res log to the cloud `/ingest/raw` post-passage; it's resumable
 via a `sync_state` cursor (re-runs send only new rows). See `pi/archiver/README.md`.
 
+**Onboard engine (Phase 9.1):** the same `compose.pi.yml` also runs the `engine` service — the
+in-race-legal deterministic engine on **:8200** (no LLM, no cloud), reading the boat's own data
+via `OnboardSource`. It comes up with the rest of the Pi stack; quick check:
+`curl -s localhost:8200/health` then `curl -s localhost:8200/conditions`. See
+"Onboard engine service (Phase 9.1)" below and `pi/engine/README.md`.
+
 ## Phased build (each phase has a clear exit test)
 
 | Phase | Deliverable | Exit test |
@@ -132,10 +138,11 @@ via a `sync_state` cursor (re-runs send only new rows). See `pi/archiver/README.
 | **5** ✅ | iPad nav companion: day/night, sail dial, course plot, navigator, tactics, routing | bench-verified end-to-end |
 | **6** ✅ | Alerting + summarizer + polar tooling | bench-complete; 2-practice-sail false-positive gate awaits real sailing |
 | 7 🔶 | Prod stack + deploy + rules review + soak | rules review done; server auth + TLS scaffolding done; prod deploy/soak gated on domain + prod `.env` |
-| **9** 🔶 | Onboard + C4 Performance Lab (three-tier pivot) | **9.0 data-access abstraction ✅ · 9.2 race gate ✅**; 9.1 onboard engine service next; 9.4 Orin LLM; Lab-1→4 — see `docs/ONBOARD_ENGINE_SCOPING.md` |
+| **9** 🔶 | Onboard + C4 Performance Lab (three-tier pivot) | **9.0 data-access abstraction ✅ · 9.1 onboard engine service ✅ · 9.2 race gate ✅**; 9.4 Orin LLM; Lab-1→4 — see `docs/ONBOARD_ENGINE_SCOPING.md` |
 
 **Current status:** Phases 0–6 built and bench-verified; Phase 7 started; **Phase 9 in progress
-(9.2 server-side race gate ✅ — see "Race-mode gate"; 9.0/9.1 onboard engine next).** Detail: Phase 1
+(9.0 data-access abstraction ✅, 9.1 onboard engine service ✅ — see "Onboard engine service",
+9.2 server-side race gate ✅ — see "Race-mode gate"; next is 9.4 Orin LLM / Lab-1).** Detail: Phase 1
 (Signal K + uplink) end-to-end;
 Phase 2 (full-res onboard archive + backfill); Phase 3 uplink store-and-forward (disk-backed
 queue on a named volume — forced-outage test passed, survives reboot mid-outage, drains with no
@@ -434,3 +441,41 @@ timestamps, and the unit conversions stay in the modules (so behavior is byte-id
 Lab tool, not part of the in-race onboard engine. Bench-verified: every engine endpoint
 (conditions/navigator/tactics/sail/fatigue, route on a practice course, practice-course generation)
 returns real data through the abstraction; cloud path unchanged.
+
+## Onboard engine service (Phase 9.1)
+
+The in-race-legal tier: a small FastAPI service (`pi/engine/`) that runs **on the boat** and
+serves the same nav/sail/plot/tactics/route endpoints the iPad uses, but computed **onboard from
+the boat's own data** — no LLM, no cloud round-trip, **no race gate** (the boat's own computer
+crunching its own sensors is Expedition-class, not an "outside source" under RRS 41). It reuses
+the cloud agent's deterministic modules unchanged (`app.navigator/tactics/routing/fatigue/sails/
+weather`) with `DATA_SOURCE=onboard`, so `datasource.active()` resolves to the new
+**`OnboardSource`** (`vps/agent/app/datasource_onboard.py`), which reads:
+- **telemetry history** — the Phase-2 full-res SQLite archive (`sk_archive` volume, written by
+  `pi/archiver`), mounted read-only — for `series`/`series_by_source` (fatigue/tactics windows);
+- **freshest live value** — an in-process Signal K WS cache (lower latency than the ~2-s archive
+  flush; falls back to the archive if the WS is down) — for `latest_value` + the instrument strip;
+- **polars** — parsed from the committed `vps/db/seed/polars_sr33.sql` (the one canonical source;
+  no DB) — for `best_angles`/`polar_nearest`/`polars_stw`;
+- **course marks** — a small local SQLite store on the `engine_state` volume (the boat has no
+  `waypoints` Postgres table) — for `marks`/`save_practice_course` (the practice course).
+
+The instrument strip / multi-source view is built by `app.onboard_conditions` (mirrors
+`tools.PRESENT`; the cloud builds it off Postgres in `tools.py`). All values are raw SI / epoch
+seconds, identical in shape to `CloudSource`, so the modules' conversions are byte-identical. To
+let the onboard image ship **no psycopg**, `datasource.py` guards the `pool` import (cloud has it
+→ unchanged; onboard absent → unused). Endpoints (port **8200**): `/health`, `/conditions`,
+`/conditions/full`, `/sources`, `/fatigue`, `/sail`, `/course`, `/navigator`,
+`POST /course/practice`, `/tactics`, `/forecast`, `/route`. Wired into `compose.pi.yml` as the
+`engine` service; cloud parity reference is `vps/agent/app/main.py`. See `pi/engine/README.md`.
+
+**Bench-verified** (sample Pi stack + engine): every endpoint returns real data through
+`OnboardSource` — `/conditions` + `/conditions/full` (14 channels) + `/sources` (5 sources) +
+`/sail` (optimal A2 + crossovers) off the live cache; `/course/practice` → `/course` → `/navigator`
+(ETA/laylines) → `/route` (isochrone via Open-Meteo, `wind_source: forecast`) + `/forecast`; and
+the **archive-history path** (`/fatigue`, `/tactics`) verified against a recent-timestamped seeded
+archive (`series` 2999 pts; fatigue computes all 5 components; tactics returns favored-side +
+recommendation). **Bench gotcha:** `--sample-n2k-data` replays a 2014 log, so the archive's SK
+*source* timestamps fall outside any wall-clock window — history endpoints look empty on the bench
+even though live ones work (on the real boat SK timestamps are current); `/sources` therefore
+merges the live cache. Cloud path unaffected (`active: CloudSource`, `pool` still set).

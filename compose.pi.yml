@@ -120,7 +120,32 @@ services:
       - signalk
     restart: unless-stopped
 
+  # Phase 9.1 — onboard deterministic engine. Serves the iPad's nav/sail/plot/tactics/route
+  # endpoints computed ONBOARD from the boat's own data (the Phase-2 archive + a live Signal K
+  # cache via OnboardSource), with no LLM and no cloud round-trip — the in-race-legal tier
+  # (RRS 41). Reuses the cloud agent's engine modules with DATA_SOURCE=onboard. Reads the
+  # archive read-only; keeps its own course-marks store on engine_state. Open-Meteo egress
+  # (forecast/route) rides the host network like the other Pi services.
+  engine:
+    build:
+      context: .
+      dockerfile: pi/engine/Dockerfile
+    network_mode: host
+    environment:
+      DATA_SOURCE: onboard
+      SIGNALK_WS: ${SIGNALK_WS:-ws://localhost:3010/signalk/v1/stream?subscribe=all}
+      ARCHIVE_DB: /var/lib/sr33/archive/archive.db
+      ENGINE_DB: /var/lib/sr33/engine/engine.db
+      BOAT_ID: ${BOAT_ID:-sr33}
+    volumes:
+      - sk_archive:/var/lib/sr33/archive:ro
+      - engine_state:/var/lib/sr33/engine
+    depends_on:
+      - signalk
+    restart: unless-stopped
+
 volumes:
   sk_config:
   sk_archive:
   sk_queue:
+  engine_state:
