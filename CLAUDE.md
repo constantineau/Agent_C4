@@ -47,6 +47,7 @@ reads facts through tools). Full design: `docs/RRS41_COMPLIANCE.md` + `docs/ONBO
 pi/                 Signal K config, vcan/systemd units, uplink + full-res archiver
 pi/engine/          onboard deterministic engine service (Tier 1, 9.1) — no LLM, :8200
 pi/console/         onboard race console (9.2) — the iPad app served from the Pi, :8091
+pi/orin/            onboard LLM copilot bring-up (Tier 2, 9.4) — Orin Nano: MLC + Qwen2.5-7B, :9000
 vps/ingestion/      FastAPI ingestion API (token-auth, writes batches to TimescaleDB)
 vps/agent/          Claude tool-use service + alerting + summarizer + WebSocket chat
 vps/web/            mobile web chat app (nginx static)
@@ -144,14 +145,16 @@ via `OnboardSource`. It comes up with the rest of the Pi stack; quick check:
 | **5** ✅ | iPad nav companion: day/night, sail dial, course plot, navigator, tactics, routing | bench-verified end-to-end |
 | **6** ✅ | Alerting + summarizer + polar tooling | bench-complete; 2-practice-sail false-positive gate awaits real sailing |
 | 7 🔶 | Prod stack + deploy + rules review + soak | rules review done; server auth + TLS scaffolding done; prod deploy/soak gated on domain + prod `.env` |
-| **9** 🔶 | Onboard + C4 Performance Lab (three-tier pivot) | **9.0 data-access abstraction ✅ · 9.1 onboard engine service ✅ · 9.2 race gate + iPad onboard console ✅ · Lab-0 race ingestion + course loader ✅ · Lab-1 multi-model GRIB optimizer ✅**; next Lab-2 branching playbook; 9.4 Orin LLM (HW not in hand — on hold) — see `docs/ONBOARD_ENGINE_SCOPING.md` |
+| **9** 🔶 | Onboard + C4 Performance Lab (three-tier pivot) | **9.0 data-access abstraction ✅ · 9.1 onboard engine service ✅ · 9.2 race gate + iPad onboard console ✅ · Lab-0 race ingestion + course loader ✅ · Lab-1 multi-model GRIB optimizer ✅ · 9.4 Orin LLM runtime bring-up authored (Orin in hand 06-18; `pi/orin/`)**; next Lab-2 branching playbook + the SR33 copilot service — see `docs/ONBOARD_ENGINE_SCOPING.md` |
 
 **Current status:** Phases 0–6 built and bench-verified; Phase 7 started; **Phase 9 in progress
 (9.0 data-access abstraction ✅, 9.1 onboard engine service ✅ — see "Onboard engine service",
 9.2 server-side race gate ✅ + iPad onboard console ✅ — see "Race-mode gate" / "Onboard race
 console"; the C4 Performance Lab (`vps/lab`) is live with **Lab-0 race ingestion + course loader ✅**
 and **Lab-1 the multi-model GRIB optimizer ✅** — see "C4 Performance Lab"; next is Lab-2 (the
-branching playbook bundle); 9.4 Orin LLM is on hold, no HW yet).**
+branching playbook bundle); **9.4 Orin LLM bring-up authored** (Orin Nano in hand 2026-06-18 —
+`pi/orin/` runtime/model bring-up: MLC + Qwen2.5-7B INT4 → OpenAI-compatible API, to run on the
+fresh unit; the SR33 copilot service is the next 9.4 increment) — see "Onboard LLM copilot").**
 Detail: Phase 1
 (Signal K + uplink) end-to-end;
 Phase 2 (full-res onboard archive + backfill); Phase 3 uplink store-and-forward (disk-backed
@@ -585,3 +588,36 @@ the gun — RRS 41). Lives in `vps/lab/app/`:
   route confidence 0.69; Opus briefing led with the confidence caveat; ~52 s first run, then cached;
   Playwright-verified the tab). **Next:** Lab-2 — fan the optimizer across ensemble members/scenarios →
   cluster → the **branching playbook bundle**. See `vps/lab/README.md`.
+
+## Onboard LLM copilot — Orin Nano (Phase 9.4, Tier 2)
+
+The optional in-race conversational LLM (`docs/ONBOARD_ENGINE_SCOPING.md` §3). A **Jetson Orin Nano
+8GB (Super)** dedicated to inference, **separate** from the Pi 4 that runs the deterministic engine
+(Tier 1) — they talk over boat-local Wi-Fi. Legal in-race because the boat's own computer reasoning
+over its own sensors + pre-loaded homework + common public data is not "outside help"; it never
+phones the cloud mid-race, never does the math (the engine does), never invents strategy outside the
+playbook. **The Orin is in hand as of 2026-06-18.**
+
+**Current increment = runtime/model bring-up only** (`pi/orin/`); the SR33 copilot service (feeding
+it engine facts + the playbook for bounded decision support) is the next 9.4 increment, not built
+yet. **Runtime decided: MLC + INT4 (`q4f16_ft`) via jetson-containers** — the path behind NVIDIA's
+own Super-mode numbers (Qwen2.5-7B = 21.8 tok/s); **not** llama.cpp/Ollama for the 7B (CUDA-alloc
+regression in the JetPack R36.4.x line broke >1B models there). The model server exposes the boring,
+stable **OpenAI `/v1/chat/completions`** contract (port **9000**) so the copilot can swap models
+(7B ↔ a 3-4B latency fallback) without changing. `pi/orin/`:
+- **`SETUP.md`** — the bring-up runbook: flash JetPack 6.2 (L4T R36.4.x) + the QSPI firmware →
+  Super mode (`sudo nvpmodel -m 2` + `jetson_clocks`) → NVIDIA-default docker runtime →
+  `jetson-containers` → MLC → benchmark Qwen2.5-7B INT4 → serve → autostart → `tegrastats` thermal.
+- **`serve.sh`** — launch the OpenAI-compatible MLC server (`MODEL`/`PORT` env, idempotent restart).
+- **`bench.sh`** — benchmark one model's prefill/decode tok/s via MLC (A/B the 7B vs a 3-4B).
+- **`smoke_api.py`** — pure-stdlib client that sends a "narrate these engine facts" prompt, prints
+  the answer + latency + effective tok/s, pass/fail — **the milestone's exit test** (a grounded
+  answer, fully offline, at usable latency; no SR33 tool-calling yet).
+- **`models.md`** — A/B matrix (NVIDIA numbers + a column for measured results) + how to confirm the
+  exact MLC model id on-unit.
+- **`../systemd/sr33-orin-llm.service`** — appliance autostart (re-applies Super mode + clocks, then
+  `serve.sh`).
+
+**Not hardware-verified yet** — I can't reach the Orin from the dev VM, so every command is authored
+from NVIDIA/dusty-nv docs and marked ✅ (confirmed) or ⚠️ (confirm the exact model-id/flag on the
+live unit). See `pi/orin/README.md`.

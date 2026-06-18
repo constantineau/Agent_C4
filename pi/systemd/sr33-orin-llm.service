@@ -1,0 +1,25 @@
+[Unit]
+Description=SR33 onboard LLM copilot — Orin Nano MLC OpenAI-compatible server (Tier 2, 9.4)
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+# Drop real values in /etc/sr33/orin.env on the Orin (MODEL, QUANT, PORT, NAME, EXTRA_ARGS).
+EnvironmentFile=-/etc/sr33/orin.env
+# Re-apply Super mode + pin clocks on boot (nvpmodel persists the mode, jetson_clocks does NOT).
+ExecStartPre=-/usr/sbin/nvpmodel -m 2
+ExecStartPre=-/usr/bin/jetson_clocks
+# serve.sh starts the MLC container detached with --restart unless-stopped; this unit owns clocks +
+# ensures it's (re)launched on boot. Adjust the repo path if you clone elsewhere than /opt/sr33.
+ExecStart=/usr/bin/env bash /opt/sr33/pi/orin/serve.sh
+# serve.sh exec's `jetson-containers run -d` (returns once the container is up); keep the unit simple.
+Type=oneshot
+RemainAfterExit=yes
+ExecStop=/usr/bin/docker rm -f ${NAME:-sr33-orin-llm}
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

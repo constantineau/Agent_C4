@@ -346,8 +346,11 @@ onboard playbook executor** (§4); Lab-3 depends on the onboard engine (9.0/9.1)
   archive for history, in `OnboardSource`.
 - **Race-mode channel separation mechanism:** ✅ DECIDED — network-level (iPad on a boat-local SSID, no
   WAN), the stronger compliance posture; the iPad-side build is 9.2.
-- **Orin Nano:** ⏸️ ON HOLD — hardware not yet in hand; defer the Orin-gated LLM work (9.4 / the Lab-3
-  LLM layer). Layers A/B + the deterministic playbook deliver most of the value with no hardware.
+- **Orin Nano:** ✅ IN HAND (2026-06-18) — 9.4 runtime/model bring-up authored (`pi/orin/`: flash →
+  Super mode → MLC + Qwen2.5-7B INT4 → OpenAI-compatible server + tok/s A/B + API smoke test +
+  systemd autostart); to be run on the fresh unit. The SR33 copilot service (engine facts + playbook
+  → bounded decision support) is the next 9.4 increment. Layers A/B + the deterministic playbook
+  still deliver most of the value with no LLM.
 - **Engine on Pi 4 vs Orin:** ✅ DECIDED — engine is light/deterministic → Pi 4; the Orin, when added,
   is dedicated to the LLM.
 - **GRIB scope:** ✅ DECIDED (§4.7-1) — full multi-model set; start the *ingestion* with the
