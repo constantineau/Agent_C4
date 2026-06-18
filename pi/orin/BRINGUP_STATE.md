@@ -41,6 +41,14 @@ Currently set to **MAXN SUPER**. Leave it there (free perf once the GPU is actua
 - `ollama pull qwen2.5:7b-instruct-q4_K_M` → done.
 
 ## >>> EXACT NEXT STEP (we are HERE — the one remaining blocker) <<<
+**⇒ TURNKEY: just run `bash pi/orin/bringup_llm.sh` ON THE ORIN.** It automates the entire
+diagnose→fix→pivot→verify flow below (pins MAXN SUPER + clocks → captures Ollama's GPU-init failure
+line → tries the cheap `LD_LIBRARY_PATH` cudart override → else builds llama.cpp from source against
+CUDA 13.2 and serves `/v1` on :9000 reusing the already-pulled qwen q4 GGUF → tegrastats GR3D peek +
+`smoke_api.py` exit test). Idempotent. `--diagnose-only` prints just the failure line; `--llamacpp`
+skips straight to the build. **The manual steps below are the same logic, kept for reference / if the
+script hits something unexpected.**
+
 **Ollama is running 100% on CPU → ~5 tok/s (4.99 @25W, 5.44 @MAXN SUPER), ~4× under the milestone.**
 Confirmed via `ollama ps` → PROCESSOR `100% CPU`; the near-zero gain from the big MAXN-SUPER GPU-clock
 bump proves the GPU is idle. **Root cause:** JetPack 7.2 / R39 / CUDA 13.2 is newer than Ollama's
