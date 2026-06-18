@@ -4,15 +4,19 @@ FROM python:3.12-slim
 
 WORKDIR /srv
 ENV PYTHONUNBUFFERED=1 PYTHONPATH=/srv \
-    RACES_DIR=/srv/races INGESTED_DIR=/srv/ingested WEB_DIR=/srv/web
+    RACES_DIR=/srv/races INGESTED_DIR=/srv/ingested WEB_DIR=/srv/web \
+    POLARS_FILE=/srv/polars_sr33.sql GRIB_CACHE=/srv/gribcache
 
 COPY vps/lab/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt \
+    && python -m eccodes selfcheck
 
 COPY shared/ ./shared/
 COPY vps/lab/app/ ./app/
 COPY vps/lab/web/ ./web/
 COPY vps/lab/races/ ./races/
+# the one canonical ORC polar (same source the onboard engine parses) for the optimizer
+COPY vps/db/seed/polars_sr33.sql ./polars_sr33.sql
 
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

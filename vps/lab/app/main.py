@@ -146,6 +146,56 @@ async def geocode_ep(body: dict):
         return JSONResponse({"detail": f"geocode failed: {exc}"}, status_code=502)
 
 
+@app.get("/api/models")
+def models():
+    """Available weather models for the optimizer (Lab-1)."""
+    from .wind import available_models
+    from .wind.models import DEFAULT_MODELS
+    return {"models": available_models(), "default": list(DEFAULT_MODELS)}
+
+
+def _run_optimize(definition, course_id, start_epoch, model_names, ensemble_members):
+    """Blocking: build the multi-model wind field, route the course, write the briefing."""
+    from .wind import build_windfield
+    from . import optimizer
+    bbox = optimizer.course_bbox(definition, course_id)
+    if not bbox:
+        return {"available": False, "note": "course has no geocoded marks — review Course & Marks"}
+    hours = optimizer.estimate_hours(definition, course_id)
+    t_end = start_epoch + hours * 3600
+    log = []
+    wf = build_windfield(bbox, start_epoch, t_end, models=model_names,
+                         ensemble_members=ensemble_members, on_progress=log.append)
+    if not wf.loaded:
+        return {"available": False, "note": "no weather model data could be loaded (not yet "
+                "posted, or no egress)", "windfield": wf.status(), "log": log}
+    result = optimizer.optimize_course(definition, course_id, start_epoch, wf)
+    result["briefing"] = optimizer.briefing(result, definition.get("name", ""))
+    result["log"] = log
+    return result
+
+
+@app.post("/api/optimize")
+async def optimize(body: dict):
+    """Lab-1: run the multi-model GRIB optimizer over a race course → one route + briefing."""
+    body = body or {}
+    rid = body.get("race_id")
+    d = store.get_race(rid) if rid else None
+    if not d:
+        return JSONResponse({"detail": "unknown race_id"}, status_code=404)
+    course_id = body.get("course_id")
+    start_epoch = float(body.get("start_epoch") or datetime.datetime.now(
+        datetime.timezone.utc).timestamp())
+    from .wind.models import DEFAULT_MODELS, MODELS
+    models_req = body.get("models") or list(DEFAULT_MODELS)
+    model_names = [m for m in models_req if m in MODELS] or list(DEFAULT_MODELS)
+    ens = int(body.get("ensemble_members") or 0)
+    try:
+        return await run_in_threadpool(_run_optimize, d, course_id, start_epoch, model_names, ens)
+    except Exception as exc:
+        return JSONResponse({"detail": f"optimize failed: {exc}"}, status_code=500)
+
+
 @app.post("/api/races")
 async def save_race(body: dict):
     """Save a (human-reviewed) RaceDefinition to the library. Errors don't block saving a draft —

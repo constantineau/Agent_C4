@@ -51,6 +51,7 @@ function route() {
     a.classList.toggle("active", a.getAttribute("href") === "#" + sec));
   if (sec === "races") return renderRaces();
   if (sec === "course") return renderCourse();
+  if (sec === "gameplan") return renderGameplan();
   renderPlaceholder(sec);
 }
 const clone = (o) => JSON.parse(JSON.stringify(o));
@@ -393,7 +394,6 @@ const SOON = {
   rules: ["Rules, Safety & Checklists", "The full prep checklist the team works through — every SER + procedural item, with the race-time subset flagged to push to the iPad."],
   fleet: ["Fleet", "Competitor roster + ORC handicaps (entry-list import, MMSI matching) for handicap-aware, corrected-time tactics."],
   learnings: ["Learnings", "The boat-level library (refined polars, crossovers, calibration, fatigue/helm-skill) and what's applied to this regatta."],
-  gameplan: ["Gameplan / Optimizer", "Run the multi-model optimization, review scenarios, and build the branching playbook with rationale and tradeoffs."],
   deploy: ["Lock-in & Deploy", "Freeze the playbook and push the homework (course, checklists, playbook) to the Pi / Orin for the race."],
   monitor: ["Monitor", "Shore-side live view during the race (the boat itself uses the onboard console)."],
   debrief: ["Debrief", "The post-race judge loop — regret analysis and write-back review that feeds the next prep."],
@@ -403,4 +403,156 @@ function renderPlaceholder(sec) {
   document.getElementById("view").innerHTML =
     `<div class="placeholder"><h2>${esc(title)}</h2><p>${esc(desc)}</p>
      <p class="muted">Coming soon — the Races tab (ingest + review) is live now.</p></div>`;
+}
+
+/* ---------- Gameplan / Optimizer (Lab-1) ---------- */
+const Opt = { races: null, models: null, raceId: null, def: null, courseId: null,
+  chosen: null, running: false, result: null };
+
+async function renderGameplan() {
+  const view = document.getElementById("view");
+  if (!Opt.races) {
+    view.innerHTML = '<div class="loading">Loading…</div>';
+    try {
+      Opt.races = (await (await apiGet("/api/races")).json()).races || [];
+      const md = await (await apiGet("/api/models")).json();
+      Opt.models = md.models; Opt.defaultModels = md.default;
+      Opt.chosen = Opt.chosen || md.default.slice();
+    } catch (e) { view.innerHTML = '<div class="placeholder">Failed to load optimizer.</div>'; return; }
+  }
+  if (!Opt.raceId && Opt.races.length) await optPickRace(Opt.races[0].race_id, false);
+  view.innerHTML = `<div class="opt">
+    <div class="card">
+      <h3>Gameplan / Optimizer <span class="muted" style="font-weight:400">— multi-model GRIB route (Lab-1)</span></h3>
+      <div class="opt-controls">
+        <label>Race
+          <select id="optRace" onchange="optPickRace(this.value)">
+            ${Opt.races.map((r) => `<option value="${esc(r.race_id)}" ${r.race_id === Opt.raceId ? "selected" : ""}>${esc(r.name)}</option>`).join("")}
+          </select></label>
+        <label>Course <select id="optCourse" onchange="Opt.courseId=this.value">${optCourseOpts()}</select></label>
+        <label>Start (UTC) <input type="datetime-local" id="optStart"></label>
+      </div>
+      <div class="opt-models">${optModelChecks()}</div>
+      <div class="opt-controls">
+        <label>Ensemble members <input type="number" id="optEns" value="0" min="0" max="30" style="width:64px"> <span class="muted">(GEFS/ECMWF-ENS only; 0 = deterministic)</span></label>
+        <button id="optRun" onclick="runOptimize()" ${Opt.running ? "disabled" : ""}>${Opt.running ? "Optimizing…" : "Run optimizer →"}</button>
+      </div>
+      <div class="muted" style="font-size:12px;margin-top:6px">Downloads live GRIB from NOAA NOMADS / ECMWF and routes the course on the SR33 polars. First run ~30–60 s (then cached). Pre-race cloud homework — frozen at the gun (RRS 41).</div>
+    </div>
+    <div id="optOut"></div></div>`;
+  if (Opt.result) renderOptResult(Opt.result);
+}
+
+function optCourseOpts() {
+  const cs = (Opt.def && Opt.def.courses) || [];
+  if (!Opt.courseId && cs.length) Opt.courseId = cs[0].id;
+  return cs.map((c) => `<option value="${esc(c.id)}" ${c.id === Opt.courseId ? "selected" : ""}>${esc(c.name || c.id)}</option>`).join("");
+}
+function optModelChecks() {
+  const m = Opt.models || {};
+  return Object.keys(m).map((k) => {
+    const on = Opt.chosen.includes(k);
+    const ens = m[k].kind === "ensemble" ? ` <span class="muted">(ens ${m[k].members})</span>` : "";
+    return `<label class="optchk"><input type="checkbox" value="${k}" ${on ? "checked" : ""} onchange="optToggle('${k}',this.checked)"> ${esc(k.toUpperCase())}${ens}</label>`;
+  }).join("");
+}
+function optToggle(k, on) {
+  Opt.chosen = Opt.chosen.filter((x) => x !== k);
+  if (on) Opt.chosen.push(k);
+}
+async function optPickRace(id, rerender = true) {
+  Opt.raceId = id; Opt.courseId = null; Opt.result = null;
+  try { Opt.def = await (await apiGet("/api/races/" + encodeURIComponent(id))).json(); }
+  catch (e) { Opt.def = null; }
+  if (rerender) renderGameplan();
+}
+
+async function runOptimize() {
+  const out = document.getElementById("optOut");
+  const ens = parseInt(document.getElementById("optEns").value || "0", 10) || 0;
+  const startVal = document.getElementById("optStart").value;
+  const body = { race_id: Opt.raceId, course_id: Opt.courseId, models: Opt.chosen, ensemble_members: ens };
+  if (startVal) body.start_epoch = Date.parse(startVal + "Z") / 1000;
+  Opt.running = true;
+  document.getElementById("optRun").disabled = true;
+  document.getElementById("optRun").textContent = "Optimizing… (downloading GRIB + routing)";
+  out.innerHTML = '<div class="card"><div class="loading">Building the multi-model wind field and routing the course…</div></div>';
+  try {
+    const res = await apiPost("/api/optimize", body);
+    const r = await res.json();
+    Opt.result = r; Opt.running = false;
+    renderGameplan();
+  } catch (e) {
+    Opt.running = false;
+    out.innerHTML = '<div class="card"><div class="placeholder">Optimize failed — ' + esc(String(e)) + '</div></div>';
+    const b = document.getElementById("optRun"); if (b) { b.disabled = false; b.textContent = "Run optimizer →"; }
+  }
+}
+
+function renderOptResult(r) {
+  const out = document.getElementById("optOut"); if (!out) return;
+  if (!r.available) {
+    out.innerHTML = `<div class="card"><div class="placeholder">No route: ${esc(r.note || "unavailable")}</div>
+      ${r.log ? `<div class="muted" style="font-size:12px">${r.log.map(esc).join("<br>")}</div>` : ""}</div>`;
+    return;
+  }
+  const conf = r.route_confidence;
+  const confCls = conf == null ? "" : conf >= 0.6 ? "ok" : conf >= 0.4 ? "warn" : "bad";
+  out.innerHTML = `<div class="opt-result">
+    <div class="card">
+      <h3>Optimal route</h3>
+      <div class="opt-stats">
+        <div><b>${r.total_hours}</b><span>hours</span></div>
+        <div><b>${r.total_sailed_nm}</b><span>nm sailed</span></div>
+        <div><b>${r.total_direct_nm}</b><span>nm direct</span></div>
+        <div><b>${r.total_tacks}</b><span>tacks/gybes</span></div>
+        <div><b class="conf ${confCls}">${conf == null ? "—" : conf}</b><span>confidence (min ${r.min_confidence == null ? "—" : r.min_confidence})</span></div>
+      </div>
+      <canvas id="optMap" class="coursemap" width="660" height="380"></canvas>
+      ${r.timed_out ? '<div class="pill warn">routing hit the time budget — route is best-effort</div>' : ""}
+      ${(r.skipped_marks || []).length ? `<div class="muted" style="font-size:12px">Marks skipped (no coords — review in Course &amp; Marks): ${r.skipped_marks.map(esc).join(", ")}</div>` : ""}
+    </div>
+    <div class="card"><h3>Legs</h3>
+      <table class="legs"><thead><tr><th>To</th><th>Min</th><th>Point of sail</th><th>Tacks</th><th>TWS</th><th>TWD</th><th>Conf</th></tr></thead>
+      <tbody>${r.legs.map(optLegRow).join("")}</tbody></table></div>
+    <div class="card"><h3>Briefing</h3><pre class="briefing">${esc(r.briefing || "")}</pre></div>
+    <div class="card"><h3>Wind field</h3>
+      <div class="muted" style="font-size:12px">${(r.windfield.models || []).map((m) =>
+        `${esc(m.model.toUpperCase())} ${esc(m.cycle)} — ${m.frames} frames`).join(" · ")} · ${r.windfield.total_frames} frames total</div>
+    </div></div>`;
+  drawRoute("optMap", r);
+}
+function optLegRow(l) {
+  const w = l.wind || {};
+  const c = w.confidence, cc = c == null ? "" : c >= 0.6 ? "ok" : c >= 0.4 ? "warn" : "bad";
+  return `<tr><td>${esc(l.to)}</td><td>${l.leg_minutes}</td><td>${esc(l.point_of_sail || "—")}</td>
+    <td>${l.tacks}</td><td>${w.tws ?? "—"}</td><td>${w.twd ?? "—"}°</td>
+    <td><span class="conf ${cc}">${c ?? "—"}</span></td></tr>`;
+}
+
+function drawRoute(id, r) {
+  const cv = document.getElementById(id); if (!cv) return;
+  const ctx = cv.getContext("2d"); const W = cv.width, H = cv.height;
+  ctx.clearRect(0, 0, W, H);
+  const path = r.path || [];
+  if (path.length < 2) { ctx.fillStyle = "#8aa0b4"; ctx.fillText("No path.", 16, 24); return; }
+  const lats = path.map((p) => p.lat), lons = path.map((p) => p.lon);
+  const meanlat = (Math.min(...lats) + Math.max(...lats)) / 2;
+  const kx = Math.cos(meanlat * Math.PI / 180);
+  const xs = path.map((p) => p.lon * kx), ys = path.map((p) => p.lat);
+  const minx = Math.min(...xs), maxx = Math.max(...xs), miny = Math.min(...ys), maxy = Math.max(...ys);
+  const pad = 46, spanx = (maxx - minx) || 0.01, spany = (maxy - miny) || 0.01;
+  const sc = Math.min((W - 2 * pad) / spanx, (H - 2 * pad) / spany);
+  const X = (p) => pad + (p.lon * kx - minx) * sc;
+  const Y = (p) => H - (pad + (p.lat - miny) * sc);
+  // optimized track
+  ctx.strokeStyle = "#36b3ff"; ctx.lineWidth = 2.5; ctx.beginPath();
+  path.forEach((p, i) => i ? ctx.lineTo(X(p), Y(p)) : ctx.moveTo(X(p), Y(p)));
+  ctx.stroke();
+  // start + finish
+  const s = path[0], f = path[path.length - 1];
+  ctx.fillStyle = "#7ee0a8"; ctx.beginPath(); ctx.arc(X(s), Y(s), 6, 0, 7); ctx.fill();
+  ctx.fillStyle = "#f5c451"; ctx.beginPath(); ctx.arc(X(f), Y(f), 6, 0, 7); ctx.fill();
+  ctx.fillStyle = "#e8eef4"; ctx.font = "12px system-ui";
+  ctx.fillText("Start", X(s) + 9, Y(s) + 4); ctx.fillText("Finish", X(f) + 9, Y(f) + 4);
 }

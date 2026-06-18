@@ -144,13 +144,14 @@ via `OnboardSource`. It comes up with the rest of the Pi stack; quick check:
 | **5** ✅ | iPad nav companion: day/night, sail dial, course plot, navigator, tactics, routing | bench-verified end-to-end |
 | **6** ✅ | Alerting + summarizer + polar tooling | bench-complete; 2-practice-sail false-positive gate awaits real sailing |
 | 7 🔶 | Prod stack + deploy + rules review + soak | rules review done; server auth + TLS scaffolding done; prod deploy/soak gated on domain + prod `.env` |
-| **9** 🔶 | Onboard + C4 Performance Lab (three-tier pivot) | **9.0 data-access abstraction ✅ · 9.1 onboard engine service ✅ · 9.2 race gate + iPad onboard console ✅ · C4 Performance Lab Lab-0 race ingestion ✅**; next Course&Marks + wiring → Lab-1; 9.4 Orin LLM (HW not in hand — on hold) — see `docs/ONBOARD_ENGINE_SCOPING.md` |
+| **9** 🔶 | Onboard + C4 Performance Lab (three-tier pivot) | **9.0 data-access abstraction ✅ · 9.1 onboard engine service ✅ · 9.2 race gate + iPad onboard console ✅ · Lab-0 race ingestion + course loader ✅ · Lab-1 multi-model GRIB optimizer ✅**; next Lab-2 branching playbook; 9.4 Orin LLM (HW not in hand — on hold) — see `docs/ONBOARD_ENGINE_SCOPING.md` |
 
 **Current status:** Phases 0–6 built and bench-verified; Phase 7 started; **Phase 9 in progress
 (9.0 data-access abstraction ✅, 9.1 onboard engine service ✅ — see "Onboard engine service",
 9.2 server-side race gate ✅ + iPad onboard console ✅ — see "Race-mode gate" / "Onboard race
-console"; the C4 Performance Lab (`vps/lab`) is live with **Lab-0 race ingestion ✅** — see "C4
-Performance Lab"; next is Course&Marks review + wiring → Lab-1; 9.4 Orin LLM is on hold, no HW yet).**
+console"; the C4 Performance Lab (`vps/lab`) is live with **Lab-0 race ingestion + course loader ✅**
+and **Lab-1 the multi-model GRIB optimizer ✅** — see "C4 Performance Lab"; next is Lab-2 (the
+branching playbook bundle); 9.4 Orin LLM is on hold, no HW yet).**
 Detail: Phase 1
 (Signal K + uplink) end-to-end;
 Phase 2 (full-res onboard archive + backfill); Phase 3 uplink store-and-forward (disk-backed
@@ -547,4 +548,40 @@ marks skipped + reported) and **`POST /course/load`** (on BOTH the cloud agent a
 writes it via `datasource.save_course(route, marks)` + activates the route, so the navigator/plot use
 the real course. Bench-verified on Mackinac cloud + onboard (gate+finish midpoints, Duck/Bois-Blanc
 skipped). The per-race `rules_profile`→gate wiring is deferred until a consumer exists (tracker access
-/ optimizer scoring). **Next:** Lab-1 — the multi-model GRIB optimizer core. See `vps/lab/README.md`.
+/ optimizer scoring).
+
+## C4 Performance Lab — Lab-1 multi-model GRIB optimizer core
+
+The optimizer that turns a reviewed RaceDefinition course into ONE optimal route + a pre-race
+briefing, routing through a **real multi-model wind field** (cloud / between-races homework, frozen at
+the gun — RRS 41). Lives in `vps/lab/app/`:
+- **`wind/` package — the multi-model wind field.** `grib.py` downloads a 10 m UGRD/VGRD GRIB2 **bbox
+  subset** per (model, cycle, forecast-hour, member) and parses it with cfgrib/eccodes (the eccodes
+  pip wheel bundles the binary → no apt; `python -m eccodes selfcheck` runs at build) into a samplable
+  `GribFrame` (bilinear on regular GFS/GEFS/ECMWF grids, nearest on curvilinear NAM/HRRR Lambert).
+  `models.py` defines key-free sources — **GFS / NAM / HRRR** (NOMADS GRIB-filter), **GEFS** (NOMADS
+  ensemble, opt-in), **ECMWF** IFS open-data (the `ecmwf-opendata` client) — each knowing its cadence,
+  forecast-hour grid, availability lag and a lag-aware **freshest-cycle** picker. `windfield.py`'s
+  `WindField.wind_at(lat,lon,epoch) → (tws_kn, twd_deg)` is a **drop-in for the agent's
+  `weather.wind_at`**: it samples every model/member series (spatial-bilinear/nearest + temporal
+  linear), blends by model priority, and reports the **SPREAD across models/members as a confidence**
+  (the fuzzy-adherence signal — models disagree → low confidence → sail conservatively). Ingestion is
+  best-effort: a field not yet posted (or no egress) is skipped and the route runs on what loaded.
+- **`optimizer.py` + `polars.py`.** `optimizer.py` is a self-contained isochrone router (no agent
+  package) that routes the course **leg by leg** through the `WindField` on the SR33 polars
+  (`polars.py` parses the one canonical `polars_sr33.sql`, the same source the onboard engine reads) →
+  one optimal route, per-leg ETA/tacks/point-of-sail/wind, total time/distance, a route-wide
+  **confidence** (mean model agreement sampled along the path) and skipped-mark report. `briefing()`
+  has Opus write the pre-race routing briefing — explicitly flagging the low-confidence legs — with a
+  deterministic template fallback so a briefing always returns.
+- **Wiring.** `POST /api/optimize {race_id, course_id?, start_epoch?, models?, ensemble_members?}`
+  derives the bbox + time window from the course, builds the wind field, routes, and returns the route
+  + briefing + wind-field provenance; `GET /api/models` lists the models + the default deterministic
+  set (`gfs,nam,hrrr`; ensembles opt-in). The **Gameplan → Optimizer** web tab (`vps/lab/web`) picks
+  race/course/start + models, runs it, and renders the stats, the isochrone route on a canvas, the leg
+  table, the briefing, and the model/cycle provenance — all confidence-coloured. Dev compose adds a
+  `lab_gribcache` volume so re-runs / many members are cheap. **Bench-verified end-to-end** on the
+  Mackinac `cove_island` course (live GFS 18Z + NAM 00Z + HRRR 01Z, ~73 frames; 133 nm/17.8 h/1 tack;
+  route confidence 0.69; Opus briefing led with the confidence caveat; ~52 s first run, then cached;
+  Playwright-verified the tab). **Next:** Lab-2 — fan the optimizer across ensemble members/scenarios →
+  cluster → the **branching playbook bundle**. See `vps/lab/README.md`.

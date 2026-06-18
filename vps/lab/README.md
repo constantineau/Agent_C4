@@ -1,4 +1,4 @@
-# C4 Performance Lab (cloud) — Lab-0: race ingestion
+# C4 Performance Lab (cloud) — Lab-0 race ingestion + Lab-1 GRIB optimizer
 
 The C4 Performance Lab is the between-races, frontier-model side of the project (strategy studio +
 learning loop). **Lab-0** is its foundation: turn a race's published documents into a structured,
@@ -92,8 +92,21 @@ python3 -m shared.race_def vps/lab/races/bayview_mackinac_2026.json
   (on the cloud agent **and** the onboard engine) writes it to the marks store + activates it, so the
   navigator/plot use the real course. Verified on Mackinac (cloud + onboard). The per-race
   `rules_profile`→gate wiring is deferred until a consumer exists (tracker access / optimizer scoring).
-- **Next:** **Lab-1** — the multi-model GRIB optimizer core (a `WindField` + isochrone on the refined
-  polars → one optimal route + briefing on a real RaceDefinition).
+- **Lab-1 multi-model GRIB optimizer: built (dev :8103).** `app/wind/` builds a real `WindField` from
+  public weather models — `grib.py` downloads 10 m UGRD/VGRD GRIB2 bbox subsets and parses them with
+  cfgrib/eccodes (the eccodes pip wheel bundles the binary, `python -m eccodes selfcheck` runs at
+  build); `models.py` defines key-free sources (**GFS / NAM / HRRR** via NOMADS GRIB-filter, **GEFS**
+  ensemble + **ECMWF** open-data opt-in), each with its cadence / forecast-hour grid / lag-aware
+  freshest-cycle picker; `windfield.py`'s `wind_at(lat,lon,epoch)` blends the models and reports the
+  **model/ensemble SPREAD as a confidence** (fuzzy adherence — models disagree → sail conservatively).
+  `optimizer.py` routes the course leg-by-leg (isochrone on `polars.py`, the canonical ORC polars) →
+  one optimal route + per-leg ETA/tacks/wind + a route confidence + an Opus briefing that flags the
+  low-confidence legs. `POST /api/optimize` + `GET /api/models` drive the **Gameplan → Optimizer** tab
+  (route canvas + leg table + briefing + model provenance, confidence-coloured); the `lab_gribcache`
+  volume caches GRIB so re-runs / ensemble members are cheap. Verified end-to-end on the Mackinac cove
+  course (live GFS 18Z + NAM 00Z + HRRR 01Z, ~73 frames; 133 nm / 17.8 h / 1 tack; confidence 0.69).
+- **Next:** **Lab-2** — fan the optimizer across ensemble members / scenarios → cluster → the
+  **branching playbook bundle** (variants + decision tree + rationale, frozen at the gun).
 
 ## Race documents (found 2026-06-17)
 

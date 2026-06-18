@@ -85,8 +85,10 @@ services:
       - "8103:8000"
     volumes:
       - lab_ingested:/srv/ingested
+      - lab_gribcache:/srv/gribcache        # Lab-1: cached GRIB subsets (cheap re-runs/members)
     restart: unless-stopped
 
 volumes:
   sr33_dev_pgdata:
   lab_ingested:
+  lab_gribcache:
