@@ -3,6 +3,10 @@
 The Pi is a **deploy target, not a dev host.** Claude Code edits this directory on the VPS;
 `deploy/push_pi.sh` rsyncs it to the Pi over Tailscale + SSH and restarts services there.
 
+**▶ Bringing up a fresh Pi from a blank SD card?** Follow **[`SETUP.md`](SETUP.md)** — OS choice,
+headless flash, Docker/Tailscale, PICAN-M `can0` bring-up (`systemd/sr33-can0.service`), and
+deploying the stack.
+
 Stack (brief §4):
 
 | Layer        | Component                         | Role |

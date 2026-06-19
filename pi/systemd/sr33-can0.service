@@ -1,0 +1,29 @@
+# Bring the PICAN-M CAN interface (can0) up at the NMEA 2000 bitrate on boot, before Docker
+# starts the Signal K container (which reads the host can0 via host networking).
+#
+# Prereq (one-time, in /boot/firmware/config.txt — see pi/SETUP.md):
+#   dtparam=spi=on
+#   dtoverlay=mcp2515-can0,oscillator=16000000,interrupt=25   # PICAN-M, 16 MHz crystal, INT on GPIO25
+# That overlay creates the can0 device at boot; this unit configures + raises it.
+#
+# Install on the Pi:
+#   sudo cp pi/systemd/sr33-can0.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now sr33-can0
+[Unit]
+Description=SR33 PICAN-M CAN bus (can0) — up at 250 kbit/s (NMEA 2000)
+# Wait for the mcp2515 overlay to create the interface, and come up before Docker.
+After=sys-subsystem-net-devices-can0.device
+BindsTo=sys-subsystem-net-devices-can0.device
+Before=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# NMEA 2000 is 250 kbit/s; a deeper tx queue helps under bus load.
+ExecStart=/usr/sbin/ip link set can0 type can bitrate 250000
+ExecStart=/usr/sbin/ip link set can0 txqueuelen 1000
+ExecStart=/usr/sbin/ip link set can0 up
+ExecStop=/usr/sbin/ip link set can0 down
+
+[Install]
+WantedBy=multi-user.target
