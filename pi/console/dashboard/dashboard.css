@@ -107,6 +107,15 @@ body {
 /* commentary-note → tile "pointing" ring (LLM points without anything moving) */
 .tile.ring { box-shadow:0 0 0 3px var(--accent), var(--shadow); }
 
+/* compact multi-value row tables (Wind Trend lookbacks, Forecast horizons) */
+.t-rows { display:flex; flex-direction:column; gap:2px; margin-top:6px; }
+.t-row { display:flex; gap:6px; align-items:baseline; font-size:12.5px; line-height:1.35; }
+.t-row .rl { color:var(--muted); flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.t-row .rc { font-weight:700; text-align:right; white-space:nowrap; min-width:48px; }
+.t-row.rsub { margin-top:5px; border-top:1px solid var(--line); padding-top:4px; }
+.t-row.rsub .rl { font-size:9.5px; letter-spacing:.8px; text-transform:uppercase; opacity:.85; flex:none; }
+.detchart .t-rows, .det-gauge .t-rows { margin-top:10px; font-size:14px; }
+
 /* wind-direction sparkline (the angle change over time, in place of jargon like "veer") */
 .spark { display:block; margin:5px 0 3px; }
 .spark-line { fill:none; stroke:var(--c, var(--accent)); stroke-width:2; vector-effect:non-scaling-stroke; }
