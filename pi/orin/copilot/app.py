@@ -10,6 +10,7 @@ There is intentionally no endpoint that takes an action — the copilot is read-
 """
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from . import config, copilot, dashboard_brief, playbook as playbook_mod, tools
@@ -29,6 +30,12 @@ class BriefRequest(BaseModel):
 
 
 class DashboardRequest(BaseModel):
+    tiles: list[dict] = []
+
+
+class DetailRequest(BaseModel):
+    domain: str
+    question: str = ""
     tiles: list[dict] = []
 
 
@@ -70,6 +77,14 @@ def dashboard(req: DashboardRequest):
     its current tiles; the LLM interprets them. Returns mode 'deterministic' on any LLM failure
     so the dashboard keeps its own engine-read commentary."""
     return dashboard_brief.make(req.tiles)
+
+
+@app.post("/detail")
+def detail(req: DetailRequest):
+    """Streamed scoped explanation of one tile (the tap-to-detail deep-dive). Streams plain-text
+    deltas token-by-token; empty stream if the LLM is unavailable (dashboard keeps its WHY)."""
+    return StreamingResponse(dashboard_brief.detail_stream(req.domain, req.question, req.tiles),
+                             media_type="text/plain")
 
 
 @app.get("/snapshot")

@@ -57,6 +57,38 @@ class LLMClient:
         except (KeyError, IndexError) as e:
             raise LLMUnavailable(f"unexpected LLM response shape: {str(data)[:300]}") from e
 
+    def chat_stream(self, messages, temperature=None):
+        """Stream a chat completion, yielding content deltas as they arrive (SSE). Used for the
+        dashboard tile deep-dive so words appear token-by-token instead of after a long blank."""
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": config.LLM_TEMPERATURE if temperature is None else temperature,
+            "stream": True,
+        }
+        body = json.dumps(payload).encode()
+        req = urllib.request.Request(self.base_url + "/chat/completions", data=body, headers={
+            "Content-Type": "application/json", "Authorization": "Bearer local",
+        })
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                for raw in r:
+                    line = raw.decode("utf-8", "ignore").strip()
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        obj = json.loads(data)
+                        delta = obj["choices"][0]["delta"].get("content")
+                    except (json.JSONDecodeError, KeyError, IndexError):
+                        continue
+                    if delta:
+                        yield delta
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            raise LLMUnavailable(str(e)) from e
+
     def reachable(self) -> bool:
         try:
             self._post_models()

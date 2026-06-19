@@ -39,7 +39,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         n = int(self.headers.get("Content-Length", 0))
         raw = self.rfile.read(n) if n else b"{}"
-        if self.path.rstrip("/") == "/dashboard":
+        path = self.path.rstrip("/")
+        if path == "/dashboard":
             try:
                 tiles = json.loads(raw).get("tiles", [])
             except Exception:
@@ -48,6 +49,26 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(dashboard_brief.make(tiles))
             except Exception as e:                       # never 500 the dashboard — degrade
                 self._send({"mode": "deterministic", "reason": "server error: " + str(e)[:120]})
+        elif path == "/detail":
+            # streamed tile deep-dive — text/plain, flushed token-by-token (X-Accel-Buffering:no
+            # tells nginx not to buffer so the words arrive live).
+            try:
+                payload = json.loads(raw)
+            except Exception:
+                payload = {}
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("X-Accel-Buffering", "no")
+            self.end_headers()
+            try:
+                for chunk in dashboard_brief.detail_stream(
+                        payload.get("domain"), payload.get("question"), payload.get("tiles", [])):
+                    self.wfile.write(chunk.encode("utf-8"))
+                    self.wfile.flush()
+            except Exception:
+                pass     # client keeps the deterministic WHY it already showed
         else:
             self._send({"error": "not found"}, 404)
 
