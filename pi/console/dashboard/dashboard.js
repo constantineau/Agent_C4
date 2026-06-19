@@ -26,7 +26,7 @@
   };
 
   const D2R = Math.PI / 180, R2D = 180 / Math.PI;
-  const WIND_WIN_S = 65 * 60;     // keep ~65 min of wind history (for the −60 min lookback)
+  const WIND_WIN_S = 12 * 3600;   // keep the whole race (~12 h) — feeds both the lookback rows and the race chart
   const FCST_WIN_S = 70 * 60;     // keep ~70 min of forecast snapshots (for the verification)
 
   /* ---- tiny helpers needed early (used in the demo scenarios) ---- */
@@ -114,6 +114,21 @@
     App.windHist.push({ t: now, tws: c.tws, twd: c.twd });
     const cut = now - WIND_WIN_S;
     while (App.windHist.length && App.windHist[0].t < cut) App.windHist.shift();
+    if (now - App.lastPersist > 30) { App.lastPersist = now; persistRace(); }   // survive a reload
+  }
+  /* persist a downsampled copy of the race wind history so a reload doesn't lose it */
+  function persistRace() {
+    try {
+      const ds = dsample(App.windHist, 1800);
+      localStorage.setItem("sr33.dash.windhist", JSON.stringify(ds.map((p) => [Math.round(p.t), Math.round(p.tws * 10) / 10, Math.round(p.twd)])));
+    } catch (e) { /* quota / disabled — best effort */ }
+  }
+  function loadRace() {
+    try {
+      const raw = localStorage.getItem("sr33.dash.windhist"); if (!raw) return;
+      const now = Date.now() / 1000;
+      App.windHist = JSON.parse(raw).map((a) => ({ t: a[0], tws: a[1], twd: a[2] })).filter((p) => p.t > now - WIND_WIN_S);
+    } catch (e) { /* ignore */ }
   }
   function pushForecast(fc) {
     if (!fc || !fc.available || !fc.hours || !fc.hours.length) return;
@@ -173,6 +188,54 @@
       '<line class="spark-mid" x1="0" y1="' + (h / 2) + '" x2="' + w + '" y2="' + (h / 2) + '"/>' +
       '<polyline class="spark-line" points="' + pts + '"/></svg>';
   }
+  /* ---- race-length TWS chart (dynamic; re-rendered each poll while the detail is open) ---- */
+  function fmtDur(s) { s = Math.round(s); if (s < 90) return s + "s"; const m = Math.round(s / 60); if (m < 90) return m + "m"; return Math.floor(m / 60) + "h " + (m % 60) + "m"; }
+  function dsample(hist, max) {
+    if (!hist || hist.length <= max) return hist || [];
+    const stride = Math.ceil(hist.length / max), out = [];
+    for (let i = 0; i < hist.length; i += stride) out.push(hist[i]);
+    if (out[out.length - 1] !== hist[hist.length - 1]) out.push(hist[hist.length - 1]);
+    return out;
+  }
+  function raceChart(hist, w, h) {
+    if (!hist || hist.length < 2) return '<span class="dc-empty">collecting race data…</span>';
+    const padL = 30, padR = 6, padT = 6, padB = 16;
+    const t0 = hist[0].t, t1 = hist[hist.length - 1].t, span = (t1 - t0) || 1;
+    const tws = hist.map((p) => p.tws);
+    let lo = Math.min.apply(null, tws), hi = Math.max.apply(null, tws);
+    if (hi - lo < 3) { const m = (hi + lo) / 2; lo = m - 1.5; hi = m + 1.5; }
+    lo = Math.max(0, Math.floor(lo - 1)); hi = Math.ceil(hi + 1);
+    const X = (t) => padL + ((t - t0) / span) * (w - padL - padR);
+    const Y = (v) => padT + (1 - (v - lo) / ((hi - lo) || 1)) * (h - padT - padB);
+    const step = Math.max(2, Math.round((hi - lo) / 4));
+    let grid = "", ylab = "";
+    for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) {
+      const y = Y(v).toFixed(1);
+      grid += '<line class="ax-grid" x1="' + padL + '" y1="' + y + '" x2="' + (w - padR) + '" y2="' + y + '"/>';
+      ylab += '<text class="ax-lab" x="' + (padL - 3) + '" y="' + (Y(v) + 3).toFixed(1) + '" text-anchor="end">' + v + '</text>';
+    }
+    let xlab = "";
+    [[t0, "−" + fmtDur(span)], [t0 + span / 2, "−" + fmtDur(span / 2)], [t1, "now"]].forEach(([t, lab]) => {
+      xlab += '<text class="ax-lab" x="' + X(t).toFixed(1) + '" y="' + (h - 3) + '" text-anchor="middle">' + lab + '</text>';
+    });
+    const pts = hist.map((p) => X(p.t).toFixed(1) + "," + Y(p.tws).toFixed(1)).join(" ");
+    return '<svg class="rchart" viewBox="0 0 ' + w + ' ' + h + '" width="100%" preserveAspectRatio="xMidYMid meet">' +
+      grid + '<polyline class="rc-line" points="' + pts + '"/>' +
+      '<circle class="rc-dot" cx="' + X(t1).toFixed(1) + '" cy="' + Y(hist[hist.length - 1].tws).toFixed(1) + '" r="3"/>' + ylab + xlab + '</svg>';
+  }
+  /* deterministic demo race series so the chart shows in DEMO mode */
+  function genDemoRace(esc) {
+    const n = 90, now = Date.now() / 1000, span = 2 * 3600, arr = [];
+    for (let i = 0; i < n; i++) {
+      const f = i / (n - 1), t = now - span * (1 - f);
+      const base = esc ? 10 + 6 * f : 12 + Math.sin(f * 6) * 1.5;
+      const tws = Math.max(2, base + Math.sin(i * 0.7) * 1.2 + (esc ? Math.sin(i * 0.3) : 0));
+      const twd = (esc ? 248 + 14 * f : 245 + Math.sin(f * 5) * 5) + Math.sin(i * 0.9) * 3;
+      arr.push({ t: t, tws: tws, twd: twd });
+    }
+    return arr;
+  }
+
   function rowsHtml(rows) {
     if (!rows) return "";
     return '<div class="t-rows">' + rows.map((r) => {
@@ -344,7 +407,7 @@
     theme: localStorage.getItem("sr33.dash.theme") || "auto",
     pos: { lat: 45.33, lon: -82.0 },
     openTile: null, streamTimer: null, pollTimer: null, polling: false,
-    dwell: {}, data: null, windHist: [], fcstHist: [],
+    dwell: {}, data: null, windHist: [], fcstHist: [], lastPersist: 0,
   };
   function currentData() {
     if (App.src === "demo") {
@@ -443,8 +506,19 @@
     const g = document.getElementById("detGauge");
     const stColor = "var(--" + (t.status === "na" ? "na" : t.status) + ")";
     if (key === "wind" && t.status !== "na") {
-      const big = App.src === "live" ? makeTwdSpark(App.windHist, 520, 110) : "";
-      g.innerHTML = (big ? '<div class="detchart" style="--c:' + stColor + '"><div class="dc-lab dc-top">↑ shifted right</div>' + big + '<div class="dc-lab dc-bot">↓ shifted left</div></div>' : "") + rowsHtml(t.rows);
+      const hist = dsample(App.src === "live" ? App.windHist : genDemoRace(App.demoScn === "escalated"), 600);
+      const tws = hist.map((p) => p.tws);
+      const dur = hist.length ? hist[hist.length - 1].t - hist[0].t : 0;
+      const stats = tws.length
+        ? '<div class="rc-stats">now <b>' + r0(tws[tws.length - 1]) + ' kts</b> · min <b>' + r0(Math.min.apply(null, tws)) + '</b> · max <b>' + r0(Math.max.apply(null, tws)) + '</b> · avg <b>' + r0(tws.reduce((a, b) => a + b, 0) / tws.length) + '</b></div>'
+        : "";
+      g.innerHTML =
+        '<div class="rc-title">TWS over the race · ' + fmtDur(dur) + '</div>' + stats +
+        '<div style="--c:' + stColor + '">' + raceChart(hist, 512, 150) + '</div>' +
+        '<div class="rc-title" style="margin-top:8px">Direction change over the race</div>' +
+        '<div class="detchart" style="--c:' + stColor + '"><div class="dc-lab dc-top">↑ shifted right</div>' +
+        (makeTwdSpark(hist, 512, 60) || '<span class="dc-empty">…</span>') +
+        '<div class="dc-lab dc-bot">↓ shifted left</div></div>' + rowsHtml(t.rows);
     } else if (t.rows) {
       g.innerHTML = (t.value ? '<div class="dc-foot">' + t.value + (t.sub ? " · " + t.sub : "") + '</div>' : "") + rowsHtml(t.rows);
     } else if (t.components) {
@@ -517,6 +591,7 @@
   /* ============================ boot ============================ */
   function init() {
     applyTheme();
+    loadRace();        // restore the race wind history across a reload
     document.getElementById("srcLbl").textContent = "LIVE";
     render();
     startPolling();
