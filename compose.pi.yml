@@ -153,6 +153,10 @@ services:
       context: .
       dockerfile: pi/console/Dockerfile
     network_mode: host
+    environment:
+      # Orin copilot upstream for the dashboard commentary (Tier 2). Bench default = the Orin's
+      # Tailscale IP; on the boat set this to the Orin's boat-Wi-Fi address.
+      COPILOT_UPSTREAM: ${COPILOT_UPSTREAM:-http://100.70.110.72:8300/}
     depends_on:
       - engine
     restart: unless-stopped

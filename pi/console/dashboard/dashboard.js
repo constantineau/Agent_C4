@@ -29,6 +29,9 @@
   const WIND_WIN_S = 12 * 3600;   // keep the whole race (~12 h) — feeds both the lookback rows and the race chart
   const FCST_WIN_S = 140 * 60;    // keep ~140 min of forecast snapshots (for the −120 min verification)
   const SERIES_MIN = 720;         // ask the engine for ~12 h of archived wind for the chart
+  const COPILOT = "/copilot";     // proxied to the Orin copilot (:8300); writes the commentary
+  const BRIEF_EVERY = 90000;      // ask the LLM for a fresh brief ~every 90 s (it's slow, ~45 s)
+  const BRIEF_TTL = 300;          // an LLM brief stays "fresh" 5 min before reverting to engine-read
 
   /* ---- tiny helpers needed early (used in the demo scenarios) ---- */
   const r0 = (x) => (x == null ? "?" : Math.round(x));
@@ -409,7 +412,44 @@
       flagged.length === 0 ? "All systems nominal (engine read)." :
       flagged.length === 1 ? "1 item needs attention (engine read)." :
       flagged.length + " items need attention (engine read).";
-    return { tiles, focus, notes, confidence: "engine", mode: "engine read" };
+    return applyBrief({ tiles, focus, notes, confidence: "engine", mode: "engine read" });
+  }
+  /* overlay the LLM brief (commentary + grounded status nudges) when it's fresh; otherwise the
+     deterministic engine-read commentary stands. The engine values are never touched. */
+  function applyBrief(d) {
+    const b = App.brief;
+    if (!b || b.mode !== "llm" || Date.now() / 1000 - b.t > BRIEF_TTL) return d;
+    for (const a of b.adjust || []) {
+      const t = d.tiles[a.tile];
+      if (t && t.status !== "na") { t.status = a.status; t.llmNote = a.reason; }
+    }
+    const notes = (b.notes || []).map((n) => ({ tile: n.tile, status: (d.tiles[n.tile] || {}).status || "ok", text: n.text, conf: n.conf || "med" }));
+    return { tiles: d.tiles, focus: b.focus || d.focus, notes: notes.length ? notes : d.notes, confidence: "llm", mode: "llm-live" };
+  }
+  /* a compact text value for each tile to send to the copilot (rows flattened, arrows stripped) */
+  function tileText(t) {
+    if (t.value != null && t.value !== "") return stripTags(t.value);
+    if (t.rows) return t.rows.filter((r) => !r.sep && !r.hdr).map((r) => r.label + " " + (r.cols || []).map(stripTags).join(" / ")).join("; ");
+    return "";
+  }
+  /* ask the Orin copilot to write the commentary for the current tiles (POST the snapshot) */
+  async function fetchBrief() {
+    if (App.src !== "live" || !App.data || !App.data.tiles || App.briefing) return;
+    App.briefing = true;
+    const snap = TILES.map((k) => { const t = App.data.tiles[k] || {}; return { key: k, name: NAME[k], value: tileText(t), sub: t.sub || "", status: t.status || "na" }; });
+    let r = null;
+    try {
+      const ctl = new AbortController();
+      const to = setTimeout(() => ctl.abort(), 130000);
+      const resp = await fetch(COPILOT + "/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tiles: snap }), signal: ctl.signal });
+      clearTimeout(to);
+      r = resp.ok ? await resp.json() : null;
+    } catch (e) { r = null; } finally { App.briefing = false; }
+    if (r && r.mode === "llm") {
+      App.brief = { focus: r.focus, notes: r.notes || [], adjust: r.adjust || [], mode: "llm", t: Date.now() / 1000 };
+      if (App.src === "live") render();
+    }
+    // deterministic / unreachable → leave the last brief to expire; the dashboard stays engine-read
   }
   function commitStatus(key, raw) {
     const d = App.dwell[key] || (App.dwell[key] = { committed: raw, cand: raw, n: 0 });
@@ -425,8 +465,8 @@
     src: "live", demoScn: "calm",
     theme: localStorage.getItem("sr33.dash.theme") || "auto",
     pos: { lat: 45.33, lon: -82.0 },
-    openTile: null, streamTimer: null, pollTimer: null, seriesTimer: null, polling: false,
-    dwell: {}, data: null, windHist: [], fcstHist: [], seriesHist: [], lastPersist: 0,
+    openTile: null, streamTimer: null, pollTimer: null, seriesTimer: null, briefTimer: null, polling: false,
+    dwell: {}, data: null, windHist: [], fcstHist: [], seriesHist: [], lastPersist: 0, brief: null,
   };
   function currentData() {
     if (App.src === "demo") {
@@ -550,7 +590,7 @@
     } else {
       g.textContent = stripTags(t.value || "—") + "  ·  " + (t.sub || "");
     }
-    document.getElementById("detConsider").textContent = t.consider || "—";
+    document.getElementById("detConsider").textContent = (t.llmNote ? "Copilot: " + t.llmNote + "  ·  " : "") + (t.consider || "—");
     document.getElementById("detClears").textContent = t.clears || "—";
     document.getElementById("detBased").textContent = (t.based || []).join("   ·   ") || "—";
     const why = t.why || "—";
@@ -604,8 +644,10 @@
   }
   function briefMe() {
     const b = document.getElementById("briefBtn");
-    b.classList.add("busy"); b.textContent = "…";
-    setTimeout(() => { b.classList.remove("busy"); b.textContent = "Brief me ↻"; if (App.src === "live") poll(); else render(); }, 700);
+    b.classList.add("busy"); b.textContent = "thinking…";
+    if (App.src === "live") { poll(); fetchBrief(); }
+    // the LLM is slow (~45 s warm); clear the busy state on a timer — render() updates when it lands
+    setTimeout(() => { b.classList.remove("busy"); b.textContent = "Brief me ↻"; if (App.src !== "live") render(); }, 1500);
   }
 
   /* ============================ boot ============================ */
@@ -617,6 +659,8 @@
     startPolling();
     fetchSeries();     // pull the archived race series from the engine, then refresh periodically
     App.seriesTimer = setInterval(fetchSeries, 30000);
+    setTimeout(fetchBrief, 4000);   // first LLM commentary once tiles exist, then on a cadence
+    App.briefTimer = setInterval(fetchBrief, BRIEF_EVERY);
     document.getElementById("themeBtn").addEventListener("click", cycleTheme);
     document.getElementById("srcBtn").addEventListener("click", cycleSource);
     document.getElementById("briefBtn").addEventListener("click", briefMe);

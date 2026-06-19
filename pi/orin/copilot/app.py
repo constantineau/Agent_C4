@@ -12,7 +12,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from . import config, copilot, playbook as playbook_mod, tools
+from . import config, copilot, dashboard_brief, playbook as playbook_mod, tools
 from .engine_client import EngineClient
 from .llm import LLMClient
 
@@ -26,6 +26,10 @@ class BriefRequest(BaseModel):
     route: str | None = None
     hoisted: str | None = None
     use_llm: bool | None = None
+
+
+class DashboardRequest(BaseModel):
+    tiles: list[dict] = []
 
 
 @app.get("/health")
@@ -58,6 +62,14 @@ def list_tools():
 def brief(req: BriefRequest):
     return copilot.make_brief(question=req.question, route=req.route,
                               hoisted=req.hoisted, use_llm=req.use_llm)
+
+
+@app.post("/dashboard")
+def dashboard(req: DashboardRequest):
+    """LLM commentary + grounded status nudges for the crew dashboard grid. The dashboard sends
+    its current tiles; the LLM interprets them. Returns mode 'deterministic' on any LLM failure
+    so the dashboard keeps its own engine-read commentary."""
+    return dashboard_brief.make(req.tiles)
 
 
 @app.get("/snapshot")

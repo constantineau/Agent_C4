@@ -1,6 +1,10 @@
 # Onboard race console (Pi) — serves the SAME iPad app as the cloud web, but pointed ONLY at
 # the onboard engine over boat-local Wi-Fi. No cloud, no auth, no /ws chat. Listens on :8091
 # (host networking; avoids :80 conflicts on the shared bench VM and is fine on the boat).
+#
+# nginx template: ${COPILOT_UPSTREAM} is substituted at container start (stock nginx envsubst).
+# On the boat the copilot runs on the ORIN (a separate box) — set COPILOT_UPSTREAM to the Orin's
+# boat-Wi-Fi address; on the bench it's the Orin's Tailscale IP. The engine is on this host (:8200).
 server {
     listen 8091;
     server_name _;
@@ -24,5 +28,14 @@ server {
     location /api/ {
         proxy_pass http://127.0.0.1:8200/;
         proxy_set_header Host $host;
+    }
+
+    # Tier-2 onboard LLM copilot (writes the dashboard commentary). Separate box (Orin) on the
+    # boat-local network. The dashboard POSTs its tile snapshot; the brief is best-effort — if the
+    # copilot is down the dashboard falls back to the engine-read commentary.
+    location /copilot/ {
+        proxy_pass ${COPILOT_UPSTREAM};
+        proxy_set_header Host $host;
+        proxy_read_timeout 130s;   # the 7B is slow (~45 s warm, ~2 min cold)
     }
 }
