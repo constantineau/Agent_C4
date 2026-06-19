@@ -467,6 +467,7 @@
     pos: { lat: 45.33, lon: -82.0 },
     openTile: null, streamTimer: null, pollTimer: null, seriesTimer: null, briefTimer: null, polling: false,
     dwell: {}, data: null, windHist: [], fcstHist: [], seriesHist: [], lastPersist: 0, brief: null,
+    detailStreamKey: null, detailAbort: null,
   };
   function currentData() {
     if (App.src === "demo") {
@@ -594,11 +595,22 @@
     document.getElementById("detClears").textContent = t.clears || "—";
     document.getElementById("detBased").textContent = (t.based || []).join("   ·   ") || "—";
     const why = t.why || "—";
-    if (stream && App.src === "demo") streamWhy(why);
-    else { if (App.streamTimer) { clearInterval(App.streamTimer); App.streamTimer = null; } document.getElementById("detWhy").textContent = why; }
+    const whyEl = document.getElementById("detWhy");
+    if (App.src === "demo") {
+      if (stream) streamWhy(why); else { stopStream(); whyEl.textContent = why; }
+    } else if (stream) {
+      // tile just opened: show the deterministic read instantly, then let the LLM stream over it
+      stopStream(); whyEl.textContent = why;
+      if (t.status !== "na") streamDetail(key, "");
+    } else if (App.detailStreamKey !== key) {
+      // periodic re-render of a tile the LLM isn't streaming → keep the deterministic read fresh
+      whyEl.textContent = why;
+    }
+    // else: re-render while the LLM stream owns this tile → leave WHY as-is
   }
   function closeDetail() {
-    if (App.streamTimer) { clearInterval(App.streamTimer); App.streamTimer = null; }
+    stopStream();
+    App.detailStreamKey = null;
     document.getElementById("detail").hidden = true;
     document.getElementById("overlay").hidden = true;
     App.openTile = null;
@@ -613,6 +625,36 @@
       el.innerHTML = words.slice(0, i).join(" ") + (i < words.length ? ' <span class="caret"></span>' : "");
       if (i >= words.length) { clearInterval(App.streamTimer); App.streamTimer = null; }
     }, 45);
+  }
+  const escapeHtml = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  function stopStream() {
+    if (App.streamTimer) { clearInterval(App.streamTimer); App.streamTimer = null; }
+    if (App.detailAbort) { try { App.detailAbort.abort(); } catch (e) {} App.detailAbort = null; }
+  }
+  /* stream the copilot's scoped deep-dive for one tile into the WHY slot, token-by-token. The
+     deterministic WHY shows first and is only replaced once real tokens arrive (so a slow/absent
+     LLM leaves the engine read in place). */
+  function streamDetail(key, question) {
+    App.detailStreamKey = key;
+    if (App.detailAbort) { try { App.detailAbort.abort(); } catch (e) {} }
+    const ctl = new AbortController(); App.detailAbort = ctl;
+    const el = document.getElementById("detWhy");
+    const snap = TILES.map((k) => { const t = (App.data && App.data.tiles[k]) || {}; return { key: k, name: NAME[k], value: tileText(t), sub: t.sub || "", status: t.status || "na" }; });
+    fetch(COPILOT + "/detail", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ domain: key, question: question || "", tiles: snap }), signal: ctl.signal })
+      .then((resp) => {
+        if (!resp.ok || !resp.body) return;
+        const reader = resp.body.getReader(), dec = new TextDecoder();
+        let acc = "", started = false;
+        const pump = () => reader.read().then(({ done, value }) => {
+          if (App.openTile !== key) { try { reader.cancel(); } catch (e) {} return; }
+          if (done) { if (started) el.textContent = acc.trim(); return; }
+          acc += dec.decode(value, { stream: true });
+          if (acc.trim()) { started = true; el.innerHTML = escapeHtml(acc.trim()) + ' <span class="caret"></span>'; }
+          return pump();
+        });
+        return pump();
+      })
+      .catch(() => { /* keep the deterministic WHY already shown */ });
   }
 
   /* ============================ live polling ============================ */
@@ -666,10 +708,16 @@
     document.getElementById("briefBtn").addEventListener("click", briefMe);
     document.getElementById("detBack").addEventListener("click", closeDetail);
     document.getElementById("overlay").addEventListener("click", closeDetail);
-    document.getElementById("detSend").addEventListener("click", () => {
+    const ask = () => {
       const inp = document.getElementById("detAsk");
-      if (inp.value.trim()) { document.getElementById("detWhy").textContent = "(scoped LLM follow-up lands in phase 4) — you asked: " + inp.value.trim(); inp.value = ""; }
-    });
+      const q = inp.value.trim();
+      if (!q || !App.openTile) return;
+      inp.value = "";
+      if (App.src === "live") streamDetail(App.openTile, q);   // scoped, grounded, streamed answer
+      else document.getElementById("detWhy").textContent = "(scoped follow-up runs live against the onboard copilot) — you asked: " + q;
+    };
+    document.getElementById("detSend").addEventListener("click", ask);
+    document.getElementById("detAsk").addEventListener("keydown", (e) => { if (e.key === "Enter") ask(); });
     setInterval(() => { if (App.theme === "auto") applyTheme(); }, 25000);
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);

@@ -37,5 +37,6 @@ server {
         proxy_pass ${COPILOT_UPSTREAM};
         proxy_set_header Host $host;
         proxy_read_timeout 130s;   # the 7B is slow (~45 s warm, ~2 min cold)
+        proxy_buffering off;       # stream the tile deep-dive (/detail) token-by-token
     }
 }
