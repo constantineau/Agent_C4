@@ -55,6 +55,33 @@ def sources():
     return onboard_conditions.get_sources()
 
 
+@app.get("/series")
+def series(minutes: int = 720, max_points: int = 600):
+    """TWS + TWD time series from the onboard full-res archive, for the dashboard race chart.
+    Returns downsampled [{t, tws, twd}] (knots, degrees) over the last `minutes` — the whole-race
+    record the boat captured, independent of when/whether the iPad dashboard was open."""
+    import math
+    src = datasource.active()
+    tws_rows = src.series("environment.wind.speedTrue", minutes)       # [(epoch, m/s)]
+    twd_rows = src.series("environment.wind.directionTrue", minutes)   # [(epoch, rad)]
+    if not tws_rows:
+        return {"available": False, "points": [], "note": "no archived wind in the window"}
+    # downsample the TWS series to keep the payload small, then match the nearest TWD by time
+    stride = max(1, math.ceil(len(tws_rows) / max_points))
+    sampled = tws_rows[::stride]
+    if sampled and sampled[-1] is not tws_rows[-1]:
+        sampled.append(tws_rows[-1])
+    pts, j = [], 0
+    for (t, ms) in sampled:
+        twd = None
+        if twd_rows:
+            while j + 1 < len(twd_rows) and abs(twd_rows[j + 1][0] - t) <= abs(twd_rows[j][0] - t):
+                j += 1
+            twd = round(math.degrees(twd_rows[j][1]) % 360, 1)
+        pts.append({"t": round(t, 1), "tws": round(ms * 1.943844, 2), "twd": twd})
+    return {"available": True, "minutes": minutes, "count": len(pts), "points": pts}
+
+
 @app.get("/fatigue")
 def fatigue_ep():
     """Helm fatigue index (0–100) + components + rotation recommendation."""
