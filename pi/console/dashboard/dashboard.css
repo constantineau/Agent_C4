@@ -48,8 +48,8 @@ body {
 
 /* ---------- main layout: tile grid | commentary ---------- */
 .dash { flex:1; display:grid; grid-template-columns: 1fr 300px; gap:10px; padding:10px; min-height:0; }
-.grid { display:grid; grid-template-columns:repeat(3,1fr); grid-template-rows:repeat(4,1fr);
-  gap:8px; min-height:0; }
+.grid { display:grid; grid-template-columns:repeat(4,1fr); grid-template-rows:repeat(2,1fr);
+  gap:10px; min-height:0; }
 
 /* ---------- a status tile ---------- */
 .tile {
@@ -89,11 +89,11 @@ body {
 .t-icon { font-size:13px; line-height:1; }
 /* CHANNEL 2 — word label (color-independent) lives in .t-word inside the chip */
 
-.t-val { font-size:30px; font-weight:800; letter-spacing:.5px; line-height:1.05;
+.t-val { font-size:40px; font-weight:800; letter-spacing:.5px; line-height:1.05; margin-top:2px;
   /* CHANNEL 3b — luminance: act is brightest, na dimmest, even at equal hue */ }
-.tile.s-na .t-val { color:var(--muted); }
+.tile.s-na .t-val { color:var(--muted); font-size:15px; font-weight:700; }
 .tile.s-act .t-val { color:var(--text); }
-.t-sub { font-size:13px; color:var(--muted); font-weight:600; }
+.t-sub { font-size:14px; color:var(--muted); font-weight:600; margin-top:2px; }
 
 /* ACT pulses IN PLACE — accessible motion (a fixed tile breathing), never a relocating card */
 .tile.s-act { animation:tilePulse 1.8s ease-in-out infinite; }
