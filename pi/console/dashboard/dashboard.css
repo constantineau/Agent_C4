@@ -114,7 +114,17 @@ body {
 .t-row .rc { font-weight:700; text-align:right; white-space:nowrap; min-width:48px; }
 .t-row.rsub { margin-top:5px; border-top:1px solid var(--line); padding-top:4px; }
 .t-row.rsub .rl { font-size:9.5px; letter-spacing:.8px; text-transform:uppercase; opacity:.85; flex:none; }
-.detchart .t-rows, .det-gauge .t-rows { margin-top:10px; font-size:14px; }
+.t-row.emph { font-weight:800; }
+.t-row.emph .rl, .t-row.emph .rc { font-size:14px; }
+.t-row.hdr { margin-top:1px; }
+.t-row.hdr .rc { font-size:9px; letter-spacing:.5px; text-transform:uppercase; color:var(--muted); font-weight:700; }
+.detchart .t-rows, .det-gauge .t-rows { margin-top:10px; font-size:14.5px; }
+.det-gauge .t-row .rc { min-width:84px; }
+
+/* wind-angle vector arrow (points the way the wind blows to: N wind = down, E = left) */
+.warr { display:inline-block; vertical-align:-3px; margin-right:3px; }
+.warr path { stroke:var(--text); stroke-width:2.4; fill:none; stroke-linecap:round; stroke-linejoin:round; }
+.det-gauge .warr { width:22px; height:22px; }
 
 /* wind-direction sparkline (the angle change over time, in place of jargon like "veer") */
 .spark { display:block; margin:5px 0 3px; }
