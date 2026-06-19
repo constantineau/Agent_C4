@@ -623,7 +623,10 @@ on the real Orin** (over a Tailscale SSH forward of :11434, Pi engine on :8200):
 green; LLM tool-loop returns a grounded brief in ~45 s warm (the model calls `get_forecast` on demand);
 graceful fallback fires on the ~2 min cold model-load or ungrounded JSON. Exit test:
 `python3 -m copilot.bench_copilot [--llm]`. **Next copilot increment = crew-facing narration.** See
-`pi/orin/copilot/README.md`. Runtime bring-up files (the originally-MLC plan, port **9000**) — note
+`pi/orin/copilot/README.md`. The **iPad crew dashboard** that surfaces the copilot graphically (a
+fixed, all-items-visible status grid that the LLM scores green/yellow/red with color-blind-safe
+redundant encoding + a commentary panel + tap-to-detail LLM deep-dives) is designed/locked in
+`docs/COPILOT_DASHBOARD.md` (not built yet). Runtime bring-up files (the originally-MLC plan, port **9000**) — note
 they describe MLC, the unit runs Ollama: `pi/orin/`:
 - **`SETUP.md`** — the bring-up runbook: flash JetPack 6.2 (L4T R36.4.x) + the QSPI firmware →
   Super mode (`sudo nvpmodel -m 2` + `jetson_clocks`) → NVIDIA-default docker runtime →
