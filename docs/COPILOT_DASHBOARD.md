@@ -121,35 +121,37 @@ tagged "(SAIL)". No per-domain wiring.
 
 ---
 
-## 5. Status encoding — accessible by construction (color-blind + night)
+## 5. Status encoding — accessible by construction, always on
 
-~8% of men have red-green color vision deficiency and a race crew skews male, so **color is never
-the sole carrier of status.** Encode status in **≥3 independent channels** so any one can be lost
-(color blindness, night-mode red tint, glare):
+**Decision (user, 2026-06-19): visual accessibility is ALWAYS ON — there are NO accessibility option
+toggles.** The dashboard has exactly **two themes — daytime and night** (the existing `sun.js`
+AUTO/DAY/NIGHT, where AUTO switches on local sunrise/sunset). Both are accessible *by construction*;
+there is no separate "color-blind mode" to find or forget. The crew gets a fully accessible
+instrument in either theme, period.
 
-1. **Shape / icon (strongest non-color channel), always on:** OK = ● filled circle · WATCH = ▲
-   triangle · ACT = ■ filled square (or ⬢ octagon = "stop"). Distinct silhouettes, road-sign style,
-   legible in pure grayscale.
+This is enforced by never letting color carry status alone. ~8% of men have red-green color vision
+deficiency and a race crew skews male, so **status is always encoded in ≥3 independent channels** so
+any one can be lost (color blindness, night-mode red tint, glare):
+
+1. **Shape / icon (strongest non-color channel):** OK = ● filled circle · WATCH = ▲ triangle ·
+   ACT = ■ filled square (or ⬢ octagon = "stop"). Distinct silhouettes, road-sign style, legible in
+   pure grayscale.
 2. **Word / letter label:** a small `OK / WATCH / ACT` chip — color-independent, unambiguous.
 3. **Luminance + a left severity bar:** the three statuses differ in *brightness* (not only hue),
    and a left edge-bar thickens as severity rises → severity legible by edge alone.
 
-**Palette (the hue layer on top of the above):**
-- *Standard traffic-light*, luminance-tuned (familiar; weakest for CVD even tuned).
-- *Color-blind-safe blue / amber / vermillion* (Okabe-Ito style): blue = ok, amber = watch,
-  red-orange = act. Blue-vs-orange is distinguishable across virtually all CVD types and red-orange
-  still reads as "alert."
-- *Fill-as-gauge*: the tile fills from the bottom; status = fill height + color → severity is a
-  position even in grayscale.
+**The palette is color-blind-safe for everyone** (no standard-vs-CVD choice). The hue layer rides on
+top of the three channels above using a blue / amber / vermillion ramp (Okabe-Ito style): blue = ok,
+amber = watch, red-orange = act — blue-vs-orange is distinguishable across virtually all CVD types and
+red-orange still reads as "alert." Tiles may additionally fill from the bottom like a gauge so
+severity is also a *position* (legible even in grayscale).
 
-A **CVD / high-contrast theme toggle** sits alongside the existing AUTO/DAY/NIGHT control; it swaps
-to the blue/amber palette + forces labels always-on, per-crew.
-
-**Night-mode convergence (important).** The `sun.js` night theme is red-on-black → **red cannot mean
-"act"** at night. The fix is to make the status system **hue-optional from the start**: shape +
-label + luminance + the severity bar carry status, with hue as a *bonus* channel. Then the
-color-blind case and the night case are solved by one approach. ACT may additionally use a gentle
-**pulse-in-place** (a fixed tile pulsing is accessible motion; relocating cards is not — that's the
+**The two themes share one accessible system; hue is hue-optional by design.** Because shape + label +
+luminance + severity bar already carry the status, hue is only a bonus channel — which is exactly what
+makes the **night theme** work: `sun.js` night is red-on-black, so **red can't mean "act"** at night,
+but it doesn't need to (the icon, label, brightness, and bar carry it; night uses amber/white accents
+instead of red). One encoding, two themes, accessible in both — no toggle. ACT may additionally use a
+gentle **pulse-in-place** (a fixed tile pulsing is accessible motion; relocating cards is not — the
 distinction the crew cares about).
 
 ---
@@ -267,14 +269,15 @@ polar-% + the later tiles.
 
 ## 11. Open decisions (not yet settled)
 
-1. **Default palette** — ship color-blind-safe (blue/amber/red-orange) for everyone, or standard
-   traffic-light + a CVD toggle?
-2. **Status count** — 3 (ok/watch/act), or a 4th gray "info/stale" state for missing/stale data
+*(Resolved: accessibility is always on, no toggle; one color-blind-safe palette for everyone; two
+themes only — daytime + night — both accessible by construction. See §5.)*
+
+1. **Status count** — 3 (ok/watch/act), or a 4th gray "info/stale" state for missing/stale data
    distinct from "act"?
-3. **Commentary placement** — right column or full-width bottom strip (wider/bigger tiles)?
-4. **Card cap / detail follow-up scope** — keep "Ask about this" strictly in-domain, or let it widen
-   when the question clearly spans domains?
-5. **Prefetch policy** — ACT tiles only, top-N by priority, or lazy on tap?
-6. **"Clears/triggers when"** — always shown (teaches the system), or only on yellow/red tiles?
-7. **Grid contents** — lock all ~12 tiles now with greyed "coming soon," or only show tiles whose
+2. **Commentary placement** — right column or full-width bottom strip (wider/bigger tiles)?
+3. **Detail follow-up scope** — keep "Ask about this" strictly in-domain, or let it widen when the
+   question clearly spans domains?
+4. **Prefetch policy** — ACT tiles only, top-N by priority, or lazy on tap?
+5. **"Clears/triggers when"** — always shown (teaches the system), or only on yellow/red tiles?
+6. **Grid contents** — lock all ~12 tiles now with greyed "coming soon," or only show tiles whose
    data exists today?
