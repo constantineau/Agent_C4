@@ -1,13 +1,13 @@
 /* SR33 Crew Dashboard — higher-order tiles (live onboard engine + deterministic status).
-   Design: docs/COPILOT_DASHBOARD.md. The grid does NOT repeat raw instrument numbers that
-   already live on other boat displays; it surfaces the higher-order reads the sensors alone
-   don't show:
+   Design: docs/COPILOT_DASHBOARD.md. The grid surfaces the higher-order reads the sensors
+   alone don't show — not raw instrument repeats:
      VMG · Wind Trend · Tactics · Forecast · Sail · Time to Mark · Crew Energy · Data
-   Velocities always carry units (kts); names are spelled out (no cryptic abbreviations); the
-   wind-direction change is drawn as a sparkline rather than described with jargon like "veer".
-   The engine owns the truth (deterministic status, works LLM-off). Wind Trend is computed
-   client-side from the live poll stream. LLM status refinement + commentary + streamed
-   deep-dives arrive in phases 3-4. */
+   Velocities carry units; names are spelled out; the wind-direction change is drawn as a
+   sparkline (no "veer" jargon). Wind Trend reports the change over 3 lookbacks (10/30/60 min)
+   and Forecast shows +30 min / +1 hr plus a "forecast vs actual" verification (how the past
+   forecast compares to what happened) — both computed CLIENT-SIDE from the live poll stream.
+   The engine owns the truth (deterministic status, works LLM-off). LLM refinement + commentary
+   arrive in phase 3. */
 (function () {
   "use strict";
 
@@ -26,11 +26,12 @@
   };
 
   const D2R = Math.PI / 180, R2D = 180 / Math.PI;
-  const WIND_WIN_S = 12 * 60;
+  const WIND_WIN_S = 65 * 60;     // keep ~65 min of wind history (for the 1-hr lookback)
+  const FCST_WIN_S = 70 * 60;     // keep ~70 min of forecast snapshots (for the verification)
 
   /* ============================ DEMO scenarios (canned) ============================ */
-  const SPARK_OSC = '<svg class="spark" viewBox="0 0 160 34" width="100%" height="34" preserveAspectRatio="none"><line class="spark-mid" x1="0" y1="17" x2="160" y2="17"/><polyline class="spark-line" points="3,17 22,9 44,24 66,11 90,23 112,10 134,22 157,15"/></svg>';
-  const SPARK_RIGHT = '<svg class="spark" viewBox="0 0 160 34" width="100%" height="34" preserveAspectRatio="none"><line class="spark-mid" x1="0" y1="17" x2="160" y2="17"/><polyline class="spark-line" points="3,26 40,22 80,17 120,11 157,5"/></svg>';
+  const SPARK_OSC = '<svg class="spark" viewBox="0 0 160 30" width="100%" height="30" preserveAspectRatio="none"><line class="spark-mid" x1="0" y1="15" x2="160" y2="15"/><polyline class="spark-line" points="3,15 22,8 44,21 66,10 90,20 112,9 134,19 157,13"/></svg>';
+  const SPARK_RIGHT = '<svg class="spark" viewBox="0 0 160 30" width="100%" height="30" preserveAspectRatio="none"><line class="spark-mid" x1="0" y1="15" x2="160" y2="15"/><polyline class="spark-line" points="3,23 40,19 80,15 120,9 157,4"/></svg>';
   const SPARK_OSC_BIG = '<svg class="spark" viewBox="0 0 520 120" width="100%" height="120" preserveAspectRatio="none"><line class="spark-mid" x1="0" y1="60" x2="520" y2="60"/><polyline class="spark-line" points="6,60 70,30 150,86 230,36 310,84 390,32 460,80 514,58"/></svg>';
   const SPARK_RIGHT_BIG = '<svg class="spark" viewBox="0 0 520 120" width="100%" height="120" preserveAspectRatio="none"><line class="spark-mid" x1="0" y1="60" x2="520" y2="60"/><polyline class="spark-line" points="6,92 130,74 260,54 390,34 514,16"/></svg>';
 
@@ -43,11 +44,15 @@
       ],
       tiles: {
         vmg:     { status: "ok", value: "5.4 kts", sub: "upwind · 96% of target", why: "VMG 5.4 kts to windward vs a 5.6 kts polar target — 96%.", consider: "Good VMG — hold the groove.", clears: "—", based: ["computed VMG = STW·cos(TWA)", "get_sail: target VMG 5.6 kts"], conf: "high" },
-        wind:    { status: "ok", value: "→ 12 kts", sub: "oscillating ±5°", chart: SPARK_OSC, chartBig: SPARK_OSC_BIG, why: "Over ~10 min: wind speed steady ~12 kts. Direction oscillating about ±5° (chart shows the angle change over time).", consider: "Oscillating breeze — work the shifts.", clears: "—", based: ["live wind-direction trend over 10 min"], conf: "high" },
+        wind:    { status: "ok", value: "12 kts", sub: "251° now", chart: SPARK_OSC, chartBig: SPARK_OSC_BIG,
+                   rows: [{ label: "10 min", cols: ["→ steady", "3° right"] }, { label: "30 min", cols: ["↗ +2 kts", "6° right"] }, { label: "1 hr", cols: ["↗ +3 kts", "9° right"] }],
+                   why: "Wind now 12 kts from 251°. Slowly building and edging right over the hour; oscillating short-term. Chart = direction change over the last 10 min.", consider: "Oscillating breeze — work the shifts.", clears: "—", based: ["live wind buffer"], conf: "high" },
         tactics: { status: "ok", value: "◀ Left", sub: "oscillating, favor left", why: "Oscillating; the left has paid. Lifted now.", consider: "Tack on the next header.", clears: "—", based: ["get_tactics: favored left, lifted"], conf: "high" },
-        forecast:{ status: "ok", value: "16 kts", sub: "↗ building · +3h", why: "Models build to ~16 kts over the next few hours.", consider: "Plan the gear for the build.", clears: "—", based: ["fetch_forecast: 16 kts in +3h"], conf: "high" },
+        forecast:{ status: "ok", value: "16 kts", sub: "→ 258° at +1 hr",
+                   rows: [{ label: "+30 min", cols: ["14 kts", "250°"] }, { sep: true, label: "forecast vs actual" }, { label: "−30 min", cols: ["+1 kt", "3° right"] }, { label: "−1 hr", cols: ["−1 kt", "2° left"] }],
+                   why: "Forecast (Open-Meteo): +30 min 14 kts 250°, +1 hr 16 kts 258°. \"Forecast vs actual\" compares the forecast made 30/60 min ago against the wind now — the model has been within ~1 kt, verifying well.", consider: "Plan the gear for the build to ~16 kts.", clears: "—", based: ["fetch_forecast + live wind buffer"], conf: "high" },
         sail:    { status: "ok", value: "J1", sub: "in range", why: "J1 is right for 12 kts upwind.", consider: "No change.", clears: "TWS > 16 kts", based: ["get_sail: optimal J1"], conf: "high" },
-        eta:     { status: "ok", value: "16 min", sub: "Cove Island", why: "~16 min to Cove Island at the current made-good.", consider: "On schedule for the mark.", clears: "—", based: ["get_navigator: ETA 16 min to Cove Island"], conf: "high" },
+        eta:     { status: "ok", value: "16 min", sub: "Cove Island", why: "~16 min to Cove Island at the current made-good.", consider: "On schedule for the mark.", clears: "—", based: ["get_navigator: ETA 16 min"], conf: "high" },
         charge:  { status: "ok", value: "72", sub: "fresh", why: "Crew energy ~72% (inverse of the fatigue index; lower = more depleted).", consider: "Driver fresh — no rotation needed.", clears: "—", based: ["get_fatigue: index 28 → energy 72%"], conf: "high" },
         data:    { status: "ok", value: "5", sub: "sources live", why: "All five sensor groups fresh.", consider: "Instruments healthy.", clears: "—", based: ["get_sources: 5 live"], conf: "high" },
       },
@@ -55,32 +60,39 @@
     escalated: {
       mode: "llm-live", focus: "Bear-away coming up, and the crew tank is getting low.", confidence: "med",
       notes: [
-        { tile: "sail",   status: "act",   text: "Peel J1 → A3 before the bear-away at the gate — start staging now (~4 min out).", conf: "high" },
-        { tile: "charge", status: "act",   text: "Crew energy down to 28% (rotate soon) — plan a driver change in the next few minutes.", conf: "med" },
-        { tile: "eta",    status: "watch", text: "Cove Island in ~4 min — begin the rounding prep.", conf: "high" },
+        { tile: "sail",     status: "act",   text: "Peel J1 → A3 before the bear-away at the gate — start staging now (~4 min out).", conf: "high" },
+        { tile: "charge",   status: "act",   text: "Crew energy down to 28% (rotate soon) — plan a driver change in the next few minutes.", conf: "med" },
+        { tile: "forecast", status: "watch", text: "Forecast has been under-calling the breeze by ~3 kts — expect a bit more than it says.", conf: "med" },
       ],
       tiles: {
-        vmg:     { status: "watch", value: "4.6 kts", sub: "upwind · 82% of target", why: "VMG 4.6 kts vs a 5.6 kts target — 82%. Pinching in the chop.", consider: "Down on VMG — ease the angle to rebuild made-good.", clears: "back over 90% of the VMG target", based: ["computed VMG = STW·cos(TWA)", "get_sail: target VMG 5.6 kts"], conf: "med" },
-        wind:    { status: "watch", value: "↗ 16 kts", sub: "shifting right ~12°", chart: SPARK_RIGHT, chartBig: SPARK_RIGHT_BIG, why: "Over ~10 min: wind speed building ~4 kts per 10 min. Direction shifting right ~12° and holding — a persistent shift (chart shows the angle change over time).", consider: "Persistent right shift — favor the right side of the course.", clears: "the trend settles", based: ["live wind-direction trend over 10 min"], conf: "med" },
+        vmg:     { status: "watch", value: "4.6 kts", sub: "upwind · 82% of target", why: "VMG 4.6 kts vs a 5.6 kts target — 82%. Pinching in the chop.", consider: "Down on VMG — ease the angle to rebuild made-good.", clears: "back over 90% of the VMG target", based: ["computed VMG = STW·cos(TWA)"], conf: "med" },
+        wind:    { status: "watch", value: "16 kts", sub: "262° now", chart: SPARK_RIGHT, chartBig: SPARK_RIGHT_BIG,
+                   rows: [{ label: "10 min", cols: ["↗ +2 kts", "5° right"] }, { label: "30 min", cols: ["↗ +4 kts", "9° right"] }, { label: "1 hr", cols: ["↗ +6 kts", "14° right"] }],
+                   why: "Wind now 16 kts from 262°. Building ~6 kts and shifting right ~14° over the hour — a persistent right trend. Chart = direction change over the last 10 min.", consider: "Persistent right shift — favor the right side of the course.", clears: "the trend settles", based: ["live wind buffer"], conf: "med" },
         tactics: { status: "watch", value: "Right ▶", sub: "persistent, favor right", why: "The breeze has shifted right and is holding — persistent, not oscillating.", consider: "Favor the right.", clears: "the shift reverses", based: ["get_tactics: favored right, persistent"], conf: "med" },
-        forecast:{ status: "ok",    value: "17 kts", sub: "→ holding · +1h", why: "Models hold 16-18 kts over the next hour.", consider: "A3-leg conditions confirmed.", clears: "—", based: ["fetch_forecast: 17 kts next hour"], conf: "high" },
+        forecast:{ status: "watch", value: "18 kts", sub: "↗ 270° at +1 hr",
+                   rows: [{ label: "+30 min", cols: ["17 kts", "264°"] }, { sep: true, label: "forecast vs actual" }, { label: "−30 min", cols: ["+3 kts", "6° right"] }, { label: "−1 hr", cols: ["+2 kts", "4° right"] }],
+                   why: "Forecast: +30 min 17 kts 264°, +1 hr 18 kts 270°. \"Forecast vs actual\" shows it has been under-calling the wind by 2-3 kts and the right shift — trust the trend over the model and expect a bit more breeze.", consider: "Forecast running light — plan for more than it says.", clears: "forecast comes back in line", based: ["fetch_forecast + live wind buffer"], conf: "med" },
         sail:    { status: "act",   value: "J1 → A3", sub: "peel before bear-away", why: "The leg after the gate bears away to ~135° TWA — an A3 leg. Peel before the rounding.", consider: "Stage the A3 and peel in ~4 min.", clears: "A3 hoisted", based: ["get_sail: A3 for TWA 135°"], conf: "high" },
-        eta:     { status: "watch", value: "4 min", sub: "Cove Island", why: "~4 min to Cove Island at the current made-good.", consider: "Mark in ~4 min — start the rounding prep.", clears: "past the rounding", based: ["get_navigator: ETA 4 min to Cove Island"], conf: "high" },
-        charge:  { status: "act",   value: "28", sub: "rotate soon", why: "Crew energy ~28% (rotate soon). Heading instability and steering reversals are up, speed deficit creeping.", consider: "Tank getting low — plan a helm rotation.", clears: "energy back above 65%", based: ["get_fatigue: index 72 → energy 28%"], conf: "med", components: { heading: 0.7, reversals: 0.8, heel: 0.4, "spd-def": 0.5 } },
+        eta:     { status: "watch", value: "4 min", sub: "Cove Island", why: "~4 min to Cove Island at the current made-good.", consider: "Mark in ~4 min — start the rounding prep.", clears: "past the rounding", based: ["get_navigator: ETA 4 min"], conf: "high" },
+        charge:  { status: "act",   value: "28", sub: "rotate soon", why: "Crew energy ~28% (rotate soon). Heading instability and steering reversals up, speed deficit creeping.", consider: "Tank getting low — plan a helm rotation.", clears: "energy back above 65%", based: ["get_fatigue: index 72 → energy 28%"], conf: "med", components: { heading: 0.7, reversals: 0.8, heel: 0.4, "spd-def": 0.5 } },
         data:    { status: "watch", value: "4", sub: "1 stale", why: "Masthead wind stale ~50 s ago; running on the Orca backup.", consider: "Running on backup wind — watch for it to return.", clears: "all sources fresh", based: ["get_sources: 4 live, 1 stale"], conf: "med" },
       },
     },
   };
 
-  /* ============================ LIVE engine mapping ============================ */
+  /* ============================ helpers ============================ */
   const API = "/api";
   const r0 = (x) => (x == null ? "?" : Math.round(x));
   const r1 = (x) => (x == null ? "?" : Math.round(x * 10) / 10);
+  const avg = (a) => a.reduce((x, y) => x + y, 0) / a.length;
+  const angDiff = (a, b) => ((a - b + 540) % 360) - 180;   // a−b in [−180,180]; + = a is right of b
   const NA = (note) => ({ status: "na", value: "—", sub: note || "no data", why: note || "No data from the engine.",
     consider: "—", clears: "—", based: [], conf: "engine" });
-  const shorten = (s) => (s ? s.split(/—/)[0].trim().split(/\s+/).slice(0, 2).join(" ") : "");
   const spanTxt = (mins) => (mins < 1 ? r0(mins * 60) + " s" : r0(mins) + " min");
   const stripTags = (s) => String(s).replace(/<[^>]+>/g, "");
+  const dTwsTxt = (d) => { const a = Math.abs(d); return a < 0.4 ? "→ steady" : (d > 0 ? "↗ +" : "↘ −") + r1(a) + " kts"; };
+  const dDirTxt = (d) => { const a = Math.round(Math.abs(d)); return a < 3 ? "steady" : a + "° " + (d > 0 ? "right" : "left"); };
 
   function fetchJSON(path, ms) {
     const ctl = new AbortController();
@@ -88,8 +100,13 @@
     return fetch(API + path, { signal: ctl.signal, headers: { Accept: "application/json" } })
       .then((r) => (r.ok ? r.json() : null)).catch(() => null).finally(() => clearTimeout(t));
   }
+  function circMeanDeg(degs) {
+    const s = degs.reduce((a, d) => a + Math.sin(d * D2R), 0) / degs.length;
+    const c = degs.reduce((a, d) => a + Math.cos(d * D2R), 0) / degs.length;
+    return (Math.atan2(s, c) * R2D + 360) % 360;
+  }
 
-  /* ---- client-side wind-trend buffer + sparkline of the direction change ---- */
+  /* ---- rolling buffers fed by the poll loop ---- */
   function pushWind(c) {
     if (!c || !c.available || c.tws == null || c.twd == null) return;
     const now = Date.now() / 1000;
@@ -97,31 +114,55 @@
     const cut = now - WIND_WIN_S;
     while (App.windHist.length && App.windHist[0].t < cut) App.windHist.shift();
   }
-  function circMeanDeg(degs) {
-    const s = degs.reduce((a, d) => a + Math.sin(d * D2R), 0) / degs.length;
-    const c = degs.reduce((a, d) => a + Math.cos(d * D2R), 0) / degs.length;
-    return (Math.atan2(s, c) * R2D + 360) % 360;
+  function pushForecast(fc) {
+    if (!fc || !fc.available || !fc.hours || !fc.hours.length) return;
+    const now = Date.now() / 1000;
+    const last = App.fcstHist[App.fcstHist.length - 1];
+    if (last && now - last.t < 55) return;     // throttle — forecasts barely move minute-to-minute
+    App.fcstHist.push({ t: now, hours: fc.hours.map((h) => ({ in_h: h.in_h, tws: h.tws, twd: h.twd })) });
+    const cut = now - FCST_WIN_S;
+    while (App.fcstHist.length && App.fcstHist[0].t < cut) App.fcstHist.shift();
   }
-  function windTrend() {
-    const h = App.windHist;
-    if (h.length < 6) return null;
-    const t0 = h[0].t, xs = h.map((p) => p.t - t0), ys = h.map((p) => p.tws), n = xs.length;
-    const sx = xs.reduce((a, b) => a + b, 0), sy = ys.reduce((a, b) => a + b, 0);
-    const sxx = xs.reduce((a, b) => a + b * b, 0), sxy = xs.reduce((a, x, i) => a + x * ys[i], 0);
-    const slope = (n * sxy - sx * sy) / ((n * sxx - sx * sx) || 1);
-    const sRad = h.map((p) => p.twd * D2R);
-    const mS = sRad.reduce((a, r) => a + Math.sin(r), 0) / n, mC = sRad.reduce((a, r) => a + Math.cos(r), 0) / n;
-    const R = Math.hypot(mS, mC);
-    const osc = R > 0 ? Math.sqrt(Math.max(0, -2 * Math.log(R))) * R2D : 0;
-    const k = Math.max(1, Math.floor(n / 3));
-    const drift = (((circMeanDeg(h.slice(-k).map((p) => p.twd)) - circMeanDeg(h.slice(0, k).map((p) => p.twd))) + 540) % 360) - 180;
-    return { twsNow: h[n - 1].tws, ratePer10: slope * 600, osc, drift, mins: (h[n - 1].t - t0) / 60, samples: n };
+  const observedNow = () => { const h = App.windHist; return h.length ? { tws: h[h.length - 1].tws, twd: h[h.length - 1].twd } : null; };
+
+  /* change in TWS + TWD over the last `winSec` of observed wind (null if not enough coverage) */
+  function windWindow(winSec) {
+    const now = Date.now() / 1000, h = App.windHist.filter((p) => p.t >= now - winSec);
+    if (h.length < 6 || (h[h.length - 1].t - h[0].t) < winSec * 0.5) return null;
+    const k = Math.max(2, Math.floor(h.length / 4));
+    const tws0 = avg(h.slice(0, k).map((p) => p.tws)), tws1 = avg(h.slice(-k).map((p) => p.tws));
+    const d0 = circMeanDeg(h.slice(0, k).map((p) => p.twd)), d1 = circMeanDeg(h.slice(-k).map((p) => p.twd));
+    return { dTws: tws1 - tws0, dTwd: angDiff(d1, d0) };
   }
-  /* SVG polyline of TWD deviation from the window mean (right shift = up, left = down). */
+  /* interpolate a forecast series (ascending in_h) to a given hours-ahead value */
+  function fcstAt(hours, h) {
+    if (!hours || !hours.length) return null;
+    if (h <= hours[0].in_h) return { tws: hours[0].tws, twd: hours[0].twd };
+    for (let i = 0; i < hours.length - 1; i++) {
+      const a = hours[i], b = hours[i + 1];
+      if (h >= a.in_h && h <= b.in_h) {
+        const f = (h - a.in_h) / ((b.in_h - a.in_h) || 1);
+        return { tws: a.tws + (b.tws - a.tws) * f, twd: (a.twd + angDiff(b.twd, a.twd) * f + 360) % 360 };
+      }
+    }
+    const last = hours[hours.length - 1];
+    return { tws: last.tws, twd: last.twd };
+  }
+  /* forecast verification: what a forecast made ~agoSec ago predicted for NOW, vs observed now */
+  function fcstSkill(agoSec) {
+    const now = Date.now() / 1000, target = now - agoSec;
+    let best = null, bestd = 1e9;
+    for (const e of App.fcstHist) { const d = Math.abs(e.t - target); if (d < bestd) { bestd = d; best = e; } }
+    if (!best || bestd > Math.max(150, agoSec * 0.25)) return null;
+    const pred = fcstAt(best.hours, (now - best.t) / 3600), obs = observedNow();
+    if (!pred || !obs) return null;
+    return { dTws: obs.tws - pred.tws, dTwd: angDiff(obs.twd, pred.twd) };
+  }
+  /* SVG polyline of TWD deviation from the window mean (right = up, left = down) */
   function makeTwdSpark(hist, w, h) {
     if (!hist || hist.length < 3) return "";
     const mean = circMeanDeg(hist.map((p) => p.twd));
-    const devs = hist.map((p) => ((p.twd - mean + 540) % 360) - 180);
+    const devs = hist.map((p) => angDiff(p.twd, mean));
     const maxAbs = Math.max(6, Math.max.apply(null, devs.map(Math.abs)));
     const t0 = hist[0].t, span = (hist[hist.length - 1].t - t0) || 1, pad = 3;
     const pts = hist.map((p, i) => {
@@ -133,7 +174,15 @@
       '<line class="spark-mid" x1="0" y1="' + (h / 2) + '" x2="' + w + '" y2="' + (h / 2) + '"/>' +
       '<polyline class="spark-line" points="' + pts + '"/></svg>';
   }
+  function rowsHtml(rows) {
+    if (!rows) return "";
+    return '<div class="t-rows">' + rows.map((r) =>
+      r.sep ? '<div class="t-row rsub"><span class="rl">' + r.label + '</span></div>'
+            : '<div class="t-row"><span class="rl">' + r.label + '</span>' + (r.cols || []).map((c) => '<span class="rc">' + c + '</span>').join("") + '</div>'
+    ).join("") + "</div>";
+  }
 
+  /* ============================ tile builders (live) ============================ */
   const BUILD = {
     vmg(p) {
       const c = p.conditions, s = p.sail;
@@ -142,8 +191,7 @@
       if (!(twa < 70 || twa > 110)) {
         return { status: "ok", value: r1(absv) + " kts", sub: "reaching",
           why: "VMG " + r1(absv) + " kts — on a reach, VMG-to-wind isn't the target (sail for the mark).",
-          consider: "Reaching — sail fast, not for VMG.", clears: "—",
-          based: ["computed VMG = STW·cos(TWA " + r0(twa) + "°)"], conf: "engine" };
+          consider: "Reaching — sail fast, not for VMG.", clears: "—", based: ["computed VMG = STW·cos(TWA " + r0(twa) + "°)"], conf: "engine" };
       }
       const tgt = s && s.available && s.targets ? Math.abs(s.targets.vmg) : null;
       const pct = tgt ? Math.round((absv / tgt) * 100) : null;
@@ -156,20 +204,26 @@
         based: ["computed VMG = STW·cos(TWA)"].concat(tgt ? ["get_sail: target VMG " + r1(tgt) + " kts"] : []), conf: "engine" };
     },
     wind(p) {
-      const wt = windTrend();
-      if (!wt) return NA("building wind history…");
-      const up = wt.ratePer10 > 1.2, down = wt.ratePer10 < -1.2;
-      const arrow = up ? "↗" : down ? "↘" : "→";
-      const persistent = Math.abs(wt.drift) > Math.max(8, wt.osc);
-      const sub = persistent ? "shifting " + (wt.drift > 0 ? "right" : "left") + " ~" + r0(Math.abs(wt.drift)) + "°" : "oscillating ±" + r0(wt.osc) + "°";
-      const st = Math.abs(wt.ratePer10) >= 8 || (persistent && Math.abs(wt.drift) >= 15) ? "watch" : "ok";
-      return { status: st, value: arrow + " " + r0(wt.twsNow) + " kts", sub: sub,
-        chart: makeTwdSpark(App.windHist, 160, 34),
-        why: "Over ~" + spanTxt(wt.mins) + ": wind speed " + (up ? "building" : down ? "easing" : "steady") + " ~" + r1(Math.abs(wt.ratePer10)) + " kts per 10 min. Direction " +
-          (persistent ? "shifting " + (wt.drift > 0 ? "right" : "left") + " ~" + r0(Math.abs(wt.drift)) + "° and holding" : "oscillating about ±" + r0(wt.osc) + "°") + " (chart shows the angle change over time).",
-        consider: persistent ? "Persistent " + (wt.drift > 0 ? "right" : "left") + " shift — favor that side of the course." : "Oscillating breeze — work the shifts, tack on the headers.",
+      const obs = observedNow() || (p.conditions && p.conditions.available ? { tws: p.conditions.tws, twd: p.conditions.twd } : null);
+      if (!obs) return NA("building wind history…");
+      const w10 = windWindow(600), w30 = windWindow(1800), w60 = windWindow(3600);
+      const mk = (w) => (w ? { cols: [dTwsTxt(w.dTws), dDirTxt(w.dTwd)] } : { cols: ["—", "accumulating"] });
+      const rows = [
+        Object.assign({ label: "10 min" }, mk(w10)),
+        Object.assign({ label: "30 min" }, mk(w30)),
+        Object.assign({ label: "1 hr" }, mk(w60)),
+      ];
+      const big = w60 || w30;
+      const st = big && (Math.abs(big.dTwd) >= 12 || Math.abs(big.dTws) >= 6) ? "watch" : "ok";
+      const now = Date.now() / 1000;
+      return { status: st, value: r0(obs.tws) + " kts", sub: r0(obs.twd) + "° now",
+        chart: makeTwdSpark(App.windHist.filter((p0) => p0.t >= now - 600), 160, 30), rows: rows,
+        why: "Wind now " + r0(obs.tws) + " kts from " + r0(obs.twd) + "°. Change over the last " +
+          ["10 min", "30 min", "1 hr"].map((lbl, i) => { const w = [w10, w30, w60][i]; return w ? lbl + " — " + dTwsTxt(w.dTws).replace(/^→ /, "") + ", " + dDirTxt(w.dTwd) : lbl + " — building"; }).join("; ") +
+          ". Chart shows the direction change over the last 10 min.",
+        consider: st === "ok" ? "Steady — work the oscillations." : "Building/shifting — favor the developing side and watch the gear.",
         clears: st === "ok" ? "—" : "the trend settles",
-        based: ["live wind-direction trend over " + spanTxt(wt.mins) + " (" + wt.samples + " samples)"], conf: "engine" };
+        based: ["live wind buffer (" + App.windHist.length + " samples over " + spanTxt(App.windHist.length ? (now - App.windHist[0].t) / 60 : 0) + ")"], conf: "engine" };
     },
     tactics(p) {
       const t = p.tactics;
@@ -185,13 +239,25 @@
     forecast(p) {
       const fc = p.forecast;
       if (!fc || !fc.available || !fc.hours || !fc.hours.length) return NA("no forecast");
-      const h = fc.hours, now = h[0].tws, end = h[h.length - 1], later = end.tws;
-      const up = later > now + 2, down = later < now - 2;
-      const arrow = up ? "↗" : down ? "↘" : "→", word = up ? "building" : down ? "easing" : "holding";
-      return { status: "ok", value: later + " kts", sub: arrow + " " + word + " · +" + r0(end.in_h) + "h",
-        why: fc.source + ": wind " + now + " → " + later + " kts over the next " + r0(end.in_h) + " hours.",
-        consider: up ? "Breeze building — plan the gear." : "Conditions holding.", clears: "—",
-        based: ["fetch_forecast: " + now + " kts now → " + later + " kts in +" + r0(end.in_h) + "h"], conf: "engine" };
+      const obs = observedNow() || (p.conditions && p.conditions.available ? { tws: p.conditions.tws, twd: p.conditions.twd } : null);
+      const aug = obs ? [{ in_h: 0, tws: obs.tws, twd: obs.twd }].concat(fc.hours) : fc.hours.slice();
+      const f30 = fcstAt(aug, 0.5), f60 = fcstAt(aug, 1.0);
+      const s30 = fcstSkill(1800), s60 = fcstSkill(3600);
+      const rows = [
+        { label: "+30 min", cols: [r0(f30.tws) + " kts", r0(f30.twd) + "°"] },
+        { sep: true, label: "forecast vs actual" },
+        { label: "−30 min", cols: s30 ? [dTwsTxt(s30.dTws), dDirTxt(s30.dTwd)] : ["—", "accumulating"] },
+        { label: "−1 hr", cols: s60 ? [dTwsTxt(s60.dTws), dDirTxt(s60.dTwd)] : ["—", "accumulating"] },
+      ];
+      const bigChange = obs && (Math.abs(f60.tws - obs.tws) >= 6 || Math.abs(angDiff(f60.twd, obs.twd)) >= 15);
+      const badSkill = (s30 && (Math.abs(s30.dTws) >= 4 || Math.abs(s30.dTwd) >= 15)) || (s60 && (Math.abs(s60.dTws) >= 4 || Math.abs(s60.dTwd) >= 15));
+      const st = bigChange || badSkill ? "watch" : "ok";
+      return { status: st, value: r0(f60.tws) + " kts", sub: "→ " + r0(f60.twd) + "° at +1 hr", rows: rows,
+        why: "Forecast (" + fc.source + "): +30 min " + r0(f30.tws) + " kts " + r0(f30.twd) + "°, +1 hr " + r0(f60.tws) + " kts " + r0(f60.twd) + "°. " +
+          "\"Forecast vs actual\" compares the forecast made 30/60 min ago against the wind now — a check on how well the model is verifying" +
+          (s30 || s60 ? "." : " (fills in after the dashboard has run ~30-60 min)."),
+        consider: badSkill ? "Forecast is off lately — trust the live trend more." : bigChange ? "A notable change is forecast — plan the gear." : "Forecast steady and verifying.",
+        clears: st === "ok" ? "—" : "forecast comes back in line", based: ["fetch_forecast + live wind buffer"], conf: "engine" };
     },
     sail(p) {
       const s = p.sail;
@@ -261,7 +327,6 @@
       flagged.length + " items need attention (engine read).";
     return { tiles, focus, notes, confidence: "engine", mode: "engine read" };
   }
-
   function commitStatus(key, raw) {
     const d = App.dwell[key] || (App.dwell[key] = { committed: raw, cand: raw, n: 0 });
     if (raw === d.committed) { d.cand = raw; d.n = 0; return d.committed; }
@@ -277,9 +342,8 @@
     theme: localStorage.getItem("sr33.dash.theme") || "auto",
     pos: { lat: 45.33, lon: -82.0 },
     openTile: null, streamTimer: null, pollTimer: null, polling: false,
-    dwell: {}, data: null, windHist: [],
+    dwell: {}, data: null, windHist: [], fcstHist: [],
   };
-
   function currentData() {
     if (App.src === "demo") {
       const sc = SCENARIOS[App.demoScn];
@@ -319,12 +383,11 @@
       el.dataset.tile = key;
       el.setAttribute("role", "button"); el.setAttribute("tabindex", "0");
       el.setAttribute("aria-label", NAME[key] + " " + st.word + " " + stripTags(t.value || ""));
+      const valHtml = (t.value != null && t.value !== "") ? '<div class="t-val">' + t.value + '</div>' : "";
       el.innerHTML =
         '<div class="t-head"><span class="t-name">' + NAME[key] + '</span>' +
         '<span class="t-chip"><span class="t-icon">' + st.icon + '</span><span class="t-word">' + st.word + '</span></span></div>' +
-        '<div class="t-val">' + (t.value != null ? t.value : "—") + '</div>' +
-        (t.chart ? t.chart : "") +
-        '<div class="t-sub">' + (t.sub || "") + '</div>';
+        valHtml + (t.chart ? t.chart : "") + (t.sub ? '<div class="t-sub">' + t.sub + '</div>' : "") + rowsHtml(t.rows);
       el.addEventListener("click", () => openDetail(key));
       el.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openDetail(key); } });
       grid.appendChild(el);
@@ -332,7 +395,6 @@
     renderCommentary(d);
     if (App.openTile && !document.getElementById("detail").hidden) populateDetail(App.openTile, false);
   }
-
   function renderCommentary(d) {
     document.getElementById("commFocus").textContent = d.focus || "—";
     document.getElementById("commConf").textContent = "conf: " + (d.confidence || "—");
@@ -381,10 +443,11 @@
     if (key === "wind" && t.status !== "na") {
       const big = App.src === "live" ? makeTwdSpark(App.windHist, 520, 120) : (t.chartBig || t.chart || "");
       g.innerHTML = '<div class="detchart" style="--c:' + stColor + '">' +
-        '<div class="dc-lab dc-top">↑ shifted right</div>' +
-        (big || '<span class="dc-empty">building chart…</span>') +
+        '<div class="dc-lab dc-top">↑ shifted right</div>' + (big || '<span class="dc-empty">building chart…</span>') +
         '<div class="dc-lab dc-bot">↓ shifted left</div>' +
-        '<div class="dc-foot">' + (t.value || "") + " · " + (t.sub || "") + '</div></div>';
+        '<div class="dc-foot">' + (t.value || "") + " · " + (t.sub || "") + '</div></div>' + rowsHtml(t.rows);
+    } else if (t.rows) {
+      g.innerHTML = '<div class="dc-foot">' + (t.value || "") + (t.sub ? " · " + t.sub : "") + '</div>' + rowsHtml(t.rows);
     } else if (t.components) {
       let bars = '<div class="bars">';
       for (const lbl of Object.keys(t.components)) {
@@ -430,6 +493,7 @@
       const res = await Promise.all(eps.map((e, i) => fetchJSON(e, ms[i])));
       const p = {}; keys.forEach((k, i) => (p[k] = res[i]));
       pushWind(p.conditions);
+      pushForecast(p.forecast);
       App.data = buildLive(p);
       if (App.src === "live") render();
     } finally { App.polling = false; }
