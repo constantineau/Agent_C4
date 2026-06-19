@@ -27,7 +27,8 @@
 
   const D2R = Math.PI / 180, R2D = 180 / Math.PI;
   const WIND_WIN_S = 12 * 3600;   // keep the whole race (~12 h) — feeds both the lookback rows and the race chart
-  const FCST_WIN_S = 70 * 60;     // keep ~70 min of forecast snapshots (for the verification)
+  const FCST_WIN_S = 140 * 60;    // keep ~140 min of forecast snapshots (for the −120 min verification)
+  const SERIES_MIN = 720;         // ask the engine for ~12 h of archived wind for the chart
 
   /* ---- tiny helpers needed early (used in the demo scenarios) ---- */
   const r0 = (x) => (x == null ? "?" : Math.round(x));
@@ -53,12 +54,12 @@
       tiles: {
         vmg:     { status: "ok", value: "5.4 kts", sub: "upwind · 96% of target", why: "VMG 5.4 kts to windward vs a 5.6 kts polar target — 96%.", consider: "Good VMG — hold the groove.", clears: "—", based: ["computed VMG = STW·cos(TWA)", "get_sail: target VMG 5.6 kts"], conf: "high" },
         wind:    { status: "ok", value: null,
-                   rows: [{ label: "Now", emph: true, cols: [arrowKts(250, 12)] }, { label: "−10 min", cols: [arrowKts(248, 13)] }, { label: "−30 min", cols: [arrowKts(244, 14)] }, { label: "−60 min", cols: [arrowKts(240, 14)] }],
-                   why: "True wind speed + direction now and looking back. Arrows point the way the wind blows (north wind points down, east points left). Mild build and a slow right shift over the hour.", consider: "Oscillating breeze — work the shifts.", clears: "—", based: ["live wind buffer"], conf: "high" },
+                   rows: [{ label: "Now", emph: true, cols: [arrowKts(250, 12)] }, { label: "−60 min", cols: [arrowKts(246, 14)] }, { label: "−120 min", cols: [arrowKts(242, 16)] }],
+                   why: "True wind speed + direction now and looking back. Arrows point the way the wind blows (north wind points down, east points left). Eased a touch and edged right over the last couple of hours.", consider: "Oscillating breeze — work the shifts.", clears: "—", based: ["engine archive + live buffer"], conf: "high" },
         tactics: { status: "ok", value: "◀ Left", sub: "oscillating, favor left", why: "Oscillating; the left has paid. Lifted now.", consider: "Tack on the next header.", clears: "—", based: ["get_tactics: favored left, lifted"], conf: "high" },
         forecast:{ status: "ok", value: null,
-                   rows: [{ label: "Now", emph: true, cols: [arrowKts(250, 10)] }, { label: "+30 min", cols: [arrowKts(254, 12)] }, { label: "+60 min", cols: [arrowKts(258, 13)] }, { sep: true, label: "FORECAST VS. ACTUAL" }, { hdr: true, cols: ["forecast", "actual"] }, { label: "−30 min", cols: [arrowKts(245, 14), arrowKts(244, 15)] }, { label: "−60 min", cols: [arrowKts(240, 17), arrowKts(238, 18)] }],
-                   why: "Forecast wind speed + direction (arrows show direction; north wind points down). Building to ~13 kts and veering right. \"Forecast vs. actual\" compares the earlier forecast for −30/−60 min ago against what actually happened — within ~1 kt, verifying well.", consider: "Plan the gear for the build.", clears: "—", based: ["fetch_forecast + live wind buffer"], conf: "high" },
+                   rows: [{ label: "Now", emph: true, cols: [arrowKts(250, 10)] }, { label: "+60 min", cols: [arrowKts(256, 13)] }, { label: "+120 min", cols: [arrowKts(262, 15)] }, { sep: true, label: "FORECAST VS. ACTUAL" }, { hdr: true, cols: ["forecast", "actual"] }, { label: "−60 min", cols: [arrowKts(244, 13), arrowKts(243, 14)] }, { label: "−120 min", cols: [arrowKts(240, 16), arrowKts(238, 17)] }],
+                   why: "Forecast wind speed + direction (arrows show direction; north wind points down). Building to ~15 kts and veering right. \"Forecast vs. actual\" compares the earlier forecast for −60/−120 min ago against what actually happened — within ~1 kt, verifying well.", consider: "Plan the gear for the build.", clears: "—", based: ["fetch_forecast + engine archive"], conf: "high" },
         sail:    { status: "ok", value: "J1", sub: "in range", why: "J1 is right for 12 kts upwind.", consider: "No change.", clears: "TWS > 16 kts", based: ["get_sail: optimal J1"], conf: "high" },
         eta:     { status: "ok", value: "16 min", sub: "Cove Island", why: "~16 min to Cove Island at the current made-good.", consider: "On schedule for the mark.", clears: "—", based: ["get_navigator: ETA 16 min"], conf: "high" },
         charge:  { status: "ok", value: "72", sub: "fresh", why: "Crew energy ~72% (inverse of the fatigue index; lower = more depleted).", consider: "Driver fresh — no rotation needed.", clears: "—", based: ["get_fatigue: index 28 → energy 72%"], conf: "high" },
@@ -75,12 +76,12 @@
       tiles: {
         vmg:     { status: "watch", value: "4.6 kts", sub: "upwind · 82% of target", why: "VMG 4.6 kts vs a 5.6 kts target — 82%. Pinching in the chop.", consider: "Down on VMG — ease the angle to rebuild made-good.", clears: "back over 90% of the VMG target", based: ["computed VMG = STW·cos(TWA)"], conf: "med" },
         wind:    { status: "watch", value: null,
-                   rows: [{ label: "Now", emph: true, cols: [arrowKts(262, 16)] }, { label: "−10 min", cols: [arrowKts(258, 14)] }, { label: "−30 min", cols: [arrowKts(252, 12)] }, { label: "−60 min", cols: [arrowKts(248, 10)] }],
-                   why: "True wind speed + direction now and looking back. Arrows point the way the wind blows (north wind points down). Built ~6 kts and veered right ~14° over the hour — a persistent right trend.", consider: "Persistent right shift — favor the right side of the course.", clears: "the trend settles", based: ["live wind buffer"], conf: "med" },
+                   rows: [{ label: "Now", emph: true, cols: [arrowKts(262, 16)] }, { label: "−60 min", cols: [arrowKts(252, 12)] }, { label: "−120 min", cols: [arrowKts(246, 9)] }],
+                   why: "True wind speed + direction now and looking back. Arrows point the way the wind blows (north wind points down). Built ~7 kts and veered right ~16° over the last two hours — a persistent right trend.", consider: "Persistent right shift — favor the right side of the course.", clears: "the trend settles", based: ["engine archive + live buffer"], conf: "med" },
         tactics: { status: "watch", value: "Right ▶", sub: "persistent, favor right", why: "The breeze has shifted right and is holding — persistent, not oscillating.", consider: "Favor the right.", clears: "the shift reverses", based: ["get_tactics: favored right, persistent"], conf: "med" },
         forecast:{ status: "watch", value: null,
-                   rows: [{ label: "Now", emph: true, cols: [arrowKts(262, 16)] }, { label: "+30 min", cols: [arrowKts(266, 17)] }, { label: "+60 min", cols: [arrowKts(270, 18)] }, { sep: true, label: "FORECAST VS. ACTUAL" }, { hdr: true, cols: ["forecast", "actual"] }, { label: "−30 min", cols: [arrowKts(258, 14), arrowKts(260, 16)] }, { label: "−60 min", cols: [arrowKts(252, 12), arrowKts(256, 14)] }],
-                   why: "Forecast wind speed + direction (arrows show direction; north wind points down). Building to ~18 kts and veering right. \"Forecast vs. actual\" shows it has under-called the wind by ~2 kts and the right shift — trust the trend over the model.", consider: "Forecast running light — plan for more than it says.", clears: "forecast comes back in line", based: ["fetch_forecast + live wind buffer"], conf: "med" },
+                   rows: [{ label: "Now", emph: true, cols: [arrowKts(262, 16)] }, { label: "+60 min", cols: [arrowKts(268, 18)] }, { label: "+120 min", cols: [arrowKts(274, 19)] }, { sep: true, label: "FORECAST VS. ACTUAL" }, { hdr: true, cols: ["forecast", "actual"] }, { label: "−60 min", cols: [arrowKts(252, 12), arrowKts(256, 14)] }, { label: "−120 min", cols: [arrowKts(248, 10), arrowKts(252, 12)] }],
+                   why: "Forecast wind speed + direction (arrows show direction; north wind points down). Building to ~19 kts and veering right. \"Forecast vs. actual\" shows it has under-called the wind by ~2 kts and the right shift — trust the trend over the model.", consider: "Forecast running light — plan for more than it says.", clears: "forecast comes back in line", based: ["fetch_forecast + engine archive"], conf: "med" },
         sail:    { status: "act",   value: "J1 → A3", sub: "peel before bear-away", why: "The leg after the gate bears away to ~135° TWA — an A3 leg. Peel before the rounding.", consider: "Stage the A3 and peel in ~4 min.", clears: "A3 hoisted", based: ["get_sail: A3 for TWA 135°"], conf: "high" },
         eta:     { status: "watch", value: "4 min", sub: "Cove Island", why: "~4 min to Cove Island at the current made-good.", consider: "Mark in ~4 min — start the rounding prep.", clears: "past the rounding", based: ["get_navigator: ETA 4 min"], conf: "high" },
         charge:  { status: "act",   value: "28", sub: "rotate soon", why: "Crew energy ~28% (rotate soon). Heading instability and steering reversals up, speed deficit creeping.", consider: "Tank getting low — plan a helm rotation.", clears: "energy back above 65%", based: ["get_fatigue: index 72 → energy 28%"], conf: "med", components: { heading: 0.7, reversals: 0.8, heel: 0.4, "spd-def": 0.5 } },
@@ -116,19 +117,37 @@
     while (App.windHist.length && App.windHist[0].t < cut) App.windHist.shift();
     if (now - App.lastPersist > 30) { App.lastPersist = now; persistRace(); }   // survive a reload
   }
-  /* persist a downsampled copy of the race wind history so a reload doesn't lose it */
+  /* persist a downsampled copy of the race wind + forecast history so a reload doesn't lose it */
   function persistRace() {
     try {
       const ds = dsample(App.windHist, 1800);
       localStorage.setItem("sr33.dash.windhist", JSON.stringify(ds.map((p) => [Math.round(p.t), Math.round(p.tws * 10) / 10, Math.round(p.twd)])));
+      localStorage.setItem("sr33.dash.fcsthist", JSON.stringify(App.fcstHist));
     } catch (e) { /* quota / disabled — best effort */ }
   }
   function loadRace() {
     try {
-      const raw = localStorage.getItem("sr33.dash.windhist"); if (!raw) return;
       const now = Date.now() / 1000;
-      App.windHist = JSON.parse(raw).map((a) => ({ t: a[0], tws: a[1], twd: a[2] })).filter((p) => p.t > now - WIND_WIN_S);
+      const w = localStorage.getItem("sr33.dash.windhist");
+      if (w) App.windHist = JSON.parse(w).map((a) => ({ t: a[0], tws: a[1], twd: a[2] })).filter((p) => p.t > now - WIND_WIN_S);
+      const f = localStorage.getItem("sr33.dash.fcsthist");
+      if (f) App.fcstHist = JSON.parse(f).filter((e) => e.t > now - FCST_WIN_S);
     } catch (e) { /* ignore */ }
+  }
+  /* pull the whole-race wind series from the onboard engine archive (authoritative + reload-proof) */
+  async function fetchSeries() {
+    const r = await fetchJSON("/series?minutes=" + SERIES_MIN, 8000);
+    App.seriesHist = (r && r.available && Array.isArray(r.points)) ? r.points.filter((p) => p.tws != null) : [];
+  }
+  /* best available race history: the engine archive (authoritative) + the live tail not yet archived;
+     falls back to the client buffer when the archive is empty (e.g. on the bench). */
+  function raceData() {
+    if (App.seriesHist && App.seriesHist.length) {
+      const lastT = App.seriesHist[App.seriesHist.length - 1].t;
+      const tail = App.windHist.filter((p) => p.t > lastT + 1);
+      return App.seriesHist.concat(tail);
+    }
+    return App.windHist;
   }
   function pushForecast(fc) {
     if (!fc || !fc.available || !fc.hours || !fc.hours.length) return;
@@ -139,9 +158,9 @@
     const cut = now - FCST_WIN_S;
     while (App.fcstHist.length && App.fcstHist[0].t < cut) App.fcstHist.shift();
   }
-  /* observed wind nearest a point `agoSec` in the past (0 = latest); null if buffer too short */
+  /* observed wind nearest a point `agoSec` in the past (0 = latest); null if history too short */
   function observedAt(agoSec) {
-    const h = App.windHist; if (!h.length) return null;
+    const h = raceData(); if (!h.length) return null;
     const now = Date.now() / 1000, target = now - agoSec;
     if (agoSec > 0 && h[0].t > target + 60) return null;
     let best = null, bd = 1e9;
@@ -268,7 +287,7 @@
         based: ["computed VMG = STW·cos(TWA)"].concat(tgt ? ["get_sail: target VMG " + r1(tgt) + " kts"] : []), conf: "engine" };
     },
     wind(p) {
-      const pts = [["Now", 0], ["−10 min", 600], ["−30 min", 1800], ["−60 min", 3600]];
+      const pts = [["Now", 0], ["−60 min", 3600], ["−120 min", 7200]];
       const samples = pts.map(([lbl, ago]) => [lbl, observedAt(ago)]);
       const nowS = samples[0][1] || (p.conditions && p.conditions.available ? { tws: p.conditions.tws, twd: p.conditions.twd } : null);
       if (!nowS) return NA("building TWS history…");
@@ -283,7 +302,7 @@
           (oldest ? " Over the window TWS " + (nowS.tws >= oldest.tws ? "built" : "eased") + " from " + r0(oldest.tws) + " to " + r0(nowS.tws) + " kts." : ""),
         consider: st === "ok" ? "Steady — work the oscillations." : "Building/shifting — favor the developing side and watch the gear.",
         clears: st === "ok" ? "—" : "the trend settles",
-        based: ["live wind buffer (" + App.windHist.length + " samples)"], conf: "engine" };
+        based: [App.seriesHist && App.seriesHist.length ? "engine archive (" + App.seriesHist.length + " pts) + live buffer" : "live wind buffer (" + App.windHist.length + " samples)"], conf: "engine" };
     },
     tactics(p) {
       const t = p.tactics;
@@ -301,26 +320,26 @@
       if (!fc || !fc.available || !fc.hours || !fc.hours.length) return NA("no forecast");
       const obs = observedAt(0) || (p.conditions && p.conditions.available ? { tws: p.conditions.tws, twd: p.conditions.twd } : null);
       const aug = obs ? [{ in_h: 0, tws: obs.tws, twd: obs.twd }].concat(fc.hours) : fc.hours.slice();
-      const f30 = fcstAt(aug, 0.5), f60 = fcstAt(aug, 1.0);
-      const v30 = fcstVsActual(1800), v60 = fcstVsActual(3600);
+      const f60 = fcstAt(aug, 1.0), f120 = fcstAt(aug, 2.0);
+      const v60 = fcstVsActual(3600), v120 = fcstVsActual(7200);
       const fwd = (s) => (s ? arrowKts(s.twd, s.tws) : "—");
       const rows = [
         { label: "Now", emph: true, cols: [obs ? arrowKts(obs.twd, obs.tws) : "—"] },
-        { label: "+30 min", cols: [fwd(f30)] },
         { label: "+60 min", cols: [fwd(f60)] },
+        { label: "+120 min", cols: [fwd(f120)] },
         { sep: true, label: "FORECAST VS. ACTUAL" },
         { hdr: true, cols: ["forecast", "actual"] },
-        { label: "−30 min", cols: v30 ? [fwd(v30.fcst), fwd(v30.actual)] : ["—", "accumulating"] },
         { label: "−60 min", cols: v60 ? [fwd(v60.fcst), fwd(v60.actual)] : ["—", "accumulating"] },
+        { label: "−120 min", cols: v120 ? [fwd(v120.fcst), fwd(v120.actual)] : ["—", "accumulating"] },
       ];
-      const bigChange = obs && (Math.abs(f60.tws - obs.tws) >= 6 || Math.abs(angDiff(f60.twd, obs.twd)) >= 15);
-      const badSkill = (v30 && (Math.abs(v30.actual.tws - v30.fcst.tws) >= 4 || Math.abs(angDiff(v30.actual.twd, v30.fcst.twd)) >= 15)) ||
-        (v60 && (Math.abs(v60.actual.tws - v60.fcst.tws) >= 4 || Math.abs(angDiff(v60.actual.twd, v60.fcst.twd)) >= 15));
+      const bigChange = obs && (Math.abs(f120.tws - obs.tws) >= 6 || Math.abs(angDiff(f120.twd, obs.twd)) >= 20);
+      const badSkill = (v60 && (Math.abs(v60.actual.tws - v60.fcst.tws) >= 4 || Math.abs(angDiff(v60.actual.twd, v60.fcst.twd)) >= 15)) ||
+        (v120 && (Math.abs(v120.actual.tws - v120.fcst.tws) >= 5 || Math.abs(angDiff(v120.actual.twd, v120.fcst.twd)) >= 20));
       const st = bigChange || badSkill ? "watch" : "ok";
       return { status: st, value: null, rows: rows,
-        why: "Forecast wind speed + direction (arrows show direction — a north wind points down). +30 min " + r0(f30.tws) + " kts, +60 min " + r0(f60.tws) + " kts. " +
-          "\"Forecast vs. actual\" compares the earlier forecast for −30 / −60 min ago against what actually happened — a read on how well the model is verifying" +
-          (v30 || v60 ? "." : " (fills in after the dashboard has run ~30-60 min)."),
+        why: "Forecast wind speed + direction (arrows show direction — a north wind points down). +60 min " + r0(f60.tws) + " kts, +120 min " + r0(f120.tws) + " kts. " +
+          "\"Forecast vs. actual\" compares the earlier forecast for −60 / −120 min ago against what actually happened — a read on how well the model is verifying" +
+          (v60 || v120 ? "." : " (fills in after the dashboard has run ~1-2 h)."),
         consider: badSkill ? "Forecast off lately — trust the live trend more." : bigChange ? "A notable change is forecast — plan the gear." : "Forecast steady and verifying.",
         clears: st === "ok" ? "—" : "forecast comes back in line", based: ["fetch_forecast + live wind buffer"], conf: "engine" };
     },
@@ -406,8 +425,8 @@
     src: "live", demoScn: "calm",
     theme: localStorage.getItem("sr33.dash.theme") || "auto",
     pos: { lat: 45.33, lon: -82.0 },
-    openTile: null, streamTimer: null, pollTimer: null, polling: false,
-    dwell: {}, data: null, windHist: [], fcstHist: [], lastPersist: 0,
+    openTile: null, streamTimer: null, pollTimer: null, seriesTimer: null, polling: false,
+    dwell: {}, data: null, windHist: [], fcstHist: [], seriesHist: [], lastPersist: 0,
   };
   function currentData() {
     if (App.src === "demo") {
@@ -494,6 +513,7 @@
     App.openTile = key;
     document.getElementById("overlay").hidden = false;
     document.getElementById("detail").hidden = false;
+    if (key === "wind" && App.src === "live") fetchSeries().then(() => { if (App.openTile === "wind") populateDetail("wind", false); });
     populateDetail(key, true);
   }
   function populateDetail(key, stream) {
@@ -506,7 +526,7 @@
     const g = document.getElementById("detGauge");
     const stColor = "var(--" + (t.status === "na" ? "na" : t.status) + ")";
     if (key === "wind" && t.status !== "na") {
-      const hist = dsample(App.src === "live" ? App.windHist : genDemoRace(App.demoScn === "escalated"), 600);
+      const hist = dsample(App.src === "live" ? raceData() : genDemoRace(App.demoScn === "escalated"), 600);
       const tws = hist.map((p) => p.tws);
       const dur = hist.length ? hist[hist.length - 1].t - hist[0].t : 0;
       const stats = tws.length
@@ -595,6 +615,8 @@
     document.getElementById("srcLbl").textContent = "LIVE";
     render();
     startPolling();
+    fetchSeries();     // pull the archived race series from the engine, then refresh periodically
+    App.seriesTimer = setInterval(fetchSeries, 30000);
     document.getElementById("themeBtn").addEventListener("click", cycleTheme);
     document.getElementById("srcBtn").addEventListener("click", cycleSource);
     document.getElementById("briefBtn").addEventListener("click", briefMe);
