@@ -47,7 +47,7 @@ reads facts through tools). Full design: `docs/RRS41_COMPLIANCE.md` + `docs/ONBO
 pi/                 Signal K config, vcan/systemd units, uplink + full-res archiver
 pi/engine/          onboard deterministic engine service (Tier 1, 9.1) — no LLM, :8200
 pi/console/         onboard race console (9.2) — the iPad app served from the Pi, :8091
-pi/orin/            onboard LLM copilot bring-up (Tier 2, 9.4) — Orin Nano: MLC + Qwen2.5-7B, :9000
+pi/orin/            onboard LLM copilot (Tier 2, 9.4) — Orin: Ollama+Qwen2.5-7B :11434; copilot/ decision-support svc :8300
 vps/ingestion/      FastAPI ingestion API (token-auth, writes batches to TimescaleDB)
 vps/agent/          Claude tool-use service + alerting + summarizer + WebSocket chat
 vps/web/            mobile web chat app (nginx static)
@@ -145,7 +145,7 @@ via `OnboardSource`. It comes up with the rest of the Pi stack; quick check:
 | **5** ✅ | iPad nav companion: day/night, sail dial, course plot, navigator, tactics, routing | bench-verified end-to-end |
 | **6** ✅ | Alerting + summarizer + polar tooling | bench-complete; 2-practice-sail false-positive gate awaits real sailing |
 | 7 🔶 | Prod stack + deploy + rules review + soak | rules review done; server auth + TLS scaffolding done; prod deploy/soak gated on domain + prod `.env` |
-| **9** 🔶 | Onboard + C4 Performance Lab (three-tier pivot) | **9.0 data-access abstraction ✅ · 9.1 onboard engine service ✅ · 9.2 race gate + iPad onboard console ✅ · Lab-0 race ingestion + course loader ✅ · Lab-1 multi-model GRIB optimizer ✅ · 9.4 Orin LLM runtime bring-up authored (Orin in hand 06-18; `pi/orin/`)**; next Lab-2 branching playbook + the SR33 copilot service — see `docs/ONBOARD_ENGINE_SCOPING.md` |
+| **9** 🔶 | Onboard + C4 Performance Lab (three-tier pivot) | **9.0 data-access abstraction ✅ · 9.1 onboard engine service ✅ · 9.2 race gate + iPad onboard console ✅ · Lab-0 race ingestion + course loader ✅ · Lab-1 multi-model GRIB optimizer ✅ · 9.4 Orin LLM appliance live (Ollama+Qwen2.5-7B :11434) + copilot decision-support layer ✅ (`pi/orin/copilot`)**; next Lab-2 branching playbook + the copilot narration increment — see `docs/ONBOARD_ENGINE_SCOPING.md` |
 
 **Current status:** Phases 0–6 built and bench-verified; Phase 7 started; **Phase 9 in progress
 (9.0 data-access abstraction ✅, 9.1 onboard engine service ✅ — see "Onboard engine service",
@@ -598,13 +598,33 @@ over its own sensors + pre-loaded homework + common public data is not "outside 
 phones the cloud mid-race, never does the math (the engine does), never invents strategy outside the
 playbook. **The Orin is in hand as of 2026-06-18.**
 
-**Current increment = runtime/model bring-up only** (`pi/orin/`); the SR33 copilot service (feeding
-it engine facts + the playbook for bounded decision support) is the next 9.4 increment, not built
-yet. **Runtime decided: MLC + INT4 (`q4f16_ft`) via jetson-containers** — the path behind NVIDIA's
-own Super-mode numbers (Qwen2.5-7B = 21.8 tok/s); **not** llama.cpp/Ollama for the 7B (CUDA-alloc
-regression in the JetPack R36.4.x line broke >1B models there). The model server exposes the boring,
-stable **OpenAI `/v1/chat/completions`** contract (port **9000**) so the copilot can swap models
-(7B ↔ a 3-4B latency fallback) without changing. `pi/orin/`:
+**Runtime appliance: LIVE.** The Orin is a turnkey headless offline-inference appliance —
+**Ollama serving `qwen2.5:7b-instruct-q4_K_M` on `:11434`** (OpenAI `/v1`), built from source with a
+`cuda_v13`@sm_87 GPU backend, ~12 tok/s (memory-bandwidth-bound; the strict 20 tok/s milestone was
+relaxed — quality over speed), reboot-verified + systemd-persistent, reachable over Tailscale. (This
+replaces the originally-planned MLC-on-:9000 path: JetPack 7.2/R39 was too new for jetson-containers'
+MLC matrix, and R39/CUDA-13.2 removed the R36.4.x llama.cpp regression that ruled Ollama out — full
+story in the Orin bring-up memory + `pi/orin/DEPLOYMENT.md`.) The copilot only sees the OpenAI `/v1`
+contract, so the runtime stays swappable.
+
+**SR33 copilot — decision-support layer: BUILT** (`pi/orin/copilot/`, the next 9.4 increment, first
+slice). A thin FastAPI service (**:8300**, runs on the Orin) that turns the Tier-1 engine's facts into
+**bounded, grounded decision support** via the local LLM. The guardrails are structural, not just
+prompt: the LLM's only capabilities are a closed set of **read-only engine-fact tools** (it can't do
+math or fetch anything else — the engine does the math); every `factor`/`recommendation` must be
+`grounded_in` a tool actually used or it's **dropped** by `brief.validate()`; caveats are computed by
+the engine (`structural_caveats`), not authored by the model; every brief carries a standing
+disclaimer + confidence; and if the LLM is off/slow/ungrounded the service returns the **deterministic
+brief** built from the same facts (always works, never depends on the model). A frozen **playbook**
+(Lab-2 output) loads via `PLAYBOOK_PATH` — the copilot selects/interprets its variants, never
+originates strategy; absent → it says so. Endpoints: `GET /health` (honest llm/deterministic/
+unreachable modes), `GET /tools` (the bounded surface), `POST /brief`, `GET /snapshot`. **Bench-verified
+on the real Orin** (over a Tailscale SSH forward of :11434, Pi engine on :8200): deterministic path
+green; LLM tool-loop returns a grounded brief in ~45 s warm (the model calls `get_forecast` on demand);
+graceful fallback fires on the ~2 min cold model-load or ungrounded JSON. Exit test:
+`python3 -m copilot.bench_copilot [--llm]`. **Next copilot increment = crew-facing narration.** See
+`pi/orin/copilot/README.md`. Runtime bring-up files (the originally-MLC plan, port **9000**) — note
+they describe MLC, the unit runs Ollama: `pi/orin/`:
 - **`SETUP.md`** — the bring-up runbook: flash JetPack 6.2 (L4T R36.4.x) + the QSPI firmware →
   Super mode (`sudo nvpmodel -m 2` + `jetson_clocks`) → NVIDIA-default docker runtime →
   `jetson-containers` → MLC → benchmark Qwen2.5-7B INT4 → serve → autostart → `tegrastats` thermal.
@@ -615,9 +635,9 @@ stable **OpenAI `/v1/chat/completions`** contract (port **9000**) so the copilot
   answer, fully offline, at usable latency; no SR33 tool-calling yet).
 - **`models.md`** — A/B matrix (NVIDIA numbers + a column for measured results) + how to confirm the
   exact MLC model id on-unit.
-- **`../systemd/sr33-orin-llm.service`** — appliance autostart (re-applies Super mode + clocks, then
-  `serve.sh`).
+- **`../systemd/sr33-orin-llm.service`** — the MLC-plan autostart unit (superseded by the live Ollama
+  systemd unit on the unit itself); **`../systemd/sr33-orin-copilot.service`** runs the copilot svc.
 
-**Not hardware-verified yet** — I can't reach the Orin from the dev VM, so every command is authored
-from NVIDIA/dusty-nv docs and marked ✅ (confirmed) or ⚠️ (confirm the exact model-id/flag on the
-live unit). See `pi/orin/README.md`.
+See `pi/orin/README.md` + `pi/orin/copilot/README.md`. The runtime as-built (Ollama-from-source) is
+documented in `pi/orin/DEPLOYMENT.md`; the copilot decision-support layer is bench-verified on real
+hardware (above).
