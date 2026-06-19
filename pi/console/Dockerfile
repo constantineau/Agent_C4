@@ -4,6 +4,8 @@
 FROM nginx:1.27-alpine
 
 COPY vps/web/public/ /usr/share/nginx/html/
+# Phase-1 crew dashboard prototype (docs/COPILOT_DASHBOARD.md) — served at /dashboard/.
+COPY pi/console/dashboard/ /usr/share/nginx/html/dashboard/
 COPY pi/console/default.conf /etc/nginx/conf.d/default.conf
 
 EXPOSE 8091

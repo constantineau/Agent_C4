@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en" data-theme="day">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>SR33 Crew Dashboard</title>
+  <link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+  <!-- ===== top bar ===== -->
+  <header class="topbar">
+    <h1>SR33 CREW</h1>
+    <span class="badge onboard">ONBOARD</span>
+    <span class="spacer"></span>
+
+    <!-- prototype-only controls (Phase 1: fake data) -->
+    <button class="ctl" id="scenarioBtn" title="Toggle demo scenario">SCENARIO: <b id="scenarioLbl">calm</b></button>
+    <button class="ctl" id="themeBtn" title="Day / night theme">☀ <b id="themeLbl">AUTO</b></button>
+  </header>
+
+  <!-- ===== main: fixed tile grid + commentary ===== -->
+  <main class="dash">
+    <section class="grid" id="grid" aria-label="Status tiles"><!-- tiles injected by JS --></section>
+
+    <aside class="commentary" id="commentary" aria-label="Copilot commentary">
+      <div class="comm-head">
+        <span class="comm-title">COPILOT</span>
+        <span class="mode-pill" id="modePill"><span class="mdot"></span><b id="modeLbl">llm-live</b></span>
+      </div>
+      <p class="comm-focus" id="commFocus">—</p>
+      <ul class="comm-notes" id="commNotes"></ul>
+      <div class="comm-foot">
+        <span class="conf" id="commConf">conf: —</span>
+        <button class="briefme" id="briefBtn">Brief me ↻</button>
+      </div>
+    </aside>
+  </main>
+
+  <!-- ===== tap-a-tile detail slide-over ===== -->
+  <div class="overlay" id="overlay" hidden></div>
+  <section class="detail" id="detail" hidden aria-modal="true" role="dialog">
+    <header class="det-head">
+      <button class="det-back" id="detBack" aria-label="Back to grid">‹ back</button>
+      <span class="det-name" id="detName">—</span>
+      <span class="det-status" id="detStatus"></span>
+    </header>
+
+    <div class="det-gauge" id="detGauge"></div>
+
+    <div class="det-body">
+      <div class="slot">
+        <span class="slot-lbl">WHY</span>
+        <p class="slot-txt" id="detWhy"></p>
+      </div>
+      <div class="slot">
+        <span class="slot-lbl">CONSIDER</span>
+        <p class="slot-txt" id="detConsider"></p>
+      </div>
+      <div class="slot">
+        <span class="slot-lbl">CLEARS WHEN</span>
+        <p class="slot-txt" id="detClears"></p>
+      </div>
+      <div class="slot">
+        <span class="slot-lbl">BASED ON</span>
+        <p class="slot-txt based" id="detBased"></p>
+      </div>
+    </div>
+
+    <footer class="det-foot">
+      <input class="det-ask" id="detAsk" placeholder="Ask about this…" />
+      <button class="det-send" id="detSend" aria-label="Ask">↵</button>
+    </footer>
+  </section>
+
+  <script src="/sun.js"></script>
+  <script src="dashboard.js"></script>
+</body>
+</html>

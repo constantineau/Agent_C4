@@ -1,0 +1,179 @@
+/* SR33 Crew Dashboard — onboard copilot iPad surface (Phase 1 prototype).
+   Design: docs/COPILOT_DASHBOARD.md. A FIXED grid of status tiles that never relocate;
+   the copilot scores each tile; status is encoded in >=3 independent channels so colour is
+   never load-bearing (accessible BY CONSTRUCTION — no toggle); two themes, day + night,
+   both accessible. */
+
+/* ---------- themes ---------- */
+:root, :root[data-theme="day"] {
+  --bg:#0b1017; --panel:#141b25; --panel2:#1b2533; --line:#27384a;
+  --text:#e7edf4; --muted:#8499ad; --accent:#43a7ff;
+  /* status hues — Okabe-Ito, distinguishable across virtually all CVD types.
+     blue=ok, amber=watch, vermillion=act, grey=stale/no-data. */
+  --ok:#3a93d6; --watch:#e69f00; --act:#e2562a; --na:#5d6b7a;
+  --ok-fill:rgba(58,147,214,.16); --watch-fill:rgba(230,159,0,.20); --act-fill:rgba(226,86,42,.26);
+  --shadow:0 2px 10px rgba(0,0,0,.35);
+}
+/* True night mode: red-on-black for night vision. Red CANNOT mean "act" here, so it doesn't —
+   shape + label + luminance + bar carry status; ACT goes near-white (bright = attention),
+   WATCH amber. Hue is just a bonus channel, so dropping red costs nothing. */
+:root[data-theme="night"] {
+  --bg:#000; --panel:#0c0000; --panel2:#150000; --line:#3a0000;
+  --text:#ff6a6a; --muted:#8a2a2a; --accent:#ff7a3a;
+  --ok:#9e4040; --watch:#ff9a3a; --act:#ffe7dd; --na:#5a2a2a;
+  --ok-fill:rgba(158,64,64,.18); --watch-fill:rgba(255,154,58,.22); --act-fill:rgba(255,231,221,.16);
+  --shadow:none;
+}
+
+* { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+html, body { margin:0; height:100%; overflow:hidden; }
+body {
+  background:var(--bg); color:var(--text);
+  font:16px/1.35 -apple-system, system-ui, "SF Pro", sans-serif;
+  display:flex; flex-direction:column; height:100vh;
+  touch-action:manipulation; -webkit-user-select:none; user-select:none;
+}
+
+/* ---------- top bar ---------- */
+.topbar { display:flex; align-items:center; gap:10px; padding:8px 14px;
+  background:var(--panel); border-bottom:1px solid var(--line); flex:none; }
+.topbar h1 { font-size:15px; letter-spacing:1.6px; margin:0; font-weight:800; }
+.topbar .spacer { flex:1; }
+.badge { font-size:11px; letter-spacing:1.4px; font-weight:800; padding:4px 9px; border-radius:6px;
+  border:1px solid var(--accent); color:var(--accent); background:transparent; }
+.ctl { background:var(--panel2); border:1px solid var(--line); color:var(--text);
+  border-radius:9px; padding:7px 12px; font-size:12px; letter-spacing:.5px; font-weight:600;
+  cursor:pointer; }
+.ctl b { font-weight:800; text-transform:uppercase; }
+
+/* ---------- main layout: tile grid | commentary ---------- */
+.dash { flex:1; display:grid; grid-template-columns: 1fr 300px; gap:10px; padding:10px; min-height:0; }
+.grid { display:grid; grid-template-columns:repeat(3,1fr); grid-template-rows:repeat(4,1fr);
+  gap:8px; min-height:0; }
+
+/* ---------- a status tile ---------- */
+.tile {
+  position:relative; overflow:hidden;
+  border:1px solid var(--line); border-radius:12px; background:var(--panel);
+  padding:9px 11px 9px 16px;            /* left pad clears the severity bar */
+  display:flex; flex-direction:column; gap:3px;
+  cursor:pointer; box-shadow:var(--shadow);
+}
+/* per-status accent colour resolved once into --c, used by bar/fill/icon/chip */
+.tile.s-ok   { --c:var(--ok);    --cfill:var(--ok-fill); }
+.tile.s-watch{ --c:var(--watch); --cfill:var(--watch-fill); }
+.tile.s-act  { --c:var(--act);   --cfill:var(--act-fill); }
+.tile.s-na   { --c:var(--na);    --cfill:transparent; }
+
+/* CHANNEL 4 — gauge fill from the bottom: severity is also a POSITION (legible in greyscale) */
+.tile::before { content:""; position:absolute; left:0; right:0; bottom:0; height:0;
+  background:var(--cfill); transition:height .5s ease; z-index:0; }
+.tile.s-ok::before    { height:18%; }
+.tile.s-watch::before { height:55%; }
+.tile.s-act::before   { height:90%; }
+
+/* CHANNEL 3a — left severity bar: thickens as severity rises (legible by edge alone) */
+.tile::after { content:""; position:absolute; left:0; top:0; bottom:0; width:4px;
+  background:var(--c); transition:width .4s ease; z-index:1; }
+.tile.s-watch::after { width:7px; }
+.tile.s-act::after   { width:11px; }
+.tile.s-na::after    { width:3px; opacity:.5; }
+
+.tile > * { position:relative; z-index:2; }
+
+.t-head { display:flex; align-items:center; gap:6px; }
+.t-name { font-size:11px; letter-spacing:1.2px; font-weight:700; color:var(--muted); }
+.t-chip { margin-left:auto; display:inline-flex; align-items:center; gap:5px;
+  font-size:10px; letter-spacing:1px; font-weight:800; color:var(--c); }
+/* CHANNEL 1 — shape/icon: distinct silhouettes, road-sign style, legible in pure greyscale */
+.t-icon { font-size:13px; line-height:1; }
+/* CHANNEL 2 — word label (color-independent) lives in .t-word inside the chip */
+
+.t-val { font-size:30px; font-weight:800; letter-spacing:.5px; line-height:1.05;
+  /* CHANNEL 3b — luminance: act is brightest, na dimmest, even at equal hue */ }
+.tile.s-na .t-val { color:var(--muted); }
+.tile.s-act .t-val { color:var(--text); }
+.t-sub { font-size:13px; color:var(--muted); font-weight:600; }
+
+/* ACT pulses IN PLACE — accessible motion (a fixed tile breathing), never a relocating card */
+.tile.s-act { animation:tilePulse 1.8s ease-in-out infinite; }
+@keyframes tilePulse { 50% { border-color:var(--act); box-shadow:0 0 0 2px var(--cfill), var(--shadow); } }
+
+/* "coming soon" tiles (data not wired yet) read clearly as inert, not as a status */
+.tile.coming { opacity:.5; }
+.tile.coming .t-val { font-size:13px; font-weight:700; }
+
+/* commentary-note → tile "pointing" ring (LLM points without anything moving) */
+.tile.ring { box-shadow:0 0 0 3px var(--accent), var(--shadow); }
+
+/* ---------- commentary panel ---------- */
+.commentary { border:1px solid var(--line); border-radius:12px; background:var(--panel);
+  padding:12px; display:flex; flex-direction:column; gap:10px; box-shadow:var(--shadow);
+  min-height:0; }
+.comm-head { display:flex; align-items:center; }
+.comm-title { font-size:13px; letter-spacing:2px; font-weight:800; }
+.mode-pill { margin-left:auto; display:inline-flex; align-items:center; gap:6px; font-size:11px;
+  font-weight:700; color:var(--muted); border:1px solid var(--line); border-radius:14px;
+  padding:3px 9px; }
+.mode-pill .mdot { width:8px; height:8px; border-radius:50%; background:var(--ok); }
+.mode-pill[data-mode="engine"] .mdot { background:var(--na); }
+.mode-pill[data-mode="engine"] b::after { content:""; }
+.comm-focus { margin:0; font-size:16px; font-weight:700; line-height:1.3; }
+.comm-notes { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:8px;
+  overflow-y:auto; flex:1; }
+.comm-notes li { border:1px solid var(--line); border-radius:9px; padding:8px 10px;
+  background:var(--panel2); cursor:pointer; display:flex; flex-direction:column; gap:4px; }
+.comm-notes li .note-txt { font-size:13.5px; line-height:1.35; }
+.comm-notes li .note-meta { display:flex; gap:6px; align-items:center; }
+.note-tag { font-size:9.5px; letter-spacing:1px; font-weight:800; padding:2px 6px; border-radius:5px;
+  background:var(--cfill, transparent); color:var(--c, var(--muted)); border:1px solid var(--c, var(--line)); }
+.comm-notes li.tg-ok    { --c:var(--ok);    --cfill:var(--ok-fill); }
+.comm-notes li.tg-watch { --c:var(--watch); --cfill:var(--watch-fill); }
+.comm-notes li.tg-act   { --c:var(--act);   --cfill:var(--act-fill); }
+.note-conf { font-size:10px; color:var(--muted); font-weight:600; }
+.comm-foot { display:flex; align-items:center; gap:8px; }
+.conf { font-size:12px; color:var(--muted); font-weight:600; }
+.briefme { margin-left:auto; background:var(--panel2); border:1px solid var(--accent);
+  color:var(--accent); border-radius:9px; padding:8px 12px; font-size:12px; font-weight:700;
+  cursor:pointer; }
+.briefme.busy { opacity:.5; }
+
+/* ---------- detail slide-over (grid stays glanceable behind) ---------- */
+.overlay { position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:20; }
+.detail { position:fixed; top:0; right:0; bottom:0; width:min(62%,560px); z-index:21;
+  background:var(--panel); border-left:1px solid var(--line); box-shadow:-6px 0 24px rgba(0,0,0,.5);
+  display:flex; flex-direction:column; transform:translateX(0); }
+.detail[hidden], .overlay[hidden] { display:none; }
+.det-head { display:flex; align-items:center; gap:10px; padding:12px 14px;
+  border-bottom:1px solid var(--line); }
+.det-back { background:var(--panel2); border:1px solid var(--line); color:var(--text);
+  border-radius:9px; padding:8px 14px; font-size:14px; font-weight:700; cursor:pointer; }
+.det-name { font-size:15px; letter-spacing:1.5px; font-weight:800; }
+.det-status { margin-left:auto; display:inline-flex; align-items:center; gap:6px;
+  font-size:11px; letter-spacing:1px; font-weight:800; }
+.det-gauge { padding:14px; border-bottom:1px solid var(--line); font-size:13px; color:var(--muted);
+  font-weight:600; }
+.det-gauge .bars { display:flex; flex-direction:column; gap:7px; margin-top:8px; }
+.det-gauge .bar { display:flex; align-items:center; gap:8px; font-size:12px; }
+.det-gauge .bar .barlbl { width:120px; color:var(--muted); }
+.det-gauge .bar .bartrk { flex:1; height:8px; border-radius:4px; background:var(--panel2);
+  overflow:hidden; }
+.det-gauge .bar .barfil { height:100%; background:var(--accent); border-radius:4px; }
+.det-body { flex:1; overflow-y:auto; padding:8px 14px; display:flex; flex-direction:column; gap:14px; }
+.slot { display:flex; flex-direction:column; gap:4px; }
+.slot-lbl { font-size:10.5px; letter-spacing:1.6px; font-weight:800; color:var(--muted); }
+.slot-txt { margin:0; font-size:15px; line-height:1.4; }
+.slot-txt.based { font-size:13px; color:var(--muted); font-family:ui-monospace,Menlo,monospace; }
+.slot-txt .caret { display:inline-block; width:7px; height:16px; background:var(--accent);
+  margin-left:2px; vertical-align:-3px; animation:blink 1s step-end infinite; }
+@keyframes blink { 50% { opacity:0; } }
+.det-foot { display:flex; gap:8px; padding:12px 14px; border-top:1px solid var(--line); }
+.det-ask { flex:1; background:var(--panel2); border:1px solid var(--line); color:var(--text);
+  border-radius:9px; padding:10px 12px; font-size:14px; }
+.det-ask::placeholder { color:var(--muted); }
+.det-send { background:var(--accent); color:#04121f; border:none; border-radius:9px;
+  padding:0 16px; font-size:18px; font-weight:800; cursor:pointer; }
+:root[data-theme="night"] .det-send { color:#1a0000; }
+
+/* portrait / narrow fallback so it never breaks on an odd viewport */
+@media (max-width:760px) { .dash { grid-template-columns:1fr; } .commentary { display:none; } }
