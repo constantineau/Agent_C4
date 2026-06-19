@@ -1,0 +1,5 @@
+# The copilot service itself needs only FastAPI to serve. The engine + LLM clients are pure
+# stdlib (urllib), so the decision-support logic runs with no extra deps on a bare Orin —
+# only `app.py` (the HTTP service) needs these.
+fastapi==0.115.6
+uvicorn[standard]==0.34.0

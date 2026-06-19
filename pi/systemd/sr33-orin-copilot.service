@@ -1,0 +1,29 @@
+[Unit]
+Description=SR33 onboard copilot — decision-support service (Tier 2, 9.4)
+# Needs the LLM (Ollama) up and the network (to reach the Pi engine over boat-local Wi-Fi).
+After=network-online.target ollama.service
+Wants=network-online.target
+# Ollama is the LLM backend; the copilot degrades to deterministic if it's down, so only Want it.
+Wants=ollama.service
+
+[Service]
+Type=simple
+User=agent-c4
+# Adjust if you clone elsewhere than /home/agent-c4/Agent_C4.
+WorkingDirectory=/home/agent-c4/Agent_C4/pi/orin
+# Drop real values in /etc/sr33/copilot.env on the Orin:
+#   ENGINE_URL=http://<pi-ip>:8200      (the Pi-4 deterministic engine)
+#   LLM_BASE_URL=http://127.0.0.1:11434/v1
+#   LLM_MODEL=qwen2.5:7b-instruct-q4_K_M
+#   LLM_TIMEOUT=180                       (cover the ~2 min cold model load, or pre-warm)
+#   PLAYBOOK_PATH=/home/agent-c4/sr33/playbook.json   (Lab-2 output, when it exists)
+#   COPILOT_ROUTE=bayview-mackinac-2026   (the loaded homework route)
+EnvironmentFile=-/etc/sr33/copilot.env
+Environment=COPILOT_PORT=8300
+# Bind 0.0.0.0 so the iPad can reach it over boat-local Wi-Fi.
+ExecStart=/usr/bin/env python3 -m uvicorn copilot.app:app --host 0.0.0.0 --port ${COPILOT_PORT}
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

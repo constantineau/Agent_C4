@@ -5,10 +5,16 @@ The **optional onboard conversational LLM** of the three-tier architecture (see
 (Super)** dedicated to LLM inference, separate from the Pi 4 that runs the deterministic engine
 (Tier 1, `pi/engine`). They talk over boat-local Wi-Fi.
 
-> **Status: runtime/model bring-up.** This directory currently covers getting the Orin flashed and
-> serving a benchmarked local LLM over an OpenAI-compatible API. The **SR33-specific copilot service**
-> (feeding it the engine's facts + the playbook, bounded decision support, narration) is the *next*
-> 9.4 increment and is **not built yet**.
+> **Status: runtime up + decision-support layer built.** The runtime/model bring-up shipped (the
+> Orin is a turnkey headless appliance — **Ollama serving `qwen2.5:7b-instruct-q4_K_M` on `:11434`**,
+> from-source `cuda_v13`@sm_87 GPU build, ~12 tok/s, reboot-verified). The **SR33 copilot service**
+> now exists in **[`copilot/`](copilot/)** — its first increment, the **decision-support /
+> tool-calling layer** (bounded read-only engine tools + grounding guardrails + deterministic
+> fallback). Crew-facing narration is the next increment. See `copilot/README.md`.
+>
+> **Endpoint note:** the runtime files below (`SETUP.md`/`serve.sh`/`smoke_api.py`) still describe the
+> originally-planned **MLC on `:9000`**; the unit actually runs **Ollama on `:11434`** (same OpenAI
+> `/v1` contract — see the Orin bring-up notes). The copilot defaults to `:11434`.
 
 ## Why a separate box, and why it's legal in-race
 
