@@ -37,9 +37,10 @@ class LLMClient:
             raise LLMUnavailable(f"bad JSON from LLM: {e}") from e
 
     def chat(self, messages, tools=None, tool_choice="auto", json_object=False,
-             temperature=None) -> dict:
+             schema=None, temperature=None) -> dict:
         """One chat round. Returns the assistant message dict, which may contain `tool_calls`.
-        Set `json_object=True` to ask for a JSON-only answer (the concluding turn)."""
+        `schema` (a JSON Schema) forces schema-valid JSON output (constrained decoding) — the most
+        reliable structured-output mode; `json_object=True` is the looser JSON-only fallback."""
         payload = {
             "model": self.model,
             "messages": messages,
@@ -49,7 +50,10 @@ class LLMClient:
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = tool_choice
-        if json_object:
+        if schema:
+            payload["response_format"] = {"type": "json_schema",
+                                          "json_schema": {"name": "response", "schema": schema}}
+        elif json_object:
             payload["response_format"] = {"type": "json_object"}
         data = self._post("/chat/completions", payload)
         try:

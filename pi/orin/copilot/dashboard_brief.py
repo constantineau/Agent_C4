@@ -40,6 +40,41 @@ _SYSTEM = (
     "Be calm and practical, like a good navigator. Respond with ONLY a JSON object."
 )
 
+# JSON schema for constrained decoding — guarantees the brief's shape (no malformed/parse failures).
+_SCHEMA = {
+    "type": "object", "additionalProperties": False,
+    "properties": {
+        "focus": {"type": "string"},
+        "notes": {"type": "array", "items": {
+            "type": "object", "additionalProperties": False,
+            "properties": {"tile": {"type": "string"}, "text": {"type": "string"},
+                           "confidence": {"type": "string", "enum": ["high", "med", "low"]}},
+            "required": ["tile", "text", "confidence"]}},
+        "adjust": {"type": "array", "items": {
+            "type": "object", "additionalProperties": False,
+            "properties": {"tile": {"type": "string"}, "status": {"type": "string", "enum": ["ok", "watch", "act"]},
+                           "reason": {"type": "string"}},
+            "required": ["tile", "status", "reason"]}},
+    },
+    "required": ["focus", "notes", "adjust"],
+}
+
+# One worked example (few-shot) — teaches the JSON shape, grounding to given keys, and especially
+# reading a trend correctly (9→18 = BUILDING). Keep it to one to limit prefill on the 7B.
+_EXAMPLE_USER = ('Dashboard tiles right now:\n' + json.dumps([
+    {"key": "wind", "name": "TWS Trend", "value": "Now 18 kts; -60 min 12 kts; -120 min 9 kts", "sub": "", "status": "watch"},
+    {"key": "sail", "name": "Sail", "value": "J1", "sub": "in range", "status": "ok"},
+    {"key": "data", "name": "Data", "value": "5", "sub": "sources live", "status": "ok"},
+]))
+_EXAMPLE_ASSISTANT = json.dumps({
+    "focus": "Breeze building fast — stay ahead of the gear.",
+    "notes": [
+        {"tile": "wind", "text": "Wind has built from 9 to 18 kts over the last two hours and is still rising — ease/depower and plan the next sail down.", "confidence": "high"},
+        {"tile": "sail", "text": "J1 is right for now, but ready the smaller headsail as it keeps building.", "confidence": "med"},
+    ],
+    "adjust": [],
+})
+
 _DETAIL_SYSTEM = (
     "You are the onboard tactical copilot for the SR33 racing yacht 'C4'. The crew tapped one "
     "dashboard tile for a closer look. " + _READING + "\n\n"
@@ -100,17 +135,17 @@ def make(tiles):
 
     compact = [{"key": t.get("key"), "name": t.get("name"), "value": t.get("value"),
                 "sub": t.get("sub"), "status": t.get("status")} for t in tiles]
-    user = ("Dashboard tiles right now:\n" + json.dumps(compact, ensure_ascii=False) +
-            "\n\nRespond with ONLY this JSON shape:\n"
-            '{"focus": "<headline>", '
-            '"notes": [{"tile": "<key>", "text": "<short note>", "confidence": "high|med|low"}], '
-            '"adjust": [{"tile": "<key>", "status": "ok|watch|act", "reason": "<why>"}]}')
-
+    user = "Dashboard tiles right now:\n" + json.dumps(compact, ensure_ascii=False)
+    messages = [
+        {"role": "system", "content": _SYSTEM},
+        {"role": "user", "content": _EXAMPLE_USER},        # few-shot: the worked example…
+        {"role": "assistant", "content": _EXAMPLE_ASSISTANT},
+        {"role": "user", "content": user},                 # …then the real tiles
+    ]
     try:
-        msg = LLMClient().chat(
-            [{"role": "system", "content": _SYSTEM}, {"role": "user", "content": user}],
-            json_object=True,
-        )
+        # schema-constrained decoding guarantees the JSON shape; falls back to json_object if the
+        # runtime ignores the schema (still parsed/validated below either way).
+        msg = LLMClient().chat(messages, schema=_SCHEMA, json_object=True)
     except LLMUnavailable as e:
         return {"mode": "deterministic", "reason": "llm unavailable: " + str(e)[:120]}
 
