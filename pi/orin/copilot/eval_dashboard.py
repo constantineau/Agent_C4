@@ -13,8 +13,9 @@ import sys
 
 from . import dashboard_brief
 
-_BUILD = ["build", "rising", "increas", "freshen", "getting up", "more breeze", "more wind", "up to"]
-_EASE = ["eas", "drop", "decreas", "dying", "lighten", "fading", "less breeze", "softening", "backing off"]
+# Word-specific so we don't false-match (e.g. "eas" inside "incrEASes", or "drop" in "any drop").
+_BUILD = ["build", "rising", "increas", "freshen", "picking up", "more breeze", "more wind", "stronger", "ramping"]
+_EASE = ["eased", "easing", "dropp", "decreas", "dying", "lighten", "fading", "softening", "less wind", "less breeze", "backing off"]
 
 
 def _has(text, words):
