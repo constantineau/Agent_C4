@@ -4,7 +4,7 @@ FROM python:3.12-slim
 
 WORKDIR /srv
 ENV PYTHONUNBUFFERED=1 PYTHONPATH=/srv \
-    RACES_DIR=/srv/races INGESTED_DIR=/srv/ingested WEB_DIR=/srv/web \
+    RACES_DIR=/srv/races BOATS_DIR=/srv/boats INGESTED_DIR=/srv/ingested WEB_DIR=/srv/web \
     POLARS_FILE=/srv/polars_sr33.sql GRIB_CACHE=/srv/gribcache ENC_CACHE=/srv/enc
 
 # gdal-bin = the S-57 driver (ogr2ogr) used at PREP time to turn NOAA ENC charts into GeoJSON
@@ -21,6 +21,7 @@ COPY shared/ ./shared/
 COPY vps/lab/app/ ./app/
 COPY vps/lab/web/ ./web/
 COPY vps/lab/races/ ./races/
+COPY vps/lab/boats/ ./boats/
 # the one canonical ORC polar (same source the onboard engine parses) for the optimizer
 COPY vps/db/seed/polars_sr33.sql ./polars_sr33.sql
 

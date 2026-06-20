@@ -471,6 +471,7 @@ async function renderGameplan() {
       const md = await (await apiGet("/api/models")).json();
       Opt.models = md.models; Opt.defaultModels = md.default;
       Opt.chosen = Opt.chosen || md.default.slice();
+      await reloadBoats();
     } catch (e) { view.innerHTML = '<div class="placeholder">Failed to load optimizer.</div>'; return; }
   }
   if (!Opt.raceId && Opt.races.length) await optPickRace(Opt.races[0].race_id, false);
@@ -485,6 +486,7 @@ async function renderGameplan() {
         <label>Course <select id="optCourse" onchange="Opt.courseId=this.value">${optCourseOpts()}</select></label>
         <label>Start (UTC) <input type="datetime-local" id="optStart"></label>
       </div>
+      <div class="opt-controls">${optBoatControls()}</div>
       <div class="opt-models">${optModelChecks()}</div>
       <div class="opt-controls">
         <label>Ensemble members <input type="number" id="optEns" value="0" min="0" max="30" style="width:64px"> <span class="muted">(GEFS/ECMWF-ENS only; 0 = deterministic)</span></label>
@@ -513,6 +515,48 @@ function optModelChecks() {
 function optToggle(k, on) {
   Opt.chosen = Opt.chosen.filter((x) => x !== k);
   if (on) Opt.chosen.push(k);
+}
+
+/* Boat profile ([B]): active boat + editable draft (feet) + chart source. Draft sets the ENC
+   depth no-go, so it drives the route. */
+async function reloadBoats() {
+  const bd = await (await apiGet("/api/boats")).json();
+  Opt.boats = bd.boats || []; Opt.activeBoat = bd.active; Opt.chartSource = bd.chart_source;
+}
+function optBoatControls() {
+  const ab = (Opt.boats || []).find((b) => b.boat_id === Opt.activeBoat) || {};
+  const draftFt = ab.draft_ft != null ? ab.draft_ft : "";
+  const depthFt = ab.safety_depth_m != null ? (ab.safety_depth_m / 0.3048).toFixed(1) : "";
+  const isEnc = Opt.chartSource === "enc";
+  return `<label>Boat
+      <select id="optBoat" onchange="optPickBoat(this.value)">
+        ${(Opt.boats || []).map((b) => `<option value="${esc(b.boat_id)}" ${b.boat_id === Opt.activeBoat ? "selected" : ""}>${esc(b.name)} (${b.draft_ft != null ? b.draft_ft + " ft" : "?"})</option>`).join("")}
+      </select></label>
+    <label>Draft (ft) <input type="number" id="optDraft" step="0.1" min="0" value="${draftFt}" style="width:64px" onchange="optSaveDraft()"></label>
+    <label>Charts
+      <select id="optChart" onchange="optSetChart(this.value)">
+        <option value="natural_earth" ${!isEnc ? "selected" : ""}>Natural Earth (coarse)</option>
+        <option value="enc" ${isEnc ? "selected" : ""}>NOAA ENC (draft-aware)</option>
+      </select></label>
+    <span class="muted">${isEnc ? "depth no-go &lt; " + depthFt + " ft (draft + margin)" : "global coastline backstop"}</span>`;
+}
+async function optPickBoat(id) {
+  Opt.activeBoat = id;
+  await apiPost("/api/boats/active", { boat_id: id });
+  await reloadBoats(); renderGameplan();
+}
+async function optSetChart(src) {
+  Opt.chartSource = src;
+  await apiPost("/api/boats/active", { chart_source: src });
+  renderGameplan();
+}
+async function optSaveDraft() {
+  const ft = parseFloat(document.getElementById("optDraft").value);
+  if (isNaN(ft) || ft <= 0) return;
+  const full = (await (await apiGet("/api/boats/" + encodeURIComponent(Opt.activeBoat))).json()).boat || {};
+  full.draft_m = Math.round(ft * 0.3048 * 10000) / 10000;          // store metres, enter feet
+  await apiPost("/api/boats", full);
+  await reloadBoats(); renderGameplan();
 }
 async function optPickRace(id, rerender = true) {
   Opt.raceId = id; Opt.courseId = null; Opt.result = null;
@@ -591,9 +635,16 @@ function optObstacleNote(r) {
   const ob = r.obstacles || {};
   if (!ob.active) return '<div class="muted" style="font-size:12px;margin-top:6px">Obstacle avoidance off — route may cross land/islands.</div>';
   const L = ob.layers || {};
-  return `<div class="muted" style="font-size:12px;margin-top:6px">⛰ Obstacle avoidance ON — route steered around land/islands/zones
-    (${r.obstacle_steps_avoided || 0} candidate steps rejected; layers: coastline ${L.coastline || 0}, islands ${L.islands || 0}, zones ${L.zones || 0} cells).
-    Coastline is Natural Earth 1:10m (${esc(ob.data_version || "")}) + this race's islands/zones — coarse near shore; verify against the chart.</div>`;
+  const steps = r.obstacle_steps_avoided || 0;
+  const boat = r.boat ? esc(r.boat.name) : "boat";
+  if (ob.source === "enc") {
+    return `<div class="muted" style="font-size:12px;margin-top:6px">⚓ <b>NOAA ENC charts</b> (draft-aware) — route steered around real land + shoals + obstructions
+      (${steps} candidate steps rejected; cells: land ${L.coastline || 0}, shoal ${L.shoal || 0}, rocks/obstrns ${L.obstruction || 0}, zones ${L.zones || 0}).
+      Shoal no-go = ${boat} draft + margin, depth &lt; <b>${ob.safety_depth_m ?? "?"} m</b>. NOAA GIS export = non-navigational; verify against the official chart.</div>`;
+  }
+  return `<div class="muted" style="font-size:12px;margin-top:6px">⛰ Natural Earth 1:10m (${esc(ob.data_version || "")}) + this race's islands/zones — route steered around land/islands/zones
+    (${steps} candidate steps rejected; cells: coastline ${L.coastline || 0}, islands ${L.islands || 0}, zones ${L.zones || 0}).
+    Coarse near shore + no depth/shoals — switch Charts to <b>NOAA ENC</b> above for draft-aware accuracy.</div>`;
 }
 
 function drawRoute(id, r) {

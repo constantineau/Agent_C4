@@ -19,8 +19,8 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from shared import race_def
-from . import auth, store, extract
+from shared import race_def, boat_profile
+from . import auth, store, extract, boats, labstate
 
 INGESTED_DIR = os.environ.get("INGESTED_DIR", "/srv/ingested")
 
@@ -154,6 +154,12 @@ def models():
     return {"models": available_models(), "default": list(DEFAULT_MODELS)}
 
 
+def chart_source():
+    """The active chart/obstacle source — labstate override, else the COASTLINE_SOURCE env default."""
+    from .geo import obstacles
+    return (labstate.get("coastline_source") or obstacles.COASTLINE_SOURCE or "natural_earth").lower()
+
+
 def _run_optimize(definition, course_id, start_epoch, model_names, ensemble_members, avoid=True):
     """Blocking: build the multi-model wind field, route the course, write the briefing."""
     from .wind import build_windfield
@@ -169,8 +175,11 @@ def _run_optimize(definition, course_id, start_epoch, model_names, ensemble_memb
     if not wf.loaded:
         return {"available": False, "note": "no weather model data could be loaded (not yet "
                 "posted, or no egress)", "windfield": wf.status(), "log": log}
-    result = optimizer.optimize_course(definition, course_id, start_epoch, wf, avoid=avoid)
+    result = optimizer.optimize_course(definition, course_id, start_epoch, wf, avoid=avoid,
+                                       source=chart_source(),
+                                       safety_depth=boats.active_safety_depth_m())
     result["briefing"] = optimizer.briefing(result, definition.get("name", ""))
+    result["boat"] = boat_profile.summary(boats.active_boat()) if boats.active_boat() else None
     result["log"] = log
     return result
 
@@ -206,10 +215,11 @@ def _run_enc_prep(definition, course_id):
     if not bbox:
         return {"ok": False, "note": "course has no geocoded marks — review Course & Marks"}
     log = []
+    depth = boats.active_safety_depth_m()
     manifest = enc.ensure_bbox(bbox, on_progress=log.append)
-    layers = enc.layers_in_bbox(bbox, safety_depth_m=obstacles.safety_depth_m())
+    layers = enc.layers_in_bbox(bbox, safety_depth_m=depth)
     return {"ok": True, "bbox": bbox, "cells": list(manifest.keys()),
-            "safety_depth_m": round(obstacles.safety_depth_m(), 2),
+            "safety_depth_m": round(depth, 2),
             "polys": {k: len(v) for k, v in layers.items()}, "log": log}
 
 
@@ -228,6 +238,77 @@ async def enc_prep(body: dict):
         return await run_in_threadpool(_run_enc_prep, d, body.get("course_id"))
     except Exception as exc:
         return JSONResponse({"detail": f"enc prep failed: {exc}"}, status_code=500)
+
+
+# --- BoatProfile ([B]): boats library + the active boat + the chart source -----
+@app.get("/api/boats")
+def list_boats():
+    """All boat profiles (summaries with feet conveniences) + the active boat id + chart settings."""
+    return {"boats": boats.list_boats(), "active": boats.active_id(),
+            "chart_source": chart_source()}
+
+
+@app.post("/api/boats")
+def save_boat(body: dict):
+    """Create/update a boat profile. Draft may be sent as `draft_ft` (US convention) — stored as m.
+
+    The optimizer reads the ACTIVE boat's draft as the ENC depth no-go, so editing draft here changes
+    the route (deeper boat → shoals block more water)."""
+    body = body or {}
+    if body.get("draft_ft") is not None and body.get("draft_m") is None:
+        body["draft_m"] = round(boat_profile.ft_to_m(body.pop("draft_ft")), 4)
+    if body.get("safety_margin_ft") is not None and body.get("safety_margin_m") is None:
+        body["safety_margin_m"] = round(boat_profile.ft_to_m(body.pop("safety_margin_ft")), 4)
+    errs, warns = boat_profile.validate(body)
+    if errs:
+        return JSONResponse({"detail": "invalid boat profile", "errors": errs}, status_code=400)
+    try:
+        saved = boats.save_boat(body)
+    except ValueError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=400)
+    return {"boat": saved, "summary": boat_profile.summary(saved), "warnings": warns}
+
+
+@app.get("/api/boats/active")        # declared before /api/boats/{bid} so 'active' isn't read as an id
+def get_active_boat():
+    b = boats.active_boat()
+    return {"active": boats.active_id(),
+            "summary": boat_profile.summary(b) if b else None,
+            "chart_source": chart_source()}
+
+
+@app.post("/api/boats/active")
+def set_active_boat(body: dict):
+    """Select the active boat and/or the chart source (natural_earth | enc). Both Lab-wide."""
+    body = body or {}
+    out = {}
+    bid = body.get("boat_id") or body.get("active")
+    if bid:
+        try:
+            out["active"] = boats.set_active(bid)
+        except ValueError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+    src = body.get("chart_source")
+    if src is not None:
+        src = str(src).strip().lower()
+        if src not in ("natural_earth", "enc"):
+            return JSONResponse({"detail": "chart_source must be natural_earth or enc"},
+                                status_code=400)
+        out["chart_source"] = labstate.set("coastline_source", src)
+    out.setdefault("active", boats.active_id())
+    out.setdefault("chart_source", chart_source())
+    b = boats.active_boat()
+    out["summary"] = boat_profile.summary(b) if b else None
+    return out
+
+
+@app.get("/api/boats/{bid}")
+def get_boat(bid: str):
+    b = boats.get_boat(bid)
+    if not b:
+        return JSONResponse({"detail": "unknown boat_id"}, status_code=404)
+    errs, warns = boat_profile.validate(b)
+    return {"boat": b, "summary": boat_profile.summary(b), "errors": errs, "warnings": warns}
 
 
 @app.post("/api/playbook")

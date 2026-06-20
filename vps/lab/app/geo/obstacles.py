@@ -23,6 +23,7 @@ from . import enc
 
 RES_DEG = float(os.environ.get("GEO_RES_DEG", "0.005"))      # mask cell size (~0.005° ≈ 550 m)
 ISLAND_DEFAULT_NM = float(os.environ.get("GEO_ISLAND_NM", "1.5"))   # default island buffer radius
+MARK_CARVE_NM = float(os.environ.get("GEO_MARK_CARVE_NM", "0.5"))   # navigable pocket around each mark
 NM_PER_DEG_LAT = 60.0
 
 # Coastline/obstacle data source: "natural_earth" (global backstop) or "enc" (NOAA S-57, draft-aware).
@@ -61,6 +62,7 @@ class ObstacleField:
         self.geometry = {"land_rings": [], "zones": [], "islands": [],   # for the web overlay
                          "shoal_rings": [], "obstruction_rings": []}
         self.source = COASTLINE_SOURCE                     # which coastline/obstacle dataset built this
+        self.safety_depth = None                           # ENC no-go depth used (draft + margin), m
         self.active = False                                # any obstacle present at all
 
     # --- cell <-> coord ------------------------------------------------------
@@ -152,6 +154,25 @@ class ObstacleField:
         if touched:
             self.active = True
 
+    def _carve_disk(self, lat, lon, radius_nm):
+        """Clear (un-block) a small disk — a course waypoint must be reachable even in shoal/land.
+
+        Race finishes and marks are deliberately set near shore/islands; ENC will flag that water as
+        shallow/land. You can't route AROUND your own destination, so open a navigable pocket at each
+        real waypoint while leaving every other obstacle intact."""
+        rlat = _nm_to_dlat(radius_nm)
+        iy0 = max(0, self._iy(lat - rlat))
+        iy1 = min(self.ny - 1, self._iy(lat + rlat))
+        for iy in range(iy0, iy1 + 1):
+            clat = self.s + (iy + 0.5) * self.res
+            rlon = _nm_to_dlon(radius_nm, clat)
+            half = rlon * math.sqrt(max(0.0, 1.0 - ((clat - lat) / rlat) ** 2)) if rlat else 0.0
+            ixa = max(0, self._ix(lon - half))
+            ixb = min(self.nx - 1, self._ix(lon + half))
+            row = iy * self.nx
+            for ix in range(ixa, ixb + 1):
+                self.mask[row + ix] = 0
+
     # --- summary -------------------------------------------------------------
     def summary(self) -> dict:
         return {
@@ -163,7 +184,8 @@ class ObstacleField:
             "layers": self.layers,
             "source": self.source,
             "data_version": enc.DATA_VERSION if self.source == "enc" else coastline.DATA_VERSION,
-            "safety_depth_m": round(safety_depth_m(), 2) if self.source == "enc" else None,
+            "safety_depth_m": (round(self.safety_depth, 2)
+                               if self.source == "enc" and self.safety_depth is not None else None),
             "geometry": self.geometry,
         }
 
@@ -206,18 +228,26 @@ _FIELD_CACHE: dict = {}                   # cache_key -> ObstacleField (reused a
 
 
 def build_for_course(definition: dict, course_id, bbox, *, coastline_on=True, zones_on=True,
-                     islands_on=True, res_deg=RES_DEG, cache_dir=None, use_cache=True) -> ObstacleField:
+                     islands_on=True, res_deg=RES_DEG, cache_dir=None, use_cache=True,
+                     source=None, safety_depth=None) -> ObstacleField:
     """Assemble the ObstacleField for a course over `bbox` = (north, south, west, east).
 
     Modular: the coastline is global (any race); the zones + island marks come from THIS race's
     RaceDefinition. Any layer can be toggled off. Returns an (inactive) field if nothing applies.
-    Built fields are cached by `cache_key` so Lab-2's many same-course scenarios reuse one mask."""
+    Built fields are cached by `cache_key` so Lab-2's many same-course scenarios reuse one mask.
+
+    `source` (None → the COASTLINE_SOURCE env default) picks Natural Earth vs NOAA ENC; `safety_depth`
+    (None → the env draft+margin default) is the ENC depth no-go = active boat draft + under-keel
+    margin. Both are folded into `cache_key` so a different boat/draft or source builds a fresh mask."""
+    src = (source or COASTLINE_SOURCE).strip().lower()
+    depth = safety_depth if safety_depth is not None else safety_depth_m()
     ck = None
     if use_cache and coastline_on and zones_on and islands_on:
-        ck = cache_key(definition, course_id, bbox, res_deg)
+        ck = cache_key(definition, course_id, bbox, res_deg, source=src, safety_depth=depth)
         if ck in _FIELD_CACHE:
             return _FIELD_CACHE[ck]
     field = ObstacleField(bbox, res_deg=res_deg)
+    field.source = src
 
     # 1) coastline / depth obstacles. ENC (NOAA S-57) gives real land + draft-aware shoals; Natural
     #    Earth is the global backstop. ENC empty (not prepped / no egress) → fall back to NE so the
@@ -226,12 +256,13 @@ def build_for_course(definition: dict, course_id, bbox, *, coastline_on=True, zo
         if field.source == "enc":
             try:
                 enc.ensure_bbox(bbox, cache_dir)
-                layers = enc.layers_in_bbox(bbox, cache_dir, safety_depth_m())
+                layers = enc.layers_in_bbox(bbox, cache_dir, depth)
             except Exception:
                 layers = {}
             if not (layers.get("land") or layers.get("shoal")):
                 field.source = "natural_earth"               # ENC unavailable → backstop
         if field.source == "enc":
+            field.safety_depth = depth
             for poly in layers.get("land", []):
                 field._fill_polygon(poly, 1, "coastline")
             for poly in layers.get("shoal", []):             # DEPARE shallower than the safety depth
@@ -276,6 +307,15 @@ def build_for_course(definition: dict, course_id, bbox, *, coastline_on=True, zo
             field._fill_disk(isl["lat"], isl["lon"], isl["radius_nm"], "islands")
             field.geometry["islands"].append(isl)
 
+    # 4) open a navigable pocket at every real course waypoint (start/gate/finish) so the route can
+    #    always REACH its marks — finishes/marks are set near shore/islands and ENC blocks that water.
+    if field.active:
+        from shared import race_def
+        marks, _skip, _cid = race_def.course_to_marks(definition, course_id)
+        for _seq, _name, mlat, mlon in marks:
+            if mlat is not None and mlon is not None:
+                field._carve_disk(mlat, mlon, MARK_CARVE_NM)
+
     if ck is not None:
         _FIELD_CACHE[ck] = field
     return field
@@ -289,14 +329,15 @@ def _overlay(field, key, polys, cap=300):
         field.geometry[key].append([[round(y, 5), round(x, 5)] for x, y in ring[::step]])
 
 
-def cache_key(definition, course_id, bbox, res_deg=RES_DEG) -> str:
+def cache_key(definition, course_id, bbox, res_deg=RES_DEG, *, source=None, safety_depth=None) -> str:
     """Stable hash so an identical obstacle build can be cached/reused. Source- and draft-aware:
     switching coastline source or the boat draft (ENC depth no-go) yields a different mask."""
     z = [(z.get("name"), z.get("type"), z.get("geometry")) for z in definition.get("zones", []) or []]
     isl = _course_islands(definition, course_id)
-    src = COASTLINE_SOURCE
+    src = (source or COASTLINE_SOURCE).strip().lower()
     dv = enc.DATA_VERSION if src == "enc" else coastline.DATA_VERSION
-    depth = round(safety_depth_m(), 3) if src == "enc" else None
+    depth = safety_depth if safety_depth is not None else safety_depth_m()
+    depth = round(depth, 3) if src == "enc" else None
     payload = repr((src, dv, depth, course_id, tuple(round(b, 4) for b in bbox),
                     round(res_deg, 5), z, isl))
     return hashlib.sha1(payload.encode()).hexdigest()[:16]
