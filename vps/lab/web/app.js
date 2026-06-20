@@ -281,14 +281,22 @@ function paintCourse() {
         (type a lat/lon or Geocode), then Save. Reviewed copies override the bundled seed.</div></div>
     <div id="courseMsg" class="muted" style="font-size:12px;margin-bottom:10px"></div>
     ${(d.courses || []).map((c, i) => courseEditCard(c, i)).join("")}
-    <button id="saveCourseBtn" onclick="saveCourse()">Save course geometry</button>`;
+    <button id="saveCourseBtn" onclick="saveCourse()">Save course geometry</button>
+    <button class="mini" onclick="saveAndGameplan()">Save → run optimizer</button>`;
   (d.courses || []).forEach((c, i) => drawCourseMap("map" + i, c));
 }
 function courseEditCard(c, ci) {
+  c.start = c.start || {};
   const rows = (c.marks || []).map((m, mi) => {
     const need = m.lat == null || m.coords_source === "needs_review";
+    const isGate = m.type === "gate", isIsland = m.type === "island";
     return `<tr class="${need ? "needrow" : ""}">
-      <td class="mono">${m.seq}</td><td>${esc(m.name)}</td><td>${esc(m.type)}</td>
+      <td class="mono">${m.seq}</td>
+      <td><input class="cin" style="width:120px" value="${esc(m.name || "")}"
+        onchange="editMark(${ci},${mi},'name',this.value)"></td>
+      <td><select onchange="editMark(${ci},${mi},'type',this.value)">
+        ${["waypoint", "gate", "island", "buoy"].map((t) =>
+          `<option ${m.type === t ? "selected" : ""}>${t}</option>`).join("")}</select></td>
       <td><select onchange="editMark(${ci},${mi},'rounding',this.value)">
         ${["none", "port", "starboard", "gate"].map((r) =>
           `<option ${m.rounding === r ? "selected" : ""}>${r}</option>`).join("")}</select></td>
@@ -296,23 +304,66 @@ function courseEditCard(c, ci) {
         onchange="editMark(${ci},${mi},'lat',this.value)"></td>
       <td><input class="cin" value="${m.lon == null ? "" : m.lon}" placeholder="lon"
         onchange="editMark(${ci},${mi},'lon',this.value)"></td>
+      <td>${isGate ? `<input class="cin" value="${m.lat2 == null ? "" : m.lat2}" placeholder="lat2"
+        onchange="editMark(${ci},${mi},'lat2',this.value)"><input class="cin" value="${m.lon2 == null ? "" : m.lon2}"
+        placeholder="lon2" onchange="editMark(${ci},${mi},'lon2',this.value)">` : ""}</td>
+      <td>${isIsland ? `<input class="cin" style="width:48px" value="${m.radius_nm == null ? "" : m.radius_nm}"
+        placeholder="nm" onchange="editMark(${ci},${mi},'radius_nm',this.value)">` : ""}</td>
       <td>${esc(m.coords_source || "")}</td>
-      <td>${need ? `<button class="mini" onclick="geocodeMark(${ci},${mi})">Geocode</button>` : ""}</td>
+      <td>${need ? `<button class="mini" onclick="geocodeMark(${ci},${mi})">Geocode</button>` : ""}
+        <button class="mini" title="remove" onclick="removeMark(${ci},${mi})">✕</button></td>
     </tr>`;
   }).join("");
   return `<div class="card"><h3>${esc(c.name)}</h3>
     <canvas id="map${ci}" class="coursemap" width="640" height="360"></canvas>
+    <div style="font-size:13px;margin:8px 0">
+      <b>Start</b>
+      <input class="cin" value="${c.start.lat == null ? "" : c.start.lat}" placeholder="start lat"
+        onchange="editStart(${ci},'lat',this.value)">
+      <input class="cin" value="${c.start.lon == null ? "" : c.start.lon}" placeholder="start lon"
+        onchange="editStart(${ci},'lon',this.value)">
+      <span class="muted">${esc(c.start.coords_source || "")}</span>
+    </div>
     <table><thead><tr><th>#</th><th>Mark</th><th>Type</th><th>Leave</th><th>Lat</th><th>Lon</th>
-      <th>Source</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+      <th>Gate 2nd pt</th><th>R&nbsp;nm</th><th>Source</th><th></th></tr></thead>
+      <tbody>${rows}</tbody></table>
+    <button class="mini" onclick="addMark(${ci})">+ Add mark</button></div>`;
 }
 function editMark(ci, mi, field, val) {
   const m = Lab.editDef.courses[ci].marks[mi];
-  if (field === "lat" || field === "lon") {
+  if (["lat", "lon", "lat2", "lon2", "radius_nm"].includes(field)) {
     const n = parseFloat(val);
     m[field] = isNaN(n) ? null : n;
     if (m.lat != null && m.lon != null && m.coords_source === "needs_review") m.coords_source = "approx";
   } else { m[field] = val; }
   paintCourse();   // re-render from Lab.editDef (updates source cell + map; onchange = after blur)
+}
+function addMark(ci) {
+  const marks = Lab.editDef.courses[ci].marks = (Lab.editDef.courses[ci].marks || []);
+  marks.push({ seq: marks.length + 1, name: "New mark", type: "waypoint", rounding: "none",
+    lat: null, lon: null, coords_source: "needs_review" });
+  paintCourse();
+  document.getElementById("courseMsg").textContent = "Added a mark — set its name + lat/lon, then Save.";
+}
+function removeMark(ci, mi) {
+  const marks = Lab.editDef.courses[ci].marks;
+  marks.splice(mi, 1);
+  marks.forEach((m, i) => { m.seq = i + 1; });   // re-sequence
+  paintCourse();
+}
+function editStart(ci, field, val) {
+  const c = Lab.editDef.courses[ci]; c.start = c.start || {};
+  const n = parseFloat(val);
+  c.start[field] = isNaN(n) ? null : n;
+  if (c.start.lat != null && c.start.lon != null &&
+      (!c.start.coords_source || ["si_pending", "needs_review"].includes(c.start.coords_source)))
+    c.start.coords_source = "approx";
+  paintCourse();
+}
+async function saveAndGameplan() {
+  await saveCourse();
+  if (window.Opt) { Opt.raceId = Lab.sel; Opt.def = Lab.editDef; Opt.courseId = null; Opt.result = null; }
+  location.hash = "#gameplan";
 }
 async function geocodeMark(ci, mi) {
   const m = Lab.editDef.courses[ci].marks[mi];
@@ -351,6 +402,8 @@ function drawCourseMap(id, course) {
   const ctx = cv.getContext("2d"); const W = cv.width, H = cv.height;
   ctx.clearRect(0, 0, W, H);
   const pts = [];
+  if (course.start && course.start.lat != null)
+    pts.push({ lat: course.start.lat, lon: course.start.lon, label: "Start", kind: "start" });
   (course.marks || []).forEach((m) => {
     if (m.lat != null) pts.push({ lat: m.lat, lon: m.lon, label: m.name, kind: m.type });
     if (m.lat2 != null) pts.push({ lat: m.lat2, lon: m.lon2, label: m.name + " (NE)", kind: "gate" });
