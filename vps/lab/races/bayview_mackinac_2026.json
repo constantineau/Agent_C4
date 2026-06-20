@@ -22,18 +22,19 @@
       "applies_to_divisions": ["I", "IV"],
       "distance_nm": null,
       "note": "NOR §11.1. Distance not stated in NOR (historically ~259 nm) — confirm from SI/chart.",
-      "start": {"type": "line", "ref": "Lower Lake Huron start line — exact line in SI", "coords_source": "si_pending"},
+      "start": {"type": "line", "ref": "Lower Lake Huron start line — exact line in SI", "lat": 43.02, "lon": -82.4, "coords_source": "approx",
+                "note": "Historical Port Huron start area (lower Lake Huron, off Port Huron). APPROX single point standing in for the start LINE; exact line pending the 2026 SI. Nudged ~1.5 nm NE into open water because the coarse Natural Earth 1:10m coastline mis-flags the Port Huron shore as land near 43.00,-82.42 — refine with NOAA ENC + the SI."},
       "marks": [
         {"seq": 1, "name": "Cove Island Virtual Gate", "type": "gate", "rounding": "gate",
          "lat": 45.3333333, "lon": -81.85, "lat2": 45.338, "lon2": -81.8271667,
          "coords_source": "nor",
          "note": "NOR §11.1. Virtual gate ~1 nm long; SW end N45°20.00' W081°51.00', NE mark N45°20.28' W081°49.63'; Cove Island virtual mark bears ~263° from the NE gate mark. Pass through from the direction of the previous mark (Appendix WP). GPS photo required at passage."},
         {"seq": 2, "name": "Duck Islands", "type": "island", "rounding": "starboard",
-         "lat": null, "lon": null, "coords_source": "needs_review",
-         "note": "NOR §11.1: leave to starboard on the approach to the finish. Physical island — geocode + human review against chart."},
+         "lat": 45.6266522, "lon": -82.9164175, "radius_nm": 3.0, "coords_source": "approx",
+         "note": "NOR §11.1: leave to starboard on the approach to the finish. Geocoded (Nominatim, Duck Islands group SE of Manitoulin) — APPROX center; verify the island extent against the chart. Used as an avoidance obstacle (radius approximate); rounding SIDE not yet enforced."},
         {"seq": 3, "name": "Bois Blanc Island", "type": "island", "rounding": "port",
-         "lat": null, "lon": null, "coords_source": "needs_review",
-         "note": "NOR §11.1: leave to port on the approach to the finish. Physical island — geocode + human review."}
+         "lat": 45.7699677, "lon": -84.4432006, "radius_nm": 5.5, "coords_source": "approx",
+         "note": "NOR §11.1: leave to port on the approach to the finish. Geocoded (Nominatim) — center of a ~10 nm-wide island; radius 5.5 nm covers its extent for avoidance. Verify against the chart; rounding SIDE not yet enforced."}
       ],
       "finish": {
         "type": "virtual_gps_line",
@@ -52,14 +53,15 @@
       "applies_to_divisions": ["II", "III"],
       "distance_nm": null,
       "note": "NOR §11.2. Distance not stated in NOR (historically ~204 nm) — confirm from SI/chart.",
-      "start": {"type": "line", "ref": "Lower Lake Huron start line — exact line in SI", "coords_source": "si_pending"},
+      "start": {"type": "line", "ref": "Lower Lake Huron start line — exact line in SI", "lat": 43.02, "lon": -82.4, "coords_source": "approx",
+                "note": "Historical Port Huron start area (lower Lake Huron, off Port Huron). APPROX single point standing in for the start LINE; exact line pending the 2026 SI. Nudged ~1.5 nm NE into open water because the coarse Natural Earth 1:10m coastline mis-flags the Port Huron shore as land near 43.00,-82.42 — refine with NOAA ENC + the SI."},
       "marks": [
         {"seq": 1, "name": "Thunder Bay Island", "type": "island", "rounding": "port",
-         "lat": null, "lon": null, "coords_source": "needs_review",
-         "note": "NOR §11.2: leave to port. Physical island (off Alpena, MI) — geocode + human review."},
+         "lat": 45.0444341, "lon": -83.2033356, "radius_nm": 1.5, "coords_source": "approx",
+         "note": "NOR §11.2: leave to port. Geocoded (Nominatim, off Alpena, MI) — APPROX; verify against the chart. Avoidance obstacle; rounding SIDE not yet enforced."},
         {"seq": 2, "name": "Bois Blanc Island", "type": "island", "rounding": "port",
-         "lat": null, "lon": null, "coords_source": "needs_review",
-         "note": "NOR §11.2: leave to port. Physical island — geocode + human review."}
+         "lat": 45.7699677, "lon": -84.4432006, "radius_nm": 5.5, "coords_source": "approx",
+         "note": "NOR §11.2: leave to port. Geocoded (Nominatim) — center of a ~10 nm-wide island; radius 5.5 nm. Verify against the chart; rounding SIDE not yet enforced."}
       ],
       "finish": {
         "type": "virtual_gps_line",

@@ -66,12 +66,17 @@ def _point_of_sail(twa):
 
 
 # --- one leg -----------------------------------------------------------------
-def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=None):
-    """Isochrone-optimal path from (slat,slon)@t0 to (dlat,dlon). Returns dict with path/eta."""
+def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=None,
+              obstacles=None):
+    """Isochrone-optimal path from (slat,slon)@t0 to (dlat,dlon). Returns dict with path/eta.
+
+    `obstacles` (an ObstacleField) makes the fan reject any heading whose step would cut across land,
+    an island, or a race exclusion zone — so the route sails AROUND obstacles instead of through them."""
     direct = _hav_nm(slat, slon, dlat, dlon)
     dt_h = min(1.0, max(0.15, direct / 40.0))          # coarser steps for long legs
     max_steps = 600
     headings = list(range(0, 360, HSTEP))
+    blocked_hits = 0
 
     def wind(lat, lon, epoch):
         w = wf.wind_at(lat, lon, epoch)
@@ -90,7 +95,8 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
             bmark = _bearing(node["lat"], node["lon"], dlat, dlon)
             twa_m = abs(_wrap180(bmark - twd))
             sp_m = _polar_speed(P, tws, twa_m)
-            if sp_m > 0.3 and dmark <= sp_m * dt_h:
+            if sp_m > 0.3 and dmark <= sp_m * dt_h and not (
+                    obstacles and obstacles.crosses(node["lat"], node["lon"], dlat, dlon)):
                 reached = {"lat": dlat, "lon": dlon, "t": node["t"] + (dmark / sp_m) * 3600,
                            "parent": node, "hdg": bmark}
                 break
@@ -100,6 +106,9 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
                 if sp < 0.3:
                     continue
                 nlat, nlon = _advance(node["lat"], node["lon"], hdg, sp * dt_h)
+                if obstacles and obstacles.crosses(node["lat"], node["lon"], nlat, nlon):
+                    blocked_hits += 1
+                    continue
                 rng = _hav_nm(slat, slon, nlat, nlon)
                 sec = round(_bearing(slat, slon, nlat, nlon) / SECTOR)
                 if sec not in cand or rng > cand[sec]["rng"]:
@@ -135,15 +144,20 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
         prev_side = side
     return {"path": path, "eta": reached["t"], "sailed_nm": round(sailed, 2),
             "direct_nm": round(direct, 2), "tacks": tacks,
-            "first_heading": round(hdgs[0]) if hdgs else None}
+            "first_heading": round(hdgs[0]) if hdgs else None,
+            "blocked_steps": blocked_hits}
 
 
 # --- full course -------------------------------------------------------------
-def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=90):
+def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=90,
+                    obstacles=None, avoid=True):
     """Route the whole course from its start through every mark to the finish via `wf`.
 
     Returns one optimal route with per-leg ETAs, total time/distance/tacks and a route confidence
-    (mean of the wind field's per-point model agreement sampled along the path)."""
+    (mean of the wind field's per-point model agreement sampled along the path).
+
+    `obstacles` (an ObstacleField) keeps the route off land/islands/exclusion-zones; if None and
+    `avoid` is set, one is built from the course bbox + this race's zones + island marks."""
     marks, skipped, cid = race_def.course_to_marks(definition, course_id)
     if len(marks) < 2:
         return {"available": False, "note": "course needs at least a start and one mark/finish",
@@ -152,6 +166,15 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
     if not P:
         return {"available": False, "note": "no polars loaded"}
 
+    if obstacles is None and avoid:
+        bbox = course_bbox(definition, course_id)
+        if bbox:
+            try:
+                from .geo import build_for_course
+                obstacles = build_for_course(definition, cid or course_id, bbox)
+            except Exception:
+                obstacles = None
+
     deadline = time.time() + time_budget_s
     legs = []
     t = float(start_epoch)
@@ -159,7 +182,7 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
     confs = []
     full_path = [{"lat": slat, "lon": slon, "t": t}]
     for seq, name, dlat, dlon in marks[1:]:
-        leg = route_leg(wf, P, slat, slon, t, dlat, dlon, deadline=deadline)
+        leg = route_leg(wf, P, slat, slon, t, dlat, dlon, deadline=deadline, obstacles=obstacles)
         # sample wind + confidence at the leg's midpoint and end (for the briefing)
         mid = leg["path"][len(leg["path"]) // 2] if leg["path"] else {"lat": dlat, "lon": dlon}
         det = wf.detail_at(mid["lat"], mid["lon"], (t + leg["eta"]) / 2.0)
@@ -174,6 +197,7 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
             "leg_minutes": round((leg["eta"] - t) / 60.0, 1),
             "eta_epoch": round(leg["eta"]),
             "first_heading": leg["first_heading"],
+            "blocked_steps": leg.get("blocked_steps", 0),
             "point_of_sail": _point_of_sail(twa) if twa is not None else None,
             "wind": ({"tws": det["tws"], "twd": det["twd"], "confidence": det["confidence"]}
                      if det else None),
@@ -195,6 +219,8 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
         "skipped_marks": skipped,
         "path": [{"lat": p["lat"], "lon": p["lon"]} for p in full_path],
         "windfield": wf.status(),
+        "obstacles": obstacles.summary() if obstacles is not None else {"active": False},
+        "obstacle_steps_avoided": sum(l.get("blocked_steps", 0) for l in legs),
         "timed_out": time.time() > deadline,
     }
 

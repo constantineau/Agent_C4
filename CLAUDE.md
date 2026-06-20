@@ -589,6 +589,22 @@ the gun — RRS 41). Lives in `vps/lab/app/`:
   Playwright-verified the tab). **Next:** Lab-2 — fan the optimizer across ensemble members/scenarios →
   cluster → the **branching playbook bundle**. See `vps/lab/README.md`.
 
+**Obstacle avoidance (routing fidelity 2a, from the Bitsailor gap analysis): SHIPPED 2026-06-20.**
+`vps/lab/app/geo/` keeps the optimizer's route off land — **race-agnostic**: three layers rasterize
+into one boolean mask the isochrone prune queries (`blocked`/`crosses`): (1) a GLOBAL coastline
+(`coastline.py`, Natural Earth 1:10m `land∧¬lake`, fetched once to the `lab_coastline` volume +
+auto-clipped to the course bbox → works for any race, ocean or lake; source pluggable for a higher-res
+upgrade), (2) the race's `zones[]` (exclusion/hazard/tss), (3) the race's geocoded `island` marks
+buffered to a disk (`radius_nm`; islands are obstacles, NOT waypoints — `course_to_marks` omits them
+as waypoints). `optimize_course(avoid=True)` builds the field (cached by `cache_key`, so Lab-2's
+same-course scenarios share one mask) + threads it through `route_leg`; `POST /api/optimize` takes
+`avoid_land` (default true) and returns an `obstacles` summary + `obstacle_steps_avoided`; the Gameplan
+tab overlays coast/islands/zones on the route canvas. **A/B-verified on the real Cove GRIB route:**
+avoid OFF passes 1.9 nm from Bois Blanc center (cuts across it); ON clears at 5.7 nm for +0.3 nm/+1 tack.
+Caveats: NE 1:10m is coarse near shore + misses sub-nm islands (the race island/zone layer covers the
+critical ones; island coords geocoded `approx` → human-review); rounding SIDE not yet enforced (avoided
+either side). Tunables `GEO_RES_DEG`/`GEO_ISLAND_NM`. See `vps/lab/README.md`.
+
 ## Onboard LLM copilot — Orin Nano (Phase 9.4, Tier 2)
 
 The optional in-race conversational LLM (`docs/ONBOARD_ENGINE_SCOPING.md` §3). A **Jetson Orin Nano

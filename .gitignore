@@ -20,3 +20,6 @@ data/
 # os / editor
 .DS_Store
 *.swp
+
+# local dev cache for Lab obstacle-avoidance coastline (fetched at runtime to the lab_coastline volume)
+.coastline_cache/

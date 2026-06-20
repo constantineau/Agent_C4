@@ -154,7 +154,7 @@ def models():
     return {"models": available_models(), "default": list(DEFAULT_MODELS)}
 
 
-def _run_optimize(definition, course_id, start_epoch, model_names, ensemble_members):
+def _run_optimize(definition, course_id, start_epoch, model_names, ensemble_members, avoid=True):
     """Blocking: build the multi-model wind field, route the course, write the briefing."""
     from .wind import build_windfield
     from . import optimizer
@@ -169,7 +169,7 @@ def _run_optimize(definition, course_id, start_epoch, model_names, ensemble_memb
     if not wf.loaded:
         return {"available": False, "note": "no weather model data could be loaded (not yet "
                 "posted, or no egress)", "windfield": wf.status(), "log": log}
-    result = optimizer.optimize_course(definition, course_id, start_epoch, wf)
+    result = optimizer.optimize_course(definition, course_id, start_epoch, wf, avoid=avoid)
     result["briefing"] = optimizer.briefing(result, definition.get("name", ""))
     result["log"] = log
     return result
@@ -190,8 +190,10 @@ async def optimize(body: dict):
     models_req = body.get("models") or list(DEFAULT_MODELS)
     model_names = [m for m in models_req if m in MODELS] or list(DEFAULT_MODELS)
     ens = int(body.get("ensemble_members") or 0)
+    avoid = body.get("avoid_land", True)
     try:
-        return await run_in_threadpool(_run_optimize, d, course_id, start_epoch, model_names, ens)
+        return await run_in_threadpool(_run_optimize, d, course_id, start_epoch, model_names, ens,
+                                       avoid)
     except Exception as exc:
         return JSONResponse({"detail": f"optimize failed: {exc}"}, status_code=500)
 

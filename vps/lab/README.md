@@ -105,8 +105,28 @@ python3 -m shared.race_def vps/lab/races/bayview_mackinac_2026.json
   (route canvas + leg table + briefing + model provenance, confidence-coloured); the `lab_gribcache`
   volume caches GRIB so re-runs / ensemble members are cheap. Verified end-to-end on the Mackinac cove
   course (live GFS 18Z + NAM 00Z + HRRR 01Z, ~73 frames; 133 nm / 17.8 h / 1 tack; confidence 0.69).
+- **Obstacle avoidance (routing fidelity, Bitsailor parity item 2a): built.** `app/geo/` keeps the
+  route off land. It's **race-agnostic** — three layers rasterize into one boolean mask the isochrone
+  prune queries (`blocked(lat,lon)` / `crosses(a,b)`):
+  1. a **global** coastline (`coastline.py`, Natural Earth 1:10m land∧¬lake, fetched once to the
+     `lab_coastline` volume and auto-clipped to whatever course bbox the RaceDefinition yields — so
+     any race anywhere gets its own coast, ocean or lake; source is pluggable for a higher-res upgrade);
+  2. the race's own `zones[]` (exclusion / hazard / tss polygons);
+  3. the race's geocoded `island` marks, buffered to a disk (`radius_nm`) — islands are obstacles to
+     route AROUND, not waypoints to hit (so `course_to_marks` omits them as waypoints).
+  `optimize_course(..., avoid=True)` builds the field from the course bbox + this race's zones/islands
+  (cached by `cache_key` so Lab-2's same-course scenarios share one mask) and threads it through
+  `route_leg`, which rejects any heading step that would cross an obstacle. `POST /api/optimize`
+  takes `avoid_land` (default true) and returns an `obstacles` summary + `obstacle_steps_avoided`;
+  the Gameplan tab draws the coast/island/zone overlay on the route canvas. **A/B-verified on the
+  real Cove Island GRIB route:** avoidance OFF passes 1.9 nm from Bois Blanc's center (cutting across
+  the island); ON clears at 5.7 nm (no violations) for +0.3 nm / +1 tack. *Caveats:* NE 1:10m is
+  coarse near shore and misses sub-nm islands (the race-island/zone layer is what guarantees the
+  race-critical ones; island coords are geocoded `approx` → human-review); rounding **side** is not
+  yet enforced (an island is avoided either side). Tunables: `GEO_RES_DEG`, `GEO_ISLAND_NM`.
 - **Next:** **Lab-2** — fan the optimizer across ensemble members / scenarios → cluster → the
-  **branching playbook bundle** (variants + decision tree + rationale, frozen at the gun).
+  **branching playbook bundle** (variants + decision tree + rationale, frozen at the gun); routing
+  fidelity 2b (sail-specific polars + per-leg sail plan) and 2c (isochrone VMG-gate/cone/adaptive).
 
 ## Race documents (found 2026-06-17)
 
