@@ -22,7 +22,8 @@
       "applies_to_divisions": ["I", "IV"],
       "distance_nm": null,
       "note": "NOR §11.1. Distance not stated in NOR (historically ~259 nm) — confirm from SI/chart.",
-      "start": {"type": "line", "ref": "Lower Lake Huron start line — exact line in SI", "coords_source": "si_pending"},
+      "start": {"type": "line", "ref": "Lower Lake Huron start line — exact line in SI", "lat": 43.02, "lon": -82.4, "coords_source": "approx",
+                "note": "Historical Port Huron start area (lower Lake Huron, off Port Huron). APPROX single point standing in for the start LINE; exact line pending the 2026 SI. Nudged ~1.5 nm NE into open water because the coarse Natural Earth 1:10m coastline mis-flags the Port Huron shore as land near 43.00,-82.42 — refine with NOAA ENC + the SI."},
       "marks": [
         {"seq": 1, "name": "Cove Island Virtual Gate", "type": "gate", "rounding": "gate",
          "lat": 45.3333333, "lon": -81.85, "lat2": 45.338, "lon2": -81.8271667,
@@ -52,7 +53,8 @@
       "applies_to_divisions": ["II", "III"],
       "distance_nm": null,
       "note": "NOR §11.2. Distance not stated in NOR (historically ~204 nm) — confirm from SI/chart.",
-      "start": {"type": "line", "ref": "Lower Lake Huron start line — exact line in SI", "coords_source": "si_pending"},
+      "start": {"type": "line", "ref": "Lower Lake Huron start line — exact line in SI", "lat": 43.02, "lon": -82.4, "coords_source": "approx",
+                "note": "Historical Port Huron start area (lower Lake Huron, off Port Huron). APPROX single point standing in for the start LINE; exact line pending the 2026 SI. Nudged ~1.5 nm NE into open water because the coarse Natural Earth 1:10m coastline mis-flags the Port Huron shore as land near 43.00,-82.42 — refine with NOAA ENC + the SI."},
       "marks": [
         {"seq": 1, "name": "Thunder Bay Island", "type": "island", "rounding": "port",
          "lat": 45.0444341, "lon": -83.2033356, "radius_nm": 1.5, "coords_source": "approx",
