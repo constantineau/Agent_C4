@@ -19,10 +19,23 @@ import math
 import os
 
 from . import coastline
+from . import enc
 
 RES_DEG = float(os.environ.get("GEO_RES_DEG", "0.005"))      # mask cell size (~0.005° ≈ 550 m)
 ISLAND_DEFAULT_NM = float(os.environ.get("GEO_ISLAND_NM", "1.5"))   # default island buffer radius
 NM_PER_DEG_LAT = 60.0
+
+# Coastline/obstacle data source: "natural_earth" (global backstop) or "enc" (NOAA S-57, draft-aware).
+COASTLINE_SOURCE = os.environ.get("COASTLINE_SOURCE", "natural_earth").strip().lower()
+# Active boat draft + under-keel safety margin → the ENC depth no-go contour (DEPARE shallower = block).
+# Draft is canonical METERS (raw-SI convention); SR33 = 7 ft = 2.1336 m. BoatProfile ([B]) will set this.
+BOAT_DRAFT_M = float(os.environ.get("BOAT_DRAFT_M", "2.1336"))
+DRAFT_MARGIN_M = float(os.environ.get("GEO_DRAFT_MARGIN_M", "0.5"))
+
+
+def safety_depth_m() -> float:
+    """No-go depth: draft + under-keel margin. Water shallower than this is blocked (ENC source)."""
+    return BOAT_DRAFT_M + DRAFT_MARGIN_M
 
 
 def _nm_to_dlat(nm):
@@ -43,9 +56,11 @@ class ObstacleField:
         self.w, self.s = w, s
         self.nx = max(1, int(math.ceil((e - w) / res_deg)))
         self.ny = max(1, int(math.ceil((n - s) / res_deg)))
-        self.mask = bytearray(self.nx * self.ny)          # 1 = blocked (land/zone/island)
-        self.layers = {"coastline": 0, "zones": 0, "islands": 0}   # cells set per layer (approx)
-        self.geometry = {"land_rings": [], "zones": [], "islands": []}   # for the web overlay
+        self.mask = bytearray(self.nx * self.ny)          # 1 = blocked (land/zone/island/shoal/obstr)
+        self.layers = {"coastline": 0, "zones": 0, "islands": 0, "shoal": 0, "obstruction": 0}
+        self.geometry = {"land_rings": [], "zones": [], "islands": [],   # for the web overlay
+                         "shoal_rings": [], "obstruction_rings": []}
+        self.source = COASTLINE_SOURCE                     # which coastline/obstacle dataset built this
         self.active = False                                # any obstacle present at all
 
     # --- cell <-> coord ------------------------------------------------------
@@ -146,7 +161,9 @@ class ObstacleField:
             "grid": [self.nx, self.ny],
             "cells_blocked": sum(self.layers.values()),
             "layers": self.layers,
-            "data_version": coastline.DATA_VERSION,
+            "source": self.source,
+            "data_version": enc.DATA_VERSION if self.source == "enc" else coastline.DATA_VERSION,
+            "safety_depth_m": round(safety_depth_m(), 2) if self.source == "enc" else None,
             "geometry": self.geometry,
         }
 
@@ -202,25 +219,41 @@ def build_for_course(definition: dict, course_id, bbox, *, coastline_on=True, zo
             return _FIELD_CACHE[ck]
     field = ObstacleField(bbox, res_deg=res_deg)
 
-    # 1) global coastline: land minus lakes (per-layer even-odd), auto-clipped to the bbox.
+    # 1) coastline / depth obstacles. ENC (NOAA S-57) gives real land + draft-aware shoals; Natural
+    #    Earth is the global backstop. ENC empty (not prepped / no egress) → fall back to NE so the
+    #    route never loses obstacle coverage.
     if coastline_on:
-        try:
-            coastline.ensure_global(cache_dir)
-            layers = coastline.layers_in_bbox(bbox, cache_dir)
-        except Exception:
-            layers = {}
-        for poly in layers.get("land", []):
-            field._fill_polygon(poly, 1, "coastline")
-        for poly in layers.get("lakes", []):
-            field._fill_polygon(poly, 0, "coastline")        # carve lakes back to water
-        for poly in layers.get("islands", []):
-            field._fill_polygon(poly, 1, "coastline")        # re-add islands inside lakes
-        # drawable coast outline (downsampled outer rings) for the web overlay
-        for poly in layers.get("land", []) + layers.get("islands", []):
-            ring = poly[0]
-            step = max(1, len(ring) // 300)
-            field.geometry["land_rings"].append(
-                [[round(y, 5), round(x, 5)] for x, y in ring[::step]])
+        if field.source == "enc":
+            try:
+                enc.ensure_bbox(bbox, cache_dir)
+                layers = enc.layers_in_bbox(bbox, cache_dir, safety_depth_m())
+            except Exception:
+                layers = {}
+            if not (layers.get("land") or layers.get("shoal")):
+                field.source = "natural_earth"               # ENC unavailable → backstop
+        if field.source == "enc":
+            for poly in layers.get("land", []):
+                field._fill_polygon(poly, 1, "coastline")
+            for poly in layers.get("shoal", []):             # DEPARE shallower than the safety depth
+                field._fill_polygon(poly, 1, "shoal")
+            for poly in layers.get("obstruction", []):       # rocks / obstructions
+                field._fill_polygon(poly, 1, "obstruction")
+            _overlay(field, "land_rings", layers.get("land", []))
+            _overlay(field, "shoal_rings", layers.get("shoal", []))
+            _overlay(field, "obstruction_rings", layers.get("obstruction", []))
+        else:                                                # natural_earth (incl. ENC fallback)
+            try:
+                coastline.ensure_global(cache_dir)
+                layers = coastline.layers_in_bbox(bbox, cache_dir)
+            except Exception:
+                layers = {}
+            for poly in layers.get("land", []):
+                field._fill_polygon(poly, 1, "coastline")
+            for poly in layers.get("lakes", []):
+                field._fill_polygon(poly, 0, "coastline")    # carve lakes back to water
+            for poly in layers.get("islands", []):
+                field._fill_polygon(poly, 1, "coastline")    # re-add islands inside lakes
+            _overlay(field, "land_rings", layers.get("land", []) + layers.get("islands", []))
 
     # 2) the race's exclusion / hazard / tss zones (per race)
     if zones_on:
@@ -235,8 +268,10 @@ def build_for_course(definition: dict, course_id, bbox, *, coastline_on=True, zo
                 {"name": z.get("name", "zone"), "type": z.get("type"),
                  "ring": [[round(y, 5), round(x, 5)] for x, y in rings[0]]})
 
-    # 3) the race's geocoded island marks, buffered to a disk (per race)
-    if islands_on:
+    # 3) the race's geocoded island marks, buffered to a disk (per race).
+    #    Under ENC the real LNDARE polygons already cover them — the crude disks are exactly the
+    #    inaccuracy ENC replaces — so only buffer disks on the Natural-Earth backstop.
+    if islands_on and field.source != "enc":
         for isl in _course_islands(definition, course_id):
             field._fill_disk(isl["lat"], isl["lon"], isl["radius_nm"], "islands")
             field.geometry["islands"].append(isl)
@@ -246,10 +281,22 @@ def build_for_course(definition: dict, course_id, bbox, *, coastline_on=True, zo
     return field
 
 
+def _overlay(field, key, polys, cap=300):
+    """Append downsampled outer rings to a web-overlay geometry list ([[lat,lon],...] per polygon)."""
+    for poly in polys:
+        ring = poly[0]
+        step = max(1, len(ring) // cap)
+        field.geometry[key].append([[round(y, 5), round(x, 5)] for x, y in ring[::step]])
+
+
 def cache_key(definition, course_id, bbox, res_deg=RES_DEG) -> str:
-    """Stable hash so an identical obstacle build can be cached/reused."""
+    """Stable hash so an identical obstacle build can be cached/reused. Source- and draft-aware:
+    switching coastline source or the boat draft (ENC depth no-go) yields a different mask."""
     z = [(z.get("name"), z.get("type"), z.get("geometry")) for z in definition.get("zones", []) or []]
     isl = _course_islands(definition, course_id)
-    payload = repr((coastline.DATA_VERSION, course_id, tuple(round(b, 4) for b in bbox),
+    src = COASTLINE_SOURCE
+    dv = enc.DATA_VERSION if src == "enc" else coastline.DATA_VERSION
+    depth = round(safety_depth_m(), 3) if src == "enc" else None
+    payload = repr((src, dv, depth, course_id, tuple(round(b, 4) for b in bbox),
                     round(res_deg, 5), z, isl))
     return hashlib.sha1(payload.encode()).hexdigest()[:16]

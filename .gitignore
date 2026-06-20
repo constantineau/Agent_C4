@@ -1,6 +1,7 @@
 # secrets / local config
 .env
 *.env
+.env.bak.*
 !.env.example
 
 # python

@@ -198,6 +198,38 @@ async def optimize(body: dict):
         return JSONResponse({"detail": f"optimize failed: {exc}"}, status_code=500)
 
 
+def _run_enc_prep(definition, course_id):
+    """Blocking: download + GDAL-extract the NOAA ENC cells covering a course bbox (cache warm-up)."""
+    from . import optimizer
+    from .geo import enc, obstacles
+    bbox = optimizer.course_bbox(definition, course_id)
+    if not bbox:
+        return {"ok": False, "note": "course has no geocoded marks — review Course & Marks"}
+    log = []
+    manifest = enc.ensure_bbox(bbox, on_progress=log.append)
+    layers = enc.layers_in_bbox(bbox, safety_depth_m=obstacles.safety_depth_m())
+    return {"ok": True, "bbox": bbox, "cells": list(manifest.keys()),
+            "safety_depth_m": round(obstacles.safety_depth_m(), 2),
+            "polys": {k: len(v) for k, v in layers.items()}, "log": log}
+
+
+@app.post("/api/enc/prep")
+async def enc_prep(body: dict):
+    """Warm the NOAA ENC cache for a course bbox (download cells + ogr2ogr → cached GeoJSON).
+
+    Optional: the optimizer auto-preps on first run, but this lets the user pre-warm with progress
+    and confirm which cells/layers loaded. Requires COASTLINE_SOURCE=enc to take effect in routing."""
+    body = body or {}
+    rid = body.get("race_id")
+    d = store.get_race(rid) if rid else None
+    if not d:
+        return JSONResponse({"detail": "unknown race_id"}, status_code=404)
+    try:
+        return await run_in_threadpool(_run_enc_prep, d, body.get("course_id"))
+    except Exception as exc:
+        return JSONResponse({"detail": f"enc prep failed: {exc}"}, status_code=500)
+
+
 @app.post("/api/playbook")
 async def playbook(body: dict):
     """Lab-2: fan the optimizer across per-model forecast scenarios → strategic variants
