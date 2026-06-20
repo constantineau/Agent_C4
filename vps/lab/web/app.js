@@ -471,6 +471,7 @@ async function renderGameplan() {
       const md = await (await apiGet("/api/models")).json();
       Opt.models = md.models; Opt.defaultModels = md.default;
       Opt.chosen = Opt.chosen || md.default.slice();
+      await reloadBoats();
     } catch (e) { view.innerHTML = '<div class="placeholder">Failed to load optimizer.</div>'; return; }
   }
   if (!Opt.raceId && Opt.races.length) await optPickRace(Opt.races[0].race_id, false);
@@ -485,6 +486,7 @@ async function renderGameplan() {
         <label>Course <select id="optCourse" onchange="Opt.courseId=this.value">${optCourseOpts()}</select></label>
         <label>Start (UTC) <input type="datetime-local" id="optStart"></label>
       </div>
+      <div class="opt-controls">${optBoatControls()}</div>
       <div class="opt-models">${optModelChecks()}</div>
       <div class="opt-controls">
         <label>Ensemble members <input type="number" id="optEns" value="0" min="0" max="30" style="width:64px"> <span class="muted">(GEFS/ECMWF-ENS only; 0 = deterministic)</span></label>
@@ -513,6 +515,48 @@ function optModelChecks() {
 function optToggle(k, on) {
   Opt.chosen = Opt.chosen.filter((x) => x !== k);
   if (on) Opt.chosen.push(k);
+}
+
+/* Boat profile ([B]): active boat + editable draft (feet) + chart source. Draft sets the ENC
+   depth no-go, so it drives the route. */
+async function reloadBoats() {
+  const bd = await (await apiGet("/api/boats")).json();
+  Opt.boats = bd.boats || []; Opt.activeBoat = bd.active; Opt.chartSource = bd.chart_source;
+}
+function optBoatControls() {
+  const ab = (Opt.boats || []).find((b) => b.boat_id === Opt.activeBoat) || {};
+  const draftFt = ab.draft_ft != null ? ab.draft_ft : "";
+  const depthFt = ab.safety_depth_m != null ? (ab.safety_depth_m / 0.3048).toFixed(1) : "";
+  const isEnc = Opt.chartSource === "enc";
+  return `<label>Boat
+      <select id="optBoat" onchange="optPickBoat(this.value)">
+        ${(Opt.boats || []).map((b) => `<option value="${esc(b.boat_id)}" ${b.boat_id === Opt.activeBoat ? "selected" : ""}>${esc(b.name)} (${b.draft_ft != null ? b.draft_ft + " ft" : "?"})</option>`).join("")}
+      </select></label>
+    <label>Draft (ft) <input type="number" id="optDraft" step="0.1" min="0" value="${draftFt}" style="width:64px" onchange="optSaveDraft()"></label>
+    <label>Charts
+      <select id="optChart" onchange="optSetChart(this.value)">
+        <option value="natural_earth" ${!isEnc ? "selected" : ""}>Natural Earth (coarse)</option>
+        <option value="enc" ${isEnc ? "selected" : ""}>NOAA ENC (draft-aware)</option>
+      </select></label>
+    <span class="muted">${isEnc ? "depth no-go &lt; " + depthFt + " ft (draft + margin)" : "global coastline backstop"}</span>`;
+}
+async function optPickBoat(id) {
+  Opt.activeBoat = id;
+  await apiPost("/api/boats/active", { boat_id: id });
+  await reloadBoats(); renderGameplan();
+}
+async function optSetChart(src) {
+  Opt.chartSource = src;
+  await apiPost("/api/boats/active", { chart_source: src });
+  renderGameplan();
+}
+async function optSaveDraft() {
+  const ft = parseFloat(document.getElementById("optDraft").value);
+  if (isNaN(ft) || ft <= 0) return;
+  const full = (await (await apiGet("/api/boats/" + encodeURIComponent(Opt.activeBoat))).json()).boat || {};
+  full.draft_m = Math.round(ft * 0.3048 * 10000) / 10000;          // store metres, enter feet
+  await apiPost("/api/boats", full);
+  await reloadBoats(); renderGameplan();
 }
 async function optPickRace(id, rerender = true) {
   Opt.raceId = id; Opt.courseId = null; Opt.result = null;
@@ -564,7 +608,7 @@ function renderOptResult(r) {
         <div><b>${r.total_tacks}</b><span>tacks/gybes</span></div>
         <div><b class="conf ${confCls}">${conf == null ? "—" : conf}</b><span>confidence (min ${r.min_confidence == null ? "—" : r.min_confidence})</span></div>
       </div>
-      <canvas id="optMap" class="coursemap" width="660" height="380"></canvas>
+      <div id="optMap" class="routemap"></div>
       ${optObstacleNote(r)}
       ${r.timed_out ? '<div class="pill warn">routing hit the time budget — route is best-effort</div>' : ""}
       ${(r.skipped_marks || []).length ? `<div class="muted" style="font-size:12px">Marks skipped (no coords — review in Course &amp; Marks): ${r.skipped_marks.map(esc).join(", ")}</div>` : ""}
@@ -577,7 +621,7 @@ function renderOptResult(r) {
       <div class="muted" style="font-size:12px">${(r.windfield.models || []).map((m) =>
         `${esc(m.model.toUpperCase())} ${esc(m.cycle)} — ${m.frames} frames`).join(" · ")} · ${r.windfield.total_frames} frames total</div>
     </div></div>`;
-  drawRoute("optMap", r);
+  MapView.render("optMap", r);
 }
 function optLegRow(l) {
   const w = l.wind || {};
@@ -591,55 +635,15 @@ function optObstacleNote(r) {
   const ob = r.obstacles || {};
   if (!ob.active) return '<div class="muted" style="font-size:12px;margin-top:6px">Obstacle avoidance off — route may cross land/islands.</div>';
   const L = ob.layers || {};
-  return `<div class="muted" style="font-size:12px;margin-top:6px">⛰ Obstacle avoidance ON — route steered around land/islands/zones
-    (${r.obstacle_steps_avoided || 0} candidate steps rejected; layers: coastline ${L.coastline || 0}, islands ${L.islands || 0}, zones ${L.zones || 0} cells).
-    Coastline is Natural Earth 1:10m (${esc(ob.data_version || "")}) + this race's islands/zones — coarse near shore; verify against the chart.</div>`;
+  const steps = r.obstacle_steps_avoided || 0;
+  const boat = r.boat ? esc(r.boat.name) : "boat";
+  if (ob.source === "enc") {
+    return `<div class="muted" style="font-size:12px;margin-top:6px">⚓ <b>NOAA ENC charts</b> (draft-aware) — route steered around real land + shoals + obstructions
+      (${steps} candidate steps rejected; cells: land ${L.coastline || 0}, shoal ${L.shoal || 0}, rocks/obstrns ${L.obstruction || 0}, zones ${L.zones || 0}).
+      Shoal no-go = ${boat} draft + margin, depth &lt; <b>${ob.safety_depth_m ?? "?"} m</b>. NOAA GIS export = non-navigational; verify against the official chart.</div>`;
+  }
+  return `<div class="muted" style="font-size:12px;margin-top:6px">⛰ Natural Earth 1:10m (${esc(ob.data_version || "")}) + this race's islands/zones — route steered around land/islands/zones
+    (${steps} candidate steps rejected; cells: coastline ${L.coastline || 0}, islands ${L.islands || 0}, zones ${L.zones || 0}).
+    Coarse near shore + no depth/shoals — switch Charts to <b>NOAA ENC</b> above for draft-aware accuracy.</div>`;
 }
 
-function drawRoute(id, r) {
-  const cv = document.getElementById(id); if (!cv) return;
-  const ctx = cv.getContext("2d"); const W = cv.width, H = cv.height;
-  ctx.clearRect(0, 0, W, H);
-  const path = r.path || [];
-  if (path.length < 2) { ctx.fillStyle = "#8aa0b4"; ctx.fillText("No path.", 16, 24); return; }
-  const lats = path.map((p) => p.lat), lons = path.map((p) => p.lon);
-  const meanlat = (Math.min(...lats) + Math.max(...lats)) / 2;
-  const kx = Math.cos(meanlat * Math.PI / 180);
-  const xs = path.map((p) => p.lon * kx), ys = path.map((p) => p.lat);
-  const minx = Math.min(...xs), maxx = Math.max(...xs), miny = Math.min(...ys), maxy = Math.max(...ys);
-  const pad = 46, spanx = (maxx - minx) || 0.01, spany = (maxy - miny) || 0.01;
-  const sc = Math.min((W - 2 * pad) / spanx, (H - 2 * pad) / spany);
-  const X = (p) => pad + (p.lon * kx - minx) * sc;
-  const Y = (p) => H - (pad + (p.lat - miny) * sc);
-  // obstacle overlay (land/islands/zones) drawn UNDER the track
-  const geo = (r.obstacles || {}).geometry || {};
-  const px = (lat, lon) => pad + (lon * kx - minx) * sc, py = (lat, lon) => H - (pad + (lat - miny) * sc);
-  ctx.fillStyle = "rgba(120,134,148,0.28)"; ctx.strokeStyle = "rgba(150,164,178,0.5)"; ctx.lineWidth = 1;
-  (geo.land_rings || []).forEach((ring) => {
-    if (ring.length < 3) return; ctx.beginPath();
-    ring.forEach((c, i) => i ? ctx.lineTo(px(c[0], c[1]), py(c[0], c[1])) : ctx.moveTo(px(c[0], c[1]), py(c[0], c[1])));
-    ctx.closePath(); ctx.fill(); ctx.stroke();
-  });
-  (geo.islands || []).forEach((is) => {
-    const cx = px(is.lat, is.lon), cy = py(is.lat, is.lon), rr = Math.max(3, is.radius_nm / 60 * sc);
-    ctx.fillStyle = "rgba(245,150,70,0.20)"; ctx.strokeStyle = "rgba(245,150,70,0.7)"; ctx.lineWidth = 1.2;
-    ctx.beginPath(); ctx.arc(cx, cy, rr, 0, 7); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = "#f5a64a"; ctx.font = "11px system-ui"; ctx.fillText(is.name, cx + rr + 3, cy + 4);
-  });
-  ctx.fillStyle = "rgba(255,90,90,0.16)"; ctx.strokeStyle = "rgba(255,90,90,0.8)"; ctx.lineWidth = 1.5;
-  (geo.zones || []).forEach((z) => {
-    const ring = z.ring || []; if (ring.length < 3) return; ctx.beginPath();
-    ring.forEach((c, i) => i ? ctx.lineTo(px(c[0], c[1]), py(c[0], c[1])) : ctx.moveTo(px(c[0], c[1]), py(c[0], c[1])));
-    ctx.closePath(); ctx.fill(); ctx.stroke();
-  });
-  // optimized track
-  ctx.strokeStyle = "#36b3ff"; ctx.lineWidth = 2.5; ctx.beginPath();
-  path.forEach((p, i) => i ? ctx.lineTo(X(p), Y(p)) : ctx.moveTo(X(p), Y(p)));
-  ctx.stroke();
-  // start + finish
-  const s = path[0], f = path[path.length - 1];
-  ctx.fillStyle = "#7ee0a8"; ctx.beginPath(); ctx.arc(X(s), Y(s), 6, 0, 7); ctx.fill();
-  ctx.fillStyle = "#f5c451"; ctx.beginPath(); ctx.arc(X(f), Y(f), 6, 0, 7); ctx.fill();
-  ctx.fillStyle = "#e8eef4"; ctx.font = "12px system-ui";
-  ctx.fillText("Start", X(s) + 9, Y(s) + 4); ctx.fillText("Finish", X(f) + 9, Y(f) + 4);
-}

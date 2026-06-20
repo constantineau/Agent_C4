@@ -112,6 +112,20 @@ button.mini:hover { border-color: var(--accent); }
 /* ---------- course & marks review ---------- */
 .coursemap { width: 100%; max-width: 640px; height: auto; background: var(--bg);
   border: 1px solid var(--line); border-radius: 10px; margin-bottom: 12px; }
+
+/* ---------- Gameplan route map (Leaflet, [C]) ---------- */
+.routemap { width: 100%; height: 480px; border: 1px solid var(--line); border-radius: 10px;
+  margin-bottom: 10px; background: #aadaff; }
+.routemap .leaflet-control.mv-ctl { background: rgba(255,255,255,0.92); color: #16202b;
+  padding: 6px 8px; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.3); font-size: 12px;
+  line-height: 1.5; }
+.routemap .mv-ctl b { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+  color: #5a6b7b; margin-bottom: 2px; }
+.routemap .mv-chk { display: block; cursor: pointer; }
+.routemap .mv-chk input { margin-right: 5px; }
+.routemap .mv-slider { min-width: 260px; }
+.routemap .mv-slider #mvTime { font-variant-numeric: tabular-nums; }
+.mv-canvas { will-change: transform; }
 .cin { width: 92px; padding: 4px 6px; border-radius: 6px; border: 1px solid var(--line);
   background: var(--panel2); color: var(--ink); font-size: 12px; font-variant-numeric: tabular-nums; }
 td select { background: var(--panel2); color: var(--ink); border: 1px solid var(--line);

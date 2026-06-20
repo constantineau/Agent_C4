@@ -124,9 +124,45 @@ python3 -m shared.race_def vps/lab/races/bayview_mackinac_2026.json
   coarse near shore and misses sub-nm islands (the race-island/zone layer is what guarantees the
   race-critical ones; island coords are geocoded `approx` → human-review); rounding **side** is not
   yet enforced (an island is avoided either side). Tunables: `GEO_RES_DEG`, `GEO_ISLAND_NM`.
+### Map accuracy upgrade — NOAA ENC charts + BoatProfile + a real slippy map
+
+The driving complaint was "the map is not accurate" (Natural Earth 1:10m misses the straits islands
+and is imprecise at the shoreline). Three pieces fix it (all on `dev`, live at the test instance):
+
+- **[A] NOAA ENC charts** (`app/geo/enc.py`). The authoritative US S-57 vector charts as a pluggable
+  obstacle source, selected by `COASTLINE_SOURCE=enc` (default `natural_earth`; auto-falls-back if
+  ENC isn't prepped / no egress). At PREP time `ogr2ogr` (GDAL S-57 driver) turns the covering ENC
+  cells into cached GeoJSON on the `lab_enc` volume; the routing hot loop stays pure-python. Role
+  layers: **LNDARE** (real land/island polygons), **DEPARE** filtered by the boat **safety depth**
+  (= draft + under-keel margin) = real **shoal no-go**, **OBSTRN/UWTROC** = rocks/obstructions.
+  `POST /api/enc/prep {race_id,course_id?}` warms the cache with progress. Verified on the real
+  Bayview Mackinac course (65 land + 108 shoal + 157 rock polys in the straits — Natural Earth had
+  zero straits islands). NOAA GIS export = non-navigational → planning data; verify vs the official
+  chart. GDAL is a prep-time dep only.
+- **[B] BoatProfile** (`shared/boat_profile.py`, `app/boats.py`). Race × boat are two dimensions; a
+  boat's **draft** sets the ENC depth no-go. Canonical SI metres, UI enters/shows **feet**. SR33 =
+  profile #1 (`boats/sr33.json`, draft 7 ft = 2.1336 m, margin 0.5 → no-go < 2.63 m). `GET/POST
+  /api/boats` (list/get/save, `draft_ft` accepted) + `GET/POST /api/boats/active` (active boat +
+  chart source, persisted in `app/labstate.py`). The Gameplan tab gains a boat selector + editable
+  draft + a Charts toggle; the optimizer reads the **active boat's** draft. *Also fixes a real
+  routing bug ENC surfaced:* a finish/mark set near shore is correctly flagged shoal/land, but you
+  can't route AROUND your own destination → `build_for_course` carves a small navigable pocket
+  (`GEO_MARK_CARVE_NM=0.5`) at each waypoint. Without it the Mackinac finish was blocked and the
+  router thrashed to 1406 nm / 148 tacks; with it the same ENC route is 278 nm / 6 tacks.
+- **[C] GRIB-on-ENC slippy map** (`web/mapview.js`, Leaflet vendored in `web/vendor/`). The Gameplan
+  route canvas is now a real **Leaflet** map — a layer stack [OSM basemap (+ OpenSeaMap seamarks) +
+  ENC obstacle overlay (our shoal/rock/land polygons on a canvas) + GRIB **wind** overlay (arrows by
+  TWS/TWD, **faded by confidence**) + route/marks]. A **forecast time slider** scrubs an embedded
+  multi-time `wind_grid` (from `WindField.sample_grid`) and moves a boat marker along the route
+  (time-synced wind). NOAA's ENC Online dynamic tiles are SCAMIN-gated / near-blank and the RNC
+  raster service was sunset, so the authoritative chart layer is **our own extracted ENC polygons**
+  (the same data the router uses) over OSM — robust, self-contained, no CDN/build step.
+
 - **Next:** **Lab-2** — fan the optimizer across ensemble members / scenarios → cluster → the
   **branching playbook bundle** (variants + decision tree + rationale, frozen at the gun); routing
   fidelity 2b (sail-specific polars + per-leg sail plan) and 2c (isochrone VMG-gate/cone/adaptive).
+  A higher-res coastline backstop (OSM land / GSHHG) for the Natural-Earth path and enforcing
+  rounding **side** remain optional upgrades.
 
 ## Race documents (found 2026-06-17)
 

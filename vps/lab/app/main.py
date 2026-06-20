@@ -16,15 +16,24 @@ import re
 
 from fastapi import FastAPI, Request, UploadFile, File
 from fastapi.concurrency import run_in_threadpool
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from shared import race_def
-from . import auth, store, extract
+from shared import race_def, boat_profile
+from . import auth, store, extract, boats, labstate, feedback
 
 INGESTED_DIR = os.environ.get("INGESTED_DIR", "/srv/ingested")
 
 app = FastAPI(title="C4 Performance Lab", version="0.1.0")
+
+# CORS so the crew dashboard (c4.racertracer.net) can POST feedback to the Lab's issue endpoint
+# cross-origin. Other /api routes stay team-token-gated regardless; this only adds the headers.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=os.environ.get("FEEDBACK_ALLOW_ORIGINS",
+        "https://c4.racertracer.net,https://lab.racertracer.net,http://localhost:8091").split(","),
+    allow_methods=["POST", "OPTIONS"], allow_headers=["*"])
 
 
 @app.middleware("http")
@@ -50,6 +59,25 @@ async def authenticate(body: dict):
 @app.get("/api/health")
 def health():
     return {"status": "ok", "service": "c4-performance-lab"}
+
+
+@app.get("/api/feedback")
+def feedback_status():
+    """Whether the feedback widget can file issues (the GitHub token is set) + the target repo."""
+    return {"configured": feedback.configured(), "repo": feedback.REPO}
+
+
+@app.post("/api/feedback")
+async def submit_feedback(body: dict, request: Request):
+    """Crew bug report / feature request → a GitHub issue on the monorepo. Open (no team login) so
+    the c4 crew dashboard can use it too; validated + rate-limited server-side."""
+    body = body or {}
+    ctx = dict(body.get("context") or {})
+    ctx.setdefault("userAgent", request.headers.get("user-agent", ""))
+    ctx.setdefault("reportedAt", datetime.datetime.now(datetime.timezone.utc).isoformat())
+    res = await run_in_threadpool(feedback.create_issue, body.get("type"), body.get("title"),
+                                  body.get("body"), body.get("source", ""), ctx)
+    return JSONResponse(res, status_code=200 if res.get("ok") else 400)
 
 
 @app.get("/api/races")
@@ -154,6 +182,12 @@ def models():
     return {"models": available_models(), "default": list(DEFAULT_MODELS)}
 
 
+def chart_source():
+    """The active chart/obstacle source — labstate override, else the COASTLINE_SOURCE env default."""
+    from .geo import obstacles
+    return (labstate.get("coastline_source") or obstacles.COASTLINE_SOURCE or "natural_earth").lower()
+
+
 def _run_optimize(definition, course_id, start_epoch, model_names, ensemble_members, avoid=True):
     """Blocking: build the multi-model wind field, route the course, write the briefing."""
     from .wind import build_windfield
@@ -169,10 +203,38 @@ def _run_optimize(definition, course_id, start_epoch, model_names, ensemble_memb
     if not wf.loaded:
         return {"available": False, "note": "no weather model data could be loaded (not yet "
                 "posted, or no egress)", "windfield": wf.status(), "log": log}
-    result = optimizer.optimize_course(definition, course_id, start_epoch, wf, avoid=avoid)
+    result = optimizer.optimize_course(definition, course_id, start_epoch, wf, avoid=avoid,
+                                       source=chart_source(),
+                                       safety_depth=boats.active_safety_depth_m())
     result["briefing"] = optimizer.briefing(result, definition.get("name", ""))
+    result["boat"] = boat_profile.summary(boats.active_boat()) if boats.active_boat() else None
+    result["wind_grid"] = _wind_grid(wf, bbox, start_epoch, result.get("finish_epoch", t_end))
     result["log"] = log
     return result
+
+
+WIND_GRID_STEP_H = float(os.environ.get("WIND_GRID_STEP_H", "1"))     # forecast frame cadence (hours)
+WIND_GRID_MAX_FRAMES = int(os.environ.get("WIND_GRID_MAX_FRAMES", "72"))
+WIND_GRID_CELLS = int(os.environ.get("WIND_GRID_CELLS", "16"))
+
+
+def _wind_grid(wf, bbox, start_epoch, finish_epoch, n_cells=WIND_GRID_CELLS):
+    """Multi-time wind-field grid for the map overlay + forecast time slider ([C]).
+
+    Sampled at HOURLY (`WIND_GRID_STEP_H`) steps across the route window (capped at
+    `WIND_GRID_MAX_FRAMES`); ~`n_cells` cells across the bbox. The slider scrubs the frames + moves
+    the boat marker; each point carries confidence (model agreement) for the fuzzy-adherence shading."""
+    n, s, w, e = bbox
+    step = max(0.05, max(n - s, e - w) / n_cells)
+    span = max(1.0, float(finish_epoch) - float(start_epoch))
+    step_s = max(900.0, WIND_GRID_STEP_H * 3600.0)               # >= 15 min between frames
+    n_times = min(WIND_GRID_MAX_FRAMES, max(2, int(span / step_s) + 1))
+    times = [round(start_epoch + min(span, i * step_s)) for i in range(n_times)]
+    if times[-1] < round(start_epoch + span):
+        times.append(round(start_epoch + span))                  # always include the finish time
+    frames = [wf.sample_grid(t, step, bbox) for t in times]
+    return {"step_deg": round(step, 3), "step_h": WIND_GRID_STEP_H, "bbox": [n, s, w, e],
+            "times": times, "frames": frames}
 
 
 @app.post("/api/optimize")
@@ -196,6 +258,110 @@ async def optimize(body: dict):
                                        avoid)
     except Exception as exc:
         return JSONResponse({"detail": f"optimize failed: {exc}"}, status_code=500)
+
+
+def _run_enc_prep(definition, course_id):
+    """Blocking: download + GDAL-extract the NOAA ENC cells covering a course bbox (cache warm-up)."""
+    from . import optimizer
+    from .geo import enc, obstacles
+    bbox = optimizer.course_bbox(definition, course_id)
+    if not bbox:
+        return {"ok": False, "note": "course has no geocoded marks — review Course & Marks"}
+    log = []
+    depth = boats.active_safety_depth_m()
+    manifest = enc.ensure_bbox(bbox, on_progress=log.append)
+    layers = enc.layers_in_bbox(bbox, safety_depth_m=depth)
+    return {"ok": True, "bbox": bbox, "cells": list(manifest.keys()),
+            "safety_depth_m": round(depth, 2),
+            "polys": {k: len(v) for k, v in layers.items()}, "log": log}
+
+
+@app.post("/api/enc/prep")
+async def enc_prep(body: dict):
+    """Warm the NOAA ENC cache for a course bbox (download cells + ogr2ogr → cached GeoJSON).
+
+    Optional: the optimizer auto-preps on first run, but this lets the user pre-warm with progress
+    and confirm which cells/layers loaded. Requires COASTLINE_SOURCE=enc to take effect in routing."""
+    body = body or {}
+    rid = body.get("race_id")
+    d = store.get_race(rid) if rid else None
+    if not d:
+        return JSONResponse({"detail": "unknown race_id"}, status_code=404)
+    try:
+        return await run_in_threadpool(_run_enc_prep, d, body.get("course_id"))
+    except Exception as exc:
+        return JSONResponse({"detail": f"enc prep failed: {exc}"}, status_code=500)
+
+
+# --- BoatProfile ([B]): boats library + the active boat + the chart source -----
+@app.get("/api/boats")
+def list_boats():
+    """All boat profiles (summaries with feet conveniences) + the active boat id + chart settings."""
+    return {"boats": boats.list_boats(), "active": boats.active_id(),
+            "chart_source": chart_source()}
+
+
+@app.post("/api/boats")
+def save_boat(body: dict):
+    """Create/update a boat profile. Draft may be sent as `draft_ft` (US convention) — stored as m.
+
+    The optimizer reads the ACTIVE boat's draft as the ENC depth no-go, so editing draft here changes
+    the route (deeper boat → shoals block more water)."""
+    body = body or {}
+    if body.get("draft_ft") is not None and body.get("draft_m") is None:
+        body["draft_m"] = round(boat_profile.ft_to_m(body.pop("draft_ft")), 4)
+    if body.get("safety_margin_ft") is not None and body.get("safety_margin_m") is None:
+        body["safety_margin_m"] = round(boat_profile.ft_to_m(body.pop("safety_margin_ft")), 4)
+    errs, warns = boat_profile.validate(body)
+    if errs:
+        return JSONResponse({"detail": "invalid boat profile", "errors": errs}, status_code=400)
+    try:
+        saved = boats.save_boat(body)
+    except ValueError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=400)
+    return {"boat": saved, "summary": boat_profile.summary(saved), "warnings": warns}
+
+
+@app.get("/api/boats/active")        # declared before /api/boats/{bid} so 'active' isn't read as an id
+def get_active_boat():
+    b = boats.active_boat()
+    return {"active": boats.active_id(),
+            "summary": boat_profile.summary(b) if b else None,
+            "chart_source": chart_source()}
+
+
+@app.post("/api/boats/active")
+def set_active_boat(body: dict):
+    """Select the active boat and/or the chart source (natural_earth | enc). Both Lab-wide."""
+    body = body or {}
+    out = {}
+    bid = body.get("boat_id") or body.get("active")
+    if bid:
+        try:
+            out["active"] = boats.set_active(bid)
+        except ValueError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+    src = body.get("chart_source")
+    if src is not None:
+        src = str(src).strip().lower()
+        if src not in ("natural_earth", "enc"):
+            return JSONResponse({"detail": "chart_source must be natural_earth or enc"},
+                                status_code=400)
+        out["chart_source"] = labstate.set("coastline_source", src)
+    out.setdefault("active", boats.active_id())
+    out.setdefault("chart_source", chart_source())
+    b = boats.active_boat()
+    out["summary"] = boat_profile.summary(b) if b else None
+    return out
+
+
+@app.get("/api/boats/{bid}")
+def get_boat(bid: str):
+    b = boats.get_boat(bid)
+    if not b:
+        return JSONResponse({"detail": "unknown boat_id"}, status_code=404)
+    errs, warns = boat_profile.validate(b)
+    return {"boat": b, "summary": boat_profile.summary(b), "errors": errs, "warnings": warns}
 
 
 @app.post("/api/playbook")

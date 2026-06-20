@@ -1,0 +1,18 @@
+{
+  "schema_version": "0.1",
+  "boat_id": "sr33",
+  "name": "SR33 \"C4\"",
+  "boat_class": "SR33",
+  "sail_number": "",
+  "draft_m": 2.1336,
+  "safety_margin_m": 0.5,
+  "polars_file": "",
+  "orc": {"rating": null, "gph": null, "scoring": ""},
+  "beam_m": null,
+  "air_draft_m": null,
+  "displacement_kg": null,
+  "hull_type": "mono",
+  "sail_inventory": ["J1", "A2", "A3", "S2"],
+  "note": "Reference boat. Draft 7 ft = 2.1336 m (user-supplied). ORC/beam/displacement TBD.",
+  "provenance": {"source": "bundled seed", "review_status": "seed"}
+}

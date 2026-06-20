@@ -150,14 +150,15 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
 
 # --- full course -------------------------------------------------------------
 def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=90,
-                    obstacles=None, avoid=True):
+                    obstacles=None, avoid=True, source=None, safety_depth=None):
     """Route the whole course from its start through every mark to the finish via `wf`.
 
     Returns one optimal route with per-leg ETAs, total time/distance/tacks and a route confidence
     (mean of the wind field's per-point model agreement sampled along the path).
 
     `obstacles` (an ObstacleField) keeps the route off land/islands/exclusion-zones; if None and
-    `avoid` is set, one is built from the course bbox + this race's zones + island marks."""
+    `avoid` is set, one is built from the course bbox + this race's zones + island marks. `source`
+    (Natural Earth vs NOAA ENC) and `safety_depth` (the active boat draft + margin) flow into it."""
     marks, skipped, cid = race_def.course_to_marks(definition, course_id)
     if len(marks) < 2:
         return {"available": False, "note": "course needs at least a start and one mark/finish",
@@ -171,7 +172,8 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
         if bbox:
             try:
                 from .geo import build_for_course
-                obstacles = build_for_course(definition, cid or course_id, bbox)
+                obstacles = build_for_course(definition, cid or course_id, bbox,
+                                             source=source, safety_depth=safety_depth)
             except Exception:
                 obstacles = None
 
@@ -217,7 +219,8 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
         "min_confidence": round(min(confs), 2) if confs else None,
         "legs": legs,
         "skipped_marks": skipped,
-        "path": [{"lat": p["lat"], "lon": p["lon"]} for p in full_path],
+        "marks": [{"seq": s, "name": n, "lat": la, "lon": lo} for s, n, la, lo in marks],
+        "path": [{"lat": p["lat"], "lon": p["lon"], "t": round(p["t"])} for p in full_path],
         "windfield": wf.status(),
         "obstacles": obstacles.summary() if obstacles is not None else {"active": False},
         "obstacle_steps_avoided": sum(l.get("blocked_steps", 0) for l in legs),

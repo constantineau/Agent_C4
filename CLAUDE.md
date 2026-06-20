@@ -605,6 +605,22 @@ Caveats: NE 1:10m is coarse near shore + misses sub-nm islands (the race island/
 critical ones; island coords geocoded `approx` → human-review); rounding SIDE not yet enforced (avoided
 either side). Tunables `GEO_RES_DEG`/`GEO_ISLAND_NM`. See `vps/lab/README.md`.
 
+**Map accuracy upgrade — NOAA ENC + BoatProfile + a real slippy map: SHIPPED (dev).** Fixes the
+"map is not accurate" complaint in three pieces (detail in `vps/lab/README.md`): **[A] NOAA ENC
+charts** (`app/geo/enc.py`) — authoritative S-57 vector charts as a pluggable obstacle source
+(`COASTLINE_SOURCE=enc`, NE fallback): prep-time `ogr2ogr` → cached GeoJSON on `lab_enc`, giving real
+land (LNDARE), **draft-aware shoals** (DEPARE < boat safety depth) and rocks (OBSTRN/UWTROC); `POST
+/api/enc/prep` warms it. **[B] BoatProfile** (`shared/boat_profile.py` + `app/boats.py`) — race × boat
+as two dimensions; the active boat's **draft** sets the ENC depth no-go (canonical metres, UI in
+**feet**; SR33 = 7 ft); `/api/boats[/active]` + a Gameplan boat selector + Charts toggle. Also carves a
+navigable pocket at each waypoint (`GEO_MARK_CARVE_NM`) so a near-shore finish is reachable (was
+thrashing the router to 1406 nm / 148 tacks; now 278 nm / 6 tacks on ENC). **[C] GRIB-on-ENC slippy
+map** (`web/mapview.js`, Leaflet vendored) — the route canvas is now a Leaflet layer stack [OSM (+
+OpenSeaMap) + our ENC shoal/rock/land polygons + GRIB **wind** arrows faded by confidence + route],
+with a **forecast time slider** over an embedded multi-time `wind_grid` (`WindField.sample_grid`).
+NOAA ENC Online tiles are SCAMIN-gated / blank and RNC was sunset → the chart layer is our own
+extracted ENC polygons over OSM (self-contained, no CDN/build). **Next: Lab-2 branching playbook.**
+
 ## Onboard LLM copilot — Orin Nano (Phase 9.4, Tier 2)
 
 The optional in-race conversational LLM (`docs/ONBOARD_ENGINE_SCOPING.md` §3). A **Jetson Orin Nano
