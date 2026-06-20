@@ -51,8 +51,11 @@ moat; the four data levers then push us past Bitsailor on physics.**
 ## Recommended sequencing (folds the gaps + the four levers into Lab-2)
 1. **Lab-2b — Opus synthesis → playbook bundle** (in progress next): variants → rationale/tradeoffs/
    "what-flips-it" + decision tree → signed artifact.
-2. **Routing fidelity (Bitsailor parity), highest-ROI first:** (a) **land/exclusion-zone avoidance**,
-   (b) **sail-specific polars + per-leg sail plan**, (c) isochrone upgrades (VMG-gate/cone/adaptive).
+2. **Routing fidelity (Bitsailor parity), highest-ROI first:** (a) **land/exclusion-zone avoidance**
+   ✅ SHIPPED 2026-06-20 (`vps/lab/app/geo/` — global Natural Earth coastline auto-clipped to the
+   course bbox + per-race zones + geocoded island disks → one rasterized mask the isochrone prune
+   queries; race-agnostic; A/B-verified the Cove route stopped cutting across Bois Blanc), (b)
+   **sail-specific polars + per-leg sail plan**, (c) isochrone upgrades (VMG-gate/cone/adaptive).
 3. **Lab-2c** — branch children + freeze/deploy to onboard `PLAYBOOK_PATH`.
 4. **Lab-2d data levers (all four, prioritized by the user):** current/tide (GLOFS) → buoy obs
    (NDBC/GLOS) → ORC corrected-time objective → refined polars write-back. (a) gives the biggest

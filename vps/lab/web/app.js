@@ -435,6 +435,7 @@ async function renderGameplan() {
       <div class="opt-models">${optModelChecks()}</div>
       <div class="opt-controls">
         <label>Ensemble members <input type="number" id="optEns" value="0" min="0" max="30" style="width:64px"> <span class="muted">(GEFS/ECMWF-ENS only; 0 = deterministic)</span></label>
+        <label class="optchk"><input type="checkbox" id="optAvoid" checked> Avoid land/islands/zones</label>
         <button id="optRun" onclick="runOptimize()" ${Opt.running ? "disabled" : ""}>${Opt.running ? "Optimizing…" : "Run optimizer →"}</button>
       </div>
       <div class="muted" style="font-size:12px;margin-top:6px">Downloads live GRIB from NOAA NOMADS / ECMWF and routes the course on the SR33 polars. First run ~30–60 s (then cached). Pre-race cloud homework — frozen at the gun (RRS 41).</div>
@@ -471,7 +472,9 @@ async function runOptimize() {
   const out = document.getElementById("optOut");
   const ens = parseInt(document.getElementById("optEns").value || "0", 10) || 0;
   const startVal = document.getElementById("optStart").value;
-  const body = { race_id: Opt.raceId, course_id: Opt.courseId, models: Opt.chosen, ensemble_members: ens };
+  const avoidEl = document.getElementById("optAvoid");
+  const body = { race_id: Opt.raceId, course_id: Opt.courseId, models: Opt.chosen, ensemble_members: ens,
+    avoid_land: avoidEl ? avoidEl.checked : true };
   if (startVal) body.start_epoch = Date.parse(startVal + "Z") / 1000;
   Opt.running = true;
   document.getElementById("optRun").disabled = true;
@@ -509,6 +512,7 @@ function renderOptResult(r) {
         <div><b class="conf ${confCls}">${conf == null ? "—" : conf}</b><span>confidence (min ${r.min_confidence == null ? "—" : r.min_confidence})</span></div>
       </div>
       <canvas id="optMap" class="coursemap" width="660" height="380"></canvas>
+      ${optObstacleNote(r)}
       ${r.timed_out ? '<div class="pill warn">routing hit the time budget — route is best-effort</div>' : ""}
       ${(r.skipped_marks || []).length ? `<div class="muted" style="font-size:12px">Marks skipped (no coords — review in Course &amp; Marks): ${r.skipped_marks.map(esc).join(", ")}</div>` : ""}
     </div>
@@ -530,6 +534,15 @@ function optLegRow(l) {
     <td><span class="conf ${cc}">${c ?? "—"}</span></td></tr>`;
 }
 
+function optObstacleNote(r) {
+  const ob = r.obstacles || {};
+  if (!ob.active) return '<div class="muted" style="font-size:12px;margin-top:6px">Obstacle avoidance off — route may cross land/islands.</div>';
+  const L = ob.layers || {};
+  return `<div class="muted" style="font-size:12px;margin-top:6px">⛰ Obstacle avoidance ON — route steered around land/islands/zones
+    (${r.obstacle_steps_avoided || 0} candidate steps rejected; layers: coastline ${L.coastline || 0}, islands ${L.islands || 0}, zones ${L.zones || 0} cells).
+    Coastline is Natural Earth 1:10m (${esc(ob.data_version || "")}) + this race's islands/zones — coarse near shore; verify against the chart.</div>`;
+}
+
 function drawRoute(id, r) {
   const cv = document.getElementById(id); if (!cv) return;
   const ctx = cv.getContext("2d"); const W = cv.width, H = cv.height;
@@ -545,6 +558,27 @@ function drawRoute(id, r) {
   const sc = Math.min((W - 2 * pad) / spanx, (H - 2 * pad) / spany);
   const X = (p) => pad + (p.lon * kx - minx) * sc;
   const Y = (p) => H - (pad + (p.lat - miny) * sc);
+  // obstacle overlay (land/islands/zones) drawn UNDER the track
+  const geo = (r.obstacles || {}).geometry || {};
+  const px = (lat, lon) => pad + (lon * kx - minx) * sc, py = (lat, lon) => H - (pad + (lat - miny) * sc);
+  ctx.fillStyle = "rgba(120,134,148,0.28)"; ctx.strokeStyle = "rgba(150,164,178,0.5)"; ctx.lineWidth = 1;
+  (geo.land_rings || []).forEach((ring) => {
+    if (ring.length < 3) return; ctx.beginPath();
+    ring.forEach((c, i) => i ? ctx.lineTo(px(c[0], c[1]), py(c[0], c[1])) : ctx.moveTo(px(c[0], c[1]), py(c[0], c[1])));
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+  });
+  (geo.islands || []).forEach((is) => {
+    const cx = px(is.lat, is.lon), cy = py(is.lat, is.lon), rr = Math.max(3, is.radius_nm / 60 * sc);
+    ctx.fillStyle = "rgba(245,150,70,0.20)"; ctx.strokeStyle = "rgba(245,150,70,0.7)"; ctx.lineWidth = 1.2;
+    ctx.beginPath(); ctx.arc(cx, cy, rr, 0, 7); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = "#f5a64a"; ctx.font = "11px system-ui"; ctx.fillText(is.name, cx + rr + 3, cy + 4);
+  });
+  ctx.fillStyle = "rgba(255,90,90,0.16)"; ctx.strokeStyle = "rgba(255,90,90,0.8)"; ctx.lineWidth = 1.5;
+  (geo.zones || []).forEach((z) => {
+    const ring = z.ring || []; if (ring.length < 3) return; ctx.beginPath();
+    ring.forEach((c, i) => i ? ctx.lineTo(px(c[0], c[1]), py(c[0], c[1])) : ctx.moveTo(px(c[0], c[1]), py(c[0], c[1])));
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+  });
   // optimized track
   ctx.strokeStyle = "#36b3ff"; ctx.lineWidth = 2.5; ctx.beginPath();
   path.forEach((p, i) => i ? ctx.lineTo(X(p), Y(p)) : ctx.moveTo(X(p), Y(p)));

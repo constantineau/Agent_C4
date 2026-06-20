@@ -59,6 +59,7 @@ class Mark:
     lon: Optional[float] = None
     lat2: Optional[float] = None   # second point for a gate / line
     lon2: Optional[float] = None
+    radius_nm: Optional[float] = None   # for islands/hazards: obstacle buffer radius (nm)
     coords_source: str = "needs_review"
     note: str = ""
 
@@ -246,10 +247,12 @@ def _mid(a, b):
 def course_to_marks(definition: dict, course_id: str = None):
     """Flatten a RaceDefinition course into the navigator's ordered marks: [(seq, name, lat, lon)].
 
-    A gate → its midpoint (the nav target to pass between); the finish line → its midpoint; marks
-    with no coordinates (e.g. un-geocoded islands) are skipped and returned so the caller can warn.
-    Returns (marks, skipped_names, course_id). This is the homework→onboard link: the same marks are
-    written to the cloud `waypoints` (CloudSource) or the Pi marks store (OnboardSource)."""
+    A gate → its midpoint (the nav target to pass between); the finish line → its midpoint. Marks of
+    type `island` are NOT nav waypoints — they are obstacles to leave to a side, handled by the
+    obstacle-avoidance layer (`app.geo`), so they are omitted here (an un-geocoded one is still
+    reported as skipped so it gets reviewed). Other marks with no coordinates are skipped + returned
+    so the caller can warn. Returns (marks, skipped_names, course_id). This is the homework→onboard
+    link: the same marks are written to the cloud `waypoints` or the Pi marks store (OnboardSource)."""
     courses = definition.get("courses", []) or []
     course = next((c for c in courses if c.get("id") == course_id), None) or (courses[0] if courses else None)
     if not course:
@@ -260,6 +263,10 @@ def course_to_marks(definition: dict, course_id: str = None):
         marks.append((seq, "Start", start["lat"], start["lon"])); seq += 1
     for m in course.get("marks", []):
         name = m.get("name", "mark")
+        if m.get("type") == "island":
+            if m.get("lat") is None:               # un-geocoded — still needs review
+                skipped.append(name)
+            continue                               # geocoded islands are obstacles, not waypoints
         if m.get("type") == "gate" and m.get("lat") is not None and m.get("lat2") is not None:
             la, lo = _mid((m["lat"], m["lon"]), (m["lat2"], m["lon2"]))
             marks.append((seq, name, la, lo)); seq += 1

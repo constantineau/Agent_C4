@@ -81,14 +81,17 @@ services:
       LAB_AUTH_ENABLED: ${LAB_AUTH_ENABLED:-true}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}        # race-doc ingestion (Opus extraction)
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-4-8}
+      COASTLINE_CACHE: /srv/coastline       # Lab obstacle avoidance: cached Natural Earth coastline
     ports:
       - "8103:8000"
     volumes:
       - lab_ingested:/srv/ingested
       - lab_gribcache:/srv/gribcache        # Lab-1: cached GRIB subsets (cheap re-runs/members)
+      - lab_coastline:/srv/coastline        # land/lake polygons for obstacle avoidance (fetched once)
     restart: unless-stopped
 
 volumes:
   sr33_dev_pgdata:
   lab_ingested:
   lab_gribcache:
+  lab_coastline:
