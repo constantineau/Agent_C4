@@ -219,6 +219,7 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
         "min_confidence": round(min(confs), 2) if confs else None,
         "legs": legs,
         "skipped_marks": skipped,
+        "marks": [{"seq": s, "name": n, "lat": la, "lon": lo} for s, n, la, lo in marks],
         "path": [{"lat": p["lat"], "lon": p["lon"], "t": round(p["t"])} for p in full_path],
         "windfield": wf.status(),
         "obstacles": obstacles.summary() if obstacles is not None else {"active": False},

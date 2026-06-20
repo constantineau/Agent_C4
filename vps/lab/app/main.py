@@ -185,17 +185,28 @@ def _run_optimize(definition, course_id, start_epoch, model_names, ensemble_memb
     return result
 
 
-def _wind_grid(wf, bbox, start_epoch, finish_epoch, n_times=5, n_cells=16):
+WIND_GRID_STEP_H = float(os.environ.get("WIND_GRID_STEP_H", "1"))     # forecast frame cadence (hours)
+WIND_GRID_MAX_FRAMES = int(os.environ.get("WIND_GRID_MAX_FRAMES", "72"))
+WIND_GRID_CELLS = int(os.environ.get("WIND_GRID_CELLS", "16"))
+
+
+def _wind_grid(wf, bbox, start_epoch, finish_epoch, n_cells=WIND_GRID_CELLS):
     """Multi-time wind-field grid for the map overlay + forecast time slider ([C]).
 
-    Sampled at `n_times` evenly across the route window; ~`n_cells` cells across the bbox. The slider
-    scrubs the frames; each point carries confidence (model agreement) for the fuzzy-adherence shading."""
+    Sampled at HOURLY (`WIND_GRID_STEP_H`) steps across the route window (capped at
+    `WIND_GRID_MAX_FRAMES`); ~`n_cells` cells across the bbox. The slider scrubs the frames + moves
+    the boat marker; each point carries confidence (model agreement) for the fuzzy-adherence shading."""
     n, s, w, e = bbox
     step = max(0.05, max(n - s, e - w) / n_cells)
     span = max(1.0, float(finish_epoch) - float(start_epoch))
-    times = [round(start_epoch + span * i / (n_times - 1)) for i in range(n_times)]
+    step_s = max(900.0, WIND_GRID_STEP_H * 3600.0)               # >= 15 min between frames
+    n_times = min(WIND_GRID_MAX_FRAMES, max(2, int(span / step_s) + 1))
+    times = [round(start_epoch + min(span, i * step_s)) for i in range(n_times)]
+    if times[-1] < round(start_epoch + span):
+        times.append(round(start_epoch + span))                  # always include the finish time
     frames = [wf.sample_grid(t, step, bbox) for t in times]
-    return {"step_deg": round(step, 3), "bbox": [n, s, w, e], "times": times, "frames": frames}
+    return {"step_deg": round(step, 3), "step_h": WIND_GRID_STEP_H, "bbox": [n, s, w, e],
+            "times": times, "frames": frames}
 
 
 @app.post("/api/optimize")

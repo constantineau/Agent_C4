@@ -118,20 +118,30 @@ const MapView = (function () {
   function buildRoute() {
     if (routeGroup) { map.removeLayer(routeGroup); routeGroup = null; }
     if (!R || !R.path || R.path.length < 2) return;
-    const latlngs = R.path.map((p) => [p.lat, p.lon]);
-    const items = [L.polyline(latlngs, { color: "#111", weight: 3, opacity: 0.85 })];
-    // marks: start, each leg destination
-    const start = R.path[0];
-    items.push(L.circleMarker([start.lat, start.lon],
-      { radius: 6, color: "#1a7f37", fillColor: "#1a7f37", fillOpacity: 1 }).bindTooltip("Start"));
-    let prev = start;
-    for (const leg of R.legs || []) {
-      // the leg endpoint is the last path pt at/just before eta — approximate with nearest path pt
-      const ep = nearestPathByT(leg.eta_epoch) || prev;
-      items.push(L.circleMarker([ep.lat, ep.lon],
-        { radius: 6, color: "#0b5bd3", fillColor: "#2f7ff0", fillOpacity: 1 }).bindTooltip(leg.to));
-      prev = ep;
+    const items = [];
+
+    // rhumb (direct) lines between the real marks — the geometric course, dashed, under the route
+    const marks = (R.marks && R.marks.length) ? R.marks : null;
+    if (marks) {
+      items.push(L.polyline(marks.map((m) => [m.lat, m.lon]),
+        { color: "#444", weight: 1.5, opacity: 0.8, dashArray: "7,7" })
+        .bindTooltip("Rhumb line (direct course)", { sticky: true }));
     }
+
+    // the optimized (sailed) route on top
+    items.push(L.polyline(R.path.map((p) => [p.lat, p.lon]),
+      { color: "#111", weight: 3, opacity: 0.9 }).bindTooltip("Optimized route", { sticky: true }));
+
+    // mark markers at their REAL positions (start green, finish gold, marks blue)
+    const list = marks || [{ name: "Start", lat: R.path[0].lat, lon: R.path[0].lon }];
+    list.forEach((m, i) => {
+      const isStart = i === 0, isFinish = i === list.length - 1 && list.length > 1;
+      const color = isStart ? "#1a7f37" : isFinish ? "#d9a400" : "#0b5bd3";
+      items.push(L.circleMarker([m.lat, m.lon],
+        { radius: 6, color: "#fff", weight: 1.5, fillColor: color, fillOpacity: 1 })
+        .bindTooltip(m.name || (isStart ? "Start" : isFinish ? "Finish" : "Mark"),
+          { permanent: false }));
+    });
     routeGroup = L.layerGroup(items).addTo(map);
   }
 
@@ -157,6 +167,12 @@ const MapView = (function () {
     try { return new Date(epoch * 1000).toUTCString().replace(":00 GMT", " UTC").replace("GMT", "UTC"); }
     catch (e) { return String(epoch); }
   }
+  function frameLabel(i) {
+    const times = (R && R.wind_grid && R.wind_grid.times) || [];
+    if (!times.length) return "";
+    const h = Math.round((times[i] - times[0]) / 3600);
+    return fmtTime(times[i]) + "  (T+" + h + "h)";
+  }
 
   // ---- in-map controls: layer toggles + the forecast time slider ----
   function addControls() {
@@ -179,8 +195,8 @@ const MapView = (function () {
         onAdd: function () {
           const d = L.DomUtil.create("div", "mv-ctl mv-slider");
           const n = R.wind_grid.times.length;
-          d.innerHTML = `<b>Forecast</b> <span id="mvTime">${fmtTime(R.wind_grid.times[frameIdx])}</span><br>
-            <input type="range" id="mvRange" min="0" max="${n - 1}" value="${frameIdx}" step="1" style="width:240px">`;
+          d.innerHTML = `<b>Forecast — drag to scrub (hourly)</b> <span id="mvTime">${frameLabel(frameIdx)}</span><br>
+            <input type="range" id="mvRange" min="0" max="${n - 1}" value="${frameIdx}" step="1" style="width:280px">`;
           L.DomEvent.disableClickPropagation(d);
           d.querySelector("#mvRange").addEventListener("input", (e) => setFrame(parseInt(e.target.value, 10)));
           return d;
@@ -200,7 +216,7 @@ const MapView = (function () {
   function setFrame(i) {
     frameIdx = i;
     const lab = document.getElementById("mvTime");
-    if (lab && R.wind_grid) lab.textContent = fmtTime(R.wind_grid.times[i]);
+    if (lab && R.wind_grid) lab.textContent = frameLabel(i);
     windLayer.redraw(); updateBoatMarker();
   }
 
