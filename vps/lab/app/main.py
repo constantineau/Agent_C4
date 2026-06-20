@@ -196,6 +196,30 @@ async def optimize(body: dict):
         return JSONResponse({"detail": f"optimize failed: {exc}"}, status_code=500)
 
 
+@app.post("/api/playbook")
+async def playbook(body: dict):
+    """Lab-2: fan the optimizer across per-model forecast scenarios → strategic variants
+    (which side of the first beat each model favors) with the agreement distribution."""
+    body = body or {}
+    rid = body.get("race_id")
+    d = store.get_race(rid) if rid else None
+    if not d:
+        return JSONResponse({"detail": "unknown race_id"}, status_code=404)
+    course_id = body.get("course_id")
+    start_epoch = float(body.get("start_epoch") or datetime.datetime.now(
+        datetime.timezone.utc).timestamp())
+    from .wind.models import DEFAULT_MODELS, MODELS
+    models_req = body.get("models") or list(DEFAULT_MODELS)
+    model_names = [m for m in models_req if m in MODELS] or list(DEFAULT_MODELS)
+    ens = int(body.get("ensemble_members") or 0)
+    from . import playbook as pb
+    try:
+        return await run_in_threadpool(pb.build_playbook, d, course_id, start_epoch,
+                                       model_names, ens)
+    except Exception as exc:
+        return JSONResponse({"detail": f"playbook failed: {exc}"}, status_code=500)
+
+
 @app.post("/api/races")
 async def save_race(body: dict):
     """Save a (human-reviewed) RaceDefinition to the library. Errors don't block saving a draft —
