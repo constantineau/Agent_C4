@@ -608,7 +608,7 @@ function renderOptResult(r) {
         <div><b>${r.total_tacks}</b><span>tacks/gybes</span></div>
         <div><b class="conf ${confCls}">${conf == null ? "—" : conf}</b><span>confidence (min ${r.min_confidence == null ? "—" : r.min_confidence})</span></div>
       </div>
-      <canvas id="optMap" class="coursemap" width="660" height="380"></canvas>
+      <div id="optMap" class="routemap"></div>
       ${optObstacleNote(r)}
       ${r.timed_out ? '<div class="pill warn">routing hit the time budget — route is best-effort</div>' : ""}
       ${(r.skipped_marks || []).length ? `<div class="muted" style="font-size:12px">Marks skipped (no coords — review in Course &amp; Marks): ${r.skipped_marks.map(esc).join(", ")}</div>` : ""}
@@ -621,7 +621,7 @@ function renderOptResult(r) {
       <div class="muted" style="font-size:12px">${(r.windfield.models || []).map((m) =>
         `${esc(m.model.toUpperCase())} ${esc(m.cycle)} — ${m.frames} frames`).join(" · ")} · ${r.windfield.total_frames} frames total</div>
     </div></div>`;
-  drawRoute("optMap", r);
+  MapView.render("optMap", r);
 }
 function optLegRow(l) {
   const w = l.wind || {};
@@ -647,50 +647,3 @@ function optObstacleNote(r) {
     Coarse near shore + no depth/shoals — switch Charts to <b>NOAA ENC</b> above for draft-aware accuracy.</div>`;
 }
 
-function drawRoute(id, r) {
-  const cv = document.getElementById(id); if (!cv) return;
-  const ctx = cv.getContext("2d"); const W = cv.width, H = cv.height;
-  ctx.clearRect(0, 0, W, H);
-  const path = r.path || [];
-  if (path.length < 2) { ctx.fillStyle = "#8aa0b4"; ctx.fillText("No path.", 16, 24); return; }
-  const lats = path.map((p) => p.lat), lons = path.map((p) => p.lon);
-  const meanlat = (Math.min(...lats) + Math.max(...lats)) / 2;
-  const kx = Math.cos(meanlat * Math.PI / 180);
-  const xs = path.map((p) => p.lon * kx), ys = path.map((p) => p.lat);
-  const minx = Math.min(...xs), maxx = Math.max(...xs), miny = Math.min(...ys), maxy = Math.max(...ys);
-  const pad = 46, spanx = (maxx - minx) || 0.01, spany = (maxy - miny) || 0.01;
-  const sc = Math.min((W - 2 * pad) / spanx, (H - 2 * pad) / spany);
-  const X = (p) => pad + (p.lon * kx - minx) * sc;
-  const Y = (p) => H - (pad + (p.lat - miny) * sc);
-  // obstacle overlay (land/islands/zones) drawn UNDER the track
-  const geo = (r.obstacles || {}).geometry || {};
-  const px = (lat, lon) => pad + (lon * kx - minx) * sc, py = (lat, lon) => H - (pad + (lat - miny) * sc);
-  ctx.fillStyle = "rgba(120,134,148,0.28)"; ctx.strokeStyle = "rgba(150,164,178,0.5)"; ctx.lineWidth = 1;
-  (geo.land_rings || []).forEach((ring) => {
-    if (ring.length < 3) return; ctx.beginPath();
-    ring.forEach((c, i) => i ? ctx.lineTo(px(c[0], c[1]), py(c[0], c[1])) : ctx.moveTo(px(c[0], c[1]), py(c[0], c[1])));
-    ctx.closePath(); ctx.fill(); ctx.stroke();
-  });
-  (geo.islands || []).forEach((is) => {
-    const cx = px(is.lat, is.lon), cy = py(is.lat, is.lon), rr = Math.max(3, is.radius_nm / 60 * sc);
-    ctx.fillStyle = "rgba(245,150,70,0.20)"; ctx.strokeStyle = "rgba(245,150,70,0.7)"; ctx.lineWidth = 1.2;
-    ctx.beginPath(); ctx.arc(cx, cy, rr, 0, 7); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = "#f5a64a"; ctx.font = "11px system-ui"; ctx.fillText(is.name, cx + rr + 3, cy + 4);
-  });
-  ctx.fillStyle = "rgba(255,90,90,0.16)"; ctx.strokeStyle = "rgba(255,90,90,0.8)"; ctx.lineWidth = 1.5;
-  (geo.zones || []).forEach((z) => {
-    const ring = z.ring || []; if (ring.length < 3) return; ctx.beginPath();
-    ring.forEach((c, i) => i ? ctx.lineTo(px(c[0], c[1]), py(c[0], c[1])) : ctx.moveTo(px(c[0], c[1]), py(c[0], c[1])));
-    ctx.closePath(); ctx.fill(); ctx.stroke();
-  });
-  // optimized track
-  ctx.strokeStyle = "#36b3ff"; ctx.lineWidth = 2.5; ctx.beginPath();
-  path.forEach((p, i) => i ? ctx.lineTo(X(p), Y(p)) : ctx.moveTo(X(p), Y(p)));
-  ctx.stroke();
-  // start + finish
-  const s = path[0], f = path[path.length - 1];
-  ctx.fillStyle = "#7ee0a8"; ctx.beginPath(); ctx.arc(X(s), Y(s), 6, 0, 7); ctx.fill();
-  ctx.fillStyle = "#f5c451"; ctx.beginPath(); ctx.arc(X(f), Y(f), 6, 0, 7); ctx.fill();
-  ctx.fillStyle = "#e8eef4"; ctx.font = "12px system-ui";
-  ctx.fillText("Start", X(s) + 9, Y(s) + 4); ctx.fillText("Finish", X(f) + 9, Y(f) + 4);
-}

@@ -141,6 +141,26 @@ class WindField:
         d = self.detail_at(lat, lon, epoch)
         return (d["tws"], d["twd"]) if d else None
 
+    def sample_grid(self, epoch: float, step_deg: float, bbox=None):
+        """Sample the blended wind on a lat/lon grid at one time → [{lat,lon,tws,twd,confidence}].
+
+        For the map's wind overlay (barbs rotated by TWD, coloured by TWS, faded by confidence).
+        Points with no model coverage are dropped. `bbox`=(n,s,w,e); defaults to the field bbox."""
+        n, s, w, e = bbox or self.bbox
+        step = max(0.02, float(step_deg))
+        pts = []
+        lat = s
+        while lat <= n + 1e-9:
+            lon = w
+            while lon <= e + 1e-9:
+                d = self.detail_at(lat, lon, epoch)
+                if d:
+                    pts.append({"lat": round(lat, 4), "lon": round(lon, 4),
+                                "tws": d["tws"], "twd": d["twd"], "confidence": d["confidence"]})
+                lon += step
+            lat += step
+        return pts
+
     def status(self):
         return {"loaded": self.loaded, "models": self.meta,
                 "window": [round(self.t_start), round(self.t_end)], "bbox": self.bbox,

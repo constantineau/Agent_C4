@@ -180,8 +180,22 @@ def _run_optimize(definition, course_id, start_epoch, model_names, ensemble_memb
                                        safety_depth=boats.active_safety_depth_m())
     result["briefing"] = optimizer.briefing(result, definition.get("name", ""))
     result["boat"] = boat_profile.summary(boats.active_boat()) if boats.active_boat() else None
+    result["wind_grid"] = _wind_grid(wf, bbox, start_epoch, result.get("finish_epoch", t_end))
     result["log"] = log
     return result
+
+
+def _wind_grid(wf, bbox, start_epoch, finish_epoch, n_times=5, n_cells=16):
+    """Multi-time wind-field grid for the map overlay + forecast time slider ([C]).
+
+    Sampled at `n_times` evenly across the route window; ~`n_cells` cells across the bbox. The slider
+    scrubs the frames; each point carries confidence (model agreement) for the fuzzy-adherence shading."""
+    n, s, w, e = bbox
+    step = max(0.05, max(n - s, e - w) / n_cells)
+    span = max(1.0, float(finish_epoch) - float(start_epoch))
+    times = [round(start_epoch + span * i / (n_times - 1)) for i in range(n_times)]
+    frames = [wf.sample_grid(t, step, bbox) for t in times]
+    return {"step_deg": round(step, 3), "bbox": [n, s, w, e], "times": times, "frames": frames}
 
 
 @app.post("/api/optimize")
