@@ -13,7 +13,7 @@ PASSWORD = os.environ.get("LAB_PASSWORD", "lab-dev")
 SECRET = os.environ.get("LAB_AUTH_SECRET") or ("lab-" + hashlib.sha256(PASSWORD.encode()).hexdigest())
 TTL_HOURS = float(os.environ.get("LAB_AUTH_TTL_HOURS", "720"))   # 30 days
 ENABLED = os.environ.get("LAB_AUTH_ENABLED", "true").strip().lower() != "false"
-OPEN_PATHS = {"/api/health", "/api/auth"}
+OPEN_PATHS = {"/api/health", "/api/auth", "/api/feedback"}   # feedback widget posts without team login
 
 
 def check_password(pw) -> bool:

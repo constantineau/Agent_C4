@@ -16,15 +16,24 @@ import re
 
 from fastapi import FastAPI, Request, UploadFile, File
 from fastapi.concurrency import run_in_threadpool
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from shared import race_def, boat_profile
-from . import auth, store, extract, boats, labstate
+from . import auth, store, extract, boats, labstate, feedback
 
 INGESTED_DIR = os.environ.get("INGESTED_DIR", "/srv/ingested")
 
 app = FastAPI(title="C4 Performance Lab", version="0.1.0")
+
+# CORS so the crew dashboard (c4.racertracer.net) can POST feedback to the Lab's issue endpoint
+# cross-origin. Other /api routes stay team-token-gated regardless; this only adds the headers.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=os.environ.get("FEEDBACK_ALLOW_ORIGINS",
+        "https://c4.racertracer.net,https://lab.racertracer.net,http://localhost:8091").split(","),
+    allow_methods=["POST", "OPTIONS"], allow_headers=["*"])
 
 
 @app.middleware("http")
@@ -50,6 +59,25 @@ async def authenticate(body: dict):
 @app.get("/api/health")
 def health():
     return {"status": "ok", "service": "c4-performance-lab"}
+
+
+@app.get("/api/feedback")
+def feedback_status():
+    """Whether the feedback widget can file issues (the GitHub token is set) + the target repo."""
+    return {"configured": feedback.configured(), "repo": feedback.REPO}
+
+
+@app.post("/api/feedback")
+async def submit_feedback(body: dict, request: Request):
+    """Crew bug report / feature request → a GitHub issue on the monorepo. Open (no team login) so
+    the c4 crew dashboard can use it too; validated + rate-limited server-side."""
+    body = body or {}
+    ctx = dict(body.get("context") or {})
+    ctx.setdefault("userAgent", request.headers.get("user-agent", ""))
+    ctx.setdefault("reportedAt", datetime.datetime.now(datetime.timezone.utc).isoformat())
+    res = await run_in_threadpool(feedback.create_issue, body.get("type"), body.get("title"),
+                                  body.get("body"), body.get("source", ""), ctx)
+    return JSONResponse(res, status_code=200 if res.get("ok") else 400)
 
 
 @app.get("/api/races")

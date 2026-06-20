@@ -85,6 +85,9 @@ services:
       COASTLINE_SOURCE: ${COASTLINE_SOURCE:-natural_earth}  # natural_earth | enc (NOAA S-57, draft-aware)
       ENC_CACHE: /srv/enc                   # NOAA ENC cells + extracted GeoJSON (prep-time GDAL)
       BOAT_DRAFT_M: ${BOAT_DRAFT_M:-2.1336}  # active boat draft (m); SR33 = 7 ft → ENC depth no-go
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}        # feedback widget → GitHub issues (dedicated fine-grained PAT)
+      GITHUB_REPO: ${GITHUB_REPO:-constantineau/Agent_C4}
+      FEEDBACK_ALLOW_ORIGINS: ${FEEDBACK_ALLOW_ORIGINS:-https://c4.racertracer.net,https://lab.racertracer.net,http://localhost:8091}
     ports:
       - "8103:8000"
     volumes:
