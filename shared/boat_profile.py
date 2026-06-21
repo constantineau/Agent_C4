@@ -58,6 +58,10 @@ class BoatProfile:
     displacement_kg: Optional[float] = None
     hull_type: str = "mono"
     sail_inventory: list = field(default_factory=list)
+    # Upwind jib change-downs by TWS (kn). The ORC cert rates only ONE headsail (the speed-optimal
+    # J1), so J2/J3 — same upwind slot, smaller jibs for a building breeze — aren't in the polar;
+    # these crew/sailmaker thresholds split the upwind jib by wind strength. [{sail, tws_min?, tws_max?}].
+    jib_crossovers: list = field(default_factory=list)
     note: str = ""
     provenance: dict = field(default_factory=dict)
     schema_version: str = SCHEMA_VERSION

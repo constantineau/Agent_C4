@@ -151,7 +151,8 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
 
 # --- full course -------------------------------------------------------------
 def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=90,
-                    obstacles=None, avoid=True, source=None, safety_depth=None):
+                    obstacles=None, avoid=True, source=None, safety_depth=None,
+                    jib_crossovers=None):
     """Route the whole course from its start through every mark to the finish via `wf`.
 
     Returns one optimal route with per-leg ETAs, total time/distance/tacks and a route confidence
@@ -202,7 +203,8 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
             "first_heading": leg["first_heading"],
             "blocked_steps": leg.get("blocked_steps", 0),
             "point_of_sail": _point_of_sail(twa) if twa is not None else None,
-            "sail": sailplan.optimal_sail(det["tws"], twa) if det and twa is not None else None,
+            "sail": (sailplan.optimal_sail(det["tws"], twa, jib_crossovers)
+                     if det and twa is not None else None),
             "wind": ({"tws": det["tws"], "twd": det["twd"], "confidence": det["confidence"]}
                      if det else None),
         })

@@ -255,17 +255,21 @@ def _boat_model():
         "draft_m": draft_m,
         "draft_ft": round(draft_m / 0.3048, 1) if draft_m is not None else None,
         "polars_source": sm.get("source"),
-        "sail_inventory": sm.get("inventory", []),
+        # the boat's own inventory (incl. J2/J3) wins over the cert's single-headsail list
+        "sail_inventory": b.get("sail_inventory") or sm.get("inventory", []),
         "sail_names": sm.get("sail_names", {}),
-        "crossovers": sm.get("crossovers", {}),     # per-TWS sail zones — the reviewable model
+        "crossovers": sm.get("crossovers", {}),         # per-TWS×TWA sail zones (from the ORC cert)
+        "jib_crossovers": b.get("jib_crossovers", []),  # J1/J2/J3 by TWS (crew/sailmaker, not cert)
     }
 
 
-def synthesize(definition, course_id, start_epoch, models, ensemble_members=0, time_budget_s=200):
+def synthesize(definition, course_id, start_epoch, models, ensemble_members=0, time_budget_s=200,
+               jib_crossovers=None):
     """Lab-2a fan-out → Lab-2b synthesized bundle (UNSIGNED draft). Freeze (`sign_bundle`) before
     it's relied on / deployed onboard. Passes through the not-available case from 2a unchanged."""
     playbook = pb.build_playbook(definition, course_id, start_epoch, models,
-                                 ensemble_members=ensemble_members, time_budget_s=time_budget_s)
+                                 ensemble_members=ensemble_members, time_budget_s=time_budget_s,
+                                 jib_crossovers=jib_crossovers)
     if not playbook.get("available"):
         return playbook
 

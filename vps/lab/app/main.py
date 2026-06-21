@@ -188,6 +188,13 @@ def chart_source():
     return (labstate.get("coastline_source") or obstacles.COASTLINE_SOURCE or "natural_earth").lower()
 
 
+def _active_jibs():
+    """The active boat's upwind jib change-down bands (J1/J2/J3 by TWS) — drives the per-leg jib
+    in the route/playbook. Empty if the boat doesn't carry them (→ the generic J1)."""
+    b = boats.active_boat() or {}
+    return b.get("jib_crossovers") or []
+
+
 def _run_optimize(definition, course_id, start_epoch, model_names, ensemble_members, avoid=True):
     """Blocking: build the multi-model wind field, route the course, write the briefing."""
     from .wind import build_windfield
@@ -205,7 +212,8 @@ def _run_optimize(definition, course_id, start_epoch, model_names, ensemble_memb
                 "posted, or no egress)", "windfield": wf.status(), "log": log}
     result = optimizer.optimize_course(definition, course_id, start_epoch, wf, avoid=avoid,
                                        source=chart_source(),
-                                       safety_depth=boats.active_safety_depth_m())
+                                       safety_depth=boats.active_safety_depth_m(),
+                                       jib_crossovers=_active_jibs())
     result["briefing"] = optimizer.briefing(result, definition.get("name", ""))
     result["boat"] = boat_profile.summary(boats.active_boat()) if boats.active_boat() else None
     result["wind_grid"] = _wind_grid(wf, bbox, start_epoch, result.get("finish_epoch", t_end))
@@ -383,7 +391,7 @@ async def playbook(body: dict):
     from . import playbook as pb
     try:
         return await run_in_threadpool(pb.build_playbook, d, course_id, start_epoch,
-                                       model_names, ens)
+                                       model_names, ens, jib_crossovers=_active_jibs())
     except Exception as exc:
         return JSONResponse({"detail": f"playbook failed: {exc}"}, status_code=500)
 
@@ -407,10 +415,32 @@ def _playbook_params(body):
 
 @app.get("/api/crossovers")
 async def crossovers():
-    """The SR33 sail crossover model (per-TWS sail zones) the optimizer attaches per leg + freezes
-    into the playbook bundle — for the Boat-model review panel."""
+    """The sail crossover model the optimizer attaches per leg + freezes into the playbook bundle —
+    for the Boat-model review panel. The per-TWA×TWS zones come from the ORC cert; the upwind jib
+    change-downs (J1/J2/J3 by TWS) come from the active boat (the cert rates only the J1)."""
     from . import sailplan
-    return sailplan.model()
+    m = sailplan.model()
+    b = boats.active_boat() or {}
+    if b.get("sail_inventory"):
+        m["inventory"] = b["sail_inventory"]        # the boat's real inventory (incl. J2/J3)
+    m["jib_crossovers"] = b.get("jib_crossovers") or []
+    m["boat_id"] = b.get("boat_id") or m.get("boat_id")
+    return m
+
+
+@app.post("/api/boats/jib-crossovers")
+async def save_jib_crossovers(body: dict):
+    """Update the active boat's upwind jib change-downs (J1/J2/J3 by TWS) — the editable, not-from-
+    the-cert crossover the user reviews. Body: {jib_crossovers:[{sail,tws_min?,tws_max?}]}."""
+    b = boats.active_boat()
+    if not b:
+        return JSONResponse({"detail": "no active boat"}, status_code=404)
+    bands = (body or {}).get("jib_crossovers")
+    if not isinstance(bands, list):
+        return JSONResponse({"detail": "jib_crossovers must be a list"}, status_code=400)
+    b["jib_crossovers"] = bands
+    boats.save_boat(b)
+    return {"saved": True, "boat_id": b.get("boat_id"), "jib_crossovers": bands}
 
 
 @app.get("/api/polars")
@@ -438,7 +468,7 @@ async def playbook_synthesize(body: dict):
     from . import synthesis
     try:
         return await run_in_threadpool(synthesis.synthesize, d, course_id, start_epoch,
-                                       model_names, ens)
+                                       model_names, ens, jib_crossovers=_active_jibs())
     except Exception as exc:
         return JSONResponse({"detail": f"synthesis failed: {exc}"}, status_code=500)
 
@@ -456,7 +486,7 @@ async def playbook_freeze(body: dict):
         if not d:
             return JSONResponse({"detail": "provide a bundle or a known race_id"}, status_code=404)
         bundle = await run_in_threadpool(synthesis.synthesize, d, course_id, start_epoch,
-                                         model_names, ens)
+                                         model_names, ens, jib_crossovers=_active_jibs())
         if not bundle.get("variants"):
             return JSONResponse({"detail": "nothing to freeze — no variants",
                                  "bundle": bundle}, status_code=422)

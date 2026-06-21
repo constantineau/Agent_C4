@@ -58,7 +58,7 @@ def _subfields(wf: WindField):
 
 
 def build_playbook(definition, course_id, start_epoch, models, ensemble_members=0,
-                   time_budget_s=200):
+                   time_budget_s=200, jib_crossovers=None):
     """Multi-scenario playbook: route the course through the blended field (consensus) and through
     each model's sub-field (scenarios), cluster by favored side into variants."""
     bbox = optimizer.course_bbox(definition, course_id)
@@ -77,13 +77,15 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
     per = max(40, int(time_budget_s / (len(subs) + 1)))     # split the budget across routes
 
     # consensus = the blended field (all models) — the baseline "best guess"
-    consensus = optimizer.optimize_course(definition, course_id, start_epoch, wf, time_budget_s=per)
+    consensus = optimizer.optimize_course(definition, course_id, start_epoch, wf, time_budget_s=per,
+                                          jib_crossovers=jib_crossovers)
     consensus_side = _favored_side(definition, course_id, consensus)
 
     # one candidate route per model scenario
     candidates = []
     for model, sub in subs.items():
-        r = optimizer.optimize_course(definition, course_id, start_epoch, sub, time_budget_s=per)
+        r = optimizer.optimize_course(definition, course_id, start_epoch, sub, time_budget_s=per,
+                                      jib_crossovers=jib_crossovers)
         if not r.get("available"):
             continue
         legs = r.get("legs") or []

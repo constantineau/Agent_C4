@@ -211,9 +211,17 @@ sail model reviewable + part of the frozen homework:
   source + active-boat draft) so the reviewed boat model is **frozen into the signed homework and
   loaded onto the copilot** (`pi/orin/copilot/playbook.py` surfaces it + the per-variant sail plan in
   its LLM digest; `/health` reports `sail_inventory`).
+- **Jib change-downs by TWS (J1/J2/J3).** The ORC cert rates only ONE headsail (the speed-optimal
+  J1), so J2/J3 — the same upwind slot, smaller jibs for a building breeze — aren't in the polar. The
+  `BoatProfile` carries an editable **`jib_crossovers`** (TWS bands; SR33 = J1<14 / J2 14–20 / J3>20
+  kn, crew/sailmaker thresholds, **not** from the cert). `sailplan.optimal_sail(tws,twa,jib_crossovers)`
+  specialises the upwind jib by TWS; the active boat's bands thread through `optimize_course` →
+  `build_playbook` → `synthesize` → the bundle's `boat_model`. The copilot digest surfaces them
+  ("Upwind jib by wind: J1 <14; J2 14–20; J3 20+").
 - **Review UI:** the Gameplan tab's "Review boat model — polars & sail crossovers" panel shows the
-  crossover bands per TWS (color-coded sails over a 0–180° TWA axis) + the polar grid (TWS × TWA →
-  target boatspeed) — exactly what gets loaded onto the copilot, reviewable before lock-in. Endpoints
+  upwind jib change-downs (editable TWS thresholds → `POST /api/boats/jib-crossovers`), the per-TWA×TWS
+  crossover bands (color-coded sails over a 0–180° axis), and the polar grid (TWS × TWA → target
+  boatspeed) — exactly what gets loaded onto the copilot, reviewable before lock-in. Endpoints
   `GET /api/crossovers` + `/api/polars`; the optimizer leg table gains a Sail column + a sail-plan strip.
 
 - **Next:** the copilot's crew-facing narration increment (it now has a signed playbook + boat sail

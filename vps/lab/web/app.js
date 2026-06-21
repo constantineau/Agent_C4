@@ -596,16 +596,60 @@ function renderBoatModel() {
     }).join("");
     return `<div class="xo-row"><span class="xo-tws">${t} kn</span><div class="xo-track">${zones}</div></div>`;
   }).join("");
-  const inv = (m.inventory || []).map((s) => `<span class="sail sail-${esc(s)}">${esc(s)}</span> ${esc((m.sail_names || {})[s + "-A"] || "")}`).join(" · ");
+  const inv = (m.inventory || []).map((s) => `<span class="sail sail-${esc(s)}">${esc(s)}</span>`).join(" ");
   out.innerHTML = `<div class="card boatmodel">
     <h3>Boat model — polars &amp; sail crossovers</h3>
     <div class="muted" style="font-size:12px;margin-bottom:10px">Source: ${esc(m.source || "—")}. This is the boat sail model the optimizer attaches per leg and <b>freezes into the playbook bundle</b> — what the onboard copilot loads to ground its sail calls. Review before lock-in.</div>
-    <div class="bm-inv">${inv}</div>
+    <div class="bm-inv">Inventory: ${inv}</div>
+    ${renderJibCrossovers(m)}
     <h4>Sail crossovers (optimal sail by TWA, per TWS)</h4>
+    <div class="muted" style="font-size:11px;margin-bottom:4px">From the ORC cert (one headsail = the jib slot; specialised to J1/J2/J3 by the wind bands above).</div>
     <div class="xo-axis"><span>0°</span><span>45°</span><span>90°</span><span>135°</span><span>180°</span></div>
     <div class="xo">${bands}</div>
     ${renderPolarGrid()}
   </div>`;
+}
+
+/* Upwind jib change-downs by TWS (J1/J2/J3) — NOT in the ORC cert (it rates one headsail), so
+   these are editable crew/sailmaker thresholds. Two boundaries: J1→J2 and J2→J3. */
+function renderJibCrossovers(m) {
+  const jc = m.jib_crossovers || [];
+  if (!jc.length) return `<div class="muted" style="font-size:12px">No upwind jib change-downs set — the optimizer uses the single cert jib (J1).</div>`;
+  const max = 35;     // axis ceiling for the TWS bars (kn)
+  const bars = jc.map((b) => {
+    const lo = b.tws_min != null ? b.tws_min : 0;
+    const hi = b.tws_max != null ? b.tws_max : max;
+    const left = (lo / max * 100).toFixed(1), w = ((hi - lo) / max * 100).toFixed(1);
+    const rng = b.tws_min == null ? `<${b.tws_max}` : b.tws_max == null ? `${b.tws_min}+` : `${b.tws_min}–${b.tws_max}`;
+    return `<div class="xo-zone sail-bg-${esc(b.sail)}" style="left:${left}%;width:${w}%" title="${esc(b.sail)} ${rng} kn">${esc(b.sail)} ${esc(rng)}</div>`;
+  }).join("");
+  // editable boundaries (assumes ordered J1,J2,J3 with the two interior thresholds)
+  const t1 = jc[0] && jc[0].tws_max, t2 = jc[1] && jc[1].tws_max;
+  return `<h4>Upwind jib change-downs (by wind strength)</h4>
+    <div class="muted" style="font-size:11px;margin-bottom:6px">The ORC cert rates only the J1 — these J1/J2/J3 change-downs are your crew/sailmaker thresholds (editable), and drive which jib each upwind leg carries.</div>
+    <div class="xo-axis"><span>0</span><span>~9</span><span>~17</span><span>~26</span><span>35 kn</span></div>
+    <div class="xo"><div class="xo-row"><span class="xo-tws">TWS</span><div class="xo-track">${bars}</div></div></div>
+    <div class="jib-edit">
+      <label>J1→J2 at <input type="number" id="jibT1" value="${t1 ?? ""}" min="2" max="34" step="0.5" style="width:58px"> kn</label>
+      <label>J2→J3 at <input type="number" id="jibT2" value="${t2 ?? ""}" min="2" max="34" step="0.5" style="width:58px"> kn</label>
+      <button class="mini" onclick="saveJibCrossovers()">Save change-downs</button>
+      <span id="jibSaveMsg" class="muted" style="font-size:11px"></span>
+    </div>`;
+}
+
+async function saveJibCrossovers() {
+  const t1 = parseFloat(document.getElementById("jibT1").value);
+  const t2 = parseFloat(document.getElementById("jibT2").value);
+  const msg = document.getElementById("jibSaveMsg");
+  if (isNaN(t1) || isNaN(t2) || t1 >= t2) { if (msg) msg.textContent = "J1→J2 must be below J2→J3."; return; }
+  const bands = [{ sail: "J1", tws_max: t1 }, { sail: "J2", tws_min: t1, tws_max: t2 }, { sail: "J3", tws_min: t2 }];
+  if (msg) msg.textContent = "Saving…";
+  try {
+    await apiPost("/api/boats/jib-crossovers", { jib_crossovers: bands });
+    Opt.boatModel = await (await apiGet("/api/crossovers")).json();   // refetch so the bars update
+    Opt.showBoatModel = true;
+    renderGameplan();
+  } catch (e) { if (msg) msg.textContent = "Save failed."; }
 }
 
 function renderPolarGrid() {

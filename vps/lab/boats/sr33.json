@@ -12,7 +12,12 @@
   "air_draft_m": null,
   "displacement_kg": null,
   "hull_type": "mono",
-  "sail_inventory": ["J1", "A2", "A3", "S2"],
-  "note": "Reference boat. Draft 7 ft = 2.1336 m (user-supplied). ORC/beam/displacement TBD.",
+  "sail_inventory": ["J1", "J2", "J3", "A2", "A3", "S2"],
+  "jib_crossovers": [
+    {"sail": "J1", "tws_max": 14},
+    {"sail": "J2", "tws_min": 14, "tws_max": 20},
+    {"sail": "J3", "tws_min": 20}
+  ],
+  "note": "Reference boat. Draft 7 ft = 2.1336 m (user-supplied). Jib change-downs J1<14 / J2 14-20 / J3>20 kn TWS (user-supplied; the ORC cert rates only the J1, so these are crew thresholds, not from the polar). ORC/beam/displacement TBD.",
   "provenance": {"source": "bundled seed", "review_status": "seed"}
 }

@@ -51,20 +51,43 @@ def crossovers(tws):
     return _load().get("crossovers", {}).get(str(b), []) if b is not None else []
 
 
-def optimal_sail(tws, twa):
+_JIB_FAMILY = "J1"      # the cert's single upwind headsail — the slot J1/J2/J3 share
+
+
+def jib_for_tws(tws, jib_crossovers):
+    """Pick the specific upwind jib (J1/J2/J3) for a TWS from the boat's change-down bands. The ORC
+    cert rates only the J1, so this TWS split is the crew's, not the polar's. Falls back to the
+    default jib if no band matches / none configured."""
+    if not jib_crossovers or tws is None:
+        return _JIB_FAMILY
+    for b in jib_crossovers:
+        lo = b.get("tws_min")
+        hi = b.get("tws_max")
+        if (lo is None or tws >= lo) and (hi is None or tws < hi):
+            return b.get("sail") or _JIB_FAMILY
+    return jib_crossovers[-1].get("sail") or _JIB_FAMILY
+
+
+def optimal_sail(tws, twa, jib_crossovers=None):
     """The crew-shorthand sail (e.g. 'A3') optimal at (tws, twa). TWA is folded to 0–180 (port/
     starboard symmetric). A leg's TWA is the DIRECT-course angle, so an upwind beat can read below
     the close-hauled angle (you tack up on the beat sail) — clamp to the first/last band rather than
-    returning nothing. None only when the model is unavailable."""
+    returning nothing. When the sail is the upwind jib and `jib_crossovers` are given, specialise it
+    to J1/J2/J3 by TWS. None only when the model is unavailable."""
     if twa is None:
         return None
     twa = abs(((twa + 180) % 360) - 180)
     zones = crossovers(tws)
     if not zones:
         return None
-    for z in zones:
-        if z["twa_min"] <= twa <= z["twa_max"]:
-            return z.get("short") or z.get("sail")
     if twa < zones[0]["twa_min"]:                     # below the beat angle → beating on the up sail
-        return zones[0].get("short") or zones[0].get("sail")
-    return zones[-1].get("short") or zones[-1].get("sail")   # past the last band → the run sail
+        base = zones[0].get("short") or zones[0].get("sail")
+    else:
+        base = zones[-1].get("short") or zones[-1].get("sail")   # past the last band → the run sail
+        for z in zones:
+            if z["twa_min"] <= twa <= z["twa_max"]:
+                base = z.get("short") or z.get("sail")
+                break
+    if base == _JIB_FAMILY and jib_crossovers:
+        return jib_for_tws(tws, jib_crossovers)
+    return base

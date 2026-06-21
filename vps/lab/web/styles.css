@@ -198,10 +198,17 @@ a.mini { text-decoration: none; display: inline-block; }
 /* Sail badges + crossover bands + polar grid (routing fidelity 2b) */
 .sail { font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 5px; color: #04121f;
   background: var(--muted); display: inline-block; }
-.sail-J1, .sail-bg-J1 { background: #36b3ff; }      /* jib — blue */
+.sail-J1, .sail-bg-J1 { background: #36b3ff; }      /* J1 — blue */
+.sail-J2, .sail-bg-J2 { background: #66a9e0; }      /* J2 — mid blue */
+.sail-J3, .sail-bg-J3 { background: #9b8cff; }      /* J3 — indigo */
 .sail-A2, .sail-bg-A2 { background: #7ee0a8; }      /* A2 — green */
 .sail-A3, .sail-bg-A3 { background: #f5c451; }      /* A3 — amber */
 .sail-S2, .sail-bg-S2 { background: #ff8042; }      /* S2 — orange */
+.jib-edit { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin: 8px 0 4px;
+  font-size: 12px; color: var(--muted); }
+.jib-edit label { display: flex; gap: 5px; align-items: center; }
+.jib-edit input { background: var(--bg); border: 1px solid var(--line); color: var(--ink);
+  border-radius: 5px; padding: 3px 6px; }
 .sailplan { margin-bottom: 10px; font-size: 13px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .boatmodel h4 { margin: 14px 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); }
 .bm-inv { font-size: 12px; color: var(--muted); display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }

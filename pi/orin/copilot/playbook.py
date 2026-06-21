@@ -40,6 +40,19 @@ def verify_signature(data: dict) -> bool:
     return hashlib.sha256(_canonical_bytes(data)).hexdigest() == sig["value"]
 
 
+def _jib_band_text(j) -> str:
+    """'J2 14–20 kn' from a {sail, tws_min?, tws_max?} band."""
+    sail = j.get("sail", "?")
+    lo, hi = j.get("tws_min"), j.get("tws_max")
+    if lo is None and hi is not None:
+        return f"{sail} <{hi}"
+    if lo is not None and hi is None:
+        return f"{sail} {lo}+"
+    if lo is not None and hi is not None:
+        return f"{sail} {lo}–{hi}"
+    return sail
+
+
 class Playbook:
     """A loaded (or empty) playbook bundle. `loaded` is False when no homework is aboard."""
 
@@ -92,9 +105,11 @@ class Playbook:
                  "you do not invent new ones."]
         bm = self.boat_model
         if bm.get("sail_inventory"):
+            jib = "; ".join(_jib_band_text(j) for j in bm.get("jib_crossovers", []))
             lines.append(f"Boat sail model: inventory {', '.join(bm['sail_inventory'])}, draft "
                          f"{bm.get('draft_ft', '?')} ft — sail calls come from this frozen crossover "
-                         "table + the engine's live TWS/TWA, not invented.")
+                         "table + the engine's live TWS/TWA, not invented."
+                         + (f" Upwind jib by wind: {jib}." if jib else ""))
         for v in self.variants[:max_variants]:
             vid = v.get("id") or v.get("name") or "?"
             summary = v.get("summary") or v.get("rationale") or ""

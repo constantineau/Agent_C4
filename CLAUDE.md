@@ -683,7 +683,14 @@ panel: the crossover bands per TWS (color-coded sails over a 0–180° TWA axis)
 TWA → target boatspeed) — what gets loaded onto the copilot, reviewable before lock-in. New endpoints
 `GET /api/crossovers` + `/api/polars`; the optimizer leg table gains a Sail column + a sail-plan
 strip. Verified end-to-end (per-leg sail attaches where wind detail exists, bundle carries
-boat_model, freeze→signed→copilot digest shows the sail model; UI Playwright-verified). **Next: the
+boat_model, freeze→signed→copilot digest shows the sail model; UI Playwright-verified).
+**Jib change-downs by TWS (J1/J2/J3):** the ORC cert rates only ONE headsail (the speed-optimal J1),
+so J2/J3 — same upwind slot, smaller jibs for a building breeze — aren't in the polar. The
+`BoatProfile` carries an editable **`jib_crossovers`** (TWS bands, e.g. SR33 J1<14 / J2 14–20 / J3>20
+kn — crew/sailmaker thresholds, NOT from the cert); `sailplan.optimal_sail(tws,twa,jib_crossovers)`
+specialises the upwind jib by TWS; the active boat's bands thread through `optimize_course`/
+`build_playbook`/`synthesize` and into the bundle's `boat_model`. The review panel shows + edits them
+(`POST /api/boats/jib-crossovers`); the copilot digest surfaces "Upwind jib by wind: J1 <14; …". **Next: the
 copilot's crew-facing narration increment** (it now has a signed playbook + boat sail model to
 interpret) + routing-fidelity 2c (isochrone VMG-gate/cone/adaptive).
 
