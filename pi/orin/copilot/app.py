@@ -53,7 +53,8 @@ def health():
                 "enabled": config.USE_LLM, "reachable": llm_ok},
         "playbook": {"loaded": pb.loaded, "race_id": pb.race_id,
                      "variants": len(pb.variants),
-                     "signed": pb.signed, "signature_ok": pb.signature_ok},
+                     "signed": pb.signed, "signature_ok": pb.signature_ok,
+                     "sail_inventory": pb.boat_model.get("sail_inventory", [])},
         # Honest degraded modes so the crew knows what they're getting.
         "mode": ("llm" if (eng_ok and llm_ok) else
                  "deterministic" if eng_ok else "engine-unreachable"),

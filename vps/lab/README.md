@@ -193,10 +193,33 @@ synthesized + **signed**, dropped onboard as the copilot's frozen homework. Two 
   onboard copilot loaded it, **verified the signature**, and emitted the LLM digest with each
   variant's flip trigger. UI Playwright-verified.
 
-- **Next:** the copilot's crew-facing narration increment (it now has a real signed playbook to
-  interpret); routing fidelity 2b (sail-specific polars + per-leg sail plan) and 2c (isochrone
-  VMG-gate/cone/adaptive). A higher-res coastline backstop (OSM land / GSHHG) for the Natural-Earth
-  path and enforcing rounding **side** remain optional upgrades.
+### Routing fidelity 2b — per-leg sail plan + reviewable boat sail model (built)
+
+The optimizer routes on the Best-Performance polar envelope (= the max-over-sails speed, so the
+route's speed is already sail-optimal) but didn't say WHICH sail. 2b attaches that and makes the boat
+sail model reviewable + part of the frozen homework:
+
+- **`vps/db/seed/sr33_crossovers.json`** — the per-TWS sail crossover bands (optimal sail by TWA: J1
+  upwind → A2/A3 reaching → S2 running), precomputed from the ORC cert by
+  `vps/agent/knowledge/build_speed_guide.py::write_crossovers` (reuses the existing `optimal_sail()`).
+  Regenerate with the guide/seed after a cert update.
+- **`app/sailplan.py`** loads it: `optimal_sail(tws,twa)` (clamped so an upwind beat's sub-close-hauled
+  *direct* TWA still maps to the up sail), `crossovers(tws)`, `model()`.
+- **`app/optimizer.py`** adds `sail` to each leg (TWS/TWA already in scope at the leg midpoint) + a
+  route-level `sail_plan` (the peel sequence). These flow into the playbook variants for free.
+- **`app/synthesis.py`** adds a **`boat_model`** block to the bundle (the crossover table + polar
+  source + active-boat draft) so the reviewed boat model is **frozen into the signed homework and
+  loaded onto the copilot** (`pi/orin/copilot/playbook.py` surfaces it + the per-variant sail plan in
+  its LLM digest; `/health` reports `sail_inventory`).
+- **Review UI:** the Gameplan tab's "Review boat model — polars & sail crossovers" panel shows the
+  crossover bands per TWS (color-coded sails over a 0–180° TWA axis) + the polar grid (TWS × TWA →
+  target boatspeed) — exactly what gets loaded onto the copilot, reviewable before lock-in. Endpoints
+  `GET /api/crossovers` + `/api/polars`; the optimizer leg table gains a Sail column + a sail-plan strip.
+
+- **Next:** the copilot's crew-facing narration increment (it now has a signed playbook + boat sail
+  model to interpret); routing fidelity 2c (isochrone VMG-gate/cone/adaptive). A higher-res coastline
+  backstop (OSM land / GSHHG) for the Natural-Earth path and enforcing rounding **side** remain
+  optional upgrades.
 
 ## Race documents (found 2026-06-17)
 

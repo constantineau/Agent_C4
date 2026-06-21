@@ -145,7 +145,7 @@ via `OnboardSource`. It comes up with the rest of the Pi stack; quick check:
 | **5** ✅ | iPad nav companion: day/night, sail dial, course plot, navigator, tactics, routing | bench-verified end-to-end |
 | **6** ✅ | Alerting + summarizer + polar tooling | bench-complete; 2-practice-sail false-positive gate awaits real sailing |
 | 7 🔶 | Prod stack + deploy + rules review + soak | rules review done; server auth + TLS scaffolding done; prod deploy/soak gated on domain + prod `.env` |
-| **9** 🔶 | Onboard + C4 Performance Lab (three-tier pivot) | **9.0 data-access abstraction ✅ · 9.1 onboard engine service ✅ · 9.2 race gate + iPad onboard console ✅ · Lab-0 race ingestion + course loader ✅ · Lab-1 multi-model GRIB optimizer ✅ · Lab-2a/2b branching playbook bundle ✅ (fan-out → variants → Opus synthesis → signed, onboard-loadable artifact) · 9.4 Orin LLM appliance live (Ollama+Qwen2.5-7B :11434) + copilot decision-support layer ✅ (`pi/orin/copilot`)**; next the copilot crew-facing narration increment + routing-fidelity (b) sail-specific polars — see `docs/ONBOARD_ENGINE_SCOPING.md` |
+| **9** 🔶 | Onboard + C4 Performance Lab (three-tier pivot) | **9.0 data-access abstraction ✅ · 9.1 onboard engine service ✅ · 9.2 race gate + iPad onboard console ✅ · Lab-0 race ingestion + course loader ✅ · Lab-1 multi-model GRIB optimizer ✅ · Lab-2a/2b branching playbook bundle ✅ (fan-out → variants → Opus synthesis → signed, onboard-loadable artifact) · routing-fidelity 2b per-leg sail plan + reviewable boat sail model ✅ · 9.4 Orin LLM appliance live (Ollama+Qwen2.5-7B :11434) + copilot decision-support layer ✅ (`pi/orin/copilot`)**; next the copilot crew-facing narration increment + routing-fidelity 2c (isochrone VMG-gate/cone/adaptive) — see `docs/ONBOARD_ENGINE_SCOPING.md` |
 
 **Current status:** Phases 0–6 built and bench-verified; Phase 7 started; **Phase 9 in progress
 (9.0 data-access abstraction ✅, 9.1 onboard engine service ✅ — see "Onboard engine service",
@@ -378,8 +378,10 @@ Pi archive (SQLite default) · crew scale + Grafana? · GRIB source · boat-inst
 **Boat-speed gospel:** the SR33 "C4" ORC Speed Guide lives in `vps/agent/knowledge/`
 (`C4_boatspeed_gospel.md` = verbatim cert; `sr33_speed_guide.md` = distilled Best-Performance
 polar + per-row optimal sail + per-TWS sail plan, loaded into the agent's cached system
-context; `polars_sr33.sql` = real polars for the DB). The agent advises sail selection and
-crossovers/peels from the sail plan. Regenerate after a cert update:
+context; `vps/db/seed/polars_sr33.sql` = real polars for the DB/optimizer;
+`vps/db/seed/sr33_crossovers.json` = the **per-TWS sail crossover model** the Lab optimizer uses
+for the per-leg sail plan, routing-fidelity 2b). The agent advises sail selection and
+crossovers/peels from the sail plan. Regenerate all three after a cert update:
 `python3 vps/agent/knowledge/build_speed_guide.py`.
 
 ## Racing-rules caveat (RRS 41 / Bayview Mackinac NOR) — drives the three-tier pivot
@@ -662,9 +664,28 @@ frozen homework. Two stages, both in `vps/lab/app/`:
 spread; Opus wrote specific rhumb-relative triggers ("if the breeze veers and holds right of ~020°
 for two-plus oscillation cycles = persistent right shift, bail to right"); freeze → signed (sha256) →
 download → the onboard copilot loaded it, **verified the signature**, and emitted the LLM digest with
-each variant's flip trigger. UI Playwright-verified. See `vps/lab/README.md`. **Next: the copilot's
-crew-facing narration increment** (it now has a real, signed playbook to interpret) + routing-fidelity
-(b) sail-specific polars.
+each variant's flip trigger. UI Playwright-verified. See `vps/lab/README.md`.
+
+**Routing fidelity 2b — per-leg SAIL PLAN + reviewable boat sail model: SHIPPED.** The optimizer
+routes on the Best-Performance polar envelope, which IS the max-over-sails speed — so the route's
+speed is already sail-optimal, but it didn't say WHICH sail. 2b attaches that. `build_speed_guide.py`
+now also emits **`vps/db/seed/sr33_crossovers.json`** — the per-TWS sail crossover bands (optimal sail
+by TWA: J1 upwind → A2/A3 reaching → S2 running), precomputed from the ORC cert via the existing
+`optimal_sail()`. `vps/lab/app/sailplan.py` loads it (`optimal_sail(tws,twa)`, clamped so an upwind
+beat's sub-close-hauled direct TWA still maps to the up sail; `crossovers(tws)`; `model()`).
+`optimizer.py` adds `sail` to each leg (TWS/TWA already in scope) + a route-level `sail_plan` (the
+peel sequence); these flow into the playbook variants for free. The synthesis bundle gains a
+**`boat_model`** block (the crossover table + polar source + active-boat draft) so the reviewed boat
+model is **frozen into the signed homework and loaded onto the copilot** — `pi/orin/copilot/
+playbook.py` surfaces `boat_model` + the per-variant sail plan in its LLM digest (`/health` reports
+`sail_inventory`). The Lab **Gameplan tab** gains a "Review boat model — polars & sail crossovers"
+panel: the crossover bands per TWS (color-coded sails over a 0–180° TWA axis) + the polar grid (TWS ×
+TWA → target boatspeed) — what gets loaded onto the copilot, reviewable before lock-in. New endpoints
+`GET /api/crossovers` + `/api/polars`; the optimizer leg table gains a Sail column + a sail-plan
+strip. Verified end-to-end (per-leg sail attaches where wind detail exists, bundle carries
+boat_model, freeze→signed→copilot digest shows the sail model; UI Playwright-verified). **Next: the
+copilot's crew-facing narration increment** (it now has a signed playbook + boat sail model to
+interpret) + routing-fidelity 2c (isochrone VMG-gate/cone/adaptive).
 
 ## Onboard LLM copilot — Orin Nano (Phase 9.4, Tier 2)
 

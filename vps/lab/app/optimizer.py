@@ -19,6 +19,7 @@ import time
 
 from shared import race_def
 from . import polars as POL
+from . import sailplan
 
 HSTEP = 12          # heading fan resolution (deg)
 SECTOR = 3.0        # isochrone pruning bucket (deg of bearing from leg start)
@@ -201,6 +202,7 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
             "first_heading": leg["first_heading"],
             "blocked_steps": leg.get("blocked_steps", 0),
             "point_of_sail": _point_of_sail(twa) if twa is not None else None,
+            "sail": sailplan.optimal_sail(det["tws"], twa) if det and twa is not None else None,
             "wind": ({"tws": det["tws"], "twd": det["twd"], "confidence": det["confidence"]}
                      if det else None),
         })
@@ -208,6 +210,14 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
         slat, slon, t = dlat, dlon, leg["eta"]
 
     total_min = round((t - float(start_epoch)) / 60.0, 1)
+    # route-level sail plan: collapse the per-leg sail into an ordered sequence of peels
+    sail_seq = []
+    for lg in legs:
+        s = lg.get("sail")
+        if s and (not sail_seq or sail_seq[-1]["sail"] != s):
+            sail_seq.append({"sail": s, "from_leg": lg["to"]})
+        elif s and sail_seq:
+            sail_seq[-1]["to_leg"] = lg["to"]
     return {
         "available": True, "course_id": cid,
         "start_epoch": round(float(start_epoch)), "finish_epoch": round(t),
@@ -218,6 +228,7 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
         "route_confidence": round(sum(confs) / len(confs), 2) if confs else None,
         "min_confidence": round(min(confs), 2) if confs else None,
         "legs": legs,
+        "sail_plan": sail_seq,
         "skipped_marks": skipped,
         "marks": [{"seq": s, "name": n, "lat": la, "lon": lo} for s, n, la, lo in marks],
         "path": [{"lat": p["lat"], "lon": p["lon"], "t": round(p["t"])} for p in full_path],

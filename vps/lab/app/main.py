@@ -405,6 +405,28 @@ def _playbook_params(body):
     return d, course_id, start_epoch, model_names, ens
 
 
+@app.get("/api/crossovers")
+async def crossovers():
+    """The SR33 sail crossover model (per-TWS sail zones) the optimizer attaches per leg + freezes
+    into the playbook bundle — for the Boat-model review panel."""
+    from . import sailplan
+    return sailplan.model()
+
+
+@app.get("/api/polars")
+async def polars_grid():
+    """The boat polar grid (TWS × TWA → target STW) for the Boat-model review panel."""
+    from . import polars
+    rows = polars.polars_stw()
+    tws = sorted({r[0] for r in rows})
+    twa = sorted({r[1] for r in rows})
+    k = lambda x: "%g" % x                 # match JS String() (4.0 -> "4", 45.3 -> "45.3")
+    grid = {k(t): {k(a): None for a in twa} for t in tws}
+    for t, a, stw in rows:
+        grid[k(t)][k(a)] = stw
+    return {"tws_buckets": tws, "twa_buckets": twa, "grid": grid, "n_points": len(rows)}
+
+
 @app.post("/api/playbook/synthesize")
 async def playbook_synthesize(body: dict):
     """Lab-2b: the 2a fan-out → Opus synthesis (per-variant rationale/tradeoffs/what-flips-it +

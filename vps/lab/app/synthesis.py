@@ -30,6 +30,7 @@ import time
 
 from shared import race_def
 from . import playbook as pb
+from . import sailplan
 
 SCHEMA = "c4.playbook/v1"
 MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-8")
@@ -237,6 +238,29 @@ def _opus_synthesis(playbook: dict, definition, course_id, race_name):
 
 # ---------------------------------------------------------------------------- bundle assembly
 
+def _boat_model():
+    """The reviewed boat sail/draft model frozen into the bundle — so the polars + sail crossovers
+    the homework assumes travel onboard (the copilot/engine can surface the per-leg sail plan and the
+    crew can review what was loaded). Boat-scoped via the Lab's active BoatProfile."""
+    try:
+        from . import boats
+        b = boats.active_boat() or {}
+    except Exception:
+        b = {}
+    sm = sailplan.model()
+    draft_m = b.get("draft_m")
+    return {
+        "boat_id": b.get("boat_id") or sm.get("boat_id"),
+        "name": b.get("name"),
+        "draft_m": draft_m,
+        "draft_ft": round(draft_m / 0.3048, 1) if draft_m is not None else None,
+        "polars_source": sm.get("source"),
+        "sail_inventory": sm.get("inventory", []),
+        "sail_names": sm.get("sail_names", {}),
+        "crossovers": sm.get("crossovers", {}),     # per-TWS sail zones — the reviewable model
+    }
+
+
 def synthesize(definition, course_id, start_epoch, models, ensemble_members=0, time_budget_s=200):
     """Lab-2a fan-out → Lab-2b synthesized bundle (UNSIGNED draft). Freeze (`sign_bundle`) before
     it's relied on / deployed onboard. Passes through the not-available case from 2a unchanged."""
@@ -259,6 +283,7 @@ def synthesize(definition, course_id, start_epoch, models, ensemble_members=0, t
             "supported_by": v.get("supported_by"), "share": v.get("share"),
             "total_hours": v.get("total_hours"), "hours_range": v.get("hours_range"),
             "first_heading": v.get("first_heading"), "route_confidence": v.get("route_confidence"),
+            "sail_plan": (v.get("route") or {}).get("sail_plan"),
             "route": v.get("route"),
         })
 
@@ -275,6 +300,7 @@ def synthesize(definition, course_id, start_epoch, models, ensemble_members=0, t
         "decision_spread_min": playbook.get("decision_spread_min"),
         "first_beat_rhumb_deg": first_beat_rhumb(definition, course_id),
         "consensus": playbook.get("consensus"),
+        "boat_model": _boat_model(),      # polars/sail crossovers + draft frozen into the homework
         "variants": variants,
         "decision_tree": syn.get("decision_tree", []),
         "provenance": {

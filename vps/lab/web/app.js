@@ -487,6 +487,9 @@ async function renderGameplan() {
         <label>Start (UTC) <input type="datetime-local" id="optStart"></label>
       </div>
       <div class="opt-controls">${optBoatControls()}</div>
+      <div class="opt-controls"><button class="mini" onclick="toggleBoatModel()">${Opt.showBoatModel ? "Hide" : "Review"} boat model — polars &amp; sail crossovers</button>
+        <span class="muted" style="font-size:12px">the per-leg sail plan + draft frozen into the playbook → loaded onto the copilot</span></div>
+      <div id="boatModelOut"></div>
       <div class="opt-models">${optModelChecks()}</div>
       <div class="opt-controls">
         <label>Ensemble members <input type="number" id="optEns" value="0" min="0" max="30" style="width:64px"> <span class="muted">(GEFS/ECMWF-ENS only; 0 = deterministic)</span></label>
@@ -502,6 +505,7 @@ async function renderGameplan() {
       <button id="pbRun" onclick="synthPlaybook()" ${Pb.running ? "disabled" : ""}>${Pb.running ? "Synthesizing…" : "Synthesize branching playbook →"}</button>
       <div id="pbOut"></div>
     </div></div>`;
+  if (Opt.showBoatModel) renderBoatModel();
   if (Opt.result) renderOptResult(Opt.result);
   if (Pb.result) renderPbResult(Pb.result);
 }
@@ -565,6 +569,58 @@ async function optSaveDraft() {
   await apiPost("/api/boats", full);
   await reloadBoats(); renderGameplan();
 }
+/* Boat-model review: the polars + sail crossovers frozen into the playbook → loaded onto the copilot */
+async function toggleBoatModel() {
+  Opt.showBoatModel = !Opt.showBoatModel;
+  if (Opt.showBoatModel && !Opt.boatModel) {
+    try {
+      Opt.boatModel = await (await apiGet("/api/crossovers")).json();
+      Opt.polarGrid = await (await apiGet("/api/polars")).json();
+    } catch (e) { Opt.boatModel = { error: String(e) }; }
+  }
+  renderGameplan();
+}
+
+function renderBoatModel() {
+  const out = document.getElementById("boatModelOut"); if (!out) return;
+  const m = Opt.boatModel;
+  if (!m) { out.innerHTML = '<div class="loading">Loading boat model…</div>'; return; }
+  if (m.error || !m.crossovers) { out.innerHTML = `<div class="placeholder">Boat model unavailable — ${esc(m.error || "no crossover data")}</div>`; return; }
+  const tws = m.tws_buckets || [];
+  // crossover bands: a horizontal 0–180° TWA axis per TWS, colored per sail
+  const bands = tws.map((t) => {
+    const zones = (m.crossovers[String(t)] || []).map((z) => {
+      const left = (z.twa_min / 180 * 100).toFixed(1);
+      const w = ((z.twa_max - z.twa_min) / 180 * 100).toFixed(1);
+      return `<div class="xo-zone sail-bg-${esc(z.short)}" style="left:${left}%;width:${w}%" title="${esc(z.label)} ${z.twa_min}–${z.twa_max}°">${esc(z.short)}</div>`;
+    }).join("");
+    return `<div class="xo-row"><span class="xo-tws">${t} kn</span><div class="xo-track">${zones}</div></div>`;
+  }).join("");
+  const inv = (m.inventory || []).map((s) => `<span class="sail sail-${esc(s)}">${esc(s)}</span> ${esc((m.sail_names || {})[s + "-A"] || "")}`).join(" · ");
+  out.innerHTML = `<div class="card boatmodel">
+    <h3>Boat model — polars &amp; sail crossovers</h3>
+    <div class="muted" style="font-size:12px;margin-bottom:10px">Source: ${esc(m.source || "—")}. This is the boat sail model the optimizer attaches per leg and <b>freezes into the playbook bundle</b> — what the onboard copilot loads to ground its sail calls. Review before lock-in.</div>
+    <div class="bm-inv">${inv}</div>
+    <h4>Sail crossovers (optimal sail by TWA, per TWS)</h4>
+    <div class="xo-axis"><span>0°</span><span>45°</span><span>90°</span><span>135°</span><span>180°</span></div>
+    <div class="xo">${bands}</div>
+    ${renderPolarGrid()}
+  </div>`;
+}
+
+function renderPolarGrid() {
+  const g = Opt.polarGrid; if (!g || !g.grid) return "";
+  const tws = g.tws_buckets, twa = g.twa_buckets;
+  const head = `<tr><th>TWA \\ TWS</th>${tws.map((t) => `<th>${t}</th>`).join("")}</tr>`;
+  const rows = twa.map((a) => `<tr><td class="pg-twa">${a}°</td>${tws.map((t) => {
+    const v = g.grid[String(t)][String(a)];
+    return `<td>${v == null ? "" : v.toFixed(1)}</td>`;
+  }).join("")}</tr>`).join("");
+  return `<h4>Polar grid — target boatspeed (kn), TWS × TWA</h4>
+    <div class="pg-wrap"><table class="pg">${head}${rows}</table></div>
+    <div class="muted" style="font-size:11px;margin-top:4px">${g.n_points} points · Best-Performance ORC envelope (the speed the optimizer routes on).</div>`;
+}
+
 async function optPickRace(id, rerender = true) {
   Opt.raceId = id; Opt.courseId = null; Opt.result = null; Pb.result = null;
   try { Opt.def = await (await apiGet("/api/races/" + encodeURIComponent(id))).json(); }
@@ -621,7 +677,8 @@ function renderOptResult(r) {
       ${(r.skipped_marks || []).length ? `<div class="muted" style="font-size:12px">Marks skipped (no coords — review in Course &amp; Marks): ${r.skipped_marks.map(esc).join(", ")}</div>` : ""}
     </div>
     <div class="card"><h3>Legs</h3>
-      <table class="legs"><thead><tr><th>To</th><th>Min</th><th>Point of sail</th><th>Tacks</th><th>TWS</th><th>TWD</th><th>Conf</th></tr></thead>
+      ${optSailPlan(r)}
+      <table class="legs"><thead><tr><th>To</th><th>Min</th><th>Point of sail</th><th>Sail</th><th>Tacks</th><th>TWS</th><th>TWD</th><th>Conf</th></tr></thead>
       <tbody>${r.legs.map(optLegRow).join("")}</tbody></table></div>
     <div class="card"><h3>Briefing</h3><pre class="briefing">${esc(r.briefing || "")}</pre></div>
     <div class="card"><h3>Wind field</h3>
@@ -634,8 +691,16 @@ function optLegRow(l) {
   const w = l.wind || {};
   const c = w.confidence, cc = c == null ? "" : c >= 0.6 ? "ok" : c >= 0.4 ? "warn" : "bad";
   return `<tr><td>${esc(l.to)}</td><td>${l.leg_minutes}</td><td>${esc(l.point_of_sail || "—")}</td>
+    <td>${l.sail ? `<span class="sail sail-${esc(l.sail)}">${esc(l.sail)}</span>` : "—"}</td>
     <td>${l.tacks}</td><td>${w.tws ?? "—"}</td><td>${w.twd ?? "—"}°</td>
     <td><span class="conf ${cc}">${c ?? "—"}</span></td></tr>`;
+}
+
+function optSailPlan(r) {
+  const sp = r.sail_plan || [];
+  if (!sp.length) return "";
+  const seq = sp.map((s) => `<span class="sail sail-${esc(s.sail)}">${esc(s.sail)}</span>`).join(' <span class="muted">→</span> ');
+  return `<div class="sailplan"><span class="muted">Sail plan:</span> ${seq}</div>`;
 }
 
 /* ---------- Branching playbook (Lab-2b) ---------- */
@@ -678,6 +743,7 @@ function renderPbResult(b) {
         <span class="pill">${b.variants.length} variants · ${(b.provenance || {}).n_scenarios || "?"} scenarios</span>
         <span class="muted" style="font-size:11px">via ${esc(((b.provenance || {}).synth_model || "").replace("claude-", ""))}</span>
       </div>
+      ${pbBoatModelNote(b)}
     </div>
     <div class="pb-variants">${b.variants.map((v) => pbVariantCard(v, v.id === b.recommended)).join("")}</div>
     ${pbDecisionTree(b)}
@@ -699,10 +765,24 @@ function pbVariantCard(v, recommended) {
       <span class="muted" style="font-size:12px">${v.total_hours ?? "—"} h${rng} · <span class="conf ${cc}">conf ${conf ?? "—"}</span> · ${esc((v.supported_by || []).map((m) => m.toUpperCase()).join(", "))}</span>
     </div>
     <div class="pb-var-sum">${esc(v.summary || "")}</div>
+    ${pbSailPlanRow(v)}
     ${v.rationale ? `<div class="pb-row"><span class="pb-lbl">Why</span><span>${esc(v.rationale)}</span></div>` : ""}
     ${v.tradeoffs ? `<div class="pb-row"><span class="pb-lbl">Tradeoffs</span><span>${esc(v.tradeoffs)}</span></div>` : ""}
     ${v.what_flips_it ? `<div class="pb-row flips"><span class="pb-lbl">What flips it</span><span>${esc(v.what_flips_it)}</span></div>` : ""}
   </div>`;
+}
+
+function pbBoatModelNote(b) {
+  const m = b.boat_model; if (!m || !m.sail_inventory) return "";
+  const inv = (m.sail_inventory || []).map((s) => `<span class="sail sail-${esc(s)}">${esc(s)}</span>`).join(" ");
+  return `<div class="pb-boatmodel muted" style="font-size:12px;margin-top:6px">⛵ Boat model frozen in: ${inv} · draft ${m.draft_ft ?? "?"} ft · ${Object.keys(m.crossovers || {}).length} TWS crossover bands — loaded onto the copilot.</div>`;
+}
+
+function pbSailPlanRow(v) {
+  const sp = v.sail_plan || [];
+  if (!sp.length) return "";
+  const seq = sp.map((s) => `<span class="sail sail-${esc(s.sail)}">${esc(s.sail)}</span>`).join(' → ');
+  return `<div class="pb-row"><span class="pb-lbl">Sail plan</span><span>${seq}</span></div>`;
 }
 
 function pbDecisionTree(b) {

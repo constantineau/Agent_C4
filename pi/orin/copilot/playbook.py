@@ -59,6 +59,25 @@ class Playbook:
     def variants(self) -> list[dict]:
         return self.data.get("variants", []) or []
 
+    @property
+    def boat_model(self) -> dict:
+        """The reviewed boat sail/draft model the Lab froze in (polars source + per-TWS sail
+        crossovers + draft) — the per-leg sail plans rest on this."""
+        return self.data.get("boat_model", {}) or {}
+
+    @staticmethod
+    def _sail_plan_text(v) -> str:
+        seq = v.get("sail_plan") or [{"sail": s} for s in
+                                     [l.get("sail") for l in (v.get("route") or {}).get("legs", [])]
+                                     if s]
+        sails = [s.get("sail") for s in seq if s.get("sail")] if seq and isinstance(seq[0], dict) else []
+        # de-dupe consecutive
+        out = []
+        for s in sails:
+            if not out or out[-1] != s:
+                out.append(s)
+        return " → ".join(out)
+
     def digest(self, max_variants: int = 6) -> str:
         """A compact text summary for the LLM system prompt. Kept short — the 7B's context is
         the constraint, and the copilot SELECTS variants, it doesn't need every leg detail."""
@@ -71,11 +90,22 @@ class Playbook:
         lines = [f"PLAYBOOK loaded for race '{self.race_id or 'unknown'}'. "
                  f"{len(self.variants)} pre-authored variant(s). You SELECT/INTERPRET these; "
                  "you do not invent new ones."]
+        bm = self.boat_model
+        if bm.get("sail_inventory"):
+            lines.append(f"Boat sail model: inventory {', '.join(bm['sail_inventory'])}, draft "
+                         f"{bm.get('draft_ft', '?')} ft — sail calls come from this frozen crossover "
+                         "table + the engine's live TWS/TWA, not invented.")
         for v in self.variants[:max_variants]:
             vid = v.get("id") or v.get("name") or "?"
             summary = v.get("summary") or v.get("rationale") or ""
             flips = v.get("what_flips_it") or v.get("triggers") or ""
-            lines.append(f"- variant {vid}: {summary}" + (f" | flips when: {flips}" if flips else ""))
+            plan = self._sail_plan_text(v)
+            line = f"- variant {vid}: {summary}"
+            if plan:
+                line += f" | sails: {plan}"
+            if flips:
+                line += f" | flips when: {flips}"
+            lines.append(line)
         return "\n".join(lines)
 
     def variant_ids(self) -> list[str]:

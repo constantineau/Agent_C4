@@ -1,0 +1,286 @@
+{
+  "boat_id": "sr33",
+  "source": "ORC certificate (data.orc.org SR33 'C4' CAN100, ref 03430004T3F)",
+  "generated_by": "vps/agent/knowledge/build_speed_guide.py",
+  "sail_names": {
+    "J1-A": "Headsail/jib (J1)",
+    "A2-A": "Asym A2 (76%)",
+    "A3-A": "Asym A3",
+    "S2-A": "Symmetric kite (S2)"
+  },
+  "inventory": [
+    "J1",
+    "A2",
+    "A3",
+    "S2"
+  ],
+  "tws_buckets": [
+    4,
+    6,
+    8,
+    10,
+    12,
+    14,
+    16,
+    20,
+    24
+  ],
+  "crossovers": {
+    "4": [
+      {
+        "sail": "J1-A",
+        "short": "J1",
+        "label": "Headsail/jib (J1)",
+        "twa_min": 45.3,
+        "twa_max": 100.0
+      },
+      {
+        "sail": "A2-A",
+        "short": "A2",
+        "label": "Asym A2 (76%)",
+        "twa_min": 100.0,
+        "twa_max": 115.0
+      },
+      {
+        "sail": "A3-A",
+        "short": "A3",
+        "label": "Asym A3",
+        "twa_min": 115.0,
+        "twa_max": 144.3
+      },
+      {
+        "sail": "S2-A",
+        "short": "S2",
+        "label": "Symmetric kite (S2)",
+        "twa_min": 144.3,
+        "twa_max": 180.0
+      }
+    ],
+    "6": [
+      {
+        "sail": "J1-A",
+        "short": "J1",
+        "label": "Headsail/jib (J1)",
+        "twa_min": 42.6,
+        "twa_max": 85.0
+      },
+      {
+        "sail": "A2-A",
+        "short": "A2",
+        "label": "Asym A2 (76%)",
+        "twa_min": 85.0,
+        "twa_max": 115.0
+      },
+      {
+        "sail": "A3-A",
+        "short": "A3",
+        "label": "Asym A3",
+        "twa_min": 115.0,
+        "twa_max": 145.9
+      },
+      {
+        "sail": "S2-A",
+        "short": "S2",
+        "label": "Symmetric kite (S2)",
+        "twa_min": 145.9,
+        "twa_max": 180.0
+      }
+    ],
+    "8": [
+      {
+        "sail": "J1-A",
+        "short": "J1",
+        "label": "Headsail/jib (J1)",
+        "twa_min": 40.2,
+        "twa_max": 85.0
+      },
+      {
+        "sail": "A2-A",
+        "short": "A2",
+        "label": "Asym A2 (76%)",
+        "twa_min": 85.0,
+        "twa_max": 100.0
+      },
+      {
+        "sail": "A3-A",
+        "short": "A3",
+        "label": "Asym A3",
+        "twa_min": 100.0,
+        "twa_max": 141.5
+      },
+      {
+        "sail": "S2-A",
+        "short": "S2",
+        "label": "Symmetric kite (S2)",
+        "twa_min": 141.5,
+        "twa_max": 180.0
+      }
+    ],
+    "10": [
+      {
+        "sail": "J1-A",
+        "short": "J1",
+        "label": "Headsail/jib (J1)",
+        "twa_min": 37.6,
+        "twa_max": 85.0
+      },
+      {
+        "sail": "A2-A",
+        "short": "A2",
+        "label": "Asym A2 (76%)",
+        "twa_min": 85.0,
+        "twa_max": 100.0
+      },
+      {
+        "sail": "A3-A",
+        "short": "A3",
+        "label": "Asym A3",
+        "twa_min": 100.0,
+        "twa_max": 142.5
+      },
+      {
+        "sail": "S2-A",
+        "short": "S2",
+        "label": "Symmetric kite (S2)",
+        "twa_min": 142.5,
+        "twa_max": 180.0
+      }
+    ],
+    "12": [
+      {
+        "sail": "J1-A",
+        "short": "J1",
+        "label": "Headsail/jib (J1)",
+        "twa_min": 36.7,
+        "twa_max": 85.0
+      },
+      {
+        "sail": "A2-A",
+        "short": "A2",
+        "label": "Asym A2 (76%)",
+        "twa_min": 85.0,
+        "twa_max": 100.0
+      },
+      {
+        "sail": "A3-A",
+        "short": "A3",
+        "label": "Asym A3",
+        "twa_min": 100.0,
+        "twa_max": 142.5
+      },
+      {
+        "sail": "S2-A",
+        "short": "S2",
+        "label": "Symmetric kite (S2)",
+        "twa_min": 142.5,
+        "twa_max": 180.0
+      }
+    ],
+    "14": [
+      {
+        "sail": "J1-A",
+        "short": "J1",
+        "label": "Headsail/jib (J1)",
+        "twa_min": 36.2,
+        "twa_max": 100.0
+      },
+      {
+        "sail": "A3-A",
+        "short": "A3",
+        "label": "Asym A3",
+        "twa_min": 100.0,
+        "twa_max": 142.5
+      },
+      {
+        "sail": "S2-A",
+        "short": "S2",
+        "label": "Symmetric kite (S2)",
+        "twa_min": 142.5,
+        "twa_max": 180.0
+      }
+    ],
+    "16": [
+      {
+        "sail": "J1-A",
+        "short": "J1",
+        "label": "Headsail/jib (J1)",
+        "twa_min": 36.0,
+        "twa_max": 100.0
+      },
+      {
+        "sail": "A3-A",
+        "short": "A3",
+        "label": "Asym A3",
+        "twa_min": 100.0,
+        "twa_max": 142.5
+      },
+      {
+        "sail": "S2-A",
+        "short": "S2",
+        "label": "Symmetric kite (S2)",
+        "twa_min": 142.5,
+        "twa_max": 180.0
+      }
+    ],
+    "20": [
+      {
+        "sail": "J1-A",
+        "short": "J1",
+        "label": "Headsail/jib (J1)",
+        "twa_min": 35.9,
+        "twa_max": 100.0
+      },
+      {
+        "sail": "A2-A",
+        "short": "A2",
+        "label": "Asym A2 (76%)",
+        "twa_min": 100.0,
+        "twa_max": 115.0
+      },
+      {
+        "sail": "A3-A",
+        "short": "A3",
+        "label": "Asym A3",
+        "twa_min": 115.0,
+        "twa_max": 142.5
+      },
+      {
+        "sail": "S2-A",
+        "short": "S2",
+        "label": "Symmetric kite (S2)",
+        "twa_min": 142.5,
+        "twa_max": 180.0
+      }
+    ],
+    "24": [
+      {
+        "sail": "J1-A",
+        "short": "J1",
+        "label": "Headsail/jib (J1)",
+        "twa_min": 36.8,
+        "twa_max": 100.0
+      },
+      {
+        "sail": "A2-A",
+        "short": "A2",
+        "label": "Asym A2 (76%)",
+        "twa_min": 100.0,
+        "twa_max": 127.5
+      },
+      {
+        "sail": "A3-A",
+        "short": "A3",
+        "label": "Asym A3",
+        "twa_min": 127.5,
+        "twa_max": 139.6
+      },
+      {
+        "sail": "S2-A",
+        "short": "S2",
+        "label": "Symmetric kite (S2)",
+        "twa_min": 139.6,
+        "twa_max": 180.0
+      }
+    ]
+  }
+}

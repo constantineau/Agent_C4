@@ -113,7 +113,8 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
             "route_confidence": rep.get("route_confidence"),
             "route": {"legs": rep.get("legs"), "path": rep.get("path"),
                       "total_sailed_nm": rep.get("total_sailed_nm"),
-                      "total_tacks": rep.get("total_tacks")},
+                      "total_tacks": rep.get("total_tacks"),
+                      "sail_plan": rep.get("sail_plan")},
         })
     variants.sort(key=lambda v: -v["share"])
 
