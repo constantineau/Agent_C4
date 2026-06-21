@@ -690,9 +690,12 @@ so J2/J3 — same upwind slot, smaller jibs for a building breeze — aren't in 
 kn — crew/sailmaker thresholds, NOT from the cert); `sailplan.optimal_sail(tws,twa,jib_crossovers)`
 specialises the upwind jib by TWS; the active boat's bands thread through `optimize_course`/
 `build_playbook`/`synthesize` and into the bundle's `boat_model`. The review panel shows + edits them
-(`POST /api/boats/jib-crossovers`); the copilot digest surfaces "Upwind jib by wind: J1 <14; …". **Next: the
-copilot's crew-facing narration increment** (it now has a signed playbook + boat sail model to
-interpret) + routing-fidelity 2c (isochrone VMG-gate/cone/adaptive).
+(`POST /api/boats/jib-crossovers`); the copilot digest surfaces "Upwind jib by wind: J1 <14; …".
+`sailplan.crossovers_specialized()` relabels the upwind band of **each TWS row** to the real jib for
+that wind (a row is one TWS → exact), so the crossover chart + bundle show J1 (light) → J2 (mid) → J3
+(heavy), not just the cert's lone J1. **Next: the copilot's crew-facing narration increment** (it now
+has a signed playbook + boat sail model to interpret) + routing-fidelity 2c (isochrone
+VMG-gate/cone/adaptive).
 
 ## Onboard LLM copilot — Orin Nano (Phase 9.4, Tier 2)
 

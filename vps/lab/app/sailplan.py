@@ -51,6 +51,36 @@ def crossovers(tws):
     return _load().get("crossovers", {}).get(str(b), []) if b is not None else []
 
 
+def crossovers_specialized(jib_crossovers):
+    """The full per-TWS crossover table with the upwind jib band relabelled to the actual jib for
+    THAT row's TWS (J1/J2/J3 by the boat's change-downs) — so the chart shows what you'd really fly,
+    not just the cert's single J1. Each row IS one TWS, so the substitution is exact (not a clamp)."""
+    raw = _load().get("crossovers", {})
+    if not jib_crossovers:
+        return raw
+    out = {}
+    for tws_key, zones in raw.items():
+        try:
+            tws = float(tws_key)
+        except ValueError:
+            out[tws_key] = zones
+            continue
+        new = []
+        for z in zones:
+            if (z.get("short") or z.get("sail")) == _JIB_FAMILY:
+                jib = jib_for_tws(tws, jib_crossovers)
+                new.append({**z, "sail": jib, "short": jib,
+                            "label": _jib_label(jib, z.get("label"))})
+            else:
+                new.append(z)
+        out[tws_key] = new
+    return out
+
+
+def _jib_label(jib, cert_label):
+    return cert_label if jib == _JIB_FAMILY else f"Jib {jib}"
+
+
 _JIB_FAMILY = "J1"      # the cert's single upwind headsail — the slot J1/J2/J3 share
 
 

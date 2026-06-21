@@ -217,7 +217,9 @@ sail model reviewable + part of the frozen homework:
   kn, crew/sailmaker thresholds, **not** from the cert). `sailplan.optimal_sail(tws,twa,jib_crossovers)`
   specialises the upwind jib by TWS; the active boat's bands thread through `optimize_course` →
   `build_playbook` → `synthesize` → the bundle's `boat_model`. The copilot digest surfaces them
-  ("Upwind jib by wind: J1 <14; J2 14–20; J3 20+").
+  ("Upwind jib by wind: J1 <14; J2 14–20; J3 20+"). `crossovers_specialized()` relabels the upwind
+  band of **each TWS row** to the real jib for that wind (each row is one TWS, so it's exact) — so the
+  crossover chart itself shows J1 (light) → J2 (mid) → J3 (heavy), not just the cert's single J1.
 - **Review UI:** the Gameplan tab's "Review boat model — polars & sail crossovers" panel shows the
   upwind jib change-downs (editable TWS thresholds → `POST /api/boats/jib-crossovers`), the per-TWA×TWS
   crossover bands (color-coded sails over a 0–180° axis), and the polar grid (TWS × TWA → target

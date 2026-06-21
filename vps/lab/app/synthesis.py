@@ -258,7 +258,8 @@ def _boat_model():
         # the boat's own inventory (incl. J2/J3) wins over the cert's single-headsail list
         "sail_inventory": b.get("sail_inventory") or sm.get("inventory", []),
         "sail_names": sm.get("sail_names", {}),
-        "crossovers": sm.get("crossovers", {}),         # per-TWS×TWA sail zones (from the ORC cert)
+        # per-TWS×TWA zones with the upwind jib specialised to J1/J2/J3 by this boat's change-downs
+        "crossovers": sailplan.crossovers_specialized(b.get("jib_crossovers") or []),
         "jib_crossovers": b.get("jib_crossovers", []),  # J1/J2/J3 by TWS (crew/sailmaker, not cert)
     }
 

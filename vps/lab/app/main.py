@@ -421,9 +421,11 @@ async def crossovers():
     from . import sailplan
     m = sailplan.model()
     b = boats.active_boat() or {}
+    jibs = b.get("jib_crossovers") or []
     if b.get("sail_inventory"):
         m["inventory"] = b["sail_inventory"]        # the boat's real inventory (incl. J2/J3)
-    m["jib_crossovers"] = b.get("jib_crossovers") or []
+    m["jib_crossovers"] = jibs
+    m["crossovers"] = sailplan.crossovers_specialized(jibs)   # chart shows the real jib per TWS row
     m["boat_id"] = b.get("boat_id") or m.get("boat_id")
     return m
 
