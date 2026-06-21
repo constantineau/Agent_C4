@@ -51,6 +51,16 @@ def _utcnow() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
 
 
+def _freshest_cycle(now: dt.datetime, cycles, lag_h: float) -> dt.datetime:
+    """Most recent valid cycle hour (in `cycles`) whose data should be posted by `now` given `lag_h`."""
+    probe = now - dt.timedelta(hours=lag_h)
+    for back in range(0, 30):
+        c = (probe - dt.timedelta(hours=back)).replace(minute=0, second=0, microsecond=0)
+        if c.hour in cycles:
+            return c
+    return probe.replace(minute=0, second=0, microsecond=0)
+
+
 def _frange(stop, step, dense_to=None, dense_step=1):
     """Forecast-hour list: dense hourly up to `dense_to`, then `step` to `stop` (inclusive)."""
     hrs, h = [], 0
@@ -75,16 +85,23 @@ class ModelSource:
         h = min(horizon_h, self.horizon_h)
         return _frange(h, self.fhr_step, self.dense_to, 1)
 
-    def pick_cycle(self, now: dt.datetime | None = None) -> dt.datetime:
-        """Freshest cycle whose data should be posted by `now` (accounting for lag)."""
-        now = now or _utcnow()
-        probe = now - dt.timedelta(hours=self.lag_h)
-        # walk back hour by hour to the most recent valid cycle hour on/before probe
-        for back in range(0, 30):
-            c = (probe - dt.timedelta(hours=back)).replace(minute=0, second=0, microsecond=0)
+    def horizon_for(self, cycle: dt.datetime) -> int:
+        """Forecast horizon (h) this model reaches from `cycle`. Cycle-independent by default; HRRR
+        overrides (only its synoptic cycles run long)."""
+        return self.horizon_h
+
+    def pick_cycle(self, now: dt.datetime | None = None, min_horizon_h: int = 0) -> dt.datetime:
+        """Freshest cycle whose data should be posted by `now` (accounting for lag). `min_horizon_h`
+        lets a model prefer a longer-reaching cycle for a long race (used by HRRR)."""
+        return _freshest_cycle(now or _utcnow(), self.cycles, self.lag_h)
+
+    def prev_cycle(self, cycle: dt.datetime) -> dt.datetime:
+        """The valid cycle immediately before `cycle` — for the not-yet-posted cycle-fallback retry."""
+        for back in range(1, 30):
+            c = (cycle - dt.timedelta(hours=back)).replace(minute=0, second=0, microsecond=0)
             if c.hour in self.cycles:
                 return c
-        return probe.replace(minute=0, second=0, microsecond=0)
+        return cycle - dt.timedelta(hours=6)
 
     # --- per-model implementations override these ---
     def _url(self, cycle, fhr, member, bbox):
@@ -162,6 +179,13 @@ class HRRR(ModelSource):
 
     def horizon_for(self, cycle):
         return 48 if cycle.hour in (0, 6, 12, 18) else 18
+
+    def pick_cycle(self, now=None, min_horizon_h: int = 0):
+        """HRRR runs hourly but only its SYNOPTIC cycles (00/06/12/18) reach 48 h — the off-synoptic
+        cycles stop at 18 h. For a race needing more than that, pick the freshest synoptic cycle so the
+        back half of the course isn't left on fallback wind (the HRRR per-cycle-horizon fix)."""
+        cycles = (0, 6, 12, 18) if min_horizon_h > self.horizon_h else self.cycles
+        return _freshest_cycle(now or _utcnow(), cycles, self.lag_h)
 
     def fhrs(self, horizon_h: int):
         return _frange(min(horizon_h, 48), 1, 0, 1)

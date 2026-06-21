@@ -716,15 +716,19 @@ function renderOptResult(r) {
   }
   const conf = r.route_confidence;
   const confCls = conf == null ? "" : conf >= 0.6 ? "ok" : conf >= 0.4 ? "warn" : "bad";
+  const cov = r.wind_coverage;
+  const covCls = cov == null ? "" : cov >= 0.9 ? "ok" : cov >= 0.6 ? "warn" : "bad";
   out.innerHTML = `<div class="opt-result">
     <div class="card">
       <h3>Optimal route</h3>
+      ${optDegradedBanner(r)}
       <div class="opt-stats">
         <div><b>${r.total_hours}</b><span>hours</span></div>
         <div><b>${r.total_sailed_nm}</b><span>nm sailed</span></div>
         <div><b>${r.total_direct_nm}</b><span>nm direct</span></div>
         <div><b>${r.total_tacks}</b><span>tacks/gybes</span></div>
         <div><b class="conf ${confCls}">${conf == null ? "—" : conf}</b><span>confidence (min ${r.min_confidence == null ? "—" : r.min_confidence})</span></div>
+        <div><b class="conf ${covCls}">${cov == null ? "—" : Math.round(cov * 100) + "%"}</b><span>wind coverage</span></div>
       </div>
       <div id="optMap" class="routemap"></div>
       ${optObstacleNote(r)}
@@ -738,7 +742,8 @@ function renderOptResult(r) {
     <div class="card"><h3>Briefing</h3><pre class="briefing">${esc(r.briefing || "")}</pre></div>
     <div class="card"><h3>Wind field</h3>
       <div class="muted" style="font-size:12px">${(r.windfield.models || []).map((m) =>
-        `${esc(m.model.toUpperCase())} ${esc(m.cycle)} — ${m.frames} frames`).join(" · ")} · ${r.windfield.total_frames} frames total</div>
+        `${esc(m.model.toUpperCase())} ${esc(m.cycle)} — ${m.frames}${m.expected_frames ? "/" + m.expected_frames : ""} frames` +
+        (m.cycle_fallbacks ? ` <span class="conf warn">(−${m.cycle_fallbacks} cycle)</span>` : "")).join(" · ")} · ${r.windfield.total_frames} frames total</div>
     </div></div>`;
   MapView.render("optMap", r);
 }
@@ -870,6 +875,15 @@ async function freezePlaybook() {
     if (r.frozen) Pb.result = r.bundle;
   } catch (e) { /* leave the draft; user can retry */ }
   Pb.freezing = false; renderGameplan();
+}
+
+function optDegradedBanner(r) {
+  const w = r.warnings || [];
+  if (!w.length) return "";
+  const cls = r.degraded ? "bad" : "warn";
+  const head = r.degraded ? "⚠ Degraded forecast — read before trusting this route" : "⚠ Notes";
+  return `<div class="pill ${cls}" style="display:block;margin-bottom:8px;text-align:left">
+    <b>${head}</b><ul style="margin:4px 0 0 16px;padding:0">${w.map((x) => `<li>${esc(x)}</li>`).join("")}</ul></div>`;
 }
 
 function optObstacleNote(r) {

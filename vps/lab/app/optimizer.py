@@ -25,6 +25,7 @@ HSTEP = 12          # heading fan resolution (deg)
 SECTOR = 3.0        # isochrone pruning bucket (deg of bearing from leg start)
 MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-8")
 API_KEY = os.environ.get("ANTHROPIC_API_KEY")
+COVERAGE_MIN = float(os.environ.get("GRIB_COVERAGE_MIN", "0.6"))   # below this → degraded route
 
 
 # --- geometry ----------------------------------------------------------------
@@ -149,6 +150,46 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
             "blocked_steps": blocked_hits}
 
 
+# --- sparse-GRIB coverage gate + route-sanity guard --------------------------
+def _wind_coverage(wf, full_path):
+    """Fraction of the routed path that had REAL multi-model coverage (vs the optimizer's constant
+    fallback wind). A sparse GRIB silently routes on `route_leg`'s fallback; this measures that."""
+    if not full_path:
+        return 0.0
+    covered = sum(1 for p in full_path if wf.detail_at(p["lat"], p["lon"], p["t"]) is not None)
+    return round(covered / len(full_path), 2)
+
+
+def _route_sanity(wf, legs, coverage, P, timed_out):
+    """Flag a route that's likely wrong because the wind field was sparse/degraded. Returns
+    (warnings, degraded). `degraded` means: do not trust this route — the inputs were too thin."""
+    warnings, degraded = [], False
+    if not wf.loaded:
+        warnings.append("No weather-model data loaded — the route ran entirely on a constant "
+                        "fallback wind. Do NOT trust it; re-run when a model is posted.")
+        degraded = True
+    elif coverage < COVERAGE_MIN:
+        warnings.append(f"Wind coverage only {int(coverage * 100)}% of the route — the remainder ran "
+                        "on fallback wind. Treat the low-coverage legs as unreliable.")
+        degraded = True
+    pmax = max((s for _, _, s in P), default=0.0)
+    for l in legs:
+        mins = l.get("leg_minutes") or 0.0
+        if mins > 0 and pmax > 0 and l.get("sailed_nm"):
+            spd = l["sailed_nm"] / (mins / 60.0)
+            if spd > pmax * 1.2:
+                warnings.append(f"Leg to {l['to']} averages {spd:.1f} kn — above the boat's polar max "
+                                f"(~{pmax:.0f} kn); almost certainly a wind-data gap.")
+                degraded = True
+        if l.get("wind") is None:
+            warnings.append(f"Leg to {l['to']}: no model wind at its midpoint (sparse GRIB) — its "
+                            "point-of-sail and sail call are fallbacks.")
+    if timed_out:
+        warnings.append("Optimizer hit its time budget — the route may be truncated; re-run for a "
+                        "complete solution.")
+    return warnings, degraded
+
+
 # --- full course -------------------------------------------------------------
 def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=90,
                     obstacles=None, avoid=True, source=None, safety_depth=None,
@@ -212,6 +253,9 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
         slat, slon, t = dlat, dlon, leg["eta"]
 
     total_min = round((t - float(start_epoch)) / 60.0, 1)
+    timed_out = time.time() > deadline
+    coverage = _wind_coverage(wf, full_path)
+    warnings, degraded = _route_sanity(wf, legs, coverage, P, timed_out)
     # route-level sail plan: collapse the per-leg sail into an ordered sequence of peels
     sail_seq = []
     for lg in legs:
@@ -229,6 +273,9 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
         "total_tacks": sum(l["tacks"] for l in legs),
         "route_confidence": round(sum(confs) / len(confs), 2) if confs else None,
         "min_confidence": round(min(confs), 2) if confs else None,
+        "wind_coverage": coverage,
+        "degraded": degraded,
+        "warnings": warnings,
         "legs": legs,
         "sail_plan": sail_seq,
         "skipped_marks": skipped,
@@ -237,7 +284,7 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
         "windfield": wf.status(),
         "obstacles": obstacles.summary() if obstacles is not None else {"active": False},
         "obstacle_steps_avoided": sum(l.get("blocked_steps", 0) for l in legs),
-        "timed_out": time.time() > deadline,
+        "timed_out": timed_out,
     }
 
 
@@ -269,10 +316,13 @@ def briefing(result: dict, race_name: str = "") -> str:
     if not result.get("available"):
         return result.get("note", "No route available.")
     legs = result["legs"]
+    warnings = result.get("warnings") or []
     facts = {
         "race": race_name, "total_hours": result["total_hours"],
         "total_sailed_nm": result["total_sailed_nm"], "total_tacks": result["total_tacks"],
         "route_confidence": result["route_confidence"], "min_confidence": result["min_confidence"],
+        "wind_coverage": result.get("wind_coverage"),
+        "degraded": result.get("degraded", False), "warnings": warnings,
         "models": [m["model"] for m in result["windfield"]["models"]],
         "legs": [{"to": l["to"], "minutes": l["leg_minutes"], "point_of_sail": l["point_of_sail"],
                   "tacks": l["tacks"], "wind": l["wind"]} for l in legs],
@@ -288,7 +338,9 @@ def briefing(result: dict, race_name: str = "") -> str:
                        "for the crew from an optimizer result. Explain the recommended route leg by "
                        "leg, the wind story, where to expect tacks/gybes and sail changes, and — "
                        "importantly — call out where model CONFIDENCE is low (models disagree) so "
-                       "the crew sails conservatively there. Be specific and brief; no preamble.",
+                       "the crew sails conservatively there. If 'degraded' is true or 'warnings' are "
+                       "present, OPEN with a clear forecast-reliability warning (the wind data was "
+                       "sparse) before anything else. Be specific and brief; no preamble.",
                 messages=[{"role": "user", "content":
                            "Optimizer result:\n" + json.dumps(facts, indent=2)}],
             )
@@ -298,10 +350,17 @@ def briefing(result: dict, race_name: str = "") -> str:
         except Exception:
             pass
     # deterministic fallback
-    lines = [f"Optimal route: {result['total_sailed_nm']} nm sailed, "
-             f"~{result['total_hours']} h, {result['total_tacks']} tacks/gybes.",
-             f"Model agreement (confidence): {result['route_confidence']} "
-             f"(lowest leg {result['min_confidence']}).", ""]
+    lines = []
+    if warnings:
+        lines.append("⚠ DEGRADED FORECAST — read before trusting this route:" if result.get("degraded")
+                     else "⚠ Notes:")
+        lines += [f"  • {w}" for w in warnings]
+        lines.append("")
+    lines += [f"Optimal route: {result['total_sailed_nm']} nm sailed, "
+              f"~{result['total_hours']} h, {result['total_tacks']} tacks/gybes.",
+              f"Model agreement (confidence): {result['route_confidence']} "
+              f"(lowest leg {result['min_confidence']}); wind coverage "
+              f"{int((result.get('wind_coverage') or 0) * 100)}% of the route.", ""]
     for l in legs:
         w = l["wind"] or {}
         lines.append(f"• To {l['to']}: {l['leg_minutes']} min, {l['point_of_sail'] or '?'}, "

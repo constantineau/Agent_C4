@@ -15,12 +15,16 @@ from __future__ import annotations
 
 import datetime as dt
 import math
+import os
 
 from . import grib
 from .models import MODELS, DEFAULT_MODELS
 
 KN_PER_MS = grib.KN_PER_MS
 MAX_FRAMES_PER_MEMBER = 64        # safety cap on downloads per series
+CYCLE_FALLBACK_TRIES = int(os.environ.get("GRIB_CYCLE_FALLBACK", "2"))   # step back N cycles if sparse
+MIN_FRAME_FRAC = float(os.environ.get("GRIB_MIN_FRAME_FRAC", "0.5"))     # "enough coverage" threshold
+_PAD = 3 * 3600                  # keep frames just outside the window so we can bracket the ends
 
 
 def _members_for(source, ensemble_members):
@@ -29,26 +33,26 @@ def _members_for(source, ensemble_members):
     return ["det"]
 
 
-def build_windfield(bbox, t_start: float, t_end: float, models=DEFAULT_MODELS,
-                    ensemble_members: int = 0, on_progress=None):
-    """Ingest the selected models over `bbox` for valid times spanning [t_start, t_end].
+def _fhrs_for_cycle(source, cycle, t_start, t_end):
+    """The forecast-hours of `source` from `cycle` that fall inside [t_start, t_end] (+pad), capped
+    at the horizon this cycle actually reaches (per-cycle — HRRR's off-synoptic cycles stop at 18 h)."""
+    horizon = math.ceil((t_end - cycle.timestamp()) / 3600.0) + source.fhr_step
+    horizon = min(max(horizon, source.fhr_step), source.horizon_for(cycle))
+    fhrs = [f for f in source.fhrs(horizon)
+            if t_start - _PAD <= source.valid_time(cycle, f) <= t_end + _PAD]
+    return fhrs[:MAX_FRAMES_PER_MEMBER]
 
-    bbox = (north, south, west, east). Returns a WindField. `on_progress(msg)` is called with
-    short status strings as each model loads (for UI/log feedback)."""
-    series = {}                   # (model, member) -> [GribFrame sorted by valid_time]
-    meta = []
-    pad = 3 * 3600               # keep frames just outside the window so we can bracket the ends
-    for name in models:
-        source = MODELS.get(name)
-        if source is None:
-            continue
-        cycle = source.pick_cycle()
-        horizon = math.ceil((t_end - cycle.timestamp()) / 3600.0) + source.fhr_step
-        fhrs = [f for f in source.fhrs(max(horizon, source.fhr_step))
-                if t_start - pad <= source.valid_time(cycle, f) <= t_end + pad]
-        fhrs = fhrs[:MAX_FRAMES_PER_MEMBER]
-        members = _members_for(source, ensemble_members)
-        loaded = 0
+
+def _load_model(source, bbox, t_start, t_end, members, on_progress):
+    """Ingest one model's frame-series with CYCLE-FALLBACK: if the freshest cycle is too sparse (not
+    fully posted yet) step back a cycle and retry, up to CYCLE_FALLBACK_TRIES. Returns (series, meta)."""
+    need_h = max(0, math.ceil((t_end - dt.datetime.now(dt.timezone.utc).timestamp()) / 3600.0))
+    cycle = source.pick_cycle(min_horizon_h=need_h)
+    series, loaded, expected, fallbacks = {}, 0, 0, 0
+    for attempt in range(CYCLE_FALLBACK_TRIES + 1):
+        fhrs = _fhrs_for_cycle(source, cycle, t_start, t_end)
+        expected = len(fhrs) * max(1, len(members))
+        series, loaded = {}, 0
         for member in members:
             frames = []
             for fhr in fhrs:
@@ -57,18 +61,46 @@ def build_windfield(bbox, t_start: float, t_end: float, models=DEFAULT_MODELS,
                     continue
                 try:
                     frames.append(grib.GribFrame.from_file(
-                        path, name, member, source.valid_time(cycle, fhr)))
+                        path, source.name, member, source.valid_time(cycle, fhr)))
                 except Exception:
                     continue
             if frames:
                 frames.sort(key=lambda fr: fr.valid_time)
-                series[(name, member)] = frames
+                series[(source.name, member)] = frames
                 loaded += len(frames)
-        meta.append({"model": name, "cycle": cycle.strftime("%Y-%m-%d %HZ"),
-                     "members": len(members), "frames": loaded,
-                     "priority": source.priority, "kind": source.kind})
+        if expected == 0 or loaded >= MIN_FRAME_FRAC * expected or attempt == CYCLE_FALLBACK_TRIES:
+            break
         if on_progress:
-            on_progress(f"{name}: {loaded} frames @ {cycle:%Y-%m-%d %HZ}")
+            on_progress(f"{source.name}: sparse ({loaded}/{expected}) — retrying previous cycle")
+        cycle = source.prev_cycle(cycle)
+        fallbacks += 1
+    meta = {"model": source.name, "cycle": cycle.strftime("%Y-%m-%d %HZ"),
+            "members": len(members), "frames": loaded, "expected_frames": expected,
+            "cycle_fallbacks": fallbacks, "priority": source.priority, "kind": source.kind}
+    if on_progress:
+        tail = f" (after {fallbacks} cycle-fallback)" if fallbacks else ""
+        on_progress(f"{source.name}: {loaded}/{expected} frames @ {cycle:%Y-%m-%d %HZ}{tail}")
+    return series, meta
+
+
+def build_windfield(bbox, t_start: float, t_end: float, models=DEFAULT_MODELS,
+                    ensemble_members: int = 0, on_progress=None):
+    """Ingest the selected models over `bbox` for valid times spanning [t_start, t_end].
+
+    bbox = (north, south, west, east). Returns a WindField. `on_progress(msg)` is called with
+    short status strings as each model loads (for UI/log feedback). Per model: picks the freshest
+    cycle that reaches the race window, requests only the forecast-hours that cycle actually has, and
+    falls back to the previous cycle if the freshest is still too sparse to route on."""
+    series = {}                   # (model, member) -> [GribFrame sorted by valid_time]
+    meta = []
+    for name in models:
+        source = MODELS.get(name)
+        if source is None:
+            continue
+        members = _members_for(source, ensemble_members)
+        m_series, m_meta = _load_model(source, bbox, t_start, t_end, members, on_progress)
+        series.update(m_series)
+        meta.append(m_meta)
     return WindField(series, meta, bbox, t_start, t_end)
 
 

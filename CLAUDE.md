@@ -592,6 +592,25 @@ the gun — RRS 41). Lives in `vps/lab/app/`:
   Playwright-verified the tab). **Next:** Lab-2 — fan the optimizer across ensemble members/scenarios →
   cluster → the **branching playbook bundle**. See `vps/lab/README.md`.
 
+**Sparse/degraded-GRIB hardening: SHIPPED 2026-06-21.** Four pieces so a thin wind field can't silently
+produce a confident-looking but fake route (the optimizer falls back to a constant 12-kn wind wherever
+the field has no coverage). (1) **Cycle-fallback** (`windfield._load_model`): if a model's freshest
+cycle is too sparse (< `GRIB_MIN_FRAME_FRAC`=0.5 of expected frames — i.e. not fully posted yet) it
+steps back to the previous cycle and retries (`GRIB_CYCLE_FALLBACK`=2 tries); meta now carries
+`expected_frames` + `cycle_fallbacks`. (2) **HRRR per-cycle horizon** (`HRRR.pick_cycle` /
+`ModelSource.horizon_for`): HRRR runs hourly but only its SYNOPTIC cycles (00/06/12/18) reach 48 h —
+off-synoptic stop at 18 h. For a race needing more, it now picks the freshest synoptic cycle, and
+`_fhrs_for_cycle` caps the requested forecast-hours at the horizon a cycle actually reaches (no more
+wasted f19–f48 404s). (3) **Coverage gate** (`optimizer._wind_coverage`): measures the fraction of the
+routed path that had REAL multi-model coverage vs the fallback wind → `wind_coverage`. (4)
+**Route-sanity guard** (`optimizer._route_sanity`): flags `degraded` + a `warnings[]` list when no data
+loaded, coverage < `GRIB_COVERAGE_MIN`=0.6, a leg's average speed exceeds the polar max ×1.2 (a tell of
+a wind gap), or the optimizer timed out. The briefing (Opus + deterministic fallback) OPENS with the
+degraded warning; the Gameplan optimizer tab shows a degraded banner + a wind-coverage stat + per-model
+frames/expected with a cycle-fallback badge. Verified: 13 unit tests (cycle selection / fhr-cap /
+fallback / coverage / sanity) + a real end-to-end Mackinac run (HRRR auto-picked the 18Z synoptic cycle
+→ 46 frames reaching ~48 h for the 47-h race; coverage 1.0, not degraded) + Playwright UI smoke.
+
 **Obstacle avoidance (routing fidelity 2a, from the Bitsailor gap analysis): SHIPPED 2026-06-20.**
 `vps/lab/app/geo/` keeps the optimizer's route off land — **race-agnostic**: three layers rasterize
 into one boolean mask the isochrone prune queries (`blocked`/`crosses`): (1) a GLOBAL coastline
