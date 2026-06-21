@@ -52,7 +52,8 @@ def health():
         "llm": {"url": config.LLM_BASE_URL, "model": config.LLM_MODEL,
                 "enabled": config.USE_LLM, "reachable": llm_ok},
         "playbook": {"loaded": pb.loaded, "race_id": pb.race_id,
-                     "variants": len(pb.variants)},
+                     "variants": len(pb.variants),
+                     "signed": pb.signed, "signature_ok": pb.signature_ok},
         # Honest degraded modes so the crew knows what they're getting.
         "mode": ("llm" if (eng_ok and llm_ok) else
                  "deterministic" if eng_ok else "engine-unreachable"),

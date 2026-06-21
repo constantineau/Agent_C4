@@ -145,14 +145,15 @@ via `OnboardSource`. It comes up with the rest of the Pi stack; quick check:
 | **5** ✅ | iPad nav companion: day/night, sail dial, course plot, navigator, tactics, routing | bench-verified end-to-end |
 | **6** ✅ | Alerting + summarizer + polar tooling | bench-complete; 2-practice-sail false-positive gate awaits real sailing |
 | 7 🔶 | Prod stack + deploy + rules review + soak | rules review done; server auth + TLS scaffolding done; prod deploy/soak gated on domain + prod `.env` |
-| **9** 🔶 | Onboard + C4 Performance Lab (three-tier pivot) | **9.0 data-access abstraction ✅ · 9.1 onboard engine service ✅ · 9.2 race gate + iPad onboard console ✅ · Lab-0 race ingestion + course loader ✅ · Lab-1 multi-model GRIB optimizer ✅ · 9.4 Orin LLM appliance live (Ollama+Qwen2.5-7B :11434) + copilot decision-support layer ✅ (`pi/orin/copilot`)**; next Lab-2 branching playbook + the copilot narration increment — see `docs/ONBOARD_ENGINE_SCOPING.md` |
+| **9** 🔶 | Onboard + C4 Performance Lab (three-tier pivot) | **9.0 data-access abstraction ✅ · 9.1 onboard engine service ✅ · 9.2 race gate + iPad onboard console ✅ · Lab-0 race ingestion + course loader ✅ · Lab-1 multi-model GRIB optimizer ✅ · Lab-2a/2b branching playbook bundle ✅ (fan-out → variants → Opus synthesis → signed, onboard-loadable artifact) · 9.4 Orin LLM appliance live (Ollama+Qwen2.5-7B :11434) + copilot decision-support layer ✅ (`pi/orin/copilot`)**; next the copilot crew-facing narration increment + routing-fidelity (b) sail-specific polars — see `docs/ONBOARD_ENGINE_SCOPING.md` |
 
 **Current status:** Phases 0–6 built and bench-verified; Phase 7 started; **Phase 9 in progress
 (9.0 data-access abstraction ✅, 9.1 onboard engine service ✅ — see "Onboard engine service",
 9.2 server-side race gate ✅ + iPad onboard console ✅ — see "Race-mode gate" / "Onboard race
 console"; the C4 Performance Lab (`vps/lab`) is live with **Lab-0 race ingestion + course loader ✅**
-and **Lab-1 the multi-model GRIB optimizer ✅** — see "C4 Performance Lab"; next is Lab-2 (the
-branching playbook bundle); **9.4 Orin LLM bring-up authored** (Orin Nano in hand 2026-06-18 —
+and **Lab-1 the multi-model GRIB optimizer ✅** + **Lab-2a/2b the branching playbook bundle ✅** —
+see "C4 Performance Lab"; next is the copilot crew-facing narration + routing-fidelity sail polars;
+**9.4 Orin LLM bring-up authored** (Orin Nano in hand 2026-06-18 —
 `pi/orin/` runtime/model bring-up: MLC + Qwen2.5-7B INT4 → OpenAI-compatible API, to run on the
 fresh unit; the SR33 copilot service is the next 9.4 increment) — see "Onboard LLM copilot").**
 Detail: Phase 1
@@ -619,7 +620,51 @@ map** (`web/mapview.js`, Leaflet vendored) — the route canvas is now a Leaflet
 OpenSeaMap) + our ENC shoal/rock/land polygons + GRIB **wind** arrows faded by confidence + route],
 with a **forecast time slider** over an embedded multi-time `wind_grid` (`WindField.sample_grid`).
 NOAA ENC Online tiles are SCAMIN-gated / blank and RNC was sunset → the chart layer is our own
-extracted ENC polygons over OSM (self-contained, no CDN/build). **Next: Lab-2 branching playbook.**
+extracted ENC polygons over OSM (self-contained, no CDN/build).
+
+## C4 Performance Lab — Lab-2 branching playbook bundle
+
+The output of the prep studio: the optimizer's one route becomes a small set of strategic
+**variants** + a crew decision-tree, synthesized + **signed**, and dropped onboard as the copilot's
+frozen homework. Two stages, both in `vps/lab/app/`:
+
+- **Lab-2a fan-out → variants (`playbook.py`).** Routing through the *blended* field gives one
+  answer, but the models disagree — so split the multi-model `WindField` into per-model sub-fields
+  (each a "what if the wind follows THIS model" scenario, free — reuses the GRIB already down­loaded),
+  route the course through each + the blended consensus, and **cluster by which side of the first
+  beat** each favors (left/middle/right of the rhumb). Returns variants with `supported_by` models,
+  `share` (agreement), total-hours + range, a representative route, and the **decision spread** (the
+  time stakes between the side options). `POST /api/playbook`.
+- **Lab-2b synthesis → signed bundle (`synthesis.py`).** Turns the 2a variants into the artifact the
+  crew carries. **Opus** writes, per variant, a crew-facing `summary` / `rationale` / `tradeoffs` and
+  — most important — `what_flips_it`: the concrete **observable** on-the-water trigger (a wind shift
+  past a bearing relative to the first-beat rhumb, persistent vs oscillating) that says "abandon this
+  variant, switch to that one" — that trigger is what makes the playbook *branching*. Plus a
+  `headline`, a `recommended` start default, and an ordered `decision_tree`. A **deterministic
+  fallback** builds a valid bundle with no API key (the Lab never depends on the model). The bundle is
+  the **`c4.playbook/v1`** schema — a *superset* of what the onboard copilot's `playbook.Playbook`
+  reads (`race_id` + `variants[].id/summary/what_flips_it`), so freezing one and pointing the
+  copilot's `PLAYBOOK_PATH` at it is the whole onboard wiring. **Signing:** `sign_bundle()` hashes the
+  canonical content (sha256 over the bundle minus its `signature`, sorted-key/no-space JSON) →
+  tamper-evident "frozen at the gun"; the copilot's `playbook.verify_signature()` recomputes the
+  **identical** canonical bytes, so a bundle that arrives byte-for-byte verifies (surfaced in copilot
+  `/health` as `signed`/`signature_ok`, non-fatal). `pbstore.py` persists frozen bundles on the
+  `lab_playbooks` volume (`/srv/playbooks`, id `<race_id>__<start_epoch>`). Endpoints: `POST
+  /api/playbook/synthesize` (draft), `POST /api/playbook/freeze` (sign + persist), `GET
+  /api/playbooks[/{id}]`, `GET /api/playbooks/{id}/download` (the exact signed bytes — scp to the
+  Orin). The **Gameplan tab** gains a "Synthesize branching playbook" panel below the optimizer:
+  headline + recommended + stakes, per-variant cards (summary/why/tradeoffs/what-flips-it), the
+  decision tree, and a **Freeze & sign** → signature + download. RRS 41: all pre-race cloud homework
+  — the copilot SELECTS/INTERPRETS these variants in-race, never originates new strategy.
+
+**Verified end-to-end on the real Bayview Mackinac cove_island course** (live GFS+NAM+HRRR + Opus,
+~2.5 min): a 3-way split (HRRR-left / NAM-middle / GFS-right), low agreement 0.33, 252-min decision
+spread; Opus wrote specific rhumb-relative triggers ("if the breeze veers and holds right of ~020°
+for two-plus oscillation cycles = persistent right shift, bail to right"); freeze → signed (sha256) →
+download → the onboard copilot loaded it, **verified the signature**, and emitted the LLM digest with
+each variant's flip trigger. UI Playwright-verified. See `vps/lab/README.md`. **Next: the copilot's
+crew-facing narration increment** (it now has a real, signed playbook to interpret) + routing-fidelity
+(b) sail-specific polars.
 
 ## Onboard LLM copilot — Orin Nano (Phase 9.4, Tier 2)
 

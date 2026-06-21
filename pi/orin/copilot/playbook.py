@@ -6,16 +6,38 @@ frozen at the gun. The copilot's job in-race is to SELECT and INTERPRET those pr
 variants — it must never originate strategy that isn't grounded in the playbook, the engine,
 or common public data.
 
-That bundle doesn't exist yet, so this module is deliberately thin: it loads a bundle JSON if
-`PLAYBOOK_PATH` points at one, exposes a compact text digest for the LLM system prompt, and
-otherwise reports "no playbook loaded" so the copilot honestly restricts itself to interpreting
-live engine facts. The schema here is a forward-declaration of what Lab-2 will emit; the
-copilot is written against it now so wiring Lab-2 in later is just dropping a file in place.
+Lab-2b (`vps/lab/app/synthesis.py`) now EMITS that bundle — the `c4.playbook/v1` schema, signed
+(sha256 over its canonical content). This module loads it if `PLAYBOOK_PATH` points at one, exposes
+a compact text digest for the LLM system prompt, and otherwise reports "no playbook loaded" so the
+copilot honestly restricts itself to interpreting live engine facts. `verify_signature()` recomputes
+the SAME canonical bytes the Lab signed (bundle minus `signature`, sorted-key/no-space JSON), so a
+bundle that arrives byte-for-byte verifies — surfaced (non-fatal) as `signed`/`signature_ok` so the
+crew sees a tampered or unsigned playbook. Wiring a frozen bundle in is just dropping the file at
+`PLAYBOOK_PATH`.
 """
+import hashlib
 import json
 import os
 
 from . import config
+
+
+def _canonical_bytes(data: dict) -> bytes:
+    """MUST match the Lab signer (`vps/lab/app/synthesis.canonical_bytes`): the bundle minus its
+    `signature` field, JSON with sorted keys and no spaces. A bundle that arrives byte-for-byte from
+    the Lab re-serializes identically here, so a valid signature verifies."""
+    content = {k: v for k, v in data.items() if k != "signature"}
+    return json.dumps(content, sort_keys=True, separators=(",", ":"),
+                      ensure_ascii=False).encode("utf-8")
+
+
+def verify_signature(data: dict) -> bool:
+    """True iff the bundle carries a sha256 signature matching its canonical content. Frozen-at-the-
+    gun integrity — a tampered or truncated playbook fails this."""
+    sig = (data or {}).get("signature") or {}
+    if sig.get("alg") != "sha256" or not sig.get("value"):
+        return False
+    return hashlib.sha256(_canonical_bytes(data)).hexdigest() == sig["value"]
 
 
 class Playbook:
@@ -24,6 +46,10 @@ class Playbook:
     def __init__(self, data: dict | None):
         self.data = data or {}
         self.loaded = bool(data)
+        # Signature is informational, not a gate: a valid bundle with no signature (a draft) still
+        # loads, but `signature_ok` is surfaced in /health so the crew sees an unsigned/tampered one.
+        self.signed = bool((self.data.get("signature") or {}).get("value"))
+        self.signature_ok = verify_signature(self.data) if self.signed else None
 
     @property
     def race_id(self) -> str | None:

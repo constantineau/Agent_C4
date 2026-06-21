@@ -158,11 +158,45 @@ and is imprecise at the shoreline). Three pieces fix it (all on `dev`, live at t
   raster service was sunset, so the authoritative chart layer is **our own extracted ENC polygons**
   (the same data the router uses) over OSM — robust, self-contained, no CDN/build step.
 
-- **Next:** **Lab-2** — fan the optimizer across ensemble members / scenarios → cluster → the
-  **branching playbook bundle** (variants + decision tree + rationale, frozen at the gun); routing
-  fidelity 2b (sail-specific polars + per-leg sail plan) and 2c (isochrone VMG-gate/cone/adaptive).
-  A higher-res coastline backstop (OSM land / GSHHG) for the Natural-Earth path and enforcing
-  rounding **side** remain optional upgrades.
+### Lab-2 branching playbook bundle (built)
+
+The optimizer's one route → a small set of strategic **variants** + a crew decision-tree,
+synthesized + **signed**, dropped onboard as the copilot's frozen homework. Two stages:
+
+- **Lab-2a fan-out → variants** (`app/playbook.py`). The blended field gives one answer but the
+  models disagree, so split the multi-model `WindField` into per-model sub-fields (each a "what if
+  the wind follows THIS model" scenario — free, reuses the GRIB already downloaded), route the course
+  through each + the blended consensus, and **cluster by which side of the first beat** each favors
+  (left/middle/right of the rhumb). Variants carry `supported_by` models, `share` (agreement),
+  total-hours + range, a representative route, and the **decision spread** (the time stakes between
+  the side options). `POST /api/playbook`.
+- **Lab-2b synthesis → signed bundle** (`app/synthesis.py`). **Opus** writes, per variant, a
+  crew-facing `summary` / `rationale` / `tradeoffs` and — most important — `what_flips_it`: the
+  concrete **observable** trigger (a wind shift past a bearing relative to the first-beat rhumb,
+  persistent vs oscillating) that flips the decision to another variant. Plus a `headline`, a
+  `recommended` start default, and an ordered `decision_tree`. A **deterministic fallback** builds a
+  valid bundle with no API key. The **`c4.playbook/v1`** schema is a *superset* of what the onboard
+  copilot's `playbook.Playbook` reads (`race_id` + `variants[].id/summary/what_flips_it`) — so
+  freezing one and pointing the copilot's `PLAYBOOK_PATH` at it is the whole onboard wiring.
+  **Signing:** `sign_bundle()` hashes the canonical content (sha256 over the bundle minus its
+  `signature`, sorted-key/no-space JSON) → tamper-evident "frozen at the gun"; the copilot recomputes
+  the identical bytes (`playbook.verify_signature`), so a byte-for-byte bundle verifies. `pbstore.py`
+  persists frozen bundles on the `lab_playbooks` volume (`/srv/playbooks`). Endpoints: `POST
+  /api/playbook/synthesize` (draft) · `POST /api/playbook/freeze` (sign + persist) · `GET
+  /api/playbooks[/{id}]` · `GET /api/playbooks/{id}/download` (the exact signed bytes — scp to the
+  Orin). The **Gameplan tab** gains a "Synthesize branching playbook" panel: headline + recommended +
+  stakes, per-variant cards (summary/why/tradeoffs/what-flips-it), the decision tree, and **Freeze &
+  sign** → signature + download.
+- **Verified end-to-end on the real Bayview Mackinac cove_island course** (live GFS+NAM+HRRR + Opus,
+  ~2.5 min): a 3-way split (HRRR-left / NAM-middle / GFS-right), agreement 0.33, 252-min decision
+  spread; Opus wrote specific rhumb-relative triggers; freeze → signed (sha256) → download → the
+  onboard copilot loaded it, **verified the signature**, and emitted the LLM digest with each
+  variant's flip trigger. UI Playwright-verified.
+
+- **Next:** the copilot's crew-facing narration increment (it now has a real signed playbook to
+  interpret); routing fidelity 2b (sail-specific polars + per-leg sail plan) and 2c (isochrone
+  VMG-gate/cone/adaptive). A higher-res coastline backstop (OSM land / GSHHG) for the Natural-Earth
+  path and enforcing rounding **side** remain optional upgrades.
 
 ## Race documents (found 2026-06-17)
 

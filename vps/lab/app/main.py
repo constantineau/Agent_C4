@@ -21,7 +21,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from shared import race_def, boat_profile
-from . import auth, store, extract, boats, labstate, feedback
+from . import auth, store, extract, boats, labstate, feedback, pbstore
 
 INGESTED_DIR = os.environ.get("INGESTED_DIR", "/srv/ingested")
 
@@ -386,6 +386,87 @@ async def playbook(body: dict):
                                        model_names, ens)
     except Exception as exc:
         return JSONResponse({"detail": f"playbook failed: {exc}"}, status_code=500)
+
+
+def _playbook_params(body):
+    """Shared race/course/start/model resolution for the Lab-2b synthesize + freeze routes."""
+    body = body or {}
+    rid = body.get("race_id")
+    d = store.get_race(rid) if rid else None
+    if not d:
+        return None, None, None, None, None
+    course_id = body.get("course_id")
+    start_epoch = float(body.get("start_epoch") or datetime.datetime.now(
+        datetime.timezone.utc).timestamp())
+    from .wind.models import DEFAULT_MODELS, MODELS
+    models_req = body.get("models") or list(DEFAULT_MODELS)
+    model_names = [m for m in models_req if m in MODELS] or list(DEFAULT_MODELS)
+    ens = int(body.get("ensemble_members") or 0)
+    return d, course_id, start_epoch, model_names, ens
+
+
+@app.post("/api/playbook/synthesize")
+async def playbook_synthesize(body: dict):
+    """Lab-2b: the 2a fan-out → Opus synthesis (per-variant rationale/tradeoffs/what-flips-it +
+    decision tree) → an UNSIGNED draft bundle (the copilot-loadable c4.playbook/v1 schema). Freeze
+    it to sign + persist for onboard use."""
+    d, course_id, start_epoch, model_names, ens = _playbook_params(body)
+    if not d:
+        return JSONResponse({"detail": "unknown race_id"}, status_code=404)
+    from . import synthesis
+    try:
+        return await run_in_threadpool(synthesis.synthesize, d, course_id, start_epoch,
+                                       model_names, ens)
+    except Exception as exc:
+        return JSONResponse({"detail": f"synthesis failed: {exc}"}, status_code=500)
+
+
+@app.post("/api/playbook/freeze")
+async def playbook_freeze(body: dict):
+    """Sign + persist a playbook bundle — the frozen-at-the-gun homework deployed onboard. Pass a
+    `bundle` already synthesized (the common path: review then freeze), or race params to synthesize
+    and freeze in one shot. Returns the id + signature; the file IS the onboard-loadable artifact."""
+    from . import synthesis
+    body = body or {}
+    bundle = body.get("bundle")
+    if not bundle:
+        d, course_id, start_epoch, model_names, ens = _playbook_params(body)
+        if not d:
+            return JSONResponse({"detail": "provide a bundle or a known race_id"}, status_code=404)
+        bundle = await run_in_threadpool(synthesis.synthesize, d, course_id, start_epoch,
+                                         model_names, ens)
+        if not bundle.get("variants"):
+            return JSONResponse({"detail": "nothing to freeze — no variants",
+                                 "bundle": bundle}, status_code=422)
+    bundle = synthesis.sign_bundle(bundle)
+    pid = pbstore.save(bundle)
+    return {"frozen": True, "id": pid, "signature": bundle["signature"],
+            "verified": synthesis.verify_bundle(bundle), "bundle": bundle}
+
+
+@app.get("/api/playbooks")
+async def playbooks_list():
+    return {"playbooks": pbstore.list_bundles()}
+
+
+@app.get("/api/playbooks/{pid}")
+async def playbook_get(pid: str):
+    b = pbstore.get(pid)
+    if not b:
+        return JSONResponse({"detail": "unknown playbook id"}, status_code=404)
+    from . import synthesis
+    return {"bundle": b, "verified": synthesis.verify_bundle(b)}
+
+
+@app.get("/api/playbooks/{pid}/download")
+async def playbook_download(pid: str):
+    """The exact signed bytes — scp this to the Orin and point the copilot's PLAYBOOK_PATH at it."""
+    raw = pbstore.get_raw(pid)
+    if raw is None:
+        return JSONResponse({"detail": "unknown playbook id"}, status_code=404)
+    from fastapi.responses import Response
+    return Response(content=raw, media_type="application/json", headers={
+        "Content-Disposition": f'attachment; filename="{pid}.json"'})
 
 
 @app.post("/api/races")

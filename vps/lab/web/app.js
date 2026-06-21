@@ -495,8 +495,15 @@ async function renderGameplan() {
       </div>
       <div class="muted" style="font-size:12px;margin-top:6px">Downloads live GRIB from NOAA NOMADS / ECMWF and routes the course on the SR33 polars. First run ~30–60 s (then cached). Pre-race cloud homework — frozen at the gun (RRS 41).</div>
     </div>
-    <div id="optOut"></div></div>`;
+    <div id="optOut"></div>
+    <div class="card">
+      <h3>Branching playbook <span class="muted" style="font-weight:400">— forecast fan-out → strategic variants (Lab-2b)</span></h3>
+      <div class="muted" style="font-size:12px;margin-bottom:8px">Fans the optimizer across each weather model, clusters the routes into <b>which side of the first beat</b> they favor, then has Opus write each variant's rationale / tradeoffs / <b>what-flips-it</b> + a decision tree. <b>Freeze &amp; sign</b> the bundle to carry it onboard (the copilot's <code>PLAYBOOK_PATH</code>) — frozen at the gun.</div>
+      <button id="pbRun" onclick="synthPlaybook()" ${Pb.running ? "disabled" : ""}>${Pb.running ? "Synthesizing…" : "Synthesize branching playbook →"}</button>
+      <div id="pbOut"></div>
+    </div></div>`;
   if (Opt.result) renderOptResult(Opt.result);
+  if (Pb.result) renderPbResult(Pb.result);
 }
 
 function optCourseOpts() {
@@ -559,7 +566,7 @@ async function optSaveDraft() {
   await reloadBoats(); renderGameplan();
 }
 async function optPickRace(id, rerender = true) {
-  Opt.raceId = id; Opt.courseId = null; Opt.result = null;
+  Opt.raceId = id; Opt.courseId = null; Opt.result = null; Pb.result = null;
   try { Opt.def = await (await apiGet("/api/races/" + encodeURIComponent(id))).json(); }
   catch (e) { Opt.def = null; }
   if (rerender) renderGameplan();
@@ -629,6 +636,105 @@ function optLegRow(l) {
   return `<tr><td>${esc(l.to)}</td><td>${l.leg_minutes}</td><td>${esc(l.point_of_sail || "—")}</td>
     <td>${l.tacks}</td><td>${w.tws ?? "—"}</td><td>${w.twd ?? "—"}°</td>
     <td><span class="conf ${cc}">${c ?? "—"}</span></td></tr>`;
+}
+
+/* ---------- Branching playbook (Lab-2b) ---------- */
+const Pb = { running: false, result: null, freezing: false };
+
+async function synthPlaybook() {
+  const out = document.getElementById("pbOut");
+  const ens = parseInt((document.getElementById("optEns") || {}).value || "0", 10) || 0;
+  const startVal = (document.getElementById("optStart") || {}).value;
+  const body = { race_id: Opt.raceId, course_id: Opt.courseId, models: Opt.chosen, ensemble_members: ens };
+  if (startVal) body.start_epoch = Date.parse(startVal + "Z") / 1000;
+  Pb.running = true; Pb.result = null;
+  const b = document.getElementById("pbRun"); if (b) { b.disabled = true; b.textContent = "Synthesizing… (fanning forecasts + routing each)"; }
+  out.innerHTML = '<div class="loading" style="margin-top:10px">Routing each forecast scenario, clustering into strategic variants, and writing the playbook…</div>';
+  try {
+    const res = await apiPost("/api/playbook/synthesize", body);
+    Pb.result = await res.json();
+  } catch (e) {
+    Pb.result = { available: false, note: String(e) };
+  }
+  Pb.running = false; renderGameplan();
+}
+
+function renderPbResult(b) {
+  const out = document.getElementById("pbOut"); if (!out) return;
+  if (b.available === false || !b.variants) {
+    out.innerHTML = `<div class="placeholder" style="margin-top:10px">No playbook: ${esc(b.note || b.detail || "unavailable")}</div>`;
+    return;
+  }
+  const agree = b.agreement == null ? "—" : Math.round(b.agreement * 100) + "%";
+  const rec = (b.variants.find((v) => v.id === b.recommended) || {}).name || b.recommended || "—";
+  const sig = b.signature;
+  out.innerHTML = `<div class="pb">
+    <div class="pb-head">
+      <div class="pb-headline">${esc(b.headline || "")}</div>
+      <div class="pb-meta">
+        <span class="pill ok">Start: ${esc(rec)}</span>
+        <span class="pill">${agree} model agreement</span>
+        <span class="pill ${(b.decision_spread_min || 0) >= 15 ? "warn" : ""}">stakes ~${Math.round(b.decision_spread_min || 0)} min</span>
+        <span class="pill">${b.variants.length} variants · ${(b.provenance || {}).n_scenarios || "?"} scenarios</span>
+        <span class="muted" style="font-size:11px">via ${esc(((b.provenance || {}).synth_model || "").replace("claude-", ""))}</span>
+      </div>
+    </div>
+    <div class="pb-variants">${b.variants.map((v) => pbVariantCard(v, v.id === b.recommended)).join("")}</div>
+    ${pbDecisionTree(b)}
+    <div class="pb-freeze">
+      ${sig ? pbSigBox(b) :
+        `<button id="pbFreeze" onclick="freezePlaybook()" ${Pb.freezing ? "disabled" : ""}>${Pb.freezing ? "Freezing…" : "🔒 Freeze & sign for onboard"}</button>
+         <span class="muted" style="font-size:12px">Signs the bundle (sha256) + saves it as the frozen, onboard-loadable homework. RRS 41: frozen at the gun.</span>`}
+    </div></div>`;
+}
+
+function pbVariantCard(v, recommended) {
+  const conf = v.route_confidence, cc = conf == null ? "" : conf >= 0.6 ? "ok" : conf >= 0.4 ? "warn" : "bad";
+  const share = v.share == null ? "—" : Math.round(v.share * 100) + "%";
+  const rng = v.hours_range ? ` · ${v.hours_range[0]}–${v.hours_range[1]} h` : "";
+  return `<div class="pb-var${recommended ? " rec" : ""}">
+    <div class="pb-var-top">
+      <b>${esc(v.name)}</b>${recommended ? '<span class="pill ok">default</span>' : ""}
+      <span class="pill">${share}</span>
+      <span class="muted" style="font-size:12px">${v.total_hours ?? "—"} h${rng} · <span class="conf ${cc}">conf ${conf ?? "—"}</span> · ${esc((v.supported_by || []).map((m) => m.toUpperCase()).join(", "))}</span>
+    </div>
+    <div class="pb-var-sum">${esc(v.summary || "")}</div>
+    ${v.rationale ? `<div class="pb-row"><span class="pb-lbl">Why</span><span>${esc(v.rationale)}</span></div>` : ""}
+    ${v.tradeoffs ? `<div class="pb-row"><span class="pb-lbl">Tradeoffs</span><span>${esc(v.tradeoffs)}</span></div>` : ""}
+    ${v.what_flips_it ? `<div class="pb-row flips"><span class="pb-lbl">What flips it</span><span>${esc(v.what_flips_it)}</span></div>` : ""}
+  </div>`;
+}
+
+function pbDecisionTree(b) {
+  const t = b.decision_tree || [];
+  if (!t.length) return "";
+  return `<div class="pb-tree"><h4>Decision tree</h4><ol>${t.map((n) => {
+    const v = (b.variants.find((x) => x.id === n.variant) || {}).name || n.variant || "";
+    return `<li><span class="pb-observe">${esc(n.observe || "")}</span> → <b>${esc(n.action || "")}</b>${v ? ` <span class="pill">${esc(v)}</span>` : ""}</li>`;
+  }).join("")}</ol></div>`;
+}
+
+function pbSigBox(b) {
+  const sig = b.signature;
+  const pid = (b.race_id || "race") + "__" + Math.round(b.start_epoch || 0);
+  return `<div class="pb-sig">
+    <span class="pill ok">🔒 Frozen &amp; signed</span>
+    <code title="sha256">${esc((sig.value || "").slice(0, 16))}…</code>
+    <a class="mini" href="/api/playbooks/${encodeURIComponent(pid)}/download" download>Download bundle</a>
+    <span class="muted" style="font-size:11px">Drop this at the copilot's <code>PLAYBOOK_PATH</code> onboard.</span>
+  </div>`;
+}
+
+async function freezePlaybook() {
+  if (!Pb.result) return;
+  Pb.freezing = true;
+  const b = document.getElementById("pbFreeze"); if (b) { b.disabled = true; b.textContent = "Freezing…"; }
+  try {
+    const res = await apiPost("/api/playbook/freeze", { bundle: Pb.result });
+    const r = await res.json();
+    if (r.frozen) Pb.result = r.bundle;
+  } catch (e) { /* leave the draft; user can retry */ }
+  Pb.freezing = false; renderGameplan();
 }
 
 function optObstacleNote(r) {

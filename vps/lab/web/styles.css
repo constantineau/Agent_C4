@@ -157,3 +157,40 @@ table.legs th { text-align: left; color: var(--muted); font-weight: 600; font-si
 table.legs td { padding: 7px 10px; border-bottom: 1px solid var(--line); }
 pre.briefing { white-space: pre-wrap; font: 13px/1.5 -apple-system, system-ui, sans-serif;
   color: var(--ink); margin: 0; }
+
+/* Branching playbook (Lab-2b) */
+#pbRun { padding: 9px 18px; border: none; border-radius: 8px; background: var(--accent2);
+  color: #04121f; font-weight: 700; cursor: pointer; }
+#pbRun:disabled { opacity: .6; cursor: default; }
+.pb { margin-top: 14px; }
+.pb-head { margin-bottom: 14px; }
+.pb-headline { font-size: 15px; font-weight: 600; color: var(--ink); margin-bottom: 8px; }
+.pb-meta { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.pb-variants { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+.pb-var { background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+.pb-var.rec { border-color: var(--accent2); box-shadow: 0 0 0 1px rgba(126,224,168,.3); }
+.pb-var-top { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.pb-var-top b { font-size: 14px; }
+.pb-var-sum { font-size: 13px; color: var(--ink); margin-bottom: 8px; }
+.pb-row { display: grid; grid-template-columns: 88px 1fr; gap: 8px; font-size: 12.5px;
+  color: var(--muted); padding: 4px 0; border-top: 1px solid var(--line); }
+.pb-row span:last-child { color: var(--ink); }
+.pb-lbl { color: var(--muted); font-weight: 600; text-transform: uppercase; font-size: 10px;
+  letter-spacing: .04em; padding-top: 2px; }
+.pb-row.flips .pb-lbl { color: var(--warn); }
+.pb-row.flips span:last-child { color: var(--warn); }
+.pb-tree { margin-top: 16px; background: var(--bg); border: 1px solid var(--line);
+  border-radius: 10px; padding: 12px 16px; }
+.pb-tree h4 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--muted); }
+.pb-tree ol { margin: 0; padding-left: 18px; }
+.pb-tree li { padding: 5px 0; font-size: 13px; }
+.pb-observe { color: var(--muted); }
+.pb-freeze { margin-top: 16px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+#pbFreeze { padding: 8px 16px; border: 1px solid var(--accent2); border-radius: 8px;
+  background: transparent; color: var(--accent2); font-weight: 700; cursor: pointer; }
+#pbFreeze:disabled { opacity: .6; cursor: default; }
+.pb-sig { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.pb-sig code { background: var(--bg); padding: 2px 6px; border-radius: 5px; font-size: 12px;
+  color: var(--accent2); border: 1px solid var(--line); }
+a.mini { text-decoration: none; display: inline-block; }
