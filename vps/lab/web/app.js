@@ -40,6 +40,17 @@ async function api(path, opts = {}) {
 const apiGet = (p) => api(p);
 const apiPost = (p, body) => api(p, { method: "POST", headers: { "Content-Type": "application/json" },
   body: JSON.stringify(body) });
+/* Parse a response as JSON, but turn an HTML error page (a gateway 502/504 timeout — what you get
+   when a long route/weather download outlives the proxy) into a clear message instead of a raw
+   "Unexpected token '<'" JSON SyntaxError. */
+async function jsonOrFriendly(res) {
+  const txt = await res.text();
+  try { return JSON.parse(txt); } catch (e) {
+    if (res.status === 502 || res.status === 504 || /^\s*</.test(txt))
+      throw new Error("the request timed out at the gateway — a weather source is likely slow/rate-limited. Try fewer models (uncheck ECMWF) and re-run.");
+    throw new Error(`server returned ${res.status}${res.statusText ? " " + res.statusText : ""} (non-JSON response)`);
+  }
+}
 function boot() { if (Lab.token) { document.getElementById("gate").style.display = "none"; start(); } }
 window.addEventListener("DOMContentLoaded", boot);
 
@@ -686,7 +697,7 @@ async function runOptimize() {
   out.innerHTML = '<div class="card"><div class="loading">Building the multi-model wind field and routing the course…</div></div>';
   try {
     const res = await apiPost("/api/optimize", body);
-    const r = await res.json();
+    const r = await jsonOrFriendly(res);
     Opt.result = r; Opt.running = false;
     renderGameplan();
   } catch (e) {
@@ -761,7 +772,7 @@ async function synthPlaybook() {
   out.innerHTML = '<div class="loading" style="margin-top:10px">Routing each forecast scenario, clustering into strategic variants, and writing the playbook…</div>';
   try {
     const res = await apiPost("/api/playbook/synthesize", body);
-    Pb.result = await res.json();
+    Pb.result = await jsonOrFriendly(res);
   } catch (e) {
     Pb.result = { available: false, note: String(e) };
   }

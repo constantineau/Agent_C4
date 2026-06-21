@@ -15,12 +15,36 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import os
+import time
 import urllib.parse
 
 from . import grib
 
 CACHE = os.environ.get("GRIB_CACHE", "/srv/gribcache")
 NOMADS = "https://nomads.ncep.noaa.gov/cgi-bin"
+
+# ECMWF open-data hardening. The ecmwf-opendata client downloads via multiurl.robust, whose default
+# retry is maximum_tries=500 / retry_after=120 s — so a single 429 (rate limit) blocks the request
+# for minutes (it was hanging /api/optimize past the gateway timeout → an HTML 504 the UI can't parse
+# as JSON). We cap those retries and, once ECMWF rate-limits, trip a cooldown so the rest of the
+# frames skip instantly and the route just proceeds on the NOMADS models (best-effort, like them).
+ECMWF_MAX_TRIES = int(os.environ.get("ECMWF_MAX_TRIES", "2"))        # vs multiurl's 500
+ECMWF_RETRY_AFTER = int(os.environ.get("ECMWF_RETRY_AFTER", "5"))    # seconds, vs multiurl's 120
+ECMWF_COOLDOWN = float(os.environ.get("ECMWF_COOLDOWN", "600"))      # back off this long after a rate-limit
+
+
+def _cap_multiurl_retries():
+    """Shrink multiurl.robust's default retry budget (500×120 s) so an ECMWF 429 can't hang the
+    request. robust is a shared function object, so patching its defaults caps every caller (the
+    index fetch AND the data download). Idempotent + defensive across multiurl versions."""
+    try:
+        import multiurl
+        d = list(getattr(multiurl.robust, "__defaults__", ()) or ())
+        if len(d) >= 2 and d[0] != ECMWF_MAX_TRIES:
+            d[0], d[1] = ECMWF_MAX_TRIES, ECMWF_RETRY_AFTER
+            multiurl.robust.__defaults__ = tuple(d)
+    except Exception:
+        pass
 
 
 def _utcnow() -> dt.datetime:
@@ -178,6 +202,7 @@ class ECMWF(ModelSource):
     fhr_step = 3
     priority = 1.15
     members = ("det",)
+    _cooldown_until = 0.0          # circuit breaker: skip ECMWF until this epoch after a rate-limit
 
     def _stream_type(self, cycle, member):
         if member == "det":
@@ -188,10 +213,13 @@ class ECMWF(ModelSource):
         path = self._cache_path(cycle, fhr, member, bbox)
         if os.path.exists(path) and os.path.getsize(path) > 100:
             return path
+        if time.time() < ECMWF._cooldown_until:
+            return None            # ECMWF rate-limited us recently — skip, don't hang the request
         try:
             from ecmwf.opendata import Client
         except Exception:
             return None
+        _cap_multiurl_retries()    # bound the 429 retry storm before any ECMWF HTTP call
         stream, typ, number = self._stream_type(cycle, member)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         req = dict(date=cycle.strftime("%Y%m%d"), time=cycle.hour, stream=stream, type=typ,
@@ -202,6 +230,9 @@ class ECMWF(ModelSource):
             Client(source="ecmwf").retrieve(**req)
             return path if os.path.exists(path) and os.path.getsize(path) > 100 else None
         except Exception:
+            # likely a 429/timeout — back off so the remaining frames skip instantly and the route
+            # proceeds on the NOMADS models instead of stalling on every ECMWF file.
+            ECMWF._cooldown_until = time.time() + ECMWF_COOLDOWN
             return None
 
 
