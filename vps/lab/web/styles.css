@@ -153,6 +153,24 @@ tr.needrow { background: rgba(245,196,81,.07); }
   color: #04121f; font-weight: 700; cursor: pointer; }
 #saveCourseBtn:disabled { opacity: .6; }
 
+/* ---------- Races detail — editable review form ---------- */
+.dactions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 12px; }
+#detailSaveBtn { padding: 8px 16px; border: none; border-radius: 8px; background: var(--accent);
+  color: #04121f; font-weight: 700; cursor: pointer; }
+#detailSaveBtn:disabled { opacity: .6; }
+.ein { background: var(--panel2); color: var(--ink); border: 1px solid var(--line);
+  border-radius: 6px; padding: 4px 6px; font-size: 13px; font-family: inherit; }
+.ein.num { width: 84px; font-variant-numeric: tabular-nums; }
+.ein.ta { width: 100%; min-height: 38px; resize: vertical; line-height: 1.35; box-sizing: border-box; }
+.dhead h2 .ein { font-size: 20px; font-weight: 700; min-width: 320px; }
+.dmeta .ein { font-size: 12px; }
+.esel { background: var(--panel2); color: var(--ink); border: 1px solid var(--line);
+  border-radius: 6px; padding: 4px; font-size: 12px; }
+.echk { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
+.req.edit { flex-direction: column; align-items: stretch; gap: 6px; }
+.req.edit .pills { align-self: flex-end; }
+.reqmeta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 6px 0; }
+
 /* ---------- Gameplan / Optimizer (Lab-1) ---------- */
 .opt { max-width: 1320px; }
 .opt-controls { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 10px; }

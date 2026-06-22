@@ -4,7 +4,59 @@
 "use strict";
 
 const Lab = { token: sessionStorage.getItem("c4lab.token") || null,
-  races: null, sel: null, sources: [], draft: null };
+  races: null, sel: null, sources: [], draft: null,
+  editDef: null, editVal: null, isDraft: false };
+
+/* ---------- editable-field binding (the review form writes straight into Lab.editDef) ----------
+   Text/select/checkbox edits write in place via eset() with NO repaint, so focus + scroll are
+   never lost mid-type; only structural changes (add/remove a row) or Save/Approve repaint. */
+const MARK_TYPES = ["start", "waypoint", "gate", "island", "buoy", "finish"];
+const ROUNDINGS = ["none", "port", "starboard", "gate"];
+const REQ_CATEGORIES = ["safety", "structural", "crew_safety", "navigation", "communications",
+  "registration", "procedure", "reporting", "environmental", "rules"];
+const REQ_PHASES = ["pre_entry", "pre_start", "start", "in_race", "at_gate", "at_finish", "post_race"];
+const TRIGGER_TYPES = ["none", "time", "event", "location"];
+
+function eset(path, value) {
+  const parts = path.split(".");
+  let o = Lab.editDef;
+  for (let i = 0; i < parts.length - 1 && o != null; i++) {
+    const k = parts[i]; o = o[/^\d+$/.test(k) ? +k : k];
+  }
+  if (o != null) o[parts[parts.length - 1]] = value;
+}
+function esetNum(path, raw) {
+  const t = String(raw).trim();
+  if (t === "") return eset(path, null);
+  const v = Number(t); if (!Number.isNaN(v)) eset(path, v);
+}
+const attr = (s) => esc(s).replace(/'/g, "&#39;");
+function ein(path, val, ph) {
+  return `<input class="ein" value="${attr(val == null ? "" : val)}" placeholder="${attr(ph || "")}"
+    oninput="eset('${path}', this.value)">`;
+}
+function enm(path, val, ph) {
+  return `<input class="ein num" value="${val == null ? "" : val}" placeholder="${attr(ph || "")}"
+    inputmode="decimal" oninput="esetNum('${path}', this.value)">`;
+}
+function etxt(path, val, ph) {
+  return `<textarea class="ein ta" placeholder="${attr(ph || "")}"
+    oninput="eset('${path}', this.value)">${esc(val == null ? "" : val)}</textarea>`;
+}
+function esel(path, val, opts) {
+  return `<select class="esel" onchange="eset('${path}', this.value)">` +
+    opts.map((o) => `<option ${o === val ? "selected" : ""} value="${attr(o)}">${esc(o)}</option>`).join("") +
+    `</select>`;
+}
+function etri(path, val) {   /* yes / no / unknown tri-state for tracker_permitted etc. */
+  const cur = val === true ? "yes" : val === false ? "no" : "unknown";
+  return `<select class="esel" onchange="eset('${path}', this.value==='yes'?true:this.value==='no'?false:null)">` +
+    ["unknown", "yes", "no"].map((o) => `<option ${o === cur ? "selected" : ""}>${o}</option>`).join("") + `</select>`;
+}
+function echk(path, val, label) {
+  return `<label class="echk"><input type="checkbox" ${val ? "checked" : ""}
+    onchange="eset('${path}', this.checked)"> ${esc(label)}</label>`;
+}
 
 const PHASE_ORDER = ["pre_entry", "pre_start", "start", "in_race", "at_gate", "at_finish", "post_race"];
 const PHASE_LABEL = {
@@ -89,9 +141,10 @@ async function renderRaces() {
   if (Lab.sel) loadRace(Lab.sel);
 }
 function raceItem(r) {
-  const rev = r.errors ? `<span class="pill bad">${r.errors} errors</span>`
+  const rev = r.reviewed ? `<span class="pill ok">✓ approved</span>`
+    : r.errors ? `<span class="pill bad">${r.errors} errors</span>`
     : (r.warnings ? `<span class="pill warn">${r.warnings} to review</span>`
-      : `<span class="pill ok">reviewed</span>`);
+      : `<span class="pill warn">awaiting approval</span>`);
   return `<div class="raceitem ${r.race_id === Lab.sel ? "sel" : ""}" data-id="${esc(r.race_id)}"
       onclick="selectRace('${esc(r.race_id)}')">
     <div class="nm">${esc(r.name)}</div>
@@ -114,7 +167,8 @@ async function loadRace(id) {
   try {
     const d = await (await apiGet("/api/races/" + encodeURIComponent(id))).json();
     const v = await (await apiGet("/api/races/" + encodeURIComponent(id) + "/validate")).json();
-    box.innerHTML = renderDetail(d, v);
+    Lab.editDef = d; Lab.editVal = v; Lab.isDraft = false;
+    paintDetail();
   } catch (e) { box.innerHTML = '<div class="placeholder">Failed to load race.</div>'; }
 }
 
@@ -173,102 +227,205 @@ async function extractDraft() {
       resp = await (await apiPost("/api/ingest", { urls: Lab.sources })).json();
     }
     if (resp.detail) { msg.textContent = "Ingest failed: " + resp.detail; btn.disabled = false; return; }
-    Lab.draft = resp; msg.textContent = "Draft extracted — review it on the right, then save.";
-    document.getElementById("raceDetail").innerHTML = renderDraft(resp);
+    Lab.draft = resp; Lab.editDef = resp.definition;
+    Lab.editVal = { errors: resp.errors || [], warnings: resp.warnings || [] }; Lab.isDraft = true;
+    msg.textContent = "Draft extracted — review/edit it on the right, then save.";
+    paintDetail();
   } catch (e) { msg.textContent = "Ingest failed."; }
   btn.disabled = false;
 }
-function renderDraft(resp) {
-  return `<div class="banner draft"><b>DRAFT — machine-extracted, needs human review.</b>
-      Check the geometry and checklist, then save to the library.
-      <button class="mini" onclick="saveDraft()">Save to library</button></div>
-    ${renderDetail(resp.definition, resp)}`;
-}
 async function saveDraft() {
-  if (!Lab.draft) return;
+  if (!Lab.editDef) return;
   try {
-    const r = await (await apiPost("/api/races", { definition: Lab.draft.definition })).json();
+    const r = await (await apiPost("/api/races", { definition: Lab.editDef })).json();
     if (!r.saved) { alert("Save failed: " + (r.detail || "unknown")); return; }
-    Lab.races = null; Lab.sel = r.race_id; Lab.draft = null; Lab.sources = [];
+    Lab.races = null; Lab.sel = r.race_id; Lab.draft = null; Lab.sources = []; Lab.isDraft = false;
     renderRaces();
   } catch (e) { alert("Save failed."); }
 }
 
-/* ---------- detail rendering ---------- */
-function renderDetail(d, v) {
+/* ---------- detail rendering (editable review form, bound to Lab.editDef) ----------
+   Text/select/checkbox edits write in place (eset, no repaint → focus preserved); only structural
+   changes (add/remove a row) and Save/Approve repaint. Field paths address into Lab.editDef. */
+function paintDetail() {
+  const box = document.getElementById("raceDetail");
+  if (!box) return;
+  const d = Lab.editDef, v = Lab.editVal || {};
+  if (!d) { box.innerHTML = '<div class="placeholder">Select a race.</div>'; return; }
+  box.innerHTML = detailActions(d, v) + detailBanner(v) + detailHead(d) +
+    (d.courses || []).map((c, i) => detailCourseCard(c, i)).join("") +
+    detailChecklist(d.requirements || []) +
+    detailRules(d.rules_profile || {}) +
+    detailProvenance(d.provenance || {});
+}
+function detailBanner(v) {
   const errs = (v.errors || []), warns = (v.warnings || []);
-  const banner = errs.length
+  return errs.length
     ? `<div class="banner review"><b>${errs.length} errors</b>: ${errs.map(esc).join(" · ")}</div>`
     : warns.length
       ? `<div class="banner review"><b>Needs human review (${warns.length}):</b> ${warns.map(esc).join(" · ")}</div>`
       : `<div class="banner ok">Validated — ready for review sign-off.</div>`;
-  return `<div class="dhead"><h2>${esc(d.name || "(unnamed)")}</h2>
-      <div class="dmeta">${esc(d.organizing_authority || "")}<br>
-        Start ${esc(d.start_date || "")} · ${esc(d.start_area || "")} · ${esc(d.region || "")}</div>
-    </div>${banner}
-    ${(d.courses || []).map(courseCard).join("")}
-    ${checklistCard(d.requirements || [])}
-    ${rulesCard(d.rules_profile || {})}
-    ${provenanceCard(d.provenance || {})}`;
 }
-function courseCard(c) {
-  const marks = (c.marks || []).map((m) => `<tr>
-    <td class="mono">${m.seq}</td><td>${esc(m.name)}</td><td>${esc(m.type)}</td>
-    <td>${esc(m.rounding)}</td>
-    <td class="mono">${m.lat == null ? '<span class="need">needs review</span>'
-      : esc(m.lat.toFixed(4) + ", " + m.lon.toFixed(4))}</td></tr>`).join("");
+function detailActions(d, v) {
+  if (Lab.isDraft) {
+    return `<div class="banner draft"><b>DRAFT — machine-extracted, needs human review.</b>
+      Edit any field below, then save to the library.
+      <button class="mini" onclick="saveDraft()">Save to library</button></div>`;
+  }
+  const hasErrs = (v.errors || []).length > 0;
+  const sign = d.reviewed
+    ? `<span class="pill ok">✓ Approved${d.reviewed_at ? " · " + esc(d.reviewed_at) : ""}</span>
+       <button class="mini" onclick="detailApprove(false)">Un-approve</button>`
+    : `<button class="mini" onclick="detailApprove(true)"${hasErrs ? " disabled title='fix the errors first'" : ""}>Approve &amp; sign off</button>`;
+  return `<div class="dactions">
+    <button id="detailSaveBtn" onclick="detailSave()">Save edits</button>
+    ${sign}<span id="detailMsg" class="muted" style="font-size:12px"></span></div>`;
+}
+function detailHead(d) {
+  return `<div class="dhead"><h2>${ein("name", d.name, "Race name")}</h2>
+      <div class="dmeta">${ein("organizing_authority", d.organizing_authority, "organizing authority")}<br>
+        Start ${ein("start_date", d.start_date, "YYYY-MM-DD")} ·
+        ${ein("start_area", d.start_area, "start area")} ·
+        ${ein("region", d.region, "region")}</div></div>`;
+}
+function detailCourseCard(c, ci) {
+  const marks = (c.marks || []).map((m, mi) => `<tr>
+    <td class="mono">${m.seq}</td>
+    <td>${ein(`courses.${ci}.marks.${mi}.name`, m.name, "name")}</td>
+    <td>${esel(`courses.${ci}.marks.${mi}.type`, m.type, MARK_TYPES)}</td>
+    <td>${esel(`courses.${ci}.marks.${mi}.rounding`, m.rounding || "none", ROUNDINGS)}</td>
+    <td>${enm(`courses.${ci}.marks.${mi}.lat`, m.lat, "lat")} ${enm(`courses.${ci}.marks.${mi}.lon`, m.lon, "lon")}</td>
+    <td><button class="mini" title="remove" onclick="detailRmMark(${ci},${mi})">✕</button></td></tr>`).join("");
   const fin = c.finish ? `<tr><td class="mono">F</td><td>Finish (${esc(c.finish.type)})</td>
-    <td>finish</td><td>${esc(c.finish.crossing || "")}</td>
+    <td colspan="2">${esc(c.finish.crossing || "")}</td>
     <td class="mono">${(c.finish.points || []).map((p) =>
-      p && p.lat != null ? esc(p.lat.toFixed(4) + "," + p.lon.toFixed(4)) : "—").join(" → ")}</td></tr>` : "";
-  return `<div class="card"><h3>Course — ${esc(c.name)}</h3>
+      p && p.lat != null ? esc(p.lat.toFixed(4) + "," + p.lon.toFixed(4)) : "—").join(" → ")}</td><td></td></tr>` : "";
+  return `<div class="card"><h3>Course — ${ein(`courses.${ci}.name`, c.name, "course name")}</h3>
     <div class="muted" style="margin-bottom:8px">Divisions ${esc((c.applies_to_divisions || []).join(", "))}${
       c.distance_nm ? " · " + c.distance_nm + " nm" : ""}</div>
-    <table><thead><tr><th>#</th><th>Mark</th><th>Type</th><th>Leave</th><th>Lat, Lon</th></tr></thead>
-    <tbody>${marks}${fin}</tbody></table></div>`;
+    <table><thead><tr><th>#</th><th>Mark</th><th>Type</th><th>Leave</th><th>Lat / Lon</th><th></th></tr></thead>
+    <tbody>${marks}${fin}</tbody></table>
+    <button class="mini" onclick="detailAddMark(${ci})">+ Add mark</button>
+    <div class="muted" style="font-size:12px;margin-top:6px">Geocode marks + see them on a map in the
+      <a href="#course">Course &amp; Marks</a> tab.</div></div>`;
 }
-function checklistCard(reqs) {
-  if (!reqs.length) return "";
-  const byPhase = {};
-  reqs.forEach((r) => (byPhase[r.phase] = byPhase[r.phase] || []).push(r));
-  const phases = PHASE_ORDER.filter((p) => byPhase[p])
-    .concat(Object.keys(byPhase).filter((p) => !PHASE_ORDER.includes(p)));
-  const groups = phases.map((p) => `<div class="phasegrp">
-    <h4>${PHASE_LABEL[p] || p}</h4>${byPhase[p].map(reqRow).join("")}</div>`).join("");
+function detailChecklist(reqs) {
   const ipad = reqs.filter((r) => r.deliver_to_ipad).length;
+  const rows = reqs.map((r, i) => detailReqRow(r, i)).join("");
   return `<div class="card"><h3>Rules, Safety &amp; Checklists — ${reqs.length} items
-    (${ipad} pushed to the iPad)</h3>${groups}</div>`;
+      (${ipad} pushed to the iPad)</h3>
+    ${rows || '<div class="muted">No checklist items.</div>'}
+    <button class="mini" onclick="detailAddReq()">+ Add item</button></div>`;
 }
-function reqRow(r) {
-  const tags = [`<span class="tag cat">${esc(r.category)}</span>`];
-  if (r.critical) tags.push('<span class="tag crit">critical</span>');
-  if (r.deliver_to_ipad) tags.push(`<span class="tag ipad">→iPad${
-    r.trigger_detail ? " · " + esc(r.trigger_detail) : ""}</span>`);
-  return `<div class="req"><div class="body">${esc(r.text)}
-    <div class="src">${esc(r.source || "")}</div></div>
-    <div class="pills">${tags.join("")}</div></div>`;
+function detailReqRow(r, i) {
+  return `<div class="req edit"><div class="body">
+      ${etxt(`requirements.${i}.text`, r.text, "requirement text")}
+      <div class="reqmeta">
+        ${esel(`requirements.${i}.category`, r.category, REQ_CATEGORIES)}
+        ${esel(`requirements.${i}.phase`, r.phase, REQ_PHASES)}
+        ${esel(`requirements.${i}.trigger_type`, r.trigger_type || "none", TRIGGER_TYPES)}
+        ${ein(`requirements.${i}.trigger_detail`, r.trigger_detail, "trigger detail")}
+        ${echk(`requirements.${i}.critical`, r.critical, "critical")}
+        ${echk(`requirements.${i}.deliver_to_ipad`, r.deliver_to_ipad, "→iPad")}
+      </div>
+      ${ein(`requirements.${i}.source`, r.source, "source (NOR/SER §)")}</div>
+    <div class="pills"><button class="mini" title="remove" onclick="detailRmReq(${i})">✕</button></div></div>`;
 }
-function rulesCard(rp) {
-  const mods = (rp.modifications || []).map((m) =>
-    `<tr><td>${esc(m.ref)}</td><td>${esc(m.rule)}</td><td>${esc(m.summary)}</td></tr>`).join("");
+function detailRules(rp) {
+  const mods = (rp.modifications || []).map((m, i) =>
+    `<tr><td>${ein(`rules_profile.modifications.${i}.ref`, m.ref, "ref")}</td>
+      <td>${ein(`rules_profile.modifications.${i}.rule`, m.rule, "rule")}</td>
+      <td>${ein(`rules_profile.modifications.${i}.summary`, m.summary, "modification")}</td>
+      <td><button class="mini" title="remove" onclick="detailRmMod(${i})">✕</button></td></tr>`).join("");
   const sc = rp.scoring || {};
   return `<div class="card"><h3>Rules &amp; scoring</h3>
-    <div class="muted" style="margin-bottom:10px">RRS ${esc(rp.rrs_edition || "")} ·
-      Appendix WP: ${rp.appendix_wp ? "yes" : "no"} ·
-      Tracker permitted: ${rp.tracker_permitted === true ? "yes" : rp.tracker_permitted === false ? "no" : "—"}</div>
-    <table><thead><tr><th>Ref</th><th>Rule</th><th>Modification</th></tr></thead>
+    <div class="reqmeta" style="margin-bottom:10px">
+      <label class="muted">RRS ${ein("rules_profile.rrs_edition", rp.rrs_edition, "edition")}</label>
+      ${echk("rules_profile.appendix_wp", rp.appendix_wp, "Appendix WP")}
+      <label class="muted">Tracker permitted ${etri("rules_profile.tracker_permitted", rp.tracker_permitted)}</label>
+    </div>
+    <table><thead><tr><th>Ref</th><th>Rule</th><th>Modification</th><th></th></tr></thead>
       <tbody>${mods}</tbody></table>
-    <div style="margin-top:12px"><b>Scoring:</b> ${esc(sc.system || "")} — ${esc(sc.method || "")}
-      <div class="muted" style="font-size:12px">${esc(sc.decided || "")}</div></div></div>`;
+    <button class="mini" onclick="detailAddMod()">+ Add modification</button>
+    <div style="margin-top:12px"><b>Scoring:</b>
+      ${ein("rules_profile.scoring.system", sc.system, "system")}
+      ${ein("rules_profile.scoring.method", sc.method, "method")}
+      ${etxt("rules_profile.scoring.decided", sc.decided, "how / when decided")}</div></div>`;
 }
-function provenanceCard(p) {
+function detailProvenance(p) {
   const srcs = (p.sources || []).map((s) =>
     `<li><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.label)}</a>
      <span class="muted">${esc(s.retrieved || "")}</span></li>`).join("");
   return `<div class="card"><h3>Provenance &amp; review</h3>
-    <ul style="margin:0 0 10px;padding-left:18px">${srcs}</ul>
-    <div class="muted" style="font-size:12px">${esc(p.si_status || "")}</div>
-    <div class="need" style="font-size:12px;margin-top:6px">${esc(p.review_status || "")}</div></div>`;
+    <ul style="margin:0 0 10px;padding-left:18px">${srcs || '<li class="muted">No sources recorded.</li>'}</ul>
+    <label class="muted" style="font-size:12px">SI status ${ein("provenance.si_status", p.si_status, "SI status")}</label>
+    <label class="muted" style="font-size:12px">Review notes ${etxt("provenance.review_status", p.review_status, "review notes")}</label></div>`;
+}
+
+/* ---------- detail edit: structural mutations (repaint), then save / approve ---------- */
+function detailAddMark(ci) {
+  const marks = (Lab.editDef.courses[ci].marks = Lab.editDef.courses[ci].marks || []);
+  marks.push({ seq: marks.length + 1, name: "New mark", type: "waypoint", rounding: "none",
+    lat: null, lon: null, coords_source: "needs_review" });
+  paintDetail();
+}
+function detailRmMark(ci, mi) {
+  const marks = Lab.editDef.courses[ci].marks;
+  marks.splice(mi, 1);
+  marks.forEach((m, i) => { m.seq = i + 1; });   // re-sequence
+  paintDetail();
+}
+function detailAddReq() {
+  (Lab.editDef.requirements = Lab.editDef.requirements || []).push(
+    { id: "req_" + Date.now(), text: "New requirement", category: "procedure", phase: "pre_start",
+      trigger_type: "none", critical: false, deliver_to_ipad: false, source: "" });
+  paintDetail();
+}
+function detailRmReq(i) { Lab.editDef.requirements.splice(i, 1); paintDetail(); }
+function detailAddMod() {
+  const rp = (Lab.editDef.rules_profile = Lab.editDef.rules_profile || {});
+  (rp.modifications = rp.modifications || []).push({ ref: "", rule: "", summary: "" });
+  paintDetail();
+}
+function detailRmMod(i) { Lab.editDef.rules_profile.modifications.splice(i, 1); paintDetail(); }
+
+async function detailSave(silent) {
+  const btn = document.getElementById("detailSaveBtn");
+  const setMsg = (t) => { const m = document.getElementById("detailMsg"); if (m) m.textContent = t; };
+  if (btn) btn.disabled = true;
+  if (!silent) setMsg("Saving…");
+  try {
+    const r = await (await apiPost("/api/races", { definition: Lab.editDef })).json();
+    if (!r.saved) { setMsg("Save failed: " + (r.detail || "?")); return false; }
+    Lab.editVal = { errors: r.errors || [], warnings: r.warnings || [] };
+    Lab.races = null;
+    if (!silent) {
+      paintDetail(); refreshRaceList();
+      setMsg(`Saved. ${(r.warnings || []).length} item(s) still flagged for review.`);
+    }
+    return true;
+  } catch (e) { setMsg("Save failed."); return false; }
+  finally { if (btn) btn.disabled = false; }
+}
+async function detailApprove(approved) {
+  const setMsg = (t) => { const m = document.getElementById("detailMsg"); if (m) m.textContent = t; };
+  try {
+    const r = await (await apiPost(`/api/races/${encodeURIComponent(Lab.editDef.race_id)}/approve`,
+      { definition: Lab.editDef, approved })).json();
+    if (r.detail) { paintDetail(); setMsg(r.detail); return; }   // e.g. blocked by validation errors
+    Lab.editDef.reviewed = r.reviewed; Lab.editDef.reviewed_at = r.reviewed_at;
+    Lab.editVal = { errors: r.errors || [], warnings: r.warnings || [] };
+    Lab.races = null;
+    paintDetail(); refreshRaceList();
+    setMsg(approved ? "Approved — signed off for race use." : "Approval cleared.");
+  } catch (e) { setMsg("Approve failed."); }
+}
+async function refreshRaceList() {
+  try {
+    Lab.races = (await (await apiGet("/api/races")).json()).races || [];
+    const el = document.getElementById("racelist");
+    if (el) el.innerHTML = Lab.races.map(raceItem).join("");
+  } catch (e) {}
 }
 
 /* ---------- Course & Marks review (map + edit + geocode + save) ---------- */

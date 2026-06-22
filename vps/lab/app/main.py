@@ -532,15 +532,45 @@ async def save_race(body: dict):
     """Save a (human-reviewed) RaceDefinition to the library. Errors don't block saving a draft —
     they're surfaced so the team finishes review — but a race_id is required."""
     definition = (body or {}).get("definition") or body
-    rid = definition.get("race_id")
-    if not rid:
+    if not definition.get("race_id"):
         return JSONResponse({"detail": "definition.race_id required"}, status_code=400)
-    rid = re.sub(r"[^a-z0-9_-]", "", str(rid).lower())
+    rid = _write_race(definition)
+    errors, warnings = race_def.validate(definition)
+    return {"saved": True, "race_id": rid, "errors": errors, "warnings": warnings,
+            "reviewed": bool(definition.get("reviewed"))}
+
+
+def _write_race(definition):
+    rid = re.sub(r"[^a-z0-9_-]", "", str(definition.get("race_id", "")).lower())
     os.makedirs(INGESTED_DIR, exist_ok=True)
     with open(os.path.join(INGESTED_DIR, f"{rid}.json"), "w") as f:
         json.dump(definition, f, indent=2)
+    return rid
+
+
+@app.post("/api/races/{rid}/approve")
+async def approve_race(rid: str, body: dict):
+    """Sign-off: mark a reviewed RaceDefinition approved (persists any edits sent with it). Refuses
+    to approve a definition with BLOCKING errors — warnings (needs-review items) don't block sign-off
+    but are returned. `{"approved": false}` clears the flag (un-approve)."""
+    definition = (body or {}).get("definition") or store.get_race(rid)
+    if not definition or not definition.get("race_id"):
+        return JSONResponse({"detail": "race not found / missing race_id"}, status_code=404)
+    approved = (body or {}).get("approved", True)
     errors, warnings = race_def.validate(definition)
-    return {"saved": True, "race_id": rid, "errors": errors, "warnings": warnings}
+    if approved and errors:
+        return JSONResponse({"detail": f"cannot approve — {len(errors)} blocking error(s); "
+                                       "fix them first", "errors": errors, "warnings": warnings,
+                             "reviewed": False}, status_code=400)
+    if approved:
+        definition["reviewed"] = True
+        definition["reviewed_at"] = _today()
+    else:
+        definition["reviewed"] = False
+        definition.pop("reviewed_at", None)
+    saved_rid = _write_race(definition)
+    return {"saved": True, "race_id": saved_rid, "reviewed": approved,
+            "reviewed_at": definition.get("reviewed_at"), "errors": errors, "warnings": warnings}
 
 
 # The Lab web shell (static). Declared last so the /api routes match first; html=True serves

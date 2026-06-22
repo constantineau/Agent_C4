@@ -64,13 +64,26 @@ python3 -m shared.race_def vps/lab/races/bayview_mackinac_2026.json
   needs SI verification); the **2026 SI is not yet posted (~July 2026)** — it fixes the exact start
   line, zones/marks beyond the NOR, and procedural requirements, so re-ingest when it lands
   (`https://bycmack.com/sis/`).
-- **Lab shell + race library + review view: live (dev :8103).** `vps/lab/` is a FastAPI service
-  that serves the browser-based Lab (shared team login, tabbed sections) + the race-library API
-  (`/api/races`, `/api/races/{id}`, `/api/races/{id}/validate`). The **Races** tab lists the library
-  and renders a RaceDefinition for review — courses/marks, the requirements checklist grouped by
-  phase with category/critical/→iPad badges + source cites, rules & scoring, provenance, and the
-  validation banner (the human-review items). Other sections are descriptive placeholders. Run:
+- **Lab shell + race library + editable review + sign-off: live (dev :8103).** `vps/lab/` is a
+  FastAPI service that serves the browser-based Lab (shared team login, tabbed sections) + the
+  race-library API (`/api/races`, `/api/races/{id}`, `/api/races/{id}/validate`,
+  `/api/races/{id}/approve`). The **Races** tab lists the library and renders a RaceDefinition as an
+  **inline-editable review form** — every field is editable in place (header, course marks
+  [name/type/rounding/lat/lon, add/remove], the requirements checklist [text/category/phase/
+  trigger/critical/→iPad/source, add/remove], rules & scoring modifications [add/remove],
+  tracker-permitted, provenance notes), bound straight to the in-memory definition so typing never
+  loses focus (only add/remove rows + Save/Approve repaint). **Save edits** (`POST /api/races`)
+  persists to the `lab_ingested` volume + re-validates; **Approve & sign off**
+  (`POST /api/races/{id}/approve`) stamps a `reviewed`/`reviewed_at` flag — **refused while blocking
+  validation errors remain** (warnings don't block) — and `{"approved":false}` un-approves. The
+  library list shows a **✓ approved** / *awaiting approval* pill per race. Geometry with maps +
+  geocoding stays the **Course & Marks** tab's job; the Races form edits the data everywhere else.
+  Other sections are descriptive placeholders. Run:
   `docker compose -f compose.dev.yml up -d --build lab` → `http://localhost:8103` (dev pw `lab-dev`).
+  *(Verified: backend approve/un-approve/refuse-on-errors + save round-trip; Playwright UI — 124
+  editable inputs / 77 selects / 45 checkboxes / 22 editable requirement rows render, edit→Save→
+  Approve drives the ✓ Approved pill + the library-list pill. Internal `_labstate.json` no longer
+  leaks into the race list.)*
 - **Dual-input ingestion: live.** The Races tab ingests a race three ways → Opus extraction →
   a **draft** RaceDefinition → the review view → **Save to library**:
   - **auto-find** — `POST /api/ingest/discover {url}` scrapes a race page for candidate PDFs;

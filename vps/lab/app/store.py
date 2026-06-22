@@ -17,10 +17,13 @@ from shared import race_def
 
 
 def _files():
+    # Files beginning with "_" are internal Lab state (e.g. _labstate.json), not races — skip them
+    # so they never leak into the race library.
     out = []
     for d in RACES_DIRS:
         if os.path.isdir(d):
-            out += sorted(glob.glob(os.path.join(d, "*.json")))
+            out += sorted(f for f in glob.glob(os.path.join(d, "*.json"))
+                          if not os.path.basename(f).startswith("_"))
     return out
 
 
@@ -52,6 +55,8 @@ def list_races():
             "requirements": len(reqs),
             "ipad_items": len([r for r in reqs if r.get("deliver_to_ipad")]),
             "errors": len(errs), "warnings": len(warns),
+            "reviewed": bool(d.get("reviewed")),
+            "reviewed_at": d.get("reviewed_at"),
             "review_status": d.get("provenance", {}).get("review_status", ""),
         })
     return races
