@@ -1,7 +1,8 @@
 # Optimizer UI Study — Orca + Expedition → C4 Performance Lab Gameplan
 
-**Status:** study + prioritized recommendations (2026-06-22). Not yet implemented — this is the
-input that feeds the optimizer-UI restyle phase. Surface under study = the Lab **Gameplan / Optimizer**
+**Status:** study + prioritized recommendations (2026-06-22). **Implementation: Tier 0 + Tier 1
+(minus laylines) SHIPPED 2026-06-22** — see the per-item ✅ markers + the implementation-phasing
+section. Remaining: Tier 1.4 laylines, Tier 2, Tier 3. Surface under study = the Lab **Gameplan / Optimizer**
 tab (`vps/lab/web/mapview.js` + `app.js` + `styles.css`). RRS 41: this is PREP (frozen at the gun).
 
 Two reference apps were studied for UI/UX *patterns* (not imagery — both are proprietary): **Orca**
@@ -145,33 +146,32 @@ confidence, the branching playbook, the boat sail model, ENC draft-aware charts,
 We are NOT trying to clone a single-route pro router — we borrow patterns that amplify what we already
 do differently.
 
-### Tier 0 — near-term, already-specced (do first, independent of the restyle)
-- **0.1 Fix the "Ensemble members" control** (`app.js` `optModelChecks`/`renderGameplan`/`optToggle`).
+### Tier 0 — near-term, already-specced (do first, independent of the restyle) — ✅ SHIPPED (PR-1)
+- **0.1 Fix the "Ensemble members" control** ✅ (`app.js` `optModelChecks`/`renderGameplan`/`optToggle`).
   Disable + hint the field when no ensemble model is checked; set `max` to the **real** member count
   of the selected ensemble source(s) from `/api/models` (GEFS 31; ECMWF-ENS 50 once wired) instead of
   the hardcoded 30; add a muted cost/diminishing-returns caption. *(Already detailed in the
   optimizer-UI-study plan memory; small contained change.)*
-- **0.2 Wire ECMWF-ENS** (`wind/models.py` `ECMWF.members`) — backend dependency for 0.1; must land
-  with bounded/parallel downloads (the 429 cap/cooldown already shipped). *(Specced in memory.)*
+- **0.2 Wire ECMWF-ENS** ✅ — shipped as a SEPARATE `ecmwf-ens` ensemble source (control + 50
+  perturbed members, enfo/cf + enfo/pf), NOT by mutating `ECMWF.members` as originally specced:
+  `_members_for` returns `["det"]` for a `kind="deterministic"` source regardless of its `members`,
+  so HRES would have broken. The new source keeps HRES loading when ensembles are off; inherits the
+  429 cap/cooldown. `/api/models` now lists it (ensemble, 51 members).
 
 ### Tier 1 — quick wins (color / legend / layout / overlay polish; ~hours each, no new backend)
-- **1.1 Wind color-scale legend on the map** (`mapview.js`). Borrow Orca's expandable bottom-left
-  legend: a small TWS color ramp (our existing 6/12/18/24-kn stops) + a note that **arrow opacity =
-  model confidence**. Today the color/fade encoding is undocumented in-UI — a legend makes our moat
-  legible. *(`addControls`, new `L.Control` bottom-left.)*
-- **1.2 Forecast animation play/pause** (`mapview.js`). Add a ▶/⏸ button beside the time slider that
-  steps `setFrame` on a timer (Expedition's animation interval + Orca's motion). We already have the
-  frames embedded; this is pure client JS.
-- **1.3 Group the controls into labeled sections** (`app.js renderGameplan` + `styles.css`). Borrow
-  Orca's clutter-removal: cluster the controls as **Course** (race/course/start) · **Boat & charts**
-  (boat/draft/charts/review) · **Weather models** (checks/ensemble) · **Run** (avoid + button), each
-  a titled sub-block. Reduces the current flat wall of `opt-controls` rows.
-- **1.4 Laylines + rhumb-bearing labels on the route** (`mapview.js buildRoute`). Draw port/starboard
-  laylines into the next mark (we have marks + polars/TWA available) and label the rhumb legs with
-  bearing/distance. Cheap chartcraft that both references show and we lack.
-- **1.5 Bracketed-TWA semantics in the leg table** (`app.js optLegRow`). Borrow Expedition's
-  convention: mark legs containing a tack/gybe (we already compute per-leg `tacks`) and show a small
-  ⇄ badge, so the table reads like a navigator's table at a glance.
+- **1.1 Wind color-scale legend on the map** ✅ (`mapview.js`, a bottom-right `L.Control`). TWS ramp
+  swatches (our 6/12/18/24-kn stops) + "arrow opacity = model confidence (faint = models split)" —
+  makes the confidence-fade moat legible.
+- **1.2 Forecast animation play/pause** ✅ (`mapview.js`). A ▶/⏸ button by the slider auto-advances
+  the frames (700 ms); a manual scrub stops it; `render()` clears a stale timer.
+- **1.3 Group the controls into labeled sections** ✅ (`app.js renderGameplan` + `styles.css`). Three
+  cards — **Course** · **Boat & charts** · **Weather models** — + a clean run row. All IDs/handlers
+  preserved.
+- **1.4 Laylines + rhumb-bearing labels on the route** — **DEFERRED** to the route-viz work (Tier 2):
+  drawing correct laylines needs the beat/run VMG angle vs the wind at the next mark, which is the
+  same geometry as the isochrone/paths overlay — better built together than as a standalone quick win.
+- **1.5 Bracketed-TWA semantics in the leg table** ✅ (`app.js optLegRow`). Legs with maneuvers show a
+  ⇄ N badge (Expedition's convention).
 
 ### Tier 2 — medium (the differentiating viz; ~days each)
 - **2.1 Draw isochrones (forward) as an optional layer** — the biggest single gap. The router already
@@ -247,10 +247,11 @@ references prove sailors expect.
 ```
 
 **Proposed implementation phasing:**
-1. **PR-1 (Tier 0):** ensemble-control fix + ECMWF-ENS wiring (already specced).
-2. **PR-2 (Tier 1 quick wins):** wind legend, animation play/pause, grouped controls, laylines,
-   bracketed-TWA badges. Pure client + small CSS; high polish-per-effort.
-3. **PR-3 (Tier 2a):** isochrone frontier emission + optional layer (the marquee viz upgrade).
+1. **PR-1 (Tier 0):** ensemble-control fix + ECMWF-ENS wiring. ✅ SHIPPED (`8bc95f7`).
+2. **PR-2 (Tier 1 quick wins):** wind legend, animation play/pause, grouped controls,
+   bracketed-TWA badges (laylines deferred to PR-3). ✅ SHIPPED (`06fb1a4`).
+3. **PR-3 (Tier 2a):** isochrone frontier emission + optional layer (the marquee viz upgrade) +
+   laylines (1.4, same geometry). ← NEXT
 4. **PR-4 (Tier 2b):** per-model candidate-paths overlay + confidence shading (our moat, visualized)
    + leg-row↔map↔time linking + CSV export.
 5. **PR-5 (Tier 3):** the consolidated Control Center + map-led layout restyle (the big Orca-style

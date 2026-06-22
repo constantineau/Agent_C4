@@ -729,8 +729,17 @@ tacks only when a shift makes the new board genuinely pay. Verified: unit tests 
 correct; upwind leg tacks at the VMG angle + reaches the mark; heavy tack-cost ≤ zero-cost tack count;
 obstacle detour still works) + a real end-to-end Mackinac `cove_island` run (43 h, coverage 1.0, not
 degraded, sail plan attached, reaches the finish). Tunables `ROUTE_CONE_DEG` / `ROUTE_TACK_COST_S`.
-**Next: the copilot's crew-facing narration increment** (it now has a signed playbook + boat sail
-model to interpret).
+
+**Optimizer UI study + restyle — `docs/OPTIMIZER_UI_STUDY.md`** (Orca + Expedition gap analysis). Tier 0
+(ensemble-control fix + ECMWF-ENS wired as a separate 51-member `ecmwf-ens` ensemble source) + Tier 1
+quick wins (map wind color-scale legend, forecast ▶/⏸ animation, grouped control cards Course/Boat &
+charts/Weather models, ⇄ tack badge in the leg table) SHIPPED. We already win the two dims both
+references are weak on — forecast confidence + a reviewable sail model. NEXT = Tier 2: emit the
+isochrone frontier + per-model candidate-paths overlay (our multi-model-confidence moat made VISUAL)
++ laylines + leg-row↔map↔time linking + CSV export.
+
+**Next (copilot track): the copilot's crew-facing narration increment** (it now has a signed playbook
++ boat sail model to interpret).
 
 ## Onboard LLM copilot — Orin Nano (Phase 9.4, Tier 2)
 
