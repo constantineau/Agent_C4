@@ -260,7 +260,28 @@ class ECMWF(ModelSource):
             return None
 
 
-MODELS = {m.name: m for m in (GFS(), NAM(), HRRR(), GEFS(), ECMWF())}
+class ECMWF_ENS(ECMWF):
+    """ECMWF ENS (ensemble) open data — the control run + 50 perturbed members.
+
+    A SEPARATE source from the HRES `ecmwf` deterministic run (which stays `kind="deterministic"` so
+    it still loads when ensembles are off): `_members_for` returns `["det"]` for a deterministic
+    source regardless of its `members`, so an ensemble had to be its own source to be member-driven.
+    Opt-in + member-capped by the request's `ensemble_members` (50 members × frames = many downloads;
+    pairs with the sparse/degraded-GRIB hardening + the 429 cap/cooldown inherited from ECMWF)."""
+    name = "ecmwf-ens"
+    kind = "ensemble"
+    priority = 1.1
+    # control ("c" → enfo/cf) first so a small member cap still includes the central estimate, then
+    # the 50 perturbed members ("1".."50" → enfo/pf/N).
+    members = ("c",) + tuple(str(i) for i in range(1, 51))
+
+    def _stream_type(self, cycle, member):
+        if member == "c":
+            return "enfo", "cf", None
+        return "enfo", "pf", int(member)
+
+
+MODELS = {m.name: m for m in (GFS(), NAM(), HRRR(), GEFS(), ECMWF(), ECMWF_ENS())}
 # Default blend: the fast, reliable deterministic models (model spread = confidence). Ensembles
 # (gefs, ecmwf-ens) are opt-in via the request because they multiply the download count.
 DEFAULT_MODELS = ("gfs", "nam", "hrrr")

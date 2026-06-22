@@ -503,10 +503,12 @@ async function renderGameplan() {
       <div id="boatModelOut"></div>
       <div class="opt-models">${optModelChecks()}</div>
       <div class="opt-controls">
-        <label>Ensemble members <input type="number" id="optEns" value="0" min="0" max="30" style="width:64px"> <span class="muted">(GEFS/ECMWF-ENS only; 0 = deterministic)</span></label>
+        <label>Ensemble members <input type="number" id="optEns" value="0" min="0" style="width:64px" oninput="updateEnsembleControl()"> </label>
+        <span id="optEnsHint" class="muted" style="font-size:12px"></span>
         <label class="optchk"><input type="checkbox" id="optAvoid" checked> Avoid land/islands/zones</label>
         <button id="optRun" onclick="runOptimize()" ${Opt.running ? "disabled" : ""}>${Opt.running ? "Optimizing…" : "Run optimizer →"}</button>
       </div>
+      <div id="optEnsCost" class="muted" style="font-size:12px;margin-top:2px"></div>
       <div class="muted" style="font-size:12px;margin-top:6px">Downloads live GRIB from NOAA NOMADS / ECMWF and routes the course on the SR33 polars. First run ~30–60 s (then cached). Pre-race cloud homework — frozen at the gun (RRS 41).</div>
     </div>
     <div id="optOut"></div>
@@ -517,6 +519,7 @@ async function renderGameplan() {
       <div id="pbOut"></div>
     </div></div>`;
   if (Opt.showBoatModel) renderBoatModel();
+  updateEnsembleControl();
   if (Opt.result) renderOptResult(Opt.result);
   if (Pb.result) renderPbResult(Pb.result);
 }
@@ -537,6 +540,43 @@ function optModelChecks() {
 function optToggle(k, on) {
   Opt.chosen = Opt.chosen.filter((x) => x !== k);
   if (on) Opt.chosen.push(k);
+  updateEnsembleControl();
+}
+
+/* The chosen ensemble sources + their real member counts (from /api/models). The ensemble-members
+   field only does anything when one is selected, and the request caps each source at this count —
+   so the cap is the LARGEST selected ensemble (a smaller source just maxes out internally). */
+function optEnsembleInfo() {
+  const m = Opt.models || {};
+  const ens = Opt.chosen.filter((k) => m[k] && m[k].kind === "ensemble");
+  const max = ens.reduce((a, k) => Math.max(a, m[k].members || 0), 0);
+  return { names: ens.map((k) => k.toUpperCase()), max };
+}
+
+/* Enable/disable + cap + explain the ensemble field reactively (Orca-style clutter-removal: a
+   control that's inert until it's meaningful, with a dynamic cap + a cost/diminishing-returns hint).
+   Called on render and whenever a model checkbox toggles. */
+function updateEnsembleControl() {
+  const inp = document.getElementById("optEns");
+  const hint = document.getElementById("optEnsHint");
+  const cost = document.getElementById("optEnsCost");
+  if (!inp) return;
+  const { names, max } = optEnsembleInfo();
+  const on = max > 0;
+  inp.disabled = !on;
+  inp.max = on ? max : 0;
+  if (!on) { inp.value = "0"; }
+  else if (parseInt(inp.value || "0", 10) > max) { inp.value = String(max); }
+  inp.style.opacity = on ? "1" : "0.5";
+  if (hint) hint.textContent = on
+    ? `0 = deterministic; up to ${max} members of ${names.join(" + ")}`
+    : "select GEFS or ECMWF-ENS to use ensemble members";
+  if (cost) {
+    const n = parseInt(inp.value || "0", 10) || 0;
+    cost.textContent = on && n > 0
+      ? `≈ ${n} member${n > 1 ? "s" : ""} × forecast frames in extra GRIB downloads — 10–20 already samples the spread well; more rarely changes the route.`
+      : "";
+  }
 }
 
 /* Boat profile ([B]): active boat + editable draft (feet) + chart source. Draft sets the ENC
