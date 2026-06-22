@@ -1,9 +1,10 @@
 # Optimizer UI Study — Orca + Expedition → C4 Performance Lab Gameplan
 
-**Status:** study + prioritized recommendations (2026-06-22). **Implementation: Tier 0, Tier 1, and
-PR-3 (Tier 2a — isochrone frontier + laylines + leg-row↔map↔time linking + CSV) SHIPPED 2026-06-22**
-— see the per-item ✅ markers + the implementation-phasing section. Remaining: PR-4 (Tier 2b —
-per-model candidate-paths overlay + confidence shading), Tier 2.4/2.5, Tier 3. Surface under study = the Lab **Gameplan / Optimizer**
+**Status:** study + prioritized recommendations (2026-06-22). **Implementation: Tier 0, Tier 1, PR-3
+(Tier 2a — isochrone frontier + laylines + leg-row↔map↔time linking + CSV) and PR-4 (Tier 2b —
+per-model candidate-paths overlay) SHIPPED 2026-06-22** — see the per-item ✅ markers + the
+implementation-phasing section. Remaining: Tier 2.4 (GRIB barbs/contours) + 2.5 (resolution control),
+Tier 3 (consolidated Control Center + map-led restyle, gated on the user's own Orca UX notes). Surface under study = the Lab **Gameplan / Optimizer**
 tab (`vps/lab/web/mapview.js` + `app.js` + `styles.css`). RRS 41: this is PREP (frozen at the gun).
 
 Two reference apps were studied for UI/UX *patterns* (not imagery — both are proprietary): **Orca**
@@ -182,13 +183,18 @@ do differently.
   threads it (the playbook's per-model routes pass False to stay lean). `mapview.js` draws them on a
   faint-blue `CanvasOverlay` (`drawExplore`) toggled by an **Isochrones** layer (default OFF). Turns
   the map from "here's the line" into "here's *why* the line".
-- **2.2 Reverse-isochrone / route-sensitivity overlay → fold into our confidence story.** Expedition's
-  killer idea is that isochrone *parallelism* shows where a decision is critical. We have a richer
-  signal already (multi-model spread + the branching playbook's `what_flips_it` triggers). **Marry
-  them:** shade the map where model routes diverge (we already split per-model fields in `playbook.py`)
-  and **plot the per-model candidate routes as faint "Paths"** (Expedition's all-paths overlay) under
-  the chosen route — so the user literally sees the fan the confidence number summarizes. This is our
-  moat made visual and beats both references on dimension 6.
+- **2.2 Per-model candidate-paths overlay → our confidence story made visual** ✅ SHIPPED (PR-4).
+  `optimizer._per_model_paths` splits the blended field into per-model sub-fields (same split as
+  `playbook._subfields`, reusing the already-built obstacle field), routes each, and emits
+  `candidate_paths`; `optimize_course(per_model=)` gates it (opt-in — the **"Per-model route fan"**
+  control, since it routes each model separately and is slower). `mapview.js` draws each as a
+  colour-per-model polyline under the chosen route (toggle **Model routes** default ON) + a per-model
+  legend (model · hours · favored side). The FAN itself is the signal — tight = models agree (high
+  confidence), spread = a real decision — so we **drop** any solo-model route that came back degraded /
+  timed-out / wildly off the blended solution (0.5×–1.6× its hours) rather than draw one we don't
+  trust. This is our moat made visual and beats both references on dimension 6. (Expedition's
+  reverse-isochrone *parallelism* idea is approximated by the forward-isochrone layer (2.1) + this
+  per-model spread; a true reverse-isochrone draw is not planned.)
 - **2.3 Routing-table ↔ map ↔ time linking** ✅ SHIPPED (PR-3, pulled forward — trivial + high-value).
   Clicking a leg row calls `MapView.focusLeg(i)`: highlights that segment (SVG renderer, on top of the
   canvas layers), fits the map to it, and snaps the forecast slider to the leg's ETA frame. Plus
@@ -256,10 +262,10 @@ references prove sailors expect.
 3. **PR-3 (Tier 2a):** isochrone frontier emission + optional layer (the marquee viz upgrade) +
    laylines (1.4) + leg-row↔map↔time linking + CSV export (pulled forward from PR-4 — both trivial).
    ✅ SHIPPED.
-4. **PR-4 (Tier 2b):** **per-model candidate-paths overlay + confidence shading** (our moat,
-   visualized) — the remaining Tier-2 piece. The playbook already routes each model
-   (`playbook.py` keeps each candidate's `path`); surface those faint per-model paths under the chosen
-   route so the user sees the fan the confidence number summarizes. ← NEXT
+4. **PR-4 (Tier 2b):** **per-model candidate-paths overlay** (our moat, visualized) — opt-in
+   "Per-model route fan", colour-per-model routes + legend, untrustworthy solo routes dropped.
+   ✅ SHIPPED. Remaining Tier-2 polish: **2.4** GRIB barbs/contours option, **2.5** Auto/Fast/Fine
+   resolution control.
 5. **PR-5 (Tier 3):** the consolidated Control Center + map-led layout restyle (the big Orca-style
    look), gated on the user's own Orca UX notes.
 

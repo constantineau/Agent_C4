@@ -288,9 +288,12 @@ def _route_sanity(wf, legs, coverage, P, timed_out):
 
 
 # --- full course -------------------------------------------------------------
+PER_MODEL_BUDGET_S = float(os.environ.get("ROUTE_PER_MODEL_BUDGET_S", "120"))  # total budget for the path fan
+
+
 def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=90,
                     obstacles=None, avoid=True, source=None, safety_depth=None,
-                    jib_crossovers=None, emit_exploration=True):
+                    jib_crossovers=None, emit_exploration=True, per_model=False):
     """Route the whole course from its start through every mark to the finish via `wf`.
 
     Returns one optimal route with per-leg ETAs, total time/distance/tacks and a route confidence
@@ -372,6 +375,11 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
             sail_seq.append({"sail": s, "from_leg": lg["to"]})
         elif s and sail_seq:
             sail_seq[-1]["to_leg"] = lg["to"]
+    # per-model candidate paths (the confidence moat made VISUAL — the fan the blended route summarizes)
+    candidate_paths = []
+    if per_model:
+        candidate_paths = _per_model_paths(definition, course_id, start_epoch, wf, obstacles, P, marks,
+                                           source, safety_depth, jib_crossovers, total_min / 60.0)
     return {
         "available": True, "course_id": cid,
         "start_epoch": round(float(start_epoch)), "finish_epoch": round(t),
@@ -390,12 +398,56 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
         "marks": [{"seq": s, "name": n, "lat": la, "lon": lo} for s, n, la, lo in marks],
         "isochrones": isochrones,
         "laylines": laylines,
+        "candidate_paths": candidate_paths,
         "path": [{"lat": p["lat"], "lon": p["lon"], "t": round(p["t"])} for p in full_path],
         "windfield": wf.status(),
         "obstacles": obstacles.summary() if obstacles is not None else {"active": False},
         "obstacle_steps_avoided": sum(l.get("blocked_steps", 0) for l in legs),
         "timed_out": timed_out,
     }
+
+
+def _per_model_paths(definition, course_id, start_epoch, wf, obstacles, P, marks,
+                     source, safety_depth, jib_crossovers, blended_hours):
+    """Route the course through EACH model's OWN sub-field (its series only) → the per-model candidate
+    paths the blended route's confidence number summarizes. Same split as the playbook's `_subfields`,
+    but here it feeds the Gameplan map's 'Model routes' overlay (PR-4): the user literally sees the fan
+    — tight where the models agree (high confidence), spread where they disagree. Reuses the
+    already-built obstacle field (no rebuild) and skips isochrone capture.
+
+    The FAN (which side each model commits to) is the signal, NOT a solo-model ETA — a single model's
+    sub-field can be too thin to route honestly. So we DROP any candidate that came back degraded /
+    timed-out / wildly off the blended solution (0.5×–1.6× its hours), rather than draw a route we
+    don't trust. Returns the kept candidates + a `dropped` count is left to the caller's discretion."""
+    by_model = {}
+    for (model, member), frames in wf.series.items():
+        by_model.setdefault(model, {})[(model, member)] = frames
+    if len(by_model) < 2:
+        return []                       # one model → no fan to show
+    from .wind.windfield import WindField
+    rhumb = (_bearing(marks[0][2], marks[0][3], marks[1][2], marks[1][3])
+             if len(marks) >= 2 and marks[0][2] is not None and marks[1][2] is not None else None)
+    per = max(30, int(PER_MODEL_BUDGET_S / len(by_model)))
+    lo, hi = (blended_hours * 0.5, blended_hours * 1.6) if blended_hours else (0, 1e9)
+    out = []
+    for model, series in by_model.items():
+        meta = [m for m in wf.meta if m["model"] == model]
+        sub = WindField(series, meta, wf.bbox, wf.t_start, wf.t_end)
+        r = optimize_course(definition, course_id, start_epoch, sub, time_budget_s=per,
+                            obstacles=obstacles, avoid=False, source=source, safety_depth=safety_depth,
+                            jib_crossovers=jib_crossovers, emit_exploration=False, per_model=False)
+        hrs = r.get("total_hours")
+        if (not r.get("available") or not r.get("path") or r.get("degraded") or r.get("timed_out")
+                or hrs is None or hrs < lo or hrs > hi):
+            continue                    # untrustworthy single-model route → don't draw it
+        fh = (r.get("legs") or [{}])[0].get("first_heading")
+        side = "middle"
+        if rhumb is not None and fh is not None:
+            d = ((fh - rhumb + 540) % 360) - 180
+            side = "left" if d < -10 else "right" if d > 10 else "middle"
+        out.append({"model": model, "total_hours": hrs, "favored_side": side,
+                    "path": [[p["lat"], p["lon"]] for p in r["path"]]})
+    return out
 
 
 # --- course extent / horizon -------------------------------------------------

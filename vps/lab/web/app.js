@@ -516,6 +516,7 @@ async function renderGameplan() {
       <div id="boatModelOut"></div>
       <div class="opt-run">
         <label class="optchk"><input type="checkbox" id="optAvoid" checked> Avoid land/islands/zones</label>
+        <label class="optchk" title="Also route each weather model separately and overlay the candidate routes — the confidence fan made visible (slower)"><input type="checkbox" id="optPerModel"> Per-model route fan <span class="muted">(slower)</span></label>
         <button id="optRun" onclick="runOptimize()" ${Opt.running ? "disabled" : ""}>${Opt.running ? "Optimizing…" : "Run optimizer →"}</button>
       </div>
       <div class="muted" style="font-size:12px;margin-top:6px">Downloads live GRIB from NOAA NOMADS / ECMWF and routes the course on the SR33 polars. First run ~30–60 s (then cached). Pre-race cloud homework — frozen at the gun (RRS 41).</div>
@@ -737,8 +738,9 @@ async function runOptimize() {
   const ens = parseInt(document.getElementById("optEns").value || "0", 10) || 0;
   const startVal = document.getElementById("optStart").value;
   const avoidEl = document.getElementById("optAvoid");
+  const pmEl = document.getElementById("optPerModel");
   const body = { race_id: Opt.raceId, course_id: Opt.courseId, models: Opt.chosen, ensemble_members: ens,
-    avoid_land: avoidEl ? avoidEl.checked : true };
+    avoid_land: avoidEl ? avoidEl.checked : true, per_model: pmEl ? pmEl.checked : false };
   if (startVal) body.start_epoch = Date.parse(startVal + "Z") / 1000;
   Opt.running = true;
   document.getElementById("optRun").disabled = true;

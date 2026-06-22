@@ -19,7 +19,12 @@ const MapView = (function () {
   let frameIdx = 0;
   let playTimer = null;         // forecast animation (▶/⏸)
   const show = { wind: true, shoals: true, rocks: true, land: false, sea: false,
-                 iso: false, laylines: true };
+                 iso: false, laylines: true, models: true };
+
+  // a stable colour per weather model for the per-model candidate-route fan (PR-4)
+  const MODEL_COLORS = { gfs: "#1f77b4", nam: "#2ca02c", hrrr: "#d62728", gefs: "#9467bd",
+    ecmwf: "#ff7f0e", "ecmwf-ens": "#8c564b" };
+  function modelColor(m) { return MODEL_COLORS[m] || "#7a7a7a"; }
 
   // ---- a generic canvas overlay: positions a full-map canvas + calls draw(ctx) on move/zoom ----
   const CanvasOverlay = L.Layer.extend({
@@ -122,6 +127,22 @@ const MapView = (function () {
   // explored — "here's WHY the line") + laylines into each beat/run mark (the VMG approach corridor).
   function drawExplore(ctx, project, zoom, size) {
     if (!R) return;
+    // per-model candidate routes (PR-4) — the fan the blended route's confidence summarizes; tight =
+    // models agree (high confidence), spread = they disagree. Drawn under the isochrones + chosen route.
+    if (show.models && R.candidate_paths && R.candidate_paths.length) {
+      ctx.lineWidth = 2; ctx.globalAlpha = 0.55;
+      for (const cp of R.candidate_paths) {
+        if (!cp.path || cp.path.length < 2) continue;
+        ctx.strokeStyle = modelColor(cp.model);
+        ctx.beginPath();
+        for (let i = 0; i < cp.path.length; i++) {
+          const pt = project(cp.path[i][0], cp.path[i][1]);
+          if (i === 0) ctx.moveTo(pt.x, pt.y); else ctx.lineTo(pt.x, pt.y);
+        }
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    }
     if (show.iso && R.isochrones && R.isochrones.length) {
       ctx.globalAlpha = 0.45; ctx.strokeStyle = "#36b3ff"; ctx.lineWidth = 1;
       for (const poly of R.isochrones) {
@@ -214,8 +235,10 @@ const MapView = (function () {
         const d = L.DomUtil.create("div", "mv-ctl");
         const hasIso = R && R.isochrones && R.isochrones.length;
         const hasLay = R && R.laylines && R.laylines.length;
+        const hasModels = R && R.candidate_paths && R.candidate_paths.length;
         d.innerHTML = `<b>Layers</b>
           ${chk("wind", "Wind")}${chk("shoals", "Shoals")}${chk("rocks", "Rocks")}${chk("land", "ENC land")}${chk("sea", "Seamarks")}` +
+          (hasModels ? chk("models", "Model routes") : "") +
           (hasIso ? chk("iso", "Isochrones") : "") + (hasLay ? chk("laylines", "Laylines") : "");
         L.DomEvent.disableClickPropagation(d);
         d.querySelectorAll("input").forEach((el) => el.addEventListener("change", () => toggle(el.dataset.k, el.checked)));
@@ -258,6 +281,24 @@ const MapView = (function () {
       },
     });
     map.addControl(new Legend());
+
+    // per-model route legend — only when the candidate-path fan is present (PR-4)
+    if (R && R.candidate_paths && R.candidate_paths.length) {
+      const ModelLegend = L.Control.extend({
+        options: { position: "bottomright" },
+        onAdd: function () {
+          const d = L.DomUtil.create("div", "mv-ctl mv-legend");
+          const rows = R.candidate_paths.map((cp) =>
+            `<span class="mv-sw"><i style="background:${modelColor(cp.model)}"></i>${cp.model.toUpperCase()}` +
+            `${cp.total_hours != null ? " " + cp.total_hours + "h" : ""} <small>${cp.favored_side || ""}</small></span>`).join("");
+          d.innerHTML = `<b>Model routes</b><div class="mv-legrow">${rows}</div>
+            <div class="mv-legnote">each model's own route — tight = agree, spread = a real decision</div>`;
+          L.DomEvent.disableClickPropagation(d);
+          return d;
+        },
+      });
+      map.addControl(new ModelLegend());
+    }
   }
   function chk(k, label) {
     return `<label class="mv-chk"><input type="checkbox" data-k="${k}" ${show[k] ? "checked" : ""}> ${label}</label>`;
@@ -265,7 +306,7 @@ const MapView = (function () {
   function toggle(k, on) {
     show[k] = on;
     if (k === "sea") { if (on) seamarks.addTo(map); else map.removeLayer(seamarks); return; }
-    if (k === "iso" || k === "laylines") { exploreLayer.redraw(); return; }
+    if (k === "iso" || k === "laylines" || k === "models") { exploreLayer.redraw(); return; }
     chartLayer.redraw(); windLayer.redraw();
   }
   function setFrame(i) {

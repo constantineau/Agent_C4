@@ -738,10 +738,15 @@ optimizer emits down-sampled **isochrone frontier** polylines (`route_leg(captur
 into each beat/run mark (`_layline_pair`); `mapview.js` draws them as toggleable map layers
 (Isochrones default off, Laylines default on) via a `drawExplore` canvas overlay; clicking a leg row
 (`MapView.focusLeg`) highlights that segment + snaps the forecast slider to its ETA; and a client-side
-**CSV export** of the leg table. We already win the two dims both references are weak on — forecast
-confidence + a reviewable sail model. NEXT = Tier 2b / PR-4: the **per-model candidate-paths overlay +
-confidence shading** (the multi-model-confidence moat made VISUAL — the playbook already routes each
-model and keeps its path).
+**CSV export** of the leg table. **Tier 2b / PR-4 SHIPPED** — the **per-model candidate-paths overlay**:
+opt-in "Per-model route fan" (`optimize_course(per_model=)` → `_per_model_paths` splits the blended
+field per model, routes each reusing the obstacle field, emits `candidate_paths`); `mapview.js` draws a
+colour-per-model route fan under the chosen route (Model-routes toggle + per-model legend) — the
+multi-model-confidence moat made VISUAL (tight = models agree, spread = a real decision). Untrustworthy
+solo routes (degraded / timed-out / 0.5×–1.6× off the blended hours) are dropped, not drawn. We already
+win the two dims both references are weak on — forecast confidence + a reviewable sail model. NEXT =
+Tier 2 polish (2.4 GRIB barbs/contours · 2.5 Auto/Fast/Fine resolution control) + Tier 3 restyle
+(gated on the user's Orca UX notes).
 
 **Next (copilot track): the copilot's crew-facing narration increment** (it now has a signed playbook
 + boat sail model to interpret).
