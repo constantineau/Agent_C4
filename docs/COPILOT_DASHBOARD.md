@@ -1,9 +1,15 @@
 # Onboard Copilot — iPad Crew Dashboard — Design
 
-**Status:** design / locked (2026-06-19). No code written yet. Companion to
-`docs/ONBOARD_ENGINE_SCOPING.md` (the three-tier architecture) and the shipped copilot
-decision-support layer (`pi/orin/copilot/`). This is the design for the **crew-facing iPad
-dashboard** that surfaces the copilot's output graphically.
+**Status:** design / locked (2026-06-19); **BUILT 2026-06-19/20 — phases 1–4 shipped** (static
+prototype → live engine wiring + deterministic status → LLM commentary/status-refine → streamed
+tap-to-detail), plus polish (wind-trend charts, forecast-vs-actual verification, demo scenarios,
+day/night, feedback widget). Lives in `pi/console/dashboard/` (served at `:8091/dashboard/`); the
+LLM layer is `pi/orin/copilot/dashboard_brief.py` (`POST /dashboard`) + the streamed `POST /detail`.
+**Note: the literal 12-tile grid below was deliberately simplified at build time to 8 higher-order
+tiles** (`vmg, wind, tactics, forecast, sail, eta, charge, data` — commit `99c3d9d`, "crew
+direction"); the design's tile names and "later tiles" (AIS/FLEET, PLAYBOOK-ADHERENCE) are the
+remaining backlog. Companion to `docs/ONBOARD_ENGINE_SCOPING.md` (the three-tier architecture) and
+the shipped copilot decision-support layer (`pi/orin/copilot/`).
 
 The decision-support layer already produces a grounded `DecisionBrief` (situation + factors +
 recommendations, each grounded in an engine fact, with urgency + confidence). This doc specifies

@@ -819,7 +819,13 @@ graceful fallback fires on the ~2 min cold model-load or ungrounded JSON. Exit t
 `pi/orin/copilot/README.md`. The **iPad crew dashboard** that surfaces the copilot graphically (a
 fixed, all-items-visible status grid that the LLM scores green/yellow/red with color-blind-safe
 redundant encoding + a commentary panel + tap-to-detail LLM deep-dives) is designed/locked in
-`docs/COPILOT_DASHBOARD.md` (not built yet). Runtime bring-up files (the originally-MLC plan, port **9000**) — note
+`docs/COPILOT_DASHBOARD.md` and **BUILT** (`pi/console/dashboard/`, served at `:8091/dashboard/`):
+phases 1–4 shipped 2026-06-19/20 — static prototype → live engine wiring + deterministic status →
+LLM commentary/status-refine (`copilot dashboard_brief.py`, `POST /dashboard`) → streamed
+tap-to-detail (`POST /detail`), plus wind-trend charts, forecast-vs-actual verification, demo
+scenarios, day/night, feedback widget. 8 higher-order tiles (`vmg, wind, tactics, forecast, sail,
+eta, charge, data`); the design's later tiles (AIS/FLEET, PLAYBOOK-ADHERENCE) are the remaining
+backlog. Runtime bring-up files (the originally-MLC plan, port **9000**) — note
 they describe MLC, the unit runs Ollama: `pi/orin/`:
 - **`SETUP.md`** — the bring-up runbook: flash JetPack 6.2 (L4T R36.4.x) + the QSPI firmware →
   Super mode (`sudo nvpmodel -m 2` + `jetson_clocks`) → NVIDIA-default docker runtime →
