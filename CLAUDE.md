@@ -145,7 +145,7 @@ via `OnboardSource`. It comes up with the rest of the Pi stack; quick check:
 | **5** ✅ | iPad nav companion: day/night, sail dial, course plot, navigator, tactics, routing | bench-verified end-to-end |
 | **6** ✅ | Alerting + summarizer + polar tooling | bench-complete; 2-practice-sail false-positive gate awaits real sailing |
 | 7 🔶 | Prod stack + deploy + rules review + soak | rules review done; server auth + TLS scaffolding done; prod deploy/soak gated on domain + prod `.env` |
-| **9** 🔶 | Onboard + C4 Performance Lab (three-tier pivot) | **9.0 data-access abstraction ✅ · 9.1 onboard engine service ✅ · 9.2 race gate + iPad onboard console ✅ · Lab-0 race ingestion + course loader ✅ · Lab-1 multi-model GRIB optimizer ✅ · Lab-2a/2b branching playbook bundle ✅ (fan-out → variants → Opus synthesis → signed, onboard-loadable artifact) · routing-fidelity 2b per-leg sail plan + reviewable boat sail model ✅ · 9.4 Orin LLM appliance live (Ollama+Qwen2.5-7B :11434) + copilot decision-support layer ✅ (`pi/orin/copilot`)**; next the copilot crew-facing narration increment + routing-fidelity 2c (isochrone VMG-gate/cone/adaptive) — see `docs/ONBOARD_ENGINE_SCOPING.md` |
+| **9** 🔶 | Onboard + C4 Performance Lab (three-tier pivot) | **9.0 data-access abstraction ✅ · 9.1 onboard engine service ✅ · 9.2 race gate + iPad onboard console ✅ · Lab-0 race ingestion + course loader ✅ · Lab-1 multi-model GRIB optimizer ✅ · Lab-2a/2b branching playbook bundle ✅ (fan-out → variants → Opus synthesis → signed, onboard-loadable artifact) · routing-fidelity 2b per-leg sail plan + reviewable boat sail model ✅ · routing-fidelity 2c isochrone VMG-gate/cone-prune/anti-over-tack ✅ · 9.4 Orin LLM appliance live (Ollama+Qwen2.5-7B :11434) + copilot decision-support layer ✅ (`pi/orin/copilot`)**; next the copilot crew-facing narration increment — see `docs/ONBOARD_ENGINE_SCOPING.md` |
 
 **Current status:** Phases 0–6 built and bench-verified; Phase 7 started; **Phase 9 in progress
 (9.0 data-access abstraction ✅, 9.1 onboard engine service ✅ — see "Onboard engine service",
@@ -712,9 +712,25 @@ specialises the upwind jib by TWS; the active boat's bands thread through `optim
 (`POST /api/boats/jib-crossovers`); the copilot digest surfaces "Upwind jib by wind: J1 <14; …".
 `sailplan.crossovers_specialized()` relabels the upwind band of **each TWS row** to the real jib for
 that wind (a row is one TWS → exact), so the crossover chart + bundle show J1 (light) → J2 (mid) → J3
-(heavy), not just the cert's lone J1. **Next: the copilot's crew-facing narration increment** (it now
-has a signed playbook + boat sail model to interpret) + routing-fidelity 2c (isochrone
-VMG-gate/cone/adaptive).
+(heavy), not just the cert's lone J1.
+
+**Routing fidelity 2c — VMG-gate + cone-prune + anti-over-tack: SHIPPED.** Three refinements to the
+isochrone `route_leg` (`optimizer.py`), all env-tunable so they're A/B-able: (1) **VMG gate** —
+`_vmg_headings()` computes the true best-VMG upwind (beat) and downwind (run) compass headings at the
+local TWS (argmax of `stw·cos(twa)` up / `−stw·cos(twa)` down over the polar band) and **injects them
+into the heading fan**, so the router sails the exact optimum tacking/gybing angle instead of being
+limited to the nearest coarse 12° grid heading. (2) **Cone prune** — the fan only opens headings
+within `ROUTE_CONE_DEG` (120°) of the bearing-to-mark (plus the VMG angles, always kept), dropping the
+truly-backward third of the compass; if the whole cone is obstacle-blocked at a node it **reopens the
+full fan** so land/island avoidance can still detour. (3) **Anti-over-tack** — a `ROUTE_TACK_COST_S`
+(30 s) maneuver penalty subtracts distance-made-good from any step that crosses the wind to the other
+tack vs the node's incoming heading, so the isochrone prune disfavors spurious tacking and the route
+tacks only when a shift makes the new board genuinely pay. Verified: unit tests (VMG beat/run headings
+correct; upwind leg tacks at the VMG angle + reaches the mark; heavy tack-cost ≤ zero-cost tack count;
+obstacle detour still works) + a real end-to-end Mackinac `cove_island` run (43 h, coverage 1.0, not
+degraded, sail plan attached, reaches the finish). Tunables `ROUTE_CONE_DEG` / `ROUTE_TACK_COST_S`.
+**Next: the copilot's crew-facing narration increment** (it now has a signed playbook + boat sail
+model to interpret).
 
 ## Onboard LLM copilot — Orin Nano (Phase 9.4, Tier 2)
 

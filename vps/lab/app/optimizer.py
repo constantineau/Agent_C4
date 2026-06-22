@@ -26,6 +26,8 @@ SECTOR = 3.0        # isochrone pruning bucket (deg of bearing from leg start)
 MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-8")
 API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 COVERAGE_MIN = float(os.environ.get("GRIB_COVERAGE_MIN", "0.6"))   # below this → degraded route
+ROUTE_CONE_DEG = float(os.environ.get("ROUTE_CONE_DEG", "120"))    # prune headings >this° off the mark
+TACK_COST_S = float(os.environ.get("ROUTE_TACK_COST_S", "30"))     # time a tack/gybe costs (anti-over-tack)
 
 
 # --- geometry ----------------------------------------------------------------
@@ -67,6 +69,28 @@ def _point_of_sail(twa):
     return "beat" if twa < 70 else ("reach" if twa < 130 else "run")
 
 
+def _vmg_headings(P, tws, twd):
+    """The VMG-optimal upwind (beat) and downwind (run) headings at this TWS, as compass headings
+    relative to TWD. Injected into the heading fan so the router can sail the TRUE best-VMG tacking/
+    gybing angle instead of being limited to the nearest coarse-grid heading — the routing-fidelity-2c
+    'VMG gate'. Returns up to 4 headings (port+stbd × upwind+downwind)."""
+    band = [(a, s) for t, a, s in P if abs(t - tws) <= 1.5 and s > 0]
+    if not band:
+        band = [(a, s) for _t, a, s in P if s > 0]
+    if not band:
+        return []
+    out = []
+    ups = [(s * math.cos(math.radians(a)), a) for a, s in band if a < 90]
+    downs = [(-s * math.cos(math.radians(a)), a) for a, s in band if a > 90]
+    if ups:
+        beat = max(ups)[1]
+        out += [(twd + beat) % 360, (twd - beat) % 360]
+    if downs:
+        run = max(downs)[1]
+        out += [(twd + run) % 360, (twd - run) % 360]
+    return out
+
+
 # --- one leg -----------------------------------------------------------------
 def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=None,
               obstacles=None):
@@ -75,7 +99,7 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
     `obstacles` (an ObstacleField) makes the fan reject any heading whose step would cut across land,
     an island, or a race exclusion zone — so the route sails AROUND obstacles instead of through them."""
     direct = _hav_nm(slat, slon, dlat, dlon)
-    dt_h = min(1.0, max(0.15, direct / 40.0))          # coarser steps for long legs
+    dt_h = min(1.0, max(0.15, direct / 40.0))          # fixed per-leg step (equal-time isochrone)
     max_steps = 600
     headings = list(range(0, 360, HSTEP))
     blocked_hits = 0
@@ -83,6 +107,35 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
     def wind(lat, lon, epoch):
         w = wf.wind_at(lat, lon, epoch)
         return w if w else fallback
+
+    def expand(node, hdgs, tws, twd, dt_h, cand):
+        """Fan `hdgs` from `node`, advancing each by its polar speed; keep the farthest-from-start
+        candidate per bearing sector (the isochrone prune). Returns (n_placed, n_blocked) — n_placed
+        counts unblocked steps, so 0-placed-but-blocked means this node is boxed in by an obstacle."""
+        placed = blocked = 0
+        for hdg in hdgs:
+            twa = abs(_wrap180(hdg - twd))
+            sp = _polar_speed(P, tws, twa)
+            if sp < 0.3:
+                continue
+            step_nm = sp * dt_h
+            # maneuver cost: a tack/gybe (crossing the wind to the other side vs the node's incoming
+            # heading) eats into the distance made good this step → the prune disfavors it, so the route
+            # tacks only when a shift makes the new board genuinely pay (no spurious isochrone over-tacking).
+            if node["hdg"] is not None and TACK_COST_S > 0 and \
+                    (_wrap180(hdg - twd) > 0) != (_wrap180(node["hdg"] - twd) > 0):
+                step_nm = max(0.0, step_nm - sp * (TACK_COST_S / 3600.0))
+            nlat, nlon = _advance(node["lat"], node["lon"], hdg, step_nm)
+            if obstacles and obstacles.crosses(node["lat"], node["lon"], nlat, nlon):
+                blocked += 1
+                continue
+            rng = _hav_nm(slat, slon, nlat, nlon)
+            sec = round(_bearing(slat, slon, nlat, nlon) / SECTOR)
+            if sec not in cand or rng > cand[sec]["rng"]:
+                cand[sec] = {"lat": nlat, "lon": nlon, "t": node["t"] + dt_h * 3600,
+                             "parent": node, "hdg": hdg, "rng": rng}
+            placed += 1
+        return placed, blocked
 
     start = {"lat": slat, "lon": slon, "t": t0, "parent": None, "hdg": None}
     frontier = [start]
@@ -102,20 +155,15 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
                 reached = {"lat": dlat, "lon": dlon, "t": node["t"] + (dmark / sp_m) * 3600,
                            "parent": node, "hdg": bmark}
                 break
-            for hdg in headings:
-                twa = abs(_wrap180(hdg - twd))
-                sp = _polar_speed(P, tws, twa)
-                if sp < 0.3:
-                    continue
-                nlat, nlon = _advance(node["lat"], node["lon"], hdg, sp * dt_h)
-                if obstacles and obstacles.crosses(node["lat"], node["lon"], nlat, nlon):
-                    blocked_hits += 1
-                    continue
-                rng = _hav_nm(slat, slon, nlat, nlon)
-                sec = round(_bearing(slat, slon, nlat, nlon) / SECTOR)
-                if sec not in cand or rng > cand[sec]["rng"]:
-                    cand[sec] = {"lat": nlat, "lon": nlon, "t": node["t"] + dt_h * 3600,
-                                 "parent": node, "hdg": hdg, "rng": rng}
+            # CONE GATE: only fan headings within a wide cone of the bearing-to-mark (drops the
+            # truly-backward third), plus the VMG-optimal angles (always kept). If the whole cone is
+            # obstacle-blocked here, reopen the FULL fan so avoidance can still detour around land.
+            vmg = _vmg_headings(P, tws, twd)
+            coned = [h for h in headings if abs(_wrap180(h - bmark)) <= ROUTE_CONE_DEG]
+            placed, blocked = expand(node, coned + vmg, tws, twd, dt_h, cand)
+            if placed == 0 and blocked > 0 and obstacles is not None:
+                _p, blocked = expand(node, headings + vmg, tws, twd, dt_h, cand)
+            blocked_hits += blocked
         if reached or not cand:
             break
         frontier = list(cand.values())
