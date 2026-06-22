@@ -124,17 +124,19 @@ def _layline_pair(P, tws, twd, pos, mlat, mlon, length_nm):
 
 # --- one leg -----------------------------------------------------------------
 def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=None,
-              obstacles=None, capture=False):
+              obstacles=None, capture=False, hstep=HSTEP, dt_cap=1.0):
     """Isochrone-optimal path from (slat,slon)@t0 to (dlat,dlon). Returns dict with path/eta.
 
     `obstacles` (an ObstacleField) makes the fan reject any heading whose step would cut across land,
     an island, or a race exclusion zone — so the route sails AROUND obstacles instead of through them.
     `capture` records each generation's frontier (the equal-time isochrone) and emits down-sampled
-    `isochrones` polylines — the exploration the single route summarizes, drawn on the Gameplan map."""
+    `isochrones` polylines — the exploration the single route summarizes, drawn on the Gameplan map.
+    `hstep` (heading-fan degrees) + `dt_cap` (per-leg step ceiling, h) come from the resolution
+    selector — Fine = smaller both (sharper, slower); Fast = larger (quicker, coarser)."""
     direct = _hav_nm(slat, slon, dlat, dlon)
-    dt_h = min(1.0, max(0.15, direct / 40.0))          # fixed per-leg step (equal-time isochrone)
+    dt_h = min(dt_cap, max(0.15, direct / 40.0))       # fixed per-leg step (equal-time isochrone)
     max_steps = 600
-    headings = list(range(0, 360, HSTEP))
+    headings = list(range(0, 360, max(1, int(hstep))))
     blocked_hits = 0
 
     def wind(lat, lon, epoch):
@@ -291,9 +293,23 @@ def _route_sanity(wf, legs, coverage, P, timed_out):
 PER_MODEL_BUDGET_S = float(os.environ.get("ROUTE_PER_MODEL_BUDGET_S", "120"))  # total budget for the path fan
 
 
-def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=90,
+# Routing resolution presets (2.5): heading-fan degrees, per-leg step ceiling (h), time budget (s).
+# Fine = sharper near shore / tight marks but slower; Fast = quicker, coarser; Auto = balanced default.
+RESOLUTIONS = {
+    "fast": {"hstep": 18, "dt_cap": 1.5, "budget": 60},
+    "auto": {"hstep": 12, "dt_cap": 1.0, "budget": 90},
+    "fine": {"hstep": 8, "dt_cap": 0.6, "budget": 200},
+}
+
+
+def _resolution(name):
+    return RESOLUTIONS.get((name or "auto").strip().lower(), RESOLUTIONS["auto"])
+
+
+def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=None,
                     obstacles=None, avoid=True, source=None, safety_depth=None,
-                    jib_crossovers=None, emit_exploration=True, per_model=False):
+                    jib_crossovers=None, emit_exploration=True, per_model=False,
+                    resolution="auto"):
     """Route the whole course from its start through every mark to the finish via `wf`.
 
     Returns one optimal route with per-leg ETAs, total time/distance/tacks and a route confidence
@@ -320,6 +336,9 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
             except Exception:
                 obstacles = None
 
+    rp = _resolution(resolution)
+    if time_budget_s is None:                          # caller didn't pin a budget → use the preset's
+        time_budget_s = rp["budget"]
     deadline = time.time() + time_budget_s
     legs = []
     t = float(start_epoch)
@@ -330,7 +349,7 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
     laylines = []
     for seq, name, dlat, dlon in marks[1:]:
         leg = route_leg(wf, P, slat, slon, t, dlat, dlon, deadline=deadline, obstacles=obstacles,
-                        capture=emit_exploration)
+                        capture=emit_exploration, hstep=rp["hstep"], dt_cap=rp["dt_cap"])
         # sample wind + confidence at the leg's midpoint and end (for the briefing)
         mid = leg["path"][len(leg["path"]) // 2] if leg["path"] else {"lat": dlat, "lon": dlon}
         det = wf.detail_at(mid["lat"], mid["lon"], (t + leg["eta"]) / 2.0)
@@ -390,6 +409,7 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
         "route_confidence": round(sum(confs) / len(confs), 2) if confs else None,
         "min_confidence": round(min(confs), 2) if confs else None,
         "wind_coverage": coverage,
+        "resolution": (resolution or "auto").strip().lower(),
         "degraded": degraded,
         "warnings": warnings,
         "legs": legs,

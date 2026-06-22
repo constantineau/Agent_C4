@@ -123,6 +123,8 @@ button.mini:hover { border-color: var(--accent); }
   color: #5a6b7b; margin-bottom: 2px; }
 .routemap .mv-chk { display: block; cursor: pointer; }
 .routemap .mv-chk input { margin-right: 5px; }
+.routemap .mv-windmode { margin-top: 4px; padding-top: 4px; border-top: 1px solid rgba(0,0,0,0.10); }
+.routemap .mv-windmode select { font-size: 11px; margin-left: 3px; }
 .routemap .mv-slider { min-width: 260px; }
 .routemap .mv-slider #mvTime { font-variant-numeric: tabular-nums; }
 .routemap .mv-play { border: 1px solid #c4cdd6; background: #fff; color: #16202b; cursor: pointer;

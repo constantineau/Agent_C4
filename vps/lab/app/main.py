@@ -196,7 +196,7 @@ def _active_jibs():
 
 
 def _run_optimize(definition, course_id, start_epoch, model_names, ensemble_members, avoid=True,
-                  per_model=False):
+                  per_model=False, resolution="auto"):
     """Blocking: build the multi-model wind field, route the course, write the briefing."""
     from .wind import build_windfield
     from . import optimizer
@@ -214,7 +214,8 @@ def _run_optimize(definition, course_id, start_epoch, model_names, ensemble_memb
     result = optimizer.optimize_course(definition, course_id, start_epoch, wf, avoid=avoid,
                                        source=chart_source(),
                                        safety_depth=boats.active_safety_depth_m(),
-                                       jib_crossovers=_active_jibs(), per_model=per_model)
+                                       jib_crossovers=_active_jibs(), per_model=per_model,
+                                       resolution=resolution)
     result["briefing"] = optimizer.briefing(result, definition.get("name", ""))
     result["boat"] = boat_profile.summary(boats.active_boat()) if boats.active_boat() else None
     result["wind_grid"] = _wind_grid(wf, bbox, start_epoch, result.get("finish_epoch", t_end))
@@ -263,9 +264,10 @@ async def optimize(body: dict):
     ens = int(body.get("ensemble_members") or 0)
     avoid = body.get("avoid_land", True)
     per_model = bool(body.get("per_model"))
+    resolution = body.get("resolution") or "auto"
     try:
         return await run_in_threadpool(_run_optimize, d, course_id, start_epoch, model_names, ens,
-                                       avoid, per_model)
+                                       avoid, per_model, resolution)
     except Exception as exc:
         return JSONResponse({"detail": f"optimize failed: {exc}"}, status_code=500)
 

@@ -18,6 +18,7 @@ const MapView = (function () {
   let R = null;                 // current optimize result
   let frameIdx = 0;
   let playTimer = null;         // forecast animation (▶/⏸)
+  let windMode = "arrows";      // wind overlay style: arrows | barbs | shaded (2.4)
   const show = { wind: true, shoals: true, rocks: true, land: false, sea: false,
                  iso: false, laylines: true, models: true };
 
@@ -79,10 +80,59 @@ const MapView = (function () {
     ctx.globalAlpha = 1;
   }
 
+  // standard meteorological wind barb (the offshore convention): a shaft pointing toward the wind's
+  // SOURCE, with half-barbs (5 kn), full barbs (10 kn) and pennants (50 kn) at the upwind end. Calm = ○.
+  function drawBarb(ctx, x, y, tws, twd, conf) {
+    ctx.globalAlpha = 0.30 + 0.70 * (conf == null ? 0.6 : conf);
+    ctx.strokeStyle = twsColor(tws); ctx.fillStyle = ctx.strokeStyle; ctx.lineWidth = 1.6;
+    if (tws < 2.5) { ctx.beginPath(); ctx.arc(x, y, 3, 0, 2 * Math.PI); ctx.stroke(); ctx.globalAlpha = 1; return; }
+    const th = twd * Math.PI / 180;            // shaft points toward where the wind comes FROM
+    const ux = Math.sin(th), uy = -Math.cos(th);
+    const px = -uy, py = ux;                    // perpendicular (barbs to one side)
+    const L = 24, step = 4.5, full = 9, half = 5;
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + ux * L, y + uy * L); ctx.stroke();
+    let kt = Math.round(tws / 5) * 5, d = L;
+    while (kt >= 50) {                          // pennants (filled triangles)
+      const b1x = x + ux * d, b1y = y + uy * d, b2x = x + ux * (d - step * 1.4), b2y = y + uy * (d - step * 1.4);
+      ctx.beginPath(); ctx.moveTo(b1x, b1y); ctx.lineTo(b1x + px * full, b1y + py * full); ctx.lineTo(b2x, b2y);
+      ctx.closePath(); ctx.fill(); kt -= 50; d -= step * 1.6;
+    }
+    while (kt >= 10) {                          // full barbs
+      ctx.beginPath(); ctx.moveTo(x + ux * d, y + uy * d); ctx.lineTo(x + ux * d + px * full, y + uy * d + py * full); ctx.stroke();
+      kt -= 10; d -= step;
+    }
+    if (kt >= 5) {                              // a lone half-barb sits in from the tip (convention)
+      if (d === L) d -= step;
+      ctx.beginPath(); ctx.moveTo(x + ux * d, y + uy * d); ctx.lineTo(x + ux * d + px * half, y + uy * d + py * half); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // shaded TWS field — fill each grid cell by wind speed (Orca-style heatmap; the "contour" option).
+  function drawShaded(ctx, project, size) {
+    const frame = (R.wind_grid.frames || [])[frameIdx] || [];
+    const b = R.wind_grid.bbox;                 // [n, s, w, e]
+    if (!frame.length || !b) return;
+    const aspect = (b[3] - b[2]) / Math.max(1e-6, (b[0] - b[1]));
+    const cols = Math.max(2, Math.round(Math.sqrt(frame.length * aspect)));
+    const dlon = (b[3] - b[2]) / cols, dlat = dlon;   // ~square cells
+    for (const p of frame) {
+      const a = project(p.lat + dlat / 2, p.lon - dlon / 2);
+      const c = project(p.lat - dlat / 2, p.lon + dlon / 2);
+      if (Math.max(a.x, c.x) < -20 || Math.max(a.y, c.y) < -20 || Math.min(a.x, c.x) > size.x + 20 || Math.min(a.y, c.y) > size.y + 20) continue;
+      ctx.globalAlpha = 0.30 * (p.confidence == null ? 0.7 : 0.4 + 0.6 * p.confidence);
+      ctx.fillStyle = twsColor(p.tws);
+      ctx.fillRect(Math.min(a.x, c.x), Math.min(a.y, c.y), Math.abs(c.x - a.x) + 1, Math.abs(c.y - a.y) + 1);
+    }
+    ctx.globalAlpha = 1;
+  }
+
   function drawWind(ctx, project, zoom, size) {
     if (!show.wind || !R || !R.wind_grid) return;
+    if (windMode === "shaded") { drawShaded(ctx, project, size); return; }
     const frame = (R.wind_grid.frames || [])[frameIdx] || [];
-    const minSpace = 26;                 // px; thins density adaptively with zoom
+    const draw = windMode === "barbs" ? drawBarb : drawArrow;
+    const minSpace = windMode === "barbs" ? 32 : 26;   // px; barbs are wider → thin a bit more
     const drawn = [];
     for (const p of frame) {
       const pt = project(p.lat, p.lon);
@@ -91,7 +141,7 @@ const MapView = (function () {
       for (const d of drawn) { if (Math.abs(d.x - pt.x) < minSpace && Math.abs(d.y - pt.y) < minSpace) { ok = false; break; } }
       if (!ok) continue;
       drawn.push(pt);
-      drawArrow(ctx, pt.x, pt.y, p.tws, p.twd, p.confidence);
+      draw(ctx, pt.x, pt.y, p.tws, p.twd, p.confidence);
     }
   }
 
@@ -236,12 +286,19 @@ const MapView = (function () {
         const hasIso = R && R.isochrones && R.isochrones.length;
         const hasLay = R && R.laylines && R.laylines.length;
         const hasModels = R && R.candidate_paths && R.candidate_paths.length;
+        const hasWind = R && R.wind_grid && (R.wind_grid.frames || []).length;
+        const windSel = hasWind ? `<div class="mv-windmode">Wind <select data-windmode>
+            <option value="arrows"${windMode === "arrows" ? " selected" : ""}>arrows</option>
+            <option value="barbs"${windMode === "barbs" ? " selected" : ""}>barbs</option>
+            <option value="shaded"${windMode === "shaded" ? " selected" : ""}>shaded</option></select></div>` : "";
         d.innerHTML = `<b>Layers</b>
           ${chk("wind", "Wind")}${chk("shoals", "Shoals")}${chk("rocks", "Rocks")}${chk("land", "ENC land")}${chk("sea", "Seamarks")}` +
           (hasModels ? chk("models", "Model routes") : "") +
-          (hasIso ? chk("iso", "Isochrones") : "") + (hasLay ? chk("laylines", "Laylines") : "");
+          (hasIso ? chk("iso", "Isochrones") : "") + (hasLay ? chk("laylines", "Laylines") : "") + windSel;
         L.DomEvent.disableClickPropagation(d);
         d.querySelectorAll("input").forEach((el) => el.addEventListener("change", () => toggle(el.dataset.k, el.checked)));
+        const ws = d.querySelector("[data-windmode]");
+        if (ws) ws.addEventListener("change", () => { windMode = ws.value; windLayer.redraw(); });
         return d;
       },
     });
@@ -275,7 +332,7 @@ const MapView = (function () {
         const sw = stops.map(([v, lbl]) =>
           `<span class="mv-sw"><i style="background:${twsColor(v)}"></i>${lbl}</span>`).join("");
         d.innerHTML = `<b>Wind (kn)</b><div class="mv-legrow">${sw}</div>
-          <div class="mv-legnote">arrow opacity = model confidence (faint = models split)</div>`;
+          <div class="mv-legnote">opacity = model confidence (faint = models split)</div>`;
         L.DomEvent.disableClickPropagation(d);
         return d;
       },

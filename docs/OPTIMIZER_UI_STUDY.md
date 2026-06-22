@@ -1,10 +1,11 @@
 # Optimizer UI Study — Orca + Expedition → C4 Performance Lab Gameplan
 
 **Status:** study + prioritized recommendations (2026-06-22). **Implementation: Tier 0, Tier 1, PR-3
-(Tier 2a — isochrone frontier + laylines + leg-row↔map↔time linking + CSV) and PR-4 (Tier 2b —
-per-model candidate-paths overlay) SHIPPED 2026-06-22** — see the per-item ✅ markers + the
-implementation-phasing section. Remaining: Tier 2.4 (GRIB barbs/contours) + 2.5 (resolution control),
-Tier 3 (consolidated Control Center + map-led restyle, gated on the user's own Orca UX notes). Surface under study = the Lab **Gameplan / Optimizer**
+(Tier 2a — isochrone frontier + laylines + leg-row↔map↔time linking + CSV), PR-4 (Tier 2b —
+per-model candidate-paths overlay) and the Tier-2 polish (2.4 wind display modes arrows/barbs/shaded +
+2.5 Auto/Fast/Fine resolution control with inline degraded checklist) SHIPPED 2026-06-22** — see the
+per-item ✅ markers + the implementation-phasing section. Remaining: Tier 3 (consolidated Control
+Center + map-led restyle, gated on the user's own Orca UX notes). Surface under study = the Lab **Gameplan / Optimizer**
 tab (`vps/lab/web/mapview.js` + `app.js` + `styles.css`). RRS 41: this is PREP (frozen at the gun).
 
 Two reference apps were studied for UI/UX *patterns* (not imagery — both are proprietary): **Orca**
@@ -199,13 +200,17 @@ do differently.
   Clicking a leg row calls `MapView.focusLeg(i)`: highlights that segment (SVG renderer, on top of the
   canvas layers), fits the map to it, and snaps the forecast slider to the leg's ETA frame. Plus
   client-side **CSV export** of the leg table (`exportLegsCsv`, Expedition's email-the-crew pattern).
-- **2.4 GRIB display options** (`mapview.js` + a small control). Offer **arrows | barbs | contours**
-  and let TWS contour increment be chosen (Expedition). At minimum add **barbs** (the standard
-  offshore convention) as an alternative to arrows. Keeps confidence-fade on top.
-- **2.5 Resolution / effort control + plain-language guidance** (`app.js` + optimizer `time_budget`/
-  grid). Expose an **Auto / Fast / Fine** routing-resolution selector with a one-line explainer
-  ("Fine = slower, sharper near shore") instead of the implicit fixed step, and surface the
-  common-error checklist inline when an optimize returns degraded/sparse.
+- **2.4 GRIB display options** ✅ SHIPPED. `mapview.js` gains a **Wind: arrows | barbs | shaded**
+  selector in the Layers control: `drawBarb` (standard offshore wind barbs — half/full/pennant by
+  speed, calm = ○) and `drawShaded` (a TWS heatmap field, the "contour" option), both keeping the
+  TWS color ramp + confidence-fade. (True isoline contours not drawn; the shaded field is the
+  practical equivalent on the sample grid.)
+- **2.5 Resolution / effort control + plain-language guidance** ✅ SHIPPED. An **Auto / Fast / Fine**
+  selector in the run row (`app.js` `#optRes`) with a one-line explainer; it maps to optimizer presets
+  (`RESOLUTIONS`: heading-fan degrees + per-leg step ceiling + time budget) threaded through
+  `optimize_course(resolution=)` → `route_leg(hstep=, dt_cap=)`. When an optimize returns degraded,
+  the banner now expands with the **common-error checklist** inline (re-run when cycle posts, drop
+  ECMWF, model-horizon note, try Auto/Fast if Fine timed out).
 
 ### Tier 3 — larger (full Orca-style restyle of the surface)
 - **3.1 Consolidated map "Control Center"** — collapse the Layers box + time slider + (new) wind-mode
@@ -264,9 +269,10 @@ references prove sailors expect.
    ✅ SHIPPED.
 4. **PR-4 (Tier 2b):** **per-model candidate-paths overlay** (our moat, visualized) — opt-in
    "Per-model route fan", colour-per-model routes + legend, untrustworthy solo routes dropped.
-   ✅ SHIPPED. Remaining Tier-2 polish: **2.4** GRIB barbs/contours option, **2.5** Auto/Fast/Fine
-   resolution control.
-5. **PR-5 (Tier 3):** the consolidated Control Center + map-led layout restyle (the big Orca-style
+   ✅ SHIPPED.
+5. **PR-5 (Tier-2 polish):** wind display modes (arrows/barbs/shaded) + Auto/Fast/Fine resolution
+   control + inline degraded checklist. ✅ SHIPPED.
+6. **PR-6 (Tier 3):** the consolidated Control Center + map-led layout restyle (the big Orca-style
    look), gated on the user's own Orca UX notes.
 
 Fold in the user's own Orca UX/UI notes when they arrive (they slot naturally into PR-2 and PR-5).

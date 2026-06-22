@@ -471,7 +471,7 @@ function renderPlaceholder(sec) {
 
 /* ---------- Gameplan / Optimizer (Lab-1) ---------- */
 const Opt = { races: null, models: null, raceId: null, def: null, courseId: null,
-  chosen: null, running: false, result: null };
+  chosen: null, running: false, result: null, resolution: "auto" };
 
 async function renderGameplan() {
   const view = document.getElementById("view");
@@ -517,7 +517,14 @@ async function renderGameplan() {
       <div class="opt-run">
         <label class="optchk"><input type="checkbox" id="optAvoid" checked> Avoid land/islands/zones</label>
         <label class="optchk" title="Also route each weather model separately and overlay the candidate routes — the confidence fan made visible (slower)"><input type="checkbox" id="optPerModel"> Per-model route fan <span class="muted">(slower)</span></label>
+        <label class="optchk" title="Routing resolution: Fine = finer heading fan + shorter steps (sharper near shore, slower); Fast = coarser (quicker).">Resolution
+          <select id="optRes" oninput="updateResHint()">
+            <option value="fast"${Opt.resolution === "fast" ? " selected" : ""}>Fast</option>
+            <option value="auto"${(Opt.resolution || "auto") === "auto" ? " selected" : ""}>Auto</option>
+            <option value="fine"${Opt.resolution === "fine" ? " selected" : ""}>Fine</option>
+          </select></label>
         <button id="optRun" onclick="runOptimize()" ${Opt.running ? "disabled" : ""}>${Opt.running ? "Optimizing…" : "Run optimizer →"}</button>
+        <span id="optResHint" class="muted" style="font-size:11px"></span>
       </div>
       <div class="muted" style="font-size:12px;margin-top:6px">Downloads live GRIB from NOAA NOMADS / ECMWF and routes the course on the SR33 polars. First run ~30–60 s (then cached). Pre-race cloud homework — frozen at the gun (RRS 41).</div>
     </div>
@@ -530,6 +537,7 @@ async function renderGameplan() {
     </div></div>`;
   if (Opt.showBoatModel) renderBoatModel();
   updateEnsembleControl();
+  updateResHint();
   if (Opt.result) renderOptResult(Opt.result);
   if (Pb.result) renderPbResult(Pb.result);
 }
@@ -566,6 +574,17 @@ function optEnsembleInfo() {
 /* Enable/disable + cap + explain the ensemble field reactively (Orca-style clutter-removal: a
    control that's inert until it's meaningful, with a dynamic cap + a cost/diminishing-returns hint).
    Called on render and whenever a model checkbox toggles. */
+const RES_HINTS = {
+  fast: "Fast — coarse heading fan + longer steps; quickest, less sharp near shore.",
+  auto: "Auto — balanced heading fan + step (the default).",
+  fine: "Fine — finer heading fan + shorter steps; sharper near shore + tight marks, slower.",
+};
+function updateResHint() {
+  const sel = document.getElementById("optRes"), hint = document.getElementById("optResHint");
+  if (!sel || !hint) return;
+  hint.textContent = RES_HINTS[sel.value] || "";
+}
+
 function updateEnsembleControl() {
   const inp = document.getElementById("optEns");
   const hint = document.getElementById("optEnsHint");
@@ -739,8 +758,11 @@ async function runOptimize() {
   const startVal = document.getElementById("optStart").value;
   const avoidEl = document.getElementById("optAvoid");
   const pmEl = document.getElementById("optPerModel");
+  const resEl = document.getElementById("optRes");
+  Opt.resolution = resEl ? resEl.value : "auto";
   const body = { race_id: Opt.raceId, course_id: Opt.courseId, models: Opt.chosen, ensemble_members: ens,
-    avoid_land: avoidEl ? avoidEl.checked : true, per_model: pmEl ? pmEl.checked : false };
+    avoid_land: avoidEl ? avoidEl.checked : true, per_model: pmEl ? pmEl.checked : false,
+    resolution: Opt.resolution };
   if (startVal) body.start_epoch = Date.parse(startVal + "Z") / 1000;
   Opt.running = true;
   document.getElementById("optRun").disabled = true;
@@ -962,8 +984,17 @@ function optDegradedBanner(r) {
   if (!w.length) return "";
   const cls = r.degraded ? "bad" : "warn";
   const head = r.degraded ? "⚠ Degraded forecast — read before trusting this route" : "⚠ Notes";
+  // when degraded, surface the common-error checklist inline so the cause is actionable (2.5)
+  const checklist = r.degraded ? `<div style="margin-top:6px;font-size:12px;font-weight:400">
+    <b>What usually fixes it:</b>
+    <ul style="margin:3px 0 0 16px;padding:0">
+      <li>The latest model cycle may not be fully posted yet — re-run in ~30 min, or add GFS/NAM (most reliable).</li>
+      <li>Uncheck ECMWF if a source is rate-limited (it can stall the field).</li>
+      <li>Long course past a model's horizon → HRRR only reaches 48 h on synoptic cycles; lean on GFS/NAM.</li>
+      <li>Try <b>Auto</b> or <b>Fast</b> resolution if a Fine run timed out before finishing.</li>
+    </ul></div>` : "";
   return `<div class="pill ${cls}" style="display:block;margin-bottom:8px;text-align:left">
-    <b>${head}</b><ul style="margin:4px 0 0 16px;padding:0">${w.map((x) => `<li>${esc(x)}</li>`).join("")}</ul></div>`;
+    <b>${head}</b><ul style="margin:4px 0 0 16px;padding:0">${w.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>${checklist}</div>`;
 }
 
 function optObstacleNote(r) {

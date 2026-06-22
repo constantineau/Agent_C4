@@ -765,9 +765,13 @@ field per model, routes each reusing the obstacle field, emits `candidate_paths`
 colour-per-model route fan under the chosen route (Model-routes toggle + per-model legend) — the
 multi-model-confidence moat made VISUAL (tight = models agree, spread = a real decision). Untrustworthy
 solo routes (degraded / timed-out / 0.5×–1.6× off the blended hours) are dropped, not drawn. We already
-win the two dims both references are weak on — forecast confidence + a reviewable sail model. NEXT =
-Tier 2 polish (2.4 GRIB barbs/contours · 2.5 Auto/Fast/Fine resolution control) + Tier 3 restyle
-(gated on the user's Orca UX notes).
+win the two dims both references are weak on — forecast confidence + a reviewable sail model. **Tier-2
+polish SHIPPED** — **2.4** wind display modes (a Layers selector: arrows / **barbs** standard offshore
+convention / **shaded** TWS heatmap, all keeping the color ramp + confidence-fade); **2.5** an
+**Auto / Fast / Fine** routing-resolution selector (`optimizer.RESOLUTIONS` → heading-fan deg +
+per-leg step ceiling + time budget, threaded through `optimize_course(resolution=)` / `route_leg`)
+with a one-line explainer + an inline **common-error checklist** in the degraded banner. NEXT = Tier 3
+restyle (consolidated Control Center + map-led layout, gated on the user's Orca UX notes).
 
 **Next (copilot track): the copilot's crew-facing narration increment** (it now has a signed playbook
 + boat sail model to interpret).
