@@ -87,6 +87,43 @@ def _best_angles(tws_kn):
     return (up if up is not None else 42.0), (dn if dn is not None else 150.0)
 
 
+def _next_rounding(marks, nxt, twd, beat, run, twa_to_mark):
+    """Geometry of the leg AFTER the next mark — the homework for the upcoming rounding.
+
+    Pure function (no I/O) so it's unit-testable. Returns the exit course (bearing from the
+    next mark to the one after it), the TWA the boat will sail once round, that leg's type
+    (beat/reach/run), and the maneuver implied by the angle change — or None when the next mark
+    is the finish (nothing to prep after it) or the wind is unknown (can't resolve a TWA)."""
+    if twd is None:
+        return None
+    try:
+        i = marks.index(nxt)
+    except ValueError:
+        return None
+    if i + 1 >= len(marks):
+        return None                       # next mark is the last (finish) — no leg after
+    after = marks[i + 1]
+    exit_course = _bearing(nxt["lat"], nxt["lon"], after["lat"], after["lon"])
+    exit_twa = _adiff(exit_course, twd)   # 0..180, angle off the wind on the next leg
+    exit_type = "beat" if exit_twa < beat else "run" if exit_twa > run else "reach"
+    # Maneuver implied by how much the TWA opens (bear away) or closes (head up) at the mark.
+    if twa_to_mark is None:
+        maneuver = "round"
+    elif exit_twa > twa_to_mark + 12:
+        maneuver = "bear away"
+    elif exit_twa < twa_to_mark - 12:
+        maneuver = "head up"
+    else:
+        maneuver = "hold course"
+    return {
+        "exit_mark": after["name"],
+        "exit_course_deg": round(exit_course, 1),
+        "exit_twa_deg": round(exit_twa, 1),
+        "exit_leg_type": exit_type,
+        "maneuver": maneuver,
+    }
+
+
 def _marks(route):
     return datasource.active().marks(route)
 
@@ -159,13 +196,17 @@ def get_navigator(route: str = None):
         if vmc > 0.2:
             eta_min = round(dist / vmc * 60, 1)
 
+    # The leg after the next mark — homework for the upcoming rounding (None at the finish).
+    twa_to_mark = _adiff(brg, twd) if twd is not None else None
+    next_rounding = _next_rounding(marks, nxt, twd, beat, run, twa_to_mark)
+
     return {
         "available": True, "route": route,
         "position": {"lat": round(lat, 5), "lon": round(lon, 5)},
         "next_mark": {"name": nxt["name"], "seq": nxt["seq"],
                       "distance_nm": round(dist, 2), "bearing_deg": round(brg, 1),
                       "eta_min": eta_min},
-        "leg": leg, "layline_call": layline_call,
+        "leg": leg, "layline_call": layline_call, "next_rounding": next_rounding,
         "wind": {"twd": None if twd is None else round(twd, 1),
                  "tws": None if tws is None else round(tws, 1),
                  "beat_twa": round(beat, 1), "run_twa": round(run, 1)},

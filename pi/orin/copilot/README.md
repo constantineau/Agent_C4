@@ -6,8 +6,9 @@ support** via the local LLM. Runs **on the Orin**, talks to the Pi-4 engine over
 Wi-Fi and to the LLM over localhost. RRS-41-safe: never phones the cloud, never does the math,
 never invents strategy outside the engine facts + the playbook.
 
-This first increment is the **decision-support / tool-calling layer** (crew-facing narration is
-the next increment). The point is the *structure and the guardrails*, proven on real hardware.
+Two surfaces, same guardrails: the **decision-support / tool-calling layer** (PULL — the crew asks,
+`POST /brief`) and the **crew-facing narration layer** (PUSH — the copilot speaks up on its own,
+`POST /narrate`). The point is the *structure and the guardrails*, proven on real hardware.
 
 ```
   Pi 4 (Tier 1)                    Orin Nano (Tier 2)
@@ -40,6 +41,26 @@ The bounded structure enforces the locked design rules **structurally, not just 
    *selects/interprets* its pre-authored variants. Absent → it says so and restricts itself to
    live engine facts.
 
+## Crew-facing narration — the PUSH surface (`narrate.py`, `POST /narrate`)
+
+The brief is PULL (the crew asks). Narration is **PUSH**: a deterministic callout engine watches
+the gathered engine facts + the frozen playbook and surfaces the few things worth **saying right
+now** — a **timed mark-rounding prep** (escalating ~15 / 10 / 5-min heads-up, with the leg-after
+homework: the maneuver, the TWA once round, and the sail to stage for the next leg), a **playbook
+branch trigger** firing, an upcoming **sail change-down**, a **helm rotation**, **stale
+instruments**. The LLM only *phrases* the top one or two into a calm spoken radio call; the
+deterministic callout text is the always-on fallback.
+
+Same guardrails as a brief: every callout is **grounded** in a real engine fact and/or a playbook
+variant (ungrounded ones are dropped), the engine does the math, and nothing originates strategy —
+it *selects / interprets* the pre-authored homework + the engine's own numbers (the in-race-legal
+posture). State is a tiny per-route **speak-once** dedup (raise-slow / clear-fast, like the cloud
+alerting loop): `POST /narrate` returns `active` (every confirmed callout — the banner set,
+priority-sorted) and `new` (the callouts that just crossed their confirmation threshold this poll —
+what's worth voicing), so the iPad can poll it every ~15 s and only voice what's genuinely new.
+`POST /narrate/reset` clears the dedup on a race / course change. The rounding callout reads
+`navigator.next_rounding` — the geometry of the leg *after* the next mark, computed by the engine.
+
 ## Files
 
 | File | What |
@@ -50,8 +71,9 @@ The bounded structure enforces the locked design rules **structurally, not just 
 | `playbook.py` | loads a frozen playbook bundle (Lab-2); thin until Lab-2 lands |
 | `brief.py` | the `DecisionBrief` shape, the grounding `validate()`, grounded `structural_caveats()`, and the deterministic builder |
 | `llm.py` | minimal OpenAI `/v1` chat client with tool-calling (stdlib) |
-| `copilot.py` | orchestration: gather facts → bounded tool loop → validate → fallback |
-| `app.py` | FastAPI service (`/health`, `/tools`, `POST /brief`, `/snapshot`) |
+| `copilot.py` | orchestration: gather facts → bounded tool loop → validate → fallback; `make_narration()` |
+| `narrate.py` | the **PUSH** callout engine: grounded callouts (rounding/playbook/sail/fatigue/data) + speak-once dedup + LLM phrasing with deterministic fallback |
+| `app.py` | FastAPI service (`/health`, `/tools`, `POST /brief`, `POST /narrate`, `POST /narrate/reset`, `/snapshot`) |
 | `bench_copilot.py` | exit test for the layer (deterministic + `--llm`); pure stdlib |
 | `requirements.txt` | only `fastapi`+`uvicorn` (the logic is stdlib) |
 
@@ -65,6 +87,8 @@ ENGINE_URL=http://<pi-ip>:8200 python3 -m uvicorn copilot.app:app --host 0.0.0.0
 curl -s localhost:8300/health
 curl -s -X POST localhost:8300/brief -H 'Content-Type: application/json' \
      -d '{"question":"What should the crew focus on right now?"}'
+# proactive callouts + a spoken line (poll this every ~15 s on the iPad):
+curl -s -X POST localhost:8300/narrate -H 'Content-Type: application/json' -d '{}'
 ```
 
 Env: `ENGINE_URL` (Pi engine), `LLM_BASE_URL` (default `http://127.0.0.1:11434/v1`), `LLM_MODEL`,
@@ -81,11 +105,19 @@ python3 -m copilot.bench_copilot --llm        # full bounded tool-loop against t
 ```
 
 The exit test asserts: a brief is always produced; every factor/rec is grounded in a tool the run
-used; the disclaimer is present; the validator drops a poisoned ungrounded item. **Bench-verified
-on the real Orin** (qwen2.5:7b @ :11434 over a Tailscale SSH forward from the dev VM, with the Pi
-engine on :8200): deterministic path green; the LLM path runs the tool loop (the model calls
-`get_forecast` on demand), returns a grounded brief in ~45 s warm; and the graceful fallback fires
-when the LLM is cold/slow (first-token model load is ~2 min) or returns ungrounded JSON.
+used; the disclaimer is present; the validator drops a poisoned ungrounded item. It also runs a
+**pure narration-logic test** (no engine/LLM needed) on a synthetic snapshot: the rounding /
+layline / shift / fatigue callouts trip and are all grounded; **raise-slow** (a persistence-gated
+callout isn't voiced until its second poll); **clear-fast / speak-once** (a voiced callout isn't
+re-voiced, and `active` empties the moment a callout's condition goes away); priority sorting
+(`rotate_now` first); and the deterministic spoken line. Then it audits narration against the live
+engine (grounding + honest mode). **Bench-verified on the real Orin** (qwen2.5:7b @ :11434 over a
+Tailscale SSH forward from the dev VM, with the Pi engine on :8200): deterministic path green; the
+LLM path runs the tool loop (the model calls `get_forecast` on demand), returns a grounded brief in
+~45 s warm; and the graceful fallback fires when the LLM is cold/slow (first-token model load is
+~2 min) or returns ungrounded JSON. The narration pure-logic test is green (11/11); against a live
+engine with a mark 24 min out + not on a layline it correctly says *nothing* (honest `mode:none`),
+and it produces the staged rounding call once the mark is inside the 15-min window.
 
 ### Known v1 limits
 
@@ -93,7 +125,9 @@ when the LLM is cold/slow (first-token model load is ~2 min) or returns unground
   model load. A brief is ~45 s warm. `LLM_TIMEOUT` defaults to 120 s → a cold first call falls back
   to deterministic; raise it, or pre-warm the model (a trivial `/v1` ping) on service start.
 - **Small-model interpretation wobble:** qwen-7B sometimes mislabels which quantity is which in the
-  prose (e.g. calls a TWS number "speed"). Numbers are always *grounded* in real fetched facts;
-  tightening the narration is the next (narration) increment.
-- **Playbook is a stub** until Lab-2 emits a bundle; the schema in `playbook.py` is the forward
-  declaration the copilot is already written against.
+  prose (e.g. calls a TWS number "speed"). Numbers are always *grounded* in real fetched facts, and
+  narration phrases pre-computed grounded callout text (so a wobble can't invent a number), but the
+  prose can still be slightly off — tune the narration system prompt against real-race transcripts.
+- **Narration is stateful per process.** The speak-once dedup lives in `narrate._STATE` (one boat,
+  one process — same as the cloud alerting loop); restart the service or `POST /narrate/reset` on a
+  race / course change so callouts re-voice from scratch.

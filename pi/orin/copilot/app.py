@@ -4,6 +4,8 @@ Endpoints:
   GET  /health    — reachability of the engine + LLM, playbook + model status
   GET  /tools     — the bounded tool surface the LLM is allowed (introspection)
   POST /brief      — produce a DecisionBrief for the current situation (+ optional question)
+  POST /narrate    — proactive crew callouts + a spoken line for what's newly worth saying (PUSH)
+  POST /narrate/reset — clear the per-route speak-once dedup (a race / course change)
   GET  /snapshot  — raw gathered engine facts (debug / "show me what you saw")
 
 There is intentionally no endpoint that takes an action — the copilot is read-only and advisory.
@@ -39,6 +41,12 @@ class DetailRequest(BaseModel):
     tiles: list[dict] = []
 
 
+class NarrateRequest(BaseModel):
+    route: str | None = None
+    hoisted: str | None = None
+    use_llm: bool | None = None
+
+
 @app.get("/health")
 def health():
     engine = EngineClient()
@@ -71,6 +79,20 @@ def list_tools():
 def brief(req: BriefRequest):
     return copilot.make_brief(question=req.question, route=req.route,
                               hoisted=req.hoisted, use_llm=req.use_llm)
+
+
+@app.post("/narrate")
+def narrate(req: NarrateRequest):
+    """Proactive crew callouts (PUSH) + a spoken line for what's newly worth saying. Stateful per
+    route (speak-once dedup) so the iPad can poll it; `active` is the full set for the banner,
+    `spoken` is the LLM-phrased top of the NEW callouts (deterministic fallback)."""
+    return copilot.make_narration(route=req.route, hoisted=req.hoisted, use_llm=req.use_llm)
+
+
+@app.post("/narrate/reset")
+def narrate_reset(req: NarrateRequest):
+    """Clear the per-route speak-once dedup state (a race / course change)."""
+    return copilot.reset_narration(route=req.route)
 
 
 @app.post("/dashboard")

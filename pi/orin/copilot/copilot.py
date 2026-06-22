@@ -16,7 +16,7 @@ import json
 import re
 
 from . import brief as brief_mod
-from . import config, playbook as playbook_mod, tools
+from . import config, narrate as narrate_mod, playbook as playbook_mod, tools
 from .engine_client import EngineClient
 from .llm import LLMClient, LLMUnavailable
 
@@ -202,3 +202,41 @@ def make_brief(question: str = "", route=None, hoisted=None, use_llm: bool | Non
     validated["engine_only"] = True
     validated["_meta"] = meta
     return validated
+
+
+def make_narration(route=None, hoisted=None, use_llm: bool | None = None) -> dict:
+    """Proactive crew callouts for the current situation + a spoken line for what's newly worth
+    saying. This is the PUSH counterpart to make_brief's PULL: a deterministic engine watches the
+    facts + the frozen playbook and surfaces the few things worth SAYING right now (a rounding
+    coming up, a playbook branch firing, a sail change-down, a helm rotation, stale instruments).
+
+    Stateful per route (`narrate.step` holds raise-slow/clear-fast dedup): repeated polls only
+    'voice' callouts that just crossed their confirmation threshold (speak-once), exactly like the
+    cloud alerting loop — so the iPad can poll this every ~15 s. `active` is the full confirmed set
+    for the banner; `spoken` is the LLM-phrased top of the NEW callouts, with the deterministic
+    callout text as the always-available fallback."""
+    route = route or config.DEFAULT_ROUTE
+    engine = EngineClient()
+    pb = playbook_mod.load()
+    snapshot = gather(engine, route, hoisted)
+
+    # `engine` is threaded in for the targeted exit-leg sail lookup the rounding callout makes.
+    stepped = narrate_mod.step(route, snapshot, pb, engine)
+
+    want_llm = config.USE_LLM if use_llm is None else use_llm
+    spoken, mode = narrate_mod.narrate(stepped["new"], LLMClient() if want_llm else None)
+
+    return {
+        "active": stepped["active"],
+        "new": stepped["new"],
+        "spoken": spoken,
+        "narration_mode": mode,
+        "_meta": {"route": route, "engine": engine.base_url, "playbook_loaded": pb.loaded,
+                  "model": config.LLM_MODEL if want_llm else None, "llm_used": mode == "llm"},
+    }
+
+
+def reset_narration(route=None) -> dict:
+    """Clear the per-route speak-once dedup state (a race / course change → re-voice from scratch)."""
+    narrate_mod.reset(route)
+    return {"reset": route or "all"}
