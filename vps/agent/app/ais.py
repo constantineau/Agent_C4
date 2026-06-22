@@ -6,8 +6,13 @@ as its own vessel context. The Pi uplink forwards the RAW target observation onl
 with the collect-everything paradigm (the boat is dumb; the cloud reasons).
 
 This module computes range, bearing, and the closest point of approach (CPA / TCPA) here,
-against the boat's OWN latest position+motion from telemetry_raw, so the geometry always
-reflects current own-ship state rather than whatever was true when the target was heard.
+against the boat's OWN latest position+motion, so the geometry always reflects current
+own-ship state rather than whatever was true when the target was heard.
+
+Both the raw targets and own-ship state are read through `datasource.active()`, so the SAME
+geometry runs in the CLOUD (`CloudSource`: the `ais_targets` table + `telemetry_raw`) and
+ONBOARD the Pi (`OnboardSource`: other-vessel Signal K contexts + the live cache) — collision
+/ fleet awareness is always legal in-race (own AIS receiver, own computer).
 
 CPA/TCPA use a local flat-plane (equirectangular) relative-motion model in nautical miles —
 fine at the ranges that matter (a few nm) and matches navigator.py's projection.
@@ -15,7 +20,7 @@ fine at the ranges that matter (a few nm) and matches navigator.py's projection.
 import math
 import os
 
-from .db import pool
+from . import datasource
 
 BOAT_ID = os.environ.get("BOAT_ID", "sr33")
 AIS_WINDOW_MIN = 5          # a target unheard this long is dropped
@@ -25,12 +30,8 @@ _EPS_KN = 0.05              # below this relative speed there's effectively no C
 
 def _latest(path):
     """Freshest numeric value (any source) for an own-ship path, SI units."""
-    with pool.connection() as conn:
-        r = conn.execute(
-            "SELECT value FROM telemetry_raw WHERE boat_id=%s AND path=%s "
-            "AND value IS NOT NULL ORDER BY time DESC LIMIT 1", (BOAT_ID, path),
-        ).fetchone()
-    return float(r["value"]) if r else None
+    v = datasource.active().latest_value(path)
+    return float(v) if v is not None else None
 
 
 def _own_ship():
@@ -86,14 +87,10 @@ def _cpa(own, tgt):
 
 
 def _latest_targets(max_age_min):
-    """Latest raw observation per MMSI within the window."""
-    with pool.connection() as conn:
-        return conn.execute(
-            "SELECT DISTINCT ON (mmsi) mmsi, name, lat, lon, sog, cog, time "
-            "FROM ais_targets WHERE boat_id=%s AND time > now()-%s::interval "
-            "AND lat IS NOT NULL AND lon IS NOT NULL "
-            "ORDER BY mmsi, time DESC", (BOAT_ID, f"{int(max_age_min)} minutes"),
-        ).fetchall()
+    """Latest raw observation per MMSI within the window, via the active data source.
+
+    Each row is a dict with mmsi/name/lat/lon/sog(kn)/cog(deg true)/time(epoch)."""
+    return datasource.active().ais_targets(max_age_min)
 
 
 def get_ais_targets(max_range_nm: float = 12):

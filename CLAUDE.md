@@ -193,6 +193,26 @@ RRS 41 "outside help"). **Bench:** `python3 vps/db/seed/ais_inject.py` injects a
 own ship + three moving targets (one deliberate closing near-miss) so CPA/TCPA are deterministic
 without the teleporting Signal K sample boat; doubles as the closing-target scenario for 6.1 alerts.
 
+**Onboard AIS + the AIS / Fleet tile.** `ais.py` is now **source-agnostic** — it reads both own-ship
+state and the raw targets through `datasource.active()` (the same Phase-9.0 seam as the rest of the
+engine), so the identical range/bearing/CPA/TCPA geometry runs in the **cloud** (`CloudSource`:
+`ais_targets` + `telemetry_raw`) and **onboard** (`OnboardSource`: other-vessel Signal K contexts).
+This also dropped `ais.py`'s direct `db.pool` import, so it ships in the no-psycopg onboard image.
+Onboard, `OnboardSource._ingest_live` now keys off the Signal K `context`: own-ship deltas go to the
+live cache as before (a latent own-ship/other-vessel conflation is fixed in passing), and other-vessel
+contexts accumulate per-MMSI (lat/lon + sog→kn + cog→deg, mirroring the uplink) → `ais_targets()`. The
+onboard engine exposes **`GET /ais`** (collision + fleet awareness — always legal in-race: own AIS
+receiver, own computer). The crew dashboard's **AIS / Fleet** tile (`pi/console/dashboard`) reads it:
+ok = clear / no closing traffic, watch = a target closing inside ~1.5 nm / 30 min, act = inside the
+~0.5 nm / 12 min guard (env-tunable in `dashboard.js`); the face shows the nearest closing contact +
+CPA/TCPA and the detail lists the threat-sorted targets. **v1 scope is AIS proximity/collision** (the
+always-legal safety layer); handicap-aware **fleet** tactics (roster match → corrected-time delta,
+the perflab item-6 vision) is the next increment and needs the RaceDefinition `fleet` block loaded
+onboard. Verified: onboard geometry unit test (`/tmp/test_ais_onboard.py`: head-on CPA≈0, opening
+target flagged, range filter, no own-ship pollution); cloud regression via `ais_inject.py` (CLOSING
+TUG CPA 0.54 nm / 16.2 min sorted first — unchanged baseline); engine `/ais` serves; Playwright UI
+(9-tile 3×3 grid, AIS tile clear-live / watch-demo + detail rows, 0 console errors).
+
 ## Alerting (Phase 6.1)
 
 `vps/agent/app/alerts.py` raises conservative, **debounced** alerts on a background loop. Each
@@ -823,9 +843,10 @@ redundant encoding + a commentary panel + tap-to-detail LLM deep-dives) is desig
 phases 1–4 shipped 2026-06-19/20 — static prototype → live engine wiring + deterministic status →
 LLM commentary/status-refine (`copilot dashboard_brief.py`, `POST /dashboard`) → streamed
 tap-to-detail (`POST /detail`), plus wind-trend charts, forecast-vs-actual verification, demo
-scenarios, day/night, feedback widget. 8 higher-order tiles (`vmg, wind, tactics, forecast, sail,
-eta, charge, data`); the design's later tiles (AIS/FLEET, PLAYBOOK-ADHERENCE) are the remaining
-backlog. Runtime bring-up files (the originally-MLC plan, port **9000**) — note
+scenarios, day/night, feedback widget. **9 higher-order tiles** (`vmg, wind, tactics, forecast,
+sail, eta, ais, charge, data`) on a 3×3 grid; the **AIS / Fleet** tile is built (see "AIS / Fleet
+dashboard tile" below) — the design's remaining later tile is **PLAYBOOK-ADHERENCE**. Runtime
+bring-up files (the originally-MLC plan, port **9000**) — note
 they describe MLC, the unit runs Ollama: `pi/orin/`:
 - **`SETUP.md`** — the bring-up runbook: flash JetPack 6.2 (L4T R36.4.x) + the QSPI firmware →
   Super mode (`sudo nvpmodel -m 2` + `jetson_clocks`) → NVIDIA-default docker runtime →

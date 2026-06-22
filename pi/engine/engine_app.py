@@ -23,7 +23,7 @@ os.environ.setdefault("DATA_SOURCE", "onboard")  # this service is always the on
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app import navigator, tactics, routing, weather, sails, fatigue, onboard_conditions, datasource
+from app import navigator, tactics, routing, weather, sails, fatigue, onboard_conditions, datasource, ais
 
 app = FastAPI(title="Agent_C4 Onboard Engine", version="0.1.0")
 # The iPad reaches the Pi directly over boat-local Wi-Fi in race mode; allow cross-origin so a
@@ -153,3 +153,13 @@ def forecast_ep(lat: float | None = None, lon: float | None = None, hours: int =
 def route_ep(route: str | None = None, target: str = "next"):
     """Isochrone optimal route to the next mark (or 'finish') through the forecast wind."""
     return routing.get_route(route, target)
+
+
+@app.get("/ais")
+def ais_ep(max_range_nm: float = 12):
+    """AIS traffic with range/bearing + live CPA/TCPA vs own ship — collision + fleet awareness.
+
+    Always legal in-race: the targets come from the boat's OWN AIS receiver (other-vessel Signal K
+    contexts) and the geometry is computed by the boat's OWN computer. Threat-sorted (closing,
+    smallest CPA first)."""
+    return ais.get_ais_targets(max_range_nm)

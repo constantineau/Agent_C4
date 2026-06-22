@@ -19,11 +19,14 @@
   };
   const SEV = { ok: 0, watch: 1, act: 2, na: 2 };
 
-  const TILES = ["vmg", "wind", "tactics", "forecast", "sail", "eta", "charge", "data"];
+  const TILES = ["vmg", "wind", "tactics", "forecast", "sail", "eta", "ais", "charge", "data"];
   const NAME = {
     vmg: "VMG", wind: "TWS Trend", tactics: "Tactics", forecast: "Forecast",
-    sail: "Sail", eta: "Time to Mark", charge: "Crew Energy", data: "Data",
+    sail: "Sail", eta: "Time to Mark", ais: "AIS / Fleet", charge: "Crew Energy", data: "Data",
   };
+  /* AIS tile thresholds: nm to the closest point of approach + minutes to it (tunable). */
+  const AIS_GUARD_NM = 0.5, AIS_WATCH_NM = 1.5, AIS_TCPA_ACT = 12, AIS_TCPA_WATCH = 30;
+  const aisName = (t) => { const n = t.name || ("MMSI " + t.mmsi); return n.length > 12 ? n.slice(0, 11) + "…" : n; };
 
   const D2R = Math.PI / 180, R2D = 180 / Math.PI;
   const WIND_WIN_S = 12 * 3600;   // keep the whole race (~12 h) — feeds both the lookback rows and the race chart
@@ -65,6 +68,7 @@
                    why: "Forecast wind speed + direction (arrows show direction; north wind points down). Building to ~15 kts and veering right. \"Forecast vs. actual\" compares the earlier forecast for −60/−120 min ago against what actually happened — within ~1 kt, verifying well.", consider: "Plan the gear for the build.", clears: "—", based: ["fetch_forecast + engine archive"], conf: "high" },
         sail:    { status: "ok", value: "J1", sub: "in range", why: "J1 is right for 12 kts upwind.", consider: "No change.", clears: "TWS > 16 kts", based: ["get_sail: optimal J1"], conf: "high" },
         eta:     { status: "ok", value: "16 min", sub: "Cove Island", why: "~16 min to Cove Island at the current made-good.", consider: "On schedule for the mark.", clears: "—", based: ["get_navigator: ETA 16 min"], conf: "high" },
+        ais:     { status: "ok", value: "3", sub: "3 contacts · closest CPA 2.1 nm", rows: [{ hdr: true, cols: ["range", "CPA / TCPA"] }, { label: "Defiance", emph: true, cols: ["2.8 nm", "2.1 nm / 24m"] }, { label: "Lake Guardian", cols: ["4.1 nm", "3.6 nm · opening"] }, { label: "MMSI 3669…", cols: ["6.0 nm", "5.5 nm · opening"] }], why: "3 AIS contacts within 12 nm; nearest closing Defiance — CPA 2.1 nm in 24 min, comfortably clear.", consider: "Traffic is clear — keep monitoring.", clears: "—", based: ["get_ais: 3 contacts, min CPA 2.1 nm"], conf: "high" },
         charge:  { status: "ok", value: "72", sub: "fresh", why: "Crew energy ~72% (inverse of the fatigue index; lower = more depleted).", consider: "Driver fresh — no rotation needed.", clears: "—", based: ["get_fatigue: index 28 → energy 72%"], conf: "high" },
         data:    { status: "ok", value: "5", sub: "sources live", why: "All five sensor groups fresh.", consider: "Instruments healthy.", clears: "—", based: ["get_sources: 5 live"], conf: "high" },
       },
@@ -87,6 +91,7 @@
                    why: "Forecast wind speed + direction (arrows show direction; north wind points down). Building to ~19 kts and veering right. \"Forecast vs. actual\" shows it has under-called the wind by ~2 kts and the right shift — trust the trend over the model.", consider: "Forecast running light — plan for more than it says.", clears: "forecast comes back in line", based: ["fetch_forecast + engine archive"], conf: "med" },
         sail:    { status: "act",   value: "J1 → A3", sub: "peel before bear-away", why: "The leg after the gate bears away to ~135° TWA — an A3 leg. Peel before the rounding.", consider: "Stage the A3 and peel in ~4 min.", clears: "A3 hoisted", based: ["get_sail: A3 for TWA 135°"], conf: "high" },
         eta:     { status: "watch", value: "4 min", sub: "Cove Island", why: "~4 min to Cove Island at the current made-good.", consider: "Mark in ~4 min — start the rounding prep.", clears: "past the rounding", based: ["get_navigator: ETA 4 min"], conf: "high" },
+        ais:     { status: "watch", value: "Algoma", sub: "CPA 0.8 nm in 11 min", rows: [{ hdr: true, cols: ["range", "CPA / TCPA"] }, { label: "Algoma", emph: true, cols: ["2.2 nm", "0.8 nm / 11m"] }, { label: "Defiance", cols: ["3.5 nm", "3.1 nm · opening"] }, { label: "MMSI 3661…", cols: ["7.4 nm", "7.0 nm · opening"] }], why: "3 AIS contacts within 12 nm; the closing one — Algoma, a laker — has a CPA of 0.8 nm in 11 min, crossing near the gate.", consider: "A target is closing — watch the CPA and plan to keep clear at the rounding.", clears: "the CPA opens back up", based: ["get_ais: 3 contacts, min CPA 0.8 nm"], conf: "high" },
         charge:  { status: "act",   value: "28", sub: "rotate soon", why: "Crew energy ~28% (rotate soon). Heading instability and steering reversals up, speed deficit creeping.", consider: "Tank getting low — plan a helm rotation.", clears: "energy back above 65%", based: ["get_fatigue: index 72 → energy 28%"], conf: "med", components: { heading: 0.7, reversals: 0.8, heel: 0.4, "spd-def": 0.5 } },
         data:    { status: "watch", value: "4", sub: "1 stale", why: "Masthead wind stale ~50 s ago; running on the Orca backup.", consider: "Running on backup wind — watch for it to return.", clears: "all sources fresh", based: ["get_sources: 4 live, 1 stale"], conf: "med" },
       },
@@ -371,6 +376,49 @@
         why: "~" + r0(e) + " min to " + m.name + " at the current made-good.",
         consider: e < 5 ? "Mark in ~" + r0(e) + " min — start the rounding prep." : "On schedule for the mark.",
         clears: st !== "ok" ? "past the rounding" : "—", based: ["get_navigator: ETA " + r0(e) + " min to " + m.name], conf: "engine" };
+    },
+    ais(p) {
+      const a = p.ais;
+      if (!a) return NA("no AIS feed");
+      const tgts = a.targets || [];
+      if (!tgts.length) {
+        return { status: "ok", value: "Clear", sub: "no traffic",
+          why: "No AIS contacts within " + r0(a.max_range_nm) + " nm of own ship.",
+          consider: "No vessels to manage — keep monitoring.", clears: "a target comes within range",
+          based: ["get_ais: 0 contacts"], conf: "engine" };
+      }
+      // no own-ship fix → we can list targets but not range/CPA; honest NA on the geometry.
+      if (a.own_fix === false) {
+        const rows = [{ hdr: true, cols: ["vessel", "SOG"] }].concat(
+          tgts.slice(0, 6).map((t, i) => ({ label: aisName(t), emph: i === 0,
+            cols: [t.sog != null ? r1(t.sog) + " kn" : "—"] })));
+        return { status: "watch", value: String(tgts.length), sub: "no own fix", rows: rows,
+          why: tgts.length + " AIS contact" + (tgts.length === 1 ? "" : "s") + " heard, but no own-ship position fix — range/CPA/TCPA unavailable.",
+          consider: "AIS up but no GPS fix — geometry is blind; verify own position.",
+          clears: "own-ship fix returns", based: ["get_ais: " + tgts.length + " contacts, no own fix"], conf: "engine" };
+      }
+      const rows = [{ hdr: true, cols: ["range", "CPA / TCPA"] }].concat(
+        tgts.slice(0, 6).map((t, i) => ({ label: aisName(t), emph: i === 0,
+          cols: [t.range_nm != null ? r1(t.range_nm) + " nm" : "—",
+                 t.cpa_nm != null ? (r1(t.cpa_nm) + " nm" + (t.closing && t.tcpa_min != null ? " / " + r0(t.tcpa_min) + "m" : t.closing ? "" : " · opening")) : "—"] })));
+      // threat = the nearest CLOSING target (the list is already threat-sorted by the engine).
+      const threat = tgts.find((t) => t.closing && t.cpa_nm != null);
+      let st = "ok", value = String(tgts.length), sub = "contact" + (tgts.length === 1 ? "" : "s") + " · all clear";
+      if (threat) {
+        const cpa = threat.cpa_nm, tcpa = threat.tcpa_min;
+        if (cpa <= AIS_GUARD_NM && tcpa != null && tcpa <= AIS_TCPA_ACT) st = "act";
+        else if (cpa <= AIS_WATCH_NM && tcpa != null && tcpa <= AIS_TCPA_WATCH) st = "watch";
+        if (st !== "ok") { value = aisName(threat); sub = "CPA " + r1(cpa) + " nm" + (tcpa != null ? " in " + r0(tcpa) + " min" : ""); }
+        else { sub = tgts.length + " contact" + (tgts.length === 1 ? "" : "s") + " · closest CPA " + r1(cpa) + " nm"; }
+      }
+      return { status: st, value: value, sub: sub, rows: rows,
+        why: tgts.length + " AIS contact" + (tgts.length === 1 ? "" : "s") + " within " + r0(a.max_range_nm) + " nm" +
+          (threat ? "; nearest closing " + aisName(threat) + " — CPA " + r1(threat.cpa_nm) + " nm" + (threat.tcpa_min != null ? " in " + r0(threat.tcpa_min) + " min." : ".")
+                  : ", none closing inside the guard."),
+        consider: st === "act" ? "Close-quarters developing — resolve the crossing now, keep clear." :
+          st === "watch" ? "A target is closing — watch the CPA and plan to keep clear." : "Traffic is clear — keep monitoring.",
+        clears: st === "ok" ? "—" : "the CPA opens back up",
+        based: ["get_ais: " + tgts.length + " contacts" + (threat ? ", min CPA " + r1(threat.cpa_nm) + " nm" : ", none closing")], conf: "engine" };
     },
     charge(p) {
       const f = p.fatigue;
@@ -662,9 +710,9 @@
     if (App.polling) return;
     App.polling = true;
     try {
-      const eps = ["/conditions", "/sail", "/navigator", "/tactics", "/fatigue", "/forecast?hours=6", "/sources"];
-      const keys = ["conditions", "sail", "navigator", "tactics", "fatigue", "forecast", "sources"];
-      const ms   = [5000, 5000, 5000, 5000, 5000, 9000, 5000];
+      const eps = ["/conditions", "/sail", "/navigator", "/tactics", "/fatigue", "/forecast?hours=6", "/sources", "/ais"];
+      const keys = ["conditions", "sail", "navigator", "tactics", "fatigue", "forecast", "sources", "ais"];
+      const ms   = [5000, 5000, 5000, 5000, 5000, 9000, 5000, 5000];
       const res = await Promise.all(eps.map((e, i) => fetchJSON(e, ms[i])));
       const p = {}; keys.forEach((k, i) => (p[k] = res[i]));
       pushWind(p.conditions);

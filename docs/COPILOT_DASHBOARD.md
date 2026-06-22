@@ -5,10 +5,13 @@ prototype → live engine wiring + deterministic status → LLM commentary/statu
 tap-to-detail), plus polish (wind-trend charts, forecast-vs-actual verification, demo scenarios,
 day/night, feedback widget). Lives in `pi/console/dashboard/` (served at `:8091/dashboard/`); the
 LLM layer is `pi/orin/copilot/dashboard_brief.py` (`POST /dashboard`) + the streamed `POST /detail`.
-**Note: the literal 12-tile grid below was deliberately simplified at build time to 8 higher-order
-tiles** (`vmg, wind, tactics, forecast, sail, eta, charge, data` — commit `99c3d9d`, "crew
-direction"); the design's tile names and "later tiles" (AIS/FLEET, PLAYBOOK-ADHERENCE) are the
-remaining backlog. Companion to `docs/ONBOARD_ENGINE_SCOPING.md` (the three-tier architecture) and
+**Note: the literal 12-tile grid below was deliberately simplified at build time to higher-order
+tiles** (commit `99c3d9d`, "crew direction"). The grid is now **9 tiles on a 3×3 layout** —
+`vmg, wind, tactics, forecast, sail, eta, ais, charge, data` — with the **AIS / Fleet** tile added
+(onboard `GET /ais` → range/bearing/CPA/TCPA, ok/watch/act on the closing-CPA guard; v1 is AIS
+proximity/collision, handicap-aware fleet tactics is the next increment). The one remaining "later
+tile" is **PLAYBOOK-ADHERENCE** (unblocked by Lab-2 + the copilot playbook loader). Companion to
+`docs/ONBOARD_ENGINE_SCOPING.md` (the three-tier architecture) and
 the shipped copilot decision-support layer (`pi/orin/copilot/`).
 
 The decision-support layer already produces a grounded `DecisionBrief` (situation + factors +
@@ -79,7 +82,8 @@ cell.
 
 **Tiles (lock the set; greyed "coming soon" until their data exists):** WIND, SPEED (+ polar %),
 SAIL, NAV, LAYLINE, TACTICS, FATIGUE, FORECAST, ROUTE, DATA-HEALTH, HEEL/TRIM, DEPTH. Later:
-AIS/FLEET, PLAYBOOK-ADHERENCE (Lab-2).
+AIS/FLEET, PLAYBOOK-ADHERENCE (Lab-2). *(As built: the 9-tile higher-order set incl. **AIS/FLEET**;
+PLAYBOOK-ADHERENCE is the remaining later tile — see the status note at the top.)*
 
 ---
 
@@ -261,8 +265,11 @@ originates strategy. Legal in-race. See `docs/RRS41_COMPLIANCE.md`.
 - **Small adds:** the `tiles` map in the brief; `POST /detail` + `llm.py` streaming; the front-end
   ranking/hysteresis + theme toggle (pure JS in `pi/console`); the onboard **polar-% tool** (the
   SPEED tile's "94%").
-- **Later:** voice (the narration increment); AIS/FLEET + PLAYBOOK-ADHERENCE tiles (need 6.0-AIS
-  onboard + Lab-2); proactive auto-coach timer (toward proactive callouts).
+- **Done since:** voice (the narration increment); the **AIS/FLEET tile** (onboard `GET /ais` via a
+  source-agnostic `ais.py` + other-vessel Signal K capture in `OnboardSource`).
+- **Later:** handicap-aware **fleet** tactics on the AIS tile (roster → corrected-time delta, needs
+  the RaceDefinition `fleet` block onboard); **PLAYBOOK-ADHERENCE** tile (unblocked by Lab-2);
+  proactive auto-coach timer (toward proactive callouts).
 - **Needs real sailing data:** TACTICS, FATIGUE, ROUTE read empty on the Baltic sample bench; they
   come alive on real boat data.
 

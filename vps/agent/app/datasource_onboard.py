@@ -20,6 +20,7 @@ Every method returns **raw SI** values and **epoch-second** timestamps, identica
 
 Selected by env `DATA_SOURCE=onboard` (datasource.active() imports this lazily).
 """
+import math
 import os
 import re
 import sqlite3
@@ -28,6 +29,20 @@ import time as _time
 from datetime import datetime, timedelta, timezone
 
 BOAT_ID = os.environ.get("BOAT_ID", "sr33")
+_MS_TO_KN = 1.943844
+
+
+def _mmsi_from_context(ctx):
+    """Pull the numeric MMSI out of an AIS vessel context urn, else None.
+
+    e.g. 'vessels.urn:mrn:imo:mmsi:366123456' -> 366123456. Own ship is a uuid context, so it
+    (correctly) returns None and is never mistaken for a target. Mirrors pi/uplink/uplink.py."""
+    if ctx and "mmsi:" in ctx:
+        tail = ctx.split("mmsi:")[-1].strip()
+        return int(tail) if tail.isdigit() else None
+    return None
+
+
 ARCHIVE_DB = os.environ.get("ARCHIVE_DB", "/var/lib/sr33/archive/archive.db")
 ENGINE_DB = os.environ.get("ENGINE_DB", "/var/lib/sr33/engine/engine.db")
 POLARS_FILE = os.environ.get("POLARS_FILE", "/srv/polars_sr33.sql")
@@ -68,7 +83,9 @@ class OnboardSource:
         )
         self._archive.row_factory = sqlite3.Row
         self._engine = self._open_engine()
-        self._live = {}            # (path, source) -> (epoch, value)
+        self._live = {}            # (path, source) -> (epoch, value)  [own ship only]
+        self._ais = {}             # mmsi -> {mmsi, time, name, lat, lon, sog(kn), cog(deg)}
+        self._self_ctx = None      # the SK 'self' context urn, from the hello frame
         self._live_lock = threading.Lock()
         self._polars = _load_polars()
         if LIVE_ENABLED:
@@ -120,8 +137,22 @@ class OnboardSource:
             data = json.loads(msg)
         except ValueError:
             return
+        # The hello frame names the self context; remember it so own-ship deltas can be told
+        # apart from other vessels heard on AIS (subscribe=all delivers both).
+        if "self" in data and "updates" not in data:
+            self._self_ctx = data["self"]
+            return
+        ctx = data.get("context")
+        mmsi = _mmsi_from_context(ctx)
+        is_other = bool(ctx) and ctx != self._self_ctx and mmsi is not None
         now = _time.time()
         with self._live_lock:
+            if is_other:
+                # An AIS target: accumulate per-MMSI, NEVER into the own-ship live cache.
+                for upd in data.get("updates", []):
+                    for v in upd.get("values", []):
+                        self._record_ais(mmsi, now, v.get("path"), v.get("value"))
+                return
             for upd in data.get("updates", []):
                 source = (upd.get("$source")
                           or (upd.get("source") or {}).get("label") or "unknown")
@@ -135,6 +166,25 @@ class OnboardSource:
                         for k, sub in val.items():
                             if isinstance(sub, (int, float)) and not isinstance(sub, bool):
                                 self._live[(f"{path}.{k}", source)] = (now, float(sub))
+
+    def _record_ais(self, mmsi, now, path, value):
+        """Accumulate the fields we need from one AIS target's delta, in kn / deg true —
+        the same shape the cloud uplink writes to `ais_targets` (caller holds _live_lock)."""
+        t = self._ais.setdefault(mmsi, {"mmsi": mmsi})
+        t["time"] = now
+        if path in ("name", "") and isinstance(value, str) and value:
+            t["name"] = value
+        elif path == "navigation.position" and isinstance(value, dict):
+            if isinstance(value.get("latitude"), (int, float)):
+                t["lat"] = float(value["latitude"])
+            if isinstance(value.get("longitude"), (int, float)):
+                t["lon"] = float(value["longitude"])
+        elif path == "navigation.speedOverGround" and isinstance(value, (int, float)) \
+                and not isinstance(value, bool):
+            t["sog"] = round(float(value) * _MS_TO_KN, 2)
+        elif path == "navigation.courseOverGroundTrue" and isinstance(value, (int, float)) \
+                and not isinstance(value, bool):
+            t["cog"] = round(math.degrees(float(value)) % 360, 1)
 
     def _live_fresh(self, path):
         """[(source, epoch, value)] for a path from the live cache, only entries within TTL."""
@@ -226,6 +276,21 @@ class OnboardSource:
     def save_practice_course(self, marks):
         """Replace the 'practice' route with these [(seq, name, lat, lon)] marks."""
         self.save_course("practice", marks)
+
+    def ais_targets(self, max_age_min):
+        """Latest AIS observation per MMSI within the window — other-vessel Signal K contexts
+        captured by the live cache. Shape-matched to CloudSource: [{mmsi, name, lat, lon,
+        sog(kn), cog(deg true), time(epoch)}]; targets without a position fix are skipped."""
+        cut = _time.time() - max_age_min * 60.0
+        out = []
+        with self._live_lock:
+            for mmsi, t in self._ais.items():
+                if t.get("time", 0) < cut or t.get("lat") is None or t.get("lon") is None:
+                    continue
+                out.append({"mmsi": mmsi, "name": t.get("name"),
+                            "lat": t["lat"], "lon": t["lon"],
+                            "sog": t.get("sog"), "cog": t.get("cog"), "time": t.get("time")})
+        return out
 
     # --- onboard-only helpers for the live instrument strip ---------------
     # (the cloud builds these in tools.py off Postgres; onboard we read the archive + live cache)

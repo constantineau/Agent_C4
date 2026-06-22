@@ -109,6 +109,22 @@ class CloudSource:
         """Replace the 'practice' route with these [(seq, name, lat, lon)] marks."""
         self.save_course("practice", marks)
 
+    def ais_targets(self, max_age_min):
+        """Latest raw AIS observation per MMSI within the window — collision/fleet awareness.
+
+        Returns [{mmsi, name, lat, lon, sog(kn), cog(deg true), time(epoch)}]; geometry
+        (range/bearing/CPA/TCPA) is computed downstream in ais.py against own-ship state."""
+        with pool.connection() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT ON (mmsi) mmsi, name, lat, lon, sog, cog, "
+                "extract(epoch FROM time) AS t "
+                "FROM ais_targets WHERE boat_id=%s AND time > now()-%s::interval "
+                "AND lat IS NOT NULL AND lon IS NOT NULL "
+                "ORDER BY mmsi, time DESC", (BOAT_ID, f"{int(max_age_min)} minutes"),
+            ).fetchall()
+        return [{"mmsi": r["mmsi"], "name": r["name"], "lat": r["lat"], "lon": r["lon"],
+                 "sog": r["sog"], "cog": r["cog"], "time": float(r["t"])} for r in rows]
+
 
 _SOURCE = None
 
