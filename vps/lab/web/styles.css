@@ -174,6 +174,10 @@ table.legs { width: 100%; border-collapse: collapse; font-size: 13px; }
 table.legs th { text-align: left; color: var(--muted); font-weight: 600; font-size: 11px;
   text-transform: uppercase; letter-spacing: .03em; border-bottom: 1px solid var(--line); padding: 6px 10px; }
 table.legs td { padding: 7px 10px; border-bottom: 1px solid var(--line); }
+table.legs tr.legrow { cursor: pointer; }
+table.legs tr.legrow:hover td { background: var(--panel2); }
+.legs-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.legs-head h3 { margin: 0; }
 pre.briefing { white-space: pre-wrap; font: 13px/1.5 -apple-system, system-ui, sans-serif;
   color: var(--ink); margin: 0; }
 

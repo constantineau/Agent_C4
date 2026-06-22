@@ -78,14 +78,14 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
 
     # consensus = the blended field (all models) — the baseline "best guess"
     consensus = optimizer.optimize_course(definition, course_id, start_epoch, wf, time_budget_s=per,
-                                          jib_crossovers=jib_crossovers)
+                                          jib_crossovers=jib_crossovers, emit_exploration=False)
     consensus_side = _favored_side(definition, course_id, consensus)
 
     # one candidate route per model scenario
     candidates = []
     for model, sub in subs.items():
         r = optimizer.optimize_course(definition, course_id, start_epoch, sub, time_budget_s=per,
-                                      jib_crossovers=jib_crossovers)
+                                      jib_crossovers=jib_crossovers, emit_exploration=False)
         if not r.get("available"):
             continue
         legs = r.get("legs") or []

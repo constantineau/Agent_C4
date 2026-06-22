@@ -784,10 +784,12 @@ function renderOptResult(r) {
       ${r.timed_out ? '<div class="pill warn">routing hit the time budget — route is best-effort</div>' : ""}
       ${(r.skipped_marks || []).length ? `<div class="muted" style="font-size:12px">Marks skipped (no coords — review in Course &amp; Marks): ${r.skipped_marks.map(esc).join(", ")}</div>` : ""}
     </div>
-    <div class="card"><h3>Legs</h3>
+    <div class="card"><div class="legs-head"><h3>Legs</h3>
+        <button class="mini" onclick="exportLegsCsv()" title="Download the leg table as CSV (email the crew)">⬇ CSV</button></div>
       ${optSailPlan(r)}
+      <div class="muted" style="font-size:11px;margin:2px 0 6px">Tip: click a leg to highlight it on the map and jump the forecast to its ETA.</div>
       <table class="legs"><thead><tr><th>To</th><th>Min</th><th>Point of sail</th><th>Sail</th><th>Tacks</th><th>TWS</th><th>TWD</th><th>Conf</th></tr></thead>
-      <tbody>${r.legs.map(optLegRow).join("")}</tbody></table></div>
+      <tbody>${r.legs.map((l, i) => optLegRow(l, i)).join("")}</tbody></table></div>
     <div class="card"><h3>Briefing</h3><pre class="briefing">${esc(r.briefing || "")}</pre></div>
     <div class="card"><h3>Wind field</h3>
       <div class="muted" style="font-size:12px">${(r.windfield.models || []).map((m) =>
@@ -796,13 +798,40 @@ function renderOptResult(r) {
     </div></div>`;
   MapView.render("optMap", r);
 }
-function optLegRow(l) {
+function optLegRow(l, i) {
   const w = l.wind || {};
   const c = w.confidence, cc = c == null ? "" : c >= 0.6 ? "ok" : c >= 0.4 ? "warn" : "bad";
-  return `<tr><td>${esc(l.to)}</td><td>${l.leg_minutes}</td><td>${esc(l.point_of_sail || "—")}</td>
+  return `<tr class="legrow" onclick="MapView.focusLeg(${i})" title="Show this leg on the map">
+    <td>${esc(l.to)}</td><td>${l.leg_minutes}</td><td>${esc(l.point_of_sail || "—")}</td>
     <td>${l.sail ? `<span class="sail sail-${esc(l.sail)}">${esc(l.sail)}</span>` : "—"}</td>
     <td>${l.tacks > 0 ? `<span class="tackbadge" title="${l.tacks} tack/gybe(s) worked into this leg">⇄ ${l.tacks}</span>` : "0"}</td><td>${w.tws ?? "—"}</td><td>${w.twd ?? "—"}°</td>
     <td><span class="conf ${cc}">${c ?? "—"}</span></td></tr>`;
+}
+
+// CSV export of the leg table — Expedition's "email the crew" pattern, fully client-side.
+function exportLegsCsv() {
+  const r = Opt.result;
+  if (!r || !r.legs) return;
+  const hdr = ["leg", "to", "minutes", "eta_utc", "point_of_sail", "sail",
+    "tacks", "direct_nm", "sailed_nm", "tws_kn", "twd_deg", "confidence"];
+  const rows = r.legs.map((l, i) => {
+    const w = l.wind || {};
+    const eta = l.eta_epoch ? new Date(l.eta_epoch * 1000).toISOString().replace(".000Z", "Z") : "";
+    return [i + 1, l.to, l.leg_minutes, eta, l.point_of_sail || "", l.sail || "",
+      l.tacks, l.direct_nm, l.sailed_nm, w.tws ?? "", w.twd ?? "", w.confidence ?? ""];
+  });
+  const csv = [hdr, ...rows].map((row) => row.map(csvCell).join(",")).join("\r\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `route_${esc(r.course_id || "course")}.csv`.replace(/[^\w.\-]/g, "_");
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+function csvCell(v) {
+  const s = String(v == null ? "" : v);
+  return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
 }
 
 function optSailPlan(r) {

@@ -13,11 +13,13 @@
    The map auto-aligns lat/lon (GRIB) onto Web-Mercator (tiles) — the reason to drop the canvas. */
 const MapView = (function () {
   let map = null;
-  let chartLayer = null, windLayer = null, routeGroup = null, seamarks = null, boatMarker = null;
+  let chartLayer = null, windLayer = null, exploreLayer = null, routeGroup = null, seamarks = null;
+  let boatMarker = null, legHighlight = null;
   let R = null;                 // current optimize result
   let frameIdx = 0;
   let playTimer = null;         // forecast animation (▶/⏸)
-  const show = { wind: true, shoals: true, rocks: true, land: false, sea: false };
+  const show = { wind: true, shoals: true, rocks: true, land: false, sea: false,
+                 iso: false, laylines: true };
 
   // ---- a generic canvas overlay: positions a full-map canvas + calls draw(ctx) on move/zoom ----
   const CanvasOverlay = L.Layer.extend({
@@ -116,6 +118,35 @@ const MapView = (function () {
     for (const z of g.zones || []) fillRings(ctx, project, [z.ring], "#7a5cff", "#5a3fd6", 0.18);
   }
 
+  // route-EXPLORATION overlay: the isochrone frontier (equal-time-from-start arcs the optimizer
+  // explored — "here's WHY the line") + laylines into each beat/run mark (the VMG approach corridor).
+  function drawExplore(ctx, project, zoom, size) {
+    if (!R) return;
+    if (show.iso && R.isochrones && R.isochrones.length) {
+      ctx.globalAlpha = 0.45; ctx.strokeStyle = "#36b3ff"; ctx.lineWidth = 1;
+      for (const poly of R.isochrones) {
+        if (!poly || poly.length < 2) continue;
+        ctx.beginPath();
+        for (let i = 0; i < poly.length; i++) {
+          const pt = project(poly[i][0], poly[i][1]);
+          if (i === 0) ctx.moveTo(pt.x, pt.y); else ctx.lineTo(pt.x, pt.y);
+        }
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    }
+    if (show.laylines && R.laylines && R.laylines.length) {
+      ctx.save();
+      ctx.setLineDash([6, 5]); ctx.lineWidth = 1.5; ctx.globalAlpha = 0.75; ctx.strokeStyle = "#0b5bd3";
+      for (const ll of R.laylines) {
+        if (!ll.pts || ll.pts.length < 2) continue;
+        const a = project(ll.pts[0][0], ll.pts[0][1]), b = project(ll.pts[1][0], ll.pts[1][1]);
+        ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+      }
+      ctx.restore(); ctx.globalAlpha = 1;
+    }
+  }
+
   function buildRoute() {
     if (routeGroup) { map.removeLayer(routeGroup); routeGroup = null; }
     if (!R || !R.path || R.path.length < 2) return;
@@ -181,8 +212,11 @@ const MapView = (function () {
       options: { position: "topright" },
       onAdd: function () {
         const d = L.DomUtil.create("div", "mv-ctl");
+        const hasIso = R && R.isochrones && R.isochrones.length;
+        const hasLay = R && R.laylines && R.laylines.length;
         d.innerHTML = `<b>Layers</b>
-          ${chk("wind", "Wind")}${chk("shoals", "Shoals")}${chk("rocks", "Rocks")}${chk("land", "ENC land")}${chk("sea", "Seamarks")}`;
+          ${chk("wind", "Wind")}${chk("shoals", "Shoals")}${chk("rocks", "Rocks")}${chk("land", "ENC land")}${chk("sea", "Seamarks")}` +
+          (hasIso ? chk("iso", "Isochrones") : "") + (hasLay ? chk("laylines", "Laylines") : "");
         L.DomEvent.disableClickPropagation(d);
         d.querySelectorAll("input").forEach((el) => el.addEventListener("change", () => toggle(el.dataset.k, el.checked)));
         return d;
@@ -231,6 +265,7 @@ const MapView = (function () {
   function toggle(k, on) {
     show[k] = on;
     if (k === "sea") { if (on) seamarks.addTo(map); else map.removeLayer(seamarks); return; }
+    if (k === "iso" || k === "laylines") { exploreLayer.redraw(); return; }
     chartLayer.redraw(); windLayer.redraw();
   }
   function setFrame(i) {
@@ -258,6 +293,33 @@ const MapView = (function () {
   }
   function stopPlay() {
     if (playTimer) { clearInterval(playTimer); playTimer = null; }
+  }
+
+  // snap the forecast time slider to the frame nearest an epoch (used by leg-row linking)
+  function snapToTime(epoch) {
+    const times = (R && R.wind_grid && R.wind_grid.times) || [];
+    if (!times.length) return;
+    let bi = 0, bd = Infinity;
+    for (let i = 0; i < times.length; i++) { const d = Math.abs(times[i] - epoch); if (d < bd) { bd = d; bi = i; } }
+    stopPlay(); const b = document.getElementById("mvPlay"); if (b) b.textContent = "▶";
+    setFrame(bi);
+  }
+
+  // leg-row ↔ map ↔ time linking: highlight a leg's path segment, fit to it, snap the slider to its ETA.
+  function focusLeg(i) {
+    if (!map || !R || !R.legs || !R.legs[i] || !R.path) return;
+    const end = R.legs[i].eta_epoch;
+    const startT = i > 0 ? R.legs[i - 1].eta_epoch : (R.start_epoch != null ? R.start_epoch : R.path[0].t);
+    const seg = R.path.filter((p) => p.t >= startT - 1 && p.t <= end + 1).map((p) => [p.lat, p.lon]);
+    if (legHighlight) { map.removeLayer(legHighlight); legHighlight = null; }
+    if (seg.length >= 2) {
+      // explicit SVG renderer so the highlight stays crisp + on top of the canvas route/wind layers
+      // (the map runs preferCanvas) and survives their redraws.
+      legHighlight = L.polyline(seg, { color: "#ff8c1a", weight: 6, opacity: 0.85, renderer: L.svg() })
+        .bindTooltip("Leg to " + (R.legs[i].to || "mark"), { sticky: true }).addTo(map);
+      map.fitBounds(legHighlight.getBounds(), { padding: [40, 40], maxZoom: 11 });
+    }
+    snapToTime(end);
   }
 
   function resultBounds() {
@@ -288,7 +350,9 @@ const MapView = (function () {
     if (b) map.setView(b.getCenter(), 7); else map.setView([45, -83], 6);
 
     chartLayer = new CanvasOverlay(drawChart).addTo(map);
+    exploreLayer = new CanvasOverlay(drawExplore).addTo(map);
     windLayer = new CanvasOverlay(drawWind).addTo(map);
+    legHighlight = null;
     buildRoute();
     updateBoatMarker();
     addControls();
@@ -299,5 +363,5 @@ const MapView = (function () {
     }, 80);
   }
 
-  return { render, setFrame };
+  return { render, setFrame, focusLeg };
 })();

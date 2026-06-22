@@ -1,8 +1,9 @@
 # Optimizer UI Study — Orca + Expedition → C4 Performance Lab Gameplan
 
-**Status:** study + prioritized recommendations (2026-06-22). **Implementation: Tier 0 + Tier 1
-(minus laylines) SHIPPED 2026-06-22** — see the per-item ✅ markers + the implementation-phasing
-section. Remaining: Tier 1.4 laylines, Tier 2, Tier 3. Surface under study = the Lab **Gameplan / Optimizer**
+**Status:** study + prioritized recommendations (2026-06-22). **Implementation: Tier 0, Tier 1, and
+PR-3 (Tier 2a — isochrone frontier + laylines + leg-row↔map↔time linking + CSV) SHIPPED 2026-06-22**
+— see the per-item ✅ markers + the implementation-phasing section. Remaining: PR-4 (Tier 2b —
+per-model candidate-paths overlay + confidence shading), Tier 2.4/2.5, Tier 3. Surface under study = the Lab **Gameplan / Optimizer**
 tab (`vps/lab/web/mapview.js` + `app.js` + `styles.css`). RRS 41: this is PREP (frozen at the gun).
 
 Two reference apps were studied for UI/UX *patterns* (not imagery — both are proprietary): **Orca**
@@ -167,18 +168,20 @@ do differently.
 - **1.3 Group the controls into labeled sections** ✅ (`app.js renderGameplan` + `styles.css`). Three
   cards — **Course** · **Boat & charts** · **Weather models** — + a clean run row. All IDs/handlers
   preserved.
-- **1.4 Laylines + rhumb-bearing labels on the route** — **DEFERRED** to the route-viz work (Tier 2):
-  drawing correct laylines needs the beat/run VMG angle vs the wind at the next mark, which is the
-  same geometry as the isochrone/paths overlay — better built together than as a standalone quick win.
+- **1.4 Laylines on the route** ✅ SHIPPED (PR-3, built with the isochrone work as planned). The
+  optimizer emits two `laylines` per beat/run mark (the VMG-optimal approach corridor, `optimizer.
+  _layline_pair`); `mapview.js` draws them as dashed blue lines, toggled by a **Laylines** layer
+  (default ON). Reaches have no laylines.
 - **1.5 Bracketed-TWA semantics in the leg table** ✅ (`app.js optLegRow`). Legs with maneuvers show a
   ⇄ N badge (Expedition's convention).
 
 ### Tier 2 — medium (the differentiating viz; ~days each)
-- **2.1 Draw isochrones (forward) as an optional layer** — the biggest single gap. The router already
-  computes the isochrone frontier per step in `route_leg`; **emit the per-step frontier polylines**
-  (down-sampled) in the optimize result and draw them as a faint `CanvasOverlay` layer with a toggle.
-  This turns our map from "here's the line" into "here's *why* the line" — and it's the natural
-  substrate for 2.2.
+- **2.1 Draw isochrones (forward) as an optional layer** ✅ SHIPPED (PR-3). `route_leg(capture=True)`
+  records each generation's frontier and emits down-sampled `isochrones` polylines (≤`ROUTE_ISO_CURVES`
+  per leg, ≤`ROUTE_ISO_PTS` pts each, ≤`ROUTE_ISO_MAX` total); `optimize_course(emit_exploration=)`
+  threads it (the playbook's per-model routes pass False to stay lean). `mapview.js` draws them on a
+  faint-blue `CanvasOverlay` (`drawExplore`) toggled by an **Isochrones** layer (default OFF). Turns
+  the map from "here's the line" into "here's *why* the line".
 - **2.2 Reverse-isochrone / route-sensitivity overlay → fold into our confidence story.** Expedition's
   killer idea is that isochrone *parallelism* shows where a decision is critical. We have a richer
   signal already (multi-model spread + the branching playbook's `what_flips_it` triggers). **Marry
@@ -186,10 +189,10 @@ do differently.
   and **plot the per-model candidate routes as faint "Paths"** (Expedition's all-paths overlay) under
   the chosen route — so the user literally sees the fan the confidence number summarizes. This is our
   moat made visual and beats both references on dimension 6.
-- **2.3 Routing-table ↔ map ↔ time linking** (`app.js` + `mapview.js`). Borrow Orca's viewport-rect +
-  Expedition's tooltip: hovering/selecting a leg row highlights that segment on the map and snaps the
-  time slider to the leg's ETA (we already carry per-point `t`). Add **CSV export** of the leg table
-  (Expedition's email-the-crew pattern) — trivial and high-value for a navigator.
+- **2.3 Routing-table ↔ map ↔ time linking** ✅ SHIPPED (PR-3, pulled forward — trivial + high-value).
+  Clicking a leg row calls `MapView.focusLeg(i)`: highlights that segment (SVG renderer, on top of the
+  canvas layers), fits the map to it, and snaps the forecast slider to the leg's ETA frame. Plus
+  client-side **CSV export** of the leg table (`exportLegsCsv`, Expedition's email-the-crew pattern).
 - **2.4 GRIB display options** (`mapview.js` + a small control). Offer **arrows | barbs | contours**
   and let TWS contour increment be chosen (Expedition). At minimum add **barbs** (the standard
   offshore convention) as an alternative to arrows. Keeps confidence-fade on top.
@@ -251,9 +254,12 @@ references prove sailors expect.
 2. **PR-2 (Tier 1 quick wins):** wind legend, animation play/pause, grouped controls,
    bracketed-TWA badges (laylines deferred to PR-3). ✅ SHIPPED (`06fb1a4`).
 3. **PR-3 (Tier 2a):** isochrone frontier emission + optional layer (the marquee viz upgrade) +
-   laylines (1.4, same geometry). ← NEXT
-4. **PR-4 (Tier 2b):** per-model candidate-paths overlay + confidence shading (our moat, visualized)
-   + leg-row↔map↔time linking + CSV export.
+   laylines (1.4) + leg-row↔map↔time linking + CSV export (pulled forward from PR-4 — both trivial).
+   ✅ SHIPPED.
+4. **PR-4 (Tier 2b):** **per-model candidate-paths overlay + confidence shading** (our moat,
+   visualized) — the remaining Tier-2 piece. The playbook already routes each model
+   (`playbook.py` keeps each candidate's `path`); surface those faint per-model paths under the chosen
+   route so the user sees the fan the confidence number summarizes. ← NEXT
 5. **PR-5 (Tier 3):** the consolidated Control Center + map-led layout restyle (the big Orca-style
    look), gated on the user's own Orca UX notes.
 

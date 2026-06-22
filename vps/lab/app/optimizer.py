@@ -28,6 +28,10 @@ API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 COVERAGE_MIN = float(os.environ.get("GRIB_COVERAGE_MIN", "0.6"))   # below this → degraded route
 ROUTE_CONE_DEG = float(os.environ.get("ROUTE_CONE_DEG", "120"))    # prune headings >this° off the mark
 TACK_COST_S = float(os.environ.get("ROUTE_TACK_COST_S", "30"))     # time a tack/gybe costs (anti-over-tack)
+ISO_CURVES = int(os.environ.get("ROUTE_ISO_CURVES", "10"))         # frontier polylines emitted per leg (viz)
+ISO_PTS = int(os.environ.get("ROUTE_ISO_PTS", "60"))               # max points kept per frontier curve
+ISO_MAX = int(os.environ.get("ROUTE_ISO_MAX", "80"))               # cap on total frontier curves in a result
+LAYLINE_NM = float(os.environ.get("ROUTE_LAYLINE_NM", "10"))       # max layline draw length (nm)
 
 
 # --- geometry ----------------------------------------------------------------
@@ -91,13 +95,42 @@ def _vmg_headings(P, tws, twd):
     return out
 
 
+def _layline_pair(P, tws, twd, pos, mlat, mlon, length_nm):
+    """The two laylines into a mark = the VMG-optimal approach corridor (the lines along which the
+    boat, sailing its best beat/run angle on each board, just lays the mark). `pos` is 'beat' or
+    'run'; returns up to 2 {tack, twa, pts:[[mlat,mlon],[endlat,endlon]]} extending the reciprocal of
+    each VMG sailing heading back from the mark. Reaches have no meaningful laylines → []."""
+    band = [(a, s) for t, a, s in P if abs(t - tws) <= 1.5 and s > 0] or \
+           [(a, s) for _t, a, s in P if s > 0]
+    if not band:
+        return []
+    if pos == "beat":
+        cands = [(s * math.cos(math.radians(a)), a) for a, s in band if a < 90]
+    elif pos == "run":
+        cands = [(-s * math.cos(math.radians(a)), a) for a, s in band if a > 90]
+    else:
+        return []
+    if not cands:
+        return []
+    vmg_twa = max(cands)[1]
+    length_nm = max(0.5, min(length_nm, LAYLINE_NM))
+    out = []
+    for tack, h in (("stbd", (twd + vmg_twa) % 360), ("port", (twd - vmg_twa) % 360)):
+        elat, elon = _advance(mlat, mlon, (h + 180) % 360, length_nm)
+        out.append({"tack": tack, "twa": round(vmg_twa), "pos": pos,
+                    "pts": [[round(mlat, 5), round(mlon, 5)], [round(elat, 5), round(elon, 5)]]})
+    return out
+
+
 # --- one leg -----------------------------------------------------------------
 def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=None,
-              obstacles=None):
+              obstacles=None, capture=False):
     """Isochrone-optimal path from (slat,slon)@t0 to (dlat,dlon). Returns dict with path/eta.
 
     `obstacles` (an ObstacleField) makes the fan reject any heading whose step would cut across land,
-    an island, or a race exclusion zone — so the route sails AROUND obstacles instead of through them."""
+    an island, or a race exclusion zone — so the route sails AROUND obstacles instead of through them.
+    `capture` records each generation's frontier (the equal-time isochrone) and emits down-sampled
+    `isochrones` polylines — the exploration the single route summarizes, drawn on the Gameplan map."""
     direct = _hav_nm(slat, slon, dlat, dlon)
     dt_h = min(1.0, max(0.15, direct / 40.0))          # fixed per-leg step (equal-time isochrone)
     max_steps = 600
@@ -140,6 +173,7 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
     start = {"lat": slat, "lon": slon, "t": t0, "parent": None, "hdg": None}
     frontier = [start]
     reached = None
+    snaps = []
     for _ in range(max_steps):
         if deadline and time.time() > deadline:
             break
@@ -167,6 +201,8 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
         if reached or not cand:
             break
         frontier = list(cand.values())
+        if capture:
+            snaps.append(frontier)
         best = min(frontier, key=lambda n: _hav_nm(n["lat"], n["lon"], dlat, dlon))
         if _hav_nm(best["lat"], best["lon"], dlat, dlon) < 0.05:
             reached = best
@@ -192,10 +228,23 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
         if prev_side and side != prev_side:
             tacks += 1
         prev_side = side
+    # equal-time isochrone curves (down-sampled) — each generation's frontier sorted by bearing from
+    # the leg start, so it draws as an arc fanning outward; ~ISO_CURVES per leg, ≤ISO_PTS pts each.
+    isochrones = []
+    if capture and snaps:
+        stride = max(1, len(snaps) // max(1, ISO_CURVES))
+        for i in range(0, len(snaps), stride):
+            snap = sorted(snaps[i], key=lambda nd: _bearing(slat, slon, nd["lat"], nd["lon"]))
+            if len(snap) > ISO_PTS:
+                step = len(snap) / float(ISO_PTS)
+                snap = [snap[int(k * step)] for k in range(ISO_PTS)]
+            poly = [[round(nd["lat"], 4), round(nd["lon"], 4)] for nd in snap]
+            if len(poly) >= 2:
+                isochrones.append(poly)
     return {"path": path, "eta": reached["t"], "sailed_nm": round(sailed, 2),
             "direct_nm": round(direct, 2), "tacks": tacks,
             "first_heading": round(hdgs[0]) if hdgs else None,
-            "blocked_steps": blocked_hits}
+            "blocked_steps": blocked_hits, "isochrones": isochrones}
 
 
 # --- sparse-GRIB coverage gate + route-sanity guard --------------------------
@@ -241,7 +290,7 @@ def _route_sanity(wf, legs, coverage, P, timed_out):
 # --- full course -------------------------------------------------------------
 def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=90,
                     obstacles=None, avoid=True, source=None, safety_depth=None,
-                    jib_crossovers=None):
+                    jib_crossovers=None, emit_exploration=True):
     """Route the whole course from its start through every mark to the finish via `wf`.
 
     Returns one optimal route with per-leg ETAs, total time/distance/tacks and a route confidence
@@ -274,8 +323,11 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
     slat, slon = marks[0][2], marks[0][3]
     confs = []
     full_path = [{"lat": slat, "lon": slon, "t": t}]
+    isochrones = []
+    laylines = []
     for seq, name, dlat, dlon in marks[1:]:
-        leg = route_leg(wf, P, slat, slon, t, dlat, dlon, deadline=deadline, obstacles=obstacles)
+        leg = route_leg(wf, P, slat, slon, t, dlat, dlon, deadline=deadline, obstacles=obstacles,
+                        capture=emit_exploration)
         # sample wind + confidence at the leg's midpoint and end (for the briefing)
         mid = leg["path"][len(leg["path"]) // 2] if leg["path"] else {"lat": dlat, "lon": dlon}
         det = wf.detail_at(mid["lat"], mid["lon"], (t + leg["eta"]) / 2.0)
@@ -284,6 +336,7 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
         twa = None
         if det:
             twa = abs(_wrap180(_bearing(slat, slon, dlat, dlon) - det["twd"]))
+        pos = _point_of_sail(twa) if twa is not None else None
         legs.append({
             "to": name, "seq": seq,
             "direct_nm": leg["direct_nm"], "sailed_nm": leg["sailed_nm"], "tacks": leg["tacks"],
@@ -291,13 +344,20 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
             "eta_epoch": round(leg["eta"]),
             "first_heading": leg["first_heading"],
             "blocked_steps": leg.get("blocked_steps", 0),
-            "point_of_sail": _point_of_sail(twa) if twa is not None else None,
+            "point_of_sail": pos,
             "sail": (sailplan.optimal_sail(det["tws"], twa, jib_crossovers)
                      if det and twa is not None else None),
             "wind": ({"tws": det["tws"], "twd": det["twd"], "confidence": det["confidence"]}
                      if det else None),
         })
         full_path += [p for p in leg["path"][1:]]
+        if emit_exploration:
+            if len(isochrones) < ISO_MAX:
+                isochrones += leg.get("isochrones", [])[:ISO_MAX - len(isochrones)]
+            # laylines into this mark when the approach is a beat or run (reaches have none)
+            if det and pos in ("beat", "run"):
+                laylines += _layline_pair(P, det["tws"], det["twd"], pos, dlat, dlon,
+                                          leg["direct_nm"])
         slat, slon, t = dlat, dlon, leg["eta"]
 
     total_min = round((t - float(start_epoch)) / 60.0, 1)
@@ -328,6 +388,8 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
         "sail_plan": sail_seq,
         "skipped_marks": skipped,
         "marks": [{"seq": s, "name": n, "lat": la, "lon": lo} for s, n, la, lo in marks],
+        "isochrones": isochrones,
+        "laylines": laylines,
         "path": [{"lat": p["lat"], "lon": p["lon"], "t": round(p["t"])} for p in full_path],
         "windfield": wf.status(),
         "obstacles": obstacles.summary() if obstacles is not None else {"active": False},
