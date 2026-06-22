@@ -116,26 +116,33 @@ button.mini:hover { border-color: var(--accent); }
 /* ---------- Gameplan route map (Leaflet, [C]) ---------- */
 .routemap { width: 100%; height: 480px; border: 1px solid var(--line); border-radius: 10px;
   margin-bottom: 10px; background: #aadaff; }
-.routemap .leaflet-control.mv-ctl { background: rgba(255,255,255,0.92); color: #16202b;
-  padding: 6px 8px; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.3); font-size: 12px;
+.routemap .leaflet-control.mv-ctl { background: rgba(255,255,255,0.94); color: #16202b;
+  padding: 6px 9px; border-radius: 8px; box-shadow: 0 1px 5px rgba(0,0,0,0.3); font-size: 12px;
   line-height: 1.5; }
-.routemap .mv-ctl b { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
-  color: #5a6b7b; margin-bottom: 2px; }
-.routemap .mv-chk { display: block; cursor: pointer; }
-.routemap .mv-chk input { margin-right: 5px; }
-.routemap .mv-windmode { margin-top: 4px; padding-top: 4px; border-top: 1px solid rgba(0,0,0,0.10); }
+.routemap .mv-ctl b { font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+  color: #5a6b7b; }
+.routemap .mv-chk { cursor: pointer; }
+.routemap .mv-chk input { margin-right: 4px; }
 .routemap .mv-windmode select { font-size: 11px; margin-left: 3px; }
-.routemap .mv-slider { min-width: 260px; }
-.routemap .mv-slider #mvTime { font-variant-numeric: tabular-nums; }
 .routemap .mv-play { border: 1px solid #c4cdd6; background: #fff; color: #16202b; cursor: pointer;
-  border-radius: 6px; width: 26px; height: 24px; font-size: 12px; margin-right: 6px; padding: 0;
-  vertical-align: middle; }
+  border-radius: 6px; width: 26px; height: 24px; font-size: 12px; padding: 0; vertical-align: middle; }
 .routemap .mv-play:hover { background: #eef3f8; }
-.routemap .mv-legend .mv-legrow { display: flex; gap: 8px; flex-wrap: wrap; }
-.routemap .mv-legend .mv-sw { display: inline-flex; align-items: center; gap: 3px;
-  font-variant-numeric: tabular-nums; }
-.routemap .mv-legend .mv-sw i { width: 13px; height: 9px; border-radius: 2px; display: inline-block; }
-.routemap .mv-legend .mv-legnote { color: #5a6b7b; font-size: 10px; margin-top: 3px; max-width: 180px; }
+.routemap .mv-sw { display: inline-flex; align-items: center; gap: 3px; font-variant-numeric: tabular-nums; }
+.routemap .mv-sw i { width: 13px; height: 9px; border-radius: 2px; display: inline-block; }
+.routemap .mv-legnote { color: #5a6b7b; font-size: 10px; }
+
+/* Tier 3.1 — consolidated Control Center (one docked bottom panel) */
+.routemap .mv-cc { max-width: calc(100% - 24px); }
+.routemap .mv-cc .cc-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 4px; }
+.routemap .mv-cc .cc-collapse { border: 1px solid #c4cdd6; background: #fff; color: #16202b; cursor: pointer;
+  border-radius: 6px; width: 22px; height: 20px; font-size: 11px; line-height: 1; padding: 0; }
+.routemap .mv-cc .cc-body { display: flex; flex-direction: column; gap: 7px; }
+.routemap .mv-cc.cc-collapsed .cc-body { display: none; }
+.routemap .mv-cc .cc-grp { display: flex; align-items: center; gap: 8px 11px; flex-wrap: wrap; }
+.routemap .mv-cc .cc-lbl { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: #5a6b7b; font-weight: 700; }
+.routemap .mv-cc .cc-sep { width: 1px; align-self: stretch; background: rgba(0,0,0,0.12); margin: 0 1px; }
+.routemap .mv-cc .cc-scrub input[type=range] { width: 230px; vertical-align: middle; }
+.routemap .mv-cc #mvTime { font-variant-numeric: tabular-nums; font-size: 11px; }
 .mv-canvas { will-change: transform; }
 .cin { width: 92px; padding: 4px 6px; border-radius: 6px; border: 1px solid var(--line);
   background: var(--panel2); color: var(--ink); font-size: 12px; font-variant-numeric: tabular-nums; }
@@ -147,7 +154,7 @@ tr.needrow { background: rgba(245,196,81,.07); }
 #saveCourseBtn:disabled { opacity: .6; }
 
 /* ---------- Gameplan / Optimizer (Lab-1) ---------- */
-.opt { max-width: 1040px; }
+.opt { max-width: 1320px; }
 .opt-controls { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 10px; }
 .opt-controls label, .opt-group label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
 .opt-controls select, .opt-controls input[type=datetime-local], .opt-controls input[type=number],
@@ -171,6 +178,28 @@ tr.needrow { background: rgba(245,196,81,.07); }
 .opt-stats > div { display: flex; flex-direction: column; }
 .opt-stats b { font-size: 22px; color: var(--ink); }
 .opt-stats span { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+
+/* Tier 3.2 — map-led cockpit: hero map + collapsible side rail */
+.opt-cockpit { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(310px, 1fr); gap: 14px;
+  align-items: stretch; margin-top: 4px; }
+.cockpit-map { min-width: 0; }
+.routemap-hero { height: 620px; margin-bottom: 0; }
+.cockpit-rail { display: flex; flex-direction: column; gap: 10px; max-height: 620px; overflow: auto;
+  padding-right: 2px; }
+.cockpit-rail .rail-stats { gap: 16px 18px; margin: 0 2px 4px; }
+.cockpit-rail .rail-stats b { font-size: 19px; }
+.rail-sec { background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; }
+.rail-sec > summary { cursor: pointer; font-size: 12px; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--accent); font-weight: 700; list-style: none; user-select: none; }
+.rail-sec > summary::-webkit-details-marker { display: none; }
+.rail-sec > summary::before { content: "▾ "; color: var(--muted); }
+.rail-sec:not([open]) > summary::before { content: "▸ "; }
+.rail-sec[open] > summary { margin-bottom: 8px; }
+@media (max-width: 1020px) {
+  .opt-cockpit { grid-template-columns: 1fr; }
+  .cockpit-rail { max-height: none; overflow: visible; }
+  .routemap-hero { height: 460px; }
+}
 .conf.ok { color: var(--accent2); } .conf.warn { color: var(--warn); } .conf.bad { color: var(--bad); }
 table.legs { width: 100%; border-collapse: collapse; font-size: 13px; }
 table.legs th { text-align: left; color: var(--muted); font-weight: 600; font-size: 11px;

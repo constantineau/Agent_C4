@@ -770,8 +770,14 @@ polish SHIPPED** — **2.4** wind display modes (a Layers selector: arrows / **b
 convention / **shaded** TWS heatmap, all keeping the color ramp + confidence-fade); **2.5** an
 **Auto / Fast / Fine** routing-resolution selector (`optimizer.RESOLUTIONS` → heading-fan deg +
 per-leg step ceiling + time budget, threaded through `optimize_course(resolution=)` / `route_leg`)
-with a one-line explainer + an inline **common-error checklist** in the degraded banner. NEXT = Tier 3
-restyle (consolidated Control Center + map-led layout, gated on the user's Orca UX notes).
+with a one-line explainer + an inline **common-error checklist** in the degraded banner. **Tier 3
+restyle SHIPPED** (built from the study's mockups; the user's own Orca notes fold in later as
+refinements) — **3.1** the four scattered map L.Controls collapsed into ONE bottom-docked, collapsible
+**Control Center** (`mapview.js` `.mv-cc`: scrubber + layer toggles + wind-mode + Follow + legend);
+**3.2** `renderOptResult` is now a map-led **cockpit** grid (`.opt-cockpit`: the slippy map is the
+hero ~620 px; stats + collapsible `<details>` rail = Legs / Briefing / Wind field, stacks on narrow);
+**3.3** the timeline scrub now **pans the map to the projected boat position** (Follow toggle, default
+on) — Orca's "ride along". NEXT = fold in the user's own Orca UX notes as refinements when they arrive.
 
 **Next (copilot track): the copilot's crew-facing narration increment** (it now has a signed playbook
 + boat sail model to interpret).

@@ -3,9 +3,10 @@
 **Status:** study + prioritized recommendations (2026-06-22). **Implementation: Tier 0, Tier 1, PR-3
 (Tier 2a — isochrone frontier + laylines + leg-row↔map↔time linking + CSV), PR-4 (Tier 2b —
 per-model candidate-paths overlay) and the Tier-2 polish (2.4 wind display modes arrows/barbs/shaded +
-2.5 Auto/Fast/Fine resolution control with inline degraded checklist) SHIPPED 2026-06-22** — see the
-per-item ✅ markers + the implementation-phasing section. Remaining: Tier 3 (consolidated Control
-Center + map-led restyle, gated on the user's own Orca UX notes). Surface under study = the Lab **Gameplan / Optimizer**
+2.5 Auto/Fast/Fine resolution control with inline degraded checklist) and **Tier 3 (3.1 consolidated
+Control Center + 3.2 map-led cockpit layout + 3.3 map-follows-projected-position on scrub) SHIPPED
+2026-06-22** — see the per-item ✅ markers + the implementation-phasing section. Surface under study =
+the Lab **Gameplan / Optimizer**
 tab (`vps/lab/web/mapview.js` + `app.js` + `styles.css`). RRS 41: this is PREP (frozen at the gun).
 
 Two reference apps were studied for UI/UX *patterns* (not imagery — both are proprietary): **Orca**
@@ -212,14 +213,18 @@ do differently.
   the banner now expands with the **common-error checklist** inline (re-run when cycle posts, drop
   ECMWF, model-horizon note, try Auto/Fast if Fine timed out).
 
-### Tier 3 — larger (full Orca-style restyle of the surface)
-- **3.1 Consolidated map "Control Center"** — collapse the Layers box + time slider + (new) wind-mode
-  + isochrone toggles into one polished bottom/side panel à la Orca, touch-sized.
-- **3.2 Map-led layout** — make the slippy map the hero (full-width, controls floating), with the
-  stats/legs/briefing/playbook as a collapsible side rail, rather than today's stacked cards. This is
-  the "clean modern Orca look" the user likes, adapted to our prep workflow.
-- **3.3 Map-follows-projected-position on scrub** — extend our time-synced boat marker (we already
-  have it) into Orca's full "scrub the timeline, the map pans to where you'll be" interaction.
+### Tier 3 — larger (full Orca-style restyle of the surface) ✅ SHIPPED 2026-06-22
+- **3.1 Consolidated map "Control Center"** ✅ — the four scattered L.Controls (Layers / slider /
+  legend / model-legend) are now ONE collapsible bottom-docked `.mv-cc` panel (`mapview.js`
+  `addControls`): forecast scrubber + layer toggles + wind-mode + a Follow checkbox + the TWS legend +
+  per-model legend, grouped with a ▾ collapse to free map space.
+- **3.2 Map-led layout** ✅ — `renderOptResult` (`app.js`) is now an `.opt-cockpit` grid: the slippy
+  map is the hero (`routemap-hero`, ~620 px, the larger column) and the stats + collapsible
+  `<details>` rail sections (Legs / Briefing / Wind field & obstacles) sit in a scrollable side rail;
+  stacks under the map on narrow screens. Replaces the old stacked result cards.
+- **3.3 Map-follows-projected-position on scrub** ✅ — `setFrame` pans the map to the projected boat
+  position while scrubbing/playing (gated by the Control Center's Follow toggle, default on) — Orca's
+  "scrub the timeline, the map rides along" interaction.
 
 **Explicitly NOT borrowed:** Orca's minimal/hidden polars (we want them reviewable — our moat) and
 its missing numeric detail; Expedition's start-line suite (race/onboard scope, not PREP); Expedition's
@@ -272,8 +277,9 @@ references prove sailors expect.
    ✅ SHIPPED.
 5. **PR-5 (Tier-2 polish):** wind display modes (arrows/barbs/shaded) + Auto/Fast/Fine resolution
    control + inline degraded checklist. ✅ SHIPPED.
-6. **PR-6 (Tier 3):** the consolidated Control Center + map-led layout restyle (the big Orca-style
-   look), gated on the user's own Orca UX notes.
+6. **PR-6 (Tier 3):** consolidated Control Center + map-led cockpit layout + map-follows-on-scrub.
+   ✅ SHIPPED. (Built from the study's mockups/recommendations; fold in the user's own Orca UX notes
+   as refinements when they arrive.)
 
 Fold in the user's own Orca UX/UI notes when they arrive (they slot naturally into PR-2 and PR-5).
 

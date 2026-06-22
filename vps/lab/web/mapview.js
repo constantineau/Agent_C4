@@ -19,6 +19,7 @@ const MapView = (function () {
   let frameIdx = 0;
   let playTimer = null;         // forecast animation (▶/⏸)
   let windMode = "arrows";      // wind overlay style: arrows | barbs | shaded (2.4)
+  let followScrub = true;       // Tier 3.3: pan the map to the projected boat position while scrubbing
   const show = { wind: true, shoals: true, rocks: true, land: false, sea: false,
                  iso: false, laylines: true, models: true };
 
@@ -277,85 +278,67 @@ const MapView = (function () {
     return fmtTime(times[i]) + "  (T+" + h + "h)";
   }
 
-  // ---- in-map controls: layer toggles + the forecast time slider ----
+  // ---- ONE consolidated Control Center (Tier 3.1) — Orca-style docked panel: forecast scrubber +
+  //      layer toggles + wind-mode + follow + the legend, all in a single collapsible bottom bar. ----
   function addControls() {
-    const Layers = L.Control.extend({
-      options: { position: "topright" },
+    const hasIso = R && R.isochrones && R.isochrones.length;
+    const hasLay = R && R.laylines && R.laylines.length;
+    const hasModels = R && R.candidate_paths && R.candidate_paths.length;
+    const hasFrames = R && R.wind_grid && (R.wind_grid.times || []).length > 1;
+    const hasWind = R && R.wind_grid && (R.wind_grid.frames || []).length;
+
+    const scrub = hasFrames ? `<div class="cc-grp cc-scrub">
+        <button id="mvPlay" class="mv-play" title="Play / pause the forecast animation">▶</button>
+        <input type="range" id="mvRange" min="0" max="${R.wind_grid.times.length - 1}" value="${frameIdx}" step="1">
+        <span id="mvTime">${frameLabel(frameIdx)}</span></div>` : "";
+
+    const windSel = hasWind ? `<label class="mv-windmode">Wind <select data-windmode>
+        <option value="arrows"${windMode === "arrows" ? " selected" : ""}>arrows</option>
+        <option value="barbs"${windMode === "barbs" ? " selected" : ""}>barbs</option>
+        <option value="shaded"${windMode === "shaded" ? " selected" : ""}>shaded</option></select></label>` : "";
+    const followChk = hasFrames ? `<label class="mv-chk" title="Pan the map to the projected boat position while scrubbing/playing">
+        <input type="checkbox" data-follow ${followScrub ? "checked" : ""}> Follow</label>` : "";
+    const layers = `<div class="cc-grp cc-layers"><span class="cc-lbl">Layers</span>
+        ${chk("wind", "Wind")}${chk("shoals", "Shoals")}${chk("rocks", "Rocks")}${chk("land", "ENC land")}${chk("sea", "Seamarks")}` +
+        (hasModels ? chk("models", "Model routes") : "") +
+        (hasIso ? chk("iso", "Isochrones") : "") + (hasLay ? chk("laylines", "Laylines") : "") +
+        windSel + followChk + `</div>`;
+
+    const stops = [[3, "<6"], [9, "6–12"], [15, "12–18"], [21, "18–24"], [27, "24+"]];
+    const sw = stops.map(([v, lbl]) => `<span class="mv-sw"><i style="background:${twsColor(v)}"></i>${lbl}</span>`).join("");
+    const modelLeg = hasModels ? `<span class="cc-sep"></span><span class="cc-lbl">Model routes</span>` +
+        R.candidate_paths.map((cp) => `<span class="mv-sw"><i style="background:${modelColor(cp.model)}"></i>${cp.model.toUpperCase()}` +
+          `${cp.total_hours != null ? " " + cp.total_hours + "h" : ""} <small>${cp.favored_side || ""}</small></span>`).join("") : "";
+    const legend = `<div class="cc-grp cc-legend"><span class="cc-lbl">Wind kn</span>${sw}
+        <span class="mv-legnote">opacity = confidence (faint = models split)</span>${modelLeg}</div>`;
+
+    const CC = L.Control.extend({
+      options: { position: "bottomleft" },
       onAdd: function () {
-        const d = L.DomUtil.create("div", "mv-ctl");
-        const hasIso = R && R.isochrones && R.isochrones.length;
-        const hasLay = R && R.laylines && R.laylines.length;
-        const hasModels = R && R.candidate_paths && R.candidate_paths.length;
-        const hasWind = R && R.wind_grid && (R.wind_grid.frames || []).length;
-        const windSel = hasWind ? `<div class="mv-windmode">Wind <select data-windmode>
-            <option value="arrows"${windMode === "arrows" ? " selected" : ""}>arrows</option>
-            <option value="barbs"${windMode === "barbs" ? " selected" : ""}>barbs</option>
-            <option value="shaded"${windMode === "shaded" ? " selected" : ""}>shaded</option></select></div>` : "";
-        d.innerHTML = `<b>Layers</b>
-          ${chk("wind", "Wind")}${chk("shoals", "Shoals")}${chk("rocks", "Rocks")}${chk("land", "ENC land")}${chk("sea", "Seamarks")}` +
-          (hasModels ? chk("models", "Model routes") : "") +
-          (hasIso ? chk("iso", "Isochrones") : "") + (hasLay ? chk("laylines", "Laylines") : "") + windSel;
+        const d = L.DomUtil.create("div", "mv-ctl mv-cc");
+        d.innerHTML = `<div class="cc-head"><b>Map controls</b>
+            <button class="cc-collapse" title="Collapse / expand">▾</button></div>
+          <div class="cc-body">${scrub}${layers}${legend}</div>`;
         L.DomEvent.disableClickPropagation(d);
-        d.querySelectorAll("input").forEach((el) => el.addEventListener("change", () => toggle(el.dataset.k, el.checked)));
+        L.DomEvent.disableScrollPropagation(d);
+        d.querySelectorAll('input[type="checkbox"][data-k]').forEach((el) =>
+          el.addEventListener("change", () => toggle(el.dataset.k, el.checked)));
         const ws = d.querySelector("[data-windmode]");
         if (ws) ws.addEventListener("change", () => { windMode = ws.value; windLayer.redraw(); });
+        const fl = d.querySelector("[data-follow]");
+        if (fl) fl.addEventListener("change", () => { followScrub = fl.checked; if (followScrub) setFrame(frameIdx); });
+        const rng = d.querySelector("#mvRange");
+        if (rng) rng.addEventListener("input", (e) => { stopPlay(); const b = d.querySelector("#mvPlay"); if (b) b.textContent = "▶"; setFrame(parseInt(e.target.value, 10)); });
+        const pl = d.querySelector("#mvPlay");
+        if (pl) pl.addEventListener("click", togglePlay);
+        d.querySelector(".cc-collapse").addEventListener("click", (e) => {
+          d.classList.toggle("cc-collapsed");
+          e.currentTarget.textContent = d.classList.contains("cc-collapsed") ? "▸" : "▾";
+        });
         return d;
       },
     });
-    map.addControl(new Layers());
-
-    if (R && R.wind_grid && (R.wind_grid.times || []).length > 1) {
-      const Slider = L.Control.extend({
-        options: { position: "bottomleft" },
-        onAdd: function () {
-          const d = L.DomUtil.create("div", "mv-ctl mv-slider");
-          const n = R.wind_grid.times.length;
-          d.innerHTML = `<b>Forecast — drag to scrub (hourly)</b> <span id="mvTime">${frameLabel(frameIdx)}</span><br>
-            <button id="mvPlay" class="mv-play" title="Play / pause the forecast animation">▶</button>
-            <input type="range" id="mvRange" min="0" max="${n - 1}" value="${frameIdx}" step="1" style="width:250px;vertical-align:middle">`;
-          L.DomEvent.disableClickPropagation(d);
-          // a manual scrub stops auto-play so the two don't fight
-          d.querySelector("#mvRange").addEventListener("input", (e) => { stopPlay(); const b = document.getElementById("mvPlay"); if (b) b.textContent = "▶"; setFrame(parseInt(e.target.value, 10)); });
-          d.querySelector("#mvPlay").addEventListener("click", togglePlay);
-          return d;
-        },
-      });
-      map.addControl(new Slider());
-    }
-
-    // wind color-scale legend — makes the TWS ramp + the confidence-fade encoding legible
-    const Legend = L.Control.extend({
-      options: { position: "bottomright" },
-      onAdd: function () {
-        const d = L.DomUtil.create("div", "mv-ctl mv-legend");
-        const stops = [[3, "<6"], [9, "6–12"], [15, "12–18"], [21, "18–24"], [27, "24+"]];
-        const sw = stops.map(([v, lbl]) =>
-          `<span class="mv-sw"><i style="background:${twsColor(v)}"></i>${lbl}</span>`).join("");
-        d.innerHTML = `<b>Wind (kn)</b><div class="mv-legrow">${sw}</div>
-          <div class="mv-legnote">opacity = model confidence (faint = models split)</div>`;
-        L.DomEvent.disableClickPropagation(d);
-        return d;
-      },
-    });
-    map.addControl(new Legend());
-
-    // per-model route legend — only when the candidate-path fan is present (PR-4)
-    if (R && R.candidate_paths && R.candidate_paths.length) {
-      const ModelLegend = L.Control.extend({
-        options: { position: "bottomright" },
-        onAdd: function () {
-          const d = L.DomUtil.create("div", "mv-ctl mv-legend");
-          const rows = R.candidate_paths.map((cp) =>
-            `<span class="mv-sw"><i style="background:${modelColor(cp.model)}"></i>${cp.model.toUpperCase()}` +
-            `${cp.total_hours != null ? " " + cp.total_hours + "h" : ""} <small>${cp.favored_side || ""}</small></span>`).join("");
-          d.innerHTML = `<b>Model routes</b><div class="mv-legrow">${rows}</div>
-            <div class="mv-legnote">each model's own route — tight = agree, spread = a real decision</div>`;
-          L.DomEvent.disableClickPropagation(d);
-          return d;
-        },
-      });
-      map.addControl(new ModelLegend());
-    }
+    map.addControl(new CC());
   }
   function chk(k, label) {
     return `<label class="mv-chk"><input type="checkbox" data-k="${k}" ${show[k] ? "checked" : ""}> ${label}</label>`;
@@ -373,6 +356,8 @@ const MapView = (function () {
     const rng = document.getElementById("mvRange");      // keep the thumb in sync during auto-play
     if (rng && +rng.value !== i) rng.value = i;
     windLayer.redraw(); updateBoatMarker();
+    // Tier 3.3: ride along — keep the projected boat position in view as the timeline scrubs/plays
+    if (followScrub && boatMarker && map) map.panTo(boatMarker.getLatLng(), { animate: false });
   }
   function frameCount() {
     return ((R && R.wind_grid && R.wind_grid.times) || []).length;

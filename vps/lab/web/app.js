@@ -791,35 +791,36 @@ function renderOptResult(r) {
   const confCls = conf == null ? "" : conf >= 0.6 ? "ok" : conf >= 0.4 ? "warn" : "bad";
   const cov = r.wind_coverage;
   const covCls = cov == null ? "" : cov >= 0.9 ? "ok" : cov >= 0.6 ? "warn" : "bad";
-  out.innerHTML = `<div class="opt-result">
-    <div class="card">
-      <h3>Optimal route</h3>
-      ${optDegradedBanner(r)}
-      <div class="opt-stats">
+  // Tier 3.2 — map-led "cockpit": the slippy map is the hero; the stats + collapsible result
+  // sections (legs / briefing / wind field) live in a side rail beside it (stacks under on narrow).
+  out.innerHTML = `<div class="opt-cockpit">
+    <section class="cockpit-map"><div id="optMap" class="routemap routemap-hero"></div></section>
+    <aside class="cockpit-rail">
+      <div class="rail-stats opt-stats">
         <div><b>${r.total_hours}</b><span>hours</span></div>
         <div><b>${r.total_sailed_nm}</b><span>nm sailed</span></div>
         <div><b>${r.total_direct_nm}</b><span>nm direct</span></div>
         <div><b>${r.total_tacks}</b><span>tacks/gybes</span></div>
-        <div><b class="conf ${confCls}">${conf == null ? "—" : conf}</b><span>confidence (min ${r.min_confidence == null ? "—" : r.min_confidence})</span></div>
-        <div><b class="conf ${covCls}">${cov == null ? "—" : Math.round(cov * 100) + "%"}</b><span>wind coverage</span></div>
+        <div><b class="conf ${confCls}">${conf == null ? "—" : conf}</b><span>conf (min ${r.min_confidence == null ? "—" : r.min_confidence})</span></div>
+        <div><b class="conf ${covCls}">${cov == null ? "—" : Math.round(cov * 100) + "%"}</b><span>wind cov</span></div>
       </div>
-      <div id="optMap" class="routemap"></div>
-      ${optObstacleNote(r)}
+      ${optDegradedBanner(r)}
       ${r.timed_out ? '<div class="pill warn">routing hit the time budget — route is best-effort</div>' : ""}
-      ${(r.skipped_marks || []).length ? `<div class="muted" style="font-size:12px">Marks skipped (no coords — review in Course &amp; Marks): ${r.skipped_marks.map(esc).join(", ")}</div>` : ""}
-    </div>
-    <div class="card"><div class="legs-head"><h3>Legs</h3>
-        <button class="mini" onclick="exportLegsCsv()" title="Download the leg table as CSV (email the crew)">⬇ CSV</button></div>
-      ${optSailPlan(r)}
-      <div class="muted" style="font-size:11px;margin:2px 0 6px">Tip: click a leg to highlight it on the map and jump the forecast to its ETA.</div>
-      <table class="legs"><thead><tr><th>To</th><th>Min</th><th>Point of sail</th><th>Sail</th><th>Tacks</th><th>TWS</th><th>TWD</th><th>Conf</th></tr></thead>
-      <tbody>${r.legs.map((l, i) => optLegRow(l, i)).join("")}</tbody></table></div>
-    <div class="card"><h3>Briefing</h3><pre class="briefing">${esc(r.briefing || "")}</pre></div>
-    <div class="card"><h3>Wind field</h3>
-      <div class="muted" style="font-size:12px">${(r.windfield.models || []).map((m) =>
-        `${esc(m.model.toUpperCase())} ${esc(m.cycle)} — ${m.frames}${m.expected_frames ? "/" + m.expected_frames : ""} frames` +
-        (m.cycle_fallbacks ? ` <span class="conf warn">(−${m.cycle_fallbacks} cycle)</span>` : "")).join(" · ")} · ${r.windfield.total_frames} frames total</div>
-    </div></div>`;
+      <details class="rail-sec" open><summary>Legs</summary>
+        <div class="legs-head"><span class="muted" style="font-size:11px">click a leg → highlight on map + jump forecast to its ETA</span>
+          <button class="mini" onclick="exportLegsCsv()" title="Download the leg table as CSV (email the crew)">⬇ CSV</button></div>
+        ${optSailPlan(r)}
+        <table class="legs"><thead><tr><th>To</th><th>Min</th><th>Point of sail</th><th>Sail</th><th>Tacks</th><th>TWS</th><th>TWD</th><th>Conf</th></tr></thead>
+        <tbody>${r.legs.map((l, i) => optLegRow(l, i)).join("")}</tbody></table></details>
+      <details class="rail-sec" open><summary>Briefing</summary><pre class="briefing">${esc(r.briefing || "")}</pre></details>
+      <details class="rail-sec"><summary>Wind field &amp; obstacles</summary>
+        ${optObstacleNote(r)}
+        ${(r.skipped_marks || []).length ? `<div class="muted" style="font-size:12px;margin-top:6px">Marks skipped (no coords — review in Course &amp; Marks): ${r.skipped_marks.map(esc).join(", ")}</div>` : ""}
+        <div class="muted" style="font-size:12px;margin-top:6px">${(r.windfield.models || []).map((m) =>
+          `${esc(m.model.toUpperCase())} ${esc(m.cycle)} — ${m.frames}${m.expected_frames ? "/" + m.expected_frames : ""} frames` +
+          (m.cycle_fallbacks ? ` <span class="conf warn">(−${m.cycle_fallbacks} cycle)</span>` : "")).join(" · ")} · ${r.windfield.total_frames} frames total</div>
+      </details>
+    </aside></div>`;
   MapView.render("optMap", r);
 }
 function optLegRow(l, i) {
