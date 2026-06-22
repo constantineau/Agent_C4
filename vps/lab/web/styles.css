@@ -125,6 +125,15 @@ button.mini:hover { border-color: var(--accent); }
 .routemap .mv-chk input { margin-right: 5px; }
 .routemap .mv-slider { min-width: 260px; }
 .routemap .mv-slider #mvTime { font-variant-numeric: tabular-nums; }
+.routemap .mv-play { border: 1px solid #c4cdd6; background: #fff; color: #16202b; cursor: pointer;
+  border-radius: 6px; width: 26px; height: 24px; font-size: 12px; margin-right: 6px; padding: 0;
+  vertical-align: middle; }
+.routemap .mv-play:hover { background: #eef3f8; }
+.routemap .mv-legend .mv-legrow { display: flex; gap: 8px; flex-wrap: wrap; }
+.routemap .mv-legend .mv-sw { display: inline-flex; align-items: center; gap: 3px;
+  font-variant-numeric: tabular-nums; }
+.routemap .mv-legend .mv-sw i { width: 13px; height: 9px; border-radius: 2px; display: inline-block; }
+.routemap .mv-legend .mv-legnote { color: #5a6b7b; font-size: 10px; margin-top: 3px; max-width: 180px; }
 .mv-canvas { will-change: transform; }
 .cin { width: 92px; padding: 4px 6px; border-radius: 6px; border: 1px solid var(--line);
   background: var(--panel2); color: var(--ink); font-size: 12px; font-variant-numeric: tabular-nums; }
@@ -136,11 +145,21 @@ tr.needrow { background: rgba(245,196,81,.07); }
 #saveCourseBtn:disabled { opacity: .6; }
 
 /* ---------- Gameplan / Optimizer (Lab-1) ---------- */
-.opt { max-width: 980px; }
+.opt { max-width: 1040px; }
 .opt-controls { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 10px; }
-.opt-controls label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
-.opt-controls select, .opt-controls input[type=datetime-local], .opt-controls input[type=number] {
+.opt-controls label, .opt-group label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.opt-controls select, .opt-controls input[type=datetime-local], .opt-controls input[type=number],
+.opt-group select, .opt-group input[type=datetime-local], .opt-group input[type=number] {
   background: var(--panel2); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 8px; font-size: 14px; }
+/* grouped controls (UI study Tier 1.3): Course · Boat & charts · Weather models */
+.opt-groups { display: flex; gap: 14px; flex-wrap: wrap; align-items: stretch; margin-bottom: 12px; }
+.opt-group { flex: 1 1 280px; min-width: 260px; background: var(--panel2); border: 1px solid var(--line);
+  border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 9px; align-items: flex-start; }
+.opt-group-h { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--accent);
+  font-weight: 700; border-bottom: 1px solid var(--line); padding-bottom: 5px; width: 100%; }
+.opt-group .opt-models { margin: 0; }
+.opt-run { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; margin-bottom: 6px; }
+.tackbadge { color: var(--warn); font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .opt-models { display: flex; gap: 14px; flex-wrap: wrap; margin: 6px 0 10px; }
 .optchk { font-size: 13px; color: var(--ink); display: inline-flex; align-items: center; gap: 5px; }
 #optRun { padding: 9px 18px; border: none; border-radius: 8px; background: var(--accent);

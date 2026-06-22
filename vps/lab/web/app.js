@@ -489,26 +489,35 @@ async function renderGameplan() {
   view.innerHTML = `<div class="opt">
     <div class="card">
       <h3>Gameplan / Optimizer <span class="muted" style="font-weight:400">— multi-model GRIB route (Lab-1)</span></h3>
-      <div class="opt-controls">
-        <label>Race
-          <select id="optRace" onchange="optPickRace(this.value)">
-            ${Opt.races.map((r) => `<option value="${esc(r.race_id)}" ${r.race_id === Opt.raceId ? "selected" : ""}>${esc(r.name)}</option>`).join("")}
-          </select></label>
-        <label>Course <select id="optCourse" onchange="Opt.courseId=this.value">${optCourseOpts()}</select></label>
-        <label>Start (UTC) <input type="datetime-local" id="optStart"></label>
+      <div class="opt-groups">
+        <div class="opt-group">
+          <div class="opt-group-h">Course</div>
+          <label>Race
+            <select id="optRace" onchange="optPickRace(this.value)">
+              ${Opt.races.map((r) => `<option value="${esc(r.race_id)}" ${r.race_id === Opt.raceId ? "selected" : ""}>${esc(r.name)}</option>`).join("")}
+            </select></label>
+          <label>Course <select id="optCourse" onchange="Opt.courseId=this.value">${optCourseOpts()}</select></label>
+          <label>Start (UTC) <input type="datetime-local" id="optStart"></label>
+        </div>
+        <div class="opt-group">
+          <div class="opt-group-h">Boat &amp; charts</div>
+          ${optBoatControls()}
+          <button class="mini" onclick="toggleBoatModel()">${Opt.showBoatModel ? "Hide" : "Review"} boat model — polars &amp; sail crossovers</button>
+          <span class="muted" style="font-size:11px">per-leg sail plan + draft frozen into the playbook → loaded onto the copilot</span>
+        </div>
+        <div class="opt-group">
+          <div class="opt-group-h">Weather models</div>
+          <div class="opt-models">${optModelChecks()}</div>
+          <label>Ensemble members <input type="number" id="optEns" value="0" min="0" style="width:64px" oninput="updateEnsembleControl()"></label>
+          <span id="optEnsHint" class="muted" style="font-size:12px"></span>
+          <div id="optEnsCost" class="muted" style="font-size:12px;margin-top:2px"></div>
+        </div>
       </div>
-      <div class="opt-controls">${optBoatControls()}</div>
-      <div class="opt-controls"><button class="mini" onclick="toggleBoatModel()">${Opt.showBoatModel ? "Hide" : "Review"} boat model — polars &amp; sail crossovers</button>
-        <span class="muted" style="font-size:12px">the per-leg sail plan + draft frozen into the playbook → loaded onto the copilot</span></div>
       <div id="boatModelOut"></div>
-      <div class="opt-models">${optModelChecks()}</div>
-      <div class="opt-controls">
-        <label>Ensemble members <input type="number" id="optEns" value="0" min="0" style="width:64px" oninput="updateEnsembleControl()"> </label>
-        <span id="optEnsHint" class="muted" style="font-size:12px"></span>
+      <div class="opt-run">
         <label class="optchk"><input type="checkbox" id="optAvoid" checked> Avoid land/islands/zones</label>
         <button id="optRun" onclick="runOptimize()" ${Opt.running ? "disabled" : ""}>${Opt.running ? "Optimizing…" : "Run optimizer →"}</button>
       </div>
-      <div id="optEnsCost" class="muted" style="font-size:12px;margin-top:2px"></div>
       <div class="muted" style="font-size:12px;margin-top:6px">Downloads live GRIB from NOAA NOMADS / ECMWF and routes the course on the SR33 polars. First run ~30–60 s (then cached). Pre-race cloud homework — frozen at the gun (RRS 41).</div>
     </div>
     <div id="optOut"></div>
@@ -792,7 +801,7 @@ function optLegRow(l) {
   const c = w.confidence, cc = c == null ? "" : c >= 0.6 ? "ok" : c >= 0.4 ? "warn" : "bad";
   return `<tr><td>${esc(l.to)}</td><td>${l.leg_minutes}</td><td>${esc(l.point_of_sail || "—")}</td>
     <td>${l.sail ? `<span class="sail sail-${esc(l.sail)}">${esc(l.sail)}</span>` : "—"}</td>
-    <td>${l.tacks}</td><td>${w.tws ?? "—"}</td><td>${w.twd ?? "—"}°</td>
+    <td>${l.tacks > 0 ? `<span class="tackbadge" title="${l.tacks} tack/gybe(s) worked into this leg">⇄ ${l.tacks}</span>` : "0"}</td><td>${w.tws ?? "—"}</td><td>${w.twd ?? "—"}°</td>
     <td><span class="conf ${cc}">${c ?? "—"}</span></td></tr>`;
 }
 

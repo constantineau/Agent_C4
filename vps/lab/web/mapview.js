@@ -16,6 +16,7 @@ const MapView = (function () {
   let chartLayer = null, windLayer = null, routeGroup = null, seamarks = null, boatMarker = null;
   let R = null;                 // current optimize result
   let frameIdx = 0;
+  let playTimer = null;         // forecast animation (▶/⏸)
   const show = { wind: true, shoals: true, rocks: true, land: false, sea: false };
 
   // ---- a generic canvas overlay: positions a full-map canvas + calls draw(ctx) on move/zoom ----
@@ -196,14 +197,33 @@ const MapView = (function () {
           const d = L.DomUtil.create("div", "mv-ctl mv-slider");
           const n = R.wind_grid.times.length;
           d.innerHTML = `<b>Forecast — drag to scrub (hourly)</b> <span id="mvTime">${frameLabel(frameIdx)}</span><br>
-            <input type="range" id="mvRange" min="0" max="${n - 1}" value="${frameIdx}" step="1" style="width:280px">`;
+            <button id="mvPlay" class="mv-play" title="Play / pause the forecast animation">▶</button>
+            <input type="range" id="mvRange" min="0" max="${n - 1}" value="${frameIdx}" step="1" style="width:250px;vertical-align:middle">`;
           L.DomEvent.disableClickPropagation(d);
-          d.querySelector("#mvRange").addEventListener("input", (e) => setFrame(parseInt(e.target.value, 10)));
+          // a manual scrub stops auto-play so the two don't fight
+          d.querySelector("#mvRange").addEventListener("input", (e) => { stopPlay(); const b = document.getElementById("mvPlay"); if (b) b.textContent = "▶"; setFrame(parseInt(e.target.value, 10)); });
+          d.querySelector("#mvPlay").addEventListener("click", togglePlay);
           return d;
         },
       });
       map.addControl(new Slider());
     }
+
+    // wind color-scale legend — makes the TWS ramp + the confidence-fade encoding legible
+    const Legend = L.Control.extend({
+      options: { position: "bottomright" },
+      onAdd: function () {
+        const d = L.DomUtil.create("div", "mv-ctl mv-legend");
+        const stops = [[3, "<6"], [9, "6–12"], [15, "12–18"], [21, "18–24"], [27, "24+"]];
+        const sw = stops.map(([v, lbl]) =>
+          `<span class="mv-sw"><i style="background:${twsColor(v)}"></i>${lbl}</span>`).join("");
+        d.innerHTML = `<b>Wind (kn)</b><div class="mv-legrow">${sw}</div>
+          <div class="mv-legnote">arrow opacity = model confidence (faint = models split)</div>`;
+        L.DomEvent.disableClickPropagation(d);
+        return d;
+      },
+    });
+    map.addControl(new Legend());
   }
   function chk(k, label) {
     return `<label class="mv-chk"><input type="checkbox" data-k="${k}" ${show[k] ? "checked" : ""}> ${label}</label>`;
@@ -217,7 +237,27 @@ const MapView = (function () {
     frameIdx = i;
     const lab = document.getElementById("mvTime");
     if (lab && R.wind_grid) lab.textContent = frameLabel(i);
+    const rng = document.getElementById("mvRange");      // keep the thumb in sync during auto-play
+    if (rng && +rng.value !== i) rng.value = i;
     windLayer.redraw(); updateBoatMarker();
+  }
+  function frameCount() {
+    return ((R && R.wind_grid && R.wind_grid.times) || []).length;
+  }
+  function togglePlay() {
+    const btn = document.getElementById("mvPlay");
+    if (playTimer) {
+      clearInterval(playTimer); playTimer = null;
+      if (btn) btn.textContent = "▶";
+      return;
+    }
+    const n = frameCount();
+    if (n <= 1) return;
+    if (btn) btn.textContent = "⏸";
+    playTimer = setInterval(() => setFrame((frameIdx + 1) % n), 700);
+  }
+  function stopPlay() {
+    if (playTimer) { clearInterval(playTimer); playTimer = null; }
   }
 
   function resultBounds() {
@@ -229,6 +269,7 @@ const MapView = (function () {
   }
 
   function render(id, result) {
+    stopPlay();
     R = result; frameIdx = 0;
     const el = document.getElementById(id);
     if (!el) return;
