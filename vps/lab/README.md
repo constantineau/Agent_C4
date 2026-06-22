@@ -108,9 +108,10 @@ python3 -m shared.race_def vps/lab/races/bayview_mackinac_2026.json
 - **Obstacle avoidance (routing fidelity, Bitsailor parity item 2a): built.** `app/geo/` keeps the
   route off land. It's **race-agnostic** — three layers rasterize into one boolean mask the isochrone
   prune queries (`blocked(lat,lon)` / `crosses(a,b)`):
-  1. a **global** coastline (`coastline.py`, Natural Earth 1:10m land∧¬lake, fetched once to the
+  1. a **global** coastline (`coastline.py`, land∧¬lake + islands-in-lakes, fetched once to the
      `lab_coastline` volume and auto-clipped to whatever course bbox the RaceDefinition yields — so
-     any race anywhere gets its own coast, ocean or lake; source is pluggable for a higher-res upgrade);
+     any race anywhere gets its own coast, ocean or lake; **GSHHG full-res by default**, Natural Earth
+     1:10m as the fallback — see "Higher-res coastline backstop" below);
   2. the race's own `zones[]` (exclusion / hazard / tss polygons);
   3. the race's geocoded `island` marks, buffered to a disk (`radius_nm`) — islands are obstacles to
      route AROUND, not waypoints to hit (so `course_to_marks` omits them as waypoints).
@@ -120,10 +121,32 @@ python3 -m shared.race_def vps/lab/races/bayview_mackinac_2026.json
   takes `avoid_land` (default true) and returns an `obstacles` summary + `obstacle_steps_avoided`;
   the Gameplan tab draws the coast/island/zone overlay on the route canvas. **A/B-verified on the
   real Cove Island GRIB route:** avoidance OFF passes 1.9 nm from Bois Blanc's center (cutting across
-  the island); ON clears at 5.7 nm (no violations) for +0.3 nm / +1 tack. *Caveats:* NE 1:10m is
-  coarse near shore and misses sub-nm islands (the race-island/zone layer is what guarantees the
-  race-critical ones; island coords are geocoded `approx` → human-review); rounding **side** is not
-  yet enforced (an island is avoided either side). Tunables: `GEO_RES_DEG`, `GEO_ISLAND_NM`.
+  the island); ON clears at 5.7 nm (no violations) for +0.3 nm / +1 tack. *Caveats:* the global
+  backstop now defaults to GSHHG full-res (below) which catches sub-nm islands; the race-island/zone
+  layer still backs the race-critical ones (island coords geocoded `approx` → human-review); rounding
+  **side** is not yet enforced (an island is avoided either side). Tunables: `GEO_RES_DEG`,
+  `GEO_ISLAND_NM`.
+
+### Higher-res coastline backstop — GSHHG full-res
+
+Natural Earth 1:10m is coarse: it omits sub-nm islands (it had **zero** islands across the whole
+North Channel / Georgian Bay) and is imprecise at the shoreline. The global coastline (`coastline.py`)
+now defaults to **GSHHG** (Global Self-consistent Hierarchical High-resolution Geography), full
+resolution. Its hierarchy maps exactly onto our three roles — **L1 = land**, **L2 = lakes**,
+**L3 = islands-in-lakes** (and L3 is precisely where the small Great-Lakes islands like Cove Island,
+in Ontario, live) — so the existing fill logic (fill land → carve lakes → re-add islands) is
+source-agnostic. GSHHG ships as shapefiles, so a prep-time `ogr2ogr -clipsrc <bbox>` (GDAL is already
+in the lab image for ENC) clips each level to the course bbox into cached GeoJSON; the hot path stays
+pure-python, exactly like `enc.py`. The 149 MB bundle is fetched + the chosen-res L1–L3 extracted once
+to `lab_coastline`. Config: `COASTLINE_GLOBAL` (`gshhg` | `natural_earth`, default `gshhg`) and
+`GSHHG_RES` (`f`|`h`|`i`|`l`|`c`, default `f`); GSHHG falls back to NE automatically if it can't be
+fetched (no download / no ogr2ogr). It is the global backstop under **both** modes — it runs first in
+ENC mode too, so US-only ENC's Canadian coverage gap (Cove Island, Manitoulin) is filled by GSHHG
+rather than coarse NE. **Mask A/B-verified** on the Bayview Mackinac cove_island bbox: GSHHG blocks
+**778 cells across 251 island clusters** NE leaves open + refines 663 cells where NE over-blocked
+water; ENC mode still blocks Canadian Manitoulin with US draft-aware shoals intact; a live optimize
+ran 42.4 h, coverage 1.0, reaching the finish.
+
 ### Map accuracy upgrade — NOAA ENC charts + BoatProfile + a real slippy map
 
 The driving complaint was "the map is not accurate" (Natural Earth 1:10m misses the straits islands
@@ -227,9 +250,8 @@ sail model reviewable + part of the frozen homework:
   `GET /api/crossovers` + `/api/polars`; the optimizer leg table gains a Sail column + a sail-plan strip.
 
 - **Next:** the copilot's crew-facing narration increment (it now has a signed playbook + boat sail
-  model to interpret); routing fidelity 2c (isochrone VMG-gate/cone/adaptive). A higher-res coastline
-  backstop (OSM land / GSHHG) for the Natural-Earth path and enforcing rounding **side** remain
-  optional upgrades.
+  model to interpret). Routing fidelity 2c (isochrone VMG-gate/cone/adaptive) and the higher-res GSHHG
+  coastline backstop are **done**; enforcing rounding **side** remains an optional upgrade.
 
 ## Race documents (found 2026-06-17)
 

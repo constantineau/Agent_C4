@@ -81,8 +81,10 @@ services:
       LAB_AUTH_ENABLED: ${LAB_AUTH_ENABLED:-true}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}        # race-doc ingestion (Opus extraction)
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-4-8}
-      COASTLINE_CACHE: /srv/coastline       # Lab obstacle avoidance: cached Natural Earth coastline
+      COASTLINE_CACHE: /srv/coastline       # Lab obstacle avoidance: cached coastline polygons
       COASTLINE_SOURCE: ${COASTLINE_SOURCE:-natural_earth}  # natural_earth | enc (NOAA S-57, draft-aware)
+      COASTLINE_GLOBAL: ${COASTLINE_GLOBAL:-gshhg}  # global backstop dataset: gshhg (full-res) | natural_earth
+      GSHHG_RES: ${GSHHG_RES:-f}            # GSHHG resolution f(ull)|h|i|l|c — full = all sub-nm islands
       ENC_CACHE: /srv/enc                   # NOAA ENC cells + extracted GeoJSON (prep-time GDAL)
       PLAYBOOK_DIR: /srv/playbooks          # Lab-2b: frozen, signed playbook bundles (onboard homework)
       BOAT_DRAFT_M: ${BOAT_DRAFT_M:-2.1336}  # active boat draft (m); SR33 = 7 ft → ENC depth no-go

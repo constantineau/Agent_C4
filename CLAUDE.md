@@ -614,9 +614,10 @@ fallback / coverage / sanity) + a real end-to-end Mackinac run (HRRR auto-picked
 **Obstacle avoidance (routing fidelity 2a, from the Bitsailor gap analysis): SHIPPED 2026-06-20.**
 `vps/lab/app/geo/` keeps the optimizer's route off land — **race-agnostic**: three layers rasterize
 into one boolean mask the isochrone prune queries (`blocked`/`crosses`): (1) a GLOBAL coastline
-(`coastline.py`, Natural Earth 1:10m `land∧¬lake`, fetched once to the `lab_coastline` volume +
-auto-clipped to the course bbox → works for any race, ocean or lake; source pluggable for a higher-res
-upgrade), (2) the race's `zones[]` (exclusion/hazard/tss), (3) the race's geocoded `island` marks
+(`coastline.py`, `land∧¬lake` + islands-in-lakes, fetched once to the `lab_coastline` volume +
+auto-clipped to the course bbox → works for any race, ocean or lake; **GSHHG full-res by default**,
+Natural Earth 1:10m as the dependency-light fallback — see "Higher-res coastline backstop" below),
+(2) the race's `zones[]` (exclusion/hazard/tss), (3) the race's geocoded `island` marks
 buffered to a disk (`radius_nm`; islands are obstacles, NOT waypoints — `course_to_marks` omits them
 as waypoints). `optimize_course(avoid=True)` builds the field (cached by `cache_key`, so Lab-2's
 same-course scenarios share one mask) + threads it through `route_leg`; `POST /api/optimize` takes
@@ -642,6 +643,26 @@ OpenSeaMap) + our ENC shoal/rock/land polygons + GRIB **wind** arrows faded by c
 with a **forecast time slider** over an embedded multi-time `wind_grid` (`WindField.sample_grid`).
 NOAA ENC Online tiles are SCAMIN-gated / blank and RNC was sunset → the chart layer is our own
 extracted ENC polygons over OSM (self-contained, no CDN/build).
+
+**Higher-res coastline backstop — GSHHG full-res: SHIPPED 2026-06-22.** Natural Earth 1:10m misses
+sub-nm islands (it had **zero** islands across the whole North Channel / Georgian Bay) and is coarse
+right at the shoreline. The global coastline (`coastline.py`) now defaults to **GSHHG** (Global
+Self-consistent Hierarchical High-resolution Geography), full resolution. GSHHG's hierarchy maps
+exactly onto our three roles — **L1 = land**, **L2 = lakes**, **L3 = islands-in-lakes** — so the
+existing fill logic (fill land → carve lakes → re-add islands) is source-agnostic. GSHHG ships as
+shapefiles → a prep-time `ogr2ogr -clipsrc <bbox>` (GDAL already in the lab image for ENC) clips each
+level to the course bbox into cached GeoJSON, then the hot path stays pure-python (same pattern as
+`enc.py`). The 149 MB bundle is fetched + the chosen-res L1–L3 extracted once to the `lab_coastline`
+volume. `COASTLINE_GLOBAL` (`gshhg` | `natural_earth`, default `gshhg`) + `GSHHG_RES`
+(`f`|`h`|`i`|`l`|`c`, default `f`); falls back to NE automatically if GSHHG can't be fetched.
+This is the **global backstop under BOTH modes** — it runs first in ENC mode too, so US-only ENC's
+Canadian gap (Cove Island, Manitoulin) is covered by GSHHG, not NE. **Mask A/B-verified** on the
+Bayview Mackinac cove_island bbox: GSHHG blocks **778 cells across 251 island clusters** that NE
+leaves open + refines 663 cells where NE's coarse shoreline over-blocked water; ENC mode still blocks
+Canadian Manitoulin (via the GSHHG backstop) with US draft-aware shoals intact; live optimize 42.4 h,
+coverage 1.0, reaches the finish. (Cove Island's own landmass already read as land under NE because it
+abuts the coarse Bruce-Peninsula blob; the real win is the many mid-lake islands NE omits, plus the
+shoreline refinement.) Rounding **side** still not enforced (an island is avoided either side).
 
 ## C4 Performance Lab — Lab-2 branching playbook bundle
 

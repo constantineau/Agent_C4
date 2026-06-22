@@ -250,11 +250,12 @@ def build_for_course(definition: dict, course_id, bbox, *, coastline_on=True, zo
     field.source = src
 
     # 1) coastline / depth obstacles. ENC (NOAA S-57) gives real land + draft-aware shoals, but it is
-    #    US-ONLY — so the global Natural-Earth land is ALWAYS rasterized first as a UNION BACKSTOP
-    #    (covers Canada + everywhere), and in ENC mode the draft-aware US shoals/rocks + sharper US land
-    #    are layered ON TOP. (Before this was either/or: a cross-border bbox — e.g. Bayview Mackinac
-    #    rounding Cove Island / Manitoulin in Ontario — had US land from ENC, so the NE backstop never
-    #    fired and Canadian land was never blocked → routes cut straight through it.)
+    #    US-ONLY — so the global coastline is ALWAYS rasterized first as a UNION BACKSTOP (covers Canada
+    #    + everywhere), and in ENC mode the draft-aware US shoals/rocks + sharper US land are layered ON
+    #    TOP. (Before this was either/or: a cross-border bbox — e.g. Bayview Mackinac rounding Cove
+    #    Island / Manitoulin in Ontario — had US land from ENC, so the backstop never fired and Canadian
+    #    land was never blocked → routes cut straight through it.) The backstop defaults to GSHHG
+    #    full-res (catches the sub-nm Great-Lakes islands NE omits, e.g. Cove Island), NE as fallback.
     if coastline_on:
         if field.source == "enc":
             try:
@@ -262,7 +263,7 @@ def build_for_course(definition: dict, course_id, bbox, *, coastline_on=True, zo
                 layers = enc.layers_in_bbox(bbox, cache_dir, depth)
             except Exception:
                 layers = {}
-            _fill_natural_earth(field, cache_dir)            # global land union backstop (incl. Canada)
+            _fill_global_backstop(field, cache_dir)          # global land union backstop (incl. Canada)
             if layers.get("land") or layers.get("shoal"):
                 field.safety_depth = depth
                 for poly in layers.get("land", []):          # ENC's sharper US land on top
@@ -275,9 +276,10 @@ def build_for_course(definition: dict, course_id, bbox, *, coastline_on=True, zo
                 _overlay(field, "shoal_rings", layers.get("shoal", []))
                 _overlay(field, "obstruction_rings", layers.get("obstruction", []))
             else:
-                field.source = "natural_earth"               # ENC unavailable → NE backstop alone
-        else:                                                # natural_earth (no ENC requested)
-            _fill_natural_earth(field, cache_dir)
+                field.source = coastline.active_source()     # ENC unavailable → global backstop alone
+        else:                                                # global coastline only (no ENC requested)
+            _fill_global_backstop(field, cache_dir)
+            field.source = coastline.active_source()         # honest provenance (gshhg | natural_earth)
 
     # 2) the race's exclusion / hazard / tss zones (per race)
     if zones_on:
@@ -294,7 +296,8 @@ def build_for_course(definition: dict, course_id, bbox, *, coastline_on=True, zo
 
     # 3) the race's geocoded island marks, buffered to a disk (per race).
     #    Under ENC the real LNDARE polygons already cover them — the crude disks are exactly the
-    #    inaccuracy ENC replaces — so only buffer disks on the Natural-Earth backstop.
+    #    inaccuracy ENC (and now GSHHG full-res) replaces — so skip disks in ENC mode. On the GSHHG/NE
+    #    backstop the disks stay as belt-and-braces for any island whose real polygon the dataset lacks.
     if islands_on and field.source != "enc":
         for isl in _course_islands(definition, course_id):
             field._fill_disk(isl["lat"], isl["lon"], isl["radius_nm"], "islands")
@@ -314,11 +317,15 @@ def build_for_course(definition: dict, course_id, bbox, *, coastline_on=True, zo
     return field
 
 
-def _fill_natural_earth(field, cache_dir):
-    """Rasterize the GLOBAL Natural-Earth coastline (land ∧ ¬lake, islands re-added inside lakes) into
-    the mask. Used both as the primary source in NE mode and as an always-on UNION BACKSTOP under ENC
-    (which is US-only) so Canadian/non-US land is never missed. Only ADDS land + carves lakes; safe to
-    run before ENC overlays it. Returns the loaded layers."""
+def _fill_global_backstop(field, cache_dir):
+    """Rasterize the GLOBAL coastline (land ∧ ¬lake, islands re-added inside lakes) into the mask.
+
+    The dataset is `coastline.active_source()` — GSHHG full-res by default (catches the sub-nm
+    Great-Lakes islands Natural Earth omits, e.g. Cove Island), Natural Earth as the fallback; both
+    expose the same land/lakes/islands roles so this code is source-agnostic. Used both as the primary
+    source in non-ENC mode and as an always-on UNION BACKSTOP under ENC (which is US-only) so
+    Canadian/non-US land is never missed. Only ADDS land + carves lakes; safe to run before ENC
+    overlays it. Returns the loaded layers."""
     try:
         coastline.ensure_global(cache_dir)
         layers = coastline.layers_in_bbox(field.bbox, cache_dir)
