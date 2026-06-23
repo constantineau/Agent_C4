@@ -283,6 +283,26 @@ def course_to_marks(definition: dict, course_id: str = None):
     return marks, skipped, course.get("id")
 
 
+def course_roundings(definition: dict, course_id: str = None) -> dict:
+    """Map nav-mark name → rounding side ('port'|'starboard'|'gate'|'none'), aligned to
+    `course_to_marks` output. Start/Finish have no side ('none'); a gate is 'gate' (pass between).
+    The optimizer uses this to leave a port/starboard mark on the correct side (it routes to the
+    mark POINT; the rounding side standsoff the approach/exit to the right side). Islands are
+    obstacles, not nav marks, so they're excluded here (same as `course_to_marks`) — island rounding
+    side is the obstacle layer's job."""
+    courses = definition.get("courses", []) or []
+    course = next((c for c in courses if c.get("id") == course_id), None) or \
+        (courses[0] if courses else None)
+    if not course:
+        return {}
+    out = {"Start": "none", "Finish": "none"}
+    for m in course.get("marks", []):
+        if m.get("type") == "island":
+            continue
+        out[m.get("name", "mark")] = m.get("rounding", "none")
+    return out
+
+
 if __name__ == "__main__":
     import sys
     path = sys.argv[1] if len(sys.argv) > 1 else None

@@ -32,6 +32,11 @@ ISO_CURVES = int(os.environ.get("ROUTE_ISO_CURVES", "10"))         # frontier po
 ISO_PTS = int(os.environ.get("ROUTE_ISO_PTS", "60"))               # max points kept per frontier curve
 ISO_MAX = int(os.environ.get("ROUTE_ISO_MAX", "80"))               # cap on total frontier curves in a result
 LAYLINE_NM = float(os.environ.get("ROUTE_LAYLINE_NM", "10"))       # max layline draw length (nm)
+# Mark-approach fidelity — stop the route sailing PAST a mark and doubling back (the "north of the
+# mark then south then around" zig-zag), and leave port/starboard marks on the legal side:
+LAYLINE_GATE = os.environ.get("ROUTE_LAYLINE_GATE", "1").strip().lower() in ("1", "true", "yes", "on")
+OVERSTAND_NM = float(os.environ.get("ROUTE_OVERSTAND_NM", "0.5"))   # reject candidates this far PAST the mark on the up/down-wind axis
+ROUND_OFFSET_NM = float(os.environ.get("ROUTE_ROUND_OFFSET_NM", "0.10"))  # standoff to the correct side at a port/stbd rounding mark (nm)
 
 
 # --- geometry ----------------------------------------------------------------
@@ -143,10 +148,25 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
         w = wf.wind_at(lat, lon, epoch)
         return w if w else fallback
 
+    # Overstand axis (#2 layline gate): on a beat the mark is to windward, on a run to leeward — in
+    # both cases sailing PAST the mark along the wind axis is overstanding (the "go past then double
+    # back" the user sees near a mark). Classify the leg from the wind AT THE MARK (which sets the
+    # laylines) and build a unit (north,east) vector pointing the OVERSTAND way; reaches → no gate.
+    _twd_m = wind(dlat, dlon, t0)[1]
+    _twa_m0 = abs(_wrap180(_bearing(slat, slon, dlat, dlon) - _twd_m))
+    _pos0 = _point_of_sail(_twa_m0)
+    leg_axis = None
+    if LAYLINE_GATE and _pos0 in ("beat", "run"):
+        wb = _twd_m if _pos0 == "beat" else (_twd_m + 180.0)        # windward (beat) / leeward (run) bearing
+        leg_axis = (math.cos(math.radians(wb)), math.sin(math.radians(wb)))
+    coslat = math.cos(math.radians(dlat))
+
     def expand(node, hdgs, tws, twd, dt_h, cand):
-        """Fan `hdgs` from `node`, advancing each by its polar speed; keep the farthest-from-start
-        candidate per bearing sector (the isochrone prune). Returns (n_placed, n_blocked) — n_placed
-        counts unblocked steps, so 0-placed-but-blocked means this node is boxed in by an obstacle."""
+        """Fan `hdgs` from `node`, advancing each by its polar speed; keep the farthest-along candidate
+        per bearing sector (the classic isochrone prune — it routes through shifts best and converges
+        fast). Candidates that have sailed PAST the mark on the up/down-wind axis are rejected (the
+        layline gate, #2) so the route lays the mark instead of overstanding and doubling back.
+        Returns (n_placed, n_blocked) — 0-placed-but-blocked means this node is boxed in."""
         placed = blocked = 0
         for hdg in hdgs:
             twa = abs(_wrap180(hdg - twd))
@@ -164,6 +184,12 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
             if obstacles and obstacles.crosses(node["lat"], node["lon"], nlat, nlon):
                 blocked += 1
                 continue
+            # layline gate: drop a candidate that has sailed PAST the mark along the wind axis.
+            if leg_axis is not None:
+                wp = (nlat - dlat) * 60.0 * leg_axis[0] + (nlon - dlon) * 60.0 * coslat * leg_axis[1]
+                if wp > OVERSTAND_NM:
+                    blocked += 1
+                    continue
             rng = _hav_nm(slat, slon, nlat, nlon)
             sec = round(_bearing(slat, slon, nlat, nlon) / SECTOR)
             if sec not in cand or rng > cand[sec]["rng"]:
@@ -249,6 +275,20 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
             "blocked_steps": blocked_hits, "isochrones": isochrones}
 
 
+def _rounding_offset(plat, plon, mlat, mlon, side, nm=None):
+    """#3 rounding side: a small standoff point to the correct side of a port/starboard mark, so the
+    route passes it on the legal side instead of cutting either way. The boat leaving a mark to PORT
+    keeps it on its port hand → it passes to the right of the inbound course → offset 90° right of the
+    approach bearing (left for starboard). Returns (lat, lon); the real mark is still recorded for
+    display. `side` other than port/starboard → no offset (gates pass between; 'none' marks unchanged)."""
+    if side not in ("port", "starboard"):
+        return mlat, mlon
+    nm = ROUND_OFFSET_NM if nm is None else nm
+    b_in = _bearing(plat, plon, mlat, mlon)
+    off = (b_in + 90.0) if side == "port" else (b_in - 90.0)
+    return _advance(mlat, mlon, off, nm)
+
+
 # --- sparse-GRIB coverage gate + route-sanity guard --------------------------
 def _wind_coverage(wf, full_path):
     """Fraction of the routed path that had REAL multi-model coverage (vs the optimizer's constant
@@ -322,6 +362,7 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
     if len(marks) < 2:
         return {"available": False, "note": "course needs at least a start and one mark/finish",
                 "skipped": skipped}
+    roundings = race_def.course_roundings(definition, course_id)   # #3 rounding side per nav mark
     P = POL.polars_stw()
     if not P:
         return {"available": False, "note": "no polars loaded"}
@@ -348,7 +389,10 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
     isochrones = []
     laylines = []
     for seq, name, dlat, dlon in marks[1:]:
-        leg = route_leg(wf, P, slat, slon, t, dlat, dlon, deadline=deadline, obstacles=obstacles,
+        # #3 rounding side: route to a small standoff on the legal side of a port/starboard mark (the
+        # real mark is still displayed + recorded). Gates pass between, finish/none unchanged.
+        rlat, rlon = _rounding_offset(slat, slon, dlat, dlon, roundings.get(name, "none"))
+        leg = route_leg(wf, P, slat, slon, t, rlat, rlon, deadline=deadline, obstacles=obstacles,
                         capture=emit_exploration, hstep=rp["hstep"], dt_cap=rp["dt_cap"])
         # sample wind + confidence at the leg's midpoint and end (for the briefing)
         mid = leg["path"][len(leg["path"]) // 2] if leg["path"] else {"lat": dlat, "lon": dlon}
@@ -380,7 +424,7 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
             if det and pos in ("beat", "run"):
                 laylines += _layline_pair(P, det["tws"], det["twd"], pos, dlat, dlon,
                                           leg["direct_nm"])
-        slat, slon, t = dlat, dlon, leg["eta"]
+        slat, slon, t = rlat, rlon, leg["eta"]   # continue from the rounding standoff (≈ the mark)
 
     total_min = round((t - float(start_epoch)) / 60.0, 1)
     timed_out = time.time() > deadline
