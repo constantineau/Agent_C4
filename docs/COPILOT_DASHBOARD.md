@@ -7,12 +7,31 @@ day/night, feedback widget). Lives in `pi/console/dashboard/` (served at `:8091/
 LLM layer is `pi/orin/copilot/dashboard_brief.py` (`POST /dashboard`) + the streamed `POST /detail`.
 **Note: the literal 12-tile grid below was deliberately simplified at build time to higher-order
 tiles** (commit `99c3d9d`, "crew direction"). The grid is now **9 tiles on a 3×3 layout** —
-`vmg, wind, tactics, forecast, sail, eta, ais, charge, data` — with the **AIS / Fleet** tile added
-(onboard `GET /ais` → range/bearing/CPA/TCPA, ok/watch/act on the closing-CPA guard; v1 is AIS
-proximity/collision, handicap-aware fleet tactics is the next increment). The one remaining "later
-tile" is **PLAYBOOK-ADHERENCE** (unblocked by Lab-2 + the copilot playbook loader). Companion to
+`vmg, wind, tactics, playbook, forecast, sail, eta, ais, charge, data` (a 5×2 grid) — with the
+**AIS / Fleet** tile (onboard `GET /ais` → range/bearing/CPA/TCPA, ok/watch/act on the closing-CPA
+guard; v1 is AIS proximity/collision, handicap-aware fleet tactics is the next increment) AND the
+**PLAYBOOK-ADHERENCE** tile (the last "later tile" — **BUILT**, see below). Companion to
 `docs/ONBOARD_ENGINE_SCOPING.md` (the three-tier architecture) and
 the shipped copilot decision-support layer (`pi/orin/copilot/`).
+
+**PLAYBOOK-ADHERENCE tile (BUILT 2026-06-23).** "Are we sailing the frozen homework, and has a
+branch trigger fired?" Its truth is the **copilot**, not the engine: a deterministic
+`pi/orin/copilot/adherence.py` compares the Lab-2 frozen playbook (the `recommended` start variant +
+each variant's `what_flips_it` trigger, keyed by first-beat side) against the engine's live tactical
+read (`get_tactics`: persistent-vs-oscillating, favored side). It returns a ready-made tile object
+via **`GET /copilot/adherence`** (no LLM — always available; `na` when no playbook is aboard), which
+the dashboard polls on its own ~8 s cadence (separate from the slow LLM brief). States: **ok** = on
+plan (oscillating, or a persistent shift confirms the recommended side); **watch** = an oscillating
+*lean* toward a non-recommended side (early warning); **act** = a persistent shift now favors a
+DIFFERENT variant → the playbook's branch says switch (the tile names the variant + surfaces its
+`what_flips_it`). The face shows a variant table (share %, ★ recommended, ← favored-now); the detail
+carries the trigger text + grounding (`playbook:<id>`, `get_tactics`). It SELECTS/INTERPRETS the
+pre-authored variants — never originates strategy (RRS-41). Verified: pure-logic exit test
+(`bench_copilot.test_adherence_logic`, all states + grounding), an end-to-end `/adherence` run
+(stub engine + loaded playbook → branch fired), and a Playwright UI smoke (10-tile 5×2 grid, calm
+`On plan: Left` / escalated `Switch → Right`, detail + commentary, 0 console errors). *(Fixed in
+passing: `narrate.py`'s playbook-branch callout read `tac["persistent"]` flat, but the engine nests
+it under `tac["wind"]` — so the proactive branch callout never fired; now reads the nested path.)*
 
 The decision-support layer already produces a grounded `DecisionBrief` (situation + factors +
 recommendations, each grounded in an engine fact, with urgency + confidence). This doc specifies
@@ -82,8 +101,8 @@ cell.
 
 **Tiles (lock the set; greyed "coming soon" until their data exists):** WIND, SPEED (+ polar %),
 SAIL, NAV, LAYLINE, TACTICS, FATIGUE, FORECAST, ROUTE, DATA-HEALTH, HEEL/TRIM, DEPTH. Later:
-AIS/FLEET, PLAYBOOK-ADHERENCE (Lab-2). *(As built: the 9-tile higher-order set incl. **AIS/FLEET**;
-PLAYBOOK-ADHERENCE is the remaining later tile — see the status note at the top.)*
+AIS/FLEET, PLAYBOOK-ADHERENCE (Lab-2). *(As built: a **10-tile 5×2** higher-order set incl. both
+**AIS/FLEET** and **PLAYBOOK-ADHERENCE** — see the status note at the top.)*
 
 ---
 
@@ -266,10 +285,11 @@ originates strategy. Legal in-race. See `docs/RRS41_COMPLIANCE.md`.
   ranking/hysteresis + theme toggle (pure JS in `pi/console`); the onboard **polar-% tool** (the
   SPEED tile's "94%").
 - **Done since:** voice (the narration increment); the **AIS/FLEET tile** (onboard `GET /ais` via a
-  source-agnostic `ais.py` + other-vessel Signal K capture in `OnboardSource`).
+  source-agnostic `ais.py` + other-vessel Signal K capture in `OnboardSource`); the
+  **PLAYBOOK-ADHERENCE tile** (deterministic `copilot/adherence.py` + `GET /copilot/adherence`,
+  on-plan/branch-fired against the frozen Lab-2 variants — see the status note up top).
 - **Later:** handicap-aware **fleet** tactics on the AIS tile (roster → corrected-time delta, needs
-  the RaceDefinition `fleet` block onboard); **PLAYBOOK-ADHERENCE** tile (unblocked by Lab-2);
-  proactive auto-coach timer (toward proactive callouts).
+  the RaceDefinition `fleet` block onboard); proactive auto-coach timer (toward proactive callouts).
 - **Needs real sailing data:** TACTICS, FATIGUE, ROUTE read empty on the Baltic sample bench; they
   come alive on real boat data.
 

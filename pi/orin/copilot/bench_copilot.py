@@ -18,8 +18,9 @@ import argparse
 import json
 import sys
 
+from . import adherence as adherence_mod
 from . import brief as brief_mod
-from . import config, copilot, narrate as narrate_mod
+from . import config, copilot, narrate as narrate_mod, playbook as playbook_mod
 from .engine_client import EngineClient
 
 
@@ -41,8 +42,10 @@ _SYNTH_SNAPSHOT = {
         "next_rounding": {"exit_mark": "Leeward", "exit_course_deg": 200.0,
                           "exit_twa_deg": 150.0, "exit_leg_type": "run", "maneuver": "bear away"},
     },
-    "get_tactics": {"available": True, "persistent": True, "favored_side": "left",
-                    "oscillation_deg": 12, "recommendation": "work the left"},
+    "get_tactics": {"available": True, "favored_side": "left",
+                    "wind": {"persistent": True, "oscillation_deg": 12, "trend": "backing",
+                             "shift_deg": -8, "now": 250, "mean_12min": 258},
+                    "recommendation": "work the left"},
     "get_sail_advice": {"available": True, "optimal_sail": "A2", "wrong_sail": False,
                         "hoisted_sail": "A2"},
     "get_fatigue": {"available": True, "level": "rotate_now", "index": 82},
@@ -149,6 +152,73 @@ def _audit_brief(b: dict, allow_engine_only=True) -> bool:
     return ok
 
 
+# A minimal frozen playbook bundle (the c4.playbook/v1 shape the Lab signs) for the pure adherence
+# test — recommends LEFT, with a Right variant whose trigger is the branch the crew watches for.
+_PLAYBOOK_BUNDLE = {
+    "schema": "c4.playbook/v1", "race_id": "_bench_race",
+    "headline": "Gameplan: start on the Left (52% of forecasts agree); branch right on a persistent veer.",
+    "recommended": "left", "agreement": 0.52, "decision_spread_min": 18, "first_beat_rhumb_deg": 10.0,
+    "variants": [
+        {"id": "left", "name": "Left", "share": 0.52,
+         "what_flips_it": "the breeze backs early; if it veers right instead, the right side pays"},
+        {"id": "middle", "name": "Middle", "share": 0.28,
+         "what_flips_it": "the breeze stays steady near the rhumb"},
+        {"id": "right", "name": "Right", "share": 0.20,
+         "what_flips_it": "the breeze veers and holds right of ~020° for two-plus oscillation cycles"},
+    ],
+}
+
+
+def _tac(favored, persistent, osc, shift, trend):
+    return {"get_tactics": {"available": True, "favored_side": favored,
+            "wind": {"persistent": persistent, "oscillation_deg": osc, "shift_deg": shift, "trend": trend}}}
+
+
+def test_adherence_logic() -> bool:
+    """Pure-function exit test for the playbook-adherence tile — no engine/LLM. Verifies the five
+    states map correctly onto the frozen variants and stay grounded: no-playbook → na; oscillating →
+    on-plan; persistent shift confirming the recommended side → on-plan; persistent shift to a
+    DIFFERENT side → branch/ACT naming the right variant; an oscillating lean toward another side →
+    early-warning WATCH."""
+    ok = True
+    print("\n== playbook-adherence (pure, synthetic playbook + tactics) ==")
+    pb = playbook_mod.Playbook(_PLAYBOOK_BUNDLE)
+
+    no_pb = adherence_mod.evaluate(playbook_mod.Playbook(None), {})
+    ok &= _check("no playbook → na", no_pb["status"] == "na" and no_pb["available"] is False)
+
+    pre = adherence_mod.evaluate(pb, {"get_tactics": {"available": False}})
+    ok &= _check("no live tactics → hold the recommended start (ok, 'Left')",
+                 pre["status"] == "ok" and pre["value"] == "Left" and "holding" in pre["sub"])
+
+    osc = adherence_mod.evaluate(pb, _tac("either", False, 10, 1, "steady"))
+    ok &= _check("oscillating, no lean → on plan (ok)",
+                 osc["status"] == "ok" and osc["value"] == "On plan: Left")
+
+    confirm = adherence_mod.evaluate(pb, _tac("left", True, 8, -12, "backing"))
+    ok &= _check("persistent shift confirms recommended side → on plan (ok)",
+                 confirm["status"] == "ok" and "confirms" in confirm["sub"])
+
+    flip = adherence_mod.evaluate(pb, _tac("right", True, 8, 14, "veering"))
+    ok &= _check("persistent shift to a different side → branch (act, 'Switch → Right')",
+                 flip["status"] == "act" and flip["value"] == "Switch → Right"
+                 and "playbook:right" in flip["based"])
+    ok &= _check("branch why carries the right variant's flip trigger",
+                 "veers" in flip["why"])
+
+    lean = adherence_mod.evaluate(pb, _tac("either", False, 12, 7, "veering"))
+    ok &= _check("oscillating lean toward a non-recommended side → early-warning (watch)",
+                 lean["status"] == "watch" and "right lean" in lean["sub"])
+
+    # Grounding + tile-shape invariants on every live state.
+    for name, r in (("oscillating", osc), ("confirm", confirm), ("flip", flip), ("lean", lean)):
+        ok &= _check(f"{name}: grounded in the playbook + tactics",
+                     any(b.startswith("playbook:") for b in r["based"]) and "get_tactics" in r["based"])
+        ok &= _check(f"{name}: carries a variant table (rows)", bool(r.get("rows")))
+    print(f"  flip value/sub: {flip['value']!r} / {flip['sub']!r}")
+    return ok
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--llm", action="store_true", help="also exercise the LLM tool-loop")
@@ -156,8 +226,9 @@ def main():
     ap.add_argument("--route", default=None)
     args = ap.parse_args()
 
-    # The callout engine is pure — exercise it first, with no live engine needed.
+    # The callout + adherence engines are pure — exercise them first, with no live engine needed.
     overall = test_narrate_logic()
+    overall &= test_adherence_logic()
 
     print(f"\n>> engine: {config.ENGINE_URL}")
     engine = EngineClient()

@@ -6,6 +6,7 @@ Endpoints:
   POST /brief      — produce a DecisionBrief for the current situation (+ optional question)
   POST /narrate    — proactive crew callouts + a spoken line for what's newly worth saying (PUSH)
   POST /narrate/reset — clear the per-route speak-once dedup (a race / course change)
+  GET  /adherence — playbook-adherence tile (on-plan / branch-trigger-fired; deterministic)
   GET  /snapshot  — raw gathered engine facts (debug / "show me what you saw")
 
 There is intentionally no endpoint that takes an action — the copilot is read-only and advisory.
@@ -109,6 +110,14 @@ def detail(req: DetailRequest):
     deltas token-by-token; empty stream if the LLM is unavailable (dashboard keeps its WHY)."""
     return StreamingResponse(dashboard_brief.detail_stream(req.domain, req.question, req.tiles),
                              media_type="text/plain")
+
+
+@app.get("/adherence")
+def adherence(route: str | None = None):
+    """Playbook-adherence tile payload: are we on the frozen gameplan and has a branch trigger
+    fired? Deterministic (no LLM); na when no playbook is aboard. The crew dashboard polls this for
+    the PLAYBOOK-ADHERENCE tile."""
+    return copilot.make_adherence(route=route)
 
 
 @app.get("/snapshot")

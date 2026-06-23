@@ -19,9 +19,9 @@
   };
   const SEV = { ok: 0, watch: 1, act: 2, na: 2 };
 
-  const TILES = ["vmg", "wind", "tactics", "forecast", "sail", "eta", "ais", "charge", "data"];
+  const TILES = ["vmg", "wind", "tactics", "playbook", "forecast", "sail", "eta", "ais", "charge", "data"];
   const NAME = {
-    vmg: "VMG", wind: "TWS Trend", tactics: "Tactics", forecast: "Forecast",
+    vmg: "VMG", wind: "TWS Trend", tactics: "Tactics", playbook: "Playbook", forecast: "Forecast",
     sail: "Sail", eta: "Time to Mark", ais: "AIS / Fleet", charge: "Crew Energy", data: "Data",
   };
   /* AIS tile thresholds: nm to the closest point of approach + minutes to it (tunable). */
@@ -35,6 +35,7 @@
   const COPILOT = "/copilot";     // proxied to the Orin copilot (:8300); writes the commentary
   const BRIEF_EVERY = 90000;      // ask the LLM for a fresh brief ~every 90 s (it's slow, ~45 s)
   const BRIEF_TTL = 300;          // an LLM brief stays "fresh" 5 min before reverting to engine-read
+  const ADHERE_EVERY = 8000;      // poll the copilot's deterministic playbook-adherence ~every 8 s (cheap, no LLM)
 
   /* ---- tiny helpers needed early (used in the demo scenarios) ---- */
   const r0 = (x) => (x == null ? "?" : Math.round(x));
@@ -63,6 +64,9 @@
                    rows: [{ label: "Now", emph: true, cols: [arrowKts(250, 12)] }, { label: "−60 min", cols: [arrowKts(246, 14)] }, { label: "−120 min", cols: [arrowKts(242, 16)] }],
                    why: "True wind speed + direction now and looking back. Arrows point the way the wind blows (north wind points down, east points left). Eased a touch and edged right over the last couple of hours.", consider: "Oscillating breeze — work the shifts.", clears: "—", based: ["engine archive + live buffer"], conf: "high" },
         tactics: { status: "ok", value: "◀ Left", sub: "oscillating, favor left", why: "Oscillating; the left has paid. Lifted now.", consider: "Tack on the next header.", clears: "—", based: ["get_tactics: favored left, lifted"], conf: "high" },
+        playbook:{ status: "ok", value: "On plan: Left", sub: "oscillating ±6°",
+                   rows: [{ hdr: true, cols: ["agree", ""] }, { label: "★ Left", emph: true, cols: ["52%", "start · now"] }, { label: "Middle", cols: ["28%", ""] }, { label: "Right", cols: ["20%", ""] }],
+                   why: "Playbook recommends starting Left (52% of forecasts agree). Wind is oscillating — no persistent shift, so the Left gameplan stands; play the shifts within the band.", consider: "Hold the gameplan — tack on the headers, no branch yet.", clears: "—", based: ["playbook:left", "agreement 52%", "get_tactics"], conf: "high" },
         forecast:{ status: "ok", value: null,
                    rows: [{ label: "Now", emph: true, cols: [arrowKts(250, 10)] }, { label: "+60 min", cols: [arrowKts(256, 13)] }, { label: "+120 min", cols: [arrowKts(262, 15)] }, { sep: true, label: "FORECAST VS. ACTUAL" }, { hdr: true, cols: ["forecast", "actual"] }, { label: "−60 min", cols: [arrowKts(244, 13), arrowKts(243, 14)] }, { label: "−120 min", cols: [arrowKts(240, 16), arrowKts(238, 17)] }],
                    why: "Forecast wind speed + direction (arrows show direction; north wind points down). Building to ~15 kts and veering right. \"Forecast vs. actual\" compares the earlier forecast for −60/−120 min ago against what actually happened — within ~1 kt, verifying well.", consider: "Plan the gear for the build.", clears: "—", based: ["fetch_forecast + engine archive"], conf: "high" },
@@ -74,8 +78,9 @@
       },
     },
     escalated: {
-      mode: "llm-live", focus: "Bear-away coming up, and the crew tank is getting low.", confidence: "med",
+      mode: "llm-live", focus: "Playbook branch: the right is paying now. Bear-away coming up, and the crew tank is getting low.", confidence: "med",
       notes: [
+        { tile: "playbook", status: "act",   text: "Playbook branch fired — the persistent right shift says bail to the right side; the recommended Left start no longer pays.", conf: "high" },
         { tile: "sail",     status: "act",   text: "Peel J1 → A3 before the bear-away at the gate — start staging now (~4 min out).", conf: "high" },
         { tile: "charge",   status: "act",   text: "Crew energy down to 28% (rotate soon) — plan a driver change in the next few minutes.", conf: "med" },
         { tile: "forecast", status: "watch", text: "Forecast has been under-calling the breeze by ~2-3 kts — expect a bit more than it says.", conf: "med" },
@@ -86,6 +91,9 @@
                    rows: [{ label: "Now", emph: true, cols: [arrowKts(262, 16)] }, { label: "−60 min", cols: [arrowKts(252, 12)] }, { label: "−120 min", cols: [arrowKts(246, 9)] }],
                    why: "True wind speed + direction now and looking back. Arrows point the way the wind blows (north wind points down). Built ~7 kts and veered right ~16° over the last two hours — a persistent right trend.", consider: "Persistent right shift — favor the right side of the course.", clears: "the trend settles", based: ["engine archive + live buffer"], conf: "med" },
         tactics: { status: "watch", value: "Right ▶", sub: "persistent, favor right", why: "The breeze has shifted right and is holding — persistent, not oscillating.", consider: "Favor the right.", clears: "the shift reverses", based: ["get_tactics: favored right, persistent"], conf: "med" },
+        playbook:{ status: "act", value: "Switch → Right", sub: "branch: persistent veer favors right",
+                   rows: [{ hdr: true, cols: ["agree", ""] }, { label: "★ Left", cols: ["52%", "start"] }, { label: "Right", emph: true, cols: ["20%", "now"] }, { label: "Middle", cols: ["28%", ""] }],
+                   why: "A persistent veering shift now favors the right side — against the recommended Left. The playbook's branch trigger: if the breeze veers and holds right of ~020° for two-plus oscillation cycles, bail to the right.", consider: "Execute the branch — commit right per variant 'Right'.", clears: "the shift reverses / settles back toward the rhumb", based: ["playbook:right", "agreement 52%", "get_tactics"], conf: "high" },
         forecast:{ status: "watch", value: null,
                    rows: [{ label: "Now", emph: true, cols: [arrowKts(262, 16)] }, { label: "+60 min", cols: [arrowKts(268, 18)] }, { label: "+120 min", cols: [arrowKts(274, 19)] }, { sep: true, label: "FORECAST VS. ACTUAL" }, { hdr: true, cols: ["forecast", "actual"] }, { label: "−60 min", cols: [arrowKts(252, 12), arrowKts(256, 14)] }, { label: "−120 min", cols: [arrowKts(248, 10), arrowKts(252, 12)] }],
                    why: "Forecast wind speed + direction (arrows show direction; north wind points down). Building to ~19 kts and veering right. \"Forecast vs. actual\" shows it has under-called the wind by ~2 kts and the right shift — trust the trend over the model.", consider: "Forecast running light — plan for more than it says.", clears: "forecast comes back in line", based: ["fetch_forecast + engine archive"], conf: "med" },
@@ -443,6 +451,15 @@
         consider: st === "ok" ? "Instruments healthy." : "Cross-check before trusting a lone reading.",
         clears: st === "ok" ? "—" : "all sources fresh", based: ["get_sources: " + count + " sources"], conf: "engine" };
     },
+    /* PLAYBOOK-ADHERENCE: the frozen Lab-2 homework vs the live tactical read. Its truth lives on
+       the copilot (the playbook + the deterministic /adherence computation), not the engine, so it
+       reads App.adherence (fetched on its own cadence) rather than the engine poll `p`. */
+    playbook() {
+      const a = App.adherence;
+      if (!a) return NA("loading playbook…");
+      if (a.available === false || a.status === "na") return NA(a.sub || a.why || "no playbook aboard");
+      return Object.assign({}, a);   // copy: commitStatus / applyBrief mutate the tile object
+    },
   };
 
   function buildLive(p) {
@@ -499,6 +516,25 @@
     }
     // deterministic / unreachable → leave the last brief to expire; the dashboard stays engine-read
   }
+  /* poll the copilot's deterministic playbook-adherence read for the PLAYBOOK tile. Deterministic
+     (no LLM) so it's cheap to poll often; the copilot does the engine round-trip internally. A
+     failure leaves the last good read (or, on the very first failure, a clear "unreachable" na). */
+  async function fetchAdherence() {
+    if (App.src !== "live") return;
+    let r = null;
+    try {
+      const ctl = new AbortController();
+      const to = setTimeout(() => ctl.abort(), 12000);
+      const resp = await fetch(COPILOT + "/adherence", { headers: { Accept: "application/json" }, signal: ctl.signal });
+      clearTimeout(to);
+      r = resp.ok ? await resp.json() : null;
+    } catch (e) { r = null; }
+    if (r) App.adherence = r;
+    else if (!App.adherence) App.adherence = { available: false, status: "na", value: "—",
+      sub: "copilot unreachable", why: "The onboard copilot (:8300) is unreachable — playbook adherence needs it.",
+      consider: "—", clears: "—", based: [], conf: "engine" };
+    if (App.src === "live") render();
+  }
   function commitStatus(key, raw) {
     const d = App.dwell[key] || (App.dwell[key] = { committed: raw, cand: raw, n: 0 });
     if (raw === d.committed) { d.cand = raw; d.n = 0; return d.committed; }
@@ -513,9 +549,10 @@
     src: "live", demoScn: "calm",
     theme: localStorage.getItem("sr33.dash.theme") || "auto",
     pos: { lat: 45.33, lon: -82.0 },
-    openTile: null, streamTimer: null, pollTimer: null, seriesTimer: null, briefTimer: null, polling: false,
+    openTile: null, streamTimer: null, pollTimer: null, seriesTimer: null, briefTimer: null,
+    adhereTimer: null, polling: false,
     dwell: {}, data: null, windHist: [], fcstHist: [], seriesHist: [], lastPersist: 0, brief: null,
-    detailStreamKey: null, detailAbort: null,
+    adherence: null, detailStreamKey: null, detailAbort: null,
   };
   function currentData() {
     if (App.src === "demo") {
@@ -735,7 +772,7 @@
   function briefMe() {
     const b = document.getElementById("briefBtn");
     b.classList.add("busy"); b.textContent = "thinking…";
-    if (App.src === "live") { poll(); fetchBrief(); }
+    if (App.src === "live") { poll(); fetchBrief(); fetchAdherence(); }
     // the LLM is slow (~45 s warm); clear the busy state on a timer — render() updates when it lands
     setTimeout(() => { b.classList.remove("busy"); b.textContent = "Brief me ↻"; if (App.src !== "live") render(); }, 1500);
   }
@@ -751,6 +788,8 @@
     App.seriesTimer = setInterval(fetchSeries, 30000);
     setTimeout(fetchBrief, 4000);   // first LLM commentary once tiles exist, then on a cadence
     App.briefTimer = setInterval(fetchBrief, BRIEF_EVERY);
+    fetchAdherence();               // playbook-adherence (deterministic, fast), then on its own cadence
+    App.adhereTimer = setInterval(fetchAdherence, ADHERE_EVERY);
     document.getElementById("themeBtn").addEventListener("click", cycleTheme);
     document.getElementById("srcBtn").addEventListener("click", cycleSource);
     document.getElementById("briefBtn").addEventListener("click", briefMe);

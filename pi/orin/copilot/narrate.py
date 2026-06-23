@@ -138,10 +138,11 @@ def _tactics_callouts(tac, playbook):
     """A persistent shift is the on-the-water trigger the playbook branches on. If a variant
     matches the favored side, voice that branch (grounded in BOTH the tactic and the variant);
     otherwise voice the engine's tactical read alone (grounded only in get_tactics)."""
-    if not tac.get("persistent"):
+    wind = tac.get("wind") or {}
+    if not wind.get("persistent"):
         return []
     side = tac.get("favored_side")
-    osc = _num(tac.get("oscillation_deg"))
+    osc = _num(wind.get("oscillation_deg"))
     base = f"persistent shift{f', {osc}° swing' if osc else ''}"
     side_txt = f" — favored side {side}" if side else ""
     v = _variant_for_side(playbook, side)

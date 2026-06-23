@@ -15,6 +15,7 @@ The model interprets and prioritizes; it can never exceed or fabricate beyond th
 import json
 import re
 
+from . import adherence as adherence_mod
 from . import brief as brief_mod
 from . import config, narrate as narrate_mod, playbook as playbook_mod, tools
 from .engine_client import EngineClient
@@ -234,6 +235,21 @@ def make_narration(route=None, hoisted=None, use_llm: bool | None = None) -> dic
         "_meta": {"route": route, "engine": engine.base_url, "playbook_loaded": pb.loaded,
                   "model": config.LLM_MODEL if want_llm else None, "llm_used": mode == "llm"},
     }
+
+
+def make_adherence(route=None) -> dict:
+    """Deterministic playbook-adherence read for the PLAYBOOK-ADHERENCE dashboard tile: are we on
+    the frozen gameplan, and has a branch trigger fired? No LLM — the engine does the math (persistent
+    vs oscillating, favored side), `adherence.evaluate` maps it onto the pre-authored variants. Always
+    returns a tile payload (na when no playbook is aboard). Pulls only the engine's tactical read (the
+    one fact the tile needs), so it's cheap enough for the dashboard to poll on a short cadence."""
+    route = route or config.DEFAULT_ROUTE
+    engine = EngineClient()
+    pb = playbook_mod.load()
+    snapshot = {"get_tactics": engine.tactics(route)}
+    out = adherence_mod.evaluate(pb, snapshot)
+    out["_meta"] = {"route": route, "engine": engine.base_url, "playbook_loaded": pb.loaded}
+    return out
 
 
 def reset_narration(route=None) -> dict:

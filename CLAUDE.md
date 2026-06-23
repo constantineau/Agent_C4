@@ -145,14 +145,15 @@ via `OnboardSource`. It comes up with the rest of the Pi stack; quick check:
 | **5** ✅ | iPad nav companion: day/night, sail dial, course plot, navigator, tactics, routing | bench-verified end-to-end |
 | **6** ✅ | Alerting + summarizer + polar tooling | bench-complete; 2-practice-sail false-positive gate awaits real sailing |
 | 7 🔶 | Prod stack + deploy + rules review + soak | rules review done; server auth + TLS scaffolding done; prod deploy/soak gated on domain + prod `.env` |
-| **9** 🔶 | Onboard + C4 Performance Lab (three-tier pivot) | **9.0 data-access abstraction ✅ · 9.1 onboard engine service ✅ · 9.2 race gate + iPad onboard console ✅ · Lab-0 race ingestion + course loader ✅ · Lab-1 multi-model GRIB optimizer ✅ · Lab-2a/2b branching playbook bundle ✅ (fan-out → variants → Opus synthesis → signed, onboard-loadable artifact) · routing-fidelity 2b per-leg sail plan + reviewable boat sail model ✅ · routing-fidelity 2c isochrone VMG-gate/cone-prune/anti-over-tack ✅ · 9.4 Orin LLM appliance live (Ollama+Qwen2.5-7B :11434) + copilot decision-support layer ✅ (`pi/orin/copilot`)**; next the copilot crew-facing narration increment — see `docs/ONBOARD_ENGINE_SCOPING.md` |
+| **9** 🔶 | Onboard + C4 Performance Lab (three-tier pivot) | **9.0 data-access abstraction ✅ · 9.1 onboard engine service ✅ · 9.2 race gate + iPad onboard console ✅ · Lab-0 race ingestion + course loader ✅ · Lab-1 multi-model GRIB optimizer ✅ · Lab-2a/2b branching playbook bundle ✅ (fan-out → variants → Opus synthesis → signed, onboard-loadable artifact) · routing-fidelity 2b per-leg sail plan + reviewable boat sail model ✅ · routing-fidelity 2c isochrone VMG-gate/cone-prune/anti-over-tack ✅ · 9.4 Orin LLM appliance live (Ollama+Qwen2.5-7B :11434) + copilot decision-support layer ✅ (`pi/orin/copilot`) · copilot crew-facing narration ✅ · PLAYBOOK-ADHERENCE dashboard tile ✅ (10-tile 5×2 grid)**; next: handicap-aware fleet tactics — see `docs/ONBOARD_ENGINE_SCOPING.md` |
 
 **Current status:** Phases 0–6 built and bench-verified; Phase 7 started; **Phase 9 in progress
 (9.0 data-access abstraction ✅, 9.1 onboard engine service ✅ — see "Onboard engine service",
 9.2 server-side race gate ✅ + iPad onboard console ✅ — see "Race-mode gate" / "Onboard race
 console"; the C4 Performance Lab (`vps/lab`) is live with **Lab-0 race ingestion + course loader ✅**
 and **Lab-1 the multi-model GRIB optimizer ✅** + **Lab-2a/2b the branching playbook bundle ✅** —
-see "C4 Performance Lab"; next is the copilot crew-facing narration + routing-fidelity sail polars;
+see "C4 Performance Lab"; the copilot crew-facing narration + the PLAYBOOK-ADHERENCE dashboard tile
+are built; next is handicap-aware fleet tactics;
 **9.4 Orin LLM bring-up authored** (Orin Nano in hand 2026-06-18 —
 `pi/orin/` runtime/model bring-up: MLC + Qwen2.5-7B INT4 → OpenAI-compatible API, to run on the
 fresh unit; the SR33 copilot service is the next 9.4 increment) — see "Onboard LLM copilot").**
@@ -799,8 +800,10 @@ hero ~620 px; stats + collapsible `<details>` rail = Legs / Briefing / Wind fiel
 **3.3** the timeline scrub now **pans the map to the projected boat position** (Follow toggle, default
 on) — Orca's "ride along". NEXT = fold in the user's own Orca UX notes as refinements when they arrive.
 
-**Next (copilot track): the copilot's crew-facing narration increment** (it now has a signed playbook
-+ boat sail model to interpret).
+**Copilot track — crew-facing narration ✅ + PLAYBOOK-ADHERENCE dashboard tile ✅** (the copilot
+interprets the signed playbook + boat sail model; see "Onboard LLM copilot"). **Next:** handicap-aware
+**fleet** tactics on the AIS / Fleet tile (roster → corrected-time delta, needs the RaceDefinition
+`fleet` block loaded onboard); routing rounding-side enforcement; the proactive auto-coach timer.
 
 ## Onboard LLM copilot — Orin Nano (Phase 9.4, Tier 2)
 
@@ -843,9 +846,15 @@ redundant encoding + a commentary panel + tap-to-detail LLM deep-dives) is desig
 phases 1–4 shipped 2026-06-19/20 — static prototype → live engine wiring + deterministic status →
 LLM commentary/status-refine (`copilot dashboard_brief.py`, `POST /dashboard`) → streamed
 tap-to-detail (`POST /detail`), plus wind-trend charts, forecast-vs-actual verification, demo
-scenarios, day/night, feedback widget. **9 higher-order tiles** (`vmg, wind, tactics, forecast,
-sail, eta, ais, charge, data`) on a 3×3 grid; the **AIS / Fleet** tile is built (see "AIS / Fleet
-dashboard tile" below) — the design's remaining later tile is **PLAYBOOK-ADHERENCE**. Runtime
+scenarios, day/night, feedback widget. **10 higher-order tiles** (`vmg, wind, tactics, playbook,
+forecast, sail, eta, ais, charge, data`) on a 5×2 grid; the **AIS / Fleet** tile is built (see "AIS /
+Fleet dashboard tile" below) and the **PLAYBOOK-ADHERENCE** tile (the last "later tile") is built —
+deterministic `pi/orin/copilot/adherence.py` + `GET /copilot/adherence` compares the frozen Lab-2
+variants (recommended start + each variant's `what_flips_it` first-beat-side trigger) against the
+engine's tactical read → ok (on plan) / watch (oscillating lean) / act (a persistent shift fires the
+branch — names the variant to switch to); polled on its own ~8 s cadence; `na` with no playbook
+aboard. (Also fixed: `narrate.py`'s playbook-branch callout read `tac["persistent"]` flat vs the
+engine's nested `tac["wind"]["persistent"]`, so it never fired — now reads the nested path.) Runtime
 bring-up files (the originally-MLC plan, port **9000**) — note
 they describe MLC, the unit runs Ollama: `pi/orin/`:
 - **`SETUP.md`** — the bring-up runbook: flash JetPack 6.2 (L4T R36.4.x) + the QSPI firmware →

@@ -61,6 +61,20 @@ what's worth voicing), so the iPad can poll it every ~15 s and only voice what's
 `POST /narrate/reset` clears the dedup on a race / course change. The rounding callout reads
 `navigator.next_rounding` — the geometry of the leg *after* the next mark, computed by the engine.
 
+## Playbook adherence — the dashboard tile (`adherence.py`, `GET /adherence`)
+
+The data source for the crew dashboard's **PLAYBOOK-ADHERENCE** tile (`docs/COPILOT_DASHBOARD.md`):
+"are we sailing the frozen homework, and has a branch trigger fired?" Deterministic (no LLM) — it
+compares the loaded Lab-2 playbook (the `recommended` start variant + each variant's `what_flips_it`
+trigger, keyed by first-beat side) against the engine's tactical read (`get_tactics`: persistent vs
+oscillating, favored side). States: **ok** = on plan (oscillating, or a persistent shift confirms
+the recommended side); **watch** = an oscillating lean toward a non-recommended side (early warning);
+**act** = a persistent shift now favors a DIFFERENT variant → the playbook's branch says switch (the
+tile names the variant + surfaces its trigger). Returns a ready-made dashboard tile object (status/
+value/sub/why/consider/clears/based/rows), `na` when no playbook is aboard. Same posture as the
+brief/narration — SELECTS/INTERPRETS the pre-authored variants, never originates strategy. The
+dashboard polls `GET /adherence` on its own ~8 s cadence (the copilot does the engine round-trip).
+
 ## Files
 
 | File | What |
@@ -68,12 +82,13 @@ what's worth voicing), so the iPad can poll it every ~15 s and only voice what's
 | `config.py` | env config (engine URL, LLM `/v1` URL + model, timeouts, playbook path, port) |
 | `engine_client.py` | read-only client for the Pi engine fact endpoints (stdlib) |
 | `tools.py` | the **bounded tool surface** — OpenAI function specs + dispatch (the only LLM capabilities) |
-| `playbook.py` | loads a frozen playbook bundle (Lab-2); thin until Lab-2 lands |
+| `playbook.py` | loads a frozen playbook bundle (Lab-2); digest for the prompt + signature verify |
+| `adherence.py` | deterministic **playbook-adherence** for the dashboard tile (on-plan / branch-fired) |
 | `brief.py` | the `DecisionBrief` shape, the grounding `validate()`, grounded `structural_caveats()`, and the deterministic builder |
 | `llm.py` | minimal OpenAI `/v1` chat client with tool-calling (stdlib) |
 | `copilot.py` | orchestration: gather facts → bounded tool loop → validate → fallback; `make_narration()` |
 | `narrate.py` | the **PUSH** callout engine: grounded callouts (rounding/playbook/sail/fatigue/data) + speak-once dedup + LLM phrasing with deterministic fallback |
-| `app.py` | FastAPI service (`/health`, `/tools`, `POST /brief`, `POST /narrate`, `POST /narrate/reset`, `/snapshot`) |
+| `app.py` | FastAPI service (`/health`, `/tools`, `POST /brief`, `POST /narrate`, `POST /narrate/reset`, `GET /adherence`, `/snapshot`) |
 | `bench_copilot.py` | exit test for the layer (deterministic + `--llm`); pure stdlib |
 | `requirements.txt` | only `fastapi`+`uvicorn` (the logic is stdlib) |
 
@@ -89,6 +104,8 @@ curl -s -X POST localhost:8300/brief -H 'Content-Type: application/json' \
      -d '{"question":"What should the crew focus on right now?"}'
 # proactive callouts + a spoken line (poll this every ~15 s on the iPad):
 curl -s -X POST localhost:8300/narrate -H 'Content-Type: application/json' -d '{}'
+# playbook-adherence tile (deterministic; needs PLAYBOOK_PATH set to a frozen Lab-2 bundle):
+curl -s localhost:8300/adherence
 ```
 
 Env: `ENGINE_URL` (Pi engine), `LLM_BASE_URL` (default `http://127.0.0.1:11434/v1`), `LLM_MODEL`,
