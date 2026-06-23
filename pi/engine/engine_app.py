@@ -23,7 +23,7 @@ os.environ.setdefault("DATA_SOURCE", "onboard")  # this service is always the on
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app import navigator, tactics, routing, weather, sails, fatigue, onboard_conditions, datasource, ais
+from app import navigator, tactics, routing, weather, sails, fatigue, onboard_conditions, datasource, ais, fleet
 
 app = FastAPI(title="Agent_C4 Onboard Engine", version="0.1.0")
 # The iPad reaches the Pi directly over boat-local Wi-Fi in race mode; allow cross-origin so a
@@ -163,3 +163,26 @@ def ais_ep(max_range_nm: float = 12):
     contexts) and the geometry is computed by the boat's OWN computer. Threat-sorted (closing,
     smallest CPA first)."""
     return ais.get_ais_targets(max_range_nm)
+
+
+@app.post("/fleet/load")
+def fleet_load(body: dict):
+    """Load the fleet homework (roster + scoring + own rating) onboard. Body:
+    {definition, own?} or {fleet, scoring, own?}. Frozen at the gun; legal in-race."""
+    from shared.race_def import fleet_blob
+    body = body or {}
+    if body.get("definition") is not None:
+        blob = fleet_blob(body["definition"], body.get("own"))
+    else:
+        blob = {"fleet": body.get("fleet") or [], "scoring": body.get("scoring") or {},
+                "own": body.get("own") or {}}
+    datasource.active().save_fleet(blob)
+    return {"loaded": True, "roster_size": len(blob["fleet"])}
+
+
+@app.get("/fleet")
+def fleet_ep(max_range_nm: float = 40.0):
+    """Handicap-aware fleet tactics: roster-matched competitors with course progress + corrected-time
+    delta (who I need to beat, by how much), plus unmatched AIS traffic. Always legal in-race (own
+    receiver + own computer + pre-loaded public roster)."""
+    return fleet.get_fleet(max_range_nm)

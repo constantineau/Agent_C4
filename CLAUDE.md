@@ -145,7 +145,7 @@ via `OnboardSource`. It comes up with the rest of the Pi stack; quick check:
 | **5** ✅ | iPad nav companion: day/night, sail dial, course plot, navigator, tactics, routing | bench-verified end-to-end |
 | **6** ✅ | Alerting + summarizer + polar tooling | bench-complete; 2-practice-sail false-positive gate awaits real sailing |
 | 7 🔶 | Prod stack + deploy + rules review + soak | rules review done; server auth + TLS scaffolding done; prod deploy/soak gated on domain + prod `.env` |
-| **9** 🔶 | Onboard + C4 Performance Lab (three-tier pivot) | **9.0 data-access abstraction ✅ · 9.1 onboard engine service ✅ · 9.2 race gate + iPad onboard console ✅ · Lab-0 race ingestion + course loader ✅ · Lab-1 multi-model GRIB optimizer ✅ · Lab-2a/2b branching playbook bundle ✅ (fan-out → variants → Opus synthesis → signed, onboard-loadable artifact) · routing-fidelity 2b per-leg sail plan + reviewable boat sail model ✅ · routing-fidelity 2c isochrone VMG-gate/cone-prune/anti-over-tack ✅ · 9.4 Orin LLM appliance live (Ollama+Qwen2.5-7B :11434) + copilot decision-support layer ✅ (`pi/orin/copilot`) · copilot crew-facing narration ✅ · PLAYBOOK-ADHERENCE dashboard tile ✅ (10-tile 5×2 grid)**; next: handicap-aware fleet tactics — see `docs/ONBOARD_ENGINE_SCOPING.md` |
+| **9** 🔶 | Onboard + C4 Performance Lab (three-tier pivot) | **9.0 data-access abstraction ✅ · 9.1 onboard engine service ✅ · 9.2 race gate + iPad onboard console ✅ · Lab-0 race ingestion + course loader ✅ · Lab-1 multi-model GRIB optimizer ✅ · Lab-2a/2b branching playbook bundle ✅ (fan-out → variants → Opus synthesis → signed, onboard-loadable artifact) · routing-fidelity 2b per-leg sail plan + reviewable boat sail model ✅ · routing-fidelity 2c isochrone VMG-gate/cone-prune/anti-over-tack ✅ · 9.4 Orin LLM appliance live (Ollama+Qwen2.5-7B :11434) + copilot decision-support layer ✅ (`pi/orin/copilot`) · copilot crew-facing narration ✅ · PLAYBOOK-ADHERENCE dashboard tile ✅ (10-tile 5×2 grid) · handicap-aware fleet tactics ✅** — see `docs/ONBOARD_ENGINE_SCOPING.md` |
 
 **Current status:** Phases 0–6 built and bench-verified; Phase 7 started; **Phase 9 in progress
 (9.0 data-access abstraction ✅, 9.1 onboard engine service ✅ — see "Onboard engine service",
@@ -153,7 +153,7 @@ via `OnboardSource`. It comes up with the rest of the Pi stack; quick check:
 console"; the C4 Performance Lab (`vps/lab`) is live with **Lab-0 race ingestion + course loader ✅**
 and **Lab-1 the multi-model GRIB optimizer ✅** + **Lab-2a/2b the branching playbook bundle ✅** —
 see "C4 Performance Lab"; the copilot crew-facing narration + the PLAYBOOK-ADHERENCE dashboard tile
-are built; next is handicap-aware fleet tactics;
+are built; handicap-aware fleet tactics is built (see "Handicap-aware fleet tactics");
 **9.4 Orin LLM bring-up authored** (Orin Nano in hand 2026-06-18 —
 `pi/orin/` runtime/model bring-up: MLC + Qwen2.5-7B INT4 → OpenAI-compatible API, to run on the
 fresh unit; the SR33 copilot service is the next 9.4 increment) — see "Onboard LLM copilot").**
@@ -208,8 +208,8 @@ ok = clear / no closing traffic, watch = a target closing inside ~1.5 nm / 30 mi
 ~0.5 nm / 12 min guard (env-tunable in `dashboard.js`); the face shows the nearest closing contact +
 CPA/TCPA and the detail lists the threat-sorted targets. **v1 scope is AIS proximity/collision** (the
 always-legal safety layer); handicap-aware **fleet** tactics (roster match → corrected-time delta,
-the perflab item-6 vision) is the next increment and needs the RaceDefinition `fleet` block loaded
-onboard. Verified: onboard geometry unit test (`/tmp/test_ais_onboard.py`: head-on CPA≈0, opening
+the perflab item-6 vision) is now BUILT on top of it — see "Handicap-aware fleet tactics" below.
+Verified: onboard geometry unit test (`/tmp/test_ais_onboard.py`: head-on CPA≈0, opening
 target flagged, range filter, no own-ship pollution); cloud regression via `ais_inject.py` (CLOSING
 TUG CPA 0.54 nm / 16.2 min sorted first — unchanged baseline); engine `/ais` serves; Playwright UI
 (9-tile 3×3 grid, AIS tile clear-live / watch-demo + detail rows, 0 console errors).
@@ -801,9 +801,40 @@ hero ~620 px; stats + collapsible `<details>` rail = Legs / Briefing / Wind fiel
 on) — Orca's "ride along". NEXT = fold in the user's own Orca UX notes as refinements when they arrive.
 
 **Copilot track — crew-facing narration ✅ + PLAYBOOK-ADHERENCE dashboard tile ✅** (the copilot
-interprets the signed playbook + boat sail model; see "Onboard LLM copilot"). **Next:** handicap-aware
-**fleet** tactics on the AIS / Fleet tile (roster → corrected-time delta, needs the RaceDefinition
-`fleet` block loaded onboard); routing rounding-side enforcement; the proactive auto-coach timer.
+interprets the signed playbook + boat sail model; see "Onboard LLM copilot"). **Handicap-aware fleet
+tactics ✅** — see "Handicap-aware fleet tactics". **Next:** routing rounding-side enforcement (the
+overstand/2d gate is in; SIDE on islands remains); the proactive auto-coach timer.
+
+## Handicap-aware fleet tactics
+
+`vps/agent/app/fleet.py` extends the collision-only AIS layer to TACTICAL: it matches AIS targets to
+the pre-loaded race roster (MMSI exact → high confidence, else fuzzy name-match → lower) and turns the
+matched competitors into intelligence — each boat's distance-to-finish (projected onto the course
+polyline), on-water lead/lag, leverage (signed cross-track), and the **ORC corrected-time delta**: who
+you actually need to beat and by how much, NOT raw on-water position. A negative delta = that boat is
+projected to BEAT us on handicap (a rival/threat). Corrected-time supports **ToT** (corrected = elapsed
+× coeff; coeff from the entry's `rating`, else derived from GPH) and **ToD** (allowance = GPH s/nm),
+selected from the race `scoring` block; the delta is the part of the race still in play (projected to
+the finish, no race-start time needed). Everything is **fuzzy + confidence-flagged** (perflab item-5):
+AIS coverage is partial, matching imperfect, corrected-time a projection — every row carries a
+confidence and the gaps are stated. Unmatched vessels stay in the collision layer (`get_ais_targets`).
+
+Source-agnostic on the 9.0 seam (`datasource.active()` + the `ais` helpers), so the identical code
+runs cloud + onboard. The fleet **homework** (roster + scoring + own rating) is loaded with
+`shared.race_def.fleet_blob(definition, own)` via **`POST /fleet/load`** (onboard engine + extendable
+to cloud) → persisted by `datasource.save_fleet()` (cloud → `app_state` key `race_fleet`; onboard →
+the engine SQLite `kv` table) — frozen at the gun, legal in-race. The onboard engine serves **`GET
+/fleet`**; the cloud agent has a gated **`get_fleet`** tool (customized tactical advice → withheld
+racing, like tactics) + prompt section + fallback. The crew dashboard's **AIS / Fleet** tile overlays
+corrected-time standings under the collision rows (collision keeps status primacy = safety; fleet
+takes the tile face when traffic is clear), with Δ-corrected arrows (▲ = a rival ahead on handicap).
+**Verified:** unit test `vps/agent/test_fleet.py` (MMSI + name matching, course-progress DTF/leverage,
+ToT + ToD corrected deltas, tags, graceful no-roster) + onboard e2e (load roster → `GET /fleet` matched
+2 boats by MMSI against the bench's 34 live AIS targets, with DTF/lead/leverage/corrected deltas) +
+Playwright (10-tile grid, live + demo AIS/Fleet tile shows the fleet section with Δ arrows + rivals).
+**HONEST v1 scope:** corrected-time is a projection (uses SOG toward the finish, common-division-start
+assumption); the entry list rarely carries MMSI so matching is partial; the over-the-horizon public
+tracker (perflab item-6) is not yet a source. The engine computes; the LLM only interprets.
 
 ## Onboard LLM copilot — Orin Nano (Phase 9.4, Tier 2)
 

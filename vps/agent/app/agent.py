@@ -89,6 +89,17 @@ the crew isn't alarmed. If own ship has no position fix the tool returns targets
 geometry (`own_fix:false`) — report that you can list contacts but can't compute CPA. Collision
 avoidance is always allowed (it's safety, never "outside help" under RRS 41).
 
+FLEET / CORRECTED-TIME — get_fleet matches AIS targets to the pre-loaded race roster and reports,
+per competitor, distance-to-finish, on-water lead/lag, leverage (cross-course separation), and the
+ORC CORRECTED-TIME delta: who you actually need to beat and by how much, NOT raw on-water position.
+A negative corrected delta means that boat is projected to BEAT us on handicap (a real threat / your
+rival); positive means you're ahead corrected. Lead with the rivals (smallest absolute delta). This
+is FUZZY — AIS coverage is partial, matching is imperfect, corrected-time is a projection — so always
+state the confidence and never present a position as certain. The engine computes the geometry and
+handicap math; you only interpret it (who to cover, when to split, where the pressure is). Unmatched
+vessels stay in the collision layer (get_ais_targets). This is customized tactical advice → withheld
+in a race on this cloud app (the boat uses its own onboard computer); fine for practice/debrief.
+
 ALERTS — get_alerts returns the automated alerts the system is RAISING right now, most severe
 first: closing AIS traffic, stale telemetry, shallow/shoaling water, boatspeed well under polar,
 a persistent wind shift, or helm fatigue. They're conservative and debounced (a condition has to
@@ -207,6 +218,24 @@ def _fallback(message: str) -> str:
                     f"{t.get('cpa_nm')} nm in {t.get('tcpa_min')} min (closing).")
         return (f"{r['count']} AIS target(s); nearest concern {who} at "
                 f"{t.get('range_nm')} nm, bearing {t.get('bearing')}° — opening / no CPA.")
+    if any(w in m for w in ("fleet", "competitor", "rival", "corrected", "handicap", "beat",
+                            "who am i racing", "who are we racing", "on the water")):
+        r = tools.get_fleet()
+        if not r.get("available"):
+            return r.get("note", "No fleet roster loaded.")
+        if not r["fleet"]:
+            return (f"No roster boats matched on AIS right now ({r['count_traffic']} other "
+                    "contact(s) as traffic).")
+        f = r["fleet"][0]
+        cd = f.get("corrected_delta_s")
+        if cd is None:
+            return (f"{r['count_matched']} fleet boat(s) on AIS; nearest {f['boat']} at "
+                    f"{f.get('range_nm')} nm — no corrected-time yet (need course + ratings).")
+        who, mins = f["boat"], abs(cd) / 60.0
+        side = "ahead of us on corrected time" if cd < 0 else "behind us on corrected time"
+        return (f"{r['count_matched']} fleet boat(s) matched ({r['scoring_method']}). Closest on "
+                f"handicap: {who} — projected {mins:.0f} min {side} (conf {f.get('confidence')}). "
+                "Fuzzy: partial AIS + projection.")
     if any(w in m for w in ("route", "routing", "best way", "weather route", "fastest", "which tack first")):
         r = tools.get_route()
         if not r.get("available"):

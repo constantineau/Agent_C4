@@ -33,6 +33,7 @@ if DEFAULT_MODE not in ("race", "practice"):
 GATED_TOOLS = frozenset({
     "get_tactics", "get_route", "get_polar_analysis", "get_polar_target",
     "get_sail_advice", "get_fatigue", "get_navigator", "get_route_status",
+    "get_fleet",
 })
 
 REFUSAL = (

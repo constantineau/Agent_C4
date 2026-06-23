@@ -301,6 +301,12 @@ def get_ais_targets(max_range_nm: float = 12):
     return ais.get_ais_targets(max_range_nm)
 
 
+def get_fleet(max_range_nm: float = 40):
+    """Handicap-aware fleet tactics: roster-matched competitors with corrected-time delta (fleet.py)."""
+    from . import fleet
+    return fleet.get_fleet(max_range_nm)
+
+
 def get_alerts():
     """Currently-active automated alerts (collision/safety/performance), most severe first."""
     return _alerts.get_alerts()
@@ -373,6 +379,7 @@ DISPATCH = {
     "get_history": get_history,
     "get_polar_target": get_polar_target,
     "get_ais_targets": get_ais_targets,
+    "get_fleet": get_fleet,
     "get_alerts": get_alerts,
     "get_summaries": get_summaries,
     "get_polar_analysis": get_polar_analysis,

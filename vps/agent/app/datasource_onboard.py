@@ -101,6 +101,7 @@ class OnboardSource:
             "route TEXT NOT NULL, seq INTEGER NOT NULL, name TEXT NOT NULL, "
             "lat REAL NOT NULL, lon REAL NOT NULL, PRIMARY KEY (route, seq))"
         )
+        conn.execute("CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         conn.commit()
         return conn
 
@@ -276,6 +277,21 @@ class OnboardSource:
     def save_practice_course(self, marks):
         """Replace the 'practice' route with these [(seq, name, lat, lon)] marks."""
         self.save_course("practice", marks)
+
+    def save_fleet(self, blob):
+        """Persist the loaded fleet homework (roster + scoring + own rating) as a JSON blob in the
+        engine SQLite `kv` store (key 'race_fleet'). Replaces any prior roster."""
+        import json
+        self._engine.execute(
+            "INSERT INTO kv (key, value) VALUES ('race_fleet', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (json.dumps(blob),))
+        self._engine.commit()
+
+    def get_fleet(self):
+        """The loaded fleet homework blob ({fleet, scoring, own}) or {} if none."""
+        import json
+        row = self._engine.execute("SELECT value FROM kv WHERE key = 'race_fleet'").fetchone()
+        return json.loads(row["value"]) if row else {}
 
     def ais_targets(self, max_age_min):
         """Latest AIS observation per MMSI within the window — other-vessel Signal K contexts

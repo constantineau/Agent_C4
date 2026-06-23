@@ -303,6 +303,23 @@ def course_roundings(definition: dict, course_id: str = None) -> dict:
     return out
 
 
+def fleet_blob(definition: dict, own: dict = None) -> dict:
+    """Build the onboard fleet homework from a RaceDefinition: the competitor roster, the scoring
+    flavor (ToT/ToD → corrected-time math), and the own boat's rating. This is the fleet counterpart
+    of `course_to_marks` — the same homework→onboard link, loaded via `POST /fleet/load` and frozen
+    at the gun. `own` (optional) = {boat, mmsi?, orc_gph?, rating?, division?} for the home boat so
+    its corrected-time can be compared against the fleet; if omitted, the engine falls back to a
+    neutral coefficient. Returns {fleet, scoring, own}."""
+    roster = []
+    for e in definition.get("fleet", []) or []:
+        roster.append({"boat": e.get("boat"), "division": e.get("division", ""),
+                       "cls": e.get("cls", ""), "owner": e.get("owner", ""),
+                       "orc_gph": e.get("orc_gph"), "rating": e.get("rating"),
+                       "mmsi": e.get("mmsi")})
+    scoring = (definition.get("rules_profile") or {}).get("scoring") or {}
+    return {"fleet": roster, "scoring": scoring, "own": own or {}}
+
+
 if __name__ == "__main__":
     import sys
     path = sys.argv[1] if len(sys.argv) > 1 else None

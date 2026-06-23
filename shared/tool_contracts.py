@@ -142,6 +142,21 @@ AGENT_TOOLS = [
         },
     },
     {
+        "name": "get_fleet",
+        "description": ("Handicap-aware FLEET tactics: AIS targets matched to the pre-loaded race "
+                        "roster, with each competitor's distance-to-finish, on-water lead/lag, "
+                        "leverage, and the ORC CORRECTED-TIME delta (who you actually need to beat "
+                        "and by how much, not raw on-water position). Confidence-flagged; unmatched "
+                        "vessels are returned as traffic for the collision layer."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "max_range_nm": {"type": "number", "default": 40},
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "get_alerts",
         "description": ("Active automated alerts the system is currently raising — closing AIS "
                         "traffic, stale telemetry, shallow/shoaling water, boatspeed well under "
