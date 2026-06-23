@@ -167,15 +167,15 @@ def ais_ep(max_range_nm: float = 12):
 
 @app.post("/fleet/load")
 def fleet_load(body: dict):
-    """Load the fleet homework (roster + scoring + own rating) onboard. Body:
-    {definition, own?} or {fleet, scoring, own?}. Frozen at the gun; legal in-race."""
+    """Load the fleet homework (roster + scoring + own rating + public-tracker config) onboard. Body:
+    {definition, own?} or {fleet, scoring, own?, tracker?}. Frozen at the gun; legal in-race."""
     from shared.race_def import fleet_blob
     body = body or {}
     if body.get("definition") is not None:
         blob = fleet_blob(body["definition"], body.get("own"))
     else:
         blob = {"fleet": body.get("fleet") or [], "scoring": body.get("scoring") or {},
-                "own": body.get("own") or {}}
+                "own": body.get("own") or {}, "tracker": body.get("tracker") or {}}
     datasource.active().save_fleet(blob)
     return {"loaded": True, "roster_size": len(blob["fleet"])}
 

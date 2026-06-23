@@ -153,6 +153,22 @@ class FleetEntry:
 
 
 @dataclass
+class TrackerConfig:
+    """Public race tracker as an over-the-horizon FLEET source (YB/TracTrac-style). Whether it may be
+    used ONBOARD is gated by `rules_profile.tracker_permitted` (per-race SI), NOT by this block — this
+    only carries HOW to fetch it. `provider`: 'generic_json'|'yb'|'tractrac'|'bycmack'|'sample';
+    `url`: the JSON/XHR endpoint behind the web UI; `fields`: optional key map for generic_json
+    ({name,lat,lon,sog,cog,time} → the feed's names); `list_path`: dotted path to the boat list;
+    `delay_min`: the feed's nominal publish delay (used for the honest 'delayed' note)."""
+    provider: str = ""
+    url: str = ""
+    fields: dict = field(default_factory=dict)
+    list_path: str = ""
+    delay_min: Optional[float] = None
+    note: str = ""
+
+
+@dataclass
 class Provenance:
     sources: list = field(default_factory=list)        # [{label, url, retrieved}]
     si_status: str = ""
@@ -175,6 +191,7 @@ class RaceDefinition:
     requirements: list = field(default_factory=list)   # [Requirement] — comprehensive checklists
     rules_profile: dict = field(default_factory=dict)  # RulesProfile (rule mods + scoring)
     fleet: list = field(default_factory=list)          # [FleetEntry]
+    tracker: dict = field(default_factory=dict)        # public race tracker source config (see TrackerConfig)
     provenance: dict = field(default_factory=dict)     # Provenance
     schema_version: str = SCHEMA_VERSION
 
@@ -237,6 +254,16 @@ def validate(d: dict) -> tuple[list, list]:
     rp = d.get("rules_profile", {})
     if rp.get("tracker_permitted") is None:
         warnings.append("rules_profile.tracker_permitted unset — confirm per-race (SI)")
+    tr = d.get("tracker", {})
+    if tr:
+        prov = (tr.get("provider") or "").lower()
+        if not prov:
+            warnings.append("tracker block has no provider — set provider + url (or 'sample')")
+        elif prov != "sample" and not tr.get("url"):
+            warnings.append(f"tracker provider {prov!r} has no url — verify the live JSON endpoint")
+        if rp.get("tracker_permitted") and not (prov == "sample" or tr.get("url")):
+            warnings.append("tracker is permitted but not fetchable (no url) — over-the-horizon "
+                            "fleet will be empty until the endpoint is set")
     return errors, warnings
 
 
@@ -309,15 +336,21 @@ def fleet_blob(definition: dict, own: dict = None) -> dict:
     of `course_to_marks` — the same homework→onboard link, loaded via `POST /fleet/load` and frozen
     at the gun. `own` (optional) = {boat, mmsi?, orc_gph?, rating?, division?} for the home boat so
     its corrected-time can be compared against the fleet; if omitted, the engine falls back to a
-    neutral coefficient. Returns {fleet, scoring, own}."""
+    neutral coefficient. Also carries the public-tracker config (over-the-horizon fleet source); its
+    `permitted` flag is driven STRICTLY by `rules_profile.tracker_permitted` (default conservative —
+    None/False → off), never by the tracker block itself. Returns {fleet, scoring, own, tracker}."""
     roster = []
     for e in definition.get("fleet", []) or []:
         roster.append({"boat": e.get("boat"), "division": e.get("division", ""),
                        "cls": e.get("cls", ""), "owner": e.get("owner", ""),
                        "orc_gph": e.get("orc_gph"), "rating": e.get("rating"),
                        "mmsi": e.get("mmsi")})
-    scoring = (definition.get("rules_profile") or {}).get("scoring") or {}
-    return {"fleet": roster, "scoring": scoring, "own": own or {}}
+    rp = definition.get("rules_profile") or {}
+    scoring = rp.get("scoring") or {}
+    tracker = dict(definition.get("tracker") or {})
+    if tracker:
+        tracker["permitted"] = bool(rp.get("tracker_permitted"))   # per-race gate is authoritative
+    return {"fleet": roster, "scoring": scoring, "own": own or {}, "tracker": tracker}
 
 
 if __name__ == "__main__":

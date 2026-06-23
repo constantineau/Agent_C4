@@ -4,7 +4,9 @@ corrected-time delta. Stubs the data source so it runs standalone (no DB / no li
 Run:  PYTHONPATH=vps/agent python3 vps/agent/test_fleet.py
   or inside the engine container:  docker ... exec -w /srv engine python test_fleet.py
 """
-from app import fleet, ais
+import time
+
+from app import fleet, ais, tracker
 
 ok = True
 def check(name, cond):
@@ -86,6 +88,59 @@ fleet.datasource.active = lambda: FakeSource(BLOB_TOD, TARGETS, MARKS)
 tod = fleet.get_fleet()
 check("ToD method reported", "Distance" in tod["scoring_method"])
 check("ToD still produces a corrected delta", tod["fleet"][0].get("corrected_delta_s") is not None)
+
+# --- public tracker source ------------------------------------------------------------------
+print("--- tracker ---")
+
+# (0) tracker.positions: aged + confidence-reduced fixes from the bench 'sample' provider
+tracker._reset_cache()
+tk = tracker.positions({"provider": "sample", "delay_min": 15})
+check("tracker available with positions", tk["available"] and len(tk["positions"]) == 3)
+fix0 = tk["positions"][0]
+check("each fix is aged (age_s ~ delay)", 800 < fix0["age_s"] < 1200)   # 15 min ≈ 900 s
+check("delayed fix confidence is reduced (<1)", 0.1 <= fix0["confidence"] < 1.0)
+check("confidence decays to a floor when stale", tracker._age_conf(3 * 3600) == 0.1)
+check("a fresh fix is full confidence", abs(tracker._age_conf(0) - 1.0) < 1e-9)
+
+# (1) over-the-horizon: a roster boat on the tracker but NOT on our AIS → an aged tracker row.
+#     'Il Mostro' is in the sample feed but absent from TARGETS; add it to the roster.
+ROSTER_TK = ROSTER + [{"boat": "Il Mostro", "division": "I", "orc_gph": 590.0, "mmsi": None}]
+BLOB_TK = {"fleet": ROSTER_TK,
+           "scoring": {"system": "ORC", "method": "Single-Number Time-on-Time (ToT)"},
+           "own": {"boat": "C4 SR33", "orc_gph": 630.0},
+           "tracker": {"permitted": True, "provider": "sample", "delay_min": 15}}
+fleet.datasource.active = lambda: FakeSource(BLOB_TK, TARGETS, MARKS)
+tracker._reset_cache()
+rtk = fleet.get_fleet()
+byb = {r["boat"]: r for r in rtk["fleet"]}
+check("tracker status reports permitted + available", rtk["tracker"] and rtk["tracker"]["permitted"] and rtk["tracker"]["available"])
+check("over-the-horizon roster boat added from tracker", "Il Mostro" in byb)
+if "Il Mostro" in byb:
+    im = byb["Il Mostro"]
+    check("the tracker row is sourced=tracker + carries an age", im["source"] == "tracker" and im.get("age_s", 0) > 0)
+    check("the tracker row confidence is reduced vs a live AIS match", im["confidence"] < byb["Defiance"]["confidence"])
+check("count split: live AIS vs tracker", rtk["count_ais"] == 2 and rtk["count_tracker"] >= 1)
+check("Defiance/Windquest stay live AIS (source=ais)", byb["Defiance"]["source"] == "ais" and byb["Windquest"]["source"] == "ais")
+
+# (2) permission gate: tracker present but NOT permitted → no tracker rows + a gap note
+BLOB_NP = {**BLOB_TK, "tracker": {"permitted": False, "provider": "sample", "delay_min": 15}}
+fleet.datasource.active = lambda: FakeSource(BLOB_NP, TARGETS, MARKS)
+tracker._reset_cache()
+rnp = fleet.get_fleet()
+check("not-permitted tracker → 0 tracker rows", rnp["count_tracker"] == 0)
+check("not-permitted tracker → withheld gap note", any("not permitted" in g.lower() for g in (rnp.get("gaps") or [])))
+check("not-permitted tracker status flags permitted False", rnp["tracker"] and rnp["tracker"]["permitted"] is False)
+
+# (3) identity enrichment: an unmatched AIS target sitting ON a roster boat's tracker fix gets resolved.
+#     Place an MMSI-less, name-less AIS target right at Il Mostro's sample-feed position (45.35,-82.70).
+TARGETS_ID = TARGETS + [{"mmsi": "555555555", "name": None, "lat": 45.35, "lon": -82.70, "sog": 8.3, "cog": 15, "time": 0}]
+fleet.datasource.active = lambda: FakeSource(BLOB_TK, TARGETS_ID, MARKS)
+tracker._reset_cache()
+rid = fleet.get_fleet()
+bid = {r["boat"]: r for r in rid["fleet"]}
+check("unknown AIS target identity-resolved to Il Mostro via tracker", "Il Mostro" in bid and bid["Il Mostro"]["matched_by"] == "tracker_position")
+check("position-resolved row is a LIVE AIS source (not the delayed tracker)", "Il Mostro" in bid and bid["Il Mostro"]["source"] == "ais")
+check("the resolved target is no longer unmatched traffic", all(t.get("mmsi") != "555555555" for t in rid["traffic"]))
 
 print("RESULT:", "PASS" if ok else "FAIL")
 import sys; sys.exit(0 if ok else 1)

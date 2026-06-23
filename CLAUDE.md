@@ -832,9 +832,30 @@ takes the tile face when traffic is clear), with Δ-corrected arrows (▲ = a ri
 ToT + ToD corrected deltas, tags, graceful no-roster) + onboard e2e (load roster → `GET /fleet` matched
 2 boats by MMSI against the bench's 34 live AIS targets, with DTF/lead/leverage/corrected deltas) +
 Playwright (10-tile grid, live + demo AIS/Fleet tile shows the fleet section with Δ arrows + rivals).
+**Over-the-horizon public tracker (perflab item-6, BUILT).** A permitted public race tracker (YB/
+TracTrac-style, e.g. bycmack.com/tracking) is now a SECOND, DELAYED fleet source. `vps/agent/app/
+tracker.py` does a best-effort, **cached** PULL (TTL `TRACKER_REFRESH_S`, never blocks the per-poll
+fleet view) via pluggable providers (`generic_json` for the common JSON/XHR endpoint behind the web UI
+via a per-race field map; `sample` for the bench) → normalized fixes, with **every position aged +
+confidence-reduced** (`_age_conf` decays to a floor past `TRACKER_STALE_MIN`) — a fix is never shown as
+current. `fleet.get_fleet()` folds it in two ways: **(a) identity** — an unmatched AIS target sitting on
+a roster boat's tracker fix (within `TRACKER_MATCH_NM`) is resolved by position (`matched_by=
+tracker_position`, source stays `ais`), filling the AIS↔roster MMSI gap; **(b) over-the-horizon** —
+roster boats on the tracker but not on our AIS at all become aged rows (`source=tracker`, `age_s`,
+reduced confidence). The per-race gate is **`rules_profile.tracker_permitted`** (authoritative;
+default conservative — off if unset; for Bayview Mackinac the user confirmed it's allowed); the config
+(provider/url/field-map/delay) is a new `RaceDefinition.tracker` block carried by `fleet_blob` (its
+`permitted` is driven strictly by `tracker_permitted`). The response gains `count_ais`/`count_tracker`
++ a `tracker` status block; the dashboard tile flags tracker rows with a ⌛ age marker + an
+"over the horizon" note (live AIS outranks the delayed tracker for the face). Verified: `test_fleet.py`
+tracker cases (aging/confidence decay, over-horizon rows, permission gate off, identity-resolution) +
+onboard e2e (`sample` provider → 3 over-horizon rows aged ~15 min, conf-reduced; gate-off withholds) +
+Playwright (⌛ marker renders, over-horizon text).
 **HONEST v1 scope:** corrected-time is a projection (uses SOG toward the finish, common-division-start
-assumption); the entry list rarely carries MMSI so matching is partial; the over-the-horizon public
-tracker (perflab item-6) is not yet a source. The engine computes; the LLM only interprets.
+assumption); the entry list rarely carries MMSI so matching is partial; the **bycmack tracker's live
+JSON endpoint + field map still need verification** against the real feed (the Bayview instance ships a
+documented placeholder, provider `bycmack`, `url:""` — `sample` works on the bench). The engine
+computes; the LLM only interprets.
 
 ## Onboard LLM copilot — Orin Nano (Phase 9.4, Tier 2)
 

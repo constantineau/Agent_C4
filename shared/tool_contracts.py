@@ -146,8 +146,10 @@ AGENT_TOOLS = [
         "description": ("Handicap-aware FLEET tactics: AIS targets matched to the pre-loaded race "
                         "roster, with each competitor's distance-to-finish, on-water lead/lag, "
                         "leverage, and the ORC CORRECTED-TIME delta (who you actually need to beat "
-                        "and by how much, not raw on-water position). Confidence-flagged; unmatched "
-                        "vessels are returned as traffic for the collision layer."),
+                        "and by how much, not raw on-water position). Where the race permits it, a "
+                        "DELAYED public race tracker adds over-the-horizon roster boats (rows marked "
+                        "source='tracker' with an age). Confidence-flagged; unmatched vessels are "
+                        "returned as traffic for the collision layer."),
         "input_schema": {
             "type": "object",
             "properties": {

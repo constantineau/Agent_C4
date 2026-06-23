@@ -167,6 +167,13 @@
 
   "fleet": [],
 
+  "tracker": {
+    "provider": "bycmack",
+    "url": "",
+    "delay_min": 15,
+    "note": "Official public tracker bycmack.com/tracking (YB Races-style) — the user confirmed it is ALLOWED + normal in-race for Bayview Mackinac (rules_profile.tracker_permitted=true). NEEDS VERIFICATION: the JSON/XHR endpoint URL + field map behind the web UI (delay ~15 min); set `url` (and `fields`/`list_path` if the keys differ from name/lat/lon/sog/cog/time) before live use. Use provider 'sample' on the bench."
+  },
+
   "provenance": {
     "sources": [
       {"label": "2026 Bayview Mackinac Notice of Race (NOR), V6 approved 11/19/25",
