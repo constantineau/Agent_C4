@@ -156,12 +156,17 @@ class FleetEntry:
 class TrackerConfig:
     """Public race tracker as an over-the-horizon FLEET source (YB/TracTrac-style). Whether it may be
     used ONBOARD is gated by `rules_profile.tracker_permitted` (per-race SI), NOT by this block — this
-    only carries HOW to fetch it. `provider`: 'generic_json'|'yb'|'tractrac'|'bycmack'|'sample';
-    `url`: the JSON/XHR endpoint behind the web UI; `fields`: optional key map for generic_json
-    ({name,lat,lon,sog,cog,time} → the feed's names); `list_path`: dotted path to the boat list;
-    `delay_min`: the feed's nominal publish delay (used for the honest 'delayed' note)."""
+    only carries HOW to fetch it. `provider`: 'yb'(==bycmack/ybtracking)|'generic_json'|'tractrac'|
+    'sample'. For `yb` (bycmack.com/tracking IS YB Tracking) set `race` (the yb.tl id, e.g.
+    'bayviewmack2026') + optional `host` (default cf.yb.tl) — the GetPositions JSON endpoint is built
+    from those; no field map needed (name/lat/lon/sog/cog/time are at known keys). For `generic_json`
+    set `url` (the JSON/XHR endpoint behind the web UI) + optional `fields` ({name,lat,lon,sog,cog,time}
+    → the feed's names) + `list_path` (dotted path to the boat list). `delay_min`: the feed's nominal
+    publish delay (used for the honest 'delayed' note)."""
     provider: str = ""
     url: str = ""
+    race: str = ""                                     # yb.tl race id (yb provider)
+    host: str = ""                                     # yb host override (default cf.yb.tl)
     fields: dict = field(default_factory=dict)
     list_path: str = ""
     delay_min: Optional[float] = None
@@ -257,13 +262,18 @@ def validate(d: dict) -> tuple[list, list]:
     tr = d.get("tracker", {})
     if tr:
         prov = (tr.get("provider") or "").lower()
+        _yb = prov in ("yb", "ybtracking", "yellowbrick", "bycmack")
+        # a yb provider is fetchable from `race` (the id) OR `url`; others need `url`.
+        fetchable = prov == "sample" or bool(tr.get("url")) or (_yb and bool(tr.get("race")))
         if not prov:
-            warnings.append("tracker block has no provider — set provider + url (or 'sample')")
-        elif prov != "sample" and not tr.get("url"):
-            warnings.append(f"tracker provider {prov!r} has no url — verify the live JSON endpoint")
-        if rp.get("tracker_permitted") and not (prov == "sample" or tr.get("url")):
-            warnings.append("tracker is permitted but not fetchable (no url) — over-the-horizon "
-                            "fleet will be empty until the endpoint is set")
+            warnings.append("tracker block has no provider — set provider + url/race (or 'sample')")
+        elif not fetchable:
+            warnings.append(f"tracker provider {prov!r} not fetchable — set "
+                            + ("`race` (e.g. 'bayviewmack2026')" if _yb else "`url`")
+                            + " — verify the live endpoint")
+        if rp.get("tracker_permitted") and not fetchable:
+            warnings.append("tracker is permitted but not fetchable — over-the-horizon "
+                            "fleet will be empty until the endpoint/race id is set")
     return errors, warnings
 
 

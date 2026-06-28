@@ -168,10 +168,11 @@
   "fleet": [],
 
   "tracker": {
-    "provider": "bycmack",
-    "url": "",
+    "provider": "yb",
+    "race": "bayviewmack2026",
+    "host": "cf.yb.tl",
     "delay_min": 15,
-    "note": "Official public tracker bycmack.com/tracking (YB Races-style) — the user confirmed it is ALLOWED + normal in-race for Bayview Mackinac (rules_profile.tracker_permitted=true). NEEDS VERIFICATION: the JSON/XHR endpoint URL + field map behind the web UI (delay ~15 min); set `url` (and `fields`/`list_path` if the keys differ from name/lat/lon/sog/cog/time) before live use. Use provider 'sample' on the bench."
+    "note": "VERIFIED 2026-06-28: bycmack.com/tracking is YB Tracking (yb.tl). Positions come from https://cf.yb.tl/API3/Race/bayviewmack2026/GetPositions?t=0 — JSON, teams[].name + latest positions[] {latitude,longitude,sogKnots,cog,gpsAtMillis,dtfNm}. Confirmed against the real bayviewmack2025 feed (race-id convention bayviewmack<year>). The user confirmed the tracker is ALLOWED + normal in-race for Bayview Mackinac (rules_profile.tracker_permitted=true). The 2026 id returns {error:...} (not published yet) → dormant until ~July 2026; provider degrades to no positions. Use provider 'sample' on the bench."
   },
 
   "provenance": {

@@ -142,5 +142,42 @@ check("unknown AIS target identity-resolved to Il Mostro via tracker", "Il Mostr
 check("position-resolved row is a LIVE AIS source (not the delayed tracker)", "Il Mostro" in bid and bid["Il Mostro"]["source"] == "ais")
 check("the resolved target is no longer unmatched traffic", all(t.get("mmsi") != "555555555" for t in rid["traffic"]))
 
+# --- YB provider (bycmack.com/tracking) -----------------------------------------------------
+# Real-shaped GetPositions payload (trimmed from the live bayviewmack2025 feed, 2026-06-28).
+print("--- tracker: yb provider ---")
+_YB_PAYLOAD = {"raceUrl": "bayviewmack2025", "teams": [
+    {"serial": 6012, "name": "Epic", "positions": [
+        {"latitude": 45.85141, "longitude": -84.60559, "sogKnots": 0.0, "cog": 0,
+         "gpsAtMillis": 1752501601000, "dtfNm": 0.0}]},
+    {"serial": 5015, "name": "Titan", "positions": [
+        # an OLDER fix first + the latest second → exercises the max-gpsAtMillis pick
+        {"latitude": 45.0, "longitude": -83.0, "sogKnots": 6.0, "cog": 10, "gpsAtMillis": 1752519000000},
+        {"latitude": 45.85149, "longitude": -84.60572, "sogKnots": 0.4, "cog": 76,
+         "gpsAtMillis": 1752519450000, "dtfNm": 0.0}]},
+    {"serial": 6150, "name": "Unplugged", "positions": []},   # no positions → skipped
+]}
+yfx = tracker._provider_yb(_YB_PAYLOAD)
+check("yb parses one fix per team-with-positions (empty positions skipped)", len(yfx) == 2)
+epic = next((f for f in yfx if f["name"] == "Epic"), None)
+check("yb fix carries name + lat/lon", epic and abs(epic["lat"] - 45.85141) < 1e-6 and abs(epic["lon"] + 84.60559) < 1e-6)
+check("yb gpsAtMillis converted to epoch seconds", epic and abs(epic["time"] - 1752501601.0) < 1e-3)
+titan = next((f for f in yfx if f["name"] == "Titan"), None)
+check("yb picks the LATEST position per boat (max gpsAtMillis)", titan and abs(titan["lat"] - 45.85149) < 1e-6 and titan["cog"] == 76)
+check("yb sog/cog pass through (knots/deg)", titan and titan["sog"] == 0.4)
+check("yb dormant payload (error, no teams) → no fixes", tracker._provider_yb({"at": 1, "error": "Unexpected Error"}) == [])
+
+# url building: race id → GetPositions endpoint; explicit url wins; host override honored.
+check("yb url built from race id", tracker._yb_url({"race": "bayviewmack2026"}) ==
+      "https://cf.yb.tl/API3/Race/bayviewmack2026/GetPositions?t=0")
+check("yb url honors host override", tracker._yb_url({"race": "x", "host": "yb.tl"}) ==
+      "https://yb.tl/API3/Race/x/GetPositions?t=0")
+check("yb explicit url wins over race", tracker._yb_url({"race": "x", "url": "http://e/p"}) == "http://e/p")
+check("yb with neither race nor url → no url", tracker._yb_url({}) is None)
+
+# positions(): a yb config with no race id degrades gracefully (no network, clear reason).
+tracker._reset_cache()
+ytk = tracker.positions({"provider": "yb"})
+check("yb with no race id → unavailable + reason (graceful)", ytk["available"] is False and "race id" in (ytk["error"] or ""))
+
 print("RESULT:", "PASS" if ok else "FAIL")
 import sys; sys.exit(0 if ok else 1)
