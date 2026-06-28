@@ -145,7 +145,7 @@ via `OnboardSource`. It comes up with the rest of the Pi stack; quick check:
 | **5** ✅ | iPad nav companion: day/night, sail dial, course plot, navigator, tactics, routing | bench-verified end-to-end |
 | **6** ✅ | Alerting + summarizer + polar tooling | bench-complete; 2-practice-sail false-positive gate awaits real sailing |
 | 7 🔶 | Prod stack + deploy + rules review + soak | rules review done; server auth + TLS scaffolding done; prod deploy/soak gated on domain + prod `.env` |
-| **9** 🔶 | Onboard + C4 Performance Lab (three-tier pivot) | **9.0 data-access abstraction ✅ · 9.1 onboard engine service ✅ · 9.2 race gate + iPad onboard console ✅ · Lab-0 race ingestion + course loader ✅ · Lab-1 multi-model GRIB optimizer ✅ · Lab-2a/2b branching playbook bundle ✅ (fan-out → variants → Opus synthesis → signed, onboard-loadable artifact) · routing-fidelity 2b per-leg sail plan + reviewable boat sail model ✅ · routing-fidelity 2c isochrone VMG-gate/cone-prune/anti-over-tack ✅ · routing-fidelity 2e finish/mark over-tack ("scramble") fixes ✅ · 9.4 Orin LLM appliance live (Ollama+Qwen2.5-7B :11434) + copilot decision-support layer ✅ (`pi/orin/copilot`) · copilot crew-facing narration ✅ + proactive auto-coach timer ✅ · PLAYBOOK-ADHERENCE dashboard tile ✅ (10-tile 5×2 grid) · handicap-aware fleet tactics ✅ (incl. verified YB/bycmack tracker source) ** — see `docs/ONBOARD_ENGINE_SCOPING.md` |
+| **9** 🔶 | Onboard + C4 Performance Lab (three-tier pivot) | **9.0 data-access abstraction ✅ · 9.1 onboard engine service ✅ · 9.2 race gate + iPad onboard console ✅ · Lab-0 race ingestion + course loader ✅ · Lab-1 multi-model GRIB optimizer ✅ · Lab-2a/2b branching playbook bundle ✅ (fan-out → variants → Opus synthesis → signed, onboard-loadable artifact) · routing-fidelity 2b per-leg sail plan + reviewable boat sail model ✅ · routing-fidelity 2c isochrone VMG-gate/cone-prune/anti-over-tack ✅ · routing-fidelity 2e finish/mark over-tack ("scramble") fixes ✅ · routing-fidelity 2f island rounding-side enforcement ✅ · 9.4 Orin LLM appliance live (Ollama+Qwen2.5-7B :11434) + copilot decision-support layer ✅ (`pi/orin/copilot`) · copilot crew-facing narration ✅ + proactive auto-coach timer ✅ · PLAYBOOK-ADHERENCE dashboard tile ✅ (10-tile 5×2 grid) · handicap-aware fleet tactics ✅ (incl. verified YB/bycmack tracker source) ** — see `docs/ONBOARD_ENGINE_SCOPING.md` |
 
 **Current status:** Phases 0–6 built and bench-verified; Phase 7 started; **Phase 9 in progress
 (9.0 data-access abstraction ✅, 9.1 onboard engine service ✅ — see "Onboard engine service",
@@ -646,8 +646,9 @@ same-course scenarios share one mask) + threads it through `route_leg`; `POST /a
 tab overlays coast/islands/zones on the route canvas. **A/B-verified on the real Cove GRIB route:**
 avoid OFF passes 1.9 nm from Bois Blanc center (cuts across it); ON clears at 5.7 nm for +0.3 nm/+1 tack.
 Caveats: NE 1:10m is coarse near shore + misses sub-nm islands (the race island/zone layer covers the
-critical ones; island coords geocoded `approx` → human-review); rounding SIDE not yet enforced (avoided
-either side). Tunables `GEO_RES_DEG`/`GEO_ISLAND_NM`. See `vps/lab/README.md`.
+critical ones; island coords geocoded `approx` → human-review); rounding SIDE is now enforced for
+islands that are MARKS of the race (2f, below) — plain hazard islands are still avoided either side.
+Tunables `GEO_RES_DEG`/`GEO_ISLAND_NM`. See `vps/lab/README.md`.
 
 **Map accuracy upgrade — NOAA ENC + BoatProfile + a real slippy map: SHIPPED (dev).** Fixes the
 "map is not accurate" complaint in three pieces (detail in `vps/lab/README.md`): **[A] NOAA ENC
@@ -683,7 +684,7 @@ leaves open + refines 663 cells where NE's coarse shoreline over-blocked water; 
 Canadian Manitoulin (via the GSHHG backstop) with US draft-aware shoals intact; live optimize 42.4 h,
 coverage 1.0, reaches the finish. (Cove Island's own landmass already read as land under NE because it
 abuts the coarse Bruce-Peninsula blob; the real win is the many mid-lake islands NE omits, plus the
-shoreline refinement.) Rounding **side** still not enforced (an island is avoided either side).
+shoreline refinement.) Rounding **side** is now enforced for marked islands (2f, below).
 
 ## C4 Performance Lab — Lab-2 branching playbook bundle
 
@@ -802,6 +803,25 @@ unchanged (metric-only). On the reported case: baseline finish ≈173 real maneu
 now reported honestly. Tunables `ROUTE_LAYLINE_COMMIT[_NM]` / `ROUTE_TACK_CUMULATIVE` /
 `ROUTE_MARK_POS_PRUNE` / `ROUTE_MARK_PRUNE_NM` / `ROUTE_MARK_PRUNE_CELL_NM` (all default ON).
 
+**Routing fidelity 2f — island ROUNDING-SIDE enforcement: SHIPPED (dev).** Obstacle avoidance (2a)
+kept the route off islands but on EITHER side; a race often says "leave Bois Blanc to port / Duck
+Islands to starboard" — and that side was thrown away (`course_to_marks`/`course_roundings` drop all
+`type:"island"` marks). Per the scoping rule **we only enforce a side when the island is a MARK OF THE
+RACE** — i.e. its `rounding` is `port`/`starboard`; a plain hazard island (`rounding:"none"`) stays
+avoided either side. Enforcement is a **wrong-side barrier** in the obstacle mask (`geo/obstacles.py`):
+for each marked island, `_island_rounding_marks()` finds the leg it sits on (transit bearing from the
+nearest preceding nav point to the nearest following one, islands skipped, gate/finish→midpoints), and
+`_fill_wrong_side_barrier()` rasterizes a wall on the ILLEGAL side (perpendicular to that axis, within
+|along| ≤ radius + `ROUTE_ROUNDSIDE_BAND_NM`), so the only gap is the legal hand. Source-independent
+(runs in ENC and GSHHG/NE backstop alike — it's a race rule, not an obstacle) and applied AFTER the
+waypoint carve so it can't be re-opened; barrier provenance lands in `obstacles.geometry.rounding_barriers`
+and the Gameplan map draws a P/S marker + a tick toward the legal side (`mapview.js`). Verified
+(`test_routing_2f.py`): scoping (a `none` hazard island gets no side); a controlled open-water flip
+(natural route takes the WRONG side → barrier flips it to the legal side, both port and starboard,
+still reaching the mark); and the real cove_island Duck(stbd)/BoisBlanc(port) barriers (legal side open,
+illegal blocked) — plus an offline gate→finish leg routed through the full mask still reaches the finish
+(no over-block). Tunables `ROUTE_ROUNDSIDE_ISLANDS` (default ON) / `ROUTE_ROUNDSIDE_BAND_NM`.
+
 **Optimizer UI study + restyle — `docs/OPTIMIZER_UI_STUDY.md`** (Orca + Expedition gap analysis). Tier 0
 (ensemble-control fix + ECMWF-ENS wired as a separate 51-member `ecmwf-ens` ensemble source) + Tier 1
 quick wins (map wind color-scale legend, forecast ▶/⏸ animation, grouped control cards Course/Boat &
@@ -833,8 +853,8 @@ on) — Orca's "ride along". NEXT = fold in the user's own Orca UX notes as refi
 **Copilot track — crew-facing narration ✅ + proactive auto-coach timer ✅ + PLAYBOOK-ADHERENCE
 dashboard tile ✅** (the copilot interprets the signed playbook + boat sail model; see "Onboard LLM
 copilot"). **Handicap-aware fleet tactics ✅** (incl. the verified YB/bycmack over-the-horizon tracker
-source) — see "Handicap-aware fleet tactics". **Next:** routing rounding-side enforcement on ISLANDS
-(the overstand/2d gate + nav-mark side are in; island obstacles are still avoided either side).
+source) — see "Handicap-aware fleet tactics". **Next:** (open) — island rounding-side enforcement is now
+in (routing fidelity 2f: marked islands only); the overstand/2d gate + nav-mark side were already in.
 
 ## Handicap-aware fleet tactics
 

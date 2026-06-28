@@ -137,8 +137,8 @@ python3 -m shared.race_def vps/lab/races/bayview_mackinac_2026.json
   the island); ON clears at 5.7 nm (no violations) for +0.3 nm / +1 tack. *Caveats:* the global
   backstop now defaults to GSHHG full-res (below) which catches sub-nm islands; the race-island/zone
   layer still backs the race-critical ones (island coords geocoded `approx` → human-review); rounding
-  **side** is not yet enforced (an island is avoided either side). Tunables: `GEO_RES_DEG`,
-  `GEO_ISLAND_NM`.
+  **side** is now enforced for islands that are MARKS of the race (see 2f below) — plain hazards stay
+  avoided either side. Tunables: `GEO_RES_DEG`, `GEO_ISLAND_NM`.
 
 ### Higher-res coastline backstop — GSHHG full-res
 
@@ -289,9 +289,25 @@ maneuvers, and would have shown the clean route as a false "0 tacks" vs the real
 classified against the wind LOCAL to where/when it's sailed → the true tacks-up/gybes-down tally
 (metric-only; route geometry unchanged).
 
+### Routing fidelity 2f — island rounding-side enforcement
+
+Obstacle avoidance (2a) keeps the route off islands but on EITHER side; a race often designates an
+island as a mark ("leave Bois Blanc to port / Duck Islands to starboard") and that side was discarded
+(`course_to_marks`/`course_roundings` drop all `type:"island"` marks). **We enforce a side only when
+the island is a MARK OF THE RACE** — its `rounding` is `port`/`starboard`; a plain hazard
+(`rounding:"none"`) stays avoided either side. Mechanism = a **wrong-side barrier** in the mask
+(`geo/obstacles.py`): `_island_rounding_marks()` finds the island's leg (transit bearing prev-nav →
+next-nav, islands skipped, gate/finish→midpoints); `_fill_wrong_side_barrier()` blocks the illegal side
+(perpendicular wall within |along| ≤ radius + `ROUTE_ROUNDSIDE_BAND_NM`) so only the legal hand is open.
+Source-independent (ENC or GSHHG/NE), applied after the waypoint carve; provenance →
+`obstacles.geometry.rounding_barriers`, drawn as a P/S marker on the Gameplan map. Verified
+(`test_routing_2f.py`): scoping (hazard island gets no side), a controlled open-water flip (natural
+route takes the wrong side → barrier flips it, both port and starboard, still reaching the mark), and
+the real cove_island Duck/BoisBlanc barriers (legal open, illegal blocked). Tunables
+`ROUTE_ROUNDSIDE_ISLANDS` (default ON) / `ROUTE_ROUNDSIDE_BAND_NM`.
+
 - **Next:** the copilot's crew-facing narration increment (it now has a signed playbook + boat sail
-  model to interpret). Routing fidelity 2c/2e and the higher-res GSHHG coastline backstop are **done**;
-  enforcing rounding **side** remains an optional upgrade.
+  model to interpret). Routing fidelity 2c/2e/2f and the higher-res GSHHG coastline backstop are **done**.
 
 ## Race documents (found 2026-06-17)
 

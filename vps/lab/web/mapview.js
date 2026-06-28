@@ -172,6 +172,20 @@ const MapView = (function () {
     if (show.rocks) fillRings(ctx, project, g.obstruction_rings, "#a01b1b", "#a01b1b", 0.55);
     // race zones (exclusion/hazard/tss) always shown
     for (const z of g.zones || []) fillRings(ctx, project, [z.ring], "#7a5cff", "#5a3fd6", 0.18);
+    // island ROUNDING-SIDE marks (leave-to-port/starboard) — a marker at the island + a tick pointing
+    // to the LEGAL side the route is forced onto. Only present for islands that are marks of the race.
+    for (const b of g.rounding_barriers || []) {
+      const p = project(b.lat, b.lon); if (!p) continue;
+      const legal = (b.side === "port" ? b.transit_brg + 90 : b.transit_brg - 90) * Math.PI / 180;
+      ctx.save();
+      ctx.strokeStyle = "#ff9f1c"; ctx.fillStyle = "#ff9f1c"; ctx.lineWidth = 2; ctx.globalAlpha = 0.9;
+      ctx.beginPath(); ctx.arc(p.x, p.y, 5, 0, 2 * Math.PI); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(p.x, p.y);
+      ctx.lineTo(p.x + 16 * Math.sin(legal), p.y - 16 * Math.cos(legal)); ctx.stroke();
+      ctx.font = "10px sans-serif"; ctx.textAlign = "center";
+      ctx.fillText(b.side === "port" ? "P" : "S", p.x, p.y - 9);
+      ctx.restore();
+    }
   }
 
   // route-EXPLORATION overlay: the isochrone frontier (equal-time-from-start arcs the optimizer

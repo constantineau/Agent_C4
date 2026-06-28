@@ -25,6 +25,13 @@ RES_DEG = float(os.environ.get("GEO_RES_DEG", "0.005"))      # mask cell size (~
 ISLAND_DEFAULT_NM = float(os.environ.get("GEO_ISLAND_NM", "1.5"))   # default island buffer radius
 MARK_CARVE_NM = float(os.environ.get("GEO_MARK_CARVE_NM", "0.5"))   # navigable pocket around each mark
 NM_PER_DEG_LAT = 60.0
+# Island rounding-SIDE enforcement: only for an island that is a MARK OF THE RACE (its `rounding` is
+# port/starboard) — a plain hazard island (rounding 'none') is still avoided either side. We rasterize a
+# WRONG-SIDE BARRIER: a wall on the illegal side of the island, perpendicular to the leg's transit axis,
+# so the only gap left is the legal side. `BAND` is the wall's half-thickness along the transit axis
+# (added to the island radius) — wide enough the route can't sneak between the disk and the wall ends.
+ROUNDSIDE_ISLANDS = os.environ.get("ROUTE_ROUNDSIDE_ISLANDS", "1").strip().lower() in ("1", "true", "yes", "on")
+ROUNDSIDE_BAND_NM = float(os.environ.get("ROUTE_ROUNDSIDE_BAND_NM", "1.5"))   # wall half-thickness added to radius
 
 # Coastline/obstacle data source: "natural_earth" (global backstop) or "enc" (NOAA S-57, draft-aware).
 COASTLINE_SOURCE = os.environ.get("COASTLINE_SOURCE", "natural_earth").strip().lower()
@@ -58,9 +65,10 @@ class ObstacleField:
         self.nx = max(1, int(math.ceil((e - w) / res_deg)))
         self.ny = max(1, int(math.ceil((n - s) / res_deg)))
         self.mask = bytearray(self.nx * self.ny)          # 1 = blocked (land/zone/island/shoal/obstr)
-        self.layers = {"coastline": 0, "zones": 0, "islands": 0, "shoal": 0, "obstruction": 0}
+        self.layers = {"coastline": 0, "zones": 0, "islands": 0, "shoal": 0, "obstruction": 0,
+                       "rounding_barrier": 0}
         self.geometry = {"land_rings": [], "zones": [], "islands": [],   # for the web overlay
-                         "shoal_rings": [], "obstruction_rings": []}
+                         "shoal_rings": [], "obstruction_rings": [], "rounding_barriers": []}
         self.source = COASTLINE_SOURCE                     # which coastline/obstacle dataset built this
         self.safety_depth = None                           # ENC no-go depth used (draft + margin), m
         self.active = False                                # any obstacle present at all
@@ -173,6 +181,44 @@ class ObstacleField:
             for ix in range(ixa, ixb + 1):
                 self.mask[row + ix] = 0
 
+    def _fill_wrong_side_barrier(self, lat, lon, radius_nm, transit_brg, side, band_nm):
+        """Block the ILLEGAL side of an island that is a race mark, so the route can only pass on the
+        legal hand. The wall is the half-plane on the wrong side of the island center, perpendicular to
+        the leg's transit axis (`transit_brg`), within a band of |along-axis| <= radius+band_nm (so it's
+        a thick wall the route can't slip past the ends of). The legal side stays open; the island disk /
+        land polygon still blocks the centre. `side` = which hand to LEAVE the island on ('port' keeps
+        the island to the boat's port → the boat passes on the island's starboard side → block the port
+        half). Returns cells blocked."""
+        if side not in ("port", "starboard"):
+            return 0
+        b = math.radians(transit_brg)
+        de_u, dn_u = math.sin(b), math.cos(b)            # transit direction unit (east, north)
+        le_u, ln_u = -math.cos(b), math.sin(b)           # PORT (left) of transit, unit (east, north)
+        band_half = radius_nm + band_nm
+        coslat = max(0.15, math.cos(math.radians(lat)))
+        # bound the scan to a square enclosing radius+band+full perpendicular reach (the wall spans the
+        # bbox perpendicular, so just scan the whole grid rows within the along-band's latitude reach).
+        touched = 0
+        for iy in range(self.ny):
+            clat = self.s + (iy + 0.5) * self.res
+            dn = (clat - lat) * NM_PER_DEG_LAT
+            row = iy * self.nx
+            for ix in range(self.nx):
+                clon = self.w + (ix + 0.5) * self.res
+                de = (clon - lon) * NM_PER_DEG_LAT * coslat
+                along = de * de_u + dn * dn_u
+                if abs(along) > band_half:
+                    continue
+                perp_port = de * le_u + dn * ln_u        # >0 = port side of the island vs transit
+                wrong = perp_port > 0 if side == "port" else perp_port < 0
+                if wrong and self.mask[row + ix] != 1:
+                    self.mask[row + ix] = 1
+                    touched += 1
+        self.layers["rounding_barrier"] = self.layers.get("rounding_barrier", 0) + touched
+        if touched:
+            self.active = True
+        return touched
+
     # --- summary -------------------------------------------------------------
     def summary(self) -> dict:
         return {
@@ -220,6 +266,60 @@ def _course_islands(definition, course_id):
         if m.get("type") == "island" and m.get("lat") is not None and m.get("lon") is not None:
             out.append({"name": m.get("name", "island"), "lat": m["lat"], "lon": m["lon"],
                         "radius_nm": float(m.get("radius_nm") or ISLAND_DEFAULT_NM)})
+    return out
+
+
+def _bearing(lat1, lon1, lat2, lon2):
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dl = math.radians(lon2 - lon1)
+    y = math.sin(dl) * math.cos(p2)
+    x = math.cos(p1) * math.sin(p2) - math.sin(p1) * math.cos(p2) * math.cos(dl)
+    return (math.degrees(math.atan2(y, x)) + 360) % 360
+
+
+def _island_rounding_marks(definition, course_id):
+    """Island marks that are MARKS OF THE RACE (rounding port/starboard) → the wrong-side-barrier inputs.
+
+    For each, the `transit_brg` is the bearing of the LEG the island sits on = from the nearest preceding
+    nav point to the nearest following nav point in course order (islands skipped, gate/finish collapsed
+    to midpoints), so the legal side is defined relative to the direction the boat actually passes it.
+    Plain hazard islands (rounding 'none') are excluded — they stay side-agnostic obstacles."""
+    courses = definition.get("courses", []) or []
+    course = next((c for c in courses if c.get("id") == course_id), None) or (courses[0] if courses else None)
+    if not course:
+        return []
+    # ordered course points: ('nav'|'island', lat, lon, side, radius)
+    seq = []
+    start = course.get("start") or {}
+    if start.get("lat") is not None:
+        seq.append(("nav", start["lat"], start["lon"], None, None))
+    for m in course.get("marks", []):
+        t = m.get("type")
+        if t == "island" and m.get("lat") is not None:
+            seq.append(("island", m["lat"], m["lon"], m.get("rounding", "none"),
+                        float(m.get("radius_nm") or ISLAND_DEFAULT_NM)))
+        elif t == "gate" and m.get("lat") is not None and m.get("lat2") is not None:
+            seq.append(("nav", (m["lat"] + m["lat2"]) / 2.0, (m["lon"] + m["lon2"]) / 2.0, None, None))
+        elif m.get("lat") is not None:
+            seq.append(("nav", m["lat"], m["lon"], None, None))
+    fpts = [p for p in ((course.get("finish") or {}).get("points") or []) if p and p.get("lat") is not None]
+    if len(fpts) >= 2:
+        seq.append(("nav", (fpts[0]["lat"] + fpts[1]["lat"]) / 2.0,
+                    (fpts[0]["lon"] + fpts[1]["lon"]) / 2.0, None, None))
+    elif len(fpts) == 1:
+        seq.append(("nav", fpts[0]["lat"], fpts[0]["lon"], None, None))
+    out = []
+    for i, (kind, la, lo, side, rad) in enumerate(seq):
+        if kind != "island" or side not in ("port", "starboard"):
+            continue
+        prev = next((p for p in reversed(seq[:i]) if p[0] == "nav"), None)
+        nxt = next((p for p in seq[i + 1:] if p[0] == "nav"), None)
+        a = prev or (kind, la, lo, None, None)          # fall back to the island itself if unbracketed
+        b = nxt or (kind, la, lo, None, None)
+        if a[1:3] == b[1:3]:
+            continue                                    # can't define a transit axis → skip enforcement
+        out.append({"lat": la, "lon": lo, "radius_nm": rad, "side": side,
+                    "transit_brg": _bearing(a[1], a[2], b[1], b[2])})
     return out
 
 
@@ -311,6 +411,19 @@ def build_for_course(definition: dict, course_id, bbox, *, coastline_on=True, zo
         for _seq, _name, mlat, mlon in marks:
             if mlat is not None and mlon is not None:
                 field._carve_disk(mlat, mlon, MARK_CARVE_NM)
+
+    # 5) island ROUNDING-SIDE enforcement (after the carve, so it can't be re-opened): for an island
+    #    that is a MARK OF THE RACE (rounding port/starboard) block the illegal side so the route passes
+    #    on the legal hand. Source-independent (ENC or backstop) — it's a race rule, not an obstacle —
+    #    and scoped to marked islands only (plain hazards stay avoided either side).
+    if islands_on and ROUNDSIDE_ISLANDS:
+        for r in _island_rounding_marks(definition, course_id):
+            n = field._fill_wrong_side_barrier(r["lat"], r["lon"], r["radius_nm"], r["transit_brg"],
+                                               r["side"], ROUNDSIDE_BAND_NM)
+            if n:
+                field.geometry["rounding_barriers"].append(
+                    {"lat": round(r["lat"], 5), "lon": round(r["lon"], 5), "side": r["side"],
+                     "transit_brg": round(r["transit_brg"], 1), "radius_nm": r["radius_nm"]})
 
     if ck is not None:
         _FIELD_CACHE[ck] = field
