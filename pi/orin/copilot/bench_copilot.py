@@ -219,6 +219,60 @@ def test_adherence_logic() -> bool:
     return ok
 
 
+def test_coach_logic() -> bool:
+    """Pure exit test for the auto-coach timer — no engine/LLM. Stub make_narration with a scripted
+    sequence and drive Coach.tick() directly: the held state captures the last result; a tick with a
+    NEW callout logs a spoken line to history; a tick with nothing new doesn't grow history; an
+    exception is caught into last_error and the loop keeps counting ticks (best-effort survival)."""
+    import asyncio
+
+    from . import coach as coach_mod
+    ok = True
+    print("\n== auto-coach timer (pure, stubbed narration) ==")
+
+    seq = []
+
+    def fake_make_narration(route=None, hoisted=None, use_llm=None):
+        item = seq.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    orig_mn, orig_rn = copilot.make_narration, copilot.reset_narration
+    copilot.make_narration = fake_make_narration
+    copilot.reset_narration = lambda route=None: None
+    try:
+        c = coach_mod._Coach()
+        c.route = "_bench_coach"
+
+        seq.append({"active": [{"headline": "Windward in ~8 min"}],
+                    "new": [{"headline": "Windward in ~8 min"}],
+                    "spoken": "Windward mark in about 8 minutes.", "narration_mode": "deterministic",
+                    "_meta": {"playbook_loaded": True}})
+        asyncio.run(c.tick())
+        st = c.state()
+        ok &= _check("tick1 holds the latest spoken line", st["spoken"].startswith("Windward"))
+        ok &= _check("tick1 logged one history entry", len(st["history"]) == 1)
+        ok &= _check("tick1 active populated + tick counted", len(st["active"]) == 1 and st["ticks"] == 1)
+        ok &= _check("tick1 surfaces playbook_loaded", st["playbook_loaded"] is True)
+
+        seq.append({"active": [{"headline": "Windward in ~8 min"}], "new": [], "spoken": "",
+                    "narration_mode": "none", "_meta": {}})
+        asyncio.run(c.tick())
+        st = c.state()
+        ok &= _check("tick2 (nothing new) does not grow history", len(st["history"]) == 1)
+        ok &= _check("tick2 clears last_error + counts", st["last_error"] is None and st["ticks"] == 2)
+
+        seq.append(RuntimeError("engine down"))
+        asyncio.run(c.tick())
+        st = c.state()
+        ok &= _check("tick3 error captured, loop survives",
+                     bool(st["last_error"]) and "engine down" in st["last_error"] and st["ticks"] == 3)
+    finally:
+        copilot.make_narration, copilot.reset_narration = orig_mn, orig_rn
+    return ok
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--llm", action="store_true", help="also exercise the LLM tool-loop")
@@ -229,6 +283,7 @@ def main():
     # The callout + adherence engines are pure — exercise them first, with no live engine needed.
     overall = test_narrate_logic()
     overall &= test_adherence_logic()
+    overall &= test_coach_logic()
 
     print(f"\n>> engine: {config.ENGINE_URL}")
     engine = EngineClient()

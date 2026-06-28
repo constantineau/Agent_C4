@@ -53,6 +53,7 @@
   const BRIEF_EVERY = 90000;      // ask the LLM for a fresh brief ~every 90 s (it's slow, ~45 s)
   const BRIEF_TTL = 300;          // an LLM brief stays "fresh" 5 min before reverting to engine-read
   const ADHERE_EVERY = 8000;      // poll the copilot's deterministic playbook-adherence ~every 8 s (cheap, no LLM)
+  const COACH_EVERY = 15000;      // poll the proactive auto-coach held state ~every 15 s (no recompute — the Orin timer drives it)
 
   /* ---- tiny helpers needed early (used in the demo scenarios) ---- */
   const r0 = (x) => (x == null ? "?" : Math.round(x));
@@ -576,6 +577,47 @@
       consider: "—", clears: "—", based: [], conf: "engine" };
     if (App.src === "live") render();
   }
+  /* poll the proactive auto-coach: the Orin runs the narration engine on a timer and HOLDS the
+     latest spoken line; we just read it (no recompute) and show what the copilot last volunteered.
+     A failure leaves the last good read. */
+  async function fetchCoach() {
+    if (App.src !== "live") return;
+    let r = null;
+    try {
+      const ctl = new AbortController();
+      const to = setTimeout(() => ctl.abort(), 12000);
+      const resp = await fetch(COPILOT + "/coach", { headers: { Accept: "application/json" }, signal: ctl.signal });
+      clearTimeout(to);
+      r = resp.ok ? await resp.json() : null;
+    } catch (e) { r = null; }
+    if (r) App.coach = r;
+    if (App.src === "live") render();
+  }
+  function agoText(epochSec) {
+    if (!epochSec) return "";
+    const s = Math.max(0, Math.round(Date.now() / 1000 - epochSec));
+    return s < 60 ? s + "s ago" : Math.round(s / 60) + "m ago";
+  }
+  /* the coach speech line in the commentary panel — the last thing the copilot volunteered (from the
+     timer's spoken history), or, if nothing's been said yet, the top of the current callout banner.
+     Hidden when there's nothing to coach or off the live source. */
+  function renderCoach() {
+    const el = document.getElementById("coachLine");
+    if (!el) return;
+    const c = App.coach;
+    if (App.src !== "live" || !c) { el.hidden = true; return; }
+    let text = "", ago = "";
+    if (c.history && c.history.length && c.history[0].spoken) {
+      text = c.history[0].spoken; ago = agoText(c.history[0].at);
+    } else if (c.active && c.active.length) {
+      const a = c.active[0];
+      text = a.headline + (a.detail ? " — " + a.detail : "");
+    }
+    if (!text) { el.hidden = true; return; }
+    document.getElementById("coachSay").textContent = text;
+    document.getElementById("coachWhen").textContent = ago;
+    el.hidden = false;
+  }
   function commitStatus(key, raw) {
     const d = App.dwell[key] || (App.dwell[key] = { committed: raw, cand: raw, n: 0 });
     if (raw === d.committed) { d.cand = raw; d.n = 0; return d.committed; }
@@ -591,9 +633,9 @@
     theme: localStorage.getItem("sr33.dash.theme") || "auto",
     pos: { lat: 45.33, lon: -82.0 },
     openTile: null, streamTimer: null, pollTimer: null, seriesTimer: null, briefTimer: null,
-    adhereTimer: null, polling: false,
+    adhereTimer: null, coachTimer: null, polling: false,
     dwell: {}, data: null, windHist: [], fcstHist: [], seriesHist: [], lastPersist: 0, brief: null,
-    adherence: null, detailStreamKey: null, detailAbort: null,
+    adherence: null, coach: null, detailStreamKey: null, detailAbort: null,
   };
   function currentData() {
     if (App.src === "demo") {
@@ -647,6 +689,7 @@
     if (App.openTile && !document.getElementById("detail").hidden) populateDetail(App.openTile, false);
   }
   function renderCommentary(d) {
+    renderCoach();
     document.getElementById("commFocus").textContent = d.focus || "—";
     document.getElementById("commConf").textContent = "conf: " + (d.confidence || "—");
     const pill = document.getElementById("modePill");
@@ -813,7 +856,7 @@
   function briefMe() {
     const b = document.getElementById("briefBtn");
     b.classList.add("busy"); b.textContent = "thinking…";
-    if (App.src === "live") { poll(); fetchBrief(); fetchAdherence(); }
+    if (App.src === "live") { poll(); fetchBrief(); fetchAdherence(); fetchCoach(); }
     // the LLM is slow (~45 s warm); clear the busy state on a timer — render() updates when it lands
     setTimeout(() => { b.classList.remove("busy"); b.textContent = "Brief me ↻"; if (App.src !== "live") render(); }, 1500);
   }
@@ -831,6 +874,8 @@
     App.briefTimer = setInterval(fetchBrief, BRIEF_EVERY);
     fetchAdherence();               // playbook-adherence (deterministic, fast), then on its own cadence
     App.adhereTimer = setInterval(fetchAdherence, ADHERE_EVERY);
+    fetchCoach();                   // proactive auto-coach held state (no recompute), then on its own cadence
+    App.coachTimer = setInterval(fetchCoach, COACH_EVERY);
     document.getElementById("themeBtn").addEventListener("click", cycleTheme);
     document.getElementById("srcBtn").addEventListener("click", cycleSource);
     document.getElementById("briefBtn").addEventListener("click", briefMe);

@@ -43,3 +43,10 @@ COPILOT_PORT = int(os.environ.get("COPILOT_PORT", "8300"))
 # If false, never call the LLM — always return the deterministic brief. Useful when the
 # Orin is busy/serving something else, or to prove the engine-only baseline.
 USE_LLM = _b("COPILOT_USE_LLM", True)
+
+# Proactive auto-coach: a background timer that runs the narration engine on a cadence, so the
+# copilot VOLUNTEERS coaching (and the time-driven callouts — rounding prep, branch triggers — fire
+# on the clock), not only when the iPad polls. Read the held result from GET /coach. The LLM only
+# phrases NEW callouts (most ticks are deterministic + cheap), following USE_LLM.
+COACH_ENABLED = _b("COPILOT_COACH", True)
+COACH_INTERVAL_S = float(os.environ.get("COPILOT_COACH_INTERVAL_S", "30"))

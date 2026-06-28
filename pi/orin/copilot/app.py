@@ -6,21 +6,37 @@ Endpoints:
   POST /brief      — produce a DecisionBrief for the current situation (+ optional question)
   POST /narrate    — proactive crew callouts + a spoken line for what's newly worth saying (PUSH)
   POST /narrate/reset — clear the per-route speak-once dedup (a race / course change)
+  GET  /coach      — the proactive AUTO-COACH state: latest spoken line + active callouts + history,
+                     produced by a background timer (the copilot volunteers coaching on a cadence)
   GET  /adherence — playbook-adherence tile (on-plan / branch-trigger-fired; deterministic)
   GET  /snapshot  — raw gathered engine facts (debug / "show me what you saw")
 
 There is intentionally no endpoint that takes an action — the copilot is read-only and advisory.
 """
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from . import coach as coach_mod
 from . import config, copilot, dashboard_brief, playbook as playbook_mod, tools
 from .engine_client import EngineClient
 from .llm import LLMClient
 
-app = FastAPI(title="Agent_C4 Onboard Copilot", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # The proactive auto-coach timer runs for the life of the service (no-op if COPILOT_COACH=false).
+    await coach_mod.start()
+    try:
+        yield
+    finally:
+        await coach_mod.stop()
+
+
+app = FastAPI(title="Agent_C4 Onboard Copilot", version="0.1.0", lifespan=lifespan)
 # The iPad may hit this directly over boat-local Wi-Fi.
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
@@ -67,6 +83,9 @@ def health():
         # Honest degraded modes so the crew knows what they're getting.
         "mode": ("llm" if (eng_ok and llm_ok) else
                  "deterministic" if eng_ok else "engine-unreachable"),
+        "coach": {"enabled": coach_mod.COACH.enabled, "running": coach_mod.COACH.running(),
+                  "interval_s": coach_mod.COACH.interval, "ticks": coach_mod.COACH.ticks,
+                  "last_error": coach_mod.COACH.last_error},
     }
 
 
@@ -110,6 +129,16 @@ def detail(req: DetailRequest):
     deltas token-by-token; empty stream if the LLM is unavailable (dashboard keeps its WHY)."""
     return StreamingResponse(dashboard_brief.detail_stream(req.domain, req.question, req.tiles),
                              media_type="text/plain")
+
+
+@app.get("/coach")
+def coach():
+    """The proactive auto-coach state: the latest spoken line + the active callouts + a short rolling
+    history, produced by the on-Orin timer (no recompute here — cheap to poll). Honest about whether
+    the timer is running and when it last ticked. This is the canonical PROACTIVE surface; POST
+    /narrate is the on-demand/debug equivalent (don't poll both for the same route — they share the
+    speak-once dedup)."""
+    return coach_mod.COACH.state()
 
 
 @app.get("/adherence")

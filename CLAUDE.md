@@ -145,7 +145,7 @@ via `OnboardSource`. It comes up with the rest of the Pi stack; quick check:
 | **5** ✅ | iPad nav companion: day/night, sail dial, course plot, navigator, tactics, routing | bench-verified end-to-end |
 | **6** ✅ | Alerting + summarizer + polar tooling | bench-complete; 2-practice-sail false-positive gate awaits real sailing |
 | 7 🔶 | Prod stack + deploy + rules review + soak | rules review done; server auth + TLS scaffolding done; prod deploy/soak gated on domain + prod `.env` |
-| **9** 🔶 | Onboard + C4 Performance Lab (three-tier pivot) | **9.0 data-access abstraction ✅ · 9.1 onboard engine service ✅ · 9.2 race gate + iPad onboard console ✅ · Lab-0 race ingestion + course loader ✅ · Lab-1 multi-model GRIB optimizer ✅ · Lab-2a/2b branching playbook bundle ✅ (fan-out → variants → Opus synthesis → signed, onboard-loadable artifact) · routing-fidelity 2b per-leg sail plan + reviewable boat sail model ✅ · routing-fidelity 2c isochrone VMG-gate/cone-prune/anti-over-tack ✅ · 9.4 Orin LLM appliance live (Ollama+Qwen2.5-7B :11434) + copilot decision-support layer ✅ (`pi/orin/copilot`) · copilot crew-facing narration ✅ · PLAYBOOK-ADHERENCE dashboard tile ✅ (10-tile 5×2 grid) · handicap-aware fleet tactics ✅** — see `docs/ONBOARD_ENGINE_SCOPING.md` |
+| **9** 🔶 | Onboard + C4 Performance Lab (three-tier pivot) | **9.0 data-access abstraction ✅ · 9.1 onboard engine service ✅ · 9.2 race gate + iPad onboard console ✅ · Lab-0 race ingestion + course loader ✅ · Lab-1 multi-model GRIB optimizer ✅ · Lab-2a/2b branching playbook bundle ✅ (fan-out → variants → Opus synthesis → signed, onboard-loadable artifact) · routing-fidelity 2b per-leg sail plan + reviewable boat sail model ✅ · routing-fidelity 2c isochrone VMG-gate/cone-prune/anti-over-tack ✅ · 9.4 Orin LLM appliance live (Ollama+Qwen2.5-7B :11434) + copilot decision-support layer ✅ (`pi/orin/copilot`) · copilot crew-facing narration ✅ + proactive auto-coach timer ✅ · PLAYBOOK-ADHERENCE dashboard tile ✅ (10-tile 5×2 grid) · handicap-aware fleet tactics ✅ (incl. verified YB/bycmack tracker source) ** — see `docs/ONBOARD_ENGINE_SCOPING.md` |
 
 **Current status:** Phases 0–6 built and bench-verified; Phase 7 started; **Phase 9 in progress
 (9.0 data-access abstraction ✅, 9.1 onboard engine service ✅ — see "Onboard engine service",
@@ -800,10 +800,11 @@ hero ~620 px; stats + collapsible `<details>` rail = Legs / Briefing / Wind fiel
 **3.3** the timeline scrub now **pans the map to the projected boat position** (Follow toggle, default
 on) — Orca's "ride along". NEXT = fold in the user's own Orca UX notes as refinements when they arrive.
 
-**Copilot track — crew-facing narration ✅ + PLAYBOOK-ADHERENCE dashboard tile ✅** (the copilot
-interprets the signed playbook + boat sail model; see "Onboard LLM copilot"). **Handicap-aware fleet
-tactics ✅** — see "Handicap-aware fleet tactics". **Next:** routing rounding-side enforcement (the
-overstand/2d gate is in; SIDE on islands remains); the proactive auto-coach timer.
+**Copilot track — crew-facing narration ✅ + proactive auto-coach timer ✅ + PLAYBOOK-ADHERENCE
+dashboard tile ✅** (the copilot interprets the signed playbook + boat sail model; see "Onboard LLM
+copilot"). **Handicap-aware fleet tactics ✅** (incl. the verified YB/bycmack over-the-horizon tracker
+source) — see "Handicap-aware fleet tactics". **Next:** routing rounding-side enforcement on ISLANDS
+(the overstand/2d gate + nav-mark side are in; island obstacles are still avoided either side).
 
 ## Handicap-aware fleet tactics
 
@@ -844,18 +845,25 @@ tracker_position`, source stays `ais`), filling the AIS↔roster MMSI gap; **(b)
 roster boats on the tracker but not on our AIS at all become aged rows (`source=tracker`, `age_s`,
 reduced confidence). The per-race gate is **`rules_profile.tracker_permitted`** (authoritative;
 default conservative — off if unset; for Bayview Mackinac the user confirmed it's allowed); the config
-(provider/url/field-map/delay) is a new `RaceDefinition.tracker` block carried by `fleet_blob` (its
+(provider/race/url/field-map/delay) is a `RaceDefinition.tracker` block carried by `fleet_blob` (its
 `permitted` is driven strictly by `tracker_permitted`). The response gains `count_ais`/`count_tracker`
 + a `tracker` status block; the dashboard tile flags tracker rows with a ⌛ age marker + an
 "over the horizon" note (live AIS outranks the delayed tracker for the face). Verified: `test_fleet.py`
 tracker cases (aging/confidence decay, over-horizon rows, permission gate off, identity-resolution) +
 onboard e2e (`sample` provider → 3 over-horizon rows aged ~15 min, conf-reduced; gate-off withholds) +
 Playwright (⌛ marker renders, over-horizon text).
+**bycmack endpoint VERIFIED 2026-06-28:** bycmack.com/tracking is **YB Tracking (yb.tl)**. The `yb`
+provider (`tracker.py`, alias `bycmack`/`ybtracking`) pulls the viewer's JSON positions API
+`https://cf.yb.tl/API3/Race/<race>/GetPositions?t=0` — per-team `teams[].name` + latest `positions[]`
+with `latitude`/`longitude`/`sogKnots`/`cog`/`gpsAtMillis`(epoch-ms)/`dtfNm`. Name + SOG + COG + time
+in ONE JSON call — no binary decode, no RaceSetup join. Set `tracker.race` (the yb.tl id, convention
+`bayviewmack<year>`) + optional `host`; the url is built from those. Confirmed live against the real
+`bayviewmack2025` feed (108 boats parsed); `bayviewmack2026` returns `{"error":...}` until the event is
+published (~July 2026) → the provider degrades to no positions gracefully. (YB also serves a big-endian
+binary `…/BIN/<race>/AllPositions3` track feed, lat/lon=int/1e5 — not needed; the JSON carries all.)
 **HONEST v1 scope:** corrected-time is a projection (uses SOG toward the finish, common-division-start
-assumption); the entry list rarely carries MMSI so matching is partial; the **bycmack tracker's live
-JSON endpoint + field map still need verification** against the real feed (the Bayview instance ships a
-documented placeholder, provider `bycmack`, `url:""` — `sample` works on the bench). The engine
-computes; the LLM only interprets.
+assumption); the entry list rarely carries MMSI so matching is partial. The engine computes; the LLM
+only interprets.
 
 ## Onboard LLM copilot — Orin Nano (Phase 9.4, Tier 2)
 
@@ -886,11 +894,28 @@ disclaimer + confidence; and if the LLM is off/slow/ungrounded the service retur
 brief** built from the same facts (always works, never depends on the model). A frozen **playbook**
 (Lab-2 output) loads via `PLAYBOOK_PATH` — the copilot selects/interprets its variants, never
 originates strategy; absent → it says so. Endpoints: `GET /health` (honest llm/deterministic/
-unreachable modes), `GET /tools` (the bounded surface), `POST /brief`, `GET /snapshot`. **Bench-verified
+unreachable modes + the auto-coach state), `GET /tools` (the bounded surface), `POST /brief`, `POST
+/narrate` (proactive callouts on demand), `GET /coach` (the auto-coach held state), `GET /adherence`,
+`GET /snapshot`. **Bench-verified
 on the real Orin** (over a Tailscale SSH forward of :11434, Pi engine on :8200): deterministic path
 green; LLM tool-loop returns a grounded brief in ~45 s warm (the model calls `get_forecast` on demand);
 graceful fallback fires on the ~2 min cold model-load or ungrounded JSON. Exit test:
-`python3 -m copilot.bench_copilot [--llm]`. **Next copilot increment = crew-facing narration.** See
+`python3 -m copilot.bench_copilot [--llm]`.
+**Proactive auto-coach timer ✅ (`coach.py`):** `make_narration` is PULL (the iPad asks); the auto-coach
+is the TIMER that DRIVES it. A background loop in the copilot lifespan ticks every `COACH_INTERVAL_S`
+(env `COPILOT_COACH_INTERVAL_S`, default 30 s; `COPILOT_COACH=false` disables), runs the narration
+engine, and HOLDS the latest result — so the copilot volunteers coaching whether or not anything polls,
+and the TIME-DRIVEN callouts (15/10/5-min rounding prep, a playbook branch firing, a sail change-down)
+fire on the clock. It mirrors the cloud alerting loop; `narrate.step`'s raise-slow/clear-fast
+speak-once already dedups, the loop just calls it on a schedule + keeps a short spoken history. The LLM
+only phrases NEW callouts (most ticks are deterministic + cheap), following `USE_LLM`. `GET /coach`
+reads the held state with no recompute (the canonical proactive surface; `POST /narrate` is the
+on-demand/debug equivalent — don't poll both for one route, they share the dedup). The crew dashboard
+shows a **COACH speech line** in the commentary panel (`fetchCoach` polls `/copilot/coach` ~15 s; the
+last volunteered line + "Ns ago", hidden when there's nothing to say). Verified: `bench_copilot.test_coach_logic`
+(held state / history-on-new / nothing-new / error-survival), live `/coach`+`/health` end-to-end (timer
+ticks against the Pi engine), Playwright (coach line renders the spoken history, only the known-unrelated
+`/copilot/adherence` 404). **Next copilot increment = (open).** See
 `pi/orin/copilot/README.md`. The **iPad crew dashboard** that surfaces the copilot graphically (a
 fixed, all-items-visible status grid that the LLM scores green/yellow/red with color-blind-safe
 redundant encoding + a commentary panel + tap-to-detail LLM deep-dives) is designed/locked in
