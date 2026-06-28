@@ -262,9 +262,36 @@ sail model reviewable + part of the frozen homework:
   boatspeed) — exactly what gets loaded onto the copilot, reviewable before lock-in. Endpoints
   `GET /api/crossovers` + `/api/polars`; the optimizer leg table gains a Sail column + a sail-plan strip.
 
+### Routing fidelity 2e — finish/mark over-tack ("scramble") fixes
+
+A real `cove_island` run whose finish leg was a light-air beat came back as a degenerate zig-zag
+(dozens of tiny tacks, ~3x oversail, ~2x slow). Structural in the isochrone `route_leg`: the 2c tack
+penalty was a per-step haircut (not cumulative), the prune buckets by bearing-from-leg-start so the
+two tacks never eliminate each other, and nothing committed the boat to a layline near the mark. Three
+env-flagged fixes (all default ON):
+- **`ROUTE_LAYLINE_COMMIT`** — within `ROUTE_LAYLINE_COMMIT_NM` (10 nm) of the mark, once a node can lay
+  it (bears > the VMG half-angle `_vmg_twa()` off the LOCAL wind axis) drop the opposite-tack headings so
+  it fetches the layline; re-checked each generation (a shift re-opens it), final-approach-only so the
+  strategic side choice is kept farther out.
+- **`ROUTE_TACK_CUMULATIVE`** — the tack cost accrues into a per-path penalty `pen` (+ node ETA); the
+  prune ranks by `rng_eff = rng − pen`, so repeated alternation truly loses ground (not a ~5% nudge).
+- **`ROUTE_MARK_POS_PRUNE`** — within `ROUTE_MARK_PRUNE_NM` (6 nm) of the mark, bucket the prune by
+  POSITION (`ROUTE_MARK_PRUNE_CELL_NM` ≈0.25 nm cell) not bearing-from-start, so near-colocated
+  opposite-tack nodes compete and the least-tacked wins.
+
+A/B against ONE frozen GFS+NAM+HRRR field (the reported Jun-29 19:00Z case): baseline finish 27 tacks /
+2.7x / 83 h → #2 alone **0 tacks / 1.1x / 40 h**, #3 alone **0 tacks / 1.1x / 40 h** (each kills it
+independently; #1 is the clean-layline finisher for genuine-beat finishes). Anti-under-tack guarded:
+a steady dead-upwind leg still tacks the minimum and reaches (`test_routing_2e.py`; 2c/2d still green).
+Also fixed the per-leg tack **counter**: it classified tack-side off a frozen leg-start wind, so on a
+clocking leg it mis-counts in either direction (on the frozen baseline it UNDER-counted, 135 vs 173 real
+maneuvers, and would have shown the clean route as a false "0 tacks" vs the real 3). Now each segment is
+classified against the wind LOCAL to where/when it's sailed → the true tacks-up/gybes-down tally
+(metric-only; route geometry unchanged).
+
 - **Next:** the copilot's crew-facing narration increment (it now has a signed playbook + boat sail
-  model to interpret). Routing fidelity 2c (isochrone VMG-gate/cone/adaptive) and the higher-res GSHHG
-  coastline backstop are **done**; enforcing rounding **side** remains an optional upgrade.
+  model to interpret). Routing fidelity 2c/2e and the higher-res GSHHG coastline backstop are **done**;
+  enforcing rounding **side** remains an optional upgrade.
 
 ## Race documents (found 2026-06-17)
 

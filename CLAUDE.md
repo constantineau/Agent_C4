@@ -145,7 +145,7 @@ via `OnboardSource`. It comes up with the rest of the Pi stack; quick check:
 | **5** ✅ | iPad nav companion: day/night, sail dial, course plot, navigator, tactics, routing | bench-verified end-to-end |
 | **6** ✅ | Alerting + summarizer + polar tooling | bench-complete; 2-practice-sail false-positive gate awaits real sailing |
 | 7 🔶 | Prod stack + deploy + rules review + soak | rules review done; server auth + TLS scaffolding done; prod deploy/soak gated on domain + prod `.env` |
-| **9** 🔶 | Onboard + C4 Performance Lab (three-tier pivot) | **9.0 data-access abstraction ✅ · 9.1 onboard engine service ✅ · 9.2 race gate + iPad onboard console ✅ · Lab-0 race ingestion + course loader ✅ · Lab-1 multi-model GRIB optimizer ✅ · Lab-2a/2b branching playbook bundle ✅ (fan-out → variants → Opus synthesis → signed, onboard-loadable artifact) · routing-fidelity 2b per-leg sail plan + reviewable boat sail model ✅ · routing-fidelity 2c isochrone VMG-gate/cone-prune/anti-over-tack ✅ · 9.4 Orin LLM appliance live (Ollama+Qwen2.5-7B :11434) + copilot decision-support layer ✅ (`pi/orin/copilot`) · copilot crew-facing narration ✅ + proactive auto-coach timer ✅ · PLAYBOOK-ADHERENCE dashboard tile ✅ (10-tile 5×2 grid) · handicap-aware fleet tactics ✅ (incl. verified YB/bycmack tracker source) ** — see `docs/ONBOARD_ENGINE_SCOPING.md` |
+| **9** 🔶 | Onboard + C4 Performance Lab (three-tier pivot) | **9.0 data-access abstraction ✅ · 9.1 onboard engine service ✅ · 9.2 race gate + iPad onboard console ✅ · Lab-0 race ingestion + course loader ✅ · Lab-1 multi-model GRIB optimizer ✅ · Lab-2a/2b branching playbook bundle ✅ (fan-out → variants → Opus synthesis → signed, onboard-loadable artifact) · routing-fidelity 2b per-leg sail plan + reviewable boat sail model ✅ · routing-fidelity 2c isochrone VMG-gate/cone-prune/anti-over-tack ✅ · routing-fidelity 2e finish/mark over-tack ("scramble") fixes ✅ · 9.4 Orin LLM appliance live (Ollama+Qwen2.5-7B :11434) + copilot decision-support layer ✅ (`pi/orin/copilot`) · copilot crew-facing narration ✅ + proactive auto-coach timer ✅ · PLAYBOOK-ADHERENCE dashboard tile ✅ (10-tile 5×2 grid) · handicap-aware fleet tactics ✅ (incl. verified YB/bycmack tracker source) ** — see `docs/ONBOARD_ENGINE_SCOPING.md` |
 
 **Current status:** Phases 0–6 built and bench-verified; Phase 7 started; **Phase 9 in progress
 (9.0 data-access abstraction ✅, 9.1 onboard engine service ✅ — see "Onboard engine service",
@@ -771,6 +771,36 @@ tacks only when a shift makes the new board genuinely pay. Verified: unit tests 
 correct; upwind leg tacks at the VMG angle + reaches the mark; heavy tack-cost ≤ zero-cost tack count;
 obstacle detour still works) + a real end-to-end Mackinac `cove_island` run (43 h, coverage 1.0, not
 degraded, sail plan attached, reaches the finish). Tunables `ROUTE_CONE_DEG` / `ROUTE_TACK_COST_S`.
+
+**Routing fidelity 2e — finish/mark over-tack ("scramble") fixes: SHIPPED (dev).** Diagnosed from a
+real Bayview Mackinac `cove_island` run whose FINISH leg was a light-air beat that the optimizer turned
+into a degenerate zig-zag — dozens of tiny tacks, ~3x oversail, arriving ~2x slower than necessary
+(the "crazy scramble near the finish" the user reported). Root cause was structural in the isochrone
+`route_leg`: the 2c tack penalty was a one-step distance haircut (not cumulative), the prune buckets by
+bearing-from-leg-start so opposite-tack nodes never eliminate each other, and nothing committed the boat
+to a layline near the mark. Three env-flagged fixes (`optimizer.py`): (1) **`ROUTE_LAYLINE_COMMIT`** —
+once a node within `ROUTE_LAYLINE_COMMIT_NM` (10 nm) of the mark can lay it (bears more than the VMG
+half-angle `_vmg_twa()` off the LOCAL wind axis), drop the opposite-tack headings so it fetches the
+layline instead of free-tacking; re-checked each generation against node-local wind (a real shift
+re-opens it), and only on the final approach so strategic side choice is preserved farther out.
+(2) **`ROUTE_TACK_CUMULATIVE`** — the tack cost accrues into a per-path penalty `pen` (and the node ETA)
+so the prune ranks by range-made-good-net-of-maneuvers (`rng_eff = rng − pen`); repeated alternation
+genuinely loses ground instead of a ~5% per-step nudge. (3) **`ROUTE_MARK_POS_PRUNE`** — within
+`ROUTE_MARK_PRUNE_NM` (6 nm) of the mark the prune buckets by POSITION (a `ROUTE_MARK_PRUNE_CELL_NM`
+≈0.25 nm lat/lon cell) instead of bearing-from-start, so near-colocated opposite-tack nodes compete and
+the least-tacked wins. **A/B against ONE frozen GFS+NAM+HRRR field** (Jun-29 19:00Z start, the reported
+case): baseline finish leg 27 tacks / 2.7x oversail / 83 h total → **#2 alone 0 tacks / 1.1x / 40 h**,
+**#3 alone 0 tacks / 1.1x / 40 h** (each independently kills the scramble; #1 is the clean-layline
+finisher for genuine-beat finishes). Anti-under-tack verified: a steady dead-upwind leg still tacks the
+minimum and reaches; `test_routing_2c/2d/2e` all green. **Also fixed the per-leg tack COUNTER** — it
+classified tack-side off a single frozen leg-start wind, so on a clocking leg every shift-following
+heading swing was mis-classified; it **mis-reports in either direction** (on the frozen-field baseline
+it actually UNDER-counted the carnage 135 vs 173 real maneuvers, and would have shown the clean route as
+a false "0 tacks" when it really makes 3). Now each segment's board is classified against the wind LOCAL
+to where/when it's sailed, so the count is the true tacks-up/gybes-down tally; route geometry is
+unchanged (metric-only). On the reported case: baseline finish ≈173 real maneuvers → 3 with the fixes,
+now reported honestly. Tunables `ROUTE_LAYLINE_COMMIT[_NM]` / `ROUTE_TACK_CUMULATIVE` /
+`ROUTE_MARK_POS_PRUNE` / `ROUTE_MARK_PRUNE_NM` / `ROUTE_MARK_PRUNE_CELL_NM` (all default ON).
 
 **Optimizer UI study + restyle — `docs/OPTIMIZER_UI_STUDY.md`** (Orca + Expedition gap analysis). Tier 0
 (ensemble-control fix + ECMWF-ENS wired as a separate 51-member `ecmwf-ens` ensemble source) + Tier 1

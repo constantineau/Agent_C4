@@ -37,6 +37,23 @@ LAYLINE_NM = float(os.environ.get("ROUTE_LAYLINE_NM", "10"))       # max layline
 LAYLINE_GATE = os.environ.get("ROUTE_LAYLINE_GATE", "1").strip().lower() in ("1", "true", "yes", "on")
 OVERSTAND_NM = float(os.environ.get("ROUTE_OVERSTAND_NM", "0.5"))   # reject candidates this far PAST the mark on the up/down-wind axis
 ROUND_OFFSET_NM = float(os.environ.get("ROUTE_ROUND_OFFSET_NM", "0.10"))  # standoff to the correct side at a port/stbd rounding mark (nm)
+# --- finish/mark over-tack ("scramble") fixes (routing fidelity 2e) — each env-flagged for A/B ---
+def _flag(name, default="1"):
+    return os.environ.get(name, default).strip().lower() in ("1", "true", "yes", "on")
+# #1 LAYLINE COMMIT: once a node can lay the mark (bears more than the VMG angle off the wind axis),
+# drop the opposite-tack headings so it sails the layline instead of free-tacking up to the mark.
+LAYLINE_COMMIT = _flag("ROUTE_LAYLINE_COMMIT")
+LAYLINE_COMMIT_EPS = float(os.environ.get("ROUTE_LAYLINE_COMMIT_EPS", "2.0"))  # deg slack before committing
+LAYLINE_COMMIT_NM = float(os.environ.get("ROUTE_LAYLINE_COMMIT_NM", "10.0"))   # only commit within this of the mark (final approach; play shifts farther out)
+# #2 CUMULATIVE TACK COST: the maneuver cost accrues along the whole path (not a one-step haircut), so
+# repeated alternation genuinely loses ground in the prune + ETA — not just a ~5% per-step nudge.
+TACK_CUMULATIVE = _flag("ROUTE_TACK_CUMULATIVE")
+# #3 POSITION PRUNE NEAR MARK: within MARK_PRUNE_NM of the mark, bucket the isochrone prune by POSITION
+# (a small lat/lon cell) instead of bearing-from-start, so near-colocated opposite-tack nodes compete
+# and the least-penalized one wins (kills the both-boards-survive weave on the final approach).
+MARK_POS_PRUNE = _flag("ROUTE_MARK_POS_PRUNE")
+MARK_PRUNE_NM = float(os.environ.get("ROUTE_MARK_PRUNE_NM", "6.0"))
+MARK_PRUNE_CELL_NM = float(os.environ.get("ROUTE_MARK_PRUNE_CELL_NM", "0.25"))
 
 
 # --- geometry ----------------------------------------------------------------
@@ -98,6 +115,22 @@ def _vmg_headings(P, tws, twd):
         run = max(downs)[1]
         out += [(twd + run) % 360, (twd - run) % 360]
     return out
+
+
+def _vmg_twa(P, tws, pos):
+    """The VMG-optimal TWA (deg off the wind) for a beat or run at this TWS — the half-angle of the
+    layline cone. `pos` is 'beat' (upwind) or 'run' (downwind); None for reaches or no polar band."""
+    band = [(a, s) for t, a, s in P if abs(t - tws) <= 1.5 and s > 0] or \
+           [(a, s) for _t, a, s in P if s > 0]
+    if not band:
+        return None
+    if pos == "beat":
+        cands = [(s * math.cos(math.radians(a)), a) for a, s in band if a < 90]
+    elif pos == "run":
+        cands = [(-s * math.cos(math.radians(a)), a) for a, s in band if a > 90]
+    else:
+        return None
+    return max(cands)[1] if cands else None
 
 
 def _layline_pair(P, tws, twd, pos, mlat, mlon, length_nm):
@@ -174,12 +207,22 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
             if sp < 0.3:
                 continue
             step_nm = sp * dt_h
-            # maneuver cost: a tack/gybe (crossing the wind to the other side vs the node's incoming
-            # heading) eats into the distance made good this step → the prune disfavors it, so the route
-            # tacks only when a shift makes the new board genuinely pay (no spurious isochrone over-tacking).
-            if node["hdg"] is not None and TACK_COST_S > 0 and \
-                    (_wrap180(hdg - twd) > 0) != (_wrap180(node["hdg"] - twd) > 0):
-                step_nm = max(0.0, step_nm - sp * (TACK_COST_S / 3600.0))
+            is_tack = (node["hdg"] is not None and
+                       (_wrap180(hdg - twd) > 0) != (_wrap180(node["hdg"] - twd) > 0))
+            # maneuver cost. Legacy (#2c): a one-step distance haircut that only nudges this step's prune.
+            # Cumulative (#2): the cost instead accrues into a per-path penalty `pen` (and the node ETA),
+            # so a path that has tacked many times genuinely loses ground in the prune ranking + clock —
+            # this is what actually suppresses the high-frequency weave, not a per-step ~5% nudge.
+            pen = node.get("pen", 0.0)
+            tk = node.get("tk", 0)
+            tack_s = 0.0
+            if is_tack and TACK_COST_S > 0:
+                if TACK_CUMULATIVE:
+                    pen += sp * (TACK_COST_S / 3600.0)
+                    tack_s = TACK_COST_S
+                    tk += 1
+                else:
+                    step_nm = max(0.0, step_nm - sp * (TACK_COST_S / 3600.0))
             nlat, nlon = _advance(node["lat"], node["lon"], hdg, step_nm)
             if obstacles and obstacles.crosses(node["lat"], node["lon"], nlat, nlon):
                 blocked += 1
@@ -191,10 +234,19 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
                     blocked += 1
                     continue
             rng = _hav_nm(slat, slon, nlat, nlon)
-            sec = round(_bearing(slat, slon, nlat, nlon) / SECTOR)
-            if sec not in cand or rng > cand[sec]["rng"]:
-                cand[sec] = {"lat": nlat, "lon": nlon, "t": node["t"] + dt_h * 3600,
-                             "parent": node, "hdg": hdg, "rng": rng}
+            # PRUNE KEY (#3): near the mark, bucket by POSITION so near-colocated opposite-tack nodes
+            # compete (and the least-penalized wins); elsewhere keep the classic bearing-from-start sector.
+            if MARK_POS_PRUNE and _hav_nm(nlat, nlon, dlat, dlon) <= MARK_PRUNE_NM:
+                cell = MARK_PRUNE_CELL_NM / 60.0
+                sec = ("p", round(nlat / cell), round(nlon / max(1e-6, cell * coslat)))
+            else:
+                sec = round(_bearing(slat, slon, nlat, nlon) / SECTOR)
+            rng_eff = rng - pen          # range made good net of accumulated maneuver cost (#2)
+            if sec not in cand or rng_eff > cand[sec]["rng_eff"]:
+                cand[sec] = {"lat": nlat, "lon": nlon,
+                             "t": node["t"] + dt_h * 3600 + tack_s,
+                             "parent": node, "hdg": hdg, "rng": rng, "rng_eff": rng_eff,
+                             "pen": pen, "tk": tk}
             placed += 1
         return placed, blocked
 
@@ -222,7 +274,24 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
             # obstacle-blocked here, reopen the FULL fan so avoidance can still detour around land.
             vmg = _vmg_headings(P, tws, twd)
             coned = [h for h in headings if abs(_wrap180(h - bmark)) <= ROUTE_CONE_DEG]
-            placed, blocked = expand(node, coned + vmg, tws, twd, dt_h, cand)
+            fan = coned + vmg
+            # LAYLINE COMMIT (#1): if this node can already lay the mark — the mark bears more than the
+            # VMG angle off the LOCAL wind axis (dead-upwind on a beat / dead-downwind on a run) — there
+            # is no reason to keep offering the opposite tack; drop it so the boat fetches the layline
+            # instead of free-tacking up to the mark. Between the laylines both boards stay open (the
+            # strategic side choice is preserved). Re-evaluated every generation against the node-local
+            # wind, so a genuine shift re-opens the layline rather than locking a stale one.
+            if LAYLINE_COMMIT and _pos0 in ("beat", "run") and dmark <= LAYLINE_COMMIT_NM:
+                half = _vmg_twa(P, tws, _pos0)
+                if half is not None:
+                    axis = twd if _pos0 == "beat" else (twd + 180.0)
+                    off = _wrap180(bmark - axis)
+                    if abs(off) >= half - LAYLINE_COMMIT_EPS:
+                        side = 1.0 if off > 0 else -1.0
+                        committed = [h for h in fan
+                                     if (1.0 if _wrap180(h - axis) >= 0 else -1.0) == side]
+                        fan = committed or [bmark]   # never strand the node — keep the fetch heading
+            placed, blocked = expand(node, fan, tws, twd, dt_h, cand)
             if placed == 0 and blocked > 0 and obstacles is not None:
                 _p, blocked = expand(node, headings + vmg, tws, twd, dt_h, cand)
             blocked_hits += blocked
@@ -247,11 +316,16 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
     path.reverse(); hdgs.reverse()
     sailed = sum(_hav_nm(path[i]["lat"], path[i]["lon"], path[i + 1]["lat"], path[i + 1]["lon"])
                  for i in range(len(path) - 1))
-    # tacks/gybes = sign changes of TWA along the path (port↔starboard)
+    # tacks/gybes = genuine port↔starboard crossings along the path. `hdgs[k]` is the heading sailed on
+    # the segment LEAVING `path[k]` at `path[k]["t"]`, so classify the board against the wind LOCAL to
+    # that point/time — NOT a single frozen leg-start wind. On a leg where the breeze clocks (e.g. a long
+    # light beat) the stale-wind version miscounts every shift-following heading swing as a tack and badly
+    # over-reports; sampling local wind makes the count the real maneuver tally (tacks upwind / gybes down).
     tacks = 0
     prev_side = None
-    for h in hdgs:
-        w = wind(slat, slon, t0)
+    for k, h in enumerate(hdgs):
+        p = path[k] if k < len(path) else path[-1]
+        w = wind(p["lat"], p["lon"], p["t"])
         side = "stbd" if _wrap180(w[1] - h) > 0 else "port"
         if prev_side and side != prev_side:
             tacks += 1
