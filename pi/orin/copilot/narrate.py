@@ -4,8 +4,8 @@ The brief / dashboard / detail surfaces are all PULL: the crew asks, or the dash
 commentary. This module is PUSH — a deterministic callout engine watches the gathered engine
 facts + the frozen playbook and surfaces the few things worth SAYING right now: a CLOSING-TRAFFIC
 collision warning (safety — top priority, always legal in-race), a mark rounding coming up (timed
-~15 / 10 / 5-min prep, escalating), a playbook branch trigger firing, an upcoming sail change-down,
-a helm rotation, stale instruments.
+~15 / 10 / 5-min prep, escalating), a playbook branch trigger firing, a handicap RIVAL going ahead on
+corrected time, an upcoming sail change-down, a helm rotation, stale instruments.
 
 Every callout is GROUNDED in an engine fact and/or a playbook variant exactly like a brief item
 — the engine does the math, the callout reports it. The LLM only PHRASES the top callouts into a
@@ -30,6 +30,9 @@ AIS_ACT_CPA_NM = float(os.environ.get("COPILOT_AIS_ACT_CPA_NM", "0.5"))
 AIS_ACT_TCPA_MIN = float(os.environ.get("COPILOT_AIS_ACT_TCPA_MIN", "12"))
 AIS_WATCH_CPA_NM = float(os.environ.get("COPILOT_AIS_WATCH_CPA_NM", "1.5"))
 AIS_WATCH_TCPA_MIN = float(os.environ.get("COPILOT_AIS_WATCH_TCPA_MIN", "30"))
+# Fleet/rival callout: only voice a roster competitor whose corrected-time match is at least this
+# confident (match × handicap-known × course-known × position-freshness), so a fuzzy/aged guess stays quiet.
+FLEET_MIN_CONF = float(os.environ.get("COPILOT_FLEET_MIN_CONF", "0.4"))
 
 # ETA thresholds (minutes-to-mark) for the staged rounding prep. Tightest matching stage wins, so
 # as the mark approaches the callout id changes (…:15 → …:10 → …:5) and each stage voices once.
@@ -38,12 +41,12 @@ ROUNDING_STAGES = [(15, "heads-up"), (10, "stage"), (5, "final")]
 URGENCY_RANK = {"now": 0, "soon": 1, "monitor": 2}
 # Lower = more important; the spoken line leads with the top of this order.
 CATEGORY_PRIORITY = {"safety": 0, "fatigue": 1, "rounding": 2, "sail": 3,
-                     "playbook": 4, "shift": 5, "layline": 6, "data": 7}
+                     "playbook": 4, "fleet": 5, "shift": 6, "layline": 7, "data": 8}
 # How many consecutive evaluations a callout must persist before it's "confirmed" and voiced —
 # the fuzzy-adherence hysteresis. Time-critical things fire at once; noisier reads wait one poll
 # so a single-sample blip never barks. (The engine already debounces tactical persistence.)
 CONFIRM_ROUNDS = {"safety": 1, "fatigue": 1, "rounding": 1, "sail": 1,
-                  "playbook": 2, "shift": 2, "layline": 1, "data": 2}
+                  "playbook": 2, "fleet": 2, "shift": 2, "layline": 1, "data": 2}
 
 
 def _callout(cid, category, urgency, headline, detail, grounded_in, confidence="med"):
@@ -78,6 +81,43 @@ def _safety_callout(ais):
     return _callout(f"ais:{t.get('mmsi') or name}:{level}", "safety", "now" if act else "soon",
                     f"Collision risk: {name}" if act else f"Traffic closing: {name}",
                     detail, ["get_ais"], "high" if act else "med")
+
+
+def _corr_str(cd):
+    """A corrected-time delta (seconds) as 'm:ss ahead/back'. cd < 0 = the COMPETITOR is projected
+    ahead of us (beating us on handicap)."""
+    s = abs(int(round(cd)))
+    mmss = f"{s // 60}:{s % 60:02d}"
+    return f"{mmss} ahead" if cd < 0 else (f"{mmss} back" if cd > 0 else "even")
+
+
+def _fleet_callout(fleet):
+    """Handicap-rival watch: the top roster competitor we're actually racing — a RIVAL (within the
+    corrected-time band) or one projected AHEAD of us on corrected. The rows are already rivals-first
+    sorted; we voice the first confident one. Grounded in get_fleet (onboard: own AIS + frozen roster +
+    own corrected-time math — the in-race-legal tactical layer). Strategic, so it stays 'monitor' and
+    sits below safety/rounding/sail; speak-once dedup keeps it from nagging as the delta wiggles."""
+    rows = fleet.get("fleet") or []
+    method = fleet.get("scoring_method", "corrected")
+    for r in rows:
+        tag = r.get("tag")
+        cd = _num(r.get("corrected_delta_s"))
+        conf = _num(r.get("confidence")) or 0.0
+        if tag not in ("rival", "ahead_corrected") or cd is None or conf < FLEET_MIN_CONF:
+            continue
+        boat = r.get("boat") or f"MMSI {r.get('mmsi', '?')}"
+        aged = (f" (tracker, ~{round(r['age_s'] / 60)} min old)"
+                if r.get("source") == "tracker" and _num(r.get("age_s")) else "")
+        if tag == "rival":
+            headline = f"Rival on corrected: {boat}"
+            detail = (f"Δ {_corr_str(cd)} on {method}{aged} — the boat you're racing; "
+                      "sail your race, stay between them and the next shift")
+        else:                                    # ahead_corrected
+            headline = f"{boat} ahead on corrected"
+            detail = f"projected to beat us by {_corr_str(cd)} on {method}{aged} — consider covering"
+        return _callout(f"fleet:{r.get('mmsi') or boat}:{tag}", "fleet", "monitor", headline, detail,
+                        ["get_fleet"], "med" if conf >= 0.6 else "low")
+    return None
 
 
 def _rounding_callout(nav, snapshot, engine):
@@ -233,10 +273,15 @@ def evaluate(snapshot, playbook=None, engine=None):
     fat = snapshot.get("get_fatigue") or {}
     cond = snapshot.get("get_conditions") or {}
     ais = snapshot.get("get_ais") or {}
+    fleet = snapshot.get("get_fleet") or {}
 
     out = []
     if ais.get("available", True) is not False:    # SAFETY first — collision watch (always legal)
         c = _safety_callout(ais)
+        if c:
+            out.append(c)
+    if fleet.get("available"):                     # handicap-rival watch (corrected-time tactical)
+        c = _fleet_callout(fleet)
         if c:
             out.append(c)
     if nav.get("available"):

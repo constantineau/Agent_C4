@@ -49,9 +49,11 @@ now** — a **closing-traffic collision warning** (safety, top priority — the 
 contact inside the CPA/TCPA guard, voiced "now" inside ~0.5 nm / 12 min, "soon" inside ~1.5 nm / 30
 min; always legal in-race = own receiver + own math), a **timed mark-rounding prep** (escalating ~15
 / 10 / 5-min heads-up, with the leg-after homework: the maneuver, the TWA once round, and the sail to
-stage for the next leg), a **playbook branch trigger** firing, an upcoming **sail change-down**, a
-**helm rotation**, **stale instruments**. The LLM only *phrases* the top one or two into a calm spoken
-radio call; the deterministic callout text is the always-on fallback.
+stage for the next leg), a **playbook branch trigger** firing, a **handicap rival** (a roster boat
+within the corrected-time band, or one projected AHEAD of us on corrected — grounded in `get_fleet`,
+confidence-gated so a fuzzy/aged match stays quiet), an upcoming **sail change-down**, a **helm
+rotation**, **stale instruments**. The LLM only *phrases* the top one or two into a calm spoken radio
+call; the deterministic callout text is the always-on fallback.
 
 Same guardrails as a brief: every callout is **grounded** in a real engine fact and/or a playbook
 variant (ungrounded ones are dropped), the engine does the math, and nothing originates strategy —

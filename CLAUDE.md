@@ -145,7 +145,7 @@ via `OnboardSource`. It comes up with the rest of the Pi stack; quick check:
 | **5** ✅ | iPad nav companion: day/night, sail dial, course plot, navigator, tactics, routing | bench-verified end-to-end |
 | **6** ✅ | Alerting + summarizer + polar tooling | bench-complete; 2-practice-sail false-positive gate awaits real sailing |
 | 7 🔶 | Prod stack + deploy + rules review + soak | rules review done; server auth + TLS scaffolding done; prod deploy/soak gated on domain + prod `.env` |
-| **9** 🔶 | Onboard + C4 Performance Lab (three-tier pivot) | **9.0 data-access abstraction ✅ · 9.1 onboard engine service ✅ · 9.2 race gate + iPad onboard console ✅ · Lab-0 race ingestion + course loader ✅ · Lab-1 multi-model GRIB optimizer ✅ · Lab-2a/2b branching playbook bundle ✅ (fan-out → variants → Opus synthesis → signed, onboard-loadable artifact) · routing-fidelity 2b per-leg sail plan + reviewable boat sail model ✅ · routing-fidelity 2c isochrone VMG-gate/cone-prune/anti-over-tack ✅ · routing-fidelity 2e finish/mark over-tack ("scramble") fixes ✅ · routing-fidelity 2f island rounding-side enforcement ✅ · 9.4 Orin LLM appliance live (Ollama+Qwen2.5-7B :11434) + copilot decision-support layer ✅ (`pi/orin/copilot`) · copilot crew-facing narration ✅ + proactive auto-coach timer ✅ + collision/AIS safety callout ✅ · PLAYBOOK-ADHERENCE dashboard tile ✅ (10-tile 5×2 grid) · handicap-aware fleet tactics ✅ (incl. verified YB/bycmack tracker source) ** — see `docs/ONBOARD_ENGINE_SCOPING.md` |
+| **9** 🔶 | Onboard + C4 Performance Lab (three-tier pivot) | **9.0 data-access abstraction ✅ · 9.1 onboard engine service ✅ · 9.2 race gate + iPad onboard console ✅ · Lab-0 race ingestion + course loader ✅ · Lab-1 multi-model GRIB optimizer ✅ · Lab-2a/2b branching playbook bundle ✅ (fan-out → variants → Opus synthesis → signed, onboard-loadable artifact) · routing-fidelity 2b per-leg sail plan + reviewable boat sail model ✅ · routing-fidelity 2c isochrone VMG-gate/cone-prune/anti-over-tack ✅ · routing-fidelity 2e finish/mark over-tack ("scramble") fixes ✅ · routing-fidelity 2f island rounding-side enforcement ✅ · 9.4 Orin LLM appliance live (Ollama+Qwen2.5-7B :11434) + copilot decision-support layer ✅ (`pi/orin/copilot`) · copilot crew-facing narration ✅ + proactive auto-coach timer ✅ + collision/AIS safety callout ✅ + handicap-rival callout ✅ · PLAYBOOK-ADHERENCE dashboard tile ✅ (10-tile 5×2 grid) · handicap-aware fleet tactics ✅ (incl. verified YB/bycmack tracker source) ** — see `docs/ONBOARD_ENGINE_SCOPING.md` |
 
 **Current status:** Phases 0–6 built and bench-verified; Phase 7 started; **Phase 9 in progress
 (9.0 data-access abstraction ✅, 9.1 onboard engine service ✅ — see "Onboard engine service",
@@ -881,7 +881,15 @@ guard as a TOP-priority safety callout ("Collision risk: <vessel> — CPA x nm i
 the copilot interrupts for, always legal in-race (own receiver + own math). act ≤0.5 nm/12 min = "now",
 watch ≤1.5 nm/30 min = "soon"; level is in the callout id so a watch→act escalation re-voices. Verified
 `bench_copilot.test_safety_callout` + end-to-end against the live :8200 engine (voiced a real
-CPA-0.0 nm closing target). Tunables `COPILOT_AIS_{ACT,WATCH}_{CPA_NM,TCPA_MIN}`. **Handicap-aware fleet tactics ✅** (incl. the verified YB/bycmack over-the-horizon tracker
+CPA-0.0 nm closing target). Tunables `COPILOT_AIS_{ACT,WATCH}_{CPA_NM,TCPA_MIN}`.
+**Handicap-rival callout** (`narrate._fleet_callout`): narration also gathers the engine's `/fleet` and
+voices the top roster competitor we're racing — a RIVAL (within the ±3-min corrected-time band) or one
+projected AHEAD of us on corrected ("{boat} ahead on corrected — projected to beat us by m:ss …
+consider covering"). Grounded in `get_fleet` (onboard: own AIS + frozen roster + own corrected-time
+math — in-race-legal tactical layer), confidence-gated (`COPILOT_FLEET_MIN_CONF`=0.4), category `fleet`
+(priority below safety/rounding/sail, persist-2 raise-slow), tag in the id so behind→rival→ahead
+re-voices. The spoken counterpart to the dashboard AIS/Fleet tile's corrected-time overlay. Verified
+`bench_copilot.test_fleet_callout`. **Handicap-aware fleet tactics ✅** (incl. the verified YB/bycmack over-the-horizon tracker
 source) — see "Handicap-aware fleet tactics". **Next:** (open) — island rounding-side enforcement is now
 in (routing fidelity 2f: marked islands only); the overstand/2d gate + nav-mark side were already in.
 

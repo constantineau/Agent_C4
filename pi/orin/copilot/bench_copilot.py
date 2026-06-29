@@ -326,6 +326,56 @@ def test_safety_callout() -> bool:
     return ok
 
 
+def test_fleet_callout() -> bool:
+    """The handicap-rival callout — grounded in get_fleet, voices a RIVAL or an ahead-on-corrected
+    competitor, gated by confidence, below safety but a real tactical callout. Pure/deterministic."""
+    ok = True
+    print("\n== fleet / handicap-rival callout (pure, synthetic fleet) ==")
+
+    def fl(rows):
+        return {"get_fleet": {"available": True, "scoring_method": "Time-on-Time", "fleet": rows}}
+
+    rival = {"boat": "Defiance", "mmsi": "5", "tag": "rival", "corrected_delta_s": -75,
+             "confidence": 0.8, "source": "ais"}
+    ahead = {"boat": "Windquest", "mmsi": "6", "tag": "ahead_corrected", "corrected_delta_s": -260,
+             "confidence": 0.7, "source": "ais"}
+    behind = {"boat": "Slowpoke", "mmsi": "7", "tag": "behind_corrected", "corrected_delta_s": 400,
+              "confidence": 0.9, "source": "ais"}
+    lowconf = {"boat": "Maybe", "mmsi": "8", "tag": "rival", "corrected_delta_s": -30,
+               "confidence": 0.2, "source": "tracker", "age_s": 1020}
+
+    c = narrate_mod._fleet_callout(fl([rival])["get_fleet"])
+    ok &= _check("rival → fleet callout grounded in get_fleet, names the boat + delta",
+                 c and c["category"] == "fleet" and c["grounded_in"] == ["get_fleet"]
+                 and "Defiance" in c["headline"] and "1:15" in c["detail"])
+    c = narrate_mod._fleet_callout(fl([ahead])["get_fleet"])
+    ok &= _check("ahead_corrected → 'consider covering'",
+                 c and "ahead on corrected" in c["headline"] and "covering" in c["detail"])
+    ok &= _check("behind_corrected only → no callout (we're winning that one)",
+                 narrate_mod._fleet_callout(fl([behind])["get_fleet"]) is None)
+    ok &= _check("low-confidence rival → no callout (fuzzy/aged stays quiet)",
+                 narrate_mod._fleet_callout(fl([lowconf])["get_fleet"]) is None)
+    ok &= _check("no roster (available False) → evaluate emits no fleet callout",
+                 not any(x["category"] == "fleet"
+                         for x in narrate_mod.evaluate({"get_fleet": {"available": False}})))
+
+    # priority: a collision (safety) outranks a rival; the rival still rides along in active.
+    route = "_bench_fleet"
+    narrate_mod.reset(route)
+    snap = {"get_fleet": fl([rival])["get_fleet"],
+            "get_ais": {"available": True, "own_fix": True,
+                        "targets": [{"mmsi": "9", "name": "TUG", "cpa_nm": 0.3, "tcpa_min": 7,
+                                     "bearing": 20, "range_nm": 1.0, "closing": True}]}}
+    s1 = narrate_mod.step(route, snap, None, None)   # fleet needs 2 polls (CONFIRM_ROUNDS)
+    s2 = narrate_mod.step(route, snap, None, None)
+    cats2 = {x["category"] for x in s2["active"]}
+    ok &= _check("fleet callout confirms on its 2nd poll (raise-slow)",
+                 "fleet" in cats2 and "fleet" not in {x["category"] for x in s1["new"]})
+    ok &= _check("safety still sorts above fleet in active",
+                 s2["active"][0]["category"] == "safety")
+    return ok
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--llm", action="store_true", help="also exercise the LLM tool-loop")
@@ -336,6 +386,7 @@ def main():
     # The callout + adherence engines are pure — exercise them first, with no live engine needed.
     overall = test_narrate_logic()
     overall &= test_safety_callout()
+    overall &= test_fleet_callout()
     overall &= test_adherence_logic()
     overall &= test_coach_logic()
 

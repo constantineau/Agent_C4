@@ -64,6 +64,12 @@ class EngineClient:
         boat's OWN receiver + OWN computer); threat-sorted (closing, smallest CPA first)."""
         return self._get("/ais", {"max_range_nm": max_range_nm})
 
+    def fleet(self, max_range_nm=None) -> dict:
+        """Roster-matched competitors with ORC corrected-time deltas (who beats us on handicap) +
+        over-the-horizon tracker rows. Onboard tactical layer — legal in-race (own receiver + own
+        computer + frozen roster homework + permitted public tracker). Rivals-first sorted."""
+        return self._get("/fleet", {"max_range_nm": max_range_nm})
+
     def sail(self, tws=None, twa=None, hoisted=None) -> dict:
         return self._get("/sail", {"tws": tws, "twa": twa, "hoisted": hoisted})
 
