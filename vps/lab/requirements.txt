@@ -13,3 +13,6 @@ xarray==2024.11.0
 # numpy-2.1-compatible pairing. (Left unpinned, a rebuild silently pulled 3.0.4 and broke GRIB ingest.)
 pandas==2.2.3
 ecmwf-opendata==0.3.10
+# Currents (set & drift): NOAA GLOFS / LMHOFS surface currents via OPeNDAP (NetCDF). The wheel bundles
+# HDF5 + a DAP-enabled netcdf-c, so OPeNDAP subsetting works with no apt libs.
+netCDF4==1.7.2
