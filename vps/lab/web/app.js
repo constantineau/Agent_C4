@@ -267,8 +267,7 @@ function paintDetail() {
   if (!d) { box.innerHTML = '<div class="placeholder">Select a race.</div>'; return; }
   box.innerHTML = detailActions(d, v) + detailBanner(v) + detailHead(d) +
     (d.courses || []).map((c, i) => detailCourseCard(c, i)).join("") +
-    detailChecklist(d.requirements || []) +
-    detailRules(d.rules_profile || {}) +
+    detailDelegated(d) +
     detailProvenance(d.provenance || {});
 }
 function detailBanner(v) {
@@ -322,6 +321,22 @@ function detailCourseCard(c, ci) {
     <div class="muted" style="font-size:12px;margin-top:6px">Geocode marks + see them on a map in the
       <a href="#course">Course &amp; Marks</a> tab.</div></div>`;
 }
+// The rules/scoring/checklist + fleet now live in their own tabs — the Races view stays the ingest +
+// library + sign-off hub and just points to them (avoids the duplicate editors, issue #28).
+function detailDelegated(d) {
+  const reqs = (d.requirements || []).length;
+  const ipad = (d.requirements || []).filter((r) => r.deliver_to_ipad).length;
+  const mods = ((d.rules_profile || {}).modifications || []).length;
+  const fleet = (d.fleet || []).length;
+  return `<div class="card"><h3>Rules, scoring, checklist &amp; fleet</h3>
+    <div class="muted" style="font-size:12px;margin-bottom:8px">Reviewed and edited in their own tabs (kept out of here so the Races view stays the ingest + library + sign-off hub):</div>
+    <div class="dep-grid">
+      <div class="dep-row"><a href="#rules">Rules, Safety &amp; Checklists →</a> <span class="muted">${mods} RRS modification${mods === 1 ? "" : "s"} + scoring · ${reqs} checklist item${reqs === 1 ? "" : "s"} (${ipad} →iPad)</span></div>
+      <div class="dep-row"><a href="#fleet">Fleet →</a> <span class="muted">${fleet} competitor${fleet === 1 ? "" : "s"} + ORC handicaps</span></div>
+      <div class="dep-row"><a href="#course">Course &amp; Marks →</a> <span class="muted">geometry on a map</span></div>
+    </div></div>`;
+}
+
 function detailChecklist(reqs) {
   const ipad = reqs.filter((r) => r.deliver_to_ipad).length;
   const rows = reqs.map((r, i) => detailReqRow(r, i)).join("");
@@ -1560,11 +1575,13 @@ function paintRules() {
         <label>Ref ${ein("rules_profile.scoring.ref", sc.ref, "NOR §13")}</label>
       </div>
       <div style="margin-top:10px"><b style="font-size:12px">RRS modifications</b>
-        ${mods.length ? `<table class="fleet-tbl" style="margin-top:4px"><thead><tr><th>Ref</th><th>Rule</th><th>Summary</th><th></th></tr></thead><tbody>${
-          mods.map((m, i) => `<tr><td>${ein(`rules_profile.modifications.${i}.ref`, m.ref, "NOR §")}</td>
-            <td>${ein(`rules_profile.modifications.${i}.rule`, m.rule, "RRS x")}</td>
-            <td>${ein(`rules_profile.modifications.${i}.summary`, m.summary, "summary")}</td>
-            <td><button class="mini" onclick="modRemove(${i})">✕</button></td></tr>`).join("")}</tbody></table>`
+        <div class="muted" style="font-size:11px;margin:2px 0 6px">Ref + rule on top, the full modification text below (wraps — nothing truncated).</div>
+        ${mods.length ? mods.map((m, i) => `<div class="req-block">
+            <div class="req-l1">${ein(`rules_profile.modifications.${i}.ref`, m.ref, "ref (e.g. NOR §2.1)")}
+              ${ein(`rules_profile.modifications.${i}.rule`, m.rule, "rule (e.g. RRS 41)")}
+              <button class="mini" onclick="modRemove(${i})" title="remove">✕</button></div>
+            <div style="margin-top:5px">${etxt(`rules_profile.modifications.${i}.summary`, m.summary, "what the modification says (full text)")}</div>
+          </div>`).join("")
           : `<div class="muted" style="font-size:12px">No modifications recorded.</div>`}
         <div style="margin-top:6px"><button class="mini" onclick="modAdd()">+ Add modification</button></div>
       </div>
