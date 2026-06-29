@@ -124,6 +124,7 @@ function route() {
   if (sec === "deploy") return renderDeploy();
   if (sec === "fleet") return renderFleet();
   if (sec === "rules") return renderRules();
+  if (sec === "learnings") return renderLearnings();
   renderPlaceholder(sec);
 }
 const clone = (o) => JSON.parse(JSON.stringify(o));
@@ -623,7 +624,6 @@ function drawCourseMap(id, course) {
 
 /* ---------- placeholders ---------- */
 const SOON = {
-  learnings: ["Learnings", "The boat-level library (refined polars, crossovers, calibration, fatigue/helm-skill) and what's applied to this regatta."],
   monitor: ["Monitor", "Shore-side live view during the race (the boat itself uses the onboard console)."],
   debrief: ["Debrief", "The post-race judge loop — regret analysis and write-back review that feeds the next prep."],
 };
@@ -873,6 +873,12 @@ function renderBoatModel() {
   const m = Opt.boatModel;
   if (!m) { out.innerHTML = '<div class="loading">Loading boat model…</div>'; return; }
   if (m.error || !m.crossovers) { out.innerHTML = `<div class="placeholder">Boat model unavailable — ${esc(m.error || "no crossover data")}</div>`; return; }
+  out.innerHTML = boatModelCard(m);
+}
+
+// The boat-model card HTML (crossover bands + jib change-downs + polar grid). Returned as a string so
+// both the Gameplan review panel and the Learnings library can embed it.
+function boatModelCard(m) {
   const tws = m.tws_buckets || [];
   // crossover bands: a horizontal 0–180° TWA axis per TWS, colored per sail
   const bands = tws.map((t) => {
@@ -884,7 +890,7 @@ function renderBoatModel() {
     return `<div class="xo-row"><span class="xo-tws">${t} kn</span><div class="xo-track">${zones}</div></div>`;
   }).join("");
   const inv = (m.inventory || []).map((s) => `<span class="sail sail-${esc(s)}">${esc(s)}</span>`).join(" ");
-  out.innerHTML = `<div class="card boatmodel">
+  return `<div class="card boatmodel">
     <h3>Boat model — polars &amp; sail crossovers</h3>
     <div class="muted" style="font-size:12px;margin-bottom:10px">Source: ${esc(m.source || "—")}. This is the boat sail model the optimizer attaches per leg and <b>freezes into the playbook bundle</b> — what the onboard copilot loads to ground its sail calls. Review before lock-in.</div>
     <div class="bm-inv">Inventory: ${inv}</div>
@@ -934,8 +940,8 @@ async function saveJibCrossovers() {
   try {
     await apiPost("/api/boats/jib-crossovers", { jib_crossovers: bands });
     Opt.boatModel = await (await apiGet("/api/crossovers")).json();   // refetch so the bars update
-    Opt.showBoatModel = true;
-    renderGameplan();
+    if ((location.hash || "").slice(1) === "learnings") { renderLearnings(); }
+    else { Opt.showBoatModel = true; renderGameplan(); }
   } catch (e) { if (msg) msg.textContent = "Save failed."; }
 }
 
@@ -1583,6 +1589,64 @@ function paintRules() {
     <div class="dactions"><button onclick="rulesSave()">Save rules &amp; checklist</button>
       <span id="rulesMsg" class="muted" style="font-size:12px"></span>
       <span class="muted" style="font-size:11px">(check-off saves on its own)</span></div>
+  </div>`;
+}
+
+/* ---------- Learnings (boat-level library + per-regatta notes) ---------- */
+async function renderLearnings() {
+  const view = document.getElementById("view");
+  view.innerHTML = '<div class="loading">Loading learnings…</div>';
+  try {
+    await reloadBoats();
+    Opt.boatModel = await (await apiGet("/api/crossovers")).json();
+    Opt.polarGrid = await (await apiGet("/api/polars")).json();
+    if (!Lab.races) Lab.races = (await (await apiGet("/api/races")).json()).races || [];
+  } catch (e) { view.innerHTML = '<div class="placeholder">Failed to load learnings.</div>'; return; }
+  if (!Lab.sel && Lab.races.length) Lab.sel = Lab.races[0].race_id;
+  if (Lab.sel && (!Lab.editDef || Lab.editDef.race_id !== Lab.sel)) {
+    try { Lab.editDef = await (await apiGet("/api/races/" + encodeURIComponent(Lab.sel))).json(); } catch (e) {}
+  }
+  if (stale("learnings")) return;
+  paintLearnings();
+}
+
+async function learnPickRace(id) { Lab.sel = id; Lab.editDef = null; renderLearnings(); }
+async function learnSaveNotes() {
+  if (!Lab.editDef) return;
+  Lab.editDef.learnings_notes = document.getElementById("learnNotes").value;
+  const msg = document.getElementById("learnMsg"); if (msg) msg.textContent = "Saving…";
+  try {
+    const r = await (await apiPost("/api/races", { definition: Lab.editDef })).json();
+    if (msg) msg.textContent = r.saved ? "Saved." : "Save failed.";
+  } catch (e) { if (msg) msg.textContent = "Save failed: " + e.message; }
+}
+
+function paintLearnings() {
+  const ab = (Opt.boats || []).find((b) => b.boat_id === Opt.activeBoat) || {};
+  const m = Opt.boatModel;
+  const card = (m && m.crossovers) ? boatModelCard(m) : `<div class="card"><div class="placeholder">Boat model unavailable.</div></div>`;
+  const d = Lab.editDef || {};
+  document.getElementById("view").innerHTML = `<div class="opt">
+    <div class="card">
+      <h3>Learnings <span class="muted" style="font-weight:400">— the boat-level library (carries across races) + what's applied to this regatta</span></h3>
+      <div class="muted" style="font-size:12px">Active boat: <b>${esc(ab.name || Opt.activeBoat || "—")}</b>${ab.draft_ft != null ? " · draft " + ab.draft_ft + " ft" : ""} · switch boat / draft in <a href="#gameplan">Gameplan</a>. The polars + sail crossovers below are the refined boat model the optimizer routes on and freezes into the playbook.</div>
+    </div>
+    ${card}
+    <div class="card">
+      <h3>Applied to this regatta</h3>
+      <div class="opt-controls">
+        <label>Race <select onchange="learnPickRace(this.value)">
+          ${(Lab.races || []).map((x) => `<option value="${attr(x.race_id)}" ${x.race_id === Lab.sel ? "selected" : ""}>${esc(x.name || x.race_id)}</option>`).join("")}
+        </select></label>
+      </div>
+      <div class="muted" style="font-size:12px;margin:8px 0 4px">Venue / conditions knowledge, calibration reminders, what to apply for this race (free text, saved with the race).</div>
+      <textarea id="learnNotes" rows="6" style="width:100%;box-sizing:border-box" placeholder="e.g. Cove Island current sets NE on the ebb; J2 crossover felt early last year — try 15 kn; main calibration +2° at the masthead…">${esc(d.learnings_notes || "")}</textarea>
+      <div style="margin-top:8px"><button onclick="learnSaveNotes()">Save notes</button> <span id="learnMsg" class="muted" style="font-size:12px"></span></div>
+    </div>
+    <div class="card">
+      <h3>Boat-level signals <span class="muted" style="font-weight:400">— from sailing + debrief</span></h3>
+      <div class="muted" style="font-size:12px">Calibration offsets, the fatigue / helm-skill baseline, and automated polar / crossover refinement are produced by the <b>onboard engine</b> while sailing and the <b>Debrief</b> judge loop (post-race write-back). Today this tab surfaces the frozen boat model + your regatta notes; the write-back will populate refined values here.</div>
+    </div>
   </div>`;
 }
 
