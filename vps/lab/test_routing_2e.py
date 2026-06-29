@@ -19,7 +19,10 @@ def check(name, cond):
     print(f"  [{'OK ' if cond else 'FAIL'}] {name}")
 
 def reload_with(flags):
-    for k in ("ROUTE_LAYLINE_COMMIT", "ROUTE_TACK_CUMULATIVE", "ROUTE_MARK_POS_PRUNE"):
+    # DMG_PRUNE (the later root-cause fix, default-on in prod) is controlled here too so this legacy
+    # test still exercises the OLD mechanism against a genuinely-scrambling baseline (DMG off); the
+    # production DMG-on behavior is covered by test_routing_scramble.py.
+    for k in ("ROUTE_LAYLINE_COMMIT", "ROUTE_TACK_CUMULATIVE", "ROUTE_MARK_POS_PRUNE", "ROUTE_DMG_PRUNE"):
         os.environ[k] = "1" if flags.get(k) else "0"
     return importlib.reload(OPT)
 
@@ -56,7 +59,8 @@ def leg_tacks(flags):
 
 base, base_end = leg_tacks(dict())
 cum, cum_end = leg_tacks(dict(ROUTE_TACK_CUMULATIVE=1))
-allf, all_end = leg_tacks(dict(ROUTE_LAYLINE_COMMIT=1, ROUTE_TACK_CUMULATIVE=1, ROUTE_MARK_POS_PRUNE=1))
+allf, all_end = leg_tacks(dict(ROUTE_LAYLINE_COMMIT=1, ROUTE_TACK_CUMULATIVE=1,
+                               ROUTE_MARK_POS_PRUNE=1, ROUTE_DMG_PRUNE=1))
 print(f"     osc leg: baseline tacks={base['tacks']} (end {base_end:.2f}); "
       f"+cumulative tacks={cum['tacks']} (end {cum_end:.2f}); all tacks={allf['tacks']} (end {all_end:.2f})")
 check("baseline micro-tacks on the oscillating field (>=5)", base["tacks"] >= 5)

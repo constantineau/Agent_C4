@@ -48,12 +48,26 @@ LAYLINE_COMMIT_NM = float(os.environ.get("ROUTE_LAYLINE_COMMIT_NM", "10.0"))   #
 # #2 CUMULATIVE TACK COST: the maneuver cost accrues along the whole path (not a one-step haircut), so
 # repeated alternation genuinely loses ground in the prune + ETA — not just a ~5% per-step nudge.
 TACK_CUMULATIVE = _flag("ROUTE_TACK_CUMULATIVE")
+# The prune regularizer is DECOUPLED from the ETA cost: a real tack costs ~TACK_COST_S (30 s) of clock,
+# but the isochrone needs a much larger penalty to stop the upwind STAIRCASE (with a 0.5 nm lane, 30 s
+# ≈ 0.04 nm is far too small to make committing to a tack win). TACK_PRUNE_S only biases the prune
+# ranking — so a beat converges to one tack to the layline — while the ETA still uses the real 30 s, so
+# predicted times aren't inflated. Genuine shifts still pay enough to tack (verified on an oscillating
+# beat), so this suppresses the weave without under-tacking.
+TACK_PRUNE_S = float(os.environ.get("ROUTE_TACK_PRUNE_S", "300"))
 # #3 POSITION PRUNE NEAR MARK: within MARK_PRUNE_NM of the mark, bucket the isochrone prune by POSITION
 # (a small lat/lon cell) instead of bearing-from-start, so near-colocated opposite-tack nodes compete
 # and the least-penalized one wins (kills the both-boards-survive weave on the final approach).
 MARK_POS_PRUNE = _flag("ROUTE_MARK_POS_PRUNE")
 MARK_PRUNE_NM = float(os.environ.get("ROUTE_MARK_PRUNE_NM", "6.0"))
 MARK_PRUNE_CELL_NM = float(os.environ.get("ROUTE_MARK_PRUNE_CELL_NM", "0.25"))
+# ROOT-CAUSE FIX for the mark-approach scramble: the legacy isochrone prunes by distance-FROM-START
+# bucketed by bearing-from-start — which rewards sailing sideways (oversail) and lets BOTH tacks survive
+# every generation (the weave). DMG_PRUNE instead ranks each candidate by distance MADE GOOD toward the
+# mark and buckets by CROSS-TRACK LANE (lateral offset from the start→mark rhumb), so the frontier is one
+# leading node per lane and a beat converges to a single tack to the layline. Supersedes MARK_POS_PRUNE.
+DMG_PRUNE = _flag("ROUTE_DMG_PRUNE")
+LANE_NM = float(os.environ.get("ROUTE_LANE_NM", "0.5"))   # cross-track lane width for the DMG prune (nm)
 
 
 # --- geometry ----------------------------------------------------------------
@@ -82,6 +96,16 @@ def _advance(lat, lon, brg, dist_nm):
     b = math.radians(brg)
     return (lat + dist_nm * math.cos(b) / 60.0,
             lon + dist_nm * math.sin(b) / (60.0 * max(0.1, math.cos(math.radians(lat)))))
+
+
+def _xtrack_nm(slat, slon, dlat, dlon, plat, plon):
+    """Signed cross-track distance (nm) of point p from the start→dest great circle (sign = side)."""
+    R = 3440.065
+    d13 = _hav_nm(slat, slon, plat, plon) / R
+    if d13 <= 0:
+        return 0.0
+    dth = math.radians(_bearing(slat, slon, plat, plon) - _bearing(slat, slon, dlat, dlon))
+    return math.asin(max(-1.0, min(1.0, math.sin(d13) * math.sin(dth)))) * R
 
 
 # --- polars ------------------------------------------------------------------
@@ -218,8 +242,8 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
             tack_s = 0.0
             if is_tack and TACK_COST_S > 0:
                 if TACK_CUMULATIVE:
-                    pen += sp * (TACK_COST_S / 3600.0)
-                    tack_s = TACK_COST_S
+                    pen += sp * (TACK_PRUNE_S / 3600.0)   # prune regularizer — suppresses the staircase
+                    tack_s = TACK_COST_S                  # realistic ETA cost — don't inflate predicted time
                     tk += 1
                 else:
                     step_nm = max(0.0, step_nm - sp * (TACK_COST_S / 3600.0))
@@ -234,18 +258,25 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
                     blocked += 1
                     continue
             rng = _hav_nm(slat, slon, nlat, nlon)
-            # PRUNE KEY (#3): near the mark, bucket by POSITION so near-colocated opposite-tack nodes
-            # compete (and the least-penalized wins); elsewhere keep the classic bearing-from-start sector.
-            if MARK_POS_PRUNE and _hav_nm(nlat, nlon, dlat, dlon) <= MARK_PRUNE_NM:
+            # PRUNE KEY + SCORE. DMG_PRUNE (root-cause fix): rank by distance MADE GOOD toward the mark,
+            # bucketed by CROSS-TRACK LANE off the start→mark rhumb — one leading node per lane, so a beat
+            # lays the layline in one tack instead of ballooning sideways and weaving. Legacy paths:
+            # #3 position-cell near the mark, else the classic bearing-from-start sector; both score by
+            # distance-from-start. Score is net of the accumulated maneuver penalty (#2).
+            if DMG_PRUNE:
+                sec = ("dmg", round(_xtrack_nm(slat, slon, dlat, dlon, nlat, nlon) / LANE_NM))
+                score = (direct - _hav_nm(nlat, nlon, dlat, dlon)) - pen
+            elif MARK_POS_PRUNE and _hav_nm(nlat, nlon, dlat, dlon) <= MARK_PRUNE_NM:
                 cell = MARK_PRUNE_CELL_NM / 60.0
                 sec = ("p", round(nlat / cell), round(nlon / max(1e-6, cell * coslat)))
+                score = rng - pen
             else:
                 sec = round(_bearing(slat, slon, nlat, nlon) / SECTOR)
-            rng_eff = rng - pen          # range made good net of accumulated maneuver cost (#2)
-            if sec not in cand or rng_eff > cand[sec]["rng_eff"]:
+                score = rng - pen
+            if sec not in cand or score > cand[sec]["rng_eff"]:
                 cand[sec] = {"lat": nlat, "lon": nlon,
                              "t": node["t"] + dt_h * 3600 + tack_s,
-                             "parent": node, "hdg": hdg, "rng": rng, "rng_eff": rng_eff,
+                             "parent": node, "hdg": hdg, "rng": rng, "rng_eff": score,
                              "pen": pen, "tk": tk}
             placed += 1
         return placed, blocked
