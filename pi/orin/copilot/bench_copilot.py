@@ -273,6 +273,59 @@ def test_coach_logic() -> bool:
     return ok
 
 
+def test_safety_callout() -> bool:
+    """The collision-watch callout — top-priority, grounded in get_ais, voiced act>watch and ahead of
+    everything else. Pure/deterministic: synthetic AIS snapshots, no engine/LLM."""
+    ok = True
+    print("\n== safety / collision callout (pure, synthetic AIS) ==")
+
+    def snap(targets, own_fix=True):
+        return {"get_ais": {"available": True, "own_fix": own_fix, "targets": targets}}
+
+    act_tgt = {"mmsi": "111", "name": "TUG", "cpa_nm": 0.3, "tcpa_min": 8, "bearing": 40,
+               "range_nm": 1.1, "closing": True}
+    watch_tgt = {"mmsi": "222", "name": "FERRY", "cpa_nm": 1.2, "tcpa_min": 25, "bearing": 300,
+                 "range_nm": 3.0, "closing": True}
+    clear_tgt = {"mmsi": "333", "name": "FAR", "cpa_nm": 4.0, "tcpa_min": 50, "bearing": 90,
+                 "range_nm": 6.0, "closing": True}
+    opening = {"mmsi": "444", "name": "OPENING", "cpa_nm": 0.2, "tcpa_min": 5, "bearing": 180,
+               "range_nm": 0.5, "closing": False}
+
+    c = narrate_mod._safety_callout(snap([act_tgt])["get_ais"])
+    ok &= _check("act-level closing → safety callout, urgency now, grounded get_ais",
+                 c and c["category"] == "safety" and c["urgency"] == "now" and c["grounded_in"] == ["get_ais"]
+                 and "Collision risk" in c["headline"])
+    c = narrate_mod._safety_callout(snap([watch_tgt])["get_ais"])
+    ok &= _check("watch-level closing → safety callout, urgency soon, 'Traffic closing'",
+                 c and c["urgency"] == "soon" and "Traffic closing" in c["headline"])
+    ok &= _check("comfortably-clear closing target → no callout",
+                 narrate_mod._safety_callout(snap([clear_tgt])["get_ais"]) is None)
+    ok &= _check("OPENING (not closing) target → no callout",
+                 narrate_mod._safety_callout(snap([opening])["get_ais"]) is None)
+    ok &= _check("no own fix → no callout (CPA meaningless)",
+                 narrate_mod._safety_callout(snap([act_tgt], own_fix=False)["get_ais"]) is None)
+
+    # priority: safety outranks everything — combine an act collision with the full synthetic snapshot.
+    route = "_bench_safety"
+    narrate_mod.reset(route)
+    combined = dict(_SYNTH_SNAPSHOT); combined["get_ais"] = snap([act_tgt])["get_ais"]
+    s = narrate_mod.step(route, combined, None, None)
+    ok &= _check("safety callout is voiced this poll and grounded",
+                 any(x["category"] == "safety" for x in s["new"]) and _grounded(s["new"]))
+    ok &= _check("safety sorts ABOVE rotate_now fatigue (top of active)",
+                 bool(s["active"]) and s["active"][0]["category"] == "safety")
+
+    # escalation watch→act re-voices (level is in the id, like the staged rounding prep)
+    narrate_mod.reset(route)
+    narrate_mod.step(route, snap([watch_tgt]), None, None)
+    esc = {"mmsi": "222", "name": "FERRY", "cpa_nm": 0.4, "tcpa_min": 9, "bearing": 300,
+           "range_nm": 1.0, "closing": True}
+    s2 = narrate_mod.step(route, snap([esc]), None, None)
+    ok &= _check("watch→act escalation re-voices a fresh (now) safety callout",
+                 any(x["category"] == "safety" and x["urgency"] == "now" for x in s2["new"]))
+    return ok
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--llm", action="store_true", help="also exercise the LLM tool-loop")
@@ -282,6 +335,7 @@ def main():
 
     # The callout + adherence engines are pure — exercise them first, with no live engine needed.
     overall = test_narrate_logic()
+    overall &= test_safety_callout()
     overall &= test_adherence_logic()
     overall &= test_coach_logic()
 

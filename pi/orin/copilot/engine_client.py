@@ -59,6 +59,11 @@ class EngineClient:
     def fatigue(self) -> dict:
         return self._get("/fatigue")
 
+    def ais(self, max_range_nm=None) -> dict:
+        """AIS traffic + live CPA/TCPA vs own ship — collision awareness. Always legal in-race (the
+        boat's OWN receiver + OWN computer); threat-sorted (closing, smallest CPA first)."""
+        return self._get("/ais", {"max_range_nm": max_range_nm})
+
     def sail(self, tws=None, twa=None, hoisted=None) -> dict:
         return self._get("/sail", {"tws": tws, "twa": twa, "hoisted": hoisted})
 

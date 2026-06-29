@@ -2,9 +2,10 @@
 
 The brief / dashboard / detail surfaces are all PULL: the crew asks, or the dashboard polls for
 commentary. This module is PUSH — a deterministic callout engine watches the gathered engine
-facts + the frozen playbook and surfaces the few things worth SAYING right now: a mark rounding
-coming up (timed ~15 / 10 / 5-min prep, escalating), a playbook branch trigger firing, an
-upcoming sail change-down, a helm rotation, stale instruments.
+facts + the frozen playbook and surfaces the few things worth SAYING right now: a CLOSING-TRAFFIC
+collision warning (safety — top priority, always legal in-race), a mark rounding coming up (timed
+~15 / 10 / 5-min prep, escalating), a playbook branch trigger firing, an upcoming sail change-down,
+a helm rotation, stale instruments.
 
 Every callout is GROUNDED in an engine fact and/or a playbook variant exactly like a brief item
 — the engine does the math, the callout reports it. The LLM only PHRASES the top callouts into a
@@ -17,9 +18,18 @@ callout that just (and persistently) appeared is `new` — worth voicing; once v
 `active` but isn't re-voiced until it clears and returns. Single-boat, single-process service, so
 holding module state is fine (the same shape as the cloud alerting loop).
 """
+import os
+
 from . import brief as brief_mod
 
 _num = brief_mod._num
+
+# Collision-watch guard (mirrors the dashboard AIS tile): a CLOSING contact inside ACT → voice now
+# ("collision risk"), inside the looser WATCH → voice soon ("traffic closing"). env-tunable.
+AIS_ACT_CPA_NM = float(os.environ.get("COPILOT_AIS_ACT_CPA_NM", "0.5"))
+AIS_ACT_TCPA_MIN = float(os.environ.get("COPILOT_AIS_ACT_TCPA_MIN", "12"))
+AIS_WATCH_CPA_NM = float(os.environ.get("COPILOT_AIS_WATCH_CPA_NM", "1.5"))
+AIS_WATCH_TCPA_MIN = float(os.environ.get("COPILOT_AIS_WATCH_TCPA_MIN", "30"))
 
 # ETA thresholds (minutes-to-mark) for the staged rounding prep. Tightest matching stage wins, so
 # as the mark approaches the callout id changes (…:15 → …:10 → …:5) and each stage voices once.
@@ -39,6 +49,35 @@ CONFIRM_ROUNDS = {"safety": 1, "fatigue": 1, "rounding": 1, "sail": 1,
 def _callout(cid, category, urgency, headline, detail, grounded_in, confidence="med"):
     return {"id": cid, "category": category, "urgency": urgency, "headline": headline,
             "detail": detail, "grounded_in": list(grounded_in), "confidence": confidence}
+
+
+def _safety_callout(ais):
+    """Collision watch — the ONE thing the copilot interrupts for. The nearest CLOSING contact inside
+    the guard becomes a top-priority safety callout, grounded in the boat's own AIS receiver + own
+    CPA/TCPA math (always legal in-race, never RRS-41 'outside help'). The level (act/watch) is in the
+    id so an escalation watch→act re-voices, exactly like the staged rounding prep."""
+    if not ais.get("own_fix"):
+        return None                       # no own fix → CPA/TCPA meaningless; don't bark
+    closing = [t for t in (ais.get("targets") or []) if t.get("closing")]
+    if not closing:
+        return None
+    t = closing[0]                        # already threat-sorted: closing, smallest CPA first
+    cpa, tcpa = _num(t.get("cpa_nm")), _num(t.get("tcpa_min"))
+    if cpa is None or tcpa is None or tcpa < 0:
+        return None
+    act = cpa <= AIS_ACT_CPA_NM and tcpa <= AIS_ACT_TCPA_MIN
+    watch = cpa <= AIS_WATCH_CPA_NM and tcpa <= AIS_WATCH_TCPA_MIN
+    if not (act or watch):
+        return None                       # closing but still comfortably clear — nothing to say
+    name = t.get("name") or f"MMSI {t.get('mmsi', '?')}"
+    brg, rng = _num(t.get("bearing")), _num(t.get("range_nm"))
+    detail = (f"CPA {cpa} nm in {tcpa} min"
+              + (f", bearing {brg}°" if brg is not None else "")
+              + (f", range {rng} nm" if rng is not None else ""))
+    level = "act" if act else "watch"
+    return _callout(f"ais:{t.get('mmsi') or name}:{level}", "safety", "now" if act else "soon",
+                    f"Collision risk: {name}" if act else f"Traffic closing: {name}",
+                    detail, ["get_ais"], "high" if act else "med")
 
 
 def _rounding_callout(nav, snapshot, engine):
@@ -193,8 +232,13 @@ def evaluate(snapshot, playbook=None, engine=None):
     sail = snapshot.get("get_sail_advice") or {}
     fat = snapshot.get("get_fatigue") or {}
     cond = snapshot.get("get_conditions") or {}
+    ais = snapshot.get("get_ais") or {}
 
     out = []
+    if ais.get("available", True) is not False:    # SAFETY first — collision watch (always legal)
+        c = _safety_callout(ais)
+        if c:
+            out.append(c)
     if nav.get("available"):
         for c in (_rounding_callout(nav, snapshot, engine), _layline_callout(nav)):
             if c:

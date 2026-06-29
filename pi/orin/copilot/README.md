@@ -45,11 +45,13 @@ The bounded structure enforces the locked design rules **structurally, not just 
 
 The brief is PULL (the crew asks). Narration is **PUSH**: a deterministic callout engine watches
 the gathered engine facts + the frozen playbook and surfaces the few things worth **saying right
-now** — a **timed mark-rounding prep** (escalating ~15 / 10 / 5-min heads-up, with the leg-after
-homework: the maneuver, the TWA once round, and the sail to stage for the next leg), a **playbook
-branch trigger** firing, an upcoming **sail change-down**, a **helm rotation**, **stale
-instruments**. The LLM only *phrases* the top one or two into a calm spoken radio call; the
-deterministic callout text is the always-on fallback.
+now** — a **closing-traffic collision warning** (safety, top priority — the nearest closing AIS
+contact inside the CPA/TCPA guard, voiced "now" inside ~0.5 nm / 12 min, "soon" inside ~1.5 nm / 30
+min; always legal in-race = own receiver + own math), a **timed mark-rounding prep** (escalating ~15
+/ 10 / 5-min heads-up, with the leg-after homework: the maneuver, the TWA once round, and the sail to
+stage for the next leg), a **playbook branch trigger** firing, an upcoming **sail change-down**, a
+**helm rotation**, **stale instruments**. The LLM only *phrases* the top one or two into a calm spoken
+radio call; the deterministic callout text is the always-on fallback.
 
 Same guardrails as a brief: every callout is **grounded** in a real engine fact and/or a playbook
 variant (ungrounded ones are dropped), the engine does the math, and nothing originates strategy —

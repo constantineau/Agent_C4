@@ -145,7 +145,7 @@ via `OnboardSource`. It comes up with the rest of the Pi stack; quick check:
 | **5** ✅ | iPad nav companion: day/night, sail dial, course plot, navigator, tactics, routing | bench-verified end-to-end |
 | **6** ✅ | Alerting + summarizer + polar tooling | bench-complete; 2-practice-sail false-positive gate awaits real sailing |
 | 7 🔶 | Prod stack + deploy + rules review + soak | rules review done; server auth + TLS scaffolding done; prod deploy/soak gated on domain + prod `.env` |
-| **9** 🔶 | Onboard + C4 Performance Lab (three-tier pivot) | **9.0 data-access abstraction ✅ · 9.1 onboard engine service ✅ · 9.2 race gate + iPad onboard console ✅ · Lab-0 race ingestion + course loader ✅ · Lab-1 multi-model GRIB optimizer ✅ · Lab-2a/2b branching playbook bundle ✅ (fan-out → variants → Opus synthesis → signed, onboard-loadable artifact) · routing-fidelity 2b per-leg sail plan + reviewable boat sail model ✅ · routing-fidelity 2c isochrone VMG-gate/cone-prune/anti-over-tack ✅ · routing-fidelity 2e finish/mark over-tack ("scramble") fixes ✅ · routing-fidelity 2f island rounding-side enforcement ✅ · 9.4 Orin LLM appliance live (Ollama+Qwen2.5-7B :11434) + copilot decision-support layer ✅ (`pi/orin/copilot`) · copilot crew-facing narration ✅ + proactive auto-coach timer ✅ · PLAYBOOK-ADHERENCE dashboard tile ✅ (10-tile 5×2 grid) · handicap-aware fleet tactics ✅ (incl. verified YB/bycmack tracker source) ** — see `docs/ONBOARD_ENGINE_SCOPING.md` |
+| **9** 🔶 | Onboard + C4 Performance Lab (three-tier pivot) | **9.0 data-access abstraction ✅ · 9.1 onboard engine service ✅ · 9.2 race gate + iPad onboard console ✅ · Lab-0 race ingestion + course loader ✅ · Lab-1 multi-model GRIB optimizer ✅ · Lab-2a/2b branching playbook bundle ✅ (fan-out → variants → Opus synthesis → signed, onboard-loadable artifact) · routing-fidelity 2b per-leg sail plan + reviewable boat sail model ✅ · routing-fidelity 2c isochrone VMG-gate/cone-prune/anti-over-tack ✅ · routing-fidelity 2e finish/mark over-tack ("scramble") fixes ✅ · routing-fidelity 2f island rounding-side enforcement ✅ · 9.4 Orin LLM appliance live (Ollama+Qwen2.5-7B :11434) + copilot decision-support layer ✅ (`pi/orin/copilot`) · copilot crew-facing narration ✅ + proactive auto-coach timer ✅ + collision/AIS safety callout ✅ · PLAYBOOK-ADHERENCE dashboard tile ✅ (10-tile 5×2 grid) · handicap-aware fleet tactics ✅ (incl. verified YB/bycmack tracker source) ** — see `docs/ONBOARD_ENGINE_SCOPING.md` |
 
 **Current status:** Phases 0–6 built and bench-verified; Phase 7 started; **Phase 9 in progress
 (9.0 data-access abstraction ✅, 9.1 onboard engine service ✅ — see "Onboard engine service",
@@ -874,8 +874,14 @@ hero ~620 px; stats + collapsible `<details>` rail = Legs / Briefing / Wind fiel
 on) — Orca's "ride along". NEXT = fold in the user's own Orca UX notes as refinements when they arrive.
 
 **Copilot track — crew-facing narration ✅ + proactive auto-coach timer ✅ + PLAYBOOK-ADHERENCE
-dashboard tile ✅** (the copilot interprets the signed playbook + boat sail model; see "Onboard LLM
-copilot"). **Handicap-aware fleet tactics ✅** (incl. the verified YB/bycmack over-the-horizon tracker
+dashboard tile ✅ + collision/AIS safety callout ✅** (the copilot interprets the signed playbook +
+boat sail model; see "Onboard LLM copilot"). **Collision callout** (`narrate._safety_callout`):
+narration now gathers the engine's `/ais` and voices the nearest CLOSING contact inside the CPA/TCPA
+guard as a TOP-priority safety callout ("Collision risk: <vessel> — CPA x nm in y min") — the one thing
+the copilot interrupts for, always legal in-race (own receiver + own math). act ≤0.5 nm/12 min = "now",
+watch ≤1.5 nm/30 min = "soon"; level is in the callout id so a watch→act escalation re-voices. Verified
+`bench_copilot.test_safety_callout` + end-to-end against the live :8200 engine (voiced a real
+CPA-0.0 nm closing target). Tunables `COPILOT_AIS_{ACT,WATCH}_{CPA_NM,TCPA_MIN}`. **Handicap-aware fleet tactics ✅** (incl. the verified YB/bycmack over-the-horizon tracker
 source) — see "Handicap-aware fleet tactics". **Next:** (open) — island rounding-side enforcement is now
 in (routing fidelity 2f: marked islands only); the overstand/2d gate + nav-mark side were already in.
 
@@ -978,8 +984,8 @@ graceful fallback fires on the ~2 min cold model-load or ungrounded JSON. Exit t
 is the TIMER that DRIVES it. A background loop in the copilot lifespan ticks every `COACH_INTERVAL_S`
 (env `COPILOT_COACH_INTERVAL_S`, default 30 s; `COPILOT_COACH=false` disables), runs the narration
 engine, and HOLDS the latest result — so the copilot volunteers coaching whether or not anything polls,
-and the TIME-DRIVEN callouts (15/10/5-min rounding prep, a playbook branch firing, a sail change-down)
-fire on the clock. It mirrors the cloud alerting loop; `narrate.step`'s raise-slow/clear-fast
+and the TIME-DRIVEN callouts (a closing-traffic COLLISION warning — safety, top priority; 15/10/5-min
+rounding prep, a playbook branch firing, a sail change-down) fire on the clock. It mirrors the cloud alerting loop; `narrate.step`'s raise-slow/clear-fast
 speak-once already dedups, the loop just calls it on a schedule + keeps a short spoken history. The LLM
 only phrases NEW callouts (most ticks are deterministic + cheap), following `USE_LLM`. `GET /coach`
 reads the held state with no recompute (the canonical proactive surface; `POST /narrate` is the
