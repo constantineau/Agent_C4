@@ -497,7 +497,7 @@ function courseEditCard(c, ci) {
     </tr>`;
   }).join("");
   return `<div class="card"><h3>${esc(c.name)}</h3>
-    <canvas id="map${ci}" class="coursemap" width="640" height="360"></canvas>
+    <div id="map${ci}" class="coursemap"></div>
     <div style="font-size:13px;margin:8px 0">
       <b>Start</b>
       <input class="cin" value="${c.start.lat == null ? "" : c.start.lat}" placeholder="start lat"
@@ -579,49 +579,43 @@ async function saveCourse() {
   } catch (e) { msg.textContent = "Save failed."; }
   btn.disabled = false;
 }
+// Course & Marks chart — a real slippy map (OSM + OpenSeaMap seamarks) so geocoded marks can be
+// sanity-checked against actual geography (issue #26). Labeled markers per start/mark/gate/finish,
+// island disks (with the rounding side), gate/finish lines, auto-fit to the course.
 function drawCourseMap(id, course) {
-  const cv = document.getElementById(id); if (!cv) return;
-  const ctx = cv.getContext("2d"); const W = cv.width, H = cv.height;
-  ctx.clearRect(0, 0, W, H);
+  const el = document.getElementById(id);
+  if (!el || !window.L) return;
+  Lab._courseMaps = Lab._courseMaps || {};
+  if (Lab._courseMaps[id]) { try { Lab._courseMaps[id].remove(); } catch (e) {} delete Lab._courseMaps[id]; }
+  const map = L.map(el); Lab._courseMaps[id] = map;
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 18, attribution: "© OpenStreetMap" }).addTo(map);
+  L.tileLayer("https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png", { maxZoom: 18, opacity: 0.9 }).addTo(map);
   const pts = [];
-  if (course.start && course.start.lat != null)
-    pts.push({ lat: course.start.lat, lon: course.start.lon, label: "Start", kind: "start" });
+  const pin = (lat, lon, label, color) => {
+    if (lat == null) return;
+    L.circleMarker([lat, lon], { radius: 6, color: "#0b0b0e", weight: 1, fillColor: color, fillOpacity: 0.95 })
+      .bindTooltip(label, { permanent: true, direction: "right", className: "cm-pin" }).addTo(map);
+    pts.push([lat, lon]);
+  };
+  if (course.start && course.start.lat != null) pin(course.start.lat, course.start.lon, "Start", "#2ecc71");
   (course.marks || []).forEach((m) => {
-    if (m.lat != null) pts.push({ lat: m.lat, lon: m.lon, label: m.name, kind: m.type });
-    if (m.lat2 != null) pts.push({ lat: m.lat2, lon: m.lon2, label: m.name + " (NE)", kind: "gate" });
-  });
-  ((course.finish || {}).points || []).forEach((p) => {
-    if (p && p.lat != null) pts.push({ lat: p.lat, lon: p.lon, label: "Finish", kind: "finish" });
-  });
-  ctx.fillStyle = "#8aa0b4"; ctx.font = "12px system-ui";
-  if (pts.length < 1) { ctx.fillText("No coordinates yet — fill marks below.", 16, 24); return; }
-  const lats = pts.map((p) => p.lat), lons = pts.map((p) => p.lon);
-  const meanlat = (Math.min(...lats) + Math.max(...lats)) / 2;
-  const kx = Math.cos(meanlat * Math.PI / 180);
-  const xs = pts.map((p) => p.lon * kx), ys = pts.map((p) => p.lat);
-  let minx = Math.min(...xs), maxx = Math.max(...xs), miny = Math.min(...ys), maxy = Math.max(...ys);
-  const pad = 50, spanx = (maxx - minx) || 0.01, spany = (maxy - miny) || 0.01;
-  const sc = Math.min((W - 2 * pad) / spanx, (H - 2 * pad) / spany);
-  const X = (p) => pad + (p.lon * kx - minx) * sc;
-  const Y = (p) => H - (pad + (p.lat - miny) * sc);   // north up
-  // gate / finish lines (pairs sharing a name)
-  ctx.strokeStyle = "#7ee0a8"; ctx.lineWidth = 2;
-  (course.marks || []).forEach((m) => {
-    if (m.lat != null && m.lat2 != null) {
-      ctx.beginPath(); ctx.moveTo(X({ lon: m.lon }), Y({ lat: m.lat }));
-      ctx.lineTo(X({ lon: m.lon2 }), Y({ lat: m.lat2 })); ctx.stroke();
+    if (m.type === "island" && m.lat != null) {
+      L.circle([m.lat, m.lon], { radius: (m.radius_nm || 0.5) * 1852, color: "#ff8a5c", weight: 1,
+        fillColor: "#ff8a5c", fillOpacity: 0.16 }).addTo(map);
+      pin(m.lat, m.lon, m.name + " · island, leave " + (m.rounding && m.rounding !== "none" ? m.rounding : "either"), "#ff8a5c");
+    } else if (m.type === "gate" && m.lat != null && m.lat2 != null) {
+      L.polyline([[m.lat, m.lon], [m.lat2, m.lon2]], { color: "#f5b13d", weight: 3 }).addTo(map);
+      pin(m.lat, m.lon, m.name, "#f5b13d"); pin(m.lat2, m.lon2, m.name + " (NE)", "#f5b13d");
+    } else if (m.lat != null) {
+      pin(m.lat, m.lon, m.name + (m.rounding && m.rounding !== "none" ? " · " + m.rounding : ""), "#2f9bff");
     }
   });
   const fp = ((course.finish || {}).points || []).filter((p) => p && p.lat != null);
-  if (fp.length === 2) {
-    ctx.strokeStyle = "#f5c451";
-    ctx.beginPath(); ctx.moveTo(X(fp[0]), Y(fp[0])); ctx.lineTo(X(fp[1]), Y(fp[1])); ctx.stroke();
-  }
-  pts.forEach((p) => {
-    ctx.fillStyle = p.kind === "finish" ? "#f5c451" : p.kind === "gate" ? "#7ee0a8" : "#36b3ff";
-    ctx.beginPath(); ctx.arc(X(p), Y(p), 5, 0, 7); ctx.fill();
-    ctx.fillStyle = "#e8eef4"; ctx.fillText(p.label, X(p) + 8, Y(p) + 4);
-  });
+  if (fp.length === 2) L.polyline([[fp[0].lat, fp[0].lon], [fp[1].lat, fp[1].lon]], { color: "#f5c451", weight: 3 }).addTo(map);
+  fp.forEach((p, k) => pin(p.lat, p.lon, k === 0 ? "Finish" : "Finish (2)", "#f5c451"));
+  if (pts.length) map.fitBounds(pts, { padding: [42, 42], maxZoom: 12 });
+  else { map.setView([44.5, -82.5], 6); L.popup().setLatLng([44.5, -82.5]).setContent("No coordinates yet — fill marks below.").openOn(map); }
+  setTimeout(() => { try { map.invalidateSize(); } catch (e) {} }, 80);   // settle tiles after the innerHTML layout
 }
 
 /* ---------- placeholders (all sections are now built) ---------- */
