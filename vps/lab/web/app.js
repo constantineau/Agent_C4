@@ -659,11 +659,11 @@ function zonedWallToEpoch(y, mo, d, h, mi, tz) {
   return (naive - o2) / 1000;
 }
 
-// Parse the "Start" field — a locale-independent 24h "YYYY-MM-DD HH:MM" (space or T).
-// Interpreted in the race's local timezone when one is known, else as UTC.
-// Returns epoch seconds, or null if blank/invalid.
+// Parse the "Start" field — the datetime-local picker's "YYYY-MM-DDThh:mm" value (a space separator
+// and an optional :ss are also accepted). Interpreted in the race's local timezone when one is known,
+// else as UTC. Returns epoch seconds, or null if blank/invalid.
 function optStartEpoch() {
-  const m = (Opt.start || "").trim().match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})$/);
+  const m = (Opt.start || "").trim().match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::\d{2})?$/);
   if (!m) return null;
   const [, y, mo, d, h, mi] = m.map(Number);
   const tz = optTz();
@@ -687,8 +687,8 @@ async function renderGameplan() {
   if (stale("gameplan")) return;
   const startTz = optTz();
   const startTitle = (startTz
-    ? "24-hour " + startTz + " local time, e.g. 2026-07-18 06:30 — converted to UTC behind the scenes."
-    : "24-hour UTC, e.g. 2026-07-19 20:05 for 8:05pm.") + " Leave blank for the freshest forecast cycle.";
+    ? "Pick the start date & time in " + startTz + " race-local time — converted to UTC behind the scenes."
+    : "Pick the start date & time (UTC).") + " Leave blank for the freshest forecast cycle.";
   view.innerHTML = `<div class="opt">
     <div class="card">
       <h3>Gameplan / Optimizer <span class="muted" style="font-weight:400">— multi-model GRIB route (Lab-1)</span></h3>
@@ -700,10 +700,8 @@ async function renderGameplan() {
               ${Opt.races.map((r) => `<option value="${esc(r.race_id)}" ${r.race_id === Opt.raceId ? "selected" : ""}>${esc(r.name)}</option>`).join("")}
             </select></label>
           <label>Course <select id="optCourse" onchange="Opt.courseId=this.value">${optCourseOpts()}</select></label>
-          <label>Start (${startTz ? "race local" : "UTC"}) <input type="text" id="optStart" inputmode="numeric"
-            placeholder="YYYY-MM-DD HH:MM" pattern="\\d{4}-\\d{2}-\\d{2}[ T]\\d{2}:\\d{2}"
-            title="${esc(startTitle)}"
-            value="${esc(Opt.start || "")}" oninput="Opt.start=this.value" style="width:150px"></label>
+          <label>Start (${startTz ? "race local" : "UTC"}) <input type="datetime-local" id="optStart"
+            title="${esc(startTitle)}" value="${esc(Opt.start || "")}" oninput="Opt.start=this.value"></label>
         </div>
         <div class="opt-group">
           <div class="opt-group-h">Boat &amp; charts</div>
