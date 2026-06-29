@@ -311,6 +311,10 @@ Source-independent (ENC or GSHHG/NE), applied after the waypoint carve; provenan
 route takes the wrong side → barrier flips it, both port and starboard, still reaching the mark), and
 the real cove_island Duck/BoisBlanc barriers (legal open, illegal blocked). Tunables
 `ROUTE_ROUNDSIDE_ISLANDS` (default ON) / `ROUTE_ROUNDSIDE_BAND_NM`.
+- **Crew-facing roundings summary:** the route enforces island sides but didn't *tell* the crew, so
+  `race_def.marks_with_side()` lists the ordered required sides for all marks (nav + islands + gates),
+  the optimize result carries `roundings`, and the briefing states them ("leave Duck Islands to
+  starboard, Bois Blanc to port"). See `test_roundings.py`.
 
 - **Next:** the copilot's crew-facing narration increment (it now has a signed playbook + boat sail
   model to interpret). Routing fidelity 2c/2e/2f and the higher-res GSHHG coastline backstop are **done**.

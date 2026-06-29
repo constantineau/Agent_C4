@@ -838,6 +838,12 @@ and the Gameplan map draws a P/S marker + a tick toward the legal side (`mapview
 still reaching the mark); and the real cove_island Duck(stbd)/BoisBlanc(port) barriers (legal side open,
 illegal blocked) — plus an offline gate→finish leg routed through the full mask still reaches the finish
 (no over-block). Tunables `ROUTE_ROUNDSIDE_ISLANDS` (default ON) / `ROUTE_ROUNDSIDE_BAND_NM`.
+**Crew-facing roundings summary (2f follow-up):** the route now ENFORCES island sides but nothing TOLD
+the crew — so `race_def.marks_with_side()` returns the ordered required sides for ALL marks (nav marks
+AND islands with rounding port/starboard, plus gates), the optimize result carries it as `roundings`,
+and `briefing()` states it explicitly (Opus prompt + deterministic line: "Roundings: … leave Duck
+Islands to starboard; leave Bois Blanc Island to port"). Verified `test_roundings.py` (ordering,
+island inclusion, briefing text).
 
 **Optimizer UI study + restyle — `docs/OPTIMIZER_UI_STUDY.md`** (Orca + Expedition gap analysis). Tier 0
 (ensemble-control fix + ECMWF-ENS wired as a separate 51-member `ecmwf-ens` ensemble source) + Tier 1

@@ -340,6 +340,25 @@ def course_roundings(definition: dict, course_id: str = None) -> dict:
     return out
 
 
+def marks_with_side(definition: dict, course_id: str = None):
+    """Ordered [{name, type, side}] for every course mark the crew must leave on a specific hand — nav
+    marks AND island marks with rounding 'port'/'starboard' (and gates, which are passed between), in
+    course order. Unlike `course_roundings` (nav marks only, for the optimizer's standoff) this INCLUDES
+    islands, so it's the crew-facing roundings summary: 'leave Duck Islands to starboard, Bois Blanc to
+    port, …'. Marks with rounding 'none' (start/finish/free marks) are omitted."""
+    courses = definition.get("courses", []) or []
+    course = next((c for c in courses if c.get("id") == course_id), None) or \
+        (courses[0] if courses else None)
+    if not course:
+        return []
+    out = []
+    for m in course.get("marks", []):
+        side = m.get("rounding", "none")
+        if side in ("port", "starboard", "gate"):
+            out.append({"name": m.get("name", "mark"), "type": m.get("type", "mark"), "side": side})
+    return out
+
+
 def fleet_blob(definition: dict, own: dict = None) -> dict:
     """Build the onboard fleet homework from a RaceDefinition: the competitor roster, the scoring
     flavor (ToT/ToD → corrected-time math), and the own boat's rating. This is the fleet counterpart

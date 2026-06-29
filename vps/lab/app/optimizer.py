@@ -532,6 +532,7 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
         "warnings": warnings,
         "legs": legs,
         "sail_plan": sail_seq,
+        "roundings": race_def.marks_with_side(definition, course_id),   # crew-facing required sides
         "skipped_marks": skipped,
         "marks": [{"seq": s, "name": n, "lat": la, "lon": lo} for s, n, la, lo in marks],
         "isochrones": isochrones,
@@ -617,6 +618,14 @@ def briefing(result: dict, race_name: str = "") -> str:
         return result.get("note", "No route available.")
     legs = result["legs"]
     warnings = result.get("warnings") or []
+    roundings = result.get("roundings") or []
+
+    def _round_phrase(r):
+        if r.get("side") == "gate":
+            return f"{r['name']} (gate — pass between)"
+        return f"leave {r['name']} to {r['side']}"
+    roundings_text = "; ".join(_round_phrase(r) for r in roundings)
+
     facts = {
         "race": race_name, "total_hours": result["total_hours"],
         "total_sailed_nm": result["total_sailed_nm"], "total_tacks": result["total_tacks"],
@@ -624,6 +633,7 @@ def briefing(result: dict, race_name: str = "") -> str:
         "wind_coverage": result.get("wind_coverage"),
         "degraded": result.get("degraded", False), "warnings": warnings,
         "models": [m["model"] for m in result["windfield"]["models"]],
+        "roundings": roundings,
         "legs": [{"to": l["to"], "minutes": l["leg_minutes"], "point_of_sail": l["point_of_sail"],
                   "tacks": l["tacks"], "wind": l["wind"]} for l in legs],
     }
@@ -638,9 +648,10 @@ def briefing(result: dict, race_name: str = "") -> str:
                        "for the crew from an optimizer result. Explain the recommended route leg by "
                        "leg, the wind story, where to expect tacks/gybes and sail changes, and — "
                        "importantly — call out where model CONFIDENCE is low (models disagree) so "
-                       "the crew sails conservatively there. If 'degraded' is true or 'warnings' are "
-                       "present, OPEN with a clear forecast-reliability warning (the wind data was "
-                       "sparse) before anything else. Be specific and brief; no preamble.",
+                       "the crew sails conservatively there. State the required mark ROUNDINGS "
+                       "explicitly (which side to leave each mark — from 'roundings'). If 'degraded' is "
+                       "true or 'warnings' are present, OPEN with a clear forecast-reliability warning "
+                       "(the wind data was sparse) before anything else. Be specific and brief; no preamble.",
                 messages=[{"role": "user", "content":
                            "Optimizer result:\n" + json.dumps(facts, indent=2)}],
             )
@@ -661,6 +672,9 @@ def briefing(result: dict, race_name: str = "") -> str:
               f"Model agreement (confidence): {result['route_confidence']} "
               f"(lowest leg {result['min_confidence']}); wind coverage "
               f"{int((result.get('wind_coverage') or 0) * 100)}% of the route.", ""]
+    if roundings_text:
+        lines.append(f"Roundings: {roundings_text}.")
+        lines.append("")
     for l in legs:
         w = l["wind"] or {}
         lines.append(f"• To {l['to']}: {l['leg_minutes']} min, {l['point_of_sail'] or '?'}, "
