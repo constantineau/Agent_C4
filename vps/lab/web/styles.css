@@ -308,3 +308,10 @@ table.pg td.pg-twa { color: var(--muted); font-weight: 600; }
 .dep-cmds { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px;
   padding: 11px 13px; font-size: 12px; line-height: 1.55; color: var(--ink); overflow-x: auto;
   white-space: pre; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+/* ---- Fleet roster table ---- */
+table.fleet-tbl { border-collapse: collapse; width: 100%; font-size: 12px; }
+table.fleet-tbl th { text-align: left; color: var(--muted); font-weight: 600; font-size: 11px;
+  padding: 2px 6px; border-bottom: 1px solid var(--line); }
+table.fleet-tbl td { padding: 3px 6px; vertical-align: middle; }
+table.fleet-tbl input.ein { padding: 5px 7px; }

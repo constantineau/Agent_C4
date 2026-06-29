@@ -381,7 +381,8 @@ def fleet_blob(definition: dict, own: dict = None) -> dict:
     tracker = dict(definition.get("tracker") or {})
     if tracker:
         tracker["permitted"] = bool(rp.get("tracker_permitted"))   # per-race gate is authoritative
-    return {"fleet": roster, "scoring": scoring, "own": own or {}, "tracker": tracker}
+    return {"fleet": roster, "scoring": scoring, "own": own or definition.get("own") or {},
+            "tracker": tracker}
 
 
 if __name__ == "__main__":

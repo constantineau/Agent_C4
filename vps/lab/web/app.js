@@ -122,6 +122,7 @@ function route() {
   if (sec === "course") return renderCourse();
   if (sec === "gameplan") return renderGameplan();
   if (sec === "deploy") return renderDeploy();
+  if (sec === "fleet") return renderFleet();
   renderPlaceholder(sec);
 }
 const clone = (o) => JSON.parse(JSON.stringify(o));
@@ -622,7 +623,6 @@ function drawCourseMap(id, course) {
 /* ---------- placeholders ---------- */
 const SOON = {
   rules: ["Rules, Safety & Checklists", "The full prep checklist the team works through — every SER + procedural item, with the race-time subset flagged to push to the iPad."],
-  fleet: ["Fleet", "Competitor roster + ORC handicaps (entry-list import, MMSI matching) for handicap-aware, corrected-time tactics."],
   learnings: ["Learnings", "The boat-level library (refined polars, crossovers, calibration, fatigue/helm-skill) and what's applied to this regatta."],
   monitor: ["Monitor", "Shore-side live view during the race (the boat itself uses the onboard console)."],
   debrief: ["Debrief", "The post-race judge loop — regret analysis and write-back review that feeds the next prep."],
@@ -1309,6 +1309,139 @@ async function downloadHomework(rid) {
     document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
   } catch (e) { alert("Could not download the homework package: " + e.message); }
+}
+
+/* ---------- Fleet (roster + ORC handicaps → corrected-time tactics homework) ---------- */
+const fleetNum = (x) => { const v = parseFloat(String(x).replace(/[^0-9.\-]/g, "")); return isNaN(v) ? null : v; };
+
+async function renderFleet() {
+  const view = document.getElementById("view");
+  if (!Lab.races) {
+    view.innerHTML = '<div class="loading">Loading…</div>';
+    try { Lab.races = (await (await apiGet("/api/races")).json()).races || []; }
+    catch (e) { view.innerHTML = '<div class="placeholder">Failed to load.</div>'; return; }
+  }
+  if (!Lab.sel && Lab.races.length) Lab.sel = Lab.races[0].race_id;
+  if (!Lab.sel) { view.innerHTML = '<div class="placeholder">No race — ingest one in the Races tab.</div>'; return; }
+  if (!Lab.editDef || Lab.editDef.race_id !== Lab.sel) {
+    view.innerHTML = '<div class="loading">Loading fleet…</div>';
+    try { Lab.editDef = await (await apiGet("/api/races/" + encodeURIComponent(Lab.sel))).json(); }
+    catch (e) { view.innerHTML = '<div class="placeholder">Failed to load.</div>'; return; }
+  }
+  if (stale("fleet")) return;
+  if (!Array.isArray(Lab.editDef.fleet)) Lab.editDef.fleet = [];
+  if (!Lab.editDef.own || typeof Lab.editDef.own !== "object") Lab.editDef.own = {};
+  paintFleet();
+}
+
+async function fleetPickRace(id) { Lab.sel = id; Lab.editDef = null; renderFleet(); }
+function fleetSet(i, f, v) { if (Lab.editDef && Lab.editDef.fleet[i]) Lab.editDef.fleet[i][f] = v; }
+function fleetOwnSet(f, v) { if (!Lab.editDef) return; if (!Lab.editDef.own) Lab.editDef.own = {}; Lab.editDef.own[f] = v; }
+function fleetAddRow() { Lab.editDef.fleet.push({ boat: "", division: "", cls: "", owner: "", orc_gph: null, rating: null, mmsi: "" }); paintFleet(); }
+function fleetRemove(i) { Lab.editDef.fleet.splice(i, 1); paintFleet(); }
+
+// Parse a pasted entry list — one boat per line, comma- or tab-separated:
+// boat, division, rating, GPH, MMSI  (a header row is skipped; only boat is required).
+function fleetImport() {
+  const ta = document.getElementById("fleetPaste");
+  const text = ta ? ta.value : "";
+  let added = 0;
+  for (let line of text.split(/\r?\n/)) {
+    line = line.trim(); if (!line) continue;
+    const c = line.split(/\t|,/).map((s) => s.trim());
+    if (/^(boat|name|yacht)$/i.test(c[0])) continue;        // header
+    if (!c[0]) continue;
+    Lab.editDef.fleet.push({ boat: c[0], division: c[1] || "", cls: "", owner: "",
+      rating: fleetNum(c[2]), orc_gph: fleetNum(c[3]), mmsi: (c[4] || "").trim() });
+    added++;
+  }
+  if (ta) ta.value = "";
+  paintFleet();
+  const m = document.getElementById("fleetMsg"); if (m) m.textContent = `Appended ${added} boat${added === 1 ? "" : "s"} — review, then Save.`;
+}
+
+async function fleetSave() {
+  // coerce numerics so the persisted JSON is clean (orc_gph/rating numbers|null)
+  Lab.editDef.fleet = Lab.editDef.fleet.filter((e) => (e.boat || "").trim()).map((e) => ({
+    boat: e.boat.trim(), division: e.division || "", cls: e.cls || "", owner: e.owner || "",
+    orc_gph: fleetNum(e.orc_gph), rating: fleetNum(e.rating), mmsi: (e.mmsi || "").trim() }));
+  const own = Lab.editDef.own || {};
+  Lab.editDef.own = { boat: (own.boat || "").trim(), division: own.division || "",
+    orc_gph: fleetNum(own.orc_gph), rating: fleetNum(own.rating), mmsi: (own.mmsi || "").trim() };
+  const msg = document.getElementById("fleetMsg");
+  if (msg) msg.textContent = "Saving…";
+  try {
+    const r = await (await apiPost("/api/races", { definition: Lab.editDef })).json();
+    paintFleet();          // repaint with the cleaned roster FIRST (it rebuilds #fleetMsg)…
+    const m2 = document.getElementById("fleetMsg");
+    if (m2) m2.textContent = r.saved ? `Saved — ${Lab.editDef.fleet.length} boats in the roster.` : "Save failed.";
+  } catch (e) { const m2 = document.getElementById("fleetMsg"); if (m2) m2.textContent = "Save failed: " + e.message; }
+}
+
+function paintFleet() {
+  const d = Lab.editDef, roster = d.fleet || [], own = d.own || {};
+  const rp = d.rules_profile || {}, sc = rp.scoring || {}, tr = d.tracker || {};
+  const inp = (val, ph, oninput, w) => `<input class="ein" style="width:${w}px" placeholder="${esc(ph)}" value="${esc(val == null ? "" : val)}" oninput="${oninput}">`;
+  const row = (e, i) => `<tr>
+    <td>${inp(e.boat, "boat name", `fleetSet(${i},'boat',this.value)`, 150)}</td>
+    <td>${inp(e.division, "div", `fleetSet(${i},'division',this.value)`, 54)}</td>
+    <td>${inp(e.cls, "class", `fleetSet(${i},'cls',this.value)`, 70)}</td>
+    <td>${inp(e.owner, "owner", `fleetSet(${i},'owner',this.value)`, 120)}</td>
+    <td>${inp(e.orc_gph, "GPH", `fleetSet(${i},'orc_gph',this.value)`, 60)}</td>
+    <td>${inp(e.rating, "rating", `fleetSet(${i},'rating',this.value)`, 60)}</td>
+    <td>${inp(e.mmsi, "MMSI", `fleetSet(${i},'mmsi',this.value)`, 90)}</td>
+    <td><button class="mini" onclick="fleetRemove(${i})" title="remove">✕</button></td></tr>`;
+  const permitted = !!rp.tracker_permitted;
+
+  document.getElementById("view").innerHTML = `<div class="opt">
+    <div class="card">
+      <h3>Fleet <span class="muted" style="font-weight:400">— competitor roster + ORC handicaps (corrected-time tactics homework)</span></h3>
+      <div class="opt-controls">
+        <label>Race <select id="fleetRace" onchange="fleetPickRace(this.value)">
+          ${Lab.races.map((x) => `<option value="${esc(x.race_id)}" ${x.race_id === Lab.sel ? "selected" : ""}>${esc(x.name || x.race_id)}</option>`).join("")}
+        </select></label>
+        <span class="muted" style="font-size:12px">Frozen at the gun → matched to AIS / the public tracker onboard for who-beats-whom on corrected time.</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Our boat <span class="muted" style="font-weight:400">— the reference for corrected-time deltas</span></h3>
+      <div class="opt-controls">
+        <label>Boat ${inp(own.boat, "SR33 \"C4\"", "fleetOwnSet('boat',this.value)", 150)}</label>
+        <label>Division ${inp(own.division, "div", "fleetOwnSet('division',this.value)", 70)}</label>
+        <label>ORC GPH ${inp(own.orc_gph, "GPH", "fleetOwnSet('orc_gph',this.value)", 70)}</label>
+        <label>Rating ${inp(own.rating, "ToT/ToD", "fleetOwnSet('rating',this.value)", 80)}</label>
+        <label>MMSI ${inp(own.mmsi, "MMSI", "fleetOwnSet('mmsi',this.value)", 100)}</label>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Roster <span class="muted" style="font-weight:400">— ${roster.length} boat${roster.length === 1 ? "" : "s"}</span></h3>
+      ${roster.length ? `<table class="fleet-tbl"><thead><tr>
+        <th>Boat</th><th>Div</th><th>Class</th><th>Owner</th><th>ORC GPH</th><th>Rating</th><th>MMSI</th><th></th>
+        </tr></thead><tbody>${roster.map(row).join("")}</tbody></table>`
+        : `<div class="muted">No boats yet — add rows or paste an entry list below.</div>`}
+      <div style="margin-top:8px"><button class="mini" onclick="fleetAddRow()">+ Add boat</button></div>
+    </div>
+
+    <div class="card">
+      <h3>Import entry list</h3>
+      <div class="muted" style="font-size:12px;margin-bottom:6px">Paste one boat per line — <code>boat, division, rating, GPH, MMSI</code> (comma or tab separated; a header row is skipped; only the boat name is required).</div>
+      <textarea id="fleetPaste" rows="5" style="width:100%;box-sizing:border-box" placeholder="Il Mostro, I, 0.9123, 650.2, 366123456&#10;Windquest, I, 0.9456, 638.0"></textarea>
+      <div style="margin-top:8px"><button class="mini" onclick="fleetImport()">Parse &amp; append</button></div>
+    </div>
+
+    <div class="card">
+      <h3>Scoring &amp; tracker <span class="muted" style="font-weight:400">— set during ingest / Rules</span></h3>
+      <div class="dep-grid">
+        <div class="dep-row"><span class="pill ${sc.method ? "ok" : "warn"}">${sc.method ? "✓" : "⚠"} Scoring</span><span class="muted">${esc(sc.system || "")} ${esc(sc.method || "not set")}</span></div>
+        <div class="dep-row"><span class="pill ${tr.provider ? "ok" : "warn"}">${tr.provider ? "✓" : "⚠"} Tracker</span><span class="muted">${tr.provider ? esc(tr.provider) + (tr.race ? " · " + esc(tr.race) : "") + (permitted ? " · permitted onboard" : " · not permitted onboard") : "no public tracker configured"}</span></div>
+      </div>
+    </div>
+
+    <div class="dactions"><button onclick="fleetSave()">Save roster</button>
+      <span id="fleetMsg" class="muted" style="font-size:12px"></span></div>
+  </div>`;
 }
 
 function optDegradedBanner(r) {
