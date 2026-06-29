@@ -21,7 +21,12 @@ WorkingDirectory=/home/agent-c4/Agent_C4/pi/orin
 EnvironmentFile=-/etc/sr33/copilot.env
 Environment=COPILOT_PORT=8300
 # Bind 0.0.0.0 so the iPad can reach it over boat-local Wi-Fi.
-ExecStart=/usr/bin/env python3 -m uvicorn copilot.app:app --host 0.0.0.0 --port ${COPILOT_PORT}
+# Runs from an isolated venv: the Orin's system Python is PEP-668 externally-managed (no --user /
+# system pip installs of fastapi/uvicorn). Create it once with:
+#   sudo apt install -y python3-venv
+#   python3 -m venv ~/copilot-venv && ~/copilot-venv/bin/pip install fastapi 'uvicorn[standard]'
+# (See pi/orin/DEPLOYMENT.md §9.) Without a venv, use /usr/bin/env python3 instead.
+ExecStart=/home/agent-c4/copilot-venv/bin/python -m uvicorn copilot.app:app --host 0.0.0.0 --port ${COPILOT_PORT}
 Restart=on-failure
 RestartSec=10
 

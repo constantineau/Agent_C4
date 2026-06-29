@@ -212,3 +212,47 @@ curl -s http://127.0.0.1:11434/api/generate -d '{
 - `ollama --version` reports `0.0.0` (the from-source Go build didn't stamp a version) —
   cosmetic; it is the v0.30.10 source.
 - ~12 tok/s is the hardware bandwidth ceiling for a 7B model here. (§3)
+
+---
+
+## 9. Copilot service (Tier 2, FastAPI on :8300)
+
+The onboard copilot (`pi/orin/copilot/`, decision support + proactive auto-coach) runs as the full
+**FastAPI** app behind systemd, serving `/health /coach /adherence /narrate /brief /snapshot /tools
+/dashboard /detail` on **:8300** (the boat console proxies `/copilot/*` here). Deployed as such
+2026-06-29 — before that the Orin ran only the stdlib fallback `serve_dashboard.py`
+(`sr33-orin-copilot-dashboard.service`, just `/dashboard`+`/health`+`/detail`), which never served
+`/coach`.
+
+**The Orin's system Python (3.12) is PEP-668 externally-managed** — `pip install --user` and
+get-pip both refuse, and there is no system `pip`. So fastapi/uvicorn live in an **isolated venv**:
+
+```bash
+sudo apt install -y python3-venv                 # ensurepip wasn't present out of the box
+python3 -m venv ~/copilot-venv
+~/copilot-venv/bin/pip install fastapi 'uvicorn[standard]'
+~/copilot-venv/bin/python -c 'import fastapi,uvicorn;print("ok",fastapi.__version__,uvicorn.__version__)'
+```
+
+Config goes in `/etc/sr33/copilot.env` (ENGINE_URL → the Pi engine, LLM_* → local Ollama,
+COPILOT_COACH=true, COPILOT_ROUTE, optional PLAYBOOK_PATH). Install + enable the unit:
+
+```bash
+sudo cp pi/systemd/sr33-orin-copilot.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl disable --now sr33-orin-copilot-dashboard   # frees :8300 (kept on disk = rollback)
+sudo systemctl enable  --now sr33-orin-copilot
+curl -s localhost:8300/health      # expect mode=llm, coach.running=true
+```
+
+**Code redeploy** (no rsync on the Orin — push with tar over ssh, then restart):
+
+```bash
+# from the repo on the dev VM:
+tar czf - --exclude=__pycache__ -C pi/orin copilot \
+  | ssh agent-c4@100.70.110.72 'tar xzf - -C ~/Agent_C4/pi/orin'
+ssh agent-c4@100.70.110.72 'sudo systemctl restart sr33-orin-copilot'
+```
+
+**Rollback to the stdlib dashboard runner:** `sudo systemctl disable --now sr33-orin-copilot &&
+sudo systemctl enable --now sr33-orin-copilot-dashboard` (both bind :8300, so only one at a time).
