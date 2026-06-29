@@ -79,6 +79,8 @@ services:
     environment:
       LAB_PASSWORD: ${LAB_PASSWORD:-lab-dev}
       LAB_AUTH_ENABLED: ${LAB_AUTH_ENABLED:-true}
+      AGENT_URL: ${AGENT_URL:-http://agent:8000}        # Monitor: our-boat telemetry from the cloud agent
+      BOAT_PASSWORD: ${BOAT_PASSWORD:-sr33-dev}          # to auth to the agent for /conditions
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}        # race-doc ingestion (Opus extraction)
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-4-8}
       COASTLINE_CACHE: /srv/coastline       # Lab obstacle avoidance: cached coastline polygons

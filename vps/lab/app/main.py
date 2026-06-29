@@ -21,7 +21,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from shared import race_def, boat_profile
-from . import auth, store, extract, boats, labstate, feedback, pbstore, deploy
+from . import auth, store, extract, boats, labstate, feedback, pbstore, deploy, monitor
 
 INGESTED_DIR = os.environ.get("INGESTED_DIR", "/srv/ingested")
 
@@ -525,6 +525,15 @@ async def playbook_download(pid: str):
     from fastapi.responses import Response
     return Response(content=raw, media_type="application/json", headers={
         "Content-Disposition": f'attachment; filename="{pid}.json"'})
+
+
+# ---- Monitor (shore-side live view: fleet via public tracker + our boat via cloud telemetry) --
+@app.get("/api/monitor")
+async def monitor_view(race_id: str, demo: bool = False):
+    d = store.get_race(race_id)
+    if not d:
+        return JSONResponse({"detail": "unknown race"}, status_code=404)
+    return await run_in_threadpool(monitor.snapshot, d, demo)
 
 
 # ---- Checklist prep progress (team check-off; kept in labstate, not the RaceDefinition) -------

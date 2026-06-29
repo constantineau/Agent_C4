@@ -125,6 +125,7 @@ function route() {
   if (sec === "fleet") return renderFleet();
   if (sec === "rules") return renderRules();
   if (sec === "learnings") return renderLearnings();
+  if (sec === "monitor") return renderMonitor();
   renderPlaceholder(sec);
 }
 const clone = (o) => JSON.parse(JSON.stringify(o));
@@ -624,7 +625,6 @@ function drawCourseMap(id, course) {
 
 /* ---------- placeholders ---------- */
 const SOON = {
-  monitor: ["Monitor", "Shore-side live view during the race (the boat itself uses the onboard console)."],
   debrief: ["Debrief", "The post-race judge loop — regret analysis and write-back review that feeds the next prep."],
 };
 function renderPlaceholder(sec) {
@@ -1590,6 +1590,108 @@ function paintRules() {
       <span id="rulesMsg" class="muted" style="font-size:12px"></span>
       <span class="muted" style="font-size:11px">(check-off saves on its own)</span></div>
   </div>`;
+}
+
+/* ---------- Monitor (shore-side live view: fleet via tracker + our boat via cloud telemetry) ---------- */
+const Mon = { raceId: null, demo: false, auto: false, data: null, map: null, fleetLayer: null, ownLayer: null, timer: null, lastAt: null };
+
+async function renderMonitor() {
+  if (Mon.timer) { clearInterval(Mon.timer); Mon.timer = null; }
+  const view = document.getElementById("view");
+  if (!Lab.races) {
+    view.innerHTML = '<div class="loading">Loading…</div>';
+    try { Lab.races = (await (await apiGet("/api/races")).json()).races || []; }
+    catch (e) { view.innerHTML = '<div class="placeholder">Failed to load.</div>'; return; }
+  }
+  if (!Mon.raceId) Mon.raceId = Lab.sel || (Lab.races[0] && Lab.races[0].race_id) || null;
+  if (!Mon.raceId) { view.innerHTML = '<div class="placeholder">No race — ingest one in the Races tab.</div>'; return; }
+  await monFetch();
+  if (stale("monitor")) return;
+  paintMonitor();
+}
+
+async function monFetch() {
+  try {
+    Mon.data = await (await apiGet(`/api/monitor?race_id=${encodeURIComponent(Mon.raceId)}${Mon.demo ? "&demo=true" : ""}`)).json();
+    Mon.lastAt = Date.now();
+  } catch (e) { Mon.data = { error: String(e) }; }
+}
+
+async function monPickRace(id) { Mon.raceId = id; Lab.sel = id; renderMonitor(); }
+async function monToggleDemo(on) { Mon.demo = on; await monFetch(); paintMonitor(); }
+async function monRefresh() {
+  if ((location.hash || "").slice(1) !== "monitor") { if (Mon.timer) { clearInterval(Mon.timer); Mon.timer = null; } return; }
+  await monFetch(); paintMonitor();
+}
+function monToggleAuto(on) {
+  Mon.auto = on;
+  if (Mon.timer) { clearInterval(Mon.timer); Mon.timer = null; }
+  if (on) Mon.timer = setInterval(monRefresh, 30000);
+}
+
+function paintMonitor() {
+  const data = Mon.data || {};
+  const fl = data.fleet || { fixes: [], reason: data.error || "no data" };
+  const own = data.own || { available: false, reason: data.error || "no data" };
+  const fixes = fl.fixes || [];
+  const ageMin = (t) => t ? Math.max(0, Math.round((Date.now() / 1000 - t) / 60)) : null;
+  const ownLine = own.available
+    ? `<span class="pill ok">● live</span> ${own.lat.toFixed(3)}, ${own.lon.toFixed(3)} · SOG ${own.sog != null ? own.sog.toFixed(1) : "?"} kn · HDG ${own.heading != null ? Math.round(own.heading) : "?"}°${own.tws != null ? " · TWS " + own.tws.toFixed(0) + " kn" : ""} · ${own.age_s != null ? Math.round(own.age_s) + "s ago" : ""}${own.stale ? " <span class=\"pill warn\">stale</span>" : ""}`
+    : `<span class="pill warn">○ no live boat</span> <span class="muted">${esc(own.reason || "unavailable")}</span>`;
+  const flLine = fixes.length
+    ? `<span class="pill ok">${fixes.length} boats</span> via ${esc(fl.provider || "tracker")}${fl.delay_min ? " · ~" + fl.delay_min + " min delayed" : ""}${fl.demo || fl.provider === "sample" ? " <span class=\"pill warn\">demo</span>" : ""}`
+    : `<span class="pill warn">no fleet</span> <span class="muted">${esc(fl.reason || "unavailable")}</span>`;
+  const permNote = fl.onboard_permitted ? "permitted onboard (in-race)" : "shore-side only (not permitted onboard for this race)";
+
+  document.getElementById("view").innerHTML = `<div class="opt">
+    <div class="card">
+      <h3>Monitor <span class="muted" style="font-weight:400">— shore-side live view (the boat uses the onboard console in-race)</span></h3>
+      <div class="opt-controls">
+        <label>Race <select onchange="monPickRace(this.value)">
+          ${Lab.races.map((x) => `<option value="${attr(x.race_id)}" ${x.race_id === Mon.raceId ? "selected" : ""}>${esc(x.name || x.race_id)}</option>`).join("")}
+        </select></label>
+        <button class="mini" onclick="monRefresh()">↻ Refresh</button>
+        <label class="req-flag"><input type="checkbox" ${Mon.auto ? "checked" : ""} onchange="monToggleAuto(this.checked)"> auto (30s)</label>
+        <label class="req-flag"><input type="checkbox" ${Mon.demo ? "checked" : ""} onchange="monToggleDemo(this.checked)"> demo fleet</label>
+        <span class="muted" style="font-size:11px">${Mon.lastAt ? "updated " + new Date(Mon.lastAt).toLocaleTimeString() : ""}</span>
+      </div>
+      <div class="dep-grid" style="margin-top:8px">
+        <div class="dep-row"><b style="min-width:78px;display:inline-block">Our boat</b> ${ownLine}</div>
+        <div class="dep-row"><b style="min-width:78px;display:inline-block">Fleet</b> ${flLine} <span class="muted">· ${esc(permNote)}</span></div>
+      </div>
+    </div>
+    <section class="cockpit-map"><div id="monMap" class="routemap routemap-hero"></div></section>
+    ${fixes.length ? `<div class="card"><h3>Fleet positions <span class="muted" style="font-weight:400">— aged from the public tracker</span></h3>
+      <table class="fleet-tbl"><thead><tr><th>Boat</th><th>SOG</th><th>COG</th><th>DTF</th><th>Age</th></tr></thead><tbody>
+      ${fixes.slice().sort((a, b) => (a.dtf_nm ?? 1e9) - (b.dtf_nm ?? 1e9)).map((f) => `<tr>
+        <td>${esc(f.name || "?")}</td><td>${f.sog != null ? f.sog.toFixed(1) + " kn" : ""}</td>
+        <td>${f.cog != null ? Math.round(f.cog) + "°" : ""}</td><td>${f.dtf_nm != null ? f.dtf_nm.toFixed(1) + " nm" : ""}</td>
+        <td>${ageMin(f.time) != null ? ageMin(f.time) + " min" : ""}</td></tr>`).join("")}
+      </tbody></table></div>` : ""}
+  </div>`;
+  initMonitorMap();
+}
+
+function initMonitorMap() {
+  if (Mon.map) { try { Mon.map.remove(); } catch (e) {} Mon.map = null; }
+  const el = document.getElementById("monMap");
+  if (!el || !window.L) return;
+  const map = L.map(el, { preferCanvas: true }); Mon.map = map;
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 18, attribution: "© OpenStreetMap" }).addTo(map);
+  const data = Mon.data || {}, fixes = (data.fleet || {}).fixes || [], own = data.own || {};
+  const pts = [];
+  fixes.forEach((f) => {
+    L.circleMarker([f.lat, f.lon], { radius: 5, color: "#36b3ff", fillColor: "#36b3ff", fillOpacity: 0.65, weight: 1 })
+      .bindTooltip(`${f.name || "?"}${f.sog != null ? " · " + f.sog.toFixed(1) + " kn" : ""}`).addTo(map);
+    pts.push([f.lat, f.lon]);
+  });
+  if (own.available) {
+    L.circleMarker([own.lat, own.lon], { radius: 8, color: "#f5c451", fillColor: "#f5c451", fillOpacity: 0.95, weight: 2 })
+      .bindTooltip(`Our boat${own.sog != null ? " · " + own.sog.toFixed(1) + " kn" : ""}`).addTo(map);
+    pts.push([own.lat, own.lon]);
+  }
+  if (pts.length) map.fitBounds(pts, { padding: [30, 30], maxZoom: 11 });
+  else map.setView([44.2, -82.5], 7);   // Lake Huron default
 }
 
 /* ---------- Learnings (boat-level library + per-regatta notes) ---------- */
