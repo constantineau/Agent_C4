@@ -118,6 +118,12 @@ python3 -m shared.race_def vps/lab/races/bayview_mackinac_2026.json
   (route canvas + leg table + briefing + model provenance, confidence-coloured); the `lab_gribcache`
   volume caches GRIB so re-runs / ensemble members are cheap. Verified end-to-end on the Mackinac cove
   course (live GFS 18Z + NAM 00Z + HRRR 01Z, ~73 frames; 133 nm / 17.8 h / 1 tack; confidence 0.69).
+  - **Parse crash isolation (`GRIB_ISOLATE_PARSE`, default ON):** cfgrib/eccodes can intermittently
+    SEGFAULT on a frame (uncatchable, kills the worker), so the parse runs in a persistent child
+    process (`_grib_parser.py`, one per build); `grib.IsolatedGribParser` respawns + retries on a
+    child crash/hang, then skips the frame (degrades to a skipped frame, not a dead optimize). Also pin
+    `pandas==2.2.3` — the unpinned transitive dep pulled 3.0.x which segfaults under numpy 2.1.3 in
+    cfgrib's datetime decode. See `test_grib_isolation.py`.
 - **Obstacle avoidance (routing fidelity, Bitsailor parity item 2a): built.** `app/geo/` keeps the
   route off land. It's **race-agnostic** — three layers rasterize into one boolean mask the isochrone
   prune queries (`blocked(lat,lon)` / `crosses(a,b)`):

@@ -632,6 +632,23 @@ frames/expected with a cycle-fallback badge. Verified: 13 unit tests (cycle sele
 fallback / coverage / sanity) + a real end-to-end Mackinac run (HRRR auto-picked the 18Z synoptic cycle
 → 46 frames reaching ~48 h for the 47-h race; coverage 1.0, not degraded) + Playwright UI smoke.
 
+**GRIB parse isolation (crash hardening): SHIPPED 2026-06-29.** cfgrib/eccodes can intermittently
+SEGFAULT on a frame (a native finalizer crash) — uncatchable by `try/except`, so it took down the whole
+optimize worker (observed: the live `/api/optimize` empty-replied at ~99 s, container restarted). With
+`GRIB_ISOLATE_PARSE` (default ON) the cfgrib parse runs in a PERSISTENT child process
+(`app/wind/_grib_parser.py`, one per `build_windfield`, paying the xarray/cfgrib import once):
+`grib.IsolatedGribParser.parse()` feeds the child one file/line and reads back the U/V arrays via a temp
+`.npz`; on child death (segfault) or a `GRIB_PARSE_TIMEOUT_S`=60 hang it **respawns + retries**
+(`GRIB_PARSE_RETRIES`=2), then skips the frame — which `_load_model`'s existing `except: continue`
+already treats like any unreadable frame, so a crashing frame degrades to a skipped frame instead of a
+dead worker. Threaded through `GribFrame.from_file(..., parser=)` / `_load_model(..., parser=)` /
+`build_windfield` (creates + closes one parser per build). Verified (`test_grib_isolation.py`): an
+injected child crash is survived (parse→None, process lives) + the parser respawns and works again + the
+isolated parse matches in-process `open_uv` exactly; integration — injecting a crash on every GFS frame
+skips GFS (0/26) while NAM/HRRR load fully and the build still succeeds. (This is the durable fix for the
+intermittent crash; the consistent crash was the separate unpinned-pandas one — see the requirements
+pin.) Tunables `GRIB_ISOLATE_PARSE` / `GRIB_PARSE_TIMEOUT_S` / `GRIB_PARSE_RETRIES`.
+
 **Obstacle avoidance (routing fidelity 2a, from the Bitsailor gap analysis): SHIPPED 2026-06-20.**
 `vps/lab/app/geo/` keeps the optimizer's route off land — **race-agnostic**: three layers rasterize
 into one boolean mask the isochrone prune queries (`blocked`/`crosses`): (1) a GLOBAL coastline

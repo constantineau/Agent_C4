@@ -43,9 +43,12 @@ def _fhrs_for_cycle(source, cycle, t_start, t_end):
     return fhrs[:MAX_FRAMES_PER_MEMBER]
 
 
-def _load_model(source, bbox, t_start, t_end, members, on_progress):
+def _load_model(source, bbox, t_start, t_end, members, on_progress, parser=None):
     """Ingest one model's frame-series with CYCLE-FALLBACK: if the freshest cycle is too sparse (not
-    fully posted yet) step back a cycle and retry, up to CYCLE_FALLBACK_TRIES. Returns (series, meta)."""
+    fully posted yet) step back a cycle and retry, up to CYCLE_FALLBACK_TRIES. Returns (series, meta).
+
+    `parser` (an IsolatedGribParser) runs the cfgrib parse out-of-process so a native segfault on a
+    frame is survived (that frame is skipped, like any other unreadable one) instead of crashing."""
     need_h = max(0, math.ceil((t_end - dt.datetime.now(dt.timezone.utc).timestamp()) / 3600.0))
     cycle = source.pick_cycle(min_horizon_h=need_h)
     series, loaded, expected, fallbacks = {}, 0, 0, 0
@@ -61,7 +64,7 @@ def _load_model(source, bbox, t_start, t_end, members, on_progress):
                     continue
                 try:
                     frames.append(grib.GribFrame.from_file(
-                        path, source.name, member, source.valid_time(cycle, fhr)))
+                        path, source.name, member, source.valid_time(cycle, fhr), parser=parser))
                 except Exception:
                     continue
             if frames:
@@ -93,14 +96,19 @@ def build_windfield(bbox, t_start: float, t_end: float, models=DEFAULT_MODELS,
     falls back to the previous cycle if the freshest is still too sparse to route on."""
     series = {}                   # (model, member) -> [GribFrame sorted by valid_time]
     meta = []
-    for name in models:
-        source = MODELS.get(name)
-        if source is None:
-            continue
-        members = _members_for(source, ensemble_members)
-        m_series, m_meta = _load_model(source, bbox, t_start, t_end, members, on_progress)
-        series.update(m_series)
-        meta.append(m_meta)
+    parser = grib.IsolatedGribParser() if grib.ISOLATE else None   # crash-isolated cfgrib parse (1/build)
+    try:
+        for name in models:
+            source = MODELS.get(name)
+            if source is None:
+                continue
+            members = _members_for(source, ensemble_members)
+            m_series, m_meta = _load_model(source, bbox, t_start, t_end, members, on_progress, parser=parser)
+            series.update(m_series)
+            meta.append(m_meta)
+    finally:
+        if parser is not None:
+            parser.close()
     return WindField(series, meta, bbox, t_start, t_end)
 
 

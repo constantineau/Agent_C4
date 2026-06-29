@@ -12,8 +12,12 @@ ensemble members are cheap.
 """
 from __future__ import annotations
 
+import json
 import math
 import os
+import select
+import subprocess
+import sys
 import tempfile
 import urllib.request
 from dataclasses import dataclass
@@ -22,6 +26,14 @@ import numpy as np
 
 KN_PER_MS = 1.9438445
 _UA = "Agent_C4-C4PerformanceLab/1.0 (+sailing race optimizer)"
+
+# Parse-isolation: cfgrib/eccodes can intermittently SEGFAULT on a frame (a native finalizer crash),
+# which a try/except can't catch — it kills the whole optimize worker. With this on, parsing runs in a
+# child process; a crash kills only the child and the parent respawns + retries, then skips the frame.
+ISOLATE = os.environ.get("GRIB_ISOLATE_PARSE", "1").strip().lower() in ("1", "true", "yes", "on")
+_PARSE_TIMEOUT_S = float(os.environ.get("GRIB_PARSE_TIMEOUT_S", "60"))   # per-frame hang guard
+_PARSE_RETRIES = int(os.environ.get("GRIB_PARSE_RETRIES", "2"))          # respawn+retry budget per frame
+_APP_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # dir holding `app/`
 
 
 # --- download ----------------------------------------------------------------
@@ -83,6 +95,78 @@ def _pick(ds, names):
     raise KeyError(f"none of {names} in GRIB ({list(ds.data_vars)})")
 
 
+class IsolatedGribParser:
+    """Parse GRIB files in a persistent child process so a native crash can't take down the parent.
+
+    `parse(path)` returns (lat, lon, u, v, regular) or None if the frame can't be parsed — a genuine
+    parse error, a child CRASH (segfault), or a hang past the timeout. On death/hang the child is
+    respawned and the file retried up to `_PARSE_RETRIES`; after that the frame is skipped (None), which
+    the loader already treats like any other unreadable frame. One instance per build_windfield call
+    (no shared state across concurrent requests). Import cost (~xarray/cfgrib) is paid once at spawn."""
+
+    def __init__(self):
+        self.proc = None
+
+    def _spawn(self):
+        self.proc = subprocess.Popen(
+            [sys.executable, "-m", "app.wind._grib_parser"],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            cwd=_APP_ROOT, text=True, bufsize=1)
+
+    def _alive(self):
+        return self.proc is not None and self.proc.poll() is None
+
+    def close(self):
+        if self.proc is not None:
+            for step in (self.proc.terminate, self.proc.kill):
+                try:
+                    step()
+                    self.proc.wait(timeout=3)
+                    break
+                except Exception:
+                    continue
+            self.proc = None
+
+    def parse(self, path):
+        for _ in range(_PARSE_RETRIES + 1):
+            if not self._alive():
+                self.close()
+                self._spawn()
+            try:
+                self.proc.stdin.write(json.dumps({"path": path}) + "\n")
+                self.proc.stdin.flush()
+            except (BrokenPipeError, OSError, ValueError):
+                self.close()                        # child died on write → respawn + retry
+                continue
+            ready, _, _ = select.select([self.proc.stdout], [], [], _PARSE_TIMEOUT_S)
+            if not ready:
+                self.close()                        # hung → kill + retry
+                continue
+            line = self.proc.stdout.readline()
+            if not line:
+                self.close()                        # EOF = crashed mid-parse → respawn + retry
+                continue
+            try:
+                resp = json.loads(line)
+            except json.JSONDecodeError:
+                self.close()
+                continue
+            if not resp.get("ok"):
+                return None                         # genuine parse error (bad frame) → skip, no retry
+            npz = resp.get("npz")
+            try:
+                with np.load(npz) as d:
+                    return (d["lat"], d["lon"], d["u"], d["v"], bool(d["regular"]))
+            except Exception:
+                return None
+            finally:
+                try:
+                    os.remove(npz)
+                except OSError:
+                    pass
+        return None                                 # retries exhausted → skip this frame
+
+
 # --- frame + sampling --------------------------------------------------------
 @dataclass
 class GribFrame:
@@ -96,8 +180,16 @@ class GribFrame:
     regular: bool
 
     @classmethod
-    def from_file(cls, path, model, member, valid_time):
-        lat, lon, u, v, regular = open_uv(path)
+    def from_file(cls, path, model, member, valid_time, parser=None):
+        """Build a frame from a GRIB file. With `parser` (an IsolatedGribParser) the cfgrib parse runs
+        in a crash-isolated child; a failed/crashed parse raises so the loader skips the frame."""
+        if parser is not None:
+            res = parser.parse(path)
+            if res is None:
+                raise OSError(f"isolated GRIB parse failed (crash/timeout/error): {path}")
+            lat, lon, u, v, regular = res
+        else:
+            lat, lon, u, v, regular = open_uv(path)
         return cls(model, member, float(valid_time), lat, lon, u, v, regular)
 
     def sample_uv(self, lat: float, lon: float):
