@@ -190,6 +190,8 @@ class RaceDefinition:
     start_date: str = ""           # ISO date
     start_area: str = ""
     region: str = ""
+    timezone: str = ""             # IANA tz name of the race venue (e.g. "America/Detroit");
+                                   # lets the optimizer accept a race-local start time. "" = enter UTC.
     divisions: list = field(default_factory=list)      # [Division]
     courses: list = field(default_factory=list)        # [Course]
     zones: list = field(default_factory=list)          # [Zone]

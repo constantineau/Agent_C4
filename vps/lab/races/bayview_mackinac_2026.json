@@ -7,6 +7,7 @@
   "start_date": "2026-07-18",
   "start_area": "Lower Lake Huron, off Port Huron, MI",
   "region": "Lake Huron (Great Lakes)",
+  "timezone": "America/Detroit",
 
   "divisions": [
     {"id": "I",   "name": "Racing Monohull — Division I (Cove Island)", "course_ref": "cove_island", "boat_type": "Monohull, fixed + movable ballast"},

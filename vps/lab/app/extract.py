@@ -75,7 +75,9 @@ def discover_pdfs(url: str) -> list[dict]:
 SCHEMA_BRIEF = """Produce ONE JSON object = a RaceDefinition. Output ONLY the JSON (no prose, no
 code fences). Fields:
 - race_id (kebab-case from name+year), name, year (int), organizing_authority, start_date (ISO),
-  start_area, region.
+  start_area, region, timezone (the IANA tz name of the start venue, e.g. "America/Detroit" — INFER
+  it from the venue / start area location; this is the one field you may derive from geography rather
+  than the documents. Use "" only if the venue location is genuinely unknown).
 - divisions: [{id, name, course_ref (->course id), boat_type}].
 - courses: [{id, name, applies_to_divisions:[div ids], distance_nm (or null), note,
   start:{type, ref, coords_source},

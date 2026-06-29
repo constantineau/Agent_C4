@@ -628,7 +628,41 @@ function renderPlaceholder(sec) {
 
 /* ---------- Gameplan / Optimizer (Lab-1) ---------- */
 const Opt = { races: null, models: null, raceId: null, def: null, courseId: null,
-  chosen: null, running: false, result: null, resolution: "auto" };
+  chosen: null, running: false, result: null, resolution: "auto", start: "" };
+
+// The race venue's IANA timezone, if the loaded RaceDefinition carries one.
+function optTz() { return (Opt.def && Opt.def.timezone) || ""; }
+
+// Offset (ms) of `tz` at `date`: (the same wall-clock read as if it were UTC) − the real UTC.
+function tzOffsetMs(tz, date) {
+  const dtf = new Intl.DateTimeFormat("en-US", { timeZone: tz, hourCycle: "h23",
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  const p = {};
+  for (const part of dtf.formatToParts(date)) p[part.type] = part.value;
+  const asUTC = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second);
+  return asUTC - date.getTime();
+}
+
+// A wall-clock time (y/mo/d/h/mi) interpreted in `tz` → epoch seconds (DST-aware, two-pass).
+function zonedWallToEpoch(y, mo, d, h, mi, tz) {
+  const naive = Date.UTC(y, mo - 1, d, h, mi);
+  const o1 = tzOffsetMs(tz, new Date(naive));
+  const o2 = tzOffsetMs(tz, new Date(naive - o1));   // settle DST-boundary cases
+  return (naive - o2) / 1000;
+}
+
+// Parse the "Start" field — a locale-independent 24h "YYYY-MM-DD HH:MM" (space or T).
+// Interpreted in the race's local timezone when one is known, else as UTC.
+// Returns epoch seconds, or null if blank/invalid.
+function optStartEpoch() {
+  const m = (Opt.start || "").trim().match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})$/);
+  if (!m) return null;
+  const [, y, mo, d, h, mi] = m.map(Number);
+  const tz = optTz();
+  return tz ? zonedWallToEpoch(y, mo, d, h, mi, tz)
+            : Date.UTC(y, mo - 1, d, h, mi) / 1000;
+}
 
 async function renderGameplan() {
   const view = document.getElementById("view");
@@ -643,6 +677,10 @@ async function renderGameplan() {
     } catch (e) { view.innerHTML = '<div class="placeholder">Failed to load optimizer.</div>'; return; }
   }
   if (!Opt.raceId && Opt.races.length) await optPickRace(Opt.races[0].race_id, false);
+  const startTz = optTz();
+  const startTitle = (startTz
+    ? "24-hour " + startTz + " local time, e.g. 2026-07-18 06:30 — converted to UTC behind the scenes."
+    : "24-hour UTC, e.g. 2026-07-19 20:05 for 8:05pm.") + " Leave blank for the freshest forecast cycle.";
   view.innerHTML = `<div class="opt">
     <div class="card">
       <h3>Gameplan / Optimizer <span class="muted" style="font-weight:400">— multi-model GRIB route (Lab-1)</span></h3>
@@ -654,7 +692,10 @@ async function renderGameplan() {
               ${Opt.races.map((r) => `<option value="${esc(r.race_id)}" ${r.race_id === Opt.raceId ? "selected" : ""}>${esc(r.name)}</option>`).join("")}
             </select></label>
           <label>Course <select id="optCourse" onchange="Opt.courseId=this.value">${optCourseOpts()}</select></label>
-          <label>Start (UTC) <input type="datetime-local" id="optStart"></label>
+          <label>Start (${startTz ? "race local" : "UTC"}) <input type="text" id="optStart" inputmode="numeric"
+            placeholder="YYYY-MM-DD HH:MM" pattern="\\d{4}-\\d{2}-\\d{2}[ T]\\d{2}:\\d{2}"
+            title="${esc(startTitle)}"
+            value="${esc(Opt.start || "")}" oninput="Opt.start=this.value" style="width:150px"></label>
         </div>
         <div class="opt-group">
           <div class="opt-group-h">Boat &amp; charts</div>
@@ -912,7 +953,6 @@ async function optPickRace(id, rerender = true) {
 async function runOptimize() {
   const out = document.getElementById("optOut");
   const ens = parseInt(document.getElementById("optEns").value || "0", 10) || 0;
-  const startVal = document.getElementById("optStart").value;
   const avoidEl = document.getElementById("optAvoid");
   const pmEl = document.getElementById("optPerModel");
   const resEl = document.getElementById("optRes");
@@ -920,7 +960,8 @@ async function runOptimize() {
   const body = { race_id: Opt.raceId, course_id: Opt.courseId, models: Opt.chosen, ensemble_members: ens,
     avoid_land: avoidEl ? avoidEl.checked : true, per_model: pmEl ? pmEl.checked : false,
     resolution: Opt.resolution };
-  if (startVal) body.start_epoch = Date.parse(startVal + "Z") / 1000;
+  const startEpoch = optStartEpoch();
+  if (startEpoch != null) body.start_epoch = startEpoch;
   Opt.running = true;
   document.getElementById("optRun").disabled = true;
   document.getElementById("optRun").textContent = "Optimizing… (downloading GRIB + routing)";
@@ -1029,9 +1070,9 @@ const Pb = { running: false, result: null, freezing: false };
 async function synthPlaybook() {
   const out = document.getElementById("pbOut");
   const ens = parseInt((document.getElementById("optEns") || {}).value || "0", 10) || 0;
-  const startVal = (document.getElementById("optStart") || {}).value;
   const body = { race_id: Opt.raceId, course_id: Opt.courseId, models: Opt.chosen, ensemble_members: ens };
-  if (startVal) body.start_epoch = Date.parse(startVal + "Z") / 1000;
+  const startEpoch = optStartEpoch();
+  if (startEpoch != null) body.start_epoch = startEpoch;
   Pb.running = true; Pb.result = null;
   const b = document.getElementById("pbRun"); if (b) { b.disabled = true; b.textContent = "Synthesizing… (fanning forecasts + routing each)"; }
   out.innerHTML = '<div class="loading" style="margin-top:10px">Routing each forecast scenario, clustering into strategic variants, and writing the playbook…</div>';
