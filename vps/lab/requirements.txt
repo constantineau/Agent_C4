@@ -8,4 +8,8 @@ numpy==2.1.3
 eccodes==2.38.3
 cfgrib==0.9.14.1
 xarray==2024.11.0
+# pandas is transitive (xarray) — PIN it: pandas 3.0.x segfaults (pandas._libs.tslibs.timedeltas) under
+# numpy 2.1.3 during xarray's cfgrib datetime decode, hard-crashing the optimize. 2.2.3 is the
+# numpy-2.1-compatible pairing. (Left unpinned, a rebuild silently pulled 3.0.4 and broke GRIB ingest.)
+pandas==2.2.3
 ecmwf-opendata==0.3.10
