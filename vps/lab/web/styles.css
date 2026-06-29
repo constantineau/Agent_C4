@@ -315,3 +315,17 @@ table.fleet-tbl th { text-align: left; color: var(--muted); font-weight: 600; fo
   padding: 2px 6px; border-bottom: 1px solid var(--line); }
 table.fleet-tbl td { padding: 3px 6px; vertical-align: middle; }
 table.fleet-tbl input.ein { padding: 5px 7px; }
+
+/* ---- Rules / checklist ---- */
+.phase-h { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--muted); margin: 12px 0 5px; border-bottom: 1px solid var(--line); padding-bottom: 3px; }
+.req-block { border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; margin-bottom: 6px;
+  background: var(--panel2); }
+.req-block.crit { border-left: 3px solid var(--warn, #f5c451); }
+.req-l1 { display: flex; align-items: center; gap: 8px; }
+.req-l1 input.ein { flex: 1; }
+.req-l2 { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 5px; font-size: 11px; color: var(--muted); }
+.req-l2 select { font-size: 11px; padding: 3px 5px; background: var(--panel); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 6px; }
+.req-chk input, .req-flag input { transform: scale(1.05); }
+.req-flag { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }

@@ -123,6 +123,7 @@ function route() {
   if (sec === "gameplan") return renderGameplan();
   if (sec === "deploy") return renderDeploy();
   if (sec === "fleet") return renderFleet();
+  if (sec === "rules") return renderRules();
   renderPlaceholder(sec);
 }
 const clone = (o) => JSON.parse(JSON.stringify(o));
@@ -622,7 +623,6 @@ function drawCourseMap(id, course) {
 
 /* ---------- placeholders ---------- */
 const SOON = {
-  rules: ["Rules, Safety & Checklists", "The full prep checklist the team works through — every SER + procedural item, with the race-time subset flagged to push to the iPad."],
   learnings: ["Learnings", "The boat-level library (refined polars, crossovers, calibration, fatigue/helm-skill) and what's applied to this regatta."],
   monitor: ["Monitor", "Shore-side live view during the race (the boat itself uses the onboard console)."],
   debrief: ["Debrief", "The post-race judge loop — regret analysis and write-back review that feeds the next prep."],
@@ -1441,6 +1441,148 @@ function paintFleet() {
 
     <div class="dactions"><button onclick="fleetSave()">Save roster</button>
       <span id="fleetMsg" class="muted" style="font-size:12px"></span></div>
+  </div>`;
+}
+
+/* ---------- Rules, Safety & Checklists ---------- */
+/* Reuses the top-of-file constants (REQ_CATEGORIES / REQ_PHASES / TRIGGER_TYPES / PHASE_ORDER /
+   PHASE_LABEL) and the path-binding helpers (ein / esel / etri / echk / eset). */
+async function renderRules() {
+  const view = document.getElementById("view");
+  if (!Lab.races) {
+    view.innerHTML = '<div class="loading">Loading…</div>';
+    try { Lab.races = (await (await apiGet("/api/races")).json()).races || []; }
+    catch (e) { view.innerHTML = '<div class="placeholder">Failed to load.</div>'; return; }
+  }
+  if (!Lab.sel && Lab.races.length) Lab.sel = Lab.races[0].race_id;
+  if (!Lab.sel) { view.innerHTML = '<div class="placeholder">No race — ingest one in the Races tab.</div>'; return; }
+  if (!Lab.editDef || Lab.editDef.race_id !== Lab.sel) {
+    view.innerHTML = '<div class="loading">Loading checklist…</div>';
+    try { Lab.editDef = await (await apiGet("/api/races/" + encodeURIComponent(Lab.sel))).json(); }
+    catch (e) { view.innerHTML = '<div class="placeholder">Failed to load.</div>'; return; }
+  }
+  try { Lab.checked = (await (await apiGet("/api/checklist?race_id=" + encodeURIComponent(Lab.sel))).json()).checked || {}; }
+  catch (e) { Lab.checked = {}; }
+  if (stale("rules")) return;
+  if (!Lab.editDef.rules_profile || typeof Lab.editDef.rules_profile !== "object") Lab.editDef.rules_profile = {};
+  if (!Array.isArray(Lab.editDef.rules_profile.modifications)) Lab.editDef.rules_profile.modifications = [];
+  if (!Lab.editDef.rules_profile.scoring) Lab.editDef.rules_profile.scoring = {};
+  if (!Array.isArray(Lab.editDef.requirements)) Lab.editDef.requirements = [];
+  paintRules();
+}
+
+async function rulesPickRace(id) { Lab.sel = id; Lab.editDef = null; renderRules(); }
+function modAdd() { Lab.editDef.rules_profile.modifications.push({ ref: "", rule: "", summary: "" }); paintRules(); }
+function modRemove(i) { Lab.editDef.rules_profile.modifications.splice(i, 1); paintRules(); }
+function reqAdd() {
+  const ids = new Set(Lab.editDef.requirements.map((r) => r.id));
+  let n = Lab.editDef.requirements.length + 1, id = "req-" + n;
+  while (ids.has(id)) { n++; id = "req-" + n; }
+  Lab.editDef.requirements.push({ id, category: "safety", phase: "pre_start", text: "",
+    trigger_type: "none", trigger_detail: "", deliver_to_ipad: false, critical: false, source: "" });
+  paintRules();
+}
+function reqRemove(i) { Lab.editDef.requirements.splice(i, 1); paintRules(); }
+
+async function checkToggle(id, on) {
+  Lab.checked = Lab.checked || {};
+  if (on) Lab.checked[id] = true; else delete Lab.checked[id];
+  // persist progress (labstate-backed, separate from the RaceDefinition)
+  try { await apiPost("/api/checklist", { race_id: Lab.sel, checked: Lab.checked }); } catch (e) {}
+  paintRules();
+}
+
+async function rulesSave() {
+  const msg = document.getElementById("rulesMsg");
+  if (msg) msg.textContent = "Saving…";
+  try {
+    const r = await (await apiPost("/api/races", { definition: Lab.editDef })).json();
+    paintRules();
+    const m2 = document.getElementById("rulesMsg");
+    if (m2) m2.textContent = r.saved ? `Saved · ${(r.errors || []).length} error(s), ${(r.warnings || []).length} warning(s).` : "Save failed.";
+  } catch (e) { const m2 = document.getElementById("rulesMsg"); if (m2) m2.textContent = "Save failed: " + e.message; }
+}
+
+function paintRules() {
+  const d = Lab.editDef, rp = d.rules_profile, sc = rp.scoring || {}, mods = rp.modifications || [];
+  const reqs = d.requirements, checked = Lab.checked || {};
+  const ipadN = reqs.filter((r) => r.deliver_to_ipad).length;
+  const critN = reqs.filter((r) => r.critical).length;
+  const doneN = reqs.filter((r) => checked[r.id]).length;
+
+  const reqBlock = (r, i) => `<div class="req-block ${r.critical ? "crit" : ""}">
+    <div class="req-l1">
+      <label class="req-chk"><input type="checkbox" ${checked[r.id] ? "checked" : ""} onchange="checkToggle('${attr(r.id)}',this.checked)"></label>
+      ${ein(`requirements.${i}.text`, r.text, "requirement text")}
+      <button class="mini" onclick="reqRemove(${i})" title="remove">✕</button>
+    </div>
+    <div class="req-l2">
+      ${esel(`requirements.${i}.category`, r.category, REQ_CATEGORIES)}
+      ${esel(`requirements.${i}.phase`, r.phase, REQ_PHASES)}
+      ${esel(`requirements.${i}.trigger_type`, r.trigger_type || "none", TRIGGER_TYPES)}
+      ${ein(`requirements.${i}.trigger_detail`, r.trigger_detail, "trigger detail")}
+      ${ein(`requirements.${i}.source`, r.source, "source §")}
+      ${echk(`requirements.${i}.deliver_to_ipad`, r.deliver_to_ipad, "→iPad")}
+      ${echk(`requirements.${i}.critical`, r.critical, "critical")}
+    </div></div>`;
+
+  let checklistHtml = "";
+  PHASE_ORDER.forEach((ph) => {
+    const items = reqs.map((r, i) => ({ r, i })).filter((x) => x.r.phase === ph);
+    if (!items.length) return;
+    checklistHtml += `<div class="phase-h">${esc(PHASE_LABEL[ph] || ph)} <span class="muted">· ${items.length}</span></div>`;
+    checklistHtml += items.map((x) => reqBlock(x.r, x.i)).join("");
+  });
+  const orphans = reqs.map((r, i) => ({ r, i })).filter((x) => !PHASE_ORDER.includes(x.r.phase));
+  if (orphans.length) checklistHtml += `<div class="phase-h">Other</div>` + orphans.map((x) => reqBlock(x.r, x.i)).join("");
+
+  document.getElementById("view").innerHTML = `<div class="opt">
+    <div class="card">
+      <h3>Rules, Safety &amp; Checklists <span class="muted" style="font-weight:400">— the prep checklist + the race rules layer</span></h3>
+      <div class="opt-controls">
+        <label>Race <select onchange="rulesPickRace(this.value)">
+          ${Lab.races.map((x) => `<option value="${attr(x.race_id)}" ${x.race_id === Lab.sel ? "selected" : ""}>${esc(x.name || x.race_id)}</option>`).join("")}
+        </select></label>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Rules profile <span class="muted" style="font-weight:400">— RRS-41 carve-out, scoring, modifications</span></h3>
+      <div class="opt-controls">
+        <label>RRS edition ${ein("rules_profile.rrs_edition", rp.rrs_edition, "2025-2028")}</label>
+        <label>Tracker permitted onboard? ${etri("rules_profile.tracker_permitted", rp.tracker_permitted)}</label>
+      </div>
+      <div class="dep-grid" style="margin-top:8px">
+        ${echk("rules_profile.info_available_to_all_permitted", rp.info_available_to_all_permitted, "Info available to all boats permitted (RRS 41 §2.1(d) carve-out)")}
+        ${echk("rules_profile.customized_advice_while_underway_prohibited", rp.customized_advice_while_underway_prohibited, "Customized advice while underway prohibited")}
+        ${echk("rules_profile.appendix_wp", rp.appendix_wp, "World Sailing Appendix WP (waypoint racing) in force")}
+      </div>
+      <div class="opt-controls" style="margin-top:8px">
+        <label>Scoring system ${ein("rules_profile.scoring.system", sc.system, "ORC")}</label>
+        <label>Method ${ein("rules_profile.scoring.method", sc.method, "Single-Number ToT")}</label>
+        <label>Ref ${ein("rules_profile.scoring.ref", sc.ref, "NOR §13")}</label>
+      </div>
+      <div style="margin-top:10px"><b style="font-size:12px">RRS modifications</b>
+        ${mods.length ? `<table class="fleet-tbl" style="margin-top:4px"><thead><tr><th>Ref</th><th>Rule</th><th>Summary</th><th></th></tr></thead><tbody>${
+          mods.map((m, i) => `<tr><td>${ein(`rules_profile.modifications.${i}.ref`, m.ref, "NOR §")}</td>
+            <td>${ein(`rules_profile.modifications.${i}.rule`, m.rule, "RRS x")}</td>
+            <td>${ein(`rules_profile.modifications.${i}.summary`, m.summary, "summary")}</td>
+            <td><button class="mini" onclick="modRemove(${i})">✕</button></td></tr>`).join("")}</tbody></table>`
+          : `<div class="muted" style="font-size:12px">No modifications recorded.</div>`}
+        <div style="margin-top:6px"><button class="mini" onclick="modAdd()">+ Add modification</button></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Checklist <span class="muted" style="font-weight:400">— ${reqs.length} items · ${ipadN} →iPad · ${critN} critical · ${doneN}/${reqs.length} checked</span></h3>
+      <div class="muted" style="font-size:12px;margin-bottom:8px">The team's prep list (check-off persists separately from the race definition). <b>→iPad</b> items compile into the playbook and surface on the onboard console at their trigger.</div>
+      ${checklistHtml || '<div class="muted">No requirements yet.</div>'}
+      <div style="margin-top:10px"><button class="mini" onclick="reqAdd()">+ Add requirement</button></div>
+    </div>
+
+    <div class="dactions"><button onclick="rulesSave()">Save rules &amp; checklist</button>
+      <span id="rulesMsg" class="muted" style="font-size:12px"></span>
+      <span class="muted" style="font-size:11px">(check-off saves on its own)</span></div>
   </div>`;
 }
 

@@ -527,6 +527,22 @@ async def playbook_download(pid: str):
         "Content-Disposition": f'attachment; filename="{pid}.json"'})
 
 
+# ---- Checklist prep progress (team check-off; kept in labstate, not the RaceDefinition) -------
+@app.get("/api/checklist")
+async def checklist_get(race_id: str):
+    return {"checked": labstate.get("checklist:" + race_id) or {}}
+
+
+@app.post("/api/checklist")
+async def checklist_set(body: dict):
+    race_id = (body or {}).get("race_id")
+    if not race_id:
+        return JSONResponse({"detail": "race_id required"}, status_code=400)
+    checked = {k: True for k, v in ((body or {}).get("checked") or {}).items() if v}
+    labstate.set("checklist:" + race_id, checked)
+    return {"saved": True, "checked": checked}
+
+
 # ---- Lock-in & Deploy -------------------------------------------------------------------------
 @app.get("/api/deploy")
 async def deploy_readiness(race_id: str, course_id: str = None):
