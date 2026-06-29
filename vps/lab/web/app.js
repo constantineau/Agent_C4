@@ -121,6 +121,7 @@ function route() {
   if (sec === "races") return renderRaces();
   if (sec === "course") return renderCourse();
   if (sec === "gameplan") return renderGameplan();
+  if (sec === "deploy") return renderDeploy();
   renderPlaceholder(sec);
 }
 const clone = (o) => JSON.parse(JSON.stringify(o));
@@ -623,7 +624,6 @@ const SOON = {
   rules: ["Rules, Safety & Checklists", "The full prep checklist the team works through — every SER + procedural item, with the race-time subset flagged to push to the iPad."],
   fleet: ["Fleet", "Competitor roster + ORC handicaps (entry-list import, MMSI matching) for handicap-aware, corrected-time tactics."],
   learnings: ["Learnings", "The boat-level library (refined polars, crossovers, calibration, fatigue/helm-skill) and what's applied to this regatta."],
-  deploy: ["Lock-in & Deploy", "Freeze the playbook and push the homework (course, checklists, playbook) to the Pi / Orin for the race."],
   monitor: ["Monitor", "Shore-side live view during the race (the boat itself uses the onboard console)."],
   debrief: ["Debrief", "The post-race judge loop — regret analysis and write-back review that feeds the next prep."],
 };
@@ -1200,6 +1200,115 @@ async function freezePlaybook() {
     if (r.frozen) Pb.result = r.bundle;
   } catch (e) { /* leave the draft; user can retry */ }
   Pb.freezing = false; renderGameplan();
+}
+
+/* ---------- Lock-in & Deploy ---------- */
+const Dep = { races: null, raceId: null, ready: null, sel: null, busy: false };
+
+async function renderDeploy() {
+  const view = document.getElementById("view");
+  if (!Dep.races) {
+    view.innerHTML = '<div class="loading">Loading…</div>';
+    try { Dep.races = (await (await apiGet("/api/races")).json()).races || []; }
+    catch (e) { view.innerHTML = '<div class="placeholder">Failed to load.</div>'; return; }
+  }
+  if (!Dep.raceId) Dep.raceId = Lab.sel || (Dep.races[0] && Dep.races[0].race_id) || null;
+  if (!Dep.raceId) { view.innerHTML = '<div class="placeholder">No race — ingest one in the Races tab.</div>'; return; }
+  try { Dep.ready = await (await apiGet("/api/deploy?race_id=" + encodeURIComponent(Dep.raceId))).json(); }
+  catch (e) { view.innerHTML = '<div class="placeholder">Failed to load deploy state.</div>'; return; }
+  if (stale("deploy")) return;
+  paintDeploy();
+}
+
+async function depPickRace(id) { Dep.raceId = id; Lab.sel = id; Dep.sel = null; renderDeploy(); }
+
+const depPill = (ok, label) => `<span class="pill ${ok ? "ok" : "warn"}">${ok ? "✓" : "⚠"} ${esc(label)}</span>`;
+
+function paintDeploy() {
+  const r = Dep.ready, lock = r.lock_in, pbs = r.playbooks || [], t = r.targets || {};
+  if (!Dep.sel) Dep.sel = (lock && lock.playbook_id) || (pbs[0] && pbs[0].id) || "";
+  const c = r.course, fl = r.fleet, ck = r.checklists;
+  const pbReady = pbs.length > 0;
+  const fmtDate = (e) => e ? new Date(e * 1000).toISOString().slice(0, 16).replace("T", " ") + "Z" : "—";
+  const pbOpt = (b) => `<option value="${esc(b.id)}" ${b.id === Dep.sel ? "selected" : ""}>${
+    esc((b.signed ? "🔒 " : "draft ") + (b.headline || b.id).slice(0, 60))} · ${b.n_variants} var · ${esc(fmtDate(b.generated_at))}</option>`;
+
+  document.getElementById("view").innerHTML = `<div class="opt">
+    <div class="card">
+      <h3>Lock-in &amp; Deploy <span class="muted" style="font-weight:400">— freeze the homework + push it onboard</span></h3>
+      <div class="opt-controls">
+        <label>Race <select id="depRace" onchange="depPickRace(this.value)">
+          ${Dep.races.map((x) => `<option value="${esc(x.race_id)}" ${x.race_id === Dep.raceId ? "selected" : ""}>${esc(x.name || x.race_id)}</option>`).join("")}
+        </select></label>
+      </div>
+
+      <div class="dep-grid">
+        <div class="dep-row">${depPill(r.reviewed, "Race reviewed")}<span class="muted">${r.reviewed ? "signed off for race use" : "approve it in the Races tab"}</span></div>
+        <div class="dep-row">${depPill(c.ready, "Course")}<span class="muted">${esc(c.course_id || "—")} · ${c.marks} marks${c.skipped && c.skipped.length ? " · ⚠ " + c.skipped.length + " un-geocoded (" + c.skipped.map(esc).join(", ") + ")" : ""}</span></div>
+        <div class="dep-row">${depPill(fl.ready, "Fleet")}<span class="muted">${fl.roster} boats${fl.scoring ? " · " + esc(fl.scoring) : ""}${fl.tracker_permitted ? " · tracker permitted" : ""}</span></div>
+        <div class="dep-row">${depPill(ck.ready, "Checklists")}<span class="muted">${ck.total} items · ${ck.ipad} →iPad</span></div>
+        <div class="dep-row">${depPill(pbReady, "Playbook")}<span class="muted">${pbReady ? pbs.length + " frozen for this race" : "synthesize + Freeze & sign one in Gameplan"}</span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Lock in the homework</h3>
+      ${pbReady ? `
+        <div class="opt-controls">
+          <label>Playbook <select id="depPb" onchange="Dep.sel=this.value" style="min-width:340px">${pbs.map(pbOpt).join("")}</select></label>
+          <button id="depLock" onclick="depLockIn()" ${Dep.busy ? "disabled" : ""}>${lock ? "Re-lock selected" : "🔒 Lock in selected playbook"}</button>
+        </div>` : `<div class="muted">No frozen playbook yet — go to <a href="#gameplan">Gameplan</a>, synthesize the branching playbook, and <b>Freeze &amp; sign</b> it. Then lock it in here.</div>`}
+      ${lock ? `<div class="banner ok" style="margin-top:10px">🔒 Locked in: <code>${esc(lock.playbook_id)}</code>${lock.signed ? ` · sig <code>${esc(lock.signature)}…</code>` : " · <b>unsigned</b>"} · ${esc(fmtDate(lock.locked_at))}</div>` : ""}
+    </div>
+
+    ${lock ? deployPanel(lock, t) : ""}
+  </div>`;
+}
+
+function deployPanel(lock, t) {
+  const rid = Dep.raceId, pid = lock.playbook_id;
+  const hw = `homework_${rid}.json`, pb = `${pid}.json`;
+  const cmds = [
+    `# 1. Course + fleet → the Pi engine (Tailscale host: ${t.pi_host})`,
+    `jq .course_load ${hw} | ssh ${t.pi_host} 'curl -sX POST ${t.pi_engine}/course/load -H "Content-Type: application/json" -d @-'`,
+    `jq .fleet_load  ${hw} | ssh ${t.pi_host} 'curl -sX POST ${t.pi_engine}/fleet/load  -H "Content-Type: application/json" -d @-'`,
+    ``,
+    `# 2. Signed playbook → the Orin copilot (Tailscale host: ${t.orin_host})`,
+    `scp ${pb} ${t.orin_host}:${t.orin_playbook_path}`,
+    `ssh ${t.orin_host} 'echo CAN100 | sudo -S systemctl restart ${t.orin_service}'`,
+    `#   (ensure PLAYBOOK_PATH=${t.orin_playbook_path} is set in /etc/sr33/copilot.env on the Orin)`,
+  ].join("\n");
+  return `<div class="card">
+    <h3>Deploy onboard <span class="muted" style="font-weight:400">— frozen at the gun (RRS 41)</span></h3>
+    <div class="muted" style="font-size:12px;margin-bottom:8px">The Lab has no line to the boat — download the two artifacts, then run the load commands from a machine on the boat's Tailscale net (course + fleet onto the Pi engine, the signed playbook onto the Orin copilot).</div>
+    <div class="dep-actions">
+      <button onclick="downloadPlaybook('${esc(pid)}')">⬇ Playbook bundle (→ Orin)</button>
+      <button onclick="downloadHomework('${esc(rid)}')">⬇ Homework package (→ Pi)</button>
+    </div>
+    <pre class="dep-cmds">${esc(cmds)}</pre>
+  </div>`;
+}
+
+async function depLockIn() {
+  if (!Dep.sel) return;
+  Dep.busy = true;
+  try { await apiPost("/api/deploy/lock-in", { race_id: Dep.raceId, playbook_id: Dep.sel }); }
+  catch (e) { alert("Lock-in failed: " + e.message); }
+  Dep.busy = false; renderDeploy();
+}
+
+// Authed download of the homework package (the /api/* route needs the bearer; a plain <a> would 401).
+async function downloadHomework(rid) {
+  try {
+    const res = await apiGet("/api/deploy/package/" + encodeURIComponent(rid) + "/download");
+    if (!res.ok) throw new Error("download failed (" + res.status + ")");
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = "homework_" + rid + ".json";
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  } catch (e) { alert("Could not download the homework package: " + e.message); }
 }
 
 function optDegradedBanner(r) {

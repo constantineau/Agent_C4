@@ -299,3 +299,12 @@ table.pg { border-collapse: collapse; font-size: 11px; margin-top: 4px; }
 table.pg th, table.pg td { border: 1px solid var(--line); padding: 3px 7px; text-align: right; color: var(--ink); }
 table.pg th { color: var(--muted); font-weight: 600; background: var(--panel2); }
 table.pg td.pg-twa { color: var(--muted); font-weight: 600; }
+
+/* ---- Lock-in & Deploy ---- */
+.dep-grid { display: flex; flex-direction: column; gap: 7px; margin-top: 10px; }
+.dep-row { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+.dep-row .muted { font-size: 12px; }
+.dep-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.dep-cmds { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px;
+  padding: 11px 13px; font-size: 12px; line-height: 1.55; color: var(--ink); overflow-x: auto;
+  white-space: pre; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }

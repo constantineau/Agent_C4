@@ -21,7 +21,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from shared import race_def, boat_profile
-from . import auth, store, extract, boats, labstate, feedback, pbstore
+from . import auth, store, extract, boats, labstate, feedback, pbstore, deploy
 
 INGESTED_DIR = os.environ.get("INGESTED_DIR", "/srv/ingested")
 
@@ -525,6 +525,41 @@ async def playbook_download(pid: str):
     from fastapi.responses import Response
     return Response(content=raw, media_type="application/json", headers={
         "Content-Disposition": f'attachment; filename="{pid}.json"'})
+
+
+# ---- Lock-in & Deploy -------------------------------------------------------------------------
+@app.get("/api/deploy")
+async def deploy_readiness(race_id: str, course_id: str = None):
+    """Per-race deploy readiness (course/fleet/checklists/playbook status) + frozen playbooks + the
+    locked-in selection + onboard targets."""
+    r = deploy.readiness(race_id, course_id)
+    if r is None:
+        return JSONResponse({"detail": "unknown race"}, status_code=404)
+    return r
+
+
+@app.post("/api/deploy/lock-in")
+async def deploy_lock_in(body: dict):
+    """Lock a frozen playbook in as the race's deploy homework. Body: {race_id, playbook_id}."""
+    race_id = (body or {}).get("race_id")
+    playbook_id = (body or {}).get("playbook_id")
+    if not race_id or not playbook_id:
+        return JSONResponse({"detail": "race_id and playbook_id required"}, status_code=400)
+    state = deploy.lock_in(race_id, playbook_id)
+    if state is None:
+        return JSONResponse({"detail": "playbook not found for this race"}, status_code=404)
+    return {"locked_in": True, "lock_in": state}
+
+
+@app.get("/api/deploy/package/{race_id}/download")
+async def deploy_package(race_id: str, course_id: str = None):
+    """The combined homework package (ready-to-POST course_load + fleet_load + iPad checklists)."""
+    pkg = deploy.package(race_id, course_id)
+    if pkg is None:
+        return JSONResponse({"detail": "unknown race"}, status_code=404)
+    from fastapi.responses import Response
+    return Response(content=json.dumps(pkg, indent=2), media_type="application/json", headers={
+        "Content-Disposition": f'attachment; filename="homework_{race_id}.json"'})
 
 
 @app.post("/api/races")
