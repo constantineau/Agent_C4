@@ -315,6 +315,7 @@ table.fleet-tbl th { text-align: left; color: var(--muted); font-weight: 600; fo
   padding: 2px 6px; border-bottom: 1px solid var(--line); }
 table.fleet-tbl td { padding: 3px 6px; vertical-align: middle; }
 table.fleet-tbl input.ein { padding: 5px 7px; }
+tr.winrow { background: rgba(126,224,168,.12); font-weight: 600; }
 
 /* ---- Rules / checklist ---- */
 .phase-h { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;

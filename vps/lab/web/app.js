@@ -126,6 +126,7 @@ function route() {
   if (sec === "rules") return renderRules();
   if (sec === "learnings") return renderLearnings();
   if (sec === "monitor") return renderMonitor();
+  if (sec === "debrief") return renderDebrief();
   renderPlaceholder(sec);
 }
 const clone = (o) => JSON.parse(JSON.stringify(o));
@@ -623,10 +624,8 @@ function drawCourseMap(id, course) {
   });
 }
 
-/* ---------- placeholders ---------- */
-const SOON = {
-  debrief: ["Debrief", "The post-race judge loop — regret analysis and write-back review that feeds the next prep."],
-};
+/* ---------- placeholders (all sections are now built) ---------- */
+const SOON = {};
 function renderPlaceholder(sec) {
   const [title, desc] = SOON[sec] || ["Section", "Coming soon."];
   document.getElementById("view").innerHTML =
@@ -1692,6 +1691,101 @@ function initMonitorMap() {
   }
   if (pts.length) map.fitBounds(pts, { padding: [30, 30], maxZoom: 11 });
   else map.setView([44.2, -82.5], 7);   // Lake Huron default
+}
+
+/* ---------- Debrief (Lab-4 post-race judge loop) ---------- */
+const Deb = { raceId: null, playbookId: null, playbooks: null, running: false, report: null };
+
+async function renderDebrief() {
+  const view = document.getElementById("view");
+  if (!Lab.races) {
+    view.innerHTML = '<div class="loading">Loading…</div>';
+    try { Lab.races = (await (await apiGet("/api/races")).json()).races || []; }
+    catch (e) { view.innerHTML = '<div class="placeholder">Failed to load.</div>'; return; }
+  }
+  if (!Deb.raceId) Deb.raceId = Lab.sel || (Lab.races[0] && Lab.races[0].race_id) || null;
+  if (!Deb.raceId) { view.innerHTML = '<div class="placeholder">No race — ingest one in the Races tab.</div>'; return; }
+  try { Deb.playbooks = ((await (await apiGet("/api/playbooks")).json()).playbooks || []).filter((b) => b.race_id === Deb.raceId); }
+  catch (e) { Deb.playbooks = []; }
+  if (stale("debrief")) return;
+  if (!Deb.playbookId || !Deb.playbooks.some((b) => b.id === Deb.playbookId)) Deb.playbookId = (Deb.playbooks[0] || {}).id || null;
+  paintDebrief();
+}
+
+async function debPickRace(id) { Deb.raceId = id; Lab.sel = id; Deb.report = null; Deb.playbookId = null; renderDebrief(); }
+async function debRun() {
+  if (!Deb.playbookId) return;
+  Deb.running = true; paintDebrief();
+  try { Deb.report = await (await apiPost("/api/debrief/run", { race_id: Deb.raceId, playbook_id: Deb.playbookId })).json(); }
+  catch (e) { Deb.report = { available: false, note: String(e) }; }
+  Deb.running = false; paintDebrief();
+}
+async function debApply() {
+  const ta = document.getElementById("debLearn"); if (!ta) return;
+  const msg = document.getElementById("debApplyMsg"); if (msg) msg.textContent = "Saving…";
+  try {
+    const r = await (await apiPost("/api/debrief/apply", { race_id: Deb.raceId, learnings: ta.value })).json();
+    if (msg) msg.textContent = r.saved ? "Promoted to Learnings ✓" : ("Failed: " + (r.note || ""));
+  } catch (e) { if (msg) msg.textContent = "Failed: " + e.message; }
+}
+
+function paintDebrief() {
+  const r = Deb.report;
+  const pbOpts = (Deb.playbooks || []).map((b) => `<option value="${attr(b.id)}" ${b.id === Deb.playbookId ? "selected" : ""}>${esc((b.signed ? "🔒 " : "") + (b.headline || b.id).slice(0, 56))} · ${b.n_variants} var</option>`).join("");
+  let body = "";
+  if (Deb.running) body = '<div class="card"><div class="loading">Running the judge — building the actual-wind field, routing the oracle, writing the critique… (~1–2 min)</div></div>';
+  else if (r && r.available) body = debReport(r);
+  else if (r && !r.available) body = `<div class="card"><div class="placeholder">${esc(r.note || "debrief unavailable")}</div></div>`;
+
+  document.getElementById("view").innerHTML = `<div class="opt">
+    <div class="card">
+      <h3>Debrief <span class="muted" style="font-weight:400">— post-race judge loop: oracle re-route → regret → critique → write-back</span></h3>
+      <div class="opt-controls">
+        <label>Race <select onchange="debPickRace(this.value)">
+          ${Lab.races.map((x) => `<option value="${attr(x.race_id)}" ${x.race_id === Deb.raceId ? "selected" : ""}>${esc(x.name || x.race_id)}</option>`).join("")}
+        </select></label>
+        ${(Deb.playbooks || []).length ? `<label>Playbook <select onchange="Deb.playbookId=this.value" style="min-width:300px">${pbOpts}</select></label>
+          <button onclick="debRun()" ${Deb.running ? "disabled" : ""}>${Deb.running ? "Judging…" : "Run debrief"}</button>`
+          : `<span class="muted">No frozen playbook for this race — freeze one in Gameplan to judge against.</span>`}
+      </div>
+      <div class="muted" style="font-size:12px;margin-top:4px">The optimizer re-routes the course on the wind that actually blew (oracle) and compares it to the plan you carried — which side paid, the regret vs perfect foresight, and a coach's critique you can promote into Learnings.</div>
+    </div>
+    ${body}
+  </div>`;
+}
+
+function debReport(r) {
+  const reg = r.regret, o = r.oracle, pb = r.playbook, c = r.critique || {};
+  const pill = reg.side_matched ? '<span class="pill ok">side held</span>' : '<span class="pill warn">side missed</span>';
+  const regMin = reg.minutes != null ? (reg.minutes >= 0 ? reg.minutes + " min slower than optimal" : Math.abs(reg.minutes) + " min (plan beat the model)") : "—";
+  const vrows = (pb.variants || []).map((v) => `<tr class="${v.side === reg.side_paid ? "winrow" : ""}">
+      <td>${esc(v.side || "?")}${v.side === pb.recommended ? " ★" : ""}</td>
+      <td>${v.total_hours != null ? v.total_hours.toFixed(1) + " h" : ""}</td>
+      <td>${v.share != null ? Math.round(v.share * 100) + "%" : ""}</td>
+      <td>${v.side === reg.side_paid ? "✓ paid" : ""}</td></tr>`).join("");
+  return `<div class="card">
+      <h3>Result ${pill}</h3>
+      <div class="dep-grid">
+        <div class="dep-row"><b style="min-width:130px;display:inline-block">Side that paid</b> <b>${esc(reg.side_paid)}</b> · recommended <b>${esc(reg.recommended_side || "—")}</b> ${reg.side_matched ? "(matched)" : "(missed)"}</div>
+        <div class="dep-row"><b style="min-width:130px;display:inline-block">Oracle optimal</b> ${o.total_hours != null ? o.total_hours.toFixed(1) + " h" : "—"} · plan predicted ${pb.predicted_hours != null ? pb.predicted_hours.toFixed(1) + " h" : "—"}</div>
+        <div class="dep-row"><b style="min-width:130px;display:inline-block">Regret</b> ${esc(regMin)}</div>
+      </div>
+      <table class="fleet-tbl" style="margin-top:8px"><thead><tr><th>Variant</th><th>Predicted</th><th>Agreement</th><th>Outcome</th></tr></thead><tbody>${vrows}</tbody></table>
+      <div class="muted" style="font-size:11px;margin-top:6px">★ = recommended · highlighted = the side that paid. ${esc(r.caveat || "")}</div>
+    </div>
+    <div class="card">
+      <h3>Coach's critique <span class="muted" style="font-weight:400">— ${esc(c.model || "deterministic")}</span></h3>
+      <p style="margin:4px 0">${esc(c.assessment || "")}</p>
+      ${c.key_lesson ? `<p style="margin:4px 0"><b>Lesson:</b> ${esc(c.key_lesson)}</p>` : ""}
+      ${c.brain_edit ? `<p style="margin:4px 0"><b>Onboard-brain edit:</b> ${esc(c.brain_edit)}</p>` : ""}
+      ${c.boat_model_note ? `<p style="margin:4px 0"><b>Boat model:</b> ${esc(c.boat_model_note)}</p>` : ""}
+      <div class="muted" style="font-size:11px;margin-top:6px">Actual boat-track scoring (helm vs optimal) — ${esc((r.actual_track || {}).note || "future")}.</div>
+    </div>
+    <div class="card">
+      <h3>Write-back → Learnings <span class="muted" style="font-weight:400">— review, then promote to the next prep</span></h3>
+      <textarea id="debLearn" rows="3" style="width:100%;box-sizing:border-box">${esc(c.proposed_learnings || "")}</textarea>
+      <div style="margin-top:8px"><button onclick="debApply()">Promote to Learnings</button> <span id="debApplyMsg" class="muted" style="font-size:12px"></span></div>
+    </div>`;
 }
 
 /* ---------- Learnings (boat-level library + per-regatta notes) ---------- */

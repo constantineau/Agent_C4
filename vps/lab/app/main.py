@@ -21,7 +21,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from shared import race_def, boat_profile
-from . import auth, store, extract, boats, labstate, feedback, pbstore, deploy, monitor
+from . import auth, store, extract, boats, labstate, feedback, pbstore, deploy, monitor, judge
 
 INGESTED_DIR = os.environ.get("INGESTED_DIR", "/srv/ingested")
 
@@ -525,6 +525,23 @@ async def playbook_download(pid: str):
     from fastapi.responses import Response
     return Response(content=raw, media_type="application/json", headers={
         "Content-Disposition": f'attachment; filename="{pid}.json"'})
+
+
+# ---- Debrief (Lab-4 post-race judge loop: oracle re-route → regret → critique → write-back) ---
+@app.post("/api/debrief/run")
+async def debrief_run(body: dict):
+    race_id = (body or {}).get("race_id")
+    if not race_id:
+        return JSONResponse({"detail": "race_id required"}, status_code=400)
+    return await run_in_threadpool(judge.run_judge, race_id, (body or {}).get("playbook_id"))
+
+
+@app.post("/api/debrief/apply")
+async def debrief_apply(body: dict):
+    race_id = (body or {}).get("race_id")
+    if not race_id:
+        return JSONResponse({"detail": "race_id required"}, status_code=400)
+    return await run_in_threadpool(judge.apply_writeback, race_id, (body or {}).get("learnings"))
 
 
 # ---- Monitor (shore-side live view: fleet via public tracker + our boat via cloud telemetry) --
