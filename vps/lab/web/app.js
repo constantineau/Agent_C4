@@ -108,8 +108,14 @@ window.addEventListener("DOMContentLoaded", boot);
 
 /* ---------- router ---------- */
 function start() { window.addEventListener("hashchange", route); route(); }
+// The section currently being viewed. Async renderers fetch then paint #view; if the user switched
+// tabs mid-fetch the late paint would land in the wrong tab — so each renderer checks stale() after
+// its awaits before writing.
+let activeSec = "";
+const stale = (s) => activeSec !== s;
 function route() {
   const sec = (location.hash || "#races").slice(1);
+  activeSec = sec;
   document.querySelectorAll("#tabs a").forEach((a) =>
     a.classList.toggle("active", a.getAttribute("href") === "#" + sec));
   if (sec === "races") return renderRaces();
@@ -128,6 +134,7 @@ async function renderRaces() {
     catch (e) { view.innerHTML = '<div class="placeholder">Failed to load races.</div>'; return; }
   }
   if (!Lab.sel && Lab.races.length) Lab.sel = Lab.races[0].race_id;
+  if (stale("races")) return;
   view.innerHTML = `<div class="races">
     <div>
       ${ingestCard()}
@@ -437,6 +444,7 @@ async function renderCourse() {
   view.innerHTML = '<div class="loading">Loading course…</div>';
   try { Lab.editDef = await (await apiGet("/api/races/" + encodeURIComponent(Lab.sel))).json(); }
   catch (e) { view.innerHTML = '<div class="placeholder">Failed to load.</div>'; return; }
+  if (stale("course")) return;
   paintCourse();
 }
 /* Render the Course & Marks view from the in-memory Lab.editDef (no server refetch — so edits and
@@ -677,6 +685,7 @@ async function renderGameplan() {
     } catch (e) { view.innerHTML = '<div class="placeholder">Failed to load optimizer.</div>'; return; }
   }
   if (!Opt.raceId && Opt.races.length) await optPickRace(Opt.races[0].race_id, false);
+  if (stale("gameplan")) return;
   const startTz = optTz();
   const startTitle = (startTz
     ? "24-hour " + startTz + " local time, e.g. 2026-07-18 06:30 — converted to UTC behind the scenes."
@@ -1161,9 +1170,24 @@ function pbSigBox(b) {
   return `<div class="pb-sig">
     <span class="pill ok">🔒 Frozen &amp; signed</span>
     <code title="sha256">${esc((sig.value || "").slice(0, 16))}…</code>
-    <a class="mini" href="/api/playbooks/${encodeURIComponent(pid)}/download" download>Download bundle</a>
+    <button class="mini" onclick="downloadPlaybook('${esc(pid)}')">Download bundle</button>
     <span class="muted" style="font-size:11px">Drop this at the copilot's <code>PLAYBOOK_PATH</code> onboard.</span>
   </div>`;
+}
+
+// The bundle download is an /api/* route (team-token gated), so a plain <a> navigation 401s — it
+// can't carry the bearer header. Fetch it through the authed api() helper, then save the blob.
+async function downloadPlaybook(pid) {
+  try {
+    const res = await apiGet("/api/playbooks/" + encodeURIComponent(pid) + "/download");
+    if (!res.ok) throw new Error("download failed (" + res.status + ")");
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = pid + ".json";
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  } catch (e) { alert("Could not download the bundle: " + e.message); }
 }
 
 async function freezePlaybook() {

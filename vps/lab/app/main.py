@@ -573,6 +573,19 @@ async def approve_race(rid: str, body: dict):
             "reviewed_at": definition.get("reviewed_at"), "errors": errors, "warnings": warnings}
 
 
+@app.get("/favicon.ico")
+async def favicon():
+    """A tiny inline SVG mark so browsers stop logging a 404 for /favicon.ico (and the tab gets an
+    icon). Declared before the static mount so it wins."""
+    from fastapi.responses import Response
+    svg = (b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">'
+           b'<rect width="32" height="32" rx="6" fill="#0e1622"/>'
+           b'<path d="M16 5 L25 24 H7 Z" fill="#3aa0ff"/>'
+           b'<rect x="6" y="24" width="20" height="3" rx="1.5" fill="#7bc0ff"/></svg>')
+    return Response(content=svg, media_type="image/svg+xml",
+                    headers={"Cache-Control": "public, max-age=86400"})
+
+
 # The Lab web shell (static). Declared last so the /api routes match first; html=True serves
 # index.html at "/". Client-side hash routing handles the section tabs.
 app.mount("/", StaticFiles(directory=os.environ.get("WEB_DIR", "/srv/web"), html=True), name="web")
