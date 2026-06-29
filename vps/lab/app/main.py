@@ -199,7 +199,7 @@ def _run_optimize(definition, course_id, start_epoch, model_names, ensemble_memb
                   per_model=False, resolution="auto"):
     """Blocking: build the multi-model wind field, route the course, write the briefing."""
     from .wind import build_windfield
-    from . import optimizer
+    from . import optimizer, current
     bbox = optimizer.course_bbox(definition, course_id)
     if not bbox:
         return {"available": False, "note": "course has no geocoded marks — review Course & Marks"}
@@ -211,11 +211,13 @@ def _run_optimize(definition, course_id, start_epoch, model_names, ensemble_memb
     if not wf.loaded:
         return {"available": False, "note": "no weather model data could be loaded (not yet "
                 "posted, or no egress)", "windfield": wf.status(), "log": log}
+    cur = current.build_currentfield(bbox, start_epoch, t_end, on_progress=log.append)  # GLOFS (no-op until wired)
     result = optimizer.optimize_course(definition, course_id, start_epoch, wf, avoid=avoid,
                                        source=chart_source(),
                                        safety_depth=boats.active_safety_depth_m(),
                                        jib_crossovers=_active_jibs(), per_model=per_model,
-                                       resolution=resolution)
+                                       resolution=resolution, cur=cur)
+    result["current"] = cur.status()
     result["briefing"] = optimizer.briefing(result, definition.get("name", ""))
     result["boat"] = boat_profile.summary(boats.active_boat()) if boats.active_boat() else None
     result["wind_grid"] = _wind_grid(wf, bbox, start_epoch, result.get("finish_epoch", t_end))

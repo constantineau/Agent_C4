@@ -186,11 +186,14 @@ def _layline_pair(P, tws, twd, pos, mlat, mlon, length_nm):
 
 # --- one leg -----------------------------------------------------------------
 def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=None,
-              obstacles=None, capture=False, hstep=HSTEP, dt_cap=1.0):
+              obstacles=None, capture=False, hstep=HSTEP, dt_cap=1.0, cur=None):
     """Isochrone-optimal path from (slat,slon)@t0 to (dlat,dlon). Returns dict with path/eta.
 
     `obstacles` (an ObstacleField) makes the fan reject any heading whose step would cut across land,
     an island, or a race exclusion zone — so the route sails AROUND obstacles instead of through them.
+    `cur` (a CurrentField) carries the boat over the GROUND: each step advances by the boat's
+    water-velocity (polar speed on its heading) PLUS the current's drift, so the route crabs into a
+    cross stream and ETAs reflect a fair/foul current. None / ZeroCurrent = no current (unchanged).
     `capture` records each generation's frontier (the equal-time isochrone) and emits down-sampled
     `isochrones` polylines — the exploration the single route summarizes, drawn on the Gameplan map.
     `hstep` (heading-fan degrees) + `dt_cap` (per-leg step ceiling, h) come from the resolution
@@ -247,7 +250,11 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
                     tk += 1
                 else:
                     step_nm = max(0.0, step_nm - sp * (TACK_COST_S / 3600.0))
-            nlat, nlon = _advance(node["lat"], node["lon"], hdg, step_nm)
+            nlat, nlon = _advance(node["lat"], node["lon"], hdg, step_nm)   # displacement through the water
+            if cur is not None:                                              # + drift over the ground (set/drift)
+                cset, cdrift = cur.current_at(node["lat"], node["lon"], node["t"])
+                if cdrift > 0.01:
+                    nlat, nlon = _advance(nlat, nlon, cset, cdrift * dt_h)
             if obstacles and obstacles.crosses(node["lat"], node["lon"], nlat, nlon):
                 blocked += 1
                 continue
@@ -454,7 +461,7 @@ def _resolution(name):
 def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=None,
                     obstacles=None, avoid=True, source=None, safety_depth=None,
                     jib_crossovers=None, emit_exploration=True, per_model=False,
-                    resolution="auto"):
+                    resolution="auto", cur=None):
     """Route the whole course from its start through every mark to the finish via `wf`.
 
     Returns one optimal route with per-leg ETAs, total time/distance/tacks and a route confidence
@@ -498,7 +505,7 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
         # real mark is still displayed + recorded). Gates pass between, finish/none unchanged.
         rlat, rlon = _rounding_offset(slat, slon, dlat, dlon, roundings.get(name, "none"))
         leg = route_leg(wf, P, slat, slon, t, rlat, rlon, deadline=deadline, obstacles=obstacles,
-                        capture=emit_exploration, hstep=rp["hstep"], dt_cap=rp["dt_cap"])
+                        capture=emit_exploration, hstep=rp["hstep"], dt_cap=rp["dt_cap"], cur=cur)
         # sample wind + confidence at the leg's midpoint and end (for the briefing)
         mid = leg["path"][len(leg["path"]) // 2] if leg["path"] else {"lat": dlat, "lon": dlon}
         det = wf.detail_at(mid["lat"], mid["lon"], (t + leg["eta"]) / 2.0)
