@@ -316,8 +316,38 @@ the real cove_island Duck/BoisBlanc barriers (legal open, illegal blocked). Tuna
   the optimize result carries `roundings`, and the briefing states them ("leave Duck Islands to
   starboard, Bois Blanc to port"). See `test_roundings.py`.
 
+### Routing fidelity 2g — sail-aware routing (per-sail polars + a peel cost)
+
+2b attached a per-leg sail LABEL but the optimizer still routed on the Best-Performance *envelope*
+(the max-over-sails speed) and peeled for free — so a route could thrash sails across a crossover at
+zero cost, and the sail plan was a post-hoc per-leg guess. 2g makes the sail a first-class part of the
+isochrone search:
+- **Per-sail polars.** `build_speed_guide.py` now also emits `vps/db/seed/sr33_sail_polars.json` — the
+  speed of EACH inventory sail (J1/A2/A3/S2) across its rated TWA domain, not just the envelope.
+  `polars.sail_polars()` loads it (env `SAIL_POLARS_FILE`); empty → the optimizer routes on the
+  envelope exactly as before.
+- **Sail in the node state + hold-vs-peel.** `route_leg` carries the current sail; per step `sail_step`
+  HOLDS it (at its OWN, slower-off-optimal per-sail speed) until it's `ROUTE_PEEL_HOLD_TOL` (6%) off the
+  envelope-optimal sail, then PEELS to the optimal sail at full speed. A peel costs `ROUTE_PEEL_COST_S`
+  (90 s, honest ETA) + a one-off `ROUTE_PEEL_PRUNE_S` prune penalty (mirrors the cumulative tack cost),
+  so the isochrone disfavors a course that needs an extra peel — the route peels only when it pays. A
+  kite is `0` outside its rated TWA domain (you can't fly it hard upwind → a forced peel); a jib
+  change-down (J1→J2/J3) shares the J1 curve, so it's a free relabel, not a routing peel.
+- **Continuity + a real sail plan.** The carried sail threads across marks (`start_sail`), so a peel at
+  a rounding counts once; the route's `sail_plan` is rebuilt from the isochrone's own sail track (where
+  it actually peeled), and the result carries per-leg `peels` + `total_peels`. The Gameplan cockpit
+  shows a *sail peels* stat + a per-leg peel badge + a peels column in the CSV; the briefing states the
+  real sail plan + peel count.
+
+Env-flagged `ROUTE_SAIL_AWARE` (default ON) for A/B; off ⇒ envelope routing, geometry byte-identical.
+Verified `test_routing_2g.py`: per-sail load + domain gate (kite infeasible upwind), carrying the wrong
+sail into a leg peels to the right one (jib→kite on a run, kite→jib on a beat), a within-tolerance
+sub-optimal sail is HELD (no thrash), SAIL_AWARE off reproduces the envelope baseline exactly, and
+starting on the optimal sail adds no peel. End-to-end on the real cove_island course: `S2 → J1`, one
+peel (the post-hoc labeler's spurious A3 transient correctly not flown).
+
 - **Next:** the copilot's crew-facing narration increment (it now has a signed playbook + boat sail
-  model to interpret). Routing fidelity 2c/2e/2f and the higher-res GSHHG coastline backstop are **done**.
+  model to interpret). Routing fidelity 2c/2e/2f/2g and the higher-res GSHHG coastline backstop are **done**.
 
 ## Race documents (found 2026-06-17)
 

@@ -228,6 +228,7 @@ tr.needrow { background: rgba(245,196,81,.07); }
 .opt-group .opt-models { margin: 0; }
 .opt-run { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; margin-bottom: 6px; }
 .tackbadge { color: var(--warn); font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.peelbadge { color: var(--muted); font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; font-size: 11px; }
 .opt-models { display: flex; gap: 14px; flex-wrap: wrap; margin: 6px 0 10px; }
 .optchk { font-size: 13px; color: var(--ink); display: inline-flex; align-items: center; gap: 5px; }
 #optRun { padding: 9px 18px; border: none; border-radius: 8px; background: var(--accent);

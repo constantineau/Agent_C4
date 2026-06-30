@@ -145,7 +145,7 @@ via `OnboardSource`. It comes up with the rest of the Pi stack; quick check:
 | **5** ✅ | iPad nav companion: day/night, sail dial, course plot, navigator, tactics, routing | bench-verified end-to-end |
 | **6** ✅ | Alerting + summarizer + polar tooling | bench-complete; 2-practice-sail false-positive gate awaits real sailing |
 | 7 🔶 | Prod stack + deploy + rules review + soak | rules review done; server auth + TLS scaffolding done; prod deploy/soak gated on domain + prod `.env` |
-| **9** 🔶 | Onboard + C4 Performance Lab (three-tier pivot) | **9.0 data-access abstraction ✅ · 9.1 onboard engine service ✅ · 9.2 race gate + iPad onboard console ✅ · Lab-0 race ingestion + course loader ✅ · Lab-1 multi-model GRIB optimizer ✅ · Lab-2a/2b branching playbook bundle ✅ (fan-out → variants → Opus synthesis → signed, onboard-loadable artifact) · routing-fidelity 2b per-leg sail plan + reviewable boat sail model ✅ · routing-fidelity 2c isochrone VMG-gate/cone-prune/anti-over-tack ✅ · routing-fidelity 2e finish/mark over-tack ("scramble") fixes ✅ · routing-fidelity 2f island rounding-side enforcement ✅ · 9.4 Orin LLM appliance live (Ollama+Qwen2.5-7B :11434) + copilot decision-support layer ✅ (`pi/orin/copilot`) · copilot crew-facing narration ✅ + proactive auto-coach timer ✅ + collision/AIS safety callout ✅ + handicap-rival callout ✅ · PLAYBOOK-ADHERENCE dashboard tile ✅ (10-tile 5×2 grid) · handicap-aware fleet tactics ✅ (incl. verified YB/bycmack tracker source) ** — see `docs/ONBOARD_ENGINE_SCOPING.md` |
+| **9** 🔶 | Onboard + C4 Performance Lab (three-tier pivot) | **9.0 data-access abstraction ✅ · 9.1 onboard engine service ✅ · 9.2 race gate + iPad onboard console ✅ · Lab-0 race ingestion + course loader ✅ · Lab-1 multi-model GRIB optimizer ✅ · Lab-2a/2b branching playbook bundle ✅ (fan-out → variants → Opus synthesis → signed, onboard-loadable artifact) · routing-fidelity 2b per-leg sail plan + reviewable boat sail model ✅ · routing-fidelity 2c isochrone VMG-gate/cone-prune/anti-over-tack ✅ · routing-fidelity 2e finish/mark over-tack ("scramble") fixes ✅ · routing-fidelity 2f island rounding-side enforcement ✅ · routing-fidelity 2g sail-aware routing (per-sail polars + peel cost) ✅ · 9.4 Orin LLM appliance live (Ollama+Qwen2.5-7B :11434) + copilot decision-support layer ✅ (`pi/orin/copilot`) · copilot crew-facing narration ✅ + proactive auto-coach timer ✅ + collision/AIS safety callout ✅ + handicap-rival callout ✅ · PLAYBOOK-ADHERENCE dashboard tile ✅ (10-tile 5×2 grid) · handicap-aware fleet tactics ✅ (incl. verified YB/bycmack tracker source) ** — see `docs/ONBOARD_ENGINE_SCOPING.md` |
 
 **Current status:** Phases 0–6 built and bench-verified; Phase 7 started; **Phase 9 in progress
 (9.0 data-access abstraction ✅, 9.1 onboard engine service ✅ — see "Onboard engine service",
@@ -401,8 +401,10 @@ Pi archive (SQLite default) · crew scale + Grafana? · GRIB source · boat-inst
 polar + per-row optimal sail + per-TWS sail plan, loaded into the agent's cached system
 context; `vps/db/seed/polars_sr33.sql` = real polars for the DB/optimizer;
 `vps/db/seed/sr33_crossovers.json` = the **per-TWS sail crossover model** the Lab optimizer uses
-for the per-leg sail plan, routing-fidelity 2b). The agent advises sail selection and
-crossovers/peels from the sail plan. Regenerate all three after a cert update:
+for the per-leg sail plan, routing-fidelity 2b; `vps/db/seed/sr33_sail_polars.json` = the **per-sail
+polar curves** (each sail's speed across its TWA domain, not just the envelope) the optimizer's
+sail-aware routing uses to weigh hold-vs-peel, routing-fidelity 2g). The agent advises sail selection
+and crossovers/peels from the sail plan. Regenerate all four after a cert update:
 `python3 vps/agent/knowledge/build_speed_guide.py`.
 
 ## Racing-rules caveat (RRS 41 / Bayview Mackinac NOR) — drives the three-tier pivot
@@ -844,6 +846,33 @@ AND islands with rounding port/starboard, plus gates), the optimize result carri
 and `briefing()` states it explicitly (Opus prompt + deterministic line: "Roundings: … leave Duck
 Islands to starboard; leave Bois Blanc Island to port"). Verified `test_roundings.py` (ordering,
 island inclusion, briefing text).
+
+**Routing fidelity 2g — SAIL-AWARE routing (per-sail polars + a peel cost): SHIPPED (dev).** 2b attached
+a per-leg sail LABEL but the optimizer still routed on the Best-Performance *envelope* (the max-over-sails
+speed) and peeled for FREE — so a route could thrash sails across a crossover at zero cost and the sail
+plan was a post-hoc per-leg guess. 2g makes the sail a first-class part of the isochrone search. **Data:**
+`build_speed_guide.py` now also emits `vps/db/seed/sr33_sail_polars.json` — the speed of EACH inventory
+sail (J1/A2/A3/S2) across its rated TWA domain (the cert already rates every sail; the envelope is just
+their max), loaded by `polars.sail_polars()` (env `SAIL_POLARS_FILE`, copied to `/srv` in the lab image);
+absent → the optimizer routes on the envelope exactly as before. **Search (`optimizer.py`):** `route_leg`
+carries the current sail in the node state; per step `sail_step` HOLDS it (at its OWN, slower-off-optimal
+per-sail speed) until it's `ROUTE_PEEL_HOLD_TOL` (6%) off the envelope-optimal sail, then PEELS to the
+optimal sail at full speed — a peel costs `ROUTE_PEEL_COST_S` (90 s honest ETA) + a one-off
+`ROUTE_PEEL_PRUNE_S` prune penalty (mirrors the cumulative tack cost), so the isochrone disfavors a course
+needing an extra peel and the hysteresis dead-band stops crossover-boundary thrash. A kite is `0` outside
+its rated TWA domain (can't fly it hard upwind → a forced peel); a jib change-down (J1→J2/J3) shares the
+J1 curve, so it's a free relabel, not a routing peel. The carried sail threads across marks
+(`start_sail`) so a peel at a rounding counts once; the route's `sail_plan` is rebuilt from the
+isochrone's OWN sail track (where it actually peeled) — physically real, not a per-leg guess — and the
+result carries per-leg `peels` + `total_peels`. **Surfaced:** the Gameplan cockpit gains a *sail peels*
+stat + a per-leg peel badge + a CSV peels column; `briefing()` states the real sail plan + peel count.
+Env-flagged `ROUTE_SAIL_AWARE` (default ON) for A/B; off ⇒ envelope routing, geometry byte-identical.
+Verified `test_routing_2g.py` (per-sail load + domain gate, carrying the wrong sail peels to the right one
+both ways, a within-tolerance sub-optimal sail is HELD with no thrash, SAIL_AWARE off reproduces the
+envelope baseline exactly, starting on the optimal sail adds no peel) + an end-to-end on the real
+cove_island course (`S2 → J1`, one peel — the post-hoc labeler's spurious A3 transient correctly NOT
+flown) + the deployed lab container. Tunables `ROUTE_SAIL_AWARE` / `ROUTE_PEEL_COST_S` /
+`ROUTE_PEEL_PRUNE_S` / `ROUTE_PEEL_HOLD_TOL` / `ROUTE_SAIL_DOMAIN_MARGIN`.
 
 **Optimizer UI study + restyle — `docs/OPTIMIZER_UI_STUDY.md`** (Orca + Expedition gap analysis). Tier 0
 (ensemble-control fix + ECMWF-ENS wired as a separate 51-member `ecmwf-ens` ensemble source) + Tier 1

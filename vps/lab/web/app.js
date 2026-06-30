@@ -1020,6 +1020,7 @@ function renderOptResult(r) {
         <div><b>${r.total_sailed_nm}</b><span>nm sailed</span></div>
         <div><b>${r.total_direct_nm}</b><span>nm direct</span></div>
         <div><b>${r.total_tacks}</b><span>tacks/gybes</span></div>
+        ${r.total_peels != null ? `<div title="Sail changes (peels) the route makes — held a sub-optimal sail rather than peel when it didn't pay (2g)"><b>${r.total_peels}</b><span>sail peels</span></div>` : ""}
         <div><b class="conf ${confCls}">${conf == null ? "—" : conf}</b><span>conf (min ${r.min_confidence == null ? "—" : r.min_confidence})</span></div>
         <div><b class="conf ${covCls}">${cov == null ? "—" : Math.round(cov * 100) + "%"}</b><span>wind cov</span></div>
       </div>
@@ -1047,7 +1048,7 @@ function optLegRow(l, i) {
   const c = w.confidence, cc = c == null ? "" : c >= 0.6 ? "ok" : c >= 0.4 ? "warn" : "bad";
   return `<tr class="legrow" onclick="MapView.focusLeg(${i})" title="Show this leg on the map">
     <td>${esc(l.to)}</td><td>${l.leg_minutes}</td><td>${esc(l.point_of_sail || "—")}</td>
-    <td>${l.sail ? `<span class="sail sail-${esc(l.sail)}">${esc(l.sail)}</span>` : "—"}</td>
+    <td>${l.sail ? `<span class="sail sail-${esc(l.sail)}">${esc(l.sail)}</span>` : "—"}${l.peels > 0 ? ` <span class="peelbadge" title="${l.peels} sail change(s)/peel(s) on this leg">⛵${l.peels}</span>` : ""}</td>
     <td>${l.tacks > 0 ? `<span class="tackbadge" title="${l.tacks} tack/gybe(s) worked into this leg">⇄ ${l.tacks}</span>` : "0"}</td><td>${w.tws ?? "—"}</td><td>${w.twd ?? "—"}°</td>
     <td><span class="conf ${cc}">${c ?? "—"}</span></td></tr>`;
 }
@@ -1056,12 +1057,12 @@ function optLegRow(l, i) {
 function exportLegsCsv() {
   const r = Opt.result;
   if (!r || !r.legs) return;
-  const hdr = ["leg", "to", "minutes", "eta_utc", "point_of_sail", "sail",
+  const hdr = ["leg", "to", "minutes", "eta_utc", "point_of_sail", "sail", "peels",
     "tacks", "direct_nm", "sailed_nm", "tws_kn", "twd_deg", "confidence"];
   const rows = r.legs.map((l, i) => {
     const w = l.wind || {};
     const eta = l.eta_epoch ? new Date(l.eta_epoch * 1000).toISOString().replace(".000Z", "Z") : "";
-    return [i + 1, l.to, l.leg_minutes, eta, l.point_of_sail || "", l.sail || "",
+    return [i + 1, l.to, l.leg_minutes, eta, l.point_of_sail || "", l.sail || "", l.peels ?? 0,
       l.tacks, l.direct_nm, l.sailed_nm, w.tws ?? "", w.twd ?? "", w.confidence ?? ""];
   });
   const csv = [hdr, ...rows].map((row) => row.map(csvCell).join(",")).join("\r\n");
