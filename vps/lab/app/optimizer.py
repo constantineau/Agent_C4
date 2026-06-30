@@ -870,7 +870,9 @@ def briefing(result: dict, race_name: str = "") -> str:
         pct = int(round(rz.get("realized_pct", 1.0) * 100))
         helm = int(round(rz.get("helm_factor", 1.0) * 100))
         hs = rz.get("sea_state_hs_mean") or 0.0
-        sea = f", sea state ~{hs:.1f} m" if hs > 0.05 else ""
+        wsrc = rz.get("wave_source")
+        wvia = " (GLWU)" if wsrc == "glwu" else ""
+        sea = f", sea state ~{hs:.1f} m{wvia}" if hs > 0.05 else ""
         realized_text = (f"Achievable speed: routing at ~{pct}% of the flat-water polar "
                          f"(helm {helm}%{sea}) — ETAs are realistic, not theoretical. The gap to 100% "
                          "is the boatspeed left to find (trim, helm, sea-state technique).")

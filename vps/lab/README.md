@@ -362,8 +362,12 @@ design hinges on.
   so ripples never perturb the route), then a gentle slope on the *excess* Hs scaled by point of sail — a
   head sea slows most (`ROUTE_WAVE_K_UP`=0.04/m → ~6% at 2 m), a following sea least
   (`ROUTE_WAVE_K_DOWN`=0.01/m), capped by `ROUTE_WAVE_FLOOR`=0.6. Coefficients are PRIORS to be calibrated
-  from the boat's realized-polar archive (Lab-4), not trusted as-is. **Phase 2** wires a real Great-Lakes
-  wave provider (NOAA GLWU Hs via THREDDS, mirroring the GLOFS current provider).
+  from the boat's realized-polar archive (Lab-4), not trusted as-is. **Phase 2 wires the real provider
+  — `GLWUWave`:** NOAA GLWU (Great Lakes WAVEWATCH III) `HTSGW` (cfgrib `swh`) from the gridded 2.5 km
+  `grlc_2p5km` product via the NOMADS GRIB-filter (the wind-model machinery, not THREDDS/unstructured) —
+  one bbox download = every forecast hour (anl + hourly to ~149 h, 01/07/13/19Z cycles); curvilinear
+  nearest-in-space + linear-in-time; the cfgrib parse runs in an isolated subprocess; outside the
+  Great-Lakes domain / any miss → `ZeroWave`. `realized.wave_source` = `glwu`.
 - **Threaded everywhere** like currents: the main optimize, the per-model fan, and the playbook
   consensus + every variant. The result carries a `realized` roll-up (`realized_pct`, `helm_factor`,
   `sea_state_hs_mean`) + per-leg `realized_factor`; the cockpit shows a *realized %* stat, and the
@@ -374,13 +378,17 @@ design hinges on.
 
 Env-flagged + default no-op (helm 1.0 + flat water ⇒ geometry/ETA byte-identical to baseline). Verified
 `test_routing_realized.py` (wave factor shape + deadband + point-of-sail scaling + floor, helm slows the
-ETA and is reported, sea state degrades a beat more than a run, default == baseline) + the `use_waves`
-off-path (no realized correction). Tunables `ROUTE_WAVE_HS_DEADBAND` / `ROUTE_WAVE_K_UP` /
+ETA and is reported, sea state degrades a beat more than a run, default == baseline) + `test_routing_waves.py`
+(GLWUWave nearest + time-blend + NaN-land/out-of-grid → flat + peak + cycle-picker/URL + non-GL reject)
++ LIVE on the real Bayview Mackinac cove_island (GLWU 19Z, ~25 frames, ~0.4–0.8 m Hs, `realized` carries
+`wave_source:glwu`). Tunables `ROUTE_WAVE_HS_DEADBAND` / `ROUTE_WAVE_K_UP` /
 `ROUTE_WAVE_K_REACH` / `ROUTE_WAVE_K_DOWN` / `ROUTE_WAVE_FLOOR` / `WAVES_ENABLED` / `WAVES_CONST_HS` +
-per-run `use_waves`.
+per-run `use_waves` + the GLWU `WAVES_STEP_H` / `WAVES_MAX_SLICES` / `WAVES_FETCH_TIMEOUT` /
+`WAVES_PARSE_TIMEOUT` / `WAVES_CYCLE_LAG_H` / `WAVES_CYCLE_FALLBACKS` / `WAVES_GLWU_PRODUCT` knobs.
 
-- **Next:** phase 2 — the real Great-Lakes wave provider (GLWU Hs). Routing fidelity 2c/2e/2f/2g, the
-  GSHHG coastline backstop, water currents, and realized-speed phase 1 are **done**.
+- **Next:** wind-over-water correction (2nd-order); Debrief actual-track ingestion (GPX/YB → helm vs
+  optimal); Lab-3 onboard executor. Routing fidelity 2c/2e/2f/2g, the GSHHG coastline backstop, water
+  currents, and realized-speed **phases 1 + 2 (GLWU)** are **done**.
 
 ## Race documents (found 2026-06-17)
 

@@ -896,15 +896,26 @@ playbook result carries the LMHOFS `current` status). Tunables `CURRENTS_ENABLED
 `CURRENTS_MAX_SLICES` / `CURRENTS_FETCH_TIMEOUT` / `CURRENTS_CYCLE_LAG_H`.
 
 **Realized (achievable) speed — helm + sea state (routing-fidelity 2d lever d, fuzzy baseline): PHASE 1
-SHIPPED.** The ORC polar is a FLAT-WATER, perfectly-sailed target; the boat never quite makes it. The
-optimizer routes on **realized** speed = `polar × helm_factor × wave_factor(hs, twa)`, so ETAs are
-achievable (not theoretical) and the gap to the polar is a coaching number — the fuzzy-adherence
++ PHASE 2 SHIPPED.** The ORC polar is a FLAT-WATER, perfectly-sailed target; the boat never quite makes
+it. The optimizer routes on **realized** speed = `polar × helm_factor × wave_factor(hs, twa)`, so ETAs
+are achievable (not theoretical) and the gap to the polar is a coaching number — the fuzzy-adherence
 baseline (perflab §5). **Helm-skill factor**: `BoatProfile.helm_factor` (0–1, default 1.0, editable in
 the Gameplan boat panel as `Helm %`; the Lab-4 loop can refine it from real tracks). **Sea state**: a
 `WaveField` seam (`vps/lab/app/wave.py`) parallel to wind/current — `wave_at(lat,lon,epoch) → hs_m`;
-phase 1 ships the seam (`ZeroWave` default = no behaviour change + `ConstantWave`/`WAVES_CONST_HS`
-what-if), **phase 2** wires a real Great-Lakes wave provider (NOAA GLWU Hs via THREDDS, like the GLOFS
-current provider). The degradation MODEL (`optimizer._wave_factor`) is source-agnostic and
+phase 1 shipped the seam (`ZeroWave` default + `ConstantWave`/`WAVES_CONST_HS` what-if). **Phase 2 wires
+the real provider — `GLWUWave`:** NOAA **GLWU** (Great Lakes Wave model, WAVEWATCH III) significant wave
+height (`HTSGW` → cfgrib `swh`) from the gridded **2.5 km `grlc_2p5km`** product via the NOMADS
+**GRIB-filter** — the SAME machinery the wind models use, NOT the native unstructured mesh / THREDDS.
+ONE bbox-subset download carries every forecast hour (anl + hourly to ~149 h, run at the 01/07/13/19Z
+cycles) in a single multi-message GRIB, so a build is one HTTP fetch + one parse; the cfgrib parse runs
+in an ISOLATED subprocess (a native eccodes segfault degrades to a skipped field, not a dead worker —
+mirrors `wind/grib.IsolatedGribParser`). The grid is curvilinear → nearest-neighbour in space + linear
+in time (NaN cells = land → flat); freshest-cycle pick (clamped to `now` so a future race still reaches
+forward) with step-back fallback; outside the Great-Lakes domain / any miss → `ZeroWave` (route
+unchanged). The `realized` roll-up gains `wave_source` (`glwu`), surfaced in the briefing. Tunables
+`WAVES_STEP_H` / `WAVES_MAX_SLICES` / `WAVES_FETCH_TIMEOUT` / `WAVES_PARSE_TIMEOUT` / `WAVES_CYCLE_LAG_H`
+/ `WAVES_CYCLE_FALLBACKS` / `WAVES_GLWU_PRODUCT`. The degradation MODEL (`optimizer._wave_factor`) is
+source-agnostic and
 **deliberately CONSERVATIVE** (under-correcting beats distorting the route on an uncalibrated guess): a
 low-Hs **deadband** (`ROUTE_WAVE_HS_DEADBAND`=0.5 m — small chop costs NOTHING, so ripples never perturb
 the route), then a gentle linear slope on the *excess* Hs scaled by point of sail (head sea hurts most
@@ -918,9 +929,13 @@ consensus/variants (helm read from the active boat via `boats.active_helm_factor
 cockpit shows a *realized %* stat and the briefing states "routing at ~N% of the flat-water polar".
 Default no-op (helm 1.0 + flat water ⇒ geometry/ETA byte-identical). Verified `test_routing_realized.py`
 (wave-factor shape + deadband + point-of-sail scaling + floor, helm slows + is reported, sea state
-degrades a beat more than a run, default == baseline) + in-container + Playwright. Tunables
+degrades a beat more than a run, default == baseline) + new `test_routing_waves.py` (GLWUWave nearest +
+time-blend + NaN-land/out-of-grid → flat + peak + the cycle picker/URL + non-GL domain reject) + LIVE on
+the real Bayview Mackinac cove_island (GLWU 19Z, ~25 frames, realistic ~0.4–0.8 m Hs, `realized` carries
+`wave_source:glwu`, the briefing states "sea state ~0.6 m (GLWU)"). Tunables
 `ROUTE_WAVE_HS_DEADBAND` / `ROUTE_WAVE_K_UP` / `ROUTE_WAVE_K_REACH` / `ROUTE_WAVE_K_DOWN` /
-`ROUTE_WAVE_FLOOR` / `WAVES_ENABLED` / `WAVES_CONST_HS` + the per-run `use_waves`.
+`ROUTE_WAVE_FLOOR` / `WAVES_ENABLED` / `WAVES_CONST_HS` + the per-run `use_waves` + the phase-2 `WAVES_*`
+GLWU knobs above.
 
 **Over-correction guards (why this won't distort the route):** discussed 2026-06-30 — the model can't run
 away (deadband + floor + conservative slopes; ~6% upwind at 2 m, downwind barely touched), it's OFF by
