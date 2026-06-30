@@ -951,6 +951,31 @@ join the Control Center. VERIFIED live on the real cove_island course (GLWU 01Z,
 canvas paints 1335 pixel-samples ON and exactly that many fewer OFF, slider scrub repaints, ZERO console
 errors). Tunable `WAVE_GRID_MIN_HS`. Files: wave.py, main.py, web/mapview.js.
 
+**Debrief — ACTUAL-track ingestion (helm vs optimal, Lab-4 enrichment): SHIPPED 2026-06-30.** The judge
+loop (`app/judge.py`) re-routes on the wind that actually blew (ORACLE) → regret; `app/track.py` adds the
+boat's REAL sailed track scored against that oracle line — the perflab §5 fuzzy-adherence metrics: time
+behind optimal, oversail %, XTE off the optimal route, the first-beat side the boat actually WORKED, and
+% of the flat-water polar the helm achieved (actual SOG vs the polar target at the realized wind). These
+are coaching deltas, never pass/fail; the Opus critique separates tactical vs helm-execution vs
+conditions, and `score_track` self-flags non-physical readings (>100% polar ≈ favorable current / soft
+ORC rating; "faster than oracle" ≈ oracle-window mismatch). **Two inputs:** **GPX upload** (`POST
+/api/debrief/track/upload`, multipart — namespace-agnostic trkpt parse, sog/cog derived) and **YB
+our-boat** (`POST /api/debrief/track/fetch {race_id,boat}`) — the JSON GetPositions feed has only the
+LATEST fix, so the full track comes from the **delta-encoded AllPositions3 binary**, reverse-engineered +
+verified (`_decode_allpositions3`: per-team `[i32 lat][i32 lon][u32 0]` + 8-byte delta records
+`[u16 dt|0x8000][i16 dlat][i16 dlon][u16]`, deg×1e5, stored newest-first, self-resyncing per-block).
+Our boat is matched by its GetPositions latest fix (self-validating) → RaceSetup team-index fallback. One
+stored track per race (`_track_<id>.json` on the ingested volume, `_`-prefixed so the race library skips
+it); `GET /api/debrief/track` + `/track/clear`. The Debrief tab gains a **Boat track** card + a **Helm vs
+optimal** scorecard; `run_judge` fills the `actual_track` slot + feeds the critique. Shore-side debrief
+use of a public tracker is fine (the in-race `tracker_permitted` gate is separate). Verified
+`test_routing_track.py` (synthetic AllPositions3 round-trip + 2-team resync + GPX + scoring + caveats) +
+LIVE decode of real bayviewmack2025 (Illuminati Port Huron→Mackinac, 1081 fixes, decoded finish ==
+GetPositions latest) + end-to-end (GPX → judge → scorecard, 77 s, Playwright UI, 0 console errors) +
+2c/2g/realized regression green. YB fetch awaits the live bayviewmack2026 feed (~July 2026) for a
+final on-our-own-boat check. Tunable `TRACK_YB_TIMEOUT_S`. Files: track.py (new), judge.py, main.py,
+web/{app.js,styles reuse}, test_routing_track.py (new).
+
 **Over-correction guards (why this won't distort the route):** discussed 2026-06-30 — the model can't run
 away (deadband + floor + conservative slopes; ~6% upwind at 2 m, downwind barely touched), it's OFF by
 default until a real wave field exists (phase 2) and per-run opt-out-able, and the route-*reshaping*

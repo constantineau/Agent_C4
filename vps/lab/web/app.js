@@ -1743,7 +1743,7 @@ function initMonitorMap() {
 }
 
 /* ---------- Debrief (Lab-4 post-race judge loop) ---------- */
-const Deb = { raceId: null, playbookId: null, playbooks: null, running: false, report: null };
+const Deb = { raceId: null, playbookId: null, playbooks: null, running: false, report: null, track: null, trackBusy: false, trackMsg: "" };
 
 async function renderDebrief() {
   const view = document.getElementById("view");
@@ -1758,7 +1758,62 @@ async function renderDebrief() {
   catch (e) { Deb.playbooks = []; }
   if (stale("debrief")) return;
   if (!Deb.playbookId || !Deb.playbooks.some((b) => b.id === Deb.playbookId)) Deb.playbookId = (Deb.playbooks[0] || {}).id || null;
+  try { Deb.track = await (await apiGet("/api/debrief/track?race_id=" + encodeURIComponent(Deb.raceId))).json(); }
+  catch (e) { Deb.track = null; }
+  if (stale("debrief")) return;
   paintDebrief();
+}
+
+// Boat-track card: upload a GPX or fetch our YB track, then "Run debrief" scores helm vs optimal.
+function debTrackCard() {
+  const t = Deb.track || {};
+  const status = t.available
+    ? `<span class="pill ok">track loaded</span> <span class="muted">${esc(t.source === "yb" ? "YB" : "GPX")}${t.boat ? " · " + esc(t.boat) : ""} · ${t.n} fixes${t.matched_by ? " · " + esc(t.matched_by) : ""}</span>`
+    : `<span class="muted">No boat track yet — upload a GPX export or fetch our YB track.</span>`;
+  return `<div class="card">
+    <h3>Boat track <span class="muted" style="font-weight:400">— the real sailed line, scored vs the oracle (helm execution)</span></h3>
+    <div style="margin:4px 0 8px">${status} ${t.available ? '<button class="mini" onclick="debClearTrack()">Remove</button>' : ""}</div>
+    <div class="opt-controls">
+      <label>GPX <input type="file" id="debGpx" accept=".gpx,application/gpx+xml,text/xml"></label>
+      <button onclick="debUploadGpx()" ${Deb.trackBusy ? "disabled" : ""}>Upload GPX</button>
+      <span class="muted">or</span>
+      <label>Our boat <input id="debBoat" placeholder="boat name in the YB feed" style="width:200px"></label>
+      <button onclick="debFetchYb()" ${Deb.trackBusy ? "disabled" : ""}>${Deb.trackBusy ? "Fetching…" : "Fetch from YB tracker"}</button>
+    </div>
+    <div class="muted" style="font-size:12px;margin-top:4px">GPX: export the track from Expedition / a Vakaros / your instruments / a phone (offline, always works). YB: pulls our boat's full track from the permitted public tracker (shore-side debrief use). ${Deb.trackMsg ? '<b>' + esc(Deb.trackMsg) + '</b>' : ""}</div>
+  </div>`;
+}
+
+async function debUploadGpx() {
+  const f = document.getElementById("debGpx").files[0];
+  if (!f) { Deb.trackMsg = "Choose a .gpx file first."; return paintDebrief(); }
+  Deb.trackBusy = true; Deb.trackMsg = ""; paintDebrief();
+  try {
+    const fd = new FormData(); fd.append("file", f);
+    const r = await (await api("/api/debrief/track/upload?race_id=" + encodeURIComponent(Deb.raceId), { method: "POST", body: fd })).json();
+    Deb.trackMsg = r.ok ? `Loaded ${r.n} fixes from ${f.name}.` : (r.detail || "upload failed");
+  } catch (e) { Deb.trackMsg = "upload failed"; }
+  Deb.trackBusy = false;
+  Deb.track = await (await apiGet("/api/debrief/track?race_id=" + encodeURIComponent(Deb.raceId))).json();
+  paintDebrief();
+}
+
+async function debFetchYb() {
+  const boat = document.getElementById("debBoat").value.trim();
+  Deb.trackBusy = true; Deb.trackMsg = ""; paintDebrief();
+  try {
+    const r = await (await apiPost("/api/debrief/track/fetch", { race_id: Deb.raceId, boat })).json();
+    Deb.trackMsg = r.ok ? `Fetched ${r.n} fixes for ${esc(r.boat || boat)} (${r.matched_by || "matched"}).`
+      : (r.note || r.detail || "fetch failed") + (r.boats ? " — boats: " + r.boats.slice(0, 20).join(", ") : "");
+  } catch (e) { Deb.trackMsg = "fetch failed"; }
+  Deb.trackBusy = false;
+  Deb.track = await (await apiGet("/api/debrief/track?race_id=" + encodeURIComponent(Deb.raceId))).json();
+  paintDebrief();
+}
+
+async function debClearTrack() {
+  await apiPost("/api/debrief/track/clear", { race_id: Deb.raceId });
+  Deb.track = { available: false }; Deb.trackMsg = "Track removed."; paintDebrief();
 }
 
 async function debPickRace(id) { Deb.raceId = id; Lab.sel = id; Deb.report = null; Deb.playbookId = null; renderDebrief(); }
@@ -1799,7 +1854,33 @@ function paintDebrief() {
       </div>
       <div class="muted" style="font-size:12px;margin-top:4px">The optimizer re-routes the course on the wind that actually blew (oracle) and compares it to the plan you carried — which side paid, the regret vs perfect foresight, and a coach's critique you can promote into Learnings.</div>
     </div>
+    ${debTrackCard()}
     ${body}
+  </div>`;
+}
+
+function debTrackScore(at) {
+  if (!at.available) {
+    return `<div class="card"><h3>Helm vs optimal</h3><div class="placeholder">${esc(at.note || "Upload a GPX or fetch our YB track above, then run the debrief.")}</div></div>`;
+  }
+  const tb = at.time_behind_optimal_min;
+  const tbTxt = tb == null ? "—" : (tb >= 0 ? tb + " min behind optimal" : Math.abs(tb) + " min faster than the oracle line");
+  const row = (label, val) => `<div class="dep-row"><b style="min-width:150px;display:inline-block">${label}</b> ${val}</div>`;
+  const pol = at.polar_pct == null ? null
+    : `<span class="pill ${at.polar_pct > 108 ? "warn" : at.polar_pct >= 90 ? "ok" : "bad"}">${at.polar_pct}% of polar</span> <span class="muted">(${at.polar_samples} samples${at.polar_pct > 108 ? " · &gt;100% ≈ current/soft rating" : ""})</span>`;
+  const cav = (at.caveats || []).length
+    ? `<div class="banner warn" style="margin-top:8px;font-size:12px">${at.caveats.map(esc).join("<br>")}</div>` : "";
+  return `<div class="card">
+    <h3>Helm vs optimal <span class="muted" style="font-weight:400">— ${esc(at.source === "yb" ? "YB track" : "GPX track")}${at.boat ? " · " + esc(at.boat) : ""} · ${at.fixes_scored}/${at.fixes_total} fixes scored</span></h3>
+    <div class="dep-grid">
+      ${row("Time behind optimal", `${tbTxt} <span class="muted">(sailed ${at.elapsed_hours != null ? at.elapsed_hours.toFixed(1) + " h" : "—"} vs oracle ${at.oracle_hours != null ? at.oracle_hours.toFixed(1) + " h" : "—"})</span>`)}
+      ${row("Distance sailed", `${at.sailed_nm} nm` + (at.extra_distance_pct != null ? ` · <b>${at.extra_distance_pct}% over</b> the optimal ${at.optimal_nm != null ? at.optimal_nm + " nm" : ""}` : "") + (at.rhumb_nm ? ` <span class="muted">(rhumb ${at.rhumb_nm} nm)</span>` : ""))}
+      ${row("Cross-track off optimal", at.xte_mean_nm != null ? `mean ${at.xte_mean_nm} nm · p90 ${at.xte_p90_nm} nm · max ${at.xte_max_nm} nm` : "—")}
+      ${row("First beat worked", `<b>${esc(at.side_worked || "—")}</b>`)}
+      ${pol ? row("Polar achieved", pol) : ""}
+    </div>
+    ${cav}
+    <div class="muted" style="font-size:11px;margin-top:6px">The boat never sails the optimal line exactly — these are coaching deltas. Oversail + cross-track = steering/tactics; polar% = helm/trim vs conditions. The critique above separates the causes.</div>
   </div>`;
 }
 
@@ -1828,8 +1909,8 @@ function debReport(r) {
       ${c.key_lesson ? `<p style="margin:4px 0"><b>Lesson:</b> ${esc(c.key_lesson)}</p>` : ""}
       ${c.brain_edit ? `<p style="margin:4px 0"><b>Onboard-brain edit:</b> ${esc(c.brain_edit)}</p>` : ""}
       ${c.boat_model_note ? `<p style="margin:4px 0"><b>Boat model:</b> ${esc(c.boat_model_note)}</p>` : ""}
-      <div class="muted" style="font-size:11px;margin-top:6px">Actual boat-track scoring (helm vs optimal) — ${esc((r.actual_track || {}).note || "future")}.</div>
     </div>
+    ${debTrackScore(r.actual_track || {})}
     <div class="card">
       <h3>Write-back → Learnings <span class="muted" style="font-weight:400">— review, then promote to the next prep</span></h3>
       <textarea id="debLearn" rows="3" style="width:100%;box-sizing:border-box">${esc(c.proposed_learnings || "")}</textarea>

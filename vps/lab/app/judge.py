@@ -19,7 +19,7 @@ import time
 
 from shared import race_def
 
-from . import store, pbstore, optimizer
+from . import store, pbstore, optimizer, track
 
 MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-8")
 API_KEY = os.environ.get("ANTHROPIC_API_KEY")
@@ -146,8 +146,7 @@ def run_judge(race_id, playbook_id=None, models=None, on_progress=None):
                    "side_matched": (rec_side == side_paid),
                    "winning_variant": winning},
         "windfield": wf.status(),
-        "actual_track": {"available": False,
-                         "note": "boat track ingestion (helm-execution scoring vs optimal) is the next enrichment"},
+        "actual_track": _score_actual_track(race_id, oracle, marks, start, wf),
         "caveat": "Oracle wind is the best-available GRIB over the race window; a true post-race judge "
                   "uses reanalysis/analysis fields. For a future/near race this is forecast-grade, so "
                   "regret reflects forecast drift, not full hindsight.",
@@ -155,6 +154,20 @@ def run_judge(race_id, playbook_id=None, models=None, on_progress=None):
     log("writing the critique…")
     report["critique"] = _critique(report) or _deterministic_critique(report)
     return report
+
+
+def _score_actual_track(race_id, oracle, marks, start_epoch, wf):
+    """Score the boat's stored ACTUAL track vs the oracle line (helm execution), if one is uploaded/
+    fetched. Returns the actual_track block for the report; a no-track default keeps the slot honest."""
+    t = track.load_track(race_id)
+    if not t or not t.get("fixes"):
+        return {"available": False,
+                "note": "no boat track for this race — upload a GPX or fetch our YB track below"}
+    try:
+        from . import polars as POL
+        return track.score_track(t, oracle, marks, start_epoch, wf=wf, polars=POL.polars_stw())
+    except Exception as e:
+        return {"available": False, "note": f"track scoring failed: {type(e).__name__}"}
 
 
 def _deterministic_critique(r):
@@ -171,35 +184,68 @@ def _deterministic_critique(r):
                   "pointed the other way" + (f" — about {abs(mins)} min of regret vs perfect foresight." if mins is not None else "."))
         lesson = (f"{side_paid} paid, not the recommended {rec}. Watch the first-beat trigger more "
                   "aggressively next time; the branch to {side_paid} should have fired.")
+    at = r.get("actual_track") or {}
+    note = ""
+    if at.get("available"):
+        bits = []
+        if at.get("time_behind_optimal_min") is not None:
+            bits.append(f"{at['time_behind_optimal_min']} min behind the oracle line")
+        if at.get("extra_distance_pct") is not None:
+            bits.append(f"{at['extra_distance_pct']}% oversail")
+        if at.get("polar_pct") is not None:
+            bits.append(f"{at['polar_pct']}% of polar")
+        if at.get("side_worked"):
+            sw = at["side_worked"]
+            bits.append(f"worked the {sw} side" + (" (= the side that paid)" if sw == side_paid else f", paid was {side_paid}"))
+        if bits:
+            note = " Boat track: " + ", ".join(bits) + "."
+        assess += note
     return {"assessment": assess, "key_lesson": lesson,
             "proposed_learnings": f"[{r['race_name']}] First beat: {side_paid} paid"
                                   + (f" (recommended {rec})" if not matched else "")
-                                  + (f"; regret ~{mins} min vs optimal." if mins is not None else "."),
+                                  + (f"; regret ~{mins} min vs optimal." if mins is not None else ".")
+                                  + (f" Sailed {at['extra_distance_pct']}% over optimal at {at.get('polar_pct','?')}% of polar."
+                                     if at.get("available") and at.get("extra_distance_pct") is not None else ""),
             "brain_edit": ("Tighten the first-beat side trigger — bias toward switching when early "
                            f"pressure shows on the {side_paid} side.") if not matched else
                           "Keep the current first-beat read; it matched the outcome.",
-            "boat_model_note": "", "model": "deterministic"}
+            "boat_model_note": ("Helm achieved only %d%% of polar — consider lowering the boat's "
+                                "helm_factor toward that, and review trim/steering in the debrief."
+                                % at["polar_pct"]) if (at.get("available") and at.get("polar_pct") and at["polar_pct"] < 92) else "",
+            "model": "deterministic"}
 
 
 def _critique(r):
     if not API_KEY:
         return None
+    at = r.get("actual_track") or {}
     facts = {
         "race": r["race_name"], "playbook": r["playbook"], "oracle": {
             "favored_side": r["oracle"]["favored_side"], "total_hours": r["oracle"]["total_hours"]},
         "regret": r["regret"], "caveat": r["caveat"],
     }
+    if at.get("available"):
+        facts["actual_track"] = {k: at.get(k) for k in (
+            "source", "elapsed_hours", "time_behind_optimal_min", "sailed_nm", "optimal_nm",
+            "extra_distance_pct", "xte_mean_nm", "xte_p90_nm", "xte_max_nm", "side_worked",
+            "polar_pct", "polar_samples")}
     system = (
         "You are an expert yacht-racing coach running a POST-RACE DEBRIEF (the judge loop). You are "
         "given the frozen pre-race PLAYBOOK we carried (recommended first-beat side + variants) and the "
         "ORACLE result — the hindsight-optimal route on the wind that actually blew (which side paid, "
-        "the optimal time) — plus the REGRET (plan vs perfect foresight). Judge the PROCESS, not just "
-        "the outcome: a good +EV call that didn't pay is still a good call. Be concrete, concise, no "
-        "preamble. Return STRICT JSON only with keys: assessment (2-3 sentences on what the plan got "
-        "right/wrong), key_lesson (one sentence), proposed_learnings (one bullet to add to the boat's "
-        "Learnings for the next regatta), brain_edit (a concrete adjustment to the onboard decision "
-        "brain — how to weight the first-beat side trigger next time), boat_model_note (any polar/"
-        "crossover refinement suggested, else empty string).")
+        "the optimal time) — plus the REGRET (plan vs perfect foresight). When ACTUAL_TRACK is present "
+        "you also have the boat's REAL sailed track scored vs the oracle line: time_behind_optimal_min, "
+        "extra_distance_pct (oversail), XTE off the optimal route, the first-beat side the boat actually "
+        "WORKED (vs the side that paid / we recommended), and polar_pct (% of the flat-water polar the "
+        "helm achieved). SEPARATE three causes: tactical (wrong side/strategy), helm execution (low "
+        "polar_pct, high XTE, oversail = steering/trim/sail-handling), and conditions/luck. The boat "
+        "NEVER sails the optimal line exactly — these are coaching deltas, not pass/fail; judge PROCESS "
+        "not just outcome (a good +EV call that didn't pay is still good). Be concrete, concise, no "
+        "preamble. Return STRICT JSON only with keys: assessment (2-3 sentences on what the plan + helm "
+        "got right/wrong), key_lesson (one sentence), proposed_learnings (one bullet to add to the "
+        "boat's Learnings for the next regatta), brain_edit (a concrete adjustment to the onboard "
+        "decision brain — how to weight the first-beat side trigger next time), boat_model_note (any "
+        "polar/crossover/helm_factor refinement the track suggests, else empty string).")
     try:
         import anthropic
         client = anthropic.Anthropic(api_key=API_KEY)

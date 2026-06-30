@@ -21,7 +21,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from shared import race_def, boat_profile
-from . import auth, store, extract, boats, labstate, feedback, pbstore, deploy, monitor, judge
+from . import auth, store, extract, boats, labstate, feedback, pbstore, deploy, monitor, judge, track
 
 INGESTED_DIR = os.environ.get("INGESTED_DIR", "/srv/ingested")
 
@@ -592,6 +592,52 @@ async def debrief_apply(body: dict):
     if not race_id:
         return JSONResponse({"detail": "race_id required"}, status_code=400)
     return await run_in_threadpool(judge.apply_writeback, race_id, (body or {}).get("learnings"))
+
+
+# ---- Debrief: ACTUAL boat-track ingestion (GPX upload / YB our-boat) → helm-vs-optimal scoring ---
+@app.get("/api/debrief/track")
+async def debrief_track_get(race_id: str):
+    t = track.load_track(race_id)
+    if not t:
+        return {"available": False}
+    fixes = t.get("fixes") or []
+    return {"available": True, "source": t.get("source"), "boat": t.get("boat"),
+            "matched_by": t.get("matched_by"), "n": len(fixes),
+            "fixes": [[f["lat"], f["lon"]] for f in fixes]}   # lightweight polyline for the map
+
+
+@app.post("/api/debrief/track/upload")
+async def debrief_track_upload(race_id: str, file: UploadFile = File(...)):
+    if not store.get_race(race_id):
+        return JSONResponse({"detail": "unknown race"}, status_code=404)
+    raw = await file.read()
+    try:
+        trk = await run_in_threadpool(track.parse_gpx, raw)
+    except ValueError as e:
+        return JSONResponse({"detail": str(e)}, status_code=400)
+    meta = await run_in_threadpool(track.save_track, race_id, trk)
+    return {"ok": True, **meta}
+
+
+@app.post("/api/debrief/track/fetch")
+async def debrief_track_fetch(body: dict):
+    race_id = (body or {}).get("race_id")
+    d = store.get_race(race_id) if race_id else None
+    if not d:
+        return JSONResponse({"detail": "unknown race"}, status_code=404)
+    res = await run_in_threadpool(track.fetch_yb_track, d, (body or {}).get("boat"))
+    if not res.get("ok"):
+        return JSONResponse(res, status_code=502 if "failed" in (res.get("note") or "") else 200)
+    meta = await run_in_threadpool(track.save_track, race_id, res)
+    return {"ok": True, **meta}
+
+
+@app.post("/api/debrief/track/clear")
+async def debrief_track_clear(body: dict):
+    race_id = (body or {}).get("race_id")
+    if not race_id:
+        return JSONResponse({"detail": "race_id required"}, status_code=400)
+    return {"ok": await run_in_threadpool(track.clear_track, race_id)}
 
 
 # ---- Monitor (shore-side live view: fleet via public tracker + our boat via cloud telemetry) --
