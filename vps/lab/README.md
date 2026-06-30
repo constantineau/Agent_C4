@@ -421,6 +421,28 @@ two-team resync + GPX + scoring math + caveats) + a LIVE decode of the real bayv
 (Illuminati Port Huron→Mackinac) + end-to-end (GPX upload → judge → scorecard, Playwright UI).
 Tunables `TRACK_YB_TIMEOUT_S`.
 
+## Fleet roster auto-import — public entry list (YB) + ORC handicaps
+
+The fleet roster (competitor names + ORC handicaps — the corrected-time tactics homework) used to be
+hand-entered. Both halves are public, so `app/fleetimport.py` automates them:
+- **Entry list = the YB tracker `RaceSetup`** (the same feed we decode for the boat track): per-team
+  name, sail number, owner/skipper, model → the roster identities. One fetch, reusing the race's
+  `tracker` block.
+- **Handicaps = the ORC public certificate DB** (`data.orc.org/public/WPub.dll?action=DownRMS&
+  CountryId=<cc>&ext=json`, decoded utf-8-sig, cached `ORC_CACHE_TTL_S`): every active national cert
+  with GPH + ToT/ToD coefficients — incl. **race-specific columns** (Bayview Mackinac's
+  `US_BAYMAC_CV/SH_TOT`, picked by race+course via `_RACE_ORC_COLS`, else the generic `TMF_Offshore`).
+  Matched to the entry list by **sail number → yacht name**; each entry gets a match badge, unmatched
+  boats keep their identity for hand-entry.
+`POST /api/fleet/import {race_id, source: yb|orc|both, country?, course_id?}` returns a DRAFT roster
+(with match stats + an unmatched list) — the human reviews/edits it in the Fleet tab and Saves via
+`POST /api/races` (nothing auto-committed, same as all Lab ingestion). `FleetEntry` gained `sail` +
+`source`. The Fleet tab gains an **Auto-import** card (entry-list + ORC / entry-only / ORC-enrich +
+country) and a Sail # column. Verified `test_fleet_import.py` (entry-list parse + sail/name ORC match +
+race-specific column + unmatched fallback) + LIVE (real bayviewmack2025: 108 entries, 58 ORC-matched
+against 653 USA certs; the rest flagged — 2025 certs have lapsed, the live 2026 race will match better).
+A dormant race (2026 not yet published) degrades gracefully to a "paste the entry list" note.
+
 ## Lab-4 learning loop — ongoing performance archive + HUMAN-APPROVED boat-model refinement
 
 `app/learning.py` closes the loop: turn the accumulating debrief record into a better boat model,

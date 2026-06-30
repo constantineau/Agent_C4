@@ -1020,6 +1020,21 @@ Verified: `test_routing_track.test_current_correction` (SOG 9→STW 7 fair, 5→
 soft-boat HTTP e2e (helm 1.0→1.11 → active_helm_factor 1.11) + Playwright (0 errors). Files: track.py,
 judge.py (builds CurrentField), learning.py, boats.py, optimizer.py, web/app.js, both test files.
 
+**FLEET ROSTER AUTO-IMPORT — public entry list (YB) + ORC handicaps: SHIPPED 2026-06-30.** The fleet
+roster (competitor names + ORC handicaps, the corrected-time tactics homework) was hand-entered; both
+halves are public. `app/fleetimport.py`: (1) **entry list = the YB `RaceSetup`** (same feed we decode for
+the track) → per-team name/sail#/owner/model; (2) **handicaps = the ORC public cert DB**
+(`data.orc.org/public/WPub.dll?action=DownRMS&CountryId=<cc>&ext=json`, utf-8-sig, cached) with GPH +
+ToT/ToD incl. race-specific columns (Bayview's `US_BAYMAC_CV/SH_TOT` picked by race+course, else generic
+`TMF_Offshore`), matched by sail#→yacht-name. `POST /api/fleet/import {race_id,source,country,course_id}`
+returns a DRAFT roster (match stats + unmatched list); the human reviews/edits in the Fleet tab and Saves
+— nothing auto-committed (FleetEntry gained `sail`+`source`; Fleet tab gained an Auto-import card + Sail#
+column). Verified `test_fleet_import.py` (entry parse + sail/name match + race-specific column + unmatched
+fallback) + LIVE (real bayviewmack2025: 108 entries, 58 ORC-matched / 653 USA certs — lapsed 2025 certs
+explain the rest; the live 2026 race matches better) + Playwright (card renders, 0 errors). Dormant race
+(2026 unpublished) degrades to a "paste the entry list" note. Files: fleetimport.py(new),
+shared/race_def.py (FleetEntry sail/source + fleet_blob), main.py, web/app.js, test_fleet_import.py(new).
+
 **Over-correction guards (why this won't distort the route):** discussed 2026-06-30 — the model can't run
 away (deadband + floor + conservative slopes; ~6% upwind at 2 m, downwind barely touched), it's OFF by
 default until a real wave field exists (phase 2) and per-run opt-out-able, and the route-*reshaping*

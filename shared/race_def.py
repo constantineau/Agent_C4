@@ -147,9 +147,11 @@ class FleetEntry:
     division: str = ""
     cls: str = ""
     owner: str = ""
+    sail: str = ""                                    # sail number — entry-list ID + ORC-cert match key
     orc_gph: Optional[float] = None
     rating: Optional[float] = None
     mmsi: Optional[str] = None
+    source: str = ""                                  # how this entry/handicap was sourced (yb/orc/manual)
 
 
 @dataclass
@@ -374,6 +376,7 @@ def fleet_blob(definition: dict, own: dict = None) -> dict:
     for e in definition.get("fleet", []) or []:
         roster.append({"boat": e.get("boat"), "division": e.get("division", ""),
                        "cls": e.get("cls", ""), "owner": e.get("owner", ""),
+                       "sail": e.get("sail", ""),
                        "orc_gph": e.get("orc_gph"), "rating": e.get("rating"),
                        "mmsi": e.get("mmsi")})
     rp = definition.get("rules_profile") or {}

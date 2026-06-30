@@ -21,7 +21,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from shared import race_def, boat_profile
-from . import auth, store, extract, boats, labstate, feedback, pbstore, deploy, monitor, judge, track, learning
+from . import auth, store, extract, boats, labstate, feedback, pbstore, deploy, monitor, judge, track, learning, fleetimport
 
 INGESTED_DIR = os.environ.get("INGESTED_DIR", "/srv/ingested")
 
@@ -688,6 +688,20 @@ async def learning_apply(pid: int, body: dict = None):
 @app.post("/api/learning/proposals/{pid}/reject")
 async def learning_reject(pid: int, body: dict = None):
     return await run_in_threadpool(learning.reject_proposal, pid, (body or {}).get("note", ""))
+
+
+# ---- Fleet roster auto-import (public data: YB entry list + ORC handicaps) → DRAFT for review ----
+@app.post("/api/fleet/import")
+async def fleet_import(body: dict):
+    """Build a DRAFT fleet roster from public data — YB RaceSetup entry list + ORC cert handicaps.
+    Returns the proposed roster (with match stats); the human reviews/edits in the Fleet tab and
+    Saves via POST /api/races (nothing is auto-committed). Body: {race_id, source?, country?, course_id?}."""
+    race_id = (body or {}).get("race_id")
+    d = store.get_race(race_id) if race_id else None
+    if not d:
+        return JSONResponse({"detail": "unknown race"}, status_code=404)
+    return await run_in_threadpool(fleetimport.import_fleet, d, (body or {}).get("source", "both"),
+                                   (body or {}).get("country", "USA"), (body or {}).get("course_id"))
 
 
 # ---- Monitor (shore-side live view: fleet via public tracker + our boat via cloud telemetry) --

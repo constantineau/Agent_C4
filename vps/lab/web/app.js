@@ -1389,8 +1389,28 @@ async function renderFleet() {
 async function fleetPickRace(id) { Lab.sel = id; Lab.editDef = null; renderFleet(); }
 function fleetSet(i, f, v) { if (Lab.editDef && Lab.editDef.fleet[i]) Lab.editDef.fleet[i][f] = v; }
 function fleetOwnSet(f, v) { if (!Lab.editDef) return; if (!Lab.editDef.own) Lab.editDef.own = {}; Lab.editDef.own[f] = v; }
-function fleetAddRow() { Lab.editDef.fleet.push({ boat: "", division: "", cls: "", owner: "", orc_gph: null, rating: null, mmsi: "" }); paintFleet(); }
+function fleetAddRow() { Lab.editDef.fleet.push({ boat: "", division: "", cls: "", owner: "", sail: "", orc_gph: null, rating: null, mmsi: "", source: "manual" }); paintFleet(); }
 function fleetRemove(i) { Lab.editDef.fleet.splice(i, 1); paintFleet(); }
+
+// Auto-import the roster from public data: 'yb' = the tracker's entry list, 'orc' = enrich the current
+// roster with ORC handicaps, 'both' = entry list → handicaps. Replaces the draft roster for review.
+async function fleetAutoImport(source) {
+  const m = document.getElementById("fleetMsg"); if (m) m.textContent = "Importing from public data… (YB / ORC)";
+  Lab.fleetBusy = true; paintFleet();
+  try {
+    const r = await (await apiPost("/api/fleet/import", { race_id: Lab.sel, source,
+      country: (document.getElementById("fleetOrcCC") || {}).value || "USA" })).json();
+    Lab.fleetBusy = false;
+    if (!r.ok) { Lab.fleetMsg = r.note || r.detail || "import failed"; paintFleet(); return; }
+    Lab.editDef.fleet = r.entries || [];
+    const bits = [`${r.count} boats`];
+    if (r.matched != null) bits.push(`${r.matched}/${r.total} matched to ORC certs`);
+    if (r.unmatched && r.unmatched.length) bits.push(`${r.unmatched.length} need a handicap by hand`);
+    if (r.orc_error) bits.push("ORC lookup failed: " + r.orc_error);
+    Lab.fleetMsg = "Imported " + bits.join(" · ") + " — review, then Save.";
+  } catch (e) { Lab.fleetBusy = false; Lab.fleetMsg = "import failed: " + e.message; }
+  paintFleet();
+}
 
 // Parse a pasted entry list — one boat per line, comma- or tab-separated:
 // boat, division, rating, GPH, MMSI  (a header row is skipped; only boat is required).
@@ -1403,8 +1423,8 @@ function fleetImport() {
     const c = line.split(/\t|,/).map((s) => s.trim());
     if (/^(boat|name|yacht)$/i.test(c[0])) continue;        // header
     if (!c[0]) continue;
-    Lab.editDef.fleet.push({ boat: c[0], division: c[1] || "", cls: "", owner: "",
-      rating: fleetNum(c[2]), orc_gph: fleetNum(c[3]), mmsi: (c[4] || "").trim() });
+    Lab.editDef.fleet.push({ boat: c[0], division: c[1] || "", cls: "", owner: "", sail: "",
+      rating: fleetNum(c[2]), orc_gph: fleetNum(c[3]), mmsi: (c[4] || "").trim(), source: "manual" });
     added++;
   }
   if (ta) ta.value = "";
@@ -1416,6 +1436,7 @@ async function fleetSave() {
   // coerce numerics so the persisted JSON is clean (orc_gph/rating numbers|null)
   Lab.editDef.fleet = Lab.editDef.fleet.filter((e) => (e.boat || "").trim()).map((e) => ({
     boat: e.boat.trim(), division: e.division || "", cls: e.cls || "", owner: e.owner || "",
+    sail: (e.sail || "").trim(), source: e.source || "manual",
     orc_gph: fleetNum(e.orc_gph), rating: fleetNum(e.rating), mmsi: (e.mmsi || "").trim() }));
   const own = Lab.editDef.own || {};
   Lab.editDef.own = { boat: (own.boat || "").trim(), division: own.division || "",
@@ -1434,16 +1455,24 @@ function paintFleet() {
   const d = Lab.editDef, roster = d.fleet || [], own = d.own || {};
   const rp = d.rules_profile || {}, sc = rp.scoring || {}, tr = d.tracker || {};
   const inp = (val, ph, oninput, w) => `<input class="ein" style="width:${w}px" placeholder="${esc(ph)}" value="${esc(val == null ? "" : val)}" oninput="${oninput}">`;
+  const srcBadge = (e) => {
+    const s = e.source || "";
+    if (!s || s === "manual") return "";
+    const orc = s.includes("orc");
+    return ` <span class="pill ${orc ? "ok" : "warn"}" title="${esc(orc ? "handicap from ORC cert" : "entry from YB; no ORC handicap match — fill by hand")}" style="font-size:9px;padding:1px 5px">${orc ? "ORC" : "YB"}</span>`;
+  };
   const row = (e, i) => `<tr>
-    <td>${inp(e.boat, "boat name", `fleetSet(${i},'boat',this.value)`, 150)}</td>
-    <td>${inp(e.division, "div", `fleetSet(${i},'division',this.value)`, 54)}</td>
-    <td>${inp(e.cls, "class", `fleetSet(${i},'cls',this.value)`, 70)}</td>
-    <td>${inp(e.owner, "owner", `fleetSet(${i},'owner',this.value)`, 120)}</td>
-    <td>${inp(e.orc_gph, "GPH", `fleetSet(${i},'orc_gph',this.value)`, 60)}</td>
-    <td>${inp(e.rating, "rating", `fleetSet(${i},'rating',this.value)`, 60)}</td>
+    <td>${inp(e.boat, "boat name", `fleetSet(${i},'boat',this.value)`, 140)}${srcBadge(e)}</td>
+    <td>${inp(e.sail, "sail #", `fleetSet(${i},'sail',this.value)`, 70)}</td>
+    <td>${inp(e.division, "div", `fleetSet(${i},'division',this.value)`, 48)}</td>
+    <td>${inp(e.cls, "class", `fleetSet(${i},'cls',this.value)`, 64)}</td>
+    <td>${inp(e.owner, "owner", `fleetSet(${i},'owner',this.value)`, 110)}</td>
+    <td>${inp(e.orc_gph, "GPH", `fleetSet(${i},'orc_gph',this.value)`, 56)}</td>
+    <td>${inp(e.rating, "rating", `fleetSet(${i},'rating',this.value)`, 56)}</td>
     <td>${inp(e.mmsi, "MMSI", `fleetSet(${i},'mmsi',this.value)`, 90)}</td>
     <td><button class="mini" onclick="fleetRemove(${i})" title="remove">✕</button></td></tr>`;
   const permitted = !!rp.tracker_permitted;
+  const ybCfg = (tr.provider || "").match(/yb|bycmack|ybtracking|yellowbrick/i);
 
   document.getElementById("view").innerHTML = `<div class="opt">
     <div class="card">
@@ -1468,16 +1497,28 @@ function paintFleet() {
     </div>
 
     <div class="card">
+      <h3>Auto-import from public data <span class="muted" style="font-weight:400">— entry list (YB) + ORC handicaps</span></h3>
+      <div class="muted" style="font-size:12px;margin-bottom:8px">Pull the roster automatically: the <b>YB tracker RaceSetup</b> supplies the entry list (boat, sail #, owner, class) and the public <b>ORC certificate database</b> fills each boat's GPH + rating, matched by sail number / name. Both public; the result is a draft you review &amp; Save. ${ybCfg ? "" : '<b>This race has no YB tracker configured</b> (set it in the Rules/ingest step) — ORC-enrich the existing roster instead, or paste an entry list below.'}</div>
+      <div class="opt-controls">
+        <button onclick="fleetAutoImport('both')" ${Lab.fleetBusy || !ybCfg ? "disabled" : ""}>${Lab.fleetBusy ? "Importing…" : "Import entry list + ORC handicaps"}</button>
+        <button class="mini" onclick="fleetAutoImport('yb')" ${Lab.fleetBusy || !ybCfg ? "disabled" : ""}>Entry list only (YB)</button>
+        <button class="mini" onclick="fleetAutoImport('orc')" ${Lab.fleetBusy ? "disabled" : ""}>Enrich current roster from ORC</button>
+        <label>ORC country <input id="fleetOrcCC" class="ein" style="width:54px" value="USA"></label>
+      </div>
+      <div class="muted" style="font-size:11px;margin-top:6px">Auto-import REPLACES the draft roster with the imported boats (Save to persist). Unmatched boats keep their identity — fill the handicap by hand. Sail # is the ORC match key, so check it on any unmatched boat.</div>
+    </div>
+
+    <div class="card">
       <h3>Roster <span class="muted" style="font-weight:400">— ${roster.length} boat${roster.length === 1 ? "" : "s"}</span></h3>
       ${roster.length ? `<table class="fleet-tbl"><thead><tr>
-        <th>Boat</th><th>Div</th><th>Class</th><th>Owner</th><th>ORC GPH</th><th>Rating</th><th>MMSI</th><th></th>
+        <th>Boat</th><th>Sail #</th><th>Div</th><th>Class</th><th>Owner</th><th>ORC GPH</th><th>Rating</th><th>MMSI</th><th></th>
         </tr></thead><tbody>${roster.map(row).join("")}</tbody></table>`
-        : `<div class="muted">No boats yet — add rows or paste an entry list below.</div>`}
+        : `<div class="muted">No boats yet — auto-import above, add rows, or paste an entry list below.</div>`}
       <div style="margin-top:8px"><button class="mini" onclick="fleetAddRow()">+ Add boat</button></div>
     </div>
 
     <div class="card">
-      <h3>Import entry list</h3>
+      <h3>Import entry list <span class="muted" style="font-weight:400">— manual paste (fallback)</span></h3>
       <div class="muted" style="font-size:12px;margin-bottom:6px">Paste one boat per line — <code>boat, division, rating, GPH, MMSI</code> (comma or tab separated; a header row is skipped; only the boat name is required).</div>
       <textarea id="fleetPaste" rows="5" style="width:100%;box-sizing:border-box" placeholder="Il Mostro, I, 0.9123, 650.2, 366123456&#10;Windquest, I, 0.9456, 638.0"></textarea>
       <div style="margin-top:8px"><button class="mini" onclick="fleetImport()">Parse &amp; append</button></div>
@@ -1492,8 +1533,9 @@ function paintFleet() {
     </div>
 
     <div class="dactions"><button onclick="fleetSave()">Save roster</button>
-      <span id="fleetMsg" class="muted" style="font-size:12px"></span></div>
+      <span id="fleetMsg" class="muted" style="font-size:12px">${esc(Lab.fleetMsg || "")}</span></div>
   </div>`;
+  Lab.fleetMsg = "";
 }
 
 /* ---------- Rules, Safety & Checklists ---------- */
