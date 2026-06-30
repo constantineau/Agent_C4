@@ -89,6 +89,7 @@ services:
       GSHHG_RES: ${GSHHG_RES:-f}            # GSHHG resolution f(ull)|h|i|l|c — full = all sub-nm islands
       ENC_CACHE: /srv/enc                   # NOAA ENC cells + extracted GeoJSON (prep-time GDAL)
       PLAYBOOK_DIR: /srv/playbooks          # Lab-2b: frozen, signed playbook bundles (onboard homework)
+      LEARNING_DB: /srv/learning/learning.db  # Lab-4: ongoing performance archive + refinement proposals
       BOAT_DRAFT_M: ${BOAT_DRAFT_M:-2.1336}  # active boat draft (m); SR33 = 7 ft → ENC depth no-go
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}        # feedback widget → GitHub issues (dedicated fine-grained PAT)
       GITHUB_REPO: ${GITHUB_REPO:-constantineau/Agent_C4}
@@ -101,6 +102,7 @@ services:
       - lab_coastline:/srv/coastline        # land/lake polygons for obstacle avoidance (fetched once)
       - lab_enc:/srv/enc                    # NOAA ENC S-57 cells + extracted GeoJSON (cached)
       - lab_playbooks:/srv/playbooks        # Lab-2b: frozen signed playbook bundles
+      - lab_learning:/srv/learning          # Lab-4: ongoing performance archive (SQLite)
     restart: unless-stopped
 
 volumes:
@@ -110,3 +112,4 @@ volumes:
   lab_coastline:
   lab_enc:
   lab_playbooks:
+  lab_learning:

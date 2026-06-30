@@ -976,6 +976,33 @@ GetPositions latest) + end-to-end (GPX → judge → scorecard, 77 s, Playwright
 final on-our-own-boat check. Tunable `TRACK_YB_TIMEOUT_S`. Files: track.py (new), judge.py, main.py,
 web/{app.js,styles reuse}, test_routing_track.py (new).
 
+**Lab-4 LEARNING LOOP — ongoing archive + HUMAN-APPROVED boat-model refinement: SHIPPED 2026-06-30.**
+Closes the loop the Debrief track ingestion fed: turn the accumulating performance record into a better
+boat model, with a person signing off on every change to the polars. `app/learning.py` — a persistent
+**SQLite archive** on a new `lab_learning` volume (`LEARNING_DB`; tables `debriefs`/`perf_bins`/
+`proposals`, pure-stdlib `sqlite3`): `judge.run_judge` archives every debrief (regret + helm-vs-optimal
+metrics + observed-vs-polar bins snapped to the ORC cert's own (TWS,TWA) grid + a slim report) so race
+performance is kept for review. `propose(boat_id)` aggregates the LATEST debrief per race → a refined
+**`helm_factor`** (overall achievable fraction) + per-cell **polar overlay multipliers** (speed SHAPE
+*relative to* the overall level, so helm + overlay don't double-count) and writes a `proposed` row —
+**it mutates nothing**. The boat changes ONLY when a human calls `apply_proposal` (the editable
+Approve), which writes `helm_factor` + `polar_adjustments` to the boat profile; `reject_proposal`
+discards. Guardrails clamp helm to [0.5,1.0], cell mults to [0.85,1.15], ±4% deadband. The ORC cert
+stays canonical; approved tweaks are an explicit overlay (`BoatProfile.polar_adjustments`) the optimizer
+applies via `polars.apply_adjustments`, threaded as `polar_adjustments=` through `optimize_course`/
+`build_playbook`/`synthesize` (resolved from the active boat in main.py, like helm/jib). Endpoints
+`/api/learning/{debriefs[/{id}],proposals,propose,proposals/{id}/apply,/reject}`; the **Learnings tab**
+gains a "Refine the boat model" review card (Propose → editable helm + per-cell adjustment table with
+keep/drop checkboxes → Approve/Reject) + a "Performance archive" table. **HUMAN-IN-THE-LOOP is the core
+invariant** (user requirement): propose never touches the boat; approve is the only mutating path —
+unit-tested (`test_routing_learning.py`: propose-doesn't-mutate → approve-writes → reject-untouched +
+overlay clamp). Verified: HTTP e2e (archive → propose helm 1.0→0.93 + cell adjustments → approve →
+overlay bites a real cert cell 7.72→8.08) + cert-snap unit test + Playwright UI (0 console errors).
+Files: learning.py (new), judge.py, track.py (perf bins), polars.py (apply_adjustments), optimizer.py/
+playbook.py/synthesis.py (polar_adjustments thread), boats.py + shared/boat_profile.py, main.py,
+web/app.js, compose.dev.yml (lab_learning volume), test_routing_learning.py (new). (Lab not in
+compose.prod — runs as the standing dev container.)
+
 **Over-correction guards (why this won't distort the route):** discussed 2026-06-30 — the model can't run
 away (deadband + floor + conservative slopes; ~6% upwind at 2 m, downwind barely touched), it's OFF by
 default until a real wave field exists (phase 2) and per-run opt-out-able, and the route-*reshaping*

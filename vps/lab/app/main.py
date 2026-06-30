@@ -21,7 +21,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from shared import race_def, boat_profile
-from . import auth, store, extract, boats, labstate, feedback, pbstore, deploy, monitor, judge, track
+from . import auth, store, extract, boats, labstate, feedback, pbstore, deploy, monitor, judge, track, learning
 
 INGESTED_DIR = os.environ.get("INGESTED_DIR", "/srv/ingested")
 
@@ -195,6 +195,12 @@ def _active_jibs():
     return b.get("jib_crossovers") or []
 
 
+def _active_adjustments():
+    """The active boat's human-APPROVED refined-polar overlay (Lab-4) — applied to the optimizer's
+    polars. Empty until a learning proposal is approved (→ routes on the raw ORC cert)."""
+    return boats.active_polar_adjustments()
+
+
 def _run_optimize(definition, course_id, start_epoch, model_names, ensemble_members, avoid=True,
                   per_model=False, resolution="auto", use_waves=True):
     """Blocking: build the multi-model wind field, route the course, write the briefing."""
@@ -220,7 +226,8 @@ def _run_optimize(definition, course_id, start_epoch, model_names, ensemble_memb
                                        safety_depth=boats.active_safety_depth_m(),
                                        jib_crossovers=_active_jibs(), per_model=per_model,
                                        resolution=resolution, cur=cur,
-                                       waves=waves, helm_factor=boats.active_helm_factor())
+                                       waves=waves, helm_factor=boats.active_helm_factor(),
+                                       polar_adjustments=_active_adjustments())
     result["current"] = cur.status()
     result["waves"] = waves.status()
     result["briefing"] = optimizer.briefing(result, definition.get("name", ""))
@@ -441,6 +448,7 @@ async def playbook(body: dict):
         return await run_in_threadpool(pb.build_playbook, d, course_id, start_epoch,
                                        model_names, ens, jib_crossovers=_active_jibs(),
                                        helm_factor=boats.active_helm_factor(),
+                                       polar_adjustments=_active_adjustments(),
                                        use_waves=body.get("use_waves", True))
     except Exception as exc:
         return JSONResponse({"detail": f"playbook failed: {exc}"}, status_code=500)
@@ -522,6 +530,7 @@ async def playbook_synthesize(body: dict):
         return await run_in_threadpool(synthesis.synthesize, d, course_id, start_epoch,
                                        model_names, ens, jib_crossovers=_active_jibs(),
                                        helm_factor=boats.active_helm_factor(),
+                                       polar_adjustments=_active_adjustments(),
                                        use_waves=(body or {}).get("use_waves", True))
     except Exception as exc:
         return JSONResponse({"detail": f"synthesis failed: {exc}"}, status_code=500)
@@ -542,6 +551,7 @@ async def playbook_freeze(body: dict):
         bundle = await run_in_threadpool(synthesis.synthesize, d, course_id, start_epoch,
                                          model_names, ens, jib_crossovers=_active_jibs(),
                                          helm_factor=boats.active_helm_factor(),
+                                         polar_adjustments=_active_adjustments(),
                                          use_waves=body.get("use_waves", True))
         if not bundle.get("variants"):
             return JSONResponse({"detail": "nothing to freeze — no variants",
@@ -638,6 +648,46 @@ async def debrief_track_clear(body: dict):
     if not race_id:
         return JSONResponse({"detail": "race_id required"}, status_code=400)
     return {"ok": await run_in_threadpool(track.clear_track, race_id)}
+
+
+# ---- Lab-4 learning loop: ongoing performance archive + HUMAN-APPROVED boat-model refinement ----
+@app.get("/api/learning/debriefs")
+async def learning_debriefs(boat_id: str = None, race_id: str = None):
+    bid = boat_id or (boats.active_boat() or {}).get("boat_id")
+    return {"boat_id": bid, "debriefs": await run_in_threadpool(learning.list_debriefs, bid, race_id)}
+
+
+@app.get("/api/learning/debriefs/{debrief_id}")
+async def learning_debrief(debrief_id: int):
+    d = await run_in_threadpool(learning.get_debrief, debrief_id)
+    return d or JSONResponse({"detail": "not found"}, status_code=404)
+
+
+@app.get("/api/learning/proposals")
+async def learning_proposals(boat_id: str = None):
+    bid = boat_id or (boats.active_boat() or {}).get("boat_id")
+    return {"boat_id": bid, "proposals": await run_in_threadpool(learning.list_proposals, bid)}
+
+
+@app.post("/api/learning/propose")
+async def learning_propose(body: dict = None):
+    bid = (body or {}).get("boat_id") or (boats.active_boat() or {}).get("boat_id")
+    if not bid:
+        return JSONResponse({"detail": "no active boat"}, status_code=400)
+    return await run_in_threadpool(learning.propose, bid)
+
+
+@app.post("/api/learning/proposals/{pid}/apply")
+async def learning_apply(pid: int, body: dict = None):
+    """HUMAN-APPROVED apply — writes the (optionally edited) helm_factor + polar overlay to the boat."""
+    body = body or {}
+    return await run_in_threadpool(learning.apply_proposal, pid, body.get("helm_factor"),
+                                   body.get("adjustments"), body.get("note", ""))
+
+
+@app.post("/api/learning/proposals/{pid}/reject")
+async def learning_reject(pid: int, body: dict = None):
+    return await run_in_threadpool(learning.reject_proposal, pid, (body or {}).get("note", ""))
 
 
 # ---- Monitor (shore-side live view: fleet via public tracker + our boat via cloud telemetry) --

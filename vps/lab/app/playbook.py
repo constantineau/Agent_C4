@@ -58,7 +58,8 @@ def _subfields(wf: WindField):
 
 
 def build_playbook(definition, course_id, start_epoch, models, ensemble_members=0,
-                   time_budget_s=200, jib_crossovers=None, helm_factor=1.0, use_waves=True):
+                   time_budget_s=200, jib_crossovers=None, helm_factor=1.0, use_waves=True,
+                   polar_adjustments=None):
     """Multi-scenario playbook: route the course through the blended field (consensus) and through
     each model's sub-field (scenarios), cluster by favored side into variants."""
     bbox = optimizer.course_bbox(definition, course_id)
@@ -87,7 +88,8 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
     # consensus = the blended field (all models) — the baseline "best guess"
     consensus = optimizer.optimize_course(definition, course_id, start_epoch, wf, time_budget_s=per,
                                           jib_crossovers=jib_crossovers, emit_exploration=False, cur=cur,
-                                          waves=waves, helm_factor=helm_factor)
+                                          waves=waves, helm_factor=helm_factor,
+                                          polar_adjustments=polar_adjustments)
     consensus_side = _favored_side(definition, course_id, consensus)
 
     # one candidate route per model scenario
@@ -95,7 +97,8 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
     for model, sub in subs.items():
         r = optimizer.optimize_course(definition, course_id, start_epoch, sub, time_budget_s=per,
                                       jib_crossovers=jib_crossovers, emit_exploration=False, cur=cur,
-                                      waves=waves, helm_factor=helm_factor)
+                                      waves=waves, helm_factor=helm_factor,
+                                      polar_adjustments=polar_adjustments)
         if not r.get("available"):
             continue
         legs = r.get("legs") or []

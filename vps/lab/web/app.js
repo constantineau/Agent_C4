@@ -1932,6 +1932,7 @@ async function renderLearnings() {
   if (Lab.sel && (!Lab.editDef || Lab.editDef.race_id !== Lab.sel)) {
     try { Lab.editDef = await (await apiGet("/api/races/" + encodeURIComponent(Lab.sel))).json(); } catch (e) {}
   }
+  await learnReload();
   if (stale("learnings")) return;
   paintLearnings();
 }
@@ -1969,11 +1970,110 @@ function paintLearnings() {
       <textarea id="learnNotes" rows="6" style="width:100%;box-sizing:border-box" placeholder="e.g. Cove Island current sets NE on the ebb; J2 crossover felt early last year — try 15 kn; main calibration +2° at the masthead…">${esc(d.learnings_notes || "")}</textarea>
       <div style="margin-top:8px"><button onclick="learnSaveNotes()">Save notes</button> <span id="learnMsg" class="muted" style="font-size:12px"></span></div>
     </div>
-    <div class="card">
-      <h3>Boat-level signals <span class="muted" style="font-weight:400">— from sailing + debrief</span></h3>
-      <div class="muted" style="font-size:12px">Calibration offsets, the fatigue / helm-skill baseline, and automated polar / crossover refinement are produced by the <b>onboard engine</b> while sailing and the <b>Debrief</b> judge loop (post-race write-back). Today this tab surfaces the frozen boat model + your regatta notes; the write-back will populate refined values here.</div>
-    </div>
+    ${learnRefineCard(ab)}
+    ${learnArchiveCard()}
   </div>`;
+}
+
+// Lab-4: human-reviewed boat-model refinement. propose() suggests; nothing lands until the human
+// approves — the polars/helm only change on an explicit Approve click.
+function learnRefineCard(ab) {
+  const L = Lab.learning || {};
+  const pending = (L.proposals || []).find((p) => p.status === "proposed");
+  const adjN = (ab.polar_adjustments || []).length;
+  const applied = (ab.helm_factor != null && ab.helm_factor < 1) || adjN
+    ? `<div class="muted" style="font-size:12px">Currently applied: helm factor <b>${ab.helm_factor != null ? ab.helm_factor : 1}</b>${adjN ? ` · <b>${adjN}</b> polar-cell adjustments` : " · no polar overlay"}.</div>` : "";
+  let body;
+  if (L.busy) body = '<div class="loading">Working…</div>';
+  else if (pending) body = learnProposalReview(pending);
+  else body = `<div class="muted" style="font-size:12px">Generate a refinement proposal from the archived debriefs for <b>${esc(ab.name || "this boat")}</b>. It suggests a refined helm factor + per-(TWS,TWA) polar adjustments — <b>nothing changes until you approve</b>.</div>
+    <div style="margin-top:8px"><button onclick="learnPropose()">Propose refinements</button> ${L.msg ? `<span class="muted" style="font-size:12px">${esc(L.msg)}</span>` : ""}</div>`;
+  return `<div class="card">
+    <h3>Refine the boat model <span class="muted" style="font-weight:400">— learning loop · human-approved</span></h3>
+    ${applied}
+    ${body}
+    <div class="muted" style="font-size:11px;margin-top:8px">The ORC cert stays the canonical polar; approved tweaks are an explicit overlay the optimizer applies. The helm factor sets the overall achievable level; per-cell multipliers capture where the boat is relatively weak/strong by angle.</div>
+  </div>`;
+}
+
+function learnProposalReview(p) {
+  const s = p.summary || {};
+  const pos = s.by_point_of_sail || {};
+  const rows = (p.adjustments || []).map((a, i) => `<tr>
+    <td><input type="checkbox" data-adj="${i}" checked></td>
+    <td>${a.tws} kn</td><td>${a.twa}°</td><td>${esc(a.point_of_sail)}</td>
+    <td><b class="conf ${a.mult < 1 ? "bad" : "ok"}">×${a.mult}</b></td>
+    <td class="muted">${esc(a.basis || "")}</td></tr>`).join("");
+  return `<div class="dep-grid" style="margin-bottom:8px">
+      <div class="dep-row"><b style="min-width:150px;display:inline-block">Overall achieved</b> ${s.overall_pct}% of polar over ${s.n_samples} samples · ${(s.races || []).length} race(s)</div>
+      <div class="dep-row"><b style="min-width:150px;display:inline-block">Helm factor</b> ${p.helm_current} → <b>${p.helm_proposed}</b> <input id="learnHelmEdit" type="number" step="0.01" min="0.5" max="1" value="${p.helm_proposed}" style="width:70px;margin-left:8px"> <span class="muted">(editable)</span></div>
+      ${Object.keys(pos).length ? `<div class="dep-row"><b style="min-width:150px;display:inline-block">By point of sail</b> ${Object.entries(pos).map(([k, v]) => `${k} ${v}%`).join(" · ")}</div>` : ""}
+    </div>
+    ${rows ? `<div class="muted" style="font-size:12px;margin-bottom:4px">Proposed polar-cell adjustments — untick any you don't want to apply:</div>
+    <table class="fleet-tbl" id="learnAdjTbl"><thead><tr><th></th><th>TWS</th><th>TWA</th><th>Point of sail</th><th>×mult</th><th>Basis</th></tr></thead><tbody>${rows}</tbody></table>`
+      : '<div class="muted" style="font-size:12px">No per-cell adjustments proposed (the boat tracks the polar shape well) — just the helm factor.</div>'}
+    <div style="margin-top:10px">
+      <button onclick="learnApply(${p.id})">✓ Approve &amp; apply</button>
+      <button class="mini" onclick="learnReject(${p.id})">Reject</button>
+      <span id="learnApplyMsg" class="muted" style="font-size:12px"></span>
+    </div>`;
+}
+
+function learnArchiveCard() {
+  const dbs = (Lab.learning || {}).debriefs || [];
+  if (!dbs.length) return `<div class="card"><h3>Performance archive</h3><div class="muted" style="font-size:12px">No archived debriefs yet — run a debrief with a boat track (in the <a href="#debrief">Debrief</a> tab) and it's recorded here for future review.</div></div>`;
+  const rows = dbs.map((d) => `<tr>
+    <td>${d.created_at ? new Date(d.created_at * 1000).toLocaleDateString() : ""}</td>
+    <td>${esc(d.race_name || d.race_id || "")}</td>
+    <td>${d.regret_min != null ? d.regret_min + " min" : "—"}</td>
+    <td>${d.time_behind_min != null ? d.time_behind_min + " min" : "—"}</td>
+    <td>${d.oversail_pct != null ? d.oversail_pct + "%" : "—"}</td>
+    <td>${d.polar_pct != null ? d.polar_pct + "%" : "—"}</td>
+    <td>${esc(d.side_worked || "—")}${d.side_matched != null ? (d.side_matched ? " ✓" : " ✗") : ""}</td>
+    <td>${esc(d.track_source || "—")}</td></tr>`).join("");
+  return `<div class="card">
+    <h3>Performance archive <span class="muted" style="font-weight:400">— ${dbs.length} debrief(s), kept for review</span></h3>
+    <table class="fleet-tbl"><thead><tr><th>Date</th><th>Race</th><th>Regret</th><th>vs optimal</th><th>Oversail</th><th>Polar%</th><th>Side</th><th>Track</th></tr></thead><tbody>${rows}</tbody></table>
+    <div class="muted" style="font-size:11px;margin-top:6px">Every debrief is archived to the ongoing learning database (helm-vs-optimal metrics + observed-vs-polar bins) so race performance is reviewable across the season and feeds the refinement proposals above.</div>
+  </div>`;
+}
+
+async function learnPropose() {
+  Lab.learning = Object.assign({}, Lab.learning, { busy: true, msg: "" }); paintLearnings();
+  try {
+    const r = await (await apiPost("/api/learning/propose", {})).json();
+    if (!r.ok) Lab.learning = Object.assign({}, Lab.learning, { busy: false, msg: r.note || "no proposal" });
+    else await learnReload();
+  } catch (e) { Lab.learning = Object.assign({}, Lab.learning, { busy: false, msg: "propose failed" }); }
+  paintLearnings();
+}
+
+async function learnApply(pid) {
+  const helm = parseFloat(document.getElementById("learnHelmEdit").value);
+  const keep = [...document.querySelectorAll("#learnAdjTbl input[data-adj]")];
+  const prop = ((Lab.learning || {}).proposals || []).find((p) => p.id === pid) || {};
+  const adjustments = (prop.adjustments || []).filter((_, i) => (keep[i] ? keep[i].checked : true));
+  document.getElementById("learnApplyMsg").textContent = "Applying…";
+  try {
+    const r = await (await apiPost(`/api/learning/proposals/${pid}/apply`, { helm_factor: helm, adjustments })).json();
+    if (!r.ok) { document.getElementById("learnApplyMsg").textContent = r.note || "apply failed"; return; }
+    await reloadBoats(); await learnReload(); paintLearnings();
+  } catch (e) { document.getElementById("learnApplyMsg").textContent = "apply failed"; }
+}
+
+async function learnReject(pid) {
+  await apiPost(`/api/learning/proposals/${pid}/reject`, {});
+  await learnReload(); paintLearnings();
+}
+
+async function learnReload() {
+  try {
+    const [props, dbs] = await Promise.all([
+      (await apiGet("/api/learning/proposals")).json(),
+      (await apiGet("/api/learning/debriefs")).json(),
+    ]);
+    Lab.learning = { busy: false, msg: "", proposals: props.proposals || [], debriefs: dbs.debriefs || [] };
+  } catch (e) { Lab.learning = Object.assign({ busy: false }, Lab.learning); }
 }
 
 function optDegradedBanner(r) {

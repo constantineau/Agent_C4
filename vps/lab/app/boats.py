@@ -116,3 +116,10 @@ def active_helm_factor(default=1.0):
     except (TypeError, ValueError):
         pass
     return default
+
+
+def active_polar_adjustments():
+    """The active boat's human-APPROVED refined-polar overlay (Lab-4) — [{tws,twa,mult}], or []."""
+    b = active_boat()
+    adj = (b or {}).get("polar_adjustments")
+    return adj if isinstance(adj, list) else []

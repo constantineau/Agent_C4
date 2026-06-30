@@ -611,7 +611,8 @@ def _resolution(name):
 def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=None,
                     obstacles=None, avoid=True, source=None, safety_depth=None,
                     jib_crossovers=None, emit_exploration=True, per_model=False,
-                    resolution="auto", cur=None, waves=None, helm_factor=1.0):
+                    resolution="auto", cur=None, waves=None, helm_factor=1.0,
+                    polar_adjustments=None):
     """Route the whole course from its start through every mark to the finish via `wf`.
 
     Returns one optimal route with per-leg ETAs, total time/distance/tacks and a route confidence
@@ -628,6 +629,7 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
     P = POL.polars_stw()
     if not P:
         return {"available": False, "note": "no polars loaded"}
+    P = POL.apply_adjustments(P, polar_adjustments)   # Lab-4 human-approved refined-polar overlay
     SP = POL.sail_polars()                 # per-sail curves for sail-aware routing (2g); {} → envelope only
 
     if obstacles is None and avoid:

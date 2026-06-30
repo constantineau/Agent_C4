@@ -305,6 +305,9 @@ def score_track(track, oracle, marks, start_epoch, wf=None, polars=None):
     pol = _polar_pct(seg, epochs, wf, polars)
     if pol:
         out.update(pol)
+    bins = _performance_bins(seg, epochs, wf, polars)
+    if bins:
+        out["perf_bins"] = bins                # observed-vs-polar by (TWS,TWA) cell — Lab-4 mining input
     # honest self-checks (matches the project's degraded-signal ethos): flag non-physical readings
     # that usually mean favorable current / a soft rating / an oracle-window mismatch, not real perf.
     cav = []
@@ -363,6 +366,58 @@ def _polar_pct(seg, epochs, wf, polars):
         return None
     return {"polar_pct": round(100 * sum(ratios) / len(ratios)),
             "polar_samples": len(ratios)}
+
+
+_BIN_MIN_SAMPLES, _BIN_PCTILE = 4, 80.0       # min slices to trust a cell; "best achievable" percentile
+
+
+def _point_of_sail(twa):
+    return "upwind" if twa <= 70 else ("reaching" if twa <= 120 else "downwind")
+
+
+def _pctile(xs, q):
+    s = sorted(xs)
+    if not s:
+        return None
+    i = (q / 100.0) * (len(s) - 1)
+    lo = int(i)
+    return s[lo] if lo + 1 >= len(s) else s[lo] + (s[lo + 1] - s[lo]) * (i - lo)
+
+
+def _performance_bins(seg, epochs, wf, polars):
+    """Observed STW vs the polar target, snapped to the ORC cert's OWN (TWS,TWA) grid cells — the
+    Lab-4 refined-polar input. Snapping to the cert grid (not arbitrary bins) is what lets an approved
+    adjustment line up 1:1 with the cell the optimizer samples (`_polar_speed` nearest-neighbour), so
+    the overlay actually bites. A high percentile (80th) of observed STW per cell = 'best achievable'
+    (rejects lulls/steering scatter). Needs the actual-wind field + ≥ a few samples/cell, else []."""
+    if wf is None or polars is None or not getattr(wf, "loaded", False):
+        return []
+    cells = {}            # (cert_tws, cert_twa) -> [observed stw]
+    for f, ep in zip(seg, epochs):
+        if ep is None or f.get("sog") is None or f.get("cog") is None or f["sog"] <= 0.3:
+            continue
+        try:
+            tws, twd = wf.wind_at(f["lat"], f["lon"], ep)
+        except Exception:
+            continue
+        if not tws or tws <= 0:
+            continue
+        twa = abs(optimizer._wrap180(f["cog"] - twd))
+        if twa < 30:
+            continue
+        cell = min(polars, key=lambda p: abs(p[0] - tws) + abs(p[1] - twa))   # nearest cert cell
+        if abs(cell[0] - tws) > 3.0 or abs(cell[1] - twa) > 18.0:             # too far → off-grid, skip
+            continue
+        cells.setdefault((cell[0], cell[1], cell[2]), []).append(f["sog"])
+    out = []
+    for (tws_c, twa_c, target), stws in sorted(cells.items()):
+        if len(stws) < _BIN_MIN_SAMPLES or not target or target <= 0.5:
+            continue
+        best = _pctile(stws, _BIN_PCTILE)
+        out.append({"tws": tws_c, "twa": twa_c, "point_of_sail": _point_of_sail(twa_c),
+                    "samples": len(stws), "best_stw": round(best, 2),
+                    "target_stw": round(target, 2), "pct": round(100 * best / target)})
+    return out
 
 
 # ---- persistence (one stored track per race; '_'-prefixed so the race library skips it) --------

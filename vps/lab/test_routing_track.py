@@ -84,6 +84,25 @@ def test_score():
     print(f"PASS caveat: {s2['time_behind_optimal_min']} min => {s2['caveats'][0][:48]}…")
 
 
+def test_perf_bins_snap_to_cert():
+    # a fake wind field (constant 12 kn from north) + a cert with specific TWA cells; observations at
+    # ~50° and ~135° must SNAP to the cert's 52° and 135° cells (so an overlay later lines up 1:1).
+    class WF:
+        loaded = True
+        def wind_at(self, lat, lon, ep):
+            return (12.0, 0.0)            # 12 kn TWS, TWD=0 (north)
+    cert = [(12.0, 52.0, 7.42), (12.0, 90.0, 8.05), (12.0, 135.0, 7.72)]
+    # cog 50 → twa 50 (snaps to 52); cog 134 → twa 134 (snaps to 135)
+    seg = ([{"lat": 43.0, "lon": -82.0, "t": i, "sog": 7.0, "cog": 50} for i in range(6)] +
+           [{"lat": 43.0, "lon": -82.0, "t": 100 + i, "sog": 7.5, "cog": 134} for i in range(6)])
+    epochs = [1_000_000 + f["t"] for f in seg]
+    bins = track._performance_bins(seg, epochs, WF(), cert)
+    cells = {(b["tws"], b["twa"]) for b in bins}
+    assert (12.0, 52.0) in cells and (12.0, 135.0) in cells, bins
+    assert all(b["target_stw"] in (7.42, 7.72, 8.05) for b in bins), bins
+    print(f"PASS perf_bins snap: observations at 50°/134° snapped to cert cells {sorted(cells)}")
+
+
 def _live():
     """Network: decode a real YB race and validate against its GetPositions latest fix."""
     import json, urllib.request
@@ -104,7 +123,7 @@ def _live():
 
 
 if __name__ == "__main__":
-    test_yb_decode(); test_yb_decode_two_teams(); test_gpx(); test_score()
+    test_yb_decode(); test_yb_decode_two_teams(); test_gpx(); test_score(); test_perf_bins_snap_to_cert()
     if "--live" in sys.argv:
         _live()
     print("\nALL TRACK TESTS PASSED")

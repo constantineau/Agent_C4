@@ -421,10 +421,41 @@ two-team resync + GPX + scoring math + caveats) + a LIVE decode of the real bayv
 (Illuminati Port Huron→Mackinac) + end-to-end (GPX upload → judge → scorecard, Playwright UI).
 Tunables `TRACK_YB_TIMEOUT_S`.
 
+## Lab-4 learning loop — ongoing performance archive + HUMAN-APPROVED boat-model refinement
+
+`app/learning.py` closes the loop: turn the accumulating debrief record into a better boat model,
+with a person signing off on every change. Two parts:
+- **Ongoing archive (SQLite, `lab_learning` volume, `LEARNING_DB`).** Every debrief run is persisted
+  (`judge.run_judge` → `archive_debrief`): the regret + helm-vs-optimal metrics, the observed-vs-polar
+  **performance bins** (snapped to the ORC cert's own (TWS,TWA) grid so they line up 1:1 with the cells
+  the optimizer samples), and a slim report JSON. Race performance is kept across the season for review.
+  Tables: `debriefs`, `perf_bins`, `proposals`. Pure-stdlib `sqlite3`, no new deps.
+- **Refinement proposals (PROPOSE → human REVIEW → APPROVE/REJECT).** `propose(boat_id)` aggregates the
+  LATEST debrief per race (so re-runs don't double-count) → a refined **`helm_factor`** (overall
+  achievable fraction, sample-weighted) + per-cell **polar overlay multipliers** (the boat's speed
+  SHAPE *relative to* the overall level, so the helm factor and the overlay don't double-count). It
+  writes a `proposed` row and **touches nothing else** — the boat profile is unchanged until a human
+  approves. `apply_proposal` (the ONLY mutating path) writes the possibly-edited `helm_factor` +
+  `polar_adjustments` onto the boat profile; `reject_proposal` discards. Guardrails clamp helm to
+  [0.5,1.0] and cell multipliers to [0.85,1.15], with a ±4% deadband so noise isn't proposed.
+
+The ORC cert stays the canonical polar; approved tweaks are an explicit overlay
+(`BoatProfile.polar_adjustments`) the optimizer applies via `polars.apply_adjustments` — threaded as
+`polar_adjustments=` through `optimize_course` / `build_playbook` / `synthesize` (resolved from the
+active boat in `main.py`, exactly like `helm_factor`/`jib_crossovers`). Endpoints: `GET
+/api/learning/debriefs[/{id}]`, `GET /api/learning/proposals`, `POST /api/learning/propose`, `POST
+/api/learning/proposals/{id}/apply` (the human-approved write), `/reject`. The **Learnings tab** gains a
+"Refine the boat model" review card (Propose → editable helm + a per-cell adjustment table with
+keep/drop checkboxes → Approve/Reject) and a "Performance archive" table. Verified
+`test_routing_learning.py` (overlay clamp/no-op + archive → propose-doesn't-mutate-the-boat →
+approve-writes → reject-leaves-untouched) + `test_routing_track.py` cert-snap + HTTP e2e (archive →
+propose helm 1.0→0.93 + cell adjustments → approve → boat updated → overlay bites a real cert cell
+7.72→8.08) + Playwright UI (review panel + archive, 0 console errors).
+
 - **Next:** wind-over-water correction (2nd-order); Lab-3 onboard executor; verify the YB fetch against
   the live bayviewmack2026 feed (~July 2026). Routing fidelity 2c/2e/2f/2g, the GSHHG coastline
-  backstop, water currents, realized-speed **phases 1 + 2 (GLWU)**, and **Debrief actual-track
-  ingestion** are **done**.
+  backstop, water currents, realized-speed **phases 1 + 2 (GLWU)**, **Debrief actual-track ingestion**,
+  and the **Lab-4 learning loop** are **done**.
 
 ## Race documents (found 2026-06-17)
 

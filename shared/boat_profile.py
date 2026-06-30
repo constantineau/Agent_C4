@@ -66,6 +66,10 @@ class BoatProfile:
     # the optimizer routes on ACHIEVABLE speed (helm × sea state), and the gap to 1.0 is a coaching
     # number. 1.0 = sails the book; the Lab-4 learning loop can refine it from real tracks. (2d-d)
     helm_factor: float = 1.0
+    # Refined-polar overlay from the Lab-4 learning loop: human-APPROVED multiplicative tweaks to the
+    # ORC cert per (TWS, TWA) cell — [{tws, twa, mult, basis?}]. The cert stays gospel (untouched);
+    # this is an explicit, reviewable overlay applied at optimize time. Empty → routes on the raw cert.
+    polar_adjustments: list = field(default_factory=list)
     note: str = ""
     provenance: dict = field(default_factory=dict)
     schema_version: str = SCHEMA_VERSION
@@ -103,6 +107,7 @@ def summary(d: dict) -> dict:
         "safety_depth_m": round(safety_depth_m(d), 2) if draft_m is not None else None,
         "hull_type": d.get("hull_type", "mono"),
         "helm_factor": d.get("helm_factor", 1.0),
+        "polar_adjustments": d.get("polar_adjustments", []),
     }
 
 

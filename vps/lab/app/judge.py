@@ -19,7 +19,7 @@ import time
 
 from shared import race_def
 
-from . import store, pbstore, optimizer, track
+from . import store, pbstore, optimizer, track, learning, boats
 
 MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-8")
 API_KEY = os.environ.get("ANTHROPIC_API_KEY")
@@ -153,6 +153,11 @@ def run_judge(race_id, playbook_id=None, models=None, on_progress=None):
     }
     log("writing the critique…")
     report["critique"] = _critique(report) or _deterministic_critique(report)
+    try:                                   # archive to the ongoing learning DB (best-effort)
+        bid = (boats.active_boat() or {}).get("boat_id")
+        report["archived_id"] = learning.archive_debrief(report, bid)
+    except Exception:
+        pass
     return report
 
 

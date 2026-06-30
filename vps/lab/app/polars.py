@@ -39,6 +39,28 @@ def sail_polars():
     return _SAIL_CACHE
 
 
+def apply_adjustments(P, adjustments):
+    """Apply the Lab-4 human-APPROVED refined-polar overlay to a polar table `P` = [(tws,twa,stw)].
+
+    `adjustments` = [{tws, twa, mult}] — a multiplicative tweak per ORC grid cell (the cert stays the
+    canonical source; this is the explicit, reviewed overlay the learning loop produces). Returns a NEW
+    list (P is the module cache — never mutate it). Multipliers are clamped to a sane band so an
+    approved tweak can't wildly distort the polar. Empty/none → P unchanged."""
+    if not adjustments or not P:
+        return P
+    key = lambda tws, twa: (round(float(tws), 1), round(float(twa), 1))
+    mults = {}
+    for a in adjustments:
+        try:
+            m = float(a.get("mult"))
+        except (TypeError, ValueError):
+            continue
+        mults[key(a.get("tws"), a.get("twa"))] = max(0.80, min(1.15, m))
+    if not mults:
+        return P
+    return [(tws, twa, stw * mults.get(key(tws, twa), 1.0)) for (tws, twa, stw) in P]
+
+
 def polars_stw():
     """[(tws, twa, target_stw)] from the polar SQL, parsed once."""
     global _CACHE
