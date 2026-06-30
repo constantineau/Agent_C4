@@ -22,6 +22,8 @@ import re
 import time
 import urllib.request
 
+from . import extract
+
 _TIMEOUT = float(os.environ.get("FLEET_IMPORT_TIMEOUT_S", "50"))
 _ORC_TTL = float(os.environ.get("ORC_CACHE_TTL_S", "86400"))   # the country dump changes slowly
 _YB_HOSTS = {"yb", "bycmack", "ybtracking", "yellowbrick"}
@@ -179,27 +181,115 @@ def enrich_from_orc(entries, country="USA", definition=None, course_id=None):
             "orc_country": country, "orc_certs": idx["n"], "tot_col": tot_col}
 
 
-def import_fleet(definition, source="both", country="USA", course_id=None):
-    """Orchestrate a DRAFT roster from public data. `source`: 'yb' (entry list only), 'orc' (enrich the
-    existing roster), or 'both' (YB entry list → ORC handicaps). Returns the proposed roster for human
-    review — NOT saved."""
+# ---- entry list from the REGATTA WEBSITE (URL / pasted text / uploaded PDF, via Opus) -------------
+_ENTRY_PROMPT = (
+    'Extract the race ENTRY / REGISTRATION list as JSON: {"entries":[{"boat","sail","owner","cls",'
+    '"division"}]}. boat = yacht name (REQUIRED). sail = sail number ("" if none). owner = owner or '
+    'skipper ("" if none). cls = boat class/design ("" if none). division = class/division/fleet '
+    '("" if none). Output ONLY the JSON object. Include ONLY real entered boats — skip headers, '
+    "totals, menus, ads, results columns. If there is no entry list in this content, return "
+    '{"entries":[]}.')
+
+
+def _llm_entry_list(text):
+    """Opus → the raw entry-list rows from arbitrary page/PDF text. Monkeypatchable in tests."""
+    if not extract.API_KEY:
+        raise RuntimeError("ANTHROPIC_API_KEY not set in the Lab service")
+    import anthropic
+    client = anthropic.Anthropic(api_key=extract.API_KEY)
+    resp = client.messages.create(
+        model=extract.MODEL, max_tokens=8000,
+        system="You extract a sailing race entry/registration list into structured JSON for a "
+               "race-strategy tool. Only real entered boats; never invent boats or handicaps.",
+        messages=[{"role": "user", "content": _ENTRY_PROMPT + "\n\nPAGE CONTENT:\n"
+                   + (text or "")[:extract.MAX_DOC_CHARS]}])
+    txt = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text")
+    return extract._parse_json(txt).get("entries") or []
+
+
+def roster_from_text(text):
+    """Extract roster identities from pasted entry-list / page text (any regatta-site format) via Opus."""
+    if not (text or "").strip():
+        return {"ok": False, "note": "no text to extract an entry list from"}
+    try:
+        raw = _llm_entry_list(text)
+    except RuntimeError as e:
+        return {"ok": False, "note": str(e)}
+    except Exception as e:
+        return {"ok": False, "note": f"entry-list extraction failed: {type(e).__name__}"}
+    entries = []
+    for e in raw:
+        nm = (e.get("boat") or "").strip()
+        if not nm:
+            continue
+        entries.append({"boat": nm, "sail": (e.get("sail") or "").strip(),
+                        "cls": (e.get("cls") or e.get("class") or "").strip(),
+                        "owner": (e.get("owner") or "").strip(),
+                        "division": (e.get("division") or "").strip(),
+                        "orc_gph": None, "rating": None, "mmsi": None, "source": "website"})
+    if not entries:
+        return {"ok": False, "note": "no boats found in that content — the page may be JS-rendered; "
+                "paste the visible entry-list text or upload the entry-list PDF"}
+    return {"ok": True, "entries": entries, "count": len(entries)}
+
+
+def roster_from_url(url):
+    """Fetch a regatta entry-list URL (HTML or PDF) → extract the roster. Static sites work directly;
+    JS-rendered hubs (YachtScoring/Regatta Network) return little → the caller falls back to paste/upload."""
+    if not (url or "").strip():
+        return {"ok": False, "note": "no URL given"}
+    try:
+        _label, text = extract.text_from_url(url)
+    except Exception as e:
+        return {"ok": False, "note": f"entry-list fetch failed: {type(e).__name__}"}
+    return roster_from_text(text)
+
+
+def roster_from_pdf(raw):
+    """Extract the roster from an uploaded entry-list PDF."""
+    try:
+        text = extract.pdf_text(raw)
+    except Exception as e:
+        return {"ok": False, "note": f"PDF read failed: {type(e).__name__}"}
+    return roster_from_text(text)
+
+
+# ---- orchestration -------------------------------------------------------------------------------
+def pack_with_orc(entries, src, country, definition, course_id):
+    """Wrap an entry list with ORC enrichment + match stats — the shared tail for every entry source."""
+    out = {"ok": True, "source": src, "entries": entries, "count": len(entries)}
+    en = enrich_from_orc(entries, country=country, definition=definition, course_id=course_id)
+    if not en.get("ok"):
+        out["orc_error"] = en.get("note")                 # entry list still returned; handicap failed
+    else:
+        out.update(matched=en["matched"], total=en["total"], orc_certs=en["orc_certs"],
+                   tot_col=en.get("tot_col"),
+                   unmatched=[e["boat"] for e in entries if not e.get("orc_match")])
+    return out
+
+
+def import_fleet(definition, source="both", country="USA", course_id=None, url=None, text=None):
+    """Orchestrate a DRAFT roster from public data — NOT saved. `source`:
+    'yb' (YB entry list only) · 'both' (YB entry list → ORC) · 'website' (regatta-site URL/text → ORC) ·
+    'orc' (enrich the existing roster). The entry list comes from YB OR the regatta website; ORC fills
+    the handicaps for both."""
     src = (source or "both").lower()
     if src in ("yb", "both"):
         r = roster_from_yb(definition)
         if not r.get("ok"):
             return r
         entries = r["entries"]
-    else:
+        if src == "yb":                                   # entry list only (no ORC)
+            return {"ok": True, "source": src, "entries": entries, "count": len(entries)}
+    elif src in ("website", "web"):
+        r = roster_from_url(url) if (url or "").strip() else roster_from_text(text)
+        if not r.get("ok"):
+            return r
+        entries = r["entries"]
+    elif src == "orc":
         entries = [dict(e) for e in (definition.get("fleet") or [])]
         if not entries:
             return {"ok": False, "note": "no existing roster to enrich — import the entry list first"}
-    out = {"ok": True, "source": src, "entries": entries, "count": len(entries)}
-    if src in ("orc", "both"):
-        en = enrich_from_orc(entries, country=country, definition=definition, course_id=course_id)
-        if not en.get("ok"):
-            out.update(orc_error=en.get("note"))          # entry list still returned; handicap failed
-        else:
-            out.update(matched=en["matched"], total=en["total"], orc_certs=en["orc_certs"],
-                       tot_col=en.get("tot_col"), unmatched=[e["boat"] for e in entries
-                                                             if not e.get("orc_match")])
-    return out
+    else:
+        return {"ok": False, "note": f"unknown import source: {source}"}
+    return pack_with_orc(entries, src, country, definition, course_id)

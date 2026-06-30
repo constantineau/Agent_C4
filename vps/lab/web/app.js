@@ -1392,24 +1392,45 @@ function fleetOwnSet(f, v) { if (!Lab.editDef) return; if (!Lab.editDef.own) Lab
 function fleetAddRow() { Lab.editDef.fleet.push({ boat: "", division: "", cls: "", owner: "", sail: "", orc_gph: null, rating: null, mmsi: "", source: "manual" }); paintFleet(); }
 function fleetRemove(i) { Lab.editDef.fleet.splice(i, 1); paintFleet(); }
 
-// Auto-import the roster from public data: 'yb' = the tracker's entry list, 'orc' = enrich the current
-// roster with ORC handicaps, 'both' = entry list → handicaps. Replaces the draft roster for review.
-async function fleetAutoImport(source) {
-  const m = document.getElementById("fleetMsg"); if (m) m.textContent = "Importing from public data… (YB / ORC)";
-  Lab.fleetBusy = true; paintFleet();
+// Auto-import the roster from public data. source: 'yb' = the tracker entry list, 'both' = YB → ORC,
+// 'website' = a regatta-site URL/pasted text → ORC, 'orc' = enrich the current roster. extra = {url|text}
+// for the website source. Replaces the draft roster for review (nothing is saved until Save).
+function _fleetCC() { return (document.getElementById("fleetOrcCC") || {}).value || "USA"; }
+function _fleetApplyResult(r) {
+  if (!r.ok) { Lab.fleetMsg = r.note || r.detail || "import failed"; return; }
+  Lab.editDef.fleet = r.entries || [];
+  const bits = [`${r.count} boats`];
+  if (r.matched != null) bits.push(`${r.matched}/${r.total} matched to ORC certs`);
+  if (r.unmatched && r.unmatched.length) bits.push(`${r.unmatched.length} need a handicap by hand`);
+  if (r.orc_error) bits.push("ORC lookup failed: " + r.orc_error);
+  Lab.fleetMsg = "Imported " + bits.join(" · ") + " — review, then Save.";
+}
+async function fleetAutoImport(source, extra) {
+  Lab.fleetBusy = true; Lab.fleetMsg = "Importing from public data…"; paintFleet();
   try {
-    const r = await (await apiPost("/api/fleet/import", { race_id: Lab.sel, source,
-      country: (document.getElementById("fleetOrcCC") || {}).value || "USA" })).json();
-    Lab.fleetBusy = false;
-    if (!r.ok) { Lab.fleetMsg = r.note || r.detail || "import failed"; paintFleet(); return; }
-    Lab.editDef.fleet = r.entries || [];
-    const bits = [`${r.count} boats`];
-    if (r.matched != null) bits.push(`${r.matched}/${r.total} matched to ORC certs`);
-    if (r.unmatched && r.unmatched.length) bits.push(`${r.unmatched.length} need a handicap by hand`);
-    if (r.orc_error) bits.push("ORC lookup failed: " + r.orc_error);
-    Lab.fleetMsg = "Imported " + bits.join(" · ") + " — review, then Save.";
-  } catch (e) { Lab.fleetBusy = false; Lab.fleetMsg = "import failed: " + e.message; }
-  paintFleet();
+    const r = await (await apiPost("/api/fleet/import", Object.assign(
+      { race_id: Lab.sel, source, country: _fleetCC() }, extra || {}))).json();
+    _fleetApplyResult(r);
+  } catch (e) { Lab.fleetMsg = "import failed: " + e.message; }
+  Lab.fleetBusy = false; paintFleet();
+}
+function fleetWebImport() {
+  const url = (document.getElementById("fleetWebUrl") || {}).value || "";
+  const text = (document.getElementById("fleetWebText") || {}).value || "";
+  if (!url.trim() && !text.trim()) { Lab.fleetMsg = "Paste a regatta entry-list URL or the entry-list text."; return paintFleet(); }
+  fleetAutoImport("website", url.trim() ? { url: url.trim() } : { text });
+}
+async function fleetUploadEntry() {
+  const f = (document.getElementById("fleetEntryPdf") || {}).files[0];
+  if (!f) { Lab.fleetMsg = "Choose an entry-list PDF first."; return paintFleet(); }
+  Lab.fleetBusy = true; Lab.fleetMsg = "Extracting the entry list from the PDF…"; paintFleet();
+  try {
+    const fd = new FormData(); fd.append("file", f);
+    const q = "?race_id=" + encodeURIComponent(Lab.sel) + "&country=" + encodeURIComponent(_fleetCC());
+    const r = await (await api("/api/fleet/import/upload" + q, { method: "POST", body: fd })).json();
+    _fleetApplyResult(r);
+  } catch (e) { Lab.fleetMsg = "upload failed: " + e.message; }
+  Lab.fleetBusy = false; paintFleet();
 }
 
 // Parse a pasted entry list — one boat per line, comma- or tab-separated:
@@ -1500,10 +1521,21 @@ function paintFleet() {
       <h3>Auto-import from public data <span class="muted" style="font-weight:400">— entry list (YB) + ORC handicaps</span></h3>
       <div class="muted" style="font-size:12px;margin-bottom:8px">Pull the roster automatically: the <b>YB tracker RaceSetup</b> supplies the entry list (boat, sail #, owner, class) and the public <b>ORC certificate database</b> fills each boat's GPH + rating, matched by sail number / name. Both public; the result is a draft you review &amp; Save. ${ybCfg ? "" : '<b>This race has no YB tracker configured</b> (set it in the Rules/ingest step) — ORC-enrich the existing roster instead, or paste an entry list below.'}</div>
       <div class="opt-controls">
-        <button onclick="fleetAutoImport('both')" ${Lab.fleetBusy || !ybCfg ? "disabled" : ""}>${Lab.fleetBusy ? "Importing…" : "Import entry list + ORC handicaps"}</button>
-        <button class="mini" onclick="fleetAutoImport('yb')" ${Lab.fleetBusy || !ybCfg ? "disabled" : ""}>Entry list only (YB)</button>
-        <button class="mini" onclick="fleetAutoImport('orc')" ${Lab.fleetBusy ? "disabled" : ""}>Enrich current roster from ORC</button>
+        <span class="muted" style="font-size:12px">Entry list from the <b>YB tracker</b>:</span>
+        <button onclick="fleetAutoImport('both')" ${Lab.fleetBusy || !ybCfg ? "disabled" : ""} title="${ybCfg ? "" : "no YB tracker configured for this race"}">${Lab.fleetBusy ? "Importing…" : "YB entry list + ORC handicaps"}</button>
+        <button class="mini" onclick="fleetAutoImport('yb')" ${Lab.fleetBusy || !ybCfg ? "disabled" : ""}>YB entry list only</button>
         <label>ORC country <input id="fleetOrcCC" class="ein" style="width:54px" value="USA"></label>
+        <button class="mini" onclick="fleetAutoImport('orc')" ${Lab.fleetBusy ? "disabled" : ""}>Enrich current roster from ORC</button>
+      </div>
+      <div style="margin-top:10px;border-top:1px solid var(--line);padding-top:10px">
+        <div class="muted" style="font-size:12px;margin-bottom:6px">Or from the <b>regatta website</b> (for races with no YB tracker — most races) — fetch a URL, paste the entry-list text, or upload the PDF; Opus reads it and ORC fills the handicaps:</div>
+        <div class="opt-controls">
+          <input id="fleetWebUrl" class="ein" style="width:340px" placeholder="entry-list URL (e.g. regatta site / YachtScoring)">
+          <button onclick="fleetWebImport()" ${Lab.fleetBusy ? "disabled" : ""}>Fetch &amp; extract + ORC</button>
+          <label>PDF <input type="file" id="fleetEntryPdf" accept=".pdf,application/pdf"></label>
+          <button class="mini" onclick="fleetUploadEntry()" ${Lab.fleetBusy ? "disabled" : ""}>Upload entry-list PDF</button>
+        </div>
+        <textarea id="fleetWebText" rows="3" style="width:100%;box-sizing:border-box;margin-top:6px" placeholder="…or paste the entry-list text here (best for JS-rendered hubs like YachtScoring/Regatta Network where a fetch can't reach the list) — then Fetch &amp; extract"></textarea>
       </div>
       <div class="muted" style="font-size:11px;margin-top:6px">Auto-import REPLACES the draft roster with the imported boats (Save to persist). Unmatched boats keep their identity — fill the handicap by hand. Sail # is the ORC match key, so check it on any unmatched boat.</div>
     </div>

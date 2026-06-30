@@ -693,15 +693,32 @@ async def learning_reject(pid: int, body: dict = None):
 # ---- Fleet roster auto-import (public data: YB entry list + ORC handicaps) → DRAFT for review ----
 @app.post("/api/fleet/import")
 async def fleet_import(body: dict):
-    """Build a DRAFT fleet roster from public data — YB RaceSetup entry list + ORC cert handicaps.
-    Returns the proposed roster (with match stats); the human reviews/edits in the Fleet tab and
-    Saves via POST /api/races (nothing is auto-committed). Body: {race_id, source?, country?, course_id?}."""
-    race_id = (body or {}).get("race_id")
-    d = store.get_race(race_id) if race_id else None
+    """Build a DRAFT fleet roster from public data — the entry list (YB tracker OR a regatta-website
+    URL/pasted text) + ORC cert handicaps. Returns the proposed roster (with match stats); the human
+    reviews/edits in the Fleet tab and Saves via POST /api/races (nothing auto-committed). Body:
+    {race_id, source: yb|both|website|orc, country?, course_id?, url?, text?}."""
+    b = body or {}
+    d = store.get_race(b.get("race_id")) if b.get("race_id") else None
     if not d:
         return JSONResponse({"detail": "unknown race"}, status_code=404)
-    return await run_in_threadpool(fleetimport.import_fleet, d, (body or {}).get("source", "both"),
-                                   (body or {}).get("country", "USA"), (body or {}).get("course_id"))
+    return await run_in_threadpool(fleetimport.import_fleet, d, b.get("source", "both"),
+                                   b.get("country", "USA"), b.get("course_id"),
+                                   b.get("url"), b.get("text"))
+
+
+@app.post("/api/fleet/import/upload")
+async def fleet_import_upload(race_id: str, country: str = "USA", course_id: str = None,
+                             file: UploadFile = File(...)):
+    """Extract a fleet roster from an uploaded entry-list PDF → ORC-enrich → DRAFT for review."""
+    d = store.get_race(race_id)
+    if not d:
+        return JSONResponse({"detail": "unknown race"}, status_code=404)
+    raw = await file.read()
+    r = await run_in_threadpool(fleetimport.roster_from_pdf, raw)
+    if not r.get("ok"):
+        return r
+    return await run_in_threadpool(fleetimport.pack_with_orc, r["entries"], "website", country,
+                                   d, course_id)
 
 
 # ---- Monitor (shore-side live view: fleet via public tracker + our boat via cloud telemetry) --

@@ -79,6 +79,29 @@ def test_import_fleet_both():
     print(f"PASS import_fleet: {out['count']} boats, {out['matched']} ORC-matched, unmatched {out['unmatched']}")
 
 
+def test_website_source():
+    # the regatta-website path extracts the entry list via Opus → stub the LLM call, then ORC-enrich
+    _fake_net()
+    fleetimport._llm_entry_list = lambda text: [
+        {"boat": "Il Mostro", "sail": "USA 60", "owner": "Puma", "class": "VOR70"},
+        {"boat": "Windquest", "sail": "USA 12", "division": "I"},
+        {"boat": "", "sail": "skip me"},                 # no name → dropped
+    ]
+    r = fleetimport.roster_from_text("<pasted entry list page text>")
+    assert r["ok"] and r["count"] == 2 and r["entries"][0]["source"] == "website", r
+    out = fleetimport.import_fleet({"race_id": "bayview-mackinac-2026"}, source="website",
+                                   country="USA", course_id="cove_island", text="page text")
+    assert out["ok"] and out["count"] == 2 and out["matched"] == 2, out
+    print(f"PASS website_source: extracted {r['count']} boats from page text, {out['matched']} ORC-matched")
+
+
+def test_website_empty():
+    fleetimport._llm_entry_list = lambda text: []        # JS-rendered page → nothing extracted
+    r = fleetimport.roster_from_text("nav menu only, no list")
+    assert not r["ok"] and "JS-rendered" in r["note"], r
+    print("PASS website_empty: no boats → graceful 'paste/upload' note")
+
+
 def _live():
     import urllib.request
     # restore real network
@@ -96,6 +119,7 @@ def _live():
 
 if __name__ == "__main__":
     test_roster_from_yb(); test_orc_match_and_race_col(); test_generic_col_fallback(); test_import_fleet_both()
+    test_website_source(); test_website_empty()
     if "--live" in sys.argv:
         _live()
     print("\nALL FLEET-IMPORT TESTS PASSED")
