@@ -887,9 +887,13 @@ cockpit:** a *current* stat (source · slices · peak drift), a teal **Current a
 slippy map (`mapview.js` `drawCurrent`, scrubbed by the same forecast slider, toggle + legend in the
 Control Center), and a current line in the briefing (Opus weaves it in; deterministic fallback states
 source + slices). Verified live on the real cove_island course (LMHOFS 18Z, 8 slices, ~1 kn peak,
-44 grid frames; Playwright-confirmed the toggle/legend/stat render with zero console errors). Tunables
-`CURRENTS_ENABLED` / `CURRENTS_STEP_H` / `CURRENTS_MAX_SLICES` / `CURRENTS_FETCH_TIMEOUT` /
-`CURRENTS_CYCLE_LAG_H`.
+44 grid frames; Playwright-confirmed the toggle/legend/stat render with zero console errors). The
+current is threaded through ALL routing, not just the main optimize: the **per-model candidate fan**
+(`_per_model_paths`, the confidence-fan overlay) and the **playbook** consensus + every scenario
+sub-field (`playbook.build_playbook` builds its own `cur`; Lab-2b `synthesis` inherits it) all crab
+through the same stream, so the variants/fan reflect a fair/foul current too (verified live — the
+playbook result carries the LMHOFS `current` status). Tunables `CURRENTS_ENABLED` / `CURRENTS_STEP_H` /
+`CURRENTS_MAX_SLICES` / `CURRENTS_FETCH_TIMEOUT` / `CURRENTS_CYCLE_LAG_H`.
 
 **Optimizer UI study + restyle — `docs/OPTIMIZER_UI_STUDY.md`** (Orca + Expedition gap analysis). Tier 0
 (ensemble-control fix + ECMWF-ENS wired as a separate 51-member `ecmwf-ens` ensemble source) + Tier 1

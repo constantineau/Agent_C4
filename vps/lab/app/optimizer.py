@@ -673,7 +673,7 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
     candidate_paths = []
     if per_model:
         candidate_paths = _per_model_paths(definition, course_id, start_epoch, wf, obstacles, P, marks,
-                                           source, safety_depth, jib_crossovers, total_min / 60.0)
+                                           source, safety_depth, jib_crossovers, total_min / 60.0, cur=cur)
     return {
         "available": True, "course_id": cid,
         "start_epoch": round(float(start_epoch)), "finish_epoch": round(t),
@@ -705,7 +705,7 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
 
 
 def _per_model_paths(definition, course_id, start_epoch, wf, obstacles, P, marks,
-                     source, safety_depth, jib_crossovers, blended_hours):
+                     source, safety_depth, jib_crossovers, blended_hours, cur=None):
     """Route the course through EACH model's OWN sub-field (its series only) → the per-model candidate
     paths the blended route's confidence number summarizes. Same split as the playbook's `_subfields`,
     but here it feeds the Gameplan map's 'Model routes' overlay (PR-4): the user literally sees the fan
@@ -732,7 +732,7 @@ def _per_model_paths(definition, course_id, start_epoch, wf, obstacles, P, marks
         sub = WindField(series, meta, wf.bbox, wf.t_start, wf.t_end)
         r = optimize_course(definition, course_id, start_epoch, sub, time_budget_s=per,
                             obstacles=obstacles, avoid=False, source=source, safety_depth=safety_depth,
-                            jib_crossovers=jib_crossovers, emit_exploration=False, per_model=False)
+                            jib_crossovers=jib_crossovers, emit_exploration=False, per_model=False, cur=cur)
         hrs = r.get("total_hours")
         if (not r.get("available") or not r.get("path") or r.get("degraded") or r.get("timed_out")
                 or hrs is None or hrs < lo or hrs > hi):

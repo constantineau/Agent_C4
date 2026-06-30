@@ -73,19 +73,25 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
         return {"available": False, "note": "no weather model data could be loaded",
                 "windfield": wf.status(), "log": log}
 
+    # water current (set & drift) — every playbook route crabs through the SAME current as the main
+    # optimize, so the variants/consensus reflect a fair/foul stream, not just wind. Off-domain / miss
+    # → ZeroCurrent (routes unchanged). Built once here and shared across consensus + every sub-field.
+    from . import current as currentmod
+    cur = currentmod.build_currentfield(bbox, start_epoch, t_end, on_progress=log.append)
+
     subs = _subfields(wf)
     per = max(40, int(time_budget_s / (len(subs) + 1)))     # split the budget across routes
 
     # consensus = the blended field (all models) — the baseline "best guess"
     consensus = optimizer.optimize_course(definition, course_id, start_epoch, wf, time_budget_s=per,
-                                          jib_crossovers=jib_crossovers, emit_exploration=False)
+                                          jib_crossovers=jib_crossovers, emit_exploration=False, cur=cur)
     consensus_side = _favored_side(definition, course_id, consensus)
 
     # one candidate route per model scenario
     candidates = []
     for model, sub in subs.items():
         r = optimizer.optimize_course(definition, course_id, start_epoch, sub, time_budget_s=per,
-                                      jib_crossovers=jib_crossovers, emit_exploration=False)
+                                      jib_crossovers=jib_crossovers, emit_exploration=False, cur=cur)
         if not r.get("available"):
             continue
         legs = r.get("legs") or []
@@ -139,6 +145,6 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
         "scenarios": [{"model": c["scenario"], "favored_side": c["favored_side"],
                        "total_hours": c["total_hours"], "first_heading": c["first_heading"]}
                       for c in candidates],
-        "windfield": wf.status(), "log": log,
+        "windfield": wf.status(), "current": cur.status(), "log": log,
         "skipped_marks": consensus.get("skipped_marks", []),
     }
