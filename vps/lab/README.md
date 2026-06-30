@@ -375,6 +375,12 @@ design hinges on.
 - **Per-run opt-out:** the optimize/playbook endpoints take `use_waves` (the Gameplan **"Sea-state
   (waves)"** checkbox, default on) → uncheck for pure flat-water (polar) routing; the helm factor still
   applies (crew efficiency, not waves).
+- **Map overlay:** the Hs field is drawn on the slippy map as a shaded **heatmap** (`mapview.js`
+  `drawWaves`, calm-teal→rough-red ramp, low opacity, UNDER the wind/current arrows so they stay
+  legible), scrubbed by the same forecast slider. Fed by `result.wave_grid` (Hs on the same bbox/times
+  as the wind/current grids via `WaveField.sample_grid`, emitted by `_wave_grid` only when peak Hs ≥
+  `WAVE_GRID_MIN_HS`=0.25 m). A **"Sea state"** layer toggle (default OFF) + an Hs legend join the
+  Control Center.
 
 Env-flagged + default no-op (helm 1.0 + flat water ⇒ geometry/ETA byte-identical to baseline). Verified
 `test_routing_realized.py` (wave factor shape + deadband + point-of-sail scaling + floor, helm slows the

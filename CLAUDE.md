@@ -937,6 +937,20 @@ the real Bayview Mackinac cove_island (GLWU 19Z, ~25 frames, realistic ~0.4–0.
 `ROUTE_WAVE_FLOOR` / `WAVES_ENABLED` / `WAVES_CONST_HS` + the per-run `use_waves` + the phase-2 `WAVES_*`
 GLWU knobs above.
 
+**Sea-state map overlay (realized-speed follow-up): SHIPPED 2026-06-30.** Currents got a map overlay but
+sea state only surfaced as the cockpit *realized %* stat — now the Hs field is drawn on the Gameplan
+slippy map. Waves are a SCALAR field (Hs, m), so it's a shaded **heatmap** (`mapview.js` `drawWaves`, a
+new CanvasOverlay UNDER the chart/wind/current layers so they stay legible) coloured by an Hs ramp (calm
+teal → rough red) at low opacity, scrubbed by the SAME forecast slider as wind/current. Fed by a new
+`result.wave_grid` — Hs sampled on the SAME bbox + times as the wind/current grids via a new base-class
+`WaveField.sample_grid()` (so the three overlays share one lattice), emitted by `main._wave_grid` only
+when there's meaningful sea state (peak Hs ≥ `WAVE_GRID_MIN_HS`=0.25 m → a flat day draws nothing). A
+"Sea state" layer toggle (default OFF — a wash is more intrusive than arrows) + an Hs legend (with peak)
+join the Control Center. VERIFIED live on the real cove_island course (GLWU 01Z, 25 frames, peak 1.1 m,
+45 grid frames, 256 cells/frame) + Playwright (toggle present/default-off, legend renders, the wave
+canvas paints 1335 pixel-samples ON and exactly that many fewer OFF, slider scrub repaints, ZERO console
+errors). Tunable `WAVE_GRID_MIN_HS`. Files: wave.py, main.py, web/mapview.js.
+
 **Over-correction guards (why this won't distort the route):** discussed 2026-06-30 — the model can't run
 away (deadband + floor + conservative slopes; ~6% upwind at 2 m, downwind barely touched), it's OFF by
 default until a real wave field exists (phase 2) and per-run opt-out-able, and the route-*reshaping*

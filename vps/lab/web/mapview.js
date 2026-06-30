@@ -13,15 +13,15 @@
    The map auto-aligns lat/lon (GRIB) onto Web-Mercator (tiles) — the reason to drop the canvas. */
 const MapView = (function () {
   let map = null;
-  let chartLayer = null, windLayer = null, currentLayer = null, exploreLayer = null, routeGroup = null, seamarks = null;
+  let chartLayer = null, windLayer = null, currentLayer = null, waveLayer = null, exploreLayer = null, routeGroup = null, seamarks = null;
   let boatMarker = null, legHighlight = null;
   let R = null;                 // current optimize result
   let frameIdx = 0;
   let playTimer = null;         // forecast animation (▶/⏸)
   let windMode = "arrows";      // wind overlay style: arrows | barbs | shaded (2.4)
   let followScrub = true;       // Tier 3.3: pan the map to the projected boat position while scrubbing
-  const show = { wind: true, current: true, shoals: true, rocks: true, land: false, sea: false,
-                 iso: false, laylines: true, models: true };
+  const show = { wind: true, current: true, waves: false, shoals: true, rocks: true, land: false,
+                 sea: false, iso: false, laylines: true, models: true };
 
   // a stable colour per weather model for the per-model candidate-route fan (PR-4)
   const MODEL_COLORS = { gfs: "#1f77b4", nam: "#2ca02c", hrrr: "#d62728", gefs: "#9467bd",
@@ -59,6 +59,12 @@ const MapView = (function () {
   function twsColor(tws) {
     return tws < 6 ? "#4aa3ff" : tws < 12 ? "#43c463" : tws < 18 ? "#f5c542"
       : tws < 24 ? "#ef8a3a" : "#e0524a";
+  }
+
+  // sea-state colour ramp by significant wave height (m): calm teal → building → rough red.
+  function hsColor(hs) {
+    return hs < 0.5 ? "#2a9d8f" : hs < 1 ? "#7bc47f" : hs < 1.5 ? "#e9c46a"
+      : hs < 2.5 ? "#e8924a" : "#d1495b";
   }
 
   function drawArrow(ctx, x, y, tws, twd, conf) {
@@ -179,6 +185,29 @@ const MapView = (function () {
       drawn.push(pt);
       drawCurrentArrow(ctx, pt.x, pt.y, p.set, p.drift);
     }
+  }
+
+  // SEA-STATE heatmap — fill each grid cell by significant wave height (Hs). Waves are a SCALAR field
+  // (unlike the wind/current vectors), so a shaded contour reads better than arrows. Low opacity so the
+  // route + wind stay legible; mirrors the wind "shaded" cell-fill geometry.
+  function drawWaves(ctx, project, zoom, size) {
+    if (!show.waves || !R || !R.wave_grid) return;
+    const frame = (R.wave_grid.frames || [])[frameIdx] || [];
+    const b = R.wave_grid.bbox;                 // [n, s, w, e]
+    if (!frame.length || !b) return;
+    const aspect = (b[3] - b[2]) / Math.max(1e-6, (b[0] - b[1]));
+    const cols = Math.max(2, Math.round(Math.sqrt(frame.length * aspect)));
+    const dlon = (b[3] - b[2]) / cols, dlat = dlon;   // ~square cells
+    for (const p of frame) {
+      if ((p.hs || 0) < 0.1) continue;               // flat cell — draw nothing
+      const a = project(p.lat + dlat / 2, p.lon - dlon / 2);
+      const c = project(p.lat - dlat / 2, p.lon + dlon / 2);
+      if (Math.max(a.x, c.x) < -20 || Math.max(a.y, c.y) < -20 || Math.min(a.x, c.x) > size.x + 20 || Math.min(a.y, c.y) > size.y + 20) continue;
+      ctx.globalAlpha = 0.28;
+      ctx.fillStyle = hsColor(p.hs);
+      ctx.fillRect(Math.min(a.x, c.x), Math.min(a.y, c.y), Math.abs(c.x - a.x) + 1, Math.abs(c.y - a.y) + 1);
+    }
+    ctx.globalAlpha = 1;
   }
 
   function fillRings(ctx, project, rings, fill, stroke, alpha) {
@@ -348,8 +377,9 @@ const MapView = (function () {
     const followChk = hasFrames ? `<label class="mv-chk" title="Pan the map to the projected boat position while scrubbing/playing">
         <input type="checkbox" data-follow ${followScrub ? "checked" : ""}> Follow</label>` : "";
     const hasCurrent = R && R.current_grid && (R.current_grid.frames || []).length;
+    const hasWaves = R && R.wave_grid && (R.wave_grid.frames || []).length;
     const layers = `<div class="cc-grp cc-layers"><span class="cc-lbl">Layers</span>
-        ${chk("wind", "Wind")}${hasCurrent ? chk("current", "Current") : ""}${chk("shoals", "Shoals")}${chk("rocks", "Rocks")}${chk("land", "ENC land")}${chk("sea", "Seamarks")}` +
+        ${chk("wind", "Wind")}${hasCurrent ? chk("current", "Current") : ""}${hasWaves ? chk("waves", "Sea state") : ""}${chk("shoals", "Shoals")}${chk("rocks", "Rocks")}${chk("land", "ENC land")}${chk("sea", "Seamarks")}` +
         (hasModels ? chk("models", "Model routes") : "") +
         (hasIso ? chk("iso", "Isochrones") : "") + (hasLay ? chk("laylines", "Laylines") : "") +
         windSel + followChk + `</div>`;
@@ -360,8 +390,11 @@ const MapView = (function () {
         R.candidate_paths.map((cp) => `<span class="mv-sw"><i style="background:${modelColor(cp.model)}"></i>${cp.model.toUpperCase()}` +
           `${cp.total_hours != null ? " " + cp.total_hours + "h" : ""} <small>${cp.favored_side || ""}</small></span>`).join("") : "";
     const curLeg = hasCurrent ? `<span class="cc-sep"></span><span class="mv-sw"><i style="background:#1bb9c4"></i>current (set/drift${R.current_grid.peak_drift_kn ? `, pk ${R.current_grid.peak_drift_kn} kn` : ""})</span>` : "";
+    const hsStops = [[0.3, "<0.5"], [0.75, "0.5–1"], [1.25, "1–1.5"], [2, "1.5–2.5"], [3, "2.5+"]];
+    const waveLeg = hasWaves ? `<span class="cc-sep"></span><span class="cc-lbl">Sea m${R.wave_grid.peak_hs_m ? ` (pk ${R.wave_grid.peak_hs_m})` : ""}</span>` +
+        hsStops.map(([v, lbl]) => `<span class="mv-sw"><i style="background:${hsColor(v)}"></i>${lbl}</span>`).join("") : "";
     const legend = `<div class="cc-grp cc-legend"><span class="cc-lbl">Wind kn</span>${sw}
-        <span class="mv-legnote">opacity = confidence (faint = models split)</span>${curLeg}${modelLeg}</div>`;
+        <span class="mv-legnote">opacity = confidence (faint = models split)</span>${curLeg}${waveLeg}${modelLeg}</div>`;
 
     const CC = L.Control.extend({
       options: { position: "bottomleft" },
@@ -399,6 +432,7 @@ const MapView = (function () {
     if (k === "sea") { if (on) seamarks.addTo(map); else map.removeLayer(seamarks); return; }
     if (k === "iso" || k === "laylines" || k === "models") { exploreLayer.redraw(); return; }
     if (k === "current") { currentLayer.redraw(); return; }
+    if (k === "waves") { waveLayer.redraw(); return; }
     chartLayer.redraw(); windLayer.redraw();
   }
   function setFrame(i) {
@@ -407,7 +441,7 @@ const MapView = (function () {
     if (lab && R.wind_grid) lab.textContent = frameLabel(i);
     const rng = document.getElementById("mvRange");      // keep the thumb in sync during auto-play
     if (rng && +rng.value !== i) rng.value = i;
-    windLayer.redraw(); currentLayer.redraw(); updateBoatMarker();
+    windLayer.redraw(); currentLayer.redraw(); waveLayer.redraw(); updateBoatMarker();
     // Tier 3.3: ride along — keep the projected boat position in view as the timeline scrubs/plays
     if (followScrub && boatMarker && map) map.panTo(boatMarker.getLatLng(), { animate: false });
   }
@@ -484,6 +518,7 @@ const MapView = (function () {
     const b = resultBounds();
     if (b) map.setView(b.getCenter(), 7); else map.setView([45, -83], 6);
 
+    waveLayer = new CanvasOverlay(drawWaves).addTo(map);    // sea-state wash sits UNDER everything
     chartLayer = new CanvasOverlay(drawChart).addTo(map);
     exploreLayer = new CanvasOverlay(drawExplore).addTo(map);
     windLayer = new CanvasOverlay(drawWind).addTo(map);

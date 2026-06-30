@@ -231,6 +231,10 @@ def _run_optimize(definition, course_id, start_epoch, model_names, ensemble_memb
         cg = _current_grid(cur, wg["bbox"], wg["times"], wg["step_deg"])
         if cg:                                           # only when some cell actually flows
             result["current_grid"] = cg
+    if waves.status().get("loaded"):                     # sea-state heatmap on the SAME times as wind
+        sg = _wave_grid(waves, wg["bbox"], wg["times"], wg["step_deg"])
+        if sg:                                           # only when there's meaningful sea state
+            result["wave_grid"] = sg
     result["log"] = log
     return result
 
@@ -269,6 +273,21 @@ def _current_grid(cur, bbox, times, step):
         return None
     return {"step_deg": step, "bbox": bbox, "times": times, "frames": frames,
             "peak_drift_kn": round(peak, 2)}
+
+
+WAVE_GRID_MIN_HS = float(os.environ.get("WAVE_GRID_MIN_HS", "0.25"))   # below this = effectively flat
+
+
+def _wave_grid(waves, bbox, times, step):
+    """Significant-wave-height grid for the map's SEA-STATE heatmap (realized-speed follow-up), on the
+    SAME bbox + times as `_wind_grid` so one slider scrubs wind/current/waves together. Returns None
+    when the sea is effectively flat (peak Hs < `WAVE_GRID_MIN_HS`) so a calm day draws no overlay."""
+    frames = [waves.sample_grid(t, step, bbox) for t in times]
+    peak = max((c.get("hs", 0.0) for fr in frames for c in fr), default=0.0)
+    if peak < WAVE_GRID_MIN_HS:
+        return None
+    return {"step_deg": step, "bbox": bbox, "times": times, "frames": frames,
+            "peak_hs_m": round(peak, 1)}
 
 
 @app.post("/api/optimize")
