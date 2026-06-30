@@ -874,6 +874,23 @@ cove_island course (`S2 → J1`, one peel — the post-hoc labeler's spurious A3
 flown) + the deployed lab container. Tunables `ROUTE_SAIL_AWARE` / `ROUTE_PEEL_COST_S` /
 `ROUTE_PEEL_PRUNE_S` / `ROUTE_PEEL_HOLD_TOL` / `ROUTE_SAIL_DOMAIN_MARGIN`.
 
+**Water currents — set & drift (routing-fidelity 2d lever a): SHIPPED.** The optimizer accounts for
+water current: in `route_leg` each step advances by the boat's water-velocity (polar speed on its
+heading) PLUS the current's drift, so the route crabs into a cross stream and ETAs reflect a fair/foul
+current (`vps/lab/app/current.py`). `build_currentfield` returns a real **`GLOFSCurrent`** over the
+course bbox — NOAA Great-Lakes OFS surface currents (Lake Michigan-Huron **LMHOFS**) via the CO-OPS
+THREDDS OPeNDAP server (freshest-cycle pick + per-slice timeout + in-process cache); outside the
+Great-Lakes domain / on any fetch miss it degrades to **`ZeroCurrent`** (route unchanged). The optimize
+result carries `current` (the field `status()`) and a **`current_grid`** (set/drift sampled on the SAME
+bbox + times as the wind grid, emitted only when something actually flows). **Surfaced in the Gameplan
+cockpit:** a *current* stat (source · slices · peak drift), a teal **Current arrows overlay** on the
+slippy map (`mapview.js` `drawCurrent`, scrubbed by the same forecast slider, toggle + legend in the
+Control Center), and a current line in the briefing (Opus weaves it in; deterministic fallback states
+source + slices). Verified live on the real cove_island course (LMHOFS 18Z, 8 slices, ~1 kn peak,
+44 grid frames; Playwright-confirmed the toggle/legend/stat render with zero console errors). Tunables
+`CURRENTS_ENABLED` / `CURRENTS_STEP_H` / `CURRENTS_MAX_SLICES` / `CURRENTS_FETCH_TIMEOUT` /
+`CURRENTS_CYCLE_LAG_H`.
+
 **Optimizer UI study + restyle — `docs/OPTIMIZER_UI_STUDY.md`** (Orca + Expedition gap analysis). Tier 0
 (ensemble-control fix + ECMWF-ENS wired as a separate 51-member `ecmwf-ens` ensemble source) + Tier 1
 quick wins (map wind color-scale legend, forecast ▶/⏸ animation, grouped control cards Course/Boat &

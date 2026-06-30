@@ -40,6 +40,24 @@ class CurrentField:
     def current_at(self, lat, lon, epoch):
         return (0.0, 0.0)
 
+    def sample_grid(self, epoch, step_deg, bbox):
+        """Set/drift on a lat/lon grid at one time → [{lat,lon,set,drift}]. Mirrors
+        WindField.sample_grid (SAME lattice, so current arrows overlay the wind arrows) — for the
+        map's current overlay + forecast time slider. ZeroCurrent → all-zero (the caller drops it)."""
+        n, s, w, e = bbox
+        step = max(0.02, float(step_deg))
+        pts = []
+        lat = s
+        while lat <= n + 1e-9:
+            lon = w
+            while lon <= e + 1e-9:
+                cset, cdrift = self.current_at(lat, lon, epoch)
+                pts.append({"lat": round(lat, 4), "lon": round(lon, 4),
+                            "set": round(cset, 1), "drift": round(cdrift, 2)})
+                lon += step
+            lat += step
+        return pts
+
     def status(self):
         return {"loaded": self.loaded, "source": self.source}
 

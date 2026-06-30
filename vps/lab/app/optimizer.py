@@ -784,6 +784,17 @@ def briefing(result: dict, race_name: str = "") -> str:
         return f"leave {r['name']} to {r['side']}"
     roundings_text = "; ".join(_round_phrase(r) for r in roundings)
 
+    cur = result.get("current") or {}
+    current_text = ""
+    if cur.get("loaded"):
+        src = cur.get("source", "current model")
+        if cur.get("source") == "constant":
+            bits = f"set {cur.get('set_deg','?')}° / drift {cur.get('drift_kn','?')} kn"
+        else:
+            bits = f"{cur.get('slices', '?')} time slices"
+        current_text = (f"Water current: {src} ({bits}) — leg ETAs already account for set & drift "
+                        "(the route crabs into a cross stream).")
+
     sail_plan_seq = [s["sail"] for s in (result.get("sail_plan") or []) if s.get("sail")]
     facts = {
         "race": race_name, "total_hours": result["total_hours"],
@@ -794,6 +805,7 @@ def briefing(result: dict, race_name: str = "") -> str:
         "wind_coverage": result.get("wind_coverage"),
         "degraded": result.get("degraded", False), "warnings": warnings,
         "models": [m["model"] for m in result["windfield"]["models"]],
+        "current": cur if cur.get("loaded") else None,    # set & drift folded into the ETAs (2d)
         "roundings": roundings,
         "legs": [{"to": l["to"], "minutes": l["leg_minutes"], "point_of_sail": l["point_of_sail"],
                   "tacks": l["tacks"], "sail": l.get("sail"), "peels": l.get("peels"),
@@ -838,6 +850,9 @@ def briefing(result: dict, race_name: str = "") -> str:
               f"{int((result.get('wind_coverage') or 0) * 100)}% of the route.", ""]
     if sail_plan_seq:
         lines.append(f"Sail plan: {' → '.join(sail_plan_seq)}.")
+        lines.append("")
+    if current_text:
+        lines.append(current_text)
         lines.append("")
     if roundings_text:
         lines.append(f"Roundings: {roundings_text}.")

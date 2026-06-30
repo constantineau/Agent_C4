@@ -13,14 +13,14 @@
    The map auto-aligns lat/lon (GRIB) onto Web-Mercator (tiles) — the reason to drop the canvas. */
 const MapView = (function () {
   let map = null;
-  let chartLayer = null, windLayer = null, exploreLayer = null, routeGroup = null, seamarks = null;
+  let chartLayer = null, windLayer = null, currentLayer = null, exploreLayer = null, routeGroup = null, seamarks = null;
   let boatMarker = null, legHighlight = null;
   let R = null;                 // current optimize result
   let frameIdx = 0;
   let playTimer = null;         // forecast animation (▶/⏸)
   let windMode = "arrows";      // wind overlay style: arrows | barbs | shaded (2.4)
   let followScrub = true;       // Tier 3.3: pan the map to the projected boat position while scrubbing
-  const show = { wind: true, shoals: true, rocks: true, land: false, sea: false,
+  const show = { wind: true, current: true, shoals: true, rocks: true, land: false, sea: false,
                  iso: false, laylines: true, models: true };
 
   // a stable colour per weather model for the per-model candidate-route fan (PR-4)
@@ -143,6 +143,41 @@ const MapView = (function () {
       if (!ok) continue;
       drawn.push(pt);
       draw(ctx, pt.x, pt.y, p.tws, p.twd, p.confidence);
+    }
+  }
+
+  // a CURRENT vector — teal, double-stroked so it reads distinctly from the wind arrows. `set` = where
+  // the water flows TO (drift kn). Length scales harder than wind (currents are slow, ~0–2 kn).
+  function drawCurrentArrow(ctx, x, y, set, drift) {
+    const th = set * Math.PI / 180;                 // flows TOWARD set
+    const dx = Math.sin(th), dy = -Math.cos(th);
+    const len = 8 + Math.min(22, drift * 16);
+    const hx = x + dx * len, hy = y + dy * len;
+    ctx.globalAlpha = 0.85;
+    ctx.strokeStyle = "#1bb9c4"; ctx.fillStyle = "#1bb9c4"; ctx.lineWidth = 2.4;
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(hx, hy); ctx.stroke();
+    const a = 0.55, hs = 6;
+    ctx.beginPath();
+    ctx.moveTo(hx, hy);
+    ctx.lineTo(hx - hs * (dx * Math.cos(a) - dy * Math.sin(a)), hy - hs * (dy * Math.cos(a) + dx * Math.sin(a)));
+    ctx.lineTo(hx - hs * (dx * Math.cos(-a) - dy * Math.sin(-a)), hy - hs * (dy * Math.cos(-a) + dx * Math.sin(-a)));
+    ctx.closePath(); ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
+  function drawCurrent(ctx, project, zoom, size) {
+    if (!show.current || !R || !R.current_grid) return;
+    const frame = (R.current_grid.frames || [])[frameIdx] || [];
+    const drawn = [];
+    for (const p of frame) {
+      if ((p.drift || 0) < 0.05) continue;          // calm cell — no arrow
+      const pt = project(p.lat, p.lon);
+      if (pt.x < -20 || pt.y < -20 || pt.x > size.x + 20 || pt.y > size.y + 20) continue;
+      let ok = true;
+      for (const d of drawn) { if (Math.abs(d.x - pt.x) < 26 && Math.abs(d.y - pt.y) < 26) { ok = false; break; } }
+      if (!ok) continue;
+      drawn.push(pt);
+      drawCurrentArrow(ctx, pt.x, pt.y, p.set, p.drift);
     }
   }
 
@@ -312,8 +347,9 @@ const MapView = (function () {
         <option value="shaded"${windMode === "shaded" ? " selected" : ""}>shaded</option></select></label>` : "";
     const followChk = hasFrames ? `<label class="mv-chk" title="Pan the map to the projected boat position while scrubbing/playing">
         <input type="checkbox" data-follow ${followScrub ? "checked" : ""}> Follow</label>` : "";
+    const hasCurrent = R && R.current_grid && (R.current_grid.frames || []).length;
     const layers = `<div class="cc-grp cc-layers"><span class="cc-lbl">Layers</span>
-        ${chk("wind", "Wind")}${chk("shoals", "Shoals")}${chk("rocks", "Rocks")}${chk("land", "ENC land")}${chk("sea", "Seamarks")}` +
+        ${chk("wind", "Wind")}${hasCurrent ? chk("current", "Current") : ""}${chk("shoals", "Shoals")}${chk("rocks", "Rocks")}${chk("land", "ENC land")}${chk("sea", "Seamarks")}` +
         (hasModels ? chk("models", "Model routes") : "") +
         (hasIso ? chk("iso", "Isochrones") : "") + (hasLay ? chk("laylines", "Laylines") : "") +
         windSel + followChk + `</div>`;
@@ -323,8 +359,9 @@ const MapView = (function () {
     const modelLeg = hasModels ? `<span class="cc-sep"></span><span class="cc-lbl">Model routes</span>` +
         R.candidate_paths.map((cp) => `<span class="mv-sw"><i style="background:${modelColor(cp.model)}"></i>${cp.model.toUpperCase()}` +
           `${cp.total_hours != null ? " " + cp.total_hours + "h" : ""} <small>${cp.favored_side || ""}</small></span>`).join("") : "";
+    const curLeg = hasCurrent ? `<span class="cc-sep"></span><span class="mv-sw"><i style="background:#1bb9c4"></i>current (set/drift${R.current_grid.peak_drift_kn ? `, pk ${R.current_grid.peak_drift_kn} kn` : ""})</span>` : "";
     const legend = `<div class="cc-grp cc-legend"><span class="cc-lbl">Wind kn</span>${sw}
-        <span class="mv-legnote">opacity = confidence (faint = models split)</span>${modelLeg}</div>`;
+        <span class="mv-legnote">opacity = confidence (faint = models split)</span>${curLeg}${modelLeg}</div>`;
 
     const CC = L.Control.extend({
       options: { position: "bottomleft" },
@@ -361,6 +398,7 @@ const MapView = (function () {
     show[k] = on;
     if (k === "sea") { if (on) seamarks.addTo(map); else map.removeLayer(seamarks); return; }
     if (k === "iso" || k === "laylines" || k === "models") { exploreLayer.redraw(); return; }
+    if (k === "current") { currentLayer.redraw(); return; }
     chartLayer.redraw(); windLayer.redraw();
   }
   function setFrame(i) {
@@ -369,7 +407,7 @@ const MapView = (function () {
     if (lab && R.wind_grid) lab.textContent = frameLabel(i);
     const rng = document.getElementById("mvRange");      // keep the thumb in sync during auto-play
     if (rng && +rng.value !== i) rng.value = i;
-    windLayer.redraw(); updateBoatMarker();
+    windLayer.redraw(); currentLayer.redraw(); updateBoatMarker();
     // Tier 3.3: ride along — keep the projected boat position in view as the timeline scrubs/plays
     if (followScrub && boatMarker && map) map.panTo(boatMarker.getLatLng(), { animate: false });
   }
@@ -449,6 +487,7 @@ const MapView = (function () {
     chartLayer = new CanvasOverlay(drawChart).addTo(map);
     exploreLayer = new CanvasOverlay(drawExplore).addTo(map);
     windLayer = new CanvasOverlay(drawWind).addTo(map);
+    currentLayer = new CanvasOverlay(drawCurrent).addTo(map);
     legHighlight = null;
     buildRoute();
     updateBoatMarker();

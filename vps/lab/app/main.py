@@ -220,7 +220,12 @@ def _run_optimize(definition, course_id, start_epoch, model_names, ensemble_memb
     result["current"] = cur.status()
     result["briefing"] = optimizer.briefing(result, definition.get("name", ""))
     result["boat"] = boat_profile.summary(boats.active_boat()) if boats.active_boat() else None
-    result["wind_grid"] = _wind_grid(wf, bbox, start_epoch, result.get("finish_epoch", t_end))
+    wg = _wind_grid(wf, bbox, start_epoch, result.get("finish_epoch", t_end))
+    result["wind_grid"] = wg
+    if cur.status().get("loaded"):                       # current overlay on the SAME times as wind
+        cg = _current_grid(cur, wg["bbox"], wg["times"], wg["step_deg"])
+        if cg:                                           # only when some cell actually flows
+            result["current_grid"] = cg
     result["log"] = log
     return result
 
@@ -247,6 +252,18 @@ def _wind_grid(wf, bbox, start_epoch, finish_epoch, n_cells=WIND_GRID_CELLS):
     frames = [wf.sample_grid(t, step, bbox) for t in times]
     return {"step_deg": round(step, 3), "step_h": WIND_GRID_STEP_H, "bbox": [n, s, w, e],
             "times": times, "frames": frames}
+
+
+def _current_grid(cur, bbox, times, step):
+    """Set/drift grid for the map's CURRENT overlay (routing fidelity 2d follow-up), on the SAME bbox +
+    times as `_wind_grid` so one slider scrubs both. Returns None when nothing flows (drift < 0.05 kn
+    everywhere) so a no-current race draws no overlay. Frames mirror the wind frames' lattice."""
+    frames = [cur.sample_grid(t, step, bbox) for t in times]
+    peak = max((c.get("drift", 0.0) for fr in frames for c in fr), default=0.0)
+    if peak < 0.05:
+        return None
+    return {"step_deg": step, "bbox": bbox, "times": times, "frames": frames,
+            "peak_drift_kn": round(peak, 2)}
 
 
 @app.post("/api/optimize")

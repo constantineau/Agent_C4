@@ -1023,6 +1023,7 @@ function renderOptResult(r) {
         ${r.total_peels != null ? `<div title="Sail changes (peels) the route makes — held a sub-optimal sail rather than peel when it didn't pay (2g)"><b>${r.total_peels}</b><span>sail peels</span></div>` : ""}
         <div><b class="conf ${confCls}">${conf == null ? "—" : conf}</b><span>conf (min ${r.min_confidence == null ? "—" : r.min_confidence})</span></div>
         <div><b class="conf ${covCls}">${cov == null ? "—" : Math.round(cov * 100) + "%"}</b><span>wind cov</span></div>
+        ${optCurrentStat(r)}
       </div>
       ${optDegradedBanner(r)}
       ${r.timed_out ? '<div class="pill warn">routing hit the time budget — route is best-effort</div>' : ""}
@@ -1077,6 +1078,17 @@ function exportLegsCsv() {
 function csvCell(v) {
   const s = String(v == null ? "" : v);
   return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+
+function optCurrentStat(r) {
+  const c = r.current;
+  if (!c || !c.loaded) return "";
+  const src = (c.source || "current").toUpperCase();
+  const peak = r.current_grid && r.current_grid.peak_drift_kn;
+  const sub = c.source === "constant"
+    ? `${c.drift_kn ?? "?"} kn @ ${c.set_deg ?? "?"}°`
+    : `${c.slices ?? "?"} slices${peak ? ` · pk ${peak} kn` : ""}`;
+  return `<div title="Water current folded into the leg ETAs (set & drift). Source ${esc(src)}."><b>${esc(src)}</b><span>current · ${esc(sub)}</span></div>`;
 }
 
 function optSailPlan(r) {
