@@ -82,10 +82,15 @@ LANE_NM = float(os.environ.get("ROUTE_LANE_NM", "0.5"))   # cross-track lane wid
 # — a head sea hurts most, a following sea least). Route on this ACHIEVABLE speed; the gap to the polar
 # is a coaching number. Default no-op (helm 1.0 + flat water), so disabled ⇒ behaviour unchanged. The
 # wave MODEL lives here (source-agnostic — Zero/Constant now, a real Great-Lakes provider in phase 2).
-WAVE_K_UP = float(os.environ.get("ROUTE_WAVE_K_UP", "0.07"))        # frac speed lost per m Hs, beating
-WAVE_K_REACH = float(os.environ.get("ROUTE_WAVE_K_REACH", "0.045"))  # reaching
-WAVE_K_DOWN = float(os.environ.get("ROUTE_WAVE_K_DOWN", "0.02"))     # running (a following sea barely hurts)
-WAVE_FLOOR = float(os.environ.get("ROUTE_WAVE_FLOOR", "0.55"))      # never degrade below this fraction
+# CONSERVATIVE first-cut coefficients — deliberately UNDER-correct (better than distorting the route on
+# an uncalibrated guess). They're priors to be CALIBRATED from the boat's realized-polar archive (Lab-4
+# loop), not trusted as-is. A low-Hs DEADBAND keeps small chop from perturbing the route at all, and the
+# FLOOR caps the extreme. Per-meter slopes apply to Hs ABOVE the deadband.
+WAVE_HS_DEADBAND = float(os.environ.get("ROUTE_WAVE_HS_DEADBAND", "0.5"))  # m of sea state with NO penalty
+WAVE_K_UP = float(os.environ.get("ROUTE_WAVE_K_UP", "0.04"))        # frac speed lost per m Hs (above deadband), beating
+WAVE_K_REACH = float(os.environ.get("ROUTE_WAVE_K_REACH", "0.025"))  # reaching
+WAVE_K_DOWN = float(os.environ.get("ROUTE_WAVE_K_DOWN", "0.01"))     # running (a following sea barely hurts)
+WAVE_FLOOR = float(os.environ.get("ROUTE_WAVE_FLOOR", "0.6"))       # never degrade below this fraction
 SAIL_AWARE = _flag("ROUTE_SAIL_AWARE")
 PEEL_COST_S = float(os.environ.get("ROUTE_PEEL_COST_S", "90"))      # clock a sail peel costs (honest ETA)
 # Prune regularizer (like TACK_PRUNE_S): a one-off per-peel penalty into the path score so the isochrone
@@ -144,13 +149,16 @@ def _polar_speed(P, tws, twa):
 
 
 def _wave_factor(hs, twa):
-    """Speed-retention fraction (≤1) for a sea state `hs` (m) at this TWA — linear-with-floor, scaled by
-    point of sail (a head sea slows you most, a following sea least). hs<=0 → 1.0 (flat water)."""
-    if hs <= 0:
+    """Speed-retention fraction (≤1) for a sea state `hs` (m) at this TWA. CONSERVATIVE by design: a
+    DEADBAND (small chop costs nothing), then a gentle linear slope on the excess Hs, scaled by point of
+    sail (a head sea slows you most, a following sea least), with a FLOOR so it can never run away.
+    hs at/below the deadband → 1.0 (no route distortion from ripples)."""
+    eff = hs - WAVE_HS_DEADBAND
+    if eff <= 0:
         return 1.0
     a = abs(((twa + 180) % 360) - 180)
     k = WAVE_K_UP if a < 70 else (WAVE_K_REACH if a < 120 else WAVE_K_DOWN)
-    return max(WAVE_FLOOR, 1.0 - k * hs)
+    return max(WAVE_FLOOR, 1.0 - k * eff)
 
 
 def _realized_factor(hs, twa, helm):

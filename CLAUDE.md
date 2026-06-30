@@ -904,17 +904,30 @@ the Gameplan boat panel as `Helm %`; the Lab-4 loop can refine it from real trac
 `WaveField` seam (`vps/lab/app/wave.py`) parallel to wind/current — `wave_at(lat,lon,epoch) → hs_m`;
 phase 1 ships the seam (`ZeroWave` default = no behaviour change + `ConstantWave`/`WAVES_CONST_HS`
 what-if), **phase 2** wires a real Great-Lakes wave provider (NOAA GLWU Hs via THREDDS, like the GLOFS
-current provider). The degradation MODEL (`optimizer._wave_factor`) is source-agnostic: linear-with-floor,
-scaled by point of sail (a head sea hurts most, a following sea least). Threaded through the main
-optimize + the per-model fan + the playbook consensus/variants (helm read from the active boat via
-`boats.active_helm_factor`); the result carries a `realized` roll-up (`realized_pct`/`helm_factor`/
-`sea_state_hs_mean`) + per-leg `realized_factor`; the cockpit shows a *realized %* stat and the briefing
-states "routing at ~N% of the flat-water polar". Default no-op (helm 1.0 + flat water ⇒ geometry/ETA
-byte-identical). Verified `test_routing_realized.py` (wave-factor shape + point-of-sail scaling + floor,
-helm slows + is reported, sea state degrades a beat more than a run, default == baseline) + in-container
-(realized block + Opus/deterministic briefing line) + Playwright (Helm % input save round-trip, zero
-console errors). Tunables `ROUTE_WAVE_K_UP` / `ROUTE_WAVE_K_REACH` / `ROUTE_WAVE_K_DOWN` /
-`ROUTE_WAVE_FLOOR` / `WAVES_ENABLED` / `WAVES_CONST_HS`.
+current provider). The degradation MODEL (`optimizer._wave_factor`) is source-agnostic and
+**deliberately CONSERVATIVE** (under-correcting beats distorting the route on an uncalibrated guess): a
+low-Hs **deadband** (`ROUTE_WAVE_HS_DEADBAND`=0.5 m — small chop costs NOTHING, so ripples never perturb
+the route), then a gentle linear slope on the *excess* Hs scaled by point of sail (head sea hurts most
+`ROUTE_WAVE_K_UP`=0.04/m → only ~6% at 2 m, following sea least 0.01/m), capped by `ROUTE_WAVE_FLOOR`=0.6.
+The coefficients are PRIORS to be calibrated from the boat's realized-polar archive (Lab-4), not trusted
+as-is. **Per-run opt-out:** the optimize/playbook endpoints take `use_waves` (Gameplan checkbox
+"Sea-state (waves)", default on) → uncheck for flat-water (polar) routing; the helm factor still applies
+(crew efficiency, not waves). Threaded through the main optimize + the per-model fan + the playbook
+consensus/variants (helm read from the active boat via `boats.active_helm_factor`); the result carries a
+`realized` roll-up (`realized_pct`/`helm_factor`/`sea_state_hs_mean`) + per-leg `realized_factor`; the
+cockpit shows a *realized %* stat and the briefing states "routing at ~N% of the flat-water polar".
+Default no-op (helm 1.0 + flat water ⇒ geometry/ETA byte-identical). Verified `test_routing_realized.py`
+(wave-factor shape + deadband + point-of-sail scaling + floor, helm slows + is reported, sea state
+degrades a beat more than a run, default == baseline) + in-container + Playwright. Tunables
+`ROUTE_WAVE_HS_DEADBAND` / `ROUTE_WAVE_K_UP` / `ROUTE_WAVE_K_REACH` / `ROUTE_WAVE_K_DOWN` /
+`ROUTE_WAVE_FLOOR` / `WAVES_ENABLED` / `WAVES_CONST_HS` + the per-run `use_waves`.
+
+**Over-correction guards (why this won't distort the route):** discussed 2026-06-30 — the model can't run
+away (deadband + floor + conservative slopes; ~6% upwind at 2 m, downwind barely touched), it's OFF by
+default until a real wave field exists (phase 2) and per-run opt-out-able, and the route-*reshaping*
+effect (vs the ETA effect) only matters once a spatially-varying field is in — where the plan is to gate
+reshaping on wave-field confidence and to calibrate the coefficients from the boat's own logs rather than
+trust the linear prior. Keep `helm_factor` a FLAT-WATER number so it doesn't double-count waves.
 
 **Optimizer UI study + restyle — `docs/OPTIMIZER_UI_STUDY.md`** (Orca + Expedition gap analysis). Tier 0
 (ensemble-control fix + ECMWF-ENS wired as a separate 51-member `ecmwf-ens` ensemble source) + Tier 1

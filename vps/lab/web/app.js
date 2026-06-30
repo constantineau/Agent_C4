@@ -729,6 +729,7 @@ async function renderGameplan() {
       <div id="boatModelOut"></div>
       <div class="opt-run">
         <label class="optchk"><input type="checkbox" id="optAvoid" checked> Avoid land/islands/zones</label>
+        <label class="optchk" title="Degrade boatspeed for sea state (waves) — routes/ETAs on achievable speed. Conservative model + a low-Hs deadband; uncheck for flat-water (polar) routing. (Helm % still applies — that's crew efficiency, not waves.)"><input type="checkbox" id="optWaves" checked> Sea-state (waves)</label>
         <label class="optchk" title="Also route each weather model separately and overlay the candidate routes — the confidence fan made visible (slower)"><input type="checkbox" id="optPerModel"> Per-model route fan <span class="muted">(slower)</span></label>
         <label class="optchk" title="Routing resolution: Fine = finer heading fan + shorter steps (sharper near shore, slower); Fast = coarser (quicker).">Resolution
           <select id="optRes" oninput="updateResHint()">
@@ -986,11 +987,13 @@ async function runOptimize() {
   const ens = parseInt(document.getElementById("optEns").value || "0", 10) || 0;
   const avoidEl = document.getElementById("optAvoid");
   const pmEl = document.getElementById("optPerModel");
+  const wavesEl = document.getElementById("optWaves");
   const resEl = document.getElementById("optRes");
   Opt.resolution = resEl ? resEl.value : "auto";
+  Opt.useWaves = wavesEl ? wavesEl.checked : true;
   const body = { race_id: Opt.raceId, course_id: Opt.courseId, models: Opt.chosen, ensemble_members: ens,
     avoid_land: avoidEl ? avoidEl.checked : true, per_model: pmEl ? pmEl.checked : false,
-    resolution: Opt.resolution };
+    resolution: Opt.resolution, use_waves: Opt.useWaves };
   const startEpoch = optStartEpoch();
   if (startEpoch != null) body.start_epoch = startEpoch;
   Opt.running = true;
@@ -1126,7 +1129,9 @@ const Pb = { running: false, result: null, freezing: false };
 async function synthPlaybook() {
   const out = document.getElementById("pbOut");
   const ens = parseInt((document.getElementById("optEns") || {}).value || "0", 10) || 0;
-  const body = { race_id: Opt.raceId, course_id: Opt.courseId, models: Opt.chosen, ensemble_members: ens };
+  const wavesEl = document.getElementById("optWaves");
+  const body = { race_id: Opt.raceId, course_id: Opt.courseId, models: Opt.chosen, ensemble_members: ens,
+    use_waves: wavesEl ? wavesEl.checked : true };
   const startEpoch = optStartEpoch();
   if (startEpoch != null) body.start_epoch = startEpoch;
   Pb.running = true; Pb.result = null;

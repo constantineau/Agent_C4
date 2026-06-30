@@ -196,7 +196,7 @@ def _active_jibs():
 
 
 def _run_optimize(definition, course_id, start_epoch, model_names, ensemble_members, avoid=True,
-                  per_model=False, resolution="auto"):
+                  per_model=False, resolution="auto", use_waves=True):
     """Blocking: build the multi-model wind field, route the course, write the briefing."""
     from .wind import build_windfield
     from . import optimizer, current, wave
@@ -212,7 +212,9 @@ def _run_optimize(definition, course_id, start_epoch, model_names, ensemble_memb
         return {"available": False, "note": "no weather model data could be loaded (not yet "
                 "posted, or no egress)", "windfield": wf.status(), "log": log}
     cur = current.build_currentfield(bbox, start_epoch, t_end, on_progress=log.append)  # GLOFS (no-op until wired)
-    waves = wave.build_wavefield(bbox, start_epoch, t_end, on_progress=log.append)      # sea state (phase 1 seam)
+    # sea state (phase 1 seam) — opt-out per run; helm factor still applies (it's crew efficiency, not waves)
+    waves = (wave.build_wavefield(bbox, start_epoch, t_end, on_progress=log.append)
+             if use_waves else wave.ZeroWave())
     result = optimizer.optimize_course(definition, course_id, start_epoch, wf, avoid=avoid,
                                        source=chart_source(),
                                        safety_depth=boats.active_safety_depth_m(),
@@ -287,9 +289,10 @@ async def optimize(body: dict):
     avoid = body.get("avoid_land", True)
     per_model = bool(body.get("per_model"))
     resolution = body.get("resolution") or "auto"
+    use_waves = body.get("use_waves", True)
     try:
         return await run_in_threadpool(_run_optimize, d, course_id, start_epoch, model_names, ens,
-                                       avoid, per_model, resolution)
+                                       avoid, per_model, resolution, use_waves)
     except Exception as exc:
         return JSONResponse({"detail": f"optimize failed: {exc}"}, status_code=500)
 
@@ -418,7 +421,8 @@ async def playbook(body: dict):
     try:
         return await run_in_threadpool(pb.build_playbook, d, course_id, start_epoch,
                                        model_names, ens, jib_crossovers=_active_jibs(),
-                                       helm_factor=boats.active_helm_factor())
+                                       helm_factor=boats.active_helm_factor(),
+                                       use_waves=body.get("use_waves", True))
     except Exception as exc:
         return JSONResponse({"detail": f"playbook failed: {exc}"}, status_code=500)
 
@@ -498,7 +502,8 @@ async def playbook_synthesize(body: dict):
     try:
         return await run_in_threadpool(synthesis.synthesize, d, course_id, start_epoch,
                                        model_names, ens, jib_crossovers=_active_jibs(),
-                                       helm_factor=boats.active_helm_factor())
+                                       helm_factor=boats.active_helm_factor(),
+                                       use_waves=(body or {}).get("use_waves", True))
     except Exception as exc:
         return JSONResponse({"detail": f"synthesis failed: {exc}"}, status_code=500)
 
@@ -517,7 +522,8 @@ async def playbook_freeze(body: dict):
             return JSONResponse({"detail": "provide a bundle or a known race_id"}, status_code=404)
         bundle = await run_in_threadpool(synthesis.synthesize, d, course_id, start_epoch,
                                          model_names, ens, jib_crossovers=_active_jibs(),
-                                         helm_factor=boats.active_helm_factor())
+                                         helm_factor=boats.active_helm_factor(),
+                                         use_waves=body.get("use_waves", True))
         if not bundle.get("variants"):
             return JSONResponse({"detail": "nothing to freeze — no variants",
                                  "bundle": bundle}, status_code=422)

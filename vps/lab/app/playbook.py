@@ -58,7 +58,7 @@ def _subfields(wf: WindField):
 
 
 def build_playbook(definition, course_id, start_epoch, models, ensemble_members=0,
-                   time_budget_s=200, jib_crossovers=None, helm_factor=1.0):
+                   time_budget_s=200, jib_crossovers=None, helm_factor=1.0, use_waves=True):
     """Multi-scenario playbook: route the course through the blended field (consensus) and through
     each model's sub-field (scenarios), cluster by favored side into variants."""
     bbox = optimizer.course_bbox(definition, course_id)
@@ -78,7 +78,8 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
     # → ZeroCurrent (routes unchanged). Built once here and shared across consensus + every sub-field.
     from . import current as currentmod, wave as wavemod
     cur = currentmod.build_currentfield(bbox, start_epoch, t_end, on_progress=log.append)
-    waves = wavemod.build_wavefield(bbox, start_epoch, t_end, on_progress=log.append)
+    waves = (wavemod.build_wavefield(bbox, start_epoch, t_end, on_progress=log.append)
+             if use_waves else wavemod.ZeroWave())
 
     subs = _subfields(wf)
     per = max(40, int(time_budget_s / (len(subs) + 1)))     # split the budget across routes

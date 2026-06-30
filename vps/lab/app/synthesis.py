@@ -265,12 +265,13 @@ def _boat_model():
 
 
 def synthesize(definition, course_id, start_epoch, models, ensemble_members=0, time_budget_s=200,
-               jib_crossovers=None, helm_factor=1.0):
+               jib_crossovers=None, helm_factor=1.0, use_waves=True):
     """Lab-2a fan-out → Lab-2b synthesized bundle (UNSIGNED draft). Freeze (`sign_bundle`) before
     it's relied on / deployed onboard. Passes through the not-available case from 2a unchanged."""
     playbook = pb.build_playbook(definition, course_id, start_epoch, models,
                                  ensemble_members=ensemble_members, time_budget_s=time_budget_s,
-                                 jib_crossovers=jib_crossovers, helm_factor=helm_factor)
+                                 jib_crossovers=jib_crossovers, helm_factor=helm_factor,
+                                 use_waves=use_waves)
     if not playbook.get("available"):
         return playbook
 

@@ -357,18 +357,27 @@ design hinges on.
 - **Sea state** — a `WaveField` seam (`vps/lab/app/wave.py`) parallel to the wind/current fields:
   `wave_at(lat,lon,epoch) → hs_m`. Phase 1 ships the seam (`ZeroWave` default — no behaviour change —
   + `ConstantWave` for tests / a `WAVES_CONST_HS` what-if). The degradation MODEL (`optimizer._wave_factor`)
-  is source-agnostic: linear-with-floor, scaled by point of sail — a head sea slows the boat most
-  (`ROUTE_WAVE_K_UP`), a following sea least (`ROUTE_WAVE_K_DOWN`). **Phase 2** wires a real Great-Lakes
+  is source-agnostic and **deliberately CONSERVATIVE** (under-correcting beats distorting the route on an
+  uncalibrated guess): a low-Hs **deadband** (`ROUTE_WAVE_HS_DEADBAND`=0.5 m — small chop costs nothing,
+  so ripples never perturb the route), then a gentle slope on the *excess* Hs scaled by point of sail — a
+  head sea slows most (`ROUTE_WAVE_K_UP`=0.04/m → ~6% at 2 m), a following sea least
+  (`ROUTE_WAVE_K_DOWN`=0.01/m), capped by `ROUTE_WAVE_FLOOR`=0.6. Coefficients are PRIORS to be calibrated
+  from the boat's realized-polar archive (Lab-4), not trusted as-is. **Phase 2** wires a real Great-Lakes
   wave provider (NOAA GLWU Hs via THREDDS, mirroring the GLOFS current provider).
 - **Threaded everywhere** like currents: the main optimize, the per-model fan, and the playbook
   consensus + every variant. The result carries a `realized` roll-up (`realized_pct`, `helm_factor`,
   `sea_state_hs_mean`) + per-leg `realized_factor`; the cockpit shows a *realized %* stat, and the
   briefing states "routing at ~N% of the flat-water polar (helm X%, sea state ~Y m)".
+- **Per-run opt-out:** the optimize/playbook endpoints take `use_waves` (the Gameplan **"Sea-state
+  (waves)"** checkbox, default on) → uncheck for pure flat-water (polar) routing; the helm factor still
+  applies (crew efficiency, not waves).
 
 Env-flagged + default no-op (helm 1.0 + flat water ⇒ geometry/ETA byte-identical to baseline). Verified
-`test_routing_realized.py` (wave factor shape + point-of-sail scaling + floor, helm slows the ETA and is
-reported, sea state degrades a beat more than a run, default == baseline). Tunables `ROUTE_WAVE_K_UP` /
-`ROUTE_WAVE_K_REACH` / `ROUTE_WAVE_K_DOWN` / `ROUTE_WAVE_FLOOR` / `WAVES_ENABLED` / `WAVES_CONST_HS`.
+`test_routing_realized.py` (wave factor shape + deadband + point-of-sail scaling + floor, helm slows the
+ETA and is reported, sea state degrades a beat more than a run, default == baseline) + the `use_waves`
+off-path (no realized correction). Tunables `ROUTE_WAVE_HS_DEADBAND` / `ROUTE_WAVE_K_UP` /
+`ROUTE_WAVE_K_REACH` / `ROUTE_WAVE_K_DOWN` / `ROUTE_WAVE_FLOOR` / `WAVES_ENABLED` / `WAVES_CONST_HS` +
+per-run `use_waves`.
 
 - **Next:** phase 2 — the real Great-Lakes wave provider (GLWU Hs). Routing fidelity 2c/2e/2f/2g, the
   GSHHG coastline backstop, water currents, and realized-speed phase 1 are **done**.
