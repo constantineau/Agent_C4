@@ -76,6 +76,16 @@ LANE_NM = float(os.environ.get("ROUTE_LANE_NM", "0.5"))   # cross-track lane wid
 # slower-off-optimal — per-sail polar) vs PEELING to the envelope-optimal sail (full speed, but a peel
 # cost). So the route peels (like it tacks) only when it genuinely pays, and the sail plan reflects the
 # sails actually flown. Off (or no per-sail polars) → routes on the envelope exactly as before.
+# --- realized (achievable) speed: helm skill + sea state (routing fidelity 2d lever d, fuzzy baseline)
+# The ORC polar is a FLAT-WATER, perfectly-sailed target; the boat never quite makes it. realized_stw =
+# polar_stw × HELM factor (boat-level, the crew's % of polar) × WAVE factor (sea state, by point of sail
+# — a head sea hurts most, a following sea least). Route on this ACHIEVABLE speed; the gap to the polar
+# is a coaching number. Default no-op (helm 1.0 + flat water), so disabled ⇒ behaviour unchanged. The
+# wave MODEL lives here (source-agnostic — Zero/Constant now, a real Great-Lakes provider in phase 2).
+WAVE_K_UP = float(os.environ.get("ROUTE_WAVE_K_UP", "0.07"))        # frac speed lost per m Hs, beating
+WAVE_K_REACH = float(os.environ.get("ROUTE_WAVE_K_REACH", "0.045"))  # reaching
+WAVE_K_DOWN = float(os.environ.get("ROUTE_WAVE_K_DOWN", "0.02"))     # running (a following sea barely hurts)
+WAVE_FLOOR = float(os.environ.get("ROUTE_WAVE_FLOOR", "0.55"))      # never degrade below this fraction
 SAIL_AWARE = _flag("ROUTE_SAIL_AWARE")
 PEEL_COST_S = float(os.environ.get("ROUTE_PEEL_COST_S", "90"))      # clock a sail peel costs (honest ETA)
 # Prune regularizer (like TACK_PRUNE_S): a one-off per-peel penalty into the path score so the isochrone
@@ -131,6 +141,21 @@ def _polar_speed(P, tws, twa):
     if not P or twa < 30:
         return 0.0
     return min(P, key=lambda p: abs(p[0] - tws) + abs(p[1] - twa))[2]
+
+
+def _wave_factor(hs, twa):
+    """Speed-retention fraction (≤1) for a sea state `hs` (m) at this TWA — linear-with-floor, scaled by
+    point of sail (a head sea slows you most, a following sea least). hs<=0 → 1.0 (flat water)."""
+    if hs <= 0:
+        return 1.0
+    a = abs(((twa + 180) % 360) - 180)
+    k = WAVE_K_UP if a < 70 else (WAVE_K_REACH if a < 120 else WAVE_K_DOWN)
+    return max(WAVE_FLOOR, 1.0 - k * hs)
+
+
+def _realized_factor(hs, twa, helm):
+    """The fraction of the FLAT-WATER polar the boat actually achieves here = helm skill × sea state."""
+    return helm * _wave_factor(hs, twa)
 
 
 def _sail_polar_key(sail):
@@ -237,7 +262,8 @@ def _layline_pair(P, tws, twd, pos, mlat, mlon, length_nm):
 # --- one leg -----------------------------------------------------------------
 def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=None,
               obstacles=None, capture=False, hstep=HSTEP, dt_cap=1.0, cur=None,
-              sail_polars=None, jib_crossovers=None, start_sail=None):
+              sail_polars=None, jib_crossovers=None, start_sail=None,
+              waves=None, helm_factor=1.0):
     """Isochrone-optimal path from (slat,slon)@t0 to (dlat,dlon). Returns dict with path/eta.
 
     `obstacles` (an ObstacleField) makes the fan reject any heading whose step would cut across land,
@@ -257,6 +283,8 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
     SP = sail_polars or {}
     sail_aware = SAIL_AWARE and bool(SP)
     dom = _sail_domains(SP) if sail_aware else {}
+    # realized (achievable) speed = helm × sea state; only do the work when it actually bites
+    realized_on = (helm_factor < 0.999) or (waves is not None and getattr(waves, "loaded", False))
 
     def sail_step(cur_sail, tws, twa, sp_env):
         """Decide the sail + speed for one step from a node currently flying `cur_sail`. Returns
@@ -308,6 +336,10 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
                 continue
             # sail-aware: hold the current sail (its own per-sail speed) or peel to the optimal sail.
             sail, sp, is_peel = sail_step(node.get("sail"), tws, twa, sp_env)
+            # realized: degrade to ACHIEVABLE speed (helm skill × sea state at this node/angle)
+            if realized_on:
+                hs = waves.wave_at(node["lat"], node["lon"], node["t"]) if waves is not None else 0.0
+                sp *= _realized_factor(hs, twa, helm_factor)
             if sp < 0.3:
                 continue
             step_nm = sp * dt_h
@@ -462,6 +494,7 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
     # over-reports; sampling local wind makes the count the real maneuver tally (tacks upwind / gybes down).
     tacks = 0
     prev_side = None
+    rf_sum = hs_sum = 0.0          # realized-factor + sea-state accumulators (the coaching number)
     for k, h in enumerate(hdgs):
         p = path[k] if k < len(path) else path[-1]
         w = wind(p["lat"], p["lon"], p["t"])
@@ -469,6 +502,12 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
         if prev_side and side != prev_side:
             tacks += 1
         prev_side = side
+        if realized_on:
+            hs = waves.wave_at(p["lat"], p["lon"], p["t"]) if waves is not None else 0.0
+            rf_sum += _realized_factor(hs, abs(_wrap180(h - w[1])), helm_factor)
+            hs_sum += hs
+    realized_mean = round(rf_sum / len(hdgs), 3) if (realized_on and hdgs) else 1.0
+    hs_mean = round(hs_sum / len(hdgs), 2) if (realized_on and hdgs) else 0.0
     # equal-time isochrone curves (down-sampled) — each generation's frontier sorted by bearing from
     # the leg start, so it draws as an arc fanning outward; ~ISO_CURVES per leg, ≤ISO_PTS pts each.
     isochrones = []
@@ -486,7 +525,8 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
             "direct_nm": round(direct, 2), "tacks": tacks,
             "first_heading": round(hdgs[0]) if hdgs else None,
             "blocked_steps": blocked_hits, "isochrones": isochrones,
-            "sail_track": sail_track, "peels": peels, "sail_end": sail_end}
+            "sail_track": sail_track, "peels": peels, "sail_end": sail_end,
+            "realized_factor": realized_mean, "hs_mean": hs_mean}
 
 
 def _rounding_offset(plat, plon, mlat, mlon, side, nm=None):
@@ -563,7 +603,7 @@ def _resolution(name):
 def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=None,
                     obstacles=None, avoid=True, source=None, safety_depth=None,
                     jib_crossovers=None, emit_exploration=True, per_model=False,
-                    resolution="auto", cur=None):
+                    resolution="auto", cur=None, waves=None, helm_factor=1.0):
     """Route the whole course from its start through every mark to the finish via `wf`.
 
     Returns one optimal route with per-leg ETAs, total time/distance/tacks and a route confidence
@@ -611,7 +651,8 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
         rlat, rlon = _rounding_offset(slat, slon, dlat, dlon, roundings.get(name, "none"))
         leg = route_leg(wf, P, slat, slon, t, rlat, rlon, deadline=deadline, obstacles=obstacles,
                         capture=emit_exploration, hstep=rp["hstep"], dt_cap=rp["dt_cap"], cur=cur,
-                        sail_polars=SP, jib_crossovers=jib_crossovers, start_sail=cur_sail)
+                        sail_polars=SP, jib_crossovers=jib_crossovers, start_sail=cur_sail,
+                        waves=waves, helm_factor=helm_factor)
         # sample wind + confidence at the leg's midpoint and end (for the briefing)
         mid = leg["path"][len(leg["path"]) // 2] if leg["path"] else {"lat": dlat, "lon": dlon}
         det = wf.detail_at(mid["lat"], mid["lon"], (t + leg["eta"]) / 2.0)
@@ -632,6 +673,8 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
             "sail": (sailplan.optimal_sail(det["tws"], twa, jib_crossovers)
                      if det and twa is not None else None),
             "peels": leg.get("peels", 0),     # sail changes the router actually made on this leg (2g)
+            "realized_factor": leg.get("realized_factor", 1.0),   # % of flat-water polar achieved (helm × sea state)
+            "hs_mean": leg.get("hs_mean", 0.0),                   # mean sea state on this leg (m)
             "wind": ({"tws": det["tws"], "twd": det["twd"], "confidence": det["confidence"]}
                      if det else None),
         })
@@ -669,11 +712,26 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
             elif s and sail_seq:
                 sail_seq[-1]["to_leg"] = lg["to"]
     total_peels = sum(l.get("peels", 0) for l in legs)
+    # realized (achievable) speed roll-up — time-weighted mean % of the flat-water polar the route
+    # sails at (helm skill × sea state), + mean sea state. The gap to 100% is the coaching number;
+    # None when nothing degrades it (helm 1.0 + flat water) so the UI hides it.
+    realized = None
+    if (helm_factor < 0.999) or (waves is not None and getattr(waves, "loaded", False)):
+        wmin = [(l.get("realized_factor", 1.0), l.get("leg_minutes") or 0.0) for l in legs]
+        tot = sum(m for _f, m in wmin) or 1.0
+        realized = {
+            "realized_pct": round(sum(f * m for f, m in wmin) / tot, 3),
+            "helm_factor": round(helm_factor, 3),
+            "sea_state_hs_mean": round(sum((l.get("hs_mean") or 0.0) * (l.get("leg_minutes") or 0.0)
+                                           for l in legs) / tot, 2),
+            "wave_source": waves.status().get("source") if waves is not None else None,
+        }
     # per-model candidate paths (the confidence moat made VISUAL — the fan the blended route summarizes)
     candidate_paths = []
     if per_model:
         candidate_paths = _per_model_paths(definition, course_id, start_epoch, wf, obstacles, P, marks,
-                                           source, safety_depth, jib_crossovers, total_min / 60.0, cur=cur)
+                                           source, safety_depth, jib_crossovers, total_min / 60.0,
+                                           cur=cur, waves=waves, helm_factor=helm_factor)
     return {
         "available": True, "course_id": cid,
         "start_epoch": round(float(start_epoch)), "finish_epoch": round(t),
@@ -682,6 +740,7 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
         "total_direct_nm": round(sum(l["direct_nm"] for l in legs), 1),
         "total_tacks": sum(l["tacks"] for l in legs),
         "total_peels": total_peels,
+        "realized": realized,
         "route_confidence": round(sum(confs) / len(confs), 2) if confs else None,
         "min_confidence": round(min(confs), 2) if confs else None,
         "wind_coverage": coverage,
@@ -705,7 +764,8 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
 
 
 def _per_model_paths(definition, course_id, start_epoch, wf, obstacles, P, marks,
-                     source, safety_depth, jib_crossovers, blended_hours, cur=None):
+                     source, safety_depth, jib_crossovers, blended_hours, cur=None,
+                     waves=None, helm_factor=1.0):
     """Route the course through EACH model's OWN sub-field (its series only) → the per-model candidate
     paths the blended route's confidence number summarizes. Same split as the playbook's `_subfields`,
     but here it feeds the Gameplan map's 'Model routes' overlay (PR-4): the user literally sees the fan
@@ -732,7 +792,8 @@ def _per_model_paths(definition, course_id, start_epoch, wf, obstacles, P, marks
         sub = WindField(series, meta, wf.bbox, wf.t_start, wf.t_end)
         r = optimize_course(definition, course_id, start_epoch, sub, time_budget_s=per,
                             obstacles=obstacles, avoid=False, source=source, safety_depth=safety_depth,
-                            jib_crossovers=jib_crossovers, emit_exploration=False, per_model=False, cur=cur)
+                            jib_crossovers=jib_crossovers, emit_exploration=False, per_model=False, cur=cur,
+                            waves=waves, helm_factor=helm_factor)
         hrs = r.get("total_hours")
         if (not r.get("available") or not r.get("path") or r.get("degraded") or r.get("timed_out")
                 or hrs is None or hrs < lo or hrs > hi):
@@ -795,6 +856,17 @@ def briefing(result: dict, race_name: str = "") -> str:
         current_text = (f"Water current: {src} ({bits}) — leg ETAs already account for set & drift "
                         "(the route crabs into a cross stream).")
 
+    rz = result.get("realized") or {}
+    realized_text = ""
+    if rz:
+        pct = int(round(rz.get("realized_pct", 1.0) * 100))
+        helm = int(round(rz.get("helm_factor", 1.0) * 100))
+        hs = rz.get("sea_state_hs_mean") or 0.0
+        sea = f", sea state ~{hs:.1f} m" if hs > 0.05 else ""
+        realized_text = (f"Achievable speed: routing at ~{pct}% of the flat-water polar "
+                         f"(helm {helm}%{sea}) — ETAs are realistic, not theoretical. The gap to 100% "
+                         "is the boatspeed left to find (trim, helm, sea-state technique).")
+
     sail_plan_seq = [s["sail"] for s in (result.get("sail_plan") or []) if s.get("sail")]
     facts = {
         "race": race_name, "total_hours": result["total_hours"],
@@ -806,6 +878,7 @@ def briefing(result: dict, race_name: str = "") -> str:
         "degraded": result.get("degraded", False), "warnings": warnings,
         "models": [m["model"] for m in result["windfield"]["models"]],
         "current": cur if cur.get("loaded") else None,    # set & drift folded into the ETAs (2d)
+        "realized": result.get("realized"),               # achievable speed = helm × sea state (2d-d)
         "roundings": roundings,
         "legs": [{"to": l["to"], "minutes": l["leg_minutes"], "point_of_sail": l["point_of_sail"],
                   "tacks": l["tacks"], "sail": l.get("sail"), "peels": l.get("peels"),
@@ -853,6 +926,9 @@ def briefing(result: dict, race_name: str = "") -> str:
         lines.append("")
     if current_text:
         lines.append(current_text)
+        lines.append("")
+    if realized_text:
+        lines.append(realized_text)
         lines.append("")
     if roundings_text:
         lines.append(f"Roundings: {roundings_text}.")

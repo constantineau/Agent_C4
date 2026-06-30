@@ -895,6 +895,27 @@ through the same stream, so the variants/fan reflect a fair/foul current too (ve
 playbook result carries the LMHOFS `current` status). Tunables `CURRENTS_ENABLED` / `CURRENTS_STEP_H` /
 `CURRENTS_MAX_SLICES` / `CURRENTS_FETCH_TIMEOUT` / `CURRENTS_CYCLE_LAG_H`.
 
+**Realized (achievable) speed — helm + sea state (routing-fidelity 2d lever d, fuzzy baseline): PHASE 1
+SHIPPED.** The ORC polar is a FLAT-WATER, perfectly-sailed target; the boat never quite makes it. The
+optimizer routes on **realized** speed = `polar × helm_factor × wave_factor(hs, twa)`, so ETAs are
+achievable (not theoretical) and the gap to the polar is a coaching number — the fuzzy-adherence
+baseline (perflab §5). **Helm-skill factor**: `BoatProfile.helm_factor` (0–1, default 1.0, editable in
+the Gameplan boat panel as `Helm %`; the Lab-4 loop can refine it from real tracks). **Sea state**: a
+`WaveField` seam (`vps/lab/app/wave.py`) parallel to wind/current — `wave_at(lat,lon,epoch) → hs_m`;
+phase 1 ships the seam (`ZeroWave` default = no behaviour change + `ConstantWave`/`WAVES_CONST_HS`
+what-if), **phase 2** wires a real Great-Lakes wave provider (NOAA GLWU Hs via THREDDS, like the GLOFS
+current provider). The degradation MODEL (`optimizer._wave_factor`) is source-agnostic: linear-with-floor,
+scaled by point of sail (a head sea hurts most, a following sea least). Threaded through the main
+optimize + the per-model fan + the playbook consensus/variants (helm read from the active boat via
+`boats.active_helm_factor`); the result carries a `realized` roll-up (`realized_pct`/`helm_factor`/
+`sea_state_hs_mean`) + per-leg `realized_factor`; the cockpit shows a *realized %* stat and the briefing
+states "routing at ~N% of the flat-water polar". Default no-op (helm 1.0 + flat water ⇒ geometry/ETA
+byte-identical). Verified `test_routing_realized.py` (wave-factor shape + point-of-sail scaling + floor,
+helm slows + is reported, sea state degrades a beat more than a run, default == baseline) + in-container
+(realized block + Opus/deterministic briefing line) + Playwright (Helm % input save round-trip, zero
+console errors). Tunables `ROUTE_WAVE_K_UP` / `ROUTE_WAVE_K_REACH` / `ROUTE_WAVE_K_DOWN` /
+`ROUTE_WAVE_FLOOR` / `WAVES_ENABLED` / `WAVES_CONST_HS`.
+
 **Optimizer UI study + restyle — `docs/OPTIMIZER_UI_STUDY.md`** (Orca + Expedition gap analysis). Tier 0
 (ensemble-control fix + ECMWF-ENS wired as a separate 51-member `ecmwf-ens` ensemble source) + Tier 1
 quick wins (map wind color-scale legend, forecast ▶/⏸ animation, grouped control cards Course/Boat &

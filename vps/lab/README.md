@@ -346,8 +346,32 @@ sub-optimal sail is HELD (no thrash), SAIL_AWARE off reproduces the envelope bas
 starting on the optimal sail adds no peel. End-to-end on the real cove_island course: `S2 → J1`, one
 peel (the post-hoc labeler's spurious A3 transient correctly not flown).
 
-- **Next:** the copilot's crew-facing narration increment (it now has a signed playbook + boat sail
-  model to interpret). Routing fidelity 2c/2e/2f/2g and the higher-res GSHHG coastline backstop are **done**.
+### Realized (achievable) speed — helm-skill factor + sea state (routing fidelity 2d-d, phase 1)
+
+The ORC polar is a FLAT-WATER, perfectly-sailed target; the boat never quite makes it. The optimizer
+now routes on **realized** speed = `polar × helm_factor × wave_factor(hs, twa)`, so ETAs are achievable
+(not theoretical) and the gap to the polar is a coaching number — the fuzzy-adherence baseline the whole
+design hinges on.
+- **Helm-skill factor** — a `BoatProfile.helm_factor` (0–1, default 1.0 = sails the book), editable in
+  the Gameplan boat panel (`Helm %`); the Lab-4 learning loop can refine it from real tracks.
+- **Sea state** — a `WaveField` seam (`vps/lab/app/wave.py`) parallel to the wind/current fields:
+  `wave_at(lat,lon,epoch) → hs_m`. Phase 1 ships the seam (`ZeroWave` default — no behaviour change —
+  + `ConstantWave` for tests / a `WAVES_CONST_HS` what-if). The degradation MODEL (`optimizer._wave_factor`)
+  is source-agnostic: linear-with-floor, scaled by point of sail — a head sea slows the boat most
+  (`ROUTE_WAVE_K_UP`), a following sea least (`ROUTE_WAVE_K_DOWN`). **Phase 2** wires a real Great-Lakes
+  wave provider (NOAA GLWU Hs via THREDDS, mirroring the GLOFS current provider).
+- **Threaded everywhere** like currents: the main optimize, the per-model fan, and the playbook
+  consensus + every variant. The result carries a `realized` roll-up (`realized_pct`, `helm_factor`,
+  `sea_state_hs_mean`) + per-leg `realized_factor`; the cockpit shows a *realized %* stat, and the
+  briefing states "routing at ~N% of the flat-water polar (helm X%, sea state ~Y m)".
+
+Env-flagged + default no-op (helm 1.0 + flat water ⇒ geometry/ETA byte-identical to baseline). Verified
+`test_routing_realized.py` (wave factor shape + point-of-sail scaling + floor, helm slows the ETA and is
+reported, sea state degrades a beat more than a run, default == baseline). Tunables `ROUTE_WAVE_K_UP` /
+`ROUTE_WAVE_K_REACH` / `ROUTE_WAVE_K_DOWN` / `ROUTE_WAVE_FLOOR` / `WAVES_ENABLED` / `WAVES_CONST_HS`.
+
+- **Next:** phase 2 — the real Great-Lakes wave provider (GLWU Hs). Routing fidelity 2c/2e/2f/2g, the
+  GSHHG coastline backstop, water currents, and realized-speed phase 1 are **done**.
 
 ## Race documents (found 2026-06-17)
 

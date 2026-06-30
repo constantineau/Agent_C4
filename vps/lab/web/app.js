@@ -837,6 +837,7 @@ function optBoatControls() {
         ${(Opt.boats || []).map((b) => `<option value="${esc(b.boat_id)}" ${b.boat_id === Opt.activeBoat ? "selected" : ""}>${esc(b.name)} (${b.draft_ft != null ? b.draft_ft + " ft" : "?"})</option>`).join("")}
       </select></label>
     <label>Draft (ft) <input type="number" id="optDraft" step="0.1" min="0" value="${draftFt}" style="width:64px" onchange="optSaveDraft()"></label>
+    <label title="Fraction of the flat-water ORC polar this crew actually sails — the optimizer routes on achievable speed. 100% = sails the book.">Helm % <input type="number" id="optHelm" step="1" min="30" max="100" value="${Math.round((ab.helm_factor ?? 1) * 100)}" style="width:58px" onchange="optSaveHelm()"></label>
     <label>Charts
       <select id="optChart" onchange="optSetChart(this.value)">
         <option value="natural_earth" ${!isEnc ? "selected" : ""}>Natural Earth (coarse)</option>
@@ -859,6 +860,15 @@ async function optSaveDraft() {
   if (isNaN(ft) || ft <= 0) return;
   const full = (await (await apiGet("/api/boats/" + encodeURIComponent(Opt.activeBoat))).json()).boat || {};
   full.draft_m = Math.round(ft * 0.3048 * 10000) / 10000;          // store metres, enter feet
+  await apiPost("/api/boats", full);
+  await reloadBoats(); renderGameplan();
+}
+async function optSaveHelm() {
+  let pct = parseFloat(document.getElementById("optHelm").value);
+  if (isNaN(pct)) return;
+  pct = Math.max(30, Math.min(100, pct));                          // clamp to the modelled range
+  const full = (await (await apiGet("/api/boats/" + encodeURIComponent(Opt.activeBoat))).json()).boat || {};
+  full.helm_factor = Math.round(pct) / 100;
   await apiPost("/api/boats", full);
   await reloadBoats(); renderGameplan();
 }
@@ -1024,6 +1034,7 @@ function renderOptResult(r) {
         <div><b class="conf ${confCls}">${conf == null ? "—" : conf}</b><span>conf (min ${r.min_confidence == null ? "—" : r.min_confidence})</span></div>
         <div><b class="conf ${covCls}">${cov == null ? "—" : Math.round(cov * 100) + "%"}</b><span>wind cov</span></div>
         ${optCurrentStat(r)}
+        ${optRealizedStat(r)}
       </div>
       ${optDegradedBanner(r)}
       ${r.timed_out ? '<div class="pill warn">routing hit the time budget — route is best-effort</div>' : ""}
@@ -1078,6 +1089,17 @@ function exportLegsCsv() {
 function csvCell(v) {
   const s = String(v == null ? "" : v);
   return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+
+function optRealizedStat(r) {
+  const rz = r.realized;
+  if (!rz) return "";
+  const pct = Math.round((rz.realized_pct ?? 1) * 100);
+  const helm = Math.round((rz.helm_factor ?? 1) * 100);
+  const hs = rz.sea_state_hs_mean || 0;
+  const sea = hs > 0.05 ? ` · sea ~${hs.toFixed(1)}m` : "";
+  const cls = pct >= 92 ? "ok" : pct >= 82 ? "warn" : "bad";
+  return `<div title="Achievable speed: the route is computed at this fraction of the flat-water polar (helm skill × sea state). The gap to 100% is the boatspeed left to find."><b class="conf ${cls}">${pct}%</b><span>realized · helm ${helm}%${sea}</span></div>`;
 }
 
 function optCurrentStat(r) {

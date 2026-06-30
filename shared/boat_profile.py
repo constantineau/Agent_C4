@@ -62,6 +62,10 @@ class BoatProfile:
     # J1), so J2/J3 — same upwind slot, smaller jibs for a building breeze — aren't in the polar;
     # these crew/sailmaker thresholds split the upwind jib by wind strength. [{sail, tws_min?, tws_max?}].
     jib_crossovers: list = field(default_factory=list)
+    # Helm-skill factor (0–1): the fraction of the FLAT-WATER ORC polar this crew actually achieves —
+    # the optimizer routes on ACHIEVABLE speed (helm × sea state), and the gap to 1.0 is a coaching
+    # number. 1.0 = sails the book; the Lab-4 learning loop can refine it from real tracks. (2d-d)
+    helm_factor: float = 1.0
     note: str = ""
     provenance: dict = field(default_factory=dict)
     schema_version: str = SCHEMA_VERSION
@@ -98,6 +102,7 @@ def summary(d: dict) -> dict:
         "safety_margin_m": d.get("safety_margin_m", DEFAULT_MARGIN_M),
         "safety_depth_m": round(safety_depth_m(d), 2) if draft_m is not None else None,
         "hull_type": d.get("hull_type", "mono"),
+        "helm_factor": d.get("helm_factor", 1.0),
     }
 
 

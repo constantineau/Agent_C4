@@ -103,3 +103,16 @@ def active_safety_depth_m(default=2.63):
     if b and b.get("draft_m") is not None:
         return boat_profile.safety_depth_m(b)
     return default
+
+
+def active_helm_factor(default=1.0):
+    """The active boat's helm-skill factor (fraction of the flat-water polar the crew achieves) — the
+    optimizer routes on achievable speed. 1.0 (no penalty) if unset/out of range."""
+    b = active_boat()
+    try:
+        hf = float((b or {}).get("helm_factor"))
+        if 0.3 <= hf <= 1.0:
+            return hf
+    except (TypeError, ValueError):
+        pass
+    return default

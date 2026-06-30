@@ -199,7 +199,7 @@ def _run_optimize(definition, course_id, start_epoch, model_names, ensemble_memb
                   per_model=False, resolution="auto"):
     """Blocking: build the multi-model wind field, route the course, write the briefing."""
     from .wind import build_windfield
-    from . import optimizer, current
+    from . import optimizer, current, wave
     bbox = optimizer.course_bbox(definition, course_id)
     if not bbox:
         return {"available": False, "note": "course has no geocoded marks — review Course & Marks"}
@@ -212,12 +212,15 @@ def _run_optimize(definition, course_id, start_epoch, model_names, ensemble_memb
         return {"available": False, "note": "no weather model data could be loaded (not yet "
                 "posted, or no egress)", "windfield": wf.status(), "log": log}
     cur = current.build_currentfield(bbox, start_epoch, t_end, on_progress=log.append)  # GLOFS (no-op until wired)
+    waves = wave.build_wavefield(bbox, start_epoch, t_end, on_progress=log.append)      # sea state (phase 1 seam)
     result = optimizer.optimize_course(definition, course_id, start_epoch, wf, avoid=avoid,
                                        source=chart_source(),
                                        safety_depth=boats.active_safety_depth_m(),
                                        jib_crossovers=_active_jibs(), per_model=per_model,
-                                       resolution=resolution, cur=cur)
+                                       resolution=resolution, cur=cur,
+                                       waves=waves, helm_factor=boats.active_helm_factor())
     result["current"] = cur.status()
+    result["waves"] = waves.status()
     result["briefing"] = optimizer.briefing(result, definition.get("name", ""))
     result["boat"] = boat_profile.summary(boats.active_boat()) if boats.active_boat() else None
     wg = _wind_grid(wf, bbox, start_epoch, result.get("finish_epoch", t_end))
@@ -414,7 +417,8 @@ async def playbook(body: dict):
     from . import playbook as pb
     try:
         return await run_in_threadpool(pb.build_playbook, d, course_id, start_epoch,
-                                       model_names, ens, jib_crossovers=_active_jibs())
+                                       model_names, ens, jib_crossovers=_active_jibs(),
+                                       helm_factor=boats.active_helm_factor())
     except Exception as exc:
         return JSONResponse({"detail": f"playbook failed: {exc}"}, status_code=500)
 
@@ -493,7 +497,8 @@ async def playbook_synthesize(body: dict):
     from . import synthesis
     try:
         return await run_in_threadpool(synthesis.synthesize, d, course_id, start_epoch,
-                                       model_names, ens, jib_crossovers=_active_jibs())
+                                       model_names, ens, jib_crossovers=_active_jibs(),
+                                       helm_factor=boats.active_helm_factor())
     except Exception as exc:
         return JSONResponse({"detail": f"synthesis failed: {exc}"}, status_code=500)
 
@@ -511,7 +516,8 @@ async def playbook_freeze(body: dict):
         if not d:
             return JSONResponse({"detail": "provide a bundle or a known race_id"}, status_code=404)
         bundle = await run_in_threadpool(synthesis.synthesize, d, course_id, start_epoch,
-                                         model_names, ens, jib_crossovers=_active_jibs())
+                                         model_names, ens, jib_crossovers=_active_jibs(),
+                                         helm_factor=boats.active_helm_factor())
         if not bundle.get("variants"):
             return JSONResponse({"detail": "nothing to freeze — no variants",
                                  "bundle": bundle}, status_code=422)
