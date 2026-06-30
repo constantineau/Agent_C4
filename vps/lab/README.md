@@ -443,7 +443,12 @@ hand-entered. Both halves are public, so `app/fleetimport.py` automates them:
 stats + an unmatched list) — the human reviews/edits it in the Fleet tab and Saves via `POST /api/races`
 (nothing auto-committed, same as all Lab ingestion). `FleetEntry` gained `sail` + `source`. The Fleet tab
 gains an **Auto-import** card — YB entry list (+ORC), regatta-website URL / paste / PDF (+ORC),
-ORC-enrich, country — and a Sail # column. Verified `test_fleet_import.py` (YB + website entry parse,
+ORC-enrich, country. The roster shows a read-only **"fleet at a glance"** view (boat · sail · class ·
+division · rating/GPH, with a coverage summary + a flag on any boat missing a handicap) with the
+editable grid in a collapsible "Edit roster"; a prominent banner reports each import's result/failure
+(e.g. a JS-rendered page → "paste the text or upload the PDF"), and a **saved / unsaved-draft** indicator
+makes clear an import is only a draft until **Save roster** (the common confusion — an import populates
+the browser, Save persists it). Verified `test_fleet_import.py` (YB + website entry parse,
 sail/name ORC match, race-specific column, unmatched + JS-rendered-empty fallback) + LIVE (real
 bayviewmack2025: 108 YB entries, 58 ORC-matched against 653 USA certs; the rest flagged — 2025 certs have
 lapsed, the live 2026 race will match better). A dormant race (2026 not yet published) degrades

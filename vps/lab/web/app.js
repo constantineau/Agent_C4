@@ -1377,33 +1377,36 @@ async function renderFleet() {
   if (!Lab.sel) { view.innerHTML = '<div class="placeholder">No race — ingest one in the Races tab.</div>'; return; }
   if (!Lab.editDef || Lab.editDef.race_id !== Lab.sel) {
     view.innerHTML = '<div class="loading">Loading fleet…</div>';
-    try { Lab.editDef = await (await apiGet("/api/races/" + encodeURIComponent(Lab.sel))).json(); }
+    try { Lab.editDef = await (await apiGet("/api/races/" + encodeURIComponent(Lab.sel))).json(); Lab.fleetMsg = ""; }
     catch (e) { view.innerHTML = '<div class="placeholder">Failed to load.</div>'; return; }
   }
   if (stale("fleet")) return;
   if (!Array.isArray(Lab.editDef.fleet)) Lab.editDef.fleet = [];
   if (!Lab.editDef.own || typeof Lab.editDef.own !== "object") Lab.editDef.own = {};
+  Lab.fleetDirty = false;                 // freshly loaded from disk = in sync
+  Lab.fleetEdit = !Lab.editDef.fleet.length;   // empty roster → open the editor; populated → show the read-only view
   paintFleet();
 }
 
-async function fleetPickRace(id) { Lab.sel = id; Lab.editDef = null; renderFleet(); }
-function fleetSet(i, f, v) { if (Lab.editDef && Lab.editDef.fleet[i]) Lab.editDef.fleet[i][f] = v; }
-function fleetOwnSet(f, v) { if (!Lab.editDef) return; if (!Lab.editDef.own) Lab.editDef.own = {}; Lab.editDef.own[f] = v; }
-function fleetAddRow() { Lab.editDef.fleet.push({ boat: "", division: "", cls: "", owner: "", sail: "", orc_gph: null, rating: null, mmsi: "", source: "manual" }); paintFleet(); }
-function fleetRemove(i) { Lab.editDef.fleet.splice(i, 1); paintFleet(); }
+async function fleetPickRace(id) { Lab.sel = id; Lab.editDef = null; Lab.fleetMsg = ""; renderFleet(); }
+function fleetSet(i, f, v) { if (Lab.editDef && Lab.editDef.fleet[i]) { Lab.editDef.fleet[i][f] = v; Lab.fleetDirty = true; } }
+function fleetOwnSet(f, v) { if (!Lab.editDef) return; if (!Lab.editDef.own) Lab.editDef.own = {}; Lab.editDef.own[f] = v; Lab.fleetDirty = true; }
+function fleetAddRow() { Lab.editDef.fleet.push({ boat: "", division: "", cls: "", owner: "", sail: "", orc_gph: null, rating: null, mmsi: "", source: "manual" }); Lab.fleetDirty = true; Lab.fleetEdit = true; paintFleet(); }
+function fleetRemove(i) { Lab.editDef.fleet.splice(i, 1); Lab.fleetDirty = true; paintFleet(); }
 
 // Auto-import the roster from public data. source: 'yb' = the tracker entry list, 'both' = YB → ORC,
 // 'website' = a regatta-site URL/pasted text → ORC, 'orc' = enrich the current roster. extra = {url|text}
 // for the website source. Replaces the draft roster for review (nothing is saved until Save).
 function _fleetCC() { return (document.getElementById("fleetOrcCC") || {}).value || "USA"; }
 function _fleetApplyResult(r) {
-  if (!r.ok) { Lab.fleetMsg = r.note || r.detail || "import failed"; return; }
+  if (!r.ok) { Lab.fleetMsg = r.note || r.detail || "import failed — no boats found"; Lab.fleetMsgErr = true; return; }
   Lab.editDef.fleet = r.entries || [];
+  Lab.fleetDirty = true; Lab.fleetMsgErr = false;
   const bits = [`${r.count} boats`];
   if (r.matched != null) bits.push(`${r.matched}/${r.total} matched to ORC certs`);
   if (r.unmatched && r.unmatched.length) bits.push(`${r.unmatched.length} need a handicap by hand`);
   if (r.orc_error) bits.push("ORC lookup failed: " + r.orc_error);
-  Lab.fleetMsg = "Imported " + bits.join(" · ") + " — review, then Save.";
+  Lab.fleetMsg = "Imported " + bits.join(" · ") + " — review below, then click Save roster.";
 }
 async function fleetAutoImport(source, extra) {
   Lab.fleetBusy = true; Lab.fleetMsg = "Importing from public data…"; paintFleet();
@@ -1449,8 +1452,11 @@ function fleetImport() {
     added++;
   }
   if (ta) ta.value = "";
+  if (added) { Lab.fleetDirty = true; Lab.fleetEdit = true; }
+  Lab.fleetMsg = added ? `Appended ${added} boat${added === 1 ? "" : "s"} — review below, then click Save roster.`
+                       : "No boats parsed — check the format (one boat per line).";
+  Lab.fleetMsgErr = !added;
   paintFleet();
-  const m = document.getElementById("fleetMsg"); if (m) m.textContent = `Appended ${added} boat${added === 1 ? "" : "s"} — review, then Save.`;
 }
 
 async function fleetSave() {
@@ -1462,28 +1468,51 @@ async function fleetSave() {
   const own = Lab.editDef.own || {};
   Lab.editDef.own = { boat: (own.boat || "").trim(), division: own.division || "",
     orc_gph: fleetNum(own.orc_gph), rating: fleetNum(own.rating), mmsi: (own.mmsi || "").trim() };
-  const msg = document.getElementById("fleetMsg");
-  if (msg) msg.textContent = "Saving…";
+  Lab.fleetMsg = "Saving…"; Lab.fleetMsgErr = false; paintFleet();
   try {
     const r = await (await apiPost("/api/races", { definition: Lab.editDef })).json();
-    paintFleet();          // repaint with the cleaned roster FIRST (it rebuilds #fleetMsg)…
-    const m2 = document.getElementById("fleetMsg");
-    if (m2) m2.textContent = r.saved ? `Saved — ${Lab.editDef.fleet.length} boats in the roster.` : "Save failed.";
-  } catch (e) { const m2 = document.getElementById("fleetMsg"); if (m2) m2.textContent = "Save failed: " + e.message; }
+    if (r.saved) { Lab.fleetDirty = false; Lab.fleetMsgErr = false;
+      Lab.fleetMsg = `Saved — ${Lab.editDef.fleet.length} boat${Lab.editDef.fleet.length === 1 ? "" : "s"} in the roster.`; }
+    else { Lab.fleetMsg = "Save failed."; Lab.fleetMsgErr = true; }
+  } catch (e) { Lab.fleetMsg = "Save failed: " + e.message; Lab.fleetMsgErr = true; }
+  paintFleet();
+}
+
+function fleetSrcBadge(e) {
+  const s = e.source || "";
+  if (!s || s === "manual") return "";
+  const orc = s.includes("orc");
+  return ` <span class="pill ${orc ? "ok" : "warn"}" title="${esc(orc ? "handicap from ORC cert" : "entry only; no ORC handicap — fill by hand")}" style="font-size:9px;padding:1px 5px">${orc ? "ORC" : "entry"}</span>`;
+}
+
+// Read-only "fleet at a glance" — the obvious list of the ingested roster (sorted by division, boat),
+// with a coverage summary so a missing-handicap boat stands out. The editable grid lives in a details.
+function fleetGlance(roster) {
+  if (!roster.length) return "";
+  const byDiv = {};
+  roster.forEach((e) => { const k = (e.division || "—").trim() || "—"; byDiv[k] = (byDiv[k] || 0) + 1; });
+  const divSummary = Object.entries(byDiv).sort().map(([k, n]) => `${esc(k)} ${n}`).join(" · ");
+  const rated = roster.filter((e) => e.rating != null || e.orc_gph != null).length;
+  const sorted = [...roster].sort((a, b) =>
+    (a.division || "").localeCompare(b.division || "") || (a.boat || "").localeCompare(b.boat || ""));
+  const li = (e) => `<tr>
+    <td><b>${esc(e.boat || "—")}</b>${fleetSrcBadge(e)}</td>
+    <td class="muted">${esc(e.sail || "")}</td>
+    <td class="muted">${esc(e.cls || "")}</td>
+    <td>${esc(e.division || "")}</td>
+    <td>${e.rating != null ? esc(e.rating) : '<span class="conf bad" title="no ORC handicap — fill it in">—</span>'}</td>
+    <td class="muted">${e.orc_gph != null ? esc(e.orc_gph) : ""}</td></tr>`;
+  return `<div class="muted" style="font-size:12px;margin-bottom:6px"><b>${roster.length}</b> boat${roster.length === 1 ? "" : "s"} · <b>${rated}</b> with an ORC handicap${rated < roster.length ? ` · <b class="conf bad">${roster.length - rated} missing a rating</b>` : ""} · by division: ${divSummary}</div>
+    <table class="fleet-tbl"><thead><tr><th>Boat</th><th>Sail #</th><th>Class</th><th>Div</th><th>Rating</th><th>GPH</th></tr></thead>
+    <tbody>${sorted.map(li).join("")}</tbody></table>`;
 }
 
 function paintFleet() {
   const d = Lab.editDef, roster = d.fleet || [], own = d.own || {};
   const rp = d.rules_profile || {}, sc = rp.scoring || {}, tr = d.tracker || {};
   const inp = (val, ph, oninput, w) => `<input class="ein" style="width:${w}px" placeholder="${esc(ph)}" value="${esc(val == null ? "" : val)}" oninput="${oninput}">`;
-  const srcBadge = (e) => {
-    const s = e.source || "";
-    if (!s || s === "manual") return "";
-    const orc = s.includes("orc");
-    return ` <span class="pill ${orc ? "ok" : "warn"}" title="${esc(orc ? "handicap from ORC cert" : "entry from YB; no ORC handicap match — fill by hand")}" style="font-size:9px;padding:1px 5px">${orc ? "ORC" : "YB"}</span>`;
-  };
   const row = (e, i) => `<tr>
-    <td>${inp(e.boat, "boat name", `fleetSet(${i},'boat',this.value)`, 140)}${srcBadge(e)}</td>
+    <td>${inp(e.boat, "boat name", `fleetSet(${i},'boat',this.value)`, 140)}${fleetSrcBadge(e)}</td>
     <td>${inp(e.sail, "sail #", `fleetSet(${i},'sail',this.value)`, 70)}</td>
     <td>${inp(e.division, "div", `fleetSet(${i},'division',this.value)`, 48)}</td>
     <td>${inp(e.cls, "class", `fleetSet(${i},'cls',this.value)`, 64)}</td>
@@ -1519,6 +1548,7 @@ function paintFleet() {
 
     <div class="card">
       <h3>Auto-import from public data <span class="muted" style="font-weight:400">— entry list (YB) + ORC handicaps</span></h3>
+      ${Lab.fleetMsg ? `<div class="banner ${Lab.fleetMsgErr ? "warn" : "ok"}" style="margin-bottom:8px">${esc(Lab.fleetMsg)}</div>` : ""}
       <div class="muted" style="font-size:12px;margin-bottom:8px">Pull the roster automatically: the <b>YB tracker RaceSetup</b> supplies the entry list (boat, sail #, owner, class) and the public <b>ORC certificate database</b> fills each boat's GPH + rating, matched by sail number / name. Both public; the result is a draft you review &amp; Save. ${ybCfg ? "" : '<b>This race has no YB tracker configured</b> (set it in the Rules/ingest step) — ORC-enrich the existing roster instead, or paste an entry list below.'}</div>
       <div class="opt-controls">
         <span class="muted" style="font-size:12px">Entry list from the <b>YB tracker</b>:</span>
@@ -1541,12 +1571,16 @@ function paintFleet() {
     </div>
 
     <div class="card">
-      <h3>Roster <span class="muted" style="font-weight:400">— ${roster.length} boat${roster.length === 1 ? "" : "s"}</span></h3>
-      ${roster.length ? `<table class="fleet-tbl"><thead><tr>
-        <th>Boat</th><th>Sail #</th><th>Div</th><th>Class</th><th>Owner</th><th>ORC GPH</th><th>Rating</th><th>MMSI</th><th></th>
-        </tr></thead><tbody>${roster.map(row).join("")}</tbody></table>`
-        : `<div class="muted">No boats yet — auto-import above, add rows, or paste an entry list below.</div>`}
-      <div style="margin-top:8px"><button class="mini" onclick="fleetAddRow()">+ Add boat</button></div>
+      <h3>Roster <span class="muted" style="font-weight:400">— the ingested fleet</span>
+        ${roster.length ? (Lab.fleetDirty ? '<span class="pill warn" style="margin-left:8px">unsaved draft — click Save roster</span>' : '<span class="pill ok" style="margin-left:8px">saved</span>') : ""}</h3>
+      ${roster.length ? fleetGlance(roster) : `<div class="banner warn">No boats in the roster yet. Auto-import from the YB tracker or the regatta website above (then <b>Save roster</b>), or add/paste boats manually. An import only fills a draft here — it isn't stored until you Save.</div>`}
+      <details ${Lab.fleetEdit ? "open" : ""} style="margin-top:10px" ontoggle="Lab.fleetEdit=this.open">
+        <summary style="cursor:pointer;font-size:13px">Edit roster ${roster.length ? `(${roster.length} — add / remove / fix handicaps)` : "(add boats)"}</summary>
+        ${roster.length ? `<table class="fleet-tbl" style="margin-top:8px"><thead><tr>
+          <th>Boat</th><th>Sail #</th><th>Div</th><th>Class</th><th>Owner</th><th>ORC GPH</th><th>Rating</th><th>MMSI</th><th></th>
+          </tr></thead><tbody>${roster.map(row).join("")}</tbody></table>` : ""}
+        <div style="margin-top:8px"><button class="mini" onclick="fleetAddRow()">+ Add boat</button></div>
+      </details>
     </div>
 
     <div class="card">
@@ -1564,10 +1598,9 @@ function paintFleet() {
       </div>
     </div>
 
-    <div class="dactions"><button onclick="fleetSave()">Save roster</button>
-      <span id="fleetMsg" class="muted" style="font-size:12px">${esc(Lab.fleetMsg || "")}</span></div>
+    <div class="dactions"><button onclick="fleetSave()">${Lab.fleetDirty ? "Save roster ●" : "Save roster"}</button>
+      <span class="muted" style="font-size:12px">${Lab.fleetDirty ? "you have unsaved changes" : (roster.length ? "roster saved" : "")}</span></div>
   </div>`;
-  Lab.fleetMsg = "";
 }
 
 /* ---------- Rules, Safety & Checklists ---------- */
