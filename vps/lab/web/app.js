@@ -1558,9 +1558,9 @@ function paintFleet() {
         <button class="mini" onclick="fleetAutoImport('orc')" ${Lab.fleetBusy ? "disabled" : ""}>Enrich current roster from ORC</button>
       </div>
       <div style="margin-top:10px;border-top:1px solid var(--line);padding-top:10px">
-        <div class="muted" style="font-size:12px;margin-bottom:6px">Or from the <b>regatta website</b> (for races with no YB tracker — most races) — fetch a URL, paste the entry-list text, or upload the PDF; Opus reads it and ORC fills the handicaps:</div>
+        <div class="muted" style="font-size:12px;margin-bottom:6px">Or from the <b>regatta website</b> (for races with no YB tracker — most races). <b>A YachtScoring event link works directly</b> — paste the <code>yachtscoring.com/emenu/&lt;id&gt;</code> URL. Most other regatta sites are JavaScript-rendered, so a URL fetch can't see the list — for those, <b>paste the entry-list text</b> (select it on the page → copy → paste below) or upload the PDF. ORC then fills the handicaps:</div>
         <div class="opt-controls">
-          <input id="fleetWebUrl" class="ein" style="width:340px" placeholder="entry-list URL (e.g. regatta site / YachtScoring)">
+          <input id="fleetWebUrl" class="ein" style="width:340px" placeholder="YachtScoring event URL (yachtscoring.com/emenu/<id>)">
           <button onclick="fleetWebImport()" ${Lab.fleetBusy ? "disabled" : ""}>Fetch &amp; extract + ORC</button>
           <label>PDF <input type="file" id="fleetEntryPdf" accept=".pdf,application/pdf"></label>
           <button class="mini" onclick="fleetUploadEntry()" ${Lab.fleetBusy ? "disabled" : ""}>Upload entry-list PDF</button>

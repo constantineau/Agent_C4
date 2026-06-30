@@ -428,10 +428,16 @@ hand-entered. Both halves are public, so `app/fleetimport.py` automates them:
 - **Entry list (who's racing) — two sources:**
   - **the YB tracker `RaceSetup`** (the same feed we decode for the boat track): per-team name, sail
     number, owner/skipper, model → the roster identities, in one fetch (reuses the race's `tracker` block).
-  - **the regatta website** — for the many races with no YB tracker: fetch an entry-list URL, paste the
-    entry-list text, or upload the entry-list PDF, and Opus extracts {boat, sail, owner, class, division}
-    (reuses the Lab-0 `extract` machinery — `text_from_url`/`pdf_text` + the same dual-input pattern as
-    NOR/SI; JS-rendered hubs that a fetch can't reach → paste/upload fallback, flagged gracefully).
+  - **the regatta website** — for the many races with no YB tracker:
+    - **YachtScoring** (the dominant platform — JS-rendered, so a plain fetch gets only an "enable
+      JavaScript" shell): pulled DIRECTLY from its public data API
+      (`api.yachtscoring.com/v1/public/event/<id>/boats`, paginated JSON — `roster_from_yachtscoring`),
+      the event id parsed from a `yachtscoring.com/emenu/<id>` or `?eID=<id>` URL. name + sailPrefix/
+      sailNumber + design + owner{firstName,lastName} + split{splitClassName}.
+    - **other sites**: fetch the URL (static HTML/PDF) or **paste the entry-list text** / **upload the
+      PDF**, and Opus extracts {boat, sail, owner, class, division} (reuses the Lab-0 `extract`
+      machinery — `text_from_url`/`pdf_text`, same dual-input pattern as NOR/SI). A JS-rendered page a
+      fetch can't read returns nothing → the note tells the user to paste the text or upload the PDF.
 - **Handicaps = the ORC public certificate DB** (`data.orc.org/public/WPub.dll?action=DownRMS&
   CountryId=<cc>&ext=json`, decoded utf-8-sig, cached `ORC_CACHE_TTL_S`): every active national cert
   with GPH + ToT/ToD coefficients — incl. **race-specific columns** (Bayview Mackinac's

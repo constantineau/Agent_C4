@@ -233,15 +233,65 @@ def roster_from_text(text):
     return {"ok": True, "entries": entries, "count": len(entries)}
 
 
+# YachtScoring is a JS SPA, but its public API serves the entry list as JSON — fetch that directly
+# (like YB), instead of the HTML shell a server-side fetch gets ("You need to enable JavaScript").
+_YS_EVENT_RE = re.compile(r"(?:emenu/|e?id=|event/)(\d+)", re.I)
+_YS_API = "https://api.yachtscoring.com/v1/public/event/{eid}/boats?page={page}&size={size}"
+
+
+def roster_from_yachtscoring(event_id):
+    """Pull a YachtScoring event's entry list from its public boats API (paginated JSON)."""
+    entries, page, size, total = [], 1, 200, None
+    while page <= 60:
+        try:
+            d = json.loads(_get(_YS_API.format(eid=event_id, page=page, size=size)).decode("utf-8", "replace"))
+        except Exception as e:
+            return {"ok": False, "note": f"YachtScoring fetch failed: {type(e).__name__}"}
+        rows = d.get("rows") or []
+        if total is None:
+            total = d.get("count")
+        for r in rows:
+            nm = (r.get("name") or "").strip()
+            if not nm:
+                continue
+            pre = str(r.get("sailPrefix") or "").strip().upper()
+            num = str(r.get("sailNumber") or "").strip()
+            sail = (pre + " " + num).strip() if (pre or num) else ""
+            own = r.get("owner")            # a dict {firstName,lastName,...} on YachtScoring
+            owner = (f"{own.get('firstName','')} {own.get('lastName','')}".strip()
+                     if isinstance(own, dict) else str(own or "").strip())
+            sp = r.get("split")             # a dict {splitDivision, splitClassName, splitCircle}
+            division = ((sp.get("splitClassName") or sp.get("splitDivision") or "")
+                        if isinstance(sp, dict) else str(sp or "")).strip()
+            entries.append({"boat": nm, "sail": sail, "cls": str(r.get("design") or "").strip(),
+                            "owner": owner, "division": division,
+                            "orc_gph": None, "rating": None, "mmsi": None, "source": "yachtscoring"})
+        if not rows or (total is not None and len(entries) >= total):
+            break
+        page += 1
+    if not entries:
+        return {"ok": False, "note": "YachtScoring returned no entries — check the event id, or the "
+                "entry list may not be public yet"}
+    return {"ok": True, "entries": entries, "count": len(entries)}
+
+
 def roster_from_url(url):
-    """Fetch a regatta entry-list URL (HTML or PDF) → extract the roster. Static sites work directly;
-    JS-rendered hubs (YachtScoring/Regatta Network) return little → the caller falls back to paste/upload."""
+    """Fetch a regatta entry-list URL → roster. Known JS platforms (YachtScoring) are pulled from their
+    public data API directly; otherwise a plain HTML/PDF fetch + Opus (works for static pages; a
+    JS-rendered hub returns nothing → the note tells the user to paste the text or upload the PDF)."""
     if not (url or "").strip():
         return {"ok": False, "note": "no URL given"}
+    if "yachtscoring.com" in url.lower():
+        m = _YS_EVENT_RE.search(url)
+        if not m:
+            return {"ok": False, "note": "couldn't find the YachtScoring event id in that URL "
+                    "(expected .../emenu/<id> or ?eID=<id>)"}
+        return roster_from_yachtscoring(m.group(1))
     try:
         _label, text = extract.text_from_url(url)
     except Exception as e:
-        return {"ok": False, "note": f"entry-list fetch failed: {type(e).__name__}"}
+        return {"ok": False, "note": f"entry-list fetch failed: {type(e).__name__} — if the page needs "
+                "a browser to load, paste the entry-list text or upload the PDF instead"}
     return roster_from_text(text)
 
 

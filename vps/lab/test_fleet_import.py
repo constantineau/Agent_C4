@@ -95,6 +95,27 @@ def test_website_source():
     print(f"PASS website_source: extracted {r['count']} boats from page text, {out['matched']} ORC-matched")
 
 
+def test_yachtscoring_parse():
+    # YachtScoring's public boats API (paginated) — owner & split are dicts; sail = prefix+number
+    page1 = json.dumps({"count": 2, "rows": [
+        {"name": "Think blue", "sailPrefix": "usa", "sailNumber": "200", "design": "Ten",
+         "owner": {"firstName": "Gary", "lastName": "Disbrow"},
+         "split": {"splitDivision": "PHRF", "splitClassName": "PHRF G"}},
+        {"name": "Killing Me Softly", "sailPrefix": "USA", "sailNumber": "40037", "design": "Farr 40",
+         "owner": {"firstName": "Ryan", "lastName": "Quinn"}, "split": {"splitClassName": "PHRF A"}},
+    ]}).encode()
+    fleetimport._get = lambda url: page1
+    for u in ("https://yachtscoring.com/emenu/50579",
+              "https://www.yachtscoring.com/event_entry_list.cfm?eID=50579"):
+        assert fleetimport._YS_EVENT_RE.search(u).group(1) == "50579", u
+    r = fleetimport.roster_from_url("https://yachtscoring.com/emenu/50579")
+    assert r["ok"] and r["count"] == 2, r
+    e0 = r["entries"][0]
+    assert e0["boat"] == "Think blue" and e0["sail"] == "USA 200" and e0["owner"] == "Gary Disbrow" \
+        and e0["division"] == "PHRF G" and e0["source"] == "yachtscoring", e0
+    print("PASS yachtscoring: event-id parsed, boats API mapped (sail/owner/division from nested JSON)")
+
+
 def test_website_empty():
     fleetimport._llm_entry_list = lambda text: []        # JS-rendered page → nothing extracted
     r = fleetimport.roster_from_text("nav menu only, no list")
@@ -119,7 +140,7 @@ def _live():
 
 if __name__ == "__main__":
     test_roster_from_yb(); test_orc_match_and_race_col(); test_generic_col_fallback(); test_import_fleet_both()
-    test_website_source(); test_website_empty()
+    test_website_source(); test_yachtscoring_parse(); test_website_empty()
     if "--live" in sys.argv:
         _live()
     print("\nALL FLEET-IMPORT TESTS PASSED")

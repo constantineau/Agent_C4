@@ -1023,9 +1023,12 @@ judge.py (builds CurrentField), learning.py, boats.py, optimizer.py, web/app.js,
 **FLEET ROSTER AUTO-IMPORT — public entry list (YB) + ORC handicaps: SHIPPED 2026-06-30.** The fleet
 roster (competitor names + ORC handicaps, the corrected-time tactics homework) was hand-entered; both
 halves are public. `app/fleetimport.py`: (1) **entry list = the YB `RaceSetup`** (same feed we decode for
-the track) OR **the REGATTA WEBSITE** (for races with no YB tracker — fetch an entry-list URL, paste the
-text, or upload the PDF → Opus extracts {boat,sail,owner,cls,division}, reusing the Lab-0 `extract`
-machinery; JS-rendered hubs → paste/upload fallback) → per-team name/sail#/owner/model; (2) **handicaps =
+the track) OR **the REGATTA WEBSITE** (for races with no YB tracker): **YachtScoring** pulled directly
+from its public data API (`api.yachtscoring.com/v1/public/event/<id>/boats` paginated JSON — it's a JS
+SPA so a plain fetch only gets an "enable JavaScript" shell; event id parsed from a
+`yachtscoring.com/emenu/<id>` / `?eID=<id>` URL), and **other sites** via URL fetch / pasted text /
+uploaded PDF → Opus extracts {boat,sail,owner,cls,division} (reuses the Lab-0 `extract` machinery;
+JS-rendered hubs that a fetch can't read → paste/upload fallback) → per-team name/sail#/owner/model; (2) **handicaps =
 the ORC public cert DB** (`data.orc.org/public/WPub.dll?action=DownRMS&CountryId=<cc>&ext=json`,
 utf-8-sig, cached) with GPH + ToT/ToD incl. race-specific columns (Bayview's `US_BAYMAC_CV/SH_TOT` picked
 by race+course, else generic `TMF_Offshore`), matched by sail#→yacht-name. `POST /api/fleet/import
