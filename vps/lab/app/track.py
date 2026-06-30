@@ -70,6 +70,21 @@ def _nearest_idx(fixes, target):
                key=lambda i: _hav_nm((fixes[i]["lat"], fixes[i]["lon"]), target))
 
 
+def _water_velocity(sog, cog, cset, cdrift):
+    """Boat velocity THROUGH THE WATER = the SOG vector minus the current vector → (stw, water_course).
+
+    The optimizer advances by water-velocity + current to get SOG, so to recover speed-through-water
+    (what the polar actually rates) we subtract the modelled set/drift back out. Removing the current
+    is what makes a measured >100% of polar trustworthy as real boat speed, not a fair tide. Headings
+    are compass degrees (0=N, CW); returns (stw_kn, course_deg)."""
+    cr, sr = math.radians(cog), math.radians(cset)
+    n = sog * math.cos(cr) - cdrift * math.cos(sr)
+    e = sog * math.sin(cr) - cdrift * math.sin(sr)
+    stw = math.hypot(n, e)
+    course = (math.degrees(math.atan2(e, n)) + 360) % 360
+    return stw, course
+
+
 # ---- GPX --------------------------------------------------------------------------------------
 def _parse_iso(s):
     if not s:
@@ -247,7 +262,7 @@ def fetch_yb_track(definition, boat_name=None):
 
 
 # ---- scoring: actual track vs the oracle-optimal route -----------------------------------------
-def score_track(track, oracle, marks, start_epoch, wf=None, polars=None):
+def score_track(track, oracle, marks, start_epoch, wf=None, polars=None, cur=None):
     """The actual_track block: helm execution vs the oracle line (perflab §5 metrics).
 
     `oracle` is the judge's oracle result (path + total_hours/total_nm); `marks` flattened course
@@ -302,12 +317,28 @@ def score_track(track, oracle, marks, start_epoch, wf=None, polars=None):
         "xte_max_nm": round(max(xtes), 2) if xtes else None,
         "side_worked": side,
     }
-    pol = _polar_pct(seg, epochs, wf, polars)
+    cc = cur if (cur is not None and getattr(cur, "loaded", False)) else None
+    pol = _polar_pct(seg, epochs, wf, polars, cc)
     if pol:
         out.update(pol)
-    bins = _performance_bins(seg, epochs, wf, polars)
+    bins = _performance_bins(seg, epochs, wf, polars, cc)
     if bins:
         out["perf_bins"] = bins                # observed-vs-polar by (TWS,TWA) cell — Lab-4 mining input
+    if cc is not None and epochs and epochs[0] is not None:
+        drifts = []
+        for f, ep in zip(seg, epochs):
+            if ep is None:
+                continue
+            try:
+                drifts.append(cc.current_at(f["lat"], f["lon"], ep)[1])
+            except Exception:
+                pass
+        if drifts:
+            out["current_corrected"] = True
+            out["current_mean_kn"] = round(sum(drifts) / len(drifts), 2)
+            out["current_max_kn"] = round(max(drifts), 2)
+    else:
+        out["current_corrected"] = False
     # honest self-checks (matches the project's degraded-signal ethos): flag non-physical readings
     # that usually mean favorable current / a soft rating / an oracle-window mismatch, not real perf.
     cav = []
@@ -315,9 +346,14 @@ def score_track(track, oracle, marks, start_epoch, wf=None, polars=None):
     if tb is not None and tb < -20:
         cav.append("boat faster than the oracle line — check the oracle wind window matches the "
                    "actual race (forecast-grade or wrong-day GRIB inflates this).")
-    if out.get("polar_pct") and out["polar_pct"] > 110:
-        cav.append(">100% of polar usually means a favorable current or a soft ORC rating, not real "
-                   "overspeed; treat the helm number as a ceiling.")
+    if out.get("polar_pct") and out["polar_pct"] > 108:
+        if out.get("current_corrected"):
+            cav.append(f">100% of polar after removing the modelled current (mean "
+                       f"{out.get('current_mean_kn', 0)} kn) — likely a soft ORC rating / sailing above "
+                       "the cert. Confirm the current model is trustworthy before refining the polar up.")
+        else:
+            cav.append(">100% of polar with NO current correction — usually a favorable current rather "
+                       "than real overspeed; a current field would disambiguate.")
     if cav:
         out["caveats"] = cav
     return out
@@ -341,10 +377,24 @@ def optimizer_first_beat_side(pts, start, first_mark, band_nm=0.4):
     return "right" if ext > 0 else "left"
 
 
-def _polar_pct(seg, epochs, wf, polars):
-    """% of the flat-water polar the boat ACHIEVED — actual SOG vs the polar target at the realized
-    wind (TWS/TWA from the actual-wind field) at each fix. The helm+conditions coaching number; needs
-    the windfield + polars + derived SOG, else omitted."""
+def _speed_angle(f, ep, twd, cur):
+    """The fix's speed + true-wind-angle to compare against the polar. With a current field, this is
+    speed THROUGH THE WATER + the through-water course (the polar's actual basis); else raw SOG/COG."""
+    sog, cog = f["sog"], f["cog"]
+    if cur is not None:
+        try:
+            cset, cdrift = cur.current_at(f["lat"], f["lon"], ep)
+            if cdrift and cdrift > 0.02:
+                sog, cog = _water_velocity(sog, cog, cset, cdrift)
+        except Exception:
+            pass
+    return sog, abs(optimizer._wrap180(cog - twd))
+
+
+def _polar_pct(seg, epochs, wf, polars, cur=None):
+    """% of the flat-water polar the boat ACHIEVED — speed-through-water (current-corrected when a
+    current field is given) vs the polar target at the realized wind, per fix. The coaching number;
+    can exceed 100% (a soft ORC rating / sailing above the cert). Needs windfield + polars, else None."""
     if wf is None or polars is None or not getattr(wf, "loaded", False):
         return None
     P = polars
@@ -358,10 +408,10 @@ def _polar_pct(seg, epochs, wf, polars):
             continue
         if not tws or tws <= 0:
             continue
-        twa = abs(optimizer._wrap180(f["cog"] - twd))
+        stw, twa = _speed_angle(f, ep, twd, cur)
         target = optimizer._polar_speed(P, tws, twa)
-        if target and target > 0.5 and f["sog"] > 0.3:
-            ratios.append(min(2.0, f["sog"] / target))
+        if target and target > 0.5 and stw > 0.3:
+            ratios.append(min(2.0, stw / target))
     if len(ratios) < 5:
         return None
     return {"polar_pct": round(100 * sum(ratios) / len(ratios)),
@@ -384,15 +434,16 @@ def _pctile(xs, q):
     return s[lo] if lo + 1 >= len(s) else s[lo] + (s[lo + 1] - s[lo]) * (i - lo)
 
 
-def _performance_bins(seg, epochs, wf, polars):
-    """Observed STW vs the polar target, snapped to the ORC cert's OWN (TWS,TWA) grid cells — the
-    Lab-4 refined-polar input. Snapping to the cert grid (not arbitrary bins) is what lets an approved
-    adjustment line up 1:1 with the cell the optimizer samples (`_polar_speed` nearest-neighbour), so
-    the overlay actually bites. A high percentile (80th) of observed STW per cell = 'best achievable'
-    (rejects lulls/steering scatter). Needs the actual-wind field + ≥ a few samples/cell, else []."""
+def _performance_bins(seg, epochs, wf, polars, cur=None):
+    """Speed-through-water (current-corrected when a current field is given) vs the polar target,
+    snapped to the ORC cert's OWN (TWS,TWA) grid cells — the Lab-4 refined-polar input. Snapping to the
+    cert grid (not arbitrary bins) is what lets an approved adjustment line up 1:1 with the cell the
+    optimizer samples (`_polar_speed` nearest-neighbour), so the overlay actually bites. A high
+    percentile (80th) per cell = 'best achievable' (rejects lulls/steering scatter); can exceed the
+    cert (soft rating). Needs the actual-wind field + ≥ a few samples/cell, else []."""
     if wf is None or polars is None or not getattr(wf, "loaded", False):
         return []
-    cells = {}            # (cert_tws, cert_twa) -> [observed stw]
+    cells = {}            # (cert_tws, cert_twa) -> [through-water stw]
     for f, ep in zip(seg, epochs):
         if ep is None or f.get("sog") is None or f.get("cog") is None or f["sog"] <= 0.3:
             continue
@@ -402,13 +453,13 @@ def _performance_bins(seg, epochs, wf, polars):
             continue
         if not tws or tws <= 0:
             continue
-        twa = abs(optimizer._wrap180(f["cog"] - twd))
-        if twa < 30:
+        stw, twa = _speed_angle(f, ep, twd, cur)
+        if twa < 30 or stw <= 0.3:
             continue
         cell = min(polars, key=lambda p: abs(p[0] - tws) + abs(p[1] - twa))   # nearest cert cell
         if abs(cell[0] - tws) > 3.0 or abs(cell[1] - twa) > 18.0:             # too far → off-grid, skip
             continue
-        cells.setdefault((cell[0], cell[1], cell[2]), []).append(f["sog"])
+        cells.setdefault((cell[0], cell[1], cell[2]), []).append(stw)
     out = []
     for (tws_c, twa_c, target), stws in sorted(cells.items()):
         if len(stws) < _BIN_MIN_SAMPLES or not target or target <= 0.5:

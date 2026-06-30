@@ -84,6 +84,16 @@ def test_score():
     print(f"PASS caveat: {s2['time_behind_optimal_min']} min => {s2['caveats'][0][:48]}…")
 
 
+def test_current_correction():
+    # boat makes 7 kn THROUGH THE WATER due east; a 2 kn east-setting current → 9 kn SOG east.
+    stw, course = track._water_velocity(9.0, 90.0, 90.0, 2.0)     # (sog, cog, set, drift)
+    assert abs(stw - 7.0) < 1e-6 and abs(course - 90.0) < 1e-3, (stw, course)
+    # a 2 kn FOUL current (sets west, 270) with only 5 kn SOG east → 7 kn through the water.
+    stw2, _ = track._water_velocity(5.0, 90.0, 270.0, 2.0)
+    assert abs(stw2 - 7.0) < 1e-6, stw2
+    print("PASS current_correction: SOG 9→STW 7 (fair tide removed), SOG 5→STW 7 (foul tide added back)")
+
+
 def test_perf_bins_snap_to_cert():
     # a fake wind field (constant 12 kn from north) + a cert with specific TWA cells; observations at
     # ~50° and ~135° must SNAP to the cert's 52° and 135° cells (so an overlay later lines up 1:1).
@@ -123,7 +133,8 @@ def _live():
 
 
 if __name__ == "__main__":
-    test_yb_decode(); test_yb_decode_two_teams(); test_gpx(); test_score(); test_perf_bins_snap_to_cert()
+    test_yb_decode(); test_yb_decode_two_teams(); test_gpx(); test_score()
+    test_current_correction(); test_perf_bins_snap_to_cert()
     if "--live" in sys.argv:
         _live()
     print("\nALL TRACK TESTS PASSED")

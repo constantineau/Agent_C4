@@ -1866,8 +1866,16 @@ function debTrackScore(at) {
   const tb = at.time_behind_optimal_min;
   const tbTxt = tb == null ? "—" : (tb >= 0 ? tb + " min behind optimal" : Math.abs(tb) + " min faster than the oracle line");
   const row = (label, val) => `<div class="dep-row"><b style="min-width:150px;display:inline-block">${label}</b> ${val}</div>`;
+  // >100% can be real (soft rating / sailing above the cert) once the current is removed — colour it
+  // ok when current-corrected, warn when not (likely a fair tide), and a runaway >120 always warns.
+  const over = at.polar_pct > 108;
+  const polCls = at.polar_pct == null ? "" : (at.polar_pct > 120 ? "warn" : over ? (at.current_corrected ? "ok" : "warn") : (at.polar_pct >= 90 ? "ok" : "bad"));
+  const overNote = over ? (at.current_corrected ? " · &gt;100% = above cert (rated soft?)" : " · &gt;100% — likely current (uncorrected)") : "";
   const pol = at.polar_pct == null ? null
-    : `<span class="pill ${at.polar_pct > 108 ? "warn" : at.polar_pct >= 90 ? "ok" : "bad"}">${at.polar_pct}% of polar</span> <span class="muted">(${at.polar_samples} samples${at.polar_pct > 108 ? " · &gt;100% ≈ current/soft rating" : ""})</span>`;
+    : `<span class="pill ${polCls}">${at.polar_pct}% of polar</span> <span class="muted">(${at.polar_samples} samples${overNote})</span>`;
+  const ccNote = at.current_corrected
+    ? `<span class="muted"> · current-corrected (mean ${at.current_mean_kn ?? "?"} kn)</span>`
+    : (at.polar_pct != null ? '<span class="muted"> · no current correction (SOG vs polar)</span>' : "");
   const cav = (at.caveats || []).length
     ? `<div class="banner warn" style="margin-top:8px;font-size:12px">${at.caveats.map(esc).join("<br>")}</div>` : "";
   return `<div class="card">
@@ -1877,7 +1885,7 @@ function debTrackScore(at) {
       ${row("Distance sailed", `${at.sailed_nm} nm` + (at.extra_distance_pct != null ? ` · <b>${at.extra_distance_pct}% over</b> the optimal ${at.optimal_nm != null ? at.optimal_nm + " nm" : ""}` : "") + (at.rhumb_nm ? ` <span class="muted">(rhumb ${at.rhumb_nm} nm)</span>` : ""))}
       ${row("Cross-track off optimal", at.xte_mean_nm != null ? `mean ${at.xte_mean_nm} nm · p90 ${at.xte_p90_nm} nm · max ${at.xte_max_nm} nm` : "—")}
       ${row("First beat worked", `<b>${esc(at.side_worked || "—")}</b>`)}
-      ${pol ? row("Polar achieved", pol) : ""}
+      ${pol ? row("Polar achieved", pol + ccNote) : ""}
     </div>
     ${cav}
     <div class="muted" style="font-size:11px;margin-top:6px">The boat never sails the optimal line exactly — these are coaching deltas. Oversail + cross-track = steering/tactics; polar% = helm/trim vs conditions. The critique above separates the causes.</div>
@@ -1981,8 +1989,8 @@ function learnRefineCard(ab) {
   const L = Lab.learning || {};
   const pending = (L.proposals || []).find((p) => p.status === "proposed");
   const adjN = (ab.polar_adjustments || []).length;
-  const applied = (ab.helm_factor != null && ab.helm_factor < 1) || adjN
-    ? `<div class="muted" style="font-size:12px">Currently applied: helm factor <b>${ab.helm_factor != null ? ab.helm_factor : 1}</b>${adjN ? ` · <b>${adjN}</b> polar-cell adjustments` : " · no polar overlay"}.</div>` : "";
+  const applied = (ab.helm_factor != null && Math.abs(ab.helm_factor - 1) > 1e-6) || adjN
+    ? `<div class="muted" style="font-size:12px">Currently applied: helm factor <b>${ab.helm_factor != null ? ab.helm_factor : 1}</b>${ab.helm_factor > 1 ? " (above cert — rated soft)" : ""}${adjN ? ` · <b>${adjN}</b> polar-cell adjustments` : " · no polar overlay"}.</div>` : "";
   let body;
   if (L.busy) body = '<div class="loading">Working…</div>';
   else if (pending) body = learnProposalReview(pending);
@@ -2006,7 +2014,7 @@ function learnProposalReview(p) {
     <td class="muted">${esc(a.basis || "")}</td></tr>`).join("");
   return `<div class="dep-grid" style="margin-bottom:8px">
       <div class="dep-row"><b style="min-width:150px;display:inline-block">Overall achieved</b> ${s.overall_pct}% of polar over ${s.n_samples} samples · ${(s.races || []).length} race(s)</div>
-      <div class="dep-row"><b style="min-width:150px;display:inline-block">Helm factor</b> ${p.helm_current} → <b>${p.helm_proposed}</b> <input id="learnHelmEdit" type="number" step="0.01" min="0.5" max="1" value="${p.helm_proposed}" style="width:70px;margin-left:8px"> <span class="muted">(editable)</span></div>
+      <div class="dep-row"><b style="min-width:150px;display:inline-block">Helm factor</b> ${p.helm_current} → <b>${p.helm_proposed}</b>${p.helm_proposed > 1 ? ' <span class="muted">(above cert — rated soft / sailing above the polar)</span>' : ""} <input id="learnHelmEdit" type="number" step="0.01" min="0.5" max="1.2" value="${p.helm_proposed}" style="width:70px;margin-left:8px"> <span class="muted">(editable)</span></div>
       ${Object.keys(pos).length ? `<div class="dep-row"><b style="min-width:150px;display:inline-block">By point of sail</b> ${Object.entries(pos).map(([k, v]) => `${k} ${v}%`).join(" · ")}</div>` : ""}
     </div>
     ${rows ? `<div class="muted" style="font-size:12px;margin-bottom:4px">Proposed polar-cell adjustments — untick any you don't want to apply:</div>

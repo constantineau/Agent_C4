@@ -20,8 +20,11 @@ import time
 
 LEARNING_DB = os.environ.get("LEARNING_DB", "/srv/learning/learning.db")
 
-# proposal guardrails — keep an approved auto-suggestion from ever wildly distorting the polar
-_HELM_MIN, _HELM_MAX = 0.50, 1.00
+# proposal guardrails — keep an approved auto-suggestion from ever wildly distorting the polar. The
+# helm factor MAY exceed 1.0: the ORC polar is a (conservative) rating, not a physical ceiling — a
+# soft-rated / well-sailed boat genuinely sails above the cert, and the current-corrected measurement
+# is what makes a >100% trustworthy. The cap is symmetric so we can learn "faster than rated" too.
+_HELM_MIN, _HELM_MAX = 0.50, 1.15
 _CELL_MULT_MIN, _CELL_MULT_MAX = 0.85, 1.15
 _CELL_DEADBAND = 0.04            # don't propose a cell tweak smaller than ±4% (noise)
 _MIN_RACES_FOR_CELL = 1          # a cell must appear in at least this many races to be proposed

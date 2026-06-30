@@ -106,12 +106,14 @@ def active_safety_depth_m(default=2.63):
 
 
 def active_helm_factor(default=1.0):
-    """The active boat's helm-skill factor (fraction of the flat-water polar the crew achieves) — the
-    optimizer routes on achievable speed. 1.0 (no penalty) if unset/out of range."""
+    """The active boat's helm/realization factor — the fraction of the flat-water ORC polar the boat
+    achieves; the optimizer routes on achievable speed. MAY exceed 1.0 (the polar is a conservative
+    rating, not a ceiling — a soft-rated/well-sailed boat sails above the cert). 1.0 if unset/out of
+    range; accepted band [0.3, 1.2]."""
     b = active_boat()
     try:
         hf = float((b or {}).get("helm_factor"))
-        if 0.3 <= hf <= 1.0:
+        if 0.3 <= hf <= 1.2:
             return hf
     except (TypeError, ValueError):
         pass

@@ -1002,6 +1002,23 @@ Files: learning.py (new), judge.py, track.py (perf bins), polars.py (apply_adjus
 playbook.py/synthesis.py (polar_adjustments thread), boats.py + shared/boat_profile.py, main.py,
 web/app.js, compose.dev.yml (lab_learning volume), test_routing_learning.py (new). (Lab not in
 compose.prod — runs as the standing dev container.)
+**HELM FACTOR CAN EXCEED 1.0 + CURRENT-CORRECTED MEASUREMENT (2026-06-30 follow-up):** the ORC polar is
+a conservative RATING, not a physical ceiling — a soft-rated / well-sailed boat genuinely sails above the
+cert, so the helm scalar must be able to learn "faster than rated." The hard ≤1.0 cap was an asymmetric
+pessimism bug (cell mults already allowed >1). Now `_HELM_MIN/_MAX=0.50/1.15` (proposals),
+`active_helm_factor` accepts [0.3,1.2], and the optimizer's `realized_on` triggers on any departure from
+1.0 (not just <1) so helm>1 speeds the boat. **The enabler is current correction:** a measured >100% could
+be a fair tide (the track only gives SOG), so the debrief now builds the actual `CurrentField` and
+`track._water_velocity` subtracts the modelled set/drift from each fix's SOG vector → speed-THROUGH-WATER
+(the polar's real basis) before comparing to the cert in `_polar_pct`/`_performance_bins`. `score_track`
+reports `current_corrected`/`current_mean_kn`; the >100% caveat distinguishes "above cert after removing
+the current (rated soft — confirm the current model)" from "no correction → likely a fair tide." UI:
+scorecard colours >100% ok when current-corrected / warns when not (always warns >120%) + a
+"current-corrected (mean N kn)" note; proposal/applied lines label helm>1 "above cert — rated soft".
+Verified: `test_routing_track.test_current_correction` (SOG 9→STW 7 fair, 5→7 foul) +
+`test_routing_learning.test_helm_can_exceed_one` (soft boat → helm 1.11) + realized/2g regression green +
+soft-boat HTTP e2e (helm 1.0→1.11 → active_helm_factor 1.11) + Playwright (0 errors). Files: track.py,
+judge.py (builds CurrentField), learning.py, boats.py, optimizer.py, web/app.js, both test files.
 
 **Over-correction guards (why this won't distort the route):** discussed 2026-06-30 — the model can't run
 away (deadband + floor + conservative slopes; ~6% upwind at 2 m, downwind barely touched), it's OFF by

@@ -439,6 +439,14 @@ with a person signing off on every change. Two parts:
   `polar_adjustments` onto the boat profile; `reject_proposal` discards. Guardrails clamp helm to
   [0.5,1.0] and cell multipliers to [0.85,1.15], with a ±4% deadband so noise isn't proposed.
 
+**Helm factor can exceed 1.0** (the ORC polar is a conservative rating, not a ceiling — a soft-rated /
+well-sailed boat sails above the cert). Proposals clamp to [0.5, 1.15] and the optimizer routes on it.
+The enabler is **current correction**: the track only gives SOG, so a fair tide would fake a >100%; the
+debrief builds the actual `CurrentField` and subtracts the modelled set/drift from each fix
+(`track._water_velocity`) to get speed-through-water — the polar's real basis — before comparing to the
+cert. A >100% after that is real (rated soft); `score_track` reports `current_corrected`/`current_mean_kn`
+and the UI flags an uncorrected >100% as "likely current."
+
 The ORC cert stays the canonical polar; approved tweaks are an explicit overlay
 (`BoatProfile.polar_adjustments`) the optimizer applies via `polars.apply_adjustments` — threaded as
 `polar_adjustments=` through `optimize_course` / `build_playbook` / `synthesize` (resolved from the

@@ -119,6 +119,13 @@ def run_judge(race_id, playbook_id=None, models=None, on_progress=None):
     if not oracle.get("available", True) and oracle.get("note"):
         return {"available": False, "note": "oracle route failed: " + oracle["note"]}
 
+    log("building the actual-current field (for through-water scoring)…")
+    try:
+        from .current import build_currentfield
+        cur = build_currentfield(bbox, start, t_end, on_progress=log)
+    except Exception:
+        cur = None
+
     marks, _, _ = race_def.course_to_marks(d, course_id)
     start_pt = (marks[0][2], marks[0][3]) if marks else None
     first_mark = (marks[1][2], marks[1][3]) if len(marks) > 1 else None
@@ -146,7 +153,7 @@ def run_judge(race_id, playbook_id=None, models=None, on_progress=None):
                    "side_matched": (rec_side == side_paid),
                    "winning_variant": winning},
         "windfield": wf.status(),
-        "actual_track": _score_actual_track(race_id, oracle, marks, start, wf),
+        "actual_track": _score_actual_track(race_id, oracle, marks, start, wf, cur),
         "caveat": "Oracle wind is the best-available GRIB over the race window; a true post-race judge "
                   "uses reanalysis/analysis fields. For a future/near race this is forecast-grade, so "
                   "regret reflects forecast drift, not full hindsight.",
@@ -161,16 +168,18 @@ def run_judge(race_id, playbook_id=None, models=None, on_progress=None):
     return report
 
 
-def _score_actual_track(race_id, oracle, marks, start_epoch, wf):
+def _score_actual_track(race_id, oracle, marks, start_epoch, wf, cur=None):
     """Score the boat's stored ACTUAL track vs the oracle line (helm execution), if one is uploaded/
-    fetched. Returns the actual_track block for the report; a no-track default keeps the slot honest."""
+    fetched. Returns the actual_track block for the report; a no-track default keeps the slot honest.
+    `cur` (the actual-current field) lets the polar%/bins use speed-through-water, so a measured >100%
+    reflects real boat speed rather than a fair tide."""
     t = track.load_track(race_id)
     if not t or not t.get("fixes"):
         return {"available": False,
                 "note": "no boat track for this race — upload a GPX or fetch our YB track below"}
     try:
         from . import polars as POL
-        return track.score_track(t, oracle, marks, start_epoch, wf=wf, polars=POL.polars_stw())
+        return track.score_track(t, oracle, marks, start_epoch, wf=wf, polars=POL.polars_stw(), cur=cur)
     except Exception as e:
         return {"available": False, "note": f"track scoring failed: {type(e).__name__}"}
 

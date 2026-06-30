@@ -96,7 +96,30 @@ def test_learning_flow():
                 os.remove(f)
 
 
+def test_helm_can_exceed_one():
+    """A boat that OUTPERFORMS the cert (rated soft) should get a proposed helm_factor > 1.0."""
+    tmp = tempfile.mkdtemp()
+    learning.LEARNING_DB = os.path.join(tmp, "learning.db")
+    boats.save_boat({"boat_id": "_softboat_", "name": "Soft", "draft_m": 2.0, "helm_factor": 1.0})
+    try:
+        bins = [{"tws": 12.0, "twa": 90.0, "point_of_sail": "reaching", "samples": 80,
+                 "best_stw": 8.9, "target_stw": 8.05, "pct": 111}]   # 111% of polar (current-corrected)
+        learning.archive_debrief(_fake_report("soft-a", bins, 111), "_softboat_")
+        learning.archive_debrief(_fake_report("soft-b", bins, 110), "_softboat_")
+        p = learning.propose("_softboat_")
+        assert p["ok"] and p["helm_proposed"] > 1.0, p          # learns "faster than rated"
+        assert p["helm_proposed"] <= 1.15, p                    # but clamped
+        learning.apply_proposal(p["id"])
+        assert boats.get_boat("_softboat_")["helm_factor"] > 1.0
+        print(f"PASS helm>1: soft-rated boat → helm_proposed {p['helm_proposed']} (>1.0), applied")
+    finally:
+        f = os.path.join(os.environ.get("INGESTED_DIR", "/srv/ingested"), "boats", "_softboat_.json")
+        if os.path.exists(f):
+            os.remove(f)
+
+
 if __name__ == "__main__":
     test_polar_overlay()
     test_learning_flow()
+    test_helm_can_exceed_one()
     print("\nALL LEARNING TESTS PASSED")

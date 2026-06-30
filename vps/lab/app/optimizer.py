@@ -291,8 +291,9 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
     SP = sail_polars or {}
     sail_aware = SAIL_AWARE and bool(SP)
     dom = _sail_domains(SP) if sail_aware else {}
-    # realized (achievable) speed = helm × sea state; only do the work when it actually bites
-    realized_on = (helm_factor < 0.999) or (waves is not None and getattr(waves, "loaded", False))
+    # realized (achievable) speed = helm × sea state; only do the work when it actually bites. Helm may
+    # be >1.0 (boat rated soft / sails above the cert), so trigger on any departure from 1.0, not just <1.
+    realized_on = (abs(helm_factor - 1.0) > 1e-3) or (waves is not None and getattr(waves, "loaded", False))
 
     def sail_step(cur_sail, tws, twa, sp_env):
         """Decide the sail + speed for one step from a node currently flying `cur_sail`. Returns
