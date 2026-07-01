@@ -228,24 +228,46 @@ async function extractDraft() {
   const msg = document.getElementById("ingMsg");
   const btn = document.getElementById("ingBtn");
   const files = document.getElementById("ingFiles").files;
-  if (!Lab.sources.length && !files.length) { msg.textContent = "Add a document URL or upload a PDF first."; return; }
-  btn.disabled = true; msg.textContent = "Extracting with Opus… (reading the documents, ~30–60s)";
+  const setMsg = (t, color) => {
+    msg.textContent = t; msg.style.color = color || "";
+    msg.style.fontWeight = color ? "600" : ""; msg.style.fontSize = "13px";
+  };
+  if (!Lab.sources.length && !files.length) { setMsg("Add a document URL or upload a PDF first.", "var(--warn)"); return; }
+  btn.disabled = true; btn.textContent = "Extracting…";
+  setMsg("⏳ Extracting with Opus — reading the documents. A large SI/NOR can take 1–2 min; keep this tab open.", "var(--accent)");
   try {
-    let resp;
+    let res;
     if (files.length) {
       const fd = new FormData();
       for (const f of files) fd.append("files", f);
-      resp = await (await api("/api/ingest/upload", { method: "POST", body: fd })).json();
+      res = await api("/api/ingest/upload", { method: "POST", body: fd });
     } else {
-      resp = await (await apiPost("/api/ingest", { urls: Lab.sources })).json();
+      res = await apiPost("/api/ingest", { urls: Lab.sources });
     }
-    if (resp.detail) { msg.textContent = "Ingest failed: " + resp.detail; btn.disabled = false; return; }
+    const txt = await res.text();
+    let resp;
+    try { resp = JSON.parse(txt); }
+    catch (e) {
+      if (res.status === 502 || res.status === 504 || /^\s*</.test(txt))
+        setMsg("✕ Timed out at the gateway — the document was too large/slow to process. Try uploading the PDF directly, or fewer/smaller docs.", "var(--bad)");
+      else setMsg("✕ Ingest failed — server returned " + res.status + " (non-JSON response).", "var(--bad)");
+      btn.disabled = false; btn.textContent = "Extract →"; return;
+    }
+    if (resp.detail) {   // the backend detail often already reads "ingest failed: …" — don't double it
+      const d = /^ingest failed/i.test(resp.detail) ? resp.detail : "Ingest failed: " + resp.detail;
+      setMsg("✕ " + d, "var(--bad)"); btn.disabled = false; btn.textContent = "Extract →"; return;
+    }
     Lab.draft = resp; Lab.editDef = resp.definition;
     Lab.editVal = { errors: resp.errors || [], warnings: resp.warnings || [] }; Lab.isDraft = true;
-    msg.textContent = "Draft extracted — review/edit it on the right, then save.";
+    const nm = (resp.definition && resp.definition.name) || "the race";
+    const nwarn = (resp.warnings || []).length, nerr = (resp.errors || []).length;
+    setMsg("✓ Draft extracted for “" + nm + "” — review it on the right"
+      + (nwarn ? " (" + nwarn + " item" + (nwarn > 1 ? "s" : "") + " flagged for review)" : "")
+      + (nerr ? " (" + nerr + " error" + (nerr > 1 ? "s" : "") + " to fix)" : "")
+      + ", then click SAVE to add it to the library. It is NOT saved yet.", "var(--accent2)");
     paintDetail();
-  } catch (e) { msg.textContent = "Ingest failed."; }
-  btn.disabled = false;
+  } catch (e) { setMsg("✕ Ingest failed: " + (e && e.message ? e.message : e), "var(--bad)"); }
+  btn.disabled = false; btn.textContent = "Extract →";
 }
 async function saveDraft() {
   if (!Lab.editDef) return;
