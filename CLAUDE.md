@@ -525,7 +525,7 @@ let the onboard image ship **no psycopg**, `datasource.py` guards the `pool` imp
 → unchanged; onboard absent → unused). Endpoints (port **8200**): `/health`, `/conditions`,
 `/conditions/full`, `/sources`, `/fatigue`, `/sail`, `/course`, `/navigator`,
 `POST /course/practice`, `/tactics`, `/forecast`, `/route`, `/ais`, `POST /fleet/load`, `/fleet`,
-`POST /playbook/load`, `/deviation`, `/drift` (the last three = Lab-3, below). Wired into `compose.pi.yml` as
+`POST /playbook/load`, `/deviation`, `/drift`, `/selector` (the last four = Lab-3, below). Wired into `compose.pi.yml` as
 the `engine` service; cloud parity reference is `vps/agent/app/main.py`. See `pi/engine/README.md`.
 
 **Bench-verified** (sample Pi stack + engine): every endpoint returns real data through
@@ -609,9 +609,30 @@ reference==live; perturb the reference +25° → 25° backed/watch) + Playwright
 0° + demo calm 6° + demo escalated 28° act, 0 errors) + lab container rebuilt (forecast_ref baked,
 `synthesis._fingerprint` builds). Files: forecast_ref.py (new), synthesis.py, drift.py (new),
 pi/engine/engine_app.py, pi/console/dashboard/{index.html,dashboard.css,dashboard.js}, test_drift.py (new).
-**NEXT Lab-3 slices:** onboard re-optimize + graceful-degradation SELECTOR (pre-authored branch →
-onboard re-optimize on own polars + common GRIB → off-script+flag) when a trigger fires; a GRIB-native
-drift fingerprint; and folding both triggers into the copilot NARRATION (voice the Strategy card).
+
+**Lab-3 branch SELECTOR (graceful degradation) — SHIPPED.** Unifies the three signals — the on-water
+persistent wind shift (`tactics`), route-deviation (`deviation`) and forecast-drift (`drift`) — into ONE
+crew-facing recommendation over the FROZEN playbook: **`vps/agent/app/selector.py`** `get_selector()` →
+HOLD the recommended variant / **SWITCH** to a pre-authored variant / **OFF-SCRIPT** (favoured side has no
+branch aboard). It SELECTS a pre-authored variant, never originates strategy — the switch target is one of
+the bundle's own variants and the rationale is its own `what_flips_it`. GRACEFUL DEGRADATION (item-2): tier
+1 = a persistent shift favours a side WITH a variant → recommend it; tier 2 = favoured side has NO variant
+→ off-script flag ("sail your own to that side" — the onboard re-optimizer is the still-deferred next tier);
+default = hold. Forecast-drift/route-deviation don't switch on their own — they REINFORCE a wind-shift switch
+(concordance raises confidence: veer→right/back→left drift agreement + XTE already on the favoured hand) and,
+alone, raise a "hold + reassess" caution. Confidence is a first-class fuzzy output. This is the Tier-1 (Pi
+engine, no Orin) generalization of the copilot's wind-shift-only `adherence.py` dashboard tile (which stays
+as-is for the PLAYBOOK tile; pointing it at `/selector` is a later cleanup). Engine **`GET /selector`**; the
+iPad Strategy card gains a top **recommendation banner** (HOLD/SWITCH/OFF-SCRIPT + confidence + grounded
+why), so the strip now shows the full executor stack: the decision on top, the two triggers below. Verified
+`vps/agent/test_selector.py` (switch tier-1 / off-script tier-2 / confirmed-hold / drift-reassess / default /
+concordance confidence / na — host + baked container) + LIVE (`/selector` = "Hold: Middle start" on the
+bench sample, correct — no shift) + Playwright (banner live HOLD + demo SWITCH→Right high-conf with the
+grounded rationale, 0 errors). Files: selector.py (new), engine_app.py, dashboard/{index.html,css,js},
+test_selector.py (new). **NEXT Lab-3 slice (biggest remaining):** the onboard RE-OPTIMIZER (tier-2/3
+degradation — when off-script, re-optimize on own polars + common GRIB onboard → a legal fresh route the LLM
+flags "off the playbook"); plus a GRIB-native drift fingerprint. The copilot narration of both triggers
+already shipped (see the copilot section).
 
 ## C4 Performance Lab (cloud) — Phase 9 / Lab-0
 

@@ -62,6 +62,17 @@ body {
 .st-chip { display:inline-flex; align-items:center; gap:6px; padding:2px 9px; border-radius:20px;
   background:var(--cfill); color:var(--c); border:1px solid var(--c); font-weight:800; }
 .st-icon { font-size:11px; } .st-word { font-size:11px; letter-spacing:1px; }
+.st-rec { margin-top:8px; padding:7px 10px; border-radius:9px; display:flex; align-items:center;
+  gap:9px; flex-wrap:wrap; background:var(--rcfill); border:1px solid var(--rc); }
+.st-rec.sr-ok    { --rc:var(--ok);    --rcfill:var(--ok-fill); }
+.st-rec.sr-watch { --rc:var(--watch); --rcfill:var(--watch-fill); }
+.st-rec.sr-act   { --rc:var(--act);   --rcfill:var(--act-fill); }
+.st-rec.sr-na    { --rc:var(--na);    --rcfill:transparent; }
+.sr-pill { font-size:11px; font-weight:800; letter-spacing:.8px; padding:2px 9px; border-radius:6px;
+  background:var(--rc); color:var(--bg); flex:none; }
+.sr-val { font-size:15px; font-weight:800; color:var(--text); }
+.sr-conf { font-size:11px; font-weight:700; color:var(--rc); text-transform:uppercase; letter-spacing:.5px; }
+.sr-why { flex:1 1 100%; font-size:12.5px; line-height:1.35; color:var(--muted); margin-top:1px; }
 .st-body { margin-top:8px; }
 .st-progress { position:relative; height:8px; border-radius:6px; background:var(--panel2);
   border:1px solid var(--line); overflow:hidden; }

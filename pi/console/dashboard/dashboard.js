@@ -104,6 +104,9 @@
         why: "Sailing the 'Left start' variant's optimized track — 0.15 nm off the line (left), 0:45 ahead of plan pace. Hold the groove.",
         consider: "Stay on the playbook line — no branch, keep sailing the plan." },
       drift: { available: true, status: "ok", value: "Forecast holding", drift_twd_deg: 6, drift_dir: "veered", drift_tws_kn: 1.2, n_points: 8 },
+      selector: { available: true, action: "hold", status: "ok", tier: 1, value: "Hold: Left start",
+        target_label: "Left start", confidence: 0.75, confidence_label: "high",
+        why: "No persistent shift and no material forecast drift — the recommended Left start stands. Play the shifts within the band." },
     },
     escalated: {
       mode: "llm-live", focus: "Playbook branch: the right is paying now. Bear-away coming up, and the crew tank is getting low.", confidence: "med",
@@ -139,6 +142,10 @@
         why: "The boat is 1.3 nm to the right of the 'Left start' variant's optimal track and diverging. This is a genuine departure from the frozen line.",
         consider: "You're right of the plan — decide: rejoin the 'Left start' line, or if the breeze has genuinely changed sides, check the branch trigger (the playbook tile is calling the right)." },
       drift: { available: true, status: "act", value: "Forecast moved · 28° veered", drift_twd_deg: 28, drift_twd_max_deg: 41, drift_dir: "veered", drift_tws_kn: 3.5, n_points: 7 },
+      selector: { available: true, action: "switch", status: "act", tier: 1, value: "Switch → Right start",
+        target_variant: "right", target_label: "Right start", confidence: 0.9, confidence_label: "high",
+        driven_by: ["get_tactics", "get_drift", "get_deviation"],
+        why: "A persistent veering shift now favours the right — against the recommended Left. That's the playbook's branch trigger. Reinforced: the forecast has veered ~28° the same way; you're already working the right side (1.3 nm right)." },
     },
   };
 
@@ -650,6 +657,18 @@
     if (App.src === "demo") return (SCENARIOS[App.demoScn] || {}).drift || null;
     return App.forecastDrift;
   }
+  /* the branch SELECTOR: the executor's unified call — hold / switch to a pre-authored variant /
+     off-script. Engine-computed (unifies wind-shift + deviation + drift over the frozen bundle). */
+  async function fetchSelector() {
+    if (App.src !== "live") return;
+    const r = await fetchJSON("/selector", 9000);
+    if (r) App.selector = r;
+    if (App.src === "live") render();
+  }
+  function currentSelector() {
+    if (App.src === "demo") return (SCENARIOS[App.demoScn] || {}).selector || null;
+    return App.selector;
+  }
   /* the Strategy strip: are we sailing the frozen variant's optimal track? (route-deviation). */
   function renderStrategy() {
     const el = document.getElementById("strategy");
@@ -699,6 +718,22 @@
     }
     document.getElementById("stWhy").textContent = d.why || d.sub || "";
     renderDriftLine();
+    renderSelector();
+  }
+  /* the executor's recommendation banner at the top of the strip: HOLD / SWITCH → variant /
+     OFF-SCRIPT, with confidence + the grounded why. Hidden when no playbook is aboard. */
+  function renderSelector() {
+    const el = document.getElementById("stRec");
+    const s = currentSelector();
+    if (!s || s.available === false || s.action === "na") { el.hidden = true; return; }
+    el.hidden = false;
+    el.className = "st-rec sr-" + (s.status || "ok");
+    const pill = { hold: "HOLD", switch: "SWITCH", off_script: "OFF-SCRIPT" }[s.action] || "—";
+    document.getElementById("stRecPill").textContent = pill;
+    document.getElementById("stRecVal").textContent = s.value || s.target_label || "";
+    document.getElementById("stRecConf").textContent =
+      s.confidence_label ? s.confidence_label + " conf" : "";
+    document.getElementById("stRecWhy").textContent = s.why || "";
   }
   /* the forecast-drift line inside the Strategy strip: how far the common forecast has moved from
      what the plan was built on (the 2nd branch trigger). Hidden when there's no reference aboard. */
@@ -757,9 +792,10 @@
     theme: localStorage.getItem("sr33.dash.theme") || "auto",
     pos: { lat: 45.33, lon: -82.0 },
     openTile: null, streamTimer: null, pollTimer: null, seriesTimer: null, briefTimer: null,
-    adhereTimer: null, coachTimer: null, devTimer: null, driftTimer: null, polling: false,
+    adhereTimer: null, coachTimer: null, devTimer: null, driftTimer: null, selTimer: null, polling: false,
     dwell: {}, data: null, windHist: [], fcstHist: [], seriesHist: [], lastPersist: 0, brief: null,
-    adherence: null, coach: null, deviation: null, forecastDrift: null, detailStreamKey: null, detailAbort: null,
+    adherence: null, coach: null, deviation: null, forecastDrift: null, selector: null,
+    detailStreamKey: null, detailAbort: null,
   };
   function currentData() {
     if (App.src === "demo") {
@@ -981,7 +1017,7 @@
   function briefMe() {
     const b = document.getElementById("briefBtn");
     b.classList.add("busy"); b.textContent = "thinking…";
-    if (App.src === "live") { poll(); fetchBrief(); fetchAdherence(); fetchCoach(); fetchDeviation(); fetchDrift(); }
+    if (App.src === "live") { poll(); fetchBrief(); fetchAdherence(); fetchCoach(); fetchDeviation(); fetchDrift(); fetchSelector(); }
     // the LLM is slow (~45 s warm); clear the busy state on a timer — render() updates when it lands
     setTimeout(() => { b.classList.remove("busy"); b.textContent = "Brief me ↻"; if (App.src !== "live") render(); }, 1500);
   }
@@ -1005,6 +1041,8 @@
     App.devTimer = setInterval(fetchDeviation, DEV_EVERY);
     fetchDrift();                   // forecast-drift (engine, common-data), then on its own cadence
     App.driftTimer = setInterval(fetchDrift, DRIFT_EVERY);
+    fetchSelector();                // branch selector (engine, unified recommendation), own cadence
+    App.selTimer = setInterval(fetchSelector, DEV_EVERY);
     document.getElementById("themeBtn").addEventListener("click", cycleTheme);
     document.getElementById("srcBtn").addEventListener("click", cycleSource);
     document.getElementById("briefBtn").addEventListener("click", briefMe);

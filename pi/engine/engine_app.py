@@ -24,7 +24,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import (navigator, tactics, routing, weather, sails, fatigue, onboard_conditions,
-                 datasource, ais, fleet, deviation, drift)
+                 datasource, ais, fleet, deviation, drift, selector)
 
 app = FastAPI(title="Agent_C4 Onboard Engine", version="0.1.0")
 # The iPad reaches the Pi directly over boat-local Wi-Fi in race mode; allow cross-origin so a
@@ -222,3 +222,12 @@ def drift_ep(route: str | None = None):
     directional shift (veered/backed) + speed change, with fuzzy consider/commit status. Deterministic,
     legal in-race (own computer + common public data); `na` with no playbook / no reference aboard."""
     return drift.get_drift(route=route)
+
+
+@app.get("/selector")
+def selector_ep(route: str | None = None):
+    """Branch SELECTOR: unifies the wind-shift + route-deviation + forecast-drift triggers into one
+    recommendation over the frozen playbook — HOLD the recommended variant / SWITCH to a pre-authored
+    variant / OFF-SCRIPT (no branch aboard for the favoured side). Deterministic, legal in-race (own
+    instruments + pre-loaded homework); selects a pre-authored variant, never originates strategy."""
+    return selector.get_selector(route=route)
