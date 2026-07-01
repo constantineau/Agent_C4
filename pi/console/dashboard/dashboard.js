@@ -146,7 +146,7 @@
         target_variant: "right", target_label: "Right start", confidence: 0.9, confidence_label: "high",
         driven_by: ["get_tactics", "get_drift", "get_deviation"],
         why: "A persistent veering shift now favours the right — against the recommended Left. That's the playbook's branch trigger. Reinforced: the forecast has veered ~28° the same way; you're already working the right side (1.3 nm right)." },
-      reoptimize: { available: true, off_playbook: true, eta_min: 254, tacks: 9, sailed_nm: 46.2,
+      reoptimize: { available: true, off_playbook: true, eta_min: 254, tacks: 9, sailed_nm: 46.2, avoids_islands: 2,
         marks: ["Cove Island", "Finish"], sail_plan: ["J1", "A3", "S2"], vs_playbook: { available: true, max_divergence_nm: 2.4, mean_divergence_nm: 0.9 } },
     },
   };
@@ -753,6 +753,7 @@
       (ro.tacks != null ? ' · ' + ro.tacks + ' tacks' : '') +
       (ro.sailed_nm != null ? ' · ' + r1(ro.sailed_nm) + ' nm' : '') +
       (sp ? ' · ⛵ ' + sp : '') +
+      (ro.avoids_islands ? ' · avoids ' + ro.avoids_islands + ' island' + (ro.avoids_islands > 1 ? 's' : '') : '') +
       (vs ? ' · ' + vs : '') + ' <span class="ro-tag">off-book</span></span>';
   }
   /* the executor's recommendation banner at the top of the strip: HOLD / SWITCH → variant /

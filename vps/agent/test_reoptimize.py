@@ -55,6 +55,39 @@ check("divergence vs the frozen plan computed", vs.get("available") and vs.get("
 check("tacking route diverges from the straight plan (>0)", vs.get("max_divergence_nm") > 0.05)
 check("each leg carries a sail slot + sail_plan is a list", "sail" in r["legs"][0] and isinstance(r.get("sail_plan"), list))
 
+# --- obstacle avoidance: an island on the direct path forces a detour --------------------------
+print("island avoidance:")
+routing.weather.wind_at = lambda lat, lon, epoch: (12.0, 90.0)     # wind from east → sailing N is a reach
+NAV.get_navigator = lambda route=None: {"available": True, "route": "race", "next_mark": {"name": "A"}}
+NAV._marks = lambda route: [{"seq": 1, "name": "Start", "lat": 43.98, "lon": -82.0},
+                            {"seq": 2, "name": "A", "lat": 44.22, "lon": -82.0}]
+NAV._latest = lambda: {"lat": 43.98, "lon": -82.0, "tws": 12.0, "twd": 90.0, "cog": 0.0, "sog": 6.0}
+ISLAND = (44.10, -82.0, 1.2)   # smack on the straight-north line from the boat to A
+
+def _min_clear(path):
+    return min(routing._pt_to_seg_nm(ISLAND[0], ISLAND[1], path[i]["lat"], path[i]["lon"],
+                                     path[i + 1]["lat"], path[i + 1]["lon"]) for i in range(len(path) - 1))
+
+# with NO obstacle homework → the reach route runs straight through the island's location
+reoptimize._cache["key"] = None
+deviation._load_playbook = lambda: {"race_id": "u", "variants": [{"id": "m"}]}   # no obstacles block
+straight = reoptimize.get_reoptimize()
+check("no obstacles → open-water note", "open-water" in straight.get("note", "") and straight.get("avoids_islands") == 0)
+check("without avoidance the route passes through the island (< radius)", _min_clear(straight["path"]) < ISLAND[2])
+
+# with the island frozen in the bundle → the route detours around it
+reoptimize._cache["key"] = None
+deviation._load_playbook = lambda: {"race_id": "u", "variants": [{"id": "m"}],
+                                    "obstacles": {"islands": [{"name": "Rock", "lat": ISLAND[0],
+                                                               "lon": ISLAND[1], "radius_nm": ISLAND[2]}]}}
+avoided = reoptimize.get_reoptimize()
+print("  avoids_islands", avoided.get("avoids_islands"), "| min clearance", round(_min_clear(avoided["path"]), 2),
+      "nm (radius", ISLAND[2], ") | reaches", round(avoided["path"][-1]["lat"], 3))
+check("obstacle count reported", avoided.get("avoids_islands") == 1)
+check("route detours clear of the island (>= ~radius)", _min_clear(avoided["path"]) >= ISLAND[2] * 0.85)
+check("still reaches the mark A (44.22)", abs(avoided["path"][-1]["lat"] - 44.22) < 0.05)
+check("note names the avoided island", "1 charted island" in avoided.get("note", ""))
+
 # --- na paths ------------------------------------------------------------------------------------
 print("na paths:")
 reoptimize._cache["key"] = None

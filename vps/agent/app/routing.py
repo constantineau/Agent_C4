@@ -52,6 +52,27 @@ def _tack(hdg, twd):
     return "stbd" if NAV._wrap180(twd - hdg) > 0 else "port"
 
 
+def _pt_to_seg_nm(plat, plon, alat, alon, blat, blon):
+    """Nearest distance (nm) from point P to segment A→B, on a flat local plane about A."""
+    coslat = math.cos(math.radians(alat))
+    px, py = (plon - alon) * 60.0 * coslat, (plat - alat) * 60.0
+    bx, by = (blon - alon) * 60.0 * coslat, (blat - alat) * 60.0
+    L2 = bx * bx + by * by
+    t = 0.0 if L2 == 0 else max(0.0, min(1.0, (px * bx + py * by) / L2))
+    return math.hypot(px - bx * t, py - by * t)
+
+
+def _seg_blocked(alat, alon, blat, blon, avoid):
+    """True if the segment A→B passes within any avoid disk (lat, lon, radius_nm). `avoid` is the
+    compact frozen island set — the onboard obstacle homework, distilled from the cloud geo mask."""
+    if not avoid:
+        return False
+    for clat, clon, r in avoid:
+        if _pt_to_seg_nm(clat, clon, alat, alon, blat, blon) < r:
+            return True
+    return False
+
+
 def make_wind_fn(slat, slon, live):
     """A wind(lat,lon,epoch)→(tws,twd) closure: the Open-Meteo forecast if reachable at the start,
     else the live measured wind held constant (so routing still runs with no network). `live` is
@@ -67,9 +88,11 @@ def make_wind_fn(slat, slon, live):
     return wind, use_fcst
 
 
-def route_leg(slat, slon, dlat, dlon, wind, t0, live_twd=0.0):
+def route_leg(slat, slon, dlat, dlon, wind, t0, live_twd=0.0, avoid=None):
     """One isochrone leg from (slat,slon) to (dlat,dlon) through `wind()`, starting at epoch `t0`.
-    The reusable core of `get_route` — chained per remaining mark by the onboard re-optimizer.
+    The reusable core of `get_route` — chained per remaining mark by the onboard re-optimizer. `avoid`
+    is an optional list of (lat,lon,radius_nm) obstacle disks (the frozen island homework); steps that
+    cross one are pruned, so the route detours around land.
     Returns {path:[{lat,lon}], legs:[{hdg,tack}], reached_t, sailed_nm, direct_nm}."""
     direct = NAV._hav_nm(slat, slon, dlat, dlon)
     start = {"lat": slat, "lon": slon, "t": t0, "parent": None, "hdg": None}
@@ -83,12 +106,13 @@ def route_leg(slat, slon, dlat, dlon, wind, t0, live_twd=0.0):
             tws, twd = wind(node["lat"], node["lon"], node["t"])
             if tws is None:
                 tws, twd = 12.0, 0.0
-            # can we lay the mark from here this step?
+            # can we lay the mark from here this step? (only if the direct segment is clear of land)
             dmark = NAV._hav_nm(node["lat"], node["lon"], dlat, dlon)
             bmark = NAV._bearing(node["lat"], node["lon"], dlat, dlon)
             twa_m = abs(NAV._wrap180(bmark - twd))
             sp_m = _polar_speed(tws, twa_m)
-            if sp_m > 0.3 and dmark <= sp_m * DT_H:
+            if sp_m > 0.3 and dmark <= sp_m * DT_H and \
+                    not _seg_blocked(node["lat"], node["lon"], dlat, dlon, avoid):
                 reached = {"lat": dlat, "lon": dlon,
                            "t": node["t"] + (dmark / sp_m) * 3600, "parent": node, "hdg": bmark}
                 break
@@ -98,6 +122,8 @@ def route_leg(slat, slon, dlat, dlon, wind, t0, live_twd=0.0):
                 if sp < 0.3:
                     continue
                 nlat, nlon = _advance(node["lat"], node["lon"], hdg, sp * DT_H)
+                if avoid and _seg_blocked(node["lat"], node["lon"], nlat, nlon, avoid):
+                    continue                          # this step would cross an obstacle → prune it
                 rng = NAV._hav_nm(slat, slon, nlat, nlon)
                 sec = round(NAV._bearing(slat, slon, nlat, nlon) / SECTOR)
                 # keep the farthest-advanced candidate per bearing sector (the isochrone)

@@ -653,10 +653,31 @@ finish + off-playbook flag + divergence>0 + na paths + no-playbook-still-routes 
 LIVE (dropped a practice W/L course → `/reoptimize` routed Windward→Leeward 69 min/2 tacks, diverges 2.49 nm
 from the frozen variant; `/route` unchanged) + Playwright (re-route line renders, 0 errors). Files:
 routing.py (route_leg extract + make_wind_fn), reoptimize.py (new), selector.py (off-script hint),
-engine_app.py, dashboard/{index.html,css,js}, test_reoptimize.py (new). **NEXT Lab-3 (remaining):** a
-GRIB-native drift fingerprint (the current one is Open-Meteo same-source); onboard re-optimize could also
-respect obstacle avoidance (the onboard isochrone has none today — open-water only) and the sail plan. The
-copilot narration of both triggers already shipped (see the copilot section).
+engine_app.py, dashboard/{index.html,css,js}, test_reoptimize.py (new).
+
+**Lab-3 onboard re-optimizer — ISLAND OBSTACLE AVOIDANCE (homework pattern) — SHIPPED.** The onboard
+isochrone had no obstacle data (the cloud geo/ GSHHG/ENC mask is too big for the Pi), so a fresh re-route
+could cut across land. Fixed the RIGHT way — the **homework pattern**: at prep the Lab distils the race's
+compact obstacle set into the bundle, and the onboard router avoids it. `shared/race_def.course_obstacles()`
+(new) extracts the course's **island marks as buffer disks** {name,lat,lon,radius_nm} (+ zones) — the
+race-critical obstacles per the durable lesson (the per-race island-disk layer is what guarantees the small
+obstacles a coarse coastline misses); `synthesis` freezes them into the bundle as `obstacles`. Onboard,
+`routing.route_leg` gained an `avoid=` param (a `_seg_blocked` point-to-segment-vs-disk test prunes any
+step that crosses an island disk; the direct-lay shortcut also checks clearance); `reoptimize` loads the
+frozen `obstacles.islands` → detours around them, reports `avoids_islands`, and the note/`⟳` card line say
+"avoiding N charted island(s)" (or "open-water — verify against the chart" when none aboard). `route_leg`'s
+`avoid` DEFAULTS None so `get_route`/`/route` are byte-identical (regression-safe). Verified `test_reoptimize`
+(a straight reach route passes THROUGH an island < radius; with the island frozen aboard it detours to ≥
+radius clearance AND still reaches the mark; count + note — host + baked container) + LIVE (a bench island on
+the course → `avoids_islands` 0→1) + real Mackinac `course_obstacles` extracts Duck Islands (3.0 nm) + Bois
+Blanc (5.5 nm) + lab freezes them + Playwright ("avoids 2 islands" on the card). Files: shared/race_def.py
+(course_obstacles), synthesis.py (freeze), routing.py (avoid + `_seg_blocked`/`_pt_to_seg_nm`), reoptimize.py,
+dashboard/dashboard.js, test_reoptimize.py. **HONEST SCOPE:** islands (disks) only for v1 — polygon
+exclusion/TSS zones are frozen into the bundle but not yet enforced onboard (a follow-up); the broad
+coastline is still cloud-only (islands are the race-critical layer). **NEXT Lab-3 (remaining, optional):** a
+GRIB-native drift fingerprint (the current one is Open-Meteo same-source, intentional given no cfgrib on the
+Pi); enforce polygon zones onboard; point the copilot `adherence.py` tile at `/selector`. The copilot
+narration of both triggers already shipped (see the copilot section).
 
 ## C4 Performance Lab (cloud) — Phase 9 / Lab-0
 

@@ -325,6 +325,8 @@ def synthesize(definition, course_id, start_epoch, models, ensemble_members=0, t
         "boat_model": _boat_model(),      # polars/sail crossovers + draft frozen into the homework
         # the common forecast the plan was built on → the onboard forecast-drift branch trigger
         "forecast_fingerprint": _fingerprint(variants, syn.get("recommended")),
+        # compact race obstacles (island disks + zones) → the onboard re-optimizer avoids land
+        "obstacles": race_def.course_obstacles(definition, playbook.get("course_id") or course_id),
         "variants": variants,
         "decision_tree": syn.get("decision_tree", []),
         "provenance": {

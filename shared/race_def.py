@@ -324,6 +324,28 @@ def course_to_marks(definition: dict, course_id: str = None):
     return marks, skipped, course.get("id")
 
 
+def course_obstacles(definition: dict, course_id: str = None, default_island_nm: float = 0.5) -> dict:
+    """A COMPACT, race-scoped obstacle set for onboard use — the island marks as buffer disks
+    (lat/lon/radius_nm) plus the course's exclusion/hazard zones. This is the homework the cloud
+    obstacle layer (`app.geo`, GSHHG/ENC — too big for the Pi) distils down to what the ONBOARD
+    re-optimizer needs: the race-critical islands (the durable lesson — the per-race island-disk layer
+    is what guarantees the small obstacles a coarse coastline misses) frozen into the bundle at prep
+    time. Returns {'islands': [{name,lat,lon,radius_nm}], 'zones': [{name,type,geometry}]}; an empty
+    set if the course has none (the onboard router then routes open-water)."""
+    courses = definition.get("courses", []) or []
+    course = next((c for c in courses if c.get("id") == course_id), None) or (courses[0] if courses else None)
+    if not course:
+        return {"islands": [], "zones": []}
+    islands = [{"name": m.get("name", "island"), "lat": m["lat"], "lon": m["lon"],
+                "radius_nm": m.get("radius_nm") or default_island_nm}
+               for m in course.get("marks", [])
+               if m.get("type") == "island" and m.get("lat") is not None and m.get("lon") is not None]
+    zones = [{"name": z.get("name", "zone"), "type": z.get("type", "exclusion"),
+              "geometry": z.get("geometry")}
+             for z in (definition.get("zones") or []) if z.get("geometry")]
+    return {"islands": islands, "zones": zones}
+
+
 def course_roundings(definition: dict, course_id: str = None) -> dict:
     """Map nav-mark name → rounding side ('port'|'starboard'|'gate'|'none'), aligned to
     `course_to_marks` output. Start/Finish have no side ('none'); a gate is 'gate' (pass between).

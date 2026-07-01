@@ -31,12 +31,19 @@ def _remaining_marks(nav, marks):
     return marks[idx:]
 
 
-def _vs_playbook(fresh_path):
+def _avoid_disks(bundle):
+    """The frozen island obstacle homework → the (lat,lon,radius_nm) disks route_leg prunes against.
+    Empty when the bundle carries no obstacles (the router then routes open-water, honestly flagged)."""
+    isls = ((bundle or {}).get("obstacles") or {}).get("islands") or []
+    return [(i["lat"], i["lon"], i.get("radius_nm") or 0.5)
+            for i in isls if i.get("lat") is not None and i.get("lon") is not None]
+
+
+def _vs_playbook(bundle, fresh_path):
     """How far the fresh route departs from the active frozen variant's optimal track — so the crew
     sees how off-script it is. Reuses deviation's polyline projection (max/mean cross-track of the
     fresh path points onto the frozen variant polyline)."""
     try:
-        bundle = deviation._load_playbook()
         if not bundle:
             return {"available": False, "note": "no playbook aboard to compare against"}
         v = deviation._pick_variant(bundle, None)
@@ -70,8 +77,10 @@ def get_reoptimize(route=None):
         return {"available": False, "note": "no position fix"}
 
     live = (s.get("tws"), s.get("twd"))
+    bundle = deviation._load_playbook()
+    avoid = _avoid_disks(bundle)
     key = (round(slat, 3), round(slon, 3), tuple(m["name"] for m in remaining),
-           round(live[0] or 0), round(live[1] or 0))
+           round(live[0] or 0), round(live[1] or 0), len(avoid))
     if _cache["key"] == key and time.time() - _cache["t"] < CACHE_TTL:
         return _cache["val"]
 
@@ -89,7 +98,7 @@ def get_reoptimize(route=None):
         if tws_l:
             twa_l = abs(NAV._wrap180(NAV._bearing(cur[0], cur[1], m["lat"], m["lon"]) - twd_l))
             sail = (sails.get_sail_advice(tws_l, twa_l) or {}).get("optimal_sail")
-        leg = routing.route_leg(cur[0], cur[1], m["lat"], m["lon"], wind, t, live[1] or 0)
+        leg = routing.route_leg(cur[0], cur[1], m["lat"], m["lon"], wind, t, live[1] or 0, avoid=avoid)
         full_path += leg["path"][1:]          # skip the duplicated leg-start point
         all_legs += leg["legs"]
         leg_summ.append({"mark": m["name"], "eta_min": round((leg["reached_t"] - t) / 60, 1),
@@ -116,11 +125,14 @@ def get_reoptimize(route=None):
         "recommended_heading": all_legs[0]["hdg"] if all_legs else None,
         "first_tack": all_legs[0]["tack"] if all_legs else None,
         "path": full_path,
-        "vs_playbook": _vs_playbook(full_path),
+        "avoids_islands": len(avoid),
+        "vs_playbook": _vs_playbook(bundle, full_path),
         "note": ("Onboard re-optimization — a FRESH route on your own polars through the "
                  + ("Open-Meteo forecast" if use_fcst else "current measured wind")
-                 + ", from your position through the remaining marks. OFF THE PLAYBOOK (not the "
-                 "frozen homework) — legal in-race, but flagged as an onboard re-route."),
+                 + ", from your position through the remaining marks"
+                 + (f", avoiding {len(avoid)} charted island(s)" if avoid else " (open-water — no "
+                    "obstacle homework aboard; verify against the chart)")
+                 + ". OFF THE PLAYBOOK (not the frozen homework) — legal in-race, flagged as a re-route."),
     }
     _cache.update(key=key, t=time.time(), val=out)
     return out
