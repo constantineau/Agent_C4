@@ -1083,6 +1083,28 @@ learning.py, optimizer.py (`_wave_factor` coeffs), boats.py, shared/boat_profile
 playbook.py, synthesis.py, main.py, web/{app.js,styles.css}, both test files. Tunable priors unchanged
 (`ROUTE_WAVE_*`); the calibrated overlay is per-boat + human-approved.
 
+**LAB-4 CONDITION-ATTRIBUTION FOLLOW-UPS: SHIPPED 2026-07-01.** (a) **Test-rot fix** — `test_routing_
+realized.py` + `test_routing_2g.py` computed the seed dir as `HERE/../db/seed`, which resolves wrong when
+the test is docker-cp'd to `/srv` (→ empty polars → `route_leg` yields eta=0). NOT a routing bug (proven
+by diffing HEAD-vs-new). Both now resolve the seed from the repo OR the baked `/srv` and only override the
+env when the seed exists. (b) **Deadband (knee) fit** — `learning.calibrate_waves` now also fits the
+low-Hs deadband, not just the slope: a global **continuous-hinge** model (ratio = helm − k·max(0,Hs−db),
+one weighted OLS per point of sail) is searched over a db grid and the residual-minimising knee wins
+(strict, so ties keep the smaller knee). Only fires when the archive has a clear flat region AND a sloped
+region (`_WAVE_DB_MIN_LOW/HIGH`), else the prior deadband is held; the floor stays the conservative prior
+(extreme-sea data is almost never present). Surfaced as a Deadband row in the wave review card. Verified
+`test_calibrate_deadband` (flat+sloped synthetic, true knee 0.6 → fit 0.6, k_up 0.05). (c) **Reshape gate**
+— a spatially-varying sea can BEND the route (toward calmer water), not just tax the ETA; on a single-model
+uncalibrated wave field that reshaping can be spurious, so `optimizer` gates it: `ROUTE_WAVE_RESHAPE`
+(`auto`|`on`|`off`, default auto) — auto reshapes ONLY when the course's P10–P90 Hs spread ≥
+`ROUTE_WAVE_RESHAPE_MIN_SPREAD` (0.5 m); otherwise a UNIFORM mean-Hs penalty (honest ETA, geometry
+unchanged, since a near-uniform sea can't be routed around anyway). `route_leg` gained `wave_uniform_hs`
+(when set, every node sees the same mean Hs); the decision + course Hs spread ride in `result.realized`
+(`wave_reshape`/`wave_reshape_note`/`wave_spread_hs`), stated in the briefing + a ⤳/= badge on the cockpit
+realized stat. Verified `test_routing_realized` reshape-gate block (stats spread, auto/on/off decisions,
+ETA-only == constant-sea routing) + LIVE Bayview Mackinac (0.47 m spread < gate → ETA-only) + Playwright
+badge. Files: optimizer.py, web/app.js, learning.py, both test files.
+
 **Optimizer UI study + restyle — `docs/OPTIMIZER_UI_STUDY.md`** (Orca + Expedition gap analysis). Tier 0
 (ensemble-control fix + ECMWF-ENS wired as a separate 51-member `ecmwf-ens` ensemble source) + Tier 1
 quick wins (map wind color-scale legend, forecast ▶/⏸ animation, grouped control cards Course/Boat &

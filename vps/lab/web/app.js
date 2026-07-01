@@ -1102,7 +1102,10 @@ function optRealizedStat(r) {
   const hs = rz.sea_state_hs_mean || 0;
   const sea = hs > 0.05 ? ` · sea ~${hs.toFixed(1)}m` : "";
   const cls = pct >= 92 ? "ok" : pct >= 82 ? "warn" : "bad";
-  return `<div title="Achievable speed: the route is computed at this fraction of the flat-water polar (helm skill × sea state). The gap to 100% is the boatspeed left to find."><b class="conf ${cls}">${pct}%</b><span>realized · helm ${helm}%${sea}</span></div>`;
+  // reshape gate: did the sea bend the route (⤳) or only tax the ETA (=)?
+  const rsh = (hs > 0.05 && "wave_reshape" in rz)
+    ? ` <span class="muted" title="${attr(rz.wave_reshape_note || "")}">${rz.wave_reshape ? "⤳ reshaped" : "= ETA-only"}</span>` : "";
+  return `<div title="Achievable speed: the route is computed at this fraction of the flat-water polar (helm skill × sea state). The gap to 100% is the boatspeed left to find."><b class="conf ${cls}">${pct}%</b><span>realized · helm ${helm}%${sea}${rsh}</span></div>`;
 }
 
 function optCurrentStat(r) {
@@ -2177,7 +2180,12 @@ function learnWaveReview(p) {
     <td>${d.n_cells} / ${d.hs_spread} m</td>
     <td>${d.confidence != null ? Math.round(d.confidence * 100) + "%" : "—"}${d.r2 != null ? ` · r²${d.r2}` : ""}</td>
     <td class="muted" style="font-size:11px">${esc(d.note || (d.helm_level != null ? "helm level " + d.helm_level : ""))}</td></tr>`).join("");
+  const db = s.deadband || {};
+  const dbRow = db.proposed != null
+    ? `<div class="dep-row" style="margin:2px 0"><b style="min-width:150px;display:inline-block">Deadband (knee)</b> ${db.current} → <b>${db.proposed}</b> m <span class="muted">(${esc(db.source === "fit" ? "fit from the data" : "held prior")}${db.floor != null ? ` · floor ${db.floor} held` : ""})</span></div>`
+    : "";
   return `<div class="muted" style="font-size:12px;margin:4px 0">Fit over ${p.n_bins} cells / ${(s.races || []).length} race(s). Proposed per-metre speed-loss coefficients:</div>
+    ${dbRow}
     <table class="fleet-tbl"><thead><tr><th>Point of sail</th><th>Now</th><th>Proposed</th><th>Cells / Hs spread</th><th>Confidence</th><th></th></tr></thead><tbody>${rows}</tbody></table>
     <div style="margin-top:10px">
       <button onclick="learnApplyWave(${p.id})">✓ Approve &amp; apply</button>

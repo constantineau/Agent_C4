@@ -13,10 +13,15 @@ import os
 import importlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SEED = os.path.join(HERE, "..", "db", "seed")
-os.environ["POLARS_FILE"] = os.path.join(SEED, "polars_sr33.sql")
-os.environ["SAIL_POLARS_FILE"] = os.path.join(SEED, "sr33_sail_polars.json")
-os.environ["CROSSOVERS_FILE"] = os.path.join(SEED, "sr33_crossovers.json")
+# Resolve the seed dir wherever the test runs: the repo (vps/lab/../db/seed) OR docker-cp'd to /srv
+# (the lab image bakes the seed files there — POLARS_FILE=/srv/polars_sr33.sql). Only override the env
+# when the seed is actually found, so a bad guess never zeroes out the polars (which yields empty routes).
+for _seed in (os.path.join(HERE, "..", "db", "seed"), "/srv"):
+    if os.path.exists(os.path.join(_seed, "polars_sr33.sql")):
+        os.environ["POLARS_FILE"] = os.path.join(_seed, "polars_sr33.sql")
+        os.environ["SAIL_POLARS_FILE"] = os.path.join(_seed, "sr33_sail_polars.json")
+        os.environ["CROSSOVERS_FILE"] = os.path.join(_seed, "sr33_crossovers.json")
+        break
 
 from app import polars as POL          # noqa: E402
 from app import sailplan               # noqa: E402

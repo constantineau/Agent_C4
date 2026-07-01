@@ -36,6 +36,13 @@ _WAVE_K_MIN, _WAVE_K_MAX = 0.0, 0.12      # frac speed lost per m Hs above the d
 _WAVE_MIN_CELLS = 4                        # need at least this many distinct-Hs cells per point of sail
 _WAVE_MIN_HS_SPREAD = 0.6                  # …spanning at least this much effective Hs (m) to fit a slope
 _WAVE_POS_KEY = {"upwind": "k_up", "reaching": "k_reach", "downwind": "k_down"}
+# Deadband (knee) fit: the Hs below which the boat keeps ~full speed. Only identifiable when the archive
+# has a clear FLAT region (points below the knee) AND a sloped region (points above) — otherwise the
+# prior deadband is held (the common sparse-archive case). The floor is NOT fit: hitting it needs extreme
+# seas an archive almost never holds, so it stays the conservative prior.
+_WAVE_DB_GRID = [round(0.2 + 0.1 * i, 1) for i in range(9)]   # candidate knees 0.2 … 1.0 m
+_WAVE_DB_MIN_LOW = 2                        # need ≥ this many flat-region cells to locate the knee…
+_WAVE_DB_MIN_HIGH = 3                       # …and ≥ this many sloped-region cells
 
 
 def _conn():
@@ -372,6 +379,41 @@ def _wls_line(pts):
     return b0, b1, max(0.0, min(1.0, r2))
 
 
+def _fit_deadband(by_pos_raw):
+    """Global knee (deadband) fit across all points of sail from raw (hs, ratio, samples) points.
+
+    For each candidate knee db, each point of sail is a CONTINUOUS hinge — ratio = helm − k·eff with
+    eff = max(0, hs − db) — fit by one weighted OLS over all that pos's points; we pick the db minimising
+    the total weighted residual (strict, so a genuinely-better knee wins ties). The continuous hinge (vs
+    two free segments) is what makes the knee identifiable: below the true knee a still-flat point pulled
+    past db deviates from the single fitted line, so only the true db drives the residual to zero. Needs a
+    clear flat region (eff-0 points) AND a sloped region on BOTH sides, else returns None (hold the prior).
+    Returns (db, n_flat, n_sloped)."""
+    best = None
+    for db in _WAVE_DB_GRID:
+        ssr = wtot = 0.0
+        nlow = nhigh = 0
+        for pts in by_pos_raw.values():
+            effs = [(max(0.0, h - db), r, w) for h, r, w in pts]
+            low = [e for e in effs if e[0] <= 1e-9]
+            high = [e for e in effs if e[0] > 1e-9]
+            if not low or len(high) < 2:
+                continue                       # this pos can't constrain the knee at this db
+            fit = _wls_line(effs)              # one hinge line over flat + sloped points
+            if not fit:
+                continue
+            b0, b1, _r2 = fit
+            nlow += len(low); nhigh += len(high)
+            for e, r, w in effs:
+                ssr += w * (r - (b0 + b1 * e)) ** 2; wtot += w
+        if nlow < _WAVE_DB_MIN_LOW or nhigh < _WAVE_DB_MIN_HIGH or wtot <= 0:
+            continue
+        score = ssr / wtot
+        if best is None or score < best[1] - 1e-12:   # strict → ties keep the smaller (earlier) knee
+            best = (db, score, nlow, nhigh)
+    return (best[0], best[2], best[3]) if best else None
+
+
 def _current_wave_coeffs(boat_id):
     """The coefficients the optimizer is using now — the boat's wave_coeffs overlay if present, else the
     ROUTE_WAVE_* env priors (mirrors optimizer._wave_factor's fallback)."""
@@ -393,10 +435,12 @@ def calibrate_waves(boat_id):
     Model: the boat's RAW %-of-flat-polar in a cell = helm_level × wave_factor(Hs) where wave_factor =
     1 − k·eff (eff = max(0, Hs − deadband)). Per point of sail this is linear in eff, so a weighted
     least-squares of ratio(=pct/100) on eff gives intercept b0 = helm_level and slope b1 = −helm·k →
-    **k = −b1/b0**. We fit the SLOPE only (deadband + floor are structural priors held fixed) and keep a
-    point of sail's prior k when the archive lacks Hs SPREAD (can't fit a slope from flat-water races)."""
+    **k = −b1/b0**. The DEADBAND (knee) is also fit globally when the archive has data on both sides of
+    it (a flat low-Hs region + a sloped region), else the prior deadband is held; the FLOOR stays the
+    conservative prior (hitting it needs extreme seas). A point of sail's prior k is kept when its data
+    lacks Hs SPREAD (can't fit a slope from flat-water races)."""
     cur = _current_wave_coeffs(boat_id)
-    db, floor = cur["hs_deadband"], cur["floor"]
+    floor = cur["floor"]
     c = _conn()
     try:
         bins, races = _latest_bins_per_race(c, boat_id)
@@ -406,11 +450,21 @@ def calibrate_waves(boat_id):
     if not have_hs:
         return {"ok": False, "note": "no archived sea-state data yet — run debriefs with a boat track "
                 "in real waves first (flat-water races carry no Hs to calibrate against)"}
-    by_pos = {}
+    # raw (hs, ratio, samples) per point of sail — keep raw Hs so the deadband knee can be searched
+    by_pos_raw = {}
     for b in have_hs:
-        eff = max(0.0, float(b["hs_mean"]) - db)
-        by_pos.setdefault(b["point_of_sail"], []).append((eff, float(b["pct"]) / 100.0, b["samples"]))
+        by_pos_raw.setdefault(b["point_of_sail"], []).append(
+            (float(b["hs_mean"]), float(b["pct"]) / 100.0, b["samples"]))
+    # fit the deadband (knee) globally if the data supports it; else hold the prior
+    db_fit = _fit_deadband(by_pos_raw)
+    db = round(max(_WAVE_DB_GRID[0], min(_WAVE_DB_GRID[-1], db_fit[0])), 2) if db_fit else cur["hs_deadband"]
+    db_source = "fit" if db_fit else "prior"
+    by_pos = {pos: [(max(0.0, h - db), r, w) for h, r, w in pts] for pos, pts in by_pos_raw.items()}
     proposed = {"hs_deadband": round(db, 3), "floor": round(floor, 3)}
+    db_info = {"current": round(cur["hs_deadband"], 3), "proposed": round(db, 3), "source": db_source,
+               "note": ("fit the knee from a flat + sloped region" if db_fit else
+                        "held prior — no clear flat/sloped split in the archive to locate the knee"),
+               "floor": round(floor, 3), "floor_note": "held prior (extreme-sea data absent)"}
     detail = {}
     fitted_any = False
     for pos, key in _WAVE_POS_KEY.items():
@@ -437,12 +491,12 @@ def calibrate_waves(boat_id):
                       "note": ("insufficient sea-state spread — need ≥%d cells spanning ≥%.1f m Hs "
                                "(have %d cells / %.1f m)" % (_WAVE_MIN_CELLS, _WAVE_MIN_HS_SPREAD, n, spread))})
         detail[pos] = d
-    if not fitted_any:
-        return {"ok": False, "note": "not enough sea-state SPREAD in the archive to fit any wave slope "
-                "yet — needs races sailed in a range of wave heights.", "by_point_of_sail": detail,
-                "current_coeffs": {k: round(v, 4) for k, v in cur.items()}}
-    summary = {"by_point_of_sail": detail, "current_coeffs": {k: round(v, 4) for k, v in cur.items()},
-               "races": sorted(races)}
+    if not fitted_any and db_source != "fit":
+        return {"ok": False, "note": "not enough sea-state SPREAD in the archive to fit the wave model "
+                "yet — needs races sailed across a range of wave heights.", "by_point_of_sail": detail,
+                "deadband": db_info, "current_coeffs": {k: round(v, 4) for k, v in cur.items()}}
+    summary = {"by_point_of_sail": detail, "deadband": db_info,
+               "current_coeffs": {k: round(v, 4) for k, v in cur.items()}, "races": sorted(races)}
     c = _conn()
     try:
         row = c.execute(

@@ -91,6 +91,14 @@ WAVE_K_UP = float(os.environ.get("ROUTE_WAVE_K_UP", "0.04"))        # frac speed
 WAVE_K_REACH = float(os.environ.get("ROUTE_WAVE_K_REACH", "0.025"))  # reaching
 WAVE_K_DOWN = float(os.environ.get("ROUTE_WAVE_K_DOWN", "0.01"))     # running (a following sea barely hurts)
 WAVE_FLOOR = float(os.environ.get("ROUTE_WAVE_FLOOR", "0.6"))       # never degrade below this fraction
+# RESHAPE GATE — a spatially-varying sea state can RESHAPE the route (bend toward calmer water), not just
+# tax the ETA. On a single-model, uncalibrated wave field that reshaping can be spurious, so we gate it:
+# `auto` (default) reshapes ONLY when the sea is materially non-uniform over the course (a near-uniform
+# field can't be routed around anyway → apply a UNIFORM mean-Hs penalty: honest ETA, geometry unchanged);
+# `on` always reshapes (local Hs per node); `off` never does (uniform mean Hs → ETA-only). Conservative:
+# under-correcting the geometry beats bending the route on a field we don't trust.
+WAVE_RESHAPE_MODE = os.environ.get("ROUTE_WAVE_RESHAPE", "auto").strip().lower()
+WAVE_RESHAPE_MIN_SPREAD = float(os.environ.get("ROUTE_WAVE_RESHAPE_MIN_SPREAD", "0.5"))  # m of P10–P90 Hs spread
 SAIL_AWARE = _flag("ROUTE_SAIL_AWARE")
 PEEL_COST_S = float(os.environ.get("ROUTE_PEEL_COST_S", "90"))      # clock a sail peel costs (honest ETA)
 # Prune regularizer (like TACK_PRUNE_S): a one-off per-peel penalty into the path score so the isochrone
@@ -173,6 +181,58 @@ def _wave_factor(hs, twa, coeffs=None):
 def _realized_factor(hs, twa, helm, coeffs=None):
     """The fraction of the FLAT-WATER polar the boat actually achieves here = helm skill × sea state."""
     return helm * _wave_factor(hs, twa, coeffs)
+
+
+def _wave_field_stats(waves, marks):
+    """Sample the sea state along the course (mark polyline × a few of the field's own times) → mean /
+    P10–P90 spread / peak Hs. The spread is the RESHAPE signal: near-uniform → nothing to route around;
+    materially variable → bending toward calmer water is meaningful. None when no real field."""
+    if waves is None or not getattr(waves, "loaded", False):
+        return None
+    pts = [(m[2], m[3]) for m in marks if m[2] is not None and m[3] is not None]
+    if len(pts) < 2:
+        return None
+    times = list(getattr(waves, "epochs", []) or [])
+    if times:
+        times = times[:: max(1, len(times) // 3)][:3]          # up to 3 representative frames
+    else:
+        times = [0]
+    xs = []
+    for i in range(len(pts) - 1):
+        for f in range(6):
+            g = f / 6.0
+            lat = pts[i][0] + (pts[i + 1][0] - pts[i][0]) * g
+            lon = pts[i][1] + (pts[i + 1][1] - pts[i][1]) * g
+            for t in times:
+                try:
+                    hs = waves.wave_at(lat, lon, t)
+                except Exception:
+                    hs = None
+                if hs is not None:
+                    xs.append(hs)
+    if not xs:
+        return None
+    xs.sort()
+    n = len(xs)
+    p = lambda q: xs[min(n - 1, max(0, int(q * (n - 1))))]
+    return {"mean": round(sum(xs) / n, 3), "spread": round(p(0.9) - p(0.1), 3),
+            "peak": round(xs[-1], 3), "n": n}
+
+
+def _wave_reshape_decision(waves, stats):
+    """Whether the sea state may RESHAPE the route (local Hs per node) or only tax the ETA (a uniform
+    mean-Hs penalty, geometry unchanged). Returns (uniform_hs_or_None, reshape_bool, note). Gated by
+    ROUTE_WAVE_RESHAPE (auto|on|off) + the course's Hs spread."""
+    if stats is None:
+        return (None, False, "no sea-state field")
+    if WAVE_RESHAPE_MODE == "on":
+        return (None, True, "reshape forced on (local Hs)")
+    if WAVE_RESHAPE_MODE == "off":
+        return (stats["mean"], False, f"ETA-only (forced) — uniform {stats['mean']:.1f} m Hs")
+    if stats["spread"] >= WAVE_RESHAPE_MIN_SPREAD:            # auto
+        return (None, True, f"reshape on — sea varies {stats['spread']:.1f} m across the course")
+    return (stats["mean"], False,
+            f"ETA-only — near-uniform sea ({stats['spread']:.1f} m spread < {WAVE_RESHAPE_MIN_SPREAD:.1f} m gate)")
 
 
 def _sail_polar_key(sail):
@@ -280,7 +340,7 @@ def _layline_pair(P, tws, twd, pos, mlat, mlon, length_nm):
 def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=None,
               obstacles=None, capture=False, hstep=HSTEP, dt_cap=1.0, cur=None,
               sail_polars=None, jib_crossovers=None, start_sail=None,
-              waves=None, helm_factor=1.0, wave_coeffs=None):
+              waves=None, helm_factor=1.0, wave_coeffs=None, wave_uniform_hs=None):
     """Isochrone-optimal path from (slat,slon)@t0 to (dlat,dlon). Returns dict with path/eta.
 
     `obstacles` (an ObstacleField) makes the fan reject any heading whose step would cut across land,
@@ -303,6 +363,14 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
     # realized (achievable) speed = helm × sea state; only do the work when it actually bites. Helm may
     # be >1.0 (boat rated soft / sails above the cert), so trigger on any departure from 1.0, not just <1.
     realized_on = (abs(helm_factor - 1.0) > 1e-3) or (waves is not None and getattr(waves, "loaded", False))
+
+    def _hs(lat, lon, t):
+        """Sea state to degrade speed with. When `wave_uniform_hs` is set (the reshape gate chose
+        ETA-only), every node sees the SAME mean Hs → the wave penalty taxes the ETA without bending
+        the geometry; otherwise the LOCAL Hs (route may reshape toward calmer water)."""
+        if wave_uniform_hs is not None:
+            return wave_uniform_hs
+        return waves.wave_at(lat, lon, t) if waves is not None else 0.0
 
     def sail_step(cur_sail, tws, twa, sp_env):
         """Decide the sail + speed for one step from a node currently flying `cur_sail`. Returns
@@ -356,7 +424,7 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
             sail, sp, is_peel = sail_step(node.get("sail"), tws, twa, sp_env)
             # realized: degrade to ACHIEVABLE speed (helm skill × sea state at this node/angle)
             if realized_on:
-                hs = waves.wave_at(node["lat"], node["lon"], node["t"]) if waves is not None else 0.0
+                hs = _hs(node["lat"], node["lon"], node["t"])
                 sp *= _realized_factor(hs, twa, helm_factor, wave_coeffs)
             if sp < 0.3:
                 continue
@@ -521,7 +589,7 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
             tacks += 1
         prev_side = side
         if realized_on:
-            hs = waves.wave_at(p["lat"], p["lon"], p["t"]) if waves is not None else 0.0
+            hs = _hs(p["lat"], p["lon"], p["t"])
             rf_sum += _realized_factor(hs, abs(_wrap180(h - w[1])), helm_factor, wave_coeffs)
             hs_sum += hs
     realized_mean = round(rf_sum / len(hdgs), 3) if (realized_on and hdgs) else 1.0
@@ -652,6 +720,10 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
             except Exception:
                 obstacles = None
 
+    # reshape gate: does the (spatially-varying) sea state get to BEND the route, or only tax the ETA?
+    wave_stats = _wave_field_stats(waves, marks)
+    wave_uniform_hs, wave_reshape, wave_reshape_note = _wave_reshape_decision(waves, wave_stats)
+
     rp = _resolution(resolution)
     if time_budget_s is None:                          # caller didn't pin a budget → use the preset's
         time_budget_s = rp["budget"]
@@ -672,7 +744,8 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
         leg = route_leg(wf, P, slat, slon, t, rlat, rlon, deadline=deadline, obstacles=obstacles,
                         capture=emit_exploration, hstep=rp["hstep"], dt_cap=rp["dt_cap"], cur=cur,
                         sail_polars=SP, jib_crossovers=jib_crossovers, start_sail=cur_sail,
-                        waves=waves, helm_factor=helm_factor, wave_coeffs=wave_coeffs)
+                        waves=waves, helm_factor=helm_factor, wave_coeffs=wave_coeffs,
+                        wave_uniform_hs=wave_uniform_hs)
         # sample wind + confidence at the leg's midpoint and end (for the briefing)
         mid = leg["path"][len(leg["path"]) // 2] if leg["path"] else {"lat": dlat, "lon": dlon}
         det = wf.detail_at(mid["lat"], mid["lon"], (t + leg["eta"]) / 2.0)
@@ -746,6 +819,10 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
                                            for l in legs) / tot, 2),
             "wave_source": waves.status().get("source") if waves is not None else None,
         }
+        if wave_stats is not None:                 # the reshape gate: did the sea bend the route or only tax ETA?
+            realized["wave_reshape"] = wave_reshape
+            realized["wave_reshape_note"] = wave_reshape_note
+            realized["wave_spread_hs"] = wave_stats["spread"]
     # per-model candidate paths (the confidence moat made VISUAL — the fan the blended route summarizes)
     candidate_paths = []
     if per_model:
@@ -886,9 +963,14 @@ def briefing(result: dict, race_name: str = "") -> str:
         wsrc = rz.get("wave_source")
         wvia = " (GLWU)" if wsrc == "glwu" else ""
         sea = f", sea state ~{hs:.1f} m{wvia}" if hs > 0.05 else ""
+        reshape = ""
+        if hs > 0.05 and "wave_reshape" in rz:
+            reshape = (" The sea state varies enough that the route bends toward calmer water."
+                       if rz.get("wave_reshape") else
+                       " The sea is near-uniform, so it only affects the ETA, not the route shape.")
         realized_text = (f"Achievable speed: routing at ~{pct}% of the flat-water polar "
                          f"(helm {helm}%{sea}) — ETAs are realistic, not theoretical. The gap to 100% "
-                         "is the boatspeed left to find (trim, helm, sea-state technique).")
+                         "is the boatspeed left to find (trim, helm, sea-state technique)." + reshape)
 
     sail_plan_seq = [s["sail"] for s in (result.get("sail_plan") or []) if s.get("sail")]
     facts = {

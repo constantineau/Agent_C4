@@ -153,6 +153,35 @@ def test_calibrate_waves():
             os.remove(f)
 
 
+def test_calibrate_deadband():
+    """With a clear FLAT region (low Hs → full speed) + a sloped region, the knee (deadband) is fit —
+    helm 0.95 / true deadband 0.6 / k_up 0.05 → recover deadband≈0.6 and k_up≈0.05."""
+    tmp = tempfile.mkdtemp()
+    learning.LEARNING_DB = os.path.join(tmp, "learning.db")
+    boats.save_boat({"boat_id": "_dbboat_", "name": "Knee", "draft_m": 2.0, "helm_factor": 1.0})
+    try:
+        helm, k, db = 0.95, 0.05, 0.6
+        data = ([(hs, helm * 100) for hs in (0.2, 0.4, 0.6)] +                       # flat below the knee
+                [(hs, helm * (1 - k * (hs - db)) * 100) for hs in (0.7, 1.1, 1.6, 2.1, 2.6)])  # sloped above
+        for i, (hs, pct) in enumerate(data):
+            bins = [{"tws": 12.0, "twa": 45.0, "point_of_sail": "upwind", "samples": 60,
+                     "best_stw": round(7.0 * pct / 100, 3), "target_stw": 7.0, "pct": pct, "hs_mean": hs}]
+            learning.archive_debrief(_fake_report(f"k{i}", bins, round(pct)), "_dbboat_")
+        cal = learning.calibrate_waves("_dbboat_")
+        assert cal["ok"], cal
+        dbd = cal["summary"]["deadband"]
+        assert dbd["source"] == "fit" and abs(dbd["proposed"] - 0.6) < 1e-9, dbd     # recovered the knee
+        assert 0.045 <= cal["wave"]["k_up"] <= 0.055, cal["wave"]                     # and the slope
+        res = learning.apply_proposal(cal["id"])
+        assert res["ok"] and abs(boats.get_boat("_dbboat_")["wave_coeffs"]["hs_deadband"] - 0.6) < 1e-9, res
+        print(f"PASS calibrate_deadband: knee {dbd['current']}→{dbd['proposed']} m (fit), k_up "
+              f"{cal['wave']['k_up']} — applied to the boat")
+    finally:
+        f = os.path.join(os.environ.get("INGESTED_DIR", "/srv/ingested"), "boats", "_dbboat_.json")
+        if os.path.exists(f):
+            os.remove(f)
+
+
 def test_trend():
     """The per-race trend carries the flat-water helm_pct + sea state (oldest→newest)."""
     tmp = tempfile.mkdtemp()
@@ -180,5 +209,6 @@ if __name__ == "__main__":
     test_learning_flow()
     test_helm_can_exceed_one()
     test_calibrate_waves()
+    test_calibrate_deadband()
     test_trend()
     print("\nALL LEARNING TESTS PASSED")

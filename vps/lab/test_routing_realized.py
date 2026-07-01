@@ -12,10 +12,15 @@ ConstantWave, no network):
 import os
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SEED = os.path.join(HERE, "..", "db", "seed")
-os.environ["POLARS_FILE"] = os.path.join(SEED, "polars_sr33.sql")
-os.environ["SAIL_POLARS_FILE"] = os.path.join(SEED, "sr33_sail_polars.json")
-os.environ["CROSSOVERS_FILE"] = os.path.join(SEED, "sr33_crossovers.json")
+# Resolve the seed dir wherever the test runs: the repo (vps/lab/../db/seed) OR docker-cp'd to /srv
+# (the lab image bakes the seed files there — POLARS_FILE=/srv/polars_sr33.sql). Only override the env
+# when the seed is actually found, so a bad guess never zeroes out the polars (which yields empty routes).
+for _seed in (os.path.join(HERE, "..", "db", "seed"), "/srv"):
+    if os.path.exists(os.path.join(_seed, "polars_sr33.sql")):
+        os.environ["POLARS_FILE"] = os.path.join(_seed, "polars_sr33.sql")
+        os.environ["SAIL_POLARS_FILE"] = os.path.join(_seed, "sr33_sail_polars.json")
+        os.environ["CROSSOVERS_FILE"] = os.path.join(_seed, "sr33_crossovers.json")
+        break
 
 from app import optimizer as OPT          # noqa: E402
 from app import wave as WAVE              # noqa: E402
@@ -86,6 +91,43 @@ check("beat realized_factor < 1 in a seaway", beat_sea["realized_factor"] < 1.0)
 b1 = O.route_leg(W, P, slat, slon, 0.0, run_d[0], run_d[1], sail_polars=SP)
 b2 = O.route_leg(W, P, slat, slon, 0.0, run_d[0], run_d[1], sail_polars=SP, waves=WAVE.ZeroWave(), helm_factor=1.0)
 check("default + ZeroWave/helm1.0 == baseline ETA", abs(b1["eta"] - b2["eta"]) < 1e-6 and b2["realized_factor"] == 1.0)
+
+
+# 5) RESHAPE GATE — a spatially-varying sea may bend the route; a near-uniform one only taxes the ETA.
+class Grad(WAVE.WaveField):     # Hs ramps with longitude → real spatial spread along an E-W course
+    loaded = True
+    source = "grad"
+    epochs = [0]
+    def wave_at(self, lat, lon, t):
+        return max(0.0, (lon + 82.5) * 3.0)   # -82.0 → 1.5 m … -81.0 → 4.5 m
+marks_ew = [(0, "start", 44.0, -82.0), (1, "finish", 44.0, -81.0)]      # varies in lon → Grad varies
+marks_ns = [(0, "start", 44.0, -82.0), (1, "finish", 44.3, -82.0)]     # constant lon → Grad is uniform
+sG = O._wave_field_stats(Grad(), marks_ew)
+sU = O._wave_field_stats(WAVE.ConstantWave(1.2), marks_ew)
+sN = O._wave_field_stats(Grad(), marks_ns)
+check("field stats: gradient course has real Hs spread", sG["spread"] >= O.WAVE_RESHAPE_MIN_SPREAD)
+check("field stats: uniform field → zero spread", sU["spread"] == 0.0 and abs(sU["mean"] - 1.2) < 1e-6)
+check("field stats: constant-lon course through a gradient → ~uniform", sN["spread"] < O.WAVE_RESHAPE_MIN_SPREAD)
+_mode = O.WAVE_RESHAPE_MODE
+O.WAVE_RESHAPE_MODE = "auto"
+uh, rs, _n = O._wave_reshape_decision(Grad(), sG)
+check("auto + variable sea → reshape (local Hs)", rs and uh is None)
+uh2, rs2, _n2 = O._wave_reshape_decision(WAVE.ConstantWave(1.2), sU)
+check("auto + uniform sea → ETA-only (uniform mean Hs, no reshape)", (not rs2) and abs(uh2 - 1.2) < 1e-6)
+O.WAVE_RESHAPE_MODE = "off"
+uh3, rs3, _n3 = O._wave_reshape_decision(Grad(), sG)
+check("mode off → never reshape (uniform Hs)", (not rs3) and uh3 is not None)
+O.WAVE_RESHAPE_MODE = "on"
+_uh4, rs4, _n4 = O._wave_reshape_decision(WAVE.ConstantWave(1.2), sU)
+check("mode on → always reshape", rs4)
+O.WAVE_RESHAPE_MODE = _mode
+# ETA-only routing (uniform Hs) matches routing on a ConstantWave of that Hs — the geometry doesn't see
+# the gradient, only the mean penalty.
+mean = sG["mean"]
+uni = O.route_leg(W, P, slat, slon, 0.0, run_d[0], run_d[1], sail_polars=SP, waves=Grad(), wave_uniform_hs=mean)
+con = O.route_leg(W, P, slat, slon, 0.0, run_d[0], run_d[1], sail_polars=SP, waves=WAVE.ConstantWave(mean))
+check("ETA-only (uniform Hs) == routing on a constant sea of that Hs",
+      abs(uni["eta"] - con["eta"]) < 1e-6 and abs(uni["realized_factor"] - con["realized_factor"]) < 1e-9)
 
 print("\n" + ("ALL PASS" if ok else "SOME FAILED"))
 raise SystemExit(0 if ok else 1)
