@@ -32,15 +32,18 @@ alerting/summarizer/polar-analysis (those are cloud / C4 Performance Lab), and *
 
 `/health` · `/conditions` · `/conditions/full` · `/sources` · `/fatigue` · `/sail` · `/course` ·
 `/navigator` · `POST /course/practice` · `/tactics` · `/forecast` · `/route` · `/ais` ·
-`POST /fleet/load` · `/fleet` · `POST /playbook/load` · `/deviation` · `/drift` · `/selector`
+`POST /fleet/load` · `/fleet` · `POST /playbook/load` · `/deviation` · `/drift` · `/selector` · `/reoptimize`
 
 `POST /playbook/load` freezes the Lab-2 playbook bundle aboard; the two Lab-3 branch triggers read
 from it: `GET /deviation` (route-deviation — boat vs the active variant's optimal track: XTE /
 along-track / time-behind / VMC) and `GET /drift` (forecast-drift — the live common forecast vs the
 plan's frozen forecast reference: veered/backed + speed change). `GET /selector` unifies those two
 plus the on-water wind shift into ONE recommendation — HOLD the recommended variant / SWITCH to a
-pre-authored variant / OFF-SCRIPT (no branch aboard for the favoured side), with confidence. All
-deterministic, fuzzy consider/commit status, and power the iPad Strategy card.
+pre-authored variant / OFF-SCRIPT (no branch aboard for the favoured side), with confidence. When it
+says off-script, `GET /reoptimize` is the fallback: a FRESH route from the live position through the
+remaining marks on own polars + the common Open-Meteo forecast (reuses the onboard isochrone, no GRIB),
+flagged OFF-PLAYBOOK, with its divergence from the frozen plan — the graceful-degradation ladder
+(pre-authored branch → onboard re-route). All deterministic and power the iPad Strategy card.
 
 Parity reference: `vps/agent/app/main.py` (the cloud serves the same paths, plus auth/chat/
 alerts and the RRS-41 race gate).

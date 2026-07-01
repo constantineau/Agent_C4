@@ -1,0 +1,77 @@
+"""Onboard re-optimizer — unit test for route_leg + the multi-mark chain, the off-playbook flag,
+and the divergence-vs-frozen comparison. Stubs the polar / wind / navigator so it runs standalone
+(no DB / no network / no live GPS).
+
+Run:  PYTHONPATH=vps/agent python3 vps/agent/test_reoptimize.py
+"""
+from app import reoptimize, routing, deviation
+from app import navigator as NAV
+
+ok = True
+def check(name, cond):
+    global ok; ok = ok and cond
+    print(f"  [{'OK ' if cond else 'FAIL'}] {name}")
+
+# --- stubs: 6 kn at any sailable TWA (>=40°), no-go below; constant wind FROM the north (twd 0) ---
+routing._polar_speed = lambda tws, twa: 6.0 if twa >= 40 else 0.0
+routing.weather.wind_at = lambda lat, lon, epoch: (12.0, 0.0)
+
+# --- route_leg: a beam reach (wind from 090, sail due north = TWA 90) → near-direct, few tacks -----
+print("route_leg (beam reach):")
+routing.weather.wind_at = lambda lat, lon, epoch: (12.0, 90.0)
+wind, use = routing.make_wind_fn(44.0, -82.0, (12.0, 90.0))
+leg = routing.route_leg(44.0, -82.0, 44.1, -82.0, wind, 0.0, 90.0)
+print("  sailed", round(leg["sailed_nm"], 2), "direct", round(leg["direct_nm"], 2), "eta_h", round(leg["reached_t"] / 3600, 2))
+check("reach leg ~direct (sailed within 15% of direct)", leg["sailed_nm"] <= leg["direct_nm"] * 1.15)
+check("reaches the mark (last point near 44.1)", abs(leg["path"][-1]["lat"] - 44.1) < 0.02)
+
+# --- reoptimize: route through the remaining marks upwind (wind from north, marks due north) --------
+print("reoptimize (upwind through 2 marks):")
+routing.weather.wind_at = lambda lat, lon, epoch: (12.0, 0.0)   # dead upwind → must tack
+MARKS = [{"seq": 1, "name": "Start", "lat": 44.0, "lon": -82.0},
+         {"seq": 2, "name": "A", "lat": 44.1, "lon": -82.0},
+         {"seq": 3, "name": "Finish", "lat": 44.2, "lon": -82.0}]
+NAV.get_navigator = lambda route=None: {"available": True, "route": "race", "next_mark": {"name": "A"}}
+NAV._marks = lambda route: MARKS
+NAV._latest = lambda: {"lat": 44.05, "lon": -82.0, "tws": 12.0, "twd": 0.0, "cog": 0.0, "sog": 6.0}
+
+# a frozen "plan" = a straight rhumb line north (so the tacking fresh route diverges from it)
+FROZEN = [{"lat": 44.05 + i * 0.015, "lon": -82.0, "t": i} for i in range(11)]
+deviation._load_playbook = lambda: {"race_id": "u", "recommended": "middle",
+                                     "variants": [{"id": "middle", "route": {"path": FROZEN}}]}
+
+r = reoptimize.get_reoptimize()
+print("  ", r.get("marks"), "| eta_min", r.get("eta_min"), "| tacks", r.get("tacks"),
+      "| sailed", r.get("sailed_nm"), "| vs", r.get("vs_playbook"))
+check("available + off_playbook flagged", r.get("available") and r.get("off_playbook") is True)
+check("routes the remaining marks A→Finish", r.get("marks") == ["A", "Finish"])
+check("upwind → it tacks (>=1)", r.get("tacks") >= 1)
+check("sailed > direct (tacking oversail)", r.get("sailed_nm") > 0.3 * 60 * (44.2 - 44.05) * 0.9)
+check("reaches the finish (last point near 44.2)", abs(r["path"][-1]["lat"] - 44.2) < 0.03)
+check("wind source is the forecast stub", r.get("wind_source") == "forecast")
+check("note flags OFF THE PLAYBOOK", "OFF THE PLAYBOOK" in r.get("note", ""))
+vs = r.get("vs_playbook") or {}
+check("divergence vs the frozen plan computed", vs.get("available") and vs.get("max_divergence_nm") >= 0)
+check("tacking route diverges from the straight plan (>0)", vs.get("max_divergence_nm") > 0.05)
+
+# --- na paths ------------------------------------------------------------------------------------
+print("na paths:")
+reoptimize._cache["key"] = None
+NAV._latest = lambda: {"lat": None, "lon": None}
+check("no fix → unavailable", reoptimize.get_reoptimize().get("available") is False)
+reoptimize._cache["key"] = None
+NAV.get_navigator = lambda route=None: {"available": False, "note": "no fix"}
+check("no navigator → unavailable", reoptimize.get_reoptimize().get("available") is False)
+
+# --- reoptimize with NO playbook aboard → still routes, vs_playbook unavailable -------------------
+print("no playbook:")
+reoptimize._cache["key"] = None
+NAV.get_navigator = lambda route=None: {"available": True, "route": "race", "next_mark": {"name": "A"}}
+NAV._latest = lambda: {"lat": 44.05, "lon": -82.0, "tws": 12.0, "twd": 0.0}
+deviation._load_playbook = lambda: {}
+r = reoptimize.get_reoptimize()
+check("routes even with no playbook", r.get("available") is True)
+check("vs_playbook unavailable (nothing to compare)", (r.get("vs_playbook") or {}).get("available") is False)
+
+print("\n", "ALL PASS" if ok else "FAILURES ABOVE")
+raise SystemExit(0 if ok else 1)

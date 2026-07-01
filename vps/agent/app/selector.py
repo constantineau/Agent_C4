@@ -127,9 +127,11 @@ def get_selector(route=None):
                     "clears": "the shift reverses / settles back toward the rhumb",
                     "based": driven + [f"playbook:{target.get('id')}"], "what_flips_it": flip}
 
-        # TIER 2 — favoured side has NO pre-authored variant aboard: off the playbook.
+        # TIER 2 — favoured side has NO pre-authored variant aboard: off the playbook. The onboard
+        # RE-OPTIMIZER (GET /reoptimize) is the fallback route — hint it (don't run the heavy
+        # isochrone here; the card/crew fetch it on demand).
         confidence = min(0.7, confidence)
-        return {**base, "action": "off_script", "status": "act", "tier": 2,
+        return {**base, "action": "off_script", "status": "act", "tier": 2, "reoptimize_hint": True,
                 "target_variant": None, "target_label": None,
                 "value": f"Off-script: sail {favored}", "driven_by": driven,
                 "confidence": round(confidence, 2), "confidence_label": _conf_label(confidence),

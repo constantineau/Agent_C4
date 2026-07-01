@@ -525,7 +525,7 @@ let the onboard image ship **no psycopg**, `datasource.py` guards the `pool` imp
 → unchanged; onboard absent → unused). Endpoints (port **8200**): `/health`, `/conditions`,
 `/conditions/full`, `/sources`, `/fatigue`, `/sail`, `/course`, `/navigator`,
 `POST /course/practice`, `/tactics`, `/forecast`, `/route`, `/ais`, `POST /fleet/load`, `/fleet`,
-`POST /playbook/load`, `/deviation`, `/drift`, `/selector` (the last four = Lab-3, below). Wired into `compose.pi.yml` as
+`POST /playbook/load`, `/deviation`, `/drift`, `/selector`, `/reoptimize` (the last five = Lab-3, below). Wired into `compose.pi.yml` as
 the `engine` service; cloud parity reference is `vps/agent/app/main.py`. See `pi/engine/README.md`.
 
 **Bench-verified** (sample Pi stack + engine): every endpoint returns real data through
@@ -629,10 +629,31 @@ why), so the strip now shows the full executor stack: the decision on top, the t
 concordance confidence / na — host + baked container) + LIVE (`/selector` = "Hold: Middle start" on the
 bench sample, correct — no shift) + Playwright (banner live HOLD + demo SWITCH→Right high-conf with the
 grounded rationale, 0 errors). Files: selector.py (new), engine_app.py, dashboard/{index.html,css,js},
-test_selector.py (new). **NEXT Lab-3 slice (biggest remaining):** the onboard RE-OPTIMIZER (tier-2/3
-degradation — when off-script, re-optimize on own polars + common GRIB onboard → a legal fresh route the LLM
-flags "off the playbook"); plus a GRIB-native drift fingerprint. The copilot narration of both triggers
-already shipped (see the copilot section).
+test_selector.py (new).
+
+**Lab-3 onboard RE-OPTIMIZER (graceful-degradation tier 2/3) — SHIPPED.** The fallback route when the
+selector says OFF-SCRIPT. `vps/agent/app/reoptimize.py` `get_reoptimize()` computes a FRESH route ONBOARD
+— from the live position, through the REMAINING course marks to the finish, on the boat's OWN polars
+through the common Open-Meteo forecast. The Pi has no cfgrib, so it reuses the onboard isochrone
+(`routing.route_leg`, extracted from `get_route` — behaviour byte-identical, `/route` regression-verified)
+CHAINED per remaining mark, NOT the GRIB lab optimizer. Legal in-race (own computer + own polars + own
+position + common data available to all) but NOT the frozen homework → explicitly flagged `off_playbook`,
+and it reports its DIVERGENCE from the active variant's frozen track (max/mean cross-track, reusing
+`deviation._project`) so the crew see how off-script it is. Isochrone chain is CPU-heavy → cached (30 s)
+and served ON DEMAND (`GET /reoptimize`) — the selector's off-script payload carries `reoptimize_hint`
+and the dashboard fetches it only while off-script (never on every poll). The Strategy card gains an
+`⟳ Onboard re-route ready — 4h 14m · 9 tacks · up to 2.4 nm off the plan · OFF-BOOK` line (dashed border)
+below the triggers, so the card shows the full degradation ladder: pre-authored branch (selector) →
+onboard re-route (this). This closes the perflab item-2 graceful-degradation chain at the Lab level.
+Verified `vps/agent/test_reoptimize.py` (route_leg reach + upwind chain through 2 marks tacks + reaches
+finish + off-playbook flag + divergence>0 + na paths + no-playbook-still-routes — host + baked container) +
+LIVE (dropped a practice W/L course → `/reoptimize` routed Windward→Leeward 69 min/2 tacks, diverges 2.49 nm
+from the frozen variant; `/route` unchanged) + Playwright (re-route line renders, 0 errors). Files:
+routing.py (route_leg extract + make_wind_fn), reoptimize.py (new), selector.py (off-script hint),
+engine_app.py, dashboard/{index.html,css,js}, test_reoptimize.py (new). **NEXT Lab-3 (remaining):** a
+GRIB-native drift fingerprint (the current one is Open-Meteo same-source); onboard re-optimize could also
+respect obstacle avoidance (the onboard isochrone has none today — open-water only) and the sail plan. The
+copilot narration of both triggers already shipped (see the copilot section).
 
 ## C4 Performance Lab (cloud) — Phase 9 / Lab-0
 

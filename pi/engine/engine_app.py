@@ -24,7 +24,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import (navigator, tactics, routing, weather, sails, fatigue, onboard_conditions,
-                 datasource, ais, fleet, deviation, drift, selector)
+                 datasource, ais, fleet, deviation, drift, selector, reoptimize)
 
 app = FastAPI(title="Agent_C4 Onboard Engine", version="0.1.0")
 # The iPad reaches the Pi directly over boat-local Wi-Fi in race mode; allow cross-origin so a
@@ -231,3 +231,12 @@ def selector_ep(route: str | None = None):
     variant / OFF-SCRIPT (no branch aboard for the favoured side). Deterministic, legal in-race (own
     instruments + pre-loaded homework); selects a pre-authored variant, never originates strategy."""
     return selector.get_selector(route=route)
+
+
+@app.get("/reoptimize")
+def reoptimize_ep(route: str | None = None):
+    """Onboard RE-OPTIMIZER (graceful-degradation tier 2/3): a fresh route from the live position
+    through the remaining marks on own polars + the common Open-Meteo forecast, flagged OFF-PLAYBOOK,
+    with its divergence from the frozen plan. The fallback when the selector says off-script. CPU-heavy
+    (isochrone chain) → cached + on-demand. Legal in-race (own computer + own polars + common data)."""
+    return reoptimize.get_reoptimize(route=route)

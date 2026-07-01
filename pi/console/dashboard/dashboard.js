@@ -146,6 +146,8 @@
         target_variant: "right", target_label: "Right start", confidence: 0.9, confidence_label: "high",
         driven_by: ["get_tactics", "get_drift", "get_deviation"],
         why: "A persistent veering shift now favours the right — against the recommended Left. That's the playbook's branch trigger. Reinforced: the forecast has veered ~28° the same way; you're already working the right side (1.3 nm right)." },
+      reoptimize: { available: true, off_playbook: true, eta_min: 254, tacks: 9, sailed_nm: 46.2,
+        marks: ["Cove Island", "Finish"], vs_playbook: { available: true, max_divergence_nm: 2.4, mean_divergence_nm: 0.9 } },
     },
   };
 
@@ -663,11 +665,25 @@
     if (App.src !== "live") return;
     const r = await fetchJSON("/selector", 9000);
     if (r) App.selector = r;
+    // only run the heavy onboard re-optimizer when the plan has actually run out (off-script)
+    if (r && r.action === "off_script") fetchReoptimize();
     if (App.src === "live") render();
   }
   function currentSelector() {
     if (App.src === "demo") return (SCENARIOS[App.demoScn] || {}).selector || null;
     return App.selector;
+  }
+  /* the onboard RE-OPTIMIZER (graceful-degradation fallback route). Heavy (isochrone) → fetched
+     on demand ONLY when the selector says off-script (server-cached), never on every poll. */
+  async function fetchReoptimize() {
+    if (App.src !== "live") return;
+    const r = await fetchJSON("/reoptimize", 20000);
+    if (r) App.reoptimize = r;
+    if (App.src === "live") render();
+  }
+  function currentReoptimize() {
+    if (App.src === "demo") return (SCENARIOS[App.demoScn] || {}).reoptimize || null;
+    return App.reoptimize;
   }
   /* the Strategy strip: are we sailing the frozen variant's optimal track? (route-deviation). */
   function renderStrategy() {
@@ -719,6 +735,23 @@
     document.getElementById("stWhy").textContent = d.why || d.sub || "";
     renderDriftLine();
     renderSelector();
+    renderReoptimize();
+  }
+  /* the onboard re-route line — shown when a fresh fallback route is available (live: only while
+     off-script; demo: illustrative). Framed clearly as OFF-BOOK (not the frozen homework). */
+  function renderReoptimize() {
+    const el = document.getElementById("stReopt");
+    const ro = currentReoptimize();
+    const sel = currentSelector();
+    const offscript = sel && sel.action === "off_script";
+    if (!ro || ro.available === false || (!offscript && App.src === "live")) { el.hidden = true; return; }
+    el.hidden = false;
+    const h = ro.eta_min != null ? (Math.floor(ro.eta_min / 60) + "h " + Math.round(ro.eta_min % 60) + "m") : "?";
+    const vs = ro.vs_playbook && ro.vs_playbook.available ? "up to " + r1(ro.vs_playbook.max_divergence_nm) + " nm off the plan" : "";
+    el.innerHTML = '<span class="ro-ico">⟳</span><span>Onboard re-route ready — <b>' + h + '</b>' +
+      (ro.tacks != null ? ' · ' + ro.tacks + ' tacks' : '') +
+      (ro.sailed_nm != null ? ' · ' + r1(ro.sailed_nm) + ' nm' : '') +
+      (vs ? ' · ' + vs : '') + ' <span class="ro-tag">off-book</span></span>';
   }
   /* the executor's recommendation banner at the top of the strip: HOLD / SWITCH → variant /
      OFF-SCRIPT, with confidence + the grounded why. Hidden when no playbook is aboard. */
@@ -794,7 +827,7 @@
     openTile: null, streamTimer: null, pollTimer: null, seriesTimer: null, briefTimer: null,
     adhereTimer: null, coachTimer: null, devTimer: null, driftTimer: null, selTimer: null, polling: false,
     dwell: {}, data: null, windHist: [], fcstHist: [], seriesHist: [], lastPersist: 0, brief: null,
-    adherence: null, coach: null, deviation: null, forecastDrift: null, selector: null,
+    adherence: null, coach: null, deviation: null, forecastDrift: null, selector: null, reoptimize: null,
     detailStreamKey: null, detailAbort: null,
   };
   function currentData() {

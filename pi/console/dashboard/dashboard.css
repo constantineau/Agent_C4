@@ -93,6 +93,12 @@ body {
 .st-drift.sd-watch { --dc:var(--watch); }
 .st-drift.sd-act   { --dc:var(--act); }
 .st-drift.sd-na    { --dc:var(--na); }
+.st-reopt { margin:6px 0 0; font-size:12.5px; line-height:1.35; color:var(--muted);
+  display:flex; align-items:center; gap:7px; padding:5px 9px; border-radius:8px;
+  background:var(--panel2); border:1px dashed var(--act); }
+.st-reopt .ro-ico { color:var(--act); font-weight:800; flex:none; }
+.st-reopt b { color:var(--text); font-weight:700; }
+.st-reopt .ro-tag { color:var(--act); font-weight:700; text-transform:uppercase; letter-spacing:.5px; font-size:11px; }
 .st-why { margin:8px 0 0; font-size:13.5px; line-height:1.4; color:var(--text); }
 .st-flip { margin:5px 0 0; font-size:12.5px; line-height:1.35; color:var(--muted); }
 .st-flip b { color:var(--c); font-weight:700; }

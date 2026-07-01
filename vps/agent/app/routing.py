@@ -52,38 +52,26 @@ def _tack(hdg, twd):
     return "stbd" if NAV._wrap180(twd - hdg) > 0 else "port"
 
 
-def get_route(route: str = None, target: str = "next"):
-    """Optimal route from the boat to the next mark (target='next') or the course finish."""
-    nav = NAV.get_navigator(route)
-    if not nav.get("available"):
-        return {"available": False, "note": nav.get("note", "no navigator fix")}
-    marks = NAV._marks(nav["route"])
-    if target == "finish":
-        dest = marks[-1]
-    else:
-        dest = next((m for m in marks if m["name"] == nav["next_mark"]["name"]), marks[-1])
-    s = NAV._latest()
-    slat, slon = s["lat"], s["lon"]
-    if slat is None:
-        return {"available": False, "note": "no position fix"}
+def make_wind_fn(slat, slon, live):
+    """A wind(lat,lon,epoch)→(tws,twd) closure: the Open-Meteo forecast if reachable at the start,
+    else the live measured wind held constant (so routing still runs with no network). `live` is
+    (tws_kn, twd_deg). Returns (wind_fn, use_forecast)."""
+    use_fcst = weather.wind_at(slat, slon, time.time()) is not None
 
-    # wind field: forecast if reachable, else live measured wind held constant
-    live = (s["tws"], s["twd"])
-    sample = weather.wind_at(slat, slon, time.time())
-    use_fcst = sample is not None
     def wind(lat, lon, epoch):
         if use_fcst:
             w = weather.wind_at(lat, lon, epoch)
             if w:
                 return w
         return live if live[0] is not None else (12.0, 0.0)
+    return wind, use_fcst
 
-    key = (round(slat, 3), round(slon, 3), dest["name"], target, round(live[0] or 0), round(live[1] or 0), use_fcst)
-    if _cache["key"] == key and time.time() - _cache["t"] < CACHE_TTL:
-        return _cache["val"]
 
-    t0 = time.time()
-    direct = NAV._hav_nm(slat, slon, dest["lat"], dest["lon"])
+def route_leg(slat, slon, dlat, dlon, wind, t0, live_twd=0.0):
+    """One isochrone leg from (slat,slon) to (dlat,dlon) through `wind()`, starting at epoch `t0`.
+    The reusable core of `get_route` — chained per remaining mark by the onboard re-optimizer.
+    Returns {path:[{lat,lon}], legs:[{hdg,tack}], reached_t, sailed_nm, direct_nm}."""
+    direct = NAV._hav_nm(slat, slon, dlat, dlon)
     start = {"lat": slat, "lon": slon, "t": t0, "parent": None, "hdg": None}
     frontier = [start]
     reached = None
@@ -96,12 +84,12 @@ def get_route(route: str = None, target: str = "next"):
             if tws is None:
                 tws, twd = 12.0, 0.0
             # can we lay the mark from here this step?
-            dmark = NAV._hav_nm(node["lat"], node["lon"], dest["lat"], dest["lon"])
-            bmark = NAV._bearing(node["lat"], node["lon"], dest["lat"], dest["lon"])
+            dmark = NAV._hav_nm(node["lat"], node["lon"], dlat, dlon)
+            bmark = NAV._bearing(node["lat"], node["lon"], dlat, dlon)
             twa_m = abs(NAV._wrap180(bmark - twd))
             sp_m = _polar_speed(tws, twa_m)
             if sp_m > 0.3 and dmark <= sp_m * DT_H:
-                reached = {"lat": dest["lat"], "lon": dest["lon"],
+                reached = {"lat": dlat, "lon": dlon,
                            "t": node["t"] + (dmark / sp_m) * 3600, "parent": node, "hdg": bmark}
                 break
             for hdg in headings:
@@ -122,29 +110,59 @@ def get_route(route: str = None, target: str = "next"):
             break
         frontier = list(cand.values())
         # stop if the envelope has effectively reached the mark
-        best = min(frontier, key=lambda n: NAV._hav_nm(n["lat"], n["lon"], dest["lat"], dest["lon"]))
-        if NAV._hav_nm(best["lat"], best["lon"], dest["lat"], dest["lon"]) < 0.05:
+        best = min(frontier, key=lambda n: NAV._hav_nm(n["lat"], n["lon"], dlat, dlon))
+        if NAV._hav_nm(best["lat"], best["lon"], dlat, dlon) < 0.05:
             reached = best
             break
 
     if not reached:
         # didn't converge — return the frontier point nearest the mark as a best effort
-        reached = min(frontier, key=lambda n: NAV._hav_nm(n["lat"], n["lon"], dest["lat"], dest["lon"]))
+        reached = min(frontier, key=lambda n: NAV._hav_nm(n["lat"], n["lon"], dlat, dlon))
 
     # backtrack the path
     path, node, legs = [], reached, []
     while node is not None:
         path.append({"lat": round(node["lat"], 5), "lon": round(node["lon"], 5)})
         if node["hdg"] is not None:
-            legs.append({"hdg": round(node["hdg"]), "tack": _tack(node["hdg"], live[1] or 0)})
+            legs.append({"hdg": round(node["hdg"]), "tack": _tack(node["hdg"], live_twd or 0)})
         node = node["parent"]
     path.reverse(); legs.reverse()
+    sailed = sum(NAV._hav_nm(path[i]["lat"], path[i]["lon"], path[i + 1]["lat"], path[i + 1]["lon"])
+                 for i in range(len(path) - 1))
+    return {"path": path, "legs": legs, "reached_t": reached["t"],
+            "sailed_nm": sailed, "direct_nm": direct}
+
+
+def get_route(route: str = None, target: str = "next"):
+    """Optimal route from the boat to the next mark (target='next') or the course finish."""
+    nav = NAV.get_navigator(route)
+    if not nav.get("available"):
+        return {"available": False, "note": nav.get("note", "no navigator fix")}
+    marks = NAV._marks(nav["route"])
+    if target == "finish":
+        dest = marks[-1]
+    else:
+        dest = next((m for m in marks if m["name"] == nav["next_mark"]["name"]), marks[-1])
+    s = NAV._latest()
+    slat, slon = s["lat"], s["lon"]
+    if slat is None:
+        return {"available": False, "note": "no position fix"}
+
+    live = (s["tws"], s["twd"])
+    wind, use_fcst = make_wind_fn(slat, slon, live)
+
+    key = (round(slat, 3), round(slon, 3), dest["name"], target, round(live[0] or 0), round(live[1] or 0), use_fcst)
+    if _cache["key"] == key and time.time() - _cache["t"] < CACHE_TTL:
+        return _cache["val"]
+
+    t0 = time.time()
+    leg = route_leg(slat, slon, dest["lat"], dest["lon"], wind, t0, live[1] or 0)
+    path, legs, direct = leg["path"], leg["legs"], leg["direct_nm"]
 
     # count tacks/gybes = tack changes along the path
     tacks = sum(1 for a, b in zip(legs, legs[1:]) if a["tack"] != b["tack"])
-    sailed = sum(NAV._hav_nm(path[i]["lat"], path[i]["lon"], path[i+1]["lat"], path[i+1]["lon"])
-                 for i in range(len(path) - 1))
-    eta_min = round((reached["t"] - t0) / 60, 1)
+    sailed = leg["sailed_nm"]
+    eta_min = round((leg["reached_t"] - t0) / 60, 1)
 
     out = {
         "available": True, "route": nav["route"], "target": dest["name"],
