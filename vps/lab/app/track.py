@@ -262,14 +262,22 @@ def fetch_yb_track(definition, boat_name=None):
 
 
 # ---- scoring: actual track vs the oracle-optimal route -----------------------------------------
-def score_track(track, oracle, marks, start_epoch, wf=None, polars=None, cur=None):
+def score_track(track, oracle, marks, start_epoch, wf=None, polars=None, cur=None,
+                wave=None, wave_coeffs=None):
     """The actual_track block: helm execution vs the oracle line (perflab §5 metrics).
 
     `oracle` is the judge's oracle result (path + total_hours/total_nm); `marks` flattened course
     waypoints [(name,type,lat,lon),...]; `wf` the actual-wind field (for %-of-polar). The track is
     clipped to the racing portion (nearest fix to start mark → nearest to finish mark) so pre-start /
     post-finish wandering doesn't pollute the numbers. Times are anchored on `start_epoch` when the
-    track carries no absolute clock (YB / a GPX with no <time>)."""
+    track carries no absolute clock (YB / a GPX with no <time>).
+
+    `wave` (the actual sea-state field) SEPARATES the helm number from the conditions: the raw
+    `polar_pct` compares achieved speed to the FLAT-WATER polar (so it's depressed by the seaway — the
+    honest gap-to-theoretical coaching number), while `helm_pct` divides the sea-state loss back out
+    (achieved / (polar × wave_factor)) so it's a FLAT-WATER-EQUIVALENT helm efficiency — that's the
+    number the learning loop refines `helm_factor` from, keeping helm flat-water so waves aren't
+    double-counted. `wave_coeffs` is the active boat's calibrated degradation overlay (else env priors)."""
     fixes = (track or {}).get("fixes") or []
     if len(fixes) < 2:
         return {"available": False, "note": "track too short to score"}
@@ -318,10 +326,11 @@ def score_track(track, oracle, marks, start_epoch, wf=None, polars=None, cur=Non
         "side_worked": side,
     }
     cc = cur if (cur is not None and getattr(cur, "loaded", False)) else None
-    pol = _polar_pct(seg, epochs, wf, polars, cc)
+    wv = wave if (wave is not None and getattr(wave, "loaded", False)) else None
+    pol = _polar_pct(seg, epochs, wf, polars, cc, wv, wave_coeffs)
     if pol:
         out.update(pol)
-    bins = _performance_bins(seg, epochs, wf, polars, cc)
+    bins = _performance_bins(seg, epochs, wf, polars, cc, wv, wave_coeffs)
     if bins:
         out["perf_bins"] = bins                # observed-vs-polar by (TWS,TWA) cell — Lab-4 mining input
     if cc is not None and epochs and epochs[0] is not None:
@@ -354,6 +363,12 @@ def score_track(track, oracle, marks, start_epoch, wf=None, polars=None, cur=Non
         else:
             cav.append(">100% of polar with NO current correction — usually a favorable current rather "
                        "than real overspeed; a current field would disambiguate.")
+    if out.get("wave_corrected") and out.get("helm_pct") is not None and out.get("polar_pct") is not None \
+            and (out["helm_pct"] - out["polar_pct"]) >= 3:
+        cav.append(f"Helm (flat-water-equivalent) {out['helm_pct']}% vs {out['polar_pct']}% of the flat "
+                   f"polar — the ~{out['helm_pct'] - out['polar_pct']}-pt gap is the sea state "
+                   f"(~{out.get('sea_state_hs_mean', 0)} m mean Hs) excused, not the crew; the learning "
+                   "loop refines helm_factor off the flat-water-equivalent so waves aren't double-counted.")
     if cav:
         out["caveats"] = cav
     return out
@@ -391,14 +406,17 @@ def _speed_angle(f, ep, twd, cur):
     return sog, abs(optimizer._wrap180(cog - twd))
 
 
-def _polar_pct(seg, epochs, wf, polars, cur=None):
+def _polar_pct(seg, epochs, wf, polars, cur=None, wave=None, wave_coeffs=None):
     """% of the flat-water polar the boat ACHIEVED — speed-through-water (current-corrected when a
-    current field is given) vs the polar target at the realized wind, per fix. The coaching number;
-    can exceed 100% (a soft ORC rating / sailing above the cert). Needs windfield + polars, else None."""
+    current field is given) vs the polar target at the realized wind, per fix. Returns BOTH:
+      - `polar_pct` — raw, vs the FLAT-WATER polar (depressed by the seaway → the honest coaching gap);
+      - `helm_pct` — the sea-state loss divided back out (achieved / (polar × wave_factor)) → a
+        FLAT-WATER-EQUIVALENT helm efficiency (waves excused). With no wave field, helm_pct == polar_pct.
+    Both can exceed 100% (a soft ORC rating / sailing above the cert). Needs windfield + polars, else None."""
     if wf is None or polars is None or not getattr(wf, "loaded", False):
         return None
     P = polars
-    ratios = []
+    ratios, helm_ratios, hss = [], [], []
     for f, ep in zip(seg, epochs):
         if ep is None or f.get("sog") is None or f.get("cog") is None:
             continue
@@ -412,10 +430,18 @@ def _polar_pct(seg, epochs, wf, polars, cur=None):
         target = optimizer._polar_speed(P, tws, twa)
         if target and target > 0.5 and stw > 0.3:
             ratios.append(min(2.0, stw / target))
+            hs = wave.wave_at(f["lat"], f["lon"], ep) if wave is not None else 0.0
+            wfac = optimizer._wave_factor(hs, twa, wave_coeffs) if wave is not None else 1.0
+            helm_ratios.append(min(2.0, stw / (target * wfac)) if wfac > 0 else min(2.0, stw / target))
+            hss.append(hs)
     if len(ratios) < 5:
         return None
-    return {"polar_pct": round(100 * sum(ratios) / len(ratios)),
-            "polar_samples": len(ratios)}
+    out = {"polar_pct": round(100 * sum(ratios) / len(ratios)),
+           "helm_pct": round(100 * sum(helm_ratios) / len(helm_ratios)),
+           "polar_samples": len(ratios), "wave_corrected": wave is not None}
+    if wave is not None and hss:
+        out["sea_state_hs_mean"] = round(sum(hss) / len(hss), 2)
+    return out
 
 
 _BIN_MIN_SAMPLES, _BIN_PCTILE = 4, 80.0       # min slices to trust a cell; "best achievable" percentile
@@ -434,16 +460,21 @@ def _pctile(xs, q):
     return s[lo] if lo + 1 >= len(s) else s[lo] + (s[lo + 1] - s[lo]) * (i - lo)
 
 
-def _performance_bins(seg, epochs, wf, polars, cur=None):
+def _performance_bins(seg, epochs, wf, polars, cur=None, wave=None, wave_coeffs=None):
     """Speed-through-water (current-corrected when a current field is given) vs the polar target,
     snapped to the ORC cert's OWN (TWS,TWA) grid cells — the Lab-4 refined-polar input. Snapping to the
     cert grid (not arbitrary bins) is what lets an approved adjustment line up 1:1 with the cell the
     optimizer samples (`_polar_speed` nearest-neighbour), so the overlay actually bites. A high
     percentile (80th) per cell = 'best achievable' (rejects lulls/steering scatter); can exceed the
-    cert (soft rating). Needs the actual-wind field + ≥ a few samples/cell, else []."""
+    cert (soft rating). Needs the actual-wind field + ≥ a few samples/cell, else [].
+
+    Each cell also carries `hs_mean` (mean sea state) and `pct_flat` (the raw `pct` with the sea-state
+    loss divided out) — `pct` (raw vs flat polar) + `hs_mean` are the WAVE-CALIBRATION input (fit the
+    Hs slope), while `pct_flat` is the FLAT-WATER shape the polar-overlay refinement uses (so a cell
+    sailed in a big head sea isn't mistaken for a weak polar angle)."""
     if wf is None or polars is None or not getattr(wf, "loaded", False):
         return []
-    cells = {}            # (cert_tws, cert_twa) -> [through-water stw]
+    cells = {}            # (cert_tws, cert_twa, target) -> [(through-water stw, hs)]
     for f, ep in zip(seg, epochs):
         if ep is None or f.get("sog") is None or f.get("cog") is None or f["sog"] <= 0.3:
             continue
@@ -459,15 +490,24 @@ def _performance_bins(seg, epochs, wf, polars, cur=None):
         cell = min(polars, key=lambda p: abs(p[0] - tws) + abs(p[1] - twa))   # nearest cert cell
         if abs(cell[0] - tws) > 3.0 or abs(cell[1] - twa) > 18.0:             # too far → off-grid, skip
             continue
-        cells.setdefault((cell[0], cell[1], cell[2]), []).append(stw)
+        hs = wave.wave_at(f["lat"], f["lon"], ep) if wave is not None else 0.0
+        cells.setdefault((cell[0], cell[1], cell[2]), []).append((stw, hs))
     out = []
-    for (tws_c, twa_c, target), stws in sorted(cells.items()):
-        if len(stws) < _BIN_MIN_SAMPLES or not target or target <= 0.5:
+    for (tws_c, twa_c, target), samples in sorted(cells.items()):
+        if len(samples) < _BIN_MIN_SAMPLES or not target or target <= 0.5:
             continue
+        stws = [s for s, _h in samples]
         best = _pctile(stws, _BIN_PCTILE)
-        out.append({"tws": tws_c, "twa": twa_c, "point_of_sail": _point_of_sail(twa_c),
-                    "samples": len(stws), "best_stw": round(best, 2),
-                    "target_stw": round(target, 2), "pct": round(100 * best / target)})
+        hs_mean = round(sum(h for _s, h in samples) / len(samples), 2)
+        pct = round(100 * best / target)
+        row = {"tws": tws_c, "twa": twa_c, "point_of_sail": _point_of_sail(twa_c),
+               "samples": len(samples), "best_stw": round(best, 2),
+               "target_stw": round(target, 2), "pct": pct}
+        if wave is not None:
+            wfac = optimizer._wave_factor(hs_mean, twa_c, wave_coeffs)
+            row["hs_mean"] = hs_mean
+            row["pct_flat"] = round(pct / wfac) if wfac > 0 else pct
+        out.append(row)
     return out
 
 

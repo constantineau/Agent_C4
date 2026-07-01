@@ -1049,6 +1049,40 @@ effect (vs the ETA effect) only matters once a spatially-varying field is in —
 reshaping on wave-field confidence and to calibrate the coefficients from the boat's own logs rather than
 trust the linear prior. Keep `helm_factor` a FLAT-WATER number so it doesn't double-count waves.
 
+**LAB-4 CONDITION ATTRIBUTION — wave-correct the helm number + calibrate the wave coefficients + a
+multi-race trend: SHIPPED 2026-07-01.** Closes the "keep helm flat-water" loop above. Three pieces:
+(1) **Wave-correct the helm measurement.** The debrief now builds the actual sea-state field (`GLWUWave`,
+alongside the current field) and threads it + the active boat's wave coeffs into `track.score_track`. The
+scorecard reports BOTH `polar_pct` (raw, vs the FLAT-water polar — the honest gap-to-theoretical, still
+depressed by the seaway) AND **`helm_pct`** = the sea-state loss divided back out (achieved /
+(polar × wave_factor)) → a FLAT-WATER-EQUIVALENT helm efficiency. `helm_pct` is what the learning loop
+refines `helm_factor` from, so waves aren't double-counted (a big `polar_pct`→`helm_pct` gap = the
+conditions, attributed to CONDITIONS not the crew, in the scorecard + Opus critique). On a calm day
+(Hs ≤ deadband) `wave_factor`≈1 so `helm_pct == polar_pct` — correctly no correction. Perf bins now carry
+`hs_mean` + `pct_flat`; `learning.propose` refines off `pct_flat` (flat-water), and the archive keeps the
+RAW `pct` + `hs_mean` for calibration. (2) **Calibrate `ROUTE_WAVE_K_*` from the archive.** New per-boat
+`BoatProfile.wave_coeffs` overlay ({hs_deadband,k_up,k_reach,k_down,floor}) on the conservative env
+priors; `optimizer._wave_factor(hs,twa,coeffs)` reads it (threaded like helm/polar_adjustments through
+`optimize_course`/`build_playbook`/`synthesize` via `boats.active_wave_coeffs`). `learning.calibrate_waves`
+fits the slope per point of sail from the archived raw `pct` + `hs_mean`: the model
+`pct = 100·helm·(1−k·eff)` (eff = max(0, Hs−deadband)) is linear in eff, so a sample-weighted least-squares
+gives intercept b0 = helm level, slope b1 = −helm·k → **k = −b1/b0**, clamped to a sane band, requiring Hs
+SPREAD (≥4 cells over ≥0.6 m) else the prior k is kept (honest — a calm-race archive can't fit a slope).
+It's a `wave_coeffs`-kind PROPOSAL (human-approved apply, same discipline as the boat-model proposal —
+`propose`/`calibrate_waves` never mutate; only `apply_proposal` writes the boat). (3) **Multi-race trend**
+(`learning.trend`, `GET /api/learning/trend`): the latest debrief per race oldest→newest (helm%/polar%/
+time-behind/regret/Hs) + applied-refinement milestones — see the boat model improving over a season. UI
+(Learnings tab): a "Calibrate the sea-state model" review card, a "Performance trend" table with inline
+bars, `helm_pct` in the scorecard + archive. Verified: unit (`test_routing_track.test_wave_correction`
+2 m head sea → helm 99 vs polar 93; `test_routing_learning.test_calibrate_waves` recovers k_up=0.05 r²1.0
++ human-in-loop; `test_trend`) + the wave_coeffs=None path is byte-identical to baseline (diffed HEAD-vs-new
+on the routing tests) + LIVE on real Bayview Mackinac (GLWU 0.55 m → wave_corrected, helm_pct==polar_pct
+on the calm day, archived, trend shows it, calibrate honestly reports insufficient spread) + Playwright
+(all cards render, calibrate shows the honest message, 0 console errors). Files: track.py, judge.py,
+learning.py, optimizer.py (`_wave_factor` coeffs), boats.py, shared/boat_profile.py (`wave_coeffs`),
+playbook.py, synthesis.py, main.py, web/{app.js,styles.css}, both test files. Tunable priors unchanged
+(`ROUTE_WAVE_*`); the calibrated overlay is per-boat + human-approved.
+
 **Optimizer UI study + restyle — `docs/OPTIMIZER_UI_STUDY.md`** (Orca + Expedition gap analysis). Tier 0
 (ensemble-control fix + ECMWF-ENS wired as a separate 51-member `ecmwf-ens` ensemble source) + Tier 1
 quick wins (map wind color-scale legend, forecast ▶/⏸ animation, grouped control cards Course/Boat &

@@ -125,3 +125,12 @@ def active_polar_adjustments():
     b = active_boat()
     adj = (b or {}).get("polar_adjustments")
     return adj if isinstance(adj, list) else []
+
+
+def active_wave_coeffs():
+    """The active boat's human-APPROVED sea-state degradation coefficients (Lab-4 calibration) —
+    {hs_deadband, k_up, k_reach, k_down, floor}, or None → the optimizer uses the ROUTE_WAVE_* env
+    priors. Keeps helm a flat-water number: the wave model carries the sea-state loss separately."""
+    b = active_boat()
+    wc = (b or {}).get("wave_coeffs")
+    return wc if isinstance(wc, dict) and wc else None

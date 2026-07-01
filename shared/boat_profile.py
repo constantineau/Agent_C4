@@ -70,6 +70,12 @@ class BoatProfile:
     # ORC cert per (TWS, TWA) cell — [{tws, twa, mult, basis?}]. The cert stays gospel (untouched);
     # this is an explicit, reviewable overlay applied at optimize time. Empty → routes on the raw cert.
     polar_adjustments: list = field(default_factory=list)
+    # Sea-state degradation coefficients (Lab-4 calibration), per-boat overlay on the conservative env
+    # priors. {hs_deadband, k_up, k_reach, k_down, floor} — the per-metre speed loss above the deadband,
+    # by point of sail. Calibrated from the boat's realized-polar archive (learning.calibrate_waves) and
+    # human-APPROVED; empty → the optimizer uses the ROUTE_WAVE_* env defaults. Keeps helm_factor a
+    # FLAT-WATER number (the wave model carries the sea-state loss, so the two don't double-count).
+    wave_coeffs: dict = field(default_factory=dict)
     note: str = ""
     provenance: dict = field(default_factory=dict)
     schema_version: str = SCHEMA_VERSION
@@ -108,6 +114,7 @@ def summary(d: dict) -> dict:
         "hull_type": d.get("hull_type", "mono"),
         "helm_factor": d.get("helm_factor", 1.0),
         "polar_adjustments": d.get("polar_adjustments", []),
+        "wave_coeffs": d.get("wave_coeffs") or {},
     }
 
 

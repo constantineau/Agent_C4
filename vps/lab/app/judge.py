@@ -126,6 +126,13 @@ def run_judge(race_id, playbook_id=None, models=None, on_progress=None):
     except Exception:
         cur = None
 
+    log("building the actual sea-state field (to separate helm from the seaway)…")
+    try:
+        from .wave import build_wavefield
+        wv = build_wavefield(bbox, start, t_end, on_progress=log)
+    except Exception:
+        wv = None
+
     marks, _, _ = race_def.course_to_marks(d, course_id)
     start_pt = (marks[0][2], marks[0][3]) if marks else None
     first_mark = (marks[1][2], marks[1][3]) if len(marks) > 1 else None
@@ -153,7 +160,7 @@ def run_judge(race_id, playbook_id=None, models=None, on_progress=None):
                    "side_matched": (rec_side == side_paid),
                    "winning_variant": winning},
         "windfield": wf.status(),
-        "actual_track": _score_actual_track(race_id, oracle, marks, start, wf, cur),
+        "actual_track": _score_actual_track(race_id, oracle, marks, start, wf, cur, wv),
         "caveat": "Oracle wind is the best-available GRIB over the race window; a true post-race judge "
                   "uses reanalysis/analysis fields. For a future/near race this is forecast-grade, so "
                   "regret reflects forecast drift, not full hindsight.",
@@ -168,18 +175,20 @@ def run_judge(race_id, playbook_id=None, models=None, on_progress=None):
     return report
 
 
-def _score_actual_track(race_id, oracle, marks, start_epoch, wf, cur=None):
+def _score_actual_track(race_id, oracle, marks, start_epoch, wf, cur=None, wave=None):
     """Score the boat's stored ACTUAL track vs the oracle line (helm execution), if one is uploaded/
     fetched. Returns the actual_track block for the report; a no-track default keeps the slot honest.
     `cur` (the actual-current field) lets the polar%/bins use speed-through-water, so a measured >100%
-    reflects real boat speed rather than a fair tide."""
+    reflects real boat speed rather than a fair tide. `wave` (the actual sea-state field) separates the
+    flat-water helm number from the seaway (so helm_factor refinement doesn't double-count waves)."""
     t = track.load_track(race_id)
     if not t or not t.get("fixes"):
         return {"available": False,
                 "note": "no boat track for this race — upload a GPX or fetch our YB track below"}
     try:
         from . import polars as POL
-        return track.score_track(t, oracle, marks, start_epoch, wf=wf, polars=POL.polars_stw(), cur=cur)
+        return track.score_track(t, oracle, marks, start_epoch, wf=wf, polars=POL.polars_stw(), cur=cur,
+                                 wave=wave, wave_coeffs=boats.active_wave_coeffs())
     except Exception as e:
         return {"available": False, "note": f"track scoring failed: {type(e).__name__}"}
 
@@ -208,6 +217,10 @@ def _deterministic_critique(r):
             bits.append(f"{at['extra_distance_pct']}% oversail")
         if at.get("polar_pct") is not None:
             bits.append(f"{at['polar_pct']}% of polar")
+        if at.get("wave_corrected") and at.get("helm_pct") is not None \
+                and (at["helm_pct"] - (at.get("polar_pct") or 0)) >= 3:
+            bits.append(f"helm ~{at['helm_pct']}% flat-water-equiv (sea state ~{at.get('sea_state_hs_mean', 0)} m "
+                        "excused the rest)")
         if at.get("side_worked"):
             sw = at["side_worked"]
             bits.append(f"worked the {sw} side" + (" (= the side that paid)" if sw == side_paid else f", paid was {side_paid}"))
@@ -223,9 +236,11 @@ def _deterministic_critique(r):
             "brain_edit": ("Tighten the first-beat side trigger — bias toward switching when early "
                            f"pressure shows on the {side_paid} side.") if not matched else
                           "Keep the current first-beat read; it matched the outcome.",
-            "boat_model_note": ("Helm achieved only %d%% of polar — consider lowering the boat's "
-                                "helm_factor toward that, and review trim/steering in the debrief."
-                                % at["polar_pct"]) if (at.get("available") and at.get("polar_pct") and at["polar_pct"] < 92) else "",
+            "boat_model_note": ("Flat-water-equivalent helm ~%d%% of polar (sea-state loss removed) — "
+                                "consider nudging helm_factor toward that; review trim/steering."
+                                % (at.get("helm_pct") or at.get("polar_pct")))
+                                if (at.get("available") and (at.get("helm_pct") or at.get("polar_pct"))
+                                    and (at.get("helm_pct") or at.get("polar_pct")) < 92) else "",
             "model": "deterministic"}
 
 
@@ -242,7 +257,7 @@ def _critique(r):
         facts["actual_track"] = {k: at.get(k) for k in (
             "source", "elapsed_hours", "time_behind_optimal_min", "sailed_nm", "optimal_nm",
             "extra_distance_pct", "xte_mean_nm", "xte_p90_nm", "xte_max_nm", "side_worked",
-            "polar_pct", "polar_samples")}
+            "polar_pct", "helm_pct", "sea_state_hs_mean", "wave_corrected", "polar_samples")}
     system = (
         "You are an expert yacht-racing coach running a POST-RACE DEBRIEF (the judge loop). You are "
         "given the frozen pre-race PLAYBOOK we carried (recommended first-beat side + variants) and the "
@@ -251,8 +266,11 @@ def _critique(r):
         "you also have the boat's REAL sailed track scored vs the oracle line: time_behind_optimal_min, "
         "extra_distance_pct (oversail), XTE off the optimal route, the first-beat side the boat actually "
         "WORKED (vs the side that paid / we recommended), and polar_pct (% of the flat-water polar the "
-        "helm achieved). SEPARATE three causes: tactical (wrong side/strategy), helm execution (low "
-        "polar_pct, high XTE, oversail = steering/trim/sail-handling), and conditions/luck. The boat "
+        "helm achieved). When wave_corrected is true, helm_pct is the FLAT-WATER-EQUIVALENT speed (the "
+        "sea-state loss at sea_state_hs_mean divided back out) — so helm_pct > polar_pct means the gap "
+        "was the seaway, not the crew; attribute that difference to CONDITIONS. SEPARATE three causes: "
+        "tactical (wrong side/strategy), helm execution (low helm_pct, high XTE, oversail = steering/"
+        "trim/sail-handling), and conditions/luck (a big polar_pct→helm_pct gap = a rough sea). The boat "
         "NEVER sails the optimal line exactly — these are coaching deltas, not pass/fail; judge PROCESS "
         "not just outcome (a good +EV call that didn't pay is still good). Be concrete, concise, no "
         "preamble. Return STRICT JSON only with keys: assessment (2-3 sentences on what the plan + helm "

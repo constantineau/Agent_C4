@@ -118,8 +118,67 @@ def test_helm_can_exceed_one():
             os.remove(f)
 
 
+def test_calibrate_waves():
+    """Fit the sea-state slope k from upwind cells across a range of wave heights; human-approved apply.
+    Synthetic model: pct = 100·helm·(1 − k·eff), helm 0.95 / k_up 0.05 / deadband 0.5 → recover k≈0.05."""
+    tmp = tempfile.mkdtemp()
+    learning.LEARNING_DB = os.path.join(tmp, "learning.db")
+    boats.save_boat({"boat_id": "_wboat_", "name": "Wave", "draft_m": 2.0, "helm_factor": 1.0})
+    try:
+        for i, (hs, pct) in enumerate([(0.5, 95.0), (1.5, 90.25), (2.5, 85.5), (3.5, 80.75)]):
+            bins = [{"tws": 12.0, "twa": 45.0, "point_of_sail": "upwind", "samples": 60,
+                     "best_stw": round(7.0 * pct / 100, 2), "target_stw": 7.0, "pct": pct, "hs_mean": hs}]
+            learning.archive_debrief(_fake_report(f"w{i}", bins, round(pct)), "_wboat_")
+        cal = learning.calibrate_waves("_wboat_")
+        assert cal["ok"] and cal["kind"] == "wave_coeffs", cal
+        assert not boats.get_boat("_wboat_").get("wave_coeffs"), "calibrate mutated the boat!"
+        kup = cal["wave"]["k_up"]
+        assert 0.04 <= kup <= 0.06, (kup, cal["summary"])          # recovers the true 0.05 slope
+        up = cal["summary"]["by_point_of_sail"]["upwind"]
+        assert up["confidence"] > 0 and up["r2"] >= 0.95, up
+        # reaching/downwind had no data → keep their priors (env), confidence 0
+        assert cal["wave"]["k_reach"] == round(float(os.environ.get("ROUTE_WAVE_K_REACH", "0.025")), 4), cal["wave"]
+        assert cal["summary"]["by_point_of_sail"]["reaching"]["confidence"] == 0
+        # APPROVE (human) → lands on the boat
+        res = learning.apply_proposal(cal["id"])
+        assert res["ok"], res
+        wc = boats.get_boat("_wboat_")["wave_coeffs"]
+        assert abs(wc["k_up"] - kup) < 1e-6 and wc["hs_deadband"] == 0.5, wc
+        assert learning.get_proposal(cal["id"])["status"] == "applied"
+        print(f"PASS calibrate_waves: fit k_up={kup} (true 0.05, r²{up['r2']}); boat UNCHANGED until "
+              f"approve → wave_coeffs {wc}")
+    finally:
+        f = os.path.join(os.environ.get("INGESTED_DIR", "/srv/ingested"), "boats", "_wboat_.json")
+        if os.path.exists(f):
+            os.remove(f)
+
+
+def test_trend():
+    """The per-race trend carries the flat-water helm_pct + sea state (oldest→newest)."""
+    tmp = tempfile.mkdtemp()
+    learning.LEARNING_DB = os.path.join(tmp, "learning.db")
+    boats.save_boat({"boat_id": "_tboat_", "name": "Trend", "draft_m": 2.0, "helm_factor": 1.0})
+    try:
+        b = [{"tws": 12.0, "twa": 90.0, "point_of_sail": "reaching", "samples": 40,
+              "best_stw": 8.0, "target_stw": 8.5, "pct": 94, "hs_mean": 0.8}]
+        r1 = _fake_report("t1", b, 94)
+        r1["actual_track"]["helm_pct"] = 96
+        r1["actual_track"]["sea_state_hs_mean"] = 0.8
+        learning.archive_debrief(r1, "_tboat_")
+        t = learning.trend("_tboat_")
+        assert t["n_races"] == 1 and t["series"][0]["helm_pct"] == 96, t
+        assert t["series"][0]["sea_state_hs_mean"] == 0.8, t
+        print(f"PASS trend: {t['n_races']}-race series carries helm_pct + sea state")
+    finally:
+        f = os.path.join(os.environ.get("INGESTED_DIR", "/srv/ingested"), "boats", "_tboat_.json")
+        if os.path.exists(f):
+            os.remove(f)
+
+
 if __name__ == "__main__":
     test_polar_overlay()
     test_learning_flow()
     test_helm_can_exceed_one()
+    test_calibrate_waves()
+    test_trend()
     print("\nALL LEARNING TESTS PASSED")

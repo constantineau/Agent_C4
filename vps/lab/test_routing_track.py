@@ -113,6 +113,33 @@ def test_perf_bins_snap_to_cert():
     print(f"PASS perf_bins snap: observations at 50°/134° snapped to cert cells {sorted(cells)}")
 
 
+def test_wave_correction():
+    # constant 12 kn N wind + a 2 m head sea; boat sails 6.9 kn upwind (twa ~50) vs a 7.42 cert target.
+    # RAW polar% is depressed by the seaway; helm_pct divides the wave loss back out (flat-water helm).
+    class WF:
+        loaded = True
+        def wind_at(self, lat, lon, ep):
+            return (12.0, 0.0)
+    class Waves:
+        loaded = True
+        def wave_at(self, lat, lon, ep):
+            return 2.0
+    cert = [(12.0, 52.0, 7.42)]
+    seg = [{"lat": 43.0, "lon": -82.0, "t": i, "sog": 6.9, "cog": 50} for i in range(8)]
+    epochs = [1_000_000 + f["t"] for f in seg]
+    flat = track._polar_pct(seg, epochs, WF(), cert)                      # no wave field
+    wav = track._polar_pct(seg, epochs, WF(), cert, None, Waves())        # wave-corrected
+    assert flat["polar_pct"] == wav["polar_pct"], (flat, wav)            # raw vs-flat-polar unchanged
+    assert not flat.get("wave_corrected") and wav["wave_corrected"], (flat, wav)
+    assert wav["helm_pct"] > wav["polar_pct"], wav                       # sea state excused
+    assert wav["sea_state_hs_mean"] == 2.0, wav
+    bins = track._performance_bins(seg, epochs, WF(), cert, None, Waves())
+    b = bins[0]
+    assert b["hs_mean"] == 2.0 and b["pct_flat"] > b["pct"], b           # cell carries Hs + flat pct
+    print(f"PASS wave_correction: polar {wav['polar_pct']}% raw -> helm {wav['helm_pct']}% flat-water "
+          f"(2 m head sea); bin pct {b['pct']}->pct_flat {b['pct_flat']}")
+
+
 def _live():
     """Network: decode a real YB race and validate against its GetPositions latest fix."""
     import json, urllib.request
@@ -134,7 +161,7 @@ def _live():
 
 if __name__ == "__main__":
     test_yb_decode(); test_yb_decode_two_teams(); test_gpx(); test_score()
-    test_current_correction(); test_perf_bins_snap_to_cert()
+    test_current_correction(); test_perf_bins_snap_to_cert(); test_wave_correction()
     if "--live" in sys.argv:
         _live()
     print("\nALL TRACK TESTS PASSED")

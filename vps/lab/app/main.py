@@ -201,6 +201,12 @@ def _active_adjustments():
     return boats.active_polar_adjustments()
 
 
+def _active_wave():
+    """The active boat's human-APPROVED sea-state degradation coefficients (Lab-4 calibration), or None
+    → the optimizer uses the conservative ROUTE_WAVE_* env priors."""
+    return boats.active_wave_coeffs()
+
+
 def _run_optimize(definition, course_id, start_epoch, model_names, ensemble_members, avoid=True,
                   per_model=False, resolution="auto", use_waves=True):
     """Blocking: build the multi-model wind field, route the course, write the briefing."""
@@ -227,7 +233,7 @@ def _run_optimize(definition, course_id, start_epoch, model_names, ensemble_memb
                                        jib_crossovers=_active_jibs(), per_model=per_model,
                                        resolution=resolution, cur=cur,
                                        waves=waves, helm_factor=boats.active_helm_factor(),
-                                       polar_adjustments=_active_adjustments())
+                                       polar_adjustments=_active_adjustments(), wave_coeffs=_active_wave())
     result["current"] = cur.status()
     result["waves"] = waves.status()
     result["briefing"] = optimizer.briefing(result, definition.get("name", ""))
@@ -449,6 +455,7 @@ async def playbook(body: dict):
                                        model_names, ens, jib_crossovers=_active_jibs(),
                                        helm_factor=boats.active_helm_factor(),
                                        polar_adjustments=_active_adjustments(),
+                                       wave_coeffs=_active_wave(),
                                        use_waves=body.get("use_waves", True))
     except Exception as exc:
         return JSONResponse({"detail": f"playbook failed: {exc}"}, status_code=500)
@@ -531,6 +538,7 @@ async def playbook_synthesize(body: dict):
                                        model_names, ens, jib_crossovers=_active_jibs(),
                                        helm_factor=boats.active_helm_factor(),
                                        polar_adjustments=_active_adjustments(),
+                                       wave_coeffs=_active_wave(),
                                        use_waves=(body or {}).get("use_waves", True))
     except Exception as exc:
         return JSONResponse({"detail": f"synthesis failed: {exc}"}, status_code=500)
@@ -552,6 +560,7 @@ async def playbook_freeze(body: dict):
                                          model_names, ens, jib_crossovers=_active_jibs(),
                                          helm_factor=boats.active_helm_factor(),
                                          polar_adjustments=_active_adjustments(),
+                                         wave_coeffs=_active_wave(),
                                          use_waves=body.get("use_waves", True))
         if not bundle.get("variants"):
             return JSONResponse({"detail": "nothing to freeze — no variants",
@@ -677,12 +686,33 @@ async def learning_propose(body: dict = None):
     return await run_in_threadpool(learning.propose, bid)
 
 
+@app.post("/api/learning/calibrate-waves")
+async def learning_calibrate_waves(body: dict = None):
+    """Fit the sea-state degradation coefficients (ROUTE_WAVE_K_* per point of sail) from the boat's
+    realized-polar archive → a PROPOSED wave_coeffs refinement for human review (never auto-applied)."""
+    bid = (body or {}).get("boat_id") or (boats.active_boat() or {}).get("boat_id")
+    if not bid:
+        return JSONResponse({"detail": "no active boat"}, status_code=400)
+    return await run_in_threadpool(learning.calibrate_waves, bid)
+
+
+@app.get("/api/learning/trend")
+async def learning_trend(boat_id: str = None):
+    """Per-race performance series (latest debrief per race) + applied-refinement milestones — the
+    multi-race trend of helm%/regret/time-behind so you can see the boat model improving."""
+    bid = boat_id or (boats.active_boat() or {}).get("boat_id")
+    if not bid:
+        return JSONResponse({"detail": "no active boat"}, status_code=400)
+    return await run_in_threadpool(learning.trend, bid)
+
+
 @app.post("/api/learning/proposals/{pid}/apply")
 async def learning_apply(pid: int, body: dict = None):
-    """HUMAN-APPROVED apply — writes the (optionally edited) helm_factor + polar overlay to the boat."""
+    """HUMAN-APPROVED apply — writes the (optionally edited) refinement to the boat: helm_factor + polar
+    overlay for a boat_model proposal, or the sea-state coefficients for a wave_coeffs proposal."""
     body = body or {}
     return await run_in_threadpool(learning.apply_proposal, pid, body.get("helm_factor"),
-                                   body.get("adjustments"), body.get("note", ""))
+                                   body.get("adjustments"), body.get("note", ""), body.get("wave_coeffs"))
 
 
 @app.post("/api/learning/proposals/{pid}/reject")

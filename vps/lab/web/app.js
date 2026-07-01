@@ -1983,6 +1983,12 @@ function debTrackScore(at) {
   const ccNote = at.current_corrected
     ? `<span class="muted"> · current-corrected (mean ${at.current_mean_kn ?? "?"} kn)</span>`
     : (at.polar_pct != null ? '<span class="muted"> · no current correction (SOG vs polar)</span>' : "");
+  // helm_pct = flat-water-equivalent (sea-state loss removed) — the number the learning loop refines
+  // helm_factor from. Show it when the seaway materially depressed the raw polar%.
+  const helmGap = (at.wave_corrected && at.helm_pct != null && at.polar_pct != null) ? (at.helm_pct - at.polar_pct) : 0;
+  const helmRow = helmGap >= 3
+    ? row("Helm (flat-water-equiv)", `<span class="pill ok">${at.helm_pct}%</span> <span class="muted">sea state ~${at.sea_state_hs_mean ?? "?"} m excused ~${helmGap} pts — this is the crew number; polar% above still includes the waves</span>`)
+    : "";
   const cav = (at.caveats || []).length
     ? `<div class="banner warn" style="margin-top:8px;font-size:12px">${at.caveats.map(esc).join("<br>")}</div>` : "";
   return `<div class="card">
@@ -1993,6 +1999,7 @@ function debTrackScore(at) {
       ${row("Cross-track off optimal", at.xte_mean_nm != null ? `mean ${at.xte_mean_nm} nm · p90 ${at.xte_p90_nm} nm · max ${at.xte_max_nm} nm` : "—")}
       ${row("First beat worked", `<b>${esc(at.side_worked || "—")}</b>`)}
       ${pol ? row("Polar achieved", pol + ccNote) : ""}
+      ${helmRow}
     </div>
     ${cav}
     <div class="muted" style="font-size:11px;margin-top:6px">The boat never sails the optimal line exactly — these are coaching deltas. Oversail + cross-track = steering/tactics; polar% = helm/trim vs conditions. The critique above separates the causes.</div>
@@ -2086,6 +2093,8 @@ function paintLearnings() {
       <div style="margin-top:8px"><button onclick="learnSaveNotes()">Save notes</button> <span id="learnMsg" class="muted" style="font-size:12px"></span></div>
     </div>
     ${learnRefineCard(ab)}
+    ${learnWaveCard(ab)}
+    ${learnTrendCard()}
     ${learnArchiveCard()}
   </div>`;
 }
@@ -2094,7 +2103,7 @@ function paintLearnings() {
 // approves — the polars/helm only change on an explicit Approve click.
 function learnRefineCard(ab) {
   const L = Lab.learning || {};
-  const pending = (L.proposals || []).find((p) => p.status === "proposed");
+  const pending = (L.proposals || []).find((p) => p.status === "proposed" && (p.kind || "boat_model") === "boat_model");
   const adjN = (ab.polar_adjustments || []).length;
   const applied = (ab.helm_factor != null && Math.abs(ab.helm_factor - 1) > 1e-6) || adjN
     ? `<div class="muted" style="font-size:12px">Currently applied: helm factor <b>${ab.helm_factor != null ? ab.helm_factor : 1}</b>${ab.helm_factor > 1 ? " (above cert — rated soft)" : ""}${adjN ? ` · <b>${adjN}</b> polar-cell adjustments` : " · no polar overlay"}.</div>` : "";
@@ -2134,6 +2143,81 @@ function learnProposalReview(p) {
     </div>`;
 }
 
+// Lab-4 condition attribution: calibrate the sea-state degradation coefficients (ROUTE_WAVE_K_* per
+// point of sail) from the boat's realized-polar archive. Same human-approved discipline as helm/polars.
+function learnWaveCard(ab) {
+  const L = Lab.learning || {};
+  const pending = (L.proposals || []).find((p) => p.status === "proposed" && p.kind === "wave_coeffs");
+  const wc = ab.wave_coeffs || {};
+  const appliedTxt = Object.keys(wc).length
+    ? `<div class="muted" style="font-size:12px">Applied wave model: up <b>${wc.k_up}</b>/m · reach <b>${wc.k_reach}</b>/m · run <b>${wc.k_down}</b>/m (deadband ${wc.hs_deadband} m, floor ${wc.floor}).</div>`
+    : `<div class="muted" style="font-size:12px">Using the conservative default (env) wave priors — calibrate to fit this boat.</div>`;
+  let body;
+  if (L.waveBusy) body = '<div class="loading">Fitting…</div>';
+  else if (pending) body = learnWaveReview(pending);
+  else body = `<div class="muted" style="font-size:12px">Fit how much the boat slows per metre of wave height (by point of sail) from the archived debriefs — needs races sailed across a RANGE of sea states. <b>Nothing changes until you approve.</b></div>
+    <div style="margin-top:8px"><button onclick="learnCalibrateWaves()">Calibrate from archive</button> ${L.waveMsg ? `<span class="muted" style="font-size:12px">${esc(L.waveMsg)}</span>` : ""}</div>`;
+  return `<div class="card">
+    <h3>Calibrate the sea-state model <span class="muted" style="font-weight:400">— condition attribution · human-approved</span></h3>
+    ${appliedTxt}
+    ${body}
+    <div class="muted" style="font-size:11px;margin-top:8px">The wave model carries the sea-state speed loss so <b>helm_factor stays a flat-water number</b> (they don't double-count). Coefficients are fit as k = −slope/intercept of achieved-%-of-polar vs excess Hs, clamped to a sane band; a point of sail with no wave spread keeps its prior.</div>
+  </div>`;
+}
+
+function learnWaveReview(p) {
+  const s = p.summary || {};
+  const pos = s.by_point_of_sail || {};
+  const prop = p.wave || {};
+  const label = { upwind: "Upwind (k_up)", reaching: "Reaching (k_reach)", downwind: "Running (k_down)" };
+  const rows = Object.entries(pos).map(([k, d]) => `<tr>
+    <td>${esc(label[k] || k)}</td>
+    <td>${d.k_current}</td>
+    <td><b class="conf ${d.confidence > 0 ? "ok" : ""}">${d.k_proposed}</b>${d.confidence > 0 ? "" : ' <span class="muted">(kept)</span>'}</td>
+    <td>${d.n_cells} / ${d.hs_spread} m</td>
+    <td>${d.confidence != null ? Math.round(d.confidence * 100) + "%" : "—"}${d.r2 != null ? ` · r²${d.r2}` : ""}</td>
+    <td class="muted" style="font-size:11px">${esc(d.note || (d.helm_level != null ? "helm level " + d.helm_level : ""))}</td></tr>`).join("");
+  return `<div class="muted" style="font-size:12px;margin:4px 0">Fit over ${p.n_bins} cells / ${(s.races || []).length} race(s). Proposed per-metre speed-loss coefficients:</div>
+    <table class="fleet-tbl"><thead><tr><th>Point of sail</th><th>Now</th><th>Proposed</th><th>Cells / Hs spread</th><th>Confidence</th><th></th></tr></thead><tbody>${rows}</tbody></table>
+    <div style="margin-top:10px">
+      <button onclick="learnApplyWave(${p.id})">✓ Approve &amp; apply</button>
+      <button class="mini" onclick="learnReject(${p.id})">Reject</button>
+      <span id="learnWaveMsg" class="muted" style="font-size:12px"></span>
+    </div>`;
+}
+
+// Lab-4 condition attribution: multi-race trend — see the model improving over a season.
+function learnTrendCard() {
+  const t = (Lab.learning || {}).trend || {};
+  const s = t.series || [];
+  if (s.length < 1) return "";
+  const bar = (v, lo, hi, cls) => {
+    if (v == null) return '<span class="muted">—</span>';
+    const f = Math.max(0, Math.min(1, (v - lo) / (hi - lo)));
+    return `<span class="tbar"><span class="tbar-fill ${cls}" style="width:${Math.round(f * 100)}%"></span></span>`;
+  };
+  const rows = s.map((d) => `<tr>
+    <td>${d.created_at ? new Date(d.created_at * 1000).toLocaleDateString() : ""}</td>
+    <td>${esc(d.race_name || d.race_id || "")}</td>
+    <td>${d.helm_pct != null ? d.helm_pct + "%" : "—"} ${bar(d.helm_pct, 70, 105, "ok")}</td>
+    <td>${d.polar_pct != null ? d.polar_pct + "%" : "—"}</td>
+    <td>${d.time_behind_min != null ? d.time_behind_min + " min" : "—"}</td>
+    <td>${d.regret_min != null ? d.regret_min + " min" : "—"}</td>
+    <td>${d.sea_state_hs_mean != null ? d.sea_state_hs_mean + " m" : "—"}</td></tr>`).join("");
+  const ms = (t.milestones || []).map((m) => {
+    const a = m.applied || {};
+    const what = a.wave_coeffs ? "sea-state model" : (a.helm_factor != null ? `helm ${a.helm_factor}` + ((a.polar_adjustments || []).length ? ` + ${a.polar_adjustments.length} polar cells` : "") : "refinement");
+    const when = m.decided_at ? new Date(m.decided_at * 1000).toLocaleDateString() : "";
+    return `<li>${when} — approved <b>${esc(what)}</b></li>`;
+  }).join("");
+  return `<div class="card">
+    <h3>Performance trend <span class="muted" style="font-weight:400">— ${s.length} race(s), oldest → newest</span></h3>
+    <table class="fleet-tbl"><thead><tr><th>Date</th><th>Race</th><th>Helm (flat-water)</th><th>Polar% (raw)</th><th>vs optimal</th><th>Regret</th><th>Sea state</th></tr></thead><tbody>${rows}</tbody></table>
+    ${ms ? `<div class="muted" style="font-size:12px;margin-top:8px">Applied refinements:</div><ul class="muted" style="font-size:12px;margin:4px 0">${ms}</ul>` : ""}
+    <div class="muted" style="font-size:11px;margin-top:6px">Helm % is the flat-water-equivalent (sea-state loss removed) — the number the refinement loop tracks; Polar% (raw) still includes the seaway, so the gap between them is the conditions. Watch helm trend up and regret/time-behind shrink as approved refinements land.</div>
+  </div>`;
+}
+
 function learnArchiveCard() {
   const dbs = (Lab.learning || {}).debriefs || [];
   if (!dbs.length) return `<div class="card"><h3>Performance archive</h3><div class="muted" style="font-size:12px">No archived debriefs yet — run a debrief with a boat track (in the <a href="#debrief">Debrief</a> tab) and it's recorded here for future review.</div></div>`;
@@ -2144,11 +2228,12 @@ function learnArchiveCard() {
     <td>${d.time_behind_min != null ? d.time_behind_min + " min" : "—"}</td>
     <td>${d.oversail_pct != null ? d.oversail_pct + "%" : "—"}</td>
     <td>${d.polar_pct != null ? d.polar_pct + "%" : "—"}</td>
+    <td>${d.helm_pct != null ? d.helm_pct + "%" : "—"}</td>
     <td>${esc(d.side_worked || "—")}${d.side_matched != null ? (d.side_matched ? " ✓" : " ✗") : ""}</td>
     <td>${esc(d.track_source || "—")}</td></tr>`).join("");
   return `<div class="card">
     <h3>Performance archive <span class="muted" style="font-weight:400">— ${dbs.length} debrief(s), kept for review</span></h3>
-    <table class="fleet-tbl"><thead><tr><th>Date</th><th>Race</th><th>Regret</th><th>vs optimal</th><th>Oversail</th><th>Polar%</th><th>Side</th><th>Track</th></tr></thead><tbody>${rows}</tbody></table>
+    <table class="fleet-tbl"><thead><tr><th>Date</th><th>Race</th><th>Regret</th><th>vs optimal</th><th>Oversail</th><th>Polar%</th><th>Helm% (flat)</th><th>Side</th><th>Track</th></tr></thead><tbody>${rows}</tbody></table>
     <div class="muted" style="font-size:11px;margin-top:6px">Every debrief is archived to the ongoing learning database (helm-vs-optimal metrics + observed-vs-polar bins) so race performance is reviewable across the season and feeds the refinement proposals above.</div>
   </div>`;
 }
@@ -2181,13 +2266,34 @@ async function learnReject(pid) {
   await learnReload(); paintLearnings();
 }
 
+async function learnCalibrateWaves() {
+  Lab.learning = Object.assign({}, Lab.learning, { waveBusy: true, waveMsg: "" }); paintLearnings();
+  try {
+    const r = await (await apiPost("/api/learning/calibrate-waves", {})).json();
+    if (!r.ok) Lab.learning = Object.assign({}, Lab.learning, { waveBusy: false, waveMsg: r.note || "not enough data" });
+    else await learnReload();
+  } catch (e) { Lab.learning = Object.assign({}, Lab.learning, { waveBusy: false, waveMsg: "calibrate failed" }); }
+  Lab.learning = Object.assign({}, Lab.learning, { waveBusy: false }); paintLearnings();
+}
+
+async function learnApplyWave(pid) {
+  const msg = document.getElementById("learnWaveMsg"); if (msg) msg.textContent = "Applying…";
+  try {
+    const r = await (await apiPost(`/api/learning/proposals/${pid}/apply`, {})).json();
+    if (!r.ok) { if (msg) msg.textContent = r.note || "apply failed"; return; }
+    await reloadBoats(); await learnReload(); paintLearnings();
+  } catch (e) { if (msg) msg.textContent = "apply failed"; }
+}
+
 async function learnReload() {
   try {
-    const [props, dbs] = await Promise.all([
+    const [props, dbs, trend] = await Promise.all([
       (await apiGet("/api/learning/proposals")).json(),
       (await apiGet("/api/learning/debriefs")).json(),
+      (await apiGet("/api/learning/trend")).json(),
     ]);
-    Lab.learning = { busy: false, msg: "", proposals: props.proposals || [], debriefs: dbs.debriefs || [] };
+    Lab.learning = { busy: false, msg: "", waveBusy: false, waveMsg: "",
+      proposals: props.proposals || [], debriefs: dbs.debriefs || [], trend };
   } catch (e) { Lab.learning = Object.assign({ busy: false }, Lab.learning); }
 }
 

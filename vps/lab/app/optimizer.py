@@ -148,22 +148,31 @@ def _polar_speed(P, tws, twa):
     return min(P, key=lambda p: abs(p[0] - tws) + abs(p[1] - twa))[2]
 
 
-def _wave_factor(hs, twa):
+def _wave_factor(hs, twa, coeffs=None):
     """Speed-retention fraction (≤1) for a sea state `hs` (m) at this TWA. CONSERVATIVE by design: a
     DEADBAND (small chop costs nothing), then a gentle linear slope on the excess Hs, scaled by point of
     sail (a head sea slows you most, a following sea least), with a FLOOR so it can never run away.
-    hs at/below the deadband → 1.0 (no route distortion from ripples)."""
-    eff = hs - WAVE_HS_DEADBAND
+    hs at/below the deadband → 1.0 (no route distortion from ripples). `coeffs` (the active boat's
+    Lab-4-calibrated overlay {hs_deadband,k_up,k_reach,k_down,floor}) overrides the ROUTE_WAVE_* env
+    priors per-key; None → all priors (unchanged behaviour)."""
+    c = coeffs or {}
+    db = c.get("hs_deadband", WAVE_HS_DEADBAND)
+    eff = hs - db
     if eff <= 0:
         return 1.0
     a = abs(((twa + 180) % 360) - 180)
-    k = WAVE_K_UP if a < 70 else (WAVE_K_REACH if a < 120 else WAVE_K_DOWN)
-    return max(WAVE_FLOOR, 1.0 - k * eff)
+    if a < 70:
+        k = c.get("k_up", WAVE_K_UP)
+    elif a < 120:
+        k = c.get("k_reach", WAVE_K_REACH)
+    else:
+        k = c.get("k_down", WAVE_K_DOWN)
+    return max(c.get("floor", WAVE_FLOOR), 1.0 - k * eff)
 
 
-def _realized_factor(hs, twa, helm):
+def _realized_factor(hs, twa, helm, coeffs=None):
     """The fraction of the FLAT-WATER polar the boat actually achieves here = helm skill × sea state."""
-    return helm * _wave_factor(hs, twa)
+    return helm * _wave_factor(hs, twa, coeffs)
 
 
 def _sail_polar_key(sail):
@@ -271,7 +280,7 @@ def _layline_pair(P, tws, twd, pos, mlat, mlon, length_nm):
 def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=None,
               obstacles=None, capture=False, hstep=HSTEP, dt_cap=1.0, cur=None,
               sail_polars=None, jib_crossovers=None, start_sail=None,
-              waves=None, helm_factor=1.0):
+              waves=None, helm_factor=1.0, wave_coeffs=None):
     """Isochrone-optimal path from (slat,slon)@t0 to (dlat,dlon). Returns dict with path/eta.
 
     `obstacles` (an ObstacleField) makes the fan reject any heading whose step would cut across land,
@@ -348,7 +357,7 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
             # realized: degrade to ACHIEVABLE speed (helm skill × sea state at this node/angle)
             if realized_on:
                 hs = waves.wave_at(node["lat"], node["lon"], node["t"]) if waves is not None else 0.0
-                sp *= _realized_factor(hs, twa, helm_factor)
+                sp *= _realized_factor(hs, twa, helm_factor, wave_coeffs)
             if sp < 0.3:
                 continue
             step_nm = sp * dt_h
@@ -513,7 +522,7 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
         prev_side = side
         if realized_on:
             hs = waves.wave_at(p["lat"], p["lon"], p["t"]) if waves is not None else 0.0
-            rf_sum += _realized_factor(hs, abs(_wrap180(h - w[1])), helm_factor)
+            rf_sum += _realized_factor(hs, abs(_wrap180(h - w[1])), helm_factor, wave_coeffs)
             hs_sum += hs
     realized_mean = round(rf_sum / len(hdgs), 3) if (realized_on and hdgs) else 1.0
     hs_mean = round(hs_sum / len(hdgs), 2) if (realized_on and hdgs) else 0.0
@@ -613,7 +622,7 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
                     obstacles=None, avoid=True, source=None, safety_depth=None,
                     jib_crossovers=None, emit_exploration=True, per_model=False,
                     resolution="auto", cur=None, waves=None, helm_factor=1.0,
-                    polar_adjustments=None):
+                    polar_adjustments=None, wave_coeffs=None):
     """Route the whole course from its start through every mark to the finish via `wf`.
 
     Returns one optimal route with per-leg ETAs, total time/distance/tacks and a route confidence
@@ -663,7 +672,7 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
         leg = route_leg(wf, P, slat, slon, t, rlat, rlon, deadline=deadline, obstacles=obstacles,
                         capture=emit_exploration, hstep=rp["hstep"], dt_cap=rp["dt_cap"], cur=cur,
                         sail_polars=SP, jib_crossovers=jib_crossovers, start_sail=cur_sail,
-                        waves=waves, helm_factor=helm_factor)
+                        waves=waves, helm_factor=helm_factor, wave_coeffs=wave_coeffs)
         # sample wind + confidence at the leg's midpoint and end (for the briefing)
         mid = leg["path"][len(leg["path"]) // 2] if leg["path"] else {"lat": dlat, "lon": dlon}
         det = wf.detail_at(mid["lat"], mid["lon"], (t + leg["eta"]) / 2.0)
@@ -742,7 +751,8 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
     if per_model:
         candidate_paths = _per_model_paths(definition, course_id, start_epoch, wf, obstacles, P, marks,
                                            source, safety_depth, jib_crossovers, total_min / 60.0,
-                                           cur=cur, waves=waves, helm_factor=helm_factor)
+                                           cur=cur, waves=waves, helm_factor=helm_factor,
+                                           wave_coeffs=wave_coeffs)
     return {
         "available": True, "course_id": cid,
         "start_epoch": round(float(start_epoch)), "finish_epoch": round(t),
@@ -776,7 +786,7 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
 
 def _per_model_paths(definition, course_id, start_epoch, wf, obstacles, P, marks,
                      source, safety_depth, jib_crossovers, blended_hours, cur=None,
-                     waves=None, helm_factor=1.0):
+                     waves=None, helm_factor=1.0, wave_coeffs=None):
     """Route the course through EACH model's OWN sub-field (its series only) → the per-model candidate
     paths the blended route's confidence number summarizes. Same split as the playbook's `_subfields`,
     but here it feeds the Gameplan map's 'Model routes' overlay (PR-4): the user literally sees the fan
@@ -804,7 +814,7 @@ def _per_model_paths(definition, course_id, start_epoch, wf, obstacles, P, marks
         r = optimize_course(definition, course_id, start_epoch, sub, time_budget_s=per,
                             obstacles=obstacles, avoid=False, source=source, safety_depth=safety_depth,
                             jib_crossovers=jib_crossovers, emit_exploration=False, per_model=False, cur=cur,
-                            waves=waves, helm_factor=helm_factor)
+                            waves=waves, helm_factor=helm_factor, wave_coeffs=wave_coeffs)
         hrs = r.get("total_hours")
         if (not r.get("available") or not r.get("path") or r.get("degraded") or r.get("timed_out")
                 or hrs is None or hrs < lo or hrs > hi):

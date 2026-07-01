@@ -358,6 +358,11 @@ table.fleet-tbl th { text-align: left; color: var(--muted); font-weight: 600; fo
 table.fleet-tbl td { padding: 3px 6px; vertical-align: middle; }
 table.fleet-tbl input.ein { padding: 5px 7px; }
 tr.winrow { background: rgba(126,224,168,.12); font-weight: 600; }
+/* inline trend bar (Lab-4 performance trend) */
+.tbar { display: inline-block; width: 64px; height: 7px; border-radius: 4px; background: var(--bg);
+  border: 1px solid var(--line); vertical-align: middle; overflow: hidden; }
+.tbar-fill { display: block; height: 100%; background: var(--muted); }
+.tbar-fill.ok { background: var(--accent2); }
 
 /* ---- Rules / checklist ---- */
 .phase-h { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;

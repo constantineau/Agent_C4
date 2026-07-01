@@ -29,6 +29,14 @@ _CELL_MULT_MIN, _CELL_MULT_MAX = 0.85, 1.15
 _CELL_DEADBAND = 0.04            # don't propose a cell tweak smaller than ±4% (noise)
 _MIN_RACES_FOR_CELL = 1          # a cell must appear in at least this many races to be proposed
 
+# --- wave-coefficient calibration guardrails (Lab-4 condition attribution) ---------------------
+# The env priors are deliberately conservative; a fit from real logs can only move k within a sane
+# physical band, needs enough sea-state SPREAD to be meaningful, and is human-approved before it lands.
+_WAVE_K_MIN, _WAVE_K_MAX = 0.0, 0.12      # frac speed lost per m Hs above the deadband (per point of sail)
+_WAVE_MIN_CELLS = 4                        # need at least this many distinct-Hs cells per point of sail
+_WAVE_MIN_HS_SPREAD = 0.6                  # …spanning at least this much effective Hs (m) to fit a slope
+_WAVE_POS_KEY = {"upwind": "k_up", "reaching": "k_reach", "downwind": "k_down"}
+
 
 def _conn():
     os.makedirs(os.path.dirname(LEARNING_DB), exist_ok=True)
@@ -55,7 +63,26 @@ def _conn():
         adjustments_json TEXT, summary_json TEXT,
         decided_at REAL, decided_note TEXT, applied_json TEXT);
     """)
+    _ensure_columns(c)      # additive-only migration for archives created before these columns
     return c
+
+
+# Columns added after the first schema — SQLite CREATE-IF-NOT-EXISTS won't add them to an existing
+# table, so ALTER them in idempotently (additive, never destructive — the DB-safety ethos).
+_ADDED = {
+    "debriefs": [("helm_pct", "REAL"), ("sea_state_hs_mean", "REAL")],
+    "perf_bins": [("hs_mean", "REAL"), ("pct_flat", "REAL")],
+    "proposals": [("kind", "TEXT DEFAULT 'boat_model'"), ("wave_json", "TEXT")],
+}
+
+
+def _ensure_columns(c):
+    for table, cols in _ADDED.items():
+        have = {r["name"] for r in c.execute(f"PRAGMA table_info({table})")}
+        for name, decl in cols:
+            if name not in have:
+                c.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+    c.commit()
 
 
 # ---- archive (called by judge.run_judge after a debrief is scored) ----------------------------
@@ -80,21 +107,24 @@ def archive_debrief(report, boat_id=None):
             """INSERT INTO debriefs (created_at,race_id,race_name,playbook_id,boat_id,oracle_hours,
                regret_min,side_paid,recommended_side,side_matched,track_source,elapsed_hours,
                time_behind_min,oversail_pct,xte_mean,xte_p90,xte_max,side_worked,polar_pct,
-               polar_samples,report_json)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               polar_samples,report_json,helm_pct,sea_state_hs_mean)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (time.time(), report.get("race_id"), report.get("race_name"), report.get("playbook_id"),
              boat_id, (report.get("oracle") or {}).get("total_hours"), reg.get("minutes"),
              reg.get("side_paid"), reg.get("recommended_side"), 1 if reg.get("side_matched") else 0,
              at.get("source"), at.get("elapsed_hours"), at.get("time_behind_optimal_min"),
              at.get("extra_distance_pct"), at.get("xte_mean_nm"), at.get("xte_p90_nm"),
              at.get("xte_max_nm"), at.get("side_worked"), at.get("polar_pct"),
-             at.get("polar_samples"), json.dumps(slim)))
+             at.get("polar_samples"), json.dumps(slim), at.get("helm_pct"),
+             at.get("sea_state_hs_mean")))
         did = cur.lastrowid
         for b in (at.get("perf_bins") or []):
             c.execute("""INSERT INTO perf_bins (debrief_id,boat_id,race_id,created_at,tws,twa,
-                         point_of_sail,samples,best_stw,target_stw,pct) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                         point_of_sail,samples,best_stw,target_stw,pct,hs_mean,pct_flat)
+                         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                       (did, boat_id, report.get("race_id"), time.time(), b["tws"], b["twa"],
-                       b["point_of_sail"], b["samples"], b["best_stw"], b["target_stw"], b["pct"]))
+                       b["point_of_sail"], b["samples"], b["best_stw"], b["target_stw"], b["pct"],
+                       b.get("hs_mean"), b.get("pct_flat")))
         c.commit()
         return did
     finally:
@@ -106,7 +136,7 @@ def list_debriefs(boat_id=None, race_id=None, limit=200):
     try:
         q = ("SELECT id,created_at,race_id,race_name,boat_id,oracle_hours,regret_min,side_paid,"
              "recommended_side,side_matched,track_source,elapsed_hours,time_behind_min,oversail_pct,"
-             "xte_mean,side_worked,polar_pct,polar_samples FROM debriefs")
+             "xte_mean,side_worked,polar_pct,helm_pct,sea_state_hs_mean,polar_samples FROM debriefs")
         cond, args = [], []
         if boat_id:
             cond.append("boat_id=?"); args.append(boat_id)
@@ -160,8 +190,12 @@ def propose(boat_id):
         if not bins:
             return {"ok": False, "note": "no archived performance bins for this boat yet — run a "
                     "debrief with a boat track first"}
-        # overall achievable fraction = sample-weighted % of polar
-        sw = sum(b["pct"] * b["samples"] for b in bins)
+        # Refine off the FLAT-WATER-equivalent % (pct_flat = raw pct with the sea-state loss removed)
+        # so helm_factor stays a flat-water number and doesn't double-count waves; older bins with no
+        # pct_flat fall back to the raw pct (== flat when there was no sea-state field).
+        _pf = lambda b: (b["pct_flat"] if b.get("pct_flat") is not None else b["pct"])
+        # overall achievable fraction = sample-weighted flat-water % of polar
+        sw = sum(_pf(b) * b["samples"] for b in bins)
         sn = sum(b["samples"] for b in bins)
         overall_pct = sw / sn if sn else 100.0
         helm_current = float((boats.active_boat() or {}).get("helm_factor", 1.0)) \
@@ -174,7 +208,7 @@ def propose(boat_id):
         for b in bins:
             k = (b["tws"], b["twa"])
             cells.setdefault(k, {"pct": [], "samples": 0, "races": set(), "pos": b["point_of_sail"]})
-            cells[k]["pct"].append(b["pct"]); cells[k]["samples"] += b["samples"]
+            cells[k]["pct"].append(_pf(b)); cells[k]["samples"] += b["samples"]
             cells[k]["races"].add(b["race_id"])
         adjustments, by_pos = [], {}
         for (tws, twa), v in sorted(cells.items()):
@@ -209,9 +243,13 @@ def propose(boat_id):
 
 def _row_to_proposal(r):
     d = dict(r)
-    for k in ("adjustments_json", "summary_json", "applied_json"):
+    for k in ("adjustments_json", "summary_json", "applied_json", "wave_json"):
         v = d.pop(k, None)
-        d[k.replace("_json", "")] = json.loads(v) if v else (None if k == "applied_json" else [])
+        default = None if k in ("applied_json", "wave_json") else []
+        d[k.replace("_json", "")] = json.loads(v) if v else default
+    d.setdefault("kind", "boat_model")
+    if d.get("kind") is None:
+        d["kind"] = "boat_model"
     return d
 
 
@@ -237,10 +275,11 @@ def list_proposals(boat_id=None, limit=50):
         c.close()
 
 
-def apply_proposal(pid, helm_factor=None, adjustments=None, note=""):
-    """HUMAN-APPROVED apply: write the (possibly human-edited) helm_factor + polar overlay onto the
-    boat profile, and mark the proposal applied. Falls back to the proposed values when the caller
-    doesn't override. This is the ONLY path that mutates the boat's polars — gated behind a person."""
+def apply_proposal(pid, helm_factor=None, adjustments=None, note="", wave_coeffs=None):
+    """HUMAN-APPROVED apply: write the (possibly human-edited) refinement onto the boat profile and mark
+    the proposal applied. Falls back to the proposed values when the caller doesn't override. This is
+    the ONLY path that mutates the boat's model — gated behind a person. A `wave_coeffs`-kind proposal
+    writes the sea-state coefficients; a `boat_model`-kind writes helm_factor + the polar overlay."""
     from . import boats
     prop = get_proposal(pid)
     if not prop:
@@ -250,6 +289,8 @@ def apply_proposal(pid, helm_factor=None, adjustments=None, note=""):
     boat = boats.get_boat(prop["boat_id"])
     if not boat:
         return {"ok": False, "note": "boat profile not found"}
+    if prop.get("kind") == "wave_coeffs":
+        return _apply_wave(prop, boat, wave_coeffs, note)
     hf = prop["helm_proposed"] if helm_factor is None else float(helm_factor)
     hf = round(max(_HELM_MIN, min(_HELM_MAX, hf)), 3)
     adj = prop["adjustments"] if adjustments is None else adjustments
@@ -271,6 +312,29 @@ def apply_proposal(pid, helm_factor=None, adjustments=None, note=""):
     return {"ok": True, "boat_id": boat["boat_id"], "applied": applied}
 
 
+def _apply_wave(prop, boat, wave_coeffs, note):
+    """HUMAN-APPROVED apply of a wave-coefficient proposal → boat.wave_coeffs (the sea-state overlay)."""
+    from . import boats
+    coeffs = dict(wave_coeffs) if wave_coeffs else dict(prop.get("wave") or {})
+    if not coeffs:
+        return {"ok": False, "note": "no wave coefficients to apply"}
+    clean = {"hs_deadband": round(float(coeffs.get("hs_deadband", 0.5)), 3),
+             "floor": round(float(coeffs.get("floor", 0.6)), 3)}
+    for key in ("k_up", "k_reach", "k_down"):
+        if coeffs.get(key) is not None:
+            clean[key] = round(max(_WAVE_K_MIN, min(_WAVE_K_MAX, float(coeffs[key]))), 4)
+    boat["wave_coeffs"] = clean
+    boats.save_boat(boat)
+    c = _conn()
+    try:
+        c.execute("UPDATE proposals SET status='applied',decided_at=?,decided_note=?,applied_json=? "
+                  "WHERE id=?", (time.time(), note, json.dumps({"wave_coeffs": clean}), prop["id"]))
+        c.commit()
+    finally:
+        c.close()
+    return {"ok": True, "boat_id": boat["boat_id"], "applied": {"wave_coeffs": clean}}
+
+
 def reject_proposal(pid, note=""):
     c = _conn()
     try:
@@ -283,5 +347,146 @@ def reject_proposal(pid, note=""):
                   (time.time(), note, pid))
         c.commit()
         return {"ok": True}
+    finally:
+        c.close()
+
+
+# ---- wave-coefficient calibration (Lab-4 condition attribution) --------------------------------
+def _wls_line(pts):
+    """Sample-weighted least-squares fit y = b0 + b1·x over pts=[(x,y,w)]. Returns (b0,b1,r2) or None
+    when x has no spread (a vertical line can't be fit)."""
+    W = sum(w for _x, _y, w in pts)
+    if W <= 0:
+        return None
+    mx = sum(w * x for x, _y, w in pts) / W
+    my = sum(w * y for _x, y, w in pts) / W
+    sxx = sum(w * (x - mx) ** 2 for x, _y, w in pts)
+    sxy = sum(w * (x - mx) * (y - my) for x, y, w in pts)
+    if sxx <= 1e-9:
+        return None
+    b1 = sxy / sxx
+    b0 = my - b1 * mx
+    sst = sum(w * (y - my) ** 2 for _x, y, w in pts)
+    ssr = sum(w * (y - (b0 + b1 * x)) ** 2 for x, y, w in pts)
+    r2 = (1 - ssr / sst) if sst > 1e-9 else 0.0
+    return b0, b1, max(0.0, min(1.0, r2))
+
+
+def _current_wave_coeffs(boat_id):
+    """The coefficients the optimizer is using now — the boat's wave_coeffs overlay if present, else the
+    ROUTE_WAVE_* env priors (mirrors optimizer._wave_factor's fallback)."""
+    from . import boats
+    b = boats.get_boat(boat_id) or {}
+    env = {"hs_deadband": float(os.environ.get("ROUTE_WAVE_HS_DEADBAND", "0.5")),
+           "k_up": float(os.environ.get("ROUTE_WAVE_K_UP", "0.04")),
+           "k_reach": float(os.environ.get("ROUTE_WAVE_K_REACH", "0.025")),
+           "k_down": float(os.environ.get("ROUTE_WAVE_K_DOWN", "0.01")),
+           "floor": float(os.environ.get("ROUTE_WAVE_FLOOR", "0.6"))}
+    env.update({k: float(v) for k, v in (b.get("wave_coeffs") or {}).items() if v is not None})
+    return env
+
+
+def calibrate_waves(boat_id):
+    """Fit the sea-state degradation slope k (per point of sail) from the archive → a PROPOSED
+    `wave_coeffs` refinement for human review. Never mutates the boat.
+
+    Model: the boat's RAW %-of-flat-polar in a cell = helm_level × wave_factor(Hs) where wave_factor =
+    1 − k·eff (eff = max(0, Hs − deadband)). Per point of sail this is linear in eff, so a weighted
+    least-squares of ratio(=pct/100) on eff gives intercept b0 = helm_level and slope b1 = −helm·k →
+    **k = −b1/b0**. We fit the SLOPE only (deadband + floor are structural priors held fixed) and keep a
+    point of sail's prior k when the archive lacks Hs SPREAD (can't fit a slope from flat-water races)."""
+    cur = _current_wave_coeffs(boat_id)
+    db, floor = cur["hs_deadband"], cur["floor"]
+    c = _conn()
+    try:
+        bins, races = _latest_bins_per_race(c, boat_id)
+    finally:
+        c.close()
+    have_hs = [b for b in bins if b.get("hs_mean") is not None and b.get("pct") is not None]
+    if not have_hs:
+        return {"ok": False, "note": "no archived sea-state data yet — run debriefs with a boat track "
+                "in real waves first (flat-water races carry no Hs to calibrate against)"}
+    by_pos = {}
+    for b in have_hs:
+        eff = max(0.0, float(b["hs_mean"]) - db)
+        by_pos.setdefault(b["point_of_sail"], []).append((eff, float(b["pct"]) / 100.0, b["samples"]))
+    proposed = {"hs_deadband": round(db, 3), "floor": round(floor, 3)}
+    detail = {}
+    fitted_any = False
+    for pos, key in _WAVE_POS_KEY.items():
+        pts = by_pos.get(pos, [])
+        k_cur = cur[key]
+        effs = [x for x, _y, _w in pts]
+        spread = (max(effs) - min(effs)) if effs else 0.0
+        n = len(pts)
+        d = {"point_of_sail": pos, "k_current": round(k_cur, 4), "n_cells": n,
+             "samples": sum(w for _x, _y, w in pts), "hs_spread": round(spread, 2)}
+        fit = _wls_line(pts) if (n >= _WAVE_MIN_CELLS and spread >= _WAVE_MIN_HS_SPREAD) else None
+        if fit and fit[0] > 0.2:                       # need a sane helm intercept to divide by
+            b0, b1, r2 = fit
+            k_raw = -b1 / b0
+            k_new = round(max(_WAVE_K_MIN, min(_WAVE_K_MAX, k_raw)), 4)
+            proposed[key] = k_new
+            d.update({"k_proposed": k_new, "k_raw": round(k_raw, 4), "helm_level": round(b0, 3),
+                      "r2": round(r2, 2),
+                      "confidence": round(min(1.0, (n / 8.0) * min(1.0, spread / 1.5)) * (0.5 + 0.5 * r2), 2)})
+            fitted_any = True
+        else:
+            proposed[key] = round(k_cur, 4)            # keep the prior — not enough spread to fit
+            d.update({"k_proposed": round(k_cur, 4), "confidence": 0.0,
+                      "note": ("insufficient sea-state spread — need ≥%d cells spanning ≥%.1f m Hs "
+                               "(have %d cells / %.1f m)" % (_WAVE_MIN_CELLS, _WAVE_MIN_HS_SPREAD, n, spread))})
+        detail[pos] = d
+    if not fitted_any:
+        return {"ok": False, "note": "not enough sea-state SPREAD in the archive to fit any wave slope "
+                "yet — needs races sailed in a range of wave heights.", "by_point_of_sail": detail,
+                "current_coeffs": {k: round(v, 4) for k, v in cur.items()}}
+    summary = {"by_point_of_sail": detail, "current_coeffs": {k: round(v, 4) for k, v in cur.items()},
+               "races": sorted(races)}
+    c = _conn()
+    try:
+        row = c.execute(
+            """INSERT INTO proposals (created_at,boat_id,status,kind,helm_current,helm_proposed,
+               overall_pct,n_debriefs,n_bins,adjustments_json,summary_json,wave_json)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (time.time(), boat_id, "proposed", "wave_coeffs", None, None, None,
+             len(races), len(have_hs), json.dumps([]), json.dumps(summary), json.dumps(proposed)))
+        c.commit()
+        return {"ok": True, **get_proposal(row.lastrowid)}
+    finally:
+        c.close()
+
+
+# ---- multi-race trend (Lab-4 condition attribution) --------------------------------------------
+def trend(boat_id, limit=50):
+    """The boat's per-race performance series (latest debrief per race, oldest→newest) + the applied
+    boat-model/wave refinements as milestone markers — so you can SEE the model improving over a
+    season: helm_pct trending up, regret/time-behind shrinking, and where an approved refinement bit."""
+    c = _conn()
+    try:
+        rows = c.execute(
+            """SELECT d.* FROM debriefs d JOIN (
+                 SELECT race_id, MAX(id) AS mid FROM debriefs
+                 WHERE boat_id IS ? GROUP BY race_id) latest
+               ON d.id = latest.mid ORDER BY d.created_at ASC LIMIT ?""", (boat_id, limit)).fetchall()
+        series = []
+        for r in rows:
+            d = dict(r)
+            series.append({k: d.get(k) for k in (
+                "id", "created_at", "race_id", "race_name", "elapsed_hours", "oracle_hours",
+                "time_behind_min", "oversail_pct", "xte_mean", "side_matched", "polar_pct",
+                "helm_pct", "sea_state_hs_mean", "regret_min")})
+        applied = c.execute(
+            """SELECT id,created_at,decided_at,kind,helm_proposed,applied_json FROM proposals
+               WHERE boat_id IS ? AND status='applied' ORDER BY decided_at ASC""", (boat_id,)).fetchall()
+        milestones = []
+        for r in applied:
+            m = dict(r)
+            try:
+                m["applied"] = json.loads(m.pop("applied_json") or "{}")
+            except ValueError:
+                m["applied"] = {}
+            milestones.append(m)
+        return {"boat_id": boat_id, "n_races": len(series), "series": series, "milestones": milestones}
     finally:
         c.close()
