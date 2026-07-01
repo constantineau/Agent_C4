@@ -53,6 +53,7 @@
   const BRIEF_EVERY = 90000;      // ask the LLM for a fresh brief ~every 90 s (it's slow, ~45 s)
   const BRIEF_TTL = 300;          // an LLM brief stays "fresh" 5 min before reverting to engine-read
   const ADHERE_EVERY = 8000;      // poll the copilot's deterministic playbook-adherence ~every 8 s (cheap, no LLM)
+  const DEV_EVERY = 5000;         // poll the ENGINE's deterministic route-deviation ~every 5 s (Tier-1, no LLM)
   const COACH_EVERY = 15000;      // poll the proactive auto-coach held state ~every 15 s (no recompute — the Orin timer drives it)
 
   /* ---- tiny helpers needed early (used in the demo scenarios) ---- */
@@ -94,6 +95,13 @@
         charge:  { status: "ok", value: "72", sub: "fresh", why: "Crew energy ~72% (inverse of the fatigue index; lower = more depleted).", consider: "Driver fresh — no rotation needed.", clears: "—", based: ["get_fatigue: index 28 → energy 72%"], conf: "high" },
         data:    { status: "ok", value: "5", sub: "sources live", why: "All five sensor groups fresh.", consider: "Instruments healthy.", clears: "—", based: ["get_sources: 5 live"], conf: "high" },
       },
+      strategy: { available: true, status: "ok", variant: "left", variant_label: "Left start",
+        value: "On the optimal track", xte_nm: 0.15, xte_side: "left", xte_trend: "steady",
+        along_pct: 38, along_nm: 54.1, route_nm: 142.0, time_behind_s: -45,
+        vmc_kn: 5.4, vmc_optimal_kn: 5.6, vmc_deficit_kn: 0.2,
+        what_flips_it: "a persistent right shift past ~020° for two-plus oscillation cycles",
+        why: "Sailing the 'Left start' variant's optimized track — 0.15 nm off the line (left), 0:45 ahead of plan pace. Hold the groove.",
+        consider: "Stay on the playbook line — no branch, keep sailing the plan." },
     },
     escalated: {
       mode: "llm-live", focus: "Playbook branch: the right is paying now. Bear-away coming up, and the crew tank is getting low.", confidence: "med",
@@ -121,6 +129,13 @@
         charge:  { status: "act",   value: "28", sub: "rotate soon", why: "Crew energy ~28% (rotate soon). Heading instability and steering reversals up, speed deficit creeping.", consider: "Tank getting low — plan a helm rotation.", clears: "energy back above 65%", based: ["get_fatigue: index 72 → energy 28%"], conf: "med", components: { heading: 0.7, reversals: 0.8, heel: 0.4, "spd-def": 0.5 } },
         data:    { status: "watch", value: "4", sub: "1 stale", why: "Masthead wind stale ~50 s ago; running on the Orca backup.", consider: "Running on backup wind — watch for it to return.", clears: "all sources fresh", based: ["get_sources: 4 live, 1 stale"], conf: "med" },
       },
+      strategy: { available: true, status: "act", variant: "left", variant_label: "Left start",
+        value: "Off track · 1.3 nm right", xte_nm: 1.3, xte_side: "right", xte_trend: "diverging",
+        along_pct: 61, along_nm: 86.6, route_nm: 142.0, time_behind_s: 180,
+        vmc_kn: 5.0, vmc_optimal_kn: 5.9, vmc_deficit_kn: 0.9,
+        what_flips_it: "a persistent right shift past ~020° for two-plus oscillation cycles",
+        why: "The boat is 1.3 nm to the right of the 'Left start' variant's optimal track and diverging. This is a genuine departure from the frozen line.",
+        consider: "You're right of the plan — decide: rejoin the 'Left start' line, or if the breeze has genuinely changed sides, check the branch trigger (the playbook tile is calling the right)." },
     },
   };
 
@@ -598,6 +613,77 @@
     const s = Math.max(0, Math.round(Date.now() / 1000 - epochSec));
     return s < 60 ? s + "s ago" : Math.round(s / 60) + "m ago";
   }
+
+  /* poll the ENGINE's deterministic route-deviation read (Lab-3 Strategy card). Tier-1, no LLM —
+     the boat's own GPS vs the frozen playbook variant's optimal track, so it's cheap + always
+     available in-race. A failure leaves the last good read (or a clear na on the first failure). */
+  async function fetchDeviation() {
+    if (App.src !== "live") return;
+    const r = await fetchJSON("/deviation", 8000);
+    if (r) App.deviation = r;
+    else if (!App.deviation) App.deviation = { available: false, status: "na", value: "—",
+      why: "The onboard engine (:8200) is unreachable — route-deviation needs it." };
+    if (App.src === "live") render();
+  }
+  const behindTxt = (s) => {
+    if (s == null) return null;
+    const a = Math.abs(s), m = Math.floor(a / 60), ss = Math.round(a % 60);
+    const mag = m + ":" + (ss < 10 ? "0" : "") + ss;
+    return (s >= 0 ? "+" + mag + " behind" : "−" + mag + " ahead");
+  };
+  function currentDeviation() {
+    if (App.src === "demo") return (SCENARIOS[App.demoScn] || {}).strategy || null;
+    return App.deviation;
+  }
+  /* the Strategy strip: are we sailing the frozen variant's optimal track? (route-deviation). */
+  function renderStrategy() {
+    const el = document.getElementById("strategy");
+    const d = currentDeviation();
+    if (!d) { el.hidden = true; return; }
+    el.hidden = false;
+    const status = d.status || "na";
+    el.className = "strategy s-" + status;
+    const st = STATUS[status] || STATUS.na;
+    document.getElementById("stIcon").textContent = st.icon;
+    document.getElementById("stWord").textContent = d.available ? st.word : "—";
+    document.getElementById("stVariant").textContent =
+      d.available ? ("Variant: " + (d.variant_label || d.variant || "—")) : "";
+
+    const prog = document.getElementById("stProgress");
+    const metricsEl = document.getElementById("stMetrics");
+    const flipEl = document.getElementById("stFlip");
+    const pct = d.available && d.along_pct != null ? Math.max(0, Math.min(100, d.along_pct)) : null;
+    if (pct != null) {
+      prog.style.display = "";
+      document.getElementById("stFill").style.width = pct + "%";
+      document.getElementById("stBoat").style.left = pct + "%";
+    } else { prog.style.display = "none"; }
+
+    const metric = (lbl, val, bad) => '<span class="st-m' + (bad ? " bad" : "") + '">' + lbl + ' <b>' + val + '</b></span>';
+    const m = [];
+    if (d.available) {
+      const off = status !== "ok";
+      if (pct != null) {
+        const dist = (d.along_nm != null && d.route_nm != null) ? " · " + r1(d.along_nm) + "/" + r1(d.route_nm) + " nm" : "";
+        m.push(metric("Along", pct + "%" + dist, false));
+      }
+      if (d.xte_nm != null) {
+        const arrow = d.xte_trend === "diverging" ? " ↗" : d.xte_trend === "converging" ? " ↘" : "";
+        m.push(metric("XTE", r1(d.xte_nm) + " nm " + (d.xte_side || "") + arrow, off && (d.xte_trend !== "converging")));
+      }
+      const bt = behindTxt(d.time_behind_s);
+      if (bt) m.push(metric("Pace", bt, d.time_behind_s > 0 && status !== "ok"));
+      if (d.vmc_kn != null && d.vmc_optimal_kn != null)
+        m.push(metric("VMC", r1(d.vmc_kn) + "/" + r1(d.vmc_optimal_kn) + " kn", d.vmc_deficit_kn != null && d.vmc_deficit_kn > 0.3));
+      metricsEl.innerHTML = m.join("");
+      if (d.what_flips_it) { flipEl.hidden = false; flipEl.innerHTML = "Branch trigger — <b>" + stripTags(d.what_flips_it) + "</b>"; }
+      else flipEl.hidden = true;
+    } else {
+      metricsEl.innerHTML = "";
+      flipEl.hidden = true;
+    }
+    document.getElementById("stWhy").textContent = d.why || d.sub || "";
+  }
   /* the coach speech line in the commentary panel — the last thing the copilot volunteered (from the
      timer's spoken history), or, if nothing's been said yet, the top of the current callout banner.
      Hidden when there's nothing to coach or off the live source. */
@@ -633,9 +719,9 @@
     theme: localStorage.getItem("sr33.dash.theme") || "auto",
     pos: { lat: 45.33, lon: -82.0 },
     openTile: null, streamTimer: null, pollTimer: null, seriesTimer: null, briefTimer: null,
-    adhereTimer: null, coachTimer: null, polling: false,
+    adhereTimer: null, coachTimer: null, devTimer: null, polling: false,
     dwell: {}, data: null, windHist: [], fcstHist: [], seriesHist: [], lastPersist: 0, brief: null,
-    adherence: null, coach: null, detailStreamKey: null, detailAbort: null,
+    adherence: null, coach: null, deviation: null, detailStreamKey: null, detailAbort: null,
   };
   function currentData() {
     if (App.src === "demo") {
@@ -685,6 +771,7 @@
       el.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openDetail(key); } });
       grid.appendChild(el);
     }
+    renderStrategy();
     renderCommentary(d);
     if (App.openTile && !document.getElementById("detail").hidden) populateDetail(App.openTile, false);
   }
@@ -856,7 +943,7 @@
   function briefMe() {
     const b = document.getElementById("briefBtn");
     b.classList.add("busy"); b.textContent = "thinking…";
-    if (App.src === "live") { poll(); fetchBrief(); fetchAdherence(); fetchCoach(); }
+    if (App.src === "live") { poll(); fetchBrief(); fetchAdherence(); fetchCoach(); fetchDeviation(); }
     // the LLM is slow (~45 s warm); clear the busy state on a timer — render() updates when it lands
     setTimeout(() => { b.classList.remove("busy"); b.textContent = "Brief me ↻"; if (App.src !== "live") render(); }, 1500);
   }
@@ -876,6 +963,8 @@
     App.adhereTimer = setInterval(fetchAdherence, ADHERE_EVERY);
     fetchCoach();                   // proactive auto-coach held state (no recompute), then on its own cadence
     App.coachTimer = setInterval(fetchCoach, COACH_EVERY);
+    fetchDeviation();               // route-deviation (engine, deterministic), then on its own cadence
+    App.devTimer = setInterval(fetchDeviation, DEV_EVERY);
     document.getElementById("themeBtn").addEventListener("click", cycleTheme);
     document.getElementById("srcBtn").addEventListener("click", cycleSource);
     document.getElementById("briefBtn").addEventListener("click", briefMe);

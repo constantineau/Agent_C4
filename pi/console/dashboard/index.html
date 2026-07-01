@@ -20,6 +20,25 @@
     <button class="ctl" id="themeBtn" title="Day / night theme">☀ <b id="themeLbl">AUTO</b></button>
   </header>
 
+  <!-- ===== Strategy strip: route-deviation vs the frozen playbook variant (Lab-3, Tier-1 engine) ===== -->
+  <section class="strategy s-na" id="strategy" aria-label="Playbook route-deviation strategy">
+    <div class="st-head">
+      <span class="st-title">STRATEGY</span>
+      <span class="st-variant" id="stVariant">—</span>
+      <span class="st-spacer"></span>
+      <span class="st-chip" id="stChip"><span class="st-icon" id="stIcon">◌</span><span class="st-word" id="stWord">—</span></span>
+    </div>
+    <div class="st-body">
+      <div class="st-progress" id="stProgress" aria-hidden="true">
+        <div class="st-fill" id="stFill"></div>
+        <div class="st-boat" id="stBoat"></div>
+      </div>
+      <div class="st-metrics" id="stMetrics"></div>
+      <p class="st-why" id="stWhy"></p>
+      <p class="st-flip" id="stFlip" hidden></p>
+    </div>
+  </section>
+
   <!-- ===== main: fixed tile grid + commentary ===== -->
   <main class="dash">
     <section class="grid" id="grid" aria-label="Status tiles"><!-- tiles injected by JS --></section>

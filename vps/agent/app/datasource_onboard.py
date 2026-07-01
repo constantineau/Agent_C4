@@ -293,6 +293,22 @@ class OnboardSource:
         row = self._engine.execute("SELECT value FROM kv WHERE key = 'race_fleet'").fetchone()
         return json.loads(row["value"]) if row else {}
 
+    def save_playbook(self, blob):
+        """Persist the frozen playbook bundle (Lab-2 `c4.playbook/v1`) in the engine SQLite `kv`
+        store (key 'race_playbook'). The route-deviation core reads the active variant's frozen
+        track from it. Replaces any prior playbook."""
+        import json
+        self._engine.execute(
+            "INSERT INTO kv (key, value) VALUES ('race_playbook', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (json.dumps(blob),))
+        self._engine.commit()
+
+    def get_playbook(self):
+        """The loaded playbook bundle or {} if none aboard."""
+        import json
+        row = self._engine.execute("SELECT value FROM kv WHERE key = 'race_playbook'").fetchone()
+        return json.loads(row["value"]) if row else {}
+
     def ais_targets(self, max_age_min):
         """Latest AIS observation per MMSI within the window — other-vessel Signal K contexts
         captured by the live cache. Shape-matched to CloudSource: [{mmsi, name, lat, lon,

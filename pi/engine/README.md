@@ -31,7 +31,12 @@ alerting/summarizer/polar-analysis (those are cloud / C4 Performance Lab), and *
 ## Endpoints (port 8200)
 
 `/health` · `/conditions` · `/conditions/full` · `/sources` · `/fatigue` · `/sail` · `/course` ·
-`/navigator` · `POST /course/practice` · `/tactics` · `/forecast` · `/route`
+`/navigator` · `POST /course/practice` · `/tactics` · `/forecast` · `/route` · `/ais` ·
+`POST /fleet/load` · `/fleet` · `POST /playbook/load` · `/deviation`
+
+`POST /playbook/load` freezes the Lab-2 playbook bundle aboard; `GET /deviation` is the Lab-3
+route-deviation read (boat vs the active variant's optimal track: XTE / along-track / time-behind /
+VMC, fuzzy consider/commit status) that powers the iPad Strategy card.
 
 Parity reference: `vps/agent/app/main.py` (the cloud serves the same paths, plus auth/chat/
 alerts and the RRS-41 race gate).

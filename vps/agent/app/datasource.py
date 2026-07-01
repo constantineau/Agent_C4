@@ -127,6 +127,25 @@ class CloudSource:
             row = conn.execute("SELECT value FROM app_state WHERE key = 'race_fleet'").fetchone()
         return json.loads(row["value"]) if row else {}
 
+    def save_playbook(self, blob):
+        """Persist the frozen playbook bundle (Lab-2 `c4.playbook/v1`) as a JSON blob in `app_state`
+        (key 'race_playbook'). The route-deviation core reads the active variant's frozen track from
+        it. Replaces any prior playbook."""
+        import json
+        with pool.connection() as conn:
+            conn.execute(
+                "INSERT INTO app_state (key, value, updated_at) VALUES ('race_playbook', %s, now()) "
+                "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
+                (json.dumps(blob),))
+            conn.commit()
+
+    def get_playbook(self):
+        """The loaded playbook bundle or {} if none aboard."""
+        import json
+        with pool.connection() as conn:
+            row = conn.execute("SELECT value FROM app_state WHERE key = 'race_playbook'").fetchone()
+        return json.loads(row["value"]) if row else {}
+
     def ais_targets(self, max_age_min):
         """Latest raw AIS observation per MMSI within the window — collision/fleet awareness.
 

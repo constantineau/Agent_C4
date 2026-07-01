@@ -524,8 +524,9 @@ seconds, identical in shape to `CloudSource`, so the modules' conversions are by
 let the onboard image ship **no psycopg**, `datasource.py` guards the `pool` import (cloud has it
 → unchanged; onboard absent → unused). Endpoints (port **8200**): `/health`, `/conditions`,
 `/conditions/full`, `/sources`, `/fatigue`, `/sail`, `/course`, `/navigator`,
-`POST /course/practice`, `/tactics`, `/forecast`, `/route`. Wired into `compose.pi.yml` as the
-`engine` service; cloud parity reference is `vps/agent/app/main.py`. See `pi/engine/README.md`.
+`POST /course/practice`, `/tactics`, `/forecast`, `/route`, `/ais`, `POST /fleet/load`, `/fleet`,
+`POST /playbook/load`, `/deviation` (the last two = Lab-3, below). Wired into `compose.pi.yml` as
+the `engine` service; cloud parity reference is `vps/agent/app/main.py`. See `pi/engine/README.md`.
 
 **Bench-verified** (sample Pi stack + engine): every endpoint returns real data through
 `OnboardSource` — `/conditions` + `/conditions/full` (14 channels) + `/sources` (5 sources) +
@@ -537,6 +538,52 @@ recommendation). **Bench gotcha:** `--sample-n2k-data` replays a 2014 log, so th
 *source* timestamps fall outside any wall-clock window — history endpoints look empty on the bench
 even though live ones work (on the real boat SK timestamps are current); `/sources` therefore
 merges the live cache. Cloud path unaffected (`active: CloudSource`, `pool` still set).
+
+## Lab-3 onboard executor — route deviation + the iPad Strategy card (first slice)
+
+The onboard executor SELECTS/INTERPRETS the frozen Lab-2 playbook in-race — it never originates
+strategy (the RRS-41 posture). Item-2's vision has two continuously-monitored branch triggers:
+(a) **route-deviation** and (b) forecast-drift. This first slice ships the **route-deviation core +
+the iPad Strategy card** — the deterministic, bench-verifiable half; forecast-drift + onboard
+re-optimize are later slices. **Architecture call: the branch-eval math is TIER-1** (the Pi engine,
+available without the Orin) even though the copilot's wind-shift `adherence.py` sits in Tier 2 —
+route deviation is the boat's own GPS vs its own pre-loaded homework, so it's legal in-race and
+needs no cloud/LLM.
+
+- **`vps/agent/app/deviation.py`** (new, source-agnostic on the 9.0 seam, like `ais`/`fleet`). The
+  frozen bundle's variants already carry the optimizer's full route as an absolute-time-stamped
+  polyline (`variant.route.path = [{lat,lon,t}]`, `t` = the plan's epoch ETA at that point).
+  `get_deviation(route, variant, since)` projects the boat's live position onto the ACTIVE variant's
+  track (default = the bundle's `recommended`) and returns the perflab §5 fuzzy-adherence metrics:
+  **XTE** (signed, side = left|right of the sailing direction), **along-track progress** (%/nm),
+  **time-behind-optimal** (from the path `t`'s; anchored to the plan start, re-anchorable via
+  `since`), and **VMC** made good along the optimal track vs the plan's pace on that segment. Status
+  is **FUZZY** — a Schmitt **consider** band + **commit** band with hysteresis on the drop edge
+  (`_band()`), so a boat hovering on a threshold doesn't chatter; per-(route,variant) module state
+  holds the band + an XTE trend (converging/diverging). Returns a dashboard-tile-shaped payload
+  (status/value/why/consider/clears/based) + raw metrics + the active variant's `what_flips_it`
+  (grounding). Tunables `DEV_XTE_{CONSIDER,COMMIT}_NM` / `DEV_BEHIND_{CONSIDER,COMMIT}_S` / `DEV_HYST`.
+- **Homework loading:** `datasource.save_playbook`/`get_playbook` (CloudSource `app_state` +
+  OnboardSource `kv`, mirroring `save_fleet`); the engine's **`POST /playbook/load`** freezes the
+  bundle aboard (like `/fleet/load`) and clears the Schmitt memory. `deviation` reads it back, with a
+  file fallback on `PLAYBOOK_PATH` (the same env the copilot uses), so either deploy path works.
+- **`GET /deviation`** on the onboard engine (`pi/engine/engine_app.py`) serves it — deterministic,
+  legal in-race, `na` with no playbook aboard.
+- **iPad Strategy card** (`pi/console/dashboard/`): a full-width **Strategy strip** above the tile
+  grid, fed by `/api/deviation` on its own ~5 s cadence (mirrors the `/adherence` wiring) — an
+  along-track progress bar with a boat marker, XTE / Pace / VMC metrics (bad ones colour + a
+  diverging ↗ arrow), the crew-facing why, and the active variant's branch trigger. Status-coloured
+  (ok/watch/act) like the tiles; renders in both LIVE (engine) and the DEMO calm/escalated scenarios.
+- **Verified:** unit test `vps/agent/test_deviation.py` (XTE + side, along-track, time-behind, VMC,
+  Schmitt hysteresis act→watch→ok, ahead-of-plan, na paths — passes host + in the baked engine
+  container) + LIVE e2e on the sample Pi stack (na → `POST /playbook/load` a bundle through the live
+  boat position → on-track read with real XTE/along/VMC; an offset track → `act`, XTE 1.31 nm) +
+  Playwright (Strategy strip renders live + demo, ok/act states, progress bar + metrics + trigger,
+  0 page errors) + fleet regression green. Files: deviation.py (new), datasource.py,
+  datasource_onboard.py, pi/engine/engine_app.py, pi/console/dashboard/{index.html,dashboard.css,
+  dashboard.js}, test_deviation.py (new). **NEXT Lab-3 slices:** forecast-drift (onboard GRIB vs a
+  build-time wind fingerprint frozen in the bundle — heavier, Pi/network) → onboard re-optimize +
+  graceful-degradation selector; and folding route-deviation into the copilot narration.
 
 ## C4 Performance Lab (cloud) — Phase 9 / Lab-0
 

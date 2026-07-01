@@ -23,7 +23,8 @@ os.environ.setdefault("DATA_SOURCE", "onboard")  # this service is always the on
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app import navigator, tactics, routing, weather, sails, fatigue, onboard_conditions, datasource, ais, fleet
+from app import (navigator, tactics, routing, weather, sails, fatigue, onboard_conditions,
+                 datasource, ais, fleet, deviation)
 
 app = FastAPI(title="Agent_C4 Onboard Engine", version="0.1.0")
 # The iPad reaches the Pi directly over boat-local Wi-Fi in race mode; allow cross-origin so a
@@ -186,3 +187,28 @@ def fleet_ep(max_range_nm: float = 40.0):
     delta (who I need to beat, by how much), plus unmatched AIS traffic. Always legal in-race (own
     receiver + own computer + pre-loaded public roster)."""
     return fleet.get_fleet(max_range_nm)
+
+
+@app.post("/playbook/load")
+def playbook_load(body: dict):
+    """Load the frozen Lab-2 playbook bundle (`c4.playbook/v1`) onboard — the homework the
+    route-deviation core measures against. Body is the bundle itself, or {bundle: ...}. Frozen at
+    the gun; legal in-race (own computer interpreting pre-loaded homework). Replaces any prior."""
+    body = body or {}
+    bundle = body.get("bundle") if "variants" not in body else body
+    if not bundle or not (bundle.get("variants")):
+        return {"loaded": False, "detail": "no bundle with variants"}
+    datasource.active().save_playbook(bundle)
+    deviation.reset_state()          # a new playbook → clear the Schmitt/trend memory
+    return {"loaded": True, "race_id": bundle.get("race_id"),
+            "variants": len(bundle.get("variants") or []),
+            "recommended": bundle.get("recommended")}
+
+
+@app.get("/deviation")
+def deviation_ep(route: str | None = None, variant: str | None = None, since: float | None = None):
+    """Route-deviation vs the active playbook variant's frozen optimal track: XTE, along-track
+    progress, time-behind-optimal, VMC deficit — with fuzzy consider/commit status. Deterministic,
+    always legal in-race (own GPS + own computer + pre-loaded homework); `na` with no playbook
+    aboard. `variant` overrides the recommended default; `since` re-anchors time-behind to the gun."""
+    return deviation.get_deviation(route=route, variant=variant, since=since)

@@ -46,6 +46,36 @@ body {
   cursor:pointer; }
 .ctl b { font-weight:800; text-transform:uppercase; }
 
+/* ---------- Strategy strip: route-deviation vs the frozen playbook variant (Lab-3) ---------- */
+.strategy { flex:none; margin:10px 10px 0; padding:10px 14px; border-radius:12px;
+  border:1px solid var(--line); background:var(--panel); box-shadow:var(--shadow);
+  border-left:5px solid var(--c); }
+.strategy.s-ok   { --c:var(--ok);    --cfill:var(--ok-fill); }
+.strategy.s-watch{ --c:var(--watch); --cfill:var(--watch-fill); }
+.strategy.s-act  { --c:var(--act);   --cfill:var(--act-fill); background:linear-gradient(90deg,var(--cfill),transparent 60%); }
+.strategy.s-na   { --c:var(--na); opacity:.75; }
+.strategy[hidden] { display:none; }
+.st-head { display:flex; align-items:center; gap:10px; }
+.st-title { font-size:11px; letter-spacing:1.4px; font-weight:800; color:var(--muted); }
+.st-variant { font-size:14px; font-weight:700; color:var(--text); }
+.st-spacer { flex:1; }
+.st-chip { display:inline-flex; align-items:center; gap:6px; padding:2px 9px; border-radius:20px;
+  background:var(--cfill); color:var(--c); border:1px solid var(--c); font-weight:800; }
+.st-icon { font-size:11px; } .st-word { font-size:11px; letter-spacing:1px; }
+.st-body { margin-top:8px; }
+.st-progress { position:relative; height:8px; border-radius:6px; background:var(--panel2);
+  border:1px solid var(--line); overflow:hidden; }
+.st-fill { position:absolute; left:0; top:0; bottom:0; background:var(--c); opacity:.55; width:0; }
+.st-boat { position:absolute; top:50%; width:12px; height:12px; margin:-6px 0 0 -6px; border-radius:50%;
+  background:var(--c); border:2px solid var(--panel); box-shadow:0 0 0 1px var(--c); left:0; }
+.st-metrics { display:flex; flex-wrap:wrap; gap:6px 16px; margin-top:9px; font-size:14px; }
+.st-m { color:var(--muted); font-weight:600; white-space:nowrap; }
+.st-m b { color:var(--text); font-weight:700; }
+.st-m.bad b { color:var(--c); }
+.st-why { margin:8px 0 0; font-size:13.5px; line-height:1.4; color:var(--text); }
+.st-flip { margin:5px 0 0; font-size:12.5px; line-height:1.35; color:var(--muted); }
+.st-flip b { color:var(--c); font-weight:700; }
+
 /* ---------- main layout: tile grid | commentary ---------- */
 .dash { flex:1; display:grid; grid-template-columns: 1fr 300px; gap:10px; padding:10px; min-height:0; }
 .grid { display:grid; grid-template-columns:repeat(5,1fr); grid-template-rows:repeat(2,1fr);
