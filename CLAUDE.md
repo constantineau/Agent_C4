@@ -1224,9 +1224,22 @@ consider covering"). Grounded in `get_fleet` (onboard: own AIS + frozen roster +
 math — in-race-legal tactical layer), confidence-gated (`COPILOT_FLEET_MIN_CONF`=0.4), category `fleet`
 (priority below safety/rounding/sail, persist-2 raise-slow), tag in the id so behind→rival→ahead
 re-voices. The spoken counterpart to the dashboard AIS/Fleet tile's corrected-time overlay. Verified
-`bench_copilot.test_fleet_callout`. **Handicap-aware fleet tactics ✅** (incl. the verified YB/bycmack over-the-horizon tracker
-source) — see "Handicap-aware fleet tactics". **Next:** (open) — island rounding-side enforcement is now
-in (routing fidelity 2f: marked islands only); the overstand/2d gate + nav-mark side were already in.
+`bench_copilot.test_fleet_callout`. **Lab-3 branch-trigger callouts** (`narrate._deviation_callout` +
+`_drift_callout`): narration now also voices the two Lab-3 branch triggers the Strategy card shows —
+**route-deviation** ("Off the playbook line — 1.3 nm right of variant middle's optimal track" / "Behind
+the plan's pace — 3:20 behind (−0.8 kn VMC)") from the engine's `/deviation`, and **forecast-drift**
+("Forecast has moved — the breeze the plan assumed has veered ~31° since it was frozen — the recommended
+variant may no longer pay") from `/drift`. Both voiced only at the engine's fuzzy watch/act (the
+engine's own Schmitt bands already de-noise, so CONFIRM_ROUNDS=1), grounded in `get_deviation`/`get_drift`
++ the frozen variant/`forecast_fingerprint` — the copilot SELECTS/INTERPRETS the pre-loaded homework +
+common public data, never originates strategy. Categories `deviation`(5)/`drift`(8) sit among the
+playbook-adherence callouts; status in the id so watch→act re-voices. `copilot.gather` now fetches
+`get_deviation`+`get_drift`; `EngineClient.deviation()/drift()` added. Verified
+`bench_copilot.test_deviation_drift_callout` + LIVE (both fired against the real :8200 engine, spoken
+line combined them in priority order). **Handicap-aware fleet tactics ✅** (incl. the verified YB/bycmack over-the-horizon tracker
+source) — see "Handicap-aware fleet tactics". **Next:** (open) — Lab-3 graceful-degradation SELECTOR
+(pick a pre-authored branch when a trigger fires → onboard re-optimize → off-script+flag); island
+rounding-side enforcement is in (routing fidelity 2f); the overstand/2d gate + nav-mark side were already in.
 
 ## Handicap-aware fleet tactics
 

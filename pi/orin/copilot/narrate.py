@@ -41,12 +41,14 @@ ROUNDING_STAGES = [(15, "heads-up"), (10, "stage"), (5, "final")]
 URGENCY_RANK = {"now": 0, "soon": 1, "monitor": 2}
 # Lower = more important; the spoken line leads with the top of this order.
 CATEGORY_PRIORITY = {"safety": 0, "fatigue": 1, "rounding": 2, "sail": 3,
-                     "playbook": 4, "fleet": 5, "shift": 6, "layline": 7, "data": 8}
+                     "playbook": 4, "deviation": 5, "fleet": 6, "shift": 7,
+                     "drift": 8, "layline": 9, "data": 10}
 # How many consecutive evaluations a callout must persist before it's "confirmed" and voiced —
 # the fuzzy-adherence hysteresis. Time-critical things fire at once; noisier reads wait one poll
-# so a single-sample blip never barks. (The engine already debounces tactical persistence.)
-CONFIRM_ROUNDS = {"safety": 1, "fatigue": 1, "rounding": 1, "sail": 1,
-                  "playbook": 2, "fleet": 2, "shift": 2, "layline": 1, "data": 2}
+# so a single-sample blip never barks. (The engine already debounces tactical persistence — the
+# deviation/drift triggers carry their OWN Schmitt consider/commit bands, so 1 round is enough.)
+CONFIRM_ROUNDS = {"safety": 1, "fatigue": 1, "rounding": 1, "sail": 1, "playbook": 2,
+                  "deviation": 1, "fleet": 2, "shift": 2, "drift": 1, "layline": 1, "data": 2}
 
 
 def _callout(cid, category, urgency, headline, detail, grounded_in, confidence="med"):
@@ -241,6 +243,56 @@ def _tactics_callouts(tac, playbook):
                     ["get_tactics"], "med")]
 
 
+def _deviation_callout(dev):
+    """Route-deviation branch trigger (Lab-3 a): are we sailing the frozen variant's optimal track?
+    Voiced only when the engine's fuzzy status is watch/act (ok → nothing). The engine already applied
+    the Schmitt consider/commit bands, so this doesn't re-debounce. Grounded in get_deviation + the
+    active variant — the copilot SELECTS/INTERPRETS the pre-authored plan, it never invents a course.
+    The status is in the id so a watch→act escalation re-voices (like the staged rounding prep)."""
+    status = dev.get("status")
+    if status not in ("watch", "act"):
+        return None
+    vid = dev.get("variant") or "the plan"
+    xte, side = _num(dev.get("xte_nm")), dev.get("xte_side")
+    behind = _num(dev.get("time_behind_s"))
+    if xte is not None and xte >= 0.4:                 # off the line (XTE dominates)
+        head = "Off the playbook line" if status == "act" else "Drifting off the line"
+        det = f"{xte} nm {side} of variant {vid}'s optimal track"
+        if dev.get("xte_trend") == "diverging":
+            det += ", still opening"
+    else:                                              # on the line but behind the plan's pace
+        head = "Behind the plan's pace"
+        mmss = f"{int(behind) // 60}:{int(behind) % 60:02d}" if (behind and behind > 0) else None
+        det = f"{mmss} behind variant {vid}'s optimal pace" if mmss else f"off variant {vid}'s pace"
+        vdef = _num(dev.get("vmc_deficit_kn"))
+        if vdef and vdef > 0:
+            det += f" (−{vdef} kn VMC)"
+    return _callout(f"deviation:{vid}:{status}", "deviation", "soon" if status == "act" else "monitor",
+                    head, det, ["get_deviation", f"playbook:{vid}"],
+                    "high" if status == "act" else "med")
+
+
+def _drift_callout(dft):
+    """Forecast-drift branch trigger (Lab-3 b): has the common forecast the plan rests on moved since
+    it was frozen? Voiced at watch/act. Grounded in get_drift + the frozen forecast reference — a
+    common-public-data reading compared to pre-loaded homework, never fresh outside advice."""
+    status = dft.get("status")
+    if status not in ("watch", "act"):
+        return None
+    deg = _num(dft.get("drift_twd_deg"))
+    direction = dft.get("drift_dir") or "shifted"
+    tws = _num(dft.get("drift_tws_kn"))
+    head = "Forecast has moved" if status == "act" else "Forecast drifting"
+    det = f"the breeze the plan assumed has {direction} ~{round(deg)}° since it was frozen"
+    if tws is not None and abs(tws) >= 2:
+        det += f" and changed {'+' if tws >= 0 else '−'}{abs(round(tws))} kn"
+    if status == "act":
+        det += " — the recommended variant may no longer pay"
+    return _callout(f"drift:{status}", "drift", "soon" if status == "act" else "monitor",
+                    head, det, ["get_drift", "playbook:forecast_fingerprint"],
+                    "high" if status == "act" else "med")
+
+
 def _fatigue_callout(fat):
     level = fat.get("level")
     if level not in ("rotate_soon", "rotate_now"):
@@ -274,6 +326,8 @@ def evaluate(snapshot, playbook=None, engine=None):
     cond = snapshot.get("get_conditions") or {}
     ais = snapshot.get("get_ais") or {}
     fleet = snapshot.get("get_fleet") or {}
+    dev = snapshot.get("get_deviation") or {}
+    dft = snapshot.get("get_drift") or {}
 
     out = []
     if ais.get("available", True) is not False:    # SAFETY first — collision watch (always legal)
@@ -292,6 +346,14 @@ def evaluate(snapshot, playbook=None, engine=None):
         out += _sail_callouts(sail)
     if tac.get("available"):
         out += _tactics_callouts(tac, playbook)
+    if dev.get("available"):                       # Lab-3 (a): off the frozen playbook line?
+        c = _deviation_callout(dev)
+        if c:
+            out.append(c)
+    if dft.get("available"):                       # Lab-3 (b): forecast moved since freeze?
+        c = _drift_callout(dft)
+        if c:
+            out.append(c)
     if fat.get("available"):
         c = _fatigue_callout(fat)
         if c:

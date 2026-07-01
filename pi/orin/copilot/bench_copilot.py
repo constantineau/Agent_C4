@@ -376,6 +376,52 @@ def test_fleet_callout() -> bool:
     return ok
 
 
+def test_deviation_drift_callout() -> bool:
+    """The Lab-3 branch-trigger callouts — route-deviation (off the frozen line?) and forecast-drift
+    (has the forecast moved since freeze?). Grounded in get_deviation/get_drift + the frozen playbook;
+    voiced only at watch/act (the engine already applied the Schmitt bands). Pure/deterministic."""
+    ok = True
+    print("\n== deviation / drift branch-trigger callouts (pure, synthetic) ==")
+
+    def dev(status, **kw):
+        return dict({"available": True, "status": status, "variant": "middle"}, **kw)
+
+    c = narrate_mod._deviation_callout(dev("act", xte_nm=1.3, xte_side="right", xte_trend="diverging"))
+    ok &= _check("act off-line → deviation callout grounded in get_deviation + variant",
+                 c and c["category"] == "deviation" and c["urgency"] == "soon"
+                 and c["grounded_in"] == ["get_deviation", "playbook:middle"]
+                 and "1.3 nm right" in c["detail"] and "opening" in c["detail"])
+    c = narrate_mod._deviation_callout(dev("watch", xte_nm=0.1, xte_side="left",
+                                           time_behind_s=200, vmc_deficit_kn=0.8))
+    ok &= _check("on-line-but-behind → 'Behind the plan's pace' with m:ss + VMC",
+                 c and c["urgency"] == "monitor" and "Behind" in c["headline"]
+                 and "3:20" in c["detail"] and "0.8 kn" in c["detail"])
+    ok &= _check("on-plan (ok) → no deviation callout",
+                 narrate_mod._deviation_callout(dev("ok", xte_nm=0.05)) is None)
+
+    c = narrate_mod._drift_callout({"available": True, "status": "act", "drift_twd_deg": 31,
+                                    "drift_dir": "veered", "drift_tws_kn": 4})
+    ok &= _check("act drift → forecast-moved callout grounded in get_drift + fingerprint",
+                 c and c["category"] == "drift"
+                 and c["grounded_in"] == ["get_drift", "playbook:forecast_fingerprint"]
+                 and "veered ~31" in c["detail"] and "may no longer pay" in c["detail"])
+    c = narrate_mod._drift_callout({"available": True, "status": "watch", "drift_twd_deg": 18,
+                                    "drift_dir": "backed", "drift_tws_kn": 0})
+    ok &= _check("watch drift → 'Forecast drifting', no premature 'may no longer pay'",
+                 c and "drifting" in c["headline"].lower() and "may no longer pay" not in c["detail"])
+    ok &= _check("holding (ok) → no drift callout",
+                 narrate_mod._drift_callout({"available": True, "status": "ok", "drift_twd_deg": 4}) is None)
+
+    snap = {"get_deviation": dev("act", xte_nm=1.2, xte_side="right"),
+            "get_drift": {"available": True, "status": "act", "drift_twd_deg": 30, "drift_dir": "veered"}}
+    cos = narrate_mod.evaluate(snap)
+    cats = [x["category"] for x in sorted(cos, key=narrate_mod._sort_key)]
+    ok &= _check("evaluate emits both, grounded, deviation sorts before drift",
+                 _grounded(cos) and "deviation" in cats and "drift" in cats
+                 and cats.index("deviation") < cats.index("drift"))
+    return ok
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--llm", action="store_true", help="also exercise the LLM tool-loop")
@@ -387,6 +433,7 @@ def main():
     overall = test_narrate_logic()
     overall &= test_safety_callout()
     overall &= test_fleet_callout()
+    overall &= test_deviation_drift_callout()
     overall &= test_adherence_logic()
     overall &= test_coach_logic()
 

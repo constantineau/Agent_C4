@@ -88,5 +88,15 @@ class EngineClient:
     def route(self, route=None, target="next") -> dict:
         return self._get("/route", {"route": route, "target": target})
 
+    def deviation(self, route=None, variant=None) -> dict:
+        """Route-deviation vs the active playbook variant's frozen optimal track (XTE / along-track /
+        time-behind / VMC, fuzzy status). Lab-3 branch trigger (a); `na` with no playbook aboard."""
+        return self._get("/deviation", {"route": route, "variant": variant})
+
+    def drift(self, route=None) -> dict:
+        """Forecast-drift vs the plan's frozen forecast reference (how far the common forecast has
+        moved: veered/backed + speed, fuzzy status). Lab-3 branch trigger (b); `na` with no reference."""
+        return self._get("/drift", {"route": route})
+
     def reachable(self) -> bool:
         return self.health().get("status") == "ok"
