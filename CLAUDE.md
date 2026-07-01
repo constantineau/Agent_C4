@@ -686,10 +686,21 @@ frozen aboard, 0 path points inside the box + still reaches the mark; circle-zon
 baked container) + LIVE (a bench TSS polygon → `avoids_zones` 0→1) + Playwright ("avoids 2 islands + 1 zone").
 Now the onboard re-route respects BOTH the race-critical islands AND the exclusion/TSS zones. **HONEST SCOPE:**
 the broad COASTLINE is still cloud-only (islands+zones are the race-critical per-race layer; a full onboard
-coastline mask is the remaining big item, deliberately deferred). **NEXT Lab-3 (remaining, optional):** a
-GRIB-native drift fingerprint (the current one is Open-Meteo same-source, intentional given no cfgrib on the
-Pi); a full onboard coastline mask; point the copilot `adherence.py` tile at `/selector`. The copilot
-narration of both triggers already shipped (see the copilot section).
+coastline mask is the remaining big item, deliberately deferred).
+
+**PLAYBOOK dashboard tile UNIFIED onto the SELECTOR — SHIPPED.** The dashboard's PLAYBOOK tile used to read
+the copilot's wind-shift-only `/copilot/adherence` (needs the Orin, and could DISAGREE with the Strategy-card
+recommendation banner). It now reads the engine's unified **`/selector`**: `selector.get_selector` gained the
+per-variant agreement `rows` (recommended ★ 'start', favoured side 'now' — the same shape adherence emitted) +
+`headline`/`agreement_pct`, so the tile renders identically but from Tier-1 (always reachable, no Orin) and
+ALWAYS AGREES with the banner (one source of truth). The tile builder (`dashboard.js playbook()`) reads
+`App.selector` (action→status/value/sub + rows/why/consider), falling back to `/adherence` only if the
+selector isn't loaded yet; `adherence.py` + `/copilot/adherence` stay as the fallback. Verified: selector unit
+test (rows present: Middle ★ start 60% / Left 'now' 40%; all prior paths green — host) + LIVE + Playwright
+(the PLAYBOOK tile shows "Hold: Middle start · on plan · medium conf" + variant rows, byte-consistent with the
+Strategy banner, 0 console errors). **NEXT Lab-3 (remaining, optional):** a GRIB-native drift fingerprint (the
+current one is Open-Meteo same-source, intentional given no cfgrib on the Pi); a full onboard coastline mask.
+The copilot narration of both triggers already shipped (see the copilot section).
 
 ## C4 Performance Lab (cloud) — Phase 9 / Lab-0
 

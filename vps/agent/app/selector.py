@@ -44,6 +44,26 @@ def _conf_label(c):
     return "high" if c >= 0.7 else "medium" if c >= 0.45 else "low"
 
 
+def _rows(bundle, rec_id, favored):
+    """The per-variant agreement table for the dashboard PLAYBOOK tile — recommended starred (start),
+    the currently-favoured side flagged 'now'. Same shape the copilot's adherence tile emitted, so the
+    tile renders identically from the (Tier-1) selector without needing the Orin."""
+    out = [{"hdr": True, "cols": ["agree", ""]}]
+    for v in (bundle.get("variants") or [])[:4]:
+        vid = str(v.get("id") or "")
+        share = v.get("share")
+        shp = f"{round(share * 100)}%" if isinstance(share, (int, float)) else "—"
+        tags = []
+        if vid == rec_id:
+            tags.append("start")
+        if favored in ("left", "right") and vid == favored:
+            tags.append("now")
+        out.append({"label": ("★ " if vid == rec_id else "") + (v.get("name") or vid),
+                    "emph": bool(favored in ("left", "right") and vid == favored),
+                    "cols": [shp, " · ".join(tags)]})
+    return out
+
+
 def _na(note):
     return {"available": False, "action": "na", "status": "na", "value": "—", "why": note,
             "consider": "—", "based": [], "conf": "engine"}
@@ -90,8 +110,12 @@ def get_selector(route=None):
         "drift": {"status": dft_status, "dir": dft.get("drift_dir") if dft_ok else None,
                   "deg": dft.get("drift_twd_deg") if dft_ok else None},
     }
+    agreement = bundle.get("agreement")
     base = {"available": True, "recommended": rec_id, "recommended_label": rec_label,
-            "signals": signals, "conf": "engine"}
+            "signals": signals, "conf": "engine",
+            "rows": _rows(bundle, rec_id, favored), "headline": bundle.get("headline", ""),
+            "agreement_pct": (round(agreement * 100) if isinstance(agreement, (int, float)) else None),
+            "decision_spread_min": bundle.get("decision_spread_min")}
 
     # ---- decisive path: a PERSISTENT shift favours a side other than the one we're on -----------
     if persistent and favored in ("left", "right") and favored != rec_id:

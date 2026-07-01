@@ -520,14 +520,24 @@
         consider: st === "ok" ? "Instruments healthy." : "Cross-check before trusting a lone reading.",
         clears: st === "ok" ? "—" : "all sources fresh", based: ["get_sources: " + count + " sources"], conf: "engine" };
     },
-    /* PLAYBOOK-ADHERENCE: the frozen Lab-2 homework vs the live tactical read. Its truth lives on
-       the copilot (the playbook + the deterministic /adherence computation), not the engine, so it
-       reads App.adherence (fetched on its own cadence) rather than the engine poll `p`. */
+    /* PLAYBOOK: are we on the frozen homework, and has a branch fired? Now driven by the engine's
+       unified SELECTOR (Tier-1, always reachable — no Orin needed), so the tile and the Strategy-card
+       recommendation banner always agree. Falls back to the copilot /adherence read if the selector
+       isn't available yet. */
     playbook() {
-      const a = App.adherence;
+      const s = App.selector;
+      if (s && s.available !== false && s.action !== "na") {
+        const act = s.action, conf = s.confidence_label ? s.confidence_label + " conf" : "";
+        const sub = (act === "switch" ? "branch fired" : act === "off_script" ? "off the playbook" : "on plan")
+          + (conf ? " · " + conf : "");
+        return { status: s.status || "ok", value: s.value || "—", sub: sub, rows: s.rows || [],
+          why: s.why || "", consider: s.consider || "—", clears: s.clears || "—",
+          based: s.based || [], conf: "engine" };
+      }
+      const a = App.adherence;   // fallback: the copilot's wind-shift-only read
       if (!a) return NA("loading playbook…");
       if (a.available === false || a.status === "na") return NA(a.sub || a.why || "no playbook aboard");
-      return Object.assign({}, a);   // copy: commitStatus / applyBrief mutate the tile object
+      return Object.assign({}, a);
     },
   };
 
