@@ -53,6 +53,7 @@ check("note flags OFF THE PLAYBOOK", "OFF THE PLAYBOOK" in r.get("note", ""))
 vs = r.get("vs_playbook") or {}
 check("divergence vs the frozen plan computed", vs.get("available") and vs.get("max_divergence_nm") >= 0)
 check("tacking route diverges from the straight plan (>0)", vs.get("max_divergence_nm") > 0.05)
+check("each leg carries a sail slot + sail_plan is a list", "sail" in r["legs"][0] and isinstance(r.get("sail_plan"), list))
 
 # --- na paths ------------------------------------------------------------------------------------
 print("na paths:")

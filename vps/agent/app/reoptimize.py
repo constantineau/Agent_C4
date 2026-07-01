@@ -18,6 +18,7 @@ import time
 from . import deviation
 from . import navigator as NAV
 from . import routing
+from . import sails
 
 _cache = {"key": None, "t": 0, "val": None}
 CACHE_TTL = 30
@@ -80,13 +81,27 @@ def get_reoptimize(route=None):
     full_path = [{"lat": round(slat, 5), "lon": round(slon, 5)}]
     all_legs, leg_summ = [], []
     for m in remaining:
+        # which sail this leg wants: the direct-course TWA at the leg midpoint → the onboard sail
+        # model (same crossovers the sail dial uses). Clamps to the up sail on a beat, like the dial.
+        mid_lat, mid_lon = (cur[0] + m["lat"]) / 2, (cur[1] + m["lon"]) / 2
+        tws_l, twd_l = wind(mid_lat, mid_lon, t)
+        sail = None
+        if tws_l:
+            twa_l = abs(NAV._wrap180(NAV._bearing(cur[0], cur[1], m["lat"], m["lon"]) - twd_l))
+            sail = (sails.get_sail_advice(tws_l, twa_l) or {}).get("optimal_sail")
         leg = routing.route_leg(cur[0], cur[1], m["lat"], m["lon"], wind, t, live[1] or 0)
         full_path += leg["path"][1:]          # skip the duplicated leg-start point
         all_legs += leg["legs"]
         leg_summ.append({"mark": m["name"], "eta_min": round((leg["reached_t"] - t) / 60, 1),
-                         "sailed_nm": round(leg["sailed_nm"], 2)})
+                         "sailed_nm": round(leg["sailed_nm"], 2), "sail": sail})
         t = leg["reached_t"]
         cur = (m["lat"], m["lon"])
+
+    # the peel sequence across the remaining course (consecutive de-dup), for the crew
+    sail_plan = []
+    for lg in leg_summ:
+        if lg.get("sail") and (not sail_plan or sail_plan[-1] != lg["sail"]):
+            sail_plan.append(lg["sail"])
 
     tacks = sum(1 for a, b in zip(all_legs, all_legs[1:]) if a["tack"] != b["tack"])
     sailed = sum(NAV._hav_nm(full_path[i]["lat"], full_path[i]["lon"],
@@ -96,7 +111,7 @@ def get_reoptimize(route=None):
     out = {
         "available": True, "off_playbook": True, "route": nav["route"],
         "wind_source": "forecast" if use_fcst else "live wind (no forecast)",
-        "marks": [m["name"] for m in remaining], "legs": leg_summ,
+        "marks": [m["name"] for m in remaining], "legs": leg_summ, "sail_plan": sail_plan,
         "eta_min": round((t - t0) / 60, 1), "tacks": tacks, "sailed_nm": round(sailed, 2),
         "recommended_heading": all_legs[0]["hdg"] if all_legs else None,
         "first_tack": all_legs[0]["tack"] if all_legs else None,

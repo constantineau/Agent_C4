@@ -645,6 +645,9 @@ and the dashboard fetches it only while off-script (never on every poll). The St
 `⟳ Onboard re-route ready — 4h 14m · 9 tacks · up to 2.4 nm off the plan · OFF-BOOK` line (dashed border)
 below the triggers, so the card shows the full degradation ladder: pre-authored branch (selector) →
 onboard re-route (this). This closes the perflab item-2 graceful-degradation chain at the Lab level.
+The re-route also carries a per-leg **SAIL PLAN** (each remaining leg's direct-course TWA at its midpoint →
+the onboard `sails` model → the sail; a consecutive-de-duped peel sequence like `J1→A3→S2`), surfaced on the
+card's re-route line (⛵), so the fallback is actually hoistable — not just a track.
 Verified `vps/agent/test_reoptimize.py` (route_leg reach + upwind chain through 2 marks tacks + reaches
 finish + off-playbook flag + divergence>0 + na paths + no-playbook-still-routes — host + baked container) +
 LIVE (dropped a practice W/L course → `/reoptimize` routed Windward→Leeward 69 min/2 tacks, diverges 2.49 nm

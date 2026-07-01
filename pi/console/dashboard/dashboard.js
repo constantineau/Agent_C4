@@ -147,7 +147,7 @@
         driven_by: ["get_tactics", "get_drift", "get_deviation"],
         why: "A persistent veering shift now favours the right — against the recommended Left. That's the playbook's branch trigger. Reinforced: the forecast has veered ~28° the same way; you're already working the right side (1.3 nm right)." },
       reoptimize: { available: true, off_playbook: true, eta_min: 254, tacks: 9, sailed_nm: 46.2,
-        marks: ["Cove Island", "Finish"], vs_playbook: { available: true, max_divergence_nm: 2.4, mean_divergence_nm: 0.9 } },
+        marks: ["Cove Island", "Finish"], sail_plan: ["J1", "A3", "S2"], vs_playbook: { available: true, max_divergence_nm: 2.4, mean_divergence_nm: 0.9 } },
     },
   };
 
@@ -748,9 +748,11 @@
     el.hidden = false;
     const h = ro.eta_min != null ? (Math.floor(ro.eta_min / 60) + "h " + Math.round(ro.eta_min % 60) + "m") : "?";
     const vs = ro.vs_playbook && ro.vs_playbook.available ? "up to " + r1(ro.vs_playbook.max_divergence_nm) + " nm off the plan" : "";
+    const sp = Array.isArray(ro.sail_plan) && ro.sail_plan.length ? ro.sail_plan.join("→") : "";
     el.innerHTML = '<span class="ro-ico">⟳</span><span>Onboard re-route ready — <b>' + h + '</b>' +
       (ro.tacks != null ? ' · ' + ro.tacks + ' tacks' : '') +
       (ro.sailed_nm != null ? ' · ' + r1(ro.sailed_nm) + ' nm' : '') +
+      (sp ? ' · ⛵ ' + sp : '') +
       (vs ? ' · ' + vs : '') + ' <span class="ro-tag">off-book</span></span>';
   }
   /* the executor's recommendation banner at the top of the strip: HOLD / SWITCH → variant /
