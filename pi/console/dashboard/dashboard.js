@@ -54,6 +54,7 @@
   const BRIEF_TTL = 300;          // an LLM brief stays "fresh" 5 min before reverting to engine-read
   const ADHERE_EVERY = 8000;      // poll the copilot's deterministic playbook-adherence ~every 8 s (cheap, no LLM)
   const DEV_EVERY = 5000;         // poll the ENGINE's deterministic route-deviation ~every 5 s (Tier-1, no LLM)
+  const DRIFT_EVERY = 20000;      // poll forecast-drift ~every 20 s (slow-moving; Open-Meteo is cached ~30 min)
   const COACH_EVERY = 15000;      // poll the proactive auto-coach held state ~every 15 s (no recompute — the Orin timer drives it)
 
   /* ---- tiny helpers needed early (used in the demo scenarios) ---- */
@@ -102,6 +103,7 @@
         what_flips_it: "a persistent right shift past ~020° for two-plus oscillation cycles",
         why: "Sailing the 'Left start' variant's optimized track — 0.15 nm off the line (left), 0:45 ahead of plan pace. Hold the groove.",
         consider: "Stay on the playbook line — no branch, keep sailing the plan." },
+      drift: { available: true, status: "ok", value: "Forecast holding", drift_twd_deg: 6, drift_dir: "veered", drift_tws_kn: 1.2, n_points: 8 },
     },
     escalated: {
       mode: "llm-live", focus: "Playbook branch: the right is paying now. Bear-away coming up, and the crew tank is getting low.", confidence: "med",
@@ -136,6 +138,7 @@
         what_flips_it: "a persistent right shift past ~020° for two-plus oscillation cycles",
         why: "The boat is 1.3 nm to the right of the 'Left start' variant's optimal track and diverging. This is a genuine departure from the frozen line.",
         consider: "You're right of the plan — decide: rejoin the 'Left start' line, or if the breeze has genuinely changed sides, check the branch trigger (the playbook tile is calling the right)." },
+      drift: { available: true, status: "act", value: "Forecast moved · 28° veered", drift_twd_deg: 28, drift_twd_max_deg: 41, drift_dir: "veered", drift_tws_kn: 3.5, n_points: 7 },
     },
   };
 
@@ -635,6 +638,18 @@
     if (App.src === "demo") return (SCENARIOS[App.demoScn] || {}).strategy || null;
     return App.deviation;
   }
+  /* forecast-drift (Lab-3 branch trigger b): live common forecast vs the plan's frozen reference.
+     Engine-computed, deterministic; polled slowly (it moves slowly + Open-Meteo is cached). */
+  async function fetchDrift() {
+    if (App.src !== "live") return;
+    const r = await fetchJSON("/drift", 9000);
+    if (r) App.forecastDrift = r;
+    if (App.src === "live") render();
+  }
+  function currentDrift() {
+    if (App.src === "demo") return (SCENARIOS[App.demoScn] || {}).drift || null;
+    return App.forecastDrift;
+  }
   /* the Strategy strip: are we sailing the frozen variant's optimal track? (route-deviation). */
   function renderStrategy() {
     const el = document.getElementById("strategy");
@@ -683,6 +698,29 @@
       flipEl.hidden = true;
     }
     document.getElementById("stWhy").textContent = d.why || d.sub || "";
+    renderDriftLine();
+  }
+  /* the forecast-drift line inside the Strategy strip: how far the common forecast has moved from
+     what the plan was built on (the 2nd branch trigger). Hidden when there's no reference aboard. */
+  function renderDriftLine() {
+    const el = document.getElementById("stDrift");
+    const fd = currentDrift();
+    if (!fd || fd.available === false) { el.hidden = true; return; }
+    el.hidden = false;
+    const status = fd.status || "na";
+    el.className = "st-drift sd-" + status;
+    const deg = fd.drift_twd_deg != null ? Math.round(fd.drift_twd_deg) : null;
+    const tag = { ok: "holding", watch: "watch", act: "moved" }[status] || "";
+    let body;
+    if (status === "ok") {
+      body = 'Forecast <b>holding</b> — ~' + (deg != null ? deg + "° drift" : "on plan");
+    } else {
+      const tws = (fd.drift_tws_kn != null && Math.abs(fd.drift_tws_kn) >= 1)
+        ? " · " + (fd.drift_tws_kn >= 0 ? "+" : "−") + Math.abs(Math.round(fd.drift_tws_kn)) + " kn" : "";
+      body = 'Forecast drift <b>' + deg + "° " + (fd.drift_dir || "shifted") + '</b>' + tws +
+        ' <span class="sd-tag">' + tag + '</span>';
+    }
+    el.innerHTML = '<span class="sd-dot"></span><span>' + body + '</span>';
   }
   /* the coach speech line in the commentary panel — the last thing the copilot volunteered (from the
      timer's spoken history), or, if nothing's been said yet, the top of the current callout banner.
@@ -719,9 +757,9 @@
     theme: localStorage.getItem("sr33.dash.theme") || "auto",
     pos: { lat: 45.33, lon: -82.0 },
     openTile: null, streamTimer: null, pollTimer: null, seriesTimer: null, briefTimer: null,
-    adhereTimer: null, coachTimer: null, devTimer: null, polling: false,
+    adhereTimer: null, coachTimer: null, devTimer: null, driftTimer: null, polling: false,
     dwell: {}, data: null, windHist: [], fcstHist: [], seriesHist: [], lastPersist: 0, brief: null,
-    adherence: null, coach: null, deviation: null, detailStreamKey: null, detailAbort: null,
+    adherence: null, coach: null, deviation: null, forecastDrift: null, detailStreamKey: null, detailAbort: null,
   };
   function currentData() {
     if (App.src === "demo") {
@@ -943,7 +981,7 @@
   function briefMe() {
     const b = document.getElementById("briefBtn");
     b.classList.add("busy"); b.textContent = "thinking…";
-    if (App.src === "live") { poll(); fetchBrief(); fetchAdherence(); fetchCoach(); fetchDeviation(); }
+    if (App.src === "live") { poll(); fetchBrief(); fetchAdherence(); fetchCoach(); fetchDeviation(); fetchDrift(); }
     // the LLM is slow (~45 s warm); clear the busy state on a timer — render() updates when it lands
     setTimeout(() => { b.classList.remove("busy"); b.textContent = "Brief me ↻"; if (App.src !== "live") render(); }, 1500);
   }
@@ -965,6 +1003,8 @@
     App.coachTimer = setInterval(fetchCoach, COACH_EVERY);
     fetchDeviation();               // route-deviation (engine, deterministic), then on its own cadence
     App.devTimer = setInterval(fetchDeviation, DEV_EVERY);
+    fetchDrift();                   // forecast-drift (engine, common-data), then on its own cadence
+    App.driftTimer = setInterval(fetchDrift, DRIFT_EVERY);
     document.getElementById("themeBtn").addEventListener("click", cycleTheme);
     document.getElementById("srcBtn").addEventListener("click", cycleSource);
     document.getElementById("briefBtn").addEventListener("click", briefMe);

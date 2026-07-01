@@ -32,11 +32,13 @@ alerting/summarizer/polar-analysis (those are cloud / C4 Performance Lab), and *
 
 `/health` · `/conditions` · `/conditions/full` · `/sources` · `/fatigue` · `/sail` · `/course` ·
 `/navigator` · `POST /course/practice` · `/tactics` · `/forecast` · `/route` · `/ais` ·
-`POST /fleet/load` · `/fleet` · `POST /playbook/load` · `/deviation`
+`POST /fleet/load` · `/fleet` · `POST /playbook/load` · `/deviation` · `/drift`
 
-`POST /playbook/load` freezes the Lab-2 playbook bundle aboard; `GET /deviation` is the Lab-3
-route-deviation read (boat vs the active variant's optimal track: XTE / along-track / time-behind /
-VMC, fuzzy consider/commit status) that powers the iPad Strategy card.
+`POST /playbook/load` freezes the Lab-2 playbook bundle aboard; the two Lab-3 branch triggers read
+from it: `GET /deviation` (route-deviation — boat vs the active variant's optimal track: XTE /
+along-track / time-behind / VMC) and `GET /drift` (forecast-drift — the live common forecast vs the
+plan's frozen forecast reference: veered/backed + speed change). Both are deterministic, fuzzy
+consider/commit status, and power the iPad Strategy card.
 
 Parity reference: `vps/agent/app/main.py` (the cloud serves the same paths, plus auth/chat/
 alerts and the RRS-41 race gate).

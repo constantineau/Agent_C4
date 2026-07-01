@@ -72,6 +72,16 @@ body {
 .st-m { color:var(--muted); font-weight:600; white-space:nowrap; }
 .st-m b { color:var(--text); font-weight:700; }
 .st-m.bad b { color:var(--c); }
+.st-drift { margin:8px 0 0; font-size:12.5px; line-height:1.35; color:var(--muted);
+  display:flex; align-items:center; gap:7px; }
+.st-drift .sd-dot { width:9px; height:9px; border-radius:50%; background:var(--dc); flex:none;
+  box-shadow:0 0 0 1px var(--dc); }
+.st-drift b { color:var(--dc); font-weight:700; }
+.st-drift .sd-tag { color:var(--dc); font-weight:700; text-transform:uppercase; letter-spacing:.5px; font-size:11px; }
+.st-drift.sd-ok    { --dc:var(--ok); }
+.st-drift.sd-watch { --dc:var(--watch); }
+.st-drift.sd-act   { --dc:var(--act); }
+.st-drift.sd-na    { --dc:var(--na); }
 .st-why { margin:8px 0 0; font-size:13.5px; line-height:1.4; color:var(--text); }
 .st-flip { margin:5px 0 0; font-size:12.5px; line-height:1.35; color:var(--muted); }
 .st-flip b { color:var(--c); font-weight:700; }

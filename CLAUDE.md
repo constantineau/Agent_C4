@@ -525,7 +525,7 @@ let the onboard image ship **no psycopg**, `datasource.py` guards the `pool` imp
 → unchanged; onboard absent → unused). Endpoints (port **8200**): `/health`, `/conditions`,
 `/conditions/full`, `/sources`, `/fatigue`, `/sail`, `/course`, `/navigator`,
 `POST /course/practice`, `/tactics`, `/forecast`, `/route`, `/ais`, `POST /fleet/load`, `/fleet`,
-`POST /playbook/load`, `/deviation` (the last two = Lab-3, below). Wired into `compose.pi.yml` as
+`POST /playbook/load`, `/deviation`, `/drift` (the last three = Lab-3, below). Wired into `compose.pi.yml` as
 the `engine` service; cloud parity reference is `vps/agent/app/main.py`. See `pi/engine/README.md`.
 
 **Bench-verified** (sample Pi stack + engine): every endpoint returns real data through
@@ -581,9 +581,37 @@ needs no cloud/LLM.
   Playwright (Strategy strip renders live + demo, ok/act states, progress bar + metrics + trigger,
   0 page errors) + fleet regression green. Files: deviation.py (new), datasource.py,
   datasource_onboard.py, pi/engine/engine_app.py, pi/console/dashboard/{index.html,dashboard.css,
-  dashboard.js}, test_deviation.py (new). **NEXT Lab-3 slices:** forecast-drift (onboard GRIB vs a
-  build-time wind fingerprint frozen in the bundle — heavier, Pi/network) → onboard re-optimize +
-  graceful-degradation selector; and folding route-deviation into the copilot narration.
+  dashboard.js}, test_deviation.py (new).
+
+**Lab-3 branch trigger (b) — FORECAST-DRIFT: SHIPPED.** The second continuously-monitored trigger:
+has the common forecast the playbook rests on MOVED since it was frozen? **Reference source call:** the
+routes are optimized on the multi-model GRIB blend, but that can't be re-fetched onboard the Pi (no
+cfgrib/eccodes on the Tier-1 image). So the drift trigger is **same-source**: at freeze the Lab samples
+**Open-Meteo** (the free keyless 10 m GFS the onboard engine already serves at `/forecast` — common
+data, available to all boats) along the recommended variant's route at each waypoint's ETA and freezes
+those (tws,twd) into the bundle; onboard, `drift.py` re-samples live Open-Meteo for the SAME
+(place, target-time) and compares — genuine forecast EVOLUTION, no cross-model bias to subtract.
+(A GRIB-native fingerprint is a heavier future upgrade.) Pieces: **`vps/lab/app/forecast_ref.py`**
+(new, pure-stdlib Open-Meteo sampler + `build_fingerprint(route_path)`; best-effort — omitted if the net
+is down at freeze) → `synthesis.synthesize` adds a **`forecast_fingerprint`** block to the bundle
+(signed at freeze). **`vps/agent/app/drift.py`** (new, Tier-1, source-agnostic): for each still-future
+waypoint (skips spent/imminent + beyond the 2-day Open-Meteo horizon) computes the signed angular drift
+(veered +/backed −) + speed change vs the frozen reference, aggregates (mean/max), and applies the same
+**Schmitt consider/commit bands + hysteresis** (`DRIFT_TWD_{CONSIDER,COMMIT}_DEG` 15/30,
+`DRIFT_TWS_{CONSIDER,COMMIT}_KN` 4/8) — `na` with no reference / all-past / no network. Engine
+**`GET /drift`**; `/playbook/load` clears both triggers' Schmitt memory. The **iPad Strategy card**
+gains a forecast-drift line (dot + "Forecast drift 28° veered · +4 kn" status-coloured) — so the strip
+now shows BOTH branch triggers. FLAGS drift + says which way; onboard re-optimize is a later slice.
+**Verified:** unit `vps/agent/test_drift.py` (angular drift + wraparound 350°→010°, veer/back, speed
+band, Schmitt hysteresis, horizon/all-past/no-net na — host + baked container) + LIVE bench on the
+sample Pi stack (build an Open-Meteo fingerprint at the live position → `/drift` reads 0°/holding when
+reference==live; perturb the reference +25° → 25° backed/watch) + Playwright (drift line renders live
+0° + demo calm 6° + demo escalated 28° act, 0 errors) + lab container rebuilt (forecast_ref baked,
+`synthesis._fingerprint` builds). Files: forecast_ref.py (new), synthesis.py, drift.py (new),
+pi/engine/engine_app.py, pi/console/dashboard/{index.html,dashboard.css,dashboard.js}, test_drift.py (new).
+**NEXT Lab-3 slices:** onboard re-optimize + graceful-degradation SELECTOR (pre-authored branch →
+onboard re-optimize on own polars + common GRIB → off-script+flag) when a trigger fires; a GRIB-native
+drift fingerprint; and folding both triggers into the copilot NARRATION (voice the Strategy card).
 
 ## C4 Performance Lab (cloud) — Phase 9 / Lab-0
 

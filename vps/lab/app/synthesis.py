@@ -29,6 +29,7 @@ import os
 import time
 
 from shared import race_def
+from . import forecast_ref
 from . import playbook as pb
 from . import sailplan
 
@@ -264,6 +265,19 @@ def _boat_model():
     }
 
 
+def _fingerprint(variants, recommended):
+    """Freeze the common forecast the playbook was built on (sampled along the recommended variant's
+    route) so the onboard executor can measure FORECAST-DRIFT. Best-effort — None if the route is
+    empty or Open-Meteo is unreachable (the bundle simply omits it)."""
+    try:
+        v = next((x for x in variants if x.get("id") == recommended), None) or \
+            (variants[0] if variants else None)
+        path = ((v or {}).get("route") or {}).get("path")
+        return forecast_ref.build_fingerprint(path)
+    except Exception:
+        return None
+
+
 def synthesize(definition, course_id, start_epoch, models, ensemble_members=0, time_budget_s=200,
                jib_crossovers=None, helm_factor=1.0, use_waves=True, polar_adjustments=None,
                wave_coeffs=None):
@@ -309,6 +323,8 @@ def synthesize(definition, course_id, start_epoch, models, ensemble_members=0, t
         "first_beat_rhumb_deg": first_beat_rhumb(definition, course_id),
         "consensus": playbook.get("consensus"),
         "boat_model": _boat_model(),      # polars/sail crossovers + draft frozen into the homework
+        # the common forecast the plan was built on → the onboard forecast-drift branch trigger
+        "forecast_fingerprint": _fingerprint(variants, syn.get("recommended")),
         "variants": variants,
         "decision_tree": syn.get("decision_tree", []),
         "provenance": {

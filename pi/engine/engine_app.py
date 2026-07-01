@@ -24,7 +24,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import (navigator, tactics, routing, weather, sails, fatigue, onboard_conditions,
-                 datasource, ais, fleet, deviation)
+                 datasource, ais, fleet, deviation, drift)
 
 app = FastAPI(title="Agent_C4 Onboard Engine", version="0.1.0")
 # The iPad reaches the Pi directly over boat-local Wi-Fi in race mode; allow cross-origin so a
@@ -200,6 +200,7 @@ def playbook_load(body: dict):
         return {"loaded": False, "detail": "no bundle with variants"}
     datasource.active().save_playbook(bundle)
     deviation.reset_state()          # a new playbook → clear the Schmitt/trend memory
+    drift.reset_state()
     return {"loaded": True, "race_id": bundle.get("race_id"),
             "variants": len(bundle.get("variants") or []),
             "recommended": bundle.get("recommended")}
@@ -212,3 +213,12 @@ def deviation_ep(route: str | None = None, variant: str | None = None, since: fl
     always legal in-race (own GPS + own computer + pre-loaded homework); `na` with no playbook
     aboard. `variant` overrides the recommended default; `since` re-anchors time-behind to the gun."""
     return deviation.get_deviation(route=route, variant=variant, since=since)
+
+
+@app.get("/drift")
+def drift_ep(route: str | None = None):
+    """Forecast-drift vs the playbook's frozen forecast reference: how far the live common forecast
+    (Open-Meteo) has moved from what the plan was built on, over the still-future route waypoints —
+    directional shift (veered/backed) + speed change, with fuzzy consider/commit status. Deterministic,
+    legal in-race (own computer + common public data); `na` with no playbook / no reference aboard."""
+    return drift.get_drift(route=route)
