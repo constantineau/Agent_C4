@@ -88,6 +88,38 @@ check("route detours clear of the island (>= ~radius)", _min_clear(avoided["path
 check("still reaches the mark A (44.22)", abs(avoided["path"][-1]["lat"] - 44.22) < 0.05)
 check("note names the avoided island", "1 charted island" in avoided.get("note", ""))
 
+# --- polygon exclusion-zone avoidance -----------------------------------------------------------
+print("exclusion-zone avoidance:")
+# a no-go box straddling the straight-north line boat(43.98)→A(44.22) at lon -82.0
+BOX = [[-82.02, 44.08], [-81.98, 44.08], [-81.98, 44.12], [-82.02, 44.12], [-82.02, 44.08]]  # (lon,lat)
+def _in_box(path):
+    return sum(1 for p in path if routing._pt_in_ring(p["lon"], p["lat"], BOX))
+
+reoptimize._cache["key"] = None
+deviation._load_playbook = lambda: {"race_id": "u", "variants": [{"id": "m"}]}   # no zones
+thru = reoptimize.get_reoptimize()
+check("without the zone, the route enters the box", _in_box(thru["path"]) > 0)
+
+reoptimize._cache["key"] = None
+deviation._load_playbook = lambda: {"race_id": "u", "variants": [{"id": "m"}],
+    "obstacles": {"islands": [], "zones": [{"name": "NoGo", "type": "exclusion",
+                                            "geometry": {"coordinates": [BOX]}}]}}
+skirt = reoptimize.get_reoptimize()
+print("  avoids_zones", skirt.get("avoids_zones"), "| points inside box", _in_box(skirt["path"]),
+      "| reaches", round(skirt["path"][-1]["lat"], 3))
+check("zone count reported", skirt.get("avoids_zones") == 1)
+check("route stays OUT of the exclusion zone", _in_box(skirt["path"]) == 0)
+check("still reaches the mark A", abs(skirt["path"][-1]["lat"] - 44.22) < 0.05)
+check("note names the exclusion zone", "exclusion zone" in skirt.get("note", ""))
+
+# a CIRCLE zone parses to a disk (folded into avoid)
+reoptimize._cache["key"] = None
+deviation._load_playbook = lambda: {"race_id": "u", "variants": [{"id": "m"}],
+    "obstacles": {"islands": [], "zones": [{"name": "Ring", "type": "hazard",
+                                            "geometry": {"center": [44.10, -82.0], "radius_nm": 1.0}}]}}
+circ = reoptimize.get_reoptimize()
+check("circle zone → disk avoidance (avoids_islands counts it)", circ.get("avoids_islands") == 1)
+
 # --- na paths ------------------------------------------------------------------------------------
 print("na paths:")
 reoptimize._cache["key"] = None

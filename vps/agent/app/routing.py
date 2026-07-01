@@ -73,6 +73,46 @@ def _seg_blocked(alat, alon, blat, blon, avoid):
     return False
 
 
+def _pt_in_ring(x, y, ring):
+    """Ray-cast point-in-polygon. `ring` is [(x, y), ...] in (lon, lat)."""
+    inside = False
+    n = len(ring)
+    j = n - 1
+    for i in range(n):
+        xi, yi = ring[i]
+        xj, yj = ring[j]
+        if ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / ((yj - yi) or 1e-12) + xi):
+            inside = not inside
+        j = i
+    return inside
+
+
+def _ccw(ax, ay, bx, by, cx, cy):
+    return (cy - ay) * (bx - ax) > (by - ay) * (cx - ax)
+
+
+def _segs_cross(a, b, c, d):
+    """Do segments A-B and C-D properly intersect? (points are (x, y))."""
+    return (_ccw(*a, *c, *d) != _ccw(*b, *c, *d)) and (_ccw(*a, *b, *c) != _ccw(*a, *b, *d))
+
+
+def _seg_crosses_poly(alat, alon, blat, blon, polys):
+    """True if the segment A→B enters any exclusion polygon. `polys` is a list of rings of (lon, lat)
+    — the frozen zone homework. Checks endpoint-inside (short isochrone steps) + edge intersection."""
+    if not polys:
+        return False
+    a, b = (alon, alat), (blon, blat)
+    for ring in polys:
+        if len(ring) < 3:
+            continue
+        if _pt_in_ring(blon, blat, ring) or _pt_in_ring(alon, alat, ring):
+            return True
+        for i in range(len(ring)):
+            if _segs_cross(a, b, ring[i - 1], ring[i]):
+                return True
+    return False
+
+
 def make_wind_fn(slat, slon, live):
     """A wind(lat,lon,epoch)→(tws,twd) closure: the Open-Meteo forecast if reachable at the start,
     else the live measured wind held constant (so routing still runs with no network). `live` is
@@ -88,12 +128,17 @@ def make_wind_fn(slat, slon, live):
     return wind, use_fcst
 
 
-def route_leg(slat, slon, dlat, dlon, wind, t0, live_twd=0.0, avoid=None):
+def route_leg(slat, slon, dlat, dlon, wind, t0, live_twd=0.0, avoid=None, avoid_polys=None):
     """One isochrone leg from (slat,slon) to (dlat,dlon) through `wind()`, starting at epoch `t0`.
     The reusable core of `get_route` — chained per remaining mark by the onboard re-optimizer. `avoid`
-    is an optional list of (lat,lon,radius_nm) obstacle disks (the frozen island homework); steps that
-    cross one are pruned, so the route detours around land.
+    is an optional list of (lat,lon,radius_nm) obstacle disks (the frozen island homework) and
+    `avoid_polys` a list of exclusion-zone rings [(lon,lat),...]; steps that cross either are pruned,
+    so the route detours around land / no-go zones.
     Returns {path:[{lat,lon}], legs:[{hdg,tack}], reached_t, sailed_nm, direct_nm}."""
+
+    def _blocked(a_lat, a_lon, b_lat, b_lon):
+        return _seg_blocked(a_lat, a_lon, b_lat, b_lon, avoid) or \
+            _seg_crosses_poly(a_lat, a_lon, b_lat, b_lon, avoid_polys)
     direct = NAV._hav_nm(slat, slon, dlat, dlon)
     start = {"lat": slat, "lon": slon, "t": t0, "parent": None, "hdg": None}
     frontier = [start]
@@ -112,7 +157,7 @@ def route_leg(slat, slon, dlat, dlon, wind, t0, live_twd=0.0, avoid=None):
             twa_m = abs(NAV._wrap180(bmark - twd))
             sp_m = _polar_speed(tws, twa_m)
             if sp_m > 0.3 and dmark <= sp_m * DT_H and \
-                    not _seg_blocked(node["lat"], node["lon"], dlat, dlon, avoid):
+                    not _blocked(node["lat"], node["lon"], dlat, dlon):
                 reached = {"lat": dlat, "lon": dlon,
                            "t": node["t"] + (dmark / sp_m) * 3600, "parent": node, "hdg": bmark}
                 break
@@ -122,8 +167,8 @@ def route_leg(slat, slon, dlat, dlon, wind, t0, live_twd=0.0, avoid=None):
                 if sp < 0.3:
                     continue
                 nlat, nlon = _advance(node["lat"], node["lon"], hdg, sp * DT_H)
-                if avoid and _seg_blocked(node["lat"], node["lon"], nlat, nlon, avoid):
-                    continue                          # this step would cross an obstacle → prune it
+                if (avoid or avoid_polys) and _blocked(node["lat"], node["lon"], nlat, nlon):
+                    continue                          # this step would cross an obstacle/zone → prune it
                 rng = NAV._hav_nm(slat, slon, nlat, nlon)
                 sec = round(NAV._bearing(slat, slon, nlat, nlon) / SECTOR)
                 # keep the farthest-advanced candidate per bearing sector (the isochrone)

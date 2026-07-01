@@ -39,6 +39,35 @@ def _avoid_disks(bundle):
             for i in isls if i.get("lat") is not None and i.get("lon") is not None]
 
 
+def _parse_zones(bundle):
+    """The frozen exclusion/TSS/hazard ZONES → (extra disks, polygon rings) for the router. Mirrors
+    the lab's `geo._zone_rings` geometry contract: a GeoJSON polygon ({"coordinates": [[[lon,lat]..]]}
+    or a bare ring), a bbox ({north,south,west,east}), or a circle ({center:[lat,lon], radius_nm})."""
+    zdisks, polys = [], []
+    for z in (((bundle or {}).get("obstacles") or {}).get("zones") or []):
+        g = z.get("geometry") or {}
+        if not g:
+            continue
+        try:
+            if g.get("center") and g.get("radius_nm"):
+                c = g["center"]                       # [lat, lon]
+                if len(c) == 2:
+                    zdisks.append((float(c[0]), float(c[1]), float(g["radius_nm"])))
+            elif "coordinates" in g:
+                coords = g["coordinates"]
+                if coords and isinstance(coords[0][0], (int, float)):
+                    coords = [coords]                 # bare ring → one-ring polygon
+                for ring in coords:
+                    if ring:
+                        polys.append([(float(x), float(y)) for x, y in ring])
+            elif all(k in g for k in ("north", "south", "west", "east")):
+                n, s, w, e = g["north"], g["south"], g["west"], g["east"]
+                polys.append([(w, s), (e, s), (e, n), (w, n)])
+        except (TypeError, ValueError, KeyError):
+            continue                                  # a malformed zone is skipped, not fatal
+    return zdisks, polys
+
+
 def _vs_playbook(bundle, fresh_path):
     """How far the fresh route departs from the active frozen variant's optimal track — so the crew
     sees how off-script it is. Reuses deviation's polyline projection (max/mean cross-track of the
@@ -78,9 +107,10 @@ def get_reoptimize(route=None):
 
     live = (s.get("tws"), s.get("twd"))
     bundle = deviation._load_playbook()
-    avoid = _avoid_disks(bundle)
+    zdisks, polys = _parse_zones(bundle)
+    avoid = _avoid_disks(bundle) + zdisks             # islands + circular zones = disks
     key = (round(slat, 3), round(slon, 3), tuple(m["name"] for m in remaining),
-           round(live[0] or 0), round(live[1] or 0), len(avoid))
+           round(live[0] or 0), round(live[1] or 0), len(avoid), len(polys))
     if _cache["key"] == key and time.time() - _cache["t"] < CACHE_TTL:
         return _cache["val"]
 
@@ -98,7 +128,8 @@ def get_reoptimize(route=None):
         if tws_l:
             twa_l = abs(NAV._wrap180(NAV._bearing(cur[0], cur[1], m["lat"], m["lon"]) - twd_l))
             sail = (sails.get_sail_advice(tws_l, twa_l) or {}).get("optimal_sail")
-        leg = routing.route_leg(cur[0], cur[1], m["lat"], m["lon"], wind, t, live[1] or 0, avoid=avoid)
+        leg = routing.route_leg(cur[0], cur[1], m["lat"], m["lon"], wind, t, live[1] or 0,
+                                avoid=avoid, avoid_polys=polys)
         full_path += leg["path"][1:]          # skip the duplicated leg-start point
         all_legs += leg["legs"]
         leg_summ.append({"mark": m["name"], "eta_min": round((leg["reached_t"] - t) / 60, 1),
@@ -125,13 +156,16 @@ def get_reoptimize(route=None):
         "recommended_heading": all_legs[0]["hdg"] if all_legs else None,
         "first_tack": all_legs[0]["tack"] if all_legs else None,
         "path": full_path,
-        "avoids_islands": len(avoid),
+        "avoids_islands": len(avoid), "avoids_zones": len(polys),
         "vs_playbook": _vs_playbook(bundle, full_path),
         "note": ("Onboard re-optimization — a FRESH route on your own polars through the "
                  + ("Open-Meteo forecast" if use_fcst else "current measured wind")
                  + ", from your position through the remaining marks"
-                 + (f", avoiding {len(avoid)} charted island(s)" if avoid else " (open-water — no "
-                    "obstacle homework aboard; verify against the chart)")
+                 + (", avoiding " + " + ".join(
+                     ([f"{len(avoid)} charted island/disk(s)"] if avoid else [])
+                     + ([f"{len(polys)} exclusion zone(s)"] if polys else []))
+                    if (avoid or polys) else
+                    " (open-water — no obstacle homework aboard; verify against the chart)")
                  + ". OFF THE PLAYBOOK (not the frozen homework) — legal in-race, flagged as a re-route."),
     }
     _cache.update(key=key, t=time.time(), val=out)

@@ -672,11 +672,23 @@ radius clearance AND still reaches the mark; count + note — host + baked conta
 the course → `avoids_islands` 0→1) + real Mackinac `course_obstacles` extracts Duck Islands (3.0 nm) + Bois
 Blanc (5.5 nm) + lab freezes them + Playwright ("avoids 2 islands" on the card). Files: shared/race_def.py
 (course_obstacles), synthesis.py (freeze), routing.py (avoid + `_seg_blocked`/`_pt_to_seg_nm`), reoptimize.py,
-dashboard/dashboard.js, test_reoptimize.py. **HONEST SCOPE:** islands (disks) only for v1 — polygon
-exclusion/TSS zones are frozen into the bundle but not yet enforced onboard (a follow-up); the broad
-coastline is still cloud-only (islands are the race-critical layer). **NEXT Lab-3 (remaining, optional):** a
+dashboard/dashboard.js, test_reoptimize.py.
+**Polygon EXCLUSION/TSS ZONE enforcement (follow-up) — SHIPPED.** The island disks were v1; now the frozen
+`obstacles.zones` are enforced onboard too. `routing` gained `_pt_in_ring` (ray-cast point-in-polygon) +
+`_segs_cross` (segment intersection) + `_seg_crosses_poly`; `route_leg(..., avoid_polys=)` prunes any step
+that ENTERS a zone polygon (endpoint-inside — short isochrone steps — OR edge-intersection). `reoptimize.
+_parse_zones` normalizes the RaceDefinition zone geometry contract (GeoJSON polygon `{coordinates:[[[lon,lat]
+..]]}`/bare ring, bbox `{north,south,west,east}`, or circle `{center:[lat,lon],radius_nm}` → a disk folded
+into `avoid`) and threads `avoid_polys`; the result reports `avoids_zones` and the note/card line say
+"avoiding N island/disk(s) + M exclusion zone(s)". Both `avoid`/`avoid_polys` default None → `/route`
+byte-identical. Verified `test_reoptimize` (a straight route ENTERS a no-go box without it → with the zone
+frozen aboard, 0 path points inside the box + still reaches the mark; circle-zone→disk; count/note — host +
+baked container) + LIVE (a bench TSS polygon → `avoids_zones` 0→1) + Playwright ("avoids 2 islands + 1 zone").
+Now the onboard re-route respects BOTH the race-critical islands AND the exclusion/TSS zones. **HONEST SCOPE:**
+the broad COASTLINE is still cloud-only (islands+zones are the race-critical per-race layer; a full onboard
+coastline mask is the remaining big item, deliberately deferred). **NEXT Lab-3 (remaining, optional):** a
 GRIB-native drift fingerprint (the current one is Open-Meteo same-source, intentional given no cfgrib on the
-Pi); enforce polygon zones onboard; point the copilot `adherence.py` tile at `/selector`. The copilot
+Pi); a full onboard coastline mask; point the copilot `adherence.py` tile at `/selector`. The copilot
 narration of both triggers already shipped (see the copilot section).
 
 ## C4 Performance Lab (cloud) — Phase 9 / Lab-0
