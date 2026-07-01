@@ -1209,7 +1209,7 @@ from its public data API (`api.yachtscoring.com/v1/public/event/<id>/boats` pagi
 SPA so a plain fetch only gets an "enable JavaScript" shell; event id parsed from a
 `yachtscoring.com/emenu/<id>` / `?eID=<id>` URL), and **other sites** via URL fetch / pasted text /
 uploaded PDF → Opus extracts {boat,sail,owner,cls,division} (reuses the Lab-0 `extract` machinery;
-JS-rendered hubs that a fetch can't read → paste/upload fallback) → per-team name/sail#/owner/model; (2) **handicaps =
+truly-JS-rendered hubs → paste/upload fallback) → per-team name/sail#/owner/model; (2) **handicaps =
 the ORC public cert DB** (`data.orc.org/public/WPub.dll?action=DownRMS&CountryId=<cc>&ext=json`,
 utf-8-sig, cached) with GPH + ToT/ToD incl. race-specific columns (Bayview's `US_BAYMAC_CV/SH_TOT` picked
 by race+course, else generic `TMF_Offshore`), matched by sail#→yacht-name. `POST /api/fleet/import
@@ -1222,6 +1222,26 @@ bayviewmack2025: 108 YB entries, 58 ORC-matched / 653 USA certs — lapsed 2025 
 live 2026 race matches better) + Playwright (card + website inputs render, 0 errors). Dormant race (2026
 unpublished) degrades to a "paste the entry list" note. Files: fleetimport.py(new), shared/race_def.py
 (FleetEntry sail/source + fleet_blob), extract.py (reused), main.py, web/app.js, test_fleet_import.py(new).
+
+**IFRAME-FOLLOW for the Fleet URL import — SHIPPED 2026-07-01 (the bycmack `current-entries` page now
+works).** User asked to make a "JS-rendered" fleet list ingest from a URL. Diagnosed against the REAL page
+(`https://bycmack.com/current-entries/`) — it's NOT JS-rendered: it's a WordPress/Elementor page that embeds
+the entry list one hop away in an **`<iframe src="https://cf.bycmack.com/entries.cfm">`** (a server-rendered
+~500 KB ColdFusion table), so the outer fetch never saw the list. Three-part fix, all in the shared `extract`
+layer so NOR/SI ingestion benefits too: (1) **`extract.text_from_url` now follows content iframes** one level
+deep (bounded: ≤3, analytics/ad denylist, error-tolerant; `follow_iframes=True` default, opt-out param leaves
+the old behavior); (2) `fetch(url, timeout=)` + the iframe fetch uses a longer `LAB_IFRAME_TIMEOUT`=60 s + one
+retry (entries.cfm is slow — 5–20 s + occasionally resets, page literally warns "large file, be patient");
+(3) `fleetimport._llm_entry_list` output bumped to `LAB_ENTRY_MAX_TOKENS`=20 000 (202 boats overflowed the
+old 8 000-token cap → truncated JSON → parse fail). VERIFIED the REAL PATH end-to-end (the process lesson —
+don't trust mocks): unit `test_iframe_follow` (mocked outer+iframe, analytics skipped, opt-out) + LIVE
+`roster_from_url(bycmack)` = **202 boats** (incl. our own C4 · CAN 100 · Matt Lane) + the actual `POST
+/api/fleet/import` endpoint = 200, **202 boats / 106 ORC-matched / 688 USA certs, ~115 s** (slow site + Opus
+on 202 boats + ORC DB; the UI busy note now sets that expectation; `api()` has no client timeout + the
+gateway already allows the 2-min synthesis, so it's fine). This is the **live 2026 Bayview Mackinac fleet** —
+so even though the YB *tracker* feed is still dormant, the entry list + ORC handicaps now import for the real
+race. Files: extract.py (iframe-follow + timeout param), fleetimport.py (token budget), web/app.js (busy note),
+test_fleet_import.py (test).
 
 **Over-correction guards (why this won't distort the route):** discussed 2026-06-30 — the model can't run
 away (deadband + floor + conservative slopes; ~6% upwind at 2 m, downwind barely touched), it's OFF by

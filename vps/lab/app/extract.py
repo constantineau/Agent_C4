@@ -9,6 +9,7 @@ import io
 import json
 import os
 import re
+import time
 import urllib.request
 
 import pypdf
@@ -16,13 +17,14 @@ import pypdf
 MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-8")
 API_KEY = os.environ.get("ANTHROPIC_API_KEY", "").strip()
 MAX_DOC_CHARS = int(os.environ.get("LAB_MAX_DOC_CHARS", "300000"))
+IFRAME_TIMEOUT = int(os.environ.get("LAB_IFRAME_TIMEOUT", "60"))   # embedded entry apps can be slow
 _UA = {"User-Agent": "Mozilla/5.0 (C4 Performance Lab race-doc ingest)"}
 
 
-def fetch(url: str):
+def fetch(url: str, timeout: int = 30):
     """GET a URL → (content_type, raw_bytes). HTTP errors raise."""
     req = urllib.request.Request(url, headers=_UA)
-    with urllib.request.urlopen(req, timeout=30) as r:
+    with urllib.request.urlopen(req, timeout=timeout) as r:
         return (r.headers.get("Content-Type", "") or "").lower(), r.read()
 
 
@@ -31,17 +33,54 @@ def pdf_text(raw: bytes) -> str:
     return "\n".join((p.extract_text() or "") for p in reader.pages)
 
 
-def text_from_url(url: str) -> tuple[str, str]:
-    """(label, extracted_text) for a URL — PDF or HTML."""
+def _html_to_text(html: str) -> str:
+    text = re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", html, flags=re.S | re.I)
+    text = re.sub(r"<[^>]+>", " ", text)
+    return re.sub(r"\s+", " ", text)
+
+
+_IFRAME_SRC = re.compile(r'<iframe[^>]+src=["\']([^"\']+)["\']', re.I)
+# non-content iframes to skip (ads/analytics/social) so we don't waste fetches or add noise
+_IFRAME_SKIP = ("google.com", "googletagmanager", "doubleclick", "facebook.", "youtube.",
+                "gstatic", "recaptcha", "/gtag", "analytics", "hotjar", "twitter.")
+
+
+def text_from_url(url: str, follow_iframes: bool = True) -> tuple[str, str]:
+    """(label, extracted_text) for a URL — PDF or HTML. HTML content embedded one level deep in a
+    content `<iframe>` is followed and appended (bounded): regatta sites commonly serve the entry
+    list / results from a separate app inside an iframe (e.g. bycmack's `current-entries` embeds
+    `cf.bycmack.com/entries.cfm`), so the visible list is absent from the outer page's own HTML."""
     ctype, raw = fetch(url)
     label = url.rsplit("/", 1)[-1] or url
     if "pdf" in ctype or url.lower().endswith(".pdf"):
         return label, pdf_text(raw)
-    # HTML: strip tags to plain-ish text
     html = raw.decode("utf-8", "ignore")
-    text = re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", html, flags=re.S | re.I)
-    text = re.sub(r"<[^>]+>", " ", text)
-    return label, re.sub(r"\s+", " ", text)
+    text = _html_to_text(html)
+    if follow_iframes:
+        from urllib.parse import urljoin
+        seen = set()
+        for src in _IFRAME_SRC.findall(html):
+            full = urljoin(url, src)
+            low = full.lower()
+            if (not low.startswith(("http://", "https://")) or full in seen
+                    or any(s in low for s in _IFRAME_SKIP)):
+                continue
+            seen.add(full)
+            if len(seen) > 3:                     # bound the fan-out; one level deep, no recursion
+                break
+            # embedded entry-list apps (ColdFusion/etc.) can be slow + flaky (bycmack's entries.cfm
+            # is a ~500 KB dynamic page that takes 5–20 s and sometimes resets) → longer timeout + 1 retry
+            for attempt in range(2):
+                try:
+                    ct, rb = fetch(full, timeout=IFRAME_TIMEOUT)
+                    text += "\n" + (pdf_text(rb) if ("pdf" in ct or low.endswith(".pdf"))
+                                    else _html_to_text(rb.decode("utf-8", "ignore")))
+                    break
+                except Exception:
+                    if attempt:                   # a dead/blocked iframe never breaks the outer fetch
+                        break
+                    time.sleep(1.5)
+    return label, text
 
 
 _PDF_LINK = re.compile(r'<a[^>]+href=["\']([^"\']+\.pdf[^"\']*)["\'][^>]*>(.*?)</a>',

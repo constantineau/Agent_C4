@@ -123,6 +123,33 @@ def test_website_empty():
     print("PASS website_empty: no boats → graceful 'paste/upload' note")
 
 
+def test_iframe_follow():
+    # regatta sites often embed the entry list in an <iframe> from a separate app (e.g. bycmack's
+    # current-entries → cf.bycmack.com/entries.cfm). text_from_url must follow it + skip analytics.
+    from app import extract
+    saved = extract.fetch
+    OUTER = ('<html><body><div>page chrome, no list here</div>'
+             '<iframe id="advanced_iframe" src="https://cf.example.com/entries.cfm" width="100%"></iframe>'
+             '<iframe src="https://doubleclick.net/ad"></iframe></body></html>')
+    INNER = '<table><tr><td>Yacht Name</td><td>Sail Number</td></tr><tr><td>C4</td><td>CAN 100</td></tr></table>'
+    def fake(url, timeout=30):
+        if "doubleclick" in url:
+            raise AssertionError("analytics iframe must be skipped, not fetched")
+        if "entries.cfm" in url:
+            return ("text/html", INNER.encode())
+        return ("text/html", OUTER.encode())
+    extract.fetch = fake
+    try:
+        _label, text = extract.text_from_url("https://example.com/current-entries/")
+        assert "Yacht Name" in text and "C4" in text and "CAN 100" in text, text[:200]
+        # follow_iframes=False leaves the outer page alone (unchanged NOR/SI behavior)
+        _l2, t2 = extract.text_from_url("https://example.com/current-entries/", follow_iframes=False)
+        assert "C4" not in t2, t2[:200]
+    finally:
+        extract.fetch = saved
+    print("PASS iframe_follow: entry list inside an <iframe> is followed + appended; analytics skipped; opt-out works")
+
+
 def _live():
     import urllib.request
     # restore real network
@@ -140,7 +167,7 @@ def _live():
 
 if __name__ == "__main__":
     test_roster_from_yb(); test_orc_match_and_race_col(); test_generic_col_fallback(); test_import_fleet_both()
-    test_website_source(); test_yachtscoring_parse(); test_website_empty()
+    test_website_source(); test_yachtscoring_parse(); test_website_empty(); test_iframe_follow()
     if "--live" in sys.argv:
         _live()
     print("\nALL FLEET-IMPORT TESTS PASSED")

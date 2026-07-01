@@ -198,7 +198,9 @@ def _llm_entry_list(text):
     import anthropic
     client = anthropic.Anthropic(api_key=extract.API_KEY)
     resp = client.messages.create(
-        model=extract.MODEL, max_tokens=8000,
+        # a big fleet (Bayview Mackinac is ~180 boats) needs plenty of output room, or the JSON
+        # truncates mid-array and fails to parse (env-tunable).
+        model=extract.MODEL, max_tokens=int(os.environ.get("LAB_ENTRY_MAX_TOKENS", "20000")),
         system="You extract a sailing race entry/registration list into structured JSON for a "
                "race-strategy tool. Only real entered boats; never invent boats or handicaps.",
         messages=[{"role": "user", "content": _ENTRY_PROMPT + "\n\nPAGE CONTENT:\n"

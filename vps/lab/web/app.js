@@ -1412,7 +1412,11 @@ function _fleetApplyResult(r) {
   Lab.fleetMsg = "Imported " + bits.join(" · ") + " — review below, then click Save roster.";
 }
 async function fleetAutoImport(source, extra) {
-  Lab.fleetBusy = true; Lab.fleetMsg = "Importing from public data…"; paintFleet();
+  Lab.fleetBusy = true;
+  // a big fleet from a slow entry-list site (e.g. Bayview Mackinac ~200 boats via bycmack's embedded
+  // entries page) + ORC enrichment can take a minute or two — set expectations so the wait isn't a mystery.
+  Lab.fleetMsg = "Importing from public data… (a large fleet or a slow site can take a minute or two)";
+  paintFleet();
   try {
     const r = await (await apiPost("/api/fleet/import", Object.assign(
       { race_id: Lab.sel, source, country: _fleetCC() }, extra || {}))).json();
