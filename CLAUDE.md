@@ -1059,6 +1059,23 @@ through the same stream, so the variants/fan reflect a fair/foul current too (ve
 playbook result carries the LMHOFS `current` status). Tunables `CURRENTS_ENABLED` / `CURRENTS_STEP_H` /
 `CURRENTS_MAX_SLICES` / `CURRENTS_FETCH_TIMEOUT` / `CURRENTS_CYCLE_LAG_H`.
 
+**Wind-over-water 2nd-order correction (routing-fidelity 2d lever b): SHIPPED.** Lever a crabs the
+DISPLACEMENT through the current (boat-over-ground = boat-through-water + drift) but still indexed the
+polar by the GROUND wind. The boat actually sails relative to the WATER it floats on, so the wind the
+sails feel is the ground wind MINUS the current vector — `W_water = W_ground − C`. `optimizer._wind_
+over_water(tws, twd, cset, cdrift)` does the vector subtraction, and `route_leg`'s node loop converts the
+forecast wind to over-water wind before ALL the polar/TWA math (direct-lay, VMG angles, cone, layline,
+`expand`); the displacement still adds the drift over ground (lever a) — so a foul current that opposes
+the wind raises the apparent TWS (+ a fair one lowers it) and a cross current veers the apparent TWD, and
+the routed angles/ETAs reflect it. Applies wherever a `cur` is threaded (main optimize + per-model fan +
+playbook variants) with no new wiring — it reads the same `cur`. **Safe no-op** where there's no current
+(ZeroCurrent → drift 0 → wind unchanged), so it's byte-identical off the Great-Lakes domain or with
+currents disabled; env-flag `ROUTE_WIND_OVER_WATER` (default ON) for A/B. Verified `test_routing_windwater.py`
+(the vector math — following current → less apparent wind, opposing → more, cross → veer, none → unchanged,
+flag-off → ground wind; + integration — the routed ETA changes under a 2 kn current, byte-identical with
+none) + the full routing regression suite green (currents/2c/2d/2g/realized/waves — the change is small
+enough the existing fair-cuts/foul-raises/crab assertions still hold). Tunable `ROUTE_WIND_OVER_WATER`.
+
 **Realized (achievable) speed — helm + sea state (routing-fidelity 2d lever d, fuzzy baseline): PHASE 1
 + PHASE 2 SHIPPED.** The ORC polar is a FLAT-WATER, perfectly-sailed target; the boat never quite makes
 it. The optimizer routes on **realized** speed = `polar × helm_factor × wave_factor(hs, twa)`, so ETAs

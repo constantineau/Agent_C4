@@ -43,6 +43,9 @@ def _flag(name, default="1"):
 # #1 LAYLINE COMMIT: once a node can lay the mark (bears more than the VMG angle off the wind axis),
 # drop the opposite-tack headings so it sails the layline instead of free-tacking up to the mark.
 LAYLINE_COMMIT = _flag("ROUTE_LAYLINE_COMMIT")
+# WIND-OVER-WATER (2d lever b): index the polar by the wind the boat feels over the WATER (ground wind
+# − current), not the ground wind. Default ON; a no-op wherever there's no current, so it's safe.
+WIND_OVER_WATER = _flag("ROUTE_WIND_OVER_WATER")
 LAYLINE_COMMIT_EPS = float(os.environ.get("ROUTE_LAYLINE_COMMIT_EPS", "2.0"))  # deg slack before committing
 LAYLINE_COMMIT_NM = float(os.environ.get("ROUTE_LAYLINE_COMMIT_NM", "10.0"))   # only commit within this of the mark (final approach; play shifts farther out)
 # #2 CUMULATIVE TACK COST: the maneuver cost accrues along the whole path (not a one-step haircut), so
@@ -137,6 +140,24 @@ def _advance(lat, lon, brg, dist_nm):
     b = math.radians(brg)
     return (lat + dist_nm * math.cos(b) / 60.0,
             lon + dist_nm * math.sin(b) / (60.0 * max(0.1, math.cos(math.radians(lat)))))
+
+
+def _wind_over_water(tws, twd, cset, cdrift):
+    """Wind-over-water 2nd-order correction (routing-fidelity 2d lever b). The boat sails relative to
+    the WATER it floats on, not the ground; the forecast wind is ground-referenced. In a current the
+    water (and boat) drift at (set, drift), so the wind the sails actually feel is the ground wind MINUS
+    the current vector — `W_water = W_ground − C`. Returns the over-water (tws, twd) so the polar is
+    indexed by the TWA/TWS the boat truly sails. (The displacement still adds the current's drift over
+    the ground separately — that's the 1st-order crab already in route_leg.) No current → unchanged."""
+    if not WIND_OVER_WATER or cdrift is None or cdrift <= 0.01 or tws is None:
+        return tws, twd
+    wdir = math.radians((twd + 180.0) % 360)          # wind velocity vector points TOWARD twd+180
+    wx, wy = tws * math.sin(wdir), tws * math.cos(wdir)   # (east, north)
+    cdir = math.radians(cset % 360)                    # current sets TOWARD `cset`
+    ox, oy = wx - cdrift * math.sin(cdir), wy - cdrift * math.cos(cdir)   # W_ground − C
+    tws_w = math.hypot(ox, oy)
+    twd_w = (math.degrees(math.atan2(ox, oy)) + 180.0) % 360   # back to a FROM bearing
+    return tws_w, twd_w
 
 
 def _xtrack_nm(slat, slon, dlat, dlon, plat, plon):
@@ -502,6 +523,9 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
         cand = {}
         for node in frontier:
             tws, twd = wind(node["lat"], node["lon"], node["t"])
+            if cur is not None:            # 2d lever b: the sails feel the wind over the WATER
+                _cs, _cd = cur.current_at(node["lat"], node["lon"], node["t"])
+                tws, twd = _wind_over_water(tws, twd, _cs, _cd)
             dmark = _hav_nm(node["lat"], node["lon"], dlat, dlon)
             bmark = _bearing(node["lat"], node["lon"], dlat, dlon)
             twa_m = abs(_wrap180(bmark - twd))
