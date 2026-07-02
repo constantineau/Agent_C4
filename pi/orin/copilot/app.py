@@ -4,9 +4,9 @@ Endpoints:
   GET  /health    — reachability of the engine + LLM, playbook + model status
   GET  /tools     — the bounded tool surface the LLM is allowed (introspection)
   POST /brief      — produce a DecisionBrief for the current situation (+ optional question)
-  POST /narrate    — proactive crew callouts + a spoken line for what's newly worth saying (PUSH)
-  POST /narrate/reset — clear the per-route speak-once dedup (a race / course change)
-  GET  /coach      — the proactive AUTO-COACH state: latest spoken line + active callouts + history,
+  POST /narrate    — proactive crew callouts + a coach line for what's newly worth showing (PUSH)
+  POST /narrate/reset — clear the per-route show-once dedup (a race / course change)
+  GET  /coach      — the proactive AUTO-COACH state: latest coach line + active callouts + history,
                      produced by a background timer (the copilot volunteers coaching on a cadence)
   GET  /adherence — playbook-adherence tile (on-plan / branch-trigger-fired; deterministic)
   GET  /snapshot  — raw gathered engine facts (debug / "show me what you saw")
@@ -103,15 +103,15 @@ def brief(req: BriefRequest):
 
 @app.post("/narrate")
 def narrate(req: NarrateRequest):
-    """Proactive crew callouts (PUSH) + a spoken line for what's newly worth saying. Stateful per
-    route (speak-once dedup) so the iPad can poll it; `active` is the full set for the banner,
+    """Proactive crew callouts (PUSH) + a coach line for what's newly worth showing. Stateful per
+    route (show-once dedup) so the iPad can poll it; `active` is the full set for the banner,
     `spoken` is the LLM-phrased top of the NEW callouts (deterministic fallback)."""
     return copilot.make_narration(route=req.route, hoisted=req.hoisted, use_llm=req.use_llm)
 
 
 @app.post("/narrate/reset")
 def narrate_reset(req: NarrateRequest):
-    """Clear the per-route speak-once dedup state (a race / course change)."""
+    """Clear the per-route show-once dedup state (a race / course change)."""
     return copilot.reset_narration(route=req.route)
 
 
@@ -133,11 +133,11 @@ def detail(req: DetailRequest):
 
 @app.get("/coach")
 def coach():
-    """The proactive auto-coach state: the latest spoken line + the active callouts + a short rolling
+    """The proactive auto-coach state: the latest coach line + the active callouts + a short rolling
     history, produced by the on-Orin timer (no recompute here — cheap to poll). Honest about whether
     the timer is running and when it last ticked. This is the canonical PROACTIVE surface; POST
     /narrate is the on-demand/debug equivalent (don't poll both for the same route — they share the
-    speak-once dedup)."""
+    show-once dedup)."""
     return coach_mod.COACH.state()
 
 

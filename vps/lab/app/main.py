@@ -491,6 +491,7 @@ async def crossovers():
         m["inventory"] = b["sail_inventory"]        # the boat's real inventory (incl. J2/J3)
     m["jib_crossovers"] = jibs
     m["crossovers"] = sailplan.crossovers_specialized(jibs)   # chart shows the real jib per TWS row
+    m["overlaps"] = sailplan.overlaps_specialized(jibs)       # toss-up bands, jib relabelled to match
     m["boat_id"] = b.get("boat_id") or m.get("boat_id")
     return m
 

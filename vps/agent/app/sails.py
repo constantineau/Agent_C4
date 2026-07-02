@@ -8,10 +8,20 @@ far to the next crossover/peel. Feeds the iPad sail-range dial and the get_sail_
 The inventory is jib (J1) upwind → A2 (tight reach) → A3 (broad reach) → S2 (run); the
 crossover TWAs shift with TWS, so zones are recomputed from the nearest TWS bucket.
 """
+import json
 import os
 import re
 
-_GUIDE = os.path.join(os.path.dirname(__file__), "..", "knowledge", "sr33_speed_guide.md")
+_HERE = os.path.dirname(__file__)
+_GUIDE = os.path.join(_HERE, "..", "knowledge", "sr33_speed_guide.md")
+# The crossover model (same file the Lab reads) carries the per-TWS "toss-up" overlap bands — two sails
+# within ~1.5% of target, the near-ties the winner-take-all zones hide. Baked into the agent/engine
+# image's knowledge/ dir; falls back to the repo seed path for local runs.
+_XOVER_CANDS = [
+    os.environ.get("CROSSOVERS_FILE"),
+    os.path.join(_HERE, "..", "knowledge", "sr33_crossovers.json"),
+    os.path.join(_HERE, "..", "..", "db", "seed", "sr33_crossovers.json"),
+]
 
 # Friendly order + colors (hex) used by the dial, keyed by sail family prefix.
 SAIL_ORDER = ["J1", "A2", "A3", "S2"]
@@ -64,6 +74,30 @@ def _parse_guide():
 
 
 _SECTIONS = _parse_guide()
+
+
+def _load_overlaps():
+    """{tws_bucket:int -> [ {sails:[s1,s2], twa_min, twa_max}, … ]} from the crossover model, or {}."""
+    for p in _XOVER_CANDS:
+        if p and os.path.exists(p):
+            try:
+                with open(p) as f:
+                    d = json.load(f)
+                return {int(k): v for k, v in (d.get("overlaps") or {}).items()}
+            except (OSError, ValueError, TypeError):
+                continue
+    return {}
+
+
+_OVERLAPS = _load_overlaps()
+
+
+def _overlaps_for(tws_bucket):
+    """The toss-up bands for a TWS bucket (nearest key), TWA-sorted."""
+    if not _OVERLAPS or tws_bucket is None:
+        return []
+    b = min(_OVERLAPS.keys(), key=lambda k: abs(k - tws_bucket))
+    return sorted(_OVERLAPS.get(b, []), key=lambda o: o.get("twa_min", 0))
 
 
 def _nearest_tws(tws):
@@ -124,22 +158,43 @@ def get_sail_advice(tws: float = None, twa: float = None, hoisted: str = None):
                       "deg_away": round(down["twa_min"] - a_twa, 1), "direction": "bear away"}
     row = _nearest_row(rows, a_twa)
     hoisted_fam = _family(hoisted)
-    wrong = hoisted_fam is not None and optimal is not None and hoisted_fam != optimal
 
+    # toss-up: sails within ~1.5% of target AT this TWA (from the crossover overlap bands). The zones are
+    # winner-take-all, so a near-tied sail reads as "wrong" — but if the hoisted sail is a toss-up with the
+    # optimal one, it's fine: carry either, no need to peel.
+    overlaps = _overlaps_for(key)
+    cooptimal = set()
+    for o in overlaps:
+        if o["twa_min"] <= a_twa <= o["twa_max"]:
+            cooptimal.update(o.get("sails", []))
+    tossup_with = sorted(s for s in cooptimal if s != optimal) if optimal in cooptimal else []
+    hoisted_ok_tossup = (hoisted_fam is not None and hoisted_fam != optimal
+                         and optimal in cooptimal and hoisted_fam in cooptimal)
+    wrong = (hoisted_fam is not None and optimal is not None
+             and hoisted_fam != optimal and not hoisted_ok_tossup)
+
+    _lbl = lambda s: SAIL_LABEL.get(s, s)
     if wrong:
-        rec = (f"Optimal sail is {SAIL_LABEL.get(optimal, optimal)} but {SAIL_LABEL.get(hoisted_fam, hoisted_fam)} "
-               f"is up — peel/change to {SAIL_LABEL.get(optimal, optimal)}.")
+        rec = f"Optimal sail is {_lbl(optimal)} but {_lbl(hoisted_fam)} is up — peel/change to {_lbl(optimal)}."
+    elif hoisted_ok_tossup:
+        rec = (f"{_lbl(hoisted_fam)} is fine — a toss-up with {_lbl(optimal)} here (within ~1.5% of target); "
+               f"no need to peel.")
     elif next_xover and next_xover["deg_away"] <= 8:
-        rec = (f"{SAIL_LABEL.get(optimal, optimal)} is right; {next_xover['to_sail']} peel coming up at "
+        rec = (f"{_lbl(optimal)} is right; {next_xover['to_sail']} peel coming up at "
                f"{next_xover['at_twa']}° TWA ({next_xover['deg_away']}° away).")
+    elif tossup_with:
+        rec = (f"{_lbl(optimal)} — but a toss-up with {', '.join(_lbl(s) for s in tossup_with)} here; "
+               f"carry either.")
     else:
-        rec = f"{SAIL_LABEL.get(optimal, optimal)} is the right sail for {round(a_twa)}° TWA / {round(tws)} kn."
+        rec = f"{_lbl(optimal)} is the right sail for {round(a_twa)}° TWA / {round(tws)} kts."
 
     return {
         "available": True,
         "tws_used": key, "twa": round(twa, 1), "twa_abs": round(a_twa, 1), "tack": tack,
         "zones": zones,
+        "overlaps": overlaps,
         "optimal_sail": optimal,
+        "tossup_with": tossup_with,
         "hoisted_sail": hoisted_fam,
         "wrong_sail": wrong,
         "in_range": (not wrong) if cur else False,
@@ -147,5 +202,5 @@ def get_sail_advice(tws: float = None, twa: float = None, hoisted: str = None):
         "targets": None if not row else {"btv": row["btv"], "vmg": row["vmg"],
                                           "awa": row["awa"], "heel": row["heel"]},
         "recommendation": rec,
-        "note": f"Zones from the nearest TWS bucket ({key} kn); crossovers shift with breeze.",
+        "note": f"Zones from the nearest TWS bucket ({key} kts); crossovers shift with breeze.",
     }

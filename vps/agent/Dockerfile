@@ -9,6 +9,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY shared/ ./shared/
 COPY vps/agent/knowledge/ ./knowledge/
+# the sail crossover model (its per-TWS toss-up overlaps feed the /sail dial); canonical copy in db/seed
+COPY vps/db/seed/sr33_crossovers.json ./knowledge/sr33_crossovers.json
 COPY vps/agent/app/ ./app/
 
 EXPOSE 8000

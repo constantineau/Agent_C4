@@ -153,12 +153,12 @@ def _template_narrative(m, mode):
     bs, pol, w = m["boatspeed"], m["polar"], m["wind"]
     bits = [f"{mode.capitalize()} — {m['duration_min']:.0f} min."]
     if bs.get("avg_stw_kn") is not None:
-        line = f"Avg boatspeed {bs['avg_stw_kn']} kn (max {bs['max_stw_kn']})"
+        line = f"Avg boatspeed {bs['avg_stw_kn']} kts (max {bs['max_stw_kn']})"
         if pol.get("percent_of_polar") is not None:
-            line += f", ~{pol['percent_of_polar']}% of the {pol['target_stw_kn']} kn polar target"
+            line += f", ~{pol['percent_of_polar']}% of the {pol['target_stw_kn']} kts polar target"
         bits.append(line + f"; {bs.get('distance_nm', '?')} nm sailed.")
     if w.get("tws_mean_kn") is not None:
-        bits.append(f"Breeze {w['tws_min_kn']}–{w['tws_max_kn']} kn (mean {w['tws_mean_kn']}), "
+        bits.append(f"Breeze {w['tws_min_kn']}–{w['tws_max_kn']} kts (mean {w['tws_mean_kn']}), "
                     f"TWD ~{w['twd_mean_deg']}° oscillating ±{round((w['twd_oscillation_deg'] or 0)/2)}°.")
     if m["heel"].get("avg_abs_deg") is not None:
         bits.append(f"Heel avg {m['heel']['avg_abs_deg']}°, peak {m['heel']['max_abs_deg']}°.")

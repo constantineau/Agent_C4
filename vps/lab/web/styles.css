@@ -336,6 +336,10 @@ a.mini { text-decoration: none; display: inline-block; }
 .xo-zone { position: absolute; top: 0; height: 100%; display: flex; align-items: center;
   justify-content: center; font-size: 10px; font-weight: 700; color: #04121f;
   border-right: 1px solid rgba(0,0,0,.25); }
+/* toss-up overlay: a two-colour diagonal hatch over the solid zones marking a near-tie (carry either) */
+.xo-ol { position: absolute; top: 0; height: 100%; display: flex; align-items: flex-start;
+  justify-content: center; font-size: 10px; font-weight: 800; color: rgba(4,18,31,.75);
+  border-left: 1px dashed rgba(0,0,0,.55); border-right: 1px dashed rgba(0,0,0,.55); }
 .pg-wrap { overflow-x: auto; }
 table.pg { border-collapse: collapse; font-size: 11px; margin-top: 4px; }
 table.pg th, table.pg td { border: 1px solid var(--line); padding: 3px 7px; text-align: right; color: var(--ink); }

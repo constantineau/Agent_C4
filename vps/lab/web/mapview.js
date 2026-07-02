@@ -389,11 +389,11 @@ const MapView = (function () {
     const modelLeg = hasModels ? `<span class="cc-sep"></span><span class="cc-lbl">Model routes</span>` +
         R.candidate_paths.map((cp) => `<span class="mv-sw"><i style="background:${modelColor(cp.model)}"></i>${cp.model.toUpperCase()}` +
           `${cp.total_hours != null ? " " + cp.total_hours + "h" : ""} <small>${cp.favored_side || ""}</small></span>`).join("") : "";
-    const curLeg = hasCurrent ? `<span class="cc-sep"></span><span class="mv-sw"><i style="background:#1bb9c4"></i>current (set/drift${R.current_grid.peak_drift_kn ? `, pk ${R.current_grid.peak_drift_kn} kn` : ""})</span>` : "";
+    const curLeg = hasCurrent ? `<span class="cc-sep"></span><span class="mv-sw"><i style="background:#1bb9c4"></i>current (set/drift${R.current_grid.peak_drift_kn ? `, pk ${R.current_grid.peak_drift_kn} kts` : ""})</span>` : "";
     const hsStops = [[0.3, "<0.5"], [0.75, "0.5–1"], [1.25, "1–1.5"], [2, "1.5–2.5"], [3, "2.5+"]];
     const waveLeg = hasWaves ? `<span class="cc-sep"></span><span class="cc-lbl">Sea m${R.wave_grid.peak_hs_m ? ` (pk ${R.wave_grid.peak_hs_m})` : ""}</span>` +
         hsStops.map(([v, lbl]) => `<span class="mv-sw"><i style="background:${hsColor(v)}"></i>${lbl}</span>`).join("") : "";
-    const legend = `<div class="cc-grp cc-legend"><span class="cc-lbl">Wind kn</span>${sw}
+    const legend = `<div class="cc-grp cc-legend"><span class="cc-lbl">Wind kts</span>${sw}
         <span class="mv-legnote">opacity = confidence (faint = models split)</span>${curLeg}${waveLeg}${modelLeg}</div>`;
 
     const CC = L.Control.extend({

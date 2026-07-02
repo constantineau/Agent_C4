@@ -103,8 +103,8 @@ def _conditions():
                 if tgt and stw < tgt * (1 - POLAR_DEFICIT):
                     pct = round(100 * stw / tgt)
                     out.append({"key": "polar_deficit", "kind": "polar_deficit", "severity": "warn",
-                                "message": f"Boatspeed {stw} kn — {pct}% of {tgt} kn target "
-                                           f"({round(twa)}° TWA / {round(tws)} kn)."})
+                                "message": f"Boatspeed {stw} kts — {pct}% of {tgt} kts target "
+                                           f"({round(twa)}° TWA / {round(tws)} kts)."})
     except Exception:
         pass
 

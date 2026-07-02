@@ -34,7 +34,7 @@ def gather(engine: EngineClient, route=None, hoisted=None) -> dict:
     snap["get_tactics"] = engine.tactics(route)
     snap["get_sail_advice"] = engine.sail(hoisted=hoisted)
     snap["get_fatigue"] = engine.fatigue()
-    snap["get_ais"] = engine.ais()        # collision watch (safety — always legal, voiced top-priority)
+    snap["get_ais"] = engine.ais()        # collision watch (safety — always legal, shown top-priority)
     snap["get_fleet"] = engine.fleet()    # handicap-rival watch (corrected-time tactical callout)
     snap["get_deviation"] = engine.deviation(route)   # Lab-3 trigger (a): off the playbook line?
     snap["get_drift"] = engine.drift(route)           # Lab-3 trigger (b): forecast moved since freeze?
@@ -210,13 +210,13 @@ def make_brief(question: str = "", route=None, hoisted=None, use_llm: bool | Non
 
 
 def make_narration(route=None, hoisted=None, use_llm: bool | None = None) -> dict:
-    """Proactive crew callouts for the current situation + a spoken line for what's newly worth
-    saying. This is the PUSH counterpart to make_brief's PULL: a deterministic engine watches the
-    facts + the frozen playbook and surfaces the few things worth SAYING right now (a rounding
+    """Proactive crew callouts for the current situation + a coach line for what's newly worth
+    showing. This is the PUSH counterpart to make_brief's PULL: a deterministic engine watches the
+    facts + the frozen playbook and surfaces the few things worth SHOWING right now (a rounding
     coming up, a playbook branch firing, a sail change-down, a helm rotation, stale instruments).
 
     Stateful per route (`narrate.step` holds raise-slow/clear-fast dedup): repeated polls only
-    'voice' callouts that just crossed their confirmation threshold (speak-once), exactly like the
+    'surface' callouts that just crossed their confirmation threshold (show-once), exactly like the
     cloud alerting loop — so the iPad can poll this every ~15 s. `active` is the full confirmed set
     for the banner; `spoken` is the LLM-phrased top of the NEW callouts, with the deterministic
     callout text as the always-available fallback."""
@@ -257,6 +257,6 @@ def make_adherence(route=None) -> dict:
 
 
 def reset_narration(route=None) -> dict:
-    """Clear the per-route speak-once dedup state (a race / course change → re-voice from scratch)."""
+    """Clear the per-route show-once dedup state (a race / course change → re-surface from scratch)."""
     narrate_mod.reset(route)
     return {"reset": route or "all"}

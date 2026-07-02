@@ -211,7 +211,7 @@ const Plot = (function () {
       <div class="nrow"><span class="lbl">Next mark</span><span class="legtag">${nav.leg.type}</span></div>
       <div class="nrow"><span class="big">${n.name}</span><span class="big">${n.distance_nm} nm</span></div>
       <div class="nrow"><span class="sub">brg ${n.bearing_deg}°</span><span class="sub">ETA ${eta}</span></div>
-      <div class="nrow"><span class="sub">wind ${nav.wind.twd ?? "–"}° @ ${nav.wind.tws ?? "–"} kn</span><span class="sub">${nav.remaining_nm} nm to finish</span></div>
+      <div class="nrow"><span class="sub">wind ${nav.wind.twd ?? "–"}° @ ${nav.wind.tws ?? "–"} kts</span><span class="sub">${nav.remaining_nm} nm to finish</span></div>
       ${nav.layline_call ? `<div class="${callCls}">${nav.layline_call}</div>` : ""}
       ${tacticsHtml()}
       ${routeHtml()}`;

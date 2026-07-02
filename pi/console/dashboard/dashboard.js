@@ -444,7 +444,7 @@
       if (a.own_fix === false) {
         const rows = [{ hdr: true, cols: ["vessel", "SOG"] }].concat(
           tgts.slice(0, 6).map((t, i) => ({ label: aisName(t), emph: i === 0,
-            cols: [t.sog != null ? r1(t.sog) + " kn" : "—"] })));
+            cols: [t.sog != null ? r1(t.sog) + " kts" : "—"] })));
         return { status: "watch", value: String(tgts.length), sub: "no own fix", rows: rows,
           why: tgts.length + " AIS contact" + (tgts.length === 1 ? "" : "s") + " heard, but no own-ship position fix — range/CPA/TCPA unavailable.",
           consider: "AIS up but no GPS fix — geometry is blind; verify own position.",
@@ -615,7 +615,7 @@
     if (App.src === "live") render();
   }
   /* poll the proactive auto-coach: the Orin runs the narration engine on a timer and HOLDS the
-     latest spoken line; we just read it (no recompute) and show what the copilot last volunteered.
+     latest coach line; we just read it (no recompute) and show what the copilot last volunteered.
      A failure leaves the last good read. */
   async function fetchCoach() {
     if (App.src !== "live") return;
@@ -734,7 +734,7 @@
       const bt = behindTxt(d.time_behind_s);
       if (bt) m.push(metric("Pace", bt, d.time_behind_s > 0 && status !== "ok"));
       if (d.vmc_kn != null && d.vmc_optimal_kn != null)
-        m.push(metric("VMC", r1(d.vmc_kn) + "/" + r1(d.vmc_optimal_kn) + " kn", d.vmc_deficit_kn != null && d.vmc_deficit_kn > 0.3));
+        m.push(metric("VMC", r1(d.vmc_kn) + "/" + r1(d.vmc_optimal_kn) + " kts", d.vmc_deficit_kn != null && d.vmc_deficit_kn > 0.3));
       metricsEl.innerHTML = m.join("");
       if (d.what_flips_it) { flipEl.hidden = false; flipEl.innerHTML = "Branch trigger — <b>" + stripTags(d.what_flips_it) + "</b>"; }
       else flipEl.hidden = true;
@@ -800,14 +800,14 @@
       body = 'Forecast <b>holding</b> — ~' + (deg != null ? deg + "° drift" : "on plan");
     } else {
       const tws = (fd.drift_tws_kn != null && Math.abs(fd.drift_tws_kn) >= 1)
-        ? " · " + (fd.drift_tws_kn >= 0 ? "+" : "−") + Math.abs(Math.round(fd.drift_tws_kn)) + " kn" : "";
+        ? " · " + (fd.drift_tws_kn >= 0 ? "+" : "−") + Math.abs(Math.round(fd.drift_tws_kn)) + " kts" : "";
       body = 'Forecast drift <b>' + deg + "° " + (fd.drift_dir || "shifted") + '</b>' + tws +
         ' <span class="sd-tag">' + tag + '</span>';
     }
     el.innerHTML = '<span class="sd-dot"></span><span>' + body + '</span>';
   }
-  /* the coach speech line in the commentary panel — the last thing the copilot volunteered (from the
-     timer's spoken history), or, if nothing's been said yet, the top of the current callout banner.
+  /* the coach line in the commentary panel — the last thing the copilot volunteered (from the
+     timer's callout history), or, if nothing's been shown yet, the top of the current callout banner.
      Hidden when there's nothing to coach or off the live source. */
   function renderCoach() {
     const el = document.getElementById("coachLine");

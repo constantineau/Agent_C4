@@ -1,21 +1,21 @@
-"""Proactive crew callouts — the copilot speaks up.
+"""Proactive crew callouts — the copilot surfaces callouts.
 
 The brief / dashboard / detail surfaces are all PULL: the crew asks, or the dashboard polls for
 commentary. This module is PUSH — a deterministic callout engine watches the gathered engine
-facts + the frozen playbook and surfaces the few things worth SAYING right now: a CLOSING-TRAFFIC
+facts + the frozen playbook and surfaces the few things worth SHOWING right now: a CLOSING-TRAFFIC
 collision warning (safety — top priority, always legal in-race), a mark rounding coming up (timed
 ~15 / 10 / 5-min prep, escalating), a playbook branch trigger firing, a handicap RIVAL going ahead on
 corrected time, an upcoming sail change-down, a helm rotation, stale instruments.
 
 Every callout is GROUNDED in an engine fact and/or a playbook variant exactly like a brief item
 — the engine does the math, the callout reports it. The LLM only PHRASES the top callouts into a
-calm spoken line, and the deterministic callout text is the always-on fallback. Nothing here
+calm coach line, and the deterministic callout text is the always-on fallback. Nothing here
 originates strategy: it SELECTS/INTERPRETS the pre-authored homework + the engine's own numbers,
 which is the in-race-legal posture (RRS 41 — see the copilot README).
 
-State: a tiny in-process dedup store (per route) gives "raise slow, clear fast" + speak-once. A
-callout that just (and persistently) appeared is `new` — worth voicing; once voiced it stays in
-`active` but isn't re-voiced until it clears and returns. Single-boat, single-process service, so
+State: a tiny in-process dedup store (per route) gives "raise slow, clear fast" + show-once. A
+callout that just (and persistently) appeared is `new` — worth showing; once shown it stays in
+`active` but isn't re-surfaced until it clears and returns. Single-boat, single-process service, so
 holding module state is fine (the same shape as the cloud alerting loop).
 """
 import os
@@ -24,26 +24,26 @@ from . import brief as brief_mod
 
 _num = brief_mod._num
 
-# Collision-watch guard (mirrors the dashboard AIS tile): a CLOSING contact inside ACT → voice now
-# ("collision risk"), inside the looser WATCH → voice soon ("traffic closing"). env-tunable.
+# Collision-watch guard (mirrors the dashboard AIS tile): a CLOSING contact inside ACT → show now
+# ("collision risk"), inside the looser WATCH → show soon ("traffic closing"). env-tunable.
 AIS_ACT_CPA_NM = float(os.environ.get("COPILOT_AIS_ACT_CPA_NM", "0.5"))
 AIS_ACT_TCPA_MIN = float(os.environ.get("COPILOT_AIS_ACT_TCPA_MIN", "12"))
 AIS_WATCH_CPA_NM = float(os.environ.get("COPILOT_AIS_WATCH_CPA_NM", "1.5"))
 AIS_WATCH_TCPA_MIN = float(os.environ.get("COPILOT_AIS_WATCH_TCPA_MIN", "30"))
-# Fleet/rival callout: only voice a roster competitor whose corrected-time match is at least this
+# Fleet/rival callout: only show a roster competitor whose corrected-time match is at least this
 # confident (match × handicap-known × course-known × position-freshness), so a fuzzy/aged guess stays quiet.
 FLEET_MIN_CONF = float(os.environ.get("COPILOT_FLEET_MIN_CONF", "0.4"))
 
 # ETA thresholds (minutes-to-mark) for the staged rounding prep. Tightest matching stage wins, so
-# as the mark approaches the callout id changes (…:15 → …:10 → …:5) and each stage voices once.
+# as the mark approaches the callout id changes (…:15 → …:10 → …:5) and each stage shows once.
 ROUNDING_STAGES = [(15, "heads-up"), (10, "stage"), (5, "final")]
 
 URGENCY_RANK = {"now": 0, "soon": 1, "monitor": 2}
-# Lower = more important; the spoken line leads with the top of this order.
+# Lower = more important; the coach line leads with the top of this order.
 CATEGORY_PRIORITY = {"safety": 0, "fatigue": 1, "rounding": 2, "sail": 3,
                      "playbook": 4, "deviation": 5, "fleet": 6, "shift": 7,
                      "drift": 8, "layline": 9, "data": 10}
-# How many consecutive evaluations a callout must persist before it's "confirmed" and voiced —
+# How many consecutive evaluations a callout must persist before it's "confirmed" and shown —
 # the fuzzy-adherence hysteresis. Time-critical things fire at once; noisier reads wait one poll
 # so a single-sample blip never barks. (The engine already debounces tactical persistence — the
 # deviation/drift triggers carry their OWN Schmitt consider/commit bands, so 1 round is enough.)
@@ -60,7 +60,7 @@ def _safety_callout(ais):
     """Collision watch — the ONE thing the copilot interrupts for. The nearest CLOSING contact inside
     the guard becomes a top-priority safety callout, grounded in the boat's own AIS receiver + own
     CPA/TCPA math (always legal in-race, never RRS-41 'outside help'). The level (act/watch) is in the
-    id so an escalation watch→act re-voices, exactly like the staged rounding prep."""
+    id so an escalation watch→act re-surfaces, exactly like the staged rounding prep."""
     if not ais.get("own_fix"):
         return None                       # no own fix → CPA/TCPA meaningless; don't bark
     closing = [t for t in (ais.get("targets") or []) if t.get("closing")]
@@ -73,7 +73,7 @@ def _safety_callout(ais):
     act = cpa <= AIS_ACT_CPA_NM and tcpa <= AIS_ACT_TCPA_MIN
     watch = cpa <= AIS_WATCH_CPA_NM and tcpa <= AIS_WATCH_TCPA_MIN
     if not (act or watch):
-        return None                       # closing but still comfortably clear — nothing to say
+        return None                       # closing but still comfortably clear — nothing to show
     name = t.get("name") or f"MMSI {t.get('mmsi', '?')}"
     brg, rng = _num(t.get("bearing")), _num(t.get("range_nm"))
     detail = (f"CPA {cpa} nm in {tcpa} min"
@@ -96,9 +96,9 @@ def _corr_str(cd):
 def _fleet_callout(fleet):
     """Handicap-rival watch: the top roster competitor we're actually racing — a RIVAL (within the
     corrected-time band) or one projected AHEAD of us on corrected. The rows are already rivals-first
-    sorted; we voice the first confident one. Grounded in get_fleet (onboard: own AIS + frozen roster +
+    sorted; we show the first confident one. Grounded in get_fleet (onboard: own AIS + frozen roster +
     own corrected-time math — the in-race-legal tactical layer). Strategic, so it stays 'monitor' and
-    sits below safety/rounding/sail; speak-once dedup keeps it from nagging as the delta wiggles."""
+    sits below safety/rounding/sail; show-once dedup keeps it from nagging as the delta wiggles."""
     rows = fleet.get("fleet") or []
     method = fleet.get("scoring_method", "corrected")
     for r in rows:
@@ -130,7 +130,7 @@ def _rounding_callout(nav, snapshot, engine):
         return None
     stage = next(((m, lbl) for m, lbl in ROUNDING_STAGES if eta <= m), None)
     if stage is None:
-        return None                      # mark is still far off — nothing to say yet
+        return None                      # mark is still far off — nothing to show yet
     mins, _label = stage
     mark = nm.get("name", "the mark")
     urgency = "now" if mins <= 5 else "soon" if mins <= 10 else "monitor"
@@ -245,10 +245,10 @@ def _tactics_callouts(tac, playbook):
 
 def _deviation_callout(dev):
     """Route-deviation branch trigger (Lab-3 a): are we sailing the frozen variant's optimal track?
-    Voiced only when the engine's fuzzy status is watch/act (ok → nothing). The engine already applied
+    Shown only when the engine's fuzzy status is watch/act (ok → nothing). The engine already applied
     the Schmitt consider/commit bands, so this doesn't re-debounce. Grounded in get_deviation + the
     active variant — the copilot SELECTS/INTERPRETS the pre-authored plan, it never invents a course.
-    The status is in the id so a watch→act escalation re-voices (like the staged rounding prep)."""
+    The status is in the id so a watch→act escalation re-surfaces (like the staged rounding prep)."""
     status = dev.get("status")
     if status not in ("watch", "act"):
         return None
@@ -266,7 +266,7 @@ def _deviation_callout(dev):
         det = f"{mmss} behind variant {vid}'s optimal pace" if mmss else f"off variant {vid}'s pace"
         vdef = _num(dev.get("vmc_deficit_kn"))
         if vdef and vdef > 0:
-            det += f" (−{vdef} kn VMC)"
+            det += f" (−{vdef} kts VMC)"
     return _callout(f"deviation:{vid}:{status}", "deviation", "soon" if status == "act" else "monitor",
                     head, det, ["get_deviation", f"playbook:{vid}"],
                     "high" if status == "act" else "med")
@@ -274,7 +274,7 @@ def _deviation_callout(dev):
 
 def _drift_callout(dft):
     """Forecast-drift branch trigger (Lab-3 b): has the common forecast the plan rests on moved since
-    it was frozen? Voiced at watch/act. Grounded in get_drift + the frozen forecast reference — a
+    it was frozen? Shown at watch/act. Grounded in get_drift + the frozen forecast reference — a
     common-public-data reading compared to pre-loaded homework, never fresh outside advice."""
     status = dft.get("status")
     if status not in ("watch", "act"):
@@ -285,7 +285,7 @@ def _drift_callout(dft):
     head = "Forecast has moved" if status == "act" else "Forecast drifting"
     det = f"the breeze the plan assumed has {direction} ~{round(deg)}° since it was frozen"
     if tws is not None and abs(tws) >= 2:
-        det += f" and changed {'+' if tws >= 0 else '−'}{abs(round(tws))} kn"
+        det += f" and changed {'+' if tws >= 0 else '−'}{abs(round(tws))} kts"
     if status == "act":
         det += " — the recommended variant may no longer pay"
     return _callout(f"drift:{status}", "drift", "soon" if status == "act" else "monitor",
@@ -414,10 +414,10 @@ def step(route, snapshot, playbook=None, engine=None):
 _NARR_SYSTEM = (
     "You are the onboard tactical copilot for the SR33 racing yacht 'C4', speaking to the crew. "
     "You are given one or more CALLOUTS the engine has already computed and grounded. Restate the "
-    "most important one or two as a single short spoken radio call — calm and practical like a good "
+    "most important one or two as a single short coach line — calm and practical like a good "
     "navigator, most urgent first, at most two sentences, plain prose (no JSON, no lists). Use ONLY "
     "the facts in the callouts; invent no numbers, marks, or advice not present. If nothing is "
-    "worth saying, reply with an empty line."
+    "worth showing, reply with an empty line."
 )
 
 
@@ -430,7 +430,7 @@ def _deterministic_spoken(callouts):
 
 
 def narrate(callouts, llm=None):
-    """Phrase the (already-sorted) callouts into a spoken crew line. Returns (text, mode). With no
+    """Phrase the (already-sorted) callouts into a coach line. Returns (text, mode). With no
     callouts → ("", "none"). The LLM only rephrases grounded text; any failure falls back to the
     deterministic line so a call is always available."""
     if not callouts:

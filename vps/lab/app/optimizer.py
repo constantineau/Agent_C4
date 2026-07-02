@@ -681,8 +681,8 @@ def _route_sanity(wf, legs, coverage, P, timed_out):
         if mins > 0 and pmax > 0 and l.get("sailed_nm"):
             spd = l["sailed_nm"] / (mins / 60.0)
             if spd > pmax * 1.2:
-                warnings.append(f"Leg to {l['to']} averages {spd:.1f} kn — above the boat's polar max "
-                                f"(~{pmax:.0f} kn); almost certainly a wind-data gap.")
+                warnings.append(f"Leg to {l['to']} averages {spd:.1f} kts — above the boat's polar max "
+                                f"(~{pmax:.0f} kts); almost certainly a wind-data gap.")
                 degraded = True
         if l.get("wind") is None:
             warnings.append(f"Leg to {l['to']}: no model wind at its midpoint (sparse GRIB) — its "
@@ -972,7 +972,7 @@ def briefing(result: dict, race_name: str = "") -> str:
     if cur.get("loaded"):
         src = cur.get("source", "current model")
         if cur.get("source") == "constant":
-            bits = f"set {cur.get('set_deg','?')}° / drift {cur.get('drift_kn','?')} kn"
+            bits = f"set {cur.get('set_deg','?')}° / drift {cur.get('drift_kn','?')} kts"
         else:
             bits = f"{cur.get('slices', '?')} time slices"
         current_text = (f"Water current: {src} ({bits}) — leg ETAs already account for set & drift "
@@ -1065,7 +1065,7 @@ def briefing(result: dict, race_name: str = "") -> str:
     for l in legs:
         w = l["wind"] or {}
         lines.append(f"• To {l['to']}: {l['leg_minutes']} min, {l['point_of_sail'] or '?'}, "
-                     f"{l['tacks']} tacks; wind {w.get('tws','?')} kn @ {w.get('twd','?')}° "
+                     f"{l['tacks']} tacks; wind {w.get('tws','?')} kts @ {w.get('twd','?')}° "
                      f"(conf {w.get('confidence','?')}).")
     if result.get("skipped_marks"):
         lines.append("")

@@ -58,9 +58,9 @@ def _grounded(callouts):
 
 def test_narrate_logic() -> bool:
     """Pure-function exit test for the proactive callout engine — no engine/LLM needed, fully
-    deterministic. Verifies: every callout is grounded; raise-slow (a need-2 category isn't voiced
-    until its second poll); clear-fast / speak-once (a voiced callout is not re-voiced); priority
-    sorting; and the deterministic spoken line."""
+    deterministic. Verifies: every callout is grounded; raise-slow (a need-2 category isn't shown
+    until its second poll); clear-fast / show-once (a shown callout is not re-surfaced); priority
+    sorting; and the deterministic coach line."""
     ok = True
     route = "_bench_narrate"
     narrate_mod.reset(route)
@@ -73,37 +73,37 @@ def test_narrate_logic() -> bool:
                  {"rounding", "layline", "shift", "fatigue"} <= cats)
     ok &= _check("every evaluated callout is grounded", _grounded(cos))
 
-    # Poll 1: the need-1 categories (rounding/layline/fatigue) confirm + voice immediately; the
+    # Poll 1: the need-1 categories (rounding/layline/fatigue) confirm + show immediately; the
     # need-2 shift is not active yet.
     s1 = narrate_mod.step(route, _SYNTH_SNAPSHOT, None, None)
     new1 = {c["category"] for c in s1["new"]}
-    ok &= _check("poll1 voices the immediate (need-1) callouts",
+    ok &= _check("poll1 shows the immediate (need-1) callouts",
                  new1 == {"rounding", "layline", "fatigue"})
     ok &= _check("poll1 active is priority-sorted (rotate_now first)",
                  bool(s1["active"]) and s1["active"][0]["category"] == "fatigue")
     ok &= _check("poll1 new callouts all grounded", _grounded(s1["new"]))
 
-    # Poll 2: the persistent (need-2) shift now crosses its threshold and is voiced once; the
-    # already-voiced callouts are still active but NOT re-voiced.
+    # Poll 2: the persistent (need-2) shift now crosses its threshold and is shown once; the
+    # already-shown callouts are still active but NOT re-surfaced.
     s2 = narrate_mod.step(route, _SYNTH_SNAPSHOT, None, None)
-    ok &= _check("poll2 voices the persistence-gated shift",
+    ok &= _check("poll2 shows the persistence-gated shift",
                  [c["category"] for c in s2["new"]] == ["shift"])
     ok &= _check("poll2 active holds all four", len(s2["active"]) == 4)
 
-    # Poll 3: nothing new — speak-once holds while conditions are unchanged.
+    # Poll 3: nothing new — show-once holds while conditions are unchanged.
     s3 = narrate_mod.step(route, _SYNTH_SNAPSHOT, None, None)
-    ok &= _check("poll3 voices nothing (speak-once)", s3["new"] == [])
+    ok &= _check("poll3 shows nothing (show-once)", s3["new"] == [])
 
     # Clear-fast: an empty situation drops everything from active immediately.
     s4 = narrate_mod.step(route, {"get_conditions": {"available": True, "stale": False}}, None, None)
     ok &= _check("clear-fast: active empties when callouts go away", s4["active"] == [])
 
-    # The deterministic spoken line: top callouts' own grounded text, no model.
+    # The deterministic coach line: top callouts' own grounded text, no model.
     txt, mode = narrate_mod.narrate(s1["new"], llm=None)
     ok &= _check("deterministic narration returns text", bool(txt) and mode == "deterministic")
     empty_txt, empty_mode = narrate_mod.narrate([], llm=None)
     ok &= _check("no callouts → empty narration", empty_txt == "" and empty_mode == "none")
-    print(f"  spoken (deterministic): {txt!r}")
+    print(f"  coach line (deterministic): {txt!r}")
     narrate_mod.reset(route)
     return ok
 
@@ -114,7 +114,7 @@ def _audit_narration(n: dict) -> bool:
           f"active={len(n.get('active', []))}, new={len(n.get('new', []))}) " + "-" * 20)
     for c in n.get("active", []):
         print(f"  [{c['urgency']}] {c['category']}: {c['headline']} <- {c['grounded_in']}")
-    print("  spoken:", repr(n.get("spoken")))
+    print("  coach line:", repr(n.get("spoken")))
     print("-" * 60)
     # Same guardrail as a brief: every surfaced callout must be grounded in an engine fact/playbook.
     ok &= _check("every active/new callout is grounded",
@@ -222,7 +222,7 @@ def test_adherence_logic() -> bool:
 def test_coach_logic() -> bool:
     """Pure exit test for the auto-coach timer — no engine/LLM. Stub make_narration with a scripted
     sequence and drive Coach.tick() directly: the held state captures the last result; a tick with a
-    NEW callout logs a spoken line to history; a tick with nothing new doesn't grow history; an
+    NEW callout logs a coach line to history; a tick with nothing new doesn't grow history; an
     exception is caught into last_error and the loop keeps counting ticks (best-effort survival)."""
     import asyncio
 
@@ -251,7 +251,7 @@ def test_coach_logic() -> bool:
                     "_meta": {"playbook_loaded": True}})
         asyncio.run(c.tick())
         st = c.state()
-        ok &= _check("tick1 holds the latest spoken line", st["spoken"].startswith("Windward"))
+        ok &= _check("tick1 holds the latest coach line", st["spoken"].startswith("Windward"))
         ok &= _check("tick1 logged one history entry", len(st["history"]) == 1)
         ok &= _check("tick1 active populated + tick counted", len(st["active"]) == 1 and st["ticks"] == 1)
         ok &= _check("tick1 surfaces playbook_loaded", st["playbook_loaded"] is True)
@@ -274,7 +274,7 @@ def test_coach_logic() -> bool:
 
 
 def test_safety_callout() -> bool:
-    """The collision-watch callout — top-priority, grounded in get_ais, voiced act>watch and ahead of
+    """The collision-watch callout — top-priority, grounded in get_ais, shown act>watch and ahead of
     everything else. Pure/deterministic: synthetic AIS snapshots, no engine/LLM."""
     ok = True
     print("\n== safety / collision callout (pure, synthetic AIS) ==")
@@ -310,24 +310,24 @@ def test_safety_callout() -> bool:
     narrate_mod.reset(route)
     combined = dict(_SYNTH_SNAPSHOT); combined["get_ais"] = snap([act_tgt])["get_ais"]
     s = narrate_mod.step(route, combined, None, None)
-    ok &= _check("safety callout is voiced this poll and grounded",
+    ok &= _check("safety callout is shown this poll and grounded",
                  any(x["category"] == "safety" for x in s["new"]) and _grounded(s["new"]))
     ok &= _check("safety sorts ABOVE rotate_now fatigue (top of active)",
                  bool(s["active"]) and s["active"][0]["category"] == "safety")
 
-    # escalation watch→act re-voices (level is in the id, like the staged rounding prep)
+    # escalation watch→act re-surfaces (level is in the id, like the staged rounding prep)
     narrate_mod.reset(route)
     narrate_mod.step(route, snap([watch_tgt]), None, None)
     esc = {"mmsi": "222", "name": "FERRY", "cpa_nm": 0.4, "tcpa_min": 9, "bearing": 300,
            "range_nm": 1.0, "closing": True}
     s2 = narrate_mod.step(route, snap([esc]), None, None)
-    ok &= _check("watch→act escalation re-voices a fresh (now) safety callout",
+    ok &= _check("watch→act escalation re-surfaces a fresh (now) safety callout",
                  any(x["category"] == "safety" and x["urgency"] == "now" for x in s2["new"]))
     return ok
 
 
 def test_fleet_callout() -> bool:
-    """The handicap-rival callout — grounded in get_fleet, voices a RIVAL or an ahead-on-corrected
+    """The handicap-rival callout — grounded in get_fleet, shows a RIVAL or an ahead-on-corrected
     competitor, gated by confidence, below safety but a real tactical callout. Pure/deterministic."""
     ok = True
     print("\n== fleet / handicap-rival callout (pure, synthetic fleet) ==")
@@ -379,7 +379,7 @@ def test_fleet_callout() -> bool:
 def test_deviation_drift_callout() -> bool:
     """The Lab-3 branch-trigger callouts — route-deviation (off the frozen line?) and forecast-drift
     (has the forecast moved since freeze?). Grounded in get_deviation/get_drift + the frozen playbook;
-    voiced only at watch/act (the engine already applied the Schmitt bands). Pure/deterministic."""
+    shown only at watch/act (the engine already applied the Schmitt bands). Pure/deterministic."""
     ok = True
     print("\n== deviation / drift branch-trigger callouts (pure, synthetic) ==")
 
@@ -395,7 +395,7 @@ def test_deviation_drift_callout() -> bool:
                                            time_behind_s=200, vmc_deficit_kn=0.8))
     ok &= _check("on-line-but-behind → 'Behind the plan's pace' with m:ss + VMC",
                  c and c["urgency"] == "monitor" and "Behind" in c["headline"]
-                 and "3:20" in c["detail"] and "0.8 kn" in c["detail"])
+                 and "3:20" in c["detail"] and "0.8 kts" in c["detail"])
     ok &= _check("on-plan (ok) → no deviation callout",
                  narrate_mod._deviation_callout(dev("ok", xte_nm=0.05)) is None)
 

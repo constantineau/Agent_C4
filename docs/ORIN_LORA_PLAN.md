@@ -20,7 +20,7 @@ part, surviving q4 quantization on real hardware. We do **not** touch the guardr
 fallback *rate*, it never replaces the safety net.
 
 Non-goals: speed (still ~12 tok/s, bandwidth-bound), strategy quality (it never originates strategy),
-spoken-phrasing style (a later pass).
+coach-line phrasing style (a later pass).
 
 ## Pipeline (end to end)
 ```

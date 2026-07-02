@@ -294,13 +294,13 @@ def get_deviation(route=None, variant=None, since=None):
         value = f"{'Behind' if band == 2 else 'Slipping'} · {behind_txt}"
         sub = f"{behind_txt} behind plan"
         if vmc_def is not None and vmc_def > 0:
-            sub += f" · VMC −{vmc_def} kn"
+            sub += f" · VMC −{vmc_def} kts"
         if along_pct is not None:
             sub += f" · {along_pct}% along"
         sub_bits = [sub]
         onliner = xte_nm <= XTE_CONSIDER_NM
         why = (f"On the '{vlabel}' line but {behind_txt} behind the plan's pace"
-               + (f" — making good {vmc_def} kn less VMC than the optimizer expected here"
+               + (f" — making good {vmc_def} kts less VMC than the optimizer expected here"
                   if vmc_def else "")
                + ("; you're on the optimal track, so this is boat-speed / mode, not position."
                   if onliner else "."))

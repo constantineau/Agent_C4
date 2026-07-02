@@ -157,11 +157,11 @@ def deterministic_brief(snapshot: dict, playbook=None) -> dict:
     if cond.get("available"):
         tws, twa, stw = _num(cond.get("tws")), _num(cond.get("twa")), _num(cond.get("stw"))
         if tws is not None:
-            bits.append(f"TWS {tws} kn")
+            bits.append(f"TWS {tws} kts")
         if twa is not None:
             bits.append(f"TWA {twa}°")
         if stw is not None:
-            bits.append(f"STW {stw} kn")
+            bits.append(f"STW {stw} kts")
     if nav.get("available") and nav.get("next_mark"):
         nm = nav["next_mark"]
         d = _num(nm.get("distance_nm"))
@@ -172,8 +172,8 @@ def deterministic_brief(snapshot: dict, playbook=None) -> dict:
     if cond.get("available"):
         b["factors"].append(_factor(
             "Wind & boatspeed",
-            f"TWS {_num(cond.get('tws'))} kn, TWA {_num(cond.get('twa'))}°, "
-            f"STW {_num(cond.get('stw'))} kn, heel {_num(cond.get('heel'))}°.",
+            f"TWS {_num(cond.get('tws'))} kts, TWA {_num(cond.get('twa'))}°, "
+            f"STW {_num(cond.get('stw'))} kts, heel {_num(cond.get('heel'))}°.",
             ["get_conditions"], "high" if not cond.get("stale") else "low"))
 
     if nav.get("available"):

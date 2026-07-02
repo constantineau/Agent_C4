@@ -20,6 +20,16 @@
   // Top-semicircle gauge: TWA 0° at left (head to wind), 90° at top (beam), 180° at right (run).
   const twaToAngle = (twa) => Math.PI + (Math.max(0, Math.min(180, twa)) / 180) * Math.PI;
 
+  // A small diagonal two-colour tile — used to hatch the toss-up bands (two sails within ~1.5% of
+  // target, where the winner-take-all zones can't show a tie) in both sails' colours.
+  function hatch(g, c1, c2) {
+    const t = document.createElement("canvas"); t.width = t.height = 10;
+    const tg = t.getContext("2d"); tg.lineWidth = 3;
+    tg.strokeStyle = c1; tg.beginPath(); tg.moveTo(-2, 8); tg.lineTo(8, -2); tg.stroke();
+    tg.strokeStyle = c2; tg.beginPath(); tg.moveTo(3, 13); tg.lineTo(13, 3); tg.stroke();
+    return g.createPattern(t, "repeat");
+  }
+
   function draw() {
     const cv = document.getElementById("sailDial");
     if (!cv || !last || !last.available) return;
@@ -47,6 +57,25 @@
       g.fillText(z.sail, cx + Math.cos(am) * rl, cy + Math.sin(am) * rl);
     });
 
+    // toss-up overlays: a two-colour hatch over the zone ring where two sails tie (~1.5%), so a sail the
+    // winner-take-all zones erased (e.g. A2 on the reach at 14–16 kts) reappears in its own colour.
+    (last.overlaps || []).forEach((o) => {
+      if (!o.sails || o.sails.length < 2) return;
+      const a1 = twaToAngle(o.twa_min), a2 = twaToAngle(o.twa_max);
+      g.save();
+      g.beginPath();
+      g.arc(cx, cy, R, a1, a2); g.arc(cx, cy, rin, a2, a1, true); g.closePath();
+      g.globalAlpha = 0.6;
+      g.fillStyle = hatch(g, pal[o.sails[0]] || "#888", pal[o.sails[1]] || "#888");
+      g.fill();
+      g.restore();
+      // small ≈ marker at mid-angle, outer edge
+      const am = (a1 + a2) / 2, rl = R * 0.9;
+      g.fillStyle = isNight() ? "#ffd0d0" : "#0b1622"; g.font = "700 11px system-ui";
+      g.textAlign = "center"; g.textBaseline = "middle";
+      g.fillText("≈", cx + Math.cos(am) * rl, cy + Math.sin(am) * rl);
+    });
+
     // crossover boundary ticks + TWA labels
     g.strokeStyle = ink(); g.fillStyle = muted(); g.font = "11px system-ui";
     last.zones.slice(1).forEach((z) => {
@@ -71,14 +100,14 @@
     g.font = "700 24px system-ui";
     g.fillText(Math.round(last.twa_abs) + "°", cx, cy - R * 0.42);
     g.font = "11px system-ui"; g.fillStyle = muted();
-    g.fillText("TWA " + last.tack + " · " + Math.round(last.tws_used) + " kn", cx, cy - R * 0.42 + 16);
+    g.fillText("TWA " + last.tack + " · " + Math.round(last.tws_used) + " kts", cx, cy - R * 0.42 + 16);
   }
 
   function render() {
     const rec = document.getElementById("sailRec");
     if (last && last.available) {
       rec.textContent = last.recommendation +
-        (last.targets && last.targets.btv ? `  ·  target ${last.targets.btv} kn, heel ${last.targets.heel}°` : "");
+        (last.targets && last.targets.btv ? `  ·  target ${last.targets.btv} kts, heel ${last.targets.heel}°` : "");
       rec.className = "sailrec" + (last.wrong_sail ? " bad"
         : (last.next_crossover && last.next_crossover.deg_away <= 8 ? " warn" : ""));
     } else {

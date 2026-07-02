@@ -126,7 +126,7 @@ target, as a % of polar: an overall number, a roll-up by point of sail (upwind/r
 and the weakest/strongest bins. Use it for "how are we doing vs the polar over the session / where
 are we slow / where do we leave speed on the table / is the rated polar realistic" — i.e. trends
 over time, NOT the instantaneous right-now polar % (for that use get_polar_target on live TWS/TWA).
-Lead with the overall % and the worst point of sail, then name a weak bin (e.g. "downwind in 16 kn
+Lead with the overall % and the worst point of sail, then name a weak bin (e.g. "downwind in 16 kts
 we're at 84% — soak lower or check the kite"). Caveat it: it's mined across varying conditions
 (sea state/current/crew) and >100% can be favourable current or a soft rating, not real overspeed;
 needs enough archived sailing to be meaningful. Practice/debrief — RRS 41 in a race.
@@ -193,8 +193,8 @@ def _fallback(message: str) -> str:
         worst = min(r["by_point_of_sail"].items(),
                     key=lambda kv: kv[1].get("percent_of_polar") or 999, default=(None, None))
         wb = r["weakest"][0] if r.get("weakest") else None
-        wbit = (f" Weakest: {wb['twa_deg']}° TWA / {wb['tws_kn']} kn at "
-                f"{wb['percent_of_polar']}% ({wb['best_stw_kn']} vs {wb['target_stw_kn']} kn).") if wb else ""
+        wbit = (f" Weakest: {wb['twa_deg']}° TWA / {wb['tws_kn']} kts at "
+                f"{wb['percent_of_polar']}% ({wb['best_stw_kn']} vs {wb['target_stw_kn']} kts).") if wb else ""
         worstbit = (f" worst {worst[0]} {worst[1]['percent_of_polar']}%;" if worst[0] else "")
         return (f"Polar analysis over {r['window_hours']:.0f}h: ~{r['overall_percent_of_polar']}% "
                 f"of polar overall ({r['buckets_rated']} bins,{worstbit} {r['samples_total']} "
@@ -253,8 +253,8 @@ def _fallback(message: str) -> str:
             return r.get("note", "Forecast unavailable.")
         h = r["hours"]
         nxt = h[1] if len(h) > 1 else (h[0] if h else None)
-        return ("Forecast: " + (f"now ~{h[0]['tws']} kn @ {h[0]['twd']}°, "
-                f"in {nxt['in_h']} h ~{nxt['tws']} kn @ {nxt['twd']}°." if nxt else "no data."))
+        return ("Forecast: " + (f"now ~{h[0]['tws']} kts @ {h[0]['twd']}°, "
+                f"in {nxt['in_h']} h ~{nxt['tws']} kts @ {nxt['twd']}°." if nxt else "no data."))
     if any(w in m for w in ("favored", "favoured", "which side", "which way", "lifted", "headed", "shift", "leverage", "tactic")):
         r = tools.get_tactics()
         if not r.get("available"):
@@ -298,12 +298,12 @@ def _fallback(message: str) -> str:
         if not p.get("available"):
             return p.get("note", "No polar data loaded.")
         pct = round(100 * (s["stw"] or 0) / p["target_stw"], 1) if p.get("target_stw") else None
-        return (f"STW {s['stw']} kn vs target {p['target_stw']} kn"
+        return (f"STW {s['stw']} kts vs target {p['target_stw']} kts"
                 + (f" — {pct}% of polar." if pct else "."))
     # default: best-value snapshot (use the chat/LLM path for multi-source detail)
     stale = " (STALE)" if s.get("stale") else ""
-    return (f"TWS {s.get('tws')} kn, TWA {s.get('twa')}°, STW {s.get('stw')} kn, "
-            f"SOG {s.get('sog')} kn, HDG {s.get('heading')}°, heel {s.get('heel')}°. "
+    return (f"TWS {s.get('tws')} kts, TWA {s.get('twa')}°, STW {s.get('stw')} kts, "
+            f"SOG {s.get('sog')} kts, HDG {s.get('heading')}°, heel {s.get('heel')}°. "
             f"Data age {s.get('data_age_seconds')}s{stale}. (ask for sources to cross-check)")
 
 

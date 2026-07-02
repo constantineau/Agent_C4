@@ -8,13 +8,13 @@ branch trigger firing, a sail change-down coming up — fire ON THE CLOCK, not o
 happens to hit the endpoint.
 
 It mirrors the cloud alerting loop (`vps/agent/app/alerts.py`): the raise-slow / clear-fast
-speak-once dedup already lives in `narrate.step` — this loop just calls it on a schedule and
-remembers what was said. The loop OWNS narration for its route (it is the single stepper, so the
-speak-once dedup is not raced by client polls); `GET /coach` reads the held state cheaply with NO
-recompute. A short rolling history of spoken lines lets the crew see "what did the coach just say".
+show-once dedup already lives in `narrate.step` — this loop just calls it on a schedule and
+remembers what was shown. The loop OWNS narration for its route (it is the single stepper, so the
+show-once dedup is not raced by client polls); `GET /coach` reads the held state cheaply with NO
+recompute. A short rolling history of coach lines lets the crew see "what did the coach just show".
 
 Best-effort like everything onboard: an engine-unreachable tick is recorded in `last_error` and the
-loop keeps ticking. Nothing here takes an action — the coach speaks, it never steers.
+loop keeps ticking. Nothing here takes an action — the coach line shows, it never steers.
 """
 import asyncio
 import time
@@ -31,7 +31,7 @@ class _Coach:
         self.interval = config.COACH_INTERVAL_S
         self.route = config.DEFAULT_ROUTE
         self.last = None                              # latest make_narration result (+ _coach_at)
-        self.history = deque(maxlen=_HISTORY_MAX)     # spoken lines, newest first
+        self.history = deque(maxlen=_HISTORY_MAX)     # coach lines, newest first
         self.ticks = 0
         self.last_tick_at = None
         self.last_error = None
@@ -52,7 +52,7 @@ class _Coach:
             "last_tick_at": self.last_tick_at,
             "last_error": self.last_error,
             "active": last.get("active", []),         # full confirmed set (the banner)
-            "new": last.get("new", []),               # what was newly voiced on the last tick
+            "new": last.get("new", []),               # what was newly shown on the last tick
             "spoken": last.get("spoken", ""),         # the phrased line for the new callouts
             "narration_mode": last.get("narration_mode", "none"),
             "updated_at": last.get("_coach_at"),
@@ -62,13 +62,13 @@ class _Coach:
 
     async def tick(self):
         """One coaching cycle: run the narration engine (off the event loop — it's blocking urllib),
-        store the result, and log any newly-voiced line. Never raises — records the error and moves on."""
+        store the result, and log any newly-shown line. Never raises — records the error and moves on."""
         try:
             res = await asyncio.to_thread(copilot.make_narration, self.route, None, None)
             res["_coach_at"] = time.time()
             self.last = res
             self.last_error = None
-            if res.get("new"):                        # something newly worth saying → log it
+            if res.get("new"):                        # something newly worth showing → log it
                 self.history.appendleft({
                     "at": res["_coach_at"],
                     "spoken": res.get("spoken", ""),
@@ -81,7 +81,7 @@ class _Coach:
         self.last_tick_at = time.time()
 
     async def run(self):
-        # Fresh start → clear the speak-once dedup so the current situation is voiced once.
+        # Fresh start → clear the show-once dedup so the current situation is shown once.
         copilot.reset_narration(self.route)
         while True:
             await self.tick()

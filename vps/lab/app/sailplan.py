@@ -35,7 +35,8 @@ def model() -> dict:
     d = _load()
     return {"boat_id": d.get("boat_id"), "source": d.get("source"),
             "inventory": d.get("inventory", []), "sail_names": d.get("sail_names", {}),
-            "tws_buckets": d.get("tws_buckets", []), "crossovers": d.get("crossovers", {})}
+            "tws_buckets": d.get("tws_buckets", []), "crossovers": d.get("crossovers", {}),
+            "overlaps": d.get("overlaps", {})}
 
 
 def _nearest_tws(tws):
@@ -74,6 +75,25 @@ def crossovers_specialized(jib_crossovers):
             else:
                 new.append(z)
         out[tws_key] = new
+    return out
+
+
+def overlaps_specialized(jib_crossovers):
+    """The per-TWS toss-up bands with the upwind jib in each band's sail list relabelled to the actual
+    jib for THAT row's TWS (J1/J2/J3) — mirrors crossovers_specialized so the chart's overlaps match."""
+    raw = _load().get("overlaps", {})
+    if not jib_crossovers:
+        return raw
+    out = {}
+    for tws_key, bands in raw.items():
+        try:
+            tws = float(tws_key)
+        except ValueError:
+            out[tws_key] = bands
+            continue
+        jib = jib_for_tws(tws, jib_crossovers)
+        out[tws_key] = [{**b, "sails": [jib if s == _JIB_FAMILY else s for s in b.get("sails", [])]}
+                        for b in bands]
     return out
 
 

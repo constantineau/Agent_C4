@@ -261,6 +261,8 @@ def _boat_model():
         "sail_names": sm.get("sail_names", {}),
         # per-TWS×TWA zones with the upwind jib specialised to J1/J2/J3 by this boat's change-downs
         "crossovers": sailplan.crossovers_specialized(b.get("jib_crossovers") or []),
+        # per-TWS toss-up bands (two sails within ~2% of target — the near-ties the zones can't show)
+        "overlaps": sailplan.overlaps_specialized(b.get("jib_crossovers") or []),
         "jib_crossovers": b.get("jib_crossovers", []),  # J1/J2/J3 by TWS (crew/sailmaker, not cert)
     }
 

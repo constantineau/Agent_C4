@@ -259,7 +259,7 @@ learning loop is between-races.
    branch on **expected value, not deviation** — only when expected gain > maneuver cost + a margin
    that **scales with uncertainty** (models disagree → hold the robust plan); (c) **confidence** is a
    first-class output on every call (scenario/model spread + how cleanly obs match one scenario + data
-   staleness), shown on the iPad and voiced by the LLM; (d) **deviation/adherence is a tracked iPad
+   staleness), shown on the iPad and surfaced by the LLM; (d) **deviation/adherence is a tracked iPad
    metric** (time-behind-optimal + % of *achievable* polar + XTE), **attributed** to helm vs conditions
    vs tactical choice and surfaced as gentle coaching, not blame; (e) baselines are **helm-aware and
    achievable, not theoretical** — reuse the fatigue-index DNA (anonymous current-helm, baselined vs

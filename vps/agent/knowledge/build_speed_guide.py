@@ -176,6 +176,56 @@ def crossover_zones(sails, tws, best_rows):
     return zones
 
 
+# Two sails are a "toss-up" at an angle when both are within this fraction of the best sail's BTV.
+# The crossover zones are winner-take-all, so a sail that's optimal by hundredths of a knot at every
+# sampled angle erases the runner-up entirely (e.g. A2 vanishes at 14–16 kn where the cert splits A2/A3
+# by ~0.03 kn on the reach). Overlap bands surface those near-ties so the chart can show "carry either".
+OVERLAP_TOL = float(os.environ.get("XOVER_OVERLAP_TOL", "0.015"))
+
+
+def cooptimal(sails, tws, twa, tol=OVERLAP_TOL):
+    """Sail ids whose BTV at (tws, twa) is within `tol` of the best sail's BTV (the winner included)."""
+    scored = []
+    for sid, blocks in sails.items():
+        b = _interp_btv(blocks.get(tws) or [], twa)
+        if b is not None:
+            scored.append((sid, b))
+    if not scored:
+        return []
+    best = max(b for _, b in scored)
+    return [sid for sid, b in scored if best - b <= tol * best]
+
+
+def overlap_bands(sails, tws, best_rows, inv, tol=OVERLAP_TOL):
+    """Per-TWS 'toss-up' bands: contiguous TWA ranges where two ADJACENT-inventory sails are BOTH
+    co-optimal (within `tol` of the best). Surfaces sails the winner-take-all zones hide on a near-tie.
+    Boundaries extend to the neighbour-row midpoints (like the zones) so a single-row tie is still
+    visible. Sail ids are crew shorthand; the upwind jib stays 'J1' (specialised per TWS downstream)."""
+    order = list(inv)                                 # cert ids in inventory order (J1-A, A2-A, …)
+    twas = [r["twa"] for r in best_rows]
+    n = len(best_rows)
+    bands = []
+    for s1, s2 in zip(order, order[1:]):              # adjacent pairs only (J1/A2, A2/A3, A3/S2)
+        marked = []
+        for r in best_rows:
+            co = cooptimal(sails, tws, r["twa"], tol)
+            marked.append(s1 in co and s2 in co)
+        i = 0
+        while i < n:
+            if not marked[i]:
+                i += 1
+                continue
+            j = i
+            while j + 1 < n and marked[j + 1]:
+                j += 1
+            twa_min = twas[i] if i == 0 else round((twas[i - 1] + twas[i]) / 2.0, 1)
+            twa_max = twas[j] if j == n - 1 else round((twas[j] + twas[j + 1]) / 2.0, 1)
+            bands.append({"sails": [_short(s1), _short(s2)], "twa_min": twa_min, "twa_max": twa_max})
+            i = j + 1
+    bands.sort(key=lambda b: b["twa_min"])
+    return bands
+
+
 def write_crossovers(groups):
     """Emit the per-TWS sail crossover table as JSON — the reviewable, onboard-loadable boat sail
     model the Lab optimizer attaches to each route leg and freezes into the playbook bundle."""
@@ -191,6 +241,8 @@ def write_crossovers(groups):
         "tws_buckets": sorted(best),
         "crossovers": {str(tws): crossover_zones(sails, tws, best[tws])
                        for tws in sorted(best) if best[tws]},
+        "overlaps": {str(tws): overlap_bands(sails, tws, best[tws], inv)
+                     for tws in sorted(best) if best[tws]},
     }
     with open(CROSSOVERS, "w") as f:
         json.dump(data, f, indent=2)

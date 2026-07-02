@@ -915,6 +915,15 @@ function renderBoatModel() {
   out.innerHTML = boatModelCard(m);
 }
 
+// Sail palette (mirrors the .sail-bg-* CSS) — used to hatch the toss-up overlap bands in two colors.
+const SAIL_COLORS = { J1: "#36b3ff", J2: "#66a9e0", J3: "#9b8cff", A2: "#7ee0a8", A3: "#f5c451", S2: "#ff8042" };
+const sailColor = (s) => SAIL_COLORS[s] || "#8899a6";
+function hexRgba(hex, a) {
+  const h = String(hex).replace("#", "");
+  const n = parseInt(h.length === 3 ? h.replace(/(.)/g, "$1$1") : h, 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+}
+
 // The boat-model card HTML (crossover bands + jib change-downs + polar grid). Returned as a string so
 // both the Gameplan review panel and the Learnings library can embed it.
 function boatModelCard(m) {
@@ -926,7 +935,17 @@ function boatModelCard(m) {
       const w = ((z.twa_max - z.twa_min) / 180 * 100).toFixed(1);
       return `<div class="xo-zone sail-bg-${esc(z.short)}" style="left:${left}%;width:${w}%" title="${esc(z.label)} ${z.twa_min}–${z.twa_max}°">${esc(z.short)}</div>`;
     }).join("");
-    return `<div class="xo-row"><span class="xo-tws">${t} kn</span><div class="xo-track">${zones}</div></div>`;
+    // toss-up overlays: two sails within ~2% of target → a translucent two-colour diagonal hatch drawn
+    // over the solid zones (the zones still show through the gaps), so a sail the winner-take-all bands
+    // erased on a near-tie (e.g. A2 at 14–16 kts) reappears in its own colour.
+    const overlaps = ((m.overlaps || {})[String(t)] || []).map((o) => {
+      const left = (o.twa_min / 180 * 100).toFixed(1);
+      const w = ((o.twa_max - o.twa_min) / 180 * 100).toFixed(1);
+      const c1 = hexRgba(sailColor(o.sails[0]), 0.72), c2 = hexRgba(sailColor(o.sails[1]), 0.72);
+      const bg = `repeating-linear-gradient(45deg, ${c1} 0 4px, transparent 4px 8px, ${c2} 8px 12px, transparent 12px 16px)`;
+      return `<div class="xo-ol" style="left:${left}%;width:${w}%;background:${bg}" title="Toss-up: ${esc(o.sails.join(" ≈ "))} within ~1.5% of target ${o.twa_min}–${o.twa_max}° — carry either / peel is optional">≈</div>`;
+    }).join("");
+    return `<div class="xo-row"><span class="xo-tws">${t} kts</span><div class="xo-track">${zones}${overlaps}</div></div>`;
   }).join("");
   const inv = (m.inventory || []).map((s) => `<span class="sail sail-${esc(s)}">${esc(s)}</span>`).join(" ");
   return `<div class="card boatmodel">
@@ -935,7 +954,7 @@ function boatModelCard(m) {
     <div class="bm-inv">Inventory: ${inv}</div>
     ${renderJibCrossovers(m)}
     <h4>Sail crossovers (optimal sail by TWA, per TWS)</h4>
-    <div class="muted" style="font-size:11px;margin-bottom:4px">From the ORC cert (one headsail = the jib slot; specialised to J1/J2/J3 by the wind bands above).</div>
+    <div class="muted" style="font-size:11px;margin-bottom:4px">From the ORC cert (one headsail = the jib slot; specialised to J1/J2/J3 by the wind bands above). <b>Hatched ≈</b> = a toss-up: two sails within ~1.5% of target speed, where the winner-take-all bands can't show a tie — carry either (the erased sail reappears in its own colour, e.g. A2 on the reach at 14–16 kts).</div>
     <div class="xo-axis"><span>0°</span><span>45°</span><span>90°</span><span>135°</span><span>180°</span></div>
     <div class="xo">${bands}</div>
     ${renderPolarGrid()}
@@ -953,17 +972,17 @@ function renderJibCrossovers(m) {
     const hi = b.tws_max != null ? b.tws_max : max;
     const left = (lo / max * 100).toFixed(1), w = ((hi - lo) / max * 100).toFixed(1);
     const rng = b.tws_min == null ? `<${b.tws_max}` : b.tws_max == null ? `${b.tws_min}+` : `${b.tws_min}–${b.tws_max}`;
-    return `<div class="xo-zone sail-bg-${esc(b.sail)}" style="left:${left}%;width:${w}%" title="${esc(b.sail)} ${rng} kn">${esc(b.sail)} ${esc(rng)}</div>`;
+    return `<div class="xo-zone sail-bg-${esc(b.sail)}" style="left:${left}%;width:${w}%" title="${esc(b.sail)} ${rng} kts">${esc(b.sail)} ${esc(rng)}</div>`;
   }).join("");
   // editable boundaries (assumes ordered J1,J2,J3 with the two interior thresholds)
   const t1 = jc[0] && jc[0].tws_max, t2 = jc[1] && jc[1].tws_max;
   return `<h4>Upwind jib change-downs (by wind strength)</h4>
     <div class="muted" style="font-size:11px;margin-bottom:6px">The ORC cert rates only the J1 — these J1/J2/J3 change-downs are your crew/sailmaker thresholds (editable), and drive which jib each upwind leg carries.</div>
-    <div class="xo-axis"><span>0</span><span>~9</span><span>~17</span><span>~26</span><span>35 kn</span></div>
+    <div class="xo-axis"><span>0</span><span>~9</span><span>~17</span><span>~26</span><span>35 kts</span></div>
     <div class="xo"><div class="xo-row"><span class="xo-tws">TWS</span><div class="xo-track">${bars}</div></div></div>
     <div class="jib-edit">
-      <label>J1→J2 at <input type="number" id="jibT1" value="${t1 ?? ""}" min="2" max="34" step="0.5" style="width:58px"> kn</label>
-      <label>J2→J3 at <input type="number" id="jibT2" value="${t2 ?? ""}" min="2" max="34" step="0.5" style="width:58px"> kn</label>
+      <label>J1→J2 at <input type="number" id="jibT1" value="${t1 ?? ""}" min="2" max="34" step="0.5" style="width:58px"> kts</label>
+      <label>J2→J3 at <input type="number" id="jibT2" value="${t2 ?? ""}" min="2" max="34" step="0.5" style="width:58px"> kts</label>
       <button class="mini" onclick="saveJibCrossovers()">Save change-downs</button>
       <span id="jibSaveMsg" class="muted" style="font-size:11px"></span>
     </div>`;
@@ -1136,8 +1155,8 @@ function optCurrentStat(r) {
   const src = (c.source || "current").toUpperCase();
   const peak = r.current_grid && r.current_grid.peak_drift_kn;
   const sub = c.source === "constant"
-    ? `${c.drift_kn ?? "?"} kn @ ${c.set_deg ?? "?"}°`
-    : `${c.slices ?? "?"} slices${peak ? ` · pk ${peak} kn` : ""}`;
+    ? `${c.drift_kn ?? "?"} kts @ ${c.set_deg ?? "?"}°`
+    : `${c.slices ?? "?"} slices${peak ? ` · pk ${peak} kts` : ""}`;
   return `<div title="Water current folded into the leg ETAs (set & drift). Source ${esc(src)}."><b>${esc(src)}</b><span>current · ${esc(sub)}</span></div>`;
 }
 
@@ -1820,7 +1839,7 @@ function paintMonitor() {
   const fixes = fl.fixes || [];
   const ageMin = (t) => t ? Math.max(0, Math.round((Date.now() / 1000 - t) / 60)) : null;
   const ownLine = own.available
-    ? `<span class="pill ok">● live</span> ${own.lat.toFixed(3)}, ${own.lon.toFixed(3)} · SOG ${own.sog != null ? own.sog.toFixed(1) : "?"} kn · HDG ${own.heading != null ? Math.round(own.heading) : "?"}°${own.tws != null ? " · TWS " + own.tws.toFixed(0) + " kn" : ""} · ${own.age_s != null ? Math.round(own.age_s) + "s ago" : ""}${own.stale ? " <span class=\"pill warn\">stale</span>" : ""}`
+    ? `<span class="pill ok">● live</span> ${own.lat.toFixed(3)}, ${own.lon.toFixed(3)} · SOG ${own.sog != null ? own.sog.toFixed(1) : "?"} kts · HDG ${own.heading != null ? Math.round(own.heading) : "?"}°${own.tws != null ? " · TWS " + own.tws.toFixed(0) + " kts" : ""} · ${own.age_s != null ? Math.round(own.age_s) + "s ago" : ""}${own.stale ? " <span class=\"pill warn\">stale</span>" : ""}`
     : `<span class="pill warn">○ no live boat</span> <span class="muted">${esc(own.reason || "unavailable")}</span>`;
   const flLine = fixes.length
     ? `<span class="pill ok">${fixes.length} boats</span> via ${esc(fl.provider || "tracker")}${fl.delay_min ? " · ~" + fl.delay_min + " min delayed" : ""}${fl.demo || fl.provider === "sample" ? " <span class=\"pill warn\">demo</span>" : ""}`
@@ -1848,7 +1867,7 @@ function paintMonitor() {
     ${fixes.length ? `<div class="card"><h3>Fleet positions <span class="muted" style="font-weight:400">— aged from the public tracker</span></h3>
       <table class="fleet-tbl"><thead><tr><th>Boat</th><th>SOG</th><th>COG</th><th>DTF</th><th>Age</th></tr></thead><tbody>
       ${fixes.slice().sort((a, b) => (a.dtf_nm ?? 1e9) - (b.dtf_nm ?? 1e9)).map((f) => `<tr>
-        <td>${esc(f.name || "?")}</td><td>${f.sog != null ? f.sog.toFixed(1) + " kn" : ""}</td>
+        <td>${esc(f.name || "?")}</td><td>${f.sog != null ? f.sog.toFixed(1) + " kts" : ""}</td>
         <td>${f.cog != null ? Math.round(f.cog) + "°" : ""}</td><td>${f.dtf_nm != null ? f.dtf_nm.toFixed(1) + " nm" : ""}</td>
         <td>${ageMin(f.time) != null ? ageMin(f.time) + " min" : ""}</td></tr>`).join("")}
       </tbody></table></div>` : ""}
@@ -1866,12 +1885,12 @@ function initMonitorMap() {
   const pts = [];
   fixes.forEach((f) => {
     L.circleMarker([f.lat, f.lon], { radius: 5, color: "#36b3ff", fillColor: "#36b3ff", fillOpacity: 0.65, weight: 1 })
-      .bindTooltip(`${f.name || "?"}${f.sog != null ? " · " + f.sog.toFixed(1) + " kn" : ""}`).addTo(map);
+      .bindTooltip(`${f.name || "?"}${f.sog != null ? " · " + f.sog.toFixed(1) + " kts" : ""}`).addTo(map);
     pts.push([f.lat, f.lon]);
   });
   if (own.available) {
     L.circleMarker([own.lat, own.lon], { radius: 8, color: "#f5c451", fillColor: "#f5c451", fillOpacity: 0.95, weight: 2 })
-      .bindTooltip(`Our boat${own.sog != null ? " · " + own.sog.toFixed(1) + " kn" : ""}`).addTo(map);
+      .bindTooltip(`Our boat${own.sog != null ? " · " + own.sog.toFixed(1) + " kts" : ""}`).addTo(map);
     pts.push([own.lat, own.lon]);
   }
   if (pts.length) map.fitBounds(pts, { padding: [30, 30], maxZoom: 11 });
@@ -2010,7 +2029,7 @@ function debTrackScore(at) {
   const pol = at.polar_pct == null ? null
     : `<span class="pill ${polCls}">${at.polar_pct}% of polar</span> <span class="muted">(${at.polar_samples} samples${overNote})</span>`;
   const ccNote = at.current_corrected
-    ? `<span class="muted"> · current-corrected (mean ${at.current_mean_kn ?? "?"} kn)</span>`
+    ? `<span class="muted"> · current-corrected (mean ${at.current_mean_kn ?? "?"} kts)</span>`
     : (at.polar_pct != null ? '<span class="muted"> · no current correction (SOG vs polar)</span>' : "");
   // helm_pct = flat-water-equivalent (sea-state loss removed) — the number the learning loop refines
   // helm_factor from. Show it when the seaway materially depressed the raw polar%.
@@ -2118,7 +2137,7 @@ function paintLearnings() {
         </select></label>
       </div>
       <div class="muted" style="font-size:12px;margin:8px 0 4px">Venue / conditions knowledge, calibration reminders, what to apply for this race (free text, saved with the race).</div>
-      <textarea id="learnNotes" rows="6" style="width:100%;box-sizing:border-box" placeholder="e.g. Cove Island current sets NE on the ebb; J2 crossover felt early last year — try 15 kn; main calibration +2° at the masthead…">${esc(d.learnings_notes || "")}</textarea>
+      <textarea id="learnNotes" rows="6" style="width:100%;box-sizing:border-box" placeholder="e.g. Cove Island current sets NE on the ebb; J2 crossover felt early last year — try 15 kts; main calibration +2° at the masthead…">${esc(d.learnings_notes || "")}</textarea>
       <div style="margin-top:8px"><button onclick="learnSaveNotes()">Save notes</button> <span id="learnMsg" class="muted" style="font-size:12px"></span></div>
     </div>
     ${learnRefineCard(ab)}
@@ -2154,7 +2173,7 @@ function learnProposalReview(p) {
   const pos = s.by_point_of_sail || {};
   const rows = (p.adjustments || []).map((a, i) => `<tr>
     <td><input type="checkbox" data-adj="${i}" checked></td>
-    <td>${a.tws} kn</td><td>${a.twa}°</td><td>${esc(a.point_of_sail)}</td>
+    <td>${a.tws} kts</td><td>${a.twa}°</td><td>${esc(a.point_of_sail)}</td>
     <td><b class="conf ${a.mult < 1 ? "bad" : "ok"}">×${a.mult}</b></td>
     <td class="muted">${esc(a.basis || "")}</td></tr>`).join("");
   return `<div class="dep-grid" style="margin-bottom:8px">

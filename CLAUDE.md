@@ -1332,36 +1332,36 @@ refinements) — **3.1** the four scattered map L.Controls collapsed into ONE bo
 **3.2** `renderOptResult` is now a map-led **cockpit** grid (`.opt-cockpit`: the slippy map is the
 hero ~620 px; stats + collapsible `<details>` rail = Legs / Briefing / Wind field, stacks on narrow);
 **3.3** the timeline scrub now **pans the map to the projected boat position** (Follow toggle, default
-on) — Orca's "ride along". NEXT = fold in the user's own Orca UX notes as refinements when they arrive.
+on) — Orca's "ride along". (Folding in the user's own Orca UX notes was dropped 2026-07-02 per user — the restyle stands as-is.)
 
 **Copilot track — crew-facing narration ✅ + proactive auto-coach timer ✅ + PLAYBOOK-ADHERENCE
 dashboard tile ✅ + collision/AIS safety callout ✅** (the copilot interprets the signed playbook +
 boat sail model; see "Onboard LLM copilot"). **Collision callout** (`narrate._safety_callout`):
-narration now gathers the engine's `/ais` and voices the nearest CLOSING contact inside the CPA/TCPA
+narration now gathers the engine's `/ais` and shows the nearest CLOSING contact inside the CPA/TCPA
 guard as a TOP-priority safety callout ("Collision risk: <vessel> — CPA x nm in y min") — the one thing
 the copilot interrupts for, always legal in-race (own receiver + own math). act ≤0.5 nm/12 min = "now",
-watch ≤1.5 nm/30 min = "soon"; level is in the callout id so a watch→act escalation re-voices. Verified
-`bench_copilot.test_safety_callout` + end-to-end against the live :8200 engine (voiced a real
+watch ≤1.5 nm/30 min = "soon"; level is in the callout id so a watch→act escalation re-surfaces. Verified
+`bench_copilot.test_safety_callout` + end-to-end against the live :8200 engine (shown a real
 CPA-0.0 nm closing target). Tunables `COPILOT_AIS_{ACT,WATCH}_{CPA_NM,TCPA_MIN}`.
 **Handicap-rival callout** (`narrate._fleet_callout`): narration also gathers the engine's `/fleet` and
-voices the top roster competitor we're racing — a RIVAL (within the ±3-min corrected-time band) or one
+shows the top roster competitor we're racing — a RIVAL (within the ±3-min corrected-time band) or one
 projected AHEAD of us on corrected ("{boat} ahead on corrected — projected to beat us by m:ss …
 consider covering"). Grounded in `get_fleet` (onboard: own AIS + frozen roster + own corrected-time
 math — in-race-legal tactical layer), confidence-gated (`COPILOT_FLEET_MIN_CONF`=0.4), category `fleet`
 (priority below safety/rounding/sail, persist-2 raise-slow), tag in the id so behind→rival→ahead
-re-voices. The spoken counterpart to the dashboard AIS/Fleet tile's corrected-time overlay. Verified
+re-surfaces. The shown counterpart to the dashboard AIS/Fleet tile's corrected-time overlay. Verified
 `bench_copilot.test_fleet_callout`. **Lab-3 branch-trigger callouts** (`narrate._deviation_callout` +
-`_drift_callout`): narration now also voices the two Lab-3 branch triggers the Strategy card shows —
+`_drift_callout`): narration now also shows the two Lab-3 branch triggers the Strategy card shows —
 **route-deviation** ("Off the playbook line — 1.3 nm right of variant middle's optimal track" / "Behind
 the plan's pace — 3:20 behind (−0.8 kn VMC)") from the engine's `/deviation`, and **forecast-drift**
 ("Forecast has moved — the breeze the plan assumed has veered ~31° since it was frozen — the recommended
-variant may no longer pay") from `/drift`. Both voiced only at the engine's fuzzy watch/act (the
+variant may no longer pay") from `/drift`. Both shown only at the engine's fuzzy watch/act (the
 engine's own Schmitt bands already de-noise, so CONFIRM_ROUNDS=1), grounded in `get_deviation`/`get_drift`
 + the frozen variant/`forecast_fingerprint` — the copilot SELECTS/INTERPRETS the pre-loaded homework +
 common public data, never originates strategy. Categories `deviation`(5)/`drift`(8) sit among the
-playbook-adherence callouts; status in the id so watch→act re-voices. `copilot.gather` now fetches
+playbook-adherence callouts; status in the id so watch→act re-surfaces. `copilot.gather` now fetches
 `get_deviation`+`get_drift`; `EngineClient.deviation()/drift()` added. Verified
-`bench_copilot.test_deviation_drift_callout` + LIVE (both fired against the real :8200 engine, spoken
+`bench_copilot.test_deviation_drift_callout` + LIVE (both fired against the real :8200 engine, the coach
 line combined them in priority order). **Handicap-aware fleet tactics ✅** (incl. the verified YB/bycmack over-the-horizon tracker
 source) — see "Handicap-aware fleet tactics". **Next:** (open) — Lab-3 graceful-degradation SELECTOR
 (pick a pre-authored branch when a trigger fires → onboard re-optimize → off-script+flag); island
@@ -1468,14 +1468,14 @@ is the TIMER that DRIVES it. A background loop in the copilot lifespan ticks eve
 engine, and HOLDS the latest result — so the copilot volunteers coaching whether or not anything polls,
 and the TIME-DRIVEN callouts (a closing-traffic COLLISION warning — safety, top priority; 15/10/5-min
 rounding prep, a playbook branch firing, a sail change-down) fire on the clock. It mirrors the cloud alerting loop; `narrate.step`'s raise-slow/clear-fast
-speak-once already dedups, the loop just calls it on a schedule + keeps a short spoken history. The LLM
+show-once already dedups, the loop just calls it on a schedule + keeps a short callout history. The LLM
 only phrases NEW callouts (most ticks are deterministic + cheap), following `USE_LLM`. `GET /coach`
 reads the held state with no recompute (the canonical proactive surface; `POST /narrate` is the
 on-demand/debug equivalent — don't poll both for one route, they share the dedup). The crew dashboard
-shows a **COACH speech line** in the commentary panel (`fetchCoach` polls `/copilot/coach` ~15 s; the
-last volunteered line + "Ns ago", hidden when there's nothing to say). Verified: `bench_copilot.test_coach_logic`
+shows a **coach line** in the commentary panel (`fetchCoach` polls `/copilot/coach` ~15 s; the
+last volunteered line + "Ns ago", hidden when there's nothing to show). Verified: `bench_copilot.test_coach_logic`
 (held state / history-on-new / nothing-new / error-survival), live `/coach`+`/health` end-to-end (timer
-ticks against the Pi engine), Playwright (coach line renders the spoken history, only the known-unrelated
+ticks against the Pi engine), Playwright (coach line renders the callout history, only the known-unrelated
 `/copilot/adherence` 404). **Next copilot increment = (open).** See
 `pi/orin/copilot/README.md`. The **iPad crew dashboard** that surfaces the copilot graphically (a
 fixed, all-items-visible status grid that the LLM scores green/yellow/red with color-blind-safe
