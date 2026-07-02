@@ -45,6 +45,7 @@ body {
   border-radius:9px; padding:7px 12px; font-size:12px; letter-spacing:.5px; font-weight:600;
   cursor:pointer; }
 .ctl b { font-weight:800; text-transform:uppercase; }
+.ctl.armed { border-color:#35c07a; color:#35c07a; box-shadow:inset 0 0 0 1px #35c07a; }
 
 /* ---------- Strategy strip: route-deviation vs the frozen playbook variant (Lab-3) ---------- */
 .strategy { flex:none; margin:10px 10px 0; padding:10px 14px; border-radius:12px;

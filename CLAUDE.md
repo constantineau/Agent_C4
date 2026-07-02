@@ -1476,7 +1476,20 @@ shows a **coach line** in the commentary panel (`fetchCoach` polls `/copilot/coa
 last volunteered line + "Ns ago", hidden when there's nothing to show). Verified: `bench_copilot.test_coach_logic`
 (held state / history-on-new / nothing-new / error-survival), live `/coach`+`/health` end-to-end (timer
 ticks against the Pi engine), Playwright (coach line renders the callout history, only the known-unrelated
-`/copilot/adherence` 404). **Next copilot increment = (open).** See
+`/copilot/adherence` 404).
+**Narration is VISUAL-ONLY + an audio ALERT SIGNAL (2026-07-02):** the copilot NEVER speaks (no TTS) —
+its callouts are DISPLAYED (coach line, banner, Strategy card). To keep a screen from being ignored when
+the crew is looking at the water, a NEW **safety/urgent** callout also fires a short synthesized attention
+**tone** (a signal, not speech — cuts through wind noise since there's no language to parse). Client-only
+in the dashboard (`dashboard.js` `Sound`/`maybeAlert`): hooks the `/coach` `new` stream (already deduped +
+priority-sorted), de-dups by callout id (status is in the id → a watch→act escalation re-alerts), and
+sounds only `urgency:"now"` (act = 3 rising beeps) or `category:"safety"` (watch = soft two-note chime) —
+routine coaching stays silent. Armed by a **🔔 topbar toggle** (default off; the tap also satisfies iOS
+Safari's audio-unlock gesture + plays a test chime; re-armed on first interaction after a reload). Live
+source only. Verified (Playwright, instrumented AudioContext): arm→2-tone chime, a safety-`now` callout→
+3-tone alert, same id→0 (dedup), 0 page errors. NOTE (v1): latency is the coach cadence (≤ tick+poll,
+~30–45 s) — a faster AIS-tile fast-path for imminent collisions is a possible follow-up; per-severity
+tone tuning is easy. **Next copilot increment = (open).** See
 `pi/orin/copilot/README.md`. The **iPad crew dashboard** that surfaces the copilot graphically (a
 fixed, all-items-visible status grid that the LLM scores green/yellow/red with color-blind-safe
 redundant encoding + a commentary panel + tap-to-detail LLM deep-dives) is designed/locked in

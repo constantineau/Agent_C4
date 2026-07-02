@@ -628,6 +628,7 @@
       r = resp.ok ? await resp.json() : null;
     } catch (e) { r = null; }
     if (r) App.coach = r;
+    if (r) maybeAlert(r);           // sound a short tone if a new safety/urgent callout arrived
     if (App.src === "live") render();
   }
   function agoText(epochSec) {
@@ -1054,6 +1055,60 @@
   }
   function startPolling() { poll(); if (!App.pollTimer) App.pollTimer = setInterval(poll, 3000); }
 
+  /* ============================ audio ALERT signal ============================
+     Narration is VISUAL — but a screen can't grab the eye when the crew is looking at the water. So a
+     new SAFETY/urgent callout also fires a short synthesized attention TONE (no speech — a signal that
+     says "look at the screen", which cuts through wind noise better than words). Client-only; it hooks
+     the /coach `new` stream (already deduped + priority-sorted on the Orin) and de-dups by callout id
+     (status is baked into the id, so a watch→act escalation re-alerts). iOS Safari blocks audio until a
+     user gesture, so it's armed by the 🔔 toggle (which also plays a test chime). Live source only. */
+  const Sound = { on: localStorage.getItem("sr33.dash.sound") === "on", ctx: null, alerted: new Set() };
+  function audioCtx() {
+    if (!Sound.ctx) { const AC = window.AudioContext || window.webkitAudioContext; if (AC) Sound.ctx = new AC(); }
+    if (Sound.ctx && Sound.ctx.state === "suspended") Sound.ctx.resume();
+    return Sound.ctx;
+  }
+  function tone(freq, startMs, durMs, peak) {
+    const ctx = Sound.ctx; if (!ctx) return;
+    const t0 = ctx.currentTime + startMs / 1000, t1 = t0 + durMs / 1000;
+    const osc = ctx.createOscillator(), g = ctx.createGain();
+    osc.type = "sine"; osc.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(peak, t0 + 0.012);   // fast attack
+    g.gain.exponentialRampToValueAtTime(0.0001, t1);         // decay to silence
+    osc.connect(g).connect(ctx.destination);
+    osc.start(t0); osc.stop(t1 + 0.02);
+  }
+  function playAlert(level) {
+    if (!audioCtx()) return;
+    if (level === "act") { tone(784, 0, 110, 0.5); tone(988, 150, 110, 0.5); tone(1319, 300, 150, 0.55); }  // 3 rising beeps
+    else { tone(659, 0, 120, 0.32); tone(880, 140, 160, 0.32); }                                            // soft two-note chime
+  }
+  function alertLevel(c) {   // which callouts are worth a sound (avoid alert fatigue: only the top tiers)
+    if (!c) return null;
+    if (c.urgency === "now") return "act";       // act-level: collision/rounding/branch firing NOW
+    if (c.category === "safety") return "watch"; // a closing contact not yet in the guard
+    return null;                                 // routine coaching stays silent (visual only)
+  }
+  function maybeAlert(coach) {
+    if (!Sound.on || App.src !== "live" || !coach) return;
+    let level = null;
+    for (const c of (coach.new || [])) {
+      const lvl = alertLevel(c);
+      if (!lvl || Sound.alerted.has(c.id)) continue;
+      Sound.alerted.add(c.id);
+      if (lvl === "act") level = "act"; else if (level !== "act") level = "watch";
+    }
+    if (level) playAlert(level);
+  }
+  function toggleSound() {
+    Sound.on = !Sound.on;
+    localStorage.setItem("sr33.dash.sound", Sound.on ? "on" : "off");
+    document.getElementById("alertLbl").textContent = Sound.on ? "ON" : "OFF";
+    document.getElementById("alertBtn").classList.toggle("armed", Sound.on);
+    if (Sound.on) { audioCtx(); playAlert("watch"); }   // the tap unlocks iOS audio + confirms it works
+  }
+
   /* ============================ controls ============================ */
   function cycleSource() {
     if (App.src === "live") { App.src = "demo"; App.demoScn = "calm"; }
@@ -1094,6 +1149,12 @@
     App.selTimer = setInterval(fetchSelector, DEV_EVERY);
     document.getElementById("themeBtn").addEventListener("click", cycleTheme);
     document.getElementById("srcBtn").addEventListener("click", cycleSource);
+    document.getElementById("alertBtn").addEventListener("click", toggleSound);
+    // reflect a persisted armed state, and re-unlock iOS audio on the first interaction after a reload
+    document.getElementById("alertLbl").textContent = Sound.on ? "ON" : "OFF";
+    document.getElementById("alertBtn").classList.toggle("armed", Sound.on);
+    ["click", "touchend"].forEach((ev) =>
+      document.addEventListener(ev, () => { if (Sound.on) audioCtx(); }, { once: true, passive: true }));
     document.getElementById("briefBtn").addEventListener("click", briefMe);
     document.getElementById("detBack").addEventListener("click", closeDetail);
     document.getElementById("overlay").addEventListener("click", closeDetail);
