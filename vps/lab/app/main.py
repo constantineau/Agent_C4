@@ -350,6 +350,47 @@ async def optimize(body: dict):
         return JSONResponse({"detail": f"optimize failed: {exc}"}, status_code=500)
 
 
+def _skill_venue(body):
+    """(definition, venue, race_date) for a model-skill request, or (None, ...) if unresolved."""
+    d = store.get_race(body.get("race_id")) if body.get("race_id") else None
+    if not d:
+        return None, None, None
+    from . import venue as venue_mod
+    v = venue_mod.resolve(d, body.get("course_id"))
+    se = body.get("start_epoch")
+    rd = (datetime.datetime.fromtimestamp(float(se), datetime.timezone.utc).date() if se else None)
+    return d, v, rd
+
+
+@app.get("/api/model-skill")
+async def model_skill_get(race_id: str, course_id: str = None):
+    """The venue's current model-skill weights + scorecard (no refetch) — for the Lab display panel."""
+    d, v, _ = _skill_venue({"race_id": race_id, "course_id": course_id})
+    if not d:
+        return JSONResponse({"detail": "unknown race_id"}, status_code=404)
+    from . import modelskill
+    return modelskill.venue_weights(v, refresh=False) if v else {"enabled": False, "reason": "no venue"}
+
+
+@app.post("/api/model-skill/backfill")
+async def model_skill_backfill(body: dict):
+    """Run the OFFLINE deep backfill (pre-2021 HRRR + GEFS-reforecast GRIB archives) for a race's venue,
+    then return the refreshed weights. Heavy + synchronous (minutes for a full seasonal span)."""
+    body = body or {}
+    d, v, rd = _skill_venue(body)
+    if not d:
+        return JSONResponse({"detail": "unknown race_id"}, status_code=404)
+    if not v or not v.get("station"):
+        return JSONResponse({"detail": "venue has no observation station — can't score skill"},
+                            status_code=422)
+    from . import modelskill
+    try:
+        await run_in_threadpool(modelskill.backfill_deep, v, modelskill.DEFAULT_MODELS, rd)
+        return modelskill.venue_weights(v, refresh=False)
+    except Exception as exc:
+        return JSONResponse({"detail": f"backfill failed: {exc}"}, status_code=500)
+
+
 def _run_enc_prep(definition, course_id):
     """Blocking: download + GDAL-extract the NOAA ENC cells covering a course bbox (cache warm-up)."""
     from . import optimizer

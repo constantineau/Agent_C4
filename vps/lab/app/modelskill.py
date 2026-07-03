@@ -191,15 +191,26 @@ def fetch_ndbc_window(station, sd, ed):
 
 
 # ---------------------------------------------------- deep history (pre-2021): reforecast / GRIB archive
-REFORECAST_READY = False   # flipped on once the heavier pipeline lands (see docs/MODEL_SKILL_WEIGHTING.md)
+# Maps our model -> (first available year, deep series provider in deepfc). Deep coverage is uneven:
+# HRRR archive from 2015 (extended runs), GEFS Reforecast v12 stands in for the NCEP GLOBAL lineage
+# ('gfs') back to ~2005. ECMWF/ICON/GEM have no easy deep archive → they rest on Open-Meteo (2021+).
+def _deep_providers():
+    from . import deepfc
+    return {"hrrr": (2015, deepfc.hrrr_series), "gfs": (2005, deepfc.gefs_series)}
 
 
 def fetch_reforecast(lat, lon, sd, ed, model, year):
-    """DEEP (pre-2021) archived-forecast provider — the heavier GRIB pipeline (GEFS Reforecast v12 on
-    AWS ≈ 2000-2019; HRRR archive ≈ 2014+; ECMWF reforecasts). Returns {epoch: (tws_kn, twd_deg)}.
-    STUB: returns {} until the pipeline is built, so pre-2021 seasonal windows currently no-op and the
-    recency-weighted score rests on the Open-Meteo era. Wiring this is the next increment."""
-    return {}
+    """DEEP (pre-2021) archived-forecast provider via the AWS GRIB byte-range pipeline (`deepfc`).
+    Returns {epoch: (tws_kn, twd_deg)}, or {} if this model has no deep source for `year`. HEAVY — only
+    reached when a caller explicitly opts into deep (the backfill), never on the inline optimize path."""
+    try:
+        prov = _deep_providers().get(model)
+        if not prov:
+            return {}
+        first, series = prov
+        return series(lat, lon, sd, ed) if year >= first else {}
+    except Exception:
+        return {}
 
 
 # --------------------------------------------------------------------------------------- scoring
@@ -339,6 +350,8 @@ def load_scores(venue_key):
 def _fresh(scores):
     if not scores:
         return False
+    if any(s.get("deep") for s in scores.values()):
+        return True                                  # deep backfill is historical + static → permanent
     now = dt.datetime.now(dt.timezone.utc).timestamp()
     return all((now - s["updated_at"]) < SKILL_TTL_S for s in scores.values())
 
@@ -368,12 +381,13 @@ def _recency_weight(year, ref_year):
     return 0.5 ** ((ref_year - year) / max(0.5, RECENCY_HALFLIFE_Y))
 
 
-def forecast_series(lat, lon, sd, ed, model, year):
+def forecast_series(lat, lon, sd, ed, model, year, include_deep=False):
     """Each model's PAST forecast for a window — dispatched by year. Open-Meteo for the archive era
-    (>=2021); the heavier reforecast/GRIB-archive pipeline for older years (deep history)."""
+    (>=2021); the heavier reforecast/GRIB-archive pipeline for older years, but ONLY when include_deep
+    (the offline backfill) — the inline optimize path never triggers the heavy deep pulls."""
     if year >= OPENMETEO_FIRST_YEAR:
         return fetch_forecast(lat, lon, sd, ed, model)
-    return fetch_reforecast(lat, lon, sd, ed, model, year)
+    return fetch_reforecast(lat, lon, sd, ed, model, year) if include_deep else {}
 
 
 def obs_series(station, sd, ed):
@@ -383,14 +397,15 @@ def obs_series(station, sd, ed):
     return fetch_metar(station["id"], sd, ed)
 
 
-def refresh_venue_skill(venue, models=DEFAULT_MODELS, race_date=None, force=False):
+def refresh_venue_skill(venue, models=DEFAULT_MODELS, race_date=None, force=False, include_deep=False):
     """Score each model over the venue's SEASONAL window across MANY years, recency-weighted, at the
     station (co-located with the obs — a shore forecast point vs shore obs; never mid-lake vs shore).
-    Persists + caches (skips within SKILL_TTL_S unless force). Returns {} if the venue has no station.
+    Persists + caches (skips within SKILL_TTL_S unless force; a deep result is permanent). Returns {}
+    if the venue has no station.
 
     `race_date` (a datetime.date) centres the seasonal window on the race's time of year; without it we
-    centre on today. Years reach back to FIRST_YEAR — pre-2021 needs the deep reforecast provider
-    (fetch_reforecast); until that's wired those years simply contribute nothing."""
+    centre on today. `include_deep`=False (the inline optimize path) scores only the Open-Meteo era
+    (>=2021), fast; the offline backfill sets it True to fold in the heavy pre-2021 GRIB archives."""
     st = (venue or {}).get("station")
     if not st:
         return {}
@@ -406,12 +421,14 @@ def refresh_venue_skill(venue, models=DEFAULT_MODELS, race_date=None, force=Fals
     accs = {m: _acc_new() for m in models}
     years_used, deep_used = set(), False
     for (year, sd, ed) in windows:
+        if year < OPENMETEO_FIRST_YEAR and not include_deep:
+            continue                                 # skip deep years on the fast inline path
         obs = obs_series(st, sd, ed)
         if not obs:
             continue
         w = _recency_weight(year, yesterday.year)
         for m in models:
-            fc = forecast_series(lat, lon, sd, ed, m, year)
+            fc = forecast_series(lat, lon, sd, ed, m, year, include_deep=include_deep)
             if fc:
                 before = accs[m]["n"]
                 _acc_add(accs[m], _match(obs, fc), w)
@@ -425,6 +442,15 @@ def refresh_venue_skill(venue, models=DEFAULT_MODELS, race_date=None, force=Fals
     save_scores(venue["key"], st["id"], st["kind"], span, scores,
                 n_years=len(yrs), deep=deep_used)
     return load_scores(venue["key"])
+
+
+def backfill_deep(venue, models=DEFAULT_MODELS, race_date=None):
+    """Explicit OFFLINE deep backfill: re-score the venue INCLUDING the pre-2021 GRIB archives (HRRR
+    2015+, GEFS reforecast 2005+), recency-weighted, and persist. Heavy (thousands of byte-range GRIB
+    gets) — run on demand, not inline. The result is marked deep=True so the fast optimize path then
+    reads it as permanent and never clobbers it."""
+    return refresh_venue_skill(venue, models=models, race_date=race_date,
+                               force=True, include_deep=True)
 
 
 def derive_weights(scores):

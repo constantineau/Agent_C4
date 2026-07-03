@@ -133,9 +133,15 @@ Sits beside the existing Lab-4 `learning.db` tables (`debriefs`, `perf_bins`, `p
   `build_windfield`→`detail_at`; env kill-switch. Verified live at KAPN: HRRR 2.85 kn across 5 July
   seasons (2022–2026, n=4123) → ×1.71; global models down-weighted. `forecast_series()` dispatches
   pre-2021 years to `fetch_reforecast()` (deep hook).
-- **Phase 2b — deep GRIB pipeline (IN PROGRESS):** implement `fetch_reforecast` = HRRR archive
-  (2014+) + GEFS Reforecast v12 (2005+) via `.idx` byte-range subsetting from AWS, parsed with the
-  existing eccodes. Offline/cached (never inline on optimize).
+- **Phase 2b — deep GRIB pipeline (BUILT + VERIFIED 2026-07-03):** `deepfc.py` = `.idx` byte-range
+  subsetting from AWS, parsed with the existing eccodes — **HRRR archive** (`hrrr_series`, 2015+) +
+  **GEFS Reforecast v12** (`gefs_series`, 2005+, the NCEP-global 'gfs' deep proxy) at a same-day
+  +6..18 h band (exists across the full archive depth). `fetch_reforecast` wires them in; deep runs
+  ONLY via the explicit **`backfill_deep`** (offline, heavy) — the inline optimize path skips pre-2021
+  years, and a deep result is marked `deep=True` → treated as permanent so optimize never clobbers it.
+  Endpoints: `GET /api/model-skill` (read), `POST /api/model-skill/backfill` (run deep). Verified live:
+  HRRR parsed back to 2015, GEFS to 2008; a bounded 2019–2026 backfill merged deep GRIB years with the
+  Open-Meteo era (HRRR n=499 → ×1.70), uneven model coverage handled by shrink-to-priors.
 - **Phase 2c — display:** surface active weights + the earning RMSE + year-span in the optimize
   result and a Lab "Model skill" panel (required, since weighting is automatic).
 - **Phase 3 — refinements:** boat-instrument obs supplement; regime-conditional weighting

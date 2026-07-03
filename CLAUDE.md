@@ -960,14 +960,19 @@ forecast-vs-observed verification, not model-vs-model agreement (which we alread
   leads). Weights = de-bias + inverse-MSE + shrink-to-priors + cap, threaded through
   `build_windfield → detail_at`; env kill-switch. Verified live at KAPN: **HRRR 2.85 kn across 5 July
   seasons (2022–2026, n=4123) → ×1.71**, globals down-weighted.
-- **Phase 2b (IN PROGRESS) — deep GRIB pipeline:** go deeper than the Open-Meteo 2021 floor. `.idx`
-  byte-range subsetting from AWS — **HRRR archive** (`noaa-hrrr-bdp-pds`, 2014+) + **GEFS Reforecast
-  v12** (`noaa-gefs-retrospective`, ~2005+), both probed accessible 2026-07-03. Coverage is uneven by
-  model (HRRR 2014+, GEFS 2005+, rest 2021+) — recency + shrink-to-priors keep sparse deep data from
-  swinging weights. `forecast_series()` already dispatches pre-2021 years to `fetch_reforecast` (stub).
-- **Phase 2c = display** (active weights + earning RMSE + year-span in the optimize result + a Lab
-  panel; required since weighting is automatic). **Phase 3** = boat-obs supplement + regime-conditional
-  (gradient vs thermal) + explicit lead-time buckets. Full design: `docs/MODEL_SKILL_WEIGHTING.md`.
+- **Phase 2b (BUILT + VERIFIED 2026-07-03) — deep GRIB pipeline:** goes deeper than the Open-Meteo
+  2021 floor. `deepfc.py` does `.idx` byte-range subsetting from AWS — **HRRR archive** (`hrrr_series`,
+  2015+) + **GEFS Reforecast v12** (`gefs_series`, 2005+, the NCEP-global 'gfs' deep proxy) at a
+  same-day +6..18 h band (available across the full archive depth; HRRR extended f24+ only starts
+  ~2019). Deep runs ONLY via the explicit **`backfill_deep`** (offline, heavy — thousands of byte-range
+  gets); the inline optimize path skips pre-2021 years, and a deep result is `deep=True` → permanent, so
+  optimize reads it without ever re-running. Endpoints `GET /api/model-skill` + `POST
+  /api/model-skill/backfill`. Verified: HRRR parsed to 2015 / GEFS to 2008; bounded 2019–2026 backfill
+  merged deep GRIB years w/ Open-Meteo (HRRR n=499 → ×1.70); uneven coverage handled by shrink-to-priors.
+- **Phase 2c (NEXT) = display** (active weights + earning RMSE + year-span in the optimize result + a
+  Lab panel + a "deep backfill" button; required since weighting is automatic). **Phase 3** = boat-obs
+  supplement + regime-conditional (gradient vs thermal) + lead-time buckets. Design:
+  `docs/MODEL_SKILL_WEIGHTING.md`.
 
 ## C4 Performance Lab — Lab-2 branching playbook bundle
 
