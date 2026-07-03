@@ -142,7 +142,9 @@ Sits beside the existing Lab-4 `learning.db` tables (`debriefs`, `perf_bins`, `p
   Endpoints: `GET /api/model-skill` (read), `POST /api/model-skill/backfill` (run deep). Verified live:
   HRRR parsed back to 2015, GEFS to 2008; a bounded 2019–2026 backfill merged deep GRIB years with the
   Open-Meteo era (HRRR n=499 → ×1.70), uneven model coverage handled by shrink-to-priors.
-- **Phase 2c — display:** surface active weights + the earning RMSE + year-span in the optimize
-  result and a Lab "Model skill" panel (required, since weighting is automatic).
+- **Phase 2c — display (BUILT 2026-07-03):** a GamePlan **Model skill** rail panel (`optModelSkill`)
+  shows each model's RMSE, applied weight (green ↑ / red ↓), veer-bias removed, sample n, the venue/
+  station, season count + span, recency t½, and a `deep` badge — plus a **"Deepen history (2005+)"**
+  button (`runModelSkillBackfill` → `POST /api/model-skill/backfill`). Required since weighting is auto.
 - **Phase 3 — refinements:** boat-instrument obs supplement; regime-conditional weighting
   (gradient vs thermal/lake-breeze); explicit lead-time buckets for longer planning horizons.

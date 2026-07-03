@@ -969,10 +969,11 @@ forecast-vs-observed verification, not model-vs-model agreement (which we alread
   optimize reads it without ever re-running. Endpoints `GET /api/model-skill` + `POST
   /api/model-skill/backfill`. Verified: HRRR parsed to 2015 / GEFS to 2008; bounded 2019–2026 backfill
   merged deep GRIB years w/ Open-Meteo (HRRR n=499 → ×1.70); uneven coverage handled by shrink-to-priors.
-- **Phase 2c (NEXT) = display** (active weights + earning RMSE + year-span in the optimize result + a
-  Lab panel + a "deep backfill" button; required since weighting is automatic). **Phase 3** = boat-obs
-  supplement + regime-conditional (gradient vs thermal) + lead-time buckets. Design:
-  `docs/MODEL_SKILL_WEIGHTING.md`.
+- **Phase 2c (BUILT 2026-07-03) = display:** GamePlan **Model skill** rail panel (`optModelSkill` in
+  `web/app.js`) — per-model RMSE, applied weight (green ↑ / red ↓), veer-bias removed, sample n, venue/
+  station, season count + span, recency t½, `deep` badge, and a **"Deepen history (2005+)"** button
+  (`runModelSkillBackfill` → `POST /api/model-skill/backfill`). **Phase 3** = boat-obs supplement +
+  regime-conditional (gradient vs thermal) + lead-time buckets. Design: `docs/MODEL_SKILL_WEIGHTING.md`.
 
 ## C4 Performance Lab — Lab-2 branching playbook bundle
 

@@ -1099,6 +1099,7 @@ function renderOptResult(r) {
           `${esc(m.model.toUpperCase())} ${esc(m.cycle)} — ${m.frames}${m.expected_frames ? "/" + m.expected_frames : ""} frames` +
           (m.cycle_fallbacks ? ` <span class="conf warn">(−${m.cycle_fallbacks} cycle)</span>` : "")).join(" · ")} · ${r.windfield.total_frames} frames total</div>
       </details>
+      ${optModelSkill(r)}
     </aside></div>`;
   MapView.render("optMap", r);
 }
@@ -1161,6 +1162,59 @@ function optCurrentStat(r) {
     ? `${c.drift_kn ?? "?"} kts @ ${c.set_deg ?? "?"}°`
     : `${c.slices ?? "?"} slices${peak ? ` · pk ${peak} kts` : ""}`;
   return `<div title="Water current folded into the leg ETAs (set & drift). Source ${esc(src)}."><b>${esc(src)}</b><span>current · ${esc(sub)}</span></div>`;
+}
+
+// Venue weather-model skill panel: each model weighted by its MEASURED past accuracy at this venue
+// (forecast-vs-observed), recency-weighted across seasons. Weights are applied automatically, so we
+// always show them + the RMSE that earned them + a button to deepen the history (pre-2021 archives).
+function optModelSkill(r) {
+  const s = r.model_skill;
+  if (!s) return "";
+  const btn = `<button class="mini" onclick="runModelSkillBackfill()" id="mskBackfill"
+    title="Pull the pre-2021 GRIB archives (HRRR 2015+, GEFS reforecast 2005+) for this venue — minutes, runs once, then cached.">⏳ Deepen history (2005+)</button>`;
+  if (!s.enabled) {
+    return `<details class="rail-sec"><summary>Model skill</summary>
+      <div class="muted" style="font-size:12px">${esc(s.note || s.reason || "not weighting")} —
+      routing on static model priors.</div>
+      ${s.venue_key ? `<div class="muted" style="font-size:11px;margin-top:4px">Venue ${esc(s.venue_key)}${s.station ? " · " + esc(s.station) : ""}</div>${btn}` : ""}
+    </details>`;
+  }
+  const rows = (s.table || []).map((t) => {
+    const w = t.weight == null ? 1 : t.weight;
+    const cls = w >= 1.15 ? "ok" : w <= 0.85 ? "bad" : "";
+    const db = (t.bias_speed_kn || t.bias_dir_deg)
+      ? `<span class="muted" title="bias removed before blending">${t.bias_dir_deg > 0 ? "+" : ""}${t.bias_dir_deg || 0}°</span>` : "—";
+    return `<tr><td>${esc(t.model.toUpperCase())}</td><td>${t.vector_rmse_kn}</td>
+      <td><b class="conf ${cls}">×${w}</b></td><td>${db}</td><td class="muted">${t.n}</td></tr>`;
+  }).join("");
+  const deep = s.deep ? `<span class="pill ok" title="Includes pre-2021 reforecast archives">deep</span>` : "";
+  return `<details class="rail-sec" open><summary>Model skill ${deep}</summary>
+    <div class="muted" style="font-size:11px;margin-bottom:6px">
+      Weighted by measured accuracy at <b>${esc(s.station || s.venue_key)}</b>${s.station_name ? " (" + esc(s.station_name) + ")" : ""} ·
+      ${s.n_years || 1} season${(s.n_years || 1) > 1 ? "s" : ""} ${s.window ? esc(s.window[0]) + "–" + esc(s.window[1]) : ""} ·
+      recency t½ ${s.recency_halflife_y}y · lower RMSE ⇒ higher weight (de-biased first)</div>
+    <table class="legs"><thead><tr><th>Model</th><th>RMSE kn</th><th>Weight</th><th>Veer bias</th><th>n</th></tr></thead>
+      <tbody>${rows}</tbody></table>
+    <div style="margin-top:6px">${btn}</div>
+    <div id="mskMsg" class="muted" style="font-size:11px;margin-top:4px"></div>
+  </details>`;
+}
+
+async function runModelSkillBackfill() {
+  const b = document.getElementById("mskBackfill"); const msg = document.getElementById("mskMsg");
+  if (!b) return;
+  b.disabled = true; b.textContent = "Deepening… (pulling GRIB archives, minutes)";
+  if (msg) msg.textContent = "Fetching pre-2021 HRRR + GEFS-reforecast archives for this venue…";
+  const body = { race_id: Opt.raceId, course_id: Opt.courseId };
+  const se = optStartEpoch(); if (se != null) body.start_epoch = se;
+  try {
+    const res = await apiPost("/api/model-skill/backfill", body);
+    const p = await jsonOrFriendly(res);
+    if (Opt.result) { Opt.result.model_skill = p; renderGameplan(); }
+  } catch (e) {
+    if (msg) msg.textContent = "Backfill failed: " + esc(String(e));
+    b.disabled = false; b.textContent = "⏳ Deepen history (2005+)";
+  }
 }
 
 function optSailPlan(r) {
