@@ -21,9 +21,10 @@ The **optional onboard conversational LLM** of the three-tier architecture (see
 Locked decisions: the **Pi 4 owns the deterministic engine** (routing/tactics/sails/nav/fatigue —
 plain physics, no LLM); the **Orin owns the LLM**. Under RRS 41 the boat's own computer reasoning over
 its own sensors + pre-loaded homework + common public data is *not* "outside help" — so the copilot is
-legal while racing **as long as it never phones the cloud mid-race**. Its job is to *interpret* the
-engine's numbers and the pre-loaded playbook, not to originate strategy or do the math (the engine
-does the math; Opus builds the strategy space pre-race, frozen at the gun).
+legal while racing **as long as it never phones the cloud mid-race** (that off-boat round-trip is the
+real RRS-41 line). Onboard it MAY originate strategy — it interprets the engine's numbers and the
+pre-loaded playbook and can reason beyond them. The engine still does the math (a reliability guardrail,
+not a legal one); the pre-race Opus playbook is a strong prior/homework, not a limit.
 
 ## The inference-API contract
 

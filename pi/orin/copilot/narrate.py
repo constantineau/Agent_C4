@@ -9,9 +9,9 @@ corrected time, an upcoming sail change-down, a helm rotation, stale instruments
 
 Every callout is GROUNDED in an engine fact and/or a playbook variant exactly like a brief item
 — the engine does the math, the callout reports it. The LLM only PHRASES the top callouts into a
-calm coach line, and the deterministic callout text is the always-on fallback. Nothing here
-originates strategy: it SELECTS/INTERPRETS the pre-authored homework + the engine's own numbers,
-which is the in-race-legal posture (RRS 41 — see the copilot README).
+calm coach line, and the deterministic callout text is the always-on fallback. It may originate
+strategy onboard; the in-race-legal posture is simply that it all runs on the boat's own gear —
+grounded in the pre-authored homework + the engine's own numbers (RRS 41 — see the copilot README).
 
 State: a tiny in-process dedup store (per route) gives "raise slow, clear fast" + show-once. A
 callout that just (and persistently) appeared is `new` — worth showing; once shown it stays in
@@ -204,7 +204,7 @@ def _sail_callouts(sail):
 
 def _variant_for_side(playbook, side):
     """Find a playbook variant whose flip-trigger / id / summary points at `side` (left/right).
-    The match keeps the copilot SELECTING a pre-authored variant, never inventing one."""
+    The match ties the switch target to a real pre-authored variant (grounding), not a fabricated one."""
     if side not in ("left", "right") or playbook is None or not getattr(playbook, "loaded", False):
         return None
     for v in playbook.variants:
@@ -247,7 +247,7 @@ def _deviation_callout(dev):
     """Route-deviation branch trigger (Lab-3 a): are we sailing the frozen variant's optimal track?
     Shown only when the engine's fuzzy status is watch/act (ok → nothing). The engine already applied
     the Schmitt consider/commit bands, so this doesn't re-debounce. Grounded in get_deviation + the
-    active variant — the copilot SELECTS/INTERPRETS the pre-authored plan, it never invents a course.
+    active variant — grounded in the pre-loaded plan + the engine's own numbers (onboard is legal in-race).
     The status is in the id so a watch→act escalation re-surfaces (like the staged rounding prep)."""
     status = dev.get("status")
     if status not in ("watch", "act"):

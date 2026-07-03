@@ -2,9 +2,9 @@
 
 Lab-2 (the branching playbook bundle) is what *produces* this artifact: N pre-optimized
 routing variants + a branching decision tree + per-variant rationale/tradeoffs, signed and
-frozen at the gun. The copilot's job in-race is to SELECT and INTERPRET those pre-authored
-variants — it must never originate strategy that isn't grounded in the playbook, the engine,
-or common public data.
+frozen at the gun. In-race the copilot leans on those pre-authored variants as a strong prior it may
+depart from (onboard = the boat's own gear, legal) — but it must ground every claim in the playbook,
+the engine, or common public data, and not fabricate the facts it reasons from.
 
 Lab-2b (`vps/lab/app/synthesis.py`) now EMITS that bundle — the `c4.playbook/v1` schema, signed
 (sha256 over its canonical content). This module loads it if `PLAYBOOK_PATH` points at one, exposes
@@ -93,16 +93,17 @@ class Playbook:
 
     def digest(self, max_variants: int = 6) -> str:
         """A compact text summary for the LLM system prompt. Kept short — the 7B's context is
-        the constraint, and the copilot SELECTS variants, it doesn't need every leg detail."""
+        the constraint, and the copilot works at the variant level, so it doesn't need every leg detail."""
         if not self.loaded:
             return (
-                "NO PLAYBOOK LOADED. There is no pre-authored strategy aboard. Restrict yourself "
-                "to interpreting the live engine facts (own instruments + common public forecast); "
-                "do not originate a race strategy or routing plan of your own."
+                "NO PLAYBOOK LOADED. There is no pre-authored strategy aboard, so you have no trusted "
+                "prior to lean on — reason ONLY from the live engine facts (own instruments + common "
+                "public forecast), keep suggestions cautious and clearly hedged, and flag that there is "
+                "no gameplan aboard to check them against."
             )
         lines = [f"PLAYBOOK loaded for race '{self.race_id or 'unknown'}'. "
-                 f"{len(self.variants)} pre-authored variant(s). You SELECT/INTERPRET these; "
-                 "you do not invent new ones."]
+                 f"{len(self.variants)} pre-authored variant(s) — your STRONG DEFAULT. Prefer them; "
+                 "if the facts point beyond them you may recommend a departure, but say so plainly."]
         bm = self.boat_model
         if bm.get("sail_inventory"):
             jib = "; ".join(_jib_band_text(j) for j in bm.get("jib_crossovers", []))

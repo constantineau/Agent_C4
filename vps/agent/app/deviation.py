@@ -18,8 +18,8 @@ FUZZY, not black/white (perflab §5): the status uses SCHMITT bands — a soft *
 hard *commit* band with hysteresis on the drop side, so a boat hovering near a threshold doesn't
 chatter between states. The result is a dashboard-tile-shaped payload (status / value / sub / why /
 consider / clears / based / conf) plus the raw metrics and the active variant's `what_flips_it`, so
-the iPad Strategy card renders it and the crew see WHY. It SELECTS/INTERPRETS the pre-authored
-variant — it never originates strategy (the RRS-41 posture, same as the rest of the onboard tiers).
+the iPad Strategy card renders it and the crew see WHY. This deterministic tile just measures the boat
+against the pre-authored variant's track (onboard is legal in-race — the boat's own gear, not outside help).
 No LLM: the deviation truth is deterministic and always available; a copilot narration layer may
 reference it later through grounding-as-routing.
 

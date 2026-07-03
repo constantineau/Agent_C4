@@ -11,7 +11,8 @@ Fine-tune the onboard copilot LLM (`qwen2.5:7b-instruct-q4_K_M`, Ollama on the O
 | **Scope** | **Focused pilot** — one task, ~200–500 examples, full loop incl. q4 deploy + A/B on the Orin |
 
 ## Why this pilot
-The copilot LLM is a **phraser/structurer, not a reasoner** — the engine does all math and the safety is
+The copilot LLM may reason and originate strategy onboard (legal in-race), but THIS pilot targets its
+**phrasing/structuring reliability** — the engine does all math and the safety is
 *structural* (`brief.validate()` grounding + deterministic fallback). The path that actually fails today
 is the bounded tool loop: the 7B sometimes returns unparseable JSON, ungrounded factors, or doesn't stop
 calling tools → it falls back to the deterministic brief. That failure is **measurable** (parse / schema /
@@ -19,7 +20,8 @@ grounding / loop-termination rates) and improving it proves the *whole* pipeline
 part, surviving q4 quantization on real hardware. We do **not** touch the guardrails: LoRA lowers the
 fallback *rate*, it never replaces the safety net.
 
-Non-goals: speed (still ~12 tok/s, bandwidth-bound), strategy quality (it never originates strategy),
+Non-goals: speed (still ~12 tok/s, bandwidth-bound), strategy quality (the model MAY originate strategy
+onboard, but a later training pass — this pilot targets reliability first),
 coach-line phrasing style (a later pass).
 
 ## Pipeline (end to end)
@@ -113,5 +115,6 @@ README.md           the runbook
 - **Phase 3:** iterate (coverage/hyperparams) or scale to the multi-task adapter (brief + narrate +
   dashboard).
 
-RRS 41: all of this is **pre-race homework** — the model still only phrases/selects grounded facts and
-the frozen playbook, never originates strategy. Training changes nothing about the in-race posture.
+RRS 41: all of this is **pre-race homework** — and it changes nothing about compliance. Onboard, the
+model is the boat's own gear (legal in-race) and may originate strategy; the pilot just makes it more
+reliable, and grounding survives as reliability discipline, not an RRS-41 limit.

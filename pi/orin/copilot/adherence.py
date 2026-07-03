@@ -11,8 +11,8 @@ other side now pays". This module answers, deterministically and at a glance:
   - whether we're ON PLAN (oscillating, or a persistent shift confirms the recommended side), and
   - whether a BRANCH TRIGGER FIRED (a persistent shift now favors a DIFFERENT variant → switch).
 
-It SELECTS/INTERPRETS the pre-authored variants against the engine's tactical read — it never
-originates strategy (the RRS-41 posture, same as the rest of the copilot). The engine does the math
+This deterministic tile just compares the pre-authored variants against the engine's tactical read
+(onboard is legal in-race either way — the boat's own gear isn't outside help). The engine does the math
 (persistent vs oscillating, favored side); this maps that onto the frozen homework. **No LLM** — the
 tile's truth is deterministic and always available; the dashboard's LLM commentary layer may still
 reference the tile through grounding-as-routing.

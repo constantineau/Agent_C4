@@ -4,8 +4,8 @@ the matched competitors into tactical intelligence: course progress, leverage, a
 
 Compliance (RRS 41): this is CLEAN in-race. The targets arrive on the boat's OWN AIS receiver
 (other-vessel Signal K contexts); the roster + ORC handicaps are PRE-LOADED public homework, frozen
-at the gun; the geometry + handicap math run on the boat's OWN computer. The engine COMPUTES, the
-LLM only INTERPRETS (pressure, cover/split). No mid-race cloud call.
+at the gun; the geometry + handicap math run on the boat's OWN computer. The engine COMPUTES; the LLM
+interprets and may recommend (pressure, cover/split), grounded in that data. No mid-race cloud call.
 
 Built source-agnostic on the Phase-9.0 seam (`datasource.active()` + the `ais` helpers), so the same
 code runs in the cloud (`CloudSource`: `ais_targets`+`telemetry_raw`+`app_state`) and onboard the Pi
@@ -337,7 +337,7 @@ def _corrected_delta(entry, method, is_tod, dtf, own_dtf, sog, own_sog, own_tot,
 
 
 def _tag(row):
-    """Deterministic tactical tag the LLM can elaborate (it never originates strategy)."""
+    """Deterministic tactical tag the LLM can elaborate and recommend from (grounded in this data)."""
     cd = row.get("corrected_delta_s")
     if cd is None:
         lead = row.get("on_water_lead_nm")

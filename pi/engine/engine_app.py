@@ -229,7 +229,8 @@ def selector_ep(route: str | None = None):
     """Branch SELECTOR: unifies the wind-shift + route-deviation + forecast-drift triggers into one
     recommendation over the frozen playbook — HOLD the recommended variant / SWITCH to a pre-authored
     variant / OFF-SCRIPT (no branch aboard for the favoured side). Deterministic, legal in-race (own
-    instruments + pre-loaded homework); selects a pre-authored variant, never originates strategy."""
+    instruments + pre-loaded homework); this layer deterministically picks a pre-authored branch (the
+    copilot above it may originate strategy — onboard is the boat's own gear, legal in-race)."""
     return selector.get_selector(route=route)
 
 

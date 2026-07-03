@@ -25,8 +25,8 @@ plan (oscillating, or a persistent shift confirms the recommended side); **watch
 *lean* toward a non-recommended side (early warning); **act** = a persistent shift now favors a
 DIFFERENT variant → the playbook's branch says switch (the tile names the variant + surfaces its
 `what_flips_it`). The face shows a variant table (share %, ★ recommended, ← favored-now); the detail
-carries the trigger text + grounding (`playbook:<id>`, `get_tactics`). It SELECTS/INTERPRETS the
-pre-authored variants — never originates strategy (RRS-41). Verified: pure-logic exit test
+carries the trigger text + grounding (`playbook:<id>`, `get_tactics`). This deterministic tile just
+compares the pre-authored variants against the tactical read (onboard is legal in-race either way). Verified: pure-logic exit test
 (`bench_copilot.test_adherence_logic`, all states + grounding), an end-to-end `/adherence` run
 (stub engine + loaded playbook → branch fired), and a Playwright UI smoke (10-tile 5×2 grid, calm
 `On plan: Left` / escalated `Switch → Right`, detail + commentary, 0 console errors). *(Fixed in
@@ -271,8 +271,9 @@ to the grid after ~30–60 s idle, big back target.
 
 Unchanged from the three-tier design: this all runs **onboard** (Pi engine + Orin LLM), over
 boat-local Wi-Fi, on the boat's own sensors + common public data, never phoning the cloud mid-race.
-The LLM interprets engine facts (and, later, the frozen playbook); it never does the math or
-originates strategy. Legal in-race. See `docs/RRS41_COMPLIANCE.md`.
+The LLM interprets engine facts (and, later, the frozen playbook) and may originate strategy; it
+never does the math (the engine does — a reliability guardrail, not the RRS-41 line). Legal in-race
+because it's all onboard. See `docs/RRS41_COMPLIANCE.md`.
 
 ---
 

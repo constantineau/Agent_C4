@@ -176,7 +176,27 @@ So the corrected picture is **three layers**:
 |---|---|---|---|
 | Deterministic engine (routing/polars/tactics/sails/nav/fatigue) | **Onboard (Pi 4)** | ✅ legal | Expedition-class; boat's own gear + published marks |
 | Common-data fetch (GRIB/forecast/AIS/buoys) | cloud or onboard | ✅ legal | "Information available to all boats" — even at cost |
-| Conversational coaching / NL Q&A | **onboard local LLM** in-race; **cloud Opus** otherwise | onboard ✅ / cloud ❌ | Narrate the engine's facts; deep Q&A |
+| Conversational coaching / NL Q&A / **in-race strategy** | **onboard local LLM** in-race; **cloud Opus** otherwise | onboard ✅ / cloud ❌ | Interpret the engine's facts, deep Q&A, **and originate strategy** over own-data + common data |
+
+### The line is on-boat vs off-boat — NOT LLM-vs-engine, NOT interpret-vs-originate
+
+A model running on hardware **physically on the boat**, on the crew's own gear, over the boat's own
+data + genuinely-common public data, is **not an outside source** — it is onboard equipment, the same
+category as Expedition, B&G, or a human tactician. All of those **originate customized tactical/routing
+strategy in-race**, every day, under RRS 41, with no issue. So the onboard LLM **may originate strategy
+in-race** for the identical reason the deterministic engine may compute a customized route: both sit on
+the *legal* side of the only line that matters.
+
+The thing that ever makes tactical help illegal here is that it **arrives from off the boat** — a shore
+router, a coach boat, or a cloud service reached over the internet mid-race. That off-boat round-trip —
+NOT "it's an LLM," and NOT "it originated the idea" — is the violation (§3, Version C). Two lines were
+being conflated: the real one is **on-boat vs off-boat**; a second, self-imposed one (the onboard LLM
+"only narrates / never originates strategy") is **not required by Rule 41**. Keep the remaining copilot
+guardrails — *the engine does the math* (the small model has no calculator) and *every claim is grounded
+in engine facts / the frozen playbook / common data* — but keep them for the right reason: they are
+**correctness/reliability discipline for a 7B, not compliance requirements.** The pre-race Opus playbook
+likewise stays a **strong prior** (frontier model + full GRIB beats the onboard 7B), but it is a prior,
+**not a legal cage** — onboard, the copilot may depart from it and say so.
 
 **Operating modes that fall out:**
 
@@ -195,9 +215,11 @@ all** — ~80% of the racing value. See `docs/ONBOARD_ENGINE_SCOPING.md`.
 **C — Onboard conversational coaching (optional, hardware).** Add a local LLM on a **Jetson Orin Nano
 (8GB, Super mode)** for in-race natural-language coaching over the engine's facts. Confirmed feasible:
 **Qwen2.5-7B INT4 via MLC ≈ 21.8 tok/s, ~4.8 GB** (Llama-3.1-8B ≈ 19; Llama-3.2-3B ≈ 43 for headroom;
-NVIDIA JetPack 6.2 benchmarks). Design rule: the engine computes; the local model only *narrates +
-answers* single-shot (no math, no inventing tactics, short tool loops only). All onboard → legal
-in-race.
+NVIDIA JetPack 6.2 benchmarks). Design rule (a *reliability* rule, not a legal one): the engine
+computes the numbers; the local model interprets them, answers free-form, and **may originate strategy**
+— constrained only by grounding (reason from engine facts / the frozen playbook / common data, don't
+fabricate) and short tool loops, because that keeps a 7B trustworthy. All onboard → legal in-race
+whether it narrates or strategizes.
 
 The earlier "all-onboard needs a local model (deferred, big)" reading was too pessimistic: a local LLM
 is only layer C; layers A and B require no new model and no new hardware.
@@ -208,10 +230,12 @@ is only layer C; layers A and B require no new model and no new hardware.
 
 - **Pre-loaded "homework."** Before the start, the cloud (Opus) produces the customized work — route,
   sail plan, polar targets, contingencies — and it is *loaded onto the onboard system*. In-race the
-  onboard engine executes/recomputes it off the boat's own sensors. Consulting a plan made before
-  racing is your own preparation (like a tide table or pre-marked chart), not in-race outside help.
-  **Bright line: the plan freezes at the gun.** Re-running the cloud mid-race to *update* it with a
-  fresh forecast is new outside help and prohibited.
+  onboard system executes, recomputes, AND may **re-strategize** off the boat's own sensors + common
+  public data. Consulting a plan made before racing is your own preparation (like a tide table or
+  pre-marked chart), not in-race outside help. **Bright line: the CLOUD plan freezes at the gun.**
+  Re-running the *cloud* mid-race to update it with a fresh forecast is new outside help and prohibited —
+  but the *onboard* copilot re-working the plan on its own hardware is the boat's own computation, and is
+  fine. The freeze is on the off-boat link, not on onboard thinking.
 - **Physical channel separation, not a software flag.** In race mode the iPad reaches *only* the Pi;
   the cloud route is disabled at the network/config level. Provable and fails closed — "the cloud was
   unreachable during the race" beats "we promise we didn't ask it anything."
@@ -252,14 +276,20 @@ Frontier-model write-back capabilities (all between-races):
 
 **Route-strategy studio + onboard playbook (see `docs/ONBOARD_ENGINE_SCOPING.md` §4).** The Lab also
 compiles, *pre-race*, a **playbook** of N pre-optimized routing variants + a deterministic decision
-tree; in-race the **onboard** executor selects/recomputes among them. Compliance hinges on three points:
+tree; in-race the **onboard** executor selects, recomputes, and — when the situation outruns the
+pre-authored branches — **re-strategizes** among/beyond them. (The playbook is a strong *prior*, not a
+cage: pre-race Opus + full GRIB is smarter than the onboard 7B, so departing from it should be
+deliberate — but it is legal, because it's the boat's own onboard computation.) Compliance hinges on
+three points:
 - **Public GRIB *and buoy* obs are "information available to all boats"** (§2.1(d) first clause — even
   at cost). Fetching NOAA NDBC / GLOS buoy obs + GRIB **in-race** and processing them **onboard** is
   legal — it is common data, identical for everyone, not advice computed off-boat. (Same lane as a
   shore weather broadcast.)
-- **The in-race optimizer/selector runs onboard.** Picking among pre-loaded variants by fixed rules, or
-  re-running the isochrone optimizer onboard on the latest public GRIB, is the boat's own computation
-  (Expedition core). Never phone the cloud mid-race for a fresh customized route.
+- **The in-race optimizer/selector/strategist runs onboard.** Picking among pre-loaded variants by fixed
+  rules, re-running the isochrone optimizer onboard on the latest public GRIB, OR the onboard LLM
+  synthesizing higher-order signals (forecast-vs-actual, fleet positioning, route deviation) into a fresh
+  plan suggestion — all are the boat's own computation (Expedition core + an onboard tactician). Never
+  phone the cloud mid-race for a fresh customized route.
 - **Glass-box rationale is compliance-clean** because the *why/tradeoffs* are **authored by Opus before
   the start** (baked into the playbook) and merely **surfaced + narrated onboard** in-race — not a fresh
   cloud call. Showing the crew the tradeoffs strengthens, not weakens, the RRS-41 posture: the boat

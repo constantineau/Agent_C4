@@ -19,7 +19,7 @@ deterministic computation from the LLM** across three tiers:
   LLM*) run here so they're legal in-race. The iPad talks to the Pi over boat-local Wi-Fi in race mode.
   *(9.0 data-access abstraction ✅ — modules read via `datasource.active()`; 9.1 onboard service next.)*
 - **Tier 2 — Onboard LLM copilot (Jetson Orin Nano, optional):** Qwen2.5-7B narrates the engine's facts
-  + bounded decision support (never does the math, never invents strategy). *(Phase 9.4; HW ~06-18.)*
+  + bounded decision support (the engine does the math; grounded, but may originate strategy — onboard is legal). *(Phase 9.4; HW ~06-18.)*
 - **Tier 3 — Cloud (this VPS):** nginx+TLS → FastAPI ingestion → TimescaleDB → agent (Opus tool-use,
   alerting, summarizer) → web. Between races it's the **C4 Performance Lab** (strategy studio → playbook
   + write-back learning) and the practice/cruising/debrief product; in a race it is **race-gated (9.2)**
@@ -541,8 +541,8 @@ merges the live cache. Cloud path unaffected (`active: CloudSource`, `pool` stil
 
 ## Lab-3 onboard executor — route deviation + the iPad Strategy card (first slice)
 
-The onboard executor SELECTS/INTERPRETS the frozen Lab-2 playbook in-race — it never originates
-strategy (the RRS-41 posture). Item-2's vision has two continuously-monitored branch triggers:
+The onboard executor works the frozen Lab-2 playbook in-race as a strong prior — onboard it may depart
+from it (the boat's own gear isn't outside help; RRS 41's line is on-boat vs off-boat). Item-2's vision has two continuously-monitored branch triggers:
 (a) **route-deviation** and (b) forecast-drift. This first slice ships the **route-deviation core +
 the iPad Strategy card** — the deterministic, bench-verifiable half; forecast-drift + onboard
 re-optimize are later slices. **Architecture call: the branch-eval math is TIER-1** (the Pi engine,
@@ -614,8 +614,8 @@ pi/engine/engine_app.py, pi/console/dashboard/{index.html,dashboard.css,dashboar
 persistent wind shift (`tactics`), route-deviation (`deviation`) and forecast-drift (`drift`) — into ONE
 crew-facing recommendation over the FROZEN playbook: **`vps/agent/app/selector.py`** `get_selector()` →
 HOLD the recommended variant / **SWITCH** to a pre-authored variant / **OFF-SCRIPT** (favoured side has no
-branch aboard). It SELECTS a pre-authored variant, never originates strategy — the switch target is one of
-the bundle's own variants and the rationale is its own `what_flips_it`. GRACEFUL DEGRADATION (item-2): tier
+branch aboard). This deterministic layer picks a pre-authored variant — the switch target is one of
+the bundle's own variants and the rationale is its own `what_flips_it` (the copilot above may originate strategy; onboard is legal). GRACEFUL DEGRADATION (item-2): tier
 1 = a persistent shift favours a side WITH a variant → recommend it; tier 2 = favoured side has NO variant
 → off-script flag ("sail your own to that side" — the onboard re-optimizer is the still-deferred next tier);
 default = hold. Forecast-drift/route-deviation don't switch on their own — they REINFORCE a wind-shift switch
@@ -902,7 +902,7 @@ frozen homework. Two stages, both in `vps/lab/app/`:
   Orin). The **Gameplan tab** gains a "Synthesize branching playbook" panel below the optimizer:
   headline + recommended + stakes, per-variant cards (summary/why/tradeoffs/what-flips-it), the
   decision tree, and a **Freeze & sign** → signature + download. RRS 41: all pre-race cloud homework
-  — the copilot SELECTS/INTERPRETS these variants in-race, never originates new strategy.
+  — a strong prior the onboard copilot may depart from in-race (onboard = the boat's own gear, legal), flagging when it does.
 
 **Verified end-to-end on the real Bayview Mackinac cove_island course** (live GFS+NAM+HRRR + Opus,
 ~2.5 min): a 3-way split (HRRR-left / NAM-middle / GFS-right), low agreement 0.33, 252-min decision
@@ -1357,8 +1357,8 @@ the plan's pace — 3:20 behind (−0.8 kn VMC)") from the engine's `/deviation`
 ("Forecast has moved — the breeze the plan assumed has veered ~31° since it was frozen — the recommended
 variant may no longer pay") from `/drift`. Both shown only at the engine's fuzzy watch/act (the
 engine's own Schmitt bands already de-noise, so CONFIRM_ROUNDS=1), grounded in `get_deviation`/`get_drift`
-+ the frozen variant/`forecast_fingerprint` — the copilot SELECTS/INTERPRETS the pre-loaded homework +
-common public data, never originates strategy. Categories `deviation`(5)/`drift`(8) sit among the
++ the frozen variant/`forecast_fingerprint` — the copilot grounds these callouts in the pre-loaded homework +
+common public data (it may originate strategy in-race; onboard is legal). Categories `deviation`(5)/`drift`(8) sit among the
 playbook-adherence callouts; status in the id so watch→act re-surfaces. `copilot.gather` now fetches
 `get_deviation`+`get_drift`; `EngineClient.deviation()/drift()` added. Verified
 `bench_copilot.test_deviation_drift_callout` + LIVE (both fired against the real :8200 engine, the coach
@@ -1424,7 +1424,7 @@ published (~July 2026) → the provider degrades to no positions gracefully. (YB
 binary `…/BIN/<race>/AllPositions3` track feed, lat/lon=int/1e5 — not needed; the JSON carries all.)
 **HONEST v1 scope:** corrected-time is a projection (uses SOG toward the finish, common-division-start
 assumption); the entry list rarely carries MMSI so matching is partial. The engine computes; the LLM
-only interprets.
+interprets and may recommend.
 
 ## Onboard LLM copilot — Orin Nano (Phase 9.4, Tier 2)
 
@@ -1432,8 +1432,8 @@ The optional in-race conversational LLM (`docs/ONBOARD_ENGINE_SCOPING.md` §3). 
 8GB (Super)** dedicated to inference, **separate** from the Pi 4 that runs the deterministic engine
 (Tier 1) — they talk over boat-local Wi-Fi. Legal in-race because the boat's own computer reasoning
 over its own sensors + pre-loaded homework + common public data is not "outside help"; it never
-phones the cloud mid-race, never does the math (the engine does), never invents strategy outside the
-playbook. **The Orin is in hand as of 2026-06-18.**
+phones the cloud mid-race (the real RRS-41 line) and the engine does the math; the frozen playbook is a
+strong prior it may depart from, not a cage. **The Orin is in hand as of 2026-06-18.**
 
 **Runtime appliance: LIVE.** The Orin is a turnkey headless offline-inference appliance —
 **Ollama serving `qwen2.5:7b-instruct-q4_K_M` on `:11434`** (OpenAI `/v1`), built from source with a
@@ -1453,8 +1453,8 @@ math or fetch anything else — the engine does the math); every `factor`/`recom
 the engine (`structural_caveats`), not authored by the model; every brief carries a standing
 disclaimer + confidence; and if the LLM is off/slow/ungrounded the service returns the **deterministic
 brief** built from the same facts (always works, never depends on the model). A frozen **playbook**
-(Lab-2 output) loads via `PLAYBOOK_PATH` — the copilot selects/interprets its variants, never
-originates strategy; absent → it says so. Endpoints: `GET /health` (honest llm/deterministic/
+(Lab-2 output) loads via `PLAYBOOK_PATH` as a strong prior — the copilot may depart from it in-race
+(onboard = legal), flagging when it does; absent → it says so. Endpoints: `GET /health` (honest llm/deterministic/
 unreachable modes + the auto-coach state), `GET /tools` (the bounded surface), `POST /brief`, `POST
 /narrate` (proactive callouts on demand), `GET /coach` (the auto-coach held state), `GET /adherence`,
 `GET /snapshot`. **Bench-verified

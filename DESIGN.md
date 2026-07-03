@@ -49,7 +49,8 @@ help." So:
 - **Tier 1 — Onboard deterministic engine (Pi 4):** routing/tactics/sails/polars/nav/fatigue, plain
   physics on the boat's own sensors + the published course. No LLM. Legal in-race.
 - **Tier 2 — Onboard LLM copilot (Jetson Orin Nano, optional):** Qwen2.5-7B narrates the engine's
-  facts and does *bounded* decision support; never computes the numbers or invents strategy.
+  facts and does *bounded* decision support; never computes the numbers (the engine does) but may
+  originate strategy — grounded — since onboard it's the boat's own gear, legal in-race.
 - **Tier 3 — Cloud frontier Opus 4.8 (the C4 Performance Lab):** *between races* it runs the
   strategy studio (→ a pre-loaded playbook) and the learning loop (→ refined polars), and serves the
   practice/cruising/debrief product. In a race it is **race-gated** (9.2) and the boat doesn't use it.

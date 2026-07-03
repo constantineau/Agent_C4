@@ -30,8 +30,8 @@ LLM_TEMPERATURE = float(os.environ.get("LLM_TEMPERATURE", "0.2"))
 MAX_TOOL_ROUNDS = int(os.environ.get("MAX_TOOL_ROUNDS", "4"))
 
 # A frozen playbook bundle (Lab-2 output) loaded onboard pre-start. Optional today; when
-# present the copilot SELECTS/INTERPRETS its pre-authored variants and never originates
-# strategy. Absent → the copilot interprets live engine facts only and says so.
+# present the copilot leans on its pre-authored variants as a strong prior — onboard it may
+# depart from them (legal). Absent → the copilot reasons from live engine facts only and says so.
 PLAYBOOK_PATH = os.environ.get("PLAYBOOK_PATH", "").strip()
 
 # The active route the engine should compute against (the loaded homework course).

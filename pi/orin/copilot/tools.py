@@ -2,7 +2,7 @@
 
 This is the heart of the decision-support guardrails. The LLM cannot compute, cannot fetch
 arbitrary data, cannot take actions. It can only call these read-only engine-fact tools. So
-"the engine does the math, the LLM interprets" is enforced structurally, not just by prompt:
+"the engine does the math, the LLM interprets and may recommend" is enforced structurally, not just by prompt:
 if the model wants a number it must ask the engine for it, and every tool result is recorded
 in a trace that the grounding validator later checks recommendations against.
 

@@ -18,7 +18,7 @@ The bundle schema is `c4.playbook/v1` and is deliberately a superset of what the
 and dropping it at the copilot's `PLAYBOOK_PATH` is the whole onboard wiring. The frontier model
 (Opus) writes the narrative; a deterministic fallback always produces a valid bundle with no key, so
 the Lab never depends on the model being reachable. RRS 41: all pre-race cloud homework, frozen at
-the gun — the copilot SELECTS/INTERPRETS these variants in-race, it never originates new strategy.
+the gun — a strong prior the onboard copilot may depart from in-race (onboard = the boat's own gear, legal).
 """
 from __future__ import annotations
 

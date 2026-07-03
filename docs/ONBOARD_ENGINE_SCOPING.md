@@ -105,12 +105,15 @@ case ("rule says east, but obs are on the line and the up-course buoy says the s
 follow-ups from the pre-loaded rationale; produce a single-shot structured brief at a decision gate
 (scenario-tracking + confidence → recommended variant + why → caveats/what-flips-it → conflict flag).
 
-**Guardrails (keep a 7B trustworthy):** the LLM **never does the math** (routing/ETA/CPA/laylines stay
-in the engine — it *consumes* those numbers); **never invents strategy outside the playbook** (decision
-space bounded to Opus's pre-authored variants + engine outputs — selects/interprets/flags, doesn't
-freelance); **never the sole authority** (surfaces to the crew with the deterministic recommendation
-alongside, so divergence is visible — crew decides). Inputs are pre-digested + the option space is
-bounded → reliable for a 7B. Short/optional tool loops only.
+**Guardrails (keep a 7B trustworthy — RELIABILITY rules, not legal ones; onboard, originating strategy
+is legal per RRS41 §4):** the LLM **never does the math** (routing/ETA/CPA/laylines stay in the engine —
+it *consumes* those numbers, because a 7B can't be trusted to compute them); **grounds every claim** in
+an engine fact, a playbook variant, or common data (it may *reason to a fresh recommendation*, it may
+not *fabricate the facts* it reasons from); **treats the playbook as a strong prior, not a cage** (Opus's
+pre-authored variants are the trusted default — the copilot may propose strategy beyond them when the
+situation outruns the branches, flagged as off-book so divergence is visible); **never the sole
+authority** (surfaces to the crew with the deterministic recommendation alongside — crew decides).
+Pre-digested inputs + grounded reasoning → reliable for a 7B. Short/optional tool loops only.
 
 **9.4 — Local LLM copilot.** Stand up the Orin with Qwen2.5-7B (A/B vs Qwen3-4B for speed), fed the
 engine's facts + the playbook + live obs. Start with narration (single-shot), then add the bounded
@@ -250,7 +253,8 @@ learning loop is between-races.
    come from the frozen playbook rationale + own instruments + common public data (interpretation of
    pre-loaded homework, not fresh outside advice). Guardrail: every suggestion grounds in (a) a
    pre-authored variant/branch, (b) the onboard deterministic re-optimizer, or (c) common public data —
-   it selects/interprets/flags, never originates novel strategy.
+   it may originate strategy onboard (the boat's own gear, legal in-race); the playbook is a strong
+   prior, and grounding in (a)/(b)/(c) is the reliability guardrail, not an RRS-41 limit.
 
 4. **FUZZY adherence — the unifying principle.** The boat never sails the line; the models are never
    exactly right; the helm varies by skill and fatigue; conditions differ from the forecast. So
