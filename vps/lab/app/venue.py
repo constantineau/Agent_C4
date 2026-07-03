@@ -57,6 +57,18 @@ def nearest_station(lat, lon, prefer=None, max_nm=STATION_MAX_NM):
     return dict(best, dist_nm=round(bd, 1)) if best else None
 
 
+def stations_for(lat, lon, max_nm=STATION_MAX_NM):
+    """The obs stations that anchor a venue — the nearest of EACH kind in range (a shore METAR +
+    an over-water NDBC buoy), so skill pools both the shore/lake-breeze regime and the open-water
+    regime. Ordered nearest-first; empty if nothing is in range."""
+    out = []
+    for kind in ("metar", "ndbc"):
+        s = nearest_station(lat, lon, prefer=kind, max_nm=max_nm)
+        if s and s["kind"] == kind:
+            out.append(s)
+    return sorted(out, key=lambda s: s["dist_nm"])
+
+
 def _cell_key(lat, lon):
     la = round(lat / CELL_DEG) * CELL_DEG
     lo = round(lon / CELL_DEG) * CELL_DEG
@@ -69,9 +81,10 @@ def resolve_from_bbox(bbox, tag=None, name=None):
     n, s, w, e = bbox
     clat, clon = (n + s) / 2.0, (w + e) / 2.0
     key = tag or _cell_key(clat, clon)
-    st = nearest_station(clat, clon)
+    stations = stations_for(clat, clon)
     return {"key": key, "label": name or key, "centroid": [round(clat, 3), round(clon, 3)],
-            "station": st}
+            "station": stations[0] if stations else None,   # primary (nearest) — for display
+            "stations": stations}                            # all anchors — skill pools across them
 
 
 def resolve(definition, course_id, bbox=None):

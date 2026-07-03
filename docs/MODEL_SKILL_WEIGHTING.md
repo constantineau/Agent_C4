@@ -85,7 +85,11 @@ the point where the deep build pays off.)
   (both probed + confirmed accessible 2026-07-03):
   - **HRRR archive** `noaa-hrrr-bdp-pds` — **2014-08→now**, CONUS, operational. Our best model here.
   - **GEFS Reforecast v12** `noaa-gefs-retrospective` — **~2005→2019**, ensemble, *fixed 2020 model*
-    (so no drift, but GEFS-line only). The one true multi-decade archived-forecast set.
+    (so no drift, but GEFS-line only). The one true multi-decade archived-forecast set. Tracked as its
+    **own `gefs` line, NOT a proxy for `gfs`** — mapping it onto gfs contaminated gfs's score (GEFS
+    control is coarser than operational GFS), so `gfs` stays on clean Open-Meteo (2021+). `gefs` is
+    **reference-only** (`REFERENCE_ONLY`): displayed, but excluded from the weight geomean and not in
+    the routing blend, so it can't distort the models that are.
   Deep coverage is **uneven across models** (HRRR 2015+, GEFS 2005+, others 2021+) — handled honestly:
   each model is scored on whatever years it has; recency weighting + the shrink-to-priors gate keep a
   thinly-covered model from swinging on sparse deep data.
@@ -98,7 +102,10 @@ a Phase-3 item. Relative model ranking within a comparison stays fair (all model
 
 ## Decisions (locked)
 
-- **Ground truth:** NDBC + METAR spine, boat-instrument wind as a supplement.
+- **Ground truth:** NDBC + METAR spine, boat-instrument wind as a supplement. A venue **pools multiple
+  anchor stations** — the nearest shore METAR *and* the nearest over-water NDBC buoy (`venue.stations_for`)
+  — so skill reflects both the shore/lake-breeze regime (where HRRR's mesoscale edge shows) and the
+  open-water regime, with the forecast always sampled co-located at the station being scored.
 - **Apply mode:** **auto-apply with shrinkage** (no manual approval gate). Made safe by hard
   shrinkage-to-priors when thin, a swing cap, and an env kill-switch (`MODEL_SKILL_WEIGHTING=off`).
 - **Observability (required):** because it's automatic, the active venue weights **and the RMSE that

@@ -1180,19 +1180,21 @@ function optModelSkill(r) {
     </details>`;
   }
   const rows = (s.table || []).map((t) => {
-    const w = t.weight == null ? 1 : t.weight;
-    const cls = w >= 1.15 ? "ok" : w <= 0.85 ? "bad" : "";
     const db = (t.bias_speed_kn || t.bias_dir_deg)
       ? `<span class="muted" title="bias removed before blending">${t.bias_dir_deg > 0 ? "+" : ""}${t.bias_dir_deg || 0}°</span>` : "—";
-    return `<tr><td>${esc(t.model.toUpperCase())}</td><td>${t.vector_rmse_kn}</td>
-      <td><b class="conf ${cls}">×${w}</b></td><td>${db}</td><td class="muted">${t.n}</td></tr>`;
+    const yrs = t.n_years ? ` <span class="muted" style="font-size:10px">${t.n_years}y</span>` : "";
+    const wcell = t.reference
+      ? `<span class="muted" title="tracked for reference — not in the routing blend">ref</span>`
+      : `<b class="conf ${(t.weight >= 1.15) ? "ok" : (t.weight <= 0.85) ? "bad" : ""}">×${t.weight == null ? 1 : t.weight}</b>`;
+    return `<tr><td>${esc(t.model.toUpperCase())}${yrs}</td><td>${t.vector_rmse_kn}</td>
+      <td>${wcell}</td><td>${db}</td><td class="muted">${t.n}</td></tr>`;
   }).join("");
   const deep = s.deep ? `<span class="pill ok" title="Includes pre-2021 reforecast archives">deep</span>` : "";
   return `<details class="rail-sec" open><summary>Model skill ${deep}</summary>
     <div class="muted" style="font-size:11px;margin-bottom:6px">
       Weighted by measured accuracy at <b>${esc(s.station || s.venue_key)}</b>${s.station_name ? " (" + esc(s.station_name) + ")" : ""} ·
-      ${s.n_years || 1} season${(s.n_years || 1) > 1 ? "s" : ""} ${s.window ? esc(s.window[0]) + "–" + esc(s.window[1]) : ""} ·
-      recency t½ ${s.recency_halflife_y}y · lower RMSE ⇒ higher weight (de-biased first)</div>
+      up to ${s.n_years || 1} season${(s.n_years || 1) > 1 ? "s" : ""} ${s.window ? esc(s.window[0]) + "–" + esc(s.window[1]) : ""} ·
+      recency t½ ${s.recency_halflife_y}y · per-model n &amp; seasons shown · lower RMSE ⇒ higher weight (de-biased first)</div>
     <table class="legs"><thead><tr><th>Model</th><th>RMSE kn</th><th>Weight</th><th>Veer bias</th><th>n</th></tr></thead>
       <tbody>${rows}</tbody></table>
     <div style="margin-top:6px">${btn}</div>

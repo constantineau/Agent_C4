@@ -192,11 +192,11 @@ def fetch_ndbc_window(station, sd, ed):
 
 # ---------------------------------------------------- deep history (pre-2021): reforecast / GRIB archive
 # Maps our model -> (first available year, deep series provider in deepfc). Deep coverage is uneven:
-# HRRR archive from 2015 (extended runs), GEFS Reforecast v12 stands in for the NCEP GLOBAL lineage
-# ('gfs') back to ~2005. ECMWF/ICON/GEM have no easy deep archive → they rest on Open-Meteo (2021+).
+# HRRR archive from 2015 (extended runs); GEFS Reforecast v12 is its OWN 'gefs' line back to ~2005 (NOT
+# a gfs proxy — that contaminated gfs). 'gfs'/ECMWF/ICON/GEM have no deep archive → Open-Meteo (2021+).
 def _deep_providers():
     from . import deepfc
-    return {"hrrr": (2015, deepfc.hrrr_series), "gfs": (2005, deepfc.gefs_series)}
+    return {"hrrr": (2015, deepfc.hrrr_series), "gefs": (2005, deepfc.gefs_series)}
 
 
 def fetch_reforecast(lat, lon, sd, ed, model, year):
@@ -296,7 +296,10 @@ MIN_N = int(os.environ.get("MODEL_SKILL_MIN_N", "12"))                  # need t
 SHRINK_N = float(os.environ.get("MODEL_SKILL_SHRINK_N", "30"))          # pseudo-count: shrink to priors
 CAP_LO = float(os.environ.get("MODEL_SKILL_CAP_LO", "0.5"))
 CAP_HI = float(os.environ.get("MODEL_SKILL_CAP_HI", "2.0"))
-DEFAULT_MODELS = ("gfs", "hrrr", "ecmwf", "icon", "gem")
+DEFAULT_MODELS = ("gfs", "hrrr", "ecmwf", "icon", "gem", "gefs")
+# tracked for reference but NOT blended → kept out of the weight-derivation geomean so it can't distort
+# the models that ARE routed on. (GEFS reforecast is our deep NCEP-global history; it isn't in the blend.)
+REFERENCE_ONLY = {"gefs"}
 
 # --- seasonal, multi-year, recency-weighted sampling -------------------------------------------
 # Instead of one recent window, score the RACE's calendar window (±SEASON_PAD_DAYS) in EVERY year we
@@ -324,16 +327,19 @@ def _conn():
     return c
 
 
-def save_scores(venue_key, station, obs_source, window, scores, n_years=1, deep=False):
+def save_scores(venue_key, station, obs_source, window, scores):
+    """Persist one score row per model. Each score dict carries its OWN `n_years` (count of distinct
+    seasons that model actually matched) and `deep` (did it use a pre-2021 archive)."""
     now = dt.datetime.now(dt.timezone.utc).timestamp()
     with _conn() as c:
+        c.execute("DELETE FROM model_skill WHERE venue_key=?", (venue_key,))   # replace the venue set
         for m, s in scores.items():
             if not s:
                 continue
             c.execute("""INSERT OR REPLACE INTO model_skill VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                       (venue_key, m, station, obs_source, s["n"], s["vector_rmse_kn"],
                        s["speed_bias_kn"], s["dir_bias_deg"], window[0], window[1], now,
-                       n_years, 1 if deep else 0))
+                       s.get("n_years", 1), 1 if s.get("deep") else 0))
 
 
 def load_scores(venue_key):
@@ -398,16 +404,16 @@ def obs_series(station, sd, ed):
 
 
 def refresh_venue_skill(venue, models=DEFAULT_MODELS, race_date=None, force=False, include_deep=False):
-    """Score each model over the venue's SEASONAL window across MANY years, recency-weighted, at the
-    station (co-located with the obs — a shore forecast point vs shore obs; never mid-lake vs shore).
-    Persists + caches (skips within SKILL_TTL_S unless force; a deep result is permanent). Returns {}
-    if the venue has no station.
+    """Score each model over the venue's SEASONAL window across MANY years, recency-weighted, POOLING
+    every anchor station (a shore METAR + an over-water buoy). The forecast is always sampled AT the
+    station being scored against (co-located obs — never mid-lake forecast vs shore obs). Persists +
+    caches (skips within SKILL_TTL_S unless force; a deep result is permanent). {} if no station.
 
     `race_date` (a datetime.date) centres the seasonal window on the race's time of year; without it we
     centre on today. `include_deep`=False (the inline optimize path) scores only the Open-Meteo era
     (>=2021), fast; the offline backfill sets it True to fold in the heavy pre-2021 GRIB archives."""
-    st = (venue or {}).get("station")
-    if not st:
+    stations = (venue or {}).get("stations") or ([venue["station"]] if (venue or {}).get("station") else [])
+    if not stations:
         return {}
     if not force:
         cached = load_scores(venue["key"])
@@ -417,30 +423,39 @@ def refresh_venue_skill(venue, models=DEFAULT_MODELS, race_date=None, force=Fals
     center = race_date or yesterday
     windows = _season_windows((center.month, center.day), FIRST_YEAR, yesterday.year,
                               SEASON_PAD_DAYS, yesterday)
-    lat, lon = st["lat"], st["lon"]
     accs = {m: _acc_new() for m in models}
-    years_used, deep_used = set(), False
-    for (year, sd, ed) in windows:
-        if year < OPENMETEO_FIRST_YEAR and not include_deep:
-            continue                                 # skip deep years on the fast inline path
-        obs = obs_series(st, sd, ed)
-        if not obs:
-            continue
-        w = _recency_weight(year, yesterday.year)
-        for m in models:
-            fc = forecast_series(lat, lon, sd, ed, m, year, include_deep=include_deep)
-            if fc:
+    model_years = {m: set() for m in models}          # per-model distinct seasons matched
+    model_deep = {m: False for m in models}           # per-model: did it use a pre-2021 archive
+    for st in stations:
+        lat, lon = st["lat"], st["lon"]
+        for (year, sd, ed) in windows:
+            if year < OPENMETEO_FIRST_YEAR and not include_deep:
+                continue                              # skip deep years on the fast inline path
+            obs = obs_series(st, sd, ed)
+            if not obs:
+                continue
+            w = _recency_weight(year, yesterday.year)
+            for m in models:
+                fc = forecast_series(lat, lon, sd, ed, m, year, include_deep=include_deep)
+                if not fc:
+                    continue
                 before = accs[m]["n"]
                 _acc_add(accs[m], _match(obs, fc), w)
                 if accs[m]["n"] > before:
-                    years_used.add(year)
+                    model_years[m].add(year)
                     if year < OPENMETEO_FIRST_YEAR:
-                        deep_used = True
-    scores = {m: _acc_final(a) for m, a in accs.items()}
-    yrs = sorted(years_used)
-    span = [f"{yrs[0]}" if yrs else "", f"{yrs[-1]}" if yrs else ""]
-    save_scores(venue["key"], st["id"], st["kind"], span, scores,
-                n_years=len(yrs), deep=deep_used)
+                        model_deep[m] = True
+    scores = {}
+    for m, a in accs.items():
+        s = _acc_final(a)
+        if s:
+            s["n_years"], s["deep"] = len(model_years[m]), model_deep[m]
+        scores[m] = s
+    all_years = sorted(set().union(*model_years.values())) if any(model_years.values()) else []
+    span = [f"{all_years[0]}" if all_years else "", f"{all_years[-1]}" if all_years else ""]
+    label = "+".join(s["id"] for s in stations)
+    src = "+".join(sorted({s["kind"] for s in stations}))
+    save_scores(venue["key"], label, src, span, scores)
     return load_scores(venue["key"])
 
 
@@ -487,19 +502,25 @@ def venue_weights(venue, models=DEFAULT_MODELS, race_date=None, refresh=True):
                 "venue_key": (venue or {}).get("key"), "model_weights": {}, "model_bias": {}, "table": []}
     scores = (refresh_venue_skill(venue, models=models, race_date=race_date) if refresh
               else load_scores(venue["key"]))
-    derived = derive_weights(scores)
+    # derive weights only over BLENDED models (exclude reference-only lines like gefs so they can't
+    # shift the geomean that sets the routed models' weights); reference lines still show in the table.
+    derived = derive_weights({m: s for m, s in scores.items() if m not in REFERENCE_ONLY})
     model_weights = {m: d["weight"] for m, d in derived.items()}
     model_bias = {m: (d["bias_speed_kn"], d["bias_dir_deg"]) for m, d in derived.items()}
     table = sorted(
-        [{"model": m, **scores[m], **derived.get(m, {"weight": 1.0})} for m in scores if scores[m]],
+        [{"model": m, "reference": m in REFERENCE_ONLY, **scores[m],
+          **derived.get(m, {"weight": None if m in REFERENCE_ONLY else 1.0})}
+         for m in scores if scores[m]],
         key=lambda r: r["vector_rmse_kn"])
-    st = venue["station"]
+    stations = venue.get("stations") or ([venue["station"]] if venue.get("station") else [])
     any_score = next((s for s in scores.values() if s), None)
     return {"enabled": bool(model_weights), "venue_key": venue["key"], "venue_label": venue.get("label"),
-            "station": st["id"], "station_name": st.get("name"), "obs_source": st["kind"],
+            "station": "+".join(s["id"] for s in stations),
+            "station_name": ", ".join(s.get("name", s["id"]) for s in stations),
+            "obs_source": "+".join(sorted({s["kind"] for s in stations})),
             "window": any_score["window"] if any_score else None,
-            "n_years": any_score.get("n_years") if any_score else 0,
-            "deep": any_score.get("deep") if any_score else False,
+            "n_years": max((s.get("n_years", 0) for s in scores.values() if s), default=0),
+            "deep": any(s.get("deep") for s in scores.values() if s),
             "recency_halflife_y": RECENCY_HALFLIFE_Y,
             "model_weights": model_weights, "model_bias": model_bias, "table": table,
             "note": None if model_weights else "not enough matched obs yet — routing on static priors"}
