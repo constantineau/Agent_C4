@@ -50,10 +50,29 @@ def _wrap180(d):
     return (d + 180.0) % 360.0 - 180.0
 
 
-def _get(url, timeout=45):
+_RETRY_CODES = {429, 500, 502, 503, 504}   # transient — throttling under a heavy backfill
+
+
+def _get(url, timeout=45, retries=5):
+    """HTTP GET with retry+backoff on transient failures (429/5xx/timeout) so a throttled call under a
+    heavy multi-year backfill isn't silently dropped as no-data. 404 raises immediately."""
+    import time
+    import urllib.error
     req = urllib.request.Request(url, headers={"User-Agent": "agent-c4-modelskill/1"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read()
+    last = None
+    for attempt in range(retries):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return r.read()
+        except urllib.error.HTTPError as e:
+            if e.code in _RETRY_CODES and attempt < retries - 1:
+                last = e
+            else:
+                raise
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+            last = e
+        time.sleep(min(8.0, 0.5 * (2 ** attempt)))
+    raise last
 
 
 # ------------------------------------------------------------------------------------- forecast
@@ -403,7 +422,8 @@ def obs_series(station, sd, ed):
     return fetch_metar(station["id"], sd, ed)
 
 
-def refresh_venue_skill(venue, models=DEFAULT_MODELS, race_date=None, force=False, include_deep=False):
+def refresh_venue_skill(venue, models=DEFAULT_MODELS, race_date=None, force=False, include_deep=False,
+                        log=None):
     """Score each model over the venue's SEASONAL window across MANY years, recency-weighted, POOLING
     every anchor station (a shore METAR + an over-water buoy). The forecast is always sampled AT the
     station being scored against (co-located obs — never mid-lake forecast vs shore obs). Persists +
@@ -433,18 +453,25 @@ def refresh_venue_skill(venue, models=DEFAULT_MODELS, race_date=None, force=Fals
                 continue                              # skip deep years on the fast inline path
             obs = obs_series(st, sd, ed)
             if not obs:
+                if log:
+                    log(f"{st['id']} {year}: no obs")
                 continue
             w = _recency_weight(year, yesterday.year)
+            got = {}
             for m in models:
                 fc = forecast_series(lat, lon, sd, ed, m, year, include_deep=include_deep)
                 if not fc:
                     continue
                 before = accs[m]["n"]
                 _acc_add(accs[m], _match(obs, fc), w)
-                if accs[m]["n"] > before:
+                added = accs[m]["n"] - before
+                if added:
+                    got[m] = added
                     model_years[m].add(year)
                     if year < OPENMETEO_FIRST_YEAR:
                         model_deep[m] = True
+            if log:
+                log(f"{st['id']} {year}: obs={len(obs)} " + " ".join(f"{m}+{n}" for m, n in got.items()))
     scores = {}
     for m, a in accs.items():
         s = _acc_final(a)
@@ -459,13 +486,13 @@ def refresh_venue_skill(venue, models=DEFAULT_MODELS, race_date=None, force=Fals
     return load_scores(venue["key"])
 
 
-def backfill_deep(venue, models=DEFAULT_MODELS, race_date=None):
+def backfill_deep(venue, models=DEFAULT_MODELS, race_date=None, log=None):
     """Explicit OFFLINE deep backfill: re-score the venue INCLUDING the pre-2021 GRIB archives (HRRR
     2015+, GEFS reforecast 2005+), recency-weighted, and persist. Heavy (thousands of byte-range GRIB
-    gets) — run on demand, not inline. The result is marked deep=True so the fast optimize path then
-    reads it as permanent and never clobbers it."""
+    gets, retried with backoff) — run on demand, not inline. The result is marked deep=True so the fast
+    optimize path then reads it as permanent and never clobbers it. `log` gets per-station-year progress."""
     return refresh_venue_skill(venue, models=models, race_date=race_date,
-                               force=True, include_deep=True)
+                               force=True, include_deep=True, log=log)
 
 
 def derive_weights(scores):

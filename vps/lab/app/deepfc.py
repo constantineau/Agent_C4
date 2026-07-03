@@ -22,6 +22,8 @@ import datetime as dt
 import math
 import os
 import tempfile
+import time
+import urllib.error
 import urllib.request
 
 import numpy as np
@@ -32,14 +34,29 @@ KN_PER_MS = grib.KN_PER_MS
 HRRR_BASE = "https://noaa-hrrr-bdp-pds.s3.amazonaws.com"
 GEFS_BASE = "https://noaa-gefs-retrospective.s3.amazonaws.com/GEFSv12/reforecast"
 LEAD_FHRS = (6, 12, 18)               # same-day 00Z run, +6..18 h — exists across full archive depth
+RETRY_CODES = {429, 500, 502, 503, 504}   # transient — AWS S3 throttles a heavy backfill with 503
 
 
-def _get(url, timeout=90, rng=None):
+def _get(url, timeout=90, rng=None, retries=5):
+    """HTTP GET with retry+backoff on transient failures (throttling/timeouts). 404 raises at once so
+    a legitimately-absent file (e.g. HRRR extended f24 pre-2019) fails fast instead of retrying."""
     req = urllib.request.Request(url, headers={"User-Agent": "agent-c4-deepfc/1"})
     if rng:
         req.add_header("Range", f"bytes={rng[0]}-{rng[1]}" if rng[1] != "" else f"bytes={rng[0]}-")
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read()
+    last = None
+    for attempt in range(retries):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return r.read()
+        except urllib.error.HTTPError as e:
+            if e.code in RETRY_CODES and attempt < retries - 1:
+                last = e
+            else:
+                raise
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+            last = e
+        time.sleep(min(8.0, 0.5 * (2 ** attempt)))   # 0.5,1,2,4,8s backoff
+    raise last
 
 
 def _idx(url, timeout=45):
