@@ -314,6 +314,15 @@ def _strategy_callout(strat):
     action = (rec.get("action") or "").strip()
     head = (strat.get("assessment") or action or "Reassess the plan").strip()
     detail = (rec.get("rationale") or conc.get("note") or "").strip()
+    # OFF-BOOK CHAINING (Phase 3): a departure comes with a concrete onboard re-route — tell the crew
+    # it's ready (the facts ride in get_strategy) so "go off-book" isn't left hanging without a route.
+    offer = strat.get("reoptimize") or {}
+    if off_book and offer.get("available") and "re-route" not in detail:
+        etatxt = ""
+        if offer.get("eta_min") is not None:
+            h, m = divmod(int(round(offer["eta_min"])), 60)
+            etatxt = f" (~{h}h {m:02d}m" + (f", {offer['tacks']} tacks" if offer.get("tacks") is not None else "") + ")"
+        detail = (detail + f" — onboard re-route ready{etatxt}").strip(" —")
     urg = rec.get("urgency")
     urgency = "now" if urg == "now" else ("soon" if (urg == "soon" or strength == "split" or off_book)
                                           else "monitor")

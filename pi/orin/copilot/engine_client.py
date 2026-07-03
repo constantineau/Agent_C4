@@ -107,5 +107,12 @@ class EngineClient:
         concordance + recommendation this copilot phrases and may extend (the LLM fallback)."""
         return self._get("/strategy", {"route": route})
 
+    def reoptimize(self, route=None) -> dict:
+        """The onboard RE-OPTIMIZER's fresh fallback route (isochrone through the remaining marks on
+        the boat's own polars, off-playbook). Chained by the strategy synthesis when a recommendation
+        DEPARTS the frozen plan so an off-book call comes with a concrete route. Heavy + engine-cached
+        → fetched only on an off-book rec (e.g. one the LLM originated that the digest didn't carry)."""
+        return self._get("/reoptimize", {"route": route})
+
     def reachable(self) -> bool:
         return self.health().get("status") == "ok"

@@ -92,6 +92,36 @@ r = strategy.get_strategy_signals()
 check("not available", r["available"] is False)
 check("still returns a disclaimer + caveat", bool(r["caveats"]) and "disclaimer" in r)
 
+# --- 5b. OFF-BOOK recommendation → chains the onboard re-route offer (Phase 3) ----------------------
+print("off-book → re-route offer chained:")
+# a persistent shift favouring a side with NO variant aboard drives the selector off_script → off-book.
+BUNDLE_ONESIDED = {"race_id": "u", "recommended": "middle", "headline": "one-sided",
+                   "variants": [{"id": "middle", "name": "Middle start"}]}
+stub(bundle=BUNDLE_ONESIDED, tac=wind(True, "right", "veering"))
+# stub the heavy re-optimizer so the test stays standalone (no nav/routing/engine).
+_ro_calls = {"n": 0}
+def _fake_reopt(route=None):
+    _ro_calls["n"] += 1
+    return {"available": True, "off_playbook": True, "eta_min": 254, "tacks": 9, "sailed_nm": 46.2,
+            "sail_plan": ["J1", "A3", "S2"], "path": [{"lat": 45.0, "lon": -83.0}] * 500,
+            "legs": [{"mark": "Finish"}], "vs_playbook": {"available": True, "max_divergence_nm": 2.4}}
+strategy.reoptimize_mod.get_reoptimize = _fake_reopt
+r = strategy.get_strategy_signals()
+print("  ", r["recommendation"]["action"], "| vs_playbook", r["recommendation"]["vs_playbook"])
+check("recommendation departs the playbook", r["recommendation"]["vs_playbook"] == "departs")
+check("re-route offer attached", (r.get("reoptimize") or {}).get("available") is True)
+check("offer is compact (no heavy path array)", "path" not in (r.get("reoptimize") or {}))
+check("offer keeps eta/tacks/sail_plan", r["reoptimize"].get("eta_min") == 254 and r["reoptimize"].get("tacks") == 9)
+check("rec flagged reoptimize ready", r["recommendation"].get("reoptimize") == "ready")
+check("rationale mentions the re-route ETA", "re-route is ready" in r["recommendation"]["rationale"])
+check("re-optimizer was actually called", _ro_calls["n"] == 1)
+
+# an ON-PLAN hold must NOT run the heavy re-optimizer.
+_ro_calls["n"] = 0
+stub(tac=wind(False, "either", "steady", osc=10))
+r = strategy.get_strategy_signals()
+check("on-plan hold does not chain a re-route", "reoptimize" not in r and _ro_calls["n"] == 0)
+
 # --- 6. _fleet_lean directly: confidence-weighted side of the threats -------------------------------
 print("fleet-lean math:")
 side, strength, n = strategy._fleet_lean({"available": True, "fleet": [

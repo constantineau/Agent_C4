@@ -160,8 +160,10 @@
         concordance: { strength: "strong", lean: "right",
           note: "the persistent veer, the forecast drift and your position all point right — and you're already 1.3 nm right of the plan; high concordance" },
         recommendation: { action: "Off-book: commit right and lay the mark", vs_playbook: "departs", target_variant: null,
-          urgency: "now", confidence: "med",
-          rationale: "all three directional reads agree right and the situation has passed even the Right-start branch — sail the favoured side, onboard re-route ready" } },
+          reoptimize: "ready", urgency: "now", confidence: "med",
+          rationale: "all three directional reads agree right and the situation has passed even the Right-start branch — sail the favoured side, onboard re-route ready" },
+        reoptimize: { available: true, off_playbook: true, eta_min: 254, tacks: 9, sailed_nm: 46.2, avoids_islands: 2, avoids_zones: 1,
+          marks: ["Cove Island", "Finish"], sail_plan: ["J1", "A3", "S2"], vs_playbook: { available: true, max_divergence_nm: 2.4, mean_divergence_nm: 0.9 } } },
     },
   };
 
@@ -829,14 +831,22 @@
     renderSelector();
     renderReoptimize();
   }
-  /* the onboard re-route line — shown when a fresh fallback route is available (live: only while
-     off-script; demo: illustrative). Framed clearly as OFF-BOOK (not the frozen homework). */
+  /* the onboard re-route line — shown when a fresh fallback route is available (live: while the
+     selector is off-script OR the synthesis recommendation departs the playbook; demo: illustrative).
+     Framed clearly as OFF-BOOK (not the frozen homework). */
   function renderReoptimize() {
     const el = document.getElementById("stReopt");
-    const ro = currentReoptimize();
     const sel = currentSelector();
+    const syn = currentSynthesis();
     const offscript = sel && sel.action === "off_script";
-    if (!ro || ro.available === false || (!offscript && App.src === "live")) { el.hidden = true; return; }
+    // A synthesis recommendation can DEPART the playbook even when the selector holds (e.g. an
+    // LLM-originated off-book move) — the re-route offer rides along with the brief (Phase 3), so
+    // prefer it, and show the line whenever EITHER path is off-book.
+    const synRec = (syn && syn.recommendation) || {};
+    const synOff = synRec.vs_playbook === "departs" || synRec.vs_playbook === "off-book";
+    const ro = (syn && syn.reoptimize && syn.reoptimize.available) ? syn.reoptimize : currentReoptimize();
+    const show = offscript || synOff || App.src !== "live";
+    if (!ro || ro.available === false || !show) { el.hidden = true; return; }
     el.hidden = false;
     const h = ro.eta_min != null ? (Math.floor(ro.eta_min / 60) + "h " + Math.round(ro.eta_min % 60) + "m") : "?";
     const vs = ro.vs_playbook && ro.vs_playbook.available ? "up to " + r1(ro.vs_playbook.max_divergence_nm) + " nm off the plan" : "";

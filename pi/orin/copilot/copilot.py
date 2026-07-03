@@ -345,6 +345,17 @@ def strategy_brief(route=None, hoisted=None, use_llm: bool | None = None) -> dic
             out["recommendation"] = rec
         # else: ungrounded recommendation → keep the deterministic one untouched.
         out["mode"] = "llm"
+        # OFF-BOOK CHAINING (Phase 3): the LLM may ORIGINATE a departure the deterministic digest
+        # didn't (so no re-route offer rode along) — fetch the onboard re-route so an off-book call
+        # still comes with a concrete route. Compact (drop the heavy path/legs); best-effort.
+        final = out.get("recommendation") or {}
+        if final.get("vs_playbook") in ("departs", "off-book") and not (out.get("reoptimize") or {}).get("available"):
+            try:
+                ro = engine.reoptimize(route)
+                if ro.get("available"):
+                    out["reoptimize"] = {k: v for k, v in ro.items() if k not in ("path", "legs")}
+            except Exception:
+                pass
         meta["llm_used"] = True
         meta["model"] = config.LLM_MODEL
         out["_meta"] = meta

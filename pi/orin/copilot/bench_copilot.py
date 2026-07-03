@@ -443,8 +443,14 @@ def test_strategy_synthesis() -> bool:
 
     class StubEngine:
         base_url = "http://stub:8200"
+        reopt_calls = 0
         def __init__(self, *a, **k): pass
         def strategy(self, route=None): return dict(DIGEST)
+        def reoptimize(self, route=None):
+            StubEngine.reopt_calls += 1
+            return {"available": True, "off_playbook": True, "eta_min": 254, "tacks": 9,
+                    "sail_plan": ["J1", "A3", "S2"], "path": [{"lat": 45.0, "lon": -83.0}] * 500,
+                    "legs": [{"mark": "Finish"}], "vs_playbook": {"available": True, "max_divergence_nm": 2.4}}
 
     class StubLLM:
         payload = None
@@ -477,6 +483,13 @@ def test_strategy_synthesis() -> bool:
         ok &= _check("engine picture/concordance/caveats preserved (numbers untouched)",
                      r["picture"] == DIGEST["picture"] and r["concordance"] == DIGEST["concordance"]
                      and r["caveats"] == DIGEST["caveats"])
+        # Off-book chaining (Phase 3): the LLM ORIGINATED the departure (the digest was on-plan, so no
+        # offer rode along) → the copilot fetches the onboard re-route, compact (no heavy path/legs).
+        ok &= _check("LLM-originated off-book → re-route offer chained",
+                     (r.get("reoptimize") or {}).get("available") is True and StubEngine.reopt_calls == 1)
+        ok &= _check("chained offer is compact (heavy path/legs stripped)",
+                     "path" not in (r.get("reoptimize") or {}) and "legs" not in (r.get("reoptimize") or {})
+                     and r["reoptimize"].get("eta_min") == 254)
 
         # C — UNGROUNDED recommendation (cites a tool not in the picture) → deterministic rec kept
         StubLLM.payload = {"assessment": "Some read.",

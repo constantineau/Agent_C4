@@ -726,6 +726,22 @@ Playwright (live engine-fallback + demo calm/escalated + OFF-BOOK badge, 0 error
 onboard the copilot MAY originate strategy (the line is on-boat vs off-boat, not LLM-vs-engine); the frozen
 playbook is a strong prior it may depart from, flagged, not a cage. Optional follow-up: tap-to-detail
 streaming on the synthesis section (deferred — the Orin `/detail` isn't reachable on the bench).
+**PHASE 3 — OFF-BOOK CHAINING: SHIPPED 2026-07-03.** A recommendation that DEPARTS the playbook now comes
+with a CONCRETE route, not just "sail your own side": the brief chains the already-built onboard
+re-optimizer and a **compact `reoptimize` offer** (heavy `path`/`legs` stripped; eta/tacks/sail-plan/
+divergence kept — the card fetches the full track from `GET /reoptimize` on demand) rides on the brief;
+the rec rationale gains "a fresh onboard re-route is ready (~ETA, N tacks)". Two attach points — **Tier-1**
+(`strategy._reoptimize_offer`, deterministic off_script → off-book) and **Tier-2** (`copilot.strategy_brief`
++ `EngineClient.reoptimize`) for an off-book move the LLM ORIGINATES that the digest didn't carry. The
+heavy isochrone runs ONLY on an off-book rec (never on an on-plan hold), engine-cached. Surfaced: the iPad
+card's `⟳ re-route` line now fires on a SYNTHESIS off-book verdict (not just a selector `off_script`),
+preferring the brief's travelling offer (so an LLM-originated departure the selector didn't flag still
+offers a route); the auto-coach `strategy` callout appends "onboard re-route ready (~ETA, N tacks)".
+Verified: `test_strategy.py` (off-book attaches a compact offer + calls the re-optimizer once; on-plan hold
+does NOT), `bench_copilot.test_strategy_synthesis` (LLM-originated off-book → offer chained, compact), live
+engine rebuild (on-plan `/strategy` carries no `reoptimize` key; forced off_script attaches the compact
+offer; `/reoptimize` = a real 14.8 min/1-tack route). Files: strategy.py, copilot.py, engine_client.py,
+narrate.py, dashboard/dashboard.js, test_strategy.py, bench_copilot.py, docs/STRATEGY_SYNTHESIS.md.
 
 ## C4 Performance Lab (cloud) — Phase 9 / Lab-0
 

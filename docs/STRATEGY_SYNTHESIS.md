@@ -129,10 +129,27 @@ phrases it and folds it into `assessment`/`recommendation`.
   Verified `bench_copilot.test_strategy_callout` (converge/split/off-book fire, plain-hold stays quiet,
   change re-surfaces) + full pure suite green.
 
-**Phase 3 — proactive + off-book chaining + tuning.**
-- When the recommendation is `off-book`, chain the `/reoptimize` hint (already built) so the card can
-  offer the fresh onboard route.
-- A later **LoRA pass** (see `docs/ORIN_LORA_PLAN.md`) can target strategy-synthesis quality once the
+**Phase 3 — off-book chaining. ✅ SHIPPED 2026-07-03.**
+- When a recommendation **departs the playbook** (`vs_playbook: "departs"`), the brief now chains the
+  already-built onboard re-optimizer so an off-book call comes with a **concrete route**, not just
+  "sail your own side". A compact **`reoptimize` offer** rides on the brief (the heavy `path`/`legs`
+  arrays stripped — the card fetches the full track from `GET /reoptimize` on demand; eta / tacks /
+  sail-plan / divergence kept), and the recommendation's rationale gains "a fresh onboard re-route is
+  ready (~ETA, N tacks)". Two attach points: **Tier-1** (`strategy.get_strategy_signals` → `_reoptimize_
+  offer`) for a deterministic off-book verdict, and **Tier-2** (`copilot.strategy_brief`) for one the LLM
+  **originates** that the digest didn't carry (fetched via `EngineClient.reoptimize`). The heavy
+  isochrone runs **only** on an off-book rec (never on an on-plan hold) and is engine-cached.
+- **Surfaced:** the iPad Strategy card's `⟳ re-route` line now shows on a synthesis off-book verdict
+  (not just a selector `off_script`), preferring the offer that travels with the brief — so an
+  LLM-originated departure the selector didn't flag still offers a route; the auto-coach `strategy`
+  callout appends "onboard re-route ready (~ETA, N tacks)" on an off-book departure.
+- **Verified:** `test_strategy.py` (off-book attaches a compact offer + calls the re-optimizer once;
+  an on-plan hold does **not**), `bench_copilot.test_strategy_synthesis` (LLM-originated off-book →
+  offer chained, compact), live engine rebuild (`/strategy` on-plan carries no `reoptimize` key;
+  forced off_script attaches the compact offer; `/reoptimize` serves a real 14.8 min / 1-tack route).
+
+**Later — tuning.**
+- A **LoRA pass** (see `docs/ORIN_LORA_PLAN.md`) can target strategy-synthesis quality once the
   reliability pilot lands — this pilot targets brief JSON/tool reliability first.
 
 ## Guardrails recap (reliability, not compliance)

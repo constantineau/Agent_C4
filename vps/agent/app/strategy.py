@@ -18,7 +18,7 @@ Source-agnostic: pure composition of `selector` + `fleet` (both already on the 9
 the identical synthesis runs cloud or onboard. It re-fetches nothing with Schmitt state — `selector`
 does the single gather (its `signals` carry the enriched reads); `fleet` is stateless.
 """
-from . import fleet as fleet_mod, selector as selector_mod
+from . import fleet as fleet_mod, reoptimize as reoptimize_mod, selector as selector_mod
 
 # a persistent VEER (TWD rising, clockwise) tends to favour the RIGHT of the beat, a BACK the LEFT.
 _DRIFT_SIDE = {"veered": "right", "backed": "left"}
@@ -204,6 +204,20 @@ def _recommendation(sel, conc, flt):
             "urgency": urg, "confidence": _conf_label(conf)}, conf
 
 
+def _reoptimize_offer(route=None):
+    """OFF-BOOK CHAINING (docs/STRATEGY_SYNTHESIS.md Phase 3). When the synthesis departs the frozen
+    playbook, hand the crew a CONCRETE fresh route — not just "go off-book". Chains the already-built
+    onboard RE-OPTIMIZER (`GET /reoptimize`): a fresh isochrone through the remaining marks on the
+    boat's own polars + the common Open-Meteo forecast, avoiding the frozen island/zone homework —
+    legal in-race, flagged off-playbook. Compact: strips the heavy `path`/`legs` arrays (the card
+    fetches the full track from /reoptimize on demand); keeps eta/tacks/sail-plan/divergence so the
+    card + coach can offer it inline. `available:False` when there's no fix / no course to route."""
+    ro = reoptimize_mod.get_reoptimize(route)
+    if not ro.get("available"):
+        return {"available": False, "note": ro.get("note", "no onboard re-route available")}
+    return {k: v for k, v in ro.items() if k not in ("path", "legs")}
+
+
 def get_strategy_signals(route=None):
     """The Tier-1 deterministic StrategyBrief: assessment + grounded picture + concordance + one
     recommendation. `available` False only when there's genuinely nothing to say (no fix / no signals);
@@ -253,10 +267,26 @@ def get_strategy_signals(route=None):
     if len(picture) <= 1:
         conf = min(conf, 0.5)      # thin picture → cap confidence honestly
 
-    return {"available": True, "mode": "deterministic", "assessment": assessment,
-            "picture": picture, "concordance": conc, "recommendation": rec,
-            "caveats": _caveats(sig, flt, has_playbook),
-            "confidence": _conf_label(conf), "confidence_value": round(conf, 2),
-            "recommended_label": sel.get("recommended_label"),
-            "disclaimer": "Advisory — the boat's own read of its own data + common public info. "
-                          "The crew decides."}
+    out = {"available": True, "mode": "deterministic", "assessment": assessment,
+           "picture": picture, "concordance": conc, "recommendation": rec,
+           "caveats": _caveats(sig, flt, has_playbook),
+           "confidence": _conf_label(conf), "confidence_value": round(conf, 2),
+           "recommended_label": sel.get("recommended_label"),
+           "disclaimer": "Advisory — the boat's own read of its own data + common public info. "
+                         "The crew decides."}
+
+    # OFF-BOOK CHAINING: a recommendation that DEPARTS the frozen playbook needs a concrete route,
+    # not just "sail your own side". Chain the onboard re-optimizer only when off-book (it's a heavy
+    # isochrone — cached, but never run on an on-plan hold).
+    if rec and rec.get("vs_playbook") == "departs":
+        offer = _reoptimize_offer(route)
+        out["reoptimize"] = offer
+        if offer.get("available"):
+            rec["reoptimize"] = "ready"
+            if offer.get("eta_min") is not None:
+                h, m = divmod(int(round(offer["eta_min"])), 60)
+                eta = (f"{h}h {m:02d}m" if h else f"{m}m")
+                tk = f", {offer['tacks']} tacks" if offer.get("tacks") is not None else ""
+                rec["rationale"] = (rec.get("rationale", "").rstrip()
+                                    + f" A fresh onboard re-route is ready (~{eta}{tk}).").strip()
+    return out
