@@ -16,7 +16,7 @@ import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # so `copilot` package imports
-from copilot import config, dashboard_brief  # noqa: E402
+from copilot import config, copilot as copilot_mod, dashboard_brief  # noqa: E402
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -49,6 +49,21 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(dashboard_brief.make(tiles))
             except Exception as e:                       # never 500 the dashboard — degrade
                 self._send({"mode": "deterministic", "reason": "server error: " + str(e)[:120]})
+        elif path == "/strategy":
+            # in-race STRATEGY SYNTHESIS — the LLM phrases the engine's deterministic cross-signal
+            # digest + may originate a move beyond the playbook (onboard = legal). Never 500 — the
+            # copilot already falls back to the deterministic digest internally on any LLM trouble.
+            try:
+                body = json.loads(raw)
+            except Exception:
+                body = {}
+            try:
+                self._send(copilot_mod.strategy_brief(route=body.get("route"),
+                                                      hoisted=body.get("hoisted"),
+                                                      use_llm=body.get("use_llm")))
+            except Exception as e:
+                self._send({"available": False, "mode": "deterministic",
+                            "reason": "server error: " + str(e)[:120]})
         elif path == "/detail":
             # streamed tile deep-dive — text/plain, flushed token-by-token (X-Accel-Buffering:no
             # tells nginx not to buffer so the words arrive live).
