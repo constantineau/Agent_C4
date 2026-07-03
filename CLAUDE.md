@@ -927,6 +927,38 @@ coverage 1.0, reaches the finish. (Cove Island's own landmass already read as la
 abuts the coarse Bruce-Peninsula blob; the real win is the many mid-lake islands NE omits, plus the
 shoreline refinement.) Rounding **side** is now enforced for marked islands (2f, below).
 
+### Venue-specific weather-model skill weighting (design LOCKED + Phase 1 SHIPPED 2026-07-03)
+
+Model skill is venue-dependent: on the Great Lakes the mesoscale models (HRRR/NAM) resolve
+lake-breeze structure the global models (GFS/ICON/ECMWF) smear out; offshore it flips. The blend today
+uses a **static** per-model priority (`wind/models.py`), so it leaves skill on the table. This feature
+**weights each model by how accurately it has ACTUALLY forecast the wind at this venue in the past** —
+forecast-vs-observed verification, not model-vs-model agreement (which we already report as
+`confidence`). Full design + math + phases: **`docs/MODEL_SKILL_WEIGHTING.md`**.
+- **Ground truth (two independent series over the venue window):** the FORECAST as it was issued,
+  from the **Open-Meteo Historical Forecast API** (archives each model's real past forecasts, per
+  model, by past date — GFS/HRRR(`gfs_hrrr`)/ECMWF/ICON/GEM individually retrievable; no need for our
+  own GRIB capture history); and the OBSERVED wind, independent of any model, from **METAR** (Iowa
+  State ASOS archive) + **NDBC buoys**, with boat-instrument TWS/TWD as a Phase-3 supplement. (NOT the
+  judge's GRIB oracle — that's a model product, circular for scoring; it stays for route-regret only.)
+- **Metric:** headline **vector RMSE (kn)** = |forecast wind vector − observed| (folds speed + dir
+  error), plus **speed bias** + circular **direction bias** (the de-bias input).
+- **Phase 1 (BUILT + PROVEN) — `vps/lab/app/modelskill.py`:** obs providers (METAR + NDBC realtime),
+  the historical per-model forecast provider, the bias/vector-RMSE scorer, and a standalone
+  `verify_venue()` "which model was right here" report. Pure stdlib; no blend changes yet. Self-test
+  `python3 -m app.modelskill` verified live against Alpena **KAPN** over the 2025 Bayview-Mackinac week
+  (613 METAR obs): **HRRR 2.45 kn** RMSE beat **ECMWF 3.71 kn** (mesoscale wins on the lake, the "best
+  global model" comes last), and every global model carried a systematic **+10–13° veer bias** HRRR
+  didn't — a clean de-bias target. Thesis validated on real forecasts vs real obs.
+- **Decisions (locked):** ground truth = METAR/NDBC spine + boat obs · apply mode = **auto-apply with
+  shrinkage** (no manual gate; safe via hard shrink-to-priors when thin + a swing cap + env kill-switch
+  `MODEL_SKILL_WEIGHTING=off`) · **weights displayed to the user** (required, since auto) · venue key =
+  auto bbox-centroid cell (~0.5°) overridable by `race.venue_tag` (bayviewmack2025+2026 → one venue).
+- **Phase 2 (IN PROGRESS):** persist skill to `/srv/learning`; derive weights (de-bias + inverse-MSE +
+  shrink-to-priors + cap); thread `model_weights`/`model_bias` through `build_windfield → detail_at`;
+  surface active weights + earning RMSE in the optimize result + a Lab "Model skill" panel. Phase 3 =
+  boat-obs supplement + regime-conditional (gradient vs thermal) + explicit lead-time buckets.
+
 ## C4 Performance Lab — Lab-2 branching playbook bundle
 
 The output of the prep studio: the optimizer's one route becomes a small set of strategic
