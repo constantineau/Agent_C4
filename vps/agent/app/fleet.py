@@ -57,21 +57,33 @@ def _match(target, roster):
 
 
 # --- ORC corrected-time model ------------------------------------------------
+def _as_float(v):
+    """Parse a handicap value tolerantly: numbers pass through; a string like '1.050' or '1.05 GPH'
+    yields its leading number; junk ('DNC', 'n/a', '') → None. Extracted/pasted rosters carry messy
+    ratings, and one bad value must NOT crash the fleet + strategy read (it would 500 both endpoints)."""
+    if v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    m = re.match(r"\s*([-+]?\d*\.?\d+)", str(v))
+    return float(m.group(1)) if m else None
+
+
 def _tot_coeff(entry, scoring_method):
     """ORC Time-on-Time coefficient for an entry: corrected = elapsed × ToT. Prefer the published
     single-number `rating` (already a ToT coeff); else derive from GPH (ToT ≈ K/GPH — a faster boat
-    has a lower GPH and a higher coefficient). Returns None if neither is known."""
-    r = entry.get("rating")
+    has a lower GPH and a higher coefficient). Returns None if neither is known/parseable."""
+    r = _as_float(entry.get("rating"))
     if r:
-        return float(r)
-    g = entry.get("orc_gph") or entry.get("gph")
-    return _TOT_K / float(g) if g else None
+        return r
+    g = _as_float(entry.get("orc_gph") or entry.get("gph"))
+    return _TOT_K / g if g else None
 
 
 def _allowance_s_per_nm(entry):
-    """ORC Time-on-Distance allowance (s/nm) = GPH. Returns None if unknown."""
-    g = entry.get("orc_gph") or entry.get("gph")
-    return float(g) if g else None
+    """ORC Time-on-Distance allowance (s/nm) = GPH. Returns None if unknown/unparseable."""
+    g = _as_float(entry.get("orc_gph") or entry.get("gph"))
+    return g if g else None
 
 
 # --- course geometry (flat-plane nm; matches ais.py / navigator scale) -------
