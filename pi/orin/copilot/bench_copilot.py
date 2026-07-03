@@ -498,6 +498,55 @@ def test_strategy_synthesis() -> bool:
     return ok
 
 
+def test_strategy_callout() -> bool:
+    """The proactive STRATEGY-SYNTHESIS callout (Phase 2). Fires only on the higher-order reads the
+    per-signal triggers don't give — signals CONVERGE (strong), CONFLICT (split), or the synthesis
+    recommends DEPARTING the playbook; a plain hold-and-monitor stays quiet. Grounded in get_strategy;
+    the verdict + action are in the id so a change re-surfaces. Pure/deterministic."""
+    ok = True
+    print("\n== strategy-synthesis callout (pure, synthetic) ==")
+
+    def strat(strength, action, vs="on-plan", urg="soon", **kw):
+        return dict({"available": True, "assessment": f"{action}.",
+                     "concordance": {"strength": strength, "note": f"signals {strength}"},
+                     "recommendation": {"action": action, "vs_playbook": vs, "urgency": urg,
+                                        "rationale": "because signals", "grounded_in": ["get_selector"],
+                                        "confidence": "high"}, "confidence": "high"}, **kw)
+
+    c = narrate_mod._strategy_callout(strat("strong", "Switch → Right start", urg="soon"))
+    ok &= _check("converging signals → strategy callout, grounded in get_strategy",
+                 c and c["category"] == "strategy" and c["urgency"] == "soon"
+                 and "get_strategy" in c["grounded_in"] and c["id"].startswith("strategy:converge:")
+                 and "Switch" in c["headline"])
+    c = narrate_mod._strategy_callout(strat("split", "Hold: Middle start", urg="monitor"))
+    ok &= _check("split signals → fires at 'soon' (one read about to be wrong), verdict in id",
+                 c and c["urgency"] == "soon" and c["id"].startswith("strategy:split:"))
+    c = narrate_mod._strategy_callout(strat("none", "Off-book: sail the favoured side",
+                                            vs="departs", urg="now"))
+    ok &= _check("off-book departure → fires even with no concordance, urgency now",
+                 c and c["urgency"] == "now" and c["id"].startswith("strategy:offbook:"))
+    ok &= _check("plain hold + weak/none concordance → NO callout (per-signal triggers cover it)",
+                 narrate_mod._strategy_callout(strat("weak", "Hold: Middle start", urg="monitor")) is None)
+    ok &= _check("unavailable → no callout",
+                 narrate_mod._strategy_callout({"available": False}) is None)
+
+    # A genuine change of verdict/action re-surfaces through the step() dedup (id encodes both).
+    route = "_bench_strategy"
+    narrate_mod.reset(route)
+    snap = {"get_strategy": strat("strong", "Switch → Right start", urg="soon")}
+    narrate_mod.step(route, snap, None, None)          # strategy needs 2 polls (CONFIRM_ROUNDS)
+    s2 = narrate_mod.step(route, snap, None, None)
+    ok &= _check("strategy callout confirmed on the 2nd poll (raise-slow)",
+                 any(x["category"] == "strategy" for x in s2["new"]))
+    snap2 = {"get_strategy": strat("split", "Hold: Middle start", urg="monitor")}
+    narrate_mod.step(route, snap2, None, None)
+    s4 = narrate_mod.step(route, snap2, None, None)
+    ok &= _check("a changed verdict re-surfaces as a new callout",
+                 any(x["category"] == "strategy" for x in s4["new"]))
+    narrate_mod.reset(route)
+    return ok
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--llm", action="store_true", help="also exercise the LLM tool-loop")
@@ -513,6 +562,7 @@ def main():
     overall &= test_adherence_logic()
     overall &= test_coach_logic()
     overall &= test_strategy_synthesis()
+    overall &= test_strategy_callout()
 
     print(f"\n>> engine: {config.ENGINE_URL}")
     engine = EngineClient()

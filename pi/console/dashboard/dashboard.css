@@ -63,6 +63,23 @@ body {
 .st-chip { display:inline-flex; align-items:center; gap:6px; padding:2px 9px; border-radius:20px;
   background:var(--cfill); color:var(--c); border:1px solid var(--c); font-weight:800; }
 .st-icon { font-size:11px; } .st-word { font-size:11px; letter-spacing:1px; }
+/* SYNTHESIS apex — the higher-order cross-signal read, above the selector banner + triggers. */
+.st-syn { margin-top:8px; padding:8px 11px; border-radius:9px; border:1px solid var(--sc);
+  background:linear-gradient(90deg, var(--scfill), transparent 70%); }
+.st-syn.y-ok    { --sc:var(--ok);    --scfill:var(--ok-fill); }
+.st-syn.y-watch { --sc:var(--watch); --scfill:var(--watch-fill); }
+.st-syn.y-act   { --sc:var(--act);   --scfill:var(--act-fill); }
+.st-syn.y-na    { --sc:var(--na);    --scfill:transparent; opacity:.8; }
+.st-syn-head { display:flex; align-items:center; gap:8px; }
+.st-syn-tag { font-size:10px; font-weight:800; letter-spacing:1.2px; color:var(--sc);
+  padding:1px 7px; border:1px solid var(--sc); border-radius:5px; }
+.st-syn-badge { font-size:10px; font-weight:800; letter-spacing:.8px; padding:1px 7px; border-radius:5px;
+  background:var(--act); color:var(--bg); }
+.st-syn-mode { font-size:10px; font-weight:800; letter-spacing:.6px; color:var(--muted);
+  border:1px solid var(--line); border-radius:5px; padding:1px 6px; }
+.st-syn-conf { font-size:10.5px; font-weight:700; color:var(--sc); text-transform:uppercase; letter-spacing:.5px; }
+.st-syn-assess { margin:6px 0 0; font-size:15px; font-weight:800; line-height:1.28; color:var(--text); }
+.st-syn-conc { margin:3px 0 0; font-size:12.5px; line-height:1.35; color:var(--muted); }
 .st-rec { margin-top:8px; padding:7px 10px; border-radius:9px; display:flex; align-items:center;
   gap:9px; flex-wrap:wrap; background:var(--rcfill); border:1px solid var(--rc); }
 .st-rec.sr-ok    { --rc:var(--ok);    --rcfill:var(--ok-fill); }

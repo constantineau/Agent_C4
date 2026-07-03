@@ -702,6 +702,31 @@ Strategy banner, 0 console errors). **NEXT Lab-3 (remaining, optional):** a GRIB
 current one is Open-Meteo same-source, intentional given no cfgrib on the Pi); a full onboard coastline mask.
 The copilot narration of both triggers already shipped (see the copilot section).
 
+**IN-RACE STRATEGY SYNTHESIS (the higher-order cross-signal read) — SHIPPED (`docs/STRATEGY_SYNTHESIS.md`).**
+The siloed triggers each say one thing (forecast moved / off the line / a rival ahead / breeze shifted);
+the synthesis fuses them into ONE read: do the signals AGREE (consolidate) or FIGHT (hold and watch, one
+read about to be wrong) — plus one grounded recommendation. Two tiers. **Tier-1 (`vps/agent/app/strategy.py`,
+engine `GET /strategy`):** deterministic — reuses `selector.get_selector` (the HOLD/SWITCH/OFF-SCRIPT
+backbone, already Schmitt-hysteretic) + the handicap `fleet` read, computes a **concordance** (pure vote
+math over shift+drift+deviation+fleet-lean → strong/split/weak/none), a grounded `picture[]` (each item
+cites its tool), one **recommendation** (folds selector action + concordance + fleet threat; off-book flag),
+assessment, caveats, confidence. Source-agnostic (pure composition on the 9.0 seam; reuses selector's single
+gather so the Schmitt bands aren't double-ticked). **Tier-2 (copilot `POST /strategy`, `copilot.strategy_
+brief`):** the onboard 7B phrases the digest + MAY originate an off-book move (onboard = the boat's own gear,
+legal in-race) — but the numbers/picture/concordance/caveats stay the ENGINE's; an ungrounded rec is dropped
+for the deterministic one; any LLM trouble → the whole deterministic digest stands (schema-constrained
+decode); also served from the stdlib `serve_dashboard.py`. **SURFACED (Phase 2):** the iPad Strategy card's
+**SYNTHESIS apex section** (assessment + concordance + mode pill LLM/ENGINE + OFF-BOOK badge, `fetchSynthesis`
+copilot→engine fallback, own ~15 s cadence) above the selector banner + deviation/drift triggers; and a
+proactive **auto-coach `strategy` callout** (`narrate._strategy_callout`, priority just under playbook) that
+fires only on the higher-order reads — signals converge, conflict, or the rec departs the playbook — a plain
+hold-and-monitor stays quiet. `copilot.gather` now fetches `get_strategy`. Verified: `test_strategy.py`,
+`bench_copilot.test_strategy_synthesis` + `test_strategy_callout`, live engine `/strategy` + copilot POST,
+Playwright (live engine-fallback + demo calm/escalated + OFF-BOOK badge, 0 errors). RRS-41: reframed —
+onboard the copilot MAY originate strategy (the line is on-boat vs off-boat, not LLM-vs-engine); the frozen
+playbook is a strong prior it may depart from, flagged, not a cage. Optional follow-up: tap-to-detail
+streaming on the synthesis section (deferred — the Orin `/detail` isn't reachable on the bench).
+
 ## C4 Performance Lab (cloud) — Phase 9 / Lab-0
 
 `vps/lab/` is the browser-based, between-races **prep + debrief** surface (the race-day surface is the

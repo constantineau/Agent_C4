@@ -107,13 +107,27 @@ phrases it and folds it into `assessment`/`recommendation`.
 - **Exit test:** `bench_copilot` case (grounded synthesis, concordant + discordant fixtures, off-book
   flag, fallback fires); live against the real Orin (:11434) + Pi engine (:8200).
 
-**Phase 2 — surface it (iPad Strategy card + coach).**
-- The Strategy card (`pi/console/dashboard/`) gains a **synthesis section** above the triggers: the
-  `assessment` headline + the concordance read + the recommendation (with the `off-book` badge when it
-  departs). Its own ~15 s cadence, `mode` pill (llm/engine), tap-to-detail streams the reasoning
-  (`POST /detail` pattern).
-- The auto-coach (`coach.py`) can volunteer a **strategy callout** (`category: "strategy"`, priority
-  just under playbook) when the recommendation changes — raise-slow/clear-fast, same dedup as the rest.
+**Phase 2 — surface it (iPad Strategy card + coach). ✅ SHIPPED 2026-07-03.**
+- The Strategy card (`pi/console/dashboard/`) gained a **SYNTHESIS apex section** above the selector
+  banner + triggers: the `assessment` headline + the concordance read + an **OFF-BOOK badge** when the
+  recommendation departs the playbook, a **mode pill** (LLM when the Orin phrased it / ENGINE for the
+  deterministic digest), and a confidence label. Status-coloured (ok/watch/act via `synthStatus`). Its
+  own ~15 s cadence (`fetchSynthesis`): tries `POST /copilot/strategy` (LLM) and falls back to the
+  engine's `GET /strategy` (deterministic) — mirrors the playbook tile's `/adherence`→`/selector`
+  fallback, so it renders with or without the Orin. The card now shows the full stack: **synthesis
+  (apex) → selector banner → deviation/drift triggers**. Demo `calm` (on-plan) + `escalated` (an LLM
+  off-book departure) scenarios added; Playwright-verified (live engine-fallback + both demos, OFF-BOOK
+  badge, 0 page errors). **Tap-to-detail streaming was deferred** (the `openDetail` path is tile-domain
+  specific + the Orin `/detail` isn't reachable on the bench — an optional follow-up).
+- The auto-coach volunteers a **strategy callout** (`narrate._strategy_callout`, `category: "strategy"`,
+  priority just under playbook) — but ONLY on the higher-order reads the per-signal triggers don't give:
+  signals **CONVERGE** (concordance strong → consolidate), **CONFLICT** (split → hold and watch, one
+  read about to be wrong), or the synthesis recommends **DEPARTING** the playbook. A plain hold-and-
+  monitor stays quiet (the per-signal triggers + the playbook tile already cover it). `copilot.gather`
+  now fetches `get_strategy`; the callout is grounded in `get_strategy` + the tools that fed the rec;
+  the verdict + action are in the id so a genuine change re-surfaces (CONFIRM_ROUNDS 2, raise-slow).
+  Verified `bench_copilot.test_strategy_callout` (converge/split/off-book fire, plain-hold stays quiet,
+  change re-surfaces) + full pure suite green.
 
 **Phase 3 — proactive + off-book chaining + tuning.**
 - When the recommendation is `off-book`, chain the `/reoptimize` hint (already built) so the card can

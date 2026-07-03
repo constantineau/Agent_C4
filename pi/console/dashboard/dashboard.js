@@ -56,6 +56,7 @@
   const DEV_EVERY = 5000;         // poll the ENGINE's deterministic route-deviation ~every 5 s (Tier-1, no LLM)
   const DRIFT_EVERY = 20000;      // poll forecast-drift ~every 20 s (slow-moving; Open-Meteo is cached ~30 min)
   const COACH_EVERY = 15000;      // poll the proactive auto-coach held state ~every 15 s (no recompute — the Orin timer drives it)
+  const SYN_EVERY = 15000;        // poll the in-race strategy synthesis ~every 15 s (a synthesis of the slower reads; LLM-phrased when the Orin is up)
 
   /* ---- tiny helpers needed early (used in the demo scenarios) ---- */
   const r0 = (x) => (x == null ? "?" : Math.round(x));
@@ -107,6 +108,12 @@
       selector: { available: true, action: "hold", status: "ok", tier: 1, value: "Hold: Left start",
         target_label: "Left start", confidence: 0.75, confidence_label: "high",
         why: "No persistent shift and no material forecast drift — the recommended Left start stands. Play the shifts within the band." },
+      synthesis: { available: true, mode: "llm", confidence: "high",
+        assessment: "On plan — nothing across the signals argues for leaving the Left start.",
+        concordance: { strength: "weak", lean: "left",
+          note: "the breeze is oscillating with no persistent shift, and the mild fleet lean agrees with Left — no decisive read to act on" },
+        recommendation: { action: "Hold: Left start", vs_playbook: "on-plan", target_variant: "left",
+          urgency: "monitor", confidence: "high" } },
     },
     escalated: {
       mode: "llm-live", focus: "Playbook branch: the right is paying now. Bear-away coming up, and the crew tank is getting low.", confidence: "med",
@@ -148,6 +155,13 @@
         why: "A persistent veering shift now favours the right — against the recommended Left. That's the playbook's branch trigger. Reinforced: the forecast has veered ~28° the same way; you're already working the right side (1.3 nm right)." },
       reoptimize: { available: true, off_playbook: true, eta_min: 254, tacks: 9, sailed_nm: 46.2, avoids_islands: 2, avoids_zones: 1,
         marks: ["Cove Island", "Finish"], sail_plan: ["J1", "A3", "S2"], vs_playbook: { available: true, max_divergence_nm: 2.4, mean_divergence_nm: 0.9 } },
+      synthesis: { available: true, mode: "llm", confidence: "med",
+        assessment: "The right has genuinely taken over — this outruns the pre-authored branches. Commit right, off the book.",
+        concordance: { strength: "strong", lean: "right",
+          note: "the persistent veer, the forecast drift and your position all point right — and you're already 1.3 nm right of the plan; high concordance" },
+        recommendation: { action: "Off-book: commit right and lay the mark", vs_playbook: "departs", target_variant: null,
+          urgency: "now", confidence: "med",
+          rationale: "all three directional reads agree right and the situation has passed even the Right-start branch — sail the favoured side, onboard re-route ready" } },
     },
   };
 
@@ -696,12 +710,79 @@
     if (App.src === "demo") return (SCENARIOS[App.demoScn] || {}).reoptimize || null;
     return App.reoptimize;
   }
-  /* the Strategy strip: are we sailing the frozen variant's optimal track? (route-deviation). */
+  /* the in-race SYNTHESIS: the higher-order cross-signal read. Try the copilot's LLM-phrased brief
+     (POST /copilot/strategy) when the Orin is up; fall back to the ENGINE's deterministic digest
+     (GET /strategy, always there on the Pi). Mirrors the playbook tile's /adherence→/selector fallback.
+     Own ~15 s cadence — it's a synthesis of the slower reads, no need to poll it fast. */
+  async function fetchSynthesis() {
+    if (App.src !== "live") return;
+    let r = null;
+    try {                                            // 1) the copilot (LLM phrasing) — absent on the bench
+      const ctl = new AbortController();
+      const to = setTimeout(() => ctl.abort(), 15000);
+      const resp = await fetch(COPILOT + "/strategy", { method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({}), signal: ctl.signal });
+      clearTimeout(to);
+      r = resp.ok ? await resp.json() : null;
+    } catch (e) { r = null; }
+    if (!r) r = await fetchJSON("/strategy", 12000);  // 2) engine deterministic digest (Tier-1 fallback)
+    if (r) App.synthesis = r;
+    if (App.src === "live") render();
+  }
+  function currentSynthesis() {
+    if (App.src === "demo") return (SCENARIOS[App.demoScn] || {}).synthesis || null;
+    return App.synthesis;
+  }
+  /* map the synthesis to a card status colour: an off-book departure or a 'now' rec = act; a split
+     read or a 'soon' rec = watch; else ok (na when there's nothing to synthesise). */
+  function synthStatus(s) {
+    if (!s || s.available === false) return "na";
+    const rec = s.recommendation || {}, conc = s.concordance || {};
+    const off = rec.vs_playbook === "departs" || rec.vs_playbook === "off-book";
+    if (off || rec.urgency === "now") return "act";
+    if (conc.strength === "split" || rec.urgency === "soon") return "watch";
+    return "ok";
+  }
+  function renderSynthesis() {
+    const el = document.getElementById("stSyn");
+    const s = currentSynthesis();
+    if (!s || s.available === false) { el.hidden = true; return; }
+    el.hidden = false;
+    el.className = "st-syn y-" + synthStatus(s);
+    const rec = s.recommendation || {}, conc = s.concordance || {};
+    const off = rec.vs_playbook === "departs" || rec.vs_playbook === "off-book";
+    document.getElementById("stSynBadge").hidden = !off;
+    document.getElementById("stSynMode").textContent = s.mode === "llm" ? "LLM" : "ENGINE";
+    const conf = s.confidence || rec.confidence || "";
+    document.getElementById("stSynConf").textContent = conf ? conf + " conf" : "";
+    document.getElementById("stSynAssess").textContent = s.assessment || rec.action || "";
+    const concEl = document.getElementById("stSynConc");
+    const note = conc.note && conc.strength !== "none" ? conc.note : "";
+    if (note) { concEl.hidden = false; concEl.textContent = note; } else concEl.hidden = true;
+  }
+  /* the Strategy strip: the synthesis apex, the selector banner, then the deviation/drift triggers. */
   function renderStrategy() {
     const el = document.getElementById("strategy");
     const d = currentDeviation();
-    if (!d) { el.hidden = true; return; }
+    const syn = currentSynthesis();
+    renderSynthesis();
+    // Show the card when EITHER the synthesis or the route-deviation read is present.
+    if (!d && (!syn || syn.available === false)) { el.hidden = true; return; }
     el.hidden = false;
+    if (!d) {   // synthesis-only (no deviation yet): render the head from the synthesis + stop.
+      el.className = "strategy s-" + synthStatus(syn);
+      const st = STATUS[synthStatus(syn)] || STATUS.na;
+      document.getElementById("stIcon").textContent = st.icon;
+      document.getElementById("stWord").textContent = st.word;
+      document.getElementById("stVariant").textContent = "";
+      document.getElementById("stProgress").style.display = "none";
+      document.getElementById("stMetrics").innerHTML = "";
+      document.getElementById("stFlip").hidden = true;
+      document.getElementById("stWhy").textContent = "";
+      renderDriftLine(); renderSelector(); renderReoptimize();
+      return;
+    }
     const status = d.status || "na";
     el.className = "strategy s-" + status;
     const st = STATUS[status] || STATUS.na;
@@ -1121,7 +1202,7 @@
   function briefMe() {
     const b = document.getElementById("briefBtn");
     b.classList.add("busy"); b.textContent = "thinking…";
-    if (App.src === "live") { poll(); fetchBrief(); fetchAdherence(); fetchCoach(); fetchDeviation(); fetchDrift(); fetchSelector(); }
+    if (App.src === "live") { poll(); fetchBrief(); fetchAdherence(); fetchCoach(); fetchDeviation(); fetchDrift(); fetchSelector(); fetchSynthesis(); }
     // the LLM is slow (~45 s warm); clear the busy state on a timer — render() updates when it lands
     setTimeout(() => { b.classList.remove("busy"); b.textContent = "Brief me ↻"; if (App.src !== "live") render(); }, 1500);
   }
@@ -1147,6 +1228,8 @@
     App.driftTimer = setInterval(fetchDrift, DRIFT_EVERY);
     fetchSelector();                // branch selector (engine, unified recommendation), own cadence
     App.selTimer = setInterval(fetchSelector, DEV_EVERY);
+    fetchSynthesis();               // in-race strategy synthesis (copilot LLM → engine fallback), own cadence
+    App.synTimer = setInterval(fetchSynthesis, SYN_EVERY);
     document.getElementById("themeBtn").addEventListener("click", cycleTheme);
     document.getElementById("srcBtn").addEventListener("click", cycleSource);
     document.getElementById("alertBtn").addEventListener("click", toggleSound);

@@ -23,13 +23,26 @@
     <button class="ctl" id="alertBtn" title="Sound a short alert tone when a safety callout appears — tap to enable / test">🔔 <b id="alertLbl">OFF</b></button>
   </header>
 
-  <!-- ===== Strategy strip: route-deviation vs the frozen playbook variant (Lab-3, Tier-1 engine) ===== -->
+  <!-- ===== Strategy strip: in-race synthesis (Tier-2 copilot / Tier-1 engine) over route-deviation vs the frozen playbook variant ===== -->
   <section class="strategy s-na" id="strategy" aria-label="Playbook route-deviation strategy">
     <div class="st-head">
       <span class="st-title">STRATEGY</span>
       <span class="st-variant" id="stVariant">—</span>
       <span class="st-spacer"></span>
       <span class="st-chip" id="stChip"><span class="st-icon" id="stIcon">◌</span><span class="st-word" id="stWord">—</span></span>
+    </div>
+    <!-- SYNTHESIS: the higher-order cross-signal read (assessment + concordance), phrased by the onboard
+         LLM when the Orin is up (mode LLM) else the engine's deterministic digest (mode ENGINE). -->
+    <div class="st-syn" id="stSyn" hidden>
+      <div class="st-syn-head">
+        <span class="st-syn-tag">SYNTHESIS</span>
+        <span class="st-syn-badge" id="stSynBadge" hidden>OFF-BOOK</span>
+        <span class="st-spacer"></span>
+        <span class="st-syn-mode" id="stSynMode"></span>
+        <span class="st-syn-conf" id="stSynConf"></span>
+      </div>
+      <p class="st-syn-assess" id="stSynAssess"></p>
+      <p class="st-syn-conc" id="stSynConc" hidden></p>
     </div>
     <div class="st-rec" id="stRec" hidden>
       <span class="sr-pill" id="stRecPill">HOLD</span>

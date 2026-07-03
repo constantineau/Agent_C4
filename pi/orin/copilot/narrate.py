@@ -41,14 +41,15 @@ ROUNDING_STAGES = [(15, "heads-up"), (10, "stage"), (5, "final")]
 URGENCY_RANK = {"now": 0, "soon": 1, "monitor": 2}
 # Lower = more important; the coach line leads with the top of this order.
 CATEGORY_PRIORITY = {"safety": 0, "fatigue": 1, "rounding": 2, "sail": 3,
-                     "playbook": 4, "deviation": 5, "fleet": 6, "shift": 7,
-                     "drift": 8, "layline": 9, "data": 10}
+                     "playbook": 4, "strategy": 5, "deviation": 6, "fleet": 7, "shift": 8,
+                     "drift": 9, "layline": 10, "data": 11}
 # How many consecutive evaluations a callout must persist before it's "confirmed" and shown —
 # the fuzzy-adherence hysteresis. Time-critical things fire at once; noisier reads wait one poll
 # so a single-sample blip never barks. (The engine already debounces tactical persistence — the
 # deviation/drift triggers carry their OWN Schmitt consider/commit bands, so 1 round is enough.)
 CONFIRM_ROUNDS = {"safety": 1, "fatigue": 1, "rounding": 1, "sail": 1, "playbook": 2,
-                  "deviation": 1, "fleet": 2, "shift": 2, "drift": 1, "layline": 1, "data": 2}
+                  "strategy": 2, "deviation": 1, "fleet": 2, "shift": 2, "drift": 1,
+                  "layline": 1, "data": 2}
 
 
 def _callout(cid, category, urgency, headline, detail, grounded_in, confidence="med"):
@@ -293,6 +294,36 @@ def _drift_callout(dft):
                     "high" if status == "act" else "med")
 
 
+def _strategy_callout(strat):
+    """In-race STRATEGY SYNTHESIS callout (docs/STRATEGY_SYNTHESIS.md Phase 2). The higher-order
+    cross-signal read the individual triggers don't give: the moment the signals CONVERGE
+    (consolidate — a moment to press) or CONFLICT (split — hold and watch, one read is about to be
+    wrong), or when the synthesis recommends DEPARTING the frozen playbook (onboard may originate
+    strategy in-race — the boat's own gear, legal). A plain hold-and-monitor stays quiet: the
+    per-signal triggers + the playbook tile already cover it, so this only fires when the SYNTHESIS
+    adds something. Grounded in get_strategy + the tools that fed the recommendation (all engine
+    facts). The concordance verdict + the recommendation are in the id so a genuine change re-surfaces."""
+    if not strat.get("available"):
+        return None
+    rec = strat.get("recommendation") or {}
+    conc = strat.get("concordance") or {}
+    strength = conc.get("strength")
+    off_book = (rec.get("vs_playbook") in ("departs", "off-book"))
+    if strength not in ("strong", "split") and not off_book:
+        return None
+    action = (rec.get("action") or "").strip()
+    head = (strat.get("assessment") or action or "Reassess the plan").strip()
+    detail = (rec.get("rationale") or conc.get("note") or "").strip()
+    urg = rec.get("urgency")
+    urgency = "now" if urg == "now" else ("soon" if (urg == "soon" or strength == "split" or off_book)
+                                          else "monitor")
+    verdict = "split" if strength == "split" else "converge" if strength == "strong" else "offbook"
+    sig = "".join(ch for ch in action.lower() if ch.isalnum())[:20]   # change-sensitive id tail
+    grounded = [g for g in (rec.get("grounded_in") or []) if g] + ["get_strategy"]
+    conf = rec.get("confidence") or strat.get("confidence") or "med"
+    return _callout(f"strategy:{verdict}:{sig}", "strategy", urgency, head, detail, grounded, conf)
+
+
 def _fatigue_callout(fat):
     level = fat.get("level")
     if level not in ("rotate_soon", "rotate_now"):
@@ -328,10 +359,15 @@ def evaluate(snapshot, playbook=None, engine=None):
     fleet = snapshot.get("get_fleet") or {}
     dev = snapshot.get("get_deviation") or {}
     dft = snapshot.get("get_drift") or {}
+    strat = snapshot.get("get_strategy") or {}
 
     out = []
     if ais.get("available", True) is not False:    # SAFETY first — collision watch (always legal)
         c = _safety_callout(ais)
+        if c:
+            out.append(c)
+    if strat.get("available"):                     # in-race synthesis — the higher-order cross-signal read
+        c = _strategy_callout(strat)
         if c:
             out.append(c)
     if fleet.get("available"):                     # handicap-rival watch (corrected-time tactical)
