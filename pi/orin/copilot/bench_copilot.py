@@ -422,6 +422,82 @@ def test_deviation_drift_callout() -> bool:
     return ok
 
 
+def test_strategy_synthesis() -> bool:
+    """Strategy-synthesis brief (Tier-2). The LLM re-narrates + may re-recommend (incl. an off-book
+    departure), but the engine's numbers / picture / concordance / caveats are preserved, an UNGROUNDED
+    recommendation is dropped for the deterministic one, and any LLM trouble falls back to the digest.
+    Pure: stub the engine digest + the LLM, no live engine/model."""
+    ok = True
+    print("\n== strategy synthesis (stubbed engine digest + LLM) ==")
+
+    DIGEST = {
+        "available": True, "mode": "deterministic", "assessment": "Hold: Middle start",
+        "picture": [
+            {"signal": "shift", "read": "oscillating ±4°", "grounded_in": ["get_tactics"], "confidence": "med"},
+            {"signal": "fleet", "read": "Rival ahead by 0:40", "grounded_in": ["get_fleet"], "confidence": "med"}],
+        "concordance": {"strength": "weak", "lean": "left", "note": "the shift leans left, fleet agrees"},
+        "recommendation": {"action": "Hold: Middle start", "vs_playbook": "on-plan",
+                           "target_variant": "middle", "rationale": "no decisive signal",
+                           "grounded_in": ["get_selector"], "urgency": "monitor", "confidence": "med"},
+        "caveats": ["Fleet corrected-time is a projection."], "confidence": "med", "disclaimer": "Advisory."}
+
+    class StubEngine:
+        base_url = "http://stub:8200"
+        def __init__(self, *a, **k): pass
+        def strategy(self, route=None): return dict(DIGEST)
+
+    class StubLLM:
+        payload = None
+        def __init__(self, *a, **k): pass
+        def chat(self, messages, **k):
+            if isinstance(StubLLM.payload, Exception):
+                raise StubLLM.payload
+            return {"content": json.dumps(StubLLM.payload)}
+
+    orig_e, orig_l = copilot.EngineClient, copilot.LLMClient
+    copilot.EngineClient, copilot.LLMClient = StubEngine, StubLLM
+    try:
+        # A — LLM off → the deterministic digest verbatim
+        r = copilot.strategy_brief(route="_bench_strat", use_llm=False)
+        ok &= _check("llm off → deterministic digest",
+                     r["mode"] == "deterministic" and r["assessment"] == "Hold: Middle start")
+
+        # B — grounded LLM refinement → new narrative + recommendation taken; engine facts preserved
+        StubLLM.payload = {"assessment": "Weak left lean with a rival ahead — press left if you have the lane.",
+                           "recommendation": {"action": "Consolidate left", "vs_playbook": "departs",
+                                              "rationale": "shift + fleet both lean left",
+                                              "grounded_in": ["get_tactics", "get_fleet"],
+                                              "urgency": "soon", "confidence": "med"}}
+        r = copilot.strategy_brief(route="_bench_strat", use_llm=True)
+        ok &= _check("grounded LLM → mode llm", r["mode"] == "llm")
+        ok &= _check("assessment re-narrated", "press left" in r["assessment"])
+        ok &= _check("grounded recommendation taken (incl. off-book departure)",
+                     r["recommendation"]["action"] == "Consolidate left"
+                     and r["recommendation"]["vs_playbook"] == "departs")
+        ok &= _check("engine picture/concordance/caveats preserved (numbers untouched)",
+                     r["picture"] == DIGEST["picture"] and r["concordance"] == DIGEST["concordance"]
+                     and r["caveats"] == DIGEST["caveats"])
+
+        # C — UNGROUNDED recommendation (cites a tool not in the picture) → deterministic rec kept
+        StubLLM.payload = {"assessment": "Some read.",
+                           "recommendation": {"action": "Tack now", "vs_playbook": "departs",
+                                              "rationale": "vibes", "grounded_in": ["get_conditions"],
+                                              "urgency": "now", "confidence": "high"}}
+        r = copilot.strategy_brief(route="_bench_strat", use_llm=True)
+        ok &= _check("ungrounded rec dropped → deterministic recommendation kept",
+                     r["recommendation"]["action"] == "Hold: Middle start")
+        ok &= _check("assessment still re-narrated even when rec dropped", r["assessment"] == "Some read.")
+
+        # D — LLM unavailable (cold model / timeout) → deterministic digest + error surfaced
+        StubLLM.payload = copilot.LLMUnavailable("cold model")
+        r = copilot.strategy_brief(route="_bench_strat", use_llm=True)
+        ok &= _check("LLM unavailable → deterministic fallback + llm_error in meta",
+                     r["mode"] == "deterministic" and bool(r["_meta"].get("llm_error")))
+    finally:
+        copilot.EngineClient, copilot.LLMClient = orig_e, orig_l
+    return ok
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--llm", action="store_true", help="also exercise the LLM tool-loop")
@@ -436,6 +512,7 @@ def main():
     overall &= test_deviation_drift_callout()
     overall &= test_adherence_logic()
     overall &= test_coach_logic()
+    overall &= test_strategy_synthesis()
 
     print(f"\n>> engine: {config.ENGINE_URL}")
     engine = EngineClient()

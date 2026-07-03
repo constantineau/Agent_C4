@@ -258,6 +258,102 @@ def make_adherence(route=None) -> dict:
     return out
 
 
+_STRATEGY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "assessment": {"type": "string"},
+        "recommendation": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string"},
+                "vs_playbook": {"type": "string", "enum": ["on-plan", "departs", "no-plan"]},
+                "rationale": {"type": "string"},
+                "grounded_in": {"type": "array", "items": {"type": "string"}},
+                "urgency": {"type": "string", "enum": ["now", "soon", "monitor"]},
+                "confidence": {"type": "string", "enum": ["high", "med", "low"]},
+            },
+            "required": ["action", "rationale", "grounded_in", "urgency", "confidence"],
+        },
+    },
+    "required": ["assessment", "recommendation"],
+}
+
+
+def _strategy_prompt(pb: playbook_mod.Playbook) -> str:
+    return (
+        "You are the SR33's ONBOARD tactician. The engine has ALREADY computed the strategic picture "
+        "below — the numbers, the per-signal reads, and the concordance are FIXED FACTS; reuse them, "
+        "do not change them or invent new numbers.\n"
+        "Your job: (1) write a 1-2 sentence ASSESSMENT that ties the signals together in plain "
+        "tactician's language — say whether they AGREE (a moment to consolidate) or FIGHT each other "
+        "(hold and watch — one read is about to be wrong). (2) Give ONE recommendation. You MAY propose "
+        "a move the deterministic layer didn't — including DEPARTING the playbook (vs_playbook "
+        "'departs') when the picture warrants it — but every recommendation must be GROUNDED: in "
+        "grounded_in cite ONLY the signal tools that actually support it (get_strategy, get_selector, "
+        "get_tactics, get_drift, get_deviation, get_fleet). Advisory, not a command.\n\n"
+        + pb.digest()
+    )
+
+
+def strategy_brief(route=None, hoisted=None, use_llm: bool | None = None) -> dict:
+    """In-race STRATEGY SYNTHESIS (Tier-2): the onboard LLM phrases the engine's deterministic
+    cross-signal digest into a crew-facing assessment + one recommendation, and MAY originate a move
+    beyond the frozen playbook (onboard = the boat's own gear, legal in-race — see
+    docs/RRS41_COMPLIANCE.md §4). Structurally grounded: the numbers / picture / concordance / caveats
+    stay the ENGINE's; the LLM contributes only the narrative + a grounded recommendation (ungrounded →
+    the deterministic one stands); any LLM trouble → the whole deterministic digest stands."""
+    route = route or config.DEFAULT_ROUTE
+    engine = EngineClient()
+    pb = playbook_mod.load()
+    digest = engine.strategy(route)
+    meta = {"route": route, "engine": engine.base_url, "llm_used": False,
+            "playbook_loaded": pb.loaded, "model": None}
+
+    want_llm = config.USE_LLM if use_llm is None else use_llm
+    if not digest.get("available") or not want_llm:
+        digest["_meta"] = meta
+        return digest
+
+    # Grounding allow-list = the signal tools that actually contributed a picture item (+ the synthesis).
+    allowed = {"get_strategy", "get_selector"} | {
+        g for item in digest.get("picture", []) for g in (item.get("grounded_in") or [])}
+    try:
+        llm = LLMClient()
+        seed = ("STRATEGIC PICTURE (engine-computed facts — reuse these, invent nothing):\n"
+                + json.dumps({"assessment": digest.get("assessment"),
+                              "picture": digest.get("picture"),
+                              "concordance": digest.get("concordance"),
+                              "recommendation": digest.get("recommendation")}, separators=(",", ":")))
+        msg = llm.chat([{"role": "system", "content": _strategy_prompt(pb)},
+                        {"role": "user", "content": seed}], schema=_STRATEGY_SCHEMA)
+        parsed = _extract_json(msg.get("content") or "")
+        if not parsed:
+            raise LLMUnavailable("strategy: no parseable JSON")
+
+        out = dict(digest)   # keep the engine's picture / concordance / caveats / confidence / disclaimer
+        assessment = (parsed.get("assessment") or "").strip()
+        if assessment:
+            out["assessment"] = assessment
+        rec = parsed.get("recommendation") or {}
+        rg = [g for g in (rec.get("grounded_in") or []) if g in allowed]
+        if rec.get("action") and rg:                      # grounded → take the LLM's recommendation
+            rec["grounded_in"] = rg
+            det_rec = digest.get("recommendation") or {}
+            rec.setdefault("target_variant", det_rec.get("target_variant"))
+            rec.setdefault("vs_playbook", det_rec.get("vs_playbook", "on-plan"))
+            out["recommendation"] = rec
+        # else: ungrounded recommendation → keep the deterministic one untouched.
+        out["mode"] = "llm"
+        meta["llm_used"] = True
+        meta["model"] = config.LLM_MODEL
+        out["_meta"] = meta
+        return out
+    except LLMUnavailable as e:
+        meta["llm_error"] = str(e)
+        digest["_meta"] = meta
+        return digest
+
+
 def reset_narration(route=None) -> dict:
     """Clear the per-route show-once dedup state (a race / course change → re-surface from scratch)."""
     narrate_mod.reset(route)

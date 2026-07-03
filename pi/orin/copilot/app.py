@@ -101,6 +101,15 @@ def brief(req: BriefRequest):
                               hoisted=req.hoisted, use_llm=req.use_llm)
 
 
+@app.post("/strategy")
+def strategy(req: NarrateRequest):
+    """In-race STRATEGY SYNTHESIS: the LLM phrases the engine's deterministic cross-signal digest
+    (forecast-vs-actual + fleet position + route-deviation + wind shift → concordance) into a
+    crew-facing assessment + one grounded recommendation, and MAY originate a move beyond the frozen
+    playbook (onboard = legal in-race). Falls back to the deterministic digest on any LLM trouble."""
+    return copilot.strategy_brief(route=req.route, hoisted=req.hoisted, use_llm=req.use_llm)
+
+
 @app.post("/narrate")
 def narrate(req: NarrateRequest):
     """Proactive crew callouts (PUSH) + a coach line for what's newly worth showing. Stateful per

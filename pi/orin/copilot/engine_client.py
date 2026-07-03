@@ -98,5 +98,14 @@ class EngineClient:
         moved: veered/backed + speed, fuzzy status). Lab-3 branch trigger (b); `na` with no reference."""
         return self._get("/drift", {"route": route})
 
+    def selector(self, route=None) -> dict:
+        """The unified HOLD/SWITCH/OFF-SCRIPT branch pick over the frozen playbook (deterministic)."""
+        return self._get("/selector", {"route": route})
+
+    def strategy(self, route=None) -> dict:
+        """The Tier-1 deterministic STRATEGY SYNTHESIS digest — the grounded cross-signal picture +
+        concordance + recommendation this copilot phrases and may extend (the LLM fallback)."""
+        return self._get("/strategy", {"route": route})
+
     def reachable(self) -> bool:
         return self.health().get("status") == "ok"
