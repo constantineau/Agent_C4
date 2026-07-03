@@ -208,7 +208,7 @@ def _active_wave():
 
 
 def _run_optimize(definition, course_id, start_epoch, model_names, ensemble_members, avoid=True,
-                  per_model=False, resolution="auto", use_waves=True):
+                  per_model=False, resolution="auto", use_waves=True, use_current=True):
     """Blocking: build the multi-model wind field, route the course, write the briefing."""
     from .wind import build_windfield
     from . import optimizer, current, wave
@@ -223,7 +223,9 @@ def _run_optimize(definition, course_id, start_epoch, model_names, ensemble_memb
     if not wf.loaded:
         return {"available": False, "note": "no weather model data could be loaded (not yet "
                 "posted, or no egress)", "windfield": wf.status(), "log": log}
-    cur = current.build_currentfield(bbox, start_epoch, t_end, on_progress=log.append)  # GLOFS (no-op until wired)
+    # water current: opt-out per run (compare with vs without) — LMHOFS surface currents, ZeroCurrent on any miss
+    cur = (current.build_currentfield(bbox, start_epoch, t_end, on_progress=log.append)
+           if use_current else current.ZeroCurrent())
     # sea state (phase 1 seam) — opt-out per run; helm factor still applies (it's crew efficiency, not waves)
     waves = (wave.build_wavefield(bbox, start_epoch, t_end, on_progress=log.append)
              if use_waves else wave.ZeroWave())
@@ -322,9 +324,10 @@ async def optimize(body: dict):
     per_model = bool(body.get("per_model"))
     resolution = body.get("resolution") or "auto"
     use_waves = body.get("use_waves", True)
+    use_current = body.get("use_current", True)
     try:
         return await run_in_threadpool(_run_optimize, d, course_id, start_epoch, model_names, ens,
-                                       avoid, per_model, resolution, use_waves)
+                                       avoid, per_model, resolution, use_waves, use_current)
     except Exception as exc:
         return JSONResponse({"detail": f"optimize failed: {exc}"}, status_code=500)
 

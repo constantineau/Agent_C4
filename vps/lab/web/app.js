@@ -752,6 +752,7 @@ async function renderGameplan() {
       <div class="opt-run">
         <label class="optchk"><input type="checkbox" id="optAvoid" checked> Avoid land/islands/zones</label>
         <label class="optchk" title="Degrade boatspeed for sea state (waves) — routes/ETAs on achievable speed. Conservative model + a low-Hs deadband; uncheck for flat-water (polar) routing. (Helm % still applies — that's crew efficiency, not waves.)"><input type="checkbox" id="optWaves" checked> Sea-state (waves)</label>
+        <label class="optchk" title="Fold water current (set &amp; drift) into the route + leg ETAs — the boat crabs into a cross stream and rides a fair/foul current. Source: NOAA LMHOFS. Uncheck to route in still water, then re-run checked to see what the current is worth."><input type="checkbox" id="optCurrent" checked> Water current</label>
         <label class="optchk" title="Also route each weather model separately and overlay the candidate routes — the confidence fan made visible (slower)"><input type="checkbox" id="optPerModel"> Per-model route fan <span class="muted">(slower)</span></label>
         <label class="optchk" title="Routing resolution: Fine = finer heading fan + shorter steps (sharper near shore, slower); Fast = coarser (quicker).">Resolution
           <select id="optRes" oninput="updateResHint()">
@@ -1029,12 +1030,14 @@ async function runOptimize() {
   const avoidEl = document.getElementById("optAvoid");
   const pmEl = document.getElementById("optPerModel");
   const wavesEl = document.getElementById("optWaves");
+  const currentEl = document.getElementById("optCurrent");
   const resEl = document.getElementById("optRes");
   Opt.resolution = resEl ? resEl.value : "auto";
   Opt.useWaves = wavesEl ? wavesEl.checked : true;
+  Opt.useCurrent = currentEl ? currentEl.checked : true;
   const body = { race_id: Opt.raceId, course_id: Opt.courseId, models: Opt.chosen, ensemble_members: ens,
     avoid_land: avoidEl ? avoidEl.checked : true, per_model: pmEl ? pmEl.checked : false,
-    resolution: Opt.resolution, use_waves: Opt.useWaves };
+    resolution: Opt.resolution, use_waves: Opt.useWaves, use_current: Opt.useCurrent };
   const startEpoch = optStartEpoch();
   if (startEpoch != null) body.start_epoch = startEpoch;
   Opt.running = true;
