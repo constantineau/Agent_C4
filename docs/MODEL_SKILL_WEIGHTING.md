@@ -63,6 +63,29 @@ Deriving the blend weight from N samples of vector error:
 Default with no data ⇒ every skill_weight = 1, zero bias ⇒ **today's blend exactly**. The system
 only changes routing once real venue history earns it.
 
+## Lookback, seasonality & recency
+
+Don't score one recent stretch — score the **race's calendar window (±21 days) in every year we can
+reach**, so the sample is the venue's *race-season regime* (July thermal/lake-breeze on Huron), not a
+random six weeks. Then **weight each year by recency** (`0.5 ** ((ref_year − year)/HALFLIFE)`) because
+models change over time (upgrades every 1–2 yr) — recent seasons must dominate.
+
+**Half-life = 8 yr** (locked): a ~2012 season still counts ~30% of a 2025 one, so deep history genuinely
+influences the weights while newer years lead. (Shorter half-lives make deep data irrelevant; 8 yr is
+the point where the deep build pays off.)
+
+**Depth by source** (the forecast archive is the binding constraint — obs go back decades):
+- **Open-Meteo Historical Forecast** — clean JSON, **2021→now** (verified: 2021 ✓, 2018/2015 empty).
+  The backbone; covers GFS/HRRR/ECMWF/ICON/GEM uniformly.
+- **Deep (pre-2021), heavier GRIB pipeline** — byte-range `.idx` subsetting from public AWS buckets
+  (both probed + confirmed accessible 2026-07-03):
+  - **HRRR archive** `noaa-hrrr-bdp-pds` — **2014-08→now**, CONUS, operational. Our best model here.
+  - **GEFS Reforecast v12** `noaa-gefs-retrospective` — **~2005→2019**, ensemble, *fixed 2020 model*
+    (so no drift, but GEFS-line only). The one true multi-decade archived-forecast set.
+  Deep coverage is **uneven across models** (HRRR 2014+, GEFS 2005+, others 2021+) — handled honestly:
+  each model is scored on whatever years it has; recency weighting + the shrink-to-priors gate keep a
+  thinly-covered model from swinging on sparse deep data.
+
 ## Decisions (locked)
 
 - **Ground truth:** NDBC + METAR spine, boat-instrument wind as a supplement.
@@ -103,9 +126,17 @@ Sits beside the existing Lab-4 `learning.db` tables (`debriefs`, `perf_bins`, `p
 - **Phase 1 — verification substrate (value on race #1):** `venue.py` (bbox→venue key + registry),
   `modelskill.py` (obs providers: METAR + NDBC; historical-forecast provider: Open-Meteo; scorer:
   per-model bias + vector RMSE), and a standalone "which model was right here" report. No blend change.
-- **Phase 2 — store + auto-weighting + display:** persist skill to `/srv/learning`; derive
-  weights (de-bias + inverse-MSE + shrinkage + cap); thread `model_weights`/`model_bias` through
-  `build_windfield`→`detail_at`; surface active weights + earning RMSE in the optimize result and a
-  Lab panel; env kill-switch.
+- **Phase 2a — store + seasonal/recency backbone + auto-weighting (BUILT + VERIFIED 2026-07-03):**
+  persist skill to `/srv/learning` (`model_skill` table, incl. `n_years`/`deep`); **seasonal,
+  multi-year, recency-weighted** sampling (`refresh_venue_skill`); derive weights (de-bias +
+  inverse-MSE + shrink-to-priors + cap); thread `model_weights`/`model_bias` through
+  `build_windfield`→`detail_at`; env kill-switch. Verified live at KAPN: HRRR 2.85 kn across 5 July
+  seasons (2022–2026, n=4123) → ×1.71; global models down-weighted. `forecast_series()` dispatches
+  pre-2021 years to `fetch_reforecast()` (deep hook).
+- **Phase 2b — deep GRIB pipeline (IN PROGRESS):** implement `fetch_reforecast` = HRRR archive
+  (2014+) + GEFS Reforecast v12 (2005+) via `.idx` byte-range subsetting from AWS, parsed with the
+  existing eccodes. Offline/cached (never inline on optimize).
+- **Phase 2c — display:** surface active weights + the earning RMSE + year-span in the optimize
+  result and a Lab "Model skill" panel (required, since weighting is automatic).
 - **Phase 3 — refinements:** boat-instrument obs supplement; regime-conditional weighting
   (gradient vs thermal/lake-breeze); explicit lead-time buckets for longer planning horizons.

@@ -954,10 +954,20 @@ forecast-vs-observed verification, not model-vs-model agreement (which we alread
   shrinkage** (no manual gate; safe via hard shrink-to-priors when thin + a swing cap + env kill-switch
   `MODEL_SKILL_WEIGHTING=off`) · **weights displayed to the user** (required, since auto) · venue key =
   auto bbox-centroid cell (~0.5°) overridable by `race.venue_tag` (bayviewmack2025+2026 → one venue).
-- **Phase 2 (IN PROGRESS):** persist skill to `/srv/learning`; derive weights (de-bias + inverse-MSE +
-  shrink-to-priors + cap); thread `model_weights`/`model_bias` through `build_windfield → detail_at`;
-  surface active weights + earning RMSE in the optimize result + a Lab "Model skill" panel. Phase 3 =
-  boat-obs supplement + regime-conditional (gradient vs thermal) + explicit lead-time buckets.
+- **Phase 2a (BUILT + VERIFIED 2026-07-03):** `model_skill` table on `/srv/learning`; **seasonal,
+  multi-year, recency-weighted** sampling — score the race's calendar window (±21 d) in every reachable
+  year, weight by recency (t½=**8 y**, so a ~2012 season still counts ~30% of 2025; models drift, recent
+  leads). Weights = de-bias + inverse-MSE + shrink-to-priors + cap, threaded through
+  `build_windfield → detail_at`; env kill-switch. Verified live at KAPN: **HRRR 2.85 kn across 5 July
+  seasons (2022–2026, n=4123) → ×1.71**, globals down-weighted.
+- **Phase 2b (IN PROGRESS) — deep GRIB pipeline:** go deeper than the Open-Meteo 2021 floor. `.idx`
+  byte-range subsetting from AWS — **HRRR archive** (`noaa-hrrr-bdp-pds`, 2014+) + **GEFS Reforecast
+  v12** (`noaa-gefs-retrospective`, ~2005+), both probed accessible 2026-07-03. Coverage is uneven by
+  model (HRRR 2014+, GEFS 2005+, rest 2021+) — recency + shrink-to-priors keep sparse deep data from
+  swinging weights. `forecast_series()` already dispatches pre-2021 years to `fetch_reforecast` (stub).
+- **Phase 2c = display** (active weights + earning RMSE + year-span in the optimize result + a Lab
+  panel; required since weighting is automatic). **Phase 3** = boat-obs supplement + regime-conditional
+  (gradient vs thermal) + explicit lead-time buckets. Full design: `docs/MODEL_SKILL_WEIGHTING.md`.
 
 ## C4 Performance Lab — Lab-2 branching playbook bundle
 

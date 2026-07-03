@@ -150,6 +150,58 @@ def fetch_ndbc_realtime(station, timeout=45):
     return out
 
 
+def fetch_ndbc_historical(station, year, timeout=60):
+    """A buoy's full-year archived stdmet (gzip). {epoch: (tws_kn, twd_deg)}. WSPD m/s → kn."""
+    import gzip
+    url = f"https://www.ndbc.noaa.gov/data/historical/stdmet/{station}h{year}.txt.gz"
+    try:
+        raw = gzip.decompress(_get(url, timeout))
+        text = raw.decode("utf-8", "replace")
+    except Exception:
+        return {}
+    out = {}
+    for line in text.splitlines():
+        if line.startswith("#") or not line.strip():
+            continue
+        c = line.split()
+        if len(c) < 7:
+            continue
+        try:
+            yy, mm, dd, hh, mn = (int(c[i]) for i in range(5))
+            wdir, wspd = c[5], c[6]
+            if wdir in ("MM", "999") or wspd in ("MM", "99.0"):
+                continue
+            out[dt.datetime(yy, mm, dd, hh, mn, tzinfo=dt.timezone.utc).timestamp()] = \
+                (float(wspd) * 1.943844, float(wdir))
+        except (ValueError, IndexError):
+            continue
+    return out
+
+
+def fetch_ndbc_window(station, sd, ed):
+    """Observed buoy wind over [sd, ed] (YYYY-MM-DD). Uses the per-year historical archive, falling
+    back to the realtime feed for the recent ~45 days it doesn't yet cover. Filtered to the window."""
+    lo = dt.datetime.fromisoformat(sd).replace(tzinfo=dt.timezone.utc).timestamp()
+    hi = dt.datetime.fromisoformat(ed).replace(tzinfo=dt.timezone.utc).timestamp() + 86400
+    obs = {}
+    for y in range(int(sd[:4]), int(ed[:4]) + 1):
+        obs.update(fetch_ndbc_historical(station, y))
+    obs.update(fetch_ndbc_realtime(station))            # recent tail the archive lacks
+    return {e: v for e, v in obs.items() if lo <= e <= hi}
+
+
+# ---------------------------------------------------- deep history (pre-2021): reforecast / GRIB archive
+REFORECAST_READY = False   # flipped on once the heavier pipeline lands (see docs/MODEL_SKILL_WEIGHTING.md)
+
+
+def fetch_reforecast(lat, lon, sd, ed, model, year):
+    """DEEP (pre-2021) archived-forecast provider — the heavier GRIB pipeline (GEFS Reforecast v12 on
+    AWS ≈ 2000-2019; HRRR archive ≈ 2014+; ECMWF reforecasts). Returns {epoch: (tws_kn, twd_deg)}.
+    STUB: returns {} until the pipeline is built, so pre-2021 seasonal windows currently no-op and the
+    recency-weighted score rests on the Open-Meteo era. Wiring this is the next increment."""
+    return {}
+
+
 # --------------------------------------------------------------------------------------- scoring
 def _match(obs, fc, tol_s=MATCH_TOL_S):
     """Pair each forecast hour with the nearest obs within tol_s. -> [(tws_o,twd_o,tws_f,twd_f)]."""
@@ -172,28 +224,41 @@ def _match(obs, fc, tol_s=MATCH_TOL_S):
     return pairs
 
 
-def score(obs, fc):
-    """Per-model error from matched (obs, forecast) pairs. None if nothing matched."""
-    pairs = _match(obs, fc)
-    if not pairs:
-        return None
-    n = len(pairs)
-    sq = spd_bias = 0.0
-    sin_e = cos_e = 0.0
+def _acc_new():
+    return {"W": 0.0, "SSE": 0.0, "SB": 0.0, "SIN": 0.0, "COS": 0.0, "n": 0}
+
+
+def _acc_add(acc, pairs, w=1.0):
+    """Fold matched (obs, forecast) pairs into a weighted accumulator (w = per-sample weight, e.g. a
+    recency weight so newer years count more). n counts actual pairs; W is the weight sum."""
     for to, do, tf, df in pairs:
         uo, vo = _uv(to, do)
         uf, vf = _uv(tf, df)
-        sq += (uf - uo) ** 2 + (vf - vo) ** 2        # squared vector error
-        spd_bias += (tf - to)
+        acc["SSE"] += w * ((uf - uo) ** 2 + (vf - vo) ** 2)   # weighted squared vector error
+        acc["SB"] += w * (tf - to)
         de = math.radians(_wrap180(df - do))
-        sin_e += math.sin(de)
-        cos_e += math.cos(de)
+        acc["SIN"] += w * math.sin(de)
+        acc["COS"] += w * math.cos(de)
+        acc["W"] += w
+        acc["n"] += 1
+    return acc
+
+
+def _acc_final(acc):
+    if acc["n"] == 0 or acc["W"] <= 0:
+        return None
+    W = acc["W"]
     return {
-        "n": n,
-        "vector_rmse_kn": round(math.sqrt(sq / n), 2),
-        "speed_bias_kn": round(spd_bias / n, 2),                        # + = model over-forecasts speed
-        "dir_bias_deg": round(math.degrees(math.atan2(sin_e, cos_e)), 1),  # + = model veered vs obs
+        "n": acc["n"],
+        "vector_rmse_kn": round(math.sqrt(acc["SSE"] / W), 2),
+        "speed_bias_kn": round(acc["SB"] / W, 2),                            # + = over-forecasts speed
+        "dir_bias_deg": round(math.degrees(math.atan2(acc["SIN"], acc["COS"])), 1),  # + = veered vs obs
     }
+
+
+def score(obs, fc):
+    """Per-model error from a single window's matched pairs (unweighted). None if nothing matched."""
+    return _acc_final(_acc_add(_acc_new(), _match(obs, fc)))
 
 
 def verify_venue(lat, lon, station, start_date, end_date, models=("gfs", "hrrr", "ecmwf", "icon", "gem"),
@@ -207,6 +272,211 @@ def verify_venue(lat, lon, station, start_date, end_date, models=("gfs", "hrrr",
         scores[m] = score(obs, fetch_forecast(lat, lon, start_date, end_date, m))
     return {"station": station, "window": [start_date, end_date],
             "obs_source": obs_source, "obs_n": len(obs), "models": scores}
+
+
+# =========================================================================== Phase 2: store + weights
+import os
+import sqlite3
+
+SKILL_DB = os.environ.get("LEARNING_DB", "/srv/learning/learning.db")   # share the Lab-4 volume
+WEIGHTING_ON = os.environ.get("MODEL_SKILL_WEIGHTING", "on").lower() not in ("off", "0", "false")
+SKILL_TTL_S = float(os.environ.get("MODEL_SKILL_TTL_S", str(6 * 3600)))  # re-score at most this often
+MIN_N = int(os.environ.get("MODEL_SKILL_MIN_N", "12"))                  # need this many matches to trust
+SHRINK_N = float(os.environ.get("MODEL_SKILL_SHRINK_N", "30"))          # pseudo-count: shrink to priors
+CAP_LO = float(os.environ.get("MODEL_SKILL_CAP_LO", "0.5"))
+CAP_HI = float(os.environ.get("MODEL_SKILL_CAP_HI", "2.0"))
+DEFAULT_MODELS = ("gfs", "hrrr", "ecmwf", "icon", "gem")
+
+# --- seasonal, multi-year, recency-weighted sampling -------------------------------------------
+# Instead of one recent window, score the RACE's calendar window (±SEASON_PAD_DAYS) in EVERY year we
+# can reach, and weight each year by recency (models change over time → recent years count more).
+SEASON_PAD_DAYS = int(os.environ.get("MODEL_SKILL_SEASON_PAD_DAYS", "21"))   # ± around the race date
+FIRST_YEAR = int(os.environ.get("MODEL_SKILL_FIRST_YEAR", "2010"))           # deepest year to attempt
+OPENMETEO_FIRST_YEAR = 2021        # Open-Meteo historical-forecast archive floor (verified empirically)
+RECENCY_HALFLIFE_Y = float(os.environ.get("MODEL_SKILL_RECENCY_HALFLIFE_Y", "8"))  # yr for weight to halve
+
+
+def _conn():
+    os.makedirs(os.path.dirname(SKILL_DB), exist_ok=True)
+    c = sqlite3.connect(SKILL_DB, timeout=10)
+    c.execute("""CREATE TABLE IF NOT EXISTS model_skill (
+        venue_key TEXT, model TEXT, station TEXT, obs_source TEXT,
+        n INTEGER, vector_rmse_kn REAL, speed_bias_kn REAL, dir_bias_deg REAL,
+        window_start TEXT, window_end TEXT, updated_at REAL,
+        n_years INTEGER, deep INTEGER,
+        PRIMARY KEY (venue_key, model))""")
+    for col, decl in (("n_years", "INTEGER"), ("deep", "INTEGER")):   # forward-compat for older tables
+        try:
+            c.execute(f"ALTER TABLE model_skill ADD COLUMN {col} {decl}")
+        except sqlite3.OperationalError:
+            pass
+    return c
+
+
+def save_scores(venue_key, station, obs_source, window, scores, n_years=1, deep=False):
+    now = dt.datetime.now(dt.timezone.utc).timestamp()
+    with _conn() as c:
+        for m, s in scores.items():
+            if not s:
+                continue
+            c.execute("""INSERT OR REPLACE INTO model_skill VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                      (venue_key, m, station, obs_source, s["n"], s["vector_rmse_kn"],
+                       s["speed_bias_kn"], s["dir_bias_deg"], window[0], window[1], now,
+                       n_years, 1 if deep else 0))
+
+
+def load_scores(venue_key):
+    with _conn() as c:
+        rows = c.execute("""SELECT model,n,vector_rmse_kn,speed_bias_kn,dir_bias_deg,updated_at,
+                            window_start,window_end,station,obs_source,n_years,deep FROM model_skill
+                            WHERE venue_key=?""", (venue_key,)).fetchall()
+    return {r[0]: {"n": r[1], "vector_rmse_kn": r[2], "speed_bias_kn": r[3], "dir_bias_deg": r[4],
+                   "updated_at": r[5], "window": [r[6], r[7]], "station": r[8], "obs_source": r[9],
+                   "n_years": r[10], "deep": bool(r[11])}
+            for r in rows}
+
+
+def _fresh(scores):
+    if not scores:
+        return False
+    now = dt.datetime.now(dt.timezone.utc).timestamp()
+    return all((now - s["updated_at"]) < SKILL_TTL_S for s in scores.values())
+
+
+def _season_windows(center_md, first_year, last_year, pad_days, yesterday):
+    """The race's calendar window (±pad_days around month/day = center_md) in each year first..last.
+    Returns [(year, sd, ed)] with the end capped at `yesterday`; a window entirely in the future is
+    skipped. So we score the same SEASON across many years, not one recent stretch."""
+    mo, dy = center_md
+    out = []
+    for y in range(first_year, last_year + 1):
+        try:
+            c = dt.date(y, mo, dy)
+        except ValueError:
+            c = dt.date(y, mo, min(dy, 28))
+        start, end = c - dt.timedelta(days=pad_days), c + dt.timedelta(days=pad_days)
+        if start > yesterday:
+            continue
+        if end > yesterday:
+            end = yesterday
+        out.append((y, start.isoformat(), end.isoformat()))
+    return out
+
+
+def _recency_weight(year, ref_year):
+    """Newer years count more (models change over time). Exponential decay by RECENCY_HALFLIFE_Y."""
+    return 0.5 ** ((ref_year - year) / max(0.5, RECENCY_HALFLIFE_Y))
+
+
+def forecast_series(lat, lon, sd, ed, model, year):
+    """Each model's PAST forecast for a window — dispatched by year. Open-Meteo for the archive era
+    (>=2021); the heavier reforecast/GRIB-archive pipeline for older years (deep history)."""
+    if year >= OPENMETEO_FIRST_YEAR:
+        return fetch_forecast(lat, lon, sd, ed, model)
+    return fetch_reforecast(lat, lon, sd, ed, model, year)
+
+
+def obs_series(station, sd, ed):
+    """Observed wind for a window from the venue station (METAR range, or NDBC historical/realtime)."""
+    if station["kind"] == "ndbc":
+        return fetch_ndbc_window(station["id"], sd, ed)
+    return fetch_metar(station["id"], sd, ed)
+
+
+def refresh_venue_skill(venue, models=DEFAULT_MODELS, race_date=None, force=False):
+    """Score each model over the venue's SEASONAL window across MANY years, recency-weighted, at the
+    station (co-located with the obs — a shore forecast point vs shore obs; never mid-lake vs shore).
+    Persists + caches (skips within SKILL_TTL_S unless force). Returns {} if the venue has no station.
+
+    `race_date` (a datetime.date) centres the seasonal window on the race's time of year; without it we
+    centre on today. Years reach back to FIRST_YEAR — pre-2021 needs the deep reforecast provider
+    (fetch_reforecast); until that's wired those years simply contribute nothing."""
+    st = (venue or {}).get("station")
+    if not st:
+        return {}
+    if not force:
+        cached = load_scores(venue["key"])
+        if _fresh(cached):
+            return cached
+    yesterday = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=1)).date()
+    center = race_date or yesterday
+    windows = _season_windows((center.month, center.day), FIRST_YEAR, yesterday.year,
+                              SEASON_PAD_DAYS, yesterday)
+    lat, lon = st["lat"], st["lon"]
+    accs = {m: _acc_new() for m in models}
+    years_used, deep_used = set(), False
+    for (year, sd, ed) in windows:
+        obs = obs_series(st, sd, ed)
+        if not obs:
+            continue
+        w = _recency_weight(year, yesterday.year)
+        for m in models:
+            fc = forecast_series(lat, lon, sd, ed, m, year)
+            if fc:
+                before = accs[m]["n"]
+                _acc_add(accs[m], _match(obs, fc), w)
+                if accs[m]["n"] > before:
+                    years_used.add(year)
+                    if year < OPENMETEO_FIRST_YEAR:
+                        deep_used = True
+    scores = {m: _acc_final(a) for m, a in accs.items()}
+    yrs = sorted(years_used)
+    span = [f"{yrs[0]}" if yrs else "", f"{yrs[-1]}" if yrs else ""]
+    save_scores(venue["key"], st["id"], st["kind"], span, scores,
+                n_years=len(yrs), deep=deep_used)
+    return load_scores(venue["key"])
+
+
+def derive_weights(scores):
+    """Turn per-model error into blend weights. Returns {model: {weight, bias_speed_kn, bias_dir_deg,
+    rmse, n}} for models with enough data (>=MIN_N); others are omitted (caller treats as identity).
+
+    weight = geomean-normalized inverse-variance (1/rmse^2), SHRUNK toward 1.0 by sample count, capped.
+    bias = the measured speed/dir offset, likewise shrunk. Needs >=2 scored models to have a reference."""
+    scored = {m: s for m, s in scores.items() if s and s.get("n", 0) >= MIN_N and s.get("vector_rmse_kn")}
+    if len(scored) < 2:
+        return {}
+    inv = {m: 1.0 / max(0.25, s["vector_rmse_kn"]) ** 2 for m, s in scored.items()}
+    geo = math.exp(sum(math.log(v) for v in inv.values()) / len(inv))
+    out = {}
+    for m, s in scored.items():
+        n = s["n"]
+        shrink = n / (n + SHRINK_N)                       # 0 (no data) .. 1 (lots)
+        factor = inv[m] / geo                             # >1 better than typical here, <1 worse
+        weight = 1.0 + (factor - 1.0) * shrink
+        weight = max(CAP_LO, min(CAP_HI, weight))
+        out[m] = {"weight": round(weight, 3),
+                  "bias_speed_kn": round(s["speed_bias_kn"] * shrink, 2),
+                  "bias_dir_deg": round(s["dir_bias_deg"] * shrink, 1),
+                  "rmse": s["vector_rmse_kn"], "n": n}
+    return out
+
+
+def venue_weights(venue, models=DEFAULT_MODELS, race_date=None, refresh=True):
+    """Top-level: (optionally) refresh venue skill, derive weights, and return the full display payload
+    used by the optimizer + the Lab panel. `model_weights`/`model_bias` are the drop-ins for
+    build_windfield; `table` is the sorted per-model scorecard for the UI. enabled=False => identity."""
+    if not WEIGHTING_ON or not venue or not venue.get("station"):
+        return {"enabled": False, "reason": ("disabled" if not WEIGHTING_ON else "no obs station"),
+                "venue_key": (venue or {}).get("key"), "model_weights": {}, "model_bias": {}, "table": []}
+    scores = (refresh_venue_skill(venue, models=models, race_date=race_date) if refresh
+              else load_scores(venue["key"]))
+    derived = derive_weights(scores)
+    model_weights = {m: d["weight"] for m, d in derived.items()}
+    model_bias = {m: (d["bias_speed_kn"], d["bias_dir_deg"]) for m, d in derived.items()}
+    table = sorted(
+        [{"model": m, **scores[m], **derived.get(m, {"weight": 1.0})} for m in scores if scores[m]],
+        key=lambda r: r["vector_rmse_kn"])
+    st = venue["station"]
+    any_score = next((s for s in scores.values() if s), None)
+    return {"enabled": bool(model_weights), "venue_key": venue["key"], "venue_label": venue.get("label"),
+            "station": st["id"], "station_name": st.get("name"), "obs_source": st["kind"],
+            "window": any_score["window"] if any_score else None,
+            "n_years": any_score.get("n_years") if any_score else 0,
+            "deep": any_score.get("deep") if any_score else False,
+            "recency_halflife_y": RECENCY_HALFLIFE_Y,
+            "model_weights": model_weights, "model_bias": model_bias, "table": table,
+            "note": None if model_weights else "not enough matched obs yet — routing on static priors"}
 
 
 # ------------------------------------------------------------------------------------- self-test

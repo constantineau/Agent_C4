@@ -218,8 +218,25 @@ def _run_optimize(definition, course_id, start_epoch, model_names, ensemble_memb
     hours = optimizer.estimate_hours(definition, course_id)
     t_end = start_epoch + hours * 3600
     log = []
+    # venue-specific model-skill weighting: weight each model by its measured past accuracy here,
+    # de-bias its persistent offset. Best-effort — any failure falls back to the static-priority blend.
+    skill = {"enabled": False}
+    mweights = mbias = None
+    try:
+        from . import venue as venue_mod, modelskill
+        v = venue_mod.resolve(definition, course_id, bbox=bbox)
+        race_date = datetime.datetime.fromtimestamp(start_epoch, datetime.timezone.utc).date()
+        skill = (modelskill.venue_weights(v, models=model_names, race_date=race_date)
+                 if v else {"enabled": False})
+        if skill.get("enabled"):
+            mweights, mbias = skill["model_weights"], skill["model_bias"]
+            log.append(f"model-skill: {v['key']} via {skill['station']} → "
+                       + ", ".join(f"{m}×{w}" for m, w in mweights.items()))
+    except Exception as exc:
+        log.append(f"model-skill: skipped ({exc})")
     wf = build_windfield(bbox, start_epoch, t_end, models=model_names,
-                         ensemble_members=ensemble_members, on_progress=log.append)
+                         ensemble_members=ensemble_members, on_progress=log.append,
+                         model_weights=mweights, model_bias=mbias)
     if not wf.loaded:
         return {"available": False, "note": "no weather model data could be loaded (not yet "
                 "posted, or no egress)", "windfield": wf.status(), "log": log}
@@ -238,6 +255,7 @@ def _run_optimize(definition, course_id, start_epoch, model_names, ensemble_memb
                                        polar_adjustments=_active_adjustments(), wave_coeffs=_active_wave())
     result["current"] = cur.status()
     result["waves"] = waves.status()
+    result["model_skill"] = skill                # venue model-skill weights + scorecard (UI panel)
     result["briefing"] = optimizer.briefing(result, definition.get("name", ""))
     result["boat"] = boat_profile.summary(boats.active_boat()) if boats.active_boat() else None
     wg = _wind_grid(wf, bbox, start_epoch, result.get("finish_epoch", t_end))

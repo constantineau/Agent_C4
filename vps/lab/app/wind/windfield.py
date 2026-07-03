@@ -27,6 +27,17 @@ MIN_FRAME_FRAC = float(os.environ.get("GRIB_MIN_FRAME_FRAC", "0.5"))     # "enou
 _PAD = 3 * 3600                  # keep frames just outside the window so we can bracket the ends
 
 
+def _debias_uv(u, v, speed_bias_kn, dir_bias_deg):
+    """Remove a model's measured bias (venue-skill Phase 2) from a wind vector before blending.
+    `speed_bias_kn` = model − obs speed (kn); `dir_bias_deg` = model − obs veer (deg). u,v are m/s."""
+    tws_kn, twd = grib.uv_to_tws_twd(u, v)         # m/s -> (kn, FROM deg)
+    tws_kn = max(0.0, tws_kn - speed_bias_kn)
+    twd = (twd - dir_bias_deg) % 360.0
+    tws_ms = tws_kn / KN_PER_MS
+    rad = math.radians(twd)
+    return (-tws_ms * math.sin(rad), -tws_ms * math.cos(rad))   # FROM-bearing -> (u_east, v_north) m/s
+
+
 def _members_for(source, ensemble_members):
     if source.kind == "ensemble":
         return [] if ensemble_members <= 0 else list(source.members[:ensemble_members])
@@ -87,7 +98,8 @@ def _load_model(source, bbox, t_start, t_end, members, on_progress, parser=None)
 
 
 def build_windfield(bbox, t_start: float, t_end: float, models=DEFAULT_MODELS,
-                    ensemble_members: int = 0, on_progress=None):
+                    ensemble_members: int = 0, on_progress=None,
+                    model_weights=None, model_bias=None):
     """Ingest the selected models over `bbox` for valid times spanning [t_start, t_end].
 
     bbox = (north, south, west, east). Returns a WindField. `on_progress(msg)` is called with
@@ -109,16 +121,21 @@ def build_windfield(bbox, t_start: float, t_end: float, models=DEFAULT_MODELS,
     finally:
         if parser is not None:
             parser.close()
-    return WindField(series, meta, bbox, t_start, t_end)
+    return WindField(series, meta, bbox, t_start, t_end,
+                     model_weights=model_weights, model_bias=model_bias)
 
 
 class WindField:
-    def __init__(self, series, meta, bbox, t_start, t_end):
+    def __init__(self, series, meta, bbox, t_start, t_end, model_weights=None, model_bias=None):
         self.series = series          # (model, member) -> [GribFrame]
         self.meta = meta
         self.bbox = bbox
         self.t_start = t_start
         self.t_end = t_end
+        # venue-skill weighting (Phase 2): per-model blend-weight multiplier + a (speed_kn, dir_deg)
+        # bias to REMOVE from each model before the vector mean. Empty => today's static-priority blend.
+        self.model_weights = model_weights or {}
+        self.model_bias = model_bias or {}
 
     @property
     def loaded(self) -> bool:
@@ -149,7 +166,12 @@ class WindField:
             uv = self._series_uv(frames, lat, lon, epoch)
             if uv is None:
                 continue
-            samples.append((uv[0], uv[1], MODELS[model].priority, model))
+            u, v = uv
+            bias = self.model_bias.get(model)
+            if bias:                                  # de-bias this model before it enters the mean
+                u, v = _debias_uv(u, v, bias[0], bias[1])
+            weight = MODELS[model].priority * self.model_weights.get(model, 1.0)
+            samples.append((u, v, weight, model))
         if not samples:
             return None
 
@@ -205,4 +227,5 @@ class WindField:
         return {"loaded": self.loaded, "models": self.meta,
                 "window": [round(self.t_start), round(self.t_end)], "bbox": self.bbox,
                 "series": len(self.series),
-                "total_frames": sum(len(f) for f in self.series.values())}
+                "total_frames": sum(len(f) for f in self.series.values()),
+                "skill_weighted": bool(self.model_weights or self.model_bias)}
