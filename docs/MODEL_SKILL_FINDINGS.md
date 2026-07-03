@@ -64,14 +64,33 @@ models.
 - **Lead time isn't perfectly matched** across sources (Open-Meteo ~day-ahead; deep GRIB same-day
   +6…18 h) — a known v1 simplification; relative ranking within a comparison stays fair.
 
-## Final venue result — Bayview Mackinac (multi-station, 2005→2026, deep)
+## Final venue result — Bayview Mackinac (multi-station, deep, 2026-07-03)
 
-*Pooled stations: NDBC 45008 (open water) + Alpena KAPN (shore); GEFS = reference-only.*
+*Pooled stations: NDBC 45008 (open water) + Alpena KAPN (shore). Race window ±21 days, recency-weighted
+(t½ 8 yr). GEFS = reference-only (not blended). 77-min backfill; the numbers below drive routing now.*
 
-> **[PENDING]** — the full multi-station deep backfill is running; this table is filled from
-> `backfill2_mackinac.json` the moment it completes. (Interim single-station buoy-only run, for
-> reference: ECMWF ×1.29 / ICON ×1.27 / HRRR ×0.93 / GEM ×0.92 / GFS ×0.72 — see finding A for why the
-> buoy-only run under-rates HRRR.)
+| model | vector RMSE | **weight** | veer bias removed | n | seasons | source |
+|---|---|---|---|---|---|---|
+| ICON | 3.89 kn | **×1.16** | +3° | 6,212 | 4 | OM 2023+ |
+| **HRRR** | 3.92 kn | **×1.14** | −5° | 11,455 | **12** | OM + deep 2015+ |
+| ECMWF | 3.99 kn | **×1.10** | +5° | 4,179 | 3 | OM 2024+ |
+| GEM | 4.40 kn | **×0.91** | +6° | 6,212 | 4 | OM 2023+ |
+| GFS | 4.79 kn | **×0.76** | +9° | 10,284 | 6 | OM 2021+ |
+| *GEFS* | *5.22 kn* | *ref* | *+11°* | *3,666* | *15* | *deep 2005+ (not blended)* |
+
+**Reading it:** with both regimes pooled, the top three — **ICON, HRRR, ECMWF — are effectively tied
+(3.89–3.99 kn)**, and HRRR sits right there with the global flagships rather than dominating (shore) or
+trailing (open-water). That's the honest, balanced answer: pooling the shore *and* the buoy averages
+HRRR's near-shore edge with its smaller open-water advantage. **GFS is clearly the weakest (×0.76)**;
+the coarse **GEFS reforecast** (15 deep seasons, ×ref) confirms the NCEP-global lineage runs highest
+error here — and is correctly kept out of the blend so it doesn't drag `gfs`.
+
+The **systematic global-model veer bias holds up across all history** (+3…+11°, removed before blending);
+HRRR alone runs a small *opposite* (−5°) bias. De-biasing remains a real, free correction.
+
+*Note the uneven Open-Meteo archive floors — GFS/HRRR 2021+, ICON/GEM 2023+, ECMWF 2024+ — so the
+globals have only 3–4 seasons vs HRRR's 12 (deep). Shrink-to-priors keeps the thin-sample models
+(esp. ECMWF, 3 seasons) from over-swinging; as their archives deepen the weights firm up.*
 
 ## Practical takeaways
 

@@ -969,11 +969,24 @@ forecast-vs-observed verification, not model-vs-model agreement (which we alread
   optimize reads it without ever re-running. Endpoints `GET /api/model-skill` + `POST
   /api/model-skill/backfill`. Verified: HRRR parsed to 2015 / GEFS to 2008; bounded 2019–2026 backfill
   merged deep GRIB years w/ Open-Meteo (HRRR n=499 → ×1.70); uneven coverage handled by shrink-to-priors.
-- **Phase 2c (BUILT 2026-07-03) = display:** GamePlan **Model skill** rail panel (`optModelSkill` in
-  `web/app.js`) — per-model RMSE, applied weight (green ↑ / red ↓), veer-bias removed, sample n, venue/
-  station, season count + span, recency t½, `deep` badge, and a **"Deepen history (2005+)"** button
-  (`runModelSkillBackfill` → `POST /api/model-skill/backfill`). **Phase 3** = boat-obs supplement +
-  regime-conditional (gradient vs thermal) + lead-time buckets. Design: `docs/MODEL_SKILL_WEIGHTING.md`.
+- **Phase 2c (BUILT 2026-07-03) = display:** GamePlan **Model skill — venue backtest** rail panel
+  (`optModelSkill` in `web/app.js`) — a plain-language explainer + a stat strip (obs stations · seasons ·
+  year span · total matched comparisons · recency t½) + per-model RMSE / applied weight (green ↑ / red ↓) /
+  veer-bias removed / sample n / seasons, a `deep history` badge, a `ref` tag for reference-only lines,
+  and a **"Deepen history (2005+)"** button (`runModelSkillBackfill` → `POST /api/model-skill/backfill`).
+- **Refinements (BUILT 2026-07-03):** (a) **multi-station pooling** — a venue anchors on the nearest
+  shore METAR AND over-water NDBC buoy (`venue.stations_for`), forecast co-located per station; (b) **GEFS
+  reforecast is its own `REFERENCE_ONLY` line** (2005+), not a gfs proxy (that contaminated gfs); gfs
+  stays clean Open-Meteo 2021+; (c) **retry+backoff** on all fetches (`deepfc._get`/`modelskill._get`) —
+  a heavy backfill was silently throttled to a sparse result without it; (d) per-model `n_years`; (e) a
+  white **"Dim chart" scrim** over the route-map basemap so wind/current arrows pop (`mapview.js`).
+- **FINAL deployed result — Bayview Mackinac (buoy 45008 + KAPN, deep 2005→2026, 77-min backfill):**
+  ICON ×1.16 (3.89 kn) · **HRRR ×1.14 (3.92, 12 seasons deep)** · ECMWF ×1.10 (3.99) · GEM ×0.91 · **GFS
+  ×0.76 (4.79)** · *GEFS ref (5.22, 15 deep seasons, not blended)*. Top 3 (ICON/HRRR/ECMWF) tied when both
+  regimes pooled; GFS weakest; global +3…+11° veer bias removed (HRRR −5°). Full write-up:
+  **`docs/MODEL_SKILL_FINDINGS.md`**. **Phase 3 (future)** = boat-obs supplement + regime-conditional
+  (gradient vs thermal) + lead-time buckets + buoy anemometer-height (5 m→10 m) correction. Design:
+  `docs/MODEL_SKILL_WEIGHTING.md`.
 
 ## C4 Performance Lab — Lab-2 branching playbook bundle
 
