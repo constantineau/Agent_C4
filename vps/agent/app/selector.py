@@ -105,11 +105,15 @@ def get_selector(route=None):
     dft_status = dft.get("status") if dft_ok else None
 
     signals = {
-        "shift": {"persistent": persistent, "favored_side": favored, "trend": trend},
+        "shift": {"persistent": persistent, "favored_side": favored, "trend": trend,
+                  "oscillation_deg": wind.get("oscillation_deg")},
         "deviation": {"status": dev_status, "side": dev.get("xte_side") if dev_ok else None,
-                      "variant": dev.get("variant") if dev_ok else None},
+                      "variant": dev.get("variant") if dev_ok else None,
+                      "xte_nm": dev.get("xte_nm") if dev_ok else None,
+                      "time_behind_s": dev.get("time_behind_s") if dev_ok else None},
         "drift": {"status": dft_status, "dir": dft.get("drift_dir") if dft_ok else None,
-                  "deg": dft.get("drift_twd_deg") if dft_ok else None},
+                  "deg": dft.get("drift_twd_deg") if dft_ok else None,
+                  "tws_kn": dft.get("drift_tws_kn") if dft_ok else None},
     }
     agreement = bundle.get("agreement")
     base = {"available": True, "recommended": rec_id, "recommended_label": rec_label,

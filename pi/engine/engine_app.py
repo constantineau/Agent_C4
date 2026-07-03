@@ -24,7 +24,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import (navigator, tactics, routing, weather, sails, fatigue, onboard_conditions,
-                 datasource, ais, fleet, deviation, drift, selector, reoptimize)
+                 datasource, ais, fleet, deviation, drift, selector, reoptimize, strategy)
 
 app = FastAPI(title="Agent_C4 Onboard Engine", version="0.1.0")
 # The iPad reaches the Pi directly over boat-local Wi-Fi in race mode; allow cross-origin so a
@@ -232,6 +232,17 @@ def selector_ep(route: str | None = None):
     instruments + pre-loaded homework); this layer deterministically picks a pre-authored branch (the
     copilot above it may originate strategy — onboard is the boat's own gear, legal in-race)."""
     return selector.get_selector(route=route)
+
+
+@app.get("/strategy")
+def strategy_ep(route: str | None = None):
+    """STRATEGY SYNTHESIS (Tier-1, deterministic): the higher-order read of the OVERALL plan — the
+    selector's HOLD/SWITCH/OFF-SCRIPT backbone fused with the handicap fleet picture into a grounded
+    assessment + a cross-signal CONCORDANCE (are forecast-drift, fleet position and route-deviation
+    pointing the same way as the wind shift, or fighting it?) + one recommendation. The deterministic
+    fallback + the digest the onboard LLM copilot phrases and may extend. Legal in-race (own instruments
+    + pre-loaded homework + common public data)."""
+    return strategy.get_strategy_signals(route=route)
 
 
 @app.get("/reoptimize")
