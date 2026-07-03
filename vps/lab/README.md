@@ -504,6 +504,21 @@ propose helm 1.0→0.93 + cell adjustments → approve → boat updated → over
   backstop, water currents, realized-speed **phases 1 + 2 (GLWU)**, **Debrief actual-track ingestion**,
   and the **Lab-4 learning loop** are **done**.
 
+## Venue weather-model skill weighting (built + deployed 2026-07-03)
+
+Weight each model in the wind blend by how accurately it has **actually forecast the wind at this
+venue in the past** — forecast-vs-observed verification, not model agreement. Scored over the race's
+seasonal window across many years, **recency-weighted** (t½ 8 y) so recent model versions lead while
+deep history still counts; the better a model has done here, the more it counts (and its persistent
+bias is removed before blending). Automatic + always shown in the GamePlan **Model skill** panel.
+- **Data:** observed = METAR (Iowa State ASOS) + NDBC buoys; forecast = Open-Meteo Historical Forecast
+  (2021+) plus a deep GRIB pipeline — HRRR archive (2015+) + GEFS Reforecast v12 (2005+) via `.idx`
+  byte-range subsetting (`app/deepfc.py`), run offline via the "Deepen history" backfill.
+- **Code:** `app/modelskill.py` (scoring + store + weights + backfill), `app/venue.py` (venue key +
+  station registry), `app/deepfc.py` (deep archives), the `model_weights`/`model_bias` seam in
+  `app/wind/windfield.py`, `GET/POST /api/model-skill[/backfill]`, and the `optModelSkill` web panel.
+- **Full design + math + as-built ops + env vars:** **`docs/MODEL_SKILL_WEIGHTING.md`**.
+
 ## Race documents (found 2026-06-17)
 
 **2026 Bayview Mackinac** (static — auto-fetch works):
