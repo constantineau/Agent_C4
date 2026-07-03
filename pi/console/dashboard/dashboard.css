@@ -157,7 +157,7 @@ body {
 .tile > * { position:relative; z-index:2; }
 
 .t-head { display:flex; align-items:center; gap:6px; }
-.t-name { font-size:11px; letter-spacing:1px; font-weight:700; color:var(--muted);
+.t-name { font-size:22px; letter-spacing:1px; font-weight:700; color:var(--muted);
   text-transform:uppercase; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
 .t-chip { margin-left:auto; display:inline-flex; align-items:center; gap:5px;
   font-size:10px; letter-spacing:1px; font-weight:800; color:var(--c); }

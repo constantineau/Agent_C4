@@ -1,7 +1,7 @@
 /* SR33 Crew Dashboard — higher-order tiles (live onboard engine + deterministic status).
    Design: docs/COPILOT_DASHBOARD.md + the crew's example slide. The grid surfaces the
    higher-order reads the sensors alone don't show:
-     TWS Trend · Playbook · Forecast · Sail · Time to Mark · AIS / Fleet · Crew Energy · Data
+     TWS Trend · Playbook · Forecast · Sail · Time to Mark · AIS / Fleet · C4 Energy · Data
    (VMG + Tactics retired 2026-07-03 — VMG repeats the boat's instruments; the on-water tactical
    read now lives in the top Strategy strip. See the TILES const below.)
    TWS Trend and Forecast use VECTOR ARROWS for true wind direction (the arrow points the way
@@ -28,7 +28,7 @@
   const TILES = ["wind", "playbook", "forecast", "sail", "eta", "ais", "charge", "data"];
   const NAME = {
     wind: "TWS Trend", playbook: "Playbook", forecast: "Forecast",
-    sail: "Sail", eta: "Time to Mark", ais: "AIS / Fleet", charge: "Crew Energy", data: "Data",
+    sail: "Sail", eta: "Time to Mark", ais: "AIS / Fleet", charge: "C4 Energy", data: "Data",
   };
   /* AIS tile thresholds: nm to the closest point of approach + minutes to it (tunable). */
   const AIS_GUARD_NM = 0.5, AIS_WATCH_NM = 1.5, AIS_TCPA_ACT = 12, AIS_TCPA_WATCH = 30;
