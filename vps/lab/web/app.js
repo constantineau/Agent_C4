@@ -1189,13 +1189,27 @@ function optModelSkill(r) {
     return `<tr><td>${esc(t.model.toUpperCase())}${yrs}</td><td>${t.vector_rmse_kn}</td>
       <td>${wcell}</td><td>${db}</td><td class="muted">${t.n}</td></tr>`;
   }).join("");
-  const deep = s.deep ? `<span class="pill ok" title="Includes pre-2021 reforecast archives">deep</span>` : "";
-  return `<details class="rail-sec" open><summary>Model skill ${deep}</summary>
-    <div class="muted" style="font-size:11px;margin-bottom:6px">
-      Weighted by measured accuracy at <b>${esc(s.station || s.venue_key)}</b>${s.station_name ? " (" + esc(s.station_name) + ")" : ""} ·
-      up to ${s.n_years || 1} season${(s.n_years || 1) > 1 ? "s" : ""} ${s.window ? esc(s.window[0]) + "–" + esc(s.window[1]) : ""} ·
-      recency t½ ${s.recency_halflife_y}y · per-model n &amp; seasons shown · lower RMSE ⇒ higher weight (de-biased first)</div>
-    <table class="legs"><thead><tr><th>Model</th><th>RMSE kn</th><th>Weight</th><th>Veer bias</th><th>n</th></tr></thead>
+  const deep = s.deep ? `<span class="pill ok" title="Includes pre-2021 reforecast archives (HRRR 2015+, GEFS 2005+)">deep history</span>` : "";
+  const total = (s.table || []).reduce((a, t) => a + (t.n || 0), 0);
+  const nSt = (s.station || "").split("+").filter(Boolean).length;
+  return `<details class="rail-sec" open><summary>Model skill — venue backtest ${deep}</summary>
+    <div class="muted" style="font-size:11px;margin-bottom:8px">
+      Each model's <b>past forecasts vs the observed wind</b> at this venue (a forecast-vs-observed
+      backtest, not model agreement). Lower vector-RMSE ⇒ more trusted; each model's persistent
+      veer/speed bias is removed before blending. <b>Weights auto-apply to the route above.</b></div>
+    <div class="rail-stats opt-stats" style="margin-bottom:8px">
+      <div title="${esc(s.station_name || s.station || "")}"><b>${nSt || "—"}</b><span>obs station${nSt === 1 ? "" : "s"}</span></div>
+      <div><b>${s.n_years || 1}</b><span>seasons</span></div>
+      <div title="race-window ±21 days, each season"><b>${s.window ? esc(s.window[0]) + "–" + esc(s.window[1]) : "—"}</b><span>years</span></div>
+      <div title="total matched forecast–observation pairs across models"><b>${total.toLocaleString()}</b><span>comparisons</span></div>
+      <div title="recency half-life: how fast older seasons are down-weighted (models drift)"><b>${s.recency_halflife_y}y</b><span>recency t½</span></div>
+    </div>
+    <div class="muted" style="font-size:10px;margin-bottom:3px">obs: ${esc(s.station || "—")} (${esc(s.obs_source || "")}) · forecast: Open-Meteo 2021+ ${s.deep ? "+ HRRR/GEFS reforecast archives" : ""}</div>
+    <table class="legs"><thead><tr>
+      <th title="model (with seasons of data)">Model</th><th title="vector RMSE, kn — headline skill (speed+direction error)">RMSE</th>
+      <th title="blend weight applied (×priority); 'ref' = tracked but not routed">Weight</th>
+      <th title="persistent direction bias removed before blending">Bias</th>
+      <th title="matched forecast–obs pairs">n</th></tr></thead>
       <tbody>${rows}</tbody></table>
     <div style="margin-top:6px">${btn}</div>
     <div id="mskMsg" class="muted" style="font-size:11px;margin-top:4px"></div>
