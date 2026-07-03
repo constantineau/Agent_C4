@@ -4,6 +4,7 @@
 Phase 3 = future refinements.
 **One line:** weight each weather model in the blend by how accurately it has *actually*
 forecast the wind **at this venue in the past** — measured, not assumed.
+**Results:** what the backtest actually found → [`MODEL_SKILL_FINDINGS.md`](MODEL_SKILL_FINDINGS.md).
 
 ## The idea
 
