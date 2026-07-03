@@ -14,6 +14,8 @@
 const MapView = (function () {
   let map = null;
   let chartLayer = null, windLayer = null, currentLayer = null, waveLayer = null, exploreLayer = null, routeGroup = null, seamarks = null;
+  let scrimLayer = null;
+  const SCRIM_OPACITY = 0.7;    // white mask over the basemap so wind/current arrows read clearly
   let boatMarker = null, legHighlight = null;
   let R = null;                 // current optimize result
   let frameIdx = 0;
@@ -21,7 +23,7 @@ const MapView = (function () {
   let windMode = "arrows";      // wind overlay style: arrows | barbs | shaded (2.4)
   let followScrub = true;       // Tier 3.3: pan the map to the projected boat position while scrubbing
   const show = { wind: true, current: true, waves: false, shoals: true, rocks: true, land: false,
-                 sea: false, iso: false, laylines: true, models: true };
+                 sea: false, iso: false, laylines: true, models: true, scrim: true };
 
   // a stable colour per weather model for the per-model candidate-route fan (PR-4)
   const MODEL_COLORS = { gfs: "#1f77b4", nam: "#2ca02c", hrrr: "#d62728", gefs: "#9467bd",
@@ -55,6 +57,14 @@ const MapView = (function () {
       this._draw(ctx, function (lat, lon) { return m.latLngToContainerPoint([lat, lon]); }, m.getZoom(), size);
     },
   });
+
+  // a white scrim over the basemap tiles (sits UNDER all data overlays) — mutes the busy nautical
+  // chart so the wind/current arrows + route read clearly. Toggle: "Dim chart".
+  function drawScrim(ctx, project, zoom, size) {
+    if (!show.scrim) return;
+    ctx.fillStyle = "rgba(255,255,255," + SCRIM_OPACITY + ")";
+    ctx.fillRect(0, 0, size.x, size.y);
+  }
 
   function twsColor(tws) {
     return tws < 6 ? "#4aa3ff" : tws < 12 ? "#43c463" : tws < 18 ? "#f5c542"
@@ -379,7 +389,7 @@ const MapView = (function () {
     const hasCurrent = R && R.current_grid && (R.current_grid.frames || []).length;
     const hasWaves = R && R.wave_grid && (R.wave_grid.frames || []).length;
     const layers = `<div class="cc-grp cc-layers"><span class="cc-lbl">Layers</span>
-        ${chk("wind", "Wind")}${hasCurrent ? chk("current", "Current") : ""}${hasWaves ? chk("waves", "Sea state") : ""}${chk("shoals", "Shoals")}${chk("rocks", "Rocks")}${chk("land", "ENC land")}${chk("sea", "Seamarks")}` +
+        ${chk("wind", "Wind")}${hasCurrent ? chk("current", "Current") : ""}${hasWaves ? chk("waves", "Sea state") : ""}${chk("shoals", "Shoals")}${chk("rocks", "Rocks")}${chk("land", "ENC land")}${chk("sea", "Seamarks")}${chk("scrim", "Dim chart")}` +
         (hasModels ? chk("models", "Model routes") : "") +
         (hasIso ? chk("iso", "Isochrones") : "") + (hasLay ? chk("laylines", "Laylines") : "") +
         windSel + followChk + `</div>`;
@@ -433,6 +443,7 @@ const MapView = (function () {
     if (k === "iso" || k === "laylines" || k === "models") { exploreLayer.redraw(); return; }
     if (k === "current") { currentLayer.redraw(); return; }
     if (k === "waves") { waveLayer.redraw(); return; }
+    if (k === "scrim") { scrimLayer.redraw(); return; }
     chartLayer.redraw(); windLayer.redraw();
   }
   function setFrame(i) {
@@ -518,6 +529,7 @@ const MapView = (function () {
     const b = resultBounds();
     if (b) map.setView(b.getCenter(), 7); else map.setView([45, -83], 6);
 
+    scrimLayer = new CanvasOverlay(drawScrim).addTo(map);   // white mask over the basemap, UNDER all data
     waveLayer = new CanvasOverlay(drawWaves).addTo(map);    // sea-state wash sits UNDER everything
     chartLayer = new CanvasOverlay(drawChart).addTo(map);
     exploreLayer = new CanvasOverlay(drawExplore).addTo(map);
