@@ -85,9 +85,31 @@ check("vs_playbook = no-plan", r["recommendation"]["vs_playbook"] == "no-plan")
 check("confidence low", r["confidence"] == "low")
 check("caveat flags no gameplan", any("no gameplan" in c.lower() for c in r["caveats"]))
 
+# --- 4b. NO PLAYBOOK but a persistent tactical shift → strip still shows favoured-side (Tactics-tile
+#         fallback: the strip must not go blind without a gameplan) ------------------------------------
+print("no playbook, persistent shift (Tactics fallback):")
+stub(bundle=None, tac=wind(True, "right", "veering"),
+     fleet={"available": False, "fleet": [], "traffic": []})
+r = strategy.get_strategy_signals()
+print("  ", r["assessment"], "| rec:", r["recommendation"]["action"])
+check("available from the tactical read alone", r["available"] is True)
+check("picture carries the shift read grounded in get_tactics",
+      any(p["signal"] == "shift" and "get_tactics" in (p.get("grounded_in") or []) for p in r["picture"]))
+check("favoured side named in the assessment", "right" in r["assessment"].lower())
+check("recommendation is no-plan (nothing to branch within)", r["recommendation"]["vs_playbook"] == "no-plan")
+check("recommendation grounded in get_tactics", "get_tactics" in r["recommendation"]["grounded_in"])
+check("no re-route chained (no-plan ≠ off-book departure)", "reoptimize" not in r)
+
+# oscillating, no playbook → sail-your-phase read (still available, not blind)
+stub(bundle=None, tac=wind(False, "either", "steady", osc=10),
+     fleet={"available": False, "fleet": [], "traffic": []})
+r = strategy.get_strategy_signals()
+check("oscillating no-playbook still available", r["available"] is True)
+check("oscillating rec mentions phase/oscillating", "phase" in r["recommendation"]["action"].lower() or "oscillat" in r["recommendation"]["action"].lower())
+
 # --- 5. NOTHING aboard → not available ---------------------------------------------------------------
 print("nothing aboard:")
-stub(bundle=None, fleet={"available": False, "fleet": [], "traffic": []})
+stub(bundle=None, tac={"available": False}, fleet={"available": False, "fleet": [], "traffic": []})
 r = strategy.get_strategy_signals()
 check("not available", r["available"] is False)
 check("still returns a disclaimer + caveat", bool(r["caveats"]) and "disclaimer" in r)

@@ -1,7 +1,9 @@
 /* SR33 Crew Dashboard — higher-order tiles (live onboard engine + deterministic status).
    Design: docs/COPILOT_DASHBOARD.md + the crew's example slide. The grid surfaces the
    higher-order reads the sensors alone don't show:
-     VMG · TWS Trend · Tactics · Forecast · Sail · Time to Mark · Crew Energy · Data
+     TWS Trend · Playbook · Forecast · Sail · Time to Mark · AIS / Fleet · Crew Energy · Data
+   (VMG + Tactics retired 2026-07-03 — VMG repeats the boat's instruments; the on-water tactical
+   read now lives in the top Strategy strip. See the TILES const below.)
    TWS Trend and Forecast use VECTOR ARROWS for true wind direction (the arrow points the way
    the wind blows TO — a north wind points down, an east wind points left), with the speed in
    kts beside it, at fixed time points (now / −10 / −30 / −60 for the trend; now / +30 / +60
@@ -19,9 +21,13 @@
   };
   const SEV = { ok: 0, watch: 1, act: 2, na: 2 };
 
-  const TILES = ["vmg", "wind", "tactics", "playbook", "forecast", "sail", "eta", "ais", "charge", "data"];
+  // VMG + Tactics retired 2026-07-03: VMG (% of polar) is repeated on the boat's own instruments, and
+  // Tactics (favoured side / persistent-vs-oscillating) is now folded into the top Strategy strip —
+  // the strip's synthesis consumes get_tactics and shows the favoured-side read even with no playbook
+  // aboard. 8 tiles → a clean 4×2 grid. See docs/COPILOT_DASHBOARD.md.
+  const TILES = ["wind", "playbook", "forecast", "sail", "eta", "ais", "charge", "data"];
   const NAME = {
-    vmg: "VMG", wind: "TWS Trend", tactics: "Tactics", playbook: "Playbook", forecast: "Forecast",
+    wind: "TWS Trend", playbook: "Playbook", forecast: "Forecast",
     sail: "Sail", eta: "Time to Mark", ais: "AIS / Fleet", charge: "Crew Energy", data: "Data",
   };
   /* AIS tile thresholds: nm to the closest point of approach + minutes to it (tunable). */
@@ -76,15 +82,13 @@
     calm: {
       mode: "llm-live", focus: "Solid groove — the left side is paying.", confidence: "high",
       notes: [
-        { tile: "tactics", status: "ok", text: "Left has paid the last two oscillations — stay set up to tack on the next header.", conf: "high" },
-        { tile: "vmg",     status: "ok", text: "VMG at 96% of target and pointing well. Hold the groove.", conf: "high" },
+        { tile: "playbook", status: "ok", text: "Left has paid the last two oscillations — the Left gameplan stands; stay set up to tack on the next header.", conf: "high" },
+        { tile: "sail",     status: "ok", text: "J1 is the right sail and pointing well. Hold the groove.", conf: "high" },
       ],
       tiles: {
-        vmg:     { status: "ok", value: "5.4 kts", sub: "upwind · 96% of target", why: "VMG 5.4 kts to windward vs a 5.6 kts polar target — 96%.", consider: "Good VMG — hold the groove.", clears: "—", based: ["computed VMG = STW·cos(TWA)", "get_sail: target VMG 5.6 kts"], conf: "high" },
         wind:    { status: "ok", value: null,
                    rows: [{ label: "Now", emph: true, cols: [arrowKts(250, 12)] }, { label: "−60 min", cols: [arrowKts(246, 14)] }, { label: "−120 min", cols: [arrowKts(242, 16)] }],
                    why: "True wind speed + direction now and looking back. Arrows point the way the wind blows (north wind points down, east points left). Eased a touch and edged right over the last couple of hours.", consider: "Oscillating breeze — work the shifts.", clears: "—", based: ["engine archive + live buffer"], conf: "high" },
-        tactics: { status: "ok", value: "◀ Left", sub: "oscillating, favor left", why: "Oscillating; the left has paid. Lifted now.", consider: "Tack on the next header.", clears: "—", based: ["get_tactics: favored left, lifted"], conf: "high" },
         playbook:{ status: "ok", value: "On plan: Left", sub: "oscillating ±6°",
                    rows: [{ hdr: true, cols: ["agree", ""] }, { label: "★ Left", emph: true, cols: ["52%", "start · now"] }, { label: "Middle", cols: ["28%", ""] }, { label: "Right", cols: ["20%", ""] }],
                    why: "Playbook recommends starting Left (52% of forecasts agree). Wind is oscillating — no persistent shift, so the Left gameplan stands; play the shifts within the band.", consider: "Hold the gameplan — tack on the headers, no branch yet.", clears: "—", based: ["playbook:left", "agreement 52%", "get_tactics"], conf: "high" },
@@ -124,11 +128,9 @@
         { tile: "forecast", status: "watch", text: "Forecast has been under-calling the breeze by ~2-3 kts — expect a bit more than it says.", conf: "med" },
       ],
       tiles: {
-        vmg:     { status: "watch", value: "4.6 kts", sub: "upwind · 82% of target", why: "VMG 4.6 kts vs a 5.6 kts target — 82%. Pinching in the chop.", consider: "Down on VMG — ease the angle to rebuild made-good.", clears: "back over 90% of the VMG target", based: ["computed VMG = STW·cos(TWA)"], conf: "med" },
         wind:    { status: "watch", value: null,
                    rows: [{ label: "Now", emph: true, cols: [arrowKts(262, 16)] }, { label: "−60 min", cols: [arrowKts(252, 12)] }, { label: "−120 min", cols: [arrowKts(246, 9)] }],
                    why: "True wind speed + direction now and looking back. Arrows point the way the wind blows (north wind points down). Built ~7 kts and veered right ~16° over the last two hours — a persistent right trend.", consider: "Persistent right shift — favor the right side of the course.", clears: "the trend settles", based: ["engine archive + live buffer"], conf: "med" },
-        tactics: { status: "watch", value: "Right ▶", sub: "persistent, favor right", why: "The breeze has shifted right and is holding — persistent, not oscillating.", consider: "Favor the right.", clears: "the shift reverses", based: ["get_tactics: favored right, persistent"], conf: "med" },
         playbook:{ status: "act", value: "Switch → Right", sub: "branch: persistent veer favors right",
                    rows: [{ hdr: true, cols: ["agree", ""] }, { label: "★ Left", cols: ["52%", "start"] }, { label: "Right", emph: true, cols: ["20%", "now"] }, { label: "Middle", cols: ["28%", ""] }],
                    why: "A persistent veering shift now favors the right side — against the recommended Left. The playbook's branch trigger: if the breeze veers and holds right of ~020° for two-plus oscillation cycles, bail to the right.", consider: "Execute the branch — commit right per variant 'Right'.", clears: "the shift reverses / settles back toward the rhumb", based: ["playbook:right", "agreement 52%", "get_tactics"], conf: "high" },
@@ -344,25 +346,6 @@
 
   /* ============================ tile builders (live) ============================ */
   const BUILD = {
-    vmg(p) {
-      const c = p.conditions, s = p.sail;
-      if (!c || !c.available || c.stw == null || c.twa == null) return NA("no speed / angle");
-      const twa = Math.abs(c.twa), vmg = c.stw * Math.cos(twa * D2R), absv = Math.abs(vmg);
-      if (!(twa < 70 || twa > 110)) {
-        return { status: "ok", value: r1(absv) + " kts", sub: "reaching",
-          why: "VMG " + r1(absv) + " kts — on a reach, VMG-to-wind isn't the target (sail for the mark).",
-          consider: "Reaching — sail fast, not for VMG.", clears: "—", based: ["computed VMG = STW·cos(TWA " + r0(twa) + "°)"], conf: "engine" };
-      }
-      const tgt = s && s.available && s.targets ? Math.abs(s.targets.vmg) : null;
-      const pct = tgt ? Math.round((absv / tgt) * 100) : null;
-      const st = pct == null ? "ok" : pct >= 90 ? "ok" : pct >= 78 ? "watch" : "act";
-      return { status: st, value: r1(absv) + " kts",
-        sub: (vmg >= 0 ? "upwind" : "downwind") + (pct != null ? " · " + pct + "% of target" : ""),
-        why: "VMG " + r1(absv) + " kts " + (vmg >= 0 ? "to windward" : "downwind") + (tgt ? " vs a " + r1(tgt) + " kts polar target (" + pct + "%)." : "."),
-        consider: st === "ok" ? "Good VMG — hold the groove." : "Down on VMG — adjust angle/trim for better made-good.",
-        clears: st !== "ok" ? "back over 90% of the VMG target" : "—",
-        based: ["computed VMG = STW·cos(TWA)"].concat(tgt ? ["get_sail: target VMG " + r1(tgt) + " kts"] : []), conf: "engine" };
-    },
     wind(p) {
       const pts = [["Now", 0], ["−60 min", 3600], ["−120 min", 7200]];
       const samples = pts.map(([lbl, ago]) => [lbl, observedAt(ago)]);
@@ -380,17 +363,6 @@
         consider: st === "ok" ? "Steady — work the oscillations." : "Building/shifting — favor the developing side and watch the gear.",
         clears: st === "ok" ? "—" : "the trend settles",
         based: [App.seriesHist && App.seriesHist.length ? "engine archive (" + App.seriesHist.length + " pts) + live buffer" : "live wind buffer (" + App.windHist.length + " samples)"], conf: "engine" };
-    },
-    tactics(p) {
-      const t = p.tactics;
-      if (!t || !t.available) return NA(t && t.note ? t.note : "no tactics");
-      const side = t.favored_side;
-      const value = side === "left" ? "◀ Left" : side === "right" ? "Right ▶" : "Even";
-      const persistent = t.shift && t.shift.oscillation_deg != null && t.shift.shift_deg != null && Math.abs(t.shift.shift_deg) > t.shift.oscillation_deg;
-      const st = side && side !== "either" && persistent ? "watch" : "ok";
-      return { status: st, value: value, sub: (t.phase || "") + (persistent ? ", persistent" : ", oscillating"),
-        why: t.recommendation || (t.phase + ", favored " + side), consider: t.favored_reason || "Sail your phase.",
-        clears: st === "ok" ? "—" : "the shift reverses", based: ["get_tactics: " + (t.phase || "?") + ", favored " + (side || "?")], conf: "engine" };
     },
     forecast(p) {
       const fc = p.forecast;

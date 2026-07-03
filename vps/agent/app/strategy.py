@@ -18,7 +18,7 @@ Source-agnostic: pure composition of `selector` + `fleet` (both already on the 9
 the identical synthesis runs cloud or onboard. It re-fetches nothing with Schmitt state — `selector`
 does the single gather (its `signals` carry the enriched reads); `fleet` is stateless.
 """
-from . import fleet as fleet_mod, reoptimize as reoptimize_mod, selector as selector_mod
+from . import fleet as fleet_mod, reoptimize as reoptimize_mod, selector as selector_mod, tactics as tactics_mod
 
 # a persistent VEER (TWD rising, clockwise) tends to favour the RIGHT of the beat, a BACK the LEFT.
 _DRIFT_SIDE = {"veered": "right", "backed": "left"}
@@ -204,6 +204,33 @@ def _recommendation(sel, conc, flt):
             "urgency": urg, "confidence": _conf_label(conf)}, conf
 
 
+def _no_playbook_recommendation(sig, flt):
+    """No frozen gameplan aboard (practice, or a race with no loaded playbook) — there's nothing to
+    HOLD or SWITCH within, but the boat's own wind read still guides. Lead with the favoured side when
+    the shift is persistent; else sail the phase / reason from the fleet. `vs_playbook: "no-plan"` so
+    the card knows this isn't a playbook departure. Grounded in the tools that actually spoke."""
+    sh = sig.get("shift") or {}
+    fav = sh.get("favored_side")
+    if sh.get("persistent") and fav in ("left", "right"):
+        return ({"action": f"Work the {fav} — favoured, but no gameplan aboard to branch within",
+                 "vs_playbook": "no-plan", "target_variant": None,
+                 "rationale": (f"A persistent shift favours the {fav} side. No playbook is loaded, so "
+                               "there's no frozen plan to hold or switch — sail your own best read to "
+                               "that side."),
+                 "grounded_in": ["get_tactics"], "urgency": "soon", "confidence": "low"}, 0.4)
+    if "shift" in sig:
+        return ({"action": "Sail your phase — oscillating, no gameplan aboard",
+                 "vs_playbook": "no-plan", "target_variant": None,
+                 "rationale": ("The breeze is oscillating with no persistent shift and no playbook is "
+                               "loaded — work the shifts on their merits."),
+                 "grounded_in": ["get_tactics"], "urgency": "monitor", "confidence": "low"}, 0.35)
+    return ({"action": "Reason from live facts — no gameplan aboard to switch within",
+             "vs_playbook": "no-plan", "target_variant": None,
+             "rationale": ("No playbook loaded; the fleet/handicap picture is shown but there is no "
+                           "frozen plan to hold or branch."),
+             "grounded_in": ["get_fleet"], "urgency": "monitor", "confidence": "low"}, 0.35)
+
+
 def _reoptimize_offer(route=None):
     """OFF-BOOK CHAINING (docs/STRATEGY_SYNTHESIS.md Phase 3). When the synthesis departs the frozen
     playbook, hand the crew a CONCRETE fresh route — not just "go off-book". Chains the already-built
@@ -226,10 +253,22 @@ def get_strategy_signals(route=None):
     flt = fleet_mod.get_fleet()
 
     has_playbook = sel.get("available", False)
-    sig = sel.get("signals") or {}
-    # With no playbook the selector is `na` and carries no signals — synthesise from fleet alone, which
-    # still lets the crew see the handicap picture. (The richer no-playbook path is the LLM layer.)
-    if not has_playbook and not flt.get("available"):
+    sig = dict(sel.get("signals") or {})
+    # With no playbook the selector is `na` and carries no signals — but the boat's own tactical read
+    # (favoured side, persistent vs oscillating) still matters and used to have its own Tactics tile.
+    # Pull it DIRECTLY so the strip shows it in practice / when no gameplan is loaded — the strip must
+    # not go blind without a playbook. (With a playbook the selector already carries the shift.)
+    if not has_playbook:
+        tac = tactics_mod.get_tactics(route)
+        if tac.get("available"):
+            w = tac.get("wind") or {}
+            sig["shift"] = {"persistent": bool(w.get("persistent")),
+                            "favored_side": tac.get("favored_side"), "trend": w.get("trend"),
+                            "oscillation_deg": w.get("oscillation_deg")}
+    have_shift = "shift" in sig
+    # Nothing to synthesise only when there's genuinely no signal at all (no playbook, no fleet, no
+    # tactical read).
+    if not has_playbook and not flt.get("available") and not have_shift:
         return {"available": False, "mode": "deterministic",
                 "assessment": "No gameplan aboard and no fleet/signal data — nothing to synthesise yet.",
                 "picture": [], "concordance": {"strength": "none"}, "recommendation": None,
@@ -245,11 +284,7 @@ def get_strategy_signals(route=None):
     if has_playbook:
         rec, conf = _recommendation(sel, conc, flt)
     else:
-        rec, conf = ({"action": "Reason from live facts — no gameplan aboard to switch within",
-                      "vs_playbook": "no-plan", "target_variant": None,
-                      "rationale": "No playbook loaded; the fleet/handicap picture is shown but there "
-                                   "is no frozen plan to hold or branch.",
-                      "grounded_in": ["get_fleet"], "urgency": "monitor", "confidence": "low"}, 0.35)
+        rec, conf = _no_playbook_recommendation(sig, flt)
 
     # assessment headline: lead with the concordance verdict when there is one.
     if conc.get("strength") == "strong":
@@ -257,7 +292,15 @@ def get_strategy_signals(route=None):
     elif conc.get("strength") == "split":
         assessment = f"Signals split — {rec['action'].lower()}; one read is about to be wrong."
     elif not has_playbook:
-        assessment = "No gameplan aboard — reasoning from the live fleet + wind picture only."
+        sh = sig.get("shift") or {}
+        fav = sh.get("favored_side")
+        if sh.get("persistent") and fav in ("left", "right"):
+            assessment = (f"No gameplan aboard — but the breeze favours the {fav}; "
+                          "sail your own read to that side.")
+        else:
+            assessment = ("No gameplan aboard — reasoning from the live "
+                          + ("wind + fleet" if flt.get("available") else "wind")
+                          + " picture only.")
     else:
         extra = sel.get("value", "") or ""
         assessment = (rec["action"] if not extra or extra.lower() in rec["action"].lower()

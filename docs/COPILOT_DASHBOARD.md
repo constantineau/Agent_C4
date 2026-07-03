@@ -6,8 +6,12 @@ tap-to-detail), plus polish (wind-trend charts, forecast-vs-actual verification,
 day/night, feedback widget). Lives in `pi/console/dashboard/` (served at `:8091/dashboard/`); the
 LLM layer is `pi/orin/copilot/dashboard_brief.py` (`POST /dashboard`) + the streamed `POST /detail`.
 **Note: the literal 12-tile grid below was deliberately simplified at build time to higher-order
-tiles** (commit `99c3d9d`, "crew direction"). The grid is now **9 tiles on a 3×3 layout** —
-`vmg, wind, tactics, playbook, forecast, sail, eta, ais, charge, data` (a 5×2 grid) — with the
+tiles** (commit `99c3d9d`, "crew direction"). The grid is now **8 tiles on a 4×2 layout** —
+`wind, playbook, forecast, sail, eta, ais, charge, data` — with the
+**VMG + Tactics tiles retired 2026-07-03** (crew de-dup): VMG (kts + % of polar) repeats the boat's own
+instruments, and the on-water tactical read (favoured side / persistent-vs-oscillating) now lives in the
+top **Strategy strip** — its synthesis consumes `get_tactics` and, when NO playbook is aboard, pulls it
+directly so the strip still shows the favoured-side read (it no longer goes blind in practice mode). The
 **AIS / Fleet** tile (onboard `GET /ais` → range/bearing/CPA/TCPA, ok/watch/act on the closing-CPA
 guard; v1 is AIS proximity/collision, handicap-aware fleet tactics is the next increment) AND the
 **PLAYBOOK-ADHERENCE** tile (the last "later tile" — **BUILT**, see below). Companion to

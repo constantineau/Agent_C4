@@ -145,7 +145,7 @@ via `OnboardSource`. It comes up with the rest of the Pi stack; quick check:
 | **5** ✅ | iPad nav companion: day/night, sail dial, course plot, navigator, tactics, routing | bench-verified end-to-end |
 | **6** ✅ | Alerting + summarizer + polar tooling | bench-complete; 2-practice-sail false-positive gate awaits real sailing |
 | 7 🔶 | Prod stack + deploy + rules review + soak | rules review done; server auth + TLS scaffolding done; prod deploy/soak gated on domain + prod `.env` |
-| **9** 🔶 | Onboard + C4 Performance Lab (three-tier pivot) | **9.0 data-access abstraction ✅ · 9.1 onboard engine service ✅ · 9.2 race gate + iPad onboard console ✅ · Lab-0 race ingestion + course loader ✅ · Lab-1 multi-model GRIB optimizer ✅ · Lab-2a/2b branching playbook bundle ✅ (fan-out → variants → Opus synthesis → signed, onboard-loadable artifact) · routing-fidelity 2b per-leg sail plan + reviewable boat sail model ✅ · routing-fidelity 2c isochrone VMG-gate/cone-prune/anti-over-tack ✅ · routing-fidelity 2e finish/mark over-tack ("scramble") fixes ✅ · routing-fidelity 2f island rounding-side enforcement ✅ · routing-fidelity 2g sail-aware routing (per-sail polars + peel cost) ✅ · 9.4 Orin LLM appliance live (Ollama+Qwen2.5-7B :11434) + copilot decision-support layer ✅ (`pi/orin/copilot`) · copilot crew-facing narration ✅ + proactive auto-coach timer ✅ + collision/AIS safety callout ✅ + handicap-rival callout ✅ · PLAYBOOK-ADHERENCE dashboard tile ✅ (10-tile 5×2 grid) · handicap-aware fleet tactics ✅ (incl. verified YB/bycmack tracker source) ** — see `docs/ONBOARD_ENGINE_SCOPING.md` |
+| **9** 🔶 | Onboard + C4 Performance Lab (three-tier pivot) | **9.0 data-access abstraction ✅ · 9.1 onboard engine service ✅ · 9.2 race gate + iPad onboard console ✅ · Lab-0 race ingestion + course loader ✅ · Lab-1 multi-model GRIB optimizer ✅ · Lab-2a/2b branching playbook bundle ✅ (fan-out → variants → Opus synthesis → signed, onboard-loadable artifact) · routing-fidelity 2b per-leg sail plan + reviewable boat sail model ✅ · routing-fidelity 2c isochrone VMG-gate/cone-prune/anti-over-tack ✅ · routing-fidelity 2e finish/mark over-tack ("scramble") fixes ✅ · routing-fidelity 2f island rounding-side enforcement ✅ · routing-fidelity 2g sail-aware routing (per-sail polars + peel cost) ✅ · 9.4 Orin LLM appliance live (Ollama+Qwen2.5-7B :11434) + copilot decision-support layer ✅ (`pi/orin/copilot`) · copilot crew-facing narration ✅ + proactive auto-coach timer ✅ + collision/AIS safety callout ✅ + handicap-rival callout ✅ · PLAYBOOK-ADHERENCE dashboard tile ✅ (8-tile 4×2 grid; VMG+Tactics retired 2026-07-03) · handicap-aware fleet tactics ✅ (incl. verified YB/bycmack tracker source) ** — see `docs/ONBOARD_ENGINE_SCOPING.md` |
 
 **Current status:** Phases 0–6 built and bench-verified; Phase 7 started; **Phase 9 in progress
 (9.0 data-access abstraction ✅, 9.1 onboard engine service ✅ — see "Onboard engine service",
@@ -742,6 +742,23 @@ does NOT), `bench_copilot.test_strategy_synthesis` (LLM-originated off-book → 
 engine rebuild (on-plan `/strategy` carries no `reoptimize` key; forced off_script attaches the compact
 offer; `/reoptimize` = a real 14.8 min/1-tack route). Files: strategy.py, copilot.py, engine_client.py,
 narrate.py, dashboard/dashboard.js, test_strategy.py, bench_copilot.py, docs/STRATEGY_SYNTHESIS.md.
+**DASHBOARD DE-DUP — VMG + TACTICS TILES RETIRED 2026-07-03 (crew request).** The Strategy strip already
+consumes `get_tactics` (favoured side / persistent-vs-oscillating is the primary driver of the selector
+HOLD/SWITCH banner), so the **Tactics tile was redundant** with the strip; and **VMG** (kts + % of polar
+target) is repeated on the boat's own instruments, violating the dashboard's "not an instrument repeater"
+rule. Both dropped → **8 tiles on a clean 4×2 grid** (`wind, playbook, forecast, sail, eta, ais, charge,
+data`). The one thing the Tactics tile did that the strip didn't — show a favoured-side read with NO
+playbook aboard (practice / no gameplan) — is now **folded into the strip**: `strategy.get_strategy_signals`
+pulls `tactics.get_tactics` DIRECTLY in the no-playbook path (`_no_playbook_recommendation` + a shift-read
+in the picture, grounded in `get_tactics`), so the strip shows "the breeze favours the {side} — sail your
+own read to that side" instead of going blind. LLM-down is already covered (the strip's `fetchSynthesis`
+does copilot→engine fallback; the engine `/strategy` is pure deterministic; `copilot.strategy_brief` falls
+back to the digest on any LLM trouble — `bench_copilot` case D). Verified: `test_strategy.py` (no-playbook +
+persistent shift → available, shift read grounded in get_tactics, favoured side in the assessment;
+oscillating → sail-your-phase; nothing-aboard → unavailable), live in-container (forced no-playbook +
+stubbed tactics → "favours the right" assessment + get_tactics picture), Playwright (8-tile 4×2 grid, VMG +
+Tactics absent, Strategy strip intact, demo calm/escalated + OFF-BOOK badge + re-route line, 0 console
+errors). Files: strategy.py, test_strategy.py, dashboard/{dashboard.js,dashboard.css}, docs/COPILOT_DASHBOARD.md.
 
 ## C4 Performance Lab (cloud) — Phase 9 / Lab-0
 
@@ -1538,8 +1555,10 @@ redundant encoding + a commentary panel + tap-to-detail LLM deep-dives) is desig
 phases 1–4 shipped 2026-06-19/20 — static prototype → live engine wiring + deterministic status →
 LLM commentary/status-refine (`copilot dashboard_brief.py`, `POST /dashboard`) → streamed
 tap-to-detail (`POST /detail`), plus wind-trend charts, forecast-vs-actual verification, demo
-scenarios, day/night, feedback widget. **10 higher-order tiles** (`vmg, wind, tactics, playbook,
-forecast, sail, eta, ais, charge, data`) on a 5×2 grid; the **AIS / Fleet** tile is built (see "AIS /
+scenarios, day/night, feedback widget. **8 higher-order tiles** (`wind, playbook, forecast, sail, eta,
+ais, charge, data`) on a **4×2 grid** (VMG + Tactics retired 2026-07-03 — see the DASHBOARD DE-DUP note
+in the Strategy-synthesis section: VMG repeats the boat's own instruments, and the on-water tactical read
+now lives in the top Strategy strip); the **AIS / Fleet** tile is built (see "AIS /
 Fleet dashboard tile" below) and the **PLAYBOOK-ADHERENCE** tile (the last "later tile") is built —
 deterministic `pi/orin/copilot/adherence.py` + `GET /copilot/adherence` compares the frozen Lab-2
 variants (recommended start + each variant's `what_flips_it` first-beat-side trigger) against the
