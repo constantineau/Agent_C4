@@ -235,21 +235,34 @@ _SIDE_VARIANT = {"left": ("Left ladder", "v_left"), "right": ("Right side", "v_r
 _RIVAL_NAMES = ["Bravado", "Illuminati", "Windquest", "Natalie J", "Meridian X"]
 
 
+def _wind_state(sc: dict) -> dict:
+    """Deterministic on-water wind + boat state for a scenario — the SHARED source for the signal
+    builder and the situation text, so they never disagree on the numbers (base/now TWD, tack, the
+    boat's nominal compass heading)."""
+    i = sc.get("_i", 0)
+    pos = wp.point_of_sail((sc.get("cond") or {}).get("leg"))
+    base = 200 + (i * 17) % 90              # on-water baseline TWD (deterministic, varied)
+    mag = 12 + (i * 5) % 8                  # 12..19° persistent shift
+    tack = (sc.get("cond") or {}).get("tack") or ("port", "starboard")[i % 2]
+    shift = sc.get("shift")
+    sign = 1 if shift == "persist_right" else -1 if shift == "persist_left" else 0
+    now = base + sign * mag if shift in ("persist_left", "persist_right") else base
+    return {"base_twd": base, "now_twd": now, "tack": tack, "pos": pos, "mag": mag, "sign": sign,
+            "heading": wp.nominal_heading(now, tack, pos)}
+
+
 def _build_sig(sc: dict) -> dict:
     """Synthetic `signals` dict as selector/tactics would carry — now with CONCRETE wind numbers
     (baseline TWD -> now TWD, current tack) so the reads carry the from->to degrees, and with the
     favoured side derived POINT-OF-SAIL aware from the actual leg (never hardcoded)."""
     sig = {}
     i = sc.get("_i", 0)
-    pos = wp.point_of_sail((sc.get("cond") or {}).get("leg"))
-    base = 200 + (i * 17) % 90              # on-water baseline TWD (deterministic, varied)
-    mag = 12 + (i * 5) % 8                  # 12..19° persistent shift
-    tack = (sc.get("cond") or {}).get("tack") or ("port", "starboard")[i % 2]
+    ws = _wind_state(sc)
+    base, now, tack, pos = ws["base_twd"], ws["now_twd"], ws["tack"], ws["pos"]
 
     shift = sc.get("shift")
     if shift in ("persist_left", "persist_right"):
-        sign = 1 if shift == "persist_right" else -1
-        now = base + sign * mag
+        sign = ws["sign"]
         sig["shift"] = {"persistent": True, "favored_side": wp.favored_side(sign, pos),
                         "base_twd": base, "now_twd": now, "tack": tack, "pos": pos,
                         "oscillation_deg": 0}

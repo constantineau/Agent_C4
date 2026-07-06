@@ -24,7 +24,9 @@ def _situation_text(sc: dict, digest: dict) -> str:
     NOT scored; it's context so a sailor can judge the assessment + recommendation."""
     cond = sc.get("cond") or {}
     pb = "playbook aboard" if sc.get("has_playbook", True) else "NO playbook aboard (practice/no gameplan)"
-    board = f" ({cond['tack']} {cond.get('board', 'tack')})" if cond.get("tack") else ""
+    hd = synth._wind_state(sc)["heading"]                    # boat's nominal compass heading
+    board = (f" ({cond['tack']} {cond.get('board', 'tack')}, heading ~{hd}°)"
+             if cond.get("tack") else "")
     lead = (f"On the {cond.get('leg','leg')}{board}, ~{cond.get('tws','?')} kts TWS, next mark "
             f"{cond.get('next_mark','?')} {cond.get('distance_nm','?')} nm — {pb}.")
     reads = [f"· {p['read']}" for p in digest.get("picture", []) if p.get("signal") != "concordance"]

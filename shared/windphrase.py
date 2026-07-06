@@ -69,6 +69,18 @@ def phase_on_tack(sign: int, tack: str, pos: str) -> str:
     return "lifted" if lift > 0 else "headed"
 
 
+_TWA_BY_POS = {"upwind": 42.0, "reach": 95.0, "downwind": 150.0}
+
+
+def nominal_heading(twd: float, tack: str, pos: str) -> int:
+    """The boat's approximate COMPASS heading, sailing at a nominal point-of-sail angle to the wind.
+    Matches the tack convention (wind is on the tack's side): starboard heading = TWD − TWA, port =
+    TWD + TWA. TWA ≈ 42° upwind / 95° reaching / 150° downwind."""
+    twa = _TWA_BY_POS.get(pos, 42.0)
+    h = (twd - twa) if tack == "starboard" else (twd + twa)
+    return round(h) % 360
+
+
 def _side_of(pos: str) -> str:
     return "beat" if pos == "upwind" else ("run" if pos == "downwind" else "leg")
 
