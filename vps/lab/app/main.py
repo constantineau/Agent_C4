@@ -712,6 +712,25 @@ async def retro_ingest(body: dict):
         return JSONResponse({"detail": f"retro ingest failed: {exc}"}, status_code=500)
 
 
+@app.post("/api/retro/run")
+async def retro_run(body: dict):
+    """R4: per-boat gun-forecast optimize + own-track scoring for the archived fleet. A full fleet
+    runs 1-2h — far past the gateway timeout — so this STARTS a background job; poll
+    GET /api/retro/run/status. Scope a pilot with teams/limit."""
+    b = body or {}
+    rid = b.get("race_id")
+    if not rid:
+        return JSONResponse({"detail": "race_id required"}, status_code=400)
+    return retro.start_fleet_job(rid, b.get("def_race_id") or "bayview-mackinac-2026",
+                                 b.get("course_id") or "cove_island", b.get("teams"),
+                                 b.get("limit"), b.get("resolution") or "auto")
+
+
+@app.get("/api/retro/run/status")
+async def retro_run_status():
+    return retro.fleet_job_status()
+
+
 @app.post("/api/retro/polars")
 async def retro_polars(body: dict):
     """Match every ingested entry to its public ORC cert + store the converted polar."""

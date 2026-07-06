@@ -224,6 +224,10 @@ def get_track(race_id, team_id):
     return json.loads(r[0]["fixes_json"]) if r else None
 
 
+def teams_with_tracks(race_id):
+    return {r["team_id"] for r in _rows("SELECT team_id FROM tracks WHERE race_id=?", (race_id,))}
+
+
 def get_results(race_id):
     return _rows("SELECT * FROM results WHERE race_id=? ORDER BY division, rank_division",
                  (race_id,))

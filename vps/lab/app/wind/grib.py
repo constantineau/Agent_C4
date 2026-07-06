@@ -198,6 +198,40 @@ class GribFrame:
             return _bilinear(self.lat, self.lon, self.u, self.v, lat, lon)
         return _nearest(self.lat, self.lon, self.u, self.v, lat, lon)
 
+    def crop(self, bbox, pad_deg: float = 0.5):
+        """A copy cropped to bbox=(n,s,w,e)+pad. The live NOMADS path downloads bbox subsets, but
+        the ARCHIVE path (retro study) byte-ranges whole-domain messages — and the curvilinear
+        `_nearest` argmin scales with grid size (full-CONUS HRRR = 1.9M cells per wind sample,
+        which starved the isochrone's time budget → truncated routes). Any doubt → return self
+        uncropped (correct, just slower)."""
+        try:
+            n, s, w, e = bbox
+            n, s, w, e = n + pad_deg, s - pad_deg, w - pad_deg, e + pad_deg
+            if self.regular:
+                yi = np.where((self.lat >= s) & (self.lat <= n))[0]
+                xi = np.where((self.lon >= w) & (self.lon <= e))[0]
+                if yi.size < 2 or xi.size < 2:
+                    return self
+                y0, y1, x0, x1 = yi[0], yi[-1] + 1, xi[0], xi[-1] + 1
+                if self.u.shape == (self.lat.size, self.lon.size):
+                    u, v = self.u[y0:y1, x0:x1], self.v[y0:y1, x0:x1]
+                elif self.u.shape == (self.lon.size, self.lat.size):
+                    u, v = self.u[x0:x1, y0:y1], self.v[x0:x1, y0:y1]
+                else:
+                    return self
+                return GribFrame(self.model, self.member, self.valid_time,
+                                 self.lat[y0:y1], self.lon[x0:x1], u, v, True)
+            m = (self.lat >= s) & (self.lat <= n) & (self.lon >= w) & (self.lon <= e)
+            if not m.any():
+                return self
+            ys, xs = np.where(m)
+            y0, y1, x0, x1 = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
+            return GribFrame(self.model, self.member, self.valid_time,
+                             self.lat[y0:y1, x0:x1], self.lon[y0:y1, x0:x1],
+                             self.u[y0:y1, x0:x1], self.v[y0:y1, x0:x1], False)
+        except Exception:
+            return self
+
 
 def _bilinear(lats, lons, u, v, lat, lon):
     """Bilinear sample on a regular (1-D lats, 1-D lons) grid. Handles either axis order."""

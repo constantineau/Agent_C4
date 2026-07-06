@@ -75,7 +75,8 @@ def _load_model(source, bbox, t_start, t_end, members, on_progress, parser=None)
                     continue
                 try:
                     frames.append(grib.GribFrame.from_file(
-                        path, source.name, member, source.valid_time(cycle, fhr), parser=parser))
+                        path, source.name, member, source.valid_time(cycle, fhr),
+                        parser=parser).crop(bbox))
                 except Exception:
                     continue
             if frames:
