@@ -13,6 +13,7 @@ CANDIDATES = os.path.join(DATA_DIR, "candidates.jsonl")
 PREF_DB = os.environ.get("TRAIN_PREF_DB", os.path.join(DATA_DIR, "labels.sqlite"))
 PAIRS = os.path.join(DATA_DIR, "pref.jsonl")
 EVAL_REPORT = os.path.join(DATA_DIR, "eval_report.json")
+NOTE_PROPOSALS = os.path.join(DATA_DIR, "note_proposals.jsonl")   # LLM-drafted, human-reviewed
 
 # --- snapshot generation ---------------------------------------------------------------------
 # How many random combination snapshots to add on top of the curated hard-case set.

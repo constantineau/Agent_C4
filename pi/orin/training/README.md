@@ -77,6 +77,18 @@ python3 -m training.eval_judgment
   tag → a labeled tuning/bug signal for `strategy.py` (Plan §4).
 - **Calibration** — the too_high/too_low distribution overall + by origin.
 
+### 6. Notes → proposals (the free-text signal)
+```bash
+python3 -m training.notes_review            # LLM-cluster labeler notes → proposals; print the digest
+python3 -m training.notes_review --list     # stored proposals + status
+python3 -m training.notes_review --accept|--dismiss <id>
+```
+`make_pairs` uses only the ranking order + calibration — the free-text NOTES were write-only. This
+reads every note (with its snapshot context), asks Opus (best-effort; deterministic fallback) to
+CLUSTER them into concrete PROPOSALS (situation content / rubric / engine), and stores them `open` for
+a human to accept/dismiss. **Propose-only — mutates nothing** (a person implements the accepted ones),
+mirroring the Lab-4 learning loop. → `training/data/note_proposals.jsonl`.
+
 ### Smoke test (no engine / LLM / key)
 ```bash
 python3 -m training.smoke
