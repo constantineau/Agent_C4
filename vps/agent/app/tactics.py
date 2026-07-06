@@ -11,6 +11,7 @@ the agent caveats it. Computation always runs so debriefs have the data.
 """
 import math
 
+from shared import windphrase as wp
 from . import navigator as NAV
 from . import datasource
 
@@ -64,22 +65,25 @@ def get_tactics(route: str = None):
     slope = _slope([(t - t0) / 60 for t, _ in series], devs)     # deg/min
     span_min = (series[-1][0] - t0) / 60
     persistent = abs(slope) * span_min > max(3.0, osc * 0.6)
-    trend = "veering" if slope > 0.2 else ("backing" if slope < -0.2 else "steady")
+    trend = "steady" if abs(slope) <= 0.2 else ("right" if slope > 0 else "left")  # compass-shift dir
+    sign = 1 if slope > 0 else -1                                                  # +1 = shifted RIGHT
 
-    # current tack + lifted/headed (a veer lifts starboard, heads port)
+    # current tack + point of sail (from the boat's true wind angle) + lifted/headed
     hdg = s["heading"] if s["heading"] is not None else s["cog"]
     tack = "—"
     phase = "even"
+    pos = "upwind"                          # default when we can't see heading (conservative)
     if hdg is not None:
         rel = NAV._wrap180(cur - hdg)        # wind source vs bow; >0 → wind from stbd
+        twa = abs(rel)
+        pos = "upwind" if twa < 70 else ("downwind" if twa > 110 else "reach")
         tack = "starboard" if rel > 0 else "port"
-        lift = shift if tack == "starboard" else -shift
-        phase = "lifted" if lift > 1.5 else ("headed" if lift < -1.5 else "even")
+        phase = wp.phase_on_tack(sign, tack, pos) if persistent else "even"
 
-    # favored side
+    # favored side — POINT-OF-SAIL aware (a right shift favours the right of a beat, the left of a run)
     if persistent:
-        favored = "right" if slope > 0 else "left"
-        fav_reason = f"persistent {trend} {abs(round(slope, 1))}°/min"
+        favored = wp.favored_side(sign, pos) or "either"
+        fav_reason = f"persistent shift {abs(round(slope, 1))}°/min"
     else:
         favored = "either"
         fav_reason = f"oscillating ±{round(osc / 2)}° — play the shifts, tack on the headers"
@@ -98,24 +102,16 @@ def get_tactics(route: str = None):
                 leverage = {"nm": round(abs(xte), 2), "side": "right" if xte > 0 else "left",
                             "boatlengths": round(abs(xte) * 6076 / SR33_LEN_FT)}
 
-    # recommendation
-    bits = []
-    if phase == "headed":
-        bits.append(f"Headed {abs(round(shift))}° on {tack} — look for the tack onto the lift.")
-    elif phase == "lifted":
-        bits.append(f"Lifted on {tack} — stay with it.")
-    else:
-        bits.append(f"Even on {tack}.")
-    if favored == "either":
-        bits.append(fav_reason + ".")
-    else:
-        bits.append(f"{favored.capitalize()} side favored ({fav_reason}).")
+    # recommendation — the shared, racer-native shift phrasing (boat-frame first, baseline→now, then
+    # the point-of-sail-aware favoured side), plus leverage.
+    bits = [wp.describe_shift(mean, cur, tack=tack if tack in ("port", "starboard") else None,
+                              pos=pos, persistent=persistent, oscillation_deg=osc)]
     if leverage and leverage["nm"] >= 0.02:
         bits.append(f"{leverage['boatlengths']} BL {leverage['side']} leverage.")
 
     return {
         "available": True, "route": nav.get("route"),
-        "tack": tack, "phase": phase,
+        "tack": tack, "phase": phase, "point_of_sail": pos,
         "wind": {"now": round(cur, 1), "mean_12min": round(mean, 1),
                  "shift_deg": round(shift, 1), "oscillation_deg": round(osc, 1),
                  "trend": trend, "slope_deg_min": round(slope, 2), "persistent": persistent},

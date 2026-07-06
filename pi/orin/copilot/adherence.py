@@ -83,8 +83,6 @@ def evaluate(playbook, snapshot):
     favored = tac.get("favored_side") if has_tac else None     # left | right | either
     osc = _num(wind.get("oscillation_deg"))
     shift = wind.get("shift_deg")
-    trend = wind.get("trend")
-    trend_txt = (trend + " ") if trend and trend != "steady" else ""
 
     based = [f"playbook:{rec_id}"] + ([f"agreement {agree_pct}%"] if agree_pct is not None else [])
 
@@ -124,8 +122,8 @@ def evaluate(playbook, snapshot):
             flip_label = _label(flip_v, favored)
             trig = flip_v.get("what_flips_it") or f"switch to {flip_label}."
             return {**base, "status": "act", "value": f"Switch → {flip_label}",
-                    "sub": f"branch: persistent {trend_txt}shift favors {favored}",
-                    "why": (f"A persistent {trend_txt}shift now favors the {favored} side — against "
+                    "sub": f"branch: persistent shift favors {favored}",
+                    "why": (f"A persistent shift now favors the {favored} side — against "
                             f"the recommended '{rec_label}'. This is the playbook's branch trigger: "
                             + trig),
                     "consider": f"Execute the branch — commit {favored} per variant '{flip_label}'.",
@@ -134,8 +132,8 @@ def evaluate(playbook, snapshot):
                     "what_flips_it": flip_v.get("what_flips_it") or ""}
         # Persistent divergence but no variant aboard for that side — honest watch, can't name a branch.
         return {**base, "status": "watch", "value": f"Off plan: {rec_label}",
-                "sub": f"persistent {trend_txt}shift favors {favored}",
-                "why": (f"A persistent {trend_txt}shift favors the {favored} side, off the recommended "
+                "sub": f"persistent shift favors {favored}",
+                "why": (f"A persistent shift favors the {favored} side, off the recommended "
                         f"'{rec_label}' — but there's no pre-authored variant for that side aboard."),
                 "consider": f"The breeze has gone {favored} against the plan — reassess with the crew.",
                 "clears": "the shift reverses", "based": based + ["get_tactics"]}
@@ -143,8 +141,8 @@ def evaluate(playbook, snapshot):
     # A persistent shift CONFIRMS the recommended side → ON PLAN.
     if persistent and on_rec_side:
         return {**base, "status": "ok", "value": f"On plan: {rec_label}",
-                "sub": f"persistent {trend_txt}shift confirms {favored}",
-                "why": (f"A persistent {trend_txt}shift favors the {favored} side — exactly what the "
+                "sub": f"persistent shift confirms {favored}",
+                "why": (f"A persistent shift favors the {favored} side — exactly what the "
                         f"recommended variant '{rec_label}' plays. Stay committed."),
                 "consider": "Commit to the gameplan side — the shift backs it.",
                 "clears": "—", "based": based + ["get_tactics"]}

@@ -400,20 +400,22 @@ def test_deviation_drift_callout() -> bool:
                  narrate_mod._deviation_callout(dev("ok", xte_nm=0.05)) is None)
 
     c = narrate_mod._drift_callout({"available": True, "status": "act", "drift_twd_deg": 31,
-                                    "drift_dir": "veered", "drift_tws_kn": 4})
+                                    "drift_dir": "right", "ref_twd": 231, "now_twd": 262,
+                                    "drift_tws_kn": 4})
     ok &= _check("act drift → forecast-moved callout grounded in get_drift + fingerprint",
                  c and c["category"] == "drift"
                  and c["grounded_in"] == ["get_drift", "playbook:forecast_fingerprint"]
-                 and "veered ~31" in c["detail"] and "may no longer pay" in c["detail"])
+                 and "shifted right ~31" in c["detail"] and "was 231° now 262°" in c["detail"]
+                 and "may no longer pay" in c["detail"])
     c = narrate_mod._drift_callout({"available": True, "status": "watch", "drift_twd_deg": 18,
-                                    "drift_dir": "backed", "drift_tws_kn": 0})
+                                    "drift_dir": "left", "drift_tws_kn": 0})
     ok &= _check("watch drift → 'Forecast drifting', no premature 'may no longer pay'",
                  c and "drifting" in c["headline"].lower() and "may no longer pay" not in c["detail"])
     ok &= _check("holding (ok) → no drift callout",
                  narrate_mod._drift_callout({"available": True, "status": "ok", "drift_twd_deg": 4}) is None)
 
     snap = {"get_deviation": dev("act", xte_nm=1.2, xte_side="right"),
-            "get_drift": {"available": True, "status": "act", "drift_twd_deg": 30, "drift_dir": "veered"}}
+            "get_drift": {"available": True, "status": "act", "drift_twd_deg": 30, "drift_dir": "right"}}
     cos = narrate_mod.evaluate(snap)
     cats = [x["category"] for x in sorted(cos, key=narrate_mod._sort_key)]
     ok &= _check("evaluate emits both, grounded, deviation sorts before drift",

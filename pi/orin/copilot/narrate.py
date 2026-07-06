@@ -224,9 +224,13 @@ def _tactics_callouts(tac, playbook):
     if not wind.get("persistent"):
         return []
     side = tac.get("favored_side")
-    osc = _num(wind.get("oscillation_deg"))
-    base = f"persistent shift{f', {osc}° swing' if osc else ''}"
-    side_txt = f" — favored side {side}" if side else ""
+    now_t, mean_t = _num(wind.get("now")), _num(wind.get("mean_12min"))
+    # racer-native: state the baseline→now degrees (no veer/back). The favoured side is already
+    # point-of-sail aware from the engine (a right shift favours the right of a beat, left of a run).
+    fromto = f", from {round(mean_t) % 360}° to {round(now_t) % 360}°" if (
+        now_t is not None and mean_t is not None) else ""
+    base = f"persistent shift{fromto}"
+    side_txt = f" — {side} side favored" if side and side != "either" else ""
     v = _variant_for_side(playbook, side)
     if v:
         vid = str(v.get("id") or v.get("name") or "?")
@@ -281,10 +285,13 @@ def _drift_callout(dft):
     if status not in ("watch", "act"):
         return None
     deg = _num(dft.get("drift_twd_deg"))
-    direction = dft.get("drift_dir") or "shifted"
+    direction = dft.get("drift_dir") or "steady"
+    dir_txt = f"shifted {direction}" if direction in ("right", "left") else "moved"
+    ref, now = dft.get("ref_twd"), dft.get("now_twd")
+    fromto = f" (was {ref}° now {now}°)" if (ref is not None and now is not None) else ""
     tws = _num(dft.get("drift_tws_kn"))
     head = "Forecast has moved" if status == "act" else "Forecast drifting"
-    det = f"the breeze the plan assumed has {direction} ~{round(deg)}° since it was frozen"
+    det = f"the breeze the plan assumed has {dir_txt} ~{round(deg)}°{fromto} since it was frozen"
     if tws is not None and abs(tws) >= 2:
         det += f" and changed {'+' if tws >= 0 else '−'}{abs(round(tws))} kts"
     if status == "act":

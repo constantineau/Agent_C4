@@ -37,6 +37,9 @@ _SYSTEM = (
     "or watch, and consistent with that tile's value. Reference only the given tiles (use their key).\n"
     "3. Optionally 'adjust' a tile's status (ok/watch/act) ONLY when the situation clearly warrants "
     "nuance the thresholds miss, each with a one-line reason. Usually adjust nothing.\n"
+    "WIND LANGUAGE: never say 'veer'/'back' — say the wind shifted RIGHT/LEFT, and whenever you "
+    "mention a wind-direction change state the baseline→now in degrees (e.g. 'from 250° to 265°'), "
+    "never a bare delta or current value.\n"
     "Be calm and practical, like a good navigator. Respond with ONLY a JSON object."
 )
 

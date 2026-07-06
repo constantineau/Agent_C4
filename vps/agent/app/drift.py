@@ -81,7 +81,8 @@ def get_drift(route=None):
         diffs.append((dtwd, dtws))
         if worst is None or abs(dtwd) > abs(worst["dtwd"]):
             worst = {"dtwd": round(dtwd), "dtws": round(dtws, 1),
-                     "in_h": round((t - now) / 3600, 1)}
+                     "in_h": round((t - now) / 3600, 1),
+                     "ref_twd": round(p["twd"]) % 360, "now_twd": round(live[1]) % 360}
 
     base = {"race_id": bundle.get("race_id"),
             "built_ago_s": (now - fp["built_at"]) if fp.get("built_at") else None,
@@ -104,16 +105,21 @@ def get_drift(route=None):
     band = max(twd_b, tws_b)
     status = _BANDS[band]
 
-    direction = ("veered" if mean_signed_twd > DIR_TOL_DEG else
-                 "backed" if mean_signed_twd < -DIR_TOL_DEG else "shifted")
-    twd_txt = f"{round(mean_abs_twd)}° {direction}"
+    # compass-shift direction (racer-native, no veer/back). The favoured SIDE is left to the tactical
+    # layers (point-of-sail aware); drift reports the OBSERVATION with the baseline→now degrees.
+    direction = ("right" if mean_signed_twd > DIR_TOL_DEG else
+                 "left" if mean_signed_twd < -DIR_TOL_DEG else "steady")
+    dir_txt = f"shifted {direction}" if direction in ("right", "left") else "moved"
+    twd_txt = f"{dir_txt} ~{round(mean_abs_twd)}°"
+    fromto = (f", was {worst['ref_twd']}° now {worst['now_twd']}°"
+              if worst and "ref_twd" in worst else "")
     tws_txt = (f"{'+' if mean_tws >= 0 else '−'}{abs(round(mean_tws,1))} kn"
                if abs(mean_tws) >= 1 else None)
     based = ["playbook:forecast_fingerprint", "Open-Meteo live (common data)"]
 
     if band == 0:
         value = "Forecast holding"
-        sub = f"{round(mean_abs_twd)}° drift · {len(diffs)} pts"
+        sub = f"~{round(mean_abs_twd)}° drift · {len(diffs)} pts"
         why = (f"The live forecast is within ~{round(mean_abs_twd)}° of what the plan was built on "
                f"across {len(diffs)} route waypoints" + (f" (speed {tws_txt})" if tws_txt else "")
                + " — the wind picture the recommended variant assumes still holds.")
@@ -122,8 +128,8 @@ def get_drift(route=None):
     else:
         lead = "Forecast moved" if band == 2 else "Forecast drifting"
         value = f"{lead} · {twd_txt}"
-        sub = f"{twd_txt}" + (f" · {tws_txt}" if tws_txt else "") + f" · max {round(max_abs_twd)}°"
-        why = (f"Since the plan was frozen the common forecast has {direction} ~{round(mean_abs_twd)}° "
+        sub = f"{twd_txt}{fromto}" + (f" · {tws_txt}" if tws_txt else "")
+        why = (f"Since the plan was frozen the common forecast has {twd_txt}{fromto} "
                f"(worst {worst['dtwd']:+d}° ~{worst['in_h']} h out)"
                + (f" and changed {tws_txt} in strength" if tws_txt else "")
                + (". This is a material move — the recommended variant was optimized for a different "
@@ -139,6 +145,8 @@ def get_drift(route=None):
         "why": why, "consider": consider, "clears": clears, "based": based, "conf": "engine",
         "drift_twd_deg": round(mean_abs_twd, 1), "drift_twd_max_deg": round(max_abs_twd, 1),
         "drift_twd_signed_deg": round(mean_signed_twd, 1), "drift_dir": direction,
+        "ref_twd": (worst.get("ref_twd") if worst else None),
+        "now_twd": (worst.get("now_twd") if worst else None),
         "drift_tws_kn": round(mean_tws, 1), "n_points": len(diffs), "n_future": n_future,
         "worst": worst, "built_ago_s": (round(now - fp["built_at"]) if fp.get("built_at") else None),
         "source": fp.get("source"), "race_id": bundle.get("race_id"),

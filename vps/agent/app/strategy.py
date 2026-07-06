@@ -18,10 +18,9 @@ Source-agnostic: pure composition of `selector` + `fleet` (both already on the 9
 the identical synthesis runs cloud or onboard. It re-fetches nothing with Schmitt state — `selector`
 does the single gather (its `signals` carry the enriched reads); `fleet` is stateless.
 """
+from shared import windphrase as wp
 from . import fleet as fleet_mod, reoptimize as reoptimize_mod, selector as selector_mod, tactics as tactics_mod
 
-# a persistent VEER (TWD rising, clockwise) tends to favour the RIGHT of the beat, a BACK the LEFT.
-_DRIFT_SIDE = {"veered": "right", "backed": "left"}
 _OPP = {"left": "right", "right": "left"}
 
 
@@ -55,7 +54,7 @@ def _concordance(lean, sig, fleet_side):
     dft = sig.get("drift") or {}
     dev = sig.get("deviation") or {}
     if dft.get("status") in ("watch", "act"):
-        votes.append(("forecast", _DRIFT_SIDE.get(dft.get("dir"))))
+        votes.append(("forecast", dft.get("favored")))   # point-of-sail-aware, set by the selector
     if dev.get("status") in ("watch", "act"):
         votes.append(("deviation", dev.get("side")))
     if fleet_side:
@@ -96,24 +95,21 @@ def _picture(sig, flt, conc):
     out = []
     sh = sig.get("shift") or {}
     if sh.get("favored_side") or sh.get("persistent") is not None:
-        osc = sh.get("oscillation_deg")
-        if sh.get("persistent") and sh.get("favored_side") in ("left", "right"):
-            read = f"persistent {sh.get('trend') or ''} shift favouring the {sh['favored_side']} side".replace("  ", " ")
-        elif osc:
-            read = f"oscillating breeze ±{round(osc / 2)}°, no persistent shift"
-        else:
-            read = "breeze steady, no persistent shift"
+        read = wp.describe_shift(sh.get("base_twd") or 0, sh.get("now_twd") or 0,
+                                 tack=sh.get("tack"), pos=sh.get("pos"),
+                                 persistent=bool(sh.get("persistent")),
+                                 oscillation_deg=sh.get("oscillation_deg"))
         out.append({"signal": "shift", "read": read, "grounded_in": ["get_tactics"],
                     "confidence": "high" if sh.get("persistent") else "med"})
 
     dft = sig.get("drift") or {}
     if dft.get("status") in ("watch", "act"):
-        tws = dft.get("tws_kn")
-        twstxt = f", {'+' if (tws or 0) >= 0 else ''}{round(tws, 1)} kn" if tws else ""
-        out.append({"signal": "forecast",
-                    "read": f"the forecast has {dft.get('dir')} ~{round(dft.get('deg') or 0)}° "
-                            f"since the plan was frozen{twstxt}",
-                    "grounded_in": ["get_drift"],
+        if dft.get("ref_twd") is not None and dft.get("now_twd") is not None:
+            read = wp.describe_drift(dft["ref_twd"], dft["now_twd"],
+                                     tws_change_kn=dft.get("tws_kn"), pos=dft.get("pos"))
+        else:   # fallback if the from→to pair isn't carried (e.g. an older signal)
+            read = f"forecast has shifted {dft.get('dir', '')} ~{round(dft.get('deg') or 0)}° since the plan was frozen"
+        out.append({"signal": "forecast", "read": read, "grounded_in": ["get_drift"],
                     "confidence": "med" if dft.get("status") == "act" else "low"})
 
     dev = sig.get("deviation") or {}
@@ -263,8 +259,10 @@ def get_strategy_signals(route=None):
         if tac.get("available"):
             w = tac.get("wind") or {}
             sig["shift"] = {"persistent": bool(w.get("persistent")),
-                            "favored_side": tac.get("favored_side"), "trend": w.get("trend"),
-                            "oscillation_deg": w.get("oscillation_deg")}
+                            "favored_side": tac.get("favored_side"),
+                            "pos": tac.get("point_of_sail", "upwind"),
+                            "base_twd": w.get("mean_12min"), "now_twd": w.get("now"),
+                            "tack": tac.get("tack"), "oscillation_deg": w.get("oscillation_deg")}
     have_shift = "shift" in sig
     # Nothing to synthesise only when there's genuinely no signal at all (no playbook, no fleet, no
     # tactical read).

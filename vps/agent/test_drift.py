@@ -40,22 +40,22 @@ check("status ok", r["status"] == "ok")
 check("~0° drift", r["drift_twd_deg"] < 1.0)
 check("compared all 4 future points", r["n_points"] == 4)
 
-# --- a 22° veer (clockwise) → watch, direction veered -----------------------------------------
+# --- a 22° right shift (clockwise) → watch, direction right -----------------------------------------
 print("22° veer:")
 drift.reset_state(); use_bundle(fp_points(200, 12)); set_live(12, 222)
 r = drift.get_drift()
 print("  ", r["status"], "|", r["value"], "| signed", r["drift_twd_signed_deg"], "| dir", r["drift_dir"])
 check("status watch (past consider band)", r["status"] == "watch")
 check("~22° drift", abs(r["drift_twd_deg"] - 22) < 1)
-check("veered (clockwise, +)", r["drift_dir"] == "veered" and r["drift_twd_signed_deg"] > 0)
+check("right shift (clockwise, +)", r["drift_dir"] == "right" and r["drift_twd_signed_deg"] > 0)
 
-# --- a 35° back (counter-clockwise) → act, direction backed -----------------------------------
+# --- a 35° left shift (counter-clockwise) → act, direction left -----------------------------------
 print("35° back:")
 drift.reset_state(); use_bundle(fp_points(200, 12)); set_live(12, 165)
 r = drift.get_drift()
 print("  ", r["status"], "|", r["value"], "| dir", r["drift_dir"])
 check("status act (past commit band)", r["status"] == "act")
-check("backed (counter-clockwise, −)", r["drift_dir"] == "backed" and r["drift_twd_signed_deg"] < 0)
+check("left shift (counter-clockwise, −)", r["drift_dir"] == "left" and r["drift_twd_signed_deg"] < 0)
 check("value says forecast moved", "moved" in r["value"].lower())
 
 # --- wraparound: ref 350°, live 010° = a 20° veer, not 340° -----------------------------------

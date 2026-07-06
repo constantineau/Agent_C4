@@ -72,7 +72,8 @@ def _system_prompt(pb: playbook_mod.Playbook) -> str:
         "it. The playbook is your strong default — if you recommend departing from it, say so plainly.\n"
         "3. You are advisory, never the sole authority. Frame recommendations as options with "
         "confidence, not commands.\n"
-        "4. Only the provided tools exist. Do not claim to have done anything else.\n\n"
+        "4. Only the provided tools exist. Do not claim to have done anything else.\n"
+        "5. " + _WIND_VOCAB + "\n"
         + pb.digest() + "\n\n"
         "When you have enough facts, STOP calling tools and reply with ONLY a JSON object, no "
         "prose, with exactly this shape:\n"
@@ -280,8 +281,20 @@ _STRATEGY_SCHEMA = {
 }
 
 
+# How to talk about wind — applied to every crew-facing line the copilot writes.
+_WIND_VOCAB = (
+    "WIND LANGUAGE: never say 'veer' or 'back'. Say the wind shifted RIGHT or LEFT. Whenever you "
+    "mention a change in wind direction, ALWAYS state the baseline and the new value in degrees "
+    "(e.g. 'shifted right, from 250° to 265°' or 'the forecast was 310°, now 315°') — never a bare "
+    "delta or a bare current value. Lead with the boat-frame effect when the tack is known (LIFTED / "
+    "HEADED on port/starboard). The favoured side is point-of-sail aware: a right shift favours the "
+    "RIGHT of a beat but the LEFT of a run. Reuse the engine's numbers; don't invent them.\n"
+)
+
+
 def _strategy_prompt(pb: playbook_mod.Playbook) -> str:
     return (
+        _WIND_VOCAB + "\n"
         "You are the SR33's ONBOARD tactician. The engine has ALREADY computed the strategic picture "
         "below — the numbers, the per-signal reads, and the concordance are FIXED FACTS; reuse them, "
         "do not change them or invent new numbers.\n"

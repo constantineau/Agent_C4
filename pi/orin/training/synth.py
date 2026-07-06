@@ -12,12 +12,24 @@ real Tier-1 engine WOULD produce for the given synthetic signals. (Real snapshot
 them from a live `/strategy`, use the engine directly — see gen_snapshots.py.) If strategy.py's
 helpers change, re-sync the copies below.
 """
+import os
 import random
+import sys
+
+# Reach the repo-root `shared` package so the training corpus speaks the EXACT language the engine
+# emits (shared/windphrase.py is the single source of truth). Running `python3 -m training.<x>` from
+# pi/orin doesn't put the repo root on the path, so add it.
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+from shared import windphrase as wp   # noqa: E402
 
 # =============================================================================================
 # VERBATIM COPIES from vps/agent/app/strategy.py (pure helpers) — keep in sync.
 # =============================================================================================
-_DRIFT_SIDE = {"veered": "right", "backed": "left"}
+# compass-shift direction -> signed rotation (+1 = shifted RIGHT/clockwise, -1 = LEFT). The favoured
+# SIDE is derived per-leg via wp.favored_side (point-of-sail aware) — never hardcoded here.
+_DRIFT_SIGN = {"right": 1, "left": -1, "veered": 1, "backed": -1}
 _OPP = {"left": "right", "right": "left"}
 
 
@@ -44,7 +56,7 @@ def _concordance(lean, sig, fleet_side):
     dft = sig.get("drift") or {}
     dev = sig.get("deviation") or {}
     if dft.get("status") in ("watch", "act"):
-        votes.append(("forecast", _DRIFT_SIDE.get(dft.get("dir"))))
+        votes.append(("forecast", dft.get("favored")))   # point-of-sail-aware, set in _build_sig
     if dev.get("status") in ("watch", "act"):
         votes.append(("deviation", dev.get("side")))
     if fleet_side:
@@ -82,24 +94,18 @@ def _picture(sig, flt, conc):
     out = []
     sh = sig.get("shift") or {}
     if sh.get("favored_side") or sh.get("persistent") is not None:
-        osc = sh.get("oscillation_deg")
-        if sh.get("persistent") and sh.get("favored_side") in ("left", "right"):
-            read = f"persistent {sh.get('trend') or ''} shift favouring the {sh['favored_side']} side".replace("  ", " ")
-        elif osc:
-            read = f"oscillating breeze ±{round(osc / 2)}°, no persistent shift"
-        else:
-            read = "breeze steady, no persistent shift"
+        read = wp.describe_shift(sh.get("base_twd", 0), sh.get("now_twd", 0),
+                                 tack=sh.get("tack"), pos=sh.get("pos"),
+                                 persistent=bool(sh.get("persistent")),
+                                 oscillation_deg=sh.get("oscillation_deg"))
         out.append({"signal": "shift", "read": read, "grounded_in": ["get_tactics"],
                     "confidence": "high" if sh.get("persistent") else "med"})
 
     dft = sig.get("drift") or {}
     if dft.get("status") in ("watch", "act"):
-        tws = dft.get("tws_kn")
-        twstxt = f", {'+' if (tws or 0) >= 0 else ''}{round(tws, 1)} kn" if tws else ""
-        out.append({"signal": "forecast",
-                    "read": f"the forecast has {dft.get('dir')} ~{round(dft.get('deg') or 0)}° "
-                            f"since the plan was frozen{twstxt}",
-                    "grounded_in": ["get_drift"],
+        read = wp.describe_drift(dft.get("ref_twd", 0), dft.get("now_twd", 0),
+                                 tws_change_kn=dft.get("tws_kn"), pos=dft.get("pos"))
+        out.append({"signal": "forecast", "read": read, "grounded_in": ["get_drift"],
                     "confidence": "med" if dft.get("status") == "act" else "low"})
 
     dev = sig.get("deviation") or {}
@@ -217,23 +223,39 @@ _RIVAL_NAMES = ["Bravado", "Illuminati", "Windquest", "Natalie J", "Meridian X"]
 
 
 def _build_sig(sc: dict) -> dict:
-    """Synthetic `signals` dict as selector/tactics would carry."""
+    """Synthetic `signals` dict as selector/tactics would carry — now with CONCRETE wind numbers
+    (baseline TWD -> now TWD, current tack) so the reads carry the from->to degrees, and with the
+    favoured side derived POINT-OF-SAIL aware from the actual leg (never hardcoded)."""
     sig = {}
+    i = sc.get("_i", 0)
+    pos = wp.point_of_sail((sc.get("cond") or {}).get("leg"))
+    base = 200 + (i * 17) % 90              # on-water baseline TWD (deterministic, varied)
+    mag = 12 + (i * 5) % 8                  # 12..19° persistent shift
+    tack = ("port", "starboard")[i % 2]
+
     shift = sc.get("shift")
-    if shift == "persist_left":
-        sig["shift"] = {"persistent": True, "favored_side": "left", "trend": "backing", "oscillation_deg": 0}
-    elif shift == "persist_right":
-        sig["shift"] = {"persistent": True, "favored_side": "right", "trend": "veering", "oscillation_deg": 0}
+    if shift in ("persist_left", "persist_right"):
+        sign = 1 if shift == "persist_right" else -1
+        now = base + sign * mag
+        sig["shift"] = {"persistent": True, "favored_side": wp.favored_side(sign, pos),
+                        "base_twd": base, "now_twd": now, "tack": tack, "pos": pos,
+                        "oscillation_deg": 0}
     elif shift == "osc":
-        sig["shift"] = {"persistent": False, "favored_side": None, "trend": None, "oscillation_deg": 16}
+        sig["shift"] = {"persistent": False, "favored_side": None, "base_twd": base,
+                        "now_twd": base, "tack": tack, "pos": pos, "oscillation_deg": 16}
     elif shift == "steady":
-        sig["shift"] = {"persistent": False, "favored_side": None, "trend": None, "oscillation_deg": 0}
+        sig["shift"] = {"persistent": False, "favored_side": None, "base_twd": base,
+                        "now_twd": base, "tack": tack, "pos": pos, "oscillation_deg": 0}
 
     drift = sc.get("drift")
     if drift:
         dir_, status = drift
-        sig["drift"] = {"status": status, "dir": dir_, "deg": 22 if status == "watch" else 34,
-                        "tws_kn": 3.0 if status == "watch" else 5.0}
+        deg = 22 if status == "watch" else 34
+        sign = _DRIFT_SIGN.get(dir_, 1)
+        ref = 200 + (i * 23) % 90           # frozen forecast direction the plan rested on
+        sig["drift"] = {"status": status, "deg": deg, "tws_kn": 3.0 if status == "watch" else 5.0,
+                        "ref_twd": ref, "now_twd": ref + sign * deg, "pos": pos,
+                        "favored": wp.favored_side(sign, pos)}
     dev = sc.get("deviation")
     if dev:
         side, status = dev
@@ -353,16 +375,16 @@ def _cond_for(sc: dict, i: int) -> dict:
 _CURATED = [
     # strong concordance switch (all agree right) — should be a confident SWITCH
     {"tag": "strong_switch_right", "has_playbook": True, "shift": "persist_right",
-     "drift": ("veered", "act"), "deviation": ("right", "watch"), "fleet": "rival_right"},
-    # SPLIT: shift left but forecast veered right — the hardest call
+     "drift": ("right", "act"), "deviation": ("right", "watch"), "fleet": "rival_right"},
+    # SPLIT: shift left but forecast shifted right — the hardest call
     {"tag": "split_shift_vs_drift", "has_playbook": True, "shift": "persist_left",
-     "drift": ("veered", "act"), "deviation": None, "fleet": None},
+     "drift": ("right", "act"), "deviation": None, "fleet": None},
     # SPLIT: shift right but the fleet is committed left
     {"tag": "split_shift_vs_fleet", "has_playbook": True, "shift": "persist_right",
      "drift": None, "deviation": None, "fleet": "rival_left"},
     # off-script: persistent favoured side with NO variant → departs
     {"tag": "offscript_no_variant", "has_playbook": True, "shift": "persist_left",
-     "variant_for_side": False, "drift": ("backed", "act"), "deviation": ("left", "act"), "fleet": None},
+     "variant_for_side": False, "drift": ("left", "act"), "deviation": ("left", "act"), "fleet": None},
     # hold with a rival ahead — press if you have leverage
     {"tag": "hold_rival_ahead", "has_playbook": True, "shift": "osc",
      "drift": None, "deviation": None, "fleet": "ahead"},
@@ -371,7 +393,7 @@ _CURATED = [
      "drift": None, "deviation": None, "fleet": None},
     # weak: deviation + fleet agree a side with no persistent shift yet
     {"tag": "weak_cluster_right", "has_playbook": True, "shift": "steady",
-     "drift": ("veered", "watch"), "deviation": ("right", "watch"), "fleet": "rival_right"},
+     "drift": ("right", "watch"), "deviation": ("right", "watch"), "fleet": "rival_right"},
     # no playbook, persistent shift — sail your own read to the side
     {"tag": "noplaybook_persist", "has_playbook": False, "shift": "persist_right",
      "drift": None, "deviation": None, "fleet": None},
@@ -380,7 +402,7 @@ _CURATED = [
      "drift": None, "deviation": None, "fleet": "behind"},
     # switch but split by deviation — confirm before committing
     {"tag": "switch_split_dev", "has_playbook": True, "shift": "persist_right",
-     "drift": ("veered", "watch"), "deviation": ("left", "act"), "fleet": None},
+     "drift": ("right", "watch"), "deviation": ("left", "act"), "fleet": None},
 ]
 
 
@@ -393,7 +415,7 @@ def scenarios(random_n: int, seed: int) -> list[dict]:
 
     rng = random.Random(seed)
     shifts = ["persist_left", "persist_right", "osc", "steady"]
-    drifts = [None, ("veered", "watch"), ("veered", "act"), ("backed", "watch"), ("backed", "act")]
+    drifts = [None, ("right", "watch"), ("right", "act"), ("left", "watch"), ("left", "act")]
     devs = [None, ("left", "watch"), ("left", "act"), ("right", "watch"), ("right", "act")]
     fleets = [None, "rival_left", "rival_right", "ahead", "behind"]
     for j in range(random_n):

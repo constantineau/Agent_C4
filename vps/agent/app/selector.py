@@ -21,6 +21,7 @@ confidence/urgency) and, on their own, raise a "reassess" caution. FUZZY (perfla
 first-class output from how many signals concur; the wind trigger keeps the engine's own persistence
 hysteresis so it doesn't flip-flop.
 """
+from shared import windphrase as wp
 from . import deviation, drift as drift_mod, tactics
 
 
@@ -70,9 +71,9 @@ def _na(note):
             "consider": "—", "based": [], "conf": "engine"}
 
 
-# a persistent VEER (clockwise, TWD rising) tends to favour the RIGHT of the beat, a BACK the LEFT —
-# used only as soft concordance between the forecast-drift direction and the on-water favoured side.
-_DRIFT_SIDE = {"veered": "right", "backed": "left"}
+# compass-shift direction of the forecast drift -> signed rotation (+1 = shifted RIGHT/clockwise).
+# The favoured SIDE it implies is point-of-sail aware (wp.favored_side), computed against the leg.
+_DRIFT_SIGN = {"right": 1, "left": -1, "veered": 1, "backed": -1}
 
 
 def get_selector(route=None):
@@ -96,16 +97,23 @@ def get_selector(route=None):
     wind = (tac.get("wind") or {}) if tac.get("available") else {}
     persistent = bool(wind.get("persistent"))
     favored = tac.get("favored_side") if tac.get("available") else None    # left | right | either
-    trend = wind.get("trend")
-    trend_txt = (trend + " ") if trend and trend not in (None, "steady") else ""
+    pos = tac.get("point_of_sail", "upwind") if tac.get("available") else "upwind"
 
     dev_ok = dev.get("available")
     dft_ok = dft.get("available")
     dev_status = dev.get("status") if dev_ok else None
     dft_status = dft.get("status") if dft_ok else None
+    # the forecast-drift's implied favoured side, POINT-OF-SAIL aware (right shift → right upwind /
+    # left downwind), so its concordance with the on-water read is correct on every leg.
+    drift_sign = _DRIFT_SIGN.get(dft.get("drift_dir")) if dft_ok else None
+    drift_favored = wp.favored_side(drift_sign, pos) if drift_sign else None
+    drift_ref = dft.get("ref_twd") if dft_ok else None
+    drift_now = dft.get("now_twd") if dft_ok else None
 
     signals = {
-        "shift": {"persistent": persistent, "favored_side": favored, "trend": trend,
+        "shift": {"persistent": persistent, "favored_side": favored, "pos": pos,
+                  "base_twd": wind.get("mean_12min"), "now_twd": wind.get("now"),
+                  "tack": tac.get("tack") if tac.get("available") else None,
                   "oscillation_deg": wind.get("oscillation_deg")},
         "deviation": {"status": dev_status, "side": dev.get("xte_side") if dev_ok else None,
                       "variant": dev.get("variant") if dev_ok else None,
@@ -113,7 +121,8 @@ def get_selector(route=None):
                       "time_behind_s": dev.get("time_behind_s") if dev_ok else None},
         "drift": {"status": dft_status, "dir": dft.get("drift_dir") if dft_ok else None,
                   "deg": dft.get("drift_twd_deg") if dft_ok else None,
-                  "tws_kn": dft.get("drift_tws_kn") if dft_ok else None},
+                  "tws_kn": dft.get("drift_tws_kn") if dft_ok else None,
+                  "ref_twd": drift_ref, "now_twd": drift_now, "pos": pos, "favored": drift_favored},
     }
     agreement = bundle.get("agreement")
     base = {"available": True, "recommended": rec_id, "recommended_label": rec_label,
@@ -127,8 +136,8 @@ def get_selector(route=None):
         target = _variant_for_side(bundle, favored)
         driven = ["get_tactics"]
         concur = 0
-        # forecast-drift concurs if the forecast has moved the same way (veer→right / back→left)
-        if dft_status in ("watch", "act") and _DRIFT_SIDE.get(dft.get("drift_dir")) == favored:
+        # forecast-drift concurs if it implies the SAME favoured side (point-of-sail aware)
+        if dft_status in ("watch", "act") and drift_favored == favored:
             driven.append("get_drift"); concur += 1
         # route-deviation concurs if we're ALREADY set up to that side (XTE on the favoured hand)
         if dev_status in ("watch", "act") and dev.get("xte_side") == favored:
@@ -140,10 +149,10 @@ def get_selector(route=None):
             flip = target.get("what_flips_it") or ""
             extra = []
             if "get_drift" in driven:
-                extra.append(f"the forecast has {dft.get('drift_dir')} ~{round(dft.get('drift_twd_deg', 0))}° the same way")
+                extra.append(f"the forecast has shifted {dft.get('drift_dir')} ~{round(dft.get('drift_twd_deg', 0))}° the same way")
             if "get_deviation" in driven:
                 extra.append(f"you're already working the {favored} side ({dev.get('xte_nm')} nm {favored})")
-            why = (f"A persistent {trend_txt}shift now favours the {favored} side — against the "
+            why = (f"A persistent shift now favours the {favored} side — against the "
                    f"recommended '{rec_label}'. That's the playbook's branch trigger"
                    + (f": {flip}" if flip else ".")
                    + (" Reinforced: " + "; ".join(extra) + "." if extra else ""))
@@ -164,7 +173,7 @@ def get_selector(route=None):
                 "target_variant": None, "target_label": None,
                 "value": f"Off-script: sail {favored}", "driven_by": driven,
                 "confidence": round(confidence, 2), "confidence_label": _conf_label(confidence),
-                "why": (f"A persistent {trend_txt}shift favours the {favored} side, but there is NO "
+                "why": (f"A persistent shift favours the {favored} side, but there is NO "
                         f"pre-authored variant for that side aboard — you're off the playbook."),
                 "consider": (f"The breeze has committed {favored} and the plan has no branch for it — "
                              "sail your own best angle to that side and flag it (onboard re-optimize "
@@ -177,7 +186,7 @@ def get_selector(route=None):
                 "target_variant": rec_id, "target_label": rec_label,
                 "value": f"Hold: {rec_label}", "driven_by": ["get_tactics"],
                 "confidence": 0.75, "confidence_label": "high",
-                "why": (f"A persistent {trend_txt}shift favours the {favored} side — exactly what the "
+                "why": (f"A persistent shift favours the {favored} side — exactly what the "
                         f"recommended '{rec_label}' plays. Stay committed."),
                 "consider": "Commit to the gameplan side — the shift backs it.",
                 "clears": "—", "based": ["get_tactics"]}
