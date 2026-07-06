@@ -24,6 +24,23 @@ app = FastAPI(title="C4 Strategy-LoRA labeling")
 _STATIC = os.path.join(os.path.dirname(__file__), "static")
 
 
+@app.middleware("http")
+async def _no_store_api(request, call_next):
+    """Never let a browser/proxy cache an /api/* response — a stale cached `next` (e.g. a
+    done:true from a deploy window with no corpus loaded) would strand a labeler on the
+    'All done' screen that a hard refresh can't clear."""
+    resp = await call_next(request)
+    p = request.url.path
+    # no-store the API *and* the HTML shell: the shell carries versioned ?v= asset URLs, so it must
+    # never itself be cached (esp. on iPad Safari, which has no hard-refresh) or the new JS/CSS never
+    # loads. Versioned /static/*.js|css stay cacheable — the ?v bump is the cache key.
+    if p.startswith("/api/") or p == "/" or p.endswith(".html"):
+        resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        resp.headers["Pragma"] = "no-cache"
+        resp.headers["Expires"] = "0"
+    return resp
+
+
 # --- request models --------------------------------------------------------------------------
 class LoginReq(BaseModel):
     name: str

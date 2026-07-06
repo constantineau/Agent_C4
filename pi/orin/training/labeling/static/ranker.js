@@ -87,7 +87,7 @@
 
   function loadNext() {
     banner("");
-    get("api/next?labeler_id=" + encodeURIComponent(session.labeler_id)).then(function (res) {
+    get("api/next?labeler_id=" + encodeURIComponent(session.labeler_id) + "&_=" + Date.now()).then(function (res) {
       if (!res.ok) {
         if (res.status === 400) { signOut(); return; }  // bad/expired labeler_id
         banner((res.data && res.data.detail) || "Could not load the next task.");
@@ -300,11 +300,32 @@
   function showDone(d) {
     showView("done");
     var p = d.progress || {};
+    var myDone = d.my_done || 0;
+    var totalSnaps = p.snapshots || 0;
+    // Only celebrate a genuine finish. my_done==0 means this labeler ranked nothing —
+    // either the corpus isn't loaded yet (totalSnaps==0) or every snapshot is already
+    // over-covered by others. Don't tell them "your rankings are in" when they aren't.
+    if (myDone === 0) {
+      if (totalSnaps === 0) {
+        $("doneTitle").textContent = "Nothing to rank yet";
+        $("doneMsg").textContent =
+          "The task set isn't loaded on the server right now. Nothing was lost — check back shortly.";
+      } else {
+        $("doneTitle").textContent = "No tasks for you right now";
+        $("doneMsg").textContent =
+          "Every scenario already has enough rankings from other sailors. Thanks for stopping by!";
+      }
+      $("doneRetry").hidden = false;
+    } else {
+      $("doneTitle").textContent = "All done — thank you!";
+      $("doneMsg").textContent = "Your rankings are in. Nice work.";
+      $("doneRetry").hidden = true;
+    }
     $("doneProgress").innerHTML =
-      stat(d.my_done || 0, "my rankings") +
-      stat((p.covered || 0) + "/" + (p.snapshots || 0), "snapshots covered") +
+      stat(myDone, "my rankings") +
+      stat((p.covered || 0) + "/" + totalSnaps, "snapshots covered") +
       stat((p.double_labeled || 0) + "/" + (p.overlap_target || 0), "overlap / target") +
-      stat(p.snapshots || 0, "total snapshots");
+      stat(totalSnaps, "total snapshots");
   }
   function stat(n, l) {
     return '<div class="stat"><div class="n">' + esc(n) + '</div><div class="l">' + esc(l) + "</div></div>";
@@ -314,9 +335,15 @@
   $("loginBtn").addEventListener("click", doLogin);
   $("loginPw").addEventListener("keydown", function (e) { if (e.key === "Enter") doLogin(); });
   $("loginName").addEventListener("keydown", function (e) { if (e.key === "Enter") $("loginPw").focus(); });
-  $("signout").addEventListener("click", signOut);
-  $("doneSignout").addEventListener("click", signOut);
-  $("submitBtn").addEventListener("click", submit);
+  function on(id, ev, fn) { var el = $(id); if (el) el.addEventListener(ev, fn); }
+  on("signout", "click", signOut);
+  on("doneSignout", "click", signOut);
+  on("doneRetry", "click", function () {
+    if (!session) { showView("login"); return; }
+    showView("ranker");
+    loadNext();
+  });
+  on("submitBtn", "click", submit);
 
   // auto-resume from a stored session
   (function boot() {

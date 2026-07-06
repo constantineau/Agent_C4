@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <base href="./" />
 <title>C4 Tactics Labeling</title>
-<link rel="stylesheet" href="static/ranker.css" />
+<link rel="stylesheet" href="static/ranker.css?v=4" />
 </head>
 <body>
 
@@ -78,13 +78,14 @@
 <!-- ===== DONE VIEW ===== -->
 <div id="done" class="done" hidden>
   <div class="donebox">
-    <h1>All done &mdash; thank you!</h1>
-    <p>Your rankings are in. Nice work.</p>
+    <h1 id="doneTitle">All done &mdash; thank you!</h1>
+    <p id="doneMsg">Your rankings are in. Nice work.</p>
     <div id="doneProgress" class="doneprog"></div>
+    <button id="doneRetry" class="retry-btn" hidden>Check again</button>
     <a id="doneSignout" href="#" class="signout-link">sign out</a>
   </div>
 </div>
 
-<script src="static/ranker.js"></script>
+<script src="static/ranker.js?v=4"></script>
 </body>
 </html>
