@@ -32,6 +32,9 @@ TEACHER_MAX_TOKENS = int(os.environ.get("TRAIN_TEACHER_MAX_TOKENS", "1024"))
 
 # --- labeling app ----------------------------------------------------------------------------
 LABEL_PORT = int(os.environ.get("TRAIN_LABEL_PORT", "8400"))
+# Bind localhost by default — nginx fronts it (lab.racertracer.net/training/). Never expose :8400
+# directly on a shared VM.
+LABEL_HOST = os.environ.get("TRAIN_LABEL_HOST", "127.0.0.1")
 # Shared team password (like the Lab). Set a real one in any hosted deployment.
 LABEL_PASSWORD = os.environ.get("TRAIN_LABEL_PASSWORD", "label-dev")
 # Fraction of snapshots double-labeled to measure inter-rater agreement (the pilot gate).

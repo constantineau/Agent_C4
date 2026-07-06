@@ -83,6 +83,28 @@ python3 -m training.smoke
 ```
 Runs the whole flywheel on a throwaway DB with two simulated labelers and asserts it all connects.
 
+## Hosting — `lab.racertracer.net/training/` (live)
+
+The ranker is deployed as a sub-menu on the Lab domain (shared VM). The labeling web app needs **no
+`copilot` at runtime** (only the offline generation scripts do), so it runs as its own lightweight
+standing service and is proxied under `/training/`:
+
+- **Service:** `pi/systemd/c4-labeling.service` runs `python3 -m training.labeling.app` from the repo
+  working copy, bound to `127.0.0.1:8400`, password `CAN100` (same as the Lab). Reboot-persistent.
+  Install: `sudo cp pi/systemd/c4-labeling.service /etc/systemd/system/ && sudo systemctl daemon-reload
+  && sudo systemctl enable --now c4-labeling`. Data + labels live under `pi/orin/training/data/`
+  (on the host FS — easy to back up; **don't delete `data/labels.sqlite`**, it's the sailors' work).
+- **nginx:** a self-contained block on the `lab.racertracer.net` vhost
+  (`/etc/nginx/sites-available/lab`, NOT in the repo): `location /training/ { proxy_pass
+  http://127.0.0.1:8400/; ... }` (trailing slash strips the prefix) + `location = /training { return
+  301 /training/; }`. The app uses relative URLs + `<base href="./">` so it works under the subpath.
+- **Lab nav:** a `Labeling ↗` link in `vps/lab/web/index.html` (baked into the Lab image — a nav
+  change needs `docker compose -f compose.dev.yml build lab && up -d lab`).
+
+To refresh the corpus the sailors see (e.g. after a rubric/scenario change), regenerate on the host and
+restart the service: `python3 -m training.gen_snapshots && python3 -m training.gen_candidates &&
+sudo systemctl restart c4-labeling`.
+
 ## The pilot protocol (Plan §7)
 
 1. Generate ~30–50 snapshots (`gen_snapshots`; trim the corpus or lower `TRAIN_SYNTH_RANDOM_N`).

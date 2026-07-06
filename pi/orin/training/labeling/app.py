@@ -125,7 +125,7 @@ def main():
     import uvicorn
     print(f"labeling app on http://127.0.0.1:{config.LABEL_PORT}  (team password: "
           f"{'set via TRAIN_LABEL_PASSWORD' if config.LABEL_PASSWORD != 'label-dev' else 'label-dev'})")
-    uvicorn.run(app, host="0.0.0.0", port=config.LABEL_PORT)
+    uvicorn.run(app, host=config.LABEL_HOST, port=config.LABEL_PORT)
 
 
 if __name__ == "__main__":

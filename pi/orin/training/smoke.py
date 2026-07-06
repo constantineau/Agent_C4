@@ -20,6 +20,7 @@ def main():
     config.EVAL_REPORT = os.path.join(tmp, "eval_report.json")
     config.SNAPSHOTS = os.path.join(tmp, "snapshots.jsonl")
     config.CANDIDATES = os.path.join(tmp, "candidates.jsonl")
+    config.SYNTH_RANDOM_N = 40   # pin so the smoke corpus is fixed regardless of ambient env
 
     # 1) snapshots (synthetic) + 2) candidates (offline: deterministic + perturbed)
     from . import gen_snapshots, gen_candidates

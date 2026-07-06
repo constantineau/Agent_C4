@@ -1,0 +1,27 @@
+# Standing service for the strategy-LoRA labeling app (Phase-0 pilot).
+# Serves the expert-sailor ranker at lab.racertracer.net/training/ (nginx proxies /training/ ->
+# 127.0.0.1:8400 and strips the prefix; the app uses relative URLs + <base href>). Runs from the
+# repo working copy on the shared VM — the pipeline needs no copilot at runtime, just the training
+# package + the generated data/ + labels sqlite (all under pi/orin/training/data).
+#
+# Install:
+#   sudo cp pi/systemd/c4-labeling.service /etc/systemd/system/c4-labeling.service
+#   sudo systemctl daemon-reload && sudo systemctl enable --now c4-labeling
+#   curl -s localhost:8400/api/health
+[Unit]
+Description=C4 strategy-LoRA labeling app (lab.racertracer.net/training)
+After=network.target
+
+[Service]
+Type=simple
+User=constantineau
+WorkingDirectory=/home/constantineau/Agent_C4/pi/orin
+Environment=TRAIN_LABEL_HOST=127.0.0.1
+Environment=TRAIN_LABEL_PORT=8400
+Environment=TRAIN_LABEL_PASSWORD=CAN100
+ExecStart=/usr/bin/python3 -m training.labeling.app
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

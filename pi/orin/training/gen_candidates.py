@@ -24,8 +24,16 @@ from copilot import playbook as playbook_mod
 from copilot.llm import LLMClient, LLMUnavailable
 
 
-def _seed(digest: dict) -> str:
-    return ("STRATEGIC PICTURE (engine-computed facts — reuse these, invent nothing):\n"
+def _seed(snap: dict) -> str:
+    digest = snap["digest"]
+    # State the playbook status authoritatively (synthetic snapshots carry no bundle, so the system
+    # prompt's playbook digest can't reflect it — without this an LLM may say "no gameplan" on a
+    # playbook-aboard case and contradict the situation the sailor sees).
+    has_pb = (snap.get("scenario") or {}).get("has_playbook", True)
+    status = ("PLAYBOOK STATUS: a frozen gameplan IS aboard for this leg (pre-authored side variants "
+              "exist to switch between) — treat this as fact.\n" if has_pb else
+              "PLAYBOOK STATUS: NO gameplan is aboard (practice / no frozen plan) — treat this as fact.\n")
+    return (status + "STRATEGIC PICTURE (engine-computed facts — reuse these, invent nothing):\n"
             + json.dumps({"assessment": digest.get("assessment"),
                           "picture": digest.get("picture"),
                           "concordance": digest.get("concordance"),
@@ -84,7 +92,7 @@ def _base(snap: dict, llm: LLMClient, n: int) -> list[dict]:
     d = snap["digest"]
     pb = playbook_mod.load()
     system = cp._strategy_prompt(pb)
-    seed = _seed(d)
+    seed = _seed(snap)
     out = []
     for i in range(n):
         try:
@@ -109,7 +117,7 @@ def _base(snap: dict, llm: LLMClient, n: int) -> list[dict]:
 def _opus(snap: dict) -> dict | None:
     d = snap["digest"]
     pb = playbook_mod.load()
-    obj = teacher.generate(cp._strategy_prompt(pb), _seed(d))
+    obj = teacher.generate(cp._strategy_prompt(pb), _seed(snap))
     if not obj:
         return None
     return schema.make_candidate(snap, "opus", (obj.get("assessment") or "").strip(),

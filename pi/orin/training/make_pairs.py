@@ -25,6 +25,8 @@ from .labeling import store
 from copilot import copilot as cp
 from copilot import playbook as playbook_mod
 
+from .gen_candidates import _seed   # reuse the EXACT generation seed (playbook status + picture)
+
 
 def _is_holdout(snapshot_id: str) -> bool:
     """Deterministic hash bucket → stable holdout membership regardless of label order."""
@@ -32,14 +34,10 @@ def _is_holdout(snapshot_id: str) -> bool:
     return (h % 1000) / 1000.0 < config.EVAL_HOLDOUT_FRAC
 
 
-def _prompt_for(digest: dict) -> list[dict]:
+def _prompt_for(snap: dict) -> list[dict]:
     pb = playbook_mod.load()
-    system = cp._strategy_prompt(pb)
-    seed = ("STRATEGIC PICTURE (engine-computed facts — reuse these, invent nothing):\n"
-            + json.dumps({"assessment": digest.get("assessment"), "picture": digest.get("picture"),
-                          "concordance": digest.get("concordance"),
-                          "recommendation": digest.get("recommendation")}, separators=(",", ":")))
-    return [{"role": "system", "content": system}, {"role": "user", "content": seed}]
+    return [{"role": "system", "content": cp._strategy_prompt(pb)},
+            {"role": "user", "content": _seed(snap)}]
 
 
 def _assistant_output(cand: dict) -> str:
@@ -89,7 +87,7 @@ def build_pairs():
             continue
         order = _apply_calibration_demotion(r["order"], r.get("calibration") or {})
         cmap = cands_by_snap[sid]
-        prompt = _prompt_for(snaps[sid]["digest"])
+        prompt = _prompt_for(snaps[sid])
         # best-vs-each-worse: every earlier-ranked candidate is `chosen` over each later one.
         for i in range(len(order)):
             for j in range(i + 1, len(order)):

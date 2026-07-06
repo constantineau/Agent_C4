@@ -55,7 +55,7 @@
     $("loginErr").textContent = "";
     if (!name) { $("loginErr").textContent = "Enter your name."; return; }
     $("loginBtn").disabled = true;
-    post("/api/login", { name: name, password: password }).then(function (res) {
+    post("api/login", { name: name, password: password }).then(function (res) {
       $("loginBtn").disabled = false;
       if (!res.ok) {
         $("loginErr").textContent = (res.data && res.data.detail) || "Login failed.";
@@ -87,7 +87,7 @@
 
   function loadNext() {
     banner("");
-    get("/api/next?labeler_id=" + encodeURIComponent(session.labeler_id)).then(function (res) {
+    get("api/next?labeler_id=" + encodeURIComponent(session.labeler_id)).then(function (res) {
       if (!res.ok) {
         if (res.status === 400) { signOut(); return; }  // bad/expired labeler_id
         banner((res.data && res.data.detail) || "Could not load the next task.");
@@ -281,7 +281,7 @@
       notes: $("notes").value.trim(),
       elapsed_ms: Date.now() - loadedAt
     };
-    post("/api/rank", body).then(function (res) {
+    post("api/rank", body).then(function (res) {
       if (!res.ok) {
         $("submitBtn").disabled = false;
         $("submitBtn").textContent = "Submit ranking → next";
