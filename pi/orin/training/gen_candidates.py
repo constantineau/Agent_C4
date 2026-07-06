@@ -15,6 +15,7 @@ copilot.strategy_brief path exactly, so what sailors rank is what the model actu
     python3 -m training.gen_candidates
 """
 import json
+import re
 
 from . import config, schema, teacher
 
@@ -125,16 +126,44 @@ def _opus(snap: dict) -> dict | None:
                                  gen_meta={"model": config.ANTHROPIC_MODEL}, nonce="opus")
 
 
+# A model candidate must not reintroduce the veer/back jargon we purged everywhere else (the LoRA is
+# trained on this text). "veer" is always wind; "backs/backing" are the wind senses — "backed"/
+# "fallback"/"background" are excluded so a note like "no read has backed it" isn't a false positive.
+_JARGON = re.compile(r"\bveer(s|ing|ed)?\b|\bback(ing|s)\b", re.I)
+
+
+def _has_jargon(c: dict | None) -> bool:
+    if not c:
+        return False
+    return bool(_JARGON.search((c.get("assessment") or "") + " " + json.dumps(c.get("recommendation") or {})))
+
+
+def _clean_or_drop(c, regen, origin, sid):
+    """A model candidate carrying veer/back → regenerate ONCE; if it's still jargon, DROP it (the
+    snapshot keeps its clean deterministic+perturbed candidates) so the corpus stays purged."""
+    if not _has_jargon(c):
+        return c
+    r = regen()
+    if not _has_jargon(r):
+        return r
+    print(f"  [jargon] dropped a {origin} candidate with veer/back for {sid}")
+    return None
+
+
 def generate_for(snap: dict, llm: LLMClient | None) -> list[dict]:
+    sid = snap["snapshot_id"]
     cands = []
     if "deterministic" in config.CAND_ORIGINS:
         cands.append(_deterministic(snap))
     if "perturbed" in config.CAND_ORIGINS:
         cands.append(_perturbed(snap))
     if "base" in config.CAND_ORIGINS and llm is not None:
-        cands.extend(_base(snap, llm, config.BASE_SAMPLES))
+        for c in _base(snap, llm, config.BASE_SAMPLES):
+            c = _clean_or_drop(c, lambda: (_base(snap, llm, 1) or [None])[0], "base", sid)
+            if c:
+                cands.append(c)
     if "opus" in config.CAND_ORIGINS:
-        c = _opus(snap)
+        c = _clean_or_drop(_opus(snap), lambda: _opus(snap), "opus", sid)
         if c:
             cands.append(c)
     # De-dupe identical candidate_ids (e.g. base emitting the same text twice).

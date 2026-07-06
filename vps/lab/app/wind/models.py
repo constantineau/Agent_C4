@@ -15,6 +15,7 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import os
+import threading
 import time
 import urllib.parse
 
@@ -31,6 +32,11 @@ NOMADS = "https://nomads.ncep.noaa.gov/cgi-bin"
 ECMWF_MAX_TRIES = int(os.environ.get("ECMWF_MAX_TRIES", "2"))        # vs multiurl's 500
 ECMWF_RETRY_AFTER = int(os.environ.get("ECMWF_RETRY_AFTER", "5"))    # seconds, vs multiurl's 120
 ECMWF_COOLDOWN = float(os.environ.get("ECMWF_COOLDOWN", "600"))      # back off this long after a rate-limit
+# HARD wall-clock per ECMWF frame. The ecmwf-opendata Client has no socket timeout we control, so a
+# SLOW (not erroring) server hangs the retrieve indefinitely — the 429 cooldown only trips on an
+# EXCEPTION, so a hang blew /api/optimize past the gateway. This bounds each fetch: on a hang we trip
+# the cooldown so every remaining frame skips instantly and the route proceeds on the NOMADS models.
+ECMWF_FETCH_TIMEOUT = float(os.environ.get("ECMWF_FETCH_TIMEOUT", "75"))
 
 
 def _cap_multiurl_retries():
@@ -233,7 +239,8 @@ class ECMWF(ModelSource):
             return ("oper" if cycle.hour in (0, 12) else "scda"), "fc", None
         return "enfo", "pf", int(member)
 
-    def fetch(self, cycle, fhr, member, bbox, timeout=120):
+    def fetch(self, cycle, fhr, member, bbox, timeout=None):
+        timeout = timeout or ECMWF_FETCH_TIMEOUT
         path = self._cache_path(cycle, fhr, member, bbox)
         if os.path.exists(path) and os.path.getsize(path) > 100:
             return path
@@ -250,14 +257,27 @@ class ECMWF(ModelSource):
                    step=int(fhr), param=["10u", "10v"], target=path)
         if number is not None:
             req["number"] = number
-        try:
-            Client(source="ecmwf").retrieve(**req)
-            return path if os.path.exists(path) and os.path.getsize(path) > 100 else None
-        except Exception:
-            # likely a 429/timeout — back off so the remaining frames skip instantly and the route
-            # proceeds on the NOMADS models instead of stalling on every ECMWF file.
+
+        # Run the retrieve in a worker thread with a HARD wall-clock join — the Client itself has no
+        # timeout we can set, so a slow (non-erroring) server would otherwise hang here forever.
+        result = {}
+
+        def _do():
+            try:
+                Client(source="ecmwf").retrieve(**req)
+                result["path"] = path if os.path.exists(path) and os.path.getsize(path) > 100 else None
+            except Exception:      # noqa: BLE001 — 429/network; treated same as a hang below
+                result["err"] = True
+
+        th = threading.Thread(target=_do, daemon=True)
+        th.start()
+        th.join(timeout)
+        if th.is_alive() or result.get("err"):
+            # hung past our wall clock, or errored (likely a 429) — back off so the remaining frames
+            # skip instantly and the route proceeds on the NOMADS models instead of stalling on ECMWF.
             ECMWF._cooldown_until = time.time() + ECMWF_COOLDOWN
             return None
+        return result.get("path")
 
 
 class ECMWF_ENS(ECMWF):
