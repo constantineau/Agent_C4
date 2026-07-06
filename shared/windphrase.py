@@ -59,13 +59,15 @@ def favored_side(sign: int, pos: str):
     return "right" if sign > 0 else "left"
 
 
-def phase_on_tack(sign: int, tack: str, pos: str) -> str:
-    """LIFTED / HEADED on the given tack for a compass shift. Upwind a RIGHT shift lifts starboard
-    and heads port; downwind the sense inverts. 'even' if steady or the tack is unknown."""
+def phase_on_tack(sign: int, tack: str, pos: str = "upwind") -> str:
+    """LIFTED / HEADED on the given tack for a compass shift. This is GEOMETRIC and does NOT depend on
+    point of sail: a RIGHT shift (veer) lifts starboard & heads port; a LEFT shift (back) heads
+    starboard & lifts port — upwind AND downwind alike. (What's *opposite* downwind is the tactical
+    value — you sail the HEADED gybe downwind — and the favoured side, handled in favored_side().)
+    'even' if steady or the tack is unknown."""
     if sign == 0 or tack not in ("port", "starboard"):
         return "even"
-    up = sign if pos != "downwind" else -sign          # effective upwind-sense rotation
-    lift = up if tack == "starboard" else -up
+    lift = sign if tack == "starboard" else -sign
     return "lifted" if lift > 0 else "headed"
 
 
