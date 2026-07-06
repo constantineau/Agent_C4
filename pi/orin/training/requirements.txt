@@ -1,0 +1,14 @@
+# Phase-0 labeling pipeline deps. The generators + store + eval are pure stdlib; only the labeling
+# web app and the optional Opus teacher need pip.
+
+# Labeling app (labeling/app.py)
+fastapi>=0.110
+uvicorn>=0.29
+pydantic>=2.0
+
+# Opus teacher candidate (teacher.py) — OPTIONAL; skipped if absent or no ANTHROPIC_API_KEY.
+anthropic>=0.40
+
+# NOTE: the base-model candidate path (gen_candidates.py) talks to a running Ollama over HTTP via
+# the copilot's stdlib client — no pip dependency, just a reachable LLM_BASE_URL (default the Orin's
+# :11434). Training itself (DPO, Phase 2) has its own deps on the rented GPU — not listed here.

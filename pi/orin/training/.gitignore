@@ -1,0 +1,4 @@
+# Generated artifacts + runtime labels — all reproducible / runtime state, never committed.
+data/
+__pycache__/
+*.pyc

@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>C4 Tactics Labeling</title>
+<link rel="stylesheet" href="/static/ranker.css" />
+</head>
+<body>
+
+<!-- ===== LOGIN VIEW ===== -->
+<div id="login" class="login">
+  <div class="loginbox">
+    <h1>C4 TACTICS<span>labeling</span></h1>
+    <p class="sub">Rank the tactical briefs best&nbsp;&rarr;&nbsp;worst. Expert sailors only.</p>
+    <label class="fld">
+      <span>Your name</span>
+      <input id="loginName" type="text" autocomplete="name" placeholder="e.g. Matt" />
+    </label>
+    <label class="fld">
+      <span>Team password</span>
+      <input id="loginPw" type="password" autocomplete="current-password" placeholder="shared password" />
+    </label>
+    <button id="loginBtn" class="primary">Start labeling</button>
+    <div id="loginErr" class="err"></div>
+  </div>
+</div>
+
+<!-- ===== RANKER VIEW ===== -->
+<div id="ranker" class="ranker" hidden>
+  <header class="topbar">
+    <div class="brand">C4&nbsp;TACTICS<span class="tag">labeling</span></div>
+    <div id="progressLine" class="progress">&nbsp;</div>
+    <div class="who">
+      <span id="whoami"></span>
+      <a id="signout" href="#">sign out</a>
+    </div>
+  </header>
+
+  <div id="errBanner" class="errbanner" hidden></div>
+
+  <main class="stage">
+    <!-- LEFT: the situation -->
+    <section class="panel situation-panel">
+      <div class="situ-head">
+        <span id="scenarioTag" class="chip scenario">&nbsp;</span>
+        <span id="playbookBadge" class="badge">&nbsp;</span>
+      </div>
+      <h2>The situation</h2>
+      <div id="situation" class="situation"></div>
+
+      <h2>The board</h2>
+      <ul id="board" class="board"></ul>
+
+      <h2>Concordance</h2>
+      <div id="concordance" class="concordance"></div>
+
+      <div id="caveats" class="caveats"></div>
+    </section>
+
+    <!-- RIGHT: the candidates to order -->
+    <section class="panel cards-panel">
+      <h2 class="cards-title">Rank the briefs &mdash; best on top, worst on the bottom</h2>
+      <p class="hint">Drag to reorder, or use the &uarr;/&darr; buttons. Flag each brief's confidence/urgency calibration.</p>
+      <div id="cards" class="cards"></div>
+
+      <label class="notes-fld">
+        <span>Notes (optional)</span>
+        <textarea id="notes" rows="2" placeholder="Anything worth recording about this ranking&hellip;"></textarea>
+      </label>
+
+      <button id="submitBtn" class="primary submit">Submit ranking &rarr; next</button>
+    </section>
+  </main>
+</div>
+
+<!-- ===== DONE VIEW ===== -->
+<div id="done" class="done" hidden>
+  <div class="donebox">
+    <h1>All done &mdash; thank you!</h1>
+    <p>Your rankings are in. Nice work.</p>
+    <div id="doneProgress" class="doneprog"></div>
+    <a id="doneSignout" href="#" class="signout-link">sign out</a>
+  </div>
+</div>
+
+<script src="/static/ranker.js"></script>
+</body>
+</html>
