@@ -175,7 +175,48 @@ unchanged against a v2 bundle. v2 consumers read `plays[]`/`nominal`. The copilo
   (does the model arm the right plays, with honest confidence) and can reuse the reliability-SFT
   plan (`docs/ORIN_LORA_PLAN.md`, unbuilt) plus a fresh labeling design; nothing built now.
 
-## 8. Phasing
+## 8. Phase B design inputs — LOCKED 2026-07-06, outputs of the fleet retro study
+
+`docs/RETRO_STUDY.md` §6 (66 boats, bayviewmack2025) converts several Phase B/D decisions from
+judgment calls into measured quantities. These are **locked as implementation requirements**:
+
+1. **Play mix is conditional on point of sail.** The generator computes the NOMINAL route's
+   point-of-sail profile and weights play generation by it: a running race leans guidance-heavy
+   (sail choice / target-speed / pace plays — execution beat geometry, polar% ρ −0.41 in every
+   division while XTE pooled ≈ 0), a beat-heavy race leans geometry-heavy (side variants, shift
+   plays). No fixed play mix.
+2. **The bundle states the geometry-vs-execution verdict.** Synthesis computes a corridor-width /
+   decision-stakes number from the scenario fan (lateral spread vs time stakes) and puts the
+   verdict in the headline: "the lateral decision is worth ~N min — prioritize execution" (or the
+   reverse when the fan splits). The 2025 fan was a wide corridor; crews should be told.
+3. **Predicate thresholds are percentile-framed, not absolute.** Fleet-median XTE was 3.5 nm and
+   median pace deficit 157 min on a 40 h race — that is NORMAL sailing, not an alarm. Play
+   predicates key off the fleet distribution (consider ≈ median, commit ≈ p90: XTE 3.5/6.0 nm,
+   pace normalized to % of elapsed with 384 min as the p90 anchor), and the bundle FREEZES the
+   venue's fleet-normal stats so the onboard matcher can phrase honestly ("about fleet-normal"
+   vs "p90 — a genuine departure").
+4. **Execution leads the evidence hierarchy.** Realized-speed-vs-target joins the Tier-1 digest
+   and the play predicates as a first-class signal; the matcher's narrative rubric ranks "under
+   target / wrong sail past its crossover" above "N nm off the line". The most-armed plays will
+   be pace + sail-guidance plays — the matcher must be best at exactly those.
+5. **Pivot hygiene is point-of-sail-aware.** A lateral SWITCH recommendation downwind requires
+   stronger/longer confirmation than upwind (lateral pivots bought little in the runner; upwind
+   leverage genuinely pays). Composes with the existing point-of-sail favored-side frame.
+6. **TWS scenarios outrank TWD scenarios downwind.** Top boats beat their own optimal by sailing
+   hotter angles in pressure — the router under-rewards pressure/angle off the wind. The
+   ×0.75/×1.25 TWS-scaling scenarios are the "more/less pressure" plays and take fan-out priority
+   over rotations for downwind-heavy races. (Deeper fix — calibrating the downwind polar overlay
+   from FLEET evidence — is a Lab-4 extension, not Phase B.)
+7. **Venue side statistics accumulate as a labeled prior.** 2025: the Div-I top third worked right
+   18:2. Each ingested race adds a data point; the bundle carries "historical side stats at this
+   venue" as clearly-labeled historical context for the matcher's tie-breaker narrative — never a
+   forecast.
+8. **Two follow-on enrichments (post-B):** oracle-regret scoring (separate forecast-bust from
+   slow execution — the scenario-mining input) and the **known-answer playbook backtest** —
+   synthesize the 2025 playbook as-of-gun and replay the realized wind through the selector; it
+   should have pivoted right early. Run before the 2026 race if time allows.
+
+## 9. Phasing
 
 - **Phase A — descope + model chain** (this commit): remove LLM origination from the copilot
   runtime + prompts + tests; remove the training system; Fable→Opus chain in synthesis/briefing;
@@ -189,7 +230,7 @@ unchanged against a v2 bundle. v2 consumers read `plays[]`/`nominal`. The copilo
   pattern-matching + grounding extension; Strategy-card armed-plays section + coach callout.
   (A LoRA pass, if ever, comes after D with a rubric built on match quality.)
 
-## 9. Honest limits
+## 10. Honest limits
 
 - Scenario plays are only as good as the transforms — a ±20° rotation is a crude stand-in for a
   real synoptic bust. The library's job is to bound the *decision space*, not predict the weather.
