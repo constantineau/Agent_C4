@@ -713,7 +713,7 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
                     obstacles=None, avoid=True, source=None, safety_depth=None,
                     jib_crossovers=None, emit_exploration=True, per_model=False,
                     resolution="auto", cur=None, waves=None, helm_factor=1.0,
-                    polar_adjustments=None, wave_coeffs=None):
+                    polar_adjustments=None, wave_coeffs=None, polar=None):
     """Route the whole course from its start through every mark to the finish via `wf`.
 
     Returns one optimal route with per-leg ETAs, total time/distance/tacks and a route confidence
@@ -727,11 +727,20 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
         return {"available": False, "note": "course needs at least a start and one mark/finish",
                 "skipped": skipped}
     roundings = race_def.course_roundings(definition, course_id)   # #3 rounding side per nav mark
-    P = POL.polars_stw()
+    if polar is not None:
+        # an INJECTED polar table [(tws,twa,stw)] — the fleet-retro per-boat path (an ORC cert's
+        # Allowances envelope). Own-boat refinements (adjustments/jibs/per-sail curves) don't apply
+        # to another boat, so sail-aware routing is off → envelope routing, like SAIL_AWARE=0.
+        P = [tuple(p) for p in polar]
+        SP = {}
+    else:
+        P = POL.polars_stw()
+        if not P:
+            return {"available": False, "note": "no polars loaded"}
+        P = POL.apply_adjustments(P, polar_adjustments)   # Lab-4 human-approved refined-polar overlay
+        SP = POL.sail_polars()             # per-sail curves for sail-aware routing (2g); {} → envelope only
     if not P:
         return {"available": False, "note": "no polars loaded"}
-    P = POL.apply_adjustments(P, polar_adjustments)   # Lab-4 human-approved refined-polar overlay
-    SP = POL.sail_polars()                 # per-sail curves for sail-aware routing (2g); {} → envelope only
 
     if obstacles is None and avoid:
         bbox = course_bbox(definition, course_id)

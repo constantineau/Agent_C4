@@ -18,7 +18,7 @@ import math
 import os
 
 from . import grib
-from .models import MODELS, DEFAULT_MODELS
+from .models import MODELS, DEFAULT_MODELS, ModelSource
 
 KN_PER_MS = grib.KN_PER_MS
 MAX_FRAMES_PER_MEMBER = 64        # safety cap on downloads per series
@@ -111,7 +111,9 @@ def build_windfield(bbox, t_start: float, t_end: float, models=DEFAULT_MODELS,
     parser = grib.IsolatedGribParser() if grib.ISOLATE else None   # crash-isolated cfgrib parse (1/build)
     try:
         for name in models:
-            source = MODELS.get(name)
+            # a ModelSource INSTANCE passes through (the retro study injects archive-backed sources
+            # pinned to a historical as-of moment); a string resolves from the live registry.
+            source = name if isinstance(name, ModelSource) else MODELS.get(name)
             if source is None:
                 continue
             members = _members_for(source, ensemble_members)
