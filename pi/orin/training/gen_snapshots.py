@@ -41,7 +41,9 @@ def build_synthetic() -> list[dict]:
         digest = synth.build_digest(sc)
         scenario = {k: v for k, v in sc.items() if k != "_i"}   # keep tag/cond/axes for the audit report
         situation = _situation_text(sc, digest)
-        snaps.append(schema.make_snapshot(digest, scenario, situation, source="synthetic"))
+        snap = schema.make_snapshot(digest, scenario, situation, source="synthetic")
+        snap["scene"] = synth.build_scene(sc)                   # geometry frozen now (needs sc['_i'])
+        snaps.append(snap)
     return snaps
 
 

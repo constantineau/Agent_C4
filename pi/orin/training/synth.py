@@ -291,6 +291,35 @@ def _build_sig(sc: dict) -> dict:
     return sig
 
 
+def build_scene(sc: dict) -> dict | None:
+    """Structured geometry for the ranker's compass diagram (rhumb, boat heading, wind base->now,
+    forecast, favoured side). MUST be called at snapshot-generation time — it reads `sc['_i']`, which
+    the persisted scenario drops — so the result is STORED on the snapshot. None if no wind state."""
+    if "shift" not in sc:
+        return None
+    cond = sc.get("cond") or {}
+    ws = _wind_state(sc)
+    sig = _build_sig(sc)
+    pos = ws["pos"]
+    base = ws["base_twd"]
+    rhumb = base if pos == "upwind" else (base + 180) % 360 if pos == "downwind" else (base + 90) % 360
+    sh = sig.get("shift") or {}
+    dft = sig.get("drift") or {}
+    forecast = None
+    if dft.get("status") in ("watch", "act") and dft.get("now_twd") is not None:
+        forecast = {"ref_deg": dft.get("ref_twd"), "now_deg": dft.get("now_twd"), "status": dft.get("status")}
+    return {
+        "rhumb_deg": round(rhumb) % 360,
+        "point_of_sail": pos,
+        "mark": {"name": cond.get("next_mark"), "distance_nm": cond.get("distance_nm")},
+        "boat": {"heading_deg": ws["heading"], "tack": ws["tack"]},
+        "wind": {"base_deg": round(ws["base_twd"]) % 360, "now_deg": round(ws["now_twd"]) % 360,
+                 "persistent": bool(sh.get("persistent")), "oscillation_deg": sh.get("oscillation_deg")},
+        "forecast": forecast,
+        "favored_side": sh.get("favored_side"),
+    }
+
+
 def _build_fleet(sc: dict) -> dict:
     fleet = sc.get("fleet")
     if not fleet:

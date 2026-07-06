@@ -26,40 +26,6 @@ def _game_plan(d: dict, has_pb: bool) -> dict:
             "text": "A frozen gameplan with pre-authored side branches is aboard."}
 
 
-def _scene(snap: dict) -> dict | None:
-    """Structured geometry so the UI can DRAW the situation (compass diagram): the rhumb bearing to
-    the next mark, the boat's heading, the wind before->now shift, the forecast drift, favoured side.
-    Derived from the stored scenario (same deterministic source as the text), so no stored data /
-    snapshot-id change. Returns None if the scenario carries no wind state."""
-    sc = snap.get("scenario") or {}
-    cond = sc.get("cond") or {}
-    try:
-        from .. import synth
-        ws = synth._wind_state(sc)
-        sig = synth._build_sig(sc)
-    except Exception:
-        return None
-    pos = ws["pos"]
-    base = ws["base_twd"]
-    rhumb = base if pos == "upwind" else (base + 180) % 360 if pos == "downwind" else (base + 90) % 360
-    sh = sig.get("shift") or {}
-    dft = sig.get("drift") or {}
-    forecast = None
-    if dft.get("status") in ("watch", "act") and dft.get("now_twd") is not None:
-        forecast = {"ref_deg": dft.get("ref_twd"), "now_deg": dft.get("now_twd"),
-                    "status": dft.get("status")}
-    return {
-        "rhumb_deg": round(rhumb) % 360,
-        "point_of_sail": pos,
-        "mark": {"name": cond.get("next_mark"), "distance_nm": cond.get("distance_nm")},
-        "boat": {"heading_deg": ws["heading"], "tack": ws["tack"]},
-        "wind": {"base_deg": round(ws["base_twd"]) % 360, "now_deg": round(ws["now_twd"]) % 360,
-                 "persistent": bool(sh.get("persistent")), "oscillation_deg": sh.get("oscillation_deg")},
-        "forecast": forecast,
-        "favored_side": sh.get("favored_side"),
-    }
-
-
 def render_snapshot(snap: dict) -> dict:
     d = snap["digest"]
     has_pb = (snap.get("scenario") or {}).get("has_playbook", True)
@@ -68,7 +34,7 @@ def render_snapshot(snap: dict) -> dict:
     return {
         "snapshot_id": snap["snapshot_id"],
         "situation": snap.get("situation", ""),
-        "scene": _scene(snap),
+        "scene": snap.get("scene"),               # geometry frozen at generation (gen_snapshots)
         "game_plan": _game_plan(d, has_pb),
         "picture": picture,
         "concordance": d.get("concordance", {}),
