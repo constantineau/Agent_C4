@@ -141,6 +141,11 @@
 
     $("situation").textContent = s.situation || "";
 
+    var gp = s.game_plan || {};
+    var gpEl = $("gameplan");
+    gpEl.textContent = gp.text || "—";
+    gpEl.className = "gameplan" + (gp.has_playbook === false ? " noplan" : "");
+
     var board = $("board");
     board.innerHTML = "";
     (s.picture || []).forEach(function (item) {
