@@ -257,6 +257,98 @@ def run_fleet(race_id: str, def_race_id: str = "bayview-mackinac-2026",
             "wind_fields": len(fields), "boats": done}
 
 
+def _spearman(xs, ys):
+    """Spearman rank correlation (tie-aware, pure stdlib). None when n<4 or degenerate."""
+    n = len(xs)
+    if n < 4:
+        return None
+
+    def ranks(v):
+        order = sorted(range(n), key=lambda i: v[i])
+        r = [0.0] * n
+        i = 0
+        while i < n:
+            j = i
+            while j + 1 < n and v[order[j + 1]] == v[order[i]]:
+                j += 1
+            avg = (i + j) / 2 + 1
+            for k in range(i, j + 1):
+                r[order[k]] = avg
+            i = j + 1
+        return r
+
+    rx, ry = ranks(xs), ranks(ys)
+    mx, my = sum(rx) / n, sum(ry) / n
+    num = sum((a - mx) * (b - my) for a, b in zip(rx, ry))
+    dx = sum((a - mx) ** 2 for a in rx) ** 0.5
+    dy = sum((b - my) ** 2 for b in ry) ** 0.5
+    return round(num / (dx * dy), 3) if dx and dy else None
+
+
+def report(race_id: str) -> dict:
+    """R5: adherence-vs-finish analysis. For every scored boat, how its distance from its OWN
+    gun-forecast optimal route relates to its corrected rank — per division (≥5 scored finishers;
+    rating-luck confound is why correlation runs WITHIN divisions) plus a pooled read on rank
+    percentile. rho > 0 for behind_min/xte/extra-distance means sailing closer to the optimizer
+    line went with finishing better (rank 1 = best); rho < 0 for polar_pct means faster-than-cert
+    execution went with finishing better. Correlation, not causation — stated in the UI."""
+    latest = {}
+    for s in rs.get_scores(race_id):
+        m = json.loads(s["metrics_json"])
+        if m.get("available") and s["run_id"] >= latest.get(s["team_id"], (0, None))[0]:
+            latest[s["team_id"]] = (s["run_id"], m)
+    scores = {tid: m for tid, (_rid, m) in latest.items()}
+    if not scores:
+        return {"ok": False, "note": "no scored runs yet — run the fleet batch first"}
+    entries = {e["team_id"]: e for e in rs.get_entries(race_id)}
+
+    divs = {}
+    for r in rs.get_results(race_id):
+        m = scores.get(r["team_id"])
+        if m and r.get("finished") and r.get("rank_division"):
+            divs.setdefault(r["division"], []).append((r, m))
+
+    out, pooled_x, pooled_rank = [], {"behind": [], "xte": [], "polar": []}, []
+    for name, rows in sorted(divs.items()):
+        if len(rows) < 5:
+            continue
+        rows.sort(key=lambda t: t[0]["rank_division"])
+        rank = [r["rank_division"] for r, _ in rows]
+        col = lambda key: [m.get(key) if m.get(key) is not None else 0 for _, m in rows]
+        third = max(1, len(rows) // 3)
+        sides = [m.get("side_worked") for _, m in rows[:third]]
+        out.append({
+            "division": name, "n": len(rows),
+            "rho_behind_min": _spearman(col("time_behind_optimal_min"), rank),
+            "rho_xte": _spearman(col("xte_mean_nm"), rank),
+            "rho_extra_distance": _spearman(col("extra_distance_pct"), rank),
+            "rho_polar_pct": _spearman(col("polar_pct"), rank),
+            "top_third_sides": {s: sides.count(s) for s in set(sides) if s},
+            "boats": [{"boat": (entries.get(r["team_id"]) or {}).get("boat"),
+                       "rank": r["rank_division"],
+                       "behind_min": m.get("time_behind_optimal_min"),
+                       "xte_nm": m.get("xte_mean_nm"),
+                       "extra_pct": m.get("extra_distance_pct"),
+                       "polar_pct": m.get("polar_pct"),
+                       "side": m.get("side_worked")} for r, m in rows]})
+        n = len(rows)
+        for (r, m) in rows:
+            pooled_rank.append((r["rank_division"] - 1) / max(1, n - 1))
+            pooled_x["behind"].append(m.get("time_behind_optimal_min") or 0)
+            pooled_x["xte"].append(m.get("xte_mean_nm") or 0)
+            pooled_x["polar"].append(m.get("polar_pct") or 0)
+
+    pooled = {"n": len(pooled_rank),
+              "rho_behind_min": _spearman(pooled_x["behind"], pooled_rank),
+              "rho_xte": _spearman(pooled_x["xte"], pooled_rank),
+              "rho_polar_pct": _spearman(pooled_x["polar"], pooled_rank)} if pooled_rank else None
+    return {"ok": True, "race_id": race_id, "scored_boats": len(scores),
+            "divisions": out, "pooled": pooled,
+            "caveats": ["Correlation, not causation — a good crew both routes well and sails fast.",
+                        "Corrected-time rank carries rating luck; correlations run within divisions.",
+                        "The optimal is each boat's OWN gun-forecast route (GFS+HRRR archive blend)."]}
+
+
 def match_polars(race_id: str, country: str = "USA") -> dict:
     """R2: ORC cert + converted polar for every entry that matches the public dump."""
     entries = rs.get_entries(race_id)

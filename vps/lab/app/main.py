@@ -731,6 +731,15 @@ async def retro_run_status():
     return retro.fleet_job_status()
 
 
+@app.get("/api/retro/report")
+async def retro_report(race_id: str):
+    """R5: adherence-vs-finish analysis over the archived fleet runs."""
+    try:
+        return await run_in_threadpool(retro.report, race_id)
+    except Exception as exc:
+        return JSONResponse({"detail": f"retro report failed: {exc}"}, status_code=500)
+
+
 @app.post("/api/retro/polars")
 async def retro_polars(body: dict):
     """Match every ingested entry to its public ORC cert + store the converted polar."""

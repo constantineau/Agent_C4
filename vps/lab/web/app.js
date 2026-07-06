@@ -2005,6 +2005,8 @@ function initMonitorMap() {
 
 /* ---------- Debrief (Lab-4 post-race judge loop) ---------- */
 const Deb = { raceId: null, playbookId: null, playbooks: null, running: false, report: null, track: null, trackBusy: false, trackMsg: "" };
+// Fleet-retro card state (docs/RETRO_STUDY.md — debrief across the WHOLE fleet of a past race)
+const Retro = { ybId: "bayviewmack2025", msg: "", busy: false, races: null, job: null, report: null, poll: null };
 
 async function renderDebrief() {
   const view = document.getElementById("view");
@@ -2021,6 +2023,11 @@ async function renderDebrief() {
   if (!Deb.playbookId || !Deb.playbooks.some((b) => b.id === Deb.playbookId)) Deb.playbookId = (Deb.playbooks[0] || {}).id || null;
   try { Deb.track = await (await apiGet("/api/debrief/track?race_id=" + encodeURIComponent(Deb.raceId))).json(); }
   catch (e) { Deb.track = null; }
+  await retroRefresh();
+  try {
+    Retro.job = await (await apiGet("/api/retro/run/status")).json();
+    if (Retro.job.state === "running" && !Retro.poll) Retro.poll = setInterval(retroPoll, 8000);
+  } catch (e) { /* card renders without job state */ }
   if (stale("debrief")) return;
   paintDebrief();
 }
@@ -2117,7 +2124,107 @@ function paintDebrief() {
     </div>
     ${debTrackCard()}
     ${body}
+    ${retroCard()}
   </div>`;
+}
+
+// ---- Fleet retro (docs/RETRO_STUDY.md): past-race archive + per-boat optimizer backtest ---------
+function retroCard() {
+  const races = Retro.races || [];
+  const j = Retro.job || {};
+  const running = j.state === "running";
+  const archived = races.map((x) =>
+    `<span class="pill">${esc(x.race_id)} · ${x.entries} boats · ${x.tracks} tracks · ${x.polars} polars · ${x.runs} runs</span>`).join(" ")
+    || '<span class="muted">nothing archived yet</span>';
+  const jobLine = running
+    ? `<div class="muted" style="font-size:12px;margin-top:6px">Fleet batch running… <span class="loading-dot"></span><br>${esc((j.progress || []).slice(-3).join(" · "))}</div>`
+    : (j.state === "done" && j.result ? `<div class="muted" style="font-size:12px;margin-top:6px"><b>Batch done:</b> ${j.result.ran} boats scored${(j.result.failed || []).length ? ", " + j.result.failed.length + " failed" : ""}.</div>`
+       : (j.state === "error" ? `<div class="muted" style="font-size:12px;margin-top:6px"><b>Batch error:</b> ${esc(j.error || "")}</div>` : ""));
+  return `<div class="card">
+    <h3>Fleet retro <span class="muted" style="font-weight:400">— past race, every boat: its ORC polar + the forecast at ITS gun vs the line it actually sailed</span></h3>
+    <div style="margin:4px 0 8px">${archived}</div>
+    <div class="opt-controls">
+      <label>YB race id <input id="retroYb" value="${attr(Retro.ybId)}" style="width:170px"></label>
+      <button class="mini" onclick="retroIngest()" ${Retro.busy ? "disabled" : ""}>1 · Ingest race</button>
+      <button class="mini" onclick="retroPolars()" ${Retro.busy ? "disabled" : ""}>2 · Match ORC polars</button>
+      <button class="mini" onclick="retroRun()" ${Retro.busy || running ? "disabled" : ""}>${running ? "Batch running…" : "3 · Run fleet batch"}</button>
+      <button class="mini" onclick="retroReport()" ${Retro.busy ? "disabled" : ""}>4 · Report</button>
+      ${Retro.msg ? `<span class="muted" style="font-size:12px">${esc(Retro.msg)}</span>` : ""}
+    </div>
+    ${jobLine}
+    ${retroReportHtml()}
+    <div class="muted" style="font-size:12px;margin-top:6px">Everything gathered is kept in the retro archive (tracks, results, certs/polars, runs, pinned GRIBs). Correlation, not causation — a good crew both routes well and sails fast; correlations run within divisions to blunt rating luck.</div>
+  </div>`;
+}
+
+function retroReportHtml() {
+  const r = Retro.report;
+  if (!r) return "";
+  if (!r.ok) return `<div class="placeholder" style="margin-top:8px">${esc(r.note || "no report")}</div>`;
+  const rho = (v) => v === null || v === undefined ? "—" : `<b style="color:${v > 0.25 ? "var(--ok, #2e7d32)" : (v < -0.25 ? "var(--warn, #b26a00)" : "inherit")}">${v}</b>`;
+  const pooled = r.pooled ? `<div style="margin:6px 0"><b>Pooled (${r.pooled.n} boats):</b>
+      behind-own-optimal vs rank ρ=${rho(r.pooled.rho_behind_min)} ·
+      XTE vs rank ρ=${rho(r.pooled.rho_xte)} ·
+      polar% vs rank ρ=${rho(r.pooled.rho_polar_pct)}
+      <span class="muted" style="font-size:12px">(ρ&gt;0 for behind/XTE = closer to the optimizer line went with a better finish; ρ&lt;0 for polar% = faster execution went with a better finish)</span></div>` : "";
+  const divs = (r.divisions || []).map((d) => `
+    <details style="margin-top:6px"><summary><b>${esc(d.division)}</b> — n=${d.n} ·
+      behind ρ=${rho(d.rho_behind_min)} · XTE ρ=${rho(d.rho_xte)} · extra-dist ρ=${rho(d.rho_extra_distance)} · polar ρ=${rho(d.rho_polar_pct)}
+      · top-third side: ${esc(Object.entries(d.top_third_sides || {}).map(([s, n]) => s + "×" + n).join(", ") || "—")}</summary>
+      <table class="tbl" style="margin-top:4px"><tr><th>#</th><th>boat</th><th>behind own opt</th><th>XTE mean</th><th>extra dist</th><th>polar %</th><th>side</th></tr>
+      ${d.boats.map((b) => `<tr><td>${b.rank}</td><td>${esc(b.boat || "?")}</td><td>${b.behind_min == null ? "—" : Math.round(b.behind_min) + " min"}</td><td>${b.xte_nm == null ? "—" : b.xte_nm + " nm"}</td><td>${b.extra_pct == null ? "—" : b.extra_pct + "%"}</td><td>${b.polar_pct == null ? "—" : b.polar_pct}</td><td>${esc(b.side || "—")}</td></tr>`).join("")}
+      </table></details>`).join("");
+  return `<div style="margin-top:8px">${pooled}${divs}</div>`;
+}
+
+async function retroRefresh() {
+  try { Retro.races = (await (await apiGet("/api/retro/races")).json()).races || []; } catch (e) { Retro.races = []; }
+}
+async function retroIngest() {
+  Retro.ybId = document.getElementById("retroYb").value.trim();
+  Retro.busy = true; Retro.msg = "ingesting (tracks + results)…"; paintDebrief();
+  try {
+    const r = await (await api("/api/retro/ingest", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ race_id: Retro.ybId }) })).json();
+    Retro.msg = r.ok ? `ingested: ${r.tracks} tracks, ${r.results} results, ${r.divisions} divisions` : (r.note || r.detail || "ingest failed");
+  } catch (e) { Retro.msg = "ingest failed"; }
+  Retro.busy = false; await retroRefresh(); paintDebrief();
+}
+async function retroPolars() {
+  Retro.ybId = document.getElementById("retroYb").value.trim();
+  Retro.busy = true; Retro.msg = "matching ORC certs (USA + CAN)…"; paintDebrief();
+  try {
+    let total = 0;
+    for (const cc of ["USA", "CAN"]) {
+      const r = await (await api("/api/retro/polars", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ race_id: Retro.ybId, country: cc }) })).json();
+      if (r.ok) total += r.matched;
+    }
+    Retro.msg = `${total} boats matched to ORC polars`;
+  } catch (e) { Retro.msg = "polar match failed"; }
+  Retro.busy = false; await retroRefresh(); paintDebrief();
+}
+async function retroRun() {
+  Retro.ybId = document.getElementById("retroYb").value.trim();
+  Retro.msg = "";
+  try {
+    const r = await (await api("/api/retro/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ race_id: Retro.ybId }) })).json();
+    if (!r.ok && r.note) { Retro.msg = r.note; paintDebrief(); return; }
+    Retro.job = { state: "running", progress: [] };
+    if (Retro.poll) clearInterval(Retro.poll);
+    Retro.poll = setInterval(retroPoll, 8000);
+  } catch (e) { Retro.msg = "batch start failed"; }
+  paintDebrief();
+}
+async function retroPoll() {
+  try { Retro.job = await (await apiGet("/api/retro/run/status")).json(); } catch (e) { return; }
+  if (Retro.job.state !== "running" && Retro.poll) { clearInterval(Retro.poll); Retro.poll = null; await retroRefresh(); }
+  if (location.hash.replace("#", "") === "debrief") paintDebrief();
+}
+async function retroReport() {
+  Retro.ybId = document.getElementById("retroYb").value.trim();
+  Retro.busy = true; Retro.msg = "building report…"; paintDebrief();
+  try { Retro.report = await (await apiGet("/api/retro/report?race_id=" + encodeURIComponent(Retro.ybId))).json(); Retro.msg = ""; }
+  catch (e) { Retro.msg = "report failed"; }
+  Retro.busy = false; paintDebrief();
 }
 
 function debTrackScore(at) {
