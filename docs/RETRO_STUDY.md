@@ -70,7 +70,44 @@ over ground → current-model correction applied · cert vintage is current-year
 approximation) · the gun field is GFS(+HRRR early hours) only — coarser than the live multi-model
 blend, stated in run provenance.
 
-## 6. What feeds forward
+## 6. FINDINGS — bayviewmack2025 (first full-fleet run, 2026-07-06)
+
+66 boats scored (every ORC-matched boat with a track; 0 batch failures; 2 wind fields across the
+staggered division guns). Spearman ρ vs corrected rank (rank 1 = best, so ρ>0 for a "badness"
+metric means less-of-it went with finishing better):
+
+| Division | n | behind-own-opt | XTE | extra-dist | polar% |
+|---|---|---|---|---|---|
+| Class A | 11 | **0.70** | −0.33 | −0.35 | **−0.48** |
+| Class B | 12 | 0.43 | −0.24 | 0.08 | **−0.68** |
+| Class C | 7 | 0.43 | 0.32 | −0.15 | **−0.60** |
+| Class D | 12 | −0.39 | −0.29 | −0.42 | **−0.58** |
+| Class E | 7 | **0.93** | 0.61 | 0.96 | −0.49 |
+| Class F | 9 | −0.07 | −0.37 | −0.70 | **−0.64** |
+| Div I Overall | 62 | 0.39 | −0.01 | −0.20 | **−0.57** |
+| **Pooled (rank pct)** | 191 | **0.23** | −0.07 | — | **−0.41** |
+
+1. **Execution beat geometry.** `polar%` (achieved speed vs own cert) is negatively correlated
+   with rank in EVERY division — the single most consistent signal. Mean XTE off the optimizer
+   line was pooled-≈0: in this southerly running race, lateral position (±3–6 nm) mattered far
+   less than boat speed. (Caveat: polar% here samples the gun field, not realized wind — biased,
+   but consistently across boats.)
+2. **Pace-vs-own-plan mattered in most divisions** (behind-own-optimal ρ +0.4…+0.9 in A/B/C/E and
+   Div-I overall; D and F are the exceptions at n≤12) — boats that held their optimizer's pace
+   finished better even when their line differed.
+3. **More distance ≠ slower.** extra-distance ρ is mostly NEGATIVE (Line Honours −0.54): top boats
+   sailed hotter angles / more distance than their own optimal — evidence the realized-speed model
+   under-rewards pressure/angle sailing downwind (an optimizer-physics feed).
+4. **The right side paid in 2025**: top-third boats worked right 18:2 in Div-I Overall (fleet-wide
+   126 right / 65 left).
+5. **Magnitudes for Phase B / Phase D thresholds:** behind-own-optimal median **157 min**, p90
+   **384 min**; XTE median **3.5 nm**, p90 **6.0 nm**. (Pace-play predicates and deviation bands
+   should key off these, not guesses.)
+
+Next enrichment: score against the REALIZED-wind oracle (regret) alongside the gun-forecast
+optimal, and re-run on `bayviewmack2026` the week after the race.
+
+## 7. What feeds forward
 
 Phase-B perturbation ranges + Phase-D predicate thresholds (divergence magnitudes) · optimizer
 physics gaps (systematic fleet-wide deviations) · route-level model skill (which model's route
