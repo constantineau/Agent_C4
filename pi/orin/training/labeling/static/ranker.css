@@ -119,6 +119,9 @@ button { font-family:inherit; cursor:pointer; }
 .situ-head { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
 .situation { white-space:pre-wrap; font-size:15px; line-height:1.5;
   background:var(--panel2); border:1px solid var(--line); border-radius:10px; padding:12px 14px; }
+.scene { background:var(--panel2); border:1px solid var(--line); border-radius:10px;
+  padding:6px 6px 2px; margin-bottom:10px; }
+.scene svg { display:block; max-width:330px; margin:0 auto; }
 .gameplan { font-size:14px; line-height:1.45; color:var(--text);
   background:var(--panel2); border:1px solid var(--line); border-left:3px solid var(--accent);
   border-radius:10px; padding:11px 14px; }

@@ -132,6 +132,84 @@
     return '<span class="chip conf-' + esc(conf) + '">' + esc(conf) + "</span>";
   }
 
+  // ============================================================= scene (SVG compass diagram)
+  var CLR = { accent: "#43a7ff", warn: "#ffc24b", ok: "#37d39b", bad: "#ff5d5d",
+              muted: "#8499ad", text: "#e7edf4", line: "#2c3f52", boat: "#e7edf4" };
+  function _polar(cx, cy, r, deg) {
+    var a = deg * Math.PI / 180; return [cx + r * Math.sin(a), cy - r * Math.cos(a)];
+  }
+  function _round(p) { return Math.round(p * 10) / 10; }
+  function _arrow(x1, y1, x2, y2, color, w, dash) {
+    var ang = Math.atan2(y2 - y1, x2 - x1), hl = 8.5, hw = 4.6;
+    var bx = x2 - hl * Math.cos(ang), by = y2 - hl * Math.sin(ang);
+    var ax = bx - hw * Math.sin(ang), ay = by + hw * Math.cos(ang);
+    var cx = bx + hw * Math.sin(ang), cy = by - hw * Math.cos(ang);
+    return '<line x1="' + _round(x1) + '" y1="' + _round(y1) + '" x2="' + _round(bx) + '" y2="' + _round(by) +
+      '" stroke="' + color + '" stroke-width="' + w + '"' + (dash ? ' stroke-dasharray="5 3"' : "") +
+      ' stroke-linecap="round"/><polygon points="' + _round(x2) + "," + _round(y2) + " " + _round(ax) + "," +
+      _round(ay) + " " + _round(cx) + "," + _round(cy) + '" fill="' + color + '"/>';
+  }
+  function _sector(cx, cy, r, b1, b2, fill) {
+    var p1 = _polar(cx, cy, r, b1), p2 = _polar(cx, cy, r, b2);
+    var large = (((b2 - b1) % 360 + 360) % 360) > 180 ? 1 : 0;
+    return '<path d="M' + cx + "," + cy + " L" + _round(p1[0]) + "," + _round(p1[1]) + " A" + r + "," + r +
+      " 0 " + large + " 1 " + _round(p2[0]) + "," + _round(p2[1]) + ' Z" fill="' + fill + '"/>';
+  }
+  function _txt(x, y, s, color, size, anchor) {
+    return '<text x="' + _round(x) + '" y="' + _round(y) + '" fill="' + color + '" font-size="' + (size || 10) +
+      '" text-anchor="' + (anchor || "middle") + '" font-family="system-ui,sans-serif">' + esc(s) + "</text>";
+  }
+  // A wind blowing FROM `deg`: an arrow from the rim inward toward the boat (points downwind).
+  function _wind(cx, cy, R, deg, color, w, dash) {
+    var o = _polar(cx, cy, R - 4, deg), i = _polar(cx, cy, 40, deg);
+    return _arrow(o[0], o[1], i[0], i[1], color, w, dash);
+  }
+  function drawScene(sc) {
+    var W = 300, cx = 150, cy = 152, R = 118;
+    var g = [];
+    var rhumb = sc.rhumb_deg, w = sc.wind || {}, fc = sc.forecast, fav = sc.favored_side;
+    // favoured-side wedge (subtle) — the side of the rhumb that pays
+    if (fav === "left") g.push(_sector(cx, cy, R, rhumb - 82, rhumb, "rgba(55,211,155,.07)"));
+    if (fav === "right") g.push(_sector(cx, cy, R, rhumb, rhumb + 82, "rgba(55,211,155,.07)"));
+    // compass ring + cardinal ticks
+    g.push('<circle cx="' + cx + '" cy="' + cy + '" r="' + R + '" fill="none" stroke="' + CLR.line + '" stroke-width="1"/>');
+    ["N", "E", "S", "W"].forEach(function (lbl, k) {
+      var p = _polar(cx, cy, R - 11, k * 90);
+      g.push(_txt(p[0], p[1] + 3.5, lbl, CLR.muted, 9));
+    });
+    // rhumb line + next mark
+    var mk = sc.mark || {}, mp = _polar(cx, cy, R * 0.7, rhumb), bp = _polar(cx, cy, 20, rhumb);
+    g.push('<line x1="' + _round(bp[0]) + '" y1="' + _round(bp[1]) + '" x2="' + _round(mp[0]) + '" y2="' + _round(mp[1]) +
+      '" stroke="' + CLR.muted + '" stroke-width="1.3" stroke-dasharray="2 3"/>');
+    g.push('<circle cx="' + _round(mp[0]) + '" cy="' + _round(mp[1]) + '" r="4.5" fill="' + CLR.warn + '"/>');
+    var ml = _polar(cx, cy, R * 0.7 + 13, rhumb);
+    g.push(_txt(ml[0], ml[1], (mk.name || "mark") + (mk.distance_nm != null ? " " + mk.distance_nm + " nm" : ""), CLR.text, 9.5));
+    // wind: baseline (faded) -> now (bold); the shift
+    if (w.base_deg != null && w.now_deg !== w.base_deg)
+      g.push(_wind(cx, cy, R, w.base_deg, CLR.muted, 1.6, false));
+    if (w.now_deg != null) g.push(_wind(cx, cy, R, w.now_deg, CLR.accent, 3, false));
+    // forecast drift arrow (dashed, amber)
+    if (fc && fc.now_deg != null) g.push(_wind(cx, cy, R, fc.now_deg, CLR.warn, 2.4, true));
+    // boat glyph at centre, pointing at heading
+    var b = sc.boat || {}, hd = b.heading_deg || 0;
+    var bow = _polar(cx, cy, 15, hd), sl = _polar(cx, cy, 9, hd + 138), sr = _polar(cx, cy, 9, hd - 138);
+    g.push('<polygon points="' + _round(bow[0]) + "," + _round(bow[1]) + " " + _round(sl[0]) + "," + _round(sl[1]) +
+      " " + _round(sr[0]) + "," + _round(sr[1]) + '" fill="' + CLR.boat + '" stroke="#0b1017" stroke-width="1"/>');
+    // labels (wind now / was / forecast) near the rim
+    if (w.now_deg != null) { var lp = _polar(cx, cy, R + 12, w.now_deg); g.push(_txt(lp[0], lp[1] + 3, w.now_deg + "°", CLR.accent, 10)); }
+    if (w.base_deg != null && w.now_deg !== w.base_deg) { var lb = _polar(cx, cy, R + 12, w.base_deg); g.push(_txt(lb[0], lb[1] + 3, "was " + w.base_deg + "°", CLR.muted, 8.5)); }
+    if (fc && fc.now_deg != null) { var lf = _polar(cx, cy, R + 12, fc.now_deg); g.push(_txt(lf[0], lf[1] + 3, "fcst " + fc.now_deg + "°", CLR.warn, 8.5)); }
+    // caption strip
+    var shiftTxt = "";
+    if (w.persistent && w.now_deg !== w.base_deg) {
+      var d = ((w.now_deg - w.base_deg + 540) % 360) - 180;
+      shiftTxt = "wind " + (d > 0 ? "right" : "left") + " " + Math.abs(Math.round(d)) + "°" + (fav ? " · " + fav + " favored" : "");
+    } else if (w.oscillation_deg) { shiftTxt = "oscillating ±" + Math.round(w.oscillation_deg / 2) + "°"; }
+    var cap = _txt(cx, W - 6, shiftTxt, CLR.muted, 10);
+    return '<svg viewBox="0 0 ' + W + " " + (W + 4) + '" width="100%" role="img" aria-label="situation diagram">' +
+      g.join("") + cap + "</svg>";
+  }
+
   function renderSituation() {
     var s = snapshot;
     $("scenarioTag").textContent = s.scenario_tag || "situation";
@@ -140,6 +218,10 @@
     else { pb.textContent = "NO playbook"; pb.className = "badge no"; }
 
     $("situation").textContent = s.situation || "";
+
+    var sceneEl = $("scene");
+    if (s.scene) { sceneEl.innerHTML = drawScene(s.scene); sceneEl.hidden = false; }
+    else { sceneEl.innerHTML = ""; sceneEl.hidden = true; }
 
     var gp = s.game_plan || {};
     var gpEl = $("gameplan");
