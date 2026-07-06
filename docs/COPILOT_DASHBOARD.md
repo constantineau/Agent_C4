@@ -275,9 +275,10 @@ to the grid after ~30–60 s idle, big back target.
 
 Unchanged from the three-tier design: this all runs **onboard** (Pi engine + Orin LLM), over
 boat-local Wi-Fi, on the boat's own sensors + common public data, never phoning the cloud mid-race.
-The LLM interprets engine facts (and, later, the frozen playbook) and may originate strategy; it
-never does the math (the engine does — a reliability guardrail, not the RRS-41 line). Legal in-race
-because it's all onboard. See `docs/RRS41_COMPLIANCE.md`.
+The LLM interprets engine facts and matches conditions against the frozen playbook; it never
+originates strategy (descope 2026-07-06 — docs/PLAYBOOK_V2.md §7) and never does the math (the
+engine does — a reliability guardrail, not the RRS-41 line). Legal in-race because it's all onboard.
+See `docs/RRS41_COMPLIANCE.md`.
 
 ---
 

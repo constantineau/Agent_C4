@@ -425,10 +425,11 @@ def test_deviation_drift_callout() -> bool:
 
 
 def test_strategy_synthesis() -> bool:
-    """Strategy-synthesis brief (Tier-2). The LLM re-narrates + may re-recommend (incl. an off-book
-    departure), but the engine's numbers / picture / concordance / caveats are preserved, an UNGROUNDED
-    recommendation is dropped for the deterministic one, and any LLM trouble falls back to the digest.
-    Pure: stub the engine digest + the LLM, no live engine/model."""
+    """Strategy-synthesis brief (Tier-2). The LLM re-narrates the assessment + may ENRICH the
+    recommendation's rationale — it NEVER changes the action / target variant / vs_playbook (descope
+    2026-07-06, docs/PLAYBOOK_V2.md §7) and never chains a re-route itself. Engine numbers / picture /
+    concordance / caveats are preserved; an ungrounded narrative is dropped; any LLM trouble falls
+    back to the digest. Pure: stub the engine digest + the LLM, no live engine/model."""
     ok = True
     print("\n== strategy synthesis (stubbed engine digest + LLM) ==")
 
@@ -470,7 +471,8 @@ def test_strategy_synthesis() -> bool:
         ok &= _check("llm off → deterministic digest",
                      r["mode"] == "deterministic" and r["assessment"] == "Hold: Middle start")
 
-        # B — grounded LLM refinement → new narrative + recommendation taken; engine facts preserved
+        # B — grounded LLM narrative → assessment re-told + rationale ENRICHED; the engine's action /
+        # vs_playbook / target stand untouched, and the LLM claiming "departs" changes NOTHING.
         StubLLM.payload = {"assessment": "Weak left lean with a rival ahead — press left if you have the lane.",
                            "recommendation": {"action": "Consolidate left", "vs_playbook": "departs",
                                               "rationale": "shift + fleet both lean left",
@@ -479,29 +481,28 @@ def test_strategy_synthesis() -> bool:
         r = copilot.strategy_brief(route="_bench_strat", use_llm=True)
         ok &= _check("grounded LLM → mode llm", r["mode"] == "llm")
         ok &= _check("assessment re-narrated", "press left" in r["assessment"])
-        ok &= _check("grounded recommendation taken (incl. off-book departure)",
-                     r["recommendation"]["action"] == "Consolidate left"
-                     and r["recommendation"]["vs_playbook"] == "departs")
+        ok &= _check("engine ACTION kept — LLM never re-recommends (descope)",
+                     r["recommendation"]["action"] == "Hold: Middle start"
+                     and r["recommendation"]["target_variant"] == "middle")
+        ok &= _check("LLM 'departs' claim ignored — vs_playbook stays the engine's",
+                     r["recommendation"]["vs_playbook"] == "on-plan")
+        ok &= _check("grounded rationale enriched",
+                     r["recommendation"]["rationale"] == "shift + fleet both lean left")
+        ok &= _check("no LLM-originated re-route chaining (Tier-2 chaining removed)",
+                     "reoptimize" not in r and StubEngine.reopt_calls == 0)
         ok &= _check("engine picture/concordance/caveats preserved (numbers untouched)",
                      r["picture"] == DIGEST["picture"] and r["concordance"] == DIGEST["concordance"]
                      and r["caveats"] == DIGEST["caveats"])
-        # Off-book chaining (Phase 3): the LLM ORIGINATED the departure (the digest was on-plan, so no
-        # offer rode along) → the copilot fetches the onboard re-route, compact (no heavy path/legs).
-        ok &= _check("LLM-originated off-book → re-route offer chained",
-                     (r.get("reoptimize") or {}).get("available") is True and StubEngine.reopt_calls == 1)
-        ok &= _check("chained offer is compact (heavy path/legs stripped)",
-                     "path" not in (r.get("reoptimize") or {}) and "legs" not in (r.get("reoptimize") or {})
-                     and r["reoptimize"].get("eta_min") == 254)
 
-        # C — UNGROUNDED recommendation (cites a tool not in the picture) → deterministic rec kept
+        # C — UNGROUNDED narrative (cites a tool not in the picture) → deterministic rationale kept
         StubLLM.payload = {"assessment": "Some read.",
                            "recommendation": {"action": "Tack now", "vs_playbook": "departs",
                                               "rationale": "vibes", "grounded_in": ["get_conditions"],
                                               "urgency": "now", "confidence": "high"}}
         r = copilot.strategy_brief(route="_bench_strat", use_llm=True)
-        ok &= _check("ungrounded rec dropped → deterministic recommendation kept",
-                     r["recommendation"]["action"] == "Hold: Middle start")
-        ok &= _check("assessment still re-narrated even when rec dropped", r["assessment"] == "Some read.")
+        ok &= _check("ungrounded → deterministic recommendation kept verbatim",
+                     r["recommendation"] == DIGEST["recommendation"])
+        ok &= _check("assessment still re-narrated even when narrative dropped", r["assessment"] == "Some read.")
 
         # D — LLM unavailable (cold model / timeout) → deterministic digest + error surfaced
         StubLLM.payload = copilot.LLMUnavailable("cold model")

@@ -10,9 +10,10 @@ Two layers, by design (see docs/STRATEGY_SYNTHESIS.md):
     backbone, already fuzzy/hysteretic) plus the handicap `fleet` read, and computes the concordance
     (do the directional signals agree, and how strongly) with plain arithmetic. The NUMBERS and the
     judgement-of-agreement are math, not a guess — that's the reliability guardrail.
-  * Tier-2 (the copilot, later) — the onboard LLM phrases this picture, explains the interplay, and may
-    ORIGINATE a suggestion beyond the frozen playbook. Legal in-race: it's the boat's own gear (see
-    docs/RRS41_COMPLIANCE.md §4). This Tier-1 brief is also the copilot's deterministic FALLBACK.
+  * Tier-2 (the copilot) — the onboard LLM phrases this picture, explains the interplay, and matches
+    the live conditions against the playbook's pre-authored plays. It does NOT originate strategy
+    (descope 2026-07-06, docs/PLAYBOOK_V2.md §7); the recommendation here is authoritative and this
+    Tier-1 brief is also the copilot's deterministic FALLBACK.
 
 Source-agnostic: pure composition of `selector` + `fleet` (both already on the 9.0 datasource seam), so
 the identical synthesis runs cloud or onboard. It re-fetches nothing with Schmitt state — `selector`

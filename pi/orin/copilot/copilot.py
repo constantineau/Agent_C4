@@ -65,11 +65,11 @@ def _system_prompt(pb: playbook_mod.Playbook) -> str:
         "HARD RULES (these are not optional):\n"
         "1. You NEVER do arithmetic or estimate numbers yourself. If you need a number, call a "
         "tool to get it from the engine. The engine is the only source of numbers.\n"
-        "2. You are the boat's own onboard tactician: you MAY reason from the facts to a fresh "
-        "strategy or tactical call. But every claim you make must be GROUNDED — traceable to (a) an "
-        "engine fact you fetched, (b) a pre-authored playbook variant, or (c) common public data the "
-        "engine returned. You may originate a recommendation; you may NOT fabricate the facts behind "
-        "it. The playbook is your strong default — if you recommend departing from it, say so plainly.\n"
+        "2. You do NOT originate strategy or tactics. Your job is to INTERPRET: explain the engine's "
+        "facts, match the live situation against the pre-authored playbook, and point to the variant "
+        "or play whose conditions look met. Every claim must be GROUNDED — traceable to (a) an engine "
+        "fact you fetched, (b) a pre-authored playbook variant, or (c) common public data the engine "
+        "returned. Never invent a tactical call the playbook or the engine didn't offer.\n"
         "3. You are advisory, never the sole authority. Frame recommendations as options with "
         "confidence, not commands.\n"
         "4. Only the provided tools exist. Do not claim to have done anything else.\n"
@@ -295,27 +295,30 @@ _WIND_VOCAB = (
 def _strategy_prompt(pb: playbook_mod.Playbook) -> str:
     return (
         _WIND_VOCAB + "\n"
-        "You are the SR33's ONBOARD tactician. The engine has ALREADY computed the strategic picture "
-        "below — the numbers, the per-signal reads, and the concordance are FIXED FACTS; reuse them, "
-        "do not change them or invent new numbers.\n"
+        "You are the SR33's ONBOARD strategy NARRATOR and playbook CONDITION-MATCHER. The engine has "
+        "ALREADY computed the strategic picture below — the numbers, the per-signal reads, the "
+        "concordance AND the recommendation are FIXED FACTS; reuse them, do not change them or invent "
+        "new numbers. You do NOT originate strategy or tactics.\n"
         "Your job: (1) write a 1-2 sentence ASSESSMENT that ties the signals together in plain "
         "tactician's language — say whether they AGREE (a moment to consolidate) or FIGHT each other "
-        "(hold and watch — one read is about to be wrong). (2) Give ONE recommendation. You MAY propose "
-        "a move the deterministic layer didn't — including DEPARTING the playbook (vs_playbook "
-        "'departs') when the picture warrants it — but every recommendation must be GROUNDED: in "
-        "grounded_in cite ONLY the signal tools that actually support it (get_strategy, get_selector, "
-        "get_tactics, get_drift, get_deviation, get_fleet). Advisory, not a command.\n\n"
+        "(hold and watch — one read is about to be wrong). (2) Restate the engine's recommendation in "
+        "crew language, enriching its rationale by matching the live facts against the playbook's own "
+        "frozen conditions (a variant's `flips when` trigger that now looks met is exactly what to "
+        "point at). Do NOT change the action, the target variant, or vs_playbook. In grounded_in cite "
+        "ONLY the signal tools that actually support it (get_strategy, get_selector, get_tactics, "
+        "get_drift, get_deviation, get_fleet). Advisory, not a command.\n\n"
         + pb.digest()
     )
 
 
 def strategy_brief(route=None, hoisted=None, use_llm: bool | None = None) -> dict:
     """In-race STRATEGY SYNTHESIS (Tier-2): the onboard LLM phrases the engine's deterministic
-    cross-signal digest into a crew-facing assessment + one recommendation, and MAY originate a move
-    beyond the frozen playbook (onboard = the boat's own gear, legal in-race — see
-    docs/RRS41_COMPLIANCE.md §4). Structurally grounded: the numbers / picture / concordance / caveats
-    stay the ENGINE's; the LLM contributes only the narrative + a grounded recommendation (ungrounded →
-    the deterministic one stands); any LLM trouble → the whole deterministic digest stands."""
+    cross-signal digest into a crew-facing assessment and enriches the recommendation's RATIONALE by
+    matching the live picture against the playbook's own frozen conditions. It does NOT originate
+    strategy (descope locked 2026-07-06 — docs/PLAYBOOK_V2.md §7): the ACTION / target variant /
+    vs_playbook are the engine's and are never overridden. Structurally grounded: the numbers /
+    picture / concordance / caveats stay the ENGINE's; an ungrounded LLM narrative is dropped; any
+    LLM trouble → the whole deterministic digest stands."""
     route = route or config.DEFAULT_ROUTE
     engine = EngineClient()
     pb = playbook_mod.load()
@@ -348,27 +351,16 @@ def strategy_brief(route=None, hoisted=None, use_llm: bool | None = None) -> dic
         assessment = (parsed.get("assessment") or "").strip()
         if assessment:
             out["assessment"] = assessment
+        # DESCOPE (2026-07-06, docs/PLAYBOOK_V2.md §7): the LLM never authors or replaces the
+        # recommendation — the engine's action / target_variant / vs_playbook stand. The LLM may only
+        # ENRICH the rationale (its condition-matching narrative), and only when grounded.
         rec = parsed.get("recommendation") or {}
         rg = [g for g in (rec.get("grounded_in") or []) if g in allowed]
-        if rec.get("action") and rg:                      # grounded → take the LLM's recommendation
-            rec["grounded_in"] = rg
-            det_rec = digest.get("recommendation") or {}
-            rec.setdefault("target_variant", det_rec.get("target_variant"))
-            rec.setdefault("vs_playbook", det_rec.get("vs_playbook", "on-plan"))
-            out["recommendation"] = rec
-        # else: ungrounded recommendation → keep the deterministic one untouched.
+        det_rec = digest.get("recommendation")
+        if det_rec and rec.get("rationale") and rg:
+            out["recommendation"] = {**det_rec, "rationale": rec["rationale"].strip()}
+        # else: ungrounded / empty narrative → the deterministic recommendation stands untouched.
         out["mode"] = "llm"
-        # OFF-BOOK CHAINING (Phase 3): the LLM may ORIGINATE a departure the deterministic digest
-        # didn't (so no re-route offer rode along) — fetch the onboard re-route so an off-book call
-        # still comes with a concrete route. Compact (drop the heavy path/legs); best-effort.
-        final = out.get("recommendation") or {}
-        if final.get("vs_playbook") in ("departs", "off-book") and not (out.get("reoptimize") or {}).get("available"):
-            try:
-                ro = engine.reoptimize(route)
-                if ro.get("available"):
-                    out["reoptimize"] = {k: v for k, v in ro.items() if k not in ("path", "legs")}
-            except Exception:
-                pass
         meta["llm_used"] = True
         meta["model"] = config.LLM_MODEL
         out["_meta"] = meta

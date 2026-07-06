@@ -82,7 +82,8 @@ services:
       AGENT_URL: ${AGENT_URL:-http://agent:8000}        # Monitor: our-boat telemetry from the cloud agent
       BOAT_PASSWORD: ${BOAT_PASSWORD:-sr33-dev}          # to auth to the agent for /conditions
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}        # race-doc ingestion (Opus extraction)
-      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-4-8}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-4-8}          # single-model knob (extract/judge)
+      ANTHROPIC_MODEL_CHAIN: ${ANTHROPIC_MODEL_CHAIN:-claude-fable-5,claude-opus-4-8}  # playbook synthesis + briefing: Fable primary, Opus fallback
       COASTLINE_CACHE: /srv/coastline       # Lab obstacle avoidance: cached coastline polygons
       COASTLINE_SOURCE: ${COASTLINE_SOURCE:-natural_earth}  # natural_earth | enc (NOAA S-57, draft-aware)
       COASTLINE_GLOBAL: ${COASTLINE_GLOBAL:-gshhg}  # global backstop dataset: gshhg (full-res) | natural_earth

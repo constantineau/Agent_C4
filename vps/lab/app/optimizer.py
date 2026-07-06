@@ -23,7 +23,6 @@ from . import sailplan
 
 HSTEP = 12          # heading fan resolution (deg)
 SECTOR = 3.0        # isochrone pruning bucket (deg of bearing from leg start)
-MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-8")
 API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 COVERAGE_MIN = float(os.environ.get("GRIB_COVERAGE_MIN", "0.6"))   # below this → degraded route
 ROUTE_CONE_DEG = float(os.environ.get("ROUTE_CONE_DEG", "120"))    # prune headings >this° off the mark
@@ -1016,10 +1015,9 @@ def briefing(result: dict, race_name: str = "") -> str:
     if API_KEY:
         try:
             import json
-            import anthropic
-            client = anthropic.Anthropic(api_key=API_KEY)
-            resp = client.messages.create(
-                model=MODEL, max_tokens=1200,
+
+            from . import llm as lab_llm
+            txt, _model = lab_llm.complete(
                 system="You are a yacht race navigator writing a concise PRE-RACE routing briefing "
                        "for the crew from an optimizer result. Explain the recommended route leg by "
                        "leg, the wind story, where to expect tacks/gybes and sail changes, and — "
@@ -1030,10 +1028,9 @@ def briefing(result: dict, race_name: str = "") -> str:
                        "explicitly (which side to leave each mark — from 'roundings'). If 'degraded' is "
                        "true or 'warnings' are present, OPEN with a clear forecast-reliability warning "
                        "(the wind data was sparse) before anything else. Be specific and brief; no preamble.",
-                messages=[{"role": "user", "content":
-                           "Optimizer result:\n" + json.dumps(facts, indent=2)}],
+                user="Optimizer result:\n" + json.dumps(facts, indent=2),
+                max_tokens=1200,
             )
-            txt = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text").strip()
             if txt:
                 return txt
         except Exception:

@@ -230,7 +230,7 @@ def selector_ep(route: str | None = None):
     recommendation over the frozen playbook — HOLD the recommended variant / SWITCH to a pre-authored
     variant / OFF-SCRIPT (no branch aboard for the favoured side). Deterministic, legal in-race (own
     instruments + pre-loaded homework); this layer deterministically picks a pre-authored branch (the
-    copilot above it may originate strategy — onboard is the boat's own gear, legal in-race)."""
+    copilot above it only narrates + condition-matches — it never originates strategy)."""
     return selector.get_selector(route=route)
 
 

@@ -180,6 +180,12 @@ So the corrected picture is **three layers**:
 
 ### The line is on-boat vs off-boat — NOT LLM-vs-engine, NOT interpret-vs-originate
 
+> **Scope note (2026-07-06):** the legal analysis in this section stands — onboard origination IS
+> permitted under RRS 41 — but as a **product choice** the copilot does not use that latitude: it
+> narrates the engine's reads and matches conditions against the pre-authored playbook only
+> (`docs/PLAYBOOK_V2.md` §7). "May originate" below describes what the rule allows, not what the
+> system does.
+
 A model running on hardware **physically on the boat**, on the crew's own gear, over the boat's own
 data + genuinely-common public data, is **not an outside source** — it is onboard equipment, the same
 category as Expedition, B&G, or a human tactician. All of those **originate customized tactical/routing

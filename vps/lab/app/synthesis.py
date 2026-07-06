@@ -18,7 +18,8 @@ The bundle schema is `c4.playbook/v1` and is deliberately a superset of what the
 and dropping it at the copilot's `PLAYBOOK_PATH` is the whole onboard wiring. The frontier model
 (Opus) writes the narrative; a deterministic fallback always produces a valid bundle with no key, so
 the Lab never depends on the model being reachable. RRS 41: all pre-race cloud homework, frozen at
-the gun — a strong prior the onboard copilot may depart from in-race (onboard = the boat's own gear, legal).
+the gun — the strategy library the onboard copilot matches conditions against in-race (the LLM never
+originates strategy; only the deterministic engine may flag an off-book departure — descope 2026-07-06).
 """
 from __future__ import annotations
 
@@ -30,11 +31,11 @@ import time
 
 from shared import race_def
 from . import forecast_ref
+from . import llm as lab_llm
 from . import playbook as pb
 from . import sailplan
 
 SCHEMA = "c4.playbook/v1"
-MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-8")
 API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 SIGNED_BY = os.environ.get("PLAYBOOK_SIGNED_BY", "C4 Performance Lab")
 
@@ -211,13 +212,8 @@ def _opus_synthesis(playbook: dict, definition, course_id, race_name):
         "what_flips_it}}), decision_tree (list of {observe,action,variant}). variant ids in "
         f"`recommended`/`decision_tree[].variant` MUST be from {ids}.")
     try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=API_KEY)
-        resp = client.messages.create(
-            model=MODEL, max_tokens=4000, system=system,
-            messages=[{"role": "user", "content": "Variants:\n" + json.dumps(facts, indent=2)}],
-        )
-        txt = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text").strip()
+        txt, used_model = lab_llm.complete(
+            system, "Variants:\n" + json.dumps(facts, indent=2), max_tokens=4000)
         if txt.startswith("```"):
             txt = txt.split("```", 2)[1].lstrip("json").strip() if "```" in txt[3:] else txt.strip("`")
         data = json.loads(txt)
@@ -240,7 +236,7 @@ def _opus_synthesis(playbook: dict, definition, course_id, race_name):
     if not tree:                                    # fall back to a deterministic tree
         tree = _deterministic_synthesis(playbook, definition, course_id)["decision_tree"]
     return {"headline": str(data.get("headline") or "").strip(),
-            "recommended": rec, "variants": syn, "decision_tree": tree, "synth_model": MODEL}
+            "recommended": rec, "variants": syn, "decision_tree": tree, "synth_model": used_model}
 
 
 # ---------------------------------------------------------------------------- bundle assembly

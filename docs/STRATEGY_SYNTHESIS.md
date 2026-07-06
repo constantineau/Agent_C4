@@ -1,7 +1,13 @@
-# In-race Strategy Synthesis — the onboard copilot as a tactician
+# In-race Strategy Synthesis — the onboard copilot as narrator + condition-matcher
 
-**Status:** design / plan (2026-07-03). Companion to `docs/RRS41_COMPLIANCE.md` (§4 — the on-boat vs
-off-boat line) and `docs/ONBOARD_ENGINE_SCOPING.md` §3 (the Orin as a judgment layer). No code yet.
+**Status:** built (Phases 0–3 shipped 2026-07-03) — then **AMENDED 2026-07-06: LLM strategy
+ORIGINATION is descoped** (`docs/PLAYBOOK_V2.md` §7). The LLM phrases the engine's deterministic
+digest and matches conditions against the pre-authored playbook; it never authors or replaces the
+recommendation, and the Tier-2 (LLM-originated) off-book chaining was removed — the Tier-1
+deterministic chaining stands. Passages below describing the LLM "originating" a move are retained
+as history of the shipped Phase 1/3 design and are superseded by the amendment. Companion:
+`docs/RRS41_COMPLIANCE.md` (§4 — the on-boat vs off-boat line, still sound) and
+`docs/ONBOARD_ENGINE_SCOPING.md` §3.
 
 ## What this adds
 
@@ -22,12 +28,13 @@ The value is the **cross-signal narrative** the siloed callouts miss:
 - *discordant* — "you're on the plan, but the fleet went the other way and the forecast is starting to
   disagree — one of you is about to be wrong; hold and watch the next shift."
 
-## Design principle — deterministic weighing, LLM synthesis + origination
+## Design principle — deterministic weighing, LLM synthesis (origination descoped 2026-07-06)
 
 Keep the **numbers and the mechanical concordance deterministic** (Tier-1, reliable, math-correct), and
-let the **LLM synthesize the picture, explain the interplay, and originate the recommendation** (Tier-2).
-The LLM may now propose strategy beyond the playbook — the guardrails that remain are for *reliability*,
-not compliance:
+let the **LLM synthesize the picture and explain the interplay** (Tier-2). ~~The LLM may now propose
+strategy beyond the playbook~~ — **amended: the LLM never proposes strategy; the recommendation is
+always the engine's** (it may enrich the rationale with its playbook condition-matching narrative).
+The guardrails are for *reliability*, not compliance:
 1. **The engine does the math.** Every number in the synthesis comes from the deterministic signal
    streams; the 7B never computes XTE, corrected-time, or drift itself.
 2. **Grounded.** Every element of the picture and every recommendation cites a real signal tool
@@ -129,7 +136,9 @@ phrases it and folds it into `assessment`/`recommendation`.
   Verified `bench_copilot.test_strategy_callout` (converge/split/off-book fire, plain-hold stays quiet,
   change re-surfaces) + full pure suite green.
 
-**Phase 3 — off-book chaining. ✅ SHIPPED 2026-07-03.**
+**Phase 3 — off-book chaining. ✅ SHIPPED 2026-07-03 — Tier-2 attach point REMOVED 2026-07-06**
+(the descope: only the Tier-1 deterministic off-book verdict chains the re-optimizer now; the LLM
+can no longer originate a departure, so it has nothing to chain).
 - When a recommendation **departs the playbook** (`vs_playbook: "departs"`), the brief now chains the
   already-built onboard re-optimizer so an off-book call comes with a **concrete route**, not just
   "sail your own side". A compact **`reoptimize` offer** rides on the brief (the heavy `path`/`legs`

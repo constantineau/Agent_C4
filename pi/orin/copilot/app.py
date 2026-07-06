@@ -105,8 +105,9 @@ def brief(req: BriefRequest):
 def strategy(req: NarrateRequest):
     """In-race STRATEGY SYNTHESIS: the LLM phrases the engine's deterministic cross-signal digest
     (forecast-vs-actual + fleet position + route-deviation + wind shift → concordance) into a
-    crew-facing assessment + one grounded recommendation, and MAY originate a move beyond the frozen
-    playbook (onboard = legal in-race). Falls back to the deterministic digest on any LLM trouble."""
+    crew-facing assessment and enriches the recommendation's rationale by matching the picture
+    against the playbook's frozen conditions. It never changes the engine's recommendation (descope
+    2026-07-06). Falls back to the deterministic digest on any LLM trouble."""
     return copilot.strategy_brief(route=req.route, hoisted=req.hoisted, use_llm=req.use_llm)
 
 

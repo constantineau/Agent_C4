@@ -19,7 +19,8 @@ deterministic computation from the LLM** across three tiers:
   LLM*) run here so they're legal in-race. The iPad talks to the Pi over boat-local Wi-Fi in race mode.
   *(9.0 data-access abstraction ✅ — modules read via `datasource.active()`; 9.1 onboard service next.)*
 - **Tier 2 — Onboard LLM copilot (Jetson Orin Nano, optional):** Qwen2.5-7B narrates the engine's facts
-  + bounded decision support (the engine does the math; grounded, but may originate strategy — onboard is legal). *(Phase 9.4; HW ~06-18.)*
+  + bounded decision support (the engine does the math; grounded; narrates + matches conditions against
+  the pre-authored playbook — it never originates strategy, descope 2026-07-06 `docs/PLAYBOOK_V2.md` §7). *(Phase 9.4.)*
 - **Tier 3 — Cloud (this VPS):** nginx+TLS → FastAPI ingestion → TimescaleDB → agent (Opus tool-use,
   alerting, summarizer) → web. Between races it's the **C4 Performance Lab** (strategy studio → playbook
   + write-back learning) and the practice/cruising/debrief product; in a race it is **race-gated (9.2)**
@@ -541,7 +542,7 @@ merges the live cache. Cloud path unaffected (`active: CloudSource`, `pool` stil
 
 ## Lab-3 onboard executor — route deviation + the iPad Strategy card (first slice)
 
-The onboard executor works the frozen Lab-2 playbook in-race as a strong prior — onboard it may depart
+The onboard executor works the frozen Lab-2 playbook in-race as a strong prior — the ENGINE may depart
 from it (the boat's own gear isn't outside help; RRS 41's line is on-boat vs off-boat). Item-2's vision has two continuously-monitored branch triggers:
 (a) **route-deviation** and (b) forecast-drift. This first slice ships the **route-deviation core +
 the iPad Strategy card** — the deterministic, bench-verifiable half; forecast-drift + onboard
@@ -615,7 +616,7 @@ persistent wind shift (`tactics`), route-deviation (`deviation`) and forecast-dr
 crew-facing recommendation over the FROZEN playbook: **`vps/agent/app/selector.py`** `get_selector()` →
 HOLD the recommended variant / **SWITCH** to a pre-authored variant / **OFF-SCRIPT** (favoured side has no
 branch aboard). This deterministic layer picks a pre-authored variant — the switch target is one of
-the bundle's own variants and the rationale is its own `what_flips_it` (the copilot above may originate strategy; onboard is legal). GRACEFUL DEGRADATION (item-2): tier
+the bundle's own variants and the rationale is its own `what_flips_it` (the copilot above narrates + condition-matches only — never originates strategy, descope 2026-07-06). GRACEFUL DEGRADATION (item-2): tier
 1 = a persistent shift favours a side WITH a variant → recommend it; tier 2 = favoured side has NO variant
 → off-script flag ("sail your own to that side" — the onboard re-optimizer is the still-deferred next tier);
 default = hold. Forecast-drift/route-deviation don't switch on their own — they REINFORCE a wind-shift switch
@@ -712,9 +713,10 @@ math over shift+drift+deviation+fleet-lean → strong/split/weak/none), a ground
 cites its tool), one **recommendation** (folds selector action + concordance + fleet threat; off-book flag),
 assessment, caveats, confidence. Source-agnostic (pure composition on the 9.0 seam; reuses selector's single
 gather so the Schmitt bands aren't double-ticked). **Tier-2 (copilot `POST /strategy`, `copilot.strategy_
-brief`):** the onboard 7B phrases the digest + MAY originate an off-book move (onboard = the boat's own gear,
-legal in-race) — but the numbers/picture/concordance/caveats stay the ENGINE's; an ungrounded rec is dropped
-for the deterministic one; any LLM trouble → the whole deterministic digest stands (schema-constrained
+brief`):** the onboard 7B phrases the digest + enriches the recommendation's RATIONALE by matching the live
+picture against the playbook's frozen conditions — it NEVER changes the action/target/vs_playbook (descope
+2026-07-06, `docs/PLAYBOOK_V2.md` §7); the numbers/picture/concordance/caveats stay the ENGINE's; an
+ungrounded narrative is dropped; any LLM trouble → the whole deterministic digest stands (schema-constrained
 decode); also served from the stdlib `serve_dashboard.py`. **SURFACED (Phase 2):** the iPad Strategy card's
 **SYNTHESIS apex section** (assessment + concordance + mode pill LLM/ENGINE + OFF-BOOK badge, `fetchSynthesis`
 copilot→engine fallback, own ~15 s cadence) above the selector banner + deviation/drift triggers; and a
@@ -722,23 +724,24 @@ proactive **auto-coach `strategy` callout** (`narrate._strategy_callout`, priori
 fires only on the higher-order reads — signals converge, conflict, or the rec departs the playbook — a plain
 hold-and-monitor stays quiet. `copilot.gather` now fetches `get_strategy`. Verified: `test_strategy.py`,
 `bench_copilot.test_strategy_synthesis` + `test_strategy_callout`, live engine `/strategy` + copilot POST,
-Playwright (live engine-fallback + demo calm/escalated + OFF-BOOK badge, 0 errors). RRS-41: reframed —
-onboard the copilot MAY originate strategy (the line is on-boat vs off-boat, not LLM-vs-engine); the frozen
-playbook is a strong prior it may depart from, flagged, not a cage. Optional follow-up: tap-to-detail
+Playwright (live engine-fallback + demo calm/escalated + OFF-BOOK badge, 0 errors). RRS-41: the on-boat
+vs off-boat line means onboard origination WOULD be legal, but it is descoped as a product choice
+(2026-07-06) — the LLM narrates + condition-matches; off-book verdicts come only from the deterministic
+engine. Optional follow-up: tap-to-detail
 streaming on the synthesis section (deferred — the Orin `/detail` isn't reachable on the bench).
 **PHASE 3 — OFF-BOOK CHAINING: SHIPPED 2026-07-03.** A recommendation that DEPARTS the playbook now comes
 with a CONCRETE route, not just "sail your own side": the brief chains the already-built onboard
 re-optimizer and a **compact `reoptimize` offer** (heavy `path`/`legs` stripped; eta/tacks/sail-plan/
 divergence kept — the card fetches the full track from `GET /reoptimize` on demand) rides on the brief;
-the rec rationale gains "a fresh onboard re-route is ready (~ETA, N tacks)". Two attach points — **Tier-1**
-(`strategy._reoptimize_offer`, deterministic off_script → off-book) and **Tier-2** (`copilot.strategy_brief`
-+ `EngineClient.reoptimize`) for an off-book move the LLM ORIGINATES that the digest didn't carry. The
+the rec rationale gains "a fresh onboard re-route is ready (~ETA, N tacks)". ONE attach point since the
+2026-07-06 descope: **Tier-1** (`strategy._reoptimize_offer`, deterministic off_script → off-book) — the
+Tier-2 (LLM-originated) attach point was REMOVED with origination (`docs/PLAYBOOK_V2.md` §7). The
 heavy isochrone runs ONLY on an off-book rec (never on an on-plan hold), engine-cached. Surfaced: the iPad
-card's `⟳ re-route` line now fires on a SYNTHESIS off-book verdict (not just a selector `off_script`),
-preferring the brief's travelling offer (so an LLM-originated departure the selector didn't flag still
-offers a route); the auto-coach `strategy` callout appends "onboard re-route ready (~ETA, N tacks)".
+card's `⟳ re-route` line fires on a SYNTHESIS off-book verdict (not just a selector `off_script`),
+preferring the brief's travelling offer; the auto-coach `strategy` callout appends "onboard re-route ready
+(~ETA, N tacks)".
 Verified: `test_strategy.py` (off-book attaches a compact offer + calls the re-optimizer once; on-plan hold
-does NOT), `bench_copilot.test_strategy_synthesis` (LLM-originated off-book → offer chained, compact), live
+does NOT), `bench_copilot.test_strategy_synthesis` (LLM 'departs' claim ignored, no Tier-2 chaining), live
 engine rebuild (on-plan `/strategy` carries no `reoptimize` key; forced off_script attaches the compact
 offer; `/reoptimize` = a real 14.8 min/1-tack route). Files: strategy.py, copilot.py, engine_client.py,
 narrate.py, dashboard/dashboard.js, test_strategy.py, bench_copilot.py, docs/STRATEGY_SYNTHESIS.md.
@@ -1021,7 +1024,8 @@ frozen homework. Two stages, both in `vps/lab/app/`:
   Orin). The **Gameplan tab** gains a "Synthesize branching playbook" panel below the optimizer:
   headline + recommended + stakes, per-variant cards (summary/why/tradeoffs/what-flips-it), the
   decision tree, and a **Freeze & sign** → signature + download. RRS 41: all pre-race cloud homework
-  — a strong prior the onboard copilot may depart from in-race (onboard = the boat's own gear, legal), flagging when it does.
+  — the strategy library the onboard copilot points into (only the deterministic engine may flag an
+  off-book departure; the LLM never originates — descope 2026-07-06).
 
 **Verified end-to-end on the real Bayview Mackinac cove_island course** (live GFS+NAM+HRRR + Opus,
 ~2.5 min): a 3-way split (HRRR-left / NAM-middle / GFS-right), low agreement 0.33, 252-min decision
@@ -1477,7 +1481,7 @@ the plan's pace — 3:20 behind (−0.8 kn VMC)") from the engine's `/deviation`
 variant may no longer pay") from `/drift`. Both shown only at the engine's fuzzy watch/act (the
 engine's own Schmitt bands already de-noise, so CONFIRM_ROUNDS=1), grounded in `get_deviation`/`get_drift`
 + the frozen variant/`forecast_fingerprint` — the copilot grounds these callouts in the pre-loaded homework +
-common public data (it may originate strategy in-race; onboard is legal). Categories `deviation`(5)/`drift`(8) sit among the
+common public data (reporting the engine's reads; it never originates strategy). Categories `deviation`(5)/`drift`(8) sit among the
 playbook-adherence callouts; status in the id so watch→act re-surfaces. `copilot.gather` now fetches
 `get_deviation`+`get_drift`; `EngineClient.deviation()/drift()` added. Verified
 `bench_copilot.test_deviation_drift_callout` + LIVE (both fired against the real :8200 engine, the coach
@@ -1551,8 +1555,9 @@ The optional in-race conversational LLM (`docs/ONBOARD_ENGINE_SCOPING.md` §3). 
 8GB (Super)** dedicated to inference, **separate** from the Pi 4 that runs the deterministic engine
 (Tier 1) — they talk over boat-local Wi-Fi. Legal in-race because the boat's own computer reasoning
 over its own sensors + pre-loaded homework + common public data is not "outside help"; it never
-phones the cloud mid-race (the real RRS-41 line) and the engine does the math; the frozen playbook is a
-strong prior it may depart from, not a cage. **The Orin is in hand as of 2026-06-18.**
+phones the cloud mid-race (the real RRS-41 line) and the engine does the math; the frozen playbook is
+the strategy library it matches conditions against — it never originates strategy (descope 2026-07-06,
+`docs/PLAYBOOK_V2.md` §7). **The Orin is in hand as of 2026-06-18.**
 
 **Runtime appliance: LIVE.** The Orin is a turnkey headless offline-inference appliance —
 **Ollama serving `qwen2.5:7b-instruct-q4_K_M` on `:11434`** (OpenAI `/v1`), built from source with a
@@ -1572,8 +1577,8 @@ math or fetch anything else — the engine does the math); every `factor`/`recom
 the engine (`structural_caveats`), not authored by the model; every brief carries a standing
 disclaimer + confidence; and if the LLM is off/slow/ungrounded the service returns the **deterministic
 brief** built from the same facts (always works, never depends on the model). A frozen **playbook**
-(Lab-2 output) loads via `PLAYBOOK_PATH` as a strong prior — the copilot may depart from it in-race
-(onboard = legal), flagging when it does; absent → it says so. Endpoints: `GET /health` (honest llm/deterministic/
+(Lab-2 output) loads via `PLAYBOOK_PATH` as the strategy library the copilot matches conditions
+against (departures are the deterministic engine's call, never the LLM's); absent → it says so. Endpoints: `GET /health` (honest llm/deterministic/
 unreachable modes + the auto-coach state), `GET /tools` (the bounded surface), `POST /brief`, `POST
 /narrate` (proactive callouts on demand), `GET /coach` (the auto-coach held state), `GET /adherence`,
 `GET /snapshot`. **Bench-verified

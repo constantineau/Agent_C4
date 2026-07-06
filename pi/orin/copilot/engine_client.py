@@ -109,9 +109,9 @@ class EngineClient:
 
     def reoptimize(self, route=None) -> dict:
         """The onboard RE-OPTIMIZER's fresh fallback route (isochrone through the remaining marks on
-        the boat's own polars, off-playbook). Chained by the strategy synthesis when a recommendation
-        DEPARTS the frozen plan so an off-book call comes with a concrete route. Heavy + engine-cached
-        → fetched only on an off-book rec (e.g. one the LLM originated that the digest didn't carry)."""
+        the boat's own polars, off-playbook). The engine's Tier-1 synthesis chains it when a
+        DETERMINISTIC verdict departs the frozen plan, so the offer normally rides in on the digest;
+        this client method remains for the dashboard/tools read path. Heavy + engine-cached."""
         return self._get("/reoptimize", {"route": route})
 
     def reachable(self) -> bool:

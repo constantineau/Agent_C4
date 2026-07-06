@@ -9,9 +9,9 @@ corrected time, an upcoming sail change-down, a helm rotation, stale instruments
 
 Every callout is GROUNDED in an engine fact and/or a playbook variant exactly like a brief item
 — the engine does the math, the callout reports it. The LLM only PHRASES the top callouts into a
-calm coach line, and the deterministic callout text is the always-on fallback. It may originate
-strategy onboard; the in-race-legal posture is simply that it all runs on the boat's own gear —
-grounded in the pre-authored homework + the engine's own numbers (RRS 41 — see the copilot README).
+calm coach line, and the deterministic callout text is the always-on fallback. It never originates
+strategy (descope 2026-07-06, docs/PLAYBOOK_V2.md §7) — it reports the engine's reads and the
+playbook's own pre-authored plays, grounded in the homework + the engine's numbers.
 
 State: a tiny in-process dedup store (per route) gives "raise slow, clear fast" + show-once. A
 callout that just (and persistently) appeared is `new` — worth showing; once shown it stays in
@@ -305,8 +305,8 @@ def _strategy_callout(strat):
     """In-race STRATEGY SYNTHESIS callout (docs/STRATEGY_SYNTHESIS.md Phase 2). The higher-order
     cross-signal read the individual triggers don't give: the moment the signals CONVERGE
     (consolidate — a moment to press) or CONFLICT (split — hold and watch, one read is about to be
-    wrong), or when the synthesis recommends DEPARTING the frozen playbook (onboard may originate
-    strategy in-race — the boat's own gear, legal). A plain hold-and-monitor stays quiet: the
+    wrong), or when the DETERMINISTIC synthesis verdict departs the frozen playbook (the selector's
+    off_script — the engine's call, never the LLM's). A plain hold-and-monitor stays quiet: the
     per-signal triggers + the playbook tile already cover it, so this only fires when the SYNTHESIS
     adds something. Grounded in get_strategy + the tools that fed the recommendation (all engine
     facts). The concordance verdict + the recommendation are in the id so a genuine change re-surfaces."""

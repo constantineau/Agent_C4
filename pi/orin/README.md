@@ -22,9 +22,10 @@ Locked decisions: the **Pi 4 owns the deterministic engine** (routing/tactics/sa
 plain physics, no LLM); the **Orin owns the LLM**. Under RRS 41 the boat's own computer reasoning over
 its own sensors + pre-loaded homework + common public data is *not* "outside help" — so the copilot is
 legal while racing **as long as it never phones the cloud mid-race** (that off-boat round-trip is the
-real RRS-41 line). Onboard it MAY originate strategy — it interprets the engine's numbers and the
-pre-loaded playbook and can reason beyond them. The engine still does the math (a reliability guardrail,
-not a legal one); the pre-race Opus playbook is a strong prior/homework, not a limit.
+real RRS-41 line). It does NOT originate strategy (a product choice locked 2026-07-06, not a legal
+limit — see `docs/PLAYBOOK_V2.md` §7): it interprets the engine's numbers and MATCHES the live
+situation against the pre-loaded playbook's plays. The engine does the math; the pre-race frontier
+playbook is the strategy library it points into.
 
 ## The inference-API contract
 

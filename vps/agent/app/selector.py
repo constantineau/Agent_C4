@@ -7,8 +7,8 @@ This module UNIFIES them into a single crew-facing recommendation over the FROZE
     HOLD the recommended variant  ·  SWITCH to a pre-authored variant  ·  OFF-SCRIPT (no branch aboard)
 
 This deterministic layer picks a pre-authored variant — the switch target is always one of the
-bundle's own variants (the copilot above it may originate strategy; onboard is the boat's own gear,
-legal in-race), and the rationale is the bundle's own
+bundle's own variants (the copilot above it only narrates and condition-matches; it never originates
+strategy — descope 2026-07-06, docs/PLAYBOOK_V2.md §7), and the rationale is the bundle's own
 `what_flips_it`. This is the Tier-1 (Pi engine, no Orin) generalization of the copilot's wind-shift-only
 `adherence.py` tile — deterministic, legal in-race (own instruments + pre-loaded homework + common data).
 

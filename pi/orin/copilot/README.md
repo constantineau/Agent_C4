@@ -4,8 +4,9 @@ The **SR33 copilot service** — the next 9.4 increment after the runtime bring-
 Tier-1 engine's facts (and, later, the frozen playbook) into **bounded, grounded decision
 support** via the local LLM. Runs **on the Orin**, talks to the Pi-4 engine over boat-local
 Wi-Fi and to the LLM over localhost. RRS-41-safe: never phones the cloud (the real line — an off-boat
-round-trip is the violation). Onboard it may originate strategy; the engine still does the math and it
-grounds every claim in engine facts + the playbook — reliability discipline for a 7B, not RRS-41 limits.
+round-trip is the violation). It never originates strategy (descope 2026-07-06, `docs/PLAYBOOK_V2.md`
+§7): it narrates the engine's reads and MATCHES the live situation against the pre-authored playbook;
+the engine does the math and it grounds every claim in engine facts + the playbook.
 
 Two surfaces, same guardrails: the **decision-support / tool-calling layer** (PULL — the crew asks,
 `POST /brief`) and the **crew-facing narration layer** (PUSH — the copilot surfaces callouts on its own,
@@ -38,9 +39,10 @@ The bounded structure enforces the locked design rules **structurally, not just 
 5. **Always produces a brief.** If the LLM is off, unreachable, slow, or its output fails
    validation, the service returns the **deterministic** brief built from the same facts. The LLM
    interprets and prioritizes on top; it can never exceed the facts.
-6. **Playbook as a strong prior.** A frozen playbook (Lab-2 output) loads via `PLAYBOOK_PATH`; the
-   copilot leans on its pre-authored variants but may depart from them onboard (legal), flagging when
-   it does. Absent → it says so and reasons from live engine facts alone.
+6. **Playbook as the strategy library.** A frozen playbook (Lab-2 output) loads via `PLAYBOOK_PATH`;
+   its pre-authored variants/plays are the ONLY strategies the copilot points to — its job is matching
+   the live conditions to them, never authoring new ones (a deterministic engine off_script verdict is
+   the "situation outran the library" path). Absent → it says so and narrates live engine facts alone.
 
 ## Crew-facing narration — the PUSH surface (`narrate.py`, `POST /narrate`)
 
@@ -60,9 +62,9 @@ rotation**, **stale instruments**. The LLM only *phrases* the top one or two int
 the deterministic callout text is the always-on fallback.
 
 Same guardrails as a brief: every callout is **grounded** in a real engine fact and/or a playbook
-variant (ungrounded ones are dropped) and the engine does the math — reliability discipline. It may
-originate strategy onboard; the in-race-legal posture is simply that it all runs on the boat's own gear
-(the pre-authored homework + the engine's own numbers). State is a tiny per-route **show-once** dedup (raise-slow / clear-fast, like the cloud
+variant (ungrounded ones are dropped) and the engine does the math — reliability discipline; the
+copilot never originates strategy (it reports the engine's reads + the playbook's own pre-authored
+plays). State is a tiny per-route **show-once** dedup (raise-slow / clear-fast, like the cloud
 alerting loop): `POST /narrate` returns `active` (every confirmed callout — the banner set,
 priority-sorted) and `new` (the callouts that just crossed their confirmation threshold this poll —
 what's worth showing), so the iPad can poll it every ~15 s and only surface what's genuinely new.

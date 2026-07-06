@@ -51,7 +51,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send({"mode": "deterministic", "reason": "server error: " + str(e)[:120]})
         elif path == "/strategy":
             # in-race STRATEGY SYNTHESIS — the LLM phrases the engine's deterministic cross-signal
-            # digest + may originate a move beyond the playbook (onboard = legal). Never 500 — the
+            # digest (narrative + condition-matching only; never re-recommends). Never 500 — the
             # copilot already falls back to the deterministic digest internally on any LLM trouble.
             try:
                 body = json.loads(raw)
