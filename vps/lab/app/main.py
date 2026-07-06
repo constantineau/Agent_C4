@@ -21,7 +21,7 @@ from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from shared import race_def, boat_profile
-from . import auth, store, extract, boats, labstate, feedback, pbstore, deploy, monitor, judge, track, learning, fleetimport, report
+from . import auth, store, extract, boats, labstate, feedback, pbstore, deploy, monitor, judge, track, learning, fleetimport, report, retro, retrostore
 
 INGESTED_DIR = os.environ.get("INGESTED_DIR", "/srv/ingested")
 
@@ -691,6 +691,38 @@ async def debrief_apply(body: dict):
     if not race_id:
         return JSONResponse({"detail": "race_id required"}, status_code=400)
     return await run_in_threadpool(judge.apply_writeback, race_id, (body or {}).get("learnings"))
+
+
+# ---- Debrief: FLEET RETRO study (docs/RETRO_STUDY.md) — past-race archive + per-boat runs -------
+@app.get("/api/retro/races")
+async def retro_races():
+    return {"races": retrostore.list_races(), "grib_archive": retrostore.grib_stats()}
+
+
+@app.post("/api/retro/ingest")
+async def retro_ingest(body: dict):
+    """Pull a YB race (entries + full-fleet tracks + results) into the persistent retro archive."""
+    rid = (body or {}).get("race_id")
+    if not rid:
+        return JSONResponse({"detail": "race_id required (the YB id, e.g. bayviewmack2025)"},
+                            status_code=400)
+    try:
+        return await run_in_threadpool(retro.ingest_race, rid)
+    except Exception as exc:
+        return JSONResponse({"detail": f"retro ingest failed: {exc}"}, status_code=500)
+
+
+@app.post("/api/retro/polars")
+async def retro_polars(body: dict):
+    """Match every ingested entry to its public ORC cert + store the converted polar."""
+    rid = (body or {}).get("race_id")
+    if not rid:
+        return JSONResponse({"detail": "race_id required"}, status_code=400)
+    try:
+        return await run_in_threadpool(retro.match_polars, rid,
+                                       (body or {}).get("country") or "USA")
+    except Exception as exc:
+        return JSONResponse({"detail": f"retro polar match failed: {exc}"}, status_code=500)
 
 
 # ---- Debrief: ACTUAL boat-track ingestion (GPX upload / YB our-boat) → helm-vs-optimal scoring ---
