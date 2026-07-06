@@ -1,5 +1,9 @@
 # Orin LLM LoRA — fine-tuning plan (pilot)
 
+> **SUPERSEDED 2026-07-06 by `docs/MATCHER_LORA_PLAN.md`** — the reliability objective below
+> (JSON / tool-loop) is absorbed into the condition-matcher training task, whose eval gates it
+> directly. Kept for the mechanics it validated (QLoRA → merge → GGUF q4 → `ollama create`).
+
 Fine-tune the onboard copilot LLM (`qwen2.5:7b-instruct-q4_K_M`, Ollama on the Orin Nano) to make the
 **bounded tool-loop brief** reliable. Decisions locked 2026-06-29:
 
