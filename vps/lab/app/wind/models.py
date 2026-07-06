@@ -148,9 +148,9 @@ class GFS(ModelSource):
     name = "gfs"
     cycles = (0, 6, 12, 18)
     lag_h = 3.8
-    horizon_h = 120
-    fhr_step = 3
-    dense_to = 0
+    horizon_h = 384       # GFS 0.25° posts 1-hourly to f120 + 3-hourly f123–f384; our 3-hourly grid
+    fhr_step = 3          # spans the whole range (the old 120 cap made a race >5 days out route on
+    dense_to = 0          # ZERO frames — the "0/0 frames" no-route failure)
     priority = 1.0
 
     def _url(self, cycle, fhr, member, bbox):
@@ -163,7 +163,7 @@ class NAM(ModelSource):
     name = "nam"
     cycles = (0, 6, 12, 18)
     lag_h = 1.8
-    horizon_h = 60
+    horizon_h = 84         # awphys files run 3-hourly past f36 out to f84
     fhr_step = 3
     dense_to = 36          # NAM is hourly to f36
     priority = 1.1         # higher-res regional → trust a touch more near shore
@@ -228,11 +228,19 @@ class ECMWF(ModelSource):
     name = "ecmwf"
     cycles = (0, 6, 12, 18)
     lag_h = 8.0
-    horizon_h = 144
+    horizon_h = 240                # IFS open data: 3-hourly to f144, 6-hourly f150–f240
     fhr_step = 3
     priority = 1.15
     members = ("det",)
     _cooldown_until = 0.0          # circuit breaker: skip ECMWF until this epoch after a rate-limit
+
+    def fhrs(self, horizon_h: int):
+        """IFS open data posts 3-hourly steps to f144 and 6-hourly f150–f240 — generate the REAL
+        grid so the f147/f153-style steps that don't exist are never requested."""
+        h = min(horizon_h, self.horizon_h)
+        out = list(range(0, min(h, 144) + 1, 3))
+        out += list(range(150, h + 1, 6))
+        return out
 
     def _stream_type(self, cycle, member):
         if member == "det":
