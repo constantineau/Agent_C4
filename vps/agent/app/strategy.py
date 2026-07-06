@@ -122,6 +122,16 @@ def _picture(sig, flt, conc):
                     "grounded_in": ["get_deviation"],
                     "confidence": "med" if dev.get("status") == "act" else "low"})
 
+    def _fleet_position(row):
+        """Where a rival is RELATIVE to us — cross-track side + on-water ahead/behind."""
+        lev, lead = row.get("leverage_nm"), row.get("on_water_lead_nm")
+        bits = []
+        if lev:
+            bits.append(f"{abs(round(lev, 1))} nm to our {'right' if lev > 0 else 'left'}")
+        if lead:
+            bits.append("ahead" if lead > 0 else "behind")
+        return f" — {' and '.join(bits)}, " if bits else " "
+
     if flt.get("available") and (flt.get("fleet") or []):
         top = flt["fleet"][0]
         d = top.get("corrected_delta_s")
@@ -129,8 +139,8 @@ def _picture(sig, flt, conc):
             m, s = divmod(abs(int(d)), 60)
             who = "beating us" if d < 0 else "behind us"
             out.append({"signal": "fleet",
-                        "read": f"{top.get('boat', 'top rival')} projected {who} by {m}:{s:02d} on "
-                                f"corrected time",
+                        "read": f"{top.get('boat', 'top rival')}{_fleet_position(top)}projected {who} "
+                                f"by {m}:{s:02d} on corrected time",
                         "grounded_in": ["get_fleet"],
                         "confidence": _conf_label(top.get("confidence") or 0.4)})
 

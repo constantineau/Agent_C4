@@ -37,6 +37,18 @@ def _conf_label(c):
     return "high" if c >= 0.7 else "med" if c >= 0.45 else "low"
 
 
+def _fleet_position(row) -> str:
+    """Where a rival is RELATIVE to us — cross-track side (leverage_nm, + = our right) and on-water
+    along-track (lead_nm, + = ahead). Returns ' — <side> and <ahead|behind>, ' (or a bare space)."""
+    lev, lead = row.get("leverage_nm"), row.get("lead_nm")
+    bits = []
+    if lev:
+        bits.append(f"{abs(round(lev, 1))} nm to our {'right' if lev > 0 else 'left'}")
+    if lead:
+        bits.append("ahead" if lead > 0 else "behind")
+    return f" — {' and '.join(bits)}, " if bits else " "
+
+
 def _fleet_lean(flt):
     if not flt.get("available"):
         return None, 0.0, 0
@@ -124,9 +136,10 @@ def _picture(sig, flt, conc):
         if d is not None:
             m, s = divmod(abs(int(d)), 60)
             who = "beating us" if d < 0 else "behind us"
+            postxt = _fleet_position(top)
             out.append({"signal": "fleet",
-                        "read": f"{top.get('boat', 'top rival')} projected {who} by {m}:{s:02d} on "
-                                f"corrected time",
+                        "read": f"{top.get('boat', 'top rival')}{postxt}projected {who} by "
+                                f"{m}:{s:02d} on corrected time",
                         "grounded_in": ["get_fleet"],
                         "confidence": _conf_label(top.get("confidence") or 0.4)})
 
@@ -231,7 +244,7 @@ def _build_sig(sc: dict) -> dict:
     pos = wp.point_of_sail((sc.get("cond") or {}).get("leg"))
     base = 200 + (i * 17) % 90              # on-water baseline TWD (deterministic, varied)
     mag = 12 + (i * 5) % 8                  # 12..19° persistent shift
-    tack = ("port", "starboard")[i % 2]
+    tack = (sc.get("cond") or {}).get("tack") or ("port", "starboard")[i % 2]
 
     shift = sc.get("shift")
     if shift in ("persist_left", "persist_right"):
@@ -270,14 +283,15 @@ def _build_fleet(sc: dict) -> dict:
     if not fleet:
         return {"available": False}
     name = _RIVAL_NAMES[sc.get("_i", 0) % len(_RIVAL_NAMES)]
+    # leverage_nm = cross-track side (+ = to our right); lead_nm = on-water along-track (+ = ahead of us)
     if fleet == "rival_left":
-        row = {"boat": name, "tag": "rival", "leverage_nm": -0.6, "confidence": 0.6, "corrected_delta_s": -75}
+        row = {"boat": name, "tag": "rival", "leverage_nm": -0.6, "lead_nm": 0.3, "confidence": 0.6, "corrected_delta_s": -75}
     elif fleet == "rival_right":
-        row = {"boat": name, "tag": "rival", "leverage_nm": 0.6, "confidence": 0.6, "corrected_delta_s": -75}
+        row = {"boat": name, "tag": "rival", "leverage_nm": 0.6, "lead_nm": 0.3, "confidence": 0.6, "corrected_delta_s": -75}
     elif fleet == "ahead":
-        row = {"boat": name, "tag": "ahead_corrected", "leverage_nm": 0.3, "confidence": 0.5, "corrected_delta_s": -120}
+        row = {"boat": name, "tag": "ahead_corrected", "leverage_nm": 0.3, "lead_nm": 0.5, "confidence": 0.5, "corrected_delta_s": -120}
     else:  # behind
-        row = {"boat": name, "tag": "rival", "leverage_nm": 0.2, "confidence": 0.5, "corrected_delta_s": 90}
+        row = {"boat": name, "tag": "rival", "leverage_nm": 0.2, "lead_nm": -0.4, "confidence": 0.5, "corrected_delta_s": 90}
     return {"available": True, "fleet": [row]}
 
 
@@ -366,7 +380,11 @@ def _cond_for(sc: dict, i: int) -> dict:
     """Deterministic plausible instrument context for the labeling UI (NOT scored)."""
     tws = 8 + (i * 3) % 12
     legs = ["beat to Windward", "run to Leeward", "beat to the weather gate"]
-    return {"tws": tws, "leg": legs[i % len(legs)],
+    leg = legs[i % len(legs)]
+    pos = wp.point_of_sail(leg)
+    tack = ("port", "starboard")[i % 2]
+    board = "gybe" if pos == "downwind" else "tack"     # sailors gybe downwind, tack upwind
+    return {"tws": tws, "leg": leg, "tack": tack, "board": board, "point_of_sail": pos,
             "next_mark": ["Windward", "Leeward", "Cove Gate"][i % 3],
             "distance_nm": round(1.5 + (i % 5) * 0.6, 1)}
 
