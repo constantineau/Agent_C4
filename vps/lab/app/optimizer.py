@@ -1024,7 +1024,9 @@ def briefing(result: dict, race_name: str = "") -> str:
                        "for the crew from an optimizer result. Explain the recommended route leg by "
                        "leg, the wind story, where to expect tacks/gybes and sail changes, and — "
                        "importantly — call out where model CONFIDENCE is low (models disagree) so "
-                       "the crew sails conservatively there. State the required mark ROUNDINGS "
+                       "the crew sails conservatively there. WIND LANGUAGE: never say 'veer'/'back' — "
+                       "say the wind shifts RIGHT/LEFT, and give wind directions in degrees (baseline "
+                       "and new value) rather than a bare change. State the required mark ROUNDINGS "
                        "explicitly (which side to leave each mark — from 'roundings'). If 'degraded' is "
                        "true or 'warnings' are present, OPEN with a clear forecast-reliability warning "
                        "(the wind data was sparse) before anything else. Be specific and brief; no preamble.",

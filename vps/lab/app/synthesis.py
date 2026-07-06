@@ -91,21 +91,23 @@ _OPP = {"left": "right", "right": "left", "middle": "either side"}
 
 
 def _trigger_text(side, rhumb):
-    """The observable wind-direction trigger for a side, expressed against the first-beat rhumb."""
+    """The observable wind-direction trigger for a side, expressed against the first-beat rhumb.
+    Racer-native: 'shifted right/left' + the degree threshold (never veer/back); a right shift heads
+    port tack, a left shift heads starboard."""
     if rhumb is None:
         if side == "left":
-            return "the breeze backs (heads port tack) early — if it veers right instead, the right side pays"
+            return "the breeze shifts left early (heads starboard) — if it shifts right instead, the right side pays"
         if side == "right":
-            return "the breeze veers (heads starboard tack) early — if it backs left instead, the left side pays"
+            return "the breeze shifts right early (heads port) — if it shifts left instead, the left side pays"
         return "the breeze stays steady near the rhumb — a persistent shift either way favors that side"
     left_b = int((rhumb - 10) % 360)
     right_b = int((rhumb + 10) % 360)
     if side == "left":
-        return (f"the breeze sits left of the rhumb ({int(rhumb)}°) / backs in the first hour — but if "
-                f"it veers right of ~{right_b}° and holds, switch to the right variant")
+        return (f"the breeze sits left of the rhumb ({int(rhumb)}°) / shifts left in the first hour — but if "
+                f"it shifts right past ~{right_b}° and holds, switch to the right variant")
     if side == "right":
-        return (f"the breeze sits right of the rhumb ({int(rhumb)}°) / veers in the first hour — but if "
-                f"it backs left of ~{left_b}° and holds, switch to the left variant")
+        return (f"the breeze sits right of the rhumb ({int(rhumb)}°) / shifts right in the first hour — but if "
+                f"it shifts left past ~{left_b}° and holds, switch to the left variant")
     return (f"the breeze holds within ~10° of the rhumb ({int(rhumb)}°) — if a persistent shift sets "
             "in either way, follow it to that side's variant")
 
@@ -197,6 +199,10 @@ def _opus_synthesis(playbook: dict, definition, course_id, race_name):
         "OBSERVABLE on-the-water trigger (a wind shift past a specific bearing relative to the rhumb, "
         "a pressure line, a persistent vs oscillating shift) that tells the crew to abandon this "
         "variant for another. Express bearings against the first-beat rhumb when given.\n"
+        "WIND LANGUAGE: never say 'veer' or 'back' — say the wind shifted RIGHT or LEFT. Whenever you "
+        "state a wind-direction change, give the baseline and the new bearing in degrees (e.g. 'shifts "
+        "right past ~265°' / 'from the rhumb 250° to 265°'), never a bare delta. A right shift heads "
+        "port tack, a left shift heads starboard.\n"
         "Then pick `recommended` (the default to start on — normally the highest-agreement variant) "
         "and build a `decision_tree`: an ordered list the crew follows from the gun — the start "
         "default, then observe→switch branches. Be specific, concise, no preamble.\n"
