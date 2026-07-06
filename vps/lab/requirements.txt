@@ -3,6 +3,7 @@ uvicorn[standard]==0.34.0
 python-multipart==0.0.20
 anthropic==0.42.0
 pypdf==5.1.0
+reportlab==4.2.5      # Gameplan → PDF report (pure-python, no system libs)
 # Lab-1 multi-model GRIB wind field + optimizer
 numpy==2.1.3
 eccodes==2.38.3

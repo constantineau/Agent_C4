@@ -17,11 +17,11 @@ import re
 from fastapi import FastAPI, Request, UploadFile, File
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from shared import race_def, boat_profile
-from . import auth, store, extract, boats, labstate, feedback, pbstore, deploy, monitor, judge, track, learning, fleetimport
+from . import auth, store, extract, boats, labstate, feedback, pbstore, deploy, monitor, judge, track, learning, fleetimport, report
 
 INGESTED_DIR = os.environ.get("INGESTED_DIR", "/srv/ingested")
 
@@ -348,6 +348,23 @@ async def optimize(body: dict):
                                        avoid, per_model, resolution, use_waves, use_current)
     except Exception as exc:
         return JSONResponse({"detail": f"optimize failed: {exc}"}, status_code=500)
+
+
+@app.post("/api/gameplan/pdf")
+async def gameplan_pdf(body: dict):
+    """Render the current gameplan (the client's optimize result + optional synthesized playbook) into
+    a shareable PDF report. The frontend posts what it already has — no re-optimize."""
+    body = body or {}
+    if not (body.get("result") or {}).get("legs"):
+        return JSONResponse({"detail": "no optimized route to report — run the optimizer first"},
+                            status_code=400)
+    try:
+        pdf = await run_in_threadpool(report.build_gameplan_pdf, body)
+    except Exception as exc:
+        return JSONResponse({"detail": f"pdf render failed: {exc}"}, status_code=500)
+    name = re.sub(r"[^\w.\-]", "_", f"gameplan_{body.get('race_name') or (body.get('result') or {}).get('race_id') or 'c4'}")
+    return Response(content=pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{name}.pdf"'})
 
 
 def _skill_venue(body):

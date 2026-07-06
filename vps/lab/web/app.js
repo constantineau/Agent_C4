@@ -1083,6 +1083,7 @@ function renderOptResult(r) {
         ${optCurrentStat(r)}
         ${optRealizedStat(r)}
       </div>
+      <div class="rail-actions"><button id="pdfBtn" onclick="downloadGameplanPdf(this)" title="Download a PDF report of this gameplan — route summary + schematic + leg table + briefing + branching playbook — to email the crew">⬇ PDF report</button></div>
       ${optDegradedBanner(r)}
       ${r.timed_out ? '<div class="pill warn">routing hit the time budget — route is best-effort</div>' : ""}
       <details class="rail-sec" open><summary>Legs</summary>
@@ -1137,6 +1138,37 @@ function exportLegsCsv() {
 function csvCell(v) {
   const s = String(v == null ? "" : v);
   return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+
+/* PDF report of the whole gameplan — the optimize result + (if synthesized) the branching playbook.
+   Server-rendered (reportlab) so it's a clean, consistent, shareable document, streamed back as a blob
+   and downloaded (same "email the crew" pattern as the CSV export, but the full report). */
+async function downloadGameplanPdf(btn) {
+  const r = Opt.result;
+  if (!r || !r.legs) { alert("Run the optimizer first — there's no route to report yet."); return; }
+  const orig = btn ? btn.textContent : "";
+  if (btn) { btn.disabled = true; btn.textContent = "Rendering…"; }
+  const raceName = (Lab.editDef && (Lab.editDef.name || Lab.editDef.race_id)) || Opt.raceId || "C4";
+  try {
+    const res = await apiPost("/api/gameplan/pdf",
+      { result: r, playbook: (Pb && Pb.result && Pb.result.variants) ? Pb.result : null,
+        race_name: raceName, boat: (r.boat && r.boat.name) || r.boat_name || "" });
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      throw new Error(j.detail || ("HTTP " + res.status));
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = ("gameplan_" + raceName + ".pdf").replace(/[^\w.\-]/g, "_");
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    alert("PDF report failed — " + String((e && e.message) || e));
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = orig; }
+  }
 }
 
 function optRealizedStat(r) {
