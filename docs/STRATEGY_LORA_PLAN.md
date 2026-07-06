@@ -224,18 +224,42 @@ The frozen playbook stays a strong prior it may depart from (flagged), not a cag
 
 ---
 
-## ▶▶ SESSION HANDOFF — 2026-07-06 (plan authored, nothing built yet)
-- **Status:** design doc only. No code, no `pi/orin/training/` additions yet. This is the judgment/DPO
-  sibling to the (also-not-yet-executed) reliability plan in `ORIN_LORA_PLAN.md`.
+## ▶▶ SESSION HANDOFF — 2026-07-06 (Phase 0 BUILT + DEPLOYED LIVE)
+
+**Status: Phase 0 complete, running in production for the pilot.** Commits `f3ee219` (pipeline) +
+`04a8641` (hosting); `dev = main = origin`, tree clean.
+
 - **Locked with the user:** objective = *which call to make* + *confidence/urgency calibration* (+ fold in
   reliability via Track A); labeling = **rank candidate briefs** (→ DPO); volume = a few hundred to start
   but **design for expandability** → the RM-driven flywheel (§6). Voice/phrasing is out of scope.
 - **Key architectural fact to preserve:** the picture is deterministic (`strategy.py`); the 7B only
   phrases + picks the recommendation (`copilot.strategy_brief`). So the LoRA moves the call + calibration,
   and the rankings double as an audit of `strategy.py` (§4).
-- **Next step (recommended):** Phase 0 — scaffold `gen_candidates.py` + the labeling app + rubric, wire
-  real snapshots from the Lab-4 archive, then run the 30–50 snapshot PILOT with 2–3 sailors and check
-  inter-rater agreement before scaling. Lock the rubric before writing much labeling UI.
-- **Open choices deferred to Phase 0:** exact N and candidate mix; DPO vs IPO/ORPO; where to host the
-  labeling app (shared Lab VM nginx, like `lab.racertracer.net`); how much Track-A SFT replay to mix into
-  the DPO run.
+
+**What's built** (`pi/orin/training/`, run as `python3 -m training.<x>` from `pi/orin/`; see
+`training/README.md`): `gen_snapshots` (synthetic hard-case digests via `synth.py` — engine helpers
+COPIED from `strategy.py`, which can't import offline; + optional `--from-engine` live `/strategy`
+capture) → `gen_candidates` (per snapshot: deterministic + perturbed offline, base=Ollama@temp +
+opus=Anthropic best-effort; prompt/schema reuse `copilot.strategy_brief`; candidates BLIND; seed states
+playbook status) → `labeling/` (FastAPI ranker + sqlite full-ranking+calibration store + coverage/overlap
+queue + `sampling.select_active_pool` active-learning seam + vanilla-JS UI) → `make_pairs` (DPO
+best-vs-worse + hash-based held-out eval split + calibration demotion) → `eval_judgment` (inter-rater
+agreement = the GATE, engine audit by scenario tag, calibration dist). `smoke.py` = offline self-test
+(passes). `data/` gitignored.
+
+**Deployed:** ranker LIVE at **https://lab.racertracer.net/training/** (password `CAN100`), sub-menu
+"Labeling ↗" in the Lab nav. Own standing service `pi/systemd/c4-labeling.service` (127.0.0.1:8400,
+reboot-persistent) — needs NO copilot at runtime. nginx `/training/` proxy strips the prefix
+(host-managed `/etc/nginx/sites-available/lab`, not in repo). Pilot corpus loaded: **38 snapshots × 3
+candidates (deterministic + perturbed + Opus)**. Labels persist at
+`pi/orin/training/data/labels.sqlite` (host FS — **don't delete**).
+
+**NEXT (resume here):**
+1. Wait for 2–3 sailors to rank at the URL, then `python3 -m training.eval_judgment` → **check
+   inter-rater agreement (gate ≳0.6) BEFORE scaling or any DPO.** Low agreement = fix the rubric.
+2. Then `make_pairs` → Phase 1 (scale labels + Track-A reliability SFT) → Phase 2 (DPO on rented GPU).
+- **Optional now:** add the real Orin 7B as a 4th ranked candidate via an SSH tunnel to its Ollama
+  (`ssh -L 11434:127.0.0.1:11434 agent-c4@100.70.110.72`, set `LLM_BASE_URL`, re-run `gen_candidates`,
+  `systemctl restart c4-labeling`). To refresh the corpus: regen on host + restart the service.
+- **Still open:** DPO vs IPO/ORPO choice; how much Track-A SFT replay to mix into the DPO run; real
+  in-race `/strategy` decision-state logging (replaces synthetic snapshots); Track A itself unbuilt.
