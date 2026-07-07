@@ -594,6 +594,41 @@ def test_plays_callout() -> bool:
     return ok
 
 
+from . import copilot as copilot_mod  # noqa: E402
+
+
+def test_play_match_filter() -> bool:
+    """Tier-2 ranked play matching guardrails: the prompt exposes the library (armed first), and
+    the LLM's matches are validated — an invented play id is DROPPED, matches carry play:<id>
+    grounding + the live matcher status, capped. Pure/deterministic."""
+    ok = True
+    print("\n== Tier-2 play matching (pure, synthetic) ==")
+    pb = playbook_mod.Playbook({"race_id": "u", "variants": [{"id": "middle"}], "plays": [
+        {"id": "pace_behind_2h_1", "conditions": {"narrative": "slower than the plan and the "
+         "forecast breeze has not arrived"}},
+        {"id": "reef_r1_a3_slot", "conditions": {"narrative": "running the A3 in 16+ kn, slot "
+         "closed"}}]})
+    lines = copilot_mod._play_library_lines(pb, {"reef_r1_a3_slot": "armed"})
+    ok &= _check("library lines render, armed first",
+                 len(lines) == 2 and "[armed]" in lines[0] and "reef_r1_a3_slot" in lines[0])
+    ok &= _check("prompt carries the library + the matching task",
+                 "PLAY LIBRARY" in copilot_mod._strategy_prompt(pb, {})
+                 and "play_matches" in copilot_mod._strategy_prompt(pb, {}))
+    parsed = {"play_matches": [
+        {"play_id": "reef_r1_a3_slot", "match": "strong", "why": "breeze + kite up"},
+        {"play_id": "invented_hero_play", "match": "strong", "why": "sounds great"},
+        {"play_id": "pace_behind_2h_1", "match": "partial", "why": "pace off"}]}
+    m = copilot_mod._filter_play_matches(parsed, pb, {"reef_r1_a3_slot": "armed"})
+    ok &= _check("invented play id dropped, real ones kept in order",
+                 [x["play_id"] for x in m] == ["reef_r1_a3_slot", "pace_behind_2h_1"])
+    ok &= _check("matches carry play:<id> grounding + live status",
+                 m[0]["grounded_in"] == ["play:reef_r1_a3_slot"] and m[0]["status"] == "armed"
+                 and m[1]["status"] == "quiet")
+    ok &= _check("nothing valid -> empty", copilot_mod._filter_play_matches(
+        {"play_matches": [{"play_id": "nope", "match": "strong", "why": "x"}]}, pb) == [])
+    return ok
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--llm", action="store_true", help="also exercise the LLM tool-loop")
@@ -611,6 +646,7 @@ def main():
     overall &= test_strategy_synthesis()
     overall &= test_strategy_callout()
     overall &= test_plays_callout()
+    overall &= test_play_match_filter()
 
     print(f"\n>> engine: {config.ENGINE_URL}")
     engine = EngineClient()

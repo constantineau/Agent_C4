@@ -277,6 +277,18 @@ _STRATEGY_SCHEMA = {
             },
             "required": ["action", "rationale", "grounded_in", "urgency", "confidence"],
         },
+        "play_matches": {                 # Phase-D Tier-2: ranked pattern matches vs the play library
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "play_id": {"type": "string"},
+                    "match": {"type": "string", "enum": ["strong", "partial"]},
+                    "why": {"type": "string"},
+                },
+                "required": ["play_id", "match", "why"],
+            },
+        },
     },
     "required": ["assessment", "recommendation"],
 }
@@ -293,7 +305,47 @@ _WIND_VOCAB = (
 )
 
 
-def _strategy_prompt(pb: playbook_mod.Playbook) -> str:
+def _play_library_lines(pb: playbook_mod.Playbook, status_map=None, cap=12):
+    """The frozen play library as matchable one-liners: id [live status]: condition narrative.
+    Non-quiet (armed/arming) plays first — the Tier-2 matcher reads these against the live picture
+    for the compound/fuzzy matches the hard predicates can't express."""
+    status_map = status_map or {}
+    plays = (pb.data or {}).get("plays") or []
+    rows = []
+    for p in plays:
+        pid = str(p.get("id") or "")
+        narr = ((p.get("conditions") or {}).get("narrative") or p.get("summary") or "").strip()
+        if not pid or not narr:
+            continue
+        rows.append((status_map.get(pid, "quiet"), pid, narr[:220]))
+    rows.sort(key=lambda r: {"armed": 0, "arming": 1}.get(r[0], 2))
+    return [f"- play {pid} [{st}]: {narr}" for st, pid, narr in rows[:cap]]
+
+
+def _filter_play_matches(parsed, pb: playbook_mod.Playbook, status_map=None, cap=4):
+    """Validate the LLM's ranked matches: unknown play ids are DROPPED (never invented), the live
+    matcher status rides along, capped. Returns [] when nothing survives."""
+    status_map = status_map or {}
+    known = set(pb.play_ids())
+    out = []
+    for m in (parsed.get("play_matches") or []):
+        pid = str((m or {}).get("play_id") or "")
+        if pid not in known:
+            continue
+        out.append({"play_id": pid, "match": m.get("match") or "partial",
+                    "why": (m.get("why") or "").strip()[:300],
+                    "status": status_map.get(pid, "quiet"),
+                    "grounded_in": [f"play:{pid}"]})
+        if len(out) >= cap:
+            break
+    return out
+
+
+def _strategy_prompt(pb: playbook_mod.Playbook, status_map=None) -> str:
+    lib = _play_library_lines(pb, status_map)
+    lib_txt = ("\nPLAY LIBRARY (frozen pre-race homework — each line is a play's DETECTION "
+               "narrative; [armed]/[arming] = the deterministic matcher already sees its hard "
+               "predicates holding):\n" + "\n".join(lib) + "\n") if lib else ""
     return (
         _WIND_VOCAB + "\n"
         "You are the SR33's ONBOARD strategy NARRATOR and playbook CONDITION-MATCHER. The engine has "
@@ -305,10 +357,15 @@ def _strategy_prompt(pb: playbook_mod.Playbook) -> str:
         "(hold and watch — one read is about to be wrong). (2) Restate the engine's recommendation in "
         "crew language, enriching its rationale by matching the live facts against the playbook's own "
         "frozen conditions (a variant's `flips when` trigger that now looks met is exactly what to "
-        "point at). Do NOT change the action, the target variant, or vs_playbook. In grounded_in cite "
-        "ONLY the signal tools that actually support it (get_strategy, get_selector, get_tactics, "
-        "get_drift, get_deviation, get_fleet). Advisory, not a command.\n\n"
-        + pb.digest()
+        "point at). (3) PLAY MATCHING: compare the live picture against each play's condition "
+        "narrative below and return `play_matches` — the plays whose DESCRIBED situation matches "
+        "what is actually happening, strongest first (compound reads count: pace off AND the drift "
+        "says the promised breeze isn't coming = the pace play, not a trim problem). Use ONLY play "
+        "ids from the library; an [armed] play you agree with ranks first; each why must reuse the "
+        "engine's facts. Do NOT change the action, the target variant, or vs_playbook. In "
+        "grounded_in cite ONLY the signal tools that actually support it (get_strategy, "
+        "get_selector, get_tactics, get_drift, get_deviation, get_fleet). Advisory, not a command."
+        "\n\n" + pb.digest() + lib_txt
     )
 
 
@@ -342,7 +399,9 @@ def strategy_brief(route=None, hoisted=None, use_llm: bool | None = None) -> dic
                               "picture": digest.get("picture"),
                               "concordance": digest.get("concordance"),
                               "recommendation": digest.get("recommendation")}, separators=(",", ":")))
-        msg = llm.chat([{"role": "system", "content": _strategy_prompt(pb)},
+        _plq = (digest.get("plays") or {})
+        status_map = {d.get("id"): d.get("status") for d in (_plq.get("detail") or [])}
+        msg = llm.chat([{"role": "system", "content": _strategy_prompt(pb, status_map)},
                         {"role": "user", "content": seed}], schema=_STRATEGY_SCHEMA)
         parsed = _extract_json(msg.get("content") or "")
         if not parsed:
@@ -361,6 +420,9 @@ def strategy_brief(route=None, hoisted=None, use_llm: bool | None = None) -> dic
         if det_rec and rec.get("rationale") and rg:
             out["recommendation"] = {**det_rec, "rationale": rec["rationale"].strip()}
         # else: ungrounded / empty narrative → the deterministic recommendation stands untouched.
+        matches = _filter_play_matches(parsed, pb, status_map)
+        if matches:
+            out["play_matches"] = matches
         out["mode"] = "llm"
         meta["llm_used"] = True
         meta["model"] = config.LLM_MODEL
