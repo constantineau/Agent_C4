@@ -556,8 +556,11 @@ def _build_plays(playbook, definition, course_id, venue_stats=None, jib_crossove
         category = p.get("category") or "external"
         if category == "external":
             s = reg.get(p["id"]) or {}
-            preds = (s.get("detect")(next(iter(p["params"].values())), ctx)
-                     if s.get("detect") else [])
+            # boundary bisection: a located flip threshold replaces the generic grid param, so the
+            # play ARMS at the value where the answer actually changes
+            param = (p.get("boundary") or {}).get("refined_param",
+                                                  next(iter(p["params"].values())))
+            preds = (s.get("detect")(param, ctx) if s.get("detect") else [])
         else:
             fn = scen.INTERNAL_DETECT.get(p.get("kind"))
             preds = fn(p.get("params") or {}, ctx) if fn else []
@@ -590,6 +593,7 @@ def _build_plays(playbook, definition, course_id, venue_stats=None, jib_crossove
             "stakes_min": stakes,
             "favored_side": p.get("favored_side"),
             **({"table": p["table"]} if p.get("table") else {}),   # rejoin-vs-continue rows
+            **({"boundary": p["boundary"]} if p.get("boundary") else {}),   # located flip threshold
         })
     plays.sort(key=lambda x: (0 if x["category"] == "internal" else 1, -(x["stakes_min"] or 0)))
     return plays, v2, synth_note

@@ -71,6 +71,47 @@ def _mean_xte_nm(path, ref_path, step=8):
     return round(sum(xs) / len(xs), 2) if xs else None
 
 
+_BISECT = os.environ.get("PB_BISECT", "1").strip().lower() in ("1", "true", "yes", "on")
+_BISECT_MAX_PROBES = int(os.environ.get("PB_BISECT_MAX_PROBES", "4"))
+# don't probe a gap smaller than the axis's meaningful resolution
+_BISECT_MIN_STEP = {"rotation": 6.0, "tws_scale": 0.1, "time_shift": 2.0}
+
+
+def _scenario_mag(kind, params):
+    """(magnitude, sign) of a graduated scenario on its axis — rotation deg / tws offset from
+    1.0 / timing hours. (None, 0) for non-graduated kinds (sea state)."""
+    if kind == "rotation":
+        v = float(params.get("deg", 0))
+    elif kind == "tws_scale":
+        v = float(params.get("scale", 1.0)) - 1.0
+    elif kind == "time_shift":
+        v = float(params.get("hours", 0))
+    else:
+        return None, 0
+    return abs(v), (1 if v >= 0 else -1)
+
+
+def _bisect_scenario(kind, sign, mag):
+    """A synthetic midpoint scenario for the probe (scen.apply dispatches on kind+params)."""
+    if kind == "rotation":
+        return {"id": f"bisect_rot_{'r' if sign > 0 else 'l'}{round(mag)}", "kind": kind,
+                "params": {"deg": sign * round(mag)}}
+    if kind == "tws_scale":
+        return {"id": f"bisect_tws_{'up' if sign > 0 else 'dn'}", "kind": kind,
+                "params": {"scale": round(1.0 + sign * mag, 2)}}
+    return {"id": f"bisect_time_{'e' if sign > 0 else 'l'}", "kind": kind,
+            "params": {"hours": sign * round(mag * 2) / 2.0}}
+
+
+def _bisect_param(kind, sign, mag):
+    """The located threshold back in the axis's native param units (what detect() takes)."""
+    if kind == "tws_scale":
+        return round(1.0 + sign * mag, 2)
+    if kind == "rotation":
+        return sign * round(mag)
+    return sign * round(mag * 2) / 2.0
+
+
 def _scenario_fan(definition, course_id, start_epoch, wf, consensus, cur, waves, marks_finish,
                   jib_crossovers=None, sail_config=None, helm_factor=1.0, polar_adjustments=None,
                   wave_coeffs=None, max_scenarios=None, per_budget_s=90, deep=False,
@@ -84,7 +125,11 @@ def _scenario_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
     profile = scen.pos_profile(consensus)
     routes, robust = [], []
     xtes, detas = [], []
-    for s in scen.select(profile, max_n=max_scenarios, deep=deep):
+    cls: dict = {}          # (kind, sign) -> [(magnitude, diverged, entry)] for boundary bisection
+
+    def _run(s):
+        """Route ONE scenario + classify vs the nominal. Returns (entry, diverged) or None
+        (unroutable/truncated — never counted as robustness)."""
         wf2, overrides = scen.apply(s, wf)
         wc = wave_coeffs
         if overrides and overrides.get("wave_scale"):
@@ -94,37 +139,88 @@ def _scenario_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
                              (("k_up", 0.04), ("k_reach", 0.02), ("k_down", 0.01))}}
         r = optimizer.optimize_course(definition, course_id, start_epoch, wf2,
                                       time_budget_s=per_budget_s, resolution="fast",
-                                      jib_crossovers=jib_crossovers, sail_config=sail_config, emit_exploration=False,
+                                      jib_crossovers=jib_crossovers, sail_config=sail_config,
+                                      emit_exploration=False,
                                       cur=cur, waves=waves, helm_factor=helm_factor,
                                       polar_adjustments=polar_adjustments, wave_coeffs=wc)
         if not r.get("available") or not r.get("path"):
             say(f"scenario {s['id']}: no route — skipped")
-            continue
+            return None
         last = r["path"][-1]
         if marks_finish and track_mod._hav_nm((last["lat"], last["lon"]), marks_finish) > 3.0:
             say(f"scenario {s['id']}: truncated route — skipped (not counted as robustness)")
-            continue
+            return None
         deta = round(((r.get("total_hours") or 0) - (consensus.get("total_hours") or 0)) * 60)
         xte = _mean_xte_nm(r.get("path"), consensus.get("path"))
-        entry = {"id": s["id"], "name": s["name"], "kind": s["kind"], "params": s["params"],
-                 "category": "external", "narrative_seed": s["narrative"],
+        entry = {"id": s["id"], "name": s.get("name", s["id"]), "kind": s["kind"],
+                 "params": s["params"], "category": "external",
+                 "narrative_seed": s.get("narrative", ""),
                  "divergence": {"delta_eta_min": deta, "xte_mean_nm": xte},
                  "total_hours": r.get("total_hours"),
                  "favored_side": _favored_side(definition, course_id, r)}
-        if xte is not None:
-            xtes.append(xte)
-        detas.append(abs(deta))
-        # DEDUPE (locked design §3): sticks to the nominal → evidence, not a play
-        if xte is not None and xte < 2.0 and abs(deta) < 45:
-            robust.append({"scenario": s["id"], "name": s["name"],
-                           "note": f"route holds within {xte} nm / {abs(deta)} min of the nominal"})
-            say(f"scenario {s['id']}: nominal HOLDS ({xte} nm, {deta:+d} min) — robustness")
-        else:
+        diverged = not (xte is not None and xte < 2.0 and abs(deta) < 45)
+        if diverged:
             entry["route"] = {"legs": r.get("legs"), "path": r.get("path"),
                               "total_sailed_nm": r.get("total_sailed_nm"),
                               "total_tacks": r.get("total_tacks"), "sail_plan": r.get("sail_plan")}
+        return entry, diverged
+
+    for s in scen.select(profile, max_n=max_scenarios, deep=deep):
+        got = _run(s)
+        if not got:
+            continue
+        entry, diverged = got
+        deta = entry["divergence"]["delta_eta_min"]
+        xte = entry["divergence"]["xte_mean_nm"]
+        if xte is not None:
+            xtes.append(xte)
+        detas.append(abs(deta))
+        mag, sign = _scenario_mag(s["kind"], s["params"])
+        if mag is not None:
+            cls.setdefault((s["kind"], sign), []).append((mag, diverged, entry))
+        if diverged:
             routes.append(entry)
             say(f"scenario {s['id']}: DIVERGES ({xte} nm, {deta:+d} min) — play candidate")
+        else:
+            robust.append({"scenario": s["id"], "name": entry["name"],
+                           "note": f"route holds within {xte} nm / {abs(deta)} min of the nominal"})
+            say(f"scenario {s['id']}: nominal HOLDS ({xte} nm, {deta:+d} min) — robustness")
+
+    # BOUNDARY BISECTION (the method refinement, 2026-07-08): where adjacent scenarios of the same
+    # axis straddle the hold/diverge boundary (e.g. +10° holds, +20° diverges), probe the midpoint
+    # to LOCATE the flip — the located threshold becomes that play's arming predicate instead of a
+    # generic band, so the fan spends compute exactly where the answer changes. One probe per axis
+    # side, capped, largest-stakes axes first; the probe route itself is never a play (dedupe).
+    if _BISECT:
+        cands = []
+        for (kind, sign), rows in cls.items():
+            held = [m for m, dv, _e in rows if not dv]
+            div = sorted([(m, e) for m, dv, e in rows if dv], key=lambda t: t[0])
+            if not div:
+                continue
+            h = max(held) if held else 0.0            # the nominal itself holds by definition
+            d, d_entry = div[0]
+            step = _BISECT_MIN_STEP.get(kind, 0)
+            if d - h > step and d_entry.get("route"):
+                cands.append((abs(d_entry["divergence"]["delta_eta_min"] or 0),
+                              kind, sign, h, d, d_entry))
+        cands.sort(reverse=True)
+        for _stk, kind, sign, h, d, d_entry in cands[:_BISECT_MAX_PROBES]:
+            mid = (h + d) / 2.0
+            probe = _bisect_scenario(kind, sign, mid)
+            say(f"bisect {kind}{'+' if sign > 0 else '−'}: holds at {h:g}, diverges at {d:g} — "
+                f"probing {mid:g}")
+            got = _run(probe)
+            if not got:
+                continue
+            _entry, p_div = got
+            refined = mid if p_div else (mid + d) / 2.0
+            d_entry["boundary"] = {"holds": h, "diverges": d, "probed": mid,
+                                   "probe_diverged": p_div,
+                                   "refined_param": _bisect_param(kind, sign, refined),
+                                   "threshold": round(refined, 2)}
+            say(f"bisect {kind}{'+' if sign > 0 else '−'}: flip located ≈{refined:g} — "
+                f"play {d_entry['id']} arms at the located threshold")
     # corridor verdict (locked input #2): lateral spread vs the time stakes across the fan
     xs = sorted(xtes)
     corridor = {

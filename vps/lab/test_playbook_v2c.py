@@ -253,3 +253,85 @@ dwn = SCEN.select({"downwind": 0.6}, deep=True)
 check("downwind race ranks pressure first at depth (locked input #6)", dwn[0]["kind"] == "tws_scale")
 
 print("RESULT-8:", "PASS" if ok else "FAIL")
+
+# ---- 9) boundary bisection (locate the flip, arm at it) -----------------------------------------
+print("9) boundary bisection")
+check("magnitude/sign per axis", PB._scenario_mag("rotation", {"deg": -20}) == (20.0, -1)
+      and PB._scenario_mag("tws_scale", {"scale": 0.75}) == (0.25, -1)
+      and PB._scenario_mag("wave_heavy", {"factor": 2.0})[0] is None)
+pr = PB._bisect_scenario("rotation", 1, 15.0)
+check("probe scenario routable by apply()", pr["kind"] == "rotation" and pr["params"]["deg"] == 15)
+check("refined param back in native units", PB._bisect_param("tws_scale", -1, 0.3) == 0.7
+      and PB._bisect_param("rotation", -1, 15.4) == -15)
+
+# integration: stub the optimizer so the fan is deterministic — rotations diverge only at ≥15°,
+# the probe at 15 diverges → the +20 play must arm at the LOCATED 15, not the generic 20-grid value
+import app.optimizer as OPTMOD
+_orig_opt = OPTMOD.optimize_course
+_orig_bud = PB._BISECT_MAX_PROBES
+
+
+def _fake_opt(definition, course_id, start_epoch, wf, **kw):
+    deg = getattr(wf, "_deg", 0)
+    path = [{"lat": 44.0, "lon": -82.0, "t": start_epoch}, {"lat": 44.2, "lon": -81.7, "t": start_epoch + 3600}]
+    far = abs(deg) >= 15
+    return {"available": True, "path": path, "total_hours": 40 + (2 if far else 0),
+            "legs": [{"to": "Finish", "first_heading": 40, "leg_minutes": 2400,
+                      "eta_epoch": start_epoch + 144000}],
+            "total_sailed_nm": 280, "total_tacks": 4, "sail_plan": []}
+
+
+class _FakeApplyWF:
+    pass
+
+
+import app.scenarios as SC2
+_orig_apply = SC2.apply
+
+
+def _fake_apply(s, wf):
+    w = _FakeApplyWF(); w._deg = s["params"].get("deg", 0) if s["kind"] == "rotation" else 0
+    return w, None
+
+
+_orig_xte = PB._mean_xte_nm
+try:
+    OPTMOD.optimize_course = _fake_opt
+    PB.optimizer.optimize_course = _fake_opt
+    SC2.apply = _fake_apply
+    PB._mean_xte_nm = lambda path, ref, step=8: 3.5 if True else 0.0
+    # xte: diverge for ≥15° rotations only → tie xte to the wf marker via a closure trick
+    def _xte(path, ref, step=8):
+        return _xte.cur
+    PB._mean_xte_nm = _xte
+
+    calls = []
+    real_run_apply = SC2.apply
+    def _apply2(s, wf):
+        w, o = real_run_apply(s, wf)
+        _xte.cur = 3.5 if (s["kind"] == "rotation" and abs(s["params"].get("deg", 0)) >= 15) else 0.5
+        calls.append(s["id"])
+        return w, o
+    SC2.apply = _apply2
+
+    cons = {"total_hours": 40, "path": [{"lat": 44.0, "lon": -82.0, "t": 0}],
+            "legs": [{"point_of_sail": "beat", "leg_minutes": 2400}]}
+    routes, robust, prof, corr = PB._scenario_fan({}, "x", 0, object(), cons, None, None, None,
+                                                  max_scenarios=9, per_budget_s=5, log=[])
+    r20 = next((r for r in routes if r["id"] == "shift_right_20"), None)
+    probed = [c for c in calls if c.startswith("bisect_rot")]
+    print(f"     probes run: {probed}; r20 boundary: {(r20 or {}).get('boundary')}")
+    check("bisect probe ran for the straddled rotation axis", len(probed) >= 1)
+    check("flip located at 15 and attached to the smallest diverging play",
+          r20 and r20.get("boundary") and abs(r20["boundary"]["threshold"] - 15) < 0.6
+          and r20["boundary"]["probe_diverged"])
+    check("10-degree rotations recorded as robustness (held)",
+          any(x["scenario"] == "shift_right_10" for x in robust))
+finally:
+    OPTMOD.optimize_course = _orig_opt
+    PB.optimizer.optimize_course = _orig_opt
+    SC2.apply = _orig_apply
+    PB._mean_xte_nm = _orig_xte
+    PB._BISECT_MAX_PROBES = _orig_bud
+
+print("RESULT-9:", "PASS" if ok else "FAIL")

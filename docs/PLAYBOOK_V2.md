@@ -118,10 +118,13 @@ decision-space coverage. Three tiers (Gameplan "Fan depth"):
 - **deep** (15, ~15 min) — the wide grid (+±30°, ×0.6/×1.4, ±6 h) for early-week homework.
 The dedupe keeps the LIBRARY honest at any depth, and the priority order stays point-of-sail
 aware (input #6). The real "more scenarios" lever beyond the grid is GEFS/ECMWF-ENS ensemble
-members (physical spread, opt-in). **Planned refinement — boundary bisection:** when adjacent
-grid scenarios straddle the decision boundary (+10° holds, +20° diverges), spawn the midpoint to
-LOCATE the flip threshold and use it as that play's arming predicate instead of the generic
-consider-band — the fan then spends compute exactly where the answer changes.
+members (physical spread, opt-in). **Boundary bisection (shipped 2026-07-08):** when
+adjacent grid scenarios straddle the decision boundary (+10° holds, +20° diverges), the fan probes
+the midpoint to LOCATE the flip and the located threshold becomes that play's arming predicate
+(`boundary` block on the play; probe routes are never plays). One probe per straddled axis side,
+largest-stakes first, capped `PB_BISECT_MAX_PROBES`=4; min gaps 6°/0.1×/2 h; kill-switch
+`PB_BISECT`. The UI default fan depth is DEEP (user preference — a bigger library is welcome; the
+dedupe keeps it honest).
 
 ### The dedupe discipline — plays only where the answer changes
 

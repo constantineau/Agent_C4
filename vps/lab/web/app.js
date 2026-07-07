@@ -772,8 +772,8 @@ async function renderGameplan() {
       <label class="muted" style="font-size:12px" title="How wide the scenario fan sweeps. Each scenario is a full re-route, so depth trades synthesis time for decision-space coverage; the dedupe keeps the play library honest at any depth (a scenario that holds becomes robustness evidence, not a play).">Fan depth
         <select id="pbFan" style="margin:0 8px 0 4px">
           <option value="quick">Quick — 6 scenarios (~5 min, race-morning refresh)</option>
-          <option value="standard" selected>Standard — 9 scenarios (~7 min, the core grid)</option>
-          <option value="deep">Deep — 15 scenarios (~15 min, ±30° / ×0.6–1.4 / ±6 h; early-week homework)</option>
+          <option value="standard">Standard — 9 scenarios (~7 min, the core grid)</option>
+          <option value="deep" selected>Deep — 15 scenarios (~15 min, ±30° / ×0.6–1.4 / ±6 h; early-week homework)</option>
         </select></label>
       <button id="pbRun" onclick="synthPlaybook()" ${Pb.running ? "disabled" : ""}>${Pb.running ? "Synthesizing…" : "Synthesize branching playbook →"}</button>
       <div id="pbOut"></div>
@@ -1431,6 +1431,7 @@ function pbPlayCard(p) {
     ${p.what_flips_it ? `<div class="pb-row flips"><span class="pb-lbl">Hands back when</span><span>${esc(p.what_flips_it)}</span></div>` : ""}
     ${(p.response || {}).route ? `<div class="pb-row"><span class="pb-lbl">Route</span><span>${(p.response.route.legs || []).length} legs · ${p.response.route.total_sailed_nm ?? "—"} nm · ${p.response.route.total_tacks ?? "—"} tacks · sails ${esc(((p.response.route.sail_plan || []).map((s) => s.sail || s)).join("→") || "—")}</span></div>` : ""}
     ${(p.response || {}).guidance ? `<div class="pb-row"><span class="pb-lbl">The call</span><span><b>${esc(p.response.guidance)}</b></span></div>` : ""}
+    ${p.boundary ? `<div class="pb-row"><span class="pb-lbl">Flip located</span><span>holds at ${p.boundary.holds}, diverges by ${p.boundary.diverges} — bisected: arms at <b>${p.boundary.threshold}</b> (probe ${p.boundary.probe_diverged ? "diverged" : "held"})</span></div>` : ""}
     ${(p.table || []).length ? `<div class="pb-row"><span class="pb-lbl">Tabulated</span><span class="mono" style="font-size:11px">${p.table.map((r) => `${esc(r.to || `leg ${r.leg + 1}`)} · ${esc(r.side)} ${r.off_nm}nm: <b>${esc(r.verdict)}</b> (continue ${r.continue_min}m / rejoin ${r.rejoin_min}m)`).join("<br>")}</span></div>` : ""}
   </details>`;
 }
