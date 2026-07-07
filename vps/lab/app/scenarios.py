@@ -109,6 +109,45 @@ EXTERNAL = [
 ]
 
 
+# ---- INTERNAL scenario detect templates (Phase C, docs/PLAYBOOK_V2.md §3) ----------------------
+# Percentile-framed against the venue's fleet-normal stats when available (locked input #3):
+# the 2025 fleet's MEDIAN pace deficit was ~149 min on a 40 h race — being "2 hours behind your
+# own optimizer" is normal sailing, so the pace plays arm above fleet-normal, not at it.
+
+def pace_predicates(params, ctx):
+    delay_min = int(params.get("delay_h", 2) * 60)
+    vs = (ctx or {}).get("venue_stats") or {}
+    med = vs.get("behind_median_min") or 150
+    p90 = vs.get("behind_p90_min") or 380
+    if delay_min < 0:      # ahead-of-plan
+        return [{"signal": "time_behind_min", "op": "<=", "value": -abs(delay_min) // 2,
+                 "sustain_min": 45}]
+    if delay_min >= 210:   # the deep-behind play arms near the venue p90
+        thr = min(p90, max(240, delay_min - 60))
+    else:                  # the moderate play arms above fleet-normal, approaching its scenario
+        thr = max(90, round(med * 0.7))
+    return [{"signal": "time_behind_min", "op": ">=", "value": thr, "sustain_min": 45}]
+
+
+def gear_loss_predicates(params, ctx):
+    # crew-armed: there is no instrument for "the A2 just blew up" — the console/matcher exposes a
+    # sail-out-of-service toggle (Phase D); until then the play is pointed to manually.
+    return [{"signal": "sail_out_of_service", "op": "==", "value": params.get("sail")}]
+
+
+def sail_guidance_predicates(params, ctx):
+    out = [{"signal": "tws_kn",
+            "op": ">=" if params.get("direction") == "over" else "<=",
+            "value": params.get("tws_threshold"), "sustain_min": 10}]
+    if params.get("hoisted"):
+        out.append({"signal": "hoisted_sail", "op": "==", "value": params["hoisted"]})
+    return out
+
+
+INTERNAL_DETECT = {"pace": pace_predicates, "gear_loss": gear_loss_predicates,
+                   "sail_guidance": sail_guidance_predicates}
+
+
 def apply(scenario, wf):
     """The transformed field for a scenario (wave_heavy routes on the SAME wind — its perturbation
     is an optimizer wave-coefficient override, returned as the second element)."""

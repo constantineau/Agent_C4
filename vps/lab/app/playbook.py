@@ -136,6 +136,123 @@ def _scenario_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
     return routes, robust, profile, corridor
 
 
+_PACE_DELAYS_H = (2, 4, -2)          # behind / deep-behind / ahead (Phase C — the user-priority plays)
+_GEAR_SAILS = ("A2", "A3", "S2")     # kites we author a loss play for when they're in the nominal plan
+
+
+def _internal_fan(definition, course_id, start_epoch, wf, consensus, cur, waves, marks,
+                  jib_crossovers=None, helm_factor=1.0, polar_adjustments=None, wave_coeffs=None,
+                  per_budget_s=90, log=None):
+    """Phase-C INTERNAL plays that need routes (docs/PLAYBOOK_V2.md §3): PACE re-routes — reach an
+    intermediate mark N hours late/early and the weather you meet downstream is different, so the
+    optimal remainder can flip — and GEAR-LOSS re-runs (route the whole course without a kite that's
+    in the nominal plan). Returns (routes, robustness) shaped like the external fan entries."""
+    say = (log.append if log is not None else (lambda *_: None))
+    routes, robust = [], []
+    legs = consensus.get("legs") or []
+    finish_pt = (marks[-1][2], marks[-1][3]) if marks else None
+    from . import track as track_mod
+
+    # ---- PACE plays: per intermediate mark × delay ---------------------------------------------
+    eta_min = 0.0
+    for k in range(1, len(marks) - 1):
+        eta_min += float((legs[k - 1] or {}).get("leg_minutes") or 0) if k - 1 < len(legs) else 0
+        mark_name = marks[k][0]
+        eta_epoch = start_epoch + eta_min * 60
+        nominal_rest_h = max(0.0, (consensus.get("total_hours") or 0) - eta_min / 60.0)
+        for dh in _PACE_DELAYS_H:
+            r = optimizer.optimize_course(definition, course_id, eta_epoch + dh * 3600, wf,
+                                          from_mark=k, time_budget_s=per_budget_s,
+                                          resolution="fast", jib_crossovers=jib_crossovers,
+                                          emit_exploration=False, cur=cur, waves=waves,
+                                          helm_factor=helm_factor,
+                                          polar_adjustments=polar_adjustments,
+                                          wave_coeffs=wave_coeffs)
+            tag = f"{abs(dh)}h {'behind' if dh > 0 else 'ahead'}"
+            sid = f"pace_{'behind' if dh > 0 else 'ahead'}_{abs(dh)}h_{k}"
+            if not r.get("available") or not r.get("path"):
+                say(f"pace {sid}: no route — skipped")
+                continue
+            last = r["path"][-1]
+            if finish_pt and track_mod._hav_nm((last["lat"], last["lon"]), finish_pt) > 3.0:
+                say(f"pace {sid}: truncated — skipped")
+                continue
+            xte = _mean_xte_nm(r.get("path"), consensus.get("path"))
+            drest = round(((r.get("total_hours") or 0) - nominal_rest_h) * 60)
+            same_sails = _sail_seq(r) == _sail_seq_from(consensus, k)
+            entry = {"id": sid, "name": f"{tag} at {mark_name}", "kind": "pace",
+                     "params": {"delay_h": dh, "mark": k, "mark_name": mark_name},
+                     "category": "internal",
+                     "narrative_seed": (f"Reaching {mark_name} ~{abs(dh)}h "
+                                        f"{'later' if dh > 0 else 'earlier'} than the plan — the "
+                                        "wind you meet on the remaining legs is different from "
+                                        "what the nominal was optimized through."),
+                     "divergence": {"delta_eta_min": drest, "xte_mean_nm": xte},
+                     "total_hours": r.get("total_hours"),
+                     "favored_side": _favored_side(definition, course_id, r)}
+            if xte is not None and xte < 2.0 and same_sails:
+                robust.append({"scenario": sid, "name": entry["name"],
+                               "note": (f"{tag} at {mark_name}: the remaining plan HOLDS — same "
+                                        f"line, same sails (rest {drest:+d} min)")})
+                say(f"pace {sid}: nominal remainder HOLDS — robustness")
+            else:
+                entry["route"] = {"legs": r.get("legs"), "path": r.get("path"),
+                                  "total_sailed_nm": r.get("total_sailed_nm"),
+                                  "total_tacks": r.get("total_tacks"),
+                                  "sail_plan": r.get("sail_plan")}
+                routes.append(entry)
+                say(f"pace {sid}: remainder CHANGES ({xte} nm, sails "
+                    f"{'same' if same_sails else 'DIFFER'}) — play")
+
+    # ---- GEAR-LOSS plays: kites actually in the nominal plan -----------------------------------
+    nominal_sails = set(_sail_seq(consensus))
+    for sail in [s for s in _GEAR_SAILS if s in nominal_sails]:
+        r = optimizer.optimize_course(definition, course_id, start_epoch, wf,
+                                      exclude_sails=[sail], time_budget_s=per_budget_s,
+                                      resolution="fast", jib_crossovers=jib_crossovers,
+                                      emit_exploration=False, cur=cur, waves=waves,
+                                      helm_factor=helm_factor,
+                                      polar_adjustments=polar_adjustments, wave_coeffs=wave_coeffs)
+        if not r.get("available") or not r.get("path"):
+            say(f"gear-loss {sail}: no route — skipped")
+            continue
+        deta = round(((r.get("total_hours") or 0) - (consensus.get("total_hours") or 0)) * 60)
+        routes.append({"id": f"gear_loss_{sail.lower()}", "name": f"{sail} out of service",
+                       "kind": "gear_loss", "params": {"sail": sail}, "category": "internal",
+                       "narrative_seed": (f"The {sail} is out of service (blown/damaged) — the "
+                                          "route and sail sequence re-planned without it."),
+                       "divergence": {"delta_eta_min": deta,
+                                      "xte_mean_nm": _mean_xte_nm(r.get("path"),
+                                                                  consensus.get("path"))},
+                       "total_hours": r.get("total_hours"),
+                       "favored_side": _favored_side(definition, course_id, r),
+                       "route": {"legs": r.get("legs"), "path": r.get("path"),
+                                 "total_sailed_nm": r.get("total_sailed_nm"),
+                                 "total_tacks": r.get("total_tacks"),
+                                 "sail_plan": r.get("sail_plan")}})
+        say(f"gear-loss {sail}: route without it costs {deta:+d} min — play")
+    return routes, robust
+
+
+def _sail_seq(result):
+    seq, out = (result or {}).get("sail_plan") or [], []
+    for s in seq:
+        s = s.get("sail") if isinstance(s, dict) else s
+        if s and (not out or out[-1] != s):
+            out.append(s)
+    return out
+
+
+def _sail_seq_from(consensus, k):
+    """The nominal's sail sequence from leg k onward (consecutive-deduped)."""
+    out = []
+    for leg in (consensus.get("legs") or [])[k:]:
+        s = leg.get("sail")
+        if s and (not out or out[-1] != s):
+            out.append(s)
+    return out
+
+
 def build_playbook(definition, course_id, start_epoch, models, ensemble_members=0,
                    time_budget_s=200, jib_crossovers=None, helm_factor=1.0, use_waves=True,
                    polar_adjustments=None, wave_coeffs=None, v2_scenarios=True,
@@ -146,7 +263,9 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
     if not bbox:
         return {"available": False, "note": "course has no geocoded marks — review Course & Marks"}
     hours = optimizer.estimate_hours(definition, course_id)
-    t_end = start_epoch + hours * 3600
+    # the v2 pace plays re-route the remainder after a +4h-late mark arrival — the field must
+    # reach past the nominal window or those runs fall onto fallback wind
+    t_end = start_epoch + (hours + (6 if v2_scenarios else 0)) * 3600
     log: list[str] = []
     wf = build_windfield(bbox, start_epoch, t_end, models=models,
                          ensemble_members=ensemble_members, on_progress=log.append)
@@ -228,8 +347,15 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
             jib_crossovers=jib_crossovers, helm_factor=helm_factor,
             polar_adjustments=polar_adjustments, wave_coeffs=wave_coeffs,
             max_scenarios=n_scen, per_budget_s=max(60, int(scenario_budget_s / n_scen)), log=log)
-        v2 = {"pos_profile": profile, "scenario_routes": s_routes, "robustness": s_robust,
-              "corridor": corridor}
+        # Phase C INTERNAL plays — pace + gear-loss (the retro study ranked these the
+        # highest-value play types; user priority)
+        i_routes, i_robust = _internal_fan(
+            definition, course_id, start_epoch, wf, consensus, cur, waves, marks,
+            jib_crossovers=jib_crossovers, helm_factor=helm_factor,
+            polar_adjustments=polar_adjustments, wave_coeffs=wave_coeffs,
+            per_budget_s=max(60, int(scenario_budget_s / n_scen)), log=log)
+        v2 = {"pos_profile": profile, "scenario_routes": s_routes + i_routes,
+              "robustness": s_robust + i_robust, "corridor": corridor}
 
     return {
         "v2": v2,

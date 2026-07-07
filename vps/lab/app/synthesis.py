@@ -385,37 +385,123 @@ def _play_synthesis(plays_in, corridor, profile, race_name):
     return {}, f"play narratives fell back to registry seeds ({last})"
 
 
-def _build_plays(playbook, definition, course_id):
-    """The v2 plays from the scenario fan: registry predicates (resolved against the route
-    context) + frontier narratives (fallback = the registry seeds) + the pre-computed route."""
+def _sail_speed(SP, sail, tws, twa):
+    """Nearest per-sail-polar speed for `sail` at (tws, twa), or None (jib change-downs share the
+    J1 curve, so J2/J3 read as J1)."""
+    pts = SP.get(sail) or SP.get({"J2": "J1", "J3": "J1"}.get(sail, "")) or []
+    best, bd = None, 1e9
+    for t, a, v in pts:
+        d = (t - tws) ** 2 + ((a - twa) / 10.0) ** 2
+        if d < bd:
+            best, bd = v, d
+    return best
+
+
+_POS_TWA = {"upwind": 45.0, "reaching": 100.0, "downwind": 150.0}
+
+
+def _sail_guidance_plays(consensus, jib_crossovers):
+    """Phase-C SAIL GUIDANCE plays (no route — a pre-authored call): for each nominal leg's sail,
+    where is the crossover if the breeze runs above/below forecast, and what does the change buy?
+    Grounded in the frozen boat model (crossovers + per-sail polars) — never invented."""
+    from . import polars as POLm
+    from . import sailplan
+    SP = POLm.sail_polars()
+    seen, out = set(), []
+    for i, leg in enumerate((consensus or {}).get("legs") or []):
+        sail = leg.get("sail")
+        w = ((leg.get("wind") or {}).get("tws"))
+        if not sail or not isinstance(w, (int, float)):
+            continue
+        twa = _POS_TWA.get(leg.get("point_of_sail") or "reaching", 100.0)
+        for step, direction in ((1, "over"), (-1, "under")):
+            s2, thr = None, None
+            for dw in range(1, 8):          # scan for the crossover boundary from the leg's TWS
+                w2 = w + step * dw
+                if w2 < 3:
+                    break
+                cand = sailplan.optimal_sail(w2, twa, jib_crossovers)
+                if cand and cand != sail:
+                    s2, thr = cand, round(w2, 1)
+                    break
+            if not s2:
+                continue
+            key = (sail, s2, direction)
+            if key in seen:
+                continue
+            seen.add(key)
+            v_new = _sail_speed(SP, s2, thr + 1, twa)
+            v_old = _sail_speed(SP, sail, thr + 1, twa)
+            rec = round(v_new - v_old, 2) if (v_new and v_old) else None
+            gain = (f" — worth ~{rec} kn while it lasts" if rec and rec > 0.05 else "")
+            verb = "builds" if direction == "over" else "drops"
+            out.append({
+                "id": f"sail_{direction}_{sail.lower()}_{s2.lower()}",
+                "name": f"{sail} past its crossover → {s2}",
+                "kind": "sail_guidance", "category": "internal",
+                "params": {"hoisted": sail, "change_to": s2, "tws_threshold": thr,
+                           "direction": direction, "leg": i},
+                "narrative_seed": (f"Flying the {sail} while the breeze {verb} through ~{thr} kn — "
+                                   f"past the frozen crossover, the {s2} is the faster sail"
+                                   + (" and holding on means giving speed away" if direction == "over"
+                                      else "")),
+                "divergence": {"delta_eta_min": 0, "xte_mean_nm": None},
+                "guidance": (f"Change to the {s2} once ~{thr} kn is sustained{gain}. "
+                             "From the frozen boat model — confirm against the crew's own bands."),
+                "favored_side": None,
+            })
+    return out
+
+
+def _build_plays(playbook, definition, course_id, venue_stats=None, jib_crossovers=None):
+    """The v2 plays: the external scenario fan + the internal fan (pace/gear-loss routes) + the
+    sail GUIDANCE plays; registry predicates resolved against the route context + the venue's
+    fleet-normal stats (percentile-framed, locked input #3); frontier narratives with the
+    registry seeds as fallback."""
     from . import scenarios as scen
     v2 = playbook.get("v2") or {}
-    routes = v2.get("scenario_routes") or []
-    if not routes:
+    entries = list(v2.get("scenario_routes") or [])
+    entries += _sail_guidance_plays(playbook.get("consensus"), jib_crossovers)
+    if not entries:
         return [], v2, None
-    ctx = {"mean_tws": _mean_tws(playbook.get("consensus"))}
+    ctx = {"mean_tws": _mean_tws(playbook.get("consensus")), "venue_stats": venue_stats}
     reg = {s["id"]: s for s in scen.EXTERNAL}
-    texts, synth_note = _play_synthesis(routes, v2.get("corridor") or {},
+    texts, synth_note = _play_synthesis(entries, v2.get("corridor") or {},
                                         v2.get("pos_profile") or {}, definition.get("name", ""))
     plays = []
-    for p in routes:
-        s = reg.get(p["id"]) or {}
+    for p in entries:
         t = texts.get(p["id"]) or {}
-        stakes = abs(p["divergence"]["delta_eta_min"] or 0)
-        route = dict(p.get("route") or {})
-        route["path"] = _downsample(route.get("path"))
+        stakes = abs((p.get("divergence") or {}).get("delta_eta_min") or 0)
+        category = p.get("category") or "external"
+        if category == "external":
+            s = reg.get(p["id"]) or {}
+            preds = (s.get("detect")(next(iter(p["params"].values())), ctx)
+                     if s.get("detect") else [])
+        else:
+            fn = scen.INTERNAL_DETECT.get(p.get("kind"))
+            preds = fn(p.get("params") or {}, ctx) if fn else []
+        route = dict(p.get("route") or {}) or None
+        if route:
+            route["path"] = _downsample(route.get("path"))
+        guidance = p.get("guidance")
+        applic = ({"legs": [p["params"]["mark"]], "phase": "any"} if p.get("kind") == "pace"
+                  else {"legs": [p["params"]["leg"]], "phase": "any"}
+                  if p.get("kind") == "sail_guidance" and "leg" in (p.get("params") or {})
+                  else {"legs": "all", "phase": "any"})
         plays.append({
-            "id": p["id"], "name": p["name"], "category": "external",
-            "scenario": {"kind": p["kind"], "params": p["params"], "source": "synthetic"},
+            "id": p["id"], "name": p["name"], "category": category,
+            "scenario": {"kind": p["kind"], "params": p["params"],
+                         "source": "synthetic" if category == "external" else "internal"},
             "conditions": {
-                "predicates": (s.get("detect")(next(iter(p["params"].values())), ctx)
-                               if s.get("detect") else []),
+                "predicates": preds,
                 "narrative": (t.get("narrative") or p.get("narrative_seed") or "").strip(),
             },
-            "applicability": {"legs": "all", "phase": "any"},
-            "response": {"type": "route", "route": route, "guidance": None,
-                         "sail_plan": route.get("sail_plan")},
-            "summary": (t.get("summary") or f"{p['name']} — the pre-routed answer.").strip(),
+            "applicability": applic,
+            "response": {"type": "route" if route else "guidance", "route": route,
+                         "guidance": guidance,
+                         "sail_plan": (route or {}).get("sail_plan")},
+            "summary": (t.get("summary")
+                        or (guidance if guidance else f"{p['name']} — the pre-routed answer.")).strip(),
             "rationale": (t.get("rationale") or "").strip(),
             "tradeoffs": (t.get("tradeoffs") or "").strip(),
             "what_flips_it": (t.get("what_flips_it")
@@ -423,7 +509,7 @@ def _build_plays(playbook, definition, course_id):
             "stakes_min": stakes,
             "favored_side": p.get("favored_side"),
         })
-    plays.sort(key=lambda x: -(x["stakes_min"] or 0))
+    plays.sort(key=lambda x: (0 if x["category"] == "internal" else 1, -(x["stakes_min"] or 0)))
     return plays, v2, synth_note
 
 
@@ -459,7 +545,9 @@ def synthesize(definition, course_id, start_epoch, models, ensemble_members=0, t
         })
 
     # ---- Playbook v2: the play library from the scenario fan (docs/PLAYBOOK_V2.md) --------------
-    plays, v2meta, play_note = _build_plays(playbook, definition, course_id)
+    venue_stats = _venue_stats()
+    plays, v2meta, play_note = _build_plays(playbook, definition, course_id,
+                                            venue_stats=venue_stats, jib_crossovers=jib_crossovers)
     corridor = (v2meta.get("corridor") or {}) if v2meta else {}
     headline = syn.get("headline", "")
     if corridor.get("note"):
@@ -481,7 +569,7 @@ def synthesize(definition, course_id, start_epoch, models, ensemble_members=0, t
         "plays": plays,
         "corridor": corridor or None,
         "pos_profile": (v2meta or {}).get("pos_profile"),
-        "venue_stats": _venue_stats(),
+        "venue_stats": venue_stats,
         "recommended": syn.get("recommended"),
         "agreement": playbook.get("agreement"),
         "decision_spread_min": playbook.get("decision_spread_min"),

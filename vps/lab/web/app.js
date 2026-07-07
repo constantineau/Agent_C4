@@ -1370,6 +1370,7 @@ function pbPlayCard(p) {
     ${p.tradeoffs ? `<div class="pb-row"><span class="pb-lbl">Tradeoffs</span><span>${esc(p.tradeoffs)}</span></div>` : ""}
     ${p.what_flips_it ? `<div class="pb-row flips"><span class="pb-lbl">Hands back when</span><span>${esc(p.what_flips_it)}</span></div>` : ""}
     ${(p.response || {}).route ? `<div class="pb-row"><span class="pb-lbl">Route</span><span>${(p.response.route.legs || []).length} legs · ${p.response.route.total_sailed_nm ?? "—"} nm · ${p.response.route.total_tacks ?? "—"} tacks · sails ${esc(((p.response.route.sail_plan || []).map((s) => s.sail || s)).join("→") || "—")}</span></div>` : ""}
+    ${(p.response || {}).guidance ? `<div class="pb-row"><span class="pb-lbl">The call</span><span><b>${esc(p.response.guidance)}</b></span></div>` : ""}
   </details>`;
 }
 

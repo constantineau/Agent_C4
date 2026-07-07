@@ -713,7 +713,8 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
                     obstacles=None, avoid=True, source=None, safety_depth=None,
                     jib_crossovers=None, emit_exploration=True, per_model=False,
                     resolution="auto", cur=None, waves=None, helm_factor=1.0,
-                    polar_adjustments=None, wave_coeffs=None, polar=None):
+                    polar_adjustments=None, wave_coeffs=None, polar=None,
+                    from_mark=0, exclude_sails=None):
     """Route the whole course from its start through every mark to the finish via `wf`.
 
     Returns one optimal route with per-leg ETAs, total time/distance/tacks and a route confidence
@@ -723,6 +724,11 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
     `avoid` is set, one is built from the course bbox + this race's zones + island marks. `source`
     (Natural Earth vs NOAA ENC) and `safety_depth` (the active boat draft + margin) flow into it."""
     marks, skipped, cid = race_def.course_to_marks(definition, course_id)
+    if from_mark:
+        # PACE PLAYS (Playbook v2 Phase C): route the REMAINING course from an intermediate mark —
+        # "if you reach this mark N hours late/early, what does the rest of the race become?"
+        # start_epoch is then the (delayed) arrival epoch at that mark.
+        marks = marks[int(from_mark):]
     if len(marks) < 2:
         return {"available": False, "note": "course needs at least a start and one mark/finish",
                 "skipped": skipped}
@@ -739,6 +745,20 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
             return {"available": False, "note": "no polars loaded"}
         P = POL.apply_adjustments(P, polar_adjustments)   # Lab-4 human-approved refined-polar overlay
         SP = POL.sail_polars()             # per-sail curves for sail-aware routing (2g); {} → envelope only
+    if exclude_sails and SP:
+        # GEAR-LOSS PLAYS (Playbook v2 Phase C): route as if a sail is out of service — the router
+        # must genuinely sail without it, so its curve is removed AND the envelope is rebuilt as the
+        # max over the REMAINING sails (the cert envelope assumes the full inventory).
+        gone = {str(s).upper() for s in exclude_sails}
+        SP = {s: pts for s, pts in SP.items() if s.upper() not in gone}
+        if SP:
+            env = {}
+            for pts in SP.values():
+                for tws, twa, stw in pts:
+                    k = (tws, twa)
+                    if stw is not None and (k not in env or stw > env[k]):
+                        env[k] = stw
+            P = sorted((t, a, v) for (t, a), v in env.items())
     if not P:
         return {"available": False, "note": "no polars loaded"}
 
