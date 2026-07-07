@@ -318,6 +318,8 @@ def _plays_callout(plays):
     stakes = top.get("stakes_min")
     head = f"Play armed: {top.get('name')}"
     det = call
+    if top.get("corroborated") and top.get("corroborated_by"):
+        det += f" Corroborated by {top['corroborated_by']}."
     if len(armed) > 1:
         det += f" (+{len(armed) - 1} more armed play(s) on the strategy card)"
     if stakes:

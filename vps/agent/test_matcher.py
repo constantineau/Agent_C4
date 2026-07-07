@@ -143,3 +143,37 @@ check("payload carries signals + sail state + grounding",
 check("no heavy route payloads ride along", all("route" not in x for x in r["plays"]))
 
 print("RESULT:", "PASS" if ok else "FAIL")
+
+print("6) corroborators — raise confidence, never gate (2026-07-08)")
+CORR_BUNDLE = {"race_id": "u", "schema": "c4.playbook/v2", "variants": [{"id": "m"}], "plays": [
+    {"id": "shift_right_20", "name": "Right shift", "category": "external",
+     "scenario": {"kind": "rotation"}, "stakes_min": 300,
+     "conditions": {
+         "predicates": [{"signal": "time_behind_min", "op": ">=", "value": 60, "sustain_min": 0}],
+         "corroborators": [{"signal": "upcourse_twd_shift_deg", "op": ">=", "value": 12,
+                            "why": "buoy reads the shift"}]},
+     "response": {"type": "route"}}]}
+matcher.SUSTAIN_SCALE = 0.0
+stub(bundle=CORR_BUNDLE, time_behind_min=90)
+r = matcher.get_plays()
+pl = r["plays"][0]
+check("predicates alone ARM the play (dark buoy never blocks)",
+      pl["status"] == "armed" and pl["corroborated"] is False)
+# now the up-course signal agrees
+matcher.gather = (lambda orig: (lambda route=None: {**orig(route),
+                                                    "upcourse_twd_shift_deg": 15,
+                                                    "_upcourse_name": "N Lake Huron buoy"}))(matcher.gather)
+r = matcher.get_plays()
+pl = r["plays"][0]
+check("agreeing buoy -> corroborated + named",
+      pl["status"] == "armed" and pl["corroborated"]
+      and pl["corroborated_by"] == "up-course buoy N Lake Huron buoy")
+check("corroborator rows ride with why", pl["corroborators"][0]["ok"]
+      and "buoy" in pl["corroborators"][0]["why"])
+# corroborator true but predicates false -> still quiet (it can't arm anything by itself)
+matcher.deviation.get_deviation = lambda route=None: {"available": True, "time_behind_s": 0,
+                                                      "xte_nm": 0.1}
+r = matcher.get_plays()
+check("corroborator alone can never arm", r["plays"][0]["status"] == "quiet")
+
+print("RESULT-6:", "PASS" if ok else "FAIL")

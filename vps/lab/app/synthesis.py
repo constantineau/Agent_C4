@@ -561,9 +561,11 @@ def _build_plays(playbook, definition, course_id, venue_stats=None, jib_crossove
             param = (p.get("boundary") or {}).get("refined_param",
                                                   next(iter(p["params"].values())))
             preds = (s.get("detect")(param, ctx) if s.get("detect") else [])
+            corr = scen.corroborators(p.get("kind"), param, ctx)
         else:
             fn = scen.INTERNAL_DETECT.get(p.get("kind"))
             preds = fn(p.get("params") or {}, ctx) if fn else []
+            corr = []
         route = dict(p.get("route") or {}) or None
         if route:
             route["path"] = _downsample(route.get("path"))
@@ -579,6 +581,7 @@ def _build_plays(playbook, definition, course_id, venue_stats=None, jib_crossove
             "conditions": {
                 "predicates": preds,
                 "narrative": (t.get("narrative") or p.get("narrative_seed") or "").strip(),
+                **({"corroborators": corr} if corr else {}),
             },
             "applicability": applic,
             "response": {"type": "route" if route else "guidance", "route": route,

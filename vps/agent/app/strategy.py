@@ -356,7 +356,8 @@ def get_strategy_signals(route=None):
             out["plays"] = {"armed": pl["armed"], "arming": pl["arming"],
                             "detail": [{k: r.get(k) for k in
                                         ("id", "name", "status", "guidance", "response_type",
-                                         "stakes_min", "summary")}
+                                         "stakes_min", "summary", "corroborated",
+                                         "corroborated_by")}
                                        for r in pl["plays"] if r["status"] != "quiet"][:6]}
             if pl["armed"]:
                 names = [r["name"] for r in pl["plays"] if r["status"] == "armed"][:3]

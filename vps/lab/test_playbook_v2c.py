@@ -335,3 +335,35 @@ finally:
     PB._BISECT_MAX_PROBES = _orig_bud
 
 print("RESULT-9:", "PASS" if ok else "FAIL")
+
+# ---- 10) corroborators (buoy raises confidence, never gates) ------------------------------------
+print("10) corroborator templates on external plays")
+_saved_key2 = SYN.API_KEY
+SYN.API_KEY = None
+try:
+    ext = {"id": "shift_right_20", "name": "Right shift", "kind": "rotation",
+           "params": {"deg": 20}, "category": "external", "narrative_seed": "seed",
+           "divergence": {"delta_eta_min": 120, "xte_mean_nm": 4.0},
+           "route": {"legs": [], "path": [], "sail_plan": []}, "favored_side": "right"}
+    prs = {"id": "pressure_down", "name": "Less pressure", "kind": "tws_scale",
+           "params": {"scale": 0.75}, "category": "external", "narrative_seed": "seed",
+           "divergence": {"delta_eta_min": 200, "xte_mean_nm": 3.0},
+           "route": {"legs": [], "path": [], "sail_plan": []}, "favored_side": None}
+    fake_pb = {"v2": {"scenario_routes": [ext, prs], "robustness": [], "corridor": {},
+                      "pos_profile": {}}, "consensus": {"legs": []}}
+    built, _v, _n = SYN._build_plays(fake_pb, {"name": "T"}, "x", venue_stats=vs)
+    b = {x["id"]: x for x in built}
+    rc = (b["shift_right_20"]["conditions"].get("corroborators") or [])
+    pc = (b["pressure_down"]["conditions"].get("corroborators") or [])
+    print(f"     rot corr: {rc}; tws corr: {pc}")
+    check("rotation play corroborated by the up-course TWD shift (signed, ~60%)",
+          rc and rc[0]["signal"] == "upcourse_twd_shift_deg" and rc[0]["value"] == 12
+          and rc[0]["op"] == ">=")
+    check("pressure play corroborated by the up-course TWS delta (negative side)",
+          pc and pc[0]["signal"] == "upcourse_tws_delta_kn" and pc[0]["value"] < 0
+          and pc[0]["op"] == "<=")
+    check("corroborators carry a crew-facing why", "buoy" in rc[0]["why"])
+finally:
+    SYN.API_KEY = _saved_key2
+
+print("RESULT-10:", "PASS" if ok else "FAIL")

@@ -699,6 +699,7 @@
       return `<div class="st-play y-${x.status === "armed" ? "act" : "watch"}">` +
         `<b>${x.name}</b> <span class="st-play-badge">${badge}</span>` +
         (x.stakes_min ? ` <span class="st-play-stakes">~${x.stakes_min}m at stake</span>` : "") +
+        (x.corroborated ? ` <span class="st-play-stakes" title="A confidence-raising signal agrees — it never gates arming">✓ ${x.corroborated_by || "corroborated"}</span>` : "") +
         (call ? `<span class="st-play-call">${call}</span>` : "") + `</div>`;
     }).join("");
     el.innerHTML = `<div class="st-plays-head"><span>PLAYS</span><span class="st-gearbox" ` +

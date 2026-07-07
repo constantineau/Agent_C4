@@ -129,6 +129,7 @@ def gather(route=None):
         # the up-course leading indicator (live NDBC buoy vs own wind; common public data)
         "upcourse_tws_delta_kn": upc.get("tws_delta_kn"),
         "upcourse_twd_shift_deg": upc.get("twd_shift_deg"),
+        "_upcourse_name": upc.get("name") or upc.get("station"),   # crew-facing corroborator label
         "polar_pct": None,          # not wired onboard yet — the sea_state play stays quiet
     }
 
@@ -180,6 +181,24 @@ def _evaluate(play, signals, now):
         st.pop("armed_at", None)
         status = "quiet"
         held_s = 0.0
+    # CORROBORATORS (2026-07-08): confidence-raising signals that never gate — e.g. the up-course
+    # buoy already reading the play's breeze. Evaluated like predicates but with NO effect on the
+    # armed status (AND semantics would let a dark buoy block a real play).
+    corr_rows, corroborated = [], False
+    for c in ((play.get("conditions") or {}).get("corroborators")) or []:
+        actual = signals.get(c.get("signal"))
+        cok = _pred_ok(c.get("op"), actual, c.get("value"))
+        corroborated = corroborated or cok
+        corr_rows.append({"signal": c.get("signal"), "op": c.get("op"), "value": c.get("value"),
+                          "actual": actual, "ok": cok, "why": c.get("why")})
+    corroborated_by = None
+    if corroborated:
+        src = next((r for r in corr_rows if r["ok"]), {})
+        upname = signals.get("_upcourse_name")
+        if str(src.get("signal", "")).startswith("upcourse") and upname:
+            corroborated_by = f"up-course buoy {upname}"
+        else:
+            corroborated_by = src.get("signal")
     resp = play.get("response") or {}
     return {
         "id": play.get("id"), "name": play.get("name"), "category": play.get("category"),
@@ -187,6 +206,9 @@ def _evaluate(play, signals, now):
         "status": status, "held_s": round(held_s),
         "sustain_min": sustain_min,
         "predicates": rows,
+        **({"corroborators": corr_rows} if corr_rows else {}),
+        "corroborated": corroborated,
+        "corroborated_by": corroborated_by,
         "summary": play.get("summary") or "",
         "guidance": resp.get("guidance"),
         "response_type": resp.get("type"),

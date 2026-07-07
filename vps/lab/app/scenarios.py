@@ -183,6 +183,29 @@ INTERNAL_DETECT = {"pace": pace_predicates, "gear_loss": gear_loss_predicates,
                    "low_maneuver": low_maneuver_predicates, "rejoin": rejoin_predicates}
 
 
+def corroborators(kind, param, ctx=None):
+    """CORROBORATOR templates (2026-07-08): live signals that RAISE CONFIDENCE in an arming play
+    but never gate it — an up-course buoy showing the play's breeze before the boat sees it. AND
+    semantics would let a dark/out-of-season buoy block arming, so these ride separately: the
+    matcher evaluates them and reports "corroborated", the predicates alone decide armed."""
+    if kind == "rotation":
+        deg = float(param)
+        thr = max(8, round(abs(deg) * 0.6))
+        sign = 1 if deg > 0 else -1
+        return [{"signal": "upcourse_twd_shift_deg", "op": ">=" if sign > 0 else "<=",
+                 "value": sign * thr,
+                 "why": "the up-course buoy already reads the shifted breeze"}]
+    if kind == "tws_scale":
+        scale = float(param)
+        mean = float((ctx or {}).get("mean_tws") or 10.0)
+        delta = (scale - 1.0) * mean
+        thr = round(abs(delta) * 0.6, 1) or 1.0
+        return [{"signal": "upcourse_tws_delta_kn", "op": ">=" if delta > 0 else "<=",
+                 "value": thr if delta > 0 else -thr,
+                 "why": "the up-course buoy already reads the changed pressure"}]
+    return []
+
+
 def apply(scenario, wf):
     """The transformed field for a scenario (wave_heavy routes on the SAME wind — its perturbation
     is an optimizer wave-coefficient override, returned as the second element)."""
