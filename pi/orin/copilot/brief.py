@@ -79,12 +79,15 @@ def structural_caveats(snapshot: dict, used_sources, playbook=None) -> list[str]
 # ---------------------------------------------------------------------------------------------
 # Grounding validator — the structural guardrail.
 # ---------------------------------------------------------------------------------------------
-def validate(brief: dict, allowed_sources: set[str], playbook_ids: list[str] | None = None) -> dict:
+def validate(brief: dict, allowed_sources: set[str], playbook_ids: list[str] | None = None,
+             play_ids: list[str] | None = None) -> dict:
     """Enforce that every factor/recommendation is grounded in a real engine source or a real
     playbook variant. Ungrounded items are removed and recorded in `caveats`. Confidence is
     capped by how much survived. Returns a cleaned copy; never raises."""
     playbook_ids = playbook_ids or []
-    valid_refs = set(allowed_sources) | {f"playbook:{v}" for v in playbook_ids} | {"playbook"}
+    play_ids = play_ids or []
+    valid_refs = (set(allowed_sources) | {f"playbook:{v}" for v in playbook_ids} | {"playbook"}
+                  | {f"play:{p}" for p in play_ids})
 
     out = new_brief()
     out["disclaimer"] = DISCLAIMER

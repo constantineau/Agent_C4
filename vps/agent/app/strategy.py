@@ -327,6 +327,25 @@ def get_strategy_signals(route=None):
            "disclaimer": "Advisory — the boat's own read of its own data + common public info. "
                          "The crew decides."}
 
+    # PLAYBOOK v2 Phase D — the ARMED PLAYS ride on the digest (deterministic matcher; the
+    # recommendation above stays the selector's — an armed play is a pointer, not an order)
+    try:
+        from . import matcher
+        pl = matcher.get_plays(route)
+        if pl.get("available") and (pl.get("armed") or pl.get("arming")):
+            out["plays"] = {"armed": pl["armed"], "arming": pl["arming"],
+                            "detail": [{k: r.get(k) for k in
+                                        ("id", "name", "status", "guidance", "response_type",
+                                         "stakes_min", "summary")}
+                                       for r in pl["plays"] if r["status"] != "quiet"][:6]}
+            if pl["armed"]:
+                names = [r["name"] for r in pl["plays"] if r["status"] == "armed"][:3]
+                picture.append({"signal": "plays",
+                                "read": "Armed play(s): " + "; ".join(names),
+                                "grounded_in": "get_plays", "confidence": "engine"})
+    except Exception:
+        pass
+
     # OFF-BOOK CHAINING: a recommendation that DEPARTS the frozen playbook needs a concrete route,
     # not just "sail your own side". Chain the onboard re-optimizer only when off-book (it's a heavy
     # isochrone — cached, but never run on an on-plan hold).

@@ -146,6 +146,24 @@ class CloudSource:
             row = conn.execute("SELECT value FROM app_state WHERE key = 'race_playbook'").fetchone()
         return json.loads(row["value"]) if row else {}
 
+    def save_sail_state(self, blob):
+        """Persist the crew-set sail state ({hoisted, out_of_service, ts}) — the matcher's
+        crew-armed signals (a blown kite has no instrument)."""
+        import json
+        with pool.connection() as conn:
+            conn.execute(
+                "INSERT INTO app_state (key, value, updated_at) VALUES ('sail_state', %s, now()) "
+                "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
+                (json.dumps(blob),))
+            conn.commit()
+
+    def get_sail_state(self):
+        """The crew-set sail state or {} if never set."""
+        import json
+        with pool.connection() as conn:
+            row = conn.execute("SELECT value FROM app_state WHERE key = 'sail_state'").fetchone()
+        return json.loads(row["value"]) if row else {}
+
     def ais_targets(self, max_age_min):
         """Latest raw AIS observation per MMSI within the window — collision/fleet awareness.
 

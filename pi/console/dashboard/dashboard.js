@@ -658,6 +658,55 @@
     if (App.src === "demo") return (SCENARIOS[App.demoScn] || {}).drift || null;
     return App.forecastDrift;
   }
+  /* Playbook v2 Phase D — the Tier-1 PLAY MATCHER: armed/arming plays from the frozen v2 bundle
+     (engine-deterministic Schmitt sustain). Plus the crew GEAR toggle: a tapped kite = declared
+     out of service (the gear-loss plays' arming signal — no instrument for a blown sail). */
+  async function fetchPlays() {
+    if (App.src !== "live") return;
+    const r = await fetchJSON("/plays", 9000);
+    if (r) App.plays = r;
+    if (App.src === "live") render();
+  }
+  function currentPlays() {
+    if (App.src === "demo") return (SCENARIOS[App.demoScn] || {}).plays || null;
+    return App.plays;
+  }
+  const GEAR = ["A2", "A3", "S2"];
+  window.toggleGear = async function (sail) {
+    const st = ((currentPlays() || {}).sail_state) || {};
+    const out = new Set(st.out_of_service || []);
+    if (out.has(sail)) out.delete(sail); else out.add(sail);
+    try {
+      await fetch(API + "/sails/state", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ out_of_service: [...out] }) });
+      fetchPlays();
+    } catch (e) { /* engine unreachable — the next poll re-syncs */ }
+  };
+  function renderPlays() {
+    const el = document.getElementById("stPlays");
+    if (!el) return;
+    const pl = currentPlays();
+    if (!pl || pl.available === false) { el.hidden = true; return; }
+    const rows = (pl.plays || []).filter((x) => x.status !== "quiet").slice(0, 4);
+    const out = new Set(((pl.sail_state || {}).out_of_service) || []);
+    const gear = GEAR.map((s) =>
+      `<button class="st-gear${out.has(s) ? " oos" : ""}" onclick="toggleGear('${s}')" ` +
+      `title="Tap = declare the ${s} ${out.has(s) ? "back in service" : "OUT of service (blown/damaged)"}">${s}${out.has(s) ? "✕" : ""}</button>`).join("");
+    const items = rows.map((x) => {
+      const call = x.guidance || x.summary || "";
+      const badge = x.status === "armed" ? "ARMED" : "arming…";
+      return `<div class="st-play y-${x.status === "armed" ? "act" : "watch"}">` +
+        `<b>${x.name}</b> <span class="st-play-badge">${badge}</span>` +
+        (x.stakes_min ? ` <span class="st-play-stakes">~${x.stakes_min}m at stake</span>` : "") +
+        (call ? `<span class="st-play-call">${call}</span>` : "") + `</div>`;
+    }).join("");
+    el.innerHTML = `<div class="st-plays-head"><span>PLAYS</span><span class="st-gearbox" ` +
+      `title="Gear out-of-service toggles — arms the pre-authored gear-loss plays">gear: ${gear}</span></div>` +
+      (items || `<div class="st-play-none">No plays armed — the library is watching ` +
+       `${pl.n_plays ?? 0} conditions.</div>`);
+    el.hidden = false;
+  }
   /* the branch SELECTOR: the executor's unified call — hold / switch to a pre-authored variant /
      off-script. Engine-computed (unifies wind-shift + deviation + drift over the frozen bundle). */
   async function fetchSelector() {
@@ -754,7 +803,7 @@
       document.getElementById("stMetrics").innerHTML = "";
       document.getElementById("stFlip").hidden = true;
       document.getElementById("stWhy").textContent = "";
-      renderDriftLine(); renderSelector(); renderReoptimize();
+      renderDriftLine(); renderSelector(); renderPlays(); renderReoptimize();
       return;
     }
     const status = d.status || "na";
@@ -801,6 +850,7 @@
     document.getElementById("stWhy").textContent = d.why || d.sub || "";
     renderDriftLine();
     renderSelector();
+    renderPlays();
     renderReoptimize();
   }
   /* the onboard re-route line — shown when a fresh fallback route is available (live: while the
@@ -1184,7 +1234,7 @@
   function briefMe() {
     const b = document.getElementById("briefBtn");
     b.classList.add("busy"); b.textContent = "thinking…";
-    if (App.src === "live") { poll(); fetchBrief(); fetchAdherence(); fetchCoach(); fetchDeviation(); fetchDrift(); fetchSelector(); fetchSynthesis(); }
+    if (App.src === "live") { poll(); fetchBrief(); fetchAdherence(); fetchCoach(); fetchDeviation(); fetchDrift(); fetchSelector(); fetchSynthesis(); fetchPlays(); }
     // the LLM is slow (~45 s warm); clear the busy state on a timer — render() updates when it lands
     setTimeout(() => { b.classList.remove("busy"); b.textContent = "Brief me ↻"; if (App.src !== "live") render(); }, 1500);
   }
@@ -1212,6 +1262,8 @@
     App.selTimer = setInterval(fetchSelector, DEV_EVERY);
     fetchSynthesis();               // in-race strategy synthesis (copilot LLM → engine fallback), own cadence
     App.synTimer = setInterval(fetchSynthesis, SYN_EVERY);
+    fetchPlays();                   // Phase-D play matcher (engine, deterministic), own cadence
+    App.playsTimer = setInterval(fetchPlays, SYN_EVERY);
     document.getElementById("themeBtn").addEventListener("click", cycleTheme);
     document.getElementById("srcBtn").addEventListener("click", cycleSource);
     document.getElementById("alertBtn").addEventListener("click", toggleSound);

@@ -141,6 +141,11 @@ class Playbook:
             lines.append(line)
         return "\n".join(lines)
 
+    def play_ids(self) -> list[str]:
+        """Play ids in a v2 bundle (Phase D) — the Tier-2 grounding allow-list extension: the LLM
+        may cite `play:<id>` for anything it matches; an unknown play is dropped by validate()."""
+        return [str(p.get("id")) for p in (self.data or {}).get("plays") or [] if p.get("id")]
+
     def variant_ids(self) -> list[str]:
         return [str(v.get("id") or v.get("name") or i) for i, v in enumerate(self.variants)]
 

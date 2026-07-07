@@ -102,6 +102,10 @@ class EngineClient:
         """The unified HOLD/SWITCH/OFF-SCRIPT branch pick over the frozen playbook (deterministic)."""
         return self._get("/selector", {"route": route})
 
+    def plays(self, route=None) -> dict:
+        """Phase-D play matcher — armed/arming plays from the frozen v2 bundle (Tier-1)."""
+        return self._get("/plays", {"route": route} if route else None)
+
     def strategy(self, route=None) -> dict:
         """The Tier-1 deterministic STRATEGY SYNTHESIS digest — the grounded cross-signal picture +
         concordance + recommendation this copilot phrases and may extend (the LLM fallback)."""

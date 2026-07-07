@@ -42,14 +42,14 @@ URGENCY_RANK = {"now": 0, "soon": 1, "monitor": 2}
 # Lower = more important; the coach line leads with the top of this order.
 CATEGORY_PRIORITY = {"safety": 0, "fatigue": 1, "rounding": 2, "sail": 3,
                      "playbook": 4, "strategy": 5, "deviation": 6, "fleet": 7, "shift": 8,
-                     "drift": 9, "layline": 10, "data": 11}
+                     "drift": 9, "layline": 10, "data": 11, "plays": 6}
 # How many consecutive evaluations a callout must persist before it's "confirmed" and shown —
 # the fuzzy-adherence hysteresis. Time-critical things fire at once; noisier reads wait one poll
 # so a single-sample blip never barks. (The engine already debounces tactical persistence — the
 # deviation/drift triggers carry their OWN Schmitt consider/commit bands, so 1 round is enough.)
 CONFIRM_ROUNDS = {"safety": 1, "fatigue": 1, "rounding": 1, "sail": 1, "playbook": 2,
                   "strategy": 2, "deviation": 1, "fleet": 2, "shift": 2, "drift": 1,
-                  "layline": 1, "data": 2}
+                  "layline": 1, "data": 2, "plays": 1}
 
 
 def _callout(cid, category, urgency, headline, detail, grounded_in, confidence="med"):
@@ -301,6 +301,33 @@ def _drift_callout(dft):
                     "high" if status == "act" else "med")
 
 
+def _plays_callout(plays):
+    """Playbook v2 Phase D: a pre-authored PLAY newly ARMS — its detection conditions have held
+    through the engine's sustain window, so the situation it was authored for looks real. The play
+    was written ashore + frozen at the gun; the matcher is deterministic (Tier-1) — this callout
+    POINTS to it in the play's own words (the copilot never originates). One callout for the
+    top-stakes armed play; the play id + status ride in the callout id so a new arm re-surfaces
+    (the engine's sustain already de-noises → 1 confirm round)."""
+    if not plays.get("available") or not plays.get("armed"):
+        return None
+    armed = [x for x in (plays.get("plays") or []) if x.get("status") == "armed"]
+    if not armed:
+        return None
+    top = armed[0]                       # matcher sorts armed-first by stakes
+    call = (top.get("guidance") or top.get("summary") or "").strip()
+    stakes = top.get("stakes_min")
+    head = f"Play armed: {top.get('name')}"
+    det = call
+    if len(armed) > 1:
+        det += f" (+{len(armed) - 1} more armed play(s) on the strategy card)"
+    if stakes:
+        det += f" — ~{stakes} min at stake if the scenario is real."
+    urgency = "now" if (top.get("response_type") == "guidance" or (stakes or 0) >= 120) else "soon"
+    return _callout("plays:" + ":".join(sorted(x["id"] for x in armed)), "plays", urgency,
+                    head, det, ["get_plays", f"play:{top.get('id')}"],
+                    "high" if (stakes or 0) >= 120 else "med")
+
+
 def _strategy_callout(strat):
     """In-race STRATEGY SYNTHESIS callout (docs/STRATEGY_SYNTHESIS.md Phase 2). The higher-order
     cross-signal read the individual triggers don't give: the moment the signals CONVERGE
@@ -384,6 +411,11 @@ def evaluate(snapshot, playbook=None, engine=None):
             out.append(c)
     if strat.get("available"):                     # in-race synthesis — the higher-order cross-signal read
         c = _strategy_callout(strat)
+        if c:
+            out.append(c)
+    pl = snapshot.get("get_plays") or {}
+    if pl.get("available"):                        # Phase D: a pre-authored play newly armed
+        c = _plays_callout(pl)
         if c:
             out.append(c)
     if fleet.get("available"):                     # handicap-rival watch (corrected-time tactical)

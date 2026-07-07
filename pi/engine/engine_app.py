@@ -24,7 +24,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import (navigator, tactics, routing, weather, sails, fatigue, onboard_conditions,
-                 datasource, ais, fleet, deviation, drift, selector, reoptimize, strategy)
+                 datasource, ais, fleet, deviation, drift, selector, reoptimize, strategy,
+                 matcher)
 
 app = FastAPI(title="Agent_C4 Onboard Engine", version="0.1.0")
 # The iPad reaches the Pi directly over boat-local Wi-Fi in race mode; allow cross-origin so a
@@ -201,9 +202,35 @@ def playbook_load(body: dict):
     datasource.active().save_playbook(bundle)
     deviation.reset_state()          # a new playbook → clear the Schmitt/trend memory
     drift.reset_state()
+    matcher.clear_state()            # forget play arm/sustain memory too
     return {"loaded": True, "race_id": bundle.get("race_id"),
             "variants": len(bundle.get("variants") or []),
+            "plays": len(bundle.get("plays") or []),
             "recommended": bundle.get("recommended")}
+
+
+@app.get("/plays")
+def plays(route: str | None = None):
+    """Playbook v2 Phase D — the Tier-1 PLAY MATCHER: every play in the frozen v2 bundle evaluated
+    against the boat's live signals (deterministic Schmitt sustain; armed first). Legal in-race —
+    own instruments + pre-loaded homework; works with no Orin aboard."""
+    return matcher.get_plays(route)
+
+
+@app.get("/sails/state")
+def sails_state():
+    """The crew-set sail state (hoisted + out-of-service) the matcher's crew-armed signals read."""
+    return matcher.get_sail_state()
+
+
+@app.post("/sails/state")
+def sails_state_set(body: dict):
+    """Update the crew sail state: {hoisted?: 'A3'|'', out_of_service?: ['A2', ...]}. The
+    out-of-service list is the gear-loss plays' arming signal — there is no instrument for a
+    blown kite; the crew declares it here (and clears it when repaired)."""
+    body = body or {}
+    return matcher.set_sail_state(hoisted=body.get("hoisted"),
+                                  out_of_service=body.get("out_of_service"))
 
 
 @app.get("/deviation")

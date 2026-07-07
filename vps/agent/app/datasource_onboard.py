@@ -309,6 +309,21 @@ class OnboardSource:
         row = self._engine.execute("SELECT value FROM kv WHERE key = 'race_playbook'").fetchone()
         return json.loads(row["value"]) if row else {}
 
+    def save_sail_state(self, blob):
+        """Persist the crew-set sail state ({hoisted, out_of_service, ts}) in the engine kv —
+        the matcher's crew-armed signals (a blown kite has no instrument)."""
+        import json
+        self._engine.execute(
+            "INSERT INTO kv (key, value) VALUES ('sail_state', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (json.dumps(blob),))
+        self._engine.commit()
+
+    def get_sail_state(self):
+        """The crew-set sail state or {} if never set."""
+        import json
+        row = self._engine.execute("SELECT value FROM kv WHERE key = 'sail_state'").fetchone()
+        return json.loads(row["value"]) if row else {}
+
     def ais_targets(self, max_age_min):
         """Latest AIS observation per MMSI within the window — other-vessel Signal K contexts
         captured by the live cache. Shape-matched to CloudSource: [{mmsi, name, lat, lon,

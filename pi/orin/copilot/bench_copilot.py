@@ -563,6 +563,37 @@ def test_strategy_callout() -> bool:
     return ok
 
 
+def test_plays_callout() -> bool:
+    """Phase-D armed-plays callout: fires when a play newly ARMS (the engine's sustain already
+    de-noised it), points in the play's own frozen words, grounded in get_plays + play:<id>;
+    quiet with nothing armed / no v2 bundle. Pure/deterministic."""
+    ok = True
+    print("\n== armed-plays callout (pure, synthetic) ==")
+
+    def plays(armed):
+        rows = [{"id": i, "name": n, "status": "armed", "guidance": g, "summary": g,
+                 "response_type": "guidance" if g else "route", "stakes_min": st}
+                for (i, n, g, st) in armed]
+        return {"available": True, "armed": [r["id"] for r in rows], "plays": rows}
+
+    c = narrate_mod._plays_callout(plays([("reef_r1_a3_slot", "Reef 1 with the A3",
+                                           "tuck in reef 1 — open the slot", 0)]))
+    ok &= _check("armed guidance play → callout in the play's words, grounded play:<id>",
+                 c and c["category"] == "plays" and "Reef 1" in c["headline"]
+                 and "open the slot" in c["detail"] and "play:reef_r1_a3_slot" in c["grounded_in"]
+                 and c["urgency"] == "now")
+    c = narrate_mod._plays_callout(plays([("pace_behind_2h_1", "2h behind", "", 63),
+                                          ("gear_loss_a2", "A2 out", "", 276)]))
+    ok &= _check("multiple armed → one callout, extras counted, ids in the callout id",
+                 c and "+1 more" in c["detail"] and "pace_behind_2h_1" in c["id"]
+                 and "gear_loss_a2" in c["id"])
+    ok &= _check("nothing armed → quiet",
+                 narrate_mod._plays_callout({"available": True, "armed": [], "plays": []}) is None)
+    ok &= _check("no v2 bundle → quiet",
+                 narrate_mod._plays_callout({"available": False}) is None)
+    return ok
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--llm", action="store_true", help="also exercise the LLM tool-loop")
@@ -579,6 +610,7 @@ def main():
     overall &= test_coach_logic()
     overall &= test_strategy_synthesis()
     overall &= test_strategy_callout()
+    overall &= test_plays_callout()
 
     print(f"\n>> engine: {config.ENGINE_URL}")
     engine = EngineClient()

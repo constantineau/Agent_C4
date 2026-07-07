@@ -229,8 +229,14 @@ judgment calls into measured quantities. These are **locked as implementation re
   overpowered guidance plays; low-maneuver variant (`maneuver_prune_mult` ×3–5, prune-only so the
   ETA delta stays honest; `PB_LOWMAN_MULT`); rejoin-vs-continue tabulation (per-leg off-track
   positions at the venue commit-band XTE → a guidance play carrying the table).
-- **Phase D — onboard matcher:** Tier-1 `matcher.py` + engine endpoint; Tier-2 LLM
-  pattern-matching + grounding extension; Strategy-card armed-plays section + coach callout.
+- **Phase D — onboard matcher** *(shipped 2026-07-07)*: Tier-1 `matcher.py` (predicates vs
+  live signals, arm-slow/clear-fast sustain) + engine `GET /plays` + the crew sail-state store
+  (`/sails/state`: hoisted + the out-of-service gear toggle — the gear-loss plays' arming
+  signal); armed plays ride the `/strategy` digest; Strategy-card ARMED-PLAYS section + gear
+  toggle; auto-coach `plays` callout (points in the play's frozen words); Tier-2 grounding
+  extended to `play:<id>` + `get_plays` in the copilot gather. *Remaining slice: a dedicated
+  Tier-2 ranked-match prompt section (the LLM reads narratives + ranks compound matches).*
+  Honest v1 limits: `applicability.legs` carried but not gated; `polar_pct` not wired onboard.
   (A LoRA pass, if ever, comes after D with a rubric built on match quality.)
 
 ## 10. Honest limits

@@ -39,6 +39,7 @@ def gather(engine: EngineClient, route=None, hoisted=None) -> dict:
     snap["get_deviation"] = engine.deviation(route)   # Lab-3 trigger (a): off the playbook line?
     snap["get_drift"] = engine.drift(route)           # Lab-3 trigger (b): forecast moved since freeze?
     snap["get_strategy"] = engine.strategy(route)     # in-race synthesis: the higher-order cross-signal read
+    snap["get_plays"] = engine.plays(route)           # Phase D: armed plays from the frozen v2 bundle
     return snap
 
 
@@ -169,7 +170,7 @@ def llm_brief(engine: EngineClient, llm: LLMClient, snapshot: dict, question: st
     if not parsed:
         raise LLMUnavailable("LLM did not return parseable JSON")
 
-    cleaned = brief_mod.validate(parsed, used_sources, pb.variant_ids())
+    cleaned = brief_mod.validate(parsed, used_sources, pb.variant_ids(), pb.play_ids())
     cleaned["engine_only"] = False
     # The LLM is not trusted to author factual caveats — replace its free text with the
     # engine's grounded caveats, keeping only the validator's own "dropped item" note.
@@ -207,7 +208,7 @@ def make_brief(question: str = "", route=None, hoisted=None, use_llm: bool | Non
     # Re-run grounding validation so the deterministic path obeys the same guardrail.
     used = set(s for s in snapshot if s in tools.TOOL_NAMES
                and isinstance(snapshot[s], dict) and snapshot[s].get("available", True) is not False)
-    validated = brief_mod.validate(out, used, pb.variant_ids())
+    validated = brief_mod.validate(out, used, pb.variant_ids(), pb.play_ids())
     validated["engine_only"] = True
     validated["_meta"] = meta
     return validated
