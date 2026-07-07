@@ -18,6 +18,11 @@ def _b(name: str, default: bool) -> bool:
 
 # Where the deterministic engine lives (Tier 1, Pi 4). The engine does ALL the math.
 ENGINE_URL = os.environ.get("ENGINE_URL", "http://127.0.0.1:8200").rstrip("/")
+# Boat-local-first engine addressing (locked 2026-07-07): in a race the Pi<->Orin link is a direct
+# ethernet cable (10.10.10.1 Pi / 10.10.10.2 Orin) — NEVER Tailscale. ENGINE_URL should point at
+# the boat-local address; ENGINE_URL_FALLBACK (e.g. the Tailscale IP) keeps DEV working while the
+# cable is down. The client health-probes the primary once and fails over transparently.
+ENGINE_URL_FALLBACK = os.environ.get("ENGINE_URL_FALLBACK", "")
 ENGINE_TIMEOUT = float(os.environ.get("ENGINE_TIMEOUT", "12"))
 
 # Where the local LLM lives (Tier 2, this Orin). OpenAI-compatible /v1.
