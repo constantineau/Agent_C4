@@ -15,6 +15,8 @@ RRS 41: all pre-race cloud homework, frozen at the gun.
 from __future__ import annotations
 
 import math
+import os
+import time
 
 from shared import race_def
 from . import optimizer
@@ -161,21 +163,32 @@ def _internal_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
         eta_epoch = start_epoch + eta_min * 60
         nominal_rest_h = max(0.0, (consensus.get("total_hours") or 0) - eta_min / 60.0)
         for dh in _PACE_DELAYS_H:
-            r = optimizer.optimize_course(definition, course_id, eta_epoch + dh * 3600, wf,
-                                          from_mark=k, time_budget_s=per_budget_s,
-                                          resolution="fast", jib_crossovers=jib_crossovers,
-                                          emit_exploration=False, cur=cur, waves=waves,
-                                          helm_factor=helm_factor,
-                                          polar_adjustments=polar_adjustments,
-                                          wave_coeffs=wave_coeffs)
+            def _route_rest(budget):
+                return optimizer.optimize_course(definition, course_id, eta_epoch + dh * 3600, wf,
+                                                 from_mark=k, time_budget_s=budget,
+                                                 resolution="fast", jib_crossovers=jib_crossovers,
+                                                 emit_exploration=False, cur=cur, waves=waves,
+                                                 helm_factor=helm_factor,
+                                                 polar_adjustments=polar_adjustments,
+                                                 wave_coeffs=wave_coeffs)
+
+            def _truncated(res):
+                if not res.get("available") or not res.get("path"):
+                    return True
+                last = res["path"][-1]
+                return bool(finish_pt and
+                            track_mod._hav_nm((last["lat"], last["lon"]), finish_pt) > 3.0)
+
             tag = f"{abs(dh)}h {'behind' if dh > 0 else 'ahead'}"
             sid = f"pace_{'behind' if dh > 0 else 'ahead'}_{abs(dh)}h_{k}"
-            if not r.get("available") or not r.get("path"):
-                say(f"pace {sid}: no route — skipped")
-                continue
-            last = r["path"][-1]
-            if finish_pt and track_mod._hav_nm((last["lat"], last["lon"]), finish_pt) > 3.0:
-                say(f"pace {sid}: truncated — skipped")
+            r = _route_rest(per_budget_s)
+            if _truncated(r):
+                # usually the fast-resolution budget running out on a delayed (lighter-wind)
+                # remainder, not a wind gap — one honest retry at double budget
+                say(f"pace {sid}: truncated at {per_budget_s}s — retrying ×2 budget")
+                r = _route_rest(per_budget_s * 2)
+            if _truncated(r):
+                say(f"pace {sid}: no complete route — skipped")
                 continue
             xte = _mean_xte_nm(r.get("path"), consensus.get("path"))
             drest = round(((r.get("total_hours") or 0) - nominal_rest_h) * 60)
@@ -231,6 +244,84 @@ def _internal_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
                                  "total_tacks": r.get("total_tacks"),
                                  "sail_plan": r.get("sail_plan")}})
         say(f"gear-loss {sail}: route without it costs {deta:+d} min — play")
+
+    # ---- LOW-MANEUVER variant: conserve the crew (night / shorthanded / fatigue) ----------------
+    # Re-route with the maneuver PRUNE penalties ×3–5 (docs/PLAYBOOK_V2.md §3) — the search avoids
+    # tacks/peels much harder while the clock cost of each stays real, so the reported ETA delta vs
+    # the nominal is honest. Nominal already minimal → robustness evidence, not a play.
+    mult = float(os.environ.get("PB_LOWMAN_MULT", "4.0"))
+    r = optimizer.optimize_course(definition, course_id, start_epoch, wf,
+                                  maneuver_prune_mult=mult, time_budget_s=per_budget_s,
+                                  resolution="fast", jib_crossovers=jib_crossovers,
+                                  emit_exploration=False, cur=cur, waves=waves,
+                                  helm_factor=helm_factor,
+                                  polar_adjustments=polar_adjustments, wave_coeffs=wave_coeffs)
+    if (r.get("available") and r.get("path") and not (
+            finish_pt and track_mod._hav_nm((r["path"][-1]["lat"], r["path"][-1]["lon"]),
+                                            finish_pt) > 3.0)):
+        base_m = (consensus.get("total_tacks") or 0) + (consensus.get("total_peels") or 0)
+        low_m = (r.get("total_tacks") or 0) + (r.get("total_peels") or 0)
+        deta = round(((r.get("total_hours") or 0) - (consensus.get("total_hours") or 0)) * 60)
+        if low_m >= base_m - 1:      # require a real reduction (≥2) — resolution noise isn't a play
+            robust.append({"scenario": "low_maneuver", "name": "Low-maneuver (conserve the crew)",
+                           "note": (f"the nominal is already the quiet route ({base_m} maneuvers — "
+                                    f"biasing ×{mult:g} against tacks/peels found nothing quieter)")})
+            say("low-maneuver: nominal already minimal — robustness")
+        else:
+            routes.append({
+                "id": "low_maneuver", "name": "Low-maneuver (conserve the crew)",
+                "kind": "low_maneuver", "category": "internal",
+                "params": {"prune_mult": mult, "maneuvers": low_m, "nominal_maneuvers": base_m},
+                "narrative_seed": (f"The crew is tired or shorthanded (night watches, a long race) "
+                                   f"— this route trades ~{abs(deta)} min for "
+                                   f"{base_m - low_m} fewer tacks/peels ({base_m} → {low_m})."),
+                "divergence": {"delta_eta_min": deta,
+                               "xte_mean_nm": _mean_xte_nm(r.get("path"), consensus.get("path"))},
+                "total_hours": r.get("total_hours"),
+                "favored_side": _favored_side(definition, course_id, r),
+                "route": {"legs": r.get("legs"), "path": r.get("path"),
+                          "total_sailed_nm": r.get("total_sailed_nm"),
+                          "total_tacks": r.get("total_tacks"),
+                          "sail_plan": r.get("sail_plan")}})
+            say(f"low-maneuver: {base_m}→{low_m} maneuvers for {deta:+d} min — play")
+    else:
+        say("low-maneuver: no route — skipped")
+
+    # ---- REJOIN-VS-CONTINUE tabulation (guidance play, no new track) ----------------------------
+    try:
+        from . import retro
+        vs = retro.venue_stats() or {}
+    except Exception:
+        vs = {}
+    off_nm = round(min(8.0, max(2.0, float(vs.get("xte_p90_nm") or 6.0))), 1)
+    tab = _rejoin_tab(definition, course_id, wf, consensus, cur, waves, marks, off_nm,
+                      jib_crossovers=jib_crossovers, helm_factor=helm_factor,
+                      polar_adjustments=polar_adjustments, wave_coeffs=wave_coeffs, log=log)
+    if tab:
+        parts = []
+        for row in tab:
+            call = ("either line is even — hold what you have" if row["verdict"] == "even" else
+                    f"CONTINUE to the mark (rejoining costs ~{row['delta_min']} min)"
+                    if row["verdict"] == "continue" else
+                    f"REJOIN the line (pressing on costs ~{-row['delta_min']} min)")
+            parts.append(f"~{row['off_nm']:g} nm {row['side']} on the {row['to']} leg: {call}")
+        worst = max(abs(row["delta_min"]) for row in tab)
+        routes.append({
+            "id": "rejoin_vs_continue", "name": "Off the line — rejoin or continue?",
+            "kind": "rejoin", "category": "internal",
+            "params": {"off_nm": off_nm, "consider_nm": vs.get("xte_median_nm"),
+                       "commit_nm": vs.get("xte_p90_nm")},
+            "narrative_seed": (f"You're a genuine departure off the optimizer's line (~{off_nm:g} nm "
+                               "— beyond fleet-normal wander, not ordinary weave). Whether sailing "
+                               "back to the line pays is tabulated per leg and side — don't "
+                               "reflex-rejoin."),
+            "divergence": {"delta_eta_min": worst, "xte_mean_nm": off_nm},
+            "guidance": ("; ".join(parts) + ". Frozen-forecast numbers — if the onboard re-route "
+                         "disagrees, trust the fresher one."),
+            "table": tab, "total_hours": None, "favored_side": None})
+        say(f"rejoin tab: {len(tab)} rows — guidance play")
+    else:
+        say("rejoin tab: no rows (legs too short or routing failed) — skipped")
     return routes, robust
 
 
@@ -251,6 +342,99 @@ def _sail_seq_from(consensus, k):
         if s and (not out or out[-1] != s):
             out.append(s)
     return out
+
+
+_REJOIN_EVEN_MIN = 10.0        # |rejoin − continue| under this → "even" (don't call a coin flip)
+_REJOIN_LEG_TIMEOUT_S = 25.0   # per-isochrone budget for a tabulation cell
+
+
+def _rejoin_tab(definition, course_id, wf, consensus, cur, waves, marks, off_nm,
+                jib_crossovers=None, helm_factor=1.0, polar_adjustments=None,
+                wave_coeffs=None, log=None):
+    """Phase-C REJOIN-VS-CONTINUE tabulation (docs/PLAYBOOK_V2.md §3): from a representative
+    off-track position on each leg (offset `off_nm` = the venue's commit-band XTE, both sides),
+    is it faster to sail back to the optimizer's line or to press on to the mark from where you
+    are? Pre-computed ashore so the onboard matcher ANSWERS the question the deviation trigger
+    raises instead of just flagging it. CONTINUE = a fresh isochrone from the off position to the
+    leg's mark; REJOIN = an isochrone to the nominal line ~1.5×off ahead (a diagonal rejoin, not
+    a U-turn) + the nominal's own pace from there. Returns table rows (may be empty — short legs
+    where the offset is comparable to the leg itself are skipped)."""
+    from . import polars as POL, track as track_mod
+    say = (log.append if log is not None else (lambda *_: None))
+    path = consensus.get("path") or []
+    legs = consensus.get("legs") or []
+    if len(path) < 3 or not legs or len(marks) < 2:
+        return []
+    P = POL.apply_adjustments(POL.polars_stw(), polar_adjustments)
+    if not P:
+        return []
+    SP = POL.sail_polars()
+    obstacles = None
+    try:
+        from .geo import build_for_course
+        bbox = optimizer.course_bbox(definition, course_id)
+        if bbox:   # cache-shared with the scenario fan's optimize_course builds
+            obstacles = build_for_course(definition, course_id, bbox)
+    except Exception:
+        obstacles = None
+    rp = optimizer._resolution("fast")
+    kw = dict(obstacles=obstacles, hstep=rp["hstep"], dt_cap=rp["dt_cap"], cur=cur,
+              sail_polars=SP, jib_crossovers=jib_crossovers, waves=waves,
+              helm_factor=helm_factor, wave_coeffs=wave_coeffs)
+    rows = []
+    leg_start_t = float(consensus.get("start_epoch") or path[0].get("t") or 0)
+    for i, leg in enumerate(legs):
+        eta = float(leg.get("eta_epoch") or 0)
+        try:
+            if i + 1 >= len(marks) or not eta:
+                continue
+            if (leg.get("direct_nm") or 0) < off_nm * 4:   # offset ≈ the leg itself → meaningless
+                continue
+            dlat, dlon = marks[i + 1][2], marks[i + 1][3]
+            t_mid = (leg_start_t + eta) / 2.0
+            idx = min(range(len(path)), key=lambda j: abs(float(path[j].get("t") or 0) - t_mid))
+            if idx < 1 or idx >= len(path) - 2:
+                continue
+            p0 = path[idx]
+            brg = _bearing(path[idx - 1]["lat"], path[idx - 1]["lon"],
+                           path[idx + 1]["lat"], path[idx + 1]["lon"])
+            # the rejoin target: the nominal path point ~1.5×off ahead of the abeam point
+            ahead, j = 0.0, idx
+            while j < len(path) - 1 and ahead < off_nm * 1.5:
+                ahead += optimizer._hav_nm(path[j]["lat"], path[j]["lon"],
+                                           path[j + 1]["lat"], path[j + 1]["lon"])
+                j += 1
+            rj = path[j]
+            rj_nominal_min = max(0.0, (eta - float(rj.get("t") or eta)) / 60.0)
+            for side, sgn in (("left", -90.0), ("right", 90.0)):
+                olat, olon = optimizer._advance(p0["lat"], p0["lon"], (brg + sgn) % 360.0, off_nm)
+                if obstacles is not None and obstacles.blocked(olat, olon):
+                    continue                                # the offset position is on land/no-go
+                cont = optimizer.route_leg(wf, P, olat, olon, t_mid, dlat, dlon,
+                                           deadline=time.time() + _REJOIN_LEG_TIMEOUT_S, **kw)
+                rejn = optimizer.route_leg(wf, P, olat, olon, t_mid, rj["lat"], rj["lon"],
+                                           deadline=time.time() + _REJOIN_LEG_TIMEOUT_S, **kw)
+                # route_leg returns the NEAREST node when it can't lay the target — verify arrival
+                ce, re_ = cont["path"][-1], rejn["path"][-1]
+                if (track_mod._hav_nm((ce["lat"], ce["lon"]), (dlat, dlon)) > 1.0 or
+                        track_mod._hav_nm((re_["lat"], re_["lon"]), (rj["lat"], rj["lon"])) > 1.0):
+                    say(f"rejoin tab leg {i} {side}: truncated isochrone — cell skipped")
+                    continue
+                cont_min = round((cont["eta"] - t_mid) / 60.0)
+                rejn_min = round((rejn["eta"] - t_mid) / 60.0 + rj_nominal_min)
+                if cont_min <= 0 or rejn_min <= 0:
+                    continue
+                delta = rejn_min - cont_min                 # + → continuing is faster
+                verdict = ("even" if abs(delta) < _REJOIN_EVEN_MIN
+                           else "continue" if delta > 0 else "rejoin")
+                rows.append({"leg": i, "to": leg.get("to"), "side": side, "off_nm": off_nm,
+                             "continue_min": cont_min, "rejoin_min": rejn_min,
+                             "delta_min": int(delta), "verdict": verdict})
+                say(f"rejoin tab leg {i} ({leg.get('to')}) {side}: continue {cont_min}m vs "
+                    f"rejoin {rejn_min}m → {verdict}")
+        finally:
+            leg_start_t = eta or leg_start_t
+    return rows
 
 
 def build_playbook(definition, course_id, start_epoch, models, ensemble_members=0,

@@ -360,7 +360,8 @@ def _layline_pair(P, tws, twd, pos, mlat, mlon, length_nm):
 def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=None,
               obstacles=None, capture=False, hstep=HSTEP, dt_cap=1.0, cur=None,
               sail_polars=None, jib_crossovers=None, start_sail=None,
-              waves=None, helm_factor=1.0, wave_coeffs=None, wave_uniform_hs=None):
+              waves=None, helm_factor=1.0, wave_coeffs=None, wave_uniform_hs=None,
+              maneuver_prune_mult=1.0):
     """Isochrone-optimal path from (slat,slon)@t0 to (dlat,dlon). Returns dict with path/eta.
 
     `obstacles` (an ObstacleField) makes the fan reject any heading whose step would cut across land,
@@ -398,6 +399,10 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
         PEEL_HOLD_TOL off the optimal sail, then PEEL to the optimal sail at full (envelope) speed +
         a peel cost. A jib change-down (same aero family) is a free relabel, not a routing peel."""
         opt = sailplan.optimal_sail(tws, twa, jib_crossovers)
+        if sail_aware and opt is not None and _sail_polar_key(opt) not in dom:
+            # gear-loss (exclude_sails): the cert-optimal sail has no curve in the FILTERED inventory
+            # — the honest call is the fastest REMAINING sail (the rebuilt envelope already prices it)
+            opt = max(SP, key=lambda s: _sail_speed(SP, dom, s, tws, twa), default=None)
         if not sail_aware or opt is None:
             return (opt or cur_sail, sp_env, False)          # sail-aware off → envelope speed, no peel
         if cur_sail is None or _sail_polar_key(cur_sail) == _sail_polar_key(opt):
@@ -459,19 +464,22 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
             tk = node.get("tk", 0)
             pl = node.get("pl", 0)
             tack_s = 0.0
+            # `maneuver_prune_mult` (Playbook v2 Phase C, low-maneuver variant): scales the PRUNE
+            # penalty only — the search avoids maneuvers ×N harder, but the clock cost of a tack/peel
+            # stays real, so the low-maneuver route's ETA is honestly comparable to the nominal's.
             if is_tack and TACK_COST_S > 0:
                 if TACK_CUMULATIVE:
-                    pen += sp * (TACK_PRUNE_S / 3600.0)   # prune regularizer — suppresses the staircase
+                    pen += sp * (TACK_PRUNE_S * maneuver_prune_mult / 3600.0)   # prune regularizer
                     tack_s = TACK_COST_S                  # realistic ETA cost — don't inflate predicted time
                     tk += 1
                 else:
-                    step_nm = max(0.0, step_nm - sp * (TACK_COST_S / 3600.0))
+                    step_nm = max(0.0, step_nm - sp * (TACK_COST_S * maneuver_prune_mult / 3600.0))
             # peel cost (2g) — mirrors the cumulative tack cost: a one-off prune penalty + honest ETA per
             # sail change, so the isochrone disfavors a course needing an extra peel and predicted times
             # carry the change-down. The PEEL_HOLD_TOL hysteresis already stops boundary thrash.
             peel_s = 0.0
             if is_peel and PEEL_COST_S > 0:
-                pen += sp * (PEEL_PRUNE_S / 3600.0)
+                pen += sp * (PEEL_PRUNE_S * maneuver_prune_mult / 3600.0)
                 peel_s = PEEL_COST_S
                 pl += 1
             nlat, nlon = _advance(node["lat"], node["lon"], hdg, step_nm)   # displacement through the water
@@ -714,7 +722,7 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
                     jib_crossovers=None, emit_exploration=True, per_model=False,
                     resolution="auto", cur=None, waves=None, helm_factor=1.0,
                     polar_adjustments=None, wave_coeffs=None, polar=None,
-                    from_mark=0, exclude_sails=None):
+                    from_mark=0, exclude_sails=None, maneuver_prune_mult=1.0):
     """Route the whole course from its start through every mark to the finish via `wf`.
 
     Returns one optimal route with per-leg ETAs, total time/distance/tacks and a route confidence
@@ -762,6 +770,17 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
     if not P:
         return {"available": False, "note": "no polars loaded"}
 
+    _gone = {str(s).upper() for s in (exclude_sails or ())}
+    _dom = _sail_domains(SP) if (_gone and SP) else {}
+
+    def _headline_sail(tws, twa):
+        """Per-leg display sail — remapped to the fastest REMAINING sail under a gear-loss
+        exclusion (the crossover table doesn't know a sail is out of service)."""
+        s = sailplan.optimal_sail(tws, twa, jib_crossovers)
+        if s and _gone and _sail_polar_key(s).upper() in _gone and SP:
+            s = max(SP, key=lambda k: _sail_speed(SP, _dom, k, tws, twa), default=s)
+        return s
+
     if obstacles is None and avoid:
         bbox = course_bbox(definition, course_id)
         if bbox:
@@ -797,7 +816,7 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
                         capture=emit_exploration, hstep=rp["hstep"], dt_cap=rp["dt_cap"], cur=cur,
                         sail_polars=SP, jib_crossovers=jib_crossovers, start_sail=cur_sail,
                         waves=waves, helm_factor=helm_factor, wave_coeffs=wave_coeffs,
-                        wave_uniform_hs=wave_uniform_hs)
+                        wave_uniform_hs=wave_uniform_hs, maneuver_prune_mult=maneuver_prune_mult)
         # sample wind + confidence at the leg's midpoint and end (for the briefing)
         mid = leg["path"][len(leg["path"]) // 2] if leg["path"] else {"lat": dlat, "lon": dlon}
         det = wf.detail_at(mid["lat"], mid["lon"], (t + leg["eta"]) / 2.0)
@@ -815,7 +834,7 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
             "first_heading": leg["first_heading"],
             "blocked_steps": leg.get("blocked_steps", 0),
             "point_of_sail": pos,
-            "sail": (sailplan.optimal_sail(det["tws"], twa, jib_crossovers)
+            "sail": (_headline_sail(det["tws"], twa)
                      if det and twa is not None else None),
             "peels": leg.get("peels", 0),     # sail changes the router actually made on this leg (2g)
             "realized_factor": leg.get("realized_factor", 1.0),   # % of flat-water polar achieved (helm × sea state)

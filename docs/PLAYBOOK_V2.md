@@ -221,11 +221,14 @@ judgment calls into measured quantities. These are **locked as implementation re
 - **Phase A — descope + model chain** (this commit): remove LLM origination from the copilot
   runtime + prompts + tests; remove the training system; Fable→Opus chain in synthesis/briefing;
   docs sweep.
-- **Phase B — external scenario fan-out:** `scenarios.py` registry; perturbation/timing/ensemble
-  scenarios; v2 schema + nominal/robustness dedupe; Fable synthesis writes plays with both
-  condition forms; Gameplan UI shows the play library.
-- **Phase C — internal plays:** pace re-routes from waypoints; sail-loss inventory re-runs;
-  wrong-sail/overpowered guidance plays; low-maneuver variant; rejoin-vs-continue tabulation.
+- **Phase B — external scenario fan-out** *(shipped 2026-07-07)*: `scenarios.py` registry;
+  perturbation/timing/ensemble scenarios; v2 schema + nominal/robustness dedupe; Fable synthesis
+  writes plays with both condition forms; Gameplan UI shows the play library.
+- **Phase C — internal plays** *(shipped 2026-07-07)*: pace re-routes from waypoints; sail-loss
+  inventory re-runs (envelope rebuilt over the remaining sails, sail labels remapped); wrong-sail/
+  overpowered guidance plays; low-maneuver variant (`maneuver_prune_mult` ×3–5, prune-only so the
+  ETA delta stays honest; `PB_LOWMAN_MULT`); rejoin-vs-continue tabulation (per-leg off-track
+  positions at the venue commit-band XTE → a guidance play carrying the table).
 - **Phase D — onboard matcher:** Tier-1 `matcher.py` + engine endpoint; Tier-2 LLM
   pattern-matching + grounding extension; Strategy-card armed-plays section + coach callout.
   (A LoRA pass, if ever, comes after D with a rubric built on match quality.)

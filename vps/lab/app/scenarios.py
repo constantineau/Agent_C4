@@ -144,8 +144,23 @@ def sail_guidance_predicates(params, ctx):
     return out
 
 
+def low_maneuver_predicates(params, ctx):
+    # conserve the crew: the engine's fatigue index is the honest instrument signal (predicates
+    # AND together, so night/shorthanded context stays in the narrative for the Tier-2 matcher).
+    return [{"signal": "fatigue_index", "op": ">=", "value": 60, "sustain_min": 30}]
+
+
+def rejoin_predicates(params, ctx):
+    # percentile-framed off the venue's fleet-normal XTE (locked input #3): the question opens at
+    # fleet-median wander (consider), the tabulated answer is computed at the commit band.
+    vs = (ctx or {}).get("venue_stats") or {}
+    thr = params.get("consider_nm") or vs.get("xte_median_nm") or 3.5
+    return [{"signal": "xte_nm", "op": ">=", "value": round(float(thr), 1), "sustain_min": 30}]
+
+
 INTERNAL_DETECT = {"pace": pace_predicates, "gear_loss": gear_loss_predicates,
-                   "sail_guidance": sail_guidance_predicates}
+                   "sail_guidance": sail_guidance_predicates,
+                   "low_maneuver": low_maneuver_predicates, "rejoin": rejoin_predicates}
 
 
 def apply(scenario, wf):
