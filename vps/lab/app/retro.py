@@ -349,6 +349,48 @@ def report(race_id: str) -> dict:
                         "The optimal is each boat's OWN gun-forecast route (GFS+HRRR archive blend)."]}
 
 
+def venue_stats():
+    """Fleet-normal adherence stats + side history across the archived races (locked Phase-B
+    input #3/#7 — the bundle freezes these so onboard phrasing is percentile-framed against the
+    venue's empirical distribution). One team counted once per race (newest run). None when the
+    archive is empty."""
+    races = rs.list_races()
+    xte, behind, side_hist, n_boats = [], [], [], 0
+    for r in races:
+        latest = {}
+        for s in rs.get_scores(r["race_id"]):
+            m = json.loads(s["metrics_json"])
+            if m.get("available") and s["run_id"] >= latest.get(s["team_id"], (0, None))[0]:
+                latest[s["team_id"]] = (s["run_id"], m)
+        ms = [m for _rid, m in latest.values()]
+        n_boats += len(ms)
+        xte += [m["xte_mean_nm"] for m in ms if m.get("xte_mean_nm") is not None]
+        behind += [m["time_behind_optimal_min"] for m in ms
+                   if m.get("time_behind_optimal_min") is not None]
+        rep = report(r["race_id"])
+        if rep.get("ok"):
+            div1 = next((d for d in rep["divisions"] if "overall" in d["division"].lower()), None)
+            if div1:
+                side_hist.append({"race_id": r["race_id"],
+                                  "top_third_sides": div1["top_third_sides"]})
+    if not xte and not behind:
+        return None
+
+    def pct(v, p):
+        if not v:
+            return None
+        v = sorted(v)
+        return round(v[min(len(v) - 1, int(p * len(v)))], 1)
+
+    return {"races": [r["race_id"] for r in races], "n_boats": n_boats,
+            "xte_median_nm": pct(xte, 0.5), "xte_p90_nm": pct(xte, 0.9),
+            "behind_median_min": pct(behind, 0.5), "behind_p90_min": pct(behind, 0.9),
+            "side_history": side_hist,
+            "note": ("fleet-normal adherence at this venue (RETRO_STUDY.md §6) — a boat near the "
+                     "median is sailing NORMALLY; p90 marks a genuine departure. Side history is a "
+                     "labeled historical prior, never a forecast.")}
+
+
 def match_polars(race_id: str, country: str = "USA") -> dict:
     """R2: ORC cert + converted polar for every entry that matches the public dump."""
     entries = rs.get_entries(race_id)

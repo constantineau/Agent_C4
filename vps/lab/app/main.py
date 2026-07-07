@@ -613,15 +613,24 @@ async def playbook_synthesize(body: dict):
     if not d:
         return JSONResponse({"detail": "unknown race_id"}, status_code=404)
     from . import synthesis
-    try:
-        return await run_in_threadpool(synthesis.synthesize, d, course_id, start_epoch,
-                                       model_names, ens, jib_crossovers=_active_jibs(),
-                                       helm_factor=boats.active_helm_factor(),
-                                       polar_adjustments=_active_adjustments(),
-                                       wave_coeffs=_active_wave(),
-                                       use_waves=(body or {}).get("use_waves", True))
-    except Exception as exc:
-        return JSONResponse({"detail": f"synthesis failed: {exc}"}, status_code=500)
+    kw = dict(jib_crossovers=_active_jibs(), helm_factor=boats.active_helm_factor(),
+              polar_adjustments=_active_adjustments(), wave_coeffs=_active_wave(),
+              use_waves=(body or {}).get("use_waves", True))
+    if (body or {}).get("sync"):
+        # legacy synchronous path (fits the gateway only for small fans) — the UI uses the job
+        try:
+            return await run_in_threadpool(synthesis.synthesize, d, course_id, start_epoch,
+                                           model_names, ens, **kw)
+        except Exception as exc:
+            return JSONResponse({"detail": f"synthesis failed: {exc}"}, status_code=500)
+    return synthesis.start_job(d, course_id, start_epoch, model_names, ens, **kw)
+
+
+@app.get("/api/playbook/synthesize/status")
+async def playbook_synthesize_status():
+    """Poll the background synthesis job; `bundle` rides on state=done."""
+    from . import synthesis
+    return synthesis.job_status()
 
 
 @app.post("/api/playbook/freeze")

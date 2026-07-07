@@ -27,6 +27,7 @@ import hashlib
 import json
 import math
 import os
+import threading
 import time
 
 from shared import race_def
@@ -36,6 +37,7 @@ from . import playbook as pb
 from . import sailplan
 
 SCHEMA = "c4.playbook/v1"
+SCHEMA_V2 = "c4.playbook/v2"          # v1 superset: + plays[]/nominal/corridor/venue_stats
 API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 SIGNED_BY = os.environ.get("PLAYBOOK_SIGNED_BY", "C4 Performance Lab")
 
@@ -282,6 +284,149 @@ def _fingerprint(variants, recommended):
         return None
 
 
+# ---- background synthesis job: the v2 scenario fan makes a full synthesize ~10 min — far past
+# the gateway's 300 s — so the UI starts a job and polls (same pattern as the retro fleet batch).
+_JOB = {"state": "idle"}
+_JOB_LOCK = threading.Lock()
+
+
+def start_job(definition, course_id, start_epoch, models, ensemble_members=0, **kw) -> dict:
+    with _JOB_LOCK:
+        if _JOB.get("state") == "running":
+            return {"ok": False, "note": "a synthesis is already in progress"}
+        _JOB.clear()
+        _JOB.update({"state": "running", "race_id": definition.get("race_id"),
+                     "started_at": time.time()})
+
+    def _work():
+        try:
+            out = synthesize(definition, course_id, start_epoch, models,
+                             ensemble_members=ensemble_members, **kw)
+            _JOB.update({"state": "done", "bundle": out})
+        except Exception as exc:      # noqa: BLE001 — the job must record any failure
+            _JOB.update({"state": "error", "error": f"{type(exc).__name__}: {exc}"})
+
+    threading.Thread(target=_work, daemon=True).start()
+    return {"ok": True, "state": "running"}
+
+
+def job_status() -> dict:
+    return dict(_JOB)
+
+
+def _venue_stats():
+    """Fleet-normal stats + side history from the retro archive (locked Phase-B input #3/#7) —
+    frozen into the bundle so the onboard matcher phrases against the venue's empirical
+    distribution instead of guesses. Best-effort: no archive → omitted."""
+    try:
+        from . import retro
+        return retro.venue_stats()
+    except Exception:
+        return None
+
+
+def _mean_tws(consensus):
+    ws = [(l.get("wind") or {}).get("tws") for l in (consensus or {}).get("legs") or []]
+    ws = [w for w in ws if isinstance(w, (int, float))]
+    return round(sum(ws) / len(ws), 1) if ws else None
+
+
+def _downsample(path, max_pts=200):
+    if not path or len(path) <= max_pts:
+        return path
+    step = max(1, len(path) // max_pts)
+    out = path[::step]
+    if out[-1] is not path[-1]:
+        out.append(path[-1])
+    return out
+
+
+def _play_synthesis(plays_in, corridor, profile, race_name):
+    """Fable writes each play's crew-facing text (summary/rationale/tradeoffs/what_flips_it +
+    the condition NARRATIVE the onboard matcher pattern-matches). Deterministic fallback = the
+    registry seeds, so a play always ships with valid conditions."""
+    if not plays_in or not API_KEY:
+        return {}, None
+    facts = [{"id": p["id"], "name": p["name"], "scenario_params": p["params"],
+              "divergence_min": p["divergence"]["delta_eta_min"],
+              "divergence_nm": p["divergence"]["xte_mean_nm"],
+              "favored_side": p.get("favored_side"), "seed": p["narrative_seed"]} for p in plays_in]
+    system = (
+        "You are the pre-race strategist for a yacht race, writing the PLAYS of a playbook the "
+        "crew carries frozen from the gun. Each play is a pre-computed alternate routing for a "
+        "SCENARIO (the wind departing from the forecast in a specific way). For each play write, "
+        "for the crew: `summary` (one line); `narrative` — the CONDITION in a tactician's words: "
+        "what you would actually OBSERVE on the water when this scenario is real (grounded in the "
+        "scenario params — a 20° right rotation, +25% pressure, the system running 3h early), so "
+        "an onboard assistant can MATCH the live situation against it; `rationale` (why the "
+        "alternate route pays then); `tradeoffs`; `what_flips_it` (the observable that says the "
+        "scenario has passed / reversed — hand back to the nominal). WIND LANGUAGE: never "
+        "'veer'/'back' — say RIGHT/LEFT with degrees (baseline → new). Do NOT invent numbers "
+        "beyond the provided params/divergences.\n"
+        f"Course context: corridor verdict = {corridor.get('verdict')} ({corridor.get('note')}); "
+        f"point-of-sail profile = {profile}.\n"
+        "Return STRICT JSON only: an object keyed by play id, each value "
+        "{summary, narrative, rationale, tradeoffs, what_flips_it}."
+    )
+    last = None
+    for attempt in range(2):        # the variant-synthesis call runs just before this one — a
+        try:                        # transient rate-limit here must not silently gut the plays
+            txt, used_model = lab_llm.complete(system, f"Race: {race_name}\nPlays:\n" +
+                                               json.dumps(facts, indent=1), max_tokens=12000)
+            if txt.startswith("```"):
+                txt = txt.split("```", 2)[1].lstrip("json").strip() if "```" in txt[3:] else txt.strip("`")
+            data = json.loads(txt)
+            if isinstance(data, dict):
+                return data, None
+            last = "non-object JSON"
+        except Exception as exc:
+            last = f"{type(exc).__name__}: {str(exc)[:120]}"
+            time.sleep(4)
+    return {}, f"play narratives fell back to registry seeds ({last})"
+
+
+def _build_plays(playbook, definition, course_id):
+    """The v2 plays from the scenario fan: registry predicates (resolved against the route
+    context) + frontier narratives (fallback = the registry seeds) + the pre-computed route."""
+    from . import scenarios as scen
+    v2 = playbook.get("v2") or {}
+    routes = v2.get("scenario_routes") or []
+    if not routes:
+        return [], v2, None
+    ctx = {"mean_tws": _mean_tws(playbook.get("consensus"))}
+    reg = {s["id"]: s for s in scen.EXTERNAL}
+    texts, synth_note = _play_synthesis(routes, v2.get("corridor") or {},
+                                        v2.get("pos_profile") or {}, definition.get("name", ""))
+    plays = []
+    for p in routes:
+        s = reg.get(p["id"]) or {}
+        t = texts.get(p["id"]) or {}
+        stakes = abs(p["divergence"]["delta_eta_min"] or 0)
+        route = dict(p.get("route") or {})
+        route["path"] = _downsample(route.get("path"))
+        plays.append({
+            "id": p["id"], "name": p["name"], "category": "external",
+            "scenario": {"kind": p["kind"], "params": p["params"], "source": "synthetic"},
+            "conditions": {
+                "predicates": (s.get("detect")(next(iter(p["params"].values())), ctx)
+                               if s.get("detect") else []),
+                "narrative": (t.get("narrative") or p.get("narrative_seed") or "").strip(),
+            },
+            "applicability": {"legs": "all", "phase": "any"},
+            "response": {"type": "route", "route": route, "guidance": None,
+                         "sail_plan": route.get("sail_plan")},
+            "summary": (t.get("summary") or f"{p['name']} — the pre-routed answer.").strip(),
+            "rationale": (t.get("rationale") or "").strip(),
+            "tradeoffs": (t.get("tradeoffs") or "").strip(),
+            "what_flips_it": (t.get("what_flips_it")
+                              or "the departure reverses / settles back to the frozen forecast").strip(),
+            "stakes_min": stakes,
+            "favored_side": p.get("favored_side"),
+        })
+    plays.sort(key=lambda x: -(x["stakes_min"] or 0))
+    return plays, v2, synth_note
+
+
 def synthesize(definition, course_id, start_epoch, models, ensemble_members=0, time_budget_s=200,
                jib_crossovers=None, helm_factor=1.0, use_waves=True, polar_adjustments=None,
                wave_coeffs=None):
@@ -313,14 +458,30 @@ def synthesize(definition, course_id, start_epoch, models, ensemble_members=0, t
             "route": v.get("route"),
         })
 
+    # ---- Playbook v2: the play library from the scenario fan (docs/PLAYBOOK_V2.md) --------------
+    plays, v2meta, play_note = _build_plays(playbook, definition, course_id)
+    corridor = (v2meta.get("corridor") or {}) if v2meta else {}
+    headline = syn.get("headline", "")
+    if corridor.get("note"):
+        headline = (headline + " — " if headline else "") + corridor["note"].capitalize() + "."
+
     bundle = {
-        "schema": SCHEMA,
+        "schema": SCHEMA_V2 if plays or v2meta else SCHEMA,
         "race_id": definition.get("race_id"),
         "race_name": definition.get("name"),
         "course_id": playbook.get("course_id") or course_id,
         "start_epoch": playbook.get("start_epoch"),
         "generated_at": round(time.time()),
-        "headline": syn.get("headline", ""),
+        "headline": headline,
+        "nominal": {
+            "favored_side": (playbook.get("consensus") or {}).get("favored_side"),
+            "total_hours": (playbook.get("consensus") or {}).get("total_hours"),
+            "robustness": (v2meta or {}).get("robustness") or [],
+        },
+        "plays": plays,
+        "corridor": corridor or None,
+        "pos_profile": (v2meta or {}).get("pos_profile"),
+        "venue_stats": _venue_stats(),
         "recommended": syn.get("recommended"),
         "agreement": playbook.get("agreement"),
         "decision_spread_min": playbook.get("decision_spread_min"),
@@ -338,6 +499,7 @@ def synthesize(definition, course_id, start_epoch, models, ensemble_members=0, t
             "n_scenarios": playbook.get("n_scenarios"),
             "n_variants": playbook.get("n_variants"),
             "synth_model": syn.get("synth_model"),
+            "play_synthesis_note": play_note,     # non-None = narratives fell back to seeds
             "scenarios": playbook.get("scenarios"),
         },
         "windfield": playbook.get("windfield"),

@@ -57,9 +57,89 @@ def _subfields(wf: WindField):
     return out
 
 
+def _mean_xte_nm(path, ref_path, step=8):
+    """Mean lateral distance of `path`'s sampled points off the `ref_path` polyline — the
+    route-vs-nominal divergence score for the v2 dedupe (docs/PLAYBOOK_V2.md §3)."""
+    from . import track as track_mod
+    ref = [(p["lat"], p["lon"]) for p in (ref_path or [])]
+    pts = [(p["lat"], p["lon"]) for p in (path or [])][::max(1, step)]
+    if len(ref) < 2 or not pts:
+        return None
+    xs = [x for x in (track_mod._xte_to_path(p, ref) for p in pts) if x is not None]
+    return round(sum(xs) / len(xs), 2) if xs else None
+
+
+def _scenario_fan(definition, course_id, start_epoch, wf, consensus, cur, waves, marks_finish,
+                  jib_crossovers=None, helm_factor=1.0, polar_adjustments=None, wave_coeffs=None,
+                  max_scenarios=None, per_budget_s=90, log=None):
+    """Playbook-v2 EXTERNAL scenario fan (docs/PLAYBOOK_V2.md §3, §8): route the course through
+    perturbed views of the SAME blended field. A scenario whose route sticks to the nominal is
+    ROBUSTNESS EVIDENCE, not a play; one that diverges is a play candidate. Priority order is
+    point-of-sail aware (input #6). Returns (scenario_routes, robustness, profile, corridor)."""
+    from . import scenarios as scen, track as track_mod
+    say = (log.append if log is not None else (lambda *_: None))
+    profile = scen.pos_profile(consensus)
+    routes, robust = [], []
+    xtes, detas = [], []
+    for s in scen.select(profile, max_n=max_scenarios):
+        wf2, overrides = scen.apply(s, wf)
+        wc = wave_coeffs
+        if overrides and overrides.get("wave_scale"):
+            base = dict(wave_coeffs or {})
+            f = overrides["wave_scale"]
+            wc = {**base, **{k: round(base.get(k, d) * f, 3) for k, d in
+                             (("k_up", 0.04), ("k_reach", 0.02), ("k_down", 0.01))}}
+        r = optimizer.optimize_course(definition, course_id, start_epoch, wf2,
+                                      time_budget_s=per_budget_s, resolution="fast",
+                                      jib_crossovers=jib_crossovers, emit_exploration=False,
+                                      cur=cur, waves=waves, helm_factor=helm_factor,
+                                      polar_adjustments=polar_adjustments, wave_coeffs=wc)
+        if not r.get("available") or not r.get("path"):
+            say(f"scenario {s['id']}: no route — skipped")
+            continue
+        last = r["path"][-1]
+        if marks_finish and track_mod._hav_nm((last["lat"], last["lon"]), marks_finish) > 3.0:
+            say(f"scenario {s['id']}: truncated route — skipped (not counted as robustness)")
+            continue
+        deta = round(((r.get("total_hours") or 0) - (consensus.get("total_hours") or 0)) * 60)
+        xte = _mean_xte_nm(r.get("path"), consensus.get("path"))
+        entry = {"id": s["id"], "name": s["name"], "kind": s["kind"], "params": s["params"],
+                 "category": "external", "narrative_seed": s["narrative"],
+                 "divergence": {"delta_eta_min": deta, "xte_mean_nm": xte},
+                 "total_hours": r.get("total_hours"),
+                 "favored_side": _favored_side(definition, course_id, r)}
+        if xte is not None:
+            xtes.append(xte)
+        detas.append(abs(deta))
+        # DEDUPE (locked design §3): sticks to the nominal → evidence, not a play
+        if xte is not None and xte < 2.0 and abs(deta) < 45:
+            robust.append({"scenario": s["id"], "name": s["name"],
+                           "note": f"route holds within {xte} nm / {abs(deta)} min of the nominal"})
+            say(f"scenario {s['id']}: nominal HOLDS ({xte} nm, {deta:+d} min) — robustness")
+        else:
+            entry["route"] = {"legs": r.get("legs"), "path": r.get("path"),
+                              "total_sailed_nm": r.get("total_sailed_nm"),
+                              "total_tacks": r.get("total_tacks"), "sail_plan": r.get("sail_plan")}
+            routes.append(entry)
+            say(f"scenario {s['id']}: DIVERGES ({xte} nm, {deta:+d} min) — play candidate")
+    # corridor verdict (locked input #2): lateral spread vs the time stakes across the fan
+    xs = sorted(xtes)
+    corridor = {
+        "corridor_p90_nm": xs[int(0.9 * (len(xs) - 1))] if xs else None,
+        "stakes_min": max(detas) if detas else 0,
+        "verdict": ("geometry" if (detas and max(detas) >= 60) else "execution"),
+        "note": ("the lateral decision is worth material time — the side choice matters"
+                 if (detas and max(detas) >= 60) else
+                 "the corridor is wide and the stakes of the line are small — prioritize boat "
+                 "speed and sail choice over the lateral position"),
+    }
+    return routes, robust, profile, corridor
+
+
 def build_playbook(definition, course_id, start_epoch, models, ensemble_members=0,
                    time_budget_s=200, jib_crossovers=None, helm_factor=1.0, use_waves=True,
-                   polar_adjustments=None, wave_coeffs=None):
+                   polar_adjustments=None, wave_coeffs=None, v2_scenarios=True,
+                   scenario_budget_s=420, max_scenarios=None):
     """Multi-scenario playbook: route the course through the blended field (consensus) and through
     each model's sub-field (scenarios), cluster by favored side into variants."""
     bbox = optimizer.course_bbox(definition, course_id)
@@ -137,7 +217,22 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
     var_hours = [v["total_hours"] for v in variants if v["total_hours"] is not None]
     spread_min = round((max(var_hours) - min(var_hours)) * 60, 0) if len(var_hours) > 1 else 0.0
 
+    # ---- Playbook v2: the external scenario fan over the SAME field (docs/PLAYBOOK_V2.md) -------
+    v2 = None
+    if v2_scenarios:
+        marks, _sk, _c = race_def.course_to_marks(definition, course_id)
+        finish_pt = (marks[-1][2], marks[-1][3]) if marks else None
+        n_scen = max_scenarios or 9
+        s_routes, s_robust, profile, corridor = _scenario_fan(
+            definition, course_id, start_epoch, wf, consensus, cur, waves, finish_pt,
+            jib_crossovers=jib_crossovers, helm_factor=helm_factor,
+            polar_adjustments=polar_adjustments, wave_coeffs=wave_coeffs,
+            max_scenarios=n_scen, per_budget_s=max(60, int(scenario_budget_s / n_scen)), log=log)
+        v2 = {"pos_profile": profile, "scenario_routes": s_routes, "robustness": s_robust,
+              "corridor": corridor}
+
     return {
+        "v2": v2,
         "available": True, "course_id": consensus.get("course_id"),
         "start_epoch": round(float(start_epoch)),
         "n_scenarios": len(candidates), "n_variants": len(variants),

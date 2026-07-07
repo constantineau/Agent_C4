@@ -1284,11 +1284,19 @@ async function synthPlaybook() {
   const startEpoch = optStartEpoch();
   if (startEpoch != null) body.start_epoch = startEpoch;
   Pb.running = true; Pb.result = null;
-  const b = document.getElementById("pbRun"); if (b) { b.disabled = true; b.textContent = "Synthesizing… (fanning forecasts + routing each)"; }
-  out.innerHTML = '<div class="loading" style="margin-top:10px">Routing each forecast scenario, clustering into strategic variants, and writing the playbook…</div>';
+  const b = document.getElementById("pbRun"); if (b) { b.disabled = true; b.textContent = "Synthesizing… (models + perturbation scenarios)"; }
+  out.innerHTML = '<div class="loading" style="margin-top:10px">Routing each forecast scenario (per-model + the v2 perturbation fan: shifts, pressure, timing), dedup-ing to plays, and writing the playbook… (~10 min; runs server-side, safe to keep working)</div>';
   try {
-    const res = await apiPost("/api/playbook/synthesize", body);
-    Pb.result = await jsonOrFriendly(res);
+    const start = await (await apiPost("/api/playbook/synthesize", body)).json();
+    if (start.ok === false) throw new Error(start.note || "synthesis busy");
+    // background job — poll for the bundle (the fan runs far past the gateway timeout)
+    while (true) {
+      await new Promise((r) => setTimeout(r, 10000));
+      const st = await (await apiGet("/api/playbook/synthesize/status")).json();
+      if (st.state === "done") { Pb.result = st.bundle; break; }
+      if (st.state === "error") { Pb.result = { available: false, note: st.error }; break; }
+      if (st.state === "idle") { Pb.result = { available: false, note: "synthesis job vanished (container restarted?)" }; break; }
+    }
   } catch (e) {
     Pb.result = { available: false, note: String(e) };
   }
@@ -1317,12 +1325,52 @@ function renderPbResult(b) {
       ${pbBoatModelNote(b)}
     </div>
     <div class="pb-variants">${b.variants.map((v) => pbVariantCard(v, v.id === b.recommended)).join("")}</div>
+    ${pbPlaysSection(b)}
     ${pbDecisionTree(b)}
     <div class="pb-freeze">
       ${sig ? pbSigBox(b) :
         `<button id="pbFreeze" onclick="freezePlaybook()" ${Pb.freezing ? "disabled" : ""}>${Pb.freezing ? "Freezing…" : "🔒 Freeze & sign for onboard"}</button>
          <span class="muted" style="font-size:12px">Signs the bundle (sha256) + saves it as the frozen, onboard-loadable homework. RRS 41: frozen at the gun.</span>`}
     </div></div>`;
+}
+
+// ---- Playbook v2: the scenario PLAY LIBRARY (docs/PLAYBOOK_V2.md) -------------------------------
+function pbPlaysSection(b) {
+  const plays = b.plays || [];
+  const robust = ((b.nominal || {}).robustness) || [];
+  const cor = b.corridor;
+  if (!plays.length && !robust.length) return "";
+  const corLine = cor ? `<div class="muted" style="font-size:12px;margin:4px 0">
+      <b>${cor.verdict === "geometry" ? "⚖ The line matters here" : "🎯 Execution race"}:</b>
+      ${esc(cor.note || "")} (fan spread p90 ${cor.corridor_p90_nm ?? "—"} nm · stakes up to ${cor.stakes_min ?? 0} min)</div>` : "";
+  const robustLine = robust.length ? `<div class="muted" style="font-size:12px;margin:4px 0">
+      ✅ Nominal holds under: ${robust.map((r) => esc(r.name || r.scenario)).join(" · ")}</div>` : "";
+  const vs = b.venue_stats;
+  const vsLine = vs ? `<div class="muted" style="font-size:11px;margin:4px 0">Venue fleet-normal (from ${(vs.races || []).length} archived race(s), ${vs.n_boats} boats): XTE ${vs.xte_median_nm}/${vs.xte_p90_nm} nm (median/p90) · behind-own-plan ${vs.behind_median_min}/${vs.behind_p90_min} min — frozen into the bundle for onboard phrasing.</div>` : "";
+  return `<div style="margin-top:12px">
+    <h4 style="margin:4px 0">Plays — pre-routed answers to scenarios (${plays.length})</h4>
+    ${corLine}${robustLine}${vsLine}
+    ${plays.map(pbPlayCard).join("")}
+  </div>`;
+}
+
+function pbPlayCard(p) {
+  const d = p.scenario || {};
+  const preds = ((p.conditions || {}).predicates || [])
+    .map((x) => `${esc(x.signal)} ${esc(x.op)} ${esc(String(x.value))}${x.sustain_min ? ` (≥${x.sustain_min} min)` : ""}`).join(" AND ");
+  return `<details class="pb-var" style="margin-top:6px">
+    <summary><b>${esc(p.name)}</b>
+      <span class="pill">${esc(p.category)}</span>
+      <span class="pill ${p.stakes_min >= 60 ? "warn" : ""}">stakes ~${p.stakes_min ?? 0} min</span>
+      ${p.favored_side ? `<span class="pill">${esc(p.favored_side)}</span>` : ""}
+      <span class="muted" style="font-size:12px">${esc(p.summary || "")}</span></summary>
+    <div class="pb-row"><span class="pb-lbl">You'd observe</span><span>${esc((p.conditions || {}).narrative || "")}</span></div>
+    ${preds ? `<div class="pb-row"><span class="pb-lbl">Arms when</span><span class="mono" style="font-size:11px">${preds}</span></div>` : ""}
+    ${p.rationale ? `<div class="pb-row"><span class="pb-lbl">Why</span><span>${esc(p.rationale)}</span></div>` : ""}
+    ${p.tradeoffs ? `<div class="pb-row"><span class="pb-lbl">Tradeoffs</span><span>${esc(p.tradeoffs)}</span></div>` : ""}
+    ${p.what_flips_it ? `<div class="pb-row flips"><span class="pb-lbl">Hands back when</span><span>${esc(p.what_flips_it)}</span></div>` : ""}
+    ${(p.response || {}).route ? `<div class="pb-row"><span class="pb-lbl">Route</span><span>${(p.response.route.legs || []).length} legs · ${p.response.route.total_sailed_nm ?? "—"} nm · ${p.response.route.total_tacks ?? "—"} tacks · sails ${esc(((p.response.route.sail_plan || []).map((s) => s.sail || s)).join("→") || "—")}</span></div>` : ""}
+  </details>`;
 }
 
 function pbVariantCard(v, recommended) {
@@ -2134,7 +2182,9 @@ function retroCard() {
   const j = Retro.job || {};
   const running = j.state === "running";
   const archived = races.map((x) =>
-    `<span class="pill">${esc(x.race_id)} · ${x.entries} boats · ${x.tracks} tracks · ${x.polars} polars · ${x.runs} runs</span>`).join(" ")
+    `<button class="pill${x.race_id === Retro.ybId ? " ok" : ""}" style="cursor:pointer;border:none"
+       title="Select this archived race and load its report"
+       onclick="retroPick('${attr(x.race_id)}')">${esc(x.race_id)} · ${x.entries} boats · ${x.tracks} tracks · ${x.polars} polars · ${x.runs} runs</button>`).join(" ")
     || '<span class="muted">nothing archived yet</span>';
   const jobLine = running
     ? `<div class="muted" style="font-size:12px;margin-top:6px">Fleet batch running… <span class="loading-dot"></span><br>${esc((j.progress || []).slice(-3).join(" · "))}</div>`
@@ -2179,6 +2229,12 @@ function retroReportHtml() {
 
 async function retroRefresh() {
   try { Retro.races = (await (await apiGet("/api/retro/races")).json()).races || []; } catch (e) { Retro.races = []; }
+}
+async function retroPick(raceId) {
+  // click an archived-race pill → select it + load its report (no ids to remember)
+  Retro.ybId = raceId; Retro.report = null;
+  paintDebrief();
+  await retroReport();
 }
 async function retroIngest() {
   Retro.ybId = document.getElementById("retroYb").value.trim();
