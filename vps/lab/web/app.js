@@ -917,7 +917,7 @@ function renderBoatModel() {
 }
 
 // Sail palette (mirrors the .sail-bg-* CSS) — used to hatch the toss-up overlap bands in two colors.
-const SAIL_COLORS = { J1: "#36b3ff", J2: "#66a9e0", J3: "#9b8cff", A2: "#7ee0a8", A3: "#f5c451", S2: "#ff8042" };
+const SAIL_COLORS = { J1: "#36b3ff", J2: "#66a9e0", J3: "#9b8cff", C0: "#4dd6c9", A2: "#7ee0a8", A3: "#f5c451", S2: "#ff8042" };
 const sailColor = (s) => SAIL_COLORS[s] || "#8899a6";
 function hexRgba(hex, a) {
   const h = String(hex).replace("#", "");
@@ -954,6 +954,7 @@ function boatModelCard(m) {
     <div class="muted" style="font-size:12px;margin-bottom:10px">Source: ${esc(m.source || "—")}. This is the boat sail model the optimizer attaches per leg and <b>freezes into the playbook bundle</b> — what the onboard copilot loads to ground its sail calls. Review before lock-in.</div>
     <div class="bm-inv">Inventory: ${inv}</div>
     ${renderJibCrossovers(m)}
+    ${renderSailConfig(m)}
     <h4>Sail crossovers (optimal sail by TWA, per TWS)</h4>
     <div class="muted" style="font-size:11px;margin-bottom:4px">From the ORC cert (one headsail = the jib slot; specialised to J1/J2/J3 by the wind bands above). <b>Hatched ≈</b> = a toss-up: two sails within ~1.5% of target speed, where the winner-take-all bands can't show a tie — carry either (the erased sail reappears in its own colour, e.g. A2 on the reach at 14–16 kts).</div>
     <div class="xo-axis"><span>0°</span><span>45°</span><span>90°</span><span>135°</span><span>180°</span></div>
@@ -999,6 +1000,58 @@ async function saveJibCrossovers() {
   try {
     await apiPost("/api/boats/jib-crossovers", { jib_crossovers: bands });
     Opt.boatModel = await (await apiGet("/api/crossovers")).json();   // refetch so the bars update
+    if ((location.hash || "").slice(1) === "learnings") { renderLearnings(); }
+    else { Opt.showBoatModel = true; renderGameplan(); }
+  } catch (e) { if (msg) msg.textContent = "Save failed."; }
+}
+
+/* Code 0 band + mainsail reef points — crew sail-config overlays the ORC cert can't express (it
+   rates neither). Editable here (Learnings + Gameplan share this card); they set the sail CALLS
+   across routing legs, the crossover chart, the frozen bundle boat_model and the copilot digest —
+   routing SPEED stays the rated envelope (no invented numbers). */
+function renderSailConfig(m) {
+  const c0 = m.code0 || {};
+  const mr = m.main_reefs || {};
+  const on = c0.enabled !== false && c0.tws_max != null;
+  return `<h4>Code 0 — light-air reacher (crew band)</h4>
+    <div class="muted" style="font-size:11px;margin-bottom:6px">The C0 takes the jib slot within this band (label overlay — the cert doesn't rate it, so routing speed stays the rated envelope; the band sets the <b>call</b>). It shows as C0 zones in the chart below and drives leg sail calls, the frozen playbook and the copilot's peel alerts.</div>
+    <div class="jib-edit">
+      <label><input type="checkbox" id="c0On" ${on ? "checked" : ""}> fly the Code 0</label>
+      <label>under <input type="number" id="c0Tws" value="${c0.tws_max ?? 9}" min="3" max="20" step="0.5" style="width:58px"> kts</label>
+      <label>TWA <input type="number" id="c0Alo" value="${c0.twa_min ?? 55}" min="30" max="150" step="5" style="width:58px">–<input type="number" id="c0Ahi" value="${c0.twa_max ?? 110}" min="40" max="170" step="5" style="width:58px">°</label>
+    </div>
+    <h4>Mainsail reef points (crew thresholds)</h4>
+    <div class="muted" style="font-size:11px;margin-bottom:6px">Reef 1 decorates the sail call (▽R1 on the legs + the copilot's reminder): <b>depower</b> once the breeze is up, and — at a lower threshold — <b>open the slot</b> between the A3 and the main when running the kite.</div>
+    <div class="jib-edit">
+      <label>Reef 1 (depower) at <input type="number" id="r1Tws" value="${mr.r1_tws_kn ?? ""}" min="4" max="45" step="0.5" style="width:58px"> kts</label>
+      <label>Reef 1 with the A3 (open the slot) at <input type="number" id="r1Slot" value="${mr.r1_a3_slot_tws_kn ?? ""}" min="4" max="45" step="0.5" style="width:58px"> kts</label>
+      <button class="mini" onclick="saveSailConfig()">Save sail config</button>
+      <span id="scSaveMsg" class="muted" style="font-size:11px"></span>
+    </div>`;
+}
+
+async function saveSailConfig() {
+  const msg = document.getElementById("scSaveMsg");
+  const on = document.getElementById("c0On").checked;
+  const tws = parseFloat(document.getElementById("c0Tws").value);
+  const alo = parseFloat(document.getElementById("c0Alo").value);
+  const ahi = parseFloat(document.getElementById("c0Ahi").value);
+  if (on && (isNaN(tws) || isNaN(alo) || isNaN(ahi) || alo >= ahi)) {
+    if (msg) msg.textContent = "Code 0: TWA min must be below max."; return;
+  }
+  const r1 = parseFloat(document.getElementById("r1Tws").value);
+  const slot = parseFloat(document.getElementById("r1Slot").value);
+  if (!isNaN(r1) && !isNaN(slot) && slot > r1) {
+    if (msg) msg.textContent = "The A3 slot reef normally fires at or below the depower reef."; return;
+  }
+  const body = {
+    code0: on ? { enabled: true, tws_max: tws, twa_min: alo, twa_max: ahi } : { enabled: false },
+    main_reefs: { r1_tws_kn: isNaN(r1) ? null : r1, r1_a3_slot_tws_kn: isNaN(slot) ? null : slot },
+  };
+  if (msg) msg.textContent = "Saving…";
+  try {
+    await apiPost("/api/boats/sail-config", body);
+    Opt.boatModel = await (await apiGet("/api/crossovers")).json();
     if ((location.hash || "").slice(1) === "learnings") { renderLearnings(); }
     else { Opt.showBoatModel = true; renderGameplan(); }
   } catch (e) { if (msg) msg.textContent = "Save failed."; }
@@ -1109,7 +1162,7 @@ function optLegRow(l, i) {
   const c = w.confidence, cc = c == null ? "" : c >= 0.6 ? "ok" : c >= 0.4 ? "warn" : "bad";
   return `<tr class="legrow" onclick="MapView.focusLeg(${i})" title="Show this leg on the map">
     <td>${esc(l.to)}</td><td>${l.leg_minutes}</td><td>${esc(l.point_of_sail || "—")}</td>
-    <td>${l.sail ? `<span class="sail sail-${esc(l.sail)}">${esc(l.sail)}</span>` : "—"}${l.peels > 0 ? ` <span class="peelbadge" title="${l.peels} sail change(s)/peel(s) on this leg">⛵${l.peels}</span>` : ""}</td>
+    <td>${l.sail ? `<span class="sail sail-${esc(l.sail)}">${esc(l.sail)}</span>` : "—"}${l.reef ? ` <span class="peelbadge" title="Main: tuck in ${esc(l.reef)} — ${esc(l.reef_why || "")}">▽${esc(l.reef)}</span>` : ""}${l.peels > 0 ? ` <span class="peelbadge" title="${l.peels} sail change(s)/peel(s) on this leg">⛵${l.peels}</span>` : ""}</td>
     <td>${l.tacks > 0 ? `<span class="tackbadge" title="${l.tacks} tack/gybe(s) worked into this leg">⇄ ${l.tacks}</span>` : "0"}</td><td>${w.tws ?? "—"}</td><td>${w.twd ?? "—"}°</td>
     <td><span class="conf ${cc}">${c ?? "—"}</span></td></tr>`;
 }
@@ -1123,7 +1176,7 @@ function exportLegsCsv() {
   const rows = r.legs.map((l, i) => {
     const w = l.wind || {};
     const eta = l.eta_epoch ? new Date(l.eta_epoch * 1000).toISOString().replace(".000Z", "Z") : "";
-    return [i + 1, l.to, l.leg_minutes, eta, l.point_of_sail || "", l.sail || "", l.peels ?? 0,
+    return [i + 1, l.to, l.leg_minutes, eta, l.point_of_sail || "", (l.sail || "") + (l.reef ? "+" + l.reef : ""), l.peels ?? 0,
       l.tacks, l.direct_nm, l.sailed_nm, w.tws ?? "", w.twd ?? "", w.confidence ?? ""];
   });
   const csv = [hdr, ...rows].map((row) => row.map(csvCell).join(",")).join("\r\n");

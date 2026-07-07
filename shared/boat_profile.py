@@ -62,6 +62,16 @@ class BoatProfile:
     # J1), so J2/J3 — same upwind slot, smaller jibs for a building breeze — aren't in the polar;
     # these crew/sailmaker thresholds split the upwind jib by wind strength. [{sail, tws_min?, tws_max?}].
     jib_crossovers: list = field(default_factory=list)
+    # Code 0 — the light-air reaching sail. NOT in the ORC cert (like J2/J3), so it is a crew-band
+    # LABEL overlay: within {tws_max, twa_min, twa_max} the optimal-sail call becomes "C0" (it takes
+    # the cert jib's slot in that band; routing SPEED stays the rated envelope — the band sets the
+    # CALL, never an invented speed). {enabled, tws_max, twa_min, twa_max}; empty → no Code 0.
+    code0: dict = field(default_factory=dict)
+    # Mainsail reef points (kn TWS) — crew thresholds, not in the cert. r1_tws_kn = tuck in reef 1
+    # to DEPOWER in breeze (any point of sail); r1_a3_slot_tws_kn = reef 1 when running with the A3
+    # to OPEN THE SLOT between the kite and the main (fires at a lower TWS than the depower reef).
+    # Reefs decorate the sail call ("A3 + R1"), they don't change routing speed. Empty → no reefs.
+    main_reefs: dict = field(default_factory=dict)
     # Helm-skill factor (0–1): the fraction of the FLAT-WATER ORC polar this crew actually achieves —
     # the optimizer routes on ACHIEVABLE speed (helm × sea state), and the gap to 1.0 is a coaching
     # number. 1.0 = sails the book; the Lab-4 learning loop can refine it from real tracks. (2d-d)

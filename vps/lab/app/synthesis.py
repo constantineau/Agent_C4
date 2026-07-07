@@ -264,10 +264,16 @@ def _boat_model():
         "sail_inventory": b.get("sail_inventory") or sm.get("inventory", []),
         "sail_names": sm.get("sail_names", {}),
         # per-TWS×TWA zones with the upwind jib specialised to J1/J2/J3 by this boat's change-downs
-        "crossovers": sailplan.crossovers_specialized(b.get("jib_crossovers") or []),
+        "crossovers": sailplan.crossovers_specialized(
+            b.get("jib_crossovers") or [],
+            {"code0": b.get("code0") or {}, "main_reefs": b.get("main_reefs") or {}}),
         # per-TWS toss-up bands (two sails within ~2% of target — the near-ties the zones can't show)
         "overlaps": sailplan.overlaps_specialized(b.get("jib_crossovers") or []),
         "jib_crossovers": b.get("jib_crossovers", []),  # J1/J2/J3 by TWS (crew/sailmaker, not cert)
+        # Code 0 band + main reef points — crew config the cert can't express (label overlays);
+        # frozen so the copilot's sail-configuration calls are grounded in the reviewed model
+        "code0": b.get("code0") or {},
+        "main_reefs": b.get("main_reefs") or {},
     }
 
 
@@ -388,7 +394,7 @@ def _play_synthesis(plays_in, corridor, profile, race_name):
 def _sail_speed(SP, sail, tws, twa):
     """Nearest per-sail-polar speed for `sail` at (tws, twa), or None (jib change-downs share the
     J1 curve, so J2/J3 read as J1)."""
-    pts = SP.get(sail) or SP.get({"J2": "J1", "J3": "J1"}.get(sail, "")) or []
+    pts = SP.get(sail) or SP.get({"J2": "J1", "J3": "J1", "C0": "J1"}.get(sail, "")) or []
     best, bd = None, 1e9
     for t, a, v in pts:
         d = (t - tws) ** 2 + ((a - twa) / 10.0) ** 2
@@ -397,10 +403,13 @@ def _sail_speed(SP, sail, tws, twa):
     return best
 
 
-_POS_TWA = {"upwind": 45.0, "reaching": 100.0, "downwind": 150.0}
+# legs carry beat/reach/run (optimizer._point_of_sail); the older upwind/reaching/downwind
+# aliases are kept so nothing regresses if a caller uses the other vocabulary
+_POS_TWA = {"beat": 45.0, "upwind": 45.0, "reach": 100.0, "reaching": 100.0,
+            "run": 150.0, "downwind": 150.0}
 
 
-def _sail_guidance_plays(consensus, jib_crossovers):
+def _sail_guidance_plays(consensus, jib_crossovers, sail_config=None):
     """Phase-C SAIL GUIDANCE plays (no route — a pre-authored call): for each nominal leg's sail,
     where is the crossover if the breeze runs above/below forecast, and what does the change buy?
     Grounded in the frozen boat model (crossovers + per-sail polars) — never invented."""
@@ -420,7 +429,7 @@ def _sail_guidance_plays(consensus, jib_crossovers):
                 w2 = w + step * dw
                 if w2 < 3:
                     break
-                cand = sailplan.optimal_sail(w2, twa, jib_crossovers)
+                cand = sailplan.optimal_sail(w2, twa, jib_crossovers, sail_config)
                 if cand and cand != sail:
                     s2, thr = cand, round(w2, 1)
                     break
@@ -453,7 +462,58 @@ def _sail_guidance_plays(consensus, jib_crossovers):
     return out
 
 
-def _build_plays(playbook, definition, course_id, venue_stats=None, jib_crossovers=None):
+def _reef_guidance_plays(consensus, sail_config):
+    """Phase-C-style GUIDANCE plays for the MAIN REEF points (crew thresholds, not in the cert):
+    when a nominal leg's forecast TWS sits within scan range of a reef threshold, pre-author the
+    call — 'tuck in reef 1 through ~N kn' (depower) and, running the A3, the lower-threshold
+    'reef 1 to open the slot between the A3 and the main'. No route — the reef changes the CALL,
+    never the rated speed."""
+    from . import sailplan
+    mr = (sail_config or {}).get("main_reefs") or {}
+    if not mr:
+        return []
+    out, seen = [], set()
+    for i, leg in enumerate((consensus or {}).get("legs") or []):
+        w = (leg.get("wind") or {}).get("tws")
+        sail = leg.get("sail")
+        if not isinstance(w, (int, float)):
+            continue
+        for kind, thr, cond in (
+                ("depower", mr.get("r1_tws_kn"), True),
+                ("a3_slot", mr.get("r1_a3_slot_tws_kn"), sail == "A3")):
+            if thr is None or not cond or kind in seen:
+                continue
+            if not (w - 2 <= float(thr) <= w + 8):     # threshold within reach of this leg's breeze
+                continue
+            seen.add(kind)
+            if kind == "depower":
+                gid, name = "reef_r1_depower", "Reef 1 — depower in the breeze"
+                narrative = (f"The breeze builds through ~{thr:g} kn and the boat is overpowered — "
+                             "heel climbing, helm loading up, main traveller buried.")
+                guidance = (f"Tuck in reef 1 once ~{thr:g} kn is sustained — depower before the "
+                            "helm does it for you. Shake it out when the breeze drops back below. "
+                            "From the boat's own reef points — confirm against the crew's feel.")
+            else:
+                gid, name = "reef_r1_a3_slot", "Reef 1 with the A3 — open the slot"
+                narrative = (f"Running the A3 in ~{thr:g}+ kn — the main is blanketing the kite "
+                             "and the slot between them has closed.")
+                guidance = (f"With the A3 up and ~{thr:g}+ kn, tuck in reef 1 to OPEN the slot "
+                            "between the kite and the main — the A3 breathes and the boat "
+                            "stands up. From the boat's own reef points.")
+            out.append({
+                "id": gid, "name": name, "kind": "sail_guidance", "category": "internal",
+                "params": {"reef": "R1", "tws_threshold": float(thr), "direction": "over",
+                           "context": kind, "leg": i,
+                           **({"hoisted": "A3"} if kind == "a3_slot" else {})},
+                "narrative_seed": narrative,
+                "divergence": {"delta_eta_min": 0, "xte_mean_nm": None},
+                "guidance": guidance, "favored_side": None,
+            })
+    return out
+
+
+def _build_plays(playbook, definition, course_id, venue_stats=None, jib_crossovers=None,
+                 sail_config=None):
     """The v2 plays: the external scenario fan + the internal fan (pace/gear-loss routes) + the
     sail GUIDANCE plays; registry predicates resolved against the route context + the venue's
     fleet-normal stats (percentile-framed, locked input #3); frontier narratives with the
@@ -461,7 +521,8 @@ def _build_plays(playbook, definition, course_id, venue_stats=None, jib_crossove
     from . import scenarios as scen
     v2 = playbook.get("v2") or {}
     entries = list(v2.get("scenario_routes") or [])
-    entries += _sail_guidance_plays(playbook.get("consensus"), jib_crossovers)
+    entries += _sail_guidance_plays(playbook.get("consensus"), jib_crossovers, sail_config)
+    entries += _reef_guidance_plays(playbook.get("consensus"), sail_config)
     if not entries:
         return [], v2, None
     ctx = {"mean_tws": _mean_tws(playbook.get("consensus")), "venue_stats": venue_stats}
@@ -515,15 +576,15 @@ def _build_plays(playbook, definition, course_id, venue_stats=None, jib_crossove
 
 
 def synthesize(definition, course_id, start_epoch, models, ensemble_members=0, time_budget_s=200,
-               jib_crossovers=None, helm_factor=1.0, use_waves=True, polar_adjustments=None,
-               wave_coeffs=None):
+               jib_crossovers=None, sail_config=None, helm_factor=1.0, use_waves=True,
+               polar_adjustments=None, wave_coeffs=None):
     """Lab-2a fan-out → Lab-2b synthesized bundle (UNSIGNED draft). Freeze (`sign_bundle`) before
     it's relied on / deployed onboard. Passes through the not-available case from 2a unchanged."""
     playbook = pb.build_playbook(definition, course_id, start_epoch, models,
                                  ensemble_members=ensemble_members, time_budget_s=time_budget_s,
-                                 jib_crossovers=jib_crossovers, helm_factor=helm_factor,
-                                 use_waves=use_waves, polar_adjustments=polar_adjustments,
-                                 wave_coeffs=wave_coeffs)
+                                 jib_crossovers=jib_crossovers, sail_config=sail_config,
+                                 helm_factor=helm_factor, use_waves=use_waves,
+                                 polar_adjustments=polar_adjustments, wave_coeffs=wave_coeffs)
     if not playbook.get("available"):
         return playbook
 
@@ -548,7 +609,8 @@ def synthesize(definition, course_id, start_epoch, models, ensemble_members=0, t
     # ---- Playbook v2: the play library from the scenario fan (docs/PLAYBOOK_V2.md) --------------
     venue_stats = _venue_stats()
     plays, v2meta, play_note = _build_plays(playbook, definition, course_id,
-                                            venue_stats=venue_stats, jib_crossovers=jib_crossovers)
+                                            venue_stats=venue_stats, jib_crossovers=jib_crossovers,
+                                            sail_config=sail_config)
     corridor = (v2meta.get("corridor") or {}) if v2meta else {}
     headline = syn.get("headline", "")
     if corridor.get("note"):

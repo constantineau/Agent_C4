@@ -72,8 +72,8 @@ def _mean_xte_nm(path, ref_path, step=8):
 
 
 def _scenario_fan(definition, course_id, start_epoch, wf, consensus, cur, waves, marks_finish,
-                  jib_crossovers=None, helm_factor=1.0, polar_adjustments=None, wave_coeffs=None,
-                  max_scenarios=None, per_budget_s=90, log=None):
+                  jib_crossovers=None, sail_config=None, helm_factor=1.0, polar_adjustments=None,
+                  wave_coeffs=None, max_scenarios=None, per_budget_s=90, log=None):
     """Playbook-v2 EXTERNAL scenario fan (docs/PLAYBOOK_V2.md §3, §8): route the course through
     perturbed views of the SAME blended field. A scenario whose route sticks to the nominal is
     ROBUSTNESS EVIDENCE, not a play; one that diverges is a play candidate. Priority order is
@@ -93,7 +93,7 @@ def _scenario_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
                              (("k_up", 0.04), ("k_reach", 0.02), ("k_down", 0.01))}}
         r = optimizer.optimize_course(definition, course_id, start_epoch, wf2,
                                       time_budget_s=per_budget_s, resolution="fast",
-                                      jib_crossovers=jib_crossovers, emit_exploration=False,
+                                      jib_crossovers=jib_crossovers, sail_config=sail_config, emit_exploration=False,
                                       cur=cur, waves=waves, helm_factor=helm_factor,
                                       polar_adjustments=polar_adjustments, wave_coeffs=wc)
         if not r.get("available") or not r.get("path"):
@@ -143,8 +143,8 @@ _GEAR_SAILS = ("A2", "A3", "S2")     # kites we author a loss play for when they
 
 
 def _internal_fan(definition, course_id, start_epoch, wf, consensus, cur, waves, marks,
-                  jib_crossovers=None, helm_factor=1.0, polar_adjustments=None, wave_coeffs=None,
-                  per_budget_s=90, log=None):
+                  jib_crossovers=None, sail_config=None, helm_factor=1.0, polar_adjustments=None,
+                  wave_coeffs=None, per_budget_s=90, log=None):
     """Phase-C INTERNAL plays that need routes (docs/PLAYBOOK_V2.md §3): PACE re-routes — reach an
     intermediate mark N hours late/early and the weather you meet downstream is different, so the
     optimal remainder can flip — and GEAR-LOSS re-runs (route the whole course without a kite that's
@@ -166,7 +166,7 @@ def _internal_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
             def _route_rest(budget):
                 return optimizer.optimize_course(definition, course_id, eta_epoch + dh * 3600, wf,
                                                  from_mark=k, time_budget_s=budget,
-                                                 resolution="fast", jib_crossovers=jib_crossovers,
+                                                 resolution="fast", jib_crossovers=jib_crossovers, sail_config=sail_config,
                                                  emit_exploration=False, cur=cur, waves=waves,
                                                  helm_factor=helm_factor,
                                                  polar_adjustments=polar_adjustments,
@@ -222,7 +222,7 @@ def _internal_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
     for sail in [s for s in _GEAR_SAILS if s in nominal_sails]:
         r = optimizer.optimize_course(definition, course_id, start_epoch, wf,
                                       exclude_sails=[sail], time_budget_s=per_budget_s,
-                                      resolution="fast", jib_crossovers=jib_crossovers,
+                                      resolution="fast", jib_crossovers=jib_crossovers, sail_config=sail_config,
                                       emit_exploration=False, cur=cur, waves=waves,
                                       helm_factor=helm_factor,
                                       polar_adjustments=polar_adjustments, wave_coeffs=wave_coeffs)
@@ -252,7 +252,7 @@ def _internal_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
     mult = float(os.environ.get("PB_LOWMAN_MULT", "4.0"))
     r = optimizer.optimize_course(definition, course_id, start_epoch, wf,
                                   maneuver_prune_mult=mult, time_budget_s=per_budget_s,
-                                  resolution="fast", jib_crossovers=jib_crossovers,
+                                  resolution="fast", jib_crossovers=jib_crossovers, sail_config=sail_config,
                                   emit_exploration=False, cur=cur, waves=waves,
                                   helm_factor=helm_factor,
                                   polar_adjustments=polar_adjustments, wave_coeffs=wave_coeffs)
@@ -295,7 +295,7 @@ def _internal_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
         vs = {}
     off_nm = round(min(8.0, max(2.0, float(vs.get("xte_p90_nm") or 6.0))), 1)
     tab = _rejoin_tab(definition, course_id, wf, consensus, cur, waves, marks, off_nm,
-                      jib_crossovers=jib_crossovers, helm_factor=helm_factor,
+                      jib_crossovers=jib_crossovers, sail_config=sail_config, helm_factor=helm_factor,
                       polar_adjustments=polar_adjustments, wave_coeffs=wave_coeffs, log=log)
     if tab:
         parts = []
@@ -349,7 +349,7 @@ _REJOIN_LEG_TIMEOUT_S = 25.0   # per-isochrone budget for a tabulation cell
 
 
 def _rejoin_tab(definition, course_id, wf, consensus, cur, waves, marks, off_nm,
-                jib_crossovers=None, helm_factor=1.0, polar_adjustments=None,
+                jib_crossovers=None, sail_config=None, helm_factor=1.0, polar_adjustments=None,
                 wave_coeffs=None, log=None):
     """Phase-C REJOIN-VS-CONTINUE tabulation (docs/PLAYBOOK_V2.md §3): from a representative
     off-track position on each leg (offset `off_nm` = the venue's commit-band XTE, both sides),
@@ -379,7 +379,7 @@ def _rejoin_tab(definition, course_id, wf, consensus, cur, waves, marks, off_nm,
         obstacles = None
     rp = optimizer._resolution("fast")
     kw = dict(obstacles=obstacles, hstep=rp["hstep"], dt_cap=rp["dt_cap"], cur=cur,
-              sail_polars=SP, jib_crossovers=jib_crossovers, waves=waves,
+              sail_polars=SP, jib_crossovers=jib_crossovers, sail_config=sail_config, waves=waves,
               helm_factor=helm_factor, wave_coeffs=wave_coeffs)
     rows = []
     leg_start_t = float(consensus.get("start_epoch") or path[0].get("t") or 0)
@@ -438,7 +438,7 @@ def _rejoin_tab(definition, course_id, wf, consensus, cur, waves, marks, off_nm,
 
 
 def build_playbook(definition, course_id, start_epoch, models, ensemble_members=0,
-                   time_budget_s=200, jib_crossovers=None, helm_factor=1.0, use_waves=True,
+                   time_budget_s=200, jib_crossovers=None, sail_config=None, helm_factor=1.0, use_waves=True,
                    polar_adjustments=None, wave_coeffs=None, v2_scenarios=True,
                    scenario_budget_s=420, max_scenarios=None):
     """Multi-scenario playbook: route the course through the blended field (consensus) and through
@@ -470,7 +470,7 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
 
     # consensus = the blended field (all models) — the baseline "best guess"
     consensus = optimizer.optimize_course(definition, course_id, start_epoch, wf, time_budget_s=per,
-                                          jib_crossovers=jib_crossovers, emit_exploration=False, cur=cur,
+                                          jib_crossovers=jib_crossovers, sail_config=sail_config, emit_exploration=False, cur=cur,
                                           waves=waves, helm_factor=helm_factor,
                                           polar_adjustments=polar_adjustments, wave_coeffs=wave_coeffs)
     consensus_side = _favored_side(definition, course_id, consensus)
@@ -479,7 +479,7 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
     candidates = []
     for model, sub in subs.items():
         r = optimizer.optimize_course(definition, course_id, start_epoch, sub, time_budget_s=per,
-                                      jib_crossovers=jib_crossovers, emit_exploration=False, cur=cur,
+                                      jib_crossovers=jib_crossovers, sail_config=sail_config, emit_exploration=False, cur=cur,
                                       waves=waves, helm_factor=helm_factor,
                                       polar_adjustments=polar_adjustments, wave_coeffs=wave_coeffs)
         if not r.get("available"):
@@ -528,14 +528,14 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
         n_scen = max_scenarios or 9
         s_routes, s_robust, profile, corridor = _scenario_fan(
             definition, course_id, start_epoch, wf, consensus, cur, waves, finish_pt,
-            jib_crossovers=jib_crossovers, helm_factor=helm_factor,
+            jib_crossovers=jib_crossovers, sail_config=sail_config, helm_factor=helm_factor,
             polar_adjustments=polar_adjustments, wave_coeffs=wave_coeffs,
             max_scenarios=n_scen, per_budget_s=max(60, int(scenario_budget_s / n_scen)), log=log)
         # Phase C INTERNAL plays — pace + gear-loss (the retro study ranked these the
         # highest-value play types; user priority)
         i_routes, i_robust = _internal_fan(
             definition, course_id, start_epoch, wf, consensus, cur, waves, marks,
-            jib_crossovers=jib_crossovers, helm_factor=helm_factor,
+            jib_crossovers=jib_crossovers, sail_config=sail_config, helm_factor=helm_factor,
             polar_adjustments=polar_adjustments, wave_coeffs=wave_coeffs,
             per_budget_s=max(60, int(scenario_budget_s / n_scen)), log=log)
         v2 = {"pos_profile": profile, "scenario_routes": s_routes + i_routes,

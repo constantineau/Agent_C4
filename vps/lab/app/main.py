@@ -195,6 +195,11 @@ def _active_jibs():
     return b.get("jib_crossovers") or []
 
 
+def _active_sails():
+    """The active boat's Code 0 band + main reef points (crew label overlays, not in the cert)."""
+    return boats.active_sail_config()
+
+
 def _active_adjustments():
     """The active boat's human-APPROVED refined-polar overlay (Lab-4) — applied to the optimizer's
     polars. Empty until a learning proposal is approved (→ routes on the raw ORC cert)."""
@@ -249,7 +254,7 @@ def _run_optimize(definition, course_id, start_epoch, model_names, ensemble_memb
     result = optimizer.optimize_course(definition, course_id, start_epoch, wf, avoid=avoid,
                                        source=chart_source(),
                                        safety_depth=boats.active_safety_depth_m(),
-                                       jib_crossovers=_active_jibs(), per_model=per_model,
+                                       jib_crossovers=_active_jibs(), sail_config=_active_sails(), per_model=per_model,
                                        resolution=resolution, cur=cur,
                                        waves=waves, helm_factor=boats.active_helm_factor(),
                                        polar_adjustments=_active_adjustments(), wave_coeffs=_active_wave())
@@ -531,7 +536,7 @@ async def playbook(body: dict):
     from . import playbook as pb
     try:
         return await run_in_threadpool(pb.build_playbook, d, course_id, start_epoch,
-                                       model_names, ens, jib_crossovers=_active_jibs(),
+                                       model_names, ens, jib_crossovers=_active_jibs(), sail_config=_active_sails(),
                                        helm_factor=boats.active_helm_factor(),
                                        polar_adjustments=_active_adjustments(),
                                        wave_coeffs=_active_wave(),
@@ -566,11 +571,14 @@ async def crossovers():
     m = sailplan.model()
     b = boats.active_boat() or {}
     jibs = b.get("jib_crossovers") or []
+    cfg = {"code0": b.get("code0") or {}, "main_reefs": b.get("main_reefs") or {}}
     if b.get("sail_inventory"):
-        m["inventory"] = b["sail_inventory"]        # the boat's real inventory (incl. J2/J3)
+        m["inventory"] = b["sail_inventory"]        # the boat's real inventory (incl. J2/J3, C0)
     m["jib_crossovers"] = jibs
-    m["crossovers"] = sailplan.crossovers_specialized(jibs)   # chart shows the real jib per TWS row
+    m["crossovers"] = sailplan.crossovers_specialized(jibs, cfg)  # real jib per TWS row + C0 carve
     m["overlaps"] = sailplan.overlaps_specialized(jibs)       # toss-up bands, jib relabelled to match
+    m["code0"] = cfg["code0"]                       # light-air reacher band (crew, not cert)
+    m["main_reefs"] = cfg["main_reefs"]             # reef points (depower + A3 slot)
     m["boat_id"] = b.get("boat_id") or m.get("boat_id")
     return m
 
@@ -588,6 +596,45 @@ async def save_jib_crossovers(body: dict):
     b["jib_crossovers"] = bands
     boats.save_boat(b)
     return {"saved": True, "boat_id": b.get("boat_id"), "jib_crossovers": bands}
+
+
+@app.post("/api/boats/sail-config")
+async def save_sail_config(body: dict):
+    """Update the active boat's crew sail-config overlays — the Code 0 band and/or the main reef
+    points. Body: {code0?: {enabled, tws_max, twa_min, twa_max}, main_reefs?: {r1_tws_kn,
+    r1_a3_slot_tws_kn}}. These are label overlays (the ORC cert rates neither) — they set the sail
+    CALLS across routing legs, the crossover chart, the frozen bundle and the copilot digest."""
+    b = boats.active_boat()
+    if not b:
+        return JSONResponse({"detail": "no active boat"}, status_code=404)
+    c0 = (body or {}).get("code0")
+    mr = (body or {}).get("main_reefs")
+    if c0 is not None:
+        if not isinstance(c0, dict):
+            return JSONResponse({"detail": "code0 must be an object"}, status_code=400)
+        if c0.get("enabled", True):
+            try:
+                tmax, alo, ahi = float(c0["tws_max"]), float(c0["twa_min"]), float(c0["twa_max"])
+            except (KeyError, TypeError, ValueError):
+                return JSONResponse({"detail": "code0 needs numeric tws_max/twa_min/twa_max"},
+                                    status_code=400)
+            if not (0 < tmax <= 30 and 0 <= alo < ahi <= 180):
+                return JSONResponse({"detail": "code0 band out of range"}, status_code=400)
+        b["code0"] = c0
+        inv = b.get("sail_inventory") or []
+        if c0.get("enabled", True) and "C0" not in inv:
+            b["sail_inventory"] = inv + ["C0"]
+    if mr is not None:
+        if not isinstance(mr, dict):
+            return JSONResponse({"detail": "main_reefs must be an object"}, status_code=400)
+        for k in ("r1_tws_kn", "r1_a3_slot_tws_kn"):
+            v = mr.get(k)
+            if v is not None and not (isinstance(v, (int, float)) and 4 <= v <= 45):
+                return JSONResponse({"detail": f"{k} must be 4–45 kn (or null)"}, status_code=400)
+        b["main_reefs"] = mr
+    boats.save_boat(b)
+    return {"saved": True, "boat_id": b.get("boat_id"),
+            "code0": b.get("code0") or {}, "main_reefs": b.get("main_reefs") or {}}
 
 
 @app.get("/api/polars")
@@ -613,7 +660,7 @@ async def playbook_synthesize(body: dict):
     if not d:
         return JSONResponse({"detail": "unknown race_id"}, status_code=404)
     from . import synthesis
-    kw = dict(jib_crossovers=_active_jibs(), helm_factor=boats.active_helm_factor(),
+    kw = dict(jib_crossovers=_active_jibs(), sail_config=_active_sails(), helm_factor=boats.active_helm_factor(),
               polar_adjustments=_active_adjustments(), wave_coeffs=_active_wave(),
               use_waves=(body or {}).get("use_waves", True))
     if (body or {}).get("sync"):
@@ -646,7 +693,7 @@ async def playbook_freeze(body: dict):
         if not d:
             return JSONResponse({"detail": "provide a bundle or a known race_id"}, status_code=404)
         bundle = await run_in_threadpool(synthesis.synthesize, d, course_id, start_epoch,
-                                         model_names, ens, jib_crossovers=_active_jibs(),
+                                         model_names, ens, jib_crossovers=_active_jibs(), sail_config=_active_sails(),
                                          helm_factor=boats.active_helm_factor(),
                                          polar_adjustments=_active_adjustments(),
                                          wave_coeffs=_active_wave(),

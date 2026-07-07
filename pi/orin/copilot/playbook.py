@@ -113,6 +113,21 @@ class Playbook:
                          f"{bm.get('draft_ft', '?')} ft — sail calls come from this frozen crossover "
                          "table + the engine's live TWS/TWA, not invented."
                          + (f" Upwind jib by wind: {jib}." if jib else ""))
+            c0 = bm.get("code0") or {}
+            if c0 and c0.get("enabled", True) and c0.get("tws_max") is not None:
+                lines.append(f"Code 0 (light-air reacher): fly it under ~{c0['tws_max']:g} kn at "
+                             f"TWA {c0.get('twa_min', '?'):g}–{c0.get('twa_max', '?'):g}° — it takes "
+                             "the jib's slot in that band (crew band, not from the cert).")
+            mr = bm.get("main_reefs") or {}
+            if mr.get("r1_tws_kn") is not None or mr.get("r1_a3_slot_tws_kn") is not None:
+                parts = []
+                if mr.get("r1_tws_kn") is not None:
+                    parts.append(f"reef 1 at ~{mr['r1_tws_kn']:g}+ kn to depower")
+                if mr.get("r1_a3_slot_tws_kn") is not None:
+                    parts.append(f"with the A3 up, reef 1 from ~{mr['r1_a3_slot_tws_kn']:g} kn to "
+                                 "open the slot between the kite and the main")
+                lines.append("Mainsail reef points: " + "; ".join(parts) +
+                             " (crew thresholds — remind the team when the breeze crosses them).")
         for v in self.variants[:max_variants]:
             vid = v.get("id") or v.get("name") or "?"
             summary = v.get("summary") or v.get("rationale") or ""

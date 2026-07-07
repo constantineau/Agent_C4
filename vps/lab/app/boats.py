@@ -134,3 +134,20 @@ def active_wave_coeffs():
     b = active_boat()
     wc = (b or {}).get("wave_coeffs")
     return wc if isinstance(wc, dict) and wc else None
+
+
+def active_sail_config():
+    """The active boat's crew sail-config overlay (NOT in the ORC cert): the Code 0 band + the main
+    reef points. {'code0': {enabled,tws_max,twa_min,twa_max}, 'main_reefs': {r1_tws_kn,
+    r1_a3_slot_tws_kn}} or None when neither is set. Label-layer only — routing speed stays the
+    rated envelope; these drive the sail CALLS (legs, sail plan, crossover chart, bundle boat_model,
+    copilot digest, sail-guidance plays)."""
+    b = active_boat() or {}
+    c0 = b.get("code0")
+    mr = b.get("main_reefs")
+    cfg = {}
+    if isinstance(c0, dict) and c0:
+        cfg["code0"] = c0
+    if isinstance(mr, dict) and mr:
+        cfg["main_reefs"] = mr
+    return cfg or None

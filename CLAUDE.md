@@ -1076,6 +1076,21 @@ specialises the upwind jib by TWS; the active boat's bands thread through `optim
 `sailplan.crossovers_specialized()` relabels the upwind band of **each TWS row** to the real jib for
 that wind (a row is one TWS → exact), so the crossover chart + bundle show J1 (light) → J2 (mid) → J3
 (heavy), not just the cert's lone J1.
+**Code 0 + mainsail reef points (2026-07-07):** two more crew-config overlays in the same
+J2/J3 discipline (the cert rates neither; labels only — routing speed stays the rated envelope).
+`BoatProfile.code0` = the light-air reacher band {enabled, tws_max, twa_min, twa_max}: inside it
+the C0 OWNS the sail call whatever cert sail it overlaps (leaving the band to a kite is a real
+modeled peel; C0↔jib relabels are free — they share the J1 curve). `BoatProfile.main_reefs` =
+{r1_tws_kn (depower once the breeze is up), r1_a3_slot_tws_kn (a LOWER threshold with the A3 up —
+reef 1 opens the slot between the kite and the main)}; reefs DECORATE the call (leg `reef`/
+`reef_why`, ▽R1 badge in the leg table + CSV). Both editable in the shared boat-model card
+(Learnings + Gameplan) → `POST /api/boats/sail-config`; the crossover chart carves C0 zones out of
+the light rows (`sailplan.crossovers_specialized`); frozen into the bundle `boat_model` → the
+copilot digest states the band + reef reminders; the sail-guidance play scan is config-aware (an
+A2→C0 "breeze dies" play) + `_reef_guidance_plays` pre-authors the depower + A3-slot calls
+(predicates via INTERNAL_DETECT sail_guidance; the slot play requires hoisted A3). Also fixed in
+passing: the play scan's `_POS_TWA` used upwind/reaching/downwind but legs say beat/reach/run —
+every scan silently used TWA 100 (now mapped correctly). Tests `test_sail_config.py`.
 
 **Routing fidelity 2c — VMG-gate + cone-prune + anti-over-tack: SHIPPED.** Three refinements to the
 isochrone `route_leg` (`optimizer.py`), all env-tunable so they're A/B-able: (1) **VMG gate** —
