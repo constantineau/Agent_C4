@@ -40,6 +40,7 @@ def gather(engine: EngineClient, route=None, hoisted=None) -> dict:
     snap["get_drift"] = engine.drift(route)           # Lab-3 trigger (b): forecast moved since freeze?
     snap["get_strategy"] = engine.strategy(route)     # in-race synthesis: the higher-order cross-signal read
     snap["get_plays"] = engine.plays(route)           # Phase D: armed plays from the frozen v2 bundle
+    snap["get_buoys"] = engine.buoys(route)           # up-course leading indicator (live NDBC obs)
     return snap
 
 
@@ -364,7 +365,7 @@ def _strategy_prompt(pb: playbook_mod.Playbook, status_map=None) -> str:
         "ids from the library; an [armed] play you agree with ranks first; each why must reuse the "
         "engine's facts. Do NOT change the action, the target variant, or vs_playbook. In "
         "grounded_in cite ONLY the signal tools that actually support it (get_strategy, "
-        "get_selector, get_tactics, get_drift, get_deviation, get_fleet). Advisory, not a command."
+        "get_selector, get_tactics, get_drift, get_deviation, get_fleet, get_buoys). Advisory, not a command."
         "\n\n" + pb.digest() + lib_txt
     )
 

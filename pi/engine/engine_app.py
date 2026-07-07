@@ -25,7 +25,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app import (navigator, tactics, routing, weather, sails, fatigue, onboard_conditions,
                  datasource, ais, fleet, deviation, drift, selector, reoptimize, strategy,
-                 matcher)
+                 matcher, buoys)
 
 app = FastAPI(title="Agent_C4 Onboard Engine", version="0.1.0")
 # The iPad reaches the Pi directly over boat-local Wi-Fi in race mode; allow cross-origin so a
@@ -215,6 +215,14 @@ def plays(route: str | None = None):
     against the boat's live signals (deterministic Schmitt sustain; armed first). Legal in-race —
     own instruments + pre-loaded homework; works with no Orin aboard."""
     return matcher.get_plays(route)
+
+
+@app.get("/buoys")
+def buoys_ep(route: str | None = None):
+    """Live NDBC buoy observations + the UP-COURSE leading indicator (common public data available
+    to all boats, read by the boat's own computer — legal in-race like GRIB). Stations come from
+    the frozen bundle's `buoys` block (else env/fallback); cached ~10 min; best-effort offline."""
+    return buoys.get_buoys(route)
 
 
 @app.get("/sails/state")

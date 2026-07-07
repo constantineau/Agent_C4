@@ -327,6 +327,26 @@ def get_strategy_signals(route=None):
            "disclaimer": "Advisory — the boat's own read of its own data + common public info. "
                          "The crew decides."}
 
+    # UP-COURSE LEADING INDICATOR — a buoy ahead reporting a material difference from the boat's
+    # own wind joins the picture (live common-data observation, the oldest leading indicator)
+    try:
+        from . import buoys as buoys_mod
+        upc = (buoys_mod.get_buoys(route) or {}).get("upcourse") or {}
+        dtws, dtwd = upc.get("tws_delta_kn"), upc.get("twd_shift_deg")
+        if upc and ((abs(dtws or 0) >= 3) or (abs(dtwd or 0) >= 15)):
+            bits = []
+            if abs(dtws or 0) >= 3:
+                bits.append(f"{abs(dtws):g} kn {'MORE' if dtws > 0 else 'LESS'} pressure")
+            if abs(dtwd or 0) >= 15:
+                bits.append(f"breeze {abs(dtwd):g}° {'right' if dtwd > 0 else 'left'} of here")
+            picture.append({"signal": "buoys",
+                            "read": (f"Up-course buoy {upc.get('name') or upc.get('station')} "
+                                     f"({upc.get('range_nm')} nm ahead): " + ", ".join(bits)
+                                     + f" ({upc.get('age_min')} min old)"),
+                            "grounded_in": "get_buoys", "confidence": "engine"})
+    except Exception:
+        pass
+
     # PLAYBOOK v2 Phase D — the ARMED PLAYS ride on the digest (deterministic matcher; the
     # recommendation above stays the selector's — an armed play is a pointer, not an order)
     try:

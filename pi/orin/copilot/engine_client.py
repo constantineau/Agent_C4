@@ -120,6 +120,10 @@ class EngineClient:
         """The unified HOLD/SWITCH/OFF-SCRIPT branch pick over the frozen playbook (deterministic)."""
         return self._get("/selector", {"route": route})
 
+    def buoys(self, route=None) -> dict:
+        """Live buoy obs + the up-course leading indicator (common public data, Tier-1 read)."""
+        return self._get("/buoys", {"route": route} if route else None)
+
     def plays(self, route=None) -> dict:
         """Phase-D play matcher — armed/arming plays from the frozen v2 bundle (Tier-1)."""
         return self._get("/plays", {"route": route} if route else None)

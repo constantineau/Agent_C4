@@ -277,6 +277,26 @@ def _boat_model():
     }
 
 
+def _buoy_stations(definition, course_id, pad_deg=0.6):
+    """Freeze the race's BUOY station list into the bundle (the homework pattern): every NDBC
+    station in the Lab's curated venue list within the course bbox (+ a pad). Onboard, buoys.py
+    reads this block for the up-course leading indicator. Best-effort — omitted when none."""
+    try:
+        from . import optimizer as _opt
+        from . import venue as _venue
+        bbox = _opt.course_bbox(definition, course_id)
+        if not bbox:
+            return None
+        n, s_, w, e = bbox
+        out = [{"id": st["id"], "lat": st["lat"], "lon": st["lon"], "name": st.get("name")}
+               for st in _venue.STATIONS if st.get("kind") == "ndbc"
+               and s_ - pad_deg <= st["lat"] <= n + pad_deg
+               and w - pad_deg <= st["lon"] <= e + pad_deg]
+        return out or None
+    except Exception:
+        return None
+
+
 def _fingerprint(variants, recommended):
     """Freeze the common forecast the playbook was built on (sampled along the recommended variant's
     route) so the onboard executor can measure FORECAST-DRIFT. Best-effort — None if the route is
@@ -633,6 +653,7 @@ def synthesize(definition, course_id, start_epoch, models, ensemble_members=0, t
         "corridor": corridor or None,
         "pos_profile": (v2meta or {}).get("pos_profile"),
         "venue_stats": venue_stats,
+        "buoys": _buoy_stations(definition, course_id),   # up-course leading-indicator stations
         "recommended": syn.get("recommended"),
         "agreement": playbook.get("agreement"),
         "decision_spread_min": playbook.get("decision_spread_min"),

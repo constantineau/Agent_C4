@@ -30,6 +30,7 @@ from __future__ import annotations
 import os
 import time
 
+from . import buoys
 from . import datasource
 from . import deviation
 from . import drift as drift_mod
@@ -79,10 +80,14 @@ def set_sail_state(hoisted=None, out_of_service=None):
 # ---------------------------------------------------------------------------- signal gather
 
 def _live_tws_kn():
+    # latest_value returns the raw SI scalar (see navigator._latest) — tolerate a (value, ts) tuple
+    # defensively since both shapes exist in test stubs
     try:
         v = datasource.active().latest_value("environment.wind.speedTrue")
-        if v and v[0] is not None:
-            return round(float(v[0]) * 1.943844, 1)
+        if isinstance(v, (tuple, list)):
+            v = v[0] if v else None
+        if v is not None:
+            return round(float(v) * 1.943844, 1)
     except Exception:
         pass
     return None
@@ -100,6 +105,11 @@ def gather(route=None):
     except Exception:
         fat = {}
     st = get_sail_state()
+    try:
+        buo = buoys.get_buoys(route)
+    except Exception:
+        buo = {}
+    upc = (buo.get("upcourse") or {}) if buo.get("available") else {}
     dev_ok, dft_ok = dev.get("available"), dft.get("available")
     sign = _DRIFT_SIGN.get(dft.get("drift_dir")) if dft_ok else None
     deg = dft.get("drift_twd_deg") if dft_ok else None
@@ -116,6 +126,9 @@ def gather(route=None):
         "fatigue_index": fat.get("index") if isinstance(fat, dict) else None,
         "hoisted_sail": st.get("hoisted"),
         "sail_out_of_service": st.get("out_of_service") or [],
+        # the up-course leading indicator (live NDBC buoy vs own wind; common public data)
+        "upcourse_tws_delta_kn": upc.get("tws_delta_kn"),
+        "upcourse_twd_shift_deg": upc.get("twd_shift_deg"),
         "polar_pct": None,          # not wired onboard yet — the sea_state play stays quiet
     }
 
@@ -204,7 +217,8 @@ def get_plays(route=None):
     arming = [r["id"] for r in out if r["status"] == "arming"]
     return {"available": True, "plays": out, "armed": armed, "arming": arming,
             "n_plays": len(out), "signals": signals, "sail_state": get_sail_state(),
-            "based": ["get_deviation", "get_drift", "get_tactics", "get_fatigue", "sail_state"],
+            "based": ["get_deviation", "get_drift", "get_tactics", "get_fatigue", "sail_state",
+                      "get_buoys"],
             "conf": "engine",
             "disclaimer": ("Deterministic condition-matching of the boat's own signals against the "
                            "frozen playbook — the crew judges; an armed play is a pointer, not an "
