@@ -540,7 +540,8 @@ async def playbook(body: dict):
                                        helm_factor=boats.active_helm_factor(),
                                        polar_adjustments=_active_adjustments(),
                                        wave_coeffs=_active_wave(),
-                                       use_waves=body.get("use_waves", True))
+                                       use_waves=body.get("use_waves", True),
+                                         fan_depth=body.get("fan_depth", "standard"))
     except Exception as exc:
         return JSONResponse({"detail": f"playbook failed: {exc}"}, status_code=500)
 
@@ -662,7 +663,8 @@ async def playbook_synthesize(body: dict):
     from . import synthesis
     kw = dict(jib_crossovers=_active_jibs(), sail_config=_active_sails(), helm_factor=boats.active_helm_factor(),
               polar_adjustments=_active_adjustments(), wave_coeffs=_active_wave(),
-              use_waves=(body or {}).get("use_waves", True))
+              use_waves=(body or {}).get("use_waves", True),
+              fan_depth=(body or {}).get("fan_depth", "standard"))
     if (body or {}).get("sync"):
         # legacy synchronous path (fits the gateway only for small fans) — the UI uses the job
         try:
@@ -697,7 +699,8 @@ async def playbook_freeze(body: dict):
                                          helm_factor=boats.active_helm_factor(),
                                          polar_adjustments=_active_adjustments(),
                                          wave_coeffs=_active_wave(),
-                                         use_waves=body.get("use_waves", True))
+                                         use_waves=body.get("use_waves", True),
+                                         fan_depth=body.get("fan_depth", "standard"))
         if not bundle.get("variants"):
             return JSONResponse({"detail": "nothing to freeze — no variants",
                                  "bundle": bundle}, status_code=422)

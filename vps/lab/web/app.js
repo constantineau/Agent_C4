@@ -769,6 +769,12 @@ async function renderGameplan() {
     <div class="card">
       <h3>Branching playbook <span class="muted" style="font-weight:400">— forecast fan-out → strategic variants (Lab-2b)</span></h3>
       <div class="muted" style="font-size:12px;margin-bottom:8px">Fans the optimizer across each weather model, clusters the routes into <b>which side of the first beat</b> they favor, then has Opus write each variant's rationale / tradeoffs / <b>what-flips-it</b> + a decision tree. <b>Freeze &amp; sign</b> the bundle to carry it onboard (the copilot's <code>PLAYBOOK_PATH</code>) — frozen at the gun.</div>
+      <label class="muted" style="font-size:12px" title="How wide the scenario fan sweeps. Each scenario is a full re-route, so depth trades synthesis time for decision-space coverage; the dedupe keeps the play library honest at any depth (a scenario that holds becomes robustness evidence, not a play).">Fan depth
+        <select id="pbFan" style="margin:0 8px 0 4px">
+          <option value="quick">Quick — 6 scenarios (~5 min, race-morning refresh)</option>
+          <option value="standard" selected>Standard — 9 scenarios (~7 min, the core grid)</option>
+          <option value="deep">Deep — 15 scenarios (~15 min, ±30° / ×0.6–1.4 / ±6 h; early-week homework)</option>
+        </select></label>
       <button id="pbRun" onclick="synthPlaybook()" ${Pb.running ? "disabled" : ""}>${Pb.running ? "Synthesizing…" : "Synthesize branching playbook →"}</button>
       <div id="pbOut"></div>
     </div></div>`;
@@ -1333,7 +1339,8 @@ async function synthPlaybook() {
   const ens = parseInt((document.getElementById("optEns") || {}).value || "0", 10) || 0;
   const wavesEl = document.getElementById("optWaves");
   const body = { race_id: Opt.raceId, course_id: Opt.courseId, models: Opt.chosen, ensemble_members: ens,
-    use_waves: wavesEl ? wavesEl.checked : true };
+    use_waves: wavesEl ? wavesEl.checked : true,
+    fan_depth: (document.getElementById("pbFan") || {}).value || "standard" };
   const startEpoch = optStartEpoch();
   if (startEpoch != null) body.start_epoch = startEpoch;
   Pb.running = true; Pb.result = null;

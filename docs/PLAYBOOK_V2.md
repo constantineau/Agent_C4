@@ -107,6 +107,22 @@ re-routes through transformed fields or altered optimizer parameters).
 | **Gear failure (sail loss)** | re-run the 2g sail-aware optimizer with a critical sail REMOVED from the inventory (no A2; no S2) | crew reports via hoisted selector; play is armed manually or by prolonged sail-domain mismatch |
 | **Conserve the crew (night/shorthanded)** | re-route with tack/peel costs ×3–5 → low-maneuver variant | `fatigue` index + night hours |
 
+### Fan depth — how many scenarios, and why (2026-07-08)
+
+The play count is EMERGENT, never a target: plays = the scenarios whose re-route genuinely
+diverges from the nominal + the internal plays this race actually has. What IS chosen is the fan:
+each scenario is a full isochrone re-route, so depth trades synthesis wall-clock for
+decision-space coverage. Three tiers (Gameplan "Fan depth"):
+- **quick** (6, ~5 min) — race-morning refresh close to the gun;
+- **standard** (9, ~7 min) — the always-informative core grid (±10/20°, ×0.75/1.25, ±3 h, sea);
+- **deep** (15, ~15 min) — the wide grid (+±30°, ×0.6/×1.4, ±6 h) for early-week homework.
+The dedupe keeps the LIBRARY honest at any depth, and the priority order stays point-of-sail
+aware (input #6). The real "more scenarios" lever beyond the grid is GEFS/ECMWF-ENS ensemble
+members (physical spread, opt-in). **Planned refinement — boundary bisection:** when adjacent
+grid scenarios straddle the decision boundary (+10° holds, +20° diverges), spawn the midpoint to
+LOCATE the flip threshold and use it as that play's arming predicate instead of the generic
+consider-band — the fan then spends compute exactly where the answer changes.
+
 ### The dedupe discipline — plays only where the answer changes
 
 A scenario whose route sticks to the nominal within tolerance is **NOT a play** — it is recorded as

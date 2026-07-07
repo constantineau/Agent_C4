@@ -106,6 +106,26 @@ EXTERNAL = [
     {"id": "sea_state_up", "name": "Rougher than forecast", "kind": "wave_heavy",
      "params": {"factor": 2.0}, "detect": _wave_predicates,
      "narrative": "Sea state materially worse than the plan assumed — upwind speed suffers most; the flatter-water side of the course gains value."},
+    # ---- DEEP-fan extensions (run only at fan depth "deep" — a wider grid of the same levers;
+    # the dedupe discipline still applies, so extra scenarios that hold become robustness lines) --
+    {"id": "shift_right_30", "name": "Breeze 30°+ right of forecast", "kind": "rotation",
+     "params": {"deg": 30}, "detect": _rot_predicates, "deep": True,
+     "narrative": "A major persistent right shift vs the frozen forecast — a different synoptic picture, not a wobble; the whole geometry of the race moves."},
+    {"id": "shift_left_30", "name": "Breeze 30°+ left of forecast", "kind": "rotation",
+     "params": {"deg": -30}, "detect": _rot_predicates, "deep": True,
+     "narrative": "A major persistent left shift vs the frozen forecast — a different synoptic picture, not a wobble; the whole geometry of the race moves."},
+    {"id": "pressure_way_up", "name": "Far more pressure than forecast", "kind": "tws_scale",
+     "params": {"scale": 1.4}, "detect": _tws_predicates, "deep": True,
+     "narrative": "Wind speed far above the frozen forecast — a stronger gradient than any model carried; reef points and heavy-air change-downs come into play."},
+    {"id": "pressure_way_down", "name": "Near-drifting vs forecast", "kind": "tws_scale",
+     "params": {"scale": 0.6}, "detect": _tws_predicates, "deep": True,
+     "narrative": "Wind speed collapsing well below the frozen forecast — a park-up race; current and the light-air sail plan dominate everything."},
+    {"id": "front_very_early", "name": "System arrives very early", "kind": "time_shift",
+     "params": {"hours": 6}, "detect": _timing_predicates, "deep": True,
+     "narrative": "The forecast evolution is running many hours AHEAD — features arriving a watch early; the back-half legs are sailed in a different regime."},
+    {"id": "front_very_late", "name": "System arrives very late", "kind": "time_shift",
+     "params": {"hours": -6}, "detect": _timing_predicates, "deep": True,
+     "narrative": "The forecast evolution is running many hours BEHIND — the change may not arrive in this race at all; plan as if the current regime holds."},
 ]
 
 
@@ -191,10 +211,12 @@ def pos_profile(nominal_result):
     return {k: round(v / tot, 2) for k, v in acc.items()}
 
 
-def select(profile, max_n=None):
+def select(profile, max_n=None, deep=False):
     """The registry ordered for THIS race (locked Phase-B input #6): downwind-heavy → pressure
     (TWS) scenarios first, rotations demoted; upwind-heavy → rotations first. Timing + sea state
-    keep mid priority. Deterministic order, stable ids."""
+    keep mid priority. Deterministic order, stable ids. `deep` opens the wider-grid extensions
+    (±30° / ×0.6-1.4 / ±6 h) — the fan-DEPTH lever; the dedupe keeps the play library honest
+    regardless (a scenario that holds is robustness evidence, not a play)."""
     downwind = (profile or {}).get("downwind", 0.33) >= 0.45
 
     def key(s):
@@ -202,5 +224,6 @@ def select(profile, max_n=None):
             else {"rotation": 0, "tws_scale": 1, "time_shift": 2, "wave_heavy": 3}
         return (base.get(s["kind"], 9), abs(next(iter(s["params"].values()), 0)))
 
-    out = sorted(EXTERNAL, key=key)
+    pool = EXTERNAL if deep else [s for s in EXTERNAL if not s.get("deep")]
+    out = sorted(pool, key=key)
     return out[:max_n] if max_n else out

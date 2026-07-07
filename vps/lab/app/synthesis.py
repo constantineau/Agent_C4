@@ -597,14 +597,15 @@ def _build_plays(playbook, definition, course_id, venue_stats=None, jib_crossove
 
 def synthesize(definition, course_id, start_epoch, models, ensemble_members=0, time_budget_s=200,
                jib_crossovers=None, sail_config=None, helm_factor=1.0, use_waves=True,
-               polar_adjustments=None, wave_coeffs=None):
+               polar_adjustments=None, wave_coeffs=None, fan_depth="standard"):
     """Lab-2a fan-out → Lab-2b synthesized bundle (UNSIGNED draft). Freeze (`sign_bundle`) before
     it's relied on / deployed onboard. Passes through the not-available case from 2a unchanged."""
     playbook = pb.build_playbook(definition, course_id, start_epoch, models,
                                  ensemble_members=ensemble_members, time_budget_s=time_budget_s,
                                  jib_crossovers=jib_crossovers, sail_config=sail_config,
                                  helm_factor=helm_factor, use_waves=use_waves,
-                                 polar_adjustments=polar_adjustments, wave_coeffs=wave_coeffs)
+                                 polar_adjustments=polar_adjustments, wave_coeffs=wave_coeffs,
+                                 fan_depth=fan_depth)
     if not playbook.get("available"):
         return playbook
 

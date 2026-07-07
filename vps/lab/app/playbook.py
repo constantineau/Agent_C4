@@ -73,7 +73,8 @@ def _mean_xte_nm(path, ref_path, step=8):
 
 def _scenario_fan(definition, course_id, start_epoch, wf, consensus, cur, waves, marks_finish,
                   jib_crossovers=None, sail_config=None, helm_factor=1.0, polar_adjustments=None,
-                  wave_coeffs=None, max_scenarios=None, per_budget_s=90, log=None):
+                  wave_coeffs=None, max_scenarios=None, per_budget_s=90, deep=False,
+                  log=None):
     """Playbook-v2 EXTERNAL scenario fan (docs/PLAYBOOK_V2.md §3, §8): route the course through
     perturbed views of the SAME blended field. A scenario whose route sticks to the nominal is
     ROBUSTNESS EVIDENCE, not a play; one that diverges is a play candidate. Priority order is
@@ -83,7 +84,7 @@ def _scenario_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
     profile = scen.pos_profile(consensus)
     routes, robust = [], []
     xtes, detas = [], []
-    for s in scen.select(profile, max_n=max_scenarios):
+    for s in scen.select(profile, max_n=max_scenarios, deep=deep):
         wf2, overrides = scen.apply(s, wf)
         wc = wave_coeffs
         if overrides and overrides.get("wave_scale"):
@@ -440,7 +441,7 @@ def _rejoin_tab(definition, course_id, wf, consensus, cur, waves, marks, off_nm,
 def build_playbook(definition, course_id, start_epoch, models, ensemble_members=0,
                    time_budget_s=200, jib_crossovers=None, sail_config=None, helm_factor=1.0, use_waves=True,
                    polar_adjustments=None, wave_coeffs=None, v2_scenarios=True,
-                   scenario_budget_s=420, max_scenarios=None):
+                   scenario_budget_s=None, max_scenarios=None, fan_depth="standard"):
     """Multi-scenario playbook: route the course through the blended field (consensus) and through
     each model's sub-field (scenarios), cluster by favored side into variants."""
     bbox = optimizer.course_bbox(definition, course_id)
@@ -525,19 +526,29 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
     if v2_scenarios:
         marks, _sk, _c = race_def.course_to_marks(definition, course_id)
         finish_pt = (marks[-1][2], marks[-1][3]) if marks else None
-        n_scen = max_scenarios or 9
+        # FAN DEPTH — the method behind 'how many scenarios' (user ask 2026-07-08): each scenario
+        # is a full isochrone re-route, so depth trades synthesis wall-clock for decision-space
+        # coverage. quick = race-morning refresh; standard = the always-informative core grid;
+        # deep = the wide grid (±30° / ×0.6-1.4 / ±6 h) for early-week homework when time is cheap.
+        # The dedupe keeps the LIBRARY honest at any depth — a scenario that sticks to the nominal
+        # becomes robustness evidence, not a play.
+        _FAN = {"quick": (6, 300, False), "standard": (9, 420, False), "deep": (15, 900, True)}
+        _n, _budget, _deep = _FAN.get((fan_depth or "standard").lower(), _FAN["standard"])
+        n_scen = max_scenarios or _n
+        budget = scenario_budget_s or _budget
         s_routes, s_robust, profile, corridor = _scenario_fan(
             definition, course_id, start_epoch, wf, consensus, cur, waves, finish_pt,
             jib_crossovers=jib_crossovers, sail_config=sail_config, helm_factor=helm_factor,
             polar_adjustments=polar_adjustments, wave_coeffs=wave_coeffs,
-            max_scenarios=n_scen, per_budget_s=max(60, int(scenario_budget_s / n_scen)), log=log)
+            max_scenarios=n_scen, per_budget_s=max(60, int(budget / n_scen)), deep=_deep,
+            log=log)
         # Phase C INTERNAL plays — pace + gear-loss (the retro study ranked these the
         # highest-value play types; user priority)
         i_routes, i_robust = _internal_fan(
             definition, course_id, start_epoch, wf, consensus, cur, waves, marks,
             jib_crossovers=jib_crossovers, sail_config=sail_config, helm_factor=helm_factor,
             polar_adjustments=polar_adjustments, wave_coeffs=wave_coeffs,
-            per_budget_s=max(60, int(scenario_budget_s / n_scen)), log=log)
+            per_budget_s=max(60, int(budget / n_scen)), log=log)
         v2 = {"pos_profile": profile, "scenario_routes": s_routes + i_routes,
               "robustness": s_robust + i_robust, "corridor": corridor}
 

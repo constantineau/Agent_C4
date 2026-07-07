@@ -238,3 +238,18 @@ finally:
     SYN.API_KEY = _saved_key
 
 print("RESULT:", "PASS" if ok else "FAIL")
+
+# ---- 8) fan depth (the 'method to the madness' — 2026-07-08) ------------------------------------
+print("8) fan depth — registry tiers")
+std = SCEN.select({"downwind": 0.2})
+deep = SCEN.select({"downwind": 0.2}, deep=True)
+check("standard fan = the 9-core grid (deep entries excluded)",
+      len(std) == 9 and not any(s.get("deep") for s in std))
+check("deep fan opens the wide grid (15 entries, ±30°/×0.6-1.4/±6 h included)",
+      len(deep) == 15 and any(s["id"] == "shift_right_30" for s in deep)
+      and any(s["id"] == "pressure_way_down" for s in deep))
+check("upwind race still ranks rotations first at depth", deep[0]["kind"] == "rotation")
+dwn = SCEN.select({"downwind": 0.6}, deep=True)
+check("downwind race ranks pressure first at depth (locked input #6)", dwn[0]["kind"] == "tws_scale")
+
+print("RESULT-8:", "PASS" if ok else "FAIL")
