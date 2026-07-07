@@ -4,6 +4,16 @@ Benchmark of our routing/optimizer against **Bitsailor** (github.com/mak08/Bitsa
 open-source isochrone weather router (Common Lisp). Done 2026-06-20 to steer Lab-2. Sources: the
 Bitsailor README + `simulation.cl` routing core.
 
+> **AS-BUILT UPDATE (2026-07-07): this analysis is historical — the routing gaps it flagged are
+> closed.** The isochrone (`vps/lab/app/optimizer.py::route_leg`) now has: VMG-gated headings +
+> destination cone (2c) · cumulative tack cost + layline commit + near-mark position/DMG-lane
+> pruning (2e) · island rounding-side barriers (2f) · sail-aware search with per-sail polars +
+> peel costs (2g) · land/shoal/zone avoidance on GSHHG/ENC with draft-aware depths (2a + map arc)
+> · current set/drift + wind-over-water (2d) · realized speed = helm × sea state (GLWU) ·
+> **adaptive endgame step + monotone progress gate** (the mark-approach loops fix). Current
+> design lives in `vps/lab/README.md` ("Routing fidelity" sections) + `CLAUDE.md`. The table
+> below reflects June 2026 and is kept for provenance.
+
 ## TL;DR
 Bitsailor is a **better single-route router** (years of polish): real land/zone avoidance,
 sail-specific polars, and a smarter isochrone. **We are a broader system** it doesn't attempt:

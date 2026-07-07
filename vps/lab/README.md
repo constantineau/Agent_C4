@@ -235,6 +235,26 @@ synthesized + **signed**, dropped onboard as the copilot's frozen homework. Two 
   onboard copilot loaded it, **verified the signature**, and emitted the LLM digest with each
   variant's flip trigger. UI Playwright-verified.
 
+**Playbook v2 — the scenario-rich PLAY LIBRARY (Phases B + C shipped 2026-07-07; design
+`docs/PLAYBOOK_V2.md`).** The v1 per-model side variants remain (compat), but the bundle
+(`c4.playbook/v2`) now carries **plays** — named scenarios with machine-checkable detection
+predicates + a pre-computed response + frontier-authored narrative. **External** plays route the
+course through transformed views of the same field (±10/20° rotations, ×0.75/1.25 pressure,
+front early/late, heavier sea state — priority ordered by the nominal's point-of-sail profile);
+a scenario whose route sticks to the nominal is recorded as **robustness evidence**, not a play.
+**Internal** plays answer the boat/crew departing the plan: **pace re-routes** from each
+intermediate mark at ±2 h/+4 h (predicates percentile-framed off the venue's fleet-normal stats —
+frozen into the bundle from the retro archive), **gear-loss re-runs** (a kite removed from the
+inventory, envelope rebuilt over the remaining sails, crew-armed predicate), **sail-guidance
+calls** (crossover scan per nominal leg from the frozen boat model — guidance, no new track), a
+**low-maneuver variant** (maneuver prune-costs ×3–5, honest ETA delta — conserve a tired crew),
+and a **rejoin-vs-continue tabulation** (per-leg off-track positions at the venue commit-band XTE:
+is sailing back to the line faster than pressing on? — a guidance play carrying the table). The
+bundle also states the **corridor verdict** (geometry vs execution — is the lateral decision worth
+real time?) from the scenario fan's spread. Synthesis model chain: Fable primary, Opus fallback,
+deterministic seeds below both. The onboard **matcher** that arms plays against live signals is
+Phase D.
+
 ### Routing fidelity 2b — per-leg sail plan + reviewable boat sail model (built)
 
 The optimizer routes on the Best-Performance polar envelope (= the max-over-sails speed, so the
@@ -294,6 +314,35 @@ clocking leg it mis-counts in either direction (on the frozen baseline it UNDER-
 maneuvers, and would have shown the clean route as a false "0 tacks" vs the real 3). Now each segment is
 classified against the wind LOCAL to where/when it's sailed → the true tacks-up/gybes-down tally
 (metric-only; route geometry unchanged).
+
+### Mark-approach loops fix — adaptive endgame step + monotone progress gate
+
+The 2e fixes killed the tiny-tack staircase; a second, larger-scale failure survived them: in
+**light ROTATING air** (~4 kn) the finish approach could draw big **self-crossing loops** around the
+mark (user report 2026-07-07). Profiled root cause: `route_leg`'s time step is sized to the **leg**
+(`direct/40`, so a 120 nm leg steps ~1 h ≈ 4 nm in light air) — once the boat is a couple of nm from
+a dead-upwind mark **every step overshoots**, and the search can only orbit the mark in quantized
+hops until one happens to land close (repro: reached 2.2 nm out, then 2.8 h of orbiting). Two fixes,
+both env-flagged default ON:
+- **Adaptive ENDGAME step (`ROUTE_ENDGAME_DT`)** — each generation's dt shrinks as the frontier
+  nears the mark (`gen_dt = min(dt_h, max(ROUTE_ENDGAME_DT_MIN=0.15 h, d_best/ROUTE_ENDGAME_DIV=16))`),
+  so the final approach is solved at fine resolution and the closing board fetches the mark via the
+  direct-lay shortcut (which keeps the FULL dt window — it is exact). On the repro the route also
+  arrived **1.8 h sooner**: the orbiting cost real time, not just aesthetics.
+- **MONOTONE progress gate (`ROUTE_MONOTONE`)** — a candidate is rejected once it gives back more
+  than `ROUTE_BACKTRACK_NM` (5 nm) of its own path's best distance-to-mark (each node carries
+  `dmin`). A node whose whole fan is monotone-blocked is re-expanded with the gate OFF — a per-node
+  **fail-open** mirroring the cone-gate reopen — so obstacle detours and being swept backward by a
+  foul current never strand the search. This is the scale backstop: a benign single crossing (a
+  shift-tack "bowtie" that never gives back ground) is legal sailing; multi-mile orbits are not.
+
+Surfacing: `_leg_self_crossings()` counts self-intersections **per leg** (crossing an *earlier* leg
+at a rounding is normal W/L course geometry) and appends a route `warnings` entry if a leg still
+crosses itself — a looping route can never again reach the crew silently. Locked by
+`test_routing_monotone.py` (rotating-air no-crossing across 4 field shapes, VMG behavior unchanged,
+obstacle detour intact, foul-current fail-open, the sanity tell) + the full 2c/2d/2e/2f/2g/realized/
+windwater/currents/scramble regression suite + real-field sweeps (3 start epochs × auto/fast × the
+UI's ENC+draft obstacle mask — all clean, ETAs same-or-better).
 
 ### Routing fidelity 2f — island rounding-side enforcement
 

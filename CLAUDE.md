@@ -1034,6 +1034,20 @@ for two-plus oscillation cycles = persistent right shift, bail to right"); freez
 download → the onboard copilot loaded it, **verified the signature**, and emitted the LLM digest with
 each variant's flip trigger. UI Playwright-verified. See `vps/lab/README.md`.
 
+**Playbook v2 — the scenario-rich PLAY LIBRARY: Phases B + C SHIPPED 2026-07-07 (design
+`docs/PLAYBOOK_V2.md`; Phase D onboard matcher next).** The v1 side variants stay (compat), but the
+`c4.playbook/v2` bundle now carries **plays** — named scenarios with deterministic detection
+predicates + a narrative condition (for the Tier-2 matcher) + a pre-computed response. EXTERNAL =
+the scenario fan through transformed views of the same field (rotations ±10/20°, pressure
+×0.75/1.25, front early/late, heavier sea — point-of-sail-weighted; a scenario that sticks to the
+nominal is robustness evidence, not a play). INTERNAL = the boat/crew departing the plan: pace
+re-routes from each intermediate mark (percentile-framed vs the venue's frozen fleet-normal stats),
+gear-loss re-runs (sail removed, envelope rebuilt over the remaining inventory), sail-guidance
+crossover calls (guidance-only), a low-maneuver variant (prune-costs ×3–5, honest ETA delta), and a
+rejoin-vs-continue tabulation (off-track positions at the venue commit-band XTE → a guidance play
+carrying the table). The bundle states the corridor verdict (geometry vs execution) + freezes
+`venue_stats`. Synthesis chain Fable→Opus→deterministic seeds. Tests `test_playbook_v2c.py`.
+
 **Routing fidelity 2b — per-leg SAIL PLAN + reviewable boat sail model: SHIPPED.** The optimizer
 routes on the Best-Performance polar envelope, which IS the max-over-sails speed — so the route's
 speed is already sail-optimal, but it didn't say WHICH sail. 2b attaches that. `build_speed_guide.py`
