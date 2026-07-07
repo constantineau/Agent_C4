@@ -70,6 +70,26 @@ MARK_PRUNE_CELL_NM = float(os.environ.get("ROUTE_MARK_PRUNE_CELL_NM", "0.25"))
 # leading node per lane and a beat converges to a single tack to the layline. Supersedes MARK_POS_PRUNE.
 DMG_PRUNE = _flag("ROUTE_DMG_PRUNE")
 LANE_NM = float(os.environ.get("ROUTE_LANE_NM", "0.5"))   # cross-track lane width for the DMG prune (nm)
+# --- progress monotonicity (the "circles/zig-zags at marks" fix) -------------------------------
+# In near-drifting, ROTATING air the time-optimal isochrone path can genuinely LOOP (sail away to
+# meet the new breeze), and with boatspeed ~1-3 kn broad regions of the frontier are near-equal so
+# the winning node is arbitrary — the crew gets a self-crossing scribble on a low-confidence
+# forecast. MONOTONE forbids giving back progress: a candidate is rejected once it is more than
+# BACKTRACK_NM farther from the mark than the CLOSEST its own path has already been. Legitimate
+# excursions survive (a beat/run gains ground on every board; layline overshoot ≪ the slack), and a
+# node whose whole fan is monotone-blocked is re-expanded WITHOUT the gate (fail-open, mirroring the
+# cone-gate reopen) so obstacle detours and being swept backward by a foul current still work.
+MONOTONE = _flag("ROUTE_MONOTONE")
+BACKTRACK_NM = float(os.environ.get("ROUTE_BACKTRACK_NM", "5.0"))   # max give-back toward the mark (nm)
+# --- adaptive ENDGAME step (the other half of the loops fix) -----------------------------------
+# The per-leg time step is sized to the LEG (a 120 nm leg steps ~1 h ≈ 4 nm in light air), so once
+# the boat is a couple of nm from the mark EVERY step overshoots — the search can only orbit the
+# mark in quantized hops until one lands close (the drawn "circles at the mark"). ENDGAME shrinks
+# each generation's dt as the frontier nears the mark (step ≈ remaining/4 at light-air speeds), so
+# the final approach is solved at fine resolution and the closing board fetches via the direct-lay.
+ENDGAME_DT = _flag("ROUTE_ENDGAME_DT")
+ENDGAME_DIV = float(os.environ.get("ROUTE_ENDGAME_DIV", "16"))   # gen dt = dist-to-mark / DIV (h)
+ENDGAME_DT_MIN = float(os.environ.get("ROUTE_ENDGAME_DT_MIN", "0.15"))   # dt floor (h)
 # --- sail-aware routing (routing fidelity 2g) --------------------------------
 # The route's SPEED is already sail-optimal (the envelope IS the max-over-sails speed), but the boat
 # can't peel for free: a sail change costs crew time + a momentary slow-down, and a smart crew HOLDS a
@@ -433,13 +453,15 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
         leg_axis = (math.cos(math.radians(wb)), math.sin(math.radians(wb)))
     coslat = math.cos(math.radians(dlat))
 
-    def expand(node, hdgs, tws, twd, dt_h, cand):
+    def expand(node, hdgs, tws, twd, dt_h, cand, monotone=True):
         """Fan `hdgs` from `node`, advancing each by its polar speed; keep the farthest-along candidate
         per bearing sector (the classic isochrone prune — it routes through shifts best and converges
         fast). Candidates that have sailed PAST the mark on the up/down-wind axis are rejected (the
-        layline gate, #2) so the route lays the mark instead of overstanding and doubling back.
-        Returns (n_placed, n_blocked) — 0-placed-but-blocked means this node is boxed in."""
-        placed = blocked = 0
+        layline gate, #2) so the route lays the mark instead of overstanding and doubling back; and a
+        candidate that gives back more than BACKTRACK_NM of its path's best progress toward the mark
+        is rejected (the MONOTONE loop gate) unless `monotone` is off (the per-node fail-open).
+        Returns (n_placed, n_blocked, n_backtracked) — 0-placed means this node is boxed in."""
+        placed = blocked = back = 0
         for hdg in hdgs:
             twa = abs(_wrap180(hdg - twd))
             sp_env = _polar_speed(P, tws, twa)
@@ -496,6 +518,13 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
                 if wp > OVERSTAND_NM:
                     blocked += 1
                     continue
+            # MONOTONE loop gate: never give back more than BACKTRACK_NM of this path's best
+            # progress toward the mark — kills the light-air rotating-wind loops/scribbles.
+            dmark_new = _hav_nm(nlat, nlon, dlat, dlon)
+            dmin = min(node.get("dmin", direct), dmark_new)
+            if monotone and MONOTONE and dmark_new > node.get("dmin", direct) + BACKTRACK_NM:
+                back += 1
+                continue
             rng = _hav_nm(slat, slon, nlat, nlon)
             # PRUNE KEY + SCORE. DMG_PRUNE (root-cause fix): rank by distance MADE GOOD toward the mark,
             # bucketed by CROSS-TRACK LANE off the start→mark rhumb — one leading node per lane, so a beat
@@ -504,8 +533,8 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
             # distance-from-start. Score is net of the accumulated maneuver penalty (#2).
             if DMG_PRUNE:
                 sec = ("dmg", round(_xtrack_nm(slat, slon, dlat, dlon, nlat, nlon) / LANE_NM))
-                score = (direct - _hav_nm(nlat, nlon, dlat, dlon)) - pen
-            elif MARK_POS_PRUNE and _hav_nm(nlat, nlon, dlat, dlon) <= MARK_PRUNE_NM:
+                score = (direct - dmark_new) - pen
+            elif MARK_POS_PRUNE and dmark_new <= MARK_PRUNE_NM:
                 cell = MARK_PRUNE_CELL_NM / 60.0
                 sec = ("p", round(nlat / cell), round(nlon / max(1e-6, cell * coslat)))
                 score = rng - pen
@@ -516,9 +545,9 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
                 cand[sec] = {"lat": nlat, "lon": nlon,
                              "t": node["t"] + dt_h * 3600 + tack_s + peel_s,
                              "parent": node, "hdg": hdg, "rng": rng, "rng_eff": score,
-                             "pen": pen, "tk": tk, "sail": sail, "pl": pl}
+                             "pen": pen, "tk": tk, "sail": sail, "pl": pl, "dmin": dmin}
             placed += 1
-        return placed, blocked
+        return placed, blocked, back
 
     start = {"lat": slat, "lon": slon, "t": t0, "parent": None, "hdg": None, "sail": start_sail}
     frontier = [start]
@@ -528,6 +557,14 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
         if deadline and time.time() > deadline:
             break
         cand = {}
+        # ADAPTIVE ENDGAME: shrink this generation's step as the frontier nears the mark, so the
+        # final approach is solved at fine resolution instead of orbiting in leg-sized hops. The
+        # direct-lay shortcut below keeps the FULL dt_h window (it is exact — one true-speed
+        # segment), so a fetchable mark still closes early.
+        gen_dt = dt_h
+        if ENDGAME_DT and frontier:
+            d_best = min(_hav_nm(n["lat"], n["lon"], dlat, dlon) for n in frontier)
+            gen_dt = min(dt_h, max(ENDGAME_DT_MIN, d_best / ENDGAME_DIV))
         for node in frontier:
             tws, twd = wind(node["lat"], node["lon"], node["t"])
             if cur is not None:            # 2d lever b: the sails feel the wind over the WATER
@@ -564,9 +601,13 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
                         committed = [h for h in fan
                                      if (1.0 if _wrap180(h - axis) >= 0 else -1.0) == side]
                         fan = committed or [bmark]   # never strand the node — keep the fetch heading
-            placed, blocked = expand(node, fan, tws, twd, dt_h, cand)
+            placed, blocked, back = expand(node, fan, tws, twd, gen_dt, cand)
             if placed == 0 and blocked > 0 and obstacles is not None:
-                _p, blocked = expand(node, headings + vmg, tws, twd, dt_h, cand)
+                placed, blocked, back = expand(node, headings + vmg, tws, twd, gen_dt, cand)
+            if placed == 0 and back > 0:
+                # every heading gave back too much ground (an obstacle detour / a foul stream really
+                # does need to retreat) — fail open for THIS node so the boat is never stranded
+                _p, blocked, _b = expand(node, headings + vmg, tws, twd, gen_dt, cand, monotone=False)
             blocked_hits += blocked
         if reached or not cand:
             break
@@ -668,6 +709,31 @@ def _wind_coverage(wf, full_path):
         return 0.0
     covered = sum(1 for p in full_path if wf.detail_at(p["lat"], p["lon"], p["t"]) is not None)
     return round(covered / len(full_path), 2)
+
+
+def _leg_self_crossings(full_path, legs, start_epoch):
+    """Per-leg self-intersection count of the routed path — a self-crossing leg is the light-air
+    'loops at the mark' tell. Legs are checked separately: crossing an EARLIER leg at a rounding is
+    normal course geometry (a W/L course crosses itself by design); a leg crossing ITSELF is not."""
+    def ccw(p, q, r):
+        return (r[1] - p[1]) * (q[0] - p[0]) > (q[1] - p[1]) * (r[0] - p[0])
+
+    def cross(a, b, c, d):
+        return ccw(a, c, d) != ccw(b, c, d) and ccw(a, b, c) != ccw(a, b, d)
+
+    out = {}
+    bounds = [float(start_epoch)] + [l["eta_epoch"] for l in legs]
+    for i, leg in enumerate(legs):
+        pts = [(p["lat"], p["lon"]) for p in full_path
+               if bounds[i] <= p["t"] <= bounds[i + 1]][:400]
+        n = 0
+        for a in range(len(pts) - 1):
+            for b in range(a + 2, len(pts) - 1):
+                if cross(pts[a], pts[a + 1], pts[b], pts[b + 1]):
+                    n += 1
+        if n:
+            out[leg["to"]] = n
+    return out
 
 
 def _route_sanity(wf, legs, coverage, P, timed_out):
@@ -859,6 +925,10 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
     timed_out = time.time() > deadline
     coverage = _wind_coverage(wf, full_path)
     warnings, degraded = _route_sanity(wf, legs, coverage, P, timed_out)
+    for name, n in _leg_self_crossings(full_path, legs, start_epoch).items():
+        warnings.append(f"Route crosses itself {n}x on the leg to {name} — the optimizer chased "
+                        "shifts in light/rotating air. Treat that leg's line as low-confidence "
+                        "and sail the shifts on the water.")
     # route-level sail plan (2g): the PHYSICALLY-REAL sequence of sails flown, from the isochrone's own
     # sail track (where it actually peeled), collapsed across legs — not a post-hoc per-leg guess. Falls
     # back to the per-leg headline sail when sail-aware routing is off / has no per-sail polars.

@@ -1109,6 +1109,26 @@ unchanged (metric-only). On the reported case: baseline finish ≈173 real maneu
 now reported honestly. Tunables `ROUTE_LAYLINE_COMMIT[_NM]` / `ROUTE_TACK_CUMULATIVE` /
 `ROUTE_MARK_POS_PRUNE` / `ROUTE_MARK_PRUNE_NM` / `ROUTE_MARK_PRUNE_CELL_NM` (all default ON).
 
+**Mark-approach LOOPS ("circles/zig-zags at marks") fix: SHIPPED 2026-07-07.** A light-air (~4 kn),
+ROTATING-wind finish drew big self-crossing loops around the mark (user report w/ screenshot). Root
+cause: the isochrone's per-leg time step is sized to the LEG (`direct/40`, ~1 h ≈ 4 nm on a 120 nm
+leg), so once the boat is a couple of nm from a dead-upwind mark EVERY step overshoots — the search
+can only orbit the mark in quantized hops until one lands close (profiled: 2.2 nm out at h=21, then
+2.8 h of orbiting, give-back 2.7 nm). Two fixes in `route_leg`, both env-flagged default-ON:
+(1) **adaptive ENDGAME step** — each generation's dt shrinks as the frontier nears the mark
+(`gen_dt = min(dt_h, max(0.15h, d_best/ROUTE_ENDGAME_DIV=16))`), so the final approach is solved at
+fine resolution and the closing board fetches via the (exact, full-window) direct-lay; on the repro
+this ALSO arrived 1.8 h sooner (the orbiting cost real time). (2) **MONOTONE progress gate** — a
+candidate is rejected once it gives back > `ROUTE_BACKTRACK_NM`=5 of its path's best
+distance-to-mark; a node whose whole fan is monotone-blocked re-expands with the gate OFF (per-node
+fail-open, mirrors the cone-gate reopen) so obstacle detours + foul-current drift never strand.
+Surfacing: `_leg_self_crossings` (per-leg, since crossing an EARLIER leg at a rounding is normal
+W/L geometry) appends a route warning if a leg still self-crosses. Verified
+`test_routing_monotone.py` (rotating-air no-crossing ×4, VMG unchanged, obstacle detour, foul-current
+fail-open, sanity tell) + full routing regression suite green + real-field sweeps (6 ENC configs ×
+2 resolutions, all selfX=0, ETAs same-or-better). Tunables `ROUTE_MONOTONE` / `ROUTE_BACKTRACK_NM` /
+`ROUTE_ENDGAME_DT` / `ROUTE_ENDGAME_DIV` / `ROUTE_ENDGAME_DT_MIN`.
+
 **Routing fidelity 2f — island ROUNDING-SIDE enforcement: SHIPPED (dev).** Obstacle avoidance (2a)
 kept the route off islands but on EITHER side; a race often says "leave Bois Blanc to port / Duck
 Islands to starboard" — and that side was thrown away (`course_to_marks`/`course_roundings` drop all
