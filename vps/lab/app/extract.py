@@ -14,7 +14,6 @@ import urllib.request
 
 import pypdf
 
-MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-8")
 API_KEY = os.environ.get("ANTHROPIC_API_KEY", "").strip()
 MAX_DOC_CHARS = int(os.environ.get("LAB_MAX_DOC_CHARS", "300000"))
 IFRAME_TIMEOUT = int(os.environ.get("LAB_IFRAME_TIMEOUT", "60"))   # embedded entry apps can be slow
@@ -151,20 +150,17 @@ def extract_race_definition(docs: list[tuple[str, str]], retrieved: str = "") ->
     """docs = [(label, text)]; returns a draft RaceDefinition dict. Raises on no API key / parse."""
     if not API_KEY:
         raise RuntimeError("ANTHROPIC_API_KEY not set in the Lab service")
-    import anthropic
+    from . import llm as lab_llm
     blob = "\n\n".join(f"===== DOCUMENT: {lbl} =====\n{txt}" for lbl, txt in docs)
     blob = blob[:MAX_DOC_CHARS]
-    client = anthropic.Anthropic(api_key=API_KEY)
-    resp = client.messages.create(
-        model=MODEL, max_tokens=32000,
-        system="You convert sailing race documents (NOR / SI / SER / entry lists) into a single "
-               "structured RaceDefinition JSON object for a race-strategy tool. Be precise and "
-               "comprehensive; never invent coordinates or facts.",
-        messages=[{"role": "user", "content": f"{SCHEMA_BRIEF}\n\nDOCUMENTS:\n{blob}"}],
-    )
-    if getattr(resp, "stop_reason", "") == "max_tokens":
+    try:
+        text, _model = lab_llm.complete(
+            "You convert sailing race documents (NOR / SI / SER / entry lists) into a single "
+            "structured RaceDefinition JSON object for a race-strategy tool. Be precise and "
+            "comprehensive; never invent coordinates or facts.",
+            f"{SCHEMA_BRIEF}\n\nDOCUMENTS:\n{blob}", max_tokens=32000)
+    except lab_llm.Truncated:
         raise RuntimeError("extraction hit the output limit — try fewer/smaller documents at once")
-    text = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text").strip()
     return _parse_json(text)
 
 

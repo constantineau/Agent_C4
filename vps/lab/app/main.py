@@ -389,20 +389,13 @@ def _skill_venue(body):
     return d, v, rd
 
 
-@app.get("/api/model-skill")
-async def model_skill_get(race_id: str, course_id: str = None):
-    """The venue's current model-skill weights + scorecard (no refetch) — for the Lab display panel."""
-    d, v, _ = _skill_venue({"race_id": race_id, "course_id": course_id})
-    if not d:
-        return JSONResponse({"detail": "unknown race_id"}, status_code=404)
-    from . import modelskill
-    return modelskill.venue_weights(v, refresh=False) if v else {"enabled": False, "reason": "no venue"}
-
 
 @app.post("/api/model-skill/backfill")
-async def model_skill_backfill(body: dict):
-    """Run the OFFLINE deep backfill (pre-2021 HRRR + GEFS-reforecast GRIB archives) for a race's venue,
-    then return the refreshed weights. Heavy + synchronous (minutes for a full seasonal span)."""
+def model_skill_backfill(body: dict):
+    """Start the OFFLINE deep backfill (pre-2021 HRRR + GEFS-reforecast GRIB archives) for a race's
+    venue as a BACKGROUND JOB — a full seasonal span is ~an hour of byte-range GRIB gets, far past
+    the gateway's ~300 s request cap (the real Mackinac run took 77 min as a blocking request).
+    Poll GET /api/model-skill/backfill/status; on `done` the refreshed weights ride in `result`."""
     body = body or {}
     d, v, rd = _skill_venue(body)
     if not d:
@@ -410,48 +403,23 @@ async def model_skill_backfill(body: dict):
     if not v or not v.get("station"):
         return JSONResponse({"detail": "venue has no observation station — can't score skill"},
                             status_code=422)
-    from . import modelskill
-    try:
-        await run_in_threadpool(modelskill.backfill_deep, v, modelskill.DEFAULT_MODELS, rd)
+    from . import jobs, modelskill
+
+    def _work(progress):
+        modelskill.backfill_deep(v, modelskill.DEFAULT_MODELS, rd, log=progress)
         return modelskill.venue_weights(v, refresh=False)
-    except Exception as exc:
-        return JSONResponse({"detail": f"backfill failed: {exc}"}, status_code=500)
+
+    return jobs.start("model_skill_backfill", _work, meta={"venue": v.get("tag") or v.get("station")})
 
 
-def _run_enc_prep(definition, course_id):
-    """Blocking: download + GDAL-extract the NOAA ENC cells covering a course bbox (cache warm-up)."""
-    from . import optimizer
-    from .geo import enc, obstacles
-    bbox = optimizer.course_bbox(definition, course_id)
-    if not bbox:
-        return {"ok": False, "note": "course has no geocoded marks — review Course & Marks"}
-    log = []
-    depth = boats.active_safety_depth_m()
-    manifest = enc.ensure_bbox(bbox, on_progress=log.append)
-    layers = enc.layers_in_bbox(bbox, safety_depth_m=depth)
-    return {"ok": True, "bbox": bbox, "cells": list(manifest.keys()),
-            "safety_depth_m": round(depth, 2),
-            "polys": {k: len(v) for k, v in layers.items()}, "log": log}
+@app.get("/api/model-skill/backfill/status")
+def model_skill_backfill_status():
+    from . import jobs
+    return jobs.status("model_skill_backfill")
 
 
-@app.post("/api/enc/prep")
-async def enc_prep(body: dict):
-    """Warm the NOAA ENC cache for a course bbox (download cells + ogr2ogr → cached GeoJSON).
-
-    Optional: the optimizer auto-preps on first run, but this lets the user pre-warm with progress
-    and confirm which cells/layers loaded. Requires COASTLINE_SOURCE=enc to take effect in routing."""
-    body = body or {}
-    rid = body.get("race_id")
-    d = store.get_race(rid) if rid else None
-    if not d:
-        return JSONResponse({"detail": "unknown race_id"}, status_code=404)
-    try:
-        return await run_in_threadpool(_run_enc_prep, d, body.get("course_id"))
-    except Exception as exc:
-        return JSONResponse({"detail": f"enc prep failed: {exc}"}, status_code=500)
 
 
-# --- BoatProfile ([B]): boats library + the active boat + the chart source -----
 @app.get("/api/boats")
 def list_boats():
     """All boat profiles (summaries with feet conveniences) + the active boat id + chart settings."""
@@ -521,51 +489,6 @@ def get_boat(bid: str):
     errs, warns = boat_profile.validate(b)
     return {"boat": b, "summary": boat_profile.summary(b), "errors": errs, "warnings": warns}
 
-
-@app.post("/api/playbook")
-async def playbook(body: dict):
-    """Lab-2: fan the optimizer across per-model forecast scenarios → strategic variants
-    (which side of the first beat each model favors) with the agreement distribution."""
-    body = body or {}
-    rid = body.get("race_id")
-    d = store.get_race(rid) if rid else None
-    if not d:
-        return JSONResponse({"detail": "unknown race_id"}, status_code=404)
-    course_id = body.get("course_id")
-    start_epoch = float(body.get("start_epoch") or datetime.datetime.now(
-        datetime.timezone.utc).timestamp())
-    from .wind.models import DEFAULT_MODELS, MODELS
-    models_req = body.get("models") or list(DEFAULT_MODELS)
-    model_names = [m for m in models_req if m in MODELS] or list(DEFAULT_MODELS)
-    ens = int(body.get("ensemble_members") or 0)
-    from . import playbook as pb
-    try:
-        return await run_in_threadpool(pb.build_playbook, d, course_id, start_epoch,
-                                       model_names, ens, jib_crossovers=_active_jibs(), sail_config=_active_sails(),
-                                       helm_factor=boats.active_helm_factor(),
-                                       polar_adjustments=_active_adjustments(),
-                                       wave_coeffs=_active_wave(),
-                                       use_waves=body.get("use_waves", True),
-                                         fan_depth=body.get("fan_depth", "standard"))
-    except Exception as exc:
-        return JSONResponse({"detail": f"playbook failed: {exc}"}, status_code=500)
-
-
-def _playbook_params(body):
-    """Shared race/course/start/model resolution for the Lab-2b synthesize + freeze routes."""
-    body = body or {}
-    rid = body.get("race_id")
-    d = store.get_race(rid) if rid else None
-    if not d:
-        return None, None, None, None, None
-    course_id = body.get("course_id")
-    start_epoch = float(body.get("start_epoch") or datetime.datetime.now(
-        datetime.timezone.utc).timestamp())
-    from .wind.models import DEFAULT_MODELS, MODELS
-    models_req = body.get("models") or list(DEFAULT_MODELS)
-    model_names = [m for m in models_req if m in MODELS] or list(DEFAULT_MODELS)
-    ens = int(body.get("ensemble_members") or 0)
-    return d, course_id, start_epoch, model_names, ens
 
 
 @app.get("/api/crossovers")

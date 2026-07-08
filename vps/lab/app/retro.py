@@ -17,6 +17,7 @@ import json
 
 from shared import race_def
 
+from . import jobs
 from . import fleetimport as fi
 from . import orcpolar
 from . import retrostore as rs
@@ -124,40 +125,18 @@ _RESULT_HEAVY = ("isochrones", "laylines", "candidate_paths", "wind_grid", "curr
                  "wave_grid", "obstacles", "log")
 
 # ---- background fleet-run job (a full fleet is ~1-2h; the nginx gateway caps a request at 300s,
-# so the batch runs in a daemon thread and the UI/CLI polls status) ------------------------------
-_JOB = {"state": "idle"}          # one at a time — a fleet batch saturates the container CPU anyway
-_JOB_LOCK = __import__("threading").Lock()
-
+# so the batch runs via the shared jobs.py machinery and the UI/CLI polls status) ----------------
 
 def start_fleet_job(race_id, def_race_id, course_id, teams, limit, resolution) -> dict:
-    import threading
-    with _JOB_LOCK:
-        if _JOB.get("state") == "running":
-            return {"ok": False, "note": "a fleet run is already in progress", "job": dict(_JOB)}
-        _JOB.clear()
-        _JOB.update({"state": "running", "race_id": race_id, "progress": [],
-                     "started_at": __import__("time").time()})
-
-    def _progress(msg):
-        _JOB.setdefault("progress", []).append(str(msg))
-        del _JOB["progress"][:-40]        # keep the tail
-
-    def _work():
-        try:
-            out = run_fleet(race_id, def_race_id, course_id, teams, limit, resolution,
-                            on_progress=_progress)
-            _JOB.update({"state": "done", "result": out})
-        except Exception as exc:       # noqa: BLE001 — job must record any failure
-            _JOB.update({"state": "error", "error": f"{type(exc).__name__}: {exc}"})
-
-    threading.Thread(target=_work, daemon=True).start()
-    return {"ok": True, "state": "running", "race_id": race_id}
+    return jobs.start(
+        "retro_fleet",
+        lambda progress: run_fleet(race_id, def_race_id, course_id, teams, limit, resolution,
+                                   on_progress=progress),
+        meta={"race_id": race_id})
 
 
 def fleet_job_status() -> dict:
-    out = dict(_JOB)
-    out["progress"] = list(out.get("progress") or [])[-12:]
-    return out
+    return jobs.status("retro_fleet")
 
 
 def run_fleet(race_id: str, def_race_id: str = "bayview-mackinac-2026",

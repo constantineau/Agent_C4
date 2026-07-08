@@ -195,17 +195,14 @@ def _llm_entry_list(text):
     """Opus → the raw entry-list rows from arbitrary page/PDF text. Monkeypatchable in tests."""
     if not extract.API_KEY:
         raise RuntimeError("ANTHROPIC_API_KEY not set in the Lab service")
-    import anthropic
-    client = anthropic.Anthropic(api_key=extract.API_KEY)
-    resp = client.messages.create(
+    from . import llm as lab_llm
+    txt, _model = lab_llm.complete(
+        "You extract a sailing race entry/registration list into structured JSON for a "
+        "race-strategy tool. Only real entered boats; never invent boats or handicaps.",
+        _ENTRY_PROMPT + "\n\nPAGE CONTENT:\n" + (text or "")[:extract.MAX_DOC_CHARS],
         # a big fleet (Bayview Mackinac is ~180 boats) needs plenty of output room, or the JSON
         # truncates mid-array and fails to parse (env-tunable).
-        model=extract.MODEL, max_tokens=int(os.environ.get("LAB_ENTRY_MAX_TOKENS", "20000")),
-        system="You extract a sailing race entry/registration list into structured JSON for a "
-               "race-strategy tool. Only real entered boats; never invent boats or handicaps.",
-        messages=[{"role": "user", "content": _ENTRY_PROMPT + "\n\nPAGE CONTENT:\n"
-                   + (text or "")[:extract.MAX_DOC_CHARS]}])
-    txt = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text")
+        max_tokens=int(os.environ.get("LAB_ENTRY_MAX_TOKENS", "20000")))
     return extract._parse_json(txt).get("entries") or []
 
 

@@ -27,11 +27,11 @@ import hashlib
 import json
 import math
 import os
-import threading
 import time
 
 from shared import race_def
 from . import forecast_ref
+from . import jobs
 from . import llm as lab_llm
 from . import playbook as pb
 from . import sailplan
@@ -311,33 +311,18 @@ def _fingerprint(variants, recommended):
 
 
 # ---- background synthesis job: the v2 scenario fan makes a full synthesize ~10 min — far past
-# the gateway's 300 s — so the UI starts a job and polls (same pattern as the retro fleet batch).
-_JOB = {"state": "idle"}
-_JOB_LOCK = threading.Lock()
-
+# the gateway's 300 s — so the UI starts a job and polls (shared machinery in jobs.py).
 
 def start_job(definition, course_id, start_epoch, models, ensemble_members=0, **kw) -> dict:
-    with _JOB_LOCK:
-        if _JOB.get("state") == "running":
-            return {"ok": False, "note": "a synthesis is already in progress"}
-        _JOB.clear()
-        _JOB.update({"state": "running", "race_id": definition.get("race_id"),
-                     "started_at": time.time()})
-
-    def _work():
-        try:
-            out = synthesize(definition, course_id, start_epoch, models,
-                             ensemble_members=ensemble_members, **kw)
-            _JOB.update({"state": "done", "bundle": out})
-        except Exception as exc:      # noqa: BLE001 — the job must record any failure
-            _JOB.update({"state": "error", "error": f"{type(exc).__name__}: {exc}"})
-
-    threading.Thread(target=_work, daemon=True).start()
-    return {"ok": True, "state": "running"}
+    return jobs.start(
+        "synthesis",
+        lambda progress: synthesize(definition, course_id, start_epoch, models,
+                                    ensemble_members=ensemble_members, **kw),
+        meta={"race_id": definition.get("race_id")}, result_key="bundle")
 
 
 def job_status() -> dict:
-    return dict(_JOB)
+    return jobs.status("synthesis")
 
 
 def _venue_stats():

@@ -136,7 +136,7 @@ and is imprecise at the shoreline). Three pieces fix it (all on `dev`, live at t
   cells into cached GeoJSON on the `lab_enc` volume; the routing hot loop stays pure-python. Role
   layers: **LNDARE** (real land/island polygons), **DEPARE** filtered by the boat **safety depth**
   (= draft + under-keel margin) = real **shoal no-go**, **OBSTRN/UWTROC** = rocks/obstructions.
-  `POST /api/enc/prep {race_id,course_id?}` warms the cache with progress. Verified on the real
+  the optimizer warms the cache automatically on first use. Verified on the real
   Bayview Mackinac course (65 land + 108 shoal + 157 rock polys in the straits — Natural Earth had
   zero straits islands). NOAA GIS export = non-navigational → planning data; verify vs the official
   chart. GDAL is a prep-time dep only.
@@ -170,7 +170,8 @@ synthesized + **signed**, dropped onboard as the copilot's frozen homework. Two 
   through each + the blended consensus, and **cluster by which side of the first beat** each favors
   (left/middle/right of the rhumb). Variants carry `supported_by` models, `share` (agreement),
   total-hours + range, a representative route, and the **decision spread** (the time stakes between
-  the side options). `POST /api/playbook`.
+  the side options). (Runs inside `POST /api/playbook/synthesize` — the fan has no separate
+  endpoint since the v2 play library made synthesis the only consumer.)
 - **Lab-2b synthesis → signed bundle** (`app/synthesis.py`). The synthesis model (the
   **Fable-primary → Opus-fallback chain**, `ANTHROPIC_MODEL_CHAIN`) writes, per variant, a
   crew-facing `summary` / `rationale` / `tradeoffs` and — most important — `what_flips_it`: the
@@ -555,7 +556,9 @@ bias is removed before blending). Automatic + always shown in the GamePlan **Mod
   byte-range subsetting (`app/deepfc.py`), run offline via the "Deepen history" backfill.
 - **Code:** `app/modelskill.py` (scoring + store + weights + backfill), `app/venue.py` (venue key +
   station registry), `app/deepfc.py` (deep archives), the `model_weights`/`model_bias` seam in
-  `app/wind/windfield.py`, `GET/POST /api/model-skill[/backfill]`, and the `optModelSkill` web panel.
+  `app/wind/windfield.py`, `POST /api/model-skill/backfill` (a background job — a deep venue span
+  is ~an hour; poll `GET /api/model-skill/backfill/status`; weights otherwise ride inside the
+  optimize result), and the `optModelSkill` web panel.
 - **Full design + math + as-built ops + env vars:** **`docs/MODEL_SKILL_WEIGHTING.md`**.
 
 ## Race documents (found 2026-06-17)

@@ -10,8 +10,6 @@ const Lab = { token: sessionStorage.getItem("c4lab.token") || null,
 /* ---------- editable-field binding (the review form writes straight into Lab.editDef) ----------
    Text/select/checkbox edits write in place via eset() with NO repaint, so focus + scroll are
    never lost mid-type; only structural changes (add/remove a row) or Save/Approve repaint. */
-const MARK_TYPES = ["start", "waypoint", "gate", "island", "buoy", "finish"];
-const ROUNDINGS = ["none", "port", "starboard", "gate"];
 const REQ_CATEGORIES = ["safety", "structural", "crew_safety", "navigation", "communications",
   "registration", "procedure", "reporting", "environmental", "rules"];
 const REQ_PHASES = ["pre_entry", "pre_start", "start", "in_race", "at_gate", "at_finish", "post_race"];
@@ -127,7 +125,7 @@ function route() {
   if (sec === "learnings") return renderLearnings();
   if (sec === "monitor") return renderMonitor();
   if (sec === "debrief") return renderDebrief();
-  renderPlaceholder(sec);
+  location.hash = "#races";          // unknown route → the library
 }
 const clone = (o) => JSON.parse(JSON.stringify(o));
 
@@ -322,26 +320,20 @@ function detailHead(d) {
         ${ein("start_area", d.start_area, "start area")} ·
         ${ein("region", d.region, "region")}</div></div>`;
 }
+// Course geometry is edited in ONE place — the Course & Marks tab (map + geocode + gate/island
+// fields). The Races detail just summarizes each course, same delegation pattern as rules/fleet.
 function detailCourseCard(c, ci) {
-  const marks = (c.marks || []).map((m, mi) => `<tr>
-    <td class="mono">${m.seq}</td>
-    <td>${ein(`courses.${ci}.marks.${mi}.name`, m.name, "name")}</td>
-    <td>${esel(`courses.${ci}.marks.${mi}.type`, m.type, MARK_TYPES)}</td>
-    <td>${esel(`courses.${ci}.marks.${mi}.rounding`, m.rounding || "none", ROUNDINGS)}</td>
-    <td>${enm(`courses.${ci}.marks.${mi}.lat`, m.lat, "lat")} ${enm(`courses.${ci}.marks.${mi}.lon`, m.lon, "lon")}</td>
-    <td><button class="mini" title="remove" onclick="detailRmMark(${ci},${mi})">✕</button></td></tr>`).join("");
-  const fin = c.finish ? `<tr><td class="mono">F</td><td>Finish (${esc(c.finish.type)})</td>
-    <td colspan="2">${esc(c.finish.crossing || "")}</td>
-    <td class="mono">${(c.finish.points || []).map((p) =>
-      p && p.lat != null ? esc(p.lat.toFixed(4) + "," + p.lon.toFixed(4)) : "—").join(" → ")}</td><td></td></tr>` : "";
+  const marks = c.marks || [];
+  const missing = marks.filter((m) => m.lat == null || m.lon == null).length;
+  const review = marks.filter((m) => m.coords_source === "needs_review").length;
+  const warn = missing || review
+    ? `<span class="pill review">${missing ? missing + " un-geocoded" : ""}${missing && review ? " · " : ""}${review ? review + " need review" : ""}</span>`
+    : `<span class="pill ok">geometry complete</span>`;
   return `<div class="card"><h3>Course — ${ein(`courses.${ci}.name`, c.name, "course name")}</h3>
     <div class="muted" style="margin-bottom:8px">Divisions ${esc((c.applies_to_divisions || []).join(", "))}${
       c.distance_nm ? " · " + c.distance_nm + " nm" : ""}</div>
-    <table><thead><tr><th>#</th><th>Mark</th><th>Type</th><th>Leave</th><th>Lat / Lon</th><th></th></tr></thead>
-    <tbody>${marks}${fin}</tbody></table>
-    <button class="mini" onclick="detailAddMark(${ci})">+ Add mark</button>
-    <div class="muted" style="font-size:12px;margin-top:6px">Geocode marks + see them on a map in the
-      <a href="#course">Course &amp; Marks</a> tab.</div></div>`;
+    <div class="dep-row"><a href="#course">Course &amp; Marks →</a>
+      <span class="muted">${marks.length} mark${marks.length === 1 ? "" : "s"}${c.finish ? " + finish" : ""}</span> ${warn}</div></div>`;
 }
 // The rules/scoring/checklist + fleet now live in their own tabs — the Races view stays the ingest +
 // library + sign-off hub and just points to them (avoids the duplicate editors, issue #28).
@@ -370,18 +362,6 @@ function detailProvenance(p) {
 }
 
 /* ---------- detail edit: structural mutations (repaint), then save / approve ---------- */
-function detailAddMark(ci) {
-  const marks = (Lab.editDef.courses[ci].marks = Lab.editDef.courses[ci].marks || []);
-  marks.push({ seq: marks.length + 1, name: "New mark", type: "waypoint", rounding: "none",
-    lat: null, lon: null, coords_source: "needs_review" });
-  paintDetail();
-}
-function detailRmMark(ci, mi) {
-  const marks = Lab.editDef.courses[ci].marks;
-  marks.splice(mi, 1);
-  marks.forEach((m, i) => { m.seq = i + 1; });   // re-sequence
-  paintDetail();
-}
 async function detailSave(silent) {
   const btn = document.getElementById("detailSaveBtn");
   const setMsg = (t) => { const m = document.getElementById("detailMsg"); if (m) m.textContent = t; };
@@ -599,13 +579,6 @@ function drawCourseMap(id, course) {
 }
 
 /* ---------- placeholders (all sections are now built) ---------- */
-const SOON = {};
-function renderPlaceholder(sec) {
-  const [title, desc] = SOON[sec] || ["Section", "Coming soon."];
-  document.getElementById("view").innerHTML =
-    `<div class="placeholder"><h2>${esc(title)}</h2><p>${esc(desc)}</p>
-     <p class="muted">Coming soon — the Races tab (ingest + review) is live now.</p></div>`;
-}
 
 /* ---------- Gameplan / Optimizer (Lab-1) ---------- */
 const Opt = { races: null, models: null, raceId: null, def: null, courseId: null,
@@ -1250,19 +1223,40 @@ function optModelSkill(r) {
   </details>`;
 }
 
+/* The deep backfill is a server-side BACKGROUND JOB (a full seasonal span ~an hour) — start it,
+   then poll /status; the button/note live-update and the panel refreshes when the weights land. */
 async function runModelSkillBackfill() {
   const b = document.getElementById("mskBackfill"); const msg = document.getElementById("mskMsg");
   if (!b) return;
-  b.disabled = true; b.textContent = "Deepening… (pulling GRIB archives, minutes)";
-  if (msg) msg.textContent = "Fetching pre-2021 HRRR + GEFS-reforecast archives for this venue…";
+  b.disabled = true; b.textContent = "Deepening… (runs server-side; safe to keep working)";
+  const setMsg = (t) => { const m = document.getElementById("mskMsg"); if (m) m.textContent = t; };
+  setMsg("Starting the deep backfill (pre-2021 HRRR + GEFS-reforecast archives)…");
   const body = { race_id: Opt.raceId, course_id: Opt.courseId };
   const se = optStartEpoch(); if (se != null) body.start_epoch = se;
   try {
-    const res = await apiPost("/api/model-skill/backfill", body);
-    const p = await jsonOrFriendly(res);
-    if (Opt.result) { Opt.result.model_skill = p; renderGameplan(); }
+    const start = await jsonOrFriendly(await apiPost("/api/model-skill/backfill", body));
+    if (start.detail || (start.ok === false && !start.job)) throw new Error(start.detail || start.note || "refused");
+    const poll = setInterval(async () => {
+      try {
+        const st = await (await api("/api/model-skill/backfill/status")).json();
+        if (st.state === "running") {
+          const last = (st.progress || []).slice(-1)[0];
+          setMsg("Backfill running… " + (last || "") + " (can take ~an hour — safe to leave this page)");
+          return;
+        }
+        clearInterval(poll);
+        if (st.state === "done") {
+          if (Opt.result) Opt.result.model_skill = st.result;
+          if ((location.hash || "#races").slice(1) === "gameplan") renderGameplan();
+        } else {
+          setMsg("Backfill failed: " + esc(String(st.error || st.state)));
+          const btn = document.getElementById("mskBackfill");
+          if (btn) { btn.disabled = false; btn.textContent = "⏳ Deepen history (2005+)"; }
+        }
+      } catch (e) { /* transient poll error — keep polling */ }
+    }, 5000);
   } catch (e) {
-    if (msg) msg.textContent = "Backfill failed: " + esc(String(e));
+    setMsg("Backfill failed: " + esc(String(e.message || e)));
     b.disabled = false; b.textContent = "⏳ Deepen history (2005+)";
   }
 }
@@ -1644,29 +1638,6 @@ async function fleetUploadEntry() {
   Lab.fleetBusy = false; paintFleet();
 }
 
-// Parse a pasted entry list — one boat per line, comma- or tab-separated:
-// boat, division, rating, GPH, MMSI  (a header row is skipped; only boat is required).
-function fleetImport() {
-  const ta = document.getElementById("fleetPaste");
-  const text = ta ? ta.value : "";
-  let added = 0;
-  for (let line of text.split(/\r?\n/)) {
-    line = line.trim(); if (!line) continue;
-    const c = line.split(/\t|,/).map((s) => s.trim());
-    if (/^(boat|name|yacht)$/i.test(c[0])) continue;        // header
-    if (!c[0]) continue;
-    Lab.editDef.fleet.push({ boat: c[0], division: c[1] || "", cls: "", owner: "", sail: "",
-      rating: fleetNum(c[2]), orc_gph: fleetNum(c[3]), mmsi: (c[4] || "").trim(), source: "manual" });
-    added++;
-  }
-  if (ta) ta.value = "";
-  if (added) { Lab.fleetDirty = true; Lab.fleetEdit = true; }
-  Lab.fleetMsg = added ? `Appended ${added} boat${added === 1 ? "" : "s"} — review below, then click Save roster.`
-                       : "No boats parsed — check the format (one boat per line).";
-  Lab.fleetMsgErr = !added;
-  paintFleet();
-}
-
 async function fleetSave() {
   // coerce numerics so the persisted JSON is clean (orc_gph/rating numbers|null)
   Lab.editDef.fleet = Lab.editDef.fleet.filter((e) => (e.boat || "").trim()).map((e) => ({
@@ -1791,20 +1762,8 @@ function paintFleet() {
       </details>
     </div>
 
-    <div class="card">
-      <h3>Import entry list <span class="muted" style="font-weight:400">— manual paste (fallback)</span></h3>
-      <div class="muted" style="font-size:12px;margin-bottom:6px">Paste one boat per line — <code>boat, division, rating, GPH, MMSI</code> (comma or tab separated; a header row is skipped; only the boat name is required).</div>
-      <textarea id="fleetPaste" rows="5" style="width:100%;box-sizing:border-box" placeholder="Il Mostro, I, 0.9123, 650.2, 366123456&#10;Windquest, I, 0.9456, 638.0"></textarea>
-      <div style="margin-top:8px"><button class="mini" onclick="fleetImport()">Parse &amp; append</button></div>
-    </div>
-
-    <div class="card">
-      <h3>Scoring &amp; tracker <span class="muted" style="font-weight:400">— set during ingest / Rules</span></h3>
-      <div class="dep-grid">
-        <div class="dep-row"><span class="pill ${sc.method ? "ok" : "warn"}">${sc.method ? "✓" : "⚠"} Scoring</span><span class="muted">${esc(sc.system || "")} ${esc(sc.method || "not set")}</span></div>
-        <div class="dep-row"><span class="pill ${tr.provider ? "ok" : "warn"}">${tr.provider ? "✓" : "⚠"} Tracker</span><span class="muted">${tr.provider ? esc(tr.provider) + (tr.race ? " · " + esc(tr.race) : "") + (permitted ? " · permitted onboard" : " · not permitted onboard") : "no public tracker configured"}</span></div>
-      </div>
-    </div>
+    <div class="dep-row" style="margin-top:4px"><a href="#rules">Rules →</a>
+      <span class="muted">scoring ${esc(sc.method || "not set")} · tracker ${tr.provider ? esc(tr.provider) + (permitted ? " (permitted onboard)" : " (not permitted onboard)") : "not configured"}</span></div>
 
     <div class="dactions"><button onclick="fleetSave()">${Lab.fleetDirty ? "Save roster ●" : "Save roster"}</button>
       <span class="muted" style="font-size:12px">${Lab.fleetDirty ? "you have unsaved changes" : (roster.length ? "roster saved" : "")}</span></div>

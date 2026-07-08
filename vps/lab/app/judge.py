@@ -21,7 +21,6 @@ from shared import race_def
 
 from . import store, pbstore, optimizer, track, learning, boats
 
-MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-8")
 API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 
 _R_NM = 3440.065
@@ -279,16 +278,13 @@ def _critique(r):
         "decision brain — how to weight the first-beat side trigger next time), boat_model_note (any "
         "polar/crossover/helm_factor refinement the track suggests, else empty string).")
     try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=API_KEY)
-        resp = client.messages.create(model=MODEL, max_tokens=1200, system=system,
-                                       messages=[{"role": "user", "content": json.dumps(facts, indent=2)}])
-        txt = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text").strip()
+        from . import llm as lab_llm
+        txt, model = lab_llm.complete(system, json.dumps(facts, indent=2), max_tokens=1200)
         if txt.startswith("```"):
             txt = txt.strip("`")
             txt = txt[4:].strip() if txt.lower().startswith("json") else txt
         out = json.loads(txt)
-        out["model"] = MODEL
+        out["model"] = model
         return out
     except Exception:
         return None
