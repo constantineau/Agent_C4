@@ -50,7 +50,7 @@ that contract means we can swap models (Qwen2.5-7B ↔ a 3-4B) or runtimes witho
 | `bench.sh` | Benchmark one model's prefill/decode tok/s via MLC (A/B the 7B vs a 3-4B) | the Orin |
 | `smoke_api.py` | Hit the `/v1` endpoint with a "narrate these facts" prompt; print answer + latency + tok/s; pass/fail. **Exit test for this milestone.** Pure stdlib. | the Orin or any LAN host |
 | `models.md` | A/B matrix (NVIDIA numbers + a column for your measured results) + how to confirm the exact MLC model id | reference |
-| `../systemd/sr33-orin-llm.service` | Appliance autostart (re-applies Super mode + clocks, then `serve.sh`) | the Orin |
+| ~~`../systemd/sr33-orin-llm.service`~~ | (removed — the MLC autostart unit; the as-built Orin runs Ollama via its own `ollama.service`, see `DEPLOYMENT.md`) | — |
 
 ## Runtime choice (decided)
 

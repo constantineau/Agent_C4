@@ -1,7 +1,8 @@
 # pi/ — onboard boat computer (Raspberry Pi 4 + PICAN-M)
 
 The Pi is a **deploy target, not a dev host.** Claude Code edits this directory on the VPS;
-`deploy/push_pi.sh` rsyncs it to the Pi over Tailscale + SSH and restarts services there.
+deploy over Tailscale SSH: on the Pi, `cd ~/Agent_C4 && git pull && docker compose -f
+compose.pi.yml up -d --build` (the whole stack runs as compose containers).
 
 **▶ Bringing up a fresh Pi from a blank SD card?** Follow **[`SETUP.md`](SETUP.md)** — OS choice,
 headless flash, Docker/Tailscale, PICAN-M `can0` bring-up (`systemd/sr33-can0.service`), and

@@ -2,7 +2,7 @@
 
 How to bring up the boat computer from a blank SD card to the full onboard stack (Signal K +
 archiver + onboard engine + race console + uplink). The Pi is a **deploy target, not a dev host**
-— code is edited on the VPS and shipped here (`deploy/push_pi.sh`) or pulled via git.
+— code is edited on the VPS and pulled here via git.
 
 Target hardware: **Raspberry Pi 4** + **PICAN-M** CAN HAT (MCP2515, 16 MHz crystal, INT on GPIO25),
 microSD. Power note in §6.
@@ -16,7 +16,7 @@ In **Raspberry Pi Imager**: *Raspberry Pi OS (other) → Raspberry Pi OS Lite (6
 bench↔boat portability rule (the only difference is `CAN_IFACE`).
 
 Before writing, open **⚙ Edit Settings** and pre-configure (so it boots headless):
-- **Hostname:** `sr33-pi`  (matches `deploy/push_pi.sh`'s default `PI_HOST`)
+- **Hostname:** `sr33-pi`
 - **Enable SSH** (use your public key)
 - **Wi-Fi** SSID + password (your dock/home net for setup; the boat-local SSID later) + country
 - **Locale / timezone**
@@ -79,7 +79,7 @@ Get the repo and run `compose.pi.yml` with the real CAN interface and your cloud
 use the `compose.pi.sample.yml` override — that injects fake N2K data and is bench-only.
 
 ```bash
-git clone https://github.com/constantineau/Agent_C4 ~/Agent_C4      # or: deploy/push_pi.sh from the VPS
+git clone https://github.com/constantineau/Agent_C4 ~/Agent_C4
 cd ~/Agent_C4
 
 # point the uplink/archiver at your cloud ingestion (token from the cloud .env)
@@ -123,8 +123,8 @@ the same boat-local network; point the console's `COPILOT_UPSTREAM` at the Orin'
 
 ## 8. Updating later
 
-From the VPS: `PI_HOST=sr33-pi deploy/push_pi.sh` (rsyncs `pi/` + restarts the uplink unit), or on
-the Pi: `cd ~/Agent_C4 && git pull && docker compose -f compose.pi.yml up -d --build`.
+On the Pi: `cd ~/Agent_C4 && git pull && docker compose -f compose.pi.yml up -d --build`
+(rebuild only the changed services, e.g. `... up -d --build engine console`).
 
 ## Follow-ups
 - Record ~1 h of `candump -l can0` dockside and commit it under `pi/logs/` as the gold-standard

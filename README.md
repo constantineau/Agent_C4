@@ -18,8 +18,9 @@ analysis and the practice/cruising/debrief product.
 > See `docs/RRS41_COMPLIANCE.md` (the why) and `docs/ONBOARD_ENGINE_SCOPING.md` (the Phase 9 build).
 > **Shipped:** 9.0 data-access abstraction, 9.1 onboard engine (`pi/engine`), 9.2 server-side race
 > gate + iPad onboard console (`pi/console`), and the C4 Performance Lab (`vps/lab`) with **Lab-0 race
-> ingestion** (NOR/SI/SER → a reviewable RaceDefinition). Next: Course & Marks review + wiring, then
-> Lab-1 (multi-model optimizer). 9.4 Orin LLM is on hold (no hardware yet).
+> ingestion** (NOR/SI/SER → a reviewable RaceDefinition), **Lab-1..4** (multi-model optimizer →
+> playbook → onboard executor → learning loop), and the **9.4 Orin LLM copilot** (live on the unit —
+> Ollama + Qwen2.5-7B, `pi/orin/`). CLAUDE.md carries the current status detail.
 
 - **DESIGN.md** — product design description: architecture + what's built vs. planned today.
 - **CLAUDE.md** — operational runbook (ports, commands, deploy, conventions).
@@ -86,7 +87,7 @@ vps/
   web/        iPad navigator UI (nginx): day/night, sail dial, course plot, tactics, routing
   db/         schema/migrations + dev seed
 shared/    units + agent tool contracts
-deploy/    deploy_prod.sh, push_pi.sh
+deploy/    deploy_prod.sh, init_tls.sh
 compose.{dev,prod}.yml
 ```
 

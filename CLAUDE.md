@@ -91,7 +91,7 @@ cd ~/Agent_C4
 cp .env.example .env                       # fill ANTHROPIC_API_KEY when doing agent work
 docker compose -f compose.dev.yml up -d --build
 docker compose -f compose.dev.yml ps
-python3 vps/db/seed/fake_telemetry.py      # POST fake 15-s aggregates through ingestion
+python3 vps/db/seed/fake_telemetry.py      # POST fake raw readings via /ingest/raw -> telemetry_raw
 # web app:        http://localhost:8090
 # ingestion docs: http://localhost:8101/docs
 # agent docs:     http://localhost:8102/docs
@@ -254,7 +254,7 @@ the `get_summaries` tool (recall newest-first) + a DEBRIEFS/SUMMARIES prompt sec
 route, and a **Debrief** quick button in the web chat (POSTs `/api/debrief`, drops the narrative
 into the log). Caveat: aggregates span ALL sources for a path (collect-everything) so a flaky
 sensor can nudge an average — fine for v1. **Note:** the summarizer reads `telemetry_raw` (Pi
-uplink / sample stack), NOT the legacy `telemetry` table that `fake_telemetry.py` writes to.
+uplink / sample stack / the `fake_telemetry.py` seed — all write `telemetry_raw` now).
 
 ## Polar mining (Phase 6.3)
 
@@ -284,7 +284,7 @@ stored in **`telemetry_raw(time, source, path, value)`**. The agent's `get_curre
 returns every quantity from every source with freshness + a disagreement flag; `get_sources`
 lists active sensors with curated reliability (`source_notes`). The agent is prompted to be
 skeptical: cross-check redundant sources, flag disagreement/stale/uncalibrated, never trust a
-lone value. Migration `002_telemetry_raw.sql`; the older wide `telemetry` table is legacy.
+lone value. Migration `002_telemetry_raw.sql`; the original wide `telemetry` table was dropped (006).
 
 **Source priority + failover (migration 003):** `source_priority` ranks a preferred source
 per channel (e.g. Orca for heel/true-wind, gWind masthead for apparent, 24xd GPS for
@@ -1695,7 +1695,7 @@ they describe MLC, the unit runs Ollama: `pi/orin/`:
   answer, fully offline, at usable latency; no SR33 tool-calling yet).
 - **`models.md`** — A/B matrix (NVIDIA numbers + a column for measured results) + how to confirm the
   exact MLC model id on-unit.
-- **`../systemd/sr33-orin-llm.service`** — the MLC-plan autostart unit (superseded by the live Ollama
+- ~~`../systemd/sr33-orin-llm.service`~~ — the MLC-plan autostart unit (REMOVED; superseded by the live Ollama
   systemd unit on the unit itself); **`../systemd/sr33-orin-copilot.service`** runs the copilot svc.
 
 See `pi/orin/README.md` + `pi/orin/copilot/README.md`. The runtime as-built (Ollama-from-source) is

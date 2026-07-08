@@ -32,7 +32,7 @@ DIFFERENT variant → the playbook's branch says switch (the tile names the vari
 carries the trigger text + grounding (`playbook:<id>`, `get_tactics`). This deterministic tile just
 compares the pre-authored variants against the tactical read (onboard is legal in-race either way). Verified: pure-logic exit test
 (`bench_copilot.test_adherence_logic`, all states + grounding), an end-to-end `/adherence` run
-(stub engine + loaded playbook → branch fired), and a Playwright UI smoke (10-tile 5×2 grid, calm
+(stub engine + loaded playbook → branch fired), and a Playwright UI smoke (grid then 10 tiles; now 8 on 4×2 — VMG + Tactics retired 2026-07-03, calm
 `On plan: Left` / escalated `Switch → Right`, detail + commentary, 0 console errors). *(Fixed in
 passing: `narrate.py`'s playbook-branch callout read `tac["persistent"]` flat, but the engine nests
 it under `tac["wind"]` — so the proactive branch callout never fired; now reads the nested path.)*
@@ -105,8 +105,11 @@ cell.
 
 **Tiles (lock the set; greyed "coming soon" until their data exists):** WIND, SPEED (+ polar %),
 SAIL, NAV, LAYLINE, TACTICS, FATIGUE, FORECAST, ROUTE, DATA-HEALTH, HEEL/TRIM, DEPTH. Later:
-AIS/FLEET, PLAYBOOK-ADHERENCE (Lab-2). *(As built: a **10-tile 5×2** higher-order set incl. both
-**AIS/FLEET** and **PLAYBOOK-ADHERENCE** — see the status note at the top.)*
+AIS/FLEET, PLAYBOOK-ADHERENCE (Lab-2). *(As built: an **8-tile 4×2** higher-order set —
+wind, playbook, forecast, sail, eta, ais, charge, data — incl. **AIS/FLEET** and **PLAYBOOK** (the
+adherence tile, since unified onto the engine's `/selector`); VMG + Tactics were retired 2026-07-03
+(VMG repeats the boat's instruments; the tactical read lives in the Strategy strip). See the status
+note at the top.)*
 
 ---
 

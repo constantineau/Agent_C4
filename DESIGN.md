@@ -11,7 +11,8 @@ abstraction ✅, 9.1 onboard engine service ✅ (`pi/engine`), 9.2 server-side r
 console ✅ (`pi/console`)**, and the **C4 Performance Lab (`vps/lab`) is live — Lab-0 race ingestion ✅**
 (NOR/SI/SER → a structured, reviewable RaceDefinition; verified on the real 2026 Bayview Mackinac NOR).
 Next: Course&Marks review + wiring the RaceDefinition through, then Lab-1 (multi-model optimizer). 9.4
-Orin LLM is on hold (no hardware yet). See §2, §8, §10, and `docs/ONBOARD_ENGINE_SCOPING.md`.
+Orin LLM is LIVE (Ollama + Qwen2.5-7B on the unit, copilot service `pi/orin/copilot` — see
+`pi/orin/DEPLOYMENT.md`). See §2, §8, §10, and `docs/ONBOARD_ENGINE_SCOPING.md`.
 **Last updated:** 2026-06-17
 
 This document describes *what the product is and how it is built today*. The original
@@ -117,9 +118,9 @@ build plan: onboard engine 9.0/9.1, race gate 9.2 ✅, Orin LLM 9.4, the C4 Perf
 
 | Component | Where | Status | Notes |
 |-----------|-------|--------|-------|
-| TimescaleDB schema | `vps/db/` | **built** | `telemetry_raw` (collect-everything) + legacy `telemetry` + `ais_targets` hypertables; `polars`, `waypoints`, `race_info`, `crew_notes`, `agent_summaries`, `source_notes`/`source_priority`, `alerts` (004), `app_state`+`audit_log` (005) |
+| TimescaleDB schema | `vps/db/` | **built** | `telemetry_raw` (collect-everything) + `ais_targets` hypertables (the legacy wide `telemetry` was dropped, 006); `polars`, `waypoints`, `race_info`, `crew_notes`, `agent_summaries`, `source_notes`/`source_priority`, `alerts` (004), `app_state`+`audit_log` (005) |
 | Ingestion API | `vps/ingestion/` | **built** | FastAPI bearer-token `/ingest` + `/ingest/raw` + `/ingest/ais`; writes batches |
-| Agent — tools | `vps/agent/app/tools.py` + `shared/tool_contracts.py` | **built** | **16 tools** (conditions/sources/history/sail/navigator/tactics/route/polar-target/ais/alerts/summaries/polar-analysis/fatigue/forecast/route-status/log_note) |
+| Agent — tools | `vps/agent/app/tools.py` + `shared/tool_contracts.py` | **built** | **17 tools** (conditions/sources/history/sail/navigator/tactics/route/polar-target/ais/fleet/alerts/summaries/polar-analysis/fatigue/forecast/route-status/log_note) |
 | Boat-speed gospel | `vps/agent/knowledge/` | **built** | SR33 "C4" ORC Speed Guide; verbatim cert + distilled Best-Performance polar with per-row optimal **sail** + per-TWS **sail plan** (crossovers), cached in agent context; `build_speed_guide.py` regenerates |
 | Polars (real data) | `vps/db/seed/polars_sr33.sql` | **built** | 126 real ORC polar points (TWS 4–24) |
 | Agent — chat loop | `vps/agent/app/agent.py` | **built (key-gated)** | real Claude tool-use loop (Opus 4.8) when `ANTHROPIC_API_KEY` set, else deterministic fallback; **race-gated (9.2)** |
@@ -138,10 +139,10 @@ build plan: onboard engine 9.0/9.1, race gate 9.2 ✅, Orin LLM 9.4, the C4 Perf
 | Data-access abstraction | `vps/agent/app/datasource.py` | **built (9.0)** | engine modules read via `datasource.active()` — `CloudSource` (Timescale) or `OnboardSource` (Pi SQLite archive + SK live) |
 | **Tier 1 — Onboard engine** | `pi/engine/` | **built (9.0/9.1)** | the deterministic modules served onboard from the boat's own data (`OnboardSource`), no LLM, port 8200; bench-verified |
 | Onboard race console | `pi/console/` | **built (9.2)** | the iPad app served from the Pi, pointed only at the engine over boat-local Wi-Fi (no cloud/auth/chat), port 8091 |
-| **Tier 2 — Orin Nano LLM** | Jetson Orin Nano | **planned (9.4) — HW on hold** | Qwen2.5-7B copilot: narrate + bounded decision support |
+| **Tier 2 — Orin Nano LLM** | Jetson Orin Nano | **built (9.4) — live on the unit** | Qwen2.5-7B copilot (Ollama): narrate + bounded decision support + playbook condition-matching |
 | **Tier 3 — C4 Performance Lab** | `vps/lab/` | **Lab-0 built; Lab-1→4 planned** | browser prep/debrief app + race ingestion (NOR/SI/SER → RaceDefinition; dual-input + Opus extraction + review, port 8103). Lab-1→4: optimizer → playbook → onboard executor → judge loop |
 | RaceDefinition schema | `shared/race_def.py` | **built (Lab-0)** | course/marks/gates/finish + comprehensive `requirements` checklist (race-time items → iPad) + `rules_profile` + fleet; validator |
-| Deploy scripts | `deploy/` | **built (untested)** | `deploy_prod.sh`, `push_pi.sh` (Tailscale), `init_tls.sh` |
+| Deploy scripts | `deploy/` | **built** | `deploy_prod.sh`, `init_tls.sh` (the Pi deploys by git pull + compose rebuild over Tailscale SSH) |
 
 ---
 
@@ -152,7 +153,7 @@ build plan: onboard engine 9.0/9.1, race gate 9.2 ✅, Orin LLM 9.4, the C4 Perf
   `(time, source, path, value)` — every Signal K path from *every* source, including
   redundant sensors, stored verbatim in SI with full provenance. New sensors/paths need no
   schema change. This is what the agent reasons over (cross-checking sources).
-- `telemetry` — legacy wide single-value-per-channel table (kept; superseded by `telemetry_raw`).
+- (the legacy wide `telemetry` table was superseded by `telemetry_raw` and dropped in migration 006.)
 - `ais_targets` — one row per target observation: position, SOG/COG, range, bearing, CPA, TCPA.
 
 **Metadata adds**
@@ -244,8 +245,8 @@ the production race archive:
 - **prod** (`compose.prod.yml`, DB `sr33_prod`) — managed/auto-restart; touched only to deploy.
 
 Git mirrors this: develop on `dev`, merge to `main`, deploy `main` via
-`deploy/deploy_prod.sh`. The Pi is a deploy target, not a dev host —
-`deploy/push_pi.sh` rsyncs `pi/` to the boat computer over Tailscale and restarts services.
+`deploy/deploy_prod.sh`. The Pi is a deploy target, not a dev host — deploy by SSH
+(Tailscale): `git reset --hard origin/main` + `docker compose -f compose.pi.yml up -d --build`.
 
 ---
 
@@ -304,12 +305,12 @@ boat-install date.
 | 5 | iPad navigator UI | full practice sail used without instruction | ✅ done — day/night, sail dial, course plot, navigator, tactics, routing |
 | 6 | Alerting + summarizer + polar tooling | acceptable false-positive rate over 2 sails | ✅ bench-complete; 2-sail false-positive gate awaits real sailing |
 | 7 | Prod + deploy + rules review + soak | NOR compliance determined; 48-h soak passes | 🔶 started — server-side web auth + TLS scaffolding done; rules review done (§8); prod deploy/soak gated on domain + prod `.env` |
-| **9** | **Onboard + C4 Performance Lab track (the three-tier pivot)** | onboard engine renders nav/sail/tactics on the Pi; race mode reaches no cloud; a sail → refined polars loaded back onboard | 🔶 in progress — **9.0 ✅, 9.1 onboard engine ✅, 9.2 race gate + onboard console ✅; C4 Performance Lab Lab-0 ingestion ✅.** Next: Course&Marks review + wiring → Lab-1. 9.4 Orin on hold (no HW). See `docs/ONBOARD_ENGINE_SCOPING.md` |
+| **9** | **Onboard + C4 Performance Lab track (the three-tier pivot)** | onboard engine renders nav/sail/tactics on the Pi; race mode reaches no cloud; a sail → refined polars loaded back onboard | 🔶 in progress — **9.0 ✅, 9.1 onboard engine ✅, 9.2 race gate + onboard console ✅; C4 Performance Lab Lab-0 ingestion ✅.** Next: Course&Marks review + wiring → Lab-1. 9.4 Orin copilot ✅ (live on the unit). See `docs/ONBOARD_ENGINE_SCOPING.md` |
 
 (Phase 8 was an interim "navigation & optimization" wishlist — real marks/GRIB/current/rounding-planner — now folded into the Phase 9 onboard track and the C4 Performance Lab.)
 
 **Phase 9 sub-steps:** 9.0 data-access abstraction ✅ → 9.1 onboard engine service (Pi) ✅ → **9.2
-server-side fail-closed race gate ✅ + iPad onboard console ✅** → 9.4 Orin Nano LLM copilot (HW on hold)
+server-side fail-closed race gate ✅ + iPad onboard console ✅** → 9.4 Orin Nano LLM copilot ✅ (Ollama, live)
 → **Lab-0 race ingestion ✅** (NOR/SI/SER → RaceDefinition) → Lab-1 (GRIB+buoy+single-scenario routing)
 → Lab-2 (multi-scenario + branching playbook) → Lab-3 (onboard executor + iPad Strategy card) → Lab-4
 (post-race judge loop). 9.3 = the C4 Performance Lab learning loop (hoisted-sail logging, polar

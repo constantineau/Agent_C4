@@ -98,7 +98,7 @@ baseline) with no latency regression and guardrails intact.
 - *Teacher leaks ungrounded content* → validator filter on every target.
 - *Forgetting general ability* → LoRA (not full FT), few epochs, spot-check general instructions.
 
-## 6. Proposed repo layout (`pi/orin/training/`)
+## 6. Proposed repo layout (`pi/orin/training/ (REMOVED 2026-07-06 with the judgment-DPO descope)`)
 ```
 gen_snapshots.py    synthetic + archive-derived gather()-shaped snapshots
 gen_targets.py      Opus teacher → grounded JSON, validate()-filtered → JSONL
