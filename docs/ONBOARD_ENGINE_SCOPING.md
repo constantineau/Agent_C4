@@ -1,8 +1,9 @@
 # Onboard Engine + C4 Performance Lab — Scoping
 
-**Status:** design / scoping only (2026-06-17). No code written yet. Companion to
-`docs/RRS41_COMPLIANCE.md` (the *why*); this is the *how*. Supersedes the old "all-onboard needs a
-local LLM (big build, deferred)" framing — see RRS41 §4.
+**Status:** the original scoping doc (2026-06-17) — kept as the design record; the track it
+scoped has since been **built** (see the §5 table's ✅ marks, `docs/HISTORY.md`, and CLAUDE.md for
+the as-built system; small as-built deltas are noted inline). Companion to
+`docs/RRS41_COMPLIANCE.md` (the *why*); this is the *how*.
 
 This is a **scope extension**, provisionally a **Phase 9 / Onboard + C4 Performance Lab track**. It does
 not change Phases 0–7; it adds a compliant in-race execution path and a between-races learning loop.
@@ -24,7 +25,7 @@ they are **loaded onto the boat**, and the onboard system merely executes/recomp
 
 ---
 
-## 2. Layer B — relocate the deterministic engine to the Pi
+## 2. Layer A — relocate the deterministic engine to the Pi *(heading fixed — §1 calls the engine Layer A)*
 
 The six modules already run on the VPS. The only real porting work is **data access** and
 **packaging**; the algorithms are unchanged.
@@ -45,7 +46,7 @@ data from the local backend.
 
 **9.1 — Onboard API + compose.** Package the engine as an onboard service in `compose.pi.yml`
 (runs on the Pi alongside Signal K / uplink / archiver), exposing the same REST endpoints the iPad
-already uses: `/navigator`, `/course`, `/route`, `/tactics`, `/sail`, `/polar-analysis`, `/fatigue`,
+already uses: `/navigator`, `/course`, `/route`, `/tactics`, `/sail`, `/fatigue`, (as-built note: `/polar-analysis` stayed cloud-only — archive mining is a Lab tool, not in-race),
 `/forecast`. No LLM, no tool-loop — direct deterministic responses.
 *Exit test:* the iPad, pointed at the Pi, renders the same nav/sail/plot/tactics screens it gets from
 the cloud.

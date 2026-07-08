@@ -1,5 +1,11 @@
 # Orin Nano bring-up runbook (Phase 9.4, Tier 2)
 
+> **SUPERSEDED (historical record).** This is the original **MLC-on-:9000 / JetPack-6.2** plan;
+> the unit was actually brought up on **JetPack 7.2 + from-source Ollama on :11434** — the
+> as-built runbook is **`DEPLOYMENT.md`**. §9's `sr33-orin-llm.service` was removed from the
+> repo. Kept because the flashing/Super-mode/thermal steps and the research remain useful.
+
+
 Get a **fresh Jetson Orin Nano 8GB (Super)** from box → flashed → Super mode → a benchmarked
 local LLM serving an **OpenAI-compatible API** that the SR33 copilot service will later call.
 This milestone is **runtime/model bring-up only** — no SR33-specific wiring yet (that's the next

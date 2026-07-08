@@ -1,10 +1,11 @@
 # Agent_C4 — Jetson Orin Nano Deployment (as-built)
 
 Authoritative current-state record of the onboard inference appliance, as deployed
-2026-06-19. For the historical, blow-by-blow bring-up narrative (including the
-bricking incident and the CPU-fallback debugging) see `BRINGUP_STATE.md`. The
-original `SETUP.md` describes the *superseded* JetPack-6.2 / MLC plan and is kept
-only for reference.
+2026-06-19. (The blow-by-blow bring-up scratchpad `BRINGUP_STATE.md` was deleted per
+its own "delete once bring-up is done" instruction — the durable facts from it,
+including the MAXN_SUPER bricking incident and the CPU-fallback debugging, are
+folded into this file and outlined in `docs/HISTORY.md`.) The original `SETUP.md`
+describes the *superseded* JetPack-6.2 / MLC plan and is kept only for reference.
 
 > **TL;DR:** Headless Jetson Orin Nano Super (8GB) running a from-source build of
 > Ollama with a `cuda_v13`@sm_87 GPU backend, serving `qwen2.5:7b-instruct-q4_K_M`
@@ -218,7 +219,7 @@ curl -s http://127.0.0.1:11434/api/generate -d '{
 ## 9. Copilot service (Tier 2, FastAPI on :8300)
 
 The onboard copilot (`pi/orin/copilot/`, decision support + proactive auto-coach) runs as the full
-**FastAPI** app behind systemd, serving `/health /coach /adherence /narrate /brief /snapshot /tools
+**FastAPI** app behind systemd, serving `/health /coach /adherence /narrate[/reset] /brief /strategy /snapshot /tools
 /dashboard /detail` on **:8300** (the boat console proxies `/copilot/*` here). Deployed as such
 2026-06-29 — before that the Orin ran only the stdlib fallback `serve_dashboard.py`
 (`sr33-orin-copilot-dashboard.service`, just `/dashboard`+`/health`+`/detail`), which never served

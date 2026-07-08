@@ -9,11 +9,11 @@ onboard deterministic engine for legal in-race use, an optional onboard LLM copi
 frontier Opus 4.8 as the between-races C4 Performance Lab. **Phase 9 in progress:** **9.0 data-access
 abstraction ✅, 9.1 onboard engine service ✅ (`pi/engine`), 9.2 server-side race gate ✅ + iPad onboard
 console ✅ (`pi/console`)**, and the **C4 Performance Lab (`vps/lab`) is live — Lab-0 race ingestion ✅**
-(NOR/SI/SER → a structured, reviewable RaceDefinition; verified on the real 2026 Bayview Mackinac NOR).
-Next: Course&Marks review + wiring the RaceDefinition through, then Lab-1 (multi-model optimizer). 9.4
+(NOR/SI/SER → a structured, reviewable RaceDefinition; verified on the real 2026 Bayview Mackinac NOR)
+**through Lab-4** — optimizer, signed playbook + v2 play library, onboard executor, learning loop. 9.4
 Orin LLM is LIVE (Ollama + Qwen2.5-7B on the unit, copilot service `pi/orin/copilot` — see
 `pi/orin/DEPLOYMENT.md`). See §2, §8, §10, and `docs/ONBOARD_ENGINE_SCOPING.md`.
-**Last updated:** 2026-06-17
+**Last updated:** 2026-07-08 · development record: `docs/HISTORY.md`
 
 This document describes *what the product is and how it is built today*. The original
 project brief (Google Doc `1lUqXt3JZ8Cao467CfGT9CP3O75wtuO6z3CvoMr56v5Y`) holds the long-form
@@ -140,7 +140,7 @@ build plan: onboard engine 9.0/9.1, race gate 9.2 ✅, Orin LLM 9.4, the C4 Perf
 | **Tier 1 — Onboard engine** | `pi/engine/` | **built (9.0/9.1)** | the deterministic modules served onboard from the boat's own data (`OnboardSource`), no LLM, port 8200; bench-verified |
 | Onboard race console | `pi/console/` | **built (9.2)** | the iPad app served from the Pi, pointed only at the engine over boat-local Wi-Fi (no cloud/auth/chat), port 8091 |
 | **Tier 2 — Orin Nano LLM** | Jetson Orin Nano | **built (9.4) — live on the unit** | Qwen2.5-7B copilot (Ollama): narrate + bounded decision support + playbook condition-matching |
-| **Tier 3 — C4 Performance Lab** | `vps/lab/` | **Lab-0 built; Lab-1→4 planned** | browser prep/debrief app + race ingestion (NOR/SI/SER → RaceDefinition; dual-input + Opus extraction + review, port 8103). Lab-1→4: optimizer → playbook → onboard executor → judge loop |
+| **Tier 3 — C4 Performance Lab** | `vps/lab/` | **built (Lab-0…Lab-4)** | browser prep/debrief studio, port 8103: race ingestion → multi-model GRIB optimizer (currents/waves/model-skill/obstacles) → signed playbook + v2 play library → onboard executor homework → human-approved learning loop + fleet retro (`vps/lab/README.md`) |
 | RaceDefinition schema | `shared/race_def.py` | **built (Lab-0)** | course/marks/gates/finish + comprehensive `requirements` checklist (race-time items → iPad) + `rules_profile` + fleet; validator |
 | Deploy scripts | `deploy/` | **built** | `deploy_prod.sh`, `init_tls.sh` (the Pi deploys by git pull + compose rebuild over Tailscale SSH) |
 
@@ -305,16 +305,15 @@ boat-install date.
 | 5 | iPad navigator UI | full practice sail used without instruction | ✅ done — day/night, sail dial, course plot, navigator, tactics, routing |
 | 6 | Alerting + summarizer + polar tooling | acceptable false-positive rate over 2 sails | ✅ bench-complete; 2-sail false-positive gate awaits real sailing |
 | 7 | Prod + deploy + rules review + soak | NOR compliance determined; 48-h soak passes | 🔶 started — server-side web auth + TLS scaffolding done; rules review done (§8); prod deploy/soak gated on domain + prod `.env` |
-| **9** | **Onboard + C4 Performance Lab track (the three-tier pivot)** | onboard engine renders nav/sail/tactics on the Pi; race mode reaches no cloud; a sail → refined polars loaded back onboard | 🔶 in progress — **9.0 ✅, 9.1 onboard engine ✅, 9.2 race gate + onboard console ✅; C4 Performance Lab Lab-0 ingestion ✅.** Next: Course&Marks review + wiring → Lab-1. 9.4 Orin copilot ✅ (live on the unit). See `docs/ONBOARD_ENGINE_SCOPING.md` |
+| **9** | **Onboard + C4 Performance Lab track (the three-tier pivot)** | onboard engine renders nav/sail/tactics on the Pi; race mode reaches no cloud; a sail → refined polars loaded back onboard | ✅ built — 9.0 seam, 9.1 onboard engine, 9.2 race gate + onboard console, 9.4 Orin copilot (live), Lab-0→Lab-4 all shipped (see `vps/lab/README.md` + `docs/HISTORY.md`) |
 
 (Phase 8 was an interim "navigation & optimization" wishlist — real marks/GRIB/current/rounding-planner — now folded into the Phase 9 onboard track and the C4 Performance Lab.)
 
 **Phase 9 sub-steps:** 9.0 data-access abstraction ✅ → 9.1 onboard engine service (Pi) ✅ → **9.2
 server-side fail-closed race gate ✅ + iPad onboard console ✅** → 9.4 Orin Nano LLM copilot ✅ (Ollama, live)
-→ **Lab-0 race ingestion ✅** (NOR/SI/SER → RaceDefinition) → Lab-1 (GRIB+buoy+single-scenario routing)
-→ Lab-2 (multi-scenario + branching playbook) → Lab-3 (onboard executor + iPad Strategy card) → Lab-4
-(post-race judge loop). 9.3 = the C4 Performance Lab learning loop (hoisted-sail logging, polar
-write-back).
+→ **Lab-0 race ingestion ✅** → **Lab-1 multi-model GRIB optimizer ✅** → **Lab-2 signed branching
+playbook + v2 play library ✅** → **Lab-3 onboard executor (deviation/drift/selector/re-optimize/
+strategy + the iPad Strategy card) ✅** → **Lab-4 post-race judge + human-approved learning loop ✅**.
 
 ## 11. Future work
 

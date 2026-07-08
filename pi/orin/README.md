@@ -58,7 +58,7 @@ that contract means we can swap models (Qwen2.5-7B ↔ a 3-4B) or runtimes witho
 = 21.8 tok/s on Super). **Not** llama.cpp/Ollama for the 7B: a CUDA memory-allocator regression in the
 JetPack R36.4.x line broke >1B models under llama.cpp. (Ollama is fine for a quick 3B A/B only.)
 
-## Quick start (on a flashed Orin in Super mode)
+## Quick start — superseded MLC plan (historical; the live unit runs DEPLOYMENT.md)
 
 ```bash
 git clone https://github.com/dusty-nv/jetson-containers && bash jetson-containers/install.sh
@@ -67,6 +67,6 @@ MODEL=<confirmed-MLC-id> bash pi/orin/serve.sh
 python3 pi/orin/smoke_api.py --base-url http://localhost:9000/v1
 ```
 
-See `SETUP.md` for the full flashing + firmware + cooling + autostart steps. Nothing here has been run
-on real hardware yet — commands are marked ✅ (confirmed against NVIDIA/dusty-nv docs) or ⚠️ (confirm
-the exact id/flag on the live unit).
+See `SETUP.md` for the full flashing + firmware + cooling + autostart steps. **This quick start is
+the superseded MLC plan** — the live unit was brought up differently (Ollama :11434); follow
+`DEPLOYMENT.md`, not this block.

@@ -30,9 +30,13 @@ alerting/summarizer/polar-analysis (those are cloud / C4 Performance Lab), and *
 
 ## Endpoints (port 8200)
 
-`/health` · `/conditions` · `/conditions/full` · `/sources` · `/fatigue` · `/sail` · `/course` ·
-`/navigator` · `POST /course/practice` · `/tactics` · `/forecast` · `/route` · `/ais` ·
-`POST /fleet/load` · `/fleet` · `POST /playbook/load` · `/deviation` · `/drift` · `/selector` · `/reoptimize`
+`/health` · `/conditions` · `/conditions/full` · `/sources` · `/series` · `/fatigue` · `/sail` ·
+`/sails/state` (GET+POST — crew-set hoisted sail + out-of-service gear) · `/course` ·
+`POST /course/practice` · `POST /course/load` · `/navigator` · `/tactics` · `/forecast` · `/route` ·
+`/ais` · `POST /fleet/load` · `/fleet` · `POST /playbook/load` · `/deviation` · `/drift` ·
+`/selector` · `/reoptimize` · `/strategy` (the cross-signal synthesis digest) · `/plays` (the
+Playbook-v2 matcher: armed/arming plays vs live signals) · `/buoys` (live NDBC + the up-course
+leading indicator)
 
 `POST /playbook/load` freezes the Lab-2 playbook bundle aboard; the two Lab-3 branch triggers read
 from it: `GET /deviation` (route-deviation — boat vs the active variant's optimal track: XTE /

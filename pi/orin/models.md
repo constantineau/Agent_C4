@@ -1,5 +1,10 @@
 # Orin model A/B matrix (Phase 9.4)
 
+> **SUPERSEDED (historical record).** This matrix belongs to the MLC bring-up plan; the unit
+> runs **Ollama + `qwen2.5:7b-instruct-q4_K_M`** at a measured **~12 tok/s** (bandwidth-bound;
+> quality kept over speed) — see `DEPLOYMENT.md`. The A/B was never run; kept for the research.
+
+
 Candidate local models for the onboard copilot, with NVIDIA's published Super-mode numbers and a
 column to fill in with **measured** results from `bench.sh` on your unit. Runtime = MLC + INT4
 (`q4f16_ft`) via jetson-containers (the path behind NVIDIA's numbers; not llama.cpp/Ollama for 7-8B

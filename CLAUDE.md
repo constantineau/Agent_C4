@@ -1,1703 +1,328 @@
 # Agent_C4 — SR33 AI Navigator
 
-LLM-powered navigator/coach/data-archive for the SR33 racing yacht. Boat NMEA 2000 →
-Raspberry Pi (Signal K) → 15-s telemetry aggregates pushed over Starlink → this VPS
-(TimescaleDB + Claude-API agent) → mobile web chat for the crew.
+LLM-powered navigator/coach/strategy-lab for the SR33 racing yacht "C4" (sail CAN100).
+Boat NMEA 2000 → Raspberry Pi (Signal K) → telemetry to this VPS (TimescaleDB + Claude
+agent) → crew web apps; a cloud **C4 Performance Lab** does pre-race strategy + post-race
+learning; an onboard deterministic engine + a Jetson-Orin LLM copilot work the race itself.
 
-Full project brief: Google Doc `1lUqXt3JZ8Cao467CfGT9CP3O75wtuO6z3CvoMr56v5Y`.
-This file is the operational summary (brief §§1–8); read the doc for full context.
+This file is the **operational reference** — how the system works today and how to run it.
+- `DESIGN.md` — product design: architecture + built-vs-planned.
+- `docs/HISTORY.md` — the chronological development record (what shipped when, and the
+  decisions that shaped it). Session narratives that used to live here are outlined there.
+- `docs/` — per-arc design docs (playbook v2, strategy synthesis, RRS-41 memo, model-skill,
+  retro study, optimizer UI study…). Some are explicitly marked superseded — kept as history.
+- Per-component READMEs: `vps/lab/README.md` (the Lab, detailed), `pi/*/README.md` (onboard).
+- Project brief: Google Doc `1lUqXt3JZ8Cao467CfGT9CP3O75wtuO6z3CvoMr56v5Y`.
 
 ## Architecture — three tiers (driven by RRS 41)
 
-Compliance forces the split: the boat's own computer crunching its own sensors is Expedition-class and
-legal in-race; only *customized advice arriving from off the boat* is "outside help". So **separate the
-deterministic computation from the LLM** across three tiers:
+The 2026 Bayview Mackinac NOR §2.1(d) makes customized advice arriving from off the boat
+while racing prohibited outside help; the boat's own computer crunching its own sensors is
+Expedition-class and legal (full memo: `docs/RRS41_COMPLIANCE.md`). So the deterministic
+computation is separated from the LLM across three tiers:
 
-- **Tier 1 — Onboard deterministic engine (Pi 4):** Signal K decodes N2K → JSON; full-res local
-  archive; uplink POSTs 15-s aggregates to the VPS (Orca Core/app unchanged — the Pi is a silent extra
-  listener). The deterministic modules (routing/tactics/sails/polars/nav/fatigue — plain physics, *no
-  LLM*) run here so they're legal in-race. The iPad talks to the Pi over boat-local Wi-Fi in race mode.
-  *(9.0 data-access abstraction ✅ — modules read via `datasource.active()`; 9.1 onboard service next.)*
-- **Tier 2 — Onboard LLM copilot (Jetson Orin Nano, optional):** Qwen2.5-7B narrates the engine's facts
-  + bounded decision support (the engine does the math; grounded; narrates + matches conditions against
-  the pre-authored playbook — it never originates strategy, descope 2026-07-06 `docs/PLAYBOOK_V2.md` §7). *(Phase 9.4.)*
-- **Tier 3 — Cloud (this VPS):** nginx+TLS → FastAPI ingestion → TimescaleDB → agent (Opus tool-use,
-  alerting, summarizer) → web. Between races it's the **C4 Performance Lab** (strategy studio → playbook
-  + write-back learning) and the practice/cruising/debrief product; in a race it is **race-gated (9.2)**
-  and the boat doesn't use it.
+- **Tier 1 — onboard deterministic engine (Pi 4):** Signal K decodes N2K; a full-res local
+  archive + an uplink push 15-s aggregates to the cloud; the deterministic modules
+  (navigator/routing/tactics/sails/fatigue/AIS/fleet/deviation/drift/selector/reoptimize/
+  strategy/matcher — plain physics, no LLM) run here, legal in-race. The iPad talks to the
+  Pi over boat-local Wi-Fi in race mode.
+- **Tier 2 — onboard LLM copilot (Jetson Orin Nano 8GB):** Qwen2.5-7B via Ollama narrates
+  the engine's facts and **condition-matches** the live picture against the pre-authored
+  playbook. **It never originates strategy** (product decision 2026-07-06,
+  `docs/PLAYBOOK_V2.md` §7) — the engine does the math; off-book verdicts are the
+  deterministic engine's call; ungrounded LLM output is dropped.
+- **Tier 3 — cloud (this VPS):** nginx → ingestion → TimescaleDB → agent (Opus tool-use,
+  alerting, summarizer) → crew web app. Between races it is the **C4 Performance Lab**
+  (strategy studio → signed playbook; debrief → human-approved learning). In a race the
+  cloud is **race-gated, fail-closed** and the boat doesn't use it.
 
 ```
   BOAT (in-race, legal)                         CLOUD (between races / practice)
   NMEA2000 → Pi4: SignalK + archive + uplink ──telemetry push──► ingestion → TimescaleDB
-              │  + ONBOARD ENGINE (T1, no LLM)                         │  → agent (Opus, RACE-GATED 9.2)
+              │  + ONBOARD ENGINE (T1, no LLM)                         │  → agent (Opus, RACE-GATED)
               │  + Orin LLM copilot (T2)        ◄──playbook (frozen────┤  → alerting/summarizer → web
    iPad ──boat-local Wi-Fi──┘                       at the gun)        ▼
    public data IN: GRIB + NOAA/GLOS buoys (avail. to all)         C4 PERFORMANCE LAB (T3):
                                                                   studio→playbook · learning→polars
 ```
 
-**Design principles:** customized in-race advice is computed **onboard** (the cloud is between-races or
-race-gated); push-only from the boat (Starlink CGNAT, no inbound; admin via Tailscale); boat is source
-of truth (link outage loses nothing); the **homework pattern** — the frontier model's work is loaded
-onboard pre-start and frozen at the gun, never re-derived mid-race; the LLM never sees raw NMEA (it
-reads facts through tools). Full design: `docs/RRS41_COMPLIANCE.md` + `docs/ONBOARD_ENGINE_SCOPING.md`.
+**Standing decisions (all binding):**
+- **Bright line:** all frontier/cloud work pre-start, frozen at the gun; in-race runs
+  onboard on own data + common public data; never phone the cloud mid-race for a route.
+- **Homework pattern:** everything the boat needs in-race (playbook, obstacles, fleet
+  roster, forecast fingerprint, venue stats, course) is compiled ashore and loaded frozen.
+- **Human-in-the-loop learning:** Lab proposals never mutate the boat model; a person
+  approves every polar/helm/wave-coefficient change.
+- **Collect everything:** every sensor reading, per source, raw SI; readers cross-check.
+- **Glass box:** rationale is pre-authored and surfaced (Strategy card, briefings) — never
+  an unexplained verdict.
 
 ## Repo layout (monorepo)
 
 ```
-pi/                 Signal K config, vcan/systemd units, uplink + full-res archiver
-pi/engine/          onboard deterministic engine service (Tier 1, 9.1) — no LLM, :8200
-pi/console/         onboard race console (9.2) — the iPad app served from the Pi, :8091
-pi/orin/            onboard LLM copilot (Tier 2, 9.4) — Orin: Ollama+Qwen2.5-7B :11434; copilot/ decision-support svc :8300
-vps/ingestion/      FastAPI ingestion API (token-auth, writes batches to TimescaleDB)
-vps/agent/          Claude tool-use service + alerting + summarizer + WebSocket chat
-vps/web/            mobile web chat app (nginx static)
-vps/lab/            C4 Performance Lab (cloud) — browser prep/debrief app + race ingestion, :8103
-vps/db/             TimescaleDB schema + migrations + fake-data seed
-shared/             data schemas, tool contracts, units, race_def (RaceDefinition schema)
-deploy/             scripts: deploy vps→prod, push pi→Pi over Tailscale
-compose.dev.yml     dev stack (run by hand during sessions)
-compose.prod.yml    prod stack (managed, leave alone)
+pi/                 Signal K config, systemd units, uplink + full-res archiver, bench tools
+pi/engine/          onboard deterministic engine service (Tier 1) — no LLM, :8200
+pi/console/         onboard race console + crew dashboard (iPad, served from the Pi, :8091)
+pi/orin/            onboard LLM copilot (Tier 2) — Ollama+Qwen2.5-7B :11434; copilot/ svc :8300
+vps/ingestion/      FastAPI ingestion API (token-auth → TimescaleDB)
+vps/agent/          Claude tool-use agent + the shared deterministic engine modules
+vps/web/            crew web app (nginx static, no build step)
+vps/lab/            C4 Performance Lab (browser prep/debrief app + optimizer), :8103
+vps/db/             schema + migrations + seeds (polars, crossovers, sail polars)
+shared/             units, tool contracts, race_def (RaceDefinition), boat_profile, windphrase
+deploy/             deploy_prod.sh (cloud), init_tls.sh (one-time TLS issuance)
+compose.dev.yml     dev cloud stack · compose.prod.yml prod (managed, leave alone)
+compose.pi.yml      Pi stack (boat or bench) · compose.pi.sample.yml bench sample-data overlay
 ```
 
-## Isolation scheme — prod/dev on ONE box
+**Isolation:** two compose projects, separate ports and DBs (`sr33_prod` vs `sr33_dev`);
+develop on `dev`, ff-merge to `main`, deploy `main`. The only bench↔boat difference is
+`CAN_IFACE` (`vcan0` vs `can0`).
 
-Two Docker Compose projects, **separate ports and separate databases** (`sr33_prod` vs
-`sr33_dev`). Dev work can never corrupt the production race archive. Git mirrors this:
-develop on `dev`, merge to `main`, deploy `main` to prod via `deploy/`.
+## Dev environments — ports & commands
 
-**Portability rule:** the ONLY difference between bench and boat is the CAN interface
-name — `vcan0` (bench) vs `can0` (boat). Single config value (`CAN_IFACE`). Everything
-else identical. Develop against simulated data (vcan0 + replayed N2K logs or
-`--sample-n2k-data`) so the whole pipeline is testable with no boat.
-
-## Dev stack — ports & commands
-
-Ports chosen to avoid conflicts with the other apps on this VM (DreamCRM, racertracer):
-
-| Service     | Container port | Host (dev) |
-|-------------|----------------|------------|
-| TimescaleDB | 5432           | **5433**   |
-| ingestion   | 8000           | **8101**   |
-| agent       | 8000           | **8102**   |
-| lab (C4 Performance Lab) | 8000 | **8103** |
-| web         | 80             | **8090**   |
-| Signal K    | 3010 (host net)| **3010**   |
-| onboard engine (pi)      | 8200 (host net) | **8200** |
-| onboard console (pi)     | 8091 (host net) | **8091** |
+| Service | Host port | | Service | Host port |
+|---|---|---|---|---|
+| TimescaleDB | **5433** | | Signal K (host net) | **3010** |
+| ingestion | **8101** | | onboard engine | **8200** |
+| agent | **8102** | | onboard console + dashboard | **8091** |
+| lab | **8103** | | copilot (on the Orin) | **8300** |
+| web | **8090** | | Ollama (on the Orin) | **11434** |
 
 ```bash
 cd ~/Agent_C4
-cp .env.example .env                       # fill ANTHROPIC_API_KEY when doing agent work
-docker compose -f compose.dev.yml up -d --build
-docker compose -f compose.dev.yml ps
-python3 vps/db/seed/fake_telemetry.py      # POST fake raw readings via /ingest/raw -> telemetry_raw
-# web app:        http://localhost:8090
-# ingestion docs: http://localhost:8101/docs
-# agent docs:     http://localhost:8102/docs
-docker compose -f compose.dev.yml down     # (add -v to wipe the dev DB volume)
+docker compose -f compose.dev.yml up -d --build          # cloud dev stack
+python3 vps/db/seed/fake_telemetry.py                    # fake raw readings → /ingest/raw → telemetry_raw
+python3 vps/db/seed/ais_inject.py                        # deterministic AIS scenario (own ship + closing target)
+# web http://localhost:8090 (pw sr33-dev) · lab http://localhost:8103 (pw lab-dev; standing container CAN100)
 ```
 
-### Pi stack (Signal K + uplink) — bench or boat
-
-Same `compose.pi.yml` runs on the VPS bench (`CAN_IFACE=vcan0`) and the real Pi
-(`CAN_IFACE=can0`). Signal K on **:3010** (host networking, to read the host CAN iface).
-`vcan0` on the VPS is a persistent systemd service (`vcan0.service`).
+**Bench Pi stack is DOWN by default** (policy 2026-07-08 — its archiver records the sample
+replay ~2 GB/day). Bring it up only when a test needs the engine/console/archiver:
 
 ```bash
-# bench with built-in sample N2K data (no boat/log needed):
-docker compose -f compose.pi.yml -f compose.pi.sample.yml up -d --build
-docker logs -f sr33-pi-uplink-1                 # 15-s aggregates POSTing to ingestion
-docker logs -f sr33-pi-archiver-1               # full-res rows landing in onboard SQLite
-docker compose -f compose.pi.yml down
-
-# bench replaying a recorded log:  bash pi/bench/replay.sh pi/logs/<log>  then compose.pi.yml up
-# on the Pi:  CAN_IFACE=can0 VPS_URL=https://nav... docker compose -f compose.pi.yml up -d
+docker compose -f compose.pi.yml -f compose.pi.sample.yml up -d --build   # bench w/ sample N2K
+docker compose -f compose.pi.yml -f compose.pi.sample.yml down            # take it back down
+# real boat:  CAN_IFACE=can0 docker compose -f compose.pi.yml up -d
 ```
 
-Notes: true wind (TWS/TWA/TWD) + VMG come from the `signalk-derived-data` plugin, which the
-`signalk-derived` init service installs + enables into the config volume automatically (config
-`pi/signalk/derived-data.json`; output `$source` is `derived-data`). Signal K port 3010 avoids
-DreamCRM's :3000 on this VM.
+**Deploys.** Cloud prod: `deploy/deploy_prod.sh` (gated on a prod `.env` + domain; TLS via
+`deploy/init_tls.sh`, nginx+certbot scaffolding is built). **Pi:** ssh over Tailscale
+(`sr33-pi@100.79.180.102`) → `cd ~/Agent_C4 && git pull && docker compose -f compose.pi.yml
+up -d --build <changed services>`. **Orin:** `agent-c4@100.70.110.72` → git pull +
+`systemctl restart sr33-orin-copilot` (runtime as-built: `pi/orin/DEPLOYMENT.md`).
+Tailscale SSH may require a fresh browser check-mode approval (~12 h validity).
 
-**Full-resolution onboard archive (Phase 2):** the `archiver` service is a *second*,
-independent Signal K subscriber that records **every** delta at full resolution to a durable
-local SQLite DB (`sk_archive` named volume, WAL + `synchronous=FULL`) — schema mirrors the
-cloud `telemetry_raw`. It owns its own subscription and crash-safe store, so a crashed uplink
-or a dropped link never costs archived data ("link outage loses nothing"). `pi/archiver/
-backfill.py` pushes the full-res log to the cloud `/ingest/raw` post-passage; it's resumable
-via a `sync_state` cursor (re-runs send only new rows). See `pi/archiver/README.md`.
-
-**Onboard engine (Phase 9.1):** the same `compose.pi.yml` also runs the `engine` service — the
-in-race-legal deterministic engine on **:8200** (no LLM, no cloud), reading the boat's own data
-via `OnboardSource`. It comes up with the rest of the Pi stack; quick check:
-`curl -s localhost:8200/health` then `curl -s localhost:8200/conditions`. See
-"Onboard engine service (Phase 9.1)" below and `pi/engine/README.md`.
-
-## Phased build (each phase has a clear exit test)
-
-| Phase | Deliverable | Exit test |
-|-------|-------------|-----------|
-| **0** ✅ | Repo + dev compose + schema + stubs + fake data | `compose.dev.yml up`; DB reachable; fake data loads |
-| **1** ✅ | Pi base + PICAN-M + vcan0 + Signal K | sample N2K flows; Signal K dashboard populated |
-| **2** ✅ | Pi local archive | full-res capture verified on bench; survives reboot; backfill lands in cloud `telemetry_raw` |
-| **3** ✅ | Ingestion + uplink store-and-forward | forced-outage test passed: batches queue to a named volume, survive a reboot mid-outage, drain with no loss |
-| **4** ✅ | Agent core + SQL tools | accurate answers on conditions/perf/AIS vs live dev data |
-| **5** ✅ | iPad nav companion: day/night, sail dial, course plot, navigator, tactics, routing | bench-verified end-to-end |
-| **6** ✅ | Alerting + summarizer + polar tooling | bench-complete; 2-practice-sail false-positive gate awaits real sailing |
-| 7 🔶 | Prod stack + deploy + rules review + soak | rules review done; server auth + TLS scaffolding done; prod deploy/soak gated on domain + prod `.env` |
-| **9** 🔶 | Onboard + C4 Performance Lab (three-tier pivot) | **9.0 data-access abstraction ✅ · 9.1 onboard engine service ✅ · 9.2 race gate + iPad onboard console ✅ · Lab-0 race ingestion + course loader ✅ · Lab-1 multi-model GRIB optimizer ✅ · Lab-2a/2b branching playbook bundle ✅ (fan-out → variants → Opus synthesis → signed, onboard-loadable artifact) · routing-fidelity 2b per-leg sail plan + reviewable boat sail model ✅ · routing-fidelity 2c isochrone VMG-gate/cone-prune/anti-over-tack ✅ · routing-fidelity 2e finish/mark over-tack ("scramble") fixes ✅ · routing-fidelity 2f island rounding-side enforcement ✅ · routing-fidelity 2g sail-aware routing (per-sail polars + peel cost) ✅ · 9.4 Orin LLM appliance live (Ollama+Qwen2.5-7B :11434) + copilot decision-support layer ✅ (`pi/orin/copilot`) · copilot crew-facing narration ✅ + proactive auto-coach timer ✅ + collision/AIS safety callout ✅ + handicap-rival callout ✅ · PLAYBOOK-ADHERENCE dashboard tile ✅ (8-tile 4×2 grid; VMG+Tactics retired 2026-07-03) · handicap-aware fleet tactics ✅ (incl. verified YB/bycmack tracker source) ** — see `docs/ONBOARD_ENGINE_SCOPING.md` |
-
-**Current status:** Phases 0–6 built and bench-verified; Phase 7 started; **Phase 9 in progress
-(9.0 data-access abstraction ✅, 9.1 onboard engine service ✅ — see "Onboard engine service",
-9.2 server-side race gate ✅ + iPad onboard console ✅ — see "Race-mode gate" / "Onboard race
-console"; the C4 Performance Lab (`vps/lab`) is live with **Lab-0 race ingestion + course loader ✅**
-and **Lab-1 the multi-model GRIB optimizer ✅** + **Lab-2a/2b the branching playbook bundle ✅** —
-see "C4 Performance Lab"; the copilot crew-facing narration + the PLAYBOOK-ADHERENCE dashboard tile
-are built; handicap-aware fleet tactics is built (see "Handicap-aware fleet tactics");
-**9.4 Orin LLM bring-up authored** (Orin Nano in hand 2026-06-18 —
-`pi/orin/` runtime/model bring-up: MLC + Qwen2.5-7B INT4 → OpenAI-compatible API, to run on the
-fresh unit; the SR33 copilot service is the next 9.4 increment) — see "Onboard LLM copilot").**
-Detail: Phase 1
-(Signal K + uplink) end-to-end;
-Phase 2 (full-res onboard archive + backfill); Phase 3 uplink store-and-forward (disk-backed
-queue on a named volume — forced-outage test passed, survives reboot mid-outage, drains with no
-loss); Phase 4 agent runs the *real* Claude tool-use loop (`vps/agent/app/agent.py`, not stubbed)
-with the boat-speed gospel + per-source skepticism + source priority/failover. True wind/VMG now
-flow via the auto-enabled `signalk-derived-data` plugin. Phase 5 ✅ the iPad crew interface is
-built (day/night, sail dial, course plot + navigator, tactics, weather/isochrone routing — see
-"iPad crew interface"). Phase 6 ✅ (bench-complete) — **6.0 live AIS** (see "Live AIS"), **6.1 alerting**
-(see "Alerting"), **6.2 summarizer/debrief** (see "Summaries / debrief"), **6.3 polar mining**
-(see "Polar mining") and **6.4 done** — the final contracts/prompt sweep (all 16 tools consistent
-across dispatch/contracts/schema/prompt/fallback) + a full bench verify (closing-AIS raise→update→
-clear over the WebSocket, history retention, debrief alert-integration, banner shot; caught + fixed
-the `active_alerts` Decimal bug). The Phase-6 EXIT TEST proper — an acceptable alert false-positive
-rate over **2 real practice sails** — still awaits real sailing (bench baseline: 0 spurious alerts
-in steady reaching; AIS/polar_deficit fired only on genuine sustained conditions). **Phase 6
-COMPLETE on the bench.** **Phase 7 STARTED — server-side shared-password web auth done + bench-verified
-(see "Web auth"), retiring the client stub.** Remaining Phase 7: prod deploy + TLS/domain + 48-h soak
-(gated on a prod `.env` w/ `sr33_prod` DB + fresh secrets, and a domain name) + RRS 41/NOR review.
-Still owed — a real `candump -l can0` replay fixture (the canned sample stands in for now).
-
-## Live AIS (Phase 6.0)
-
-Collision-avoidance traffic follows the collect-everything model: the boat (em-trak B951)
-forwards only RAW target observations (mmsi/name/lat/lon/sog/cog) and the cloud reasons. The Pi
-uplink routes Signal K deltas by `context` — own-ship deltas go to `telemetry_raw` as before;
-other-vessel contexts are accumulated per-MMSI and POSTed to ingestion **`/ingest/ais`** →
-`ais_targets` (geometry columns left NULL). AIS is sent best-effort (NOT disk-queued like
-telemetry — replaying stale positions after a link outage would be wrong). `vps/agent/app/ais.py`
-computes range/bearing + **CPA/TCPA live** against own-ship's freshest fix from `telemetry_raw`
-(equirectangular relative-motion model, nm) — so geometry always reflects the current situation,
-not when the target was heard. `get_ais_targets` returns targets threat-sorted (closing, smallest
-CPA first); the agent prompt has an AIS / COLLISION GUARD section (always allowed — safety, never
-RRS 41 "outside help"). **Bench:** `python3 vps/db/seed/ais_inject.py` injects a stable synthetic
-own ship + three moving targets (one deliberate closing near-miss) so CPA/TCPA are deterministic
-without the teleporting Signal K sample boat; doubles as the closing-target scenario for 6.1 alerts.
-
-**Onboard AIS + the AIS / Fleet tile.** `ais.py` is now **source-agnostic** — it reads both own-ship
-state and the raw targets through `datasource.active()` (the same Phase-9.0 seam as the rest of the
-engine), so the identical range/bearing/CPA/TCPA geometry runs in the **cloud** (`CloudSource`:
-`ais_targets` + `telemetry_raw`) and **onboard** (`OnboardSource`: other-vessel Signal K contexts).
-This also dropped `ais.py`'s direct `db.pool` import, so it ships in the no-psycopg onboard image.
-Onboard, `OnboardSource._ingest_live` now keys off the Signal K `context`: own-ship deltas go to the
-live cache as before (a latent own-ship/other-vessel conflation is fixed in passing), and other-vessel
-contexts accumulate per-MMSI (lat/lon + sog→kn + cog→deg, mirroring the uplink) → `ais_targets()`. The
-onboard engine exposes **`GET /ais`** (collision + fleet awareness — always legal in-race: own AIS
-receiver, own computer). The crew dashboard's **AIS / Fleet** tile (`pi/console/dashboard`) reads it:
-ok = clear / no closing traffic, watch = a target closing inside ~1.5 nm / 30 min, act = inside the
-~0.5 nm / 12 min guard (env-tunable in `dashboard.js`); the face shows the nearest closing contact +
-CPA/TCPA and the detail lists the threat-sorted targets. **v1 scope is AIS proximity/collision** (the
-always-legal safety layer); handicap-aware **fleet** tactics (roster match → corrected-time delta,
-the perflab item-6 vision) is now BUILT on top of it — see "Handicap-aware fleet tactics" below.
-Verified: onboard geometry unit test (`/tmp/test_ais_onboard.py`: head-on CPA≈0, opening
-target flagged, range filter, no own-ship pollution); cloud regression via `ais_inject.py` (CLOSING
-TUG CPA 0.54 nm / 16.2 min sorted first — unchanged baseline); engine `/ais` serves; Playwright UI
-(9-tile 3×3 grid, AIS tile clear-live / watch-demo + detail rows, 0 console errors).
-
-## Alerting (Phase 6.1)
-
-`vps/agent/app/alerts.py` raises conservative, **debounced** alerts on a background loop. Each
-rule reports the conditions true *right now* (closing AIS with CPA/TCPA in the guard, persistent
-wind shift via tactics, boatspeed well under polar, stale telemetry, depth shoaling, helm
-`rotate_now`); a condition must hold continuously for its per-rule window before it RAISES, and
-CLEARS as soon as it goes false — **raise slow, clear fast** (thresholds are env-tunable
-`ALERT_*`, first-cut — exit test is an acceptable false-positive rate over two practice sails).
-The agent lifespan runs `alerts.evaluate()` every `ALERT_EVAL_SECONDS` (15) in a threadpool; it
-diffs the firing set against the DB and **pushes new/updated/cleared deltas over the existing
-`/ws`** to all clients (a `Hub` fans out; each connection drains its own queue so a push and a
-chat reply never race). Migration **`004_alerts.sql`** = one `alerts` table that is both live
-state (`cleared_at IS NULL`) and the **debrief history** (cleared rows retained). Surfaced as
-`GET /alerts`, the `get_alerts` tool (+ ALERTS prompt section + fallback route), and a
-severity-colored **dismissible web banner** (`#alerts`; warn/danger via theme vars so it's
-day/night aware; a fresh client gets the active set as a snapshot on connect). **Migrations
-auto-run only on first DB init** — apply 004 to the running dev DB by hand:
-`docker compose -f compose.dev.yml exec -T timescaledb psql -U sr33 -d sr33_dev < vps/db/migrations/004_alerts.sql`.
-Bench-verified end-to-end with `ais_inject.py`: AIS + polar_deficit alerts raised after debounce,
-streamed live `updated` pushes, and cleared — banner screenshot confirmed. (**Gotcha fixed in 6.4:**
-`active_alerts()` did `time.time() - extract(epoch …)`, and `extract(epoch …)` returns a `Decimal`,
-so `GET /alerts` 500'd whenever any alert was active — now cast `::float8` in SQL. Same Decimal
-trap fatigue/tactics already guard against.)
-
-## Summaries / debrief (Phase 6.2)
-
-`vps/agent/app/summarizer.py` rolls up a time window of telemetry into a performance report and
-stores it in the existing `agent_summaries` table. **On-demand only — no background timer** (by
-decision). `compute_window(start,end)` aggregates `telemetry_raw` (boatspeed avg/max vs polar,
-TWS range, TWD circular mean + oscillation, heel, SOG-integrated distance) plus every alert that
-fired in the window (the 6.1 `alerts` debrief history). The narrative is written by Claude from
-the metrics when `ANTHROPIC_API_KEY` is set, else a deterministic template — so it works with no
-LLM. Two entry points differing only by default window + framing: `make_summary` (short recap,
-`SUMMARY_MIN`=20) and `make_debrief` (fuller report, `DEBRIEF_MIN`=120). Surfaced as **`POST
-/summary`**, **`POST /debrief`** (both accept `?minutes=`, both store), **`GET /summaries`** +
-the `get_summaries` tool (recall newest-first) + a DEBRIEFS/SUMMARIES prompt section + fallback
-route, and a **Debrief** quick button in the web chat (POSTs `/api/debrief`, drops the narrative
-into the log). Caveat: aggregates span ALL sources for a path (collect-everything) so a flaky
-sensor can nudge an average — fine for v1. **Note:** the summarizer reads `telemetry_raw` (Pi
-uplink / sample stack / the `fake_telemetry.py` seed — all write `telemetry_raw` now).
-
-## Polar mining (Phase 6.3)
-
-`vps/agent/app/polar_tool.py` mines the telemetry ARCHIVE for what the boat ACTUALLY achieved vs
-the ORC rated polar — a coaching/debrief view, NOT the live instantaneous %. It time-buckets
-`telemetry_raw` (default 30 s) pivoting STW/TWS/|TWA| onto each slice, bins by TWS (ORC 2-kn grid)
-and TWA (15° bins), and for each bin with enough samples takes a HIGH PERCENTILE of observed STW
-(default 90th — "best achievable", rejects surf/GPS spikes a max would chase) and compares it to
-the nearest ORC `target_stw`. Output: overall % of polar (sample-weighted), a roll-up by point of
-sail (upwind/reaching/downwind), the weakest/strongest bins, and the full observed-vs-rated table.
-Surfaced as **`GET /polar-analysis`** (`?hours=&min_samples=&point_of_sail=`), the
-**`get_polar_analysis`** tool (+ POLAR ANALYSIS prompt section + a distinct fallback route — kept
-separate from the live `get_polar_target` "Polar%" path), and a **Polar trend** web quick-button.
-Tunables are `POLAR_*` env (look-back 168 h, bucket 30 s, min-samples 6, pctile 90). **Caveats
-(in the output):** aggregates span all sources; sea-state/current/crew vary across the window;
-**>100% of polar is usually current or a soft rating, not real overspeed** — e.g. the sample boat's
-light-air 45° upwind bins read 157–167% because the ORC VMG-optimum angle there is ~42° and the
-rated target at the binned 45° is low. Bench-verified: `GET /polar-analysis?hours=24` mined 14
-bins / 1636 slices (overall 91%, upwind 96% / reaching 88%); the live LLM chained the tool into a
-grounded coaching answer that correctly dismissed the >100% bins; the no-LLM fallback rendered too.
+**Migrations auto-run only on first DB init.** Apply to a running DB by hand:
+`docker compose -f compose.dev.yml exec -T timescaledb psql -U sr33 -d sr33_dev < vps/db/migrations/<file>.sql`
+(001 init · 002 telemetry_raw · 003 source_priority · 004 alerts · 005 race_mode+audit ·
+006 drops the legacy wide `telemetry` table).
 
 ## Data paradigm — collect everything, per source
 
-Live telemetry uses the **collect-everything** model: the uplink forwards *every* Signal K
-`(source, path)` reading — all sensors, including redundant ones — to ingestion `/ingest/raw`,
-stored in **`telemetry_raw(time, source, path, value)`**. The agent's `get_current_conditions`
-returns every quantity from every source with freshness + a disagreement flag; `get_sources`
-lists active sensors with curated reliability (`source_notes`). The agent is prompted to be
-skeptical: cross-check redundant sources, flag disagreement/stale/uncalibrated, never trust a
-lone value. Migration `002_telemetry_raw.sql`; the original wide `telemetry` table was dropped (006).
+The uplink forwards **every** Signal K `(source, path)` reading verbatim to `/ingest/raw`
+→ **`telemetry_raw(time, boat_id, source, path, value)`** (raw SI). AIS targets go to
+`/ingest/ais` → `ais_targets` (best-effort, not queued — stale positions must not replay).
+`source_priority` (003) ranks a preferred source per channel with automatic failover
+(preferred stale >45 s → next rank, flagged `fell_back`); all sources stay visible. The
+agent is prompted to sensor skepticism: cross-check redundant sources, flag disagreement/
+staleness, never trust a lone value. `source_notes` carries curated per-device reliability.
 
-**Source priority + failover (migration 003):** `source_priority` ranks a preferred source
-per channel (e.g. Orca for heel/true-wind, gWind masthead for apparent, 24xd GPS for
-position). `get_current_conditions` adds a `preferred` reading per channel and automatically
-fails over to the next rank when the preferred source is stale (>45 s) / absent, setting
-`fell_back=true` so the agent announces it's on a backup. All sources stay visible — priority
-only picks the lead + fallback order. Matchers are `$source` substrings (refine on real bus).
+The Pi also keeps its own **full-res archive** (a second, independent Signal K subscriber →
+crash-safe SQLite on the `sk_archive` volume; `pi/archiver/backfill.py` pushes it to the
+cloud post-passage, resumable). Link outage loses nothing — the boat is the source of truth.
 
-## iPad crew interface (Phase 5)
+## Cloud agent (Tier 3)
 
-`vps/web` is an iPad-landscape **navigator companion** (not an instrument repeater — the boat
-already has those). Vanilla JS over nginx (`/api/*` + `/ws` proxy to the agent), no build step,
-offline-friendly. Pieces:
-- **Auto day/night** (`sun.js`) — switches on local sunrise/sunset from GPS position + time
-  (Safari has no light sensor); manual AUTO/DAY/NIGHT override. Night = red-on-black.
-- **Sail-range dial** (`sail.js` + `sails.py`, `GET /sail`, `get_sail_advice`) — point-of-sail
-  gauge with the J1/A2/A3/S2 zones for the current TWS, crossover ticks, live TWA needle, and a
-  crew "what's hoisted" selector that flags wrong-sail / imminent peel.
-- **Schematic course plot** (`plot.js`) — boat/marks/legs/laylines/wind/track on a local
-  projection (no chart tiles), N↑/Crs↑. `navigator.py` (`/course`, `/navigator`, `get_navigator`)
-  computes next mark/ETA/leg-type/laylines; a practice-course generator (`POST /course/practice`)
-  drops a W/L course from live position+wind. Active route is shared in-process so chat matches
-  the screen.
-- **Tactical layer** (`tactics.py`, `/tactics`, `get_tactics`) — lifted/headed, oscillating vs
-  persistent shift, favored side, leverage.
-- **Weather routing** (`weather.py` Open-Meteo + `routing.py` isochrone, `/forecast`, `/route`,
-  `fetch_forecast`/`get_route`) — optimal route on the polars through the forecast wind (falls
-  back to live measured wind); ETA, tacks, recommended first tack, route overlay.
-- **Race/Practice toggle** gates tactics + routing in the UI (RRS 41); the agent caveats them.
-  **All-channels** slide-over reuses the multi-source `/conditions/full` view.
+`vps/agent/app/agent.py` runs the real Claude tool-use loop (`ANTHROPIC_MODEL`, currently
+`claude-opus-4-8`) over **17 tools** (`shared/tool_contracts.py` is canonical): conditions/
+sources/history (multi-source instrument reads), sail advice + crossovers, navigator,
+tactics, route (isochrone on live/forecast wind), polar target + polar analysis (archive
+mining), AIS targets, fleet (handicap tactics), alerts, summaries, forecast, route status,
+fatigue, log note. A deterministic no-LLM fallback answers every tool intent when no API
+key is set. The boat-speed gospel (ORC Speed Guide) is cached system context; regenerate
+its four artifacts after a cert update: `python3 vps/agent/knowledge/build_speed_guide.py`.
 
-Routing is CPU-bound but cached (~25 s); the LLM may take 45–90 s when it chains several tool calls.
+- **Alerting** (`alerts.py`, migration 004): debounced rules — closing AIS (CPA/TCPA),
+  persistent shift, polar deficit, stale telemetry, shoaling, helm `rotate_now` — evaluated
+  every ~15 s, **raise slow / clear fast**, pushed live over `/ws`; cleared rows retained as
+  debrief history. `ALERT_*` env tunables.
+- **Summaries/debrief** (`summarizer.py`): on-demand only — `POST /summary` (~20 min) /
+  `POST /debrief` (~120), stored in `agent_summaries`, LLM narrative w/ deterministic
+  template fallback.
+- **Polar mining** (`polar_tool.py`, cloud-only): archive → observed p90 STW vs ORC target
+  by TWS/TWA bin → `GET /polar-analysis`. >100% usually = current or a soft rating.
+- **Helm fatigue** (`fatigue.py`): anonymous multi-signal composite (heading stability,
+  reversal rate, heel, TWD-detrended AWA wander, speed deficit) vs the boat's own trailing
+  baseline; maneuver-aware; `fresh/watch/rotate_soon/rotate_now`; `FATIGUE_*` tunables.
+- **Web auth** (`auth.py`): one shared boat password → stateless signed bearer
+  (HMAC-SHA256, `AUTH_TTL_HOURS` 720); middleware gates all REST but `/health`+`/auth`;
+  `/ws` checks `?token=`. Dev pw `sr33-dev`. TLS: nginx+certbot webroot scaffolding with an
+  entrypoint template selector — prod starts HTTP-first and flips HTTPS once the cert lands.
+- **Race-mode gate** (`race_mode.py`, migration 005): server-side, **fail-closed** (missing
+  state ⇒ RACING; `RACE_MODE_DEFAULT` dev=practice, prod omits ⇒ race). `GATED_TOOLS`
+  (tactics, route, polar analysis/target, sail, fatigue, navigator, route-status, fleet)
+  are withheld from the LLM loop AND refused at dispatch while racing; the advice REST
+  endpoints 403 `{withheld}`; own-data/safety/verbatim-forecast/recall stay allowed.
+  `audit_log` records every mode change and refusal. This is the cloud stopgap — the real
+  in-race surface is the onboard engine.
 
-## Web auth (Phase 7)
+## Onboard Tier 1 — engine, console, crew dashboard
 
-The crew share ONE boat password (project decision). `vps/agent/app/auth.py` replaces the old
-client-stub gate with a real server check: **`POST /auth {password}`** verifies against
-`BOAT_PASSWORD` (constant-time) and issues a **stateless signed bearer token** — `"<exp>.<hmac>"`,
-HMAC-SHA256 over the expiry with `AUTH_SECRET` (defaults to a value derived from `BOAT_PASSWORD`,
-so changing the password rotates tokens; set a fresh random value in prod). An **HTTP middleware**
-(`require_auth`) gates every REST route except `OPEN_PATHS` (`/health`, `/auth`); the **`/ws`**
-handler checks the token inline (passed as `?token=` since browsers can't set headers on a WS
-handshake) and closes 1008 if absent/bad. Token TTL is `AUTH_TTL_HOURS` (default 720 h / 30 days so
-the crew don't re-auth mid-passage); `AUTH_ENABLED=false` disables the check (open bench only).
-The web app POSTs the password to `/api/auth`, stores the token in `sessionStorage`, and routes all
-calls through a single `apiFetch` helper (injects `Authorization: Bearer`, re-gates on 401) + the
-WS URL `?token=`; a stored token auto-resumes on reload. Dev password is `sr33-dev` (compose
-default + screenshot harness). Prod compose requires `BOAT_PASSWORD` + `AUTH_SECRET` in the `.env`.
-Bench-verified end-to-end through the nginx proxy: `/health` open; data/chat/WS all 401/reject
-without a token; wrong password 401; correct password connects; tamper/expiry/garbage tokens
-rejected; reload auto-resumes. **Note:** this is a shared-secret bearer behind TLS — not per-user
-identity; appropriate for a boat iPad, not a public app.
+**Data-access seam:** engine modules read via `datasource.active()` (`DATA_SOURCE=cloud|
+onboard`). `CloudSource` = TimescaleDB; `OnboardSource` (`datasource_onboard.py`) = the
+full-res SQLite archive + an in-process Signal K live cache + polars parsed from the
+committed seed + a local marks/kv store on the `engine_state` volume. Same interface, raw
+SI, byte-identical module behavior. The onboard image ships no psycopg.
 
-### TLS scaffolding (prod, awaiting a domain)
+**Engine service** (`pi/engine/`, **:8200**, no LLM, no auth, no race gate — the boat's own
+computer is legal in-race). Endpoints:
+`/health · /conditions[/full] · /sources · /series · /fatigue · /sail · /sails/state
+(GET+POST — crew-set hoisted sail + out-of-service gear, the gear-loss plays' arming
+signal) · /course · POST /course/practice · POST /course/load (RaceDefinition course →
+marks) · /navigator · /tactics · /forecast · /route · /ais · POST /fleet/load · /fleet ·
+POST /playbook/load (freeze the signed bundle aboard; clears trigger/matcher state) ·
+/deviation · /drift · /selector · /reoptimize · /strategy · /plays · /buoys`.
 
-The web nginx terminates TLS in prod via a standard **nginx + certbot (webroot)** setup, built but
-not yet deployed (needs a domain + DNS). The image stages two configs in `/etc/nginx/template-src/`
-and an entrypoint selector **`docker-entrypoint.d/10-tls-select.sh`** (runs before the stock
-envsubst step) picks one into `/etc/nginx/templates/`:
-- **`default.conf.template`** (HTTP-only) — used in dev and during prod bootstrap; serves the
-  `/.well-known/acme-challenge/` docroot so certbot can issue.
-- **`default.ssl.conf.template`** — selected only when `TLS_ENABLED=true` AND the cert for
-  `$SERVER_NAME` exists: port 80 redirects to HTTPS (+ keeps the ACME location), port 443 does
-  TLS 1.2/1.3 + HSTS and proxies `/` + `/api` + `/ws`. The cert-existence check means prod web
-  always starts (HTTP first) and flips to HTTPS on the next restart once the cert lands — **dev is
-  unaffected** (no `TLS_ENABLED` → HTTP-only, same as before; verified, and `nginx -t` passes on
-  the rendered TLS config).
-`compose.prod.yml` gains a long-running **`certbot`** service (renews every 12 h) sharing
-`letsencrypt` + `certbot_webroot` volumes with web, and the web service publishes 80/443.
-**`deploy/init_tls.sh`** does the one-time issuance: starts web HTTP-only, runs `certbot certonly
---webroot` for `$SERVER_NAME`, then recreates web on TLS (`--staging` flag for dry runs). Prod
-`.env` adds `SERVER_NAME`, `CERTBOT_EMAIL`, `TLS_ENABLED`. **Deploy caveat:** ports 80/443 must be
-free on this shared VM (DreamCRM/racertracer also run here) — check before deploy, or front
-everything with one shared reverse proxy.
+The **executor stack** (all deterministic, Schmitt-hysteretic — consider/commit bands,
+raise slow / clear fast):
+- `deviation.py` — live position vs the frozen recommended track: XTE + side, along-track
+  %, time-behind-plan, VMC vs plan pace. `DEV_*` tunables.
+- `drift.py` — live Open-Meteo re-sampled at the bundle's frozen `forecast_fingerprint`
+  (same-source, no cross-model bias): signed TWD/TWS drift. `DRIFT_*` tunables.
+- `selector.py` — unifies shift + deviation + drift over the frozen variants into ONE call:
+  **HOLD / SWITCH → variant / OFF-SCRIPT** + confidence (concordance raises it).
+- `reoptimize.py` — the off-script fallback: a fresh route onboard (own polars + Open-Meteo
+  + the bundle's frozen island/zone obstacles), explicitly flagged off-book, with a
+  hoistable sail plan; on-demand + cached (never on every poll).
+- `strategy.py` — the cross-signal synthesis: concordance (strong/split/weak) over
+  shift/drift/deviation/fleet-lean + one grounded recommendation; chains a compact
+  re-route offer on an off-book verdict; works with no playbook (tactics-only read).
+- `matcher.py` — the Playbook-v2 **play matcher**: every play's predicates vs live signals
+  (deviation/drift/tactics/fatigue/TWS/sail state/**polar_pct** — a windowed ~10-min mean
+  of STW vs the polar target so a tack can't reset a sustain/**current_leg** — the
+  navigator's next-mark index). Arm-slow (per-play `sustain_min`) / clear-fast;
+  `applicability.legs` gating (hard for pace plays — leg N arrives at course marks[N];
+  advisory never gates; unknown leg fails open); buoy **corroborators** raise confidence
+  but never gate. `MATCHER_*` tunables.
+- `buoys.py` — live NDBC observations; the up-course buoy as a leading indicator.
 
-## Helm fatigue index
+**Onboard console** (`pi/console/`, **:8091**): nginx serving the same web app pointed only
+at the engine (`/api` → :8200, no cloud, no auth, no chat; `config.js` → `SR33_ONBOARD=
+true`, every panel ungated). In a race the iPad uses `http://<pi>:8091`; between races the
+cloud app.
 
-A 0–100 index that flags a tiring driver and recommends a crew rotation, on the principle
-that a tired helm both **wanders** (more steering variance) and goes **slower** vs. the
-boat's own potential. `vps/agent/app/fatigue.py` blends several "tells" — heading instability
-(circular stdev), steering-reversal rate, heel instability, AWA wander **de-trended by TWD**
-(so a shifty breeze isn't blamed on the driver), and boatspeed deficit vs. the polar — each
-scored as a **recent window (8 min) vs. the boat's own trailing baseline (~40 min)**.
+**Crew dashboard** (`pi/console/dashboard/`, at `:8091/dashboard/`): **8 higher-order tiles
+on a 4×2 grid** — wind, playbook, forecast, sail, eta, ais, charge (crew energy), data —
+each LLM-scorable green/yellow/red with tap-to-detail; the **Strategy strip** above them =
+SYNTHESIS apex (LLM/ENGINE mode pill, OFF-BOOK badge, Tier-2 `play_matches`) → selector
+banner → deviation/drift triggers → armed PLAYS (+ gear toggle) → the ⟳ off-book re-route
+line. The playbook tile reads the engine `/selector` (single source of truth — the old
+copilot `/adherence` fallback is retired). Copilot commentary + coach line poll the Orin;
+narration is **visual-only + an audio attention tone** for safety/urgent callouts (🔔
+toggle, iOS-unlock aware). Demo scenarios (SRC button: live → calm → escalated) exercise
+every state without a boat.
 
-Key design choices:
-- **Anonymous current-helm.** No driver identity; baselining against the boat's own recent
-  steering auto-normalises for sea state, breeze, and skill, and needs zero crew input. The
-  signal is *degradation within a stint*, not an absolute number.
-- **Multi-signal composite with floors** so one spike can't trip it and a very tight baseline
-  can't make normal wander look catastrophic; `rotate_now` (≥80) effectively needs more than
-  one component elevated. Levels: `fresh` <35, `watch` <60, `rotate_soon` <80, `rotate_now`.
-- **Maneuver-aware:** samples during high heading-rate turns (tacks/gybes, >8°/s) are excluded.
-- Surfaced as the **Fatigue** cell on the web strip (`get_strip` adds `fatigue`/`fatigue_level`),
-  the **`GET /fatigue`** endpoint, and the **`get_fatigue`** agent tool (the agent leads with the
-  index + level and relays the rotation call). Cached ~20 s so the 5-s strip poll is cheap.
-- **v1 limits / tuning:** not wind-strength normalised beyond the baseline (a fast breeze-build
-  can read high — caveat it); thresholds/weights (`FATIGUE_*` env) are first-cut and meant to be
-  tuned against **real race archives** (the Phase 2 full-res log is the training set). No stored
-  target *heel* yet, so heel uses stability not error-vs-target.
+## Onboard Tier 2 — the Orin copilot
+
+Runtime as-built (`pi/orin/DEPLOYMENT.md`): JetPack 7.2/R39, **from-source Ollama
+(cuda_v13 @ sm_87) serving `qwen2.5:7b-instruct-q4_K_M` on :11434** (OpenAI `/v1`), ~12
+tok/s, 100% GPU, systemd-persistent appliance. (The original MLC-on-:9000 plan is
+superseded history — `pi/orin/SETUP.md`/`models.md` are kept but marked.) The copilot only
+sees the OpenAI contract, so the runtime stays swappable.
+
+**Copilot service** (`pi/orin/copilot/`, **:8300**): `GET /health · GET /tools · POST
+/brief · POST /narrate · POST /narrate/reset · GET /coach · GET /adherence · GET /snapshot
+· POST /strategy · POST /dashboard · POST /detail`. Guardrails are structural: a closed set
+of read-only engine-fact tools; every factor/recommendation must be `grounded_in` a tool
+actually used or it is dropped; caveats computed by the engine; deterministic fallback on
+any LLM trouble. The **auto-coach** timer (30 s) drives the narration engine and holds the
+latest callouts (safety/collision top priority, rounding prep 15/10/5 min, playbook branch,
+sail change-down, deviation/drift, fleet rival, plays) — show-once dedup, priority-sorted.
+`POST /strategy` phrases the engine digest + **ranks `play_matches`** against the play
+library narratives (validated ids only). Engine addressing is boat-local-first with
+`ENGINE_URL_FALLBACK`. Exit test: `python3 -m copilot.bench_copilot [--llm]`.
+
+## C4 Performance Lab (Tier 3, `vps/lab/`, :8103)
+
+The between-races strategy studio + debrief surface (detail: `vps/lab/README.md`; shared
+team login `LAB_PASSWORD`). Hash-routed tabs: PREP (Races, Course & Marks, Rules/Safety/
+Checklists, Fleet, Learnings, Gameplan, Lock-in & Deploy) · RACE (Monitor) · DEBRIEF.
+
+- **Lab-0 ingestion:** NOR/SI/SER (auto-discover / URL / PDF) → Opus extraction → a draft
+  **RaceDefinition** (`shared/race_def.py`: courses/marks/gates, comprehensive requirements
+  checklists, rules_profile, fleet, tracker) → human review (editable form, geocoding,
+  approve/sign-off) → save. Coordinates only when stated, never guessed.
+- **Optimizer:** multi-model GRIB wind field (GFS/NAM/HRRR/GEFS/ECMWF(+ENS)/ICON/GEM via
+  key-free sources, lag-aware freshest-cycle pick, cycle fallback, coverage gate,
+  crash-isolated cfgrib parse) blended with **venue model-skill weights** (measured
+  forecast-vs-observed accuracy, METAR+NDBC, deep GRIB to 2005 — `docs/MODEL_SKILL_
+  WEIGHTING.md`); **currents** (NOAA LMHOFS: drift + wind-over-water correction); **waves**
+  (NOAA GLWU → conservative realized-speed model + per-boat calibrated coefficients);
+  **obstacles** (GSHHG full-res coastline backstop + NOAA ENC draft-aware shoals + race
+  islands/zones + island rounding-side barriers); a sail-aware isochrone (per-sail polars,
+  peel cost/hysteresis, VMG gate, cone prune, cumulative tack cost, layline commit,
+  mark-position prune, adaptive endgame, monotone gate — `ROUTE_*` env knobs, all
+  A/B-able) → route + per-leg sail plan/reefs + confidence + briefing; Gameplan map
+  cockpit (Leaflet, wind/current/wave overlays, per-model route fan, isochrones, laylines).
+- **Playbook:** per-model fan → side variants (v1) + the **v2 play library**
+  (`docs/PLAYBOOK_V2.md`): external scenario fan (rotations/pressure/timing/sea-state
+  through the SAME blended field, boundary bisection, fan-depth tiers) + internal plays
+  (pace re-routes per mark, gear-loss re-runs, sail-guidance, low-maneuver,
+  rejoin-vs-continue) + corridor verdict + venue stats frozen from the retro archive →
+  Fable-primary/Opus-fallback synthesis (`ANTHROPIC_MODEL_CHAIN`) as a background job →
+  **signed** (`sign_bundle`, sha256 canonical) → frozen aboard via `/playbook/load`.
+- **Lab-4 learning loop:** Debrief ingests the real track (GPX or the YB AllPositions3
+  binary), scores it vs the oracle re-route (regret, XTE, helm % — wave- and
+  current-corrected `helm_pct`), archives every debrief, and **proposes** helm/polar/
+  wave-coefficient refinements a human approves or rejects. Multi-race trend view.
+- **Fleet retro study** (`docs/RETRO_STUDY.md`): whole-fleet backtest on own-ORC polars vs
+  real tracks (2025: execution beat geometry — the Playbook-v2 threshold source).
+- **Fleet auto-import:** YB entry list / regatta websites (YachtScoring API, iframe-follow)
+  + the ORC public cert DB → reviewed draft roster with corrected-time handicaps.
+
+## Verification & tests
+
+- Agent/engine unit tests: `PYTHONPATH=vps/agent:. python3 vps/agent/test_<x>.py`
+  (matcher, deviation, drift, selector, strategy, reoptimize, fleet, buoys…).
+- Lab tests need the baked image: `docker cp vps/lab/test_<x>.py sr33-dev-lab-1:/srv/ &&
+  docker exec sr33-dev-lab-1 sh -c "cd /srv && python3 test_<x>.py"`.
+- Copilot exit test: `python3 -m copilot.bench_copilot` (pure) / `--llm` (on the Orin).
+- Playwright harness: reuse DreamCRM's `playwright-core` (CJS default import
+  `import pkg from '…/index.js'`) + the chromium-1228 binary, `--no-sandbox`; dashboard at
+  `:8091/dashboard/`; use `domcontentloaded` (the dashboard polls forever, `networkidle`
+  never settles).
+
+## Gotchas
+
+- **Every image BAKES its source** — rebuild after ANY change: `docker compose -f
+  compose.dev.yml up -d --build <lab|agent|web|ingestion>` / `-f compose.pi.yml -f
+  compose.pi.sample.yml up -d --build <engine|console>`.
+- **Bench archive timestamps:** the sample stack replays a 2014 log, so archive-window
+  reads (fatigue/tactics history) look empty on the bench even though live reads work;
+  `/sources` merges the live cache. Real-boat timestamps are current.
+- **`extract(epoch …)` returns `Decimal`** in psycopg — cast `::float8` in SQL or it
+  poisons float math (the 6.4 alerts bug; fatigue/tactics guard it).
+- **Long Lab jobs** (synthesis fan ~10 min, retro batch) run as background jobs with status
+  polling — the nginx gateway 504s past ~300 s. Live optimize is ~60–70 s, then cached.
+- **Passwords:** web dev `sr33-dev`; lab compose default `lab-dev`, the standing
+  lab.racertracer.net container uses `CAN100`.
+- **`.env` safety:** copy it outside the tree before any risky branch op
+  (`cp .env ~/agentc4.env.bak`) — a `git rm --cached` + branch switch once overwrote it.
+- **Don't `compose down` the standing lab container** without restarting it
+  (lab.racertracer.net rides on it).
+- The optimizer falls back to a constant wind where the field has no coverage — trust the
+  `wind_coverage`/`degraded` flags, not a pretty route.
 
 ## Database safety
 
 Never run destructive DB ops or migrations against `sr33_prod` without explicit go-ahead.
-Dev DB (`sr33_dev`) is disposable. Keep local `.env` out of git (it's gitignored); copy it
-aside before any risky branch operation.
-
-## Open items still owed (brief §9 — don't guess)
-
-domain name · VPS specs confirm · ~~Anthropic API key~~ (done) · ~~SR33 polar data~~ (done —
-ORC Speed Guide in `vps/agent/knowledge/`) · race route waypoints · Starlink/Tailscale on Pi ·
-Pi archive (SQLite default) · crew scale + Grafana? · GRIB source · boat-install date.
-
-**Boat-speed gospel:** the SR33 "C4" ORC Speed Guide lives in `vps/agent/knowledge/`
-(`C4_boatspeed_gospel.md` = verbatim cert; `sr33_speed_guide.md` = distilled Best-Performance
-polar + per-row optimal sail + per-TWS sail plan, loaded into the agent's cached system
-context; `vps/db/seed/polars_sr33.sql` = real polars for the DB/optimizer;
-`vps/db/seed/sr33_crossovers.json` = the **per-TWS sail crossover model** the Lab optimizer uses
-for the per-leg sail plan, routing-fidelity 2b; `vps/db/seed/sr33_sail_polars.json` = the **per-sail
-polar curves** (each sail's speed across its TWA domain, not just the envelope) the optimizer's
-sail-aware routing uses to weigh hold-vs-peel, routing-fidelity 2g). The agent advises sail selection
-and crossovers/peels from the sail plan. Regenerate all four after a cert update:
-`python3 vps/agent/knowledge/build_speed_guide.py`.
-
-## Racing-rules caveat (RRS 41 / Bayview Mackinac NOR) — drives the three-tier pivot
-
-**Reviewed 2026-06-17 — full memo `docs/RRS41_COMPLIANCE.md`; onboard build plan `docs/ONBOARD_ENGINE_SCOPING.md`.**
-The 2026 NOR **§2.1(d) changes RRS 41(c)**: info available to all boats is OK even at cost, but *"shall
-not include private forecast or tactical advice or information customized for a particular boat … while
-underway."* So **customized tactical/routing/polar/sail/fatigue advice computed off-boat and delivered
-while racing is prohibited outside help** — and that's true even if it comes from a public service.
-The memo rebuts three loopholes (§3): publishing per-boat advice (still "customized for a particular
-boat *or group of boats*"); a public fleet feed; and the "Claude is available to all boats" framing —
-*"available to all"* is about the **product**, not the **provider**, and "customized for a particular
-boat" is an independent, unbeatable prong (orchestrator location is cosmetic). **Allowed in-race:**
-passive collection, the boat's **own** instrument readout, **safety** alerts (AIS/depth/stale),
-all-boats info verbatim. Practice/delivery/debrief is unrestricted.
-
-**The fix = separate the deterministic engine from the LLM → a three-tier architecture (memo §4):**
-- **Onboard deterministic engine (Pi 4):** `navigator/routing/tactics/sails/polar_tool/fatigue` are
-  plain physics on the boat's own sensors — Expedition-class, legal in-race, **no LLM needed** (~80% of
-  the value). Move them to the Pi; the iPad talks to the Pi in race mode.
-- **Onboard LLM (optional, Jetson Orin Nano 8GB):** Qwen2.5-7B (~21.8 tok/s INT4/MLC) for in-race NL
-  coaching over the engine's facts — single-shot narration, no tactical invention.
-- **Cloud frontier Opus 4.8 (between races only):** prep, debrief, and the **C4 Performance Lab** —
-  write-back learning that refines polars/crossovers/calibration/fatigue, loaded onboard *before the
-  start* (frozen at the gun; never re-derived mid-race).
-
-**Minimum-now: DONE — see "Race-mode gate" below.** **Confirm with the OA/RC in writing + re-check
-the Sailing Instructions (~July 2026) before race use.**
-
-## Race-mode gate (Phase 9.2) — server-side, fail-closed RRS 41 enforcement
-
-Race/practice mode used to live only in the browser (`localStorage`) and gate the UI; the chat/LLM
-and every REST route still answered tactical questions. **9.2 moves the gate server-side.**
-`vps/agent/app/race_mode.py` is the single source of truth: an authoritative flag persisted in
-`app_state` (key `race_mode`, value `race|practice`), **fail-closed** (missing/unreadable → treat as
-RACING; default from `RACE_MODE_DEFAULT` — dev compose sets `practice`, prod omits it → `race`).
-`GATED_TOOLS` = the customized-advice tools withheld while racing: `get_tactics`, `get_route`,
-`get_polar_analysis`, `get_polar_target`, `get_sail_advice`, `get_fatigue`, `get_navigator`,
-`get_route_status`. **Allowed in-race:** own instruments (`get_current_conditions`/`get_strip`/
-`get_sources`/`get_history`), safety (`get_ais_targets`/`get_alerts`), common data verbatim
-(`fetch_forecast`), recall (`get_summaries`), `log_note`.
-- **Agent (`agent.py`):** in race mode the Claude loop gets only the allowed tools + a RACE_MODE
-  directive, and `dispatch` refuses any gated tool (defense in depth); the no-LLM fallback early-returns
-  the refusal on a gated intent. Refusal text is the RRS-41 message.
-- **REST (`main.py`):** `GET/POST /mode` (authoritative, audited); the 7 advice endpoints + `POST
-  /summary` + `POST /debrief` return **403 `{withheld,detail,mode}`** while racing via `_race_gated`.
-  `/health` now reports `mode`.
-- **Audit trail:** `audit_log` records every `mode_change` and every `refusal` (channel/tool) — a
-  tamper-evident record for a protest committee.
-- **Web:** the mode toggle is now authoritative — `POST /api/mode` + `syncMode()` on load (server wins);
-  the sail dial + plot navigator skip their (now-gated) fetches in race and show a withheld note; the
-  Debrief button surfaces the withheld message.
-- **Migration `005_race_mode.sql`** (`app_state` + `audit_log`). Migrations auto-run only on first DB
-  init — apply to a running dev DB by hand:
-  `docker compose -f compose.dev.yml exec -T timescaledb psql -U sr33 -d sr33_dev < vps/db/migrations/005_race_mode.sql`.
-Bench-verified through nginx: practice → all 200; race → tactics/route/navigator/sail/fatigue/
-polar-analysis/debrief 403, conditions/alerts/forecast 200, chat refuses tactical Qs + answers safety,
-audit_log populated; toggle round-trips. **This is the cloud STOPGAP** — the real fix is the onboard
-engine (9.0/9.1), where the boat's own gear isn't an "outside source".
-
-## Onboard engine — data-access abstraction (Phase 9.0)
-
-The deterministic engine modules (navigator/routing/tactics/sails/fatigue + the live `get_polar_target`)
-no longer query TimescaleDB directly — they read through `vps/agent/app/datasource.py` so the **same
-engine code runs in the cloud or onboard the Pi**. `datasource.active()` returns the backend chosen by
-env **`DATA_SOURCE`** (`cloud` | `onboard`, default `cloud`); methods return **raw SI** values + epoch
-timestamps, and the unit conversions stay in the modules (so behavior is byte-identical to pre-9.0).
-`CloudSource` reproduces the exact prior SQL: `latest_value`, `series`, `series_by_source`,
-`best_angles`, `polars_stw`, `polar_nearest`, `marks`, `save_practice_course`. **`OnboardSource`
-(SQLite archive + Signal K live) is Phase 9.1** — `active()` imports it lazily only when
-`DATA_SOURCE=onboard`. `sails.py` needs no data source (it parses the speed guide); `polar_tool.py`
-(archive mining via Timescale `time_bucket`) stays **cloud-only** — it's a between-races C4 Performance
-Lab tool, not part of the in-race onboard engine. Bench-verified: every engine endpoint
-(conditions/navigator/tactics/sail/fatigue, route on a practice course, practice-course generation)
-returns real data through the abstraction; cloud path unchanged.
-
-## Onboard race console (Phase 9.2, iPad-side)
-
-The iPad-side of the race-mode channel separation. In race mode the iPad connects to the **Pi**, not
-the cloud — at the network level (boat-local Wi-Fi, no WAN), which is the strong compliance posture.
-The console (`pi/console/`) is an nginx that serves the **same web app** (`vps/web/public`) but pointed
-only at the onboard engine (`/api/` → `127.0.0.1:8200`, no `/ws`), on **:8091** (host net). The app
-runs in an **onboard mode** flipped by a one-line `config.js` (the cloud serves `window.SR33_ONBOARD =
-false`; the console overrides `/config.js` to `true`). Onboard mode (in `app.js`): no password gate
-(the engine has no auth), no LLM chat WebSocket, `apiFetch` drops the bearer and never re-gates on 401,
-the chat card is hidden, and the mode pill becomes a static **ONBOARD** badge — and crucially **every
-panel is available** (sail/navigator/tactics/route ungate, since the boat's own computer is legal
-in-race; `tacticsAllowed()`/`plot.racing()` are onboard-aware). The cloud web is unchanged (it serves
-the static `config.js=false` and stays auth-gated + LLM-chat + RRS-41-toggle as before). Bench-verified
-with Playwright pointed at `:8091`: loads with no gate, `SR33_ONBOARD=true`, chat hidden, **zero
-`/auth` and zero WebSocket calls**, all panels (incl. the gated ones) fetched through the engine proxy,
-and the course/sail/navigator render. Cloud regression check: `:8090/config.js`=false and
-`/api/conditions` without a token still 401s. **So in a race the iPad uses `http://<pi-ip>:8091`
-(onboard, legal); between races it uses the cloud app (full LLM + debrief).**
-
-## Onboard engine service (Phase 9.1)
-
-The in-race-legal tier: a small FastAPI service (`pi/engine/`) that runs **on the boat** and
-serves the same nav/sail/plot/tactics/route endpoints the iPad uses, but computed **onboard from
-the boat's own data** — no LLM, no cloud round-trip, **no race gate** (the boat's own computer
-crunching its own sensors is Expedition-class, not an "outside source" under RRS 41). It reuses
-the cloud agent's deterministic modules unchanged (`app.navigator/tactics/routing/fatigue/sails/
-weather`) with `DATA_SOURCE=onboard`, so `datasource.active()` resolves to the new
-**`OnboardSource`** (`vps/agent/app/datasource_onboard.py`), which reads:
-- **telemetry history** — the Phase-2 full-res SQLite archive (`sk_archive` volume, written by
-  `pi/archiver`), mounted read-only — for `series`/`series_by_source` (fatigue/tactics windows);
-- **freshest live value** — an in-process Signal K WS cache (lower latency than the ~2-s archive
-  flush; falls back to the archive if the WS is down) — for `latest_value` + the instrument strip;
-- **polars** — parsed from the committed `vps/db/seed/polars_sr33.sql` (the one canonical source;
-  no DB) — for `best_angles`/`polar_nearest`/`polars_stw`;
-- **course marks** — a small local SQLite store on the `engine_state` volume (the boat has no
-  `waypoints` Postgres table) — for `marks`/`save_practice_course` (the practice course).
-
-The instrument strip / multi-source view is built by `app.onboard_conditions` (mirrors
-`tools.PRESENT`; the cloud builds it off Postgres in `tools.py`). All values are raw SI / epoch
-seconds, identical in shape to `CloudSource`, so the modules' conversions are byte-identical. To
-let the onboard image ship **no psycopg**, `datasource.py` guards the `pool` import (cloud has it
-→ unchanged; onboard absent → unused). Endpoints (port **8200**): `/health`, `/conditions`,
-`/conditions/full`, `/sources`, `/fatigue`, `/sail`, `/course`, `/navigator`,
-`POST /course/practice`, `/tactics`, `/forecast`, `/route`, `/ais`, `POST /fleet/load`, `/fleet`,
-`POST /playbook/load`, `/deviation`, `/drift`, `/selector`, `/reoptimize` (the last five = Lab-3, below). Wired into `compose.pi.yml` as
-the `engine` service; cloud parity reference is `vps/agent/app/main.py`. See `pi/engine/README.md`.
-
-**Bench-verified** (sample Pi stack + engine): every endpoint returns real data through
-`OnboardSource` — `/conditions` + `/conditions/full` (14 channels) + `/sources` (5 sources) +
-`/sail` (optimal A2 + crossovers) off the live cache; `/course/practice` → `/course` → `/navigator`
-(ETA/laylines) → `/route` (isochrone via Open-Meteo, `wind_source: forecast`) + `/forecast`; and
-the **archive-history path** (`/fatigue`, `/tactics`) verified against a recent-timestamped seeded
-archive (`series` 2999 pts; fatigue computes all 5 components; tactics returns favored-side +
-recommendation). **Bench gotcha:** `--sample-n2k-data` replays a 2014 log, so the archive's SK
-*source* timestamps fall outside any wall-clock window — history endpoints look empty on the bench
-even though live ones work (on the real boat SK timestamps are current); `/sources` therefore
-merges the live cache. Cloud path unaffected (`active: CloudSource`, `pool` still set).
-
-## Lab-3 onboard executor — route deviation + the iPad Strategy card (first slice)
-
-The onboard executor works the frozen Lab-2 playbook in-race as a strong prior — the ENGINE may depart
-from it (the boat's own gear isn't outside help; RRS 41's line is on-boat vs off-boat). Item-2's vision has two continuously-monitored branch triggers:
-(a) **route-deviation** and (b) forecast-drift. This first slice ships the **route-deviation core +
-the iPad Strategy card** — the deterministic, bench-verifiable half; forecast-drift + onboard
-re-optimize are later slices. **Architecture call: the branch-eval math is TIER-1** (the Pi engine,
-available without the Orin) even though the copilot's wind-shift `adherence.py` sits in Tier 2 —
-route deviation is the boat's own GPS vs its own pre-loaded homework, so it's legal in-race and
-needs no cloud/LLM.
-
-- **`vps/agent/app/deviation.py`** (new, source-agnostic on the 9.0 seam, like `ais`/`fleet`). The
-  frozen bundle's variants already carry the optimizer's full route as an absolute-time-stamped
-  polyline (`variant.route.path = [{lat,lon,t}]`, `t` = the plan's epoch ETA at that point).
-  `get_deviation(route, variant, since)` projects the boat's live position onto the ACTIVE variant's
-  track (default = the bundle's `recommended`) and returns the perflab §5 fuzzy-adherence metrics:
-  **XTE** (signed, side = left|right of the sailing direction), **along-track progress** (%/nm),
-  **time-behind-optimal** (from the path `t`'s; anchored to the plan start, re-anchorable via
-  `since`), and **VMC** made good along the optimal track vs the plan's pace on that segment. Status
-  is **FUZZY** — a Schmitt **consider** band + **commit** band with hysteresis on the drop edge
-  (`_band()`), so a boat hovering on a threshold doesn't chatter; per-(route,variant) module state
-  holds the band + an XTE trend (converging/diverging). Returns a dashboard-tile-shaped payload
-  (status/value/why/consider/clears/based) + raw metrics + the active variant's `what_flips_it`
-  (grounding). Tunables `DEV_XTE_{CONSIDER,COMMIT}_NM` / `DEV_BEHIND_{CONSIDER,COMMIT}_S` / `DEV_HYST`.
-- **Homework loading:** `datasource.save_playbook`/`get_playbook` (CloudSource `app_state` +
-  OnboardSource `kv`, mirroring `save_fleet`); the engine's **`POST /playbook/load`** freezes the
-  bundle aboard (like `/fleet/load`) and clears the Schmitt memory. `deviation` reads it back, with a
-  file fallback on `PLAYBOOK_PATH` (the same env the copilot uses), so either deploy path works.
-- **`GET /deviation`** on the onboard engine (`pi/engine/engine_app.py`) serves it — deterministic,
-  legal in-race, `na` with no playbook aboard.
-- **iPad Strategy card** (`pi/console/dashboard/`): a full-width **Strategy strip** above the tile
-  grid, fed by `/api/deviation` on its own ~5 s cadence (mirrors the `/adherence` wiring) — an
-  along-track progress bar with a boat marker, XTE / Pace / VMC metrics (bad ones colour + a
-  diverging ↗ arrow), the crew-facing why, and the active variant's branch trigger. Status-coloured
-  (ok/watch/act) like the tiles; renders in both LIVE (engine) and the DEMO calm/escalated scenarios.
-- **Verified:** unit test `vps/agent/test_deviation.py` (XTE + side, along-track, time-behind, VMC,
-  Schmitt hysteresis act→watch→ok, ahead-of-plan, na paths — passes host + in the baked engine
-  container) + LIVE e2e on the sample Pi stack (na → `POST /playbook/load` a bundle through the live
-  boat position → on-track read with real XTE/along/VMC; an offset track → `act`, XTE 1.31 nm) +
-  Playwright (Strategy strip renders live + demo, ok/act states, progress bar + metrics + trigger,
-  0 page errors) + fleet regression green. Files: deviation.py (new), datasource.py,
-  datasource_onboard.py, pi/engine/engine_app.py, pi/console/dashboard/{index.html,dashboard.css,
-  dashboard.js}, test_deviation.py (new).
-
-**Lab-3 branch trigger (b) — FORECAST-DRIFT: SHIPPED.** The second continuously-monitored trigger:
-has the common forecast the playbook rests on MOVED since it was frozen? **Reference source call:** the
-routes are optimized on the multi-model GRIB blend, but that can't be re-fetched onboard the Pi (no
-cfgrib/eccodes on the Tier-1 image). So the drift trigger is **same-source**: at freeze the Lab samples
-**Open-Meteo** (the free keyless 10 m GFS the onboard engine already serves at `/forecast` — common
-data, available to all boats) along the recommended variant's route at each waypoint's ETA and freezes
-those (tws,twd) into the bundle; onboard, `drift.py` re-samples live Open-Meteo for the SAME
-(place, target-time) and compares — genuine forecast EVOLUTION, no cross-model bias to subtract.
-(A GRIB-native fingerprint is a heavier future upgrade.) Pieces: **`vps/lab/app/forecast_ref.py`**
-(new, pure-stdlib Open-Meteo sampler + `build_fingerprint(route_path)`; best-effort — omitted if the net
-is down at freeze) → `synthesis.synthesize` adds a **`forecast_fingerprint`** block to the bundle
-(signed at freeze). **`vps/agent/app/drift.py`** (new, Tier-1, source-agnostic): for each still-future
-waypoint (skips spent/imminent + beyond the 2-day Open-Meteo horizon) computes the signed angular drift
-(veered +/backed −) + speed change vs the frozen reference, aggregates (mean/max), and applies the same
-**Schmitt consider/commit bands + hysteresis** (`DRIFT_TWD_{CONSIDER,COMMIT}_DEG` 15/30,
-`DRIFT_TWS_{CONSIDER,COMMIT}_KN` 4/8) — `na` with no reference / all-past / no network. Engine
-**`GET /drift`**; `/playbook/load` clears both triggers' Schmitt memory. The **iPad Strategy card**
-gains a forecast-drift line (dot + "Forecast drift 28° veered · +4 kn" status-coloured) — so the strip
-now shows BOTH branch triggers. FLAGS drift + says which way; onboard re-optimize is a later slice.
-**Verified:** unit `vps/agent/test_drift.py` (angular drift + wraparound 350°→010°, veer/back, speed
-band, Schmitt hysteresis, horizon/all-past/no-net na — host + baked container) + LIVE bench on the
-sample Pi stack (build an Open-Meteo fingerprint at the live position → `/drift` reads 0°/holding when
-reference==live; perturb the reference +25° → 25° backed/watch) + Playwright (drift line renders live
-0° + demo calm 6° + demo escalated 28° act, 0 errors) + lab container rebuilt (forecast_ref baked,
-`synthesis._fingerprint` builds). Files: forecast_ref.py (new), synthesis.py, drift.py (new),
-pi/engine/engine_app.py, pi/console/dashboard/{index.html,dashboard.css,dashboard.js}, test_drift.py (new).
-
-**Lab-3 branch SELECTOR (graceful degradation) — SHIPPED.** Unifies the three signals — the on-water
-persistent wind shift (`tactics`), route-deviation (`deviation`) and forecast-drift (`drift`) — into ONE
-crew-facing recommendation over the FROZEN playbook: **`vps/agent/app/selector.py`** `get_selector()` →
-HOLD the recommended variant / **SWITCH** to a pre-authored variant / **OFF-SCRIPT** (favoured side has no
-branch aboard). This deterministic layer picks a pre-authored variant — the switch target is one of
-the bundle's own variants and the rationale is its own `what_flips_it` (the copilot above narrates + condition-matches only — never originates strategy, descope 2026-07-06). GRACEFUL DEGRADATION (item-2): tier
-1 = a persistent shift favours a side WITH a variant → recommend it; tier 2 = favoured side has NO variant
-→ off-script flag ("sail your own to that side" — the onboard re-optimizer is the still-deferred next tier);
-default = hold. Forecast-drift/route-deviation don't switch on their own — they REINFORCE a wind-shift switch
-(concordance raises confidence: veer→right/back→left drift agreement + XTE already on the favoured hand) and,
-alone, raise a "hold + reassess" caution. Confidence is a first-class fuzzy output. This is the Tier-1 (Pi
-engine, no Orin) generalization of the copilot's wind-shift-only `adherence.py` dashboard tile (which stays
-as-is for the PLAYBOOK tile; pointing it at `/selector` is a later cleanup). Engine **`GET /selector`**; the
-iPad Strategy card gains a top **recommendation banner** (HOLD/SWITCH/OFF-SCRIPT + confidence + grounded
-why), so the strip now shows the full executor stack: the decision on top, the two triggers below. Verified
-`vps/agent/test_selector.py` (switch tier-1 / off-script tier-2 / confirmed-hold / drift-reassess / default /
-concordance confidence / na — host + baked container) + LIVE (`/selector` = "Hold: Middle start" on the
-bench sample, correct — no shift) + Playwright (banner live HOLD + demo SWITCH→Right high-conf with the
-grounded rationale, 0 errors). Files: selector.py (new), engine_app.py, dashboard/{index.html,css,js},
-test_selector.py (new).
-
-**Lab-3 onboard RE-OPTIMIZER (graceful-degradation tier 2/3) — SHIPPED.** The fallback route when the
-selector says OFF-SCRIPT. `vps/agent/app/reoptimize.py` `get_reoptimize()` computes a FRESH route ONBOARD
-— from the live position, through the REMAINING course marks to the finish, on the boat's OWN polars
-through the common Open-Meteo forecast. The Pi has no cfgrib, so it reuses the onboard isochrone
-(`routing.route_leg`, extracted from `get_route` — behaviour byte-identical, `/route` regression-verified)
-CHAINED per remaining mark, NOT the GRIB lab optimizer. Legal in-race (own computer + own polars + own
-position + common data available to all) but NOT the frozen homework → explicitly flagged `off_playbook`,
-and it reports its DIVERGENCE from the active variant's frozen track (max/mean cross-track, reusing
-`deviation._project`) so the crew see how off-script it is. Isochrone chain is CPU-heavy → cached (30 s)
-and served ON DEMAND (`GET /reoptimize`) — the selector's off-script payload carries `reoptimize_hint`
-and the dashboard fetches it only while off-script (never on every poll). The Strategy card gains an
-`⟳ Onboard re-route ready — 4h 14m · 9 tacks · up to 2.4 nm off the plan · OFF-BOOK` line (dashed border)
-below the triggers, so the card shows the full degradation ladder: pre-authored branch (selector) →
-onboard re-route (this). This closes the perflab item-2 graceful-degradation chain at the Lab level.
-The re-route also carries a per-leg **SAIL PLAN** (each remaining leg's direct-course TWA at its midpoint →
-the onboard `sails` model → the sail; a consecutive-de-duped peel sequence like `J1→A3→S2`), surfaced on the
-card's re-route line (⛵), so the fallback is actually hoistable — not just a track.
-Verified `vps/agent/test_reoptimize.py` (route_leg reach + upwind chain through 2 marks tacks + reaches
-finish + off-playbook flag + divergence>0 + na paths + no-playbook-still-routes — host + baked container) +
-LIVE (dropped a practice W/L course → `/reoptimize` routed Windward→Leeward 69 min/2 tacks, diverges 2.49 nm
-from the frozen variant; `/route` unchanged) + Playwright (re-route line renders, 0 errors). Files:
-routing.py (route_leg extract + make_wind_fn), reoptimize.py (new), selector.py (off-script hint),
-engine_app.py, dashboard/{index.html,css,js}, test_reoptimize.py (new).
-
-**Lab-3 onboard re-optimizer — ISLAND OBSTACLE AVOIDANCE (homework pattern) — SHIPPED.** The onboard
-isochrone had no obstacle data (the cloud geo/ GSHHG/ENC mask is too big for the Pi), so a fresh re-route
-could cut across land. Fixed the RIGHT way — the **homework pattern**: at prep the Lab distils the race's
-compact obstacle set into the bundle, and the onboard router avoids it. `shared/race_def.course_obstacles()`
-(new) extracts the course's **island marks as buffer disks** {name,lat,lon,radius_nm} (+ zones) — the
-race-critical obstacles per the durable lesson (the per-race island-disk layer is what guarantees the small
-obstacles a coarse coastline misses); `synthesis` freezes them into the bundle as `obstacles`. Onboard,
-`routing.route_leg` gained an `avoid=` param (a `_seg_blocked` point-to-segment-vs-disk test prunes any
-step that crosses an island disk; the direct-lay shortcut also checks clearance); `reoptimize` loads the
-frozen `obstacles.islands` → detours around them, reports `avoids_islands`, and the note/`⟳` card line say
-"avoiding N charted island(s)" (or "open-water — verify against the chart" when none aboard). `route_leg`'s
-`avoid` DEFAULTS None so `get_route`/`/route` are byte-identical (regression-safe). Verified `test_reoptimize`
-(a straight reach route passes THROUGH an island < radius; with the island frozen aboard it detours to ≥
-radius clearance AND still reaches the mark; count + note — host + baked container) + LIVE (a bench island on
-the course → `avoids_islands` 0→1) + real Mackinac `course_obstacles` extracts Duck Islands (3.0 nm) + Bois
-Blanc (5.5 nm) + lab freezes them + Playwright ("avoids 2 islands" on the card). Files: shared/race_def.py
-(course_obstacles), synthesis.py (freeze), routing.py (avoid + `_seg_blocked`/`_pt_to_seg_nm`), reoptimize.py,
-dashboard/dashboard.js, test_reoptimize.py.
-**Polygon EXCLUSION/TSS ZONE enforcement (follow-up) — SHIPPED.** The island disks were v1; now the frozen
-`obstacles.zones` are enforced onboard too. `routing` gained `_pt_in_ring` (ray-cast point-in-polygon) +
-`_segs_cross` (segment intersection) + `_seg_crosses_poly`; `route_leg(..., avoid_polys=)` prunes any step
-that ENTERS a zone polygon (endpoint-inside — short isochrone steps — OR edge-intersection). `reoptimize.
-_parse_zones` normalizes the RaceDefinition zone geometry contract (GeoJSON polygon `{coordinates:[[[lon,lat]
-..]]}`/bare ring, bbox `{north,south,west,east}`, or circle `{center:[lat,lon],radius_nm}` → a disk folded
-into `avoid`) and threads `avoid_polys`; the result reports `avoids_zones` and the note/card line say
-"avoiding N island/disk(s) + M exclusion zone(s)". Both `avoid`/`avoid_polys` default None → `/route`
-byte-identical. Verified `test_reoptimize` (a straight route ENTERS a no-go box without it → with the zone
-frozen aboard, 0 path points inside the box + still reaches the mark; circle-zone→disk; count/note — host +
-baked container) + LIVE (a bench TSS polygon → `avoids_zones` 0→1) + Playwright ("avoids 2 islands + 1 zone").
-Now the onboard re-route respects BOTH the race-critical islands AND the exclusion/TSS zones. **HONEST SCOPE:**
-the broad COASTLINE is still cloud-only (islands+zones are the race-critical per-race layer; a full onboard
-coastline mask is the remaining big item, deliberately deferred).
-
-**PLAYBOOK dashboard tile UNIFIED onto the SELECTOR — SHIPPED.** The dashboard's PLAYBOOK tile used to read
-the copilot's wind-shift-only `/copilot/adherence` (needs the Orin, and could DISAGREE with the Strategy-card
-recommendation banner). It now reads the engine's unified **`/selector`**: `selector.get_selector` gained the
-per-variant agreement `rows` (recommended ★ 'start', favoured side 'now' — the same shape adherence emitted) +
-`headline`/`agreement_pct`, so the tile renders identically but from Tier-1 (always reachable, no Orin) and
-ALWAYS AGREES with the banner (one source of truth). The tile builder (`dashboard.js playbook()`) reads
-`App.selector` (action→status/value/sub + rows/why/consider), falling back to `/adherence` only if the
-selector isn't loaded yet; `adherence.py` + `/copilot/adherence` stay as the fallback. Verified: selector unit
-test (rows present: Middle ★ start 60% / Left 'now' 40%; all prior paths green — host) + LIVE + Playwright
-(the PLAYBOOK tile shows "Hold: Middle start · on plan · medium conf" + variant rows, byte-consistent with the
-Strategy banner, 0 console errors). **NEXT Lab-3 (remaining, optional):** a GRIB-native drift fingerprint (the
-current one is Open-Meteo same-source, intentional given no cfgrib on the Pi); a full onboard coastline mask.
-The copilot narration of both triggers already shipped (see the copilot section).
-
-**IN-RACE STRATEGY SYNTHESIS (the higher-order cross-signal read) — SHIPPED (`docs/STRATEGY_SYNTHESIS.md`).**
-The siloed triggers each say one thing (forecast moved / off the line / a rival ahead / breeze shifted);
-the synthesis fuses them into ONE read: do the signals AGREE (consolidate) or FIGHT (hold and watch, one
-read about to be wrong) — plus one grounded recommendation. Two tiers. **Tier-1 (`vps/agent/app/strategy.py`,
-engine `GET /strategy`):** deterministic — reuses `selector.get_selector` (the HOLD/SWITCH/OFF-SCRIPT
-backbone, already Schmitt-hysteretic) + the handicap `fleet` read, computes a **concordance** (pure vote
-math over shift+drift+deviation+fleet-lean → strong/split/weak/none), a grounded `picture[]` (each item
-cites its tool), one **recommendation** (folds selector action + concordance + fleet threat; off-book flag),
-assessment, caveats, confidence. Source-agnostic (pure composition on the 9.0 seam; reuses selector's single
-gather so the Schmitt bands aren't double-ticked). **Tier-2 (copilot `POST /strategy`, `copilot.strategy_
-brief`):** the onboard 7B phrases the digest + enriches the recommendation's RATIONALE by matching the live
-picture against the playbook's frozen conditions — it NEVER changes the action/target/vs_playbook (descope
-2026-07-06, `docs/PLAYBOOK_V2.md` §7); the numbers/picture/concordance/caveats stay the ENGINE's; an
-ungrounded narrative is dropped; any LLM trouble → the whole deterministic digest stands (schema-constrained
-decode); also served from the stdlib `serve_dashboard.py`. **SURFACED (Phase 2):** the iPad Strategy card's
-**SYNTHESIS apex section** (assessment + concordance + mode pill LLM/ENGINE + OFF-BOOK badge, `fetchSynthesis`
-copilot→engine fallback, own ~15 s cadence) above the selector banner + deviation/drift triggers; and a
-proactive **auto-coach `strategy` callout** (`narrate._strategy_callout`, priority just under playbook) that
-fires only on the higher-order reads — signals converge, conflict, or the rec departs the playbook — a plain
-hold-and-monitor stays quiet. `copilot.gather` now fetches `get_strategy`. Verified: `test_strategy.py`,
-`bench_copilot.test_strategy_synthesis` + `test_strategy_callout`, live engine `/strategy` + copilot POST,
-Playwright (live engine-fallback + demo calm/escalated + OFF-BOOK badge, 0 errors). RRS-41: the on-boat
-vs off-boat line means onboard origination WOULD be legal, but it is descoped as a product choice
-(2026-07-06) — the LLM narrates + condition-matches; off-book verdicts come only from the deterministic
-engine. Optional follow-up: tap-to-detail
-streaming on the synthesis section (deferred — the Orin `/detail` isn't reachable on the bench).
-**PHASE 3 — OFF-BOOK CHAINING: SHIPPED 2026-07-03.** A recommendation that DEPARTS the playbook now comes
-with a CONCRETE route, not just "sail your own side": the brief chains the already-built onboard
-re-optimizer and a **compact `reoptimize` offer** (heavy `path`/`legs` stripped; eta/tacks/sail-plan/
-divergence kept — the card fetches the full track from `GET /reoptimize` on demand) rides on the brief;
-the rec rationale gains "a fresh onboard re-route is ready (~ETA, N tacks)". ONE attach point since the
-2026-07-06 descope: **Tier-1** (`strategy._reoptimize_offer`, deterministic off_script → off-book) — the
-Tier-2 (LLM-originated) attach point was REMOVED with origination (`docs/PLAYBOOK_V2.md` §7). The
-heavy isochrone runs ONLY on an off-book rec (never on an on-plan hold), engine-cached. Surfaced: the iPad
-card's `⟳ re-route` line fires on a SYNTHESIS off-book verdict (not just a selector `off_script`),
-preferring the brief's travelling offer; the auto-coach `strategy` callout appends "onboard re-route ready
-(~ETA, N tacks)".
-Verified: `test_strategy.py` (off-book attaches a compact offer + calls the re-optimizer once; on-plan hold
-does NOT), `bench_copilot.test_strategy_synthesis` (LLM 'departs' claim ignored, no Tier-2 chaining), live
-engine rebuild (on-plan `/strategy` carries no `reoptimize` key; forced off_script attaches the compact
-offer; `/reoptimize` = a real 14.8 min/1-tack route). Files: strategy.py, copilot.py, engine_client.py,
-narrate.py, dashboard/dashboard.js, test_strategy.py, bench_copilot.py, docs/STRATEGY_SYNTHESIS.md.
-**DASHBOARD DE-DUP — VMG + TACTICS TILES RETIRED 2026-07-03 (crew request).** The Strategy strip already
-consumes `get_tactics` (favoured side / persistent-vs-oscillating is the primary driver of the selector
-HOLD/SWITCH banner), so the **Tactics tile was redundant** with the strip; and **VMG** (kts + % of polar
-target) is repeated on the boat's own instruments, violating the dashboard's "not an instrument repeater"
-rule. Both dropped → **8 tiles on a clean 4×2 grid** (`wind, playbook, forecast, sail, eta, ais, charge,
-data`). The one thing the Tactics tile did that the strip didn't — show a favoured-side read with NO
-playbook aboard (practice / no gameplan) — is now **folded into the strip**: `strategy.get_strategy_signals`
-pulls `tactics.get_tactics` DIRECTLY in the no-playbook path (`_no_playbook_recommendation` + a shift-read
-in the picture, grounded in `get_tactics`), so the strip shows "the breeze favours the {side} — sail your
-own read to that side" instead of going blind. LLM-down is already covered (the strip's `fetchSynthesis`
-does copilot→engine fallback; the engine `/strategy` is pure deterministic; `copilot.strategy_brief` falls
-back to the digest on any LLM trouble — `bench_copilot` case D). Verified: `test_strategy.py` (no-playbook +
-persistent shift → available, shift read grounded in get_tactics, favoured side in the assessment;
-oscillating → sail-your-phase; nothing-aboard → unavailable), live in-container (forced no-playbook +
-stubbed tactics → "favours the right" assessment + get_tactics picture), Playwright (8-tile 4×2 grid, VMG +
-Tactics absent, Strategy strip intact, demo calm/escalated + OFF-BOOK badge + re-route line, 0 console
-errors). Files: strategy.py, test_strategy.py, dashboard/{dashboard.js,dashboard.css}, docs/COPILOT_DASHBOARD.md.
-
-## C4 Performance Lab (cloud) — Phase 9 / Lab-0
-
-`vps/lab/` is the browser-based, between-races **prep + debrief** surface (the race-day surface is the
-deliberately-simple `pi/console`). One FastAPI container serves the Lab web shell + a race-library API;
-shared **team** login (`LAB_PASSWORD`, dev `lab-dev`) gates `/api/*`, the static shell is public. Dev
-**:8103**. The Lab is organized into hash-routed tabs across the three phases (PREP: Races, Course &
-Marks, Rules/Safety/Checklists, Fleet, Learnings, Gameplan, Lock-in & Deploy · RACE: Monitor · DEBRIEF)
-so each opens in its own browser tab; the **Races** tab is live, the rest are descriptive placeholders.
-
-**RaceDefinition** (`shared/race_def.py`) is the portable artifact a race's NOR/SI/SER distil into —
-course geometry (marks/gates/finish, **decimal-degrees WGS84**), a **comprehensive `requirements`
-checklist** (safety/SER + procedural; each tagged phase + trigger, race-time items flagged
-`deliver_to_ipad` so they compile into the playbook for the onboard console), and the `rules_profile`
-(rule modifications incl. the RRS-41 carve-out + scoring). It feeds **both** the optimizer/navigator
-and the race gate. A dependency-free validator (`python3 -m shared.race_def <json>`) separates errors
-(block) from warnings (human-review items, e.g. `needs_review` coordinates).
-
-**Lab-0 race ingestion (live).** Dual input → Opus extraction → a **draft** → review → save:
-`POST /api/ingest/discover` (auto-find PDF links on a race page), `/api/ingest` (URLs — auto-find
-selections or pasted direct links), `/api/ingest/upload` (multipart PDFs — for JS-rendered hubs a
-crawler can't reach), `/api/races` (save the reviewed draft to the `lab_ingested` volume).
-`app/extract.py` pulls text with pypdf and Opus (`ANTHROPIC_MODEL`, `max_tokens` 32k) emits a
-schema-conformant RaceDefinition — coordinates **only when stated** (else `needs_review`; never
-guessed). The lab image carries `anthropic`+`pypdf`; the dev compose passes `ANTHROPIC_API_KEY`.
-Bundled `vps/lab/races/bayview_mackinac_2026.json` is the hand-curated reference instance.
-**Verified on the real 2026 Bayview Mackinac NOR + SER:** 0 errors, **56 requirements (8 →iPad)**, the
-Cove Island gate + finish coordinates, 13 RRS modifications, ORC ToT scoring — a draft more complete
-than the hand-built one; discover returned 39 candidates; save round-trips; UI Playwright-verified.
-**Drafts are always machine-extracted → human review before they're relied on.**
-
-**Course & Marks review + course loader (built).** The Lab's Course & Marks tab renders each course on
-a schematic map + an editable marks table; fill any `needs_review` mark by hand or **Geocode**
-(`POST /api/geocode` → Nominatim, human-confirmed) and Save — the reviewed copy lands on `lab_ingested`
-and **overrides the bundled seed** (store precedence). The **homework→onboard course loader**:
-`shared.race_def.course_to_marks()` flattens a course (gate→midpoint, finish→midpoint; un-geocoded
-marks skipped + reported) and **`POST /course/load`** (on BOTH the cloud agent and the onboard engine)
-writes it via `datasource.save_course(route, marks)` + activates the route, so the navigator/plot use
-the real course. Bench-verified on Mackinac cloud + onboard (gate+finish midpoints, Duck/Bois-Blanc
-skipped). The per-race `rules_profile`→gate wiring is deferred until a consumer exists (tracker access
-/ optimizer scoring).
-
-## C4 Performance Lab — Lab-1 multi-model GRIB optimizer core
-
-The optimizer that turns a reviewed RaceDefinition course into ONE optimal route + a pre-race
-briefing, routing through a **real multi-model wind field** (cloud / between-races homework, frozen at
-the gun — RRS 41). Lives in `vps/lab/app/`:
-- **`wind/` package — the multi-model wind field.** `grib.py` downloads a 10 m UGRD/VGRD GRIB2 **bbox
-  subset** per (model, cycle, forecast-hour, member) and parses it with cfgrib/eccodes (the eccodes
-  pip wheel bundles the binary → no apt; `python -m eccodes selfcheck` runs at build) into a samplable
-  `GribFrame` (bilinear on regular GFS/GEFS/ECMWF grids, nearest on curvilinear NAM/HRRR Lambert).
-  `models.py` defines key-free sources — **GFS / NAM / HRRR** (NOMADS GRIB-filter), **GEFS** (NOMADS
-  ensemble, opt-in), **ECMWF** IFS open-data (the `ecmwf-opendata` client) — each knowing its cadence,
-  forecast-hour grid, availability lag and a lag-aware **freshest-cycle** picker. `windfield.py`'s
-  `WindField.wind_at(lat,lon,epoch) → (tws_kn, twd_deg)` is a **drop-in for the agent's
-  `weather.wind_at`**: it samples every model/member series (spatial-bilinear/nearest + temporal
-  linear), blends by model priority, and reports the **SPREAD across models/members as a confidence**
-  (the fuzzy-adherence signal — models disagree → low confidence → sail conservatively). Ingestion is
-  best-effort: a field not yet posted (or no egress) is skipped and the route runs on what loaded.
-- **`optimizer.py` + `polars.py`.** `optimizer.py` is a self-contained isochrone router (no agent
-  package) that routes the course **leg by leg** through the `WindField` on the SR33 polars
-  (`polars.py` parses the one canonical `polars_sr33.sql`, the same source the onboard engine reads) →
-  one optimal route, per-leg ETA/tacks/point-of-sail/wind, total time/distance, a route-wide
-  **confidence** (mean model agreement sampled along the path) and skipped-mark report. `briefing()`
-  has Opus write the pre-race routing briefing — explicitly flagging the low-confidence legs — with a
-  deterministic template fallback so a briefing always returns.
-- **Wiring.** `POST /api/optimize {race_id, course_id?, start_epoch?, models?, ensemble_members?}`
-  derives the bbox + time window from the course, builds the wind field, routes, and returns the route
-  + briefing + wind-field provenance; `GET /api/models` lists the models + the default deterministic
-  set (`gfs,nam,hrrr`; ensembles opt-in). The **Gameplan → Optimizer** web tab (`vps/lab/web`) picks
-  race/course/start + models, runs it, and renders the stats, the isochrone route on a canvas, the leg
-  table, the briefing, and the model/cycle provenance — all confidence-coloured. Dev compose adds a
-  `lab_gribcache` volume so re-runs / many members are cheap. **Bench-verified end-to-end** on the
-  Mackinac `cove_island` course (live GFS 18Z + NAM 00Z + HRRR 01Z, ~73 frames; 133 nm/17.8 h/1 tack;
-  route confidence 0.69; Opus briefing led with the confidence caveat; ~52 s first run, then cached;
-  Playwright-verified the tab). **Next:** Lab-2 — fan the optimizer across ensemble members/scenarios →
-  cluster → the **branching playbook bundle**. See `vps/lab/README.md`.
-
-**Sparse/degraded-GRIB hardening: SHIPPED 2026-06-21.** Four pieces so a thin wind field can't silently
-produce a confident-looking but fake route (the optimizer falls back to a constant 12-kn wind wherever
-the field has no coverage). (1) **Cycle-fallback** (`windfield._load_model`): if a model's freshest
-cycle is too sparse (< `GRIB_MIN_FRAME_FRAC`=0.5 of expected frames — i.e. not fully posted yet) it
-steps back to the previous cycle and retries (`GRIB_CYCLE_FALLBACK`=2 tries); meta now carries
-`expected_frames` + `cycle_fallbacks`. (2) **HRRR per-cycle horizon** (`HRRR.pick_cycle` /
-`ModelSource.horizon_for`): HRRR runs hourly but only its SYNOPTIC cycles (00/06/12/18) reach 48 h —
-off-synoptic stop at 18 h. For a race needing more, it now picks the freshest synoptic cycle, and
-`_fhrs_for_cycle` caps the requested forecast-hours at the horizon a cycle actually reaches (no more
-wasted f19–f48 404s). (3) **Coverage gate** (`optimizer._wind_coverage`): measures the fraction of the
-routed path that had REAL multi-model coverage vs the fallback wind → `wind_coverage`. (4)
-**Route-sanity guard** (`optimizer._route_sanity`): flags `degraded` + a `warnings[]` list when no data
-loaded, coverage < `GRIB_COVERAGE_MIN`=0.6, a leg's average speed exceeds the polar max ×1.2 (a tell of
-a wind gap), or the optimizer timed out. The briefing (Opus + deterministic fallback) OPENS with the
-degraded warning; the Gameplan optimizer tab shows a degraded banner + a wind-coverage stat + per-model
-frames/expected with a cycle-fallback badge. Verified: 13 unit tests (cycle selection / fhr-cap /
-fallback / coverage / sanity) + a real end-to-end Mackinac run (HRRR auto-picked the 18Z synoptic cycle
-→ 46 frames reaching ~48 h for the 47-h race; coverage 1.0, not degraded) + Playwright UI smoke.
-
-**GRIB parse isolation (crash hardening): SHIPPED 2026-06-29.** cfgrib/eccodes can intermittently
-SEGFAULT on a frame (a native finalizer crash) — uncatchable by `try/except`, so it took down the whole
-optimize worker (observed: the live `/api/optimize` empty-replied at ~99 s, container restarted). With
-`GRIB_ISOLATE_PARSE` (default ON) the cfgrib parse runs in a PERSISTENT child process
-(`app/wind/_grib_parser.py`, one per `build_windfield`, paying the xarray/cfgrib import once):
-`grib.IsolatedGribParser.parse()` feeds the child one file/line and reads back the U/V arrays via a temp
-`.npz`; on child death (segfault) or a `GRIB_PARSE_TIMEOUT_S`=60 hang it **respawns + retries**
-(`GRIB_PARSE_RETRIES`=2), then skips the frame — which `_load_model`'s existing `except: continue`
-already treats like any unreadable frame, so a crashing frame degrades to a skipped frame instead of a
-dead worker. Threaded through `GribFrame.from_file(..., parser=)` / `_load_model(..., parser=)` /
-`build_windfield` (creates + closes one parser per build). Verified (`test_grib_isolation.py`): an
-injected child crash is survived (parse→None, process lives) + the parser respawns and works again + the
-isolated parse matches in-process `open_uv` exactly; integration — injecting a crash on every GFS frame
-skips GFS (0/26) while NAM/HRRR load fully and the build still succeeds. (This is the durable fix for the
-intermittent crash; the consistent crash was the separate unpinned-pandas one — see the requirements
-pin.) Tunables `GRIB_ISOLATE_PARSE` / `GRIB_PARSE_TIMEOUT_S` / `GRIB_PARSE_RETRIES`.
-
-**Obstacle avoidance (routing fidelity 2a, from the Bitsailor gap analysis): SHIPPED 2026-06-20.**
-`vps/lab/app/geo/` keeps the optimizer's route off land — **race-agnostic**: three layers rasterize
-into one boolean mask the isochrone prune queries (`blocked`/`crosses`): (1) a GLOBAL coastline
-(`coastline.py`, `land∧¬lake` + islands-in-lakes, fetched once to the `lab_coastline` volume +
-auto-clipped to the course bbox → works for any race, ocean or lake; **GSHHG full-res by default**,
-Natural Earth 1:10m as the dependency-light fallback — see "Higher-res coastline backstop" below),
-(2) the race's `zones[]` (exclusion/hazard/tss), (3) the race's geocoded `island` marks
-buffered to a disk (`radius_nm`; islands are obstacles, NOT waypoints — `course_to_marks` omits them
-as waypoints). `optimize_course(avoid=True)` builds the field (cached by `cache_key`, so Lab-2's
-same-course scenarios share one mask) + threads it through `route_leg`; `POST /api/optimize` takes
-`avoid_land` (default true) and returns an `obstacles` summary + `obstacle_steps_avoided`; the Gameplan
-tab overlays coast/islands/zones on the route canvas. **A/B-verified on the real Cove GRIB route:**
-avoid OFF passes 1.9 nm from Bois Blanc center (cuts across it); ON clears at 5.7 nm for +0.3 nm/+1 tack.
-Caveats: NE 1:10m is coarse near shore + misses sub-nm islands (the race island/zone layer covers the
-critical ones; island coords geocoded `approx` → human-review); rounding SIDE is now enforced for
-islands that are MARKS of the race (2f, below) — plain hazard islands are still avoided either side.
-Tunables `GEO_RES_DEG`/`GEO_ISLAND_NM`. See `vps/lab/README.md`.
-
-**Map accuracy upgrade — NOAA ENC + BoatProfile + a real slippy map: SHIPPED (dev).** Fixes the
-"map is not accurate" complaint in three pieces (detail in `vps/lab/README.md`): **[A] NOAA ENC
-charts** (`app/geo/enc.py`) — authoritative S-57 vector charts as a pluggable obstacle source
-(`COASTLINE_SOURCE=enc`, NE fallback): prep-time `ogr2ogr` → cached GeoJSON on `lab_enc`, giving real
-land (LNDARE), **draft-aware shoals** (DEPARE < boat safety depth) and rocks (OBSTRN/UWTROC); `POST
-/api/enc/prep` warms it. **[B] BoatProfile** (`shared/boat_profile.py` + `app/boats.py`) — race × boat
-as two dimensions; the active boat's **draft** sets the ENC depth no-go (canonical metres, UI in
-**feet**; SR33 = 7 ft); `/api/boats[/active]` + a Gameplan boat selector + Charts toggle. Also carves a
-navigable pocket at each waypoint (`GEO_MARK_CARVE_NM`) so a near-shore finish is reachable (was
-thrashing the router to 1406 nm / 148 tacks; now 278 nm / 6 tacks on ENC). **[C] GRIB-on-ENC slippy
-map** (`web/mapview.js`, Leaflet vendored) — the route canvas is now a Leaflet layer stack [OSM (+
-OpenSeaMap) + our ENC shoal/rock/land polygons + GRIB **wind** arrows faded by confidence + route],
-with a **forecast time slider** over an embedded multi-time `wind_grid` (`WindField.sample_grid`).
-NOAA ENC Online tiles are SCAMIN-gated / blank and RNC was sunset → the chart layer is our own
-extracted ENC polygons over OSM (self-contained, no CDN/build).
-
-**Higher-res coastline backstop — GSHHG full-res: SHIPPED 2026-06-22.** Natural Earth 1:10m misses
-sub-nm islands (it had **zero** islands across the whole North Channel / Georgian Bay) and is coarse
-right at the shoreline. The global coastline (`coastline.py`) now defaults to **GSHHG** (Global
-Self-consistent Hierarchical High-resolution Geography), full resolution. GSHHG's hierarchy maps
-exactly onto our three roles — **L1 = land**, **L2 = lakes**, **L3 = islands-in-lakes** — so the
-existing fill logic (fill land → carve lakes → re-add islands) is source-agnostic. GSHHG ships as
-shapefiles → a prep-time `ogr2ogr -clipsrc <bbox>` (GDAL already in the lab image for ENC) clips each
-level to the course bbox into cached GeoJSON, then the hot path stays pure-python (same pattern as
-`enc.py`). The 149 MB bundle is fetched + the chosen-res L1–L3 extracted once to the `lab_coastline`
-volume. `COASTLINE_GLOBAL` (`gshhg` | `natural_earth`, default `gshhg`) + `GSHHG_RES`
-(`f`|`h`|`i`|`l`|`c`, default `f`); falls back to NE automatically if GSHHG can't be fetched.
-This is the **global backstop under BOTH modes** — it runs first in ENC mode too, so US-only ENC's
-Canadian gap (Cove Island, Manitoulin) is covered by GSHHG, not NE. **Mask A/B-verified** on the
-Bayview Mackinac cove_island bbox: GSHHG blocks **778 cells across 251 island clusters** that NE
-leaves open + refines 663 cells where NE's coarse shoreline over-blocked water; ENC mode still blocks
-Canadian Manitoulin (via the GSHHG backstop) with US draft-aware shoals intact; live optimize 42.4 h,
-coverage 1.0, reaches the finish. (Cove Island's own landmass already read as land under NE because it
-abuts the coarse Bruce-Peninsula blob; the real win is the many mid-lake islands NE omits, plus the
-shoreline refinement.) Rounding **side** is now enforced for marked islands (2f, below).
-
-### Venue-specific weather-model skill weighting (design LOCKED + Phase 1 SHIPPED 2026-07-03)
-
-Model skill is venue-dependent: on the Great Lakes the mesoscale models (HRRR/NAM) resolve
-lake-breeze structure the global models (GFS/ICON/ECMWF) smear out; offshore it flips. The blend today
-uses a **static** per-model priority (`wind/models.py`), so it leaves skill on the table. This feature
-**weights each model by how accurately it has ACTUALLY forecast the wind at this venue in the past** —
-forecast-vs-observed verification, not model-vs-model agreement (which we already report as
-`confidence`). Full design + math + phases: **`docs/MODEL_SKILL_WEIGHTING.md`**.
-- **Ground truth (two independent series over the venue window):** the FORECAST as it was issued,
-  from the **Open-Meteo Historical Forecast API** (archives each model's real past forecasts, per
-  model, by past date — GFS/HRRR(`gfs_hrrr`)/ECMWF/ICON/GEM individually retrievable; no need for our
-  own GRIB capture history); and the OBSERVED wind, independent of any model, from **METAR** (Iowa
-  State ASOS archive) + **NDBC buoys**, with boat-instrument TWS/TWD as a Phase-3 supplement. (NOT the
-  judge's GRIB oracle — that's a model product, circular for scoring; it stays for route-regret only.)
-- **Metric:** headline **vector RMSE (kn)** = |forecast wind vector − observed| (folds speed + dir
-  error), plus **speed bias** + circular **direction bias** (the de-bias input).
-- **Phase 1 (BUILT + PROVEN) — `vps/lab/app/modelskill.py`:** obs providers (METAR + NDBC realtime),
-  the historical per-model forecast provider, the bias/vector-RMSE scorer, and a standalone
-  `verify_venue()` "which model was right here" report. Pure stdlib; no blend changes yet. Self-test
-  `python3 -m app.modelskill` verified live against Alpena **KAPN** over the 2025 Bayview-Mackinac week
-  (613 METAR obs): **HRRR 2.45 kn** RMSE beat **ECMWF 3.71 kn** (mesoscale wins on the lake, the "best
-  global model" comes last), and every global model carried a systematic **+10–13° veer bias** HRRR
-  didn't — a clean de-bias target. Thesis validated on real forecasts vs real obs.
-- **Decisions (locked):** ground truth = METAR/NDBC spine + boat obs · apply mode = **auto-apply with
-  shrinkage** (no manual gate; safe via hard shrink-to-priors when thin + a swing cap + env kill-switch
-  `MODEL_SKILL_WEIGHTING=off`) · **weights displayed to the user** (required, since auto) · venue key =
-  auto bbox-centroid cell (~0.5°) overridable by `race.venue_tag` (bayviewmack2025+2026 → one venue).
-- **Phase 2a (BUILT + VERIFIED 2026-07-03):** `model_skill` table on `/srv/learning`; **seasonal,
-  multi-year, recency-weighted** sampling — score the race's calendar window (±21 d) in every reachable
-  year, weight by recency (t½=**8 y**, so a ~2012 season still counts ~30% of 2025; models drift, recent
-  leads). Weights = de-bias + inverse-MSE + shrink-to-priors + cap, threaded through
-  `build_windfield → detail_at`; env kill-switch. Verified live at KAPN: **HRRR 2.85 kn across 5 July
-  seasons (2022–2026, n=4123) → ×1.71**, globals down-weighted.
-- **Phase 2b (BUILT + VERIFIED 2026-07-03) — deep GRIB pipeline:** goes deeper than the Open-Meteo
-  2021 floor. `deepfc.py` does `.idx` byte-range subsetting from AWS — **HRRR archive** (`hrrr_series`,
-  2015+) + **GEFS Reforecast v12** (`gefs_series`, 2005+, the NCEP-global 'gfs' deep proxy) at a
-  same-day +6..18 h band (available across the full archive depth; HRRR extended f24+ only starts
-  ~2019). Deep runs ONLY via the explicit **`backfill_deep`** (offline, heavy — thousands of byte-range
-  gets); the inline optimize path skips pre-2021 years, and a deep result is `deep=True` → permanent, so
-  optimize reads it without ever re-running. Endpoints `GET /api/model-skill` + `POST
-  /api/model-skill/backfill`. Verified: HRRR parsed to 2015 / GEFS to 2008; bounded 2019–2026 backfill
-  merged deep GRIB years w/ Open-Meteo (HRRR n=499 → ×1.70); uneven coverage handled by shrink-to-priors.
-- **Phase 2c (BUILT 2026-07-03) = display:** GamePlan **Model skill — venue backtest** rail panel
-  (`optModelSkill` in `web/app.js`) — a plain-language explainer + a stat strip (obs stations · seasons ·
-  year span · total matched comparisons · recency t½) + per-model RMSE / applied weight (green ↑ / red ↓) /
-  veer-bias removed / sample n / seasons, a `deep history` badge, a `ref` tag for reference-only lines,
-  and a **"Deepen history (2005+)"** button (`runModelSkillBackfill` → `POST /api/model-skill/backfill`).
-- **Refinements (BUILT 2026-07-03):** (a) **multi-station pooling** — a venue anchors on the nearest
-  shore METAR AND over-water NDBC buoy (`venue.stations_for`), forecast co-located per station; (b) **GEFS
-  reforecast is its own `REFERENCE_ONLY` line** (2005+), not a gfs proxy (that contaminated gfs); gfs
-  stays clean Open-Meteo 2021+; (c) **retry+backoff** on all fetches (`deepfc._get`/`modelskill._get`) —
-  a heavy backfill was silently throttled to a sparse result without it; (d) per-model `n_years`; (e) a
-  white **"Dim chart" scrim** over the route-map basemap so wind/current arrows pop (`mapview.js`).
-- **FINAL deployed result — Bayview Mackinac (buoy 45008 + KAPN, deep 2005→2026, 77-min backfill):**
-  ICON ×1.16 (3.89 kn) · **HRRR ×1.14 (3.92, 12 seasons deep)** · ECMWF ×1.10 (3.99) · GEM ×0.91 · **GFS
-  ×0.76 (4.79)** · *GEFS ref (5.22, 15 deep seasons, not blended)*. Top 3 (ICON/HRRR/ECMWF) tied when both
-  regimes pooled; GFS weakest; global +3…+11° veer bias removed (HRRR −5°). Full write-up:
-  **`docs/MODEL_SKILL_FINDINGS.md`**. **Phase 3 (future)** = boat-obs supplement + regime-conditional
-  (gradient vs thermal) + lead-time buckets + buoy anemometer-height (5 m→10 m) correction. Design:
-  `docs/MODEL_SKILL_WEIGHTING.md`.
-
-## C4 Performance Lab — Lab-2 branching playbook bundle
-
-The output of the prep studio: the optimizer's one route becomes a small set of strategic
-**variants** + a crew decision-tree, synthesized + **signed**, and dropped onboard as the copilot's
-frozen homework. Two stages, both in `vps/lab/app/`:
-
-- **Lab-2a fan-out → variants (`playbook.py`).** Routing through the *blended* field gives one
-  answer, but the models disagree — so split the multi-model `WindField` into per-model sub-fields
-  (each a "what if the wind follows THIS model" scenario, free — reuses the GRIB already down­loaded),
-  route the course through each + the blended consensus, and **cluster by which side of the first
-  beat** each favors (left/middle/right of the rhumb). Returns variants with `supported_by` models,
-  `share` (agreement), total-hours + range, a representative route, and the **decision spread** (the
-  time stakes between the side options). `POST /api/playbook`.
-- **Lab-2b synthesis → signed bundle (`synthesis.py`).** Turns the 2a variants into the artifact the
-  crew carries. **Opus** writes, per variant, a crew-facing `summary` / `rationale` / `tradeoffs` and
-  — most important — `what_flips_it`: the concrete **observable** on-the-water trigger (a wind shift
-  past a bearing relative to the first-beat rhumb, persistent vs oscillating) that says "abandon this
-  variant, switch to that one" — that trigger is what makes the playbook *branching*. Plus a
-  `headline`, a `recommended` start default, and an ordered `decision_tree`. A **deterministic
-  fallback** builds a valid bundle with no API key (the Lab never depends on the model). The bundle is
-  the **`c4.playbook/v1`** schema — a *superset* of what the onboard copilot's `playbook.Playbook`
-  reads (`race_id` + `variants[].id/summary/what_flips_it`), so freezing one and pointing the
-  copilot's `PLAYBOOK_PATH` at it is the whole onboard wiring. **Signing:** `sign_bundle()` hashes the
-  canonical content (sha256 over the bundle minus its `signature`, sorted-key/no-space JSON) →
-  tamper-evident "frozen at the gun"; the copilot's `playbook.verify_signature()` recomputes the
-  **identical** canonical bytes, so a bundle that arrives byte-for-byte verifies (surfaced in copilot
-  `/health` as `signed`/`signature_ok`, non-fatal). `pbstore.py` persists frozen bundles on the
-  `lab_playbooks` volume (`/srv/playbooks`, id `<race_id>__<start_epoch>`). Endpoints: `POST
-  /api/playbook/synthesize` (draft), `POST /api/playbook/freeze` (sign + persist), `GET
-  /api/playbooks[/{id}]`, `GET /api/playbooks/{id}/download` (the exact signed bytes — scp to the
-  Orin). The **Gameplan tab** gains a "Synthesize branching playbook" panel below the optimizer:
-  headline + recommended + stakes, per-variant cards (summary/why/tradeoffs/what-flips-it), the
-  decision tree, and a **Freeze & sign** → signature + download. RRS 41: all pre-race cloud homework
-  — the strategy library the onboard copilot points into (only the deterministic engine may flag an
-  off-book departure; the LLM never originates — descope 2026-07-06).
-
-**Verified end-to-end on the real Bayview Mackinac cove_island course** (live GFS+NAM+HRRR + Opus,
-~2.5 min): a 3-way split (HRRR-left / NAM-middle / GFS-right), low agreement 0.33, 252-min decision
-spread; Opus wrote specific rhumb-relative triggers ("if the breeze veers and holds right of ~020°
-for two-plus oscillation cycles = persistent right shift, bail to right"); freeze → signed (sha256) →
-download → the onboard copilot loaded it, **verified the signature**, and emitted the LLM digest with
-each variant's flip trigger. UI Playwright-verified. See `vps/lab/README.md`.
-
-**Playbook v2 — the scenario-rich PLAY LIBRARY: Phases B + C SHIPPED 2026-07-07, Phase D onboard
-matcher (Tier-1 `matcher.py` + `GET /plays` + crew sail-state + armed-plays surfaces + Tier-2
-ranked matching) SHIPPED 2026-07-07/08 (design `docs/PLAYBOOK_V2.md` §9).** The v1 side variants
-stay (compat), but the
-`c4.playbook/v2` bundle now carries **plays** — named scenarios with deterministic detection
-predicates + a narrative condition (for the Tier-2 matcher) + a pre-computed response. EXTERNAL =
-the scenario fan through transformed views of the same field (rotations ±10/20°, pressure
-×0.75/1.25, front early/late, heavier sea — point-of-sail-weighted; a scenario that sticks to the
-nominal is robustness evidence, not a play). INTERNAL = the boat/crew departing the plan: pace
-re-routes from each intermediate mark (percentile-framed vs the venue's frozen fleet-normal stats),
-gear-loss re-runs (sail removed, envelope rebuilt over the remaining inventory), sail-guidance
-crossover calls (guidance-only), a low-maneuver variant (prune-costs ×3–5, honest ETA delta), and a
-rejoin-vs-continue tabulation (off-track positions at the venue commit-band XTE → a guidance play
-carrying the table). The bundle states the corridor verdict (geometry vs execution) + freezes
-`venue_stats`. Synthesis chain Fable→Opus→deterministic seeds. Tests `test_playbook_v2c.py`.
-
-**Routing fidelity 2b — per-leg SAIL PLAN + reviewable boat sail model: SHIPPED.** The optimizer
-routes on the Best-Performance polar envelope, which IS the max-over-sails speed — so the route's
-speed is already sail-optimal, but it didn't say WHICH sail. 2b attaches that. `build_speed_guide.py`
-now also emits **`vps/db/seed/sr33_crossovers.json`** — the per-TWS sail crossover bands (optimal sail
-by TWA: J1 upwind → A2/A3 reaching → S2 running), precomputed from the ORC cert via the existing
-`optimal_sail()`. `vps/lab/app/sailplan.py` loads it (`optimal_sail(tws,twa)`, clamped so an upwind
-beat's sub-close-hauled direct TWA still maps to the up sail; `crossovers(tws)`; `model()`).
-`optimizer.py` adds `sail` to each leg (TWS/TWA already in scope) + a route-level `sail_plan` (the
-peel sequence); these flow into the playbook variants for free. The synthesis bundle gains a
-**`boat_model`** block (the crossover table + polar source + active-boat draft) so the reviewed boat
-model is **frozen into the signed homework and loaded onto the copilot** — `pi/orin/copilot/
-playbook.py` surfaces `boat_model` + the per-variant sail plan in its LLM digest (`/health` reports
-`sail_inventory`). The Lab **Gameplan tab** gains a "Review boat model — polars & sail crossovers"
-panel: the crossover bands per TWS (color-coded sails over a 0–180° TWA axis) + the polar grid (TWS ×
-TWA → target boatspeed) — what gets loaded onto the copilot, reviewable before lock-in. New endpoints
-`GET /api/crossovers` + `/api/polars`; the optimizer leg table gains a Sail column + a sail-plan
-strip. Verified end-to-end (per-leg sail attaches where wind detail exists, bundle carries
-boat_model, freeze→signed→copilot digest shows the sail model; UI Playwright-verified).
-**Jib change-downs by TWS (J1/J2/J3):** the ORC cert rates only ONE headsail (the speed-optimal J1),
-so J2/J3 — same upwind slot, smaller jibs for a building breeze — aren't in the polar. The
-`BoatProfile` carries an editable **`jib_crossovers`** (TWS bands, e.g. SR33 J1<14 / J2 14–20 / J3>20
-kn — crew/sailmaker thresholds, NOT from the cert); `sailplan.optimal_sail(tws,twa,jib_crossovers)`
-specialises the upwind jib by TWS; the active boat's bands thread through `optimize_course`/
-`build_playbook`/`synthesize` and into the bundle's `boat_model`. The review panel shows + edits them
-(`POST /api/boats/jib-crossovers`); the copilot digest surfaces "Upwind jib by wind: J1 <14; …".
-`sailplan.crossovers_specialized()` relabels the upwind band of **each TWS row** to the real jib for
-that wind (a row is one TWS → exact), so the crossover chart + bundle show J1 (light) → J2 (mid) → J3
-(heavy), not just the cert's lone J1.
-**Code 0 + mainsail reef points (2026-07-07):** two more crew-config overlays in the same
-J2/J3 discipline (the cert rates neither; labels only — routing speed stays the rated envelope).
-`BoatProfile.code0` = the light-air reacher band {enabled, tws_max, twa_min, twa_max}: inside it
-the C0 OWNS the sail call whatever cert sail it overlaps (leaving the band to a kite is a real
-modeled peel; C0↔jib relabels are free — they share the J1 curve). `BoatProfile.main_reefs` =
-{r1_tws_kn (depower once the breeze is up), r1_a3_slot_tws_kn (a LOWER threshold with the A3 up —
-reef 1 opens the slot between the kite and the main)}; reefs DECORATE the call (leg `reef`/
-`reef_why`, ▽R1 badge in the leg table + CSV). Both editable in the shared boat-model card
-(Learnings + Gameplan) → `POST /api/boats/sail-config`; the crossover chart carves C0 zones out of
-the light rows (`sailplan.crossovers_specialized`); frozen into the bundle `boat_model` → the
-copilot digest states the band + reef reminders; the sail-guidance play scan is config-aware (an
-A2→C0 "breeze dies" play) + `_reef_guidance_plays` pre-authors the depower + A3-slot calls
-(predicates via INTERNAL_DETECT sail_guidance; the slot play requires hoisted A3). Also fixed in
-passing: the play scan's `_POS_TWA` used upwind/reaching/downwind but legs say beat/reach/run —
-every scan silently used TWA 100 (now mapped correctly). Tests `test_sail_config.py`.
-
-**Routing fidelity 2c — VMG-gate + cone-prune + anti-over-tack: SHIPPED.** Three refinements to the
-isochrone `route_leg` (`optimizer.py`), all env-tunable so they're A/B-able: (1) **VMG gate** —
-`_vmg_headings()` computes the true best-VMG upwind (beat) and downwind (run) compass headings at the
-local TWS (argmax of `stw·cos(twa)` up / `−stw·cos(twa)` down over the polar band) and **injects them
-into the heading fan**, so the router sails the exact optimum tacking/gybing angle instead of being
-limited to the nearest coarse 12° grid heading. (2) **Cone prune** — the fan only opens headings
-within `ROUTE_CONE_DEG` (120°) of the bearing-to-mark (plus the VMG angles, always kept), dropping the
-truly-backward third of the compass; if the whole cone is obstacle-blocked at a node it **reopens the
-full fan** so land/island avoidance can still detour. (3) **Anti-over-tack** — a `ROUTE_TACK_COST_S`
-(30 s) maneuver penalty subtracts distance-made-good from any step that crosses the wind to the other
-tack vs the node's incoming heading, so the isochrone prune disfavors spurious tacking and the route
-tacks only when a shift makes the new board genuinely pay. Verified: unit tests (VMG beat/run headings
-correct; upwind leg tacks at the VMG angle + reaches the mark; heavy tack-cost ≤ zero-cost tack count;
-obstacle detour still works) + a real end-to-end Mackinac `cove_island` run (43 h, coverage 1.0, not
-degraded, sail plan attached, reaches the finish). Tunables `ROUTE_CONE_DEG` / `ROUTE_TACK_COST_S`.
-
-**Routing fidelity 2e — finish/mark over-tack ("scramble") fixes: SHIPPED (dev).** Diagnosed from a
-real Bayview Mackinac `cove_island` run whose FINISH leg was a light-air beat that the optimizer turned
-into a degenerate zig-zag — dozens of tiny tacks, ~3x oversail, arriving ~2x slower than necessary
-(the "crazy scramble near the finish" the user reported). Root cause was structural in the isochrone
-`route_leg`: the 2c tack penalty was a one-step distance haircut (not cumulative), the prune buckets by
-bearing-from-leg-start so opposite-tack nodes never eliminate each other, and nothing committed the boat
-to a layline near the mark. Three env-flagged fixes (`optimizer.py`): (1) **`ROUTE_LAYLINE_COMMIT`** —
-once a node within `ROUTE_LAYLINE_COMMIT_NM` (10 nm) of the mark can lay it (bears more than the VMG
-half-angle `_vmg_twa()` off the LOCAL wind axis), drop the opposite-tack headings so it fetches the
-layline instead of free-tacking; re-checked each generation against node-local wind (a real shift
-re-opens it), and only on the final approach so strategic side choice is preserved farther out.
-(2) **`ROUTE_TACK_CUMULATIVE`** — the tack cost accrues into a per-path penalty `pen` (and the node ETA)
-so the prune ranks by range-made-good-net-of-maneuvers (`rng_eff = rng − pen`); repeated alternation
-genuinely loses ground instead of a ~5% per-step nudge. (3) **`ROUTE_MARK_POS_PRUNE`** — within
-`ROUTE_MARK_PRUNE_NM` (6 nm) of the mark the prune buckets by POSITION (a `ROUTE_MARK_PRUNE_CELL_NM`
-≈0.25 nm lat/lon cell) instead of bearing-from-start, so near-colocated opposite-tack nodes compete and
-the least-tacked wins. **A/B against ONE frozen GFS+NAM+HRRR field** (Jun-29 19:00Z start, the reported
-case): baseline finish leg 27 tacks / 2.7x oversail / 83 h total → **#2 alone 0 tacks / 1.1x / 40 h**,
-**#3 alone 0 tacks / 1.1x / 40 h** (each independently kills the scramble; #1 is the clean-layline
-finisher for genuine-beat finishes). Anti-under-tack verified: a steady dead-upwind leg still tacks the
-minimum and reaches; `test_routing_2c/2d/2e` all green. **Also fixed the per-leg tack COUNTER** — it
-classified tack-side off a single frozen leg-start wind, so on a clocking leg every shift-following
-heading swing was mis-classified; it **mis-reports in either direction** (on the frozen-field baseline
-it actually UNDER-counted the carnage 135 vs 173 real maneuvers, and would have shown the clean route as
-a false "0 tacks" when it really makes 3). Now each segment's board is classified against the wind LOCAL
-to where/when it's sailed, so the count is the true tacks-up/gybes-down tally; route geometry is
-unchanged (metric-only). On the reported case: baseline finish ≈173 real maneuvers → 3 with the fixes,
-now reported honestly. Tunables `ROUTE_LAYLINE_COMMIT[_NM]` / `ROUTE_TACK_CUMULATIVE` /
-`ROUTE_MARK_POS_PRUNE` / `ROUTE_MARK_PRUNE_NM` / `ROUTE_MARK_PRUNE_CELL_NM` (all default ON).
-
-**Mark-approach LOOPS ("circles/zig-zags at marks") fix: SHIPPED 2026-07-07.** A light-air (~4 kn),
-ROTATING-wind finish drew big self-crossing loops around the mark (user report w/ screenshot). Root
-cause: the isochrone's per-leg time step is sized to the LEG (`direct/40`, ~1 h ≈ 4 nm on a 120 nm
-leg), so once the boat is a couple of nm from a dead-upwind mark EVERY step overshoots — the search
-can only orbit the mark in quantized hops until one lands close (profiled: 2.2 nm out at h=21, then
-2.8 h of orbiting, give-back 2.7 nm). Two fixes in `route_leg`, both env-flagged default-ON:
-(1) **adaptive ENDGAME step** — each generation's dt shrinks as the frontier nears the mark
-(`gen_dt = min(dt_h, max(0.15h, d_best/ROUTE_ENDGAME_DIV=16))`), so the final approach is solved at
-fine resolution and the closing board fetches via the (exact, full-window) direct-lay; on the repro
-this ALSO arrived 1.8 h sooner (the orbiting cost real time). (2) **MONOTONE progress gate** — a
-candidate is rejected once it gives back > `ROUTE_BACKTRACK_NM`=5 of its path's best
-distance-to-mark; a node whose whole fan is monotone-blocked re-expands with the gate OFF (per-node
-fail-open, mirrors the cone-gate reopen) so obstacle detours + foul-current drift never strand.
-Surfacing: `_leg_self_crossings` (per-leg, since crossing an EARLIER leg at a rounding is normal
-W/L geometry) appends a route warning if a leg still self-crosses. Verified
-`test_routing_monotone.py` (rotating-air no-crossing ×4, VMG unchanged, obstacle detour, foul-current
-fail-open, sanity tell) + full routing regression suite green + real-field sweeps (6 ENC configs ×
-2 resolutions, all selfX=0, ETAs same-or-better). Tunables `ROUTE_MONOTONE` / `ROUTE_BACKTRACK_NM` /
-`ROUTE_ENDGAME_DT` / `ROUTE_ENDGAME_DIV` / `ROUTE_ENDGAME_DT_MIN`.
-
-**Routing fidelity 2f — island ROUNDING-SIDE enforcement: SHIPPED (dev).** Obstacle avoidance (2a)
-kept the route off islands but on EITHER side; a race often says "leave Bois Blanc to port / Duck
-Islands to starboard" — and that side was thrown away (`course_to_marks`/`course_roundings` drop all
-`type:"island"` marks). Per the scoping rule **we only enforce a side when the island is a MARK OF THE
-RACE** — i.e. its `rounding` is `port`/`starboard`; a plain hazard island (`rounding:"none"`) stays
-avoided either side. Enforcement is a **wrong-side barrier** in the obstacle mask (`geo/obstacles.py`):
-for each marked island, `_island_rounding_marks()` finds the leg it sits on (transit bearing from the
-nearest preceding nav point to the nearest following one, islands skipped, gate/finish→midpoints), and
-`_fill_wrong_side_barrier()` rasterizes a wall on the ILLEGAL side (perpendicular to that axis, within
-|along| ≤ radius + `ROUTE_ROUNDSIDE_BAND_NM`), so the only gap is the legal hand. Source-independent
-(runs in ENC and GSHHG/NE backstop alike — it's a race rule, not an obstacle) and applied AFTER the
-waypoint carve so it can't be re-opened; barrier provenance lands in `obstacles.geometry.rounding_barriers`
-and the Gameplan map draws a P/S marker + a tick toward the legal side (`mapview.js`). Verified
-(`test_routing_2f.py`): scoping (a `none` hazard island gets no side); a controlled open-water flip
-(natural route takes the WRONG side → barrier flips it to the legal side, both port and starboard,
-still reaching the mark); and the real cove_island Duck(stbd)/BoisBlanc(port) barriers (legal side open,
-illegal blocked) — plus an offline gate→finish leg routed through the full mask still reaches the finish
-(no over-block). Tunables `ROUTE_ROUNDSIDE_ISLANDS` (default ON) / `ROUTE_ROUNDSIDE_BAND_NM`.
-**Crew-facing roundings summary (2f follow-up):** the route now ENFORCES island sides but nothing TOLD
-the crew — so `race_def.marks_with_side()` returns the ordered required sides for ALL marks (nav marks
-AND islands with rounding port/starboard, plus gates), the optimize result carries it as `roundings`,
-and `briefing()` states it explicitly (Opus prompt + deterministic line: "Roundings: … leave Duck
-Islands to starboard; leave Bois Blanc Island to port"). Verified `test_roundings.py` (ordering,
-island inclusion, briefing text).
-
-**Routing fidelity 2g — SAIL-AWARE routing (per-sail polars + a peel cost): SHIPPED (dev).** 2b attached
-a per-leg sail LABEL but the optimizer still routed on the Best-Performance *envelope* (the max-over-sails
-speed) and peeled for FREE — so a route could thrash sails across a crossover at zero cost and the sail
-plan was a post-hoc per-leg guess. 2g makes the sail a first-class part of the isochrone search. **Data:**
-`build_speed_guide.py` now also emits `vps/db/seed/sr33_sail_polars.json` — the speed of EACH inventory
-sail (J1/A2/A3/S2) across its rated TWA domain (the cert already rates every sail; the envelope is just
-their max), loaded by `polars.sail_polars()` (env `SAIL_POLARS_FILE`, copied to `/srv` in the lab image);
-absent → the optimizer routes on the envelope exactly as before. **Search (`optimizer.py`):** `route_leg`
-carries the current sail in the node state; per step `sail_step` HOLDS it (at its OWN, slower-off-optimal
-per-sail speed) until it's `ROUTE_PEEL_HOLD_TOL` (6%) off the envelope-optimal sail, then PEELS to the
-optimal sail at full speed — a peel costs `ROUTE_PEEL_COST_S` (90 s honest ETA) + a one-off
-`ROUTE_PEEL_PRUNE_S` prune penalty (mirrors the cumulative tack cost), so the isochrone disfavors a course
-needing an extra peel and the hysteresis dead-band stops crossover-boundary thrash. A kite is `0` outside
-its rated TWA domain (can't fly it hard upwind → a forced peel); a jib change-down (J1→J2/J3) shares the
-J1 curve, so it's a free relabel, not a routing peel. The carried sail threads across marks
-(`start_sail`) so a peel at a rounding counts once; the route's `sail_plan` is rebuilt from the
-isochrone's OWN sail track (where it actually peeled) — physically real, not a per-leg guess — and the
-result carries per-leg `peels` + `total_peels`. **Surfaced:** the Gameplan cockpit gains a *sail peels*
-stat + a per-leg peel badge + a CSV peels column; `briefing()` states the real sail plan + peel count.
-Env-flagged `ROUTE_SAIL_AWARE` (default ON) for A/B; off ⇒ envelope routing, geometry byte-identical.
-Verified `test_routing_2g.py` (per-sail load + domain gate, carrying the wrong sail peels to the right one
-both ways, a within-tolerance sub-optimal sail is HELD with no thrash, SAIL_AWARE off reproduces the
-envelope baseline exactly, starting on the optimal sail adds no peel) + an end-to-end on the real
-cove_island course (`S2 → J1`, one peel — the post-hoc labeler's spurious A3 transient correctly NOT
-flown) + the deployed lab container. Tunables `ROUTE_SAIL_AWARE` / `ROUTE_PEEL_COST_S` /
-`ROUTE_PEEL_PRUNE_S` / `ROUTE_PEEL_HOLD_TOL` / `ROUTE_SAIL_DOMAIN_MARGIN`.
-
-**Water currents — set & drift (routing-fidelity 2d lever a): SHIPPED.** The optimizer accounts for
-water current: in `route_leg` each step advances by the boat's water-velocity (polar speed on its
-heading) PLUS the current's drift, so the route crabs into a cross stream and ETAs reflect a fair/foul
-current (`vps/lab/app/current.py`). `build_currentfield` returns a real **`GLOFSCurrent`** over the
-course bbox — NOAA Great-Lakes OFS surface currents (Lake Michigan-Huron **LMHOFS**) via the CO-OPS
-THREDDS OPeNDAP server (freshest-cycle pick + per-slice timeout + in-process cache); outside the
-Great-Lakes domain / on any fetch miss it degrades to **`ZeroCurrent`** (route unchanged). The optimize
-result carries `current` (the field `status()`) and a **`current_grid`** (set/drift sampled on the SAME
-bbox + times as the wind grid, emitted only when something actually flows). **Surfaced in the Gameplan
-cockpit:** a *current* stat (source · slices · peak drift), a teal **Current arrows overlay** on the
-slippy map (`mapview.js` `drawCurrent`, scrubbed by the same forecast slider, toggle + legend in the
-Control Center), and a current line in the briefing (Opus weaves it in; deterministic fallback states
-source + slices). Verified live on the real cove_island course (LMHOFS 18Z, 8 slices, ~1 kn peak,
-44 grid frames; Playwright-confirmed the toggle/legend/stat render with zero console errors). The
-current is threaded through ALL routing, not just the main optimize: the **per-model candidate fan**
-(`_per_model_paths`, the confidence-fan overlay) and the **playbook** consensus + every scenario
-sub-field (`playbook.build_playbook` builds its own `cur`; Lab-2b `synthesis` inherits it) all crab
-through the same stream, so the variants/fan reflect a fair/foul current too (verified live — the
-playbook result carries the LMHOFS `current` status). Tunables `CURRENTS_ENABLED` / `CURRENTS_STEP_H` /
-`CURRENTS_MAX_SLICES` / `CURRENTS_FETCH_TIMEOUT` / `CURRENTS_CYCLE_LAG_H`.
-
-**Wind-over-water 2nd-order correction (routing-fidelity 2d lever b): SHIPPED.** Lever a crabs the
-DISPLACEMENT through the current (boat-over-ground = boat-through-water + drift) but still indexed the
-polar by the GROUND wind. The boat actually sails relative to the WATER it floats on, so the wind the
-sails feel is the ground wind MINUS the current vector — `W_water = W_ground − C`. `optimizer._wind_
-over_water(tws, twd, cset, cdrift)` does the vector subtraction, and `route_leg`'s node loop converts the
-forecast wind to over-water wind before ALL the polar/TWA math (direct-lay, VMG angles, cone, layline,
-`expand`); the displacement still adds the drift over ground (lever a) — so a foul current that opposes
-the wind raises the apparent TWS (+ a fair one lowers it) and a cross current veers the apparent TWD, and
-the routed angles/ETAs reflect it. Applies wherever a `cur` is threaded (main optimize + per-model fan +
-playbook variants) with no new wiring — it reads the same `cur`. **Safe no-op** where there's no current
-(ZeroCurrent → drift 0 → wind unchanged), so it's byte-identical off the Great-Lakes domain or with
-currents disabled; env-flag `ROUTE_WIND_OVER_WATER` (default ON) for A/B. Verified `test_routing_windwater.py`
-(the vector math — following current → less apparent wind, opposing → more, cross → veer, none → unchanged,
-flag-off → ground wind; + integration — the routed ETA changes under a 2 kn current, byte-identical with
-none) + the full routing regression suite green (currents/2c/2d/2g/realized/waves — the change is small
-enough the existing fair-cuts/foul-raises/crab assertions still hold). Tunable `ROUTE_WIND_OVER_WATER`.
-
-**Realized (achievable) speed — helm + sea state (routing-fidelity 2d lever d, fuzzy baseline): PHASE 1
-+ PHASE 2 SHIPPED.** The ORC polar is a FLAT-WATER, perfectly-sailed target; the boat never quite makes
-it. The optimizer routes on **realized** speed = `polar × helm_factor × wave_factor(hs, twa)`, so ETAs
-are achievable (not theoretical) and the gap to the polar is a coaching number — the fuzzy-adherence
-baseline (perflab §5). **Helm-skill factor**: `BoatProfile.helm_factor` (0–1, default 1.0, editable in
-the Gameplan boat panel as `Helm %`; the Lab-4 loop can refine it from real tracks). **Sea state**: a
-`WaveField` seam (`vps/lab/app/wave.py`) parallel to wind/current — `wave_at(lat,lon,epoch) → hs_m`;
-phase 1 shipped the seam (`ZeroWave` default + `ConstantWave`/`WAVES_CONST_HS` what-if). **Phase 2 wires
-the real provider — `GLWUWave`:** NOAA **GLWU** (Great Lakes Wave model, WAVEWATCH III) significant wave
-height (`HTSGW` → cfgrib `swh`) from the gridded **2.5 km `grlc_2p5km`** product via the NOMADS
-**GRIB-filter** — the SAME machinery the wind models use, NOT the native unstructured mesh / THREDDS.
-ONE bbox-subset download carries every forecast hour (anl + hourly to ~149 h, run at the 01/07/13/19Z
-cycles) in a single multi-message GRIB, so a build is one HTTP fetch + one parse; the cfgrib parse runs
-in an ISOLATED subprocess (a native eccodes segfault degrades to a skipped field, not a dead worker —
-mirrors `wind/grib.IsolatedGribParser`). The grid is curvilinear → nearest-neighbour in space + linear
-in time (NaN cells = land → flat); freshest-cycle pick (clamped to `now` so a future race still reaches
-forward) with step-back fallback; outside the Great-Lakes domain / any miss → `ZeroWave` (route
-unchanged). The `realized` roll-up gains `wave_source` (`glwu`), surfaced in the briefing. Tunables
-`WAVES_STEP_H` / `WAVES_MAX_SLICES` / `WAVES_FETCH_TIMEOUT` / `WAVES_PARSE_TIMEOUT` / `WAVES_CYCLE_LAG_H`
-/ `WAVES_CYCLE_FALLBACKS` / `WAVES_GLWU_PRODUCT`. The degradation MODEL (`optimizer._wave_factor`) is
-source-agnostic and
-**deliberately CONSERVATIVE** (under-correcting beats distorting the route on an uncalibrated guess): a
-low-Hs **deadband** (`ROUTE_WAVE_HS_DEADBAND`=0.5 m — small chop costs NOTHING, so ripples never perturb
-the route), then a gentle linear slope on the *excess* Hs scaled by point of sail (head sea hurts most
-`ROUTE_WAVE_K_UP`=0.04/m → only ~6% at 2 m, following sea least 0.01/m), capped by `ROUTE_WAVE_FLOOR`=0.6.
-The coefficients are PRIORS to be calibrated from the boat's realized-polar archive (Lab-4), not trusted
-as-is. **Per-run opt-out:** the optimize/playbook endpoints take `use_waves` (Gameplan checkbox
-"Sea-state (waves)", default on) → uncheck for flat-water (polar) routing; the helm factor still applies
-(crew efficiency, not waves). Threaded through the main optimize + the per-model fan + the playbook
-consensus/variants (helm read from the active boat via `boats.active_helm_factor`); the result carries a
-`realized` roll-up (`realized_pct`/`helm_factor`/`sea_state_hs_mean`) + per-leg `realized_factor`; the
-cockpit shows a *realized %* stat and the briefing states "routing at ~N% of the flat-water polar".
-Default no-op (helm 1.0 + flat water ⇒ geometry/ETA byte-identical). Verified `test_routing_realized.py`
-(wave-factor shape + deadband + point-of-sail scaling + floor, helm slows + is reported, sea state
-degrades a beat more than a run, default == baseline) + new `test_routing_waves.py` (GLWUWave nearest +
-time-blend + NaN-land/out-of-grid → flat + peak + the cycle picker/URL + non-GL domain reject) + LIVE on
-the real Bayview Mackinac cove_island (GLWU 19Z, ~25 frames, realistic ~0.4–0.8 m Hs, `realized` carries
-`wave_source:glwu`, the briefing states "sea state ~0.6 m (GLWU)"). Tunables
-`ROUTE_WAVE_HS_DEADBAND` / `ROUTE_WAVE_K_UP` / `ROUTE_WAVE_K_REACH` / `ROUTE_WAVE_K_DOWN` /
-`ROUTE_WAVE_FLOOR` / `WAVES_ENABLED` / `WAVES_CONST_HS` + the per-run `use_waves` + the phase-2 `WAVES_*`
-GLWU knobs above.
-
-**Sea-state map overlay (realized-speed follow-up): SHIPPED 2026-06-30.** Currents got a map overlay but
-sea state only surfaced as the cockpit *realized %* stat — now the Hs field is drawn on the Gameplan
-slippy map. Waves are a SCALAR field (Hs, m), so it's a shaded **heatmap** (`mapview.js` `drawWaves`, a
-new CanvasOverlay UNDER the chart/wind/current layers so they stay legible) coloured by an Hs ramp (calm
-teal → rough red) at low opacity, scrubbed by the SAME forecast slider as wind/current. Fed by a new
-`result.wave_grid` — Hs sampled on the SAME bbox + times as the wind/current grids via a new base-class
-`WaveField.sample_grid()` (so the three overlays share one lattice), emitted by `main._wave_grid` only
-when there's meaningful sea state (peak Hs ≥ `WAVE_GRID_MIN_HS`=0.25 m → a flat day draws nothing). A
-"Sea state" layer toggle (default OFF — a wash is more intrusive than arrows) + an Hs legend (with peak)
-join the Control Center. VERIFIED live on the real cove_island course (GLWU 01Z, 25 frames, peak 1.1 m,
-45 grid frames, 256 cells/frame) + Playwright (toggle present/default-off, legend renders, the wave
-canvas paints 1335 pixel-samples ON and exactly that many fewer OFF, slider scrub repaints, ZERO console
-errors). Tunable `WAVE_GRID_MIN_HS`. Files: wave.py, main.py, web/mapview.js.
-
-**Debrief — ACTUAL-track ingestion (helm vs optimal, Lab-4 enrichment): SHIPPED 2026-06-30.** The judge
-loop (`app/judge.py`) re-routes on the wind that actually blew (ORACLE) → regret; `app/track.py` adds the
-boat's REAL sailed track scored against that oracle line — the perflab §5 fuzzy-adherence metrics: time
-behind optimal, oversail %, XTE off the optimal route, the first-beat side the boat actually WORKED, and
-% of the flat-water polar the helm achieved (actual SOG vs the polar target at the realized wind). These
-are coaching deltas, never pass/fail; the Opus critique separates tactical vs helm-execution vs
-conditions, and `score_track` self-flags non-physical readings (>100% polar ≈ favorable current / soft
-ORC rating; "faster than oracle" ≈ oracle-window mismatch). **Two inputs:** **GPX upload** (`POST
-/api/debrief/track/upload`, multipart — namespace-agnostic trkpt parse, sog/cog derived) and **YB
-our-boat** (`POST /api/debrief/track/fetch {race_id,boat}`) — the JSON GetPositions feed has only the
-LATEST fix, so the full track comes from the **delta-encoded AllPositions3 binary**, reverse-engineered +
-verified (`_decode_allpositions3`: per-team `[i32 lat][i32 lon][u32 0]` + 8-byte delta records
-`[u16 dt|0x8000][i16 dlat][i16 dlon][u16]`, deg×1e5, stored newest-first, self-resyncing per-block).
-Our boat is matched by its GetPositions latest fix (self-validating) → RaceSetup team-index fallback. One
-stored track per race (`_track_<id>.json` on the ingested volume, `_`-prefixed so the race library skips
-it); `GET /api/debrief/track` + `/track/clear`. The Debrief tab gains a **Boat track** card + a **Helm vs
-optimal** scorecard; `run_judge` fills the `actual_track` slot + feeds the critique. Shore-side debrief
-use of a public tracker is fine (the in-race `tracker_permitted` gate is separate). Verified
-`test_routing_track.py` (synthetic AllPositions3 round-trip + 2-team resync + GPX + scoring + caveats) +
-LIVE decode of real bayviewmack2025 (Illuminati Port Huron→Mackinac, 1081 fixes, decoded finish ==
-GetPositions latest) + end-to-end (GPX → judge → scorecard, 77 s, Playwright UI, 0 console errors) +
-2c/2g/realized regression green. YB fetch awaits the live bayviewmack2026 feed (~July 2026) for a
-final on-our-own-boat check. Tunable `TRACK_YB_TIMEOUT_S`. Files: track.py (new), judge.py, main.py,
-web/{app.js,styles reuse}, test_routing_track.py (new).
-
-**Lab-4 LEARNING LOOP — ongoing archive + HUMAN-APPROVED boat-model refinement: SHIPPED 2026-06-30.**
-Closes the loop the Debrief track ingestion fed: turn the accumulating performance record into a better
-boat model, with a person signing off on every change to the polars. `app/learning.py` — a persistent
-**SQLite archive** on a new `lab_learning` volume (`LEARNING_DB`; tables `debriefs`/`perf_bins`/
-`proposals`, pure-stdlib `sqlite3`): `judge.run_judge` archives every debrief (regret + helm-vs-optimal
-metrics + observed-vs-polar bins snapped to the ORC cert's own (TWS,TWA) grid + a slim report) so race
-performance is kept for review. `propose(boat_id)` aggregates the LATEST debrief per race → a refined
-**`helm_factor`** (overall achievable fraction) + per-cell **polar overlay multipliers** (speed SHAPE
-*relative to* the overall level, so helm + overlay don't double-count) and writes a `proposed` row —
-**it mutates nothing**. The boat changes ONLY when a human calls `apply_proposal` (the editable
-Approve), which writes `helm_factor` + `polar_adjustments` to the boat profile; `reject_proposal`
-discards. Guardrails clamp helm to [0.5,1.0], cell mults to [0.85,1.15], ±4% deadband. The ORC cert
-stays canonical; approved tweaks are an explicit overlay (`BoatProfile.polar_adjustments`) the optimizer
-applies via `polars.apply_adjustments`, threaded as `polar_adjustments=` through `optimize_course`/
-`build_playbook`/`synthesize` (resolved from the active boat in main.py, like helm/jib). Endpoints
-`/api/learning/{debriefs[/{id}],proposals,propose,proposals/{id}/apply,/reject}`; the **Learnings tab**
-gains a "Refine the boat model" review card (Propose → editable helm + per-cell adjustment table with
-keep/drop checkboxes → Approve/Reject) + a "Performance archive" table. **HUMAN-IN-THE-LOOP is the core
-invariant** (user requirement): propose never touches the boat; approve is the only mutating path —
-unit-tested (`test_routing_learning.py`: propose-doesn't-mutate → approve-writes → reject-untouched +
-overlay clamp). Verified: HTTP e2e (archive → propose helm 1.0→0.93 + cell adjustments → approve →
-overlay bites a real cert cell 7.72→8.08) + cert-snap unit test + Playwright UI (0 console errors).
-Files: learning.py (new), judge.py, track.py (perf bins), polars.py (apply_adjustments), optimizer.py/
-playbook.py/synthesis.py (polar_adjustments thread), boats.py + shared/boat_profile.py, main.py,
-web/app.js, compose.dev.yml (lab_learning volume), test_routing_learning.py (new). (Lab not in
-compose.prod — runs as the standing dev container.)
-**HELM FACTOR CAN EXCEED 1.0 + CURRENT-CORRECTED MEASUREMENT (2026-06-30 follow-up):** the ORC polar is
-a conservative RATING, not a physical ceiling — a soft-rated / well-sailed boat genuinely sails above the
-cert, so the helm scalar must be able to learn "faster than rated." The hard ≤1.0 cap was an asymmetric
-pessimism bug (cell mults already allowed >1). Now `_HELM_MIN/_MAX=0.50/1.15` (proposals),
-`active_helm_factor` accepts [0.3,1.2], and the optimizer's `realized_on` triggers on any departure from
-1.0 (not just <1) so helm>1 speeds the boat. **The enabler is current correction:** a measured >100% could
-be a fair tide (the track only gives SOG), so the debrief now builds the actual `CurrentField` and
-`track._water_velocity` subtracts the modelled set/drift from each fix's SOG vector → speed-THROUGH-WATER
-(the polar's real basis) before comparing to the cert in `_polar_pct`/`_performance_bins`. `score_track`
-reports `current_corrected`/`current_mean_kn`; the >100% caveat distinguishes "above cert after removing
-the current (rated soft — confirm the current model)" from "no correction → likely a fair tide." UI:
-scorecard colours >100% ok when current-corrected / warns when not (always warns >120%) + a
-"current-corrected (mean N kn)" note; proposal/applied lines label helm>1 "above cert — rated soft".
-Verified: `test_routing_track.test_current_correction` (SOG 9→STW 7 fair, 5→7 foul) +
-`test_routing_learning.test_helm_can_exceed_one` (soft boat → helm 1.11) + realized/2g regression green +
-soft-boat HTTP e2e (helm 1.0→1.11 → active_helm_factor 1.11) + Playwright (0 errors). Files: track.py,
-judge.py (builds CurrentField), learning.py, boats.py, optimizer.py, web/app.js, both test files.
-
-**FLEET ROSTER AUTO-IMPORT — public entry list (YB) + ORC handicaps: SHIPPED 2026-06-30.** The fleet
-roster (competitor names + ORC handicaps, the corrected-time tactics homework) was hand-entered; both
-halves are public. `app/fleetimport.py`: (1) **entry list = the YB `RaceSetup`** (same feed we decode for
-the track) OR **the REGATTA WEBSITE** (for races with no YB tracker): **YachtScoring** pulled directly
-from its public data API (`api.yachtscoring.com/v1/public/event/<id>/boats` paginated JSON — it's a JS
-SPA so a plain fetch only gets an "enable JavaScript" shell; event id parsed from a
-`yachtscoring.com/emenu/<id>` / `?eID=<id>` URL), and **other sites** via URL fetch / pasted text /
-uploaded PDF → Opus extracts {boat,sail,owner,cls,division} (reuses the Lab-0 `extract` machinery;
-truly-JS-rendered hubs → paste/upload fallback) → per-team name/sail#/owner/model; (2) **handicaps =
-the ORC public cert DB** (`data.orc.org/public/WPub.dll?action=DownRMS&CountryId=<cc>&ext=json`,
-utf-8-sig, cached) with GPH + ToT/ToD incl. race-specific columns (Bayview's `US_BAYMAC_CV/SH_TOT` picked
-by race+course, else generic `TMF_Offshore`), matched by sail#→yacht-name. `POST /api/fleet/import
-{race_id,source:yb|both|website|orc,country,course_id,url?,text?}` (+ `/import/upload` multipart for a
-PDF) returns a DRAFT roster (match stats + unmatched list); the human reviews/edits in the Fleet tab and
-Saves — nothing auto-committed (FleetEntry gained `sail`+`source`; Fleet tab gained an Auto-import card —
-YB / website URL·paste·PDF / ORC-enrich — + Sail# column). Verified `test_fleet_import.py` (YB + website
-entry parse + sail/name match + race-specific column + unmatched + JS-empty fallback) + LIVE (real
-bayviewmack2025: 108 YB entries, 58 ORC-matched / 653 USA certs — lapsed 2025 certs explain the rest; the
-live 2026 race matches better) + Playwright (card + website inputs render, 0 errors). Dormant race (2026
-unpublished) degrades to a "paste the entry list" note. Files: fleetimport.py(new), shared/race_def.py
-(FleetEntry sail/source + fleet_blob), extract.py (reused), main.py, web/app.js, test_fleet_import.py(new).
-
-**IFRAME-FOLLOW for the Fleet URL import — SHIPPED 2026-07-01 (the bycmack `current-entries` page now
-works).** User asked to make a "JS-rendered" fleet list ingest from a URL. Diagnosed against the REAL page
-(`https://bycmack.com/current-entries/`) — it's NOT JS-rendered: it's a WordPress/Elementor page that embeds
-the entry list one hop away in an **`<iframe src="https://cf.bycmack.com/entries.cfm">`** (a server-rendered
-~500 KB ColdFusion table), so the outer fetch never saw the list. Three-part fix, all in the shared `extract`
-layer so NOR/SI ingestion benefits too: (1) **`extract.text_from_url` now follows content iframes** one level
-deep (bounded: ≤3, analytics/ad denylist, error-tolerant; `follow_iframes=True` default, opt-out param leaves
-the old behavior); (2) `fetch(url, timeout=)` + the iframe fetch uses a longer `LAB_IFRAME_TIMEOUT`=60 s + one
-retry (entries.cfm is slow — 5–20 s + occasionally resets, page literally warns "large file, be patient");
-(3) `fleetimport._llm_entry_list` output bumped to `LAB_ENTRY_MAX_TOKENS`=20 000 (202 boats overflowed the
-old 8 000-token cap → truncated JSON → parse fail). VERIFIED the REAL PATH end-to-end (the process lesson —
-don't trust mocks): unit `test_iframe_follow` (mocked outer+iframe, analytics skipped, opt-out) + LIVE
-`roster_from_url(bycmack)` = **202 boats** (incl. our own C4 · CAN 100 · Matt Lane) + the actual `POST
-/api/fleet/import` endpoint = 200, **202 boats / 106 ORC-matched / 688 USA certs, ~115 s** (slow site + Opus
-on 202 boats + ORC DB; the UI busy note now sets that expectation; `api()` has no client timeout + the
-gateway already allows the 2-min synthesis, so it's fine). This is the **live 2026 Bayview Mackinac fleet** —
-so even though the YB *tracker* feed is still dormant, the entry list + ORC handicaps now import for the real
-race. Files: extract.py (iframe-follow + timeout param), fleetimport.py (token budget), web/app.js (busy note),
-test_fleet_import.py (test).
-
-**Over-correction guards (why this won't distort the route):** discussed 2026-06-30 — the model can't run
-away (deadband + floor + conservative slopes; ~6% upwind at 2 m, downwind barely touched), it's OFF by
-default until a real wave field exists (phase 2) and per-run opt-out-able, and the route-*reshaping*
-effect (vs the ETA effect) only matters once a spatially-varying field is in — where the plan is to gate
-reshaping on wave-field confidence and to calibrate the coefficients from the boat's own logs rather than
-trust the linear prior. Keep `helm_factor` a FLAT-WATER number so it doesn't double-count waves.
-
-**LAB-4 CONDITION ATTRIBUTION — wave-correct the helm number + calibrate the wave coefficients + a
-multi-race trend: SHIPPED 2026-07-01.** Closes the "keep helm flat-water" loop above. Three pieces:
-(1) **Wave-correct the helm measurement.** The debrief now builds the actual sea-state field (`GLWUWave`,
-alongside the current field) and threads it + the active boat's wave coeffs into `track.score_track`. The
-scorecard reports BOTH `polar_pct` (raw, vs the FLAT-water polar — the honest gap-to-theoretical, still
-depressed by the seaway) AND **`helm_pct`** = the sea-state loss divided back out (achieved /
-(polar × wave_factor)) → a FLAT-WATER-EQUIVALENT helm efficiency. `helm_pct` is what the learning loop
-refines `helm_factor` from, so waves aren't double-counted (a big `polar_pct`→`helm_pct` gap = the
-conditions, attributed to CONDITIONS not the crew, in the scorecard + Opus critique). On a calm day
-(Hs ≤ deadband) `wave_factor`≈1 so `helm_pct == polar_pct` — correctly no correction. Perf bins now carry
-`hs_mean` + `pct_flat`; `learning.propose` refines off `pct_flat` (flat-water), and the archive keeps the
-RAW `pct` + `hs_mean` for calibration. (2) **Calibrate `ROUTE_WAVE_K_*` from the archive.** New per-boat
-`BoatProfile.wave_coeffs` overlay ({hs_deadband,k_up,k_reach,k_down,floor}) on the conservative env
-priors; `optimizer._wave_factor(hs,twa,coeffs)` reads it (threaded like helm/polar_adjustments through
-`optimize_course`/`build_playbook`/`synthesize` via `boats.active_wave_coeffs`). `learning.calibrate_waves`
-fits the slope per point of sail from the archived raw `pct` + `hs_mean`: the model
-`pct = 100·helm·(1−k·eff)` (eff = max(0, Hs−deadband)) is linear in eff, so a sample-weighted least-squares
-gives intercept b0 = helm level, slope b1 = −helm·k → **k = −b1/b0**, clamped to a sane band, requiring Hs
-SPREAD (≥4 cells over ≥0.6 m) else the prior k is kept (honest — a calm-race archive can't fit a slope).
-It's a `wave_coeffs`-kind PROPOSAL (human-approved apply, same discipline as the boat-model proposal —
-`propose`/`calibrate_waves` never mutate; only `apply_proposal` writes the boat). (3) **Multi-race trend**
-(`learning.trend`, `GET /api/learning/trend`): the latest debrief per race oldest→newest (helm%/polar%/
-time-behind/regret/Hs) + applied-refinement milestones — see the boat model improving over a season. UI
-(Learnings tab): a "Calibrate the sea-state model" review card, a "Performance trend" table with inline
-bars, `helm_pct` in the scorecard + archive. Verified: unit (`test_routing_track.test_wave_correction`
-2 m head sea → helm 99 vs polar 93; `test_routing_learning.test_calibrate_waves` recovers k_up=0.05 r²1.0
-+ human-in-loop; `test_trend`) + the wave_coeffs=None path is byte-identical to baseline (diffed HEAD-vs-new
-on the routing tests) + LIVE on real Bayview Mackinac (GLWU 0.55 m → wave_corrected, helm_pct==polar_pct
-on the calm day, archived, trend shows it, calibrate honestly reports insufficient spread) + Playwright
-(all cards render, calibrate shows the honest message, 0 console errors). Files: track.py, judge.py,
-learning.py, optimizer.py (`_wave_factor` coeffs), boats.py, shared/boat_profile.py (`wave_coeffs`),
-playbook.py, synthesis.py, main.py, web/{app.js,styles.css}, both test files. Tunable priors unchanged
-(`ROUTE_WAVE_*`); the calibrated overlay is per-boat + human-approved.
-
-**LAB-4 CONDITION-ATTRIBUTION FOLLOW-UPS: SHIPPED 2026-07-01.** (a) **Test-rot fix** — `test_routing_
-realized.py` + `test_routing_2g.py` computed the seed dir as `HERE/../db/seed`, which resolves wrong when
-the test is docker-cp'd to `/srv` (→ empty polars → `route_leg` yields eta=0). NOT a routing bug (proven
-by diffing HEAD-vs-new). Both now resolve the seed from the repo OR the baked `/srv` and only override the
-env when the seed exists. (b) **Deadband (knee) fit** — `learning.calibrate_waves` now also fits the
-low-Hs deadband, not just the slope: a global **continuous-hinge** model (ratio = helm − k·max(0,Hs−db),
-one weighted OLS per point of sail) is searched over a db grid and the residual-minimising knee wins
-(strict, so ties keep the smaller knee). Only fires when the archive has a clear flat region AND a sloped
-region (`_WAVE_DB_MIN_LOW/HIGH`), else the prior deadband is held; the floor stays the conservative prior
-(extreme-sea data is almost never present). Surfaced as a Deadband row in the wave review card. Verified
-`test_calibrate_deadband` (flat+sloped synthetic, true knee 0.6 → fit 0.6, k_up 0.05). (c) **Reshape gate**
-— a spatially-varying sea can BEND the route (toward calmer water), not just tax the ETA; on a single-model
-uncalibrated wave field that reshaping can be spurious, so `optimizer` gates it: `ROUTE_WAVE_RESHAPE`
-(`auto`|`on`|`off`, default auto) — auto reshapes ONLY when the course's P10–P90 Hs spread ≥
-`ROUTE_WAVE_RESHAPE_MIN_SPREAD` (0.5 m); otherwise a UNIFORM mean-Hs penalty (honest ETA, geometry
-unchanged, since a near-uniform sea can't be routed around anyway). `route_leg` gained `wave_uniform_hs`
-(when set, every node sees the same mean Hs); the decision + course Hs spread ride in `result.realized`
-(`wave_reshape`/`wave_reshape_note`/`wave_spread_hs`), stated in the briefing + a ⤳/= badge on the cockpit
-realized stat. Verified `test_routing_realized` reshape-gate block (stats spread, auto/on/off decisions,
-ETA-only == constant-sea routing) + LIVE Bayview Mackinac (0.47 m spread < gate → ETA-only) + Playwright
-badge. Files: optimizer.py, web/app.js, learning.py, both test files.
-
-**Optimizer UI study + restyle — `docs/OPTIMIZER_UI_STUDY.md`** (Orca + Expedition gap analysis). Tier 0
-(ensemble-control fix + ECMWF-ENS wired as a separate 51-member `ecmwf-ens` ensemble source) + Tier 1
-quick wins (map wind color-scale legend, forecast ▶/⏸ animation, grouped control cards Course/Boat &
-charts/Weather models, ⇄ tack badge in the leg table) SHIPPED. **Tier 2a / PR-3 SHIPPED** — the
-optimizer emits down-sampled **isochrone frontier** polylines (`route_leg(capture=)`) + **laylines**
-into each beat/run mark (`_layline_pair`); `mapview.js` draws them as toggleable map layers
-(Isochrones default off, Laylines default on) via a `drawExplore` canvas overlay; clicking a leg row
-(`MapView.focusLeg`) highlights that segment + snaps the forecast slider to its ETA; and a client-side
-**CSV export** of the leg table. **Tier 2b / PR-4 SHIPPED** — the **per-model candidate-paths overlay**:
-opt-in "Per-model route fan" (`optimize_course(per_model=)` → `_per_model_paths` splits the blended
-field per model, routes each reusing the obstacle field, emits `candidate_paths`); `mapview.js` draws a
-colour-per-model route fan under the chosen route (Model-routes toggle + per-model legend) — the
-multi-model-confidence moat made VISUAL (tight = models agree, spread = a real decision). Untrustworthy
-solo routes (degraded / timed-out / 0.5×–1.6× off the blended hours) are dropped, not drawn. We already
-win the two dims both references are weak on — forecast confidence + a reviewable sail model. **Tier-2
-polish SHIPPED** — **2.4** wind display modes (a Layers selector: arrows / **barbs** standard offshore
-convention / **shaded** TWS heatmap, all keeping the color ramp + confidence-fade); **2.5** an
-**Auto / Fast / Fine** routing-resolution selector (`optimizer.RESOLUTIONS` → heading-fan deg +
-per-leg step ceiling + time budget, threaded through `optimize_course(resolution=)` / `route_leg`)
-with a one-line explainer + an inline **common-error checklist** in the degraded banner. **Tier 3
-restyle SHIPPED** (built from the study's mockups; the user's own Orca notes fold in later as
-refinements) — **3.1** the four scattered map L.Controls collapsed into ONE bottom-docked, collapsible
-**Control Center** (`mapview.js` `.mv-cc`: scrubber + layer toggles + wind-mode + Follow + legend);
-**3.2** `renderOptResult` is now a map-led **cockpit** grid (`.opt-cockpit`: the slippy map is the
-hero ~620 px; stats + collapsible `<details>` rail = Legs / Briefing / Wind field, stacks on narrow);
-**3.3** the timeline scrub now **pans the map to the projected boat position** (Follow toggle, default
-on) — Orca's "ride along". (Folding in the user's own Orca UX notes was dropped 2026-07-02 per user — the restyle stands as-is.)
-
-**Copilot track — crew-facing narration ✅ + proactive auto-coach timer ✅ + PLAYBOOK-ADHERENCE
-dashboard tile ✅ + collision/AIS safety callout ✅** (the copilot interprets the signed playbook +
-boat sail model; see "Onboard LLM copilot"). **Collision callout** (`narrate._safety_callout`):
-narration now gathers the engine's `/ais` and shows the nearest CLOSING contact inside the CPA/TCPA
-guard as a TOP-priority safety callout ("Collision risk: <vessel> — CPA x nm in y min") — the one thing
-the copilot interrupts for, always legal in-race (own receiver + own math). act ≤0.5 nm/12 min = "now",
-watch ≤1.5 nm/30 min = "soon"; level is in the callout id so a watch→act escalation re-surfaces. Verified
-`bench_copilot.test_safety_callout` + end-to-end against the live :8200 engine (shown a real
-CPA-0.0 nm closing target). Tunables `COPILOT_AIS_{ACT,WATCH}_{CPA_NM,TCPA_MIN}`.
-**Handicap-rival callout** (`narrate._fleet_callout`): narration also gathers the engine's `/fleet` and
-shows the top roster competitor we're racing — a RIVAL (within the ±3-min corrected-time band) or one
-projected AHEAD of us on corrected ("{boat} ahead on corrected — projected to beat us by m:ss …
-consider covering"). Grounded in `get_fleet` (onboard: own AIS + frozen roster + own corrected-time
-math — in-race-legal tactical layer), confidence-gated (`COPILOT_FLEET_MIN_CONF`=0.4), category `fleet`
-(priority below safety/rounding/sail, persist-2 raise-slow), tag in the id so behind→rival→ahead
-re-surfaces. The shown counterpart to the dashboard AIS/Fleet tile's corrected-time overlay. Verified
-`bench_copilot.test_fleet_callout`. **Lab-3 branch-trigger callouts** (`narrate._deviation_callout` +
-`_drift_callout`): narration now also shows the two Lab-3 branch triggers the Strategy card shows —
-**route-deviation** ("Off the playbook line — 1.3 nm right of variant middle's optimal track" / "Behind
-the plan's pace — 3:20 behind (−0.8 kn VMC)") from the engine's `/deviation`, and **forecast-drift**
-("Forecast has moved — the breeze the plan assumed has veered ~31° since it was frozen — the recommended
-variant may no longer pay") from `/drift`. Both shown only at the engine's fuzzy watch/act (the
-engine's own Schmitt bands already de-noise, so CONFIRM_ROUNDS=1), grounded in `get_deviation`/`get_drift`
-+ the frozen variant/`forecast_fingerprint` — the copilot grounds these callouts in the pre-loaded homework +
-common public data (reporting the engine's reads; it never originates strategy). Categories `deviation`(5)/`drift`(8) sit among the
-playbook-adherence callouts; status in the id so watch→act re-surfaces. `copilot.gather` now fetches
-`get_deviation`+`get_drift`; `EngineClient.deviation()/drift()` added. Verified
-`bench_copilot.test_deviation_drift_callout` + LIVE (both fired against the real :8200 engine, the coach
-line combined them in priority order). **Handicap-aware fleet tactics ✅** (incl. the verified YB/bycmack over-the-horizon tracker
-source) — see "Handicap-aware fleet tactics". **Next:** (open) — Lab-3 graceful-degradation SELECTOR
-(pick a pre-authored branch when a trigger fires → onboard re-optimize → off-script+flag); island
-rounding-side enforcement is in (routing fidelity 2f); the overstand/2d gate + nav-mark side were already in.
-
-## Handicap-aware fleet tactics
-
-`vps/agent/app/fleet.py` extends the collision-only AIS layer to TACTICAL: it matches AIS targets to
-the pre-loaded race roster (MMSI exact → high confidence, else fuzzy name-match → lower) and turns the
-matched competitors into intelligence — each boat's distance-to-finish (projected onto the course
-polyline), on-water lead/lag, leverage (signed cross-track), and the **ORC corrected-time delta**: who
-you actually need to beat and by how much, NOT raw on-water position. A negative delta = that boat is
-projected to BEAT us on handicap (a rival/threat). Corrected-time supports **ToT** (corrected = elapsed
-× coeff; coeff from the entry's `rating`, else derived from GPH) and **ToD** (allowance = GPH s/nm),
-selected from the race `scoring` block; the delta is the part of the race still in play (projected to
-the finish, no race-start time needed). Everything is **fuzzy + confidence-flagged** (perflab item-5):
-AIS coverage is partial, matching imperfect, corrected-time a projection — every row carries a
-confidence and the gaps are stated. Unmatched vessels stay in the collision layer (`get_ais_targets`).
-
-Source-agnostic on the 9.0 seam (`datasource.active()` + the `ais` helpers), so the identical code
-runs cloud + onboard. The fleet **homework** (roster + scoring + own rating) is loaded with
-`shared.race_def.fleet_blob(definition, own)` via **`POST /fleet/load`** (onboard engine + extendable
-to cloud) → persisted by `datasource.save_fleet()` (cloud → `app_state` key `race_fleet`; onboard →
-the engine SQLite `kv` table) — frozen at the gun, legal in-race. The onboard engine serves **`GET
-/fleet`**; the cloud agent has a gated **`get_fleet`** tool (customized tactical advice → withheld
-racing, like tactics) + prompt section + fallback. The crew dashboard's **AIS / Fleet** tile overlays
-corrected-time standings under the collision rows (collision keeps status primacy = safety; fleet
-takes the tile face when traffic is clear), with Δ-corrected arrows (▲ = a rival ahead on handicap).
-**Verified:** unit test `vps/agent/test_fleet.py` (MMSI + name matching, course-progress DTF/leverage,
-ToT + ToD corrected deltas, tags, graceful no-roster) + onboard e2e (load roster → `GET /fleet` matched
-2 boats by MMSI against the bench's 34 live AIS targets, with DTF/lead/leverage/corrected deltas) +
-Playwright (10-tile grid, live + demo AIS/Fleet tile shows the fleet section with Δ arrows + rivals).
-**Over-the-horizon public tracker (perflab item-6, BUILT).** A permitted public race tracker (YB/
-TracTrac-style, e.g. bycmack.com/tracking) is now a SECOND, DELAYED fleet source. `vps/agent/app/
-tracker.py` does a best-effort, **cached** PULL (TTL `TRACKER_REFRESH_S`, never blocks the per-poll
-fleet view) via pluggable providers (`generic_json` for the common JSON/XHR endpoint behind the web UI
-via a per-race field map; `sample` for the bench) → normalized fixes, with **every position aged +
-confidence-reduced** (`_age_conf` decays to a floor past `TRACKER_STALE_MIN`) — a fix is never shown as
-current. `fleet.get_fleet()` folds it in two ways: **(a) identity** — an unmatched AIS target sitting on
-a roster boat's tracker fix (within `TRACKER_MATCH_NM`) is resolved by position (`matched_by=
-tracker_position`, source stays `ais`), filling the AIS↔roster MMSI gap; **(b) over-the-horizon** —
-roster boats on the tracker but not on our AIS at all become aged rows (`source=tracker`, `age_s`,
-reduced confidence). The per-race gate is **`rules_profile.tracker_permitted`** (authoritative;
-default conservative — off if unset; for Bayview Mackinac the user confirmed it's allowed); the config
-(provider/race/url/field-map/delay) is a `RaceDefinition.tracker` block carried by `fleet_blob` (its
-`permitted` is driven strictly by `tracker_permitted`). The response gains `count_ais`/`count_tracker`
-+ a `tracker` status block; the dashboard tile flags tracker rows with a ⌛ age marker + an
-"over the horizon" note (live AIS outranks the delayed tracker for the face). Verified: `test_fleet.py`
-tracker cases (aging/confidence decay, over-horizon rows, permission gate off, identity-resolution) +
-onboard e2e (`sample` provider → 3 over-horizon rows aged ~15 min, conf-reduced; gate-off withholds) +
-Playwright (⌛ marker renders, over-horizon text).
-**bycmack endpoint VERIFIED 2026-06-28:** bycmack.com/tracking is **YB Tracking (yb.tl)**. The `yb`
-provider (`tracker.py`, alias `bycmack`/`ybtracking`) pulls the viewer's JSON positions API
-`https://cf.yb.tl/API3/Race/<race>/GetPositions?t=0` — per-team `teams[].name` + latest `positions[]`
-with `latitude`/`longitude`/`sogKnots`/`cog`/`gpsAtMillis`(epoch-ms)/`dtfNm`. Name + SOG + COG + time
-in ONE JSON call — no binary decode, no RaceSetup join. Set `tracker.race` (the yb.tl id, convention
-`bayviewmack<year>`) + optional `host`; the url is built from those. Confirmed live against the real
-`bayviewmack2025` feed (108 boats parsed); `bayviewmack2026` returns `{"error":...}` until the event is
-published (~July 2026) → the provider degrades to no positions gracefully. (YB also serves a big-endian
-binary `…/BIN/<race>/AllPositions3` track feed, lat/lon=int/1e5 — not needed; the JSON carries all.)
-**HONEST v1 scope:** corrected-time is a projection (uses SOG toward the finish, common-division-start
-assumption); the entry list rarely carries MMSI so matching is partial. The engine computes; the LLM
-interprets and may recommend.
-
-## Onboard LLM copilot — Orin Nano (Phase 9.4, Tier 2)
-
-The optional in-race conversational LLM (`docs/ONBOARD_ENGINE_SCOPING.md` §3). A **Jetson Orin Nano
-8GB (Super)** dedicated to inference, **separate** from the Pi 4 that runs the deterministic engine
-(Tier 1) — they talk over boat-local Wi-Fi. Legal in-race because the boat's own computer reasoning
-over its own sensors + pre-loaded homework + common public data is not "outside help"; it never
-phones the cloud mid-race (the real RRS-41 line) and the engine does the math; the frozen playbook is
-the strategy library it matches conditions against — it never originates strategy (descope 2026-07-06,
-`docs/PLAYBOOK_V2.md` §7). **The Orin is in hand as of 2026-06-18.**
-
-**Runtime appliance: LIVE.** The Orin is a turnkey headless offline-inference appliance —
-**Ollama serving `qwen2.5:7b-instruct-q4_K_M` on `:11434`** (OpenAI `/v1`), built from source with a
-`cuda_v13`@sm_87 GPU backend, ~12 tok/s (memory-bandwidth-bound; the strict 20 tok/s milestone was
-relaxed — quality over speed), reboot-verified + systemd-persistent, reachable over Tailscale. (This
-replaces the originally-planned MLC-on-:9000 path: JetPack 7.2/R39 was too new for jetson-containers'
-MLC matrix, and R39/CUDA-13.2 removed the R36.4.x llama.cpp regression that ruled Ollama out — full
-story in the Orin bring-up memory + `pi/orin/DEPLOYMENT.md`.) The copilot only sees the OpenAI `/v1`
-contract, so the runtime stays swappable.
-
-**SR33 copilot — decision-support layer: BUILT** (`pi/orin/copilot/`, the next 9.4 increment, first
-slice). A thin FastAPI service (**:8300**, runs on the Orin) that turns the Tier-1 engine's facts into
-**bounded, grounded decision support** via the local LLM. The guardrails are structural, not just
-prompt: the LLM's only capabilities are a closed set of **read-only engine-fact tools** (it can't do
-math or fetch anything else — the engine does the math); every `factor`/`recommendation` must be
-`grounded_in` a tool actually used or it's **dropped** by `brief.validate()`; caveats are computed by
-the engine (`structural_caveats`), not authored by the model; every brief carries a standing
-disclaimer + confidence; and if the LLM is off/slow/ungrounded the service returns the **deterministic
-brief** built from the same facts (always works, never depends on the model). A frozen **playbook**
-(Lab-2 output) loads via `PLAYBOOK_PATH` as the strategy library the copilot matches conditions
-against (departures are the deterministic engine's call, never the LLM's); absent → it says so. Endpoints: `GET /health` (honest llm/deterministic/
-unreachable modes + the auto-coach state), `GET /tools` (the bounded surface), `POST /brief`, `POST
-/narrate` (proactive callouts on demand), `GET /coach` (the auto-coach held state), `GET /adherence`,
-`GET /snapshot`. **Bench-verified
-on the real Orin** (over a Tailscale SSH forward of :11434, Pi engine on :8200): deterministic path
-green; LLM tool-loop returns a grounded brief in ~45 s warm (the model calls `get_forecast` on demand);
-graceful fallback fires on the ~2 min cold model-load or ungrounded JSON. Exit test:
-`python3 -m copilot.bench_copilot [--llm]`.
-**Proactive auto-coach timer ✅ (`coach.py`):** `make_narration` is PULL (the iPad asks); the auto-coach
-is the TIMER that DRIVES it. A background loop in the copilot lifespan ticks every `COACH_INTERVAL_S`
-(env `COPILOT_COACH_INTERVAL_S`, default 30 s; `COPILOT_COACH=false` disables), runs the narration
-engine, and HOLDS the latest result — so the copilot volunteers coaching whether or not anything polls,
-and the TIME-DRIVEN callouts (a closing-traffic COLLISION warning — safety, top priority; 15/10/5-min
-rounding prep, a playbook branch firing, a sail change-down) fire on the clock. It mirrors the cloud alerting loop; `narrate.step`'s raise-slow/clear-fast
-show-once already dedups, the loop just calls it on a schedule + keeps a short callout history. The LLM
-only phrases NEW callouts (most ticks are deterministic + cheap), following `USE_LLM`. `GET /coach`
-reads the held state with no recompute (the canonical proactive surface; `POST /narrate` is the
-on-demand/debug equivalent — don't poll both for one route, they share the dedup). The crew dashboard
-shows a **coach line** in the commentary panel (`fetchCoach` polls `/copilot/coach` ~15 s; the
-last volunteered line + "Ns ago", hidden when there's nothing to show). Verified: `bench_copilot.test_coach_logic`
-(held state / history-on-new / nothing-new / error-survival), live `/coach`+`/health` end-to-end (timer
-ticks against the Pi engine), Playwright (coach line renders the callout history, only the known-unrelated
-`/copilot/adherence` 404).
-**Narration is VISUAL-ONLY + an audio ALERT SIGNAL (2026-07-02):** the copilot NEVER speaks (no TTS) —
-its callouts are DISPLAYED (coach line, banner, Strategy card). To keep a screen from being ignored when
-the crew is looking at the water, a NEW **safety/urgent** callout also fires a short synthesized attention
-**tone** (a signal, not speech — cuts through wind noise since there's no language to parse). Client-only
-in the dashboard (`dashboard.js` `Sound`/`maybeAlert`): hooks the `/coach` `new` stream (already deduped +
-priority-sorted), de-dups by callout id (status is in the id → a watch→act escalation re-alerts), and
-sounds only `urgency:"now"` (act = 3 rising beeps) or `category:"safety"` (watch = soft two-note chime) —
-routine coaching stays silent. Armed by a **🔔 topbar toggle** (default off; the tap also satisfies iOS
-Safari's audio-unlock gesture + plays a test chime; re-armed on first interaction after a reload). Live
-source only. Verified (Playwright, instrumented AudioContext): arm→2-tone chime, a safety-`now` callout→
-3-tone alert, same id→0 (dedup), 0 page errors. NOTE (v1): latency is the coach cadence (≤ tick+poll,
-~30–45 s) — a faster AIS-tile fast-path for imminent collisions is a possible follow-up; per-severity
-tone tuning is easy. **Next copilot increment = (open).** See
-`pi/orin/copilot/README.md`. The **iPad crew dashboard** that surfaces the copilot graphically (a
-fixed, all-items-visible status grid that the LLM scores green/yellow/red with color-blind-safe
-redundant encoding + a commentary panel + tap-to-detail LLM deep-dives) is designed/locked in
-`docs/COPILOT_DASHBOARD.md` and **BUILT** (`pi/console/dashboard/`, served at `:8091/dashboard/`):
-phases 1–4 shipped 2026-06-19/20 — static prototype → live engine wiring + deterministic status →
-LLM commentary/status-refine (`copilot dashboard_brief.py`, `POST /dashboard`) → streamed
-tap-to-detail (`POST /detail`), plus wind-trend charts, forecast-vs-actual verification, demo
-scenarios, day/night, feedback widget. **8 higher-order tiles** (`wind, playbook, forecast, sail, eta,
-ais, charge, data`) on a **4×2 grid** (VMG + Tactics retired 2026-07-03 — see the DASHBOARD DE-DUP note
-in the Strategy-synthesis section: VMG repeats the boat's own instruments, and the on-water tactical read
-now lives in the top Strategy strip); the **AIS / Fleet** tile is built (see "AIS /
-Fleet dashboard tile" below) and the **PLAYBOOK-ADHERENCE** tile (the last "later tile") is built —
-deterministic `pi/orin/copilot/adherence.py` + `GET /copilot/adherence` compares the frozen Lab-2
-variants (recommended start + each variant's `what_flips_it` first-beat-side trigger) against the
-engine's tactical read → ok (on plan) / watch (oscillating lean) / act (a persistent shift fires the
-branch — names the variant to switch to); polled on its own ~8 s cadence; `na` with no playbook
-aboard. (Also fixed: `narrate.py`'s playbook-branch callout read `tac["persistent"]` flat vs the
-engine's nested `tac["wind"]["persistent"]`, so it never fired — now reads the nested path.) Runtime
-bring-up files (the originally-MLC plan, port **9000**) — note
-they describe MLC, the unit runs Ollama: `pi/orin/`:
-- **`SETUP.md`** — the bring-up runbook: flash JetPack 6.2 (L4T R36.4.x) + the QSPI firmware →
-  Super mode (`sudo nvpmodel -m 2` + `jetson_clocks`) → NVIDIA-default docker runtime →
-  `jetson-containers` → MLC → benchmark Qwen2.5-7B INT4 → serve → autostart → `tegrastats` thermal.
-- **`serve.sh`** — launch the OpenAI-compatible MLC server (`MODEL`/`PORT` env, idempotent restart).
-- **`bench.sh`** — benchmark one model's prefill/decode tok/s via MLC (A/B the 7B vs a 3-4B).
-- **`smoke_api.py`** — pure-stdlib client that sends a "narrate these engine facts" prompt, prints
-  the answer + latency + effective tok/s, pass/fail — **the milestone's exit test** (a grounded
-  answer, fully offline, at usable latency; no SR33 tool-calling yet).
-- **`models.md`** — A/B matrix (NVIDIA numbers + a column for measured results) + how to confirm the
-  exact MLC model id on-unit.
-- ~~`../systemd/sr33-orin-llm.service`~~ — the MLC-plan autostart unit (REMOVED; superseded by the live Ollama
-  systemd unit on the unit itself); **`../systemd/sr33-orin-copilot.service`** runs the copilot svc.
-
-See `pi/orin/README.md` + `pi/orin/copilot/README.md`. The runtime as-built (Ollama-from-source) is
-documented in `pi/orin/DEPLOYMENT.md`; the copilot decision-support layer is bench-verified on real
-hardware (above).
+Dev DB (`sr33_dev`) is disposable. `.env` is gitignored — keep it that way.
+
+## Open items still owed (don't guess)
+
+Domain name + prod `.env` → first cloud prod deploy + 48-h soak · confirm RRS-41 posture
+with the OA/RC in writing + re-check the SIs (~July 2026) before race use · plug the N2K
+cable into the Pi (bus not yet physically connected) · record a real `candump -l can0`
+dockside as the gold-standard replay fixture · the Phase-6 exit test proper (alert
+false-positive rate over 2 real practice sails) awaits real sailing.

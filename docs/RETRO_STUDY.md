@@ -1,6 +1,7 @@
 # Fleet Retro Study — learning from past Mackinac races ("pre-Phase-B")
 
-**Status:** design locked with the user 2026-07-06; building. Precedes Playbook v2 Phase B
+**Status:** design locked 2026-07-06; **built + run** (the §6 findings are from the full 66-boat
+bayviewmack2025 batch). Kept as the design + findings record. Precedes Playbook v2 Phase B
 (`PLAYBOOK_V2.md`) because its outputs — which departure scenarios actually occur, and at what
 magnitudes — set Phase B's perturbation ranges and Phase D's predicate thresholds from data.
 
@@ -47,7 +48,7 @@ pattern as `learning.py`/`modelskill`):
    matching); Allowances → a per-boat polar grid shaped like the optimizer's canonical polars;
    store cert + polar. Unmatched boats are recorded and excluded from per-boat runs (stated, not
    silent).
-3. **Gun-forecast field** (`histwind.py`): `ArchiveGFS`/`ArchiveHRRR` ModelSources — same
+3. **Gun-forecast field** (`wind/archive.py`): `ArchiveGFS`/`ArchiveHRRR` ModelSources — same
    `ModelSource` interface, but `fetch()` pulls UGRD/VGRD-10m messages by `.idx` byte-range from
    the AWS buckets for the freshest cycle ≤ the historical start, caching into the pinned store;
    `GribFrame`/`WindField`/`optimize_course` are reused unchanged.

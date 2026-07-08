@@ -80,15 +80,19 @@ for the CAN bench (setup/replay/generate) and `pi/README.md` for the onboard sta
 ## Layout
 
 ```
-pi/        onboard Pi: Signal K config, uplink service (systemd), CAN_IFACE switch
+pi/        onboard Pi: Signal K config, uplink + full-res archiver, systemd units, bench tools
+  engine/    onboard deterministic engine (Tier 1, no LLM) :8200
+  console/   onboard race console + crew dashboard (iPad) :8091
+  orin/      onboard LLM copilot (Tier 2): Ollama+Qwen2.5-7B :11434, copilot svc :8300
 vps/
   ingestion/  FastAPI token-auth ingest -> TimescaleDB
-  agent/      Claude tool-use loop + SQL-backed tools + helm fatigue index + WebSocket chat
-  web/        iPad navigator UI (nginx): day/night, sail dial, course plot, tactics, routing
-  db/         schema/migrations + dev seed
-shared/    units + agent tool contracts
+  agent/      Claude tool-use loop + the shared deterministic engine modules
+  web/        crew web app (nginx): day/night, sail dial, course plot, tactics, routing
+  lab/        C4 Performance Lab (prep/debrief studio + optimizer) :8103
+  db/         schema/migrations + seeds
+shared/    units, tool contracts, RaceDefinition, boat profile
 deploy/    deploy_prod.sh, init_tls.sh
-compose.{dev,prod}.yml
+compose.{dev,prod}.yml · compose.pi.yml (+ compose.pi.sample.yml bench overlay)
 ```
 
 ## Status
@@ -99,14 +103,18 @@ compose.{dev,prod}.yml
   navigator, tactics, routing), and alerting + on-demand summarizer/debrief + polar mining.
 - **Phase 7 — started.** Server-side shared-password web auth + TLS scaffolding (bench-verified);
   remaining: prod deploy + domain/TLS + 48-h soak + the RRS 41 review (done — see below).
-- **Phase 9 — the three-tier pivot, in progress.**
-  - **9.2 server-side race gate — ✅ shipped & bench-verified.** In a race the cloud agent + advice
-    endpoints withhold tactical/routing/polar/sail/fatigue/navigation (RRS 41) and log every refusal;
-    safety + own-instrument data + verbatim common data still flow. Fail-closed.
-  - **9.0/9.1 onboard engine — next.** Relocate the deterministic engine to the Pi (legal in-race, no LLM).
-  - **9.4 Orin Nano LLM copilot** (HW arriving) and the **C4 Performance Lab** (Lab-1→4: GRIB/buoy
-    ingestion, strategy studio → playbook, onboard executor, write-back learning) follow.
-  - Design in `docs/ONBOARD_ENGINE_SCOPING.md`; the *why* in `docs/RRS41_COMPLIANCE.md`.
+- **Phase 9 — the three-tier pivot: built.**
+  - **Onboard (Tier 1):** the deterministic engine runs on the Pi (:8200, no LLM — legal in-race)
+    with the race console + crew dashboard served boat-local (:8091); the cloud is **race-gated,
+    fail-closed** (every refusal audited).
+  - **Onboard LLM (Tier 2):** the Orin copilot is **live** (Ollama + Qwen2.5-7B; narrates +
+    condition-matches the frozen playbook — never originates strategy).
+  - **C4 Performance Lab (Tier 3):** Lab-0 ingestion → Lab-1 multi-model GRIB optimizer →
+    Lab-2 signed branching playbook + the v2 play library → Lab-3 onboard executor
+    (deviation/drift/selector/re-optimize/strategy) → Lab-4 human-approved learning loop —
+    **all shipped**, plus venue model-skill weighting, currents/waves, fleet tools.
+  - The *why* is `docs/RRS41_COMPLIANCE.md`; the record of how it got here is `docs/HISTORY.md`;
+    the operational detail is `CLAUDE.md`.
 
 The agent runs the real Claude tool-use loop when `ANTHROPIC_API_KEY` is set, else a deterministic
 tool-grounded fallback. See **DESIGN.md** for built-vs-planned and **CLAUDE.md** for the phased plan

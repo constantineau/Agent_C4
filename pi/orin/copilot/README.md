@@ -98,8 +98,10 @@ cadence (the copilot does the engine round-trip).
 | `brief.py` | the `DecisionBrief` shape, the grounding `validate()`, grounded `structural_caveats()`, and the deterministic builder |
 | `llm.py` | minimal OpenAI `/v1` chat client with tool-calling (stdlib) |
 | `copilot.py` | orchestration: gather facts → bounded tool loop → validate → fallback; `make_narration()` |
-| `narrate.py` | the **PUSH** callout engine: grounded callouts (rounding/playbook/sail/fatigue/data) + show-once dedup + LLM phrasing with deterministic fallback |
-| `app.py` | FastAPI service (`/health`, `/tools`, `POST /brief`, `POST /narrate`, `POST /narrate/reset`, `GET /adherence`, `/snapshot`) |
+| `narrate.py` | the **PUSH** callout engine: grounded callouts (safety/rounding/playbook/deviation/drift/sail/fleet/plays/fatigue/data) + show-once dedup + LLM phrasing with deterministic fallback |
+| `coach.py` | the proactive auto-coach timer — drives `narrate` on a cadence + holds the latest callouts for `GET /coach` |
+| `dashboard_brief.py` | dashboard commentary + grounded status refinement (`POST /dashboard`) and the streamed tile deep-dive (`POST /detail`) |
+| `app.py` | FastAPI service (`/health`, `/tools`, `POST /brief`, `POST /narrate[/reset]`, `GET /coach`, `GET /adherence`, `/snapshot`, `POST /strategy`, `POST /dashboard`, `POST /detail`) |
 | `bench_copilot.py` | exit test for the layer (deterministic + `--llm`); pure stdlib |
 | `requirements.txt` | only `fastapi`+`uvicorn` (the logic is stdlib) |
 

@@ -1,5 +1,12 @@
 # SR33 "C4" — Sensor / Instrument Integration Matrix
 
+> **Research snapshot (2026-06-16) — historical record.** The device facts remain valid
+> reference; the "planned" implementation items at the bottom have since been **built**
+> (AIS ingestion + the onboard `/ais` + fleet tactics; heel/pitch/ROT flow with
+> collect-everything), and the wide `telemetry` table it mentions was superseded by
+> `telemetry_raw` and dropped (migration 006).
+
+
 The onboard instrument package and how each device reaches the Agent_C4 pipeline
 (NMEA 2000 → PICAN-M/SocketCAN `can0` → Signal K (canboatjs) → uplink → cloud).
 Researched 2026-06-16 from manufacturer manuals + the Signal K/canboat source; see

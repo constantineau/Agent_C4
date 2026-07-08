@@ -45,106 +45,65 @@ python3 -m shared.race_def vps/lab/races/bayview_mackinac_2026.json
 # errors block activation; warnings are the human-review items (e.g. null island coords)
 ```
 
-## Status
+## Race ingestion & review (Lab-0)
 
-- **Schema + first instance: done (schema-first slice).** `bayview_mackinac_2026.json` was
-  extracted from the real 2026 NOR and validates. It carries authoritative NOR geometry — the
-  **Cove Island virtual gate** (SW N45°20.00′ W081°51.00′, NE N45°20.28′ W081°49.63′) and the
-  **virtual GPS finish** at Round Island / Mackinac — plus both courses (Cove Island, Shore), the
-  four divisions, the ORC Single-Number ToT scoring (BYC Mack Cove/Shore wind mix or WRS, fixed at
-  the race-morning briefing), the `rules_profile` (incl. §2.1(d), the §2.1(f) transponder finish,
-  and Appendix WP), and a **22-item `requirements` checklist** spanning safety/SER, registration,
-  navigation, procedure, reporting and environmental — **6 flagged `deliver_to_ipad`** (nav lights
-  at sunset, sponsor flag, the Cove gate GPS photo, and the finish procedure / GPS photo /
-  displaying numbers).
-- **Pending (flagged in the instance):** island coordinates (Duck Islands / Bois Blanc / Thunder
-  Bay Island) need geocoding + human review; course distances unconfirmed; the `requirements`
-  checklist is a **representative subset** — the full SER (~40 equipment items) + SI procedural
-  items must be ingested completely before the prep checklist is relied on (and `display-numbers`
-  needs SI verification); the **2026 SI is not yet posted (~July 2026)** — it fixes the exact start
-  line, zones/marks beyond the NOR, and procedural requirements, so re-ingest when it lands
-  (`https://bycmack.com/sis/`).
-- **Lab shell + race library + editable review + sign-off: live (dev :8103).** `vps/lab/` is a
-  FastAPI service that serves the browser-based Lab (shared team login, tabbed sections) + the
-  race-library API (`/api/races`, `/api/races/{id}`, `/api/races/{id}/validate`,
-  `/api/races/{id}/approve`). The **Races** tab lists the library and renders a RaceDefinition as an
-  **inline-editable review form** — every field is editable in place (header, course marks
-  [name/type/rounding/lat/lon, add/remove], the requirements checklist [text/category/phase/
-  trigger/critical/→iPad/source, add/remove], rules & scoring modifications [add/remove],
-  tracker-permitted, provenance notes), bound straight to the in-memory definition so typing never
-  loses focus (only add/remove rows + Save/Approve repaint). **Save edits** (`POST /api/races`)
-  persists to the `lab_ingested` volume + re-validates; **Approve & sign off**
-  (`POST /api/races/{id}/approve`) stamps a `reviewed`/`reviewed_at` flag — **refused while blocking
-  validation errors remain** (warnings don't block) — and `{"approved":false}` un-approves. The
-  library list shows a **✓ approved** / *awaiting approval* pill per race. Geometry with maps +
-  geocoding stays the **Course & Marks** tab's job; the Races form edits the data everywhere else.
-  Other sections are descriptive placeholders. Run:
-  `docker compose -f compose.dev.yml up -d --build lab` → `http://localhost:8103` (dev pw `lab-dev`).
-  *(Verified: backend approve/un-approve/refuse-on-errors + save round-trip; Playwright UI — 124
-  editable inputs / 77 selects / 45 checkboxes / 22 editable requirement rows render, edit→Save→
-  Approve drives the ✓ Approved pill + the library-list pill. Internal `_labstate.json` no longer
-  leaks into the race list.)*
-- **Dual-input ingestion: live.** The Races tab ingests a race three ways → Opus extraction →
-  a **draft** RaceDefinition → the review view → **Save to library**:
-  - **auto-find** — `POST /api/ingest/discover {url}` scrapes a race page for candidate PDFs;
-  - **paste a direct PDF link** / **upload PDF(s)** — `POST /api/ingest {urls}` / `POST /api/ingest/upload`;
-  - extraction (`app/extract.py`) pulls text with pypdf and a frontier model (Opus,
-    `ANTHROPIC_MODEL`) emits a RaceDefinition matching the schema — coordinates only when the docs
-    state them (else `needs_review`), a comprehensive `requirements` checklist with the race-time
-    items flagged `deliver_to_ipad`, and the `rules_profile`. `POST /api/races` saves the
-    (reviewed) draft to the `lab_ingested` volume.
-  - *Verified on the real 2026 NOR + SER:* 0 errors, **56 requirements** (8 →iPad), the Cove Island
-    gate + finish coordinates, 13 RRS modifications, ORC ToT scoring — a draft more complete than
-    the hand-built instance. Always a DRAFT pending human review before it's relied on.
-- **Course & Marks review: live.** The Course & Marks tab renders each course on a schematic map +
-  an editable marks table; fill any `needs_review` mark by hand or **Geocode** (Nominatim,
-  human-confirmed), then Save — the reviewed copy lands on the `lab_ingested` volume and **overrides
-  the bundled seed**, so the validator's review warnings drop as marks are filled.
-- **Course loader (homework→onboard): wired.** `shared.race_def.course_to_marks()` flattens a course
-  (gate→midpoint, finish→midpoint; un-geocoded marks skipped + reported) and `POST /course/load`
-  (on the cloud agent **and** the onboard engine) writes it to the marks store + activates it, so the
-  navigator/plot use the real course. Verified on Mackinac (cloud + onboard). The per-race
-  `rules_profile`→gate wiring is deferred until a consumer exists (tracker access / optimizer scoring).
-- **Lab-1 multi-model GRIB optimizer: built (dev :8103).** `app/wind/` builds a real `WindField` from
-  public weather models — `grib.py` downloads 10 m UGRD/VGRD GRIB2 bbox subsets and parses them with
-  cfgrib/eccodes (the eccodes pip wheel bundles the binary, `python -m eccodes selfcheck` runs at
-  build); `models.py` defines key-free sources (**GFS / NAM / HRRR** via NOMADS GRIB-filter, **GEFS**
-  ensemble + **ECMWF** open-data opt-in), each with its cadence / forecast-hour grid / lag-aware
-  freshest-cycle picker; `windfield.py`'s `wind_at(lat,lon,epoch)` blends the models and reports the
-  **model/ensemble SPREAD as a confidence** (fuzzy adherence — models disagree → sail conservatively).
-  `optimizer.py` routes the course leg-by-leg (isochrone on `polars.py`, the canonical ORC polars) →
-  one optimal route + per-leg ETA/tacks/wind + a route confidence + an Opus briefing that flags the
-  low-confidence legs. `POST /api/optimize` + `GET /api/models` drive the **Gameplan → Optimizer** tab
-  (route canvas + leg table + briefing + model provenance, confidence-coloured); the `lab_gribcache`
-  volume caches GRIB so re-runs / ensemble members are cheap. Verified end-to-end on the Mackinac cove
-  course (live GFS 18Z + NAM 00Z + HRRR 01Z, ~73 frames; 133 nm / 17.8 h / 1 tack; confidence 0.69).
-  - **Parse crash isolation (`GRIB_ISOLATE_PARSE`, default ON):** cfgrib/eccodes can intermittently
-    SEGFAULT on a frame (uncatchable, kills the worker), so the parse runs in a persistent child
-    process (`_grib_parser.py`, one per build); `grib.IsolatedGribParser` respawns + retries on a
-    child crash/hang, then skips the frame (degrades to a skipped frame, not a dead optimize). Also pin
-    `pandas==2.2.3` — the unpinned transitive dep pulled 3.0.x which segfaults under numpy 2.1.3 in
-    cfgrib's datetime decode. See `test_grib_isolation.py`.
-- **Obstacle avoidance (routing fidelity, Bitsailor parity item 2a): built.** `app/geo/` keeps the
-  route off land. It's **race-agnostic** — three layers rasterize into one boolean mask the isochrone
-  prune queries (`blocked(lat,lon)` / `crosses(a,b)`):
-  1. a **global** coastline (`coastline.py`, land∧¬lake + islands-in-lakes, fetched once to the
-     `lab_coastline` volume and auto-clipped to whatever course bbox the RaceDefinition yields — so
-     any race anywhere gets its own coast, ocean or lake; **GSHHG full-res by default**, Natural Earth
-     1:10m as the fallback — see "Higher-res coastline backstop" below);
-  2. the race's own `zones[]` (exclusion / hazard / tss polygons);
-  3. the race's geocoded `island` marks, buffered to a disk (`radius_nm`) — islands are obstacles to
-     route AROUND, not waypoints to hit (so `course_to_marks` omits them as waypoints).
-  `optimize_course(..., avoid=True)` builds the field from the course bbox + this race's zones/islands
-  (cached by `cache_key` so Lab-2's same-course scenarios share one mask) and threads it through
-  `route_leg`, which rejects any heading step that would cross an obstacle. `POST /api/optimize`
-  takes `avoid_land` (default true) and returns an `obstacles` summary + `obstacle_steps_avoided`;
-  the Gameplan tab draws the coast/island/zone overlay on the route canvas. **A/B-verified on the
-  real Cove Island GRIB route:** avoidance OFF passes 1.9 nm from Bois Blanc's center (cutting across
-  the island); ON clears at 5.7 nm (no violations) for +0.3 nm / +1 tack. *Caveats:* the global
-  backstop now defaults to GSHHG full-res (below) which catches sub-nm islands; the race-island/zone
-  layer still backs the race-critical ones (island coords geocoded `approx` → human-review); rounding
-  **side** is now enforced for islands that are MARKS of the race (see 2f below) — plain hazards stay
-  avoided either side. Tunables: `GEO_RES_DEG`, `GEO_ISLAND_NM`.
+Dual input → Opus extraction → a **draft** RaceDefinition → human review → save:
+- **Ingest** (Races tab): auto-find PDFs on a race page (`POST /api/ingest/discover`), paste
+  direct links (`POST /api/ingest`), or upload PDFs (`POST /api/ingest/upload`); `app/extract.py`
+  (pypdf + `ANTHROPIC_MODEL`) emits a schema-conformant draft — coordinates only when the docs
+  state them (else `needs_review`), a comprehensive `requirements` checklist with race-time items
+  flagged `deliver_to_ipad`, and the `rules_profile`. Drafts are always machine-extracted →
+  **human review before use**.
+- **Review + sign-off**: the Races tab renders an inline-editable review form (header, marks,
+  requirements, rules & scoring, tracker, provenance) bound to the in-memory definition; **Save**
+  (`POST /api/races`) persists to the `lab_ingested` volume (overrides the bundled seed) +
+  re-validates; **Approve & sign off** (`POST /api/races/{id}/approve`) stamps `reviewed` and is
+  refused while blocking errors remain. Library API: `GET /api/races[/{id}]`, `/validate`.
+- **Course & Marks tab**: schematic + real map per course, editable marks, **Geocode** (Nominatim,
+  human-confirmed), Save.
+- **Course loader (homework→onboard)**: `shared.race_def.course_to_marks()` flattens a course
+  (gates/finish → midpoints; un-geocoded marks skipped + reported) and `POST /course/load` (cloud
+  agent AND onboard engine) writes + activates it.
+- **Reference instance**: `races/bayview_mackinac_2026.json` (real 2026 NOR: Cove Island virtual
+  gate, virtual GPS finish, both courses, ORC ToT, §2.1(d) carve-out, Appendix WP).
+  **Still pending**: the **2026 SI is not posted (~July 2026)** — re-ingest when it lands
+  (`bycmack.com/sis/`) for the exact start line, zones and procedural items; the full SER
+  equipment list should be ingested completely before the prep checklist is relied on.
+
+### Multi-model GRIB optimizer core (Lab-1)
+
+`app/wind/` builds a real `WindField` from public weather models — `grib.py` downloads 10 m
+UGRD/VGRD GRIB2 bbox subsets and parses them with cfgrib/eccodes (the eccodes pip wheel bundles
+the binary; `python -m eccodes selfcheck` runs at build); `models.py` defines key-free sources
+(**GFS / NAM / HRRR** via NOMADS GRIB-filter, **GEFS** + **ECMWF-ENS** ensembles and **ECMWF /
+ICON / GEM** opt-in), each with its cadence / forecast-hour grid / lag-aware freshest-cycle
+picker + cycle fallback; `windfield.py`'s `wind_at(lat,lon,epoch)` blends the models (weighted by
+venue model skill, below) and reports the **model/ensemble SPREAD as a confidence** (models
+disagree → sail conservatively). `optimizer.py` routes the course leg-by-leg (isochrone on
+`polars.py`, the canonical ORC polars) → one optimal route + per-leg ETA/tacks/sail/wind + a
+route confidence + a briefing that flags low-confidence legs. `POST /api/optimize` +
+`GET /api/models` drive the **Gameplan → Optimizer** tab; the `lab_gribcache` volume makes
+re-runs / ensemble members cheap.
+- **Degraded-field honesty:** a coverage gate + route-sanity guard flag `degraded` + warnings when
+  the field is thin (the router falls back to a constant wind where nothing loaded — trust the
+  flags). Tunables `GRIB_MIN_FRAME_FRAC` / `GRIB_COVERAGE_MIN` / `GRIB_CYCLE_FALLBACK`.
+- **Parse crash isolation (`GRIB_ISOLATE_PARSE`, default ON):** cfgrib/eccodes can intermittently
+  SEGFAULT (uncatchable), so the parse runs in a persistent child process (`_grib_parser.py`);
+  a crash/hang respawns + retries, then skips the frame — a skipped frame, not a dead optimize.
+  `pandas` stays pinned (an unpinned 3.0.x segfaulted under numpy in cfgrib's datetime decode).
+
+### Obstacle avoidance (routing fidelity 2a)
+
+`app/geo/` keeps the route off land — race-agnostic; three layers rasterize into one boolean mask
+the isochrone prune queries: (1) a **global coastline** (`coastline.py`, fetched once to the
+`lab_coastline` volume, clipped to the course bbox; **GSHHG full-res default**, Natural Earth
+fallback — see the backstop section), (2) the race's `zones[]` (exclusion/hazard/TSS), (3) the
+race's geocoded `island` marks buffered to disks (islands are obstacles to route around, not
+waypoints). `optimize_course(avoid=True)` builds the field (cached by `cache_key` so same-course
+scenarios share a mask); `POST /api/optimize` takes `avoid_land` (default true) and returns an
+`obstacles` summary; the Gameplan map overlays coast/islands/zones. Rounding **side** is enforced
+for islands that are marks of the race (2f below); plain hazards stay avoided either side.
+Tunables `GEO_RES_DEG` / `GEO_ISLAND_NM` / `GEO_MARK_CARVE_NM`.
 
 ### Higher-res coastline backstop — GSHHG full-res
 
@@ -212,7 +171,8 @@ synthesized + **signed**, dropped onboard as the copilot's frozen homework. Two 
   (left/middle/right of the rhumb). Variants carry `supported_by` models, `share` (agreement),
   total-hours + range, a representative route, and the **decision spread** (the time stakes between
   the side options). `POST /api/playbook`.
-- **Lab-2b synthesis → signed bundle** (`app/synthesis.py`). **Opus** writes, per variant, a
+- **Lab-2b synthesis → signed bundle** (`app/synthesis.py`). The synthesis model (the
+  **Fable-primary → Opus-fallback chain**, `ANTHROPIC_MODEL_CHAIN`) writes, per variant, a
   crew-facing `summary` / `rationale` / `tradeoffs` and — most important — `what_flips_it`: the
   concrete **observable** trigger (a wind shift past a bearing relative to the first-beat rhumb,
   persistent vs oscillating) that flips the decision to another variant. Plus a `headline`, a
@@ -235,7 +195,7 @@ synthesized + **signed**, dropped onboard as the copilot's frozen homework. Two 
   onboard copilot loaded it, **verified the signature**, and emitted the LLM digest with each
   variant's flip trigger. UI Playwright-verified.
 
-**Playbook v2 — the scenario-rich PLAY LIBRARY (Phases B + C shipped 2026-07-07; design
+**Playbook v2 — the scenario-rich PLAY LIBRARY (Phases B–D shipped 2026-07-07/08; design
 `docs/PLAYBOOK_V2.md`).** The v1 per-model side variants remain (compat), but the bundle
 (`c4.playbook/v2`) now carries **plays** — named scenarios with machine-checkable detection
 predicates + a pre-computed response + frontier-authored narrative. **External** plays route the
@@ -252,8 +212,9 @@ and a **rejoin-vs-continue tabulation** (per-leg off-track positions at the venu
 is sailing back to the line faster than pressing on? — a guidance play carrying the table). The
 bundle also states the **corridor verdict** (geometry vs execution — is the lateral decision worth
 real time?) from the scenario fan's spread. Synthesis model chain: Fable primary, Opus fallback,
-deterministic seeds below both. The onboard **matcher** that arms plays against live signals is
-Phase D.
+deterministic seeds below both. The onboard **matcher** (Phase D, shipped) arms plays against live
+signals on the engine (`GET /plays`; crew sail-state, polar_pct, leg gating, buoy
+corroborators) and the copilot ranks Tier-2 `play_matches` — see CLAUDE.md.
 
 ### Routing fidelity 2b — per-leg sail plan + reviewable boat sail model (built)
 
@@ -556,7 +517,11 @@ The ORC cert stays the canonical polar; approved tweaks are an explicit overlay
 `polar_adjustments=` through `optimize_course` / `build_playbook` / `synthesize` (resolved from the
 active boat in `main.py`, exactly like `helm_factor`/`jib_crossovers`). Endpoints: `GET
 /api/learning/debriefs[/{id}]`, `GET /api/learning/proposals`, `POST /api/learning/propose`, `POST
-/api/learning/proposals/{id}/apply` (the human-approved write), `/reject`. The **Learnings tab** gains a
+/api/learning/proposals/{id}/apply` (the human-approved write), `/reject`, `POST
+/api/learning/calibrate-waves` (fit the boat's wave coefficients — slope per point of sail + the
+low-Hs deadband knee — from the archived raw polar%/Hs record; a `wave_coeffs` proposal, same
+human-approved discipline), and `GET /api/learning/trend` (latest debrief per race oldest→newest +
+applied-refinement milestones — the boat model improving over a season). The **Learnings tab** gains a
 "Refine the boat model" review card (Propose → editable helm + a per-cell adjustment table with
 keep/drop checkboxes → Approve/Reject) and a "Performance archive" table. Verified
 `test_routing_learning.py` (overlay clamp/no-op + archive → propose-doesn't-mutate-the-boat →
@@ -564,10 +529,19 @@ approve-writes → reject-leaves-untouched) + `test_routing_track.py` cert-snap 
 propose helm 1.0→0.93 + cell adjustments → approve → boat updated → overlay bites a real cert cell
 7.72→8.08) + Playwright UI (review panel + archive, 0 console errors).
 
-- **Next:** wind-over-water correction (2nd-order); Lab-3 onboard executor; verify the YB fetch against
-  the live bayviewmack2026 feed (~July 2026). Routing fidelity 2c/2e/2f/2g, the GSHHG coastline
-  backstop, water currents, realized-speed **phases 1 + 2 (GLWU)**, **Debrief actual-track ingestion**,
-  and the **Lab-4 learning loop** are **done**.
+- **Still owed:** verify the YB our-boat track fetch against the live bayviewmack2026 feed
+  (~July 2026) — everything else in this file is built.
+
+## Fleet retro study (built — findings in `docs/RETRO_STUDY.md`)
+
+For a past race, optimize EVERY boat on its own ORC polar with the forecast knowable at ITS gun,
+score its real YB track against its own optimal, and correlate adherence with corrected rank.
+`app/retro.py` (ingest + background batch + report), `app/retrostore.py` (SQLite on the
+`lab_retro` volume — races/entries/tracks/results/certs/polars/runs/scores + a GRIB registry that
+pins every archive file), `app/orcpolar.py` (the public ORC cert `Allowances` block IS a full
+polar), `app/wind/archive.py` (`ArchiveGFS`/`ArchiveHRRR` — `.idx` byte-range from AWS, `asof`
+frozen to "posted by the gun"). Endpoints `POST/GET /api/retro/*`; Debrief-tab "Fleet retro"
+card. 2025 headline: **execution beat geometry** — the Playbook-v2 threshold source.
 
 ## Venue weather-model skill weighting (built + deployed 2026-07-03)
 

@@ -18,8 +18,10 @@ guard; v1 is AIS proximity/collision, handicap-aware fleet tactics is the next i
 `docs/ONBOARD_ENGINE_SCOPING.md` (the three-tier architecture) and
 the shipped copilot decision-support layer (`pi/orin/copilot/`).
 
-**PLAYBOOK-ADHERENCE tile (BUILT 2026-06-23).** "Are we sailing the frozen homework, and has a
-branch trigger fired?" Its truth is the **copilot**, not the engine: a deterministic
+**PLAYBOOK-ADHERENCE tile (BUILT 2026-06-23; wiring since superseded — the tile now reads the
+engine's unified `GET /selector` as its single source of truth, and the copilot `/adherence`
+fallback was retired 2026-07-08. The below records the original design.)** "Are we sailing the
+frozen homework, and has a branch trigger fired?" Its truth was the **copilot**: a deterministic
 `pi/orin/copilot/adherence.py` compares the Lab-2 frozen playbook (the `recommended` start variant +
 each variant's `what_flips_it` trigger, keyed by first-beat side) against the engine's live tactical
 read (`get_tactics`: persistent-vs-oscillating, favored side). It returns a ready-made tile object

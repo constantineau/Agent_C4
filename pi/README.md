@@ -18,7 +18,7 @@ Stack (brief §4):
 | Data server  | Signal K server                   | N2K → normalized JSON (WS + REST) |
 | Derived data | signalk-derived-data (auto-enabled)| true wind (TWS/TWA/TWD), VMG — `$source` `derived-data` |
 | Local archive| `archiver/archiver.py` → SQLite   | full-resolution onboard log (every delta); `backfill.py` → VPS post-passage |
-| Uplink       | `uplink/uplink.py` (systemd)      | 15-s aggregates → VPS; disk-backed queue replays on link loss |
+| Uplink       | `uplink/uplink.py` (compose svc)  | 15-s aggregates → VPS; disk-backed queue replays on link loss |
 | Onboard engine | `engine/` (Tier 1, 9.1) → :8200 | the deterministic modules run here from the boat's own data (`OnboardSource`) — no LLM, legal in-race |
 | Race console | `console/` (9.2) → :8091          | the iPad app served from the Pi, pointed only at the engine over boat-local Wi-Fi (no cloud) |
 | Remote admin | Tailscale                         | SSH through CGNAT |
@@ -29,9 +29,9 @@ Set it once (env / config); everything else is identical.
 **Phase 9 — the three-tier pivot (built):** the Pi is now also the **onboard deterministic engine**
 host (`engine/`, 9.1) — `routing/tactics/sails/polars/nav/fatigue` run here from the boat's own data
 (the boat's own gear → legal in-race under RRS 41, no LLM, :8200), and in race mode the iPad is served
-from the Pi (`console/`, 9.2, :8091) and talks only to the engine. An optional **Jetson Orin Nano**
-companion (Tier 2, 9.4) would add a local LLM (Qwen2.5-7B) for in-race chat — **on hold (no hardware
-yet)**. The cloud stays the between-races prep/debrief/learning **C4 Performance Lab** (`vps/lab`). See
+from the Pi (`console/`, 9.2, :8091) and talks only to the engine. The **Jetson Orin Nano**
+companion (Tier 2, 9.4) is **live** — Ollama + Qwen2.5-7B with the copilot decision-support service
+(`orin/`, as-built in `orin/DEPLOYMENT.md`). The cloud stays the between-races prep/debrief/learning **C4 Performance Lab** (`vps/lab`). See
 `pi/engine/README.md`, `docs/RRS41_COMPLIANCE.md`, and `docs/ONBOARD_ENGINE_SCOPING.md`.
 
 ## Phase status
