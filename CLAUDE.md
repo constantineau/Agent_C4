@@ -12,6 +12,7 @@ This file is the **operational reference** — how the system works today and ho
 - `docs/` — per-arc design docs (playbook v2, strategy synthesis, RRS-41 memo, model-skill,
   retro study, optimizer UI study…). Some are explicitly marked superseded — kept as history.
 - Per-component READMEs: `vps/lab/README.md` (the Lab, detailed), `pi/*/README.md` (onboard).
+- `docs/REMOTE_OPS.md` — working on the boat remotely (access paths, hardening, session rules).
 - Project brief: Google Doc `1lUqXt3JZ8Cao467CfGT9CP3O75wtuO6z3CvoMr56v5Y`.
 
 ## Architecture — three tiers (driven by RRS 41)

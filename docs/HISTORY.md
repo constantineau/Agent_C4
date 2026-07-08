@@ -191,6 +191,15 @@ and the per-component READMEs. Detailed design rationale for the big arcs is in 
   runs on boat-local wire + Wi-Fi with no WAN anywhere, and the engine↔copilot leg survives
   even a boat-AP failure.
 
+## 2026-07-08 (night) — remote-operations hardening (the boat moves aboard long-term)
+
+- The system stays on the boat in Sarnia on Starlink, owner-powered. Verified: Tailscale key
+  expiry disabled on both nodes, full power-cycle survival (restart policies + boot-enabled
+  units), storage self-limits. Built: the **cross-hop** — ed25519 keys exchanged so either box
+  reaches the other over the Pi↔Orin ethernet if one drops off the tailnet. `docs/REMOTE_OPS.md`
+  carries the access ladder, the session rules (never touch wlan/tailscale/default route; never
+  `compose down` remotely; one box at a time), and the accepted residual risks.
+
 ## Standing decisions (still binding)
 
 - **RRS 41 bright line**: all frontier/cloud work pre-start, frozen at the gun; in-race =
