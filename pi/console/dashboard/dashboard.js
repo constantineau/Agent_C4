@@ -78,6 +78,47 @@
   }
   const arrowKts = (twd, kts) => windArrow(twd) + r0(kts) + " kts";
 
+  /* Tile-sized TWS trend: the last 3.5 h with 30-min gridlines (−210 … now, crew request
+     2026-07-08), the TWS line + min/max, and a direction-arrow strip sampled at each 30-min
+     point. Fits the tile face; the tap-detail keeps the full-race chart. */
+  function twsTrendTile(hist) {
+    if (!hist || hist.length < 5) return "";
+    const now = hist[hist.length - 1].t;
+    const WIN = 210 * 60;
+    const h = hist.filter((p) => p.t >= now - WIN);
+    if (h.length < 5) return "";
+    const w = 232, ht = 66, padL = 24, padR = 8, padT = 6, padB = 14;
+    const t0 = now - WIN, span = WIN;
+    const tws = h.map((p) => p.tws);
+    let lo = Math.min.apply(null, tws), hi = Math.max.apply(null, tws);
+    if (hi - lo < 3) { const m = (hi + lo) / 2; lo = m - 1.5; hi = m + 1.5; }
+    lo = Math.max(0, Math.floor(lo)); hi = Math.ceil(hi);
+    const X = (t) => padL + ((t - t0) / span) * (w - padL - padR);
+    const Y = (v) => padT + (1 - (v - lo) / ((hi - lo) || 1)) * (ht - padT - padB);
+    let gridv = "", ticks = "";
+    const arrows = [];
+    for (let m = 210; m >= 0; m -= 30) {
+      const t = now - m * 60, x = X(t).toFixed(1);
+      gridv += '<line class="ax-grid" x1="' + x + '" y1="' + padT + '" x2="' + x + '" y2="' + (ht - padB) + '"/>';
+      if (m % 60 === 0)          // hourly labels only — the 30-min gridlines + arrows mark the rest
+        ticks += '<text class="ax-lab" x="' + x + '" y="' + (ht - 3) + '" text-anchor="middle">' +
+                 (m === 0 ? "now" : "−" + (m / 60) + "h") + '</text>';
+      let best = null;
+      for (const p of h) if (best === null || Math.abs(p.t - t) < Math.abs(best.t - t)) best = p;
+      arrows.push(best && Math.abs(best.t - t) <= 900
+        ? '<span class="tt-a" title="−' + m + ' min · ' + r0(best.tws) + ' kts">' + windArrow(best.twd) + '</span>'
+        : '<span class="tt-a tt-gap">·</span>');
+    }
+    const ylab = '<text class="ax-lab" x="' + (padL - 3) + '" y="' + (Y(hi) + 3).toFixed(1) + '" text-anchor="end">' + hi + '</text>' +
+                 '<text class="ax-lab" x="' + (padL - 3) + '" y="' + (Y(lo) + 3).toFixed(1) + '" text-anchor="end">' + lo + '</text>';
+    const pts = dsample(h, 90).map((p) => X(p.t).toFixed(1) + "," + Y(p.tws).toFixed(1)).join(" ");
+    const last = h[h.length - 1];
+    return '<div class="tt-wrap"><svg class="rchart" viewBox="0 0 ' + w + " " + ht + '" width="100%" preserveAspectRatio="xMidYMid meet">' +
+      gridv + ylab + '<polyline class="rc-line" points="' + pts + '"/>' +
+      '<circle class="rc-dot" cx="' + X(last.t).toFixed(1) + '" cy="' + Y(last.tws).toFixed(1) + '" r="2.5"/>' + ticks +
+      '</svg><div class="tt-arrows">' + arrows.join("") + '</div></div>';
+  }
+
   /* ============================ DEMO scenarios (canned) ============================ */
   const SCENARIOS = {
     calm: {
@@ -87,7 +128,7 @@
         { tile: "sail",     status: "ok", text: "J1 is the right sail and pointing well. Hold the groove.", conf: "high" },
       ],
       tiles: {
-        wind:    { status: "ok", value: null,
+        wind:    { status: "ok", value: arrowKts(250, 12), sub: "16→12 kts · 8° right", chart: twsTrendTile(genDemoRace(false)),
                    rows: [{ label: "Now", emph: true, cols: [arrowKts(250, 12)] }, { label: "−60 min", cols: [arrowKts(246, 14)] }, { label: "−120 min", cols: [arrowKts(242, 16)] }],
                    why: "True wind speed + direction now and looking back. Arrows point the way the wind blows (north wind points down, east points left). Eased a touch and edged right over the last couple of hours.", consider: "Oscillating breeze — work the shifts.", clears: "—", based: ["engine archive + live buffer"], conf: "high" },
         playbook:{ status: "ok", value: "On plan: Left", sub: "oscillating ±6°",
@@ -129,7 +170,7 @@
         { tile: "forecast", status: "watch", text: "Forecast has been under-calling the breeze by ~2-3 kts — expect a bit more than it says.", conf: "med" },
       ],
       tiles: {
-        wind:    { status: "watch", value: null,
+        wind:    { status: "watch", value: arrowKts(262, 16), sub: "9→16 kts · 16° right", chart: twsTrendTile(genDemoRace(true)),
                    rows: [{ label: "Now", emph: true, cols: [arrowKts(262, 16)] }, { label: "−60 min", cols: [arrowKts(252, 12)] }, { label: "−120 min", cols: [arrowKts(246, 9)] }],
                    why: "True wind speed + direction now and looking back. Arrows point the way the wind blows (north wind points down). Built ~7 kts and veered right ~16° over the last two hours — a persistent right trend.", consider: "Persistent right shift — favor the right side of the course.", clears: "the trend settles", based: ["engine archive + live buffer"], conf: "med" },
         playbook:{ status: "act", value: "Switch → Right", sub: "branch: persistent veer favors right",
@@ -362,9 +403,15 @@
       const rows = samples.map(([lbl, s], i) => ({ label: lbl, emph: i === 0, cols: [s ? arrowKts(s.twd, s.tws) : "—"] }));
       let oldest = null;
       for (let i = samples.length - 1; i >= 1; i--) { if (samples[i][1]) { oldest = samples[i][1]; break; } }
-      let st = "ok";
-      if (oldest) { const dT = nowS.tws - oldest.tws, dD = angDiff(nowS.twd, oldest.twd); if (Math.abs(dT) >= 6 || Math.abs(dD) >= 12) st = "watch"; }
-      return { status: st, value: null, rows: rows,
+      let st = "ok", sub = "";
+      if (oldest) {
+        const dT = nowS.tws - oldest.tws, dD = angDiff(nowS.twd, oldest.twd);
+        if (Math.abs(dT) >= 6 || Math.abs(dD) >= 12) st = "watch";
+        sub = r0(oldest.tws) + "→" + r0(nowS.tws) + " kts" +
+          (Math.abs(dD) >= 5 ? " · " + r0(Math.abs(dD)) + "° " + (dD > 0 ? "right" : "left") : " · steady dir");
+      }
+      const chart = twsTrendTile(App.src === "live" ? raceData() : null) || null;
+      return { status: st, value: arrowKts(nowS.twd, nowS.tws), sub: sub, chart: chart, rows: rows,
         why: "True wind speed + direction, now and looking back. Arrows point the way the wind is blowing (a north wind points down, an east wind points left)." +
           (oldest ? " Over the window TWS " + (nowS.tws >= oldest.tws ? "built" : "eased") + " from " + r0(oldest.tws) + " to " + r0(nowS.tws) + " kts." : ""),
         consider: st === "ok" ? "Steady — work the oscillations." : "Building/shifting — favor the developing side and watch the gear.",
@@ -1066,7 +1113,7 @@
       el.innerHTML =
         '<div class="t-head"><span class="t-name">' + NAME[key] + '</span>' +
         '<span class="t-chip"><span class="t-icon">' + st.icon + '</span><span class="t-word">' + st.word + '</span></span></div>' +
-        valHtml + (t.chart ? t.chart : "") + (t.sub ? '<div class="t-sub">' + t.sub + '</div>' : "") + rowsHtml(t.rows);
+        valHtml + (t.chart ? t.chart : "") + (t.sub ? '<div class="t-sub">' + t.sub + '</div>' : "") + (t.chart ? "" : rowsHtml(t.rows));
       el.addEventListener("click", () => openDetail(key));
       el.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openDetail(key); } });
       grid.appendChild(el);

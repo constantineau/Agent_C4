@@ -330,6 +330,14 @@ body {
 .sb-chip.on { background:var(--ok-fill); color:var(--ok); border-color:var(--ok); }
 .sb-chip.reef.on { background:var(--watch-fill); color:var(--watch); border-color:var(--watch); }
 .sb-note { font-size:11px; color:var(--muted); margin-left:auto; }
+/* tile-face TWS trend (last 3.5 h, 30-min grid) + the direction-arrow strip under it */
+.tt-wrap { margin:6px 0 2px; }
+.tt-arrows { display:flex; justify-content:space-between; padding-left:22px; padding-right:6px;
+  margin-top:1px; }
+.tt-a { width:16px; height:16px; display:inline-flex; align-items:center; justify-content:center; }
+.tt-a .warr { width:13px; height:13px; }
+.tt-gap { color:var(--muted); opacity:.5; font-size:10px; }
+
 .ctl.rec.on { color:var(--act); border-color:var(--act); }
 .ctl.rec.on b { color:var(--act); }
 .st-plays-head { display: flex; justify-content: space-between; align-items: center;
