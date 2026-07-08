@@ -76,10 +76,10 @@ def _safety_callout(ais):
     if not (act or watch):
         return None                       # closing but still comfortably clear — nothing to show
     name = t.get("name") or f"MMSI {t.get('mmsi', '?')}"
-    brg, rng = _num(t.get("bearing")), _num(t.get("range_nm"))
-    detail = (f"CPA {cpa} nm in {tcpa} min"
-              + (f", bearing {brg}°" if brg is not None else "")
-              + (f", range {rng} nm" if rng is not None else ""))
+    brg = _num(t.get("bearing"))
+    # compact — this rides the dashboard's one-line coach strip (crew request 2026-07-08)
+    detail = (f"CPA {cpa} nm / {tcpa} min"
+              + (f" · brg {brg}°" if brg is not None else ""))
     level = "act" if act else "watch"
     return _callout(f"ais:{t.get('mmsi') or name}:{level}", "safety", "now" if act else "soon",
                     f"Collision risk: {name}" if act else f"Traffic closing: {name}",

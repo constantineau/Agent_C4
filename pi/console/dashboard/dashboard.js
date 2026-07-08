@@ -28,10 +28,9 @@
   const TILES = ["wind", "playbook", "forecast", "sail", "eta", "ais", "charge", "data"];
   const NAME = {
     wind: "TWS Trend", playbook: "Playbook", forecast: "Forecast",
-    sail: "Sail", eta: "Time to Mark", ais: "AIS / Fleet", charge: "C4 Energy", data: "Data",
+    sail: "Sail", eta: "Time to Mark", ais: "Fleet", charge: "C4 Energy", data: "Data",
   };
-  /* AIS tile thresholds: nm to the closest point of approach + minutes to it (tunable). */
-  const AIS_GUARD_NM = 0.5, AIS_WATCH_NM = 1.5, AIS_TCPA_ACT = 12, AIS_TCPA_WATCH = 30;
+  const boatName = (r) => { const n = r.boat || r.name || ("MMSI " + (r.mmsi || "?")); return n.length > 14 ? n.slice(0, 13) + "…" : n; };
   const aisName = (t) => { const n = t.name || ("MMSI " + t.mmsi); return n.length > 12 ? n.slice(0, 11) + "…" : n; };
   /* corrected-time delta as a signed m:ss; cd<0 = the competitor is projected AHEAD of us. */
   const corrTxt = (b) => {
@@ -49,7 +48,10 @@
   };
   /* a delayed public-tracker fix carries source="tracker" + age_s — flag it (⌛ + age) so an
      over-the-horizon position is never read as a live call. Live own-receiver AIS has no mark. */
-  const srcMark = (b) => b.source === "tracker" ? " ⌛" + (b.age_s != null ? Math.round(b.age_s / 60) + "m" : "trk") : "";
+  const srcMark = (b) => b.source === "tracker"
+    ? " ⌛" + (b.age_s != null ? Math.round(b.age_s / 60) + "m" : "trk") + (b.dr_nm ? "→DR" : "")
+    : b.source === "ais" ? "" : b.source === "own" ? "" : b.source == null ? " ·no fix" : "";
+  const ordinal = (n) => { const v = n % 100; return n + (v >= 11 && v <= 13 ? "th" : ["th", "st", "nd", "rd"][n % 10] || "th"); };
 
   const D2R = Math.PI / 180, R2D = 180 / Math.PI;
   const WIND_WIN_S = 12 * 3600;   // keep the whole race (~12 h) — feeds both the lookback rows and the race chart
@@ -96,7 +98,7 @@
                    why: "Forecast wind speed + direction (arrows show direction; north wind points down). Building to ~15 kts and veering right. \"Forecast vs. actual\" compares the earlier forecast for −60/−120 min ago against what actually happened — within ~1 kt, verifying well.", consider: "Plan the gear for the build.", clears: "—", based: ["fetch_forecast + engine archive"], conf: "high" },
         sail:    { status: "ok", value: "J1", sub: "in range · no change ahead", why: "Reading the crew-set sail (J1 on the sails bar) — right for 12 kts upwind.", consider: "No change.", clears: "TWS > 16 kts", based: ["sails bar: crew set J1", "get_sail: optimal J1"], conf: "high" },
         eta:     { status: "ok", value: "16 min", sub: "Cove Island", why: "~16 min to Cove Island at the current made-good.", consider: "On schedule for the mark.", clears: "—", based: ["get_navigator: ETA 16 min"], conf: "high" },
-        ais:     { status: "ok", value: "Windquest", sub: "▽ 1:50 back · behind corrected", rows: [{ hdr: true, cols: ["range", "CPA / TCPA"] }, { label: "Defiance", emph: true, cols: ["2.8 nm", "2.1 nm / 24m"] }, { label: "Lake Guardian", cols: ["4.1 nm", "3.6 nm · opening"] }, { label: "MMSI 3669…", cols: ["6.0 nm", "5.5 nm · opening"] }, { hdr: true, cols: ["fleet · ToT", "Δ corrected"] }, { label: "Windquest", emph: true, cols: ["3.1 nm to fin", "▽ 1:50 back"] }, { label: "Defiance", cols: ["3.4 nm to fin", "▲ 0:40 ahead"] }, { label: "Il Mostro ⌛17m", cols: ["1.9 nm to fin", "▲ 3:10 ahead"] }], why: "3 AIS contacts within 12 nm; nearest closing Defiance — CPA 2.1 nm in 24 min, comfortably clear. Fleet: 2 roster boats on AIS — Windquest 2 min back on corrected. 1 more over the horizon via the public tracker (delayed): Il Mostro is up the course and ahead on corrected.", consider: "Ahead of those near you on corrected — but the tracker shows Il Mostro leading over the horizon; keep racing the course, not just the boats in sight. (Fuzzy: partial AIS + a delayed tracker fix.)", clears: "—", based: ["get_ais: 3 contacts, min CPA 2.1 nm", "get_fleet: 2 matched, ToT", "tracker: 1 over-horizon"], conf: "high" },
+        ais:     { status: "ok", value: "2nd of 4 (div)", sub: "▲ Defiance 0:40 · ▽ Windquest 1:50", rows: [{ hdr: true, cols: ["to fin", "Δ corrected"] }, { label: "1. Il Mostro ⌛17m", cols: ["1.9 nm", "▲ 3:10 ahead"] }, { label: "2. ◆ Defiance", cols: ["3.4 nm", "▲ 0:40 ahead"] }, { label: "3. ◆ C4 (us)", emph: true, cols: ["3.2 nm", "—"] }, { label: "4. ◆ Windquest", cols: ["3.1 nm", "▽ 1:50 back"] }, { label: "5. Vayu ⌛22m→DR", cols: ["4.8 nm", "▽ 4:05 back"] }], why: "Estimated standings across the 5-boat demo fleet on ToT, remaining-race basis: 2 live on our AIS, 2 via the public tracker (delayed; 1 dead-reckoned forward at their pace). ◆ = our division (B).", consider: "Chase Defiance on corrected — consolidate against Windquest. (Estimates: partial AIS + a delayed tracker.)", clears: "—", based: ["get_fleet standings: 5 ranked / 5 roster", "sources: AIS 2 · tracker 2 · DR 1", "ToT"], conf: "high" },
         charge:  { status: "ok", value: "72", sub: "fresh", why: "Crew energy ~72% (inverse of the fatigue index; lower = more depleted).", consider: "Driver fresh — no rotation needed.", clears: "—", based: ["get_fatigue: index 28 → energy 72%"], conf: "high" },
         data:    { status: "ok", value: "5", sub: "sources live", why: "All five sensor groups fresh.", consider: "Instruments healthy.", clears: "—", based: ["get_sources: 5 live"], conf: "high" },
       },
@@ -138,7 +140,7 @@
                    why: "Forecast wind speed + direction (arrows show direction; north wind points down). Building to ~19 kts and veering right. \"Forecast vs. actual\" shows it has under-called the wind by ~2 kts and the right shift — trust the trend over the model.", consider: "Forecast running light — plan for more than it says.", clears: "forecast comes back in line", based: ["fetch_forecast + engine archive"], conf: "med" },
         sail:    { status: "act",   value: "J1 → A3", sub: "in range · at Cove Island (bear away, ~4 min)", why: "Reading the crew-set sail (J1). The leg after the gate bears away to ~135° TWA — an A3 leg. Stage the peel before the rounding.", consider: "Stage the A3 and peel in ~4 min.", clears: "A3 hoisted", based: ["sails bar: crew set J1", "get_sail: A3 for TWA 135°"], conf: "high" },
         eta:     { status: "watch", value: "4 min", sub: "Cove Island", why: "~4 min to Cove Island at the current made-good.", consider: "Mark in ~4 min — start the rounding prep.", clears: "past the rounding", based: ["get_navigator: ETA 4 min"], conf: "high" },
-        ais:     { status: "watch", value: "Algoma", sub: "CPA 0.8 nm in 11 min", rows: [{ hdr: true, cols: ["range", "CPA / TCPA"] }, { label: "Algoma", emph: true, cols: ["2.2 nm", "0.8 nm / 11m"] }, { label: "Defiance", cols: ["3.5 nm", "3.1 nm · opening"] }, { label: "MMSI 3661…", cols: ["7.4 nm", "7.0 nm · opening"] }, { hdr: true, cols: ["fleet · ToT", "Δ corrected"] }, { label: "Defiance", emph: true, cols: ["2.9 nm to fin", "▲ 1:20 ahead"] }, { label: "Windquest", cols: ["4.0 nm to fin", "▽ 2:10 back"] }], why: "3 AIS contacts within 12 nm; the closing one — Algoma, a laker — has a CPA of 0.8 nm in 11 min, crossing near the gate. Fleet: 2 roster boats on AIS — Defiance 1 min ahead on corrected.", consider: "A target is closing — watch the CPA and plan to keep clear at the rounding. On handicap, Defiance is your rival — cover when the crossing allows.", clears: "the CPA opens back up", based: ["get_ais: 3 contacts, min CPA 0.8 nm", "get_fleet: 2 matched, ToT"], conf: "high" },
+        ais:     { status: "watch", value: "2nd of 4 (div)", sub: "▲ Defiance 1:20 · ▽ Windquest 2:10", rows: [{ hdr: true, cols: ["to fin", "Δ corrected"] }, { label: "1. ◆ Defiance", cols: ["2.9 nm", "▲ 1:20 ahead"] }, { label: "2. ◆ C4 (us)", emph: true, cols: ["3.0 nm", "—"] }, { label: "3. ◆ Windquest", cols: ["4.0 nm", "▽ 2:10 back"] }, { label: "4. Il Mostro ⌛31m→DR", cols: ["1.2 nm", "▽ 0:55 back"] }], why: "Estimated standings across the 4-boat demo fleet on ToT, remaining-race basis: 2 live on our AIS, 1 via the public tracker (delayed; dead-reckoned forward). Defiance holds the division lead by 1:20 corrected. ◆ = our division (B).", consider: "Tight on corrected with Defiance — sail your race, cover at the crossings.", clears: "—", based: ["get_fleet standings: 4 ranked / 4 roster", "sources: AIS 2 · tracker 1 · DR 1", "ToT"], conf: "high" },
         charge:  { status: "act",   value: "28", sub: "rotate soon", why: "Crew energy ~28% (rotate soon). Heading instability and steering reversals up, speed deficit creeping.", consider: "Tank getting low — plan a helm rotation.", clears: "energy back above 65%", based: ["get_fatigue: index 72 → energy 28%"], conf: "med", components: { heading: 0.7, reversals: 0.8, heel: 0.4, "spd-def": 0.5 } },
         data:    { status: "watch", value: "4", sub: "1 stale", why: "Masthead wind stale ~50 s ago; running on the Orca backup.", consider: "Running on backup wind — watch for it to return.", clears: "all sources fresh", based: ["get_sources: 4 live, 1 stale"], conf: "med" },
       },
@@ -458,72 +460,61 @@
         consider: e < 5 ? "Mark in ~" + r0(e) + " min — start the rounding prep." : "On schedule for the mark.",
         clears: st !== "ok" ? "past the rounding" : "—", based: ["get_navigator: ETA " + r0(e) + " min to " + m.name], conf: "engine" };
     },
+    /* FLEET: whole-fleet corrected-time STANDINGS estimate (crew decision 2026-07-08). Collision
+       avoidance lives on the boat's dedicated gear — NOT here; the copilot's compact safety
+       callout is the tablet's only collision surface. Face = our division standing; detail =
+       the whole fleet ranked (◆ = a boat in OUR division), each row with its position source
+       (live AIS · ⌛aged tracker fix, →DR = dead-reckoned forward · no fix) and the corrected
+       delta vs us. Ranks are the REMAINING race on corrected time — start-time-free. */
     ais(p) {
-      const a = p.ais;
-      if (!a) return NA("no AIS feed");
-      const tgts = a.targets || [];
-      if (!tgts.length) {
-        return { status: "ok", value: "Clear", sub: "no traffic",
-          why: "No AIS contacts within " + r0(a.max_range_nm) + " nm of own ship.",
-          consider: "No vessels to manage — keep monitoring.", clears: "a target comes within range",
-          based: ["get_ais: 0 contacts"], conf: "engine" };
-      }
-      // no own-ship fix → we can list targets but not range/CPA; honest NA on the geometry.
-      if (a.own_fix === false) {
-        const rows = [{ hdr: true, cols: ["vessel", "SOG"] }].concat(
-          tgts.slice(0, 6).map((t, i) => ({ label: aisName(t), emph: i === 0,
-            cols: [t.sog != null ? r1(t.sog) + " kts" : "—"] })));
-        return { status: "watch", value: String(tgts.length), sub: "no own fix", rows: rows,
-          why: tgts.length + " AIS contact" + (tgts.length === 1 ? "" : "s") + " heard, but no own-ship position fix — range/CPA/TCPA unavailable.",
-          consider: "AIS up but no GPS fix — geometry is blind; verify own position.",
-          clears: "own-ship fix returns", based: ["get_ais: " + tgts.length + " contacts, no own fix"], conf: "engine" };
-      }
-      const rows = [{ hdr: true, cols: ["range", "CPA / TCPA"] }].concat(
-        tgts.slice(0, 6).map((t, i) => ({ label: aisName(t), emph: i === 0,
-          cols: [t.range_nm != null ? r1(t.range_nm) + " nm" : "—",
-                 t.cpa_nm != null ? (r1(t.cpa_nm) + " nm" + (t.closing && t.tcpa_min != null ? " / " + r0(t.tcpa_min) + "m" : t.closing ? "" : " · opening")) : "—"] })));
-      // threat = the nearest CLOSING target (the list is already threat-sorted by the engine).
-      const threat = tgts.find((t) => t.closing && t.cpa_nm != null);
-      let st = "ok", value = String(tgts.length), sub = "contact" + (tgts.length === 1 ? "" : "s") + " · all clear";
-      if (threat) {
-        const cpa = threat.cpa_nm, tcpa = threat.tcpa_min;
-        if (cpa <= AIS_GUARD_NM && tcpa != null && tcpa <= AIS_TCPA_ACT) st = "act";
-        else if (cpa <= AIS_WATCH_NM && tcpa != null && tcpa <= AIS_TCPA_WATCH) st = "watch";
-        if (st !== "ok") { value = aisName(threat); sub = "CPA " + r1(cpa) + " nm" + (tcpa != null ? " in " + r0(tcpa) + " min" : ""); }
-        else { sub = tgts.length + " contact" + (tgts.length === 1 ? "" : "s") + " · closest CPA " + r1(cpa) + " nm"; }
-      }
-      // FLEET overlay: corrected-time standings for roster-matched competitors (the handicap layer).
-      // Collision keeps status primacy (safety); fleet enriches the detail + takes the face when clear.
-      const fl = p.fleet, based = ["get_ais: " + tgts.length + " contacts" + (threat ? ", min CPA " + r1(threat.cpa_nm) + " nm" : ", none closing")];
-      let why = tgts.length + " AIS contact" + (tgts.length === 1 ? "" : "s") + " within " + r0(a.max_range_nm) + " nm" +
-        (threat ? "; nearest closing " + aisName(threat) + " — CPA " + r1(threat.cpa_nm) + " nm" + (threat.tcpa_min != null ? " in " + r0(threat.tcpa_min) + " min." : ".")
-                : ", none closing inside the guard.");
-      let consider = st === "act" ? "Close-quarters developing — resolve the crossing now, keep clear." :
-        st === "watch" ? "A target is closing — watch the CPA and plan to keep clear." : "Traffic is clear — keep monitoring.";
-      if (fl && fl.available && fl.fleet && fl.fleet.length) {
-        const F = fl.fleet, top = F[0], nTrk = fl.count_tracker || 0;
-        rows.push({ hdr: true, cols: ["fleet · " + (fl.scoring_method || "corrected"), "Δ corrected"] });
-        F.slice(0, 4).forEach((b, i) => rows.push({ label: (b.boat || ("MMSI " + b.mmsi)) + srcMark(b), emph: i === 0,
-          cols: [b.dtf_nm != null ? r1(b.dtf_nm) + " nm to fin" : (b.range_nm != null ? r1(b.range_nm) + " nm" : "—"), corrTxt(b)] }));
-        based.push("get_fleet: " + fl.count_matched + " matched, " + (fl.scoring_method || "corrected"));
-        why += " Fleet: " + (fl.count_ais != null ? fl.count_ais : fl.count_matched) + " roster boat" +
-          ((fl.count_ais === 1) ? "" : "s") + " on AIS — " + fleetLine(top) + ".";
-        if (nTrk) {
-          why += " " + nTrk + " more over the horizon via the public tracker (delayed).";
-          based.push("tracker: " + nTrk + " over-horizon" + (fl.tracker && fl.tracker.error ? " (feed issue)" : ""));
-        }
-        if (st === "ok") {                       // no traffic threat → fleet takes the face
-          value = (top.boat || ("MMSI " + top.mmsi)) + srcMark(top);
-          sub = corrTxt(top) + " · " + (top.tag === "rival" ? "your rival" : top.tag === "ahead_corrected" ? "ahead corrected" : "behind corrected");
-          consider = top.tag === "ahead_corrected" ? "Cover " + (top.boat || "the leader") + " — they're projected ahead on handicap." :
-                     top.tag === "rival" ? "Tight on corrected with " + (top.boat || "a rival") + " — sail your race, stay between them and the next shift." :
-                     "Ahead on corrected — consolidate, don't take a flyer. (Fuzzy: partial AIS + projection.)";
-        }
-      } else if (fl && fl.available === false && tgts.length) {
-        why += " (No fleet roster loaded — corrected-time standings unavailable.)";
-      }
-      return { status: st, value: value, sub: sub, rows: rows, why: why, consider: consider,
-        clears: st === "ok" ? "—" : "the CPA opens back up", based: based, conf: "engine" };
+      const fl = p.fleet;
+      if (!fl) return NA("no fleet feed");
+      if (fl.available === false) return NA(fl.note || "no fleet roster loaded — load it in the Lab's Lock-in & Deploy");
+      const st = fl.standings || [];
+      if (!st.length) return NA("roster loaded — no positions yet (AIS/tracker)");
+      const orank = fl.own_rank || {};
+      const ranked = st.filter((r) => r.rank != null);
+      const meIdx = ranked.findIndex((r) => r.source === "own");
+      const me = ranked[meIdx] || {};
+      const fmtD = (cd) => { const m = Math.floor(Math.abs(cd) / 60), ss = Math.round(Math.abs(cd) % 60);
+        return m + ":" + (ss < 10 ? "0" : "") + ss; };
+      // face: our division standing (fall back to overall), rivals around us as the subtitle
+      const value = orank.division != null && orank.division_of > 1
+        ? ordinal(orank.division) + " of " + orank.division_of + " (div)"
+        : orank.overall != null ? ordinal(orank.overall) + " of " + orank.of : "—";
+      const ahead = meIdx > 0 ? ranked[meIdx - 1] : null;
+      const behind = meIdx >= 0 && meIdx < ranked.length - 1 ? ranked[meIdx + 1] : null;
+      const subBits = [];
+      if (ahead) subBits.push("▲ " + boatName(ahead) + " " + fmtD(ahead.corrected_delta_s));
+      if (behind) subBits.push("▽ " + boatName(behind) + " " + fmtD(behind.corrected_delta_s));
+      const sub = subBits.join(" · ") || "est. standings";
+      // tight racing on either side = watch (informational — there is no safety state here)
+      const near = [ahead, behind].some((b) => b && Math.abs(b.corrected_delta_s) <= 120);
+      const status = near ? "watch" : "ok";
+      const rows = [{ hdr: true, cols: ["to fin", "Δ corrected"] }].concat(
+        st.slice(0, 10).map((r) => ({
+          label: (r.rank != null ? r.rank + ". " : "—  ") + (r.our_division ? "◆ " : "") +
+                 boatName(r) + srcMark(r) + (r.source === "own" ? " (us)" : ""),
+          emph: r.source === "own" || r.our_division,
+          cols: [r.dtf_nm != null ? r1(r.dtf_nm) + " nm" : "—",
+                 r.source === "own" ? "—" : corrTxt(r)] })));
+      const nAis = fl.count_ais || 0, nTrk = fl.count_tracker || 0;
+      const nDr = st.filter((r) => r.dr_nm).length;
+      const unranked = orank.unranked || 0;
+      const why = "Estimated standings across the " + (fl.roster_size || st.length) + "-boat fleet on " +
+        (fl.scoring_method || "corrected time") + ", remaining-race basis: " + nAis + " live on our AIS, " +
+        nTrk + " via the public tracker (delayed" + (nDr ? "; " + nDr + " dead-reckoned forward at their pace" : "") + ")" +
+        (unranked ? ", " + unranked + " with no fix yet" : "") + ". ◆ = our division" +
+        (fl.own_division ? " (" + fl.own_division + ")" : "") + ".";
+      const consider = near
+        ? "Tight on corrected with " + boatName(Math.abs((ahead || {}).corrected_delta_s || 9e9) <= Math.abs((behind || {}).corrected_delta_s || 9e9) ? ahead : behind) + " — sail your race, cover at the crossings."
+        : ahead ? "Chase " + boatName(ahead) + " on corrected — consolidate against " + (behind ? boatName(behind) : "the boats behind") + "."
+        : "Leading on corrected (est.) — consolidate, don't take a flyer.";
+      return { status: status, value: value, sub: sub, rows: rows, why: why, consider: consider,
+        clears: "—",
+        based: ["get_fleet standings: " + ranked.length + " ranked / " + st.length + " roster",
+                "sources: AIS " + nAis + " · tracker " + nTrk + (nDr ? " · DR " + nDr : ""),
+                fl.scoring_method || "ToT"].concat(fl.gaps || []), conf: "engine" };
     },
     charge(p) {
       const f = p.fatigue;
@@ -1226,9 +1217,9 @@
     if (App.polling) return;
     App.polling = true;
     try {
-      const eps = ["/conditions", "/sail", "/navigator", "/tactics", "/fatigue", "/forecast?hours=6", "/sources", "/ais", "/fleet"];
-      const keys = ["conditions", "sail", "navigator", "tactics", "fatigue", "forecast", "sources", "ais", "fleet"];
-      const ms   = [5000, 5000, 5000, 5000, 5000, 9000, 5000, 5000, 6000];
+      const eps = ["/conditions", "/sail", "/navigator", "/tactics", "/fatigue", "/forecast?hours=6", "/sources", "/fleet"];
+      const keys = ["conditions", "sail", "navigator", "tactics", "fatigue", "forecast", "sources", "fleet"];
+      const ms   = [5000, 5000, 5000, 5000, 5000, 9000, 5000, 6000];
       const res = await Promise.all(eps.map((e, i) => fetchJSON(e, ms[i])));
       const p = {}; keys.forEach((k, i) => (p[k] = res[i]));
       pushWind(p.conditions);

@@ -234,10 +234,14 @@ def get_fleet(max_range_nm: float = 40.0):
     # rivals first: smallest |corrected delta|, then live AIS over the delayed tracker, then nearest
     fleet.sort(key=lambda x: (abs(x.get("corrected_delta_s", 1e9)),
                               _SRC_RANK.get(x.get("source"), 9), x.get("range_nm", 1e9)))
+    standings, own_rank = _standings(roster, fleet, own_cfg, own_dtf, own.get("sog"),
+                                     method, is_tod, own_tot, own_alw)
     return {
         "available": True,
         "scoring_method": scoring.get("method") or ("Time-on-Distance" if is_tod else "Time-on-Time"),
         "roster_size": len(roster),
+        "standings": standings, "own_rank": own_rank,
+        "own_division": (own_cfg.get("division") or "").strip() or None,
         "own": {"dtf_nm": round(own_dtf, 2) if own_dtf is not None else None,
                 "leverage_nm": round(own_lev, 2) if own_lev is not None else None,
                 "fix": own.get("lat") is not None},
@@ -250,6 +254,88 @@ def get_fleet(max_range_nm: float = 40.0):
         "note": ("Corrected-time is a projection to the finish; AIS coverage is partial and the "
                  "public tracker is delayed — soft signals, confidence-flagged."),
     }
+
+
+def _standings(roster, fleet_rows, own_cfg, own_dtf, own_sog, method, is_tod,
+               own_tot, own_alw):
+    """WHOLE-FLEET ranked standings estimate (the FLEET tile's view). Every roster boat gets its
+    best-available position (own AIS live · public-tracker fix aged · DEAD-RECKONED forward from
+    that fix at its observed pace, falling back to our pace scaled by the handicap ratio) and a
+    remaining-race corrected-time delta vs us → ranked. Our division is MARKED, not filtered
+    (crew decision 2026-07-08: whole fleet ranked, markers for our division). Ranks are the
+    REMAINING race on corrected time (start-time-free — the same honest metric as the rival
+    deltas); full-race standings would need per-division gun times. Everything confidence-flagged.
+    Returns (standings, own_rank)."""
+    own_div = (own_cfg.get("division") or "").strip()
+    own_gph = _num_or_none(own_cfg.get("orc_gph"))
+    by_boat = {}
+    for r in fleet_rows:
+        k = (r.get("boat") or "").strip().lower()
+        if k and (k not in by_boat or _SRC_RANK.get(r.get("source"), 9)
+                  < _SRC_RANK.get(by_boat[k].get("source"), 9)):
+            by_boat[k] = r
+    out = []
+    for e in roster:
+        boat = (e.get("boat") or "").strip()
+        div = (e.get("division") or "").strip()
+        r = by_boat.get(boat.lower())
+        row = {"boat": boat, "division": div,
+               "our_division": bool(own_div) and div.lower() == own_div.lower()}
+        if r:
+            row.update({"source": r.get("source"), "age_s": r.get("age_s"),
+                        "confidence": r.get("confidence"),
+                        "dtf_nm": r.get("dtf_nm"),
+                        "on_water_lead_nm": r.get("on_water_lead_nm"),
+                        "corrected_delta_s": r.get("corrected_delta_s")})
+            # DEAD RECKONING: advance an AGED tracker fix along the course at the boat's pace
+            # (its own SOG at the fix; else our pace scaled by the GPH ratio — what the rating
+            # says its relative speed should be). Re-project the corrected delta off the DR'd
+            # position. Live AIS (no age) skips this.
+            age = r.get("age_s")
+            if (age or 0) > 120 and r.get("dtf_nm") is not None:
+                pace = r.get("sog")
+                if not pace or pace <= 0.5:
+                    gph = _num_or_none(e.get("orc_gph"))
+                    if own_sog and own_gph and gph and gph > 0:
+                        pace = own_sog * (own_gph / gph)
+                if pace and pace > 0.5:
+                    adv = age / 3600.0 * pace
+                    est = max(0.0, r["dtf_nm"] - adv)
+                    row["dtf_nm"] = round(est, 2)
+                    row["dr_nm"] = round(adv, 2)
+                    if own_dtf is not None:
+                        row["on_water_lead_nm"] = round(own_dtf - est, 2)
+                    cd, basis, _ = _corrected_delta(e, method, is_tod, est, own_dtf,
+                                                    pace, own_sog, own_tot, own_alw)
+                    if cd is not None:
+                        row["corrected_delta_s"] = round(cd)
+        else:
+            row.update({"source": None, "confidence": 0.0,
+                        "note": "no fix (not on AIS or the tracker yet)"})
+        out.append(row)
+    # our own boat rides in the ranking at delta 0
+    own_row = {"boat": own_cfg.get("boat") or "US", "division": own_div, "our_division": True,
+               "source": "own", "corrected_delta_s": 0, "dtf_nm":
+               round(own_dtf, 2) if own_dtf is not None else None, "confidence": 1.0}
+    ranked = sorted([r for r in out if r.get("corrected_delta_s") is not None] + [own_row],
+                    key=lambda r: r["corrected_delta_s"])
+    unranked = [r for r in out if r.get("corrected_delta_s") is None]
+    for i, r in enumerate(ranked):
+        r["rank"] = i + 1
+    div_rows = [r for r in ranked if r.get("our_division")]
+    for i, r in enumerate(div_rows):
+        r["division_rank"] = i + 1
+    own_rank = {"overall": own_row.get("rank"), "of": len(ranked),
+                "division": own_row.get("division_rank"), "division_of": len(div_rows),
+                "unranked": len(unranked)}
+    return ranked + unranked, own_rank
+
+
+def _num_or_none(v):
+    try:
+        return float(v) if v is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _merge_tracker(blob, roster, fleet, unmatched, pts, origin, own, own_dtf,

@@ -245,8 +245,11 @@ body {
 .mode-pill .mdot { width:8px; height:8px; border-radius:50%; background:var(--ok); }
 .mode-pill[data-mode="engine"] .mdot { background:var(--na); }
 .mode-pill[data-mode="engine"] b::after { content:""; }
-.coach-line { display:flex; align-items:baseline; gap:8px; padding:7px 9px; border-radius:9px;
+.coach-line { display:flex; align-items:baseline; gap:8px; padding:4px 9px; border-radius:9px;
   background:var(--accent-fill, var(--panel2)); border:1px solid var(--accent); }
+/* the coach line stays ONE line — a long callout ellipsizes; tap a tile for the full read
+   (crew request 2026-07-08: the collision callout must take minimal space) */
+#coachSay { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; flex:1; }
 .coach-say { font-size:14px; font-weight:700; line-height:1.3; flex:1; }
 .coach-when { font-size:10.5px; color:var(--muted); font-weight:600; flex:none; white-space:nowrap; }
 .comm-focus { margin:0; font-size:16px; font-weight:700; line-height:1.3; }

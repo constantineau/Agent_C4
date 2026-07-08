@@ -180,4 +180,52 @@ ytk = tracker.positions({"provider": "yb"})
 check("yb with no race id → unavailable + reason (graceful)", ytk["available"] is False and "race id" in (ytk["error"] or ""))
 
 print("RESULT:", "PASS" if ok else "FAIL")
+
+
+print("S) whole-fleet STANDINGS — rank, DR, division markers (2026-07-08)")
+from app import fleet as F
+
+roster = [
+    {"boat": "Il Mostro", "division": "I", "rating": 1.10, "orc_gph": 560.0},
+    {"boat": "Windquest", "division": "I", "rating": 0.98, "orc_gph": 640.0},
+    {"boat": "Defiance", "division": "B", "rating": 0.95, "orc_gph": 660.0},
+    {"boat": "Ghost", "division": "B", "rating": 0.94, "orc_gph": 665.0},   # no fix anywhere
+]
+own_cfg = {"boat": "C4", "division": "B", "rating": 0.96, "orc_gph": 650.0}
+rows = [
+    # live AIS: Il Mostro well up the course, fast (they will beat us on corrected: big lead)
+    {"boat": "Il Mostro", "source": "ais", "dtf_nm": 40.0, "sog": 8.0,
+     "corrected_delta_s": -1800, "confidence": 0.9},
+    # tracker fix, 30 min old, 2 nm behind us on the water at the fix
+    {"boat": "Windquest", "source": "tracker", "age_s": 1800, "dtf_nm": 62.0, "sog": 6.0,
+     "corrected_delta_s": 400, "confidence": 0.5},
+    # tracker fix with NO sog → DR falls back to the handicap-scaled own pace
+    {"boat": "Defiance", "source": "tracker", "age_s": 3600, "dtf_nm": 61.0, "sog": None,
+     "corrected_delta_s": 300, "confidence": 0.5},
+]
+standings, own_rank = F._standings(roster, rows, own_cfg, own_dtf=60.0, own_sog=6.5,
+                                   method="tot", is_tod=False, own_tot=0.96, own_alw=None)
+by = {r["boat"]: r for r in standings}
+check("every roster boat + our own boat present", len(standings) == 5 and "C4" in by)
+ranked = [r for r in standings if r.get("rank") is not None]
+deltas = [r["corrected_delta_s"] for r in ranked]
+check("ranked ascending by corrected delta, us included at 0",
+      deltas == sorted(deltas) and by["C4"]["corrected_delta_s"] == 0
+      and by["Il Mostro"]["rank"] < by["C4"]["rank"] < by["Windquest"]["rank"])
+check("our division marked (B), others not",
+      by["C4"]["our_division"] and by["Defiance"]["our_division"]
+      and not by["Il Mostro"]["our_division"])
+check("division rank computed within B", own_rank["division_of"] >= 2
+      and by["C4"].get("division_rank") is not None)
+check("DR advanced the aged Windquest fix (dtf shrank, dr_nm recorded)",
+      by["Windquest"]["dtf_nm"] < 62.0 and by["Windquest"]["dr_nm"] > 2.5)
+check("DR with no SOG uses the handicap-scaled own pace (Defiance advanced)",
+      by["Defiance"]["dtf_nm"] < 61.0 and by["Defiance"].get("dr_nm") is not None)
+check("DR recomputed the corrected delta", by["Windquest"]["corrected_delta_s"] != 400)
+check("no-fix boat unranked at the bottom with a note",
+      by["Ghost"].get("rank") is None and "no fix" in (by["Ghost"].get("note") or ""))
+check("own_rank summary sane", own_rank["of"] == 4 and own_rank["unranked"] == 1)
+check("live AIS row is NOT dead-reckoned", by["Il Mostro"]["dtf_nm"] == 40.0
+      and "dr_nm" not in by["Il Mostro"])
+print("RESULT-S:", "PASS" if ok else "FAIL")
 import sys; sys.exit(0 if ok else 1)
