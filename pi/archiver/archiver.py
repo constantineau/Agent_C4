@@ -25,7 +25,7 @@ import json
 import os
 import sqlite3
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import websockets
@@ -132,6 +132,70 @@ async def flusher(conn, buf, loop):
         print(f"[archive] +{len(rows)} rows (total {total})", flush=True)
 
 
+# ---- RETENTION PRUNE (race sessions) ------------------------------------------------------
+# The archive records EVERYTHING (collect-everything), but only RACE-SESSION windows — the
+# owner's record switch, started/ended from the iPad console (engine `sessions` table) — are
+# kept long-term. Outside any session, readings older than ARCHIVE_RETAIN_DAYS are deleted, so
+# a day sail or a delivery never accumulates on the SD card (deleted pages are reused; the file
+# stops growing). SAFETY: if the engine DB / sessions table can't be read, NOTHING is pruned —
+# we must never delete a race because a volume didn't mount. 0 disables (the bench keeps its
+# replayed sample data).
+RETAIN_DAYS = float(os.environ.get("ARCHIVE_RETAIN_DAYS", "14"))
+ENGINE_DB = os.environ.get("ENGINE_DB", "/var/lib/sr33/engine/engine.db")
+PRUNE_EVERY_S = float(os.environ.get("ARCHIVE_PRUNE_EVERY_S", "3600"))
+
+
+def _iso(epoch):
+    return datetime.fromtimestamp(epoch, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def session_windows(engine_db=None):
+    """[(start_iso, end_iso)] from the engine's sessions table; None = unreadable (DON'T prune)."""
+    try:
+        ec = sqlite3.connect(f"file:{engine_db or ENGINE_DB}?mode=ro", uri=True, timeout=10)
+        rows = ec.execute("SELECT start_ts, end_ts FROM sessions").fetchall()
+        ec.close()
+    except Exception:
+        return None
+    now = datetime.now(timezone.utc).timestamp()
+    return [(_iso(a), _iso(b if b is not None else now + 86400)) for a, b in rows]
+
+
+def prune(conn, engine_db=None, retain_days=None):
+    """Delete out-of-session readings older than the retention window. Returns rows deleted,
+    or None when pruning was skipped (disabled / engine DB unreadable)."""
+    days = RETAIN_DAYS if retain_days is None else float(retain_days)
+    if days <= 0:
+        return None
+    wins = session_windows(engine_db)
+    if wins is None:
+        print("[archive] prune SKIPPED — engine sessions table unreadable (never delete blind)",
+              flush=True)
+        return None
+    cutoff = _iso(datetime.now(timezone.utc).timestamp() - days * 86400)
+    cond = "time < ?"
+    args = [cutoff]
+    for a, b in wins:
+        cond += " AND NOT (time >= ? AND time <= ?)"
+        args += [a, b]
+    with _WRITE_LOCK:
+        cur = conn.execute(f"DELETE FROM readings WHERE {cond}", args)
+        conn.commit()
+    if cur.rowcount:
+        print(f"[archive] pruned {cur.rowcount} out-of-session rows older than {cutoff} "
+              f"({len(wins)} session window(s) kept)", flush=True)
+    return cur.rowcount
+
+
+async def pruner(conn, loop):
+    while True:
+        try:
+            await loop.run_in_executor(None, prune, conn)
+        except Exception as exc:      # never let housekeeping kill the recorder
+            print(f"[archive] prune error: {exc}", flush=True)
+        await asyncio.sleep(PRUNE_EVERY_S)
+
+
 async def run():
     conn = open_db()
     n = conn.execute("SELECT count(*) FROM readings").fetchone()[0]
@@ -140,6 +204,7 @@ async def run():
     buf = []
     loop = asyncio.get_running_loop()
     asyncio.create_task(flusher(conn, buf, loop))
+    asyncio.create_task(pruner(conn, loop))
     while True:
         try:
             async with websockets.connect(SIGNALK_WS, ping_interval=20) as ws:

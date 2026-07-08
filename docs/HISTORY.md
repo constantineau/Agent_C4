@@ -160,6 +160,20 @@ and the per-component READMEs. Detailed design rationale for the big arcs is in 
   everywhere, legacy telemetry table dropped, superseded deploy script + systemd units
   removed, dead code out, docs synced).
 
+## 2026-07-08 (later) — Long-term onboard living: race log, sail configurations, ORC helpers
+
+- **Race-log sessions**: the iPad's one-tap record switch (no Lab prep needed) → only
+  session windows are kept long-term + backfilled; the archiver prunes everything else
+  after 14 days (fail-safe: never deletes blind) — day sails and deliveries never
+  accumulate or leave the boat. The Lab Debrief gained the boat's own log as a track
+  source (full-res, sail changes riding along).
+- **Sail configurations**: the crew sail state became a SET (C0 alone · C0+J2 ·
+  kite+staysail; SS joined the inventory) + main-reef state, picked on the dashboard's
+  SAILS bar, timestamped into an append-only onboard log — closing the 9.3 "hoisted sail
+  never persisted" data gap. Play predicates match by membership.
+- **ORC ratings**: multi-country enrich (USA+CAN in one pass) + a per-boat fuzzy
+  cert-candidate picker for unrated roster boats.
+
 ## Standing decisions (still binding)
 
 - **RRS 41 bright line**: all frontier/cloud work pre-start, frozen at the gun; in-race =

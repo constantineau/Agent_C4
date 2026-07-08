@@ -6,19 +6,27 @@ cloud `/ingest/raw` once a real link is available (e.g. dockside on wifi after a
 It is resumable and safe to re-run: a `sync_state` cursor in the archive DB tracks the
 highest row id already accepted by the cloud, so a re-run only sends what's new.
 
+SESSION-AWARE (default): only readings inside RACE-SESSION windows (the iPad record switch,
+engine `sessions` table) are pushed — a day sail or delivery never leaves the boat. Each run
+also pushes the crew SAIL LOG (`crew.sail.state` readings) and a `crew.session` marker per
+closed session, so the cloud debrief can find the windows. `--all` restores the old
+everything mode; `--since/--until` stays the ad-hoc window export.
+
 Usage (from the archiver container or any host with the DB + network to the VPS):
-    python backfill.py                       # send everything not yet uploaded
+    python backfill.py                       # send session windows not yet uploaded
+    python backfill.py --all                 # send everything not yet uploaded
     python backfill.py --since 2026-06-16T00:00:00Z --until 2026-06-16T23:59:59Z
     python backfill.py --reset               # forget the cursor, re-send from the start
 
-Env: ARCHIVE_DB, VPS_URL, INGEST_TOKEN, BOAT_ID, BACKFILL_BATCH.
+Env: ARCHIVE_DB, ENGINE_DB, VPS_URL, INGEST_TOKEN, BOAT_ID, BACKFILL_BATCH.
 """
 import argparse
 import json
 import os
+import sqlite3
 import urllib.request
 
-from archiver import ARCHIVE_DB, BOAT_ID, open_db
+from archiver import ARCHIVE_DB, BOAT_ID, ENGINE_DB, open_db, session_windows
 
 VPS_URL = os.environ.get("VPS_URL", "http://localhost:8101")
 INGEST_TOKEN = os.environ.get("INGEST_TOKEN", "dev-ingest-token")
@@ -60,10 +68,72 @@ def row_to_reading(r):
     return reading
 
 
+def _engine(ro=True):
+    return sqlite3.connect(f"file:{ENGINE_DB}?mode=ro" if ro else ENGINE_DB,
+                           uri=ro, timeout=10)
+
+
+def push_sail_log(conn):
+    """Push the crew sail-state history as `crew.sail.state` readings (cursor: last ts sent)."""
+    try:
+        ec = _engine()
+        row = conn.execute("SELECT v FROM sync_state WHERE k='backfill_sail_ts'").fetchone()
+        since = float(row[0]) if row else 0.0
+        logs = ec.execute("SELECT ts, flying, reef, out_of_service FROM sail_log "
+                          "WHERE ts > ? ORDER BY ts", (since,)).fetchall()
+        ec.close()
+    except Exception as exc:
+        print(f"[backfill] sail log skipped ({exc})", flush=True)
+        return
+    if not logs:
+        return
+    from datetime import datetime, timezone
+    readings = [{"time": datetime.fromtimestamp(ts, tz=timezone.utc).isoformat(),
+                 "source": "crew", "path": "crew.sail.state",
+                 "str_value": json.dumps({"flying": json.loads(fly or "[]"), "reef": reef,
+                                          "out_of_service": json.loads(oos or "[]")})}
+                for ts, fly, reef, oos in logs]
+    _post(readings)
+    conn.execute("INSERT INTO sync_state (k, v) VALUES ('backfill_sail_ts', ?) "
+                 "ON CONFLICT(k) DO UPDATE SET v=excluded.v", (str(logs[-1][0]),))
+    conn.commit()
+    print(f"[backfill] sent {len(readings)} sail-log entries", flush=True)
+
+
+def push_session_markers(conn):
+    """One `crew.session` marker per CLOSED session (cursor: last session id sent) — the cloud
+    debrief finds the race windows through these."""
+    try:
+        ec = _engine()
+        row = conn.execute("SELECT v FROM sync_state WHERE k='backfill_session_id'").fetchone()
+        since = int(row[0]) if row else 0
+        rows = ec.execute("SELECT id, name, race_id, kind, start_ts, end_ts FROM sessions "
+                          "WHERE id > ? AND end_ts IS NOT NULL ORDER BY id", (since,)).fetchall()
+        ec.close()
+    except Exception as exc:
+        print(f"[backfill] session markers skipped ({exc})", flush=True)
+        return
+    if not rows:
+        return
+    from datetime import datetime, timezone
+    readings = [{"time": datetime.fromtimestamp(a, tz=timezone.utc).isoformat(),
+                 "source": "crew", "path": "crew.session",
+                 "str_value": json.dumps({"id": i, "name": n, "race_id": rid, "kind": k,
+                                          "start_ts": a, "end_ts": b})}
+                for i, n, rid, k, a, b in rows]
+    _post(readings)
+    conn.execute("INSERT INTO sync_state (k, v) VALUES ('backfill_session_id', ?) "
+                 "ON CONFLICT(k) DO UPDATE SET v=excluded.v", (str(rows[-1][0]),))
+    conn.commit()
+    print(f"[backfill] sent {len(readings)} session marker(s)", flush=True)
+
+
 def main():
     ap = argparse.ArgumentParser(description="Backfill the Pi full-res archive to the cloud.")
     ap.add_argument("--since", help="only rows with time >= this ISO8601 timestamp")
     ap.add_argument("--until", help="only rows with time <= this ISO8601 timestamp")
+    ap.add_argument("--all", action="store_true",
+                    help="push everything (default: only race-session windows)")
     ap.add_argument("--reset", action="store_true", help="reset the upload cursor first")
     args = ap.parse_args()
 
@@ -72,10 +142,10 @@ def main():
         set_cursor(conn, 0)
         print("[backfill] cursor reset to 0", flush=True)
 
-    # Two modes. Default (no time filter) is the routine catch-up: page by id from the
-    # saved cursor and advance it as the cloud accepts batches, so re-runs only send new
-    # rows. A time range is an ad-hoc re-export — it streams the requested window and never
-    # touches the cursor (so it can't skip rows the catch-up flow still owes).
+    # Modes. Default = routine SESSION catch-up: page by id from the saved cursor, but send
+    # only rows inside race-session windows (the cursor still advances past skipped rows — a
+    # day sail is deliberately never sent). --all = the old everything mode. A time range is
+    # an ad-hoc re-export — it streams the requested window and never touches the cursor.
     ad_hoc = bool(args.since or args.until)
     where = ["id > ?"]
     params = [0 if ad_hoc else get_cursor(conn)]
@@ -85,6 +155,21 @@ def main():
     if args.until:
         where.append("time <= ?")
         params.append(args.until)
+    if not ad_hoc and not args.all:
+        wins = session_windows()
+        if wins is None:
+            print("[backfill] engine sessions table unreadable — nothing sent "
+                  "(use --all to push everything)", flush=True)
+            return
+        if not wins:
+            print("[backfill] no race sessions recorded — nothing to send "
+                  "(start one from the iPad, or use --all)", flush=True)
+            push_sail_log(conn)
+            return
+        where.append("(" + " OR ".join(["(time >= ? AND time <= ?)"] * len(wins)) + ")")
+        for a, b in wins:
+            params += [a, b]
+        print(f"[backfill] session mode — {len(wins)} window(s)", flush=True)
     sql = ("SELECT id, time, source, path, value, str_value FROM readings "
            f"WHERE {' AND '.join(where)} ORDER BY id LIMIT ?")
 
@@ -102,6 +187,9 @@ def main():
         print(f"[backfill] sent {len(rows)} (cumulative {sent}, through id {last_id})",
               flush=True)
 
+    if not ad_hoc:
+        push_sail_log(conn)
+        push_session_markers(conn)
     print(f"[backfill] done — {sent} reading(s) uploaded from {ARCHIVE_DB}", flush=True)
 
 

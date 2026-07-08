@@ -311,6 +311,18 @@ body {
 
 /* ---- Phase-D armed plays (Strategy strip) + the crew gear toggle ---- */
 .st-plays { margin: 6px 0 2px; font-size: 13px; }
+/* Sails bar — the crew sail-configuration chips (multi-select) + reef */
+.sailsbar { display:flex; align-items:center; gap:7px; flex-wrap:wrap; margin-top:8px;
+  padding:7px 12px; border-radius:10px; background:var(--panel); border:1px solid var(--line); }
+.sb-tag { font-size:10px; font-weight:800; letter-spacing:1.1px; color:var(--muted); }
+.sb-sep { width:1px; height:18px; background:var(--line); margin:0 2px; }
+.sb-chip { font-size:12px; font-weight:800; padding:3px 10px; border-radius:7px; cursor:pointer;
+  background:var(--panel2); color:var(--muted); border:1px solid var(--line); }
+.sb-chip.on { background:var(--ok-fill); color:var(--ok); border-color:var(--ok); }
+.sb-chip.reef.on { background:var(--watch-fill); color:var(--watch); border-color:var(--watch); }
+.sb-note { font-size:11px; color:var(--muted); margin-left:auto; }
+.ctl.rec.on { color:var(--act); border-color:var(--act); }
+.ctl.rec.on b { color:var(--act); }
 .st-plays-head { display: flex; justify-content: space-between; align-items: center;
   font-size: 11px; letter-spacing: 1px; opacity: 0.75; margin-bottom: 3px; }
 .st-gearbox { letter-spacing: 0; }

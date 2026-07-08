@@ -13,9 +13,10 @@ Signals resolved (all existing Tier-1 reads; a signal with no live value simply 
   shift_persistent                  — tactics.get_tactics (the engine's persistence hysteresis)
   tws_kn                            — the boat's own true wind
   fatigue_index                     — fatigue.get_fatigue
-  hoisted_sail · sail_out_of_service — the crew-set SAIL STATE (the console's hoisted selector +
-                                       the Phase-D out-of-service toggle; there is no instrument
-                                       for a blown kite — the crew arms it)
+  hoisted_sail · reef · sail_out_of_service — the crew-set SAIL STATE (the dashboard's sail
+                                       chips; a SET — the boat flies combinations like C0+J2 or
+                                       kite+staysail; `==` predicates match membership; there is
+                                       no instrument for a blown kite — the crew declares it)
   polar_pct                         — live % of the rated polar, WINDOWED (mean over the last
                                        ~10 min of STW vs the polar target at each sample's own
                                        TWS/TWA) so a tack's momentary dip can't reset a play's
@@ -81,15 +82,35 @@ def get_sail_state():
         return {}
 
 
-def set_sail_state(hoisted=None, out_of_service=None):
-    """Update the crew sail state. Pass only what changed: hoisted='A3' (or '' to clear);
-    out_of_service=['A2'] replaces the out list (a sail present = crew declared it unusable —
-    the gear-loss plays' arming signal). Returns the stored state."""
+# ordered by "which sail is driving" — the legacy single-sail mirror picks the first flying
+_PRIMARY_ORDER = ("A2", "A3", "S2", "C0", "J1", "J2", "J3", "SS")
+
+
+def _primary(flying):
+    for s in _PRIMARY_ORDER:
+        if s in flying:
+            return s
+    return flying[0] if flying else None
+
+
+def set_sail_state(hoisted=None, flying=None, reef=None, out_of_service=None):
+    """Update the crew sail state. The configuration is a SET — the boat flies combinations
+    (C0 alone · C0+J2 · kite+staysail …): flying=['C0','J2'] replaces the set; reef='R1' (or ''
+    to shake it out); out_of_service=['A2'] replaces the gear-out list (a sail present = crew
+    declared it unusable — the gear-loss plays' arming signal). hoisted='A3' is the legacy
+    single-sail setter (→ flying=['A3']); the stored `hoisted` mirrors the primary driver so
+    older consumers keep working. Returns the stored state."""
     st = get_sail_state()
-    if hoisted is not None:
-        st["hoisted"] = (str(hoisted).upper() or None) if hoisted != "" else None
+    if flying is not None:
+        st["flying"] = sorted({str(s).upper() for s in flying if s})
+    elif hoisted is not None:
+        st["flying"] = [str(hoisted).upper()] if hoisted != "" else []
+    if reef is not None:
+        st["reef"] = (str(reef).upper() or None) if reef != "" else None
     if out_of_service is not None:
         st["out_of_service"] = sorted({str(s).upper() for s in out_of_service if s})
+    st.setdefault("flying", [st["hoisted"]] if st.get("hoisted") else [])
+    st["hoisted"] = _primary(st["flying"])
     st["ts"] = round(time.time())
     datasource.active().save_sail_state(st)
     return st
@@ -246,7 +267,11 @@ def gather(route=None):
         "shift_persistent": bool(wind.get("persistent")) if wind else None,
         "tws_kn": _live_tws_kn(),
         "fatigue_index": fat.get("index") if isinstance(fat, dict) else None,
-        "hoisted_sail": st.get("hoisted"),
+        # the flying SET — `==` predicates use membership on a list actual, so a play authored
+        # "hoisted_sail == C0" arms whenever the C0 is among the flying combination
+        "hoisted_sail": (st.get("flying") if st.get("flying") is not None
+                         else ([st["hoisted"]] if st.get("hoisted") else [])),
+        "reef": st.get("reef"),
         "sail_out_of_service": st.get("out_of_service") or [],
         # the up-course leading indicator (live NDBC buoy vs own wind; common public data)
         "upcourse_tws_delta_kn": upc.get("tws_delta_kn"),

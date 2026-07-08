@@ -1638,6 +1638,36 @@ async function fleetUploadEntry() {
   Lab.fleetBusy = false; paintFleet();
 }
 
+async function fleetFindOrc(i) {
+  const e = (Lab.editDef.fleet || [])[i];
+  if (!e) return;
+  Lab.fleetMsg = `Searching the ORC cert DB for "${e.boat}"…`; Lab.fleetMsgErr = false; paintFleet();
+  try {
+    const cc = (document.getElementById("fleetOrcCC") || {}).value || "USA,CAN";
+    const r = await (await apiPost("/api/fleet/orc-candidates",
+      { race_id: Lab.sel, boat: e.boat, sail: e.sail, country: cc })).json();
+    Lab.fleetCand = { i, list: r.candidates || [] };
+    Lab.fleetMsg = (r.candidates || []).length
+      ? `${r.candidates.length} ORC candidate(s) for "${e.boat}" — pick one below the row.`
+      : `No ORC candidates for "${e.boat}" — fill the handicap by hand.`;
+  } catch (err) { Lab.fleetMsg = "ORC search failed: " + (err.message || err); Lab.fleetMsgErr = true; }
+  paintFleet();
+}
+function fleetApplyCand(i, ci) {
+  const e = (Lab.editDef.fleet || [])[i];
+  const c = ((Lab.fleetCand || {}).list || [])[ci];
+  if (!e || !c) return;
+  if (c.orc_gph != null) e.orc_gph = c.orc_gph;
+  if (c.rating != null) e.rating = c.rating;
+  if (!e.cls && c.cls) e.cls = c.cls;
+  if (!e.sail && c.sail) e.sail = c.sail;
+  e.source = (e.source || "") ? e.source + "+orc" : "orc";
+  Lab.fleetCand = null;
+  Lab.fleetDirty = true;
+  Lab.fleetMsg = `Applied ${c.yacht} (${c.country}) to "${e.boat}" — review, then Save roster.`;
+  paintFleet();
+}
+
 async function fleetSave() {
   // coerce numerics so the persisted JSON is clean (orc_gph/rating numbers|null)
   Lab.editDef.fleet = Lab.editDef.fleet.filter((e) => (e.boat || "").trim()).map((e) => ({
@@ -1674,13 +1704,26 @@ function fleetGlance(roster) {
   const rated = roster.filter((e) => e.rating != null || e.orc_gph != null).length;
   const sorted = [...roster].sort((a, b) =>
     (a.division || "").localeCompare(b.division || "") || (a.boat || "").localeCompare(b.boat || ""));
-  const li = (e) => `<tr>
+  const li = (e) => {
+    const i = roster.indexOf(e);
+    const unrated = e.rating == null && e.orc_gph == null;
+    const findBtn = unrated
+      ? ` <button class="mini" onclick="fleetFindOrc(${i})" title="Search the ORC cert DB by name (fuzzy) — pick a candidate to fill the handicap">find</button>`
+      : "";
+    const cand = (Lab.fleetCand && Lab.fleetCand.i === i) ? `<tr><td colspan="6" style="padding:4px 8px 8px">${
+      Lab.fleetCand.list.length ? Lab.fleetCand.list.map((c, ci) =>
+        `<button class="mini" style="margin:2px" onclick="fleetApplyCand(${i},${ci})" title="score ${c.score}">` +
+        `${esc(c.yacht || "?")} · ${esc(c.sail || "")} · ${esc(c.cls || "")} · GPH ${c.orc_gph ?? "—"}${c.rating != null ? " · " + c.rating : ""} (${esc(c.country)})</button>`).join("")
+      : '<span class="muted">no ORC candidates found — fill the handicap by hand</span>'
+    }</td></tr>` : "";
+    return `<tr>
     <td><b>${esc(e.boat || "—")}</b>${fleetSrcBadge(e)}</td>
     <td class="muted">${esc(e.sail || "")}</td>
     <td class="muted">${esc(e.cls || "")}</td>
     <td>${esc(e.division || "")}</td>
-    <td>${e.rating != null ? esc(e.rating) : '<span class="conf bad" title="no ORC handicap — fill it in">—</span>'}</td>
-    <td class="muted">${e.orc_gph != null ? esc(e.orc_gph) : ""}</td></tr>`;
+    <td>${e.rating != null ? esc(e.rating) : '<span class="conf bad" title="no ORC handicap — fill it in">—</span>' + findBtn}</td>
+    <td class="muted">${e.orc_gph != null ? esc(e.orc_gph) : ""}</td></tr>` + cand;
+  };
   return `<div class="muted" style="font-size:12px;margin-bottom:6px"><b>${roster.length}</b> boat${roster.length === 1 ? "" : "s"} · <b>${rated}</b> with an ORC handicap${rated < roster.length ? ` · <b class="conf bad">${roster.length - rated} missing a rating</b>` : ""} · by division: ${divSummary}</div>
     <table class="fleet-tbl"><thead><tr><th>Boat</th><th>Sail #</th><th>Class</th><th>Div</th><th>Rating</th><th>GPH</th></tr></thead>
     <tbody>${sorted.map(li).join("")}</tbody></table>`;
@@ -1733,7 +1776,7 @@ function paintFleet() {
         <span class="muted" style="font-size:12px">Entry list from the <b>YB tracker</b>:</span>
         <button onclick="fleetAutoImport('both')" ${Lab.fleetBusy || !ybCfg ? "disabled" : ""} title="${ybCfg ? "" : "no YB tracker configured for this race"}">${Lab.fleetBusy ? "Importing…" : "YB entry list + ORC handicaps"}</button>
         <button class="mini" onclick="fleetAutoImport('yb')" ${Lab.fleetBusy || !ybCfg ? "disabled" : ""}>YB entry list only</button>
-        <label>ORC country <input id="fleetOrcCC" class="ein" style="width:54px" value="USA"></label>
+        <label>ORC countries <input id="fleetOrcCC" class="ein" style="width:84px" value="USA,CAN" title="comma-separated ORC cert dumps to match against (a Great Lakes fleet spans both)"></label>
         <button class="mini" onclick="fleetAutoImport('orc')" ${Lab.fleetBusy ? "disabled" : ""}>Enrich current roster from ORC</button>
       </div>
       <div style="margin-top:10px;border-top:1px solid var(--line);padding-top:10px">
@@ -2036,6 +2079,9 @@ async function renderDebrief() {
   if (!Deb.playbookId || !Deb.playbooks.some((b) => b.id === Deb.playbookId)) Deb.playbookId = (Deb.playbooks[0] || {}).id || null;
   try { Deb.track = await (await apiGet("/api/debrief/track?race_id=" + encodeURIComponent(Deb.raceId))).json(); }
   catch (e) { Deb.track = null; }
+  try { Deb.sessions = ((await (await apiGet("/api/racelog/sessions")).json()).sessions || [])
+    .filter((x) => x.end_ts); }          // only closed windows can be loaded
+  catch (e) { Deb.sessions = []; }
   await retroRefresh();
   try {
     Retro.job = await (await apiGet("/api/retro/run/status")).json();
@@ -2049,7 +2095,7 @@ async function renderDebrief() {
 function debTrackCard() {
   const t = Deb.track || {};
   const status = t.available
-    ? `<span class="pill ok">track loaded</span> <span class="muted">${esc(t.source === "yb" ? "YB" : "GPX")}${t.boat ? " · " + esc(t.boat) : ""} · ${t.n} fixes${t.matched_by ? " · " + esc(t.matched_by) : ""}</span>`
+    ? `<span class="pill ok">track loaded</span> <span class="muted">${esc(t.source === "yb" ? "YB" : t.source === "boatlog" ? "boat log" : "GPX")}${t.boat ? " · " + esc(t.boat) : ""} · ${t.n} fixes${t.matched_by ? " · " + esc(t.matched_by) : ""}</span>`
     : `<span class="muted">No boat track yet — upload a GPX export or fetch our YB track.</span>`;
   return `<div class="card">
     <h3>Boat track <span class="muted" style="font-weight:400">— the real sailed line, scored vs the oracle (helm execution)</span></h3>
@@ -2061,8 +2107,31 @@ function debTrackCard() {
       <label>Our boat <input id="debBoat" placeholder="boat name in the YB feed" style="width:200px"></label>
       <button onclick="debFetchYb()" ${Deb.trackBusy ? "disabled" : ""}>${Deb.trackBusy ? "Fetching…" : "Fetch from YB tracker"}</button>
     </div>
+    <div class="opt-controls" style="margin-top:6px">
+      <span class="muted">or the <b>boat's own log</b> (full-res, from a race session):</span>
+      <select id="debSession">${(Deb.sessions || []).map((x, i) =>
+        `<option value="${i}">${esc(x.name || x.race_id || "session")} · ${new Date(x.start_ts * 1000).toISOString().slice(0, 16)}Z${x.kind ? " · " + esc(x.kind) : ""}</option>`).join("") || '<option value="">no sessions backfilled yet</option>'}</select>
+      <button class="mini" onclick="debFromLog()" ${Deb.trackBusy || !(Deb.sessions || []).length ? "disabled" : ""}>Use boat log</button>
+    </div>
     <div class="muted" style="font-size:12px;margin-top:4px">GPX: export the track from Expedition / a Vakaros / your instruments / a phone (offline, always works). YB: pulls our boat's full track from the permitted public tracker (shore-side debrief use). ${Deb.trackMsg ? '<b>' + esc(Deb.trackMsg) + '</b>' : ""}</div>
   </div>`;
+}
+
+async function debFromLog() {
+  const sel = document.getElementById("debSession");
+  const ses = (Deb.sessions || [])[parseInt(sel && sel.value, 10)];
+  if (!ses) { Deb.trackMsg = "No backfilled session to load."; return paintDebrief(); }
+  Deb.trackBusy = true; Deb.trackMsg = ""; paintDebrief();
+  try {
+    const r = await jsonOrFriendly(await apiPost("/api/debrief/track/from-log",
+      { race_id: Deb.raceId, start_ts: ses.start_ts, end_ts: ses.end_ts, name: ses.name }));
+    Deb.trackMsg = r.ok ? `Loaded ${r.n} fixes from the boat log ("${ses.name}")` +
+      (r.sail_changes ? ` + ${r.sail_changes} sail change(s)` : "") + "."
+      : (r.detail || "boat-log fetch failed");
+  } catch (e) { Deb.trackMsg = "boat-log fetch failed: " + (e.message || e); }
+  Deb.trackBusy = false;
+  Deb.track = await (await apiGet("/api/debrief/track?race_id=" + encodeURIComponent(Deb.raceId))).json();
+  paintDebrief();
 }
 
 async function debUploadGpx() {

@@ -25,7 +25,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app import (navigator, tactics, routing, weather, sails, fatigue, onboard_conditions,
                  datasource, ais, fleet, deviation, drift, selector, reoptimize, strategy,
-                 matcher, buoys)
+                 matcher, buoys, racelog)
 
 app = FastAPI(title="Agent_C4 Onboard Engine", version="0.1.0")
 # The iPad reaches the Pi directly over boat-local Wi-Fi in race mode; allow cross-origin so a
@@ -233,12 +233,47 @@ def sails_state():
 
 @app.post("/sails/state")
 def sails_state_set(body: dict):
-    """Update the crew sail state: {hoisted?: 'A3'|'', out_of_service?: ['A2', ...]}. The
-    out-of-service list is the gear-loss plays' arming signal — there is no instrument for a
-    blown kite; the crew declares it here (and clears it when repaired)."""
+    """Update the crew sail state: {flying?: ['C0','J2'], reef?: 'R1'|'', hoisted?: 'A3'|'',
+    out_of_service?: ['A2', ...]}. The configuration is a SET (the boat flies combinations —
+    C0 alone, C0+J2, kite+staysail); `hoisted` is the legacy single-sail setter. Every change
+    is also APPENDED to the onboard sail log (timestamped history for the race log / debrief).
+    The out-of-service list is the gear-loss plays' arming signal — there is no instrument for
+    a blown kite; the crew declares it here (and clears it when repaired)."""
     body = body or {}
-    return matcher.set_sail_state(hoisted=body.get("hoisted"),
+    return matcher.set_sail_state(hoisted=body.get("hoisted"), flying=body.get("flying"),
+                                  reef=body.get("reef"),
                                   out_of_service=body.get("out_of_service"))
+
+
+@app.get("/session")
+def session_status():
+    """The RACE LOG state: active session + recent windows. Sessions mark what the boat KEEPS
+    (full-res, backfilled, debriefed); everything outside them is pruned after the retention
+    period and never leaves the boat. No Lab prep / RaceDefinition needed."""
+    return racelog.status()
+
+
+@app.post("/session/start")
+def session_start(body: dict = None):
+    """Start a session: {name?, race_id?, kind?: race|practice} — all optional (one tap at the
+    gun; the loaded playbook's race_id is picked up automatically when aboard)."""
+    body = body or {}
+    return racelog.start(name=body.get("name"), race_id=body.get("race_id"),
+                         kind=body.get("kind"))
+
+
+@app.post("/session/end")
+def session_end():
+    return racelog.end()
+
+
+@app.get("/sails/log")
+def sails_log(since: float | None = None, until: float | None = None):
+    """The timestamped crew sail-state history (append-only; onboard engine store)."""
+    src = datasource.active()
+    if not hasattr(src, "sail_log"):
+        return {"available": False, "note": "sail log is onboard-only"}
+    return {"available": True, "log": src.sail_log(since, until)}
 
 
 @app.get("/deviation")

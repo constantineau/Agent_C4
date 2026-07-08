@@ -102,6 +102,18 @@ class OnboardSource:
             "lat REAL NOT NULL, lon REAL NOT NULL, PRIMARY KEY (route, seq))"
         )
         conn.execute("CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        # append-only crew sail-state history — every /sails/state change lands here with a
+        # timestamp so the race log / debrief can correlate sail choice vs performance (the
+        # long-standing 9.3 data gap; the kv row above holds only the CURRENT state)
+        conn.execute("CREATE TABLE IF NOT EXISTS sail_log ("
+                     "ts REAL NOT NULL, flying TEXT, reef TEXT, out_of_service TEXT)")
+        # RACE SESSIONS (the owner's record switch): windows the boat wants KEPT + debriefed.
+        # Started/ended from the iPad — no Lab prep or RaceDefinition required. The archiver
+        # prunes full-res data OUTSIDE these windows after its retention period, and backfill
+        # pushes ONLY these windows to the cloud — a day sail or delivery never leaves the boat.
+        conn.execute("CREATE TABLE IF NOT EXISTS sessions ("
+                     "id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, race_id TEXT, "
+                     "kind TEXT NOT NULL, start_ts REAL NOT NULL, end_ts REAL)")
         conn.commit()
         return conn
 
@@ -310,13 +322,63 @@ class OnboardSource:
         return json.loads(row["value"]) if row else {}
 
     def save_sail_state(self, blob):
-        """Persist the crew-set sail state ({hoisted, out_of_service, ts}) in the engine kv —
-        the matcher's crew-armed signals (a blown kite has no instrument)."""
+        """Persist the crew-set sail state ({flying, reef, out_of_service, hoisted, ts}) in the
+        engine kv — the matcher's crew-armed signals (a blown kite has no instrument) — and
+        APPEND it to sail_log (the timestamped history the race log / debrief reads)."""
         import json
         self._engine.execute(
             "INSERT INTO kv (key, value) VALUES ('sail_state', ?) "
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (json.dumps(blob),))
+        self._engine.execute(
+            "INSERT INTO sail_log (ts, flying, reef, out_of_service) VALUES (?, ?, ?, ?)",
+            (blob.get("ts"), json.dumps(blob.get("flying") or []), blob.get("reef"),
+             json.dumps(blob.get("out_of_service") or [])))
         self._engine.commit()
+
+    # --- race sessions (onboard-only capability, like sail_log) -------------
+    def session_start(self, name, race_id, kind, start_ts):
+        cur = self.session_current()
+        if cur:                                   # only one open window at a time
+            self.session_end(start_ts)
+        self._engine.execute(
+            "INSERT INTO sessions (name, race_id, kind, start_ts) VALUES (?, ?, ?, ?)",
+            (name, race_id, kind, float(start_ts)))
+        self._engine.commit()
+        return self.session_current()
+
+    def session_end(self, end_ts):
+        self._engine.execute(
+            "UPDATE sessions SET end_ts = ? WHERE end_ts IS NULL", (float(end_ts),))
+        self._engine.commit()
+
+    def session_current(self):
+        r = self._engine.execute(
+            "SELECT id, name, race_id, kind, start_ts FROM sessions "
+            "WHERE end_ts IS NULL ORDER BY id DESC LIMIT 1").fetchone()
+        return ({"id": r[0], "name": r[1], "race_id": r[2], "kind": r[3], "start_ts": r[4]}
+                if r else None)
+
+    def sessions_list(self, limit=20):
+        rows = self._engine.execute(
+            "SELECT id, name, race_id, kind, start_ts, end_ts FROM sessions "
+            "ORDER BY start_ts DESC LIMIT ?", (int(limit),)).fetchall()
+        return [{"id": r[0], "name": r[1], "race_id": r[2], "kind": r[3],
+                 "start_ts": r[4], "end_ts": r[5]} for r in rows]
+
+    def sail_log(self, since=None, until=None):
+        """[{ts, flying, reef, out_of_service}] time-ordered — the crew sail history."""
+        import json
+        q, args = "SELECT ts, flying, reef, out_of_service FROM sail_log", []
+        conds = []
+        if since is not None:
+            conds.append("ts >= ?"); args.append(float(since))
+        if until is not None:
+            conds.append("ts <= ?"); args.append(float(until))
+        if conds:
+            q += " WHERE " + " AND ".join(conds)
+        rows = self._engine.execute(q + " ORDER BY ts", args).fetchall()
+        return [{"ts": r[0], "flying": json.loads(r[1] or "[]"), "reef": r[2],
+                 "out_of_service": json.loads(r[3] or "[]")} for r in rows]
 
     def get_sail_state(self):
         """The crew-set sail state or {} if never set."""

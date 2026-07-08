@@ -178,11 +178,26 @@ SI, byte-identical module behavior. The onboard image ships no psycopg.
 **Engine service** (`pi/engine/`, **:8200**, no LLM, no auth, no race gate — the boat's own
 computer is legal in-race). Endpoints:
 `/health · /conditions[/full] · /sources · /series · /fatigue · /sail · /sails/state
-(GET+POST — crew-set hoisted sail + out-of-service gear, the gear-loss plays' arming
-signal) · /course · POST /course/practice · POST /course/load (RaceDefinition course →
+(GET+POST — the crew-set sail CONFIGURATION: a SET of flying sails (C0 alone · C0+J2 ·
+kite+staysail), main reef, out-of-service gear; every change appends to the onboard
+/sails/log with a timestamp) · /session + POST /session/start|end (the RACE LOG — see
+below) · /course · POST /course/practice · POST /course/load (RaceDefinition course →
 marks) · /navigator · /tactics · /forecast · /route · /ais · POST /fleet/load · /fleet ·
 POST /playbook/load (freeze the signed bundle aboard; clears trigger/matcher state) ·
 /deviation · /drift · /selector · /reoptimize · /strategy · /plays · /buoys`.
+
+**Race log (sessions)** — the owner's record switch, fully standalone (no Lab prep, no
+RaceDefinition, no cloud): the dashboard's ⏺ LOG button one-tap starts/ends a session
+(name defaults to the date; a loaded playbook's race_id is picked up automatically). The
+archiver records everything all the time, but only SESSION windows are kept long-term and
+backfilled — outside them, readings are pruned after `ARCHIVE_RETAIN_DAYS` (14; bench
+overlay 0) and never leave the boat, so day sails/deliveries don't accumulate anywhere.
+`backfill.py` defaults to session mode (+ pushes the sail log as `crew.sail.state` and a
+`crew.session` marker per closed window; `--all` restores everything-mode); the cloud
+agent serves them back (`GET /racelog/sessions`, `GET /racelog/track`) and the Lab
+Debrief's "boat's own log" track source builds the debrief track from them — full-res,
+with the sail changes riding along. Prune is fail-safe: engine store unreadable ⇒ nothing
+deleted. The dashboard **SAILS bar** (chips + R1 reef) is the crew's logging surface.
 
 The **executor stack** (all deterministic, Schmitt-hysteretic — consider/commit bands,
 raise slow / clear fast):

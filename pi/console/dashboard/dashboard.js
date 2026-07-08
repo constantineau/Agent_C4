@@ -654,6 +654,87 @@
     return App.plays;
   }
   const GEAR = ["A2", "A3", "S2"];
+  /* the boat's sail inventory for the SAILS bar — cert sails + the crew-config overlays
+     (C0/J2/J3/SS aren't in the ORC cert; the boat flies COMBINATIONS, so chips multi-select) */
+  const SAILS_INV = ["J1", "J2", "J3", "C0", "SS", "A2", "A3", "S2"];
+  async function fetchSailState() {
+    if (App.src !== "live") return;
+    const r = await fetchJSON("/sails/state", 8000);
+    if (r) { App.sailState = r; renderSailsBar(); }
+  }
+  window.toggleFlying = async function (sail) {
+    const fly = new Set(((App.sailState || {}).flying) || []);
+    if (fly.has(sail)) fly.delete(sail); else fly.add(sail);
+    try {
+      const resp = await fetch(API + "/sails/state", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ flying: [...fly] }) });
+      if (resp.ok) { App.sailState = await resp.json(); renderSailsBar(); fetchPlays(); }
+    } catch (e) { /* engine unreachable — the next poll re-syncs */ }
+  };
+  window.toggleReef = async function () {
+    const cur = ((App.sailState || {}).reef) || "";
+    try {
+      const resp = await fetch(API + "/sails/state", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reef: cur ? "" : "R1" }) });
+      if (resp.ok) { App.sailState = await resp.json(); renderSailsBar(); fetchPlays(); }
+    } catch (e) { /* re-sync on next poll */ }
+  };
+  /* RACE LOG (sessions): one-tap record switch. Start needs nothing (the engine defaults the
+     name to the date and picks up the loaded playbook's race_id if one is aboard). */
+  async function fetchSession() {
+    if (App.src !== "live") return;
+    const r = await fetchJSON("/session", 8000);
+    if (r) { App.session = r; renderRec(); }
+  }
+  function renderRec() {
+    const b = document.getElementById("recBtn"), l = document.getElementById("recLbl");
+    if (!b || !l) return;
+    const a = (App.session || {}).active;
+    b.classList.toggle("on", !!a);
+    if (a) {
+      const min = Math.max(0, Math.round((Date.now() / 1000 - a.start_ts) / 60));
+      l.textContent = (a.kind === "race" ? "REC·RACE " : "REC ") + min + "m";
+      b.title = "Logging \"" + a.name + "\" — tap to END the session";
+    } else {
+      l.textContent = "LOG";
+      b.title = "Race log — tap to start a logged session (races AND practice sails; " +
+        "data outside sessions is pruned and never leaves the boat)";
+    }
+  }
+  async function toggleRec() {
+    const a = (App.session || {}).active;
+    try {
+      if (a) {
+        if (!confirm('End the race log "' + a.name + '"?')) return;
+        await fetch(API + "/session/end", { method: "POST" });
+      } else {
+        await fetch(API + "/session/start", { method: "POST",
+          headers: { "Content-Type": "application/json" }, body: "{}" });
+      }
+      fetchSession();
+    } catch (e) { /* engine unreachable — next poll re-syncs */ }
+  }
+  function renderSailsBar() {
+    const el = document.getElementById("sailsBar");
+    if (!el) return;
+    if (App.src !== "live") { el.hidden = true; return; }
+    el.hidden = false;
+    const st = App.sailState || {};
+    const fly = new Set(st.flying || []);
+    const out = new Set(st.out_of_service || []);
+    document.getElementById("sbChips").innerHTML = SAILS_INV.map((s) =>
+      `<button class="sb-chip${fly.has(s) ? " on" : ""}" onclick="toggleFlying('${s}')" ` +
+      `title="Tap = ${fly.has(s) ? "douse" : "hoist"} the ${s}${out.has(s) ? " (declared out of service)" : ""}">` +
+      `${s}${out.has(s) ? "✕" : ""}</button>`).join("");
+    document.getElementById("sbReef").innerHTML =
+      `<button class="sb-chip reef${st.reef ? " on" : ""}" onclick="toggleReef()" ` +
+      `title="${st.reef ? "Shake out reef 1" : "Tuck in reef 1"}">R1${st.reef ? " ▽" : ""}</button>`;
+    document.getElementById("sbNote").textContent = fly.size
+      ? "flying " + [...fly].join(" + ") + (st.reef ? " · reef 1 in" : "") + " — logged"
+      : "tap what's flying — it's logged for the debrief";
+  }
   window.toggleGear = async function (sail) {
     const st = ((currentPlays() || {}).sail_state) || {};
     const out = new Set(st.out_of_service || []);
@@ -1234,13 +1315,14 @@
     else if (App.demoScn === "calm") { App.demoScn = "escalated"; }
     else { App.src = "live"; }
     document.getElementById("srcLbl").textContent = App.src === "live" ? "LIVE" : "DEMO·" + App.demoScn;
+    renderSailsBar();
     if (!document.getElementById("detail").hidden) closeDetail();
     render();
   }
   function briefMe() {
     const b = document.getElementById("briefBtn");
     b.classList.add("busy"); b.textContent = "thinking…";
-    if (App.src === "live") { poll(); fetchBrief(); fetchCoach(); fetchDeviation(); fetchDrift(); fetchSelector(); fetchSynthesis(); fetchPlays(); }
+    if (App.src === "live") { poll(); fetchBrief(); fetchCoach(); fetchDeviation(); fetchDrift(); fetchSelector(); fetchSynthesis(); fetchPlays(); fetchSailState(); }
     // the LLM is slow (~45 s warm); clear the busy state on a timer — render() updates when it lands
     setTimeout(() => { b.classList.remove("busy"); b.textContent = "Brief me ↻"; if (App.src !== "live") render(); }, 1500);
   }
@@ -1267,9 +1349,14 @@
     fetchSynthesis();               // in-race strategy synthesis (copilot LLM → engine fallback), own cadence
     App.synTimer = setInterval(fetchSynthesis, SYN_EVERY);
     fetchPlays();                   // Phase-D play matcher (engine, deterministic), own cadence
+    fetchSailState();               // the SAILS bar (crew sail configuration), own cadence
+    App.sailTimer = setInterval(fetchSailState, 12000);
+    fetchSession();                 // the RACE LOG control, own cadence
+    App.sessionTimer = setInterval(fetchSession, 15000);
     App.playsTimer = setInterval(fetchPlays, SYN_EVERY);
     document.getElementById("themeBtn").addEventListener("click", cycleTheme);
     document.getElementById("srcBtn").addEventListener("click", cycleSource);
+    document.getElementById("recBtn").addEventListener("click", toggleRec);
     document.getElementById("alertBtn").addEventListener("click", toggleSound);
     // reflect a persisted armed state, and re-unlock iOS audio on the first interaction after a reload
     document.getElementById("alertLbl").textContent = Sound.on ? "ON" : "OFF";

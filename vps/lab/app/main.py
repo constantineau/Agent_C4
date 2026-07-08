@@ -778,6 +778,43 @@ async def debrief_track_fetch(body: dict):
     return {"ok": True, **meta}
 
 
+@app.get("/api/racelog/sessions")
+def racelog_sessions():
+    """Race-session windows backfilled from the boat (the iPad record switch) — the debrief's
+    boat-log source list."""
+    from . import monitor
+    try:
+        return monitor.agent_json("/racelog/sessions")
+    except Exception as exc:
+        return {"sessions": [], "note": f"agent unreachable: {exc}"}
+
+
+@app.post("/api/debrief/track/from-log")
+def debrief_track_from_log(body: dict):
+    """Build the debrief track from the BOAT'S OWN backfilled log (full-res position/SOG —
+    far denser than a public tracker) over a race-session window: {race_id, start_ts, end_ts,
+    name?}. Stores it exactly like a GPX/YB track; the sail log rides along."""
+    from . import monitor
+    body = body or {}
+    rid = body.get("race_id")
+    if not rid or body.get("start_ts") is None or body.get("end_ts") is None:
+        return JSONResponse({"detail": "race_id, start_ts and end_ts are required"},
+                            status_code=422)
+    try:
+        r = monitor.agent_json(f"/racelog/track?start={float(body['start_ts'])}"
+                               f"&end={float(body['end_ts'])}")
+    except Exception as exc:
+        return JSONResponse({"detail": f"agent unreachable: {exc}"}, status_code=502)
+    fixes = r.get("fixes") or []
+    if len(fixes) < 10:
+        return JSONResponse({"detail": "the boat log has no track in that window — has the "
+                                       "backfill run since the session?"}, status_code=404)
+    meta = track.save_track(rid, {"source": "boatlog", "boat": body.get("name"),
+                                      "fixes": fixes, "n": len(fixes),
+                                      "sail_log": r.get("sail_log") or []})
+    return {"ok": True, **meta, "sail_changes": len(r.get("sail_log") or [])}
+
+
 @app.post("/api/debrief/track/clear")
 async def debrief_track_clear(body: dict):
     race_id = (body or {}).get("race_id")
@@ -859,12 +896,23 @@ async def fleet_import(body: dict):
     if not d:
         return JSONResponse({"detail": "unknown race"}, status_code=404)
     return await run_in_threadpool(fleetimport.import_fleet, d, b.get("source", "both"),
-                                   b.get("country", "USA"), b.get("course_id"),
+                                   b.get("country", "USA,CAN"), b.get("course_id"),
                                    b.get("url"), b.get("text"))
 
 
+@app.post("/api/fleet/orc-candidates")
+def fleet_orc_candidates(body: dict):
+    """Fuzzy ORC-cert candidates for ONE unrated roster boat: {race_id, boat, sail?, country?}.
+    The human picks a candidate in the Fleet tab; nothing auto-applies."""
+    body = body or {}
+    d = store.get_race(body.get("race_id")) if body.get("race_id") else None
+    return fleetimport.orc_candidates(body.get("boat"), sail=body.get("sail"),
+                                      country=body.get("country") or "USA,CAN",
+                                      definition=d, course_id=body.get("course_id"))
+
+
 @app.post("/api/fleet/import/upload")
-async def fleet_import_upload(race_id: str, country: str = "USA", course_id: str = None,
+async def fleet_import_upload(race_id: str, country: str = "USA,CAN", course_id: str = None,
                              file: UploadFile = File(...)):
     """Extract a fleet roster from an uploaded entry-list PDF → ORC-enrich → DRAFT for review."""
     d = store.get_race(race_id)

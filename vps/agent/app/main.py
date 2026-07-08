@@ -216,6 +216,72 @@ def alerts_ep():
     return tools.get_alerts()
 
 
+@app.get("/racelog/sessions")
+def racelog_sessions():
+    """RACE-SESSION markers backfilled from the boat (`crew.session` readings) — the windows the
+    owner recorded. Shore-side recall of own data (the Lab debrief's from-log source)."""
+    with pool.connection() as conn:
+        rows = conn.execute(
+            "SELECT str_value FROM telemetry_raw WHERE path = 'crew.session' "
+            "ORDER BY time DESC LIMIT 100").fetchall()
+    import json as _json
+    out, seen = [], set()
+    for r in rows:                      # dict rows (psycopg row factory)
+        try:
+            d = _json.loads(r["str_value"])
+        except Exception:
+            continue
+        key = d.get("id"), d.get("start_ts")
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(d)
+    return {"sessions": out}
+
+
+@app.get("/racelog/track")
+def racelog_track(start: float, end: float, max_points: int = 2000):
+    """The boat's own track over a window, built from the backfilled full-res archive
+    (position/SOG/COG in telemetry_raw) — the Lab debrief's 'boat log' track source. Far denser
+    than a public tracker's fixes. Also returns the crew sail-state changes in the window."""
+    from datetime import datetime, timezone
+    import json as _json
+    t0 = datetime.fromtimestamp(float(start), tz=timezone.utc)
+    t1 = datetime.fromtimestamp(float(end), tz=timezone.utc)
+    paths = ("navigation.position.latitude", "navigation.position.longitude",
+             "navigation.speedOverGround", "navigation.courseOverGroundTrue")
+    with pool.connection() as conn:
+        rows = conn.execute(
+            "SELECT extract(epoch FROM time)::float8 AS epoch, path, value FROM telemetry_raw "
+            "WHERE path = ANY(%s) AND time BETWEEN %s AND %s AND value IS NOT NULL "
+            "ORDER BY time", (list(paths), t0, t1)).fetchall()
+        sails = conn.execute(
+            "SELECT extract(epoch FROM time)::float8 AS epoch, str_value FROM telemetry_raw "
+            "WHERE path = 'crew.sail.state' AND time BETWEEN %s AND %s ORDER BY time",
+            (t0, t1)).fetchall()
+    # bucket by second → fixes; a fix needs at least lat+lon (dict rows — psycopg row factory)
+    buckets = {}
+    for r in rows:
+        buckets.setdefault(round(r["epoch"]), {})[r["path"]] = r["value"]
+    fixes = []
+    for t in sorted(buckets):
+        b = buckets[t]
+        if paths[0] in b and paths[1] in b:
+            fixes.append({"t": t, "lat": b[paths[0]], "lon": b[paths[1]],
+                          "sog": round(b[paths[2]] * 1.943844, 2) if paths[2] in b else None,
+                          "cog": round(b[paths[3]] * 57.29577951308232, 1) if paths[3] in b else None})
+    if len(fixes) > int(max_points):          # even thinning — the debrief doesn't need 1 Hz
+        step = len(fixes) / float(max_points)
+        fixes = [fixes[int(i * step)] for i in range(int(max_points))]
+    sail_log = []
+    for r in sails:
+        try:
+            sail_log.append({"t": r["epoch"], **_json.loads(r["str_value"])})
+        except Exception:
+            continue
+    return {"fixes": fixes, "n": len(fixes), "sail_log": sail_log}
+
+
 @app.post("/summary")
 async def summary_ep(minutes: float | None = None):
     """On-demand short recap of the recent window; stored in agent_summaries."""

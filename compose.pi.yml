@@ -114,8 +114,13 @@ services:
       ARCHIVE_DB: /var/lib/sr33/archive/archive.db
       VPS_URL: ${VPS_URL:-http://localhost:8101}
       INGEST_TOKEN: ${INGEST_TOKEN:-dev-ingest-token}
+      # retention: full-res data OUTSIDE race-session windows is pruned after this many days
+      # (0 = keep everything). Sessions come from the engine store (mounted read-only below).
+      ARCHIVE_RETAIN_DAYS: ${ARCHIVE_RETAIN_DAYS:-14}
+      ENGINE_DB: /var/lib/sr33/engine/engine.db
     volumes:
       - sk_archive:/var/lib/sr33/archive
+      - engine_state:/var/lib/sr33/engine:ro
     depends_on:
       - signalk
     restart: unless-stopped

@@ -7,19 +7,53 @@
   "draft_m": 2.1336,
   "safety_margin_m": 0.5,
   "polars_file": "",
-  "orc": {"rating": null, "gph": null, "scoring": ""},
+  "orc": {
+    "rating": null,
+    "gph": null,
+    "scoring": ""
+  },
   "beam_m": null,
   "air_draft_m": null,
   "displacement_kg": null,
   "hull_type": "mono",
-  "sail_inventory": ["J1", "J2", "J3", "C0", "A2", "A3", "S2"],
-  "jib_crossovers": [
-    {"sail": "J1", "tws_max": 14},
-    {"sail": "J2", "tws_min": 14, "tws_max": 20},
-    {"sail": "J3", "tws_min": 20}
+  "sail_inventory": [
+    "J1",
+    "J2",
+    "J3",
+    "C0",
+    "SS",
+    "A2",
+    "A3",
+    "S2"
   ],
-  "code0": {"enabled": true, "tws_max": 9, "twa_min": 55, "twa_max": 110},
-  "main_reefs": {"r1_tws_kn": 20, "r1_a3_slot_tws_kn": 16},
-  "note": "Reference boat. Draft 7 ft = 2.1336 m (user-supplied). Jib change-downs J1<14 / J2 14-20 / J3>20 kn TWS (user-supplied; the ORC cert rates only the J1, so these are crew thresholds, not from the polar). Code 0 band + reef points are FIRST-CUT defaults — edit in Learnings. ORC/beam/displacement TBD.",
-  "provenance": {"source": "bundled seed", "review_status": "seed"}
+  "jib_crossovers": [
+    {
+      "sail": "J1",
+      "tws_max": 14
+    },
+    {
+      "sail": "J2",
+      "tws_min": 14,
+      "tws_max": 20
+    },
+    {
+      "sail": "J3",
+      "tws_min": 20
+    }
+  ],
+  "code0": {
+    "enabled": true,
+    "tws_max": 9,
+    "twa_min": 55,
+    "twa_max": 110
+  },
+  "main_reefs": {
+    "r1_tws_kn": 20,
+    "r1_a3_slot_tws_kn": 16
+  },
+  "note": "Reference boat. Draft 7 ft = 2.1336 m (user-supplied). Jib change-downs J1<14 / J2 14-20 / J3>20 kn TWS (user-supplied; the ORC cert rates only the J1, so these are crew thresholds, not from the polar). Code 0 band + reef points are FIRST-CUT defaults \u2014 edit in Learnings. ORC/beam/displacement TBD.",
+  "provenance": {
+    "source": "bundled seed",
+    "review_status": "seed"
+  }
 }

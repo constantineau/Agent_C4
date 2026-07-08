@@ -149,19 +149,41 @@ def _orc_handicap(rec, tot_col):
     return gph, rating
 
 
-def enrich_from_orc(entries, country="USA", definition=None, course_id=None):
+def _countries(country):
+    """'USA,CAN' → ['USA', 'CAN'] (a Great Lakes fleet spans both; each is a separate ORC dump)."""
+    return [c.strip().upper() for c in str(country or "USA").split(",") if c.strip()]
+
+
+def enrich_from_orc(entries, country="USA,CAN", definition=None, course_id=None):
     """Fill orc_gph + rating (and tidy class) on each entry by matching to the ORC cert DB. Match by
-    sail number, then yacht name. Returns the enriched entries + match stats; unmatched keep their
-    identity (the human can fill the handicap by hand)."""
-    try:
-        idx = _orc_dump(country)
-    except Exception as e:
-        return {"ok": False, "note": f"ORC database fetch failed ({country}): {type(e).__name__}",
+    sail number, then yacht name, trying EACH listed country's dump in order (comma-separated —
+    a Great Lakes fleet spans USA + CAN certs). Returns the enriched entries + match stats;
+    unmatched keep their identity (the human can fill the handicap by hand)."""
+    idxs, certs, fetched = [], 0, []
+    for cc in _countries(country):
+        try:
+            idx = _orc_dump(cc)
+            idxs.append((cc, idx))
+            certs += idx["n"]
+            fetched.append(cc)
+        except Exception as e:
+            print(f"[fleet] ORC dump {cc} failed ({type(e).__name__}) — skipping", flush=True)
+    if not idxs:
+        return {"ok": False, "note": f"ORC database fetch failed ({country})",
                 "entries": entries}
     tot_col, _tod = _tot_cols_for_race(definition or {}, course_id) if definition else (None, None)
     matched = 0
     for e in entries:
-        rec = idx["by_sail"].get(_norm_sail(e.get("sail"))) or idx["by_name"].get(_norm(e.get("boat")))
+        rec, by, cc_hit = None, None, None
+        for cc, idx in idxs:
+            rec = idx["by_sail"].get(_norm_sail(e.get("sail")))
+            if rec:
+                by, cc_hit = "sail", cc
+                break
+            rec = idx["by_name"].get(_norm(e.get("boat")))
+            if rec:
+                by, cc_hit = "name", cc
+                break
         if not rec:
             e["orc_match"] = None
             continue
@@ -173,12 +195,39 @@ def enrich_from_orc(entries, country="USA", definition=None, course_id=None):
         if not e.get("cls") and rec.get("Class"):
             e["cls"] = rec.get("Class")
         e["source"] = (e.get("source") or "") + "+orc" if e.get("source") else "orc"
-        e["orc_match"] = {"by": "sail" if _norm_sail(e.get("sail")) in idx["by_sail"] else "name",
+        e["orc_match"] = {"by": by, "country": cc_hit,
                           "yacht": rec.get("YachtName"), "sail": rec.get("SailNo"),
                           "class": rec.get("Class"), "col": tot_col or "GPH/offshore"}
         matched += 1
     return {"ok": True, "entries": entries, "matched": matched, "total": len(entries),
-            "orc_country": country, "orc_certs": idx["n"], "tot_col": tot_col}
+            "orc_country": ",".join(fetched), "orc_certs": certs, "tot_col": tot_col}
+
+
+def orc_candidates(boat, sail=None, country="USA,CAN", definition=None, course_id=None, limit=6):
+    """Fuzzy ORC-cert candidates for ONE unrated boat — the human picks; nothing auto-applies.
+    Scores name similarity (difflib) + an exact-sail boost across every listed country's dump."""
+    import difflib
+    tot_col, _tod = _tot_cols_for_race(definition or {}, course_id) if definition else (None, None)
+    target = _norm(boat or "")
+    target_sail = _norm_sail(sail)
+    out = []
+    for cc in _countries(country):
+        try:
+            idx = _orc_dump(cc)
+        except Exception:
+            continue
+        for key, rec in idx["by_name"].items():
+            score = difflib.SequenceMatcher(None, target, key).ratio() if target else 0.0
+            if target_sail and _norm_sail(rec.get("SailNo")) == target_sail:
+                score = max(score, 0.99)
+            if score < 0.55:
+                continue
+            gph, rating = _orc_handicap(rec, tot_col)
+            out.append({"score": round(score, 2), "country": cc,
+                        "yacht": rec.get("YachtName"), "sail": rec.get("SailNo"),
+                        "cls": rec.get("Class"), "orc_gph": gph, "rating": rating})
+    out.sort(key=lambda c: -c["score"])
+    return {"boat": boat, "candidates": out[:limit], "tot_col": tot_col}
 
 
 # ---- entry list from the REGATTA WEBSITE (URL / pasted text / uploaded PDF, via Opus) -------------

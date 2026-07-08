@@ -8,3 +8,8 @@ services:
   signalk:
     entrypoint: /home/node/signalk/node_modules/.bin/signalk-server
     command: ["--sample-n2k-data"]
+  archiver:
+    environment:
+      # bench: never prune — the replayed 2014-timestamped sample data would all be
+      # "out of session and old" (wipe the bench volume by hand when it gets fat)
+      ARCHIVE_RETAIN_DAYS: "0"

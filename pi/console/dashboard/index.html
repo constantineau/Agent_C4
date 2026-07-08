@@ -15,6 +15,9 @@
     <span class="badge onboard">ONBOARD</span>
     <span class="spacer"></span>
 
+    <!-- RACE LOG: the owner's record switch — one tap starts a session (kept + backfilled +
+         debriefed); data outside sessions is pruned and never leaves the boat. No Lab prep needed. -->
+    <button class="ctl rec" id="recBtn" title="Race log — tap to start/end a logged session (races AND practice sails; day sails/deliveries outside a session are pruned and never leave the boat)">⏺ <b id="recLbl">LOG</b></button>
     <!-- data source: LIVE engine vs canned DEMO scenarios (calm/escalated) -->
     <button class="ctl" id="srcBtn" title="Live engine ↔ demo scenarios">SRC: <b id="srcLbl">LIVE</b></button>
     <button class="ctl" id="themeBtn" title="Day / night theme">☀ <b id="themeLbl">AUTO</b></button>
@@ -65,6 +68,18 @@
       <p class="st-why" id="stWhy"></p>
       <p class="st-flip" id="stFlip" hidden></p>
     </div>
+  </section>
+
+  <!-- ===== Sails bar: the crew-set sail CONFIGURATION (a set — C0 alone, C0+J2, kite+staysail…)
+       + main reef. Always available in live mode (no playbook / no course needed) — every change
+       is logged onboard with a timestamp for the race log / debrief. ===== -->
+  <section class="sailsbar" id="sailsBar" hidden aria-label="Sails flying">
+    <span class="sb-tag">SAILS</span>
+    <span id="sbChips"></span>
+    <span class="sb-sep"></span>
+    <span class="sb-tag" title="Main reef — tuck in / shake out reef 1">MAIN</span>
+    <span id="sbReef"></span>
+    <span class="sb-note" id="sbNote"></span>
   </section>
 
   <!-- ===== main: fixed tile grid + commentary ===== -->

@@ -96,6 +96,15 @@ def fleet(definition, demo=False):
     return base
 
 
+def agent_json(path):
+    """Authed GET against the cloud agent (shared by Monitor and the debrief's boat-log
+    track source). Raises on auth failure / network error."""
+    tok = _agent_token()
+    if not tok:
+        raise RuntimeError("agent auth failed (BOAT_PASSWORD)")
+    return _http_json(_AGENT_URL + path, headers={"Authorization": "Bearer " + tok})
+
+
 def _agent_token():
     now = time.time()
     if _tok["value"] and _tok["exp"] > now:

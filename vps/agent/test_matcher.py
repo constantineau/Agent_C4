@@ -271,5 +271,40 @@ check("thin archive -> instantaneous fallback (~80%)",
       r["signals"]["polar_pct"] is not None and abs(r["signals"]["polar_pct"] - 80.0) < 1.5)
 matcher._POLAR_TABLE = None
 print("RESULT-8:", "PASS" if ok else "FAIL")
+
+print("9) sail CONFIGURATIONS — flying sets, reef, legacy compat (2026-07-08)")
+COMBO = {"race_id": "u", "schema": "c4.playbook/v2", "variants": [{"id": "m"}], "plays": [
+    {"id": "sail_c0_up", "name": "C0 past its ceiling", "category": "internal",
+     "scenario": {"kind": "sail_guidance"}, "stakes_min": 0,
+     "conditions": {"predicates": [{"signal": "hoisted_sail", "op": "==", "value": "C0"}]},
+     "response": {"type": "guidance"}},
+    {"id": "reef_in_check", "name": "Reef 1 declared", "category": "internal",
+     "scenario": {"kind": "sail_guidance"}, "stakes_min": 0,
+     "conditions": {"predicates": [{"signal": "reef", "op": "==", "value": "R1"}]},
+     "response": {"type": "guidance"}},
+]}
+matcher.SUSTAIN_SCALE = 0.0
+stub(bundle=COMBO)
+st = matcher.set_sail_state(flying=["C0", "J2"])
+check("flying SET stored + primary mirror", st["flying"] == ["C0", "J2"] and st["hoisted"] == "C0")
+r = matcher.get_plays()
+p = next(x for x in r["plays"] if x["id"] == "sail_c0_up")
+check("membership: C0 among C0+J2 arms a hoisted==C0 play", p["status"] == "armed")
+st = matcher.set_sail_state(flying=["C0", "J2"], reef="R1")
+r = matcher.get_plays()
+p = next(x for x in r["plays"] if x["id"] == "reef_in_check")
+check("reef R1 declared -> reef play arms", p["status"] == "armed"
+      and r["signals"]["reef"] == "R1")
+st = matcher.set_sail_state(reef="")
+check("reef shaken out (flying untouched)", st["reef"] is None and st["flying"] == ["C0", "J2"])
+st = matcher.set_sail_state(flying=["A3", "SS"])
+check("kite+staysail combo; primary = the kite", st["flying"] == ["A3", "SS"]
+      and st["hoisted"] == "A3")
+st = matcher.set_sail_state(hoisted="J1")          # legacy single-sail setter
+check("legacy hoisted setter -> flying=[J1]", st["flying"] == ["J1"] and st["hoisted"] == "J1")
+r = matcher.get_plays()
+check("C0 doused -> the C0 play clears", next(x for x in r["plays"]
+      if x["id"] == "sail_c0_up")["status"] == "quiet")
+print("RESULT-9:", "PASS" if ok else "FAIL")
 import sys
 sys.exit(0 if ok else 1)
