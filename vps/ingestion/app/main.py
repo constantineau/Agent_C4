@@ -12,31 +12,9 @@ from typing import Optional
 from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
-from shared.units import TELEMETRY_CHANNELS
 from .db import pool
 
 INGEST_TOKEN = os.environ.get("INGEST_TOKEN", "dev-ingest-token")
-
-
-class TelemetryPoint(BaseModel):
-    time: datetime
-    aws: Optional[float] = None
-    awa: Optional[float] = None
-    tws: Optional[float] = None
-    twa: Optional[float] = None
-    twd: Optional[float] = None
-    stw: Optional[float] = None
-    sog: Optional[float] = None
-    cog: Optional[float] = None
-    heading: Optional[float] = None
-    lat: Optional[float] = None
-    lon: Optional[float] = None
-    depth: Optional[float] = None
-
-
-class TelemetryBatch(BaseModel):
-    boat_id: str = "sr33"
-    points: list[TelemetryPoint] = Field(..., min_length=1)
 
 
 class Reading(BaseModel):
@@ -99,23 +77,9 @@ def health():
         raise HTTPException(status_code=503, detail=f"db unavailable: {exc}")
 
 
-_COLS = ("time", "boat_id", *TELEMETRY_CHANNELS)
-
-
-@app.post("/ingest", dependencies=[Depends(require_token)])
-def ingest(batch: TelemetryBatch):
-    rows = []
-    for p in batch.points:
-        d = p.model_dump()
-        rows.append((d["time"], batch.boat_id, *(d[c] for c in TELEMETRY_CHANNELS)))
-
-    placeholders = "(" + ", ".join(["%s"] * len(_COLS)) + ")"
-    sql = f"INSERT INTO telemetry ({', '.join(_COLS)}) VALUES {placeholders}"
-    with pool.connection() as conn:
-        with conn.cursor() as cur:
-            cur.executemany(sql, rows)
-        conn.commit()
-    return {"accepted": len(rows), "boat_id": batch.boat_id}
+# The original wide-table `POST /ingest` (one column per channel → `telemetry`) is retired:
+# the collect-everything `/ingest/raw` → `telemetry_raw` superseded it (migration 002) and
+# nothing ever read the wide table back. Migration 006 drops it.
 
 
 @app.post("/ingest/ais", dependencies=[Depends(require_token)])
