@@ -522,9 +522,19 @@
       if (!s) return NA("loading playbook…");
       if (s.available === false || s.action === "na") return NA(s.why || s.value || "no playbook aboard");
       const act = s.action, conf = s.confidence_label ? s.confidence_label + " conf" : "";
-      const sub = (act === "switch" ? "branch fired" : act === "off_script" ? "off the playbook" : "on plan")
-        + (conf ? " · " + conf : "");
-      return { status: s.status || "ok", value: s.value || "—", sub: sub, rows: s.rows || [],
+      // the tile face carries the WHOLE strategy stack's headline now (the old top strip is
+      // retired — tap the tile for synthesis/triggers/plays/re-route detail)
+      const armed = ((App.plays || {}).armed || []).length;
+      const synRec = ((App.synthesis || {}).recommendation) || {};
+      const synOff = synRec.vs_playbook === "departs" || synRec.vs_playbook === "off-book";
+      let status = s.status || "ok";
+      if (synOff) status = "act";
+      else if (armed && status === "ok") status = "watch";
+      const bits = [(act === "switch" ? "branch fired" : act === "off_script" ? "off the playbook" : "on plan")];
+      if (armed) bits.push(armed + " play" + (armed === 1 ? "" : "s") + " ARMED");
+      if (synOff) bits.push("off-book · re-route ready");
+      if (conf) bits.push(conf);
+      return { status: status, value: s.value || "—", sub: bits.join(" · "), rows: s.rows || [],
         why: s.why || "", consider: s.consider || "—", clears: s.clears || "—",
         based: s.based || [], conf: "engine" };
     },
@@ -746,31 +756,6 @@
       fetchPlays();
     } catch (e) { /* engine unreachable — the next poll re-syncs */ }
   };
-  function renderPlays() {
-    const el = document.getElementById("stPlays");
-    if (!el) return;
-    const pl = currentPlays();
-    if (!pl || pl.available === false) { el.hidden = true; return; }
-    const rows = (pl.plays || []).filter((x) => x.status !== "quiet").slice(0, 4);
-    const out = new Set(((pl.sail_state || {}).out_of_service) || []);
-    const gear = GEAR.map((s) =>
-      `<button class="st-gear${out.has(s) ? " oos" : ""}" onclick="toggleGear('${s}')" ` +
-      `title="Tap = declare the ${s} ${out.has(s) ? "back in service" : "OUT of service (blown/damaged)"}">${s}${out.has(s) ? "✕" : ""}</button>`).join("");
-    const items = rows.map((x) => {
-      const call = x.guidance || x.summary || "";
-      const badge = x.status === "armed" ? "ARMED" : "arming…";
-      return `<div class="st-play y-${x.status === "armed" ? "act" : "watch"}">` +
-        `<b>${x.name}</b> <span class="st-play-badge">${badge}</span>` +
-        (x.stakes_min ? ` <span class="st-play-stakes">~${x.stakes_min}m at stake</span>` : "") +
-        (x.corroborated ? ` <span class="st-play-stakes" title="A confidence-raising signal agrees — it never gates arming">✓ ${x.corroborated_by || "corroborated"}</span>` : "") +
-        (call ? `<span class="st-play-call">${call}</span>` : "") + `</div>`;
-    }).join("");
-    el.innerHTML = `<div class="st-plays-head"><span>PLAYS</span><span class="st-gearbox" ` +
-      `title="Gear out-of-service toggles — arms the pre-authored gear-loss plays">gear: ${gear}</span></div>` +
-      (items || `<div class="st-play-none">No plays armed — the library is watching ` +
-       `${pl.n_plays ?? 0} conditions.</div>`);
-    el.hidden = false;
-  }
   /* the branch SELECTOR: the executor's unified call — hold / switch to a pre-authored variant /
      off-script. Engine-computed (unifies wind-shift + deviation + drift over the frozen bundle). */
   async function fetchSelector() {
@@ -831,169 +816,80 @@
     if (conc.strength === "split" || rec.urgency === "soon") return "watch";
     return "ok";
   }
-  function renderSynthesis() {
-    const el = document.getElementById("stSyn");
+  /* ============ the STRATEGY STACK — now lives INSIDE the PLAYBOOK tile's tap-detail ============
+     (the old top-of-screen Strategy strip was information overflow — crew request 2026-07-08).
+     Same content, composed as HTML for the detail overlay: synthesis apex → selector banner →
+     deviation progress/metrics → drift line → armed plays (+ gear toggles) → off-book re-route. */
+  function synthHtml() {
     const s = currentSynthesis();
-    if (!s || s.available === false) { el.hidden = true; renderSynPlays({}); return; }
-    el.hidden = false;
-    el.className = "st-syn y-" + synthStatus(s);
+    if (!s || s.available === false) return "";
     const rec = s.recommendation || {}, conc = s.concordance || {};
     const off = rec.vs_playbook === "departs" || rec.vs_playbook === "off-book";
-    document.getElementById("stSynBadge").hidden = !off;
-    document.getElementById("stSynMode").textContent = s.mode === "llm" ? "LLM" : "ENGINE";
     const conf = s.confidence || rec.confidence || "";
-    document.getElementById("stSynConf").textContent = conf ? conf + " conf" : "";
-    document.getElementById("stSynAssess").textContent = s.assessment || rec.action || "";
-    const concEl = document.getElementById("stSynConc");
     const note = conc.note && conc.strength !== "none" ? conc.note : "";
-    if (note) { concEl.hidden = false; concEl.textContent = note; } else concEl.hidden = true;
-    renderSynPlays(s);
-  }
-  /* Tier-2 ranked play matches (Playbook v2 Phase D): the copilot's LLM pattern-matches the live
-     picture against the play library narratives and the brief carries `play_matches` (validated
-     play ids only — the copilot drops inventions; the Tier-1 matcher status rides along). Names
-     resolve from the Tier-1 /plays payload; demo entries may carry their own `name`. */
-  function renderSynPlays(s) {
-    const el = document.getElementById("stSynPlays");
     const pm = Array.isArray(s.play_matches) ? s.play_matches.slice(0, 3) : [];
-    if (!pm.length) { el.hidden = true; el.innerHTML = ""; return; }
     const lib = {};
     ((currentPlays() || {}).plays || []).forEach((p) => { lib[p.id] = p.name; });
-    el.hidden = false;
-    el.innerHTML = pm.map((m) => {
+    const pmHtml = pm.length ? '<div class="st-syn-plays">' + pm.map((m) => {
       const name = stripTags(m.name || lib[m.play_id] || m.play_id);
       const live = m.status === "armed" ? "armed" : m.status === "arming" ? "arming…" : "";
       return '<div class="st-pm' + (m.match === "strong" ? " strong" : "") + '">' +
         '<span class="st-pm-tag">' + (m.match === "strong" ? "◆" : "◇") + ' play</span> ' +
         "<b>" + name + "</b>" +
         '<i>' + (m.match || "partial") + " match" + (live ? " · " + live : "") + "</i>" +
-        (m.why ? '<span class="st-pm-why">' + stripTags(m.why) + "</span>" : "") +
-        "</div>";
-    }).join("");
+        (m.why ? '<span class="st-pm-why">' + stripTags(m.why) + "</span>" : "") + "</div>";
+    }).join("") + "</div>" : "";
+    return '<div class="st-syn y-' + synthStatus(s) + '"><div class="st-syn-head">' +
+      '<span class="st-syn-tag">SYNTHESIS</span>' +
+      (off ? '<span class="st-syn-badge">OFF-BOOK</span>' : "") +
+      '<span class="st-spacer"></span>' +
+      '<span class="st-syn-mode">' + (s.mode === "llm" ? "LLM" : "ENGINE") + '</span>' +
+      (conf ? '<span class="st-syn-conf">' + conf + ' conf</span>' : "") + "</div>" +
+      '<p class="st-syn-assess">' + stripTags(s.assessment || rec.action || "") + "</p>" +
+      (note ? '<p class="st-syn-conc">' + stripTags(note) + "</p>" : "") + pmHtml + "</div>";
   }
-  /* the Strategy strip: the synthesis apex, the selector banner, then the deviation/drift triggers. */
-  function renderStrategy() {
-    const el = document.getElementById("strategy");
-    const d = currentDeviation();
-    const syn = currentSynthesis();
-    renderSynthesis();
-    // Show the card when EITHER the synthesis or the route-deviation read is present.
-    if (!d && (!syn || syn.available === false)) { el.hidden = true; return; }
-    el.hidden = false;
-    if (!d) {   // synthesis-only (no deviation yet): render the head from the synthesis + stop.
-      el.className = "strategy s-" + synthStatus(syn);
-      const st = STATUS[synthStatus(syn)] || STATUS.na;
-      document.getElementById("stIcon").textContent = st.icon;
-      document.getElementById("stWord").textContent = st.word;
-      document.getElementById("stVariant").textContent = "";
-      document.getElementById("stProgress").style.display = "none";
-      document.getElementById("stMetrics").innerHTML = "";
-      document.getElementById("stFlip").hidden = true;
-      document.getElementById("stWhy").textContent = "";
-      renderDriftLine(); renderSelector(); renderPlays(); renderReoptimize();
-      return;
-    }
-    const status = d.status || "na";
-    el.className = "strategy s-" + status;
-    const st = STATUS[status] || STATUS.na;
-    document.getElementById("stIcon").textContent = st.icon;
-    document.getElementById("stWord").textContent = d.available ? st.word : "—";
-    document.getElementById("stVariant").textContent =
-      d.available ? ("Variant: " + (d.variant_label || d.variant || "—")) : "";
-
-    const prog = document.getElementById("stProgress");
-    const metricsEl = document.getElementById("stMetrics");
-    const flipEl = document.getElementById("stFlip");
-    const pct = d.available && d.along_pct != null ? Math.max(0, Math.min(100, d.along_pct)) : null;
-    if (pct != null) {
-      prog.style.display = "";
-      document.getElementById("stFill").style.width = pct + "%";
-      document.getElementById("stBoat").style.left = pct + "%";
-    } else { prog.style.display = "none"; }
-
-    const metric = (lbl, val, bad) => '<span class="st-m' + (bad ? " bad" : "") + '">' + lbl + ' <b>' + val + '</b></span>';
-    const m = [];
-    if (d.available) {
-      const off = status !== "ok";
-      if (pct != null) {
-        const dist = (d.along_nm != null && d.route_nm != null) ? " · " + r1(d.along_nm) + "/" + r1(d.route_nm) + " nm" : "";
-        m.push(metric("Along", pct + "%" + dist, false));
-      }
-      if (d.xte_nm != null) {
-        const arrow = d.xte_trend === "diverging" ? " ↗" : d.xte_trend === "converging" ? " ↘" : "";
-        m.push(metric("XTE", r1(d.xte_nm) + " nm " + (d.xte_side || "") + arrow, off && (d.xte_trend !== "converging")));
-      }
-      const bt = behindTxt(d.time_behind_s);
-      if (bt) m.push(metric("Pace", bt, d.time_behind_s > 0 && status !== "ok"));
-      if (d.vmc_kn != null && d.vmc_optimal_kn != null)
-        m.push(metric("VMC", r1(d.vmc_kn) + "/" + r1(d.vmc_optimal_kn) + " kts", d.vmc_deficit_kn != null && d.vmc_deficit_kn > 0.3));
-      metricsEl.innerHTML = m.join("");
-      if (d.what_flips_it) { flipEl.hidden = false; flipEl.innerHTML = "Branch trigger — <b>" + stripTags(d.what_flips_it) + "</b>"; }
-      else flipEl.hidden = true;
-    } else {
-      metricsEl.innerHTML = "";
-      flipEl.hidden = true;
-    }
-    document.getElementById("stWhy").textContent = d.why || d.sub || "";
-    renderDriftLine();
-    renderSelector();
-    renderPlays();
-    renderReoptimize();
-  }
-  /* the onboard re-route line — shown when a fresh fallback route is available (live: while the
-     selector is off-script OR the synthesis recommendation departs the playbook; demo: illustrative).
-     Framed clearly as OFF-BOOK (not the frozen homework). */
-  function renderReoptimize() {
-    const el = document.getElementById("stReopt");
-    const sel = currentSelector();
-    const syn = currentSynthesis();
-    const offscript = sel && sel.action === "off_script";
-    // A synthesis recommendation can DEPART the playbook even when the selector holds (e.g. an
-    // LLM-originated off-book move) — the re-route offer rides along with the brief (Phase 3), so
-    // prefer it, and show the line whenever EITHER path is off-book.
-    const synRec = (syn && syn.recommendation) || {};
-    const synOff = synRec.vs_playbook === "departs" || synRec.vs_playbook === "off-book";
-    const ro = (syn && syn.reoptimize && syn.reoptimize.available) ? syn.reoptimize : currentReoptimize();
-    const show = offscript || synOff || App.src !== "live";
-    if (!ro || ro.available === false || !show) { el.hidden = true; return; }
-    el.hidden = false;
-    const h = ro.eta_min != null ? (Math.floor(ro.eta_min / 60) + "h " + Math.round(ro.eta_min % 60) + "m") : "?";
-    const vs = ro.vs_playbook && ro.vs_playbook.available ? "up to " + r1(ro.vs_playbook.max_divergence_nm) + " nm off the plan" : "";
-    const sp = Array.isArray(ro.sail_plan) && ro.sail_plan.length ? ro.sail_plan.join("→") : "";
-    const avb = [];
-    if (ro.avoids_islands) avb.push(ro.avoids_islands + " island" + (ro.avoids_islands > 1 ? "s" : ""));
-    if (ro.avoids_zones) avb.push(ro.avoids_zones + " zone" + (ro.avoids_zones > 1 ? "s" : ""));
-    el.innerHTML = '<span class="ro-ico">⟳</span><span>Onboard re-route ready — <b>' + h + '</b>' +
-      (ro.tacks != null ? ' · ' + ro.tacks + ' tacks' : '') +
-      (ro.sailed_nm != null ? ' · ' + r1(ro.sailed_nm) + ' nm' : '') +
-      (sp ? ' · ⛵ ' + sp : '') +
-      (avb.length ? ' · avoids ' + avb.join(" + ") : '') +
-      (vs ? ' · ' + vs : '') + ' <span class="ro-tag">off-book</span></span>';
-  }
-  /* the executor's recommendation banner at the top of the strip: HOLD / SWITCH → variant /
-     OFF-SCRIPT, with confidence + the grounded why. Hidden when no playbook is aboard. */
-  function renderSelector() {
-    const el = document.getElementById("stRec");
+  function selectorHtml() {
     const s = currentSelector();
-    if (!s || s.available === false || s.action === "na") { el.hidden = true; return; }
-    el.hidden = false;
-    el.className = "st-rec sr-" + (s.status || "ok");
+    if (!s || s.available === false || s.action === "na") return "";
     const pill = { hold: "HOLD", switch: "SWITCH", off_script: "OFF-SCRIPT" }[s.action] || "—";
-    document.getElementById("stRecPill").textContent = pill;
-    document.getElementById("stRecVal").textContent = s.value || s.target_label || "";
-    document.getElementById("stRecConf").textContent =
-      s.confidence_label ? s.confidence_label + " conf" : "";
-    document.getElementById("stRecWhy").textContent = s.why || "";
+    return '<div class="st-rec sr-' + (s.status || "ok") + '">' +
+      '<span class="sr-pill">' + pill + '</span>' +
+      '<span class="sr-val">' + stripTags(s.value || s.target_label || "") + '</span>' +
+      (s.confidence_label ? '<span class="sr-conf">' + s.confidence_label + ' conf</span>' : "") +
+      (s.why ? '<span class="sr-why">' + stripTags(s.why) + '</span>' : "") + "</div>";
   }
-  /* the forecast-drift line inside the Strategy strip: how far the common forecast has moved from
-     what the plan was built on (the 2nd branch trigger). Hidden when there's no reference aboard. */
-  function renderDriftLine() {
-    const el = document.getElementById("stDrift");
+  function deviationHtml() {
+    const d = currentDeviation();
+    if (!d || d.available === false) return "";
+    const status = d.status || "na";
+    const pct = d.along_pct != null ? Math.max(0, Math.min(100, d.along_pct)) : null;
+    const metric = (lbl, val, bad) => '<span class="st-m' + (bad ? " bad" : "") + '">' + lbl + ' <b>' + val + '</b></span>';
+    const off = status !== "ok";
+    const m = [];
+    if (pct != null) {
+      const dist = (d.along_nm != null && d.route_nm != null) ? " · " + r1(d.along_nm) + "/" + r1(d.route_nm) + " nm" : "";
+      m.push(metric("Along", pct + "%" + dist, false));
+    }
+    if (d.xte_nm != null) {
+      const arrow = d.xte_trend === "diverging" ? " ↗" : d.xte_trend === "converging" ? " ↘" : "";
+      m.push(metric("XTE", r1(d.xte_nm) + " nm " + (d.xte_side || "") + arrow, off && (d.xte_trend !== "converging")));
+    }
+    const bt = behindTxt(d.time_behind_s);
+    if (bt) m.push(metric("Pace", bt, d.time_behind_s > 0 && off));
+    if (d.vmc_kn != null && d.vmc_optimal_kn != null)
+      m.push(metric("VMC", r1(d.vmc_kn) + "/" + r1(d.vmc_optimal_kn) + " kts", d.vmc_deficit_kn != null && d.vmc_deficit_kn > 0.3));
+    const prog = pct != null
+      ? '<div class="st-progress"><div class="st-fill" style="width:' + pct + '%"></div><div class="st-boat" style="left:' + pct + '%"></div></div>' : "";
+    return '<div class="st-dev" style="--c:var(--' + (status === "na" ? "na" : status) + ')">' +
+      '<div class="st-dev-head">TRACK — variant ' + stripTags(d.variant_label || d.variant || "—") + "</div>" +
+      prog + (m.length ? '<div class="st-metrics">' + m.join("") + "</div>" : "") +
+      (d.why || d.sub ? '<p class="st-why">' + stripTags(d.why || d.sub) + "</p>" : "") +
+      (d.what_flips_it ? '<p class="st-flip">Branch trigger — <b>' + stripTags(d.what_flips_it) + "</b></p>" : "") + "</div>";
+  }
+  function driftHtml() {
     const fd = currentDrift();
-    if (!fd || fd.available === false) { el.hidden = true; return; }
-    el.hidden = false;
+    if (!fd || fd.available === false) return "";
     const status = fd.status || "na";
-    el.className = "st-drift sd-" + status;
     const deg = fd.drift_twd_deg != null ? Math.round(fd.drift_twd_deg) : null;
     const tag = { ok: "holding", watch: "watch", act: "moved" }[status] || "";
     let body;
@@ -1005,7 +901,57 @@
       body = 'Forecast drift <b>' + deg + "° " + (fd.drift_dir || "shifted") + '</b>' + tws +
         ' <span class="sd-tag">' + tag + '</span>';
     }
-    el.innerHTML = '<span class="sd-dot"></span><span>' + body + '</span>';
+    return '<p class="st-drift sd-' + status + '"><span class="sd-dot"></span><span>' + body + '</span></p>';
+  }
+  function playsHtml() {
+    const pl = currentPlays();
+    if (!pl || pl.available === false) return "";
+    const rows = (pl.plays || []).filter((x) => x.status !== "quiet").slice(0, 4);
+    const out = new Set(((pl.sail_state || {}).out_of_service) || []);
+    const gear = GEAR.map((s) =>
+      `<button class="st-gear${out.has(s) ? " oos" : ""}" onclick="toggleGear('${s}')" ` +
+      `title="Tap = declare the ${s} ${out.has(s) ? "back in service" : "OUT of service (blown/damaged)"}">${s}${out.has(s) ? "✕" : ""}</button>`).join("");
+    const items = rows.map((x) => {
+      const call = x.guidance || x.summary || "";
+      const badge = x.status === "armed" ? "ARMED" : "arming…";
+      return `<div class="st-play y-${x.status === "armed" ? "act" : "watch"}">` +
+        `<b>${x.name}</b> <span class="st-play-badge">${badge}</span>` +
+        (x.stakes_min ? ` <span class="st-play-stakes">~${x.stakes_min}m at stake</span>` : "") +
+        (x.corroborated ? ` <span class="st-play-stakes" title="A confidence-raising signal agrees — it never gates arming">✓ ${x.corroborated_by || "corroborated"}</span>` : "") +
+        (call ? `<span class="st-play-call">${call}</span>` : "") + `</div>`;
+    }).join("");
+    return `<div class="st-plays"><div class="st-plays-head"><span>PLAYS</span><span class="st-gearbox" ` +
+      `title="Gear out-of-service toggles — arms the pre-authored gear-loss plays">gear: ${gear}</span></div>` +
+      (items || `<div class="st-play-none">No plays armed — the library is watching ` +
+       `${pl.n_plays ?? 0} conditions.</div>`) + `</div>`;
+  }
+  function reoptHtml() {
+    const sel = currentSelector();
+    const syn = currentSynthesis();
+    const offscript = sel && sel.action === "off_script";
+    const synRec = (syn && syn.recommendation) || {};
+    const synOff = synRec.vs_playbook === "departs" || synRec.vs_playbook === "off-book";
+    const ro = (syn && syn.reoptimize && syn.reoptimize.available) ? syn.reoptimize : currentReoptimize();
+    const show = offscript || synOff || App.src !== "live";
+    if (!ro || ro.available === false || !show) return "";
+    const h = ro.eta_min != null ? (Math.floor(ro.eta_min / 60) + "h " + Math.round(ro.eta_min % 60) + "m") : "?";
+    const vs = ro.vs_playbook && ro.vs_playbook.available ? "up to " + r1(ro.vs_playbook.max_divergence_nm) + " nm off the plan" : "";
+    const sp = Array.isArray(ro.sail_plan) && ro.sail_plan.length ? ro.sail_plan.join("→") : "";
+    const avb = [];
+    if (ro.avoids_islands) avb.push(ro.avoids_islands + " island" + (ro.avoids_islands > 1 ? "s" : ""));
+    if (ro.avoids_zones) avb.push(ro.avoids_zones + " zone" + (ro.avoids_zones > 1 ? "s" : ""));
+    return '<p class="st-reopt"><span class="ro-ico">⟳</span><span>Onboard re-route ready — <b>' + h + '</b>' +
+      (ro.tacks != null ? ' · ' + ro.tacks + ' tacks' : '') +
+      (ro.sailed_nm != null ? ' · ' + r1(ro.sailed_nm) + ' nm' : '') +
+      (sp ? ' · ⛵ ' + sp : '') +
+      (avb.length ? ' · avoids ' + avb.join(" + ") : '') +
+      (vs ? ' · ' + vs : '') + ' <span class="ro-tag">off-book</span></span></p>';
+  }
+  function strategyStackHtml() {
+    const parts = [synthHtml(), selectorHtml(), deviationHtml(), driftHtml(), playsHtml(), reoptHtml()]
+      .filter(Boolean);
+    if (!parts.length) return "";
+    return '<div class="st-stack">' + parts.join("") + "</div>";
   }
   /* the coach line in the commentary panel — the last thing the copilot volunteered (from the
      timer's callout history), or, if nothing's been shown yet, the top of the current callout banner.
@@ -1095,7 +1041,6 @@
       el.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openDetail(key); } });
       grid.appendChild(el);
     }
-    renderStrategy();
     renderCommentary(d);
     if (App.openTile && !document.getElementById("detail").hidden) populateDetail(App.openTile, false);
   }
@@ -1160,6 +1105,10 @@
         '<div class="detchart" style="--c:' + stColor + '"><div class="dc-lab dc-top">↑ shifted right</div>' +
         (makeTwdSpark(hist, 512, 60) || '<span class="dc-empty">…</span>') +
         '<div class="dc-lab dc-bot">↓ shifted left</div></div>' + rowsHtml(t.rows);
+    } else if (key === "playbook") {
+      // the full strategy stack lives here now (synthesis → selector → track → drift → plays →
+      // re-route), followed by the variant-agreement rows
+      g.innerHTML = strategyStackHtml() + (t.rows ? rowsHtml(t.rows) : "");
     } else if (t.rows) {
       g.innerHTML = (t.value ? '<div class="dc-foot">' + t.value + (t.sub ? " · " + t.sub : "") + '</div>' : "") + rowsHtml(t.rows);
     } else if (t.components) {

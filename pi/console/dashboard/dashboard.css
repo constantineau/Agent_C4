@@ -310,6 +310,12 @@ body {
 @media (max-width:760px) { .dash { grid-template-columns:1fr; } .commentary { display:none; } }
 
 /* ---- Phase-D armed plays (Strategy strip) + the crew gear toggle ---- */
+/* the strategy stack now renders inside the PLAYBOOK tile's tap-detail */
+.st-stack { display:flex; flex-direction:column; gap:9px; margin-bottom:12px; }
+.st-stack .st-syn, .st-stack .st-rec { margin-top:0; }
+.st-dev { padding:8px 11px; border-radius:9px; border:1px solid var(--line); background:var(--panel2); }
+.st-dev-head { font-size:10px; font-weight:800; letter-spacing:1.1px; color:var(--muted);
+  margin-bottom:6px; }
 .st-plays { margin: 6px 0 2px; font-size: 13px; }
 /* Sails bar — the crew sail-configuration chips (multi-select) + reef */
 .sailsbar { display:flex; align-items:center; gap:7px; flex-wrap:wrap; margin-top:8px;
