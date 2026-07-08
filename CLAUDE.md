@@ -1034,8 +1034,10 @@ for two-plus oscillation cycles = persistent right shift, bail to right"); freez
 download → the onboard copilot loaded it, **verified the signature**, and emitted the LLM digest with
 each variant's flip trigger. UI Playwright-verified. See `vps/lab/README.md`.
 
-**Playbook v2 — the scenario-rich PLAY LIBRARY: Phases B + C SHIPPED 2026-07-07 (design
-`docs/PLAYBOOK_V2.md`; Phase D onboard matcher next).** The v1 side variants stay (compat), but the
+**Playbook v2 — the scenario-rich PLAY LIBRARY: Phases B + C SHIPPED 2026-07-07, Phase D onboard
+matcher (Tier-1 `matcher.py` + `GET /plays` + crew sail-state + armed-plays surfaces + Tier-2
+ranked matching) SHIPPED 2026-07-07/08 (design `docs/PLAYBOOK_V2.md` §9).** The v1 side variants
+stay (compat), but the
 `c4.playbook/v2` bundle now carries **plays** — named scenarios with deterministic detection
 predicates + a narrative condition (for the Tier-2 matcher) + a pre-computed response. EXTERNAL =
 the scenario fan through transformed views of the same field (rotations ±10/20°, pressure

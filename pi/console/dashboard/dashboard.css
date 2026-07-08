@@ -80,6 +80,16 @@ body {
 .st-syn-conf { font-size:10.5px; font-weight:700; color:var(--sc); text-transform:uppercase; letter-spacing:.5px; }
 .st-syn-assess { margin:6px 0 0; font-size:15px; font-weight:800; line-height:1.28; color:var(--text); }
 .st-syn-conc { margin:3px 0 0; font-size:12.5px; line-height:1.35; color:var(--muted); }
+/* Tier-2 ranked play matches (LLM pattern-match vs the play library) */
+.st-syn-plays { margin-top:6px; display:flex; flex-direction:column; gap:4px; }
+.st-pm { font-size:12.5px; line-height:1.3; color:var(--muted); }
+.st-pm b { color:var(--text); font-weight:700; }
+.st-pm i { font-style:normal; font-size:10.5px; font-weight:700; letter-spacing:.4px;
+  text-transform:uppercase; color:var(--sc); margin-left:7px; }
+.st-pm.strong b { font-weight:800; }
+.st-pm-tag { font-size:10px; font-weight:800; letter-spacing:.8px; text-transform:uppercase;
+  color:var(--sc); }
+.st-pm-why { display:block; font-size:11.5px; color:var(--muted); opacity:.85; }
 .st-rec { margin-top:8px; padding:7px 10px; border-radius:9px; display:flex; align-items:center;
   gap:9px; flex-wrap:wrap; background:var(--rcfill); border:1px solid var(--rc); }
 .st-rec.sr-ok    { --rc:var(--ok);    --rcfill:var(--ok-fill); }

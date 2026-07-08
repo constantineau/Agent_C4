@@ -253,9 +253,16 @@ judgment calls into measured quantities. These are **locked as implementation re
   (`/sails/state`: hoisted + the out-of-service gear toggle — the gear-loss plays' arming
   signal); armed plays ride the `/strategy` digest; Strategy-card ARMED-PLAYS section + gear
   toggle; auto-coach `plays` callout (points in the play's frozen words); Tier-2 grounding
-  extended to `play:<id>` + `get_plays` in the copilot gather. *Remaining slice: a dedicated
-  Tier-2 ranked-match prompt section (the LLM reads narratives + ranks compound matches).*
-  Honest v1 limits: `applicability.legs` carried but not gated; `polar_pct` not wired onboard.
+  extended to `play:<id>` + `get_plays` in the copilot gather. The Tier-2 ranked-match prompt
+  section shipped next (the LLM reads narratives + ranks compound matches → `play_matches` on
+  the strategy brief, unknown ids dropped), and the ranked matches render on the iPad Strategy
+  card's SYNTHESIS section (2026-07-08).
+  The two v1 limits are closed (2026-07-08): `polar_pct` is a live matcher signal (windowed
+  ~10-min mean of STW vs the polar target so a tack's dip can't reset a sustain, instantaneous
+  fallback), and `applicability.legs` is GATED for hard-gated plays — pace plays carry
+  `gate:"hard"` (leg N = the leg arriving at course marks[N] == the navigator's next-mark
+  index; off-leg clears fast, unknown leg fails open); sail-guidance plays carry
+  `gate:"advisory"` (authored for a forecast leg but condition-driven — never gated).
   (A LoRA pass, if ever, comes after D with a rubric built on match quality.)
 
 ## 10. Honest limits

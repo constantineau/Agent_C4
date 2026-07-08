@@ -164,6 +164,12 @@
         recommendation: { action: "Off-book: commit right and lay the mark", vs_playbook: "departs", target_variant: null,
           reoptimize: "ready", urgency: "now", confidence: "med",
           rationale: "all three directional reads agree right and the situation has passed even the Right-start branch — sail the favoured side, onboard re-route ready" },
+        play_matches: [
+          { play_id: "shift_right_20", name: "Breeze 20°+ right of forecast", match: "strong", status: "armed",
+            why: "the persistent veer + 28° forecast drift are exactly this play's described bust" },
+          { play_id: "pressure_up", name: "More pressure than forecast", match: "partial", status: "quiet",
+            why: "breeze running ~2-3 kts over the frozen forecast, not yet sustained" },
+        ],
         reoptimize: { available: true, off_playbook: true, eta_min: 254, tacks: 9, sailed_nm: 46.2, avoids_islands: 2, avoids_zones: 1,
           marks: ["Cove Island", "Finish"], sail_plan: ["J1", "A3", "S2"], vs_playbook: { available: true, max_divergence_nm: 2.4, mean_divergence_nm: 0.9 } } },
     },
@@ -771,7 +777,7 @@
   function renderSynthesis() {
     const el = document.getElementById("stSyn");
     const s = currentSynthesis();
-    if (!s || s.available === false) { el.hidden = true; return; }
+    if (!s || s.available === false) { el.hidden = true; renderSynPlays({}); return; }
     el.hidden = false;
     el.className = "st-syn y-" + synthStatus(s);
     const rec = s.recommendation || {}, conc = s.concordance || {};
@@ -784,6 +790,29 @@
     const concEl = document.getElementById("stSynConc");
     const note = conc.note && conc.strength !== "none" ? conc.note : "";
     if (note) { concEl.hidden = false; concEl.textContent = note; } else concEl.hidden = true;
+    renderSynPlays(s);
+  }
+  /* Tier-2 ranked play matches (Playbook v2 Phase D): the copilot's LLM pattern-matches the live
+     picture against the play library narratives and the brief carries `play_matches` (validated
+     play ids only — the copilot drops inventions; the Tier-1 matcher status rides along). Names
+     resolve from the Tier-1 /plays payload; demo entries may carry their own `name`. */
+  function renderSynPlays(s) {
+    const el = document.getElementById("stSynPlays");
+    const pm = Array.isArray(s.play_matches) ? s.play_matches.slice(0, 3) : [];
+    if (!pm.length) { el.hidden = true; el.innerHTML = ""; return; }
+    const lib = {};
+    ((currentPlays() || {}).plays || []).forEach((p) => { lib[p.id] = p.name; });
+    el.hidden = false;
+    el.innerHTML = pm.map((m) => {
+      const name = stripTags(m.name || lib[m.play_id] || m.play_id);
+      const live = m.status === "armed" ? "armed" : m.status === "arming" ? "arming…" : "";
+      return '<div class="st-pm' + (m.match === "strong" ? " strong" : "") + '">' +
+        '<span class="st-pm-tag">' + (m.match === "strong" ? "◆" : "◇") + ' play</span> ' +
+        "<b>" + name + "</b>" +
+        '<i>' + (m.match || "partial") + " match" + (live ? " · " + live : "") + "</i>" +
+        (m.why ? '<span class="st-pm-why">' + stripTags(m.why) + "</span>" : "") +
+        "</div>";
+    }).join("");
   }
   /* the Strategy strip: the synthesis apex, the selector banner, then the deviation/drift triggers. */
   function renderStrategy() {
