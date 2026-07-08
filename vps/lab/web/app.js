@@ -1643,7 +1643,8 @@ async function fleetUploadEntry() {
 function epochToWall(e, tz) {
   if (e == null) return "";
   try {
-    const d = new Date(e * 1000);
+    // an SI extraction stores ISO local strings; the card writes epochs — render both
+    const d = typeof e === "string" ? new Date(e) : new Date(e * 1000);
     const p = {};
     new Intl.DateTimeFormat("en-CA", { timeZone: tz || undefined, hourCycle: "h23",
       year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })

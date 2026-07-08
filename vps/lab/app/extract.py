@@ -131,6 +131,9 @@ code fences). Fields:
   Capture safety/SER equipment, registration, navigation, and procedural items. Set
   deliver_to_ipad=true for race-time ACTION items the crew must do at a moment (e.g. nav lights at
   sunset, gate GPS photo, finish procedure / displaying numbers) and give them a trigger.
+- division_starts: {division id or name -> the division's WARNING/START gun as an ISO local
+  datetime "YYYY-MM-DDTHH:MM" (the race venue's local time)} — ONLY when the SIs/NOR state the
+  per-division start times; omit entirely when not stated. These drive corrected-time standings.
 - rules_profile: {rrs_edition, info_available_to_all_permitted (bool),
   customized_advice_while_underway_prohibited (bool), appendix_wp (bool),
   tracker_permitted (true/false/null), modifications:[{ref,rule,summary}],

@@ -999,8 +999,18 @@ async def save_race(body: dict):
             "reviewed": bool(definition.get("reviewed"))}
 
 
+# Fields OWNED by other tabs / built up over prep — a re-ingested draft (e.g. the SIs landing
+# ~race week) must not wipe them when the fresh extraction doesn't carry them.
+_PRESERVE_ON_SAVE = ("fleet", "own", "division_starts", "tracker", "learnings_notes")
+
+
 def _write_race(definition):
     rid = re.sub(r"[^a-z0-9_-]", "", str(definition.get("race_id", "")).lower())
+    prior = store.get_race(rid)
+    if prior:
+        for k in _PRESERVE_ON_SAVE:
+            if not definition.get(k) and prior.get(k):
+                definition[k] = prior[k]
     os.makedirs(INGESTED_DIR, exist_ok=True)
     with open(os.path.join(INGESTED_DIR, f"{rid}.json"), "w") as f:
         json.dump(definition, f, indent=2)

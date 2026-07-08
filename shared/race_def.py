@@ -385,6 +385,33 @@ def marks_with_side(definition: dict, course_id: str = None):
     return out
 
 
+def _gun_epoch(v, tz_name=""):
+    """A division gun as epoch seconds. Accepts an epoch number (the Lab guns card) or an ISO
+    local datetime string (the SI extraction), interpreted in the race venue's timezone when the
+    definition carries one (zoneinfo; naive/UTC fallback otherwise)."""
+    if v is None:
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        pass
+    try:
+        from datetime import datetime, timezone as _tz
+        dt = datetime.fromisoformat(str(v).strip().replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            if tz_name:
+                try:
+                    from zoneinfo import ZoneInfo
+                    dt = dt.replace(tzinfo=ZoneInfo(tz_name))
+                except Exception:
+                    dt = dt.replace(tzinfo=_tz.utc)
+            else:
+                dt = dt.replace(tzinfo=_tz.utc)
+        return dt.timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
 def fleet_blob(definition: dict, own: dict = None) -> dict:
     """Build the onboard fleet homework from a RaceDefinition: the competitor roster, the scoring
     flavor (ToT/ToD → corrected-time math), and the own boat's rating. This is the fleet counterpart
@@ -409,12 +436,11 @@ def fleet_blob(definition: dict, own: dict = None) -> dict:
     # per-division GUN TIMES (epoch s), entered in the Lab from the SIs — the elapsed-time term
     # that turns the onboard corrected deltas from remaining-race into FULL-RACE best estimates
     division_starts = {}
+    tz_name = definition.get("timezone") or ""
     for k, v in (definition.get("division_starts") or {}).items():
-        try:
-            if v is not None:
-                division_starts[str(k)] = float(v)
-        except (TypeError, ValueError):
-            continue
+        e = _gun_epoch(v, tz_name)
+        if e is not None:
+            division_starts[str(k)] = e
     return {"fleet": roster, "scoring": scoring, "own": own or definition.get("own") or {},
             "tracker": tracker, "division_starts": division_starts}
 
