@@ -13,6 +13,17 @@ rules that keep a remote session from stranding the boat.
 | **Cross-hop (the backup)** | from the Orin: `ssh sr33-pi@10.10.10.1` · from the Pi: `ssh agent-c4@10.10.10.2` | over the direct Pi↔Orin ethernet, ed25519 keys exchanged + verified 2026-07-08 — if ONE box drops off the tailnet, reach it through the other |
 | Last resort | the owner power-cycles | everything below is built to come back on its own |
 
+## Cold-start test — PASSED (real reboots, 2026-07-08)
+
+Both boxes were remotely rebooted one at a time and came back with **zero logins**:
+- **Orin**: reachable in ~40 s; ollama + copilot + tailscaled + docker all active; the copilot
+  immediately re-found the engine over the ethernet and its LLM; MAXN_SUPER persisted.
+- **Pi**: reachable in ~30 s; all five compose services auto-started; engine healthy; console
+  serving; the cross-hop to the Orin worked seconds after boot.
+
+So the owner's job really is just power: **plug in, walk away**. Power order between the two
+boxes (and Starlink) doesn't matter — everything reconnects when its counterpart appears.
+
 ## Already hardened (verified 2026-07-08)
 
 - **Tailscale key expiry: DISABLED on both nodes** — the classic silent killer for unattended
