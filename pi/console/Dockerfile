@@ -10,7 +10,8 @@ COPY pi/console/dashboard/ /usr/share/nginx/html/dashboard/
 COPY vps/lab/web/feedback.js /usr/share/nginx/html/dashboard/feedback.js
 # nginx template — stock entrypoint runs envsubst on ${COPILOT_UPSTREAM} at start.
 COPY pi/console/default.conf.template /etc/nginx/templates/default.conf.template
-# default if the env var is unset (the Orin's Tailscale IP on the bench; boat overrides it).
-ENV COPILOT_UPSTREAM=http://100.70.110.72:8300/
+# default if the env var is unset: the Orin over the direct Pi↔Orin ethernet (boat reality);
+# the bench overlay overrides to the Orin's Tailscale IP.
+ENV COPILOT_UPSTREAM=http://10.10.10.2:8300/
 
 EXPOSE 8091

@@ -8,6 +8,10 @@ services:
   signalk:
     entrypoint: /home/node/signalk/node_modules/.bin/signalk-server
     command: ["--sample-n2k-data"]
+  console:
+    environment:
+      # bench: no Pi↔Orin cable here — reach the real Orin over Tailscale
+      COPILOT_UPSTREAM: "http://100.70.110.72:8300/"
   archiver:
     environment:
       # bench: never prune — the replayed 2014-timestamped sample data would all be

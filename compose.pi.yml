@@ -161,7 +161,9 @@ services:
     environment:
       # Orin copilot upstream for the dashboard commentary (Tier 2). Bench default = the Orin's
       # Tailscale IP; on the boat set this to the Orin's boat-Wi-Fi address.
-      COPILOT_UPSTREAM: ${COPILOT_UPSTREAM:-http://100.70.110.72:8300/}
+      # the Orin over the DIRECT Pi↔Orin ethernet (10.10.10.0/24, plugged 2026-07-08) — no
+      # Wi-Fi/WAN dependency in-race; the bench overlay overrides to the Orin's Tailscale IP
+      COPILOT_UPSTREAM: ${COPILOT_UPSTREAM:-http://10.10.10.2:8300/}
     depends_on:
       - engine
     restart: unless-stopped
