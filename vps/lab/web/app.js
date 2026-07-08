@@ -359,49 +359,6 @@ function detailDelegated(d) {
     </div></div>`;
 }
 
-function detailChecklist(reqs) {
-  const ipad = reqs.filter((r) => r.deliver_to_ipad).length;
-  const rows = reqs.map((r, i) => detailReqRow(r, i)).join("");
-  return `<div class="card"><h3>Rules, Safety &amp; Checklists — ${reqs.length} items
-      (${ipad} pushed to the iPad)</h3>
-    ${rows || '<div class="muted">No checklist items.</div>'}
-    <button class="mini" onclick="detailAddReq()">+ Add item</button></div>`;
-}
-function detailReqRow(r, i) {
-  return `<div class="req edit"><div class="body">
-      ${etxt(`requirements.${i}.text`, r.text, "requirement text")}
-      <div class="reqmeta">
-        ${esel(`requirements.${i}.category`, r.category, REQ_CATEGORIES)}
-        ${esel(`requirements.${i}.phase`, r.phase, REQ_PHASES)}
-        ${esel(`requirements.${i}.trigger_type`, r.trigger_type || "none", TRIGGER_TYPES)}
-        ${ein(`requirements.${i}.trigger_detail`, r.trigger_detail, "trigger detail")}
-        ${echk(`requirements.${i}.critical`, r.critical, "critical")}
-        ${echk(`requirements.${i}.deliver_to_ipad`, r.deliver_to_ipad, "→iPad")}
-      </div>
-      ${ein(`requirements.${i}.source`, r.source, "source (NOR/SER §)")}</div>
-    <div class="pills"><button class="mini" title="remove" onclick="detailRmReq(${i})">✕</button></div></div>`;
-}
-function detailRules(rp) {
-  const mods = (rp.modifications || []).map((m, i) =>
-    `<tr><td>${ein(`rules_profile.modifications.${i}.ref`, m.ref, "ref")}</td>
-      <td>${ein(`rules_profile.modifications.${i}.rule`, m.rule, "rule")}</td>
-      <td>${ein(`rules_profile.modifications.${i}.summary`, m.summary, "modification")}</td>
-      <td><button class="mini" title="remove" onclick="detailRmMod(${i})">✕</button></td></tr>`).join("");
-  const sc = rp.scoring || {};
-  return `<div class="card"><h3>Rules &amp; scoring</h3>
-    <div class="reqmeta" style="margin-bottom:10px">
-      <label class="muted">RRS ${ein("rules_profile.rrs_edition", rp.rrs_edition, "edition")}</label>
-      ${echk("rules_profile.appendix_wp", rp.appendix_wp, "Appendix WP")}
-      <label class="muted">Tracker permitted ${etri("rules_profile.tracker_permitted", rp.tracker_permitted)}</label>
-    </div>
-    <table><thead><tr><th>Ref</th><th>Rule</th><th>Modification</th><th></th></tr></thead>
-      <tbody>${mods}</tbody></table>
-    <button class="mini" onclick="detailAddMod()">+ Add modification</button>
-    <div style="margin-top:12px"><b>Scoring:</b>
-      ${ein("rules_profile.scoring.system", sc.system, "system")}
-      ${ein("rules_profile.scoring.method", sc.method, "method")}
-      ${etxt("rules_profile.scoring.decided", sc.decided, "how / when decided")}</div></div>`;
-}
 function detailProvenance(p) {
   const srcs = (p.sources || []).map((s) =>
     `<li><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.label)}</a>
@@ -425,20 +382,6 @@ function detailRmMark(ci, mi) {
   marks.forEach((m, i) => { m.seq = i + 1; });   // re-sequence
   paintDetail();
 }
-function detailAddReq() {
-  (Lab.editDef.requirements = Lab.editDef.requirements || []).push(
-    { id: "req_" + Date.now(), text: "New requirement", category: "procedure", phase: "pre_start",
-      trigger_type: "none", critical: false, deliver_to_ipad: false, source: "" });
-  paintDetail();
-}
-function detailRmReq(i) { Lab.editDef.requirements.splice(i, 1); paintDetail(); }
-function detailAddMod() {
-  const rp = (Lab.editDef.rules_profile = Lab.editDef.rules_profile || {});
-  (rp.modifications = rp.modifications || []).push({ ref: "", rule: "", summary: "" });
-  paintDetail();
-}
-function detailRmMod(i) { Lab.editDef.rules_profile.modifications.splice(i, 1); paintDetail(); }
-
 async function detailSave(silent) {
   const btn = document.getElementById("detailSaveBtn");
   const setMsg = (t) => { const m = document.getElementById("detailMsg"); if (m) m.textContent = t; };

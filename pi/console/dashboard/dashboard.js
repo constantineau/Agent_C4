@@ -58,7 +58,6 @@
   const COPILOT = "/copilot";     // proxied to the Orin copilot (:8300); writes the commentary
   const BRIEF_EVERY = 90000;      // ask the LLM for a fresh brief ~every 90 s (it's slow, ~45 s)
   const BRIEF_TTL = 300;          // an LLM brief stays "fresh" 5 min before reverting to engine-read
-  const ADHERE_EVERY = 8000;      // poll the copilot's deterministic playbook-adherence ~every 8 s (cheap, no LLM)
   const DEV_EVERY = 5000;         // poll the ENGINE's deterministic route-deviation ~every 5 s (Tier-1, no LLM)
   const DRIFT_EVERY = 20000;      // poll forecast-drift ~every 20 s (slow-moving; Open-Meteo is cached ~30 min)
   const COACH_EVERY = 15000;      // poll the proactive auto-coach held state ~every 15 s (no recompute — the Orin timer drives it)
@@ -514,24 +513,20 @@
         consider: st === "ok" ? "Instruments healthy." : "Cross-check before trusting a lone reading.",
         clears: st === "ok" ? "—" : "all sources fresh", based: ["get_sources: " + count + " sources"], conf: "engine" };
     },
-    /* PLAYBOOK: are we on the frozen homework, and has a branch fired? Now driven by the engine's
+    /* PLAYBOOK: are we on the frozen homework, and has a branch fired? Driven by the engine's
        unified SELECTOR (Tier-1, always reachable — no Orin needed), so the tile and the Strategy-card
-       recommendation banner always agree. Falls back to the copilot /adherence read if the selector
-       isn't available yet. */
+       recommendation banner always agree. (The old copilot /adherence fallback is retired — the
+       selector has been the single source of truth since the tile was unified onto it.) */
     playbook() {
       const s = App.selector;
-      if (s && s.available !== false && s.action !== "na") {
-        const act = s.action, conf = s.confidence_label ? s.confidence_label + " conf" : "";
-        const sub = (act === "switch" ? "branch fired" : act === "off_script" ? "off the playbook" : "on plan")
-          + (conf ? " · " + conf : "");
-        return { status: s.status || "ok", value: s.value || "—", sub: sub, rows: s.rows || [],
-          why: s.why || "", consider: s.consider || "—", clears: s.clears || "—",
-          based: s.based || [], conf: "engine" };
-      }
-      const a = App.adherence;   // fallback: the copilot's wind-shift-only read
-      if (!a) return NA("loading playbook…");
-      if (a.available === false || a.status === "na") return NA(a.sub || a.why || "no playbook aboard");
-      return Object.assign({}, a);
+      if (!s) return NA("loading playbook…");
+      if (s.available === false || s.action === "na") return NA(s.why || s.value || "no playbook aboard");
+      const act = s.action, conf = s.confidence_label ? s.confidence_label + " conf" : "";
+      const sub = (act === "switch" ? "branch fired" : act === "off_script" ? "off the playbook" : "on plan")
+        + (conf ? " · " + conf : "");
+      return { status: s.status || "ok", value: s.value || "—", sub: sub, rows: s.rows || [],
+        why: s.why || "", consider: s.consider || "—", clears: s.clears || "—",
+        based: s.based || [], conf: "engine" };
     },
   };
 
@@ -588,25 +583,6 @@
       if (App.src === "live") render();
     }
     // deterministic / unreachable → leave the last brief to expire; the dashboard stays engine-read
-  }
-  /* poll the copilot's deterministic playbook-adherence read for the PLAYBOOK tile. Deterministic
-     (no LLM) so it's cheap to poll often; the copilot does the engine round-trip internally. A
-     failure leaves the last good read (or, on the very first failure, a clear "unreachable" na). */
-  async function fetchAdherence() {
-    if (App.src !== "live") return;
-    let r = null;
-    try {
-      const ctl = new AbortController();
-      const to = setTimeout(() => ctl.abort(), 12000);
-      const resp = await fetch(COPILOT + "/adherence", { headers: { Accept: "application/json" }, signal: ctl.signal });
-      clearTimeout(to);
-      r = resp.ok ? await resp.json() : null;
-    } catch (e) { r = null; }
-    if (r) App.adherence = r;
-    else if (!App.adherence) App.adherence = { available: false, status: "na", value: "—",
-      sub: "copilot unreachable", why: "The onboard copilot (:8300) is unreachable — playbook adherence needs it.",
-      consider: "—", clears: "—", based: [], conf: "engine" };
-    if (App.src === "live") render();
   }
   /* poll the proactive auto-coach: the Orin runs the narration engine on a timer and HOLDS the
      latest coach line; we just read it (no recompute) and show what the copilot last volunteered.
@@ -742,7 +718,7 @@
   }
   /* the in-race SYNTHESIS: the higher-order cross-signal read. Try the copilot's LLM-phrased brief
      (POST /copilot/strategy) when the Orin is up; fall back to the ENGINE's deterministic digest
-     (GET /strategy, always there on the Pi). Mirrors the playbook tile's /adherence→/selector fallback.
+     (GET /strategy, always there on the Pi). Mirrors the playbook tile's selector wiring.
      Own ~15 s cadence — it's a synthesis of the slower reads, no need to poll it fast. */
   async function fetchSynthesis() {
     if (App.src !== "live") return;
@@ -987,7 +963,7 @@
     openTile: null, streamTimer: null, pollTimer: null, seriesTimer: null, briefTimer: null,
     adhereTimer: null, coachTimer: null, devTimer: null, driftTimer: null, selTimer: null, polling: false,
     dwell: {}, data: null, windHist: [], fcstHist: [], seriesHist: [], lastPersist: 0, brief: null,
-    adherence: null, coach: null, deviation: null, forecastDrift: null, selector: null, reoptimize: null,
+    coach: null, deviation: null, forecastDrift: null, selector: null, reoptimize: null,
     detailStreamKey: null, detailAbort: null,
   };
   function currentData() {
@@ -1264,7 +1240,7 @@
   function briefMe() {
     const b = document.getElementById("briefBtn");
     b.classList.add("busy"); b.textContent = "thinking…";
-    if (App.src === "live") { poll(); fetchBrief(); fetchAdherence(); fetchCoach(); fetchDeviation(); fetchDrift(); fetchSelector(); fetchSynthesis(); fetchPlays(); }
+    if (App.src === "live") { poll(); fetchBrief(); fetchCoach(); fetchDeviation(); fetchDrift(); fetchSelector(); fetchSynthesis(); fetchPlays(); }
     // the LLM is slow (~45 s warm); clear the busy state on a timer — render() updates when it lands
     setTimeout(() => { b.classList.remove("busy"); b.textContent = "Brief me ↻"; if (App.src !== "live") render(); }, 1500);
   }
@@ -1280,8 +1256,6 @@
     App.seriesTimer = setInterval(fetchSeries, 30000);
     setTimeout(fetchBrief, 4000);   // first LLM commentary once tiles exist, then on a cadence
     App.briefTimer = setInterval(fetchBrief, BRIEF_EVERY);
-    fetchAdherence();               // playbook-adherence (deterministic, fast), then on its own cadence
-    App.adhereTimer = setInterval(fetchAdherence, ADHERE_EVERY);
     fetchCoach();                   // proactive auto-coach held state (no recompute), then on its own cadence
     App.coachTimer = setInterval(fetchCoach, COACH_EVERY);
     fetchDeviation();               // route-deviation (engine, deterministic), then on its own cadence

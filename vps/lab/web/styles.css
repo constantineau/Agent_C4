@@ -115,16 +115,12 @@ th { color: var(--muted); font-weight: 600; font-size: 12px; }
 .need { color: var(--warn); }
 
 /* checklist */
-.phasegrp { margin-bottom: 14px; }
-.phasegrp h4 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .05em;
-  color: var(--accent); }
 .req { display: flex; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
 .req .body { flex: 1; }
 .req .src { color: var(--muted); font-size: 11px; }
 .tag { font-size: 10px; padding: 1px 7px; border-radius: 5px; white-space: nowrap; height: fit-content; }
 .tag.ipad { background: rgba(54,179,255,.15); color: var(--ipad); border: 1px solid var(--ipad); }
 .tag.crit { background: rgba(255,128,66,.14); color: var(--crit); border: 1px solid var(--crit); }
-.tag.cat { background: var(--panel2); color: var(--muted); border: 1px solid var(--line); }
 
 /* ---------- ingestion panel ---------- */
 .ing-row { display: flex; gap: 6px; margin-bottom: 8px; align-items: center; }
@@ -314,13 +310,13 @@ a.mini { text-decoration: none; display: inline-block; }
 /* Sail badges + crossover bands + polar grid (routing fidelity 2b) */
 .sail { font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 5px; color: #04121f;
   background: var(--muted); display: inline-block; }
-.sail-J1, .sail-bg-J1 { background: #36b3ff; }      /* J1 — blue */
-.sail-J2, .sail-bg-J2 { background: #66a9e0; }      /* J2 — mid blue */
-.sail-J3, .sail-bg-J3 { background: #9b8cff; }      /* J3 — indigo */
-.sail-C0, .sail-bg-C0 { background: #4dd6c9; }      /* Code 0 — teal (light-air reacher) */
-.sail-A2, .sail-bg-A2 { background: #7ee0a8; }      /* A2 — green */
-.sail-A3, .sail-bg-A3 { background: #f5c451; }      /* A3 — amber */
-.sail-S2, .sail-bg-S2 { background: #ff8042; }      /* S2 — orange */
+.sail-bg-J1 { background: #36b3ff; }      /* J1 — blue */
+.sail-bg-J2 { background: #66a9e0; }      /* J2 — mid blue */
+.sail-bg-J3 { background: #9b8cff; }      /* J3 — indigo */
+.sail-bg-C0 { background: #4dd6c9; }      /* Code 0 — teal (light-air reacher) */
+.sail-bg-A2 { background: #7ee0a8; }      /* A2 — green */
+.sail-bg-A3 { background: #f5c451; }      /* A3 — amber */
+.sail-bg-S2 { background: #ff8042; }      /* S2 — orange */
 .jib-edit { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin: 8px 0 4px;
   font-size: 12px; color: var(--muted); }
 .jib-edit label { display: flex; gap: 5px; align-items: center; }

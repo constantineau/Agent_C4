@@ -243,20 +243,6 @@ def get_polars(race_id):
                  "WHERE race_id=?", (race_id,))
 
 
-def get_runs(race_id, team_id=None, kind=None):
-    q, args = "SELECT id, race_id, team_id, created_at, kind, config_json FROM runs WHERE race_id=?", [race_id]
-    if team_id is not None:
-        q += " AND team_id=?"; args.append(team_id)
-    if kind:
-        q += " AND kind=?"; args.append(kind)
-    return _rows(q, tuple(args))
-
-
-def get_run_result(run_id):
-    r = _rows("SELECT result_json FROM runs WHERE id=?", (run_id,))
-    return json.loads(r[0]["result_json"]) if r else None
-
-
 def get_scores(race_id):
     return _rows("SELECT * FROM scores WHERE race_id=?", (race_id,))
 
