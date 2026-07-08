@@ -1638,6 +1638,48 @@ async function fleetUploadEntry() {
   Lab.fleetBusy = false; paintFleet();
 }
 
+/* Division GUN TIMES (from the SIs, race morning) — the elapsed-time term that makes the
+   onboard corrected standings a FULL-race estimate. Rides fleet_blob → POST /fleet/load. */
+function epochToWall(e, tz) {
+  if (e == null) return "";
+  try {
+    const d = new Date(e * 1000);
+    const p = {};
+    new Intl.DateTimeFormat("en-CA", { timeZone: tz || undefined, hourCycle: "h23",
+      year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })
+      .formatToParts(d).forEach((x) => { p[x.type] = x.value; });
+    return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}`;
+  } catch (err) { return ""; }
+}
+function fleetGunSet(div, val) {
+  const m = (val || "").match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+  const ds = (Lab.editDef.division_starts = Lab.editDef.division_starts || {});
+  if (!m) { delete ds[div]; }
+  else {
+    const [, y, mo, d, h, mi] = m.map(Number);
+    const tz = Lab.editDef.timezone || "";
+    ds[div] = tz ? zonedWallToEpoch(y, mo, d, h, mi, tz)
+                 : new Date(y, mo - 1, d, h, mi).getTime() / 1000;
+  }
+  Lab.fleetDirty = true;
+  paintFleet();
+}
+function fleetGunsCard(roster, own) {
+  const divs = [...new Set([(own.division || ""), ...roster.map((e) => e.division || "")]
+    .map((d) => d.trim()).filter(Boolean))].sort();
+  if (!divs.length) return "";
+  const ds = Lab.editDef.division_starts || {};
+  const tz = Lab.editDef.timezone || "";
+  const set = divs.filter((d) => ds[d] != null).length;
+  const rows = divs.map((d) => `<label style="margin-right:14px">${esc(d)}${(own.division || "").trim() === d ? " ◆" : ""}
+    <input type="datetime-local" value="${epochToWall(ds[d], tz)}" onchange="fleetGunSet('${esc(d)}', this.value)"></label>`).join("");
+  return `<div class="card">
+    <h3>Division gun times <span class="muted" style="font-weight:400">— from the SIs (race morning) · ${set}/${divs.length} set</span></h3>
+    <div class="muted" style="font-size:12px;margin-bottom:8px">The elapsed-time term that turns the onboard corrected standings into a <b>full-race</b> best estimate (without these the boat falls back to the ⏺ race-log start — approximate for staggered divisions — or remaining-race deltas). Times are ${tz ? "race-local (" + esc(tz) + ")" : "in this browser's timezone"}. Save roster to persist.</div>
+    <div class="opt-controls">${rows}</div>
+  </div>`;
+}
+
 async function fleetFindOrc(i) {
   const e = (Lab.editDef.fleet || [])[i];
   if (!e) return;
@@ -1767,6 +1809,8 @@ function paintFleet() {
         <label>MMSI ${inp(own.mmsi, "MMSI", "fleetOwnSet('mmsi',this.value)", 100)}</label>
       </div>
     </div>
+
+    ${fleetGunsCard(roster, own)}
 
     <div class="card">
       <h3>Auto-import from public data <span class="muted" style="font-weight:400">— entry list (YB) + ORC handicaps</span></h3>

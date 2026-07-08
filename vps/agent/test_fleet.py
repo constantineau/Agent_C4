@@ -228,4 +228,40 @@ check("own_rank summary sane", own_rank["of"] == 4 and own_rank["unranked"] == 1
 check("live AIS row is NOT dead-reckoned", by["Il Mostro"]["dtf_nm"] == 40.0
       and "dr_nm" not in by["Il Mostro"])
 print("RESULT-S:", "PASS" if ok else "FAIL")
+
+print("G) FULL-race corrected basis — gun times make it a true standings estimate (2026-07-08)")
+# ToT: same speed/position, 24h elapsed — the E×ΔToT term must appear (it's hours, not noise)
+them = {"boat": "X", "rating": 1.10}
+E = 24 * 3600.0
+d_rem, basis_rem, _ = F._corrected_delta(them, "tot", False, 30.0, 30.0, 6.0, 6.0, 0.96, None)
+d_full, basis_full, _ = F._corrected_delta(them, "tot", False, 30.0, 30.0, 6.0, 6.0, 0.96, None,
+                                           e_them=E, e_us=E, course_nm=200.0)
+check("bases labeled", basis_rem == "remaining" and basis_full == "full")
+# expected full-vs-remaining difference = E × (1.10 − 0.96) = 12096 s
+check("elapsed term present (E×ΔToT ≈ 3.4 h)", abs((d_full - d_rem) - E * (1.10 - 0.96)) < 1)
+# staggered guns: they started 600 s after us → their elapsed is less → they gain 600×ToT
+d_stag, _, _ = F._corrected_delta(them, "tot", False, 30.0, 30.0, 6.0, 6.0, 0.96, None,
+                                  e_them=E - 600, e_us=E, course_nm=200.0)
+check("staggered gun shifts the delta by gun-diff × their ToT",
+      abs((d_full - d_stag) - 600 * 1.10) < 1)
+# ToD full: allowance owed on the WHOLE course, elapsed cancels for a same-gun pair
+tod_them = {"boat": "Y", "orc_gph": 660.0}
+d_tod, b_tod, _ = F._corrected_delta(tod_them, "time-on-distance", True, 30.0, 30.0, 6.0, 6.0,
+                                     1.0, 600.0 / 3600.0 * 6.0 and 640.0, e_them=E, e_us=E,
+                                     course_nm=200.0)
+check("ToD full basis labeled", b_tod == "full")
+
+print("H) gun resolver — SIs beat the session; session flagged approximate")
+gf, src, approx = F._gun_resolver({"division_starts": {"B": 1000.0, "I": 1600.0}})
+check("division_starts exact per division", src == "division_starts"
+      and gf("B") == 1000.0 and gf("I") == 1600.0)
+F._session_gun_orig = F._session_gun
+F._session_gun = lambda: 2000.0
+gf, src, approx = F._gun_resolver({})
+check("session fallback for ALL divisions, flagged approx",
+      src == "session" and approx and gf("B") == 2000.0 == gf("I"))
+gf2, _, _ = F._gun_resolver({"division_starts": {"B": 1000.0}})
+check("unknown division falls to the session gun", gf2("B") == 1000.0 and gf2("Z") == 2000.0)
+F._session_gun = F._session_gun_orig
+print("RESULT-G/H:", "PASS" if ok else "FAIL")
 import sys; sys.exit(0 if ok else 1)

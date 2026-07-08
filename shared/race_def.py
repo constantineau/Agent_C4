@@ -406,8 +406,17 @@ def fleet_blob(definition: dict, own: dict = None) -> dict:
     tracker = dict(definition.get("tracker") or {})
     if tracker:
         tracker["permitted"] = bool(rp.get("tracker_permitted"))   # per-race gate is authoritative
+    # per-division GUN TIMES (epoch s), entered in the Lab from the SIs — the elapsed-time term
+    # that turns the onboard corrected deltas from remaining-race into FULL-RACE best estimates
+    division_starts = {}
+    for k, v in (definition.get("division_starts") or {}).items():
+        try:
+            if v is not None:
+                division_starts[str(k)] = float(v)
+        except (TypeError, ValueError):
+            continue
     return {"fleet": roster, "scoring": scoring, "own": own or definition.get("own") or {},
-            "tracker": tracker}
+            "tracker": tracker, "division_starts": division_starts}
 
 
 if __name__ == "__main__":

@@ -17,6 +17,7 @@ laggy), name/MMSI matching is imperfect, and corrected-time is a projection — 
 carries a confidence and the gaps are stated honestly. Treat as soft signals, never gospel.
 """
 import math
+import time
 import os
 import re
 
@@ -133,7 +134,7 @@ def _active_route():
 
 
 def _fleet_row(entry, obj, matched_by, mconf, source, pts, origin, own, own_dtf,
-               method, is_tod, own_tot, own_alw, age_s=None):
+               method, is_tod, own_tot, own_alw, age_s=None, corr=None):
     """Build one matched-competitor row from a position-bearing object `obj` (lat/lon/sog/cog/mmsi).
     Shared by the live-AIS and the delayed-tracker paths so the geometry + corrected-time + confidence
     math is identical. `source` = 'ais' (own receiver, real-time) | 'tracker' (delayed, aged); a tracker
@@ -156,8 +157,13 @@ def _fleet_row(entry, obj, matched_by, mconf, source, pts, origin, own, own_dtf,
         row["leverage_nm"] = round(lev, 2) if lev is not None else None
         if own_dtf is not None and dtf is not None:
             row["on_water_lead_nm"] = round(own_dtf - dtf, 2)   # + = they're ahead on the water
+    c = corr or {}
+    gun = c.get("gun_for", lambda d: None)(entry.get("division"))
+    e_them = (c["now"] - gun) if (gun and c.get("now")) else None
     cdelta, basis, _ = _corrected_delta(entry, method, is_tod, dtf, own_dtf,
-                                        obj.get("sog"), own.get("sog"), own_tot, own_alw)
+                                        obj.get("sog"), own.get("sog"), own_tot, own_alw,
+                                        e_them=e_them, e_us=c.get("e_us"),
+                                        course_nm=c.get("course_nm"))
     if cdelta is not None:
         row["corrected_delta_s"] = round(cdelta)
         row["corrected_basis"] = basis
@@ -213,6 +219,22 @@ def get_fleet(max_range_nm: float = 40.0):
         oe, on = _nm(origin[0], origin[1], own["lat"], own["lon"])
         own_dtf, own_lev, _ = _course_progress(oe, on, pts)
 
+    # elapsed-time context: division guns (SIs) / the race-log session → FULL-race corrected
+    # (the best estimate); no gun anywhere → remaining-race basis, flagged
+    gun_for, gun_source, gun_approx = _gun_resolver(blob)
+    now = time.time()
+    own_gun = gun_for(own_cfg.get("division"))
+    course_nm = sum(math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1])
+                    for i in range(len(pts) - 1)) if pts else None
+    corr = {"now": now, "gun_for": gun_for,
+            "e_us": (now - own_gun) if own_gun else None, "course_nm": course_nm}
+    if corr["e_us"] is None:
+        gaps.append("no gun time known (division_starts not loaded, no race session running) — "
+                    "corrected deltas are REMAINING-race only, not full standings")
+    elif gun_source == "session" and gun_approx:
+        gaps.append("gun = the race-log session start applied to ALL divisions — approximate for "
+                    "staggered starts (load division_starts from the SIs for exact)")
+
     fleet, unmatched = [], []
     for r in raw:
         entry, matched_by, mconf = _match(r, roster)
@@ -220,12 +242,13 @@ def get_fleet(max_range_nm: float = 40.0):
             unmatched.append(r)                  # keep the full target for tracker identity-resolution
             continue
         row, _ = _fleet_row(entry, {**r, "_posconf": 1.0}, matched_by, mconf, "ais",
-                            pts, origin, own, own_dtf, method, is_tod, own_tot, own_alw)
+                            pts, origin, own, own_dtf, method, is_tod, own_tot, own_alw,
+                            corr=corr)
         fleet.append(row)
 
     # --- public race tracker: a permitted, DELAYED, over-the-horizon source ----------------------
     tk_status = _merge_tracker(blob, roster, fleet, unmatched, pts, origin, own, own_dtf,
-                               method, is_tod, own_tot, own_alw, gaps)
+                               method, is_tod, own_tot, own_alw, gaps, corr=corr)
 
     # unmatched targets that the tracker couldn't identify stay in the collision layer (a light passthrough)
     traffic = [{"mmsi": r.get("mmsi"), "name": r.get("name"),
@@ -235,12 +258,14 @@ def get_fleet(max_range_nm: float = 40.0):
     fleet.sort(key=lambda x: (abs(x.get("corrected_delta_s", 1e9)),
                               _SRC_RANK.get(x.get("source"), 9), x.get("range_nm", 1e9)))
     standings, own_rank = _standings(roster, fleet, own_cfg, own_dtf, own.get("sog"),
-                                     method, is_tod, own_tot, own_alw)
+                                     method, is_tod, own_tot, own_alw, corr=corr)
     return {
         "available": True,
         "scoring_method": scoring.get("method") or ("Time-on-Distance" if is_tod else "Time-on-Time"),
         "roster_size": len(roster),
         "standings": standings, "own_rank": own_rank,
+        "corrected_basis": "full" if corr.get("e_us") is not None else "remaining",
+        "gun_source": gun_source,
         "own_division": (own_cfg.get("division") or "").strip() or None,
         "own": {"dtf_nm": round(own_dtf, 2) if own_dtf is not None else None,
                 "leverage_nm": round(own_lev, 2) if own_lev is not None else None,
@@ -257,7 +282,7 @@ def get_fleet(max_range_nm: float = 40.0):
 
 
 def _standings(roster, fleet_rows, own_cfg, own_dtf, own_sog, method, is_tod,
-               own_tot, own_alw):
+               own_tot, own_alw, corr=None):
     """WHOLE-FLEET ranked standings estimate (the FLEET tile's view). Every roster boat gets its
     best-available position (own AIS live · public-tracker fix aged · DEAD-RECKONED forward from
     that fix at its observed pace, falling back to our pace scaled by the handicap ratio) and a
@@ -305,8 +330,13 @@ def _standings(roster, fleet_rows, own_cfg, own_dtf, own_sog, method, is_tod,
                     row["dr_nm"] = round(adv, 2)
                     if own_dtf is not None:
                         row["on_water_lead_nm"] = round(own_dtf - est, 2)
+                    c = corr or {}
+                    gun = c.get("gun_for", lambda d: None)(e.get("division"))
+                    e_them = (c["now"] - gun) if (gun and c.get("now")) else None
                     cd, basis, _ = _corrected_delta(e, method, is_tod, est, own_dtf,
-                                                    pace, own_sog, own_tot, own_alw)
+                                                    pace, own_sog, own_tot, own_alw,
+                                                    e_them=e_them, e_us=c.get("e_us"),
+                                                    course_nm=c.get("course_nm"))
                     if cd is not None:
                         row["corrected_delta_s"] = round(cd)
         else:
@@ -331,6 +361,36 @@ def _standings(roster, fleet_rows, own_cfg, own_dtf, own_sog, method, is_tod,
     return ranked + unranked, own_rank
 
 
+def _session_gun():
+    """The active race-log session's start (kind=race) — the onboard fallback gun when the SIs'
+    division starts haven't been loaded. Cloud datasource has no sessions → None."""
+    try:
+        src = datasource.active()
+        if hasattr(src, "session_current"):
+            cur = src.session_current()
+            if cur and cur.get("kind") == "race":
+                return cur.get("start_ts")
+    except Exception:
+        pass
+    return None
+
+
+def _gun_resolver(blob):
+    """(gun_for(division) → epoch|None, own_gun, approx: bool, source: str|None). Priority:
+    the blob's division_starts (SIs, exact per division) → the race-log session start applied to
+    EVERY division (approximate for staggered guns — flagged)."""
+    ds = {str(k).strip().lower(): v for k, v in (blob.get("division_starts") or {}).items()}
+    session = _session_gun()
+    if ds:
+        def gun_for(div):
+            g = ds.get((div or "").strip().lower())
+            return g if g is not None else session
+        return gun_for, "division_starts", bool(session)
+    if session:
+        return (lambda div: session), "session", True
+    return (lambda div: None), None, False
+
+
 def _num_or_none(v):
     try:
         return float(v) if v is not None else None
@@ -339,7 +399,7 @@ def _num_or_none(v):
 
 
 def _merge_tracker(blob, roster, fleet, unmatched, pts, origin, own, own_dtf,
-                   method, is_tod, own_tot, own_alw, gaps):
+                   method, is_tod, own_tot, own_alw, gaps, corr=None):
     """Fold a permitted public race tracker into the fleet view. Two uses (perflab item-6): (a) IDENTITY
     — resolve an unmatched AIS target to a roster boat by proximity to that boat's tracker fix (fills the
     AIS↔roster MMSI-match gap); (b) OVER-THE-HORIZON — add roster boats seen on the tracker but not on
@@ -383,7 +443,8 @@ def _merge_tracker(blob, roster, fleet, unmatched, pts, origin, own, own_dtf,
             # a LIVE AIS position with an identity borrowed from the tracker → source stays 'ais',
             # confidence reduced for the fuzzy position match
             row, _ = _fleet_row(resolved, {**r, "_posconf": 0.6}, "tracker_position", 0.5, "ais",
-                                pts, origin, own, own_dtf, method, is_tod, own_tot, own_alw)
+                                pts, origin, own, own_dtf, method, is_tod, own_tot, own_alw,
+                                corr=corr)
             row["note"] = "identity from tracker (position match)"
             fleet.append(row)
             have.add(_norm(resolved["boat"]))
@@ -398,17 +459,24 @@ def _merge_tracker(blob, roster, fleet, unmatched, pts, origin, own, own_dtf,
         obj = {"lat": fx["lat"], "lon": fx["lon"], "sog": fx.get("sog"), "cog": fx.get("cog"),
                "mmsi": None, "_posconf": fx["confidence"]}
         row, _ = _fleet_row(e, obj, "tracker_name", 0.7, "tracker", pts, origin, own, own_dtf,
-                            method, is_tod, own_tot, own_alw, age_s=fx["age_s"])
+                            method, is_tod, own_tot, own_alw, age_s=fx["age_s"], corr=corr)
         fleet.append(row)
         have.add(_norm(e["boat"]))
     return status
 
 
-def _corrected_delta(entry, method, is_tod, dtf, own_dtf, sog, own_sog, own_tot, own_alw):
+def _corrected_delta(entry, method, is_tod, dtf, own_dtf, sog, own_sog, own_tot, own_alw,
+                     e_them=None, e_us=None, course_nm=None):
     """Projected corrected-time delta of `entry` vs own boat, in seconds. Negative = the competitor
-    is projected to BEAT us (less corrected time); positive = we beat them. Basis 'remaining' = only
-    the part of the race still in play (no race-start time needed; the locked-in elapsed can't change
-    the tactical picture). Returns (delta_s, basis, confidence) or (None, None, 0)."""
+    is projected to BEAT us (less corrected time); positive = we beat them.
+
+    Basis **'full'** (the BEST ESTIMATE of finish corrected time — used whenever elapsed times are
+    known from the division gun times / the race-log session): corrected = (elapsed + projected
+    time-to-finish) × ToT, or elapsed + ttf − allowance × the FULL course length for ToD. The
+    elapsed term matters: over a long race, E × (their ToT − ours) is hours of corrected time.
+
+    Basis 'remaining' (fallback, no gun known) = only the race still in play.
+    Returns (delta_s, basis, confidence) or (None, None, 0)."""
     if dtf is None or own_dtf is None:
         return None, None, 0.0
     # project time-to-finish from each boat's speed made good toward the finish (fuzzy: use SOG)
@@ -418,19 +486,25 @@ def _corrected_delta(entry, method, is_tod, dtf, own_dtf, sog, own_sog, own_tot,
         return None, None, 0.0
     ttf_them = dtf / v_them * 3600.0          # s
     ttf_us = own_dtf / v_us * 3600.0
+    full = e_them is not None and e_us is not None
     if is_tod:
         alw = _allowance_s_per_nm(entry)
         if alw is None or own_alw is None:
             return None, None, 0.0
-        # ToD: corrected = elapsed − allowance·distance. Over the REMAINING course each boat owes its
-        # allowance on the miles still to sail; delta_remaining = (ttf_them − alw·dtf) − (ttf_us − alw_us·own_dtf)
+        if full and course_nm:
+            # ToD full: corrected = (elapsed + ttf) − allowance × the whole course
+            corr_them = (e_them + ttf_them) - alw * course_nm
+            corr_us = (e_us + ttf_us) - own_alw * course_nm
+            return corr_them - corr_us, "full", 0.65
+        # remaining: each boat owes its allowance on the miles still to sail
         corr_them = ttf_them - alw * dtf
         corr_us = ttf_us - own_alw * own_dtf
         return corr_them - corr_us, "remaining", 0.6
-    # ToT: corrected = elapsed × coeff. Remaining-corrected = ttf × coeff.
     tot_them = _tot_coeff(entry, method)
     if tot_them is None:
         return None, None, 0.0
+    if full:
+        return (e_them + ttf_them) * tot_them - (e_us + ttf_us) * own_tot, "full", 0.65
     return ttf_them * tot_them - ttf_us * own_tot, "remaining", 0.6
 
 
