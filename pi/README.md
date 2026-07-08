@@ -20,7 +20,7 @@ Stack (brief §4):
 | Local archive| `archiver/archiver.py` → SQLite   | full-resolution onboard log (every delta); `backfill.py` → VPS post-passage |
 | Uplink       | `uplink/uplink.py` (compose svc)  | 15-s aggregates → VPS; disk-backed queue replays on link loss |
 | Onboard engine | `engine/` (Tier 1, 9.1) → :8200 | the deterministic modules run here from the boat's own data (`OnboardSource`) — no LLM, legal in-race |
-| Race console | `console/` (9.2) → :8091          | the iPad app served from the Pi, pointed only at the engine over boat-local Wi-Fi (no cloud) |
+| Race console | `console/` (9.2) → :8091          | the iPad app served from the Pi, pointed only at the engine (no cloud); `/copilot/*` proxies to the Orin over the direct ethernet |
 | Remote admin | Tailscale                         | SSH through CGNAT |
 
 **Portability rule:** the ONLY bench↔boat difference is `CAN_IFACE` (`vcan0` vs `can0`).

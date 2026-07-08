@@ -139,6 +139,23 @@ model. A monitor will show only a text `agent-c4 login:` on tty1 — that's expe
 
 ---
 
+## 5a. Networking — the direct Pi↔Orin ethernet (in-race primary, live 2026-07-08)
+
+A dedicated cable links the two boxes — the in-race data path with **no Wi-Fi or WAN
+dependency**: Pi `eth0` = **10.10.10.1/24** ↔ Orin `enP8p1s0` = **10.10.10.2/24** (static,
+no DHCP on the link). Measured at bring-up: 0% loss, ~0.28 ms RTT both directions; the
+engine answers over the cable in ~4 ms.
+
+Who uses it:
+- the copilot's engine client (`ENGINE_URL=http://10.10.10.1:8200`, with `ENGINE_URL_FALLBACK`
+  for Tailscale/dev — boat-local-first failover, 2026-07-07);
+- the Pi console's `/copilot/*` proxy (the iPad's route to the Orin):
+  `COPILOT_UPSTREAM=http://10.10.10.2:8300/` (compose default; the bench overlay overrides to
+  the Tailscale IP below — no cable on the VPS).
+
+So the full in-race loop (iPad → Pi console → Orin copilot → Pi engine) rides boat-local
+wire + Wi-Fi only, and the engine↔copilot leg survives a boat-AP failure outright.
+
 ## 5. Networking — Tailscale infrastructure
 
 The Orin has **no public IP** and moves between home / boat networks, so access is over a

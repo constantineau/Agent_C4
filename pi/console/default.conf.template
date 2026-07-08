@@ -3,8 +3,9 @@
 # (host networking; avoids :80 conflicts on the shared bench VM and is fine on the boat).
 #
 # nginx template: ${COPILOT_UPSTREAM} is substituted at container start (stock nginx envsubst).
-# On the boat the copilot runs on the ORIN (a separate box) — set COPILOT_UPSTREAM to the Orin's
-# boat-Wi-Fi address; on the bench it's the Orin's Tailscale IP. The engine is on this host (:8200).
+# On the boat the copilot runs on the ORIN, reached over the DIRECT Pi↔Orin ethernet
+# (default http://10.10.10.2:8300/ — no Wi-Fi/WAN dependency); the bench overlay overrides to
+# the Orin's Tailscale IP. The engine is on this host (:8200).
 server {
     listen 8091;
     server_name _;

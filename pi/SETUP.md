@@ -119,7 +119,9 @@ docker logs -f sr33-pi-archiver-1                   # full-res rows landing in t
 In a race the iPad joins the **boat-local Wi-Fi** (no WAN) and opens
 `http://sr33-pi:8091/dashboard/` (or the Pi's LAN IP) — the console talks only to the onboard
 engine, never the cloud (RRS-41-clean). The optional Orin copilot (Tier 2) runs on a second box on
-the same boat-local network; point the console's `COPILOT_UPSTREAM` at the Orin's boat-Wi-Fi address.
+the same boat-local network. The console reaches the Orin over the **direct Pi↔Orin ethernet**
+(`COPILOT_UPSTREAM` defaults to `http://10.10.10.2:8300/`; Pi eth0 = 10.10.10.1, Orin enP8p1s0 =
+10.10.10.2 — statically addressed, no DHCP on the link).
 
 ## 8. Updating later
 

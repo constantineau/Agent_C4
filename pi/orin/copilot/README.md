@@ -3,7 +3,8 @@
 The **SR33 copilot service** — the next 9.4 increment after the runtime bring-up. It turns the
 Tier-1 engine's facts (and, later, the frozen playbook) into **bounded, grounded decision
 support** via the local LLM. Runs **on the Orin**, talks to the Pi-4 engine over boat-local
-Wi-Fi and to the LLM over localhost. RRS-41-safe: never phones the cloud (the real line — an off-boat
+Wi-Fi — primarily over the DIRECT Pi↔Orin ethernet (ENGINE_URL http://10.10.10.1:8200, with
+`ENGINE_URL_FALLBACK` for Tailscale/dev) — and to the LLM over localhost. RRS-41-safe: never phones the cloud (the real line — an off-boat
 round-trip is the violation). It never originates strategy (descope 2026-07-06, `docs/PLAYBOOK_V2.md`
 §7): it narrates the engine's reads and MATCHES the live situation against the pre-authored playbook;
 the engine does the math and it grounds every claim in engine facts + the playbook.

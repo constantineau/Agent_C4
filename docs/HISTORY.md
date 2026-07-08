@@ -174,6 +174,15 @@ and the per-component READMEs. Detailed design rationale for the big arcs is in 
 - **ORC ratings**: multi-country enrich (USA+CAN in one pass) + a per-boat fuzzy
   cert-candidate picker for unrated roster boats.
 
+## 2026-07-08 (evening) — the Pi↔Orin ethernet goes live
+
+- The direct cable was plugged (both ends pre-addressed: Pi eth0 10.10.10.1 ↔ Orin enP8p1s0
+  10.10.10.2): sub-millisecond RTT, the engine answers the Orin in ~4 ms. The console's
+  `/copilot/*` proxy default moved off the Orin's Tailscale address (a hidden WAN dependency)
+  onto the cable — the whole in-race loop (iPad → Pi console → Orin copilot → Pi engine) now
+  runs on boat-local wire + Wi-Fi with no WAN anywhere, and the engine↔copilot leg survives
+  even a boat-AP failure.
+
 ## Standing decisions (still binding)
 
 - **RRS 41 bright line**: all frontier/cloud work pre-start, frozen at the gun; in-race =

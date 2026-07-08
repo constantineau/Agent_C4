@@ -25,7 +25,9 @@ computation is separated from the LLM across three tiers:
   archive + an uplink push 15-s aggregates to the cloud; the deterministic modules
   (navigator/routing/tactics/sails/fatigue/AIS/fleet/deviation/drift/selector/reoptimize/
   strategy/matcher — plain physics, no LLM) run here, legal in-race. The iPad talks to the
-  Pi over boat-local Wi-Fi in race mode.
+  Pi over boat-local Wi-Fi in race mode; the Pi and the Orin also share a DIRECT ethernet
+  link (10.10.10.1 ↔ 10.10.10.2, plugged 2026-07-08) so the engine↔copilot leg has no Wi-Fi
+  dependency at all.
 - **Tier 2 — onboard LLM copilot (Jetson Orin Nano 8GB):** Qwen2.5-7B via Ollama narrates
   the engine's facts and **condition-matches** the live picture against the pre-authored
   playbook. **It never originates strategy** (product decision 2026-07-06,
@@ -41,7 +43,7 @@ computation is separated from the LLM across three tiers:
   NMEA2000 → Pi4: SignalK + archive + uplink ──telemetry push──► ingestion → TimescaleDB
               │  + ONBOARD ENGINE (T1, no LLM)                         │  → agent (Opus, RACE-GATED)
               │  + Orin LLM copilot (T2)        ◄──playbook (frozen────┤  → alerting/summarizer → web
-   iPad ──boat-local Wi-Fi──┘                       at the gun)        ▼
+   iPad ──boat-local Wi-Fi──┘  Pi═══ethernet═══Orin     at the gun)        ▼
    public data IN: GRIB + NOAA/GLOS buoys (avail. to all)         C4 PERFORMANCE LAB (T3):
                                                                   studio→playbook · learning→polars
 ```
@@ -246,7 +248,9 @@ tok/s, 100% GPU, systemd-persistent appliance. (The original MLC-on-:9000 plan i
 superseded history — `pi/orin/SETUP.md`/`models.md` are kept but marked.) The copilot only
 sees the OpenAI contract, so the runtime stays swappable.
 
-**Copilot service** (`pi/orin/copilot/`, **:8300**): `GET /health · GET /tools · POST
+**Copilot service** (`pi/orin/copilot/`, **:8300**; reached from the iPad via the console's
+`/copilot/*` proxy, which rides the **direct Pi↔Orin ethernet** — `COPILOT_UPSTREAM` defaults
+to `http://10.10.10.2:8300/`, the bench overlay overrides to the Orin's Tailscale IP): `GET /health · GET /tools · POST
 /brief · POST /narrate · POST /narrate/reset · GET /coach · GET /adherence · GET /snapshot
 · POST /strategy · POST /dashboard · POST /detail`. Guardrails are structural: a closed set
 of read-only engine-fact tools; every factor/recommendation must be `grounded_in` a tool
