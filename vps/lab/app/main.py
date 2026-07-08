@@ -17,6 +17,7 @@ import re
 from fastapi import FastAPI, Request, UploadFile, File
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -26,6 +27,10 @@ from . import auth, store, extract, boats, labstate, feedback, pbstore, deploy, 
 INGESTED_DIR = os.environ.get("INGESTED_DIR", "/srv/ingested")
 
 app = FastAPI(title="C4 Performance Lab", version="0.1.0")
+
+# gzip the static shell + JSON responses (app.js alone is ~175 KB raw / ~49 KB gzipped — the Lab
+# is used over hotel Wi-Fi and Starlink; optimize results are large JSON too)
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 # CORS so the crew dashboard (c4.racertracer.net) can POST feedback to the Lab's issue endpoint
 # cross-origin. Other /api routes stay team-token-gated regardless; this only adds the headers.

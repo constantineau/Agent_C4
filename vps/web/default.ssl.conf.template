@@ -34,6 +34,13 @@ server {
     root /usr/share/nginx/html;
     index index.html;
 
+    # gzip text assets (no-build vanilla JS — compression is the transfer lever over Starlink)
+    gzip on;
+    gzip_comp_level 5;
+    gzip_min_length 1024;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+    gzip_vary on;
+
     location / {
         try_files $uri $uri/ /index.html;
     }
