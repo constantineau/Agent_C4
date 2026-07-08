@@ -177,3 +177,99 @@ r = matcher.get_plays()
 check("corroborator alone can never arm", r["plays"][0]["status"] == "quiet")
 
 print("RESULT-6:", "PASS" if ok else "FAIL")
+
+print("7) leg gate — a pace play arms only on its leg (2026-07-08)")
+matcher.SUSTAIN_SCALE = 0.0
+_nav_leg = [None]
+matcher.navigator.get_navigator = lambda route=None: (
+    {"available": True, "next_mark": {"index": _nav_leg[0]}} if _nav_leg[0] is not None
+    else {"available": False})
+stub(time_behind_min=120)          # pace play predicates true; applicability {"legs": [1]}
+_nav_leg[0] = None
+r = matcher.get_plays()
+p = next(x for x in r["plays"] if x["id"] == "pace_behind_2h_1")
+check("leg unknown -> FAIL OPEN (arms)", p["status"] == "armed" and p["applicable"] is True)
+_nav_leg[0] = 1
+matcher.clear_state()
+r = matcher.get_plays()
+p = next(x for x in r["plays"] if x["id"] == "pace_behind_2h_1")
+check("on the applicable leg -> arms", p["status"] == "armed"
+      and r["signals"]["current_leg"] == 1)
+_nav_leg[0] = 2
+r = matcher.get_plays()
+p = next(x for x in r["plays"] if x["id"] == "pace_behind_2h_1")
+check("rounded onto leg 2 -> gated quiet (clear fast)",
+      p["status"] == "quiet" and p["applicable"] is False)
+# advisory applicability never gates: same legs list, sail_guidance kind, gate advisory
+ADV = {"race_id": "u", "schema": "c4.playbook/v2", "variants": [{"id": "m"}], "plays": [
+    {"id": "sail_over_j1_j2", "name": "J1 past crossover", "category": "internal",
+     "scenario": {"kind": "sail_guidance"}, "stakes_min": 0,
+     "conditions": {"predicates": [{"signal": "tws_kn", "op": ">=", "value": 15}]},
+     "applicability": {"legs": [1], "gate": "advisory"}, "response": {"type": "guidance"}}]}
+stub(bundle=ADV, tws_kn=18.0)
+_nav_leg[0] = 3
+r = matcher.get_plays()
+check("advisory applicability off its leg still arms (condition-driven)",
+      r["plays"][0]["status"] == "armed")
+print("RESULT-7:", "PASS" if ok else "FAIL")
+
+print("8) polar_pct — windowed live % of polar (2026-07-08)")
+SEA = {"race_id": "u", "schema": "c4.playbook/v2", "variants": [{"id": "m"}], "plays": [
+    {"id": "sea_state_up", "name": "Rougher than forecast", "category": "external",
+     "scenario": {"kind": "wave_heavy"}, "stakes_min": 60,
+     "conditions": {"predicates": [{"signal": "polar_pct", "op": "<=", "value": 88,
+                                    "sustain_min": 0}]},
+     "response": {"type": "route"}}]}
+_now = time.time()
+
+
+class PolarDS(StubDS):
+    pct = 0.80          # boat sailing at 80% of target
+
+    def polars_stw(self):
+        return [(8.0, 45.0, 6.0), (8.0, 90.0, 7.0), (12.0, 90.0, 8.0)]
+
+    def series(self, path, minutes):
+        n = 30
+        if path == "navigation.speedThroughWater":
+            return [(_now - i, 7.0 * PolarDS.pct / 1.943844) for i in range(n, 0, -1)]
+        if path == "environment.wind.speedTrue":
+            return [(_now - i, 8.0 / 1.943844) for i in range(n, 0, -1)]
+        if path == "environment.wind.angleTrueWater":
+            return [(_now - i, 90.0 / 57.29577951308232) for i in range(n, 0, -1)]
+        return []
+
+
+stub(bundle=SEA)
+matcher.datasource.active = lambda: PolarDS()
+matcher._POLAR_TABLE = None
+r = matcher.get_plays()
+check("windowed polar_pct computed (~80%)",
+      r["signals"]["polar_pct"] is not None and abs(r["signals"]["polar_pct"] - 80.0) < 1.5)
+check("sea-state play arms on underperformance", r["plays"][0]["status"] == "armed")
+PolarDS.pct = 0.95
+matcher.clear_state()
+r = matcher.get_plays()
+check("sailing at 95% -> quiet", r["plays"][0]["status"] == "quiet"
+      and abs(r["signals"]["polar_pct"] - 95.0) < 1.5)
+
+
+class ThinDS(PolarDS):
+    def series(self, path, minutes):
+        return []           # archive gap — fall back to the instantaneous read
+
+    def latest_value(self, path):
+        return {"navigation.speedThroughWater": 7.0 * 0.8 / 1.943844,
+                "environment.wind.speedTrue": 8.0 / 1.943844,
+                "environment.wind.angleTrueWater": 90.0 / 57.29577951308232}.get(path)
+
+
+matcher.datasource.active = lambda: ThinDS()
+matcher._POLAR_TABLE = None
+r = matcher.get_plays()
+check("thin archive -> instantaneous fallback (~80%)",
+      r["signals"]["polar_pct"] is not None and abs(r["signals"]["polar_pct"] - 80.0) < 1.5)
+matcher._POLAR_TABLE = None
+print("RESULT-8:", "PASS" if ok else "FAIL")
+import sys
+sys.exit(0 if ok else 1)

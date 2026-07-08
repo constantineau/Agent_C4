@@ -570,8 +570,15 @@ def _build_plays(playbook, definition, course_id, venue_stats=None, jib_crossove
         if route:
             route["path"] = _downsample(route.get("path"))
         guidance = p.get("guidance")
-        applic = ({"legs": [p["params"]["mark"]], "phase": "any"} if p.get("kind") == "pace"
-                  else {"legs": [p["params"]["leg"]], "phase": "any"}
+        # Leg convention (matcher-enforced): leg N is the leg ARRIVING at course marks[N] — the
+        # navigator's next-mark index onboard. Pace plays are HARD-gated (the response is a
+        # re-route FROM mark k, wrong on any other leg — legs [k] = the leg toward mark k);
+        # sail-guidance plays are ADVISORY (authored for the leg whose forecast breeze sits near
+        # the threshold, but the predicates are condition-driven — never gate them). params.leg
+        # stays the 0-based consensus-legs index; legs[i] arrives at marks[i+1].
+        applic = ({"legs": [p["params"]["mark"]], "phase": "any", "gate": "hard"}
+                  if p.get("kind") == "pace"
+                  else {"legs": [p["params"]["leg"] + 1], "phase": "any", "gate": "advisory"}
                   if p.get("kind") == "sail_guidance" and "leg" in (p.get("params") or {})
                   else {"legs": "all", "phase": "any"})
         plays.append({

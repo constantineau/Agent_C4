@@ -16,17 +16,28 @@ Signals resolved (all existing Tier-1 reads; a signal with no live value simply 
   hoisted_sail · sail_out_of_service — the crew-set SAIL STATE (the console's hoisted selector +
                                        the Phase-D out-of-service toggle; there is no instrument
                                        for a blown kite — the crew arms it)
-  polar_pct                         — not yet wired onboard (None → the sea_state play stays quiet)
+  polar_pct                         — live % of the rated polar, WINDOWED (mean over the last
+                                       ~10 min of STW vs the polar target at each sample's own
+                                       TWS/TWA) so a tack's momentary dip can't reset a play's
+                                       30-min sustain; instantaneous fallback when the archive
+                                       window is thin
+  current_leg                       — the leg the boat is on, from the navigator's next mark:
+                                       leg N is the leg ARRIVING at the loaded course's marks[N]
+                                       (1-based == the next mark's index in the ordered marks).
+                                       None when no course/fix — leg gating FAILS OPEN.
 
-HONEST v1 LIMIT: `applicability.legs` (a pace play pinned to its mark) is carried in the payload
-for the crew/Tier-2 but NOT enforced as a gate — the pace predicates are global (time-behind), so
-the worst case is a play arming a leg early, clearly labelled with its mark.
+LEG GATING: a play whose `applicability.legs` is a list and whose gate is HARD (bundle
+`applicability.gate == "hard"`, or kind == "pace" for pre-gate bundles — a pace play's response
+is a re-route FROM its specific mark, wrong anywhere else) only arms while `current_leg` is in
+that list; the gate participates in the Schmitt discipline (off-leg clears fast). Advisory
+applicability (sail-guidance plays authored for a forecast leg but condition-driven) never gates.
 
 The recommendation stays the deterministic selector's; the matcher ARMS plays — the Tier-2 LLM (and
 the crew) read the armed set. The auto-coach volunteers a callout when a play newly arms.
 """
 from __future__ import annotations
 
+import bisect
 import os
 import time
 
@@ -35,10 +46,17 @@ from . import datasource
 from . import deviation
 from . import drift as drift_mod
 from . import fatigue
+from . import navigator
 from . import tactics
 
 # sustain windows come from each play's predicates (minutes). Scale for bench/tests (0 = instant).
 SUSTAIN_SCALE = float(os.environ.get("MATCHER_SUSTAIN_SCALE", "1.0"))
+
+# polar_pct window: long enough to ride through a tack, short enough to track a real slowdown
+POLAR_PCT_WINDOW_MIN = float(os.environ.get("MATCHER_POLAR_WINDOW_MIN", "10"))
+POLAR_PCT_MIN_SAMPLES = int(os.environ.get("MATCHER_POLAR_MIN_SAMPLES", "6"))
+_MS_TO_KN = 1.943844
+_RAD_TO_DEG = 57.29577951308232
 
 _DRIFT_SIGN = {"right": 1, "left": -1, "veered": 1, "backed": -1}
 
@@ -75,6 +93,110 @@ def set_sail_state(hoisted=None, out_of_service=None):
     st["ts"] = round(time.time())
     datasource.active().save_sail_state(st)
     return st
+
+
+# ---------------------------------------------------------------------------- polar % (live)
+
+_POLAR_TABLE = None      # [(tws_kn, twa_deg, target_stw_kn)] — static per session, fetched once
+
+
+def _polar_table():
+    global _POLAR_TABLE
+    if _POLAR_TABLE is None:
+        try:
+            _POLAR_TABLE = [(t, a, s) for (t, a, s) in datasource.active().polars_stw()
+                            if s is not None]
+        except Exception:
+            _POLAR_TABLE = []
+    return _POLAR_TABLE
+
+
+def _target_stw(pol, tws_kn, twa_deg):
+    """Nearest polar bucket (same metric as datasource.polar_nearest) from the cached table —
+    no per-sample DB round-trips."""
+    if not pol:
+        return None
+    row = min(pol, key=lambda p: abs(p[0] - tws_kn) + abs(p[1] - abs(twa_deg)))
+    return row[2]
+
+
+def _scalar(v):
+    if isinstance(v, (tuple, list)):
+        v = v[0] if v else None
+    return float(v) if v is not None else None
+
+
+def _nearest_in(times, values, epoch, tol_s=20.0):
+    """Value at the timestamp nearest `epoch` within tol; series is time-ordered."""
+    if not times:
+        return None
+    i = bisect.bisect_left(times, epoch)
+    best = None
+    for j in (i - 1, i):
+        if 0 <= j < len(times) and abs(times[j] - epoch) <= tol_s:
+            if best is None or abs(times[j] - epoch) < abs(times[best] - epoch):
+                best = j
+    return values[best] if best is not None else None
+
+
+def _polar_pct():
+    """Live % of the rated polar: mean over the window of STW / target(tws, twa) per sample —
+    windowed so a tack's dip doesn't reset a 30-min sustain. Falls back to one instantaneous
+    read when the archive window is thin (fresh boot / bench). None when it can't be known."""
+    pol = _polar_table()
+    if not pol:
+        return None
+    src = datasource.active()
+    try:
+        stw = src.series("navigation.speedThroughWater", POLAR_PCT_WINDOW_MIN)
+        tws = src.series("environment.wind.speedTrue", POLAR_PCT_WINDOW_MIN)
+        twa = src.series("environment.wind.angleTrueWater", POLAR_PCT_WINDOW_MIN)
+    except Exception:
+        stw = tws = twa = []
+    pcts = []
+    if stw and tws and twa:
+        tws_t, tws_v = [t for t, _ in tws], [v for _, v in tws]
+        twa_t, twa_v = [t for t, _ in twa], [v for _, v in twa]
+        step = max(1, len(stw) // 120)          # cap the per-poll work
+        for e, v in stw[::step]:
+            w, a = _nearest_in(tws_t, tws_v, e), _nearest_in(twa_t, twa_v, e)
+            if v is None or w is None or a is None:
+                continue
+            w_kn = w * _MS_TO_KN
+            if w_kn < 3.5:
+                continue                        # drifting air — the polar isn't meaningful
+            tgt = _target_stw(pol, w_kn, a * _RAD_TO_DEG)
+            if tgt and tgt > 0.5:
+                pcts.append(v * _MS_TO_KN / tgt * 100.0)
+    if len(pcts) >= POLAR_PCT_MIN_SAMPLES:
+        return round(sum(pcts) / len(pcts), 1)
+    try:                                        # instantaneous fallback — one read beats blind
+        v = _scalar(src.latest_value("navigation.speedThroughWater"))
+        w = _scalar(src.latest_value("environment.wind.speedTrue"))
+        a = _scalar(src.latest_value("environment.wind.angleTrueWater"))
+    except Exception:
+        return None
+    if v is None or w is None or a is None or w * _MS_TO_KN < 3.5:
+        return None
+    tgt = _target_stw(pol, w * _MS_TO_KN, a * _RAD_TO_DEG)
+    return round(v * _MS_TO_KN / tgt * 100.0, 1) if tgt and tgt > 0.5 else None
+
+
+# ---------------------------------------------------------------------------- current leg
+
+def _current_leg(route=None):
+    """1-based number of the leg the boat is on = the next mark's index in the loaded course's
+    ordered marks (leg N arrives at marks[N] — the same convention the Lab's synthesis writes
+    into `applicability.legs`, both sides flatten the course with race_def.course_to_marks).
+    None when unknown (no course / no fix) — leg gating fails open."""
+    try:
+        nav = navigator.get_navigator(route)
+        if not nav.get("available"):
+            return None
+        idx = (nav.get("next_mark") or {}).get("index")
+        return idx if isinstance(idx, int) and idx >= 1 else None
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------- signal gather
@@ -130,7 +252,8 @@ def gather(route=None):
         "upcourse_tws_delta_kn": upc.get("tws_delta_kn"),
         "upcourse_twd_shift_deg": upc.get("twd_shift_deg"),
         "_upcourse_name": upc.get("name") or upc.get("station"),   # crew-facing corroborator label
-        "polar_pct": None,          # not wired onboard yet — the sea_state play stays quiet
+        "polar_pct": _polar_pct(),
+        "current_leg": _current_leg(route),
     }
 
 
@@ -160,6 +283,19 @@ def _evaluate(play, signals, now):
     crew/Tier-2-facing record (no heavy route payload — the bundle aboard has it)."""
     preds = ((play.get("conditions") or {}).get("predicates")) or []
     rows, all_ok = [], bool(preds)
+    # LEG GATE — a hard-gated play (pace: the response is a re-route FROM its mark) only arms on
+    # its applicable leg(s). Participates in the Schmitt like a predicate (off-leg clears fast);
+    # fails OPEN when the current leg is unknown or the applicability is advisory / "all".
+    applic = play.get("applicability") or {}
+    legs = applic.get("legs")
+    hard = (applic.get("gate") == "hard"
+            or (applic.get("gate") is None and (play.get("scenario") or {}).get("kind") == "pace"))
+    applicable = True
+    if hard and isinstance(legs, list) and legs:
+        cur = signals.get("current_leg")
+        if cur is not None:
+            applicable = cur in legs
+    all_ok = all_ok and applicable
     sustain_min = 0.0
     for p in preds:
         actual = signals.get(p.get("signal"))
@@ -214,6 +350,7 @@ def _evaluate(play, signals, now):
         "response_type": resp.get("type"),
         "stakes_min": play.get("stakes_min"),
         "applicability": play.get("applicability"),
+        "applicable": applicable,       # False = held quiet by the leg gate (off its leg)
         "what_flips_it": play.get("what_flips_it") or "",
     }
 

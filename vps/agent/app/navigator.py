@@ -204,6 +204,9 @@ def get_navigator(route: str = None):
         "available": True, "route": route,
         "position": {"lat": round(lat, 5), "lon": round(lon, 5)},
         "next_mark": {"name": nxt["name"], "seq": nxt["seq"],
+                      # position in the ordered marks list — leg N of the course arrives at
+                      # marks[N], so this doubles as the current 1-based leg number (matcher)
+                      "index": marks.index(nxt),
                       "distance_nm": round(dist, 2), "bearing_deg": round(brg, 1),
                       "eta_min": eta_min},
         "leg": leg, "layline_call": layline_call, "next_rounding": next_rounding,
