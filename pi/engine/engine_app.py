@@ -92,12 +92,18 @@ def fatigue_ep():
 
 @app.get("/sail")
 def sail(tws: float | None = None, twa: float | None = None, hoisted: str | None = None):
-    """Sail-range advice for the dial. tws/twa default to the latest live values."""
+    """Sail-range advice for the dial + the SAIL tile. tws/twa default to the latest live
+    values; `hoisted` defaults to the CREW-SET sail (the sails bar / /sails/state — the primary
+    driver of the flying combination), so the read is about the sail actually up. The frozen
+    boat model (jib TWS bands, the Code-0 envelope) refines the fit when a bundle is aboard."""
     if tws is None or twa is None:
         s = onboard_conditions.get_strip()
         tws = tws if tws is not None else s.get("tws")
         twa = twa if twa is not None else s.get("twa")
-    return sails.get_sail_advice(tws, twa, hoisted)
+    if hoisted is None:
+        hoisted = (matcher.get_sail_state() or {}).get("hoisted")
+    bm = (deviation._load_playbook() or {}).get("boat_model")
+    return sails.get_sail_advice(tws, twa, hoisted, boat_model=bm)
 
 
 @app.get("/course")

@@ -94,7 +94,7 @@
         forecast:{ status: "ok", value: null,
                    rows: [{ label: "Now", emph: true, cols: [arrowKts(250, 10)] }, { label: "+60 min", cols: [arrowKts(256, 13)] }, { label: "+120 min", cols: [arrowKts(262, 15)] }, { sep: true, label: "FORECAST VS. ACTUAL" }, { hdr: true, cols: ["forecast", "actual"] }, { label: "−60 min", cols: [arrowKts(244, 13), arrowKts(243, 14)] }, { label: "−120 min", cols: [arrowKts(240, 16), arrowKts(238, 17)] }],
                    why: "Forecast wind speed + direction (arrows show direction; north wind points down). Building to ~15 kts and veering right. \"Forecast vs. actual\" compares the earlier forecast for −60/−120 min ago against what actually happened — within ~1 kt, verifying well.", consider: "Plan the gear for the build.", clears: "—", based: ["fetch_forecast + engine archive"], conf: "high" },
-        sail:    { status: "ok", value: "J1", sub: "in range", why: "J1 is right for 12 kts upwind.", consider: "No change.", clears: "TWS > 16 kts", based: ["get_sail: optimal J1"], conf: "high" },
+        sail:    { status: "ok", value: "J1", sub: "in range · no change ahead", why: "Reading the crew-set sail (J1 on the sails bar) — right for 12 kts upwind.", consider: "No change.", clears: "TWS > 16 kts", based: ["sails bar: crew set J1", "get_sail: optimal J1"], conf: "high" },
         eta:     { status: "ok", value: "16 min", sub: "Cove Island", why: "~16 min to Cove Island at the current made-good.", consider: "On schedule for the mark.", clears: "—", based: ["get_navigator: ETA 16 min"], conf: "high" },
         ais:     { status: "ok", value: "Windquest", sub: "▽ 1:50 back · behind corrected", rows: [{ hdr: true, cols: ["range", "CPA / TCPA"] }, { label: "Defiance", emph: true, cols: ["2.8 nm", "2.1 nm / 24m"] }, { label: "Lake Guardian", cols: ["4.1 nm", "3.6 nm · opening"] }, { label: "MMSI 3669…", cols: ["6.0 nm", "5.5 nm · opening"] }, { hdr: true, cols: ["fleet · ToT", "Δ corrected"] }, { label: "Windquest", emph: true, cols: ["3.1 nm to fin", "▽ 1:50 back"] }, { label: "Defiance", cols: ["3.4 nm to fin", "▲ 0:40 ahead"] }, { label: "Il Mostro ⌛17m", cols: ["1.9 nm to fin", "▲ 3:10 ahead"] }], why: "3 AIS contacts within 12 nm; nearest closing Defiance — CPA 2.1 nm in 24 min, comfortably clear. Fleet: 2 roster boats on AIS — Windquest 2 min back on corrected. 1 more over the horizon via the public tracker (delayed): Il Mostro is up the course and ahead on corrected.", consider: "Ahead of those near you on corrected — but the tracker shows Il Mostro leading over the horizon; keep racing the course, not just the boats in sight. (Fuzzy: partial AIS + a delayed tracker fix.)", clears: "—", based: ["get_ais: 3 contacts, min CPA 2.1 nm", "get_fleet: 2 matched, ToT", "tracker: 1 over-horizon"], conf: "high" },
         charge:  { status: "ok", value: "72", sub: "fresh", why: "Crew energy ~72% (inverse of the fatigue index; lower = more depleted).", consider: "Driver fresh — no rotation needed.", clears: "—", based: ["get_fatigue: index 28 → energy 72%"], conf: "high" },
@@ -136,7 +136,7 @@
         forecast:{ status: "watch", value: null,
                    rows: [{ label: "Now", emph: true, cols: [arrowKts(262, 16)] }, { label: "+60 min", cols: [arrowKts(268, 18)] }, { label: "+120 min", cols: [arrowKts(274, 19)] }, { sep: true, label: "FORECAST VS. ACTUAL" }, { hdr: true, cols: ["forecast", "actual"] }, { label: "−60 min", cols: [arrowKts(252, 12), arrowKts(256, 14)] }, { label: "−120 min", cols: [arrowKts(248, 10), arrowKts(252, 12)] }],
                    why: "Forecast wind speed + direction (arrows show direction; north wind points down). Building to ~19 kts and veering right. \"Forecast vs. actual\" shows it has under-called the wind by ~2 kts and the right shift — trust the trend over the model.", consider: "Forecast running light — plan for more than it says.", clears: "forecast comes back in line", based: ["fetch_forecast + engine archive"], conf: "med" },
-        sail:    { status: "act",   value: "J1 → A3", sub: "peel before bear-away", why: "The leg after the gate bears away to ~135° TWA — an A3 leg. Peel before the rounding.", consider: "Stage the A3 and peel in ~4 min.", clears: "A3 hoisted", based: ["get_sail: A3 for TWA 135°"], conf: "high" },
+        sail:    { status: "act",   value: "J1 → A3", sub: "in range · at Cove Island (bear away, ~4 min)", why: "Reading the crew-set sail (J1). The leg after the gate bears away to ~135° TWA — an A3 leg. Stage the peel before the rounding.", consider: "Stage the A3 and peel in ~4 min.", clears: "A3 hoisted", based: ["sails bar: crew set J1", "get_sail: A3 for TWA 135°"], conf: "high" },
         eta:     { status: "watch", value: "4 min", sub: "Cove Island", why: "~4 min to Cove Island at the current made-good.", consider: "Mark in ~4 min — start the rounding prep.", clears: "past the rounding", based: ["get_navigator: ETA 4 min"], conf: "high" },
         ais:     { status: "watch", value: "Algoma", sub: "CPA 0.8 nm in 11 min", rows: [{ hdr: true, cols: ["range", "CPA / TCPA"] }, { label: "Algoma", emph: true, cols: ["2.2 nm", "0.8 nm / 11m"] }, { label: "Defiance", cols: ["3.5 nm", "3.1 nm · opening"] }, { label: "MMSI 3661…", cols: ["7.4 nm", "7.0 nm · opening"] }, { hdr: true, cols: ["fleet · ToT", "Δ corrected"] }, { label: "Defiance", emph: true, cols: ["2.9 nm to fin", "▲ 1:20 ahead"] }, { label: "Windquest", cols: ["4.0 nm to fin", "▽ 2:10 back"] }], why: "3 AIS contacts within 12 nm; the closing one — Algoma, a laker — has a CPA of 0.8 nm in 11 min, crossing near the gate. Fleet: 2 roster boats on AIS — Defiance 1 min ahead on corrected.", consider: "A target is closing — watch the CPA and plan to keep clear at the rounding. On handicap, Defiance is your rival — cover when the crossing allows.", clears: "the CPA opens back up", based: ["get_ais: 3 contacts, min CPA 0.8 nm", "get_fleet: 2 matched, ToT"], conf: "high" },
         charge:  { status: "act",   value: "28", sub: "rotate soon", why: "Crew energy ~28% (rotate soon). Heading instability and steering reversals up, speed deficit creeping.", consider: "Tank getting low — plan a helm rotation.", clears: "energy back above 65%", based: ["get_fatigue: index 72 → energy 28%"], conf: "med", components: { heading: 0.7, reversals: 0.8, heel: 0.4, "spd-def": 0.5 } },
@@ -397,19 +397,54 @@
         consider: badSkill ? "Forecast off lately — trust the live trend more." : bigChange ? "A notable change is forecast — plan the gear." : "Forecast steady and verifying.",
         clears: st === "ok" ? "—" : "forecast comes back in line", based: ["fetch_forecast + live wind buffer"], conf: "engine" };
     },
+    /* SAIL: reads the CREW-SET sail (the sails bar) and says how it fits the conditions —
+       in range / overpowered / underpowered / wrong angle — with an arrow to the next change
+       and WHEN: change now · at the next mark (leg-after geometry) · at an approaching
+       crossover. Falls back to the optimal read when the crew hasn't set a sail. */
     sail(p) {
       const s = p.sail;
       if (!s || !s.available) return NA(s && s.note ? s.note : "no sail data");
+      const crew = s.crew_sail;
+      const fit = s.fit;
       const xo = s.next_crossover;
-      let st = "ok", value = s.optimal_sail || "—";
-      if (s.wrong_sail) { st = "act"; value = (s.hoisted_sail || "?") + " → " + s.optimal_sail; }
-      else if (xo && xo.deg_away <= 8) { st = "watch"; value = s.optimal_sail + " → " + xo.to_sail; }
+      const FIT = { in_range: "in range", overpowered: "OVERPOWERED", underpowered: "underpowered",
+                    wrong_angle: "wrong sail for this angle", no_model: "logged (no rating model)" };
+      let to = null, when = null, st = "ok";
+      if (crew && fit && fit !== "in_range" && fit !== "no_model") {
+        to = s.change_to || s.optimal_sail;
+        when = "change now";
+        st = "act";
+      } else {
+        const cur = s.hoisted_sail || s.optimal_sail;
+        // next-mark look-ahead: what does the leg AFTER the rounding want?
+        const nr = (p.navigator || {}).next_rounding;
+        if (nr && nr.exit_twa_deg != null) {
+          const z = (s.zones || []).find((z) => z.twa_min <= nr.exit_twa_deg && nr.exit_twa_deg <= z.twa_max);
+          if (z && z.sail !== cur) {
+            to = z.sail;
+            const eta = ((p.navigator || {}).next_mark || {}).eta_min;
+            when = "at " + (nr.exit_mark || "the next mark") + " (" + nr.maneuver + (eta != null ? ", ~" + r0(eta) + " min" : "") + ")";
+            st = eta != null && eta <= 15 ? "watch" : "ok";
+          }
+        }
+        if (!to && xo && xo.deg_away <= 8 && xo.to_sail !== cur) {
+          to = xo.to_sail;
+          when = "as you " + xo.direction + " (" + r0(xo.deg_away) + "° from here)";
+          st = "watch";
+        }
+      }
+      const base = crew || s.optimal_sail || "—";
+      const value = to ? base + " → " + to : base;
+      const sub = (crew ? (FIT[fit] || "crew-set") : "crew sail not set — optimal shown")
+        + (when ? " · " + when : (crew && fit === "in_range" ? " · no change ahead" : ""));
       return { status: st, value: value,
-        sub: s.wrong_sail ? "wrong sail up" : s.in_range ? "in range" : (xo ? xo.direction + " " + r0(xo.deg_away) + "° → " + xo.to_sail : ""),
-        why: s.recommendation || "",
-        consider: s.wrong_sail ? "Change to " + s.optimal_sail + "." : (xo && xo.deg_away <= 8 ? "Stage the " + xo.to_sail + "; crossover " + r0(xo.deg_away) + "° away." : "No change."),
-        clears: st === "ok" ? "—" : "cross to " + (xo ? xo.to_sail : s.optimal_sail),
-        based: ["get_sail: optimal " + s.optimal_sail + ", TWA " + r0(s.twa) + "°, TWS " + r0(s.tws_used) + " kts" + (xo ? ", crossover " + xo.to_sail + " " + r0(xo.deg_away) + "°" : "")], conf: "engine" };
+        sub: sub,
+        why: (crew ? "Reading the crew-set sail (" + crew + " on the sails bar). " : "No crew sail set — tap what's flying on the SAILS bar. ")
+          + (s.recommendation || ""),
+        consider: to ? (when === "change now" ? "Change to " + to + " now." : "Stage the " + to + " — " + when + ".") : "No change.",
+        clears: st === "ok" ? "—" : (to ? to + " hoisted" : "—"),
+        based: ["sails bar: crew set " + (crew || "—"),
+                "get_sail: optimal " + s.optimal_sail + ", TWA " + r0(s.twa) + "°, TWS " + r0(s.tws_used) + " kts" + (xo ? ", crossover " + xo.to_sail + " " + r0(xo.deg_away) + "°" : "")], conf: "engine" };
     },
     eta(p) {
       const n = p.navigator;

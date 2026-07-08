@@ -26,6 +26,10 @@ _XOVER_CANDS = [
 # Friendly order + colors (hex) used by the dial, keyed by sail family prefix.
 SAIL_ORDER = ["J1", "A2", "A3", "S2"]
 SAIL_LABEL = {"J1": "Jib (J1)", "A2": "Asym A2", "A3": "Asym A3", "S2": "Kite (S2)"}
+# the CREW inventory is richer than the cert: jib change-downs, the Code 0 and the staysail are
+# crew-config sails (rated bands come from the frozen boat model, not the cert)
+CREW_SAILS = ("J1", "J2", "J3", "C0", "SS", "A2", "A3", "S2")
+_CERT_EQUIV = {"J1": "J1", "J2": "J1", "J3": "J1", "A2": "A2", "A3": "A3", "S2": "S2"}
 
 
 def _num(s):
@@ -132,7 +136,71 @@ def _nearest_row(rows, twa):
     return min(rows, key=lambda r: abs(r["twa"] - twa)) if rows else None
 
 
-def get_sail_advice(tws: float = None, twa: float = None, hoisted: str = None):
+def _crew_norm(sail):
+    if not sail:
+        return None
+    up = sail.strip().upper()
+    for fam in CREW_SAILS:
+        if up.startswith(fam):
+            return fam
+    return None
+
+
+def _tws_band_for(fam, a_twa):
+    """The TWS buckets where `fam` wins the zone at this TWA (cert model) — the over/under test."""
+    ks = []
+    for k in sorted(_SECTIONS):
+        z = next((z for z in _zones(_SECTIONS[k]) if z["twa_min"] <= a_twa <= z["twa_max"]), None)
+        if z and z["sail"] == fam:
+            ks.append(k)
+    return ks
+
+
+def _fit_and_change(crew, a_twa, tws, optimal, wrong, tossup_ok, boat_model):
+    """How the CREW-SET sail fits the conditions right now, and what to change to if it doesn't:
+    (fit, change_to). fit ∈ in_range | overpowered | underpowered | wrong_angle | no_model | None.
+    Jib TWS bands + the Code-0 envelope come from the frozen boat model when one is aboard; the
+    staysail flies WITH another sail and has no solo rating (logged only)."""
+    bm = boat_model or {}
+    if crew is None:
+        return None, None
+    if crew == "SS":
+        return "no_model", None
+    if crew == "C0":
+        c0 = ((bm.get("sail_config") or {}).get("code0")) or {}
+        if not c0.get("enabled"):
+            return "no_model", None
+        if not (float(c0.get("twa_min", 0)) <= a_twa <= float(c0.get("twa_max", 180))):
+            return "wrong_angle", optimal
+        if tws > float(c0.get("tws_max", 99)):
+            return "overpowered", optimal
+        return "in_range", None
+    if crew in ("J1", "J2", "J3"):
+        if wrong and not tossup_ok:            # the cert wants a different FAMILY at this angle
+            return "wrong_angle", optimal
+        jx = bm.get("jib_crossovers") or []
+        band = next((b for b in jx if (b.get("sail") or "").upper() == crew), None)
+        right = next((b.get("sail") for b in jx
+                      if float(b.get("tws_min") or 0) <= tws <= float(b.get("tws_max") or 99)), None)
+        if band:
+            if band.get("tws_max") is not None and tws > float(band["tws_max"]):
+                return "overpowered", right or optimal
+            if band.get("tws_min") is not None and tws < float(band["tws_min"]):
+                return "underpowered", right or optimal
+        return "in_range", None
+    # kites: the cert knows their whole envelope
+    if wrong and not tossup_ok:
+        band = _tws_band_for(crew, a_twa)
+        if band:
+            if tws > max(band):
+                return "overpowered", optimal
+            if tws < min(band):
+                return "underpowered", optimal
+        return "wrong_angle", optimal
+    return "in_range", None
+
+
+def get_sail_advice(tws: float = None, twa: float = None, hoisted: str = None, boat_model: dict = None):
     """Sail-range advice for the dial + agent. tws/twa are live values; hoisted is the
     crew-reported sail (J1/A2/A3/S2) so we can flag flying the wrong one."""
     if not _SECTIONS:
@@ -157,7 +225,8 @@ def get_sail_advice(tws: float = None, twa: float = None, hoisted: str = None):
         next_xover = {"at_twa": down["twa_min"], "to_sail": down["sail"],
                       "deg_away": round(down["twa_min"] - a_twa, 1), "direction": "bear away"}
     row = _nearest_row(rows, a_twa)
-    hoisted_fam = _family(hoisted)
+    crew_sail = _crew_norm(hoisted)
+    hoisted_fam = _CERT_EQUIV.get(crew_sail) if crew_sail else _family(hoisted)
 
     # toss-up: sails within ~1.5% of target AT this TWA (from the crossover overlap bands). The zones are
     # winner-take-all, so a near-tied sail reads as "wrong" — but if the hoisted sail is a toss-up with the
@@ -188,6 +257,9 @@ def get_sail_advice(tws: float = None, twa: float = None, hoisted: str = None):
     else:
         rec = f"{_lbl(optimal)} is the right sail for {round(a_twa)}° TWA / {round(tws)} kts."
 
+    fit, change_to = _fit_and_change(crew_sail, a_twa, tws, optimal, wrong,
+                                     hoisted_ok_tossup, boat_model)
+
     return {
         "available": True,
         "tws_used": key, "twa": round(twa, 1), "twa_abs": round(a_twa, 1), "tack": tack,
@@ -195,6 +267,9 @@ def get_sail_advice(tws: float = None, twa: float = None, hoisted: str = None):
         "overlaps": overlaps,
         "optimal_sail": optimal,
         "tossup_with": tossup_with,
+        "crew_sail": crew_sail,          # what the crew SET (sails bar) — J2/C0/SS stay distinct
+        "fit": fit,                       # in_range | overpowered | underpowered | wrong_angle | no_model
+        "change_to": change_to,
         "hoisted_sail": hoisted_fam,
         "wrong_sail": wrong,
         "in_range": (not wrong) if cur else False,
