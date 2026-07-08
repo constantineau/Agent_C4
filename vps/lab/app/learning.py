@@ -78,7 +78,7 @@ def _conn():
 # table, so ALTER them in idempotently (additive, never destructive — the DB-safety ethos).
 _ADDED = {
     "debriefs": [("helm_pct", "REAL"), ("sea_state_hs_mean", "REAL")],
-    "perf_bins": [("hs_mean", "REAL"), ("pct_flat", "REAL")],
+    "perf_bins": [("hs_mean", "REAL"), ("pct_flat", "REAL"), ("config", "TEXT")],
     "proposals": [("kind", "TEXT DEFAULT 'boat_model'"), ("wave_json", "TEXT")],
 }
 
@@ -127,11 +127,11 @@ def archive_debrief(report, boat_id=None):
         did = cur.lastrowid
         for b in (at.get("perf_bins") or []):
             c.execute("""INSERT INTO perf_bins (debrief_id,boat_id,race_id,created_at,tws,twa,
-                         point_of_sail,samples,best_stw,target_stw,pct,hs_mean,pct_flat)
-                         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                         point_of_sail,samples,best_stw,target_stw,pct,hs_mean,pct_flat,config)
+                         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                       (did, boat_id, report.get("race_id"), time.time(), b["tws"], b["twa"],
                        b["point_of_sail"], b["samples"], b["best_stw"], b["target_stw"], b["pct"],
-                       b.get("hs_mean"), b.get("pct_flat")))
+                       b.get("hs_mean"), b.get("pct_flat"), b.get("config")))
         c.commit()
         return did
     finally:
@@ -185,6 +185,47 @@ def _latest_bins_per_race(c, boat_id):
                           WHERE boat_id IS ? GROUP BY race_id) latest
                         ON pb.debrief_id = latest.did""", (boat_id,)).fetchall()
     return [dict(r) for r in rows], {r["race_id"] for r in rows}
+
+
+def config_polars(boat_id=None):
+    """OBSERVED polars BY SAIL CONFIGURATION — the innovation record. Aggregates the archived
+    per-config performance bins (boat-log debriefs; the crew's sails-bar history attributes every
+    fix to its configuration): for each config × (TWS,TWA) cert cell, the best observed STW and
+    sample depth across all races. Combinations the crossover chart doesn't rate (C0+J2,
+    kite+staysail…) accumulate their own curves here over time. Read-only."""
+    c = _conn()
+    try:
+        rows = c.execute(
+            "SELECT config, tws, twa, point_of_sail, best_stw, target_stw, pct, samples, race_id "
+            "FROM perf_bins WHERE config IS NOT NULL AND boat_id IS ? ORDER BY config, tws, twa",
+            (boat_id,)).fetchall()
+    finally:
+        c.close()
+    configs = {}
+    for r in rows:
+        r = dict(r)
+        g = configs.setdefault(r["config"], {"config": r["config"], "cells": {}, "samples": 0,
+                                             "races": set()})
+        g["samples"] += r["samples"] or 0
+        g["races"].add(r["race_id"])
+        k = (r["tws"], r["twa"])
+        cell = g["cells"].get(k)
+        if cell is None or (r["best_stw"] or 0) > (cell["best_stw"] or 0):
+            g["cells"][k] = {"tws": r["tws"], "twa": r["twa"], "point_of_sail": r["point_of_sail"],
+                             "best_stw": r["best_stw"], "target_stw": r["target_stw"],
+                             "pct": r["pct"], "samples": r["samples"]}
+        elif cell is not None:
+            cell["samples"] = (cell["samples"] or 0) + (r["samples"] or 0)
+    out = []
+    for g in configs.values():
+        cells = sorted(g["cells"].values(), key=lambda x: (x["tws"], x["twa"]))
+        out.append({"config": g["config"], "n_cells": len(cells), "samples": g["samples"],
+                    "races": len(g["races"]), "cells": cells})
+    out.sort(key=lambda g: -g["samples"])
+    return {"configs": out,
+            "note": ("Observed best-achievable STW per cert (TWS,TWA) cell, split by the crew's "
+                     "sail CONFIGURATION (the sails-bar log). Small samples are anecdotes, not "
+                     "polars — the record grows race by race.")}
 
 
 def propose(boat_id):

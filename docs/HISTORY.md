@@ -174,6 +174,14 @@ and the per-component READMEs. Detailed design rationale for the big arcs is in 
 - **ORC ratings**: multi-country enrich (USA+CAN in one pass) + a per-boat fuzzy
   cert-candidate picker for unrated roster boats.
 
+## 2026-07-08 (evening) — per-configuration polar development
+
+- The sails bar became **CURRENT SAILS** and its log became the innovation record: boat-log
+  debriefs attribute every fix to the crew's active configuration, the learning archive keeps
+  performance bins per config, and the Learnings tab grows observed curves for combinations
+  the crossover chart doesn't rate (the team innovates while racing; the data follows). The
+  sail-log backfill was also scoped to race-session windows like everything else.
+
 ## 2026-07-08 (evening) — the Pi↔Orin ethernet goes live
 
 - The direct cable was plugged (both ends pre-addressed: Pi eth0 10.10.10.1 ↔ Orin enP8p1s0

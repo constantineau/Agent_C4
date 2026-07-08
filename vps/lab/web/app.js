@@ -2490,7 +2490,7 @@ function paintLearnings() {
     </div>
     ${learnRefineCard(ab)}
     ${learnWaveCard(ab)}
-    ${learnTrendCard()}
+    ${learnTrendCard() + learnConfigCard()}
     ${learnArchiveCard()}
   </div>`;
 }
@@ -2588,6 +2588,26 @@ function learnWaveReview(p) {
 }
 
 // Lab-4 condition attribution: multi-race trend — see the model improving over a season.
+/* Observed polars BY SAIL CONFIGURATION — the innovation record: the crew's sails-bar log
+   attributes every fix of a boat-log debrief to its configuration, so combinations the
+   crossover chart doesn't rate (C0+J2, kite+staysail…) accumulate their own observed curves. */
+function learnConfigCard() {
+  const cp = (Lab.learning || {}).configPolars;
+  const inner = !cp ? '<div class="muted">Loading…</div>'
+    : !(cp.configs || []).length
+      ? '<div class="muted" style="font-size:12px">Nothing yet — this fills from boat-log debriefs: the crew taps the CURRENT SAILS bar during a race session, the log rides the backfill, and each configuration accumulates its own observed cells here (incl. combinations the crossover chart doesn\'t rate).</div>'
+      : cp.configs.map((g) => `<details style="margin-bottom:6px"><summary style="cursor:pointer">
+          <b>${esc(g.config)}</b> <span class="muted">· ${g.n_cells} cell${g.n_cells === 1 ? "" : "s"} · ${g.samples} samples · ${g.races} race${g.races === 1 ? "" : "s"}</span></summary>
+          <table style="margin-top:6px"><thead><tr><th>TWS</th><th>TWA</th><th>best STW</th><th>vs cert cell</th><th>n</th></tr></thead>
+          <tbody>${g.cells.map((c) => `<tr><td>${c.tws}</td><td>${c.twa}°</td><td><b>${c.best_stw}</b> kts</td><td class="muted">${c.target_stw} (${c.pct}%)</td><td class="muted">${c.samples}</td></tr>`).join("")}</tbody></table>
+        </details>`).join("");
+  return `<div class="card">
+    <h3>Observed by sail configuration <span class="muted" style="font-weight:400">— the innovation record (from the CURRENT SAILS log)</span></h3>
+    ${inner}
+    ${cp && (cp.configs || []).length ? `<div class="muted" style="font-size:11px;margin-top:6px">${esc(cp.note || "")}</div>` : ""}
+  </div>`;
+}
+
 function learnTrendCard() {
   const t = (Lab.learning || {}).trend || {};
   const s = t.series || [];
@@ -2688,13 +2708,15 @@ async function learnApplyWave(pid) {
 
 async function learnReload() {
   try {
-    const [props, dbs, trend] = await Promise.all([
+    const [props, dbs, trend, cfg] = await Promise.all([
       (await apiGet("/api/learning/proposals")).json(),
       (await apiGet("/api/learning/debriefs")).json(),
       (await apiGet("/api/learning/trend")).json(),
+      (await apiGet("/api/learning/config-polars")).json(),
     ]);
     Lab.learning = { busy: false, msg: "", waveBusy: false, waveMsg: "",
-      proposals: props.proposals || [], debriefs: dbs.debriefs || [], trend };
+      proposals: props.proposals || [], debriefs: dbs.debriefs || [], trend,
+      configPolars: cfg };
   } catch (e) { Lab.learning = Object.assign({ busy: false }, Lab.learning); }
 }
 

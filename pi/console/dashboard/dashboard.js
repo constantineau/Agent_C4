@@ -819,8 +819,8 @@
       `<button class="sb-chip reef${st.reef ? " on" : ""}" onclick="toggleReef()" ` +
       `title="${st.reef ? "Shake out reef 1" : "Tuck in reef 1"}">R1${st.reef ? " ▽" : ""}</button>`;
     document.getElementById("sbNote").textContent = fly.size
-      ? "flying " + [...fly].join(" + ") + (st.reef ? " · reef 1 in" : "") + " — logged"
-      : "tap what's flying — it's logged for the debrief";
+      ? "flying " + [...fly].join(" + ") + (st.reef ? " · reef 1 in" : "") + " — logged for this config's polar"
+      : "tap what's flying — every change is logged; each configuration builds its own polar over time";
   }
   window.toggleGear = async function (sail) {
     const st = ((currentPlays() || {}).sail_state) || {};

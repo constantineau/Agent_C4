@@ -330,7 +330,8 @@ def score_track(track, oracle, marks, start_epoch, wf=None, polars=None, cur=Non
     pol = _polar_pct(seg, epochs, wf, polars, cc, wv, wave_coeffs)
     if pol:
         out.update(pol)
-    bins = _performance_bins(seg, epochs, wf, polars, cc, wv, wave_coeffs)
+    bins = _performance_bins(seg, epochs, wf, polars, cc, wv, wave_coeffs,
+                             sail_log=(track or {}).get("sail_log"))
     if bins:
         out["perf_bins"] = bins                # observed-vs-polar by (TWS,TWA) cell — Lab-4 mining input
     if cc is not None and epochs and epochs[0] is not None:
@@ -460,7 +461,24 @@ def _pctile(xs, q):
     return s[lo] if lo + 1 >= len(s) else s[lo] + (s[lo + 1] - s[lo]) * (i - lo)
 
 
-def _performance_bins(seg, epochs, wf, polars, cur=None, wave=None, wave_coeffs=None):
+def config_at(sail_log, epoch):
+    """The crew sail CONFIGURATION active at `epoch`, from the timestamped sail log the boat
+    keeps (the sails bar): 'C0+J2', 'A3+SS+R1', … None before the first entry / no log. This is
+    what lets per-config observed polars accumulate for combinations the crossover chart doesn't
+    rate — the crew innovates, the data follows."""
+    if not sail_log or epoch is None:
+        return None
+    cfg = None
+    for e in sail_log:
+        ts = e.get("ts") if e.get("ts") is not None else e.get("t")
+        if ts is None or ts > epoch:
+            break
+        fly = sorted(x for x in (e.get("flying") or []) if x)
+        cfg = ("+".join(fly) + (("+" + str(e["reef"]).upper()) if e.get("reef") else "")) if fly else None
+    return cfg
+
+
+def _performance_bins(seg, epochs, wf, polars, cur=None, wave=None, wave_coeffs=None, sail_log=None):
     """Speed-through-water (current-corrected when a current field is given) vs the polar target,
     snapped to the ORC cert's OWN (TWS,TWA) grid cells — the Lab-4 refined-polar input. Snapping to the
     cert grid (not arbitrary bins) is what lets an approved adjustment line up 1:1 with the cell the
@@ -491,9 +509,11 @@ def _performance_bins(seg, epochs, wf, polars, cur=None, wave=None, wave_coeffs=
         if abs(cell[0] - tws) > 3.0 or abs(cell[1] - twa) > 18.0:             # too far → off-grid, skip
             continue
         hs = wave.wave_at(f["lat"], f["lon"], ep) if wave is not None else 0.0
-        cells.setdefault((cell[0], cell[1], cell[2]), []).append((stw, hs))
+        cfg = config_at(sail_log, ep)
+        cells.setdefault((cell[0], cell[1], cell[2], cfg), []).append((stw, hs))
     out = []
-    for (tws_c, twa_c, target), samples in sorted(cells.items()):
+    for (tws_c, twa_c, target, cfg), samples in sorted(
+            cells.items(), key=lambda kv: (kv[0][0], kv[0][1], kv[0][3] or "")):
         if len(samples) < _BIN_MIN_SAMPLES or not target or target <= 0.5:
             continue
         stws = [s for s, _h in samples]
@@ -502,7 +522,8 @@ def _performance_bins(seg, epochs, wf, polars, cur=None, wave=None, wave_coeffs=
         pct = round(100 * best / target)
         row = {"tws": tws_c, "twa": twa_c, "point_of_sail": _point_of_sail(twa_c),
                "samples": len(samples), "best_stw": round(best, 2),
-               "target_stw": round(target, 2), "pct": pct}
+               "target_stw": round(target, 2), "pct": pct,
+               "config": cfg}      # the crew sail configuration this cell was sailed under
         if wave is not None:
             wfac = optimizer._wave_factor(hs_mean, twa_c, wave_coeffs)
             row["hs_mean"] = hs_mean
@@ -521,9 +542,13 @@ def save_track(race_id, track):
     os.makedirs(TRACK_DIR, exist_ok=True)
     meta = {"race_id": race_id, "source": track.get("source"), "boat": track.get("boat"),
             "n": track.get("n") or len(track.get("fixes") or []),
-            "matched_by": track.get("matched_by")}
+            "matched_by": track.get("matched_by"),
+            "sail_changes": len(track.get("sail_log") or [])}
     with open(_path(race_id), "w") as fh:
-        json.dump({**meta, "fixes": track.get("fixes") or []}, fh)
+        # sail_log = the crew's timestamped CONFIGURATION history (boat-log tracks) — the
+        # per-config polar-development input; GPX/YB tracks simply don't carry one
+        json.dump({**meta, "fixes": track.get("fixes") or [],
+                   "sail_log": track.get("sail_log") or []}, fh)
     return meta
 
 

@@ -165,3 +165,32 @@ if __name__ == "__main__":
     if "--live" in sys.argv:
         _live()
     print("\nALL TRACK TESTS PASSED")
+
+
+def test_config_attribution():
+    """Per-config polar development: the sails-bar log attributes each fix to its configuration."""
+    from app import track as T
+    log = [{"ts": 100, "flying": ["J1"], "reef": None},
+           {"ts": 200, "flying": ["C0", "J2"], "reef": None},
+           {"ts": 300, "flying": ["A3", "SS"], "reef": "R1"}]
+    assert T.config_at(log, 50) is None            # before the first entry
+    assert T.config_at(log, 150) == "J1"
+    assert T.config_at(log, 250) == "C0+J2"        # a combination the crossover chart doesn't rate
+    assert T.config_at(log, 999) == "A3+SS+R1"     # kite + staysail + reef
+    assert T.config_at([], 150) is None            # no log (GPX/YB tracks)
+    assert T.config_at(log, None) is None
+    # doused everything -> None again
+    log2 = log + [{"ts": 400, "flying": [], "reef": None}]
+    assert T.config_at(log2, 450) is None
+    # save/load round-trips the sail log with the track
+    import tempfile, os
+    T.TRACK_DIR = tempfile.mkdtemp()
+    meta = T.save_track("cfg-test", {"source": "boatlog", "fixes": [{"t": 1, "lat": 0, "lon": 0}],
+                                     "sail_log": log})
+    assert meta["sail_changes"] == 3
+    back = T.load_track("cfg-test")
+    assert len(back["sail_log"]) == 3 and back["sail_log"][1]["flying"] == ["C0", "J2"]
+    print("  [OK ] config attribution + sail-log round-trip")
+
+
+test_config_attribution()

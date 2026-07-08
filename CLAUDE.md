@@ -199,7 +199,11 @@ overlay 0) and never leave the boat, so day sails/deliveries don't accumulate an
 agent serves them back (`GET /racelog/sessions`, `GET /racelog/track`) and the Lab
 Debrief's "boat's own log" track source builds the debrief track from them — full-res,
 with the sail changes riding along. Prune is fail-safe: engine store unreadable ⇒ nothing
-deleted. The dashboard **SAILS bar** (chips + R1 reef) is the crew's logging surface.
+deleted. The dashboard **CURRENT SAILS bar** (chips + R1 reef) is the crew's logging surface — and
+the per-config polar-development input: boat-log debriefs attribute every fix to the active
+configuration (track.config_at), the learning archive stores performance bins per config, and
+`GET /api/learning/config-polars` + the Learnings "Observed by sail configuration" card grow
+observed curves for combinations the crossover chart doesn't rate (C0+J2, kite+staysail…).
 
 The **executor stack** (all deterministic, Schmitt-hysteretic — consider/commit bands,
 raise slow / clear fast):

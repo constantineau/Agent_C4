@@ -74,13 +74,18 @@ def _engine(ro=True):
 
 
 def push_sail_log(conn):
-    """Push the crew sail-state history as `crew.sail.state` readings (cursor: last ts sent)."""
+    """Push the crew sail-state history as `crew.sail.state` readings (cursor: last ts sent).
+    SESSION-SCOPED like everything else: only changes inside race-session windows upload — a
+    day sail's sail changes never leave the boat (and the per-config polar record is built
+    from RACE data only)."""
     try:
         ec = _engine()
         row = conn.execute("SELECT v FROM sync_state WHERE k='backfill_sail_ts'").fetchone()
         since = float(row[0]) if row else 0.0
-        logs = ec.execute("SELECT ts, flying, reef, out_of_service FROM sail_log "
-                          "WHERE ts > ? ORDER BY ts", (since,)).fetchall()
+        wins = ec.execute("SELECT start_ts, end_ts FROM sessions").fetchall()
+        logs = [r for r in ec.execute("SELECT ts, flying, reef, out_of_service FROM sail_log "
+                                      "WHERE ts > ? ORDER BY ts", (since,)).fetchall()
+                if any(a <= r[0] and (b is None or r[0] <= b) for a, b in wins)]
         ec.close()
     except Exception as exc:
         print(f"[backfill] sail log skipped ({exc})", flush=True)
@@ -95,7 +100,7 @@ def push_sail_log(conn):
                 for ts, fly, reef, oos in logs]
     _post(readings)
     conn.execute("INSERT INTO sync_state (k, v) VALUES ('backfill_sail_ts', ?) "
-                 "ON CONFLICT(k) DO UPDATE SET v=excluded.v", (str(logs[-1][0]),))
+                 "ON CONFLICT(k) DO UPDATE SET v=excluded.v", (str(max(r[0] for r in logs)),))
     conn.commit()
     print(f"[backfill] sent {len(readings)} sail-log entries", flush=True)
 

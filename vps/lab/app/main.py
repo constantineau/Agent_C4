@@ -860,6 +860,13 @@ async def learning_calibrate_waves(body: dict = None):
     return await run_in_threadpool(learning.calibrate_waves, bid)
 
 
+@app.get("/api/learning/config-polars")
+def learning_config_polars(boat_id: str = None):
+    """Observed polars BY SAIL CONFIGURATION (the sails-bar log attributed to every fix) —
+    curves for combinations the crossover chart doesn't rate accumulate here over time."""
+    return learning.config_polars(boat_id)
+
+
 @app.get("/api/learning/trend")
 async def learning_trend(boat_id: str = None):
     """Per-race performance series (latest debrief per race) + applied-refinement milestones — the
