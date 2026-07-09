@@ -81,6 +81,37 @@ stub(tac=wind(False, "either", osc=12))
 r = selector.get_selector()
 check("default hold, ok", r["action"] == "hold" and r["status"] == "ok")
 
+# --- downwind pivot hygiene (PLAYBOOK_V2 locked input #5; 2025 known-answer backtest) ------------
+# Downwind, the decisive persistent-shift SWITCH must CONFIRM (default 60 min) before it fires;
+# upwind keeps fire-on-persistent. The 2025 replay showed 13/15 wrong-side calls were short-lived
+# downwind excursions — this timer is what kills them.
+print("downwind confirmation:")
+B_RIGHT = {"race_id": "u", "recommended": "right",
+           "variants": [{"id": "right", "name": "Right"}, {"id": "left", "name": "Left"}]}
+def wind_pos(pos):
+    w = wind(True, "left")
+    w["point_of_sail"] = pos
+    return w
+T0 = 1_800_000_000.0
+selector._CONFIRM.clear()
+stub(bundle=B_RIGHT, tac=wind_pos("upwind"))
+check("upwind: immediate switch (unchanged)", selector.get_selector(now=T0)["action"] == "switch")
+selector._CONFIRM.clear()
+stub(bundle=B_RIGHT, tac=wind_pos("downwind"))
+r = selector.get_selector(now=T0)
+check("downwind t=0: hold-watch, confirming", r["action"] == "hold" and r["status"] == "watch"
+      and r["confirming"]["favored"] == "left")
+check("downwind t=30m: still confirming",
+      selector.get_selector(now=T0 + 1800)["confirming"]["held_s"] == 1800)
+check("downwind sustained past the bar: switch fires",
+      selector.get_selector(now=T0 + 3660)["action"] == "switch")
+stub(bundle=B_RIGHT, tac=wind(False, "either"))
+selector.get_selector(now=T0 + 3720)                       # condition drops → clock clears
+stub(bundle=B_RIGHT, tac=wind_pos("downwind"))
+check("clear-fast: dropout resets the clock",
+      selector.get_selector(now=T0 + 3780)["confirming"]["held_s"] == 0)
+selector._CONFIRM.clear()
+
 # --- na paths -----------------------------------------------------------------------------------
 print("na:")
 stub(bundle={})

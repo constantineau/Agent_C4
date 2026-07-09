@@ -21,8 +21,19 @@ confidence/urgency) and, on their own, raise a "reassess" caution. FUZZY (perfla
 first-class output from how many signals concur; the wind trigger keeps the engine's own persistence
 hysteresis so it doesn't flip-flop.
 """
+import os
+import time
+
 from shared import windphrase as wp
 from . import deviation, drift as drift_mod, tactics
+
+# PLAYBOOK_V2 locked input #5 — pivot hygiene is point-of-sail-aware: a lateral SWITCH downwind
+# must be CONFIRMED longer than upwind (the 2025 retro: lateral pivots bought little in the
+# runner; the 2025 known-answer backtest: 13/15 wrong-side switch calls were short-lived downwind
+# excursions, median ~40 min). Upwind keeps the current fire-on-persistent behavior; downwind the
+# decisive condition must HOLD this long before the verdict escalates from a reassess to a SWITCH.
+SWITCH_CONFIRM_DOWNWIND_S = float(os.environ.get("SEL_SWITCH_CONFIRM_DOWNWIND_S", "3600"))
+_CONFIRM = {}      # (route, favored) -> epoch the decisive condition was first seen (clear-fast)
 
 
 def _variant_for_side(bundle, side):
@@ -76,9 +87,11 @@ def _na(note):
 _DRIFT_SIGN = {"right": 1, "left": -1, "veered": 1, "backed": -1}
 
 
-def get_selector(route=None):
+def get_selector(route=None, now=None):
     """The unified branch recommendation over the frozen playbook. Reuses the two trigger reads +
-    the tactical read (each already fuzzy/hysteretic), so this stays a thin, deterministic decision."""
+    the tactical read (each already fuzzy/hysteretic), so this stays a thin, deterministic decision.
+    `now` is injectable for replay/backtest; live callers leave it None (wall clock)."""
+    now = float(now) if now is not None else time.time()
     bundle = deviation._load_playbook()
     if not bundle:
         return _na("no playbook aboard")
@@ -132,7 +145,34 @@ def get_selector(route=None):
             "decision_spread_min": bundle.get("decision_spread_min")}
 
     # ---- decisive path: a PERSISTENT shift favours a side other than the one we're on -----------
-    if persistent and favored in ("left", "right") and favored != rec_id:
+    decisive = persistent and favored in ("left", "right") and favored != rec_id
+    if not decisive:
+        for k in [k for k in list(_CONFIRM) if k[0] == route]:   # clear-fast: condition gone
+            _CONFIRM.pop(k, None)
+    if decisive:
+        # locked input #5 — downwind, the pivot must CONFIRM before the verdict escalates to a
+        # SWITCH; a different favored side restarts its own clock (clear-fast on the old one).
+        key = (route, favored)
+        for k in [k for k in list(_CONFIRM) if k[0] == route and k != key]:
+            _CONFIRM.pop(k, None)
+        first = _CONFIRM.setdefault(key, now)
+        held_s = now - first
+        if pos == "downwind" and held_s < SWITCH_CONFIRM_DOWNWIND_S:
+            held_m, need_m = round(held_s / 60), round(SWITCH_CONFIRM_DOWNWIND_S / 60)
+            return {**base, "action": "hold", "status": "watch", "tier": 0,
+                    "target_variant": None, "target_label": None,
+                    "value": f"Hold: {rec_label}", "driven_by": ["get_tactics"],
+                    "confidence": 0.5, "confidence_label": _conf_label(0.5),
+                    "why": (f"A persistent shift now favours the {favored} — but this is a DOWNWIND "
+                            f"leg, and downwind pivots need longer confirmation before they pay "
+                            f"(2025 retro: lateral pivots bought little in the runner). "
+                            f"Held {held_m} of {need_m} min."),
+                    "consider": (f"Stay on '{rec_label}' while the {favored} shift confirms — the "
+                                 f"branch fires at {need_m} min sustained."),
+                    "clears": "the shift reverses (clock resets), or confirmation completes",
+                    "based": ["get_tactics"],
+                    "confirming": {"favored": favored, "held_s": round(held_s),
+                                   "need_s": SWITCH_CONFIRM_DOWNWIND_S}}
         target = _variant_for_side(bundle, favored)
         driven = ["get_tactics"]
         concur = 0

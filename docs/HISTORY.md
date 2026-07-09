@@ -220,6 +220,21 @@ and the per-component READMEs. Detailed design rationale for the big arcs is in 
   the :10/:5 escalations (and the act-level audio tone at the mark) never fired. Both rounding
   and watch stages now take `min()` of the matching thresholds.
 
+## 2026-07-09 (later) — the known-answer playbook backtest, and the fix it forced
+
+- **PLAYBOOK_V2 §8's pre-race validation, run for real** (RETRO_STUDY.md §8): the 2025 playbook
+  synthesized exactly as-of-gun from the pinned archive GRIBs (fingerprint rebuilt from the same
+  frozen blend), the realized race replayed through the REAL selector/matcher along two YB tracks
+  (Div-I winner + rank 88) on an hourly HRRR-f00 oracle chain. Verdict: **the gun bundle
+  recommended RIGHT — the side that paid 18:2 — at 0.74 consensus**; the selector held the plan
+  in steady state but chattered Switch→Left downwind (15 short excursions, 13 downwind, 17–21%
+  of race time). That was locked input #5, designed and never implemented.
+- **Selector: downwind pivot-hygiene confirmation clock** (`SEL_SWITCH_CONFIRM_DOWNWIND_S`,
+  default 60 min, clear-fast): downwind the decisive SWITCH must sustain before it fires; upwind
+  unchanged. Wrong-side time on the replay fell to 6–10%; survivors are hour-plus real shifts.
+  `get_selector(now=)` is injectable for replay. New harness kept: `vps/lab/app/pbbacktest.py`
+  (as-of synthesis + oracle sampling) + `vps/agent/backtest_replay.py` (host decision replay).
+
 ## Standing decisions (still binding)
 
 - **RRS 41 bright line**: all frontier/cloud work pre-start, frozen at the gun; in-race =

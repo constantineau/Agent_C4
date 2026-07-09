@@ -233,7 +233,10 @@ judgment calls into measured quantities. These are **locked as implementation re
 8. **Two follow-on enrichments (post-B):** oracle-regret scoring (separate forecast-bust from
    slow execution — the scenario-mining input) and the **known-answer playbook backtest** —
    synthesize the 2025 playbook as-of-gun and replay the realized wind through the selector; it
-   should have pivoted right early. Run before the 2026 race if time allows.
+   should have pivoted right early. **RUN 2026-07-09 (RETRO_STUDY.md §8): the gun bundle already
+   recommended RIGHT — the side that paid — and the replay surfaced that input #5 was never
+   implemented in the selector; the downwind confirmation clock now is (wrong-side chatter
+   17–21% → 6–10% of race time).**
 
 ## 9. Phasing
 

@@ -112,5 +112,49 @@ optimal, and re-run on `bayviewmack2026` the week after the race.
 
 Phase-B perturbation ranges + Phase-D predicate thresholds (divergence magnitudes) · optimizer
 physics gaps (systematic fleet-wide deviations) · route-level model skill (which model's route
-would have scored best) · a full-system playbook backtest (later: replay the oracle wind through
-drift/selector hour by hour against the synthesized playbook).
+would have scored best) · a full-system playbook backtest (§8 — run 2026-07-09).
+
+## 8. KNOWN-ANSWER PLAYBOOK BACKTEST — bayviewmack2025 (run 2026-07-09, pre-race validation)
+
+The full-system test PLAYBOOK_V2 §8 asked for: synthesize the playbook EXACTLY as-of the 2025
+gun (pinned archive GRIBs — GFS 06Z/12Z + HRRR 13/15/16Z, nothing the boat couldn't have had),
+then replay the realized race through the REAL onboard decision code and compare against the
+known outcome (right paid 18:2 in the Div-I top third).
+
+**Method** (`vps/lab/app/pbbacktest.py` + `vps/agent/backtest_replay.py`):
+- As-of synthesis: `synthesis.synthesize(models=archive.gun_sources(gun))` — the same seam the
+  retro uses; the forecast fingerprint is rebuilt from the SAME gun blend (live Open-Meteo can't
+  serve 2025) and the bundle re-signed. Full v2 fan, Fable narratives, 10 plays.
+- Realized wind: an hourly **HRRR f00 analysis chain** (the judge-loop's oracle definition; 51
+  frames, pinned `retro:bayviewmack2025-oracle`).
+- Replay: 15-min steps along two real YB tracks — **Mockingbird** (Div-I winner) and
+  **Wavelength** (rank 88) — position → realized wind → tactics.py's own persistence math (3 h
+  window on analysis wind) + the engine's real deviation/drift Schmitt bands → the REAL
+  `selector.get_selector()` + `matcher._evaluate()` per step.
+- Stated approximations: drift = realized-vs-frozen (not evolving-forecast-vs-frozen);
+  fatigue/sail/polar/leg signals absent; YB cog sparse (point-of-sail classification is rough).
+
+**Findings:**
+1. **The gun playbook called the race: PASS.** The as-of-gun bundle recommended **right** at
+   0.74 consensus confidence (models split — GFS right / HRRR left 1.9 h, 114 min at stake).
+   The side that paid 18:2 was on the plan's cover page before the start.
+2. **The selector held the plan in steady state** — the majority verdict on both tracks was
+   HOLD: Right — **but chattered downwind**: 15 short-lived Switch→Left excursions across the
+   two boats (median ~40 min; 17% / 21% of race time on the wrong-side call; 13/15 while
+   running). Exactly the failure locked input #5 predicted ("lateral pivots bought little in
+   the runner") — and #5 had never been implemented in the selector.
+3. **Fix shipped from this backtest**: `selector.py` now carries the locked-input-#5
+   confirmation clock — downwind, the decisive persistent-shift SWITCH must hold
+   `SEL_SWITCH_CONFIRM_DOWNWIND_S` (default 60 min, clear-fast on any dropout) before it fires;
+   until then the verdict is a hold-watch "confirming" read. Upwind unchanged. Re-replay:
+   wrong-side time **17%→6%** (winner's track) and **21%→10%**; the surviving Switch→Left calls
+   are hour-plus sustained shifts (defensible seamanship, not chatter). Unit-tested in
+   `test_selector.py`.
+4. **Plays armed liberally through the frontal passages** (front_early AND front_late; both
+   pressure directions within hours) — the predicates track the real swings. Acceptable for a
+   descriptive ARMED list the crew reads alongside the deterministic recommendation, but worth
+   remembering: armed ≠ act.
+5. Reproduce: `docker cp vps/lab/app/pbbacktest.py sr33-dev-lab-1:/srv/app/ && docker exec
+   sr33-dev-lab-1 python3 -c "from app import pbbacktest; pbbacktest.run()"` → copy
+   `/srv/retro/backtest/replay_input.json` out → `PYTHONPATH=vps/agent:. python3
+   vps/agent/backtest_replay.py <replay_input.json>`.
