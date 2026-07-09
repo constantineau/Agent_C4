@@ -65,6 +65,8 @@ computation is separated from the LLM across three tiers:
 ```
 pi/                 Signal K config, systemd units, uplink + full-res archiver, bench tools
 pi/engine/          onboard deterministic engine service (Tier 1) — no LLM, :8200
+pi/n2kout/          N2K route BROADCASTER (:8210, host net) — the iPad's "show on GPS" button:
+                    129285/129284/129283 onto the bus for the Garmin 943; passive until asked
 pi/console/         onboard race console + crew dashboard (iPad, served from the Pi, :8091)
 pi/orin/            onboard LLM copilot (Tier 2) — Ollama+Qwen2.5-7B :11434; copilot/ svc :8300
 vps/ingestion/      FastAPI ingestion API (token-auth → TimescaleDB)
@@ -88,6 +90,7 @@ develop on `dev`, ff-merge to `main`, deploy `main`. The only bench↔boat diffe
 |---|---|---|---|---|
 | TimescaleDB | **5433** | | Signal K (host net) | **3010** |
 | ingestion | **8101** | | onboard engine | **8200** |
+| n2kout (route→GPS) | **8210** | | | |
 | agent | **8102** | | onboard console + dashboard | **8091** |
 | lab | **8103** | | copilot (on the Orin) | **8300** |
 | web | **8090** | | Ollama (on the Orin) | **11434** |
@@ -191,7 +194,12 @@ edited live on the CREW tile) · /session + POST /session/start|end (the RACE LO
 below) · /course · POST /course/practice · POST /course/load (RaceDefinition course →
 marks) · /navigator · /tactics · /forecast · /route · /ais · POST /fleet/load · /fleet ·
 POST /playbook/load (freeze the signed bundle aboard; clears trigger/matcher state) ·
-/deviation · /drift · /plangap · /trend · /selector · /reoptimize · /strategy · /plays · /buoys`.
+/deviation · /drift · /plangap · /trend · /selector · /reoptimize · /strategy · /plays · /buoys ·
+POST /gps/show + /gps/clear + GET /gps/status (the CHARTPLOTTER push: assembles the frozen
+variant's path — or the onboard re-route — and drives the `pi/n2kout` broadcaster, which
+transmits 129285 route chunks + 129284/129283 nav data on the boat's own N2K bus for the
+Garmin 943; encodings verified round-trip through canboatjs on vcan0; **the 943's on-screen
+rendering still needs a dockside eyeball once the N2K cable is plugged**)`.
 
 **Race log (sessions)** — the owner's record switch, fully standalone (no Lab prep, no
 RaceDefinition, no cloud): the dashboard's ⏺ LOG button one-tap starts/ends a session

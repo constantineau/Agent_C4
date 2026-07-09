@@ -149,6 +149,19 @@ services:
       - signalk
     restart: unless-stopped
 
+  # N2K route BROADCASTER — the one service that WRITES to the bus, and only on the crew's
+  # button: the iPad's "show on GPS" → engine /gps/show → this service broadcasts the gameplan
+  # route to the Garmin 943 (129285 route chunks + 129283/129284 nav data; RRS-41 clean — own
+  # computer to own display). Passive until asked; harmless with no bus (bench / pre-cable).
+  n2kout:
+    build:
+      context: .
+      dockerfile: pi/n2kout/Dockerfile
+    network_mode: host
+    environment:
+      CAN_IFACE: ${CAN_IFACE:-vcan0}
+    restart: unless-stopped
+
   # Phase 9.2 (iPad-side) — onboard race console. Serves the SAME iPad app as the cloud web,
   # but pointed ONLY at the onboard engine (:8200) over boat-local Wi-Fi: no cloud, no auth,
   # no LLM chat, every panel available. In race mode the iPad connects to THIS (network-level

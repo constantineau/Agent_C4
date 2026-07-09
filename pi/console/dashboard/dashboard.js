@@ -267,6 +267,14 @@
     return fetch(API + path, { signal: ctl.signal, headers: { Accept: "application/json" } })
       .then((r) => (r.ok ? r.json() : null)).catch(() => null).finally(() => clearTimeout(t));
   }
+  function postJSON(path, body, ms) {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), ms || 8000);
+    return fetch(API + path, { method: "POST", signal: ctl.signal,
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(body || {}) })
+      .then((r) => (r.ok ? r.json() : null)).catch(() => null).finally(() => clearTimeout(t));
+  }
   function circMeanDeg(degs) {
     const s = degs.reduce((a, d) => a + Math.sin(d * D2R), 0) / degs.length;
     const c = degs.reduce((a, d) => a + Math.cos(d * D2R), 0) / degs.length;
@@ -1139,9 +1147,50 @@
       (avb.length ? ' · avoids ' + avb.join(" + ") : '') +
       (vs ? ' · ' + vs : '') + ' <span class="ro-tag">off-book</span></span></p>';
   }
+  /* ============ GARMIN 943 — push the gameplan onto the chartplotter (engine /gps/*) ============
+     The one WRITE surface on the stack: crew-initiated, crew-cleared. The engine assembles the
+     frozen variant path (or the onboard re-route) and the Pi's n2kout service broadcasts it on
+     the boat's own N2K bus — pixels on the crew's own display, RRS-41 clean. */
+  async function fetchGps() {
+    if (App.src !== "live") return;
+    App.gps = await fetchJSON("/gps/status", 6000);
+    if (App.openTile === "playbook") populateDetail("playbook", false);
+  }
+  window.gpsShow = async function (source, variant) {
+    App.gpsBusy = true;
+    if (App.openTile === "playbook") populateDetail("playbook", false);
+    const r = await postJSON("/gps/show", { source: source, variant: variant || null }, 12000);
+    App.gpsBusy = false;
+    App.gpsNote = r ? (r.shown ? "" : (r.note || "could not show")) : "engine unreachable";
+    await fetchGps();
+  };
+  window.gpsClear = async function () {
+    App.gpsBusy = true;
+    await postJSON("/gps/clear", {}, 8000);
+    App.gpsBusy = false;
+    App.gpsNote = "";
+    await fetchGps();
+  };
+  function gpsHtml() {
+    if (App.src !== "live") return "";
+    const g = App.gps;
+    const on = g && g.broadcasting;
+    const busy = App.gpsBusy ? " disabled" : "";
+    const status = !g || g.available === false
+      ? '<span class="gps-note">broadcaster offline</span>'
+      : on ? `<span class="gps-on">● showing “${g.route || "route"}” (${g.n_waypoints} pts)</span>`
+           : '<span class="gps-note">idle</span>';
+    const note = App.gpsNote ? ` <span class="gps-note">${App.gpsNote}</span>` : "";
+    return '<div class="st-gps"><div class="st-plays-head"><span>GARMIN 943</span>' + status +
+      '</div><div class="cw-btns">' +
+      `<button class="cw-btn"${busy} onclick="gpsShow('playbook')">▶ Gameplan route</button>` +
+      `<button class="cw-btn"${busy} onclick="gpsShow('reoptimize')">⟳ Re-route</button>` +
+      `<button class="cw-btn"${busy} onclick="gpsClear()">✕ Clear</button>` +
+      '</div>' + note + '</div>';
+  }
   function strategyStackHtml() {
     const parts = [synthHtml(), selectorHtml(), deviationHtml(), driftHtml(), plangapHtml(),
-      playsHtml(), reoptHtml()].filter(Boolean);
+      playsHtml(), reoptHtml(), gpsHtml()].filter(Boolean);
     if (!parts.length) return "";
     return '<div class="st-stack">' + parts.join("") + "</div>";
   }
@@ -1183,7 +1232,7 @@
     adhereTimer: null, coachTimer: null, devTimer: null, driftTimer: null, selTimer: null, polling: false,
     dwell: {}, data: null, windHist: [], fcstHist: [], seriesHist: [], lastPersist: 0, brief: null,
     coach: null, deviation: null, forecastDrift: null, selector: null, reoptimize: null,
-    plangap: null, trend: null, briefBusy: {},
+    plangap: null, trend: null, briefBusy: {}, gps: null, gpsBusy: false, gpsNote: "",
     detailStreamKey: null, detailAbort: null,
   };
   function currentData() {
@@ -1339,6 +1388,7 @@
     document.getElementById("overlay").hidden = false;
     document.getElementById("detail").hidden = false;
     if (key === "wind" && App.src === "live") fetchSeries().then(() => { if (App.openTile === "wind") populateDetail("wind", false); });
+    if (key === "playbook" && App.src === "live") fetchGps();   // the GARMIN 943 row's live state
     populateDetail(key, true);
   }
   /* ============ the COACH WINDOW — the commentary panel's tap-detail ============

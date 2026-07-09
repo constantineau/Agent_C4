@@ -397,3 +397,9 @@ body {
 .st-watch-head { font-size: 10px; letter-spacing: 1px; opacity: 0.6; margin: 6px 0 2px; }
 .st-watch { font-size: 12px; color: var(--muted); margin: 2px 0; }
 .st-watch-pct { display: inline-block; min-width: 34px; font-weight: 800; color: inherit; }
+
+/* GARMIN 943 row on the strategy stack */
+.st-gps { margin-top: 6px; padding-top: 5px; border-top: 1px solid var(--line); }
+.st-gps .cw-btns { margin: 4px 0 2px; }
+.gps-on { font-size: 11.5px; color: var(--ok, #3a3); letter-spacing: 0; }
+.gps-note { font-size: 11px; opacity: 0.65; letter-spacing: 0; }

@@ -25,7 +25,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app import (navigator, tactics, routing, weather, sails, fatigue, onboard_conditions,
                  datasource, ais, fleet, deviation, drift, selector, reoptimize, strategy,
-                 matcher, buoys, racelog, watches, trend, plangap)
+                 matcher, buoys, racelog, watches, trend, plangap, gpsout)
 
 app = FastAPI(title="Agent_C4 Onboard Engine", version="0.1.0")
 # The iPad reaches the Pi directly over boat-local Wi-Fi in race mode; allow cross-origin so a
@@ -222,6 +222,29 @@ def plays(route: str | None = None):
     against the boat's live signals (deterministic Schmitt sustain; armed first). Legal in-race —
     own instruments + pre-loaded homework; works with no Orin aboard."""
     return matcher.get_plays(route)
+
+
+@app.post("/gps/show")
+def gps_show(body: dict | None = None):
+    """Put a route on the CHARTPLOTTER (Garmin 943) — the iPad's button. Assembles the frozen
+    bundle variant's path (default: recommended) or the onboard re-route and hands it to the
+    n2kout broadcaster (129285/129284/129283 on the boat's own bus — RRS-41 clean).
+    Body: {source: "playbook"|"reoptimize", variant?: "<id>", route?: "<route>"}."""
+    body = body or {}
+    return gpsout.show(source=body.get("source") or "playbook",
+                       variant=body.get("variant"), route=body.get("route"))
+
+
+@app.post("/gps/clear")
+def gps_clear():
+    """Stop broadcasting — the plotter drops the external route when the stream goes quiet."""
+    return gpsout.clear()
+
+
+@app.get("/gps/status")
+def gps_status(route: str | None = None):
+    """The broadcaster's state + the bundle's variant ids (for the iPad's buttons)."""
+    return gpsout.status(route)
 
 
 @app.get("/trend")

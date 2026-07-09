@@ -281,6 +281,29 @@ and the per-component READMEs. Detailed design rationale for the big arcs is in 
   image. Live-leg N2K broadcast (129284/129285 emitter on the Pi) is DESIGNED, not built —
   post-cable, needs a dockside render check on the 943.
 
+## 2026-07-10 (later) — the iPad button that puts the route on the Garmin
+
+- **The live push, built** (the "designed, not built" from the same morning): **`pi/n2kout/`**,
+  the one Tier-1 service that WRITES to the bus, and only on the crew's button. Pure-stdlib
+  NMEA-2000 encoder (`n2k.py`: SocketCAN AF_CAN, fast-packet TX framing, canboat-exact field
+  packing for 129283 XTE · 129284 Navigation Data · 129285 Route/WP list · a minimal 60928
+  address claim; STRING_LAU names; n/a conventions; long routes CHUNKED via startRps — and
+  nItems = rows-in-this-message, the canboat reference reading, or decoders chase a phantom
+  row into the frame padding). FastAPI service on :8210 (host net, `CAN_IFACE`): POST /route
+  starts a broadcast thread (route chunks ~5 s, XTE+nav ~1 Hz), POST /stop goes silent,
+  passive by default — harmless with no bus (bench vcan0 / pre-cable boat alike).
+- **Engine `POST /gps/show` / `/gps/clear` / `GET /gps/status`** (`app/gpsout.py`): assembles
+  the frozen bundle variant's path (default recommended) or the onboard re-route, downsamples
+  to ≤24 points (endpoints kept), names them C4-01…, hands to n2kout. **iPad**: the playbook
+  detail's strategy stack gains the **GARMIN 943 row** — ▶ Gameplan route · ⟳ Re-route ·
+  ✕ Clear + live broadcaster status.
+- **Verified on the bench end-to-end**: Playwright tap → engine → n2kout → vcan0 frames →
+  **canboatjs round-trip decode exact** (route name, named waypoints, correct lat/lon 1e-7,
+  ETA date/time, chunk placement 0/10/20). Unit suites: `pi/n2kout/test_n2k.py` (ids, packing,
+  framing, chunk cap) + `vps/agent/test_gpsout.py` (variant selection, downsample, honest
+  failure notes). **Dockside verification still owed**: how the 943 *renders* an external
+  route (line on chart vs data fields) — first time the N2K cable goes in.
+
 ## Standing decisions (still binding)
 
 - **RRS 41 bright line**: all frontier/cloud work pre-start, frozen at the gun; in-race =
