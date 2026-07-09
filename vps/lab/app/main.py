@@ -665,6 +665,30 @@ async def playbook_get(pid: str):
     return {"bundle": b, "verified": synthesis.verify_bundle(b)}
 
 
+@app.get("/api/playbooks/{pid}/gpx")
+async def playbook_gpx(pid: str, variants: str = "recommended"):
+    """The frozen gameplan as GPX for the boat's CHARTPLOTTER (Garmin GPSMAP 943 imports GPX
+    from a memory card / ActiveCaptain and draws it): course marks as waypoints, the recommended
+    variant as a navigable route (+ every variant as a drawn track with variants=all)."""
+    b = pbstore.get(pid)
+    if not b:
+        return JSONResponse({"detail": "unknown playbook id"}, status_code=404)
+    marks = []
+    d = store.get_race(b.get("race_id") or "")
+    if d:
+        try:
+            rows, _sk, _cid = race_def.course_to_marks(d, b.get("course_id"))
+            # course_to_marks returns (seq, name, lat, lon) tuples — reshape for the GPX builder
+            marks = [{"name": name, "lat": lat, "lon": lon} for (_seq, name, lat, lon) in rows]
+        except Exception:
+            marks = []
+    from . import gpx as gpx_mod
+    text = gpx_mod.bundle_gpx(b, marks=marks, variants=variants)
+    from fastapi.responses import Response
+    return Response(content=text, media_type="application/gpx+xml", headers={
+        "Content-Disposition": f'attachment; filename="{pid}.gpx"'})
+
+
 @app.get("/api/playbooks/{pid}/download")
 async def playbook_download(pid: str):
     """The exact signed bytes — scp this to the Orin and point the copilot's PLAYBOOK_PATH at it."""

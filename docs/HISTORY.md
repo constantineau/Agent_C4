@@ -265,6 +265,22 @@ and the per-component READMEs. Detailed design rationale for the big arcs is in 
   handover/mark brief buttons. Playwright-verified; engine+console rebuilt on the bench;
   12 unit suites + bench_copilot green (briefs section added).
 
+## 2026-07-10 — the gameplan on the GPS screen (GPX → GPSMAP 943)
+
+- **Question answered: can the system drop waypoints/a path on the boat's chartplotter?**
+  Researched against the Garmin GPSMAP touch-series PGN tables: the 943 **imports GPX** user
+  data (memory card / ActiveCaptain) and draws it; it **receives 129284/129285** (external
+  navigation data — a live "steer-to" leg from the Pi is possible, dockside verification
+  required once the N2K cable is plugged); it does **NOT receive 129041 AIS AtoN**, so the
+  virtual-AIS-marks trick is out on N2K for this plotter.
+- **Shipped: Lab GPX export** (`vps/lab/app/gpx.py`, `GET /api/playbooks/{pid}/gpx`, a
+  "⤓ GPX (chartplotter)" button beside the bundle download): course marks as C4- prefixed
+  waypoints, the RECOMMENDED variant as a navigable route (named points, plan ETAs as times),
+  every variant as a drawn track (`?variants=all`). Verified against the frozen
+  bayview-mackinac-2026 bundle (3 marks + 43-point route + 2 tracks); unit test host + baked
+  image. Live-leg N2K broadcast (129284/129285 emitter on the Pi) is DESIGNED, not built —
+  post-cable, needs a dockside render check on the 943.
+
 ## Standing decisions (still binding)
 
 - **RRS 41 bright line**: all frontier/cloud work pre-start, frozen at the gun; in-race =

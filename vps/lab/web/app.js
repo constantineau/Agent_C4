@@ -1528,6 +1528,7 @@ function pbSigBox(b) {
     <span class="pill ok">🔒 Frozen &amp; signed</span>
     <code title="sha256">${esc((sig.value || "").slice(0, 16))}…</code>
     <button class="mini" onclick="downloadPlaybook('${esc(pid)}')">Download bundle</button>
+    <button class="mini" onclick="downloadPlaybookGpx('${esc(pid)}')" title="Course marks as waypoints + the recommended variant as a navigable route + every variant as a drawn track — import on the GPSMAP via ActiveCaptain or a memory card and the gameplan draws on the chart">⤓ GPX (chartplotter)</button>
     <span class="muted" style="font-size:11px">Drop this at the copilot's <code>PLAYBOOK_PATH</code> onboard.</span>
   </div>`;
 }
@@ -1545,6 +1546,21 @@ async function downloadPlaybook(pid) {
     document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
   } catch (e) { alert("Could not download the bundle: " + e.message); }
+}
+
+// The gameplan as GPX for the boat's chartplotter (the GPSMAP imports GPX via ActiveCaptain /
+// a memory card and draws it on the chart). Same authed-fetch dance as the bundle download.
+async function downloadPlaybookGpx(pid) {
+  try {
+    const res = await apiGet("/api/playbooks/" + encodeURIComponent(pid) + "/gpx?variants=all");
+    if (!res.ok) throw new Error("download failed (" + res.status + ")");
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = pid + ".gpx";
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  } catch (e) { alert("Could not download the GPX: " + e.message); }
 }
 
 async function freezePlaybook() {
