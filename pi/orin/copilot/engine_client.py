@@ -77,6 +77,11 @@ class EngineClient:
     def fatigue(self) -> dict:
         return self._get("/fatigue")
 
+    def watch(self) -> dict:
+        """The watch system: who's on, countdown to the next change, the block schedule.
+        Deterministic crew scheduling from the engine kv — feeds the watch-change callouts."""
+        return self._get("/watch")
+
     def ais(self, max_range_nm=None) -> dict:
         """AIS traffic + live CPA/TCPA vs own ship — collision awareness. Always legal in-race (the
         boat's OWN receiver + OWN computer); threat-sorted (closing, smallest CPA first)."""

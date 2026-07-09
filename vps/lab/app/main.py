@@ -106,6 +106,19 @@ def validate(rid: str):
     return {"errors": errors, "warnings": warnings}
 
 
+@app.post("/api/watchplan/generate")
+def watchplan_generate(body: dict):
+    """Emit watch blocks from a pattern (shared/watchplan.py — the SAME generator the tests
+    exercise, so the Lab editor and the onboard resolver can't drift). Body: {anchor: epoch,
+    total_hours, pattern: name|[hours], first_on?}. The client lays the blocks into
+    definition.watch_plan and hand-edits from there."""
+    from shared import watchplan
+    body = body or {}
+    blocks = watchplan.generate(body.get("anchor"), body.get("total_hours"),
+                                body.get("pattern"), body.get("first_on") or "A")
+    return {"blocks": blocks, "patterns": sorted(watchplan.PATTERNS)}
+
+
 def _today():
     return datetime.date.today().isoformat()
 
@@ -1008,7 +1021,8 @@ async def save_race(body: dict):
 
 # Fields OWNED by other tabs / built up over prep — a re-ingested draft (e.g. the SIs landing
 # ~race week) must not wipe them when the fresh extraction doesn't carry them.
-_PRESERVE_ON_SAVE = ("fleet", "own", "division_starts", "tracker", "learnings_notes")
+_PRESERVE_ON_SAVE = ("fleet", "own", "division_starts", "tracker", "learnings_notes",
+                     "watch_plan")
 
 
 def _write_race(definition):

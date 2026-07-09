@@ -25,7 +25,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app import (navigator, tactics, routing, weather, sails, fatigue, onboard_conditions,
                  datasource, ais, fleet, deviation, drift, selector, reoptimize, strategy,
-                 matcher, buoys, racelog)
+                 matcher, buoys, racelog, watches)
 
 app = FastAPI(title="Agent_C4 Onboard Engine", version="0.1.0")
 # The iPad reaches the Pi directly over boat-local Wi-Fi in race mode; allow cross-origin so a
@@ -249,6 +249,21 @@ def sails_state_set(body: dict):
     return matcher.set_sail_state(hoisted=body.get("hoisted"), flying=body.get("flying"),
                                   reef=body.get("reef"),
                                   out_of_service=body.get("out_of_service"))
+
+
+@app.get("/watch")
+def watch_status():
+    """The watch system: who's on now, countdown to the next change, the full block schedule
+    (the CREW tile + coach read). Deterministic scheduling on the boat's own computer — always
+    legal in-race; empty-but-valid when no plan is loaded."""
+    return watches.get_watch()
+
+
+@app.post("/watch")
+def watch_set(body: dict = None):
+    """Replace or live-edit the watch plan: {plan: {...}} (Lab homework / block editor) ·
+    {action: 'hold'|'swap'|'all_hands', minutes?} (the iPad quick edits) · {clear: true}."""
+    return watches.set_watch(body)
 
 
 @app.get("/session")

@@ -26,9 +26,11 @@
   // the strip's synthesis consumes get_tactics and shows the favoured-side read even with no playbook
   // aboard. 8 tiles → a clean 4×2 grid. See docs/COPILOT_DASHBOARD.md.
   const TILES = ["wind", "playbook", "forecast", "sail", "eta", "ais", "charge", "data"];
+  // "charge" stayed the internal id when the tile grew into CREW (energy + the watch system) —
+  // demo scenarios, CSS and the copilot brief all key on it.
   const NAME = {
     wind: "TWS Trend", playbook: "Playbook", forecast: "Forecast",
-    sail: "Sail", eta: "Time to Mark", ais: "Fleet", charge: "C4 Energy", data: "Data",
+    sail: "Sail", eta: "Time to Mark", ais: "Fleet", charge: "Crew", data: "Data",
   };
   const boatName = (r) => { const n = r.boat || r.name || ("MMSI " + (r.mmsi || "?")); return n.length > 14 ? n.slice(0, 13) + "…" : n; };
   const aisName = (t) => { const n = t.name || ("MMSI " + t.mmsi); return n.length > 12 ? n.slice(0, 11) + "…" : n; };
@@ -78,6 +80,39 @@
   }
   const arrowKts = (twd, kts) => windArrow(twd) + r0(kts) + " kts";
 
+  /* ---- watch-system formatting (CREW tile) ---- */
+  const fmtHM = (e) => { const d = new Date(e * 1000); return ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2); };
+  const fmtMins = (m) => (m == null ? "?" : m >= 90 ? (Math.round(m / 6) / 10) + "h" : Math.round(m) + "m");
+  const teamTxt = (w, id) => { const t = ((w || {}).teams || {})[id]; return t ? t.name + ((t.members || []).length ? " (" + t.members.join(", ") + ")" : "") : id; };
+  /* a canned watch read for the demo scenarios: 4-on/4-off, mid-block on calm, 4 min from the
+     change on escalated (exercises the T-5 act state + the wake-the-next-team consider) */
+  function genDemoWatch(esc) {
+    const now = Math.floor(Date.now() / 1000);
+    const chgS = (esc ? 4 : 110) * 60;
+    let t = now + chgS - 4 * 3600, on = "B";
+    const blocks = [];
+    for (let i = 0; i < 6; i++) { blocks.push({ start: t, end: t + 4 * 3600, on: on, note: null }); t += 4 * 3600; on = on === "A" ? "B" : "A"; }
+    return { plan_set: true, active: true, on: "B", on_label: "Stbd", all_hands: false,
+      next_change: now + chgS, next_on: "A", next_on_label: "Port", mins_to_change: Math.round(chgS / 60),
+      teams: { A: { name: "Port", members: ["Grant", "Elise"] }, B: { name: "Stbd", members: ["CJ", "Mo"] } },
+      blocks: blocks, upcoming: blocks.filter((b) => b.start > now).slice(0, 3) };
+  }
+  /* who the tile trusts for the watch read: canned in demo, the engine /watch poll live */
+  function watchNow() { return App.src === "demo" ? (SCENARIOS[App.demoScn] || {}).watch || null : App.watch; }
+  /* escalation: T-15 = watch (wake the next team), T-5 = act — mirrors the coach callout tiers */
+  function watchTileStatus(w) {
+    if (!w || !w.plan_set || w.mins_to_change == null) return "ok";
+    return w.mins_to_change <= 5 ? "act" : w.mins_to_change <= 15 ? "watch" : "ok";
+  }
+  function watchSubTxt(w) {
+    if (!w || !w.plan_set) return null;
+    if (w.active) {
+      return (w.all_hands ? "ALL HANDS" : (w.on_label || w.on) + " on") + " · change " +
+        fmtMins(w.mins_to_change) + (w.next_on_label ? " → " + w.next_on_label : "");
+    }
+    return w.next_change ? "watches start " + fmtHM(w.next_change) : "watch plan ended";
+  }
+
   /* Tile-sized TWS trend: the last 3.5 h with 30-min gridlines (−210 … now, crew request
      2026-07-08), the TWS line + min/max, and a direction-arrow strip sampled at each 30-min
      point. Fits the tile face; the tap-detail keeps the full-race chart. */
@@ -123,6 +158,7 @@
   const SCENARIOS = {
     calm: {
       mode: "llm-live", focus: "Solid groove — the left side is paying.", confidence: "high",
+      watch: genDemoWatch(false),
       notes: [
         { tile: "playbook", status: "ok", text: "Left has paid the last two oscillations — the Left gameplan stands; stay set up to tack on the next header.", conf: "high" },
         { tile: "sail",     status: "ok", text: "J1 is the right sail and pointing well. Hold the groove.", conf: "high" },
@@ -140,7 +176,7 @@
         sail:    { status: "ok", value: "J1", sub: "in range · no change ahead", why: "Reading the crew-set sail (J1 on the sails bar) — right for 12 kts upwind.", consider: "No change.", clears: "TWS > 16 kts", based: ["sails bar: crew set J1", "get_sail: optimal J1"], conf: "high" },
         eta:     { status: "ok", value: "16 min", sub: "Cove Island", why: "~16 min to Cove Island at the current made-good.", consider: "On schedule for the mark.", clears: "—", based: ["get_navigator: ETA 16 min"], conf: "high" },
         ais:     { status: "ok", value: "2nd of 4 (div)", sub: "▲ Defiance 0:40 · ▽ Windquest 1:50", rows: [{ hdr: true, cols: ["to fin", "Δ corrected"] }, { label: "1. Il Mostro ⌛17m", cols: ["1.9 nm", "▲ 3:10 ahead"] }, { label: "2. ◆ Defiance", cols: ["3.4 nm", "▲ 0:40 ahead"] }, { label: "3. ◆ C4 (us)", emph: true, cols: ["3.2 nm", "—"] }, { label: "4. ◆ Windquest", cols: ["3.1 nm", "▽ 1:50 back"] }, { label: "5. Vayu ⌛22m→DR", cols: ["4.8 nm", "▽ 4:05 back"] }], why: "Estimated standings across the 5-boat demo fleet on ToT, FULL-race corrected basis (gun times from the SIs): 2 live on our AIS, 2 via the public tracker (delayed; 1 dead-reckoned forward at their pace). ◆ = our division (B).", consider: "Chase Defiance on corrected — consolidate against Windquest. (Estimates: partial AIS + a delayed tracker.)", clears: "—", based: ["get_fleet standings: 5 ranked / 5 roster", "sources: AIS 2 · tracker 2 · DR 1", "ToT"], conf: "high" },
-        charge:  { status: "ok", value: "72", sub: "fresh", why: "Crew energy ~72% (inverse of the fatigue index; lower = more depleted).", consider: "Driver fresh — no rotation needed.", clears: "—", based: ["get_fatigue: index 28 → energy 72%"], conf: "high" },
+        charge:  { status: "ok", value: "72", sub: "fresh · Stbd on · change 1.8h", why: "Crew energy ~72% (inverse of the fatigue index; lower = more depleted). Watch system: Stbd on deck, change to Port in ~1.8 h.", consider: "Driver fresh — no rotation needed. Next watch change 1.8 h out.", clears: "—", based: ["get_fatigue: index 28 → energy 72%", "get_watch: Stbd on · Port at the change"], conf: "high" },
         data:    { status: "ok", value: "5", sub: "sources live", why: "All five sensor groups fresh.", consider: "Instruments healthy.", clears: "—", based: ["get_sources: 5 live"], conf: "high" },
       },
       strategy: { available: true, status: "ok", variant: "left", variant_label: "Left start",
@@ -163,6 +199,7 @@
     },
     escalated: {
       mode: "llm-live", focus: "Playbook branch: the right is paying now. Bear-away coming up, and the crew tank is getting low.", confidence: "med",
+      watch: genDemoWatch(true),
       notes: [
         { tile: "playbook", status: "act",   text: "Playbook branch fired — the persistent right shift says bail to the right side; the recommended Left start no longer pays.", conf: "high" },
         { tile: "sail",     status: "act",   text: "Peel J1 → A3 before the bear-away at the gate — start staging now (~4 min out).", conf: "high" },
@@ -182,7 +219,7 @@
         sail:    { status: "act",   value: "J1 → A3", sub: "in range · at Cove Island (bear away, ~4 min)", why: "Reading the crew-set sail (J1). The leg after the gate bears away to ~135° TWA — an A3 leg. Stage the peel before the rounding.", consider: "Stage the A3 and peel in ~4 min.", clears: "A3 hoisted", based: ["sails bar: crew set J1", "get_sail: A3 for TWA 135°"], conf: "high" },
         eta:     { status: "watch", value: "4 min", sub: "Cove Island", why: "~4 min to Cove Island at the current made-good.", consider: "Mark in ~4 min — start the rounding prep.", clears: "past the rounding", based: ["get_navigator: ETA 4 min"], conf: "high" },
         ais:     { status: "watch", value: "2nd of 4 (div)", sub: "▲ Defiance 1:20 · ▽ Windquest 2:10", rows: [{ hdr: true, cols: ["to fin", "Δ corrected"] }, { label: "1. ◆ Defiance", cols: ["2.9 nm", "▲ 1:20 ahead"] }, { label: "2. ◆ C4 (us)", emph: true, cols: ["3.0 nm", "—"] }, { label: "3. ◆ Windquest", cols: ["4.0 nm", "▽ 2:10 back"] }, { label: "4. Il Mostro ⌛31m→DR", cols: ["1.2 nm", "▽ 0:55 back"] }], why: "Estimated standings across the 4-boat demo fleet on ToT, FULL-race corrected basis (gun times from the SIs): 2 live on our AIS, 1 via the public tracker (delayed; dead-reckoned forward). Defiance holds the division lead by 1:20 corrected. ◆ = our division (B).", consider: "Tight on corrected with Defiance — sail your race, cover at the crossings.", clears: "—", based: ["get_fleet standings: 4 ranked / 4 roster", "sources: AIS 2 · tracker 1 · DR 1", "ToT"], conf: "high" },
-        charge:  { status: "act",   value: "28", sub: "rotate soon", why: "Crew energy ~28% (rotate soon). Heading instability and steering reversals up, speed deficit creeping.", consider: "Tank getting low — plan a helm rotation.", clears: "energy back above 65%", based: ["get_fatigue: index 72 → energy 28%"], conf: "med", components: { heading: 0.7, reversals: 0.8, heel: 0.4, "spd-def": 0.5 } },
+        charge:  { status: "act",   value: "28", sub: "rotate soon · change 4m → Port", why: "Crew energy ~28% (rotate soon). Heading instability and steering reversals up, speed deficit creeping. Watch change in 4 min — Port up next.", consider: "Watch change in 4 min — wake Port (Grant, Elise); rotate the helm at the change.", clears: "energy back above 65%", based: ["get_fatigue: index 72 → energy 28%", "get_watch: change in 4 min → Port"], conf: "med", components: { heading: 0.7, reversals: 0.8, heel: 0.4, "spd-def": 0.5 } },
         data:    { status: "watch", value: "4", sub: "1 stale", why: "Masthead wind stale ~50 s ago; running on the Orca backup.", consider: "Running on backup wind — watch for it to return.", clears: "all sources fresh", based: ["get_sources: 4 live, 1 stale"], conf: "med" },
       },
       strategy: { available: true, status: "act", variant: "left", variant_label: "Left start",
@@ -486,11 +523,17 @@
       const value = to ? base + " → " + to : base;
       const sub = (crew ? (FIT[fit] || "crew-set") : "crew sail not set — optimal shown")
         + (when ? " · " + when : (crew && fit === "in_range" ? " · no change ahead" : ""));
+      // advisory watch coupling: a pending change with the watch boundary close by = extra
+      // hands soon — say so (the crew decides; nothing is re-timed)
+      const w = p.watch;
+      const wNote = to && w && w.plan_set && w.active && w.mins_to_change != null && w.mins_to_change <= 30
+        ? " Watch change " + fmtMins(w.mins_to_change) + " out — full hands on deck at the change."
+        : "";
       return { status: st, value: value,
         sub: sub,
         why: (crew ? "Reading the crew-set sail (" + crew + " on the sails bar). " : "No crew sail set — tap what's flying on the SAILS bar. ")
-          + (s.recommendation || ""),
-        consider: to ? (when === "change now" ? "Change to " + to + " now." : "Stage the " + to + " — " + when + ".") : "No change.",
+          + (s.recommendation || "") + wNote,
+        consider: (to ? (when === "change now" ? "Change to " + to + " now." : "Stage the " + to + " — " + when + ".") : "No change.") + wNote,
         clears: st === "ok" ? "—" : (to ? to + " hoisted" : "—"),
         based: ["sails bar: crew set " + (crew || "—"),
                 "get_sail: optimal " + s.optimal_sail + ", TWA " + r0(s.twa) + "°, TWS " + r0(s.tws_used) + " kts" + (xo ? ", crossover " + xo.to_sail + " " + r0(xo.deg_away) + "°" : "")], conf: "engine" };
@@ -567,17 +610,40 @@
                 "sources: AIS " + nAis + " · tracker " + nTrk + (nDr ? " · DR " + nDr : ""),
                 fl.scoring_method || "ToT"].concat(fl.gaps || []), conf: "engine" };
     },
+    /* CREW: helm energy (fatigue) + the WATCH SYSTEM on one tile — who's on, countdown to the
+       change, T-15/T-5 escalation. Rotation advice and the watch boundary compose ("rotate at
+       the change"). Fatigue-less but plan-aboard still shows the watch read (bench archives are
+       stale; the schedule is a clock, not a sensor). */
     charge(p) {
-      const f = p.fatigue;
-      if (!f || !f.available || f.index == null) return NA(f && f.note ? f.note : "no helm data");
-      const chg = Math.round(100 - f.index), lvl = (f.level || "").replace(/_/g, " ");
-      const st = f.level === "fresh" ? "ok" : f.level === "watch" ? "watch" : "act";
-      const o = { status: st, value: String(chg), sub: lvl,
-        why: "Crew energy ~" + chg + "% (inverse of the fatigue index; lower = more depleted). Level: " + lvl + ".",
-        consider: st === "ok" ? "Driver fresh — no rotation needed." : "Tank getting low — plan a helm rotation.",
-        clears: st === "ok" ? "—" : "energy back above 65%",
-        based: ["get_fatigue: index " + r0(f.index) + " → energy " + chg + "%, level " + (f.level || "?")], conf: "engine" };
-      if (f.components) o.components = f.components;
+      const f = p.fatigue, w = p.watch;
+      const wSet = w && w.plan_set, wSub = watchSubTxt(w), wSt = watchTileStatus(w);
+      const hasF = f && f.available && f.index != null;
+      if (!hasF && !wSet) return NA(f && f.note ? f.note : "no helm data · no watch plan");
+      const chg = hasF ? Math.round(100 - f.index) : null;
+      const lvl = hasF ? (f.level || "").replace(/_/g, " ") : null;
+      const stF = !hasF ? "ok" : f.level === "fresh" ? "ok" : f.level === "watch" ? "watch" : "act";
+      const st = SEV[wSt] > SEV[stF] ? wSt : stF;
+      const rotate = hasF && f.level !== "fresh";
+      const soon = wSet && w.mins_to_change != null && w.mins_to_change <= 15;
+      const wake = w && w.next_on ? teamTxt(w, w.next_on) : "the next team";
+      const consider =
+        soon && w.active ? "Watch change in " + fmtMins(w.mins_to_change) + " — wake " + wake +
+          (rotate ? "; rotate the helm at the change." : ".")
+        : rotate && wSet && w.mins_to_change != null ? "Tank getting low — rotate at the watch change (" + fmtMins(w.mins_to_change) + " out), sooner if it slips."
+        : rotate ? "Tank getting low — plan a helm rotation."
+        : "Driver fresh — no rotation needed." + (wSet && w.active && w.mins_to_change != null ? " Next watch change " + fmtMins(w.mins_to_change) + " out." : "");
+      const o = { status: st,
+        value: hasF ? String(chg) : (w.all_hands ? "ALL" : (w.on_label || w.on || "—")),
+        sub: [lvl, wSub].filter(Boolean).join(" · "),
+        why: (hasF ? "Crew energy ~" + chg + "% (inverse of the fatigue index; lower = more depleted). Level: " + lvl + ". " : "No helm data (fatigue needs recent archive history). ") +
+             (wSet ? (w.active ? "Watch system: " + (w.all_hands ? "ALL HANDS" : teamTxt(w, w.on) + " on deck") +
+                 (w.next_change ? ", change at " + fmtHM(w.next_change) + (w.next_on_label ? " to " + w.next_on_label : "") + "." : ".")
+               : "Watch plan aboard but no block active" + (w.next_change ? " — watches start " + fmtHM(w.next_change) + "." : ".")) : "No watch plan aboard."),
+        consider: consider,
+        clears: soon ? "the watch change" : rotate ? "energy back above 65%" : "—",
+        based: (hasF ? ["get_fatigue: index " + r0(f.index) + " → energy " + chg + "%, level " + (f.level || "?")] : [])
+          .concat(wSet ? ["get_watch: " + (wSub || "plan aboard")] : []), conf: "engine" };
+      if (hasF && f.components) o.components = f.components;
       return o;
     },
     data(p) {
@@ -1152,6 +1218,72 @@
   }
 
   /* ============================ detail slide-over ============================ */
+  /* ---- WATCH SYSTEM panel (CREW tile detail): schedule + the live quick edits ----
+     Editing surfaces: the Lab authors the plan; aboard, the quick actions cover what crews
+     actually do mid-race (hold a watch, swap teams, all hands), and tapping a block's team
+     cycles A → B → ALL for anything else. Every edit POSTs the engine /watch (kv-persisted,
+     logged) — demo mode shows the panel read-only. */
+  function watchPanelHtml() {
+    const w = watchNow(), live = App.src === "live";
+    const btn = (label, act, mins) =>
+      '<button class="wq-btn" onclick="watchAct(\'' + act + "'" + (mins != null ? ", " + mins : "") + ')">' + label + "</button>";
+    if (!w || !w.plan_set) {
+      return '<div class="rc-title" style="margin-top:8px">Watch system</div>' +
+        '<div class="dc-foot">No watch plan aboard — author one in the Lab (Races → Watch plan) and load it with the homework.</div>' +
+        (live ? '<div class="wq-actions">' + btn("Start ALL HANDS 4h", "all_hands", 240) + "</div>" : "");
+    }
+    const now = Math.floor(Date.now() / 1000);
+    const head = w.active
+      ? "<b>" + (w.all_hands ? "ALL HANDS" : teamTxt(w, w.on) + " on deck") + "</b>" +
+        (w.next_change ? " · change " + fmtHM(w.next_change) + " (" + fmtMins(w.mins_to_change) + ")" +
+          (w.next_on_label ? " → " + w.next_on_label : "") : " · last block")
+      : "No block active" + (w.next_change ? " — watches start " + fmtHM(w.next_change) : " — plan ended");
+    let rows = "";
+    (w.blocks || []).forEach(function (b, i) {
+      if (b.end <= now || rows.split("t-row").length > 7) return;   // past blocks out; ~6 rows max
+      const cur = b.start <= now && now < b.end;
+      const lbl = b.on === "ALL" ? "ALL HANDS" : ((w.teams || {})[b.on] || {}).name || b.on;
+      rows += '<div class="t-row' + (cur ? " emph" : "") + '"><span class="rl">' +
+        (cur ? "▶ " : "") + fmtHM(b.start) + "–" + fmtHM(b.end) + '</span><span class="rc">' +
+        (live ? '<button class="wq-team" onclick="watchCycleBlock(' + i + ')">' + lbl + "</button>" : lbl) +
+        "</span>" + (b.note ? '<span class="rc">' + b.note + "</span>" : "") + "</div>";
+    });
+    return '<div class="rc-title" style="margin-top:8px">Watch system</div>' +
+      '<div class="dc-foot">' + head + "</div>" +
+      '<div class="t-rows">' + rows + "</div>" +
+      '<div class="dc-foot">A = ' + teamTxt(w, "A") + " · B = " + teamTxt(w, "B") + "</div>" +
+      (live ? '<div class="wq-actions">' + btn("Hold +30m", "hold", 30) + btn("Hold +1h", "hold", 60) +
+        btn("Swap teams", "swap") + btn("All hands 30m", "all_hands", 30) + "</div>" : "");
+  }
+  window.watchAct = async function (action, minutes) {
+    try {
+      const resp = await fetch(API + "/watch", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(minutes != null ? { action: action, minutes: minutes } : { action: action }) });
+      if (resp.ok) {
+        App.watch = await resp.json();
+        if (App.openTile === "charge") populateDetail("charge", false);
+      }
+    } catch (e) { /* engine unreachable — the next poll re-syncs */ }
+  };
+  window.watchCycleBlock = async function (i) {
+    const w = App.watch;
+    if (!w || !w.blocks || !w.blocks[i]) return;
+    const order = { A: "B", B: "ALL", ALL: "A" };
+    const blocks = w.blocks.map(function (b, j) {
+      return j === i ? Object.assign({}, b, { on: order[b.on] || "A" }) : b;
+    });
+    try {
+      const resp = await fetch(API + "/watch", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ plan: { teams: w.teams, blocks: blocks, log: w.log } }) });
+      if (resp.ok) {
+        App.watch = await resp.json();
+        if (App.openTile === "charge") populateDetail("charge", false);
+      }
+    } catch (e) { /* re-sync on next poll */ }
+  };
+
   function openDetail(key) {
     App.openTile = key;
     document.getElementById("overlay").hidden = false;
@@ -1186,6 +1318,18 @@
       // the full strategy stack lives here now (synthesis → selector → track → drift → plays →
       // re-route), followed by the variant-agreement rows
       g.innerHTML = strategyStackHtml() + (t.rows ? rowsHtml(t.rows) : "");
+    } else if (key === "charge") {
+      // CREW: the watch panel (schedule + live quick edits) above the fatigue component bars
+      let bars = "";
+      if (t.components) {
+        bars = '<div class="rc-title" style="margin-top:10px">Helm fatigue components</div><div class="bars">';
+        for (const lbl of Object.keys(t.components)) {
+          bars += '<div class="bar"><span class="barlbl">' + lbl + '</span><span class="bartrk"><span class="barfil" style="width:' + Math.round(t.components[lbl] * 100) + '%"></span></span></div>';
+        }
+        bars += "</div>";
+      }
+      g.innerHTML = '<div class="dc-foot">' + (t.value || "—") + (t.sub ? " · " + t.sub : "") + '</div>' +
+        watchPanelHtml() + bars;
     } else if (t.rows) {
       g.innerHTML = (t.value ? '<div class="dc-foot">' + t.value + (t.sub ? " · " + t.sub : "") + '</div>' : "") + rowsHtml(t.rows);
     } else if (t.components) {
@@ -1268,11 +1412,12 @@
     if (App.polling) return;
     App.polling = true;
     try {
-      const eps = ["/conditions", "/sail", "/navigator", "/tactics", "/fatigue", "/forecast?hours=6", "/sources", "/fleet"];
-      const keys = ["conditions", "sail", "navigator", "tactics", "fatigue", "forecast", "sources", "fleet"];
-      const ms   = [5000, 5000, 5000, 5000, 5000, 9000, 5000, 6000];
+      const eps = ["/conditions", "/sail", "/navigator", "/tactics", "/fatigue", "/forecast?hours=6", "/sources", "/fleet", "/watch"];
+      const keys = ["conditions", "sail", "navigator", "tactics", "fatigue", "forecast", "sources", "fleet", "watch"];
+      const ms   = [5000, 5000, 5000, 5000, 5000, 9000, 5000, 6000, 5000];
       const res = await Promise.all(eps.map((e, i) => fetchJSON(e, ms[i])));
       const p = {}; keys.forEach((k, i) => (p[k] = res[i]));
+      App.watch = p.watch;               // the CREW detail panel + quick actions read it
       pushWind(p.conditions);
       pushForecast(p.forecast);
       App.data = buildLive(p);
@@ -1314,6 +1459,7 @@
     if (!c) return null;
     if (c.urgency === "now") return "act";       // act-level: collision/rounding/branch firing NOW
     if (c.category === "safety") return "watch"; // a closing contact not yet in the guard
+    if (c.category === "watch") return "watch";  // T-15 watch change — the wake-the-next-team tone
     return null;                                 // routine coaching stays silent (visual only)
   }
   function maybeAlert(coach) {

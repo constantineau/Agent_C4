@@ -74,6 +74,8 @@ def readiness(race_id, course_id=None):
                   "tracker_permitted": bool((blob.get("tracker") or {}).get("permitted")),
                   "ready": len(roster) > 0},
         "checklists": {"total": len(reqs), "ipad": len(ipad), "ready": len(reqs) > 0},
+        "watch": {"blocks": len((d.get("watch_plan") or {}).get("blocks") or []),
+                  "ready": bool((d.get("watch_plan") or {}).get("blocks"))},
         "playbooks": pbs,
         "lock_in": lock,
         "targets": targets(),
@@ -112,6 +114,10 @@ def package(race_id, course_id=None):
         "course_load": {"definition": d, "course_id": cid},   # → POST /course/load (Pi engine :8200)
         "fleet_load": {"definition": d},                      # → POST /fleet/load (Pi engine :8200)
         "checklists_ipad": [r for r in (d.get("requirements") or []) if r.get("deliver_to_ipad")],
+        # → POST /watch (Pi engine :8200); None when no plan authored — the boat can still
+        # author one from the iPad, this just seeds it
+        "watch_load": ({"plan": d["watch_plan"]} if (d.get("watch_plan") or {}).get("blocks")
+                       else None),
         "skipped_marks": skipped,
         "playbook_id": lock.get("playbook_id"),
         "playbook_signature": lock.get("signature"),

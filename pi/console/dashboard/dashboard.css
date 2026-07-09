@@ -330,6 +330,13 @@ body {
 .sb-chip.on { background:var(--ok-fill); color:var(--ok); border-color:var(--ok); }
 .sb-chip.reef.on { background:var(--watch-fill); color:var(--watch); border-color:var(--watch); }
 .sb-note { font-size:11px; color:var(--muted); margin-left:auto; }
+/* Watch-system panel (CREW tile detail): quick-edit buttons + tappable block teams */
+.wq-actions { display:flex; gap:7px; flex-wrap:wrap; margin-top:8px; }
+.wq-btn { font-size:12px; font-weight:800; padding:5px 11px; border-radius:7px; cursor:pointer;
+  background:var(--panel2); color:var(--ink, inherit); border:1px solid var(--line); }
+.wq-btn:active { border-color:var(--ok); color:var(--ok); }
+.wq-team { font:inherit; font-size:12px; font-weight:800; padding:1px 9px; border-radius:9px;
+  cursor:pointer; background:transparent; color:inherit; border:1px solid var(--line); }
 /* tile-face TWS trend (last 3.5 h, 30-min grid) + the direction-arrow strip under it */
 .tt-wrap { margin:6px 0 2px; }
 .tt-arrows { display:flex; justify-content:space-between; padding-left:22px; padding-right:6px;

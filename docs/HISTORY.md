@@ -200,6 +200,26 @@ and the per-component READMEs. Detailed design rationale for the big arcs is in 
   carries the access ladder, the session rules (never touch wlan/tailscale/default route; never
   `compose down` remotely; one box at a time), and the accepted residual risks.
 
+## 2026-07-09 — the watch system (crew rotation aboard)
+
+- **Watch plan end to end**: `shared/watchplan.py` (explicit block list is the canonical format —
+  teams A/B/ALL-hands, absolute epochs; pattern GENERATORS 4/4 · 3/3 · 6/6 · Swedish 4-4-4-6-6 are
+  conveniences; hold/swap/all-hands quick edits with a capped edit log) → engine + cloud
+  `GET/POST /watch` (kv-persisted, restart-proof) → Lab Races-tab **Watch plan card** (generate →
+  hand-edit → Save; `watch_plan` joined the `_write_race` SI-re-ingest preserve list; deploy
+  readiness pill + homework `watch_load` + a jq load command) → the **CREW tile** (formerly
+  C4 Energy; face = energy + who's-on + countdown, T-15 `watch`/T-5 `act` escalation; detail =
+  schedule with tap-to-cycle team blocks + Hold +30m/+1h · Swap · All-hands quick edits, live
+  only) → auto-coach **watch-change callouts** (T-15 wake-the-next-team — rides the audio
+  attention tone — and T-5 handover, staged show-once like the rounding prep). Advisory-only
+  maneuver coupling (the user's call): the SAIL tile + the watch/rounding callouts note when a
+  pending sail change or rounding lands near the boundary ("full hands at the change" / "the
+  incoming watch takes this rounding") — routing/matcher never re-time anything.
+- **Fixed a latent narration bug** the watch work surfaced: the staged-callout threshold pick
+  was first-match, not tightest-match, so the rounding prep pinned at the :15 heads-up forever —
+  the :10/:5 escalations (and the act-level audio tone at the mark) never fired. Both rounding
+  and watch stages now take `min()` of the matching thresholds.
+
 ## Standing decisions (still binding)
 
 - **RRS 41 bright line**: all frontier/cloud work pre-start, frozen at the gun; in-race =

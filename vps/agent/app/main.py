@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse
 
 from shared.tool_contracts import AGENT_TOOLS
 from .db import pool
-from . import agent, tools, navigator, alerts, summarizer, auth, race_mode, datasource
+from . import agent, tools, navigator, alerts, summarizer, auth, race_mode, datasource, watches
 
 
 def _race_gated(channel: str):
@@ -148,6 +148,21 @@ def sources():
 def fatigue():
     """Helm fatigue index (0–100) + components + rotation recommendation."""
     return _race_gated("/fatigue") or tools.get_fatigue()
+
+
+@app.get("/watch")
+def watch_status():
+    """The watch system: who's on now, countdown to the next change, the block schedule.
+    Crew scheduling, not performance advice — never race-gated (the in-race surface is the
+    onboard engine's identical endpoint anyway)."""
+    return watches.get_watch()
+
+
+@app.post("/watch")
+def watch_set(body: dict = None):
+    """Replace or live-edit the watch plan: {plan: {...}} (Lab homework / block editor) ·
+    {action: 'hold'|'swap'|'all_hands', minutes?} (quick edits) · {clear: true}."""
+    return watches.set_watch(body)
 
 
 @app.get("/sail")

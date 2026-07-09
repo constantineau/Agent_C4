@@ -183,7 +183,11 @@ computer is legal in-race). Endpoints:
 `/health · /conditions[/full] · /sources · /series · /fatigue · /sail · /sails/state
 (GET+POST — the crew-set sail CONFIGURATION: a SET of flying sails (C0 alone · C0+J2 ·
 kite+staysail), main reef, out-of-service gear; every change appends to the onboard
-/sails/log with a timestamp) · /session + POST /session/start|end (the RACE LOG — see
+/sails/log with a timestamp) · /watch (GET+POST — the WATCH SYSTEM: crew-rotation block
+schedule from `shared/watchplan.py`, kv-persisted; POST takes {plan} (Lab homework /
+block editor), {action: hold|swap|all_hands, minutes} (the iPad quick edits) or {clear};
+authored in the Lab Races-tab Watch-plan card, delivered in the homework `watch_load`,
+edited live on the CREW tile) · /session + POST /session/start|end (the RACE LOG — see
 below) · /course · POST /course/practice · POST /course/load (RaceDefinition course →
 marks) · /navigator · /tactics · /forecast · /route · /ais · POST /fleet/load · /fleet ·
 POST /playbook/load (freeze the signed bundle aboard; clears trigger/matcher state) ·
@@ -235,7 +239,9 @@ true`, every panel ungated). In a race the iPad uses `http://<pi>:8091`; between
 cloud app.
 
 **Crew dashboard** (`pi/console/dashboard/`, at `:8091/dashboard/`): **8 higher-order tiles
-on a 4×2 grid** — wind, playbook, forecast, sail, eta, ais, charge (crew energy), data —
+on a 4×2 grid** — wind, playbook, forecast, sail, eta, ais, crew (energy + the WATCH
+SYSTEM: who's on, countdown, T-15/T-5 escalation; detail = schedule + hold/swap/all-hands
+quick edits; internal tile id stays `charge`), data —
 each LLM-scorable green/yellow/red with tap-to-detail; the **Strategy strip** above them =
 SYNTHESIS apex (LLM/ENGINE mode pill, OFF-BOOK badge, Tier-2 `play_matches`) → selector
 banner → deviation/drift triggers → armed PLAYS (+ gear toggle) → the ⟳ off-book re-route

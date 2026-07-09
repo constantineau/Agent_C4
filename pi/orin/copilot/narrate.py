@@ -37,17 +37,20 @@ FLEET_MIN_CONF = float(os.environ.get("COPILOT_FLEET_MIN_CONF", "0.4"))
 # ETA thresholds (minutes-to-mark) for the staged rounding prep. Tightest matching stage wins, so
 # as the mark approaches the callout id changes (…:15 → …:10 → …:5) and each stage shows once.
 ROUNDING_STAGES = [(15, "heads-up"), (10, "stage"), (5, "final")]
+# Watch-change prep stages: T-15 = the wake-the-next-team signal (the dashboard's audio tone
+# keys on the category), T-5 = the handover itself. Same show-once-per-stage shape as rounding.
+WATCH_STAGES = [(15, "wake"), (5, "change")]
 
 URGENCY_RANK = {"now": 0, "soon": 1, "monitor": 2}
 # Lower = more important; the coach line leads with the top of this order.
-CATEGORY_PRIORITY = {"safety": 0, "fatigue": 1, "rounding": 2, "sail": 3,
+CATEGORY_PRIORITY = {"safety": 0, "fatigue": 1, "rounding": 2, "watch": 2, "sail": 3,
                      "playbook": 4, "strategy": 5, "deviation": 6, "fleet": 7, "shift": 8,
                      "drift": 9, "layline": 10, "data": 11, "plays": 6}
 # How many consecutive evaluations a callout must persist before it's "confirmed" and shown —
 # the fuzzy-adherence hysteresis. Time-critical things fire at once; noisier reads wait one poll
 # so a single-sample blip never barks. (The engine already debounces tactical persistence — the
 # deviation/drift triggers carry their OWN Schmitt consider/commit bands, so 1 round is enough.)
-CONFIRM_ROUNDS = {"safety": 1, "fatigue": 1, "rounding": 1, "sail": 1, "playbook": 2,
+CONFIRM_ROUNDS = {"safety": 1, "fatigue": 1, "rounding": 1, "watch": 1, "sail": 1, "playbook": 2,
                   "strategy": 2, "deviation": 1, "fleet": 2, "shift": 2, "drift": 1,
                   "layline": 1, "data": 2, "plays": 1}
 
@@ -129,7 +132,9 @@ def _rounding_callout(nav, snapshot, engine):
     eta = _num(nm.get("eta_min"))
     if eta is None:
         return None
-    stage = next(((m, lbl) for m, lbl in ROUNDING_STAGES if eta <= m), None)
+    # tightest matching stage wins (min, NOT first-match — first-match pinned every approach
+    # at the :15 heads-up and the :10/:5 escalations never fired)
+    stage = min(((m, lbl) for m, lbl in ROUNDING_STAGES if eta <= m), default=None)
     if stage is None:
         return None                      # mark is still far off — nothing to show yet
     mins, _label = stage
@@ -167,6 +172,16 @@ def _rounding_callout(nav, snapshot, engine):
                         bits.append(f"stage the {exit_sail} (you have the {hoisted} up)")
                     else:
                         bits.append(f"{exit_sail} on the next leg")
+
+    # Advisory watch coupling: a rounding landing near a watch boundary changes who does the
+    # work — say so (brief the incoming watch / call hands up early), never re-time the maneuver.
+    wat = snapshot.get("get_watch") or {}
+    chg = _num(wat.get("mins_to_change"))
+    if wat.get("active") and chg is not None and abs(chg - eta) <= 20:
+        bits.append("watch change ~" + str(round(chg)) + " min out — " +
+                    ("the incoming watch takes this rounding; brief them at the handover"
+                     if chg <= eta else "call the next watch up early if the rounding needs hands"))
+        grounded.append("get_watch")
 
     return _callout(f"rounding:{mark}:{mins}", "rounding", urgency, headline,
                     "; ".join(bits) if bits else "prepare to round",
@@ -369,6 +384,41 @@ def _strategy_callout(strat):
     return _callout(f"strategy:{verdict}:{sig}", "strategy", urgency, head, detail, grounded, conf)
 
 
+def _watch_callout(watch, sail=None):
+    """Timed watch-change prep: T-15 'wake the next team' → T-5 'handover now' (the same staged
+    show-once shape as the rounding prep; the id carries the boundary epoch so a HOLD edit that
+    moves the change re-arms the callout). Advisory maneuver coupling: a pending sail change is
+    pointed at the boundary — full hands on deck at the change (glass-box: we phrase, the crew
+    decides)."""
+    if not watch.get("plan_set") or not watch.get("active"):
+        return None
+    mins = _num(watch.get("mins_to_change"))
+    if mins is None or mins < 0:
+        return None
+    stage = min((m for m, _lbl in WATCH_STAGES if mins <= m), default=None)
+    if stage is None:
+        return None
+    nxt = watch.get("next_on_label") or watch.get("next_on")
+    team = (watch.get("teams") or {}).get(watch.get("next_on") or "") or {}
+    members = ", ".join(team.get("members") or [])
+    urgency = "now" if stage <= 5 else "soon"
+    headline = f"Watch change in ~{round(mins)} min" + (f" — {nxt} up" if nxt else "")
+    bits, grounded = [], ["get_watch"]
+    if nxt and stage > 5:
+        bits.append(f"wake {nxt}" + (f" ({members})" if members else ""))
+    elif nxt:
+        bits.append(f"{nxt} on deck — hand over course, sail plan and traffic")
+    if watch.get("all_hands"):
+        bits.append("all-hands period ends at the change")
+    if sail:
+        to = sail.get("change_to") or (sail.get("optimal_sail") if sail.get("wrong_sail") else None)
+        if to:
+            bits.append(f"pending sail change (→ {to}) — full hands at the change")
+            grounded.append("get_sail_advice")
+    return _callout(f"watch:{int(watch.get('next_change') or 0)}:{stage}", "watch", urgency,
+                    headline, "; ".join(bits) if bits else "prep the handover", grounded, "high")
+
+
 def _fatigue_callout(fat):
     level = fat.get("level")
     if level not in ("rotate_soon", "rotate_now"):
@@ -438,6 +488,11 @@ def evaluate(snapshot, playbook=None, engine=None):
             out.append(c)
     if dft.get("available"):                       # Lab-3 (b): forecast moved since freeze?
         c = _drift_callout(dft)
+        if c:
+            out.append(c)
+    wat = snapshot.get("get_watch") or {}
+    if wat.get("plan_set"):                        # watch-change prep (T-15 wake / T-5 handover)
+        c = _watch_callout(wat, sail if sail.get("available") else None)
         if c:
             out.append(c)
     if fat.get("available"):

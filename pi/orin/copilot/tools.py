@@ -108,6 +108,18 @@ TOOL_SPECS = [
     {
         "type": "function",
         "function": {
+            "name": "get_watch",
+            "description": (
+                "The watch system: which crew team is on deck now, minutes to the next watch "
+                "change, who's up next, and the block schedule. Use when timing crew work "
+                "(sail changes, roundings) or rotation advice against the watch boundary."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_forecast",
             "description": (
                 "Wind forecast (Open-Meteo — common public data, legal in-race) for the live "
@@ -154,6 +166,7 @@ _DISPATCH = {
     "get_tactics": ("tactics", ["route"]),
     "get_sail_advice": ("sail", ["tws", "twa", "hoisted"]),
     "get_fatigue": ("fatigue", []),
+    "get_watch": ("watch", []),
     "get_forecast": ("forecast", ["lat", "lon", "hours"]),
     "get_route": ("route", ["route", "target"]),
 }

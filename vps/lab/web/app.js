@@ -288,6 +288,7 @@ function paintDetail() {
   box.innerHTML = detailActions(d, v) + detailBanner(v) + detailHead(d) +
     (d.courses || []).map((c, i) => detailCourseCard(c, i)).join("") +
     detailDelegated(d) +
+    detailWatchCard(d) +
     detailProvenance(d.provenance || {});
 }
 function detailBanner(v) {
@@ -349,6 +350,113 @@ function detailDelegated(d) {
       <div class="dep-row"><a href="#fleet">Fleet →</a> <span class="muted">${fleet} competitor${fleet === 1 ? "" : "s"} + ORC handicaps</span></div>
       <div class="dep-row"><a href="#course">Course &amp; Marks →</a> <span class="muted">geometry on a map</span></div>
     </div></div>`;
+}
+
+/* WATCH PLAN (crew rotation) — authored here, delivered aboard with the homework (seeds the
+   engine's /watch store), edited live from the iPad CREW tile. Lives on the definition so it
+   survives an SI re-ingest (preserve list). The BLOCK LIST is the canonical format; the
+   pattern generator (shared/watchplan.py, via /api/watchplan/generate) is a convenience. */
+function watchPlanOf(d) {
+  const w = (d.watch_plan = d.watch_plan || {});
+  w.teams = w.teams || {};
+  w.teams.A = w.teams.A || { name: "A", members: [] };
+  w.teams.B = w.teams.B || { name: "B", members: [] };
+  w.blocks = w.blocks || [];
+  return w;
+}
+function watchWallToEpoch(val, tz) {
+  const m = (val || "").match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+  if (!m) return null;
+  const [, y, mo, d, h, mi] = m.map(Number);
+  return tz ? zonedWallToEpoch(y, mo, d, h, mi, tz) : new Date(y, mo - 1, d, h, mi).getTime() / 1000;
+}
+function watchTeamMembers(tid, val) {
+  watchPlanOf(Lab.editDef).teams[tid].members =
+    val.split(",").map((s) => s.trim()).filter(Boolean);
+}
+function watchBlockSet(i, field, val) {
+  const w = watchPlanOf(Lab.editDef), b = w.blocks[i];
+  if (!b) return;
+  if (field === "start" || field === "end") {
+    const e = watchWallToEpoch(val, Lab.editDef.timezone || "");
+    if (e != null) b[field] = e;
+  } else if (field === "on") b.on = val;
+  else if (field === "note") b.note = val.trim() || null;
+  if (field !== "note") paintDetail();
+}
+function watchBlockAdd() {
+  const w = watchPlanOf(Lab.editDef);
+  const last = w.blocks[w.blocks.length - 1];
+  const start = last ? last.end : Math.floor(Date.now() / 1000);
+  w.blocks.push({ start, end: start + 4 * 3600, on: last && last.on === "A" ? "B" : "A", note: null });
+  paintDetail();
+}
+function watchBlockDel(i) { watchPlanOf(Lab.editDef).blocks.splice(i, 1); paintDetail(); }
+function watchClearBlocks() {
+  if (!confirm("Clear all watch blocks?")) return;
+  watchPlanOf(Lab.editDef).blocks = [];
+  paintDetail();
+}
+async function watchGen() {
+  const w = watchPlanOf(Lab.editDef), tz = Lab.editDef.timezone || "";
+  const anchor = watchWallToEpoch((document.getElementById("wgAnchor") || {}).value, tz);
+  const hours = Number((document.getElementById("wgHours") || {}).value) || 0;
+  let pattern = (document.getElementById("wgPattern") || {}).value;
+  if (pattern === "custom") {
+    pattern = ((document.getElementById("wgCustom") || {}).value || "")
+      .split(",").map((s) => Number(s.trim())).filter((n) => n > 0);
+  }
+  const firstOn = (document.getElementById("wgFirst") || {}).value || "A";
+  const msg = document.getElementById("watchMsg");
+  if (anchor == null || !hours) { if (msg) msg.textContent = "Set the anchor time and total hours first."; return; }
+  if (w.blocks.length && !confirm("Replace the existing blocks with a fresh pattern?")) return;
+  try {
+    const r = await (await apiPost("/api/watchplan/generate",
+      { anchor, total_hours: hours, pattern, first_on: firstOn })).json();
+    if (!(r.blocks || []).length) { if (msg) msg.textContent = "Generator returned no blocks — check the pattern."; return; }
+    w.blocks = r.blocks;
+    paintDetail();
+    const m2 = document.getElementById("watchMsg");
+    if (m2) m2.textContent = `${r.blocks.length} blocks generated — hand-edit (insert ALL-HANDS around the start), then Save edits.`;
+  } catch (e) { if (msg) msg.textContent = "Generate failed: " + (e.message || e); }
+}
+function detailWatchCard(d) {
+  const w = watchPlanOf(d), tz = d.timezone || "";
+  const teamRow = (tid) => `<div class="dep-row">
+      <label>Team ${tid} ${ein(`watch_plan.teams.${tid}.name`, w.teams[tid].name, tid)}</label>
+      <input class="ein" style="flex:1;min-width:260px" value="${attr((w.teams[tid].members || []).join(", "))}"
+        placeholder="crew names, comma-separated" onchange="watchTeamMembers('${tid}', this.value)"></div>`;
+  const hours = (b) => ((b.end - b.start) / 3600).toFixed(1).replace(/\.0$/, "");
+  const onSel = (i, on) => `<select class="esel" onchange="watchBlockSet(${i}, 'on', this.value)">` +
+    ["A", "B", "ALL"].map((o) => `<option ${o === on ? "selected" : ""}>${o}</option>`).join("") + `</select>`;
+  const rows = w.blocks.map((b, i) => `<tr>
+      <td><input type="datetime-local" value="${epochToWall(b.start, tz)}" onchange="watchBlockSet(${i}, 'start', this.value)"></td>
+      <td><input type="datetime-local" value="${epochToWall(b.end, tz)}" onchange="watchBlockSet(${i}, 'end', this.value)"></td>
+      <td class="muted">${hours(b)}h</td>
+      <td>${onSel(i, b.on)}</td>
+      <td><input class="ein" value="${attr(b.note || "")}" placeholder="note" onchange="watchBlockSet(${i}, 'note', this.value)"></td>
+      <td><button class="mini" onclick="watchBlockDel(${i})">✕</button></td></tr>`).join("");
+  return `<div class="card">
+    <h3>Watch plan <span class="muted" style="font-weight:400">— crew rotation · ${w.blocks.length} blocks${w.blocks.length ? "" : " (optional)"}</span></h3>
+    <div class="muted" style="font-size:12px;margin-bottom:8px">Two teams on/off by segment; <b>ALL</b> = all hands (start, finish, big maneuvers). Delivered aboard with the homework — the iPad CREW tile shows who's on + the countdown and can edit it live (hold a watch, swap teams, all hands). Times are ${tz ? "race-local (" + esc(tz) + ")" : "in this browser's timezone"}. Save edits to persist.</div>
+    ${teamRow("A")}${teamRow("B")}
+    <div class="opt-controls" style="margin-top:8px">
+      <label>Anchor <input type="datetime-local" id="wgAnchor"></label>
+      <label>Total <input class="ein num" id="wgHours" value="48" style="width:52px"> h</label>
+      <label>Pattern <select id="wgPattern" onchange="document.getElementById('wgCustom').style.display = this.value === 'custom' ? '' : 'none'">
+        <option value="4on4off">4 on / 4 off</option><option value="3on3off">3 on / 3 off</option>
+        <option value="6on6off">6 on / 6 off</option><option value="swedish">Swedish 4-4-4-6-6</option>
+        <option value="custom">custom…</option></select></label>
+      <input class="ein" id="wgCustom" placeholder="hours, e.g. 5,5,4,5,5" style="display:none;width:140px">
+      <label>First on <select id="wgFirst"><option>A</option><option>B</option></select></label>
+      <button class="mini" onclick="watchGen()">Generate blocks</button>
+      ${w.blocks.length ? `<button class="mini" onclick="watchClearBlocks()">Clear</button>` : ""}
+      <span id="watchMsg" class="muted" style="font-size:12px"></span>
+    </div>
+    ${w.blocks.length ? `<table class="legs" style="margin-top:8px">
+      <thead><tr><th>on deck from</th><th>until</th><th></th><th>team</th><th>note</th><th></th></tr></thead><tbody>${rows}</tbody></table>
+      <button class="mini" style="margin-top:6px" onclick="watchBlockAdd()">+ block</button>` : ""}
+  </div>`;
 }
 
 function detailProvenance(p) {
@@ -1496,6 +1604,7 @@ function paintDeploy() {
         <div class="dep-row">${depPill(c.ready, "Course")}<span class="muted">${esc(c.course_id || "—")} · ${c.marks} marks${c.skipped && c.skipped.length ? " · ⚠ " + c.skipped.length + " un-geocoded (" + c.skipped.map(esc).join(", ") + ")" : ""}</span></div>
         <div class="dep-row">${depPill(fl.ready, "Fleet")}<span class="muted">${fl.roster} boats${fl.scoring ? " · " + esc(fl.scoring) : ""}${fl.tracker_permitted ? " · tracker permitted" : ""}</span></div>
         <div class="dep-row">${depPill(ck.ready, "Checklists")}<span class="muted">${ck.total} items · ${ck.ipad} →iPad</span></div>
+        <div class="dep-row">${depPill((r.watch || {}).ready, "Watch plan")}<span class="muted">${(r.watch || {}).ready ? (r.watch.blocks + " blocks — seeds the CREW tile (iPad can still edit live)") : "optional — author it on the race in the Races tab"}</span></div>
         <div class="dep-row">${depPill(pbReady, "Playbook")}<span class="muted">${pbReady ? pbs.length + " frozen for this race" : "synthesize + Freeze & sign one in Gameplan"}</span></div>
       </div>
     </div>
@@ -1521,6 +1630,9 @@ function deployPanel(lock, t) {
     `# 1. Course + fleet → the Pi engine (Tailscale host: ${t.pi_host})`,
     `jq .course_load ${hw} | ssh ${t.pi_host} 'curl -sX POST ${t.pi_engine}/course/load -H "Content-Type: application/json" -d @-'`,
     `jq .fleet_load  ${hw} | ssh ${t.pi_host} 'curl -sX POST ${t.pi_engine}/fleet/load  -H "Content-Type: application/json" -d @-'`,
+    ...(((Dep.ready || {}).watch || {}).ready ? [
+      `jq .watch_load  ${hw} | ssh ${t.pi_host} 'curl -sX POST ${t.pi_engine}/watch       -H "Content-Type: application/json" -d @-'`,
+    ] : []),
     ``,
     `# 2. Signed playbook → the Orin copilot (Tailscale host: ${t.orin_host})`,
     `scp ${pb} ${t.orin_host}:${t.orin_playbook_path}`,
