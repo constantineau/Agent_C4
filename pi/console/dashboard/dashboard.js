@@ -176,7 +176,7 @@
         sail:    { status: "ok", value: "J1", sub: "in range · no change ahead", why: "Reading the crew-set sail (J1 on the sails bar) — right for 12 kts upwind.", consider: "No change.", clears: "TWS > 16 kts", based: ["sails bar: crew set J1", "get_sail: optimal J1"], conf: "high" },
         eta:     { status: "ok", value: "16 min", sub: "Cove Island", why: "~16 min to Cove Island at the current made-good.", consider: "On schedule for the mark.", clears: "—", based: ["get_navigator: ETA 16 min"], conf: "high" },
         ais:     { status: "ok", value: "2nd of 4 (div)", sub: "▲ Defiance 0:40 · ▽ Windquest 1:50", rows: [{ hdr: true, cols: ["to fin", "Δ corrected"] }, { label: "1. Il Mostro ⌛17m", cols: ["1.9 nm", "▲ 3:10 ahead"] }, { label: "2. ◆ Defiance", cols: ["3.4 nm", "▲ 0:40 ahead"] }, { label: "3. ◆ C4 (us)", emph: true, cols: ["3.2 nm", "—"] }, { label: "4. ◆ Windquest", cols: ["3.1 nm", "▽ 1:50 back"] }, { label: "5. Vayu ⌛22m→DR", cols: ["4.8 nm", "▽ 4:05 back"] }], why: "Estimated standings across the 5-boat demo fleet on ToT, FULL-race corrected basis (gun times from the SIs): 2 live on our AIS, 2 via the public tracker (delayed; 1 dead-reckoned forward at their pace). ◆ = our division (B).", consider: "Chase Defiance on corrected — consolidate against Windquest. (Estimates: partial AIS + a delayed tracker.)", clears: "—", based: ["get_fleet standings: 5 ranked / 5 roster", "sources: AIS 2 · tracker 2 · DR 1", "ToT"], conf: "high" },
-        charge:  { status: "ok", value: "72", energy: 72, level: "fresh", sub: "fresh · Stbd on · change 1.8h", why: "Crew energy ~72% (inverse of the fatigue index; lower = more depleted). Watch system: Stbd on deck, change to Port in ~1.8 h.", consider: "Driver fresh — no rotation needed. Next watch change 1.8 h out.", clears: "—", based: ["get_fatigue: index 28 → energy 72%", "get_watch: Stbd on · Port at the change"], conf: "high" },
+        charge:  { status: "ok", value: '72<div class="t-val2">Stbd on</div>', energy: 72, level: "fresh", sub: "change 1.8h → Port · fresh", why: "Crew energy ~72% (inverse of the fatigue index; lower = more depleted). Watch system: Stbd on deck, change to Port in ~1.8 h.", consider: "Driver fresh — no rotation needed. Next watch change 1.8 h out.", clears: "—", based: ["get_fatigue: index 28 → energy 72%", "get_watch: Stbd on · Port at the change"], conf: "high" },
         data:    { status: "ok", value: "5", sub: "sources live", why: "All five sensor groups fresh.", consider: "Instruments healthy.", clears: "—", based: ["get_sources: 5 live"], conf: "high" },
       },
       strategy: { available: true, status: "ok", variant: "left", variant_label: "Left start",
@@ -219,7 +219,7 @@
         sail:    { status: "act",   value: "J1 → A3", sub: "in range · at Cove Island (bear away, ~4 min)", why: "Reading the crew-set sail (J1). The leg after the gate bears away to ~135° TWA — an A3 leg. Stage the peel before the rounding.", consider: "Stage the A3 and peel in ~4 min.", clears: "A3 hoisted", based: ["sails bar: crew set J1", "get_sail: A3 for TWA 135°"], conf: "high" },
         eta:     { status: "watch", value: "4 min", sub: "Cove Island", why: "~4 min to Cove Island at the current made-good.", consider: "Mark in ~4 min — start the rounding prep.", clears: "past the rounding", based: ["get_navigator: ETA 4 min"], conf: "high" },
         ais:     { status: "watch", value: "2nd of 4 (div)", sub: "▲ Defiance 1:20 · ▽ Windquest 2:10", rows: [{ hdr: true, cols: ["to fin", "Δ corrected"] }, { label: "1. ◆ Defiance", cols: ["2.9 nm", "▲ 1:20 ahead"] }, { label: "2. ◆ C4 (us)", emph: true, cols: ["3.0 nm", "—"] }, { label: "3. ◆ Windquest", cols: ["4.0 nm", "▽ 2:10 back"] }, { label: "4. Il Mostro ⌛31m→DR", cols: ["1.2 nm", "▽ 0:55 back"] }], why: "Estimated standings across the 4-boat demo fleet on ToT, FULL-race corrected basis (gun times from the SIs): 2 live on our AIS, 1 via the public tracker (delayed; dead-reckoned forward). Defiance holds the division lead by 1:20 corrected. ◆ = our division (B).", consider: "Tight on corrected with Defiance — sail your race, cover at the crossings.", clears: "—", based: ["get_fleet standings: 4 ranked / 4 roster", "sources: AIS 2 · tracker 1 · DR 1", "ToT"], conf: "high" },
-        charge:  { status: "act",   value: "28", energy: 28, level: "rotate soon", sub: "rotate soon · change 4m → Port", why: "Crew energy ~28% (rotate soon). Heading instability and steering reversals up, speed deficit creeping. Watch change in 4 min — Port up next.", consider: "Watch change in 4 min — wake Port (Grant, Elise); rotate the helm at the change.", clears: "energy back above 65%", based: ["get_fatigue: index 72 → energy 28%", "get_watch: change in 4 min → Port"], conf: "med", components: { heading: 0.7, reversals: 0.8, heel: 0.4, "spd-def": 0.5 } },
+        charge:  { status: "act",   value: '28<div class="t-val2">Stbd on</div>', energy: 28, level: "rotate soon", sub: "change 4m → Port · rotate soon", why: "Crew energy ~28% (rotate soon). Heading instability and steering reversals up, speed deficit creeping. Watch change in 4 min — Port up next.", consider: "Watch change in 4 min — wake Port (Grant, Elise); rotate the helm at the change.", clears: "energy back above 65%", based: ["get_fatigue: index 72 → energy 28%", "get_watch: change in 4 min → Port"], conf: "med", components: { heading: 0.7, reversals: 0.8, heel: 0.4, "spd-def": 0.5 } },
         data:    { status: "watch", value: "4", sub: "1 stale", why: "Masthead wind stale ~50 s ago; running on the Orca backup.", consider: "Running on backup wind — watch for it to return.", clears: "all sources fresh", based: ["get_sources: 4 live, 1 stale"], conf: "med" },
       },
       strategy: { available: true, status: "act", variant: "left", variant_label: "Left start",
@@ -632,10 +632,18 @@
         : rotate && wSet && w.mins_to_change != null ? "Tank getting low — rotate at the watch change (" + fmtMins(w.mins_to_change) + " out), sooner if it slips."
         : rotate ? "Tank getting low — plan a helm rotation."
         : "Driver fresh — no rotation needed." + (wSet && w.active && w.mins_to_change != null ? " Next watch change " + fmtMins(w.mins_to_change) + " out." : "");
+      // face: the C4 energy score leads (as the old C4 Energy tile), the on-watch team rides
+      // just under it at value weight; countdown + level go to the sub line
+      const teamLine = wSet && w.active ? (w.all_hands ? "ALL HANDS" : (w.on_label || w.on) + " on") : null;
+      const countdown = wSet
+        ? (w.active && w.mins_to_change != null
+            ? "change " + fmtMins(w.mins_to_change) + (w.next_on_label ? " → " + w.next_on_label : "")
+            : watchSubTxt(w))
+        : null;
       const o = { status: st,
         energy: chg, level: lvl,      // the detail's CREW ENERGY section reads these explicitly
-        value: hasF ? String(chg) : (w.all_hands ? "ALL" : (w.on_label || w.on || "—")),
-        sub: [lvl, wSub].filter(Boolean).join(" · "),
+        value: (hasF ? String(chg) : "—") + (teamLine ? '<div class="t-val2">' + teamLine + "</div>" : ""),
+        sub: [countdown, lvl].filter(Boolean).join(" · "),
         why: (hasF ? "Crew energy ~" + chg + "% (inverse of the fatigue index; lower = more depleted). Level: " + lvl + ". " : "No helm data (fatigue needs recent archive history). ") +
              (wSet ? (w.active ? "Watch system: " + (w.all_hands ? "ALL HANDS" : teamTxt(w, w.on) + " on deck") +
                  (w.next_change ? ", change at " + fmtHM(w.next_change) + (w.next_on_label ? " to " + w.next_on_label : "") + "." : ".")
