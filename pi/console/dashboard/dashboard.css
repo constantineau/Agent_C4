@@ -330,6 +330,13 @@ body {
 .sb-chip.on { background:var(--ok-fill); color:var(--ok); border-color:var(--ok); }
 .sb-chip.reef.on { background:var(--watch-fill); color:var(--watch); border-color:var(--watch); }
 .sb-note { font-size:11px; color:var(--muted); margin-left:auto; }
+/* CREW tile detail: the energy score row (big number + inline gauge) */
+.en-row { display:flex; align-items:center; gap:10px; margin:4px 0 2px; }
+.en-score { font-size:34px; font-weight:800; line-height:1; }
+.en-side { display:flex; align-items:center; gap:10px; flex:1; font-size:12px; color:var(--muted); }
+.en-trk { flex:1; max-width:220px; height:8px; border-radius:4px; background:var(--panel2);
+  overflow:hidden; display:inline-block; }
+.en-trk .barfil { display:block; height:100%; border-radius:4px; }
 /* Watch-system panel (CREW tile detail): quick-edit buttons + tappable block teams */
 .wq-actions { display:flex; gap:7px; flex-wrap:wrap; margin-top:8px; }
 .wq-btn { font-size:12px; font-weight:800; padding:5px 11px; border-radius:7px; cursor:pointer;
