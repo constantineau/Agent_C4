@@ -139,6 +139,31 @@ TOOL_SPECS = [
     {
         "type": "function",
         "function": {
+            "name": "get_trend",
+            "description": (
+                "Wind TREND from the boat's own archive: 1 h and 3 h build/fade rate (kts/hr) "
+                "and which way the breeze is walking (deg/hr, right/left, from->to degrees). "
+                "Use for 'what has the wind been doing' — never estimate a trend yourself."
+            ),
+            "parameters": {"type": "object", "properties": {"route": {"type": "string"}}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_plangap",
+            "description": (
+                "PLAN GAP: the boat's own observed wind vs what the frozen gameplan's forecast "
+                "promised for here/now (promised vs actual TWD/TWS, signed gaps, status). Use "
+                "for 'did the plan's breeze show up' — distinct from get_drift, which compares "
+                "forecast to forecast."
+            ),
+            "parameters": {"type": "object", "properties": {"route": {"type": "string"}}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_route",
             "description": (
                 "The engine's isochrone optimal route to the next mark (target='next') or the "
@@ -169,6 +194,8 @@ _DISPATCH = {
     "get_watch": ("watch", []),
     "get_forecast": ("forecast", ["lat", "lon", "hours"]),
     "get_route": ("route", ["route", "target"]),
+    "get_trend": ("trend", ["route"]),
+    "get_plangap": ("plangap", ["route"]),
 }
 
 TOOL_NAMES = set(_DISPATCH)

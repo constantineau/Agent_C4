@@ -55,3 +55,13 @@ USE_LLM = _b("COPILOT_USE_LLM", True)
 # phrases NEW callouts (most ticks are deterministic + cheap), following USE_LLM.
 COACH_ENABLED = _b("COPILOT_COACH", True)
 COACH_INTERVAL_S = float(os.environ.get("COPILOT_COACH_INTERVAL_S", "30"))
+
+# Scheduled CREW BRIEFS (briefs.py) riding the same timer: the watch-handover brief at T-minus
+# BRIEF_HANDOVER_T_MIN to a rotation, the hourly recap (only while a watch plan is active or a
+# race-log session is open — no recap noise at the dock), the mark pre-brief inside
+# BRIEF_MARK_T_MIN of the next mark (but not during the rounding itself — narrate owns that).
+BRIEFS_ENABLED = _b("COPILOT_BRIEFS", True)
+BRIEF_HANDOVER_T_MIN = float(os.environ.get("COPILOT_BRIEF_HANDOVER_T_MIN", "15"))
+BRIEF_RECAP_S = float(os.environ.get("COPILOT_BRIEF_RECAP_S", "3600"))
+BRIEF_MARK_T_MIN = float(os.environ.get("COPILOT_BRIEF_MARK_T_MIN", "20"))
+BRIEF_MARK_MIN_T_MIN = float(os.environ.get("COPILOT_BRIEF_MARK_MIN_T_MIN", "4"))

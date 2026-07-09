@@ -26,6 +26,13 @@ Signals resolved (all existing Tier-1 reads; a signal with no live value simply 
                                        leg N is the leg ARRIVING at the loaded course's marks[N]
                                        (1-based == the next mark's index in the ordered marks).
                                        None when no course/fix — leg gating FAILS OPEN.
+  tws_trend_kn_per_hr · twd_trend_deg_per_hr — trend.get_trend (1 h build/walk rate, own archive)
+  plangap_twd_deg · plangap_twd_signed_deg · plangap_tws_kn — plangap.get_plangap (own OBSERVED
+                                       wind vs the bundle's frozen promise for here/now)
+
+Every predicate also reports a DISTANCE-TO-TRIGGER `closeness` (0..1, normalized gap to its
+threshold); a quiet play's weakest predicate is the play's closeness, and the closest quiet plays
+ride the payload as the `watchlist` ("what flips the plan", with live numbers).
 
 LEG GATING: a play whose `applicability.legs` is a list and whose gate is HARD (bundle
 `applicability.gate == "hard"`, or kind == "pace" for pre-gate bundles — a pace play's response
@@ -48,7 +55,9 @@ from . import deviation
 from . import drift as drift_mod
 from . import fatigue
 from . import navigator
+from . import plangap as plangap_mod
 from . import tactics
+from . import trend as trend_mod
 
 # sustain windows come from each play's predicates (minutes). Scale for bench/tests (0 = instant).
 SUSTAIN_SCALE = float(os.environ.get("MATCHER_SUSTAIN_SCALE", "1.0"))
@@ -56,6 +65,10 @@ SUSTAIN_SCALE = float(os.environ.get("MATCHER_SUSTAIN_SCALE", "1.0"))
 # polar_pct window: long enough to ride through a tack, short enough to track a real slowdown
 POLAR_PCT_WINDOW_MIN = float(os.environ.get("MATCHER_POLAR_WINDOW_MIN", "10"))
 POLAR_PCT_MIN_SAMPLES = int(os.environ.get("MATCHER_POLAR_MIN_SAMPLES", "6"))
+
+# watchlist: quiet plays at least this close to arming are worth the crew's attention
+WATCHLIST_CLOSENESS = float(os.environ.get("MATCHER_WATCHLIST_CLOSENESS", "0.5"))
+WATCHLIST_MAX = int(os.environ.get("MATCHER_WATCHLIST_MAX", "3"))
 _MS_TO_KN = 1.943844
 _RAD_TO_DEG = 57.29577951308232
 
@@ -253,6 +266,16 @@ def gather(route=None):
     except Exception:
         buo = {}
     upc = (buo.get("upcourse") or {}) if buo.get("available") else {}
+    try:
+        tr = trend_mod.get_trend()
+        tr = tr if tr.get("available") else {}
+    except Exception:
+        tr = {}
+    try:
+        pg = plangap_mod.get_plangap(route)
+        pg_ok = bool(pg.get("available"))
+    except Exception:
+        pg, pg_ok = {}, False
     dev_ok, dft_ok = dev.get("available"), dft.get("available")
     sign = _DRIFT_SIGN.get(dft.get("drift_dir")) if dft_ok else None
     deg = dft.get("drift_twd_deg") if dft_ok else None
@@ -279,6 +302,13 @@ def gather(route=None):
         "_upcourse_name": upc.get("name") or upc.get("station"),   # crew-facing corroborator label
         "polar_pct": _polar_pct(),
         "current_leg": _current_leg(route),
+        # observed wind TREND (own archive) — sail-window / pressure plays key off the build rate
+        "tws_trend_kn_per_hr": tr.get("tws_trend_kn_per_hr"),
+        "twd_trend_deg_per_hr": tr.get("twd_trend_deg_per_hr"),
+        # PLAN GAP (own wind vs the frozen promise) — the honest "the promised breeze isn't here"
+        "plangap_twd_deg": pg.get("gap_twd_deg") if pg_ok else None,
+        "plangap_twd_signed_deg": pg.get("gap_twd_signed_deg") if pg_ok else None,
+        "plangap_tws_kn": pg.get("gap_tws_kn") if pg_ok else None,
     }
 
 
@@ -301,6 +331,26 @@ def _pred_ok(op, actual, value):
     except (TypeError, ValueError):
         return False
     return False
+
+
+def _pred_closeness(op, actual, value, ok):
+    """DISTANCE-TO-TRIGGER: how close a predicate is to holding, 0..1 (1 = at/past the threshold).
+    Numeric gaps are normalized by the threshold's own magnitude — "14° of a 15° predicate" reads
+    0.93 whatever the unit. Discrete (==) predicates are 1/0 — the crew flips a switch, there is
+    no 'almost'. None when the signal has no live value (unknowable is not 'far')."""
+    if actual is None:
+        return None
+    if ok:
+        return 1.0
+    try:
+        if op in (">=", "<="):
+            a, v = float(actual), float(value)
+            gap = (v - a) if op == ">=" else (a - v)
+            scale = max(abs(v), 1e-9)
+            return round(max(0.0, min(1.0, 1.0 - gap / scale)), 2)
+    except (TypeError, ValueError):
+        return None
+    return 0.0
 
 
 def _evaluate(play, signals, now):
@@ -328,7 +378,17 @@ def _evaluate(play, signals, now):
         all_ok = all_ok and ok
         sustain_min = max(sustain_min, float(p.get("sustain_min") or 0))
         rows.append({"signal": p.get("signal"), "op": p.get("op"), "value": p.get("value"),
-                     "actual": actual, "ok": ok})
+                     "actual": actual, "ok": ok,
+                     "closeness": _pred_closeness(p.get("op"), actual, p.get("value"), ok)})
+    # play-level DISTANCE-TO-TRIGGER: the weakest predicate is the distance (min over the set);
+    # a play with any unknowable signal — or held off its leg — can't honestly be called "close".
+    closeness = None
+    nearest = None
+    if rows and applicable and all(r["closeness"] is not None for r in rows):
+        weakest = min(rows, key=lambda r: r["closeness"])
+        closeness = weakest["closeness"]
+        if not weakest["ok"]:
+            nearest = {k: weakest[k] for k in ("signal", "op", "value", "actual")}
     st = _ST.setdefault(str(play.get("id")), {})
     if all_ok:
         st.setdefault("since", now)
@@ -361,11 +421,17 @@ def _evaluate(play, signals, now):
         else:
             corroborated_by = src.get("signal")
     resp = play.get("response") or {}
+    sustain_s = sustain_min * 60.0 * SUSTAIN_SCALE
     return {
         "id": play.get("id"), "name": play.get("name"), "category": play.get("category"),
         "kind": (play.get("scenario") or {}).get("kind"),
         "status": status, "held_s": round(held_s),
         "sustain_min": sustain_min,
+        "sustain_pct": (100 if status == "armed" else
+                        round(min(100.0, held_s / sustain_s * 100)) if (status == "arming" and sustain_s > 0)
+                        else None),
+        "closeness": closeness,
+        "nearest_gap": nearest,
         "predicates": rows,
         **({"corroborators": corr_rows} if corr_rows else {}),
         "corroborated": corroborated,
@@ -399,7 +465,16 @@ def get_plays(route=None):
     out.sort(key=lambda r: (_ORDER.get(r["status"], 3), -(r.get("stakes_min") or 0)))
     armed = [r["id"] for r in out if r["status"] == "armed"]
     arming = [r["id"] for r in out if r["status"] == "arming"]
+    # WATCHLIST — quiet plays measurably close to arming (distance-to-trigger), closest first.
+    # "What flips the plan" made concrete: the crew sees the trigger nearest to being met, with
+    # the live number against the threshold, instead of eyeballing narratives.
+    watchlist = sorted((r for r in out if r["status"] == "quiet"
+                        and (r.get("closeness") or 0) >= WATCHLIST_CLOSENESS),
+                       key=lambda r: -r["closeness"])[:WATCHLIST_MAX]
     return {"available": True, "plays": out, "armed": armed, "arming": arming,
+            "watchlist": [{k: r.get(k) for k in ("id", "name", "closeness", "nearest_gap",
+                                                 "what_flips_it", "stakes_min")}
+                          for r in watchlist],
             "n_plays": len(out), "signals": signals, "sail_state": get_sail_state(),
             "based": ["get_deviation", "get_drift", "get_tactics", "get_fatigue", "sail_state",
                       "get_buoys"],

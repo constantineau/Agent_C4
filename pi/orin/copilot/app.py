@@ -6,8 +6,10 @@ Endpoints:
   POST /brief      — produce a DecisionBrief for the current situation (+ optional question)
   POST /narrate    — proactive crew callouts + a coach line for what's newly worth showing (PUSH)
   POST /narrate/reset — clear the per-route show-once dedup (a race / course change)
-  GET  /coach      — the proactive AUTO-COACH state: latest coach line + active callouts + history,
-                     produced by a background timer (the copilot volunteers coaching on a cadence)
+  GET  /coach      — the proactive AUTO-COACH state: latest coach line + active callouts + history
+                     + the held CREW BRIEFS (handover/recap/mark/watchlist), produced by a
+                     background timer (the copilot volunteers coaching on a cadence)
+  GET  /briefs/{kind} — one crew brief on demand (the coach window's "Brief me" buttons)
   GET  /adherence — playbook-adherence tile (on-plan / branch-trigger-fired; deterministic)
   GET  /snapshot  — raw gathered engine facts (debug / "show me what you saw")
 
@@ -20,6 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from . import briefs as briefs_mod
 from . import coach as coach_mod
 from . import config, copilot, dashboard_brief, playbook as playbook_mod, tools
 from .engine_client import EngineClient
@@ -149,6 +152,17 @@ def coach():
     /narrate is the on-demand/debug equivalent (don't poll both for the same route — they share the
     show-once dedup)."""
     return coach_mod.COACH.state()
+
+
+@app.get("/briefs/{kind}")
+def crew_brief(kind: str, route: str | None = None, use_llm: bool | None = None):
+    """One CREW BRIEF on demand (the coach window's 'Brief me' buttons): kind in
+    handover|recap|mark|watchlist. Deterministic sections always; LLM phrasing on top when up.
+    The freshly-made brief also replaces the held copy the coach window shows."""
+    payload = briefs_mod.make(kind, route=route, use_llm=use_llm)
+    if payload.get("available"):
+        coach_mod.COACH._hold_brief(kind, payload)
+    return payload
 
 
 @app.get("/adherence")

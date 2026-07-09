@@ -191,7 +191,7 @@ edited live on the CREW tile) · /session + POST /session/start|end (the RACE LO
 below) · /course · POST /course/practice · POST /course/load (RaceDefinition course →
 marks) · /navigator · /tactics · /forecast · /route · /ais · POST /fleet/load · /fleet ·
 POST /playbook/load (freeze the signed bundle aboard; clears trigger/matcher state) ·
-/deviation · /drift · /selector · /reoptimize · /strategy · /plays · /buoys`.
+/deviation · /drift · /plangap · /trend · /selector · /reoptimize · /strategy · /plays · /buoys`.
 
 **Race log (sessions)** — the owner's record switch, fully standalone (no Lab prep, no
 RaceDefinition, no cloud): the dashboard's ⏺ LOG button one-tap starts/ends a session
@@ -216,6 +216,11 @@ raise slow / clear fast):
   %, time-behind-plan, VMC vs plan pace. `DEV_*` tunables.
 - `drift.py` — live Open-Meteo re-sampled at the bundle's frozen `forecast_fingerprint`
   (same-source, no cross-model bias): signed TWD/TWS drift. `DRIFT_*` tunables.
+- `plangap.py` — own OBSERVED wind vs the fingerprint's promise for here/now (the read drift's
+  forecast-vs-forecast design can't make); windowed obs mean, time-interpolated promise,
+  position-honesty caveat. `PLANGAP_*` tunables.
+- `trend.py` — 1 h/3 h TWS build/fade + TWD walk rates from the own archive (bucket means, no
+  alarm status); feeds play predicates + the strategy picture + the copilot's briefs.
 - `selector.py` — unifies shift + deviation + drift over the frozen variants into ONE call:
   **HOLD / SWITCH → variant / OFF-SCRIPT** + confidence (concordance raises it).
 - `reoptimize.py` — the off-script fallback: a fresh route onboard (own polars + Open-Meteo
@@ -230,7 +235,9 @@ raise slow / clear fast):
   navigator's next-mark index). Arm-slow (per-play `sustain_min`) / clear-fast;
   `applicability.legs` gating (hard for pace plays — leg N arrives at course marks[N];
   advisory never gates; unknown leg fails open); buoy **corroborators** raise confidence
-  but never gate. `MATCHER_*` tunables.
+  but never gate. **Distance-to-trigger**: per-predicate `closeness` (normalized gap to the
+  threshold) → the quiet-but-close plays ride `/plays` + the strategy digest as the
+  `watchlist` ("what flips the plan", live number vs threshold). `MATCHER_*` tunables.
 - `buoys.py` — live NDBC observations; the up-course buoy as a leading indicator.
 
 **Onboard console** (`pi/console/`, **:8091**): nginx serving the same web app pointed only
@@ -262,8 +269,13 @@ sees the OpenAI contract, so the runtime stays swappable.
 **Copilot service** (`pi/orin/copilot/`, **:8300**; reached from the iPad via the console's
 `/copilot/*` proxy, which rides the **direct Pi↔Orin ethernet** — `COPILOT_UPSTREAM` defaults
 to `http://10.10.10.2:8300/`, the bench overlay overrides to the Orin's Tailscale IP): `GET /health · GET /tools · POST
-/brief · POST /narrate · POST /narrate/reset · GET /coach · GET /adherence · GET /snapshot
-· POST /strategy · POST /dashboard · POST /detail`. Guardrails are structural: a closed set
+/brief · POST /narrate · POST /narrate/reset · GET /coach · GET /briefs/{kind} · GET /adherence
+· GET /snapshot · POST /strategy · POST /dashboard · POST /detail`.
+**CREW BRIEFS** (`briefs.py`): handover (T-15, incl. the sail-window clock) · recap (hourly
+while racing) · mark (~T-20) · watchlist ("what flips the plan") — deterministic sections from
+engine numbers, LLM rephrase on top, data-honesty notes lead; the auto-coach timer schedules
+them show-once and holds them on `GET /coach` (the iPad's COACH WINDOW = the commentary
+panel's tap-detail). `COPILOT_BRIEF*` tunables. Guardrails are structural: a closed set
 of read-only engine-fact tools; every factor/recommendation must be `grounded_in` a tool
 actually used or it is dropped; caveats computed by the engine; deterministic fallback on
 any LLM trouble. The **auto-coach** timer (30 s) drives the narration engine and holds the

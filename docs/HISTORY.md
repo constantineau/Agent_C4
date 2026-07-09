@@ -235,6 +235,36 @@ and the per-component READMEs. Detailed design rationale for the big arcs is in 
   `get_selector(now=)` is injectable for replay. New harness kept: `vps/lab/app/pbbacktest.py`
   (as-of synthesis + oracle sampling) + `vps/agent/backtest_replay.py` (host decision replay).
 
+## 2026-07-09 (night) — the COACH WINDOW: crew briefs + three new engine signals
+
+- **Three deterministic engine signals** widen what the boat can synthesize from: `trend.py`
+  (1 h/3 h TWS build/fade + TWD walk rates, bucket means from the own archive — an observation,
+  not an alarm; `GET /trend`), `plangap.py` (own OBSERVED wind vs the bundle's frozen
+  `forecast_fingerprint` promise for here/now — the honest "the promised breeze isn't here" that
+  drift's forecast-vs-forecast design deliberately can't make; Schmitt `PLANGAP_*` bands +
+  position-honesty caveat; `GET /plangap`), and the matcher's **distance-to-trigger**: every
+  predicate reports a normalized `closeness`, a quiet play's weakest predicate is the play's,
+  and the closest quiet plays ride `/plays` + the strategy digest as the **watchlist** ("what
+  flips the plan", with the live number against the threshold). All three feed the play
+  predicates (`tws_trend_kn_per_hr`, `plangap_twd_deg`, …), the strategy picture, and the
+  Tier-2 grounding allow-list (`get_trend`/`get_plangap` joined the copilot tool surface).
+- **CREW BRIEFS** (`pi/orin/copilot/briefs.py`): four synthesis surfaces — **handover** (T-15:
+  the race the incoming watch inherits, incl. the SAIL-WINDOW clock: trend rate vs the frozen
+  reef/C0 thresholds → "you cross reef-1 in ~2 h"), **recap** (the last hour: wind from→to,
+  polar %, plan-vs-reality, top rival, sail-log events), **mark** (~T-20 pre-brief: the leg
+  after, the staged sail change, who takes the rounding from the watch clock, next leg's
+  plays), **watchlist**. Deterministic sections always (engine numbers only); the LLM only
+  REPHRASES into crew language (schema-forced; fallback = the deterministic text). **Data
+  honesty** leads every brief (stale instruments / fallback link / no plan aboard). The
+  auto-coach timer schedules them show-once (rotation/hour/mark keys); `GET /briefs/{kind}` on
+  demand; the held set rides `GET /coach`.
+- **The coach window (iPad)**: the commentary panel is now the coach's FACE — tap it for the
+  full window (brief cards + 4 Brief-me buttons + active callouts + recent-brief rail). Tile
+  hooks: PLAYBOOK detail's stack gains the plan-gap line + the CLOSE-TO-FLIPPING watchlist;
+  SAIL detail the trend read; FORECAST detail the promise-vs-actual line; CREW/ETA details get
+  handover/mark brief buttons. Playwright-verified; engine+console rebuilt on the bench;
+  12 unit suites + bench_copilot green (briefs section added).
+
 ## Standing decisions (still binding)
 
 - **RRS 41 bright line**: all frontier/cloud work pre-start, frozen at the gun; in-race =

@@ -25,7 +25,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app import (navigator, tactics, routing, weather, sails, fatigue, onboard_conditions,
                  datasource, ais, fleet, deviation, drift, selector, reoptimize, strategy,
-                 matcher, buoys, racelog, watches)
+                 matcher, buoys, racelog, watches, trend, plangap)
 
 app = FastAPI(title="Agent_C4 Onboard Engine", version="0.1.0")
 # The iPad reaches the Pi directly over boat-local Wi-Fi in race mode; allow cross-origin so a
@@ -208,6 +208,7 @@ def playbook_load(body: dict):
     datasource.active().save_playbook(bundle)
     deviation.reset_state()          # a new playbook → clear the Schmitt/trend memory
     drift.reset_state()
+    plangap.reset_state()            # the plan-gap read measures against the NEW promise
     matcher.clear_state()            # forget play arm/sustain memory too
     return {"loaded": True, "race_id": bundle.get("race_id"),
             "variants": len(bundle.get("variants") or []),
@@ -221,6 +222,22 @@ def plays(route: str | None = None):
     against the boat's live signals (deterministic Schmitt sustain; armed first). Legal in-race —
     own instruments + pre-loaded homework; works with no Orin aboard."""
     return matcher.get_plays(route)
+
+
+@app.get("/trend")
+def trend_ep(route: str | None = None):
+    """Wind TREND — deterministic 1 h/3 h rate-of-change of own observed TWS/TWD (bucket means
+    from the full-res archive). An observation, not an alarm; feeds the strategy picture, the
+    play predicates (`tws_trend_kn_per_hr`/`twd_trend_deg_per_hr`) and the copilot's briefs."""
+    return trend.get_trend(route)
+
+
+@app.get("/plangap")
+def plangap_ep(route: str | None = None):
+    """PLAN GAP — own OBSERVED wind vs the frozen bundle's forecast promise for here/now (the
+    read `drift`'s forecast-vs-forecast design deliberately can't make). Schmitt-banded; legal
+    in-race (own instruments + pre-loaded homework)."""
+    return plangap.get_plangap(route)
 
 
 @app.get("/buoys")

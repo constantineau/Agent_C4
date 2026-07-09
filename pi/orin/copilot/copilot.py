@@ -366,7 +366,8 @@ def _strategy_prompt(pb: playbook_mod.Playbook, status_map=None) -> str:
         "ids from the library; an [armed] play you agree with ranks first; each why must reuse the "
         "engine's facts. Do NOT change the action, the target variant, or vs_playbook. In "
         "grounded_in cite ONLY the signal tools that actually support it (get_strategy, "
-        "get_selector, get_tactics, get_drift, get_deviation, get_fleet, get_buoys). Advisory, not a command."
+        "get_selector, get_tactics, get_drift, get_plangap, get_trend, get_deviation, get_fleet, "
+        "get_buoys). Advisory, not a command."
         "\n\n" + pb.digest() + lib_txt
     )
 

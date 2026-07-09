@@ -347,8 +347,36 @@ def get_strategy_signals(route=None):
     except Exception:
         pass
 
+    # PLAN GAP — own observed wind vs the promise the plan was built on (drift stays quiet when
+    # the real wind busts before the forecast catches up; this read doesn't)
+    try:
+        from . import plangap as plangap_mod
+        pg = plangap_mod.get_plangap(route)
+        if pg.get("available") and pg.get("status") in ("watch", "act"):
+            picture.append({"signal": "plan_gap",
+                            "read": (f"The plan promised {pg['plan_tws_kn']:g} kn at "
+                                     f"{pg['plan_twd']}° for here/now; you have "
+                                     f"{pg['obs_tws_kn']:g} kn at {pg['obs_twd']}°"),
+                            "grounded_in": ["get_plangap"],
+                            "confidence": "med" if pg["status"] == "act" else "low"})
+    except Exception:
+        pass
+
+    # WIND TREND — a material build/fade or a walking breeze joins the picture (own archive)
+    try:
+        from . import trend as trend_mod
+        tr = trend_mod.get_trend(route)
+        if (tr.get("available") and tr.get("read")
+                and (abs(tr.get("tws_trend_kn_per_hr") or 0) >= 1.0
+                     or abs(tr.get("twd_trend_deg_per_hr") or 0) >= 5.0)):
+            picture.append({"signal": "trend", "read": tr["read"][0].upper() + tr["read"][1:],
+                            "grounded_in": ["get_trend"], "confidence": "engine"})
+    except Exception:
+        pass
+
     # PLAYBOOK v2 Phase D — the ARMED PLAYS ride on the digest (deterministic matcher; the
-    # recommendation above stays the selector's — an armed play is a pointer, not an order)
+    # recommendation above stays the selector's — an armed play is a pointer, not an order),
+    # plus the WATCHLIST: quiet plays measurably close to arming ("what flips the plan")
     try:
         from . import matcher
         pl = matcher.get_plays(route)
@@ -364,6 +392,8 @@ def get_strategy_signals(route=None):
                 picture.append({"signal": "plays",
                                 "read": "Armed play(s): " + "; ".join(names),
                                 "grounded_in": "get_plays", "confidence": "engine"})
+        if pl.get("available") and pl.get("watchlist"):
+            out.setdefault("plays", {})["watchlist"] = pl["watchlist"]
     except Exception:
         pass
 

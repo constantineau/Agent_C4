@@ -371,3 +371,29 @@ body {
 .st-play-stakes { font-size: 11px; opacity: 0.7; margin-left: 6px; }
 .st-play-call { display: block; font-size: 12px; opacity: 0.85; }
 .st-play-none { font-size: 11px; opacity: 0.55; }
+
+/* ============ COACH WINDOW (the commentary panel's tap-detail) + the plays watchlist ============ */
+.commentary { cursor: pointer; }
+.commentary .briefme { cursor: pointer; }
+.cw-btns { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 8px; }
+.cw-btn { font: inherit; font-size: 12px; font-weight: 800; padding: 5px 11px; border-radius: 7px;
+  cursor: pointer; background: var(--panel2); color: inherit; border: 1px solid var(--line); }
+.cw-btn.busy { opacity: 0.55; }
+.cw-btn.cw-inline { margin: 6px 0; display: inline-block; }
+.cw-card { border: 1px solid var(--line); border-radius: 8px; background: var(--panel2);
+  padding: 7px 10px; margin: 6px 0; }
+.cw-card-head { display: flex; align-items: baseline; gap: 8px; font-size: 11px;
+  letter-spacing: 1px; color: var(--muted); }
+.cw-card-head b { color: inherit; letter-spacing: 0.4px; }
+.cw-tag { font-size: 10px; border: 1px solid currentColor; border-radius: 8px; padding: 0 6px; }
+.cw-when { margin-left: auto; font-size: 11px; opacity: 0.7; }
+.cw-head2 { font-size: 13px; font-weight: 800; margin: 4px 0 2px; }
+.cw-body { font-size: 12.5px; line-height: 1.4; color: var(--muted); white-space: pre-wrap; }
+.cw-callout { padding: 3px 8px; margin: 2px 0; border-left: 3px solid currentColor;
+  border-radius: 4px; font-size: 12.5px; }
+.cw-callout.y-act { background: rgba(220, 60, 60, 0.12); }
+.cw-callout.y-watch { background: rgba(220, 170, 40, 0.10); }
+.cw-hist { font-size: 11.5px; color: var(--muted); margin: 2px 0; }
+.st-watch-head { font-size: 10px; letter-spacing: 1px; opacity: 0.6; margin: 6px 0 2px; }
+.st-watch { font-size: 12px; color: var(--muted); margin: 2px 0; }
+.st-watch-pct { display: inline-block; min-width: 34px; font-weight: 800; color: inherit; }

@@ -129,6 +129,18 @@ class EngineClient:
         """Live buoy obs + the up-course leading indicator (common public data, Tier-1 read)."""
         return self._get("/buoys", {"route": route} if route else None)
 
+    def trend(self, route=None) -> dict:
+        """Wind TREND — 1 h/3 h build/walk rates of own observed wind (Tier-1 archive read)."""
+        return self._get("/trend", {"route": route} if route else None)
+
+    def plangap(self, route=None) -> dict:
+        """PLAN GAP — own observed wind vs the bundle's frozen promise for here/now (Tier-1)."""
+        return self._get("/plangap", {"route": route} if route else None)
+
+    def series(self, minutes=None, max_points=None) -> dict:
+        """Downsampled TWS/TWD time series from the onboard archive (the recap's raw record)."""
+        return self._get("/series", {"minutes": minutes, "max_points": max_points})
+
     def plays(self, route=None) -> dict:
         """Phase-D play matcher — armed/arming plays from the frozen v2 bundle (Tier-1)."""
         return self._get("/plays", {"route": route} if route else None)

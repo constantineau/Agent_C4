@@ -31,6 +31,7 @@
   const NAME = {
     wind: "TWS Trend", playbook: "Playbook", forecast: "Forecast",
     sail: "Sail", eta: "Time to Mark", ais: "Fleet", charge: "Crew", data: "Data",
+    coach: "Coach",
   };
   const boatName = (r) => { const n = r.boat || r.name || ("MMSI " + (r.mmsi || "?")); return n.length > 14 ? n.slice(0, 13) + "…" : n; };
   const aisName = (t) => { const n = t.name || ("MMSI " + t.mmsi); return n.length > 12 ? n.slice(0, 11) + "…" : n; };
@@ -802,6 +803,23 @@
     if (App.src === "demo") return (SCENARIOS[App.demoScn] || {}).drift || null;
     return App.forecastDrift;
   }
+  /* PLAN GAP — own observed wind vs the frozen promise (the read drift can't make); engine /plangap */
+  async function fetchPlangap() {
+    if (App.src !== "live") return;
+    const r = await fetchJSON("/plangap", 9000);
+    if (r) App.plangap = r;
+    if (App.src === "live") render();
+  }
+  function currentPlangap() {
+    if (App.src === "demo") return (SCENARIOS[App.demoScn] || {}).plangap || null;
+    return App.plangap;
+  }
+  /* TREND — 1h/3h build/walk rates of own observed wind; engine /trend (sail-detail read) */
+  async function fetchTrend() {
+    if (App.src !== "live") return;
+    const r = await fetchJSON("/trend", 9000);
+    if (r) App.trend = r;
+  }
   /* Playbook v2 Phase D — the Tier-1 PLAY MATCHER: armed/arming plays from the frozen v2 bundle
      (engine-deterministic Schmitt sustain). Plus the crew GEAR toggle: a tapped kite = declared
      out of service (the gear-loss plays' arming signal — no instrument for a blown sail). */
@@ -1055,6 +1073,16 @@
     }
     return '<p class="st-drift sd-' + status + '"><span class="sd-dot"></span><span>' + body + '</span></p>';
   }
+  /* PLAN GAP — promised vs actual breeze, one stack line, only when straying (in its band) */
+  function plangapHtml() {
+    const pg = currentPlangap();
+    if (!pg || pg.available === false || pg.status === "ok" || pg.status === "na") return "";
+    const tag = pg.status === "act" ? "not this breeze" : "straying";
+    const body = 'Promise <b>' + pg.plan_twd + "°/" + pg.plan_tws_kn + ' kts</b> · have <b>' +
+      pg.obs_twd + "°/" + pg.obs_tws_kn + ' kts</b> <span class="sd-tag">' + tag + '</span>';
+    return '<p class="st-drift sd-' + pg.status + '" title="Own observed wind vs what the plan\'s ' +
+      'forecast promised for here/now"><span class="sd-dot"></span><span>' + body + '</span></p>';
+  }
   function playsHtml() {
     const pl = currentPlays();
     if (!pl || pl.available === false) return "";
@@ -1072,10 +1100,22 @@
         (x.corroborated ? ` <span class="st-play-stakes" title="A confidence-raising signal agrees — it never gates arming">✓ ${x.corroborated_by || "corroborated"}</span>` : "") +
         (call ? `<span class="st-play-call">${call}</span>` : "") + `</div>`;
     }).join("");
+    // the WATCHLIST — quiet plays measurably close to arming ("what flips the plan"), with the
+    // live number against the threshold (the matcher's distance-to-trigger)
+    const wl = (pl.watchlist || []).map((w) => {
+      const g = w.nearest_gap || {};
+      const num = (g.actual != null && g.value != null)
+        ? ` — ${g.signal} ${g.actual} vs ${g.op} ${g.value}` : "";
+      const pct = Math.round((w.closeness || 0) * 100);
+      return `<div class="st-watch"><span class="st-watch-pct">${pct}%</span>` +
+        `<b>${w.name}</b>${num}</div>`;
+    }).join("");
     return `<div class="st-plays"><div class="st-plays-head"><span>PLAYS</span><span class="st-gearbox" ` +
       `title="Gear out-of-service toggles — arms the pre-authored gear-loss plays">gear: ${gear}</span></div>` +
       (items || `<div class="st-play-none">No plays armed — the library is watching ` +
-       `${pl.n_plays ?? 0} conditions.</div>`) + `</div>`;
+       `${pl.n_plays ?? 0} conditions.</div>`) +
+      (wl ? `<div class="st-watch-head" title="Distance-to-trigger: how close each quiet play's ` +
+        `weakest predicate is to its threshold">CLOSE TO FLIPPING</div>` + wl : "") + `</div>`;
   }
   function reoptHtml() {
     const sel = currentSelector();
@@ -1100,8 +1140,8 @@
       (vs ? ' · ' + vs : '') + ' <span class="ro-tag">off-book</span></span></p>';
   }
   function strategyStackHtml() {
-    const parts = [synthHtml(), selectorHtml(), deviationHtml(), driftHtml(), playsHtml(), reoptHtml()]
-      .filter(Boolean);
+    const parts = [synthHtml(), selectorHtml(), deviationHtml(), driftHtml(), plangapHtml(),
+      playsHtml(), reoptHtml()].filter(Boolean);
     if (!parts.length) return "";
     return '<div class="st-stack">' + parts.join("") + "</div>";
   }
@@ -1143,6 +1183,7 @@
     adhereTimer: null, coachTimer: null, devTimer: null, driftTimer: null, selTimer: null, polling: false,
     dwell: {}, data: null, windHist: [], fcstHist: [], seriesHist: [], lastPersist: 0, brief: null,
     coach: null, deviation: null, forecastDrift: null, selector: null, reoptimize: null,
+    plangap: null, trend: null, briefBusy: {},
     detailStreamKey: null, detailAbort: null,
   };
   function currentData() {
@@ -1300,7 +1341,90 @@
     if (key === "wind" && App.src === "live") fetchSeries().then(() => { if (App.openTile === "wind") populateDetail("wind", false); });
     populateDetail(key, true);
   }
+  /* ============ the COACH WINDOW — the commentary panel's tap-detail ============
+     Everything the copilot volunteers, in one place: the latest coach line + active callouts,
+     the held CREW BRIEFS (handover / recap / mark / watchlist — timer-scheduled on the Orin),
+     a "Brief me" button per kind, and the recent-brief rail. */
+  const BRIEF_KINDS = [["handover", "Watch handover"], ["recap", "Last hour"],
+                       ["mark", "Mark approach"], ["watchlist", "What flips the plan"]];
+  window.openCoachBrief = function (kind) {   // a tile hook: jump to the coach window + fetch
+    openDetail("coach");
+    window.crewBrief(kind);
+  };
+  window.crewBrief = async function (kind) {
+    App.briefBusy[kind] = true;
+    const btn = document.getElementById("cwb-" + kind);
+    if (btn) { btn.classList.add("busy"); btn.textContent = "thinking…"; }
+    try {
+      const ctl = new AbortController();
+      const to = setTimeout(() => ctl.abort(), 90000);   // LLM phrasing can take ~a minute
+      const resp = await fetch(COPILOT + "/briefs/" + kind, {
+        headers: { Accept: "application/json" }, signal: ctl.signal });
+      clearTimeout(to);
+      const r = resp.ok ? await resp.json() : null;
+      if (r && r.available) {
+        App.coach = App.coach || {};
+        App.coach.briefs = App.coach.briefs || {};
+        App.coach.briefs[kind] = r;
+      }
+    } catch (e) { /* the held copy (if any) stands */ }
+    App.briefBusy[kind] = false;
+    if (App.openTile === "coach") populateDetail("coach", false);
+  };
+  function briefCardHtml(kind, label, b) {
+    if (!b) return "";
+    const mode = b.mode === "llm" ? "LLM" : "engine";
+    const when = b.generated_at ? agoText(b.generated_at) : "";
+    return '<div class="cw-card"><div class="cw-card-head"><b>' + label + '</b>' +
+      '<span class="cw-tag">' + mode + '</span><span class="cw-when">' + when + '</span></div>' +
+      '<div class="cw-head2">' + escapeHtml(b.headline || "") + '</div>' +
+      '<div class="cw-body">' + escapeHtml(b.body || "") + '</div></div>';
+  }
+  function coachWindowHtml() {
+    const c = App.coach;
+    let out = '<div class="cw-btns">' + BRIEF_KINDS.map(([k, lbl]) =>
+      '<button class="cw-btn' + (App.briefBusy[k] ? " busy" : "") + '" id="cwb-' + k +
+      '" onclick="crewBrief(\'' + k + '\')">' +
+      (App.briefBusy[k] ? "thinking…" : lbl + " ↻") + '</button>').join("") + '</div>';
+    if (!c) {
+      return out + '<div class="dc-foot">Copilot not reachable — no coach state yet. ' +
+        'Briefs need the Orin up.</div>';
+    }
+    const briefs = c.briefs || {};
+    out += BRIEF_KINDS.map(([k, lbl]) => briefCardHtml(k, lbl, briefs[k])).join("");
+    if (c.active && c.active.length) {
+      out += '<div class="rc-title" style="margin-top:8px">Active callouts</div>' +
+        c.active.slice(0, 5).map((a) => '<div class="cw-callout y-' +
+          (a.urgency === "now" ? "act" : "watch") + '">' + escapeHtml(a.headline || "") +
+          (a.detail ? " — " + escapeHtml(a.detail) : "") + '</div>').join("");
+    }
+    const hist = (c.brief_history || []).slice(0, 6);
+    if (hist.length) {
+      out += '<div class="rc-title" style="margin-top:8px">Recent briefs</div>' +
+        hist.map((h) => '<div class="cw-hist">' + agoText(h.at) + ' · ' + h.kind + ' — ' +
+          escapeHtml(h.headline || "") + '</div>').join("");
+    }
+    return out;
+  }
   function populateDetail(key, stream) {
+    if (key === "coach") {
+      document.getElementById("detName").textContent = NAME.coach;
+      const c = App.coach || {};
+      const ds = document.getElementById("detStatus");
+      ds.innerHTML = c.running ? "timer on · every " + Math.round(c.interval_s || 30) + " s"
+                               : "timer off";
+      ds.style.color = "var(--na)";
+      document.getElementById("detGauge").innerHTML = coachWindowHtml();
+      document.getElementById("detWhy").textContent =
+        "The coach window: everything the copilot volunteers — scheduled crew briefs (watch " +
+        "handover at T-15, hourly recap while racing, mark pre-brief at ~T-20) plus the live " +
+        "callout stream. Deterministic engine numbers first; LLM phrasing when the Orin is up.";
+      document.getElementById("detConsider").textContent =
+        "Tap a button for a fresh brief on demand.";
+      document.getElementById("detClears").textContent = "—";
+      document.getElementById("detBased").textContent = "copilot /coach · /briefs/{kind}";
+      return;
+    }
     const t = currentData().tiles[key] || STATUS_PLACEHOLDER();
     const st = STATUS[t.status] || STATUS.na;
     document.getElementById("detName").textContent = NAME[key];
@@ -1350,7 +1474,10 @@
         }
         bars += "</div>";
       }
-      g.innerHTML = energy + watchPanelHtml() + bars;
+      // the handover brief on demand — the watch-change synthesis lives in the coach window
+      const hbtn = '<button class="cw-btn cw-inline" onclick="openCoachBrief(\'handover\')">' +
+        'Watch handover brief ↻</button>';
+      g.innerHTML = energy + hbtn + watchPanelHtml() + bars;
     } else if (t.rows) {
       g.innerHTML = (t.value ? '<div class="dc-foot">' + t.value + (t.sub ? " · " + t.sub : "") + '</div>' : "") + rowsHtml(t.rows);
     } else if (t.components) {
@@ -1361,6 +1488,24 @@
       g.innerHTML = (t.value || "—") + " · " + (t.sub || "") + bars + "</div>";
     } else {
       g.textContent = stripTags(t.value || "—") + "  ·  " + (t.sub || "");
+    }
+    // per-tile coach hooks — appended whatever branch built the gauge above
+    if (key === "sail" && App.trend && App.trend.available && App.trend.read) {
+      // the observed wind trend (the full threshold clock lives in the handover brief)
+      g.insertAdjacentHTML("beforeend", '<div class="dc-foot">Trend: ' +
+        escapeHtml(App.trend.read) + '</div>');
+    }
+    if (key === "forecast") {
+      const pg = currentPlangap();
+      if (pg && pg.available) {   // did the promised breeze show up on deck?
+        g.insertAdjacentHTML("beforeend", '<div class="dc-foot" title="Own observed wind vs ' +
+          'the plan\'s frozen promise for here/now">' + escapeHtml(pg.value || "") +
+          (pg.sub ? " · " + escapeHtml(pg.sub) : "") + '</div>');
+      }
+    }
+    if (key === "eta") {
+      g.insertAdjacentHTML("beforeend", '<button class="cw-btn cw-inline" ' +
+        'onclick="openCoachBrief(\'mark\')">Mark pre-brief ↻</button>');
     }
     document.getElementById("detConsider").textContent = (t.llmNote ? "Copilot: " + t.llmNote + "  ·  " : "") + (t.consider || "—");
     document.getElementById("detClears").textContent = t.clears || "—";
@@ -1537,6 +1682,10 @@
     App.devTimer = setInterval(fetchDeviation, DEV_EVERY);
     fetchDrift();                   // forecast-drift (engine, common-data), then on its own cadence
     App.driftTimer = setInterval(fetchDrift, DRIFT_EVERY);
+    fetchPlangap();                 // plan-gap (own wind vs the frozen promise), drift's cadence
+    App.plangapTimer = setInterval(fetchPlangap, DRIFT_EVERY);
+    fetchTrend();                   // wind trend (sail-detail read), slow-moving
+    App.trendTimer = setInterval(fetchTrend, 60000);
     fetchSelector();                // branch selector (engine, unified recommendation), own cadence
     App.selTimer = setInterval(fetchSelector, DEV_EVERY);
     fetchSynthesis();               // in-race strategy synthesis (copilot LLM → engine fallback), own cadence
@@ -1557,6 +1706,12 @@
     ["click", "touchend"].forEach((ev) =>
       document.addEventListener(ev, () => { if (Sound.on) audioCtx(); }, { once: true, passive: true }));
     document.getElementById("briefBtn").addEventListener("click", briefMe);
+    // the commentary panel IS the coach window's face — tap anywhere on it (except the
+    // Brief-me button) to open the full coach window
+    document.getElementById("commentary").addEventListener("click", (e) => {
+      if (e.target.closest("#briefBtn")) return;
+      openDetail("coach");
+    });
     document.getElementById("detBack").addEventListener("click", closeDetail);
     document.getElementById("overlay").addEventListener("click", closeDetail);
     const ask = () => {

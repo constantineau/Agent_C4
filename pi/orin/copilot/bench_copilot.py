@@ -629,6 +629,75 @@ def test_play_match_filter() -> bool:
     return ok
 
 
+from . import briefs as briefs_mod  # noqa: E402
+
+
+def test_briefs_logic() -> bool:
+    """CREW BRIEFS (briefs.py) — pure section builders on a synthetic snapshot: the sail-window
+    clock, the fatigue-performance link, the watchlist rows, the mark crew handoff, and the
+    data-honesty notes. No engine, no LLM."""
+    ok = True
+    print("\n== crew briefs (pure, synthetic) ==")
+    pb = playbook_mod.Playbook({"race_id": "u", "variants": [{"id": "middle"}],
+                                "boat_model": {"sail_inventory": ["A3"],
+                                               "main_reefs": {"r1_tws_kn": 20}}})
+    snap = {
+        "conditions": {"available": True, "tws": 16.0, "twa": 140.0, "stw": 8.2, "stale": False},
+        "trend": {"available": True, "tws_trend_kn_per_hr": 2.0, "twd_trend_deg_per_hr": 0.5,
+                  "read": "breeze building 2 kn/hr (12->16 kn)",
+                  "h1": {"tws_rate_kn_per_hr": 2.0}},
+        "plays": {"available": True, "sail_state": {"flying": ["A3"], "reef": None},
+                  "signals": {"polar_pct": 91.0},
+                  "plays": [{"id": "p1", "name": "Pressure down", "status": "armed",
+                             "guidance": "soak low"}],
+                  "watchlist": [{"id": "w1", "name": "2h behind at the gate", "closeness": 0.9,
+                                 "nearest_gap": {"signal": "time_behind_min", "op": ">=",
+                                                 "value": 104, "actual": 94}}]},
+        "fatigue": {"index": 72, "level": "rotate_soon"},
+        "watch": {"plan_set": True, "active": True, "on": "A", "on_label": "Team A",
+                  "next_on": "B", "next_on_label": "Team B", "mins_to_change": 12,
+                  "next_change": 999.0},
+        "deviation": {"available": True, "status": "ok"},
+        "drift": {"available": True, "status": "ok"},
+        "plangap": {"available": True, "status": "watch",
+                    "value": "Breeze straying from the promise",
+                    "sub": "promised 200°/12 kn · have 214°/10 kn"},
+        "_pb": pb,
+    }
+    sw = briefs_mod._sail_window_lines(snap, pb)
+    ok &= _check("sail-window clock: reef-1 threshold ~2 h out at +2 kn/hr",
+                 sw and any("reef-1" in l and "2 h" in l for l in sw["lines"]))
+    crew = briefs_mod._crew_lines(snap)
+    ok &= _check("fatigue-performance link: fatigue + under-target polar in one line",
+                 crew and any("72" in l and "91" in l for l in crew["lines"]))
+    rows = briefs_mod._watchlist_rows(snap["plays"])
+    ok &= _check("watchlist row carries the live number vs the threshold",
+                 rows and "94" in rows[0] and "104" in rows[0] and "90%" in rows[0])
+    div = briefs_mod._divergence_lines(snap)
+    ok &= _check("divergence section shows only in-band reads (plangap watch, drift ok)",
+                 div and len(div["lines"]) == 1 and "promise" in div["lines"][0])
+    notes = briefs_mod._data_notes(snap, type("E", (), {"base_url": "http://x"})())
+    ok &= _check("healthy snapshot -> no data notes", notes == [])
+    snap["conditions"]["stale"] = True
+    notes = briefs_mod._data_notes(snap, type("E", (), {"base_url": "http://x"})())
+    ok &= _check("stale instruments -> honesty note leads", notes
+                 and "STALE" in notes[0])
+    # mark brief: incoming watch takes the rounding when the change lands before the ETA
+    snap["navigator"] = {"available": True,
+                         "next_mark": {"name": "Cove Island", "seq": 3, "index": 2,
+                                       "distance_nm": 4.2, "bearing_deg": 310.0, "eta_min": 18},
+                         "leg": {"type": "run"}, "next_rounding": {"leg_type": "beat"}}
+    snap["sail"] = {"available": True, "next_xover": {"to_sail": "J2", "at_twa": 95}}
+    secs, head = briefs_mod._mark_sections(snap, pb)
+    flat = " ".join(l for s in secs for l in s["lines"])
+    ok &= _check("mark brief: headline names the mark + ETA", "Cove Island" in head)
+    ok &= _check("mark brief: incoming watch takes the rounding (change at 12 < ETA 18)",
+                 "Team B" in flat)
+    ok &= _check("mark brief: staged sail change + the leg after",
+                 "J2" in flat and "beat" in flat)
+    return ok
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--llm", action="store_true", help="also exercise the LLM tool-loop")
@@ -647,6 +716,7 @@ def main():
     overall &= test_strategy_callout()
     overall &= test_plays_callout()
     overall &= test_play_match_filter()
+    overall &= test_briefs_logic()
 
     print(f"\n>> engine: {config.ENGINE_URL}")
     engine = EngineClient()

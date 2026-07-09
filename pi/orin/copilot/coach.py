@@ -20,9 +20,12 @@ import asyncio
 import time
 from collections import deque
 
+from . import briefs as briefs_mod
 from . import config, copilot
+from .engine_client import EngineClient
 
 _HISTORY_MAX = 12
+_BRIEF_HISTORY_MAX = 10
 
 
 class _Coach:
@@ -36,6 +39,13 @@ class _Coach:
         self.last_tick_at = None
         self.last_error = None
         self._task = None
+        # scheduled CREW BRIEFS state (briefs.py): the held latest per kind + a short history,
+        # and the show-once keys so each rotation/hour/mark gets its brief exactly once
+        self.briefs = {}                              # kind -> latest full payload
+        self.brief_history = deque(maxlen=_BRIEF_HISTORY_MAX)   # {kind, at, headline}, newest first
+        self._handover_key = None                     # the rotation (next_change epoch) already briefed
+        self._recap_at = 0.0                          # last recap wall-clock
+        self._mark_key = None                         # the mark (name:seq) already briefed
 
     def running(self) -> bool:
         return self._task is not None and not self._task.done()
@@ -58,7 +68,55 @@ class _Coach:
             "updated_at": last.get("_coach_at"),
             "history": list(self.history),
             "playbook_loaded": last.get("_meta", {}).get("playbook_loaded"),
+            # the coach-window surface: latest full brief per kind + what fired recently
+            "briefs": self.briefs,
+            "brief_history": list(self.brief_history),
         }
+
+    def _hold_brief(self, kind, payload):
+        self.briefs[kind] = payload
+        self.brief_history.appendleft({"kind": kind, "at": payload.get("generated_at"),
+                                       "headline": payload.get("headline"),
+                                       "mode": payload.get("mode")})
+
+    async def _make_brief(self, kind):
+        payload = await asyncio.to_thread(briefs_mod.make, kind, self.route)
+        if payload.get("available"):
+            self._hold_brief(kind, payload)
+
+    async def check_briefs(self):
+        """The BRIEF SCHEDULER — one pass of the show-once rules. Two cheap engine reads decide
+        whether anything is due; the (LLM-phrased) brief itself is generated at most once per
+        rotation / hour / mark. Never raises."""
+        eng = await asyncio.to_thread(EngineClient)
+        w = await asyncio.to_thread(eng.watch)
+        nav = await asyncio.to_thread(eng.navigator, self.route)
+        now = time.time()
+        racing = bool(w.get("plan_set") and w.get("active"))
+
+        # handover at T-15 to the next rotation, once per rotation
+        mins = w.get("mins_to_change")
+        if (racing and w.get("next_on") and isinstance(mins, (int, float))
+                and 0 < mins <= config.BRIEF_HANDOVER_T_MIN):
+            key = w.get("next_change")
+            if key and key != self._handover_key:
+                self._handover_key = key
+                await self._make_brief("handover")
+
+        # hourly recap — only while racing (an active watch plan is the signal); dock = silence
+        if racing and now - self._recap_at >= config.BRIEF_RECAP_S:
+            self._recap_at = now
+            await self._make_brief("recap")
+
+        # mark pre-brief inside the window, once per mark; the rounding endgame is narrate's
+        nm = (nav.get("next_mark") or {}) if nav.get("available") else {}
+        eta = nm.get("eta_min")
+        if (nm.get("name") and isinstance(eta, (int, float))
+                and config.BRIEF_MARK_MIN_T_MIN < eta <= config.BRIEF_MARK_T_MIN):
+            key = f"{nm.get('name')}:{nm.get('seq')}"
+            if key != self._mark_key:
+                self._mark_key = key
+                await self._make_brief("mark")
 
     async def tick(self):
         """One coaching cycle: run the narration engine (off the event loop — it's blocking urllib),
@@ -77,6 +135,11 @@ class _Coach:
                 })
         except Exception as e:                        # best-effort — a flaky link must not kill the loop
             self.last_error = f"{type(e).__name__}: {e}"
+        if config.BRIEFS_ENABLED:
+            try:
+                await self.check_briefs()
+            except Exception as e:                    # a failed brief never kills the coach
+                self.last_error = f"briefs: {type(e).__name__}: {e}"
         self.ticks += 1
         self.last_tick_at = time.time()
 

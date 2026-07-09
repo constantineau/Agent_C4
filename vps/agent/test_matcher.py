@@ -306,5 +306,45 @@ r = matcher.get_plays()
 check("C0 doused -> the C0 play clears", next(x for x in r["plays"]
       if x["id"] == "sail_c0_up")["status"] == "quiet")
 print("RESULT-9:", "PASS" if ok else "FAIL")
+
+print("10) distance-to-trigger + watchlist (2026-07-09)")
+matcher.navigator.get_navigator = lambda route=None: {"available": False}   # leg unknown again
+matcher.SUSTAIN_SCALE = 1.0                                                 # real sustain clocks
+StubDS.state = {}                                                           # no leftover sail state
+# 94 min behind a 104-min pace predicate → quiet but ~0.9 close; on the watchlist w/ live numbers
+stub(time_behind_min=94)
+r = matcher.get_plays()
+p = next(x for x in r["plays"] if x["id"] == "pace_behind_2h_1")
+check("quiet near-threshold play reports closeness ~0.9",
+      p["status"] == "quiet" and p["closeness"] is not None and 0.85 <= p["closeness"] <= 0.95)
+check("nearest_gap carries the live number vs the threshold",
+      p["nearest_gap"] and p["nearest_gap"]["signal"] == "time_behind_min"
+      and p["nearest_gap"]["actual"] == 94 and p["nearest_gap"]["value"] == 104)
+check("watchlist surfaces it", any(w["id"] == "pace_behind_2h_1" for w in r["watchlist"]))
+# an unknowable play (fatigue signal absent) never fakes a closeness / a watchlist slot
+p = next(x for x in r["plays"] if x["id"] == "low_maneuver")
+check("unknowable signal -> closeness None, off the watchlist",
+      p["closeness"] is None and not any(w["id"] == "low_maneuver" for w in r["watchlist"]))
+# far from the threshold → below the 0.5 cut, off the watchlist
+stub(time_behind_min=20)
+r = matcher.get_plays()
+p = next(x for x in r["plays"] if x["id"] == "pace_behind_2h_1")
+check("far-off play (closeness < 0.5) stays off the watchlist",
+      (p["closeness"] or 0) < 0.5 and not any(w["id"] == "pace_behind_2h_1"
+                                              for w in r["watchlist"]))
+# a holding predicate w/ sustain running → arming carries sustain_pct, closeness 1.0
+stub(time_behind_min=120)
+r = matcher.get_plays()
+p = next(x for x in r["plays"] if x["id"] == "pace_behind_2h_1")
+check("arming play: closeness 1.0 + sustain_pct present",
+      p["status"] == "arming" and p["closeness"] == 1.0
+      and isinstance(p["sustain_pct"], int) and 0 <= p["sustain_pct"] < 100)
+check("arming play is not on the quiet watchlist",
+      not any(w["id"] == "pace_behind_2h_1" for w in r["watchlist"]))
+# == predicates are 1/0 — a gear-loss play never reads "almost"
+p = next(x for x in r["plays"] if x["id"] == "gear_loss_a2")
+check("discrete predicate: closeness 0, not 'almost'", p["closeness"] in (0.0, None)
+      or p["closeness"] == 0)
+print("RESULT-10:", "PASS" if ok else "FAIL")
 import sys
 sys.exit(0 if ok else 1)
