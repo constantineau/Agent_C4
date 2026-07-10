@@ -3,7 +3,12 @@
 **Status:** step 0 IN PROGRESS (2026-07-10). The eval harness is BUILT — `pi/orin/copilot/eval/`
 (§3 generators + §4 metrics/gates + a runner that drives the real production prompt path), exit
 test `python3 -m copilot.eval.test_eval` green incl. an oracle lock-step vs `app.matcher`.
-Baseline of the stock q4 7B on the real Orin: pending/running. Train only if the gates fail.
+Baseline of the stock q4 7B on the real Orin: quality gates FAIL decisively even hinted (armed-set
+F1 0.45, top-1 0.55, near-miss FP 30%, n=141 infra-clean; JSON reliability 100% passes) → the
+training gate is OPEN. **Decision (user, 2026-07-10): train PRE-race (Jul 18)** — bounded risk
+(Tier-1 untouched; rollback = one model-name line). GPU side: `training/matcher_lora/`
+(RunPod runbook + QLoRA script); corpus: `python3 -m copilot.eval.gen_train` (seed 1001,
+3200 examples; seed 7 = held-out eval, never trained).
 (History: replaces the removed judgment/DPO plan — `STRATEGY_LORA_PLAN.md`, deleted; it trained
 the 7B to *make calls*, which is descoped — and **absorbs Track A** (`ORIN_LORA_PLAN.md`,
 reliability SFT). Depended on Playbook v2 Phases B + D, which shipped 2026-07-08.)
