@@ -13,6 +13,7 @@ the model can out-read a hint that is present and unhelpful, exactly that regime
 
 import argparse
 import json
+import os
 import time
 
 from .. import copilot, playbook as playbook_mod
@@ -27,6 +28,25 @@ def _schema_ok(parsed):
                and m.get("why") for m in parsed.get("play_matches", []))
 
 
+def _chat_with_recovery(llm, messages, attempts=3, recovery_s=180):
+    """A multi-hour eval must survive an Ollama restart (the 2026-07-10 baseline lost 337 of 480
+    examples to one OOM-kill): on LLM trouble, wait for the server to answer /models again (systemd
+    restarts it) and retry, up to `attempts`. An example fails only when the LLM is truly gone."""
+    last = None
+    for i in range(attempts):
+        try:
+            return llm.chat(messages, schema=copilot._STRATEGY_SCHEMA)
+        except LLMUnavailable as e:
+            last = e
+            deadline = time.time() + recovery_s
+            while time.time() < deadline:
+                if llm.reachable():
+                    break
+                time.sleep(10)
+            print(f"  ! llm trouble ({e}) — retry {i + 1}/{attempts}", flush=True)
+    raise last
+
+
 def _predict(ex, llm, blind=False, dry=False):
     pb = playbook_mod.Playbook(ex["bundle"])
     smap = ({pid: "quiet" for pid in pb.play_ids()} if blind else ex["status_map"])
@@ -39,9 +59,9 @@ def _predict(ex, llm, blind=False, dry=False):
                 "filtered": copilot._filter_play_matches(parsed, pb, smap), "latency_s": 0.0}
     t0 = time.time()
     try:
-        msg = llm.chat([{"role": "system", "content": copilot._strategy_prompt(pb, smap)},
-                        {"role": "user", "content": ex["seed"]}],
-                       schema=copilot._STRATEGY_SCHEMA)
+        msg = _chat_with_recovery(
+            llm, [{"role": "system", "content": copilot._strategy_prompt(pb, smap)},
+                  {"role": "user", "content": ex["seed"]}])
         parsed = copilot._extract_json(msg.get("content") or "")
     except LLMUnavailable as e:
         return {"parse_ok": False, "schema_ok": False, "raw": [], "filtered": [],
@@ -60,6 +80,8 @@ def main():
     ap.add_argument("--n", type=int, help="cap examples (quick pass)")
     ap.add_argument("--blind", action="store_true")
     ap.add_argument("--dry", action="store_true")
+    ap.add_argument("--resume", action="store_true",
+                    help="reuse non-error predictions already in --out; re-run the rest")
     args = ap.parse_args()
 
     with open(args.corpus) as f:
@@ -67,9 +89,20 @@ def main():
     if args.n:
         examples = examples[:args.n]
 
+    done = {}
+    if args.resume and args.out and os.path.exists(args.out):
+        with open(args.out) as f:
+            prev = json.load(f)
+        done = {eid: p for eid, p in zip(prev.get("example_ids", []), prev.get("predictions", []))
+                if not p.get("error")}
+        print(f"resume: {len(done)} prior predictions reused")
+
     llm = None if args.dry else LLMClient()
     preds = []
     for i, ex in enumerate(examples):
+        if ex["id"] in done:
+            preds.append(done[ex["id"]])
+            continue
         pr = _predict(ex, llm, blind=args.blind, dry=args.dry)
         preds.append(pr)
         if not args.dry:
