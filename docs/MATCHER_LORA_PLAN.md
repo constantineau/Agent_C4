@@ -1,11 +1,12 @@
 # Matcher LoRA — fine-tuning the Orin 7B for playbook CONDITION MATCHING
 
-**Status:** design (2026-07-06). Replaces the removed judgment/DPO plan (`STRATEGY_LORA_PLAN.md`,
-deleted — it trained the 7B to *make calls*, which is descoped) and **absorbs Track A**
-(`ORIN_LORA_PLAN.md`, reliability SFT — its objective folds into this task). Nothing is built;
-**step 0 is a measurement gate, not training** (§6). Depends on Playbook v2 Phases B + D
-(`PLAYBOOK_V2.md`) shipping first — the task doesn't exist until the play library and the Tier-2
-matcher prompt do.
+**Status:** step 0 IN PROGRESS (2026-07-10). The eval harness is BUILT — `pi/orin/copilot/eval/`
+(§3 generators + §4 metrics/gates + a runner that drives the real production prompt path), exit
+test `python3 -m copilot.eval.test_eval` green incl. an oracle lock-step vs `app.matcher`.
+Baseline of the stock q4 7B on the real Orin: pending/running. Train only if the gates fail.
+(History: replaces the removed judgment/DPO plan — `STRATEGY_LORA_PLAN.md`, deleted; it trained
+the 7B to *make calls*, which is descoped — and **absorbs Track A** (`ORIN_LORA_PLAN.md`,
+reliability SFT). Depended on Playbook v2 Phases B + D, which shipped 2026-07-08.)
 
 ## 1. The task being optimized
 
