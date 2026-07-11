@@ -269,10 +269,14 @@ every state without a boat.
 ## Onboard Tier 2 — the Orin copilot
 
 Runtime as-built (`pi/orin/DEPLOYMENT.md`): JetPack 7.2/R39, **from-source Ollama
-(cuda_v13 @ sm_87) serving `qwen2.5:7b-instruct-q4_K_M` on :11434** (OpenAI `/v1`), ~12
-tok/s, 100% GPU, systemd-persistent appliance. (The original MLC-on-:9000 plan is
-superseded history — `pi/orin/SETUP.md`/`models.md` are kept but marked.) The copilot only
-sees the OpenAI contract, so the runtime stays swappable.
+(cuda_v13 @ sm_87) on :11434** (OpenAI `/v1`), ~12 tok/s, 100% GPU, systemd-persistent
+appliance. **Deployed model (2026-07-11): `qwen2.5-matcher:7b-q4_K_M`** — the stock
+`qwen2.5:7b-instruct-q4_K_M` fine-tuned for playbook condition-matching (QLoRA;
+results + known /brief-forgetting caveat in `docs/MATCHER_LORA_PLAN.md`; eval harness
+`pi/orin/copilot/eval/`, GPU runbook `training/matcher_lora/`). Stock model stays installed;
+**rollback = flip `LLM_MODEL` in `/etc/sr33/copilot.env` + restart**. (The original
+MLC-on-:9000 plan is superseded history — `pi/orin/SETUP.md`/`models.md` are kept but
+marked.) The copilot only sees the OpenAI contract, so the runtime stays swappable.
 
 **Copilot service** (`pi/orin/copilot/`, **:8300**; reached from the iPad via the console's
 `/copilot/*` proxy, which rides the **direct Pi↔Orin ethernet** — `COPILOT_UPSTREAM` defaults

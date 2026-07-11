@@ -2,9 +2,30 @@
 
 The GPU-side of `docs/MATCHER_LORA_PLAN.md` §5. Everything before and after the GPU box is in
 `pi/orin/copilot/eval/` (corpus generators, §4 eval). Decision 2026-07-10: train PRE-race —
-the stock-7B baseline failed the quality gates decisively (F1 0.45 / top-1 0.55 / near-miss FP
-30% even hinted). Bounded risk: the LoRA touches only the Tier-2 narrative layer; the
+the stock-7B baseline failed the quality gates decisively (F1 0.50 / top-1 0.60 / near-miss FP
+26% even hinted). Bounded risk: the LoRA touches only the Tier-2 narrative layer; the
 deterministic Tier-1 matcher is untouched, and rollback is one model-name change.
+
+## AS-BUILT (2026-07-10/11 — this runbook was executed; deltas + results)
+
+- **Ran on:** RunPod Secure Cloud 1× A100-SXM4-80GB, official PyTorch template (torch 2.8/cu128,
+  transformers 5.13, peft 0.19). PEP-668 image → use `python3 -m venv --system-site-packages`.
+  Training: 3,200 examples × 2 epochs = **59 min**, loss 1.3 → ~0.0. Whole pod bill < $10.
+- **Corpus:** seed 1001 (3,200 SFT examples, 35% blind-hint slice); eval = the held-out seed-7
+  corpus (240 examples, disjoint libraries), never trained on.
+- **Artifacts:** merged→GGUF f16→`llama-quantize q4_K_M` (llama.cpp `convert_hf_to_gguf.py`
+  needed `pip install gguf mistral-common`; quantize built CPU-only `-DGGML_CUDA=OFF`). Final
+  blob sha256 `3fa29c4f…` (4.68 GB). Adapter + train/gguf logs archived on the dev VM:
+  `~/Agent_C4-artifacts-matcher-lora-adapter.tgz` (re-derive everything without retraining).
+- **Ollama registration:** don't hand-write TEMPLATE — `ollama show --modelfile
+  qwen2.5:7b-instruct-q4_K_M | sed "s|^FROM .*|FROM <gguf>|" > Modelfile` inherits the exact
+  chatml template/params, then `ollama create qwen2.5-matcher:7b-q4_K_M -f Modelfile`.
+- **Results + deploy decision:** table + known `/brief` forgetting regression in
+  `docs/MATCHER_LORA_PLAN.md` (Results section). DEPLOYED to the boat Orin 2026-07-11.
+- **Orin ops lesson (cost us two freezes):** strictly SERIALIZE heavy operations on the 8 GB box
+  — eval, then the 4.7 GB transfer, then `ollama create`; stop `sr33-orin-copilot` (sudo — plain
+  systemctl hits polkit) during long eval runs. The eval runner's retry/`--resume` (12be0e4)
+  rides through Ollama OOM restarts.
 
 ## 1. Corpus (on the dev VM — no GPU)
 

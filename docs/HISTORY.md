@@ -304,6 +304,40 @@ and the per-component READMEs. Detailed design rationale for the big arcs is in 
   failure notes). **Dockside verification still owed**: how the 943 *renders* an external
   route (line on chart vs data fields) — first time the N2K cable goes in.
 
+## 2026-07-10/11 — Matcher LoRA: eval harness → baseline → pre-race fine-tune → deployed
+
+- **Boat deploy of the coach-window arc** (`dcf6fd0` pulled to Pi + Orin; engine/console/
+  n2kout rebuilt) and the first **real-hardware 7B smoke**: `briefs._phrase` ran live
+  (mode `llm`, coherent racer phrasing). Surfaced that the playbook must be loaded in TWO
+  places (copilot `PLAYBOOK_PATH` + engine `POST /playbook/load`) and that no v2 (plays)
+  bundle had ever been frozen — the Jul-17 synthesis must include a freeze.
+- **Step-0 eval harness** (`pi/orin/copilot/eval/`, `d34b9a8`): seeded synthetic play
+  libraries (10 families) + verdict-conditioned scenarios (near-miss modes: threshold /
+  sustain / wrong-leg / confounder) + a pure oracle lock-stepped against `app.matcher` +
+  §4 gate metrics + a runner driving the REAL `_strategy_prompt → LLM → _filter_play_matches`
+  path (hinted/blind/dry modes; retry-through-Ollama-restart + `--resume` added in `12be0e4`
+  after an OOM ate a run).
+- **Stock q4 baseline on the Orin (n=240 each): FAILED the quality gates** — hinted F1 0.497 /
+  top-1 0.597 / near-miss FP 26.2% / grounding violations 12%; blind 0.404/0.430/24.2%/17.7%.
+  JSON reliability ~99% passed (the old Track-A worry dead). Training gate open; **user chose
+  to train PRE-race**.
+- **QLoRA SFT** (`training/matcher_lora/`, RunPod A100, 59 min, <$10): 3,200 oracle-labeled
+  chat examples through the production prompt (armed→strong with condition-quoting whys,
+  arming→partial, other near-misses ABSENT; 35% blind-hint slice; seed-guarded from the
+  held-out eval corpus) → merge → GGUF q4_K_M (sha `3fa29c4f…`) → `ollama create
+  qwen2.5-matcher:7b-q4_K_M` on the Orin (template inherited from the stock modelfile).
+- **A/B on the held-out corpus: tuned hinted passes EVERY gate — F1 0.998, top-1 0.995,
+  near-miss FP 0%, grounding violations 0%** (blind: F1 0.75, grounding 0%, near-FP still
+  ~23% — the no-hints threshold discrimination remains the residual weakness). Known accepted
+  regression: the open `/brief` tool-loop now falls back to deterministic more readily (mild
+  forgetting; every path has a safe deterministic fallback; SFT v2 with brief replay is the
+  fix if wanted). **DEPLOYED**: `LLM_MODEL=qwen2.5-matcher:7b-q4_K_M` in `/etc/sr33/copilot.env`
+  — rollback = revert that line. Remaining human gate: the ~50-sample sailor face-validity audit.
+- **Orin ops lessons** (two memory-thrash freezes): serialize heavy operations on the 8 GB box
+  (eval, then multi-GB transfers, then `ollama create`) and stop the copilot during long eval
+  runs; the box self-recovers via the OOM killer, and kernel-pings-but-no-ssh is the thrash
+  signature (the Pi↔Orin ethernet is the diagnostic back door).
+
 ## Standing decisions (still binding)
 
 - **RRS 41 bright line**: all frontier/cloud work pre-start, frozen at the gun; in-race =

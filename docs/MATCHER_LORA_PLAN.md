@@ -1,14 +1,37 @@
 # Matcher LoRA — fine-tuning the Orin 7B for playbook CONDITION MATCHING
 
-**Status:** step 0 IN PROGRESS (2026-07-10). The eval harness is BUILT — `pi/orin/copilot/eval/`
-(§3 generators + §4 metrics/gates + a runner that drives the real production prompt path), exit
-test `python3 -m copilot.eval.test_eval` green incl. an oracle lock-step vs `app.matcher`.
-Baseline of the stock q4 7B on the real Orin: quality gates FAIL decisively even hinted (armed-set
-F1 0.45, top-1 0.55, near-miss FP 30%, n=141 infra-clean; JSON reliability 100% passes) → the
-training gate is OPEN. **Decision (user, 2026-07-10): train PRE-race (Jul 18)** — bounded risk
-(Tier-1 untouched; rollback = one model-name line). GPU side: `training/matcher_lora/`
-(RunPod runbook + QLoRA script); corpus: `python3 -m copilot.eval.gen_train` (seed 1001,
-3200 examples; seed 7 = held-out eval, never trained).
+**Status: TRAINED + DEPLOYED (2026-07-11).** The whole pipeline ran 2026-07-10/11: harness →
+stock baseline (gates FAILED) → user green-lit PRE-race training → QLoRA on a RunPod A100 (59 min,
+$<10) → GGUF q4_K_M → A/B on the real Orin → **deployed as `qwen2.5-matcher:7b-q4_K_M`**
+(`LLM_MODEL` in `/etc/sr33/copilot.env`; rollback = revert that line to
+`qwen2.5:7b-instruct-q4_K_M`). Full as-built runbook + results: `training/matcher_lora/README.md`.
+
+## Results (held-out corpus, n=240 each, q4 on the real Orin)
+
+| Axis (gate) | stock hinted | stock blind | **tuned hinted** | tuned blind |
+|---|---|---|---|---|
+| Armed-set F1 (≥0.90) | 0.497 | 0.404 | **0.998 ✓** | 0.750 |
+| Top-1 (≥0.90) | 0.597 | 0.430 | **0.995 ✓** | 0.742 |
+| Near-miss FP (≤10%) | 26.2% | 24.2% | **0.0% ✓** | 22.7% |
+| Grounding violations (~0) | 12.0% | 17.7% | **0.0% ✓** | **0.0% ✓** |
+| JSON schema (≥98%) | 99.6% ✓ | 98.8% ✓ | 99.2% ✓ | 99.6% ✓ |
+
+Hinted = the production regime (the deterministic matcher's status tags ride in the prompt): the
+tuned model passes every gate, near-perfectly. Blind (hints withheld — the compound/fuzzy §3.4
+stress) improved hugely on F1/top-1/grounding but still bites near-miss traps ~23% — narrative
+threshold discrimination without hints is the residual weakness. Calibration note: the tuned
+model uses `partial` per the training semantics (= conditions present, sustain not met), so the
+harness's partial-vs-armed accuracy metric reads 0 by construction — not a defect.
+
+**Known regression (accepted, documented):** on the open `/brief` DecisionBrief tool-loop the
+tuned model produced no grounded content in the dockside bench and fell back to deterministic
+(stock had produced one grounded factor) — mild catastrophic forgetting toward the matcher task.
+Bounded by architecture: every LLM path falls back to deterministic engine facts. Fix if wanted:
+SFT v2 mixing general-brief replay examples into the corpus. All other bench sections pass;
+the one remaining bench FAIL (deterministic dockside brief with no live data) predates the LoRA.
+
+**Remaining:** the §4 expert audit — ~50 sampled outputs read by sailors ("would this make sense
+on deck") before race trust.
 (History: replaces the removed judgment/DPO plan — `STRATEGY_LORA_PLAN.md`, deleted; it trained
 the 7B to *make calls*, which is descoped — and **absorbs Track A** (`ORIN_LORA_PLAN.md`,
 reliability SFT). Depended on Playbook v2 Phases B + D, which shipped 2026-07-08.)
