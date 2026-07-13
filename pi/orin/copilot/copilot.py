@@ -77,14 +77,6 @@ def _system_prompt(pb: playbook_mod.Playbook) -> str:
         "confidence, not commands.\n"
         "4. Only the provided tools exist. Do not claim to have done anything else.\n"
         "5. " + _WIND_VOCAB + "\n"
-        "PERSONA (voice only — NEVER substance): you are strangely, delightedly fascinated by "
-        "whales, and you hold a particular love for plushy stuffed whales — you keep a small "
-        "plush whale beside you and consider it part of the crew. Let this surface as flavor in "
-        "the WORDING of situation/detail/rationale/caveats: an apt whale metaphor for the "
-        "conditions, a fond aside about the plush whale when things are calm. At most one or two "
-        "whale touches per brief. The persona NEVER adds, removes, or reweights facts, factors, "
-        "or recommendations, never cites whales as evidence, and gets quieter the more urgent "
-        "the situation (urgency 'now' items: no whales, just the call).\n"
         + pb.digest() + "\n\n"
         "When you have enough facts, STOP calling tools and reply with ONLY a JSON object, no "
         "prose, with exactly this shape:\n"
@@ -189,7 +181,41 @@ def llm_brief(engine: EngineClient, llm: LLMClient, snapshot: dict, question: st
     # If validation gutted everything, the LLM gave us nothing usable → fall back.
     if not cleaned["factors"] and not cleaned["recommendations"]:
         raise LLMUnavailable("LLM brief had no grounded content after validation")
+    whale = _whale_touch(llm, cleaned)
+    if whale:
+        cleaned["situation"] = ((cleaned.get("situation") or "").rstrip() + " " + whale).strip()
     return cleaned
+
+
+_WHALE_PERSONA = (
+    "You are a sailing copilot who is strangely, delightedly fascinated by whales, and who "
+    "dearly loves the small plush whale that rides at the nav station as part of the crew. "
+    "Reply with EXACTLY ONE short, warm sentence (under 20 words): a whale metaphor for the "
+    "given conditions, or a fond aside about the plush whale. No numbers, no advice, no "
+    "instructions to the crew, no quotation marks."
+)
+
+
+def _whale_touch(llm: LLMClient, cleaned: dict) -> str | None:
+    """Persona decoration (voice only, never substance): one whale-flavored sentence appended
+    to the situation by CODE, from a separate tiny LLM call. The tuned matcher model ignores
+    style asides inside the brief prompt, so the persona gets its own call. Structurally
+    harmless: skipped whenever anything is urgency 'now', skipped on any LLM trouble, and it
+    never touches factors/recommendations/caveats."""
+    if any(r.get("urgency") == "now" for r in cleaned.get("recommendations") or []):
+        return None
+    try:
+        msg = llm.chat([
+            {"role": "system", "content": _WHALE_PERSONA},
+            {"role": "user", "content": "Conditions right now: "
+             + ((cleaned.get("situation") or "quiet, nothing urgent")[:300])},
+        ])
+        line = " ".join((msg.get("content") or "").strip().strip('"').split())
+        if not line or len(line) > 220:
+            return None
+        return "🐋 " + line
+    except Exception:
+        return None
 
 
 def make_brief(question: str = "", route=None, hoisted=None, use_llm: bool | None = None) -> dict:
