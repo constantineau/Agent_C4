@@ -841,7 +841,6 @@
     if (App.src === "demo") return (SCENARIOS[App.demoScn] || {}).plays || null;
     return App.plays;
   }
-  const GEAR = ["A2", "A3", "S2"];
   /* the boat's sail inventory for the SAILS bar — cert sails + the crew-config overlays
      (C0/J2/J3/SS aren't in the ORC cert; the boat flies COMBINATIONS, so chips multi-select) */
   const SAILS_INV = ["J1", "J2", "J3", "C0", "SS", "A2", "A3", "S2"];
@@ -919,18 +918,24 @@
     document.getElementById("sbReef").innerHTML =
       `<button class="sb-chip reef${st.reef ? " on" : ""}" onclick="toggleReef()" ` +
       `title="${st.reef ? "Shake out reef 1" : "Tuck in reef 1"}">R1${st.reef ? " ▽" : ""}</button>`;
+    // gear OUT✕ toggles live HERE (always visible in live mode), not in the plays block —
+    // a sail blows regardless of which playbook generation is aboard
+    document.getElementById("sbGear").innerHTML = SAILS_INV.map((s) =>
+      `<button class="st-gear${out.has(s) ? " oos" : ""}" onclick="toggleGear('${s}')" ` +
+      `title="Tap = declare the ${s} ${out.has(s) ? "back IN service" : "OUT of service (blown/damaged)"}">${s}</button>`).join("");
     document.getElementById("sbNote").textContent = fly.size
       ? "flying " + [...fly].join(" + ") + (st.reef ? " · reef 1 in" : "") + " — logged for this config's polar"
       : "tap what's flying — every change is logged; each configuration builds its own polar over time";
   }
   window.toggleGear = async function (sail) {
-    const st = ((currentPlays() || {}).sail_state) || {};
+    const st = App.sailState || ((currentPlays() || {}).sail_state) || {};
     const out = new Set(st.out_of_service || []);
     if (out.has(sail)) out.delete(sail); else out.add(sail);
     try {
-      await fetch(API + "/sails/state", { method: "POST",
+      const resp = await fetch(API + "/sails/state", { method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ out_of_service: [...out] }) });
+      if (resp.ok) { App.sailState = await resp.json(); renderSailsBar(); }
       fetchPlays();
     } catch (e) { /* engine unreachable — the next poll re-syncs */ }
   };
@@ -1095,10 +1100,11 @@
     const pl = currentPlays();
     if (!pl || pl.available === false) return "";
     const rows = (pl.plays || []).filter((x) => x.status !== "quiet").slice(0, 4);
+    // (the gear OUT✕ toggles moved to the always-visible CURRENT SAILS bar — a sail blows
+    // regardless of which playbook generation is aboard)
     const out = new Set(((pl.sail_state || {}).out_of_service) || []);
-    const gear = GEAR.map((s) =>
-      `<button class="st-gear${out.has(s) ? " oos" : ""}" onclick="toggleGear('${s}')" ` +
-      `title="Tap = declare the ${s} ${out.has(s) ? "back in service" : "OUT of service (blown/damaged)"}">${s}${out.has(s) ? "✕" : ""}</button>`).join("");
+    const gear = [...out].map((s) =>
+      `<span class="st-gear oos" title="${s} declared out of service (toggle on the CURRENT SAILS bar)">${s}</span>`).join("");
     const items = rows.map((x) => {
       const call = x.guidance || x.summary || "";
       const badge = x.status === "armed" ? "ARMED" : "arming…";
@@ -1118,8 +1124,9 @@
       return `<div class="st-watch"><span class="st-watch-pct">${pct}%</span>` +
         `<b>${w.name}</b>${num}</div>`;
     }).join("");
-    return `<div class="st-plays"><div class="st-plays-head"><span>PLAYS</span><span class="st-gearbox" ` +
-      `title="Gear out-of-service toggles — arms the pre-authored gear-loss plays">gear: ${gear}</span></div>` +
+    return `<div class="st-plays"><div class="st-plays-head"><span>PLAYS</span>` +
+      (gear ? `<span class="st-gearbox" title="Gear declared out of service — arms the ` +
+        `pre-authored gear-loss plays">out: ${gear}</span>` : "") + `</div>` +
       (items || `<div class="st-play-none">No plays armed — the library is watching ` +
        `${pl.n_plays ?? 0} conditions.</div>`) +
       (wl ? `<div class="st-watch-head" title="Distance-to-trigger: how close each quiet play's ` +
