@@ -29,6 +29,10 @@ server {
 
     location / {
         try_files $uri $uri/ /index.html;
+        # no-cache (NOT no-store): the browser may keep a copy but must revalidate every load,
+        # so a deploy shows up on the next reload — no stale dashboards mid-race-week. Assets
+        # are small + gzipped + boat-local; revalidation cost is a 304 on the LAN.
+        add_header Cache-Control "no-cache";
     }
 
     # REST → the onboard engine (host-networked on :8200). No /ws location: the engine has no
