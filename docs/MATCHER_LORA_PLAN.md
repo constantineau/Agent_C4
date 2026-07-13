@@ -30,8 +30,13 @@ Bounded by architecture: every LLM path falls back to deterministic engine facts
 SFT v2 mixing general-brief replay examples into the corpus. All other bench sections pass;
 the one remaining bench FAIL (deterministic dockside brief with no live data) predates the LoRA.
 
-**Remaining:** the §4 expert audit — ~50 sampled outputs read by sailors ("would this make sense
-on deck") before race trust.
+**§4 expert audit: PASSED 2026-07-13 — 42 reads-true / 1 wince over 43 stratified cards.** The
+single wince was on the audit page's trap LABEL, not the model: a "threshold" near-miss whose
+randomly-sabotaged predicate was the boolean persistence condition, while the page copy said
+"planted just under the threshold" (the degrees were in fact over). Oracle label and model
+refusal were both correct; page wording fixed. **The tuned matcher is race-trusted.**
+(Audit-page lesson for the next run: the trap tag must name WHICH predicate was sabotaged —
+"threshold" mode picks a random one, including booleans.)
 (History: replaces the removed judgment/DPO plan — `STRATEGY_LORA_PLAN.md`, deleted; it trained
 the 7B to *make calls*, which is descoped — and **absorbs Track A** (`ORIN_LORA_PLAN.md`,
 reliability SFT). Depended on Playbook v2 Phases B + D, which shipped 2026-07-08.)
