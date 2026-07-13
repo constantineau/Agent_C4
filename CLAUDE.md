@@ -319,6 +319,10 @@ Checklists, Fleet, Learnings, Gameplan, Lock-in & Deploy) · RACE (Monitor) · D
   mark-position prune, adaptive endgame, monotone gate — `ROUTE_*` env knobs, all
   A/B-able) → route + per-leg sail plan/reefs + confidence + briefing; Gameplan map
   cockpit (Leaflet, wind/current/wave overlays, per-model route fan, isochrones, laylines).
+  **Share player** (`app/share.py`): the 🔗 button (and the PDF report automatically, with a
+  QR) mints a public read-only `/share/<token>` route-player link — the MapView with the
+  boat animating through the forecast — for the crew, no Lab login; frozen snapshot on the
+  `lab_shares` volume; `LAB_PUBLIC_URL` sets the link base.
 - **Playbook:** per-model fan → side variants (v1) + the **v2 play library**
   (`docs/PLAYBOOK_V2.md`): external scenario fan (rotations/pressure/timing/sea-state
   through the SAME blended field, boundary bisection, fan-depth tiers) + internal plays

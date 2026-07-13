@@ -90,6 +90,8 @@ services:
       GSHHG_RES: ${GSHHG_RES:-f}            # GSHHG resolution f(ull)|h|i|l|c — full = all sub-nm islands
       ENC_CACHE: /srv/enc                   # NOAA ENC cells + extracted GeoJSON (prep-time GDAL)
       PLAYBOOK_DIR: /srv/playbooks          # Lab-2b: frozen, signed playbook bundles (onboard homework)
+      SHARE_DIR: /srv/shares                # public read-only route-player share bundles
+      LAB_PUBLIC_URL: ${LAB_PUBLIC_URL:-https://lab.racertracer.net}  # base for /share links (PDF QR)
       LEARNING_DB: /srv/learning/learning.db  # Lab-4: ongoing performance archive + refinement proposals
       RETRO_DB: /srv/retro/retro.db           # fleet-retro persistent archive (docs/RETRO_STUDY.md)
       RETRO_GRIB_DIR: /srv/retro/grib         # pinned GRIB artifacts — durable, never cache-evicted
@@ -107,6 +109,7 @@ services:
       - lab_playbooks:/srv/playbooks        # Lab-2b: frozen signed playbook bundles
       - lab_learning:/srv/learning          # Lab-4: ongoing performance archive (SQLite)
       - lab_retro:/srv/retro                # fleet-retro archive: SQLite + pinned GRIBs
+      - lab_shares:/srv/shares              # route-player share bundles (frozen snapshots)
     restart: unless-stopped
 
 volumes:
@@ -118,3 +121,4 @@ volumes:
   lab_playbooks:
   lab_learning:
   lab_retro:
+  lab_shares:

@@ -18,11 +18,11 @@ from fastapi import FastAPI, Request, UploadFile, File
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from shared import race_def, boat_profile
-from . import auth, store, extract, boats, labstate, feedback, pbstore, deploy, monitor, judge, track, learning, fleetimport, report, retro, retrostore
+from . import auth, store, extract, boats, labstate, feedback, pbstore, deploy, monitor, judge, track, learning, fleetimport, report, retro, retrostore, share
 
 INGESTED_DIR = os.environ.get("INGESTED_DIR", "/srv/ingested")
 
@@ -382,12 +382,43 @@ async def gameplan_pdf(body: dict):
         return JSONResponse({"detail": "no optimized route to report — run the optimizer first"},
                             status_code=400)
     try:
+        # The PDF carries a live route-player link + QR; the share is a bonus — never blocks the PDF.
+        body["share_url"] = share.create(body)["url"]
+    except Exception:
+        pass
+    try:
         pdf = await run_in_threadpool(report.build_gameplan_pdf, body)
     except Exception as exc:
         return JSONResponse({"detail": f"pdf render failed: {exc}"}, status_code=500)
     name = re.sub(r"[^\w.\-]", "_", f"gameplan_{body.get('race_name') or (body.get('result') or {}).get('race_id') or 'c4'}")
     return Response(content=pdf, media_type="application/pdf",
                     headers={"Content-Disposition": f'attachment; filename="{name}.pdf"'})
+
+
+@app.post("/api/share")
+async def create_share(body: dict):
+    """Freeze the current gameplan into a public read-only route-player link (app/share.py)."""
+    try:
+        return await run_in_threadpool(share.create, body or {})
+    except ValueError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=400)
+
+
+@app.get("/share/{token}")
+async def share_page(token: str):
+    """The crew-facing route player. No team login — the unguessable token is the access."""
+    if not share.load(token):
+        return JSONResponse({"detail": "unknown share link"}, status_code=404)
+    return FileResponse(os.path.join(os.environ.get("WEB_DIR", "/srv/web"), "player.html"),
+                        media_type="text/html")
+
+
+@app.get("/share/{token}/data")
+async def share_data(token: str):
+    bundle = share.load(token)
+    if not bundle:
+        return JSONResponse({"detail": "unknown share link"}, status_code=404)
+    return JSONResponse(bundle)
 
 
 def _skill_venue(body):

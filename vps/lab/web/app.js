@@ -1166,7 +1166,8 @@ function renderOptResult(r) {
         ${optCurrentStat(r)}
         ${optRealizedStat(r)}
       </div>
-      <div class="rail-actions"><button id="pdfBtn" onclick="downloadGameplanPdf(this)" title="Download a PDF report of this gameplan — route summary + schematic + leg table + briefing + branching playbook — to email the crew">⬇ PDF report</button></div>
+      <div class="rail-actions"><button id="pdfBtn" onclick="downloadGameplanPdf(this)" title="Download a PDF report of this gameplan — route summary + schematic + leg table + briefing + branching playbook — to email the crew">⬇ PDF report</button>
+        <button id="shareBtn" onclick="shareGameplan(this)" title="Create a public read-only link to this gameplan's playable route view (boat animating through the forecast) — send it to the crew; no Lab login needed">🔗 Share player</button></div>
       ${optDegradedBanner(r)}
       ${r.timed_out ? '<div class="pill warn">routing hit the time budget — route is best-effort</div>' : ""}
       <details class="rail-sec" open><summary>Legs</summary>
@@ -1221,6 +1222,31 @@ function exportLegsCsv() {
 function csvCell(v) {
   const s = String(v == null ? "" : v);
   return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+
+/* Public share link — freezes this gameplan into a read-only route-player page anyone with the
+   link can open (unguessable token, no team login; served at /share/<token>). The PDF report
+   also creates one automatically and embeds the link + QR. */
+async function shareGameplan(btn) {
+  const r = Opt.result;
+  if (!r || !r.legs) { alert("Run the optimizer first — there's no route to share yet."); return; }
+  const orig = btn ? btn.textContent : "";
+  if (btn) { btn.disabled = true; btn.textContent = "Creating link…"; }
+  const raceName = (Lab.editDef && (Lab.editDef.name || Lab.editDef.race_id)) || Opt.raceId || "C4";
+  try {
+    const res = await apiPost("/api/share",
+      { result: r, race_name: raceName, boat: (r.boat && r.boat.name) || r.boat_name || "" });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(j.detail || ("HTTP " + res.status));
+    let copied = false;
+    try { await navigator.clipboard.writeText(j.url); copied = true; } catch (e) { /* http or no permission */ }
+    prompt(copied ? "Route-player link (already copied to your clipboard) — paste it to the crew:"
+                  : "Route-player link — copy it and send it to the crew:", j.url);
+  } catch (e) {
+    alert("Share failed — " + String((e && e.message) || e));
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = orig; }
+  }
 }
 
 /* PDF report of the whole gameplan — the optimize result + (if synthesized) the branching playbook.

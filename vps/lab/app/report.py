@@ -170,6 +170,33 @@ def build_gameplan_pdf(payload: dict) -> bytes:
                                st["body"]))
         return _render(story)
 
+    # ---- live route player (share link + QR) ----
+    if payload.get("share_url"):
+        try:
+            from reportlab.graphics.barcode import qr as _qr
+            from reportlab.graphics.shapes import Drawing
+            url = str(payload["share_url"])
+            widget = _qr.QrCodeWidget(url, barLevel="M")
+            x1, y1, x2, y2 = widget.getBounds()
+            side = 0.95 * inch
+            drawing = Drawing(side, side,
+                              transform=[side / (x2 - x1), 0, 0, side / (y2 - y1), 0, 0])
+            drawing.add(widget)
+            blurb = Paragraph(
+                "<b>Interactive route player</b> — the playable version of this gameplan "
+                "(boat animating along the route through the forecast). Scan the code or open:"
+                f'<br/><link href="{_esc(url)}"><u>{_esc(url)}</u></link>', st["body"])
+            t = Table([[blurb, drawing]], colWidths=[5.5 * inch, 1.1 * inch])
+            t.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                                   ("BOX", (0, 0), (-1, -1), 0.6, _TEAL),
+                                   ("LEFTPADDING", (0, 0), (-1, -1), 8),
+                                   ("TOPPADDING", (0, 0), (-1, -1), 6),
+                                   ("BOTTOMPADDING", (0, 0), (-1, -1), 6)]))
+            story.append(t)
+            story.append(Spacer(1, 6))
+        except Exception:
+            pass   # the QR is decoration — a barcode hiccup must never sink the report
+
     # ---- route summary ----
     story.append(Paragraph("Route summary", st["h2"]))
     rl = r.get("realized") or {}

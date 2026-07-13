@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>C4 route player</title>
+<link rel="stylesheet" href="/vendor/leaflet.css">
+<link rel="stylesheet" href="/styles.css">
+<style>
+  /* The shared route player — a read-only, crew-facing view of one frozen gameplan.
+     Reuses the Lab's MapView (route + boat + forecast scrubber + wind/current overlays);
+     styles.css provides the map Control Center styling; this page owns only the shell. */
+  html, body { height: 100%; margin: 0; }
+  body.player { display: flex; flex-direction: column; background: #0b2b45; overflow: hidden; }
+  #ph { color: #fff; padding: 10px 14px 8px; flex: none; }
+  #ph h1 { font-size: 17px; margin: 0 0 2px; font-weight: 600; letter-spacing: .01em; }
+  #ph .sub { font-size: 12.5px; color: #9fb8cc; }
+  #ph .sub b { color: #e8f0f6; font-weight: 600; }
+  #legchips { flex: none; display: flex; gap: 6px; overflow-x: auto; padding: 6px 14px 8px;
+              background: #0b2b45; -webkit-overflow-scrolling: touch; }
+  .legchip { flex: none; font-size: 11.5px; color: #dce7f0; background: #164066;
+             border: 1px solid #2a5580; border-radius: 999px;
+             padding: 3px 10px; cursor: pointer; white-space: nowrap; }
+  .legchip b { color: #ffd76a; }
+  #shareMap { flex: 1 1 auto; min-height: 0; }
+  #loading { color: #9fb8cc; font-size: 14px; padding: 30px; text-align: center; }
+  #foot { flex: none; background: #0b2b45; color: #6e88a0; font-size: 10.5px;
+          padding: 4px 14px 6px; }
+</style>
+</head>
+<body class="player">
+<header id="ph">
+  <h1 id="phName">Loading gameplan…</h1>
+  <div class="sub" id="phSub"></div>
+</header>
+<div id="legchips"></div>
+<div id="shareMap"><div id="loading">Loading route…</div></div>
+<div id="foot">SR33 C4 gameplan — read-only share. Press ▶ on the map bar to play the race
+through the forecast; the marker is the boat at that hour.</div>
+<script src="/vendor/leaflet.js"></script>
+<script src="/mapview.js"></script>
+<script>
+(async function () {
+  const token = location.pathname.split("/").filter(Boolean).pop();
+  const fail = (msg) => {
+    document.getElementById("phName").textContent = "This share link isn't available";
+    document.getElementById("phSub").textContent = msg;
+    document.getElementById("loading").textContent = msg;
+  };
+  let bundle;
+  try {
+    const res = await fetch("/share/" + token + "/data");
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || "HTTP " + res.status);
+    bundle = await res.json();
+  } catch (e) {
+    return fail(String((e && e.message) || e) + " — ask whoever sent it for a fresh link.");
+  }
+  const r = bundle.result || {};
+  const fmt = (ep) => { try {
+    return new Date(ep * 1000).toLocaleString(undefined,
+      { weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  } catch (e) { return ""; } };
+
+  document.title = "C4 route player — " + (bundle.race_name || "gameplan");
+  document.getElementById("phName").textContent =
+    (bundle.race_name || "C4 gameplan") + (bundle.boat ? " — " + bundle.boat : "");
+  const legs = r.legs || [];
+  const eta = legs.length ? legs[legs.length - 1].eta_epoch : null;
+  const bits = [];
+  if (r.start_epoch) bits.push("Start <b>" + fmt(r.start_epoch) + "</b>");
+  if (eta) bits.push("ETA <b>" + fmt(eta) + "</b>");
+  if (r.route_confidence) bits.push("route confidence <b>" + r.route_confidence + "</b>");
+  document.getElementById("phSub").innerHTML = bits.join(" · ");
+
+  // Sail-plan chips: tap a leg to zoom it on the map (MapView.focusLeg).
+  const chips = document.getElementById("legchips");
+  chips.innerHTML = legs.map((l, i) =>
+    '<span class="legchip" onclick="MapView.focusLeg(' + i + ')">' +
+    (i + 1) + " → " + (l.to || "mark") + (l.sail ? " <b>" + l.sail + "</b>" : "") + "</span>"
+  ).join("");
+
+  MapView.render("shareMap", r);
+})();
+</script>
+</body>
+</html>
