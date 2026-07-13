@@ -122,15 +122,12 @@ TOOL_SPECS = [
         "function": {
             "name": "get_forecast",
             "description": (
-                "Wind forecast (Open-Meteo — common public data, legal in-race) for the live "
-                "position or a given lat/lon over `hours`. Use for 'what's the breeze doing "
-                "ahead'."
+                "Wind forecast (Open-Meteo — common public data, legal in-race) at the boat's "
+                "live position over `hours`. Use for 'what's the breeze doing ahead'."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "lat": {"type": "number"},
-                    "lon": {"type": "number"},
                     "hours": {"type": "integer"},
                 },
             },
@@ -192,7 +189,9 @@ _DISPATCH = {
     "get_sail_advice": ("sail", ["tws", "twa", "hoisted"]),
     "get_fatigue": ("fatigue", []),
     "get_watch": ("watch", []),
-    "get_forecast": ("forecast", ["lat", "lon", "hours"]),
+    # lat/lon deliberately NOT accepted from the model — the 7B hallucinated coordinates
+    # (wrong-location forecast fails silently); the engine always uses the live position.
+    "get_forecast": ("forecast", ["hours"]),
     "get_route": ("route", ["route", "target"]),
     "get_trend": ("trend", ["route"]),
     "get_plangap": ("plangap", ["route"]),
