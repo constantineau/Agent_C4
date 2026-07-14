@@ -43,16 +43,16 @@ WATCH_STAGES = [(15, "wake"), (5, "change")]
 
 URGENCY_RANK = {"now": 0, "soon": 1, "monitor": 2}
 # Lower = more important; the coach line leads with the top of this order.
-CATEGORY_PRIORITY = {"safety": 0, "fatigue": 1, "rounding": 2, "watch": 2, "sail": 3,
-                     "playbook": 4, "strategy": 5, "deviation": 6, "fleet": 7, "shift": 8,
-                     "drift": 9, "layline": 10, "data": 11, "plays": 6}
+CATEGORY_PRIORITY = {"safety": 0, "fatigue": 1, "rounding": 2, "watch": 2, "checklist": 2,
+                     "sail": 3, "playbook": 4, "strategy": 5, "deviation": 6, "fleet": 7,
+                     "shift": 8, "drift": 9, "layline": 10, "data": 11, "plays": 6}
 # How many consecutive evaluations a callout must persist before it's "confirmed" and shown —
 # the fuzzy-adherence hysteresis. Time-critical things fire at once; noisier reads wait one poll
 # so a single-sample blip never barks. (The engine already debounces tactical persistence — the
 # deviation/drift triggers carry their OWN Schmitt consider/commit bands, so 1 round is enough.)
-CONFIRM_ROUNDS = {"safety": 1, "fatigue": 1, "rounding": 1, "watch": 1, "sail": 1, "playbook": 2,
-                  "strategy": 2, "deviation": 1, "fleet": 2, "shift": 2, "drift": 1,
-                  "layline": 1, "data": 2, "plays": 1}
+CONFIRM_ROUNDS = {"safety": 1, "fatigue": 1, "rounding": 1, "watch": 1, "checklist": 1,
+                  "sail": 1, "playbook": 2, "strategy": 2, "deviation": 1, "fleet": 2,
+                  "shift": 2, "drift": 1, "layline": 1, "data": 2, "plays": 1}
 
 
 def _callout(cid, category, urgency, headline, detail, grounded_in, confidence="med"):
@@ -419,6 +419,28 @@ def _watch_callout(watch, sail=None):
                     headline, "; ".join(bits) if bits else "prep the handover", grounded, "high")
 
 
+def _checklist_callouts(chk):
+    """One callout per ACTIVE race-requirement item (the SI/NOR `deliver_to_ipad` homework the
+    engine's /checklist triggers evaluated): nav lights at sunset, the Cove Island gate photo on
+    the approach, the finish procedure/photo/numbers on the finish approach. The id carries the
+    arming epoch, so a sunset item that re-arms the next night fires again; the item rides
+    `active` (persistent) until the crew acks it on the iPad checklist card, which drops it from
+    the engine read and clear-fasts the callout. Compliance items are DSQ-risk → critical ones
+    voice as `now`."""
+    out = []
+    for it in (chk.get("active") or [])[:4]:            # cap a burst (e.g. finish arms 3 at once)
+        crit = bool(it.get("critical"))
+        text = (it.get("text") or "").strip()
+        head = text if len(text) <= 90 else text[:87] + "…"
+        bits = [b for b in (it.get("measure"), it.get("source")) if b]
+        bits.append("ack on the checklist when done")
+        out.append(_callout(f"checklist:{it.get('id')}:{int(_num(it.get('armed_at')) or 0)}",
+                            "checklist", "now" if crit else "soon",
+                            f"Race requirement — {head}", "; ".join(bits),
+                            ["get_checklist"], "high" if crit else "med"))
+    return out
+
+
 def _fatigue_callout(fat):
     level = fat.get("level")
     if level not in ("rotate_soon", "rotate_now"):
@@ -495,6 +517,9 @@ def evaluate(snapshot, playbook=None, engine=None):
         c = _watch_callout(wat, sail if sail.get("available") else None)
         if c:
             out.append(c)
+    chk = snapshot.get("get_checklist") or {}
+    if chk.get("plan_set"):                        # SI/NOR requirement reminders at their trigger
+        out += _checklist_callouts(chk)
     if fat.get("available"):
         c = _fatigue_callout(fat)
         if c:

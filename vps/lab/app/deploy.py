@@ -105,6 +105,7 @@ def package(race_id, course_id=None):
         return None
     marks, skipped, cid = _course_for(d, race_id, course_id)
     lock = labstate.get(_lock_key(race_id)) or {}
+    ipad = [r for r in (d.get("requirements") or []) if r.get("deliver_to_ipad")]
     return {
         "schema": "c4.homework/v1",
         "race_id": race_id,
@@ -113,7 +114,9 @@ def package(race_id, course_id=None):
         "generated_at": int(time.time()),
         "course_load": {"definition": d, "course_id": cid},   # → POST /course/load (Pi engine :8200)
         "fleet_load": {"definition": d},                      # → POST /fleet/load (Pi engine :8200)
-        "checklists_ipad": [r for r in (d.get("requirements") or []) if r.get("deliver_to_ipad")],
+        # → POST /checklist/load (Pi engine :8200) — the in-race requirement reminders (nav
+        # lights at sunset, the gate photo, the finish procedure) the console + coach surface
+        "checklist_load": {"items": ipad, "race_id": race_id},
         # → POST /watch (Pi engine :8200); None when no plan authored — the boat can still
         # author one from the iPad, this just seeds it
         "watch_load": ({"plan": d["watch_plan"]} if (d.get("watch_plan") or {}).get("blocks")

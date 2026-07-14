@@ -120,6 +120,19 @@ TOOL_SPECS = [
     {
         "type": "function",
         "function": {
+            "name": "get_checklist",
+            "description": (
+                "The RACE CHECKLIST from the SIs/NOR: required actions with live status "
+                "(pending/active/done) and a measure (e.g. 'Cove Island Virtual Gate in 6 nm', "
+                "'sunset in 40 min'). Use when asked what the crew must do / has missed — "
+                "nav lights, the gate photo, the finish procedure. Never invent requirements."
+            ),
+            "parameters": {"type": "object", "properties": {"route": {"type": "string"}}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_forecast",
             "description": (
                 "Wind forecast (Open-Meteo — common public data, legal in-race) at the boat's "
@@ -189,6 +202,7 @@ _DISPATCH = {
     "get_sail_advice": ("sail", ["tws", "twa", "hoisted"]),
     "get_fatigue": ("fatigue", []),
     "get_watch": ("watch", []),
+    "get_checklist": ("checklist", ["route"]),
     # lat/lon deliberately NOT accepted from the model — the 7B hallucinated coordinates
     # (wrong-location forecast fails silently); the engine always uses the live position.
     "get_forecast": ("forecast", ["hours"]),

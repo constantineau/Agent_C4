@@ -25,7 +25,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app import (navigator, tactics, routing, weather, sails, fatigue, onboard_conditions,
                  datasource, ais, fleet, deviation, drift, selector, reoptimize, strategy,
-                 matcher, buoys, racelog, watches, trend, plangap, gpsout)
+                 matcher, buoys, racelog, watches, trend, plangap, gpsout, checklist)
 
 app = FastAPI(title="Agent_C4 Onboard Engine", version="0.1.0")
 # The iPad reaches the Pi directly over boat-local Wi-Fi in race mode; allow cross-origin so a
@@ -304,6 +304,30 @@ def watch_set(body: dict = None):
     """Replace or live-edit the watch plan: {plan: {...}} (Lab homework / block editor) ·
     {action: 'hold'|'swap'|'all_hands', minutes?} (the iPad quick edits) · {clear: true}."""
     return watches.set_watch(body)
+
+
+@app.get("/checklist")
+def checklist_status(route: str | None = None):
+    """The RACE CHECKLIST (the SI/NOR `deliver_to_ipad` requirement subset): every item with live
+    status (pending/active/done/manual) + measure — nav lights at sunset, the Cove Island gate
+    photo on the approach, the finish procedure/photo/numbers on the finish approach. Deterministic
+    triggers on the boat's own computer + pre-loaded homework — legal in-race; empty-but-valid
+    when nothing is loaded."""
+    return checklist.get_checklist(route)
+
+
+@app.post("/checklist/load")
+def checklist_load(body: dict):
+    """Load the iPad checklist (homework `checklists_ipad`). Body: {items: [...]} /
+    {checklists_ipad: [...]} / {definition}. Replaces any prior list; clears acks."""
+    return checklist.load(body)
+
+
+@app.post("/checklist/ack")
+def checklist_ack(body: dict):
+    """Crew ack from the iPad: {id, undo?} — done for the current window (a sunset item
+    re-arms the next evening). Returns the fresh checklist state."""
+    return checklist.ack(body)
 
 
 @app.get("/session")

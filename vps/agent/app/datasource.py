@@ -182,6 +182,24 @@ class CloudSource:
             row = conn.execute("SELECT value FROM app_state WHERE key = 'watch_plan'").fetchone()
         return json.loads(row["value"]) if row else {}
 
+    def save_checklist(self, blob):
+        """Persist the race checklist (items + acks/latches) — the homework's
+        `checklists_ipad` subset, acked live from the iPad."""
+        import json
+        with pool.connection() as conn:
+            conn.execute(
+                "INSERT INTO app_state (key, value, updated_at) VALUES ('checklist', %s, now()) "
+                "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
+                (json.dumps(blob),))
+            conn.commit()
+
+    def get_checklist(self):
+        """The checklist blob or {} if never set."""
+        import json
+        with pool.connection() as conn:
+            row = conn.execute("SELECT value FROM app_state WHERE key = 'checklist'").fetchone()
+        return json.loads(row["value"]) if row else {}
+
     def ais_targets(self, max_age_min):
         """Latest raw AIS observation per MMSI within the window — collision/fleet awareness.
 

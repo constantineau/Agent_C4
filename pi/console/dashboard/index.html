@@ -6,7 +6,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>SR33 Crew Dashboard</title>
-  <link rel="stylesheet" href="dashboard.css?v=72ebc19">
+  <link rel="stylesheet" href="dashboard.css?v=chk0714">
 </head>
 <body>
   <!-- ===== top bar ===== -->
@@ -39,6 +39,15 @@
     <span class="sb-tag" title="Declare blown/damaged gear — no instrument can see a blown sail; this tap is the signal that arms the gear-loss plays and excludes the sail from re-routes">OUT✕</span>
     <span id="sbGear"></span>
     <span class="sb-note" id="sbNote"></span>
+  </section>
+
+  <!-- ===== Race checklist bar: ACTIVE SI/NOR requirement reminders (the engine /checklist
+       triggers — nav lights at sunset, the Cove Island gate photo, the finish procedure).
+       Appears only when something needs doing; ✓ acks it (engine-persisted). Tap the tag or an
+       item's text for the full race checklist. ===== -->
+  <section class="chkbar" id="chkBar" hidden aria-label="Race checklist">
+    <span class="sb-tag chk-tag" id="chkTag">☑ CHECKLIST</span>
+    <span id="chkItems"></span>
   </section>
 
   <!-- ===== main: fixed tile grid + commentary ===== -->
@@ -102,7 +111,7 @@
   </section>
 
   <script src="/sun.js"></script>
-  <script src="dashboard.js?v=72ebc19"></script>
+  <script src="dashboard.js?v=chk0714"></script>
   <script>window.FEEDBACK_CFG = { endpoint: "https://lab.racertracer.net/api/feedback", source: "c4-console" };</script>
   <script src="feedback.js"></script>
 </body>

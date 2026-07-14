@@ -190,7 +190,12 @@ kite+staysail), main reef, out-of-service gear; every change appends to the onbo
 schedule from `shared/watchplan.py`, kv-persisted; POST takes {plan} (Lab homework /
 block editor), {action: hold|swap|all_hands, minutes} (the iPad quick edits) or {clear};
 authored in the Lab Races-tab Watch-plan card, delivered in the homework `watch_load`,
-edited live on the CREW tile) · /session + POST /session/start|end (the RACE LOG — see
+edited live on the CREW tile) · /checklist (GET) + POST /checklist/load + POST /checklist/ack
+(the RACE CHECKLIST: the SI/NOR `deliver_to_ipad` requirement subset from the homework
+`checklist_load`, evaluated deterministically at its trigger — sunset→sunrise via a NOAA solar
+calc on live position, mark-name proximity (the Cove Island gate photo), finish approach — and
+LATCHED active until the crew acks; acks are per-window, so a sunset item re-arms the next
+evening; kv-persisted; `CHECKLIST_*` tunables) · /session + POST /session/start|end (the RACE LOG — see
 below) · /course · POST /course/practice · POST /course/load (RaceDefinition course →
 marks) · /navigator · /tactics · /forecast · /route · /ais · POST /fleet/load · /fleet ·
 POST /playbook/load (freeze the signed bundle aboard; clears trigger/matcher state) ·
@@ -261,7 +266,10 @@ each LLM-scorable green/yellow/red with tap-to-detail; the **Strategy strip** ab
 SYNTHESIS apex (LLM/ENGINE mode pill, OFF-BOOK badge, Tier-2 `play_matches`) → selector
 banner → deviation/drift triggers → armed PLAYS (+ gear toggle) → the ⟳ off-book re-route
 line. The playbook tile reads the engine `/selector` (single source of truth — the old
-copilot `/adherence` fallback is retired). Copilot commentary + coach line poll the Orin;
+copilot `/adherence` fallback is retired). A **RACE CHECKLIST bar** (under the sails bar)
+appears when a requirement comes due — engine `/checklist` triggers — with per-item ✓ DONE
+acks + a full-list tap-detail; new-active items also fire a coach callout + the alert tone.
+Copilot commentary + coach line poll the Orin;
 narration is **visual-only + an audio attention tone** for safety/urgent callouts (🔔
 toggle, iOS-unlock aware). Demo scenarios (SRC button: live → calm → escalated) exercise
 every state without a boat.

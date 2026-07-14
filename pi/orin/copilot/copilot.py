@@ -35,6 +35,7 @@ def gather(engine: EngineClient, route=None, hoisted=None) -> dict:
     snap["get_sail_advice"] = engine.sail(hoisted=hoisted)
     snap["get_fatigue"] = engine.fatigue()
     snap["get_watch"] = engine.watch()    # watch system: who's on + countdown (change callouts)
+    snap["get_checklist"] = engine.checklist(route)   # SI/NOR requirement reminders (checklist callouts)
     snap["get_ais"] = engine.ais()        # collision watch (safety — always legal, shown top-priority)
     snap["get_fleet"] = engine.fleet()    # handicap-rival watch (corrected-time tactical callout)
     snap["get_deviation"] = engine.deviation(route)   # Lab-3 trigger (a): off the playbook line?

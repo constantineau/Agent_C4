@@ -31,7 +31,7 @@
   const NAME = {
     wind: "TWS Trend", playbook: "Playbook", forecast: "Forecast",
     sail: "Sail", eta: "Time to Mark", ais: "Fleet", charge: "Crew", data: "Data",
-    coach: "Coach",
+    coach: "Coach", checklist: "Race Checklist",
   };
   const boatName = (r) => { const n = r.boat || r.name || ("MMSI " + (r.mmsi || "?")); return n.length > 14 ? n.slice(0, 13) + "…" : n; };
   const aisName = (t) => { const n = t.name || ("MMSI " + t.mmsi); return n.length > 12 ? n.slice(0, 11) + "…" : n; };
@@ -67,6 +67,7 @@
   const DRIFT_EVERY = 20000;      // poll forecast-drift ~every 20 s (slow-moving; Open-Meteo is cached ~30 min)
   const COACH_EVERY = 15000;      // poll the proactive auto-coach held state ~every 15 s (no recompute — the Orin timer drives it)
   const SYN_EVERY = 15000;        // poll the in-race strategy synthesis ~every 15 s (a synthesis of the slower reads; LLM-phrased when the Orin is up)
+  const CHK_EVERY = 15000;        // poll the race checklist ~every 15 s (engine-deterministic triggers; the bar only shows when something is due)
 
   /* ---- tiny helpers needed early (used in the demo scenarios) ---- */
   const r0 = (x) => (x == null ? "?" : Math.round(x));
@@ -1240,6 +1241,7 @@
     dwell: {}, data: null, windHist: [], fcstHist: [], seriesHist: [], lastPersist: 0, brief: null,
     coach: null, deviation: null, forecastDrift: null, selector: null, reoptimize: null,
     plangap: null, trend: null, briefBusy: {}, gps: null, gpsBusy: false, gpsNote: "",
+    checklist: null, chkTimer: null,
     detailStreamKey: null, detailAbort: null,
   };
   function currentData() {
@@ -1463,7 +1465,76 @@
     }
     return out;
   }
+  /* ============ RACE CHECKLIST — the SI/NOR requirement reminders ============
+     The engine /checklist evaluates the homework's `deliver_to_ipad` items against the live
+     picture (sunset window, mark proximity, finish approach). ACTIVE items ride the bar under
+     the sails bar until acked; the tap-detail lists the whole race checklist. Live source only
+     (the bar is an action surface, not a demo prop). */
+  async function fetchChecklist() {
+    if (App.src !== "live") return;
+    const r = await fetchJSON("/checklist", 6000);
+    if (r) { App.checklist = r; renderChkBar(); }
+  }
+  window.chkAck = async function (id, undo) {
+    try {
+      const resp = await fetch(API + "/checklist/ack", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(undo ? { id: id, undo: true } : { id: id }) });
+      if (resp.ok) { App.checklist = await resp.json(); renderChkBar(); }
+    } catch (e) { /* re-sync on the next poll */ }
+    if (App.openTile === "checklist") populateDetail("checklist", false);
+  };
+  window.openChecklist = function () { openDetail("checklist"); };   // inline-onclick hook (IIFE scope)
+  const chkShort = (t) => { t = t || ""; const cut = t.indexOf(". "); if (cut > 10 && cut < 70) return t.slice(0, cut); return t.length > 70 ? t.slice(0, 67) + "…" : t; };
+  function renderChkBar() {
+    const bar = document.getElementById("chkBar"), c = App.checklist;
+    const act = (c && App.src === "live" && c.active) || [];
+    bar.hidden = !act.length;
+    if (!act.length) return;
+    document.getElementById("chkItems").innerHTML = act.map((it) =>
+      '<span class="chk-item' + (it.critical ? " crit" : "") + '" onclick="openChecklist()">' +
+      escapeHtml(chkShort(it.text)) +
+      (it.measure ? ' <span class="chk-meas">' + escapeHtml(it.measure) + '</span>' : "") +
+      '<button class="chk-ack" title="Mark done (logged)" onclick="event.stopPropagation();chkAck(\'' + it.id + '\')">✓ DONE</button></span>').join("");
+  }
+  function checklistHtml() {
+    const c = App.checklist;
+    if (!c || !c.plan_set) {
+      return '<div class="dc-foot">No race checklist aboard — it loads with the homework package ' +
+        '(Lab → Lock-in &amp; Deploy → checklist_load → the engine /checklist/load).</div>';
+    }
+    const order = { active: 0, pending: 1, manual: 2, done: 3 };
+    const items = (c.items || []).slice().sort((a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9));
+    const word = { active: "DUE NOW", pending: "armed", manual: "manual", done: "done ✓" };
+    return items.map((it) =>
+      '<div class="chk-row st-' + it.status + '"><span class="chk-txt">' + escapeHtml(it.text) +
+      '<span class="chk-sub">' + [word[it.status] || it.status, it.measure, it.source]
+        .filter(Boolean).map(escapeHtml).join(" · ") + '</span></span>' +
+      (it.status === "done"
+        ? '<button class="wq-btn" onclick="chkAck(\'' + it.id + '\', true)">undo</button>'
+        : '<button class="chk-ack" onclick="chkAck(\'' + it.id + '\')">✓ DONE</button>') +
+      '</div>').join("");
+  }
   function populateDetail(key, stream) {
+    if (key === "checklist") {
+      document.getElementById("detName").textContent = NAME.checklist;
+      const c = App.checklist || {};
+      const n = (c.counts && c.counts.active) || 0;
+      const ds = document.getElementById("detStatus");
+      ds.innerHTML = c.plan_set ? (n ? n + " due now" : "nothing due") : "not loaded";
+      ds.style.color = n ? "var(--act)" : "var(--na)";
+      document.getElementById("detGauge").innerHTML = checklistHtml();
+      document.getElementById("detWhy").textContent =
+        "The race checklist from the SIs/NOR (Lab-extracted, human-reviewed): each item arms at " +
+        "its trigger — sunset for lights, the mark approach for the gate photo, the finish " +
+        "approach for the finish procedure — and stays until acked. Acks are logged onboard; " +
+        "a sunset item re-arms the next evening.";
+      document.getElementById("detConsider").textContent =
+        "✓ DONE when the action is complete — the reminder (and its coach callout) clears.";
+      document.getElementById("detClears").textContent = "—";
+      document.getElementById("detBased").textContent = "engine /checklist · homework checklists_ipad";
+      return;
+    }
     if (key === "coach") {
       document.getElementById("detName").textContent = NAME.coach;
       const c = App.coach || {};
@@ -1683,6 +1754,7 @@
     if (c.urgency === "now") return "act";       // act-level: collision/rounding/branch firing NOW
     if (c.category === "safety") return "watch"; // a closing contact not yet in the guard
     if (c.category === "watch") return "watch";  // T-15 watch change — the wake-the-next-team tone
+    if (c.category === "checklist") return "watch"; // a race requirement came due (DSQ-risk action item)
     return null;                                 // routine coaching stays silent (visual only)
   }
   function maybeAlert(coach) {
@@ -1752,6 +1824,9 @@
     App.sailTimer = setInterval(fetchSailState, 12000);
     fetchSession();                 // the RACE LOG control, own cadence
     App.sessionTimer = setInterval(fetchSession, 15000);
+    fetchChecklist();               // race-checklist reminders (engine triggers), own cadence
+    App.chkTimer = setInterval(fetchChecklist, CHK_EVERY);
+    document.getElementById("chkTag").addEventListener("click", () => openDetail("checklist"));
     App.playsTimer = setInterval(fetchPlays, SYN_EVERY);
     document.getElementById("themeBtn").addEventListener("click", cycleTheme);
     document.getElementById("srcBtn").addEventListener("click", cycleSource);

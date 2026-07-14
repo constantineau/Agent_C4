@@ -1645,7 +1645,7 @@ function paintDeploy() {
         <div class="dep-row">${depPill(r.reviewed, "Race reviewed")}<span class="muted">${r.reviewed ? "signed off for race use" : "approve it in the Races tab"}</span></div>
         <div class="dep-row">${depPill(c.ready, "Course")}<span class="muted">${esc(c.course_id || "—")} · ${c.marks} marks${c.skipped && c.skipped.length ? " · ⚠ " + c.skipped.length + " un-geocoded (" + c.skipped.map(esc).join(", ") + ")" : ""}</span></div>
         <div class="dep-row">${depPill(fl.ready, "Fleet")}<span class="muted">${fl.roster} boats${fl.scoring ? " · " + esc(fl.scoring) : ""}${fl.tracker_permitted ? " · tracker permitted" : ""}</span></div>
-        <div class="dep-row">${depPill(ck.ready, "Checklists")}<span class="muted">${ck.total} items · ${ck.ipad} →iPad</span></div>
+        <div class="dep-row">${depPill(ck.ready, "Checklists")}<span class="muted">${ck.total} items · ${ck.ipad} →iPad (auto-reminders: sunset / gate / finish triggers on the console + coach)</span></div>
         <div class="dep-row">${depPill((r.watch || {}).ready, "Watch plan")}<span class="muted">${(r.watch || {}).ready ? (r.watch.blocks + " blocks — seeds the CREW tile (iPad can still edit live)") : "optional — author it on the race in the Races tab"}</span></div>
         <div class="dep-row">${depPill(pbReady, "Playbook")}<span class="muted">${pbReady ? pbs.length + " frozen for this race" : "synthesize + Freeze & sign one in Gameplan"}</span></div>
       </div>
@@ -1672,6 +1672,9 @@ function deployPanel(lock, t) {
     `# 1. Course + fleet → the Pi engine (Tailscale host: ${t.pi_host})`,
     `jq .course_load ${hw} | ssh ${t.pi_host} 'curl -sX POST ${t.pi_engine}/course/load -H "Content-Type: application/json" -d @-'`,
     `jq .fleet_load  ${hw} | ssh ${t.pi_host} 'curl -sX POST ${t.pi_engine}/fleet/load  -H "Content-Type: application/json" -d @-'`,
+    ...(((Dep.ready || {}).checklists || {}).ipad ? [
+      `jq .checklist_load ${hw} | ssh ${t.pi_host} 'curl -sX POST ${t.pi_engine}/checklist/load -H "Content-Type: application/json" -d @-'`,
+    ] : []),
     ...(((Dep.ready || {}).watch || {}).ready ? [
       `jq .watch_load  ${hw} | ssh ${t.pi_host} 'curl -sX POST ${t.pi_engine}/watch       -H "Content-Type: application/json" -d @-'`,
     ] : []),

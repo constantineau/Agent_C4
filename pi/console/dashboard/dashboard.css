@@ -332,6 +332,24 @@ body {
 .sb-chip.on { background:var(--ok-fill); color:var(--ok); border-color:var(--ok); }
 .sb-chip.reef.on { background:var(--watch-fill); color:var(--watch); border-color:var(--watch); }
 .sb-note { font-size:11px; color:var(--muted); margin-left:auto; }
+/* Race checklist bar: active SI/NOR requirement reminders — persistent until acked */
+.chkbar { display:flex; align-items:center; gap:7px; flex-wrap:wrap; margin-top:8px;
+  padding:7px 12px; border-radius:10px; background:var(--panel); border:1px solid var(--act); }
+.chk-tag { cursor:pointer; color:var(--act); }
+.chk-item { display:inline-flex; align-items:center; gap:7px; font-size:12px; font-weight:700;
+  padding:3px 4px 3px 10px; border-radius:7px; background:var(--panel2);
+  border:1px solid var(--line); cursor:pointer; }
+.chk-item.crit { border-color:var(--act); color:var(--act); }
+.chk-meas { font-weight:600; font-size:11px; color:var(--muted); }
+.chk-ack { font:inherit; font-size:12px; font-weight:800; padding:2px 9px; border-radius:6px;
+  cursor:pointer; background:var(--ok-fill); color:var(--ok); border:1px solid var(--ok); }
+/* full-list rows in the checklist detail */
+.chk-row { display:flex; align-items:center; gap:8px; padding:5px 8px; margin:3px 0;
+  border-left:3px solid var(--line); border-radius:4px; font-size:12.5px; }
+.chk-row.st-active { border-left-color:var(--act); }
+.chk-row.st-done { border-left-color:var(--ok); opacity:.7; }
+.chk-row .chk-txt { flex:1; }
+.chk-row .chk-sub { display:block; font-size:11px; color:var(--muted); }
 /* CREW tile detail: the energy score row (big number + inline gauge) */
 .en-row { display:flex; align-items:center; gap:10px; margin:4px 0 2px; }
 .en-score { font-size:34px; font-weight:800; line-height:1; }
