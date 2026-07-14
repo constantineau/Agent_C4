@@ -231,8 +231,11 @@ def _active_wave():
 
 
 def _run_optimize(definition, course_id, start_epoch, model_names, ensemble_members, avoid=True,
-                  per_model=False, resolution="auto", use_waves=True, use_current=True):
-    """Blocking: build the multi-model wind field, route the course, write the briefing."""
+                  per_model=False, resolution="auto", use_waves=True, use_current=True,
+                  on_progress=None):
+    """Blocking: build the multi-model wind field, route the course, write the briefing.
+    `on_progress(msg)` (optional) mirrors the log lines out live — the background-job status
+    endpoint serves them so the UI can show which weather source it's waiting on."""
     from .wind import build_windfield
     from . import optimizer, current, wave
     bbox = optimizer.course_bbox(definition, course_id)
@@ -240,7 +243,15 @@ def _run_optimize(definition, course_id, start_epoch, model_names, ensemble_memb
         return {"available": False, "note": "course has no geocoded marks — review Course & Marks"}
     hours = optimizer.estimate_hours(definition, course_id)
     t_end = start_epoch + hours * 3600
-    log = []
+    class _Log(list):                      # a list whose .append also mirrors to on_progress
+        def append(self, msg):
+            list.append(self, msg)
+            if on_progress:
+                try:
+                    on_progress(msg)
+                except Exception:
+                    pass
+    log = _Log()
     # venue-specific model-skill weighting: weight each model by its measured past accuracy here,
     # de-bias its persistent offset. Best-effort — any failure falls back to the static-priority blend.
     skill = {"enabled": False}
@@ -348,7 +359,12 @@ def _wave_grid(waves, bbox, times, step):
 
 @app.post("/api/optimize")
 async def optimize(body: dict):
-    """Lab-1: run the multi-model GRIB optimizer over a race course → one route + briefing."""
+    """Lab-1: run the multi-model GRIB optimizer over a race course → one route + briefing.
+
+    STARTS a background job and returns immediately; poll `/api/optimize/status` for the result.
+    A slow/rate-limited weather source (NOMADS on a busy cycle, the ECMWF open feed) routinely
+    pushed the old synchronous request past the nginx ~300 s gateway cap → a 504 with the work
+    thrown away. Same job pattern as the synthesis fan; single-flight per Lab."""
     body = body or {}
     rid = body.get("race_id")
     d = store.get_race(rid) if rid else None
@@ -366,11 +382,20 @@ async def optimize(body: dict):
     resolution = body.get("resolution") or "auto"
     use_waves = body.get("use_waves", True)
     use_current = body.get("use_current", True)
-    try:
-        return await run_in_threadpool(_run_optimize, d, course_id, start_epoch, model_names, ens,
-                                       avoid, per_model, resolution, use_waves, use_current)
-    except Exception as exc:
-        return JSONResponse({"detail": f"optimize failed: {exc}"}, status_code=500)
+    from . import jobs
+
+    def _work(progress):
+        return _run_optimize(d, course_id, start_epoch, model_names, ens, avoid, per_model,
+                             resolution, use_waves, use_current, on_progress=progress)
+
+    return jobs.start("optimize", _work, meta={"race_id": rid})
+
+
+@app.get("/api/optimize/status")
+async def optimize_status():
+    """Poll the background optimize job; the route rides on state=done under `result`."""
+    from . import jobs
+    return jobs.status("optimize")
 
 
 @app.post("/api/gameplan/pdf")

@@ -81,9 +81,11 @@ picker + cycle fallback; `windfield.py`'s `wind_at(lat,lon,epoch)` blends the mo
 venue model skill, below) and reports the **model/ensemble SPREAD as a confidence** (models
 disagree → sail conservatively). `optimizer.py` routes the course leg-by-leg (isochrone on
 `polars.py`, the canonical ORC polars) → one optimal route + per-leg ETA/tacks/sail/wind + a
-route confidence + a briefing that flags low-confidence legs. `POST /api/optimize` +
-`GET /api/models` drive the **Gameplan → Optimizer** tab; the `lab_gribcache` volume makes
-re-runs / ensemble members cheap.
+route confidence + a briefing that flags low-confidence legs. `POST /api/optimize` (a
+background job — returns at once, poll `GET /api/optimize/status`; a slow weather source
+used to 504 the old synchronous request at the gateway) + `GET /api/models` drive the
+**Gameplan → Optimizer** tab; the `lab_gribcache` volume makes re-runs / ensemble members
+cheap.
 - **Degraded-field honesty:** a coverage gate + route-sanity guard flag `degraded` + warnings when
   the field is thin (the router falls back to a constant wind where nothing loaded — trust the
   flags). Tunables `GRIB_MIN_FRAME_FRAC` / `GRIB_COVERAGE_MIN` / `GRIB_CYCLE_FALLBACK`.

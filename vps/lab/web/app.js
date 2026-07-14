@@ -1126,10 +1126,25 @@ async function runOptimize() {
   Opt.running = true;
   document.getElementById("optRun").disabled = true;
   document.getElementById("optRun").textContent = "Optimizing… (downloading GRIB + routing)";
-  out.innerHTML = '<div class="card"><div class="loading">Building the multi-model wind field and routing the course…</div></div>';
+  out.innerHTML = '<div class="card"><div class="loading">Building the multi-model wind field and routing the course…</div>' +
+    '<div class="muted" id="optProg" style="font-size:12px;margin-top:6px"></div></div>';
   try {
-    const res = await apiPost("/api/optimize", body);
-    const r = await jsonOrFriendly(res);
+    // background job — a slow/rate-limited weather source used to push the synchronous request
+    // past the gateway's ~300 s cap (the old "timed out at the gateway" failure). Start + poll,
+    // like the synthesis fan; the status's progress tail shows which source it's waiting on.
+    const start = await (await apiPost("/api/optimize", body)).json();
+    if (start.detail) throw new Error(start.detail);
+    if (start.ok === false) throw new Error(start.note || "an optimize run is already in progress");
+    let r;
+    while (true) {
+      await new Promise((res) => setTimeout(res, 3000));
+      const st = await (await apiGet("/api/optimize/status")).json();
+      if (st.state === "done") { r = st.result; break; }
+      if (st.state === "error") throw new Error(st.error || "optimize failed");
+      if (st.state === "idle") throw new Error("optimize job vanished (container restarted?) — re-run");
+      const p = document.getElementById("optProg");
+      if (p && st.progress && st.progress.length) p.textContent = st.progress[st.progress.length - 1];
+    }
     Opt.result = r; Opt.running = false;
     renderGameplan();
   } catch (e) {

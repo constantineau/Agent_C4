@@ -369,8 +369,9 @@ Checklists, Fleet, Learnings, Gameplan, Lock-in & Deploy) · RACE (Monitor) · D
   `/sources` merges the live cache. Real-boat timestamps are current.
 - **`extract(epoch …)` returns `Decimal`** in psycopg — cast `::float8` in SQL or it
   poisons float math (the 6.4 alerts bug; fatigue/tactics guard it).
-- **Long Lab jobs** (synthesis fan ~10 min, retro batch) run as background jobs with status
-  polling — the nginx gateway 504s past ~300 s. Live optimize is ~60–70 s, then cached.
+- **Long Lab jobs** (synthesis fan ~10 min, retro batch, AND live optimize since 2026-07-14)
+  run as background jobs with status polling — the nginx gateway 504s past ~300 s. Optimize is
+  ~60–70 s cached-warm, but a rate-limited GRIB source can blow past the cap, hence the job.
 - **Passwords:** web dev `sr33-dev`; lab compose default `lab-dev`, the standing
   lab.racertracer.net container uses `CAN100`.
 - **`.env` safety:** copy it outside the tree before any risky branch op
