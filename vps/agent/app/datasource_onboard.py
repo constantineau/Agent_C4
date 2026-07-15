@@ -87,6 +87,8 @@ class OnboardSource:
         self._ais = {}             # mmsi -> {mmsi, time, name, lat, lon, sog(kn), cog(deg)}
         self._self_ctx = None      # the SK 'self' context urn, from the hello frame
         self._live_lock = threading.Lock()
+        self._series_cache = {}    # (kind, path, minutes) -> (mono, rows) — see _cached_series
+        self._series_lock = threading.Lock()
         self._polars = _load_polars()
         if LIVE_ENABLED:
             self._start_live()
@@ -218,33 +220,65 @@ class OnboardSource:
         ).fetchone()
         return row["value"] if row else None
 
+    # Real N2K sensors write 5–28 Hz, so a 40-min fatigue window is tens of thousands of rows —
+    # converting them one-by-one in Python starved the whole engine at first-light (2026-07-15;
+    # the bench never saw it because its 2014-stamped replay makes window reads empty). Window
+    # reads therefore decimate IN SQL to the last sample per (source, second) — LAST, not avg,
+    # so wrap-around angles (heading 359°→1°) can't be smeared — and are memoized for a few
+    # seconds so the dashboard's nine parallel polls share one query. The consumers bucket to
+    # minutes (fatigue was designed against the cloud's 15-s aggregates), so 1 Hz loses nothing.
+    _SERIES_TTL_S = 3.0
+
+    def _cached_series(self, kind, path, minutes, fetch):
+        key = (kind, path, round(float(minutes), 2))
+        now = _time.monotonic()
+        with self._series_lock:
+            hit = self._series_cache.get(key)
+            if hit and now - hit[0] < self._SERIES_TTL_S:
+                return hit[1]
+        rows = fetch()
+        with self._series_lock:
+            self._series_cache[key] = (now, rows)
+            if len(self._series_cache) > 64:   # bounded — a handful of (path, window) pairs live here
+                oldest = min(self._series_cache, key=lambda k: self._series_cache[k][0])
+                del self._series_cache[oldest]
+        return rows
+
     def series(self, path, minutes):
-        """[(epoch_s, raw_value)] for a path over the window, all sources, time-ordered."""
-        cut_s, cut_e = _cutoff_str(minutes)
-        rows = self._archive.execute(
-            "SELECT time, value FROM readings WHERE boat_id=? AND path=? AND value IS NOT NULL "
-            "AND time > ? ORDER BY time", (BOAT_ID, path, cut_s),
-        ).fetchall()
-        out = []
-        for r in rows:
-            e = _epoch(r["time"])
-            if e is not None and e >= cut_e:
-                out.append((e, float(r["value"])))
-        return out
+        """[(epoch_s, raw_value)] for a path over the window, all sources, time-ordered,
+        decimated to the last sample per second."""
+        def fetch():
+            cut_s, cut_e = _cutoff_str(minutes)
+            rows = self._archive.execute(
+                "SELECT max(time) AS time, value FROM readings WHERE boat_id=? AND path=? "
+                "AND value IS NOT NULL AND time > ? GROUP BY substr(time,1,19) ORDER BY time",
+                (BOAT_ID, path, cut_s),
+            ).fetchall()
+            out = []
+            for r in rows:
+                e = _epoch(r["time"])
+                if e is not None and e >= cut_e:
+                    out.append((e, float(r["value"])))
+            return out
+        return self._cached_series("series", path, minutes, fetch)
 
     def series_by_source(self, path, minutes):
-        """[(source, epoch_s, raw_value)] for a path over the window, time-ordered."""
-        cut_s, cut_e = _cutoff_str(minutes)
-        rows = self._archive.execute(
-            "SELECT source, time, value FROM readings WHERE boat_id=? AND path=? "
-            "AND value IS NOT NULL AND time > ? ORDER BY time", (BOAT_ID, path, cut_s),
-        ).fetchall()
-        out = []
-        for r in rows:
-            e = _epoch(r["time"])
-            if e is not None and e >= cut_e:
-                out.append((r["source"], e, float(r["value"])))
-        return out
+        """[(source, epoch_s, raw_value)] for a path over the window, time-ordered,
+        decimated to the last sample per (source, second)."""
+        def fetch():
+            cut_s, cut_e = _cutoff_str(minutes)
+            rows = self._archive.execute(
+                "SELECT source, max(time) AS time, value FROM readings WHERE boat_id=? AND path=? "
+                "AND value IS NOT NULL AND time > ? GROUP BY source, substr(time,1,19) "
+                "ORDER BY time", (BOAT_ID, path, cut_s),
+            ).fetchall()
+            out = []
+            for r in rows:
+                e = _epoch(r["time"])
+                if e is not None and e >= cut_e:
+                    out.append((r["source"], e, float(r["value"])))
+            return out
+        return self._cached_series("by_source", path, minutes, fetch)
 
     def best_angles(self, tws_kn):
         """(optimal_upwind_twa, optimal_downwind_twa) at the nearest TWS; None if absent.
@@ -434,27 +468,33 @@ class OnboardSource:
     # --- onboard-only helpers for the live instrument strip ---------------
     # (the cloud builds these in tools.py off Postgres; onboard we read the archive + live cache)
     def latest_per_source(self, paths, max_age_min):
-        """[{path, source, value, epoch}] — latest reading per (path, source) within the window,
-        merging the live cache (freshest) over the archive."""
+        """[{path, source, value, epoch}] — latest reading per (path, source) within the window.
+
+        Live cache first: when the SK websocket is up it already holds the freshest value per
+        (path, source), so the archive is only consulted for paths the cache doesn't cover
+        (WS down / a source that just went quiet) — and then as a per-group SQL aggregate, not
+        a raw-row flood (28 Hz wind × even a 5-min window starved the Pi at first-light)."""
         cut_s, cut_e = _cutoff_str(max_age_min)
-        placeholders = ",".join("?" * len(paths))
-        rows = self._archive.execute(
-            f"SELECT path, source, value, time FROM readings WHERE boat_id=? "
-            f"AND path IN ({placeholders}) AND value IS NOT NULL AND time > ? ORDER BY time",
-            (BOAT_ID, *paths, cut_s),
-        ).fetchall()
         best = {}
-        for r in rows:
-            e = _epoch(r["time"])
-            if e is None or e < cut_e:
-                continue
-            k = (r["path"], r["source"])
-            if k not in best or e > best[k][0]:
-                best[k] = (e, float(r["value"]))
         with self._live_lock:
             for (p, s), (e, val) in self._live.items():
-                if p in paths and e >= cut_e and ((p, s) not in best or e > best[(p, s)][0]):
+                if p in paths and e >= cut_e:
                     best[(p, s)] = (e, val)
+        missing = [p for p in paths if not any(k[0] == p for k in best)]
+        if missing:
+            placeholders = ",".join("?" * len(missing))
+            rows = self._archive.execute(
+                f"SELECT path, source, max(time) AS time, value FROM readings WHERE boat_id=? "
+                f"AND path IN ({placeholders}) AND value IS NOT NULL AND time > ? "
+                f"GROUP BY path, source", (BOAT_ID, *missing, cut_s),
+            ).fetchall()
+            for r in rows:
+                e = _epoch(r["time"])
+                if e is None or e < cut_e:
+                    continue
+                k = (r["path"], r["source"])
+                if k not in best or e > best[k][0]:
+                    best[k] = (e, float(r["value"]))
         return [{"path": p, "source": s, "value": v, "epoch": e}
                 for (p, s), (e, v) in best.items()]
 

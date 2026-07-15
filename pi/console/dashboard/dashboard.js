@@ -1829,7 +1829,13 @@
     document.getElementById("chkTag").addEventListener("click", () => openDetail("checklist"));
     App.playsTimer = setInterval(fetchPlays, SYN_EVERY);
     document.getElementById("themeBtn").addEventListener("click", cycleTheme);
-    document.getElementById("srcBtn").addEventListener("click", cycleSource);
+    // Demo scenarios are a bench/dev surface — on the boat the crew wants LIVE only (user call,
+    // 2026-07-15). Opt back in with ?demo in the URL (the Playwright harness + bench walkthroughs).
+    if (new URLSearchParams(location.search).has("demo")) {
+      document.getElementById("srcBtn").addEventListener("click", cycleSource);
+    } else {
+      document.getElementById("srcBtn").hidden = true;
+    }
     document.getElementById("recBtn").addEventListener("click", toggleRec);
     document.getElementById("alertBtn").addEventListener("click", toggleSound);
     // reflect a persisted armed state, and re-unlock iOS audio on the first interaction after a reload
