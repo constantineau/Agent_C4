@@ -1,193 +1,527 @@
 {
-  "schema_version": "0.1",
-  "race_id": "bayview-mackinac-2026",
-  "name": "2026 Bayview Mackinac Race",
-  "year": 2026,
-  "organizing_authority": "Bayview Yacht Club Mackinac Race Authority (OA), affiliated with US Sailing",
-  "start_date": "2026-07-18",
-  "start_area": "Lower Lake Huron, off Port Huron, MI",
-  "region": "Lake Huron (Great Lakes)",
-  "timezone": "America/Detroit",
-
-  "divisions": [
-    {"id": "I",   "name": "Racing Monohull — Division I (Cove Island)", "course_ref": "cove_island", "boat_type": "Monohull, fixed + movable ballast"},
-    {"id": "II",  "name": "Racing Monohull + Double-Handed — Division II (Shore)", "course_ref": "shore", "boat_type": "Monohull, fixed + movable ballast"},
-    {"id": "III", "name": "Cruising — Division III (Shore)", "course_ref": "shore", "boat_type": "Monohull"},
-    {"id": "IV",  "name": "Multihull — Division IV (Cove Island)", "course_ref": "cove_island", "boat_type": "Multihull"}
-  ],
-
-  "courses": [
+ "schema_version": "0.1",
+ "race_id": "bayview-mackinac-2026",
+ "name": "2026 Bayview Mackinac Race",
+ "year": 2026,
+ "organizing_authority": "Bayview Yacht Club Mackinac Race Authority (OA), affiliated with US Sailing",
+ "start_date": "2026-07-18",
+ "start_area": "Lower Lake Huron, off Port Huron, MI",
+ "region": "Lake Huron (Great Lakes)",
+ "timezone": "America/Detroit",
+ "divisions": [
+  {
+   "id": "I",
+   "name": "Racing Monohull — Division I (Cove Island)",
+   "course_ref": "cove_island",
+   "boat_type": "Monohull, fixed + movable ballast"
+  },
+  {
+   "id": "II",
+   "name": "Racing Monohull + Double-Handed — Division II (Shore)",
+   "course_ref": "shore",
+   "boat_type": "Monohull, fixed + movable ballast"
+  },
+  {
+   "id": "III",
+   "name": "Cruising — Division III (Shore)",
+   "course_ref": "shore",
+   "boat_type": "Monohull"
+  },
+  {
+   "id": "IV",
+   "name": "Multihull — Division IV (Cove Island)",
+   "course_ref": "cove_island",
+   "boat_type": "Multihull"
+  }
+ ],
+ "courses": [
+  {
+   "id": "cove_island",
+   "name": "Cove Island Course",
+   "applies_to_divisions": [
+    "I",
+    "IV"
+   ],
+   "distance_nm": 259,
+   "note": "SI 7.1 / NOR §11.1. 259 nm (SI 18.3c).",
+   "start": {
+    "type": "line",
+    "ref": "SI 6 / SI 8.2 — RC Signal Boat position",
+    "lat": 43.06625,
+    "lon": -82.4175,
+    "coords_source": "si",
+    "note": "SI 6: starting area on the WEST side of the shipping channel, ~4.5 nm north of the head of the St. Clair River. RC Signal Boat anchored at approx N43°03.975' W82°25.050' (43.06625, -82.41750) = starboard end of the line; pin boat at the port end (SI 8.2). Single point stands in for the LINE (SI: coords approximate, no redress for minor deviation). First-class warning 1120 EDT Sat 2026-07-18 (SI 8.5); class flags + start times come in an SI ADDENDUM — not yet posted, watch the Official Board."
+   },
+   "marks": [
     {
-      "id": "cove_island",
-      "name": "Cove Island Course",
-      "applies_to_divisions": ["I", "IV"],
-      "distance_nm": null,
-      "note": "NOR §11.1. Distance not stated in NOR (historically ~259 nm) — confirm from SI/chart.",
-      "start": {"type": "line", "ref": "Lower Lake Huron start line — exact line in SI", "lat": 43.02, "lon": -82.4, "coords_source": "approx",
-                "note": "Historical Port Huron start area (lower Lake Huron, off Port Huron). APPROX single point standing in for the start LINE; exact line pending the 2026 SI. Nudged ~1.5 nm NE into open water because the coarse Natural Earth 1:10m coastline mis-flags the Port Huron shore as land near 43.00,-82.42 — refine with NOAA ENC + the SI."},
-      "marks": [
-        {"seq": 1, "name": "Cove Island Virtual Gate", "type": "gate", "rounding": "gate",
-         "lat": 45.3333333, "lon": -81.85, "lat2": 45.338, "lon2": -81.8271667,
-         "coords_source": "nor",
-         "note": "NOR §11.1. Virtual gate ~1 nm long; SW end N45°20.00' W081°51.00', NE mark N45°20.28' W081°49.63'; Cove Island virtual mark bears ~263° from the NE gate mark. Pass through from the direction of the previous mark (Appendix WP). GPS photo required at passage."},
-        {"seq": 2, "name": "Duck Islands", "type": "island", "rounding": "starboard",
-         "lat": 45.6266522, "lon": -82.9164175, "radius_nm": 3.0, "coords_source": "approx",
-         "note": "NOR §11.1: leave to starboard on the approach to the finish. Geocoded (Nominatim, Duck Islands group SE of Manitoulin) — APPROX center; verify the island extent against the chart. Used as an avoidance obstacle (radius approximate); rounding SIDE not yet enforced."},
-        {"seq": 3, "name": "Bois Blanc Island", "type": "island", "rounding": "port",
-         "lat": 45.7699677, "lon": -84.4432006, "radius_nm": 5.5, "coords_source": "approx",
-         "note": "NOR §11.1: leave to port on the approach to the finish. Geocoded (Nominatim) — center of a ~10 nm-wide island; radius 5.5 nm covers its extent for avoidance. Verify against the chart; rounding SIDE not yet enforced."}
-      ],
-      "finish": {
-        "type": "virtual_gps_line",
-        "points": [
-          {"name": "Round Island Lighthouse SE corner", "lat": 45.8372333, "lon": -84.6168667},
-          {"name": "Point on Mackinac Island", "lat": 45.8460833, "lon": -84.6184167}
-        ],
-        "crossing": "East to West",
-        "coords_source": "nor",
-        "note": "NOR §11.3. Virtual GPS finish; Round Island Light bears 180° magnetic upon finishing. Finish recorded by position transponder; GPS photo required (NOR §2.1(f), changes def. of Finish per RRS 86.3)."
-      }
+     "seq": 1,
+     "name": "Cove Island Virtual Gate",
+     "type": "gate",
+     "rounding": "gate",
+     "lat": 45.3333333,
+     "lon": -81.85,
+     "lat2": 45.338,
+     "lon2": -81.8271667,
+     "coords_source": "si",
+     "note": "SI 7.1 (coords match the NOR exactly). Gate ~1 nm long; SW mark N45°20.00' W081°51.00' left to PORT, NE mark N45°20.28' W081°49.63' left to STARBOARD; SW mark bears ~263° from the NE mark. Sail through the gate from a SOUTHERLY to a NORTHERLY direction (SI 7.1). WGS84; coords approximate per SI, no redress for minor deviation. At passage: photo of the boat's clock + primary nav GPS, and fill out + sign the Virtual Cove Island Gate card."
     },
     {
-      "id": "shore",
-      "name": "Shore Course",
-      "applies_to_divisions": ["II", "III"],
-      "distance_nm": null,
-      "note": "NOR §11.2. Distance not stated in NOR (historically ~204 nm) — confirm from SI/chart.",
-      "start": {"type": "line", "ref": "Lower Lake Huron start line — exact line in SI", "lat": 43.02, "lon": -82.4, "coords_source": "approx",
-                "note": "Historical Port Huron start area (lower Lake Huron, off Port Huron). APPROX single point standing in for the start LINE; exact line pending the 2026 SI. Nudged ~1.5 nm NE into open water because the coarse Natural Earth 1:10m coastline mis-flags the Port Huron shore as land near 43.00,-82.42 — refine with NOAA ENC + the SI."},
-      "marks": [
-        {"seq": 1, "name": "Thunder Bay Island", "type": "island", "rounding": "port",
-         "lat": 45.0444341, "lon": -83.2033356, "radius_nm": 1.5, "coords_source": "approx",
-         "note": "NOR §11.2: leave to port. Geocoded (Nominatim, off Alpena, MI) — APPROX; verify against the chart. Avoidance obstacle; rounding SIDE not yet enforced."},
-        {"seq": 2, "name": "Bois Blanc Island", "type": "island", "rounding": "port",
-         "lat": 45.7699677, "lon": -84.4432006, "radius_nm": 5.5, "coords_source": "approx",
-         "note": "NOR §11.2: leave to port. Geocoded (Nominatim) — center of a ~10 nm-wide island; radius 5.5 nm. Verify against the chart; rounding SIDE not yet enforced."}
-      ],
-      "finish": {
-        "type": "virtual_gps_line",
-        "points": [
-          {"name": "Round Island Lighthouse SE corner", "lat": 45.8372333, "lon": -84.6168667},
-          {"name": "Point on Mackinac Island", "lat": 45.8460833, "lon": -84.6184167}
-        ],
-        "crossing": "East to West",
-        "coords_source": "nor",
-        "note": "NOR §11.3. Same finish line as the Cove Island Course."
-      }
+     "seq": 2,
+     "name": "Duck Islands",
+     "type": "island",
+     "rounding": "starboard",
+     "lat": 45.6266522,
+     "lon": -82.9164175,
+     "radius_nm": 3.0,
+     "coords_source": "approx",
+     "note": "NOR §11.1: leave to starboard on the approach to the finish. Geocoded (Nominatim, Duck Islands group SE of Manitoulin) — APPROX center; verify the island extent against the chart. Used as an avoidance obstacle (radius approximate); rounding SIDE not yet enforced."
+    },
+    {
+     "seq": 3,
+     "name": "Bois Blanc Island",
+     "type": "island",
+     "rounding": "port",
+     "lat": 45.7699677,
+     "lon": -84.4432006,
+     "radius_nm": 5.5,
+     "coords_source": "approx",
+     "note": "NOR §11.1: leave to port on the approach to the finish. Geocoded (Nominatim) — center of a ~10 nm-wide island; radius 5.5 nm covers its extent for avoidance. Verify against the chart; rounding SIDE not yet enforced."
     }
-  ],
-
-  "zones": [
-    {"name": "Lake Huron shipping lanes / traffic separation", "type": "tss", "geometry": null,
-     "note": "Not specified in the NOR; commercial shipping lanes exist in Lake Huron — source from SI/chart and human review before the optimizer treats them as exclusion zones."}
-  ],
-
-  "requirements": [
-    {"id": "ser-cert", "category": "safety", "phase": "pre_start", "critical": true,
-     "text": "Electronic SER compliance certification completed before registration.", "source": "NOR §8.2(a) / SER"},
-    {"id": "harness-tether", "category": "crew_safety", "phase": "pre_start", "critical": true,
-     "text": "Each crew member has a safety harness + compatible tether (≤2 m, ≥20 kN).", "source": "SER 3.1.3"},
-    {"id": "jacklines", "category": "crew_safety", "phase": "pre_start", "critical": true,
-     "text": "Jacklines (≥20 kN) rigged to reach all points on deck.", "source": "SER 3.2.1"},
-    {"id": "nav-lights", "category": "navigation", "phase": "in_race", "critical": true,
-     "text": "Display navigation lights (primary; backup on a separate power source available) between sunset and sunrise.",
-     "trigger_type": "time", "trigger_detail": "sunset->sunrise", "deliver_to_ipad": true, "source": "SER 3.3.1 / 3.3.2"},
-    {"id": "flares", "category": "safety", "phase": "pre_start",
-     "text": "Three (3) SOLAS red hand flares (or approved equivalent) aboard, in date.", "source": "SER 3.6.2"},
-    {"id": "mob-record", "category": "crew_safety", "phase": "pre_start", "critical": true,
-     "text": "Electronic means to record a man-overboard position within 10 seconds.", "source": "SER 3.7.4"},
-    {"id": "vhf", "category": "communications", "phase": "pre_start", "critical": true,
-     "text": "Fixed 25 W VHF with the boat's MMSI programmed + a watertight handheld VHF.", "source": "SER 3.8.1 / 3.8.2"},
-    {"id": "charts", "category": "navigation", "phase": "pre_start",
-     "text": "Non-electronic charts for the race area (incl. US 14860, 14864).", "source": "SER 3.12"},
-    {"id": "radar-reflector", "category": "safety", "phase": "pre_start",
-     "text": "Octahedral radar reflector ≥11.5 in (or equivalent).", "source": "SER 3.18"},
-    {"id": "emergency-steering", "category": "safety", "phase": "pre_start",
-     "text": "Emergency tiller able to be fitted to the rudder stock (wheel-steered boats).", "source": "SER 3.21"},
-    {"id": "insurance", "category": "registration", "phase": "pre_start", "critical": true,
-     "text": "≥ $500,000 boat liability insurance valid for the race window; certificate carried aboard.", "source": "NOR §7.4"},
-    {"id": "crew-list", "category": "registration", "phase": "pre_start",
-     "text": "Final crew list submitted; register at Bayview YC or Port Huron on the registration date.", "source": "NOR §7.5 / §8"},
-    {"id": "tracker", "category": "registration", "phase": "pre_start", "critical": true,
-     "text": "Accept the Race Tracking Application Agreement; carry the position transponder (used for the finish).", "source": "NOR §7.5(e)"},
-    {"id": "sponsor-flag", "category": "registration", "phase": "in_race",
-     "text": "Display the supplied sponsor backstay flag if required.", "trigger_type": "event",
-     "trigger_detail": "if supplied / per SI", "deliver_to_ipad": true, "source": "NOR §3.2"},
-    {"id": "gate-photo", "category": "procedure", "phase": "at_gate", "critical": true,
-     "text": "At the Cove Island Gate (Div I/IV): photograph the primary navigation GPS showing time + location, demonstrating passage between the gate.",
-     "trigger_type": "location", "trigger_detail": "Cove Island gate", "deliver_to_ipad": true, "source": "NOR §11.1"},
-    {"id": "finish-procedure", "category": "procedure", "phase": "at_finish", "critical": true,
-     "text": "Cross the finish line East→West; Round Island Light bears 180° magnetic; sail at least 10 boat lengths past the line.",
-     "trigger_type": "event", "trigger_detail": "finishing", "deliver_to_ipad": true, "source": "NOR §11.3"},
-    {"id": "finish-photo", "category": "procedure", "phase": "at_finish", "critical": true,
-     "text": "At the finish: photograph the primary navigation GPS showing time + location (the position transponder records the finish).",
-     "trigger_type": "event", "trigger_detail": "finishing", "deliver_to_ipad": true, "source": "NOR §2.1(f)"},
-    {"id": "display-numbers", "category": "registration", "phase": "at_finish",
-     "text": "Display registration / sail numbers so the boat is identifiable at the finish. VERIFY exact requirement in the 2026 SI.",
-     "trigger_type": "event", "trigger_detail": "finishing", "deliver_to_ipad": true, "source": "user-cited; verify in SI"},
-    {"id": "crew-change-report", "category": "reporting", "phase": "pre_start",
-     "text": "Report any crew change after registration before the start (email mackpro@byc.com before 0900, or VHF ch 72 before the start signal).", "source": "NOR §8.2(d)"},
-    {"id": "no-discharge", "category": "environmental", "phase": "in_race",
-     "text": "No overboard discharge of toilets / holding tanks (Michigan & Ontario law).", "source": "NOR §22"},
-    {"id": "post-finish-inspection", "category": "safety", "phase": "post_race",
-     "text": "Randomly selected boats are SER-inspected immediately after finishing; do not hinder inspection.", "source": "NOR §9.3"},
-    {"id": "docking", "category": "procedure", "phase": "post_race",
-     "text": "Leave the harbors by 1100 Wednesday after the race unless arranged (and paid) with the DNR.", "source": "NOR §16.2"}
-  ],
-
-  "rules_profile": {
-    "rrs_edition": "2025-2028",
-    "info_available_to_all_permitted": true,
-    "customized_advice_while_underway_prohibited": true,
-    "appendix_wp": true,
-    "tracker_permitted": true,
-    "modifications": [
-      {"ref": "NOR §2.1(a)", "rule": "US Sailing prescription RRS 63.1", "summary": "shall not apply"},
-      {"ref": "NOR §2.1(d)", "rule": "RRS 41(c)", "summary": "Help in the form of information available to all boats is permitted even if only at cost; but 'at cost' help shall NOT include private forecast or tactical advice or information customized for a particular boat or group of boats while underway. (This is the basis of the three-tier architecture.)"},
-      {"ref": "NOR §2.1(e)", "rule": "RRS 47", "summary": "trash definition excludes biodegradable sail ties used while setting sails"},
-      {"ref": "NOR §2.1(f)", "rule": "Definition of Finish (RRS 86.3)", "summary": "a boat finishes when its position transponder crosses the finish line from the course side; GPS photo required"},
-      {"ref": "NOR §2.1(i)", "rule": "ORC rules / ORC 206.1", "summary": "ORC governs monohull racing; +1 spinnaker allowance with conditions; storm/heavy-weather sails excluded from the sail count"},
-      {"ref": "NOR §2.1(j)", "rule": "GLMRA rules", "summary": "Great Lakes Multihull Racing Association rules for multihulls"},
-      {"ref": "NOR §2.1(k)", "rule": "Cruising Division Rules", "summary": "apply to Cruising Division entrants (Division III)"},
-      {"ref": "NOR §2.1(m)", "rule": "World Sailing Appendix WP", "summary": "Rules for Racing Around Waypoints apply (gate/waypoint passing, electronic position fixing — primary nav system precedence)"},
-      {"ref": "NOR §2.1(n)", "rule": "RRS 60.1", "summary": "[NP] breaches are not grounds for a protest by a boat"},
-      {"ref": "NOR §2.2", "rule": "RRS 60.4(a)(2)", "summary": "changed re: protests by boats not involved in / did not see the incident"}
+   ],
+   "finish": {
+    "type": "virtual_gps_line",
+    "points": [
+     {
+      "name": "Round Island Lighthouse SE corner",
+      "lat": 45.8372333,
+      "lon": -84.6168667
+     },
+     {
+      "name": "Point on Mackinac Island",
+      "lat": 45.8460833,
+      "lon": -84.6184167
+     }
     ],
-    "scoring": {
-      "system": "ORC",
-      "method": "Single-Number Time-on-Time (ToT)",
-      "options": [
-        "BYC Mack Cove custom wind mix (Cove Island Course)",
-        "BYC Mack Shore custom wind mix (Shore Course)",
-        "ORC Weather Routing Scoring (WRS)"
-      ],
-      "decided": "OA decides/announces the custom-wind-mix vs WRS option no later than the 0800 weather briefing race morning; if WRS, the TCF is published no later than 3 hours before the start.",
-      "ref": "NOR §13"
+    "crossing": "East to West",
+    "coords_source": "si",
+    "note": "SI 11.1 (coords match the NOR). Virtual GPS line Round Island Lighthouse SE corner → point on Mackinac Island; Round Island Light bears 180° magnetic upon finishing; cross East to West; sail ≥10 boat lengths beyond. The YB tracker records position at high frequency and ITS DATA DETERMINES THE FINISH TIME (SI 11.1 [NP]); finish defined by the transponder crossing (SI 1.1d, changes RRS 86.3). GPS+clock photo required at finish."
+   }
+  },
+  {
+   "id": "shore",
+   "name": "Shore Course",
+   "applies_to_divisions": [
+    "II",
+    "III"
+   ],
+   "distance_nm": 204,
+   "note": "SI 7.2 / NOR §11.2. 204 nm (SI 18.3c). Thunder Bay Island and Bois Blanc Island to port.",
+   "start": {
+    "type": "line",
+    "ref": "SI 6 / SI 8.2 — RC Signal Boat position",
+    "lat": 43.06625,
+    "lon": -82.4175,
+    "coords_source": "si",
+    "note": "SI 6: starting area on the WEST side of the shipping channel, ~4.5 nm north of the head of the St. Clair River. RC Signal Boat anchored at approx N43°03.975' W82°25.050' (43.06625, -82.41750) = starboard end of the line; pin boat at the port end (SI 8.2). Single point stands in for the LINE (SI: coords approximate, no redress for minor deviation). First-class warning 1120 EDT Sat 2026-07-18 (SI 8.5); class flags + start times come in an SI ADDENDUM — not yet posted, watch the Official Board."
+   },
+   "marks": [
+    {
+     "seq": 1,
+     "name": "Thunder Bay Island",
+     "type": "island",
+     "rounding": "port",
+     "lat": 45.0444341,
+     "lon": -83.2033356,
+     "radius_nm": 1.5,
+     "coords_source": "approx",
+     "note": "NOR §11.2: leave to port. Geocoded (Nominatim, off Alpena, MI) — APPROX; verify against the chart. Avoidance obstacle; rounding SIDE not yet enforced."
+    },
+    {
+     "seq": 2,
+     "name": "Bois Blanc Island",
+     "type": "island",
+     "rounding": "port",
+     "lat": 45.7699677,
+     "lon": -84.4432006,
+     "radius_nm": 5.5,
+     "coords_source": "approx",
+     "note": "NOR §11.2: leave to port. Geocoded (Nominatim) — center of a ~10 nm-wide island; radius 5.5 nm. Verify against the chart; rounding SIDE not yet enforced."
     }
-  },
-
-  "fleet": [],
-
-  "tracker": {
-    "provider": "yb",
-    "race": "bayviewmack2026",
-    "host": "cf.yb.tl",
-    "delay_min": 15,
-    "note": "VERIFIED 2026-06-28: bycmack.com/tracking is YB Tracking (yb.tl). Positions come from https://cf.yb.tl/API3/Race/bayviewmack2026/GetPositions?t=0 — JSON, teams[].name + latest positions[] {latitude,longitude,sogKnots,cog,gpsAtMillis,dtfNm}. Confirmed against the real bayviewmack2025 feed (race-id convention bayviewmack<year>). The user confirmed the tracker is ALLOWED + normal in-race for Bayview Mackinac (rules_profile.tracker_permitted=true). The 2026 id returns {error:...} (not published yet) → dormant until ~July 2026; provider degrades to no positions. Use provider 'sample' on the bench."
-  },
-
-  "provenance": {
-    "sources": [
-      {"label": "2026 Bayview Mackinac Notice of Race (NOR), V6 approved 11/19/25",
-       "url": "https://bycmack.com/Assets/pdf/2026NOR%20V6%20111925%20Approved_Post.pdf",
-       "retrieved": "2026-06-17"},
-      {"label": "2026 BYC Mack Safety Equipment Requirements (SER)",
-       "url": "https://bycmack.com/Assets/pdf/2026%20BYC%20Mack%20Safety%20Requirements%20100625.pdf",
-       "retrieved": "2026-06-17"},
-      {"label": "Race tracking", "url": "https://bycmack.com/tracking/", "retrieved": "2026-06-17"}
+   ],
+   "finish": {
+    "type": "virtual_gps_line",
+    "points": [
+     {
+      "name": "Round Island Lighthouse SE corner",
+      "lat": 45.8372333,
+      "lon": -84.6168667
+     },
+     {
+      "name": "Point on Mackinac Island",
+      "lat": 45.8460833,
+      "lon": -84.6184167
+     }
     ],
-    "si_status": "2026 Sailing Instructions NOT yet posted (~July 2026). The SI will fix the exact start line, any turning marks/zones beyond the NOR, confirm distances, and likely add procedural requirements (e.g. displaying numbers). Re-ingest when posted (https://bycmack.com/sis/).",
-    "review_status": "machine-extracted from the NOR + SER — NEEDS HUMAN REVIEW: island coordinates are null (Duck Islands / Bois Blanc / Thunder Bay Island), course distances unconfirmed, start line + TSS pending the SI. The `requirements` checklist is a REPRESENTATIVE subset — the full SER (~40 equipment items) and SI procedural items must be ingested completely before the prep checklist is relied on; 'display-numbers' is user-cited and needs SI verification.",
-    "extracted_by": "Lab-0 manual extraction (schema-first slice), 2026-06-17"
+    "crossing": "East to West",
+    "coords_source": "si",
+    "note": "SI 11.1. Same virtual GPS finish line as the Cove Island Course."
+   }
   }
+ ],
+ "zones": [
+  {
+   "name": "Lake Huron shipping lanes / traffic separation",
+   "type": "tss",
+   "geometry": null,
+   "note": "Not specified in the NOR; commercial shipping lanes exist in Lake Huron — source from SI/chart and human review before the optimizer treats them as exclusion zones."
+  }
+ ],
+ "requirements": [
+  {
+   "id": "ser-cert",
+   "category": "safety",
+   "phase": "pre_start",
+   "critical": true,
+   "text": "Electronic SER compliance certification completed before registration.",
+   "source": "NOR §8.2(a) / SER"
+  },
+  {
+   "id": "harness-tether",
+   "category": "crew_safety",
+   "phase": "pre_start",
+   "critical": true,
+   "text": "Each crew member has a safety harness + compatible tether (≤2 m, ≥20 kN).",
+   "source": "SER 3.1.3"
+  },
+  {
+   "id": "jacklines",
+   "category": "crew_safety",
+   "phase": "pre_start",
+   "critical": true,
+   "text": "Jacklines (≥20 kN) rigged to reach all points on deck.",
+   "source": "SER 3.2.1"
+  },
+  {
+   "id": "nav-lights",
+   "category": "navigation",
+   "phase": "in_race",
+   "critical": true,
+   "text": "Display navigation lights (primary; backup on a separate power source available) between sunset and sunrise.",
+   "trigger_type": "time",
+   "trigger_detail": "sunset->sunrise",
+   "deliver_to_ipad": true,
+   "source": "SER 3.3.1 / 3.3.2"
+  },
+  {
+   "id": "flares",
+   "category": "safety",
+   "phase": "pre_start",
+   "text": "Three (3) SOLAS red hand flares (or approved equivalent) aboard, in date.",
+   "source": "SER 3.6.2"
+  },
+  {
+   "id": "mob-record",
+   "category": "crew_safety",
+   "phase": "pre_start",
+   "critical": true,
+   "text": "Electronic means to record a man-overboard position within 10 seconds.",
+   "source": "SER 3.7.4"
+  },
+  {
+   "id": "vhf",
+   "category": "communications",
+   "phase": "pre_start",
+   "critical": true,
+   "text": "Fixed 25 W VHF with the boat's MMSI programmed + a watertight handheld VHF.",
+   "source": "SER 3.8.1 / 3.8.2"
+  },
+  {
+   "id": "charts",
+   "category": "navigation",
+   "phase": "pre_start",
+   "text": "Non-electronic charts for the race area (incl. US 14860, 14864).",
+   "source": "SER 3.12"
+  },
+  {
+   "id": "radar-reflector",
+   "category": "safety",
+   "phase": "pre_start",
+   "text": "Octahedral radar reflector ≥11.5 in (or equivalent).",
+   "source": "SER 3.18"
+  },
+  {
+   "id": "emergency-steering",
+   "category": "safety",
+   "phase": "pre_start",
+   "text": "Emergency tiller able to be fitted to the rudder stock (wheel-steered boats).",
+   "source": "SER 3.21"
+  },
+  {
+   "id": "insurance",
+   "category": "registration",
+   "phase": "pre_start",
+   "critical": true,
+   "text": "≥ $500,000 boat liability insurance valid for the race window; certificate carried aboard.",
+   "source": "NOR §7.4"
+  },
+  {
+   "id": "crew-list",
+   "category": "registration",
+   "phase": "pre_start",
+   "text": "Final crew list submitted; register at Bayview YC or Port Huron on the registration date.",
+   "source": "NOR §7.5 / §8"
+  },
+  {
+   "id": "tracker",
+   "category": "registration",
+   "phase": "pre_start",
+   "critical": true,
+   "text": "Carry the OA position transponder attached to the AFT-MOST portion of the stern pulpit at all times while racing (no stern pulpit → aft-most lifeline stanchion; alternates need Race Technical Chair approval). Its data determines the finish time. Turn it in at the Skipper Check-In Desk within 8 h of finishing ($1,000 charge if never returned).",
+   "source": "SI 10.2 / 11.1 / 11.4"
+  },
+  {
+   "id": "sponsor-flag",
+   "category": "registration",
+   "phase": "in_race",
+   "text": "Display the backstay flag (in the Skipper's Packet) from the backstay ≥6 ft above deck — from before entering the Starting/Staging Area until ≥30 min AFTER starting, and for ≥30 min immediately BEFORE and AFTER finishing. No backstay → fly it from the stern pulpit.",
+   "trigger_type": "event",
+   "trigger_detail": "start + finish windows (manual)",
+   "deliver_to_ipad": true,
+   "source": "SI 5",
+   "critical": true
+  },
+  {
+   "id": "gate-photo",
+   "category": "procedure",
+   "phase": "at_gate",
+   "critical": true,
+   "text": "At the Cove Island Gate (Div I/IV): photograph the boat's CLOCK + primary navigation GPS showing time and position, demonstrating passage between the gate marks (southerly→northerly). Also fill out + sign the Virtual Cove Island Gate card — turned in at the Skipper Check-In Desk.",
+   "trigger_type": "location",
+   "trigger_detail": "Cove Island gate",
+   "deliver_to_ipad": true,
+   "source": "SI 7.1"
+  },
+  {
+   "id": "finish-procedure",
+   "category": "procedure",
+   "phase": "at_finish",
+   "critical": true,
+   "text": "Cross the finish line East→West (Round Island Light bears 180° magnetic); sail ≥10 boat lengths past the line. Then: fill out + sign the Start & Finish card, and call the Race Harbormaster on VHF 71 for the assigned docking zone. Check in at the Skipper Check-In Desk (Mission Point main lobby) within 8 h of finishing — turn in the card + the transponder.",
+   "trigger_type": "event",
+   "trigger_detail": "finishing",
+   "deliver_to_ipad": true,
+   "source": "SI 11.1 / 11.3 / 11.4 / 12.2"
+  },
+  {
+   "id": "finish-photo",
+   "category": "procedure",
+   "phase": "at_finish",
+   "critical": true,
+   "text": "At the finish: photograph the boat's CLOCK + primary navigation GPS clearly showing the lat/lon at the time of Finish. KEEP the photo for 30 days (scoring inquiries). The YB transponder determines the finish time; it must not be your primary nav GPS.",
+   "trigger_type": "event",
+   "trigger_detail": "finishing",
+   "deliver_to_ipad": true,
+   "source": "SI 1.1d / 11.3"
+  },
+  {
+   "id": "crew-change-report",
+   "category": "reporting",
+   "phase": "pre_start",
+   "text": "Report any crew or sail-number change after registration on VHF ch 72, monitored from 1000 on race day until the last start. Do NOT check in on VHF 71 (emergencies only).",
+   "source": "SI 8.1"
+  },
+  {
+   "id": "no-discharge",
+   "category": "environmental",
+   "phase": "in_race",
+   "text": "No overboard discharge of toilets / holding tanks (Michigan & Ontario law).",
+   "source": "NOR §22"
+  },
+  {
+   "id": "post-finish-inspection",
+   "category": "safety",
+   "phase": "post_race",
+   "text": "Boats may be selected for SER inspection after finishing — notified on VHF 71 and directed to dockage; do not refuse or hinder inspection.",
+   "source": "SI 13"
+  },
+  {
+   "id": "docking",
+   "category": "procedure",
+   "phase": "post_race",
+   "text": "Leave the harbors by 1100 Wednesday after the race unless arranged (and paid) with the DNR.",
+   "source": "NOR §16.2"
+  },
+  {
+   "id": "start-finish-card",
+   "category": "procedure",
+   "phase": "in_race",
+   "text": "Fill out + sign the Start & Finish card (in the Skipper's Packet) at the START and at the FINISH; a boat representative turns it in with the transponder at the Skipper Check-In Desk (Mission Point main lobby) within 8 h of finishing. Finish after 1000 Tue Jul 21 → email legible photos of the card to mackchair2026@byc.com + confirm by text 313-618-5339.",
+   "trigger_type": "event",
+   "trigger_detail": "at start + at finish (manual)",
+   "deliver_to_ipad": true,
+   "source": "SI 8.7 / 11.3 / 11.4"
+  },
+  {
+   "id": "radio-watch",
+   "category": "navigation",
+   "phase": "in_race",
+   "critical": true,
+   "text": "Monitor VHF ch 16 at all times while racing (SI 10.1). RC uses ch 71 (recalls, signals broadcast, harbormaster) — keep it clear except for emergencies; ch 72 = crew/sail-number changes + the 0800 race announcement.",
+   "trigger_type": "none",
+   "trigger_detail": "",
+   "deliver_to_ipad": false,
+   "source": "SI 10.1 / 8.1 / 4.4"
+  },
+  {
+   "id": "retirement-reporting",
+   "category": "safety",
+   "phase": "in_race",
+   "critical": true,
+   "text": "If retiring for ANY reason: contact the PRO by voice/text at 214-244-4955 ASAP and notify the USCG on VHF 16. MOB, injury needing medical attention, or damage >$5,000 → submit the Withdrawal/Retirement/MOB/Accident form (Owner Login page) by 2026-08-08.",
+   "trigger_type": "none",
+   "trigger_detail": "",
+   "deliver_to_ipad": false,
+   "source": "SI 15 / 14"
+  },
+  {
+   "id": "safety-contacts",
+   "category": "safety",
+   "phase": "in_race",
+   "text": "Emergency: USCG VHF 16. USCG Sector Detroit (833) 388-8724 covers Port Huron→Alpena; Sector Northern Great Lakes (906) 635-3217 covers Alpena→Mackinac; STA St. Ignace 906-643-6402. YB tracker red alert: lift the flap, hold the RED button 5 s, keep sky view until the green LED stops flashing. Distress comms with USCG take priority; inform the RC as soon as practicable after.",
+   "trigger_type": "none",
+   "trigger_detail": "",
+   "deliver_to_ipad": false,
+   "source": "SI 19 (Amendment #1)"
+  },
+  {
+   "id": "protest-window",
+   "category": "procedure",
+   "phase": "at_finish",
+   "text": "Protest/redress: email intent + nature to mackjury@byc.com within 1 h of finish or retirement (no email → text 313-402-4949); file online within 3 h of finishing (or by 1000 next day if finishing after 2100). Scoring inquiries: ali@byc.com within 3 h.",
+   "trigger_type": "none",
+   "trigger_detail": "",
+   "deliver_to_ipad": false,
+   "source": "SI 16.1 / 17.5"
+  },
+  {
+   "id": "crew-aboard-0800",
+   "category": "procedure",
+   "phase": "pre_start",
+   "text": "All crew aboard by 0800 Saturday 2026-07-18 in Port Huron (dock departure management). Race announcement on VHF 72 at 0800. AP flag ashore = postponed, first warning ≥2 h after it drops (monitor VHF 71 + the Official Board).",
+   "trigger_type": "none",
+   "trigger_detail": "",
+   "deliver_to_ipad": false,
+   "source": "SI 4.2 / 4.3 / 4.4"
+  }
+ ],
+ "rules_profile": {
+  "rrs_edition": "2025-2028",
+  "info_available_to_all_permitted": true,
+  "customized_advice_while_underway_prohibited": true,
+  "appendix_wp": true,
+  "tracker_permitted": true,
+  "modifications": [
+   {
+    "ref": "NOR §2.1(a)",
+    "rule": "US Sailing prescription RRS 63.1",
+    "summary": "shall not apply"
+   },
+   {
+    "ref": "NOR §2.1(d)",
+    "rule": "RRS 41(c)",
+    "summary": "Help in the form of information available to all boats is permitted even if only at cost; but 'at cost' help shall NOT include private forecast or tactical advice or information customized for a particular boat or group of boats while underway. (This is the basis of the three-tier architecture.)"
+   },
+   {
+    "ref": "NOR §2.1(e)",
+    "rule": "RRS 47",
+    "summary": "trash definition excludes biodegradable sail ties used while setting sails"
+   },
+   {
+    "ref": "NOR §2.1(f)",
+    "rule": "Definition of Finish (RRS 86.3)",
+    "summary": "a boat finishes when its position transponder crosses the finish line from the course side; GPS photo required"
+   },
+   {
+    "ref": "NOR §2.1(i)",
+    "rule": "ORC rules / ORC 206.1",
+    "summary": "ORC governs monohull racing; +1 spinnaker allowance with conditions; storm/heavy-weather sails excluded from the sail count"
+   },
+   {
+    "ref": "NOR §2.1(j)",
+    "rule": "GLMRA rules",
+    "summary": "Great Lakes Multihull Racing Association rules for multihulls"
+   },
+   {
+    "ref": "NOR §2.1(k)",
+    "rule": "Cruising Division Rules",
+    "summary": "apply to Cruising Division entrants (Division III)"
+   },
+   {
+    "ref": "NOR §2.1(m)",
+    "rule": "World Sailing Appendix WP",
+    "summary": "Rules for Racing Around Waypoints apply (gate/waypoint passing, electronic position fixing — primary nav system precedence)"
+   },
+   {
+    "ref": "NOR §2.1(n)",
+    "rule": "RRS 60.1",
+    "summary": "[NP] breaches are not grounds for a protest by a boat"
+   },
+   {
+    "ref": "NOR §2.2",
+    "rule": "RRS 60.4(a)(2)",
+    "summary": "changed re: protests by boats not involved in / did not see the incident"
+   }
+  ],
+  "scoring": {
+   "system": "ORC",
+   "method": "Single-Number Time-on-Time (ToT)",
+   "options": [
+    "BYC Mack Cove custom wind mix (Cove Island Course)",
+    "BYC Mack Shore custom wind mix (Shore Course)",
+    "ORC Weather Routing Scoring (WRS)"
+   ],
+   "decided": "RC decides/announces BayMac custom wind mix vs ORC WRS no later than the 0810 Weather Briefing on race morning; if WRS, the TCF is published ≥3 h before the start (SI 17.1).",
+   "ref": "NOR §13 / SI 17.1"
+  }
+ },
+ "fleet": [],
+ "tracker": {
+  "provider": "yb",
+  "race": "bayviewmack2026",
+  "host": "cf.yb.tl",
+  "delay_min": 15,
+  "note": "VERIFIED 2026-06-28: bycmack.com/tracking is YB Tracking (yb.tl). Positions come from https://cf.yb.tl/API3/Race/bayviewmack2026/GetPositions?t=0 — JSON, teams[].name + latest positions[] {latitude,longitude,sogKnots,cog,gpsAtMillis,dtfNm}. Confirmed against the real bayviewmack2025 feed (race-id convention bayviewmack<year>). The user confirmed the tracker is ALLOWED + normal in-race for Bayview Mackinac (rules_profile.tracker_permitted=true). The 2026 id returns {error:...} (not published yet) → dormant until ~July 2026; provider degrades to no positions. Use provider 'sample' on the bench."
+ },
+ "provenance": {
+  "sources": [
+   {
+    "label": "2026 Bayview Mackinac Notice of Race (NOR), V6 approved 11/19/25",
+    "url": "https://bycmack.com/Assets/pdf/2026NOR%20V6%20111925%20Approved_Post.pdf",
+    "retrieved": "2026-06-17"
+   },
+   {
+    "label": "2026 BYC Mack Safety Equipment Requirements (SER)",
+    "url": "https://bycmack.com/Assets/pdf/2026%20BYC%20Mack%20Safety%20Requirements%20100625.pdf",
+    "retrieved": "2026-06-17"
+   },
+   {
+    "label": "Race tracking",
+    "url": "https://bycmack.com/tracking/",
+    "retrieved": "2026-06-17"
+   },
+   {
+    "label": "2026 Bayview Mackinac Race Sailing Instructions v5 (incl. Amendment #1), posted 2026-07-14",
+    "url": "https://bycmack.com/Assets/pdf/2026%20Bayview%20Mackinac%20Race%20-%20Sailing%20Instructions%20v5%20071426.pdf",
+    "retrieved": "2026-07-15"
+   },
+   {
+    "label": "2026 SI Amendment #1 (adds Section 19 Safety; folded into v5)",
+    "url": "https://bycmack.com/Assets/pdf/2026%20SI%20Amendment%201_071426.pdf",
+    "retrieved": "2026-07-15"
+   }
+  ],
+  "si_status": "2026 SIs v5 (incl. Amendment #1, posted 2026-07-14 1800) INGESTED 2026-07-15: start position (SI 6, RC boat N43°03.975 W82°25.050), first warning 1120 EDT, distances 259/204 nm, finish + gate coords confirmed identical to the NOR, YB-tracker-determined finish, checklist items updated ('display-numbers' REMOVED — no such SI requirement; backstay-flag windows + Start&Finish/Gate cards added). STILL PENDING: the SI ADDENDUM with class backstay flags + class start times (SI 8.6) — watch the Official Board; SI changes possible until 0900 race day (SI 3).",
+  "review_status": "NOR+SER extraction reviewed against SI v5 on 2026-07-15. Island marks (Duck/Bois Blanc/Thunder Bay) remain geocoded-approximate avoidance obstacles — unchanged by the SI (it names them without coords). Requirements now cover the SI procedural set; the full ~40-item SER equipment list is still a representative subset. NEEDS the user's sign-off before the Jul-17 playbook synthesis freeze.",
+  "extracted_by": "Lab-0 manual extraction 2026-06-17; SI v5 re-ingest 2026-07-15"
+ }
 }
