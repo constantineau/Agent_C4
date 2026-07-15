@@ -78,10 +78,7 @@ class OnboardSource:
     """Local Pi data backend — same interface as CloudSource, byte-identical outputs."""
 
     def __init__(self):
-        self._archive = sqlite3.connect(
-            f"file:{ARCHIVE_DB}?mode=ro", uri=True, timeout=30, check_same_thread=False
-        )
-        self._archive.row_factory = sqlite3.Row
+        self._archive_local = threading.local()
         self._engine = self._open_engine()
         self._live = {}            # (path, source) -> (epoch, value)  [own ship only]
         self._ais = {}             # mmsi -> {mmsi, time, name, lat, lon, sog(kn), cog(deg)}
@@ -92,6 +89,21 @@ class OnboardSource:
         self._polars = _load_polars()
         if LIVE_ENABLED:
             self._start_live()
+
+    @property
+    def _archive(self):
+        """Per-THREAD read-only archive connection. A single shared connection serialized every
+        archive read behind whichever one was stalled on SD-card I/O (the archiver fsyncs every
+        flush), which showed up as episodic all-endpoint timeouts under the dashboard's parallel
+        poll. Read-only connections are cheap; one per threadpool thread removes the queue."""
+        conn = getattr(self._archive_local, "conn", None)
+        if conn is None:
+            conn = sqlite3.connect(
+                f"file:{ARCHIVE_DB}?mode=ro", uri=True, timeout=30, check_same_thread=False
+            )
+            conn.row_factory = sqlite3.Row
+            self._archive_local.conn = conn
+        return conn
 
     # --- local marks store (writable) --------------------------------------
     def _open_engine(self):
