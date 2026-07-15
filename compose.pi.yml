@@ -35,7 +35,10 @@ services:
   # only on the first boot with a fresh volume; afterwards it's cached in sk_config. Uses the
   # signalk image (it has npm/node) and runs after signalk-init has chowned the volume.
   signalk-derived:
-    image: cr.signalk.io/signalk/signalk-server:latest
+    # Pinned: v2.28.0+ locks out anonymous access when no security.json exists (rejects the
+    # engine/uplink/archiver websockets with "Missing access token"); v2.27.0 = the proven-open
+    # bench version. Re-test security behavior before bumping.
+    image: cr.signalk.io/signalk/signalk-server:v2.27.0
     user: "1000:1000"
     volumes:
       - ./pi/signalk:/src:ro
@@ -64,7 +67,8 @@ services:
         condition: service_completed_successfully
 
   signalk:
-    image: cr.signalk.io/signalk/signalk-server:latest
+    # Pinned to v2.27.0 — see the note on signalk-derived above.
+    image: cr.signalk.io/signalk/signalk-server:v2.27.0
     init: true
     network_mode: host
     environment:
