@@ -21,7 +21,8 @@ _TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{10,64}$")
 # Exactly what MapView.render() reads (vps/lab/web/mapview.js) plus the scalars the player
 # header shows. Everything else in the optimize result stays out of the public bundle.
 _MAP_FIELDS = ("path", "marks", "legs", "wind_grid", "current_grid", "wave_grid",
-               "isochrones", "laylines", "candidate_paths", "obstacles", "start_epoch")
+               "isochrones", "laylines", "candidate_paths", "obstacles", "start_epoch",
+               "sail_plan")     # the map's peel chips + live current-sail chip read this
 _SCALAR_FIELDS = ("race_id", "course_id", "route_confidence", "eta_utc", "total_nm",
                   "distance_nm", "roundings")
 
