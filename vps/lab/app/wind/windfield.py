@@ -117,6 +117,11 @@ def build_windfield(bbox, t_start: float, t_end: float, models=DEFAULT_MODELS,
             source = name if isinstance(name, ModelSource) else MODELS.get(name)
             if source is None:
                 continue
+            if hasattr(source, "load_series"):        # API-grid source (ICON via Open-Meteo) —
+                m_series, m_meta = source.load_series(bbox, t_start, t_end, on_progress)
+                series.update(m_series)               # whole-series ingest, no per-frame GRIB fetch
+                meta.append(m_meta)
+                continue
             members = _members_for(source, ensemble_members)
             m_series, m_meta = _load_model(source, bbox, t_start, t_end, members, on_progress, parser=parser)
             series.update(m_series)

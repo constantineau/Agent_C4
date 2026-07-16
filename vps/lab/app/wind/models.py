@@ -309,7 +309,128 @@ class ECMWF_ENS(ECMWF):
         return "enfo", "pf", int(member)
 
 
-MODELS = {m.name: m for m in (GFS(), NAM(), HRRR(), GEFS(), ECMWF(), ECMWF_ENS())}
+class ICON(ModelSource):
+    """DWD ICON-global, routed via the Open-Meteo forecast API (regular lat-lon regrid).
+
+    DWD's own open data publishes ICON-global only on its native ICOSAHEDRAL mesh — the GRIB
+    embeds no lat/lon (an external grid-definition file is required), so it doesn't fit the
+    cfgrib path the other sources share. Open-Meteo serves the SAME regridded `icon_global`
+    data the venue model-skill backtest measured (tied-top at Mackinac 2026), so routing on it
+    is consistent with how it was scored. Opt-in for A/B — deliberately NOT in DEFAULT_MODELS.
+
+    This is the first API-grid source: instead of `_url`/`fetch` per frame it implements
+    `load_series` (the windfield loader's API-source seam) — one batched multi-point call
+    covering the whole bbox × window, reshaped into regular-grid GribFrames.
+    """
+    name = "icon"
+    cycles = (0, 6, 12, 18)
+    lag_h = 4.0
+    horizon_h = 180
+    fhr_step = 3
+    priority = 1.15               # venue backtest: tied-top with HRRR/ECMWF at Mackinac
+
+    GRID_STEP = 0.25              # ≈ the 13 km icon-global cell — honest, no invented resolution
+    CHUNK = 90                    # locations per API call (URL length + courtesy)
+    MAX_FRAMES = 64               # mirrors the loader's per-member frame cap
+    API = os.environ.get("ICON_OM_URL", "https://api.open-meteo.com/v1/forecast")
+    TIMEOUT = float(os.environ.get("ICON_OM_TIMEOUT", "45"))
+
+    def _grid(self, bbox):
+        n, s, w, e = bbox
+        lats = [round(s + i * self.GRID_STEP, 4) for i in range(int((n - s) / self.GRID_STEP) + 2)]
+        lons = [round(w + i * self.GRID_STEP, 4) for i in range(int((e - w) / self.GRID_STEP) + 2)]
+        return lats, lons
+
+    def _fetch_points(self, points, t_start, t_end):
+        """One batched Open-Meteo call for `points` [(lat,lon)…] → list of per-point hourly dicts."""
+        import json as _json
+        import urllib.request
+        iso = lambda t: dt.datetime.fromtimestamp(t, dt.timezone.utc).strftime("%Y-%m-%dT%H:00")
+        qs = urllib.parse.urlencode({
+            "latitude": ",".join(str(p[0]) for p in points),
+            "longitude": ",".join(str(p[1]) for p in points),
+            "hourly": "wind_speed_10m,wind_direction_10m",
+            "models": "icon_global", "wind_speed_unit": "ms",
+            "timeformat": "unixtime", "timezone": "UTC",
+            "start_hour": iso(t_start), "end_hour": iso(t_end),
+        })
+        # cache by (points, window, current UTC hour) — re-runs within the hour are free and a new
+        # hour naturally picks up the next Open-Meteo refresh
+        key = hashlib.md5((qs + _utcnow().strftime("%Y%m%d%H")).encode()).hexdigest()[:16]
+        cpath = os.path.join(CACHE, self.name, f"om_{key}.json")
+        if os.path.exists(cpath) and os.path.getsize(cpath) > 100:
+            with open(cpath) as f:
+                return _json.load(f)
+        req = urllib.request.Request(self.API + "?" + qs,
+                                     headers={"User-Agent": "Agent_C4-C4PerformanceLab/1.0"})
+        with urllib.request.urlopen(req, timeout=self.TIMEOUT) as r:
+            data = _json.loads(r.read().decode())
+        if isinstance(data, dict):                     # single-location responses aren't wrapped
+            data = [data]
+        os.makedirs(os.path.dirname(cpath), exist_ok=True)
+        with open(cpath, "w") as f:
+            _json.dump(data, f)
+        return data
+
+    def load_series(self, bbox, t_start, t_end, on_progress=None):
+        """Whole-series ingest: bbox grid × [t_start, t_end] → {(icon, det): [GribFrame]}, meta."""
+        import math as _math
+
+        import numpy as np
+
+        from . import grib as g
+        lats, lons = self._grid(bbox)
+        points = [(la, lo) for la in lats for lo in lons]
+        pad = 3 * 3600
+        try:
+            per_point = []
+            for i in range(0, len(points), self.CHUNK):
+                per_point.extend(self._fetch_points(points[i:i + self.CHUNK], t_start - pad, t_end + pad))
+            if len(per_point) != len(points):
+                raise OSError(f"expected {len(points)} points, got {len(per_point)}")
+            times = (per_point[0].get("hourly") or {}).get("time") or []
+            # 3-hourly sampling (matches the GRIB sources' fhr grid), capped like the loader
+            keep = [k for k, t in enumerate(times) if t % (self.fhr_step * 3600) == 0][:self.MAX_FRAMES]
+            frames = []
+            la_arr = np.asarray(lats, dtype="float64")
+            lo_arr = np.asarray(lons, dtype="float64")
+            for k in keep:
+                u = np.full((len(lats), len(lons)), np.nan)
+                v = np.full((len(lats), len(lons)), np.nan)
+                for idx, pp in enumerate(per_point):
+                    hh = pp.get("hourly") or {}
+                    spd = (hh.get("wind_speed_10m") or [])
+                    drn = (hh.get("wind_direction_10m") or [])
+                    if k >= len(spd) or spd[k] is None or k >= len(drn) or drn[k] is None:
+                        continue
+                    r = _math.radians(float(drn[k]))                  # direction FROM
+                    u[idx // len(lons), idx % len(lons)] = -float(spd[k]) * _math.sin(r)
+                    v[idx // len(lons), idx % len(lons)] = -float(spd[k]) * _math.cos(r)
+                if np.isnan(u).all():
+                    continue
+                # the odd null point (API gap) must not poison the bilinear sample — fill with the
+                # frame mean rather than let NaN propagate into the blend
+                u = np.where(np.isnan(u), np.nanmean(u), u)
+                v = np.where(np.isnan(v), np.nanmean(v), v)
+                frames.append(g.GribFrame(self.name, "det", float(times[k]), la_arr, lo_arr, u, v, True))
+            frames.sort(key=lambda fr: fr.valid_time)
+            series = {(self.name, "det"): frames} if frames else {}
+            meta = {"model": self.name, "cycle": "open-meteo icon_global (latest run)",
+                    "members": 1, "frames": len(frames), "expected_frames": len(keep),
+                    "cycle_fallbacks": 0, "priority": self.priority, "kind": self.kind}
+            if on_progress:
+                on_progress(f"{self.name}: {len(frames)}/{len(keep)} frames via Open-Meteo "
+                            f"({len(points)} grid points @ {self.GRID_STEP}°)")
+            return series, meta
+        except Exception as exc:  # noqa: BLE001 — best-effort like every other source
+            if on_progress:
+                on_progress(f"{self.name}: unavailable ({type(exc).__name__}) — skipped")
+            return {}, {"model": self.name, "cycle": "open-meteo icon_global", "members": 1,
+                        "frames": 0, "expected_frames": 0, "cycle_fallbacks": 0,
+                        "priority": self.priority, "kind": self.kind}
+
+
+MODELS = {m.name: m for m in (GFS(), NAM(), HRRR(), GEFS(), ECMWF(), ECMWF_ENS(), ICON())}
 # Default blend: the fast, reliable deterministic models (model spread = confidence). Ensembles
 # (gefs, ecmwf-ens) are opt-in via the request because they multiply the download count.
 DEFAULT_MODELS = ("gfs", "nam", "hrrr")

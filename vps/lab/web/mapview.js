@@ -27,7 +27,7 @@ const MapView = (function () {
 
   // a stable colour per weather model for the per-model candidate-route fan (PR-4)
   const MODEL_COLORS = { gfs: "#1f77b4", nam: "#2ca02c", hrrr: "#d62728", gefs: "#9467bd",
-    ecmwf: "#ff7f0e", "ecmwf-ens": "#8c564b" };
+    ecmwf: "#ff7f0e", "ecmwf-ens": "#8c564b", icon: "#e377c2" };
   function modelColor(m) { return MODEL_COLORS[m] || "#7a7a7a"; }
 
   // ---- a generic canvas overlay: positions a full-map canvas + calls draw(ctx) on move/zoom ----
