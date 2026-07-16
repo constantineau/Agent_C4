@@ -324,6 +324,20 @@ const MapView = (function () {
     items.push(L.polyline(R.path.map((p) => [p.lat, p.lon]),
       { color: "#111", weight: 3, opacity: 0.9 }).bindTooltip("Optimized route", { sticky: true }));
 
+    // sail-change chips ON the track — the 2g sail_plan carries the real peel points ({sail,lat,lon,t});
+    // the per-leg fallback form has no positions and simply draws nothing here.
+    const sp = (R.sail_plan || []).filter((s) => s.lat != null && s.lon != null);
+    sp.forEach((s, i) => {
+      const when = s.t != null ? " @ " + fmtTime(s.t) : "";
+      const label = i === 0 ? "Start under the " + s.sail + when
+        : "Peel " + sp[i - 1].sail + " → " + s.sail + when;
+      items.push(L.marker([s.lat, s.lon], {
+        icon: L.divIcon({ className: "mv-sailchip-wrap",
+          html: `<span class="sail sail-${s.sail} mv-sailchip">${s.sail}</span>`,
+          iconSize: null, iconAnchor: [-6, 18] }),
+      }).bindTooltip(label, { sticky: true }));
+    });
+
     // mark markers at their REAL positions (start green, finish gold, marks blue)
     const list = marks || [{ name: "Start", lat: R.path[0].lat, lon: R.path[0].lon }];
     list.forEach((m, i) => {
@@ -344,15 +358,29 @@ const MapView = (function () {
     return best;
   }
 
+  // the sail the route is carrying at epoch t (last sail_plan change at/before t) + the
+  // active leg's reef — drives the live chip next to the scrubber while the track plays
+  function sailAt(t) {
+    if (!R || t == null) return null;
+    let sail = null;
+    for (const s of R.sail_plan || []) { if (s.t != null && s.t <= t + 1) sail = s.sail; }
+    if (!sail) return null;
+    let reef = null;
+    for (const l of R.legs || []) { if (l.eta_epoch != null && t <= l.eta_epoch) { reef = l.reef || null; break; } }
+    return { sail, reef };
+  }
+
   function updateBoatMarker() {
     if (boatMarker) { map.removeLayer(boatMarker); boatMarker = null; }
     if (!R || !R.wind_grid) return;
     const t = (R.wind_grid.times || [])[frameIdx];
     const p = nearestPathByT(t);
     if (!p) return;
+    const sa = sailAt(t);
     boatMarker = L.circleMarker([p.lat, p.lon],
       { radius: 7, color: "#fff", weight: 2, fillColor: "#111", fillOpacity: 1 })
-      .bindTooltip("boat @ " + fmtTime(t), { permanent: false }).addTo(map);
+      .bindTooltip("boat @ " + fmtTime(t) + (sa ? " · under the " + sa.sail + (sa.reef ? " +" + sa.reef : "") : ""),
+        { permanent: false }).addTo(map);
   }
 
   function fmtTime(epoch) {
@@ -378,7 +406,10 @@ const MapView = (function () {
     const scrub = hasFrames ? `<div class="cc-grp cc-scrub">
         <button id="mvPlay" class="mv-play" title="Play / pause the forecast animation">▶</button>
         <input type="range" id="mvRange" min="0" max="${R.wind_grid.times.length - 1}" value="${frameIdx}" step="1">
-        <span id="mvTime">${frameLabel(frameIdx)}</span></div>` : "";
+        <span id="mvTime">${frameLabel(frameIdx)}</span>
+        ${(() => { const sa = sailAt(R.wind_grid.times[frameIdx]);
+          return `<span id="mvSail" title="The sail the route carries at the selected time (+ reef)"
+            class="${sa ? `sail sail-${sa.sail} mv-sailchip` : ""}">${sa ? sa.sail + (sa.reef ? " +" + sa.reef : "") : ""}</span>`; })()}</div>` : "";
 
     const windSel = hasWind ? `<label class="mv-windmode">Wind <select data-windmode>
         <option value="arrows"${windMode === "arrows" ? " selected" : ""}>arrows</option>
@@ -450,6 +481,12 @@ const MapView = (function () {
     frameIdx = i;
     const lab = document.getElementById("mvTime");
     if (lab && R.wind_grid) lab.textContent = frameLabel(i);
+    const sc = document.getElementById("mvSail");    // live sail chip rides the scrubber
+    if (sc) {
+      const sa = sailAt(((R.wind_grid || {}).times || [])[i]);
+      sc.className = sa ? `sail sail-${sa.sail} mv-sailchip` : "";
+      sc.textContent = sa ? sa.sail + (sa.reef ? " +" + sa.reef : "") : "";
+    }
     const rng = document.getElementById("mvRange");      // keep the thumb in sync during auto-play
     if (rng && +rng.value !== i) rng.value = i;
     windLayer.redraw(); currentLayer.redraw(); waveLayer.redraw(); updateBoatMarker();
