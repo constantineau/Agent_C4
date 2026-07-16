@@ -649,6 +649,23 @@ async def polars_grid():
     return {"tws_buckets": tws, "twa_buckets": twa, "grid": grid, "n_points": len(rows)}
 
 
+def _playbook_params(body):
+    """Shared race/course/start/model resolution for the Lab-2b synthesize + freeze routes."""
+    body = body or {}
+    rid = body.get("race_id")
+    d = store.get_race(rid) if rid else None
+    if not d:
+        return None, None, None, None, None
+    course_id = body.get("course_id")
+    start_epoch = float(body.get("start_epoch") or datetime.datetime.now(
+        datetime.timezone.utc).timestamp())
+    from .wind.models import DEFAULT_MODELS, MODELS
+    models_req = body.get("models") or list(DEFAULT_MODELS)
+    model_names = [m for m in models_req if m in MODELS] or list(DEFAULT_MODELS)
+    ens = int(body.get("ensemble_members") or 0)
+    return d, course_id, start_epoch, model_names, ens
+
+
 @app.post("/api/playbook/synthesize")
 async def playbook_synthesize(body: dict):
     """Lab-2b: the 2a fan-out → Opus synthesis (per-variant rationale/tradeoffs/what-flips-it +
