@@ -336,6 +336,19 @@ class OnboardSource:
         """Replace the 'practice' route with these [(seq, name, lat, lon)] marks."""
         self.save_course("practice", marks)
 
+    def save_active_route(self, route):
+        """Persist the navigator's active route name (kv 'active_route') so an engine restart
+        resumes the loaded course instead of silently falling back to 'default'."""
+        self._engine.execute(
+            "INSERT INTO kv (key, value) VALUES ('active_route', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (route,))
+        self._engine.commit()
+
+    def get_active_route(self):
+        """The persisted active route name, or None if never set."""
+        row = self._engine.execute("SELECT value FROM kv WHERE key = 'active_route'").fetchone()
+        return row["value"] if row else None
+
     def save_fleet(self, blob):
         """Persist the loaded fleet homework (roster + scoring + own rating) as a JSON blob in the
         engine SQLite `kv` store (key 'race_fleet'). Replaces any prior roster."""

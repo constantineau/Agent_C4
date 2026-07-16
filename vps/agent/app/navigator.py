@@ -18,16 +18,38 @@ ROUND_NM = 0.06            # within this of a mark = rounded; advance to the nex
 LAYLINE_TOL_DEG = 4.0      # within this of a layline bearing = "on the layline"
 
 # Active course, shared in-process by the web endpoints and the agent tool so "what's next"
-# in chat matches what's on the iPad plot. Updated when a course is loaded/generated.
+# in chat matches what's on the iPad plot. Updated when a course is loaded/generated, and
+# persisted through the datasource kv (where the store offers it) — every deploy rebuilds the
+# engine container, and without the restore a restart silently dropped back to 'default' with
+# no course (navigator/tactics/checklist-location dark until someone reloaded the homework).
 _active = "default"
+_restored = False
 
 
 def set_active(route):
-    global _active
+    global _active, _restored
     _active = route or "default"
+    _restored = True
+    try:
+        ds = datasource.active()
+        if hasattr(ds, "save_active_route"):
+            ds.save_active_route(_active)
+    except Exception:
+        pass
 
 
 def active_route():
+    global _active, _restored
+    if not _restored:
+        _restored = True
+        try:
+            ds = datasource.active()
+            if hasattr(ds, "get_active_route"):
+                saved = ds.get_active_route()
+                if saved:
+                    _active = saved
+        except Exception:
+            pass
     return _active
 
 
@@ -130,7 +152,7 @@ def _marks(route):
 
 def get_course(route: str = None):
     """The course marks + per-leg bearing/distance (for the plot). Sets the active route."""
-    route = route or _active
+    route = route or active_route()
     set_active(route)
     marks = _marks(route)
     legs = []
@@ -143,7 +165,7 @@ def get_course(route: str = None):
 
 def get_navigator(route: str = None):
     """Next mark, ETA, leg type, and laylines from live position + wind."""
-    route = route or _active
+    route = route or active_route()
     marks = _marks(route)
     if not marks:
         return {"available": False, "note": f"no course loaded for route '{route}'"}
