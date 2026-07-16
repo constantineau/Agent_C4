@@ -5,15 +5,21 @@
    both accessible. */
 
 /* ---------- themes ---------- */
+/* Day = white-on-black-text for direct-sunlight readability on deck (crew call 2026-07-16;
+   the old dark-navy day palette washed out in daylight). */
 :root, :root[data-theme="day"] {
-  --bg:#0b1017; --panel:#141b25; --panel2:#1b2533; --line:#27384a;
-  --text:#e7edf4; --muted:#8499ad; --accent:#43a7ff;
-  /* status hues — Okabe-Ito, distinguishable across virtually all CVD types.
+  --bg:#ffffff; --panel:#f3f5f7; --panel2:#e8ecf0; --line:#c7d1da;
+  --text:#0c1116; --muted:#4b5c6b; --accent:#0b5bd3;
+  /* status hues — Okabe-Ito family, distinguishable across virtually all CVD types,
+     darkened to hold contrast on white (incl. as chip fills under white text).
      blue=ok, amber=watch, vermillion=act, grey=stale/no-data. */
-  --ok:#3a93d6; --watch:#e69f00; --act:#e2562a; --na:#5d6b7a;
-  --ok-fill:rgba(58,147,214,.16); --watch-fill:rgba(230,159,0,.20); --act-fill:rgba(226,86,42,.26);
-  --shadow:0 2px 10px rgba(0,0,0,.35);
+  --ok:#1f6fae; --watch:#a86f00; --act:#c04018; --na:#8794a1;
+  --ok-fill:rgba(31,111,174,.12); --watch-fill:rgba(168,111,0,.14); --act-fill:rgba(192,64,24,.16);
+  --shadow:0 2px 10px rgba(25,45,65,.16);
 }
+/* status chips paint text in --bg (white in day) over the status hue — fine; but the
+   ask-button's dark-on-light-blue text predates the saturated day accent */
+:root[data-theme="day"] .det-send { color:#fff; }
 /* True night mode: red-on-black for night vision. Red CANNOT mean "act" here, so it doesn't —
    shape + label + luminance + bar carry status; ACT goes near-white (bright = attention),
    WATCH amber. Hue is just a bonus channel, so dropping red costs nothing. */
