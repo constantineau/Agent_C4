@@ -27,6 +27,7 @@ import datetime as dt
 import math
 import os
 import time
+import concurrent.futures as cf
 import urllib.request
 
 from . import deviation
@@ -35,7 +36,9 @@ from . import navigator
 _RT_URL = "https://www.ndbc.noaa.gov/data/realtime2/{station}.txt"
 _METAR_URL = "https://aviationweather.gov/api/data/metar?format=json&hours=3&ids={ids}"
 REFRESH_S = float(os.environ.get("BUOY_REFRESH_S", "600"))       # NDBC obs cadence ~10 min
-MAX_NM = float(os.environ.get("BUOY_MAX_NM", "60"))              # ignore stations beyond this
+MAX_NM = float(os.environ.get("BUOY_MAX_NM", "300"))             # course-scale: the station list is
+                                                                 # curated per venue/bundle, so the
+                                                                 # radius only trims true outliers
 UPCOURSE_CONE = float(os.environ.get("BUOY_UPCOURSE_CONE_DEG", "75"))
 STALE_MIN = float(os.environ.get("BUOY_STALE_MIN", "90"))        # obs older than this = stale
 FETCH_TIMEOUT = float(os.environ.get("BUOY_FETCH_TIMEOUT", "10"))
@@ -227,6 +230,12 @@ def get_buoys(route=None):
     now = time.time()
     sts = [st for st in stations() if _hav_nm(lat, lon, st["lat"], st["lon"]) <= MAX_NM]
     metar_obs = _obs_metars([st["id"] for st in sts if st.get("kind") == "metar"])
+    # warm the per-station cache concurrently — at course-scale radius the full bundle list is in
+    # play (~20 stations) and serial cold fetches would blow the dashboard's request timeout
+    buoy_ids = [st["id"] for st in sts if st.get("kind") != "metar"]
+    if len(buoy_ids) > 1:
+        with cf.ThreadPoolExecutor(max_workers=min(8, len(buoy_ids))) as pool:
+            list(pool.map(_obs, buoy_ids))
     rows, upcourse, upcourse_shore = [], None, None
     for st in sts:
         rng = _hav_nm(lat, lon, st["lat"], st["lon"])
