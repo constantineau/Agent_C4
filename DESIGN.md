@@ -222,7 +222,7 @@ inside guard, stale telemetry, shoaling, helm `rotate_now`), and observed-vs-ORC
 (the boat already has instruments); the big numbers live behind an all-channels submenu.
 Vanilla JS over nginx (`/api/*` + `/ws` proxy), no build step, offline-friendly. Elements:
 **automatic day/night** from GPS-derived sunrise/sunset (manual override; night = red-on-black);
-a **sail-range dial** (point-of-sail gauge with the J1/A2/A3/S2 zones, crossover/peel markers,
+a **sail-range dial** (point-of-sail gauge with the J1/A3/S1 zones, crossover/peel markers,
 live TWA needle, crew "what's hoisted" selector flagging wrong sail); a **schematic course
 plot** (boat/marks/legs/laylines/wind/track, north-up/course-up, no chart tiles); a
 **Navigator** panel (next mark, ETA, leg type, layline call); a **tactical** read (lifted/headed,

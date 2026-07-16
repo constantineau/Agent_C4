@@ -128,7 +128,7 @@ PEEL_COST_S = float(os.environ.get("ROUTE_PEEL_COST_S", "90"))      # clock a sa
 PEEL_PRUNE_S = float(os.environ.get("ROUTE_PEEL_PRUNE_S", "180"))
 # Hysteresis: hold a sub-optimal sail until it's THIS fraction off the optimal sail's speed, then peel.
 # A dead-band across the crossover so the route doesn't thrash on noise / a wind clocking past a boundary
-# (you peel A2→A3 only when A3 is materially faster, not for the first 0.1 kn). > this → peel.
+# (you peel A3→S1 only when the S1 is materially faster, not for the first 0.1 kn). > this → peel.
 PEEL_HOLD_TOL = float(os.environ.get("ROUTE_PEEL_HOLD_TOL", "0.06"))
 SAIL_DOMAIN_MARGIN = float(os.environ.get("ROUTE_SAIL_DOMAIN_MARGIN", "5"))  # deg slack on a sail's rated TWA domain
 

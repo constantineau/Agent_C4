@@ -280,7 +280,7 @@ def sails_state():
 @app.post("/sails/state")
 def sails_state_set(body: dict):
     """Update the crew sail state: {flying?: ['C0','J2'], reef?: 'R1'|'', hoisted?: 'A3'|'',
-    out_of_service?: ['A2', ...]}. The configuration is a SET (the boat flies combinations —
+    out_of_service?: ['S1', ...]}. The configuration is a SET (the boat flies combinations —
     C0 alone, C0+J2, kite+staysail); `hoisted` is the legacy single-sail setter. Every change
     is also APPENDED to the onboard sail log (timestamped history for the race log / debrief).
     The out-of-service list is the gear-loss plays' arming signal — there is no instrument for

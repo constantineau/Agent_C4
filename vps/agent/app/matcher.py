@@ -86,7 +86,7 @@ def clear_state():
 # ---------------------------------------------------------------------------- crew sail state
 
 def get_sail_state():
-    """The crew-set sail state: {'hoisted': 'A3'|None, 'out_of_service': ['A2', ...], 'ts': epoch}.
+    """The crew-set sail state: {'hoisted': 'A3'|None, 'out_of_service': ['S1', ...], 'ts': epoch}.
     Persisted in the engine kv (onboard) / app_state (cloud) so the matcher + copilot read one
     truth. Empty dict when never set."""
     try:
@@ -96,7 +96,7 @@ def get_sail_state():
 
 
 # ordered by "which sail is driving" — the legacy single-sail mirror picks the first flying
-_PRIMARY_ORDER = ("A2", "A3", "S2", "C0", "J1", "J2", "J3", "SS")
+_PRIMARY_ORDER = ("A3", "S1", "C0", "J1", "J2", "J3", "SS")
 
 
 def _primary(flying):
@@ -109,7 +109,7 @@ def _primary(flying):
 def set_sail_state(hoisted=None, flying=None, reef=None, out_of_service=None):
     """Update the crew sail state. The configuration is a SET — the boat flies combinations
     (C0 alone · C0+J2 · kite+staysail …): flying=['C0','J2'] replaces the set; reef='R1' (or ''
-    to shake it out); out_of_service=['A2'] replaces the gear-out list (a sail present = crew
+    to shake it out); out_of_service=['S1'] replaces the gear-out list (a sail present = crew
     declared it unusable — the gear-loss plays' arming signal). hoisted='A3' is the legacy
     single-sail setter (→ flying=['A3']); the stored `hoisted` mirrors the primary driver so
     older consumers keep working. Returns the stored state."""

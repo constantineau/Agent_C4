@@ -1,6 +1,6 @@
 """Boat sail-config overlays — Code 0 (light-air reacher) + mainsail reef points.
 
-Neither is in the ORC cert (it rates J1/A2/A3/S2 only), so — like the J2/J3 change-downs — they are
+Neither is in the ORC cert (it rates only J1/A3/S1 of the carried sails), so — like the J2/J3 change-downs — they are
 crew-band LABEL overlays: routing SPEED stays the rated envelope; the bands set the sail CALL.
 Locked here:
   - optimal_sail: the C0 takes the jib slot inside its {tws_max, twa_min, twa_max} band, nowhere
@@ -48,7 +48,7 @@ print("1) optimal_sail — C0 takes the jib slot in-band only")
 check("light reach in-band -> C0", sailplan.optimal_sail(6, 80, JIBS, CFG) == "C0")
 check("same angle, heavier air -> not C0", sailplan.optimal_sail(12, 80, JIBS, CFG) != "C0")
 check("light but too tight (40 deg) -> the jib", sailplan.optimal_sail(6, 40, JIBS, CFG) == "J1")
-check("light but deep (150 deg) -> a kite", sailplan.optimal_sail(6, 150, JIBS, CFG) in ("A2", "A3", "S2"))
+check("light but deep (150 deg) -> a kite", sailplan.optimal_sail(6, 150, JIBS, CFG) in ("A3", "S1"))
 check("disabled band is inert",
       sailplan.optimal_sail(6, 80, JIBS, {"code0": {"enabled": False, "tws_max": 9,
                                                     "twa_min": 55, "twa_max": 110}}) == "J1")
@@ -62,8 +62,8 @@ r = sailplan.reef_for(22, "beat", "J3", mr)
 check("22 kn beat -> reef 1 (depower)", r and r["reef"] == "R1" and "depower" in r["why"])
 r = sailplan.reef_for(17, "run", "A3", mr)
 check("17 kn under the A3 -> reef 1 (open the slot)", r and "slot" in r["why"])
-check("17 kn under the S2 -> no reef (below depower threshold)",
-      sailplan.reef_for(17, "run", "S2", mr) is None)
+check("17 kn under the S1 -> no reef (below depower threshold)",
+      sailplan.reef_for(17, "run", "S1", mr) is None)
 check("12 kn -> no reef", sailplan.reef_for(12, "beat", "J1", mr) is None)
 check("no thresholds -> no reef", sailplan.reef_for(30, "beat", "J3", {}) is None)
 
@@ -132,11 +132,11 @@ check("6 kn leg carries no reef", lgt.get("reef") is None)
 
 # ---- 5) plays — C0 crossover + reef guidance -----------------------------------------------------
 print("5) guidance plays — sail the config, alert the team")
-cons = {"legs": [{"sail": "A2", "point_of_sail": "reach", "wind": {"tws": 10.5}}]}
+cons = {"legs": [{"sail": "A3", "point_of_sail": "reach", "wind": {"tws": 10.5}}]}
 plays = SYN._sail_guidance_plays(cons, JIBS, CFG)
 c0p = next((p for p in plays if p["params"].get("change_to") == "C0"), None)
 print(f"     sail plays: {[p['id'] for p in plays]}")
-check("breeze dying under the A2 -> set the Code 0 (an A2->C0 play)", c0p is not None
+check("breeze dying under the A3 -> set the Code 0 (an A3->C0 play)", c0p is not None
       and c0p["params"]["direction"] == "under" and c0p["params"]["tws_threshold"] <= 9.5)
 cons_r = {"legs": [{"sail": "J1", "point_of_sail": "beat", "wind": {"tws": 17.0}},
                    {"sail": "A3", "point_of_sail": "run", "wind": {"tws": 14.0}}]}

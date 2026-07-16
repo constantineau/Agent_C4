@@ -32,7 +32,7 @@ def _check(name, ok):
 # A synthetic snapshot (the shape copilot.gather() returns) that trips several callout types at
 # once — deterministic, so the callout engine can be exercised with NO live engine.
 _SYNTH_SNAPSHOT = {
-    "_route": "_bench", "_hoisted": "A2",
+    "_route": "_bench", "_hoisted": "A3",
     "get_conditions": {"available": True, "tws": 12.0, "twa": 60, "stale": False},
     "get_navigator": {
         "available": True,
@@ -46,8 +46,8 @@ _SYNTH_SNAPSHOT = {
                     "wind": {"persistent": True, "oscillation_deg": 12, "trend": "backing",
                              "shift_deg": -8, "now": 250, "mean_12min": 258},
                     "recommendation": "work the left"},
-    "get_sail_advice": {"available": True, "optimal_sail": "A2", "wrong_sail": False,
-                        "hoisted_sail": "A2"},
+    "get_sail_advice": {"available": True, "optimal_sail": "A3", "wrong_sail": False,
+                        "hoisted_sail": "A3"},
     "get_fatigue": {"available": True, "level": "rotate_now", "index": 82},
 }
 
@@ -452,7 +452,7 @@ def test_strategy_synthesis() -> bool:
         def reoptimize(self, route=None):
             StubEngine.reopt_calls += 1
             return {"available": True, "off_playbook": True, "eta_min": 254, "tacks": 9,
-                    "sail_plan": ["J1", "A3", "S2"], "path": [{"lat": 45.0, "lon": -83.0}] * 500,
+                    "sail_plan": ["J1", "A3", "S1"], "path": [{"lat": 45.0, "lon": -83.0}] * 500,
                     "legs": [{"mark": "Finish"}], "vs_playbook": {"available": True, "max_divergence_nm": 2.4}}
 
     class StubLLM:
@@ -583,10 +583,10 @@ def test_plays_callout() -> bool:
                  and "open the slot" in c["detail"] and "play:reef_r1_a3_slot" in c["grounded_in"]
                  and c["urgency"] == "now")
     c = narrate_mod._plays_callout(plays([("pace_behind_2h_1", "2h behind", "", 63),
-                                          ("gear_loss_a2", "A2 out", "", 276)]))
+                                          ("gear_loss_s1", "S1 out", "", 276)]))
     ok &= _check("multiple armed → one callout, extras counted, ids in the callout id",
                  c and "+1 more" in c["detail"] and "pace_behind_2h_1" in c["id"]
-                 and "gear_loss_a2" in c["id"])
+                 and "gear_loss_s1" in c["id"])
     ok &= _check("nothing armed → quiet",
                  narrate_mod._plays_callout({"available": True, "armed": [], "plays": []}) is None)
     ok &= _check("no v2 bundle → quiet",

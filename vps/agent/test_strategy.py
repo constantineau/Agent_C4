@@ -125,7 +125,7 @@ _ro_calls = {"n": 0}
 def _fake_reopt(route=None):
     _ro_calls["n"] += 1
     return {"available": True, "off_playbook": True, "eta_min": 254, "tacks": 9, "sailed_nm": 46.2,
-            "sail_plan": ["J1", "A3", "S2"], "path": [{"lat": 45.0, "lon": -83.0}] * 500,
+            "sail_plan": ["J1", "A3", "S1"], "path": [{"lat": 45.0, "lon": -83.0}] * 500,
             "legs": [{"mark": "Finish"}], "vs_playbook": {"available": True, "max_divergence_nm": 2.4}}
 strategy.reoptimize_mod.get_reoptimize = _fake_reopt
 r = strategy.get_strategy_signals()

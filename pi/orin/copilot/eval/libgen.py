@@ -63,13 +63,13 @@ _FAMILIES = [
                "Cross-track error past {t0} nm: the split from the frozen route is now a position, "
                "not a wobble."],
          guidance="Decide rejoin-vs-continue deliberately; don't drift into the split."),
-    dict(key="gear-a2-out", category="internal", kind="gear_loss",
-         preds=[("sail_out_of_service", "==", "A2", "")],
-         name="A2 out of service",
-         narr=["The A2 is out of service — the gear-loss re-run without it applies; downwind legs "
-               "re-planned on the A3/S2 envelope.",
-               "Running without the A2 (flagged out of service): use the no-A2 route and sail plan."],
-         guidance="Switch to the no-A2 plan; expect deeper/hotter angles on the A3."),
+    dict(key="gear-s1-out", category="internal", kind="gear_loss",
+         preds=[("sail_out_of_service", "==", "S1", "")],
+         name="S1 out of service",
+         narr=["The S1 is out of service — the gear-loss re-run without it applies; downwind legs "
+               "re-planned on the J1/A3 envelope.",
+               "Running without the S1 (flagged out of service): use the no-S1 route and sail plan."],
+         guidance="Switch to the no-S1 plan; expect hotter angles on the A3."),
     dict(key="changedown", category="internal", kind="sail_guidance",
          preds=[("tws_kn", ">=", (18, 24), " kn"), ("hoisted_sail", "==", "J1", "")],
          name="Overpowered on the J1",

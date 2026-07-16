@@ -29,7 +29,7 @@ CASES = [
         "name": "building wind (9→12→18)",
         "tiles": [
             {"key": "wind", "name": "TWS Trend", "value": "Now 18 kts; -60 min 12 kts; -120 min 9 kts", "sub": "", "status": "watch"},
-            {"key": "sail", "name": "Sail", "value": "A2", "sub": "in range", "status": "ok"},
+            {"key": "sail", "name": "Sail", "value": "A3", "sub": "in range", "status": "ok"},
             {"key": "vmg", "name": "VMG", "value": "5.1 kts", "sub": "92% of target", "status": "ok"},
         ],
         "trend": "build",
@@ -38,7 +38,7 @@ CASES = [
         "name": "easing wind (17→12→8)",
         "tiles": [
             {"key": "wind", "name": "TWS Trend", "value": "Now 8 kts; -60 min 12 kts; -120 min 17 kts", "sub": "", "status": "ok"},
-            {"key": "sail", "name": "Sail", "value": "A2 → A3", "sub": "crossover near", "status": "watch"},
+            {"key": "sail", "name": "Sail", "value": "A3 → S1", "sub": "crossover near", "status": "watch"},
         ],
         "trend": "ease",
     },

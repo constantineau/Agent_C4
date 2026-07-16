@@ -5,8 +5,9 @@ Sail at that TWA) into contiguous sail ZONES per wind speed, then answers: given
 and TWA, which sail is optimal, where the boat sits within that sail's TWA band, and how
 far to the next crossover/peel. Feeds the iPad sail-range dial and the get_sail_advice tool.
 
-The inventory is jib (J1) upwind → A2 (tight reach) → A3 (broad reach) → S2 (run); the
-crossover TWAs shift with TWS, so zones are recomputed from the nearest TWS bucket.
+The inventory is jib (J1) upwind → A3 (reach) → S1 (run); the crossover TWAs shift with
+TWS, so zones are recomputed from the nearest TWS bucket. (The cert also rates an A2 the
+boat does NOT carry — build_speed_guide.py excludes it from every generated artifact.)
 """
 import json
 import os
@@ -24,12 +25,12 @@ _XOVER_CANDS = [
 ]
 
 # Friendly order + colors (hex) used by the dial, keyed by sail family prefix.
-SAIL_ORDER = ["J1", "A2", "A3", "S2"]
-SAIL_LABEL = {"J1": "Jib (J1)", "A2": "Asym A2", "A3": "Asym A3", "S2": "Kite (S2)"}
+SAIL_ORDER = ["J1", "A3", "S1"]
+SAIL_LABEL = {"J1": "Jib (J1)", "A3": "Asym A3", "S1": "Kite (S1)"}
 # the CREW inventory is richer than the cert: jib change-downs, the Code 0 and the staysail are
 # crew-config sails (rated bands come from the frozen boat model, not the cert)
-CREW_SAILS = ("J1", "J2", "J3", "C0", "SS", "A2", "A3", "S2")
-_CERT_EQUIV = {"J1": "J1", "J2": "J1", "J3": "J1", "A2": "A2", "A3": "A3", "S2": "S2"}
+CREW_SAILS = ("J1", "J2", "J3", "C0", "SS", "A3", "S1")
+_CERT_EQUIV = {"J1": "J1", "J2": "J1", "J3": "J1", "A3": "A3", "S1": "S1"}
 
 
 def _num(s):
@@ -202,7 +203,7 @@ def _fit_and_change(crew, a_twa, tws, optimal, wrong, tossup_ok, boat_model):
 
 def get_sail_advice(tws: float = None, twa: float = None, hoisted: str = None, boat_model: dict = None):
     """Sail-range advice for the dial + agent. tws/twa are live values; hoisted is the
-    crew-reported sail (J1/A2/A3/S2) so we can flag flying the wrong one."""
+    crew-reported sail (J1/A3/S1) so we can flag flying the wrong one."""
     if not _SECTIONS:
         return {"available": False, "note": "speed guide not loaded"}
     if tws is None or twa is None:

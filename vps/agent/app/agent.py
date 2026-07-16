@@ -54,7 +54,7 @@ numerically; the guide gives you the full curve and the surrounding context. If 
 (TWS/TWA) is unavailable, say so — without it you cannot place the boat on the polar.
 
 SAIL SELECTION — each polar row lists the optimal Sail, and each TWS has a Sail plan
-showing which sail to fly across the wind range (J1 jib, A2/A3 asymmetrics, S2 symmetric
+showing which sail to fly across the wind range (J1 jib, A3 asymmetric, S1 symmetric
 kite). Use it to recommend the right sail and to call CROSSOVERS / PEELS: when the optimal
 sail changes as the boat bears away/heads up or the breeze builds/drops, say so explicitly
 (e.g. "past 95° TWA the A3 is faster than the jib — time to hoist"). Note that sail changes

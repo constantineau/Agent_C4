@@ -947,7 +947,7 @@ function renderBoatModel() {
 }
 
 // Sail palette (mirrors the .sail-bg-* CSS) — used to hatch the toss-up overlap bands in two colors.
-const SAIL_COLORS = { J1: "#36b3ff", J2: "#66a9e0", J3: "#9b8cff", C0: "#4dd6c9", A2: "#7ee0a8", A3: "#f5c451", S2: "#ff8042" };
+const SAIL_COLORS = { J1: "#36b3ff", J2: "#66a9e0", J3: "#9b8cff", C0: "#4dd6c9", A3: "#f5c451", S1: "#ff8042" };
 const sailColor = (s) => SAIL_COLORS[s] || "#8899a6";
 function hexRgba(hex, a) {
   const h = String(hex).replace("#", "");
@@ -968,7 +968,7 @@ function boatModelCard(m) {
     }).join("");
     // toss-up overlays: two sails within ~2% of target → a translucent two-colour diagonal hatch drawn
     // over the solid zones (the zones still show through the gaps), so a sail the winner-take-all bands
-    // erased on a near-tie (e.g. A2 at 14–16 kts) reappears in its own colour.
+    // erased on a near-tie reappears in its own colour.
     const overlaps = ((m.overlaps || {})[String(t)] || []).map((o) => {
       const left = (o.twa_min / 180 * 100).toFixed(1);
       const w = ((o.twa_max - o.twa_min) / 180 * 100).toFixed(1);
@@ -986,7 +986,7 @@ function boatModelCard(m) {
     ${renderJibCrossovers(m)}
     ${renderSailConfig(m)}
     <h4>Sail crossovers (optimal sail by TWA, per TWS)</h4>
-    <div class="muted" style="font-size:11px;margin-bottom:4px">From the ORC cert (one headsail = the jib slot; specialised to J1/J2/J3 by the wind bands above). <b>Hatched ≈</b> = a toss-up: two sails within ~1.5% of target speed, where the winner-take-all bands can't show a tie — carry either (the erased sail reappears in its own colour, e.g. A2 on the reach at 14–16 kts).</div>
+    <div class="muted" style="font-size:11px;margin-bottom:4px">From the ORC cert (one headsail = the jib slot; specialised to J1/J2/J3 by the wind bands above). <b>Hatched ≈</b> = a toss-up: two sails within ~1.5% of target speed, where the winner-take-all bands can't show a tie — carry either (the erased sail reappears in its own colour).</div>
     <div class="xo-axis"><span>0°</span><span>45°</span><span>90°</span><span>135°</span><span>180°</span></div>
     <div class="xo">${bands}</div>
     ${renderPolarGrid()}

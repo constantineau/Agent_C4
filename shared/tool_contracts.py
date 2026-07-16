@@ -55,7 +55,7 @@ AGENT_TOOLS = [
         "description": (
             "Sail-range advice from the SR33 Speed Guide: the optimal sail for the current "
             "TWS/TWA, where the boat sits within that sail's TWA band, and the next crossover/peel. "
-            "Pass the crew's currently hoisted sail (J1/A2/A3/S2) to flag flying the wrong one. "
+            "Pass the crew's currently hoisted sail (J1/A3/S1) to flag flying the wrong one. "
             "tws/twa default to the latest live values. Use when asked what sail to fly, whether "
             "to peel, or how close a crossover is."
         ),
@@ -64,7 +64,7 @@ AGENT_TOOLS = [
             "properties": {
                 "tws": {"type": "number", "description": "true wind speed (kn); omit to use live"},
                 "twa": {"type": "number", "description": "true wind angle (deg); omit to use live"},
-                "hoisted": {"type": "string", "description": "currently hoisted sail: J1/A2/A3/S2"},
+                "hoisted": {"type": "string", "description": "currently hoisted sail: J1/A3/S1"},
             },
             "required": [],
         },

@@ -271,7 +271,7 @@ Frontier-model write-back capabilities (all between-races):
   aggregate across many sails and *emit an updated polar table* (`target_stw`/`target_vmg`) replacing
   the generic ORC cert. Using your own measured polars in-race is fine — own performance reference,
   frozen pre-start.
-- **Crossover refinement** — refine the J1/A2/A3/S2 sail-change points from observed performance →
+- **Crossover refinement** — refine the J1/A3/S1 sail-change points from observed performance →
   updated `sr33_speed_guide.md`. **Prerequisite (data gap):** the hoisted sail is currently only in
   browser `localStorage` (`sr33.hoisted`) and passed transiently to `/sail`; it is **not persisted to
   the archive**. Crossover-learning needs a timestamped hoisted-sail log — add that capture. (Polar +

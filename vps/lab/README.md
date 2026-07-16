@@ -226,7 +226,7 @@ route's speed is already sail-optimal) but didn't say WHICH sail. 2b attaches th
 sail model reviewable + part of the frozen homework:
 
 - **`vps/db/seed/sr33_crossovers.json`** — the per-TWS sail crossover bands (optimal sail by TWA: J1
-  upwind → A2/A3 reaching → S2 running), precomputed from the ORC cert by
+  upwind → A3 reaching → S1 running), precomputed from the ORC cert by
   `vps/agent/knowledge/build_speed_guide.py::write_crossovers` (reuses the existing `optimal_sail()`).
   Regenerate with the guide/seed after a cert update.
 - **`app/sailplan.py`** loads it: `optimal_sail(tws,twa)` (clamped so an upwind beat's sub-close-hauled
@@ -263,7 +263,7 @@ reef 1 opens the slot between the kite and the main)}; reefs DECORATE the call (
 (Learnings + Gameplan) → `POST /api/boats/sail-config`; the crossover chart carves C0 zones out of
 the light rows (`sailplan.crossovers_specialized`); frozen into the bundle `boat_model` → the
 copilot digest states the band + reef reminders; the sail-guidance play scan is config-aware (an
-A2→C0 "breeze dies" play) + `_reef_guidance_plays` pre-authors the depower + A3-slot calls
+kite→C0 "breeze dies" play) + `_reef_guidance_plays` pre-authors the depower + A3-slot calls
 (predicates via INTERNAL_DETECT sail_guidance; the slot play requires hoisted A3). Also fixed in
 passing: the play scan's `_POS_TWA` used upwind/reaching/downwind but legs say beat/reach/run —
 every scan silently used TWA 100 (now mapped correctly). Tests `test_sail_config.py`.
@@ -352,7 +352,7 @@ the real cove_island Duck/BoisBlanc barriers (legal open, illegal blocked). Tuna
 zero cost, and the sail plan was a post-hoc per-leg guess. 2g makes the sail a first-class part of the
 isochrone search:
 - **Per-sail polars.** `build_speed_guide.py` now also emits `vps/db/seed/sr33_sail_polars.json` — the
-  speed of EACH inventory sail (J1/A2/A3/S2) across its rated TWA domain, not just the envelope.
+  speed of EACH carried sail (J1/A3/S1 — the cert-rated A2 is not aboard) across its rated TWA domain, not just the envelope.
   `polars.sail_polars()` loads it (env `SAIL_POLARS_FILE`); empty → the optimizer routes on the
   envelope exactly as before.
 - **Sail in the node state + hold-vs-peel.** `route_leg` carries the current sail; per step `sail_step`
@@ -372,7 +372,7 @@ Env-flagged `ROUTE_SAIL_AWARE` (default ON) for A/B; off ⇒ envelope routing, g
 Verified `test_routing_2g.py`: per-sail load + domain gate (kite infeasible upwind), carrying the wrong
 sail into a leg peels to the right one (jib→kite on a run, kite→jib on a beat), a within-tolerance
 sub-optimal sail is HELD (no thrash), SAIL_AWARE off reproduces the envelope baseline exactly, and
-starting on the optimal sail adds no peel. End-to-end on the real cove_island course: `S2 → J1`, one
+starting on the optimal sail adds no peel. End-to-end on the real cove_island course: `S1 → J1`, one
 peel (the post-hoc labeler's spurious A3 transient correctly not flown).
 
 ### Realized (achievable) speed — helm-skill factor + sea state (routing fidelity 2d-d, phase 1)

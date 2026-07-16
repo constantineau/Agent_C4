@@ -237,7 +237,7 @@
         driven_by: ["get_tactics", "get_drift", "get_deviation"],
         why: "A persistent veering shift now favours the right — against the recommended Left. That's the playbook's branch trigger. Reinforced: the forecast has veered ~28° the same way; you're already working the right side (1.3 nm right)." },
       reoptimize: { available: true, off_playbook: true, eta_min: 254, tacks: 9, sailed_nm: 46.2, avoids_islands: 2, avoids_zones: 1,
-        marks: ["Cove Island", "Finish"], sail_plan: ["J1", "A3", "S2"], vs_playbook: { available: true, max_divergence_nm: 2.4, mean_divergence_nm: 0.9 } },
+        marks: ["Cove Island", "Finish"], sail_plan: ["J1", "A3", "S1"], vs_playbook: { available: true, max_divergence_nm: 2.4, mean_divergence_nm: 0.9 } },
       synthesis: { available: true, mode: "llm", confidence: "med",
         assessment: "The right has genuinely taken over — this outruns the pre-authored branches. Commit right, off the book.",
         concordance: { strength: "strong", lean: "right",
@@ -252,7 +252,7 @@
             why: "breeze running ~2-3 kts over the frozen forecast, not yet sustained" },
         ],
         reoptimize: { available: true, off_playbook: true, eta_min: 254, tacks: 9, sailed_nm: 46.2, avoids_islands: 2, avoids_zones: 1,
-          marks: ["Cove Island", "Finish"], sail_plan: ["J1", "A3", "S2"], vs_playbook: { available: true, max_divergence_nm: 2.4, mean_divergence_nm: 0.9 } } },
+          marks: ["Cove Island", "Finish"], sail_plan: ["J1", "A3", "S1"], vs_playbook: { available: true, max_divergence_nm: 2.4, mean_divergence_nm: 0.9 } } },
     },
   };
 
@@ -887,7 +887,7 @@
   }
   /* the boat's sail inventory for the SAILS bar — cert sails + the crew-config overlays
      (C0/J2/J3/SS aren't in the ORC cert; the boat flies COMBINATIONS, so chips multi-select) */
-  const SAILS_INV = ["J1", "J2", "J3", "C0", "SS", "A2", "A3", "S2"];
+  const SAILS_INV = ["J1", "J2", "J3", "C0", "SS", "A3", "S1"];
   async function fetchSailState() {
     if (App.src !== "live") return;
     const r = await fetchJSON("/sails/state", 8000);

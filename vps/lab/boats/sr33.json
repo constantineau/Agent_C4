@@ -22,9 +22,8 @@
     "J3",
     "C0",
     "SS",
-    "A2",
     "A3",
-    "S2"
+    "S1"
   ],
   "jib_crossovers": [
     {
@@ -51,7 +50,7 @@
     "r1_tws_kn": 20,
     "r1_a3_slot_tws_kn": 16
   },
-  "note": "Reference boat. Draft 7 ft = 2.1336 m (user-supplied). Jib change-downs J1<14 / J2 14-20 / J3>20 kn TWS (user-supplied; the ORC cert rates only the J1, so these are crew thresholds, not from the polar). Code 0 band + reef points are FIRST-CUT defaults \u2014 edit in Learnings. ORC/beam/displacement TBD.",
+  "note": "Reference boat. Draft 7 ft = 2.1336 m (user-supplied). Jib change-downs J1<14 / J2 14-20 / J3>20 kn TWS (user-supplied; the ORC cert rates only the J1, so these are crew thresholds, not from the polar). Code 0 band + reef points are FIRST-CUT defaults \u2014 edit in Learnings. ORC/beam/displacement TBD. Cert-rated A2 is NOT aboard (excluded from all artifacts); the symmetric kite is S1 (cert id S2-A).",
   "provenance": {
     "source": "bundled seed",
     "review_status": "seed"

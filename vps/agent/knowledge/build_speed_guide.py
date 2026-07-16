@@ -2,9 +2,13 @@
 """Distill the ORC certificate export (C4_boatspeed_gospel.md) into clean artifacts.
 
 The raw export (data.orc.org Speed Guide for SR33 "C4", CAN100) contains five sets of
-per-TWS tables: a "Best Performance" envelope plus one per sail in the inventory
+per-TWS tables: a "Best Performance" envelope plus one per sail in the RATED wardrobe
 (Headsail J1-A, Symmetric S2-A, Asymmetric A2-A/A3-A). Each table has columns
 TWA, BTV (target boatspeed), VMG, AWS, AWA, Heel, Reef, Flat.
+
+The rated wardrobe is not the boat's: the A2 is rated but NOT aboard (EXCLUDED — the
+envelope is rebuilt from carried sails so every target is achievable), and the crew calls
+the symmetric kite S1 (SHORTS maps the cert id S2-A to it).
 
 This script emits:
   1. sr33_speed_guide.md  — clean reference loaded into the agent's standing context. Adds,
@@ -27,13 +31,20 @@ SAIL_POLARS = os.path.abspath(os.path.join(HERE, "..", "..", "db", "seed", "sr33
 
 NUM = lambda s: float(s.replace("°", "").strip())
 
+# The cert wardrobe is NOT the boat's: the cert rates an A2 the boat does not carry
+# (excluded everywhere below — the envelope is rebuilt from carried sails so targets stay
+# achievable), and the crew calls the symmetric kite S1 (the cert id stays S2-A).
+EXCLUDED = {"A2-A"}
+CARRIED = ("J1-A", "A3-A", "S2-A")
+
 # Sail id -> crew-friendly label.
 SAIL_NAMES = {
     "J1-A": "Headsail/jib (J1)",
-    "S2-A": "Symmetric kite (S2)",
-    "A2-A": "Asym A2 (76%)",
+    "S2-A": "Symmetric kite (S1)",
     "A3-A": "Asym A3",
 }
+# Sail id -> crew shorthand (the crew's name, not the cert's — S2-A is "S1" aboard).
+SHORTS = {"J1-A": "J1", "A3-A": "A3", "S2-A": "S1"}
 
 
 def parse_groups(text):
@@ -82,6 +93,43 @@ def _interp_btv(rows, twa):
     return pts[-1][1]
 
 
+def _interp_row(rows, twa):
+    """Interpolate a full table row (all numeric columns) at twa; None if outside the domain."""
+    pts = sorted(rows, key=lambda r: r["twa"])
+    if not pts or twa < pts[0]["twa"] or twa > pts[-1]["twa"]:
+        return None
+    for r0, r1 in zip(pts, pts[1:]):
+        if r0["twa"] <= twa <= r1["twa"]:
+            span = r1["twa"] - r0["twa"]
+            f = 0.0 if span == 0 else (twa - r0["twa"]) / span
+            return {k: r0[k] + (r1[k] - r0[k]) * f for k in r0}
+    return dict(pts[-1])
+
+
+def rebuild_best(groups):
+    """Rebuild the Best-Performance envelope from the CARRIED sails only. The cert's own
+    envelope is max-over-the-whole-rated-wardrobe — with the A2 excluded, its reaching rows
+    promise speeds the boat can't sail, which would poison targets, polar_pct and routing.
+    Keeps the cert's TWA sampling (incl. optimum beat/run angles); each row takes every
+    column from whichever carried sail is fastest there."""
+    best = groups["best"]["blocks"]
+    sails = {sid: g["blocks"] for sid, g in groups.items()
+             if sid != "best" and sid not in EXCLUDED}
+    rebuilt = {}
+    for tws, rows in best.items():
+        out = []
+        for r in rows:
+            cand = []
+            for sid, blocks in sails.items():
+                ir = _interp_row(blocks.get(tws) or [], r["twa"])
+                if ir is not None:
+                    cand.append(ir)
+            out.append(max(cand, key=lambda c: c["btv"]) if cand else dict(r))
+        rebuilt[tws] = out
+    groups["best"]["blocks"] = rebuilt
+    return groups
+
+
 def optimal_sail(sails, tws, twa):
     """Among sails whose domain covers (tws, twa), the one with the highest BTV."""
     best_id, best_btv = None, -1.0
@@ -123,9 +171,9 @@ def write_guide(groups):
                "produces best performance at that TWS/TWA — use it to advise sail changes "
                "(when the optimal sail changes between angles, that's a crossover / peel).\n")
     out.append("## Sail inventory")
-    for sid in ("J1-A", "A2-A", "A3-A", "S2-A"):
+    for sid in CARRIED:
         if sid in groups:
-            out.append(f"- **{sid}** — {groups[sid]['label']}")
+            out.append(f"- **{_short(sid)}** (cert id {sid}) — {groups[sid]['label']}")
     out.append("")
     for tws in sorted(best):
         rows = best[tws]
@@ -143,17 +191,17 @@ def write_guide(groups):
         out.append("\n| TWA | BTV | VMG | AWS | AWA | Heel | Reef | Flat | Sail |")
         out.append("|----:|----:|----:|----:|----:|-----:|-----:|-----:|:-----|")
         for r in rows:
-            sid = row_sail.get(r["twa"]) or "—"
+            sid = row_sail.get(r["twa"])
             out.append(f"| {r['twa']:.1f}° | {r['btv']:.2f} | {r['vmg']:.2f} | "
                        f"{r['aws']:.2f} | {r['awa']:.1f}° | {r['heel']:.1f}° | "
-                       f"{r['reef']:.2f} | {r['flat']:.2f} | {sid} |")
+                       f"{r['reef']:.2f} | {r['flat']:.2f} | {_short(sid) if sid else '—'} |")
     open(GUIDE, "w").write("\n".join(out) + "\n")
     return GUIDE
 
 
 def _short(sid):
-    """Sail id 'A3-A' -> crew shorthand 'A3'."""
-    return (sid or "").split("-")[0] or sid
+    """Sail id -> crew shorthand ('A3-A' -> 'A3', 'S2-A' -> 'S1' — the crew's names)."""
+    return SHORTS.get(sid) or (sid or "").split("-")[0] or sid
 
 
 def crossover_zones(sails, tws, best_rows):
@@ -178,8 +226,8 @@ def crossover_zones(sails, tws, best_rows):
 
 # Two sails are a "toss-up" at an angle when both are within this fraction of the best sail's BTV.
 # The crossover zones are winner-take-all, so a sail that's optimal by hundredths of a knot at every
-# sampled angle erases the runner-up entirely (e.g. A2 vanishes at 14–16 kn where the cert splits A2/A3
-# by ~0.03 kn on the reach). Overlap bands surface those near-ties so the chart can show "carry either".
+# sampled angle erases the runner-up entirely (the cert splits adjacent kites by ~0.03 kn near a
+# crossover). Overlap bands surface those near-ties so the chart can show "carry either".
 OVERLAP_TOL = float(os.environ.get("XOVER_OVERLAP_TOL", "0.015"))
 
 
@@ -201,11 +249,11 @@ def overlap_bands(sails, tws, best_rows, inv, tol=OVERLAP_TOL):
     co-optimal (within `tol` of the best). Surfaces sails the winner-take-all zones hide on a near-tie.
     Boundaries extend to the neighbour-row midpoints (like the zones) so a single-row tie is still
     visible. Sail ids are crew shorthand; the upwind jib stays 'J1' (specialised per TWS downstream)."""
-    order = list(inv)                                 # cert ids in inventory order (J1-A, A2-A, …)
+    order = list(inv)                                 # cert ids in inventory order (J1-A, A3-A, …)
     twas = [r["twa"] for r in best_rows]
     n = len(best_rows)
     bands = []
-    for s1, s2 in zip(order, order[1:]):              # adjacent pairs only (J1/A2, A2/A3, A3/S2)
+    for s1, s2 in zip(order, order[1:]):              # adjacent pairs only (J1/A3, A3/S1)
         marked = []
         for r in best_rows:
             co = cooptimal(sails, tws, r["twa"], tol)
@@ -231,7 +279,7 @@ def write_crossovers(groups):
     model the Lab optimizer attaches to each route leg and freezes into the playbook bundle."""
     best = groups["best"]["blocks"]
     sails = {sid: g["blocks"] for sid, g in groups.items() if sid != "best"}
-    inv = [sid for sid in ("J1-A", "A2-A", "A3-A", "S2-A") if sid in groups]
+    inv = [sid for sid in CARRIED if sid in groups]
     data = {
         "boat_id": "sr33",
         "source": "ORC certificate (data.orc.org SR33 'C4' CAN100, ref 03430004T3F)",
@@ -253,12 +301,12 @@ def write_sail_polars(groups):
     """Emit the PER-SAIL polar curves as JSON — the speed of EACH inventory sail across its TWA domain
     (not just the Best-Performance envelope). The Lab optimizer's sail-aware routing (routing fidelity
     2g) uses these to model the cost of HOLDING a sub-optimal sail through a crossover vs PEELING:
-    the envelope is the max-over-sails speed (= the optimal sail's speed), but carrying, say, the A2
+    the envelope is the max-over-sails speed (= the optimal sail's speed), but carrying, say, the A3
     past its crossover is SLOWER — that gap is the hold-vs-peel tradeoff, and it lives only here.
-    Shape: {sails: {<short>: [[tws, twa, btv], ...]}} keyed by crew shorthand (J1/A2/A3/S2)."""
+    Shape: {sails: {<short>: [[tws, twa, btv], ...]}} keyed by crew shorthand (J1/A3/S1)."""
     sails = {sid: g["blocks"] for sid, g in groups.items() if sid != "best"}
     out = {}
-    for sid in ("J1-A", "A2-A", "A3-A", "S2-A"):
+    for sid in CARRIED:
         if sid not in sails:
             continue
         pts = [[tws, r["twa"], r["btv"]]
@@ -269,7 +317,7 @@ def write_sail_polars(groups):
         "source": "ORC certificate (data.orc.org SR33 'C4' CAN100, ref 03430004T3F)",
         "generated_by": "vps/agent/knowledge/build_speed_guide.py",
         "sail_names": {_short(sid): SAIL_NAMES.get(sid, sid)
-                       for sid in ("J1-A", "A2-A", "A3-A", "S2-A") if sid in sails},
+                       for sid in CARRIED if sid in sails},
         "sails": out,
     }
     with open(SAIL_POLARS, "w") as f:
@@ -296,6 +344,10 @@ def write_seed(groups):
 if __name__ == "__main__":
     groups = parse_groups(open(SRC).read())
     print("parsed groups:", {k: f"{len(v['blocks'])} TWS" for k, v in groups.items()})
+    dropped = [k for k in groups if k in EXCLUDED]
+    groups = {k: v for k, v in groups.items() if k not in EXCLUDED}
+    groups = rebuild_best(groups)
+    print("excluded (rated but not aboard):", dropped or "none")
     print("wrote", write_guide(groups))
     print("wrote", write_seed(groups))
     print("wrote", write_crossovers(groups))

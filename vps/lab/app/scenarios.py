@@ -150,7 +150,7 @@ def pace_predicates(params, ctx):
 
 
 def gear_loss_predicates(params, ctx):
-    # crew-armed: there is no instrument for "the A2 just blew up" — the console/matcher exposes a
+    # crew-armed: there is no instrument for "the kite just blew up" — the console/matcher exposes a
     # sail-out-of-service toggle (Phase D); until then the play is pointed to manually.
     return [{"signal": "sail_out_of_service", "op": "==", "value": params.get("sail")}]
 

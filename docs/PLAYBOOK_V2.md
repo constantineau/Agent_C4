@@ -104,7 +104,7 @@ re-routes through transformed fields or altered optimizer parameters).
 | **Pace behind/ahead** | re-route from each major waypoint at planned-ETA +2 h / +4 h / −2 h — being late means meeting DIFFERENT weather downstream; the optimum from there can flip | `deviation.time_behind_s` |
 | **Off the line (rejoin-vs-continue)** | tabulate rejoin-vs-continue from representative off-track positions per leg | `deviation.xte_nm` + side |
 | **Wrong sail / overpowered** | guidance play from the frozen crossover table (change-down call + expected recovery) | `sails` hoisted-vs-optimal + TWS margin + heel |
-| **Gear failure (sail loss)** | re-run the 2g sail-aware optimizer with a critical sail REMOVED from the inventory (no A2; no S2) | crew reports via hoisted selector; play is armed manually or by prolonged sail-domain mismatch |
+| **Gear failure (sail loss)** | re-run the 2g sail-aware optimizer with a critical sail REMOVED from the inventory (no A3; no S1) | crew reports via hoisted selector; play is armed manually or by prolonged sail-domain mismatch |
 | **Conserve the crew (night/shorthanded)** | re-route with tack/peel costs ×3–5 → low-maneuver variant | `fatigue` index + night hours |
 
 ### Fan depth — how many scenarios, and why (2026-07-08)

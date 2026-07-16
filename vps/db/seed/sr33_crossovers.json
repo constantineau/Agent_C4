@@ -4,15 +4,13 @@
   "generated_by": "vps/agent/knowledge/build_speed_guide.py",
   "sail_names": {
     "J1-A": "Headsail/jib (J1)",
-    "A2-A": "Asym A2 (76%)",
     "A3-A": "Asym A3",
-    "S2-A": "Symmetric kite (S2)"
+    "S2-A": "Symmetric kite (S1)"
   },
   "inventory": [
     "J1",
-    "A2",
     "A3",
-    "S2"
+    "S1"
   ],
   "tws_buckets": [
     4,
@@ -35,23 +33,16 @@
         "twa_max": 100.0
       },
       {
-        "sail": "A2-A",
-        "short": "A2",
-        "label": "Asym A2 (76%)",
-        "twa_min": 100.0,
-        "twa_max": 115.0
-      },
-      {
         "sail": "A3-A",
         "short": "A3",
         "label": "Asym A3",
-        "twa_min": 115.0,
+        "twa_min": 100.0,
         "twa_max": 144.3
       },
       {
         "sail": "S2-A",
-        "short": "S2",
-        "label": "Symmetric kite (S2)",
+        "short": "S1",
+        "label": "Symmetric kite (S1)",
         "twa_min": 144.3,
         "twa_max": 180.0
       }
@@ -62,26 +53,19 @@
         "short": "J1",
         "label": "Headsail/jib (J1)",
         "twa_min": 42.6,
-        "twa_max": 85.0
-      },
-      {
-        "sail": "A2-A",
-        "short": "A2",
-        "label": "Asym A2 (76%)",
-        "twa_min": 85.0,
-        "twa_max": 115.0
+        "twa_max": 100.0
       },
       {
         "sail": "A3-A",
         "short": "A3",
         "label": "Asym A3",
-        "twa_min": 115.0,
+        "twa_min": 100.0,
         "twa_max": 145.9
       },
       {
         "sail": "S2-A",
-        "short": "S2",
-        "label": "Symmetric kite (S2)",
+        "short": "S1",
+        "label": "Symmetric kite (S1)",
         "twa_min": 145.9,
         "twa_max": 180.0
       }
@@ -92,13 +76,6 @@
         "short": "J1",
         "label": "Headsail/jib (J1)",
         "twa_min": 40.2,
-        "twa_max": 85.0
-      },
-      {
-        "sail": "A2-A",
-        "short": "A2",
-        "label": "Asym A2 (76%)",
-        "twa_min": 85.0,
         "twa_max": 100.0
       },
       {
@@ -110,8 +87,8 @@
       },
       {
         "sail": "S2-A",
-        "short": "S2",
-        "label": "Symmetric kite (S2)",
+        "short": "S1",
+        "label": "Symmetric kite (S1)",
         "twa_min": 141.5,
         "twa_max": 180.0
       }
@@ -125,23 +102,16 @@
         "twa_max": 85.0
       },
       {
-        "sail": "A2-A",
-        "short": "A2",
-        "label": "Asym A2 (76%)",
-        "twa_min": 85.0,
-        "twa_max": 100.0
-      },
-      {
         "sail": "A3-A",
         "short": "A3",
         "label": "Asym A3",
-        "twa_min": 100.0,
+        "twa_min": 85.0,
         "twa_max": 142.5
       },
       {
         "sail": "S2-A",
-        "short": "S2",
-        "label": "Symmetric kite (S2)",
+        "short": "S1",
+        "label": "Symmetric kite (S1)",
         "twa_min": 142.5,
         "twa_max": 180.0
       }
@@ -152,13 +122,6 @@
         "short": "J1",
         "label": "Headsail/jib (J1)",
         "twa_min": 36.7,
-        "twa_max": 85.0
-      },
-      {
-        "sail": "A2-A",
-        "short": "A2",
-        "label": "Asym A2 (76%)",
-        "twa_min": 85.0,
         "twa_max": 100.0
       },
       {
@@ -170,8 +133,8 @@
       },
       {
         "sail": "S2-A",
-        "short": "S2",
-        "label": "Symmetric kite (S2)",
+        "short": "S1",
+        "label": "Symmetric kite (S1)",
         "twa_min": 142.5,
         "twa_max": 180.0
       }
@@ -193,8 +156,8 @@
       },
       {
         "sail": "S2-A",
-        "short": "S2",
-        "label": "Symmetric kite (S2)",
+        "short": "S1",
+        "label": "Symmetric kite (S1)",
         "twa_min": 142.5,
         "twa_max": 180.0
       }
@@ -216,8 +179,8 @@
       },
       {
         "sail": "S2-A",
-        "short": "S2",
-        "label": "Symmetric kite (S2)",
+        "short": "S1",
+        "label": "Symmetric kite (S1)",
         "twa_min": 142.5,
         "twa_max": 180.0
       }
@@ -231,23 +194,16 @@
         "twa_max": 100.0
       },
       {
-        "sail": "A2-A",
-        "short": "A2",
-        "label": "Asym A2 (76%)",
-        "twa_min": 100.0,
-        "twa_max": 115.0
-      },
-      {
         "sail": "A3-A",
         "short": "A3",
         "label": "Asym A3",
-        "twa_min": 115.0,
+        "twa_min": 100.0,
         "twa_max": 142.5
       },
       {
         "sail": "S2-A",
-        "short": "S2",
-        "label": "Symmetric kite (S2)",
+        "short": "S1",
+        "label": "Symmetric kite (S1)",
         "twa_min": 142.5,
         "twa_max": 180.0
       }
@@ -261,23 +217,16 @@
         "twa_max": 100.0
       },
       {
-        "sail": "A2-A",
-        "short": "A2",
-        "label": "Asym A2 (76%)",
-        "twa_min": 100.0,
-        "twa_max": 127.5
-      },
-      {
         "sail": "A3-A",
         "short": "A3",
         "label": "Asym A3",
-        "twa_min": 127.5,
+        "twa_min": 100.0,
         "twa_max": 139.6
       },
       {
         "sail": "S2-A",
-        "short": "S2",
-        "label": "Symmetric kite (S2)",
+        "short": "S1",
+        "label": "Symmetric kite (S1)",
         "twa_min": 139.6,
         "twa_max": 180.0
       }
@@ -287,16 +236,8 @@
     "4": [
       {
         "sails": [
-          "A2",
-          "A3"
-        ],
-        "twa_min": 115.0,
-        "twa_max": 127.5
-      },
-      {
-        "sails": [
           "A3",
-          "S2"
+          "S1"
         ],
         "twa_min": 136.8,
         "twa_max": 157.5
@@ -305,26 +246,10 @@
     "6": [
       {
         "sails": [
-          "J1",
-          "A2"
-        ],
-        "twa_min": 85.0,
-        "twa_max": 100.0
-      },
-      {
-        "sails": [
-          "A2",
-          "A3"
+          "A3",
+          "S1"
         ],
         "twa_min": 100.0,
-        "twa_max": 115.0
-      },
-      {
-        "sails": [
-          "A3",
-          "S2"
-        ],
-        "twa_min": 115.0,
         "twa_max": 157.5
       }
     ],
@@ -332,25 +257,17 @@
       {
         "sails": [
           "J1",
-          "A2"
-        ],
-        "twa_min": 77.5,
-        "twa_max": 85.0
-      },
-      {
-        "sails": [
-          "A2",
           "A3"
         ],
-        "twa_min": 100.0,
-        "twa_max": 115.0
+        "twa_min": 85.0,
+        "twa_max": 100.0
       },
       {
         "sails": [
           "A3",
-          "S2"
+          "S1"
         ],
-        "twa_min": 100.0,
+        "twa_min": 85.0,
         "twa_max": 157.5
       }
     ],
@@ -358,25 +275,17 @@
       {
         "sails": [
           "J1",
-          "A2"
-        ],
-        "twa_min": 77.5,
-        "twa_max": 85.0
-      },
-      {
-        "sails": [
-          "A2",
           "A3"
         ],
         "twa_min": 85.0,
-        "twa_max": 115.0
+        "twa_max": 100.0
       },
       {
         "sails": [
           "A3",
-          "S2"
+          "S1"
         ],
-        "twa_min": 100.0,
+        "twa_min": 85.0,
         "twa_max": 158.8
       }
     ],
@@ -384,23 +293,15 @@
       {
         "sails": [
           "J1",
-          "A2"
+          "A3"
         ],
         "twa_min": 85.0,
         "twa_max": 100.0
       },
       {
         "sails": [
-          "A2",
-          "A3"
-        ],
-        "twa_min": 85.0,
-        "twa_max": 115.0
-      },
-      {
-        "sails": [
           "A3",
-          "S2"
+          "S1"
         ],
         "twa_min": 115.0,
         "twa_max": 154.6
@@ -409,24 +310,8 @@
     "14": [
       {
         "sails": [
-          "J1",
-          "A2"
-        ],
-        "twa_min": 85.0,
-        "twa_max": 100.0
-      },
-      {
-        "sails": [
-          "A2",
-          "A3"
-        ],
-        "twa_min": 100.0,
-        "twa_max": 115.0
-      },
-      {
-        "sails": [
           "A3",
-          "S2"
+          "S1"
         ],
         "twa_min": 115.0,
         "twa_max": 157.5
@@ -435,16 +320,8 @@
     "16": [
       {
         "sails": [
-          "A2",
-          "A3"
-        ],
-        "twa_min": 100.0,
-        "twa_max": 115.0
-      },
-      {
-        "sails": [
           "A3",
-          "S2"
+          "S1"
         ],
         "twa_min": 127.5,
         "twa_max": 142.5
@@ -453,21 +330,22 @@
     "20": [
       {
         "sails": [
-          "A2",
-          "A3"
-        ],
-        "twa_min": 115.0,
-        "twa_max": 127.5
-      },
-      {
-        "sails": [
           "A3",
-          "S2"
+          "S1"
         ],
         "twa_min": 127.5,
         "twa_max": 142.5
       }
     ],
-    "24": []
+    "24": [
+      {
+        "sails": [
+          "J1",
+          "A3"
+        ],
+        "twa_min": 100.0,
+        "twa_max": 115.0
+      }
+    ]
   }
 }

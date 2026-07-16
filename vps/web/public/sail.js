@@ -4,10 +4,10 @@
    highlighted so a wrong sail / imminent peel is obvious at a glance. Data from /api/sail. */
 "use strict";
 (function () {
-  const FAMILY = ["J1", "A2", "A3", "S2"];
+  const FAMILY = ["J1", "A3", "S1"];
   // day palette per sail; night uses a red monochrome ramp for night vision.
-  const DAY = { J1: "#3f7bd6", A2: "#36c08a", A3: "#e0902f", S2: "#b06bd8" };
-  const NIGHT = { J1: "#3a0c0c", A2: "#5a1414", A3: "#7e1d1d", S2: "#a83030" };
+  const DAY = { J1: "#3f7bd6", A3: "#e0902f", S1: "#b06bd8" };
+  const NIGHT = { J1: "#3a0c0c", A3: "#7e1d1d", S1: "#a83030" };
 
   let hoisted = localStorage.getItem("sr33.hoisted") || "";
   let last = null;   // last /api/sail response, for redraw on resize/theme
@@ -58,7 +58,7 @@
     });
 
     // toss-up overlays: a two-colour hatch over the zone ring where two sails tie (~1.5%), so a sail the
-    // winner-take-all zones erased (e.g. A2 on the reach at 14–16 kts) reappears in its own colour.
+    // winner-take-all zones erased on a near-tie reappears in its own colour.
     (last.overlaps || []).forEach((o) => {
       if (!o.sails || o.sails.length < 2) return;
       const a1 = twaToAngle(o.twa_min), a2 = twaToAngle(o.twa_max);

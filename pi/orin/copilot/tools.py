@@ -82,7 +82,7 @@ TOOL_SPECS = [
             "description": (
                 "The optimal sail for a given TWS/TWA against the SR33 sail crossovers, plus "
                 "whether what's hoisted is right and any imminent peel. Omit tws/twa to use the "
-                "live values; pass `hoisted` (e.g. 'A2') to check the current sail."
+                "live values; pass `hoisted` (e.g. 'A3') to check the current sail."
             ),
             "parameters": {
                 "type": "object",

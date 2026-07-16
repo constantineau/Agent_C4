@@ -24,11 +24,11 @@ BUNDLE = {"race_id": "u", "schema": "c4.playbook/v2", "variants": [{"id": "middl
          {"signal": "time_behind_min", "op": ">=", "value": 104, "sustain_min": 45}]},
      "applicability": {"legs": [1]}, "response": {"type": "route"},
      "summary": "the pre-routed answer"},
-    {"id": "gear_loss_a2", "name": "A2 out of service", "category": "internal",
+    {"id": "gear_loss_s1", "name": "S1 out of service", "category": "internal",
      "scenario": {"kind": "gear_loss"}, "stakes_min": 276,
      "conditions": {"predicates": [
-         {"signal": "sail_out_of_service", "op": "==", "value": "A2"}]},
-     "response": {"type": "route"}, "summary": "re-planned without the A2"},
+         {"signal": "sail_out_of_service", "op": "==", "value": "S1"}]},
+     "response": {"type": "route"}, "summary": "re-planned without the S1"},
     {"id": "reef_r1_a3_slot", "name": "Reef 1 with the A3", "category": "internal",
      "scenario": {"kind": "sail_guidance"}, "stakes_min": 0,
      "conditions": {"predicates": [
@@ -105,13 +105,13 @@ check("hold memory wiped on clear", "since" not in matcher._ST["pace_behind_2h_1
 print("3) crew sail-state signals")
 matcher.SUSTAIN_SCALE = 0.0
 stub()
-matcher.set_sail_state(out_of_service=["A2"])
+matcher.set_sail_state(out_of_service=["S1"])
 r = matcher.get_plays()
-p = next(x for x in r["plays"] if x["id"] == "gear_loss_a2")
-check("crew declares the A2 blown -> gear play ARMED", p["status"] == "armed")
+p = next(x for x in r["plays"] if x["id"] == "gear_loss_s1")
+check("crew declares the S1 blown -> gear play ARMED", p["status"] == "armed")
 matcher.set_sail_state(out_of_service=[])
 r = matcher.get_plays()
-p = next(x for x in r["plays"] if x["id"] == "gear_loss_a2")
+p = next(x for x in r["plays"] if x["id"] == "gear_loss_s1")
 check("repaired/cleared -> quiet", p["status"] == "quiet")
 stub(tws_kn=18.0)
 matcher.set_sail_state(hoisted="A3")
@@ -119,10 +119,10 @@ r = matcher.get_plays()
 p = next(x for x in r["plays"] if x["id"] == "reef_r1_a3_slot")
 check("18 kn + A3 hoisted -> the slot-reef play arms", p["status"] == "armed")
 check("guidance text rides on the armed play", "open the slot" in (p.get("guidance") or ""))
-matcher.set_sail_state(hoisted="S2")
+matcher.set_sail_state(hoisted="S1")
 r = matcher.get_plays()
 p = next(x for x in r["plays"] if x["id"] == "reef_r1_a3_slot")
-check("same breeze, S2 hoisted -> quiet (AND semantics)", p["status"] == "quiet")
+check("same breeze, S1 hoisted -> quiet (AND semantics)", p["status"] == "quiet")
 
 print("4) missing data never arms")
 stub()          # no fatigue value
@@ -133,7 +133,7 @@ check("fatigue signal absent -> low-maneuver quiet", p["status"] == "quiet"
 
 print("5) ordering + payload shape")
 stub(tws_kn=18.0, time_behind_min=120)
-matcher.set_sail_state(hoisted="A3", out_of_service=["A2"])
+matcher.set_sail_state(hoisted="A3", out_of_service=["S1"])
 r = matcher.get_plays()
 statuses = [x["status"] for x in r["plays"]]
 check("armed sort first", statuses == sorted(statuses, key=lambda s: {"armed": 0, "arming": 1,
@@ -342,7 +342,7 @@ check("arming play: closeness 1.0 + sustain_pct present",
 check("arming play is not on the quiet watchlist",
       not any(w["id"] == "pace_behind_2h_1" for w in r["watchlist"]))
 # == predicates are 1/0 — a gear-loss play never reads "almost"
-p = next(x for x in r["plays"] if x["id"] == "gear_loss_a2")
+p = next(x for x in r["plays"] if x["id"] == "gear_loss_s1")
 check("discrete predicate: closeness 0, not 'almost'", p["closeness"] in (0.0, None)
       or p["closeness"] == 0)
 print("RESULT-10:", "PASS" if ok else "FAIL")

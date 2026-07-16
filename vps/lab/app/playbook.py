@@ -236,7 +236,7 @@ def _scenario_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
 
 
 _PACE_DELAYS_H = (2, 4, -2)          # behind / deep-behind / ahead (Phase C — the user-priority plays)
-_GEAR_SAILS = ("A2", "A3", "S2")     # kites we author a loss play for when they're in the nominal plan
+_GEAR_SAILS = ("A3", "S1")           # kites we author a loss play for when they're in the nominal plan
 
 
 def _internal_fan(definition, course_id, start_epoch, wf, consensus, cur, waves, marks,

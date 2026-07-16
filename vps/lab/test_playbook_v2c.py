@@ -75,9 +75,9 @@ check("ahead-of-plan play keys on NEGATIVE time-behind",
       p[0]["op"] == "<=" and p[0]["value"] == -60)
 p = SCEN.pace_predicates({"delay_h": 2}, {})
 check("no venue stats -> conservative defaults (0.7×150=105)", p[0]["value"] == 105)
-p = SCEN.gear_loss_predicates({"sail": "A2"}, {})
-check("gear-loss is crew-armed (sail_out_of_service == A2)",
-      p == [{"signal": "sail_out_of_service", "op": "==", "value": "A2"}])
+p = SCEN.gear_loss_predicates({"sail": "S1"}, {})
+check("gear-loss is crew-armed (sail_out_of_service == S1)",
+      p == [{"signal": "sail_out_of_service", "op": "==", "value": "S1"}])
 p = SCEN.low_maneuver_predicates({}, {})
 check("low-maneuver keys on the fatigue index (>=60, sustained)",
       p[0]["signal"] == "fatigue_index" and p[0]["value"] == 60)
@@ -93,19 +93,19 @@ check("sail-guidance = TWS threshold + hoisted sail",
 
 # ---- 2) gear-loss: exclude_sails rebuilds the envelope -----------------------------------------
 print("2) gear-loss routing (exclude_sails: curve dropped + envelope rebuilt)")
-# dead run ~18 nm: start due north of finish, wind FROM north -> S2 is the nominal run sail
+# dead run ~18 nm: start due north of finish, wind FROM north -> S1 is the nominal run sail
 run_def = {"courses": [{"id": "x", "start": {"lat": 44.3, "lon": -82.0},
                         "finish": {"points": [{"lat": 44.0, "lon": -82.0}]}}]}
 base = OPT.optimize_course(run_def, "x", 0, WF(), avoid=False, emit_exploration=False,
                            resolution="fast", time_budget_s=30)
 noS2 = OPT.optimize_course(run_def, "x", 0, WF(), avoid=False, emit_exploration=False,
-                           resolution="fast", time_budget_s=30, exclude_sails=["S2"])
+                           resolution="fast", time_budget_s=30, exclude_sails=["S1"])
 b_sails = {s["sail"] for s in (base.get("sail_plan") or [])}
 n_sails = {s["sail"] for s in (noS2.get("sail_plan") or [])}
 print(f"     baseline {base.get('total_minutes')} min sails={sorted(b_sails)}; "
-      f"no-S2 {noS2.get('total_minutes')} min sails={sorted(n_sails)}")
-check("baseline run flies the S2", "S2" in b_sails)
-check("excluded route never flies the S2", "S2" not in n_sails)
+      f"no-S1 {noS2.get('total_minutes')} min sails={sorted(n_sails)}")
+check("baseline run flies the S1", "S1" in b_sails)
+check("excluded route never flies the S1", "S1" not in n_sails)
 check("excluded route still routes + reaches", noS2.get("available")
       and OPT._hav_nm(noS2["path"][-1]["lat"], noS2["path"][-1]["lon"], 44.0, -82.0) < 0.5)
 check("losing the run kite never makes the boat faster",

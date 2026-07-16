@@ -66,11 +66,11 @@ def run_leg(O, dlat, dlon, start_sail):
 
 
 # 1) data loads + domain gate
-check("per-sail polars load (J1/A2/A3/S2)", set(SP) == {"J1", "A2", "A3", "S2"})
+check("per-sail polars load (J1/A3/S1)", set(SP) == {"J1", "A3", "S1"})
 O = reload_with(True)
 dom = OPT._sail_domains(SP)
-check("kite has a real run speed (S2 @180)", OPT._sail_speed(SP, dom, "S2", 12, 180) > 4.0)
-check("kite is infeasible upwind (S2 @40 → 0)", OPT._sail_speed(SP, dom, "S2", 12, 40) == 0.0)
+check("kite has a real run speed (S1 @180)", OPT._sail_speed(SP, dom, "S1", 12, 180) > 4.0)
+check("kite is infeasible upwind (S1 @40 → 0)", OPT._sail_speed(SP, dom, "S1", 12, 40) == 0.0)
 check("jib variant maps to J1 curve (J3 @45 == J1)",
       OPT._sail_speed(SP, dom, "J3", 12, 45) == OPT._sail_speed(SP, dom, "J1", 12, 45))
 
@@ -79,31 +79,31 @@ run_dlat, run_dlon = slat - 12.0 / 60.0, slon          # 12 nm due south = dead 
 leg = run_leg(O, run_dlat, run_dlon, "J1")
 end_sail = leg.get("sail_end")
 print(f"     run leg carrying J1: sail_end={end_sail} peels={leg['peels']}")
-check("run leg carrying a jib PEELS to a kite", leg["peels"] >= 1 and end_sail in ("A2", "A3", "S2"))
+check("run leg carrying a jib PEELS to a kite", leg["peels"] >= 1 and end_sail in ("A3", "S1"))
 
 # 3) carry a kite into a beat → forced peel to the jib (kite infeasible upwind)
 beat_dlat, beat_dlon = slat + 12.0 / 60.0, slon        # 12 nm due north = dead upwind
-leg = run_leg(O, beat_dlat, beat_dlon, "S2")
-print(f"     beat leg carrying S2: sail_end={leg.get('sail_end')} peels={leg['peels']}")
+leg = run_leg(O, beat_dlat, beat_dlon, "S1")
+print(f"     beat leg carrying S1: sail_end={leg.get('sail_end')} peels={leg['peels']}")
 check("beat leg carrying a kite PEELS to the jib", leg["peels"] >= 1 and leg.get("sail_end") == "J1")
 
 # 4) hysteresis — a sub-optimal sail WITHIN tolerance is held (no peel, flown at its own speed).
-# Find a reach TWA where A2 is optimal-ish but A3 is marginally faster (within PEEL_HOLD_TOL).
-twa_test = 110.0
+# Find a broad-reach TWA where A3 is near-tied but S1 is marginally faster (within PEEL_HOLD_TOL).
+twa_test = 150.0
 opt = sailplan.optimal_sail(12, twa_test)
-a2 = OPT._sail_speed(SP, dom, "A2", 12, twa_test)
+a3 = OPT._sail_speed(SP, dom, "A3", 12, twa_test)
 env = OPT._polar_speed(P, 12, twa_test)
-within = a2 >= env * (1.0 - OPT.PEEL_HOLD_TOL)
-print(f"     TWA{twa_test}: optimal={opt} A2={a2:.2f} env={env:.2f} within_tol={within}")
-if within and opt != "A2":
-    # heading 110 off TWD0 = 110 true; dest along that bearing
-    rdlat, rdlon = OPT._advance(slat, slon, 110.0, 12.0)
-    leg = run_leg(O, rdlat, rdlon, "A2")
-    held = (leg.get("sail_end") == "A2" and leg["peels"] == 0)
-    print(f"     reach leg carrying A2 (A3 marginally faster): sail_end={leg.get('sail_end')} peels={leg['peels']}")
+within = a3 >= env * (1.0 - OPT.PEEL_HOLD_TOL)
+print(f"     TWA{twa_test}: optimal={opt} A3={a3:.2f} env={env:.2f} within_tol={within}")
+if within and opt != "A3":
+    # heading twa_test off TWD0 = twa_test true; dest along that bearing
+    rdlat, rdlon = OPT._advance(slat, slon, twa_test, 12.0)
+    leg = run_leg(O, rdlat, rdlon, "A3")
+    held = (leg.get("sail_end") == "A3" and leg["peels"] == 0)
+    print(f"     reach leg carrying A3 (S1 marginally faster): sail_end={leg.get('sail_end')} peels={leg['peels']}")
     check("a within-tolerance sub-optimal sail is HELD (no thrash)", held)
 else:
-    check("hysteresis precondition (A2 within tol, not optimal) — skipped cleanly", True)
+    check("hysteresis precondition (A3 within tol, not optimal) — skipped cleanly", True)
 
 # 5) SAIL_AWARE off → geometry identical to the envelope baseline (no per-sail effect).
 Ooff = reload_with(False)
