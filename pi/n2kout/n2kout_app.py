@@ -12,6 +12,8 @@ No reads, no steering, no autopilot coupling: pixels on the crew's own chartplot
 from __future__ import annotations
 
 import os
+import socket
+import struct
 import threading
 import time
 
@@ -100,17 +102,66 @@ class _Broadcaster:
             self.state["broadcasting"] = False
 
 
+class _ClaimResponder(threading.Thread):
+    """Answer ISO Requests (59904) for our Address Claim (60928) — the one RX this service does.
+
+    Found live on the real bus (2026-07-16): the Garmin 943 enumerates any source it sees
+    traffic from with a directed `EA` request (payload 00 EE 00 = "send your 60928") and it
+    KEEPS asking — a source that never identifies itself is not a valid bus device, and the
+    plotter discards its PGNs. A one-shot claim at broadcast start isn't enough; the request
+    can come at any time (plotter boots later, device-list refresh). So: a standing listener,
+    filtered to PF 0xEA only, that replies with the claim when asked (directed to us, or the
+    global enumeration). Still no steering, no other reads — one 8-byte identity frame on
+    request. Known limitation (documented, fixed bus): we don't contend for the address if
+    another device ever claims SA 35."""
+
+    def __init__(self, iface: str, sa: int = n2k.DEFAULT_SA):
+        super().__init__(daemon=True, name="n2k-claim-responder")
+        self.iface, self.sa = iface, sa
+        self.state = {"running": False, "claims_answered": 0, "error": None}
+
+    def run(self):
+        try:
+            s = socket.socket(socket.AF_CAN, socket.SOCK_RAW, socket.CAN_RAW)
+            # kernel-side filter: only extended-id frames with PF 0xEA (ISO Request) wake us
+            flt = struct.pack("<II", n2k.CAN_EFF_FLAG | (0xEA << 16),
+                              n2k.CAN_EFF_FLAG | (0xFF << 16))
+            s.setsockopt(socket.SOL_CAN_RAW, socket.CAN_RAW_FILTER, flt)
+            s.bind((self.iface,))
+        except OSError as e:                    # no CAN interface — idle, same as the broadcaster
+            self.state["error"] = f"claim responder disabled: {e}"
+            return
+        pgn, prio, data = n2k.encode_60928(sa=self.sa)
+        claim = struct.pack("<IB3x8s", n2k.can_id(pgn, self.sa, prio) | n2k.CAN_EFF_FLAG,
+                            len(data), data.ljust(8, b"\xff"))
+        self.state["running"] = True
+        while True:
+            try:
+                frame = s.recv(16)
+                cid, dlc = struct.unpack("<IB3x", frame[:8])
+                dest = (cid >> 8) & 0xFF
+                if dest in (self.sa, 0xFF) and frame[8:8 + dlc][:3] == b"\x00\xee\x00":
+                    s.send(claim)
+                    self.state["claims_answered"] += 1
+            except OSError as e:
+                self.state.update({"running": False, "error": str(e)})
+                return
+
+
 BC = _Broadcaster()
+RESPONDER = _ClaimResponder(CAN_IFACE)
+RESPONDER.start()
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "n2kout", **BC.state}
+    return {"status": "ok", "service": "n2kout", **BC.state,
+            "claim_responder": dict(RESPONDER.state)}
 
 
 @app.get("/status")
 def status():
-    return dict(BC.state)
+    return {**BC.state, "claim_responder": dict(RESPONDER.state)}
 
 
 @app.post("/route")
