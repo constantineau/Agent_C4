@@ -876,15 +876,20 @@
     const r = await fetchJSON("/session", 8000);
     if (r) { App.session = r; renderRec(); }
   }
+  let recConfirmUntil = 0;   // two-step end: first tap arms this window, second tap ends
   function renderRec() {
     const b = document.getElementById("recBtn"), l = document.getElementById("recLbl");
     if (!b || !l) return;
     const a = (App.session || {}).active;
     b.classList.toggle("on", !!a);
-    if (a) {
+    b.classList.toggle("confirm", !!a && Date.now() < recConfirmUntil);
+    if (a && Date.now() < recConfirmUntil) {
+      l.textContent = "TAP AGAIN TO END";
+      b.title = "Tap again to end \"" + a.name + "\" — or wait and it stays logging";
+    } else if (a) {
       const min = Math.max(0, Math.round((Date.now() / 1000 - a.start_ts) / 60));
       l.textContent = (a.kind === "race" ? "REC·RACE " : "REC ") + min + "m";
-      b.title = "Logging \"" + a.name + "\" — tap to END the session";
+      b.title = "Logging \"" + a.name + "\" — tap twice to END the session";
     } else {
       l.textContent = "LOG";
       b.title = "Race log — tap to start a logged session (races AND practice sails; " +
@@ -895,14 +900,24 @@
     const a = (App.session || {}).active;
     try {
       if (a) {
-        if (!confirm('End the race log "' + a.name + '"?')) return;
+        // in-button confirmation — window.confirm is unreliable in iOS standalone
+        // mode and its dialog buttons are a worse target than the button itself
+        if (Date.now() >= recConfirmUntil) {
+          recConfirmUntil = Date.now() + 5000;
+          renderRec();
+          setTimeout(renderRec, 5200);   // revert the label when the window lapses
+          return;
+        }
+        recConfirmUntil = 0;
         await fetch(API + "/session/end", { method: "POST" });
       } else {
+        const l = document.getElementById("recLbl");
+        if (l) l.textContent = "STARTING…";   // instant feedback — the poll confirms
         await fetch(API + "/session/start", { method: "POST",
           headers: { "Content-Type": "application/json" }, body: "{}" });
       }
       fetchSession();
-    } catch (e) { /* engine unreachable — next poll re-syncs */ }
+    } catch (e) { fetchSession(); /* engine unreachable — re-sync restores the true state */ }
   }
   function renderSailsBar() {
     const el = document.getElementById("sailsBar");
