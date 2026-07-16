@@ -11,6 +11,7 @@ commands — crew in the loop, frozen at the gun (RRS 41). An automated Tailscal
 later. Lock-in state (which frozen playbook is the chosen homework for a race) persists in labstate
 under `deploy:<race_id>`.
 """
+import json
 import os
 import time
 
@@ -34,6 +35,57 @@ def targets() -> dict:
                                              "/home/agent-c4/sr33/playbook.json"),
         "orin_service": os.environ.get("DEPLOY_ORIN_SERVICE", "sr33-orin-copilot"),
     }
+
+
+def _post_json(url, body, timeout=25):
+    """POST a JSON body; (ok, response-dict). Never raises — push reports per-step outcomes."""
+    import urllib.error
+    import urllib.request
+    req = urllib.request.Request(url, data=json.dumps(body).encode(),
+                                 headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return True, json.loads(r.read() or b"{}")
+    except Exception as exc:
+        return False, {"error": str(exc)}
+
+
+def push(race_id):
+    """Push the locked homework straight onto the boat — no downloads, no SD card. Course/fleet/
+    checklist/watch + the signed playbook → the Pi engine over Tailscale; the same playbook → the
+    Orin copilot via the Pi console's /copilot proxy (rides the Pi↔Orin ethernet crossover, so no
+    Orin-Tailscale dependency). Each push OVERWRITES the previous load on both boxes (the engine
+    clears its trigger/matcher state; the copilot rewrites PLAYBOOK_PATH and re-reads per request).
+    Returns per-step results ({target, step, ok, detail}); None if the race is unknown."""
+    pkg = package(race_id)
+    if not pkg:
+        return None
+    lock = labstate.get(_lock_key(race_id)) or {}
+    bundle = pbstore.get(lock.get("playbook_id")) if lock.get("playbook_id") else None
+    eng = os.environ.get("DEPLOY_PI_ENGINE_URL", "http://100.79.180.102:8200").rstrip("/")
+    cop = os.environ.get("DEPLOY_COPILOT_URL", "http://100.79.180.102:8091/copilot").rstrip("/")
+    steps = []
+
+    def step(target, name, url, body, check=None):
+        ok, resp = _post_json(url, body)
+        if ok and check is not None and not check(resp):
+            ok = False
+        steps.append({"target": target, "step": name, "ok": ok, "detail": resp})
+
+    step("pi-engine", "course", f"{eng}/course/load", pkg["course_load"])
+    step("pi-engine", "fleet", f"{eng}/fleet/load", pkg["fleet_load"])
+    if (pkg.get("checklist_load") or {}).get("items"):
+        step("pi-engine", "checklist", f"{eng}/checklist/load", pkg["checklist_load"])
+    if pkg.get("watch_load"):
+        step("pi-engine", "watch", f"{eng}/watch", pkg["watch_load"])
+    if bundle:
+        step("pi-engine", "playbook", f"{eng}/playbook/load", bundle,
+             check=lambda r: r.get("loaded"))
+        step("orin-copilot", "playbook", f"{cop}/playbook/load", bundle,
+             check=lambda r: r.get("loaded"))
+    return {"race_id": race_id, "playbook_id": lock.get("playbook_id"),
+            "pushed_playbook": bool(bundle), "ok": bool(steps) and all(s["ok"] for s in steps),
+            "steps": steps}
 
 
 def _course_for(d: dict, race_id: str, course_id=None):

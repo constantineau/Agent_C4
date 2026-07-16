@@ -1092,6 +1092,19 @@ async def deploy_lock_in(body: dict):
     return {"locked_in": True, "lock_in": state}
 
 
+@app.post("/api/deploy/push")
+async def deploy_push(body: dict):
+    """Push the locked homework + playbook straight onto the boat (Pi engine over Tailscale, Orin
+    copilot via the console proxy). Overwrites the previous load. Body: {race_id}."""
+    race_id = (body or {}).get("race_id")
+    if not race_id:
+        return JSONResponse({"detail": "race_id required"}, status_code=400)
+    res = await run_in_threadpool(deploy.push, race_id)
+    if res is None:
+        return JSONResponse({"detail": "unknown race"}, status_code=404)
+    return res
+
+
 @app.get("/api/deploy/package/{race_id}/download")
 async def deploy_package(race_id: str, course_id: str = None):
     """The combined homework package (ready-to-POST course_load + fleet_load + iPad checklists)."""

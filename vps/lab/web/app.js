@@ -1699,15 +1699,38 @@ function deployPanel(lock, t) {
     `ssh ${t.orin_host} 'echo CAN100 | sudo -S systemctl restart ${t.orin_service}'`,
     `#   (ensure PLAYBOOK_PATH=${t.orin_playbook_path} is set in /etc/sr33/copilot.env on the Orin)`,
   ].join("\n");
+  const res = Dep.pushRes;
+  const stepRow = (s) => `<div class="dep-row"><span class="pill ${s.ok ? "ok" : "warn"}">${s.ok ? "✓" : "✗"} ${esc(s.target)} · ${esc(s.step)}</span><span class="muted">${esc(s.ok ? pushDetail(s) : (s.detail && s.detail.error) || JSON.stringify(s.detail).slice(0, 120))}</span></div>`;
+  const resHtml = !res ? "" : res.pushing ? `<div class="banner" style="margin-top:10px">Pushing to the boat…</div>`
+    : `<div class="banner ${res.ok ? "ok" : "warn"}" style="margin-top:10px">${res.ok ? "✓ Boat loaded — the iPad picks it up on its next poll (nothing to do there)" : "⚠ Push incomplete — fix and push again (a re-push overwrites everything cleanly)"}</div>
+       <div class="dep-grid" style="margin-top:8px">${(res.steps || []).map(stepRow).join("")}</div>`;
   return `<div class="card">
     <h3>Deploy onboard <span class="muted" style="font-weight:400">— frozen at the gun (RRS 41)</span></h3>
-    <div class="muted" style="font-size:12px;margin-bottom:8px">The Lab has no line to the boat — download the two artifacts, then run the load commands from a machine on the boat's Tailscale net (course + fleet onto the Pi engine, the signed playbook onto the Orin copilot).</div>
+    <div class="muted" style="font-size:12px;margin-bottom:8px">Push loads everything over the Lab's Tailscale line: course + fleet + checklist + watch plan + the signed playbook onto the Pi engine, and the same playbook onto the Orin copilot (via the console's ethernet proxy — no restart needed). Every push overwrites the previous load. Downloads below are the manual fallback if the boat is unreachable.</div>
     <div class="dep-actions">
+      <button id="depPush" onclick="depPush()" ${Dep.busy ? "disabled" : ""}>🚀 Push to boat</button>
       <button onclick="downloadPlaybook('${esc(pid)}')">⬇ Playbook bundle (→ Orin)</button>
       <button onclick="downloadHomework('${esc(rid)}')">⬇ Homework package (→ Pi)</button>
     </div>
+    ${resHtml}
     <pre class="dep-cmds">${esc(cmds)}</pre>
   </div>`;
+}
+
+function pushDetail(s) {
+  const d = s.detail || {};
+  if (s.step === "playbook") return `${d.race_id || ""} · ${d.variants ?? "?"} variants · ${d.plays ?? 0} plays${d.signed ? " · signed" + (d.signature_ok === false ? " ⚠ SIGNATURE BAD" : " ✓") : ""}`;
+  return JSON.stringify(d).slice(0, 120);
+}
+
+async function depPush() {
+  Dep.busy = true; Dep.pushRes = { pushing: true }; paintDeploy();
+  try {
+    const res = await apiPost("/api/deploy/push", { race_id: Dep.raceId });
+    Dep.pushRes = await jsonOrFriendly(res);
+    if (!res.ok) Dep.pushRes = { ok: false, steps: [], ...Dep.pushRes };
+  } catch (e) { Dep.pushRes = { ok: false, steps: [{ target: "lab", step: "push", ok: false, detail: { error: e.message } }] }; }
+  Dep.busy = false; paintDeploy();
 }
 
 async function depLockIn() {

@@ -128,6 +128,33 @@ def narrate_reset(req: NarrateRequest):
     return copilot.reset_narration(route=req.route)
 
 
+@app.post("/playbook/load")
+def playbook_load(body: dict):
+    """Load a frozen playbook bundle — written atomically to PLAYBOOK_PATH, overwriting any prior.
+    Every consumer re-reads the file per request, so it takes effect immediately (no restart).
+    Body is the bundle itself, or {bundle: ...} — same contract as the engine's /playbook/load.
+    This changes which HOMEWORK the copilot interprets; it still takes no action."""
+    import json as _json
+    import os as _os
+    body = body or {}
+    bundle = body.get("bundle") if "variants" not in body else body
+    if not bundle or not bundle.get("variants"):
+        return {"loaded": False, "detail": "no bundle with variants"}
+    path = config.PLAYBOOK_PATH
+    if not path:
+        return {"loaded": False, "detail": "PLAYBOOK_PATH is not configured on this copilot"}
+    _os.makedirs(_os.path.dirname(path) or ".", exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        _json.dump(bundle, f)
+    _os.replace(tmp, path)
+    copilot.reset_narration()            # new homework → clear the show-once dedup
+    pb = playbook_mod.load()
+    return {"loaded": pb.loaded, "race_id": pb.race_id, "variants": len(pb.variants),
+            "plays": len(pb.play_ids()), "signed": pb.signed, "signature_ok": pb.signature_ok,
+            "path": path}
+
+
 @app.post("/dashboard")
 def dashboard(req: DashboardRequest):
     """LLM commentary + grounded status nudges for the crew dashboard grid. The dashboard sends
