@@ -118,7 +118,7 @@ class _ClaimResponder(threading.Thread):
     def __init__(self, iface: str, sa: int = n2k.DEFAULT_SA):
         super().__init__(daemon=True, name="n2k-claim-responder")
         self.iface, self.sa = iface, sa
-        self.state = {"running": False, "claims_answered": 0, "error": None}
+        self.state = {"running": False, "answered": {}, "error": None}
 
     def run(self):
         try:
@@ -128,21 +128,28 @@ class _ClaimResponder(threading.Thread):
                               n2k.CAN_EFF_FLAG | (0xFF << 16))
             s.setsockopt(socket.SOL_CAN_RAW, socket.CAN_RAW_FILTER, flt)
             s.bind((self.iface,))
+            sender = n2k.N2kSender(self.iface, self.sa)   # TX side (fast-packet capable)
+            sender.open()
         except OSError as e:                    # no CAN interface — idle, same as the broadcaster
             self.state["error"] = f"claim responder disabled: {e}"
             return
-        pgn, prio, data = n2k.encode_60928(sa=self.sa)
-        claim = struct.pack("<IB3x8s", n2k.can_id(pgn, self.sa, prio) | n2k.CAN_EFF_FLAG,
-                            len(data), data.ljust(8, b"\xff"))
+        # requested-PGN → response. 60928 alone isn't enough: once the claim lands, the
+        # Garmins immediately request 126996 Product Information (observed live) — a device
+        # that stalls the enumeration ladder stays "unknown" and its PGNs stay suspect.
+        handlers = {60928: n2k.encode_60928(sa=self.sa),
+                    126996: n2k.encode_126996()}
         self.state["running"] = True
         while True:
             try:
                 frame = s.recv(16)
                 cid, dlc = struct.unpack("<IB3x", frame[:8])
                 dest = (cid >> 8) & 0xFF
-                if dest in (self.sa, 0xFF) and frame[8:8 + dlc][:3] == b"\x00\xee\x00":
-                    s.send(claim)
-                    self.state["claims_answered"] += 1
+                req = int.from_bytes(frame[8:8 + dlc][:3], "little")
+                if dest in (self.sa, 0xFF) and req in handlers:
+                    pgn, prio, data = handlers[req]
+                    sender.send(pgn, prio, data)
+                    k = str(req)
+                    self.state["answered"][k] = self.state["answered"].get(k, 0) + 1
             except OSError as e:
                 self.state.update({"running": False, "error": str(e)})
                 return

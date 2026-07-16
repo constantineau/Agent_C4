@@ -70,6 +70,23 @@ def encode_60928(unique: int = 100, mfg: int = 2046, sa: int = DEFAULT_SA):
     return 60928, 6, data
 
 
+def _fix32(s: str) -> bytes:
+    """STRING_FIX(32): ASCII, unused tail padded 0xFF (canboat convention)."""
+    return str(s or "")[:32].encode("ascii", "replace").ljust(32, b"\xff")
+
+
+def encode_126996(model: str = "SR33 C4 Navigator", sw: str = "1.0", hw: str = "Pi4/PICAN-M",
+                  serial: str = "C4-000100"):
+    """Product Information (134-byte fast packet) — the rung ABOVE the address claim on the
+    plotter's enumeration ladder: after our 60928 the Garmins immediately request this
+    (observed live: directed 59904 with payload 14 F0 01). N2K db version 2.101, product
+    code arbitrary; cert level 0, LEN 1 (one 50 mA load unit) — cosmetic but honest."""
+    data = struct.pack("<HH", 2101, 100)
+    data += _fix32(model) + _fix32(sw) + _fix32(hw) + _fix32(serial)
+    data += bytes([0, 1])          # certification level, load equivalency
+    return 126996, 6, data
+
+
 def encode_129283(xte_m: float | None = 0.0, sid: int = 0):
     """XTE, single frame. Mode=autonomous, navigation NOT terminated — the 'we are navigating'
     heartbeat that makes a plotter treat the 129284/129285 stream as an active leg."""
