@@ -251,7 +251,12 @@ raise slow / clear fast):
   but never gate. **Distance-to-trigger**: per-predicate `closeness` (normalized gap to the
   threshold) → the quiet-but-close plays ride `/plays` + the strategy digest as the
   `watchlist` ("what flips the plan", live number vs threshold). `MATCHER_*` tunables.
-- `buoys.py` — live NDBC observations; the up-course buoy as a leading indicator.
+- `buoys.py` — live NDBC/GLOS/ECCC buoy+light observations AND airport METARs (shore-flagged:
+  direction/trend indicators, pressure under-reads); the up-course station as a leading
+  indicator (over-water preferred for the headline). The bundle's `buoys` block is LIVE-PROBED
+  at synthesis (seasonal buoys — 45003/45008 were dark for Mackinac 2026) and carries a
+  per-station `promise` series sampled from the routed blend → every obs gets a `vs forecast`
+  delta (actuals-vs-plan, the spatial plangap); surfaced on the wind tile's up-course ladder.
 
 **Onboard console** (`pi/console/`, **:8091**): nginx serving the same web app pointed only
 at the engine (`/api` → :8200, no cloud, no auth, no chat; `config.js` → `SR33_ONBOARD=

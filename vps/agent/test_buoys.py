@@ -122,4 +122,70 @@ check("up-course deltas land as matcher signals",
       abs(sig["upcourse_tws_delta_kn"] - 4.1) < 0.2 and sig["upcourse_twd_shift_deg"] == 15)
 check("tws_kn works on the REAL scalar shape (the fixed bug)", sig["tws_kn"] == 8.0)
 
+print("5) METAR shore stations + over-water headline preference")
+import json as _json
+
+def fetch_multi(url, timeout):
+    if "aviationweather" in url:
+        return FEEDS["metar"]
+    return FEEDS[url.split("/")[-1].split(".")[0]]
+
+ST2 = [{"id": "45999", "lat": 45.333, "lon": -82.5, "name": "buoy", "kind": "ndbc"},
+       {"id": "KXYZ", "lat": 45.25, "lon": -82.5, "name": "airport", "kind": "metar"}]
+now_ep = time.time() - 15 * 60
+METAR_JSON = _json.dumps([
+    {"icaoId": "KXYZ", "obsTime": now_ep, "wdir": 320, "wspd": 10},
+    {"icaoId": "KXYZ", "obsTime": now_ep - 3600, "wdir": 310, "wspd": 8},
+    {"icaoId": "KXYZ", "obsTime": now_ep - 1800, "wdir": "VRB", "wspd": 5},   # VRB → skipped
+])
+stub(nav_brg=0.0, stations=ST2, feeds={"45999": "", "metar": METAR_JSON})
+buoys._fetch = fetch_multi
+r = buoys.get_buoys()
+ap = next(s for s in r["stations"] if s["id"] == "KXYZ")
+print(f"     airport: tws={ap.get('tws_kn')} twd={ap.get('twd_deg')} shore={ap.get('shore')} "
+      f"trend={ap.get('trend')} headline={r['upcourse'] and r['upcourse']['station']}")
+check("METAR parsed (kt, latest first; VRB skipped)", ap.get("tws_kn") == 10 and ap.get("twd_deg") == 320)
+check("METAR flagged shore", ap.get("shore") is True)
+check("METAR trend from the 3 h history", ap.get("trend") and ap["trend"]["tws_kn_per_h"] > 0)
+check("shore station headlines only when no over-water station is up",
+      r["upcourse"] and r["upcourse"]["station"] == "KXYZ" and r["upcourse"]["shore"])
+stub(nav_brg=0.0, stations=ST2,
+     feeds={"45999": rt2([(20, 6.2, 315)]), "metar": METAR_JSON})
+buoys._fetch = fetch_multi
+r = buoys.get_buoys()
+check("over-water buoy takes the headline over a CLOSER shore METAR",
+      r["upcourse"] and r["upcourse"]["station"] == "45999" and not r["upcourse"]["shore"])
+
+print("6) actual vs the frozen forecast promise")
+now = time.time()
+ST3 = [{"id": "45999", "lat": 45.333, "lon": -82.5, "name": "buoy", "kind": "ndbc",
+        "promise": [[round(now - 3600), 8.0, 290], [round(now + 3600), 10.0, 310]]}]
+stub(nav_brg=0.0, stations=ST3, feeds={"45999": rt2([(20, 6.2, 315)])})
+buoys._fetch = fetch_multi
+r = buoys.get_buoys()
+st = r["stations"][0]
+f = st.get("forecast")
+print(f"     obs {st['tws_kn']}kn@{st['twd_deg']} vs promise {f and f['tws_kn']}kn@{f and f['twd_deg']} "
+      f"→ vs={f and f['vs']}")
+check("promise interpolated at the obs moment (~8.7 kn @ ~297°)",
+      f and abs(f["tws_kn"] - 8.7) < 0.2 and abs(f["twd_deg"] - 297) <= 1)
+check("vs-forecast deltas (obs stronger + right of plan)",
+      f and abs(f["vs"]["tws_kn"] - 3.4) < 0.3 and 16 <= f["vs"]["twd_deg"] <= 20)
+check("headline carries vs_forecast", r["upcourse"] and r["upcourse"].get("vs_forecast"))
+
+print("7) promise wrap + out-of-window honesty")
+ST4 = [{"id": "45999", "lat": 45.333, "lon": -82.5, "name": "buoy", "kind": "ndbc",
+        "promise": [[round(now - 3600), 8.0, 350], [round(now + 3600), 8.0, 20]]}]
+stub(nav_brg=0.0, stations=ST4, feeds={"45999": rt2([(0, 4.1, 10)])})
+buoys._fetch = fetch_multi
+f = buoys.get_buoys()["stations"][0].get("forecast")
+check("direction interpolates THROUGH north (350→20 ≈ 5°, not 185°)",
+      f and (f["twd_deg"] >= 350 or f["twd_deg"] <= 20))
+ST5 = [{"id": "45999", "lat": 45.333, "lon": -82.5, "name": "buoy", "kind": "ndbc",
+        "promise": [[round(now - 8 * 3600), 8.0, 290], [round(now - 6 * 3600), 10.0, 310]]}]
+stub(nav_brg=0.0, stations=ST5, feeds={"45999": rt2([(20, 6.2, 315)])})
+buoys._fetch = fetch_multi
+check("promise far outside its window → no forecast row (honest)",
+      buoys.get_buoys()["stations"][0].get("forecast") is None)
+
 print("RESULT:", "PASS" if ok else "FAIL")

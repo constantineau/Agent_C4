@@ -23,6 +23,7 @@ originates strategy; only the deterministic engine may flag an off-book departur
 """
 from __future__ import annotations
 
+import datetime
 import hashlib
 import json
 import math
@@ -277,10 +278,62 @@ def _boat_model():
     }
 
 
-def _buoy_stations(definition, course_id, pad_deg=0.6):
-    """Freeze the race's BUOY station list into the bundle (the homework pattern): every NDBC
-    station in the Lab's curated venue list within the course bbox (+ a pad). Onboard, buoys.py
-    reads this block for the up-course leading indicator. Best-effort — omitted when none."""
+_PROBE_FRESH_H = 3.0        # a candidate must have reported wind this recently to be frozen
+
+
+def _probe_ndbc(station_id, timeout=8):
+    """True if the NDBC realtime feed has a fresh wind obs for this station (lake buoys are
+    seasonal and lists rot — 45003/45008 were both dark for the 2026 Mackinac)."""
+    import urllib.request
+    url = f"https://www.ndbc.noaa.gov/data/realtime2/{station_id.upper()}.txt"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as r:
+            text = r.read(4096).decode("utf-8", "replace")
+        for line in text.splitlines():
+            if line.startswith("#") or not line.strip():
+                continue
+            c = line.split()
+            if len(c) < 7 or c[5] in ("MM", "999") or c[6] in ("MM", "99.0"):
+                return False
+            ep = datetime.datetime(*(int(c[i]) for i in range(5)),
+                                   tzinfo=datetime.timezone.utc).timestamp()
+            return (time.time() - ep) <= _PROBE_FRESH_H * 3600
+    except Exception:
+        return False
+    return False
+
+
+def _probe_metars(ids, timeout=12):
+    """The subset of `ids` with a fresh METAR wind report (one batched aviationweather call)."""
+    import json as _json
+    import urllib.request
+    if not ids:
+        return set()
+    url = ("https://aviationweather.gov/api/data/metar?format=json&ids=" + ",".join(ids))
+    try:
+        with urllib.request.urlopen(urllib.request.Request(
+                url, headers={"User-Agent": "Agent_C4-C4PerformanceLab/1.0"}), timeout=timeout) as r:
+            reports = _json.loads(r.read().decode())
+        ok = set()
+        for m in reports or []:
+            if m.get("wspd") is None:
+                continue
+            ep = (m.get("obsTime") or 0)
+            if ep and (time.time() - float(ep)) <= _PROBE_FRESH_H * 3600:
+                ok.add(m.get("icaoId"))
+        return ok
+    except Exception:
+        return set()
+
+
+def _buoy_stations(definition, course_id, promises=None, pad_deg=0.6):
+    """Freeze the race's observed-wind station list into the bundle (the homework pattern):
+    every curated station — NDBC-feed buoys/lights AND shore METARs — within the course bbox
+    (+ a pad) that a LIVE PROBE confirms is actually reporting (seasonal buoys and rotting lists
+    otherwise ship dark stations). Each frozen station carries `kind`, a `shore` flag (METAR
+    anemometers under-read the over-water gradient — direction/trend indicators, not pressure)
+    and, when the playbook sampled them, the blended field's `promise` series so the boat can
+    compare actuals against the forecast the plan routed on. Best-effort — omitted when none."""
     try:
         from . import optimizer as _opt
         from . import venue as _venue
@@ -288,10 +341,21 @@ def _buoy_stations(definition, course_id, pad_deg=0.6):
         if not bbox:
             return None
         n, s_, w, e = bbox
-        out = [{"id": st["id"], "lat": st["lat"], "lon": st["lon"], "name": st.get("name")}
-               for st in _venue.STATIONS if st.get("kind") == "ndbc"
-               and s_ - pad_deg <= st["lat"] <= n + pad_deg
-               and w - pad_deg <= st["lon"] <= e + pad_deg]
+        cands = [st for st in _venue.STATIONS if st.get("kind") in ("ndbc", "metar")
+                 and s_ - pad_deg <= st["lat"] <= n + pad_deg
+                 and w - pad_deg <= st["lon"] <= e + pad_deg]
+        live_metars = _probe_metars([st["id"] for st in cands if st["kind"] == "metar"])
+        out = []
+        for st in cands:
+            alive = st["id"] in live_metars if st["kind"] == "metar" else _probe_ndbc(st["id"])
+            if not alive:
+                continue
+            row = {"id": st["id"], "lat": st["lat"], "lon": st["lon"], "name": st.get("name"),
+                   "kind": st["kind"], "shore": st["kind"] == "metar"}
+            p = (promises or {}).get(st["id"])
+            if p:
+                row["promise"] = p
+            out.append(row)
         return out or None
     except Exception:
         return None
@@ -653,7 +717,8 @@ def synthesize(definition, course_id, start_epoch, models, ensemble_members=0, t
         "corridor": corridor or None,
         "pos_profile": (v2meta or {}).get("pos_profile"),
         "venue_stats": venue_stats,
-        "buoys": _buoy_stations(definition, course_id),   # up-course leading-indicator stations
+        # up-course leading-indicator stations — live-probed, with the blend's promised wind
+        "buoys": _buoy_stations(definition, course_id, promises=playbook.get("buoy_promises")),
         "recommended": syn.get("recommended"),
         "agreement": playbook.get("agreement"),
         "decision_spread_min": playbook.get("decision_spread_min"),

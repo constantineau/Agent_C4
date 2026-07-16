@@ -554,6 +554,32 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
         return {"available": False, "note": "no weather model data could be loaded",
                 "windfield": wf.status(), "log": log}
 
+    # STATION PROMISES: what THIS blended field (the one the plan routes on) promises at each
+    # observed-wind station near the course, hourly across the window. Frozen into the bundle so
+    # the boat can put live buoy/METAR readings next to the forecast they're supposed to match
+    # (actuals-vs-forecast, the spatial extension of plangap). Sampled here because the field
+    # object never leaves this function — rebuilding it later would re-parse every frame.
+    buoy_promises = {}
+    try:
+        from . import venue as _venue
+        n_, s_, w_, e_ = bbox
+        for st in _venue.STATIONS:
+            la, lo = st.get("lat"), st.get("lon")
+            if la is None or lo is None or not (s_ <= la <= n_ and w_ <= lo <= e_):
+                continue
+            ser, t = [], float(start_epoch)
+            while t <= t_end:
+                w_at = wf.wind_at(la, lo, t)
+                if w_at:
+                    ser.append([round(t), round(w_at[0], 1), round(w_at[1])])
+                t += 3600.0
+            if ser:
+                buoy_promises[st["id"]] = ser
+        if buoy_promises:
+            log.append(f"station promises: {len(buoy_promises)} stations sampled from the blend")
+    except Exception:
+        buoy_promises = {}
+
     # water current (set & drift) — every playbook route crabs through the SAME current as the main
     # optimize, so the variants/consensus reflect a fair/foul stream, not just wind. Off-domain / miss
     # → ZeroCurrent (routes unchanged). Built once here and shared across consensus + every sub-field.
@@ -667,4 +693,5 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
         "windfield": wf.status(), "current": cur.status(), "waves": waves.status(),
         "realized": consensus.get("realized"), "log": log,
         "skipped_marks": consensus.get("skipped_marks", []),
+        "buoy_promises": buoy_promises,   # station_id -> [[t, tws_kn, twd_deg]…] from the blend
     }

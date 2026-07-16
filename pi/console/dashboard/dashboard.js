@@ -313,6 +313,49 @@
     const r = await fetchJSON("/series?minutes=" + SERIES_MIN, 8000);
     App.seriesHist = (r && r.available && Array.isArray(r.points)) ? r.points.filter((p) => p.tws != null) : [];
   }
+  /* UP-COURSE OBSERVATIONS (engine /buoys): live NDBC/METAR stations + actual-vs-forecast — the
+     wind detail's ladder. Fetched when the wind detail opens (slow-moving; engine caches ~10 min). */
+  async function fetchBuoys() {
+    const r = await fetchJSON("/buoys", 9000);
+    if (r) App.buoys = r;
+  }
+  function buoysLadderHtml() {
+    const b = App.buoys;
+    if (!b || !b.available) return "";
+    const dd = (v, unit, digits) => v == null ? "—"
+      : (v > 0 ? "+" : "") + (digits ? v.toFixed(1) : Math.round(v)) + unit;
+    const rows = (b.stations || []).map((s) => {
+      const obs = s.tws_kn != null
+        ? r0(s.tws_kn) + " kts @ " + s.twd_deg + "°" + (s.stale ? " ⚠" : "")
+        : "<span class='muted'>dark</span>";
+      const vsOwn = s.delta ? dd(s.delta.tws_kn, "k", 1) + " / " + dd(s.delta.twd_deg, "°") : "—";
+      const f = s.forecast, big = f && (Math.abs(f.vs.tws_kn) >= 4 || Math.abs(f.vs.twd_deg) >= 20);
+      const vsFc = f ? dd(f.vs.tws_kn, "k", 1) + " / " + dd(f.vs.twd_deg, "°") : "—";
+      return "<tr" + (s.up_course ? " class='bl-up'" : "") + "><td>" + esc2(s.name) +
+        (s.shore ? " <span class='bl-shore'>shore</span>" : "") +
+        (s.up_course ? " ▲" : "") + "</td>" +
+        "<td>" + s.range_nm + "nm @" + s.bearing + "°</td>" +
+        "<td>" + obs + (s.age_min != null ? " <span class='muted'>" + s.age_min + "m</span>" : "") + "</td>" +
+        "<td>" + vsOwn + "</td>" +
+        "<td" + (big ? " style='color:var(--act);font-weight:700'" : "") + ">" + vsFc + "</td></tr>";
+    }).join("");
+    if (!rows) return "";
+    const up = b.upcourse;
+    const head = up
+      ? "<div class='dc-foot'>▲ " + esc2(up.name) + " up-course " + up.range_nm + " nm: " +
+        dd(up.tws_delta_kn, " kts", 1) + " vs here, " + dd(up.twd_shift_deg, "°") + " shift" +
+        (up.vs_forecast ? " · vs plan " + dd(up.vs_forecast.tws_kn, "k", 1) + " / " + dd(up.vs_forecast.twd_deg, "°") : "") +
+        (up.shore ? " (shore)" : "") + "</div>" : "";
+    return "<div class='rc-title' style='margin-top:10px'>Up-course observations · actual vs plan</div>" +
+      head +
+      "<div class='bl-wrap'><table class='bl-tbl'><thead><tr><th>station</th><th>where</th><th>obs</th>" +
+      "<th title='observation minus own instruments'>vs own</th>" +
+      "<th title='observation minus the frozen forecast the plan routed on'>vs plan</th></tr></thead>" +
+      "<tbody>" + rows + "</tbody></table></div>" +
+      "<div class='dc-foot'>vs plan = the blend frozen in the playbook; shore stations under-read " +
+      "pressure — trust their direction more.</div>";
+  }
+  function esc2(s) { return String(s == null ? "" : s).replace(/[<>&"]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" }[c])); }
   /* best available race history: the engine archive (authoritative) + the live tail not yet archived;
      falls back to the client buffer when the archive is empty (e.g. on the bench). */
   function raceData() {
@@ -1411,7 +1454,10 @@
     App.openTile = key;
     document.getElementById("overlay").hidden = false;
     document.getElementById("detail").hidden = false;
-    if (key === "wind" && App.src === "live") fetchSeries().then(() => { if (App.openTile === "wind") populateDetail("wind", false); });
+    if (key === "wind" && App.src === "live") {
+      fetchSeries().then(() => { if (App.openTile === "wind") populateDetail("wind", false); });
+      fetchBuoys().then(() => { if (App.openTile === "wind") populateDetail("wind", false); });
+    }
     if (key === "playbook" && App.src === "live") fetchGps();   // the GARMIN 943 row's live state
     populateDetail(key, true);
   }
@@ -1589,7 +1635,8 @@
         '<div class="rc-title" style="margin-top:8px">Direction change over the race</div>' +
         '<div class="detchart" style="--c:' + stColor + '"><div class="dc-lab dc-top">↑ shifted right</div>' +
         (makeTwdSpark(hist, 512, 60) || '<span class="dc-empty">…</span>') +
-        '<div class="dc-lab dc-bot">↓ shifted left</div></div>' + rowsHtml(t.rows);
+        '<div class="dc-lab dc-bot">↓ shifted left</div></div>' +
+        (App.src === "live" ? buoysLadderHtml() : "") + rowsHtml(t.rows);
     } else if (key === "playbook") {
       // the full strategy stack lives here now (synthesis → selector → track → drift → plays →
       // re-route), followed by the variant-agreement rows
