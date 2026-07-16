@@ -329,6 +329,7 @@ class ICON(ModelSource):
     fhr_step = 3
     priority = 1.15               # venue backtest: tied-top with HRRR/ECMWF at Mackinac
 
+    OM_MODEL = "icon_global"      # Open-Meteo model id (subclasses override)
     GRID_STEP = 0.25              # ≈ the 13 km icon-global cell — honest, no invented resolution
     CHUNK = 90                    # locations per API call (URL length + courtesy)
     MAX_FRAMES = 64               # mirrors the loader's per-member frame cap
@@ -350,7 +351,7 @@ class ICON(ModelSource):
             "latitude": ",".join(str(p[0]) for p in points),
             "longitude": ",".join(str(p[1]) for p in points),
             "hourly": "wind_speed_10m,wind_direction_10m",
-            "models": "icon_global", "wind_speed_unit": "ms",
+            "models": self.OM_MODEL, "wind_speed_unit": "ms",
             "timeformat": "unixtime", "timezone": "UTC",
             "start_hour": iso(t_start), "end_hour": iso(t_end),
         })
@@ -361,10 +362,21 @@ class ICON(ModelSource):
         if os.path.exists(cpath) and os.path.getsize(cpath) > 100:
             with open(cpath) as f:
                 return _json.load(f)
+        import urllib.error
         req = urllib.request.Request(self.API + "?" + qs,
                                      headers={"User-Agent": "Agent_C4-C4PerformanceLab/1.0"})
-        with urllib.request.urlopen(req, timeout=self.TIMEOUT) as r:
-            data = _json.loads(r.read().decode())
+        for attempt in (1, 2, 3):
+            try:
+                with urllib.request.urlopen(req, timeout=self.TIMEOUT) as r:
+                    data = _json.loads(r.read().decode())
+                break
+            except urllib.error.HTTPError as he:
+                # per-minute rate limit — a short backoff usually clears it (two API-grid models
+                # loading back-to-back is enough to trip it); anything else is a real failure
+                if he.code == 429 and attempt < 3:
+                    time.sleep(3.0 * attempt)
+                    continue
+                raise
         if isinstance(data, dict):                     # single-location responses aren't wrapped
             data = [data]
         os.makedirs(os.path.dirname(cpath), exist_ok=True)
@@ -415,7 +427,7 @@ class ICON(ModelSource):
                 frames.append(g.GribFrame(self.name, "det", float(times[k]), la_arr, lo_arr, u, v, True))
             frames.sort(key=lambda fr: fr.valid_time)
             series = {(self.name, "det"): frames} if frames else {}
-            meta = {"model": self.name, "cycle": "open-meteo icon_global (latest run)",
+            meta = {"model": self.name, "cycle": f"open-meteo {self.OM_MODEL} (latest run)",
                     "members": 1, "frames": len(frames), "expected_frames": len(keep),
                     "cycle_fallbacks": 0, "priority": self.priority, "kind": self.kind}
             if on_progress:
@@ -425,12 +437,28 @@ class ICON(ModelSource):
         except Exception as exc:  # noqa: BLE001 — best-effort like every other source
             if on_progress:
                 on_progress(f"{self.name}: unavailable ({type(exc).__name__}) — skipped")
-            return {}, {"model": self.name, "cycle": "open-meteo icon_global", "members": 1,
+            return {}, {"model": self.name, "cycle": f"open-meteo {self.OM_MODEL}", "members": 1,
                         "frames": 0, "expected_frames": 0, "cycle_fallbacks": 0,
                         "priority": self.priority, "kind": self.kind}
 
 
-MODELS = {m.name: m for m in (GFS(), NAM(), HRRR(), GEFS(), ECMWF(), ECMWF_ENS(), ICON())}
+class GEM(ICON):
+    """ECCC GEM/GDPS via the Open-Meteo regrid — same API-grid path as ICON.
+
+    Venue backtest at Mackinac: 4.40 kn vector RMSE — mid-pack (below ICON/HRRR/ECMWF, clearly
+    ahead of GFS at 4.79), so it earns an A/B checkbox but not default-blend status. GDPS runs
+    00/12 only, ~15 km grid, 240 h horizon.
+    """
+    name = "gem"
+    cycles = (0, 12)
+    lag_h = 5.5
+    horizon_h = 240
+    priority = 1.0
+
+    OM_MODEL = "gem_global"
+
+
+MODELS = {m.name: m for m in (GFS(), NAM(), HRRR(), GEFS(), ECMWF(), ECMWF_ENS(), ICON(), GEM())}
 # Default blend: the fast, reliable deterministic models (model spread = confidence). Ensembles
 # (gefs, ecmwf-ens) are opt-in via the request because they multiply the download count.
 DEFAULT_MODELS = ("gfs", "nam", "hrrr")

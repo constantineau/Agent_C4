@@ -315,10 +315,10 @@ Checklists, Fleet, Learnings, Gameplan, Lock-in & Deploy) · RACE (Monitor) · D
   **RaceDefinition** (`shared/race_def.py`: courses/marks/gates, comprehensive requirements
   checklists, rules_profile, fleet, tracker) → human review (editable form, geocoding,
   approve/sign-off) → save. Coordinates only when stated, never guessed.
-- **Optimizer:** multi-model wind field (GFS/NAM/HRRR/GEFS/ECMWF(+ENS) GRIB + ICON via the
-  Open-Meteo regrid — opt-in A/B checkbox, DWD's own feed is icosahedral-only; GEM is
-  skill-tracked but not routable; key-free sources, lag-aware freshest-cycle pick, cycle
-  fallback, coverage gate, crash-isolated cfgrib parse) blended with **venue model-skill weights** (measured
+- **Optimizer:** multi-model wind field (GFS/NAM/HRRR/GEFS/ECMWF(+ENS) GRIB + ICON/GEM via
+  the Open-Meteo regrid — opt-in A/B checkboxes, DWD's own ICON feed is icosahedral-only;
+  key-free sources, lag-aware freshest-cycle pick, cycle fallback, coverage gate,
+  crash-isolated cfgrib parse) blended with **venue model-skill weights** (measured
   forecast-vs-observed accuracy, METAR+NDBC, deep GRIB to 2005 — `docs/MODEL_SKILL_
   WEIGHTING.md`); **currents** (NOAA LMHOFS: drift + wind-over-water correction); **waves**
   (NOAA GLWU → conservative realized-speed model + per-boat calibrated coefficients);
