@@ -1,527 +1,2787 @@
 {
- "schema_version": "0.1",
- "race_id": "bayview-mackinac-2026",
- "name": "2026 Bayview Mackinac Race",
- "year": 2026,
- "organizing_authority": "Bayview Yacht Club Mackinac Race Authority (OA), affiliated with US Sailing",
- "start_date": "2026-07-18",
- "start_area": "Lower Lake Huron, off Port Huron, MI",
- "region": "Lake Huron (Great Lakes)",
- "timezone": "America/Detroit",
- "divisions": [
-  {
-   "id": "I",
-   "name": "Racing Monohull — Division I (Cove Island)",
-   "course_ref": "cove_island",
-   "boat_type": "Monohull, fixed + movable ballast"
-  },
-  {
-   "id": "II",
-   "name": "Racing Monohull + Double-Handed — Division II (Shore)",
-   "course_ref": "shore",
-   "boat_type": "Monohull, fixed + movable ballast"
-  },
-  {
-   "id": "III",
-   "name": "Cruising — Division III (Shore)",
-   "course_ref": "shore",
-   "boat_type": "Monohull"
-  },
-  {
-   "id": "IV",
-   "name": "Multihull — Division IV (Cove Island)",
-   "course_ref": "cove_island",
-   "boat_type": "Multihull"
-  }
- ],
- "courses": [
-  {
-   "id": "cove_island",
-   "name": "Cove Island Course",
-   "applies_to_divisions": [
-    "I",
-    "IV"
-   ],
-   "distance_nm": 259,
-   "note": "SI 7.1 / NOR §11.1. 259 nm (SI 18.3c).",
-   "start": {
-    "type": "line",
-    "ref": "SI 6 / SI 8.2 — RC Signal Boat position",
-    "lat": 43.06625,
-    "lon": -82.4175,
-    "coords_source": "si",
-    "note": "SI 6: starting area on the WEST side of the shipping channel, ~4.5 nm north of the head of the St. Clair River. RC Signal Boat anchored at approx N43°03.975' W82°25.050' (43.06625, -82.41750) = starboard end of the line; pin boat at the port end (SI 8.2). Single point stands in for the LINE (SI: coords approximate, no redress for minor deviation). First-class warning 1120 EDT Sat 2026-07-18 (SI 8.5); class flags + start times come in an SI ADDENDUM — not yet posted, watch the Official Board."
-   },
-   "marks": [
+  "schema_version": "0.1",
+  "race_id": "bayview-mackinac-2026",
+  "name": "2026 Bayview Mackinac Race",
+  "year": 2026,
+  "organizing_authority": "Bayview Yacht Club Mackinac Race Authority (OA), affiliated with US Sailing",
+  "start_date": "2026-07-18",
+  "start_area": "Lower Lake Huron, off Port Huron, MI",
+  "region": "Lake Huron (Great Lakes)",
+  "divisions": [
     {
-     "seq": 1,
-     "name": "Cove Island Virtual Gate",
-     "type": "gate",
-     "rounding": "gate",
-     "lat": 45.3333333,
-     "lon": -81.85,
-     "lat2": 45.338,
-     "lon2": -81.8271667,
-     "coords_source": "si",
-     "note": "SI 7.1 (coords match the NOR exactly). Gate ~1 nm long; SW mark N45°20.00' W081°51.00' left to PORT, NE mark N45°20.28' W081°49.63' left to STARBOARD; SW mark bears ~263° from the NE mark. Sail through the gate from a SOUTHERLY to a NORTHERLY direction (SI 7.1). WGS84; coords approximate per SI, no redress for minor deviation. At passage: photo of the boat's clock + primary nav GPS, and fill out + sign the Virtual Cove Island Gate card."
+      "id": "I",
+      "name": "Racing Monohull \u2014 Division I (Cove Island)",
+      "course_ref": "cove_island",
+      "boat_type": "Monohull, fixed + movable ballast"
     },
     {
-     "seq": 2,
-     "name": "Duck Islands",
-     "type": "island",
-     "rounding": "starboard",
-     "lat": 45.6266522,
-     "lon": -82.9164175,
-     "radius_nm": 3.0,
-     "coords_source": "approx",
-     "note": "NOR §11.1: leave to starboard on the approach to the finish. Geocoded (Nominatim, Duck Islands group SE of Manitoulin) — APPROX center; verify the island extent against the chart. Used as an avoidance obstacle (radius approximate); rounding SIDE not yet enforced."
+      "id": "II",
+      "name": "Racing Monohull + Double-Handed \u2014 Division II (Shore)",
+      "course_ref": "shore",
+      "boat_type": "Monohull, fixed + movable ballast"
     },
     {
-     "seq": 3,
-     "name": "Bois Blanc Island",
-     "type": "island",
-     "rounding": "port",
-     "lat": 45.7699677,
-     "lon": -84.4432006,
-     "radius_nm": 5.5,
-     "coords_source": "approx",
-     "note": "NOR §11.1: leave to port on the approach to the finish. Geocoded (Nominatim) — center of a ~10 nm-wide island; radius 5.5 nm covers its extent for avoidance. Verify against the chart; rounding SIDE not yet enforced."
+      "id": "III",
+      "name": "Cruising \u2014 Division III (Shore)",
+      "course_ref": "shore",
+      "boat_type": "Monohull"
+    },
+    {
+      "id": "IV",
+      "name": "Multihull \u2014 Division IV (Cove Island)",
+      "course_ref": "cove_island",
+      "boat_type": "Multihull"
     }
-   ],
-   "finish": {
-    "type": "virtual_gps_line",
-    "points": [
-     {
-      "name": "Round Island Lighthouse SE corner",
-      "lat": 45.8372333,
-      "lon": -84.6168667
-     },
-     {
-      "name": "Point on Mackinac Island",
-      "lat": 45.8460833,
-      "lon": -84.6184167
-     }
-    ],
-    "crossing": "East to West",
-    "coords_source": "si",
-    "note": "SI 11.1 (coords match the NOR). Virtual GPS line Round Island Lighthouse SE corner → point on Mackinac Island; Round Island Light bears 180° magnetic upon finishing; cross East to West; sail ≥10 boat lengths beyond. The YB tracker records position at high frequency and ITS DATA DETERMINES THE FINISH TIME (SI 11.1 [NP]); finish defined by the transponder crossing (SI 1.1d, changes RRS 86.3). GPS+clock photo required at finish."
-   }
-  },
-  {
-   "id": "shore",
-   "name": "Shore Course",
-   "applies_to_divisions": [
-    "II",
-    "III"
-   ],
-   "distance_nm": 204,
-   "note": "SI 7.2 / NOR §11.2. 204 nm (SI 18.3c). Thunder Bay Island and Bois Blanc Island to port.",
-   "start": {
-    "type": "line",
-    "ref": "SI 6 / SI 8.2 — RC Signal Boat position",
-    "lat": 43.06625,
-    "lon": -82.4175,
-    "coords_source": "si",
-    "note": "SI 6: starting area on the WEST side of the shipping channel, ~4.5 nm north of the head of the St. Clair River. RC Signal Boat anchored at approx N43°03.975' W82°25.050' (43.06625, -82.41750) = starboard end of the line; pin boat at the port end (SI 8.2). Single point stands in for the LINE (SI: coords approximate, no redress for minor deviation). First-class warning 1120 EDT Sat 2026-07-18 (SI 8.5); class flags + start times come in an SI ADDENDUM — not yet posted, watch the Official Board."
-   },
-   "marks": [
+  ],
+  "courses": [
     {
-     "seq": 1,
-     "name": "Thunder Bay Island",
-     "type": "island",
-     "rounding": "port",
-     "lat": 45.0444341,
-     "lon": -83.2033356,
-     "radius_nm": 1.5,
-     "coords_source": "approx",
-     "note": "NOR §11.2: leave to port. Geocoded (Nominatim, off Alpena, MI) — APPROX; verify against the chart. Avoidance obstacle; rounding SIDE not yet enforced."
+      "id": "cove_island",
+      "name": "Cove Island Course",
+      "applies_to_divisions": [
+        "I",
+        "IV"
+      ],
+      "distance_nm": 259,
+      "note": "SI 7.1 / NOR \u00a711.1. 259 nm (SI 18.3c).",
+      "start": {
+        "type": "line",
+        "ref": "SI 6 / SI 8.2 \u2014 RC Signal Boat position",
+        "lat": 43.06625,
+        "lon": -82.4175,
+        "coords_source": "si",
+        "note": "SI 6: starting area on the WEST side of the shipping channel, ~4.5 nm north of the head of the St. Clair River. RC Signal Boat anchored at approx N43\u00b003.975' W82\u00b025.050' (43.06625, -82.41750) = starboard end of the line; pin boat at the port end (SI 8.2). Single point stands in for the LINE (SI: coords approximate, no redress for minor deviation). First-class warning 1120 EDT Sat 2026-07-18 (SI 8.5); class flags + start times come in an SI ADDENDUM \u2014 not yet posted, watch the Official Board."
+      },
+      "marks": [
+        {
+          "seq": 1,
+          "name": "Cove Island Virtual Gate",
+          "type": "gate",
+          "rounding": "gate",
+          "lat": 45.3333333,
+          "lon": -81.85,
+          "lat2": 45.338,
+          "lon2": -81.8271667,
+          "coords_source": "si",
+          "note": "SI 7.1 (coords match the NOR exactly). Gate ~1 nm long; SW mark N45\u00b020.00' W081\u00b051.00' left to PORT, NE mark N45\u00b020.28' W081\u00b049.63' left to STARBOARD; SW mark bears ~263\u00b0 from the NE mark. Sail through the gate from a SOUTHERLY to a NORTHERLY direction (SI 7.1). WGS84; coords approximate per SI, no redress for minor deviation. At passage: photo of the boat's clock + primary nav GPS, and fill out + sign the Virtual Cove Island Gate card."
+        },
+        {
+          "seq": 2,
+          "name": "Duck Islands",
+          "type": "island",
+          "rounding": "starboard",
+          "lat": 45.6266522,
+          "lon": -82.9164175,
+          "radius_nm": 3,
+          "coords_source": "approx",
+          "note": "NOR \u00a711.1: leave to starboard on the approach to the finish. Geocoded (Nominatim, Duck Islands group SE of Manitoulin) \u2014 APPROX center; verify the island extent against the chart. Used as an avoidance obstacle (radius approximate); rounding SIDE not yet enforced."
+        },
+        {
+          "seq": 3,
+          "name": "Bois Blanc Island",
+          "type": "island",
+          "rounding": "port",
+          "lat": 45.7699677,
+          "lon": -84.4432006,
+          "radius_nm": 5.5,
+          "coords_source": "approx",
+          "note": "NOR \u00a711.1: leave to port on the approach to the finish. Geocoded (Nominatim) \u2014 center of a ~10 nm-wide island; radius 5.5 nm covers its extent for avoidance. Verify against the chart; rounding SIDE not yet enforced."
+        }
+      ],
+      "finish": {
+        "type": "virtual_gps_line",
+        "points": [
+          {
+            "name": "Round Island Lighthouse SE corner",
+            "lat": 45.8372333,
+            "lon": -84.6168667
+          },
+          {
+            "name": "Point on Mackinac Island",
+            "lat": 45.8460833,
+            "lon": -84.6184167
+          }
+        ],
+        "crossing": "East to West",
+        "coords_source": "si",
+        "note": "SI 11.1 (coords match the NOR). Virtual GPS line Round Island Lighthouse SE corner \u2192 point on Mackinac Island; Round Island Light bears 180\u00b0 magnetic upon finishing; cross East to West; sail \u226510 boat lengths beyond. The YB tracker records position at high frequency and ITS DATA DETERMINES THE FINISH TIME (SI 11.1 [NP]); finish defined by the transponder crossing (SI 1.1d, changes RRS 86.3). GPS+clock photo required at finish."
+      }
     },
     {
-     "seq": 2,
-     "name": "Bois Blanc Island",
-     "type": "island",
-     "rounding": "port",
-     "lat": 45.7699677,
-     "lon": -84.4432006,
-     "radius_nm": 5.5,
-     "coords_source": "approx",
-     "note": "NOR §11.2: leave to port. Geocoded (Nominatim) — center of a ~10 nm-wide island; radius 5.5 nm. Verify against the chart; rounding SIDE not yet enforced."
+      "id": "shore",
+      "name": "Shore Course",
+      "applies_to_divisions": [
+        "II",
+        "III"
+      ],
+      "distance_nm": 204,
+      "note": "SI 7.2 / NOR \u00a711.2. 204 nm (SI 18.3c). Thunder Bay Island and Bois Blanc Island to port.",
+      "start": {
+        "type": "line",
+        "ref": "SI 6 / SI 8.2 \u2014 RC Signal Boat position",
+        "lat": 43.06625,
+        "lon": -82.4175,
+        "coords_source": "si",
+        "note": "SI 6: starting area on the WEST side of the shipping channel, ~4.5 nm north of the head of the St. Clair River. RC Signal Boat anchored at approx N43\u00b003.975' W82\u00b025.050' (43.06625, -82.41750) = starboard end of the line; pin boat at the port end (SI 8.2). Single point stands in for the LINE (SI: coords approximate, no redress for minor deviation). First-class warning 1120 EDT Sat 2026-07-18 (SI 8.5); class flags + start times come in an SI ADDENDUM \u2014 not yet posted, watch the Official Board."
+      },
+      "marks": [
+        {
+          "seq": 1,
+          "name": "Thunder Bay Island",
+          "type": "island",
+          "rounding": "port",
+          "lat": 45.0444341,
+          "lon": -83.2033356,
+          "radius_nm": 1.5,
+          "coords_source": "approx",
+          "note": "NOR \u00a711.2: leave to port. Geocoded (Nominatim, off Alpena, MI) \u2014 APPROX; verify against the chart. Avoidance obstacle; rounding SIDE not yet enforced."
+        },
+        {
+          "seq": 2,
+          "name": "Bois Blanc Island",
+          "type": "island",
+          "rounding": "port",
+          "lat": 45.7699677,
+          "lon": -84.4432006,
+          "radius_nm": 5.5,
+          "coords_source": "approx",
+          "note": "NOR \u00a711.2: leave to port. Geocoded (Nominatim) \u2014 center of a ~10 nm-wide island; radius 5.5 nm. Verify against the chart; rounding SIDE not yet enforced."
+        }
+      ],
+      "finish": {
+        "type": "virtual_gps_line",
+        "points": [
+          {
+            "name": "Round Island Lighthouse SE corner",
+            "lat": 45.8372333,
+            "lon": -84.6168667
+          },
+          {
+            "name": "Point on Mackinac Island",
+            "lat": 45.8460833,
+            "lon": -84.6184167
+          }
+        ],
+        "crossing": "East to West",
+        "coords_source": "si",
+        "note": "SI 11.1. Same virtual GPS finish line as the Cove Island Course."
+      }
     }
-   ],
-   "finish": {
-    "type": "virtual_gps_line",
-    "points": [
-     {
-      "name": "Round Island Lighthouse SE corner",
-      "lat": 45.8372333,
-      "lon": -84.6168667
-     },
-     {
-      "name": "Point on Mackinac Island",
-      "lat": 45.8460833,
-      "lon": -84.6184167
-     }
+  ],
+  "zones": [
+    {
+      "name": "Lake Huron shipping lanes / traffic separation",
+      "type": "tss",
+      "geometry": null,
+      "note": "Not specified in the NOR; commercial shipping lanes exist in Lake Huron \u2014 source from SI/chart and human review before the optimizer treats them as exclusion zones."
+    }
+  ],
+  "requirements": [
+    {
+      "id": "ser-cert",
+      "category": "safety",
+      "phase": "pre_start",
+      "critical": true,
+      "text": "Electronic SER compliance certification completed before registration.",
+      "source": "NOR \u00a78.2(a) / SER"
+    },
+    {
+      "id": "harness-tether",
+      "category": "crew_safety",
+      "phase": "pre_start",
+      "critical": true,
+      "text": "Each crew member has a safety harness + compatible tether (\u22642 m, \u226520 kN).",
+      "source": "SER 3.1.3"
+    },
+    {
+      "id": "jacklines",
+      "category": "crew_safety",
+      "phase": "pre_start",
+      "critical": true,
+      "text": "Jacklines (\u226520 kN) rigged to reach all points on deck.",
+      "source": "SER 3.2.1"
+    },
+    {
+      "id": "nav-lights",
+      "category": "navigation",
+      "phase": "in_race",
+      "critical": true,
+      "text": "Display navigation lights (primary; backup on a separate power source available) between sunset and sunrise.",
+      "trigger_type": "time",
+      "trigger_detail": "sunset->sunrise",
+      "deliver_to_ipad": true,
+      "source": "SER 3.3.1 / 3.3.2"
+    },
+    {
+      "id": "flares",
+      "category": "safety",
+      "phase": "pre_start",
+      "text": "Three (3) SOLAS red hand flares (or approved equivalent) aboard, in date.",
+      "source": "SER 3.6.2"
+    },
+    {
+      "id": "mob-record",
+      "category": "crew_safety",
+      "phase": "pre_start",
+      "critical": true,
+      "text": "Electronic means to record a man-overboard position within 10 seconds.",
+      "source": "SER 3.7.4"
+    },
+    {
+      "id": "vhf",
+      "category": "communications",
+      "phase": "pre_start",
+      "critical": true,
+      "text": "Fixed 25 W VHF with the boat's MMSI programmed + a watertight handheld VHF.",
+      "source": "SER 3.8.1 / 3.8.2"
+    },
+    {
+      "id": "charts",
+      "category": "navigation",
+      "phase": "pre_start",
+      "text": "Non-electronic charts for the race area (incl. US 14860, 14864).",
+      "source": "SER 3.12"
+    },
+    {
+      "id": "radar-reflector",
+      "category": "safety",
+      "phase": "pre_start",
+      "text": "Octahedral radar reflector \u226511.5 in (or equivalent).",
+      "source": "SER 3.18"
+    },
+    {
+      "id": "emergency-steering",
+      "category": "safety",
+      "phase": "pre_start",
+      "text": "Emergency tiller able to be fitted to the rudder stock (wheel-steered boats).",
+      "source": "SER 3.21"
+    },
+    {
+      "id": "insurance",
+      "category": "registration",
+      "phase": "pre_start",
+      "critical": true,
+      "text": "\u2265 $500,000 boat liability insurance valid for the race window; certificate carried aboard.",
+      "source": "NOR \u00a77.4"
+    },
+    {
+      "id": "crew-list",
+      "category": "registration",
+      "phase": "pre_start",
+      "text": "Final crew list submitted; register at Bayview YC or Port Huron on the registration date.",
+      "source": "NOR \u00a77.5 / \u00a78"
+    },
+    {
+      "id": "tracker",
+      "category": "registration",
+      "phase": "pre_start",
+      "critical": true,
+      "text": "Carry the OA position transponder attached to the AFT-MOST portion of the stern pulpit at all times while racing (no stern pulpit \u2192 aft-most lifeline stanchion; alternates need Race Technical Chair approval). Its data determines the finish time. Turn it in at the Skipper Check-In Desk within 8 h of finishing ($1,000 charge if never returned).",
+      "source": "SI 10.2 / 11.1 / 11.4"
+    },
+    {
+      "id": "sponsor-flag",
+      "category": "registration",
+      "phase": "in_race",
+      "text": "Display the backstay flag (in the Skipper's Packet) from the backstay \u22656 ft above deck \u2014 from before entering the Starting/Staging Area until \u226530 min AFTER starting, and for \u226530 min immediately BEFORE and AFTER finishing. No backstay \u2192 fly it from the stern pulpit.",
+      "trigger_type": "event",
+      "trigger_detail": "start + finish windows (manual)",
+      "deliver_to_ipad": true,
+      "source": "SI 5",
+      "critical": true
+    },
+    {
+      "id": "gate-photo",
+      "category": "procedure",
+      "phase": "at_gate",
+      "critical": true,
+      "text": "At the Cove Island Gate (Div I/IV): photograph the boat's CLOCK + primary navigation GPS showing time and position, demonstrating passage between the gate marks (southerly\u2192northerly). Also fill out + sign the Virtual Cove Island Gate card \u2014 turned in at the Skipper Check-In Desk.",
+      "trigger_type": "location",
+      "trigger_detail": "Cove Island gate",
+      "deliver_to_ipad": true,
+      "source": "SI 7.1"
+    },
+    {
+      "id": "finish-procedure",
+      "category": "procedure",
+      "phase": "at_finish",
+      "critical": true,
+      "text": "Cross the finish line East\u2192West (Round Island Light bears 180\u00b0 magnetic); sail \u226510 boat lengths past the line. Then: fill out + sign the Start & Finish card, and call the Race Harbormaster on VHF 71 for the assigned docking zone. Check in at the Skipper Check-In Desk (Mission Point main lobby) within 8 h of finishing \u2014 turn in the card + the transponder.",
+      "trigger_type": "event",
+      "trigger_detail": "finishing",
+      "deliver_to_ipad": true,
+      "source": "SI 11.1 / 11.3 / 11.4 / 12.2"
+    },
+    {
+      "id": "finish-photo",
+      "category": "procedure",
+      "phase": "at_finish",
+      "critical": true,
+      "text": "At the finish: photograph the boat's CLOCK + primary navigation GPS clearly showing the lat/lon at the time of Finish. KEEP the photo for 30 days (scoring inquiries). The YB transponder determines the finish time; it must not be your primary nav GPS.",
+      "trigger_type": "event",
+      "trigger_detail": "finishing",
+      "deliver_to_ipad": true,
+      "source": "SI 1.1d / 11.3"
+    },
+    {
+      "id": "crew-change-report",
+      "category": "reporting",
+      "phase": "pre_start",
+      "text": "Report any crew or sail-number change after registration on VHF ch 72, monitored from 1000 on race day until the last start. Do NOT check in on VHF 71 (emergencies only).",
+      "source": "SI 8.1"
+    },
+    {
+      "id": "no-discharge",
+      "category": "environmental",
+      "phase": "in_race",
+      "text": "No overboard discharge of toilets / holding tanks (Michigan & Ontario law).",
+      "source": "NOR \u00a722"
+    },
+    {
+      "id": "post-finish-inspection",
+      "category": "safety",
+      "phase": "post_race",
+      "text": "Boats may be selected for SER inspection after finishing \u2014 notified on VHF 71 and directed to dockage; do not refuse or hinder inspection.",
+      "source": "SI 13"
+    },
+    {
+      "id": "docking",
+      "category": "procedure",
+      "phase": "post_race",
+      "text": "Leave the harbors by 1100 Wednesday after the race unless arranged (and paid) with the DNR.",
+      "source": "NOR \u00a716.2"
+    },
+    {
+      "id": "start-finish-card",
+      "category": "procedure",
+      "phase": "in_race",
+      "text": "Fill out + sign the Start & Finish card (in the Skipper's Packet) at the START and at the FINISH; a boat representative turns it in with the transponder at the Skipper Check-In Desk (Mission Point main lobby) within 8 h of finishing. Finish after 1000 Tue Jul 21 \u2192 email legible photos of the card to mackchair2026@byc.com + confirm by text 313-618-5339.",
+      "trigger_type": "event",
+      "trigger_detail": "at start + at finish (manual)",
+      "deliver_to_ipad": true,
+      "source": "SI 8.7 / 11.3 / 11.4"
+    },
+    {
+      "id": "radio-watch",
+      "category": "navigation",
+      "phase": "in_race",
+      "critical": true,
+      "text": "Monitor VHF ch 16 at all times while racing (SI 10.1). RC uses ch 71 (recalls, signals broadcast, harbormaster) \u2014 keep it clear except for emergencies; ch 72 = crew/sail-number changes + the 0800 race announcement.",
+      "trigger_type": "none",
+      "trigger_detail": "",
+      "deliver_to_ipad": false,
+      "source": "SI 10.1 / 8.1 / 4.4"
+    },
+    {
+      "id": "retirement-reporting",
+      "category": "safety",
+      "phase": "in_race",
+      "critical": true,
+      "text": "If retiring for ANY reason: contact the PRO by voice/text at 214-244-4955 ASAP and notify the USCG on VHF 16. MOB, injury needing medical attention, or damage >$5,000 \u2192 submit the Withdrawal/Retirement/MOB/Accident form (Owner Login page) by 2026-08-08.",
+      "trigger_type": "none",
+      "trigger_detail": "",
+      "deliver_to_ipad": false,
+      "source": "SI 15 / 14"
+    },
+    {
+      "id": "safety-contacts",
+      "category": "safety",
+      "phase": "in_race",
+      "text": "Emergency: USCG VHF 16. USCG Sector Detroit (833) 388-8724 covers Port Huron\u2192Alpena; Sector Northern Great Lakes (906) 635-3217 covers Alpena\u2192Mackinac; STA St. Ignace 906-643-6402. YB tracker red alert: lift the flap, hold the RED button 5 s, keep sky view until the green LED stops flashing. Distress comms with USCG take priority; inform the RC as soon as practicable after.",
+      "trigger_type": "none",
+      "trigger_detail": "",
+      "deliver_to_ipad": false,
+      "source": "SI 19 (Amendment #1)"
+    },
+    {
+      "id": "protest-window",
+      "category": "procedure",
+      "phase": "at_finish",
+      "text": "Protest/redress: email intent + nature to mackjury@byc.com within 1 h of finish or retirement (no email \u2192 text 313-402-4949); file online within 3 h of finishing (or by 1000 next day if finishing after 2100). Scoring inquiries: ali@byc.com within 3 h.",
+      "trigger_type": "none",
+      "trigger_detail": "",
+      "deliver_to_ipad": false,
+      "source": "SI 16.1 / 17.5"
+    },
+    {
+      "id": "crew-aboard-0800",
+      "category": "procedure",
+      "phase": "pre_start",
+      "text": "All crew aboard by 0800 Saturday 2026-07-18 in Port Huron (dock departure management). Race announcement on VHF 72 at 0800. AP flag ashore = postponed, first warning \u22652 h after it drops (monitor VHF 71 + the Official Board).",
+      "trigger_type": "none",
+      "trigger_detail": "",
+      "deliver_to_ipad": false,
+      "source": "SI 4.2 / 4.3 / 4.4"
+    },
+    {
+      "id": "class-start-flag",
+      "category": "procedure",
+      "phase": "pre_start",
+      "critical": true,
+      "text": "Class E gun 13:00 EDT (start #10 of 14; day's 1st warning 11:20). Class flag color PURPLE \u2014 confirm backstay flag flown per SI 8.6. B/A start together 13:30; Multihull last 13:40.",
+      "source": "SI Addendum #1 posted 2026-07-16 1330"
+    }
+  ],
+  "rules_profile": {
+    "rrs_edition": "2025-2028",
+    "info_available_to_all_permitted": true,
+    "customized_advice_while_underway_prohibited": true,
+    "appendix_wp": true,
+    "tracker_permitted": true,
+    "modifications": [
+      {
+        "ref": "NOR \u00a72.1(a)",
+        "rule": "US Sailing prescription RRS 63.1",
+        "summary": "shall not apply"
+      },
+      {
+        "ref": "NOR \u00a72.1(d)",
+        "rule": "RRS 41(c)",
+        "summary": "Help in the form of information available to all boats is permitted even if only at cost; but 'at cost' help shall NOT include private forecast or tactical advice or information customized for a particular boat or group of boats while underway. (This is the basis of the three-tier architecture.)"
+      },
+      {
+        "ref": "NOR \u00a72.1(e)",
+        "rule": "RRS 47",
+        "summary": "trash definition excludes biodegradable sail ties used while setting sails"
+      },
+      {
+        "ref": "NOR \u00a72.1(f)",
+        "rule": "Definition of Finish (RRS 86.3)",
+        "summary": "a boat finishes when its position transponder crosses the finish line from the course side; GPS photo required"
+      },
+      {
+        "ref": "NOR \u00a72.1(i)",
+        "rule": "ORC rules / ORC 206.1",
+        "summary": "ORC governs monohull racing; +1 spinnaker allowance with conditions; storm/heavy-weather sails excluded from the sail count"
+      },
+      {
+        "ref": "NOR \u00a72.1(j)",
+        "rule": "GLMRA rules",
+        "summary": "Great Lakes Multihull Racing Association rules for multihulls"
+      },
+      {
+        "ref": "NOR \u00a72.1(k)",
+        "rule": "Cruising Division Rules",
+        "summary": "apply to Cruising Division entrants (Division III)"
+      },
+      {
+        "ref": "NOR \u00a72.1(m)",
+        "rule": "World Sailing Appendix WP",
+        "summary": "Rules for Racing Around Waypoints apply (gate/waypoint passing, electronic position fixing \u2014 primary nav system precedence)"
+      },
+      {
+        "ref": "NOR \u00a72.1(n)",
+        "rule": "RRS 60.1",
+        "summary": "[NP] breaches are not grounds for a protest by a boat"
+      },
+      {
+        "ref": "NOR \u00a72.2",
+        "rule": "RRS 60.4(a)(2)",
+        "summary": "changed re: protests by boats not involved in / did not see the incident"
+      }
     ],
-    "crossing": "East to West",
-    "coords_source": "si",
-    "note": "SI 11.1. Same virtual GPS finish line as the Cove Island Course."
-   }
-  }
- ],
- "zones": [
-  {
-   "name": "Lake Huron shipping lanes / traffic separation",
-   "type": "tss",
-   "geometry": null,
-   "note": "Not specified in the NOR; commercial shipping lanes exist in Lake Huron — source from SI/chart and human review before the optimizer treats them as exclusion zones."
-  }
- ],
- "requirements": [
-  {
-   "id": "ser-cert",
-   "category": "safety",
-   "phase": "pre_start",
-   "critical": true,
-   "text": "Electronic SER compliance certification completed before registration.",
-   "source": "NOR §8.2(a) / SER"
+    "scoring": {
+      "system": "ORC",
+      "method": "Single-Number Time-on-Time (ToT)",
+      "options": [
+        "BYC Mack Cove custom wind mix (Cove Island Course)",
+        "BYC Mack Shore custom wind mix (Shore Course)",
+        "ORC Weather Routing Scoring (WRS)"
+      ],
+      "decided": "RC decides/announces BayMac custom wind mix vs ORC WRS no later than the 0810 Weather Briefing on race morning; if WRS, the TCF is published \u22653 h before the start (SI 17.1).",
+      "ref": "NOR \u00a713 / SI 17.1"
+    }
   },
-  {
-   "id": "harness-tether",
-   "category": "crew_safety",
-   "phase": "pre_start",
-   "critical": true,
-   "text": "Each crew member has a safety harness + compatible tether (≤2 m, ≥20 kN).",
-   "source": "SER 3.1.3"
+  "provenance": {
+    "sources": [
+      {
+        "label": "2026 Bayview Mackinac Notice of Race (NOR), V6 approved 11/19/25",
+        "url": "https://bycmack.com/Assets/pdf/2026NOR%20V6%20111925%20Approved_Post.pdf",
+        "retrieved": "2026-06-17"
+      },
+      {
+        "label": "2026 BYC Mack Safety Equipment Requirements (SER)",
+        "url": "https://bycmack.com/Assets/pdf/2026%20BYC%20Mack%20Safety%20Requirements%20100625.pdf",
+        "retrieved": "2026-06-17"
+      },
+      {
+        "label": "Race tracking",
+        "url": "https://bycmack.com/tracking/",
+        "retrieved": "2026-06-17"
+      },
+      {
+        "label": "2026 Bayview Mackinac Race Sailing Instructions v5 (incl. Amendment #1), posted 2026-07-14",
+        "url": "https://bycmack.com/Assets/pdf/2026%20Bayview%20Mackinac%20Race%20-%20Sailing%20Instructions%20v5%20071426.pdf",
+        "retrieved": "2026-07-15"
+      },
+      {
+        "label": "2026 SI Amendment #1 (adds Section 19 Safety; folded into v5)",
+        "url": "https://bycmack.com/Assets/pdf/2026%20SI%20Amendment%201_071426.pdf",
+        "retrieved": "2026-07-15"
+      }
+    ],
+    "si_status": "2026 SIs v5 (incl. Amendment #1, posted 2026-07-14 1800) INGESTED 2026-07-15: start position (SI 6, RC boat N43\u00b003.975 W82\u00b025.050), first warning 1120 EDT, distances 259/204 nm, finish + gate coords confirmed identical to the NOR, YB-tracker-determined finish, checklist items updated ('display-numbers' REMOVED \u2014 no such SI requirement; backstay-flag windows + Start&Finish/Gate cards added). STILL PENDING: the SI ADDENDUM with class backstay flags + class start times (SI 8.6) \u2014 watch the Official Board; SI changes possible until 0900 race day (SI 3).",
+    "review_status": "NOR+SER extraction reviewed against SI v5 on 2026-07-15. Island marks (Duck/Bois Blanc/Thunder Bay) remain geocoded-approximate avoidance obstacles \u2014 unchanged by the SI (it names them without coords). Requirements now cover the SI procedural set; the full ~40-item SER equipment list is still a representative subset. NEEDS the user's sign-off before the Jul-17 playbook synthesis freeze.",
+    "extracted_by": "Lab-0 manual extraction 2026-06-17; SI v5 re-ingest 2026-07-15",
+    "division_starts": "SI Addendum #1 posted 2026-07-16 1330 (bycmack.com/si-addendum-1); ratings refreshed from ScratchPrintClass.cfm + ORC WPub 2026-07-17"
   },
-  {
-   "id": "jacklines",
-   "category": "crew_safety",
-   "phase": "pre_start",
-   "critical": true,
-   "text": "Jacklines (≥20 kN) rigged to reach all points on deck.",
-   "source": "SER 3.2.1"
-  },
-  {
-   "id": "nav-lights",
-   "category": "navigation",
-   "phase": "in_race",
-   "critical": true,
-   "text": "Display navigation lights (primary; backup on a separate power source available) between sunset and sunrise.",
-   "trigger_type": "time",
-   "trigger_detail": "sunset->sunrise",
-   "deliver_to_ipad": true,
-   "source": "SER 3.3.1 / 3.3.2"
-  },
-  {
-   "id": "flares",
-   "category": "safety",
-   "phase": "pre_start",
-   "text": "Three (3) SOLAS red hand flares (or approved equivalent) aboard, in date.",
-   "source": "SER 3.6.2"
-  },
-  {
-   "id": "mob-record",
-   "category": "crew_safety",
-   "phase": "pre_start",
-   "critical": true,
-   "text": "Electronic means to record a man-overboard position within 10 seconds.",
-   "source": "SER 3.7.4"
-  },
-  {
-   "id": "vhf",
-   "category": "communications",
-   "phase": "pre_start",
-   "critical": true,
-   "text": "Fixed 25 W VHF with the boat's MMSI programmed + a watertight handheld VHF.",
-   "source": "SER 3.8.1 / 3.8.2"
-  },
-  {
-   "id": "charts",
-   "category": "navigation",
-   "phase": "pre_start",
-   "text": "Non-electronic charts for the race area (incl. US 14860, 14864).",
-   "source": "SER 3.12"
-  },
-  {
-   "id": "radar-reflector",
-   "category": "safety",
-   "phase": "pre_start",
-   "text": "Octahedral radar reflector ≥11.5 in (or equivalent).",
-   "source": "SER 3.18"
-  },
-  {
-   "id": "emergency-steering",
-   "category": "safety",
-   "phase": "pre_start",
-   "text": "Emergency tiller able to be fitted to the rudder stock (wheel-steered boats).",
-   "source": "SER 3.21"
-  },
-  {
-   "id": "insurance",
-   "category": "registration",
-   "phase": "pre_start",
-   "critical": true,
-   "text": "≥ $500,000 boat liability insurance valid for the race window; certificate carried aboard.",
-   "source": "NOR §7.4"
-  },
-  {
-   "id": "crew-list",
-   "category": "registration",
-   "phase": "pre_start",
-   "text": "Final crew list submitted; register at Bayview YC or Port Huron on the registration date.",
-   "source": "NOR §7.5 / §8"
-  },
-  {
-   "id": "tracker",
-   "category": "registration",
-   "phase": "pre_start",
-   "critical": true,
-   "text": "Carry the OA position transponder attached to the AFT-MOST portion of the stern pulpit at all times while racing (no stern pulpit → aft-most lifeline stanchion; alternates need Race Technical Chair approval). Its data determines the finish time. Turn it in at the Skipper Check-In Desk within 8 h of finishing ($1,000 charge if never returned).",
-   "source": "SI 10.2 / 11.1 / 11.4"
-  },
-  {
-   "id": "sponsor-flag",
-   "category": "registration",
-   "phase": "in_race",
-   "text": "Display the backstay flag (in the Skipper's Packet) from the backstay ≥6 ft above deck — from before entering the Starting/Staging Area until ≥30 min AFTER starting, and for ≥30 min immediately BEFORE and AFTER finishing. No backstay → fly it from the stern pulpit.",
-   "trigger_type": "event",
-   "trigger_detail": "start + finish windows (manual)",
-   "deliver_to_ipad": true,
-   "source": "SI 5",
-   "critical": true
-  },
-  {
-   "id": "gate-photo",
-   "category": "procedure",
-   "phase": "at_gate",
-   "critical": true,
-   "text": "At the Cove Island Gate (Div I/IV): photograph the boat's CLOCK + primary navigation GPS showing time and position, demonstrating passage between the gate marks (southerly→northerly). Also fill out + sign the Virtual Cove Island Gate card — turned in at the Skipper Check-In Desk.",
-   "trigger_type": "location",
-   "trigger_detail": "Cove Island gate",
-   "deliver_to_ipad": true,
-   "source": "SI 7.1"
-  },
-  {
-   "id": "finish-procedure",
-   "category": "procedure",
-   "phase": "at_finish",
-   "critical": true,
-   "text": "Cross the finish line East→West (Round Island Light bears 180° magnetic); sail ≥10 boat lengths past the line. Then: fill out + sign the Start & Finish card, and call the Race Harbormaster on VHF 71 for the assigned docking zone. Check in at the Skipper Check-In Desk (Mission Point main lobby) within 8 h of finishing — turn in the card + the transponder.",
-   "trigger_type": "event",
-   "trigger_detail": "finishing",
-   "deliver_to_ipad": true,
-   "source": "SI 11.1 / 11.3 / 11.4 / 12.2"
-  },
-  {
-   "id": "finish-photo",
-   "category": "procedure",
-   "phase": "at_finish",
-   "critical": true,
-   "text": "At the finish: photograph the boat's CLOCK + primary navigation GPS clearly showing the lat/lon at the time of Finish. KEEP the photo for 30 days (scoring inquiries). The YB transponder determines the finish time; it must not be your primary nav GPS.",
-   "trigger_type": "event",
-   "trigger_detail": "finishing",
-   "deliver_to_ipad": true,
-   "source": "SI 1.1d / 11.3"
-  },
-  {
-   "id": "crew-change-report",
-   "category": "reporting",
-   "phase": "pre_start",
-   "text": "Report any crew or sail-number change after registration on VHF ch 72, monitored from 1000 on race day until the last start. Do NOT check in on VHF 71 (emergencies only).",
-   "source": "SI 8.1"
-  },
-  {
-   "id": "no-discharge",
-   "category": "environmental",
-   "phase": "in_race",
-   "text": "No overboard discharge of toilets / holding tanks (Michigan & Ontario law).",
-   "source": "NOR §22"
-  },
-  {
-   "id": "post-finish-inspection",
-   "category": "safety",
-   "phase": "post_race",
-   "text": "Boats may be selected for SER inspection after finishing — notified on VHF 71 and directed to dockage; do not refuse or hinder inspection.",
-   "source": "SI 13"
-  },
-  {
-   "id": "docking",
-   "category": "procedure",
-   "phase": "post_race",
-   "text": "Leave the harbors by 1100 Wednesday after the race unless arranged (and paid) with the DNR.",
-   "source": "NOR §16.2"
-  },
-  {
-   "id": "start-finish-card",
-   "category": "procedure",
-   "phase": "in_race",
-   "text": "Fill out + sign the Start & Finish card (in the Skipper's Packet) at the START and at the FINISH; a boat representative turns it in with the transponder at the Skipper Check-In Desk (Mission Point main lobby) within 8 h of finishing. Finish after 1000 Tue Jul 21 → email legible photos of the card to mackchair2026@byc.com + confirm by text 313-618-5339.",
-   "trigger_type": "event",
-   "trigger_detail": "at start + at finish (manual)",
-   "deliver_to_ipad": true,
-   "source": "SI 8.7 / 11.3 / 11.4"
-  },
-  {
-   "id": "radio-watch",
-   "category": "navigation",
-   "phase": "in_race",
-   "critical": true,
-   "text": "Monitor VHF ch 16 at all times while racing (SI 10.1). RC uses ch 71 (recalls, signals broadcast, harbormaster) — keep it clear except for emergencies; ch 72 = crew/sail-number changes + the 0800 race announcement.",
-   "trigger_type": "none",
-   "trigger_detail": "",
-   "deliver_to_ipad": false,
-   "source": "SI 10.1 / 8.1 / 4.4"
-  },
-  {
-   "id": "retirement-reporting",
-   "category": "safety",
-   "phase": "in_race",
-   "critical": true,
-   "text": "If retiring for ANY reason: contact the PRO by voice/text at 214-244-4955 ASAP and notify the USCG on VHF 16. MOB, injury needing medical attention, or damage >$5,000 → submit the Withdrawal/Retirement/MOB/Accident form (Owner Login page) by 2026-08-08.",
-   "trigger_type": "none",
-   "trigger_detail": "",
-   "deliver_to_ipad": false,
-   "source": "SI 15 / 14"
-  },
-  {
-   "id": "safety-contacts",
-   "category": "safety",
-   "phase": "in_race",
-   "text": "Emergency: USCG VHF 16. USCG Sector Detroit (833) 388-8724 covers Port Huron→Alpena; Sector Northern Great Lakes (906) 635-3217 covers Alpena→Mackinac; STA St. Ignace 906-643-6402. YB tracker red alert: lift the flap, hold the RED button 5 s, keep sky view until the green LED stops flashing. Distress comms with USCG take priority; inform the RC as soon as practicable after.",
-   "trigger_type": "none",
-   "trigger_detail": "",
-   "deliver_to_ipad": false,
-   "source": "SI 19 (Amendment #1)"
-  },
-  {
-   "id": "protest-window",
-   "category": "procedure",
-   "phase": "at_finish",
-   "text": "Protest/redress: email intent + nature to mackjury@byc.com within 1 h of finish or retirement (no email → text 313-402-4949); file online within 3 h of finishing (or by 1000 next day if finishing after 2100). Scoring inquiries: ali@byc.com within 3 h.",
-   "trigger_type": "none",
-   "trigger_detail": "",
-   "deliver_to_ipad": false,
-   "source": "SI 16.1 / 17.5"
-  },
-  {
-   "id": "crew-aboard-0800",
-   "category": "procedure",
-   "phase": "pre_start",
-   "text": "All crew aboard by 0800 Saturday 2026-07-18 in Port Huron (dock departure management). Race announcement on VHF 72 at 0800. AP flag ashore = postponed, first warning ≥2 h after it drops (monitor VHF 71 + the Official Board).",
-   "trigger_type": "none",
-   "trigger_detail": "",
-   "deliver_to_ipad": false,
-   "source": "SI 4.2 / 4.3 / 4.4"
-  }
- ],
- "rules_profile": {
-  "rrs_edition": "2025-2028",
-  "info_available_to_all_permitted": true,
-  "customized_advice_while_underway_prohibited": true,
-  "appendix_wp": true,
-  "tracker_permitted": true,
-  "modifications": [
-   {
-    "ref": "NOR §2.1(a)",
-    "rule": "US Sailing prescription RRS 63.1",
-    "summary": "shall not apply"
-   },
-   {
-    "ref": "NOR §2.1(d)",
-    "rule": "RRS 41(c)",
-    "summary": "Help in the form of information available to all boats is permitted even if only at cost; but 'at cost' help shall NOT include private forecast or tactical advice or information customized for a particular boat or group of boats while underway. (This is the basis of the three-tier architecture.)"
-   },
-   {
-    "ref": "NOR §2.1(e)",
-    "rule": "RRS 47",
-    "summary": "trash definition excludes biodegradable sail ties used while setting sails"
-   },
-   {
-    "ref": "NOR §2.1(f)",
-    "rule": "Definition of Finish (RRS 86.3)",
-    "summary": "a boat finishes when its position transponder crosses the finish line from the course side; GPS photo required"
-   },
-   {
-    "ref": "NOR §2.1(i)",
-    "rule": "ORC rules / ORC 206.1",
-    "summary": "ORC governs monohull racing; +1 spinnaker allowance with conditions; storm/heavy-weather sails excluded from the sail count"
-   },
-   {
-    "ref": "NOR §2.1(j)",
-    "rule": "GLMRA rules",
-    "summary": "Great Lakes Multihull Racing Association rules for multihulls"
-   },
-   {
-    "ref": "NOR §2.1(k)",
-    "rule": "Cruising Division Rules",
-    "summary": "apply to Cruising Division entrants (Division III)"
-   },
-   {
-    "ref": "NOR §2.1(m)",
-    "rule": "World Sailing Appendix WP",
-    "summary": "Rules for Racing Around Waypoints apply (gate/waypoint passing, electronic position fixing — primary nav system precedence)"
-   },
-   {
-    "ref": "NOR §2.1(n)",
-    "rule": "RRS 60.1",
-    "summary": "[NP] breaches are not grounds for a protest by a boat"
-   },
-   {
-    "ref": "NOR §2.2",
-    "rule": "RRS 60.4(a)(2)",
-    "summary": "changed re: protests by boats not involved in / did not see the incident"
-   }
+  "reviewed": false,
+  "timezone": "America/Detroit",
+  "learnings_notes": "",
+  "fleet": [
+    {
+      "boat": "Entourage 3",
+      "division": "Class A",
+      "cls": "TP 52",
+      "owner": "Michael Dannecker",
+      "sail": "USA 5206",
+      "source": "website+orc",
+      "orc_gph": 437.9,
+      "rating": 0.9823,
+      "mmsi": ""
+    },
+    {
+      "boat": "Fjord",
+      "division": "Class A",
+      "cls": "TP 52",
+      "owner": "John Brynjolfsson",
+      "sail": "USA 61469",
+      "source": "website+orc",
+      "orc_gph": 435.5,
+      "rating": 0.9936,
+      "mmsi": ""
+    },
+    {
+      "boat": "Heartbreaker",
+      "division": "Class A",
+      "cls": "Botin TP 52",
+      "owner": "Robert Hughes",
+      "sail": "USA 88528",
+      "source": "website+orc",
+      "orc_gph": 425.8,
+      "rating": 1.0203,
+      "mmsi": ""
+    },
+    {
+      "boat": "Hooligan Racing",
+      "division": "Class A",
+      "cls": "TP 52",
+      "owner": "Trey Sheehan",
+      "sail": "USA 52521",
+      "source": "website+orc",
+      "orc_gph": 444.6,
+      "rating": 0.9765,
+      "mmsi": ""
+    },
+    {
+      "boat": "Mockingbird",
+      "division": "Class A",
+      "cls": "Botin TP 52",
+      "owner": "Chris Duhon",
+      "sail": "USA 5294",
+      "source": "website+orc",
+      "orc_gph": 428.6,
+      "rating": 0.9997,
+      "mmsi": ""
+    },
+    {
+      "boat": "Natalie J",
+      "division": "Class A",
+      "cls": "Botin PAC 52",
+      "owner": "Philip & Sharon O'Niel",
+      "sail": "USA 5252",
+      "source": "website+orc",
+      "orc_gph": 430.7,
+      "rating": 0.9953,
+      "mmsi": ""
+    },
+    {
+      "boat": "NIMBUS",
+      "division": "Class A",
+      "cls": "TP 52",
+      "owner": "Jack Kitrenos",
+      "sail": "USA 52221",
+      "source": "website+orc",
+      "orc_gph": 441.1,
+      "rating": 0.9886,
+      "mmsi": ""
+    },
+    {
+      "boat": "Sagamore",
+      "division": "Class A",
+      "cls": "Farr STP 65",
+      "owner": "Laura & Tone Martin",
+      "sail": "USA 73232",
+      "source": "website+orc",
+      "orc_gph": 392.7,
+      "rating": 1.0852,
+      "mmsi": ""
+    },
+    {
+      "boat": "Catapult",
+      "division": "Class B",
+      "cls": "Santa Cruz 70",
+      "owner": "Joel Ronning",
+      "sail": "USA 87654",
+      "source": "website+orc",
+      "orc_gph": 452.7,
+      "rating": 0.9518,
+      "mmsi": ""
+    },
+    {
+      "boat": "Damn Yankee",
+      "division": "Class B",
+      "cls": "Farr 60",
+      "owner": "Theodore Johnson",
+      "sail": "USA 52560",
+      "source": "website+orc",
+      "orc_gph": 450.3,
+      "rating": 0.9796,
+      "mmsi": ""
+    },
+    {
+      "boat": "Dynamis",
+      "division": "Class B",
+      "cls": "Santa Cruz 70",
+      "owner": "Brien Baker & Mike Shields",
+      "sail": "USA 52701",
+      "source": "website+orc",
+      "orc_gph": 462.2,
+      "rating": 0.9267,
+      "mmsi": ""
+    },
+    {
+      "boat": "Evolution",
+      "division": "Class B",
+      "cls": "Santa Cruz 70",
+      "owner": "Evolution Racing Group LLC",
+      "sail": "USA 70",
+      "source": "website+orc",
+      "orc_gph": 556.1,
+      "rating": 0.9286,
+      "mmsi": ""
+    },
+    {
+      "boat": "Illuminati",
+      "division": "Class B",
+      "cls": "Andrews 70",
+      "owner": "Sanford, Andrew, & Charlie Burris",
+      "sail": "USA 97999",
+      "source": "website+orc",
+      "orc_gph": 452.4,
+      "rating": 0.954,
+      "mmsi": ""
+    },
+    {
+      "boat": "OC 68",
+      "division": "Class B",
+      "cls": "Nelson/Marek 68",
+      "owner": "Oakcliff Sailing",
+      "sail": "USA 77984",
+      "source": "website+orc",
+      "orc_gph": 477,
+      "rating": 0.9014,
+      "mmsi": ""
+    },
+    {
+      "boat": "Ohana",
+      "division": "Class B",
+      "cls": "Santa Cruz 70",
+      "owner": "Tor Hough",
+      "sail": "USA 323",
+      "source": "website+orc",
+      "orc_gph": 458.6,
+      "rating": 0.9323,
+      "mmsi": ""
+    },
+    {
+      "boat": "Talisman",
+      "division": "Class B",
+      "cls": "Botin/Carkeek 58",
+      "owner": "Bruce & Linda Aikens",
+      "sail": "USA 482",
+      "source": "website+orc",
+      "orc_gph": 465,
+      "rating": 0.963,
+      "mmsi": ""
+    },
+    {
+      "boat": "Trident",
+      "division": "Class B",
+      "cls": "Santa Cruz 70",
+      "owner": "Detroit Charter Co. & Kent Colpaert",
+      "sail": "USA 50045",
+      "source": "website+orc",
+      "orc_gph": 456.8,
+      "rating": 0.9389,
+      "mmsi": ""
+    },
+    {
+      "boat": "Valor",
+      "division": "Class B",
+      "cls": "Santa Cruz 70",
+      "owner": "Marc Hollerbach & Michael Kiss",
+      "sail": "USA 25168",
+      "source": "website+orc",
+      "orc_gph": 463.1,
+      "rating": 0.928,
+      "mmsi": ""
+    },
+    {
+      "boat": "Amante 2",
+      "division": "Class C",
+      "cls": "Farr 49",
+      "owner": "Philip Velez",
+      "sail": "USA 52774",
+      "source": "website+orc",
+      "orc_gph": 490.1,
+      "rating": 0.9102,
+      "mmsi": ""
+    },
+    {
+      "boat": "Carrera",
+      "division": "Class C",
+      "cls": "Nelson/Marek 43",
+      "owner": "Rod Spearin",
+      "sail": "USA 430",
+      "source": "website+orc",
+      "orc_gph": 540.3,
+      "rating": 0.8286,
+      "mmsi": ""
+    },
+    {
+      "boat": "Eagle One",
+      "division": "Class C",
+      "cls": "Sydney 41",
+      "owner": "Timothy LaRiviere",
+      "sail": "USA 2",
+      "source": "website+orc",
+      "orc_gph": 547.8,
+      "rating": 0.8107,
+      "mmsi": ""
+    },
+    {
+      "boat": "Golden Child",
+      "division": "Class C",
+      "cls": "Nelson Marek",
+      "owner": "James Herman",
+      "sail": "USA 52555",
+      "source": "website+orc",
+      "orc_gph": 487.7,
+      "rating": 0.9201,
+      "mmsi": ""
+    },
+    {
+      "boat": "Golden Girl",
+      "division": "Class C",
+      "cls": "J/45",
+      "owner": "Bradford Kimmel",
+      "sail": "USA 45011",
+      "source": "website+orc",
+      "orc_gph": 522.3,
+      "rating": 0.8366,
+      "mmsi": ""
+    },
+    {
+      "boat": "Irregardless",
+      "division": "Class C",
+      "cls": "Farr 40",
+      "owner": "Brian Fife",
+      "sail": "USA 40113",
+      "source": "website+orc",
+      "orc_gph": 527,
+      "rating": 0.8513,
+      "mmsi": ""
+    },
+    {
+      "boat": "Jailbreak",
+      "division": "Class C",
+      "cls": "Farr 45",
+      "owner": "Keith Cameron & Shane Woolever",
+      "sail": "USA 1445",
+      "source": "website+orc",
+      "orc_gph": 505.6,
+      "rating": 0.8806,
+      "mmsi": ""
+    },
+    {
+      "boat": "Killing Me Softly",
+      "division": "Class C",
+      "cls": "Farr 40",
+      "owner": "Ryan & Trina Quinn",
+      "sail": "USA 40037",
+      "source": "website+orc",
+      "orc_gph": 527.7,
+      "rating": 0.8466,
+      "mmsi": ""
+    },
+    {
+      "boat": "mc 2",
+      "division": "Class C",
+      "cls": "Reichel/Pugh 50",
+      "owner": "Dan Lewis",
+      "sail": "USA 45777",
+      "source": "website+orc",
+      "orc_gph": 482.2,
+      "rating": 0.9219,
+      "mmsi": ""
+    },
+    {
+      "boat": "Shine Box",
+      "division": "Class C",
+      "cls": "Farr 40",
+      "owner": "Marc Belloli",
+      "sail": "USA 4007",
+      "source": "website+orc",
+      "orc_gph": 531.7,
+      "rating": 0.8377,
+      "mmsi": ""
+    },
+    {
+      "boat": "Sirocco",
+      "division": "Class C",
+      "cls": "J/160",
+      "owner": "Robert Klairmont",
+      "sail": "USA 34",
+      "source": "website+orc",
+      "orc_gph": 578.9,
+      "rating": 0.8269,
+      "mmsi": ""
+    },
+    {
+      "boat": "Solution",
+      "division": "Class C",
+      "cls": "Farr 40 OD MH",
+      "owner": "William Francis",
+      "sail": "USA 40025",
+      "source": "website+orc",
+      "orc_gph": 525.7,
+      "rating": 0.8507,
+      "mmsi": ""
+    },
+    {
+      "boat": "Swiftsure",
+      "division": "Class C",
+      "cls": "Nelson/Marek 50",
+      "owner": "Ronald Ehlert",
+      "sail": "USA 40888",
+      "source": "website+orc",
+      "orc_gph": 527.8,
+      "rating": 0.86,
+      "mmsi": ""
+    },
+    {
+      "boat": "Trompe le Monde",
+      "division": "Class C",
+      "cls": "Farr 11s",
+      "owner": "Oliver Baer",
+      "sail": "USA 61529",
+      "source": "website+orc",
+      "orc_gph": 513.1,
+      "rating": 0.8324,
+      "mmsi": ""
+    },
+    {
+      "boat": "Turbo Gary",
+      "division": "Class C",
+      "cls": "Farr 11s",
+      "owner": "Michael Duker",
+      "sail": "UAE 74111",
+      "source": "website+orc",
+      "orc_gph": 503.9,
+      "rating": 0.8686,
+      "mmsi": ""
+    },
+    {
+      "boat": "Capers",
+      "division": "Class D",
+      "cls": "J/111",
+      "owner": "Don Hudak",
+      "sail": "USA 92",
+      "source": "website+orc",
+      "orc_gph": 561.1,
+      "rating": 0.7847,
+      "mmsi": ""
+    },
+    {
+      "boat": "Cheep N Deep II",
+      "division": "Class D",
+      "cls": "J/44",
+      "owner": "Jim Richter",
+      "sail": "USA 25580",
+      "source": "website+orc",
+      "orc_gph": 554.8,
+      "rating": 0.7845,
+      "mmsi": ""
+    },
+    {
+      "boat": "Equinox",
+      "division": "Class D",
+      "cls": "Carroll Marine Tripp 40",
+      "owner": "John Demers",
+      "sail": "USA 42977",
+      "source": "website+orc",
+      "orc_gph": 576.7,
+      "rating": 0.7682,
+      "mmsi": ""
+    },
+    {
+      "boat": "Freedom",
+      "division": "Class D",
+      "cls": "J/111",
+      "owner": "James Cooper",
+      "sail": "USA 84",
+      "source": "website+orc",
+      "orc_gph": 565.8,
+      "rating": 0.7822,
+      "mmsi": ""
+    },
+    {
+      "boat": "MoneyPenny",
+      "division": "Class D",
+      "cls": "Beneteau First 44.7",
+      "owner": "Stuart Bletcher",
+      "sail": "CAN 52558",
+      "source": "website+orc",
+      "orc_gph": 559.4,
+      "rating": 0.8031,
+      "mmsi": ""
+    },
+    {
+      "boat": "Northern Spy",
+      "division": "Class D",
+      "cls": "Dufour 45e",
+      "owner": "John Steigenga",
+      "sail": "NED 131",
+      "source": "website+orc",
+      "orc_gph": 560.2,
+      "rating": 0.7736,
+      "mmsi": ""
+    },
+    {
+      "boat": "Notso EZ Money",
+      "division": "Class D",
+      "cls": "Dehler 44 SQ",
+      "owner": "Sam Medwid",
+      "sail": "USA 25669",
+      "source": "website+orc",
+      "orc_gph": 555.2,
+      "rating": 0.785,
+      "mmsi": ""
+    },
+    {
+      "boat": "Pendragon",
+      "division": "Class D",
+      "cls": "J/130SD",
+      "owner": "Gregory Thomas",
+      "sail": "USA 4001",
+      "source": "website+orc",
+      "orc_gph": 553,
+      "rating": 0.7855,
+      "mmsi": ""
+    },
+    {
+      "boat": "Pterodactyl",
+      "division": "Class D",
+      "cls": "J/111",
+      "owner": "Mark Symonds",
+      "sail": "USA 43",
+      "source": "website+orc",
+      "orc_gph": 657.1,
+      "rating": 0.7847,
+      "mmsi": ""
+    },
+    {
+      "boat": "Shmokin Joe",
+      "division": "Class D",
+      "cls": "J/111",
+      "owner": "Jeffrey Schaefer",
+      "sail": "USA 20",
+      "source": "website+orc",
+      "orc_gph": 561,
+      "rating": 0.7846,
+      "mmsi": ""
+    },
+    {
+      "boat": "Skull Cracker",
+      "division": "Class D",
+      "cls": "Solaris 50",
+      "owner": "Daniel Kitchens",
+      "sail": "USA 1629",
+      "source": "website+orc",
+      "orc_gph": 533.5,
+      "rating": 0.8041,
+      "mmsi": ""
+    },
+    {
+      "boat": "Stars & Stripes",
+      "division": "Class D",
+      "cls": "Nelson/Marek 40",
+      "owner": "Daniel Mercier",
+      "sail": "USA 5002",
+      "source": "website+orc",
+      "orc_gph": 589.8,
+      "rating": 0.7615,
+      "mmsi": ""
+    },
+    {
+      "boat": "Unplugged",
+      "division": "Class D",
+      "cls": "J/111",
+      "owner": "Tim Clayson",
+      "sail": "USA 25",
+      "source": "website+orc",
+      "orc_gph": 527.7,
+      "rating": 0.7783,
+      "mmsi": ""
+    },
+    {
+      "boat": "Variance",
+      "division": "Class D",
+      "cls": "J/111",
+      "owner": "Carl Hanssen",
+      "sail": "USA 100",
+      "source": "website+orc",
+      "orc_gph": 560.6,
+      "rating": 0.7859,
+      "mmsi": ""
+    },
+    {
+      "boat": "Warsaw",
+      "division": "Class D",
+      "cls": "1D 35 Turbo",
+      "owner": "Tim Peters",
+      "sail": "USA 35032",
+      "source": "website+orc",
+      "orc_gph": 557.9,
+      "rating": 0.7963,
+      "mmsi": ""
+    },
+    {
+      "boat": "Wildcat",
+      "division": "Class D",
+      "cls": "J/111",
+      "owner": "George Edward Kriese",
+      "sail": "USA 137",
+      "source": "website+orc",
+      "orc_gph": 560.7,
+      "rating": 0.7851,
+      "mmsi": ""
+    },
+    {
+      "boat": "ARIA",
+      "division": "Class E",
+      "cls": "Beneteau Figaro 3",
+      "owner": "Jim Banovitz",
+      "sail": "USA 36600",
+      "source": "website+orc",
+      "orc_gph": 573.6,
+      "rating": 0.7657,
+      "mmsi": ""
+    },
+    {
+      "boat": "Bad Habits",
+      "division": "Class E",
+      "cls": "Beneteau First 40.7",
+      "owner": "Mark Hanke",
+      "sail": "USA 51405",
+      "source": "website+orc",
+      "orc_gph": 583.6,
+      "rating": 0.7509,
+      "mmsi": ""
+    },
+    {
+      "boat": "Blackbird",
+      "division": "Class E",
+      "cls": "SR33",
+      "owner": "Nicholas Paterson",
+      "sail": "CAN 333",
+      "source": "website+orc",
+      "orc_gph": 587,
+      "rating": 0.7486,
+      "mmsi": ""
+    },
+    {
+      "boat": "C4",
+      "division": "Class E",
+      "cls": "C&C SR33",
+      "owner": "Matt Lane",
+      "sail": "CAN 100",
+      "source": "website+orc",
+      "orc_gph": 588.7,
+      "rating": 0.7419,
+      "mmsi": ""
+    },
+    {
+      "boat": "California Girl",
+      "division": "Class E",
+      "cls": "J/120",
+      "owner": "Robert Eger",
+      "sail": "USA 50345",
+      "source": "website+orc",
+      "orc_gph": 560.3,
+      "rating": 0.7751,
+      "mmsi": ""
+    },
+    {
+      "boat": "Elevation",
+      "division": "Class E",
+      "cls": "J/112e",
+      "owner": "Tim & Cathy McGuire",
+      "sail": "USA 61232",
+      "source": "website+orc",
+      "orc_gph": 583.8,
+      "rating": 0.7495,
+      "mmsi": ""
+    },
+    {
+      "boat": "FUNTECH Racing",
+      "division": "Class E",
+      "cls": "J/120",
+      "owner": "Charles C Hess",
+      "sail": "USA 5455",
+      "source": "website+orc",
+      "orc_gph": 571.8,
+      "rating": 0.7582,
+      "mmsi": ""
+    },
+    {
+      "boat": "Ghost",
+      "division": "Class E",
+      "cls": "Columbia 30 Sport",
+      "owner": "David Day",
+      "sail": "USA 56607",
+      "source": "website+orc",
+      "orc_gph": 587.5,
+      "rating": 0.7725,
+      "mmsi": ""
+    },
+    {
+      "boat": "Hot Ticket",
+      "division": "Class E",
+      "cls": "J/120",
+      "owner": "Mike & Bob Kirkman",
+      "sail": "USA 25328",
+      "source": "website+orc",
+      "orc_gph": 572.4,
+      "rating": 0.7589,
+      "mmsi": ""
+    },
+    {
+      "boat": "Kailani",
+      "division": "Class E",
+      "cls": "C&C 121",
+      "owner": "Kris Tonn",
+      "sail": "USA 93213",
+      "source": "website+orc",
+      "orc_gph": 590.4,
+      "rating": 0.741,
+      "mmsi": ""
+    },
+    {
+      "boat": "Latitude",
+      "division": "Class E",
+      "cls": "J/120",
+      "owner": "Jim Denner/Jon Berg",
+      "sail": "USA 50793",
+      "source": "website+orc",
+      "orc_gph": 568,
+      "rating": 0.7657,
+      "mmsi": ""
+    },
+    {
+      "boat": "Maskwa",
+      "division": "Class E",
+      "cls": "C&C 115",
+      "owner": "Donald Waller",
+      "sail": "USA 11508",
+      "source": "website+orc",
+      "orc_gph": 586.9,
+      "rating": 0.7485,
+      "mmsi": ""
+    },
+    {
+      "boat": "My Girl",
+      "division": "Class E",
+      "cls": "C&C 115",
+      "owner": "John Raguse",
+      "sail": "USA 2007",
+      "source": "website+orc",
+      "orc_gph": 585.5,
+      "rating": 0.7509,
+      "mmsi": ""
+    },
+    {
+      "boat": "Nobody's Fault",
+      "division": "Class E",
+      "cls": "J/120",
+      "owner": "Chris Ongena & C.J. Ruffing",
+      "sail": "USA 25999",
+      "source": "website+orc",
+      "orc_gph": 566.6,
+      "rating": 0.7668,
+      "mmsi": ""
+    },
+    {
+      "boat": "O-Sheet",
+      "division": "Class M - Cruiser-Racer",
+      "cls": "Olson 40",
+      "owner": "J. Scott Maust",
+      "sail": "USA 32718",
+      "source": "website",
+      "orc_gph": null,
+      "rating": null,
+      "mmsi": ""
+    },
+    {
+      "boat": "Rowdy",
+      "division": "Class E",
+      "cls": "Tartan 101",
+      "owner": "Steven Clement",
+      "sail": "USA 10102",
+      "source": "website+orc",
+      "orc_gph": 599,
+      "rating": 0.7418,
+      "mmsi": ""
+    },
+    {
+      "boat": "Sleeping Tiger",
+      "division": "Class E",
+      "cls": "J/120",
+      "owner": "John Harvey & Rick Titsworth",
+      "sail": "USA 25900",
+      "source": "website+orc",
+      "orc_gph": 571.8,
+      "rating": 0.756,
+      "mmsi": ""
+    },
+    {
+      "boat": "Smoke Show",
+      "division": "Class E",
+      "cls": "JPK 10.80",
+      "owner": "Jake Thomas",
+      "sail": "USA 38103",
+      "source": "website+orc",
+      "orc_gph": 587.7,
+      "rating": 0.7393,
+      "mmsi": ""
+    },
+    {
+      "boat": "Taku",
+      "division": "Class L - Cruiser-Racer",
+      "cls": "Beneteau First 40.7",
+      "owner": "Brian Jenney",
+      "sail": "USA 25467",
+      "source": "website+orc",
+      "orc_gph": 583.8,
+      "rating": 0.7532,
+      "mmsi": ""
+    },
+    {
+      "boat": "Blackhawk",
+      "division": "Class F",
+      "cls": "J/35",
+      "owner": "Tim & Amie Ross",
+      "sail": "USA 32478",
+      "source": "website+orc",
+      "orc_gph": 605.1,
+      "rating": 0.7356,
+      "mmsi": ""
+    },
+    {
+      "boat": "Bull",
+      "division": "Class F",
+      "cls": "J/109",
+      "owner": "Michael Hendrie",
+      "sail": "USA 368",
+      "source": "website+orc",
+      "orc_gph": 603.7,
+      "rating": 0.7254,
+      "mmsi": ""
+    },
+    {
+      "boat": "Falcon",
+      "division": "Class F",
+      "cls": "J/35",
+      "owner": "Mike Welch",
+      "sail": "USA 43828",
+      "source": "website",
+      "orc_gph": 607.2,
+      "rating": 0.7306,
+      "mmsi": ""
+    },
+    {
+      "boat": "FireFly",
+      "division": "Class F",
+      "cls": "J/35",
+      "owner": "Terry & Sheri Dufresne",
+      "sail": "USA 45",
+      "source": "website+orc",
+      "orc_gph": 608.7,
+      "rating": 0.731,
+      "mmsi": ""
+    },
+    {
+      "boat": "FireFly",
+      "division": "Class F",
+      "cls": "J/35",
+      "owner": "Terry & Sheri Dufresne",
+      "sail": "USA 40935",
+      "source": "website+orc",
+      "orc_gph": 606.5,
+      "rating": 0.7325,
+      "mmsi": ""
+    },
+    {
+      "boat": "Havannah",
+      "division": "Class F",
+      "cls": "Italia 11.98",
+      "owner": "Karim Botros",
+      "sail": "ITA 17598",
+      "source": "website+orc",
+      "orc_gph": 591.4,
+      "rating": 0.7385,
+      "mmsi": ""
+    },
+    {
+      "boat": "Janine",
+      "division": "Class F",
+      "cls": "J/109",
+      "owner": "Kevin Lemonds",
+      "sail": "USA 93272",
+      "source": "website+orc",
+      "orc_gph": 607.4,
+      "rating": 0.7201,
+      "mmsi": ""
+    },
+    {
+      "boat": "Kinsail",
+      "division": "Class F",
+      "cls": "Thomas 35",
+      "owner": "Douglas & Drew Blackburn",
+      "sail": "USA 43504",
+      "source": "website+orc",
+      "orc_gph": 606.5,
+      "rating": 0.7338,
+      "mmsi": ""
+    },
+    {
+      "boat": "Le R\u00eave",
+      "division": "Class F",
+      "cls": "Arcona 380",
+      "owner": "Rachel O'Byrne",
+      "sail": "USA 38044",
+      "source": "website+orc",
+      "orc_gph": 561.7,
+      "rating": 0.7414,
+      "mmsi": ""
+    },
+    {
+      "boat": "Phoenix",
+      "division": "Class F",
+      "cls": "J/109",
+      "owner": "William Hamilton",
+      "sail": "USA 251",
+      "source": "website+orc",
+      "orc_gph": 610.2,
+      "rating": 0.7168,
+      "mmsi": ""
+    },
+    {
+      "boat": "Power Trip",
+      "division": "Class F",
+      "cls": "Corby 33",
+      "owner": "James & Paul Kraft",
+      "sail": "USA 52833",
+      "source": "website+orc",
+      "orc_gph": 603.8,
+      "rating": 0.735,
+      "mmsi": ""
+    },
+    {
+      "boat": "Rambler",
+      "division": "Class F",
+      "cls": "J/99",
+      "owner": "James Nachtman",
+      "sail": "USA 99",
+      "source": "website+orc",
+      "orc_gph": 605.6,
+      "rating": 0.732,
+      "mmsi": ""
+    },
+    {
+      "boat": "Redline",
+      "division": "Class F",
+      "cls": "J/35",
+      "owner": "Kim & M. Linus Isabell",
+      "sail": "USA 69311",
+      "source": "website+orc",
+      "orc_gph": 606.7,
+      "rating": 0.731,
+      "mmsi": ""
+    },
+    {
+      "boat": "Rowdy",
+      "division": "Class F",
+      "cls": "Thomas 35",
+      "owner": "Val C. Saph",
+      "sail": "USA 42418",
+      "source": "website+orc",
+      "orc_gph": 605.6,
+      "rating": 0.7348,
+      "mmsi": ""
+    },
+    {
+      "boat": "Sapphire",
+      "division": "Class F",
+      "cls": "Beneteau First 40.7",
+      "owner": "Sebastian Scheibert",
+      "sail": "USA 9449",
+      "source": "website+orc",
+      "orc_gph": 593.3,
+      "rating": 0.7351,
+      "mmsi": ""
+    },
+    {
+      "boat": "Shing-a-Ling",
+      "division": "Class F",
+      "cls": "J/99",
+      "owner": "Bob Asher & Wes Ory",
+      "sail": "USA 103",
+      "source": "website+orc",
+      "orc_gph": 562.6,
+      "rating": 0.7363,
+      "mmsi": ""
+    },
+    {
+      "boat": "Snipe",
+      "division": "Class F",
+      "cls": "J/35",
+      "owner": "Dennis Meagher",
+      "sail": "USA 97481",
+      "source": "website+orc",
+      "orc_gph": 607.2,
+      "rating": 0.7296,
+      "mmsi": ""
+    },
+    {
+      "boat": "Undaunted",
+      "division": "Class F",
+      "cls": "Beneteau FIRST 36.7 (Modified)",
+      "owner": "Than & Meghan Dykstra",
+      "sail": "USA 25547",
+      "source": "website+orc",
+      "orc_gph": 607.6,
+      "rating": 0.7301,
+      "mmsi": ""
+    },
+    {
+      "boat": "Brandilee",
+      "division": "Class G",
+      "cls": "X-402",
+      "owner": "Steve Nadeau",
+      "sail": "USA 40740",
+      "source": "website",
+      "orc_gph": null,
+      "rating": null,
+      "mmsi": ""
+    },
+    {
+      "boat": "Caliber",
+      "division": "Class G",
+      "cls": "Tripp 33",
+      "owner": "Brian DeWyse",
+      "sail": "USA 50506",
+      "source": "website+orc",
+      "orc_gph": 605.1,
+      "rating": 0.7272,
+      "mmsi": ""
+    },
+    {
+      "boat": "Consig",
+      "division": "Class F",
+      "cls": "J/109",
+      "owner": "Brad D'Arcangelo",
+      "sail": "USA 173",
+      "source": "website+orc",
+      "orc_gph": 609.6,
+      "rating": 0.7196,
+      "mmsi": ""
+    },
+    {
+      "boat": "Desilou",
+      "division": "Class G",
+      "cls": "Beneteau First 36.7",
+      "owner": "Louis Schweitzer",
+      "sail": "USA 1821",
+      "source": "website+orc",
+      "orc_gph": 614.7,
+      "rating": 0.7143,
+      "mmsi": ""
+    },
+    {
+      "boat": "DeTour",
+      "division": "Class G",
+      "cls": "Italia 9.98",
+      "owner": "Chuck Stormes",
+      "sail": "USA 998",
+      "source": "website+orc",
+      "orc_gph": 616.2,
+      "rating": 0.7107,
+      "mmsi": ""
+    },
+    {
+      "boat": "Discover",
+      "division": "Class G",
+      "cls": "J/33",
+      "owner": "Matt Kern",
+      "sail": "USA 65376",
+      "source": "website+orc",
+      "orc_gph": 614.8,
+      "rating": 0.7159,
+      "mmsi": ""
+    },
+    {
+      "boat": "Fast Tango",
+      "division": "Class G",
+      "cls": "NA 40",
+      "owner": "Tim Prophit",
+      "sail": "USA 15004",
+      "source": "website+orc",
+      "orc_gph": 620.1,
+      "rating": 0.7206,
+      "mmsi": ""
+    },
+    {
+      "boat": "Glass Pony",
+      "division": "Class G",
+      "cls": "Beneteau First 35",
+      "owner": "Jason Huffman",
+      "sail": "USA 25649",
+      "source": "website+orc",
+      "orc_gph": 611,
+      "rating": 0.7114,
+      "mmsi": ""
+    },
+    {
+      "boat": "Good Lookin'",
+      "division": "Class G",
+      "cls": "J/105",
+      "owner": "Mark DenUyl",
+      "sail": "USA 123",
+      "source": "website+orc",
+      "orc_gph": 614.5,
+      "rating": 0.696,
+      "mmsi": ""
+    },
+    {
+      "boat": "Invictus",
+      "division": "Class G",
+      "cls": "Beneteau First 36",
+      "owner": "Wayne Shaw",
+      "sail": "CAN 1",
+      "source": "website+orc",
+      "orc_gph": 590.6,
+      "rating": 0.7226,
+      "mmsi": ""
+    },
+    {
+      "boat": "Joyride",
+      "division": "Class G",
+      "cls": "J/105",
+      "owner": "Christian Jensen",
+      "sail": "CAN 92",
+      "source": "website+orc",
+      "orc_gph": 564.7,
+      "rating": 0.7034,
+      "mmsi": ""
+    },
+    {
+      "boat": "Lake Effect",
+      "division": "Class I",
+      "cls": "C&C 110",
+      "owner": "Bill Brusilow",
+      "sail": "USA 25685",
+      "source": "website+orc",
+      "orc_gph": 626,
+      "rating": 0.704,
+      "mmsi": ""
+    },
+    {
+      "boat": "Manitou",
+      "division": "Class G",
+      "cls": "Beneteau First 36.7",
+      "owner": "John Burke",
+      "sail": "USA 143",
+      "source": "website+orc",
+      "orc_gph": 614.2,
+      "rating": 0.7155,
+      "mmsi": ""
+    },
+    {
+      "boat": "Moa",
+      "division": "Class G",
+      "cls": "J/105",
+      "owner": "Peter DeGalan",
+      "sail": "USA 487",
+      "source": "website+orc",
+      "orc_gph": 614.6,
+      "rating": 0.6969,
+      "mmsi": ""
+    },
+    {
+      "boat": "Mostly Harmless",
+      "division": "Class G",
+      "cls": "Beneteau First 42 TM",
+      "owner": "Warwick & Mary Smith, Randy Smith",
+      "sail": "USA 25668",
+      "source": "website+orc",
+      "orc_gph": 608.2,
+      "rating": 0.7194,
+      "mmsi": ""
+    },
+    {
+      "boat": "Patriot",
+      "division": "Class G",
+      "cls": "Beneteau First 36.7",
+      "owner": "Michael Valuck",
+      "sail": "USA 51678",
+      "source": "website+orc",
+      "orc_gph": 614.2,
+      "rating": 0.7155,
+      "mmsi": ""
+    },
+    {
+      "boat": "Sohest",
+      "division": "Class G",
+      "cls": "Beneteau First 36.7",
+      "owner": "Jerry Somalski & Wanda Dziwura",
+      "sail": "USA 52754",
+      "source": "website+orc",
+      "orc_gph": 614.2,
+      "rating": 0.7155,
+      "mmsi": ""
+    },
+    {
+      "boat": "Max",
+      "division": "Class H - Doublehanded",
+      "cls": "Beneteau First 36.7",
+      "owner": "Joshua Milberg",
+      "sail": "USA 709",
+      "source": "website",
+      "orc_gph": null,
+      "rating": 0.7368,
+      "mmsi": ""
+    },
+    {
+      "boat": "No Surprise",
+      "division": "Class H - Doublehanded",
+      "cls": "J/111",
+      "owner": "Scott & Merritt Sellers",
+      "sail": "USA 60611",
+      "source": "website+orc",
+      "orc_gph": 561.4,
+      "rating": 0.7914,
+      "mmsi": ""
+    },
+    {
+      "boat": "Otis B. Driftwood",
+      "division": "Class H - Doublehanded",
+      "cls": "Jeanneau Sun Rise 34",
+      "owner": "Blair Arden",
+      "sail": "USA 25341",
+      "source": "website",
+      "orc_gph": null,
+      "rating": 0.6616,
+      "mmsi": ""
+    },
+    {
+      "boat": "Revel",
+      "division": "Class H - Doublehanded",
+      "cls": "Sabre 452",
+      "owner": "Brian Ellison",
+      "sail": "USA 61638",
+      "source": "website+orc",
+      "orc_gph": 589,
+      "rating": 0.7315,
+      "mmsi": ""
+    },
+    {
+      "boat": "Riptide",
+      "division": "Class H - Doublehanded",
+      "cls": "Express 27",
+      "owner": "John Walton",
+      "sail": "USA 32122",
+      "source": "website",
+      "orc_gph": null,
+      "rating": 0.6379,
+      "mmsi": ""
+    },
+    {
+      "boat": "Southbound",
+      "division": "Class H - Doublehanded",
+      "cls": "J/105",
+      "owner": "Lease Schock",
+      "sail": "USA 423",
+      "source": "website",
+      "orc_gph": null,
+      "rating": 0.7097,
+      "mmsi": ""
+    },
+    {
+      "boat": "Spitfire",
+      "division": "Class H - Doublehanded",
+      "cls": "Olson 911SE",
+      "owner": "Daryl Baxter",
+      "sail": "CAN 102",
+      "source": "website+orc",
+      "orc_gph": 594,
+      "rating": 0.6597,
+      "mmsi": ""
+    },
+    {
+      "boat": "Utah",
+      "division": "Class H - Doublehanded",
+      "cls": "J/111",
+      "owner": "Bradley & Ian Faber",
+      "sail": "USA 90",
+      "source": "website+orc",
+      "orc_gph": 511.1,
+      "rating": 0.7909,
+      "mmsi": ""
+    },
+    {
+      "boat": "Avatar",
+      "division": "Class I",
+      "cls": "Santana 35",
+      "owner": "Andrew Morlan",
+      "sail": "USA 15056",
+      "source": "website+orc",
+      "orc_gph": 652,
+      "rating": 0.68,
+      "mmsi": ""
+    },
+    {
+      "boat": "BenJammin",
+      "division": "Class I",
+      "cls": "Santana 35",
+      "owner": "James A. Rapelje",
+      "sail": "USA 43076",
+      "source": "website+orc",
+      "orc_gph": 645.5,
+      "rating": 0.6848,
+      "mmsi": ""
+    },
+    {
+      "boat": "Centurion",
+      "division": "Class I",
+      "cls": "J/29",
+      "owner": "Michael Gualdoni",
+      "sail": "USA 63240",
+      "source": "website+orc",
+      "orc_gph": 651.6,
+      "rating": 0.6903,
+      "mmsi": ""
+    },
+    {
+      "boat": "Eliminator",
+      "division": "Class I",
+      "cls": "C&C 35 MKII",
+      "owner": "Christopher & John VanTol",
+      "sail": "USA 15370",
+      "source": "website+orc",
+      "orc_gph": 637.2,
+      "rating": 0.7078,
+      "mmsi": ""
+    },
+    {
+      "boat": "FreeWay",
+      "division": "Class I",
+      "cls": "Morgan 42-2 TM",
+      "owner": "Bill Furlong",
+      "sail": "USA 10211",
+      "source": "website+orc",
+      "orc_gph": 634.4,
+      "rating": 0.703,
+      "mmsi": ""
+    },
+    {
+      "boat": "It's a Zoo",
+      "division": "Class I",
+      "cls": "Santana 35",
+      "owner": "James F. Shaw",
+      "sail": "USA 15057",
+      "source": "website+orc",
+      "orc_gph": 654.5,
+      "rating": 0.6791,
+      "mmsi": ""
+    },
+    {
+      "boat": "Marmalade",
+      "division": "Class I",
+      "cls": "Hunter Legend 37",
+      "owner": "Dan & Maureen Vialard",
+      "sail": "USA 42082",
+      "source": "website+orc",
+      "orc_gph": 623.6,
+      "rating": 0.7097,
+      "mmsi": ""
+    },
+    {
+      "boat": "Royal Blue",
+      "division": "Class I",
+      "cls": "Frers 33",
+      "owner": "R. Gregory Fisher",
+      "sail": "USA 42478",
+      "source": "website+orc",
+      "orc_gph": 646.3,
+      "rating": 0.6983,
+      "mmsi": ""
+    },
+    {
+      "boat": "Shape",
+      "division": "Class I",
+      "cls": "Santana 35",
+      "owner": "Everett & Cameron Benedict",
+      "sail": "USA 23756",
+      "source": "website+orc",
+      "orc_gph": 655,
+      "rating": 0.6752,
+      "mmsi": ""
+    },
+    {
+      "boat": "Titan",
+      "division": "Class L - Cruiser-Racer",
+      "cls": "C&C 41",
+      "owner": "Dan Aitken & Michael Schultes",
+      "sail": "USA 25633",
+      "source": "website+orc",
+      "orc_gph": 606.8,
+      "rating": 0.7308,
+      "mmsi": ""
+    },
+    {
+      "boat": "Trader",
+      "division": "Class I",
+      "cls": "Santana 35",
+      "owner": "Dave Kember",
+      "sail": "CAN 15053",
+      "source": "website+orc",
+      "orc_gph": 647.8,
+      "rating": 0.6877,
+      "mmsi": ""
+    },
+    {
+      "boat": "Trim",
+      "division": "Class I",
+      "cls": "Morgan NM 36",
+      "owner": "James J Leamon",
+      "sail": "USA 15154",
+      "source": "website+orc",
+      "orc_gph": 637.7,
+      "rating": 0.6946,
+      "mmsi": ""
+    },
+    {
+      "boat": "Whistler",
+      "division": "Class I",
+      "cls": "J/105",
+      "owner": "Ethan & Will Taylor",
+      "sail": "USA 376",
+      "source": "website+orc",
+      "orc_gph": 618.1,
+      "rating": 0.6979,
+      "mmsi": ""
+    },
+    {
+      "boat": "Wind Toy IV",
+      "division": "Class I",
+      "cls": "Morgan 42-2 TM",
+      "owner": "Rob Bunn",
+      "sail": "USA 5119",
+      "source": "website+orc",
+      "orc_gph": 636.2,
+      "rating": 0.7019,
+      "mmsi": ""
+    },
+    {
+      "boat": "Arcadia",
+      "division": "Class J",
+      "cls": "C&C 35 MKI",
+      "owner": "James Jelsone & Tim Jordan",
+      "sail": "USA 5133",
+      "source": "website+orc",
+      "orc_gph": 659.8,
+      "rating": 0.6721,
+      "mmsi": ""
+    },
+    {
+      "boat": "Bravo",
+      "division": "Class J",
+      "cls": "C&C 35 MKI",
+      "owner": "Andrew Beeler",
+      "sail": "USA 5288",
+      "source": "website+orc",
+      "orc_gph": 659.5,
+      "rating": 0.6721,
+      "mmsi": ""
+    },
+    {
+      "boat": "Contender",
+      "division": "Class J",
+      "cls": "C&C 35 MKI",
+      "owner": "Gary Graham",
+      "sail": "USA 15560",
+      "source": "website+orc",
+      "orc_gph": 659.8,
+      "rating": 0.6721,
+      "mmsi": ""
+    },
+    {
+      "boat": "Firewater",
+      "division": "Class J",
+      "cls": "C&C 35 MKI",
+      "owner": "Andrew Hellenbart",
+      "sail": "CAN 4207",
+      "source": "website+orc",
+      "orc_gph": 658.5,
+      "rating": 0.6721,
+      "mmsi": ""
+    },
+    {
+      "boat": "Mystic",
+      "division": "Class J",
+      "cls": "C&C 35 MKI",
+      "owner": "Bob Mann",
+      "sail": "USA 14032",
+      "source": "website+orc",
+      "orc_gph": 660.8,
+      "rating": 0.6721,
+      "mmsi": ""
+    },
+    {
+      "boat": "PRAECEPTOR",
+      "division": "Class J",
+      "cls": "C&C 35 MKI",
+      "owner": "Grant Veach",
+      "sail": "USA 13106",
+      "source": "website+orc",
+      "orc_gph": 659.9,
+      "rating": 0.6721,
+      "mmsi": ""
+    },
+    {
+      "boat": "Shamrock",
+      "division": "Class J",
+      "cls": "C&C 35 MKI",
+      "owner": "J. Schuch & D.R. Keys",
+      "sail": "USA 11166",
+      "source": "website+orc",
+      "orc_gph": 659.3,
+      "rating": 0.6721,
+      "mmsi": ""
+    },
+    {
+      "boat": "Shillelagh",
+      "division": "Class J",
+      "cls": "C&C 35 MKI",
+      "owner": "George Mulqueen",
+      "sail": "USA 5166",
+      "source": "website+orc",
+      "orc_gph": 659.3,
+      "rating": 0.6721,
+      "mmsi": ""
+    },
+    {
+      "boat": "Siochail",
+      "division": "Class J",
+      "cls": "C&C 35 MKI",
+      "owner": "Brian Geraghty",
+      "sail": "USA 10380",
+      "source": "website+orc",
+      "orc_gph": 658.8,
+      "rating": 0.6721,
+      "mmsi": ""
+    },
+    {
+      "boat": "Tir Na Nog",
+      "division": "Class J",
+      "cls": "C&C 35 MKI",
+      "owner": "Steven Sheppard",
+      "sail": "USA 5290",
+      "source": "website+orc",
+      "orc_gph": 658.8,
+      "rating": 0.6721,
+      "mmsi": ""
+    },
+    {
+      "boat": "Underdog",
+      "division": "Class J",
+      "cls": "C&C 35 MKI",
+      "owner": "Cameron Paine",
+      "sail": "CAN 4605",
+      "source": "website+orc",
+      "orc_gph": 659.2,
+      "rating": 0.6721,
+      "mmsi": ""
+    },
+    {
+      "boat": "Albacore",
+      "division": "Class K",
+      "cls": "S&S Pilot 33",
+      "owner": "Richard Marsh",
+      "sail": "USA 422",
+      "source": "website+orc",
+      "orc_gph": 696.4,
+      "rating": 0.6445,
+      "mmsi": ""
+    },
+    {
+      "boat": "Courage",
+      "division": "Class K",
+      "cls": "Morgan 35",
+      "owner": "Spencer Channell",
+      "sail": "USA 5224",
+      "source": "website+orc",
+      "orc_gph": 696.2,
+      "rating": 0.6305,
+      "mmsi": ""
+    },
+    {
+      "boat": "Days End",
+      "division": "Class K",
+      "cls": "Catalina 320 WK",
+      "owner": "Charles Blaty",
+      "sail": "USA 25589",
+      "source": "website+orc",
+      "orc_gph": 683.6,
+      "rating": 0.6375,
+      "mmsi": ""
+    },
+    {
+      "boat": "Double Jeopardy",
+      "division": "Class K",
+      "cls": "Tartan 10",
+      "owner": "Sean Murphy",
+      "sail": "USA 31",
+      "source": "website+orc",
+      "orc_gph": 654.8,
+      "rating": 0.6728,
+      "mmsi": ""
+    },
+    {
+      "boat": "Ginger",
+      "division": "Class K",
+      "cls": "S2 7.9",
+      "owner": "Andrea Hill & Mark Allen",
+      "sail": "CAN 533",
+      "source": "website+orc",
+      "orc_gph": 708.8,
+      "rating": 0.6329,
+      "mmsi": ""
+    },
+    {
+      "boat": "Jam Jam",
+      "division": "Class K",
+      "cls": "Morgan 27",
+      "owner": "James Morphew",
+      "sail": "USA 56",
+      "source": "website+orc",
+      "orc_gph": 721.9,
+      "rating": 0.6123,
+      "mmsi": ""
+    },
+    {
+      "boat": "No Rebase",
+      "division": "Class K",
+      "cls": "Tartan 10",
+      "owner": "Paul Hoff",
+      "sail": "USA 22391",
+      "source": "website+orc",
+      "orc_gph": 655,
+      "rating": 0.6675,
+      "mmsi": ""
+    },
+    {
+      "boat": "Shenan Again",
+      "division": "Class K",
+      "cls": "PT-30",
+      "owner": "Richard Synowiec & Paul Goddard",
+      "sail": "USA 15482",
+      "source": "website+orc",
+      "orc_gph": 698.6,
+      "rating": 0.6457,
+      "mmsi": ""
+    },
+    {
+      "boat": "Spageeto Byte",
+      "division": "Class K",
+      "cls": "Hunter 33-2 SD",
+      "owner": "Steve Straub",
+      "sail": "USA 52710",
+      "source": "website+orc",
+      "orc_gph": 692.9,
+      "rating": 0.6126,
+      "mmsi": ""
+    },
+    {
+      "boat": "Tar Baby",
+      "division": "Class K",
+      "cls": "Tartan 10",
+      "owner": "Don Lang",
+      "sail": "USA 21827",
+      "source": "website+orc",
+      "orc_gph": 657,
+      "rating": 0.6671,
+      "mmsi": ""
+    },
+    {
+      "boat": "Voyager",
+      "division": "Class K",
+      "cls": "S2 9.1",
+      "owner": "Roy L Lamphier",
+      "sail": "USA 33958",
+      "source": "website+orc",
+      "orc_gph": 674.8,
+      "rating": 0.662,
+      "mmsi": ""
+    },
+    {
+      "boat": "Advantage",
+      "division": "Class L - Cruiser-Racer",
+      "cls": "Beneteau First Class 12",
+      "owner": "John Vermeulen",
+      "sail": "USA 35007",
+      "source": "website+orc",
+      "orc_gph": 604.7,
+      "rating": 0.7321,
+      "mmsi": ""
+    },
+    {
+      "boat": "Audacious",
+      "division": "Class L - Cruiser-Racer",
+      "cls": "Tartan 4100 CB TM",
+      "owner": "Joseph Moceri",
+      "sail": "USA 25379",
+      "source": "website+orc",
+      "orc_gph": 595.9,
+      "rating": 0.7356,
+      "mmsi": ""
+    },
+    {
+      "boat": "Bali Ha'i",
+      "division": "Class L - Cruiser-Racer",
+      "cls": "C&C 39 Northeast",
+      "owner": "Stephen Beck",
+      "sail": "USA 40250",
+      "source": "website+orc",
+      "orc_gph": 621.1,
+      "rating": 0.7172,
+      "mmsi": ""
+    },
+    {
+      "boat": "CNC Legacy",
+      "division": "Class L - Cruiser-Racer",
+      "cls": "C&C 41",
+      "owner": "Scott & Matthew Jones",
+      "sail": "USA 34843",
+      "source": "website+orc",
+      "orc_gph": 616.7,
+      "rating": 0.7155,
+      "mmsi": ""
+    },
+    {
+      "boat": "Duo Trio",
+      "division": "Class L - Cruiser-Racer",
+      "cls": "Beneteau First 45",
+      "owner": "Blair Fleming",
+      "sail": "CAN 86",
+      "source": "website+orc",
+      "orc_gph": 580.2,
+      "rating": 0.7341,
+      "mmsi": ""
+    },
+    {
+      "boat": "Epic",
+      "division": "Class L - Cruiser-Racer",
+      "cls": "Beneteau First 42s7",
+      "owner": "Ray & Winnie Adams",
+      "sail": "USA 35427",
+      "source": "website+orc",
+      "orc_gph": 582.2,
+      "rating": 0.7538,
+      "mmsi": ""
+    },
+    {
+      "boat": "My Way",
+      "division": "Class L - Cruiser-Racer",
+      "cls": "XC 38",
+      "owner": "Eric Petersen",
+      "sail": "USA 25775",
+      "source": "website+orc",
+      "orc_gph": 615.6,
+      "rating": 0.714,
+      "mmsi": ""
+    },
+    {
+      "boat": "Pop'Aye",
+      "division": "Class L - Cruiser-Racer",
+      "cls": "X-412",
+      "owner": "Michael J. Popenas",
+      "sail": "USA 25825",
+      "source": "website+orc",
+      "orc_gph": 608.4,
+      "rating": 0.7165,
+      "mmsi": ""
+    },
+    {
+      "boat": "Relentless",
+      "division": "Class L - Cruiser-Racer",
+      "cls": "C&C 121",
+      "owner": "Jeff Daudert",
+      "sail": "USA 52090",
+      "source": "website+orc",
+      "orc_gph": 594.6,
+      "rating": 0.7355,
+      "mmsi": ""
+    },
+    {
+      "boat": "Roxy",
+      "division": "Class L - Cruiser-Racer",
+      "cls": "X 4 0",
+      "owner": "Don Condit",
+      "sail": "USA 25817",
+      "source": "website+orc",
+      "orc_gph": 599.2,
+      "rating": 0.7346,
+      "mmsi": ""
+    },
+    {
+      "boat": "Solo",
+      "division": "Class L - Cruiser-Racer",
+      "cls": "Hanse 400",
+      "owner": "Cam Macrae",
+      "sail": "CAN 644",
+      "source": "website",
+      "orc_gph": null,
+      "rating": null,
+      "mmsi": ""
+    },
+    {
+      "boat": "Sundance",
+      "division": "Class L - Cruiser-Racer",
+      "cls": "NA 40",
+      "owner": "Jack Gillis & Dick Hathaway",
+      "sail": "USA 15011",
+      "source": "website+orc",
+      "orc_gph": 623,
+      "rating": 0.7202,
+      "mmsi": ""
+    },
+    {
+      "boat": "TUFTY",
+      "division": "Class L - Cruiser-Racer",
+      "cls": "Beneteau First 42",
+      "owner": "Ryan Huybers",
+      "sail": "CAN 25434",
+      "source": "website+orc",
+      "orc_gph": 618.6,
+      "rating": 0.7172,
+      "mmsi": ""
+    },
+    {
+      "boat": "Whitehawk",
+      "division": "Class L - Cruiser-Racer",
+      "cls": "Bruce King Custom",
+      "owner": "Peter Thornton",
+      "sail": "USA 22261",
+      "source": "website+orc",
+      "orc_gph": 460,
+      "rating": 0.914,
+      "mmsi": ""
+    },
+    {
+      "boat": "American Flyer",
+      "division": "Class M - Cruiser-Racer",
+      "cls": "Olson 34",
+      "owner": "Chris Cyrul",
+      "sail": "USA 73351",
+      "source": "website+orc",
+      "orc_gph": 653.1,
+      "rating": 0.6719,
+      "mmsi": ""
+    },
+    {
+      "boat": "Ariel",
+      "division": "Class M - Cruiser-Racer",
+      "cls": "Tartan 33",
+      "owner": "Mark W. Aitken",
+      "sail": "USA 148",
+      "source": "website+orc",
+      "orc_gph": 684,
+      "rating": 0.6406,
+      "mmsi": ""
+    },
+    {
+      "boat": "Blue Eyes",
+      "division": "Class M - Cruiser-Racer",
+      "cls": "Ericson 35 MKII",
+      "owner": "Patrick Hoy & Jim Paulus",
+      "sail": "USA 332",
+      "source": "website+orc",
+      "orc_gph": 693.2,
+      "rating": 0.6442,
+      "mmsi": ""
+    },
+    {
+      "boat": "Delphinus",
+      "division": "Class M - Cruiser-Racer",
+      "cls": "Sabre 402",
+      "owner": "Stephen Polk",
+      "sail": "USA 35064",
+      "source": "website+orc",
+      "orc_gph": 615.8,
+      "rating": 0.7045,
+      "mmsi": ""
+    },
+    {
+      "boat": "Full Tilt",
+      "division": "Class M - Cruiser-Racer",
+      "cls": "C&C 37",
+      "owner": "Charles 'Sam' Pillsbury",
+      "sail": "USA 104",
+      "source": "website+orc",
+      "orc_gph": 568.6,
+      "rating": 0.6942,
+      "mmsi": ""
+    },
+    {
+      "boat": "Lateralus",
+      "division": "Class M - Cruiser-Racer",
+      "cls": "Farr 33",
+      "owner": "Konnor Lange",
+      "sail": "USA 40456",
+      "source": "website+orc",
+      "orc_gph": 650.8,
+      "rating": 0.6929,
+      "mmsi": ""
+    },
+    {
+      "boat": "Merak",
+      "division": "Class M - Cruiser-Racer",
+      "cls": "Hunter Legend 37",
+      "owner": "Adnan Medic",
+      "sail": "USA 595",
+      "source": "website+orc",
+      "orc_gph": 630.1,
+      "rating": 0.7047,
+      "mmsi": ""
+    },
+    {
+      "boat": "Pirouette",
+      "division": "Class M - Cruiser-Racer",
+      "cls": "Abbott 36",
+      "owner": "Jeff Else",
+      "sail": "USA 5",
+      "source": "website+orc",
+      "orc_gph": 535.1,
+      "rating": 0.7071,
+      "mmsi": ""
+    },
+    {
+      "boat": "Resolute",
+      "division": "Class I",
+      "cls": "C&C 110",
+      "owner": "Gregg Remer",
+      "sail": "USA 93335",
+      "source": "website+orc",
+      "orc_gph": 627.7,
+      "rating": 0.6989,
+      "mmsi": ""
+    },
+    {
+      "boat": "Saving Grace II",
+      "division": "Class M - Cruiser-Racer",
+      "cls": "Catalina 30",
+      "owner": "Scott Austin",
+      "sail": "USA 3590",
+      "source": "website+orc",
+      "orc_gph": 708.4,
+      "rating": 0.6328,
+      "mmsi": ""
+    },
+    {
+      "boat": "Trav'ler",
+      "division": "Class M - Cruiser-Racer",
+      "cls": "Grampian 30",
+      "owner": "Jeremy Thompson",
+      "sail": "USA 278",
+      "source": "website+orc",
+      "orc_gph": 746.2,
+      "rating": 0.5743,
+      "mmsi": ""
+    },
+    {
+      "boat": "Trixie",
+      "division": "Class M - Cruiser-Racer",
+      "cls": "C&C 35 MKIII",
+      "owner": "Richard Schmidt",
+      "sail": "USA 33731",
+      "source": "website+orc",
+      "orc_gph": 660.8,
+      "rating": 0.6745,
+      "mmsi": ""
+    },
+    {
+      "boat": "Windhover",
+      "division": "Class M - Cruiser-Racer",
+      "cls": "Swede 41",
+      "owner": "Rick Nelson & Doug Lowe",
+      "sail": "USA 5201",
+      "source": "website+orc",
+      "orc_gph": 633.5,
+      "rating": 0.6765,
+      "mmsi": ""
+    },
+    {
+      "boat": "Windseeker III",
+      "division": "Class M - Cruiser-Racer",
+      "cls": "C&C 38-3 WK",
+      "owner": "Paul Evola",
+      "sail": "USA 25209",
+      "source": "website+orc",
+      "orc_gph": 634,
+      "rating": 0.7065,
+      "mmsi": ""
+    },
+    {
+      "boat": "Billy P",
+      "division": "Class N",
+      "cls": "Marlow-Hunter 31",
+      "owner": "Karl Kiebel",
+      "sail": "USA 9950",
+      "source": "website",
+      "orc_gph": null,
+      "rating": 0.4927,
+      "mmsi": ""
+    },
+    {
+      "boat": "Caribbean Soul",
+      "division": "Class N",
+      "cls": "Hunter 340",
+      "owner": "James Twigg",
+      "sail": "USA 340",
+      "source": "website+orc",
+      "orc_gph": 707,
+      "rating": 0.6161,
+      "mmsi": ""
+    },
+    {
+      "boat": "Challenge",
+      "division": "Class N",
+      "cls": "Nonsuch 30 Ultra",
+      "owner": "Greg Doyal",
+      "sail": "USA 516",
+      "source": "website",
+      "orc_gph": null,
+      "rating": 0.5641,
+      "mmsi": ""
+    },
+    {
+      "boat": "Door Prize",
+      "division": "Class N",
+      "cls": "Nonsuch 30",
+      "owner": "Roger Eger",
+      "sail": "USA 435",
+      "source": "website+orc",
+      "orc_gph": 543.4,
+      "rating": 0.5803,
+      "mmsi": ""
+    },
+    {
+      "boat": "Faith",
+      "division": "Class N",
+      "cls": "Taswell",
+      "owner": "Gregg Granger",
+      "sail": "USA 5659",
+      "source": "website+orc",
+      "orc_gph": 595.9,
+      "rating": 0.6866,
+      "mmsi": ""
+    },
+    {
+      "boat": "Freedom",
+      "division": "Class N",
+      "cls": "Catalina 42",
+      "owner": "Kenneth Meyer",
+      "sail": "USA 116",
+      "source": "website+orc",
+      "orc_gph": 663.5,
+      "rating": 0.6231,
+      "mmsi": ""
+    },
+    {
+      "boat": "Glory",
+      "division": "Class N",
+      "cls": "Nonsuch 30",
+      "owner": "Robert Wood",
+      "sail": "USA 502",
+      "source": "website+orc",
+      "orc_gph": 443.9,
+      "rating": 0.5661,
+      "mmsi": ""
+    },
+    {
+      "boat": "Goblin",
+      "division": "Class N",
+      "cls": "Catalina 30 TRBS",
+      "owner": "Andrew Dupuis",
+      "sail": "USA 4118",
+      "source": "website+orc",
+      "orc_gph": 715.5,
+      "rating": 0.6255,
+      "mmsi": ""
+    },
+    {
+      "boat": "Hibernia",
+      "division": "Class N",
+      "cls": "Beneteau 40",
+      "owner": "Gregory D. DeGrazia",
+      "sail": "USA 25627",
+      "source": "website+orc",
+      "orc_gph": 631.9,
+      "rating": 0.673,
+      "mmsi": ""
+    },
+    {
+      "boat": "Huma",
+      "division": "Class N",
+      "cls": "Jeanneau 49",
+      "owner": "Marc Uhrich",
+      "sail": "USA 50",
+      "source": "website+orc",
+      "orc_gph": 595.7,
+      "rating": 0.6673,
+      "mmsi": ""
+    },
+    {
+      "boat": "Kaos",
+      "division": "Class N",
+      "cls": "Catalina 34",
+      "owner": "Bob & Tina Henderson",
+      "sail": "USA 358",
+      "source": "website+orc",
+      "orc_gph": 680,
+      "rating": 0.6441,
+      "mmsi": ""
+    },
+    {
+      "boat": "KatieAnn",
+      "division": "Class N",
+      "cls": "Hunter 36",
+      "owner": "Dan Noetzel",
+      "sail": "USA 25930",
+      "source": "website+orc",
+      "orc_gph": 693.3,
+      "rating": 0.5991,
+      "mmsi": ""
+    },
+    {
+      "boat": "Maeve",
+      "division": "Class N",
+      "cls": "Catalina 42 MKII",
+      "owner": "Joseph Kar",
+      "sail": "USA 1010",
+      "source": "website+orc",
+      "orc_gph": 636.1,
+      "rating": 0.6726,
+      "mmsi": ""
+    },
+    {
+      "boat": "Opus",
+      "division": "Class N",
+      "cls": "Beneteau Moorings 432",
+      "owner": "Patricia Thull O'Brien",
+      "sail": "USA 023",
+      "source": "website+orc",
+      "orc_gph": 627.7,
+      "rating": 0.6818,
+      "mmsi": ""
+    },
+    {
+      "boat": "Resolute",
+      "division": "Class N",
+      "cls": "Catalina 38",
+      "owner": "R. Perry Smith",
+      "sail": "USA 15219",
+      "source": "website+orc",
+      "orc_gph": 652.1,
+      "rating": 0.6823,
+      "mmsi": ""
+    },
+    {
+      "boat": "Seagoing III",
+      "division": "Class N",
+      "cls": "Beneteau Oceanis 400",
+      "owner": "John Seago",
+      "sail": "USA 93292",
+      "source": "website+orc",
+      "orc_gph": 649.6,
+      "rating": 0.6446,
+      "mmsi": ""
+    },
+    {
+      "boat": "Sisu",
+      "division": "Class N",
+      "cls": "Beneteau",
+      "owner": "Gregg Aho",
+      "sail": "256",
+      "source": "website+orc",
+      "orc_gph": 676.2,
+      "rating": 0.6286,
+      "mmsi": ""
+    },
+    {
+      "boat": "Adagio",
+      "division": "Class 00 - Multihull",
+      "cls": "Gougeon 35 Trimaran",
+      "owner": "Alan Gurski",
+      "sail": "E 5",
+      "source": "website",
+      "orc_gph": null,
+      "rating": 1.1364,
+      "mmsi": ""
+    },
+    {
+      "boat": "Angry Cupcake",
+      "division": "Class 00 - Multihull",
+      "cls": "Corsair 31",
+      "owner": "Bill Baisden",
+      "sail": "USA 27049",
+      "source": "website",
+      "orc_gph": null,
+      "rating": 1.0334,
+      "mmsi": ""
+    },
+    {
+      "boat": "Cerberus",
+      "division": "Class 00 - Multihull",
+      "cls": "Corsair F31",
+      "owner": "Matt Smith",
+      "sail": "198 198",
+      "source": "website",
+      "orc_gph": null,
+      "rating": 1.0433,
+      "mmsi": ""
+    },
+    {
+      "boat": "Hardly Tri-ing",
+      "division": "Class 00 - Multihull",
+      "cls": "Corsair 31",
+      "owner": "Marty Foster & Branden Brickles",
+      "sail": "USA 25411",
+      "source": "website",
+      "orc_gph": null,
+      "rating": null,
+      "mmsi": ""
+    },
+    {
+      "boat": "Morticia",
+      "division": "Class 00 - Multihull",
+      "cls": "Seacart 30 Trimaran",
+      "owner": "Chris Tuckfield",
+      "sail": "USA 3002",
+      "source": "website",
+      "orc_gph": null,
+      "rating": 1.2195,
+      "mmsi": ""
+    },
+    {
+      "boat": "Nelda Ray",
+      "division": "Class 00 - Multihull",
+      "cls": "Farrier F-33RX",
+      "owner": "Pete Pattullo",
+      "sail": "USA 009",
+      "source": "website",
+      "orc_gph": null,
+      "rating": 1.0797,
+      "mmsi": ""
+    },
+    {
+      "boat": "Ollie",
+      "division": "Class 00 - Multihull",
+      "cls": "Gougeon 35 Trimaran",
+      "owner": "Tim Walli, Dave Sturm, & Rob Covers",
+      "sail": "T 1",
+      "source": "website",
+      "orc_gph": null,
+      "rating": 1.1188,
+      "mmsi": ""
+    },
+    {
+      "boat": "Stingray",
+      "division": "Class 00 - Multihull",
+      "cls": "Corsair 37C",
+      "owner": "Rory Cumming",
+      "sail": "USA 10",
+      "source": "website+orc",
+      "orc_gph": 650.7,
+      "rating": 1.0797,
+      "mmsi": ""
+    },
+    {
+      "boat": "Unleaded II",
+      "division": "Class 00 - Multihull",
+      "cls": "Bleu Marine 46",
+      "owner": "Etienne St-Laurent",
+      "sail": "CAN 1116",
+      "source": "website",
+      "orc_gph": null,
+      "rating": 0.8508,
+      "mmsi": ""
+    }
   ],
-  "scoring": {
-   "system": "ORC",
-   "method": "Single-Number Time-on-Time (ToT)",
-   "options": [
-    "BYC Mack Cove custom wind mix (Cove Island Course)",
-    "BYC Mack Shore custom wind mix (Shore Course)",
-    "ORC Weather Routing Scoring (WRS)"
-   ],
-   "decided": "RC decides/announces BayMac custom wind mix vs ORC WRS no later than the 0810 Weather Briefing on race morning; if WRS, the TCF is published ≥3 h before the start (SI 17.1).",
-   "ref": "NOR §13 / SI 17.1"
+  "own": {
+    "boat": "C4",
+    "division": "Class E",
+    "orc_gph": 588.7,
+    "rating": 0.7419,
+    "mmsi": ""
+  },
+  "division_starts": {
+    "Class H - Doublehanded": 1784388600,
+    "Class N": 1784389200,
+    "Class K": 1784389800,
+    "Class M - Cruiser-Racer": 1784390400,
+    "Class G": 1784391000,
+    "Class J": 1784391600,
+    "Class F": 1784392200,
+    "Class I": 1784392800,
+    "Class L - Cruiser-Racer": 1784393400,
+    "Class E": 1784394000,
+    "Class D": 1784394600,
+    "Class C": 1784395200,
+    "Class B": 1784395800,
+    "Class A": 1784395800,
+    "Class 00 - Multihull": 1784396400
+  },
+  "tracker": {
+    "provider": "yb",
+    "race": "bayviewmack2026",
+    "host": "cf.yb.tl",
+    "delay_min": 15,
+    "note": "VERIFIED 2026-06-28: bycmack.com/tracking is YB Tracking (yb.tl). Positions come from https://cf.yb.tl/API3/Race/bayviewmack2026/GetPositions?t=0 \u2014 JSON, teams[].name + latest positions[] {latitude,longitude,sogKnots,cog,gpsAtMillis,dtfNm}. Confirmed against the real bayviewmack2025 feed (race-id convention bayviewmack<year>). The user confirmed the tracker is ALLOWED + normal in-race for Bayview Mackinac (rules_profile.tracker_permitted=true). The 2026 id returns {error:...} (not published yet) \u2192 dormant until ~July 2026; provider degrades to no positions. Use provider 'sample' on the bench."
+  },
+  "watch_plan": {
+    "teams": {
+      "A": {
+        "name": "A",
+        "members": []
+      },
+      "B": {
+        "name": "B",
+        "members": []
+      }
+    },
+    "blocks": []
   }
- },
- "fleet": [],
- "tracker": {
-  "provider": "yb",
-  "race": "bayviewmack2026",
-  "host": "cf.yb.tl",
-  "delay_min": 15,
-  "note": "VERIFIED 2026-06-28: bycmack.com/tracking is YB Tracking (yb.tl). Positions come from https://cf.yb.tl/API3/Race/bayviewmack2026/GetPositions?t=0 — JSON, teams[].name + latest positions[] {latitude,longitude,sogKnots,cog,gpsAtMillis,dtfNm}. Confirmed against the real bayviewmack2025 feed (race-id convention bayviewmack<year>). The user confirmed the tracker is ALLOWED + normal in-race for Bayview Mackinac (rules_profile.tracker_permitted=true). The 2026 id returns {error:...} (not published yet) → dormant until ~July 2026; provider degrades to no positions. Use provider 'sample' on the bench."
- },
- "provenance": {
-  "sources": [
-   {
-    "label": "2026 Bayview Mackinac Notice of Race (NOR), V6 approved 11/19/25",
-    "url": "https://bycmack.com/Assets/pdf/2026NOR%20V6%20111925%20Approved_Post.pdf",
-    "retrieved": "2026-06-17"
-   },
-   {
-    "label": "2026 BYC Mack Safety Equipment Requirements (SER)",
-    "url": "https://bycmack.com/Assets/pdf/2026%20BYC%20Mack%20Safety%20Requirements%20100625.pdf",
-    "retrieved": "2026-06-17"
-   },
-   {
-    "label": "Race tracking",
-    "url": "https://bycmack.com/tracking/",
-    "retrieved": "2026-06-17"
-   },
-   {
-    "label": "2026 Bayview Mackinac Race Sailing Instructions v5 (incl. Amendment #1), posted 2026-07-14",
-    "url": "https://bycmack.com/Assets/pdf/2026%20Bayview%20Mackinac%20Race%20-%20Sailing%20Instructions%20v5%20071426.pdf",
-    "retrieved": "2026-07-15"
-   },
-   {
-    "label": "2026 SI Amendment #1 (adds Section 19 Safety; folded into v5)",
-    "url": "https://bycmack.com/Assets/pdf/2026%20SI%20Amendment%201_071426.pdf",
-    "retrieved": "2026-07-15"
-   }
-  ],
-  "si_status": "2026 SIs v5 (incl. Amendment #1, posted 2026-07-14 1800) INGESTED 2026-07-15: start position (SI 6, RC boat N43°03.975 W82°25.050), first warning 1120 EDT, distances 259/204 nm, finish + gate coords confirmed identical to the NOR, YB-tracker-determined finish, checklist items updated ('display-numbers' REMOVED — no such SI requirement; backstay-flag windows + Start&Finish/Gate cards added). STILL PENDING: the SI ADDENDUM with class backstay flags + class start times (SI 8.6) — watch the Official Board; SI changes possible until 0900 race day (SI 3).",
-  "review_status": "NOR+SER extraction reviewed against SI v5 on 2026-07-15. Island marks (Duck/Bois Blanc/Thunder Bay) remain geocoded-approximate avoidance obstacles — unchanged by the SI (it names them without coords). Requirements now cover the SI procedural set; the full ~40-item SER equipment list is still a representative subset. NEEDS the user's sign-off before the Jul-17 playbook synthesis freeze.",
-  "extracted_by": "Lab-0 manual extraction 2026-06-17; SI v5 re-ingest 2026-07-15"
- }
 }
