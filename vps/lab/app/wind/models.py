@@ -223,7 +223,9 @@ class ECMWF(ModelSource):
     """ECMWF IFS open data via the ecmwf-opendata client (HRES; ENS opt-in).
 
     Unlike NOMADS this isn't a single URL — the client retrieves to a target file — so it overrides
-    `fetch`. HRES uses stream `oper` at 00/12 and `scda` at 06/18. Slowest to publish (~7-8 h).
+    `fetch`. ALL four cycles publish under stream `oper` now (the separate 06/18 `scda` stream is
+    gone from the open-data server — requesting it 404s; verified 2026-07-17); 06/18 just stop at
+    f144 where 00/12 reach f240. Slowest to publish (~7-8 h).
     """
     name = "ecmwf"
     cycles = (0, 6, 12, 18)
@@ -242,9 +244,14 @@ class ECMWF(ModelSource):
         out += list(range(150, h + 1, 6))
         return out
 
+    def horizon_for(self, cycle):
+        """06/18 runs stop at f144; 00/12 reach f240 (same split for ENS). Keeps the loader from
+        requesting steps past the short cycles' horizon."""
+        return 144 if cycle.hour in (6, 18) else self.horizon_h
+
     def _stream_type(self, cycle, member):
         if member == "det":
-            return ("oper" if cycle.hour in (0, 12) else "scda"), "fc", None
+            return "oper", "fc", None
         return "enfo", "pf", int(member)
 
     def fetch(self, cycle, fhr, member, bbox, timeout=None):
@@ -274,8 +281,14 @@ class ECMWF(ModelSource):
             try:
                 Client(source="ecmwf").retrieve(**req)
                 result["path"] = path if os.path.exists(path) and os.path.getsize(path) > 100 else None
-            except Exception:      # noqa: BLE001 — 429/network; treated same as a hang below
-                result["err"] = True
+            except Exception as e:  # noqa: BLE001
+                # A 404 means THIS frame isn't posted (cycle still publishing / past this cycle's
+                # horizon) — skip it WITHOUT the cooldown, or one missing frame silently blanks the
+                # rest of the request (that's how the scda retirement zeroed every ECMWF run).
+                if "404" in str(e):
+                    result["missing"] = True
+                else:
+                    result["err"] = True   # 429/network — treated same as a hang below
 
         th = threading.Thread(target=_do, daemon=True)
         th.start()
