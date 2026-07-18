@@ -280,8 +280,14 @@ def _run_optimize(definition, course_id, start_epoch, model_names, ensemble_memb
     # sea state (phase 1 seam) — opt-out per run; helm factor still applies (it's crew efficiency, not waves)
     waves = (wave.build_wavefield(bbox, start_epoch, t_end, on_progress=log.append)
              if use_waves else wave.ZeroWave())
+    # A fleet boat added from its ORC cert (e.g. boats/bravo.json) carries its Allowances envelope
+    # in `cert_polar` — route on THAT instead of the bundled own-boat polar files. Envelope routing
+    # only (optimize_course drops per-sail curves for an injected polar); the crew overlays below
+    # (jibs/sail_config/adjustments/wave_coeffs/helm) all read the SAME active profile, so a fleet
+    # boat contributes its own (empty) overlays and the own boat keeps its refinements.
+    cert_polar = (boats.active_boat() or {}).get("cert_polar") or None
     result = optimizer.optimize_course(definition, course_id, start_epoch, wf, avoid=avoid,
-                                       source=chart_source(),
+                                       source=chart_source(), polar=cert_polar,
                                        safety_depth=boats.active_safety_depth_m(),
                                        jib_crossovers=_active_jibs(), sail_config=_active_sails(), per_model=per_model,
                                        resolution=resolution, cur=cur,
@@ -639,7 +645,8 @@ async def save_sail_config(body: dict):
 async def polars_grid():
     """The boat polar grid (TWS × TWA → target STW) for the Boat-model review panel."""
     from . import polars
-    rows = polars.polars_stw()
+    # follow the selected boat: a fleet profile's cert_polar wins over the bundled own-boat files
+    rows = [tuple(p) for p in (boats.active_boat() or {}).get("cert_polar") or []] or polars.polars_stw()
     tws = sorted({r[0] for r in rows})
     twa = sorted({r[1] for r in rows})
     k = lambda x: "%g" % x                 # match JS String() (4.0 -> "4", 45.3 -> "45.3")
