@@ -565,7 +565,10 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
         n_, s_, w_, e_ = bbox
         for st in _venue.STATIONS:
             la, lo = st.get("lat"), st.get("lon")
-            if la is None or lo is None or not (s_ <= la <= n_ and w_ <= lo <= e_):
+            # same 0.6° pad as the station freeze (synthesis._buoy_stations) — without it the
+            # padded-in stations (e.g. the Cove Island gate pair, just east of the course bbox)
+            # freeze aboard with obs but NO promise series, so their vs-forecast delta never shows
+            if la is None or lo is None or not (s_ - 0.6 <= la <= n_ + 0.6 and w_ - 0.6 <= lo <= e_ + 0.6):
                 continue
             ser, t = [], float(start_epoch)
             while t <= t_end:
