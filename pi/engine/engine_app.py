@@ -216,6 +216,27 @@ def playbook_load(body: dict):
             "recommended": bundle.get("recommended")}
 
 
+@app.get("/playbook/track")
+def playbook_track(variant: str | None = None):
+    """The loaded playbook's optimizer route — the ACTIVE variant's frozen `route.path` points —
+    so the console course map can draw the plan line, not just the rhumb legs. Same variant pick
+    as the deviation core (requested id → bundle recommended → first). Pre-loaded homework only:
+    legal in-race."""
+    bundle = deviation._load_playbook()
+    if not bundle:
+        return {"available": False, "note": "no playbook aboard"}
+    v = deviation._pick_variant(bundle, variant)
+    path = ((v or {}).get("route") or {}).get("path") or []
+    if not path:
+        return {"available": False, "note": "playbook variant has no route path"}
+    return {"available": True, "race_id": bundle.get("race_id"),
+            "variant": str(v.get("id") or v.get("name") or ""),
+            "variant_label": v.get("name") or str(v.get("id") or "the plan"),
+            "recommended": bundle.get("recommended"),
+            "points": [{"lat": p.get("lat"), "lon": p.get("lon")} for p in path
+                       if p.get("lat") is not None and p.get("lon") is not None]}
+
+
 @app.get("/plays")
 def plays(route: str | None = None):
     """Playbook v2 Phase D — the Tier-1 PLAY MATCHER: every play in the frozen v2 bundle evaluated

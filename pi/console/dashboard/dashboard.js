@@ -366,12 +366,17 @@
     const r = await fetchJSON("/course", 8000);
     if (r && r.available && (r.marks || []).length >= 2) App.courseMap = r;
   }
+  async function fetchTrack() {   // NOT memoized — a mid-day re-push replaces the playbook
+    const r = await fetchJSON("/playbook/track", 8000);
+    App.pbTrack = r && r.available && (r.points || []).length >= 2 ? r : null;
+  }
   function courseMapHtml() {
     const c = App.courseMap, nav = App.nav;
     if (!c || !nav || !nav.position || nav.position.lat == null) return "";
     const marks = c.marks, boat = nav.position;
-    const lats = marks.map((m) => m.lat).concat([boat.lat]);
-    const lons = marks.map((m) => m.lon).concat([boat.lon]);
+    const trk = App.pbTrack ? App.pbTrack.points : [];   // the optimizer route, when loaded
+    const lats = marks.map((m) => m.lat).concat([boat.lat], trk.map((p) => p.lat));
+    const lons = marks.map((m) => m.lon).concat([boat.lon], trk.map((p) => p.lon));
     const midLat = (Math.min.apply(null, lats) + Math.max.apply(null, lats)) / 2;
     const KX = Math.cos(midLat * Math.PI / 180) * 60;                 // nm per °lon here
     const nm = (lat, lon) => [lon * KX, -lat * 60];                   // planar nm coords
@@ -388,10 +393,14 @@
     let svg = "";
     for (let i = 1; i < marks.length; i++) {
       const a = P(marks[i - 1].lat, marks[i - 1].lon), b = P(marks[i].lat, marks[i].lon);
-      const on = i === ni;
+      const on = i === ni && !trk.length;   // with a plan line aboard, accent belongs to it
       svg += '<line x1="' + a[0].toFixed(1) + '" y1="' + a[1].toFixed(1) + '" x2="' + b[0].toFixed(1) +
         '" y2="' + b[1].toFixed(1) + '" style="stroke:var(--' + (on ? "accent" : "na") + ');stroke-width:' +
         (on ? 3 : 2) + ';opacity:' + (on ? 1 : 0.55) + '" />';
+    }
+    if (trk.length) {                       // the frozen variant's optimizer route
+      const pts = trk.map((p) => P(p.lat, p.lon).map((x) => x.toFixed(1)).join(",")).join(" ");
+      svg += '<polyline points="' + pts + '" style="fill:none;stroke:var(--accent);stroke-width:2.5;stroke-linejoin:round" />';
     }
     const bp = P(boat.lat, boat.lon);
     if (nav.next_mark) {                                              // dashed: us → the next mark
@@ -426,6 +435,8 @@
       const cross = (dx * (q[1] - a[1]) - dy * (q[0] - a[0])) / len;  // +ve = right of the leg (screen y down)
       foot += " · " + r1(Math.abs(cross)) + " nm " + (cross > 0 ? "right" : "left") + " of the leg line";
     }
+    if (trk.length) foot += (foot ? " · " : "") + "plan line = optimizer route (" +
+      esc2(App.pbTrack.variant_label || App.pbTrack.variant) + ")";
     return '<div class="rc-title" style="margin-top:10px">Course · plan legs vs us</div>' +
       '<svg viewBox="0 0 ' + W + " " + H + '" style="width:100%;height:auto;display:block;background:var(--panel2);border-radius:8px">' + svg + "</svg>" +
       (foot ? '<div class="dc-foot">' + foot + "</div>" : "");
@@ -1533,8 +1544,10 @@
       fetchBuoys().then(() => { if (App.openTile === "wind") populateDetail("wind", false); });
     }
     if (key === "playbook" && App.src === "live") fetchGps();   // the GARMIN 943 row's live state
-    if (key === "eta" && App.src === "live")
+    if (key === "eta" && App.src === "live") {
       fetchCourse().then(() => { if (App.openTile === "eta") populateDetail("eta", false); });
+      fetchTrack().then(() => { if (App.openTile === "eta") populateDetail("eta", false); });
+    }
     populateDetail(key, true);
   }
   /* ============ the COACH WINDOW — the commentary panel's tap-detail ============
