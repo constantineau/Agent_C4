@@ -356,6 +356,80 @@
       "pressure — trust their direction more.</div>";
   }
   function esc2(s) { return String(s == null ? "" : s).replace(/[<>&"]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" }[c])); }
+  /* ============ COURSE MAP (Time-to-Mark detail): the plan course to scale + the boat ============
+     Equirectangular nm projection (x = lon·cos(midlat)·60, y = −lat·60) — plenty accurate at
+     course scale, zero tiles/network. Marks + legs come from the loaded course (/course, memoized
+     until the next homework push), the boat is the live /navigator position; the leg being sailed
+     is highlighted and the dashed line is boat → next mark. Redraws with the 3-s poll. */
+  async function fetchCourse() {
+    if (App.courseMap) return;
+    const r = await fetchJSON("/course", 8000);
+    if (r && r.available && (r.marks || []).length >= 2) App.courseMap = r;
+  }
+  function courseMapHtml() {
+    const c = App.courseMap, nav = App.nav;
+    if (!c || !nav || !nav.position || nav.position.lat == null) return "";
+    const marks = c.marks, boat = nav.position;
+    const lats = marks.map((m) => m.lat).concat([boat.lat]);
+    const lons = marks.map((m) => m.lon).concat([boat.lon]);
+    const midLat = (Math.min.apply(null, lats) + Math.max.apply(null, lats)) / 2;
+    const KX = Math.cos(midLat * Math.PI / 180) * 60;                 // nm per °lon here
+    const nm = (lat, lon) => [lon * KX, -lat * 60];                   // planar nm coords
+    const ptsNm = marks.map((m) => nm(m.lat, m.lon)).concat([nm(boat.lat, boat.lon)]);
+    const minX = Math.min.apply(null, ptsNm.map((p) => p[0])), maxX = Math.max.apply(null, ptsNm.map((p) => p[0]));
+    const minY = Math.min.apply(null, ptsNm.map((p) => p[1])), maxY = Math.max.apply(null, ptsNm.map((p) => p[1]));
+    const spanX = Math.max(maxX - minX, 0.5), spanY = Math.max(maxY - minY, 0.5);
+    const W = 512, PAD = 40;
+    const H = Math.round(Math.min(430, Math.max(220, (W - 2 * PAD) * spanY / spanX + 2 * PAD)));
+    const s = Math.min((W - 2 * PAD) / spanX, (H - 2 * PAD) / spanY);
+    const ox = (W - s * spanX) / 2, oy = (H - s * spanY) / 2;
+    const P = (lat, lon) => { const q = nm(lat, lon); return [ox + (q[0] - minX) * s, oy + (q[1] - minY) * s]; };
+    const ni = (nav.next_mark && nav.next_mark.index) || 0;           // active leg = marks[ni-1]→[ni]
+    let svg = "";
+    for (let i = 1; i < marks.length; i++) {
+      const a = P(marks[i - 1].lat, marks[i - 1].lon), b = P(marks[i].lat, marks[i].lon);
+      const on = i === ni;
+      svg += '<line x1="' + a[0].toFixed(1) + '" y1="' + a[1].toFixed(1) + '" x2="' + b[0].toFixed(1) +
+        '" y2="' + b[1].toFixed(1) + '" style="stroke:var(--' + (on ? "accent" : "na") + ');stroke-width:' +
+        (on ? 3 : 2) + ';opacity:' + (on ? 1 : 0.55) + '" />';
+    }
+    const bp = P(boat.lat, boat.lon);
+    if (nav.next_mark) {                                              // dashed: us → the next mark
+      const t = P(marks[ni].lat, marks[ni].lon);
+      svg += '<line x1="' + bp[0].toFixed(1) + '" y1="' + bp[1].toFixed(1) + '" x2="' + t[0].toFixed(1) +
+        '" y2="' + t[1].toFixed(1) + '" style="stroke:var(--text);stroke-width:1.5;stroke-dasharray:5 4;opacity:.7" />';
+    }
+    marks.forEach((m, i) => {
+      const p = P(m.lat, m.lon);
+      const name = m.name.length > 14 ? m.name.slice(0, 13) + "…" : m.name;
+      const left = p[0] > W - 110;                                    // keep labels on-canvas
+      svg += '<circle cx="' + p[0].toFixed(1) + '" cy="' + p[1].toFixed(1) + '" r="4.5" style="fill:var(--panel);stroke:var(--text);stroke-width:1.6" />' +
+        '<text x="' + (p[0] + (left ? -9 : 9)).toFixed(1) + '" y="' + (p[1] + 4).toFixed(1) +
+        '" text-anchor="' + (left ? "end" : "start") + '" style="fill:var(--muted);font:11px system-ui">' + esc2(name) + '</text>';
+    });
+    svg += '<circle cx="' + bp[0].toFixed(1) + '" cy="' + bp[1].toFixed(1) + '" r="5.5" style="fill:var(--accent);stroke:var(--bg);stroke-width:2" />' +
+      '<text x="' + (bp[0] + (bp[0] > W - 70 ? -10 : 10)).toFixed(1) + '" y="' + (bp[1] - 8).toFixed(1) +
+      '" text-anchor="' + (bp[0] > W - 70 ? "end" : "start") + '" style="fill:var(--text);font:bold 11px system-ui">C4</text>';
+    // north tick + a round-number scale bar so distances read at a glance
+    const nice = [5, 10, 20, 50, 100].reduce((a, v) => (v * s <= (W - 2 * PAD) / 3 ? v : a), 5);
+    svg += '<text x="10" y="18" style="fill:var(--muted);font:11px system-ui">N ↑</text>' +
+      '<line x1="12" y1="' + (H - 12) + '" x2="' + (12 + nice * s).toFixed(1) + '" y2="' + (H - 12) +
+      '" style="stroke:var(--muted);stroke-width:2" />' +
+      '<text x="' + (16 + nice * s).toFixed(1) + '" y="' + (H - 8) + '" style="fill:var(--muted);font:10px system-ui">' + nice + ' nm</text>';
+    // foot line: engine-computed range/bearing + our planar offset from the active leg line
+    let foot = "";
+    if (nav.next_mark && nav.next_mark.distance_nm != null)
+      foot = r1(nav.next_mark.distance_nm) + " nm @ " + r0(nav.next_mark.bearing_deg) + "° to " + esc2(marks[ni].name);
+    if (ni >= 1) {
+      const a = nm(marks[ni - 1].lat, marks[ni - 1].lon), b = nm(marks[ni].lat, marks[ni].lon), q = nm(boat.lat, boat.lon);
+      const dx = b[0] - a[0], dy = b[1] - a[1], len = Math.hypot(dx, dy) || 1;
+      const cross = (dx * (q[1] - a[1]) - dy * (q[0] - a[0])) / len;  // +ve = right of the leg (screen y down)
+      foot += " · " + r1(Math.abs(cross)) + " nm " + (cross > 0 ? "right" : "left") + " of the leg line";
+    }
+    return '<div class="rc-title" style="margin-top:10px">Course · plan legs vs us</div>' +
+      '<svg viewBox="0 0 ' + W + " " + H + '" style="width:100%;height:auto;display:block;background:var(--panel2);border-radius:8px">' + svg + "</svg>" +
+      (foot ? '<div class="dc-foot">' + foot + "</div>" : "");
+  }
   /* best available race history: the engine archive (authoritative) + the live tail not yet archived;
      falls back to the client buffer when the archive is empty (e.g. on the bench). */
   function raceData() {
@@ -1459,6 +1533,8 @@
       fetchBuoys().then(() => { if (App.openTile === "wind") populateDetail("wind", false); });
     }
     if (key === "playbook" && App.src === "live") fetchGps();   // the GARMIN 943 row's live state
+    if (key === "eta" && App.src === "live")
+      fetchCourse().then(() => { if (App.openTile === "eta") populateDetail("eta", false); });
     populateDetail(key, true);
   }
   /* ============ the COACH WINDOW — the commentary panel's tap-detail ============
@@ -1668,6 +1744,9 @@
       const hbtn = '<button class="cw-btn cw-inline" onclick="openCoachBrief(\'handover\')">' +
         'Watch handover brief ↻</button>';
       g.innerHTML = energy + hbtn + watchPanelHtml() + bars;
+    } else if (key === "eta" && App.src === "live" && courseMapHtml()) {
+      g.innerHTML = '<div class="dc-foot">' + stripTags(t.value || "—") +
+        (t.sub ? " · " + t.sub : "") + '</div>' + courseMapHtml();
     } else if (t.rows) {
       g.innerHTML = (t.value ? '<div class="dc-foot">' + t.value + (t.sub ? " · " + t.sub : "") + '</div>' : "") + rowsHtml(t.rows);
     } else if (t.components) {
@@ -1774,6 +1853,7 @@
       const res = await Promise.all(eps.map((e, i) => fetchJSON(e, ms[i])));
       const p = {}; keys.forEach((k, i) => (p[k] = res[i]));
       App.watch = p.watch;               // the CREW detail panel + quick actions read it
+      App.nav = p.navigator;             // the eta-detail course map reads position live
       pushWind(p.conditions);
       pushForecast(p.forecast);
       App.data = buildLive(p);
