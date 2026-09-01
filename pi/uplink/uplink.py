@@ -18,6 +18,7 @@ import asyncio
 import json
 import math
 import os
+import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,6 +36,9 @@ INGEST_TOKEN = os.environ.get("INGEST_TOKEN", "dev-ingest-token")
 BOAT_ID = os.environ.get("BOAT_ID", "sr33")
 AGG_SECONDS = int(os.environ.get("AGG_SECONDS", "15"))
 QUEUE_DIR = Path(os.environ.get("QUEUE_DIR", "/var/lib/sr33/queue"))
+# Sits inside QUEUE_DIR but out of its `*.json` glob, so quarantined files stay on the
+# boat for inspection without ever being retried.
+QUARANTINE_DIR = QUEUE_DIR / "quarantine"
 
 
 def record(window, source, path, value):
@@ -126,18 +130,52 @@ def _post(batch):
 def _enqueue(batch):
     QUEUE_DIR.mkdir(parents=True, exist_ok=True)
     stamp = batch["readings"][0]["time"].replace(":", "").replace("-", "")
-    (QUEUE_DIR / f"{stamp}.json").write_text(json.dumps(batch))
+    # Write to a temp name and rename into place: rename is atomic, so a power cut can
+    # never leave a truncated `.json` in the queue. 17 zero-byte files got in this way
+    # during the 2026-07-19 outage, and one of them then blocked the queue for six weeks.
+    tmp = QUEUE_DIR / f".{stamp}.json.tmp"
+    tmp.write_text(json.dumps(batch))
+    os.replace(tmp, QUEUE_DIR / f"{stamp}.json")
+
+
+def _quarantine(f, why):
+    """Set aside a spool file that can never be sent, so the queue behind it can drain."""
+    try:
+        QUARANTINE_DIR.mkdir(parents=True, exist_ok=True)
+        os.replace(f, QUARANTINE_DIR / f.name)
+    except OSError:
+        return  # leave it; next pass will try again rather than lose it silently
+    print(f"[uplink] quarantined {f.name}: {why}", flush=True)
 
 
 def _flush_queue():
+    """Replay queued batches oldest-first.
+
+    Two failure modes have to be told apart, because treating them alike is what stalled
+    the queue for six weeks: a *transient* failure (link down, server 5xx) means stop and
+    keep everything for later, but a *permanent* one (file corrupt on disk, server
+    rejects the payload as malformed) will fail identically on every future pass. A
+    permanent failure has to be moved aside or it blocks every newer batch behind it
+    forever.
+    """
     if not QUEUE_DIR.exists():
         return
     for f in sorted(QUEUE_DIR.glob("*.json")):
         try:
-            _post(json.loads(f.read_text()))
-            f.unlink()
+            batch = json.loads(f.read_text())
+        except (OSError, ValueError) as exc:
+            _quarantine(f, f"unreadable ({exc})")
+            continue
+        try:
+            _post(batch)
+        except urllib.error.HTTPError as exc:
+            if 400 <= exc.code < 500:
+                _quarantine(f, f"rejected HTTP {exc.code}")
+                continue
+            return  # 5xx — server-side and probably transient; keep the rest queued
         except Exception:
             return  # link still down — leave the rest queued
+        f.unlink(missing_ok=True)
 
 
 def send(readings):
