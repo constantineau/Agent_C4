@@ -245,7 +245,7 @@ missing from Postgres. Six weeks of stall from one empty file.
 snapshot. All are **truly empty — 0 bytes, no telemetry in them**, so clearing them loses
 nothing.
 
-**Fix in `pi/uplink/uplink.py` (uncommitted, branch `dev`):**
+**Fix in `pi/uplink/uplink.py`** (committed `8ca9c21`, merged to `main`):
 - `_flush_queue` now separates *transient* (link down, HTTP 5xx → stop, keep everything)
   from *permanent* (unreadable file, HTTP 4xx → move to `quarantine/`, keep draining).
 - `_enqueue` writes to a temp name and `os.replace`s it in — atomic, so a power cut can no
