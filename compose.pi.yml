@@ -61,6 +61,10 @@ services:
         else
           echo "[derived] derived-data.json already present (leaving as-is)"
         fi
+        # Split the two true-wind directions onto separate paths. Runs unconditionally
+        # (the script is idempotent) so a fresh volume, which reinstalls the plugin above,
+        # comes back patched instead of silently reverting to the double-emit.
+        sh /src/patch-windground-path.sh
     depends_on:
       signalk-init:
         condition: service_completed_successfully
