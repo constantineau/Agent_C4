@@ -10,11 +10,23 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .db import pool
 
 INGEST_TOKEN = os.environ.get("INGEST_TOKEN", "dev-ingest-token")
+
+
+def strip_nul(v: Optional[str]) -> Optional[str]:
+    """Drop NUL bytes from incoming text — Postgres rejects them in `text`.
+
+    Some N2K devices emit UTF-16LE strings that reach Signal K as a NUL-interleaved
+    run (`'W\\x00E\\x00D...'` for `WEDNESDAY`), so stripping recovers the intended
+    value rather than discarding it. This matters out of proportion to how rare it is:
+    a batch is one `executemany` in one transaction, so a single un-stripped reading
+    used to abort the whole batch and silently lose every good reading beside it.
+    """
+    return v.replace("\x00", "") if v is not None else None
 
 
 class Reading(BaseModel):
@@ -24,6 +36,8 @@ class Reading(BaseModel):
     path: str
     value: Optional[float] = None
     str_value: Optional[str] = None
+
+    _no_nul = field_validator("source", "path", "str_value")(strip_nul)
 
 
 class RawBatch(BaseModel):
@@ -44,6 +58,10 @@ class AisObservation(BaseModel):
     lon: Optional[float] = None
     sog: Optional[float] = None   # kn
     cog: Optional[float] = None   # deg true
+
+    # AIS static names arrive fixed-width padded and hit the same one-bad-row-kills-the-
+    # batch path as /ingest/raw, so they get the same treatment.
+    _no_nul = field_validator("name")(strip_nul)
 
 
 class AisBatch(BaseModel):
