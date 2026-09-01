@@ -6,6 +6,7 @@ agent) → crew web apps; a cloud **C4 Performance Lab** does pre-race strategy 
 learning; an onboard deterministic engine + a Jetson-Orin LLM copilot work the race itself.
 
 This file is the **operational reference** — how the system works today and how to run it.
+- `CONTEXT.md` — the domain glossary (what words mean); read it before design work.
 - `DESIGN.md` — product design: architecture + built-vs-planned.
 - `docs/HISTORY.md` — the chronological development record (what shipped when, and the
   decisions that shaped it). Session narratives that used to live here are outlined there.
@@ -399,3 +400,22 @@ with the OA/RC in writing + re-check the SIs (~July 2026) before race use · plu
 cable into the Pi (bus not yet physically connected) · record a real `candump -l can0`
 dockside as the gold-standard replay fixture · the Phase-6 exit test proper (alert
 false-positive rate over 2 real practice sails) awaits real sailing.
+
+## Agent skills
+
+### Issue tracker
+
+Local markdown under `.scratch/<feature>/` (committed, not ignored — tickets ride the
+repo). `docs/V2_BACKLOG.md` stays the triage inbox; specs and tracer-bullet tickets
+graduate into `.scratch/`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default five-role vocabulary, recorded as `Status:` lines in ticket files.
+See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` at the repo root, ADRs in `docs/adr/`. The per-arc
+design docs in `docs/` predate ADRs and stay where they are.
+See `docs/agents/domain.md`.
