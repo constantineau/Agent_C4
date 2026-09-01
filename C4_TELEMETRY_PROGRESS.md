@@ -24,7 +24,9 @@ reboot `/tmp` is empty — re-copy it first, or the corrupt-page handling silent
 ssh sr33-pi@100.79.180.102 'docker cp ~/Agent_C4/pi/archiver/tools/step_over_bad.py sr33-pi-archiver-1:/tmp/'
 ```
 
-**2. The guardian, on this box.** A systemd unit, so it survives this session and reboot.
+**2. The guardian, on this box.** A **transient** systemd unit (`systemd-run --collect`): it
+outlives the session that started it, but **NOT a reboot of this box** — if the OVH box
+restarts, relaunch it before letting the drain continue.
 ```bash
 systemctl status c4-drain-guardian
 tail -5 /home/constantineau/backups/drain-guardian.log
@@ -34,7 +36,7 @@ It compacts every 5 min (the auto compression policy will NOT cover the active c
 after a final compaction pass. **If it is not `active`, restart it before resuming the
 drain** — without compaction the drain writes ~20 GB into ~24 G free.
 ```bash
-systemd-run --unit=c4-drain-guardian --collect ~/… /pi/archiver/tools/drain-guardian.sh
+systemd-run --unit=c4-drain-guardian --collect /home/constantineau/Agent_C4/pi/archiver/tools/drain-guardian.sh
 ```
 
 **When the drain completes, in order:**
@@ -44,8 +46,11 @@ systemd-run --unit=c4-drain-guardian --collect ~/… /pi/archiver/tools/drain-gu
 3. Set up the **recurring** drain (#6c) — this run is a one-time catch-up; the boat adds
    ~34M rows/day and #8's prune starts ~2026-09-13.
 
-Everything is committed and pushed: `dev` and `main` are both at `b3c30a1`, working tree
-clean, boat clone pulled to the same commit.
+Everything is committed and pushed — working tree clean, nothing left in a scratchpad.
+`dev` is merged into `main` and both are on origin (`git log --oneline -3` for the exact
+heads; SHAs are deliberately not pinned here because they drift). The boat's clone tracks
+`main` and may sit a merge or two behind — that only affects the guardian script, which runs
+on the OVH box, not on the boat, so the boat does not need to be current for the drain.
 
 ## Status at a glance
 
@@ -65,10 +70,9 @@ clean, boat clone pulled to the same commit.
 | 10 | derived-data double-emit | ✅ fixed on the boat 2026-09-01 |
 | 11 | Live-archive reads race the archiver | ℹ️ caveat for #6 |
 
-**Uncommitted on branch `dev`** (all verified, none committed — the running containers are
-built from this working tree, so `git checkout` would diverge image from source):
-`vps/ingestion/app/main.py`, `pi/uplink/uplink.py`, `pi/uplink/test_uplink_queue.py`,
-`pi/signalk/patch-windground-path.sh`, `compose.pi.yml`, this file.
+All of this session's work is **committed and pushed** on `dev` and merged to `main`:
+the ingestion NUL strip, the uplink queue fix + its regression suite, the Signal K
+wind-path split + compose wiring, the drain tooling, the guardian, and this document.
 
 ## DONE
 
@@ -114,9 +118,8 @@ Verified end-to-end, not just by unit test: POSTed a 3-reading batch to
 `{"accepted":3}` and all three rows landed, `str_value` = `WEDNESDAY`. Pre-fix that batch
 would have aborted whole. The three `source='nultest'` rows were deleted afterwards.
 
-⚠️ The change is **still uncommitted** on branch `dev` (`vps/ingestion/app/main.py`). The
-running container is built from the working tree, so a `git checkout` would silently
-diverge image from source. Commit it.
+Committed 2026-09-01 as `699714e` and merged to `main`. The running container was built from
+the working tree, so image and source now agree.
 
 Two corrections to the previously recorded diagnosis:
 - The spool files contain **no literal NUL bytes**. They carry the JSON escape `\u0000`,
@@ -243,7 +246,7 @@ missing from Postgres. Six weeks of stall from one empty file.
 snapshot. All are **truly empty — 0 bytes, no telemetry in them**, so clearing them loses
 nothing.
 
-**Fix in `pi/uplink/uplink.py` (uncommitted, branch `dev`):**
+**Fix in `pi/uplink/uplink.py`** (committed `8ca9c21`, merged to `main`):
 - `_flush_queue` now separates *transient* (link down, HTTP 5xx → stop, keep everything)
   from *permanent* (unreadable file, HTTP 4xx → move to `quarantine/`, keep draining).
 - `_enqueue` writes to a temp name and `os.replace`s it in — atomic, so a power cut can no
