@@ -3,6 +3,50 @@
 Goal (Cole, this session): **lose no telemetry**, and **copy all telemetry off the Pi to the VPS**.
 Deletion from the boat is allowed only *after* an off-boat copy is sha256-verified.
 
+## ⏸ PICK UP HERE (paused 2026-09-01 ~20:30Z — a drain is RUNNING unattended)
+
+**Two long-running jobs are live right now. Check them before doing anything else.**
+
+**1. The drain, on the boat.** Detached (`PPID 1`), survives disconnects.
+```bash
+ssh sr33-pi@100.79.180.102 'tail -3 /tmp/drain-archive.log; pgrep -f drain-archive.sh'
+ssh sr33-pi@100.79.180.102 'cat /tmp/drain-lost-rowids.log'   # rows lost to corrupt pages
+```
+Look for `DRAIN COMPLETE`. At the 2026-09-01T20:26Z checkpoint it was at **id 5,733,000 of
+~81,000,000**, ~131k rows/min against ~24k/min of new data — **ETA ~08:00Z 2026-09-02**.
+If it died, just relaunch; the cursor makes it resume exactly:
+```bash
+ssh sr33-pi@100.79.180.102 'setsid ~/Agent_C4/pi/archiver/tools/drain-archive.sh </dev/null >/dev/null 2>&1 &'
+```
+⚠️ `drain-archive.sh` calls `/tmp/step_over_bad.py` **inside the container**. After a Pi
+reboot `/tmp` is empty — re-copy it first, or the corrupt-page handling silently no-ops:
+```bash
+ssh sr33-pi@100.79.180.102 'docker cp ~/Agent_C4/pi/archiver/tools/step_over_bad.py sr33-pi-archiver-1:/tmp/'
+```
+
+**2. The guardian, on this box.** A systemd unit, so it survives this session and reboot.
+```bash
+systemctl status c4-drain-guardian
+tail -5 /home/constantineau/backups/drain-guardian.log
+```
+It compacts every 5 min (the auto compression policy will NOT cover the active chunk until
+~Sep 5), stops the drain if free disk drops under 5 G, and exits cleanly on `DRAIN COMPLETE`
+after a final compaction pass. **If it is not `active`, restart it before resuming the
+drain** — without compaction the drain writes ~20 GB into ~24 G free.
+```bash
+systemd-run --unit=c4-drain-guardian --collect ~/… /pi/archiver/tools/drain-guardian.sh
+```
+
+**When the drain completes, in order:**
+1. Confirm `FINAL rows=… size=…` in the guardian log; check `drain-lost-rowids.log`.
+2. Recreate the archiver container to clear its stale `VPS_URL` (see #6) — **only after** the
+   drain, since the drain runs inside it.
+3. Set up the **recurring** drain (#6c) — this run is a one-time catch-up; the boat adds
+   ~34M rows/day and #8's prune starts ~2026-09-13.
+
+Everything is committed and pushed: `dev` and `main` are both at `b3c30a1`, working tree
+clean, boat clone pulled to the same commit.
+
 ## Status at a glance
 
 | # | Item | State |
@@ -12,7 +56,9 @@ Deletion from the boat is allowed only *after* an off-boat copy is sha256-verifi
 | 3 | Boat cleanup, the verified 2.1 GB | ✅ done 2026-08-30 |
 | 4 | Pre-race remainder, 5,481,959 rows | ⬜ not started |
 | 5 | Re-pull of the 9.6 GB corrupt archive | ✅ VERIFIED 2026-08-30; salvage still to do |
-| 6 | Drain the Pi's live `archive.db` | ⬜ not started — **biggest open problem, 16.2 GB** |
+| 6 | Drain the Pi's live `archive.db` | 🔄 **RUNNING unattended** — ETA ~08:00Z 2026-09-02 |
+| 6b | TimescaleDB compression | ✅ enabled, 36.6x — this is what made #6 possible |
+| 6c | Recurring drain so it stays drained | ⬜ **next task** — makes the Sep 13 prune safe |
 | 7 | Uplink spool | ✅ root cause fixed, drained to 0, reconciles exactly |
 | 8 | `ARCHIVE_RETAIN_DAYS=14` prune | ⬜ open — **starts deleting ~2026-09-13** |
 | 9 | Jul 18 duplicate rows | ✅ deduped 2026-09-01, reversible |
@@ -166,9 +212,23 @@ Two things learned doing it, both non-obvious:
   uplink kept landing at 5.5 s lag into the just-compressed current chunk. That is what lets
   the drain be compacted *while running* instead of peaking at 21 GB.
 
-A compression policy (`compress_after => 2 days`, job 1000) now handles future chunks, and
-`/tmp/.../compact_watch.sh` recompacts during the drain and aborts if free disk drops
-under 3 G.
+A compression policy (`compress_after => 2 days`, job 1000) handles future chunks, and
+`pi/archiver/tools/drain-guardian.sh` recompacts during the drain.
+
+⚠️ **The policy does not protect this drain.** It fires on chunks older than 2 days, but all
+79.9M incoming rows are dated Aug 30 – Sep 1 and land in the chunk covering Aug 27 – Sep 3,
+which does not age out until ~Sep 5. Compaction has to be driven manually until then —
+that is the guardian's whole purpose. Do not assume the policy has it covered.
+
+### 6c. The drain is a one-time catch-up — it does NOT stay done
+`backfill.py` exits once it reaches the end, so this run only closes the existing gap. The
+boat then keeps producing **~34M rows/day** (~24k/min, ~240 MB/day compressed) and the gap
+reopens immediately.
+
+For #8's prune to be safe under "lose nothing", the drain has to run on a schedule so the
+prune only ever deletes rows already on the VPS. A systemd timer or cron on the Pi calling
+`pi/archiver/tools/drain-archive.sh` is enough. **Not yet set up — this is the next task,
+and it is what actually makes the Sep 13 prune deadline safe.**
 
 ### 7. Reconcile the uplink spool ✅ **DONE 2026-09-01 — root cause fixed, spool fully drained**
 
