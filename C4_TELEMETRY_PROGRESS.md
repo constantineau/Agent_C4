@@ -47,9 +47,10 @@ systemd-run --unit=c4-drain-guardian --collect /home/constantineau/Agent_C4/pi/a
    ~34M rows/day and #8's prune starts ~2026-09-13.
 
 Everything is committed and pushed — working tree clean, nothing left in a scratchpad.
-`dev` = `8ea263d`, `main` = `186da58` (merge commits, both on origin). The boat's clone is
-on `main` and pulled to `b3c30a1`; it is one merge behind, which only affects the
-guardian script that runs on the OVH box, not on the boat.
+`dev` is merged into `main` and both are on origin (`git log --oneline -3` for the exact
+heads; SHAs are deliberately not pinned here because they drift). The boat's clone tracks
+`main` and may sit a merge or two behind — that only affects the guardian script, which runs
+on the OVH box, not on the boat, so the boat does not need to be current for the drain.
 
 ## Status at a glance
 
