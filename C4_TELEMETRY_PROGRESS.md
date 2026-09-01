@@ -98,14 +98,77 @@ VPS_URL=http://localhost:8101 BACKFILL_BATCH=2000 \
 Careful: ad-hoc mode restarts from id 0 and does not record a cursor, so it is **not**
 re-run-safe. Run once.
 
-### 6. Drain the Pi's live `archive.db` — **now the biggest problem**
-As of 2026-09-01 14:03 it is `16,191,725,568` bytes. It was 3.6 GB on Aug 30, so the
-~6.3 GB/day growth rate held. Never yet drained to the VPS.
+### 6. Drain the Pi's live `archive.db` 🔄 **IN FLIGHT since 2026-09-01 — do not re-run blind**
+16.2 GB / **79,934,390 rows** (rowid 1 → max), all dated Aug 30 → Sep 1 — the DB was
+recreated Aug 30, and the boat produces ~36M rows/day.
 
-**The pull-then-backfill pattern used for the other files no longer works here**: only
-~21 G is free locally (see Disk), the file is 16 GB, and at ~3 MB/s over the uplink a pull
-takes ~1.5 h during which it grows another ~0.4 GB. This needs a *streaming* drain —
-backfill straight from the Pi to the VPS in windows, with a cursor — not a file copy.
+**Don't copy the file — stream it.** `backfill.py --all` runs *inside the archiver
+container on the Pi*, which already has the DB and the network, so the 16 GB never moves.
+That dissolves the local-disk problem entirely.
+```bash
+# on the Pi — supervised, resumable, survives disconnect:
+/tmp/drain-archive.sh          # logs to /tmp/drain-archive.log
+```
+Measured throughput **~131k rows/min**, so the full 79.9M is roughly a **10-hour** job.
+
+⚠️ **The archiver container carries a stale `VPS_URL`** — `100.67.228.63`, which is
+unreachable from the boat (the live uplink correctly uses `100.88.252.115`, and only that
+one answers `/health` with 200). A backfill run with default env just fails; the drain
+script overrides it explicitly.
+
+**This is not a code bug — `compose.pi.yml` and the Pi's `.env` are both already correct.**
+The container was created **2026-07-08** and has been running with an env baked in from
+before the VPS address changed. The fix is simply to recreate it:
+```bash
+cd ~/Agent_C4 && docker compose -f compose.pi.yml up -d --force-recreate archiver
+```
+**Do NOT do this while the drain is running** — the drain executes inside that container.
+Do it once the drain reports COMPLETE. Worth checking the other long-lived containers
+(console/engine/n2kout/signalk are all 6+ weeks old) for the same drift.
+
+**Why it is supervised:** transient `database disk image is malformed` (see #11) and link
+drops both abort a run of this length. `backfill.py` keeps a `backfill_last_id` cursor in
+the archive's `sync_state` and pages by id, so a restart resumes exactly and never
+re-sends — which matters because `telemetry_raw` has no PK and a re-send duplicates
+silently. **Never use `--since/--until` for this**: ad-hoc mode ignores the cursor.
+
+**The live archive has REAL corrupt pages too, and plain retrying cannot pass them.**
+The drain wedged at ids **470500..471000**: `backfill.py` pages with
+`id > cursor ORDER BY id LIMIT n`, so a corrupt page anywhere inside that window makes the
+whole SELECT raise — the cursor never advances and the supervisor loops forever (it burned
+6 attempts in under a minute). This is distinct from the WAL-race transients in #11: those
+clear on retry, this never does.
+
+`pi/archiver/tools/step_over_bad.py` handles it with salvage.py's bisect: split the range,
+recurse to single rows, POST everything readable, and advance the cursor past only what is
+genuinely unreadable. First use recovered **2,954 of 3,000 rows, losing exactly 46**
+(rowids 470572–470617, one contiguous page — the July salvage lost 45 the same way).
+Losing 46 readings beats losing the 79.5M behind them.
+
+`pi/archiver/tools/drain-archive.sh` now does this automatically: retry once for a
+transient, and on a *second* consecutive failure hand off to the stepper, then resume.
+Unreadable rowids are appended to `/tmp/drain-lost-rowids.log` on the Pi.
+
+### 6b. Compression is what makes #6 possible at all
+Draining 79.9M rows at the measured **263 bytes/row** would have been **~21 GB into 22 G of
+free disk** — it would have filled the disk and taken Postgres down. TimescaleDB compression
+was available but **not enabled**.
+
+Enabled it (`segmentby = boat_id, source, path`, `orderby = time DESC`) and measured on real
+data: **37–42x**. `telemetry_raw` went **3,459 MB → 94 MB** with row counts unchanged
+(13.75M total; Jul 18 still exactly 5,296,752). The 79.9M incoming rows should land around
+**~500 MB** rather than 21 GB.
+
+Two things learned doing it, both non-obvious:
+- **Compress chunk-by-chunk, one statement per transaction.** A single multi-chunk
+  `compress_chunk(...)` over `show_chunks(...)` **deadlocks** against live uplink inserts.
+- **Compressing an actively-written chunk does not block ingestion.** Verified: the live
+  uplink kept landing at 5.5 s lag into the just-compressed current chunk. That is what lets
+  the drain be compacted *while running* instead of peaking at 21 GB.
+
+A compression policy (`compress_after => 2 days`, job 1000) now handles future chunks, and
+`/tmp/.../compact_watch.sh` recompacts during the drain and aborts if free disk drops
+under 3 G.
 
 ### 7. Reconcile the uplink spool ✅ **DONE 2026-09-01 — root cause fixed, spool fully drained**
 
@@ -225,17 +288,26 @@ emits, and leaves `environment.wind.directionTrue` to the water-referenced calc.
 Pi originals kept: `/tmp/uplink.py.orig-20260901`, `/tmp/compose.pi.yml.orig-20260901`,
 and `windGround.js.orig` inside the plugin dir.
 
-### 11. Reading the live `archive.db` is unreliable while the archiver writes
-Probing the live 16 GB DB from a second connection intermittently raises
-`sqlite3.DatabaseError: database disk image is malformed` — the *same* query over the *same*
-rowid range fails on one pass and succeeds on the next, and a later pass read 100,000 rows
-clean across the window that had failed. It is **not** persistent corruption: the archiver
-has `RestartCount 0` and is appending 750–950 rows/batch continuously.
+### 11. `database disk image is malformed` on the live archive has TWO causes — tell them apart
+Both are real, and they need opposite responses. Diagnosing one as the other wastes hours.
 
-It is a reader racing WAL writes/checkpointing. **Consequence for #6:** a drain must not
-treat `DatabaseError` as corruption — it needs retries, or better, should read from a
-consistent snapshot (SQLite backup API / `VACUUM INTO`) rather than the live file. Without
-that it will look like the July corruption and trigger a pointless salvage.
+**(a) Transient — a reader racing the archiver's WAL.** The *same* query over the *same*
+rowid range fails on one pass and succeeds on the next; a later pass read 100,000 rows clean
+across a window that had just failed. **Retrying works.** Contributing factor found the hard
+way: a leftover `docker run` probe container held an open SQLite connection on the archive
+for ~15 min and made this much worse — kill stray readers (`docker ps` on the Pi).
+
+**(b) Persistent — an actually corrupt page.** Reproducible: every attempt over that exact
+range fails, forever. Confirmed at ids 470500..471000 by walking 500-row windows — clean
+either side, and bisection pinned the damage to 46 contiguous rows (470572–470617).
+**Retrying never works**; only bisect-and-skip gets past it.
+
+**Distinguishing them cheaply:** retry once. Transient clears; persistent fails identically.
+That is exactly the rule `drain-archive.sh` implements.
+
+This is the third instance of SQLite corruption on this SD card (`archive.corrupt-20260718`,
+`archive.corrupt-20260830`, now live pages). Treat it as expected, not exceptional — **the
+root cause is still unaddressed**, and a drain that assumes a clean DB will wedge.
 
 ### 8. ⚠️ `ARCHIVE_RETAIN_DAYS=14` is an active deletion mechanism
 The archiver prunes out-of-session readings older than 14 days. No prune has run yet — the
