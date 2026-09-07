@@ -195,24 +195,65 @@ assertions; agent suite 16/16.
 
 ### Weather & routing
 
-- **P1 — `/strategy` re-optimizes the whole remaining course on every call.** ~14 s for the
-  remaining 259 nm on a fast x86 box, while `dashboard.js` polls it **every 15 s**; a Pi 4 is
-  far slower. Previously masked — the broken sequencer made `reoptimize` route to the Start, a
-  no-op — so fixing the sequencer exposed it. A slow-moving strategic digest should be cached
-  and recomputed on an interval or on material change. **The sequencer fix should not be
-  deployed to the boat until this is addressed**, and it is a prime suspect for the readout
-  flapping above.
+- **P1 — `/strategy` re-optimizes the whole remaining course on every call ✅ FIXED 2026-09-07.**
+  ~14 s for the remaining 259 nm on a fast x86 box, polled every 15 s by `dashboard.js`. It was
+  already supposed to be cached, but the key carried raw instrument readings (position 3 dp,
+  TWS 1 kn, TWD 1°) so it **missed ~97% of the time** — 466 distinct keys in 480 calls, TWD
+  alone churning on 84% of consecutive polls.
+
+  Bucketing the key just moves the problem to the bucket edges (coarse buckets still recomputed
+  287×/2 h), so invalidation is now a threshold on the delta from the conditions the cached
+  route was computed at. Live wind only counts when the route was actually computed from live
+  wind — with a forecast reachable, `make_wind_fn` routes on the forecast and `live` is only the
+  fallback. Structural change (mark rounded, new obstacles) forces a synchronous recompute;
+  drift is served stale-while-revalidate so the endpoint never blocks.
+
+  | | recomputes / 480 polls | reuse | engine CPU duty |
+  |---|---|---|---|
+  | before | 467 | 2.7% | ~91% |
+  | **after** | **88** | **82%** | **~17%** |
+
+  This was the gate on deploying the sequencer fix to the boat.
 
 ### Onboard hardware / deployment (Pi, Orin, N2K)
 
-- **P1 — Onboard source selection is "freshest wins", with no cross-source sanity check.**
-  `datasource_onboard.latest_value()` is `ORDER BY time DESC LIMIT 1` across **all** sources.
-  On Jul 18, `n2k-socketcan.43` agreed with `.15`/`.3` most of the time (median SOG ratio
-  1.003) but threw excursions to **8.84 kn SOG and 171° COG in 20–24% of frames**, while
-  `.15` and `.3` never disagreed on SOG at all (0/433 frames). Whichever source wrote last
-  wins, so those excursions can silently drive the engine. A `source_priority` table exists
-  (migration 003) but is consumed only by the **cloud** path (`tools.py:65`) — it was never
-  wired into the onboard datasource.
+- **P0 — 🔴 THE ARCHIVER RECORDS AIS TRAFFIC AS OWN-SHIP TELEMETRY.** Root cause of the
+  "unreliable source" symptom below, and much worse than it first looked.
+
+  `pi/archiver/archiver.py` has **no vessel-context filtering at all** — no `context`, no
+  `mmsi`, no `self` check. Signal K's `subscribe=all` delivers own-ship deltas *and* every AIS
+  target, and the archiver writes them all under the single own-ship `boat_id`.
+  `pi/uplink/uplink.py` and `datasource_onboard._ingest_live()` both filter by context; the
+  archiver was never given the same treatment.
+
+  `n2k-socketcan.43` is the AIS receiver. It also carries `sensors.ais.class` (36,899 rows),
+  `atonType.id` / `offPosition` / `virtual` (aids-to-navigation), `design.aisShipType.id`. Its
+  `navigation.position.*` is a stream of *other vessels*, so consecutive samples imply
+  impossible speeds, and its longitude range runs to **−2.4°** — the Atlantic off Africa, not
+  Lake Huron.
+
+  Because `datasource_onboard.latest_value()` is `ORDER BY time DESC LIMIT 1` across **all**
+  sources — freshest wins, no sanity check — the engine consumed another vessel's position for
+  a sixth of the race:
+
+  | source | median implied speed | max | samples implying >15 kn |
+  |---|---|---|---|
+  | **mixed (what `latest_value` returns)** | 6.5 kn | **48,876 kn** | **17.2%** |
+  | `n2k-socketcan.15` | 6.4 kn | 8.9 kn | 0% |
+  | `n2k-socketcan.3` | 6.4 kn | 8.5 kn | 0% |
+  | `n2k-socketcan.43` (AIS) | **15,859 kn** | **171,588 kn** | 72.7% |
+
+  Consequences: position/COG/SOG glitches feeding everything downstream; spurious re-optimize
+  invalidation; and a latching hazard for the mark ratchet (guarded in `b355058`, but the data
+  fix is what actually solves it). It also fully explains the earlier "n2k.43 throws excursions"
+  finding — those were other ships' SOG and COG.
+
+  Two fixes needed, both boat-independent to write: **(1)** filter contexts in the archiver so
+  AIS never lands under `boat_id`; **(2)** stop `latest_value()` trusting whichever source wrote
+  last — a `source_priority` table already exists (migration 003) but is consumed only by the
+  **cloud** path (`tools.py:65`) and was never wired into the onboard datasource.
+  ⚠️ The existing archive is already contaminated, so the replay rig and any retro analysis
+  should exclude AIS-bearing sources until it is cleaned.
 
 ### Learning loop (Lab-4, retro, LoRA)
 
