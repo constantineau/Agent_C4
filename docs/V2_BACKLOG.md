@@ -156,11 +156,30 @@ assertions; agent suite 16/16.
 
 ### In-race UX (console, dashboard, coach)
 
-- **P0 — Time to Mark: sequencer ✅ fixed; the ETA estimator is a SECOND, independent defect.**
-  `navigator.py` projects *instantaneous* VMG across the whole leg. Replayed 17:30–20:30Z the
-  ETA swung **15.6 h → 38.9 h** (σ 5.2 h) with one **22.1 h jump between consecutive 5-minute
-  samples**, while true average VMG (5.75 kn) implies a steady ~20.4 h. Needs a rolling-window
-  VMG or a polar/routing-based ETA. Design call outstanding.
+- **P0 — Time to Mark ✅ BOTH DEFECTS FIXED 2026-09-07.** The sequencer (above) and, separately,
+  the ETA estimator: `distance / instantaneous VMC`, which assumes the boat can sail straight at
+  the mark — upwind it cannot — and takes its speed from one sample.
+
+  Estimators were scored on **arrival-time stability**: as the clock advances by *d* a good ETA
+  falls by *d*, so the predicted arrival should sit still and its wander is the error. That needs
+  no knowledge of the real arrival, which matters because the archive never reaches Cove Island.
+
+  | estimator | arrival spread | median jump | worst jump |
+  |---|---|---|---|
+  | instantaneous VMC (as raced) | 74.34 h | 78.7 min | 33.88 h |
+  | closing rate, 30 min window | 11.68 h | 2.1 min | 0.21 h |
+  | polars with a beat/reach branch | 33.58 h | 0.1 min | **26.37 h** |
+  | **polars, best VMG, smoothed wind** | **10.39 h** | **3.8 min** | **0.25 h** |
+
+  The branch version is the lesson: `if twa < beat` is a **discontinuity**, so no amount of wind
+  smoothing helps — drifting across close-hauled makes the answer leap hours. Maximising VMG over
+  sailable headings has no branch to jump across. Snapping to the polar grid reintroduced the same
+  cliff one level down; interpolating both axes cut the worst jump 1.75 h → 0.25 h.
+
+  Residual ~10 h is largely **real** — TWS ranged 9–19 kn over those hours and across 116 nm that
+  genuinely moves arrival. Only forecast-aware routing can improve on it; `/reoptimize` already
+  computes per-mark ETAs and is now cheaply cached, so **wiring routed ETA into `next_mark` is
+  the natural follow-up** (mind the recursion: `reoptimize` calls `get_navigator`).
 - **P0 — Readouts flap between a value and "no data" ✅ FIXED 2026-09-07.** The archive proves
   this was never sensor or link loss: every strip path has **12,990 samples, one per second,
   across the whole race, zero gaps over 1 s**. It was the console — `fetchJSON` aborts at 5 s
