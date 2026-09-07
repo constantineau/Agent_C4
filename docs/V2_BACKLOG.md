@@ -217,8 +217,25 @@ assertions; agent suite 16/16.
 
 ### Onboard hardware / deployment (Pi, Orin, N2K)
 
-- **P0 — 🔴 THE ARCHIVER RECORDS AIS TRAFFIC AS OWN-SHIP TELEMETRY.** Root cause of the
-  "unreliable source" symptom below, and much worse than it first looked.
+- **P0 — 🔴 THE ARCHIVER RECORDS AIS TRAFFIC AS OWN-SHIP TELEMETRY ✅ FIXED 2026-09-07.** Root
+  cause of the "unreliable source" symptom, and much worse than it first looked.
+
+  **Fixed in two layers.** `archiver.py` now tracks the `self` context from the hello frame and
+  skips foreign contexts (asymmetric on purpose — anything not positively identifiable as
+  another vessel is kept, because dropping own-ship data is the worse failure); and
+  `datasource_onboard` excludes AIS-bearing sources from its five archive reads, which is what
+  rescues the archives already written, including the Jul 18 race the replay rig depends on.
+  AIS channels are identified from the data (a source publishing AIS-only marker paths), not a
+  hand-maintained list. Measured on own-ship position as `latest_value()` returns it:
+
+  | | median | max | steps implying >15 kn |
+  |---|---|---|---|
+  | as raced | 5.63 kn | **4,091 kn** | **15.9%** |
+  | **fixed** | 4.86 kn | **8.0 kn** | **0.0%** |
+
+  ⚠️ Still open: the archive on disk remains contaminated — the filter hides AIS rows from
+  own-ship reads but does not delete them. A cleanup pass (and deciding whether AIS should be
+  archived properly, with a context column, to make the Fleet tile replayable) is still to do.
 
   `pi/archiver/archiver.py` has **no vessel-context filtering at all** — no `context`, no
   `mmsi`, no `self` check. Signal K's `subscribe=all` delivers own-ship deltas *and* every AIS
