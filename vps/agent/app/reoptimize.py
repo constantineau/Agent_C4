@@ -13,6 +13,8 @@ pre-authored branch (the selector) → onboard re-optimize (this) → the LLM/cr
 re-route, off the playbook". Deterministic, Tier-1. The isochrone chain is CPU-heavy → cached, and served
 on demand (`GET /reoptimize`), not on every poll.
 """
+import os
+import threading
 import time
 
 from . import deviation
@@ -20,8 +22,65 @@ from . import navigator as NAV
 from . import routing
 from . import sails
 
-_cache = {"key": None, "t": 0, "val": None}
-CACHE_TTL = 30
+# --- when is a cached route still good? ------------------------------------
+# This isochrone is the most expensive thing the engine does — ~14 s for a 259 nm remaining
+# course, and `dashboard.js` polls /strategy (which chains it) every 15 s. It was already meant
+# to be cached, but the key carried raw instrument readings: position to 3 dp (~111 m), TWS to
+# 1 kn, TWD to 1 deg. Measured against the Bayview Mackinac 2026 archive at the real 15 s poll:
+# 466 distinct keys in 480 calls, only 14 of 479 consecutive polls repeating — a ~97% MISS rate,
+# i.e. a 14 s route computation every poll, for the whole race.
+#
+# Bucketing the key is not the fix either: it only moves the problem to the bucket boundaries,
+# where a TWD hovering near an edge chatters between two buckets forever. Measured, coarse
+# buckets still recomputed 287 times in 2 h.
+#
+# So the test is a THRESHOLD ON THE DELTA from the conditions the cached route was actually
+# computed at. There are no boundaries to chatter across: the route is reused until the world
+# has moved enough to change it, however the readings wander in between. The isochrone is still
+# computed from exact live values — this only decides WHEN to recompute.
+CACHE_TTL = float(os.environ.get("REOPT_CACHE_TTL_S", "300"))     # recompute at least this often
+POS_TOL_NM = float(os.environ.get("REOPT_POS_TOL_NM", "0.5"))     # boat movement that matters
+TWD_TOL_DEG = float(os.environ.get("REOPT_TWD_TOL_DEG", "15"))    # a real shift, not instrument noise
+TWS_TOL_KN = float(os.environ.get("REOPT_TWS_TOL_KN", "4"))       # a real build/drop
+
+_cache = {"ctx": None, "t": 0, "val": None}
+_refresh_lock = threading.Lock()
+_refreshing = False
+
+
+def _structurally_changed(ctx, prev):
+    """The cached route is about a DIFFERENT PROBLEM, not merely an older one.
+
+    Kept separate from drift because a stale answer is only acceptable when it is still an
+    answer to the same question. If a mark has been rounded, or new obstacle homework has come
+    aboard, the cached track may run through an island or to a mark already behind us — so these
+    force a synchronous recompute and are never served stale."""
+    return (prev is None
+            or ctx["marks"] != prev["marks"]
+            or ctx["obstacles"] != prev["obstacles"])
+
+
+def _drifted(ctx, prev, age_s):
+    """True when the same problem has drifted far enough to be worth re-solving. Gradual, so it
+    is safe to serve the previous route while a fresh one is computed behind the request."""
+    if prev is None:
+        return True
+    if age_s >= CACHE_TTL:
+        return True
+    if NAV._hav_nm(prev["lat"], prev["lon"], ctx["lat"], ctx["lon"]) > POS_TOL_NM:
+        return True
+    # Live wind only invalidates a route that was actually COMPUTED from live wind. When the
+    # forecast is reachable, make_wind_fn routes on the forecast at every point and `live` is
+    # merely the no-network fallback plus an initial tack reference — so the answer barely
+    # depends on it, and throwing the route away because the masthead moved was discarding work
+    # over an input it hardly used. The forecast moves slowly (Open-Meteo is cached ~30 min);
+    # CACHE_TTL is what picks that up.
+    if prev.get("from_live_wind"):
+        if abs(NAV._wrap180((ctx["twd"] or 0) - (prev["twd"] or 0))) > TWD_TOL_DEG:
+            return True
+        if abs((ctx["tws"] or 0) - (prev["tws"] or 0)) > TWS_TOL_KN:
+            return True
+    return False
 
 
 def _remaining_marks(nav, marks):
@@ -109,11 +168,81 @@ def get_reoptimize(route=None):
     bundle = deviation._load_playbook()
     zdisks, polys = _parse_zones(bundle)
     avoid = _avoid_disks(bundle) + zdisks             # islands + circular zones = disks
-    key = (round(slat, 3), round(slon, 3), tuple(m["name"] for m in remaining),
-           round(live[0] or 0), round(live[1] or 0), len(avoid), len(polys))
-    if _cache["key"] == key and time.time() - _cache["t"] < CACHE_TTL:
+
+    ctx = {"lat": slat, "lon": slon, "tws": live[0], "twd": live[1],
+           "marks": tuple(m["name"] for m in remaining),
+           "obstacles": (len(avoid), len(polys))}
+    prev = _cache["ctx"]
+    age = time.time() - _cache["t"]
+    if _structurally_changed(ctx, prev):
+        return _compute(nav, remaining, slat, slon, live, bundle, avoid, polys, ctx)
+    if not _drifted(ctx, prev, age):
         return _cache["val"]
 
+    # STALE-WHILE-REVALIDATE, for drift only. A recompute costs ~14 s, and /strategy is a
+    # synchronous endpoint the console aborts at 5 s — so blocking does not merely cost CPU, it
+    # blanks the readouts that depend on it (the race-day flapping). The problem is unchanged
+    # and only the conditions have moved, so serve the previous route immediately and refresh
+    # behind the request.
+    if _cache["val"] is not None:
+        _kick_refresh(route)
+        stale = dict(_cache["val"])
+        stale["stale_s"] = round(age, 1)
+        return stale
+
+    return _compute(nav, remaining, slat, slon, live, bundle, avoid, polys, ctx)
+
+
+def _kick_refresh(route):
+    """Recompute in the background, at most one at a time. Daemon so it can never hold a
+    shutdown open, and failures are swallowed — a stale route is a fine outcome, an exception
+    escaping into a poll thread is not."""
+    global _refreshing
+    with _refresh_lock:
+        if _refreshing:
+            return
+        _refreshing = True
+
+    def run():
+        global _refreshing
+        try:
+            _recompute_now(route)
+        except Exception as exc:
+            print(f"[reoptimize] background refresh failed ({exc}); keeping the cached route",
+                  flush=True)
+        finally:
+            with _refresh_lock:
+                _refreshing = False
+
+    threading.Thread(target=run, name="reoptimize-refresh", daemon=True).start()
+
+
+def _recompute_now(route=None):
+    """Force a fresh isochrone and cache it (the background refresh path)."""
+    nav = NAV.get_navigator(route)
+    if not nav.get("available"):
+        return None
+    marks = NAV._marks(nav["route"])
+    if not marks:
+        return None
+    remaining = _remaining_marks(nav, marks)
+    s = NAV._latest()
+    slat, slon = s.get("lat"), s.get("lon")
+    if slat is None:
+        return None
+    live = (s.get("tws"), s.get("twd"))
+    bundle = deviation._load_playbook()
+    zdisks, polys = _parse_zones(bundle)
+    avoid = _avoid_disks(bundle) + zdisks
+    ctx = {"lat": slat, "lon": slon, "tws": live[0], "twd": live[1],
+           "marks": tuple(m["name"] for m in remaining),
+           "obstacles": (len(avoid), len(polys))}
+    return _compute(nav, remaining, slat, slon, live, bundle, avoid, polys, ctx)
+
+
+def _compute(nav, remaining, slat, slon, live, bundle, avoid, polys, ctx):
+    """The heavy isochrone chain. Split out so the background refresh and the first-call path
+    share exactly one implementation."""
     wind, use_fcst = routing.make_wind_fn(slat, slon, live)
     t0 = t = time.time()
     cur = (slat, slon)
@@ -168,5 +297,8 @@ def get_reoptimize(route=None):
                     " (open-water — no obstacle homework aboard; verify against the chart)")
                  + ". OFF THE PLAYBOOK (not the frozen homework) — legal in-race, flagged as a re-route."),
     }
-    _cache.update(key=key, t=time.time(), val=out)
+    # record WHICH wind this route came from — _drifted needs it to decide whether live-wind
+    # movement can invalidate the answer at all
+    ctx = dict(ctx, from_live_wind=not use_fcst)
+    _cache.update(ctx=ctx, t=time.time(), val=out)
     return out
