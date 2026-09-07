@@ -95,6 +95,13 @@ def _adiff(a, b):
 # top for the cases plane-crossing alone cannot see: drifting back over the line pre-start, or a
 # course that doubles back on itself.
 PASS_NM = 0.05             # distance beyond a mark's plane that counts as passed (~90 m)
+# The ratchet is persistent, so a single bad fix could latch us onto the wrong mark for the rest
+# of the race. That is not hypothetical: the Jul 18 archive shows own-ship position contaminated
+# by the AIS receiver channel (see pi/archiver — AIS contexts were archived under boat_id), so
+# 17% of position reads were some other vessel. Geometry alone is self-correcting and still
+# answers immediately; only the WRITE waits for the advance to be seen twice running.
+PROGRESS_CONFIRM = 2
+_pending = {}              # route -> [index, consecutive observations]
 # Set false to ignore the stored ratchet and run on geometry alone (the replay rig does this so
 # a frame depends only on its own timestamp, never on which frames were computed before it).
 PROGRESS_LATCH = os.environ.get("NAV_PROGRESS_LATCH", "true").strip().lower() != "false"
@@ -155,6 +162,20 @@ def _progress_floor(route, marks):
         return int(rec.get("i", 0)) if rec.get("fp") == _course_fp(marks) else 0
     except Exception:
         return 0
+
+
+def _confirm_progress(route, marks, i):
+    """Persist an advance only once it has been observed PROGRESS_CONFIRM times running.
+
+    A one-off wild fix advances the returned index for that call (geometry is recomputed every
+    time, so the next good fix undoes it), but never reaches the durable ratchet."""
+    p = _pending.get(route)
+    if not p or p[0] != i:
+        _pending[route] = [i, 1]
+    else:
+        p[1] += 1
+    if _pending[route][1] >= PROGRESS_CONFIRM:
+        _save_progress(route, marks, i)
 
 
 def _save_progress(route, marks, i):
@@ -269,7 +290,7 @@ def get_navigator(route: str = None):
     floor = _progress_floor(route, marks)
     idx = _next_index(marks, lat, lon, floor)
     if idx != floor:
-        _save_progress(route, marks, idx)
+        _confirm_progress(route, marks, idx)
     nxt = marks[idx]
     dist = _hav_nm(lat, lon, nxt["lat"], nxt["lon"])
     brg = _bearing(lat, lon, nxt["lat"], nxt["lon"])
