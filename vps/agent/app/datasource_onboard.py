@@ -64,6 +64,30 @@ def _epoch(iso):
         return None
 
 
+# Sources that carry AIS traffic rather than own-ship instruments. Until 2026-09-07 the
+# archiver had no vessel-context filter, so `subscribe=all` put every AIS target into `readings`
+# under the own-ship BOAT_ID (fixed in pi/archiver/archiver.py). Any archive written before that
+# is contaminated: on Jul 18, 17% of own-ship position reads were another vessel, with implied
+# speeds to 171,000 kn and a longitude of -2.4 deg.
+#
+# Rather than maintain a list of source names by hand — they are assigned dynamically by the
+# N2K stack and differ per boat — identify them from the data: a source that publishes AIS-only
+# paths is an AIS channel, so its navigation.* rows describe somebody else. This also cleans the
+# archive we already have, which is what the replay rig and any retro analysis need.
+AIS_MARKER_PATHS = ("sensors.ais.class", "atonType.id", "design.aisShipType.id",
+                    "navigation.specialManeuver", "offPosition")
+AIS_FILTER = os.environ.get("ONBOARD_AIS_FILTER", "true").strip().lower() != "false"
+# How many recent rows per marker path to inspect. Bounded on purpose: a wall-clock lookback
+# silently finds nothing when the archive being read is older than the window (which is exactly
+# the case for replay and retro work), and an unbounded DISTINCT would scan every AIS row on a
+# multi-GB card. A source publishing AIS markers at all will appear in its own last few thousand.
+AIS_PROBE_ROWS = int(os.environ.get("ONBOARD_AIS_PROBE_ROWS", "5000"))
+# Discovered per ARCHIVE_DB, not per instance: it is a property of the file, and the engine
+# builds a fresh source per replay frame — memoising on the instance re-ran the probe (and
+# re-logged) hundreds of times.
+_AIS_SRC_CACHE = {}
+
+
 def _cutoff_str(minutes):
     """A second-precision UTC cutoff string that lexicographically pre-filters the archive.
 
@@ -104,6 +128,39 @@ class OnboardSource:
             conn.row_factory = sqlite3.Row
             self._archive_local.conn = conn
         return conn
+
+    # --- AIS-bearing sources (see AIS_MARKER_PATHS) ------------------------
+    def ais_sources(self):
+        """Source labels that carry AIS traffic, discovered from the archive and memoised.
+
+        Returns a set; empty when the filter is disabled or nothing matches, so callers can
+        treat it as "sources to exclude from own-ship reads"."""
+        if not AIS_FILTER:
+            return set()
+        cached = _AIS_SRC_CACHE.get(ARCHIVE_DB)
+        if cached is not None:
+            return cached
+        found = set()
+        for p in AIS_MARKER_PATHS:
+            try:
+                # (path, time) is indexed, so this walks that path's newest rows and stops
+                found.update(r[0] for r in self._archive.execute(
+                    "SELECT DISTINCT source FROM (SELECT source FROM readings WHERE path=? "
+                    "ORDER BY time DESC LIMIT ?)", (p, AIS_PROBE_ROWS)))
+            except Exception:
+                continue
+        _AIS_SRC_CACHE[ARCHIVE_DB] = found
+        print(f"[onboard] AIS-bearing source(s) excluded from own-ship reads: {sorted(found)}"
+              if found else "[onboard] no AIS-bearing sources in the archive", flush=True)
+        return found
+
+    def _not_ais(self, alias="", params=None):
+        """SQL fragment + params excluding AIS sources, or ('', []) when there are none."""
+        srcs = sorted(self.ais_sources())
+        if not srcs:
+            return "", []
+        col = f"{alias}source" if alias else "source"
+        return f" AND {col} NOT IN ({','.join('?' * len(srcs))})", srcs
 
     # --- local marks store (writable) --------------------------------------
     def _open_engine(self):
@@ -226,9 +283,10 @@ class OnboardSource:
         live = self._live_fresh(path)
         if live:
             return max(live, key=lambda r: r[1])[2]
+        not_ais, ais_p = self._not_ais()
         row = self._archive.execute(
-            "SELECT value FROM readings WHERE boat_id=? AND path=? AND value IS NOT NULL "
-            "ORDER BY time DESC LIMIT 1", (BOAT_ID, path),
+            "SELECT value FROM readings WHERE boat_id=? AND path=? AND value IS NOT NULL"
+            + not_ais + " ORDER BY time DESC LIMIT 1", (BOAT_ID, path, *ais_p),
         ).fetchone()
         return row["value"] if row else None
 
@@ -261,10 +319,12 @@ class OnboardSource:
         decimated to the last sample per second."""
         def fetch():
             cut_s, cut_e = _cutoff_str(minutes)
+            not_ais, ais_p = self._not_ais()
             rows = self._archive.execute(
                 "SELECT max(time) AS time, value FROM readings WHERE boat_id=? AND path=? "
-                "AND value IS NOT NULL AND time > ? GROUP BY substr(time,1,19) ORDER BY time",
-                (BOAT_ID, path, cut_s),
+                "AND value IS NOT NULL AND time > ?" + not_ais
+                + " GROUP BY substr(time,1,19) ORDER BY time",
+                (BOAT_ID, path, cut_s, *ais_p),
             ).fetchall()
             out = []
             for r in rows:
@@ -279,10 +339,12 @@ class OnboardSource:
         decimated to the last sample per (source, second)."""
         def fetch():
             cut_s, cut_e = _cutoff_str(minutes)
+            not_ais, ais_p = self._not_ais()
             rows = self._archive.execute(
                 "SELECT source, max(time) AS time, value FROM readings WHERE boat_id=? AND path=? "
-                "AND value IS NOT NULL AND time > ? GROUP BY source, substr(time,1,19) "
-                "ORDER BY time", (BOAT_ID, path, cut_s),
+                "AND value IS NOT NULL AND time > ?" + not_ais
+                + " GROUP BY source, substr(time,1,19) ORDER BY time",
+                (BOAT_ID, path, cut_s, *ais_p),
             ).fetchall()
             out = []
             for r in rows:
@@ -527,10 +589,11 @@ class OnboardSource:
         missing = [p for p in paths if not any(k[0] == p for k in best)]
         if missing:
             placeholders = ",".join("?" * len(missing))
+            not_ais, ais_p = self._not_ais()
             rows = self._archive.execute(
                 f"SELECT path, source, max(time) AS time, value FROM readings WHERE boat_id=? "
-                f"AND path IN ({placeholders}) AND value IS NOT NULL AND time > ? "
-                f"GROUP BY path, source", (BOAT_ID, *missing, cut_s),
+                f"AND path IN ({placeholders}) AND value IS NOT NULL AND time > ?" + not_ais
+                + " GROUP BY path, source", (BOAT_ID, *missing, cut_s, *ais_p),
             ).fetchall()
             for r in rows:
                 e = _epoch(r["time"])
@@ -548,10 +611,11 @@ class OnboardSource:
         Merges the live SK cache (what's reporting right now) over the archive — important on
         the bench, where the sample log's source timestamps fall outside any wall-clock window."""
         cut_s, cut_e = _cutoff_str(max_age_min)
+        not_ais, ais_p = self._not_ais()
         rows = self._archive.execute(
             "SELECT source, max(time) AS last, count(DISTINCT path) AS paths, count(*) AS n "
-            "FROM readings WHERE boat_id=? AND time > ? GROUP BY source ORDER BY source",
-            (BOAT_ID, cut_s),
+            "FROM readings WHERE boat_id=? AND time > ?" + not_ais
+            + " GROUP BY source ORDER BY source", (BOAT_ID, cut_s, *ais_p),
         ).fetchall()
         agg = {}
         for r in rows:

@@ -91,11 +91,58 @@ def flatten(time, source, path, value, out):
         out.append((time, BOAT_ID, source, path, None, value))
 
 
-def parse_delta(msg, default_time):
-    """Turn one Signal K delta message into a list of archive rows (full resolution)."""
+def _mmsi_from_context(ctx):
+    """Pull the numeric MMSI out of an AIS vessel context urn, else None.
+
+    e.g. 'vessels.urn:mrn:imo:mmsi:366123456' -> 366123456. Own ship is a uuid context, so it
+    (correctly) returns None. Mirrors pi/uplink/uplink.py."""
+    if ctx and "mmsi:" in ctx:
+        tail = ctx.split("mmsi:")[-1].strip()
+        return int(tail) if tail.isdigit() else None
+    return None
+
+
+def _is_other_vessel(ctx, self_ctx):
+    """True when this delta describes a vessel or navigation aid that is NOT us.
+
+    `subscribe=all` delivers own-ship deltas AND every AIS target on one socket. Without this
+    test the archiver wrote them all under the single own-ship BOAT_ID, so `navigation.position`
+    in the archive was a mix of this boat and whatever shipping was in range — on Jul 18 that
+    made 17% of own-ship position reads another vessel, with implied speeds to 171,000 kn and a
+    longitude of -2.4 deg (the Atlantic, not Lake Huron).
+
+    Deliberately conservative: silently DROPPING own-ship telemetry is far worse than keeping
+    the odd AIS row, so anything not positively identifiable as someone else is kept.
+      - no context               -> own ship (Signal K omits it for self)
+      - context == self          -> own ship
+      - self known and differs   -> someone else
+      - self not yet known       -> drop only when the context names an MMSI (an AIS target)
+    """
+    if not ctx:
+        return False
+    if self_ctx:
+        return ctx != self_ctx
+    return _mmsi_from_context(ctx) is not None
+
+
+def parse_delta(msg, default_time, state=None):
+    """Turn one Signal K delta message into a list of archive rows (full resolution).
+
+    `state` carries the `self` context learned from the hello frame, so AIS traffic can be told
+    apart from own-ship data; pass a dict to enable the filter (and to count what it drops)."""
     try:
         data = json.loads(msg)
     except ValueError:
+        return []
+    # The hello frame names the self context — remember it, it is what makes the filter exact.
+    if "self" in data and "updates" not in data:
+        if state is not None:
+            state["self"] = data["self"]
+            print(f"[archive] own-ship context = {data['self']} (AIS contexts will be skipped)",
+                  flush=True)
+        return []
+    if state is not None and _is_other_vessel(data.get("context"), state.get("self")):
+        state["skipped"] = state.get("skipped", 0) + 1
         return []
     rows = []
     for upd in data.get("updates", []):
@@ -120,7 +167,7 @@ def write_rows(conn, rows):
         conn.commit()
 
 
-async def flusher(conn, buf, loop):
+async def flusher(conn, buf, loop, state=None):
     total = 0
     while True:
         await asyncio.sleep(FLUSH_SECONDS)
@@ -129,7 +176,11 @@ async def flusher(conn, buf, loop):
         rows, buf[:] = buf[:], []
         await loop.run_in_executor(None, write_rows, conn, rows)
         total += len(rows)
-        print(f"[archive] +{len(rows)} rows (total {total})", flush=True)
+        # report the AIS skip count too — silence here would look identical to a filter that
+        # had quietly stopped working, or to one wrongly eating own-ship data
+        skipped = (state or {}).get("skipped", 0)
+        note = f" (skipped {skipped} AIS deltas)" if skipped else ""
+        print(f"[archive] +{len(rows)} rows (total {total}){note}", flush=True)
 
 
 # ---- RETENTION PRUNE (race sessions) ------------------------------------------------------
@@ -202,8 +253,11 @@ async def run():
     print(f"[archive] {ARCHIVE_DB} ready ({n} rows) <- {SIGNALK_WS} (full resolution)",
           flush=True)
     buf = []
+    # carries the `self` context from the hello frame + the AIS skip count; survives reconnects
+    # so a dropped socket does not briefly re-admit AIS before the next hello arrives
+    state = {}
     loop = asyncio.get_running_loop()
-    asyncio.create_task(flusher(conn, buf, loop))
+    asyncio.create_task(flusher(conn, buf, loop, state))
     asyncio.create_task(pruner(conn, loop))
     while True:
         try:
@@ -211,7 +265,7 @@ async def run():
                 print("[archive] connected to Signal K", flush=True)
                 async for msg in ws:
                     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-                    rows = parse_delta(msg, now)
+                    rows = parse_delta(msg, now, state)
                     if rows:
                         buf.extend(rows)
                         if len(buf) >= FLUSH_ROWS:

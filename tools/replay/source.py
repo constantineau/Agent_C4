@@ -61,20 +61,23 @@ class ReplaySource(OnboardSource):
     # --- overrides: every archive read that is otherwise unbounded above ------
     def latest_value(self, path):
         """Freshest value AT OR BEFORE `at`. The live cache is off in replay, so archive only."""
+        not_ais, ais_p = self._not_ais()
         row = self._archive.execute(
             "SELECT value FROM readings WHERE boat_id=? AND path=? AND value IS NOT NULL "
-            "AND time <= ? ORDER BY time DESC LIMIT 1", (BOAT_ID, path, self._upper()),
+            "AND time <= ?" + not_ais + " ORDER BY time DESC LIMIT 1",
+            (BOAT_ID, path, self._upper(), *ais_p),
         ).fetchone()
         return row["value"] if row else None
 
     def series(self, path, minutes):
         def fetch():
             cut_s, cut_e = _cutoff_str(minutes)       # virtual-correct: the clock is frozen
+            not_ais, ais_p = self._not_ais()
             rows = self._archive.execute(
                 "SELECT max(time) AS time, value FROM readings WHERE boat_id=? AND path=? "
-                "AND value IS NOT NULL AND time > ? AND time <= ? "
-                "GROUP BY substr(time,1,19) ORDER BY time",
-                (BOAT_ID, path, cut_s, self._upper()),
+                "AND value IS NOT NULL AND time > ? AND time <= ?" + not_ais
+                + " GROUP BY substr(time,1,19) ORDER BY time",
+                (BOAT_ID, path, cut_s, self._upper(), *ais_p),
             ).fetchall()
             out = []
             for r in rows:
@@ -87,11 +90,12 @@ class ReplaySource(OnboardSource):
     def series_by_source(self, path, minutes):
         def fetch():
             cut_s, cut_e = _cutoff_str(minutes)
+            not_ais, ais_p = self._not_ais()
             rows = self._archive.execute(
                 "SELECT source, max(time) AS time, value FROM readings WHERE boat_id=? AND path=? "
-                "AND value IS NOT NULL AND time > ? AND time <= ? "
-                "GROUP BY source, substr(time,1,19) ORDER BY time",
-                (BOAT_ID, path, cut_s, self._upper()),
+                "AND value IS NOT NULL AND time > ? AND time <= ?" + not_ais
+                + " GROUP BY source, substr(time,1,19) ORDER BY time",
+                (BOAT_ID, path, cut_s, self._upper(), *ais_p),
             ).fetchall()
             out = []
             for r in rows:
@@ -106,10 +110,12 @@ class ReplaySource(OnboardSource):
         if not paths:
             return []
         placeholders = ",".join("?" * len(paths))
+        not_ais, ais_p = self._not_ais()
         rows = self._archive.execute(
             f"SELECT path, source, max(time) AS time, value FROM readings WHERE boat_id=? "
-            f"AND path IN ({placeholders}) AND value IS NOT NULL AND time > ? AND time <= ? "
-            f"GROUP BY path, source", (BOAT_ID, *paths, cut_s, self._upper()),
+            f"AND path IN ({placeholders}) AND value IS NOT NULL AND time > ? AND time <= ?"
+            + not_ais + " GROUP BY path, source",
+            (BOAT_ID, *paths, cut_s, self._upper(), *ais_p),
         ).fetchall()
         best = {}
         for r in rows:
@@ -124,10 +130,11 @@ class ReplaySource(OnboardSource):
 
     def sources(self, max_age_min):
         cut_s, cut_e = _cutoff_str(max_age_min)
+        not_ais, ais_p = self._not_ais()
         rows = self._archive.execute(
             "SELECT source, max(time) AS last, count(DISTINCT path) AS paths, count(*) AS n "
-            "FROM readings WHERE boat_id=? AND time > ? AND time <= ? GROUP BY source "
-            "ORDER BY source", (BOAT_ID, cut_s, self._upper()),
+            "FROM readings WHERE boat_id=? AND time > ? AND time <= ?" + not_ais
+            + " GROUP BY source ORDER BY source", (BOAT_ID, cut_s, self._upper(), *ais_p),
         ).fetchall()
         out = []
         for r in rows:

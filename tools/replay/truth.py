@@ -39,10 +39,32 @@ PATHS = {
 }
 
 
+# A source publishing these is an AIS receiver, not an own-ship instrument. Until 2026-09-07
+# the archiver had no vessel-context filter, so AIS traffic went into `readings` under the
+# own-ship boat_id. Showing it here as a "source" for own-ship truth is worse than useless: it
+# is what made the review pane flag disagreements between the boat and a passing ship.
+AIS_MARKER_PATHS = ("sensors.ais.class", "atonType.id", "design.aisShipType.id",
+                    "navigation.specialManeuver", "offPosition")
+
+
+def _ais_sources(conn, probe_rows=5000):
+    found = set()
+    for p in AIS_MARKER_PATHS:
+        found.update(r[0] for r in conn.execute(
+            "SELECT DISTINCT source FROM (SELECT source FROM readings WHERE path=? "
+            "ORDER BY time DESC LIMIT ?)", (p, probe_rows)))
+    return found
+
+
 def build(archive_db, start, end, step_s, out_dir, boat_id="sr33"):
     conn = sqlite3.connect(f"file:{archive_db}?mode=ro", uri=True)
     lo = start.strftime("%Y-%m-%dT%H:%M:%S")
     hi = end.strftime("%Y-%m-%dT%H:%M:%S") + "Z"
+
+    ais = sorted(_ais_sources(conn))
+    if ais:
+        print(f"[truth] excluding AIS-bearing source(s): {ais}")
+    not_ais = f" AND source NOT IN ({','.join('?' * len(ais))})" if ais else ""
 
     # One row per (path, source, second) — the LAST sample in that second, never an average,
     # so wrap-around angles (359 deg -> 1 deg) cannot be smeared into a bogus midpoint.
@@ -50,8 +72,8 @@ def build(archive_db, start, end, step_s, out_dir, boat_id="sr33"):
     rows = conn.execute(
         f"SELECT path, source, substr(time,1,19) AS sec, value FROM readings "
         f"WHERE boat_id=? AND path IN ({placeholders}) AND value IS NOT NULL "
-        f"AND time > ? AND time <= ? "
-        f"GROUP BY path, source, sec ORDER BY sec", (boat_id, *PATHS, lo, hi),
+        f"AND time > ? AND time <= ?" + not_ais +
+        f" GROUP BY path, source, sec ORDER BY sec", (boat_id, *PATHS, lo, hi, *ais),
     ).fetchall()
     print(f"[truth] {len(rows):,} per-second samples across {len(PATHS)} paths")
 
