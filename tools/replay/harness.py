@@ -63,6 +63,9 @@ def _setup(archive_db, engine_db, polars_file):
         ARCHIVE_DB=archive_db, ENGINE_DB=engine_db, POLARS_FILE=polars_file,
         DATA_SOURCE="onboard", ONBOARD_LIVE_WS="false",
         NAV_PROGRESS_LATCH="false",     # each frame stands alone — see the docstring
+        REOPT_SWR="false",              # ...and so does the re-optimizer: its background
+                                        # refresh would read a source the harness has already
+                                        # moved to the next frame
     )
     for p in (HERE, ROOT, os.path.join(ROOT, "vps", "agent"), os.path.join(ROOT, "pi", "engine")):
         if p not in sys.path:

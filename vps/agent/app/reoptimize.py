@@ -39,6 +39,12 @@ from . import sails
 # has moved enough to change it, however the readings wander in between. The isochrone is still
 # computed from exact live values — this only decides WHEN to recompute.
 CACHE_TTL = float(os.environ.get("REOPT_CACHE_TTL_S", "300"))     # recompute at least this often
+# Stale-while-revalidate refreshes in a background thread, which reads whatever
+# `datasource.active()` currently points at. On the boat that is one stable source. Under replay
+# the harness reassigns it per frame, so a refresh started in one frame can finish reading
+# another's — a route stitched from mixed timestamps, then cached for a later frame. Replay sets
+# this false so every frame depends only on its own timestamp.
+SWR = os.environ.get("REOPT_SWR", "true").strip().lower() != "false"
 POS_TOL_NM = float(os.environ.get("REOPT_POS_TOL_NM", "0.5"))     # boat movement that matters
 TWD_TOL_DEG = float(os.environ.get("REOPT_TWD_TOL_DEG", "15"))    # a real shift, not instrument noise
 TWS_TOL_KN = float(os.environ.get("REOPT_TWS_TOL_KN", "4"))       # a real build/drop
@@ -184,7 +190,7 @@ def get_reoptimize(route=None):
     # blanks the readouts that depend on it (the race-day flapping). The problem is unchanged
     # and only the conditions have moved, so serve the previous route immediately and refresh
     # behind the request.
-    if _cache["val"] is not None:
+    if SWR and _cache["val"] is not None:
         _kick_refresh(route)
         stale = dict(_cache["val"])
         stale["stale_s"] = round(age, 1)
