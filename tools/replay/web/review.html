@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Race Rewind — Bayview Mackinac 2026</title>
+<style>
+  :root {
+    --bg:#0b2b45; --panel:#0f3555; --line:#2a5580; --ink:#e8f0f6; --dim:#9fb8cc;
+    --accent:#ffd76a; --good:#6ee7a8; --bad:#ff8b8b;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { height:100%; margin:0; background:var(--bg); color:var(--ink); overflow:hidden; }
+  body { display:flex; flex-direction:column; }
+
+  header { flex:none; display:flex; align-items:center; gap:14px; padding:8px 14px;
+           background:#0a2338; border-bottom:1px solid var(--line); }
+  header h1 { font-size:15px; margin:0; font-weight:600; letter-spacing:.02em; }
+  header .clock { font-variant-numeric: tabular-nums; font-size:20px; font-weight:600;
+                  color:var(--accent); }
+  header .meta { font-size:11.5px; color:var(--dim); }
+  header .spacer { flex:1; }
+  button.ctl { background:#164066; color:var(--ink); border:1px solid var(--line);
+               border-radius:6px; padding:5px 11px; font-size:12.5px; cursor:pointer; }
+  button.ctl:hover { background:#1d4f7d; }
+  button.ctl[disabled] { opacity:.45; cursor:default; }
+
+  .scrub { flex:none; display:flex; align-items:center; gap:10px; padding:7px 14px;
+           background:#0a2338; border-bottom:1px solid var(--line); }
+  .scrub input[type=range] { flex:1; accent-color:var(--accent); }
+  .scrub .idx { font-size:11.5px; color:var(--dim); font-variant-numeric:tabular-nums;
+                min-width:120px; text-align:right; }
+
+  main { flex:1 1 auto; display:flex; min-height:0; }
+  .pane { display:flex; flex-direction:column; min-width:0; min-height:0; }
+  .pane > h2 { flex:none; margin:0; font-size:11px; letter-spacing:.09em; text-transform:uppercase;
+               color:var(--dim); padding:7px 12px; background:#0a2338;
+               border-bottom:1px solid var(--line); }
+  #left  { flex:1 1 58%; border-right:1px solid var(--line); }
+  #right { flex:1 1 42%; }
+  /* The console is iPad software. Squeezing it into a narrow pane truncates every tile
+     heading ("TW…", "PLA…") and misrepresents the very information architecture this rig
+     exists to judge. So render it at true iPad-landscape geometry and scale the whole thing
+     down to fit — you see the real layout, just smaller. */
+  #ipadWrap { flex:1; position:relative; overflow:hidden; background:#000; }
+  #ipad { position:absolute; top:0; left:0; width:1194px; height:834px; border:0;
+          transform-origin: top left; background:#000; }
+
+  #truth { flex:1; overflow:auto; padding:10px 12px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(132px,1fr)); gap:8px; }
+  .cell { background:var(--panel); border:1px solid var(--line); border-radius:7px; padding:7px 9px; }
+  .cell .lab { font-size:10px; letter-spacing:.06em; text-transform:uppercase; color:var(--dim); }
+  .cell .val { font-size:20px; font-weight:600; font-variant-numeric:tabular-nums; }
+  .cell .val small { font-size:11px; color:var(--dim); font-weight:400; }
+  .cell .src { font-size:10px; color:var(--dim); margin-top:2px; font-variant-numeric:tabular-nums; }
+  .cell.split { border-color:#8a6a2a; }
+  .cell.split .src { color:var(--accent); }
+
+  h3.sec { font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--dim);
+           margin:14px 0 7px; }
+  #track { width:100%; height:190px; background:var(--panel); border:1px solid var(--line);
+           border-radius:7px; }
+  table.cmp { width:100%; border-collapse:collapse; font-size:12px; }
+  table.cmp th, table.cmp td { text-align:left; padding:4px 6px; border-bottom:1px solid #1b4368; }
+  table.cmp th { color:var(--dim); font-weight:500; font-size:10.5px; letter-spacing:.05em;
+                 text-transform:uppercase; }
+  table.cmp td.n { font-variant-numeric:tabular-nums; }
+  .flag { color:var(--bad); font-weight:600; }
+  .okv  { color:var(--good); }
+
+  footer { flex:none; border-top:1px solid var(--line); background:#0a2338; padding:8px 14px;
+           display:flex; gap:9px; align-items:flex-start; }
+  footer select, footer textarea {
+    background:#123a5c; color:var(--ink); border:1px solid var(--line); border-radius:6px;
+    padding:6px 8px; font:inherit; font-size:12.5px; }
+  footer textarea { flex:1; height:46px; resize:vertical; }
+  footer .hint { font-size:10.5px; color:var(--dim); margin-top:3px; }
+  #noteCount { font-size:11.5px; color:var(--dim); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Race Rewind</h1>
+  <span class="clock" id="clock">—</span>
+  <span class="meta" id="meta">loading…</span>
+  <span class="spacer"></span>
+  <button class="ctl" id="playBtn">▶ Play</button>
+  <select id="speed" style="background:#164066;color:#e8f0f6;border:1px solid #2a5580;border-radius:6px;padding:5px 8px;font-size:12.5px;">
+    <option value="1">1 frame / 500 ms</option>
+    <option value="2" selected>1 frame / 250 ms</option>
+    <option value="5">1 frame / 100 ms</option>
+    <option value="20">1 frame / 25 ms</option>
+  </select>
+  <a class="ctl" href="/replay/notes.md" target="_blank" style="text-decoration:none;">Notes ↗</a>
+  <span id="noteCount"></span>
+</header>
+
+<div class="scrub">
+  <button class="ctl" id="prev">◀</button>
+  <input type="range" id="range" min="0" max="0" value="0">
+  <button class="ctl" id="next">▶</button>
+  <span class="idx" id="idx">—</span>
+</div>
+
+<main>
+  <section class="pane" id="left">
+    <h2>What the iPad showed — the real console, fed replay frames</h2>
+    <div id="ipadWrap"><iframe id="ipad" src="/dashboard/"></iframe></div>
+  </section>
+  <section class="pane" id="right">
+    <h2>Ground truth — raw archive, per source, no engine</h2>
+    <div id="truth">
+      <div class="grid" id="cells"></div>
+      <h3 class="sec">Boat track (whole timeline · ● = now)</h3>
+      <svg id="track" viewBox="0 0 400 190" preserveAspectRatio="xMidYMid meet"></svg>
+      <h3 class="sec">Engine vs truth</h3>
+      <table class="cmp" id="cmp"><tbody></tbody></table>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div>
+    <select id="tile">
+      <option value="general">general</option>
+      <option>wind</option><option>playbook</option><option>forecast</option>
+      <option>sail</option><option>eta</option><option>ais</option>
+      <option>charge</option><option>data</option>
+      <option>truth-mismatch</option><option>design</option>
+    </select>
+    <div class="hint">⌘/Ctrl + Enter</div>
+  </div>
+  <textarea id="note" placeholder="What's wrong or right about this moment? The timestamp and the on-screen numbers are attached automatically."></textarea>
+  <button class="ctl" id="save">Save note</button>
+</footer>
+
+<script>
+(function () {
+  "use strict";
+  var IDX = [], TRUTH = null, FRAME = null, i = 0, playing = false, timer = null;
+  var ipad = document.getElementById("ipad");
+  var $ = function (id) { return document.getElementById(id); };
+
+  function fmt(v, d) { return v === null || v === undefined ? "—" : Number(v).toFixed(d === undefined ? 1 : d); }
+
+  /* keep the iPad-geometry iframe scaled to whatever width the left pane has */
+  function fitIpad() {
+    var wrap = document.getElementById("ipadWrap");
+    if (!wrap) return;
+    var k = Math.min(wrap.clientWidth / 1194, wrap.clientHeight / 834);
+    ipad.style.transform = "scale(" + k + ")";
+    ipad.style.left = Math.max(0, (wrap.clientWidth - 1194 * k) / 2) + "px";
+  }
+  window.addEventListener("resize", fitIpad);
+
+  /* ---------- load ---------- */
+  Promise.all([
+    fetch("/replay/index").then(function (r) { return r.json(); }),
+    fetch("/replay/truth").then(function (r) { return r.json(); })
+  ]).then(function (res) {
+    var ix = res[0]; TRUTH = res[1];
+    IDX = ix.t || [];
+    $("range").max = String(Math.max(0, IDX.length - 1));
+    var m = ix.manifest || {};
+    $("meta").textContent = IDX.length + " frames · " + (m.step_s || "?") + " s step · "
+      + ((m.endpoints || []).length) + " endpoints"
+      + (m.built_at_wall_s ? " · built in " + Math.round(m.built_at_wall_s) + " s" : "");
+    drawTrack();
+    fitIpad();
+    go(0);
+    refreshNotes();
+  });
+
+  /* ---------- frame ---------- */
+  function go(n) {
+    i = Math.max(0, Math.min(n, IDX.length - 1));
+    $("range").value = String(i);
+    $("idx").textContent = (i + 1) + " / " + IDX.length;
+    $("clock").textContent = (IDX[i] || "").replace("T", " ").replace("Z", "Z");
+    fetch("/replay/frame?i=" + i).then(function (r) { return r.json(); }).then(function (f) {
+      FRAME = f;
+      ipad.contentWindow.postMessage({ type: "replay:frame", frame: f }, "*");
+      renderTruth();
+      renderCompare();
+      markTrack();
+    });
+  }
+
+  /* ---------- ground truth ---------- */
+  function truthAt(path, source, n) {
+    var s = TRUTH && TRUTH.series && TRUTH.series[path];
+    if (!s) return null;
+    var arr = s[source !== undefined ? source : Object.keys(s)[0]];
+    return arr ? arr[n === undefined ? i : n] : null;
+  }
+
+  var CELLS = ["environment.wind.speedTrue", "environment.wind.directionTrue",
+               "environment.wind.angleTrueWater", "navigation.speedOverGround",
+               "navigation.courseOverGroundTrue", "navigation.speedThroughWater",
+               "environment.wind.speedApparent", "environment.wind.angleApparent"];
+
+  function renderTruth() {
+    if (!TRUTH || !TRUTH.series) return;
+    var html = CELLS.map(function (path) {
+      var srcs = (TRUTH.sources || {})[path] || [];
+      var meta = (TRUTH.labels || {})[path] || { label: path, unit: "" };
+      var vals = srcs.map(function (s) { return { s: s, v: truthAt(path, s) }; })
+                     .filter(function (x) { return x.v !== null && x.v !== undefined; });
+      if (!vals.length) return "";
+      // Degrees must be compared the short way round the circle, or a sign convention alone
+      // reads as a fault: derived-data publishes TWA as -129.5 where n2k.15 publishes 230.3,
+      // which is the SAME angle. Only a genuine disagreement should raise the flag.
+      var spread = 0;
+      for (var a = 0; a < vals.length; a++) {
+        for (var b = a + 1; b < vals.length; b++) {
+          var d = Math.abs(Number(vals[a].v) - Number(vals[b].v));
+          if (meta.unit === "deg") { d = d % 360; if (d > 180) d = 360 - d; }
+          if (d > spread) spread = d;
+        }
+      }
+      var split = vals.length > 1 && spread > (meta.unit === "deg" ? 8 : 1.0);
+      return '<div class="cell' + (split ? " split" : "") + '">'
+        + '<div class="lab">' + meta.label + '</div>'
+        + '<div class="val">' + fmt(vals[0].v) + ' <small>' + meta.unit + '</small></div>'
+        + '<div class="src">' + vals.map(function (x) {
+              return x.s.replace("n2k-socketcan.", "n2k.") + " " + fmt(x.v);
+            }).join(" · ") + (split ? " ⚠" : "") + '</div>'
+        + '</div>';
+    }).join("");
+    $("cells").innerHTML = html;
+  }
+
+  /* ---------- engine vs truth ---------- */
+  function renderCompare() {
+    var d = (FRAME && FRAME.data) || {};
+    var nav = d["/navigator"] || {}, nm = nav.next_mark || {}, w = nav.wind || {};
+    var tTws = truthAt("environment.wind.speedTrue", "n2k-socketcan.15");
+    var tTwd = truthAt("environment.wind.directionTrue", "n2k-socketcan.15");
+    var rows = [
+      ["next mark", nm.name || "—", "", ""],
+      ["mark index", nm.index === undefined ? "—" : nm.index, "", ""],
+      ["distance", fmt(nm.distance_nm) + " nm", "", ""],
+      ["bearing to mark", fmt(nm.bearing_deg) + "°", "", ""],
+      ["ETA", nm.eta_min == null ? "— blank" : (nm.eta_min / 60).toFixed(1) + " h",
+       "", nm.eta_min == null ? "flag" : ""],
+      ["engine TWS", fmt(w.tws) + " kn", tTws === null ? "" : fmt(tTws) + " kn (n2k.15)", ""],
+      ["engine TWD", fmt(w.twd) + "°", tTwd === null ? "" : fmt(tTwd) + "° (n2k.15)", ""],
+      ["leg type", (nav.leg || {}).type || "—", "", ""],
+      ["remaining", fmt(nav.remaining_nm) + " nm", "", ""]
+    ];
+    var stale = (FRAME && FRAME.stale) || [];
+    var body = rows.map(function (r) {
+      return "<tr><th>" + r[0] + "</th><td class='n " + (r[3] === "flag" ? "flag" : "") + "'>"
+        + r[1] + "</td><td class='n'>" + (r[2] || "") + "</td></tr>";
+    }).join("");
+    if (stale.length) {
+      body += "<tr><th>carried forward</th><td colspan='2' class='n'>" + stale.join(", ") + "</td></tr>";
+    }
+    $("cmp").querySelector("tbody").innerHTML =
+      "<tr><th>signal</th><th>engine said</th><th>truth</th></tr>" + body;
+  }
+
+  /* ---------- track ---------- */
+  var TR = null;
+  function drawTrack() {
+    var la = ((TRUTH.series || {})["navigation.position.latitude"] || {});
+    var lo = ((TRUTH.series || {})["navigation.position.longitude"] || {});
+    var lak = Object.keys(la)[0], lok = Object.keys(lo)[0];
+    if (!lak || !lok) return;
+    var lats = la[lak], lons = lo[lok], pts = [];
+    for (var n = 0; n < lats.length; n++) {
+      if (lats[n] != null && lons[n] != null) pts.push([lons[n], lats[n], n]);
+    }
+    if (!pts.length) return;
+    var xs = pts.map(function (p) { return p[0]; }), ys = pts.map(function (p) { return p[1]; });
+    var x0 = Math.min.apply(null, xs), x1 = Math.max.apply(null, xs);
+    var y0 = Math.min.apply(null, ys), y1 = Math.max.apply(null, ys);
+    var padX = (x1 - x0) * 0.08 || 0.01, padY = (y1 - y0) * 0.08 || 0.01;
+    x0 -= padX; x1 += padX; y0 -= padY; y1 += padY;
+    // latitude is compressed by cos(lat) at this longitude scale; keep the track's shape honest
+    var W = 400, H = 190;
+    TR = {
+      pts: pts,
+      X: function (x) { return (x - x0) / (x1 - x0) * W; },
+      Y: function (y) { return H - (y - y0) / (y1 - y0) * H; }
+    };
+    var dpath = pts.map(function (p, k) {
+      return (k ? "L" : "M") + TR.X(p[0]).toFixed(1) + " " + TR.Y(p[1]).toFixed(1);
+    }).join(" ");
+    $("track").innerHTML =
+      '<path d="' + dpath + '" fill="none" stroke="#4d8fc4" stroke-width="1.6"/>'
+      + '<circle id="now" r="4.5" fill="#ffd76a" stroke="#0b2b45" stroke-width="1.5"/>';
+  }
+  function markTrack() {
+    if (!TR) return;
+    var c = document.getElementById("now");
+    if (!c) return;
+    var best = null;
+    for (var k = 0; k < TR.pts.length; k++) {
+      if (TR.pts[k][2] <= i) best = TR.pts[k]; else break;
+    }
+    if (!best) return;
+    c.setAttribute("cx", TR.X(best[0]).toFixed(1));
+    c.setAttribute("cy", TR.Y(best[1]).toFixed(1));
+  }
+
+  /* ---------- transport ---------- */
+  function stop() { playing = false; $("playBtn").textContent = "▶ Play"; if (timer) clearInterval(timer); timer = null; }
+  function play() {
+    playing = true; $("playBtn").textContent = "❚❚ Pause";
+    var ms = 500 / Number($("speed").value);
+    timer = setInterval(function () {
+      if (i >= IDX.length - 1) return stop();
+      go(i + 1);
+    }, ms);
+  }
+  $("playBtn").onclick = function () { playing ? stop() : play(); };
+  $("speed").onchange = function () { if (playing) { stop(); play(); } };
+  $("range").oninput = function () { stop(); go(Number(this.value)); };
+  $("prev").onclick = function () { stop(); go(i - 1); };
+  $("next").onclick = function () { stop(); go(i + 1); };
+  document.addEventListener("keydown", function (e) {
+    if (e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT") return;
+    if (e.key === "ArrowLeft") { stop(); go(i - 1); }
+    if (e.key === "ArrowRight") { stop(); go(i + 1); }
+    if (e.key === " ") { e.preventDefault(); playing ? stop() : play(); }
+  });
+
+  /* ---------- notes ---------- */
+  window.addEventListener("message", function (ev) {
+    if (!ev.data) return;
+    if (ev.data.type === "replay:tile") $("tile").value = ev.data.tile;
+    // The shim announces itself once it has patched fetch. Until then a posted frame lands
+    // nowhere, so the console would sit on its empty state ("no active course") until the
+    // first scrub. Re-send whatever frame we are on the moment it is ready.
+    if (ev.data.type === "replay:ready" && FRAME) {
+      ipad.contentWindow.postMessage({ type: "replay:frame", frame: FRAME }, "*");
+    }
+  });
+  function refreshNotes() {
+    fetch("/replay/notes").then(function (r) { return r.json(); }).then(function (n) {
+      $("noteCount").textContent = n.length + " note" + (n.length === 1 ? "" : "s");
+    });
+  }
+  function save() {
+    var text = $("note").value.trim();
+    if (!text) return;
+    var d = (FRAME && FRAME.data) || {};
+    var nav = d["/navigator"] || {}, nm = nav.next_mark || {}, w = nav.wind || {};
+    var ctx = "mark=" + (nm.name || "?") + " idx=" + nm.index
+      + " eta_min=" + (nm.eta_min == null ? "null" : nm.eta_min)
+      + " dist_nm=" + nm.distance_nm + " tws=" + w.tws + " twd=" + w.twd;
+    fetch("/replay/notes", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ t: IDX[i], frame: i, tile: $("tile").value, text: text, context: ctx })
+    }).then(function () { $("note").value = ""; refreshNotes(); });
+  }
+  $("save").onclick = save;
+  $("note").addEventListener("keydown", function (e) {
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") save();
+  });
+})();
+</script>
+</body>
+</html>
