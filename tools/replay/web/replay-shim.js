@@ -51,8 +51,28 @@
     });
   }
 
+  /* ---- fault injection ----
+   * Reproduces the race-day failure mode so a fix can be measured rather than asserted. The
+   * engine does not stall one endpoint at a time — a slow archive read or a heavy /strategy
+   * blocks the lot — so this models WINDOWS in which every /api call fails, which is what
+   * fetchJSON's 5 s abort looks like from the console's side.
+   *   { stallMs, periodMs }  ->  fail everything for stallMs out of every periodMs
+   */
+  var FAULTS = null;
+  window.addEventListener("message", function (ev) {
+    if (ev.data && ev.data.type === "replay:faults") FAULTS = ev.data.faults || null;
+  });
+  function faulting() {
+    if (!FAULTS || !FAULTS.periodMs) return false;
+    return (Date.now() % FAULTS.periodMs) < (FAULTS.stallMs || 0);
+  }
+
   window.fetch = function (url, opts) {
     var ep = endpointOf(url);
+    if (ep !== null && faulting()) {
+      // what the console sees when its own AbortController fires: a failed request -> null
+      return Promise.resolve(jsonResponse({ replay: "injected stall" }, 504));
+    }
     if (ep === null) {
       // /copilot/* and anything else: let it go to the server, which 404s. dashboard.js
       // already treats a failed copilot poll as "keep the deterministic text".

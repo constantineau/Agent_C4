@@ -180,6 +180,12 @@ body {
 .t-head { display:flex; align-items:center; gap:6px; }
 .t-name { font-size:22px; letter-spacing:1px; font-weight:700; color:var(--muted);
   text-transform:uppercase; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
+/* HELD age badge — the readout is a real value that has simply stopped being refreshed. Kept
+   deliberately quiet (no status colour, no icon): it must not read as an alarm, because the
+   number itself is still good. Its absence is the signal that a tile is live. */
+.t-age { flex:none; font-size:10px; letter-spacing:.5px; font-weight:700;
+  color:var(--muted); opacity:.75; padding:1px 5px; border-radius:999px;
+  border:1px solid currentColor; white-space:nowrap; }
 .t-chip { margin-left:auto; display:inline-flex; align-items:center; gap:5px;
   font-size:10px; letter-spacing:1px; font-weight:800; color:var(--c); }
 /* CHANNEL 1 — shape/icon: distinct silhouettes, road-sign style, legible in pure greyscale */
