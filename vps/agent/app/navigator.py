@@ -213,6 +213,117 @@ def _latest():
     return out
 
 
+# --- ETA -------------------------------------------------------------------
+# ETA used to be `distance / instantaneous VMC`: project this second's COG/SOG onto the bearing
+# to the mark and divide. Two things are wrong with that over a distance leg. It assumes you can
+# sail straight at the mark, which upwind you cannot — no amount of smoothing fixes an estimator
+# that ignores tacking. And it is driven by a single sample, so it moves with every wave.
+#
+# Measured on the Jul 18 archive, 700 samples over 3 h, scoring each estimator by how stable the
+# ARRIVAL TIME it predicts is (as the clock advances by d, a good ETA falls by d — so the
+# predicted arrival should sit still, and its wander is the error; this needs no knowledge of the
+# real arrival, which the archive never reaches):
+#
+#   instantaneous VMC (old)              arrival spread 74.34 h, median 15 s jump 78.7 min
+#   closing rate over a 30 min window    arrival spread 11.68 h, median jump  2.1 min
+#   polars w/ a beat/reach branch        arrival spread 33.58 h, worst jump  26.37 h
+#   polars, best VMG, 20 min wind        arrival spread  6.41 h, median jump  0.4 min
+#
+# The branch version is the instructive failure: `if twa < beat` is a DISCONTINUITY, so however
+# much the wind is smoothed, drifting across the close-hauled angle makes the answer leap hours.
+# Maximising speed-made-good over sailable headings removes the branch entirely — when the mark
+# is fetchable the maximum sits at the direct angle, and when it is inside the no-go zone the
+# maximum slides to close-hauled on its own, continuously.
+ETA_WIND_MIN = float(os.environ.get("NAV_ETA_WIND_MIN", "20"))   # wind-smoothing window
+
+
+def _smoothed_wind(minutes=None):
+    """(tws_kn, twd_deg) averaged over the window — circular mean for direction, so 359 deg and
+    1 deg average to 0 rather than 180. (None, None) when there is not enough history."""
+    mins = ETA_WIND_MIN if minutes is None else minutes
+    try:
+        src = datasource.active()
+        tws = [v for _, v in src.series(_PATHS["tws"], mins) if v is not None]
+        twd = [v for _, v in src.series(_PATHS["twd"], mins) if v is not None]
+    except Exception:
+        return None, None
+    if not tws or not twd:
+        return None, None
+    sy = sum(math.sin(v) for v in twd)          # radians in the archive, raw SI
+    sx = sum(math.cos(v) for v in twd)
+    return (sum(tws) / len(tws)) * 1.943844, (math.degrees(math.atan2(sy, sx)) + 360) % 360
+
+
+def _polar_curves(pts):
+    """{tws: [(twa, target_stw), ...] sorted} from the flat polar table."""
+    by = {}
+    for t, a, stw in pts:
+        if stw:
+            by.setdefault(t, []).append((a, stw))
+    for t in by:
+        by[t].sort()
+    return by
+
+
+def _polar_speed(by, tws_kn, twa):
+    """Target boat speed at (tws, twa), linearly interpolated in BOTH axes.
+
+    The polar is a coarse, unevenly spaced grid — 14 angles per curve with gaps like
+    90 -> 110 -> 135 deg, and wind speeds every 2-4 kn. Snapping to the nearest grid point puts
+    the discontinuities straight back, which is the whole thing this estimator exists to avoid.
+    Below the smallest charted angle the boat cannot sail at all, so that returns 0 rather than
+    close-hauled speed — otherwise dead upwind looks fetchable and the ETA comes out optimistic."""
+    speeds = sorted(by)
+    if not speeds:
+        return None
+
+    def on_curve(t):
+        row = by[t]
+        if twa < row[0][0]:
+            return 0.0                       # inside the no-go zone
+        if twa >= row[-1][0]:
+            return row[-1][1]
+        for (a0, s0), (a1, s1) in zip(row, row[1:]):
+            if a0 <= twa <= a1:
+                return s0 + (s1 - s0) * ((twa - a0) / (a1 - a0) if a1 > a0 else 0.0)
+        return row[-1][1]
+
+    if tws_kn <= speeds[0]:
+        return on_curve(speeds[0])
+    if tws_kn >= speeds[-1]:
+        return on_curve(speeds[-1])
+    for t0, t1 in zip(speeds, speeds[1:]):
+        if t0 <= tws_kn <= t1:
+            f = (tws_kn - t0) / (t1 - t0) if t1 > t0 else 0.0
+            return on_curve(t0) * (1 - f) + on_curve(t1) * f
+    return on_curve(speeds[-1])
+
+
+def _polar_vmg_to_mark(tws_kn, twa_to_mark):
+    """Best speed made good toward a mark lying `twa_to_mark` off the wind, in kn.
+
+    Maximises target boat speed x cos(sailing angle - angle to the mark) over sailable headings.
+    Continuous through the close-hauled boundary by construction: when the mark is fetchable the
+    maximum sits at the direct angle, and when it is inside the no-go zone the maximum slides to
+    close-hauled on its own — there is no branch to jump across."""
+    try:
+        pts = datasource.active().polars_stw()          # [(tws, twa, target_stw)]
+    except Exception:
+        return None
+    by = _polar_curves(pts)
+    if not by:
+        return None
+    target, best = abs(twa_to_mark), 0.0
+    for a in range(0, 181, 2):
+        stw = _polar_speed(by, tws_kn, float(a))
+        if not stw:
+            continue
+        v = stw * math.cos(math.radians(a - target))
+        if v > best:
+            best = v
+    return best or None
+
+
 def _best_angles(tws_kn):
     """Optimal upwind and downwind TWA (deg) from the polar at the nearest TWS."""
     if tws_kn is None:
@@ -326,12 +437,19 @@ def get_navigator(route: str = None):
             else:
                 layline_call = f"{round(near)}° below the {name} layline to {nxt['name']}."
 
-    # ETA from velocity made good toward the mark (projects COG/SOG onto the bearing)
-    eta_min = None
-    if s["sog"] and s["cog"] is not None:
+    # ETA on the boat's polars at the smoothed wind — see the note above _smoothed_wind.
+    eta_min, eta_basis = None, None
+    eta_tws, eta_twd = _smoothed_wind()
+    if eta_tws and eta_twd is not None:
+        vmg = _polar_vmg_to_mark(eta_tws, _adiff(brg, eta_twd))
+        if vmg and vmg > 0.2:
+            eta_min, eta_basis = round(dist / vmg * 60, 1), "polar"
+    if eta_min is None and s["sog"] and s["cog"] is not None:
+        # No polars or not enough wind history yet (a fresh archive, or the first minutes of a
+        # session). Instantaneous made-good is poor, but it is better than a blank tile.
         vmc = s["sog"] * math.cos(math.radians(_adiff(s["cog"], brg)))
         if vmc > 0.2:
-            eta_min = round(dist / vmc * 60, 1)
+            eta_min, eta_basis = round(dist / vmc * 60, 1), "made-good"
 
     # The leg after the next mark — homework for the upcoming rounding (None at the finish).
     twa_to_mark = _adiff(brg, twd) if twd is not None else None
@@ -345,7 +463,9 @@ def get_navigator(route: str = None):
                       # marks[N], so this doubles as the current 1-based leg number (matcher)
                       "index": idx,
                       "distance_nm": round(dist, 2), "bearing_deg": round(brg, 1),
-                      "eta_min": eta_min},
+                      # eta_basis says WHICH estimator answered — "polar" is the real one,
+                      # "made-good" the degraded fallback, so a debrief can tell them apart
+                      "eta_min": eta_min, "eta_basis": eta_basis},
         "leg": leg, "layline_call": layline_call, "next_rounding": next_rounding,
         "wind": {"twd": None if twd is None else round(twd, 1),
                  "tws": None if tws is None else round(tws, 1),
