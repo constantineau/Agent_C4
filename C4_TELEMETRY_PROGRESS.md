@@ -3,7 +3,56 @@
 Goal (Cole): **lose no telemetry**, and **copy all telemetry off the Pi to the VPS**.
 Deletion from the boat is allowed only *after* an off-boat copy is sha256-verified.
 
-## ⏸ PICK UP HERE (2026-09-07)
+## ⏸ PICK UP HERE (2026-09-07, second pause — read this block, then "Session 2026-09-07 (later)")
+
+**Everything in this session is committed on `dev` and NOT pushed.** Working tree clean.
+All suites green: **24 files + 10 pytest cases** (`test_power`, `test_sensor_health`,
+`test_source_priority`, `test_brownout` are the new ones). Nothing is mid-flight; no background
+units are running.
+
+**Scope Cole set, in his words:** the full-res archive (`17:03:31 → 20:40:30Z` Jul 18) is what
+they *"highly value"*; everything after the turnaround is *"scrap"*. They **retired** — the race
+ended ~20:00 local (00:00Z Jul 19). So: do not invest in the post-turnaround spool, and do not
+backfill the Jul 15–17 delivery salvage into Postgres (non-racing = scrap; the 9.10 GB salvaged
+file on disk already satisfies "lose no telemetry"). Cole's stated goal for the good data:
+**analyse it in the C4 Lab debrief, and use all of it to make the system better.**
+
+**Cole approved and these are DONE this session:** watch the bank (`GET /power`), make archiving
+brownout-tolerant, make `source_priority` actually bind, and fix the Lab debrief's own-log
+track. Full write-up in "Session 2026-09-07 (later)" below, including the correction that the
+**GPS kick at 22:58Z, not the battery, is what cost primary navigation**.
+
+**Do these next, in this order:**
+1. **The iPad surface.** The engine now returns `/power`, `/health/sensors` and provenance +
+   `fell_back` per channel in `/conditions/full`, and **none of it is on the dashboard**. One
+   bank tile, provenance on each number, and a single instrument-health chip (unresolvable
+   matchers · silent rank-1 sources · attitude out of range · heading-vs-COG bias · AIS or
+   synthetic sources present). This is where the value is now: the checks exist, nobody aboard
+   can see them.
+2. **Two things only a person at the boat can settle** — confirm the bank's chemistry/capacity
+   (the `POWER_*` absolute thresholds are unverified 12 V lead-acid guesses; the trend and
+   projection are sound), and enable the Orca Core's N2K attitude sharing (heel/pitch/ROT
+   rank 1 is fiction until then).
+3. **Derive `headingTrue` from `headingMagnetic` + `magneticVariation`.** Heading had *no*
+   redundancy on Jul 18 — the 24xd was the only publisher, and when it was kicked there was
+   nothing to fail over to.
+4. **Record device identity on the boat** (archiver/uplink read `/signalk/v1/api/sources`), so
+   `shared/n2k_sources.SR33_DEVICES` becomes a cache rather than the source of truth. N2K
+   addresses are claimed at power-up and can move; `drift()` exists to detect that.
+5. Then the v2 backlog. Parked on the boat: recreate the archiver container for its stale
+   `VPS_URL`, #6c the recurring drain.
+
+**Replay rig state:** `backups/replay-jul18/timeline/` is REBUILT against the current engine
+(433 frames, 0 endpoint errors) — use it. `timeline-preprio/` is the pre-fix baseline kept for
+before/after diffs; `timeline-prio-partial/` is a half-fixed intermediate, **delete it**.
+Rebuilds need the venv in a scratchpad (`freezegun`, `fastapi`, `httpx`, `websockets`,
+`pytest`) — it is ephemeral, recreate it.
+
+**Disk: ~9 G free (90%).** The obvious reclaim is
+`backups/c4-boat-pull-2026-08-30/work/archive-backfill.db` (3.1 GB, no longer needed — #4 is
+done) and `timeline-prio-partial/`.
+
+---
 
 **The boat is OFFLINE and that is accepted** — Cole, 2026-09-07: no race is near, so do not
 chase it, and do not treat Pi/Orin work as blocked-and-waiting. Uplink stopped
@@ -26,6 +75,88 @@ died, which becomes prune-eligible **~2026-09-16**.
 started), then the v2 work in `docs/V2_BACKLOG.md`, which the Race Rewind rig
 (`tools/replay/`) has now unblocked. Needs the boat, so parked: recreate the archiver
 container for its stale `VPS_URL`, and #6c the recurring drain.
+
+### Added 2026-09-07 (later session) — three facts that change what is worth doing
+
+**1. The whole race IS covered — in two resolutions. Nothing of it is missing.** (Corrected
+2026-09-07 after Cole pushed back on an earlier, wronger version of this note.)
+
+Racing ran roughly **17:03Z → 00:00Z Jul 19**, i.e. **13:03 → 20:00 local EDT** — Cole's
+"racing ended about 20:00" is local time, and the track confirms it to the hour: the boat made
+5.9–7.3 kn northeast up Lake Huron to 43.71 N/−82.12 W at exactly 00:00Z, **turned around**,
+sailed back down the same line and was stopped (0.00 kn) at Port Huron 43.0021 N/−82.4136 W by
+07:00Z. That is a retirement, not a finish.
+
+| window (UTC) | source | resolution |
+|---|---|---|
+| 17:03:31 → 20:40:30 | full-res archive (`archive-recovered.db`) | ~18,000 rows/h, 5–28 Hz |
+| 20:40:31 → 00:09:35 | uplink **spool**, already in Postgres | 33,014 rows, **74 paths**, ~16 s/path |
+| 00:00 → 07:00 Jul 19 | spool | the sail home |
+
+So the archive covers the first ~3 h 37 m of a ~7 h race and the spool covers the last ~3 h
+20 m — including the decision to retire. **What is gone is resolution, not the race**: the
+archiver crash-looped on the corrupt DB from Jul 19 and wrote nothing until Aug 30, and AIS
+stopped in the same hour from the same cause, so the final third exists at 16 s per path rather
+than 5–28 Hz. Earlier notes in this file called that "the offshore leg, permanently gone" —
+misleading on both counts: there was no long offshore leg, and 74 paths at 16 s is enough for
+the engine (its consumers bucket to minutes).
+
+**Follow-up this unlocks:** the replay rig stops at 20:40 only because it reads the SQLite
+archive. Materialise the 33,014 spool rows into a `readings`-schema SQLite file and the rig
+covers the **whole** race, retirement included — which is exactly where Time-to-Mark and
+playbook relevance mattered most. Boat-independent, and the highest-value use of the rig.
+
+**2. #5's 9.6 GB `archive.corrupt-20260718.db` contains no race data at all** — probed
+directly: rowids 1..**46,408,949**, spanning **2026-07-15T20:35:32Z → 2026-07-17T21:13:01Z**.
+The filename is the date it was set aside, not the data inside it. So #5 is a **Jul 15–17
+delivery / tune-up** recovery, ~46.4 M rows at full resolution against the ~1 M low-res spool
+rows now in Postgres for that window (**~45×**). Real value for polar/config learning; zero
+value for the race debrief. Note the seam: it ends **1 h 38 m before** the recovered archive
+begins (Jul 17 22:51:08Z) — a rotation, not corruption. The Jul 16 11:00–14:00Z hole in
+Postgres is **not** a data-loss gap: the salvaged archive has nothing there either, so the
+boat was simply off.
+
+**#5 SALVAGE DONE 2026-09-07 (later session).** `pi/archiver/tools/salvage.py` (new — the old
+`backups/…/salvage.py` had src/dst and the rowid range hardcoded to the 2.1 GB archive and
+would have merged this one into that one's output; the new one takes `--src/--dst`, plus
+`--resume`, `--min-free-g` and incremental lost-rowid logging). Result, 253 s:
+
+```
+salvaged : 46,408,689 rows   lost 260 (99.9994%)   9.10 GB, indexed
+span     : 2026-07-15T20:35:32.641Z -> 2026-07-17T21:13:01.138Z   139 paths
+-> backups/c4-boat-pull-2026-08-30/recovered/archive-jul1517-recovered.db
+   (+ …db.lost-rowids.txt, 3 corrupt page ranges)
+```
+
+⚠️ **Not yet in Postgres, and the backfill needs a decision.** The window already holds
+5,481,959 spool rows from #4, and these 46.4 M archive rows cover the same readings at full
+rate — so an ad-hoc backfill **partially duplicates** it. `backfill.py` session mode is
+re-run-safe but would push nothing (Jul 15–17 is not a race session); `--since/--until` mode
+is the only route and is **not** re-run-safe. Plan before running: snapshot a rollback table,
+then either delete the #4 window rows first or dedupe on `(tableoid, ctid)` after.
+
+⚠️ **Disk: 9.6 G free (90%)** after the salvage. `work/archive-backfill.db` (3.1 GB) is
+deletable now that #4 is done — that is the obvious reclaim before the backfill.
+
+**3. Archive cleanup (Cole's item 1) resolves without deleting anything** — measured; see
+`docs/V2_BACKLOG.md` → "Onboard hardware / deployment". Short version: `n2k-socketcan.43` is an
+em-trak B951 AIS transceiver, all 3,394,173 of its rows are AIS/AtoN with no own-ship data
+interleaved, and **vessel identity was never archived** (unique timestamps per position, so
+rows regroup into reports but can never be attributed). Retro Fleet replay out of
+`telemetry_raw` is therefore impossible; `ais_targets` (902,710 rows / 430 MMSIs, with the
+race) is the store to build on. **Recommend keeping the rows** — the read filter hides them,
+they are ~1% of a 36×-compressed archive, and `telemetry_raw` has no PK. The forward-looking
+half (an `mmsi` column in the archive, the only route to *offshore* Fleet history, since
+`ais_targets` is uplink-fed) is a schema change and needs Cole's call.
+
+**Also found, and bigger than the cleanup: `source_priority` has never matched anything.** The
+seeded matchers are device names (`orca`, `24xd`, `reactor`, `gnd`) but `$source` labels are N2K
+addresses (`n2k-socketcan.15`), so the cloud's `_choose_preferred` always falls through to
+"freshest available" — and the onboard path never consulted the table at all. Two of its
+premises are also false (the Orca published **no** roll/pitch/ROT during the race; `gwind` is
+not a distinct source, the masthead arrives via the GND10). Full measurements, the recovered
+address→device map, and the four-part fix are in `docs/V2_BACKLOG.md`. Fifth instance of the
+session's pattern: designed, seeded, wired, silently not in force.
 
 ---
 
@@ -143,7 +274,7 @@ on the OVH box, not on the boat, so the boat does not need to be current for the
 | 2 | NUL-strip fix in ingestion | ✅ deployed + verified 2026-09-01 |
 | 3 | Boat cleanup, the verified 2.1 GB | ✅ done 2026-08-30 |
 | 4 | Pre-race remainder, 5,481,959 rows | ✅ done 2026-09-07 |
-| 5 | Re-pull of the 9.6 GB corrupt archive | ✅ VERIFIED 2026-08-30; salvage still to do |
+| 5 | Re-pull of the 9.6 GB corrupt archive | ✅ re-pulled 08-30; ✅ **salvaged 09-07** (46,408,689 rows, 99.9994%) — backfill to Postgres still open, needs a dedupe decision |
 | 6 | Drain the Pi's live `archive.db` | ✅ COMPLETE 2026-09-02T07:24Z — 109.9M rows, zero gaps |
 | 6b | TimescaleDB compression | ✅ enabled, 36.6x — this is what made #6 possible |
 | 6c | Recurring drain so it stays drained | ⬜ **next task** — makes the Sep 13 prune safe |
@@ -189,8 +320,9 @@ Local copy is the full `9,613,660,160` bytes at
 **It is now safe to delete from the boat** (still present there as of 2026-09-01) — that
 would free 9.6 GB of the Pi's 115 G card.
 
-Still to do with it: salvage via `salvage.py` (it is corrupt too — pre-Jul-18 history),
-then backfill. **Blocked on local disk, see "Disk" below.**
+✅ **Salvaged 2026-09-07** — 46,408,689 rows, 260 lost, span Jul 15 20:35:32Z → Jul 17
+21:13:01Z. See the "Added 2026-09-07 (later session)" block at the top for the numbers, the
+new `pi/archiver/tools/salvage.py`, and why the Postgres backfill is still open.
 
 ### 2. NUL-strip fix ✅ **DEPLOYED 2026-09-01**
 `docker compose -f compose.dev.yml build ingestion && ... up -d ingestion` — image rebuilt,
@@ -472,6 +604,12 @@ Consumers already on disk under `backups/c4-boat-pull-2026-08-30/`:
 Salvaging the 9.6 GB writes a second ~9 GB file → would leave ~12 G free before any
 Postgres growth. Sequence disk-hungry work deliberately; `df` before each step.
 
+**Updated 2026-09-07 (later session):** the salvage ran and cost 9.10 GB —
+`recovered/archive-jul1517-recovered.db`. **`/` is now at 9.6 G free (90%).** Reclaim
+`work/archive-backfill.db` (3.1 GB, no longer needed — #4 is done) before the Jul 15–17
+backfill. `salvage.py` now takes `--min-free-g` (default 6) and stops mid-run rather than
+filling the disk; re-run with `--resume` after freeing space.
+
 ## Environment notes
 - Backfill needs `websockets` (via `archiver` import) which is **not** installed on this
   host. A venv was built in the session scratchpad; that path is ephemeral — recreate with
@@ -488,3 +626,150 @@ Postgres growth. Sequence disk-hungry work deliberately; `df` before each step.
   Orin is `agent-c4@100.70.110.72`. **Not** `constantineau@`.
 - Local disk: 96 G, was down to ~28 G free before the 9.6 GB pull. The pull plus salvage
   plus the Postgres growth from remaining backfills will be tight — **watch `df`**.
+
+---
+
+## Session 2026-09-07 (later) — power, provenance, and the debrief path
+
+Everything below is on `dev`, all suites green (22 files + 10 pytest cases), and each number
+was measured against the real Jul 18 race rather than argued.
+
+### The finding the rest hangs off: the house bank went flat during the race
+
+| hour (UTC) | mean V | min V |
+|---|---|---|
+| 11:00 (pre-start) | 12.91 | 12.03 |
+| 14:00 | 12.75 | 12.10 |
+| 16:00 | 12.11 | 11.41 |
+| 18:00 | 11.68 | 11.15 |
+| **20:00 — archiver + AIS die at 20:40** | **11.61** | **11.08** |
+| 05:00 Jul 19 (motoring home) | 13.30 | 13.03 |
+
+A monotone 1.3 V decline over six hours of racing, bottoming at 11.08 V, recovering only once
+the engine came on. At 20:40, at the bottom of that curve, **two things stopped in the same
+minute**: the full-res archiver (SQLite corruption, the third on that card) and the em-trak AIS
+receiver (67,149 rows in the previous 100 min → **11** in the next 3.5 h). Every other N2K
+source kept reporting through the uplink, so the bus lived and the two write-sensitive/
+power-hungry devices did not. Correlation, not proof — but it is to the minute.
+
+**`electrical.batteries.0.voltage` was in the archive at ~0.7 Hz the whole time and nothing
+read it**: absent from `tools.PRESENT`, from `onboard_conditions.PRESENT`, from `alerts.py`'s
+six rules, and from the dashboard (whose "energy" tile is *crew* energy).
+
+### What was built
+
+1. **`vps/agent/app/power.py` + engine `GET /power`** — bank level (median), robust trend
+   (median-of-thirds, not OLS), projected hours to an 11.0 V floor, and status
+   ok/warn/danger/charging. Stateless so the replay rig gives the same verdicts as the boat.
+   `vps/agent/test_power.py` replays the real curve: **warn at 14:25Z, danger from 16:10Z** —
+   6 h 15 m and 4 h 30 m of warning before the archiver died — and no alarm during the motor
+   home. Two bugs the test caught in the module itself, both this repo's recurring shape: a
+   raw-threshold test flapped danger↔warn while the bank sat on 11.6 V for three hours, and an
+   OLS slope turned a single winch-load sag into "the bank is dying". Now: Schmitt band on the
+   smoothed level, release requires a *sustained* recovery (an unloaded flat bank reads high).
+   ⚠️ **The absolute thresholds (12.0 / 11.6 / 11.0 V) assume 12 V lead-acid and are NOT
+   confirmed against this boat** — chemistry/capacity are recorded nowhere in the repo. The
+   trend and projection need no such assumption; trust those first.
+
+2. **Brownout-tolerant archiving (`pi/archiver/archiver.py`)** — the corruption cost six weeks,
+   not because of the corruption but because of the response: `open_db()` raised, the process
+   exited, Docker restarted it, 48 times, recording nothing from Jul 19 to Aug 30. Now
+   `open_db_resilient()` runs `PRAGMA quick_check`, rotates a bad file aside as
+   `archive.corrupt-<ts>.db` (**kept** — salvage recovers ~all of it) and opens a fresh one;
+   the flusher survives corruption mid-write, rotates, and re-writes the buffered rows; a
+   transient lock requeues instead of rotating; every rotation is counted in `sync_state`
+   because a fresh archive otherwise looks exactly like a boat that never sailed. The reader no
+   longer writes at all (it signals the flusher), so there is exactly one writer and one
+   recovery path. `pi/archiver/test_brownout.py`, 34 assertions — it caught a real bug in the
+   new code: two rotations in the same second would have **deleted** the first corrupt file.
+
+3. **`source_priority` now binds** (see `docs/V2_BACKLOG.md` for the full write-up). Matchers
+   were device names, `$source` labels are N2K addresses, so nothing ever matched and every
+   channel silently used freshest-wins. `shared/n2k_sources.py` resolves addresses to devices
+   (map regenerable from Signal K's `sources-cache.json`, with drift detection);
+   `shared/source_policy.py` holds the policy the boat uses (no Postgres aboard); the seed SQL
+   and `source_notes` are corrected (`gwind` → `gnd`, `gdt` → `intelliducer` — there is no
+   GDT 43 on this bus); the cloud, the onboard instrument strip, `latest_value` and the replay
+   rig all consult it. Measured on the race: heel came off the "non-racing only" autopilot
+   AHRS on **58%** of reads, apparent wind changed on **44%** (0.33 kn median, 4.86 kn max).
+
+4. **The Lab debrief's own-log track was reading other vessels.** `GET /racelog/track` had no
+   `boat_id` filter and no AIS filter, and kept whichever source wrote last within each second.
+   99.7% of one-second buckets in the race window contained an AIS position:
+
+   | track build | median | p99 | max | legs >15 kn |
+   |---|---|---|---|---|
+   | as it was | 6.54 kn | 21,290 kn | **50,034 kn** | 9.0% |
+   | AIS sources excluded | 6.46 | 18.1 | 25.5 | 1.48% |
+   | **+ source priority per second** | 6.48 | **9.3** | **13.6** | **0.00%** |
+
+   This mattered most because it is the one path the race actually gets analysed through.
+   `shared/n2k_sources.AIS_MARKER_PATHS` is now the single definition for all three readers
+   (onboard, cloud, replay ground-truth) — the cloud one had simply never existed.
+
+### ⚠️ CORRECTION — the battery did NOT cause the navigation failure
+
+Cole relayed from the crew that **someone kicked the GPS/compass** during the race and primary
+navigation was lost, and that the battery may not have been to blame. The telemetry agrees with
+the crew and dates it to the minute. `n2k-socketcan.3` is the Garmin GPS24xd — a 9-axis
+sensor that was the **only own-ship `headingTrue` publisher on the bus**:
+
+```
+22:57Z  roll  36.4°  pitch  +2.8°   tracking the autopilot AHRS (35.3° / −3.4°), as all race
+22:58Z  roll 133.1°  pitch −49.2°   the autopilot still reads 35.3° / −3.4°   <-- THE KICK
+…       roll ≈ ±175° (inverted), pitch −30..−49°, for 23 minutes
+23:21Z  roll  38° then a few degrees — the crew put it back upright
+00:00Z+ headingTrue − COG = −96, −90, −90, −91, −90, −89, −87, −90°  (spread 2–7°)
+```
+
+**Two independent failures, 2 h 18 m apart:**
+
+| time | what | cause |
+|---|---|---|
+| 20:40:30Z | full-res archiver dies (SQLite corruption) + AIS receiver goes silent | the flat bank (11.08 V minima) |
+| **22:58Z** | **primary navigation lost — compass/attitude kicked** | **mechanical, nothing to do with power** |
+| 00:00Z | retired, turned for Port Huron | ~1 h after the kick |
+
+The bank was *recovering* by 22:58 (11.83 V and rising), so the earlier framing — which put the
+battery at the centre of everything — is wrong about navigation. The battery cost the **record**
+(archive resolution + all AIS); the kick cost the **navigation**. Both are real; they are not
+the same failure.
+
+**The worst part is the hour after the repair.** Once the sensor was upright again every value
+looked ordinary — a few degrees of roll, a few of pitch, a plausible heading number — and the
+compass was wrong by a quarter turn for the remaining seven hours. A range check cannot see
+that. Nothing aboard cross-checked heading against GPS course, so nobody was told.
+
+Two more things the same data shows:
+
+- **The bias was already growing before the kick**: hourly heading−COG ran −0.1..−5.7° through
+  the healthy race, then **+7.0° at 21:00Z and +16.3° at 22:00Z**. Either the sensor was
+  already working loose or that leg had unusual leeway/current — either way it was visible an
+  hour early and unreported.
+- **The 24xd's pitch has never been calibrated.** Over the healthy window the autopilot reads
+  mean −0.39° (range −7.5..+7.8, symmetric about zero); the 24xd reads mean **+10.95°** and
+  never crosses zero (+4.3..+19.9). It is mounted ~11° nose-up. `pitch` priority now ranks the
+  autopilot above it, with the measurement in the seed comment.
+- **Heading has no redundancy at all.** Only the 24xd published `headingTrue`; the autopilot
+  publishes `headingMagnetic` only. Deriving true from magnetic + `navigation.magneticVariation`
+  is the missing fallback — worth doing, and separate work.
+
+**Built for it:** `vps/agent/app/sensor_health.py` + engine `GET /health/sensors` — an attitude
+range gate (catches the kick on the *first* sample) and a heading-vs-COG circular-bias check
+(catches the quiet quarter-turn the range gate cannot see, and would have warned at 22:00Z).
+Stateless, so the replay rig agrees with the boat; it reports rather than substituting, because
+silently picking another sensor is how the AIS contamination survived a race.
+`vps/agent/test_sensor_health.py` replays the real event, 30 assertions.
+
+### Still open
+
+- **Confirm the bank's chemistry and capacity**, then set `POWER_*` thresholds honestly.
+- **Enable the Orca Core's N2K attitude sharing** (dockside): heel/pitch/ROT rank 1 is fiction
+  until then, and the boat races on a 1 Hz GPS attitude plus the autopilot.
+- **Record device identity on the boat** (archiver/uplink read `/signalk/v1/api/sources`), so
+  the committed address→device map becomes a cache rather than the source of truth.
+- **Surface all of this on the iPad**: provenance per number (device + `fell_back`), a bank
+  tile, and a single instrument-health chip (unresolvable matchers · silent rank-1 sources ·
+  AIS/synthetic sources present · channel disagreement). The engine now returns the data; no
+  console work has been done.
+- Deploy: boat is offline. `main` is deployable; copy single files after diffing.

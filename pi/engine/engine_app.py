@@ -25,7 +25,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app import (navigator, tactics, routing, weather, sails, fatigue, onboard_conditions,
                  datasource, ais, fleet, deviation, drift, selector, reoptimize, strategy,
-                 matcher, buoys, racelog, watches, trend, plangap, gpsout, checklist)
+                 matcher, buoys, racelog, watches, trend, plangap, gpsout, checklist,
+                 power, sensor_health)
 
 app = FastAPI(title="Agent_C4 Onboard Engine", version="0.1.0")
 # The iPad reaches the Pi directly over boat-local Wi-Fi in race mode; allow cross-origin so a
@@ -55,6 +56,29 @@ def conditions_full():
 @app.get("/sources")
 def sources():
     return onboard_conditions.get_sources()
+
+
+@app.get("/health/sensors")
+def sensor_health_ep():
+    """Is an instrument that is still reporting still RIGHT? Attitude range gate + a
+    heading-vs-GPS-course cross-check.
+
+    Added 2026-09-07 from the Jul 18 race: the compass/GPS was kicked at 22:58Z (roll stepped
+    to 133 deg, then sat inverted for 23 minutes), was put back upright, and then read a
+    quarter turn out — plausible-looking and wrong — for the remaining seven hours. Nothing
+    aboard noticed either state."""
+    return sensor_health.assess()
+
+
+@app.get("/power")
+def power_ep():
+    """House-bank state: level, trend, projected time to the brownout floor, status.
+
+    Added 2026-09-07. On Jul 18 the bank fell 12.91 -> 11.61 V over six hours of racing and at
+    the bottom of that curve the full-res archiver and the AIS transceiver stopped in the same
+    minute; the boat retired. The voltage was in the archive the whole time and no surface read
+    it. This endpoint is that surface — deterministic, no LLM, legal in-race like the rest."""
+    return power.assess()
 
 
 @app.get("/series")

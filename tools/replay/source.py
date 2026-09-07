@@ -32,15 +32,17 @@ import sys
 from datetime import datetime, timezone
 
 # Import the agent app package the same way the onboard engine does.
-_AGENT = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__)))), "vps", "agent")
-if _AGENT not in sys.path:
-    sys.path.insert(0, _AGENT)
+_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_AGENT = os.path.join(_ROOT, "vps", "agent")
+for _p in (_AGENT, _ROOT):          # _ROOT so `shared.*` imports work from any cwd
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 os.environ.setdefault("DATA_SOURCE", "onboard")
 os.environ.setdefault("ONBOARD_LIVE_WS", "false")   # no Signal K aboard a replay — archive only
 
 from app.datasource_onboard import BOAT_ID, OnboardSource, _epoch, _cutoff_str  # noqa: E402
+from shared import source_policy  # noqa: E402
 
 
 class ReplaySource(OnboardSource):
@@ -60,14 +62,34 @@ class ReplaySource(OnboardSource):
 
     # --- overrides: every archive read that is otherwise unbounded above ------
     def latest_value(self, path):
-        """Freshest value AT OR BEFORE `at`. The live cache is off in replay, so archive only."""
+        """Priority-preferred value AT OR BEFORE `at`; archive only (the live cache is off).
+
+        Mirrors `OnboardSource.latest_value` with the upper bound added — same two bounded
+        queries, same `_prefer`. It has to: the rig exists to measure what the boat does, so a
+        read-path change that skipped this override would be measured as if it had never
+        shipped."""
         not_ais, ais_p = self._not_ais()
-        row = self._archive.execute(
-            "SELECT value FROM readings WHERE boat_id=? AND path=? AND value IS NOT NULL "
-            "AND time <= ?" + not_ais + " ORDER BY time DESC LIMIT 1",
+        newest = self._archive.execute(
+            "SELECT max(time) AS time FROM readings WHERE boat_id=? AND path=? "
+            "AND value IS NOT NULL AND time <= ?" + not_ais,
             (BOAT_ID, path, self._upper(), *ais_p),
         ).fetchone()
-        return row["value"] if row else None
+        if not newest or not newest["time"]:
+            return None
+        newest_e = _epoch(newest["time"])
+        if newest_e is None:
+            return None
+        cut = datetime.fromtimestamp(
+            newest_e - source_policy.FAILOVER_AGE_S, tz=timezone.utc
+        ).strftime("%Y-%m-%dT%H:%M:%S")
+        rows = self._archive.execute(
+            "SELECT source, max(time) AS time, value FROM readings WHERE boat_id=? AND path=? "
+            "AND value IS NOT NULL AND time > ? AND time <= ?" + not_ais + " GROUP BY source",
+            (BOAT_ID, path, cut, self._upper(), *ais_p),
+        ).fetchall()
+        cands = [(r["source"], _epoch(r["time"]), r["value"]) for r in rows]
+        best = self._prefer(path, [c for c in cands if c[1] is not None])
+        return best[2] if best else None
 
     def series(self, path, minutes):
         def fetch():

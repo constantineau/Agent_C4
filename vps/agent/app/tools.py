@@ -9,6 +9,8 @@ import math
 import os
 from datetime import datetime, timezone
 
+from shared import n2k_sources
+
 from .db import pool
 from . import datasource
 from . import fatigue
@@ -50,10 +52,13 @@ PRESENT = {
     "environment.depth.belowTransducer": ("depth", "m", _id),
     "environment.water.temperature":   ("water_temp", "°C", _k_to_c),
     "steering.rudderAngle":            ("rudder_angle", "°", _rad_to_deg),
+    # The bank. Absent from both PRESENT tables until 2026-09-07, which is why a six-hour
+    # discharge to 11.08 V went unremarked through the Jul 18 race — see app/power.py.
+    "electrical.batteries.0.voltage": ("bank_voltage", "V", _id),
 }
 CHANNEL_TO_PATH = {ch: p for p, (ch, _, _) in PRESENT.items()}
 # "sensors disagree" threshold by display unit (spread beyond expected noise)
-DISAGREE = {"°": 6.0, "kn": 0.6, "m": 1.0, "°C": 2.0, "°/s": 5.0}
+DISAGREE = {"°": 6.0, "kn": 0.6, "m": 1.0, "°C": 2.0, "°/s": 5.0, "V": 0.5}
 # A ranked source must be fresher than this to be used before falling back to the next.
 FAILOVER_AGE_S = 45
 
@@ -68,15 +73,53 @@ def _load_priority():
     prio = {}
     for r in rows:
         prio.setdefault(r["channel"], []).append(r["match"].lower())
+    _warn_unresolved(prio)
     return prio
+
+
+_warned_unresolved = False
+
+
+def _warn_unresolved(prio):
+    """Log once when a seeded matcher names nothing on this boat.
+
+    This is the assertion the bug needed: an unresolvable matcher and a satisfied one produced
+    identical output for a year, because the fallback ("freshest available") is also the happy
+    path when the lead source is simply stale."""
+    global _warned_unresolved
+    if _warned_unresolved or not prio:
+        return
+    _warned_unresolved = True
+    devices = n2k_sources.devices_for(BOAT_ID)
+    if not devices:
+        return
+    labels = []
+    try:
+        with pool.connection() as conn:
+            labels = [r["source"] for r in conn.execute(
+                "SELECT DISTINCT source FROM telemetry_raw WHERE boat_id = %s "
+                "AND time > now() - interval '7 days'", (BOAT_ID,)).fetchall()]
+    except Exception:
+        pass          # the check is diagnostic; never let it break a conditions read
+    missing = n2k_sources.unresolved({m for ms in prio.values() for m in ms}, devices, labels)
+    if missing:
+        print(f"[tools] source_priority matchers that resolve to NO known source: {missing} — "
+              f"those channels silently fall back to freshest-wins", flush=True)
 
 
 def _choose_preferred(channel, readings, prio):
     """Pick the lead reading by priority, failing over when the preferred source is stale/absent.
-    Returns (reading, reason, fell_back)."""
+    Returns (reading, reason, fell_back).
+
+    Matching goes through `n2k_sources`, not `match in source`: the seeded matchers are device
+    names (`orca`, `24xd`) while `$source` is an N2K address (`n2k-socketcan.15`), so the
+    substring test could never succeed and every channel silently used the freshest source.
+    Measured and fixed 2026-09-07 — see `shared/source_policy.py`."""
+    devices = n2k_sources.devices_for(BOAT_ID)
     matchers = prio.get(channel, [])
     for i, m in enumerate(matchers):
-        fresh = [r for r in readings if m in r["source"].lower() and r["age_s"] <= FAILOVER_AGE_S]
+        fresh = [r for r in readings
+                 if n2k_sources.matches(r["source"], m, devices) and r["age_s"] <= FAILOVER_AGE_S]
         if fresh:
             best = min(fresh, key=lambda r: r["age_s"])
             return best, f"priority rank {i+1} ({m})", i > 0
@@ -84,6 +127,39 @@ def _choose_preferred(channel, readings, prio):
     if matchers:
         return best, "no preferred source fresh — using freshest available", True
     return best, "no priority set — freshest available", False
+
+
+_ais_sources_cache = None
+
+
+def ais_bearing_sources():
+    """Sources in `telemetry_raw` that carry AIS traffic — to be excluded from own-ship reads.
+
+    The cloud twin of `datasource_onboard.ais_sources()`, and it exists for the same reason:
+    Signal K's `subscribe=all` put every AIS target into the archive under the own-ship
+    `boat_id`, so `navigation.position/SOG/COG` from an AIS channel is somebody else's boat.
+    Identified from the data via `n2k_sources.AIS_MARKER_PATHS`, never by source name.
+
+    Memoised for the process: which sources are AIS receivers is a property of the boat's bus,
+    not of a request. Returns an empty set on any error — the callers must degrade to
+    unfiltered data rather than to no data."""
+    global _ais_sources_cache
+    if _ais_sources_cache is not None:
+        return _ais_sources_cache
+    try:
+        with pool.connection() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT source FROM telemetry_raw WHERE boat_id = %s AND path = ANY(%s)",
+                (BOAT_ID, list(n2k_sources.AIS_MARKER_PATHS))).fetchall()
+        _ais_sources_cache = {r["source"] for r in rows}
+    except Exception as exc:
+        print(f"[tools] could not identify AIS-bearing sources ({exc}); not filtering",
+              flush=True)
+        _ais_sources_cache = set()
+    if _ais_sources_cache:
+        print(f"[tools] AIS-bearing source(s) excluded from own-ship reads: "
+              f"{sorted(_ais_sources_cache)}", flush=True)
+    return _ais_sources_cache
 
 
 def _age(ts):
