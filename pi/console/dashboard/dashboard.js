@@ -68,6 +68,12 @@
   const COACH_EVERY = 15000;      // poll the proactive auto-coach held state ~every 15 s (no recompute — the Orin timer drives it)
   const SYN_EVERY = 15000;        // poll the in-race strategy synthesis ~every 15 s (a synthesis of the slower reads; LLM-phrased when the Orin is up)
   const CHK_EVERY = 15000;        // poll the race checklist ~every 15 s (engine-deterministic triggers; the bar only shows when something is due)
+  /* Readout HOLD — see hold() below. Bayview Mackinac 2026: readouts flapped between a value
+     and "no data" all race. The archive shows that was never the sensors or the link (every
+     strip path recorded 12,990 samples, one per second, zero gaps over 1 s) — it was this poll
+     turning a slow ENGINE response into a blank tile. */
+  const HOLD_MS = 30000;          // keep showing the last good reading this long after a poll fails
+  const STALE_AFTER_MS = 7000;    // ...and show its age once it is older than ~2 missed polls
 
   /* ---- tiny helpers needed early (used in the demo scenarios) ---- */
   const r0 = (x) => (x == null ? "?" : Math.round(x));
@@ -835,13 +841,19 @@
     for (const k of TILES) {
       const raw = (BUILD[k] || (() => NA("—")))(p);
       raw.status = commitStatus(k, raw.status);
+      // Held-but-stale is a THIRD state, distinct from fresh and from absent: the number is
+      // real, just not current, and the crew is entitled to know which it is looking at.
+      const age = tileAge(k);
+      if (age !== Infinity && age >= STALE_AFTER_MS) raw.staleMs = age;
       tiles[k] = raw;
     }
     const flagged = TILES.filter((k) => tiles[k].status === "watch" || tiles[k].status === "act")
       .sort((a, b) => SEV[tiles[b].status] - SEV[tiles[a].status]);
     const reachable = p.conditions || p.navigator || p.sources;
     const notes = flagged.slice(0, 3).map((k) => ({ tile: k, status: tiles[k].status, text: tiles[k].consider || tiles[k].why, conf: "engine" }));
+    const held = TILES.filter((k) => tiles[k].staleMs);
     const focus = !reachable ? "Engine unreachable — no live data." :
+      held.length ? "Holding last good values (" + fmtAge(Math.max.apply(null, held.map((k) => tiles[k].staleMs))) + " old) — engine slow to answer." :
       flagged.length === 0 ? "All systems nominal (engine read)." :
       flagged.length === 1 ? "1 item needs attention (engine read)." :
       flagged.length + " items need attention (engine read).";
@@ -1365,6 +1377,43 @@
     document.getElementById("coachWhen").textContent = ago;
     el.hidden = false;
   }
+  /* HOLD a failed poll's endpoint at its last good value for a bounded window.
+   *
+   * fetchJSON maps any failure — including its own 5 s abort — to null, and the tile builders
+   * turn null into NA("—"). One slow engine response was therefore indistinguishable from a
+   * dead sensor, and blanked the readout until the next cycle happened to succeed. commitStatus
+   * did not save us: it dwells the STATUS enum, while the tile's value/sub/why come straight
+   * off the NA object, so a missed poll showed a dash under a still-committed "OK" dot.
+   *
+   * The secondary pollers (deviation/drift/trend/selector/checklist) already do `if (r) App.x = r`,
+   * i.e. hold indefinitely. This brings the main poll into line — but BOUNDED, and with the age
+   * surfaced, because silently showing minutes-old wind is its own way to lose a race. Past
+   * HOLD_MS the endpoint really is absent and NA is the honest answer.
+   */
+  function hold(key, val, now) {
+    const f = App.fresh[key];
+    if (val != null) { App.fresh[key] = { v: val, t: now }; App.ages[key] = 0; return val; }
+    if (f && now - f.t <= HOLD_MS) { App.ages[key] = now - f.t; return f.v; }
+    App.ages[key] = Infinity;
+    return null;
+  }
+  /* which poll endpoints each tile is built from — a tile is only as fresh as its slowest one */
+  const TILE_SRC = {
+    wind: ["conditions"], playbook: ["tactics"], forecast: ["forecast"],
+    sail: ["sail", "conditions"], eta: ["navigator"], ais: ["fleet"],
+    charge: ["fatigue", "watch"], data: ["sources"],
+  };
+  function tileAge(key) {
+    let worst = 0;
+    for (const src of TILE_SRC[key] || []) {
+      const a = App.ages[src];
+      if (a === Infinity) return Infinity;
+      if (a > worst) worst = a;
+    }
+    return worst;
+  }
+  const fmtAge = (ms) => (ms < 60000 ? Math.round(ms / 1000) + "s" : Math.round(ms / 60000) + "m");
+
   function commitStatus(key, raw) {
     const d = App.dwell[key] || (App.dwell[key] = { committed: raw, cand: raw, n: 0 });
     if (raw === d.committed) { d.cand = raw; d.n = 0; return d.committed; }
@@ -1381,7 +1430,7 @@
     pos: { lat: 45.33, lon: -82.0 },
     openTile: null, streamTimer: null, pollTimer: null, seriesTimer: null, briefTimer: null,
     adhereTimer: null, coachTimer: null, devTimer: null, driftTimer: null, selTimer: null, polling: false,
-    dwell: {}, data: null, windHist: [], fcstHist: [], seriesHist: [], lastPersist: 0, brief: null,
+    dwell: {}, fresh: {}, ages: {}, data: null, windHist: [], fcstHist: [], seriesHist: [], lastPersist: 0, brief: null,
     coach: null, deviation: null, forecastDrift: null, selector: null, reoptimize: null,
     plangap: null, trend: null, briefBusy: {}, gps: null, gpsBusy: false, gpsNote: "",
     checklist: null, chkTimer: null,
@@ -1427,8 +1476,12 @@
       el.setAttribute("role", "button"); el.setAttribute("tabindex", "0");
       el.setAttribute("aria-label", NAME[key] + " " + st.word + " " + stripTags(t.value || ""));
       const valHtml = (t.value != null && t.value !== "") ? '<div class="t-val">' + t.value + '</div>' : "";
+      const ageHtml = t.staleMs
+        ? '<span class="t-age" title="Held: the engine has not answered for ' + fmtAge(t.staleMs)
+          + '. This is the last good reading, not a current one.">⏱ ' + fmtAge(t.staleMs) + '</span>'
+        : "";
       el.innerHTML =
-        '<div class="t-head"><span class="t-name">' + NAME[key] + '</span>' +
+        '<div class="t-head"><span class="t-name">' + NAME[key] + '</span>' + ageHtml +
         '<span class="t-chip"><span class="t-icon">' + st.icon + '</span><span class="t-word">' + st.word + '</span></span></div>' +
         valHtml + (t.chart ? t.chart : "") + (t.sub ? '<div class="t-sub">' + t.sub + '</div>' : "") + (t.chart ? "" : rowsHtml(t.rows));
       el.addEventListener("click", () => openDetail(key));
@@ -1864,7 +1917,8 @@
       const keys = ["conditions", "sail", "navigator", "tactics", "fatigue", "forecast", "sources", "fleet", "watch"];
       const ms   = [5000, 5000, 5000, 5000, 5000, 9000, 5000, 6000, 5000];
       const res = await Promise.all(eps.map((e, i) => fetchJSON(e, ms[i])));
-      const p = {}; keys.forEach((k, i) => (p[k] = res[i]));
+      const now = Date.now();
+      const p = {}; keys.forEach((k, i) => (p[k] = hold(k, res[i], now)));
       App.watch = p.watch;               // the CREW detail panel + quick actions read it
       App.nav = p.navigator;             // the eta-detail course map reads position live
       pushWind(p.conditions);

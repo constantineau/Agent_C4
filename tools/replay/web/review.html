@@ -145,6 +145,13 @@
 
   function fmt(v, d) { return v === null || v === undefined ? "—" : Number(v).toFixed(d === undefined ? 1 : d); }
 
+  /* Fault injection, driven from the parent so a test can set it deterministically.
+     window.replayFaults({stallMs:7000, periodMs:12000}) — or null to clear. */
+  window.replayFaults = function (f) {
+    ipad.contentWindow.postMessage({ type: "replay:faults", faults: f || null }, "*");
+    return f;
+  };
+
   /* keep the iPad-geometry iframe scaled to whatever width the left pane has */
   function fitIpad() {
     var wrap = document.getElementById("ipadWrap");

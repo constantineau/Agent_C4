@@ -161,15 +161,31 @@ assertions; agent suite 16/16.
   ETA swung **15.6 h → 38.9 h** (σ 5.2 h) with one **22.1 h jump between consecutive 5-minute
   samples**, while true average VMG (5.75 kn) implies a steady ~20.4 h. Needs a rolling-window
   VMG or a polar/routing-based ETA. Design call outstanding.
-- **P0 — Readouts flap between a value and "no data" (race report, 2026-09-07).** The archive
-  proves this was NOT sensor or link loss at the data layer: every strip path has **12,990
-  samples, one per second, across the whole race, with zero gaps over 1 s**. The flapping is
-  above that layer — `dashboard.js` aborts each poll at 5 s and maps failure to `null`, which
-  renders as `—`, so a single slow engine response blanks a tile until the next cycle. Compare
-  `47c1138` ("episodic all-endpoint timeouts under the dashboard's parallel poll"), whose fix
-  evidently did not fully hold. Wanted: the console should tell **stale** apart from **absent**
-  — hold the last good value with an age badge and hysteresis, and only fall back to "no data"
-  after N consecutive misses or a genuine staleness threshold.
+- **P0 — Readouts flap between a value and "no data" ✅ FIXED 2026-09-07.** The archive proves
+  this was never sensor or link loss: every strip path has **12,990 samples, one per second,
+  across the whole race, zero gaps over 1 s**. It was the console — `fetchJSON` aborts at 5 s
+  and maps failure to `null`, which the tile builders render as `—`, so one slow ENGINE
+  response was indistinguishable from a dead sensor. `commitStatus` did not help: it dwells the
+  status enum while value/sub/why come straight off the NA object, so a missed poll showed a
+  dash under a still-committed "OK" dot. Compare `47c1138`, whose fix evidently did not hold.
+
+  Fixed by holding each endpoint at its last good value for a bounded `HOLD_MS`, surfacing the
+  age on the tile past `STALE_AFTER_MS`, and falling back to NA honestly after that. This makes
+  the main poll consistent with the secondary pollers, which already held indefinitely
+  (`if (r) App.x = r`) — bounded, because silently showing minutes-old wind is its own hazard.
+
+  Measured in the replay rig with injected engine stalls (7 s in every 12 s), 40 s, 158 samples:
+
+  | | eta | sail | ais |
+  |---|---|---|---|
+  | before — flips | 7 | 7 | 7 |
+  | before — % showing "no data" | 63% | 63% | 63% |
+  | **after — flips** | **0** | **0** | **0** |
+  | **after — % showing "no data"** | **0%** | **0%** | **0%** |
+
+  Hold expiry verified separately under a permanent outage: the value holds with a counting age
+  badge to 30 s, then goes to `—` / "Engine unreachable" at 31 s. Genuinely-absent endpoints
+  (e.g. `/forecast`) show no badge and stay blank — stale and absent stay distinguishable.
 - **P1 — Ruthless curation of the console.** Unchanged from #3 above; ground it in the replay.
 
 ### Strategy & playbook
