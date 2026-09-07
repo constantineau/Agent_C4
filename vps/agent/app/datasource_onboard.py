@@ -349,6 +349,25 @@ class OnboardSource:
         row = self._engine.execute("SELECT value FROM kv WHERE key = 'active_route'").fetchone()
         return row["value"] if row else None
 
+    def save_nav_progress(self, route, blob):
+        """Persist how far round the course we are ({fp, i}) so a mid-race engine restart does
+        not reset the navigator to the first mark. The ratchet is advisory — plane crossing
+        alone is already correct on a normal course (see navigator._passed)."""
+        import json
+        self._engine.execute(
+            "INSERT INTO kv (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (f"nav_progress:{route}", json.dumps(blob)))
+        self._engine.commit()
+
+    def get_nav_progress(self, route):
+        """Stored course progress for `route`, or {} if none. The caller discards it when the
+        fingerprint does not match the loaded course."""
+        import json
+        row = self._engine.execute("SELECT value FROM kv WHERE key = ?",
+                                   (f"nav_progress:{route}",)).fetchone()
+        return json.loads(row["value"]) if row else {}
+
     def save_fleet(self, blob):
         """Persist the loaded fleet homework (roster + scoring + own rating) as a JSON blob in the
         engine SQLite `kv` store (key 'race_fleet'). Replaces any prior roster."""

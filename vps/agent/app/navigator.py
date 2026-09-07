@@ -77,6 +77,97 @@ def _adiff(a, b):
     return abs(_wrap180(a - b))
 
 
+# --- course progression -----------------------------------------------------
+# Mark advance used to be a stateless PROXIMITY test — "next mark = the first one you are not
+# within ROUND_NM of" — which silently never fires on a distance race. On Bayview Mackinac 2026
+# the Start stayed `next_mark` for the entire race: the boat is inside 111 m of it for only a few
+# seconds at the gun, and the instant it is further away the Start satisfies the test again (and
+# there was no latch, so even that instant would have reverted). ETA went null for the whole race
+# — VMG toward a mark astern is negative — and everything keyed on the mark index went with it:
+# matcher leg gating failed open, tactics leverage never computed, the onboard re-route resolved
+# its destination back to the Start, and the buoy layer hunted corroborators behind the boat.
+#
+# Advance is now a PLANE crossing: you have passed a mark once you are beyond the plane through
+# it normal to the leg you are sailing — the OUTBOUND leg for the start line, the INBOUND leg for
+# a rounding. That is monotone on a normal course, so it is correct with no stored state at all,
+# which also keeps it replayable at an arbitrary moment. Close aboard (<= ROUND_NM) still counts,
+# so windward-leeward buoy racing behaves exactly as before. The kv latch is a ratchet layered on
+# top for the cases plane-crossing alone cannot see: drifting back over the line pre-start, or a
+# course that doubles back on itself.
+PASS_NM = 0.05             # distance beyond a mark's plane that counts as passed (~90 m)
+# Set false to ignore the stored ratchet and run on geometry alone (the replay rig does this so
+# a frame depends only on its own timestamp, never on which frames were computed before it).
+PROGRESS_LATCH = os.environ.get("NAV_PROGRESS_LATCH", "true").strip().lower() != "false"
+
+
+def _beyond_nm(lat, lon, m, axis_deg):
+    """Signed distance (nm) the boat lies beyond mark `m`, measured along `axis_deg`.
+
+    Positive = past the plane through `m` normal to the axis; negative = still short of it."""
+    d = _hav_nm(m["lat"], m["lon"], lat, lon)
+    if d == 0.0:
+        return 0.0
+    return d * math.cos(math.radians(_bearing(m["lat"], m["lon"], lat, lon) - axis_deg))
+
+
+def _passed(marks, i, lat, lon):
+    """Has the boat passed marks[i]? Pure — no I/O and no stored state, so it is unit-testable
+    and gives the same answer for a moment however you arrive at it."""
+    m = marks[i]
+    if _hav_nm(lat, lon, m["lat"], m["lon"]) <= ROUND_NM:
+        return True                                                   # close aboard: a rounding
+    if i > 0:                                                          # axis = the leg INTO it
+        axis = _bearing(marks[i - 1]["lat"], marks[i - 1]["lon"], m["lat"], m["lon"])
+    elif len(marks) > 1:                                               # start line: leg OUT of it
+        axis = _bearing(m["lat"], m["lon"], marks[i + 1]["lat"], marks[i + 1]["lon"])
+    else:
+        return False                                                   # a one-mark course
+    return _beyond_nm(lat, lon, m, axis) >= PASS_NM
+
+
+def _next_index(marks, lat, lon, floor=0):
+    """Index of the mark being sailed to. Advances from `floor` while marks lie behind us, and
+    never past the last one — the finish stays the target once it becomes the target."""
+    i = max(0, min(int(floor), len(marks) - 1))
+    while i < len(marks) - 1 and _passed(marks, i, lat, lon):
+        i += 1
+    return i
+
+
+def _course_fp(marks):
+    """Stable fingerprint of the course geometry — a stored ratchet is void if the course
+    changes, so loading new homework cannot leave the navigator latched onto an old leg.
+    hashlib (not hash()) because str hashing is salted per process."""
+    import hashlib
+    body = "|".join(f"{m['seq']}:{m['lat']:.6f},{m['lon']:.6f}" for m in marks)
+    return hashlib.sha1(body.encode()).hexdigest()[:16]
+
+
+def _progress_floor(route, marks):
+    """Lowest index the ratchet allows: 0 when disabled, unsupported, or the course changed."""
+    if not PROGRESS_LATCH:
+        return 0
+    try:
+        ds = datasource.active()
+        if not hasattr(ds, "get_nav_progress"):
+            return 0                       # CloudSource has no kv — geometry alone, still correct
+        rec = ds.get_nav_progress(route) or {}
+        return int(rec.get("i", 0)) if rec.get("fp") == _course_fp(marks) else 0
+    except Exception:
+        return 0
+
+
+def _save_progress(route, marks, i):
+    if not PROGRESS_LATCH:
+        return
+    try:
+        ds = datasource.active()
+        if hasattr(ds, "save_nav_progress"):
+            ds.save_nav_progress(route, {"fp": _course_fp(marks), "i": int(i)})
+    except Exception:
+        pass
+
+
 # --- live state -------------------------------------------------------------
 _PATHS = {
     "lat": "navigation.position.latitude", "lon": "navigation.position.longitude",
@@ -174,9 +265,12 @@ def get_navigator(route: str = None):
         return {"available": False, "note": "no position fix yet"}
     lat, lon = s["lat"], s["lon"]
 
-    # next mark = first by seq still more than a rounding radius away
-    nxt = next((m for m in marks
-                if _hav_nm(lat, lon, m["lat"], m["lon"]) > ROUND_NM), marks[-1])
+    # next mark = the first one we have not passed (plane crossing, then the kv ratchet)
+    floor = _progress_floor(route, marks)
+    idx = _next_index(marks, lat, lon, floor)
+    if idx != floor:
+        _save_progress(route, marks, idx)
+    nxt = marks[idx]
     dist = _hav_nm(lat, lon, nxt["lat"], nxt["lon"])
     brg = _bearing(lat, lon, nxt["lat"], nxt["lon"])
 
@@ -228,7 +322,7 @@ def get_navigator(route: str = None):
         "next_mark": {"name": nxt["name"], "seq": nxt["seq"],
                       # position in the ordered marks list — leg N of the course arrives at
                       # marks[N], so this doubles as the current 1-based leg number (matcher)
-                      "index": marks.index(nxt),
+                      "index": idx,
                       "distance_nm": round(dist, 2), "bearing_deg": round(brg, 1),
                       "eta_min": eta_min},
         "leg": leg, "layline_call": layline_call, "next_rounding": next_rounding,
@@ -238,7 +332,7 @@ def get_navigator(route: str = None):
         "marks_total": len(marks),
         "remaining_nm": round(sum(
             _hav_nm(marks[i]["lat"], marks[i]["lon"], marks[i+1]["lat"], marks[i+1]["lon"])
-            for i in range(marks.index(nxt), len(marks) - 1)) + dist, 1),
+            for i in range(idx, len(marks) - 1)) + dist, 1),
     }
 
 
