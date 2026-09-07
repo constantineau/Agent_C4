@@ -1,9 +1,33 @@
-# C4 telemetry consolidation — progress (updated 2026-09-01)
+# C4 telemetry consolidation — progress (updated 2026-09-07)
 
-Goal (Cole, this session): **lose no telemetry**, and **copy all telemetry off the Pi to the VPS**.
+Goal (Cole): **lose no telemetry**, and **copy all telemetry off the Pi to the VPS**.
 Deletion from the boat is allowed only *after* an off-boat copy is sha256-verified.
 
-## ⏸ PICK UP HERE (paused 2026-09-01 ~20:30Z — a drain is RUNNING unattended)
+## ⏸ PICK UP HERE (2026-09-07)
+
+**The boat is OFFLINE and that is accepted** — Cole, 2026-09-07: no race is near, so do not
+chase it, and do not treat Pi/Orin work as blocked-and-waiting. Uplink stopped
+**2026-09-02T22:13Z** (one 1,476-row reconnect blip at 2026-09-04T20:59:45Z, nothing since).
+Tailscale last saw `sr33-pi` 2026-09-05 and `agent-c4` 2026-09-03.
+
+**#6 drain COMPLETE** 2026-09-02T07:24:57Z, attempt 27. Guardian exited clean:
+`FINAL rows=109,934,779 size=1033 MB`. Reconciled Postgres-side: 74 hours of data across the
+74 hours the fresh archive existed (Aug 30 ~05:00Z → Sep 2 07:24Z), **zero gaps**.
+
+**#4 pre-race remainder DONE** 2026-09-07: `5,481,959` rows, reconciled exactly
+(260,811 pre-existing + 5,481,959 = 5,742,770 in-window). Rollback table
+`telemetry_raw_pre4_20260907`. Ad-hoc mode is not re-run-safe — do not run it again.
+
+**Deadline moved in our favour.** Everything through Sep 2 07:24Z is on the VPS, so the Sep 13
+prune has nothing undrained to eat. The undrained window is Sep 2 07:24Z → whenever the boat
+died, which becomes prune-eligible **~2026-09-16**.
+
+**Next, all boat-independent:** #5 (salvage the re-pulled 9.6 GB archive — local, never
+started), then the v2 work in `docs/V2_BACKLOG.md`, which the Race Rewind rig
+(`tools/replay/`) has now unblocked. Needs the boat, so parked: recreate the archiver
+container for its stale `VPS_URL`, and #6c the recurring drain.
+
+## Previous resume block (2026-09-01 — drain now finished, kept for context)
 
 **Two long-running jobs are live right now. Check them before doing anything else.**
 
@@ -59,9 +83,9 @@ on the OVH box, not on the boat, so the boat does not need to be current for the
 | 1 | Jul 18 race backfill → Postgres | ✅ done 2026-08-30 |
 | 2 | NUL-strip fix in ingestion | ✅ deployed + verified 2026-09-01 |
 | 3 | Boat cleanup, the verified 2.1 GB | ✅ done 2026-08-30 |
-| 4 | Pre-race remainder, 5,481,959 rows | ⬜ not started |
+| 4 | Pre-race remainder, 5,481,959 rows | ✅ done 2026-09-07 |
 | 5 | Re-pull of the 9.6 GB corrupt archive | ✅ VERIFIED 2026-08-30; salvage still to do |
-| 6 | Drain the Pi's live `archive.db` | 🔄 **RUNNING unattended** — ETA ~08:00Z 2026-09-02 |
+| 6 | Drain the Pi's live `archive.db` | ✅ COMPLETE 2026-09-02T07:24Z — 109.9M rows, zero gaps |
 | 6b | TimescaleDB compression | ✅ enabled, 36.6x — this is what made #6 possible |
 | 6c | Recurring drain so it stays drained | ⬜ **next task** — makes the Sep 13 prune safe |
 | 7 | Uplink spool | ✅ root cause fixed, drained to 0, reconciles exactly |

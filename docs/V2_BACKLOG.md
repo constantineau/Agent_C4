@@ -87,6 +87,15 @@ Priorities: **P0** = fix before next race outing · **P1** = core v2 work · **P
 
 ---
 
+## Race-data situation — ⚠ SUPERSEDED 2026-09-07, see "Replay findings" below
+
+**The block that follows is kept for the record but its premise is false.** The race data is no
+longer stranded: the Jul 18 archive was recovered on 2026-08-30 (10,445,463 readings) and the
+pre-race remainder went up on 2026-09-07, so `telemetry_raw` now holds the whole race. The P0
+below — *"pull race-day logs from the Pi archiver"* — is **done**, and every Pi-dependent item
+here is unblocked and needs no boat access. Diagnosis now runs on `tools/replay/` (Race Rewind),
+which replays the real engine and the real console against race-day data on a laptop.
+
 ## Race-data situation (checked 2026-07-22)
 
 - **Boat Starlink is dead** (user report). Pi + Orin both offline on Tailscale, last seen Jul 19;
@@ -118,29 +127,88 @@ Priorities: **P0** = fix before next race outing · **P1** = core v2 work · **P
 
 ---
 
-## Triaged v2.0 work
+## Replay findings (2026-09-07, `tools/replay/` against the real Jul 18 data)
+
+**One bug explains most of the low ratings.** `navigator.py` advanced the next mark with a
+*stateless proximity test* — "the first mark you are not within `ROUND_NM` (111 m) of". On a
+250 nm race to a virtual gate that can never fire, so `next_mark` stayed **"Start"** for the
+entire race: at 19:30Z the tile pointed at bearing 186°, due south, at a mark 16 nm astern.
+
+Blast radius, because five of the seven rated components read that index:
+
+| Consumer | What it did on race day |
+|---|---|
+| `navigator` — Time to Mark | `eta_min` null all race (VMG toward a mark astern is negative) → **0/10** |
+| `matcher.py:231` — leg gating | index 0 → returns `None` → *"leg gating fails open"* → **every play applicable on every leg, all race** |
+| `tactics.py:96` — leverage / favored side | `i=0` → `start=None` → leverage never computed |
+| `routing.py:216` — onboard re-route | destination resolved to **the Start** |
+| `buoys.py:223` — corroborators | up-course stations chosen on a bearing pointing astern |
+
+So the Playbook's 1/10 ("overwhelming walls of text") was at least partly an **unfiltered**
+playbook, not just a badly-shaped one — leg scoping, a primary relevance filter, was inert.
+**Do not commit to a from-scratch playbook rebuild until it has been replayed with leg gating
+working.** That is now a cheap experiment rather than a guess.
+
+**FIXED 2026-09-07** — advance is now a plane crossing (monotone, so correct with no stored
+state, which also keeps it replayable), with a kv ratchet for the pathological cases and the
+close-aboard rule preserved for buoy racing. `vps/agent/test_navigator_progress.py`, 22
+assertions; agent suite 16/16.
 
 ### In-race UX (console, dashboard, coach)
 
-- **P0 — Fix Time to Mark (rated 0/10, broken during the race).** Pull race-day logs from the
-  Pi archiver, find out what actually failed (data feed? mark sequencing? the tile itself?),
-  fix, and add a dockside/underway self-check so a dead tile is caught before the gun.
-  Includes the in-tile course map, which also wasn't working.
+- **P0 — Time to Mark: sequencer ✅ fixed; the ETA estimator is a SECOND, independent defect.**
+  `navigator.py` projects *instantaneous* VMG across the whole leg. Replayed 17:30–20:30Z the
+  ETA swung **15.6 h → 38.9 h** (σ 5.2 h) with one **22.1 h jump between consecutive 5-minute
+  samples**, while true average VMG (5.75 kn) implies a steady ~20.4 h. Needs a rolling-window
+  VMG or a polar/routing-based ETA. Design call outstanding.
+- **P0 — Readouts flap between a value and "no data" (race report, 2026-09-07).** The archive
+  proves this was NOT sensor or link loss at the data layer: every strip path has **12,990
+  samples, one per second, across the whole race, with zero gaps over 1 s**. The flapping is
+  above that layer — `dashboard.js` aborts each poll at 5 s and maps failure to `null`, which
+  renders as `—`, so a single slow engine response blanks a tile until the next cycle. Compare
+  `47c1138` ("episodic all-endpoint timeouts under the dashboard's parallel poll"), whose fix
+  evidently did not fully hold. Wanted: the console should tell **stale** apart from **absent**
+  — hold the last good value with an age badge and hysteresis, and only fall back to "no data"
+  after N consecutive misses or a genuine staleness threshold.
+- **P1 — Ruthless curation of the console.** Unchanged from #3 above; ground it in the replay.
 
 ### Strategy & playbook
 
-- **P1 — Rebuild the playbook approach from scratch (rated 1/10).** v1's dense prose plays
-  were overwhelming and made no sense under race load. v2 design goal: glanceable, actionable,
-  minimal text — decide during the retro what (if anything) from the scenario-fan/matcher
-  machinery survives. Ground the redesign in what the race actually demanded.
+- **P1 — Rebuild the playbook approach (rated 1/10)** — but re-evaluate first, see above: leg
+  gating was disabled for the whole race, so v1 has never actually been observed working.
 
 ### Weather & routing
 
+- **P1 — `/strategy` re-optimizes the whole remaining course on every call.** ~14 s for the
+  remaining 259 nm on a fast x86 box, while `dashboard.js` polls it **every 15 s**; a Pi 4 is
+  far slower. Previously masked — the broken sequencer made `reoptimize` route to the Start, a
+  no-op — so fixing the sequencer exposed it. A slow-moving strategic digest should be cached
+  and recomputed on an interval or on material change. **The sequencer fix should not be
+  deployed to the boat until this is addressed**, and it is a prime suspect for the readout
+  flapping above.
+
 ### Onboard hardware / deployment (Pi, Orin, N2K)
+
+- **P1 — Onboard source selection is "freshest wins", with no cross-source sanity check.**
+  `datasource_onboard.latest_value()` is `ORDER BY time DESC LIMIT 1` across **all** sources.
+  On Jul 18, `n2k-socketcan.43` agreed with `.15`/`.3` most of the time (median SOG ratio
+  1.003) but threw excursions to **8.84 kn SOG and 171° COG in 20–24% of frames**, while
+  `.15` and `.3` never disagreed on SOG at all (0/433 frames). Whichever source wrote last
+  wins, so those excursions can silently drive the engine. A `source_priority` table exists
+  (migration 003) but is consumed only by the **cloud** path (`tools.py:65`) — it was never
+  wired into the onboard datasource.
 
 ### Learning loop (Lab-4, retro, LoRA)
 
+- **P1 — Log Tier-2 copilot output.** The Orin's narration was never archived, so it cannot be
+  replayed for Jul 18 (the only `crew` paths that race are `crew.sail.state`/`crew.session`).
+  Every future debrief is blind to what the copilot actually said unless this is fixed.
+
 ### Infra & ops
+
+- **P2 — Capture AIS into the replayable record.** The archiver stores own-ship contexts only;
+  AIS went to the cloud `ais_targets` table by a separate path, so the Fleet tile (7/10) cannot
+  be replayed. Postgres has the data — wiring it into `tools/replay/` would close the gap.
 
 ---
 
