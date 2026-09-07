@@ -27,6 +27,65 @@ started), then the v2 work in `docs/V2_BACKLOG.md`, which the Race Rewind rig
 (`tools/replay/`) has now unblocked. Needs the boat, so parked: recreate the archiver
 container for its stale `VPS_URL`, and #6c the recurring drain.
 
+---
+
+### Session handoff — 2026-09-07 (paused by Cole)
+
+Everything below is **committed, merged to `main`, and pushed**; working tree clean, all suites
+green (16 agent + navigator-progress + navigator-eta + archiver context-filter = 18).
+
+**Five defects found and fixed, each measured against the real Jul 18 race rather than argued:**
+
+| what | before | after |
+|---|---|---|
+| mark sequencer (`navigator`) | `next_mark` stuck on "Start" the whole race | advances; leg gating live |
+| readout flapping (`console`) | 7 flips, "no data" 63% of samples | 0 flips, 0% |
+| `/reoptimize` caching | ~97% miss → ~91% engine CPU duty | 82% reuse → ~17% |
+| own-ship position (AIS contamination) | max 4,091 kn, 15.9% impossible | max 8.0 kn, 0.0% |
+| Time-to-Mark ETA | arrival spread 74.34 h | 10.39 h, worst jump 0.25 h |
+
+**⚠️ Boat-deployment gate is CLEARED but read this first.** The `/strategy` cost was the thing
+blocking the sequencer fix from reaching the Pi, and it is fixed — so `main` is deployable when
+the boat returns. The boat's clone tracks `main` and is several merges behind; deploy by copying
+single files after diffing (a `git pull` there switches the branch — see "Hard-won specifics").
+
+**A pattern worth acting on next session.** Three of the five were things already *designed*
+correctly that had quietly stopped working: a cache that never hit, status hysteresis smoothing
+the wrong field, and a context filter that existed in `uplink.py` but never reached
+`archiver.py`. A fourth recurred three times in one session — **quantising a continuous quantity
+reintroduces discontinuities** (cache-key buckets chattering at their edges, `if twa < beat`, and
+snapping to the polar grid). Worth spending time on assertions that would have caught these — a
+cache-hit-rate check, a plausibility gate on own-ship position, a continuity sweep — rather than
+only on new features.
+
+**Open, in the order Cole chose:**
+1. **Archive cleanup** — AIS rows are hidden from own-ship reads but still on disk. Related:
+   whether AIS should be archived *properly* with a context column, which would make the Fleet
+   tile replayable (currently it cannot be).
+2. **Log Tier-2 copilot output** — never archived, so every debrief is blind to what it said.
+3. **#5, the 9.6 GB salvage** — untouched, purely local, longest-standing item.
+4. Follow-up: routed (forecast-aware) ETA into `next_mark` — `/reoptimize` already computes
+   per-mark ETAs and is now cheaply cached. **Mind the recursion: `reoptimize` calls
+   `get_navigator`.**
+
+**Race Rewind rig** (`tools/replay/`, built this session):
+```bash
+python3 tools/replay/server.py --timeline /home/constantineau/backups/replay-jul18/timeline
+# http://localhost:8110/   — real console left, ground truth right, notes -> /replay/notes.md
+```
+A final timeline rebuild was launched at pause under `systemd-run --unit=c4-replay-rebuild`
+(~35 min) so it survives the session — **check `systemctl status c4-replay-rebuild` and that
+`timeline/frames.jsonl` has 433 lines before trusting the rig.** Rebuild it after any engine
+change: `tools/replay/harness.py` then `tools/replay/truth.py`, same `--start/--end/--step`, or
+the ground-truth pane silently blanks past the shorter of the two.
+
+**Two shell traps that cost time this session** (both bit more than once):
+- `pgrep -f X` / `pkill -f X` **match the invoking shell's own command line** — they kill the
+  session (exit 144) or loop forever waiting on themselves. Use `pgrep -f 'harn[e]ss.py'`, or
+  put the kill in a script file.
+- Timings taken *inside* `freeze_time` are meaningless (even a `time.time` captured beforehand
+  reads frozen). Measure from the shell, or bisect by running with different inputs.
+
 ## Previous resume block (2026-09-01 — drain now finished, kept for context)
 
 **Two long-running jobs are live right now. Check them before doing anything else.**
