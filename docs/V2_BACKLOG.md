@@ -187,12 +187,19 @@ all** — if a future harness grows another thread boundary, assert an age, don'
 ### ✅ The rig now covers the WHOLE race (2026-09-08) — and the first thing it found
 
 `tools/replay/spool_to_sqlite.py` materialises the cloud spool into a `readings`-schema SQLite
-file (33,282 rows, 75 paths, 6.6 MB for `20:40:30 -> 00:09:35Z`); `source.py` ATTACHes it and
+file (50,288 rows, 75 paths, 10.0 MB for `20:40:30Z -> 02:09:50Z`); `source.py` ATTACHes it and
 reads both files through `_both()`; `harness.py --spool` wires it up. Two files, not one merged
 one — the rates differ by three orders of magnitude and merging would let a 24-s aggregate be
 read as a 5-Hz measurement. Verified across the seam: the archive leads to 20:40:30 at age
 ~−1 s, there is a real 29–59 s gap the strip honestly reports as stale, and the spool leads from
 20:42:00 with position, speed and bank voltage all continuous.
+
+⚠ **The window was extended from `00:09:35Z` to `02:09:50Z` later the same day, and the reason is
+the whole lesson of the P0 below: the first cut ended thirteen minutes after the fault it was
+built to replay.** `00:09Z` is the end of racing and everything after it is scrap for *tactics* —
+but a sensor fault does not stop when the crew stops racing, and the check under test needs the
+steady state, not the onset. Cut a replay window where the evidence ends, not where the race
+does. (Racing tactics past 00:09Z remain out of scope; this is coverage for the health checks.)
 
 Performance note for whoever touches it next: the obvious `CREATE TEMP VIEW readings_all AS …
 UNION ALL …` is **200× slower** and its query plan looks fine. Both arms SEARCH their index, but
@@ -200,45 +207,101 @@ the compound sits behind a CO-ROUTINE that the outer `max()` then SCANS — 0.67
 read, i.e. every read streams every matching row of a 10.4 M-row table. Aggregate *inside* each
 arm and re-aggregate the two small results.
 
-- **P0 — 🔴 THE HEADING CROSS-CHECK IS SILENT ON THE DATA THE BOAT ACTUALLY SENT, AND IT COMPARES
-  THE 24xd AGAINST ITSELF.** Found immediately on the first full-race replay, which is the entire
-  argument for having done it. The attitude range gate works exactly as designed — `danger` on
-  the first bad sample at 22:58Z (roll 133.1°), sustained through the inverted hour, quiet again
-  from 23:22Z when the crew re-seated it. The *cross-check*, the one written specifically for the
-  quiet quarter-turn error that followed, does not:
+- **P0 — 🔴 ~~THE HEADING CROSS-CHECK IS SILENT ON THE DATA THE BOAT ACTUALLY SENT~~ ✅ CORRECTED
+  AND FIXED 2026-09-08 (same day). It was never silent on the fault. It was silent for one window
+  either side of it, and the replay stopped eleven minutes after the fault began.** The headline
+  above was written from 36 frames and it was wrong; what follows is measured against every row
+  Postgres holds. Two of the three findings survive, one of them is bigger than the original, and
+  the false one is worth keeping on the page because of *how* it was false.
 
-  | after the sensor was put back, 23:25 → 00:00Z | |
-  |---|---|
-  | frames reporting `unknown` ("samples disagree — manoeuvring or unstable") | **35 of 36** |
-  | frames reporting `danger` | 1 |
-  | median `spread_deg` (the gate is 25°) | **68.7°** |
-  | the one bias it did report | **+119.2°** — against the −90° the fixture analysis measured |
+  **What is actually true (23:20Z Jul 18 → 02:09Z Jul 19, `telemetry_raw`, 291 samples/path).**
+  The compass was fine for half an hour after the crew re-seated it — bias +3 to +24° at 23:50Z.
+  It stepped out at **23:56:10Z**, heading 43.6° → 125.8° → 285.7° in 70 s while COG held ~25-33°,
+  and then sat there. From 23:56Z on the bias is **−90 to −105°, rock steady**.
 
-  **Root cause, measured.** `sensor_health.assess()` builds its reference series with
-  `src.series()`, which decimates to one value per second with `max(time)` across *all* non-AIS
-  sources. `navigation.courseOverGroundTrue` has **two** publishers — the 24xd and the Orca — and
-  in this window they disagree by a mean of **12.5°** and a maximum of **73.1°**. So the series
-  alternates between two devices sample to sample, and that source-switching noise lands straight
-  in the `spread_deg` statistic the check uses to decide whether its samples agree. The spread
-  gate then correctly concludes the samples disagree and returns `unknown` — defeating the check
-  with a number the check itself manufactured.
+  | 00:20 → 02:09Z, the steady quarter-turn, 20-min window | mixed ref | Orca-only ref |
+  |---|---|---|
+  | frames reporting `danger` | **110 of 110** | **110 of 110** |
+  | median bias | −90.7° | −90.2° |
+  | median `spread_deg` (gate is 25°) | 7.5° | 5.7° |
 
-  **And the independence is fictional.** `navigation.headingTrue` has exactly one publisher, the
-  24xd. `source_priority` ranks COG `['24xd', 'orca', '943', 'b951']` — so the policy-preferred
-  COG is the **same physical device** as the heading. A cross-check whose whole premise is "an
-  independent measurement" is, on this boat, comparing the kicked sensor against itself. The Orca
-  is rank 2 and is the genuinely independent one.
+  So the check works, and it worked before today's fix. **The 35-of-36 `unknown` window was
+  23:25 → 00:09Z — a stretch that straddles two step changes** (the re-seat at 23:22Z, the
+  misalignment at 23:56Z) and contains nothing else. A 20-minute sliding window over a step
+  reports `unknown` until the bad samples outvote the good ones; it cannot do anything else, and
+  it clears itself. The reason the first replay saw only that stretch is that **the timeline
+  ended at 00:09:35Z**, thirteen minutes after the fault began. The rig was not lying — it was
+  too short, and a 36-frame sample of a 7-hour race got read as the whole story.
 
-  **The fix has two parts, and only the first is obvious.** (1) Build the reference series from a
-  *single* source via `series_by_source`, choosing a publisher that is **not** the channel's own
-  publisher — otherwise the check cannot mean what it says. (2) Decide whether the 25° spread gate
-  is tuned for 1 Hz archive data and needs to be rate-aware: some of that spread is genuine, a
-  boat manoeuvring sampled every 24–35 s, so a single-source series will narrow it but may not
-  clear it. Re-measure on the full-race timeline after (1) before touching (2) — the rig can now
-  score both, which it could not this morning.
+  Same lesson as `power._tripped` flapping the bank tile, one level up: **a sliding-window
+  statistic tells you about the window, not only the signal** — and a replay window is one of
+  those windows.
 
-  This is the ninth instance of the shape: **a read path silently mixing sources**, designed and
-  wired and not doing what it says.
+  **1. Fixed — the reference was never chosen (real, and the effect is smaller than claimed).**
+  `assess()` read COG through `src.series()`, which decimates to one value per second and keeps
+  whichever source wrote last *inside that second*. COG has two publishers here, the 24xd and the
+  Orca, a mean **13.9°** apart, so the "reference" alternated between two devices sample to
+  sample and that noise landed in the `spread_deg` statistic the check judges itself by. It is a
+  real defect and the ninth instance of the shape — **a read path silently mixing sources**. But
+  measured, it moved the median spread 7.5° → 5.7°, and **it never changed a verdict**: mixed,
+  Orca-only and 24xd-only all report 110/110 `danger`. `choose_source()` now picks one publisher
+  and the readout names it.
+
+  **2. Fixed — the independence was fictional, and that part stands.** `navigation.headingTrue`
+  has exactly one publisher, the 24xd. `source_priority` ranks COG `['24xd', 'orca', '943',
+  'b951']`, so the policy's own first choice for the "independent measurement" was the compass's
+  own box. It happened not to matter on Jul 18 — a magnetometer and a GPS position track are
+  different physics even inside one enclosure, which is why the 24xd-only arm still reads
+  −90.8° — but it cannot survive that box losing power, which is precisely the failure this
+  boat had. The reference now prefers a publisher on a different device, says which one it used,
+  and when there is no such publisher it still runs but reports a standing `note` instead of
+  implying redundancy it does not have.
+
+  **2b. And `source_priority` ranks the AIS transceiver as an own-ship fallback.** `b951` is rank
+  4 for `sog`, `cog`, `lat` and `lon`. The read paths filter AIS out first, so nothing is broken
+  today — but that is one deleted filter away from the bug that cost this project a race, written
+  into the policy as an intention. `choose_source()` refuses AIS-bearing sources outright rather
+  than ranking them last. **Deleting those four `b951` entries from the policy and the seed is
+  queued, not done** — it needs the `test_source_priority` SQL-vs-Python assertion updated in the
+  same commit.
+
+  **3. Fixed, and it was the actual cost — the window was the detection latency.** Nobody had
+  measured what the 20 minutes bought. It buys nothing: over the healthy race 17:35–20:40Z at
+  1 Hz, windows of 5, 10, 20 and 30 minutes all raised **zero** false alarms. What it costs is
+  time-to-tell, measured from the 23:56:10Z onset — 5 min → fires in 5, 10 → 10, **20 → 19**,
+  30 → 29. `HEADING_WINDOW_MIN` is now **10**: half the latency, same coverage (45 of 64 frames),
+  still no false alarms, and a decimated cloud window stays comfortably above
+  `HEADING_MIN_SAMPLES` where 5 would sit exactly on it.
+
+  **NOT done, and now deliberately not: the spread gate does not need to be rate-aware.** That
+  was step (2) of the original plan. The measurement says the `unknown`s were a window straddling
+  a step, not a gate mis-tuned for 24–35 s sampling, and the steady-state spread is 5.7° against
+  a 25° gate — a factor of four of headroom. Loosening it would only have let the straddle
+  frames through as a false bias.
+
+  **Verified end to end, not just in a fixture.** `timeline-heading/` — 378 frames, 23:00Z →
+  02:09Z, the real engine and the real `/health/sensors` payload the iPad reads:
+
+  | phase | frames | what the cross-check says |
+  |---|---|---|
+  | 23:00–23:22Z, sensor inverted | 44 | 30 `ok`, 14 `warn` — heading was *fine* while roll read ±175°; the **attitude gate** carries this hour, exactly the division of labour it was built for |
+  | 23:22–23:56Z, crew working on the mount | 68 | 54 `unknown`, 8 `danger`, 6 `ok` — the bias swings +114° → +3° → −90°; an honest mixture |
+  | 23:56–00:20Z, the step and one window | 48 | 28 `danger`, 20 `unknown` |
+  | 00:20–02:09Z, the steady quarter turn | 218 | **199 `danger`**, median bias **−90.2°**, median spread **5.3°**; the 19 `unknown`s are the boat under 3 kn, which is the SOG gate doing its job |
+
+  Every one of the 378 frames reports `reference: {heading: GPS24xd-NMEA2000, course: Orca Core,
+  independent: true}` — the check can now be audited on which two devices it compared. And on the
+  exact 23:25 → 00:09Z stretch the P0 was raised from: **85 of 88 `unknown` before, 74 of 88
+  after** — better, and still mostly `unknown`, because that stretch really is the transition.
+
+  **4. Fixed on the way past — `_circular()` crashed on perfect agreement.** `sqrt(-2 ln R)` with
+  every sample carrying the identical delta: R overshoots 1.0 by an ulp, `log` goes positive,
+  `sqrt` raises `ValueError`, and `/health/sensors` returns nothing at all. A becalmed boat and
+  every bench fixture produce exactly that input. It survived because no test ever let `assess()`
+  build its own series — every existing case handed `heading_bias()` pre-paired fixture samples.
+  **That is the whole finding of the day in one line: the checks were tested, the read path
+  underneath them was not.** `test_sensor_health.py` now drives `assess()` through a fake source
+  with two disagreeing COG publishers.
 
 ### ⚠ …and it could still phone the live internet — the rig is now hermetic (2026-09-08)
 
