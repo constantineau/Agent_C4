@@ -92,9 +92,17 @@ free / 89%.)
 **Replay rig state.** `backups/replay-jul18/timeline/` is rebuilt against the current engine
 **with the clock fix** (433 frames, 0 endpoint errors, truth aligned) and now also captures
 `/power`, `/health/sensors` and `/conditions/full`. **`timeline-fullrace/` runs to 00:09Z** using
-`--spool backups/replay-jul18/spool-jul18.db` — 851 frames, the whole race including the
-retirement and the kicked GPS. Use the full-race one for anything about sensor health; the
-17:03–20:40 one is the full-resolution view.
+`--spool backups/replay-jul18/spool-jul18.db` — 851 frames + 851 aligned truth stamps, the whole
+race including the retirement and the kicked GPS. Use the full-race one for anything about sensor
+health; the 17:03–20:40 one is the full-resolution view. **Pass `--spool` to `truth.py` as well**
+or the ground-truth pane blanks where the archive stops. Truth now carries roll/pitch/rate-of-turn
+and the house bank, so the kick can be read per source: at 22:59:01Z the 24xd reads 133.1° while
+the Reactor still reads 35.3°.
+
+```bash
+python3 tools/replay/server.py --timeline /home/constantineau/backups/replay-jul18/timeline-fullrace
+# http://localhost:8110/  — scrub to ~22:58Z for the kick; frame 711 is 22:59:01Z
+```
 `timeline-preprio/` is the pre-2026-09-07 baseline kept for before/after diffs — note it carries
 the wall-clock bug, so do not compare *ages* across that boundary. Rebuilds need an ephemeral
 venv (`freezegun`, `fastapi`, `httpx`, `websockets`, `pytest`), take ~28 min for 433 frames, and
