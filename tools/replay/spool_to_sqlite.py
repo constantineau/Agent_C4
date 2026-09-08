@@ -31,13 +31,21 @@ Usage (the rig's ephemeral venv, plus `psycopg[binary]`):
 
     python tools/replay/spool_to_sqlite.py \
         --dsn "postgresql://sr33:sr33-dev@localhost:5433/sr33_dev" \
-        --since 2026-07-18T20:40:30Z --until 2026-07-19T00:09:36Z \
-        --out /home/constantineau/backups/replay-jul18/spool-jul18.db
+        --since 2026-07-18T20:40:30Z --until 2026-07-19T02:10:00Z \
+        --out /home/constantineau/backups/replay-jul18/spool-jul18-to0210.db
 
 Then build a timeline across the whole race:
 
-    python tools/replay/harness.py --spool /home/constantineau/backups/replay-jul18/spool-jul18.db \
-        --start 2026-07-18T17:03:31Z --end 2026-07-19T00:09:00Z --step 30 --out <dir>
+    python tools/replay/harness.py \
+        --spool /home/constantineau/backups/replay-jul18/spool-jul18-to0210.db \
+        --start 2026-07-18T17:03:31Z --end 2026-07-19T02:09:00Z --step 30 --out <dir>
+
+⚠️ **CHOOSE `--until` BY THE FAULT, NOT BY THE FINISH.** The first version of this file stopped
+at `00:09:36Z` — the end of racing, and a defensible line. The compass misalignment it exists to
+replay begins at **23:56:10Z**, so that window held thirteen minutes of a seven-hour fault, all
+of it inside the transition where a sliding-window check correctly reports `unknown`. The result
+was a P0 raised against working code (see `docs/V2_BACKLOG.md`). Postgres holds `telemetry_raw`
+well past the finish; when a window is cut, cut it where the evidence ends.
 """
 import argparse
 import os
