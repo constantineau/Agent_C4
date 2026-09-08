@@ -5,11 +5,19 @@ Deletion from the boat is allowed only *after* an off-boat copy is sha256-verifi
 
 ## ⏸ PICK UP HERE (2026-09-08 — read this block, then "Session 2026-09-08" below)
 
-**Everything in this session is committed on `dev`, merged to `main`, and pushed** (6 commits:
-the replay clock fix, the power hysteresis fix, the dashboard surface, docs, the hermetic-rig
-fix, and this correction). Working tree
-clean. All suites green: **24 files + 10 pytest cases** (`test_power` gained 8 assertions,
-`test_sensor_health` 21). Nothing is mid-flight; no background units are running.
+**Everything in this session is committed on `dev`, merged to `main` and pushed** (11 commits:
+6 from the first pause, then the heading cross-check fix, the dashboard fixtures, the replay
+window, two docs, and the AIS-ranking removal). Working tree clean. All suites green: **24 files + 10 pytest cases**
+(`test_sensor_health` gained 24 more assertions, and for the first time they drive `assess()`
+through a fake source rather than handing `heading_bias()` pre-paired samples — see below for
+why that mattered). `test_racelog.py` fails on this box and always has: `pi/archiver/archiver.py`
+imports `websockets`, which is not in the system python.
+
+**One background unit may still be running: `c4-fullrace2`**, rebuilding
+`backups/replay-jul18/timeline-fullrace2/` (1,091 frames, 17:03:31Z → 02:09:00Z) against the
+extended spool. `systemctl is-active c4-fullrace2`; log at
+`backups/replay-jul18/build-fullrace2.log`. When it lands, run `truth.py` over the same window
+with the same `--spool` and swap it in for `timeline-fullrace/`.
 
 **`main` is deployable and the boat's clone is several merges behind it.** When the boat is back:
 rebuild the console + engine images (`docker compose -f compose.pi.yml up -d --build console
@@ -58,19 +66,33 @@ the source of every timeline built so far. Deleting it breaks Race Rewind. (Disk
 free / 89%.)
 
 **Do these next, in this order:**
-0. 🔴 **NEW, and it outranks everything below: the heading cross-check is silent on the data the
-   boat actually sent, and it compares the 24xd against itself.** Found within minutes of the
-   first full-race replay (item 2 below is now DONE, which is how). The attitude gate works —
-   `danger` on the first bad sample at 22:58Z, quiet again when the crew re-seated it at 23:22Z.
-   The cross-check written for the *quiet* quarter-turn error that followed reports `unknown` in
-   **35 of 36 frames**, median spread 68.7° against a 25° gate, because `assess()` builds its
-   reference series with `src.series()` — which mixes the 24xd's and the Orca's COG sample to
-   sample, and they disagree by a mean of 12.5° (max 73.1°). That manufactured spread is what
-   trips the gate. And `source_priority` ranks COG `24xd` first, the *same device* that is the
-   only `headingTrue` publisher, so the "independent measurement" is the kicked sensor itself.
-   Fix: single-source reference via `series_by_source`, choosing a publisher that is not the
-   channel's own; then re-measure before deciding whether the spread gate needs to be rate-aware.
-   Full numbers in `docs/V2_BACKLOG.md`.
+0. ~~🔴 **the heading cross-check is silent on the data the boat actually sent**~~ ✅ **DONE, and
+   the headline was WRONG — the check was working.** Read `docs/V2_BACKLOG.md` → the P0 block for
+   the full measurement; the short version is that this morning's P0 was raised from 36 frames of
+   a 7-hour recording, and the recording disagreed. The compass was *fine* for half an hour after
+   the crew re-seated it (+3 to +24° at 23:50Z) and stepped out at **23:56:10Z** — heading 43.6 →
+   125.8 → 285.7° in 70 s while COG held ~25-33°. From there the bias is a rock-steady −90 to
+   −105°, and the check reports **`danger` on 110 of 110 minutes** at a median −90.2° with 5.7° of
+   spread against a 25° gate. The 35-of-36 `unknown` window was 23:25 → 00:09Z: a 20-minute
+   sliding window straddling two step changes and containing nothing else, which is the only
+   thing a sliding window can do there. **The rig only ever saw that stretch because the timeline
+   stopped at 00:09:35Z, thirteen minutes after the fault began.** Same shape as `power._tripped`
+   flapping the bank tile, one level up: a sliding-window statistic tells you about the window —
+   and a replay window is one of those windows. Fixed anyway, because two of the three findings
+   were real: the reference is now a single named publisher on a different device from the
+   compass (`choose_source()`, and the verdict says "vs Orca Core"), AIS-bearing sources are
+   refused outright, `HEADING_WINDOW_MIN` is **10 not 20** (measured: the window IS the detection
+   latency, and 20 bought no false-alarm protection that 10 does not), and `_circular()` no
+   longer raises `ValueError` on perfectly-agreeing samples — which took `/health/sensors` down
+   entirely, on the cleanest input there is. The rate-aware spread gate is **explicitly dropped**.
+0b. ~~**`source_priority` ranks the AIS transceiver as an own-ship fallback**~~ ✅ **DONE
+   2026-09-08, Cole's call.** `b951` was rank 4 for `sog`, `cog`, `lat` and `lon`. Nothing was
+   broken — the read paths filter AIS out first — but it is the one ranking whose only protection
+   lives in another module, and "use the AIS box for lat/lon" is the bug that cost a race written
+   down as an intention. Removed from `shared/source_policy.py`, `vps/db/seed/source_priority.sql`
+   **and the running `sr33_dev` table** (`DELETE 4`), so the cloud read path matches the boat's.
+   The 24xd, Orca and 943 keep three real GPS sources. Two assertions in `test_source_priority.py`
+   aimed at whoever re-adds it "for redundancy" later.
 1. **The two things only a person at the boat can settle**, now with a sharper reason than
    yesterday: **confirm the bank** (chemistry, capacity, charging budget) — the race data cannot
    resolve `danger` vs `warn` on its own, see #2 above — and **enable the Orca Core's N2K
@@ -79,9 +101,12 @@ free / 89%.)
    standing note rather than an alarm, and it will keep doing so until someone flips that
    setting.
 2. ~~**Materialise the 33,014 spool rows into a `readings`-schema SQLite file**~~ ✅ **DONE
-   2026-09-08.** `tools/replay/spool_to_sqlite.py` + `harness.py --spool`; 33,282 rows for
-   `20:40:30 -> 00:09:35Z` in `backups/replay-jul18/spool-jul18.db`, verified continuous across
-   the seam. It paid for itself immediately — see item 0.
+   2026-09-08**, and then **re-cut later the same day**: 50,288 rows for `20:40:30Z -> 02:09:50Z`
+   in `backups/replay-jul18/spool-jul18-to0210.db`, verified continuous across the seam. The
+   first cut stopped at `00:09:36Z` — the end of racing, and defensible — and that is exactly
+   what produced a P0 against working code. **Cut a replay window where the evidence ends, not
+   where the race does.** (Racing *tactics* past 00:09Z stay out of scope per Cole; this is
+   coverage for the health checks, and it is 3.4 MB.)
 3. **Derive `headingTrue` from `headingMagnetic` + `magneticVariation`.** Unchanged from
    yesterday: heading had *no* redundancy on Jul 18.
 4. **Record device identity on the boat** (archiver/uplink read `/signalk/v1/api/sources`), so
@@ -89,19 +114,26 @@ free / 89%.)
 5. Then the v2 backlog. Parked on the boat: recreate the archiver container for its stale
    `VPS_URL`, and #6c the recurring drain.
 
-**Replay rig state.** `backups/replay-jul18/timeline/` is rebuilt against the current engine
-**with the clock fix** (433 frames, 0 endpoint errors, truth aligned) and now also captures
-`/power`, `/health/sensors` and `/conditions/full`. **`timeline-fullrace/` runs to 00:09Z** using
-`--spool backups/replay-jul18/spool-jul18.db` — 851 frames + 851 aligned truth stamps, the whole
-race including the retirement and the kicked GPS. Use the full-race one for anything about sensor
-health; the 17:03–20:40 one is the full-resolution view. **Pass `--spool` to `truth.py` as well**
-or the ground-truth pane blanks where the archive stops. Truth now carries roll/pitch/rate-of-turn
-and the house bank, so the kick can be read per source: at 22:59:01Z the 24xd reads 133.1° while
-the Reactor still reads 35.3°.
+**Replay rig state.** Four timelines, and it matters which one you open.
+
+| dir | window | frames | what it is for |
+|---|---|---|---|
+| `timeline-heading/` | 23:00Z → 02:09Z | 378 + truth | **the compass fault, end to end.** Built after the fix, on the extended spool |
+| `timeline-fullrace2/` | 17:03Z → 02:09Z | 1,091 | the new standing artifact — **rebuilding as of this pause**, see the top block |
+| `timeline-fullrace/` | 17:03Z → 00:09Z | 851 + truth | the previous standing one. Stops 13 min after the compass fault begins, which is how a P0 got raised against working code |
+| `timeline/` | 17:03Z → 20:40Z | 433 + truth | the full-resolution (5–28 Hz) view of the racing half |
+
+All are rebuilt with the clock fix and capture `/power`, `/health/sensors` and
+`/conditions/full`. **Pass `--spool` to `truth.py` as well** or the ground-truth pane blanks where
+the archive stops. Truth carries roll/pitch/rate-of-turn and the house bank, so the kick reads per
+source: at 22:59:01Z the 24xd reads 133.1° while the Reactor still reads 35.3°.
 
 ```bash
+python3 tools/replay/server.py --timeline /home/constantineau/backups/replay-jul18/timeline-heading
+# http://localhost:8110/  — 23:56:10Z is where the compass steps out; scrub past 00:20Z and the
+# heading row reads "-90° off GPS course (vs Orca Core)" for the rest of the recording
 python3 tools/replay/server.py --timeline /home/constantineau/backups/replay-jul18/timeline-fullrace
-# http://localhost:8110/  — scrub to ~22:58Z for the kick; frame 711 is 22:59:01Z
+# scrub to ~22:58Z for the kick itself; frame 711 is 22:59:01Z
 ```
 `timeline-preprio/` is the pre-2026-09-07 baseline kept for before/after diffs — note it carries
 the wall-clock bug, so do not compare *ages* across that boundary. Rebuilds need an ephemeral
@@ -171,6 +203,45 @@ done)~~ and `timeline-prio-partial/`.
 🛑 **WRONG — do not delete `archive-backfill.db`** (corrected 2026-09-08). It is `harness.py`'s
 default `--archive` and the source of every replay timeline built so far; deleting it breaks
 Race Rewind. `timeline-prio-partial/` was already gone.
+
+---
+
+## Session 2026-09-08 (second pause) — the P0 that was raised against working code
+
+Picked up the one open decision from the block above — "want me to fix the heading cross-check?"
+— and the first thing the fix needed was a measurement, which said the check did not need
+fixing for the reason given. Kept going anyway, because two of the three findings were real.
+
+**What the whole recording says** (`telemetry_raw`, 23:20Z Jul 18 → 02:09Z Jul 19, 291
+samples/path — Postgres holds this; the spool did not):
+
+| | |
+|---|---|
+| bias 30 min after the crew re-seated the sensor (23:50Z) | **+3 to +24°** — the compass was fine |
+| the step | **23:56:10Z**, heading 43.6 → 125.8 → 285.7° in 70 s while COG held ~25-33° |
+| 00:20 → 02:09Z, 20-min window, `danger` frames | **110 of 110**, median bias −90.2°, median spread 5.7° against a 25° gate |
+| the same, with the *mixed* reference the code had this morning | **110 of 110** — the mixing never changed a verdict |
+
+So the 35-of-36 `unknown` window (23:25 → 00:09Z) was the transition: a 20-minute sliding window
+straddling two step changes, which is the only thing it can report there, and it clears itself.
+**The rig only saw that stretch because the timeline ended at 00:09:35Z**, thirteen minutes after
+the fault began — the end of *racing*, which was a defensible line for tactics and the wrong one
+for a sensor fault. Cut a replay window where the evidence ends.
+
+**Fixed regardless (4 commits on `dev`, not pushed):** `choose_source()` picks one named
+publisher on a different physical device from the compass and the verdict says which ("vs Orca
+Core"); AIS-bearing sources are refused outright; `HEADING_WINDOW_MIN` 20 → **10** (the window is
+the detection latency — 5→5, 10→10, 20→19, 30→29 min from the onset — and *zero* false alarms at
+any of them over the healthy race at 1 Hz, so the 20 was buying nothing); and `_circular()` no
+longer raises `ValueError` when every sample agrees, which took `/health/sensors` down completely
+on the cleanest input there is. The rate-aware spread gate is **explicitly dropped** — 5.7°
+against a 25° gate is four times the headroom needed.
+
+**The habit that found all of it, and the one that hid it.** Every existing case handed
+`heading_bias()` a fixture of pre-paired samples, so the module looked correct while the read
+path underneath chose no reference at all. The moment a test let `assess()` build its own series
+it produced the `ValueError` on the first try. **Test the read path, not only the check** — and
+score a *whole* recording before believing a window of it.
 
 ---
 

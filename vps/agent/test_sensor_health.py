@@ -364,5 +364,151 @@ check("an unmapped source degrades to its raw label rather than raising",
                                          depth=("m", [("bench-provider", 12.4, 1.0)]))))
         ["channels"]["depth"]["source"] == "bench-provider")
 
+
+# ===========================================================================
+# THE REFERENCE — what is this cross-check actually comparing against?
+# ===========================================================================
+# Added 2026-09-08. Nothing asserted `assess()`'s READ PATH before this: every test above hands
+# `heading_bias` a fixture of pre-paired samples, so the module looked correct while the thing
+# that fed it read COG through `src.series()` — one value per second, whichever source wrote
+# last — and `source_priority` handed it the compass's own box as rank 1. Both facts were
+# invisible to a test that never let the module choose its own reference.
+from shared import n2k_sources as ns   # noqa: E402
+
+DEVICES = ns.devices_for("sr33")
+
+
+def rows(*specs):
+    """(source, n) pairs -> a `series_by_source` result, one sample a second."""
+    out = []
+    for src, n in specs:
+        out += [(src, T0 + i, 0.5) for i in range(n)]
+    return out
+
+
+print("\nthe reference — which device is the cross-check comparing against?")
+src, indep = sh.choose_source(rows((G24XD, 60), (ORCA, 60)), "cog", DEVICES,
+                              exclude={sh._device_key(G24XD, DEVICES)})
+check("COG comes off the Orca, NOT the 24xd that publishes the heading — even though "
+      "source_priority ranks the 24xd first", (src, indep) == (ORCA, True))
+check("...and the policy really does rank it first, so this is a live trap, not a hypothetical",
+      sp.matchers_for("cog")[0] == "24xd" and ns.matches(G24XD, "24xd", DEVICES))
+src, indep = sh.choose_source(rows((G24XD, 60)), "cog", DEVICES,
+                              exclude={sh._device_key(G24XD, DEVICES)})
+check("with no independent publisher it degrades rather than going blind, and says so",
+      (src, indep) == (G24XD, False))
+src, _ = sh.choose_source(rows((AIS, 200), (ORCA, 60)), "cog", DEVICES,
+                          exclude={sh._device_key(G24XD, DEVICES)})
+check("the AIS transceiver is refused outright — source_priority lists b951 as a COG fallback, "
+      "and another vessel's course is not own-ship", src == ORCA)
+check("...and it is refused even when it is the ONLY publisher",
+      sh.choose_source(rows((AIS, 200)), "cog", DEVICES)[0] is None)
+check("no publishers at all is None, not a crash", sh.choose_source([], "cog", DEVICES)[0] is None)
+# `sqrt(-2 ln R)` with every sample identical: R overshoots 1 by an ulp, ln goes positive, sqrt
+# raises. A becalmed boat and every bench fixture produce exactly that, and it took `assess()`
+# down with a ValueError rather than returning a verdict.
+check("perfect agreement is 0° of spread, not a ValueError",
+      sh.heading_bias([(T0 + i, 40.0, 130.0, 6.0) for i in range(20)])["spread_deg"] == 0.0)
+check("the pick is deterministic — the same window cannot yield two verdicts",
+      sh.choose_source(rows((ORCA, 60), (G24XD, 60)), "cog", DEVICES)[0]
+      == sh.choose_source(rows((G24XD, 60), (ORCA, 60)), "cog", DEVICES)[0])
+check("an unmapped label is its own device, so a bench is never told two sources are one",
+      sh._device_key("bench-provider", DEVICES) != sh._device_key(ORCA, DEVICES))
+check("...and two addresses sharing a modelSerialCode are still two devices "
+      "(.5 and .11 both report 3432723336)",
+      sh._device_key("n2k-socketcan.5", DEVICES) != sh._device_key("n2k-socketcan.11", DEVICES))
+
+
+class FakeSource:
+    """The read path `assess()` actually uses, with two COG publishers that disagree — which is
+    the Jul 18 bus. `series_by_source` only; a source that cannot name its publishers has no
+    business feeding a cross-check."""
+
+    def __init__(self, bias_deg=-90.0, cog_split=25.0, n=120):
+        self.bias, self.split, self.n = bias_deg, cog_split, n
+
+    def latest_value(self, path):
+        return {"navigation.attitude.roll": 0.20, "navigation.attitude.pitch": 0.04}.get(path)
+
+    def series_by_source(self, path, minutes):
+        rad = 0.017453292519943295
+        out = []
+        for i in range(self.n):
+            t, cog = T0 + i * 5, 30.0 + (i % 7)          # a boat holding a course
+            if path == "navigation.headingTrue":
+                out.append((G24XD, t, ((cog + self.bias) % 360) * rad))
+            elif path == "navigation.courseOverGroundTrue":
+                out.append((ORCA, t, cog * rad))
+                out.append((G24XD, t, ((cog + self.split) % 360) * rad))
+            elif path == "navigation.speedOverGround":
+                out += [(ORCA, t, 3.1), (G24XD, t, 3.1)]
+        return out
+
+    def ais_sources(self):
+        return {AIS}
+
+
+h = sh.assess(source=FakeSource(), conditions={"channels": {}})
+check(f"end to end, the quarter turn is caught (bias {h['heading'].get('bias_deg')}°, "
+      f"spread {h['heading'].get('spread_deg')}°)", h["heading"]["status"] == "danger")
+check("...against the Orca, and the verdict says which device",
+      h["heading"]["reference"]["course"] == "Orca Core"
+      and "Orca Core" in h["heading"]["reason"])
+check("...and claims independence only because it really got it",
+      h["heading"]["reference"]["independent"] is True and not h["heading"]["note"])
+# The regression that mattered: the SAME data read through `series()` mixes two publishers 25°
+# apart into one series, and that manufactured spread is what a spread gate sees.
+mixed = [(t, hh, cc, ss) for (t, hh, cc, ss) in
+         [(T0 + i * 5, (30.0 + (i % 7) - 90.0) % 360,
+           (30.0 + (i % 7) + (25.0 if i % 2 else 0.0)) % 360, 6.0) for i in range(120)]]
+check("a two-publisher reference inflates the spread the gate judges by "
+      f"({sh.heading_bias(mixed)['spread_deg']}° vs {h['heading']['spread_deg']}°)",
+      sh.heading_bias(mixed)["spread_deg"] > 2 * h["heading"]["spread_deg"])
+
+print("the reference — a bus with only one GPS:")
+
+
+class SoloGPS(FakeSource):
+    def series_by_source(self, path, minutes):
+        return [r for r in FakeSource.series_by_source(self, path, minutes) if r[0] != ORCA]
+
+
+h1 = sh.assess(source=SoloGPS(), conditions={"channels": {}})
+check("the check still runs — a magnetometer and a position track are different physics",
+      h1["heading"]["status"] == "danger")
+check("...but it does not pretend to redundancy it does not have",
+      h1["heading"]["reference"]["independent"] is False
+      and "no COG publisher independent of" in (h1["heading"]["note"] or ""))
+check("...and that rides as a NOTE, not a flag — it is true on every poll of every race",
+      any("independent of" in n for n in h1["notes"])
+      and not any("independent of" in f for f in h1["flags"]))
+
+# --- the window is the detection latency, and that is what looked like a bug ----------------
+# The first full-race replay read 35-of-36 `unknown` frames as "the check is silent on the data
+# the boat sent". It was not: every one of those windows straddled the step at 23:56:10Z when
+# the bias appeared. A sliding window cannot do anything else, and it clears itself.
+print("the window straddling the fault — the false P0:")
+STEP = 60          # samples before the bias appears
+
+
+def straddle(after):
+    """`after` samples of a −90° bias appended to STEP good ones, as the window slides over."""
+    good = [(T0 + i * 5, 30.0 + (i % 7), 30.0 + (i % 7), 6.0) for i in range(STEP - after)]
+    bad = [(T0 + (STEP - after + i) * 5, (30.0 + (i % 7) - 90.0) % 360, 30.0 + (i % 7), 6.0)
+           for i in range(after)]
+    return good + bad
+
+
+check("a window that is half healthy and half misaligned reports unknown, not a false bias",
+      sh.heading_bias(straddle(30))["status"] == "unknown")
+check("...and says the bias may simply be new, rather than blaming the crew's steering",
+      "only just appeared" in sh.heading_bias(straddle(30))["reason"])
+check("one window later it is a clean danger — the quiet is self-clearing",
+      sh.heading_bias(straddle(STEP))["status"] == "danger")
+check("the window before the fault is a clean ok, so this is a transition and not a blind spot",
+      sh.heading_bias(straddle(0))["status"] == "ok")
+check("the default window is the detection latency, and 10 min is the measured choice",
+      sh.HEADING_WINDOW_MIN == 10)
+
 print("\n" + ("PASS" if ok else "FAIL"))
 raise SystemExit(0 if ok else 1)

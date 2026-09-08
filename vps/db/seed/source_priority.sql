@@ -58,14 +58,18 @@ INSERT INTO source_priority (boat_id, channel, rank, match, note) VALUES
  ('sr33','twa',2,'derived',NULL),
  ('sr33','twd',1,'orca',NULL),
  ('sr33','twd',2,'derived',NULL),
- -- Position/COG/SOG: dedicated 24xd GPS preferred; Orca, chartplotter, AIS GPS as backups.
- -- `b951` is the em-trak AIS transceiver's own-ship GPS. It ranks LAST here and its foreign
- -- AIS traffic is filtered upstream (see the archiver context filter) — those are different
- -- concerns: this rank is about own-ship fixes from the AIS box, not about other vessels.
- ('sr33','sog',1,'24xd',NULL),('sr33','sog',2,'orca',NULL),('sr33','sog',3,'943',NULL),('sr33','sog',4,'b951',NULL),
- ('sr33','cog',1,'24xd',NULL),('sr33','cog',2,'orca',NULL),('sr33','cog',3,'943',NULL),('sr33','cog',4,'b951',NULL),
- ('sr33','lat',1,'24xd',NULL),('sr33','lat',2,'orca',NULL),('sr33','lat',3,'943',NULL),('sr33','lat',4,'b951',NULL),
- ('sr33','lon',1,'24xd',NULL),('sr33','lon',2,'orca',NULL),('sr33','lon',3,'943',NULL),('sr33','lon',4,'b951',NULL),
+ -- Position/COG/SOG: dedicated 24xd GPS preferred; Orca and the chartplotter as backups.
+ -- `b951`, the em-trak AIS transceiver's own-ship GPS, was rank 4 on all four of these until
+ -- 2026-09-08. The argument was sound in isolation — its own-ship fix is a real fix and its
+ -- foreign traffic is filtered upstream — and it is removed anyway, because it is the one
+ -- ranking whose only protection is a filter somewhere else. Reading another vessel's position
+ -- as own-ship already cost a race (see the archiver context filter and its regression test);
+ -- ranking the AIS box for lat/lon is that bug written down as an intention, waiting for the
+ -- filter to regress. Keep in lockstep with shared/source_policy.DEFAULT_PRIORITY.
+ ('sr33','sog',1,'24xd',NULL),('sr33','sog',2,'orca',NULL),('sr33','sog',3,'943',NULL),
+ ('sr33','cog',1,'24xd',NULL),('sr33','cog',2,'orca',NULL),('sr33','cog',3,'943',NULL),
+ ('sr33','lat',1,'24xd',NULL),('sr33','lat',2,'orca',NULL),('sr33','lat',3,'943',NULL),
+ ('sr33','lon',1,'24xd',NULL),('sr33','lon',2,'orca',NULL),('sr33','lon',3,'943',NULL),
  -- Single-source quantities (ranked so future redundancy slots in cleanly).
  -- `gdt` (Garmin GDT 43) was rank 1 for depth and water_temp, but there is no GDT on this bus:
  -- depth comes from a Garmin Intelliducer Thru-hull (n2k-socketcan.2, the only depth publisher

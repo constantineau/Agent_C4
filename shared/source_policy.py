@@ -33,10 +33,18 @@ DEFAULT_PRIORITY = {
     "tws": ["orca", "derived"],
     "twa": ["orca", "derived"],
     "twd": ["orca", "derived"],
-    "sog": ["24xd", "orca", "943", "b951"],
-    "cog": ["24xd", "orca", "943", "b951"],
-    "lat": ["24xd", "orca", "943", "b951"],
-    "lon": ["24xd", "orca", "943", "b951"],
+    # `b951` — the em-trak AIS transceiver's own-ship GPS — was rank 4 on all four of these until
+    # 2026-09-08. The argument for it was sound in isolation (its own-ship fix is a real fix, and
+    # its foreign traffic is filtered upstream) and it is removed anyway, because it is the one
+    # ranking whose *only* protection is a filter elsewhere in the stack. Reading another
+    # vessel's position as own-ship already cost this project a race; a policy that says "use the
+    # AIS box for lat/lon" is that bug written down as an intention, waiting for the filter to
+    # regress. `sensor_health.choose_source()` refuses AIS-bearing sources outright for the same
+    # reason. The 943 chartplotter is the third GPS and stays.
+    "sog": ["24xd", "orca", "943"],
+    "cog": ["24xd", "orca", "943"],
+    "lat": ["24xd", "orca", "943"],
+    "lon": ["24xd", "orca", "943"],
     "stw": ["gst"],
     "depth": ["intelliducer"],
     "water_temp": ["intelliducer", "gst"],

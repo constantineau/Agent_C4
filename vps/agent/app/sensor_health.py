@@ -34,6 +34,24 @@ is wrong. On Jul 18 the 24xd was the only own-ship `headingTrue` publisher on th
 was nothing to fail over to — the autopilot publishes `headingMagnetic` only. Deriving true
 heading from magnetic + `navigation.magneticVariation` is the redundancy this boat is missing,
 and it is a separate piece of work.
+
+Both the *reference* and the *window* were wrong until 2026-09-08, and only one of them the way
+the first replay read it:
+
+  - **The reference was not chosen at all.** `assess()` read COG through `src.series()`, which
+    decimates to one value per second and keeps whichever source wrote last inside that second.
+    COG has two publishers here, 13.9° apart on average, so the "reference" alternated between
+    them sample to sample. Worse, `source_priority` ranks COG 24xd-first — the compass's own
+    box — so the policy's answer to "compare against an independent measurement" was the sensor
+    under test. `choose_source()` now names one publisher, prefers one that is not the compass's
+    device, and the verdict says which. Measured effect on Jul 18: spread 7.5° → 5.7° in the
+    steady window. Small, and it was never what made the check go quiet.
+  - **The window WAS what made it go quiet, and the quiet was correct.** A 20-minute sliding
+    window straddling the step at 23:56:10Z, when the bias appeared, reports `unknown` until the
+    bad samples outnumber the good — the same window-arithmetic discontinuity that flapped the
+    bank tile. Once past it the check fires `danger` on **110 of 110** minutes at −90.2°. It was
+    never silent on the fault; it was silent for one window length either side of it, and the
+    first replay only ever saw that stretch because the timeline stopped at 00:09Z.
 """
 import math
 import os
@@ -52,7 +70,14 @@ ROLL_LIMIT_DEG = float(os.environ.get("HEALTH_ROLL_LIMIT_DEG", "75"))
 PITCH_LIMIT_DEG = float(os.environ.get("HEALTH_PITCH_LIMIT_DEG", "35"))
 
 # --- heading-vs-COG cross-check ---------------------------------------------
-HEADING_WINDOW_MIN = float(os.environ.get("HEALTH_HEADING_WINDOW_MIN", "20"))
+# 10, not 20. The window is also the *detection latency*: a sliding window straddling the moment
+# the bias appears reports `unknown` until the bad samples outnumber the good ones, so the check
+# tells the crew roughly one window-length after the fault. Measured against Jul 18 (the bias
+# settles at 23:56:10Z): 5 min → fires in 5, 10 → 10, 20 → 19, 30 → 29. And measured against the
+# healthy race 17:35–20:40Z at 1 Hz, every one of those windows raised **zero** false alarms, so
+# the 20 was costing ten minutes and buying nothing. 10 keeps a decimated cloud window (~35 s a
+# sample) comfortably above HEADING_MIN_SAMPLES; 5 would sit exactly on it.
+HEADING_WINDOW_MIN = float(os.environ.get("HEALTH_HEADING_WINDOW_MIN", "10"))
 # COG is meaningless at rest and noisy at crawl, so only sail speeds count.
 HEADING_MIN_SOG_KN = float(os.environ.get("HEALTH_HEADING_MIN_SOG_KN", "3.0"))
 # Leeway plus current plus a genuine tidal set can legitimately reach double digits; a healthy
@@ -89,9 +114,70 @@ def _circular(deltas_deg):
     x = sum(math.cos(math.radians(d)) for d in deltas_deg)
     y = sum(math.sin(math.radians(d)) for d in deltas_deg)
     mean = math.degrees(math.atan2(y, x))
-    r = math.hypot(x, y) / len(deltas_deg)
-    spread = math.degrees(math.sqrt(-2.0 * math.log(r))) if r > 0 else None
+    # Clamp: R is a mean resultant length and cannot exceed 1, but summing N unit vectors that
+    # all point the same way overshoots by an ulp or two, and `log(1+ε)` is positive, and
+    # `sqrt` of that raises. Perfect agreement — every sample the same delta — is exactly what a
+    # bench fixture and a becalmed boat produce, so this crashed `/health/sensors` outright on
+    # the cleanest input there is. Found 2026-09-08 the first time a test let `assess()` build
+    # its own series; -0.0 degrees had been printing for a day on the near-miss.
+    r = min(1.0, math.hypot(x, y) / len(deltas_deg))
+    spread = math.degrees(math.sqrt(max(0.0, -2.0 * math.log(r)))) if r > 0 else None
     return mean, spread
+
+
+def _device_key(source, devices):
+    """What two `$source` labels share when they are the same physical box.
+
+    Not the serial on its own: `n2k-socketcan.5` (Garmin's Virtual N2K Input Handler) and
+    `n2k-socketcan.11` (the GPSMAP 943) both report modelSerialCode `3432723336` on this bus.
+    An unmapped label is its own device, which is the safe reading — it keeps a bench or an
+    unknown boat from silently deciding two sources are one."""
+    d = (devices or {}).get(source) or {}
+    if not d:
+        return ("label", (source or "").lower())
+    return ("device", d.get("manufacturer"), d.get("model"), d.get("serial"))
+
+
+def _publishers(rows):
+    """{source: sample count} from a `series_by_source` result."""
+    counts = {}
+    for src, _t, _v in rows:
+        counts[src] = counts.get(src, 0) + 1
+    return counts
+
+
+def choose_source(rows, channel, devices, exclude=(), ais=()):
+    """Pick ONE publisher to be a whole reference series. Returns `(source, independent)`.
+
+    Why this exists, measured on Jul 18: `src.series()` decimates to one value per second and
+    keeps whichever source wrote last *within that second*, so a channel with two publishers
+    returns a series that alternates between two devices sample to sample. On this boat
+    `navigation.courseOverGroundTrue` has two — the 24xd and the Orca — and they differ by a
+    mean of 13.9°. That is a reference series nobody chose, and it lands in the `spread_deg`
+    statistic the check uses to decide whether its own samples agree.
+
+    And the ranking has to be told to skip the sensor under test. `source_priority` ranks COG
+    `['24xd', 'orca', '943', 'b951']`; the 24xd is also the only `navigation.headingTrue`
+    publisher, so following the policy blindly cross-checks the compass against its own box.
+    `exclude` carries the device keys of the channel under test.
+
+    Order: policy rank first (unranked last), then sample count, then label — deterministic, so
+    the same window always yields the same verdict. AIS-bearing sources are refused outright
+    rather than ranked last: `source_priority` really does list `b951`, the AIS transceiver, as a
+    COG/SOG/position fallback, and reading another vessel's course as own-ship is the bug that
+    cost this project a race."""
+    ais, excluded = set(ais or ()), set(exclude or ())
+    independent, self_ref = [], []
+    for src, n in _publishers(rows).items():
+        if src in ais or "ais" in n2k_sources.identity(src, devices):
+            continue
+        rank = source_policy.rank_for(channel, src, devices)
+        entry = (99 if rank is None else rank, -n, src)
+        (self_ref if _device_key(src, devices) in excluded else independent).append(entry)
+    for pool, is_independent in ((sorted(independent), True), (sorted(self_ref), False)):
+        if pool:
+            return pool[0][2], is_independent
+    return None, False
 
 
 def attitude_plausible(roll_deg=None, pitch_deg=None):
@@ -110,17 +196,31 @@ def attitude_plausible(roll_deg=None, pitch_deg=None):
             "limits": {"roll_deg": ROLL_LIMIT_DEG, "pitch_deg": PITCH_LIMIT_DEG}}
 
 
-def heading_bias(samples):
+def heading_bias(samples, reference=None):
     """Compass-vs-COG bias from [(epoch_s, heading_deg_true, cog_deg_true, sog_kn)].
 
     Returns status ok/warn/danger plus the measured bias, so the iPad can say "heading reads
     89° off GPS course" rather than showing a plausible, wrong number. Never picks a winner:
     the bias is evidence about the pair, and on this boat there is no second compass to fail
-    over to anyway."""
+    over to anyway.
+
+    `reference` is what `assess()` chose to compare against — `{"heading", "course",
+    "independent"}` — and it is reported rather than assumed. A cross-check that cannot say
+    which two devices it compared is a cross-check nobody can audit, and this one spent a day
+    silently comparing the 24xd against itself."""
+    ref = dict(reference or {})
+    note = None
+    if reference and not ref.get("independent"):
+        # Still worth running — a magnetometer and a GPS position track are different physics
+        # even inside one enclosure, which is why the 24xd-vs-24xd comparison did catch Jul 18.
+        # But it cannot survive that box losing power, so say so instead of implying redundancy.
+        note = (f"compared against {ref.get('course') or 'the same device'} — no COG publisher "
+                f"independent of {ref.get('heading') or 'the compass'} on this bus")
     usable = [(h, c) for (_t, h, c, s) in samples
               if h is not None and c is not None and s is not None and s >= HEADING_MIN_SOG_KN]
     if len(usable) < HEADING_MIN_SAMPLES:
         return {"available": False, "status": "unknown", "samples": len(usable),
+                "reference": ref or None, "note": note,
                 "reason": f"need {HEADING_MIN_SAMPLES} samples over "
                           f"{HEADING_MIN_SOG_KN:g} kn (COG is meaningless at rest)"}
     mean, spread = _circular([_wrap180(h - c) for h, c in usable])
@@ -130,26 +230,31 @@ def heading_bias(samples):
     mean = round(mean, 1)
     out = {"available": True, "bias_deg": mean,
            "spread_deg": None if spread is None else round(spread, 1),
-           "samples": len(usable),
+           "samples": len(usable), "reference": ref or None, "note": note,
            "thresholds": {"warn_deg": HEADING_WARN_DEG, "bad_deg": HEADING_BAD_DEG,
                           "max_spread_deg": HEADING_MAX_SPREAD_DEG}}
+    against = f" (vs {ref['course']})" if ref.get("course") else ""
     if spread is not None and spread > HEADING_MAX_SPREAD_DEG:
-        # Manoeuvring, or a sensor mid-tumble: the samples do not agree on any bias, so this
-        # check has nothing to say. The range gate covers the tumble.
+        # The samples do not agree on any bias, so this check has nothing to say. Three ways to
+        # get here and they are all honest `unknown`s: a boat manoeuvring, a sensor mid-tumble
+        # (the range gate covers that one), and — the one that looked like a bug on Jul 18 — a
+        # window that straddles the moment a steady bias appears. The last is self-clearing
+        # after one window length; see HEADING_WINDOW_MIN.
         out.update(status="unknown",
-                   reason=f"samples disagree ({spread:.0f}° spread) — manoeuvring or unstable")
+                   reason=f"samples disagree ({spread:.0f}° spread){against} — manoeuvring, "
+                          f"unstable, or a bias that has only just appeared")
         return out
     a = abs(mean)
     if a >= HEADING_BAD_DEG:
         out.update(status="danger",
-                   reason=f"heading reads {mean:+.0f}° off GPS course, held steadily "
+                   reason=f"heading reads {mean:+.0f}° off GPS course{against}, held steadily "
                           f"({spread:.0f}° spread) — the compass is misaligned, not the boat")
     elif a >= HEADING_WARN_DEG:
         out.update(status="warn",
-                   reason=f"heading {mean:+.0f}° off GPS course — more than leeway and current "
-                          f"explain; check the compass mounting")
+                   reason=f"heading {mean:+.0f}° off GPS course{against} — more than leeway and "
+                          f"current explain; check the compass mounting")
     else:
-        out.update(status="ok", reason=f"heading within {mean:+.0f}° of GPS course")
+        out.update(status="ok", reason=f"heading within {mean:+.0f}° of GPS course{against}")
     return out
 
 
@@ -312,14 +417,43 @@ def assess(source=None, minutes=None, conditions=None):
     data the caller already has — the engine polls conditions anyway."""
     src = source or datasource.active()
     minutes = HEADING_WINDOW_MIN if minutes is None else minutes
+    ais = set()
+    try:                                     # onboard only; the cloud source has no such method
+        ais = set(src.ais_sources() or ())
+    except Exception:
+        pass
     try:
         roll = src.latest_value("navigation.attitude.roll")
         pitch = src.latest_value("navigation.attitude.pitch")
-        hdg = src.series("navigation.headingTrue", minutes)
-        cog = src.series("navigation.courseOverGroundTrue", minutes)
-        sog = src.series("navigation.speedOverGround", minutes)
+        # `series_by_source`, never `series` — see `choose_source`. One device per series or the
+        # spread statistic measures the gap between two devices instead of the fault.
+        hdg_rows = src.series_by_source("navigation.headingTrue", minutes)
+        cog_rows = src.series_by_source("navigation.courseOverGroundTrue", minutes)
+        sog_rows = src.series_by_source("navigation.speedOverGround", minutes)
     except Exception as exc:                 # health checks must never take the engine down
         return {"available": False, "status": "unknown", "note": f"unreadable: {exc}"}
+
+    devices = n2k_sources.devices_for(BOAT_ID)
+
+    def named(label):
+        d = n2k_sources.resolve(label, devices) or {}
+        return d.get("model") or label
+
+    def one(rows, label):
+        return [(t, v) for (s, t, v) in rows if s == label]
+
+    hdg_src, _ = choose_source(hdg_rows, "heading_true", devices, ais=ais)
+    own = {_device_key(hdg_src, devices)} if hdg_src else set()
+    cog_src, independent = choose_source(cog_rows, "cog", devices, exclude=own, ais=ais)
+    # SOG is only the gate that decides whether COG means anything, so keep it on the same device
+    # as the COG it qualifies; fall back to any publisher rather than losing the gate entirely.
+    sog_src, _ = choose_source([r for r in sog_rows if r[0] == cog_src] or sog_rows,
+                               "sog", devices, ais=ais)
+    hdg, cog, sog = one(hdg_rows, hdg_src), one(cog_rows, cog_src), one(sog_rows, sog_src)
+    ref = {"heading": named(hdg_src) if hdg_src else None,
+           "course": named(cog_src) if cog_src else None,
+           "heading_source": hdg_src, "course_source": cog_src,
+           "independent": bool(hdg_src and cog_src and independent)}
 
     deg = 57.29577951308232
     att = attitude_plausible(None if roll is None else roll * deg,
@@ -332,13 +466,8 @@ def assess(source=None, minutes=None, conditions=None):
     samples = [(t, h * deg, (lambda v: None if v is None else (v * deg) % 360)(nearest(cog, t)),
                 (lambda v: None if v is None else v * 1.943844)(nearest(sog, t)))
                for t, h in hdg]
-    hb = heading_bias(samples)
+    hb = heading_bias(samples, reference=ref)
 
-    ais = set()
-    try:                                     # onboard only; the cloud source has no such method
-        ais = set(src.ais_sources() or ())
-    except Exception:
-        pass
     prov = assess_provenance((conditions or {}).get("channels") or {}, ais_excluded=ais)
 
     statuses = (att["status"], hb.get("status"), prov["status"])
@@ -353,7 +482,10 @@ def assess(source=None, minutes=None, conditions=None):
     if hb.get("status") in ("warn", "danger"):
         flags.append(hb["reason"])
     flags.extend(prov["flags"])
+    # A standing fact about the bus, not an in-race alarm: it is true on every poll until someone
+    # adds a second course source, so it rides with the Orca-attitude note rather than the flags.
+    notes = ([hb["note"]] if hb.get("note") else []) + (prov.get("notes") or [])
     return {"available": True, "status": worst, "attitude": att, "heading": hb,
-            "provenance": prov, "flags": flags, "notes": prov.get("notes") or [],
+            "provenance": prov, "flags": flags, "notes": notes,
             "reason": "; ".join(flags) if flags else "instruments cross-check clean",
             "window_min": minutes}
