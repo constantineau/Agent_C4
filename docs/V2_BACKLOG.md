@@ -184,6 +184,25 @@ freezegun and is unaffected, so a frames-only rebuild over the same `--start/--e
 the two panes aligned. **A frozen clock the rig only mostly applies is worse than no clock at
 all** — if a future harness grows another thread boundary, assert an age, don't eyeball a tile.
 
+### ⚠ …and it could still phone the live internet — the rig is now hermetic (2026-09-08)
+
+The rebuild for that fix **stalled at frame 282** holding an ESTABLISHED TLS connection to
+Open-Meteo, 376 bytes queued, no response, no socket timeout anywhere in the stack. It would
+have sat there forever, and the frames already written looked like an ordinary partial build.
+
+`NEEDS_NETWORK` excludes `/forecast`, `/drift`, `/buoys`, `/plangap` and `/reoptimize` for
+exactly this reason — but **`/strategy` is replayable and chains into the same machinery when
+the verdict goes off-book**, which it did at that frame ("Off-book: Off-script: sail right"). An
+exclusion list that has to be kept in step with the call graph by hand was never going to hold.
+
+Two failures, not one: a ~30-minute build can hang indefinitely on a third party, **and** the
+frames it does write become a mix of replayed race and whatever the live internet said today —
+the fidelity problem the list exists to prevent, arriving through the back door. So the rig is
+hermetic by construction now: non-loopback `connect()` raises immediately and a 20 s default
+socket timeout bounds anything that slips through. Every engine module has a no-forecast
+fallback (that is the onboard design), so a blocked call degrades instead of breaking.
+`REPLAY_ALLOW_NET=true` opts out and prints that the frames are no longer reproducible.
+
 ### In-race UX (console, dashboard, coach)
 
 - **P0 — ✅ THE IPAD NOW SHOWS THE BANK, THE CROSS-CHECKS AND THE PROVENANCE (2026-09-08).**
