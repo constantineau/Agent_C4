@@ -294,6 +294,27 @@ arm and re-aggregate the two small results.
   exact 23:25 → 00:09Z stretch the P0 was raised from: **85 of 88 `unknown` before, 74 of 88
   after** — better, and still mostly `unknown`, because that stretch really is the transition.
 
+  **Then the whole race, rebuilt: `timeline-fullrace/`, 1,091 frames, 17:03:31Z → 02:09:00Z, 0
+  endpoint errors.** Two things nothing had measured before:
+
+  - **435 of 435 frames `ok` across the full-resolution healthy race (17:03–20:40Z).** The
+    zero-false-alarm result for the 10-minute window, end to end through the real engine on 5–28 Hz
+    data, not an offline sweep. That is what makes the window change safe to keep.
+  - **The check would have said WATCH at 22:08:31Z — fifty minutes before anyone kicked
+    anything.** Bias +15.3°, spread 7.7°, and it holds. The pre-kick drift was already in the
+    2026-09-07 fixture analysis (+7.0° at 21:00Z, +16.3° at 22:00Z, against −0.1..−5.7° for the
+    healthy race) but it had never been on a screen, and at the old 20-minute window it was still
+    averaging in healthy samples. **This is the best argument yet for the whole module:** the
+    boat had the evidence of a compass working loose most of an hour before the failure, and
+    nobody was told.
+
+  ⚠ **Follow-up, small and not done: the pre-kick warn flickers.** Between 22:08Z and the kick it
+  is `warn` on 80 frames and `ok` on 19, because the bias sits right on the 15° threshold and
+  crosses it back and forth. Nothing is wrong with the number — it is genuinely 14–16° — but a
+  chip that blinks is a chip the crew learns to ignore, which is the same lesson `power._tripped`
+  needed a dwell median for. Fix it with dwell/hysteresis on the *status*, not by moving the
+  threshold, and score it for stability the way `test_power.py` now does.
+
   **4. Fixed on the way past — `_circular()` crashed on perfect agreement.** `sqrt(-2 ln R)` with
   every sample carrying the identical delta: R overshoots 1.0 by an ulp, `log` goes positive,
   `sqrt` raises `ValueError`, and `/health/sensors` returns nothing at all. A becalmed boat and

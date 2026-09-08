@@ -13,11 +13,20 @@ through a fake source rather than handing `heading_bias()` pre-paired samples �
 why that mattered). `test_racelog.py` fails on this box and always has: `pi/archiver/archiver.py`
 imports `websockets`, which is not in the system python.
 
-**One background unit may still be running: `c4-fullrace2`**, rebuilding
-`backups/replay-jul18/timeline-fullrace2/` (1,091 frames, 17:03:31Z → 02:09:00Z) against the
-extended spool. `systemctl is-active c4-fullrace2`; log at
-`backups/replay-jul18/build-fullrace2.log`. When it lands, run `truth.py` over the same window
-with the same `--spool` and swap it in for `timeline-fullrace/`.
+**Nothing is mid-flight; no background units are running.** `timeline-fullrace/` was rebuilt and
+swapped in at the end of this session: 1,091 frames, 17:03:31Z → 02:09:00Z, **0 endpoint
+errors**, truth aligned over the same window with the same `--spool`.
+
+**Two things the rebuilt timeline showed that nothing had measured before:**
+- **435 of 435 frames `ok` across the full-resolution healthy race (17:03–20:40Z)** — the
+  zero-false-alarm claim for the 10-minute window, now end to end through the real engine rather
+  than from an offline sweep.
+- **The check would have warned at 22:08:31Z — fifty minutes before anyone kicked anything.**
+  Bias +15.3° with 7.7° of spread, and it holds. That is the pre-kick drift the fixture noted
+  (+7.0° at 21:00Z, +16.3° at 22:00Z) finally arriving as something on a screen. ⚠️ It **flickers
+  across the 15° threshold** — 80 `warn` to 19 `ok` between 22:08Z and the kick — because the
+  bias sits right on it. Not fixed: it is the same "right every other poll" shape the bank tile
+  needed a dwell median for, and it is queued as a small follow-up rather than tuned blind.
 
 **`main` is deployable and the boat's clone is several merges behind it.** When the boat is back:
 rebuild the console + engine images (`docker compose -f compose.pi.yml up -d --build console
@@ -118,9 +127,9 @@ free / 89%.)
 
 | dir | window | frames | what it is for |
 |---|---|---|---|
-| `timeline-heading/` | 23:00Z → 02:09Z | 378 + truth | **the compass fault, end to end.** Built after the fix, on the extended spool |
-| `timeline-fullrace2/` | 17:03Z → 02:09Z | 1,091 | the new standing artifact — **rebuilding as of this pause**, see the top block |
-| `timeline-fullrace/` | 17:03Z → 00:09Z | 851 + truth | the previous standing one. Stops 13 min after the compass fault begins, which is how a P0 got raised against working code |
+| `timeline-fullrace/` | 17:03Z → 02:09Z | **1,091 + truth** | **the standing artifact — use this.** Rebuilt 2026-09-08 after the heading fix, 0 endpoint errors |
+| `timeline-heading/` | 23:00Z → 02:09Z | 378 + truth | the compass fault on its own, if you do not want to scrub nine hours |
+| `timeline-fullrace-preheadingfix/` | 17:03Z → 00:09Z | 851 + truth | the previous standing one, kept one session as the before/after baseline. **It stops 13 min after the compass fault begins** — that is how a P0 got raised against working code. Delete it when the disk gets tight |
 | `timeline/` | 17:03Z → 20:40Z | 433 + truth | the full-resolution (5–28 Hz) view of the racing half |
 
 All are rebuilt with the clock fix and capture `/power`, `/health/sensors` and
@@ -129,11 +138,10 @@ the archive stops. Truth carries roll/pitch/rate-of-turn and the house bank, so 
 source: at 22:59:01Z the 24xd reads 133.1° while the Reactor still reads 35.3°.
 
 ```bash
-python3 tools/replay/server.py --timeline /home/constantineau/backups/replay-jul18/timeline-heading
-# http://localhost:8110/  — 23:56:10Z is where the compass steps out; scrub past 00:20Z and the
-# heading row reads "-90° off GPS course (vs Orca Core)" for the rest of the recording
 python3 tools/replay/server.py --timeline /home/constantineau/backups/replay-jul18/timeline-fullrace
-# scrub to ~22:58Z for the kick itself; frame 711 is 22:59:01Z
+# http://localhost:8110/ — the whole race. 22:08:31Z is where the heading row first says WATCH;
+# 22:58Z is the kick (attitude goes ACT); 23:56:10Z is where the compass steps out for good, and
+# from 00:20Z the row reads "-90° off GPS course (vs Orca Core)" to the end of the recording.
 ```
 `timeline-preprio/` is the pre-2026-09-07 baseline kept for before/after diffs — note it carries
 the wall-clock bug, so do not compare *ages* across that boundary. Rebuilds need an ephemeral
