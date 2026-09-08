@@ -108,6 +108,14 @@ check("'gdt' is gone from both seeds — there is no GDT 43 on this bus",
       "gdt" not in seed_matchers and "gdt" not in note_matchers)
 check("'gwind' is no longer a PRIORITY matcher (it cannot resolve)",
       "gwind" not in seed_matchers)
+# Removed 2026-09-08. `b951` resolves perfectly well — that is the point. The em-trak's own-ship
+# fix is real data, and ranking it for lat/lon/sog/cog is still the AIS contamination bug written
+# down as an intention, protected only by a filter in a different module. If a future session
+# re-adds it "for redundancy", this is the assertion that should stop it.
+check("'b951' is not a PRIORITY matcher anywhere — the AIS box does not lead own-ship",
+      "b951" not in seed_matchers and "b951" not in source_policy.all_matchers())
+check("...and the three GPS channels still have real redundancy without it",
+      all(len(source_policy.matchers_for(c)) == 3 for c in ("sog", "cog", "lat", "lon")))
 check("the policy's own matchers resolve too",
       n2k_sources.unresolved(source_policy.all_matchers(), DEV, NON_BUS_LABELS) == [])
 
