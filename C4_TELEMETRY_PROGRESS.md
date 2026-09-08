@@ -5,13 +5,16 @@ Deletion from the boat is allowed only *after* an off-boat copy is sha256-verifi
 
 ## ⏸ PICK UP HERE (2026-09-08 — read this block, then "Session 2026-09-08" below)
 
-**Everything in this session is committed on `dev`, merged to `main` and pushed** (11 commits:
-6 from the first pause, then the heading cross-check fix, the dashboard fixtures, the replay
-window, two docs, and the AIS-ranking removal). Working tree clean. All suites green: **24 files + 10 pytest cases**
-(`test_sensor_health` gained 24 more assertions, and for the first time they drive `assess()`
-through a fake source rather than handing `heading_bias()` pre-paired samples — see below for
-why that mattered). `test_racelog.py` fails on this box and always has: `pi/archiver/archiver.py`
-imports `websockets`, which is not in the system python.
+**Two batches, and they are at different points.** The heading cross-check work (11 commits) is
+on `dev`, merged to `main` and **pushed** — `main` is at `c525e66`. The race-window work after it
+is committed and pushed to `origin/dev`, but **NOT merged to `main`**; that is your call next
+session. Working tree clean.
+
+All suites green: **25 files + 10 pytest cases** (`test_sensor_health` gained 24 assertions and
+now drives `assess()` through a fake source instead of handing `heading_bias()` pre-paired
+samples; `test_race_window.py` is new — 30 assertions, driven by the real Jul 18 record).
+`test_racelog.py` fails on this box and always has: `pi/archiver/archiver.py` imports
+`websockets`, which is not in the system python.
 
 **Nothing is mid-flight; no background units are running.** `timeline-fullrace/` was rebuilt and
 swapped in at the end of this session: 1,091 frames, 17:03:31Z → 02:09:00Z, **0 endpoint
@@ -74,7 +77,43 @@ the real Jul 18 race through the replay rig, not just the demo scenarios. Full w
 the source of every timeline built so far. Deleting it breaks Race Rewind. (Disk is still ~11 G
 free / 89%.)
 
+**THE SECOND HALF OF THIS SESSION — the Lab debrief, and a race four times longer than the
+record said.** Cole: *"I'd like to build out the 'debrief' portion of the lab"*, then *"stitch
+together proximal windows into a complete race, regardless of button presses."*
+
+- **The Lab could only see 1 h 49 m of the 7 h race.** Session marker id 2 says
+  `17:03:31Z → 18:52:20Z`, and **2,534,717 rows of telemetry sit after it**. Not a bug — the
+  ⏺ LOG button was caught during a kite hoist (`end_ts` written 4.2 s before the sail bar
+  registered A3 up / J1 down / staysail up). Two of the three sessions ever recorded look
+  accidental; Jul 8 lasted **21 seconds**.
+- **✅ `shared/race_window.py`** treats the marker as a hint: seed → stitch (< 1 h apart) →
+  extend across continuous underway telemetry → bound at the turnaround, with `provenance` in
+  words and the raw marker always served alongside. Verified through the live database:
+  **1.81 h → 7.36 h (×4.1)** for Jul 18, +18 min for Jul 15. `/racelog/sessions` now returns a
+  `window` per session. Four judgement calls are argued in the module docstring and the commit —
+  the start is deliberately NOT extended, the turnaround needs a sustain rule, the bound is
+  `min()` not assignment, and the motion series comes from ONE device-resolved source.
+- **❌ Item 3 below is DEAD, measured not assumed.** Deriving `headingTrue` from
+  `headingMagnetic` + `magneticVariation` is not redundancy: the Reactor 40's magnetic heading
+  tracks the 24xd to within a degree (median −0.0°, n=12,982) through the healthy race **and**
+  through the quarter-turn fault, where it reads 91.0° off COG against the 24xd's 90.9°. It would
+  have been a failover source that agrees with the broken sensor. Numbers in
+  `docs/V2_BACKLOG.md` → "Learning loop".
+- **The debrief plan (A → C → B) is in `docs/V2_BACKLOG.md` → "Debrief".** Read that section
+  before starting. It carries the two findings that shape it: ~2 h of the race is
+  instrument-corrupt and nothing marks it (derived TWD moves 137° across the compass step while
+  TWS holds at ~27 kn), and the debrief has no concept of a retirement.
+
 **Do these next, in this order:**
+0c. **Point the Lab's debrief at `window` instead of `start_ts`/`end_ts`.** The change that makes
+   the seven hours actually reach the analysis; the rest of the debrief plan sits on it. Small.
+0d. 🔴 **Then wire `race_window` into the onboard retention prune.** `archiver.prune()` deletes
+   out-of-session readings older than 14 days (`pi/archiver/archiver.py:357`), so an accidental
+   stop puts the rest of a race on the **deletion** path — the one place a wrong window destroys
+   data instead of hiding it, and squarely against "lose no telemetry". (What happened to
+   Jul 18's out-of-session hours on the Pi is not established — see the backlog note.)
+0e. **Then A from the debrief plan — the trust layer.** ⚠️ The gating RULE (refuse vs down-weight
+   bins from `danger` windows) is Cole's call; do not pick it unilaterally.
 0. ~~🔴 **the heading cross-check is silent on the data the boat actually sent**~~ ✅ **DONE, and
    the headline was WRONG — the check was working.** Read `docs/V2_BACKLOG.md` → the P0 block for
    the full measurement; the short version is that this morning's P0 was raised from 36 frames of
@@ -116,8 +155,12 @@ free / 89%.)
    what produced a P0 against working code. **Cut a replay window where the evidence ends, not
    where the race does.** (Racing *tactics* past 00:09Z stay out of scope per Cole; this is
    coverage for the health checks, and it is 3.4 MB.)
-3. **Derive `headingTrue` from `headingMagnetic` + `magneticVariation`.** Unchanged from
-   yesterday: heading had *no* redundancy on Jul 18.
+3. ~~**Derive `headingTrue` from `headingMagnetic` + `magneticVariation`.**~~ ❌ **DROPPED
+   2026-09-08 — measured, and it is not redundancy.** See the block at the top and
+   `docs/V2_BACKLOG.md` → "Learning loop". Heading still has no redundancy on this boat; it has
+   to come from a second compass or from COG above a speed gate, and that needs a decision about
+   what the engine should DO when heading is untrusted (`sensor_health` deliberately reports
+   rather than substitutes). Not queued.
 4. **Record device identity on the boat** (archiver/uplink read `/signalk/v1/api/sources`), so
    `shared/n2k_sources.SR33_DEVICES` becomes a cache rather than the source of truth.
 5. Then the v2 backlog. Parked on the boat: recreate the archiver container for its stale

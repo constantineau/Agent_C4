@@ -689,6 +689,109 @@ fallback (that is the onboard design), so a blocked call degrades instead of bre
   replayed for Jul 18 (the only `crew` paths that race are `crew.sail.state`/`crew.session`).
   Every future debrief is blind to what the copilot actually said unless this is fixed.
 
+- **❌ DROPPED 2026-09-08 — "derive `headingTrue` from `headingMagnetic` + `magneticVariation`"
+  is not redundancy.** It was queued for two sessions as the missing second heading source, on
+  the reasoning that the 24xd was the only `headingTrue` publisher and the autopilot publishes
+  magnetic. Measured before building, and the premise is false:
+
+  | | |
+  |---|---|
+  | derived (Reactor 40 mag + Orca variation) − 24xd true, healthy race 17:03–20:40Z | **median −0.0°**, p5/p95 −1.2/+1.3, n=12,982 |
+  | the same during the fault, 00:20 → 02:09Z | 24xd is 90.9° off COG, derived is **91.0°** off |
+
+  The autopilot's magnetic heading tracks the 24xd to within a degree — through the healthy race
+  *and* through the quarter-turn error. Whether the Reactor is slaved to the 24xd over N2K or
+  both share the fault, deriving true heading yields a second **number**, not a second
+  **measurement**, and it would have read −90° too. Building it would have produced a failover
+  source that agrees with the broken sensor — the most dangerous shape there is.
+
+  All the inputs are present for the whole race (`headingMagnetic` from `n2k-socketcan.1`,
+  `magneticVariation` from four sources including two that are not the 24xd), so this is a real
+  negative result and not missing data. **Real heading redundancy on this boat has to come from
+  somewhere else** — a second compass, or treating COG as the failover above a speed gate. Not
+  queued yet; it needs a decision about what the engine should *do* when heading is untrusted,
+  and `sensor_health` deliberately reports rather than substitutes.
+
+### Debrief — turning the Jul 18 record into the Lab's DEBRIEF tab (2026-09-08)
+
+The Lab debrief today (`judge.py` + `track.py` + `learning.py`) is a **tactics/navigation**
+debrief: the optimizer becomes an oracle, compare against the frozen playbook → regret, XTE,
+first-beat side, helm %, then Opus critiques and `learning.propose()` offers polar/helm/wave
+refinements for human approval. It runs almost entirely on a **position track** — lat/lon, SOG,
+COG. The boat records **104 distinct paths** over that window. The debrief reads four.
+
+Three findings shape what to build next:
+
+1. **✅ FIXED — the Lab could only see 1 h 49 m of a 7 h race.** See `shared/race_window.py`
+   below.
+2. **🔴 Roughly two hours of that race is instrument-corrupt and nothing marks it.** Heading was
+   ~90° out from 23:56:10Z. Across that step, derived true wind moves **114° → 251°** (a 137°
+   shift) in *both* publishers — the Orca's own TWD and `derived-data` — because both compute
+   from the same heading, while TWS holds at ~27 kn. Some of that could be real weather; the
+   point is that **nothing in the Lab can tell you which**, and `learning.propose()` writes to
+   the boat model. Fixing the window without this would import seven hours of which the last two
+   teach the boat wrong.
+3. **The debrief has no concept of a retirement.** Regret-vs-oracle assumes the course was
+   sailed. For Jul 18 the honest headline is not a regret figure — it is *two independent
+   hardware failures ended this, and here is when each became knowable*.
+
+Build order, agreed 2026-09-08:
+
+- **A. A trust layer on the debrief — "can you believe this?"** Run `sensor_health.assess()`
+  across the derived window and publish a per-channel trust timeline beside the track; stamp it
+  into `learning.archive_debrief()`; have `propose()` refuse or down-weight bins from windows the
+  cross-check called `danger`. Uses everything already shipped. **Guardrail, not a feature — but
+  it protects the only loop that writes to the boat model.** ⚠️ The gating RULE is still Cole's
+  call; do not pick it unilaterally.
+- **C. Performance from instruments, not geometry.** Helm % is inferred from track shape today.
+  With STW, AWA/AWS, heel, rudder angle and rate-of-turn at 5–28 Hz it can be *measured*: cost
+  per tack and gybe in seconds and boat-lengths, heel vs target, rudder work as a trim/balance
+  proxy, leeway, and target-speed deficit per (TWS, TWA) bin **with the sail config attached**,
+  which the crew already logs.
+- **B. A decision timeline — what the crew saw, next to what was true.** `timeline-fullrace/`
+  already holds 1,091 frames of every engine endpoint across that race: a recording of the iPad.
+  Scrub it against the oracle route — 19:23Z off-book, 20:40Z bank dies, 22:08Z compass warning,
+  22:58Z the kick. The most demo-able thing in the product, and the biggest build; it needs the
+  replay rig to run server-side rather than as a laptop tool.
+
+- **✅ DONE 2026-09-08 — the race window is derived from the record, not the button**
+  (`shared/race_window.py`). The debrief's own-log source, the archiver's retention prune and the
+  learning loop are all bounded by a session window that was exactly the interval between two
+  taps on the ⏺ LOG button. On Jul 18 that button was caught during a kite hoist:
+
+  ```
+  18:52:20.81Z   session end_ts written    <- the button
+  18:52:25Z      A3 + J1    kite hoisted
+  18:52:26Z      A3         J1 dropped
+  18:52:29Z      A3 + SS    staysail up
+  ```
+
+  `session_end()` is only ever called by that button (`racelog.py:57`, `time.time()` at the
+  press) and no later session exists, so nothing auto-closed it. Two of the three sessions ever
+  recorded look accidental — Jul 8 lasted **21 seconds**. Seed → stitch (markers < 1 h apart) →
+  extend across continuous underway telemetry → bound at the turnaround, every step reported in
+  `provenance`, the raw marker always served alongside. Measured through the live database:
+  **marker 1.81 h → derived 7.36 h (×4.1)**, and Jul 15 gained 18 min the button had clipped.
+  `/racelog/sessions` returns a `window` block per session. **Still to do: point the Lab's
+  debrief at `window` instead of `start_ts`/`end_ts` — that is the change that makes the seven
+  hours actually reach the analysis.**
+
+  ⚠️ **The retention prune keys off session windows too, and that is the part with teeth.**
+  `archiver.prune()` deletes every reading older than `ARCHIVE_RETAIN_DAYS` (14) that falls
+  outside a session window — verified in `pi/archiver/archiver.py:357`. So an accidental stop
+  does not merely shorten a debrief, it puts the rest of the race on the **deletion** path, on
+  the boat, against the owner's "lose no telemetry" goal.
+
+  What actually happened to Jul 18's out-of-session hours on the Pi is **not established** —
+  `archive-backfill.db` holds 17:00 → 20:40:30Z, well past the 18:52 session end, so either the
+  prune had not run (the archiver died at 20:40:30Z with SQLite corruption and may have stayed
+  down) or the pull pre-empted it. Worth settling when the boat is reachable, because the answer
+  changes how urgent the fix is — but not worth waiting for: **wiring `race_window` into the
+  onboard prune is the highest-consequence follow-up in this section either way.** It is the one
+  place where a wrong window destroys data rather than merely hiding it, and the prune's own
+  fail-safe ("engine store unreadable ⇒ delete nothing") shows the design already takes that
+  seriously.
+
 ### Infra & ops
 
 - **P2 — Capture AIS into the replayable record.** The archiver stores own-ship contexts only;
