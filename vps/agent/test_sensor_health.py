@@ -227,5 +227,142 @@ for m in (25, 150, 177, 178, 190, 205, 280, 360):
     print(f"  T0+{m:>3} min  roll {a['roll_deg']:>7.1f}  pitch {a['pitch_deg']:>6.1f}  "
           f"range={a['status']:<7} bias={str(hb.get('bias_deg')):>7}  cross={hb['status']}")
 
+
+# ===========================================================================
+# PROVENANCE — where is each number FROM, and is the policy actually in force?
+# ===========================================================================
+# Added 2026-09-08 with the iPad's instrument-health chip. Channels are assembled through the
+# REAL `onboard_conditions._choose_preferred`, because `fell_back` is its output and a fixture
+# that set the flag by hand would test the display and not the decision.
+from app import onboard_conditions as oc   # noqa: E402
+
+ORCA, REACTOR, G24XD, GND10, AIS = ("n2k-socketcan.15", "n2k-socketcan.1", "n2k-socketcan.3",
+                                    "n2k-socketcan.0", "n2k-socketcan.43")
+
+
+def channels(spec):
+    """{channel: (unit, [(source, value, age_s), ...])} -> a `/conditions/full` channels dict."""
+    out = {}
+    for ch, (unit, rows) in spec.items():
+        readings = [{"source": s, "value": v, "age_s": a} for (s, v, a) in rows]
+        c = {"unit": unit, "readings": readings,
+             "freshest_age_s": min(r["age_s"] for r in readings)}
+        vals = [r["value"] for r in readings]
+        if len(vals) > 1:
+            c["spread"] = round(max(vals) - min(vals), 3)
+            c["disagreement"] = c["spread"] > oc.DISAGREE.get(unit, 1e9)
+        best, reason, fell_back = oc._choose_preferred(ch, readings)
+        from shared import n2k_sources as ns
+        c["preferred"] = {"source": best["source"], "value": best["value"],
+                          "age_s": best["age_s"],
+                          "device": (ns.resolve(best["source"],
+                                                ns.devices_for("sr33")) or {}).get("model")}
+        c["preferred_reason"] = reason
+        if fell_back:
+            c["fell_back"] = True
+        out[ch] = c
+    return out
+
+
+print("\nprovenance — the healthy case:")
+# `derived-data` carries a reading on purpose: `derived` is the only matcher in the policy that
+# names no bus device, so it can only be shown to bind by something actually publishing under
+# that label. Leave it out and the policy check correctly complains.
+HEALTHY_SPEC = {
+    "tws": ("kn", [(ORCA, 17.2, 1.0)]),
+    "twd": ("°", [(ORCA, 264.4, 1.0), ("derived-data", 263.9, 2.0)]),
+    "stw": ("kn", [("n2k-socketcan.4", 7.6, 1.0)]),
+    "sog": ("kn", [(G24XD, 7.4, 1.0), (ORCA, 7.3, 1.0)]),
+    "aws": ("kn", [(GND10, 18.2, 1.0), (ORCA, 17.9, 2.0)]),
+}
+HEALTHY = channels(HEALTHY_SPEC)
+p = sh.assess_provenance(HEALTHY, ais_excluded={AIS})
+check(f"clean bus reads ok ({p['reason'][:48]}…)", p["status"] == "ok" and not p["flags"])
+check("every matcher in the committed policy binds to a device on this bus",
+      p["checks"]["policy_binds"]["status"] == "ok"
+      and not p["checks"]["policy_binds"]["unresolvable"])
+check("the provenance table names the DEVICE, not the N2K address",
+      p["channels"]["aws"]["device"] == "GND10" and p["channels"]["tws"]["device"] == "Orca Core")
+check("...with its rank, so 'is this the sensor we chose?' is answerable",
+      p["channels"]["aws"]["rank"] == 1 and p["channels"]["sog"]["rank"] == 1)
+check("the AIS filter reports what it is excluding — positive evidence it bound",
+      p["checks"]["own_ship"]["ais_excluded"] == [AIS]
+      and p["checks"]["own_ship"]["status"] == "ok")
+
+print("provenance — the rank-1 sensor goes silent mid-race:")
+# The GND10 masthead stops: its last reading is 90 s old, past the 45 s failover window, so the
+# Orca's computed apparent wind takes over. Measured on Jul 18: those two disagree by up to
+# 5.9 kn, so which one is on screen is not a detail.
+SILENT = channels(dict(HEALTHY_SPEC, aws=("kn", [(GND10, 18.2, 90.0), (ORCA, 12.3, 1.0)])))
+p = sh.assess_provenance(SILENT, ais_excluded={AIS})
+check(f"it is a WARN, not a note ({p['checks']['lead_source']['reason'][:60]}…)",
+      p["status"] == "warn" and p["checks"]["lead_source"]["status"] == "warn")
+ws = p["checks"]["lead_source"]["went_silent"]
+check("the flag says which channel, which backup is in use, and how stale the lead is",
+      len(ws) == 1 and ws[0]["channel"] == "aws" and ws[0]["expected"] == "gnd"
+      and ws[0]["lead_age_s"] == 90.0)
+check("...and the chip has a one-line reason it can show verbatim",
+      "aws" in p["reason"] and "went silent" in p["reason"])
+
+print("provenance — a ranked lead that has NEVER published (Jul 18, all race):")
+# The policy ranks the Orca first for heel/pitch/rate-of-turn. The Orca published none of them
+# during the race — its N2K attitude sharing is off — so heel ran on the 24xd for seven hours.
+# True on every poll of every race until someone changes a setting on the boat, so it must NOT
+# read as an alarm: a permanently yellow chip is a chip nobody looks at.
+UNMET = channels(dict(HEALTHY_SPEC,
+                      heel=("°", [(G24XD, 14.8, 1.0), (REACTOR, 15.1, 1.0)])))
+p = sh.assess_provenance(UNMET, ais_excluded={AIS})
+check("the status stays ok — this is configuration, not an event",
+      p["status"] == "ok" and not p["flags"])
+check("but it is NOT silent: the note names the channel and the device that owes it data",
+      any("heel" in n and "orca" in n for n in p["notes"]))
+check("the table still records that heel is not on its rank-1 source",
+      p["channels"]["heel"]["fell_back"] is True
+      and p["channels"]["heel"]["lead_publishes"] is False)
+check("a channel whose lead DOES publish is distinguished from one whose lead never has",
+      p["channels"]["tws"]["lead_publishes"] is True)
+
+print("provenance — AIS traffic leading an own-ship channel (the P0 regression):")
+# If `datasource_onboard`'s AIS exclusion is ever switched off or fails to identify the
+# transceiver, another vessel's position leads own-ship position again — max 4,091 kn as raced.
+# A range check would not catch it (5.6 kn median looks fine); the source identity does.
+BAD = channels(dict(HEALTHY_SPEC, lat=("°", [(AIS, 41.2, 1.0)]),
+                    lon=("°", [(AIS, -2.4, 1.0)])))
+p = sh.assess_provenance(BAD, ais_excluded={AIS})
+check(f"it is a DANGER ({p['checks']['own_ship']['reason'][:52]}…)",
+      p["status"] == "danger" and p["checks"]["own_ship"]["status"] == "danger")
+check("...naming the channels being contaminated",
+      {x["channel"] for x in p["checks"]["own_ship"]["ais_leading"]} == {"lat", "lon"})
+
+print("provenance — a policy that cannot bind (the defect shape, six times over):")
+# `orca`/`24xd`/`reactor` matched NOTHING for most of this project's life, because `$source` is
+# an N2K address. An unmatched matcher and a satisfied one look identical unless asserted.
+import shared.source_policy as sp   # noqa: E402
+_orig = sp.DEFAULT_PRIORITY
+try:
+    sp.DEFAULT_PRIORITY = dict(_orig, tws=["garmin-gwind", "orca"])
+    p = sh.assess_provenance(HEALTHY, ais_excluded={AIS})
+    check("a matcher naming no device on the bus is a warn, not silence",
+          p["status"] == "warn" and "garmin-gwind" in p["checks"]["policy_binds"]["unresolvable"])
+    check("...and says what it means: those channels are unranked in practice",
+          "unranked in practice" in p["checks"]["policy_binds"]["reason"])
+finally:
+    sp.DEFAULT_PRIORITY = _orig
+
+print("provenance — guards:")
+check("no channels at all is 'unknown', never a false all-clear",
+      sh.assess_provenance({})["status"] == "unknown")
+check("...and says so", "no live channels" in sh.assess_provenance({})["reason"])
+check("a computed channel is marked as arithmetic, not measurement",
+      sh.assess_provenance(channels(dict(HEALTHY_SPEC,
+                                         twd=("°", [("derived-data", 264.4, 1.0)]))))
+        ["channels"]["twd"]["measured"] is False)
+check("...and a measured one is not",
+      sh.assess_provenance(HEALTHY)["channels"]["aws"]["measured"] is True)
+check("an unmapped source degrades to its raw label rather than raising",
+      sh.assess_provenance(channels(dict(HEALTHY_SPEC,
+                                         depth=("m", [("bench-provider", 12.4, 1.0)]))))
+        ["channels"]["depth"]["source"] == "bench-provider")
+
 print("\n" + ("PASS" if ok else "FAIL"))
 raise SystemExit(0 if ok else 1)

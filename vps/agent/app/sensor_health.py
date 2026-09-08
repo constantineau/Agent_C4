@@ -38,6 +38,9 @@ and it is a separate piece of work.
 import math
 import os
 
+from shared import n2k_sources
+from shared import source_policy
+
 from . import datasource
 
 # --- attitude range gate ----------------------------------------------------
@@ -60,6 +63,13 @@ HEADING_BAD_DEG = float(os.environ.get("HEALTH_HEADING_BAD_DEG", "35"))
 # tumbling sensor, which is the range gate's business, not this one's.
 HEADING_MAX_SPREAD_DEG = float(os.environ.get("HEALTH_HEADING_MAX_SPREAD_DEG", "25"))
 HEADING_MIN_SAMPLES = int(os.environ.get("HEALTH_HEADING_MIN_SAMPLES", "8"))
+
+# --- provenance / policy-in-force checks ------------------------------------
+BOAT_ID = os.environ.get("BOAT_ID", "sr33")
+# Sources that publish computed values rather than measuring anything. Not a fault — `derived`
+# is a legitimately ranked matcher for the true-wind channels — but the crew is entitled to know
+# which numbers on the iPad are measured and which are arithmetic.
+SYNTHETIC_HINTS = ("derived", "signalk", "n2k-socketcan.100", "virtual")
 
 
 def _wrap180(deg):
@@ -143,8 +153,163 @@ def heading_bias(samples):
     return out
 
 
-def assess(source=None, minutes=None):
-    """Sensor health through the active datasource: attitude range + heading-vs-COG bias."""
+def assess_provenance(channels, ais_excluded=(), boat_id=None):
+    """Is the sensor policy actually IN FORCE, and where is each number coming from?
+
+    Pure function of a `/conditions/full` channels payload, so the replay rig and the tests see
+    exactly what the boat sees. Three checks plus a per-channel provenance table:
+
+      - `policy_binds` — every matcher in `source_policy` names a device that exists. For most
+        of this project's life none of them did (`orca` vs `n2k-socketcan.15`), and an unmatched
+        matcher is **indistinguishable from a satisfied one** unless something asserts it. That
+        is the sixth instance of this repo's recurring defect shape: designed, seeded, wired,
+        and silently not in force. It is a `warn`, not a `danger` — the numbers are real, the
+        *ranking* is not happening.
+      - `lead_source` — which channels are running on a backup. `fell_back` already rides
+        `/conditions/full` per channel and nothing displayed it; on Jul 18 freshest-wins put
+        heel on the autopilot AHRS (the source the policy annotates "non-racing only") for 58%
+        of reads and nobody could have known. Two causes, and they are **not** the same alarm:
+        a ranked device that was publishing and **went silent** is happening now and is a
+        `warn`; a ranked device that has **never published** the channel at all is a false
+        premise in the policy (the Orca Core is ranked first for heel/pitch/rate-of-turn and
+        published none of them during the race — its N2K attitude sharing is off) and reports
+        as a standing `note` with the status left `ok`. Conflating them puts the chip
+        permanently yellow, which is the same as switching it off.
+      - `own_ship` — the AIS read filter. `ais_excluded` is *positive* confirmation the filter
+        bound to something; a channel whose lead is an AIS-bearing source means it did not, and
+        that is the bug that fed another vessel's position to the engine for a sixth of a race.
+        Loud on purpose: `danger`.
+
+    The provenance table is the point of the whole thing — every number the iPad shows, with the
+    device that produced it, its rank, its age and whether it is a fallback."""
+    devices = n2k_sources.devices_for(BOAT_ID if boat_id is None else boat_id)
+    channels = channels or {}
+    ais = set(ais_excluded or ())
+    if not channels:
+        # No readings means no basis for any of the three verdicts — in particular the policy
+        # check compares matchers against the sources actually observed, so an empty window
+        # would report every non-device matcher as unbindable. Say "unknown" and stop.
+        return {"available": False, "status": "unknown", "checks": {}, "flags": [], "notes": [],
+                "channels": {}, "reason": "no live channels to attribute"}
+
+    labels = sorted({r["source"] for c in channels.values() for r in c.get("readings") or []})
+    unresolvable = n2k_sources.unresolved(source_policy.all_matchers(), devices, labels)
+
+    prov, went_silent, unmet, unranked, ais_leading, synthetic = {}, [], [], [], [], []
+    for ch, c in sorted(channels.items()):
+        pref = c.get("preferred") or {}
+        src_label = pref.get("source")
+        readings = c.get("readings") or []
+        matchers = source_policy.matchers_for(ch)
+        rank = source_policy.rank_for(ch, src_label, devices) if src_label else None
+        # Is the rank-1 device publishing this channel AT ALL in the window? `readings` is every
+        # source reporting the channel, so "absent from readings" distinguishes a device that
+        # went quiet mid-race from one that has never been a real option.
+        lead_m = matchers[0] if matchers else None
+        lead_seen = [r for r in readings
+                     if lead_m and n2k_sources.matches(r["source"], lead_m, devices)]
+        entry = {
+            "source": src_label,
+            "device": pref.get("device") or n2k_sources.resolve(src_label, devices) or None,
+            "value": pref.get("value"), "unit": c.get("unit"),
+            "age_s": pref.get("age_s"),
+            "rank": None if rank is None else rank + 1,
+            "ranked_first": lead_m,
+            "lead_publishes": bool(lead_seen),
+            "reason": c.get("preferred_reason"),
+            "fell_back": bool(c.get("fell_back")),
+            "sources": len(readings),
+            "spread": c.get("spread"),
+            "disagreement": bool(c.get("disagreement")),
+        }
+        if isinstance(entry["device"], dict):
+            entry["device"] = entry["device"].get("model")
+        # Match on the DEVICE identity, not the bare label: `n2k-socketcan.5` is Garmin's
+        # "Virtual N2K Input Handler" and `.100` is signalk-server, neither of which is
+        # recognisable from the address alone.
+        ident = n2k_sources.identity(src_label, devices) if src_label else ""
+        entry["measured"] = not any(h in ident for h in SYNTHETIC_HINTS)
+        prov[ch] = entry
+        if entry["fell_back"]:
+            item = {"channel": ch, "expected": lead_m,
+                    "using": entry["device"] or src_label, "age_s": entry["age_s"]}
+            if lead_seen:
+                # `default=None` and the generator guard: a health check must never take the
+                # engine down, and a reading without an age is a payload we did not write.
+                item["lead_age_s"] = min(
+                    (r["age_s"] for r in lead_seen if r.get("age_s") is not None), default=None)
+                went_silent.append(item)
+            else:
+                unmet.append(item)
+        if not matchers:
+            unranked.append(ch)
+        if src_label in ais:
+            ais_leading.append({"channel": ch, "source": src_label})
+        if not entry["measured"]:
+            synthetic.append(ch)
+
+    checks = {
+        "policy_binds": {
+            "status": "warn" if unresolvable else "ok",
+            "unresolvable": unresolvable,
+            "reason": (f"{len(unresolvable)} priority matcher(s) name no device on this bus "
+                       f"({', '.join(unresolvable)}) — those channels are unranked in practice"
+                       if unresolvable else
+                       f"all {len(source_policy.all_matchers())} priority matchers bind"),
+        },
+        "lead_source": {
+            "status": "warn" if went_silent else "ok",
+            "went_silent": went_silent, "policy_unmet": unmet, "unranked": unranked,
+            "reason": (", ".join(f"{f['channel']} on {f['using'] or '?'} — ranked "
+                                 f"{f['expected']} went silent"
+                                 + (f" ({f['lead_age_s']:.0f} s ago)"
+                                    if f.get("lead_age_s") is not None else "")
+                                 for f in went_silent)
+                       if went_silent else
+                       "every ranked channel is on its rank-1 device"
+                       + (f"; {len(unranked)} unranked channel(s) take the freshest source"
+                          if unranked else "")),
+            # A standing configuration fact, not an in-race alarm: it will be true on every poll
+            # of every race until someone turns the Orca's attitude sharing on.
+            "note": (f"{len(unmet)} channel(s) never see their ranked lead ("
+                     + ", ".join(f"{f['channel']}→{f['expected']}" for f in unmet)
+                     + ") — the policy names a device that does not publish them"
+                     if unmet else None),
+        },
+        "own_ship": {
+            "status": "danger" if ais_leading else "ok",
+            "ais_excluded": sorted(ais), "ais_leading": ais_leading, "synthetic": synthetic,
+            "reason": ("AIS traffic is leading " + ", ".join(x["channel"] for x in ais_leading)
+                       + " — another vessel's data is being read as own-ship"
+                       if ais_leading else
+                       f"AIS filter excluding {', '.join(sorted(ais))} from own-ship reads"
+                       if ais else
+                       "no AIS-bearing source identified — nothing to exclude"),
+            # The excluded list is POSITIVE evidence the filter bound to something. An empty list
+            # on a boat that carries an AIS transceiver is worth an eyebrow, but it is normal on
+            # the bench, so it is a note rather than a status.
+            "note": (f"{', '.join(synthetic)} computed, not measured" if synthetic else None),
+        },
+    }
+
+    order = {"danger": 3, "warn": 2, "ok": 0}
+    worst = max((c["status"] for c in checks.values()), key=lambda s: order.get(s, 0))
+    flags = [c["reason"] for c in checks.values() if c["status"] in ("warn", "danger")]
+    notes = [c["note"] for c in checks.values() if c.get("note")]
+    return {"available": bool(channels), "status": worst if channels else "unknown",
+            "checks": checks, "flags": flags, "notes": notes, "channels": prov,
+            "reason": ("; ".join(flags) if flags else
+                       checks["own_ship"]["reason"] if channels else
+                       "no live channels to attribute")}
+
+
+def assess(source=None, minutes=None, conditions=None):
+    """Sensor health through the active datasource: attitude range + heading-vs-COG bias, plus
+    the provenance/policy checks when a `/conditions/full` payload is supplied.
+
+    `conditions` is passed in rather than fetched here so this module stays independent of
+    `onboard_conditions` (which the cloud image does not ship) and stays a pure-ish function of
+    data the caller already has — the engine polls conditions anyway."""
     src = source or datasource.active()
     minutes = HEADING_WINDOW_MIN if minutes is None else minutes
     try:
@@ -168,8 +333,27 @@ def assess(source=None, minutes=None):
                 (lambda v: None if v is None else v * 1.943844)(nearest(sog, t)))
                for t, h in hdg]
     hb = heading_bias(samples)
-    worst = "danger" if "danger" in (att["status"], hb.get("status")) else (
-        "warn" if "warn" in (att["status"], hb.get("status")) else
-        "unknown" if hb.get("status") == "unknown" else "ok")
+
+    ais = set()
+    try:                                     # onboard only; the cloud source has no such method
+        ais = set(src.ais_sources() or ())
+    except Exception:
+        pass
+    prov = assess_provenance((conditions or {}).get("channels") or {}, ais_excluded=ais)
+
+    statuses = (att["status"], hb.get("status"), prov["status"])
+    worst = "danger" if "danger" in statuses else (
+        "warn" if "warn" in statuses else
+        "unknown" if "unknown" in statuses else "ok")
+    # One line the iPad's health chip can show verbatim: every check that is not clean, worst
+    # first. A chip that says "3 flags" and makes the crew go looking is a chip they ignore.
+    flags = []
+    if att["status"] != "ok":
+        flags.append(att["reason"])
+    if hb.get("status") in ("warn", "danger"):
+        flags.append(hb["reason"])
+    flags.extend(prov["flags"])
     return {"available": True, "status": worst, "attitude": att, "heading": hb,
+            "provenance": prov, "flags": flags, "notes": prov.get("notes") or [],
+            "reason": "; ".join(flags) if flags else "instruments cross-check clean",
             "window_min": minutes}

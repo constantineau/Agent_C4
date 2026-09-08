@@ -211,6 +211,32 @@ body {
 /* commentary-note → tile "pointing" ring (LLM points without anything moving) */
 .tile.ring { box-shadow:0 0 0 3px var(--accent), var(--shadow); }
 
+/* ---------- the SYSTEMS pair: DATA + HOUSE BANK share the 8th cell ----------
+   Added 2026-09-08 with the bank tile. Nine tiles on an eight-cell grid, and reflowing the 4x2
+   would have shrunk every sailing tile and moved the ones the crew reaches for by muscle memory.
+   These two are the systems reads — "are the instruments telling the truth" and "will the boat
+   still be powered in six hours" — both a single number and a line, neither with a chart, and
+   the pair that belongs together: on Jul 18 the flat bank is what killed the instruments. */
+.tile-pair { display:grid; grid-template-rows:1fr 1fr; gap:10px; min-height:0; }
+.tile.mini { padding:6px 9px 6px 14px; gap:1px; }
+.tile.mini .t-name { font-size:15px; letter-spacing:.6px; }
+.tile.mini .t-val  { font-size:23px; margin-top:0; }
+.tile.mini.s-na .t-val { font-size:13px; }
+.tile.mini .t-sub  { font-size:11.5px; margin-top:1px; }
+.tile.mini .t-chip { font-size:9px; letter-spacing:.6px; }
+.tile.mini .t-rows { margin-top:3px; gap:0; }
+.tile.mini .t-row  { font-size:10.5px; line-height:1.25; }
+.tile.mini .t-row .rc { min-width:34px; }
+/* the mini tiles keep the severity bar but a shallower gauge fill — at half height the 90% fill
+   of an ACT tile leaves no contrast for the number sitting on top of it */
+.tile.mini.s-ok::before    { height:14%; }
+.tile.mini.s-watch::before { height:40%; }
+.tile.mini.s-act::before   { height:62%; }
+
+/* PROVENANCE marker — this tile's number is coming off a backup sensor. Deliberately not a
+   status colour: the reading is real, it is just not the sensor we ranked first. */
+.t-flag { flex:none; font-size:12px; line-height:1; color:var(--watch); opacity:.9; }
+
 /* compact multi-value row tables (Wind Trend lookbacks, Forecast horizons) */
 .t-rows { display:flex; flex-direction:column; gap:2px; margin-top:6px; }
 .t-row { display:flex; gap:6px; align-items:baseline; font-size:12.5px; line-height:1.35; }
@@ -352,6 +378,12 @@ body {
 /* Race checklist bar: active SI/NOR requirement reminders — persistent until acked */
 .chkbar { display:flex; align-items:center; gap:7px; flex-wrap:wrap; margin-top:8px;
   padding:7px 12px; border-radius:10px; background:var(--panel); border:1px solid var(--act); }
+/* `display:flex` beats the `hidden` ATTRIBUTE, so both bars were on screen permanently — the
+   checklist one as an empty red "☑ CHECKLIST" strip whose entire design is "appears only when
+   something is due", and the sails bar before any sail state had loaded. Both JS paths set
+   `.hidden` correctly and neither could take effect. `.strategy[hidden]` and `.detail[hidden]`
+   below already carry this guard; these two were missed. Found 2026-09-08. */
+.sailsbar[hidden], .chkbar[hidden] { display:none; }
 .chk-tag { cursor:pointer; color:var(--act); }
 .chk-item { display:inline-flex; align-items:center; gap:7px; font-size:12px; font-weight:700;
   padding:3px 4px 3px 10px; border-radius:7px; background:var(--panel2);
@@ -367,6 +399,25 @@ body {
 .chk-row.st-done { border-left-color:var(--ok); opacity:.7; }
 .chk-row .chk-txt { flex:1; }
 .chk-row .chk-sub { display:block; font-size:11px; color:var(--muted); }
+/* DATA tile detail: the five instrument cross-checks, one row each with its own verdict.
+   The verdict WORD carries the state (not only colour) — same rule as the tile chips, because
+   these get read in daylight through polarised sunglasses. */
+.hc-row { display:flex; align-items:flex-start; gap:9px; padding:5px 8px; margin:3px 0;
+  border-left:3px solid var(--line); border-radius:4px; font-size:12.5px; }
+.hc-row.st-ok      { border-left-color:var(--ok); }
+.hc-row.st-warn    { border-left-color:var(--watch); }
+.hc-row.st-danger  { border-left-color:var(--act); }
+.hc-row.st-unknown { border-left-color:var(--na); opacity:.75; }
+.hc-word { flex:none; min-width:46px; font-size:10px; letter-spacing:.8px; font-weight:800;
+  padding-top:2px; }
+.hc-row.st-ok      .hc-word { color:var(--ok); }
+.hc-row.st-warn    .hc-word { color:var(--watch); }
+.hc-row.st-danger  .hc-word { color:var(--act); }
+.hc-row.st-unknown .hc-word { color:var(--na); }
+.hc-txt { flex:1; min-width:0; }
+.hc-sub { display:block; font-size:11px; color:var(--muted); font-weight:600; margin-top:1px; }
+/* a key for the provenance table's marks — reference material, not a reading */
+.dc-legend { font-size:11px; line-height:1.45; color:var(--muted); font-weight:600; margin-top:6px; }
 /* CREW tile detail: the energy score row (big number + inline gauge) */
 .en-row { display:flex; align-items:center; gap:10px; margin:4px 0 2px; }
 .en-score { font-size:34px; font-weight:800; line-height:1; }

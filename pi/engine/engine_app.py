@@ -60,14 +60,19 @@ def sources():
 
 @app.get("/health/sensors")
 def sensor_health_ep():
-    """Is an instrument that is still reporting still RIGHT? Attitude range gate + a
-    heading-vs-GPS-course cross-check.
+    """Is an instrument that is still reporting still RIGHT, and where is each number FROM?
+    Attitude range gate + a heading-vs-GPS-course cross-check + the provenance/policy checks.
 
     Added 2026-09-07 from the Jul 18 race: the compass/GPS was kicked at 22:58Z (roll stepped
     to 133 deg, then sat inverted for 23 minutes), was put back upright, and then read a
     quarter turn out — plausible-looking and wrong — for the remaining seven hours. Nothing
-    aboard noticed either state."""
-    return sensor_health.assess()
+    aboard noticed either state.
+
+    The provenance half (2026-09-08) is the other half of the same lesson: the priority policy,
+    the AIS read filter and the per-channel `fell_back` flag all existed and none of them was
+    ever shown to anyone, so "silently not in force" looked exactly like "working". This is the
+    single endpoint the iPad's instrument-health chip reads."""
+    return sensor_health.assess(conditions=onboard_conditions.get_current_conditions())
 
 
 @app.get("/power")
