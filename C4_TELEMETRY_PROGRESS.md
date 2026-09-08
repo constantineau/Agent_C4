@@ -58,6 +58,19 @@ the source of every timeline built so far. Deleting it breaks Race Rewind. (Disk
 free / 89%.)
 
 **Do these next, in this order:**
+0. 🔴 **NEW, and it outranks everything below: the heading cross-check is silent on the data the
+   boat actually sent, and it compares the 24xd against itself.** Found within minutes of the
+   first full-race replay (item 2 below is now DONE, which is how). The attitude gate works —
+   `danger` on the first bad sample at 22:58Z, quiet again when the crew re-seated it at 23:22Z.
+   The cross-check written for the *quiet* quarter-turn error that followed reports `unknown` in
+   **35 of 36 frames**, median spread 68.7° against a 25° gate, because `assess()` builds its
+   reference series with `src.series()` — which mixes the 24xd's and the Orca's COG sample to
+   sample, and they disagree by a mean of 12.5° (max 73.1°). That manufactured spread is what
+   trips the gate. And `source_priority` ranks COG `24xd` first, the *same device* that is the
+   only `headingTrue` publisher, so the "independent measurement" is the kicked sensor itself.
+   Fix: single-source reference via `series_by_source`, choosing a publisher that is not the
+   channel's own; then re-measure before deciding whether the spread gate needs to be rate-aware.
+   Full numbers in `docs/V2_BACKLOG.md`.
 1. **The two things only a person at the boat can settle**, now with a sharper reason than
    yesterday: **confirm the bank** (chemistry, capacity, charging budget) — the race data cannot
    resolve `danger` vs `warn` on its own, see #2 above — and **enable the Orca Core's N2K
@@ -65,11 +78,10 @@ free / 89%.)
    heading and it published **none** of them during the race. The health chip reports that as a
    standing note rather than an alarm, and it will keep doing so until someone flips that
    setting.
-2. **Materialise the 33,014 spool rows into a `readings`-schema SQLite file** so the rig covers
-   the whole race instead of stopping at 20:40. This is now the highest-value rig work: the
-   kicked GPS at 22:58Z and the quarter-turn compass error that followed are **after** the
-   archive ends, so the two `/health/sensors` checks written for that event have never been
-   exercised against the real thing — only against the fixture in `test_sensor_health.py`.
+2. ~~**Materialise the 33,014 spool rows into a `readings`-schema SQLite file**~~ ✅ **DONE
+   2026-09-08.** `tools/replay/spool_to_sqlite.py` + `harness.py --spool`; 33,282 rows for
+   `20:40:30 -> 00:09:35Z` in `backups/replay-jul18/spool-jul18.db`, verified continuous across
+   the seam. It paid for itself immediately — see item 0.
 3. **Derive `headingTrue` from `headingMagnetic` + `magneticVariation`.** Unchanged from
    yesterday: heading had *no* redundancy on Jul 18.
 4. **Record device identity on the boat** (archiver/uplink read `/signalk/v1/api/sources`), so
@@ -78,7 +90,11 @@ free / 89%.)
    `VPS_URL`, and #6c the recurring drain.
 
 **Replay rig state.** `backups/replay-jul18/timeline/` is rebuilt against the current engine
-**with the clock fix** and now also captures `/power`, `/health/sensors` and `/conditions/full`.
+**with the clock fix** (433 frames, 0 endpoint errors, truth aligned) and now also captures
+`/power`, `/health/sensors` and `/conditions/full`. **`timeline-fullrace/` runs to 00:09Z** using
+`--spool backups/replay-jul18/spool-jul18.db` — 851 frames, the whole race including the
+retirement and the kicked GPS. Use the full-race one for anything about sensor health; the
+17:03–20:40 one is the full-resolution view.
 `timeline-preprio/` is the pre-2026-09-07 baseline kept for before/after diffs — note it carries
 the wall-clock bug, so do not compare *ages* across that boundary. Rebuilds need an ephemeral
 venv (`freezegun`, `fastapi`, `httpx`, `websockets`, `pytest`), take ~28 min for 433 frames, and
