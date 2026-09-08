@@ -104,7 +104,7 @@ def _hermetic():
     socket.socket.connect_ex = _local_only(_real_ex)
 
 
-def _setup(archive_db, engine_db, polars_file):
+def _setup(archive_db, engine_db, polars_file, spool_db=None):
     os.environ.update(
         ARCHIVE_DB=archive_db, ENGINE_DB=engine_db, POLARS_FILE=polars_file,
         DATA_SOURCE="onboard", ONBOARD_LIVE_WS="false",
@@ -113,13 +113,21 @@ def _setup(archive_db, engine_db, polars_file):
                                         # refresh would read a source the harness has already
                                         # moved to the next frame
     )
+    # A second, coarser recording of the same race, attached read-only by ReplaySource so the
+    # timeline can run past 20:40:30Z where the Pi's archive stops. See spool_to_sqlite.py.
+    # Passed by env rather than argument because the harness builds a fresh source per frame.
+    if spool_db:
+        os.environ["REPLAY_SPOOL_DB"] = spool_db
+    else:
+        os.environ.pop("REPLAY_SPOOL_DB", None)
     for p in (HERE, ROOT, os.path.join(ROOT, "vps", "agent"), os.path.join(ROOT, "pi", "engine")):
         if p not in sys.path:
             sys.path.insert(0, p)
 
 
-def build(archive_db, engine_db, polars_file, start, end, step_s, out_dir, endpoints=None):
-    _setup(archive_db, engine_db, polars_file)
+def build(archive_db, engine_db, polars_file, start, end, step_s, out_dir, endpoints=None,
+          spool_db=None):
+    _setup(archive_db, engine_db, polars_file, spool_db=spool_db)
     import freezegun
     from freezegun import freeze_time
     from fastapi.testclient import TestClient
@@ -187,7 +195,7 @@ def build(archive_db, engine_db, polars_file, start, end, step_s, out_dir, endpo
         "start": start.isoformat().replace("+00:00", "Z"),
         "end": end.isoformat().replace("+00:00", "Z"),
         "step_s": step_s, "frames": n_frames,
-        "archive_db": archive_db, "engine_db": engine_db,
+        "archive_db": archive_db, "engine_db": engine_db, "spool_db": spool_db,
         "endpoints": eps,
         "skipped_need_network": NEEDS_NETWORK,
         "cadence_s": {k: v for k, v in CADENCE_S.items() if k in eps},
@@ -217,6 +225,9 @@ def main():
                                          "work/archive-backfill.db")
     ap.add_argument("--engine", default="/home/constantineau/backups/replay-jul18/engine.db")
     ap.add_argument("--polars", default=os.path.join(ROOT, "vps", "db", "seed", "polars_sr33.sql"))
+    ap.add_argument("--spool", help="a readings-schema SQLite file of uplink aggregates "
+                                    "(tools/replay/spool_to_sqlite.py) attached alongside the "
+                                    "archive, so the timeline can run past where it stops")
     ap.add_argument("--start", required=True)
     ap.add_argument("--end", required=True)
     ap.add_argument("--step", type=float, default=30.0, help="seconds between frames")
@@ -224,7 +235,8 @@ def main():
     ap.add_argument("--endpoints", help="comma-separated override of the endpoint list")
     a = ap.parse_args()
     build(a.archive, a.engine, a.polars, _iso(a.start), _iso(a.end), a.step, a.out,
-          endpoints=[e.strip() for e in a.endpoints.split(",")] if a.endpoints else None)
+          endpoints=[e.strip() for e in a.endpoints.split(",")] if a.endpoints else None,
+          spool_db=a.spool)
 
 
 if __name__ == "__main__":
