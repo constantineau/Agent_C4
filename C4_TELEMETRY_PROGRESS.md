@@ -1,9 +1,91 @@
-# C4 telemetry consolidation — progress (updated 2026-09-07)
+# C4 telemetry consolidation — progress (updated 2026-09-08)
 
 Goal (Cole): **lose no telemetry**, and **copy all telemetry off the Pi to the VPS**.
 Deletion from the boat is allowed only *after* an off-boat copy is sha256-verified.
 
-## ⏸ PICK UP HERE (2026-09-07, second pause — read this block, then "Session 2026-09-07 (later)")
+## ⏸ PICK UP HERE (2026-09-08 — read this block, then "Session 2026-09-08" below)
+
+**Everything in this session is committed on `dev`, merged to `main`, and pushed** (4 commits:
+the replay clock fix, the power hysteresis fix, the dashboard surface, these docs). Working tree
+clean. All suites green: **24 files + 10 pytest cases** (`test_power` gained 8 assertions,
+`test_sensor_health` 21). Nothing is mid-flight; no background units are running.
+
+**`main` is deployable and the boat's clone is several merges behind it.** When the boat is back:
+rebuild the console + engine images (`docker compose -f compose.pi.yml up -d --build console
+engine`) — the console image BAKES `pi/console/dashboard/`, so the new tiles do not appear until
+it is rebuilt — and deploy by copying single files after diffing, because a `git pull` on the Pi
+switches branches.
+
+**Done this session — the iPad surface (the previous handoff's item #1).** Everything the
+2026-09-07 session built was reachable by HTTP and on **no screen aboard**. Now: a **HOUSE BANK**
+tile, **DATA turned into the instrument-health tile** (one chip over five cross-checks), and
+**provenance on every number** (⚑ on any tile running off a backup sensor, the device named in
+every BASED ON line, a full channel→device→rank→age table in the DATA detail). Verified against
+the real Jul 18 race through the replay rig, not just the demo scenarios. Full write-up in
+`docs/V2_BACKLOG.md` → "In-race UX".
+
+**Three bugs found by looking at the numbers on a screen, all fixed:**
+
+1. 🔴 **The replay rig's frozen clock only reached ONE endpoint.** freezegun's default ignore
+   list contains `'threading'`, and `TestClient` runs each endpoint on an AnyIO worker thread, so
+   `time.time()` returned the **real** wall clock — 51 days after the race — everywhere except
+   `/conditions` (whose extra stack frame happened to hide the `threading` frame). `/sources`
+   reported ages of **4,394,415 s** in every frame ever built, and `/conditions/full` showed
+   **18 of 18** channels as `fell_back`. **Every timeline built before today is wrong in this
+   way.** Fixed in `harness.build()`; rebuilt (see "Replay rig state").
+2. 🔴 **The bank status flapped `warn`↔`danger` seventeen times in 40 minutes** — visible the
+   moment the tile existed. `min()` over a sliding window is discontinuous in `now`. Fixed to a
+   dwell median; `POWER_CLEAR_MARGIN_V` removed; `test_power.py` now scores **stability**, which
+   nothing did before. **This supersedes the 14:25Z-warn / 16:10Z-danger figures in the
+   backlog** — those came from the decimated spool. Archive-measured: first warn 13:04:30Z (7.6 h
+   before the failure), and `danger` never fires, because the bank plateaued just *above* an
+   unconfirmed 11.60 V line. Numbers in `docs/V2_BACKLOG.md` → "Onboard hardware".
+3. **`display:flex` beats the `hidden` attribute**, so the RACE CHECKLIST bar — "appears only
+   when something is due" — was on screen permanently as an empty red strip. Seventh instance of
+   designed-wired-and-silently-not-in-force.
+
+**⚠️ CORRECTION to the previous handoff: do NOT delete
+`backups/c4-boat-pull-2026-08-30/work/archive-backfill.db`.** It was listed there as the obvious
+3.1 GB disk reclaim. It is the **replay rig's archive** — `harness.py`'s default `--archive` and
+the source of every timeline built so far. Deleting it breaks Race Rewind. (Disk is still ~11 G
+free / 89%.)
+
+**Do these next, in this order:**
+1. **The two things only a person at the boat can settle**, now with a sharper reason than
+   yesterday: **confirm the bank** (chemistry, capacity, charging budget) — the race data cannot
+   resolve `danger` vs `warn` on its own, see #2 above — and **enable the Orca Core's N2K
+   attitude sharing**, because the policy ranks the Orca first for heel/pitch/rate-of-turn/
+   heading and it published **none** of them during the race. The health chip reports that as a
+   standing note rather than an alarm, and it will keep doing so until someone flips that
+   setting.
+2. **Materialise the 33,014 spool rows into a `readings`-schema SQLite file** so the rig covers
+   the whole race instead of stopping at 20:40. This is now the highest-value rig work: the
+   kicked GPS at 22:58Z and the quarter-turn compass error that followed are **after** the
+   archive ends, so the two `/health/sensors` checks written for that event have never been
+   exercised against the real thing — only against the fixture in `test_sensor_health.py`.
+3. **Derive `headingTrue` from `headingMagnetic` + `magneticVariation`.** Unchanged from
+   yesterday: heading had *no* redundancy on Jul 18.
+4. **Record device identity on the boat** (archiver/uplink read `/signalk/v1/api/sources`), so
+   `shared/n2k_sources.SR33_DEVICES` becomes a cache rather than the source of truth.
+5. Then the v2 backlog. Parked on the boat: recreate the archiver container for its stale
+   `VPS_URL`, and #6c the recurring drain.
+
+**Replay rig state.** `backups/replay-jul18/timeline/` is rebuilt against the current engine
+**with the clock fix** and now also captures `/power`, `/health/sensors` and `/conditions/full`.
+`timeline-preprio/` is the pre-2026-09-07 baseline kept for before/after diffs — note it carries
+the wall-clock bug, so do not compare *ages* across that boundary. Rebuilds need an ephemeral
+venv (`freezegun`, `fastapi`, `httpx`, `websockets`, `pytest`), take ~28 min for 433 frames, and
+must be run **after** the change you want to measure.
+
+To look at it:
+```bash
+python3 tools/replay/server.py --timeline /home/constantineau/backups/replay-jul18/timeline
+# http://localhost:8110/   — real console left, ground truth right, notes -> /replay/notes.md
+```
+
+---
+
+## Session 2026-09-07 (second pause — the block that was here before)
 
 **Everything in this session is committed on `dev` and NOT pushed.** Working tree clean.
 All suites green: **24 files + 10 pytest cases** (`test_power`, `test_sensor_health`,
@@ -22,8 +104,10 @@ brownout-tolerant, make `source_priority` actually bind, and fix the Lab debrief
 track. Full write-up in "Session 2026-09-07 (later)" below, including the correction that the
 **GPS kick at 22:58Z, not the battery, is what cost primary navigation**.
 
-**Do these next, in this order:**
-1. **The iPad surface.** The engine now returns `/power`, `/health/sensors` and provenance +
+**Do these next, in this order:** ⚠️ *superseded — see the 2026-09-08 block at the top. Item 1
+is DONE; the disk advice below is WRONG.*
+1. ~~**The iPad surface.**~~ ✅ **Done 2026-09-08.** The engine now returns `/power`,
+   `/health/sensors` and provenance +
    `fell_back` per channel in `/conditions/full`, and **none of it is on the dashboard**. One
    bank tile, provenance on each number, and a single instrument-health chip (unresolvable
    matchers · silent rank-1 sources · attitude out of range · heading-vs-COG bias · AIS or
@@ -48,9 +132,112 @@ before/after diffs; `timeline-prio-partial/` is a half-fixed intermediate, **del
 Rebuilds need the venv in a scratchpad (`freezegun`, `fastapi`, `httpx`, `websockets`,
 `pytest`) — it is ephemeral, recreate it.
 
-**Disk: ~9 G free (90%).** The obvious reclaim is
+**Disk: ~9 G free (90%).** ~~The obvious reclaim is
 `backups/c4-boat-pull-2026-08-30/work/archive-backfill.db` (3.1 GB, no longer needed — #4 is
-done) and `timeline-prio-partial/`.
+done)~~ and `timeline-prio-partial/`.
+🛑 **WRONG — do not delete `archive-backfill.db`** (corrected 2026-09-08). It is `harness.py`'s
+default `--archive` and the source of every replay timeline built so far; deleting it breaks
+Race Rewind. `timeline-prio-partial/` was already gone.
+
+---
+
+## Session 2026-09-08 — the iPad surface, and three bugs it exposed
+
+**The thesis of the session, and it held: a check nobody can see is worth what a check that was
+never written is worth.** Yesterday's session built the bank watch, the attitude/heading
+cross-checks and the sensor-priority binding, measured all three against the real race, and left
+them reachable only over HTTP. Putting them on the iPad took a morning; *looking* at them found
+two defects in the code that had been declared finished a day earlier, one of them in the
+measuring instrument itself.
+
+**What shipped on the dashboard** (`pi/console/dashboard/`, one commit, no engine changes beyond
+the new `/health/sensors` payload):
+
+| surface | what it answers |
+|---|---|
+| **HOUSE BANK** tile | level, drain rate, hours to the 11.0 V brownout floor; detail adds the raw/min/decision figures and the unconfirmed-thresholds warning |
+| **DATA** → instrument health | one chip over five cross-checks; detail lists each with its own verdict |
+| **⚑ on any tile** | this number is coming off a backup sensor — hover/tap says which |
+| **DATA detail table** | every channel → device → priority rank → age → ⚑ backup / ƒ computed / ≠ sources disagree |
+
+Nine tiles on an eight-cell grid: the two SYSTEMS reads share the last cell, stacked
+(`.tile-pair` / `.tile.mini`), so the seven sailing tiles keep the footprint the crew has learned.
+DATA and BANK belong together — on Jul 18 the flat bank is what killed the instruments.
+
+**The engine side** is one aggregated endpoint so the chip has a single source of truth:
+`sensor_health.assess(conditions=…)` now carries a `provenance` block —
+`assess_provenance(channels, ais_excluded)`, pure, so the rig and the tests see what the boat
+sees. Three checks: **policy_binds** (every matcher names a device on this bus), **lead_source**
+(which channels are on a backup), **own_ship** (the AIS read filter, with the excluded list as
+positive evidence it bound). 21 new assertions in `test_sensor_health.py`.
+
+**A distinction worth keeping:** `lead_source` separates a ranked sensor that **went silent**
+(happening now → `warn`) from one that has **never published** the channel (a false premise in
+the policy → a standing `note`, status left `ok`). The Orca Core is ranked first for
+heel/pitch/rate-of-turn/heading and published none of them during the race, so conflating the
+two would leave the chip permanently yellow — which is the same as switching it off.
+
+### Bug 1 — the replay rig's frozen clock only reached one endpoint
+
+freezegun's `DEFAULT_IGNORE_LIST` contains `'threading'` and it decides whether to serve the
+frozen clock by inspecting a bounded window of the call stack. `TestClient` runs each sync
+endpoint on an AnyIO worker thread, so for most endpoints the `threading` frame sat inside that
+window and `time.time()` returned the **real** wall clock. It stayed hidden because the one
+endpoint it did not affect is `/conditions` — `get_strip()` adds a stack frame, pushing
+`threading` out of view — so the first thing anyone checks looked right.
+
+| in the same frame | as built | clock fixed |
+|---|---|---|
+| `/sources` last-seen age | **4,394,415 s** (51 days) | −0.9 s |
+| `/conditions/full` channels `fell_back` | **18 of 18** | 5 of 18 |
+| `/conditions` `data_age_seconds` | −1.0 | −1.0 |
+
+Nothing previously *measured* through the rig used a `time.time()`-derived age, so the published
+before/after numbers stand. But it was a precondition for this session: every channel reading
+"the ranked sensor is stale" is indistinguishable from a real failover, and would have been
+reported as one. Fix: `freezegun.configure(default_ignore_list=[])` in `harness.build()`.
+
+### Bug 2 — the bank status flapped, and only the tile made it visible
+
+`_tripped` decided on `min()` over the *sliding* 45-minute window. That is discontinuous in
+`now` — a dip enters the window in one step and leaves it 45 minutes later — so the verdict
+toggled on window arithmetic rather than on anything the battery did, and the release band
+written to prevent exactly this never got a say because the early-out "never tripped in this
+window" bypassed it.
+
+Measured over the full-res archive (18,554 samples at ~0.7 Hz): **56 status changes → 22**, and
+the seventeen `danger` frames were **each a single 30 s frame**, all between 19:13Z and 19:53Z.
+The tile would have flashed red for half a minute and gone amber again, seventeen times, while
+the bank sat flat. Fixed by deciding on the **median of the raw samples in the dwell** (~420
+samples, slides smoothly, crosses a line once). `POWER_CLEAR_MARGIN_V` is **removed** rather
+than left doing nothing — the median *is* a release band a short bounce cannot move.
+
+Two consequences: `charging` no longer clears a `warn` (it sat above the warn test, so 11.71 V
+read `ok` on a +0.12 V/h wobble), and **the race never reaches `danger`** — the bank plateaued at
+a 11.64–11.72 V median for the last 3½ hours, settling just *above* an 11.60 V line nobody has
+confirmed. That is the calibration question, not a missing alarm, and it is the sharpest argument
+yet for someone checking the bank. The sags never reach the floor either: **0.0% of samples
+≤ 11.0 V in every hour**, absolute minimum 11.08 V.
+
+**Also re-measured, superseding the backlog's figures:** first `warn` at **13:04:30Z**, 7.6 h
+before the archiver died. The old 14:25Z / 16:10Z numbers came from the decimated Postgres spool,
+where a 10-minute dwell holds two or three points — this module is written for the 0.7 Hz onboard
+feed and says so now.
+
+**The assertion that would have caught it, and now does.** `test_power.py` scores the verdict
+for **stability**: a bank parked 5 mV off the danger line at 0.7 Hz with deterministic load sags
+must produce ≤1 status change in 120 polls (it produces 0). Nothing scored stability before,
+which is exactly why a defect this visible survived a day — every assertion asked "is it right at
+moment X", and a readout that is right every other poll passes all of them. The console's own
+flapping defect was fixed one day earlier by the same reasoning; the lesson did not travel.
+
+### Bug 3 — `display:flex` beats the `hidden` attribute
+
+The RACE CHECKLIST bar, whose whole design is "appears only when something is due", was on
+screen permanently as an empty red strip, and the CURRENT SAILS bar showed before any sail state
+had loaded. Both JS paths set `.hidden` correctly and neither could take effect;
+`.strategy[hidden]` and `.detail[hidden]` already carried the guard. **Seventh instance of
+designed, seeded, wired, and silently not in force.**
 
 ---
 

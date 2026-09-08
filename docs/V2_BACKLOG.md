@@ -154,7 +154,77 @@ state, which also keeps it replayable), with a kv ratchet for the pathological c
 close-aboard rule preserved for buoy racing. `vps/agent/test_navigator_progress.py`, 22
 assertions; agent suite 16/16.
 
+### ⚠ The rig's frozen clock only reached ONE endpoint — FIXED 2026-09-08
+
+**Every timeline built before 2026-09-08 has real-wall-clock ages in it, and the whole point of
+the rig is that it does not.** freezegun's `DEFAULT_IGNORE_LIST` contains `'threading'`, and it
+decides whether to serve the frozen clock by inspecting a bounded window of the call stack.
+`TestClient` runs each sync endpoint on an AnyIO worker thread, so for most endpoints the
+`threading` frame sat inside that window and `time.time()` returned the **real** wall clock —
+51 days after the race.
+
+It stayed invisible because the one endpoint it did *not* affect is `/conditions`: `get_strip()`
+adds a stack frame, which pushes `threading` out of the inspected window. So the first thing
+anyone checks looked right, while in the same frame:
+
+| | as built (before) | with the clock fixed |
+|---|---|---|
+| `/sources` last-seen age | **4,394,415 s** (51 days) | −0.9 s |
+| `/conditions/full` channels flagged `fell_back` | **18 of 18** | 5 of 18 |
+| `/conditions` `data_age_seconds` | −1.0 | −1.0 |
+
+Nothing that had been *measured* through the rig used a `time.time()`-derived age, so the
+published before/after numbers stand — but the fix was a precondition for the bank tile and the
+health chip, whose entire job is to reason about freshness. Every channel reading as "the ranked
+sensor is stale" is indistinguishable from a real failover, and it would have been reported as
+one.
+
+Fix: `freezegun.configure(default_ignore_list=[])` in `harness.build()`. `truth.py` never used
+freezegun and is unaffected, so a frames-only rebuild over the same `--start/--end/--step` keeps
+the two panes aligned. **A frozen clock the rig only mostly applies is worse than no clock at
+all** — if a future harness grows another thread boundary, assert an age, don't eyeball a tile.
+
 ### In-race UX (console, dashboard, coach)
+
+- **P0 — ✅ THE IPAD NOW SHOWS THE BANK, THE CROSS-CHECKS AND THE PROVENANCE (2026-09-08).**
+  Everything the 2026-09-07 session built — `/power`, `/health/sensors`, and per-channel
+  provenance with `fell_back` in `/conditions/full` — was reachable by HTTP and on **no screen
+  aboard**. A check nobody can see is worth exactly as much as a check that was never written,
+  which is the same failure as the voltage sitting unread in the archive. Three surfaces, all in
+  `pi/console/dashboard/`:
+
+  - **HOUSE BANK tile** — smoothed level as the face, drain rate and hours-to-floor as the
+    sub-line, tap for the raw/min/trend table. Amber at `warn`, red and pulsing at `danger`.
+  - **DATA is now the instrument-health tile.** Its chip is the worst of five cross-checks
+    (attitude range · heading-vs-GPS-course · priority matchers bind · rank-1 sensor in use ·
+    own-ship data only), each shown with its own verdict in the detail rather than rolled into
+    one word, because the response differs: a misaligned compass is a navigation problem, an
+    unbindable matcher is a configuration problem, AIS leading own-ship position is a
+    "stop trusting this screen" problem.
+  - **Provenance on every number.** A ⚑ on any tile whose inputs are coming off a backup
+    sensor, the device named in every tile's BASED ON line, and a full table in the DATA detail:
+    channel · value · device · priority rank · age · how many sources report it · ⚑ backup /
+    ƒ computed / ≠ sources disagree.
+
+  Nine tiles on an eight-cell grid: rather than reflow the 4×2 the crew has learned, the two
+  SYSTEMS reads share the last cell stacked (`.tile-pair`, `.tile.mini`). DATA and BANK belong
+  together — on Jul 18 the flat bank is what killed the instruments.
+
+  **Two things this surfaced that are worth acting on:**
+
+  - **The priority policy names a device that does not publish.** `heel`, `pitch`,
+    `rate_of_turn`, `heading_true` and `heading_mag` all rank the Orca Core first and the Orca
+    published **none** of them during the race, so all five ran on the 24xd/Reactor for seven
+    hours. That is a standing configuration fact, not an event, so it reports as a **note with
+    the status left `ok`** — a permanently yellow chip is a chip nobody looks at. It clears when
+    someone enables the Orca's N2K attitude sharing (already an open item), or when the policy
+    is rewritten to match what the bus actually carries.
+  - **`display:flex` beats the `hidden` attribute**, so the RACE CHECKLIST bar — whose entire
+    design is "appears only when something is due" — was on screen permanently as an empty red
+    strip, and the CURRENT SAILS bar showed before any sail state loaded. Both JS paths set
+    `.hidden` correctly and neither could take effect. `.strategy[hidden]` and `.detail[hidden]`
+    already carried the guard; these two were missed. **Seventh instance of the session's
+    recurring shape: designed, wired, silently not in force.**
 
 - **P0 — Time to Mark ✅ BOTH DEFECTS FIXED 2026-09-07.** The sequencer (above) and, separately,
   the ETA estimator: `distance / instantaneous VMC`, which assumes the boat can sail straight at
@@ -248,11 +318,51 @@ assertions; agent suite 16/16.
 
   ✅ **Bank watch built** (`vps/agent/app/power.py`, engine `GET /power`): smoothed level,
   robust trend, projected hours to an 11.0 V floor, ok/warn/danger/charging, stateless so the
-  replay rig agrees with the boat. Against the real curve it would have warned at **14:25Z**
-  and escalated to danger at **16:10Z** — 6 h 15 m and 4 h 30 m before the failure — and it
-  does not alarm on the charging recovery. ⚠️ The absolute thresholds assume 12 V lead-acid and
-  are **unconfirmed**; the bank's chemistry and capacity are recorded nowhere in this repo.
-  Trust the trend/projection first, and set `POWER_*` once someone checks the bank.
+  replay rig agrees with the boat. ✅ **On the iPad since 2026-09-08** (see "In-race UX").
+  ⚠️ The absolute thresholds assume 12 V lead-acid and are **unconfirmed**; the bank's chemistry
+  and capacity are recorded nowhere in this repo. Trust the trend/projection first, and set
+  `POWER_*` once someone checks the bank.
+
+  **Re-measured 2026-09-08 against the full-res archive (18,554 samples at ~0.7 Hz, 11:26 →
+  20:40:30Z), which supersedes the 14:25Z/16:10Z figures above** — those were taken from the
+  decimated Postgres spool, and at 5-minute means this module's 10-minute dwell holds two or
+  three points, so its verdict there is not the verdict the boat would have produced. On the
+  archive:
+
+  | | before | after |
+  |---|---|---|
+  | status changes, 11:30 → 20:40Z | **56** | **22** |
+  | `danger` frames | 17, **every one a single 30 s frame** | 0 |
+  | `warn` runs / longest | 26 / 141 min | **9 / 226 min** |
+  | first `warn` | 13:04:30Z, **7.6 h** before the failure | unchanged |
+
+  🔴 **The status flapped, and only the new tile made it visible.** `_tripped` decided on
+  `min()` over the *sliding* 45-minute window — a discontinuous function of `now`, since a dip
+  enters the window in one step and leaves it 45 minutes later — so between 19:13Z and 19:53Z
+  the tile would have flashed red for 30 s and gone amber again, **seventeen times**, while the
+  bank sat flat. The release band written to prevent exactly this never got a say: the early-out
+  "never tripped in this window" bypassed it. **Fourth instance of quantising a continuous
+  quantity to drive a discrete decision** (cache-key buckets · `if twa < beat` · polar snapping ·
+  this) and the second flapping readout on this boat's screens in two days.
+
+  Fixed by deciding on the **median of the raw samples in the dwell** — ~420 samples at 0.7 Hz,
+  so it slides smoothly and crosses a threshold once. The median is also the release band a
+  bounce cannot move (a 3-minute recovery inside a 10-minute dwell leaves the median where it
+  was), so `POWER_CLEAR_MARGIN_V` is **removed** rather than left reading 0.15 V and doing
+  nothing. `test_power.py` now scores the verdict for **stability** on a bank parked 5 mV off the
+  danger line at 0.7 Hz with deterministic load sags — 0 changes in 120 polls. Nothing scored
+  stability before, which is why a defect this visible survived a day: every assertion asked
+  "is it right at moment X", and a readout that is right every other poll passes all of them.
+
+  **Two consequences worth knowing.** `charging` no longer clears a `warn`, only annotates it
+  (it sat above the warn test, so 11.71 V read `ok` on a +0.12 V/h wobble — noise in a six-hour
+  decline). And the race **never reaches `danger`** under the fixed rule: the bank plateaued at a
+  11.64–11.72 V median for the last 3½ hours, i.e. settled just *above* an 11.60 V danger line
+  nobody has confirmed. A rule that calls that plateau dangerous can only do it by chattering.
+  **That is the calibration question, not a missing alarm** — and the sharpest argument yet for
+  someone at the boat pinning down the bank's chemistry and capacity. The sags never reach the
+  floor either (0.0% of samples ≤ 11.0 V in every hour; the absolute minimum is 11.08 V), so a
+  brownout rule keyed on the floor would never fire.
 
   ✅ **Brownout-tolerant archiving** (`pi/archiver/archiver.py`): the corruption cost six weeks
   only because `open_db()` raised, the process exited and Docker restarted it 48 times,
