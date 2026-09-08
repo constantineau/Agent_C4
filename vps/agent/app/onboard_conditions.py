@@ -10,8 +10,15 @@ This mirrors `tools.PRESENT` / `DISAGREE`; kept standalone so the onboard image 
 the cloud tool stack (DB pool, alerts, summarizer, LLM). If a channel is added to tools.PRESENT,
 mirror it here.
 """
+import os
+
+from shared import n2k_sources
+from shared import source_policy
+
 from . import datasource
 from . import fatigue
+
+BOAT_ID = os.environ.get("BOAT_ID", "sr33")
 
 _ms_to_kn = lambda x: x * 1.943844
 _rad_to_deg = lambda x: x * 57.295779513
@@ -38,8 +45,11 @@ PRESENT = {
     "environment.depth.belowTransducer": ("depth", "m", _id),
     "environment.water.temperature":   ("water_temp", "°C", _k_to_c),
     "steering.rudderAngle":            ("rudder_angle", "°", _rad_to_deg),
+    # The bank. Absent from both PRESENT tables until 2026-09-07, which is why a six-hour
+    # discharge to 11.08 V went unremarked through the Jul 18 race — see app/power.py.
+    "electrical.batteries.0.voltage": ("bank_voltage", "V", _id),
 }
-DISAGREE = {"°": 6.0, "kn": 0.6, "m": 1.0, "°C": 2.0, "°/s": 5.0}
+DISAGREE = {"°": 6.0, "kn": 0.6, "m": 1.0, "°C": 2.0, "°/s": 5.0, "V": 0.5}
 
 
 def _age(epoch):
@@ -47,10 +57,35 @@ def _age(epoch):
     return round(time.time() - epoch, 1)
 
 
+def _choose_preferred(channel, readings):
+    """Lead reading by device priority, failing over when the ranked source is stale/absent.
+    Returns (reading, reason, fell_back) — the same contract as `tools._choose_preferred`.
+
+    Until 2026-09-07 this was "freshest wins", with a note here saying to refine it once
+    real-bus `$source` priority was available onboard. It now is: `shared/source_policy` holds
+    the committed policy (the boat has no Postgres to read the table from) and
+    `shared/n2k_sources` resolves N2K addresses to devices, which is what the seeded matchers
+    are actually written against. Measured on Jul 18: freshest-wins put heel on the autopilot
+    AHRS — the source the policy annotates "non-racing only" — for 58% of reads, and alternated
+    apparent wind between two devices that disagree by up to 5.9 kn."""
+    devices = n2k_sources.devices_for(BOAT_ID)
+    matchers = source_policy.matchers_for(channel)
+    for i, m in enumerate(matchers):
+        fresh = [r for r in readings
+                 if n2k_sources.matches(r["source"], m, devices)
+                 and r["age_s"] <= source_policy.FAILOVER_AGE_S]
+        if fresh:
+            return min(fresh, key=lambda r: r["age_s"]), f"priority rank {i+1} ({m})", i > 0
+    best = min(readings, key=lambda r: r["age_s"])
+    if matchers:
+        return best, "no preferred source fresh — using freshest available", True
+    return best, "no priority set — freshest available", False
+
+
 def get_current_conditions(max_age_minutes: int = 5):
     """Every live quantity, from EVERY reporting source, with freshness + a disagreement flag.
-    Freshest source wins as the lead (the cloud adds priority/failover from a Postgres table;
-    onboard v1 uses freshest — refine when real-bus $source priority is loaded onboard)."""
+    The lead per channel is the priority-ranked device with automatic failover; all readings
+    stay visible."""
     rows = datasource.active().latest_per_source(list(PRESENT.keys()), max_age_minutes)
     channels = {}
     for r in rows:
@@ -66,18 +101,25 @@ def get_current_conditions(max_age_minutes: int = 5):
         if len(vals) > 1:
             c["spread"] = round(max(vals) - min(vals), 3)
             c["disagreement"] = c["spread"] > DISAGREE.get(c["unit"], 1e9)
-        best = min(c["readings"], key=lambda x: x["age_s"])
+        best, reason, fell_back = _choose_preferred(ch, c["readings"])
         c["preferred"] = {"source": best["source"], "value": best["value"],
-                          "age_s": best["age_s"]}
-        c["preferred_reason"] = "freshest available (onboard)"
+                          "age_s": best["age_s"],
+                          "device": (n2k_sources.resolve(best["source"],
+                                                         n2k_sources.devices_for(BOAT_ID))
+                                     or {}).get("model")}
+        c["preferred_reason"] = reason
+        if fell_back:
+            c["fell_back"] = True   # ranked sensor stale/silent — the iPad should say so
     if not channels:
         return {"available": False, "note": "no telemetry in window"}
     from datetime import datetime, timezone
     return {
         "available": True, "as_of": datetime.now(timezone.utc).isoformat(),
         "channels": channels,
-        "note": ("Onboard engine: every source kept; lead is the freshest reading. Cross-check "
-                 "disagreement; treat stale/uncalibrated sources with caution."),
+        "note": ("Onboard engine: every source kept; `preferred` is the priority-ranked device "
+                 "with automatic failover, and `fell_back=true` means the ranked sensor was "
+                 "stale/silent and a backup is in use — say so. Cross-check disagreement; "
+                 "treat stale/uncalibrated sources with caution."),
     }
 
 

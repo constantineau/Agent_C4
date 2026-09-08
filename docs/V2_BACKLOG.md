@@ -154,7 +154,77 @@ state, which also keeps it replayable), with a kv ratchet for the pathological c
 close-aboard rule preserved for buoy racing. `vps/agent/test_navigator_progress.py`, 22
 assertions; agent suite 16/16.
 
+### ⚠ The rig's frozen clock only reached ONE endpoint — FIXED 2026-09-08
+
+**Every timeline built before 2026-09-08 has real-wall-clock ages in it, and the whole point of
+the rig is that it does not.** freezegun's `DEFAULT_IGNORE_LIST` contains `'threading'`, and it
+decides whether to serve the frozen clock by inspecting a bounded window of the call stack.
+`TestClient` runs each sync endpoint on an AnyIO worker thread, so for most endpoints the
+`threading` frame sat inside that window and `time.time()` returned the **real** wall clock —
+51 days after the race.
+
+It stayed invisible because the one endpoint it did *not* affect is `/conditions`: `get_strip()`
+adds a stack frame, which pushes `threading` out of the inspected window. So the first thing
+anyone checks looked right, while in the same frame:
+
+| | as built (before) | with the clock fixed |
+|---|---|---|
+| `/sources` last-seen age | **4,394,415 s** (51 days) | −0.9 s |
+| `/conditions/full` channels flagged `fell_back` | **18 of 18** | 5 of 18 |
+| `/conditions` `data_age_seconds` | −1.0 | −1.0 |
+
+Nothing that had been *measured* through the rig used a `time.time()`-derived age, so the
+published before/after numbers stand — but the fix was a precondition for the bank tile and the
+health chip, whose entire job is to reason about freshness. Every channel reading as "the ranked
+sensor is stale" is indistinguishable from a real failover, and it would have been reported as
+one.
+
+Fix: `freezegun.configure(default_ignore_list=[])` in `harness.build()`. `truth.py` never used
+freezegun and is unaffected, so a frames-only rebuild over the same `--start/--end/--step` keeps
+the two panes aligned. **A frozen clock the rig only mostly applies is worse than no clock at
+all** — if a future harness grows another thread boundary, assert an age, don't eyeball a tile.
+
 ### In-race UX (console, dashboard, coach)
+
+- **P0 — ✅ THE IPAD NOW SHOWS THE BANK, THE CROSS-CHECKS AND THE PROVENANCE (2026-09-08).**
+  Everything the 2026-09-07 session built — `/power`, `/health/sensors`, and per-channel
+  provenance with `fell_back` in `/conditions/full` — was reachable by HTTP and on **no screen
+  aboard**. A check nobody can see is worth exactly as much as a check that was never written,
+  which is the same failure as the voltage sitting unread in the archive. Three surfaces, all in
+  `pi/console/dashboard/`:
+
+  - **HOUSE BANK tile** — smoothed level as the face, drain rate and hours-to-floor as the
+    sub-line, tap for the raw/min/trend table. Amber at `warn`, red and pulsing at `danger`.
+  - **DATA is now the instrument-health tile.** Its chip is the worst of five cross-checks
+    (attitude range · heading-vs-GPS-course · priority matchers bind · rank-1 sensor in use ·
+    own-ship data only), each shown with its own verdict in the detail rather than rolled into
+    one word, because the response differs: a misaligned compass is a navigation problem, an
+    unbindable matcher is a configuration problem, AIS leading own-ship position is a
+    "stop trusting this screen" problem.
+  - **Provenance on every number.** A ⚑ on any tile whose inputs are coming off a backup
+    sensor, the device named in every tile's BASED ON line, and a full table in the DATA detail:
+    channel · value · device · priority rank · age · how many sources report it · ⚑ backup /
+    ƒ computed / ≠ sources disagree.
+
+  Nine tiles on an eight-cell grid: rather than reflow the 4×2 the crew has learned, the two
+  SYSTEMS reads share the last cell stacked (`.tile-pair`, `.tile.mini`). DATA and BANK belong
+  together — on Jul 18 the flat bank is what killed the instruments.
+
+  **Two things this surfaced that are worth acting on:**
+
+  - **The priority policy names a device that does not publish.** `heel`, `pitch`,
+    `rate_of_turn`, `heading_true` and `heading_mag` all rank the Orca Core first and the Orca
+    published **none** of them during the race, so all five ran on the 24xd/Reactor for seven
+    hours. That is a standing configuration fact, not an event, so it reports as a **note with
+    the status left `ok`** — a permanently yellow chip is a chip nobody looks at. It clears when
+    someone enables the Orca's N2K attitude sharing (already an open item), or when the policy
+    is rewritten to match what the bus actually carries.
+  - **`display:flex` beats the `hidden` attribute**, so the RACE CHECKLIST bar — whose entire
+    design is "appears only when something is due" — was on screen permanently as an empty red
+    strip, and the CURRENT SAILS bar showed before any sail state loaded. Both JS paths set
+    `.hidden` correctly and neither could take effect. `.strategy[hidden]` and `.detail[hidden]`
+    already carried the guard; these two were missed. **Seventh instance of the session's
+    recurring shape: designed, wired, silently not in force.**
 
 - **P0 — Time to Mark ✅ BOTH DEFECTS FIXED 2026-09-07.** The sequencer (above) and, separately,
   the ETA estimator: `distance / instantaneous VMC`, which assumes the boat can sail straight at
@@ -236,6 +306,76 @@ assertions; agent suite 16/16.
 
 ### Onboard hardware / deployment (Pi, Orin, N2K)
 
+- **P0 — 🔴 THE HOUSE BANK WENT FLAT DURING THE RACE, AND THE SYSTEM NEVER SAID SO.** Found
+  2026-09-07 while looking for why the archiver died. Voltage fell monotonically 12.91 V
+  (pre-start) → 11.61 V mean with minima at **11.08 V** over six hours of racing, recovering
+  only when the engine went on for the trip home. At **20:40:30Z**, at the bottom of that
+  curve, the full-res archiver (SQLite corruption) and the em-trak AIS receiver (67,149 rows in
+  the previous 100 min → **11** in the next 3.5 h) stopped in the same minute; every other N2K
+  source kept reporting through the uplink. The boat retired ~3 h later.
+  `electrical.batteries.0.voltage` was arriving from the Orca at ~0.7 Hz the entire time and
+  appeared in **no** PRESENT table, **no** alert rule and **no** tile.
+
+  ✅ **Bank watch built** (`vps/agent/app/power.py`, engine `GET /power`): smoothed level,
+  robust trend, projected hours to an 11.0 V floor, ok/warn/danger/charging, stateless so the
+  replay rig agrees with the boat. ✅ **On the iPad since 2026-09-08** (see "In-race UX").
+  ⚠️ The absolute thresholds assume 12 V lead-acid and are **unconfirmed**; the bank's chemistry
+  and capacity are recorded nowhere in this repo. Trust the trend/projection first, and set
+  `POWER_*` once someone checks the bank.
+
+  **Re-measured 2026-09-08 against the full-res archive (18,554 samples at ~0.7 Hz, 11:26 →
+  20:40:30Z), which supersedes the 14:25Z/16:10Z figures above** — those were taken from the
+  decimated Postgres spool, and at 5-minute means this module's 10-minute dwell holds two or
+  three points, so its verdict there is not the verdict the boat would have produced. On the
+  archive:
+
+  | | before | after |
+  |---|---|---|
+  | status changes, 11:30 → 20:40Z | **56** | **22** |
+  | `danger` frames | 17, **every one a single 30 s frame** | 0 |
+  | `warn` runs / longest | 26 / 141 min | **9 / 226 min** |
+  | first `warn` | 13:04:30Z, **7.6 h** before the failure | unchanged |
+
+  🔴 **The status flapped, and only the new tile made it visible.** `_tripped` decided on
+  `min()` over the *sliding* 45-minute window — a discontinuous function of `now`, since a dip
+  enters the window in one step and leaves it 45 minutes later — so between 19:13Z and 19:53Z
+  the tile would have flashed red for 30 s and gone amber again, **seventeen times**, while the
+  bank sat flat. The release band written to prevent exactly this never got a say: the early-out
+  "never tripped in this window" bypassed it. **Fourth instance of quantising a continuous
+  quantity to drive a discrete decision** (cache-key buckets · `if twa < beat` · polar snapping ·
+  this) and the second flapping readout on this boat's screens in two days.
+
+  Fixed by deciding on the **median of the raw samples in the dwell** — ~420 samples at 0.7 Hz,
+  so it slides smoothly and crosses a threshold once. The median is also the release band a
+  bounce cannot move (a 3-minute recovery inside a 10-minute dwell leaves the median where it
+  was), so `POWER_CLEAR_MARGIN_V` is **removed** rather than left reading 0.15 V and doing
+  nothing. `test_power.py` now scores the verdict for **stability** on a bank parked 5 mV off the
+  danger line at 0.7 Hz with deterministic load sags — 0 changes in 120 polls. Nothing scored
+  stability before, which is why a defect this visible survived a day: every assertion asked
+  "is it right at moment X", and a readout that is right every other poll passes all of them.
+
+  **Two consequences worth knowing.** `charging` no longer clears a `warn`, only annotates it
+  (it sat above the warn test, so 11.71 V read `ok` on a +0.12 V/h wobble — noise in a six-hour
+  decline). And the race **never reaches `danger`** under the fixed rule: the bank plateaued at a
+  11.64–11.72 V median for the last 3½ hours, i.e. settled just *above* an 11.60 V danger line
+  nobody has confirmed. A rule that calls that plateau dangerous can only do it by chattering.
+  **That is the calibration question, not a missing alarm** — and the sharpest argument yet for
+  someone at the boat pinning down the bank's chemistry and capacity. The sags never reach the
+  floor either (0.0% of samples ≤ 11.0 V in every hour; the absolute minimum is 11.08 V), so a
+  brownout rule keyed on the floor would never fire.
+
+  ✅ **Brownout-tolerant archiving** (`pi/archiver/archiver.py`): the corruption cost six weeks
+  only because `open_db()` raised, the process exited and Docker restarted it 48 times,
+  archiving nothing Jul 19 → Aug 30. It now quick-checks on startup, rotates a bad file aside
+  (kept, for salvage), survives corruption mid-write and re-writes the buffered rows, requeues
+  transient locks, and counts rotations in `sync_state`. `pi/archiver/test_brownout.py`.
+
+  Still open, and the parts a person has to do: **confirm the bank** (chemistry, capacity,
+  charging regime — is there a solar/alternator budget for a 40 h race at all?), and decide
+  whether the Pi deserves its own supply or supercap-backed shutdown. Three SD corruptions in
+  six weeks on a bus that browns out is not a coincidence, and software can only make it cheap,
+  not absent.
+
 - **P0 — 🔴 THE ARCHIVER RECORDS AIS TRAFFIC AS OWN-SHIP TELEMETRY ✅ FIXED 2026-09-07.** Root
   cause of the "unreliable source" symptom, and much worse than it first looked.
 
@@ -252,9 +392,34 @@ assertions; agent suite 16/16.
   | as raced | 5.63 kn | **4,091 kn** | **15.9%** |
   | **fixed** | 4.86 kn | **8.0 kn** | **0.0%** |
 
-  ⚠️ Still open: the archive on disk remains contaminated — the filter hides AIS rows from
-  own-ship reads but does not delete them. A cleanup pass (and deciding whether AIS should be
-  archived properly, with a context column, to make the Fleet tile replayable) is still to do.
+  **Archive cleanup — measured 2026-09-07 (later session), and the answer is "keep them".**
+  `n2k-socketcan.43` is an em-trak B951 AIS Class B transceiver (per `sources-cache.json`) and
+  contributes **3,394,173** rows to `telemetry_raw`; *every* path it publishes is AIS or AtoN,
+  so there is no own-ship data interleaved to preserve. Two things follow:
+
+  - **Retro Fleet replay out of `telemetry_raw` is impossible — do not plan on it.** Vessel
+    identity was never archived (no `context`/`mmsi` column, everything flattened to one
+    `boat_id`). Each AIS position carries a *unique* timestamp (92,257 distinct, zero
+    collisions, over Jul 18), so rows can be regrouped into single per-vessel reports but can
+    never be attributed to a vessel. MMSI is gone, not merely unindexed.
+  - **`ais_targets` is the identified store and already has the race**: 902,710 rows / 430
+    MMSIs with name, lat/lon, SOG/COG, CPA/TCPA, running 120–131 vessels through the start
+    hours. Build Fleet replay on that table.
+
+  Recommendation: **do not DELETE the 3.39 M rows.** The read-side filter already hides them,
+  they are ~1% of a 36×-compressed archive, and `telemetry_raw` has no PK — an irreversible
+  bulk delete on a hypertable buys nothing under a "lose no telemetry" policy.
+
+  Still worth doing, forward-looking: **archive AIS with an `mmsi`/context column.**
+  `ais_targets` is uplink-fed and — per the design — `/ingest/ais` is **best-effort, not
+  queued** ("stale positions must not replay"), while telemetry is spooled and replayed later.
+  Measured consequence on Jul 18: AIS ingest stopped at **20:59:00Z** and never resumed, while
+  the telemetry spool kept flowing to **00:09:35Z** — so the boat has **zero fleet data for the
+  last ~3 hours of racing**, including the retirement decision, even though the link was good
+  enough to carry 33,014 telemetry rows across 74 paths in that window. Not-queued is the right
+  call for a *live* CPA display and the wrong one for history. An identified AIS column in the
+  boat's own archive is the only route to fleet history that survives a degraded link; it is a
+  schema change, so it needs a deliberate call.
 
   `pi/archiver/archiver.py` has **no vessel-context filtering at all** — no `context`, no
   `mmsi`, no `self` check. Signal K's `subscribe=all` delivers own-ship deltas *and* every AIS
@@ -290,6 +455,74 @@ assertions; agent suite 16/16.
   **cloud** path (`tools.py:65`) and was never wired into the onboard datasource.
   ⚠️ The existing archive is already contaminated, so the replay rig and any retro analysis
   should exclude AIS-bearing sources until it is cleaned.
+
+- **P1 — 🔴 `source_priority` has never matched anything: the boat has no sensor-priority
+  policy in force.** Found 2026-09-07 (later session). Not just the missing onboard wiring
+  noted above — the **cloud** path that does consume the table never matches either, so every
+  channel silently takes the `"no preferred source fresh — using freshest available"` branch of
+  `tools.py:_choose_preferred`. This is the same shape as the other four defects: designed,
+  seeded, wired, and quietly not in force.
+
+  Cause: the seeded matchers are **device names** (`orca`, `24xd`, `reactor`, `gnd`, `gwind`,
+  `943`) but archived and uplinked `$source` labels are **N2K addresses** (`n2k-socketcan.15`).
+  `m in r["source"].lower()` therefore cannot match on any channel, on any boat. The identity
+  lives only in Signal K's `sources-cache.json`, which neither the archiver nor the uplink
+  records. The SR33's map, recovered from the Aug 30 pull:
+
+  | source | device | | source | device |
+  |---|---|---|---|---|
+  | `.0` | Garmin GND10 | | `.6` | Garmin GHC 50 |
+  | `.1` | Garmin Reactor 40 (autopilot AHRS) | | `.11` | Garmin GPSMAP 943 |
+  | `.2` | Garmin Intelliducer | | `.12` | Garmin GNX20 |
+  | `.3` | Garmin GPS24xd | | `.15` | **Orca Core** |
+  | `.4` | Garmin GST10 | | `.43` | em-trak B951 AIS |
+
+  Two of the table's premises are also false, measured over the race window
+  (17:03:31–20:40:31Z):
+
+  - **heel / pitch / rate_of_turn: rank 1 (`orca`) published nothing at all.** Heel and pitch
+    came from Reactor 40 (65,857 samples) — the source the table annotates *"autopilot AHRS
+    (non-racing only)"* — and GPS24xd (52,880). Freshest-wins gave the race to the
+    non-racing sensor. **Impact is small, though**: the two agree to 1.29° median / 2.98° max,
+    never crossing the 6° disagree threshold. Fix the ranking because it is wrong, not because
+    it corrupted this race.
+  - **aws / awa: rank 1 (`gwind`) is not a distinct source.** The masthead reaches N2K
+    *through* the GND10, so the real contest is GND10 (130,990) vs Orca Core (128,107) —
+    alternating ≈50/50, sample to sample. They disagree on **AWS by 0.35 kn median, 1.75 kn
+    p95, 5.9 kn max**, against a 0.6 kn "sensors disagree" threshold: the displayed apparent
+    wind jitters by *which device reported last*. TWS is unbiased (Orca vs `derived-data` both
+    mean 15.40 kn) but still carries 0.15 kn median / 0.84 kn p95 instantaneous jitter into the
+    TWS-trend tile — the highest-rated component (9/10), fixable for free by pinning a source.
+
+  Work: (a) resolve `$source` → device once and record it (archiver/uplink column, or a
+  committed per-boat address map regenerated from `sources-cache.json` — addresses can be
+  re-claimed, so a map needs a staleness check); (b) re-rank heel/pitch/ROT against what the
+  Orca actually publishes; (c) wire priority into `datasource_onboard.latest_value()`, which
+  still ignores it entirely; (d) assert it: a startup check that every seeded matcher resolves
+  to a live source, because an unmatched matcher is currently indistinguishable from a
+  satisfied one.
+
+- **P2 — 5.5 M synthetic rows in `telemetry_raw`, timestamped as if live.** The Signal K
+  sample-data provider wrote `n2k-sample-data.{115,160,129,43}` — STW, AWA/AWS, depth, water
+  temp, position, SOG/COG, current set/drift, battery — with 2026 timestamps from 06-16 to
+  07-30 (5,506,867 rows; a stray 8,355 keep the sample file's 2014 stamps). **The race is
+  clean** (zero sample rows Jul 18–20). Overlap, measured by the hour:
+
+  - **493 hours** carry synthetic *and* non-synthetic rows (Jun 16 22:00 → Jul 30 23:00),
+    5,275,089 synthetic against 778,892 other — but almost all of that "other" is
+    `derived-data`, i.e. the engine's own output, itself computed from the demo feed. That
+    stretch is simply the bench period, and reads there are synthetic whether or not they
+    are filtered.
+  - **Only 6 hours** put synthetic data against *real N2K instruments*: **2026-07-15 20:00 →
+    2026-07-16 02:00Z**, ~6,900 synthetic rows/h against 1,415–15,515 instrument rows/h. That
+    is the window where a replay or retro read can silently prefer a demo value over the boat.
+
+  The AIS filter does not catch them: `.115/.160/.129` publish no AIS marker paths. The provider is
+  already gone from the boat's `settings.json` (only `n2k-socketcan` remains as of the Aug 30
+  pull), so this is historical, not a live risk. Do **not** blanket-exclude these sources from
+  own-ship reads — the dev bench has no other data (see the comment at
+  `datasource_onboard.series`). Prefer real over synthetic *when both exist for a path*, and
+  keep synthetic as the fallback.
 
 ### Learning loop (Lab-4, retro, LoRA)
 

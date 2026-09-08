@@ -24,6 +24,11 @@ _READING = (
     "the PAST: −120 min was two hours ago); 'Forecast' shows Now, then +60 min and +120 min (the "
     "FUTURE). To call a trend, compare Now against the other values: wind is BUILDING when Now is "
     "HIGHER than the earlier/older numbers and EASING when LOWER — state the direction correctly. "
+    "Two tiles are about ENERGY and they are different things: 'Crew' is the HUMAN driver's tank "
+    "(0-100, higher is fresher, fix it with a helm rotation), while 'House Bank' is the BOAT's "
+    "battery in volts (lower is worse, fix it by shedding load or running a charge source). Never "
+    "swap them: a flat bank is what silently killed the data recorder and the AIS transceiver "
+    "mid-race on 2026-07-18. "
     "A status of 'act' needs action now, 'watch' needs attention, 'ok' is fine. Never invent numbers."
 )
 

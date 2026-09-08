@@ -18,7 +18,14 @@ import argparse
 import json
 import os
 import sqlite3
+import sys
 from datetime import datetime, timedelta, timezone
+
+_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _ROOT not in sys.path:                 # so `shared.*` imports work from any cwd
+    sys.path.insert(0, _ROOT)
+
+from shared import n2k_sources            # noqa: E402
 
 MS_TO_KN = 1.943844
 DEG = 57.29577951308232
@@ -43,8 +50,7 @@ PATHS = {
 # the archiver had no vessel-context filter, so AIS traffic went into `readings` under the
 # own-ship boat_id. Showing it here as a "source" for own-ship truth is worse than useless: it
 # is what made the review pane flag disagreements between the boat and a passing ship.
-AIS_MARKER_PATHS = ("sensors.ais.class", "atonType.id", "design.aisShipType.id",
-                    "navigation.specialManeuver", "offPosition")
+AIS_MARKER_PATHS = n2k_sources.AIS_MARKER_PATHS   # canonical: shared/n2k_sources
 
 
 def _ais_sources(conn, probe_rows=5000):

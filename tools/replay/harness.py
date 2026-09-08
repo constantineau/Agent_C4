@@ -41,6 +41,10 @@ REPLAYABLE = [
     "/conditions", "/sail", "/navigator", "/tactics", "/fatigue", "/sources", "/fleet",
     "/watch", "/course", "/deviation", "/selector", "/strategy", "/plays", "/checklist",
     "/trend", "/session", "/sails/state", "/playbook/track", "/gps/status",
+    # Added 2026-09-08 with the iPad's bank tile + instrument-health chip. These are the whole
+    # reason the rig is worth having: the bank curve and the kicked compass are IN the recording,
+    # so a scrub shows exactly when each tile would have spoken during the real race.
+    "/power", "/health/sensors", "/conditions/full",
 ]
 # Need the live internet (or a forecast archive we do not have) — see the module docstring.
 NEEDS_NETWORK = ["/forecast", "/drift", "/buoys", "/plangap", "/reoptimize"]
@@ -74,8 +78,22 @@ def _setup(archive_db, engine_db, polars_file):
 
 def build(archive_db, engine_db, polars_file, start, end, step_s, out_dir, endpoints=None):
     _setup(archive_db, engine_db, polars_file)
+    import freezegun
     from freezegun import freeze_time
     from fastapi.testclient import TestClient
+
+    # freezegun's DEFAULT_IGNORE_LIST contains 'threading', and it decides whether to serve the
+    # frozen clock by inspecting a bounded window of the call stack. TestClient runs each sync
+    # endpoint on an AnyIO worker thread, so for most endpoints the `threading` frame is inside
+    # that window and `time.time()` returned the REAL wall clock — 51 days after the race.
+    #
+    # This was silent because the ONE endpoint it did not affect is `/conditions`: `get_strip`
+    # adds a stack frame, which pushes `threading` out of the inspected window. So the first
+    # thing anyone checks looked right while `/sources` reported ages of 4,394,415 s in every
+    # frame of the timeline, and every channel in `/conditions/full` read as `fell_back` because
+    # nothing could be fresher than the 45 s failover window. A frozen clock the rig only mostly
+    # applies is worse than no clock at all — clear the list.
+    freezegun.configure(default_ignore_list=[])
     from source import ReplaySource
     from app import datasource
     import engine_app

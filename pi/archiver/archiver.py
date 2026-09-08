@@ -77,6 +77,109 @@ def open_db(path: Path = ARCHIVE_DB) -> sqlite3.Connection:
     return conn
 
 
+# ---- BROWNOUT TOLERANCE -------------------------------------------------------------------
+# WAL + synchronous=FULL above protects the *last flush* against power loss. It does not
+# protect against the SD card itself going bad, which on this boat is the common case: three
+# SQLite corruptions in six weeks (archive.corrupt-20260718, archive.corrupt-20260830, then
+# live pages), and REMOTE_OPS.md already lists SD mortality as an accepted risk.
+#
+# What actually cost the data was the response, not the corruption. On 2026-07-18 at 20:40:30Z
+# — at the bottom of a six-hour discharge to 11.08 V, see vps/agent/app/power.py — the archive
+# went malformed mid-race. `open_db()` raised at startup, the process exited, Docker restarted
+# it, and that repeated 48 times: the archiver recorded NOTHING from Jul 19 until a human
+# applied the fix by hand on Aug 30. Six weeks of full-resolution telemetry, lost to a failure
+# the code already knew how to survive — `CREATE TABLE IF NOT EXISTS` self-initialises a fresh
+# DB, so all that was ever needed was to move the bad file aside and reopen.
+#
+# So: check on startup, rotate on detection, never exit, and never delete. The corrupt file is
+# KEPT — pi/archiver/tools/salvage.py recovered 99.9994% of one of them, which is how the
+# Jul 15–17 archive exists at all.
+CORRUPT_MARKERS = ("malformed", "not a database", "disk image")
+
+
+def _is_corruption(exc: Exception) -> bool:
+    """True for the errors that mean the FILE is bad, not that the statement was."""
+    if not isinstance(exc, sqlite3.DatabaseError):
+        return False
+    return any(m in str(exc).lower() for m in CORRUPT_MARKERS)
+
+
+def integrity_ok(conn) -> bool:
+    """`PRAGMA quick_check` — the cheap variant (skips per-row index cross-checks), which still
+    catches the malformed-page case and returns in well under a second on a multi-GB archive."""
+    try:
+        return conn.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+    except sqlite3.DatabaseError:
+        return False
+
+
+def rotate_corrupt(path: Path = ARCHIVE_DB, stamp=None) -> Path:
+    """Move a corrupt archive (and its -wal/-shm) aside and return the new path.
+
+    Named `archive.corrupt-<YYYYmmddTHHMMSS>.db`, matching the two files a human created by
+    hand for exactly this. Kept, never deleted: salvage recovers almost all of it."""
+    stamp = stamp or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+    dest = path.with_name(f"{path.stem}.corrupt-{stamp}{path.suffix}")
+    # Second-resolution names collide when two rotations land in the same second, and a plain
+    # rename would then DELETE the first corrupt archive — the one thing this must never do.
+    # (Caught by test_brownout, which rotated twice in one second.)
+    n = 1
+    while Path(str(dest)).exists():
+        dest = path.with_name(f"{path.stem}.corrupt-{stamp}-{n}{path.suffix}")
+        n += 1
+    for suffix in ("", "-wal", "-shm"):
+        src = Path(str(path) + suffix)
+        if src.exists():
+            src.rename(Path(str(dest) + suffix))
+    print(f"[archive] CORRUPT archive moved aside -> {dest.name}; starting a fresh one. "
+          f"KEEP that file: pi/archiver/tools/salvage.py recovers ~all of it.", flush=True)
+    return dest
+
+
+def open_db_resilient(path: Path = ARCHIVE_DB):
+    """Open the archive, rotating it aside if it is unusable. Returns (conn, rotated_to|None).
+
+    This is the whole brownout story: a bad card must cost minutes, not six weeks."""
+    rotated = None
+    conn = None
+    try:
+        conn = open_db(path)
+        if not integrity_ok(conn):
+            raise sqlite3.DatabaseError("quick_check failed: database disk image is malformed")
+        return conn, None
+    except sqlite3.DatabaseError as exc:
+        if not _is_corruption(exc):
+            raise
+        print(f"[archive] {path.name} is unusable ({exc})", flush=True)
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        rotated = rotate_corrupt(path)
+        conn = open_db(path)          # CREATE TABLE IF NOT EXISTS self-initialises
+        _note_rotation(conn, rotated)
+        return conn, rotated
+
+
+def _note_rotation(conn, rotated: Path):
+    """Record the rotation in `sync_state` so it is visible to backfill and the engine — a
+    silent recovery would be almost as bad as a silent failure, because a fresh archive looks
+    exactly like a boat that has not sailed yet."""
+    try:
+        with _WRITE_LOCK:
+            row = conn.execute("SELECT v FROM sync_state WHERE k='corrupt_rotations'").fetchone()
+            n = int(row[0]) + 1 if row and str(row[0]).isdigit() else 1
+            conn.execute("INSERT OR REPLACE INTO sync_state (k, v) VALUES ('corrupt_rotations', ?)",
+                         (str(n),))
+            conn.execute("INSERT OR REPLACE INTO sync_state (k, v) "
+                         "VALUES ('last_corrupt_rotation', ?)",
+                         (f"{datetime.now(timezone.utc).isoformat()} {rotated.name}",))
+            conn.commit()
+    except Exception as exc:          # bookkeeping must never stop the recorder
+        print(f"[archive] could not record the rotation: {exc}", flush=True)
+
+
 def flatten(time, source, path, value, out):
     """Append one or more archive rows for a Signal K value, matching uplink flattening."""
     if isinstance(value, bool):
@@ -167,18 +270,57 @@ def write_rows(conn, rows):
         conn.commit()
 
 
-async def flusher(conn, buf, loop, state=None):
+async def flusher(conn, buf, loop, state=None, db=None, wake=None):
+    """Drain the buffer to disk every FLUSH_SECONDS, for as long as this process lives.
+
+    Wrapped end to end because an unhandled exception here does not crash the service — it
+    kills this ONE task, asyncio swallows the traceback, and the archiver goes on looking
+    perfectly healthy while recording nothing. That is a worse failure than the crash-loop it
+    replaces, so the recorder must be un-killable: corruption rotates the file and continues,
+    and anything else is logged and retried on the next tick with the rows put back."""
     total = 0
+    state = state if state is not None else {}
     while True:
-        await asyncio.sleep(FLUSH_SECONDS)
+        # Wake on the timer OR as soon as the reader says the buffer is full (FLUSH_ROWS).
+        # The reader used to write that case itself; it now signals instead, so there is
+        # exactly ONE writer and therefore exactly one place that handles corruption.
+        if wake is None:
+            await asyncio.sleep(FLUSH_SECONDS)
+        else:
+            try:
+                await asyncio.wait_for(wake.wait(), timeout=FLUSH_SECONDS)
+            except asyncio.TimeoutError:
+                pass
+            wake.clear()
         if not buf:
             continue
         rows, buf[:] = buf[:], []
-        await loop.run_in_executor(None, write_rows, conn, rows)
+        try:
+            await loop.run_in_executor(None, write_rows, state["conn"], rows)
+        except sqlite3.DatabaseError as exc:
+            if not _is_corruption(exc):
+                buf[:0] = rows            # transient (locked/busy) — retry next tick, in order
+                print(f"[archive] write failed, {len(rows)} rows requeued ({exc})", flush=True)
+                continue
+            print(f"[archive] CORRUPTION during write ({exc}) — rotating and continuing",
+                  flush=True)
+            try:
+                state["conn"], _rot = await loop.run_in_executor(
+                    None, open_db_resilient, db or ARCHIVE_DB)
+                await loop.run_in_executor(None, write_rows, state["conn"], rows)
+            except Exception as exc2:     # keep recording even if recovery half-failed
+                print(f"[archive] recovery incomplete ({exc2}); {len(rows)} rows dropped",
+                      flush=True)
+                continue
+        except Exception as exc:
+            buf[:0] = rows
+            print(f"[archive] unexpected flush error, {len(rows)} rows requeued ({exc})",
+                  flush=True)
+            continue
         total += len(rows)
         # report the AIS skip count too — silence here would look identical to a filter that
         # had quietly stopped working, or to one wrongly eating own-ship data
-        skipped = (state or {}).get("skipped", 0)
+        skipped = state.get("skipped", 0)
         note = f" (skipped {skipped} AIS deltas)" if skipped else ""
         print(f"[archive] +{len(rows)} rows (total {total}){note}", flush=True)
 
@@ -238,27 +380,31 @@ def prune(conn, engine_db=None, retain_days=None):
     return cur.rowcount
 
 
-async def pruner(conn, loop):
+async def pruner(state, loop):
     while True:
         try:
-            await loop.run_in_executor(None, prune, conn)
+            await loop.run_in_executor(None, prune, state["conn"])
         except Exception as exc:      # never let housekeeping kill the recorder
             print(f"[archive] prune error: {exc}", flush=True)
         await asyncio.sleep(PRUNE_EVERY_S)
 
 
 async def run():
-    conn = open_db()
-    n = conn.execute("SELECT count(*) FROM readings").fetchone()[0]
-    print(f"[archive] {ARCHIVE_DB} ready ({n} rows) <- {SIGNALK_WS} (full resolution)",
-          flush=True)
-    buf = []
-    # carries the `self` context from the hello frame + the AIS skip count; survives reconnects
-    # so a dropped socket does not briefly re-admit AIS before the next hello arrives
+    # `state` carries the `self` context from the hello frame + the AIS skip count (surviving
+    # reconnects, so a dropped socket does not briefly re-admit AIS before the next hello) and
+    # now also the live connection, because a corruption rotation replaces it underneath every
+    # writer. One holder, so nobody keeps writing to a file that has been moved aside.
     state = {}
+    conn, rotated = open_db_resilient()
+    state["conn"] = conn
+    n = conn.execute("SELECT count(*) FROM readings").fetchone()[0]
+    print(f"[archive] {ARCHIVE_DB} ready ({n} rows) <- {SIGNALK_WS} (full resolution)"
+          + (f" [recovered from {rotated.name}]" if rotated else ""), flush=True)
+    buf = []
     loop = asyncio.get_running_loop()
-    asyncio.create_task(flusher(conn, buf, loop, state))
-    asyncio.create_task(pruner(conn, loop))
+    wake = asyncio.Event()
+    asyncio.create_task(flusher(conn, buf, loop, state, wake=wake))
+    asyncio.create_task(pruner(state, loop))
     while True:
         try:
             async with websockets.connect(SIGNALK_WS, ping_interval=20) as ws:
@@ -269,8 +415,10 @@ async def run():
                     if rows:
                         buf.extend(rows)
                         if len(buf) >= FLUSH_ROWS:
-                            chunk, buf[:] = buf[:], []
-                            await loop.run_in_executor(None, write_rows, conn, chunk)
+                            # Signal, don't write: the flusher owns the corruption/retry path,
+                            # and a second writer with its own error handling is how you end up
+                            # with half-recovered state.
+                            wake.set()
         except Exception as exc:
             print(f"[archive] Signal K WS error ({exc}); retrying in 3s", flush=True)
             await asyncio.sleep(3)

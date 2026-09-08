@@ -25,13 +25,21 @@
   // Tactics (favoured side / persistent-vs-oscillating) is now folded into the top Strategy strip —
   // the strip's synthesis consumes get_tactics and shows the favoured-side read even with no playbook
   // aboard. 8 tiles → a clean 4×2 grid. See docs/COPILOT_DASHBOARD.md.
-  const TILES = ["wind", "playbook", "forecast", "sail", "eta", "ais", "charge", "data"];
+  const TILES = ["wind", "playbook", "forecast", "sail", "eta", "ais", "charge", "data", "bank"];
   // "charge" stayed the internal id when the tile grew into CREW (energy + the watch system) —
-  // demo scenarios, CSS and the copilot brief all key on it.
+  // demo scenarios, CSS and the copilot brief all key on it. Note that "charge" is the CREW's
+  // tank, not the boat's: the house bank is "bank", added 2026-09-08.
+  //
+  // BANK is the 9th tile on an 8-cell grid. Rather than reflow the 4x2 the crew has learned,
+  // the two SYSTEMS reads — "are the instruments telling the truth" (data) and "will the boat
+  // still be powered in six hours" (bank) — share the last cell, stacked. Both are a single
+  // number plus a line, neither carries a chart, and they are the two tiles you want next to
+  // each other: on Jul 18 the flat bank is what killed the instruments.
+  const PAIR = ["data", "bank"];
   const NAME = {
     wind: "TWS Trend", playbook: "Playbook", forecast: "Forecast",
     sail: "Sail", eta: "Time to Mark", ais: "Fleet", charge: "Crew", data: "Data",
-    coach: "Coach", checklist: "Race Checklist",
+    bank: "House Bank", coach: "Coach", checklist: "Race Checklist",
   };
   const boatName = (r) => { const n = r.boat || r.name || ("MMSI " + (r.mmsi || "?")); return n.length > 14 ? n.slice(0, 13) + "…" : n; };
   const aisName = (t) => { const n = t.name || ("MMSI " + t.mmsi); return n.length > 12 ? n.slice(0, 11) + "…" : n; };
@@ -68,6 +76,11 @@
   const COACH_EVERY = 15000;      // poll the proactive auto-coach held state ~every 15 s (no recompute — the Orin timer drives it)
   const SYN_EVERY = 15000;        // poll the in-race strategy synthesis ~every 15 s (a synthesis of the slower reads; LLM-phrased when the Orin is up)
   const CHK_EVERY = 15000;        // poll the race checklist ~every 15 s (engine-deterministic triggers; the bar only shows when something is due)
+  /* The bank moves over hours (a 45-min trend window, 0.7 Hz source) and the health checks read
+     three 20-min series — neither belongs in the 3 s loop on a Pi 4. 10 s is still ~2,000 reads
+     per race and nothing either one measures can change meaningfully in between. */
+  const POWER_EVERY = 10000;
+  const HEALTH_EVERY = 10000;
   /* Readout HOLD — see hold() below. Bayview Mackinac 2026: readouts flapped between a value
      and "no data" all race. The archive shows that was never the sensors or the link (every
      strip path recorded 12,990 samples, one per second, zero gaps over 1 s) — it was this poll
@@ -185,8 +198,51 @@
         eta:     { status: "ok", value: "16 min", sub: "Cove Island", why: "~16 min to Cove Island at the current made-good.", consider: "On schedule for the mark.", clears: "—", based: ["get_navigator: ETA 16 min"], conf: "high" },
         ais:     { status: "ok", value: "2nd of 4 (div)", sub: "▲ Defiance 0:40 · ▽ Windquest 1:50", rows: [{ hdr: true, cols: ["to fin", "Δ corrected"] }, { label: "1. Il Mostro ⌛17m", cols: ["1.9 nm", "▲ 3:10 ahead"] }, { label: "2. ◆ Defiance", cols: ["3.4 nm", "▲ 0:40 ahead"] }, { label: "3. ◆ C4 (us)", emph: true, cols: ["3.2 nm", "—"] }, { label: "4. ◆ Windquest", cols: ["3.1 nm", "▽ 1:50 back"] }, { label: "5. Vayu ⌛22m→DR", cols: ["4.8 nm", "▽ 4:05 back"] }], why: "Estimated standings across the 5-boat demo fleet on ToT, FULL-race corrected basis (gun times from the SIs): 2 live on our AIS, 2 via the public tracker (delayed; 1 dead-reckoned forward at their pace). ◆ = our division (B).", consider: "Chase Defiance on corrected — consolidate against Windquest. (Estimates: partial AIS + a delayed tracker.)", clears: "—", based: ["get_fleet standings: 5 ranked / 5 roster", "sources: AIS 2 · tracker 2 · DR 1", "ToT"], conf: "high" },
         charge:  { status: "ok", value: '72<div class="t-val2">Stbd on</div>', energy: 72, level: "fresh", sub: "change 1.8h → Port · fresh", why: "Crew energy ~72% (inverse of the fatigue index; lower = more depleted). Watch system: Stbd on deck, change to Port in ~1.8 h.", consider: "Driver fresh — no rotation needed. Next watch change 1.8 h out.", clears: "—", based: ["get_fatigue: index 28 → energy 72%", "get_watch: Stbd on · Port at the change"], conf: "high" },
-        data:    { status: "ok", value: "5", sub: "sources live", why: "All five sensor groups fresh.", consider: "Instruments healthy.", clears: "—", based: ["get_sources: 5 live"], conf: "high" },
+        data:    { status: "ok", value: "5", sub: "5 sources live · 2 on backup", why: "All five sensor groups fresh. Attitude, heading-vs-GPS-course, sensor priority and the AIS filter all check out.", consider: "Instruments agree — numbers are safe to act on.", clears: "—", based: ["get_sources: 5 live", "health/sensors: instruments cross-check clean"], conf: "high" },
+        bank:    { status: "ok", value: "12.68 V", sub: "-0.04 V/h · ~42 h to 11.0 V", why: "Bank 12.68 V, -0.04 V/h. The status is decided on a 10-min median, so a winch load can't trip it and a bounce shorter than half that can't clear it; the trend is measured over 45 min.", consider: "Bank healthy.", clears: "—", based: ["get_power: 12.68 V over 1890 samples, -0.04 V/h"], conf: "high" },
       },
+      // the two SYSTEMS endpoints behind the DATA chip and the BANK tile, in their healthy shape
+      power: { available: true, status: "ok", volts: 12.68, volts_decided: 12.69, volts_last: 12.66,
+        volts_min: 12.61, sustain_min: 10,
+        trend_v_per_h: -0.04, hours_to_floor: 42.0, charging: false, samples: 1890, window_min: 45,
+        path: "electrical.batteries.0.voltage", reason: "bank 12.68 V, -0.04 V/h",
+        thresholds: { warn_v: 12.0, danger_v: 11.6, floor_v: 11.0, drain_warn_v_per_h: 0.15 } },
+      // Note the standing `policy_unmet` note: the Orca Core is ranked first for heel and
+      // heading and published neither during the Jul 18 race, so the calm scenario shows the
+      // real thing — an ok chip that is still explicit about running on the 24xd.
+      health: { available: true, status: "ok", reason: "instruments cross-check clean", flags: [],
+        notes: ["2 channel(s) never see their ranked lead (heading_true→orca, heel→orca) — " +
+                "the policy names a device that does not publish them"], window_min: 20,
+        attitude: { ok: true, status: "ok", reason: "attitude within limits", roll_deg: 14.8, pitch_deg: 1.7 },
+        heading: { available: true, status: "ok", bias_deg: -2.1, spread_deg: 4.3, samples: 1180,
+          reason: "heading within -2° of GPS course" },
+        provenance: { available: true, status: "ok", flags: [],
+          notes: ["2 channel(s) never see their ranked lead (heading_true→orca, heel→orca) — " +
+                  "the policy names a device that does not publish them"],
+          checks: {
+            policy_binds: { status: "ok", unresolvable: [], reason: "all 9 priority matchers bind" },
+            lead_source: { status: "ok", unranked: [], went_silent: [],
+              policy_unmet: [{ channel: "heading_true", expected: "orca", using: "GPS24xd-NMEA2000", age_s: 1.0 },
+                              { channel: "heel", expected: "orca", using: "GPS24xd-NMEA2000", age_s: 1.0 }],
+              reason: "every ranked channel is on its rank-1 device",
+              note: "2 channel(s) never see their ranked lead (heading_true→orca, heel→orca) — " +
+                    "the policy names a device that does not publish them" },
+            own_ship: { status: "ok", ais_excluded: ["n2k-socketcan.43"], ais_leading: [],
+              synthetic: [], reason: "AIS filter excluding n2k-socketcan.43 from own-ship reads" },
+          },
+          channels: {
+            tws: { source: "n2k-socketcan.15", device: "Orca Core", value: 12.1, unit: "kn", age_s: 1.0, rank: 1, fell_back: false, measured: true, sources: 2, lead_publishes: true },
+            twd: { source: "n2k-socketcan.15", device: "Orca Core", value: 250, unit: "°", age_s: 1.0, rank: 1, fell_back: false, measured: true, sources: 2, lead_publishes: true },
+            aws: { source: "n2k-socketcan.0", device: "GND10", value: 14.2, unit: "kn", age_s: 1.0, rank: 1, fell_back: false, measured: true, sources: 2, lead_publishes: true },
+            awa: { source: "n2k-socketcan.0", device: "GND10", value: -38.4, unit: "°", age_s: 1.0, rank: 1, fell_back: false, measured: true, sources: 2, lead_publishes: true },
+            stw: { source: "n2k-socketcan.4", device: "GST10", value: 7.2, unit: "kn", age_s: 1.0, rank: 1, fell_back: false, measured: true, sources: 1, lead_publishes: true },
+            sog: { source: "n2k-socketcan.3", device: "GPS24xd-NMEA2000", value: 7.4, unit: "kn", age_s: 1.0, rank: 1, fell_back: false, measured: true, sources: 2, lead_publishes: true },
+            cog: { source: "n2k-socketcan.3", device: "GPS24xd-NMEA2000", value: 12.5, unit: "°", age_s: 1.0, rank: 1, fell_back: false, measured: true, sources: 2, lead_publishes: true },
+            heading_true: { source: "n2k-socketcan.3", device: "GPS24xd-NMEA2000", value: 14.3, unit: "°", age_s: 1.0, rank: 2, fell_back: true, measured: true, sources: 1, lead_publishes: false },
+            heel: { source: "n2k-socketcan.3", device: "GPS24xd-NMEA2000", value: 14.8, unit: "°", age_s: 1.0, rank: 2, fell_back: true, measured: true, sources: 2, lead_publishes: false },
+            depth: { source: "n2k-socketcan.2", device: "Intelliducer Thru-hull", value: 26.2, unit: "m", age_s: 1.0, rank: 1, fell_back: false, measured: true, sources: 1, lead_publishes: true },
+            bank_voltage: { source: "n2k-socketcan.15", device: "Orca Core", value: 12.68, unit: "V", age_s: 1.0, rank: 1, fell_back: false, measured: true, sources: 1, lead_publishes: true },
+          } } },
       strategy: { available: true, status: "ok", variant: "left", variant_label: "Left start",
         value: "On the optimal track", xte_nm: 0.15, xte_side: "left", xte_trend: "steady",
         along_pct: 38, along_nm: 54.1, route_nm: 142.0, time_behind_s: -45,
@@ -211,6 +267,7 @@
       notes: [
         { tile: "playbook", status: "act",   text: "Playbook branch fired — the persistent right shift says bail to the right side; the recommended Left start no longer pays.", conf: "high" },
         { tile: "sail",     status: "act",   text: "Peel J1 → A3 before the bear-away at the gate — start staging now (~4 min out).", conf: "high" },
+        { tile: "bank",     status: "act",   text: "House bank 11.58 V and falling 0.22 V/h — about 2.6 h to the 11.0 V floor. Shed load or get a charge source on; the archive and the AIS transceiver are what die first.", conf: "high" },
         { tile: "charge",   status: "act",   text: "Crew energy down to 28% (rotate soon) — plan a driver change in the next few minutes.", conf: "med" },
         { tile: "forecast", status: "watch", text: "Forecast has been under-calling the breeze by ~2-3 kts — expect a bit more than it says.", conf: "med" },
       ],
@@ -228,8 +285,56 @@
         eta:     { status: "watch", value: "4 min", sub: "Cove Island", why: "~4 min to Cove Island at the current made-good.", consider: "Mark in ~4 min — start the rounding prep.", clears: "past the rounding", based: ["get_navigator: ETA 4 min"], conf: "high" },
         ais:     { status: "watch", value: "2nd of 4 (div)", sub: "▲ Defiance 1:20 · ▽ Windquest 2:10", rows: [{ hdr: true, cols: ["to fin", "Δ corrected"] }, { label: "1. ◆ Defiance", cols: ["2.9 nm", "▲ 1:20 ahead"] }, { label: "2. ◆ C4 (us)", emph: true, cols: ["3.0 nm", "—"] }, { label: "3. ◆ Windquest", cols: ["4.0 nm", "▽ 2:10 back"] }, { label: "4. Il Mostro ⌛31m→DR", cols: ["1.2 nm", "▽ 0:55 back"] }], why: "Estimated standings across the 4-boat demo fleet on ToT, FULL-race corrected basis (gun times from the SIs): 2 live on our AIS, 1 via the public tracker (delayed; dead-reckoned forward). Defiance holds the division lead by 1:20 corrected. ◆ = our division (B).", consider: "Tight on corrected with Defiance — sail your race, cover at the crossings.", clears: "—", based: ["get_fleet standings: 4 ranked / 4 roster", "sources: AIS 2 · tracker 1 · DR 1", "ToT"], conf: "high" },
         charge:  { status: "act",   value: '28<div class="t-val2">Stbd on</div>', energy: 28, level: "rotate soon", sub: "change 4m → Port · rotate soon", why: "Crew energy ~28% (rotate soon). Heading instability and steering reversals up, speed deficit creeping. Watch change in 4 min — Port up next.", consider: "Watch change in 4 min — wake Port (Grant, Elise); rotate the helm at the change.", clears: "energy back above 65%", based: ["get_fatigue: index 72 → energy 28%", "get_watch: change in 4 min → Port"], conf: "med", components: { heading: 0.7, reversals: 0.8, heel: 0.4, "spd-def": 0.5 } },
-        data:    { status: "watch", value: "4", sub: "1 stale", why: "Masthead wind stale ~50 s ago; running on the Orca backup.", consider: "Running on backup wind — watch for it to return.", clears: "all sources fresh", based: ["get_sources: 4 live, 1 stale"], conf: "med" },
+        data:    { status: "watch", value: "4", sub: "⚑ aws", why: "4 sensor groups reporting, one stale. Cross-checks flag: aws on Orca Core — ranked gnd went silent (78 s ago). Standing: 2 channel(s) never see their ranked lead (heading_true→orca, heel→orca) — the policy names a device that does not publish them.", consider: "Do not trust the flagged channel — cross-check it against another instrument before acting on it.", clears: "the flagged cross-check passes again", based: ["get_sources: 4 sources", "health/sensors: aws on Orca Core — ranked gnd went silent (78 s ago)"], conf: "med" },
+        /* The Jul 18 bank, rehearsed: 11.58 V and falling 0.22 V/h with ~2.6 h to the 11.0 V
+           floor. This is the state nobody could see during the real race, three hours before the
+           archiver and the AIS transceiver died together at the bottom of the curve. */
+        bank:    { status: "act", value: "11.58 V", sub: "-0.22 V/h · ~2.6 h to 11.0 V", why: "Bank 11.58 V, at or under 11.60 V. At the current rate the bank reaches 11.0 V in about 2.6 h. Below ~11.0 V the Pi's SD card writes and the AIS transceiver are at risk — that is how the Jul 18 full-res archive and the AIS feed were both lost mid-race, in the same minute, at the bottom of a six-hour discharge.", consider: "Shed load and get a charge source on — the archive and the AIS transceiver go first.", clears: "the 10-min median comes back above 11.6 V", based: ["get_power: 11.58 V over 1890 samples, -0.22 V/h", "⚠ absolute thresholds are unconfirmed 12 V lead-acid defaults — trust the trend"], conf: "high" },
       },
+      power: { available: true, status: "danger", volts: 11.58, volts_decided: 11.57, volts_last: 11.52,
+        volts_min: 11.31, sustain_min: 10,
+        trend_v_per_h: -0.22, hours_to_floor: 2.64, charging: false, samples: 1890, window_min: 45,
+        path: "electrical.batteries.0.voltage",
+        reason: "bank 11.58 V, at or under 11.60 V",
+        thresholds: { warn_v: 12.0, danger_v: 11.6, floor_v: 11.0, drain_warn_v_per_h: 0.15 } },
+      health: { available: true, status: "warn", window_min: 20,
+        reason: "aws on Orca Core — ranked gnd went silent (78 s ago)",
+        flags: ["aws on Orca Core — ranked gnd went silent (78 s ago)"],
+        notes: ["2 channel(s) never see their ranked lead (heading_true→orca, heel→orca) — " +
+                "the policy names a device that does not publish them"],
+        attitude: { ok: true, status: "ok", reason: "attitude within limits", roll_deg: 27.4, pitch_deg: -2.1 },
+        heading: { available: true, status: "ok", bias_deg: -4.4, spread_deg: 5.1, samples: 1150,
+          reason: "heading within -4° of GPS course" },
+        provenance: { available: true, status: "warn",
+          flags: ["aws on Orca Core — ranked gnd went silent (78 s ago)"],
+          notes: ["2 channel(s) never see their ranked lead (heading_true→orca, heel→orca) — " +
+                  "the policy names a device that does not publish them"],
+          checks: {
+            policy_binds: { status: "ok", unresolvable: [], reason: "all 9 priority matchers bind" },
+            lead_source: { status: "warn", unranked: [],
+              went_silent: [{ channel: "aws", expected: "gnd", using: "Orca Core", age_s: 1.0, lead_age_s: 78.0 }],
+              policy_unmet: [{ channel: "heading_true", expected: "orca", using: "GPS24xd-NMEA2000", age_s: 1.0 },
+                             { channel: "heel", expected: "orca", using: "GPS24xd-NMEA2000", age_s: 1.0 }],
+              reason: "aws on Orca Core — ranked gnd went silent (78 s ago)",
+              note: "2 channel(s) never see their ranked lead (heading_true→orca, heel→orca) — " +
+                    "the policy names a device that does not publish them" },
+            own_ship: { status: "ok", ais_excluded: ["n2k-socketcan.43"], ais_leading: [],
+              synthetic: ["twd"], reason: "AIS filter excluding n2k-socketcan.43 from own-ship reads",
+              note: "twd computed, not measured" },
+          },
+          channels: {
+            tws: { source: "n2k-socketcan.15", device: "Orca Core", value: 16.4, unit: "kn", age_s: 1.0, rank: 1, fell_back: false, measured: true, sources: 2, lead_publishes: true },
+            twd: { source: "derived-data", device: null, value: 262, unit: "°", age_s: 2.0, rank: 2, fell_back: true, measured: false, sources: 2, lead_publishes: false },
+            aws: { source: "n2k-socketcan.15", device: "Orca Core", value: 19.8, unit: "kn", age_s: 1.0, rank: 2, fell_back: true, measured: true, sources: 2, spread: 5.9, disagreement: true, lead_publishes: true },
+            awa: { source: "n2k-socketcan.15", device: "Orca Core", value: -44.1, unit: "°", age_s: 1.0, rank: 2, fell_back: true, measured: true, sources: 2, lead_publishes: true },
+            stw: { source: "n2k-socketcan.4", device: "GST10", value: 6.9, unit: "kn", age_s: 1.0, rank: 1, fell_back: false, measured: true, sources: 1, lead_publishes: true },
+            sog: { source: "n2k-socketcan.3", device: "GPS24xd-NMEA2000", value: 6.6, unit: "kn", age_s: 1.0, rank: 1, fell_back: false, measured: true, sources: 2, lead_publishes: true },
+            cog: { source: "n2k-socketcan.3", device: "GPS24xd-NMEA2000", value: 53.6, unit: "°", age_s: 1.0, rank: 1, fell_back: false, measured: true, sources: 2, lead_publishes: true },
+            heading_true: { source: "n2k-socketcan.3", device: "GPS24xd-NMEA2000", value: 47.2, unit: "°", age_s: 1.0, rank: 2, fell_back: true, measured: true, sources: 1, lead_publishes: false },
+            heel: { source: "n2k-socketcan.3", device: "GPS24xd-NMEA2000", value: 27.4, unit: "°", age_s: 1.0, rank: 2, fell_back: true, measured: true, sources: 2, lead_publishes: false },
+            depth: { source: "n2k-socketcan.2", device: "Intelliducer Thru-hull", value: 44.3, unit: "m", age_s: 1.0, rank: 1, fell_back: false, measured: true, sources: 1, lead_publishes: true },
+            bank_voltage: { source: "n2k-socketcan.15", device: "Orca Core", value: 11.58, unit: "V", age_s: 1.0, rank: 1, fell_back: false, measured: true, sources: 1, lead_publishes: true },
+          } } },
       strategy: { available: true, status: "act", variant: "left", variant_label: "Left start",
         value: "Off track · 1.3 nm right", xte_nm: 1.3, xte_side: "right", xte_trend: "diverging",
         along_pct: 61, along_nm: 86.6, route_nm: 142.0, time_behind_s: 180,
@@ -799,15 +904,101 @@
       if (hasF && f.components) o.components = f.components;
       return o;
     },
+    /* DATA is now the INSTRUMENT-HEALTH tile: a source count was never the question. The
+       question is "is what I'm reading true", and the engine answers it in five ways at
+       /health/sensors — unbindable priority matchers, a rank-1 source that went silent, an
+       attitude outside what a monohull can do, heading-vs-GPS-course bias, and AIS or computed
+       sources leading an own-ship channel. All five collapse into this one chip; tap for the
+       per-channel provenance table. Every one of those checks existed on 2026-09-07 and none of
+       them was on a screen, which is the same failure as the bank. */
     data(p) {
-      const c = p.conditions, src = p.sources;
+      const c = p.conditions, src = p.sources, h = currentHealth();
       const count = src && src.count != null ? src.count : 0;
       const anyStale = src && src.sources && src.sources.some((s) => s.last_seen_s > 45);
-      const st = !c || !c.available ? "act" : (c.stale || anyStale) ? "watch" : "ok";
-      return { status: st, value: String(count), sub: "source" + (count === 1 ? "" : "s") + " live",
-        why: !c || !c.available ? "No live conditions from the engine." : count + " sensor groups reporting" + (anyStale ? ", one stale." : "."),
-        consider: st === "ok" ? "Instruments healthy." : "Cross-check before trusting a lone reading.",
-        clears: st === "ok" ? "—" : "all sources fresh", based: ["get_sources: " + count + " sources"], conf: "engine" };
+      const linkSt = !c || !c.available ? "act" : (c.stale || anyStale) ? "watch" : "ok";
+      const noHealth = !h || !h.available || h.status === "unknown";
+      const hSt = noHealth ? "na" : h.status === "danger" ? "act"
+        : h.status === "warn" ? "watch" : "ok";
+      // The link's own state still wins when the engine has gone quiet — a health verdict
+      // computed from data we can no longer see is not a reassurance. But an *absent* health
+      // read must not blank a perfectly good source count either (SEV ranks "na" alongside
+      // "act"), so it falls through to the link state and says so on the face instead.
+      const st = noHealth ? linkSt : (SEV[linkSt] >= SEV[hSt] ? linkSt : hSt);
+      const flags = (h && h.flags) || [];
+      const notes = (h && h.notes) || [];
+      const chans = ((h || {}).provenance || {}).channels || {};
+      const backups = Object.keys(chans).filter((k) => chans[k].fell_back);
+      // The face stays the live-source count — that is what the tile has always meant, and a
+      // bare "1" for one flag reads like one sensor. The chips say what is wrong; the status
+      // colour and word say how much it matters.
+      const chips = healthChips(h);
+      const face = String(count);
+      const sub = chips.length
+        ? "⚑ " + chips.slice(0, 2).join(", ") + (chips.length > 2 ? " +" + (chips.length - 2) : "")
+        : (count + " source" + (count === 1 ? "" : "s") + " live"
+           + (noHealth ? " · checks offline"
+              : backups.length ? " · " + backups.length + " on backup" : ""));
+      // No provenance rows on the FACE: at half height the device names truncate to "GPS24…"
+      // and the label column collapses, which is noise, not information. The full table is one
+      // tap away — and the backlog's loudest v2 note is that the console showed too much.
+      return { status: st, value: face, sub: sub,
+        flags: flags, notes: notes, health: h || null,
+        why: (!c || !c.available ? "No live conditions from the engine. " :
+              count + " sensor group" + (count === 1 ? "" : "s") + " reporting"
+              + (anyStale ? ", one stale. " : ". "))
+          + (!h || !h.available ? "Instrument cross-checks unavailable."
+             : flags.length ? "Cross-checks flag: " + flags.join("; ") + "."
+             : "Attitude, heading-vs-GPS-course, sensor priority and the AIS filter all check out.")
+          + (notes.length ? " Standing: " + notes.join("; ") + "." : ""),
+        consider: flags.length ? "Do not trust the flagged channel — cross-check it against another instrument before acting on it."
+          : st === "ok" ? "Instruments agree — numbers are safe to act on."
+          : "Cross-check before trusting a lone reading.",
+        clears: flags.length ? "the flagged cross-check passes again" : st === "ok" ? "—" : "all sources fresh",
+        based: ["get_sources: " + count + " sources",
+                h && h.available ? "health/sensors: " + h.reason : "health/sensors: unavailable"]
+          .concat(provLine("data") ? [provLine("data")] : []), conf: "engine" };
+    },
+    /* HOUSE BANK — the tile that did not exist on 2026-07-18. `/power` decides on a smoothed
+       level with a robust trend, so the face is a voltage the crew can act on and the sub is the
+       part that actually predicts the failure: the drain rate and how long until 11.0 V, where
+       the Pi's SD writes and the AIS transceiver start browning out. */
+    bank(p) {
+      const b = currentPower();
+      if (!b || b.available === false) return NA(b && b.note ? b.note : "no bank voltage");
+      const st = b.status === "danger" ? "act" : b.status === "warn" ? "watch" : "ok";
+      const trend = b.trend_v_per_h;
+      // two bits at most on the face — the projection is what you act on, the window minimum is
+      // in the detail. A wrapping third line pushed the number off a half-height tile.
+      const bits = [];
+      if (trend != null) bits.push((trend >= 0 ? "+" : "") + trend.toFixed(2) + " V/h");
+      if (b.charging) bits.push("charging");
+      // hours to a decimal only while it matters — "~42.0 h" wrapped the half-height tile's
+      // sub-line onto a second row for a number nobody acts on
+      else if (b.hours_to_floor != null) bits.push("~" + (b.hours_to_floor >= 10 ? r0(b.hours_to_floor) : r1(b.hours_to_floor))
+        + " h to " + r1(b.thresholds.floor_v) + " V");
+      else if (b.volts_min != null && b.volts_min < b.volts) bits.push("min " + b.volts_min + " V");
+      return { status: st, value: (b.volts != null ? b.volts.toFixed(2) : "—") + " V", sub: bits.join(" · "),
+        why: b.reason + ". The status is decided on a " + r0(b.sustain_min) + "-min median, so a "
+          + "winch load can't trip it and a bounce shorter than half that can't clear it; the "
+          + "trend is measured over " + r0(b.window_min) + " min."
+          + (b.hours_to_floor != null ? " At the current rate the bank reaches "
+             + r1(b.thresholds.floor_v) + " V in about " + r1(b.hours_to_floor) + " h." : "")
+          + " Below ~11.0 V the Pi's SD card writes and the AIS transceiver are at risk — that is"
+          + " how the Jul 18 full-res archive and the AIS feed were both lost mid-race, in the"
+          + " same minute, at the bottom of a six-hour discharge.",
+        consider: st === "act" ? "Shed load and get a charge source on — the archive and the AIS transceiver go first."
+          : st === "watch" ? (b.charging ? "Recovering, but still low — leave the charge source on."
+              : "Bank is draining. Decide on a charging window before it reaches the floor, not after.")
+          : "Bank healthy.",
+        // the release condition IS the decision condition now — the dwell median coming back
+        // above the line it crossed. No separate band to explain (see power.py `_tripped`).
+        clears: st === "ok" ? "—"
+          : "the " + r0(b.sustain_min) + "-min median comes back above "
+            + r1(b.status === "danger" ? b.thresholds.danger_v : b.thresholds.warn_v) + " V",
+        based: ["get_power: " + b.volts + " V over " + b.samples + " samples, "
+                + (trend == null ? "no trend yet" : trend.toFixed(2) + " V/h"),
+                "⚠ absolute thresholds are unconfirmed 12 V lead-acid defaults — trust the trend"]
+          .concat(provLine("bank") ? [provLine("bank")] : []), conf: "engine" };
     },
     /* PLAYBOOK: are we on the frozen homework, and has a branch fired? Driven by the engine's
        unified SELECTOR (Tier-1, always reachable — no Orin needed), so the tile and the Strategy-card
@@ -841,6 +1032,10 @@
     for (const k of TILES) {
       const raw = (BUILD[k] || (() => NA("—")))(p);
       raw.status = commitStatus(k, raw.status);
+      // PROVENANCE on every number, in one place rather than eight: the BASED ON slot names the
+      // device behind each of the tile's inputs. (`data` and `bank` add their own richer lines.)
+      const prov = PAIR.indexOf(k) < 0 ? provLine(k) : null;
+      if (prov) raw.based = (raw.based || []).concat([prov]);
       // Held-but-stale is a THIRD state, distinct from fresh and from absent: the number is
       // real, just not current, and the crew is entitled to know which it is looking at.
       const age = tileAge(k);
@@ -968,6 +1163,81 @@
     if (App.src !== "live") return;
     const r = await fetchJSON("/trend", 9000);
     if (r) App.trend = r;
+  }
+  /* ---- HOUSE BANK + INSTRUMENT HEALTH (engine /power, /health/sensors) ----
+     Both endpoints existed before this surface did, and that was the whole problem: on Jul 18
+     the bank fell 12.91 -> 11.08 V over six hours, took the archiver and the AIS transceiver
+     with it, and no screen aboard carried the number. `hold()` them like the main poll so a slow
+     engine shows a held value with its age rather than a blank tile. */
+  async function fetchPower() {
+    if (App.src !== "live") return;
+    App.power = hold("power", await fetchJSON("/power", 8000), Date.now());
+    if (App.src === "live") render();
+  }
+  async function fetchHealth() {
+    if (App.src !== "live") return;
+    App.health = hold("health", await fetchJSON("/health/sensors", 8000), Date.now());
+    if (App.src === "live") render();
+  }
+  function currentPower() {
+    if (App.src === "demo") return (SCENARIOS[App.demoScn] || {}).power || null;
+    return App.power;
+  }
+  function currentHealth() {
+    if (App.src === "demo") return (SCENARIOS[App.demoScn] || {}).health || null;
+    return App.health;
+  }
+  /* Which channels each tile's numbers actually come from — the map behind "provenance on every
+     number". Keyed to `/health/sensors` -> provenance.channels, which names the DEVICE (not the
+     N2K address) plus its rank and age. */
+  const TILE_CHANNELS = {
+    wind: ["tws", "twd"], forecast: ["tws", "twd"], sail: ["aws", "awa", "tws", "twa"],
+    eta: ["sog", "cog", "lat", "lon"], ais: ["lat", "lon", "sog", "cog"],
+    playbook: ["tws", "twd", "lat", "lon"], charge: ["heading_true", "heel", "stw"],
+    bank: ["bank_voltage"],
+  };
+  const CH_LABEL = { tws: "TWS", twd: "TWD", twa: "TWA", aws: "AWS", awa: "AWA", stw: "STW",
+    sog: "SOG", cog: "COG", lat: "position", lon: "position", heel: "heel", pitch: "pitch",
+    heading_true: "heading", heading_mag: "heading (mag)", rate_of_turn: "rate of turn",
+    depth: "depth", water_temp: "water temp", rudder_angle: "rudder", bank_voltage: "bank" };
+  /* one "TWS Orca Core (rank 1) · TWD Orca Core" line for a tile's BASED ON slot */
+  function provLine(key) {
+    const chans = ((currentHealth() || {}).provenance || {}).channels;
+    const want = TILE_CHANNELS[key];
+    if (!chans || !want) return null;
+    const seen = new Set(), bits = [];
+    for (const ch of want) {
+      const e = chans[ch];
+      if (!e || seen.has(CH_LABEL[ch] || ch)) continue;
+      seen.add(CH_LABEL[ch] || ch);
+      bits.push((CH_LABEL[ch] || ch) + " " + (e.device || e.source || "?") +
+        (e.fell_back ? " ⚑backup" : e.rank ? "" : " (unranked)") +
+        (e.measured === false ? " (computed)" : ""));
+    }
+    return bits.length ? "from: " + bits.join(" · ") : null;
+  }
+  /* Short labels for whatever the health checks are flagging — the DATA tile face has room for
+     "⚑ aws, compass vs GPS", not for the engine's full sentence (which is in the detail). */
+  function healthChips(h) {
+    if (!h || !h.available) return [];
+    const out = [];
+    if ((h.attitude || {}).status !== "ok" && (h.attitude || {}).status) out.push("attitude");
+    if (["warn", "danger"].indexOf((h.heading || {}).status) >= 0) out.push("compass vs GPS");
+    const c = (h.provenance || {}).checks || {};
+    for (const f of (c.lead_source || {}).went_silent || []) out.push(f.channel);
+    for (const f of (c.own_ship || {}).ais_leading || []) out.push("AIS in " + f.channel);
+    if (((c.policy_binds || {}).unresolvable || []).length) out.push("priority unbound");
+    return out;
+  }
+  /* does any number on this tile come from a backup sensor? the tile head shows ⚑ if so */
+  function provFlagged(key) {
+    const chans = ((currentHealth() || {}).provenance || {}).channels;
+    const want = TILE_CHANNELS[key];
+    if (!chans || !want) return null;
+    const fb = want.filter((ch) => (chans[ch] || {}).fell_back);
+    if (!fb.length) return null;
+    return fb.map((ch) => (CH_LABEL[ch] || ch) + " on " +
+      ((chans[ch].device || chans[ch].source || "a backup"))).join(", ");
   }
   /* Playbook v2 Phase D — the Tier-1 PLAY MATCHER: armed/arming plays from the frozen v2 bundle
      (engine-deterministic Schmitt sustain). Plus the crew GEAR toggle: a tapped kite = declared
@@ -1401,7 +1671,7 @@
   const TILE_SRC = {
     wind: ["conditions"], playbook: ["tactics"], forecast: ["forecast"],
     sail: ["sail", "conditions"], eta: ["navigator"], ais: ["fleet"],
-    charge: ["fatigue", "watch"], data: ["sources"],
+    charge: ["fatigue", "watch"], data: ["sources", "health"], bank: ["power"],
   };
   function tileAge(key) {
     let worst = 0;
@@ -1430,6 +1700,7 @@
     pos: { lat: 45.33, lon: -82.0 },
     openTile: null, streamTimer: null, pollTimer: null, seriesTimer: null, briefTimer: null,
     adhereTimer: null, coachTimer: null, devTimer: null, driftTimer: null, selTimer: null, polling: false,
+    powerTimer: null, healthTimer: null, power: null, health: null,
     dwell: {}, fresh: {}, ages: {}, data: null, windHist: [], fcstHist: [], seriesHist: [], lastPersist: 0, brief: null,
     coach: null, deviation: null, forecastDrift: null, selector: null, reoptimize: null,
     plangap: null, trend: null, briefBusy: {}, gps: null, gpsBusy: false, gpsNote: "",
@@ -1463,30 +1734,46 @@
 
   /* ============================ render ============================ */
   function STATUS_PLACEHOLDER() { return { status: "na", value: "—", sub: "", why: "", consider: "—", clears: "—", based: [] }; }
+  /* one tile element; `mini` is the half-height form used by the stacked SYSTEMS pair */
+  function tileEl(key, t, mini) {
+    const st = STATUS[t.status] || STATUS.na;
+    const el = document.createElement("div");
+    el.className = "tile s-" + (t.status || "na") + (mini ? " mini" : "");
+    el.dataset.tile = key;
+    el.setAttribute("role", "button"); el.setAttribute("tabindex", "0");
+    el.setAttribute("aria-label", NAME[key] + " " + st.word + " " + stripTags(t.value || ""));
+    const valHtml = (t.value != null && t.value !== "") ? '<div class="t-val">' + t.value + '</div>' : "";
+    const ageHtml = t.staleMs
+      ? '<span class="t-age" title="Held: the engine has not answered for ' + fmtAge(t.staleMs)
+        + '. This is the last good reading, not a current one.">⏱ ' + fmtAge(t.staleMs) + '</span>'
+      : "";
+    // PROVENANCE, on the tile face: a number coming off a backup sensor is still a number, and
+    // the crew is entitled to know which sensor it came from before they steer on it.
+    const flagged = provFlagged(key);         // demo-aware: currentHealth() serves the scenario
+    const flagHtml = flagged
+      ? '<span class="t-flag" title="Running on a backup sensor: ' + esc2(flagged)
+        + '. Tap for provenance.">⚑</span>'
+      : "";
+    el.innerHTML =
+      '<div class="t-head"><span class="t-name">' + NAME[key] + '</span>' + flagHtml + ageHtml +
+      '<span class="t-chip"><span class="t-icon">' + st.icon + '</span><span class="t-word">' + st.word + '</span></span></div>' +
+      valHtml + (t.chart ? t.chart : "") + (t.sub ? '<div class="t-sub">' + t.sub + '</div>' : "") + (t.chart ? "" : rowsHtml(t.rows));
+    el.addEventListener("click", () => openDetail(key));
+    el.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openDetail(key); } });
+    return el;
+  }
   function render() {
     const d = currentData();
     const grid = document.getElementById("grid");
     grid.innerHTML = "";
     for (const key of TILES) {
+      if (PAIR.indexOf(key) > 0) continue;              // drawn inside the pair below
       const t = d.tiles[key] || STATUS_PLACEHOLDER();
-      const st = STATUS[t.status] || STATUS.na;
-      const el = document.createElement("div");
-      el.className = "tile s-" + (t.status || "na");
-      el.dataset.tile = key;
-      el.setAttribute("role", "button"); el.setAttribute("tabindex", "0");
-      el.setAttribute("aria-label", NAME[key] + " " + st.word + " " + stripTags(t.value || ""));
-      const valHtml = (t.value != null && t.value !== "") ? '<div class="t-val">' + t.value + '</div>' : "";
-      const ageHtml = t.staleMs
-        ? '<span class="t-age" title="Held: the engine has not answered for ' + fmtAge(t.staleMs)
-          + '. This is the last good reading, not a current one.">⏱ ' + fmtAge(t.staleMs) + '</span>'
-        : "";
-      el.innerHTML =
-        '<div class="t-head"><span class="t-name">' + NAME[key] + '</span>' + ageHtml +
-        '<span class="t-chip"><span class="t-icon">' + st.icon + '</span><span class="t-word">' + st.word + '</span></span></div>' +
-        valHtml + (t.chart ? t.chart : "") + (t.sub ? '<div class="t-sub">' + t.sub + '</div>' : "") + (t.chart ? "" : rowsHtml(t.rows));
-      el.addEventListener("click", () => openDetail(key));
-      el.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openDetail(key); } });
-      grid.appendChild(el);
+      if (key !== PAIR[0]) { grid.appendChild(tileEl(key, t, false)); continue; }
+      const pair = document.createElement("div");
+      pair.className = "tile-pair";
+      for (const k of PAIR) pair.appendChild(tileEl(k, d.tiles[k] || STATUS_PLACEHOLDER(), true));
+      grid.appendChild(pair);
     }
     renderCommentary(d);
     if (App.openTile && !document.getElementById("detail").hidden) populateDetail(App.openTile, false);
@@ -1668,6 +1955,125 @@
     }
     return out;
   }
+  /* ============ INSTRUMENT HEALTH + PROVENANCE (the DATA tile's detail) ============
+     Five checks, each shown with its own verdict rather than rolled into one word, because they
+     fail for different reasons and the crew's response differs: a misaligned compass is a
+     navigation problem, an unbindable priority matcher is a configuration problem, and AIS
+     leading own-ship position is a "stop trusting this screen" problem. */
+  const HEALTH_ROWS = [
+    ["attitude", "Attitude in range", (h) => h.attitude,
+     "A monohull cannot sit at 133° of roll. One sample is enough — this is what would have " +
+     "caught the kicked sensor at 22:58Z on Jul 18, on the spot."],
+    ["heading", "Heading vs GPS course", (h) => h.heading,
+     "Under sail these agree within a few degrees of leeway and current. A steady bias held " +
+     "for hours means the compass is misaligned, not the boat — and every individual number " +
+     "looks perfectly ordinary while it happens."],
+    ["policy_binds", "Sensor priority binds", (h) => (h.provenance || {}).checks?.policy_binds,
+     "Every ranked device name in the policy has to match a device that is really on this bus. " +
+     "For most of this project's life none of them did, and an unmatched rule looks exactly " +
+     "like a satisfied one."],
+    ["lead_source", "Preferred sensor in use", (h) => (h.provenance || {}).checks?.lead_source,
+     "Which channels are running on a backup because the ranked sensor went quiet."],
+    ["own_ship", "Own-ship data only", (h) => (h.provenance || {}).checks?.own_ship,
+     "The AIS transceiver publishes other vessels' positions on the same bus. If one of them " +
+     "ever leads an own-ship channel again, the number is another boat's."],
+  ];
+  const HEALTH_WORD = { ok: "OK", warn: "WATCH", danger: "ACT", unknown: "—" };
+  function healthPanelHtml() {
+    const h = currentHealth();
+    if (!h || !h.available) {
+      return '<div class="dc-foot">Instrument cross-checks unavailable — the engine ' +
+        '/health/sensors read did not answer' + (h && h.note ? ": " + esc2(h.note) : "") + '.</div>';
+    }
+    let out = '<div class="rc-title">Instrument cross-checks</div>';
+    for (const [id, label, pick, why] of HEALTH_ROWS) {
+      let c = null;
+      try { c = pick(h); } catch (e) { c = null; }
+      const s = (c && c.status) || "unknown";
+      out += '<div class="hc-row st-' + s + '" title="' + esc2(why) + '">' +
+        '<span class="hc-word">' + (HEALTH_WORD[s] || s) + '</span>' +
+        '<span class="hc-txt"><b>' + label + '</b>' +
+        '<span class="hc-sub">' + esc2((c && c.reason) || "no reading") +
+        ((c && c.note) ? " — " + esc2(c.note) : "") + '</span></span></div>';
+    }
+    return out;
+  }
+  /* PROVENANCE: every channel the iPad reads, and the device it came from. This is the table
+     that would have answered "which wind are we looking at?" — the GND10 masthead and the Orca's
+     computed apparent wind disagreed by up to 5.9 kn on Jul 18 and the dashboard showed whichever
+     had written last, unlabelled. */
+  function provenanceTableHtml() {
+    const p = (currentHealth() || {}).provenance || {};
+    const chans = p.channels || {};
+    const keys = Object.keys(chans);
+    if (!keys.length) return "";
+    const order = ["tws", "twd", "twa", "aws", "awa", "stw", "sog", "cog", "heading_true",
+                   "heading_mag", "heel", "pitch", "rate_of_turn", "lat", "lon", "depth",
+                   "water_temp", "rudder_angle", "bank_voltage"];
+    keys.sort((a, b) => (order.indexOf(a) + 1 || 99) - (order.indexOf(b) + 1 || 99));
+    let out = '<div class="rc-title" style="margin-top:10px">Where each number comes from</div>' +
+      '<div class="t-rows"><div class="t-row hdr"><span class="rl"></span>' +
+      '<span class="rc">value</span><span class="rc">device</span><span class="rc">age</span></div>';
+    for (const k of keys) {
+      const e = chans[k];
+      const marks = (e.fell_back ? " ⚑" : "") + (e.measured === false ? " ƒ" : "") +
+        (e.disagreement ? " ≠" : "");
+      out += '<div class="t-row' + (e.fell_back ? " emph" : "") + '">' +
+        '<span class="rl">' + (CH_LABEL[k] || k) + '</span>' +
+        '<span class="rc">' + (e.value == null ? "—" : e.value) + " " + esc2(e.unit || "") + '</span>' +
+        '<span class="rc">' + esc2(e.device || e.source || "?") +
+        (e.rank ? " #" + e.rank : "") + marks + '</span>' +
+        '<span class="rc">' + (e.age_s == null ? "—" : Math.max(0, Math.round(e.age_s)) + "s") +
+        (e.sources > 1 ? " /" + e.sources : "") + '</span></div>';
+    }
+    out += '</div><div class="dc-legend">⚑ on a backup sensor · ƒ computed, not measured · ' +
+      '≠ sources disagree by more than the channel tolerance · #n the sensor\'s priority rank · ' +
+      '/n how many sources report this channel. Every source is kept — nothing is dropped, ' +
+      'the lead is chosen and labelled.</div>';
+    return out;
+  }
+  /* the BANK detail: the number, the trend, and the projection, plus the unconfirmed-threshold
+     warning — the absolute levels are 12 V lead-acid guesses until somebody checks the bank */
+  function bankPanelHtml() {
+    const b = currentPower();
+    if (!b || b.available === false) {
+      return '<div class="dc-foot">No bank voltage — the engine reported: ' +
+        esc2((b && b.note) || "nothing") + '. The Orca Core publishes ' +
+        'electrical.batteries.0.voltage at ~0.7 Hz when its N2K sharing is on.</div>';
+    }
+    const st = b.status === "danger" ? "act" : b.status === "warn" ? "watch" : "ok";
+    const rows = [
+      ["now", b.volts != null ? b.volts.toFixed(2) + " V" : "—", "5-min median"],
+      ["status taken on", b.volts_decided != null ? b.volts_decided.toFixed(2) + " V" : "—",
+       r0(b.sustain_min) + "-min median — raise-slow"],
+      ["last sample", b.volts_last != null ? b.volts_last + " V" : "—", "raw"],
+      ["lowest", b.volts_min != null ? b.volts_min + " V" : "—",
+       "in the last " + r0(b.window_min) + " min"],
+      ["trend", b.trend_v_per_h == null ? "—"
+        : (b.trend_v_per_h >= 0 ? "+" : "") + b.trend_v_per_h.toFixed(2) + " V/h",
+       b.charging ? "charge source on" : "median-of-thirds, not least squares"],
+      ["to " + r1(b.thresholds.floor_v) + " V", b.hours_to_floor == null ? "—"
+        : "~" + r1(b.hours_to_floor) + " h",
+       b.dark_at_epoch ? "about " + fmtHM(b.dark_at_epoch) : "at the current rate"],
+    ];
+    let out = '<div class="rc-title">House bank</div>' +
+      '<div class="en-row"><span class="en-score" style="color:var(--' + st + ')">' +
+      (b.volts != null ? b.volts.toFixed(2) : "—") + '</span><span class="en-side">V · ' +
+      esc2(b.status) + '</span></div><div class="t-rows">';
+    for (const [l, v, note] of rows) {
+      out += '<div class="t-row"><span class="rl">' + l + '</span><span class="rc">' + v +
+        '</span><span class="rc">' + esc2(note) + '</span></div>';
+    }
+    out += '</div><div class="dc-foot">Thresholds in use: warn ' + r1(b.thresholds.warn_v) +
+      ' V · danger ' + r1(b.thresholds.danger_v) + ' V · floor ' + r1(b.thresholds.floor_v) +
+      ' V, from ' + b.samples + ' samples of <code>' + esc2(b.path) + '</code>.</div>' +
+      '<div class="dc-foot" style="color:var(--watch)">⚠ Those absolute levels are conservative ' +
+      '12 V lead-acid defaults and are NOT confirmed against this boat — nothing in the system ' +
+      'records the bank\'s chemistry or capacity. Trust the trend and the projection first; ' +
+      'someone at the boat needs to check the bank and set POWER_*.</div>';
+    return out;
+  }
+
   /* ============ RACE CHECKLIST — the SI/NOR requirement reminders ============
      The engine /checklist evaluates the homework's `deliver_to_ipad` items against the live
      picture (sunset window, mark proximity, finish approach). ACTIVE items ride the bar under
@@ -1810,6 +2216,11 @@
       const hbtn = '<button class="cw-btn cw-inline" onclick="openCoachBrief(\'handover\')">' +
         'Watch handover brief ↻</button>';
       g.innerHTML = energy + hbtn + watchPanelHtml() + bars;
+    } else if (key === "data") {
+      // the instrument-health detail: the five cross-checks, then the full provenance table
+      g.innerHTML = healthPanelHtml() + provenanceTableHtml();
+    } else if (key === "bank") {
+      g.innerHTML = bankPanelHtml();
     } else if (key === "eta" && App.src === "live" && courseMapHtml()) {
       g.innerHTML = '<div class="dc-foot">' + stripTags(t.value || "—") +
         (t.sub ? " · " + t.sub : "") + '</div>' + courseMapHtml();
@@ -2035,6 +2446,10 @@
     App.sessionTimer = setInterval(fetchSession, 15000);
     fetchChecklist();               // race-checklist reminders (engine triggers), own cadence
     App.chkTimer = setInterval(fetchChecklist, CHK_EVERY);
+    fetchPower();                   // house bank (engine /power), slow-moving — see POWER_EVERY
+    App.powerTimer = setInterval(fetchPower, POWER_EVERY);
+    fetchHealth();                  // instrument cross-checks + provenance (engine /health/sensors)
+    App.healthTimer = setInterval(fetchHealth, HEALTH_EVERY);
     document.getElementById("chkTag").addEventListener("click", () => openDetail("checklist"));
     App.playsTimer = setInterval(fetchPlays, SYN_EVERY);
     document.getElementById("themeBtn").addEventListener("click", cycleTheme);

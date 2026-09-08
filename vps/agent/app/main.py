@@ -13,6 +13,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 
 from shared.tool_contracts import AGENT_TOOLS
+from shared import n2k_sources, source_policy
 from .db import pool
 from . import agent, tools, navigator, alerts, summarizer, auth, race_mode, datasource, watches
 
@@ -265,19 +266,47 @@ def racelog_track(start: float, end: float, max_points: int = 2000):
     t1 = datetime.fromtimestamp(float(end), tz=timezone.utc)
     paths = ("navigation.position.latitude", "navigation.position.longitude",
              "navigation.speedOverGround", "navigation.courseOverGroundTrue")
+    # Two filters, both added 2026-09-07, both measured on the Jul 18 race window:
+    #
+    #   1. **Exclude AIS-bearing sources.** Without it this query mixes other vessels' fixes
+    #      into "the boat's own track": 99.7% of one-second buckets in that window contained an
+    #      AIS position, and the resulting track reached an implied **50,034 kn** with 9.0% of
+    #      legs over 15 kn. This is the debrief's own-log source, so the contamination landed
+    #      squarely in the one place the race gets analysed.
+    #   2. **Honour source priority within each second.** Own ship is reported by two GPSs
+    #      (24xd and the Orca) and the old code kept whichever row arrived last, so fixes
+    #      alternated between them: still 25.5 kn max, 1.48% of legs over 15 kn. Taking the
+    #      ranked source per second instead gives max 13.6 kn, p99 9.3 kn, **0.00%** implausible.
+    #
+    # Also filters `boat_id`, which was simply missing.
+    ais = tools.ais_bearing_sources()
+    devices = n2k_sources.devices_for(tools.BOAT_ID)
     with pool.connection() as conn:
         rows = conn.execute(
-            "SELECT extract(epoch FROM time)::float8 AS epoch, path, value FROM telemetry_raw "
-            "WHERE path = ANY(%s) AND time BETWEEN %s AND %s AND value IS NOT NULL "
-            "ORDER BY time", (list(paths), t0, t1)).fetchall()
+            "SELECT extract(epoch FROM time)::float8 AS epoch, path, value, source "
+            "FROM telemetry_raw WHERE boat_id = %s AND path = ANY(%s) "
+            "AND time BETWEEN %s AND %s AND value IS NOT NULL "
+            + ("AND NOT (source = ANY(%s)) " if ais else "")
+            + "ORDER BY time",
+            ((tools.BOAT_ID, list(paths), t0, t1, sorted(ais)) if ais
+             else (tools.BOAT_ID, list(paths), t0, t1))).fetchall()
         sails = conn.execute(
             "SELECT extract(epoch FROM time)::float8 AS epoch, str_value FROM telemetry_raw "
             "WHERE path = 'crew.sail.state' AND time BETWEEN %s AND %s ORDER BY time",
             (t0, t1)).fetchall()
-    # bucket by second → fixes; a fix needs at least lat+lon (dict rows — psycopg row factory)
-    buckets = {}
+    # bucket by second → fixes; a fix needs at least lat+lon (dict rows — psycopg row factory).
+    # Within a second, the best-ranked source wins (see the note above); an unranked source is
+    # rank 999 rather than dropped, so a boat with no policy behaves exactly as before.
+    buckets, ranks = {}, {}
     for r in rows:
-        buckets.setdefault(round(r["epoch"]), {})[r["path"]] = r["value"]
+        sec = round(r["epoch"])
+        rank = source_policy.rank_for(r["path"], r["source"], devices)
+        rank = 999 if rank is None else rank
+        key = (sec, r["path"])
+        if key in ranks and ranks[key] < rank:
+            continue
+        ranks[key] = rank
+        buckets.setdefault(sec, {})[r["path"]] = r["value"]
     fixes = []
     for t in sorted(buckets):
         b = buckets[t]

@@ -28,6 +28,9 @@ import threading
 import time as _time
 from datetime import datetime, timedelta, timezone
 
+from shared import n2k_sources
+from shared import source_policy
+
 BOAT_ID = os.environ.get("BOAT_ID", "sr33")
 _MS_TO_KN = 1.943844
 
@@ -74,8 +77,10 @@ def _epoch(iso):
 # N2K stack and differ per boat — identify them from the data: a source that publishes AIS-only
 # paths is an AIS channel, so its navigation.* rows describe somebody else. This also cleans the
 # archive we already have, which is what the replay rig and any retro analysis need.
-AIS_MARKER_PATHS = ("sensors.ais.class", "atonType.id", "design.aisShipType.id",
-                    "navigation.specialManeuver", "offPosition")
+# Canonical list lives in shared/n2k_sources so the cloud track builder, the replay
+# ground-truth pane and this reader cannot drift apart (they did: the cloud one was missing
+# entirely, which left the Lab debrief's own-log track reaching 50,034 kn).
+AIS_MARKER_PATHS = n2k_sources.AIS_MARKER_PATHS
 AIS_FILTER = os.environ.get("ONBOARD_AIS_FILTER", "true").strip().lower() != "false"
 # How many recent rows per marker path to inspect. Bounded on purpose: a wall-clock lookback
 # silently finds nothing when the archive being read is older than the window (which is exactly
@@ -277,18 +282,69 @@ class OnboardSource:
             return [(s, e, val) for (p, s), (e, val) in self._live.items()
                     if p == path and e >= cut]
 
+    # --- source priority ---------------------------------------------------
+    # `shared/source_policy` ranks a device per channel (Orca over the autopilot AHRS for heel,
+    # the masthead over the Orca for apparent wind, …). The cloud read path consulted the
+    # `source_priority` table; this one never did — it took whichever source wrote last, which
+    # is how the boat spent a race on the sensor its own policy marks "non-racing only".
+    #
+    # Freshness is judged RELATIVE to the newest sample for that path, never against the wall
+    # clock: onboard reads are routinely a replay of an old archive, where a wall-clock gate
+    # calls every source stale and silently defeats the whole policy. (`series()` can use a
+    # wall-clock window because a window is what it means; "is the lead sensor current?" is not.)
+    def _prefer(self, path, candidates):
+        """Pick one (source, epoch, value) by priority with failover.
+
+        Freshest wins when the path is unranked, or when no ranked source has a sample within
+        FAILOVER_AGE_S of the newest one — an unranked source is still real data and must never
+        be dropped for want of an opinion about it."""
+        if not candidates:
+            return None
+        freshest = max(candidates, key=lambda r: r[1])
+        matchers = source_policy.matchers_for(path)
+        if not matchers:
+            return freshest
+        devices = n2k_sources.devices_for(BOAT_ID)
+        for m in matchers:
+            ranked = [r for r in candidates
+                      if n2k_sources.matches(r[0], m, devices)
+                      and freshest[1] - r[1] <= source_policy.FAILOVER_AGE_S]
+            if ranked:
+                return max(ranked, key=lambda r: r[1])
+        return freshest
+
     # --- CloudSource interface --------------------------------------------
     def latest_value(self, path):
-        """Freshest raw SI value (any source) for a path — live cache first, then archive."""
+        """Raw SI value for a path from the priority-preferred source — live cache, then archive.
+
+        Two bounded archive queries rather than one: the newest timestamp for the path (index
+        only), then just the last FAILOVER_AGE_S of that path grouped by source. Grouping the
+        whole path by source would scan millions of rows on every poll."""
         live = self._live_fresh(path)
         if live:
-            return max(live, key=lambda r: r[1])[2]
+            return self._prefer(path, live)[2]
         not_ais, ais_p = self._not_ais()
-        row = self._archive.execute(
-            "SELECT value FROM readings WHERE boat_id=? AND path=? AND value IS NOT NULL"
-            + not_ais + " ORDER BY time DESC LIMIT 1", (BOAT_ID, path, *ais_p),
+        newest = self._archive.execute(
+            "SELECT max(time) AS time FROM readings WHERE boat_id=? AND path=? "
+            "AND value IS NOT NULL" + not_ais, (BOAT_ID, path, *ais_p),
         ).fetchone()
-        return row["value"] if row else None
+        if not newest or not newest["time"]:
+            return None
+        newest_e = _epoch(newest["time"])
+        if newest_e is None:
+            return None
+        cut = datetime.fromtimestamp(
+            newest_e - source_policy.FAILOVER_AGE_S, timezone.utc
+        ).strftime("%Y-%m-%dT%H:%M:%S")
+        rows = self._archive.execute(
+            "SELECT source, max(time) AS time, value FROM readings WHERE boat_id=? AND path=? "
+            "AND value IS NOT NULL AND time > ?" + not_ais + " GROUP BY source",
+            (BOAT_ID, path, cut, *ais_p),
+        ).fetchall()
+        cands = [(r["source"], _epoch(r["time"]), r["value"]) for r in rows]
+        cands = [c for c in cands if c[1] is not None]
+        best = self._prefer(path, cands)
+        return best[2] if best else None
 
     # Real N2K sensors write 5–28 Hz, so a 40-min fatigue window is tens of thousands of rows —
     # converting them one-by-one in Python starved the whole engine at first-light (2026-07-15;
