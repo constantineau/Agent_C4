@@ -184,6 +184,62 @@ freezegun and is unaffected, so a frames-only rebuild over the same `--start/--e
 the two panes aligned. **A frozen clock the rig only mostly applies is worse than no clock at
 all** — if a future harness grows another thread boundary, assert an age, don't eyeball a tile.
 
+### ✅ The rig now covers the WHOLE race (2026-09-08) — and the first thing it found
+
+`tools/replay/spool_to_sqlite.py` materialises the cloud spool into a `readings`-schema SQLite
+file (33,282 rows, 75 paths, 6.6 MB for `20:40:30 -> 00:09:35Z`); `source.py` ATTACHes it and
+reads both files through `_both()`; `harness.py --spool` wires it up. Two files, not one merged
+one — the rates differ by three orders of magnitude and merging would let a 24-s aggregate be
+read as a 5-Hz measurement. Verified across the seam: the archive leads to 20:40:30 at age
+~−1 s, there is a real 29–59 s gap the strip honestly reports as stale, and the spool leads from
+20:42:00 with position, speed and bank voltage all continuous.
+
+Performance note for whoever touches it next: the obvious `CREATE TEMP VIEW readings_all AS …
+UNION ALL …` is **200× slower** and its query plan looks fine. Both arms SEARCH their index, but
+the compound sits behind a CO-ROUTINE that the outer `max()` then SCANS — 0.67 s vs 0.00 s per
+read, i.e. every read streams every matching row of a 10.4 M-row table. Aggregate *inside* each
+arm and re-aggregate the two small results.
+
+- **P0 — 🔴 THE HEADING CROSS-CHECK IS SILENT ON THE DATA THE BOAT ACTUALLY SENT, AND IT COMPARES
+  THE 24xd AGAINST ITSELF.** Found immediately on the first full-race replay, which is the entire
+  argument for having done it. The attitude range gate works exactly as designed — `danger` on
+  the first bad sample at 22:58Z (roll 133.1°), sustained through the inverted hour, quiet again
+  from 23:22Z when the crew re-seated it. The *cross-check*, the one written specifically for the
+  quiet quarter-turn error that followed, does not:
+
+  | after the sensor was put back, 23:25 → 00:00Z | |
+  |---|---|
+  | frames reporting `unknown` ("samples disagree — manoeuvring or unstable") | **35 of 36** |
+  | frames reporting `danger` | 1 |
+  | median `spread_deg` (the gate is 25°) | **68.7°** |
+  | the one bias it did report | **+119.2°** — against the −90° the fixture analysis measured |
+
+  **Root cause, measured.** `sensor_health.assess()` builds its reference series with
+  `src.series()`, which decimates to one value per second with `max(time)` across *all* non-AIS
+  sources. `navigation.courseOverGroundTrue` has **two** publishers — the 24xd and the Orca — and
+  in this window they disagree by a mean of **12.5°** and a maximum of **73.1°**. So the series
+  alternates between two devices sample to sample, and that source-switching noise lands straight
+  in the `spread_deg` statistic the check uses to decide whether its samples agree. The spread
+  gate then correctly concludes the samples disagree and returns `unknown` — defeating the check
+  with a number the check itself manufactured.
+
+  **And the independence is fictional.** `navigation.headingTrue` has exactly one publisher, the
+  24xd. `source_priority` ranks COG `['24xd', 'orca', '943', 'b951']` — so the policy-preferred
+  COG is the **same physical device** as the heading. A cross-check whose whole premise is "an
+  independent measurement" is, on this boat, comparing the kicked sensor against itself. The Orca
+  is rank 2 and is the genuinely independent one.
+
+  **The fix has two parts, and only the first is obvious.** (1) Build the reference series from a
+  *single* source via `series_by_source`, choosing a publisher that is **not** the channel's own
+  publisher — otherwise the check cannot mean what it says. (2) Decide whether the 25° spread gate
+  is tuned for 1 Hz archive data and needs to be rate-aware: some of that spread is genuine, a
+  boat manoeuvring sampled every 24–35 s, so a single-source series will narrow it but may not
+  clear it. Re-measure on the full-race timeline after (1) before touching (2) — the rig can now
+  score both, which it could not this morning.
+
+  This is the ninth instance of the shape: **a read path silently mixing sources**, designed and
+  wired and not doing what it says.
+
 ### ⚠ …and it could still phone the live internet — the rig is now hermetic (2026-09-08)
 
 The rebuild for that fix **stalled at frame 282** holding an ESTABLISHED TLS connection to
