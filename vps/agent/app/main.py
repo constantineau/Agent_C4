@@ -13,7 +13,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 
 from shared.tool_contracts import AGENT_TOOLS
-from shared import n2k_sources, source_policy
+from shared import n2k_sources, race_window, source_policy
 from .db import pool
 from . import agent, tools, navigator, alerts, summarizer, auth, race_mode, datasource, watches
 
@@ -232,10 +232,60 @@ def alerts_ep():
     return tools.get_alerts()
 
 
+def _motion_series(t0, t1, bucket_s=300):
+    """[(epoch_s, sog_kn, cog_deg)] over [t0, t1], one sample per `bucket_s`, from a SINGLE
+    non-AIS source — `race_window` reads course reversals off this and a series that alternates
+    between two GPSs is a series of manufactured turns.
+
+    Source is chosen the way `sensor_health.choose_source` does: policy rank first, then coverage.
+    """
+    from datetime import datetime as _dt, timezone as _tz
+    ais = tools.ais_bearing_sources()
+    devices = n2k_sources.devices_for(tools.BOAT_ID)
+    paths = ("navigation.speedOverGround", "navigation.courseOverGroundTrue")
+    with pool.connection() as conn:
+        rows = conn.execute(
+            "SELECT source, "
+            "  extract(epoch FROM time_bucket(%s, time))::float8 AS b, "
+            "  avg(CASE WHEN path = %s THEN value END) AS sog, "
+            "  avg(CASE WHEN path = %s THEN sin(value) END) AS cs, "
+            "  avg(CASE WHEN path = %s THEN cos(value) END) AS cc "
+            "FROM telemetry_raw WHERE boat_id = %s AND path = ANY(%s) "
+            "AND time BETWEEN %s AND %s AND value IS NOT NULL "
+            + ("AND NOT (source = ANY(%s)) " if ais else "")
+            + "GROUP BY 1, 2 ORDER BY 2",
+            ((f"{int(bucket_s)} seconds", paths[0], paths[1], paths[1], tools.BOAT_ID,
+              list(paths), _dt.fromtimestamp(t0, _tz.utc), _dt.fromtimestamp(t1, _tz.utc))
+             + ((sorted(ais),) if ais else ()))).fetchall()
+    by_source = {}
+    for r in rows:
+        by_source.setdefault(r["source"], []).append(r)
+    best, resolved = race_window.choose_motion_source(by_source, devices)
+    if best is None:
+        return [], None, False
+    import math as _math
+    out = []
+    for r in by_source[best]:
+        sog = None if r["sog"] is None else float(r["sog"]) * 1.943844
+        cog = (None if r["cs"] is None or r["cc"] is None
+               else _math.degrees(_math.atan2(float(r["cs"]), float(r["cc"]))))
+        out.append((float(r["b"]), sog, cog))
+    return out, best, resolved
+
+
 @app.get("/racelog/sessions")
-def racelog_sessions():
+def racelog_sessions(derive: bool = True):
     """RACE-SESSION markers backfilled from the boat (`crew.session` readings) — the windows the
-    owner recorded. Shore-side recall of own data (the Lab debrief's from-log source)."""
+    owner recorded. Shore-side recall of own data (the Lab debrief's from-log source).
+
+    Each session also carries a **`window`**: the race as the RECORD supports it rather than as
+    the button recorded it. The marker is a hint — on Jul 18 2026 the ⏺ LOG button was caught
+    during a kite hoist and stopped the recording 4.2 s before the sail bar registered the hoist,
+    so the marker claims 1 h 49 m of a race that ran 7 h 22 m. `shared/race_window.derive()`
+    stitches proximal markers, extends across continuous underway telemetry and stops at the
+    turnaround, and reports every step in `window.provenance`. The raw marker stays in
+    `start_ts`/`end_ts` — a derived window that quietly disagrees with what the crew remembers
+    pressing would be worse than none, so both are always served."""
     with pool.connection() as conn:
         rows = conn.execute(
             "SELECT str_value FROM telemetry_raw WHERE path = 'crew.session' "
@@ -252,6 +302,30 @@ def racelog_sessions():
             continue
         seen.add(key)
         out.append(d)
+    if derive:
+        for s in out:
+            try:
+                a = float(s["start_ts"])
+                b = float(s.get("end_ts") or a)
+                # Look a long way past the marker — the whole point is that the marker may have
+                # stopped early — but bound it so one session cannot scan a season.
+                motion, msrc, resolved = _motion_series(a - 6 * 3600, b + 24 * 3600)
+                w = race_window.derive(out, motion, race_id=s.get("race_id"), anchor_ts=a)
+                if w:
+                    w["motion_source"] = msrc
+                    w["motion_device"] = (n2k_sources.resolve(msrc, n2k_sources.devices_for(
+                        tools.BOAT_ID)) or {}).get("model")
+                    if msrc and not resolved:
+                        # The Jul 8 2026 marker sits in a window whose only motion publishers are
+                        # the bench stack's replayed 2014 log. Deriving from it is not wrong
+                        # enough to refuse, but it must never look like the boat.
+                        w["provenance"].append(
+                            f"⚠ derived from {msrc}, which is not a known device on this boat — "
+                            f"treat this window as unverified")
+                s["window"] = w
+            except Exception as exc:    # a derived window must never break session recall
+                s["window"] = None
+                s["window_error"] = f"{type(exc).__name__}: {exc}"[:200]
     return {"sessions": out}
 
 
