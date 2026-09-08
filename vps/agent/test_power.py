@@ -112,9 +112,23 @@ check(f"escalates to danger at T0+{danger_at} min, still before the failure",
 check("danger comes after warn (it escalates, never skips)",
       danger_at is not None and warn_at is not None and danger_at >= warn_at)
 
+# At the moment of failure this reads WARN, not danger, and that is the honest answer rather
+# than a weaker one. Revised 2026-09-08: the assertion here used to be `== "danger"`, and it
+# passed only because the old `_tripped` flapped — measured against the full-res archive it
+# produced seventeen separate single-frame danger blips between 19:13Z and 19:53Z. The bank had
+# *plateaued* at a 11.64–11.72 V median for the last three and a half hours, which is to say it
+# settled just above a DANGER_V of 11.60 that nobody has ever confirmed for this bank. A rule
+# that reports danger on that curve can only do it by chattering.
+#
+# So: the load-bearing claim is that the crew is warned early and the readout holds still. That
+# the plateau does not escalate is a THRESHOLD question — 11.60 V is a generic 12 V lead-acid
+# guess — and it is the reason `POWER_*` needs somebody at the boat with the bank's spec sheet.
 died = at(ARCHIVE_DIED)
-check(f"at the moment of failure it reads danger ({died['volts']:.2f} V)",
-      died["status"] == "danger")
+check(f"at the moment of failure it is alarming ({died['volts']:.2f} V, {died['status']})",
+      died["status"] in ("warn", "danger"))
+check("...and it has been saying so for over two hours, without interruption",
+      all(at(m)["status"] in ("warn", "danger")
+          for m in range(int(ARCHIVE_DIED) - 130, int(ARCHIVE_DIED), 5)))
 # while the bank is genuinely falling, the projection must name a time
 falling = at(180)
 check(f"the projection names a time the instruments are at risk "
@@ -136,6 +150,56 @@ flat_charging = [(T0 + m * 60, 11.20 + 0.005 * m) for m in range(0, 46)]   # +0.
 fc = power.assess_series(flat_charging, now=T0 + 45 * 60)
 check(f"a flat-but-recovering bank still reports danger ({fc['volts']:.2f} V, "
       f"{fc['trend_v_per_h']:+.2f} V/h)", fc["status"] == "danger" and fc["charging"] is True)
+# ...and the same rule in the WARN band, which it did NOT follow until 2026-09-08: the charging
+# branch sat above the warn test, so a bank between the danger and warn lines reported `ok` on
+# any upward wobble past CHARGE_V_PER_H. Found on the Jul 18 replay at 18:03Z — 11.71 V reading
+# "ok · charging" on +0.12 V/h, which is noise in a six-hour decline, not an alternator.
+low_wobble = [(T0 + m * 60, 11.72 + 0.002 * m) for m in range(0, 46)]      # +0.12 V/h at 11.7 V
+lw = power.assess_series(low_wobble, now=T0 + 45 * 60)
+check(f"a LOW-but-rising bank warns, it does not read ok ({lw['volts']:.2f} V, "
+      f"{lw['trend_v_per_h']:+.2f} V/h, {lw['status']})",
+      lw["status"] == "warn" and lw["charging"] is True)
+check("...and the wording says it is recovering rather than projecting a floor it is leaving",
+      "recovering" in lw["reason"] and "to 11.0 V" not in lw["reason"])
+# the healthy case must still be quiet: charging only annotates a LOW level, it is not itself
+# a status downgrade
+hi = power.assess_series([(T0 + m * 60, 12.60 + 0.004 * m) for m in range(0, 46)],
+                         now=T0 + 45 * 60)
+check(f"a healthy bank on charge still reads `charging`, not `warn` ({hi['volts']:.2f} V)",
+      hi["status"] == "charging")
+
+# --- the assertion that would have caught the flap -------------------------
+# Added 2026-09-08. The bug this catches was invisible for a day because nothing scored the
+# verdict for STABILITY: every existing assertion asked "does it say the right thing at moment
+# X", and a readout that says the right thing every other poll passes all of them. The console's
+# own flapping defect (7 flips a race) was found the same way and fixed a day earlier — the
+# lesson did not travel.
+#
+# A bank parked ON a threshold is the worst case by construction, so that is the fixture: the
+# real Jul 18 plateau level, at the Orca's real ~0.7 Hz, with deterministic load sags. No RNG —
+# a flake here would be indistinguishable from the bug.
+print("stability — a level parked on the danger line must not chatter:")
+PLATEAU = power.DANGER_V + 0.005          # 11.605 V: five millivolts above the line
+plateau = []
+for i in range(int(90 * 60 * 0.7)):       # 90 minutes at 0.7 Hz
+    t = T0 + i / 0.7
+    wobble = 0.02 * ((i % 7) - 3) / 3.0                      # ±20 mV instrument noise
+    sag = -0.55 if (i % 431) < 12 else 0.0                   # a winch load every ~10 min
+    plateau.append((t, PLATEAU + wobble + sag))
+seq = [power.assess_series([r for r in plateau if r[0] <= T0 + s], now=T0 + s)["status"]
+       for s in range(30 * 60, 90 * 60, 30)]                 # poll every 30 s over the last hour
+flips = sum(1 for a, b in zip(seq, seq[1:]) if a != b)
+check(f"the verdict holds still on a plateau ({flips} change(s) in {len(seq)} polls, "
+      f"settled on {seq[-1]!r})", flips <= 1)
+check("...and it is not silent about a bank sitting on the danger line",
+      set(seq) <= {"warn", "danger"})
+# the same fixture 100 mV lower must land on the other side — and just as steadily
+lower = [(t, v - 0.10) for t, v in plateau]
+seq2 = [power.assess_series([r for r in lower if r[0] <= T0 + s], now=T0 + s)["status"]
+        for s in range(30 * 60, 90 * 60, 30)]
+check(f"100 mV lower reads danger, also without chattering "
+      f"({sum(1 for a, b in zip(seq2, seq2[1:]) if a != b)} change(s))",
+      seq2[-1] == "danger" and sum(1 for a, b in zip(seq2, seq2[1:]) if a != b) <= 1)
 
 # --- noise rejection, the reason for raise-slow ----------------------------
 print("noise rejection:")

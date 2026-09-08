@@ -16,23 +16,26 @@ Design notes, mostly inherited from mistakes made elsewhere in this repo:
   - **Stateless and replayable.** Everything is derived from the sample window, so the replay
     rig produces the same verdicts as the boat and the mark-sequencer's stored-state problem
     cannot recur here.
-  - **Raise on the smoothed level, release on a sustained recovery.** Voltage under sail is
-    noisy — winch, pilot and kettle loads produce second-scale sags — so decisions are taken on
-    a median, never a raw sample. Release is deliberately *not* the "clear fast" convention
-    used elsewhere in this repo: an unloaded flat bank reads high for a while (surface charge),
-    so clearing requires the smoothed level to hold above a release band for the dwell. See
-    `_tripped`, which records the two ways earlier versions of this got it wrong.
-  - **No bucketing, and a robust trend.** The level is a median over overlapping sub-windows
-    and the trend is a median-of-thirds slope, not least squares — a single sag dragged an OLS
-    slope to -1 V/h and read as "the bank is dying". Quantising a continuous quantity to fire a
-    discrete alarm is the failure shape this codebase has hit three times.
+  - **Decide on a median over the dwell, in both directions.** Voltage under sail is noisy —
+    winch, pilot and kettle loads produce second-scale sags — so decisions are taken on a
+    median, never a raw sample. The median is also the release band: a recovery shorter than
+    half the dwell cannot move it, which is what the "clear fast" convention elsewhere in this
+    repo would get wrong here, because an unloaded flat bank reads high for a while (surface
+    charge). See `_tripped`, which records the **three** ways earlier versions of this got it
+    wrong — the third of them found on 2026-09-08 by finally putting the number on a screen.
+  - **No bucketing, no sliding-window `min()`, and a robust trend.** The trend is a
+    median-of-thirds slope, not least squares — a single sag dragged an OLS slope to -1 V/h and
+    read as "the bank is dying". Quantising a continuous quantity to fire a discrete alarm is
+    the failure shape this codebase has now hit **four** times, and `_tripped` was the fourth.
   - **Chemistry-independent trend rule.** Absolute thresholds depend on chemistry and bank
     size, which are not recorded anywhere in this repo — the defaults below are conservative
     12 V lead-acid figures and MUST be confirmed against the real bank. The drain rule (V/h
     plus a projection to the floor) needs no such knowledge and is the part to trust first.
-  - **Charging is not an alarm.** A rising slope means the alternator or shore power is on;
-    Jul 18's recovery to 13.30 V by 05:00Z was the motor home. A flat-but-recovering bank
-    still reports `danger` on level, because it is still flat.
+  - **Charging is not an alarm, but it does not clear a low level either.** A rising slope means
+    the alternator or shore power is on; Jul 18's recovery to 13.30 V by 05:00Z was the motor
+    home. A flat-but-recovering bank still reports `danger`, and a low-but-recovering one still
+    reports `warn` — charging only ever *annotates* those. (It used to clear `warn`, which read
+    as `ok` at 11.7 V on the strength of a +0.12 V/h wobble; see the status ladder below.)
 """
 import os
 import statistics
@@ -54,8 +57,9 @@ FLOOR_V = float(os.environ.get("POWER_FLOOR_V", "11.0"))
 DRAIN_WARN_V_PER_H = float(os.environ.get("POWER_DRAIN_WARN_V_PER_H", "0.15"))
 DRAIN_WARN_HOURS = float(os.environ.get("POWER_DRAIN_WARN_HOURS", "6"))
 CHARGE_V_PER_H = float(os.environ.get("POWER_CHARGE_V_PER_H", "0.10"))
-# Schmitt release band: a status raised at X clears only above X + this. See `_tripped`.
-CLEAR_MARGIN_V = float(os.environ.get("POWER_CLEAR_MARGIN_V", "0.15"))
+# `POWER_CLEAR_MARGIN_V` was a Schmitt release band here until 2026-09-08. It is gone rather
+# than left reading 0.15 and doing nothing: the dwell median is the release band now (see
+# `_tripped`), and an env knob with no effect is the failure this repo has hit six times.
 
 
 def _slope_v_per_h(rows):
@@ -104,44 +108,63 @@ def _smoothed(rows, now, window_min, smooth_min=None, step_min=None):
     return out
 
 
-def _tripped(rows, threshold, now, window_min):
-    """Schmitt test on the SMOOTHED level: has this threshold tripped and not yet released?
+def _tripped(rows, threshold, now):
+    """Is this threshold tripped? The MEDIAN level over the dwell, against `threshold`.
 
-    Tripped = the smoothed level fell below `threshold` somewhere in the window. Released = the
-    latest smoothed level is back above `threshold + CLEAR_MARGIN_V`.
+    Three earlier versions of this were wrong, in three different ways, and all three are worth
+    keeping written down because each fix looked complete at the time:
 
-    Two earlier versions of this were wrong in opposite directions, and both are worth keeping
-    written down:
-
-      1. "every raw sample in the dwell is below the threshold" made the verdict *flap*. The
-         Jul 18 bank sat at 11.6–11.7 V for three hours, straddling the danger line, so the
-         status oscillated danger↔warn every few minutes. The release band fixes that.
-      2. "any raw sample in the window fell below the threshold" raised **danger on a single
+      1. "any raw sample in the window fell below the threshold" raised **danger on a single
          winch-load sag** — one 10.9 V sample on an otherwise 12.6 V bank. Deciding on the
-         smoothed level instead of raw samples fixes that.
+         smoothed level rather than raw samples fixes that.
+      2. "every raw sample in the dwell is below the threshold" made the verdict *flap*: the
+         Jul 18 bank sat at 11.6–11.7 V for hours, straddling the danger line.
+      3. **"the smoothed level dipped below the threshold anywhere in the 45-min window, and
+         has not since held above threshold + CLEAR_MARGIN for the whole dwell"** — the version
+         written on 2026-09-07 to fix (2), which did not. Measured against the real race on
+         2026-09-08, once the tile existed to show it: **56 status changes** across the archive
+         day (11:30 -> 20:40Z) against 22 for the rule below, and seventeen of those were a
+         single 30 s frame of `danger`, all between 19:13Z and 19:53Z. The tile would have
+         flashed red for half a minute and gone amber again, seventeen times, while the bank
+         sat flat.
 
-    Note that release is deliberately NOT fast here, unlike the alert convention elsewhere in
-    this repo: an unloaded flat battery reads high for a while (surface charge), so a brief
-    recovery is not a recovery. Clearing needs the *median* to come back up, which takes half a
-    smoothing window of genuinely better readings.
+         The cause is `min()` over a *sliding* window. It is a discontinuous function of `now`:
+         a dip enters the window in one step and leaves it 45 minutes later, so the verdict
+         toggles on window arithmetic rather than on anything the battery did — and the release
+         band never got a say, because the early-out "never tripped in this window" bypassed it
+         entirely. **The fourth instance in this repo of quantising a continuous quantity to
+         drive a discrete decision** (cache-key buckets · `if twa < beat` · polar snapping ·
+         this), and the second time it produced a flapping readout on this boat's screens.
 
-    Memory lives in the sample window rather than in a variable, so this is replayable and the
-    rig produces the same verdicts as the boat."""
-    sm = _smoothed(rows, now, window_min)
-    if not sm:
+    So: decide on the **median of the raw samples in the dwell** — the typical level over the
+    last `SUSTAIN_MIN` minutes. As `now` advances by a poll interval the dwell slides by the same
+    amount, and with the Orca's ~0.7 Hz that is ~420 samples, so the median moves smoothly and a
+    level hovering at the line crosses it once rather than chattering. It needs no memory, which
+    keeps this replayable.
+
+    Raw samples rather than `_smoothed()` points on purpose: the smoothing grid is anchored to
+    the window start, so its points enter and leave as `now` moves, which is a second copy of
+    the same discontinuity. A median over hundreds of raw samples needs no pre-smoothing — that
+    is what a median is for. (`_smoothed` is still used for the reported level and stays useful
+    where a *series* is wanted.)
+
+    The median IS the release band, which is why `CLEAR_MARGIN_V` is gone. A bounce shorter than
+    half the dwell cannot move it — "three minutes at 12.7 V after two hours at 11.4 V" (the
+    surface-charge case the band was written for) leaves the median at 11.4 and still tripped —
+    and a genuine recovery clears it after half a dwell of better readings. Asymmetry by
+    construction rather than by a knob.
+
+    ⚠ Sampling rate matters here and the boat's rate is fine, but a **decimated** feed is not:
+    against 5-minute means the dwell holds two or three points and the median is as jumpy as any
+    other statistic. This module is written for the onboard archive / live cache (0.7 Hz). Do not
+    wire it to a decimated cloud read without widening `SUSTAIN_MIN` to match."""
+    if not rows:
         return False
     span = rows[-1][0] - rows[0][0]
     if span < SUSTAIN_MIN * 60.0 * 0.5:
         return False              # too little history to judge — never raise on a fresh sample
-    if min(v for _, v in sm) >= threshold:
-        return False              # never tripped in this window
-    # Release needs the smoothed level above the band for the WHOLE dwell, not just at the
-    # latest point: three minutes at 12.7 V after two hours at 11.4 V is a removed load, not a
-    # charged battery, and a trailing median alone flips as soon as the bounce fills half the
-    # smoothing window. Asymmetric by design — noise-robust to raise, surface-charge-robust to
-    # clear.
-    dwell = [v for t, v in sm if t >= now - SUSTAIN_MIN * 60.0] or [sm[-1][1]]
-    return not all(v >= threshold + CLEAR_MARGIN_V for v in dwell)
+    dwell = [v for t, v in rows if t >= now - SUSTAIN_MIN * 60.0] or [rows[-1][1]]
+    return statistics.median(dwell) <= threshold
 
 
 def assess_series(rows, now=None):
@@ -158,6 +181,12 @@ def assess_series(rows, now=None):
 
     tail = [v for t, v in window if t >= now - SMOOTH_MIN * 60.0] or [window[-1][1]]
     level = statistics.median(tail)
+    # The DISPLAYED level is a 5-min median (responsive) and the DECISION is a 10-min one
+    # (raise-slow), which is deliberate but means the two can disagree by a few tens of mV right
+    # at a threshold — "11.99 V · charging" against a 12.00 V warn line looks like a broken
+    # readout unless the decision figure is also on the screen. Report both.
+    dwell = [v for t, v in window if t >= now - SUSTAIN_MIN * 60.0] or [window[-1][1]]
+    decided = statistics.median(dwell)
     slope = _slope_v_per_h(window)
     charging = slope is not None and slope >= CHARGE_V_PER_H
 
@@ -168,18 +197,27 @@ def assess_series(rows, now=None):
     draining = (slope is not None and slope <= -DRAIN_WARN_V_PER_H
                 and hours_to_floor is not None and hours_to_floor <= DRAIN_WARN_HOURS)
 
-    if _tripped(window, DANGER_V, now, WINDOW_MIN):
+    # Level first, BOTH bands, then charging. The module's rule is "charging explains a low
+    # level, it does not clear one" — that was honoured for `danger` and, until 2026-09-08, not
+    # for `warn`: the charging branch sat above the warn test, so any upward wobble past
+    # CHARGE_V_PER_H reported `ok`. Measured on the Jul 18 replay, a bank sitting at 11.7 V read
+    # "ok · charging" on a +0.12 V/h median-of-thirds — noise in a slow decline, not a charge
+    # source, and the one status the crew must not see on a nearly-flat bank. Found by putting
+    # the number on a screen and watching it for a race, which is the whole argument for the tile.
+    if _tripped(window, DANGER_V, now):
         status = "danger"
         reason = (f"bank {level:.2f} V, at or under {DANGER_V:.2f} V"
                   + (" — recovering, charge source on" if charging else ""))
+    elif _tripped(window, WARN_V, now):
+        status = "warn"
+        reason = f"bank {level:.2f} V, at or under {WARN_V:.2f} V"
+        if charging:
+            reason += f" — recovering, {slope:+.2f} V/h"
+        elif hours_to_floor is not None:
+            reason += f"; ~{hours_to_floor:.1f} h to {FLOOR_V:.1f} V at {slope:+.2f} V/h"
     elif charging:
         status = "charging"
         reason = f"bank {level:.2f} V, rising {slope:+.2f} V/h — charge source on"
-    elif _tripped(window, WARN_V, now, WINDOW_MIN):
-        status = "warn"
-        reason = f"bank {level:.2f} V, at or under {WARN_V:.2f} V"
-        if hours_to_floor is not None:
-            reason += f"; ~{hours_to_floor:.1f} h to {FLOOR_V:.1f} V at {slope:+.2f} V/h"
     elif draining:
         status = "warn"
         reason = (f"bank {level:.2f} V draining {slope:+.2f} V/h — "
@@ -193,6 +231,7 @@ def assess_series(rows, now=None):
         "status": status,                      # ok | warn | danger | charging | unknown
         "reason": reason,
         "volts": round(level, 2),
+        "volts_decided": round(decided, 2),   # the figure the status was actually taken on
         "volts_last": round(window[-1][1], 2),
         "volts_min": round(min(v for _, v in window), 2),
         "trend_v_per_h": None if slope is None else round(slope, 3),
@@ -202,6 +241,7 @@ def assess_series(rows, now=None):
         "charging": charging,
         "samples": len(window),
         "window_min": WINDOW_MIN,
+        "sustain_min": SUSTAIN_MIN,           # the dwell `volts_decided` is taken over
         "path": PATH,
         "thresholds": {"warn_v": WARN_V, "danger_v": DANGER_V, "floor_v": FLOOR_V,
                        "drain_warn_v_per_h": DRAIN_WARN_V_PER_H},
