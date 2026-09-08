@@ -212,10 +212,11 @@
       // real thing — an ok chip that is still explicit about running on the 24xd.
       health: { available: true, status: "ok", reason: "instruments cross-check clean", flags: [],
         notes: ["2 channel(s) never see their ranked lead (heading_true→orca, heel→orca) — " +
-                "the policy names a device that does not publish them"], window_min: 20,
+                "the policy names a device that does not publish them"], window_min: 10,
         attitude: { ok: true, status: "ok", reason: "attitude within limits", roll_deg: 14.8, pitch_deg: 1.7 },
         heading: { available: true, status: "ok", bias_deg: -2.1, spread_deg: 4.3, samples: 1180,
-          reason: "heading within -2° of GPS course" },
+          reference: { heading: "GPS24xd-NMEA2000", course: "Orca Core", independent: true },
+          note: null, reason: "heading within -2° of GPS course (vs Orca Core)" },
         provenance: { available: true, status: "ok", flags: [],
           notes: ["2 channel(s) never see their ranked lead (heading_true→orca, heel→orca) — " +
                   "the policy names a device that does not publish them"],
@@ -297,14 +298,15 @@
         path: "electrical.batteries.0.voltage",
         reason: "bank 11.58 V, at or under 11.60 V",
         thresholds: { warn_v: 12.0, danger_v: 11.6, floor_v: 11.0, drain_warn_v_per_h: 0.15 } },
-      health: { available: true, status: "warn", window_min: 20,
+      health: { available: true, status: "warn", window_min: 10,
         reason: "aws on Orca Core — ranked gnd went silent (78 s ago)",
         flags: ["aws on Orca Core — ranked gnd went silent (78 s ago)"],
         notes: ["2 channel(s) never see their ranked lead (heading_true→orca, heel→orca) — " +
                 "the policy names a device that does not publish them"],
         attitude: { ok: true, status: "ok", reason: "attitude within limits", roll_deg: 27.4, pitch_deg: -2.1 },
         heading: { available: true, status: "ok", bias_deg: -4.4, spread_deg: 5.1, samples: 1150,
-          reason: "heading within -4° of GPS course" },
+          reference: { heading: "GPS24xd-NMEA2000", course: "Orca Core", independent: true },
+          note: null, reason: "heading within -4° of GPS course (vs Orca Core)" },
         provenance: { available: true, status: "warn",
           flags: ["aws on Orca Core — ranked gnd went silent (78 s ago)"],
           notes: ["2 channel(s) never see their ranked lead (heading_true→orca, heel→orca) — " +
