@@ -5,9 +5,9 @@ Deletion from the boat is allowed only *after* an off-boat copy is sha256-verifi
 
 ## ⏸ PICK UP HERE (2026-09-08 — read this block, then "Session 2026-09-08" below)
 
-**The first 6 commits of this session are on `dev`, merged to `main` and pushed. The 4 after
-them — the heading cross-check work — are committed on `dev` and NOT merged or pushed; that is
-your call.** Working tree clean. All suites green: **24 files + 10 pytest cases**
+**Everything in this session is committed on `dev`, merged to `main` and pushed** (11 commits:
+6 from the first pause, then the heading cross-check fix, the dashboard fixtures, the replay
+window, two docs, and the AIS-ranking removal). Working tree clean. All suites green: **24 files + 10 pytest cases**
 (`test_sensor_health` gained 24 more assertions, and for the first time they drive `assess()`
 through a fake source rather than handing `heading_bias()` pre-paired samples — see below for
 why that mattered). `test_racelog.py` fails on this box and always has: `pi/archiver/archiver.py`
@@ -85,12 +85,14 @@ free / 89%.)
    latency, and 20 bought no false-alarm protection that 10 does not), and `_circular()` no
    longer raises `ValueError` on perfectly-agreeing samples — which took `/health/sensors` down
    entirely, on the cleanest input there is. The rate-aware spread gate is **explicitly dropped**.
-0b. **Queued, needs your call: `source_priority` ranks the AIS transceiver as an own-ship
-   fallback.** `b951` is rank 4 for `sog`, `cog`, `lat` and `lon`. The read paths filter AIS out
-   first so nothing is broken today, and `choose_source()` now refuses AIS sources outright — but
-   it is one deleted filter away from the bug that cost a race, written into the policy as an
-   intention. Removing those four entries touches `shared/source_policy.py`,
-   `vps/db/seed/source_priority.sql` and the test that asserts the two agree, in one commit.
+0b. ~~**`source_priority` ranks the AIS transceiver as an own-ship fallback**~~ ✅ **DONE
+   2026-09-08, Cole's call.** `b951` was rank 4 for `sog`, `cog`, `lat` and `lon`. Nothing was
+   broken — the read paths filter AIS out first — but it is the one ranking whose only protection
+   lives in another module, and "use the AIS box for lat/lon" is the bug that cost a race written
+   down as an intention. Removed from `shared/source_policy.py`, `vps/db/seed/source_priority.sql`
+   **and the running `sr33_dev` table** (`DELETE 4`), so the cloud read path matches the boat's.
+   The 24xd, Orca and 943 keep three real GPS sources. Two assertions in `test_source_priority.py`
+   aimed at whoever re-adds it "for redundancy" later.
 1. **The two things only a person at the boat can settle**, now with a sharper reason than
    yesterday: **confirm the bank** (chemistry, capacity, charging budget) — the race data cannot
    resolve `danger` vs `warn` on its own, see #2 above — and **enable the Orca Core's N2K
