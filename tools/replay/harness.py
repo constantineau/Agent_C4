@@ -62,6 +62,48 @@ NEEDS_NETWORK = ["/forecast", "/drift", "/buoys", "/plangap", "/reoptimize"]
 CADENCE_S = {"/strategy": 600.0}
 
 
+def _hermetic():
+    """Refuse non-loopback sockets for the duration of a build, and bound the ones we allow.
+
+    Added 2026-09-08 after a build sat on an ESTABLISHED TLS connection to Open-Meteo for ten
+    minutes at frame 282 and would have sat there forever: 376 bytes queued, no response, no
+    socket timeout anywhere in the stack. `NEEDS_NETWORK` excludes /forecast, /drift, /buoys,
+    /plangap and /reoptimize for exactly this reason, but `/strategy` is replayable and CHAINS
+    into the same machinery when the verdict goes off-book, so the exclusion list was never
+    enough. Two failures, not one:
+
+      - a ~30-minute build can hang indefinitely on a third-party API, and
+      - the frames it does write become a mix of replayed race and whatever the live internet
+        said today, which is the fidelity problem the exclusion list exists to prevent.
+
+    So the rig is hermetic by construction rather than by a list somebody has to maintain. A
+    blocked call raises immediately, the engine module falls back to its no-forecast path (they
+    all have one — that is the onboard design), and the frame records what happened instead of
+    quietly borrowing today's weather. Set REPLAY_ALLOW_NET=true to opt out, and expect the
+    frames to stop being reproducible if you do."""
+    import socket
+    if os.environ.get("REPLAY_ALLOW_NET", "").lower() in ("1", "true", "yes"):
+        socket.setdefaulttimeout(20)          # at minimum, never hang forever
+        print("[replay] REPLAY_ALLOW_NET set — frames will not be reproducible", flush=True)
+        return
+    socket.setdefaulttimeout(20)
+    _real = socket.socket.connect
+    _real_ex = socket.socket.connect_ex
+
+    def _local_only(fn):
+        def guard(self, address, *a, **kw):
+            host = address[0] if isinstance(address, tuple) else address
+            if isinstance(host, str) and (host in ("localhost", "::1") or
+                                          host.startswith("127.") or host.startswith("/")):
+                return fn(self, address, *a, **kw)
+            raise OSError(f"replay is hermetic: refused outbound connection to {host!r} "
+                          f"(set REPLAY_ALLOW_NET=true to allow, and lose reproducibility)")
+        return guard
+
+    socket.socket.connect = _local_only(_real)
+    socket.socket.connect_ex = _local_only(_real_ex)
+
+
 def _setup(archive_db, engine_db, polars_file):
     os.environ.update(
         ARCHIVE_DB=archive_db, ENGINE_DB=engine_db, POLARS_FILE=polars_file,
@@ -94,6 +136,7 @@ def build(archive_db, engine_db, polars_file, start, end, step_s, out_dir, endpo
     # nothing could be fresher than the 45 s failover window. A frozen clock the rig only mostly
     # applies is worse than no clock at all — clear the list.
     freezegun.configure(default_ignore_list=[])
+    _hermetic()
     from source import ReplaySource
     from app import datasource
     import engine_app
