@@ -5,8 +5,9 @@ Deletion from the boat is allowed only *after* an off-boat copy is sha256-verifi
 
 ## ⏸ PICK UP HERE (2026-09-08 — read this block, then "Session 2026-09-08" below)
 
-**Everything in this session is committed on `dev`, merged to `main`, and pushed** (4 commits:
-the replay clock fix, the power hysteresis fix, the dashboard surface, these docs). Working tree
+**Everything in this session is committed on `dev`, merged to `main`, and pushed** (6 commits:
+the replay clock fix, the power hysteresis fix, the dashboard surface, docs, the hermetic-rig
+fix, and this correction). Working tree
 clean. All suites green: **24 files + 10 pytest cases** (`test_power` gained 8 assertions,
 `test_sensor_health` 21). Nothing is mid-flight; no background units are running.
 
@@ -24,7 +25,7 @@ every BASED ON line, a full channel→device→rank→age table in the DATA deta
 the real Jul 18 race through the replay rig, not just the demo scenarios. Full write-up in
 `docs/V2_BACKLOG.md` → "In-race UX".
 
-**Three bugs found by looking at the numbers on a screen, all fixed:**
+**Four bugs found by looking at the numbers on a screen, all fixed:**
 
 1. 🔴 **The replay rig's frozen clock only reached ONE endpoint.** freezegun's default ignore
    list contains `'threading'`, and `TestClient` runs each endpoint on an AnyIO worker thread, so
@@ -33,6 +34,12 @@ the real Jul 18 race through the replay rig, not just the demo scenarios. Full w
    reported ages of **4,394,415 s** in every frame ever built, and `/conditions/full` showed
    **18 of 18** channels as `fell_back`. **Every timeline built before today is wrong in this
    way.** Fixed in `harness.build()`; rebuilt (see "Replay rig state").
+1b. 🔴 **…and the rig could still phone the live internet.** The rebuild for that fix stalled at
+   frame 282 on an ESTABLISHED TLS socket to Open-Meteo — no response, no timeout, would have
+   hung forever. `NEEDS_NETWORK` misses it because **`/strategy` is replayable and chains into
+   the re-route path when the verdict goes off-book**, which it does at 19:23Z. The rig is now
+   hermetic (non-loopback `connect()` raises; 20 s default socket timeout;
+   `REPLAY_ALLOW_NET=true` opts out and says the frames stop being reproducible).
 2. 🔴 **The bank status flapped `warn`↔`danger` seventeen times in 40 minutes** — visible the
    moment the tile existed. `min()` over a sliding window is discontinuous in `now`. Fixed to a
    dwell median; `POWER_CLEAR_MARGIN_V` removed; `test_power.py` now scores **stability**, which
@@ -75,7 +82,9 @@ free / 89%.)
 `timeline-preprio/` is the pre-2026-09-07 baseline kept for before/after diffs — note it carries
 the wall-clock bug, so do not compare *ages* across that boundary. Rebuilds need an ephemeral
 venv (`freezegun`, `fastapi`, `httpx`, `websockets`, `pytest`), take ~28 min for 433 frames, and
-must be run **after** the change you want to measure.
+must be run **after** the change you want to measure. Build to a NEW directory and swap, so a
+failed build cannot destroy the working timeline — and note that the rig is hermetic now, so a
+build can no longer hang on a third-party API the way the first attempt did.
 
 To look at it:
 ```bash
