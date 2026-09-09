@@ -816,15 +816,45 @@ Build order, agreed 2026-09-08:
   does not merely shorten a debrief, it puts the rest of the race on the **deletion** path, on
   the boat, against the owner's "lose no telemetry" goal.
 
-  What actually happened to Jul 18's out-of-session hours on the Pi is **not established** —
-  `archive-backfill.db` holds 17:00 → 20:40:30Z, well past the 18:52 session end, so either the
-  prune had not run (the archiver died at 20:40:30Z with SQLite corruption and may have stayed
-  down) or the pull pre-empted it. Worth settling when the boat is reachable, because the answer
-  changes how urgent the fix is — but not worth waiting for: **wiring `race_window` into the
-  onboard prune is the highest-consequence follow-up in this section either way.** It is the one
-  place where a wrong window destroys data rather than merely hiding it, and the prune's own
-  fail-safe ("engine store unreadable ⇒ delete nothing") shows the design already takes that
-  seriously.
+- **✅ DONE 2026-09-09 — the prune keeps the derived window too, and the Jul 18 mystery is
+  settled.** `archiver.session_windows()` now takes the archive connection and widens every
+  closed marker with `shared/race_window`, returning **both** windows: the kept set can only
+  grow, so a derivation that is wrong, that raises, or that is missing from the image can never
+  delete something the old code would have kept (all three are asserted in
+  `pi/archiver/test_prune_window.py`, 12 assertions). `pi/archiver/Dockerfile` now copies
+  `shared/`; `backfill.py` session mode passes its connection too, so the cloud copy gets the
+  same hours. **The archiver image must be rebuilt** — without `shared/` it prunes on markers
+  alone and says so on every run.
+
+  Two findings from running it against the real 2026-08-30 pull:
+
+  - 🔎 **The 18:52:20 tap was a START, not a stop.** The boat's `engine.db` holds a **third**
+    session — `Race 2026-07-18 18:52Z`, `start_ts` 18:52:20.810 (exactly session 2's end, which
+    starting auto-closes) and **`end_ts` NULL to this day**. So the rest of that race was never
+    on the deletion path: an open session's window runs to *now* + 1 day. That answers the
+    question below — and it means **retention has been effectively disabled on the boat since
+    Jul 18**, because one open session protects the whole archive. Worth closing from the iPad
+    when the boat is back (an auto-close after N hours not under way is the obvious guard, and
+    is Cole's call). It also explains the shore-side confusion: only the *closed* marker is
+    uplinked, so the cloud sees a 1 h 49 m race and the boat holds an open session for the rest.
+  - ⚠️ **A bucketed window's edge is not the edge.** Motion is read in 5-minute buckets and a
+    bucket is labelled with its START, so the derived end lands up to one bucket *before* the
+    last reading it came from. Shore-side that hides five minutes; here it **deletes** them —
+    measured, four rows of a five-hour sail, every prune, forever. The keep-window is now padded
+    by one bucket on each side. Fifth instance of "quantising a continuous quantity reintroduces
+    discontinuities", and the first where the quantisation error was destructive.
+
+  On the real pull: 5.6 s to derive across a 3.0 GB archive, Jul 15 widened by 10 min and Jul 18
+  by 1.8 h — to **20:45:00Z, where the boat's own record stops**, not the cloud's 00:25Z. Correct:
+  the archiver can only keep what it has.
+
+  ~~What actually happened to Jul 18's out-of-session hours on the Pi is not established —
+  either the prune had not run or the pull pre-empted it.~~ **Settled 2026-09-09: neither.** The
+  third, still-open session covered them (above). The guess that the archiver's death at
+  20:40:30Z had stopped the prune was wrong, and it was reached without reading the sessions
+  table that was sitting in the pull the whole time. It remains the one place where a wrong
+  window destroys data rather than merely hiding it — the prune's own fail-safe ("engine store
+  unreadable ⇒ delete nothing") shows the design already took that seriously.
 
 ### Infra & ops
 

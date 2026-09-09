@@ -161,7 +161,9 @@ def main():
         where.append("time <= ?")
         params.append(args.until)
     if not ad_hoc and not args.all:
-        wins = session_windows()
+        # `conn` (the archive) lets session_windows widen each marker to the window the record
+        # supports — session mode is how a race reaches the cloud, and the button is a hint.
+        wins = session_windows(conn=conn)
         if wins is None:
             print("[backfill] engine sessions table unreadable — nothing sent "
                   "(use --all to push everything)", flush=True)
