@@ -3,7 +3,36 @@
 Goal (Cole): **lose no telemetry**, and **copy all telemetry off the Pi to the VPS**.
 Deletion from the boat is allowed only *after* an off-boat copy is sha256-verified.
 
-## ⏸ PICK UP HERE (2026-09-09)
+## ⏸ PICK UP HERE (2026-09-09, end of day — the queue, in order)
+
+The two-race corpus is built and already paying (see the blocks below for everything shipped
+today: derived window in the debrief AND the prune, session auto-close, GCS Coldline archive +
+22 G reclaimed, the Jul 15 full-res backfill + control timeline, per-config polars, the bank
+retune, the sail-log dedupe, `sr33-bench`). What is NEXT:
+
+1. **A — the trust layer**, once Cole answers the gating question put to him 2026-09-09:
+   *refuse* vs *down-weight* bins from `danger` windows in `learning.propose()`. Recommended:
+   **refuse, per-channel, print what was refused** — safe now that the false-alarm rate is
+   measured 0.0% on the Jul 15 control. Run `sensor_health.assess()` across the derived window
+   server-side, trust timeline beside the track, stamp into `archive_debrief`.
+2. **C — measured wind into `_performance_bins`.** It bins against GRIB (`wf.wind_at`) while the
+   boat recorded TWS/TWA at ~10 Hz. `tools/analysis/perf_by_config.py` is the working prototype
+   (paired within-cell: the staysail paid in every cell where both configs were flown, and the
+   measured A3↔S2 crossover lands on the certificate's 142.5°).
+3. **`config_at()` stale-config fix** — the last sail-log entry extrapolates forever; Jul 15's
+   beat home is attributed to the spinnaker. Physics gate (no kite < ~60° TWA sustained) → mark
+   the window **unattributed**, never gate on the cert (crew combos like A3+SS are real data —
+   Cole). The settle window for what counts as a change is Cole's call; the data's knee is 30 s.
+4. **The channel-diff script** (per race, source-filtered — the bench contamination is exactly
+   why it must filter). Four hand queries found real things; make it repeatable.
+5. **B — the decision timeline** (the big build; needs the rig server-side).
+6. Small: the heading `warn` 15°-threshold flicker (wants the bank tile's dwell median).
+7. **When the boat is back:** rebuild archiver + engine + console images (`shared/` in the
+   archiver, auto-close in the engine, September tiles in the console); close session 3 from the
+   iPad; enable Orca attitude sharing; bank chemistry now LOW priority (Cole: never saw it go too
+   low; the tile no longer assumes otherwise).
+
+## Session 2026-09-09 (what shipped, in order)
 
 **Done today: 0c — the Lab debrief reads the DERIVED race window.** One commit on `dev`, working
 tree clean, and it is the change the rest of the debrief plan sat on. The route stopped taking
