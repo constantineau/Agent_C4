@@ -1,15 +1,17 @@
 """Bank watch — house-battery state from the boat's own telemetry.
 
-Why this module exists, in one paragraph. On 2026-07-18 the house bank fell monotonically from
-12.91 V (pre-start) to 11.61 V mean with minima at **11.08 V** over six hours of racing. At
-20:40:30Z, at the bottom of that curve, two things stopped in the same minute: the full-res
-archiver (SQLite corruption — the third on that SD card) and the em-trak AIS transceiver
-(67,149 rows in the previous 100 minutes, then 11 in the next 3.5 hours). Every other N2K
-source kept reporting, so the bus survived and the write-sensitive/power-hungry devices did
-not. The boat then retired. **The Orca publishes `electrical.batteries.0.voltage` at ~0.7 Hz
-and nothing in this system read it** — not `tools.PRESENT`, not `alerts.py`, not the dashboard
-(whose "energy" tile is crew energy). The data that predicted the failure was in the archive,
-unread, the whole time.
+Why this module exists, in one paragraph. On 2026-07-18 the house bank fell from 12.91 V
+(pre-start) to 11.61 V mean over six hours of racing, and at 20:40:30Z the full-res archiver
+(SQLite corruption — the third on that SD card) and the em-trak AIS transceiver stopped in the
+same minute. **The Orca publishes `electrical.batteries.0.voltage` at ~0.7 Hz and nothing in
+this system read it** — not `tools.PRESENT`, not `alerts.py`, not the dashboard. ⚠️ CORRECTED
+2026-09-09: the causal story ("the flat bank killed them") is NOT supported at minute
+resolution — at 20:40 the bank read 11.65 V / min 11.41, unremarkable against the preceding
+hour, and it kept publishing through the failure. Across the whole recorded life of this boat
+the bank's median is 12.29 V and both race days sat at 11.5–11.7 V for hours with everything
+running; per Cole (2026-09-09) the battery was never seen to go too low. So this tile's job is
+to put the NUMBER and the TREND on a screen — not to enforce textbook lead-acid lines the
+record contradicts.
 
 Design notes, mostly inherited from mistakes made elsewhere in this repo:
 
@@ -31,11 +33,11 @@ Design notes, mostly inherited from mistakes made elsewhere in this repo:
     size, which are not recorded anywhere in this repo — the defaults below are conservative
     12 V lead-acid figures and MUST be confirmed against the real bank. The drain rule (V/h
     plus a projection to the floor) needs no such knowledge and is the part to trust first.
-  - **Charging is not an alarm, but it does not clear a low level either.** A rising slope means
-    the alternator or shore power is on; Jul 18's recovery to 13.30 V by 05:00Z was the motor
-    home. A flat-but-recovering bank still reports `danger`, and a low-but-recovering one still
-    reports `warn` — charging only ever *annotates* those. (It used to clear `warn`, which read
-    as `ok` at 11.7 V on the strength of a +0.12 V/h wobble; see the status ladder below.)
+  - **Charging is not an alarm, but it does not clear a floor-level either.** A rising slope
+    means the alternator or shore power is on; Jul 18's recovery to 13.30 V by 05:00Z was the
+    motor home. A bank sustained near the floor still reports `danger` while charging — charging
+    only ever *annotates* it. (`warn` is now purely a drain projection, so a rising bank cannot
+    be `warn` by construction: a projection needs a negative slope.)
 """
 import os
 import statistics
@@ -49,11 +51,19 @@ WINDOW_MIN = float(os.environ.get("POWER_WINDOW_MIN", "45"))
 SMOOTH_MIN = float(os.environ.get("POWER_SMOOTH_MIN", "5"))     # median window for the level
 SUSTAIN_MIN = float(os.environ.get("POWER_SUSTAIN_MIN", "10"))  # raise-slow dwell
 # ⚠️ Confirm against the actual bank before trusting these. 12 V lead-acid, under load:
-# ~12.0 V is roughly half charge, ~11.6 V is nearly flat, and the Pi/AIS start browning out
-# around 11.0 V — which is where Jul 18's minima sat.
-WARN_V = float(os.environ.get("POWER_WARN_V", "12.0"))
-DANGER_V = float(os.environ.get("POWER_DANGER_V", "11.6"))
+# RETUNED 2026-09-09 from the two-race record (Cole: "it's a mistake to think of 11.6 V as a
+# danger line"). The old 12.0/11.6 lines sat INSIDE this boat's ordinary band — across 10,584
+# recorded minutes the median is 12.29 V, the 1st percentile 11.38 V, and both race days sat at
+# 11.5–11.7 V for hours while everything ran. Worse, at the minute the archiver actually died
+# (20:40:30Z) the bank read 11.65 V / min 11.41 — unremarkable against the preceding hour — so
+# "the flat bank killed the archiver" is a guess the record does not back. Absolute lines now
+# exist only at the bottom of everything this boat has ever recorded; the rest is trend.
 FLOOR_V = float(os.environ.get("POWER_FLOOR_V", "11.0"))
+# danger = the dwell median within this margin of the floor: sustained ≤ 11.3 V, rarer than the
+# 1st percentile of the whole record. Momentary winch sags to 11.1 are normal and never trip it.
+DANGER_MARGIN_V = float(os.environ.get("POWER_DANGER_MARGIN_V", "0.3"))
+# The drain warn only arms below this level — under the loaded plateau both race days sat on.
+DRAIN_LEVEL_V = float(os.environ.get("POWER_DRAIN_LEVEL_V", "11.5"))
 DRAIN_WARN_V_PER_H = float(os.environ.get("POWER_DRAIN_WARN_V_PER_H", "0.15"))
 DRAIN_WARN_HOURS = float(os.environ.get("POWER_DRAIN_WARN_HOURS", "6"))
 CHARGE_V_PER_H = float(os.environ.get("POWER_CHARGE_V_PER_H", "0.10"))
@@ -194,27 +204,27 @@ def assess_series(rows, now=None):
     if slope is not None and slope < 0 and level > FLOOR_V:
         hours_to_floor = (level - FLOOR_V) / -slope
 
+    # The drain WARN is gated on being below the plateau band, because the linear projection has
+    # been wrong on every race in the record: both Jul 15 and Jul 18 opened with steep falls
+    # (-0.45 to -0.70 V/h, projecting ~1 h to the floor) and both settled at the 11.6 V loaded
+    # plateau instead — voltage under load is not linear. Above DRAIN_LEVEL_V the projection is
+    # still computed and displayed (`hours_to_floor`, `dark_at_epoch`); it just is not an alarm
+    # until the bank is somewhere the plateau cannot explain.
     draining = (slope is not None and slope <= -DRAIN_WARN_V_PER_H
+                and decided <= DRAIN_LEVEL_V
                 and hours_to_floor is not None and hours_to_floor <= DRAIN_WARN_HOURS)
 
-    # Level first, BOTH bands, then charging. The module's rule is "charging explains a low
-    # level, it does not clear one" — that was honoured for `danger` and, until 2026-09-08, not
-    # for `warn`: the charging branch sat above the warn test, so any upward wobble past
-    # CHARGE_V_PER_H reported `ok`. Measured on the Jul 18 replay, a bank sitting at 11.7 V read
-    # "ok · charging" on a +0.12 V/h median-of-thirds — noise in a slow decline, not a charge
-    # source, and the one status the crew must not see on a nearly-flat bank. Found by putting
-    # the number on a screen and watching it for a race, which is the whole argument for the tile.
-    if _tripped(window, DANGER_V, now):
+    # Danger keeps level-first precedence ("charging explains a low level, it does not clear
+    # one"), but it is now anchored to the measured bottom of this boat's record rather than to a
+    # line inside its normal band. Everything above that is TREND: a bank sitting steady at
+    # 11.65 V is this boat racing, and the crew gets the number, not an alarm. What earns `warn`
+    # is a projection — draining fast enough to reach the floor within the watch.
+    if _tripped(window, FLOOR_V + DANGER_MARGIN_V, now):
         status = "danger"
-        reason = (f"bank {level:.2f} V, at or under {DANGER_V:.2f} V"
-                  + (" — recovering, charge source on" if charging else ""))
-    elif _tripped(window, WARN_V, now):
-        status = "warn"
-        reason = f"bank {level:.2f} V, at or under {WARN_V:.2f} V"
+        reason = (f"bank {level:.2f} V — within {DANGER_MARGIN_V:.1f} V of the {FLOOR_V:.1f} V "
+                  f"floor, below everything this bank has recorded")
         if charging:
-            reason += f" — recovering, {slope:+.2f} V/h"
-        elif hours_to_floor is not None:
-            reason += f"; ~{hours_to_floor:.1f} h to {FLOOR_V:.1f} V at {slope:+.2f} V/h"
+            reason += " — recovering, charge source on"
     elif charging:
         status = "charging"
         reason = f"bank {level:.2f} V, rising {slope:+.2f} V/h — charge source on"
@@ -243,12 +253,13 @@ def assess_series(rows, now=None):
         "window_min": WINDOW_MIN,
         "sustain_min": SUSTAIN_MIN,           # the dwell `volts_decided` is taken over
         "path": PATH,
-        "thresholds": {"warn_v": WARN_V, "danger_v": DANGER_V, "floor_v": FLOOR_V,
+        "thresholds": {"danger_v": FLOOR_V + DANGER_MARGIN_V, "floor_v": FLOOR_V,
                        "drain_warn_v_per_h": DRAIN_WARN_V_PER_H},
-        "note": ("Absolute thresholds assume a 12 V lead-acid bank under load and are NOT yet "
-                 "confirmed against this boat's chemistry/capacity — trust `trend_v_per_h` and "
-                 "`hours_to_floor` first. Below ~11.0 V the Pi's SD writes and the AIS "
-                 "transceiver are at risk: that is how the Jul 18 archive was lost mid-race."),
+        "note": ("Status is trend-first: this bank ordinarily races at 11.5–12.4 V, so absolute "
+                 "alarms exist only near the floor of its own record (sustained ≤ "
+                 f"{FLOOR_V + DANGER_MARGIN_V:.1f} V). The {FLOOR_V:.1f} V floor is an "
+                 "equipment-risk estimate, not a measured failure point — at the minute the "
+                 "Jul 18 archiver died the bank read 11.65 V and kept publishing."),
     }
 
 

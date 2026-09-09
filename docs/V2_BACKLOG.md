@@ -815,6 +815,23 @@ the boat's normal state. It also explains why the tile flapped 16 times on Jul 1
 ordinary operating voltage.** Whether that voltage is *safe* depends on chemistry and capacity,
 which is still the question only Cole can answer — and it is now the most valuable one on the list.
 
+**RESOLVED 2026-09-09 — Cole: "we never saw the battery go too low; it's a mistake to think of
+11.6 V as a danger line."** The tile was retuned to what the record supports, and the causal
+story corrected: at the minute the archiver died (20:40:30Z) the bank read **11.65 V / min
+11.41** — unremarkable against the preceding hour, still publishing — so "the flat bank killed
+the archiver" is a guess the minute-level data does not back. The SD card's third SQLite
+corruption needs no second cause.
+
+The retuned model (`power.py`): absolute `danger` only for a **sustained** level within 0.3 V of
+the 11.0 V floor (≤ 11.3 V — rarer than the 1st percentile of all 10,584 recorded minutes);
+`warn` only for a drain **below the 11.5 V plateau band**, because a linear projection from
+inside the normal band predicted ~1 h-to-floor on BOTH race days and both times the bank settled
+at its loaded plateau — voltage under load is not linear, and the projection has been wrong 2
+for 2. Above the plateau the slope and `hours_to_floor` are displayed, not alarmed. Swept over
+the real Postgres series: **Jul 18 0.0% alarmed (was 99.3%), Jul 15 2.5% with one on/off (was
+98.2%, 16 flips).** The number and the trend on the screen are the product; the alarm is
+reserved for the boat leaving its own record.
+
 ### 🔴 The sail log counts TAPS, not sail changes (found 2026-09-09, by Cole asking "48?!")
 
 `/racelog/track` reported **48 sail changes** for the 1.5-hour Jul 15 race. It is 48 *records*,

@@ -1,13 +1,23 @@
-"""Bank watch — would the system have warned before the Jul 18 archive died?
+"""Bank watch — is the readout honest about a discharge, and quiet about this boat being itself?
 
 The fixture below is the REAL house-bank voltage from the race, 5-minute means straight out of
 `telemetry_raw` (`electrical.batteries.0.voltage`, the Orca Core), 13:00Z Jul 18 -> 06:00Z
-Jul 19. It is the whole point of the module: at 20:40:30Z (T0+460 min) the full-res archiver
-and the AIS transceiver both stopped at the bottom of this curve, the boat retired, and nothing
-in the system had said a word — the path was in no PRESENT table, no alert rule and no tile.
+Jul 19.
 
-So the load-bearing assertions are temporal: warn well before the failure, danger before it,
-and no alarm during the motor home when the alternator is putting the bank back.
+REFRAMED 2026-09-09 (Cole: "we never saw the battery go too low — it's a mistake to think of
+11.6 V as a danger line"). The original assertions here demanded warn-then-danger before the
+20:40:30Z archiver failure, on the theory that the sagging bank caused it. The minute-level
+record does not support that theory — at 20:40 the bank read 11.65 V / min 11.41, unremarkable
+against the preceding hour — and across 10,584 recorded minutes this bank's median is 12.29 V
+with race days sitting at 11.5–11.7 V for hours, everything running. A tile that alarms on this
+boat's ordinary race voltage is a tile the crew learns to ignore (measured: 98% of a HEALTHY
+race read warn/danger under the old lines).
+
+So the load-bearing assertions are now: NO alarm anywhere on either real race (the bank never
+left its own record, so a correct tile is quiet — the number and the trend are the product),
+the projection displayed-but-not-alarmed above the plateau band, `warn` for a drain below it,
+and `danger` for a sustained level below everything this bank has ever recorded. Swept over the
+real Postgres series: Jul 18 0.0% alarmed, Jul 15 2.5% with one on/off.
 
 Run:  PYTHONPATH=vps/agent:. python3 vps/agent/test_power.py
 """
@@ -99,41 +109,33 @@ check(f"pre-start bank is healthy ({start['volts']:.2f} V, {start['status']})",
       start["status"] in ("ok", "charging") and start["volts"] > 12.5)
 check("...and not alarmed", start["status"] not in ("warn", "danger"))
 
-warn_at = first_status("warn")
-check(f"warns at T0+{warn_at} min ({'—' if warn_at is None else at(warn_at)['volts']} V), "
-      f"before the archiver died at T0+{ARCHIVE_DIED:.0f}",
-      warn_at is not None and warn_at < ARCHIVE_DIED)
-check(f"...and with >1 h of warning ({'' if warn_at is None else ARCHIVE_DIED - warn_at:.0f} min)",
-      warn_at is not None and ARCHIVE_DIED - warn_at > 60)
-
-danger_at = first_status("danger")
-check(f"escalates to danger at T0+{danger_at} min, still before the failure",
-      danger_at is not None and danger_at < ARCHIVE_DIED)
-check("danger comes after warn (it escalates, never skips)",
-      danger_at is not None and warn_at is not None and danger_at >= warn_at)
-
-# At the moment of failure this reads WARN, not danger, and that is the honest answer rather
-# than a weaker one. Revised 2026-09-08: the assertion here used to be `== "danger"`, and it
-# passed only because the old `_tripped` flapped — measured against the full-res archive it
-# produced seventeen separate single-frame danger blips between 19:13Z and 19:53Z. The bank had
-# *plateaued* at a 11.64–11.72 V median for the last three and a half hours, which is to say it
-# settled just above a DANGER_V of 11.60 that nobody has ever confirmed for this bank. A rule
-# that reports danger on that curve can only do it by chattering.
-#
-# So: the load-bearing claim is that the crew is warned early and the readout holds still. That
-# the plateau does not escalate is a THRESHOLD question — 11.60 V is a generic 12 V lead-acid
-# guess — and it is the reason `POWER_*` needs somebody at the boat with the bank's spec sheet.
-died = at(ARCHIVE_DIED)
-check(f"at the moment of failure it is alarming ({died['volts']:.2f} V, {died['status']})",
-      died["status"] in ("warn", "danger"))
-check("...and it has been saying so for over two hours, without interruption",
-      all(at(m)["status"] in ("warn", "danger")
-          for m in range(int(ARCHIVE_DIED) - 130, int(ARCHIVE_DIED), 5)))
-# while the bank is genuinely falling, the projection must name a time
+# The opening fall is steep (-0.70 V/h, projecting ~1.1 h to the floor) — and the bank then
+# settled at its loaded plateau, as it also did on Jul 15. A linear projection from inside the
+# normal band has been wrong on every race in the record, so above 11.5 V it is DISPLAYED, not
+# alarmed: the crew sees the slope and the time, the tile stays quiet.
 falling = at(180)
-check(f"the projection names a time the instruments are at risk "
-      f"(~{falling['hours_to_floor']} h at {falling['trend_v_per_h']:+.2f} V/h)",
-      falling["hours_to_floor"] is not None and falling["dark_at_epoch"] is not None)
+check(f"the steep fall shows the projection without alarming "
+      f"(~{falling['hours_to_floor']} h at {falling['trend_v_per_h']:+.2f} V/h, "
+      f"{falling['status']})",
+      falling["hours_to_floor"] is not None and falling["dark_at_epoch"] is not None
+      and falling["status"] == "ok")
+check("no warn fires anywhere in this race — the bank never left its own record",
+      first_status("warn") is None)
+
+# REFRAMED 2026-09-09: the old test demanded warn-then-danger held to the moment the archiver
+# died, encoding the theory that the bank killed it. At that minute the bank read 11.65 V — a
+# level BOTH race days sat at for hours with everything running — and Cole has ruled 11.6 V is
+# not a danger line. The honest reading of the 11.6–11.7 V plateau is the NUMBER, steady, with
+# no alarm: this bank at race load. Danger is reserved for a sustained level below everything
+# the record holds (<= floor + 0.3 = 11.3 V), which this race never reached.
+died = at(ARCHIVE_DIED)
+check(f"the plateau does NOT alarm — 11.6 V is this boat racing, not an emergency "
+      f"({died['volts']:.2f} V, {died['status']})", died["status"] == "ok")
+check("danger never fires on this race — it never sustained below 11.3 V",
+      first_status("danger") is None)
+check("...and the number is still on the screen the whole plateau",
+      all(at(m)["volts"] is not None and abs(at(m)["volts"] - 11.66) < 0.25
+          for m in range(int(ARCHIVE_DIED) - 130, int(ARCHIVE_DIED), 25)))
 
 # --- the sail home: recovery must not read as an emergency ------------------
 print("the motor home (alternator on):")
@@ -146,21 +148,19 @@ check(f"a full regulated bank reads ok ({full['volts']:.2f} V)", full["status"] 
 check("nothing alarms once recovered", full["status"] not in ("warn", "danger"))
 # precedence, on a synthetic case rather than a guess about the curve: a bank that is flat but
 # being charged is still flat, and level must win over the rising trend.
-flat_charging = [(T0 + m * 60, 11.20 + 0.005 * m) for m in range(0, 46)]   # +0.3 V/h at 11.2 V
+flat_charging = [(T0 + m * 60, 11.10 + 0.004 * m) for m in range(0, 46)]   # +0.24 V/h at ~11.2 V
 fc = power.assess_series(flat_charging, now=T0 + 45 * 60)
-check(f"a flat-but-recovering bank still reports danger ({fc['volts']:.2f} V, "
+check(f"a near-floor-but-recovering bank still reports danger ({fc['volts']:.2f} V, "
       f"{fc['trend_v_per_h']:+.2f} V/h)", fc["status"] == "danger" and fc["charging"] is True)
-# ...and the same rule in the WARN band, which it did NOT follow until 2026-09-08: the charging
-# branch sat above the warn test, so a bank between the danger and warn lines reported `ok` on
-# any upward wobble past CHARGE_V_PER_H. Found on the Jul 18 replay at 18:03Z — 11.71 V reading
-# "ok · charging" on +0.12 V/h, which is noise in a six-hour decline, not an alternator.
+# 11.7 V wobbling upward is this bank at race load, drifting — under the 2026-09-09 reframe it
+# reads `ok` with the number shown (the 2026-09-08 version demanded `warn` here, back when
+# 11.7 V was treated as "low"; Cole has since ruled the band 11.5–11.7 is ordinary for this
+# bank). The wobble is below CHARGE_V_PER_H, so it must not read `charging` either.
 low_wobble = [(T0 + m * 60, 11.72 + 0.002 * m) for m in range(0, 46)]      # +0.12 V/h at 11.7 V
 lw = power.assess_series(low_wobble, now=T0 + 45 * 60)
-check(f"a LOW-but-rising bank warns, it does not read ok ({lw['volts']:.2f} V, "
-      f"{lw['trend_v_per_h']:+.2f} V/h, {lw['status']})",
-      lw["status"] == "warn" and lw["charging"] is True)
-check("...and the wording says it is recovering rather than projecting a floor it is leaving",
-      "recovering" in lw["reason"] and "to 11.0 V" not in lw["reason"])
+check(f"11.7 V drifting upward never alarms — the boat's ordinary band "
+      f"({lw['volts']:.2f} V, {lw['status']})",
+      lw["status"] in ("ok", "charging"))
 # the healthy case must still be quiet: charging only annotates a LOW level, it is not itself
 # a status downgrade
 hi = power.assess_series([(T0 + m * 60, 12.60 + 0.004 * m) for m in range(0, 46)],
@@ -179,7 +179,8 @@ check(f"a healthy bank on charge still reads `charging`, not `warn` ({hi['volts'
 # real Jul 18 plateau level, at the Orca's real ~0.7 Hz, with deterministic load sags. No RNG —
 # a flake here would be indistinguishable from the bug.
 print("stability — a level parked on the danger line must not chatter:")
-PLATEAU = power.DANGER_V + 0.005          # 11.605 V: five millivolts above the line
+DANGER_LINE = power.FLOOR_V + power.DANGER_MARGIN_V
+PLATEAU = DANGER_LINE + 0.005             # 11.305 V: five millivolts above the line
 plateau = []
 for i in range(int(90 * 60 * 0.7)):       # 90 minutes at 0.7 Hz
     t = T0 + i / 0.7
@@ -191,8 +192,8 @@ seq = [power.assess_series([r for r in plateau if r[0] <= T0 + s], now=T0 + s)["
 flips = sum(1 for a, b in zip(seq, seq[1:]) if a != b)
 check(f"the verdict holds still on a plateau ({flips} change(s) in {len(seq)} polls, "
       f"settled on {seq[-1]!r})", flips <= 1)
-check("...and it is not silent about a bank sitting on the danger line",
-      set(seq) <= {"warn", "danger"})
+check("...and a bank five millivolts above the danger line settles on ONE verdict",
+      len(set(seq)) == 1)
 # the same fixture 100 mV lower must land on the other side — and just as steadily
 lower = [(t, v - 0.10) for t, v in plateau]
 seq2 = [power.assess_series([r for r in lower if r[0] <= T0 + s], now=T0 + s)["status"]
@@ -210,8 +211,8 @@ check(f"a single deep sag does NOT raise an alarm (status {sagged['status']}, "
       f"slope {sagged['trend_v_per_h']:+.2f} V/h)", sagged["status"] == "ok")
 check("...and does not fake a drain trend",
       abs(sagged["trend_v_per_h"]) < power.DRAIN_WARN_V_PER_H)
-flat = [(T0 + m * 60, 11.4) for m in range(0, 46, 1)]
-check("a sustained low bank DOES raise danger",
+flat = [(T0 + m * 60, 11.25) for m in range(0, 46, 1)]
+check("a bank SUSTAINED below everything on record DOES raise danger",
       power.assess_series(flat, now=T0 + 45 * 60)["status"] == "danger")
 # release is deliberately slow for this quantity: an UNLOADED flat bank reads high for a
 # while (surface charge), so a brief bounce is not a recovery.
@@ -226,9 +227,14 @@ check("a sustained recovery DOES clear it",
 print("drain projection (no chemistry assumptions):")
 drain = [(T0 + m * 60, 13.4 - 0.006 * m) for m in range(0, 46, 1)]   # -0.36 V/h, still high
 d = power.assess_series(drain, now=T0 + 45 * 60)
-check(f"a fast drain warns even above the level thresholds ({d['volts']:.2f} V, "
-      f"{d['trend_v_per_h']:+.2f} V/h)", d["status"] == "warn" and d["volts"] > power.WARN_V)
-check("...and projects the time to the floor", d["hours_to_floor"] is not None)
+check(f"a fast drain on a HIGH bank shows the projection but does not alarm — both race days "
+      f"opened exactly like this and were fine ({d['volts']:.2f} V, "
+      f"{d['trend_v_per_h']:+.2f} V/h, {d['status']})",
+      d["status"] == "ok" and d["hours_to_floor"] is not None)
+low_drain = [(T0 + m * 60, 11.55 - 0.005 * m) for m in range(0, 46, 1)]  # -0.30 V/h, BELOW the plateau
+ld = power.assess_series(low_drain, now=T0 + 45 * 60)
+check(f"the same drain below the plateau band DOES warn ({ld['volts']:.2f} V, "
+      f"{ld['trend_v_per_h']:+.2f} V/h)", ld["status"] == "warn")
 steady = [(T0 + m * 60, 12.9) for m in range(0, 46, 1)]
 check("a steady healthy bank stays ok",
       power.assess_series(steady, now=T0 + 45 * 60)["status"] == "ok")
