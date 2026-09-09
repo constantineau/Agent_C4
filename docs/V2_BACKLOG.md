@@ -712,6 +712,40 @@ fallback (that is the onboard design), so a blocked call degrades instead of bre
   queued yet; it needs a decision about what the engine should *do* when heading is untrusted,
   and `sensor_health` deliberately reports rather than substitutes.
 
+### ✅ Per-config polars from the instruments — a working prototype of item C (2026-09-09)
+
+`tools/analysis/perf_by_config.py` measures what item C proposes: boat speed vs the ORC polar per
+**sail configuration**, from measured wind and STW rather than from the shape of a track. Jul 15
+needed no playbook for this — Cole's point — and it produced 17 bins with ≥ 60 s of evidence:
+
+```
+A3      1064 s   90.5% of polar        S2      842 s   83.9%
+A3+SS    320 s   86.1%                 S2+SS   187 s   94.4%
+```
+
+Two things it exposed immediately:
+
+- 🔴 **`config_at()` extrapolates the last sail-log entry forever.** The Jul 15 log's final entry
+  is `00:00:46 S2`; at 00:02 the boat rounds up (TWA 134° → 41°, STW 6.7 → 2.0 kn) and beats home
+  — and every second of that is still attributed to the **spinnaker**. It shows up as
+  "S2 at 30° TWA, 29.9% of polar", a bin that is pure artifact and would teach the boat model
+  that the kite is slow. The debrief's own `_performance_bins` is *partially* shielded by a
+  `twa < 30` floor, an 80th-percentile-per-cell rule and a minimum sample count — but that
+  shielding is incidental, and a stale config between 30° and 60° still bins. A config needs
+  either an expiry or a plausibility gate (`sr33_crossovers.json` already carries `twa_min`/
+  `twa_max` per sail per TWS bucket).
+- **The debrief bins against GRIB wind, not the boat's.** `_performance_bins` calls
+  `wf.wind_at(lat, lon, epoch)` — a forecast field — while the boat recorded TWS/TWA at ~10 Hz
+  from `n2k-socketcan.15`. That is exactly the substitution item C is for, and Jul 15 shows the
+  measured inputs are there.
+
+⚠️ **A latent trap, deliberately not a bug today.** The crew's sail vocabulary and the ORC
+crossover table's do not agree: the bar logs `S2` and `SS`, the table knows `J1`, `A3` and `S1`
+(its "S2-A" is *named* `S1`) and has no staysail at all. `config_at()`'s docstring says the
+non-join is intentional — "the crew innovates, the data follows" — and nothing joins them today.
+Anyone who later matches crew configs against crossover names gets silent no-matches, which is
+the `source_priority` failure exactly.
+
 ### 🔎 Jul 15 vs Jul 18 — three channels the boat HAD and then didn't (2026-09-09)
 
 The first thing the two-race corpus produced, in four queries. Both races are now full-res in
