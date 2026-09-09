@@ -2357,6 +2357,7 @@ function debTrackCard() {
       <button class="mini" onclick="debFromLog()" ${Deb.trackBusy || !(Deb.sessions || []).length ? "disabled" : ""}>Use boat log</button>
     </div>
     ${t.available && t.window ? `<div class="muted" style="font-size:12px;margin-top:4px">Window: <b>${esc(debWinRange(t.window))}</b> · ${t.window.kind === "derived" ? "derived from the record" : "the ⏺ LOG marker"}${t.window.motion_device ? " · off the " + esc(t.window.motion_device) : ""}${(t.window.provenance || []).map((p) => "<br>· " + esc(p)).join("")}</div>` : ""}
+    ${t.available && t.trust ? `<div class="muted" style="font-size:12px;margin-top:2px">Trust: ${t.trust.available ? `<b>${esc(((t.trust.summary || {}).line) || "swept")}</b> — danger windows are excluded from polar/helm refinement` : `<b>sweep unavailable</b> — ${esc(t.trust.note || "")}`}</div>` : ""}
     <div class="muted" style="font-size:12px;margin-top:4px">GPX: export the track from Expedition / a Vakaros / your instruments / a phone (offline, always works). YB: pulls our boat's full track from the permitted public tracker (shore-side debrief use). ${Deb.trackMsg ? '<b>' + esc(Deb.trackMsg) + '</b>' : ""}</div>
   </div>`;
 }

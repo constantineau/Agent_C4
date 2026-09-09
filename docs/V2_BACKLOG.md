@@ -882,12 +882,35 @@ Three findings shape what to build next:
 
 Build order, agreed 2026-09-08:
 
-- **A. A trust layer on the debrief — "can you believe this?"** Run `sensor_health.assess()`
-  across the derived window and publish a per-channel trust timeline beside the track; stamp it
-  into `learning.archive_debrief()`; have `propose()` refuse or down-weight bins from windows the
-  cross-check called `danger`. Uses everything already shipped. **Guardrail, not a feature — but
-  it protects the only loop that writes to the boat model.** ⚠️ The gating RULE is still Cole's
-  call; do not pick it unilaterally.
+- **✅ A. The trust layer — SHIPPED 2026-09-09.** Rule per Cole: **refuse, per-channel, print
+  what was refused** (never down-weight — a (TWS,TWA) coordinate from a broken compass files data
+  in the wrong bin, wrong at any weight; never silently — a check nobody can see is worth
+  nothing). What shipped:
+  - `vps/agent/app/trust_window.py` — pure sweep of `sensor_health.heading_bias` /
+    `attitude_plausible` over a recorded window → per-channel segments + danger intervals. One
+    publisher per channel for the whole window; the heading reference is forced onto a different
+    DEVICE where the bus offers one, and the verdict names both.
+  - `GET /racelog/trust?start=&end=` on the agent. Measured on the live DB: **Jul 18** = ok for
+    5 h, `warn` from 22:07Z (51 min of it — the "fifty minutes of warning nobody got"), honest
+    `unknown` across the step transitions, `danger` −98° (6° spread) to the race-window end;
+    **Jul 15 control** = one `ok` segment per channel, nothing refused. ⚠️ The pairing tolerance
+    is 30 s because the record changes resolution mid-race (full-res → 15 s uplink aggregates
+    when the archiver died); at 5 s the sweep silently dropped the half containing the fault.
+  - The Lab's from-log route fetches the sweep and stores it with the track; a failed sweep is
+    stored as `available: False` and the card says **"unguarded"** rather than refusing nothing
+    quietly. `score_track` refuses samples inside danger intervals from `_polar_pct` +
+    `_performance_bins` (the learning inputs) while leaving XTE/side/time-behind on the full
+    track (GPS geometry, not compass); `out["trust"]` carries the refused count + channel names
+    and rides into `archive_debrief` via `actual_track`, so `propose()` is protected
+    transitively — refused samples never become `perf_bins` rows.
+  - Tests: `test_debrief_trust.py` (12 checks: the union of multi-channel danger windows,
+    unknown-is-not-refused, unguarded-is-loud) + trust storage in `test_debrief_window.py`.
+    Verified END TO END (new agent + new lab containers against the live DB): Jul 18 refuses the
+    compass-fault windows, Jul 15 refuses nothing — and the e2e caught a real bug: **session ids
+    are not unique across engine-store generations** (Jul 8 and Jul 15 both carry id=1), so
+    `resolve_log_window` now discriminates on `start_ts` first.
+  - Still open from A's original sketch: a graphical trust timeline beside the track (the card
+    shows the text line today) — fold into B, whose scrubber is the natural home.
 - **C. Performance from instruments, not geometry.** Helm % is inferred from track shape today.
   With STW, AWA/AWS, heel, rudder angle and rate-of-turn at 5–28 Hz it can be *measured*: cost
   per tack and gybe in seconds and boat-lengths, heel vs target, rudder work as a trim/balance

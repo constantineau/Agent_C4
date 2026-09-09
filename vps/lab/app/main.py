@@ -866,6 +866,7 @@ async def debrief_track_get(race_id: str):
     fixes = t.get("fixes") or []
     return {"available": True, "source": t.get("source"), "boat": t.get("boat"),
             "matched_by": t.get("matched_by"), "n": len(fixes), "window": t.get("window"),
+            "trust": t.get("trust"),
             "fixes": [[f["lat"], f["lon"]] for f in fixes]}   # lightweight polyline for the map
 
 
@@ -917,15 +918,20 @@ def resolve_log_window(body, sessions):
 
     Returns {start_ts, end_ts, kind, ...} or None when nothing identifies a session."""
     sid, anchor = body.get("session_id"), body.get("start_ts")
-    ses = None
-    for s in sessions or ():
-        if sid is not None and s.get("id") == sid:
-            ses = s
-            break
-        if (anchor is not None and s.get("start_ts") is not None
-                and abs(float(s["start_ts"]) - float(anchor)) < 1.0):
-            ses = s
-            break
+    # Session ids are NOT unique across the boat: the engine store has been recreated, so two
+    # different races both carry id=1 (Jul 8 and Jul 15 2026 — found by the e2e check, which got
+    # Jul 15's track back when it asked for Jul 8). The marker's start_ts is the discriminator:
+    # prefer a session matching BOTH keys, then start_ts alone, then id alone.
+    def hit_id(s):
+        return sid is not None and s.get("id") == sid
+
+    def hit_ts(s):
+        return (anchor is not None and s.get("start_ts") is not None
+                and abs(float(s["start_ts"]) - float(anchor)) < 1.0)
+
+    ses = (next((s for s in sessions or () if hit_id(s) and hit_ts(s)), None)
+           or next((s for s in sessions or () if hit_ts(s)), None)
+           or (next((s for s in sessions or () if hit_id(s)), None) if anchor is None else None))
     w = (ses or {}).get("window") or {}
     marker_a = (ses or {}).get("start_ts", anchor)
     marker_b = (ses or {}).get("end_ts", body.get("end_ts"))
@@ -981,8 +987,19 @@ def debrief_track_from_log(body: dict):
     if len(fixes) < 10:
         return JSONResponse({"detail": "the boat log has no track in that window — has the "
                                        "backfill run since the session?"}, status_code=404)
+    # The TRUST sweep rides with the track (item A): per-channel segments + the danger intervals
+    # the scorer refuses bins from. A failed sweep is stored as unavailable and SAID — refusing
+    # nothing silently would defeat the guardrail's purpose.
+    try:
+        trust = monitor.agent_json(f"/racelog/trust?start={win['start_ts']}&end={win['end_ts']}")
+        trust["available"] = True
+    except Exception as exc:
+        trust = {"available": False,
+                 "note": f"trust sweep unavailable ({exc}) — NO bins were refused; treat "
+                         f"refinements from this track as unguarded"}
     meta = track.save_track(rid, {"source": "boatlog", "boat": body.get("name"),
                                       "fixes": fixes, "n": len(fixes), "window": win,
+                                      "trust": trust,
                                       "sail_log": r.get("sail_log") or []})
     return {"ok": True, **meta, "sail_changes": len(r.get("sail_log") or [])}
 

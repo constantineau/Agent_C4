@@ -60,6 +60,15 @@ check("a session matches on start_ts too (the UI sends both; older callers send 
       main.resolve_log_window({"start_ts": MARKER_A}, [SESSION])["end_ts"] == DERIVED_B)
 check("a start_ts a minute off matches nothing — a near-miss must not silently load another race",
       main.resolve_log_window({"start_ts": MARKER_A + 60}, [SESSION]) is None)
+
+# session ids are NOT unique across the boat (the engine store has been recreated; Jul 8 and
+# Jul 15 2026 both carry id=1) — found when the e2e check asked for Jul 8 and got Jul 15 back
+TWIN = {**SESSION, "start_ts": MARKER_A - 7 * 86400, "end_ts": MARKER_A - 7 * 86400 + 60,
+        "window": {"start_ts": MARKER_A - 7 * 86400, "end_ts": MARKER_A - 7 * 86400 + 1620,
+                   "hours": 0.45, "marker_hours": 0.02, "provenance": []}}
+w2 = main.resolve_log_window({"session_id": 2, "start_ts": TWIN["start_ts"]}, [SESSION, TWIN])
+check("a duplicated session id resolves by start_ts, not by whichever id matched first",
+      w2 is not None and w2["hours"] == 0.45)
 check("no such session is None, not a fabricated window",
       main.resolve_log_window({"session_id": 99}, [SESSION]) is None)
 
@@ -89,6 +98,12 @@ def fake_agent_json(path):
     asked.append(path)
     if path == "/racelog/sessions":
         return {"sessions": [SESSION]}
+    if path.startswith("/racelog/trust"):
+        return {"channels": {"heading": [{"t0": MARKER_A, "t1": DERIVED_B, "status": "ok",
+                                          "reason": "heading within -2° of GPS course"}]},
+                "danger": {"heading": [], "attitude": []},
+                "summary": {"danger_s": 0, "warn_s": 0, "unknown_s": 0,
+                            "line": "no danger windows"}}
     return {"fixes": [{"t": MARKER_A + i, "lat": 45 + i / 1e4, "lon": -83.0, "sog": 6.0}
                       for i in range(50)],
             "sail_log": [{"ts": MARKER_B + 5, "flying": ["A3", "SS"]}]}
@@ -106,20 +121,24 @@ r = main.debrief_track_from_log({"race_id": "bayviewmack2026", "session_id": 2,
                                  "start_ts": MARKER_A, "end_ts": MARKER_B, "name": "Bayview Mac"})
 check("it asked the agent for the sessions before asking for a track",
       asked and asked[0] == "/racelog/sessions")
-check(f"it fetched the DERIVED seven hours, not the button's two — {asked[-1]}",
-      f"start={MARKER_A}" in asked[-1] and f"end={DERIVED_B}" in asked[-1])
+trk = next(p for p in asked if p.startswith("/racelog/track"))
+check(f"it fetched the DERIVED seven hours, not the button's two — {trk}",
+      f"start={MARKER_A}" in trk and f"end={DERIVED_B}" in trk)
 check("...and asked for points in proportion to it — a 4x longer window must not arrive 4x "
       "coarser (2000 default would be 13 s between fixes over seven hours)",
-      "max_points=8000" in asked[-1])
+      "max_points=8000" in trk)
 check("the window it used is stored with the track (the judge scores a window, not a race)",
       saved.get("window", {}).get("kind") == "derived")
+check("the TRUST sweep was fetched over the derived window and stored with the track",
+      any(p.startswith("/racelog/trust") and f"end={DERIVED_B}" in p for p in asked)
+      and saved.get("trust", {}).get("available") is True)
 check("and reported back to the caller", r.get("ok") and r["window"]["hours"] == 7.36)
 
 asked.clear()
 main.debrief_track_from_log({"race_id": "bayviewmack2026", "session_id": 2,
                             "start_ts": MARKER_A, "end_ts": MARKER_B, "use_marker": True})
 check("use_marker really does fetch the shorter interval",
-      f"end={MARKER_B}" in asked[-1])
+      f"end={MARKER_B}" in next(p for p in asked if p.startswith("/racelog/track")))
 
 bad = main.debrief_track_from_log({"race_id": "bayviewmack2026"})
 check("no session identifier is a 422, not a full-database scan", bad.status_code == 422)

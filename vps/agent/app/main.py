@@ -395,13 +395,102 @@ def racelog_track(start: float, end: float, max_points: int = 2000):
     if len(fixes) > int(max_points):          # even thinning — the debrief doesn't need 1 Hz
         step = len(fixes) / float(max_points)
         fixes = [fixes[int(i * step)] for i in range(int(max_points))]
-    sail_log = []
+    raw_log = []
     for r in sails:
         try:
-            sail_log.append({"t": r["epoch"], **_json.loads(r["str_value"])})
+            raw_log.append({"t": r["epoch"], **_json.loads(r["str_value"])})
         except Exception:
             continue
-    return {"fixes": fixes, "n": len(fixes), "sail_log": sail_log}
+    # SETTLE: the log records TAPS, not changes — a peel logs as two states one second apart and
+    # a mis-tap as three. Taps closer together than SAIL_SETTLE_S are one manoeuvre and count as
+    # the state it ENDED on, stamped at the last tap. 30 s per Cole (2026-09-09): "it takes at
+    # least 30 seconds to change sails". Jul 15: 18 deduped taps -> 7 configurations.
+    def _cfg(e):
+        return (tuple(sorted(e.get("flying") or [])), e.get("reef"),
+                tuple(sorted(e.get("out_of_service") or [])))
+    settle_s = float(os.environ.get("SAIL_SETTLE_S", "30"))
+    bursts = []
+    for e in raw_log:
+        if bursts and e["t"] - bursts[-1]["t"] <= settle_s:
+            bursts[-1] = e
+        else:
+            bursts.append(e)
+    sail_log = [e for i, e in enumerate(bursts) if i == 0 or _cfg(e) != _cfg(bursts[i - 1])]
+    return {"fixes": fixes, "n": len(fixes), "sail_log": sail_log,
+            "sail_log_raw_entries": len(raw_log), "sail_settle_s": settle_s}
+
+
+@app.get("/racelog/trust")
+def racelog_trust(start: float, end: float, step_s: float = None):
+    """Per-channel TRUST timeline over a recorded window — the debrief's guardrail (item A).
+
+    Sweeps the same cross-checks the boat runs live (`sensor_health.heading_bias`,
+    `attitude_plausible`) across the window and returns per-channel segments plus the danger
+    intervals the debrief must refuse bins from. One publisher per channel for the whole window;
+    the heading reference is a course publisher on a DIFFERENT device where one exists, and the
+    verdict names both."""
+    from datetime import datetime as _dt, timezone as _tz
+    from . import trust_window
+    t0 = _dt.fromtimestamp(float(start), _tz.utc)
+    t1 = _dt.fromtimestamp(float(end), _tz.utc)
+    ais = tools.ais_bearing_sources()
+    devices = n2k_sources.devices_for(tools.BOAT_ID)
+    paths = ("navigation.headingTrue", "navigation.courseOverGroundTrue",
+             "navigation.speedOverGround", "navigation.attitude.roll",
+             "navigation.attitude.pitch")
+    with pool.connection() as conn:
+        rows = conn.execute(
+            "SELECT extract(epoch FROM time)::float8 AS epoch, path, value, source "
+            "FROM telemetry_raw WHERE boat_id = %s AND path = ANY(%s) "
+            "AND time BETWEEN %s AND %s AND value IS NOT NULL "
+            + ("AND NOT (source = ANY(%s)) " if ais else "")
+            + "ORDER BY time",
+            ((tools.BOAT_ID, list(paths), t0, t1, sorted(ais)) if ais
+             else (tools.BOAT_ID, list(paths), t0, t1))).fetchall()
+    deg = 57.29577951308232
+    by = {p: {} for p in paths}
+    for r in rows:
+        by[r["path"]].setdefault(r["source"], []).append((r["epoch"], float(r["value"])))
+    chosen = {p: trust_window.pick_source(by[p], p.rsplit(".", 1)[-1].lower(), devices)
+              for p in paths}
+
+    def series(path, scale=1.0):
+        src = chosen[path]
+        return [(t, v * scale) for t, v in by[path].get(src, [])]
+
+    hdg_dev = n2k_sources.resolve(chosen[paths[0]] or "", devices)
+    # the reference must not be the compass's own box where the bus offers an alternative
+    cog_candidates = dict(by[paths[1]])
+    if hdg_dev and len(cog_candidates) > 1:
+        same = [s for s in cog_candidates
+                if (n2k_sources.resolve(s, devices) or {}).get("model") == hdg_dev.get("model")]
+        if len(same) < len(cog_candidates):
+            for s in same:
+                cog_candidates.pop(s)
+    cog_src = trust_window.pick_source(cog_candidates, "cog", devices)
+    cog_dev = n2k_sources.resolve(cog_src or "", devices)
+    reference = {"heading": (hdg_dev or {}).get("model") or chosen[paths[0]],
+                 "course": (cog_dev or {}).get("model") or cog_src,
+                 "independent": bool(hdg_dev and cog_dev
+                                     and hdg_dev.get("model") != cog_dev.get("model"))}
+
+    merged = trust_window.merge_heading_samples(
+        series(paths[0], deg),
+        [(t, v * deg) for t, v in by[paths[1]].get(cog_src, [])],
+        series(paths[2], 1.943844))
+    heading = trust_window.heading_segments(merged, step_s)
+    roll = dict(series(paths[3], deg))
+    pitch = dict(series(paths[4], deg))
+    att = [(t, v, pitch.get(t)) for t, v in sorted(roll.items())]
+    attitude = trust_window.attitude_segments(att, step_s)
+    channels = {"heading": heading, "attitude": attitude}
+    return {"window": {"start": float(start), "end": float(end)},
+            "sources": {"heading": chosen[paths[0]], "course": cog_src},
+            "reference": reference,
+            "channels": channels,
+            "danger": {ch: trust_window.danger_intervals(segs)
+                       for ch, segs in channels.items()},
+            "summary": trust_window.summarize(channels)}
 
 
 @app.post("/summary")
