@@ -896,6 +896,15 @@ async def debrief_track_fetch(body: dict):
     return {"ok": True, **meta}
 
 
+@app.get("/api/polar/observed")
+async def polar_observed(refresh: bool = False):
+    """The boat's OBSERVED polar — measured TWS/TWA/STW only, trust-gated, kite-gated, per
+    (TWS, TWA, config) cell (the Polar tab's data; `app/obspolar.py`). Cached on the learning
+    volume; `?refresh=1` rebuilds from the agent (~30 s over two races)."""
+    from . import obspolar
+    return await run_in_threadpool(obspolar.build, bool(refresh))
+
+
 @app.get("/api/racelog/sessions")
 def racelog_sessions():
     """Race-session windows backfilled from the boat (the iPad record switch) — the debrief's

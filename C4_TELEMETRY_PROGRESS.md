@@ -3,7 +3,24 @@
 Goal (Cole): **lose no telemetry**, and **copy all telemetry off the Pi to the VPS**.
 Deletion from the boat is allowed only *after* an off-boat copy is sha256-verified.
 
-## ⏸ PICK UP HERE (2026-09-09, end of day — the queue, in order)
+## ⏸ PICK UP HERE (2026-09-09, later — the POLAR TAB is live)
+
+**https://lab.racertracer.net/#polar** (password `CAN100`). The debrief interface Cole asked
+for: the observed polar as a half-polar diagram (TWS chips + config filter, per-config curves
+with hover tooltips, the ORC cert as a dashed reference only), the cell table, per-race
+provenance (trust line, refused counts, skipped bench sessions), and the Decisions card wired to
+the existing propose/apply flow (measured bins only; apply stays in Debrief). Engine:
+`vps/lab/app/obspolar.py` (single implementation — the CLI in `tools/analysis/` is a thin
+wrapper), cached on the `lab_learning` volume, "Refresh from the record" rebuilds in ~20 s.
+`monitor.agent_json` grew a per-call `timeout` (a 7-hour full-res track fetch is ~20 s; the 8 s
+default strangled it). Palette CVD-validated on the Lab surface (7 config slots); chart geometry
+eyeballed via rendered SVG both modes.
+
+**The standing dev stack is REBUILT (agent + lab, in place)** — everything from September is live
+in the browser now, not just the polar tab: derived windows, the trust sweep, measured-wind
+bins, the settle. The bench console stack was already rebuilt this morning.
+
+## The earlier queue (2026-09-09, superseded where struck)
 
 The two-race corpus is built and already paying (see the blocks below for everything shipped
 today: derived window in the debrief AND the prune, session auto-close, GCS Coldline archive +

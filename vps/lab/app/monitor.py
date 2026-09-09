@@ -22,9 +22,9 @@ _YB_PROVIDERS = ("yb", "bycmack", "ybtracking", "yellowbrick")
 _tok = {"value": None, "exp": 0.0}
 
 
-def _http_json(url, data=None, headers=None):
+def _http_json(url, data=None, headers=None, timeout=None):
     req = urllib.request.Request(url, data=data, headers=headers or {})
-    with urllib.request.urlopen(req, timeout=_TIMEOUT) as r:
+    with urllib.request.urlopen(req, timeout=timeout or _TIMEOUT) as r:
         return json.loads(r.read().decode())
 
 
@@ -96,13 +96,15 @@ def fleet(definition, demo=False):
     return base
 
 
-def agent_json(path):
+def agent_json(path, timeout=None):
     """Authed GET against the cloud agent (shared by Monitor and the debrief's boat-log
-    track source). Raises on auth failure / network error."""
+    track source). Raises on auth failure / network error. `timeout` overrides the 8 s default
+    for calls that legitimately walk a whole race (a 7-hour full-res track is ~20-30 s)."""
     tok = _agent_token()
     if not tok:
         raise RuntimeError("agent auth failed (BOAT_PASSWORD)")
-    return _http_json(_AGENT_URL + path, headers={"Authorization": "Bearer " + tok})
+    return _http_json(_AGENT_URL + path, headers={"Authorization": "Bearer " + tok},
+                      timeout=timeout)
 
 
 def _agent_token():
