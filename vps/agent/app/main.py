@@ -364,9 +364,13 @@ def racelog_track(start: float, end: float, max_points: int = 2000):
             + "ORDER BY time",
             ((tools.BOAT_ID, list(paths), t0, t1, sorted(ais)) if ais
              else (tools.BOAT_ID, list(paths), t0, t1))).fetchall()
+        # DISTINCT: the sail log reaches the cloud 2-3x over (push_sail_log's cursor lives in the
+        # archive DB, and backfills have run from two copies of that archive; telemetry_raw has
+        # no PK to stop the re-posts). 48 "sail changes" on Jul 15 were 18 distinct entries.
         sails = conn.execute(
-            "SELECT extract(epoch FROM time)::float8 AS epoch, str_value FROM telemetry_raw "
-            "WHERE path = 'crew.sail.state' AND time BETWEEN %s AND %s ORDER BY time",
+            "SELECT DISTINCT extract(epoch FROM time)::float8 AS epoch, str_value "
+            "FROM telemetry_raw "
+            "WHERE path = 'crew.sail.state' AND time BETWEEN %s AND %s ORDER BY 1",
             (t0, t1)).fetchall()
     # bucket by second → fixes; a fix needs at least lat+lon (dict rows — psycopg row factory).
     # Within a second, the best-ranked source wins (see the note above); an unranked source is

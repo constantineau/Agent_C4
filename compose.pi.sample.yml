@@ -17,3 +17,14 @@ services:
       # bench: never prune — the replayed 2014-timestamped sample data would all be
       # "out of session and old" (wipe the bench volume by hand when it gets fat)
       ARCHIVE_RETAIN_DAYS: "0"
+      # bench data must NEVER be mistaken for the boat's. The bench uplink once posted the 2014
+      # sample loop into sr33_dev under boat_id=sr33; its battery-bank-1 / set-drift / keel-offset
+      # channels then read exactly like a boat losing instruments between Jul 15 and Jul 18 2026,
+      # and an analysis published that conclusion before catching it. Found 2026-09-09.
+      BOAT_ID: sr33-bench
+  uplink:
+    environment:
+      BOAT_ID: sr33-bench           # same reason as the archiver — see above
+  engine:
+    environment:
+      BOAT_ID: sr33-bench
