@@ -137,6 +137,29 @@ def main():
             n = sum(r[3] for r in rs)
             print(f"   {cfg:16} {n:>6} s  weighted {sum(r[6] * r[3] for r in rs) / n:>5.1f}% of polar")
 
+    # PAIRED comparison. Config totals are not comparable on their own — each config was flown in
+    # its own slice of wind, so "A3 90.5% vs A3+SS 86.1%" compares two different races. Within one
+    # (TWS, TWA) cell the comparison is real, and it is the only way to answer questions the ORC
+    # certificate cannot: it rates single sails, so a combination the crew invents (A3 + staysail)
+    # has no rated target anywhere — the boat's own record is the only source of truth for it.
+    print(f"\npaired within a cell — the only comparison that controls for conditions:")
+    by_cell = defaultdict(list)
+    for cfg, wb, ab, n, med, tgt, pct in rows:
+        by_cell[(wb, ab)].append((cfg, n, med, pct))
+    found = False
+    for (wb, ab), cfgs in sorted(by_cell.items()):
+        if len(cfgs) < 2:
+            continue
+        found = True
+        base = max(cfgs, key=lambda c: c[1])
+        print(f"   TWS {wb:>2} TWA {ab:>3}:")
+        for cfg, n, med, pct in sorted(cfgs, key=lambda c: -c[2]):
+            d = med - base[2]
+            mark = "  (reference)" if cfg == base[0] else f"  {d:+.2f} kn vs {base[0]}"
+            print(f"      {cfg:14} {med:>5.2f} kn  {pct:>5.1f}%  {n:>4} s{mark}")
+    if not found:
+        print("   (no cell carries two configurations with enough evidence)")
+
 
 if __name__ == "__main__":
     main()
