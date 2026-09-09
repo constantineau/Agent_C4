@@ -18,14 +18,12 @@ retune, the sail-log dedupe, `sr33-bench`). What is NEXT:
    (Jul 8 + Jul 15 both id=1) resolve by `start_ts` now; sail log settles at **30 s** (Cole:
    "it takes at least 30 seconds to change sails") — Jul 15 = 7 configurations, Jul 18 = 4.
    Graphical trust timeline folded into B. Details: `docs/V2_BACKLOG.md` → "Debrief" → A.
-2. **C — measured wind into `_performance_bins`.** It bins against GRIB (`wf.wind_at`) while the
-   boat recorded TWS/TWA at ~10 Hz. `tools/analysis/perf_by_config.py` is the working prototype
-   (paired within-cell: the staysail paid in every cell where both configs were flown, and the
-   measured A3↔S2 crossover lands on the certificate's 142.5°).
-3. **`config_at()` stale-config fix** — the last sail-log entry extrapolates forever; Jul 15's
-   beat home is attributed to the spinnaker. Physics gate (no kite < ~60° TWA sustained) → mark
-   the window **unattributed**, never gate on the cert (crew combos like A3+SS are real data —
-   Cole). The settle window for what counts as a change is Cole's call; the data's knee is 30 s.
+2. ~~**C — measured wind into `_performance_bins`.**~~ ✅ **SHIPPED 2026-09-09** with
+   3. ~~**`config_at()` stale-config fix**~~ ✅ — fixes carry TWS/TWA/STW, `_fix_wind` prefers
+   measured over GRIB (`wind_source` labels which), kite gate at 55° TWA bins implausible windows
+   unattributed. E2e on live Jul 15: 6,660/6,660 measured fixes, 57 bins, phantom gone.
+   Second half of C still open: tack/gybe cost, heel vs target, rudder work (the record has the
+   series). Details: `docs/V2_BACKLOG.md` → "Debrief" → C.
 4. **The channel-diff script** (per race, source-filtered — the bench contamination is exactly
    why it must filter). Four hand queries found real things; make it repeatable.
 5. **B — the decision timeline** (the big build; needs the rig server-side).
