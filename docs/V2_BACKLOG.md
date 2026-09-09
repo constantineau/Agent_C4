@@ -712,6 +712,31 @@ fallback (that is the onboard design), so a blocked call degrades instead of bre
   queued yet; it needs a decision about what the engine should *do* when heading is untrusted,
   and `sensor_health` deliberately reports rather than substitutes.
 
+### 🔴 The sail log counts TAPS, not sail changes (found 2026-09-09, by Cole asking "48?!")
+
+`/racelog/track` reported **48 sail changes** for the 1.5-hour Jul 15 race. It is 48 *records*,
+and the number is wrong twice over:
+
+- **Every entry is in the cloud 2–3 times.** 48 rows → **18** distinct `(time, str_value)`;
+  Jul 18 is 51 → **25**. `push_sail_log()` pages from a `backfill_sail_ts` cursor stored **in the
+  archive DB**, and this project has run backfills from more than one copy of that archive
+  (`work/archive-backfill.db` is a working copy). Each copy carries its own cursor, so the same
+  entries were posted again. `telemetry_raw` has no PK, so nothing stopped it.
+- **The rest are intermediate taps inside one manoeuvre.** `A3+J1 → A3` one second apart is a
+  peel, not two changes; `S2+SS → S2 → S2+SS` three seconds apart is a mis-tap being corrected.
+  Settling the stream (keep the state a burst *ends on*) gives **7 configurations** for that race
+  at a 30 s or 60 s window, 15 at 0 s, 5 at 120 s — 30 s is the knee, 120 s starts merging real
+  changes.
+
+Why it matters beyond the number: `track.config_at()` attributes performance to whatever config
+was flying, and `learning.propose()` bins by (TWS, TWA, config) — **so a one-second phantom config
+gets its own bin in the boat model.** The fix has two halves and only one is mechanical:
+**dedupe on `(time, str_value)` in the read path** (unambiguous, do it), and **choose a settle
+window** for what counts as a change (Cole's call; the data says 30 s).
+
+Same shape as the flapping bank tile one level up: a raw event stream read as though every event
+were a distinct event.
+
 ### Debrief — turning the Jul 18 record into the Lab's DEBRIEF tab (2026-09-08)
 
 The Lab debrief today (`judge.py` + `track.py` + `learning.py`) is a **tactics/navigation**
