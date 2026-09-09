@@ -3,7 +3,42 @@
 Goal (Cole): **lose no telemetry**, and **copy all telemetry off the Pi to the VPS**.
 Deletion from the boat is allowed only *after* an off-boat copy is sha256-verified.
 
-## ⏸ PICK UP HERE (2026-09-09, later — the POLAR TAB is live)
+## ⏸ PICK UP HERE — REFINEMENT PHASE (set 2026-09-09, horizon: a couple of weeks)
+
+**Cole approved the Polar tab as a first pass and set the mode: "generally refine the entire
+system over the next couple weeks."** Not new surface area — make what exists trustworthy,
+smooth and correct. The standing dev stack (agent + lab) runs today's code; the bench console
+stack too; `dev` and `main` are level and pushed.
+
+**The refinement queue, in rough order of value:**
+1. **Close the polar → optimizer loop.** The Polar tab's "Propose refinement" honestly reports
+   no measured bins archived — bins reach the archive only through a debrief RUN, which needs a
+   race definition + oracle. Run a real debrief over the Jul 15 boat-log track (it's the clean
+   race), archive the measured bins, propose, and walk Cole through his first apply. This is the
+   one remaining link in the chain he cares most about.
+2. **Exercise the Polar tab against Cole's actual use** — he's reviewing it now; expect
+   refinement asks (sorting, a per-config table view across all TWS, maybe both races overlaid).
+   Don't guess ahead; fix what he names.
+3. **B — the decision timeline** (the big build): the rig server-side, scrub the race with the
+   trust strip beside the track. The graphical trust timeline folded in here.
+4. **The known small rough edges, all measured already:**
+   - the heading `warn` flicker across the 15° line (22:07–23:06 on Jul 18, ok↔warn churn in the
+     trust sweep too) — wants the bank tile's dwell-median treatment in `sensor_health`;
+   - the deviation tile's absolute gates (`act` for 88% of Jul 18; 5 min behind plan trips it an
+     hour into a multi-day race) — thresholds should scale with the race, numbers are Cole's;
+   - `selector` flip churn (40 flips on Jul 18) — same stability sweep, uninvestigated;
+   - the channel-diff script (source-filtered) — four hand queries found real things, make it
+     repeatable per race.
+5. **When the boat is back** (unchanged): rebuild archiver + engine + console aboard, close
+   session 3 from the iPad, enable Orca attitude sharing.
+
+**Refinement-phase habits that today validated:** score for stability, not moments; verify before
+deleting; one implementation per analysis; measured beats forecast beats theory; every gate must
+say what it refused. The stability scorer (`tools/replay/score_stability.py`) and the two-race
+corpus are the instruments for the whole phase — anything that flaps on Jul 15 is a bug by
+construction.
+
+## (2026-09-09, later — the POLAR TAB shipped)
 
 **https://lab.racertracer.net/#polar** (password `CAN100`). The debrief interface Cole asked
 for: the observed polar as a half-polar diagram (TWS chips + config filter, per-config curves
