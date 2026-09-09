@@ -56,6 +56,26 @@ for a weeks-old session would put those weeks on the deletion path; and an under
 crew learns the boat ended their session. **This does not fix session 3** — the boat has been
 stopped for weeks, so it hits the second refusal; close that one from the iPad.
 
+**The local backups are gone, and the disk is no longer the binding constraint: 43% used, 55 G
+free** (2026-09-09). Deleted after every object was restored from Coldline, decompressed and
+hashed against the sha256 taken from the original: `archive.corrupt-20260718.db` (9.0 G, already
+salvaged), `archive-jul1517-recovered.db` (8.5 G), `pi/sk_archive/archive.db` (2.0 G, malformed)
+and `recovered/archive-recovered.db` (2.0 G, fully in Postgres). **Still on disk on purpose:**
+`work/archive-backfill.db` (2.9 G — the replay rig dies without it), `work/engine.db` and the
+small files, `backups/replay-jul18/` (300 M).
+
+**Both races are prototype data now, and neither depends on those files.**
+- **Jul 18** — full-res in Postgres (10.8 M rows) and in the rig's archive.
+- **Jul 15** — was full-res ONLY inside the deleted 8.5 G delivery salvage. Cut out first to
+  **`backups/race-data/archive-jul15-race.db`** (459 M, 2,352,414 rows, `22:30 → 00:20Z`,
+  132 paths, row-count matched against the source) and backfilled into Postgres, which is where
+  the debrief reads. That window went from **47,128 aggregate rows to 2,399,542 full-res**; the
+  debrief's own-log track now returns **5,291 fixes at a 1-second median gap** with 48 sail
+  changes. The delivery hours stay out of Postgres per Cole's earlier call — only the race went in.
+  ⚠️ `backfill.py --since/--until` compares ISO strings **lexicographically**, and
+  `'…22:30:00.020Z' < '…22:30:00Z'` because `.` sorts below `Z` — the first run silently dropped
+  the 409 rows in the first second. Pass sub-second bounds (`…:00.000Z`) or lose the first second.
+
 **Off-box backups now exist** (2026-09-09, Cole's call): `gs://constantineau-c4-archive`,
 COLDLINE, `northamerica-northeast1`, **versioning on + a 1-year (unlocked) retention policy, no
 lifecycle rule**. Holds the whole 2026-08-30 boat pull (26 G → 3.06 GiB) with a
@@ -1022,13 +1042,18 @@ DB was recreated 2026-08-30, so nothing is old enough — but it will start dele
 Aug-30-onward out-of-session data around **2026-09-13**. Under a "lose nothing" policy,
 either raise/disable retention or get the drain (#6) working before then.
 
-## Disk — the binding constraint (2026-09-01)
-Local `/` is 96 G, **21 G free** (75 G used). Boat card is 115 G, 75 G free.
-Consumers already on disk under `backups/c4-boat-pull-2026-08-30/`:
-- `pi/sk_archive/archive.corrupt-20260718.db` 9.6 GB — keep, not yet salvaged
-- `pi/sk_archive/archive.db` 2.1 GB (the Jul 19 snapshot)
-- `recovered/archive-recovered.db` 2.0 GB — pristine Jul 18 artifact, already in Postgres
-- `work/archive-backfill.db` 3.1 GB — working copy; **still needed for task #4**, deletable after
+## Disk — ~~the binding constraint~~ RESOLVED 2026-09-09 (55 G free, 43%)
+Local `/` is 96 G, **55 G free**. Boat card is 115 G, 75 G free. Everything below was archived to
+`gs://constantineau-c4-archive` (restore-verified) and deleted; read the top block before
+planning around any of it. What is left under `backups/`:
+- `c4-boat-pull-2026-08-30/work/archive-backfill.db` 2.9 GB — 🛑 the replay rig's archive, keep
+- `race-data/archive-jul15-race.db` 459 MB — the Jul 15 race at full res, cut from the salvage
+- `replay-jul18/` 300 MB — the timelines and the materialised spool
+- ~~`pi/sk_archive/archive.corrupt-20260718.db` 9.6 GB~~ salvaged, then archived + deleted
+- ~~`pi/sk_archive/archive.db` 2.1 GB~~ malformed; archived + deleted
+- ~~`recovered/archive-recovered.db` 2.0 GB~~ fully in Postgres; archived + deleted
+- ~~`recovered/archive-jul1517-recovered.db` 8.5 GB~~ archived + deleted; **its Jul 15 race lives
+  on in `race-data/` and in Postgres**, the delivery hours only in GCS
 
 Salvaging the 9.6 GB writes a second ~9 GB file → would leave ~12 G free before any
 Postgres growth. Sequence disk-hungry work deliberately; `df` before each step.
