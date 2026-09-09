@@ -3,7 +3,52 @@
 Goal (Cole): **lose no telemetry**, and **copy all telemetry off the Pi to the VPS**.
 Deletion from the boat is allowed only *after* an off-boat copy is sha256-verified.
 
-## ⏸ PICK UP HERE (2026-09-08 — read this block, then "Session 2026-09-08" below)
+## ⏸ PICK UP HERE (2026-09-09)
+
+**Done today: 0c — the Lab debrief reads the DERIVED race window.** One commit on `dev`, working
+tree clean, and it is the change the rest of the debrief plan sat on. The route stopped taking
+its bounds from the caller: `POST /api/debrief/track/from-log` now takes a **session**, fetches
+`/racelog/sessions` and resolves the window server-side (`main.resolve_log_window`), so the Lab
+UI and any other caller get the same race. Measured end to end against the live database —
+**1.81 h / 2,000 fixes / 4 sail changes → 7.30 h / 8,000 fixes / 51 sail changes.**
+
+Three things worth carrying forward:
+- **The window travels with the track now** — `save_track` persists it (kind, marker span,
+  `provenance`, motion device), `/api/debrief/track` serves it, the card prints it, and
+  `judge._score_actual_track` stamps it into `actual_track`. **A (the trust layer) should read
+  it from there** rather than re-deriving.
+- **Density had to scale with the window.** `/racelog/track` thins to `max_points` (2000), so a
+  4× longer window arrives 4× coarser unless you ask — the eighth instance of the shape, in a new
+  costume: not "not in force" but "in force at a quarter of the resolution". Now one point per
+  3 s, capped 8000; median gap 2 s. **Watch for this wherever a limit is a constant and the range
+  is not.**
+- **`use_marker: true`** (a checkbox in the card) still loads exactly what the button recorded.
+
+⚠️ **The running dev stack cannot show this yet.** `sr33-dev-agent-1` / `sr33-dev-lab-1` are
+2026-07-30 images: the live `/racelog/sessions` has **no `window` key**, and the resolver falls
+back to the marker (tested path). Today's numbers came from current code run against the live DB
+in throwaway containers. `docker compose -f compose.dev.yml up -d --build agent lab` to see it in
+the browser. Note the lab image **bakes `vps/lab/web/`**, same as the console.
+
+**Do these next, in this order:**
+- 0d. 🔴 **Wire `race_window` into the onboard retention prune** (`pi/archiver/archiver.py:357`) —
+  unchanged from yesterday and now the top item. The one place a wrong window **deletes** data.
+- 0e. **A — the trust layer** on the debrief. ⚠️ The gating rule (refuse vs down-weight `danger`
+  bins) is Cole's call; do not pick it unilaterally.
+- **Merge `dev` → `main`?** Still open, still Cole's call. `main` is at `c525e66`; `dev` now
+  carries the race-window work **and** today's debrief change.
+- Small follow-up still queued: the heading `warn` flickers across the 15° threshold (80 `warn` /
+  19 `ok` between 22:08Z and the kick) — wants the same dwell median the bank tile got.
+
+Tests: **26 files + 10 pytest cases.** New: `vps/lab/test_debrief_window.py` (17 assertions; the
+ones that matter assert **what interval the route asks the agent for**, not what the resolver
+prefers). Lab tests need fastapi — run them in a throwaway container with the repo mounted:
+`docker run --rm -v $PWD/vps/lab/app:/srv/app:ro -v $PWD/shared:/srv/shared:ro -v
+$PWD/vps/lab/test_debrief_window.py:/srv/test_debrief_window.py:ro -w /srv sr33-dev-lab python
+test_debrief_window.py` — cleaner than `docker cp` into the running container, which leaves it
+running a mix of two builds.
+
+## Previous resume block (2026-09-08 — read this next, then "Session 2026-09-08" below)
 
 **Two batches, and they are at different points.** The heading cross-check work (11 commits) is
 on `dev`, merged to `main` and **pushed** — `main` is at `c525e66`. The race-window work after it
@@ -105,8 +150,8 @@ together proximal windows into a complete race, regardless of button presses."*
   TWS holds at ~27 kn), and the debrief has no concept of a retirement.
 
 **Do these next, in this order:**
-0c. **Point the Lab's debrief at `window` instead of `start_ts`/`end_ts`.** The change that makes
-   the seven hours actually reach the analysis; the rest of the debrief plan sits on it. Small.
+0c. ~~**Point the Lab's debrief at `window` instead of `start_ts`/`end_ts`.**~~ ✅ **DONE
+   2026-09-09** — see the block at the top and `docs/V2_BACKLOG.md` → "Debrief".
 0d. 🔴 **Then wire `race_window` into the onboard retention prune.** `archiver.prune()` deletes
    out-of-session readings older than 14 days (`pi/archiver/archiver.py:357`), so an accidental
    stop puts the rest of a race on the **deletion** path — the one place a wrong window destroys

@@ -865,7 +865,7 @@ async def debrief_track_get(race_id: str):
         return {"available": False}
     fixes = t.get("fixes") or []
     return {"available": True, "source": t.get("source"), "boat": t.get("boat"),
-            "matched_by": t.get("matched_by"), "n": len(fixes),
+            "matched_by": t.get("matched_by"), "n": len(fixes), "window": t.get("window"),
             "fixes": [[f["lat"], f["lon"]] for f in fixes]}   # lightweight polyline for the map
 
 
@@ -906,20 +906,75 @@ def racelog_sessions():
         return {"sessions": [], "note": f"agent unreachable: {exc}"}
 
 
+def resolve_log_window(body, sessions):
+    """Which interval of the boat log a from-log debrief track should cover.
+
+    The button is a hint, not the race (`shared/race_window`): on Jul 18 2026 it stopped 4.2 s
+    into a kite hoist and the marker claims 1 h 49 m of a 7 h 22 m race. The agent already
+    derives a `window` per session and serves the raw marker alongside it, so the debrief reads
+    the DERIVED window by default and keeps the marker for display. Pure function of the request
+    and the session list so the read path is testable without an agent.
+
+    Returns {start_ts, end_ts, kind, ...} or None when nothing identifies a session."""
+    sid, anchor = body.get("session_id"), body.get("start_ts")
+    ses = None
+    for s in sessions or ():
+        if sid is not None and s.get("id") == sid:
+            ses = s
+            break
+        if (anchor is not None and s.get("start_ts") is not None
+                and abs(float(s["start_ts"]) - float(anchor)) < 1.0):
+            ses = s
+            break
+    w = (ses or {}).get("window") or {}
+    marker_a = (ses or {}).get("start_ts", anchor)
+    marker_b = (ses or {}).get("end_ts", body.get("end_ts"))
+    # `use_marker` is the escape hatch for a crew that means the button — a derived window that
+    # cannot be refused is as bad as one that cannot be seen.
+    if not body.get("use_marker") and w.get("start_ts") is not None and w.get("end_ts") is not None:
+        return {"start_ts": float(w["start_ts"]), "end_ts": float(w["end_ts"]), "kind": "derived",
+                "marker_start_ts": marker_a, "marker_end_ts": marker_b,
+                "hours": w.get("hours"), "marker_hours": w.get("marker_hours"),
+                "provenance": w.get("provenance") or [], "motion_source": w.get("motion_source"),
+                "motion_device": w.get("motion_device")}
+    if marker_a is None or marker_b is None:
+        return None
+    note = ("the ⏺ LOG marker, as recorded (requested)" if body.get("use_marker")
+            else "the ⏺ LOG marker — no derived window was available for this session")
+    return {"start_ts": float(marker_a), "end_ts": float(marker_b), "kind": "marker",
+            "marker_start_ts": marker_a, "marker_end_ts": marker_b,
+            "hours": round((float(marker_b) - float(marker_a)) / 3600.0, 2),
+            "marker_hours": round((float(marker_b) - float(marker_a)) / 3600.0, 2),
+            "provenance": [note]}
+
+
 @app.post("/api/debrief/track/from-log")
 def debrief_track_from_log(body: dict):
     """Build the debrief track from the BOAT'S OWN backfilled log (full-res position/SOG —
-    far denser than a public tracker) over a race-session window: {race_id, start_ts, end_ts,
-    name?}. Stores it exactly like a GPX/YB track; the sail log rides along."""
+    far denser than a public tracker) over a race session: {race_id, session_id?, start_ts,
+    end_ts?, name?, use_marker?}. The bounds are the session's DERIVED race window, not the
+    button (see `resolve_log_window`); the window used is stored with the track and reported
+    back. Stores it exactly like a GPX/YB track; the sail log rides along."""
     from . import monitor
     body = body or {}
     rid = body.get("race_id")
-    if not rid or body.get("start_ts") is None or body.get("end_ts") is None:
-        return JSONResponse({"detail": "race_id, start_ts and end_ts are required"},
+    if not rid or (body.get("start_ts") is None and body.get("session_id") is None):
+        return JSONResponse({"detail": "race_id and one of session_id / start_ts are required"},
                             status_code=422)
     try:
-        r = monitor.agent_json(f"/racelog/track?start={float(body['start_ts'])}"
-                               f"&end={float(body['end_ts'])}")
+        sessions = (monitor.agent_json("/racelog/sessions") or {}).get("sessions") or []
+    except Exception as exc:
+        return JSONResponse({"detail": f"agent unreachable: {exc}"}, status_code=502)
+    win = resolve_log_window(body, sessions)
+    if not win:
+        return JSONResponse({"detail": "no such race session on the boat log"}, status_code=404)
+    # Ask for points in proportion to the window. `/racelog/track` thins to `max_points` (default
+    # 2000), so a window that grew 4x would have arrived 4x coarser — 13 s between fixes instead
+    # of 3 s — and the debrief would have quietly traded resolution for the hours it just gained.
+    pts = max(2000, min(8000, int((win["end_ts"] - win["start_ts"]) / 3.0)))
+    try:
+        r = monitor.agent_json(f"/racelog/track?start={win['start_ts']}&end={win['end_ts']}"
+                               f"&max_points={pts}")
     except Exception as exc:
         return JSONResponse({"detail": f"agent unreachable: {exc}"}, status_code=502)
     fixes = r.get("fixes") or []
@@ -927,7 +982,7 @@ def debrief_track_from_log(body: dict):
         return JSONResponse({"detail": "the boat log has no track in that window — has the "
                                        "backfill run since the session?"}, status_code=404)
     meta = track.save_track(rid, {"source": "boatlog", "boat": body.get("name"),
-                                      "fixes": fixes, "n": len(fixes),
+                                      "fixes": fixes, "n": len(fixes), "window": win,
                                       "sail_log": r.get("sail_log") or []})
     return {"ok": True, **meta, "sail_changes": len(r.get("sail_log") or [])}
 

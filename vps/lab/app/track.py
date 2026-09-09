@@ -543,6 +543,9 @@ def save_track(race_id, track):
     meta = {"race_id": race_id, "source": track.get("source"), "boat": track.get("boat"),
             "n": track.get("n") or len(track.get("fixes") or []),
             "matched_by": track.get("matched_by"),
+            # boat-log tracks carry the race window they were cut to (derived vs the ⏺ LOG
+            # marker, with its provenance) — a track is only as trustworthy as its bounds
+            "window": track.get("window"),
             "sail_changes": len(track.get("sail_log") or [])}
     with open(_path(race_id), "w") as fh:
         # sail_log = the crew's timestamped CONFIGURATION history (boat-log tracks) — the

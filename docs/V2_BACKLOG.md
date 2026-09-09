@@ -772,9 +772,43 @@ Build order, agreed 2026-09-08:
   extend across continuous underway telemetry → bound at the turnaround, every step reported in
   `provenance`, the raw marker always served alongside. Measured through the live database:
   **marker 1.81 h → derived 7.36 h (×4.1)**, and Jul 15 gained 18 min the button had clipped.
-  `/racelog/sessions` returns a `window` block per session. **Still to do: point the Lab's
-  debrief at `window` instead of `start_ts`/`end_ts` — that is the change that makes the seven
-  hours actually reach the analysis.**
+  `/racelog/sessions` returns a `window` block per session.
+
+- **✅ DONE 2026-09-09 — the debrief now reads the derived window.** `POST
+  /api/debrief/track/from-log` no longer takes the bounds from its caller: it takes a
+  **session**, fetches `/racelog/sessions` and resolves the interval server-side
+  (`main.resolve_log_window`), so every caller of that route gets the same race. Measured
+  end to end against the live database:
+
+  ```
+  marker    2000 fixes  17:03:31Z -> 18:52:17Z   1.81 h    4 sail changes
+  derived   8000 fixes  17:03:31Z -> 00:24:11Z   7.30 h   51 sail changes
+  ```
+
+  Three things the change carries beyond the bounds themselves:
+  - **Density scales with the window.** `/racelog/track` thins to `max_points` (default 2000), so
+    the four-times-longer window would have arrived four times coarser — 13 s between fixes
+    instead of 3 s, resolution traded for the hours it had just gained. The route now asks for
+    one point per 3 s (2000 ≤ n ≤ 8000): median gap **2 s**, max 77 s over the full seven hours.
+  - **The bounds travel with the track.** `save_track` persists the `window` (kind, marker span,
+    `provenance`, motion device), `/api/debrief/track` serves it, the debrief card prints it, and
+    `judge._score_actual_track` stamps it into `actual_track` — every number in that block is a
+    number *about a window*, and A (the trust layer) will need to know which one.
+  - **The marker is still reachable**: a "button window only" checkbox, `use_marker: true` on the
+    API. A derived bound nobody can refuse is as bad as one nobody can see.
+
+  Sanity across the five newly-visible hours: SOG max **14.09 kn**, p99 9.66, **0.00%** of fixes
+  over 15 kn — the AIS-exclusion and source-priority filters added 2026-09-07 hold over the
+  extended window, which had never been read by this path before.
+
+  ⚠️ **Not yet in force in the running dev stack.** `sr33-dev-agent-1` and `sr33-dev-lab-1` are
+  built from 2026-07-30 images, so the live `/racelog/sessions` serves **no `window` key at all**
+  and the resolver correctly falls back to the marker (that path is tested). The derived numbers
+  above come from today's agent code run against the live database in a throwaway container.
+  Rebuild both to actually see seven hours in the Lab:
+  `docker compose -f compose.dev.yml up -d --build agent lab`.
+  `vps/lab/test_debrief_window.py` — 17 assertions, and the ones that matter assert **what
+  interval the route asks the agent for**, not what the resolver prefers.
 
   ⚠️ **The retention prune keys off session windows too, and that is the part with teeth.**
   `archiver.prune()` deletes every reading older than `ARCHIVE_RETAIN_DAYS` (14) that falls

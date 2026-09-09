@@ -2320,7 +2320,9 @@ async function renderDebrief() {
   try { Deb.track = await (await apiGet("/api/debrief/track?race_id=" + encodeURIComponent(Deb.raceId))).json(); }
   catch (e) { Deb.track = null; }
   try { Deb.sessions = ((await (await apiGet("/api/racelog/sessions")).json()).sessions || [])
-    .filter((x) => x.end_ts); }          // only closed windows can be loaded
+    .filter((x) => x.end_ts || (x.window && x.window.end_ts)); }
+    // a session needs an END to be loadable — either the button's or the one the record derives
+    // (a race the crew never stopped recording still has a window; that is the whole point)
   catch (e) { Deb.sessions = []; }
   await retroRefresh();
   try {
@@ -2350,22 +2352,42 @@ function debTrackCard() {
     <div class="opt-controls" style="margin-top:6px">
       <span class="muted">or the <b>boat's own log</b> (full-res, from a race session):</span>
       <select id="debSession">${(Deb.sessions || []).map((x, i) =>
-        `<option value="${i}">${esc(x.name || x.race_id || "session")} · ${new Date(x.start_ts * 1000).toISOString().slice(0, 16)}Z${x.kind ? " · " + esc(x.kind) : ""}</option>`).join("") || '<option value="">no sessions backfilled yet</option>'}</select>
+        `<option value="${i}">${esc(x.name || x.race_id || "session")} · ${new Date(x.start_ts * 1000).toISOString().slice(0, 16)}Z${x.kind ? " · " + esc(x.kind) : ""}${esc(debWinSuffix(x.window))}</option>`).join("") || '<option value="">no sessions backfilled yet</option>'}</select>
+      <label class="muted" title="Load exactly what the ⏺ LOG button recorded instead of the window the record supports"><input type="checkbox" id="debUseMarker"> button window only</label>
       <button class="mini" onclick="debFromLog()" ${Deb.trackBusy || !(Deb.sessions || []).length ? "disabled" : ""}>Use boat log</button>
     </div>
+    ${t.available && t.window ? `<div class="muted" style="font-size:12px;margin-top:4px">Window: <b>${esc(debWinRange(t.window))}</b> · ${t.window.kind === "derived" ? "derived from the record" : "the ⏺ LOG marker"}${t.window.motion_device ? " · off the " + esc(t.window.motion_device) : ""}${(t.window.provenance || []).map((p) => "<br>· " + esc(p)).join("")}</div>` : ""}
     <div class="muted" style="font-size:12px;margin-top:4px">GPX: export the track from Expedition / a Vakaros / your instruments / a phone (offline, always works). YB: pulls our boat's full track from the permitted public tracker (shore-side debrief use). ${Deb.trackMsg ? '<b>' + esc(Deb.trackMsg) + '</b>' : ""}</div>
   </div>`;
+}
+
+// The window a session will actually be loaded over: the record's, with the button's alongside
+// whenever the two disagree (Jul 18: 7.36 h derived vs 1.81 h pressed).
+function debWinSuffix(w) {
+  if (!w || w.hours == null) return "";
+  const grew = w.marker_hours != null && w.hours - w.marker_hours > 0.05;
+  return ` · ${w.hours} h${grew ? ` (button said ${w.marker_hours} h)` : ""}`;
+}
+
+function debWinRange(w) {
+  const iso = (t) => new Date(t * 1000).toISOString().slice(11, 16) + "Z";
+  return `${iso(w.start_ts)} → ${iso(w.end_ts)}` + (w.hours != null ? ` · ${w.hours} h` : "");
 }
 
 async function debFromLog() {
   const sel = document.getElementById("debSession");
   const ses = (Deb.sessions || [])[parseInt(sel && sel.value, 10)];
   if (!ses) { Deb.trackMsg = "No backfilled session to load."; return paintDebrief(); }
+  const marker = !!(document.getElementById("debUseMarker") || {}).checked;
   Deb.trackBusy = true; Deb.trackMsg = ""; paintDebrief();
   try {
+    // The Lab sends the session, not the bounds: the window is resolved server-side from the
+    // agent's derived `window` so every caller of this route gets the same race.
     const r = await jsonOrFriendly(await apiPost("/api/debrief/track/from-log",
-      { race_id: Deb.raceId, start_ts: ses.start_ts, end_ts: ses.end_ts, name: ses.name }));
+      { race_id: Deb.raceId, session_id: ses.id, start_ts: ses.start_ts, end_ts: ses.end_ts,
+        name: ses.name, use_marker: marker }));
     Deb.trackMsg = r.ok ? `Loaded ${r.n} fixes from the boat log ("${ses.name}")` +
+      (r.window ? ` over ${debWinRange(r.window)}${r.window.kind === "derived" ? " (derived, not the button)" : " (the button's window)"}` : "") +
       (r.sail_changes ? ` + ${r.sail_changes} sail change(s)` : "") + "."
       : (r.detail || "boat-log fetch failed");
   } catch (e) { Deb.trackMsg = "boat-log fetch failed: " + (e.message || e); }
