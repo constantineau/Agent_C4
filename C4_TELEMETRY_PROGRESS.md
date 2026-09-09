@@ -30,23 +30,45 @@ back to the marker (tested path). Today's numbers came from current code run aga
 in throwaway containers. `docker compose -f compose.dev.yml up -d --build agent lab` to see it in
 the browser. Note the lab image **bakes `vps/lab/web/`**, same as the console.
 
+**Also done today: 0d — the retention prune keeps the derived window** (`session_windows()` takes
+the archive connection and returns marker **and** derived, so the kept set can only grow;
+`pi/archiver/Dockerfile` now copies `shared/`; `backfill.py` session mode passes its connection
+too). Two findings, both from running it against the real 2026-08-30 pull:
+- 🔎 **The 18:52:20 tap was a START, not a stop.** The boat's `engine.db` has a **third** session,
+  `Race 2026-07-18 18:52Z`, open to this day — starting one auto-closes the last. So Jul 18's
+  hours were never on the deletion path (the old open question is settled), and **retention has
+  been effectively disabled on the boat since Jul 18**: one open session protects everything.
+  Close it from the iPad when the boat is back. Only *closed* markers are uplinked, which is why
+  the cloud thinks that race lasted 1 h 49 m.
+- ⚠️ **A bucketed window's edge is not the edge.** Motion is read in 5-minute buckets labelled
+  with their START, so an unpadded keep-window deletes up to five minutes off the tail of every
+  race — measured, 4 rows of a five-hour sail, every prune. Padded by one bucket each side.
+
 **Do these next, in this order:**
-- 0d. 🔴 **Wire `race_window` into the onboard retention prune** (`pi/archiver/archiver.py:357`) —
-  unchanged from yesterday and now the top item. The one place a wrong window **deletes** data.
 - 0e. **A — the trust layer** on the debrief. ⚠️ The gating rule (refuse vs down-weight `danger`
   bins) is Cole's call; do not pick it unilaterally.
-- **Merge `dev` → `main`?** Still open, still Cole's call. `main` is at `c525e66`; `dev` now
-  carries the race-window work **and** today's debrief change.
+- **When the boat is back:** rebuild the **archiver** image too (it needs `shared/` now, or it
+  prunes on markers alone and says so every hour), and close session 3.
 - Small follow-up still queued: the heading `warn` flickers across the 15° threshold (80 `warn` /
   19 `ok` between 22:08Z and the kick) — wants the same dwell median the bank tile got.
+- Open question for Cole: should a session **auto-close** after N hours not under way? One
+  mis-tap currently disables retention indefinitely.
 
-Tests: **26 files + 10 pytest cases.** New: `vps/lab/test_debrief_window.py` (17 assertions; the
-ones that matter assert **what interval the route asks the agent for**, not what the resolver
-prefers). Lab tests need fastapi — run them in a throwaway container with the repo mounted:
-`docker run --rm -v $PWD/vps/lab/app:/srv/app:ro -v $PWD/shared:/srv/shared:ro -v
-$PWD/vps/lab/test_debrief_window.py:/srv/test_debrief_window.py:ro -w /srv sr33-dev-lab python
-test_debrief_window.py` — cleaner than `docker cp` into the running container, which leaves it
-running a mix of two builds.
+**Branches: `dev` and `main` are both pushed and level** (the debrief change merged as `81aa3c7`;
+the prune change follows it). The public **c4.racertracer.net dashboard is back up** — it had been
+502 since the bench stack was taken down; rebuilt from `dev`, so it serves September's tiles.
+⚠️ Its engine's `/health/sensors` and `/conditions/full` return **500** until the bench
+`archiver` runs (the engine mounts the archive read-only and there was no writer to open it); the
+bench archive is 14.6 GB of the replayed 2014 sample loop and wants wiping first.
+
+Tests: **27 files + 10 pytest cases.** New: `vps/lab/test_debrief_window.py` (17 assertions) and
+`pi/archiver/test_prune_window.py` (12). In both, the assertions that matter test the **read
+path** — what interval the route asks the agent for, what rows are still on disk after a prune —
+not what the resolver returns. Archiver tests need `websockets`, lab tests need fastapi; run each
+in a throwaway container off its own image with the repo mounted:
+`docker run --rm -v $PWD/pi/archiver:/app/pi-archiver:ro -v $PWD/shared:/app/shared:ro -w /app
+sr33-pi-archiver python pi-archiver/test_prune_window.py` — cleaner than `docker cp` into a
+running container, which leaves it serving a mix of two builds.
 
 ## Previous resume block (2026-09-08 — read this next, then "Session 2026-09-08" below)
 

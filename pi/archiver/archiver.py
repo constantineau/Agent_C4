@@ -30,6 +30,14 @@ from pathlib import Path
 
 import websockets
 
+# The retention prune keeps race-session windows, and a window derived from the record beats one
+# derived from a button press (see `session_windows`). Guarded: an image built before `shared/`
+# was copied in must still record — it just prunes on the markers alone, loudly.
+try:
+    from shared import n2k_sources, race_window
+except ImportError:                     # pragma: no cover - image without shared/
+    n2k_sources = race_window = None
+
 # Writes are offloaded to executor threads (fsync on a slow SD card shouldn't stall the
 # event loop), so the connection is shared across threads and a lock serializes writers.
 _WRITE_LOCK = threading.Lock()
@@ -342,16 +350,120 @@ def _iso(epoch):
     return datetime.fromtimestamp(epoch, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
 
 
-def session_windows(engine_db=None):
-    """[(start_iso, end_iso)] from the engine's sessions table; None = unreadable (DON'T prune)."""
+MOTION_PATHS = ("navigation.speedOverGround", "navigation.courseOverGroundTrue")
+# How far either side of a marker to read motion when deriving. The whole point is that the
+# marker may have stopped early, so look a long way past it — but bound it so one session cannot
+# scan a season. Same numbers the cloud agent uses.
+DERIVE_BEHIND_S = 6 * 3600
+DERIVE_AHEAD_S = 24 * 3600
+# Motion is read in buckets; the keep-window is widened by one on each side (see _derived_window).
+DERIVE_BUCKET_S = 300
+_DERIVED_CACHE = {}         # (session id, start, end) -> window, for sessions that can't change
+
+
+def motion_series(conn, t0, t1, bucket_s=300):
+    """[(epoch_s, sog_kn, cog_deg)] from the archive, one sample per `bucket_s`, from a SINGLE
+    source — the boat's own record, read the same way the cloud agent reads it. A series that
+    alternates between the two GPSs is a series of manufactured turns, and `find_turnaround`
+    would read them as the end of a race.
+
+    The archiver never stores AIS (own-ship contexts only), so unlike the cloud there is nothing
+    to exclude here — but the source still has to be CHOSEN, not merged."""
+    import math
+    # SQLite's built-in trig is a compile-time option; these always exist.
+    conn.create_function("m_sin", 1, math.sin)
+    conn.create_function("m_cos", 1, math.cos)
+    rows = conn.execute(
+        "SELECT source, CAST(strftime('%s', time) AS INTEGER) / ? * ? AS b, "
+        "  avg(CASE WHEN path = ? THEN value END) AS sog, "
+        "  avg(CASE WHEN path = ? THEN m_sin(value) END) AS cs, "
+        "  avg(CASE WHEN path = ? THEN m_cos(value) END) AS cc "
+        "FROM readings WHERE boat_id = ? AND path IN (?, ?) "
+        "AND time >= ? AND time <= ? AND value IS NOT NULL GROUP BY 1, 2 ORDER BY 2",
+        (int(bucket_s), int(bucket_s), MOTION_PATHS[0], MOTION_PATHS[1], MOTION_PATHS[1],
+         BOAT_ID, MOTION_PATHS[0], MOTION_PATHS[1], _iso(t0), _iso(t1))).fetchall()
+    by_source = {}
+    for src, b, sog, cs, cc in rows:
+        by_source.setdefault(src, []).append((float(b), sog, cs, cc))
+    best, _resolved = race_window.choose_motion_source(by_source, n2k_sources.devices_for(BOAT_ID))
+    if best is None:
+        return []
+    return [(b, None if sog is None else float(sog) * 1.943844,
+             None if cs is None or cc is None else math.degrees(math.atan2(float(cs), float(cc))))
+            for b, sog, cs, cc in by_source[best]]
+
+
+def _derived_window(conn, sessions, s, now):
+    """The window `shared/race_window` derives for one marker, as (start_iso, end_iso)."""
+    if s["end_ts"] is None:
+        return None                     # an open session already reaches into the future
+    key = (s["id"], s["start_ts"], s["end_ts"])
+    settled = now - s["end_ts"] > 3600  # a race that ended an hour ago cannot grow new telemetry
+    if settled and key in _DERIVED_CACHE:
+        return _DERIVED_CACHE[key]
+    motion = motion_series(conn, s["start_ts"] - DERIVE_BEHIND_S, s["end_ts"] + DERIVE_AHEAD_S,
+                           bucket_s=DERIVE_BUCKET_S)
+    w = race_window.derive(sessions, motion, anchor_ts=s["start_ts"])
+    if not w:
+        return None
+    # ⚠ A bucketed sample is labelled with the START of its bucket, so the derived end lands up
+    # to one bucket BEFORE the last reading it was derived from — and here that difference is
+    # deleted, not merely hidden (measured: 4 rows of a five-hour sail, every prune, forever).
+    # Widen the keep-window by a bucket on each side. Quantising a continuous quantity
+    # reintroduces discontinuities; the honest fix is to keep the quantisation error, not to
+    # pretend the edge is exact.
+    out = (_iso(w["start_ts"] - DERIVE_BUCKET_S), _iso(w["end_ts"] + DERIVE_BUCKET_S))
+    if w["hours"] > w["marker_hours"] + 0.02:
+        print(f"[archive] session {s['id']}: the record supports {w['hours']:.2f} h, the button "
+              f"recorded {w['marker_hours']:.2f} h — keeping the derived window too "
+              f"({'; '.join(w['provenance']) or 'no reason given'})", flush=True)
+    if settled:
+        _DERIVED_CACHE[key] = out
+    return out
+
+
+def session_windows(engine_db=None, conn=None):
+    """Everything the prune must KEEP, as [(start_iso, end_iso)]; None = unreadable (DON'T prune).
+
+    The markers are taps on the iPad's ⏺ LOG button, and Jul 18 2026 is what trusting them costs:
+    the stop was caught during a kite hoist and written 4.2 s before the sail bar registered the
+    hoist, claiming 1 h 49 m of a 7 h race. Shore-side that is a short debrief. HERE it is
+    different in kind — everything after 18:52 is out-of-session, so the retention prune puts the
+    rest of the race on the DELETION path, on the boat, against "lose no telemetry".
+
+    So when the archive is available (`conn`), every closed marker is also widened by
+    `shared/race_window`, derived from the boat's own record, and BOTH windows are returned. The
+    kept set can only grow: a derivation that is wrong, that raises, or that is missing entirely
+    can never delete something the old behaviour would have kept."""
     try:
         ec = sqlite3.connect(f"file:{engine_db or ENGINE_DB}?mode=ro", uri=True, timeout=10)
-        rows = ec.execute("SELECT start_ts, end_ts FROM sessions").fetchall()
+        rows = ec.execute("SELECT id, race_id, start_ts, end_ts FROM sessions").fetchall()
         ec.close()
     except Exception:
         return None
     now = datetime.now(timezone.utc).timestamp()
-    return [(_iso(a), _iso(b if b is not None else now + 86400)) for a, b in rows]
+    sessions = [{"id": i, "race_id": rid, "start_ts": float(a),
+                 "end_ts": None if b is None else float(b)} for i, rid, a, b in rows]
+    wins = [(_iso(s["start_ts"]),
+             _iso(s["end_ts"] if s["end_ts"] is not None else now + 86400)) for s in sessions]
+    if conn is None or not sessions:
+        return wins
+    if race_window is None:
+        # Never silently: a prune keeping only the button's windows is exactly the failure this
+        # code exists to prevent, and it must not look like a working one.
+        print("[archive] prune: shared/race_window is not in this image — keeping ONLY the "
+              "button's windows; rebuild the archiver", flush=True)
+        return wins
+    for s in sessions:
+        try:
+            w = _derived_window(conn, sessions, s, now)
+        except Exception as exc:
+            print(f"[archive] session {s['id']}: window derivation failed "
+                  f"({type(exc).__name__}: {exc}) — keeping the marker window", flush=True)
+            continue
+        if w:
+            wins.append(w)
+    return wins
 
 
 def prune(conn, engine_db=None, retain_days=None):
@@ -360,7 +472,7 @@ def prune(conn, engine_db=None, retain_days=None):
     days = RETAIN_DAYS if retain_days is None else float(retain_days)
     if days <= 0:
         return None
-    wins = session_windows(engine_db)
+    wins = session_windows(engine_db, conn=conn)
     if wins is None:
         print("[archive] prune SKIPPED — engine sessions table unreadable (never delete blind)",
               flush=True)
