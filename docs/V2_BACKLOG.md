@@ -712,29 +712,108 @@ fallback (that is the onboard design), so a blocked call degrades instead of bre
   queued yet; it needs a decision about what the engine should *do* when heading is untrusted,
   and `sensor_health` deliberately reports rather than substitutes.
 
-### 🔎 Jul 15 vs Jul 18 — three channels the boat HAD and then didn't (2026-09-09)
+### ✅ Per-config polars from the instruments — a working prototype of item C (2026-09-09)
 
-The first thing the two-race corpus produced, in four queries. Both races are now full-res in
-Postgres, so channel coverage can be diffed between a healthy race and the broken one:
+`tools/analysis/perf_by_config.py` measures what item C proposes: boat speed vs the ORC polar per
+**sail configuration**, from measured wind and STW rather than from the shape of a track. Jul 15
+needed no playbook for this — Cole's point — and it produced 17 bins with ≥ 60 s of evidence:
 
-| channel | Jul 15 | Jul 18 | |
-|---|---|---|---|
-| `electrical.batteries.1.voltage/current/temperature` | 5,547 each | **0** | a whole second bank, gone |
-| `environment.current.setTrue` / `drift` | 5,750 each | **0** | set and drift — a tactical input on the Mac |
-| `environment.depth.belowKeel` / `transducerToKeel` | 5,751 each | **0** | the sounder is fine (`belowTransducer` 32,637 on Jul 18); the **keel offset** is what disappeared, so the one depth number a sailor steers by is not published |
-| `electrical.batteries.0.voltage` | 4,381 | 23,355 | still there, and the rate changed 0.05 → 0.27 Hz |
+```
+A3      1064 s   90.5% of polar        S2      842 s   83.9%
+A3+SS    320 s   86.1%                 S2+SS   187 s   94.4%
+```
 
-**The battery one deserves attention.** Jul 18's story is a house bank sagging 12.91 → 11.61 V
-over six hours with nobody warned. Bank 0 publishes **voltage only** — but three days earlier
-bank 1 was publishing **current and temperature** as well, and current is precisely what
-distinguishes "discharging faster than we charge" from "a slow sag". Whether bank 1 is the house
-or the start bank is a question for Cole; either way the boat lost that channel between two races
-three days apart, and nothing noticed.
+Two things it exposed immediately:
 
-None of this is a code bug — it is the *record* telling us the boat's instrument coverage
-regressed. Worth (a) asking Cole what changed on the boat between Jul 15 and Jul 18, (b) checking
-these three against the live bus when the boat is back, and (c) making the diff a script, because
-it took four queries by hand and should run against every future race.
+- 🔴 **`config_at()` extrapolates the last sail-log entry forever.** The Jul 15 log's final entry
+  is `00:00:46 S2`; at 00:02 the boat rounds up (TWA 134° → 41°, STW 6.7 → 2.0 kn) and beats home
+  — and every second of that is still attributed to the **spinnaker**. It shows up as
+  "S2 at 30° TWA, 29.9% of polar", a bin that is pure artifact and would teach the boat model
+  that the kite is slow. The debrief's own `_performance_bins` is *partially* shielded by a
+  `twa < 30` floor, an 80th-percentile-per-cell rule and a minimum sample count — but that
+  shielding is incidental, and a stale config between 30° and 60° still bins. A config needs an
+  expiry or a plausibility gate — but ⚠️ **not** a gate against `sr33_crossovers.json`'s rated
+  envelope, which was this file's first suggestion and is wrong: the crew really does fly
+  combinations (A3 + staysail, S2 + staysail — confirmed by Cole 2026-09-09) that the certificate
+  cannot rate, and gating on the cert would throw away exactly the data worth having. The gate has
+  to be **physics, not rating**: no spinnaker of any kind below ~60° TWA. Better still, treat the
+  contradiction as a signal — if the logged config is impossible for the boat's current TWA for
+  more than a minute or two, the crew doused without logging it, and the window should be marked
+  **unattributed** rather than silently credited to the wrong sail.
+- **The debrief bins against GRIB wind, not the boat's.** `_performance_bins` calls
+  `wf.wind_at(lat, lon, epoch)` — a forecast field — while the boat recorded TWS/TWA at ~10 Hz
+  from `n2k-socketcan.15`. That is exactly the substitution item C is for, and Jul 15 shows the
+  measured inputs are there.
+
+**The staysail is the answer to "why bother measuring per-config".** Paired *within* a (TWS, TWA)
+cell — the only comparison that controls for conditions, since each config was otherwise flown in
+its own slice of the race — Jul 15 says:
+
+```
+TWS 10  TWA 135:  A3+SS 6.73   A3 6.64 (-0.09)   S2 6.45 (-0.28)
+TWS 10  TWA 150:  S2+SS 6.21 (+0.29)   S2 5.92   A3+SS 5.33 (-0.59)
+TWS 10  TWA 165:  S2    5.82          A3+SS 4.78 (-1.04)
+TWS 12  TWA 135:  S2+SS 7.17   S2 7.13 (-0.04)
+```
+
+The staysail never cost anything and was worth up to +0.29 kn — and **the ORC certificate has no
+opinion on it**, because it isn't in the rated inventory. Meanwhile the measured A3↔S2 crossover
+lands right where the certificate puts it (142.5° at TWS 10: A3 fastest at 135°, the symmetric
+fastest at 150° and 165°), which is a useful validation of the polar the optimizer runs on.
+
+⚠️ Honest limits on those numbers: one race, 54–377 s per cell, medians of 1 Hz samples, and the
+two configs in a cell were sailed at *different times*, so conditions drift is uncontrolled. The
+direction is consistent across all four cells; the magnitudes are not yet trustworthy. More races
+in the corpus is what fixes that — which is an argument for keeping every future race in Postgres.
+
+⚠️ **A latent trap, deliberately not a bug today.** The crew's sail vocabulary and the ORC
+crossover table's do not agree: the bar logs `S2` and `SS`, the table knows `J1`, `A3` and `S1`
+(its "S2-A" is *named* `S1`) and has no staysail at all. `config_at()`'s docstring says the
+non-join is intentional — "the crew innovates, the data follows" — and nothing joins them today.
+Anyone who later matches crew configs against crossover names gets silent no-matches, which is
+the `source_priority` failure exactly.
+
+### 🔴 The dev database mixes BENCH data with boat data under the same `boat_id` (2026-09-09)
+
+**This section previously claimed the boat "lost" three channels between Jul 15 and Jul 18 —
+battery bank 1 (voltage/current/temperature), current set/drift, and the keel offset. That was
+wrong, and the way it was wrong is the finding.** Every one of those paths comes from
+`n2k-sample-data.115/129/160` — the bench stack replaying Signal K's 2014 sample log on this VPS,
+posting to the dev ingestion endpoint under **`boat_id=sr33`**. The bench was running on Jul 15
+and not on Jul 18, so its channels appear and disappear exactly like a boat losing instruments.
+
+```
+electrical.batteries.1.voltage   n2k-sample-data.129   12.49 - 14.59 V   <- the bench
+electrical.batteries.0.voltage   n2k-socketcan.15      10.93 - 12.33 V   <- the boat
+```
+
+**Consequences, in order of how much they cost:**
+
+1. **Any analysis of `sr33_dev` that does not filter by source is contaminated.** The read paths
+   are mostly safe — `/racelog/track` ranks sources per second, `choose_motion_source()` prefers
+   resolved devices — but ad-hoc SQL, `series()` (which merges sources) and any hand-written
+   sweep are not. A channel census in particular is meaningless without a source filter.
+2. **Fix it at the source: give the bench its own `boat_id`** (`sr33-bench`) in
+   `compose.pi.sample.yml`, so it can never again be mistaken for the boat. The bench `uplink` is
+   not currently running, so nothing is being written today — do this before it is started again.
+3. The bench also explains the `n2k-sample-data.160` motion publisher that `race_window`
+   already defends against for the Jul 8 session. That defence exists because of this; it just
+   was not generalised to everything else that reads the database.
+
+**What is actually true about the bank, measured from the boat's own publisher only:**
+
+```
+Jul 15 race window   socketcan.15   10.93 - 12.33 V   mean 11.69   4,925 samples
+Jul 18 race window   socketcan.15   11.08 - 12.39 V   mean 11.67   9,906 samples
+```
+
+The bank was **already sitting at ~11.7 V during the Jul 15 race**, three days before the Mac.
+So the Jul 18 story is not "a healthy bank went flat in one race" — it is a bank that was low to
+begin with, and the documented `12.91 → 11.61 V` figure describes a trend within that window, not
+the boat's normal state. It also explains why the tile flapped 16 times on Jul 15 and why
+`danger` never fires on Jul 18: **the 11.60 V danger line sits in the middle of this boat's
+ordinary operating voltage.** Whether that voltage is *safe* depends on chemistry and capacity,
+which is still the question only Cole can answer — and it is now the most valuable one on the list.
 
 ### 🔴 The sail log counts TAPS, not sail changes (found 2026-09-09, by Cole asking "48?!")
 
