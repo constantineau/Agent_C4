@@ -186,8 +186,13 @@ def _score_actual_track(race_id, oracle, marks, start_epoch, wf, cur=None, wave=
                 "note": "no boat track for this race — upload a GPX or fetch our YB track below"}
     try:
         from . import polars as POL
-        return track.score_track(t, oracle, marks, start_epoch, wf=wf, polars=POL.polars_stw(), cur=cur,
-                                 wave=wave, wave_coeffs=boats.active_wave_coeffs())
+        scored = track.score_track(t, oracle, marks, start_epoch, wf=wf, polars=POL.polars_stw(), cur=cur,
+                                   wave=wave, wave_coeffs=boats.active_wave_coeffs())
+        # Boat-log tracks know the window they were cut to (derived vs the ⏺ LOG button). Every
+        # number above is a number ABOUT that window, so it travels with them.
+        if t.get("window"):
+            scored = {**scored, "window": t["window"]}
+        return scored
     except Exception as e:
         return {"available": False, "note": f"track scoring failed: {type(e).__name__}"}
 
