@@ -44,15 +44,35 @@ too). Two findings, both from running it against the real 2026-08-30 pull:
   with their START, so an unpadded keep-window deletes up to five minutes off the tail of every
   race — measured, 4 rows of a five-hour sail, every prune. Padded by one bucket each side.
 
+**Also done today: sessions auto-close** (Cole's call, 2026-09-09). `racelog.autoclose()` runs off
+the REC poll in `status()` — no new loop — and closes an open session at **the last moment the
+boat was under way**, once the record shows ≥ `RACELOG_AUTOCLOSE_IDLE_H` (12) hours stopped. Three
+refusals matter more than the feature, and all three are tested: **a quiet bus is not a parked
+boat** (needs ≥ 30 motion samples in the idle window, so a dead archiver or a powered-down boat
+never ends a race); **no under-way moment inside the session ⇒ refuse**, because picking an end
+for a weeks-old session would put those weeks on the deletion path; and an under-way moment that
+**predates** the session cannot end it (REC tapped at the dock after a sail would otherwise write
+`end_ts < start_ts`, a negative window the prune reads). `status()` reports `auto_closed` so the
+crew learns the boat ended their session. **This does not fix session 3** — the boat has been
+stopped for weeks, so it hits the second refusal; close that one from the iPad.
+
+**Off-box backups now exist** (2026-09-09, Cole's call): `gs://constantineau-c4-archive`,
+COLDLINE, `northamerica-northeast1`, **versioning on + a 1-year (unlocked) retention policy, no
+lifecycle rule**. Holds the whole 2026-08-30 boat pull (26 G → 3.06 GiB) with a
+`MANIFEST-sha256.txt` of every source hash, and the wiped bench volume (15.6 G → 2.25 G). Each
+file was hashed, compressed, decompressed and re-hashed **before** upload. ⚠️ Do NOT use
+`gs://constantineau-vps-backups` for anything you cannot lose — it has a lifecycle rule deleting
+every object at 30 days.
+
 **Do these next, in this order:**
 - 0e. **A — the trust layer** on the debrief. ⚠️ The gating rule (refuse vs down-weight `danger`
   bins) is Cole's call; do not pick it unilaterally.
-- **When the boat is back:** rebuild the **archiver** image too (it needs `shared/` now, or it
-  prunes on markers alone and says so every hour), and close session 3.
+- **When the boat is back:** rebuild the **archiver** image (it needs `shared/` now, or it prunes
+  on markers alone and says so every hour) and the **engine** (auto-close lives there), then close
+  session 3 from the iPad — auto-close deliberately will not.
 - Small follow-up still queued: the heading `warn` flickers across the 15° threshold (80 `warn` /
   19 `ok` between 22:08Z and the kick) — wants the same dwell median the bank tile got.
-- Open question for Cole: should a session **auto-close** after N hours not under way? One
-  mis-tap currently disables retention indefinitely.
+- Tests: `vps/agent/test_racelog.py` gained the auto-close section (8 assertions).
 
 **Branches: `dev` and `main` are both pushed and level** (the debrief change merged as `81aa3c7`;
 the prune change follows it). The public **c4.racertracer.net dashboard is back up** — it had been
