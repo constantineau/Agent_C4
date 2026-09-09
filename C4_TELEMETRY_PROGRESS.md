@@ -10,11 +10,14 @@ today: derived window in the debrief AND the prune, session auto-close, GCS Cold
 22 G reclaimed, the Jul 15 full-res backfill + control timeline, per-config polars, the bank
 retune, the sail-log dedupe, `sr33-bench`). What is NEXT:
 
-1. **A — the trust layer**, once Cole answers the gating question put to him 2026-09-09:
-   *refuse* vs *down-weight* bins from `danger` windows in `learning.propose()`. Recommended:
-   **refuse, per-channel, print what was refused** — safe now that the false-alarm rate is
-   measured 0.0% on the Jul 15 control. Run `sensor_health.assess()` across the derived window
-   server-side, trust timeline beside the track, stamp into `archive_debrief`.
+1. ~~**A — the trust layer**~~ ✅ **SHIPPED 2026-09-09** (Cole ruled: refuse, per-channel,
+   printed). `trust_window.py` + `GET /racelog/trust` on the agent; the Lab stores the sweep with
+   the track and `score_track` refuses danger-window samples from the learning inputs only.
+   Verified e2e on the live DB: Jul 18 refuses the −98° compass windows, the Jul 15 control
+   refuses nothing. Also fixed en route: duplicate session ids across engine-store generations
+   (Jul 8 + Jul 15 both id=1) resolve by `start_ts` now; sail log settles at **30 s** (Cole:
+   "it takes at least 30 seconds to change sails") — Jul 15 = 7 configurations, Jul 18 = 4.
+   Graphical trust timeline folded into B. Details: `docs/V2_BACKLOG.md` → "Debrief" → A.
 2. **C — measured wind into `_performance_bins`.** It bins against GRIB (`wf.wind_at`) while the
    boat recorded TWS/TWA at ~10 Hz. `tools/analysis/perf_by_config.py` is the working prototype
    (paired within-cell: the staysail paid in every cell where both configs were flown, and the

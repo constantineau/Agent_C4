@@ -327,10 +327,34 @@ def score_track(track, oracle, marks, start_epoch, wf=None, polars=None, cur=Non
     }
     cc = cur if (cur is not None and getattr(cur, "loaded", False)) else None
     wv = wave if (wave is not None and getattr(wave, "loaded", False)) else None
-    pol = _polar_pct(seg, epochs, wf, polars, cc, wv, wave_coeffs)
+    # TRUST GATE (item A; rule per Cole 2026-09-09: refuse, per-channel, print what was refused).
+    # Samples inside a channel's DANGER windows are excluded from everything that feeds the
+    # learning loop (polar %, helm %, perf_bins) — a (TWS,TWA) coordinate derived from a broken
+    # compass files data in the wrong bin, which no weight can fix. Track-shape metrics above
+    # (XTE, side, time-behind) stay on the full track: they read GPS geometry, not the compass.
+    # `unknown` is honest silence and is never refused. Refusals are counted and REPORTED —
+    # measured on Jul 18, this excludes the ~23 min of steady −98° compass fault inside the race
+    # window; on the healthy Jul 15 control it excludes nothing (0 danger segments).
+    trust = (track or {}).get("trust") or {}
+    dz = [(a, b, ch) for ch, iv in (trust.get("danger") or {}).items() for a, b in (iv or ())]
+    lseg, leps = seg, epochs
+    if dz:
+        kept = [(f, ep) for f, ep in zip(seg, epochs)
+                if ep is None or not any(a <= ep <= b for a, b, _ in dz)]
+        lseg = [f for f, _ in kept]
+        leps = [ep for _, ep in kept]
+    out["trust"] = {
+        "available": bool(trust.get("available")),
+        "refused_samples": len(seg) - len(lseg),
+        "refused_channels": sorted({ch for _, _, ch in dz}),
+        "danger_s": (trust.get("summary") or {}).get("danger_s"),
+        "line": ((trust.get("summary") or {}).get("line")
+                 if trust.get("available") else trust.get("note")),
+    }
+    pol = _polar_pct(lseg, leps, wf, polars, cc, wv, wave_coeffs)
     if pol:
         out.update(pol)
-    bins = _performance_bins(seg, epochs, wf, polars, cc, wv, wave_coeffs,
+    bins = _performance_bins(lseg, leps, wf, polars, cc, wv, wave_coeffs,
                              sail_log=(track or {}).get("sail_log"))
     if bins:
         out["perf_bins"] = bins                # observed-vs-polar by (TWS,TWA) cell — Lab-4 mining input
@@ -546,6 +570,9 @@ def save_track(race_id, track):
             # boat-log tracks carry the race window they were cut to (derived vs the ⏺ LOG
             # marker, with its provenance) — a track is only as trustworthy as its bounds
             "window": track.get("window"),
+            # ...and the trust sweep over that window (item A): per-channel segments + the
+            # danger intervals score_track refuses bins from
+            "trust": track.get("trust"),
             "sail_changes": len(track.get("sail_log") or [])}
     with open(_path(race_id), "w") as fh:
         # sail_log = the crew's timestamped CONFIGURATION history (boat-log tracks) — the
