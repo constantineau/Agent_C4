@@ -712,6 +712,30 @@ fallback (that is the onboard design), so a blocked call degrades instead of bre
   queued yet; it needs a decision about what the engine should *do* when heading is untrusted,
   and `sensor_health` deliberately reports rather than substitutes.
 
+### 🔎 Jul 15 vs Jul 18 — three channels the boat HAD and then didn't (2026-09-09)
+
+The first thing the two-race corpus produced, in four queries. Both races are now full-res in
+Postgres, so channel coverage can be diffed between a healthy race and the broken one:
+
+| channel | Jul 15 | Jul 18 | |
+|---|---|---|---|
+| `electrical.batteries.1.voltage/current/temperature` | 5,547 each | **0** | a whole second bank, gone |
+| `environment.current.setTrue` / `drift` | 5,750 each | **0** | set and drift — a tactical input on the Mac |
+| `environment.depth.belowKeel` / `transducerToKeel` | 5,751 each | **0** | the sounder is fine (`belowTransducer` 32,637 on Jul 18); the **keel offset** is what disappeared, so the one depth number a sailor steers by is not published |
+| `electrical.batteries.0.voltage` | 4,381 | 23,355 | still there, and the rate changed 0.05 → 0.27 Hz |
+
+**The battery one deserves attention.** Jul 18's story is a house bank sagging 12.91 → 11.61 V
+over six hours with nobody warned. Bank 0 publishes **voltage only** — but three days earlier
+bank 1 was publishing **current and temperature** as well, and current is precisely what
+distinguishes "discharging faster than we charge" from "a slow sag". Whether bank 1 is the house
+or the start bank is a question for Cole; either way the boat lost that channel between two races
+three days apart, and nothing noticed.
+
+None of this is a code bug — it is the *record* telling us the boat's instrument coverage
+regressed. Worth (a) asking Cole what changed on the boat between Jul 15 and Jul 18, (b) checking
+these three against the live bus when the boat is back, and (c) making the diff a script, because
+it took four queries by hand and should run against every future race.
+
 ### 🔴 The sail log counts TAPS, not sail changes (found 2026-09-09, by Cole asking "48?!")
 
 `/racelog/track` reported **48 sail changes** for the 1.5-hour Jul 15 race. It is 48 *records*,
