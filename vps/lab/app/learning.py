@@ -78,7 +78,8 @@ def _conn():
 # table, so ALTER them in idempotently (additive, never destructive — the DB-safety ethos).
 _ADDED = {
     "debriefs": [("helm_pct", "REAL"), ("sea_state_hs_mean", "REAL")],
-    "perf_bins": [("hs_mean", "REAL"), ("pct_flat", "REAL"), ("config", "TEXT")],
+    "perf_bins": [("hs_mean", "REAL"), ("pct_flat", "REAL"), ("config", "TEXT"),
+                  ("wind_source", "TEXT")],
     "proposals": [("kind", "TEXT DEFAULT 'boat_model'"), ("wave_json", "TEXT")],
 }
 
@@ -127,11 +128,13 @@ def archive_debrief(report, boat_id=None):
         did = cur.lastrowid
         for b in (at.get("perf_bins") or []):
             c.execute("""INSERT INTO perf_bins (debrief_id,boat_id,race_id,created_at,tws,twa,
-                         point_of_sail,samples,best_stw,target_stw,pct,hs_mean,pct_flat,config)
-                         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                         point_of_sail,samples,best_stw,target_stw,pct,hs_mean,pct_flat,config,
+                         wind_source)
+                         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                       (did, boat_id, report.get("race_id"), time.time(), b["tws"], b["twa"],
                        b["point_of_sail"], b["samples"], b["best_stw"], b["target_stw"], b["pct"],
-                       b.get("hs_mean"), b.get("pct_flat"), b.get("config")))
+                       b.get("hs_mean"), b.get("pct_flat"), b.get("config"),
+                       b.get("wind_source")))
         c.commit()
         return did
     finally:
@@ -238,6 +241,18 @@ def propose(boat_id):
         if not bins:
             return {"ok": False, "note": "no archived performance bins for this boat yet — run a "
                     "debrief with a boat track first"}
+        # ACTUAL polars only (Cole 2026-09-09): the boat model refines off measured angles and
+        # measured wind speed. GRIB-derived bins — including every bin archived before wind_source
+        # existed, all of which were forecast-based — are excluded and the exclusion is REPORTED.
+        # A polar taught by a forecast's idea of the wind is the phantom-bin failure at scale.
+        excluded = [b for b in bins if b.get("wind_source") != "measured"]
+        bins = [b for b in bins if b.get("wind_source") == "measured"]
+        races = {b["race_id"] for b in bins}
+        if not bins:
+            return {"ok": False,
+                    "note": f"no MEASURED-wind bins archived yet ({len(excluded)} forecast-based "
+                            f"bin(s) excluded) — re-run the debrief from a boat-log track; the "
+                            f"boat model only refines off the instruments"}
         # Refine off the FLAT-WATER-equivalent % (pct_flat = raw pct with the sea-state loss removed)
         # so helm_factor stays a flat-water number and doesn't double-count waves; older bins with no
         # pct_flat fall back to the raw pct (== flat when there was no sea-state field).
@@ -277,7 +292,8 @@ def propose(boat_id):
         summary = {"overall_pct": round(overall_pct), "n_samples": sn,
                    "by_point_of_sail": {k: round(sum(x["pct"]) / len(x["pct"]))
                                         for k, x in by_pos.items()},
-                   "races": sorted(races)}
+                   "races": sorted(races), "wind_source": "measured",
+                   "excluded_forecast_bins": len(excluded)}
         row = c.execute(
             """INSERT INTO proposals (created_at,boat_id,status,helm_current,helm_proposed,overall_pct,
                n_debriefs,n_bins,adjustments_json,summary_json) VALUES (?,?,?,?,?,?,?,?,?,?)""",

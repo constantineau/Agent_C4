@@ -923,9 +923,28 @@ Build order, agreed 2026-09-08:
   bins **unattributed**, never under the wrong sail. Measured e2e on the live Jul 15 race: 6,660
   of 6,660 fixes with measured wind, 57 bins, the phantom gone, and the staysail story confirmed
   in the cert's own cells (A3+SS @135° = 98%, A3 = 97%, S2+SS = 95%).
-  **Still open (C, second half):** cost per tack/gybe in seconds and boat-lengths, heel vs
-  target, rudder work, leeway — needs heel/rudder/RoT series, which the record has.
-  `vps/lab/test_debrief_measured_wind.py` — 15 checks.
+  `vps/lab/test_debrief_measured_wind.py` — 16 checks.
+
+  **Sharpened by Cole 2026-09-09: "just compute the polars off of the instruments — not off of
+  theoretical/forecast data."** Two consequences, both shipped the same day:
+  - `learning.propose()` refines the boat model off **measured bins only** — every bin now
+    carries `wind_source`, a cell is `measured` only when every sample's TWS *and* TWA came off
+    the boat, and GRIB/mixed bins (including everything archived before the tag existed) are
+    excluded *and counted* in the proposal summary. No measured bins ⇒ propose refuses, loudly.
+  - **`tools/analysis/observed_polar.py` — the boat's ACTUAL polar**, not a %-of-cert report:
+    observed p80 STW per measured (TWS, TWA[, config]) cell on a plain 2 kn × 10° grid, so
+    angles and combos the certificate doesn't rate stand on equal footing. Trust-gated,
+    kite-gated, bench sessions skipped. First build off the two races: **134 cells, 18 sailed in
+    both**, written to `backups/race-data/observed-polar.json`. Immediate signal in it: the boat
+    BEATS the cert deep (8 kn/140–150°: 6.03 obs vs 4.73 rated — soft downwind rating the
+    optimizer should know about), A3+J1 vs A3+SS have a real measured crossover near 135–140°,
+    and there is a full J1+J3 heavy-air beat table (16–28 kn) from Jul 18 that the cert only
+    guesses at.
+  - Deprioritized per the same direction: tack/gybe cost, heel-vs-target, rudder work (the
+    record has the series; build when the polar loop is closed).
+  - **Next link in this chain:** feed the observed polar into the gameplan/optimizer through the
+    existing human-approval flow — run a real debrief over the boat-log tracks so the measured
+    bins archive, then `propose()` → Cole approves → the overlay bites `_polar_speed`.
 - **B. A decision timeline — what the crew saw, next to what was true.** `timeline-fullrace/`
   already holds 1,091 frames of every engine endpoint across that race: a recording of the iPad.
   Scrub it against the oracle route — 19:23Z off-book, 20:40Z bank dies, 22:08Z compass warning,

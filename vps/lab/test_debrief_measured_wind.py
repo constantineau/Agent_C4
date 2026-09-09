@@ -44,8 +44,8 @@ def fixes(n, tws=10.0, twa=120.0, stw=6.83, measured=True):
 
 print("_fix_wind:")
 f = fixes(1)[0]
-check("measured wind on the fix wins, no windfield needed",
-      T._fix_wind(f, T0, None, None) == (10.0, 120.0, 6.83))
+check("measured wind on the fix wins, no windfield needed — and says so",
+      T._fix_wind(f, T0, None, None) == (10.0, 120.0, 6.83, "measured"))
 check("a negative TWA (port tack) folds to its magnitude",
       T._fix_wind({**f, "twa": -120.0}, T0, None, None)[1] == 120.0)
 check("no measured wind + no windfield -> None, not a crash",
@@ -61,8 +61,9 @@ class FakeWF:
 
 check("...and a fix WITH measured wind ignores the windfield entirely",
       T._fix_wind(f, T0, FakeWF(), None)[0] == 10.0)
-check("a bare fix falls back to GRIB",
-      T._fix_wind({"lat": 45, "lon": -83, "sog": 6.0, "cog": 0.0}, T0, FakeWF(), None)[0] == 14.0)
+check("a bare fix falls back to GRIB — and is labelled as forecast",
+      T._fix_wind({"lat": 45, "lon": -83, "sog": 6.0, "cog": 0.0}, T0, FakeWF(), None)
+      == (14.0, 60.0, 6.0, "grib"))
 
 print("\n_polar_pct from instruments alone:")
 seg = fixes(30)
@@ -99,6 +100,9 @@ check("a staysail alone is never mistaken for a kite (SS has no digit)",
       T._config_plausible("SS+J1", 40.0) is True)
 check("a code zero at 50° is left alone — codes point higher than kites",
       T._config_plausible("C0", 50.0) is True)
+check("every bin from an instrumented track is tagged measured — one forecast sample would "
+      "disqualify a cell from refinement",
+      bins and all(b.get("wind_source") == "measured" for b in bins))
 check("S2 at 40° is implausible", T._config_plausible("S2", 40.0) is False)
 check("no TWA at all gates nothing", T._config_plausible("S2", None) is True)
 
