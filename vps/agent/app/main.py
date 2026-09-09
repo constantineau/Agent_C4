@@ -339,7 +339,13 @@ def racelog_track(start: float, end: float, max_points: int = 2000):
     t0 = datetime.fromtimestamp(float(start), tz=timezone.utc)
     t1 = datetime.fromtimestamp(float(end), tz=timezone.utc)
     paths = ("navigation.position.latitude", "navigation.position.longitude",
-             "navigation.speedOverGround", "navigation.courseOverGroundTrue")
+             "navigation.speedOverGround", "navigation.courseOverGroundTrue",
+             # Measured wind + speed-through-water ride on each fix (item C): the debrief bins
+             # against what the boat MEASURED at 5-28 Hz, not a GRIB forecast's idea of the hour.
+             # Per-second source ranking applies to these like everything else, so `derived-data`
+             # only speaks where the instrument does not.
+             "environment.wind.speedTrue", "environment.wind.angleTrueWater",
+             "navigation.speedThroughWater")
     # Two filters, both added 2026-09-07, both measured on the Jul 18 race window:
     #
     #   1. **Exclude AIS-bearing sources.** Without it this query mixes other vessels' fixes
@@ -391,7 +397,10 @@ def racelog_track(start: float, end: float, max_points: int = 2000):
         if paths[0] in b and paths[1] in b:
             fixes.append({"t": t, "lat": b[paths[0]], "lon": b[paths[1]],
                           "sog": round(b[paths[2]] * 1.943844, 2) if paths[2] in b else None,
-                          "cog": round(b[paths[3]] * 57.29577951308232, 1) if paths[3] in b else None})
+                          "cog": round(b[paths[3]] * 57.29577951308232, 1) if paths[3] in b else None,
+                          "tws": round(b[paths[4]] * 1.943844, 2) if paths[4] in b else None,
+                          "twa": round(b[paths[5]] * 57.29577951308232, 1) if paths[5] in b else None,
+                          "stw": round(b[paths[6]] * 1.943844, 2) if paths[6] in b else None})
     if len(fixes) > int(max_points):          # even thinning — the debrief doesn't need 1 Hz
         step = len(fixes) / float(max_points)
         fixes = [fixes[int(i * step)] for i in range(int(max_points))]

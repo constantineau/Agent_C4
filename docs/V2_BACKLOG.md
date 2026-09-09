@@ -911,11 +911,21 @@ Build order, agreed 2026-09-08:
     `resolve_log_window` now discriminates on `start_ts` first.
   - Still open from A's original sketch: a graphical trust timeline beside the track (the card
     shows the text line today) — fold into B, whose scrubber is the natural home.
-- **C. Performance from instruments, not geometry.** Helm % is inferred from track shape today.
-  With STW, AWA/AWS, heel, rudder angle and rate-of-turn at 5–28 Hz it can be *measured*: cost
-  per tack and gybe in seconds and boat-lengths, heel vs target, rudder work as a trim/balance
-  proxy, leeway, and target-speed deficit per (TWS, TWA) bin **with the sail config attached**,
-  which the crew already logs.
+- **✅ C (first half) — SHIPPED 2026-09-09: the bins read the instruments.** Boat-log fixes now
+  carry measured TWS/TWA/STW (ranked per second aboard, like every other channel), and
+  `_fix_wind` prefers them over GRIB — the forecast stays only as the fallback for GPX/YB tracks,
+  and `wind_source` on the score says which was used. `_polar_pct` and `_performance_bins` run
+  with **no windfield at all** on a boat-log track. The stale-config gate shipped with it:
+  `config_at()` extrapolates the last sail-log entry forever, so Jul 15's beat home was credited
+  to the spinnaker ("S2 at 30° TWA, 29.9% of polar" — a bin that teaches the boat model the kite
+  is slow). The gate is PHYSICS (no A*/S* kite below `KITE_MIN_TWA_DEG=55`), never the crossover
+  chart — crew combos the certificate can't rate are real data (Cole) — and an implausible window
+  bins **unattributed**, never under the wrong sail. Measured e2e on the live Jul 15 race: 6,660
+  of 6,660 fixes with measured wind, 57 bins, the phantom gone, and the staysail story confirmed
+  in the cert's own cells (A3+SS @135° = 98%, A3 = 97%, S2+SS = 95%).
+  **Still open (C, second half):** cost per tack/gybe in seconds and boat-lengths, heel vs
+  target, rudder work, leeway — needs heel/rudder/RoT series, which the record has.
+  `vps/lab/test_debrief_measured_wind.py` — 15 checks.
 - **B. A decision timeline — what the crew saw, next to what was true.** `timeline-fullrace/`
   already holds 1,091 frames of every engine endpoint across that race: a recording of the iPad.
   Scrub it against the oracle route — 19:23Z off-book, 20:40Z bank dies, 22:08Z compass warning,

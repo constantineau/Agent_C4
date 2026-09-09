@@ -21,6 +21,7 @@ boat NEVER follows the optimal line exactly, so these are coaching deltas, never
 import json
 import math
 import os
+import re
 import struct
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -428,7 +429,47 @@ def _speed_angle(f, ep, twd, cur):
                 sog, cog = _water_velocity(sog, cog, cset, cdrift)
         except Exception:
             pass
-    return sog, abs(optimizer._wrap180(cog - twd))
+    return sog, (None if twd is None else abs(optimizer._wrap180(cog - twd)))
+
+
+def _fix_wind(f, ep, wf, cur):
+    """(tws_kn, twa_deg, stw_kn) for one fix — MEASURED where the fix carries it, GRIB else.
+
+    Item C: boat-log fixes carry the instruments' own TWS/TWA/STW (5–28 Hz aboard, ranked per
+    second), which is what the polar comparison is actually about. The GRIB path stays for
+    GPX/YB tracks, which carry position only — a forecast's idea of the hour is better than
+    nothing, and it is labelled (`wind_source` on the score). Returns None when neither knows."""
+    if f.get("tws") is not None and f.get("twa") is not None and f["tws"] > 0:
+        stw = f.get("stw")
+        if stw is None:
+            stw, _ = _speed_angle(f, ep, None, cur)
+        return f["tws"], abs(f["twa"]), stw
+    if wf is None or not getattr(wf, "loaded", False):
+        return None
+    try:
+        tws, twd = wf.wind_at(f["lat"], f["lon"], ep)
+    except Exception:
+        return None
+    if not tws or tws <= 0:
+        return None
+    stw, twa = _speed_angle(f, ep, twd, cur)
+    return tws, twa, stw
+
+
+# A3/S2 below ~55° TWA sustained is not a sail plan, it is a stale log entry: the crew doused
+# without tapping (measured on Jul 15 2026 — the last entry says S2 at 00:00:46Z, the boat rounds
+# up at 00:02 and beats home, and every second of the beat was credited to the spinnaker as
+# "S2 at 30° TWA, 29.9% of polar"). The gate is PHYSICS, not the crossover chart — crew combos
+# the certificate can't rate (A3+SS, S2+SS) are real data and must never be gated on rating.
+# Codes (C0) point higher than kites and are deliberately not gated.
+_KITE = re.compile(r"^[AS]\d+$")
+KITE_MIN_TWA_DEG = float(os.environ.get("KITE_MIN_TWA_DEG", "55"))
+
+
+def _config_plausible(cfg, twa):
+    if cfg is None or twa is None:
+        return True
+    return not (twa < KITE_MIN_TWA_DEG and any(_KITE.match(t) for t in cfg.split("+")))
 
 
 def _polar_pct(seg, epochs, wf, polars, cur=None, wave=None, wave_coeffs=None):
@@ -438,20 +479,18 @@ def _polar_pct(seg, epochs, wf, polars, cur=None, wave=None, wave_coeffs=None):
       - `helm_pct` — the sea-state loss divided back out (achieved / (polar × wave_factor)) → a
         FLAT-WATER-EQUIVALENT helm efficiency (waves excused). With no wave field, helm_pct == polar_pct.
     Both can exceed 100% (a soft ORC rating / sailing above the cert). Needs windfield + polars, else None."""
-    if wf is None or polars is None or not getattr(wf, "loaded", False):
+    has_measured = any(f.get("tws") is not None for f in seg)
+    if polars is None or (not has_measured and (wf is None or not getattr(wf, "loaded", False))):
         return None
     P = polars
     ratios, helm_ratios, hss = [], [], []
     for f, ep in zip(seg, epochs):
         if ep is None or f.get("sog") is None or f.get("cog") is None:
             continue
-        try:
-            tws, twd = wf.wind_at(f["lat"], f["lon"], ep)
-        except Exception:
+        w = _fix_wind(f, ep, wf, cur)
+        if w is None:
             continue
-        if not tws or tws <= 0:
-            continue
-        stw, twa = _speed_angle(f, ep, twd, cur)
+        tws, twa, stw = w
         target = optimizer._polar_speed(P, tws, twa)
         if target and target > 0.5 and stw > 0.3:
             ratios.append(min(2.0, stw / target))
@@ -463,7 +502,8 @@ def _polar_pct(seg, epochs, wf, polars, cur=None, wave=None, wave_coeffs=None):
         return None
     out = {"polar_pct": round(100 * sum(ratios) / len(ratios)),
            "helm_pct": round(100 * sum(helm_ratios) / len(helm_ratios)),
-           "polar_samples": len(ratios), "wave_corrected": wave is not None}
+           "polar_samples": len(ratios), "wave_corrected": wave is not None,
+           "wind_source": "measured" if has_measured else "grib"}
     if wave is not None and hss:
         out["sea_state_hs_mean"] = round(sum(hss) / len(hss), 2)
     return out
@@ -514,26 +554,28 @@ def _performance_bins(seg, epochs, wf, polars, cur=None, wave=None, wave_coeffs=
     loss divided out) — `pct` (raw vs flat polar) + `hs_mean` are the WAVE-CALIBRATION input (fit the
     Hs slope), while `pct_flat` is the FLAT-WATER shape the polar-overlay refinement uses (so a cell
     sailed in a big head sea isn't mistaken for a weak polar angle)."""
-    if wf is None or polars is None or not getattr(wf, "loaded", False):
+    has_measured = any(f.get("tws") is not None for f in seg)
+    if polars is None or (not has_measured and (wf is None or not getattr(wf, "loaded", False))):
         return []
     cells = {}            # (cert_tws, cert_twa, target) -> [(through-water stw, hs)]
     for f, ep in zip(seg, epochs):
         if ep is None or f.get("sog") is None or f.get("cog") is None or f["sog"] <= 0.3:
             continue
-        try:
-            tws, twd = wf.wind_at(f["lat"], f["lon"], ep)
-        except Exception:
+        w = _fix_wind(f, ep, wf, cur)
+        if w is None:
             continue
-        if not tws or tws <= 0:
-            continue
-        stw, twa = _speed_angle(f, ep, twd, cur)
-        if twa < 30 or stw <= 0.3:
+        tws, twa, stw = w
+        if twa is None or twa < 30 or stw is None or stw <= 0.3:
             continue
         cell = min(polars, key=lambda p: abs(p[0] - tws) + abs(p[1] - twa))   # nearest cert cell
         if abs(cell[0] - tws) > 3.0 or abs(cell[1] - twa) > 18.0:             # too far → off-grid, skip
             continue
         hs = wave.wave_at(f["lat"], f["lon"], ep) if wave is not None else 0.0
         cfg = config_at(sail_log, ep)
+        if not _config_plausible(cfg, twa):
+            # the log says spinnaker, the wind angle says impossible — a douse nobody tapped.
+            # UNATTRIBUTED, per Cole 2026-09-09: never credited to the wrong sail, never dropped.
+            cfg = None
         cells.setdefault((cell[0], cell[1], cell[2], cfg), []).append((stw, hs))
     out = []
     for (tws_c, twa_c, target, cfg), samples in sorted(
