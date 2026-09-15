@@ -1,4 +1,4 @@
-# C4 telemetry consolidation — progress (updated 2026-09-08)
+# C4 telemetry consolidation — progress (updated 2026-09-15)
 
 Goal (Cole): **lose no telemetry**, and **copy all telemetry off the Pi to the VPS**.
 Deletion from the boat is allowed only *after* an off-boat copy is sha256-verified.
@@ -7,28 +7,36 @@ Deletion from the boat is allowed only *after* an off-boat copy is sha256-verifi
 
 **Cole approved the Polar tab as a first pass and set the mode: "generally refine the entire
 system over the next couple weeks."** Not new surface area — make what exists trustworthy,
-smooth and correct. The standing dev stack (agent + lab) runs today's code; the bench console
-stack too; `dev` and `main` are level and pushed.
+smooth and correct. The standing dev stack (agent + lab) runs today's code (lab rebuilt in place
+2026-09-15); the bench console stack too.
+
+**2026-09-15: the polar → optimizer loop is CLOSED up to Cole's click.** Both boat-log recordings
+are debriefed on the live lab and **proposal #2 is waiting in Debrief → "Refine the boat model"**
+(helm 0.931, 29 cell adjustments off 165 measured bins / 9,325 samples / 2 recordings, 18 thin
+cells skipped). Nothing has been applied — that is his. Details in the 2026-09-15 section.
 
 **The refinement queue, in rough order of value:**
-1. **Close the polar → optimizer loop.** The Polar tab's "Propose refinement" honestly reports
-   no measured bins archived — bins reach the archive only through a debrief RUN, which needs a
-   race definition + oracle. Run a real debrief over the Jul 15 boat-log track (it's the clean
-   race), archive the measured bins, propose, and walk Cole through his first apply. This is the
-   one remaining link in the chain he cares most about.
-2. **Exercise the Polar tab against Cole's actual use** — he's reviewing it now; expect
-   refinement asks (sorting, a per-config table view across all TWS, maybe both races overlaid).
-   Don't guess ahead; fix what he names.
+1. **Walk Cole through his first apply.** Review proposal #2 with him: the 4 kn cells (55–78%,
+   clamped to ×0.85) are pre-start drift and should be unchecked; the 6 kn A3+SS cells at
+   110–120° (67–70%) look like a hoist; the heavy-air beat table (14–20 kn / 36° at 97–100%,
+   878 samples at 16 kn) is the real signal, as is 6 kn/142° at ×1.15 in both recordings. He
+   edits the helm number and unchecks cells in the card; Apply writes `polar_adjustments` and
+   the optimizer's `_polar_speed` reads them. Then run a gameplan and confirm the overlay bit.
+2. **Exercise the Polar tab against Cole's actual use** — fix what he names, don't guess.
 3. **B — the decision timeline** (the big build): the rig server-side, scrub the race with the
    trust strip beside the track. The graphical trust timeline folded in here.
 4. **The known small rough edges, all measured already:**
-   - the heading `warn` flicker across the 15° line (22:07–23:06 on Jul 18, ok↔warn churn in the
-     trust sweep too) — wants the bank tile's dwell-median treatment in `sensor_health`;
-   - the deviation tile's absolute gates (`act` for 88% of Jul 18; 5 min behind plan trips it an
-     hour into a multi-day race) — thresholds should scale with the race, numbers are Cole's;
+   - the heading `warn` flicker across the 15° line (22:07–23:06 on Jul 18) — wants the bank
+     tile's dwell-median treatment in `sensor_health`;
+   - the deviation tile's absolute gates (`act` for 88% of Jul 18) — thresholds should scale
+     with the race, numbers are Cole's;
    - `selector` flip churn (40 flips on Jul 18) — same stability sweep, uninvestigated;
-   - the channel-diff script (source-filtered) — four hand queries found real things, make it
-     repeatable per race.
+   - the channel-diff script (source-filtered) — make it repeatable per race;
+   - **new 2026-09-15:** the debrief has one track slot per race id (loading Jul 15 replaces
+     Jul 18 in the card; the archive keeps both) — a per-recording slot when B lands; the Jul 18
+     sail log starts at 18:08Z so the first 65 min bin unattributed; from-log density is
+     3 s/fix (2000 min) — Jul 15 at 1 s gave 57 bins vs 52; the debrief's regret/critique
+     still has no notion of a retirement (Jul 18) beyond the "faster than oracle" caveat.
 5. **When the boat is back** (unchanged): rebuild archiver + engine + console aboard, close
    session 3 from the iPad, enable Orca attitude sharing.
 
@@ -36,7 +44,65 @@ stack too; `dev` and `main` are level and pushed.
 deleting; one implementation per analysis; measured beats forecast beats theory; every gate must
 say what it refused. The stability scorer (`tools/replay/score_stability.py`) and the two-race
 corpus are the instruments for the whole phase — anything that flaps on Jul 15 is a bug by
-construction.
+construction. **And (2026-09-15): run the real chain end to end before believing any link of it
+— five defects sat between "the bins are measured" and "a proposal exists", none visible from
+unit tests, all found by running the two recordings through the live route.**
+
+## Session 2026-09-15 — the polar → optimizer link (queue item #1)
+
+**Goal:** run a real debrief over the boat-log recordings so measured bins archive → `propose()`
+→ Cole applies. **Done up to the apply:** both recordings debriefed on the live lab, proposal #2
+created. Verified first on a throwaway lab container (repo mounted over `sr33-dev-lab`, scratch
+learning DB, real agent + GRIB cache), then the standing lab was rebuilt in place and the same
+chain run against it. All 24 lab test scripts pass; `test_debrief_recording.py` is new (20
+checks) and fails on the pre-session code at exactly the defects below.
+
+**Five defects found by running the chain, each "wired and silently not in force":**
+1. **The judge could never debrief a past race.** Its oracle wind came from the live NOMADS
+   sources (≈10 days of cycles); for July the picker returned today's cycle, zero frames landed,
+   and `run_judge` answered "no wind data" and archived nothing. The retro study's archive-backed
+   GFS/HRRR sources (AWS open data) existed one module over. `judge._oracle_windfield` routes a
+   race older than `JUDGE_LIVE_WINDOW_DAYS` (9) to the archive, falls back to it when live
+   comes up empty, and the report says `windfield.basis` + a matching caveat. Jul 18: GFS 12Z
+   (26 frames) + HRRR 15Z (19), 45 s wall.
+2. **The scorer re-anchored a wall clock on the gun.** Boat-log fixes carry epoch `t`; every
+   track was shifted so `t0 == start_epoch`. Jul 18: 211 s (trust danger windows slid by that
+   much). Jul 15 against the Jul 18 gun: 2.8 days — every sail-log entry in the past, the last
+   sail of the day credited with every bin. `track.absolute_clock()` (t > 1e9 is a clock; YB's
+   relative offsets still anchor).
+3. **A windowed recording was clipped to the nearest fixes to the start/finish marks** like a
+   GPX. The window IS the racing portion now; the mark clip stays for GPX/YB.
+4. **The archive keyed "latest debrief" on race_id** — Bayview 2026 holds two recordings under
+   one id, so the second run would have displaced the first's bins. `window_start` column on
+   `debriefs` + `perf_bins` (additive migration); latest per (race_id, window_start); GPX/YB
+   (NULL) still group per race. `trend`, the archive card and the proposal summary follow.
+5. **The from-log route never passed `agent_json`'s per-call timeout** (added 09-09 for this
+   exact fetch): the 7.4 h Jul 18 track takes 8.4 s against an 8 s default, so the first live
+   attempt loaded nothing and the judge quietly re-judged the track still in the slot.
+   `main.agent_timeout_for(hours)` = 30 + 10 s/h, on both the track and the trust calls.
+
+**And the one that changed the numbers: TWA arrives wrapped 0–360.** The record carries the
+signed instrument angle wrapped, so a port-tack beat is ~300°. `_fix_wind` took `abs()` only:
+every port-tack fix (5,800 of Jul 18's 8,000) fell off the cert grid in `_performance_bins` —
+**zero bins from the race with the heavy-air beat** — and `_polar_pct` scored them against the
+180° cell, which is why Jul 15 read 105% and Jul 18 99%. `track.fold_twa()` (same rule
+`obspolar` already used): Jul 15 87% / 52 bins, Jul 18 88% / 113 bins. The Polar tab was
+always right; the debrief's numbers were not.
+
+**Two proposal-quality fixes, seen in the first real proposal:** a cell's % was the UNWEIGHTED
+mean of its per-config bins (10 kn/120°: A3+J1 92% × 117, A3+SS 93% × 13, a 5-sample S2 douse at
+59% → 81% → ×0.886) — now sample-weighted (→ 92%); and 4-sample cells clamped straight to the
+±15% guardrail — `LEARNING_MIN_CELL_SAMPLES` (20 ≈ a minute) skips them and the summary counts
+the skips. Also: a recording that ended before the gun (Jul 15) now carries a caveat saying its
+tactics metrics mean nothing here and its bins stand (`predates_gun`).
+
+**What the live lab now holds** (`lab_learning`): debriefs #2 (Jul 15, 1.59 h, 52 bins) and #3
+(Jul 18, 7.34 h, 113 bins, 23 samples refused in the −98° compass windows — one per minute,
+the post-20:40 uplink aggregates carry position at 1/min), proposal #2 `proposed`. The old
+GPX debrief #1 and rejected proposal #1 are untouched. The Debrief tab's track slot holds Jul 18.
+
+**Also fixed:** `test_routing_learning.py` had been red since 09-09 (its seeded bins carried no
+`wind_source`, so the measured-only propose refused them) — tagged.
 
 ## (2026-09-09, later — the POLAR TAB shipped)
 

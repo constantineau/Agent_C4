@@ -942,9 +942,18 @@ Build order, agreed 2026-09-08:
     guesses at.
   - Deprioritized per the same direction: tack/gybe cost, heel-vs-target, rudder work (the
     record has the series; build when the polar loop is closed).
-  - **Next link in this chain:** feed the observed polar into the gameplan/optimizer through the
-    existing human-approval flow — run a real debrief over the boat-log tracks so the measured
-    bins archive, then `propose()` → Cole approves → the overlay bites `_polar_speed`.
+  - **✅ Next link — CLOSED up to the apply, 2026-09-15.** Both boat-log recordings are debriefed
+    on the live lab and proposal #2 (helm 0.931, 29 cells, 165 measured bins / 9,325 samples)
+    waits for Cole in Debrief → "Refine the boat model". Running the real chain found five
+    "wired, not in force" defects and one that changed every number: the judge had no wind for
+    any past race (now the GFS/HRRR archive, `windfield.basis`), the scorer re-anchored wall
+    clocks on the gun (trust windows slid 211 s; Jul 15's sail log 2.8 days), windowed
+    recordings were mark-clipped, the archive keyed on race_id (two recordings, one id), the
+    from-log route never passed the 09-09 timeout (7.4 h track = 8.4 s vs 8 s) — and **TWA
+    arrives wrapped 0–360, so every port-tack fix fell off the cert grid** (Jul 18: 0 bins →
+    113; polar% 105/99 → 87/88). `fold_twa()` now matches `obspolar`. Proposal cells are
+    sample-weighted across configs and thin cells (< 20 samples) are skipped and counted.
+    Full account: `C4_TELEMETRY_PROGRESS.md` → Session 2026-09-15.
 - **B. A decision timeline — what the crew saw, next to what was true.** `timeline-fullrace/`
   already holds 1,091 frames of every engine endpoint across that race: a recording of the iPad.
   Scrub it against the oracle route — 19:23Z off-book, 20:40Z bank dies, 22:08Z compass warning,

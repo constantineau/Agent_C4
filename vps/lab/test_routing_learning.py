@@ -45,10 +45,12 @@ def test_learning_flow():
     boats.save_boat(boat)
     try:
         # archive two races; the boat is relatively WEAK upwind (88% of polar) vs reaching (98%)
+        # measured-wind bins: since 2026-09-09 propose() refines off the instruments only, so an
+        # untagged (forecast-era) bin is excluded — this test is about the flow, not that gate
         bins_a = [{"tws": 12.0, "twa": 45.0, "point_of_sail": "upwind", "samples": 40,
-                   "best_stw": 6.2, "target_stw": 7.0, "pct": 88},
+                   "best_stw": 6.2, "target_stw": 7.0, "pct": 88, "wind_source": "measured"},
                   {"tws": 12.0, "twa": 90.0, "point_of_sail": "reaching", "samples": 40,
-                   "best_stw": 8.3, "target_stw": 8.5, "pct": 98}]
+                   "best_stw": 8.3, "target_stw": 8.5, "pct": 98, "wind_source": "measured"}]
         id1 = learning.archive_debrief(_fake_report("alpha", bins_a, 92), "_testboat_")
         id2 = learning.archive_debrief(_fake_report("beta", bins_a, 93), "_testboat_")
         assert id1 and id2 and id1 != id2
@@ -103,7 +105,7 @@ def test_helm_can_exceed_one():
     boats.save_boat({"boat_id": "_softboat_", "name": "Soft", "draft_m": 2.0, "helm_factor": 1.0})
     try:
         bins = [{"tws": 12.0, "twa": 90.0, "point_of_sail": "reaching", "samples": 80,
-                 "best_stw": 8.9, "target_stw": 8.05, "pct": 111}]   # 111% of polar (current-corrected)
+                 "best_stw": 8.9, "target_stw": 8.05, "pct": 111, "wind_source": "measured"}]   # 111% of polar (current-corrected)
         learning.archive_debrief(_fake_report("soft-a", bins, 111), "_softboat_")
         learning.archive_debrief(_fake_report("soft-b", bins, 110), "_softboat_")
         p = learning.propose("_softboat_")
@@ -127,7 +129,7 @@ def test_calibrate_waves():
     try:
         for i, (hs, pct) in enumerate([(0.5, 95.0), (1.5, 90.25), (2.5, 85.5), (3.5, 80.75)]):
             bins = [{"tws": 12.0, "twa": 45.0, "point_of_sail": "upwind", "samples": 60,
-                     "best_stw": round(7.0 * pct / 100, 2), "target_stw": 7.0, "pct": pct, "hs_mean": hs}]
+                     "best_stw": round(7.0 * pct / 100, 2), "target_stw": 7.0, "pct": pct, "hs_mean": hs, "wind_source": "measured"}]
             learning.archive_debrief(_fake_report(f"w{i}", bins, round(pct)), "_wboat_")
         cal = learning.calibrate_waves("_wboat_")
         assert cal["ok"] and cal["kind"] == "wave_coeffs", cal
@@ -165,7 +167,7 @@ def test_calibrate_deadband():
                 [(hs, helm * (1 - k * (hs - db)) * 100) for hs in (0.7, 1.1, 1.6, 2.1, 2.6)])  # sloped above
         for i, (hs, pct) in enumerate(data):
             bins = [{"tws": 12.0, "twa": 45.0, "point_of_sail": "upwind", "samples": 60,
-                     "best_stw": round(7.0 * pct / 100, 3), "target_stw": 7.0, "pct": pct, "hs_mean": hs}]
+                     "best_stw": round(7.0 * pct / 100, 3), "target_stw": 7.0, "pct": pct, "hs_mean": hs, "wind_source": "measured"}]
             learning.archive_debrief(_fake_report(f"k{i}", bins, round(pct)), "_dbboat_")
         cal = learning.calibrate_waves("_dbboat_")
         assert cal["ok"], cal
@@ -189,7 +191,7 @@ def test_trend():
     boats.save_boat({"boat_id": "_tboat_", "name": "Trend", "draft_m": 2.0, "helm_factor": 1.0})
     try:
         b = [{"tws": 12.0, "twa": 90.0, "point_of_sail": "reaching", "samples": 40,
-              "best_stw": 8.0, "target_stw": 8.5, "pct": 94, "hs_mean": 0.8}]
+              "best_stw": 8.0, "target_stw": 8.5, "pct": 94, "hs_mean": 0.8, "wind_source": "measured"}]
         r1 = _fake_report("t1", b, 94)
         r1["actual_track"]["helm_pct"] = 96
         r1["actual_track"]["sea_state_hs_mean"] = 0.8

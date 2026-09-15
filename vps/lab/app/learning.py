@@ -27,7 +27,12 @@ LEARNING_DB = os.environ.get("LEARNING_DB", "/srv/learning/learning.db")
 _HELM_MIN, _HELM_MAX = 0.50, 1.15
 _CELL_MULT_MIN, _CELL_MULT_MAX = 0.85, 1.15
 _CELL_DEADBAND = 0.04            # don't propose a cell tweak smaller than ±4% (noise)
-_MIN_RACES_FOR_CELL = 1          # a cell must appear in at least this many races to be proposed
+_MIN_RACES_FOR_CELL = 1          # a cell must appear in at least this many recordings to be proposed
+# A cell needs this many samples before its multiplier is proposed. The first real proposal
+# (Jul 15 2026, 3 s fixes) clamped 6 kn/142° to ×1.15 off FOUR samples and 6 kn/52° to ×0.85 off
+# eleven — twelve seconds of sailing is a gust or a tack, not the polar. Twenty is about a minute
+# at the debrief's density; the number is a knob, and skipped cells are counted in the summary.
+_MIN_SAMPLES_FOR_CELL = int(os.environ.get("LEARNING_MIN_CELL_SAMPLES", "20"))
 
 # --- wave-coefficient calibration guardrails (Lab-4 condition attribution) ---------------------
 # The env priors are deliberately conservative; a fit from real logs can only move k within a sane
@@ -77,9 +82,9 @@ def _conn():
 # Columns added after the first schema — SQLite CREATE-IF-NOT-EXISTS won't add them to an existing
 # table, so ALTER them in idempotently (additive, never destructive — the DB-safety ethos).
 _ADDED = {
-    "debriefs": [("helm_pct", "REAL"), ("sea_state_hs_mean", "REAL")],
+    "debriefs": [("helm_pct", "REAL"), ("sea_state_hs_mean", "REAL"), ("window_start", "REAL")],
     "perf_bins": [("hs_mean", "REAL"), ("pct_flat", "REAL"), ("config", "TEXT"),
-                  ("wind_source", "TEXT")],
+                  ("wind_source", "TEXT"), ("window_start", "REAL")],
     "proposals": [("kind", "TEXT DEFAULT 'boat_model'"), ("wave_json", "TEXT")],
 }
 
@@ -94,14 +99,25 @@ def _ensure_columns(c):
 
 
 # ---- archive (called by judge.run_judge after a debrief is scored) ----------------------------
+def recording_key(at):
+    """What a debrief is a debrief OF: the race id plus the start of the boat-log window it was
+    scored over (None for a GPX/YB track, which has no window of its own). One race definition
+    can hold several recordings — Bayview 2026 has the Jul 15 practice sail and the Jul 18 race
+    under one id — and keying the archive on race_id alone made the second debrief silently
+    displace the first's bins (found 2026-09-15, before it happened on the live archive)."""
+    return ((at or {}).get("window") or {}).get("start_ts")
+
+
 def archive_debrief(report, boat_id=None):
     """Persist one debrief run to the ongoing archive. Idempotent-ish: every run is a row (a true
-    log); proposals use only the LATEST run per race so re-runs don't double-count."""
+    log); proposals use only the LATEST run per RECORDING (race id + boat-log window start) so
+    re-runs don't double-count and two recordings of one race both count."""
     if not report or not report.get("available"):
         return None
     reg = report.get("regret") or {}
     at = report.get("actual_track") or {}
     crit = report.get("critique") or {}
+    wstart = recording_key(at)
     # keep the stored report lean (drop the heavy oracle path / windfield arrays)
     slim = {k: report.get(k) for k in ("race_id", "race_name", "playbook_id", "start_epoch",
                                        "regret", "playbook", "caveat")}
@@ -115,8 +131,8 @@ def archive_debrief(report, boat_id=None):
             """INSERT INTO debriefs (created_at,race_id,race_name,playbook_id,boat_id,oracle_hours,
                regret_min,side_paid,recommended_side,side_matched,track_source,elapsed_hours,
                time_behind_min,oversail_pct,xte_mean,xte_p90,xte_max,side_worked,polar_pct,
-               polar_samples,report_json,helm_pct,sea_state_hs_mean)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               polar_samples,report_json,helm_pct,sea_state_hs_mean,window_start)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (time.time(), report.get("race_id"), report.get("race_name"), report.get("playbook_id"),
              boat_id, (report.get("oracle") or {}).get("total_hours"), reg.get("minutes"),
              reg.get("side_paid"), reg.get("recommended_side"), 1 if reg.get("side_matched") else 0,
@@ -124,17 +140,17 @@ def archive_debrief(report, boat_id=None):
              at.get("extra_distance_pct"), at.get("xte_mean_nm"), at.get("xte_p90_nm"),
              at.get("xte_max_nm"), at.get("side_worked"), at.get("polar_pct"),
              at.get("polar_samples"), json.dumps(slim), at.get("helm_pct"),
-             at.get("sea_state_hs_mean")))
+             at.get("sea_state_hs_mean"), wstart))
         did = cur.lastrowid
         for b in (at.get("perf_bins") or []):
             c.execute("""INSERT INTO perf_bins (debrief_id,boat_id,race_id,created_at,tws,twa,
                          point_of_sail,samples,best_stw,target_stw,pct,hs_mean,pct_flat,config,
-                         wind_source)
-                         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                         wind_source,window_start)
+                         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                       (did, boat_id, report.get("race_id"), time.time(), b["tws"], b["twa"],
                        b["point_of_sail"], b["samples"], b["best_stw"], b["target_stw"], b["pct"],
                        b.get("hs_mean"), b.get("pct_flat"), b.get("config"),
-                       b.get("wind_source")))
+                       b.get("wind_source"), wstart))
         c.commit()
         return did
     finally:
@@ -146,7 +162,8 @@ def list_debriefs(boat_id=None, race_id=None, limit=200):
     try:
         q = ("SELECT id,created_at,race_id,race_name,boat_id,oracle_hours,regret_min,side_paid,"
              "recommended_side,side_matched,track_source,elapsed_hours,time_behind_min,oversail_pct,"
-             "xte_mean,side_worked,polar_pct,helm_pct,sea_state_hs_mean,polar_samples FROM debriefs")
+             "xte_mean,side_worked,polar_pct,helm_pct,sea_state_hs_mean,polar_samples,window_start "
+             "FROM debriefs")
         cond, args = [], []
         if boat_id:
             cond.append("boat_id=?"); args.append(boat_id)
@@ -180,12 +197,18 @@ def get_debrief(debrief_id):
 
 
 # ---- proposal engine (PROPOSES only — never applies) ------------------------------------------
+def _rec(b):
+    return (b["race_id"], b.get("window_start"))
+
+
 def _latest_bins_per_race(c, boat_id):
-    """The perf_bins from the LATEST debrief of each race for this boat (so repeated debrief runs of
-    one race don't double-count). Returns (bins[], race_ids set)."""
+    """The perf_bins from the LATEST debrief of each RECORDING (race id + boat-log window start;
+    SQLite groups the NULL window of GPX/YB tracks as one, so those still key on the race alone)
+    for this boat — repeated runs of one recording don't double-count, and two recordings of one
+    race both count. Returns (bins[], race_ids set)."""
     rows = c.execute("""SELECT pb.* FROM perf_bins pb JOIN (
-                          SELECT race_id, MAX(debrief_id) AS did FROM perf_bins
-                          WHERE boat_id IS ? GROUP BY race_id) latest
+                          SELECT race_id, window_start, MAX(debrief_id) AS did FROM perf_bins
+                          WHERE boat_id IS ? GROUP BY race_id, window_start) latest
                         ON pb.debrief_id = latest.did""", (boat_id,)).fetchall()
     return [dict(r) for r in rows], {r["race_id"] for r in rows}
 
@@ -248,6 +271,7 @@ def propose(boat_id):
         excluded = [b for b in bins if b.get("wind_source") != "measured"]
         bins = [b for b in bins if b.get("wind_source") == "measured"]
         races = {b["race_id"] for b in bins}
+        recordings = sorted({_rec(b) for b in bins}, key=lambda k: (k[0], k[1] or 0))
         if not bins:
             return {"ok": False,
                     "note": f"no MEASURED-wind bins archived yet ({len(excluded)} forecast-based "
@@ -270,14 +294,23 @@ def propose(boat_id):
         cells = {}
         for b in bins:
             k = (b["tws"], b["twa"])
-            cells.setdefault(k, {"pct": [], "samples": 0, "races": set(), "pos": b["point_of_sail"]})
-            cells[k]["pct"].append(_pf(b)); cells[k]["samples"] += b["samples"]
-            cells[k]["races"].add(b["race_id"])
-        adjustments, by_pos = [], {}
+            cells.setdefault(k, {"pct": [], "n": [], "samples": 0, "races": set(),
+                                 "pos": b["point_of_sail"]})
+            cells[k]["pct"].append(_pf(b)); cells[k]["n"].append(b["samples"])
+            cells[k]["samples"] += b["samples"]
+            cells[k]["races"].add(_rec(b))          # recordings, not race ids (see recording_key)
+        adjustments, by_pos, thin = [], {}, 0
         for (tws, twa), v in sorted(cells.items()):
             if len(v["races"]) < _MIN_RACES_FOR_CELL:
                 continue
-            cell_pct = sum(v["pct"]) / len(v["pct"])
+            if v["samples"] < _MIN_SAMPLES_FOR_CELL:
+                thin += 1
+                continue
+            # SAMPLE-WEIGHTED across the cell's bins. Bins are per sail configuration, so a cell
+            # holds several: on Jul 15 2026, 10 kn/120° was A3+J1 at 92% over 117 samples, A3+SS
+            # at 93% over 13, and a 5-sample S2 bin at 59% (a douse) — the unweighted mean read
+            # 81% and proposed ×0.886 against a cell the boat sails at 92%.
+            cell_pct = sum(p * n for p, n in zip(v["pct"], v["n"])) / v["samples"]
             rel = (cell_pct / 100.0) / (overall_pct / 100.0) if overall_pct else 1.0
             mult = round(max(_CELL_MULT_MIN, min(_CELL_MULT_MAX, rel)), 3)
             if abs(mult - 1.0) < _CELL_DEADBAND:
@@ -286,19 +319,21 @@ def propose(boat_id):
                                 "cell_pct": round(cell_pct), "samples": v["samples"],
                                 "races": len(v["races"]),
                                 "basis": f"sailed {round(cell_pct)}% of polar over {v['samples']} samples / "
-                                         f"{len(v['races'])} race(s)"})
+                                         f"{len(v['races'])} recording(s)"})
             p = by_pos.setdefault(v["pos"], {"pct": [], "n": 0})
             p["pct"].append(cell_pct); p["n"] += v["samples"]
         summary = {"overall_pct": round(overall_pct), "n_samples": sn,
                    "by_point_of_sail": {k: round(sum(x["pct"]) / len(x["pct"]))
                                         for k, x in by_pos.items()},
                    "races": sorted(races), "wind_source": "measured",
-                   "excluded_forecast_bins": len(excluded)}
+                   "recordings": [{"race_id": r, "window_start": w} for r, w in recordings],
+                   "excluded_forecast_bins": len(excluded),
+                   "thin_cells_skipped": thin, "min_cell_samples": _MIN_SAMPLES_FOR_CELL}
         row = c.execute(
             """INSERT INTO proposals (created_at,boat_id,status,helm_current,helm_proposed,overall_pct,
                n_debriefs,n_bins,adjustments_json,summary_json) VALUES (?,?,?,?,?,?,?,?,?,?)""",
             (time.time(), boat_id, "proposed", helm_current, helm_proposed, round(overall_pct, 1),
-             len(races), len(bins), json.dumps(adjustments), json.dumps(summary)))
+             len(recordings), len(bins), json.dumps(adjustments), json.dumps(summary)))
         c.commit()
         return {"ok": True, **get_proposal(row.lastrowid)}
     finally:
@@ -577,8 +612,8 @@ def trend(boat_id, limit=50):
     try:
         rows = c.execute(
             """SELECT d.* FROM debriefs d JOIN (
-                 SELECT race_id, MAX(id) AS mid FROM debriefs
-                 WHERE boat_id IS ? GROUP BY race_id) latest
+                 SELECT race_id, window_start, MAX(id) AS mid FROM debriefs
+                 WHERE boat_id IS ? GROUP BY race_id, window_start) latest
                ON d.id = latest.mid ORDER BY d.created_at ASC LIMIT ?""", (boat_id, limit)).fetchall()
         series = []
         for r in rows:
@@ -586,7 +621,7 @@ def trend(boat_id, limit=50):
             series.append({k: d.get(k) for k in (
                 "id", "created_at", "race_id", "race_name", "elapsed_hours", "oracle_hours",
                 "time_behind_min", "oversail_pct", "xte_mean", "side_matched", "polar_pct",
-                "helm_pct", "sea_state_hs_mean", "regret_min")})
+                "helm_pct", "sea_state_hs_mean", "regret_min", "window_start")})
         applied = c.execute(
             """SELECT id,created_at,decided_at,kind,helm_proposed,applied_json FROM proposals
                WHERE boat_id IS ? AND status='applied' ORDER BY decided_at ASC""", (boat_id,)).fetchall()

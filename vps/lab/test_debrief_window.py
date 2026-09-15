@@ -92,10 +92,12 @@ check("a session the crew never stopped is still loadable — its window has an 
 # ---- the read path: what does the route ASK FOR? ------------------------------------------------
 print("\nthe route (POST /api/debrief/track/from-log):")
 asked = []
+timeouts = {}
 
 
-def fake_agent_json(path):
+def fake_agent_json(path, timeout=None):
     asked.append(path)
+    timeouts[path.split("?")[0]] = timeout
     if path == "/racelog/sessions":
         return {"sessions": [SESSION]}
     if path.startswith("/racelog/trust"):
@@ -133,6 +135,11 @@ check("the TRUST sweep was fetched over the derived window and stored with the t
       any(p.startswith("/racelog/trust") and f"end={DERIVED_B}" in p for p in asked)
       and saved.get("trust", {}).get("available") is True)
 check("and reported back to the caller", r.get("ok") and r["window"]["hours"] == 7.36)
+check("the track and trust calls carry a timeout that scales with the window (the 7.4 h Jul 18 "
+      "fetch takes ~8.4 s and the 8 s default timed it out on the first real run) — "
+      f"{timeouts.get('/racelog/track')} s",
+      (timeouts.get("/racelog/track") or 0) >= 90 and (timeouts.get("/racelog/trust") or 0) >= 90
+      and main.agent_timeout_for(0) == 30.0)
 
 asked.clear()
 main.debrief_track_from_log({"race_id": "bayviewmack2026", "session_id": 2,
