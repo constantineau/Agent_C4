@@ -916,6 +916,11 @@ def racelog_sessions():
         return {"sessions": [], "note": f"agent unreachable: {exc}"}
 
 
+def agent_timeout_for(hours):
+    """Seconds to allow the agent for a call that walks `hours` of full-res record."""
+    return max(30.0, 30.0 + 10.0 * float(hours or 0))
+
+
 def resolve_log_window(body, sessions):
     """Which interval of the boat log a from-log debrief track should cover.
 
@@ -986,10 +991,16 @@ def debrief_track_from_log(body: dict):
     # Ask for points in proportion to the window. `/racelog/track` thins to `max_points` (default
     # 2000), so a window that grew 4x would have arrived 4x coarser — 13 s between fixes instead
     # of 3 s — and the debrief would have quietly traded resolution for the hours it just gained.
-    pts = max(2000, min(8000, int((win["end_ts"] - win["start_ts"]) / 3.0)))
+    hours = (win["end_ts"] - win["start_ts"]) / 3600.0
+    pts = max(2000, min(8000, int(hours * 1200)))
+    # The agent walks the whole window at full resolution: the 7.4 h Jul 18 race takes ~8.4 s for
+    # the track and ~4 s for the trust sweep, so `agent_json`'s 8 s default (which grew a per-call
+    # override on 2026-09-09 for exactly this fetch) failed it on the first real run — the
+    # override existed and this route never passed it. Scale with the window, never below 30 s.
+    tmo = agent_timeout_for(hours)
     try:
         r = monitor.agent_json(f"/racelog/track?start={win['start_ts']}&end={win['end_ts']}"
-                               f"&max_points={pts}")
+                               f"&max_points={pts}", timeout=tmo)
     except Exception as exc:
         return JSONResponse({"detail": f"agent unreachable: {exc}"}, status_code=502)
     fixes = r.get("fixes") or []
@@ -1000,7 +1011,8 @@ def debrief_track_from_log(body: dict):
     # the scorer refuses bins from. A failed sweep is stored as unavailable and SAID — refusing
     # nothing silently would defeat the guardrail's purpose.
     try:
-        trust = monitor.agent_json(f"/racelog/trust?start={win['start_ts']}&end={win['end_ts']}")
+        trust = monitor.agent_json(f"/racelog/trust?start={win['start_ts']}&end={win['end_ts']}",
+                                   timeout=tmo)
         trust["available"] = True
     except Exception as exc:
         trust = {"available": False,

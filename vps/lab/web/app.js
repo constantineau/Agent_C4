@@ -2744,7 +2744,7 @@ function learnProposalReview(p) {
     <td><b class="conf ${a.mult < 1 ? "bad" : "ok"}">×${a.mult}</b></td>
     <td class="muted">${esc(a.basis || "")}</td></tr>`).join("");
   return `<div class="dep-grid" style="margin-bottom:8px">
-      <div class="dep-row"><b style="min-width:150px;display:inline-block">Overall achieved</b> ${s.overall_pct}% of polar over ${s.n_samples} samples · ${(s.races || []).length} race(s)</div>
+      <div class="dep-row"><b style="min-width:150px;display:inline-block">Overall achieved</b> ${s.overall_pct}% of polar over ${s.n_samples} samples · ${s.recordings ? s.recordings.length + " recording(s) of " : ""}${(s.races || []).length} race(s)${s.excluded_forecast_bins ? ` · <span class="muted">${s.excluded_forecast_bins} forecast-based bin(s) excluded</span>` : ""}${s.thin_cells_skipped ? ` · <span class="muted">${s.thin_cells_skipped} thin cell(s) skipped (&lt; ${s.min_cell_samples} samples)</span>` : ""}</div>
       <div class="dep-row"><b style="min-width:150px;display:inline-block">Helm factor</b> ${p.helm_current} → <b>${p.helm_proposed}</b>${p.helm_proposed > 1 ? ' <span class="muted">(above cert — rated soft / sailing above the polar)</span>' : ""} <input id="learnHelmEdit" type="number" step="0.01" min="0.5" max="1.2" value="${p.helm_proposed}" style="width:70px;margin-left:8px"> <span class="muted">(editable)</span></div>
       ${Object.keys(pos).length ? `<div class="dep-row"><b style="min-width:150px;display:inline-block">By point of sail</b> ${Object.entries(pos).map(([k, v]) => `${k} ${v}%`).join(" · ")}</div>` : ""}
     </div>
@@ -2863,7 +2863,7 @@ function learnArchiveCard() {
   if (!dbs.length) return `<div class="card"><h3>Performance archive</h3><div class="muted" style="font-size:12px">No archived debriefs yet — run a debrief with a boat track (in the <a href="#debrief">Debrief</a> tab) and it's recorded here for future review.</div></div>`;
   const rows = dbs.map((d) => `<tr>
     <td>${d.created_at ? new Date(d.created_at * 1000).toLocaleDateString() : ""}</td>
-    <td>${esc(d.race_name || d.race_id || "")}</td>
+    <td>${esc(d.race_name || d.race_id || "")}${d.window_start ? `<div class="muted" style="font-size:11px">recording ${new Date(d.window_start * 1000).toISOString().slice(0, 16).replace("T", " ")}Z${d.elapsed_hours != null ? " · " + d.elapsed_hours + " h" : ""}</div>` : ""}</td>
     <td>${d.regret_min != null ? d.regret_min + " min" : "—"}</td>
     <td>${d.time_behind_min != null ? d.time_behind_min + " min" : "—"}</td>
     <td>${d.oversail_pct != null ? d.oversail_pct + "%" : "—"}</td>
@@ -2872,7 +2872,7 @@ function learnArchiveCard() {
     <td>${esc(d.side_worked || "—")}${d.side_matched != null ? (d.side_matched ? " ✓" : " ✗") : ""}</td>
     <td>${esc(d.track_source || "—")}</td></tr>`).join("");
   return `<div class="card">
-    <h3>Performance archive <span class="muted" style="font-weight:400">— ${dbs.length} debrief(s), kept for review</span></h3>
+    <h3>Performance archive <span class="muted" style="font-weight:400">— ${dbs.length} debrief(s), kept for review · proposals read the latest per recording</span></h3>
     <table class="fleet-tbl"><thead><tr><th>Date</th><th>Race</th><th>Regret</th><th>vs optimal</th><th>Oversail</th><th>Polar%</th><th>Helm% (flat)</th><th>Side</th><th>Track</th></tr></thead><tbody>${rows}</tbody></table>
     <div class="muted" style="font-size:11px;margin-top:6px">Every debrief is archived to the ongoing learning database (helm-vs-optimal metrics + observed-vs-polar bins) so race performance is reviewable across the season and feeds the refinement proposals above.</div>
   </div>`;

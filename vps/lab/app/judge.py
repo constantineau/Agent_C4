@@ -82,6 +82,41 @@ def _playbook_predicted_hours(pb):
     return min(hrs) if hrs else None
 
 
+# The live NOMADS sources keep about ten days of cycles. A debrief is by nature about a race that
+# is over — often weeks over (the Jul 15/18 2026 recordings were first judged in September) — and
+# for those the live cycle picker returns TODAY's cycle, which has no valid time inside the race
+# window: the field loaded zero frames, the judge answered "no wind data", and nothing was archived.
+# The bins had read the instruments since item C; it was the ORACLE that still needed the wind. The
+# retro study's archive-backed GFS/HRRR sources (AWS open data, pinned durably) serve any past
+# window, so a race older than the live horizon goes straight to the archive, and a recent one
+# falls back to it if the live sources come up empty.
+LIVE_WINDOW_DAYS = float(os.environ.get("JUDGE_LIVE_WINDOW_DAYS", "9"))
+
+
+def wind_basis_for(start_epoch, now=None):
+    """'live' while the live sources can still serve the gun, 'archive' for an older race."""
+    now = time.time() if now is None else now
+    return "archive" if start_epoch < now - LIVE_WINDOW_DAYS * 86400 else "live"
+
+
+def _oracle_windfield(bbox, start, t_end, models, race_id, log):
+    """The wind the oracle routes through → (WindField, basis). Pure routing of the decision above;
+    `build_windfield` is unchanged (archive sources are ModelSource instances and pass through)."""
+    from .wind import build_windfield
+    if wind_basis_for(start) == "live":
+        log("building the actual-wind field (oracle)…")
+        wf = (build_windfield(bbox, start, t_end, models=models, on_progress=log) if models
+              else build_windfield(bbox, start, t_end, on_progress=log))
+        if wf.loaded or t_end > time.time():
+            return wf, "live"
+        log("the live sources hold nothing for that window — falling back to the archive")
+    from .wind.archive import gun_sources
+    log("building the oracle wind from the GFS/HRRR archive (cycle as of the gun)…")
+    wf = build_windfield(bbox, start, t_end, models=gun_sources(start, context=f"debrief:{race_id}"),
+                         on_progress=log)
+    return wf, "archive"
+
+
 def run_judge(race_id, playbook_id=None, models=None, on_progress=None):
     """Oracle re-route on the actual/latest wind vs the frozen playbook → regret + Opus critique."""
     log = on_progress or (lambda *_: None)
@@ -99,20 +134,17 @@ def run_judge(race_id, playbook_id=None, models=None, on_progress=None):
     if not start:
         return {"available": False, "note": "playbook has no start_epoch"}
 
-    from .wind import build_windfield
     bbox = optimizer.course_bbox(d, course_id)
     if not bbox:
         return {"available": False, "note": "course has no geocoded marks"}
     hours = optimizer.estimate_hours(d, course_id)
     t_end = start + hours * 3600
-    log("building the actual-wind field (oracle)…")
     pv_models = (pb.get("provenance") or {}).get("models") or None
-    wf = build_windfield(bbox, start, t_end, models=(models or pv_models or None), on_progress=log) \
-        if (models or pv_models) else build_windfield(bbox, start, t_end, on_progress=log)
+    wf, wind_basis = _oracle_windfield(bbox, start, t_end, models or pv_models, race_id, log)
     if not wf.loaded:
-        return {"available": False, "note": "no wind data for the race window (analysis GRIB unavailable "
-                "for a past race, or no egress) — the oracle needs the wind that actually blew",
-                "windfield": wf.status(), "log": []}
+        return {"available": False, "note": "no wind data for the race window (neither the live sources "
+                "nor the GFS/HRRR archive served it — no egress?) — the oracle needs the wind that blew",
+                "windfield": {**wf.status(), "basis": wind_basis}, "log": []}
     log("routing the hindsight-optimal (oracle) course…")
     oracle = optimizer.optimize_course(d, course_id, start, wf, avoid=True)
     if not oracle.get("available", True) and oracle.get("note"):
@@ -158,11 +190,16 @@ def run_judge(race_id, playbook_id=None, models=None, on_progress=None):
                    "side_paid": side_paid, "recommended_side": rec_side,
                    "side_matched": (rec_side == side_paid),
                    "winning_variant": winning},
-        "windfield": wf.status(),
+        "windfield": {**wf.status(), "basis": wind_basis},
         "actual_track": _score_actual_track(race_id, oracle, marks, start, wf, cur, wv),
-        "caveat": "Oracle wind is the best-available GRIB over the race window; a true post-race judge "
-                  "uses reanalysis/analysis fields. For a future/near race this is forecast-grade, so "
-                  "regret reflects forecast drift, not full hindsight.",
+        "caveat": ("Oracle wind is the GFS/HRRR ARCHIVE cycle as of the gun (AWS open data) — the "
+                   "forecast a navigator could have held, not a reanalysis, so regret reflects "
+                   "forecast drift, not full hindsight. Polar/helm bins read the boat's own "
+                   "instruments and do not depend on this field."
+                   if wind_basis == "archive" else
+                   "Oracle wind is the best-available GRIB over the race window; a true post-race judge "
+                   "uses reanalysis/analysis fields. For a future/near race this is forecast-grade, so "
+                   "regret reflects forecast drift, not full hindsight."),
     }
     log("writing the critique…")
     report["critique"] = _critique(report) or _deterministic_critique(report)
@@ -192,6 +229,18 @@ def _score_actual_track(race_id, oracle, marks, start_epoch, wf, cur=None, wave=
         # number above is a number ABOUT that window, so it travels with them.
         if t.get("window"):
             scored = {**scored, "window": t["window"]}
+            # A recording that ENDED before the gun is not this race — Bayview 2026 carries the
+            # Jul 15 practice sail under the race's id. Its bins are real (they read the
+            # instruments); its tactics metrics compare a different day with the race oracle.
+            end = (t["window"] or {}).get("end_ts")
+            if end is not None and start_epoch and end < start_epoch:
+                days = (start_epoch - end) / 86400.0
+                scored["caveats"] = list(scored.get("caveats") or []) + [
+                    f"this recording ended {days:.1f} day(s) BEFORE the gun — a practice or delivery "
+                    "sail under this race's id. Time-behind, XTE, side and regret compare it with the "
+                    "race oracle and mean nothing here; the polar/helm bins are the boat's measured "
+                    "speed and stand."]
+                scored["predates_gun"] = True
         return scored
     except Exception as e:
         return {"available": False, "note": f"track scoring failed: {type(e).__name__}"}

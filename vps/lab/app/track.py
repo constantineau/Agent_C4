@@ -66,6 +66,15 @@ def _path_len_nm(pts):
     return sum(_hav_nm(pts[i - 1], pts[i]) for i in range(1, len(pts)))
 
 
+# A fix time above this is a wall clock (epoch seconds; 1e9 = 2001-09-09), below it a
+# race-relative offset (the YB feed counts seconds from its own start).
+_EPOCH_FLOOR = 1e9
+
+
+def absolute_clock(t):
+    return t is not None and t > _EPOCH_FLOOR
+
+
 def _nearest_idx(fixes, target):
     return min(range(len(fixes)),
                key=lambda i: _hav_nm((fixes[i]["lat"], fixes[i]["lon"]), target))
@@ -288,17 +297,32 @@ def score_track(track, oracle, marks, start_epoch, wf=None, polars=None, cur=Non
     finish_pt = (marks[-1][2], marks[-1][3]) if marks else (fixes[-1]["lat"], fixes[-1]["lon"])
 
     # clip to the racing window
-    i0 = _nearest_idx(fixes, start_pt)
-    i1 = _nearest_idx(fixes, finish_pt)
-    if i1 <= i0:
+    if (track or {}).get("window"):
+        # A boat-log track was already cut to its race window (derived, or the ⏺ LOG marker) and
+        # that IS the racing portion. Nearest-mark clipping is the heuristic for tracks with no
+        # bounds of their own (GPX/YB); on a recording that never reached the finish mark — a
+        # practice sail, a retirement — it cuts the tail at whichever fix happened to lie closest.
         i0, i1 = 0, len(fixes) - 1
+    else:
+        i0 = _nearest_idx(fixes, start_pt)
+        i1 = _nearest_idx(fixes, finish_pt)
+        if i1 <= i0:
+            i0, i1 = 0, len(fixes) - 1
     seg = fixes[i0:i1 + 1]
     pts = [(f["lat"], f["lon"]) for f in seg]
 
-    # time: prefer absolute timestamps; else anchor relative time on the gun
+    # time: a wall clock is used AS IS; only race-relative offsets (YB) are anchored on the gun.
+    # Until 2026-09-15 every track was re-anchored, so a boat-log fix at 17:03:31Z scored as
+    # 17:00:00Z (the playbook's gun) — 211 s off on Jul 18, which slid the trust sweep's danger
+    # windows by that much, and 2.8 DAYS off for the Jul 15 recording judged against the Jul 18
+    # gun, which put every sail-log entry in the past and credited the LAST sail of that day
+    # with every bin — the stale-config phantom again, by a different road.
     if seg[0]["t"] is not None and seg[-1]["t"] is not None:
-        rel0 = seg[0]["t"]
-        epochs = [(f["t"] - rel0) + (start_epoch or 0) for f in seg]
+        if absolute_clock(seg[0]["t"]):
+            epochs = [f["t"] for f in seg]
+        else:
+            rel0 = seg[0]["t"]
+            epochs = [(f["t"] - rel0) + (start_epoch or 0) for f in seg]
         elapsed_h = (seg[-1]["t"] - seg[0]["t"]) / 3600.0
     else:
         elapsed_h = None
@@ -432,6 +456,18 @@ def _speed_angle(f, ep, twd, cur):
     return sog, (None if twd is None else abs(optimizer._wrap180(cog - twd)))
 
 
+def fold_twa(twa):
+    """A true wind angle as the polar knows it: 0–180°, tack dropped. The instruments publish a
+    SIGNED angle and the record carries it wrapped to 0–360, so a port-tack beat arrives as
+    ~300°. Until 2026-09-15 the debrief took abs() only: on Jul 18 2026 every port-tack fix
+    (5,800 of 8,000) fell off the cert grid — ZERO bins from the race with the heavy-air beat —
+    and the %-of-polar figure scored them against the 180° cell. Same rule as `obspolar`."""
+    if twa is None:
+        return None
+    twa = abs(float(twa)) % 360.0
+    return 360.0 - twa if twa > 180.0 else twa
+
+
 def _fix_wind(f, ep, wf, cur):
     """(tws_kn, twa_deg, stw_kn) for one fix — MEASURED where the fix carries it, GRIB else.
 
@@ -443,7 +479,7 @@ def _fix_wind(f, ep, wf, cur):
         stw = f.get("stw")
         if stw is None:
             stw, _ = _speed_angle(f, ep, None, cur)
-        return f["tws"], abs(f["twa"]), stw, "measured"
+        return f["tws"], fold_twa(f["twa"]), stw, "measured"
     if wf is None or not getattr(wf, "loaded", False):
         return None
     try:
@@ -453,7 +489,7 @@ def _fix_wind(f, ep, wf, cur):
     if not tws or tws <= 0:
         return None
     stw, twa = _speed_angle(f, ep, twd, cur)
-    return tws, twa, stw, "grib"
+    return tws, fold_twa(twa), stw, "grib"
 
 
 # A3/S2 below ~55° TWA sustained is not a sail plan, it is a stale log entry: the crew doused
