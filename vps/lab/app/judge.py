@@ -117,38 +117,96 @@ def _oracle_windfield(bbox, start, t_end, models, race_id, log):
     return wf, "archive"
 
 
-def run_judge(race_id, playbook_id=None, models=None, on_progress=None):
-    """Oracle re-route on the actual/latest wind vs the frozen playbook → regret + Opus critique."""
+def run_judge(race_id, playbook_id=None, models=None, on_progress=None, recording=None):
+    """Debrief one RECORDING of a race.
+
+    Two halves, and they have different prerequisites — which is the whole point:
+      - the PERFORMANCE half (boat speed vs its polar, the trust sweep, the bins the learning loop
+        refines the boat model from) needs only the recording and the cert polars. It runs always.
+      - the TACTICS half (oracle re-route on the wind that blew, which side paid, regret vs the
+        plan we carried) needs a frozen playbook. Before 2026-09-15 the whole debrief refused
+        without one, so a race nobody wrote a playbook for could not be debriefed AT ALL — the
+        crew's own speed, which needs no plan to be true, was hostage to the plan. It is now
+        reported unavailable BY NAME and everything else runs.
+    """
     log = on_progress or (lambda *_: None)
     d = store.get_race(race_id)
     if not d:
         return {"available": False, "note": "unknown race"}
+    t = track.load_track(race_id, recording)
     pbs = [b for b in pbstore.list_bundles() if b.get("race_id") == race_id]
     pid = playbook_id or (pbs[0]["id"] if pbs else None)
     pb = pbstore.get(pid) if pid else None
-    if not pb:
-        return {"available": False, "note": "no frozen playbook to judge — freeze one in Gameplan first",
-                "playbooks": pbs}
+    if not pb and not t:
+        return {"available": False, "playbooks": pbs,
+                "note": "nothing to debrief yet — load the boat's log for a race session (or upload "
+                        "a GPX) above. A frozen playbook adds the tactics half; without one you "
+                        "still get the performance debrief."}
+    tac = _tactics(d, race_id, pb, models, log) if pb else {
+        "available": False,
+        "note": "no frozen playbook for this race — this is a PERFORMANCE debrief: boat speed vs "
+                "the polar, the trust sweep, and the bins the boat model learns from. Freeze a "
+                "playbook in Gameplan before the next race and the debrief judges the tactics too."}
+    if pb and not tac.get("available") and not t:
+        return {"available": False, "note": tac.get("note"),
+                "windfield": tac.get("windfield"), "log": []}
+
+    # The gun when there is a plan; otherwise the recording's own start — a wall-clock track is
+    # scored on its own clock either way (`track.absolute_clock`), and this is what a relative
+    # (YB) track anchors on.
+    start = tac.get("start_epoch") or ((t or {}).get("window") or {}).get("start_ts") or 0
+    log("scoring the boat's track…")
+    scored = _score_actual_track(t, tac.get("oracle") or {}, tac.get("marks") or [], start,
+                                 tac.get("wf"), tac.get("cur"), tac.get("wave"))
+    report = {
+        "available": True, "race_id": race_id, "race_name": d.get("name"),
+        "playbook_id": pid if pb else None, "course_id": tac.get("course_id"),
+        "start_epoch": start, "recording": (t or {}).get("window"),
+        "tactics_available": bool(tac.get("available")),
+        "tactics_note": None if tac.get("available") else tac.get("note"),
+        "oracle": tac.get("oracle_summary") or {},
+        "playbook": tac.get("playbook") or {},
+        "regret": tac.get("regret") or {},
+        "windfield": tac.get("windfield") or {},
+        "actual_track": scored,
+        "caveat": tac.get("caveat") or "",
+    }
+    log("writing the critique…")
+    report["critique"] = _critique(report) or _deterministic_critique(report)
+    try:                                   # archive to the ongoing learning DB (best-effort)
+        bid = (boats.active_boat() or {}).get("boat_id")
+        report["archived_id"] = learning.archive_debrief(report, bid)
+    except Exception:
+        pass
+    return report
+
+
+def _tactics(d, race_id, pb, models, log):
+    """The tactics half: the hindsight-optimal route on the wind that actually blew, vs the frozen
+    plan. Every refusal names itself and carries `start_epoch` where it knows it, so the caller can
+    still score the boat's own speed."""
     course_id = pb.get("course_id")
     start = float(pb.get("start_epoch") or 0)
     if not start:
-        return {"available": False, "note": "playbook has no start_epoch"}
-
+        return {"available": False, "note": "the frozen playbook has no start_epoch"}
     bbox = optimizer.course_bbox(d, course_id)
     if not bbox:
-        return {"available": False, "note": "course has no geocoded marks"}
+        return {"available": False, "start_epoch": start, "note": "course has no geocoded marks"}
     hours = optimizer.estimate_hours(d, course_id)
     t_end = start + hours * 3600
     pv_models = (pb.get("provenance") or {}).get("models") or None
     wf, wind_basis = _oracle_windfield(bbox, start, t_end, models or pv_models, race_id, log)
     if not wf.loaded:
-        return {"available": False, "note": "no wind data for the race window (neither the live sources "
-                "nor the GFS/HRRR archive served it — no egress?) — the oracle needs the wind that blew",
-                "windfield": {**wf.status(), "basis": wind_basis}, "log": []}
+        return {"available": False, "start_epoch": start,
+                "windfield": {**wf.status(), "basis": wind_basis},
+                "note": "no wind data for the race window (neither the live sources nor the "
+                        "GFS/HRRR archive served it — no egress?) — the oracle needs the wind "
+                        "that blew"}
     log("routing the hindsight-optimal (oracle) course…")
     oracle = optimizer.optimize_course(d, course_id, start, wf, avoid=True)
     if not oracle.get("available", True) and oracle.get("note"):
-        return {"available": False, "note": "oracle route failed: " + oracle["note"]}
+        return {"available": False, "start_epoch": start,
+                "note": "oracle route failed: " + oracle["note"]}
 
     log("building the actual-current field (for through-water scoring)…")
     try:
@@ -177,54 +235,43 @@ def run_judge(race_id, playbook_id=None, models=None, on_progress=None):
     variants = [{"side": v.get("id") or v.get("side"), "total_hours": v.get("total_hours"),
                  "share": v.get("share")} for v in (pb.get("variants") or [])]
     winning = next((v for v in variants if v["side"] == side_paid), None)
-
-    report = {
-        "available": True, "race_id": race_id, "race_name": d.get("name"),
-        "playbook_id": pid, "course_id": course_id, "start_epoch": start,
-        "oracle": {"total_hours": oracle_hours, "favored_side": side_paid,
-                   "route_confidence": oracle.get("route_confidence"), "path": oracle_path,
-                   "tacks": oracle.get("tacks")},
+    return {
+        "available": True, "start_epoch": start, "course_id": course_id, "marks": marks,
+        "oracle": oracle, "wf": wf, "cur": cur, "wave": wv,
+        "oracle_summary": {"total_hours": oracle_hours, "favored_side": side_paid,
+                           "route_confidence": oracle.get("route_confidence"), "path": oracle_path,
+                           "tacks": oracle.get("tacks")},
         "playbook": {"recommended": rec_side, "predicted_hours": predicted, "variants": variants,
                      "headline": pb.get("headline"), "agreement": pb.get("agreement")},
-        "regret": {"hours": regret_h, "minutes": (round(regret_h * 60) if regret_h is not None else None),
+        "regret": {"hours": regret_h,
+                   "minutes": (round(regret_h * 60) if regret_h is not None else None),
                    "side_paid": side_paid, "recommended_side": rec_side,
-                   "side_matched": (rec_side == side_paid),
-                   "winning_variant": winning},
+                   "side_matched": (rec_side == side_paid), "winning_variant": winning},
         "windfield": {**wf.status(), "basis": wind_basis},
-        "actual_track": _score_actual_track(race_id, oracle, marks, start, wf, cur, wv),
         "caveat": ("Oracle wind is the GFS/HRRR ARCHIVE cycle as of the gun (AWS open data) — the "
                    "forecast a navigator could have held, not a reanalysis, so regret reflects "
                    "forecast drift, not full hindsight. Polar/helm bins read the boat's own "
                    "instruments and do not depend on this field."
                    if wind_basis == "archive" else
-                   "Oracle wind is the best-available GRIB over the race window; a true post-race judge "
-                   "uses reanalysis/analysis fields. For a future/near race this is forecast-grade, so "
-                   "regret reflects forecast drift, not full hindsight."),
+                   "Oracle wind is the best-available GRIB over the race window; a true post-race "
+                   "judge uses reanalysis/analysis fields. For a future/near race this is "
+                   "forecast-grade, so regret reflects forecast drift, not full hindsight."),
     }
-    log("writing the critique…")
-    report["critique"] = _critique(report) or _deterministic_critique(report)
-    try:                                   # archive to the ongoing learning DB (best-effort)
-        bid = (boats.active_boat() or {}).get("boat_id")
-        report["archived_id"] = learning.archive_debrief(report, bid)
-    except Exception:
-        pass
-    return report
 
 
-def _score_actual_track(race_id, oracle, marks, start_epoch, wf, cur=None, wave=None):
-    """Score the boat's stored ACTUAL track vs the oracle line (helm execution), if one is uploaded/
-    fetched. Returns the actual_track block for the report; a no-track default keeps the slot honest.
-    `cur` (the actual-current field) lets the polar%/bins use speed-through-water, so a measured >100%
-    reflects real boat speed rather than a fair tide. `wave` (the actual sea-state field) separates the
-    flat-water helm number from the seaway (so helm_factor refinement doesn't double-count waves)."""
-    t = track.load_track(race_id)
+def _score_actual_track(t, oracle, marks, start_epoch, wf=None, cur=None, wave=None):
+    """Score the recording against the oracle line (helm execution) — and, with no oracle at all,
+    against the boat's own polar alone. `cur` (the actual-current field) lets the polar%/bins use
+    speed-through-water, so a measured >100% reflects real boat speed rather than a fair tide.
+    `wave` (the actual sea-state field) separates the flat-water helm number from the seaway (so
+    helm_factor refinement doesn't double-count waves). A no-track default keeps the slot honest."""
     if not t or not t.get("fixes"):
         return {"available": False,
-                "note": "no boat track for this race — upload a GPX or fetch our YB track below"}
+                "note": "no boat track for this recording — load the boat's log or upload a GPX"}
     try:
         from . import polars as POL
-        scored = track.score_track(t, oracle, marks, start_epoch, wf=wf, polars=POL.polars_stw(), cur=cur,
-                                   wave=wave, wave_coeffs=boats.active_wave_coeffs())
+        scored = track.score_track(t, oracle, marks, start_epoch, wf=wf, polars=POL.polars_stw(),
+                                   cur=cur, wave=wave, wave_coeffs=boats.active_wave_coeffs())
         # Boat-log tracks know the window they were cut to (derived vs the ⏺ LOG button). Every
         # number above is a number ABOUT that window, so it travels with them.
         if t.get("window"):
@@ -246,7 +293,44 @@ def _score_actual_track(race_id, oracle, marks, start_epoch, wf, cur=None, wave=
         return {"available": False, "note": f"track scoring failed: {type(e).__name__}"}
 
 
+def _performance_critique(r):
+    """The critique when there was no plan to judge — speed, not tactics. Says what the boat did
+    against its own polar and points at the refinement, and never invents a side that paid."""
+    at = r.get("actual_track") or {}
+    if not at.get("available"):
+        return {"assessment": r.get("tactics_note") or "Nothing to score.", "key_lesson": "",
+                "proposed_learnings": "", "brain_edit": "", "boat_model_note": "",
+                "model": "deterministic"}
+    pol, helm = at.get("polar_pct"), at.get("helm_pct")
+    nbins = len(at.get("perf_bins") or [])
+    hrs = at.get("elapsed_hours")
+    bits = [f"{pol}% of the flat-water polar" if pol is not None else None,
+            f"{at['polar_samples']} samples" if at.get("polar_samples") else None,
+            f"{nbins} measured cells for the boat model" if nbins else None]
+    assess = (f"Performance debrief over {hrs:.1f} h" if hrs else "Performance debrief") + \
+             ((": " + ", ".join(b for b in bits if b) + ".") if any(bits) else ".")
+    if at.get("trust", {}).get("refused_samples"):
+        assess += (f" {at['trust']['refused_samples']} sample(s) were refused from the learning "
+                   f"inputs on {', '.join(at['trust'].get('refused_channels') or ['a channel'])} — "
+                   "the instruments contradicted each other there.")
+    assess += " No frozen playbook, so nothing here judges the tactics."
+    lesson = ""
+    if helm is not None:
+        lesson = (f"The boat sailed {helm}% of its rated polar over this recording — "
+                  + ("above the cert: the rating is soft where that came from."
+                     if helm > 100 else "the gap is the coaching target."))
+    return {"assessment": assess, "key_lesson": lesson,
+            "proposed_learnings": (f"[{r.get('race_name')}] {hrs:.1f} h recording at {pol}% of polar"
+                                   f"; {nbins} measured cells archived." if hrs and pol else ""),
+            "brain_edit": "",
+            "boat_model_note": (f"{nbins} measured (TWS,TWA) cells archived — review the proposal in "
+                                "Learnings before it touches the boat model." if nbins else ""),
+            "model": "deterministic"}
+
+
 def _deterministic_critique(r):
+    if not r.get("tactics_available"):
+        return _performance_critique(r)
     reg = r["regret"]
     matched = reg["side_matched"]
     side_paid, rec = reg["side_paid"], reg["recommended_side"]
@@ -301,16 +385,37 @@ def _critique(r):
     if not API_KEY:
         return None
     at = r.get("actual_track") or {}
-    facts = {
-        "race": r["race_name"], "playbook": r["playbook"], "oracle": {
-            "favored_side": r["oracle"]["favored_side"], "total_hours": r["oracle"]["total_hours"]},
-        "regret": r["regret"], "caveat": r["caveat"],
-    }
+    tactics = bool(r.get("tactics_available"))
+    facts = {"race": r["race_name"]}
+    if tactics:
+        facts.update({"playbook": r["playbook"],
+                      "oracle": {"favored_side": r["oracle"]["favored_side"],
+                                 "total_hours": r["oracle"]["total_hours"]},
+                      "regret": r["regret"], "caveat": r["caveat"]})
+    else:
+        facts["no_playbook"] = r.get("tactics_note")
+        facts["perf_cells"] = len(at.get("perf_bins") or [])
+        facts["trust"] = at.get("trust")
     if at.get("available"):
         facts["actual_track"] = {k: at.get(k) for k in (
             "source", "elapsed_hours", "time_behind_optimal_min", "sailed_nm", "optimal_nm",
             "extra_distance_pct", "xte_mean_nm", "xte_p90_nm", "xte_max_nm", "side_worked",
             "polar_pct", "helm_pct", "sea_state_hs_mean", "wave_corrected", "polar_samples")}
+    perf_system = (
+        "You are an expert yacht-racing coach running a POST-RACE PERFORMANCE debrief. There was no "
+        "frozen pre-race playbook, so you have NO tactical plan and NO oracle route: say nothing "
+        "about which side paid, about regret, or about the strategy — you cannot know. What you have "
+        "is the boat's own recorded track scored against its ORC polar: polar_pct (% of the "
+        "flat-water polar achieved), helm_pct (the same with the sea-state loss divided back out, "
+        "when wave_corrected), elapsed_hours, sailed_nm, and the count of measured (TWS,TWA) cells "
+        "archived for the boat model. `trust` reports samples REFUSED from the learning inputs "
+        "because the instruments contradicted each other — mention it if any were. Separate helm "
+        "execution from conditions. A >100% of polar is real when the current was corrected (a soft "
+        "rating), not a mistake. Be concrete, concise, no preamble. Return STRICT JSON only with "
+        "keys: assessment (2-3 sentences on the speed the boat showed), key_lesson (one sentence), "
+        "proposed_learnings (one bullet for the boat's Learnings), brain_edit (empty string — there "
+        "is no plan to adjust), boat_model_note (what the measured cells suggest for the polar/helm "
+        "refinement, else empty string).")
     system = (
         "You are an expert yacht-racing coach running a POST-RACE DEBRIEF (the judge loop). You are "
         "given the frozen pre-race PLAYBOOK we carried (recommended first-beat side + variants) and the "
@@ -333,7 +438,8 @@ def _critique(r):
         "polar/crossover/helm_factor refinement the track suggests, else empty string).")
     try:
         from . import llm as lab_llm
-        txt, model = lab_llm.complete(system, json.dumps(facts, indent=2), max_tokens=1200)
+        txt, model = lab_llm.complete(system if tactics else perf_system,
+                                      json.dumps(facts, indent=2), max_tokens=1200)
         if txt.startswith("```"):
             txt = txt.strip("`")
             txt = txt[4:].strip() if txt.lower().startswith("json") else txt

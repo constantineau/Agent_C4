@@ -2301,7 +2301,9 @@ function initMonitorMap() {
 }
 
 /* ---------- Debrief (Lab-4 post-race judge loop) ---------- */
-const Deb = { raceId: null, playbookId: null, playbooks: null, running: false, report: null, track: null, trackBusy: false, trackMsg: "" };
+const Deb = { raceId: null, playbookId: null, playbooks: null, report: null, track: null,
+  trackBusy: false, trackMsg: "", recordings: null, agent: null, job: null, poll: null, msg: "",
+  viewing: null };
 // Fleet-retro card state (docs/RETRO_STUDY.md — debrief across the WHOLE fleet of a past race)
 const Retro = { ybId: "bayviewmack2025", msg: "", busy: false, races: null, job: null, report: null, poll: null };
 
@@ -2320,11 +2322,11 @@ async function renderDebrief() {
   if (!Deb.playbookId || !Deb.playbooks.some((b) => b.id === Deb.playbookId)) Deb.playbookId = (Deb.playbooks[0] || {}).id || null;
   try { Deb.track = await (await apiGet("/api/debrief/track?race_id=" + encodeURIComponent(Deb.raceId))).json(); }
   catch (e) { Deb.track = null; }
-  try { Deb.sessions = ((await (await apiGet("/api/racelog/sessions")).json()).sessions || [])
-    .filter((x) => x.end_ts || (x.window && x.window.end_ts)); }
-    // a session needs an END to be loadable — either the button's or the one the record derives
-    // (a race the crew never stopped recording still has a window; that is the whole point)
-  catch (e) { Deb.sessions = []; }
+  await debLoadRecordings();
+  if (stale("debrief")) return;
+  try { Deb.job = await (await apiGet("/api/debrief/run/status")).json(); }
+  catch (e) { Deb.job = null; }
+  if (Deb.job && Deb.job.state === "running" && !Deb.poll) Deb.poll = setInterval(debPoll, 4000);
   await retroRefresh();
   try {
     Retro.job = await (await apiGet("/api/retro/run/status")).json();
@@ -2335,13 +2337,14 @@ async function renderDebrief() {
 }
 
 // Boat-track card: upload a GPX or fetch our YB track, then "Run debrief" scores helm vs optimal.
+// Tracks that DON'T come off the boat's own log — a GPX export or the public YB feed. The boat's
+// own recordings live in the recordings card above, which is the normal path.
 function debTrackCard() {
   const t = Deb.track || {};
   const status = t.available
     ? `<span class="pill ok">track loaded</span> <span class="muted">${esc(t.source === "yb" ? "YB" : t.source === "boatlog" ? "boat log" : "GPX")}${t.boat ? " · " + esc(t.boat) : ""} · ${t.n} fixes${t.matched_by ? " · " + esc(t.matched_by) : ""}</span>`
     : `<span class="muted">No boat track yet — upload a GPX export or fetch our YB track.</span>`;
-  return `<div class="card">
-    <h3>Boat track <span class="muted" style="font-weight:400">— the real sailed line, scored vs the oracle (helm execution)</span></h3>
+  return `<details class="card"><summary><b>Another track source</b> <span class="muted" style="font-weight:400">— a GPX export or the public YB tracker, for a boat-log gap or another boat</span></summary>
     <div style="margin:4px 0 8px">${status} ${t.available ? '<button class="mini" onclick="debClearTrack()">Remove</button>' : ""}</div>
     <div class="opt-controls">
       <label>GPX <input type="file" id="debGpx" accept=".gpx,application/gpx+xml,text/xml"></label>
@@ -2349,13 +2352,6 @@ function debTrackCard() {
       <span class="muted">or</span>
       <label>Our boat <input id="debBoat" placeholder="boat name in the YB feed" style="width:200px"></label>
       <button onclick="debFetchYb()" ${Deb.trackBusy ? "disabled" : ""}>${Deb.trackBusy ? "Fetching…" : "Fetch from YB tracker"}</button>
-    </div>
-    <div class="opt-controls" style="margin-top:6px">
-      <span class="muted">or the <b>boat's own log</b> (full-res, from a race session):</span>
-      <select id="debSession">${(Deb.sessions || []).map((x, i) =>
-        `<option value="${i}">${esc(x.name || x.race_id || "session")} · ${new Date(x.start_ts * 1000).toISOString().slice(0, 16)}Z${x.kind ? " · " + esc(x.kind) : ""}${esc(debWinSuffix(x.window))}</option>`).join("") || '<option value="">no sessions backfilled yet</option>'}</select>
-      <label class="muted" title="Load exactly what the ⏺ LOG button recorded instead of the window the record supports"><input type="checkbox" id="debUseMarker"> button window only</label>
-      <button class="mini" onclick="debFromLog()" ${Deb.trackBusy || !(Deb.sessions || []).length ? "disabled" : ""}>Use boat log</button>
     </div>
     ${t.available && t.window ? `<div class="muted" style="font-size:12px;margin-top:4px">Window: <b>${esc(debWinRange(t.window))}</b> · ${t.window.kind === "derived" ? "derived from the record" : "the ⏺ LOG marker"}${t.window.motion_device ? " · off the " + esc(t.window.motion_device) : ""}${(t.window.provenance || []).map((p) => "<br>· " + esc(p)).join("")}</div>` : ""}
     ${t.available && t.trust ? `<div class="muted" style="font-size:12px;margin-top:2px">Trust: ${t.trust.available ? `<b>${esc(((t.trust.summary || {}).line) || "swept")}</b> — danger windows are excluded from polar/helm refinement` : `<b>sweep unavailable</b> — ${esc(t.trust.note || "")}`}</div>` : ""}
@@ -2365,37 +2361,106 @@ function debTrackCard() {
 
 // The window a session will actually be loaded over: the record's, with the button's alongside
 // whenever the two disagree (Jul 18: 7.36 h derived vs 1.81 h pressed).
-function debWinSuffix(w) {
-  if (!w || w.hours == null) return "";
-  const grew = w.marker_hours != null && w.hours - w.marker_hours > 0.05;
-  return ` · ${w.hours} h${grew ? ` (button said ${w.marker_hours} h)` : ""}`;
-}
-
 function debWinRange(w) {
   const iso = (t) => new Date(t * 1000).toISOString().slice(11, 16) + "Z";
   return `${iso(w.start_ts)} → ${iso(w.end_ts)}` + (w.hours != null ? ` · ${w.hours} h` : "");
 }
 
-async function debFromLog() {
-  const sel = document.getElementById("debSession");
-  const ses = (Deb.sessions || [])[parseInt(sel && sel.value, 10)];
-  if (!ses) { Deb.trackMsg = "No backfilled session to load."; return paintDebrief(); }
-  const marker = !!(document.getElementById("debUseMarker") || {}).checked;
-  Deb.trackBusy = true; Deb.trackMsg = ""; paintDebrief();
+// ---- the recordings surface: what the boat sailed, and what has been debriefed ----------------
+async function debLoadRecordings() {
   try {
-    // The Lab sends the session, not the bounds: the window is resolved server-side from the
-    // agent's derived `window` so every caller of this route gets the same race.
-    const r = await jsonOrFriendly(await apiPost("/api/debrief/track/from-log",
-      { race_id: Deb.raceId, session_id: ses.id, start_ts: ses.start_ts, end_ts: ses.end_ts,
-        name: ses.name, use_marker: marker }));
-    Deb.trackMsg = r.ok ? `Loaded ${r.n} fixes from the boat log ("${ses.name}")` +
-      (r.window ? ` over ${debWinRange(r.window)}${r.window.kind === "derived" ? " (derived, not the button)" : " (the button's window)"}` : "") +
-      (r.sail_changes ? ` + ${r.sail_changes} sail change(s)` : "") + "."
-      : (r.detail || "boat-log fetch failed");
-  } catch (e) { Deb.trackMsg = "boat-log fetch failed: " + (e.message || e); }
-  Deb.trackBusy = false;
-  Deb.track = await (await apiGet("/api/debrief/track?race_id=" + encodeURIComponent(Deb.raceId))).json();
+    const r = await (await apiGet("/api/debrief/recordings?race_id=" + encodeURIComponent(Deb.raceId))).json();
+    Deb.recordings = r.recordings || []; Deb.agent = r.agent || null;
+  } catch (e) { Deb.recordings = []; Deb.agent = { available: false, note: "the Lab could not list recordings" }; }
+  try { Deb.track = await (await apiGet("/api/debrief/track?race_id=" + encodeURIComponent(Deb.raceId))).json(); }
+  catch (e) { Deb.track = null; }
+}
+
+// One button per recording: the job fetches the boat log for that session (if it isn't loaded
+// already) and judges it. No ordering for the crew to get right.
+async function debRunRecording(i) {
+  const x = (Deb.recordings || [])[i];
+  if (!x) return;
+  Deb.msg = ""; Deb.report = null; Deb.viewing = null;
+  const body = { race_id: Deb.raceId, playbook_id: Deb.playbookId || undefined,
+                 recording: x.recording };
+  if (x.session_id != null || x.start_ts != null) {
+    body.session_id = x.session_id; body.start_ts = x.start_ts; body.name = x.name;
+  }
+  try {
+    const r = await (await apiPost("/api/debrief/run", body)).json();
+    if (!r.ok) { Deb.msg = r.note || r.detail || "could not start the debrief"; return paintDebrief(); }
+    Deb.job = { state: "running", progress: [], race_id: Deb.raceId, recording: x.recording };
+    if (Deb.poll) clearInterval(Deb.poll);
+    Deb.poll = setInterval(debPoll, 4000);
+  } catch (e) { Deb.msg = "could not start the debrief: " + (e.message || e); }
   paintDebrief();
+}
+
+async function debPoll() {
+  try { Deb.job = await (await apiGet("/api/debrief/run/status")).json(); } catch (e) { return; }
+  if (Deb.job.state !== "running") {
+    if (Deb.poll) { clearInterval(Deb.poll); Deb.poll = null; }
+    if (Deb.job.state === "done") { Deb.report = Deb.job.report; Deb.viewing = null; }
+    await debLoadRecordings();
+  }
+  if (location.hash.replace("#", "") === "debrief") paintDebrief();
+}
+
+// A debrief already archived reopens from the record — re-running one is a choice, not the only
+// way to see it again.
+async function debOpenDebrief(id) {
+  Deb.msg = ""; Deb.viewing = id; Deb.report = null; paintDebrief();
+  try {
+    const d = await (await apiGet("/api/learning/debriefs/" + id)).json();
+    const rep = d.report || {};
+    Deb.report = Object.assign({ available: true, race_name: d.race_name, archived_id: d.id,
+                                 archived_at: d.created_at }, rep);
+    if (Deb.report.actual_track && d.perf_bins) Deb.report.actual_track.n_bins = d.perf_bins.length;
+  } catch (e) { Deb.msg = "could not open that debrief"; Deb.viewing = null; }
+  paintDebrief();
+}
+
+function debRecordingsCard() {
+  const rs = Deb.recordings;
+  const j = Deb.job || {};
+  const running = j.state === "running";
+  const agentNote = Deb.agent && Deb.agent.available === false
+    ? `<div class="banner warn" style="font-size:12px;margin-bottom:8px">${esc(Deb.agent.note || "the boat agent is unreachable")}</div>` : "";
+  if (!rs) return `<div class="card"><h3>Recordings</h3><div class="loading">Loading…</div></div>`;
+  const rows = rs.map((x, i) => {
+    const d = x.debrief;
+    const when = x.start_ts ? new Date(x.start_ts * 1000).toISOString().slice(0, 16).replace("T", " ") + "Z" : "—";
+    const grew = x.marker_hours != null && x.hours != null && x.hours - x.marker_hours > 0.05
+      ? ` <span class="muted" title="the ⏺ LOG button stopped mid-race; the record supports the longer window">(button said ${x.marker_hours} h)</span>` : "";
+    const state = d
+      ? `<span class="pill ok">debriefed</span> <span class="muted">${new Date(d.created_at * 1000).toLocaleDateString()}${d.polar_pct != null ? " · " + d.polar_pct + "% of polar" : ""}${d.n_bins ? " · " + d.n_bins + " measured cells" : ""}${x.n_debriefs > 1 ? " · " + x.n_debriefs + " runs" : ""}</span>`
+      : (x.track ? `<span class="pill">track loaded</span> <span class="muted">${x.track.n} fixes</span>`
+                 : `<span class="muted">not debriefed yet</span>`);
+    const isThis = running && j.recording != null && x.recording != null
+      && Math.abs(j.recording - x.recording) < 1;
+    const btns = running
+      ? (isThis ? '<span class="muted">running…</span>' : "")
+      : `<button class="mini" onclick="debRunRecording(${i})">${d ? "Re-run" : "Debrief"}</button>`
+        + (d ? ` <button class="mini" onclick="debOpenDebrief(${d.id})">Open</button>` : "");
+    return `<tr${isThis ? ' class="winrow"' : ""}>
+      <td><b>${esc(x.name || "recording")}</b><div class="muted" style="font-size:11px">${when}${x.kind ? " · " + esc(x.kind) : ""}</div></td>
+      <td>${x.hours != null ? x.hours + " h" : "—"}${grew}</td>
+      <td>${state}</td>
+      <td style="white-space:nowrap">${btns}</td></tr>`;
+  }).join("");
+  const prog = running
+    ? `<div class="muted" style="font-size:12px;margin-top:6px">Debrief running… <span class="loading-dot"></span><br>${esc((j.progress || []).slice(-3).join(" · "))}</div>`
+    : (j.state === "error" ? `<div class="banner warn" style="font-size:12px;margin-top:6px">Debrief failed: ${esc(j.error || "")}</div>` : "");
+  return `<div class="card">
+    <h3>Recordings <span class="muted" style="font-weight:400">— every race the boat logged, and which of them has been debriefed</span></h3>
+    ${agentNote}
+    ${rows ? `<table class="fleet-tbl"><thead><tr><th>Recording</th><th>Length</th><th>State</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
+           : '<div class="placeholder">No recordings for this race yet — the boat log has no race session here, and no track has been uploaded.</div>'}
+    ${prog}
+    ${Deb.msg ? `<div class="muted" style="font-size:12px;margin-top:6px"><b>${esc(Deb.msg)}</b></div>` : ""}
+    <div class="muted" style="font-size:11px;margin-top:6px">A debrief scores the boat's own speed against its polar and archives the measured cells the boat model learns from — that needs nothing but the recording. With a frozen playbook it also judges the tactics: which side paid, and the regret against the plan you carried.</div>
+  </div>`;
 }
 
 async function debUploadGpx() {
@@ -2408,7 +2473,7 @@ async function debUploadGpx() {
     Deb.trackMsg = r.ok ? `Loaded ${r.n} fixes from ${f.name}.` : (r.detail || "upload failed");
   } catch (e) { Deb.trackMsg = "upload failed"; }
   Deb.trackBusy = false;
-  Deb.track = await (await apiGet("/api/debrief/track?race_id=" + encodeURIComponent(Deb.raceId))).json();
+  await debLoadRecordings();
   paintDebrief();
 }
 
@@ -2421,23 +2486,22 @@ async function debFetchYb() {
       : (r.note || r.detail || "fetch failed") + (r.boats ? " — boats: " + r.boats.slice(0, 20).join(", ") : "");
   } catch (e) { Deb.trackMsg = "fetch failed"; }
   Deb.trackBusy = false;
-  Deb.track = await (await apiGet("/api/debrief/track?race_id=" + encodeURIComponent(Deb.raceId))).json();
+  await debLoadRecordings();
   paintDebrief();
 }
 
 async function debClearTrack() {
   await apiPost("/api/debrief/track/clear", { race_id: Deb.raceId });
-  Deb.track = { available: false }; Deb.trackMsg = "Track removed."; paintDebrief();
+  Deb.trackMsg = "Track removed.";
+  await debLoadRecordings();
+  paintDebrief();
 }
 
-async function debPickRace(id) { Deb.raceId = id; Lab.sel = id; Deb.report = null; Deb.playbookId = null; renderDebrief(); }
-async function debRun() {
-  if (!Deb.playbookId) return;
-  Deb.running = true; paintDebrief();
-  try { Deb.report = await (await apiPost("/api/debrief/run", { race_id: Deb.raceId, playbook_id: Deb.playbookId })).json(); }
-  catch (e) { Deb.report = { available: false, note: String(e) }; }
-  Deb.running = false; paintDebrief();
+async function debPickRace(id) {
+  Deb.raceId = id; Lab.sel = id; Deb.report = null; Deb.viewing = null; Deb.playbookId = null;
+  Deb.recordings = null; renderDebrief();
 }
+
 async function debApply() {
   const ta = document.getElementById("debLearn"); if (!ta) return;
   const msg = document.getElementById("debApplyMsg"); if (msg) msg.textContent = "Saving…";
@@ -2449,29 +2513,30 @@ async function debApply() {
 
 function paintDebrief() {
   const r = Deb.report;
+  const running = (Deb.job || {}).state === "running";
   const pbOpts = (Deb.playbooks || []).map((b) => `<option value="${attr(b.id)}" ${b.id === Deb.playbookId ? "selected" : ""}>${esc((b.signed ? "🔒 " : "") + (b.headline || b.id).slice(0, 56))} · ${b.n_variants} var</option>`).join("");
   let body = "";
-  if (Deb.running) body = '<div class="card"><div class="loading">Running the judge — building the actual-wind field, routing the oracle, writing the critique… (~1–2 min)</div></div>';
-  else if (r && r.available) body = debReport(r);
+  if (r && r.available) body = debReport(r);
   else if (r && !r.available) body = `<div class="card"><div class="placeholder">${esc(r.note || "debrief unavailable")}</div></div>`;
 
   document.getElementById("view").innerHTML = `<div class="opt">
     <div class="card">
-      <h3>Debrief <span class="muted" style="font-weight:400">— post-race judge loop: oracle re-route → regret → critique → write-back</span></h3>
+      <h3>Debrief <span class="muted" style="font-weight:400">— after every race: what the boat sailed, how fast, and what the model should learn</span></h3>
       <div class="opt-controls">
         <label>Race <select onchange="debPickRace(this.value)">
           ${Lab.races.map((x) => `<option value="${attr(x.race_id)}" ${x.race_id === Deb.raceId ? "selected" : ""}>${esc(x.name || x.race_id)}</option>`).join("")}
         </select></label>
-        ${(Deb.playbooks || []).length ? `<label>Playbook <select onchange="Deb.playbookId=this.value" style="min-width:300px">${pbOpts}</select></label>
-          <button onclick="debRun()" ${Deb.running ? "disabled" : ""}>${Deb.running ? "Judging…" : "Run debrief"}</button>`
-          : `<span class="muted">No frozen playbook for this race — freeze one in Gameplan to judge against.</span>`}
+        ${(Deb.playbooks || []).length
+          ? `<label title="The frozen plan the debrief judges the tactics against. Without one you still get the performance debrief.">Judge against <select onchange="Deb.playbookId=this.value" style="min-width:300px">${pbOpts}</select></label>`
+          : `<span class="muted">No frozen playbook for this race — the debrief will score the boat's speed, not the tactics. Freeze one in Gameplan before the next race.</span>`}
       </div>
-      <div class="muted" style="font-size:12px;margin-top:4px">The optimizer re-routes the course on the wind that actually blew (oracle) and compares it to the plan you carried — which side paid, the regret vs perfect foresight, and a coach's critique you can promote into Learnings.</div>
     </div>
-    ${debTrackCard()}
+    ${debRecordingsCard()}
     ${body}
+    ${debTrackCard()}
     ${retroCard()}
   </div>`;
+  if (running && !Deb.poll) Deb.poll = setInterval(debPoll, 4000);
 }
 
 // ---- Fleet retro (docs/RETRO_STUDY.md): past-race archive + per-boat optimizer backtest ---------
@@ -2583,7 +2648,7 @@ async function retroReport() {
 
 function debTrackScore(at) {
   if (!at.available) {
-    return `<div class="card"><h3>Helm vs optimal</h3><div class="placeholder">${esc(at.note || "Upload a GPX or fetch our YB track above, then run the debrief.")}</div></div>`;
+    return `<div class="card"><h3>Speed vs polar</h3><div class="placeholder">${esc(at.note || "No track scored for this recording.")}</div></div>`;
   }
   const tb = at.time_behind_optimal_min;
   const tbTxt = tb == null ? "—" : (tb >= 0 ? tb + " min behind optimal" : Math.abs(tb) + " min faster than the oracle line");
@@ -2607,39 +2672,30 @@ function debTrackScore(at) {
   const cav = (at.caveats || []).length
     ? `<div class="banner warn" style="margin-top:8px;font-size:12px">${at.caveats.map(esc).join("<br>")}</div>` : "";
   return `<div class="card">
-    <h3>Helm vs optimal <span class="muted" style="font-weight:400">— ${esc(at.source === "yb" ? "YB track" : "GPX track")}${at.boat ? " · " + esc(at.boat) : ""} · ${at.fixes_scored}/${at.fixes_total} fixes scored</span></h3>
+    <h3>Speed vs polar <span class="muted" style="font-weight:400">— ${esc(at.source === "yb" ? "YB track" : at.source === "boatlog" ? "the boat's own log" : "GPX track")}${at.boat ? " · " + esc(at.boat) : ""} · ${at.fixes_scored}/${at.fixes_total} fixes scored${(at.perf_bins || at.n_bins) ? " · " + ((at.perf_bins || []).length || at.n_bins) + " measured cells archived" : ""}${(at.trust || {}).refused_samples ? " · " + at.trust.refused_samples + " refused (" + esc((at.trust.refused_channels || []).join(", ")) + ")" : ""}</span></h3>
     <div class="dep-grid">
-      ${row("Time behind optimal", `${tbTxt} <span class="muted">(sailed ${at.elapsed_hours != null ? at.elapsed_hours.toFixed(1) + " h" : "—"} vs oracle ${at.oracle_hours != null ? at.oracle_hours.toFixed(1) + " h" : "—"})</span>`)}
+      ${at.oracle_hours != null ? row("Time behind optimal", `${tbTxt} <span class="muted">(sailed ${at.elapsed_hours != null ? at.elapsed_hours.toFixed(1) + " h" : "—"} vs oracle ${at.oracle_hours.toFixed(1)} h)</span>`)
+        : row("Sailed", `${at.elapsed_hours != null ? at.elapsed_hours.toFixed(1) + " h" : "—"} <span class="muted">— no oracle route (no frozen playbook), so there is no time-behind to quote</span>`)}
       ${row("Distance sailed", `${at.sailed_nm} nm` + (at.extra_distance_pct != null ? ` · <b>${at.extra_distance_pct}% over</b> the optimal ${at.optimal_nm != null ? at.optimal_nm + " nm" : ""}` : "") + (at.rhumb_nm ? ` <span class="muted">(rhumb ${at.rhumb_nm} nm)</span>` : ""))}
-      ${row("Cross-track off optimal", at.xte_mean_nm != null ? `mean ${at.xte_mean_nm} nm · p90 ${at.xte_p90_nm} nm · max ${at.xte_max_nm} nm` : "—")}
-      ${row("First beat worked", `<b>${esc(at.side_worked || "—")}</b>`)}
+      ${at.xte_mean_nm != null ? row("Cross-track off optimal", `mean ${at.xte_mean_nm} nm · p90 ${at.xte_p90_nm} nm · max ${at.xte_max_nm} nm`) : ""}
+      ${at.side_worked ? row("First beat worked", `<b>${esc(at.side_worked)}</b>`) : ""}
       ${pol ? row("Polar achieved", pol + ccNote) : ""}
       ${helmRow}
     </div>
     ${cav}
-    <div class="muted" style="font-size:11px;margin-top:6px">The boat never sails the optimal line exactly — these are coaching deltas. Oversail + cross-track = steering/tactics; polar% = helm/trim vs conditions. The critique above separates the causes.</div>
+    <div class="muted" style="font-size:11px;margin-top:6px">The boat never sails the optimal line exactly — these are coaching deltas. Oversail + cross-track = steering/tactics; polar% = helm/trim vs conditions. The critique above separates the causes. Measured cells archived here are what <a href="#learnings">Learnings → Refine the boat model</a> proposes from.</div>
   </div>`;
 }
 
 function debReport(r) {
-  const reg = r.regret, o = r.oracle, pb = r.playbook, c = r.critique || {};
-  const pill = reg.side_matched ? '<span class="pill ok">side held</span>' : '<span class="pill warn">side missed</span>';
-  const regMin = reg.minutes != null ? (reg.minutes >= 0 ? reg.minutes + " min slower than optimal" : Math.abs(reg.minutes) + " min (plan beat the model)") : "—";
-  const vrows = (pb.variants || []).map((v) => `<tr class="${v.side === reg.side_paid ? "winrow" : ""}">
-      <td>${esc(v.side || "?")}${v.side === pb.recommended ? " ★" : ""}</td>
-      <td>${v.total_hours != null ? v.total_hours.toFixed(1) + " h" : ""}</td>
-      <td>${v.share != null ? Math.round(v.share * 100) + "%" : ""}</td>
-      <td>${v.side === reg.side_paid ? "✓ paid" : ""}</td></tr>`).join("");
-  return `<div class="card">
-      <h3>Result ${pill}</h3>
-      <div class="dep-grid">
-        <div class="dep-row"><b style="min-width:130px;display:inline-block">Side that paid</b> <b>${esc(reg.side_paid)}</b> · recommended <b>${esc(reg.recommended_side || "—")}</b> ${reg.side_matched ? "(matched)" : "(missed)"}</div>
-        <div class="dep-row"><b style="min-width:130px;display:inline-block">Oracle optimal</b> ${o.total_hours != null ? o.total_hours.toFixed(1) + " h" : "—"} · plan predicted ${pb.predicted_hours != null ? pb.predicted_hours.toFixed(1) + " h" : "—"}</div>
-        <div class="dep-row"><b style="min-width:130px;display:inline-block">Regret</b> ${esc(regMin)}</div>
-      </div>
-      <table class="fleet-tbl" style="margin-top:8px"><thead><tr><th>Variant</th><th>Predicted</th><th>Agreement</th><th>Outcome</th></tr></thead><tbody>${vrows}</tbody></table>
-      <div class="muted" style="font-size:11px;margin-top:6px">★ = recommended · highlighted = the side that paid. ${esc(r.caveat || "")}</div>
-    </div>
+  const c = r.critique || {};
+  const w = r.recording || (r.actual_track || {}).window || null;
+  const head = `<div class="card">
+    <h3>${esc(r.race_name || "Debrief")} <span class="muted" style="font-weight:400">— ${w && w.start_ts ? esc(new Date(w.start_ts * 1000).toISOString().slice(0, 16).replace("T", " ") + "Z") + (w.hours != null ? " · " + w.hours + " h" : "") : "loaded track"}</span></h3>
+    ${r.archived_id ? `<div class="muted" style="font-size:12px">Archived debrief #${r.archived_id}${r.archived_at ? " · " + new Date(r.archived_at * 1000).toLocaleString() : ""} — reopened from the record, not re-run.</div>` : ""}
+    ${r.tactics_available ? "" : `<div class="banner" style="font-size:12px;margin-top:6px"><b>Performance debrief.</b> ${esc(r.tactics_note || "No frozen playbook for this race, so nothing here judges the tactics.")}</div>`}
+  </div>`;
+  return head + (r.tactics_available ? debTacticsCard(r) : "") + `
     <div class="card">
       <h3>Coach's critique <span class="muted" style="font-weight:400">— ${esc(c.model || "deterministic")}</span></h3>
       <p style="margin:4px 0">${esc(c.assessment || "")}</p>
@@ -2652,6 +2708,28 @@ function debReport(r) {
       <h3>Write-back → Learnings <span class="muted" style="font-weight:400">— review, then promote to the next prep</span></h3>
       <textarea id="debLearn" rows="3" style="width:100%;box-sizing:border-box">${esc(c.proposed_learnings || "")}</textarea>
       <div style="margin-top:8px"><button onclick="debApply()">Promote to Learnings</button> <span id="debApplyMsg" class="muted" style="font-size:12px"></span></div>
+    </div>`;
+}
+
+// The tactics half — only when a frozen playbook gave the oracle something to judge against.
+function debTacticsCard(r) {
+  const reg = r.regret, o = r.oracle, pb = r.playbook;
+  const pill = reg.side_matched ? '<span class="pill ok">side held</span>' : '<span class="pill warn">side missed</span>';
+  const regMin = reg.minutes != null ? (reg.minutes >= 0 ? reg.minutes + " min slower than optimal" : Math.abs(reg.minutes) + " min (plan beat the model)") : "—";
+  const vrows = (pb.variants || []).map((v) => `<tr class="${v.side === reg.side_paid ? "winrow" : ""}">
+      <td>${esc(v.side || "?")}${v.side === pb.recommended ? " ★" : ""}</td>
+      <td>${v.total_hours != null ? v.total_hours.toFixed(1) + " h" : ""}</td>
+      <td>${v.share != null ? Math.round(v.share * 100) + "%" : ""}</td>
+      <td>${v.side === reg.side_paid ? "✓ paid" : ""}</td></tr>`).join("");
+  return `<div class="card">
+      <h3>Tactics ${pill}</h3>
+      <div class="dep-grid">
+        <div class="dep-row"><b style="min-width:130px;display:inline-block">Side that paid</b> <b>${esc(reg.side_paid)}</b> · recommended <b>${esc(reg.recommended_side || "—")}</b> ${reg.side_matched ? "(matched)" : "(missed)"}</div>
+        <div class="dep-row"><b style="min-width:130px;display:inline-block">Oracle optimal</b> ${o.total_hours != null ? o.total_hours.toFixed(1) + " h" : "—"} · plan predicted ${pb.predicted_hours != null ? pb.predicted_hours.toFixed(1) + " h" : "—"}</div>
+        <div class="dep-row"><b style="min-width:130px;display:inline-block">Regret</b> ${esc(regMin)}</div>
+      </div>
+      <table class="fleet-tbl" style="margin-top:8px"><thead><tr><th>Variant</th><th>Predicted</th><th>Agreement</th><th>Outcome</th></tr></thead><tbody>${vrows}</tbody></table>
+      <div class="muted" style="font-size:11px;margin-top:6px">★ = recommended · highlighted = the side that paid. ${esc(r.caveat || "")}</div>
     </div>`;
 }
 

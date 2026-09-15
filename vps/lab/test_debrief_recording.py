@@ -160,14 +160,7 @@ check("the 4-sample cell is skipped and the skip is reported",
       not any(a["twa"] == 142.0 for a in pm["adjustments"]) and pm["summary"]["thin_cells_skipped"] == 1)
 
 print("3c. a recording that predates the gun is said so:")
-class _Trk:
-    pass
-saved = J.track.load_track
-J.track.load_track = lambda rid: mktrack(window=True)
-try:
-    sc = J._score_actual_track("x", ORACLE, MARKS, GUN, None)
-finally:
-    J.track.load_track = saved
+sc = J._score_actual_track(mktrack(window=True), ORACLE, MARKS, GUN)
 check("the caveat names the gap in days and the bins stand",
       sc.get("predates_gun") is True and any("BEFORE the gun" in c for c in sc.get("caveats") or [])
       and len(sc.get("perf_bins") or []) >= 1)

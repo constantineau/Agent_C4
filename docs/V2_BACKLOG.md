@@ -954,6 +954,14 @@ Build order, agreed 2026-09-08:
     113; polar% 105/99 → 87/88). `fold_twa()` now matches `obspolar`. Proposal cells are
     sample-weighted across configs and thin cells (< 20 samples) are skipped and counted.
     Full account: `C4_TELEMETRY_PROGRESS.md` → Session 2026-09-15.
+  - **✅ The debrief is a PRODUCT (2026-09-15, Cole's ask: "available in the C4 Lab after every
+    race — we shouldn't have to do a fresh session here").** The tab opens on a **Recordings**
+    table (boat-log sessions × the Lab's tracks × archived debriefs, `GET
+    /api/debrief/recordings`), one button per row, run as a background job with progress
+    (`jobs.start("debrief")` + `/api/debrief/run/status`). **A debrief no longer needs a frozen
+    playbook** — `judge._tactics()` is the half that does, and it reports itself unavailable by
+    name while the performance half (polar %, trust, the measured cells) always runs. Tracks are
+    keyed per recording. Verified on three real recordings, one button each.
 - **B. A decision timeline — what the crew saw, next to what was true.** `timeline-fullrace/`
   already holds 1,091 frames of every engine endpoint across that race: a recording of the iPad.
   Scrub it against the oracle route — 19:23Z off-book, 20:40Z bank dies, 22:08Z compass warning,

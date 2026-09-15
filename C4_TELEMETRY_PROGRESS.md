@@ -15,6 +15,13 @@ are debriefed on the live lab and **proposal #2 is waiting in Debrief → "Refin
 (helm 0.931, 29 cell adjustments off 165 measured bins / 9,325 samples / 2 recordings, 18 thin
 cells skipped). Nothing has been applied — that is his. Details in the 2026-09-15 section.
 
+**2026-09-15, later: the debrief is a PRODUCT.** Cole: *"I want the debrief to be something
+available in the C4 Lab after every race — we shouldn't have to do a fresh session here to create
+one."* Shipped the same day, live on the standing lab. The Debrief tab now opens on a
+**Recordings** table — every race session the boat logged, joined with the tracks the Lab holds
+and the debriefs it has archived — and each row carries ONE button. See the 2026-09-15 (product)
+section.
+
 **The refinement queue, in rough order of value:**
 1. **Walk Cole through his first apply.** Review proposal #2 with him: the 4 kn cells (55–78%,
    clamped to ×0.85) are pre-start drift and should be unchecked; the 6 kn A3+SS cells at
@@ -47,6 +54,51 @@ corpus are the instruments for the whole phase — anything that flaps on Jul 15
 construction. **And (2026-09-15): run the real chain end to end before believing any link of it
 — five defects sat between "the bins are measured" and "a proposal exists", none visible from
 unit tests, all found by running the two recordings through the live route.**
+
+## Session 2026-09-15 (product) — the debrief stops needing a Claude session
+
+**Cole's ask:** a debrief after every race, from the Lab, without a fresh Claude Code session.
+Three things stood in the way, all now shipped and live:
+
+1. **A debrief REQUIRED a frozen playbook.** `run_judge` refused outright without one, so a race
+   nobody wrote a playbook for could not be debriefed at all — *including the boat's own speed,
+   which needs no plan to be true.* The judge is split: `_tactics()` (oracle re-route, side that
+   paid, regret) needs the playbook and reports itself unavailable **by name**; the performance
+   half (polar %, helm %, the trust sweep, the measured cells the boat model learns from) always
+   runs. The report carries `tactics_available` + `tactics_note`, the card says "Performance
+   debrief" instead of inventing a side, and the critique has a performance prompt that is
+   forbidden to mention which side paid.
+2. **One stored track per race id.** Tracks are keyed on (race, window start) now —
+   `track.list_tracks()`, and `load_track` falls back to the pre-2026-09-15 bare path when that
+   file's window is the one asked for, so the Jul 18 track already on the live lab still loads.
+3. **Nothing could say what had been debriefed.** `GET /api/debrief/recordings` joins the boat
+   log's sessions × the Lab's tracks × the archived debriefs → the tab's home screen. A session
+   with no end at all is not offered; another regatta's session is not listed; a GPX the boat log
+   can't explain still is; and with the boat unreachable it says so and still lists what the Lab
+   holds.
+
+**And the run is a background job** (`jobs.start("debrief")`, `GET /api/debrief/run/status`,
+polled every 4 s with a progress tail) — the Jul 18 recording is ~13 s of boat log plus ~40 s of
+oracle routing warm, and a cold archive fetch is minutes, past the gateway's 300 s cap. Naming a
+session in the body makes it **one button**: the job fetches that recording off the boat log and
+judges it, so there is no ordering for the crew to get right.
+
+**Measured end to end on a throwaway lab against the live agent** (Cole's archive deliberately
+untouched — the standing lab was only read): three recordings, one button each →
+**Jul 18 7.36 h / 88% / 113 cells / 23 refused · Jul 15 1.6 h / 87% / 52 cells · Jul 08 0.45 h /
+85% / 6 cells**, each archived under its own recording, and `propose()` over all three = 171
+measured bins. `test_debrief_product.py` is new (22 checks); all **25 lab test scripts** pass.
+
+Read-path detail worth keeping: a debrief archived before this change has no `tactics_available`,
+and a reader that treats a missing flag as False would relabel a fully-judged race a performance
+debrief. `learning._fill_report` infers it from the row (an oracle time ⇒ tactics ran) and
+recovers `recording` from `window_start`. **A default is a decision; make it at the read path,
+and make it from evidence the row already carries.**
+
+Still open on this surface (none of it blocking): the debrief does not run itself when a new
+recording appears (the row says "not debriefed yet" — a nudge, not automation); the Jul 08
+recording is a 27-minute session that now feeds the proposal like any other, which is honest but
+worth Cole's eye; and the report card still has no notion of a retirement.
 
 ## Session 2026-09-15 — the polar → optimizer link (queue item #1)
 
