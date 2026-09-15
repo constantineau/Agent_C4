@@ -783,10 +783,107 @@ async def playbook_download(pid: str):
 # ---- Debrief (Lab-4 post-race judge loop: oracle re-route → regret → critique → write-back) ---
 @app.post("/api/debrief/run")
 async def debrief_run(body: dict):
-    race_id = (body or {}).get("race_id")
+    """Start a debrief of ONE RECORDING, as a background job (poll /api/debrief/run/status).
+
+    A debrief walks a whole race: the Jul 18 2026 recording is ~13 s of boat log plus ~40 s of
+    oracle routing with a warm GRIB cache, and a cold archive fetch is minutes — past the gateway's
+    request cap and far past a browser's patience. `jobs` already carries the progress + polling
+    pattern the retro batch uses.
+
+    Body: {race_id, playbook_id?, recording?, session_id?/start_ts?/use_marker?}. Naming a session
+    makes this ONE button: the job fetches that recording off the boat log, then judges it."""
+    from . import jobs
+    b = body or {}
+    race_id = b.get("race_id")
     if not race_id:
         return JSONResponse({"detail": "race_id required"}, status_code=400)
-    return await run_in_threadpool(judge.run_judge, race_id, (body or {}).get("playbook_id"))
+
+    def _work(progress):
+        rec = b.get("recording")
+        if b.get("session_id") is not None or b.get("start_ts") is not None:
+            progress("fetching this recording from the boat log…")
+            res, code = load_log_track(b)
+            if code != 200:
+                return {"available": False,
+                        "note": res.get("detail") or "the boat log could not be fetched"}
+            rec = (res.get("window") or {}).get("start_ts")
+            progress(f"{res.get('n')} fixes over {(res.get('window') or {}).get('hours')} h"
+                     f" · {res.get('sail_changes')} sail change(s)")
+        return judge.run_judge(race_id, b.get("playbook_id"), on_progress=progress, recording=rec)
+
+    return jobs.start("debrief", _work, result_key="report",
+                      meta={"race_id": race_id, "recording": b.get("recording"),
+                            "session_id": b.get("session_id")})
+
+
+@app.get("/api/debrief/run/status")
+async def debrief_run_status():
+    from . import jobs
+    return jobs.status("debrief")
+
+
+@app.get("/api/debrief/recordings")
+async def debrief_recordings(race_id: str = None):
+    """What the boat has recorded, and which of it has been debriefed — the tab's home screen.
+
+    Joins three things the Lab kept separately until 2026-09-15: the boat log's race SESSIONS
+    (what was sailed), the TRACKS this Lab has loaded, and the archived DEBRIEFS. Without this a
+    crew cannot tell whether last weekend's race has been debriefed without re-running it."""
+    return await run_in_threadpool(_recordings, race_id)
+
+
+def _recordings(race_id=None):
+    from . import monitor
+    bid = (boats.active_boat() or {}).get("boat_id")
+    try:
+        sessions = (monitor.agent_json("/racelog/sessions", timeout=30) or {}).get("sessions") or []
+        agent = {"available": True}
+    except Exception as exc:
+        sessions, agent = [], {"available": False, "note": f"the boat agent is unreachable ({exc}) — "
+                               "recordings already loaded into the Lab are still listed"}
+    tracks = track.list_tracks(race_id) if race_id else []
+    debriefs = learning.list_debriefs(bid, race_id) if race_id else []
+
+    def near(a, b):
+        return a is not None and b is not None and abs(float(a) - float(b)) < 1.0
+
+    def latest_debrief(rec):
+        hit = [d for d in debriefs if near(d.get("window_start"), rec)]
+        return max(hit, key=lambda d: d["created_at"]) if hit else None
+
+    out, seen = [], set()
+    for ses in sessions:
+        if race_id and ses.get("race_id") != race_id:
+            continue
+        w = ses.get("window") or {}
+        rec = ses.get("start_ts")
+        # a session needs an END to be debriefable — the button's, or the one the record derives
+        if not (ses.get("end_ts") or w.get("end_ts")):
+            continue
+        seen.add(round(float(rec), 3) if rec is not None else None)
+        trk = next((t for t in tracks if near(t.get("recording"), rec)), None)
+        out.append({"recording": rec, "session_id": ses.get("id"), "name": ses.get("name"),
+                    "kind": ses.get("kind"), "race_id": ses.get("race_id"),
+                    "start_ts": rec, "end_ts": ses.get("end_ts"), "window": w,
+                    "hours": w.get("hours"), "marker_hours": w.get("marker_hours"),
+                    "track": trk, "debrief": latest_debrief(rec),
+                    "n_debriefs": len([d for d in debriefs if near(d.get("window_start"), rec)])})
+    # tracks the Lab holds that no session explains (a GPX/YB upload, or a session the boat has
+    # since dropped) — they are debriefable too, and hiding them would hide a debrief that exists
+    for t in tracks:
+        rec = t.get("recording")
+        if (round(float(rec), 3) if rec is not None else None) in seen:
+            continue
+        out.append({"recording": rec, "session_id": None,
+                    "name": t.get("boat") or ("uploaded " + (t.get("source") or "track")),
+                    "kind": t.get("source"), "race_id": race_id,
+                    "start_ts": rec, "end_ts": (t.get("window") or {}).get("end_ts"),
+                    "window": t.get("window") or {}, "hours": (t.get("window") or {}).get("hours"),
+                    "track": t, "debrief": latest_debrief(rec),
+                    "n_debriefs": len([d for d in debriefs if near(d.get("window_start"), rec)])})
+    out.sort(key=lambda r: r["start_ts"] or 0, reverse=True)
+    return {"race_id": race_id, "boat_id": bid, "agent": agent, "recordings": out,
+            "debriefs": debriefs}
 
 
 @app.post("/api/debrief/apply")
@@ -859,14 +956,15 @@ async def retro_polars(body: dict):
 
 # ---- Debrief: ACTUAL boat-track ingestion (GPX upload / YB our-boat) → helm-vs-optimal scoring ---
 @app.get("/api/debrief/track")
-async def debrief_track_get(race_id: str):
-    t = track.load_track(race_id)
+async def debrief_track_get(race_id: str, recording: float = None):
+    t = track.load_track(race_id, recording)
     if not t:
         return {"available": False}
     fixes = t.get("fixes") or []
     return {"available": True, "source": t.get("source"), "boat": t.get("boat"),
             "matched_by": t.get("matched_by"), "n": len(fixes), "window": t.get("window"),
-            "trust": t.get("trust"),
+            "recording": track.recording_of(t), "trust": t.get("trust"),
+            "sail_changes": len(t.get("sail_log") or []),
             "fixes": [[f["lat"], f["lon"]] for f in fixes]}   # lightweight polyline for the map
 
 
@@ -970,6 +1068,11 @@ def resolve_log_window(body, sessions):
 
 @app.post("/api/debrief/track/from-log")
 def debrief_track_from_log(body: dict):
+    res, code = load_log_track(body or {})
+    return res if code == 200 else JSONResponse(res, status_code=code)
+
+
+def load_log_track(body):
     """Build the debrief track from the BOAT'S OWN backfilled log (full-res position/SOG —
     far denser than a public tracker) over a race session: {race_id, session_id?, start_ts,
     end_ts?, name?, use_marker?}. The bounds are the session's DERIVED race window, not the
@@ -979,15 +1082,14 @@ def debrief_track_from_log(body: dict):
     body = body or {}
     rid = body.get("race_id")
     if not rid or (body.get("start_ts") is None and body.get("session_id") is None):
-        return JSONResponse({"detail": "race_id and one of session_id / start_ts are required"},
-                            status_code=422)
+        return {"detail": "race_id and one of session_id / start_ts are required"}, 422
     try:
-        sessions = (monitor.agent_json("/racelog/sessions") or {}).get("sessions") or []
+        sessions = (monitor.agent_json("/racelog/sessions", timeout=30) or {}).get("sessions") or []
     except Exception as exc:
-        return JSONResponse({"detail": f"agent unreachable: {exc}"}, status_code=502)
+        return {"detail": f"agent unreachable: {exc}"}, 502
     win = resolve_log_window(body, sessions)
     if not win:
-        return JSONResponse({"detail": "no such race session on the boat log"}, status_code=404)
+        return {"detail": "no such race session on the boat log"}, 404
     # Ask for points in proportion to the window. `/racelog/track` thins to `max_points` (default
     # 2000), so a window that grew 4x would have arrived 4x coarser — 13 s between fixes instead
     # of 3 s — and the debrief would have quietly traded resolution for the hours it just gained.
@@ -1002,11 +1104,11 @@ def debrief_track_from_log(body: dict):
         r = monitor.agent_json(f"/racelog/track?start={win['start_ts']}&end={win['end_ts']}"
                                f"&max_points={pts}", timeout=tmo)
     except Exception as exc:
-        return JSONResponse({"detail": f"agent unreachable: {exc}"}, status_code=502)
+        return {"detail": f"agent unreachable: {exc}"}, 502
     fixes = r.get("fixes") or []
     if len(fixes) < 10:
-        return JSONResponse({"detail": "the boat log has no track in that window — has the "
-                                       "backfill run since the session?"}, status_code=404)
+        return {"detail": "the boat log has no track in that window — has the backfill run "
+                          "since the session?"}, 404
     # The TRUST sweep rides with the track (item A): per-channel segments + the danger intervals
     # the scorer refuses bins from. A failed sweep is stored as unavailable and SAID — refusing
     # nothing silently would defeat the guardrail's purpose.
@@ -1022,7 +1124,7 @@ def debrief_track_from_log(body: dict):
                                       "fixes": fixes, "n": len(fixes), "window": win,
                                       "trust": trust,
                                       "sail_log": r.get("sail_log") or []})
-    return {"ok": True, **meta, "sail_changes": len(r.get("sail_log") or [])}
+    return {"ok": True, **meta, "sail_changes": len(r.get("sail_log") or [])}, 200
 
 
 @app.post("/api/debrief/track/clear")
@@ -1030,7 +1132,8 @@ async def debrief_track_clear(body: dict):
     race_id = (body or {}).get("race_id")
     if not race_id:
         return JSONResponse({"detail": "race_id required"}, status_code=400)
-    return {"ok": await run_in_threadpool(track.clear_track, race_id)}
+    return {"ok": await run_in_threadpool(track.clear_track, race_id,
+                                          (body or {}).get("recording"))}
 
 
 # ---- Lab-4 learning loop: ongoing performance archive + HUMAN-APPROVED boat-model refinement ----

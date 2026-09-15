@@ -120,7 +120,8 @@ def archive_debrief(report, boat_id=None):
     wstart = recording_key(at)
     # keep the stored report lean (drop the heavy oracle path / windfield arrays)
     slim = {k: report.get(k) for k in ("race_id", "race_name", "playbook_id", "start_epoch",
-                                       "regret", "playbook", "caveat")}
+                                       "regret", "playbook", "caveat", "recording",
+                                       "tactics_available", "tactics_note")}
     slim["oracle"] = {k: (report.get("oracle") or {}).get(k)
                       for k in ("total_hours", "favored_side", "tacks")}
     slim["actual_track"] = {k: v for k, v in at.items() if k != "perf_bins"}
@@ -160,9 +161,12 @@ def archive_debrief(report, boat_id=None):
 def list_debriefs(boat_id=None, race_id=None, limit=200):
     c = _conn()
     try:
+        # the archived cell count rides along: a debrief row that cannot say how much the boat
+        # model learned from it is a row nobody can act on
         q = ("SELECT id,created_at,race_id,race_name,boat_id,oracle_hours,regret_min,side_paid,"
              "recommended_side,side_matched,track_source,elapsed_hours,time_behind_min,oversail_pct,"
-             "xte_mean,side_worked,polar_pct,helm_pct,sea_state_hs_mean,polar_samples,window_start "
+             "xte_mean,side_worked,polar_pct,helm_pct,sea_state_hs_mean,polar_samples,window_start,"
+             "(SELECT COUNT(*) FROM perf_bins pb WHERE pb.debrief_id=debriefs.id) AS n_bins "
              "FROM debriefs")
         cond, args = [], []
         if boat_id:
@@ -188,12 +192,34 @@ def get_debrief(debrief_id):
             d["report"] = json.loads(d.pop("report_json") or "{}")
         except ValueError:
             d["report"] = {}
+        _fill_report(d)
         d["perf_bins"] = [dict(x) for x in
                           c.execute("SELECT tws,twa,point_of_sail,samples,best_stw,target_stw,pct "
                                     "FROM perf_bins WHERE debrief_id=? ORDER BY tws,twa", (debrief_id,))]
         return d
     finally:
         c.close()
+
+
+def _fill_report(d):
+    """Serve a stored report the way today's reader expects it.
+
+    Debriefs archived before 2026-09-15 predate `tactics_available` and `recording`, and a reader
+    that treats a MISSING flag as False would label a fully-judged race a "performance debrief" —
+    a read-path bug of exactly the kind that has bitten this project before. The row itself knows:
+    a debrief with an oracle time judged the tactics, and `window_start` is the recording."""
+    rep = d.get("report") or {}
+    if rep.get("tactics_available") is None:
+        rep["tactics_available"] = bool((rep.get("regret") or {}).get("side_paid")
+                                        or d.get("oracle_hours") is not None)
+        if not rep["tactics_available"] and not rep.get("tactics_note"):
+            rep["tactics_note"] = ("archived before the Lab recorded which halves ran; no oracle "
+                                   "time was stored, so read this as a performance debrief")
+    if not rep.get("recording") and d.get("window_start"):
+        rep["recording"] = {"start_ts": d["window_start"], "hours": d.get("elapsed_hours"),
+                            "kind": "archived"}
+    d["report"] = rep
+    return d
 
 
 # ---- proposal engine (PROPOSES only — never applies) ------------------------------------------

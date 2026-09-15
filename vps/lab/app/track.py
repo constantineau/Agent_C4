@@ -640,10 +640,22 @@ def _performance_bins(seg, epochs, wf, polars, cur=None, wave=None, wave_coeffs=
     return out
 
 
-# ---- persistence (one stored track per race; '_'-prefixed so the race library skips it) --------
-def _path(race_id):
+# ---- persistence (one stored track per RECORDING; '_'-prefixed so the race library skips it) ---
+# A race definition holds as many recordings as the boat made under it — Bayview 2026 carries the
+# Jul 15 practice sail and the Jul 18 race — so the stored track is keyed on (race, window start),
+# not on the race alone. Before 2026-09-15 loading one replaced the other and the debrief silently
+# judged whichever was last fetched. A GPX/YB track has no window and keeps the bare race path,
+# which is also the pre-2026-09-15 file, so existing tracks load unchanged.
+def _path(race_id, recording=None):
     rid = "".join(c for c in str(race_id).lower() if c.isalnum() or c in "_-")
-    return os.path.join(TRACK_DIR, f"_track_{rid}.json")
+    if recording is None:
+        return os.path.join(TRACK_DIR, f"_track_{rid}.json")
+    return os.path.join(TRACK_DIR, f"_track_{rid}__{int(float(recording))}.json")
+
+
+def recording_of(track):
+    """The recording a stored track belongs to — its window start, or None for GPX/YB."""
+    return ((track or {}).get("window") or {}).get("start_ts")
 
 
 def save_track(race_id, track):
@@ -658,7 +670,7 @@ def save_track(race_id, track):
             # danger intervals score_track refuses bins from
             "trust": track.get("trust"),
             "sail_changes": len(track.get("sail_log") or [])}
-    with open(_path(race_id), "w") as fh:
+    with open(_path(race_id, recording_of(track)), "w") as fh:
         # sail_log = the crew's timestamped CONFIGURATION history (boat-log tracks) — the
         # per-config polar-development input; GPX/YB tracks simply don't carry one
         json.dump({**meta, "fixes": track.get("fixes") or [],
@@ -666,17 +678,52 @@ def save_track(race_id, track):
     return meta
 
 
-def load_track(race_id):
+def load_track(race_id, recording=None):
+    t = _read(_path(race_id, recording))
+    if t is None and recording is not None:
+        # The track stored before 2026-09-15 sits at the bare race path and carries a window all
+        # the same — it IS a recording, just filed under the old one-per-race scheme. Serve it
+        # when its window is the one asked for, so an existing debrief keeps working.
+        legacy = _read(_path(race_id))
+        if legacy is not None and _near(recording_of(legacy), recording):
+            return legacy
+    return t
+
+
+def _read(path):
     try:
-        with open(_path(race_id)) as fh:
+        with open(path) as fh:
             return json.load(fh)
     except (OSError, ValueError):
         return None
 
 
-def clear_track(race_id):
+def _near(a, b, tol=1.0):
+    return a is not None and b is not None and abs(float(a) - float(b)) < tol
+
+
+def list_tracks(race_id):
+    """Every stored track for this race, newest recording first — meta only, no fixes."""
+    rid = "".join(c for c in str(race_id).lower() if c.isalnum() or c in "_-")
+    out = []
+    for name in sorted(os.listdir(TRACK_DIR) if os.path.isdir(TRACK_DIR) else []):
+        if not (name == f"_track_{rid}.json" or name.startswith(f"_track_{rid}__")):
+            continue
+        try:
+            with open(os.path.join(TRACK_DIR, name)) as fh:
+                t = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        out.append({"race_id": race_id, "recording": recording_of(t), "source": t.get("source"),
+                    "legacy_path": name == f"_track_{rid}.json" and recording_of(t) is not None,
+                    "boat": t.get("boat"), "n": len(t.get("fixes") or []), "window": t.get("window"),
+                    "trust": t.get("trust"), "sail_changes": len(t.get("sail_log") or [])})
+    return sorted(out, key=lambda x: x["recording"] or 0, reverse=True)
+
+
+def clear_track(race_id, recording=None):
     try:
-        os.remove(_path(race_id))
+        os.remove(_path(race_id, recording))
         return True
     except OSError:
         return False
