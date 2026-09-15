@@ -29,7 +29,9 @@ section.
    878 samples at 16 kn) is the real signal, as is 6 kn/142° at ×1.15 in both recordings. He
    edits the helm number and unchecks cells in the card; Apply writes `polar_adjustments` and
    the optimizer's `_polar_speed` reads them. Then run a gameplan and confirm the overlay bit.
-2. **Exercise the Polar tab against Cole's actual use** — fix what he names, don't guess.
+2. **Exercise the Polar tab against Cole's actual use** — fix what he names, don't guess. The
+   per-race filter, the by-race curves and the per-race "which races teach the optimizer"
+   checkboxes shipped 2026-09-15; the next asks land on top of those.
 3. **B — the decision timeline** (the big build): the rig server-side, scrub the race with the
    trust strip beside the track. The graphical trust timeline folded in here.
 4. **The known small rough edges, all measured already:**
@@ -54,6 +56,58 @@ corpus are the instruments for the whole phase — anything that flaps on Jul 15
 construction. **And (2026-09-15): run the real chain end to end before believing any link of it
 — five defects sat between "the bins are measured" and "a proposal exists", none visible from
 unit tests, all found by running the two recordings through the live route.**
+
+## Session 2026-09-15 (polars per race) — see each race, compare them, choose what teaches
+
+**Cole's ask:** *"allow us to show polars from each race instance, as a filter… radio buttons to
+show race instances on the polar plot… selectively pick which races are to be used to update the
+polars for the optimizer."* All three are live on the Polar tab.
+
+- **Filter + radios.** `obspolar.compute()` now emits FOUR views off one pass of the record:
+  `cells` (pooled, by sail), `race_cells` (one race, by sail), `race_curves` (one race,
+  sail-agnostic — the curve races are compared with) and `curve` (pooled, sail-agnostic). Each
+  view is a p80 **re-pooled from the raw samples**, never a p80 of p80s: a percentile does not
+  average, and combining per-race p80s would publish a speed the boat never sailed. The tab has a
+  race select (all races / one instance) and radio buttons for what the curves split by — sail
+  configuration or race instance. **Races get a sequential ramp, not the sail palette:** race
+  instances are ordered in time (oldest lightest), and the two modes must not share a colour
+  vocabulary. The sail filter is disabled and *says why* in race mode.
+- **Choosing what teaches the optimizer.** `learning.propose(boat_id, recordings=[...])` restricts
+  the refinement to chosen race instances; omitted still means all. `GET
+  /api/learning/bin-sources` is the menu behind the checkboxes (per recording: measured cells,
+  samples, the debrief that archived them, its polar %), and the proposal summary counts
+  `excluded_by_choice` + `bins_offered` — a filter nobody can see is a lie about where the
+  numbers came from. Recordings the boat sailed but nobody debriefed are listed as teaching
+  nothing, with a link to go debrief them.
+
+**Three defects the work turned up, all shipped fixed:**
+- 🔎 **The observed polar had no lower TWA bound.** The debrief's bins have refused TWA < 30°
+  since they were written; the polar did not, so the Jul 15 race published cells at 10°, 20° and
+  30° TWA (5.4–5.6 kn — motoring head to wind) and they sat in the boat's "actual polar". Pinned
+  by splitting per race, where the inner lobe was impossible to miss. `MIN_TWA_DEG` (30) now
+  gates it and every race REPORTS what it refused: **Jul 18 363 samples, Jul 15 390**. Pooled
+  cells 134 → 130.
+- 🔎 **`propose()`'s new `recordings` parameter was shadowed** by the local list built for the
+  summary, so the proposal reported its own recording list as "what the human selected". Caught
+  by the test asserting the unfiltered default reports `None`. *A parameter and a local that mean
+  different things must not share a name — especially when one is added months after the other.*
+- **A cached artifact of the older shape would have served an empty race filter** — present,
+  wired, silently not in force, for the ninth time. `build()` treats a cache without the per-race
+  keys as a miss and recomputes.
+
+**Live:** rebuilt and refreshed from the record — 130 pooled cells, 136 per-race cells, 108
+per-race curve points across the two races; the Jul 15 and Jul 18 curves at 10 kn are visibly
+different boats (Jul 15 is 7.29 kn at 110°, Jul 18 6.22 — worth Cole's eye). Tests:
+`test_polar_races.py` (17 checks, incl. the pooled-p80-is-not-an-average case), **26 lab scripts
+green**.
+
+⚠️ **Correction to the note below:** the standing lab was NOT only read during the product build.
+`debriefs` carries a **#4 at 15:06:59Z** — a duplicate Jul 18 run written by the product code
+(it carries `recording`/`tactics_available`, which #3 does not). I could not establish which call
+made it. It is harmless: identical numbers to #3, and **proposal #2 was created at 14:31:46Z from
+#2 + #3**, so the proposal Cole reviews is untouched. A future proposal takes Jul 18's bins from
+#4 instead of #3 — the same 113 bins. Left in place: this archive is a true log by design
+(latest-per-recording wins) and deleting a row of Cole's record is his call, not mine.
 
 ## Session 2026-09-15 (product) — the debrief stops needing a Claude session
 

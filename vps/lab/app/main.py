@@ -1157,10 +1157,25 @@ async def learning_proposals(boat_id: str = None):
 
 @app.post("/api/learning/propose")
 async def learning_propose(body: dict = None):
-    bid = (body or {}).get("boat_id") or (boats.active_boat() or {}).get("boat_id")
+    """Propose a boat-model refinement from the archived measured bins. `recordings` (a list of
+    race-instance window starts) restricts it to the races the human picked; omit it for all."""
+    b = body or {}
+    bid = b.get("boat_id") or (boats.active_boat() or {}).get("boat_id")
     if not bid:
         return JSONResponse({"detail": "no active boat"}, status_code=400)
-    return await run_in_threadpool(learning.propose, bid)
+    recs = b.get("recordings")
+    if recs is not None and not isinstance(recs, list):
+        return JSONResponse({"detail": "recordings must be a list of race-instance window starts"},
+                            status_code=422)
+    return await run_in_threadpool(learning.propose, bid, recs)
+
+
+@app.get("/api/learning/bin-sources")
+async def learning_bin_sources(boat_id: str = None):
+    """The race instances that have measured bins for the boat model — the menu behind choosing
+    which races teach the optimizer (the Polar tab's Decisions card)."""
+    bid = boat_id or (boats.active_boat() or {}).get("boat_id")
+    return {"boat_id": bid, "sources": await run_in_threadpool(learning.bin_sources, bid)}
 
 
 @app.post("/api/learning/calibrate-waves")
