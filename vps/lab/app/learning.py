@@ -280,9 +280,61 @@ def config_polars(boat_id=None):
                      "polars — the record grows race by race.")}
 
 
-def propose(boat_id):
+def selects(window_start, recordings):
+    """Is this bin's recording in the chosen set? `None` in the set means 'the GPX/YB track that
+    has no recording of its own'. A float compare needs a tolerance: the same window start reaches
+    here through JSON and through SQLite REAL."""
+    for r in recordings:
+        if r is None and window_start is None:
+            return True
+        if r is not None and window_start is not None and abs(float(r) - float(window_start)) < 1.0:
+            return True
+    return False
+
+
+def bin_sources(boat_id=None):
+    """Every RACE INSTANCE that has measured bins the boat model could learn from, with how much
+    each one brings. This is the menu behind 'which races teach the optimizer' (Cole, 2026-09-15):
+    a choice nobody can see the contents of is not a choice."""
+    c = _conn()
+    try:
+        bins, _races = _latest_bins_per_race(c, boat_id)
+        named = {}
+        for d in list_debriefs(boat_id):
+            k = d.get("window_start")
+            k = round(float(k), 3) if k is not None else None
+            if k not in named or d["created_at"] > named[k]["created_at"]:
+                named[k] = d
+        groups = {}
+        for b in bins:
+            ws = b.get("window_start")
+            k = round(float(ws), 3) if ws is not None else None
+            g = groups.setdefault(k, {"recording": ws, "race_id": b["race_id"], "n_bins": 0,
+                                      "measured_bins": 0, "samples": 0})
+            g["n_bins"] += 1
+            if b.get("wind_source") == "measured":
+                g["measured_bins"] += 1
+                g["samples"] += b.get("samples") or 0
+        out = []
+        for k, g in groups.items():
+            d = named.get(k) or {}
+            out.append({**g, "debrief_id": d.get("id"), "debrief_at": d.get("created_at"),
+                        "race_name": d.get("race_name"), "hours": d.get("elapsed_hours"),
+                        "polar_pct": d.get("polar_pct"), "track_source": d.get("track_source")})
+        return sorted(out, key=lambda x: x["recording"] or 0, reverse=True)
+    finally:
+        c.close()
+
+
+def propose(boat_id, recordings=None):
     """Aggregate the archive → a PROPOSED boat-model refinement (helm_factor + per-cell polar overlay),
-    written as a `proposed` row for human review. Never touches the boat profile."""
+    written as a `proposed` row for human review. Never touches the boat profile.
+
+    `recordings` (a list of race-instance window starts, `None` for a GPX/YB track) restricts the
+    refinement to the races the human picked — Cole, 2026-09-15: "be able to selectively pick which
+    races are to be used to update the polars for the optimizer." Omitted means every recording, as
+    before. What was left out is COUNTED in the summary: a filter nobody can see is a lie about
+    where the numbers came from."""
     from . import boats
     c = _conn()
     try:
@@ -290,6 +342,17 @@ def propose(boat_id):
         if not bins:
             return {"ok": False, "note": "no archived performance bins for this boat yet — run a "
                     "debrief with a boat track first"}
+        offered = len(bins)
+        by_choice = 0
+        if recordings is not None:
+            chosen = [b for b in bins if selects(b.get("window_start"), recordings)]
+            by_choice = len(bins) - len(chosen)
+            if not chosen:
+                have = sorted({b.get("window_start") for b in bins}, key=lambda x: x or 0)
+                return {"ok": False, "note": "none of the selected races has archived bins — "
+                        f"{len(bins)} bin(s) are available from {len(have)} recording(s); "
+                        "pick at least one of those, or debrief the race you want first"}
+            bins = chosen
         # ACTUAL polars only (Cole 2026-09-09): the boat model refines off measured angles and
         # measured wind speed. GRIB-derived bins — including every bin archived before wind_source
         # existed, all of which were forecast-based — are excluded and the exclusion is REPORTED.
@@ -297,7 +360,7 @@ def propose(boat_id):
         excluded = [b for b in bins if b.get("wind_source") != "measured"]
         bins = [b for b in bins if b.get("wind_source") == "measured"]
         races = {b["race_id"] for b in bins}
-        recordings = sorted({_rec(b) for b in bins}, key=lambda k: (k[0], k[1] or 0))
+        used = sorted({_rec(b) for b in bins}, key=lambda k: (k[0], k[1] or 0))
         if not bins:
             return {"ok": False,
                     "note": f"no MEASURED-wind bins archived yet ({len(excluded)} forecast-based "
@@ -349,17 +412,19 @@ def propose(boat_id):
             p = by_pos.setdefault(v["pos"], {"pct": [], "n": 0})
             p["pct"].append(cell_pct); p["n"] += v["samples"]
         summary = {"overall_pct": round(overall_pct), "n_samples": sn,
+                   "bins_offered": offered, "excluded_by_choice": by_choice,
+                   "recordings_selected": (None if recordings is None else list(recordings)),
                    "by_point_of_sail": {k: round(sum(x["pct"]) / len(x["pct"]))
                                         for k, x in by_pos.items()},
                    "races": sorted(races), "wind_source": "measured",
-                   "recordings": [{"race_id": r, "window_start": w} for r, w in recordings],
+                   "recordings": [{"race_id": r, "window_start": w} for r, w in used],
                    "excluded_forecast_bins": len(excluded),
                    "thin_cells_skipped": thin, "min_cell_samples": _MIN_SAMPLES_FOR_CELL}
         row = c.execute(
             """INSERT INTO proposals (created_at,boat_id,status,helm_current,helm_proposed,overall_pct,
                n_debriefs,n_bins,adjustments_json,summary_json) VALUES (?,?,?,?,?,?,?,?,?,?)""",
             (time.time(), boat_id, "proposed", helm_current, helm_proposed, round(overall_pct, 1),
-             len(recordings), len(bins), json.dumps(adjustments), json.dumps(summary)))
+             len(used), len(bins), json.dumps(adjustments), json.dumps(summary)))
         c.commit()
         return {"ok": True, **get_proposal(row.lastrowid)}
     finally:

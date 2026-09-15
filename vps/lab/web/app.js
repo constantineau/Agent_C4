@@ -3057,12 +3057,19 @@ function optObstacleNote(r) {
    polar diagram + tables, and the decision hook for what future optimizer runs sail on. Data is
    /api/polar/observed (app/obspolar.py): measured TWS/TWA/STW only, trust-gated, kite-gated —
    never GRIB, never the cert (the cert appears only as a dashed reference curve). */
-const Pol = { data: null, tws: null, config: "all", busy: false, proposals: null };
+const Pol = { data: null, tws: null, config: "all", race: "all", split: "config",
+  busy: false, proposals: null, sources: null, use: null, msg: "" };
 
 // Fixed hue order — color follows the sail, never the filter (dataviz rule). Validated for CVD +
 // contrast on this app's panel surface (#141418), 7 slots, 2026-09-09. Unattributed = muted.
 const POL_ORDER = ["J1", "J1+J3", "A3", "A3+J1", "A3+SS", "S2", "S2+SS"];
 const POL_HUES = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9"];
+// Race instances are ORDERED (they happened in sequence), so they get a sequential ramp rather
+// than a categorical palette: oldest lightest, newest darkest. It encodes which race AND when,
+// and it can never be mistaken for the sail colors above — the two modes mean different things
+// and must not share a vocabulary.
+const POL_RACE_RAMP = ["#a5e0ef", "#6cc6e0", "#38a8cc", "#2a86ab", "#1f6485"];
+
 function polColor(cfg) {
   if (!cfg) return "#9a9aa6";
   const known = POL_ORDER.indexOf(cfg);
@@ -3070,6 +3077,24 @@ function polColor(cfg) {
   // a config outside the known order gets a stable slot from the artifact's sorted config list
   const extras = ((Pol.data || {}).configs || []).filter((c) => !POL_ORDER.includes(c));
   return POL_HUES[(POL_ORDER.length + extras.indexOf(cfg)) % POL_HUES.length];
+}
+
+// the race instances that carry measured cells, oldest first (the ramp's order)
+function polRaces() {
+  return ((Pol.data || {}).races || [])
+    .filter((r) => !r.skipped && r.recording != null)
+    .slice().sort((x, y) => x.recording - y.recording);
+}
+function polRaceColor(rec) {
+  const i = polRaces().findIndex((r) => polSameRec(r.recording, rec));
+  return i < 0 ? "#9a9aa6" : POL_RACE_RAMP[i % POL_RACE_RAMP.length];
+}
+function polRaceName(rec) {
+  const r = polRaces().find((x) => polSameRec(x.recording, rec));
+  return r ? (r.name || "recording") : "recording";
+}
+function polSameRec(a, b) {
+  return a != null && b != null && Math.abs(Number(a) - Number(b)) < 1;
 }
 
 async function renderPolar() {
@@ -3083,7 +3108,14 @@ async function renderPolar() {
   }
   try { Pol.proposals = ((await (await apiGet("/api/learning/proposals")).json()).proposals || []); }
   catch (e) { Pol.proposals = []; }
+  try { Pol.sources = ((await (await apiGet("/api/learning/bin-sources")).json()).sources || []); }
+  catch (e) { Pol.sources = []; }
   if (stale("polar")) return;
+  // every race teaches the model until a human says otherwise
+  if (!Pol.use) {
+    Pol.use = {};
+    (Pol.sources || []).forEach((x) => { Pol.use[polUseKey(x.recording)] = true; });
+  }
   const buckets = Pol.data.tws_buckets || [];
   if (Pol.tws == null || !buckets.includes(Pol.tws)) {
     // default to the bucket with the most evidence, not the first
@@ -3100,9 +3132,36 @@ async function polRefresh() {
   Pol.busy = false; Pol.tws = null; renderPolar();
 }
 
+// The cells behind the table and the config curves, for the current race filter. One race means
+// that race's OWN p80 (re-pooled from its samples server-side), not a slice of the pooled build.
 function polCells(tws, config) {
-  return (Pol.data.cells || []).filter((c) =>
-    (tws == null || c.tws === tws) && (config === "all" || (c.config || "—") === config));
+  const d = Pol.data || {};
+  const src = Pol.race === "all" ? (d.cells || [])
+    : (d.race_cells || []).filter((c) => polSameRec(c.recording, Pol.race));
+  return src.filter((c) => (tws == null || c.tws === tws)
+    && (config === "all" || (c.config || "—") === config));
+}
+
+// What the chart draws: one series per sail configuration, or one per race instance.
+function polSeries() {
+  const d = Pol.data || {};
+  if (Pol.split === "race") {
+    const src = (d.race_curves || []).filter((c) => c.tws === Pol.tws
+      && (Pol.race === "all" || polSameRec(c.recording, Pol.race)));
+    const by = {};
+    src.forEach((c) => (by[c.recording] = by[c.recording] || []).push(c));
+    return Object.keys(by)
+      .sort((x, y) => Number(x) - Number(y))
+      .map((rec) => ({ key: rec, label: polRaceName(Number(rec)), color: polRaceColor(Number(rec)),
+                       pts: by[rec].slice().sort((m, n) => m.twa - n.twa) }));
+  }
+  const cells = polCells(Pol.tws, Pol.config);
+  const by = {};
+  cells.forEach((c) => (by[c.config || "—"] = by[c.config || "—"] || []).push(c));
+  return Object.keys(by)
+    .sort((x, y) => (POL_ORDER.indexOf(x) + 1 || 99) - (POL_ORDER.indexOf(y) + 1 || 99) || x.localeCompare(y))
+    .map((name) => ({ key: name, label: name, color: polColor(name === "—" ? null : name),
+                      pts: by[name].slice().sort((m, n) => m.twa - n.twa) }));
 }
 
 function polCertCurve(tws) {
@@ -3117,13 +3176,15 @@ function polCertCurve(tws) {
 }
 
 function polSvg() {
-  const cells = polCells(Pol.tws, Pol.config);
+  const series = polSeries();
   const cert = polCertCurve(Pol.tws);
-  const maxV = Math.max(4, ...cells.map((c) => c.stw), ...(cert ? cert.pts.map((p) => p.stw) : [])) + 0.8;
+  const all = series.reduce((a, s) => a.concat(s.pts), []);
+  const maxV = Math.max(4, ...all.map((c) => c.stw), ...(cert ? cert.pts.map((p) => p.stw) : [])) + 0.8;
   const CX = 70, CY = 320, R = 268;
   const rr = (v) => R * v / maxV;
   const XY = (twa, v) => [CX + rr(v) * Math.sin(twa * Math.PI / 180), CY - rr(v) * Math.cos(twa * Math.PI / 180)];
   let out = [];
+  Pol._pts = [];
   // rings every 2 kn + spokes every 30° — recessive grid
   for (let v = 2; v < maxV; v += 2) {
     const [x0, y0] = XY(0, v), [x1, y1] = XY(180, v);
@@ -3143,100 +3204,149 @@ function polSvg() {
     // named in the legend below the chart, not at the curve end — the deep sector is where the
     // observed labels live, and the reference must never crowd the record
   }
-  // observed series: one polyline + markers per config, direct label at the outer end
-  const byCfg = {};
-  cells.forEach((c) => (byCfg[c.config || "—"] = byCfg[c.config || "—"] || []).push(c));
-  const names = Object.keys(byCfg).sort((a, b) =>
-    (POL_ORDER.indexOf(a) + 1 || 99) - (POL_ORDER.indexOf(b) + 1 || 99) || a.localeCompare(b));
-  for (const name of names) {
-    const pts = byCfg[name].slice().sort((a, b) => a.twa - b.twa);
-    const col = polColor(name === "—" ? null : name);
-    if (pts.length > 1) {
-      const d = pts.map((p, i) => (i ? "L" : "M") + XY(p.twa, p.stw).map((n) => n.toFixed(1)).join(" ")).join(" ");
-      out.push(`<path d="${d}" fill="none" stroke="${col}" stroke-width="2"/>`);
+  for (const sr of series) {
+    if (sr.pts.length > 1) {
+      const d = sr.pts.map((p, i) => (i ? "L" : "M") + XY(p.twa, p.stw).map((n) => n.toFixed(1)).join(" ")).join(" ");
+      out.push(`<path d="${d}" fill="none" stroke="${sr.color}" stroke-width="2"/>`);
     }
-    for (const p of pts) {
+    for (const p of sr.pts) {
       const [x, y] = XY(p.twa, p.stw);
-      out.push(`<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4" fill="${col}" stroke="var(--panel)" stroke-width="2"/>`);
+      const i = Pol._pts.push({ ...p, label: sr.label, mode: Pol.split }) - 1;
+      out.push(`<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4" fill="${sr.color}" stroke="var(--panel)" stroke-width="2"/>`);
       out.push(`<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="11" fill="transparent" style="cursor:pointer"
-        onmousemove="polTip(event,${p.tws},${p.twa},'${esc(name)}')" onmouseleave="polTipHide()"/>`);
+        onmousemove="polTip(event,${i})" onmouseleave="polTipHide()"/>`);
     }
     // direct label at the curve's FASTEST point, pushed radially outward — curve ends converge
     // in the deep sector and labels there collide (seen on the first render)
-    const top = pts.reduce((a, b) => (b.stw > a.stw ? b : a));
+    const top = sr.pts.reduce((a, b) => (b.stw > a.stw ? b : a));
     const [ex, ey] = XY(top.twa, top.stw + 0.55);
-    out.push(`<text x="${ex}" y="${ey + 4}" fill="var(--ink)" font-size="11" font-weight="600" text-anchor="middle">${esc(name)}</text>`);
+    out.push(`<text x="${ex}" y="${ey + 4}" fill="var(--ink)" font-size="11" font-weight="600" text-anchor="middle">${esc(sr.label)}</text>`);
   }
   return `<svg viewBox="0 0 640 660" style="width:100%;max-width:620px" role="img"
-    aria-label="Observed polar, TWS ${Pol.tws} kn">${out.join("")}</svg>`;
+    aria-label="Observed polar, TWS ${Pol.tws} kn, by ${Pol.split === "race" ? "race instance" : "sail configuration"}">${out.join("")}</svg>`;
 }
 
-function polTip(ev, tws, twa, name) {
-  const c = (Pol.data.cells || []).find((x) => x.tws === tws && x.twa === twa && (x.config || "—") === name);
+function polTip(ev, i) {
+  const c = (Pol._pts || [])[i];
   if (!c) return;
   let tip = document.getElementById("polTipEl");
   if (!tip) { tip = document.createElement("div"); tip.id = "polTipEl"; document.body.appendChild(tip); }
   tip.setAttribute("style", "position:fixed;z-index:99;background:var(--panel2);border:1px solid var(--line);" +
     "border-radius:8px;padding:8px 10px;font-size:12px;pointer-events:none;max-width:260px;" +
     `left:${Math.min(ev.clientX + 14, innerWidth - 280)}px;top:${ev.clientY + 12}px`);
-  tip.innerHTML = `<b>${esc(name)}</b> · TWS ${tws} · TWA ${twa}°<br>` +
+  const src = c.mode === "race" ? "every sail this race flew at this angle"
+    : (c.races ? `${c.races.length} race(s): ${esc(c.races.join(", "))}`
+               : esc(polRaceName(c.recording)));
+  tip.innerHTML = `<b>${esc(c.label)}</b> · TWS ${c.tws} · TWA ${c.twa}°<br>` +
     `STW <b>${c.stw}</b> kn (p80) · median ${c.median_stw}<br>` +
-    `${c.samples}s of evidence · ${c.races.length} race(s): ${esc(c.races.join(", "))}`;
+    `${c.samples}s of evidence · ${src}`;
 }
 function polTipHide() { const t = document.getElementById("polTipEl"); if (t) t.remove(); }
+
+function polUseKey(rec) { return rec == null ? "none" : String(Math.round(Number(rec))); }
+function polToggleUse(key, on) { Pol.use[key] = on; paintPolar(); }
+function polSetAllUse(on) {
+  (Pol.sources || []).forEach((x) => { Pol.use[polUseKey(x.recording)] = on; });
+  paintPolar();
+}
+function polSelectedRecordings() {
+  return (Pol.sources || []).filter((x) => Pol.use[polUseKey(x.recording)]).map((x) => x.recording);
+}
+
+// Which race instances feed the boat model. The count of what is being LEFT OUT is on screen
+// next to the button, because a filter nobody can see is a lie about where the numbers came from.
+function polDecisionsCard() {
+  const pending = (Pol.proposals || []).find((p) => p.status === "proposed");
+  const src = Pol.sources || [];
+  const chosen = polSelectedRecordings();
+  const rows = src.map((x) => {
+    const k = polUseKey(x.recording);
+    const on = !!Pol.use[k];
+    const dot = x.recording != null
+      ? `<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${polRaceColor(x.recording)};margin-right:5px"></span>` : "";
+    return `<tr>
+      <td><label style="cursor:pointer"><input type="checkbox" ${on ? "checked" : ""}
+        onchange="polToggleUse('${k}', this.checked)"> ${dot}<b>${esc(x.race_name || x.race_id || "recording")}</b></label>
+        <div class="muted" style="font-size:11px">${x.recording ? esc(new Date(x.recording * 1000).toISOString().slice(0, 16).replace("T", " ") + "Z") : "uploaded track (no recording)"}${x.hours != null ? " · " + x.hours + " h" : ""}${x.track_source ? " · " + esc(x.track_source) : ""}</div></td>
+      <td>${x.measured_bins} measured cell(s)<div class="muted" style="font-size:11px">${x.samples} samples${x.n_bins > x.measured_bins ? ` · ${x.n_bins - x.measured_bins} forecast-based, always refused` : ""}</div></td>
+      <td>${x.polar_pct != null ? x.polar_pct + "% of polar" : "—"}<div class="muted" style="font-size:11px">${x.debrief_id ? "debrief #" + x.debrief_id : ""}</div></td></tr>`;
+  }).join("");
+  const undebriefed = polRaces().filter((r) => !src.some((x) => polSameRec(x.recording, r.recording)));
+  return `<div class="card">
+    <h3>Decisions <span class="muted" style="font-weight:400">— what future optimizer runs sail on</span></h3>
+    <div class="muted" style="font-size:12px;margin-bottom:6px">The optimizer routes on the cert polar + the APPROVED overlay. Refinement proposals are built from <b>measured bins only</b> (forecast-derived bins are refused and counted); nothing changes the boat model without approval in <a href="#debrief">Debrief</a>.</div>
+    ${pending ? `<div class="dep-row"><span class="pill warn">proposal #${pending.id} pending</span> helm ${pending.helm_current} → <b>${pending.helm_proposed}</b> · ${(pending.adjustments || []).length} cell adjustment(s) · built from ${((pending.summary || {}).recordings || []).length || "?"} recording(s)${(pending.summary || {}).excluded_by_choice ? `, ${(pending.summary || {}).excluded_by_choice} bin(s) left out by choice` : ""} — <a href="#debrief">review &amp; apply</a></div>` : ""}
+    ${src.length ? `<div class="muted" style="font-size:12px;margin:8px 0 4px">Which races teach the boat model:</div>
+      <table class="fleet-tbl"><thead><tr><th>Race instance</th><th>Contributes</th><th>Debrief</th></tr></thead><tbody>${rows}</tbody></table>
+      <div style="margin-top:4px"><button class="mini" onclick="polSetAllUse(true)">All</button> <button class="mini" onclick="polSetAllUse(false)">None</button></div>`
+      : '<div class="placeholder">No archived bins yet — debrief a recording in the <a href="#debrief">Debrief</a> tab and its measured cells land here.</div>'}
+    ${undebriefed.length ? `<div class="muted" style="font-size:12px;margin-top:6px">Not debriefed yet, so they teach nothing: ${undebriefed.map((r) => esc(r.name)).join(", ")} — <a href="#debrief">debrief them</a> to make them selectable.</div>` : ""}
+    <div style="margin-top:8px">
+      <button class="mini" onclick="polPropose()" ${src.length && chosen.length ? "" : "disabled"}>Propose refinement from ${chosen.length} of ${src.length} race(s)</button>
+      <span class="muted" id="polMsg" style="font-size:12px">${esc(Pol.msg || "")}</span>
+    </div>
+  </div>`;
+}
 
 function paintPolar() {
   const d = Pol.data || {};
   const cells = polCells(Pol.tws, Pol.config);
   const allTws = d.tws_buckets || [];
   const cfgs = ["all", ...((d.configs || [])), "—"];
-  const races = (d.races || []);
-  const pending = (Pol.proposals || []).find((p) => p.status === "proposed");
+  const races = polRaces();
+  const byRace = Pol.split === "race";
   const chips = allTws.map((t) =>
     `<button class="mini" style="${t === Pol.tws ? "background:var(--accent);color:#fff" : ""}"
        onclick="Pol.tws=${t};paintPolar()">${t} kn</button>`).join(" ");
-  const cfgSel = `<select onchange="Pol.config=this.value;paintPolar()">${cfgs.map((c) =>
+  const cfgSel = `<select ${byRace ? "disabled" : ""} onchange="Pol.config=this.value;paintPolar()">${cfgs.map((c) =>
     `<option value="${esc(c)}" ${c === Pol.config ? "selected" : ""}>${c === "all" ? "all configs" : c === "—" ? "unattributed" : esc(c)}</option>`).join("")}</select>`;
-  const legend = (d.configs || []).map((c) =>
-    `<span style="white-space:nowrap"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${polColor(c)};margin-right:4px"></span>${esc(c)}</span>`
-  ).join(" &nbsp; ") + ` &nbsp; <span style="white-space:nowrap"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#9a9aa6;margin-right:4px"></span>unattributed</span>
-   &nbsp; <span style="white-space:nowrap;color:var(--muted)"><svg width="22" height="8"><line x1="0" y1="4" x2="22" y2="4" stroke="#9a9aa6" stroke-width="2" stroke-dasharray="5 4"/></svg> ORC cert (reference)</span>`;
+  const raceSel = `<select onchange="Pol.race=this.value==='all'?'all':Number(this.value);paintPolar()">
+    <option value="all" ${Pol.race === "all" ? "selected" : ""}>all races together</option>
+    ${races.slice().reverse().map((r) => `<option value="${r.recording}" ${polSameRec(Pol.race, r.recording) ? "selected" : ""}>${esc(r.name)}${r.hours != null ? " · " + r.hours + " h" : ""}</option>`).join("")}
+  </select>`;
+  const splitRadio = ["config", "race"].map((k) =>
+    `<label style="cursor:pointer;margin-right:10px"><input type="radio" name="polsplit" value="${k}" ${Pol.split === k ? "checked" : ""}
+      onchange="Pol.split='${k}';paintPolar()"> ${k === "config" ? "sail configuration" : "race instance"}</label>`).join("");
+  const legend = byRace
+    ? races.map((r) => `<span style="white-space:nowrap"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${polRaceColor(r.recording)};margin-right:4px"></span>${esc(r.name)}</span>`).join(" &nbsp; ")
+    : (d.configs || []).map((c) =>
+        `<span style="white-space:nowrap"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${polColor(c)};margin-right:4px"></span>${esc(c)}</span>`
+      ).join(" &nbsp; ") + ` &nbsp; <span style="white-space:nowrap"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#9a9aa6;margin-right:4px"></span>unattributed</span>`;
+  const legendTail = ` &nbsp; <span style="white-space:nowrap;color:var(--muted)"><svg width="22" height="8"><line x1="0" y1="4" x2="22" y2="4" stroke="#9a9aa6" stroke-width="2" stroke-dasharray="5 4"/></svg> ORC cert (reference)</span>`;
   const tbl = cells.length ? `<div class="pg-wrap"><table class="pg">
-    <tr><th>TWA</th><th>config</th><th>STW p80</th><th>median</th><th>evidence (s)</th><th>races</th></tr>
+    <tr><th>TWA</th><th>config</th><th>STW p80</th><th>median</th><th>evidence (s)</th><th>${Pol.race === "all" ? "races" : "race"}</th></tr>
     ${cells.slice().sort((a, b) => a.twa - b.twa || String(a.config).localeCompare(String(b.config))).map((c) =>
       `<tr><td>${c.twa}°</td><td><span style="color:${polColor(c.config)}">●</span> ${esc(c.config || "unattributed")}</td>
-       <td><b>${c.stw}</b></td><td>${c.median_stw}</td><td>${c.samples}</td><td>${esc(c.races.join(", "))}</td></tr>`).join("")}
-  </table></div>` : '<div class="placeholder">No measured cells at this TWS.</div>';
+       <td><b>${c.stw}</b></td><td>${c.median_stw}</td><td>${c.samples}</td><td>${esc(c.races ? c.races.join(", ") : polRaceName(c.recording))}</td></tr>`).join("")}
+  </table></div>` : '<div class="placeholder">No measured cells at this TWS for this race.</div>';
   document.getElementById("view").innerHTML = `<div class="opt">
     <div class="card">
       <h3>Observed polar <span class="muted" style="font-weight:400">— what the boat actually sailed, off the instruments. Measured TWS/TWA/STW only; the ORC cert is the dashed reference, never the source.</span></h3>
-      ${races.map((r) => r.skipped
+      ${(d.races || []).map((r) => r.skipped
         ? `<div class="muted" style="font-size:12px">⊘ ${esc(r.name)} — ${esc(r.skipped)}</div>`
-        : `<div class="muted" style="font-size:12px"><b style="color:var(--ink)">${esc(r.name)}</b> · ${r.hours} h · ${r.fixes} fixes (${r.refused_by_trust} refused by the trust gate) · ${r.measured_samples} measured samples · trust: ${esc(r.trust_line || "—")}</div>`).join("")}
+        : `<div class="muted" style="font-size:12px"><b style="color:var(--ink)">${esc(r.name)}</b> · ${r.hours} h · ${r.fixes} fixes (${r.refused_by_trust} refused by the trust gate) · ${r.measured_samples} measured samples${r.refused_below_min_twa ? ", " + r.refused_below_min_twa + " below " + ((d.grid || {}).min_twa_deg || 30) + "° TWA (not sailing)" : ""}${r.cells != null ? " → " + r.cells + " cells" : ""} · trust: ${esc(r.trust_line || "—")}</div>`).join("")}
       <div style="margin-top:6px"><button class="mini" onclick="polRefresh()" ${Pol.busy ? "disabled" : ""}>${Pol.busy ? "Rebuilding from the record…" : "Refresh from the record"}</button>
       <span class="muted" style="font-size:11px"> built ${d.generated_at ? new Date(d.generated_at * 1000).toISOString().slice(0, 16) + "Z" : "—"}${d.refresh_error ? " · last refresh failed: " + esc(d.refresh_error) : ""}</span></div>
     </div>
     <div class="card">
-      <div class="opt-controls" style="margin-bottom:6px">TWS: ${chips} &nbsp; config: ${cfgSel}</div>
+      <div class="opt-controls" style="margin-bottom:6px">TWS: ${chips}</div>
+      <div class="opt-controls" style="margin-bottom:6px">race: ${raceSel} &nbsp; config: ${cfgSel} &nbsp;
+        <span class="muted">curves by:</span> ${splitRadio}</div>
+      ${byRace ? `<div class="muted" style="font-size:12px;margin-bottom:4px">One curve per race instance — each is that race's own p80 at every angle, across whatever sails were up. The sail filter does not apply in this mode.</div>` : ""}
       ${polSvg()}
-      <div class="muted" style="font-size:12px;margin-top:4px">${legend}</div>
+      <div class="muted" style="font-size:12px;margin-top:4px">${legend}${legendTail}</div>
     </div>
-    <div class="card"><h3>Cells at ${Pol.tws} kn <span class="muted" style="font-weight:400">— p80 = best achievable; ≥${(d.grid || {}).min_samples || 30}s of evidence per cell</span></h3>${tbl}</div>
-    <div class="card">
-      <h3>Decisions <span class="muted" style="font-weight:400">— what future optimizer runs sail on</span></h3>
-      <div class="muted" style="font-size:12px;margin-bottom:6px">The optimizer routes on the cert polar + the APPROVED overlay. Refinement proposals are built from <b>measured bins only</b> (forecast-derived bins are refused and counted); nothing changes the boat model without approval below in <a href="#debrief">Debrief</a>.</div>
-      ${pending ? `<div class="dep-row"><span class="pill warn">proposal #${pending.id} pending</span> helm ${pending.helm_current} → <b>${pending.helm_proposed}</b> · ${(pending.adjustments || []).length} cell adjustment(s) · ${(pending.summary || {}).excluded_forecast_bins || 0} forecast bin(s) refused — <a href="#debrief">review &amp; apply</a></div>`
-                 : '<div class="muted" style="font-size:12px">No pending proposal.</div>'}
-      <div style="margin-top:6px"><button class="mini" onclick="polPropose()">Propose refinement (measured bins only)</button> <span class="muted" id="polMsg" style="font-size:12px"></span></div>
-    </div>
+    <div class="card"><h3>Cells at ${Pol.tws} kn${Pol.race === "all" ? "" : " · " + esc(polRaceName(Pol.race))} <span class="muted" style="font-weight:400">— p80 = best achievable; ≥${(d.grid || {}).min_samples || 30}s of evidence per cell</span></h3>${tbl}</div>
+    ${polDecisionsCard()}
   </div>`;
 }
 
 async function polPropose() {
-  const m = document.getElementById("polMsg"); m.textContent = "Proposing…";
+  Pol.msg = "Proposing…"; paintPolar();
   try {
-    const r = await (await apiPost("/api/learning/propose", {})).json();
-    m.textContent = r.ok ? `Proposal #${r.id} created — review it in Debrief.` : (r.note || "propose failed");
-  } catch (e) { m.textContent = "propose failed: " + (e.message || e); }
+    const r = await (await apiPost("/api/learning/propose", { recordings: polSelectedRecordings() })).json();
+    Pol.msg = r.ok ? `Proposal #${r.id} created from ${(r.summary || {}).n_samples || "?"} samples — review it in Debrief.`
+                   : (r.note || "propose failed");
+  } catch (e) { Pol.msg = "propose failed: " + (e.message || e); }
   renderPolar();
 }

@@ -954,6 +954,14 @@ Build order, agreed 2026-09-08:
     113; polar% 105/99 → 87/88). `fold_twa()` now matches `obspolar`. Proposal cells are
     sample-weighted across configs and thin cells (< 20 samples) are skipped and counted.
     Full account: `C4_TELEMETRY_PROGRESS.md` → Session 2026-09-15.
+  - **✅ Polars PER RACE INSTANCE + selective learning (2026-09-15, Cole's ask).** The Polar tab
+    filters to one race instance, splits the chart's curves by sail configuration OR by race
+    instance (radio), and its Decisions card picks which races teach the optimizer
+    (`learning.propose(recordings=[...])`, menu from `GET /api/learning/bin-sources`, exclusions
+    counted in the summary). `obspolar` emits four views off one pass, every one a p80 re-pooled
+    from the raw samples — never a p80 of p80s. Found en route: **the observed polar had no lower
+    TWA bound**, so motoring head to wind (10–30° TWA) was in the boat's actual polar; `MIN_TWA_DEG`
+    gates it and each race reports what it refused (Jul 18 363 samples, Jul 15 390).
   - **✅ The debrief is a PRODUCT (2026-09-15, Cole's ask: "available in the C4 Lab after every
     race — we shouldn't have to do a fresh session here").** The tab opens on a **Recordings**
     table (boat-log sessions × the Lab's tracks × archived debriefs, `GET
