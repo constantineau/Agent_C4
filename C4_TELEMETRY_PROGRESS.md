@@ -38,13 +38,14 @@ section.
    trust strip beside the track. The graphical trust timeline folded in here.
 4. **The known small rough edges, all measured already:**
    - ✅ the heading `warn` flicker across the 15° line — **fixed 2026-09-16 with a release band,
-     not the dwell-median the queue assumed** (12 flips → 1). See that session. **New, opened by
-     the same measurement:** during the real fault the tile alternates `danger` ↔ `unknown` four
-     times because the spread gate trips while manoeuvring — a real danger going quiet is worse
-     than a flicker, and it is next.
+     not the dwell-median the queue assumed** (12 flips → 1). See that session. ✅ **And the `danger` ↔ `unknown`
+     alternation it opened is fixed too** (`HEADING_DANGER_HOLD_MIN`): 28% of a real fault used to
+     report `unknown`.
    - the deviation tile's absolute gates (`act` for 88% of Jul 18) — thresholds should scale
      with the race, numbers are Cole's;
-   - `selector` flip churn (40 flips on Jul 18) — same stability sweep, uninvestigated;
+   - **`selector` flip churn — now the noisiest tile left by a wide margin: 40 flips, all 40
+     crossing the alarm boundary** (the rebuilt corpus, 2026-09-16). Still uninvestigated, and the
+     obvious next one;
    - the channel-diff script (source-filtered) — make it repeatable per race;
    - **new 2026-09-15:** the debrief has one track slot per race id (loading Jul 15 replaces
      Jul 18 in the card; the archive keeps both) — a per-recording slot when B lands; the Jul 18
@@ -120,11 +121,34 @@ sat at **15.0 ± 0.8°** for an hour and wandered across the 15° line (14.2, 15
   window to window; a caller passing no `previous` behaves exactly as before. That is what keeps
   the cloud's retro sweep and the boat's live poll from leaking into each other.
 
-**A second thing the transition list exposed, NOT fixed:** during the real fault the tile
-alternates `danger` ↔ `unknown` four times (23:41, 23:45, 00:05, 00:34, 00:44) because the spread
-gate trips while the boat manoeuvres. **A real danger going quiet because the crew is tacking is
-worse than a flicker** — it is the "window shorter than the event" shape again, seen from the
-other side. Next after this.
+**And the thing the transition list exposed, now ALSO fixed: a danger that went quiet.** From
+23:24Z, with the kicked GPS24xd reading a quarter turn out, **93 of the fault's 329 frames — 28%
+of it — reported `unknown`**, in silent runs of **16, 20 and 9 minutes**. 58 of those were the
+spread gate firing while the boat manoeuvred; 35 were too few samples over the SOG floor. Neither
+is evidence the compass got better. **A real danger going quiet because the crew is tacking is
+worse than one that flickers** — the flicker at least stays on screen.
+- `unknown` means "this window cannot tell you". Treating that as a recovery is the read-path
+  default this project has been bitten by before: **a default is a decision, and the honest
+  default for no-information is to keep saying what the last window that COULD judge said.**
+- `HEADING_DANGER_HOLD_MIN` (45) bounds it, so a held verdict cannot outlive its evidence — past
+  the bound the tile returns to `unknown` and says how long the compass has been unjudgeable. The
+  real runs are 20 min at worst, so the bound is slack, not tuning. Only `danger` is held; a
+  window that can judge overrides it in both directions; and **the engine endpoint does not let a
+  held verdict refresh its own age**, or the hold would cite itself as its own evidence.
+- ⚠️ **Unlike the release band, this DOES widen the danger intervals the debrief learns from, so
+  it was measured on the LIVE route before shipping.** Over the Jul 18 race window it merges two
+  intervals (4 min + 19 min, 20 min of silence between) into **one continuous 43 min**
+  — confirmed on the rebuilt agent's `/racelog/trust`. Rebuilding the observed polar through it:
+  **Jul 18 measured samples 13,037 → 13,009** (28 fewer, 0.2%), trust refusals 39 → 74, **one cell
+  lost** (28 kn / 40° / J1+J3, which held exactly the minimum 60 s), pooled cells 87 → 86, one
+  surviving p80 moved 0.02 kn. Closing a 20-minute hole in a real alarm for 0.2% of the record.
+- 🔎 **An offline estimate of that cost said "no cells lost" and was wrong** — it did not apply the
+  trust gate that was already in force. A number computed *beside* the real path instead of
+  *through* it, which is the mistake this whole session kept finding in older work. The habit
+  holds: run the chain.
+
+**The standing agent was rebuilt in place 2026-09-16** so `/racelog/trust` serves this, and the
+observed-polar cache was refreshed through it.
 
 ## Session 2026-09-16 (the apply) — the boat model is no longer the cert
 
