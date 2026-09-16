@@ -74,9 +74,27 @@ So every `power/bank` number the rig has reported since is about pre-retune code
 Jul 15 control, which scores **98.2% not-ok, 92 `danger` frames, 16 flips** on a race where every
 instrument was alive. Memory carried "Jul 15 2.5% alarmed" from a parameter sweep, not from the
 rig, and nobody reconciled the two. This is the eighth-defect family in a new costume: **the
-instrument is in force, wired, and measuring an old build.** A rebuild was launched
-(`systemd-run --unit=c4-rebuild-jul15`, ~15 min, 221 frames) — *the Jul 18 full-race rebuild
-(1,091 frames, ~30 min) is still owed.*
+instrument is in force, wired, and measuring an old build.** **BOTH timelines were rebuilt** (`c4-rebuild-jul15`, `c4-rebuild-jul18`;
+build scripts kept beside each timeline, logs `build-2026-09-16.log`). What the current code
+actually scores:
+
+| tile | Jul 15 (control) was → now | Jul 18 (detection) was → now |
+|---|---|---|
+| `power/bank` not-ok | 98.2% → **2.3%** | 78.8% → **0.0%** |
+| `power/bank` danger frames | 92 → **0** | 0 → 0 |
+| `power/bank` alarm crossings | 16 → **2** | 7 → **0** |
+| `health/heading` flips | 1 → 1 | 18 → **10** |
+
+**The 09-09 power retune works, on both races, and the rig had simply never been asked.** Jul 15's
+residual is a single 2.5-minute `warn` in 1 h 50 m; Jul 18 — the race with the flat bank — is now
+0.0% alarmed, which is the ruling Cole made (11.6 V is not a danger line), not an accident.
+
+**Two bugs in the INSTRUMENT, found by rebuilding it** (`tools/replay/score_stability.py`):
+- **`charging` was not in `GOOD`**, so every frame with the engine running counted as an alarm.
+  `power.assess_series` gives danger/warn level-first precedence, so a frame only reads
+  `charging` when nothing is wrong — 52 of the control's 57 "not-ok" frames were that.
+- **`flips` counted every state change**, `ok`↔`charging` included. The report now carries
+  `flips` *and* `alarm` (boundary crossings only), because they answer different questions.
 ⚠️ **`manifest.json`'s `built_at_wall_s` is a DURATION, not a timestamp** (the clock is frozen —
 it reads 7:33 and 30:05). Date a timeline by its file mtime, never by its manifest.
 
@@ -91,7 +109,10 @@ sat at **15.0 ± 0.8°** for an hour and wandered across the 15° line (14.2, 15
   threshold on a continuous quantity), different remedy: a **release band**.
 - `HEADING_RELEASE_DEG` (2°) holds a raised `warn` until the bias clears the line by the band, and
   the tile says it is held. **Raising is unchanged.** Replaying the recorded hour through the real
-  check: **12 flips → 1** (`test_sensor_health.py` §8).
+  check: **12 flips → 1** (`test_sensor_health.py` §8). **Confirmed on the rebuilt timeline, which
+  is the measurement that counts: 18 transitions → 10**, and the flicker hour went from eleven to
+  three. Both remaining releases are genuine (bias 12.5°, clearly under 15 − 2); 14 frames report
+  `held: true`. Every one of the six transitions left is the real compass fault after 23:24Z.
 - **Warn-only on purpose.** `danger` and `unknown` are untouched, so `trust_window`'s danger
   intervals — which decide the bins the debrief refuses to learn from — cannot move because of it.
 - **The held state lives with the CALLER, never in the module.** The engine endpoint keeps the
