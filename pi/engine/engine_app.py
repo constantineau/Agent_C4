@@ -17,6 +17,7 @@ Cloud counterpart for parity: `vps/agent/app/main.py`. Differences: no /auth, no
 alerts/summarizer/polar-analysis (those are cloud / C4 Performance Lab), no race gate.
 """
 import os
+import time
 
 os.environ.setdefault("DATA_SOURCE", "onboard")  # this service is always the onboard backend
 
@@ -58,9 +59,11 @@ def sources():
     return onboard_conditions.get_sources()
 
 
-# The heading check's last DECIDED verdict, held here rather than in `sensor_health` so the
-# module stays pure and the cloud's retro sweep cannot inherit the boat's live state.
+# The heading check's last DECIDED verdict and when it was decided, held here rather than in
+# `sensor_health` so the module stays pure and the cloud's retro sweep cannot inherit the boat's
+# live state. The pair carries the warn release band and the danger hold across polls.
 _LAST_HEADING_STATUS = None
+_LAST_HEADING_AT = None
 
 
 @app.get("/health/sensors")
@@ -77,12 +80,17 @@ def sensor_health_ep():
     the AIS read filter and the per-channel `fell_back` flag all existed and none of them was
     ever shown to anyone, so "silently not in force" looked exactly like "working". This is the
     single endpoint the iPad's instrument-health chip reads."""
-    global _LAST_HEADING_STATUS
-    out = sensor_health.assess(conditions=onboard_conditions.get_current_conditions(),
-                               previous=_LAST_HEADING_STATUS)
-    st = ((out or {}).get("heading") or {}).get("status")
-    if st in ("ok", "warn", "danger"):        # `unknown` is silence, not a release
-        _LAST_HEADING_STATUS = st
+    global _LAST_HEADING_STATUS, _LAST_HEADING_AT
+    now = time.time()
+    out = sensor_health.assess(
+        conditions=onboard_conditions.get_current_conditions(),
+        previous=_LAST_HEADING_STATUS,
+        previous_age_s=None if _LAST_HEADING_AT is None else max(0.0, now - _LAST_HEADING_AT))
+    h = (out or {}).get("heading") or {}
+    # A HELD verdict must not refresh its own age, or the hold never expires — it would keep
+    # citing itself as the evidence for citing itself.
+    if h.get("status") in ("ok", "warn", "danger") and not h.get("held"):
+        _LAST_HEADING_STATUS, _LAST_HEADING_AT = h["status"], now
     return out
 
 

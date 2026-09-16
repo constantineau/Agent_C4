@@ -62,11 +62,15 @@ def heading_segments(samples, step_s=None):
         i1 = i0
         while i1 < len(samples) and samples[i1][0] <= t:
             i1 += 1
-        # the last DECIDED verdict (never `unknown`) carries the warn release band across
-        # windows, so the strip shows one warning instead of six crossings of the same line
-        decided = next((g["status"] for g in reversed(segs)
-                        if g["status"] in ("ok", "warn", "danger")), None)
-        v = sensor_health.heading_bias(samples[i0:i1], previous=decided)
+        # The last DECIDED verdict (never `unknown`) and when it was decided. It carries the
+        # warn release band across windows — so the strip shows one warning instead of six
+        # crossings of the same line — and holds a danger across windows that cannot judge, so a
+        # real fault does not go quiet every time the boat manoeuvres.
+        last = next((g for g in reversed(segs)
+                     if g["status"] in ("ok", "warn", "danger")), None)
+        v = sensor_health.heading_bias(
+            samples[i0:i1], previous=(last or {}).get("status"),
+            previous_age_s=None if last is None else max(0.0, t - last["t1"]))
         step = {"status": v["status"], "bias_deg": v.get("bias_deg"),
                 "spread_deg": v.get("spread_deg"), "reason": v.get("reason")}
         if segs and segs[-1]["status"] == step["status"]:

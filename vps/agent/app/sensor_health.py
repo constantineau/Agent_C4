@@ -100,6 +100,30 @@ HEADING_WARN_DEG = float(os.environ.get("HEALTH_HEADING_WARN_DEG", "15"))
 # intervals — which decide the bins the debrief refuses to learn from — cannot move because of
 # this. Raising is unchanged at WARN; only the way back to `ok` is held.
 HEADING_RELEASE_DEG = float(os.environ.get("HEALTH_HEADING_RELEASE_DEG", "2"))
+# How long a raised `danger` survives windows that cannot judge. Measured on the Jul 18 full-race
+# timeline 2026-09-16: from 23:24Z, when the kicked GPS24xd had the compass reading a quarter turn
+# out, **93 of the fault's 329 frames — 28% of it — reported `unknown`**, in silent runs of 16, 20
+# and 9 minutes. Two causes, both present: 58 frames where the samples disagreed (the boat was
+# manoeuvring, so the spread gate fired) and 35 where too few were over HEADING_MIN_SOG_KN.
+#
+# Neither is evidence the compass got better. `unknown` means "this window cannot tell you", and
+# treating that as a recovery is the read-path default this project has been bitten by before:
+# **a default is a decision, and the honest default for no-information is to keep saying what the
+# last window that COULD judge said.** A danger that goes quiet because the crew is tacking is
+# worse than one that flickers — the flicker at least stays on screen.
+#
+# It is bounded so a held verdict cannot outlive its evidence: past this, the tile returns to
+# `unknown` and says the compass has not been judgeable since. The real runs above are 20 min at
+# worst, so this bound is slack, not tuning.
+#
+# ⚠️ Unlike HEADING_RELEASE_DEG, this DOES widen `trust_window`'s danger intervals, which are what
+# the debrief refuses to learn from — so it was measured before it shipped, not assumed. Over the
+# Jul 18 race window it merges two danger intervals (4 min + 19 min, with a 20-minute silence
+# between them) into one continuous 43 min. The cost to the observed polar: **32 of 13,073
+# measured samples, 0.2%, and not one cell lost at the 60 s gate** — nine heavy-air J1+J3 beat
+# cells lose a few seconds each and keep 98%+ of their evidence. Closing a 20-minute hole in a
+# real alarm for 0.2% of the record is the trade, and it is a good one.
+HEADING_DANGER_HOLD_MIN = float(os.environ.get("HEALTH_HEADING_DANGER_HOLD_MIN", "45"))
 HEADING_BAD_DEG = float(os.environ.get("HEALTH_HEADING_BAD_DEG", "35"))
 # A bias only means something if the samples agree about it. Wild spread means manoeuvring or a
 # tumbling sensor, which is the range gate's business, not this one's.
@@ -213,7 +237,21 @@ def attitude_plausible(roll_deg=None, pitch_deg=None):
             "limits": {"roll_deg": ROLL_LIMIT_DEG, "pitch_deg": PITCH_LIMIT_DEG}}
 
 
-def heading_bias(samples, reference=None, previous=None):
+def _hold_danger(out, previous, previous_age_s, why):
+    """A window that cannot judge does not clear a danger — see HEADING_DANGER_HOLD_MIN."""
+    if previous != "danger":
+        return out
+    if previous_age_s is not None and previous_age_s > HEADING_DANGER_HOLD_MIN * 60.0:
+        out["reason"] = (f"{out['reason']} — and the compass has not been judgeable for "
+                         f"{previous_age_s / 60.0:.0f} min, so the last danger is too old to hold")
+        return out
+    out.update(status="danger", held=True, held_reason=out.get("reason"),
+               reason=f"compass last read a quarter turn out and this window cannot say "
+                      f"otherwise ({why}) — holding the alarm, not clearing it")
+    return out
+
+
+def heading_bias(samples, reference=None, previous=None, previous_age_s=None):
     """Compass-vs-COG bias from [(epoch_s, heading_deg_true, cog_deg_true, sog_kn)].
 
     Returns status ok/warn/danger plus the measured bias, so the iPad can say "heading reads
@@ -221,9 +259,11 @@ def heading_bias(samples, reference=None, previous=None):
     the bias is evidence about the pair, and on this boat there is no second compass to fail
     over to anyway.
 
-    `previous` is the last DECIDED status from this same check (the caller holds it — this
-    module stays a pure function so the cloud's retro sweep and the boat's live poll cannot leak
-    into each other). It only ever holds a `warn`: see HEADING_RELEASE_DEG.
+    `previous` is the last DECIDED status from this same check, and `previous_age_s` how long ago
+    it was decided (the caller holds both — this module stays a pure function so the cloud's retro
+    sweep and the boat's live poll cannot leak into each other). They hold a `warn` across the
+    threshold (HEADING_RELEASE_DEG) and a `danger` across windows that cannot judge
+    (HEADING_DANGER_HOLD_MIN). Nothing else is ever held, and a held verdict says so.
 
     `reference` is what `assess()` chose to compare against — `{"heading", "course",
     "independent"}` — and it is reported rather than assumed. A cross-check that cannot say
@@ -240,10 +280,12 @@ def heading_bias(samples, reference=None, previous=None):
     usable = [(h, c) for (_t, h, c, s) in samples
               if h is not None and c is not None and s is not None and s >= HEADING_MIN_SOG_KN]
     if len(usable) < HEADING_MIN_SAMPLES:
-        return {"available": False, "status": "unknown", "samples": len(usable),
-                "reference": ref or None, "note": note,
-                "reason": f"need {HEADING_MIN_SAMPLES} samples over "
-                          f"{HEADING_MIN_SOG_KN:g} kn (COG is meaningless at rest)"}
+        return _hold_danger(
+            {"available": False, "status": "unknown", "samples": len(usable),
+             "reference": ref or None, "note": note,
+             "reason": f"need {HEADING_MIN_SAMPLES} samples over "
+                       f"{HEADING_MIN_SOG_KN:g} kn (COG is meaningless at rest)"},
+            previous, previous_age_s, "too slow for COG to mean anything")
     mean, spread = _circular([_wrap180(h - c) for h, c in usable])
     # Decide on the value we REPORT, not on the raw float. Otherwise a bias of 14.951 prints as
     # "+15.0°" and is classified `ok` against a 15° threshold — a readout that contradicts its
@@ -254,7 +296,8 @@ def heading_bias(samples, reference=None, previous=None):
            "samples": len(usable), "reference": ref or None, "note": note,
            "thresholds": {"warn_deg": HEADING_WARN_DEG, "bad_deg": HEADING_BAD_DEG,
                           "max_spread_deg": HEADING_MAX_SPREAD_DEG,
-                          "warn_release_deg": HEADING_RELEASE_DEG}}
+                          "warn_release_deg": HEADING_RELEASE_DEG,
+                          "danger_hold_min": HEADING_DANGER_HOLD_MIN}}
     against = f" (vs {ref['course']})" if ref.get("course") else ""
     if spread is not None and spread > HEADING_MAX_SPREAD_DEG:
         # The samples do not agree on any bias, so this check has nothing to say. Three ways to
@@ -265,7 +308,7 @@ def heading_bias(samples, reference=None, previous=None):
         out.update(status="unknown",
                    reason=f"samples disagree ({spread:.0f}° spread){against} — manoeuvring, "
                           f"unstable, or a bias that has only just appeared")
-        return out
+        return _hold_danger(out, previous, previous_age_s, f"{spread:.0f}° spread")
     a = abs(mean)
     if a >= HEADING_BAD_DEG:
         out.update(status="danger",
@@ -437,7 +480,7 @@ def assess_provenance(channels, ais_excluded=(), boat_id=None):
                        "no live channels to attribute")}
 
 
-def assess(source=None, minutes=None, conditions=None, previous=None):
+def assess(source=None, minutes=None, conditions=None, previous=None, previous_age_s=None):
     """Sensor health through the active datasource: attitude range + heading-vs-COG bias, plus
     the provenance/policy checks when a `/conditions/full` payload is supplied.
 
@@ -498,7 +541,8 @@ def assess(source=None, minutes=None, conditions=None, previous=None):
     samples = [(t, h * deg, (lambda v: None if v is None else (v * deg) % 360)(nearest(cog, t)),
                 (lambda v: None if v is None else v * 1.943844)(nearest(sog, t)))
                for t, h in hdg]
-    hb = heading_bias(samples, reference=ref, previous=previous)
+    hb = heading_bias(samples, reference=ref, previous=previous,
+                      previous_age_s=previous_age_s)
 
     prov = assess_provenance((conditions or {}).get("channels") or {}, ais_excluded=ais)
 

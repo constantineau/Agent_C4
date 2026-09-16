@@ -563,8 +563,8 @@ check("a held warn says it is held, and why",
       and "holding the warning" in sh.heading_bias(steady(14.0), previous="warn")["reason"])
 check("the band is published with the other thresholds",
       sh.heading_bias(steady(3.0))["thresholds"]["warn_release_deg"] == sh.HEADING_RELEASE_DEG)
-check("the band is warn-ONLY, so trust_window's danger intervals — the bins the debrief refuses "
-      "to learn from — cannot move because of it",
+check("the RELEASE BAND is warn-only, so it alone never moves trust_window's danger intervals "
+      "(the danger HOLD in section 9 does, deliberately and measurably — see its comment)",
       sh.heading_bias(steady(30.0), previous="danger")["status"] == "warn"
       and sh.heading_bias(steady(-90.0), previous="ok")["status"] == "danger")
 check("`unknown` is neither manufactured nor suppressed by the band",
@@ -572,6 +572,63 @@ check("`unknown` is neither manufactured nor suppressed by the band",
                       previous="warn")["status"] == "unknown")
 check("a caller that passes no `previous` behaves exactly as before (the retro sweep is pure)",
       sh.heading_bias(steady(14.0))["status"] == "ok")
+
+# --- a danger that cannot be judged is not a danger that cleared (2026-09-16) -------------------
+# Measured on the rebuilt Jul 18 timeline: from 23:24Z, with the kicked GPS24xd reading a quarter
+# turn out, 93 of the fault's 329 frames — 28% of it — reported `unknown`, in silent runs of 16,
+# 20 and 9 minutes. 58 of those were the spread gate firing while the boat manoeuvred and 35 were
+# too few samples over the SOG floor. Neither is evidence the compass got better.
+
+print("\n9. a window that cannot judge does not clear a danger:")
+
+
+def slow(n=60):
+    """Under the SOG floor — COG means nothing, so the check has nothing to say."""
+    return [(float(i), 100.0, 100.0, 0.5) for i in range(n)]
+
+
+def disagreeing(n=60):
+    """The spread gate's case: the boat is manoeuvring, the samples agree on no bias at all."""
+    return [(float(i), 100.0 + (40 if i % 2 else -40), 100.0, 6.0) for i in range(n)]
+
+
+check("a manoeuvring window still reads `unknown` on its own",
+      sh.heading_bias(disagreeing())["status"] == "unknown")
+check("...and so does a window below the SOG floor",
+      sh.heading_bias(slow())["status"] == "unknown")
+check("but after a DANGER, the manoeuvring window holds the alarm instead of going quiet",
+      sh.heading_bias(disagreeing(), previous="danger")["status"] == "danger")
+check("...and so does the slow one — a boat that stopped did not fix its compass",
+      sh.heading_bias(slow(), previous="danger")["status"] == "danger")
+check("a held danger SAYS it is held, and keeps the window's own reason",
+      sh.heading_bias(disagreeing(), previous="danger").get("held") is True
+      and "holding the alarm" in sh.heading_bias(disagreeing(), previous="danger")["reason"]
+      and "spread" in sh.heading_bias(disagreeing(), previous="danger")["held_reason"])
+check("only DANGER is held — an `ok` or a `warn` still goes honestly quiet",
+      sh.heading_bias(disagreeing(), previous="ok")["status"] == "unknown"
+      and sh.heading_bias(disagreeing(), previous="warn")["status"] == "unknown")
+check("a window that CAN judge overrides the hold in both directions",
+      sh.heading_bias(steady(2.0), previous="danger")["status"] == "ok"
+      and sh.heading_bias(steady(-90.0), previous="ok")["status"] == "danger")
+
+print("\n10. ...but a held verdict cannot outlive its evidence:")
+HOLD = sh.HEADING_DANGER_HOLD_MIN * 60.0
+check("inside the bound the danger holds",
+      sh.heading_bias(disagreeing(), previous="danger",
+                      previous_age_s=HOLD - 60)["status"] == "danger")
+check("past it the tile admits it cannot say, rather than citing a stale alarm",
+      sh.heading_bias(disagreeing(), previous="danger",
+                      previous_age_s=HOLD + 60)["status"] == "unknown")
+check("...and says how long it has been unjudgeable rather than just falling silent",
+      "not been judgeable" in sh.heading_bias(disagreeing(), previous="danger",
+                                              previous_age_s=HOLD + 60)["reason"])
+check("the bound is generous next to the real runs (16, 20, 9 min on Jul 18)",
+      sh.HEADING_DANGER_HOLD_MIN >= 30)
+check("the bound is published with the other thresholds",
+      sh.heading_bias(steady(3.0))["thresholds"]["danger_hold_min"]
+      == sh.HEADING_DANGER_HOLD_MIN)
+check("a caller that passes no age still holds (the bound is opt-in, the hold is not)",
+      sh.heading_bias(disagreeing(), previous="danger")["status"] == "danger")
 
 print("\n" + ("PASS" if ok else "FAIL"))
 raise SystemExit(0 if ok else 1)
