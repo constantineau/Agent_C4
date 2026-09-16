@@ -23,15 +23,17 @@ and the debriefs it has archived — and each row carries ONE button. See the 20
 section.
 
 **The refinement queue, in rough order of value:**
-1. **Walk Cole through his first apply.** Review proposal #2 with him: the 4 kn cells (55–78%,
-   clamped to ×0.85) are pre-start drift and should be unchecked; the 6 kn A3+SS cells at
-   110–120° (67–70%) look like a hoist; the heavy-air beat table (14–20 kn / 36° at 97–100%,
-   878 samples at 16 kn) is the real signal, as is 6 kn/142° at ×1.15 in both recordings. He
-   edits the helm number and unchecks cells in the card; Apply writes `polar_adjustments` and
-   the optimizer's `_polar_speed` reads them. Then run a gameplan and confirm the overlay bit.
+1. ✅ **DONE 2026-09-16 — proposal #2 is applied** (helm 0.931 + 24 cells; the 4 kn drift and
+   the 6 kn hoist cells unchecked). See the 2026-09-16 (the apply) session. **What is left of
+   this item:** run a real GRIB gameplan and eyeball the `realized · helm 93%` bit in the UI —
+   the routing chain is verified in-process but not yet through a live synthesize, and Cole
+   should see the 6 kn upwind penalty (+11.8% on a light-air beat) before he trusts a light-air
+   plan.
 2. **Exercise the Polar tab against Cole's actual use** — fix what he names, don't guess. The
    per-race filter, the by-race curves and the per-race "which races teach the optimizer"
-   checkboxes shipped 2026-09-15; the next asks land on top of those.
+   checkboxes shipped 2026-09-15; the fixed radial scale and the 60-second evidence gate shipped
+   2026-09-16 (see that session). **Open question back to Cole:** the fixed scale is 16 kn because
+   the ORC cert reaches 14.26 at 24 kn — say the word and it drops to the record's own 10 kn.
 3. **B — the decision timeline** (the big build): the rig server-side, scrub the race with the
    trust strip beside the track. The graphical trust timeline folded in here.
 4. **The known small rough edges, all measured already:**
@@ -56,6 +58,82 @@ corpus are the instruments for the whole phase — anything that flaps on Jul 15
 construction. **And (2026-09-15): run the real chain end to end before believing any link of it
 — five defects sat between "the bins are measured" and "a proposal exists", none visible from
 unit tests, all found by running the two recordings through the live route.**
+
+## Session 2026-09-16 (the apply) — the boat model is no longer the cert
+
+**Cole: "apply and move forward."** Proposal #2 is **APPLIED**. `sr33` was helm 1.0 / 0 cells and
+is now **helm 0.931 + 24 polar-overlay cells**; the proposal row is `status=applied` with its
+`applied_json`. This is the first time the optimizer has routed on anything but the ORC cert.
+
+**What was unchecked, and why it is not the same as deleting it.** Five of the 29 cells were
+dropped, exactly the ones Cole named in his review (queue #1): the three 4 kn cells (52°/55%,
+60°/78%, 70°/72% — pre-start drift) and the two 6 kn 110–120° cells (67%, 70% — a kite hoist).
+**The multipliers are RELATIVE to `helm_factor`** (`learning._propose`: `rel = cell_pct /
+overall_pct`, then clamped to 0.85–1.15), so an unchecked cell is not restored to the cert — it
+inherits the boat's overall level. Verified on the live profile: 4 kn/60° and 6 kn/110° now route
+at **93.1% of cert (helm alone), not 79.1%** (0.85 × 0.931). That is the right answer for a cell
+whose evidence we do not believe: use the boat's average, not the drift.
+
+**The chain was run end to end, not assumed** (`boats.active_polar_adjustments()` →
+`POL.apply_adjustments()` → `OPT.route_leg`, live profile, constant field, 12 nm legs):
+- **16 kn beat: 139.65 → 139.54 min.** The overlay's +7.1% at 36° cancels the helm's −6.9%, which
+  is precisely Cole's "the heavy-air beat table is the real signal" — this boat sails its rating
+  upwind in a breeze, and a flat helm factor alone would have wrongly taxed it 7%.
+- **6 kn run: 187.2 → 182.0 min (2.8% FASTER than the cert).** The 141.8° ×1.15 cell in both
+  recordings — the boat beats its rating deep, now in the router.
+- **6 kn beat: 141.7 → 158.4 min (+11.8%) — the biggest change in the model, flagged for Cole.**
+  It rests on the 6 kn 60°/70° cells (83% over 99 samples, 78% over 44), both present in BOTH
+  recordings, so it is the strongest evidence shape available — but light-air upwind is where
+  this crew is being told it loses most, off ~143 s of record. Worth a look before the next
+  light-air gameplan; the cells are unticked in one click if he disagrees.
+
+**To revert:** `learning.apply_proposal` is the only writer; set `helm_factor` back to 1.0 and
+`polar_adjustments` to `[]` on the `sr33` boat profile. The pre-apply profile is recorded here:
+helm 1.0, no overlay, no wave coeffs.
+
+⚠️ **The wave coefficients were NOT touched** — `wave_coeffs` is still `{}`, so the optimizer uses
+the `ROUTE_WAVE_*` priors. `helm_factor` stays a flat-water number by design; calibrating the sea
+state is its own proposal kind (`_apply_wave`) and its own decision.
+
+## Session 2026-09-16 (polar tab, second pass) — one scale, and evidence measured in seconds
+
+**Cole's ask:** *"make it so that the polar graph doesn't change scales between the TWS menus,
+currently it does between 22 kn and 24 kn. Also, can we not show data that is generated with less
+than 60 seconds of data?"* Both shipped; the second one was not what it looked like.
+
+- **One fixed radial scale (`polMaxV()` in `web/app.js`).** The chart sized itself from whatever
+  was on screen, so every TWS chip redrew at a different scale and a curve that looked longer was
+  only drawn bigger. **The jump Cole caught was the CERT reference, not the record:** the cert's
+  fastest cell steps **11.12 → 14.26 kn** from the 20 kn bucket (shown at 22) to the 24 kn bucket,
+  while the boat's own best moved 8.73 → 9.23. The scale is now taken once over everything the tab
+  can ever draw — every TWS bucket, race, config, and every cert bucket that can appear as the
+  reference — rounded up to a whole 2 kn ring: **16 kn, 8 rings, identical under every filter.**
+  It is immune to the race select and the split radio too, so two screenshots are comparable.
+  Trade-off worth knowing: light air is now visibly small (4 kn TWS fills 24% of the radius,
+  24 kn fills 58%) — which is the point, but if Cole would rather the reference never drive the
+  scale, dropping the cert from `polMaxV()` gives a 10 kn chart and clips the cert above it.
+- **The evidence gate is 30 → 60 SECONDS, and it is now actually seconds.** `MIN_SAMPLES = 30`
+  counted *returned fixes*. `/racelog/track` buckets the archive per second and then thins evenly
+  to `max_points`, so a fix is a second only while no thinning happened — the gate would have
+  silently doubled on the first race long enough to trip the 20,000 cap. This is the shape this
+  project keeps meeting (**a constant limit bounding a range that is not constant** — the eighth
+  defect, `max_points` again). `_stride_s()` measures each race's stride from its OWN fix
+  timestamps (the MEDIAN gap: Jul 18 is 1 Hz for 97% of its gaps with outages to 77 s, and a mean
+  would call it 1.97 s/fix and halve its evidence), every cell accumulates `seconds`, and the gate
+  and the table both read that. Both races measure **1.0 s/fix** today, so the numbers on screen
+  did not move — the meaning did.
+- **What 60 s costs, measured on the live build:** pooled cells **130 → 87**. The refused cells
+  hold a **median of 7 s** each, which is the argument for the gate: a p80 over a few seconds is
+  the top of the noise, not a speed the boat can hold. Nothing is hidden — every gate here says
+  what it refused, so each race line now carries `+N under 60 s, refused` (Jul 18 +168 / 2,495 s,
+  Jul 15 +80 / 932 s) and the cells card lists the refusals at the TWS and race on screen.
+- ⚠️ **This is the display polar only.** The optimizer's refinement path is `learning.propose()`
+  off the debrief's archived `perf_bins`, which has its own `LEARNING_MIN_CELL_SAMPLES` (20) —
+  proposal #2 is untouched by this change. Raising that one is a separate decision, and Cole's.
+- **The assertion that would have caught it** (`test_polar_races.py` §1b): a race whose fixes are
+  3 s apart clears a 60 s gate on 25 fixes while a 1 Hz race with the same 25 fixes is refused.
+  A geometry harness (`polSvg()` run under node against the live artifact) pins the ring radii
+  identical across all 13 TWS chips × both split modes × every race filter.
 
 ## Session 2026-09-15 (polars per race) — see each race, compare them, choose what teaches
 
