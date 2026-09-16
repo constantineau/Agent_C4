@@ -30,7 +30,12 @@ TILES = [
     ("deviation",         "/deviation",       ("status",)),
     ("selector",          "/selector",        ("status",)),
 ]
-GOOD = {"ok", "unknown", "na", None}      # `unknown` is honest silence, not an alarm
+# `unknown` is honest silence, not an alarm. `charging` is a HEALTHY bank: `power.assess_series`
+# gives danger and warn level-first precedence ("charging explains a low level, it does not clear
+# it"), so a frame only ever reads `charging` when nothing is wrong. Counting it as an alarm cost
+# the rebuilt Jul 15 control 52 of its 57 "not-ok" frames and most of its flips — the instrument
+# was overstating the false-alarm rate it exists to measure.
+GOOD = {"ok", "unknown", "na", "charging", None}
 
 
 def dig(obj, path):
@@ -45,7 +50,7 @@ def score(dir_path):
     frames = [json.loads(l) for l in open(os.path.join(dir_path, "frames.jsonl"))]
     print(f"\n=== {os.path.basename(dir_path)} — {len(frames)} frames "
           f"{frames[0]['t']} -> {frames[-1]['t']}")
-    print(f"{'tile':18} {'frames':>7} {'not-ok':>7} {'%':>6} {'flips':>6}  states")
+    print(f"{'tile':18} {'frames':>7} {'not-ok':>7} {'%':>6} {'flips':>6} {'alarm':>6}  states")
     rows = []
     for label, ep, path in TILES:
         seq = []
@@ -57,12 +62,20 @@ def score(dir_path):
             continue
         bad = sum(1 for v in seq if v not in GOOD)
         flips = sum(1 for i in range(1, len(seq)) if seq[i] != seq[i - 1])
+        # `flips` counts every state change; `alarm` counts only the ones that CROSS the alarm
+        # boundary. They are different questions and conflating them flatters or slanders a tile:
+        # the rebuilt Jul 15 control shows 7 power/bank flips, but five are ok<->charging as the
+        # engine runs — healthy, and not what a flapping metric is for. The two that remain are
+        # one 2.5-minute warn in a 1h50m race.
+        alarm = sum(1 for i in range(1, len(seq))
+                    if (seq[i] in GOOD) != (seq[i - 1] in GOOD))
         counts = defaultdict(int)
         for v in seq:
             counts[v] += 1
         states = " ".join(f"{k}:{n}" for k, n in sorted(counts.items(), key=lambda kv: -kv[1]))
-        print(f"{label:18} {len(seq):>7} {bad:>7} {100 * bad / len(seq):>5.1f}% {flips:>6}  {states}")
-        rows.append((label, len(seq), bad, flips))
+        print(f"{label:18} {len(seq):>7} {bad:>7} {100 * bad / len(seq):>5.1f}% "
+              f"{flips:>6} {alarm:>6}  {states}")
+        rows.append((label, len(seq), bad, flips, alarm))
     # An endpoint that errored is not a passing tile — count those separately or a broken
     # endpoint reads as a quiet one.
     errs = defaultdict(int)
