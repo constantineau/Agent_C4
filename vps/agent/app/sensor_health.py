@@ -117,12 +117,16 @@ HEADING_RELEASE_DEG = float(os.environ.get("HEALTH_HEADING_RELEASE_DEG", "2"))
 # worst, so this bound is slack, not tuning.
 #
 # ⚠️ Unlike HEADING_RELEASE_DEG, this DOES widen `trust_window`'s danger intervals, which are what
-# the debrief refuses to learn from — so it was measured before it shipped, not assumed. Over the
-# Jul 18 race window it merges two danger intervals (4 min + 19 min, with a 20-minute silence
-# between them) into one continuous 43 min. The cost to the observed polar: **32 of 13,073
-# measured samples, 0.2%, and not one cell lost at the 60 s gate** — nine heavy-air J1+J3 beat
-# cells lose a few seconds each and keep 98%+ of their evidence. Closing a 20-minute hole in a
-# real alarm for 0.2% of the record is the trade, and it is a good one.
+# the debrief refuses to learn from — so it was measured on the LIVE rebuild before it shipped,
+# not assumed. Over the Jul 18 race window it merges two danger intervals (4 min + 19 min, with a
+# 20-minute silence between them) into one continuous 43 min. The cost to the observed polar,
+# rebuilt through the real route: Jul 18's measured samples 13,037 → 13,009 (28 fewer, 0.2%),
+# trust refusals 39 → 74, and **one cell lost** — 28 kn / 40° / J1+J3, which held exactly the
+# minimum 60 s and fell under it. Pooled cells 87 → 86; one surviving p80 moved 0.02 kn.
+#
+# (An offline estimate of this said "no cells lost". It was wrong because it did not apply the
+# trust gate that was ALREADY in force — the same mistake in miniature that this whole session
+# has been about: a number computed beside the real path instead of through it. Run the chain.)
 HEADING_DANGER_HOLD_MIN = float(os.environ.get("HEALTH_HEADING_DANGER_HOLD_MIN", "45"))
 HEADING_BAD_DEG = float(os.environ.get("HEALTH_HEADING_BAD_DEG", "35"))
 # A bias only means something if the samples agree about it. Wild spread means manoeuvring or a
