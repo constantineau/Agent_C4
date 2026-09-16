@@ -58,6 +58,11 @@ def sources():
     return onboard_conditions.get_sources()
 
 
+# The heading check's last DECIDED verdict, held here rather than in `sensor_health` so the
+# module stays pure and the cloud's retro sweep cannot inherit the boat's live state.
+_LAST_HEADING_STATUS = None
+
+
 @app.get("/health/sensors")
 def sensor_health_ep():
     """Is an instrument that is still reporting still RIGHT, and where is each number FROM?
@@ -72,7 +77,13 @@ def sensor_health_ep():
     the AIS read filter and the per-channel `fell_back` flag all existed and none of them was
     ever shown to anyone, so "silently not in force" looked exactly like "working". This is the
     single endpoint the iPad's instrument-health chip reads."""
-    return sensor_health.assess(conditions=onboard_conditions.get_current_conditions())
+    global _LAST_HEADING_STATUS
+    out = sensor_health.assess(conditions=onboard_conditions.get_current_conditions(),
+                               previous=_LAST_HEADING_STATUS)
+    st = ((out or {}).get("heading") or {}).get("status")
+    if st in ("ok", "warn", "danger"):        # `unknown` is silence, not a release
+        _LAST_HEADING_STATUS = st
+    return out
 
 
 @app.get("/power")
