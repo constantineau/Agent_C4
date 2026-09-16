@@ -3058,7 +3058,7 @@ function optObstacleNote(r) {
    /api/polar/observed (app/obspolar.py): measured TWS/TWA/STW only, trust-gated, kite-gated —
    never GRIB, never the cert (the cert appears only as a dashed reference curve). */
 const Pol = { data: null, tws: null, config: "all", race: "all", split: "config",
-  busy: false, proposals: null, sources: null, use: null, msg: "" };
+  busy: false, proposals: null, sources: null, use: null, msg: "", _maxV: null };
 
 // Fixed hue order — color follows the sail, never the filter (dataviz rule). Validated for CVD +
 // contrast on this app's panel surface (#141418), 7 slots, 2026-09-09. Unattributed = muted.
@@ -3103,6 +3103,7 @@ async function renderPolar() {
     view.innerHTML = '<div class="loading">Loading the observed polar…</div>';
     try {
       Pol.data = await (await apiGet("/api/polar/observed")).json();
+      Pol._maxV = null;
       Opt.polarGrid = Opt.polarGrid || (await (await apiGet("/api/polars")).json());
     } catch (e) { view.innerHTML = '<div class="placeholder">Failed to load.</div>'; return; }
   }
@@ -3127,7 +3128,7 @@ async function renderPolar() {
 
 async function polRefresh() {
   Pol.busy = true; paintPolar();
-  try { Pol.data = await (await apiGet("/api/polar/observed?refresh=1")).json(); }
+  try { Pol.data = await (await apiGet("/api/polar/observed?refresh=1")).json(); Pol._maxV = null; }
   catch (e) { /* keep the cached build */ }
   Pol.busy = false; Pol.tws = null; renderPolar();
 }
@@ -3140,6 +3141,39 @@ function polCells(tws, config) {
     : (d.race_cells || []).filter((c) => polSameRec(c.recording, Pol.race));
   return src.filter((c) => (tws == null || c.tws === tws)
     && (config === "all" || (c.config || "—") === config));
+}
+
+// The cells the evidence gate REFUSED, under the same filters as polCells — so the card can say
+// what it is not showing at the TWS and race on screen, not just a grand total. A gate nobody can
+// see is a lie about where the numbers came from.
+function polThin(tws, config) {
+  const d = Pol.data || {};
+  const src = Pol.race === "all" ? (d.refused_thin || [])
+    : (d.refused_thin_race || []).filter((c) => polSameRec(c.recording, Pol.race));
+  return src.filter((c) => (tws == null || c.tws === tws)
+    && (config === "all" || (c.config || "—") === config));
+}
+
+// ONE radial scale for the whole tab. Cole, 2026-09-16: the chart must not rescale between the
+// TWS chips — it did, and the jump he caught between 22 and 24 kn was the CERT reference, not the
+// record: the cert's fastest cell steps 11.12 -> 14.26 kn across those buckets while the boat's
+// own best moved 8.73 -> 9.23. A curve that looked longer was only drawn bigger. The scale is
+// taken over everything this tab can ever draw — every TWS bucket, every race, every config, and
+// every cert bucket that can appear as the reference — so it is immune to the race and sail
+// filters too, and two screenshots are legitimately comparable.
+function polMaxV() {
+  if (Pol._maxV) return Pol._maxV;
+  const d = Pol.data || {};
+  let m = 4;
+  for (const set of [d.cells, d.race_cells, d.race_curves, d.curve])
+    (set || []).forEach((c) => { if (c.stw > m) m = c.stw; });
+  const g = Opt.polarGrid;
+  if (!g || !g.grid) return Math.max(6, Math.ceil((m + 0.4) / 2) * 2);   // don't memoise a
+  Object.values(g.grid).forEach((row) =>                                 // scale missing the cert
+    Object.values(row).forEach((v) => { if (v != null && v > m) m = v; }));
+  // round up to a whole ring, so the outermost 2 kn ring is the chart's edge
+  Pol._maxV = Math.max(6, Math.ceil((m + 0.4) / 2) * 2);
+  return Pol._maxV;
 }
 
 // What the chart draws: one series per sail configuration, or one per race instance.
@@ -3178,21 +3212,20 @@ function polCertCurve(tws) {
 function polSvg() {
   const series = polSeries();
   const cert = polCertCurve(Pol.tws);
-  const all = series.reduce((a, s) => a.concat(s.pts), []);
-  const maxV = Math.max(4, ...all.map((c) => c.stw), ...(cert ? cert.pts.map((p) => p.stw) : [])) + 0.8;
+  const maxV = polMaxV();     // fixed across every TWS chip and every filter — see polMaxV()
   const CX = 70, CY = 320, R = 268;
   const rr = (v) => R * v / maxV;
   const XY = (twa, v) => [CX + rr(v) * Math.sin(twa * Math.PI / 180), CY - rr(v) * Math.cos(twa * Math.PI / 180)];
   let out = [];
   Pol._pts = [];
   // rings every 2 kn + spokes every 30° — recessive grid
-  for (let v = 2; v < maxV; v += 2) {
+  for (let v = 2; v <= maxV + 1e-9; v += 2) {
     const [x0, y0] = XY(0, v), [x1, y1] = XY(180, v);
     out.push(`<path d="M ${x0} ${y0} A ${rr(v)} ${rr(v)} 0 0 1 ${x1} ${y1}" fill="none" stroke="var(--line)" stroke-width="1"/>`);
     out.push(`<text x="${CX + rr(v) + 3}" y="${CY - 4}" fill="var(--muted)" font-size="10">${v}</text>`);
   }
   for (let a = 0; a <= 180; a += 30) {
-    const [x, y] = XY(a, maxV - 0.2);
+    const [x, y] = XY(a, maxV);
     out.push(`<line x1="${CX}" y1="${CY}" x2="${x}" y2="${y}" stroke="var(--line)" stroke-width="1"/>`);
     const [lx, ly] = XY(a, maxV + 0.35);
     out.push(`<text x="${lx}" y="${ly + 3}" fill="var(--muted)" font-size="11" text-anchor="middle">${a}°</text>`);
@@ -3239,7 +3272,7 @@ function polTip(ev, i) {
                : esc(polRaceName(c.recording)));
   tip.innerHTML = `<b>${esc(c.label)}</b> · TWS ${c.tws} · TWA ${c.twa}°<br>` +
     `STW <b>${c.stw}</b> kn (p80) · median ${c.median_stw}<br>` +
-    `${c.samples}s of evidence · ${src}`;
+    `${c.seconds != null ? c.seconds : c.samples} s of evidence (${c.samples} fixes) · ${src}`;
 }
 function polTipHide() { const t = document.getElementById("polTipEl"); if (t) t.remove(); }
 
@@ -3291,6 +3324,8 @@ function polDecisionsCard() {
 function paintPolar() {
   const d = Pol.data || {};
   const cells = polCells(Pol.tws, Pol.config);
+  const minS = Math.round((d.grid || {}).min_seconds || 60);
+  const thin = polThin(Pol.tws, Pol.config);
   const allTws = d.tws_buckets || [];
   const cfgs = ["all", ...((d.configs || [])), "—"];
   const races = polRaces();
@@ -3317,14 +3352,14 @@ function paintPolar() {
     <tr><th>TWA</th><th>config</th><th>STW p80</th><th>median</th><th>evidence (s)</th><th>${Pol.race === "all" ? "races" : "race"}</th></tr>
     ${cells.slice().sort((a, b) => a.twa - b.twa || String(a.config).localeCompare(String(b.config))).map((c) =>
       `<tr><td>${c.twa}°</td><td><span style="color:${polColor(c.config)}">●</span> ${esc(c.config || "unattributed")}</td>
-       <td><b>${c.stw}</b></td><td>${c.median_stw}</td><td>${c.samples}</td><td>${esc(c.races ? c.races.join(", ") : polRaceName(c.recording))}</td></tr>`).join("")}
+       <td><b>${c.stw}</b></td><td>${c.median_stw}</td><td>${c.seconds != null ? c.seconds : c.samples}</td><td>${esc(c.races ? c.races.join(", ") : polRaceName(c.recording))}</td></tr>`).join("")}
   </table></div>` : '<div class="placeholder">No measured cells at this TWS for this race.</div>';
   document.getElementById("view").innerHTML = `<div class="opt">
     <div class="card">
       <h3>Observed polar <span class="muted" style="font-weight:400">— what the boat actually sailed, off the instruments. Measured TWS/TWA/STW only; the ORC cert is the dashed reference, never the source.</span></h3>
       ${(d.races || []).map((r) => r.skipped
         ? `<div class="muted" style="font-size:12px">⊘ ${esc(r.name)} — ${esc(r.skipped)}</div>`
-        : `<div class="muted" style="font-size:12px"><b style="color:var(--ink)">${esc(r.name)}</b> · ${r.hours} h · ${r.fixes} fixes (${r.refused_by_trust} refused by the trust gate) · ${r.measured_samples} measured samples${r.refused_below_min_twa ? ", " + r.refused_below_min_twa + " below " + ((d.grid || {}).min_twa_deg || 30) + "° TWA (not sailing)" : ""}${r.cells != null ? " → " + r.cells + " cells" : ""} · trust: ${esc(r.trust_line || "—")}</div>`).join("")}
+        : `<div class="muted" style="font-size:12px"><b style="color:var(--ink)">${esc(r.name)}</b> · ${r.hours} h · ${r.fixes} fixes (${r.refused_by_trust} refused by the trust gate) · ${r.measured_samples} measured samples${r.refused_below_min_twa ? ", " + r.refused_below_min_twa + " below " + ((d.grid || {}).min_twa_deg || 30) + "° TWA (not sailing)" : ""}${r.sec_per_fix ? " @ " + r.sec_per_fix + " s/fix" : ""}${r.cells != null ? " → " + r.cells + " cells" : ""}${r.thin_cells ? " (+" + r.thin_cells + " under " + minS + " s, refused)" : ""} · trust: ${esc(r.trust_line || "—")}</div>`).join("")}
       <div style="margin-top:6px"><button class="mini" onclick="polRefresh()" ${Pol.busy ? "disabled" : ""}>${Pol.busy ? "Rebuilding from the record…" : "Refresh from the record"}</button>
       <span class="muted" style="font-size:11px"> built ${d.generated_at ? new Date(d.generated_at * 1000).toISOString().slice(0, 16) + "Z" : "—"}${d.refresh_error ? " · last refresh failed: " + esc(d.refresh_error) : ""}</span></div>
     </div>
@@ -3335,8 +3370,10 @@ function paintPolar() {
       ${byRace ? `<div class="muted" style="font-size:12px;margin-bottom:4px">One curve per race instance — each is that race's own p80 at every angle, across whatever sails were up. The sail filter does not apply in this mode.</div>` : ""}
       ${polSvg()}
       <div class="muted" style="font-size:12px;margin-top:4px">${legend}${legendTail}</div>
+      <div class="muted" style="font-size:11px;margin-top:4px">Rings are fixed at 2 kn out to ${polMaxV()} kn for every TWS, race and sail — the chart never rescales, so a longer curve is a faster boat.</div>
     </div>
-    <div class="card"><h3>Cells at ${Pol.tws} kn${Pol.race === "all" ? "" : " · " + esc(polRaceName(Pol.race))} <span class="muted" style="font-weight:400">— p80 = best achievable; ≥${(d.grid || {}).min_samples || 30}s of evidence per cell</span></h3>${tbl}</div>
+    <div class="card"><h3>Cells at ${Pol.tws} kn${Pol.race === "all" ? "" : " · " + esc(polRaceName(Pol.race))} <span class="muted" style="font-weight:400">— p80 = best achievable; ≥${minS} s of the record per cell</span></h3>${tbl}
+      ${thin.length ? `<div class="muted" style="font-size:11px;margin-top:6px">Not shown: <b>${thin.length}</b> cell(s) here held less than ${minS} s of the record (${thin.reduce((n, c) => n + c.seconds, 0)} s between them) — ${thin.slice().sort((x, y) => y.seconds - x.seconds).slice(0, 6).map((c) => `${c.twa}°${c.config ? " " + esc(c.config) : ""} ${c.seconds}s`).join(", ")}${thin.length > 6 ? `, +${thin.length - 6} more` : ""}. A p80 over a few seconds is the top of the noise, not a speed the boat can hold.</div>` : ""}</div>
     ${polDecisionsCard()}
   </div>`;
 }

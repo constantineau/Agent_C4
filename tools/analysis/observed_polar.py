@@ -41,7 +41,8 @@ def main():
     for r in art["races"]:
         print(f"{r['name']}: " + (r.get("skipped") or
               f"{r['fixes']} fixes, {r['refused_by_trust']} refused by trust, "
-              f"{r['measured_samples']} measured samples, {r.get('cells')} cells "
+              f"{r['measured_samples']} measured samples ({r.get('sec_per_fix')} s/fix), "
+              f"{r.get('cells')} cells (+{r.get('thin_cells')} too thin) "
               f"[--race {r.get('recording')}] — {r.get('trust_line')}"))
     if a.race is None:
         rows = art["cells"]
@@ -51,13 +52,14 @@ def main():
             raise SystemExit(f"no cells for race instance {a.race} — the window starts are "
                              f"printed above")
     print(f"\nACTUAL POLAR{'' if a.race is None else ' — ONE RACE INSTANCE'} — {len(rows)} cells "
-          f"(p{art['grid']['pctile']:.0f} STW, >= {art['grid']['min_samples']}s each, "
-          f"instruments only)")
-    print(f"{'TWS':>4} {'TWA':>5} {'config':10} {'STW':>6} {'med':>6} {'n(s)':>6} {'cert*':>6}  races")
+          f"(p{art['grid']['pctile']:.0f} STW, >= {art['grid']['min_seconds']:.0f}s each, "
+          f"instruments only; {art['thin']['cells' if a.race is None else 'race_cells']} cell(s) "
+          f"refused for thin evidence)")
+    print(f"{'TWS':>4} {'TWA':>5} {'config':10} {'STW':>6} {'med':>6} {'sec':>6} {'cert*':>6}  races")
     for r in rows:
         ref = cert_ref(r["tws"], r["twa"])
         print(f"{r['tws']:>4.0f} {r['twa']:>5.0f} {str(r['config'] or '—'):10} "
-              f"{r['stw']:>6.2f} {r['median_stw']:>6.2f} {r['samples']:>6} "
+              f"{r['stw']:>6.2f} {r['median_stw']:>6.2f} {r['seconds']:>6} "
               f"{(f'{ref:.2f}' if ref is not None else '  —'):>6}  {len(r.get('races') or [a.race])}")
     print("(* nearest ORC-rated cell, reference only — the polar above is the record)")
     if a.out:

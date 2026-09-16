@@ -69,7 +69,7 @@ def fake_agent(path, timeout=None):
 monitor.agent_json = fake_agent
 
 print("1. one pass, four views, every one a true p80:")
-art = OP.compute(min_samples=30)
+art = OP.compute(min_seconds=30)
 pooled = [c for c in art["cells"] if c["tws"] == 10.0 and c["twa"] == 90.0]
 check("the pooled cell is the p80 of all 80 samples (6.0), not the mean of the two races' p80s (7.5)",
       len(pooled) == 1 and pooled[0]["stw"] == 6.0 and pooled[0]["samples"] == 80)
@@ -98,12 +98,52 @@ def with_motoring(path, timeout=None):
 
 
 monitor.agent_json = with_motoring
-art2 = OP.compute(min_samples=30)
+art2 = OP.compute(min_seconds=30)
 monitor.agent_json = _prev
 c = next(m for m in art2["races"] if m["name"] == "Race C")
 check(f"an hour head to wind ({head_to_wind}° floor) makes no polar cells and is COUNTED, not dropped",
       c["cells"] == 0 and c["refused_below_min_twa"] == 40 and c["measured_samples"] == 0
       and not any(r["recording"] == 900.0 for r in art2["race_cells"]))
+
+print("\n1b. evidence is SECONDS of record, not a count of fixes:")
+# `/racelog/track` buckets per second and then thins evenly to `max_points`, so on a long enough
+# race one returned fix stands for several seconds. A gate written in samples would silently
+# tighten on exactly the races that carry the most evidence. Race D is the thinned shape: 25
+# fixes 3 s apart = 75 s, which must CLEAR a 60 s gate that 25 one-second fixes do not.
+SESSIONS["sessions"].append({"id": 5, "name": "Race D", "race_id": "r",
+                             "window": {"start_ts": 500000.0, "end_ts": 503600.0, "hours": 1.0}})
+SESSIONS["sessions"].append({"id": 6, "name": "Race E", "race_id": "r",
+                             "window": {"start_ts": 600000.0, "end_ts": 603600.0, "hours": 1.0}})
+_two = fake_agent
+
+
+def thinned(path, timeout=None):
+    for start, step in ((500000, 3), (600000, 1)):
+        if path.startswith("/racelog/track") and f"start={start}" in path:
+            return {"fixes": [{"t": start + i * step, "tws": 20.0, "twa": 90.0, "stw": 7.0}
+                              for i in range(25)], "sail_log": []}
+        if path.startswith("/racelog/trust") and f"start={start}" in path:
+            return {"danger": {}, "summary": {"line": "no danger windows"}}
+    return _two(path, timeout)
+
+
+monitor.agent_json = thinned
+art3 = OP.compute(min_seconds=60)
+monitor.agent_json = _two
+d = next(m for m in art3["races"] if m["name"] == "Race D")
+e = next(m for m in art3["races"] if m["name"] == "Race E")
+check("a thinned race's stride is measured from its own fixes (3 s), not assumed to be 1 s",
+      d["sec_per_fix"] == 3.0 and e["sec_per_fix"] == 1.0)
+check("25 fixes 3 s apart = 75 s and CLEAR a 60 s gate", d["cells"] == 1 and d["thin_cells"] == 0)
+check("25 fixes 1 s apart = 25 s and are refused", e["cells"] == 0 and e["thin_cells"] == 1)
+cell_d = next(r for r in art3["race_cells"] if r["recording"] == 500000.0)
+check("...and the cell reports the seconds it stands on, not just the sample count",
+      cell_d["seconds"] == 75 and cell_d["samples"] == 25)
+check("the refusal is COUNTED and carried, not silently dropped",
+      art3["thin"]["race_cells"] >= 1
+      and any(r["recording"] == 600000.0 and r["seconds"] == 25
+              for r in art3["refused_thin_race"]))
+SESSIONS["sessions"] = [x for x in SESSIONS["sessions"] if x["id"] not in (5, 6)]
 
 print("\n2. a race instance is the same key everywhere:")
 meta = {m.get("name"): m for m in art["races"]}
