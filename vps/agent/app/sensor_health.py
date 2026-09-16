@@ -83,6 +83,23 @@ HEADING_MIN_SOG_KN = float(os.environ.get("HEALTH_HEADING_MIN_SOG_KN", "3.0"))
 # Leeway plus current plus a genuine tidal set can legitimately reach double digits; a healthy
 # race read −0.1..−5.7° per hour. Warn beyond WARN, call it broken beyond BAD.
 HEADING_WARN_DEG = float(os.environ.get("HEALTH_HEADING_WARN_DEG", "15"))
+# The RELEASE band for `warn` only. Measured on the Jul 18 full-race timeline 2026-09-16: the
+# heading tile changed status 18 times, and ELEVEN of them were 22:08-23:06Z, where the bias sat
+# at 15.0 +/- 0.8 deg for an hour and wandered back and forth across the 15 deg line (14.2, 15.3,
+# 15.6, 14.7, 15.5, 15.0, 13.8, ...). The other seven are the real compass fault after 23:24Z and
+# must not be smoothed.
+#
+# The queue called for "the bank tile's dwell-median treatment". It would not have helped, and
+# saying why matters: the bank flapped because a sliding-window min() toggled on window
+# arithmetic, so a median over the dwell fixed it. Here the window mean is ALREADY stable — the
+# bias genuinely WAS ~15 deg for an hour. No amount of smoothing moves a value off a line it is
+# sitting on; only a release band does. Same family as the bank tile (a threshold on a continuous
+# quantity), different remedy.
+#
+# Deliberately `warn` only. `danger` and `unknown` are untouched, so `trust_window`'s danger
+# intervals — which decide the bins the debrief refuses to learn from — cannot move because of
+# this. Raising is unchanged at WARN; only the way back to `ok` is held.
+HEADING_RELEASE_DEG = float(os.environ.get("HEALTH_HEADING_RELEASE_DEG", "2"))
 HEADING_BAD_DEG = float(os.environ.get("HEALTH_HEADING_BAD_DEG", "35"))
 # A bias only means something if the samples agree about it. Wild spread means manoeuvring or a
 # tumbling sensor, which is the range gate's business, not this one's.
@@ -196,13 +213,17 @@ def attitude_plausible(roll_deg=None, pitch_deg=None):
             "limits": {"roll_deg": ROLL_LIMIT_DEG, "pitch_deg": PITCH_LIMIT_DEG}}
 
 
-def heading_bias(samples, reference=None):
+def heading_bias(samples, reference=None, previous=None):
     """Compass-vs-COG bias from [(epoch_s, heading_deg_true, cog_deg_true, sog_kn)].
 
     Returns status ok/warn/danger plus the measured bias, so the iPad can say "heading reads
     89° off GPS course" rather than showing a plausible, wrong number. Never picks a winner:
     the bias is evidence about the pair, and on this boat there is no second compass to fail
     over to anyway.
+
+    `previous` is the last DECIDED status from this same check (the caller holds it — this
+    module stays a pure function so the cloud's retro sweep and the boat's live poll cannot leak
+    into each other). It only ever holds a `warn`: see HEADING_RELEASE_DEG.
 
     `reference` is what `assess()` chose to compare against — `{"heading", "course",
     "independent"}` — and it is reported rather than assumed. A cross-check that cannot say
@@ -232,7 +253,8 @@ def heading_bias(samples, reference=None):
            "spread_deg": None if spread is None else round(spread, 1),
            "samples": len(usable), "reference": ref or None, "note": note,
            "thresholds": {"warn_deg": HEADING_WARN_DEG, "bad_deg": HEADING_BAD_DEG,
-                          "max_spread_deg": HEADING_MAX_SPREAD_DEG}}
+                          "max_spread_deg": HEADING_MAX_SPREAD_DEG,
+                          "warn_release_deg": HEADING_RELEASE_DEG}}
     against = f" (vs {ref['course']})" if ref.get("course") else ""
     if spread is not None and spread > HEADING_MAX_SPREAD_DEG:
         # The samples do not agree on any bias, so this check has nothing to say. Three ways to
@@ -253,6 +275,13 @@ def heading_bias(samples, reference=None):
         out.update(status="warn",
                    reason=f"heading {mean:+.0f}° off GPS course{against} — more than leeway and "
                           f"current explain; check the compass mounting")
+    elif previous == "warn" and a >= HEADING_WARN_DEG - HEADING_RELEASE_DEG:
+        # Raised, and not yet clearly back. Held rather than dropped, and it SAYS it is held —
+        # a tile that changes its mind every other poll teaches the crew to stop reading it.
+        out.update(status="warn", held=True,
+                   reason=f"heading {mean:+.0f}° off GPS course{against} — still within "
+                          f"{HEADING_RELEASE_DEG:g}° of the {HEADING_WARN_DEG:g}° line it "
+                          f"crossed; holding the warning until it clears")
     else:
         out.update(status="ok", reason=f"heading within {mean:+.0f}° of GPS course{against}")
     return out
@@ -408,9 +437,12 @@ def assess_provenance(channels, ais_excluded=(), boat_id=None):
                        "no live channels to attribute")}
 
 
-def assess(source=None, minutes=None, conditions=None):
+def assess(source=None, minutes=None, conditions=None, previous=None):
     """Sensor health through the active datasource: attitude range + heading-vs-COG bias, plus
     the provenance/policy checks when a `/conditions/full` payload is supplied.
+
+    `previous` is the caller's last DECIDED heading status — held state lives with the caller,
+    never in this module, so a live poll and a retro sweep can never contaminate each other.
 
     `conditions` is passed in rather than fetched here so this module stays independent of
     `onboard_conditions` (which the cloud image does not ship) and stays a pure-ish function of
@@ -466,7 +498,7 @@ def assess(source=None, minutes=None, conditions=None):
     samples = [(t, h * deg, (lambda v: None if v is None else (v * deg) % 360)(nearest(cog, t)),
                 (lambda v: None if v is None else v * 1.943844)(nearest(sog, t)))
                for t, h in hdg]
-    hb = heading_bias(samples, reference=ref)
+    hb = heading_bias(samples, reference=ref, previous=previous)
 
     prov = assess_provenance((conditions or {}).get("channels") or {}, ais_excluded=ais)
 

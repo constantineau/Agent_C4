@@ -510,5 +510,68 @@ check("the window before the fault is a clean ok, so this is a transition and no
 check("the default window is the detection latency, and 10 min is the measured choice",
       sh.HEADING_WINDOW_MIN == 10)
 
+# --- the warn release band (2026-09-16) ---------------------------------------------------------
+# Measured on the Jul 18 full-race timeline: the heading tile changed status 18 times, and ELEVEN
+# of them fell in 22:08-23:06Z, where the bias sat at 15.0 +/- 0.8 deg for an hour and wandered
+# back and forth across the 15 deg line. The other seven are the real compass fault after 23:24Z
+# and must survive untouched. The refinement queue called for "the bank tile's dwell-median
+# treatment"; it would not have helped, and the reason is worth pinning: the window mean is
+# ALREADY stable, so no amount of smoothing moves a value off a line it is sitting on.
+
+print("\n8. the tile does not change its mind while the bias sits ON the line:")
+
+
+def steady(bias, n=60, sog=6.0):
+    """A window whose heading sits exactly `bias` off its course — spread 0, so the reported mean
+    IS `bias` and the classification is the only thing under test."""
+    return [(float(i), (100.0 + bias) % 360.0, 100.0, sog) for i in range(n)]
+
+
+def sweep(biases, band=True):
+    """The real check over a sequence of windows, threading the last DECIDED status exactly as
+    `trust_window.heading_segments` and the engine endpoint do."""
+    prev, out = None, []
+    for b in biases:
+        v = sh.heading_bias(steady(b), previous=prev if band else None)
+        out.append(v["status"])
+        if v["status"] in ("ok", "warn", "danger"):
+            prev = v["status"]
+    return out
+
+
+def flips(states):
+    return sum(1 for a, b in zip(states, states[1:]) if a != b)
+
+
+JUL18 = [14.2, 15.3, 15.6, 14.7, 15.5, 15.0, 13.8, 14.9, 15.0, 14.0, 14.8, 15.1, 15.8, 14.5,
+         14.2, 15.0, 14.9, 15.1, 16.0, 14.7]          # the recorded 22:08-23:06Z biases
+before, after = sweep(JUL18, band=False), sweep(JUL18, band=True)
+print(f"     without the band: {flips(before):2} flips  "
+      f"{''.join('W' if x == 'warn' else '.' for x in before)}")
+print(f"     with the band:    {flips(after):2} flips  "
+      f"{''.join('W' if x == 'warn' else '.' for x in after)}")
+check("that hour used to flap", flips(before) >= 10)
+check("it now settles into a single warning", flips(after) <= 1)
+check("...and the warning STAYS raised — the bias is real, it is the churn that was noise",
+      after[-1] == "warn")
+check("raising is untouched: a first crossing warns immediately",
+      sh.heading_bias(steady(15.0), previous="ok")["status"] == "warn")
+check("a bias that properly clears the band releases", sweep([15.5, 14.5, 12.9])[-1] == "ok")
+check("...and one still inside it does not", sweep([15.5, 13.1])[-1] == "warn")
+check("a held warn says it is held, and why",
+      sh.heading_bias(steady(14.0), previous="warn").get("held") is True
+      and "holding the warning" in sh.heading_bias(steady(14.0), previous="warn")["reason"])
+check("the band is published with the other thresholds",
+      sh.heading_bias(steady(3.0))["thresholds"]["warn_release_deg"] == sh.HEADING_RELEASE_DEG)
+check("the band is warn-ONLY, so trust_window's danger intervals — the bins the debrief refuses "
+      "to learn from — cannot move because of it",
+      sh.heading_bias(steady(30.0), previous="danger")["status"] == "warn"
+      and sh.heading_bias(steady(-90.0), previous="ok")["status"] == "danger")
+check("`unknown` is neither manufactured nor suppressed by the band",
+      sh.heading_bias([(float(i), 100.0 + (40 if i % 2 else -40), 100.0, 6.0) for i in range(60)],
+                      previous="warn")["status"] == "unknown")
+check("a caller that passes no `previous` behaves exactly as before (the retro sweep is pure)",
+      sh.heading_bias(steady(14.0))["status"] == "ok")
+
 print("\n" + ("PASS" if ok else "FAIL"))
 raise SystemExit(0 if ok else 1)
