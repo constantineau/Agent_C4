@@ -147,8 +147,26 @@ worse than one that flickers** — the flicker at least stays on screen.
   *through* it, which is the mistake this whole session kept finding in older work. The habit
   holds: run the chain.
 
+**Confirmed on the rebuilt timeline — the measurement that counts.** `health/heading` across the
+whole session: **18 transitions → 6**, `unknown` frames **93 → 34**, `danger` **235 → 294**.
+Inside the fault there is now **no `unknown` after detection at all**: once danger is raised at
+23:41:31 it holds for 294 consecutive frames to the end of the recording, 73 of them explicitly
+`held`. The one `unknown` run left is **23:25–23:41, before any danger was ever raised** — the
+honest, self-clearing detection latency while the window straddles the moment the bias appears
+(`HEADING_WINDOW_MIN`), with nothing to hold. The 45-minute bound was never reached, because
+judgeable windows keep appearing between the unjudgeable ones and reset the age: the bound is
+slack, exactly as intended.
+
 **The standing agent was rebuilt in place 2026-09-16** so `/racelog/trust` serves this, and the
-observed-polar cache was refreshed through it.
+observed-polar cache was refreshed through it. Final corpus (today's code, both races):
+
+| tile | Jul 15 not-ok / alarm flips | Jul 18 not-ok / alarm flips |
+|---|---|---|
+| `power/bank` | 2.3% / 2 | **0.0% / 0** |
+| `health/heading` | 0.0% / 0 | 37.2% / **5** (was 30.5% / 17 — more of the real fault, far less churn) |
+| `health/attitude` | 0.0% / 0 | 4.2% / 2 |
+| `selector` | 0.0% / 0 | 9.0% / **40** ← the noisiest tile left, uninvestigated |
+| `deviation` | 0.0% / 0 | 90.3% / 1 (absolute gates; thresholds are Cole's) |
 
 ## Session 2026-09-16 (the apply) — the boat model is no longer the cert
 
