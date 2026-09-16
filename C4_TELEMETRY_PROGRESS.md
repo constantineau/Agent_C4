@@ -37,8 +37,11 @@ section.
 3. **B — the decision timeline** (the big build): the rig server-side, scrub the race with the
    trust strip beside the track. The graphical trust timeline folded in here.
 4. **The known small rough edges, all measured already:**
-   - the heading `warn` flicker across the 15° line (22:07–23:06 on Jul 18) — wants the bank
-     tile's dwell-median treatment in `sensor_health`;
+   - ✅ the heading `warn` flicker across the 15° line — **fixed 2026-09-16 with a release band,
+     not the dwell-median the queue assumed** (12 flips → 1). See that session. **New, opened by
+     the same measurement:** during the real fault the tile alternates `danger` ↔ `unknown` four
+     times because the spread gate trips while manoeuvring — a real danger going quiet is worse
+     than a flicker, and it is next.
    - the deviation tile's absolute gates (`act` for 88% of Jul 18) — thresholds should scale
      with the race, numbers are Cole's;
    - `selector` flip churn (40 flips on Jul 18) — same stability sweep, uninvestigated;
@@ -51,6 +54,9 @@ section.
 5. **When the boat is back** (unchanged): rebuild archiver + engine + console aboard, close
    session 3 from the iPad, enable Orca attitude sharing.
 
+⚠️ **The rig's timelines are only as current as their last rebuild — check the mtime against
+`git log` for the module you are about to judge, before you quote a number from them.**
+
 **Refinement-phase habits that today validated:** score for stability, not moments; verify before
 deleting; one implementation per analysis; measured beats forecast beats theory; every gate must
 say what it refused. The stability scorer (`tools/replay/score_stability.py`) and the two-race
@@ -58,6 +64,46 @@ corpus are the instruments for the whole phase — anything that flaps on Jul 15
 construction. **And (2026-09-15): run the real chain end to end before believing any link of it
 — five defects sat between "the bins are measured" and "a proposal exists", none visible from
 unit tests, all found by running the two recordings through the live route.**
+
+## Session 2026-09-16 (moving forward) — the instrument was stale, and the heading fix was the wrong fix
+
+**🔴 The stability corpus does not measure today's code, and has not since it was built.**
+`timeline-fullrace` was built **2026-09-08 15:55Z** and `timeline-jul15` **2026-09-09 10:24Z**;
+the power retune (`3d24b86`) landed **2026-09-09 11:42Z**, 78 minutes after the later of the two.
+So every `power/bank` number the rig has reported since is about pre-retune code — including the
+Jul 15 control, which scores **98.2% not-ok, 92 `danger` frames, 16 flips** on a race where every
+instrument was alive. Memory carried "Jul 15 2.5% alarmed" from a parameter sweep, not from the
+rig, and nobody reconciled the two. This is the eighth-defect family in a new costume: **the
+instrument is in force, wired, and measuring an old build.** A rebuild was launched
+(`systemd-run --unit=c4-rebuild-jul15`, ~15 min, 221 frames) — *the Jul 18 full-race rebuild
+(1,091 frames, ~30 min) is still owed.*
+⚠️ **`manifest.json`'s `built_at_wall_s` is a DURATION, not a timestamp** (the clock is frozen —
+it reads 7:33 and 30:05). Date a timeline by its file mtime, never by its manifest.
+
+**The heading `warn` flicker (queue 4a) — fixed, but not the way the queue said.** The Jul 18
+timeline changes the heading status **18 times**. Eleven of them are 22:08–23:06Z, where the bias
+sat at **15.0 ± 0.8°** for an hour and wandered across the 15° line (14.2, 15.3, 15.6, 14.7, 15.5,
+15.0, 13.8 …). The other seven are the real compass fault after 23:24Z.
+- The queue called for **the bank tile's dwell-median treatment. It would not have helped.** The
+  bank flapped because a sliding-window `min()` toggled on *window arithmetic*, so a median over
+  the dwell fixed it. Here the window mean is **already stable** — the bias genuinely was ~15° for
+  an hour. **No amount of smoothing moves a value off a line it is sitting on.** Same family (a
+  threshold on a continuous quantity), different remedy: a **release band**.
+- `HEADING_RELEASE_DEG` (2°) holds a raised `warn` until the bias clears the line by the band, and
+  the tile says it is held. **Raising is unchanged.** Replaying the recorded hour through the real
+  check: **12 flips → 1** (`test_sensor_health.py` §8).
+- **Warn-only on purpose.** `danger` and `unknown` are untouched, so `trust_window`'s danger
+  intervals — which decide the bins the debrief refuses to learn from — cannot move because of it.
+- **The held state lives with the CALLER, never in the module.** The engine endpoint keeps the
+  boat's live verdict; `trust_window.heading_segments` threads its own last *decided* status
+  window to window; a caller passing no `previous` behaves exactly as before. That is what keeps
+  the cloud's retro sweep and the boat's live poll from leaking into each other.
+
+**A second thing the transition list exposed, NOT fixed:** during the real fault the tile
+alternates `danger` ↔ `unknown` four times (23:41, 23:45, 00:05, 00:34, 00:44) because the spread
+gate trips while the boat manoeuvres. **A real danger going quiet because the crew is tacking is
+worse than a flicker** — it is the "window shorter than the event" shape again, seen from the
+other side. Next after this.
 
 ## Session 2026-09-16 (the apply) — the boat model is no longer the cert
 
