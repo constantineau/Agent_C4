@@ -15,7 +15,13 @@ BUNDLE = {"race_id": "u", "recommended": "middle",
           "variants": [{"id": "middle", "name": "Middle start"},
                        {"id": "left", "name": "Left start", "what_flips_it": "breeze backs left of ~190°"}]}
 
-def stub(bundle=BUNDLE, tac=None, dev=None, dft=None):
+def stub(bundle=BUNDLE, tac=None, dev=None, dft=None, reset=True):
+    # a fresh scenario is a fresh boat: clear BOTH pieces of carried state, the downwind
+    # confirmation clock and the settle latch that steadies the card. `reset=False` changes the
+    # conditions on the SAME boat — which is what the settling tests below are about.
+    if reset:
+        selector._CONFIRM.clear()
+        selector._SETTLE.clear()
     selector.deviation._load_playbook = lambda: bundle
     selector.tactics.get_tactics = lambda route=None: (tac or {"available": False})
     selector.deviation.get_deviation = lambda route=None: (dev or {"available": False, "status": "na"})
@@ -101,21 +107,116 @@ stub(bundle=B_RIGHT, tac=wind_pos("downwind"))
 r = selector.get_selector(now=T0)
 check("downwind t=0: hold-watch, confirming", r["action"] == "hold" and r["status"] == "watch"
       and r["confirming"]["favored"] == "left")
-check("downwind t=30m: still confirming",
-      selector.get_selector(now=T0 + 1800)["confirming"]["held_s"] == 1800)
+# relative to the bar, not a hard-coded 30/61 min — the bar is a tuned number and moved on
+# 2026-09-17; assertions that pin it in two places rot the moment it does
+BAR = selector.SWITCH_CONFIRM_DOWNWIND_S
+check("downwind, halfway to the bar: still confirming, and says how far",
+      selector.get_selector(now=T0 + BAR / 2)["confirming"]["held_s"] == round(BAR / 2))
 check("downwind sustained past the bar: switch fires",
-      selector.get_selector(now=T0 + 3660)["action"] == "switch")
-stub(bundle=B_RIGHT, tac=wind(False, "either"))
-selector.get_selector(now=T0 + 3720)                       # condition drops → clock clears
+      selector.get_selector(now=T0 + BAR + 60)["action"] == "switch")
+# Dropout handling (Cole, 2026-09-17: "forgive dropouts and lower the bar"). The clock used to
+# clear-fast on ANY dropout; the detector feeding it chatters, so a short lapse is noise.
+# NOTE: these re-stubs MUST pass reset=False. They did not when `stub()` first learned to clear
+# state, and the old clear-fast assertion went on passing while testing nothing at all.
+# They drive `_decide` rather than `get_selector`: this is the confirmation CLOCK under test, and
+# the card's settle wrapper would otherwise stand between the test and it.
+selector._CONFIRM.clear()
 stub(bundle=B_RIGHT, tac=wind_pos("downwind"))
-check("clear-fast: dropout resets the clock",
-      selector.get_selector(now=T0 + 3780)["confirming"]["held_s"] == 0)
+selector._decide(None, now=T0)                              # clock starts
+stub(bundle=B_RIGHT, tac=wind(False, "either"), reset=False)
+selector._decide(None, now=T0 + 60)                         # a 1-minute dropout...
+stub(bundle=B_RIGHT, tac=wind_pos("downwind"), reset=False)
+check("a dropout INSIDE the grace does not reset the clock — it keeps running through it",
+      selector._decide(None, now=T0 + 120)["confirming"]["held_s"] == 120)
+stub(bundle=B_RIGHT, tac=wind(False, "either"), reset=False)
+selector._decide(None, now=T0 + 180)
+selector._decide(None, now=T0 + 180 + selector.SWITCH_GRACE_S + 30)   # ...outlives the grace
+stub(bundle=B_RIGHT, tac=wind_pos("downwind"), reset=False)
+check("a dropout that OUTLIVES the grace does reset it",
+      selector._decide(None, now=T0 + 240 + selector.SWITCH_GRACE_S)["confirming"]["held_s"] == 0)
+# Swapping sides is not a flicker. BUNDLE recommends "middle", so BOTH left and right are
+# decisive here — with B_RIGHT, "favours right" is simply the recommended side and therefore not
+# decisive at all, i.e. an ordinary (forgiven) lapse.
+def wind_side(side, pos="downwind"):
+    w = wind(True, side)
+    w["point_of_sail"] = pos
+    return w
+
+selector._CONFIRM.clear()
+stub(tac=wind_side("left"))
+selector._decide(None, now=T0)
+stub(tac=wind_side("right"), reset=False)                  # the other side takes over
+selector._decide(None, now=T0 + 60)
+stub(tac=wind_side("left"), reset=False)
+check("a shift that swaps sides drops the old clock outright — that is not a flicker",
+      selector._decide(None, now=T0 + 120)["confirming"]["held_s"] == 0)
 selector._CONFIRM.clear()
 
 # --- na paths -----------------------------------------------------------------------------------
 print("na:")
 stub(bundle={})
 check("no playbook → na", selector.get_selector()["action"] == "na")
+
+# --- the card has to be steady enough to read (2026-09-17) ---------------------------------------
+# Measured on the Jul 18 2026 full-race timeline: this tile changed state 40 times in 9 hours, in
+# 20 excursions, TEN of them a minute or less. The cause is one layer up — tactics' persistence
+# test is a bare threshold and its quantity sat within +/-10% of that threshold for 13% of the
+# race, flipping 74 times. A recommendation that appears and withdraws inside one tack teaches the
+# crew to stop reading the card.
+print("settling — a verdict has to hold before the crew sees it:")
+S = selector.SETTLE_S
+
+stub(tac=wind(False, "either"), reset=False)
+base = selector.get_selector(now=T0)
+check("the first read is shown immediately — nothing to settle against",
+      base["status"] == "ok" and "settling" not in base)
+
+stub(tac=wind(True, "left", "backing"), reset=False)                    # a switch call appears...
+r = selector.get_selector(now=T0 + 30)
+check("a change does NOT reach the card on its first frame",
+      r["status"] == "ok" and r["action"] == "hold")
+check("...but the card SAYS a change is firming up, and to what",
+      r["settling"]["to_action"] == "switch" and r["settling"]["need_s"] == S
+      and r["settling"]["held_s"] == 0)
+stub(tac=wind(False, "either"), reset=False)                            # ...and withdraws inside a minute
+r = selector.get_selector(now=T0 + 60)
+check("a one-minute excursion never reaches the card at all",
+      r["status"] == "ok" and r["action"] == "hold" and "settling" not in r)
+
+selector._SETTLE.clear()
+stub(tac=wind(False, "either"), reset=False)
+selector.get_selector(now=T0)
+stub(tac=wind(True, "left", "backing"), reset=False)
+selector.get_selector(now=T0 + 30)
+check("halfway through, the wait is reported honestly",
+      selector.get_selector(now=T0 + 30 + S / 2)["settling"]["held_s"] == round(S / 2))
+check("a change that HOLDS for the settle does reach the card",
+      selector.get_selector(now=T0 + 30 + S)["action"] == "switch")
+
+selector._SETTLE.clear()
+stub(tac=wind(True, "left", "backing"), reset=False)
+selector.get_selector(now=T0)
+stub(tac=wind(False, "either"), reset=False)
+check("de-escalation settles too — most of Jul 18's churn was an alarm withdrawing",
+      selector.get_selector(now=T0 + 30)["action"] == "switch")
+check("...and clears once it holds",
+      selector.get_selector(now=T0 + 30 + S)["action"] == "hold")
+
+selector._SETTLE.clear()
+stub(tac=wind(False, "either"), reset=False)
+selector.get_selector(now=T0)
+stub(tac=wind(True, "left", "backing"), reset=False)
+selector.get_selector(now=T0 + 30)
+stub(tac=wind(True, "right"), reset=False)                              # a DIFFERENT change part-way through
+r = selector.get_selector(now=T0 + 30 + S * 0.9)
+check("a different change starts its own clock rather than inheriting the first one's",
+      r["settling"]["held_s"] == 0 and r["settling"]["to_action"] == "off_script")
+
+selector._SETTLE.clear()
+stub(bundle={})
+check("an `na` read is passed straight through, never a held stale verdict",
+      selector.get_selector(now=T0)["action"] == "na")
+selector._SETTLE.clear()
 
 print("\n", "ALL PASS" if ok else "FAILURES ABOVE")
 raise SystemExit(0 if ok else 1)

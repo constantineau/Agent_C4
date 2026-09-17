@@ -18,8 +18,15 @@ OFF-SCRIPT flag ("sail your own to that side, off the playbook" — the onboard 
 tier); (3) nothing decisive → HOLD. Forecast-drift and route-deviation don't trigger a switch on their
 own (drift is a forecast, deviation is an execution gap) — they REINFORCE a wind-shift switch (raising
 confidence/urgency) and, on their own, raise a "reassess" caution. FUZZY (perflab §5): confidence is a
-first-class output from how many signals concur; the wind trigger keeps the engine's own persistence
-hysteresis so it doesn't flip-flop.
+first-class output from how many signals concur.
+
+⚠️ This docstring used to claim "the wind trigger keeps the engine's own persistence hysteresis so
+it doesn't flip-flop". **There is no such hysteresis.** `tactics.get_tactics` decides with a bare
+`abs(slope) * span > max(3, osc * 0.6)`, and on Jul 18 2026 that quantity sat within ±10% of its
+own threshold for 13% of the race and flipped **74 times** — which flipped this tile 40 times, 20
+separate excursions, half of them a minute or less. A documented guarantee that was never
+implemented is the shape this project keeps meeting; SETTLE_S below is the thing that actually
+does it, and it does it here, where the crew reads it.
 """
 import os
 import time
@@ -32,8 +39,57 @@ from . import deviation, drift as drift_mod, tactics
 # runner; the 2025 known-answer backtest: 13/15 wrong-side switch calls were short-lived downwind
 # excursions, median ~40 min). Upwind keeps the current fire-on-persistent behavior; downwind the
 # decisive condition must HOLD this long before the verdict escalates from a reassess to a SWITCH.
-SWITCH_CONFIRM_DOWNWIND_S = float(os.environ.get("SEL_SWITCH_CONFIRM_DOWNWIND_S", "3600"))
-_CONFIRM = {}      # (route, favored) -> epoch the decisive condition was first seen (clear-fast)
+#
+# 🔴 **60 min was unreachable aboard, and lowering it has a measured price. Read both numbers.**
+# On Jul 18 2026 the decisive condition never held longer than 7.5 min, so this branch had never
+# fired and could not. But the 60 was not wrong where it was SET: `backtest_replay.py` runs
+# tactics' own formula over a **180-minute** window of smooth analysis wind, while the boat runs
+# it over **12 minutes** of anemometer. A trend lasts hours in the first and minutes in the
+# second. **The bar was calibrated in one timescale and applied in another** — the real defect,
+# and the real fix is the detector, not this number.
+#
+# Lowered to 1200 s on Cole's instruction (2026-09-17: "forgive dropouts and lower the bar"),
+# with the cost measured on the 2025 known-answer race, where RIGHT paid 18:2:
+#
+#     bar      wrong-side time (winner / 88th)
+#     3600 s   7% / 12%      <- what locked input #5 bought (from 17% / 21% unprotected)
+#     1800 s   12% / 18%
+#     1200 s   12% / 18%     <- here
+#      600 s   11% / 18%
+#
+# So this gives back roughly half of #5's gain on that race. 1200 s is chosen because every
+# lowered value costs the same there, and 1200 is the LARGEST that is actually reachable on the
+# boat's own signal (Jul 18's longest run with the grace below is 24.5 min) — the least damage
+# that still makes the branch exist. ⚠️ Revisit with a second real race, or by widening the
+# onboard tactics window so the two timescales agree.
+SWITCH_CONFIRM_DOWNWIND_S = float(os.environ.get("SEL_SWITCH_CONFIRM_DOWNWIND_S", "1200"))
+# How long the decisive condition may LAPSE without resetting the confirmation clock. Cole,
+# 2026-09-17: "forgive dropouts and lower the bar."
+#
+# Why it was needed: the clock used to clear-fast on any dropout, and the signal it is timing
+# comes from `tactics.get_tactics`, whose persistence test is a bare threshold that flipped 74
+# times on Jul 18 2026. With no grace, the longest the condition ever held on that race was
+# **7.5 minutes**; forgiving a 3-minute lapse it reaches 19.0, and a 5-minute lapse 24.5.
+# The clock keeps RUNNING through a forgiven lapse — a dropout shorter than the grace is treated
+# as noise in the detector, not as the shift going away, which is exactly what it is.
+SWITCH_GRACE_S = float(os.environ.get("SEL_SWITCH_GRACE_S", "300"))
+_CONFIRM = {}      # (route, favored) -> {"first": epoch, "lapsed": epoch|None}
+
+# How long a CHANGED verdict must hold before the crew is shown it. Measured on the Jul 18 2026
+# full-race timeline: the tile changed state 40 times in 9 hours, in 20 excursions, and TEN of
+# those lasted a minute or less — a recommendation that appears and withdraws inside one tack is
+# worse than no recommendation, because it teaches the crew to stop reading the card.
+#
+# 2 minutes is where the measured curve turns: 40 flips -> 26 at 1 min, -> 12 at 2 min, and only
+# -> 6 by 5 min. It also removes the `watch` state from the race entirely; every `watch` on Jul 18
+# was a sub-2-minute excursion. The cost is up to 2 minutes of delay on a genuine SWITCH call,
+# which is nothing against a branch the playbook already makes you confirm for an hour downwind.
+#
+# The tile never lies about it: while a change is settling it carries a `settling` block saying
+# what it is moving to and how far through the wait it is, the same way the downwind confirmation
+# reports "Held 12 of 60 min".
+SETTLE_S = float(os.environ.get("SEL_SETTLE_S", "120"))
+_SETTLE = {}       # route -> {key, shown, cand, cand_since}
 
 
 def _variant_for_side(bundle, side):
@@ -88,9 +144,51 @@ _DRIFT_SIGN = {"right": 1, "left": -1, "veered": 1, "backed": -1}
 
 
 def get_selector(route=None, now=None):
-    """The unified branch recommendation over the frozen playbook. Reuses the two trigger reads +
-    the tactical read (each already fuzzy/hysteretic), so this stays a thin, deterministic decision.
+    """The unified branch recommendation, SETTLED — what the crew is actually shown.
+
+    `_decide` is the pure verdict for this instant; this wrapper is the only thing that makes the
+    card stable enough to read. A verdict that differs from what is on screen must hold for
+    SETTLE_S before it replaces it, and while it waits the card says so in `settling`. Both
+    directions settle, because the churn runs both ways: most of Jul 18's excursions were an
+    alarm that appeared and withdrew inside a minute.
+
+    State lives here, keyed by route, next to `_CONFIRM`, which this module has always held.
+    Clear both to reset a scenario (`test_selector.py` does).
+
     `now` is injectable for replay/backtest; live callers leave it None (wall clock)."""
+    now = float(now) if now is not None else time.time()
+    out = _decide(route, now)
+    if not out.get("available", True) or out.get("status") == "na":
+        _SETTLE.pop(route, None)          # nothing to steady — don't hold a verdict over a gap
+        return out
+    key = (out.get("status"), out.get("action"), out.get("target_variant"))
+    st = _SETTLE.get(route)
+    if st is None or st["key"] == key:    # agrees with the card: refresh it, drop any candidate
+        _SETTLE[route] = {"key": key, "shown": out, "cand": None, "cand_since": now}
+        return out
+    # A change the logic BELOW has already timed does not need timing again: when the downwind
+    # confirmation completes it has held the decisive condition for an hour, and making the crew
+    # wait another two minutes for the card to admit it would be the gate arguing with itself.
+    if st["shown"].get("confirming") and out.get("action") == "switch":
+        _SETTLE[route] = {"key": key, "shown": out, "cand": None, "cand_since": now}
+        return out
+    if st.get("cand") != key:             # a different change started: its own clock, from zero
+        st["cand"], st["cand_since"] = key, now
+    held = now - st["cand_since"]
+    if held >= SETTLE_S:
+        _SETTLE[route] = {"key": key, "shown": out, "cand": None, "cand_since": now}
+        return out
+    shown = dict(st["shown"])
+    shown["settling"] = {"to_value": out.get("value"), "to_status": out.get("status"),
+                         "to_action": out.get("action"), "why": out.get("why"),
+                         "held_s": round(held), "need_s": SETTLE_S}
+    return shown
+
+
+def _decide(route=None, now=None):
+    """The unified branch recommendation over the frozen playbook. Reuses the two trigger reads +
+    the tactical read, so this stays a thin, deterministic decision. Pure for this instant apart
+    from the downwind confirmation clock — `get_selector` is what steadies it for the crew."""
     now = float(now) if now is not None else time.time()
     bundle = deviation._load_playbook()
     if not bundle:
@@ -147,15 +245,25 @@ def get_selector(route=None, now=None):
     # ---- decisive path: a PERSISTENT shift favours a side other than the one we're on -----------
     decisive = persistent and favored in ("left", "right") and favored != rec_id
     if not decisive:
-        for k in [k for k in list(_CONFIRM) if k[0] == route]:   # clear-fast: condition gone
-            _CONFIRM.pop(k, None)
+        # The condition is gone THIS instant — but the detector feeding it chatters, so a lapse
+        # shorter than SWITCH_GRACE_S is noise, not a reversal. Mark when it lapsed and only
+        # drop the clock once the lapse outlives the grace.
+        for k in [k for k in list(_CONFIRM) if k[0] == route]:
+            rec = _CONFIRM[k]
+            if rec.get("lapsed") is None:
+                rec["lapsed"] = now
+            elif now - rec["lapsed"] > SWITCH_GRACE_S:
+                _CONFIRM.pop(k, None)
     if decisive:
         # locked input #5 — downwind, the pivot must CONFIRM before the verdict escalates to a
-        # SWITCH; a different favored side restarts its own clock (clear-fast on the old one).
+        # SWITCH; a different favored side restarts its own clock (the old one is dropped
+        # outright, grace or no grace — a shift that swapped sides did not merely flicker).
         key = (route, favored)
         for k in [k for k in list(_CONFIRM) if k[0] == route and k != key]:
             _CONFIRM.pop(k, None)
-        first = _CONFIRM.setdefault(key, now)
+        rec = _CONFIRM.setdefault(key, {"first": now, "lapsed": None})
+        rec["lapsed"] = None                      # back on: the forgiven lapse is over
+        first = rec["first"]
         held_s = now - first
         if pos == "downwind" and held_s < SWITCH_CONFIRM_DOWNWIND_S:
             held_m, need_m = round(held_s / 60), round(SWITCH_CONFIRM_DOWNWIND_S / 60)
