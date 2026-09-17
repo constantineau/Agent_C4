@@ -43,9 +43,10 @@ section.
      report `unknown`.
    - the deviation tile's absolute gates (`act` for 88% of Jul 18) — thresholds should scale
      with the race, numbers are Cole's;
-   - **`selector` flip churn — now the noisiest tile left by a wide margin: 40 flips, all 40
-     crossing the alarm boundary** (the rebuilt corpus, 2026-09-16). Still uninvestigated, and the
-     obvious next one;
+   - ✅ **`selector` flip churn — fixed 2026-09-17 with a 2-minute settle on the card** (40 flips
+     → 12). **But it turned up a bigger thing that is Cole's call: the 60-minute downwind
+     confirmation can never complete** — Jul 18's longest downwind persistent run is 2.5 min. That
+     branch has never fired and cannot on this data. See the 2026-09-17 session for the options;
    - the channel-diff script (source-filtered) — make it repeatable per race;
    - **new 2026-09-15:** the debrief has one track slot per race id (loading Jul 15 replaces
      Jul 18 in the card; the archive keeps both) — a per-recording slot when B lands; the Jul 18
@@ -65,6 +66,53 @@ corpus are the instruments for the whole phase — anything that flaps on Jul 15
 construction. **And (2026-09-15): run the real chain end to end before believing any link of it
 — five defects sat between "the bins are measured" and "a proposal exists", none visible from
 unit tests, all found by running the two recordings through the live route.**
+
+## Session 2026-09-17 (the selector) — a steady card, and a branch that can never fire
+
+**The churn, measured.** The selector changed state **40 times in 9 hours** on Jul 18, in 20
+excursions, and **ten of those lasted a minute or less**. A branch recommendation that appears and
+withdraws inside one tack is worse than none — it teaches the crew to stop reading the card.
+
+**The cause is one layer up, in `tactics.get_tactics`.** Persistence is a bare threshold:
+`abs(slope) * span > max(3.0, osc * 0.6)`. On Jul 18 that quantity sat **within ±10% of its own
+threshold for 13% of the race** (within 20–25% for a quarter of it), while frame-to-frame noise in
+the same ratio has a median of 0.09 — the noise is the same size as the distance to the line. It
+flipped **74 times**. 🔎 **And `selector.py`'s docstring claimed "the wind trigger keeps the
+engine's own persistence hysteresis so it doesn't flip-flop." There is no such hysteresis** — a
+documented guarantee that was never implemented, the same shape as the cache that never hit and
+the context filter that was never added. The docstring now says what is actually true.
+
+**Two fixes at the SOURCE were tried and measured before either shipped — both rejected:**
+- **The median-of-thirds slope `power.py` uses made it WORSE: 50 flips → 72.** Its docstring says
+  OLS was wrong there because a single sag dragged the slope, so carrying it over looked obvious.
+  It is the wrong medicine: this noise is not outlier sensitivity, the quantity genuinely hovers on
+  its line. *A lesson that is true in one module is not automatically true in the next — measure
+  the transplant.*
+- **A release band on the ratio helps, but only so far:** 50 flips → 42 (band 0.10) → **36 (0.20)**
+  → 34 (0.40). Worth having one day, not worth shipping alone.
+
+**🔴 The finding that matters more than the churn: the downwind branch cannot fire.**
+`SWITCH_CONFIRM_DOWNWIND_S` is **3600 s** — a persistent shift must hold an hour downwind before
+the verdict escalates to a SWITCH (locked input #5, from the 2025 retro where 13/15 wrong-side
+calls were short-lived downwind excursions, median ~40 min). On Jul 18 the longest **downwind**
+persistent run is **2.5 minutes** — 4.0 min even if you forgive three minutes of dropout inside a
+run. Upwind it is 8.5 min (19.0 min forgiving dropout). **Zero runs reach 60 minutes under any
+variant tested, including with the release band at 0.40.** So this branch has never fired and, on
+the only race data that exists, cannot. It is not the clear-fast reset doing it — the signal
+itself is that short. **The bar is longer than any trend this race produced, and what it should be
+is Cole's number, like the deviation gates.** Options when he wants them: lower the bar to what a
+real trend looks like (~10–20 min), keep 60 min and accept the branch is dormant, or make the
+confirmation tolerant of brief dropouts *and* lower the bar (tolerance alone buys 1.5 min).
+
+**What DID ship: the card settles (`SETTLE_S`, 120 s).** A changed verdict must hold two minutes
+before it replaces what is on screen. **40 flips → 12**, and every `watch` on Jul 18 disappears
+because every one was a sub-2-minute excursion. Measured curve: 40 → 26 (1 min) → **12 (2 min)** →
+12 (3 min) → 6 (5 min); 2 minutes is where it turns. Both directions settle, since most of the
+churn was an alarm withdrawing. **The card never lies about it** — while a change waits it carries
+a `settling` block saying what it is moving to and how far through the wait it is, exactly as the
+downwind confirmation reports "Held 12 of 60 min". A switch that comes *out of* that hour-long
+confirmation is exempt: the gate should not argue with itself. `get_selector` is now a settling
+wrapper over `_decide`, with state beside `_CONFIRM`, which this module has always held.
 
 ## Session 2026-09-16 (moving forward) — the instrument was stale, and the heading fix was the wrong fix
 
