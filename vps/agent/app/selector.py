@@ -40,29 +40,31 @@ from . import deviation, drift as drift_mod, tactics
 # excursions, median ~40 min). Upwind keeps the current fire-on-persistent behavior; downwind the
 # decisive condition must HOLD this long before the verdict escalates from a reassess to a SWITCH.
 #
-# 🔴 **60 min was unreachable aboard, and lowering it has a measured price. Read both numbers.**
-# On Jul 18 2026 the decisive condition never held longer than 7.5 min, so this branch had never
-# fired and could not. But the 60 was not wrong where it was SET: `backtest_replay.py` runs
-# tactics' own formula over a **180-minute** window of smooth analysis wind, while the boat runs
-# it over **12 minutes** of anemometer. A trend lasts hours in the first and minutes in the
-# second. **The bar was calibrated in one timescale and applied in another** — the real defect,
-# and the real fix is the detector, not this number.
+# **This stays at 3600, and the story of it briefly not staying there is worth keeping.** It was
+# lowered to 1200 on 2026-09-17 because Jul 18's telemetry appeared to show the branch could never
+# fire — but that measurement counted **persistence while downwind**, which is not what this gates.
+# This gates the DECISIVE condition: a persistent shift favouring a side *other than* the
+# recommended one. Jul 18's downwind persistence almost all favoured the side the plan was already
+# on, i.e. a hold. Decisive-AND-downwind is **0 frames** on the 1,091-frame build and ~5 scattered
+# minutes on the older 851-frame one. **Jul 18 does not exercise this branch and says nothing
+# about the bar.** (The lesson, which cost a wrong decision: *a filter that is NEARLY the real
+# condition is not the real condition.*)
 #
-# Lowered to 1200 s on Cole's instruction (2026-09-17: "forgive dropouts and lower the bar"),
-# with the cost measured on the 2025 known-answer race, where RIGHT paid 18:2:
+# The only evidence that bears on the number is the 2025 known-answer race, where RIGHT paid 18:2
+# and wrong-side time is the metric locked input #5 was set by:
 #
 #     bar      wrong-side time (winner / 88th)
-#     3600 s   7% / 12%      <- what locked input #5 bought (from 17% / 21% unprotected)
+#     3600 s   7% / 12%      <- here; what #5 bought, from 17% / 21% unprotected
 #     1800 s   12% / 18%
-#     1200 s   12% / 18%     <- here
+#     1200 s   12% / 18%
 #      600 s   11% / 18%
 #
-# So this gives back roughly half of #5's gain on that race. 1200 s is chosen because every
-# lowered value costs the same there, and 1200 is the LARGEST that is actually reachable on the
-# boat's own signal (Jul 18's longest run with the grace below is 24.5 min) — the least damage
-# that still makes the branch exist. ⚠️ Revisit with a second real race, or by widening the
-# onboard tactics window so the two timescales agree.
-SWITCH_CONFIRM_DOWNWIND_S = float(os.environ.get("SEL_SWITCH_CONFIRM_DOWNWIND_S", "1200"))
+# ⚠️ A real mismatch remains underneath, and it is the thing to fix rather than this constant:
+# `backtest_replay.py` runs tactics' own formula over a **180-minute** window of smooth analysis
+# wind, while the boat runs it over **12 minutes** of anemometer. A trend lasts hours in the first
+# and minutes in the second, so a bar calibrated on one is being applied to the other. Widening
+# the onboard tactics window is the candidate fix; it wants a second real race first.
+SWITCH_CONFIRM_DOWNWIND_S = float(os.environ.get("SEL_SWITCH_CONFIRM_DOWNWIND_S", "3600"))
 # How long the decisive condition may LAPSE without resetting the confirmation clock. Cole,
 # 2026-09-17: "forgive dropouts and lower the bar."
 #

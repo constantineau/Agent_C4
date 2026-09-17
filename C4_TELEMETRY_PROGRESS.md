@@ -105,10 +105,11 @@ have no onboard evidence about the downwind bar", not "the bar is unreachable".
 ⚠️ **Consequence: the only evidence that bears on the bar is the 2025 known-answer backtest, and
 it says the bar should stay at 3600 s.** 60 min → 7%/12% wrong-side time; 20 min → 12%/18%
 (unprotected is 17%/21%). The bar was lowered to 1200 s on Cole's instruction, but he gave that
-instruction on the strength of the wrong claim above. **Recommendation: put
-`SEL_SWITCH_CONFIRM_DOWNWIND_S` back to 3600 and KEEP `SEL_SWITCH_GRACE_S` (the grace costs
-nothing on the backtest — 7%/12% with it and without).** Awaiting his word; nothing is urgent,
-the boat is offline.
+instruction on the strength of the wrong claim above. ✅ **DONE 2026-09-17 on Cole's word: the bar is back at 3600 and the
+grace is kept** (the grace costs nothing on the backtest — 7%/12% with it and without).
+Re-verified at the restored default: **7% / 12%**. What survives from the whole exercise is the
+grace, the settle, and the 180-vs-12-minute window mismatch underneath — that last one is the
+real defect and it wants a second real race before anyone touches the onboard tactics window.
 
 🔎 **The mistake itself is the lesson: a filter that is *nearly* the real condition is not the
 real condition.** `persistent AND downwind` looks like the gate and is off by exactly the term
