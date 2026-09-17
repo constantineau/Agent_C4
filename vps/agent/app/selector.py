@@ -39,8 +39,41 @@ from . import deviation, drift as drift_mod, tactics
 # runner; the 2025 known-answer backtest: 13/15 wrong-side switch calls were short-lived downwind
 # excursions, median ~40 min). Upwind keeps the current fire-on-persistent behavior; downwind the
 # decisive condition must HOLD this long before the verdict escalates from a reassess to a SWITCH.
-SWITCH_CONFIRM_DOWNWIND_S = float(os.environ.get("SEL_SWITCH_CONFIRM_DOWNWIND_S", "3600"))
-_CONFIRM = {}      # (route, favored) -> epoch the decisive condition was first seen (clear-fast)
+#
+# 🔴 **60 min was unreachable aboard, and lowering it has a measured price. Read both numbers.**
+# On Jul 18 2026 the decisive condition never held longer than 7.5 min, so this branch had never
+# fired and could not. But the 60 was not wrong where it was SET: `backtest_replay.py` runs
+# tactics' own formula over a **180-minute** window of smooth analysis wind, while the boat runs
+# it over **12 minutes** of anemometer. A trend lasts hours in the first and minutes in the
+# second. **The bar was calibrated in one timescale and applied in another** — the real defect,
+# and the real fix is the detector, not this number.
+#
+# Lowered to 1200 s on Cole's instruction (2026-09-17: "forgive dropouts and lower the bar"),
+# with the cost measured on the 2025 known-answer race, where RIGHT paid 18:2:
+#
+#     bar      wrong-side time (winner / 88th)
+#     3600 s   7% / 12%      <- what locked input #5 bought (from 17% / 21% unprotected)
+#     1800 s   12% / 18%
+#     1200 s   12% / 18%     <- here
+#      600 s   11% / 18%
+#
+# So this gives back roughly half of #5's gain on that race. 1200 s is chosen because every
+# lowered value costs the same there, and 1200 is the LARGEST that is actually reachable on the
+# boat's own signal (Jul 18's longest run with the grace below is 24.5 min) — the least damage
+# that still makes the branch exist. ⚠️ Revisit with a second real race, or by widening the
+# onboard tactics window so the two timescales agree.
+SWITCH_CONFIRM_DOWNWIND_S = float(os.environ.get("SEL_SWITCH_CONFIRM_DOWNWIND_S", "1200"))
+# How long the decisive condition may LAPSE without resetting the confirmation clock. Cole,
+# 2026-09-17: "forgive dropouts and lower the bar."
+#
+# Why it was needed: the clock used to clear-fast on any dropout, and the signal it is timing
+# comes from `tactics.get_tactics`, whose persistence test is a bare threshold that flipped 74
+# times on Jul 18 2026. With no grace, the longest the condition ever held on that race was
+# **7.5 minutes**; forgiving a 3-minute lapse it reaches 19.0, and a 5-minute lapse 24.5.
+# The clock keeps RUNNING through a forgiven lapse — a dropout shorter than the grace is treated
+# as noise in the detector, not as the shift going away, which is exactly what it is.
+SWITCH_GRACE_S = float(os.environ.get("SEL_SWITCH_GRACE_S", "300"))
+_CONFIRM = {}      # (route, favored) -> {"first": epoch, "lapsed": epoch|None}
 
 # How long a CHANGED verdict must hold before the crew is shown it. Measured on the Jul 18 2026
 # full-race timeline: the tile changed state 40 times in 9 hours, in 20 excursions, and TEN of
@@ -212,15 +245,25 @@ def _decide(route=None, now=None):
     # ---- decisive path: a PERSISTENT shift favours a side other than the one we're on -----------
     decisive = persistent and favored in ("left", "right") and favored != rec_id
     if not decisive:
-        for k in [k for k in list(_CONFIRM) if k[0] == route]:   # clear-fast: condition gone
-            _CONFIRM.pop(k, None)
+        # The condition is gone THIS instant — but the detector feeding it chatters, so a lapse
+        # shorter than SWITCH_GRACE_S is noise, not a reversal. Mark when it lapsed and only
+        # drop the clock once the lapse outlives the grace.
+        for k in [k for k in list(_CONFIRM) if k[0] == route]:
+            rec = _CONFIRM[k]
+            if rec.get("lapsed") is None:
+                rec["lapsed"] = now
+            elif now - rec["lapsed"] > SWITCH_GRACE_S:
+                _CONFIRM.pop(k, None)
     if decisive:
         # locked input #5 — downwind, the pivot must CONFIRM before the verdict escalates to a
-        # SWITCH; a different favored side restarts its own clock (clear-fast on the old one).
+        # SWITCH; a different favored side restarts its own clock (the old one is dropped
+        # outright, grace or no grace — a shift that swapped sides did not merely flicker).
         key = (route, favored)
         for k in [k for k in list(_CONFIRM) if k[0] == route and k != key]:
             _CONFIRM.pop(k, None)
-        first = _CONFIRM.setdefault(key, now)
+        rec = _CONFIRM.setdefault(key, {"first": now, "lapsed": None})
+        rec["lapsed"] = None                      # back on: the forgiven lapse is over
+        first = rec["first"]
         held_s = now - first
         if pos == "downwind" and held_s < SWITCH_CONFIRM_DOWNWIND_S:
             held_m, need_m = round(held_s / 60), round(SWITCH_CONFIRM_DOWNWIND_S / 60)

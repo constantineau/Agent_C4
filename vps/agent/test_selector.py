@@ -107,15 +107,49 @@ stub(bundle=B_RIGHT, tac=wind_pos("downwind"))
 r = selector.get_selector(now=T0)
 check("downwind t=0: hold-watch, confirming", r["action"] == "hold" and r["status"] == "watch"
       and r["confirming"]["favored"] == "left")
-check("downwind t=30m: still confirming",
-      selector.get_selector(now=T0 + 1800)["confirming"]["held_s"] == 1800)
+# relative to the bar, not a hard-coded 30/61 min — the bar is a tuned number and moved on
+# 2026-09-17; assertions that pin it in two places rot the moment it does
+BAR = selector.SWITCH_CONFIRM_DOWNWIND_S
+check("downwind, halfway to the bar: still confirming, and says how far",
+      selector.get_selector(now=T0 + BAR / 2)["confirming"]["held_s"] == round(BAR / 2))
 check("downwind sustained past the bar: switch fires",
-      selector.get_selector(now=T0 + 3660)["action"] == "switch")
-stub(bundle=B_RIGHT, tac=wind(False, "either"))
-selector.get_selector(now=T0 + 3720)                       # condition drops → clock clears
+      selector.get_selector(now=T0 + BAR + 60)["action"] == "switch")
+# Dropout handling (Cole, 2026-09-17: "forgive dropouts and lower the bar"). The clock used to
+# clear-fast on ANY dropout; the detector feeding it chatters, so a short lapse is noise.
+# NOTE: these re-stubs MUST pass reset=False. They did not when `stub()` first learned to clear
+# state, and the old clear-fast assertion went on passing while testing nothing at all.
+# They drive `_decide` rather than `get_selector`: this is the confirmation CLOCK under test, and
+# the card's settle wrapper would otherwise stand between the test and it.
+selector._CONFIRM.clear()
 stub(bundle=B_RIGHT, tac=wind_pos("downwind"))
-check("clear-fast: dropout resets the clock",
-      selector.get_selector(now=T0 + 3780)["confirming"]["held_s"] == 0)
+selector._decide(None, now=T0)                              # clock starts
+stub(bundle=B_RIGHT, tac=wind(False, "either"), reset=False)
+selector._decide(None, now=T0 + 60)                         # a 1-minute dropout...
+stub(bundle=B_RIGHT, tac=wind_pos("downwind"), reset=False)
+check("a dropout INSIDE the grace does not reset the clock — it keeps running through it",
+      selector._decide(None, now=T0 + 120)["confirming"]["held_s"] == 120)
+stub(bundle=B_RIGHT, tac=wind(False, "either"), reset=False)
+selector._decide(None, now=T0 + 180)
+selector._decide(None, now=T0 + 180 + selector.SWITCH_GRACE_S + 30)   # ...outlives the grace
+stub(bundle=B_RIGHT, tac=wind_pos("downwind"), reset=False)
+check("a dropout that OUTLIVES the grace does reset it",
+      selector._decide(None, now=T0 + 240 + selector.SWITCH_GRACE_S)["confirming"]["held_s"] == 0)
+# Swapping sides is not a flicker. BUNDLE recommends "middle", so BOTH left and right are
+# decisive here — with B_RIGHT, "favours right" is simply the recommended side and therefore not
+# decisive at all, i.e. an ordinary (forgiven) lapse.
+def wind_side(side, pos="downwind"):
+    w = wind(True, side)
+    w["point_of_sail"] = pos
+    return w
+
+selector._CONFIRM.clear()
+stub(tac=wind_side("left"))
+selector._decide(None, now=T0)
+stub(tac=wind_side("right"), reset=False)                  # the other side takes over
+selector._decide(None, now=T0 + 60)
+stub(tac=wind_side("left"), reset=False)
+check("a shift that swaps sides drops the old clock outright — that is not a flicker",
+      selector._decide(None, now=T0 + 120)["confirming"]["held_s"] == 0)
 selector._CONFIRM.clear()
 
 # --- na paths -----------------------------------------------------------------------------------
