@@ -15,7 +15,13 @@ BUNDLE = {"race_id": "u", "recommended": "middle",
           "variants": [{"id": "middle", "name": "Middle start"},
                        {"id": "left", "name": "Left start", "what_flips_it": "breeze backs left of ~190°"}]}
 
-def stub(bundle=BUNDLE, tac=None, dev=None, dft=None):
+def stub(bundle=BUNDLE, tac=None, dev=None, dft=None, reset=True):
+    # a fresh scenario is a fresh boat: clear BOTH pieces of carried state, the downwind
+    # confirmation clock and the settle latch that steadies the card. `reset=False` changes the
+    # conditions on the SAME boat — which is what the settling tests below are about.
+    if reset:
+        selector._CONFIRM.clear()
+        selector._SETTLE.clear()
     selector.deviation._load_playbook = lambda: bundle
     selector.tactics.get_tactics = lambda route=None: (tac or {"available": False})
     selector.deviation.get_deviation = lambda route=None: (dev or {"available": False, "status": "na"})
@@ -116,6 +122,67 @@ selector._CONFIRM.clear()
 print("na:")
 stub(bundle={})
 check("no playbook → na", selector.get_selector()["action"] == "na")
+
+# --- the card has to be steady enough to read (2026-09-17) ---------------------------------------
+# Measured on the Jul 18 2026 full-race timeline: this tile changed state 40 times in 9 hours, in
+# 20 excursions, TEN of them a minute or less. The cause is one layer up — tactics' persistence
+# test is a bare threshold and its quantity sat within +/-10% of that threshold for 13% of the
+# race, flipping 74 times. A recommendation that appears and withdraws inside one tack teaches the
+# crew to stop reading the card.
+print("settling — a verdict has to hold before the crew sees it:")
+S = selector.SETTLE_S
+
+stub(tac=wind(False, "either"), reset=False)
+base = selector.get_selector(now=T0)
+check("the first read is shown immediately — nothing to settle against",
+      base["status"] == "ok" and "settling" not in base)
+
+stub(tac=wind(True, "left", "backing"), reset=False)                    # a switch call appears...
+r = selector.get_selector(now=T0 + 30)
+check("a change does NOT reach the card on its first frame",
+      r["status"] == "ok" and r["action"] == "hold")
+check("...but the card SAYS a change is firming up, and to what",
+      r["settling"]["to_action"] == "switch" and r["settling"]["need_s"] == S
+      and r["settling"]["held_s"] == 0)
+stub(tac=wind(False, "either"), reset=False)                            # ...and withdraws inside a minute
+r = selector.get_selector(now=T0 + 60)
+check("a one-minute excursion never reaches the card at all",
+      r["status"] == "ok" and r["action"] == "hold" and "settling" not in r)
+
+selector._SETTLE.clear()
+stub(tac=wind(False, "either"), reset=False)
+selector.get_selector(now=T0)
+stub(tac=wind(True, "left", "backing"), reset=False)
+selector.get_selector(now=T0 + 30)
+check("halfway through, the wait is reported honestly",
+      selector.get_selector(now=T0 + 30 + S / 2)["settling"]["held_s"] == round(S / 2))
+check("a change that HOLDS for the settle does reach the card",
+      selector.get_selector(now=T0 + 30 + S)["action"] == "switch")
+
+selector._SETTLE.clear()
+stub(tac=wind(True, "left", "backing"), reset=False)
+selector.get_selector(now=T0)
+stub(tac=wind(False, "either"), reset=False)
+check("de-escalation settles too — most of Jul 18's churn was an alarm withdrawing",
+      selector.get_selector(now=T0 + 30)["action"] == "switch")
+check("...and clears once it holds",
+      selector.get_selector(now=T0 + 30 + S)["action"] == "hold")
+
+selector._SETTLE.clear()
+stub(tac=wind(False, "either"), reset=False)
+selector.get_selector(now=T0)
+stub(tac=wind(True, "left", "backing"), reset=False)
+selector.get_selector(now=T0 + 30)
+stub(tac=wind(True, "right"), reset=False)                              # a DIFFERENT change part-way through
+r = selector.get_selector(now=T0 + 30 + S * 0.9)
+check("a different change starts its own clock rather than inheriting the first one's",
+      r["settling"]["held_s"] == 0 and r["settling"]["to_action"] == "off_script")
+
+selector._SETTLE.clear()
+stub(bundle={})
+check("an `na` read is passed straight through, never a held stale verdict",
+      selector.get_selector(now=T0)["action"] == "na")
+selector._SETTLE.clear()
 
 print("\n", "ALL PASS" if ok else "FAILURES ABOVE")
 raise SystemExit(0 if ok else 1)
