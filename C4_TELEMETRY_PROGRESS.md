@@ -91,6 +91,32 @@ the context filter that was never added. The docstring now says what is actually
 - **A release band on the ratio helps, but only so far:** 50 flips → 42 (band 0.10) → **36 (0.20)**
   → 34 (0.40). Worth having one day, not worth shipping alone.
 
+**🔴 CORRECTED 2026-09-17 (later) — READ THIS BEFORE THE PARAGRAPH BELOW. The claim in it is
+wrong, and it is wrong in the direction that changed a decision.** "The longest downwind
+persistent run is 2.5 min" measured **persistence while downwind**, which is not what the
+confirmation clock gates. The clock gates the **decisive** condition — a persistent shift
+favouring a side *other than the recommended one* — and on Jul 18 the downwind persistence almost
+all favoured **the side the plan was already on**, which is a hold, not a switch. Counting it
+properly: **decisive AND downwind is 0 frames on the current 1,091-frame build and 10 frames
+(~5 min, scattered) on the older 851-frame one.** So **Jul 18 barely exercises this branch at
+all and says nothing about whether a 60-minute bar is reachable.** The honest statement is "we
+have no onboard evidence about the downwind bar", not "the bar is unreachable".
+
+⚠️ **Consequence: the only evidence that bears on the bar is the 2025 known-answer backtest, and
+it says the bar should stay at 3600 s.** 60 min → 7%/12% wrong-side time; 20 min → 12%/18%
+(unprotected is 17%/21%). The bar was lowered to 1200 s on Cole's instruction, but he gave that
+instruction on the strength of the wrong claim above. **Recommendation: put
+`SEL_SWITCH_CONFIRM_DOWNWIND_S` back to 3600 and KEEP `SEL_SWITCH_GRACE_S` (the grace costs
+nothing on the backtest — 7%/12% with it and without).** Awaiting his word; nothing is urgent,
+the boat is offline.
+
+🔎 **The mistake itself is the lesson: a filter that is *nearly* the real condition is not the
+real condition.** `persistent AND downwind` looks like the gate and is off by exactly the term
+that matters. Same family as the offline polar estimate earlier this session that skipped the
+trust gate already in force — **compute the real predicate, not one that resembles it.**
+
+**The superseded paragraph, kept so the error is auditable:**
+
 **🔴 The finding that matters more than the churn: the downwind branch cannot fire.**
 `SWITCH_CONFIRM_DOWNWIND_S` is **3600 s** — a persistent shift must hold an hour downwind before
 the verdict escalates to a SWITCH (locked input #5, from the 2025 retro where 13/15 wrong-side
