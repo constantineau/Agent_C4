@@ -273,6 +273,85 @@ gpsout.show()
 check("show(): rock elsewhere → advances to waypoint 2", sent["payload"]["dest_index"] == 2)
 gpsout._course_context = _orig_ctx
 
+print("   one invariant: the boat→destination line is clear (Codex round 5)")
+BOAT5 = (44.0007, -81.9999)
+check("(setup) boat → waypoint 2 crosses the rock, → waypoint 1 is clear",
+      rock({"lat": BOAT5[0], "lon": BOAT5[1]}, DOG[2]) and not rock({"lat": BOAT5[0], "lon": BOAT5[1]}, DOG[1]))
+check("projection's dest 2 runs through the rock → walks back to waypoint 1",
+      gpsout._dest_index(DOG, BOAT5, blocked=rock) == 1)
+check("(control) clear water: the projection's dest 2 stands",
+      gpsout._dest_index(DOG, BOAT5, blocked=CLEAR) == 2)
+ALL = lambda a, b: True    # noqa: E731 — every line blocked
+check("nothing reachable → None (refuse)", gpsout._dest_index(DOG, BOAT5, blocked=ALL) is None)
+gpsout._course_context = lambda route=None: ([], BOAT5, None)
+bundle_rock["obstacles"]["islands"][0]["lat"] = 44.0
+gpsout.show()
+check("show(): island homework → steer-to waypoint 1", sent["payload"]["dest_index"] == 1)
+_orig_blk = gpsout._blocked_fn
+gpsout._blocked_fn = lambda b: ALL
+sent.clear()
+r = gpsout.show()
+gpsout._blocked_fn = _orig_blk
+gpsout._course_context = _orig_ctx
+check("show(): no clear waypoint → not pushed, named reason, nothing sent",
+      r["shown"] is False and "hazard" in r["note"] and "payload" not in sent)
+
+print("   property: seeded random paths around random rocks")
+import math   # noqa: E402
+import random   # noqa: E402
+rng = random.Random(31)
+cases = walked = refused = 0
+bad = []
+while cases < 400:
+    clat, clon = 44.0 + rng.uniform(-0.05, 0.05), -82.0 + rng.uniform(-0.05, 0.05)
+    r_nm = rng.uniform(0.02, 0.3)
+    disk = [(clat, clon, r_nm)]
+    blk = lambda a, b, _d=disk: routing._seg_blocked(a["lat"], a["lon"], b["lat"], b["lon"], _d)  # noqa: E731
+    coslat = math.cos(math.radians(clat))
+    # a detour arc around the rock (what a router produces): 3–7 vertices on a ring 1.1–4 r out
+    R, a0 = r_nm * rng.uniform(1.1, 4.0), rng.uniform(0, 2 * math.pi)
+    n = rng.randint(3, 7)
+    span = rng.uniform(0.3, 1.6) * math.pi
+    pts = [{"lat": clat + R * math.cos(a0 + span * k / (n - 1)) / 60.0,
+            "lon": clon + R * math.sin(a0 + span * k / (n - 1)) / (60.0 * coslat)} for k in range(n)]
+    if any(blk(a, b) for a, b in zip(pts, pts[1:])):
+        continue                     # a router never returns a path through the rock
+    seg = rng.randrange(n - 1)
+    f = rng.random()
+    off = rng.uniform(-0.4, 0.4) * R
+    bl = pts[seg]["lat"] + (pts[seg + 1]["lat"] - pts[seg]["lat"]) * f + off / 60.0 * rng.choice((-1, 1)) * rng.random()
+    bo = pts[seg]["lon"] + (pts[seg + 1]["lon"] - pts[seg]["lon"]) * f + off / (60.0 * coslat) * rng.random()
+    if rng.random() < 0.5:           # half: anywhere around the rock, incl. its far side
+        ba, bd = rng.uniform(0, 2 * math.pi), rng.uniform(1.02, 2.0) * r_nm
+        bl, bo = clat + bd * math.cos(ba) / 60.0, clon + bd * math.sin(ba) / (60.0 * coslat)
+    if NAV._hav_nm(bl, bo, clat, clon) <= r_nm:
+        continue                     # the boat isn't ON the rock
+    cases += 1
+    here = {"lat": bl, "lon": bo}
+    marks = {0: 0, 1: n - 1} if rng.random() < 0.5 else None
+    nk = 1 if marks else None
+    d = gpsout._dest_index(pts, (bl, bo), marks, nk, blk)
+    raw, _lo = gpsout._dest_candidate(pts, (bl, bo), marks or {}, nk, blk)
+    if d is None:
+        refused += 1
+        if any(not blk(here, pts[j]) for j in range(0, raw + 1)):
+            bad.append(("refused but a waypoint at/behind the candidate was clear", cases))
+        continue
+    if not (0 <= d < n):
+        bad.append(("out of range", cases, d))
+    elif blk(here, pts[d]):
+        bad.append(("boat→dest crosses the rock", cases, d))
+    if d != raw:
+        walked += 1
+        if d > raw:
+            bad.append(("walked forward", cases, d, raw))
+    if gpsout._dest_index(pts, (bl, bo), marks, nk, CLEAR) != gpsout._dest_candidate(
+            pts, (bl, bo), marks or {}, nk, CLEAR)[0]:
+        bad.append(("clear water changed the projection", cases))
+print(f"     {cases} cases: {walked} walked back, {refused} refused, {len(bad)} violations {bad[:3]}")
+check("every returned destination has a clear boat→destination line", not bad)
+check("the property actually exercised the walk-back and the refusal", walked > 0 and refused > 0)
+
 check("next mark is the path start (pre-start) → 0",
       gpsout._dest_index(LINE, (43.99, -82.0), {0: 0, 1: 3}, 0) == 0)
 

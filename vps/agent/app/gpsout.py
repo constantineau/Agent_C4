@@ -171,16 +171,32 @@ def _dest_index(pts, boat, mark_pos=None, next_k=None, blocked=None):
     a shortcut: the boat would steer straight at the waypoint after it. That is allowed only when
     `blocked` (the same obstacle test the downsample used) says the boat→that-waypoint line is
     clear. A waypoint may be an obstacle-avoidance vertex, so with no obstacle test available the
-    attained waypoint is kept (conservative)."""
+    attained waypoint is kept (conservative).
+
+    ONE invariant at the single exit (with an obstacle test): the boat→destination line is clear.
+    Whatever picked the index, a blocked one walks back to the nearest preceding waypoint the boat
+    can reach in a straight line, never before the current leg's start; if none can, None — the
+    caller refuses the push rather than steer through a hazard."""
     if not boat or boat[0] is None or len(pts) < 2:
         return 1
+    dest, lo = _dest_candidate(pts, boat, mark_pos, next_k, blocked)
+    if blocked is None:
+        return dest
+    here = {"lat": boat[0], "lon": boat[1]}
+    while dest >= lo and blocked(here, pts[dest]):
+        dest -= 1
+    return dest if dest >= lo else None
+
+
+def _dest_candidate(pts, boat, mark_pos, next_k, blocked):
+    """(destination index, current leg's first index) before the clear-line guard."""
     last = len(pts) - 1
     lo, hi = 0, last
     mark_pos = mark_pos or {}
     if next_k is not None and next_k in mark_pos:
         hi = mark_pos[next_k]
         if hi == 0:
-            return 0
+            return 0, 0
         prev = [v for k, v in mark_pos.items() if k < next_k and v < hi]
         lo = max(prev) if prev else 0
     here = {"lat": boat[0], "lon": boat[1]}
@@ -198,7 +214,7 @@ def _dest_index(pts, boat, mark_pos=None, next_k=None, blocked=None):
     while (dest < last and NAV._hav_nm(boat[0], boat[1], pts[dest]["lat"], pts[dest]["lon"]) <= ARRIVE_NM
            and _clear_to(dest + 1)):
         dest += 1                                         # attained → the next one, if clear
-    return dest
+    return dest, lo
 
 
 def _course_context(route=None):
@@ -274,6 +290,11 @@ def show(source: str = "playbook", variant=None, route=None):
                        blocked)
     wpts = [{"name": f"C4-{i + 1:02d}", "lat": p.get("lat"), "lon": p.get("lon"),
              "t": p.get("t")} for i, p in enumerate(pts)]
+    if dest is None:
+        return {"shown": False, "dest_index": None,
+                "note": ("not pushed — no waypoint on the current leg is reachable from the boat in "
+                         "a straight line clear of the charted islands/zones; steering to one would "
+                         "cross a hazard. Steer by eye clear of it, then push again.")}
     st = _post("/route", {"name": wire_name, "waypoints": wpts, "dest_index": dest})
     if st.get("error"):
         return {"shown": False, "note": st["error"]}
