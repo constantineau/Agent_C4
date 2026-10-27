@@ -179,16 +179,23 @@ def reopen_fresh(conn, path: Path = ARCHIVE_DB):
     `PRAGMA quick_check`, and the boat's archive.db (2026-09-02) is the case where that gate is
     not enough: a file can pass quick_check and still fail a full `count(*)` or a write. Asking
     quick_check again would hand back the same broken file and drop every flush, forever. The
-    write already told us the file is bad; believe it."""
+    write already told us the file is bad; believe it.
+
+    Order matters: move the file, open the fresh one, and only THEN close the old connection.
+    If the move or the open fails, the caller still holds an open connection (on the old file),
+    so the disk guard can still read its free pages and the next attempt starts clean — not a
+    closed handle that every later step trips over. If an earlier attempt already moved the file
+    but failed to open the new one, there is nothing left to move."""
+    rotated = rotate_corrupt(path) if path.exists() else None
+    new = open_db(path)
     if conn is not None:
         try:
             conn.close()
         except Exception:
             pass
-    rotated = rotate_corrupt(path)
-    conn = open_db(path)
-    _note_rotation(conn, rotated)
-    return conn, rotated
+    if rotated is not None:
+        _note_rotation(new, rotated)
+    return new, rotated
 
 
 def open_for_run(path: Path = ARCHIVE_DB):
@@ -356,7 +363,8 @@ STATUS_FILE = Path(os.environ.get("ARCHIVE_STATUS_FILE",
 
 
 def disk_usage(path, conn=None, statvfs=os.statvfs):
-    """(credited_pct, raw_pct, free_bytes) for the archive's filesystem.
+    """(credited_pct, raw_pct, free_bytes) for the archive's filesystem. credited_pct is None
+    when there is no usable connection to read the free pages from — UNKNOWN, not "full".
 
     raw_pct and free_bytes are what the filesystem really has. credited_pct also counts the
     archive's SQLite free pages as free — right for "is there room to keep recording once the
@@ -368,20 +376,22 @@ def disk_usage(path, conn=None, statvfs=os.statvfs):
         return 0.0, 0.0, free
     used = total - free                          # reserved blocks count as used: conservative
     raw = 100.0 * used / total
-    if conn is not None:
-        try:
-            with _WRITE_LOCK:
-                free_pages = conn.execute("PRAGMA freelist_count").fetchone()[0]
-                page_size = conn.execute("PRAGMA page_size").fetchone()[0]
-            used -= free_pages * page_size
-        except Exception:
-            pass                                 # no credit for free pages — errs toward stopping
-    return max(0.0, 100.0 * used / total), raw, free
+    if conn is None:
+        return None, raw, free
+    try:
+        with _WRITE_LOCK:
+            free_pages = conn.execute("PRAGMA freelist_count").fetchone()[0]
+            page_size = conn.execute("PRAGMA page_size").fetchone()[0]
+    except Exception:
+        return None, raw, free                   # e.g. a closed or broken connection
+    return max(0.0, 100.0 * (used - free_pages * page_size) / total), raw, free
 
 
 def disk_used_pct(path, conn=None, statvfs=os.statvfs):
-    """Percent of the archive's filesystem in use, counting SQLite free pages as free."""
-    return disk_usage(path, conn, statvfs)[0]
+    """Percent of the archive's filesystem in use, counting SQLite free pages as free (the raw
+    figure when they can't be read)."""
+    credited, raw, _free = disk_usage(path, conn, statvfs)
+    return raw if credited is None else credited
 
 
 class DiskGuard:
@@ -392,6 +402,10 @@ class DiskGuard:
     really used, or less than `min_free_mb` really free) ignores that credit: it stops recording
     on its own, and recording cannot resume until the real numbers are clear of it by a margin
     (2 points, and twice the minimum free) — so it does not flap at the line either.
+
+    When the free pages can't be read (no connection, or a broken one mid-recovery) the
+    credited figure is UNKNOWN: the high/low marks make no decision that check, and only the
+    hard floor can stop recording. Unknown must never read as "full, discard".
 
     `allow()` is called before every flush but measures at most every `every_s` (a statvfs and
     two pragmas — microseconds). If the measurement itself fails it keeps recording: an unknown
@@ -433,7 +447,8 @@ class DiskGuard:
             hard_hit = self.raw_pct >= self.hard_pct or self.free_bytes < self.min_free
             hard_clear = (self.raw_pct < self.hard_pct - 2
                           and self.free_bytes >= 2 * self.min_free)
-            if not self.paused and (self.pct >= self.high or hard_hit):
+            known = self.pct is not None
+            if not self.paused and ((known and self.pct >= self.high) or hard_hit):
                 self.paused = True
                 self.reason = "hard_floor" if hard_hit else "high_mark"
                 self.paused_since = datetime.now(timezone.utc).isoformat()
@@ -443,7 +458,7 @@ class DiskGuard:
                       f"real use < {self.hard_pct - 2:.0f}%, free >= "
                       f"{2 * self.min_free / 2**30:.1f} GB). Free space on the card or close "
                       f"the open race session so the prune can work.", flush=True)
-            elif self.paused and self.pct < self.low and hard_clear:
+            elif self.paused and known and self.pct < self.low and hard_clear:
                 self.paused = False
                 self.reason = None
                 print(f"[archive] disk {self._describe()} — full-res recording "
@@ -457,7 +472,8 @@ class DiskGuard:
         return not self.paused
 
     def _describe(self):
-        return (f"{self.pct:.1f}% counting archive free pages (limit {self.high:.0f}%), "
+        credited = "unknown" if self.pct is None else f"{self.pct:.1f}%"
+        return (f"{credited} counting archive free pages (limit {self.high:.0f}%), "
                 f"{self.raw_pct:.1f}% really used (hard limit {self.hard_pct:.0f}%), "
                 f"{self.free_bytes / 2**30:.1f} GB free (minimum {self.min_free / 2**30:.1f} GB)")
 
@@ -552,7 +568,28 @@ async def flusher(conn, buf, loop, state=None, db=None, wake=None, guard=None):
             write_status(state, guard)
 
 
+async def _recover(buf, loop, state, path):
+    """Finish a pending corruption rotation. True when the archive is usable again. On failure
+    nothing is lost: rows stay in `buf` (capped) and the next flush tries again."""
+    try:
+        state["conn"], _rot = await loop.run_in_executor(None, reopen_fresh, state.get("conn"), path)
+    except Exception as exc:
+        print(f"[archive] rotation failed ({type(exc).__name__}: {exc}); "
+              f"{len(buf)} rows waiting, will retry", flush=True)
+        cap_buffer(buf, state)
+        return False
+    state["rotate_pending"] = False
+    state["rotations"] = state.get("rotations", 0) + 1
+    state["_status_dirty"] = True
+    return True
+
+
 async def _flush_once(buf, loop, state, path, guard):
+    # A pending rotation goes FIRST, before the disk guard: the guard reads free pages through
+    # the connection, and deciding "full" from a half-recovered archive would throw away the
+    # very rows the rotation is meant to save.
+    if state.get("rotate_pending") and not await _recover(buf, loop, state, path):
+        return
     if guard is not None:
         allowed = await loop.run_in_executor(None, guard.allow, state.get("conn"))
         if not allowed:
@@ -567,15 +604,10 @@ async def _flush_once(buf, loop, state, path, guard):
     # fresh file straight away. If the rotation or the second write fails too, the rows go back.
     for attempt in (1, 2):
         if state.get("rotate_pending"):
-            try:
-                state["conn"], _rot = await loop.run_in_executor(
-                    None, reopen_fresh, state.get("conn"), path)
-                state["rotate_pending"] = False
-                state["rotations"] = state.get("rotations", 0) + 1
-                state["_status_dirty"] = True
-            except Exception as exc:
-                _requeue(buf, rows, state, f"rotation failed ({type(exc).__name__}: {exc})")
+            buf[:0] = rows                # _recover keeps them on failure, in order
+            if not await _recover(buf, loop, state, path):
                 return
+            rows, buf[:] = buf[:], []
         try:
             await loop.run_in_executor(None, write_rows, state["conn"], rows)
             break
@@ -772,7 +804,11 @@ def prune(conn, engine_db=None, retain_days=None):
 async def pruner(state, loop):
     while True:
         try:
-            await loop.run_in_executor(None, prune, state["conn"])
+            if state.get("rotate_pending") or state.get("conn") is None:
+                # never prune a file that just reported corruption, nor through a missing handle
+                print("[archive] prune skipped this hour — archive recovery pending", flush=True)
+            else:
+                await loop.run_in_executor(None, prune, state["conn"])
         except Exception as exc:      # never let housekeeping kill the recorder
             print(f"[archive] prune error: {exc}", flush=True)
         await asyncio.sleep(PRUNE_EVERY_S)

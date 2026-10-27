@@ -91,6 +91,29 @@ print("DONE")
 PY
 }
 
+# Restart the onboard engine — no rebuild, no code change — and check it answers. Needed after
+# a rotation: the boat's engine (Sep 1 code) caches its archive connection and would go on
+# reading the OLD file (now archive.corrupt-*.db) until restarted. dev's engine reopens on its
+# own when the file is replaced; this covers the code that is actually aboard.
+restart_engine() {
+  echo "restarting the onboard engine so it reads the new archive.db (no rebuild):"
+  pi "cd ~/$PI_REPO && $COMPOSE restart engine"
+  local i
+  for i in $(seq 1 12); do
+    if pi "docker exec sr33-pi-engine-1 python3 -c \"import urllib.request as u; print(u.urlopen('http://localhost:8200/health', timeout=5).read().decode())\"" 2>/dev/null; then
+      # /series reads the ARCHIVE (last 10 min of true wind), so it shows which file the engine
+      # is on. /conditions comes from the live Signal K cache and would look fine either way.
+      echo "engine archive read (/series, last 10 min):"
+      pi "docker exec sr33-pi-engine-1 python3 -c \"import json, time, urllib.request as u; d = json.load(u.urlopen('http://localhost:8200/series?minutes=10', timeout=30)); p = d.get('points') or []; print('  newest archived wind %.0f s old, %d points' % (time.time() - p[-1]['t'], len(p)) if p else '  no archived wind in the last 10 min (inconclusive: true wind may simply not be reporting) - ' + str(d.get('note')))\"" \
+        || echo "!! /series did not answer — look at: docker logs sr33-pi-engine-1"
+      return 0
+    fi
+    sleep 5
+  done
+  echo "!! the engine did not answer /health within 60 s after its restart — look at: docker logs sr33-pi-engine-1"
+  return 1
+}
+
 if [[ -n $rollback ]]; then
   bdir="$BACKUPS/data-path-$rollback"
   say "ROLLBACK to $bdir"
@@ -102,10 +125,12 @@ if [[ -n $rollback ]]; then
     && docker tag sr33-pi-archiver:pre-$rollback sr33-pi-archiver \
     && if docker image inspect sr33-pi-uplink:pre-$rollback >/dev/null 2>&1 && grep -q '^uplink$' ~/$bdir/rebuilt.txt; then docker tag sr33-pi-uplink:pre-$rollback sr33-pi-uplink && $COMPOSE up -d --no-deps --no-build uplink; fi \
     && $COMPOSE up -d --no-deps --no-build archiver"
-  if [[ $apply -eq 1 ]]; then pi "$cmd"; else echo "(dry run) would run on the Pi: $cmd"; fi
+  if [[ $apply -eq 1 ]]; then pi "$cmd"; restart_engine || true
+  else echo "(dry run) would run on the Pi: $cmd"; echo "(dry run) would restart the engine (no rebuild) and check /health"; fi
   cat <<'EOF'
 
-Rollback restores the files and the previous image. It does NOT move the corrupt archive back:
+Rollback restores the files and the previous image, then restarts the engine (no rebuild) so
+it is reading whatever archive.db is on the volume. It does NOT move the corrupt archive back:
 archive.corrupt-<stamp>.db stays where it is, and the old code will start recording into the
 fresh archive.db, without the disk guard. To stop full-res recording instead:
   ssh $PI_HOST 'cd ~/Agent_C4 && docker compose -f compose.pi.yml stop archiver'
@@ -273,6 +298,10 @@ pi "docker logs --since 40m sr33-pi-archiver-1 2>&1 | grep -E 'unusable|count\(\
 if [[ -z $seen ]]; then
   if [[ $expect_rotation -eq 1 ]]; then what="rotation + first write"; else what="open + first write"; fi
   echo "!! no $what seen within ${VERIFY_TIMEOUT_S}s — check the log above"; exit 1
+fi
+# Any rotation (expected or not) replaced archive.db under the engine: restart it.
+if grep -q 'CORRUPT archive moved aside' <<<"$log"; then
+  echo; restart_engine || echo "!! recording is fine; the engine needs a look"
 fi
 
 echo; echo "archive volume:"

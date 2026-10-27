@@ -91,6 +91,17 @@ AIS_PROBE_ROWS = int(os.environ.get("ONBOARD_AIS_PROBE_ROWS", "5000"))
 # builds a fresh source per replay frame — memoising on the instance re-ran the probe (and
 # re-logged) hundreds of times.
 _AIS_SRC_CACHE = {}
+# How often (per thread) to check whether archive.db is still the file we opened.
+ARCHIVE_RECHECK_S = float(os.environ.get("ONBOARD_ARCHIVE_RECHECK_S", "5"))
+
+
+def _file_identity(path):
+    """(st_dev, st_ino) of `path`, or None when it is missing right now (mid-rotation)."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (st.st_dev, st.st_ino)
 
 
 def _cutoff_str(minutes):
@@ -124,14 +135,34 @@ class OnboardSource:
         """Per-THREAD read-only archive connection. A single shared connection serialized every
         archive read behind whichever one was stalled on SD-card I/O (the archiver fsyncs every
         flush), which showed up as episodic all-endpoint timeouts under the dashboard's parallel
-        poll. Read-only connections are cheap; one per threadpool thread removes the queue."""
-        conn = getattr(self._archive_local, "conn", None)
+        poll. Read-only connections are cheap; one per threadpool thread removes the queue.
+
+        Reopened when archive.db is REPLACED. The archiver moves a corrupt archive aside and
+        starts a fresh file; a connection opened before that keeps reading the old inode, so
+        history goes stale (or keeps failing on the corrupt pages) while recording is fine.
+        A stat at most every ARCHIVE_RECHECK_S per thread catches it."""
+        local = self._archive_local
+        conn = getattr(local, "conn", None)
+        now = _time.monotonic()
+        if conn is not None and now - getattr(local, "checked", 0.0) >= ARCHIVE_RECHECK_S:
+            local.checked = now
+            ident = _file_identity(ARCHIVE_DB)
+            if ident is not None and ident != getattr(local, "ident", None):
+                print(f"[onboard] {ARCHIVE_DB} was replaced (rotation?) — reopening", flush=True)
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                conn = None
+                _AIS_SRC_CACHE.pop(ARCHIVE_DB, None)   # learned from the old file
         if conn is None:
             conn = sqlite3.connect(
                 f"file:{ARCHIVE_DB}?mode=ro", uri=True, timeout=30, check_same_thread=False
             )
             conn.row_factory = sqlite3.Row
-            self._archive_local.conn = conn
+            local.conn = conn
+            local.ident = _file_identity(ARCHIVE_DB)
+            local.checked = now
         return conn
 
     # --- AIS-bearing sources (see AIS_MARKER_PATHS) ------------------------

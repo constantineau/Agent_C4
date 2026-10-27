@@ -31,7 +31,8 @@ passes `--apply` without his go.
 4. **Copy** the changed and new files into `~/Agent_C4`.
 5. **Rebuild and restart only** the archiver (and the uplink if its files changed):
    `docker compose -f compose.pi.yml build archiver && … up -d --no-deps archiver`.
-   Signal K, the engine, the console and n2kout are not touched.
+   Signal K, the console and n2kout are not touched. The engine is not rebuilt, but it is
+   restarted after a rotation (step 6).
 6. **Verify.** Waits (up to 30 min; checking a 24 GB file on the SD card is slow) for the
    archiver to open its archive and write. Then it lists the volume, checks `archive.db` grows
    over 60 s, prints `archiver-status.json` and the retention now in effect, and checks the
@@ -41,6 +42,13 @@ passes `--apply` without his go.
    opened the old file without rotating it, the script stops the archiver and exits.
    `archive.corrupt-<stamp>.db` must then be on the volume at the old size; it is never
    deleted. A later, normal deploy against a healthy archive runs without the flag.
+7. **Restart the engine after a rotation** (`docker compose -f compose.pi.yml restart engine`:
+   no rebuild, no code change). The engine aboard is Sep 1 code. It caches its connection to
+   `archive.db`, so after the archiver replaces the file it would keep reading the old one,
+   now `archive.corrupt-*.db`, and history would stay stuck in September. The script then
+   checks the engine answers `/health` and reads the archive (`/series`, last 10 min of true wind; empty is inconclusive at the dock, where true wind may not be reporting). dev's engine
+   notices a replaced file and reopens it by itself, so once the engine is updated this step
+   is belt and braces.
 
 ## Steps, in this order
 
@@ -65,8 +73,9 @@ pi/deploy/deploy-data-path.sh --rollback <stamp>           # dry run
 pi/deploy/deploy-data-path.sh --rollback <stamp> --apply   # restore files + :pre-<stamp> image
 ```
 
-The stamp is printed at the end of the deploy and is the backup folder's suffix. Rollback does
-not move the corrupt archive back. The old code would then record into the fresh `archive.db`
+The stamp is printed at the end of the deploy and is the backup folder's suffix. Rollback
+restores the files and the previous archiver image, then restarts the engine (no rebuild) and
+checks `/health`. Rollback does not move the corrupt archive back. The old code would then record into the fresh `archive.db`
 with no disk guard, so if the point of rolling back is to stop recording, stop the archiver
 instead: `cd ~/Agent_C4 && docker compose -f compose.pi.yml stop archiver`.
 

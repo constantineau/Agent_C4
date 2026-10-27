@@ -69,22 +69,23 @@ def flush(buf, state, path, guard=None):
 
 # --- 1. the hysteresis switch ---------------------------------------------------------------
 print("disk guard: stop at the high mark, resume only below the low mark:")
+MEM = sqlite3.connect(":memory:")      # an archive with no free pages: credit known, = 0
 level = {"pct": 50.0}
 clock = Clock()
 g = archiver.DiskGuard("/x", high=85, low=80, every_s=30, nag_s=600,
                        statvfs=lambda p: fake_statvfs(level["pct"])(p), clock=clock)
-check("50% -> recording", g.allow() is True and not g.paused)
+check("50% -> recording", g.allow(MEM) is True and not g.paused)
 level["pct"] = 86.0
-check("86% but inside the check interval -> not measured yet", g.allow() is True)
+check("86% but inside the check interval -> not measured yet", g.allow(MEM) is True)
 clock.t = 31
-check("86% after the interval -> STOPPED", g.allow() is False and g.paused)
+check("86% after the interval -> STOPPED", g.allow(MEM) is False and g.paused)
 check("...and the measured level is kept for the status", abs(g.pct - 86.0) < 0.1)
 level["pct"] = 82.0
 clock.t = 62
-check("82% (between the marks) -> still stopped (no flapping at the line)", g.allow() is False)
+check("82% (between the marks) -> still stopped (no flapping at the line)", g.allow(MEM) is False)
 level["pct"] = 79.0
 clock.t = 93
-check("79% -> RESUMED", g.allow() is True and not g.paused)
+check("79% -> RESUMED", g.allow(MEM) is True and not g.paused)
 
 
 def broken_statvfs(_p):
@@ -296,6 +297,106 @@ with tempfile.TemporaryDirectory() as d:
     check("status reports the drop",
           archiver.write_status(state, None, path=Path(d) / "s.json")
           ["rows_dropped_buffer_full"] == 15)
+
+
+# --- 7. recovery comes before the guard (Codex round 2) ---------------------------------------
+class NoPragmas(Corrupt):
+    """The corrupt archive's connection, as it is mid-recovery: nothing on it works."""
+
+    def execute(self, *a):
+        raise sqlite3.ProgrammingError("Cannot operate on a closed database.")
+
+
+print("unknown free-page credit is not 'full':")
+c = Clock()
+g = archiver.DiskGuard("/x", high=85, low=80, every_s=0, hard_pct=95, min_free_mb=2048,
+                       statvfs=fake_statvfs(90), clock=c)
+check("90% real, credit unreadable -> keeps recording (only the hard floor may stop it)",
+      g.allow(NoPragmas()) is True and not g.paused)
+check("...and the same with no connection at all", g.allow(None) is True)
+g.statvfs = fake_statvfs(96)
+check("96% real, credit unreadable -> the hard floor still stops it",
+      g.allow(None) is False and g.reason == "hard_floor")
+g.statvfs = fake_statvfs(90)
+check("a stopped guard does not resume on an unknown credit", g.allow(None) is False)
+
+print("a pending rotation runs BEFORE the guard; a failed one keeps the rows:")
+with tempfile.TemporaryDirectory() as d:
+    db = Path(d) / "archive.db"
+    archiver.open_db(db).close()
+    g = archiver.DiskGuard(db.parent, high=85, low=80, every_s=0, hard_pct=95,
+                           min_free_mb=2048, statvfs=fake_statvfs(90), clock=Clock())
+    real_rotate = archiver.rotate_corrupt
+    calls = {"n": 0}
+
+    def flaky_rotate(path, stamp=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError("device busy")          # transient
+        return real_rotate(path, stamp)
+
+    archiver.rotate_corrupt = flaky_rotate
+    try:
+        state = {"conn": NoPragmas(), "rotate_pending": True}
+        buf = [ROW] * 6
+        flush(buf, state, db, g)
+        check("rotation failed: all 6 rows still waiting", len(buf) == 6)
+        check("...none counted as not-recorded by the guard", g.dropped == 0)
+        check("...the rotation is still owed", state.get("rotate_pending") is True)
+        check("...and the old connection was not closed out from under us",
+              isinstance(state["conn"], NoPragmas))
+        flush(buf, state, db, g)
+        check("next flush: rotated first", calls["n"] == 2
+              and len(list(Path(d).glob("archive.corrupt-*.db"))) == 1
+              and not state.get("rotate_pending"))
+        check("...then the guard judged the REAL archive (90%, no free pages) and stopped",
+              g.paused and g.pct is not None)
+    finally:
+        archiver.rotate_corrupt = real_rotate
+        if isinstance(state["conn"], sqlite3.Connection):
+            state["conn"].close()
+
+    # and below the marks, the same sequence writes everything
+    archiver.open_db(db).close()
+    g = archiver.DiskGuard(db.parent, high=85, low=80, every_s=0, hard_pct=95,
+                           min_free_mb=2048, statvfs=fake_statvfs(50), clock=Clock())
+    calls["n"] = 0
+    archiver.rotate_corrupt = flaky_rotate
+    try:
+        state = {"conn": NoPragmas(), "rotate_pending": True}
+        buf = [ROW] * 6
+        flush(buf, state, db, g)
+        flush(buf, state, db, g)
+    finally:
+        archiver.rotate_corrupt = real_rotate
+    check("at 50%: after the retried rotation all 6 rows are in the fresh archive",
+          state["conn"].execute("SELECT count(*) FROM readings").fetchone()[0] == 6 and buf == [])
+    state["conn"].close()
+
+print("the pruner skips while recovery is pending:")
+with tempfile.TemporaryDirectory() as d:
+    real_prune = archiver.prune
+    pruned = []
+    archiver.prune = lambda conn, *a, **k: pruned.append(conn)
+    real_every = archiver.PRUNE_EVERY_S
+    archiver.PRUNE_EVERY_S = 0.01
+
+    async def one_prune(state):
+        t = asyncio.create_task(archiver.pruner(state, asyncio.get_running_loop()))
+        await asyncio.sleep(0.005)
+        t.cancel()
+        try:
+            await t
+        except asyncio.CancelledError:
+            pass
+
+    try:
+        asyncio.run(one_prune({"conn": NoPragmas(), "rotate_pending": True}))
+        check("no prune on a file that just reported corruption", pruned == [])
+        asyncio.run(one_prune({"conn": None}))
+        check("no prune through a missing connection", pruned == [])
+    finally:
+        archiver.prune, archiver.PRUNE_EVERY_S = real_prune, real_every
 
 
 # --- 6. startup: count(*) corruption rotates --------------------------------------------------
