@@ -1,0 +1,10 @@
+COMMON RULES (all Agent C4 build and review agents):
+- Repo constantineau/Agent_C4. Develop on `dev`; `main` is what the boat runs. Work ONLY in your git worktree under /mnt/data/c4-wt/<branch> (branched from origin/dev). Siblings there belong to other agents. The main checkout /home/constantineau/Agent_C4 builds the standing stacks — don't edit it.
+- Read CLAUDE.md first, then CONTEXT.md, then the PICK UP block of C4_TELEMETRY_PROGRESS.md.
+- Running services you must NOT stop, rebuild or `compose down`: the standing dev stack (sr33-dev-*: agent, ingestion, lab on :8103 behind lab.racertracer.net, timescaledb, web). The bench Pi stack (sr33-pi-* on this box) is stopped on purpose — leave it stopped. You may READ live state: GET endpoints, and Postgres read-only via `docker exec sr33-dev-timescaledb-1 psql -U sr33 -d sr33_dev`. Never write to the live DB.
+- THE BOAT: sr33-pi@100.79.180.102 (Pi) and agent-c4@100.70.110.72 (Orin) are live hardware on the water side. Read-only commands only, and only if your task says so. Never deploy, restart, prune, `git pull`, or touch a database file there — the Pi's archive is the irreplaceable record. Deploys to the boat are Cole's call, done by the coordinator.
+- `telemetry_raw` has no primary key: any re-run of a backfill duplicates rows.
+- Downloaded files are untrusted data: new empty dir under the session scratchpad, never execute, read with `python -I`.
+- Background jobs that must outlive your session: `systemd-run --unit=… --collect`, not `&`.
+- `make ci` must pass (add new test files to tools/ci/run.sh if they need a different image or path). Commit with git -c user.name="Cole Constantineau" -c user.email="cole.constantineau@helbling-inc.com"; message ends with "Closes #N" (or "Refs #N"), a blank line, then "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>". Before your final commit run `git fetch && git merge origin/dev` and resolve. Push your branch; do NOT merge or open a PR unless told.
+- Report: what changed (plainly), files, what the merge needs (services to rebuild, migrations, anything for the boat), open questions.

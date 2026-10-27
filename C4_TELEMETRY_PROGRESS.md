@@ -3,6 +3,39 @@
 Goal (Cole): **lose no telemetry**, and **copy all telemetry off the Pi to the VPS**.
 Deletion from the boat is allowed only *after* an off-boat copy is sha256-verified.
 
+## 2026-10-27 — the boat is back, its archive is not; `make ci` exists
+
+**Boxes (read-only check, nothing changed aboard):**
+- **`sr33-pi` is online** (Tailscale direct, booted 2026-10-24 after an unclean shutdown — ext4
+  "orphan cleanup" on mount). Disk 41/115 G, 3.0 G RAM free, `throttled=0x0`. Still on `main`
+  at `b3c30a1` (2026-09-01) — none of September's work is aboard.
+- **The archiver is crash-looping on a corrupt DB, 4,112 restarts:** `archive.db` (24 G) →
+  `sqlite3.DatabaseError: database disk image is malformed` at `archiver.py:201`
+  (`SELECT count(*) FROM readings`). Its mtime is **2026-09-02 22:11Z** — the minute the uplink
+  went quiet, and the Orin's `last` shows a boot at 22:12Z. So both boxes lost power together
+  and the archive corrupted mid-write: **the same failure as Jul 18**
+  (`archive.corrupt-20260718.db`, still on the volume). No full-res telemetry has been recorded
+  since Sep 2.
+- **The uplink is fine**: ~430k rows/day reaching `telemetry_raw` since 2026-09-16 (the thinned
+  live stream, vs ~32 M/day when the archive streamed Aug 30–Sep 2). Newest row = now.
+  Aug 30–Sep 2 full-res is in Postgres (97 M rows), so the corrupt file likely holds little or
+  nothing that is not already ashore — **unverified**; check before anyone touches it.
+- **`agent-c4` (Orin)** is up (27 min at check), no containers running, and `dnsmasq` +
+  `isc-dhcp-server`/`-server6` are in `failed` state. Whether that matters depends on whether
+  the Orin is meant to be serving DHCP on the boat LAN — not established.
+- Open for Cole: set the corrupt `archive.db` aside so the archiver starts a fresh one (after
+  confirming Postgres has its contents); and the real fix — an archive that survives a power
+  cut (two corruptions in two months on the same path).
+
+**`make ci` (new, `tools/ci/run.sh`):** every test file, each in a throwaway container off its
+own service's image built fresh as `sr33-ci-*`. 2 m 35 s warm. **52/53 pass on `dev`.**
+`vps/agent/test_strategy.py` fails "on-plan hold does not chain a re-route" — **broken by
+`5974472` (2026-09-17, the selector card's 2-minute settle)**, verified by running the test at
+`5974472^` (pass) and `5974472` (fail). Not fixed: it goes into the code review. Build/review
+agents follow `tools/agents/agent-rules.md`; worktrees live under `/mnt/data/c4-wt/`. The Codex
+mirror works for this repo (`/root/.claude/codex/mirror.sh`), so `/codex-review`, `/dual-review`
+and the merge gate apply to Agent_C4 PRs.
+
 ## ⏸ PICK UP HERE — REFINEMENT PHASE (set 2026-09-09, horizon: a couple of weeks)
 
 **Cole approved the Polar tab as a first pass and set the mode: "generally refine the entire

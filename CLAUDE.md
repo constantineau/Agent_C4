@@ -356,10 +356,12 @@ Checklists, Fleet, Learnings, Gameplan, Lock-in & Deploy) · RACE (Monitor) · D
 
 ## Verification & tests
 
-- Agent/engine unit tests: `PYTHONPATH=vps/agent:. python3 vps/agent/test_<x>.py`
-  (matcher, deviation, drift, selector, strategy, reoptimize, fleet, buoys…).
-- Lab tests need the baked image: `docker cp vps/lab/test_<x>.py sr33-dev-lab-1:/srv/ &&
-  docker exec sr33-dev-lab-1 sh -c "cd /srv && python3 test_<x>.py"`.
+- **`make ci` runs every test file** (`tools/ci/run.sh`): each in a throwaway container off its
+  own service's image, built fresh from the tree as `sr33-ci-*` (never the standing stack's
+  images). `make ci ONLY=<path part>` runs a subset. Add a new test file's image/path there if
+  the defaults don't fit. Build agents follow `tools/agents/agent-rules.md`.
+- One file by hand: `PYTHONPATH=vps/agent:. python3 vps/agent/test_<x>.py` (agent tests; the
+  system python lacks some deps, so prefer `make ci ONLY=test_<x>`).
 - Copilot exit test: `python3 -m copilot.bench_copilot` (pure) / `--llm` (on the Orin).
 - Playwright harness: reuse DreamCRM's `playwright-core` (CJS default import
   `import pkg from '…/index.js'`) + the chromium-1228 binary, `--no-sandbox`; dashboard at
