@@ -35,6 +35,7 @@ for f in pi/archiver/test_*.py; do run archiver /repo /repo/pi/archiver:/repo "$
 run uplink /repo /repo "pi/uplink/test_uplink_queue.py" python3 -m pytest -q -p no:cacheprovider /repo/pi/uplink/test_uplink_queue.py
 run n2kout /repo /repo/pi/n2kout "pi/n2kout/test_n2k.py"
 run agent /repo/pi/orin /repo/pi/orin:/repo/vps/agent:/repo "pi/orin/copilot/eval/test_eval.py" python3 -m copilot.eval.test_eval
+run agent /repo/pi/orin /repo/pi/orin:/repo/vps/agent:/repo "pi/orin/copilot/test_collision_watch.py" python3 -m copilot.test_collision_watch
 for f in vps/agent/test_*.py; do run agent /repo /repo/vps/agent:/repo:/repo/pi/archiver "$f"; done
 # The lab reads its data from the image's /srv layout (races, boats, polars), built from this tree.
 for f in vps/lab/test_*.py; do run lab /srv /srv "$f"; done
