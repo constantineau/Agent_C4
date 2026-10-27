@@ -56,6 +56,10 @@ USE_LLM = _b("COPILOT_USE_LLM", True)
 COACH_ENABLED = _b("COPILOT_COACH", True)
 COACH_INTERVAL_S = float(os.environ.get("COPILOT_COACH_INTERVAL_S", "30"))
 
+# The polled POST /strategy (the iPad, ~15 s) is served from a cache: at most one LLM strategy pass
+# in flight, refreshed in the background at most once per this many seconds.
+STRATEGY_TTL_S = float(os.environ.get("COPILOT_STRATEGY_TTL_S", "180"))
+
 # Scheduled CREW BRIEFS (briefs.py) riding the same timer: the watch-handover brief at T-minus
 # BRIEF_HANDOVER_T_MIN to a rotation, the hourly recap (only while a watch plan is active or a
 # race-log session is open — no recap noise at the dock), the mark pre-brief inside

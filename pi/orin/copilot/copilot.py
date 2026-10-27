@@ -14,6 +14,9 @@ The model interprets and prioritizes; it can never exceed or fabricate beyond th
 """
 import json
 import re
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 from . import adherence as adherence_mod
 from . import brief as brief_mod
@@ -27,22 +30,30 @@ _DEFAULT_GATHER = ["get_conditions", "get_navigator", "get_tactics", "get_sail_a
 
 
 def gather(engine: EngineClient, route=None, hoisted=None) -> dict:
-    """Pull the core engine facts, keyed by tool name (so grounding maps cleanly)."""
+    """Pull the core engine facts, keyed by tool name (so grounding maps cleanly). The reads go out
+    in parallel: one after another, a slow or dead engine cost up to 14 × ENGINE_TIMEOUT before the
+    collision watch was even looked at."""
+    reads = {
+        "get_conditions": lambda: engine.conditions(),
+        "get_navigator": lambda: engine.navigator(route),
+        "get_tactics": lambda: engine.tactics(route),
+        "get_sail_advice": lambda: engine.sail(hoisted=hoisted),
+        "get_fatigue": lambda: engine.fatigue(),
+        "get_watch": lambda: engine.watch(),            # watch system: who's on + countdown (change callouts)
+        "get_checklist": lambda: engine.checklist(route),   # SI/NOR requirement reminders (checklist callouts)
+        "get_ais": lambda: engine.ais(),                # collision watch (safety — always legal, shown top-priority)
+        "get_fleet": lambda: engine.fleet(),            # handicap-rival watch (corrected-time tactical callout)
+        "get_deviation": lambda: engine.deviation(route),   # Lab-3 trigger (a): off the playbook line?
+        "get_drift": lambda: engine.drift(route),           # Lab-3 trigger (b): forecast moved since freeze?
+        "get_strategy": lambda: engine.strategy(route),     # in-race synthesis: the higher-order cross-signal read
+        "get_plays": lambda: engine.plays(route),           # Phase D: armed plays from the frozen v2 bundle
+        "get_buoys": lambda: engine.buoys(route),           # up-course leading indicator (live NDBC obs)
+    }
     snap = {"_route": route, "_hoisted": hoisted}
-    snap["get_conditions"] = engine.conditions()
-    snap["get_navigator"] = engine.navigator(route)
-    snap["get_tactics"] = engine.tactics(route)
-    snap["get_sail_advice"] = engine.sail(hoisted=hoisted)
-    snap["get_fatigue"] = engine.fatigue()
-    snap["get_watch"] = engine.watch()    # watch system: who's on + countdown (change callouts)
-    snap["get_checklist"] = engine.checklist(route)   # SI/NOR requirement reminders (checklist callouts)
-    snap["get_ais"] = engine.ais()        # collision watch (safety — always legal, shown top-priority)
-    snap["get_fleet"] = engine.fleet()    # handicap-rival watch (corrected-time tactical callout)
-    snap["get_deviation"] = engine.deviation(route)   # Lab-3 trigger (a): off the playbook line?
-    snap["get_drift"] = engine.drift(route)           # Lab-3 trigger (b): forecast moved since freeze?
-    snap["get_strategy"] = engine.strategy(route)     # in-race synthesis: the higher-order cross-signal read
-    snap["get_plays"] = engine.plays(route)           # Phase D: armed plays from the frozen v2 bundle
-    snap["get_buoys"] = engine.buoys(route)           # up-course leading indicator (live NDBC obs)
+    with ThreadPoolExecutor(max_workers=len(reads)) as pool:
+        futs = {name: pool.submit(fn) for name, fn in reads.items()}
+        for name, fut in futs.items():
+            snap[name] = fut.result()
     return snap
 
 
@@ -251,6 +262,44 @@ def make_brief(question: str = "", route=None, hoisted=None, use_llm: bool | Non
     return validated
 
 
+def step_narration(route=None, hoisted=None) -> dict:
+    """Gather + run the deterministic callout engine — NO LLM. The result is publishable as-is:
+    `spoken` is the callouts' own grounded text. The auto-coach publishes this the moment it's
+    computed (a collision warning must never wait on a model) and phrases separately."""
+    route = route or config.DEFAULT_ROUTE
+    engine = EngineClient()
+    pb = playbook_mod.load()
+    snapshot = gather(engine, route, hoisted)
+
+    # `engine` is threaded in for the targeted exit-leg sail lookup the rounding callout makes.
+    stepped = narrate_mod.step(route, snapshot, pb, engine)
+    spoken, mode = narrate_mod.narrate(stepped["new"], None)
+    return {
+        "active": stepped["active"],
+        "new": stepped["new"],
+        "spoken": spoken,
+        "narration_mode": mode,
+        "_meta": {"route": route, "engine": engine.base_url, "playbook_loaded": pb.loaded,
+                  "model": None, "llm_used": False,
+                  # every read failed on transport → the engine is gone (the blind callout says so)
+                  "engine_lost": all(isinstance(snapshot.get(k), dict) and bool(snapshot[k].get("error"))
+                                     for k in ("get_ais", "get_conditions"))},
+    }
+
+
+def phrase_narration(res: dict, use_llm: bool | None = None) -> dict:
+    """LLM-phrase a `step_narration` result's NEW callouts in place (safety callouts never reach the
+    model — `narrate.narrate` keeps them word for word). Returns `res`."""
+    want_llm = config.USE_LLM if use_llm is None else use_llm
+    if not want_llm or not res.get("new"):
+        return res
+    spoken, mode = narrate_mod.narrate(res["new"], LLMClient())
+    res["spoken"], res["narration_mode"] = spoken, mode
+    res["_meta"]["model"] = config.LLM_MODEL
+    res["_meta"]["llm_used"] = mode == "llm"
+    return res
+
+
 def make_narration(route=None, hoisted=None, use_llm: bool | None = None) -> dict:
     """Proactive crew callouts for the current situation + a coach line for what's newly worth
     showing. This is the PUSH counterpart to make_brief's PULL: a deterministic engine watches the
@@ -261,26 +310,9 @@ def make_narration(route=None, hoisted=None, use_llm: bool | None = None) -> dic
     'surface' callouts that just crossed their confirmation threshold (show-once), exactly like the
     cloud alerting loop — so the iPad can poll this every ~15 s. `active` is the full confirmed set
     for the banner; `spoken` is the LLM-phrased top of the NEW callouts, with the deterministic
-    callout text as the always-available fallback."""
-    route = route or config.DEFAULT_ROUTE
-    engine = EngineClient()
-    pb = playbook_mod.load()
-    snapshot = gather(engine, route, hoisted)
-
-    # `engine` is threaded in for the targeted exit-leg sail lookup the rounding callout makes.
-    stepped = narrate_mod.step(route, snapshot, pb, engine)
-
-    want_llm = config.USE_LLM if use_llm is None else use_llm
-    spoken, mode = narrate_mod.narrate(stepped["new"], LLMClient() if want_llm else None)
-
-    return {
-        "active": stepped["active"],
-        "new": stepped["new"],
-        "spoken": spoken,
-        "narration_mode": mode,
-        "_meta": {"route": route, "engine": engine.base_url, "playbook_loaded": pb.loaded,
-                  "model": config.LLM_MODEL if want_llm else None, "llm_used": mode == "llm"},
-    }
+    callout text as the always-available fallback. (The on-demand path: step + phrase in one call.
+    The auto-coach splits them so nothing waits on the model.)"""
+    return phrase_narration(step_narration(route, hoisted), use_llm)
 
 
 def make_adherence(route=None) -> dict:
@@ -426,7 +458,13 @@ def strategy_brief(route=None, hoisted=None, use_llm: bool | None = None) -> dic
     if not digest.get("available") or not want_llm:
         digest["_meta"] = meta
         return digest
+    if use_llm is None:                  # the polled path (the iPad, every ~15 s) → cached, never blocks
+        return _strategy_cached(route, digest, pb, meta)
+    return _strategy_llm(digest, pb, meta)
 
+
+def _strategy_llm(digest: dict, pb: playbook_mod.Playbook, meta: dict) -> dict:
+    """One LLM pass over the engine digest (see strategy_brief). Any LLM trouble → the digest."""
     # Grounding allow-list = the signal tools that actually contributed a picture item (+ the synthesis).
     allowed = {"get_strategy", "get_selector"} | {
         g for item in digest.get("picture", []) for g in (item.get("grounded_in") or [])}
@@ -470,6 +508,56 @@ def strategy_brief(route=None, hoisted=None, use_llm: bool | None = None) -> dic
         meta["llm_error"] = str(e)
         digest["_meta"] = meta
         return digest
+
+
+
+# The iPad polls POST /strategy every ~15 s and gives up after 15 s, but one LLM pass takes ~45 s and
+# the server kept running every one of them — Ollama was never free for the coach line or a brief.
+# So the polled path is served from a per-route cache: at most ONE LLM /strategy runs at a time, in
+# the background, at most once per STRATEGY_TTL_S; the request itself answers at once with the fresh
+# engine digest, carrying the last LLM narrative only while the engine's call is still the same one.
+_STRAT_LOCK = threading.Lock()           # single flight: never two LLM /strategy calls at once
+_STRAT_CACHE: dict = {}                  # route -> (at, llm_out | None)  (None = the last try failed)
+
+
+def _rec_key(rec):
+    rec = rec or {}
+    return (rec.get("action"), rec.get("target_variant"), rec.get("vs_playbook"))
+
+
+def _strategy_refresh(route, digest, pb, meta):
+    try:
+        out = _strategy_llm(dict(digest), pb, dict(meta))
+        _STRAT_CACHE[route] = (time.time(), out if out.get("mode") == "llm" else None)
+    except Exception:                    # a background refresh never takes the service down
+        _STRAT_CACHE[route] = (time.time(), None)
+    finally:
+        _STRAT_LOCK.release()
+
+
+def _strategy_cached(route, digest, pb, meta) -> dict:
+    now = time.time()
+    at, cached = _STRAT_CACHE.get(route, (0.0, None))
+    ttl = config.STRATEGY_TTL_S
+    if now - at >= ttl and _STRAT_LOCK.acquire(blocking=False):
+        meta["llm_refreshing"] = True
+        threading.Thread(target=_strategy_refresh, args=(route, dict(digest), pb, dict(meta)),
+                         daemon=True).start()
+    if (cached and now - at < 2 * ttl
+            and _rec_key(cached.get("recommendation")) == _rec_key(digest.get("recommendation"))):
+        out = dict(digest)               # the engine's numbers stay fresh; only the narrative is reused
+        out["assessment"] = cached.get("assessment", digest.get("assessment"))
+        if digest.get("recommendation") and cached.get("recommendation"):
+            out["recommendation"] = {**digest["recommendation"],
+                                     "rationale": cached["recommendation"].get("rationale")}
+        if cached.get("play_matches"):
+            out["play_matches"] = cached["play_matches"]
+        out["mode"] = "llm"
+        meta.update(llm_used=True, model=config.LLM_MODEL, cached_age_s=round(now - at))
+        out["_meta"] = meta
+        return out
+    digest["_meta"] = meta
+    return digest
 
 
 def reset_narration(route=None) -> dict:
