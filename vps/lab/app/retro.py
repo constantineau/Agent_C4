@@ -204,17 +204,18 @@ def run_fleet(race_id: str, def_race_id: str = "bayview-mackinac-2026",
         # COMPLETENESS GUARD: a budget-truncated isochrone can return a partial route (the pilot
         # caught a 124nm "optimal" on a 276nm course → 36nm XTE nonsense). A route that doesn't
         # reach the finish is stored for debugging but NEVER scored — scoring a real track against
-        # half a route poisons the analysis.
+        # half a route poisons the analysis. The router's own `incomplete` flag comes first (#31): on
+        # a course that finishes at its start, a route stalled on leg 1 ends within 3 nm of the finish.
         last = result["path"][-1]
         gap_nm = track_mod._hav_nm((last["lat"], last["lon"]), (marks[-1][2], marks[-1][3]))
-        if gap_nm > 3.0:
+        why = optimizer.incomplete_reason(result, (marks[-1][2], marks[-1][3]))
+        if why:
             slim = {k: v for k, v in result.items() if k not in _RESULT_HEAVY}
             rs.save_run(race_id, e["team_id"], "gun_forecast_partial",
                         {"def_race_id": def_race_id, "course_id": course_id,
                          "start_epoch": start, "resolution": resolution,
                          "finish_gap_nm": round(gap_nm, 1)}, {}, slim)
-            failed.append({"boat": e["boat"],
-                           "note": f"route incomplete — ends {round(gap_nm)}nm short of the finish"})
+            failed.append({"boat": e["boat"], "note": f"route incomplete — {why}"})
             continue
         slim = {k: v for k, v in result.items() if k not in _RESULT_HEAVY}
         run_id = rs.save_run(race_id, e["team_id"], "gun_forecast",

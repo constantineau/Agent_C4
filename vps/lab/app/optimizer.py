@@ -620,6 +620,10 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
         if _hav_nm(best["lat"], best["lon"], dlat, dlon) < 0.05:
             reached = best
             break
+    # #31: a leg that never closes on its target (time budget out, or every heading blocked) returns
+    # its NEAREST node — flagged `reached: False` so the caller stops the course there instead of
+    # chaining the next leg from the mark (a free teleport, possibly across land).
+    arrived = reached is not None
     if not reached:
         reached = min(frontier, key=lambda n: _hav_nm(n["lat"], n["lon"], dlat, dlon))
 
@@ -682,6 +686,8 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
             if len(poly) >= 2:
                 isochrones.append(poly)
     return {"path": path, "eta": reached["t"], "sailed_nm": round(sailed, 2),
+            "reached": arrived,
+            "short_nm": 0.0 if arrived else round(_hav_nm(reached["lat"], reached["lon"], dlat, dlon), 2),
             "direct_nm": round(direct, 2), "tacks": tacks,
             "first_heading": round(hdgs[0]) if hdgs else None,
             "blocked_steps": blocked_hits, "isochrones": isochrones,
@@ -766,6 +772,27 @@ def _route_sanity(wf, legs, coverage, P, timed_out):
         warnings.append("Optimizer hit its time budget — the route may be truncated; re-run for a "
                         "complete solution.")
     return warnings, degraded
+
+
+FINISH_TOL_NM = 3.0     # a route whose path ends farther than this from the finish didn't finish
+
+
+def incomplete_reason(result, finish_pt=None, tol_nm=FINISH_TOL_NM):
+    """Why a course result can't stand for a whole course, or None when it can (#31). Reads the
+    router's own `incomplete` flag (a leg that stalled short of its mark) AND — for results built
+    elsewhere, or when the flag is missing — the end-of-path distance to `finish_pt` (lat, lon), the
+    same 3 nm rule the retro study uses. Callers drop / retry / refuse to score on a reason."""
+    if not result or not result.get("available", True) or not result.get("path"):
+        return (result or {}).get("note") or "no route"
+    inc = result.get("incomplete")
+    if inc:
+        return f"stopped {inc.get('short_nm')} nm short of {inc.get('to')} ({inc.get('reason')})"
+    if finish_pt and finish_pt[0] is not None:
+        last = result["path"][-1]
+        gap = _hav_nm(last["lat"], last["lon"], finish_pt[0], finish_pt[1])
+        if gap > tol_nm:
+            return f"ends {gap:.1f} nm short of the finish"
+    return None
 
 
 # --- full course -------------------------------------------------------------
@@ -876,6 +903,9 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
     laylines = []
     cur_sail = None           # the sail carried into a leg — threaded across marks so a peel at a
     route_track = []          # rounding counts once, and the whole-route sail plan is continuous (2g)
+    incomplete = None         # #31: set when a leg never reaches its mark — the course stops there
+    leg_end_idx = []          # full_path index where each REACHED leg ends — the mark vertices,
+                              # known at construction (gpsout/synthesis keep them; no proximity guess)
     for seq, name, dlat, dlon in marks[1:]:
         # #3 rounding side: route to a small standoff on the legal side of a port/starboard mark (the
         # real mark is still displayed + recorded). Gates pass between, finish/none unchanged.
@@ -916,11 +946,14 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
             "hs_mean": leg.get("hs_mean", 0.0),                   # mean sea state on this leg (m)
             "wind": ({"tws": det["tws"], "twd": det["twd"], "confidence": det["confidence"]}
                      if det else None),
+            "reached": leg.get("reached", True),
         })
         # accumulate the real sails-flown track + carry the ending sail into the next leg (2g)
         route_track += leg.get("sail_track", [])
         cur_sail = leg.get("sail_end") or cur_sail
         full_path += [p for p in leg["path"][1:]]
+        if leg.get("reached", True):
+            leg_end_idx.append(len(full_path) - 1)
         if emit_exploration:
             if len(isochrones) < ISO_MAX:
                 isochrones += leg.get("isochrones", [])[:ISO_MAX - len(isochrones)]
@@ -928,12 +961,30 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
             if det and pos in ("beat", "run"):
                 laylines += _layline_pair(P, det["tws"], det["twd"], pos, dlat, dlon,
                                           leg["direct_nm"])
+        if not leg.get("reached", True):
+            # #31: the leg stalled short of its mark (time budget out / every heading blocked). Stop
+            # the course HERE — chaining the next leg from the mark would teleport the boat to it
+            # (possibly across land) at no time cost and report a too-short finish.
+            incomplete = {"leg": len(legs), "to": name, "short_nm": leg.get("short_nm"),
+                          "reason": ("time budget" if (deadline and time.time() > deadline)
+                                     else "no clear heading reached the mark"),
+                          "legs_not_routed": [n for _s, n, _a, _o in marks[1:]][len(legs):]}
+            t = leg["eta"]
+            break
         slat, slon, t = rlat, rlon, leg["eta"]   # continue from the rounding standoff (≈ the mark)
 
     total_min = round((t - float(start_epoch)) / 60.0, 1)
     timed_out = time.time() > deadline
     coverage = _wind_coverage(wf, full_path)
     warnings, degraded = _route_sanity(wf, legs, coverage, P, timed_out)
+    if incomplete:
+        degraded = True
+        rest = incomplete["legs_not_routed"]
+        warnings.insert(0, f"Route INCOMPLETE — the leg to {incomplete['to']} stopped "
+                           f"{incomplete['short_nm']} nm short of the mark ({incomplete['reason']})"
+                           + (f"; not routed after it: {', '.join(rest)}" if rest else "")
+                           + ". The times cover only the routed part — do NOT use this route; "
+                           "re-run (more time budget, or check the obstacles near that mark).")
     for name, n in _leg_self_crossings(full_path, legs, start_epoch).items():
         warnings.append(f"Route crosses itself {n}x on the leg to {name} — the optimizer chased "
                         "shifts in light/rotating air. Treat that leg's line as low-confidence "
@@ -994,6 +1045,9 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
         "wind_coverage": coverage,
         "resolution": (resolution or "auto").strip().lower(),
         "degraded": degraded,
+        "complete": incomplete is None,
+        "leg_end_idx": leg_end_idx,
+        "incomplete": incomplete,
         "warnings": warnings,
         "legs": legs,
         "sail_plan": sail_seq,

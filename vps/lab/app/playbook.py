@@ -44,6 +44,15 @@ def _favored_side(definition, course_id, result):
     return "left" if d < -10 else "right" if d > 10 else "middle"
 
 
+def _truncated(res, finish_pt):
+    """Why a playbook route can't stand for the whole course (#31), or None. A route that stalled
+    short of a mark, or ends > 3 nm from the finish, has a too-short `total_hours` that would poison
+    the consensus, the variant medians, `decision_spread_min` and every play's ETA delta — so it is
+    dropped or retried, never used. Shared by the consensus, the per-model candidates and every
+    fan play (scenario / pace / gear-loss / low-maneuver)."""
+    return optimizer.incomplete_reason(res, finish_pt)
+
+
 _LABELS = {"left": "Left side", "right": "Right side", "middle": "Up the middle (rhumb)"}
 
 
@@ -120,7 +129,7 @@ def _scenario_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
     perturbed views of the SAME blended field. A scenario whose route sticks to the nominal is
     ROBUSTNESS EVIDENCE, not a play; one that diverges is a play candidate. Priority order is
     point-of-sail aware (input #6). Returns (scenario_routes, robustness, profile, corridor)."""
-    from . import scenarios as scen, track as track_mod
+    from . import scenarios as scen
     say = (log.append if log is not None else (lambda *_: None))
     profile = scen.pos_profile(consensus)
     routes, robust = [], []
@@ -143,12 +152,10 @@ def _scenario_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
                                       emit_exploration=False,
                                       cur=cur, waves=waves, helm_factor=helm_factor,
                                       polar_adjustments=polar_adjustments, wave_coeffs=wc)
-        if not r.get("available") or not r.get("path"):
-            say(f"scenario {s['id']}: no route — skipped")
-            return None
-        last = r["path"][-1]
-        if marks_finish and track_mod._hav_nm((last["lat"], last["lon"]), marks_finish) > 3.0:
-            say(f"scenario {s['id']}: truncated route — skipped (not counted as robustness)")
+        why = _truncated(r, marks_finish)
+        if why:
+            say(f"scenario {s['id']}: incomplete route ({why}) — skipped "
+                "(not counted as robustness)")
             return None
         deta = round(((r.get("total_hours") or 0) - (consensus.get("total_hours") or 0)) * 60)
         xte = _mean_xte_nm(r.get("path"), consensus.get("path"))
@@ -161,6 +168,7 @@ def _scenario_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
         diverged = not (xte is not None and xte < 2.0 and abs(deta) < 45)
         if diverged:
             entry["route"] = {"legs": r.get("legs"), "path": r.get("path"),
+                 "leg_end_idx": r.get("leg_end_idx"),
                               "total_sailed_nm": r.get("total_sailed_nm"),
                               "total_tacks": r.get("total_tacks"), "sail_plan": r.get("sail_plan")}
         return entry, diverged
@@ -250,7 +258,6 @@ def _internal_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
     routes, robust = [], []
     legs = consensus.get("legs") or []
     finish_pt = (marks[-1][2], marks[-1][3]) if marks else None
-    from . import track as track_mod
 
     # ---- PACE plays: per intermediate mark × delay ---------------------------------------------
     eta_min = 0.0
@@ -269,23 +276,17 @@ def _internal_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
                                                  polar_adjustments=polar_adjustments,
                                                  wave_coeffs=wave_coeffs)
 
-            def _truncated(res):
-                if not res.get("available") or not res.get("path"):
-                    return True
-                last = res["path"][-1]
-                return bool(finish_pt and
-                            track_mod._hav_nm((last["lat"], last["lon"]), finish_pt) > 3.0)
-
             tag = f"{abs(dh)}h {'behind' if dh > 0 else 'ahead'}"
             sid = f"pace_{'behind' if dh > 0 else 'ahead'}_{abs(dh)}h_{k}"
             r = _route_rest(per_budget_s)
-            if _truncated(r):
+            if _truncated(r, finish_pt):
                 # usually the fast-resolution budget running out on a delayed (lighter-wind)
                 # remainder, not a wind gap — one honest retry at double budget
                 say(f"pace {sid}: truncated at {per_budget_s}s — retrying ×2 budget")
                 r = _route_rest(per_budget_s * 2)
-            if _truncated(r):
-                say(f"pace {sid}: no complete route — skipped")
+            why = _truncated(r, finish_pt)
+            if why:
+                say(f"pace {sid}: no complete route ({why}) — skipped")
                 continue
             xte = _mean_xte_nm(r.get("path"), consensus.get("path"))
             drest = round(((r.get("total_hours") or 0) - nominal_rest_h) * 60)
@@ -307,6 +308,7 @@ def _internal_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
                 say(f"pace {sid}: nominal remainder HOLDS — robustness")
             else:
                 entry["route"] = {"legs": r.get("legs"), "path": r.get("path"),
+                 "leg_end_idx": r.get("leg_end_idx"),
                                   "total_sailed_nm": r.get("total_sailed_nm"),
                                   "total_tacks": r.get("total_tacks"),
                                   "sail_plan": r.get("sail_plan")}
@@ -317,14 +319,24 @@ def _internal_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
     # ---- GEAR-LOSS plays: kites actually in the nominal plan -----------------------------------
     nominal_sails = set(_sail_seq(consensus))
     for sail in [s for s in _GEAR_SAILS if s in nominal_sails]:
-        r = optimizer.optimize_course(definition, course_id, start_epoch, wf,
-                                      exclude_sails=[sail], time_budget_s=per_budget_s,
-                                      resolution="fast", jib_crossovers=jib_crossovers, sail_config=sail_config,
-                                      emit_exploration=False, cur=cur, waves=waves,
-                                      helm_factor=helm_factor,
-                                      polar_adjustments=polar_adjustments, wave_coeffs=wave_coeffs)
-        if not r.get("available") or not r.get("path"):
-            say(f"gear-loss {sail}: no route — skipped")
+        def _route_without(budget):
+            return optimizer.optimize_course(definition, course_id, start_epoch, wf,
+                                             exclude_sails=[sail], time_budget_s=budget,
+                                             resolution="fast", jib_crossovers=jib_crossovers,
+                                             sail_config=sail_config,
+                                             emit_exploration=False, cur=cur, waves=waves,
+                                             helm_factor=helm_factor,
+                                             polar_adjustments=polar_adjustments,
+                                             wave_coeffs=wave_coeffs)
+
+        r = _route_without(per_budget_s)
+        if _truncated(r, finish_pt):
+            # a partial route's short total_hours would read as "losing the kite SAVES time"
+            say(f"gear-loss {sail}: incomplete at {per_budget_s}s — retrying ×2 budget")
+            r = _route_without(per_budget_s * 2)
+        why = _truncated(r, finish_pt)
+        if why:
+            say(f"gear-loss {sail}: no complete route ({why}) — skipped")
             continue
         deta = round(((r.get("total_hours") or 0) - (consensus.get("total_hours") or 0)) * 60)
         routes.append({"id": f"gear_loss_{sail.lower()}", "name": f"{sail} out of service",
@@ -337,6 +349,7 @@ def _internal_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
                        "total_hours": r.get("total_hours"),
                        "favored_side": _favored_side(definition, course_id, r),
                        "route": {"legs": r.get("legs"), "path": r.get("path"),
+                 "leg_end_idx": r.get("leg_end_idx"),
                                  "total_sailed_nm": r.get("total_sailed_nm"),
                                  "total_tacks": r.get("total_tacks"),
                                  "sail_plan": r.get("sail_plan")}})
@@ -353,9 +366,10 @@ def _internal_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
                                   emit_exploration=False, cur=cur, waves=waves,
                                   helm_factor=helm_factor,
                                   polar_adjustments=polar_adjustments, wave_coeffs=wave_coeffs)
-    if (r.get("available") and r.get("path") and not (
-            finish_pt and track_mod._hav_nm((r["path"][-1]["lat"], r["path"][-1]["lon"]),
-                                            finish_pt) > 3.0)):
+    why = _truncated(r, finish_pt)
+    if why:
+        say(f"low-maneuver: incomplete route ({why}) — skipped")
+    else:
         base_m = (consensus.get("total_tacks") or 0) + (consensus.get("total_peels") or 0)
         low_m = (r.get("total_tacks") or 0) + (r.get("total_peels") or 0)
         deta = round(((r.get("total_hours") or 0) - (consensus.get("total_hours") or 0)) * 60)
@@ -377,12 +391,11 @@ def _internal_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
                 "total_hours": r.get("total_hours"),
                 "favored_side": _favored_side(definition, course_id, r),
                 "route": {"legs": r.get("legs"), "path": r.get("path"),
+                 "leg_end_idx": r.get("leg_end_idx"),
                           "total_sailed_nm": r.get("total_sailed_nm"),
                           "total_tacks": r.get("total_tacks"),
                           "sail_plan": r.get("sail_plan")}})
             say(f"low-maneuver: {base_m}→{low_m} maneuvers for {deta:+d} min — play")
-    else:
-        say("low-maneuver: no route — skipped")
 
     # ---- REJOIN-VS-CONTINUE tabulation (guidance play, no new track) ----------------------------
     try:
@@ -513,7 +526,8 @@ def _rejoin_tab(definition, course_id, wf, consensus, cur, waves, marks, off_nm,
                                            deadline=time.time() + _REJOIN_LEG_TIMEOUT_S, **kw)
                 # route_leg returns the NEAREST node when it can't lay the target — verify arrival
                 ce, re_ = cont["path"][-1], rejn["path"][-1]
-                if (track_mod._hav_nm((ce["lat"], ce["lon"]), (dlat, dlon)) > 1.0 or
+                if (not cont.get("reached", True) or not rejn.get("reached", True) or
+                        track_mod._hav_nm((ce["lat"], ce["lon"]), (dlat, dlon)) > 1.0 or
                         track_mod._hav_nm((re_["lat"], re_["lon"]), (rj["lat"], rj["lon"])) > 1.0):
                     say(f"rejoin tab leg {i} {side}: truncated isochrone — cell skipped")
                     continue
@@ -594,21 +608,41 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
     subs = _subfields(wf)
     per = max(40, int(time_budget_s / (len(subs) + 1)))     # split the budget across routes
 
-    # consensus = the blended field (all models) — the baseline "best guess"
-    consensus = optimizer.optimize_course(definition, course_id, start_epoch, wf, time_budget_s=per,
-                                          jib_crossovers=jib_crossovers, sail_config=sail_config, emit_exploration=False, cur=cur,
-                                          waves=waves, helm_factor=helm_factor,
-                                          polar_adjustments=polar_adjustments, wave_coeffs=wave_coeffs)
+    marks, _sk, _c = race_def.course_to_marks(definition, course_id)
+    finish_pt = (marks[-1][2], marks[-1][3]) if marks else None
+
+    def _route(field, budget):
+        return optimizer.optimize_course(definition, course_id, start_epoch, field,
+                                         time_budget_s=budget, jib_crossovers=jib_crossovers,
+                                         sail_config=sail_config, emit_exploration=False, cur=cur,
+                                         waves=waves, helm_factor=helm_factor,
+                                         polar_adjustments=polar_adjustments,
+                                         wave_coeffs=wave_coeffs)
+
+    # consensus = the blended field (all models) — the baseline "best guess". It anchors every
+    # number in the bundle, so an incomplete one gets one retry at double budget and otherwise
+    # fails the build by name (#31) — a half-course consensus must never be frozen aboard.
+    consensus = _route(wf, per)
+    if _truncated(consensus, finish_pt):
+        log.append(f"consensus: incomplete at {per}s ({_truncated(consensus, finish_pt)}) — "
+                   "retrying ×2 budget")
+        consensus = _route(wf, per * 2)
+    why = _truncated(consensus, finish_pt)
+    if why:
+        return {"available": False, "windfield": wf.status(), "log": log,
+                "note": f"the consensus route did not finish the course — {why}. Re-run with a "
+                        "larger time budget, or check the course marks / obstacles near it."}
     consensus_side = _favored_side(definition, course_id, consensus)
 
-    # one candidate route per model scenario
-    candidates = []
+    # one candidate route per model scenario — an incomplete one is DROPPED (its short total_hours
+    # would skew the variant median and decision_spread_min) and named in `dropped_scenarios`
+    candidates, dropped = [], []
     for model, sub in subs.items():
-        r = optimizer.optimize_course(definition, course_id, start_epoch, sub, time_budget_s=per,
-                                      jib_crossovers=jib_crossovers, sail_config=sail_config, emit_exploration=False, cur=cur,
-                                      waves=waves, helm_factor=helm_factor,
-                                      polar_adjustments=polar_adjustments, wave_coeffs=wave_coeffs)
-        if not r.get("available"):
+        r = _route(sub, per)
+        why = _truncated(r, finish_pt)
+        if why:
+            dropped.append({"model": model, "why": why})
+            log.append(f"scenario {model}: incomplete route ({why}) — dropped")
             continue
         legs = r.get("legs") or []
         candidates.append({
@@ -636,6 +670,7 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
             "first_heading": (rep.get("legs") or [{}])[0].get("first_heading"),
             "route_confidence": rep.get("route_confidence"),
             "route": {"legs": rep.get("legs"), "path": rep.get("path"),
+                      "leg_end_idx": rep.get("leg_end_idx"),
                       "total_sailed_nm": rep.get("total_sailed_nm"),
                       "total_tacks": rep.get("total_tacks"),
                       "sail_plan": rep.get("sail_plan")},
@@ -649,8 +684,6 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
     # ---- Playbook v2: the external scenario fan over the SAME field (docs/PLAYBOOK_V2.md) -------
     v2 = None
     if v2_scenarios:
-        marks, _sk, _c = race_def.course_to_marks(definition, course_id)
-        finish_pt = (marks[-1][2], marks[-1][3]) if marks else None
         # FAN DEPTH — the method behind 'how many scenarios' (user ask 2026-07-08): each scenario
         # is a full isochrone re-route, so depth trades synthesis wall-clock for decision-space
         # coverage. quick = race-morning refresh; standard = the always-informative core grid;
@@ -688,11 +721,13 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
             "favored_side": consensus_side, "total_hours": consensus.get("total_hours"),
             "route_confidence": consensus.get("route_confidence"),
             "legs": consensus.get("legs"), "path": consensus.get("path"),
+            "leg_end_idx": consensus.get("leg_end_idx"),
         },
         "variants": variants,
         "scenarios": [{"model": c["scenario"], "favored_side": c["favored_side"],
                        "total_hours": c["total_hours"], "first_heading": c["first_heading"]}
                       for c in candidates],
+        "dropped_scenarios": dropped,     # per-model routes that didn't finish (#31) — not used
         "windfield": wf.status(), "current": cur.status(), "waves": waves.status(),
         "realized": consensus.get("realized"), "log": log,
         "skipped_marks": consensus.get("skipped_marks", []),
