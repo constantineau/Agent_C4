@@ -265,6 +265,23 @@ def _compute(nav, remaining, slat, slon, live, bundle, avoid, polys, ctx):
             sail = (sails.get_sail_advice(tws_l, twa_l) or {}).get("optimal_sail")
         leg = routing.route_leg(cur[0], cur[1], m["lat"], m["lon"], wind, t, live[1] or 0,
                                 avoid=avoid, avoid_polys=polys)
+        if not leg.get("reached", True):
+            # #31: the leg never closed on its mark (search horizon out on a long light-air leg, or
+            # every heading blocked by the island/zone homework). Chaining the next leg from the
+            # mark would jump the path there for free and understate the ETA — so refuse by name.
+            done = [x["mark"] for x in leg_summ]
+            out = {"available": False, "off_playbook": True, "route": nav["route"],
+                   "degraded": True, "complete": False,
+                   "incomplete": {"to": m["name"], "short_nm": leg.get("short_nm"),
+                                  "routed_marks": done,
+                                  "horizon_h": round(routing.MAX_STEPS * routing.DT_H, 1)},
+                   "wind_source": "forecast" if use_fcst else "live wind (no forecast)",
+                   "note": (f"Onboard re-route INCOMPLETE — the leg to {m['name']} stopped "
+                            f"{leg.get('short_nm')} nm short of the mark (no clear path within "
+                            f"the {routing.MAX_STEPS * routing.DT_H:.0f} h search horizon, or the "
+                            "obstacle homework blocks it). No route offered rather than a wrong one.")}
+            _cache.update(ctx=dict(ctx, from_live_wind=not use_fcst), t=time.time(), val=out)
+            return out
         full_path += leg["path"][1:]          # skip the duplicated leg-start point
         all_legs += leg["legs"]
         leg_summ.append({"mark": m["name"], "eta_min": round((leg["reached_t"] - t) / 60, 1),

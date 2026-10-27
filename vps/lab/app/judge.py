@@ -207,6 +207,16 @@ def _tactics(d, race_id, pb, models, log):
     if not oracle.get("available", True) and oracle.get("note"):
         return {"available": False, "start_epoch": start,
                 "note": "oracle route failed: " + oracle["note"]}
+    # COMPLETENESS GUARD (#31, same rule as retro.py): an oracle that never reaches the finish
+    # (time budget out / a leg blocked) would score regret, time-behind and XTE against half a
+    # course. Refuse the tactics half by name; the boat's own speed is still scored on `wf`.
+    _mk, _, _ = race_def.course_to_marks(d, course_id)
+    why = optimizer.incomplete_reason(oracle, (_mk[-1][2], _mk[-1][3]) if _mk else None)
+    if why:
+        return {"available": False, "start_epoch": start, "wf": wf,
+                "windfield": {**wf.status(), "basis": wind_basis},
+                "note": f"oracle route incomplete — {why}; tactics not scored against a "
+                        "partial course"}
 
     log("building the actual-current field (for through-water scoring)…")
     try:
