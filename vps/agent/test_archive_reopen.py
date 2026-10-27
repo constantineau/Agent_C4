@@ -119,5 +119,47 @@ with tempfile.TemporaryDirectory() as d:
     check("and so does the engine", count(src) == 12)
     w_new.close()
 
+print("a rotation landing between the connect and the identity stat is caught:")
+with tempfile.TemporaryDirectory() as d:
+    db = os.path.join(d, "archive.db")
+    make_archive(db, 5)
+    ds.ARCHIVE_DB = db
+    ds.ARCHIVE_RECHECK_S = 1e9          # no periodic recheck: the open itself must get it right
+    real_ident = ds._file_identity
+    calls = {"n": 0}
+
+    def rotate_after_connect(path):
+        calls["n"] += 1
+        if calls["n"] == 2:             # the stat AFTER the first connect: rotate right before it
+            os.rename(db, os.path.join(d, "archive.corrupt-20261027T160000.db"))
+            make_archive(db, 8)
+        return real_ident(path)
+
+    ds._file_identity = rotate_after_connect
+    try:
+        src = source()
+        n = count(src)
+    finally:
+        ds._file_identity = real_ident
+    check("the open noticed the move and retried onto the new file", n == 8 and calls["n"] >= 4)
+    check("the cached identity is the NEW file's", src._archive_local.ident == real_ident(db))
+    check("and it stays on the new file", count(src) == 8)
+
+    calls["n"] = 0
+
+    def always_moving(path):
+        calls["n"] += 1
+        return (0, calls["n"])          # a file that never holds still
+
+    ds._file_identity = always_moving
+    try:
+        src = source()
+        count(src)
+        ident = src._archive_local.ident
+    finally:
+        ds._file_identity = real_ident
+    check("if it never settles, the identity is left unknown (so the next recheck reopens)",
+          ident is None)
+
 print("\n" + ("PASS" if ok else "FAIL"))
 raise SystemExit(0 if ok else 1)

@@ -114,6 +114,39 @@ def _cutoff_str(minutes):
     return c.strftime("%Y-%m-%dT%H:%M:%S"), c.timestamp()
 
 
+def _open_archive_ro(attempts=3):
+    """Open the archive read-only and return (conn, identity of the file it is on).
+
+    The identity is taken BEFORE the connect and again AFTER a first read (the read is what
+    makes SQLite open the -wal, by name). If the archiver rotated the file in between, the two
+    differ and the connection may be on the old file, or on the old db with the new -wal: close
+    and try again. If it keeps moving, the identity is returned as None, which makes the next
+    recheck reopen — the connection never gets cached under a file it is not on."""
+    conn = None
+    for _ in range(attempts):
+        before = _file_identity(ARCHIVE_DB)
+        conn = sqlite3.connect(
+            f"file:{ARCHIVE_DB}?mode=ro", uri=True, timeout=30, check_same_thread=False
+        )
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchall()
+        except sqlite3.Error:
+            pass                    # a broken file still gets a connection; queries will say so
+        after = _file_identity(ARCHIVE_DB)
+        if before is not None and before == after:
+            return conn, after
+        try:
+            conn.close()
+        except Exception:
+            pass
+    conn = sqlite3.connect(
+        f"file:{ARCHIVE_DB}?mode=ro", uri=True, timeout=30, check_same_thread=False
+    )
+    conn.row_factory = sqlite3.Row
+    return conn, None
+
+
 class OnboardSource:
     """Local Pi data backend — same interface as CloudSource, byte-identical outputs."""
 
@@ -156,12 +189,8 @@ class OnboardSource:
                 conn = None
                 _AIS_SRC_CACHE.pop(ARCHIVE_DB, None)   # learned from the old file
         if conn is None:
-            conn = sqlite3.connect(
-                f"file:{ARCHIVE_DB}?mode=ro", uri=True, timeout=30, check_same_thread=False
-            )
-            conn.row_factory = sqlite3.Row
+            conn, local.ident = _open_archive_ro()
             local.conn = conn
-            local.ident = _file_identity(ARCHIVE_DB)
             local.checked = now
         return conn
 

@@ -122,27 +122,81 @@ def integrity_ok(conn) -> bool:
         return False
 
 
-def rotate_corrupt(path: Path = ARCHIVE_DB, stamp=None) -> Path:
-    """Move a corrupt archive (and its -wal/-shm) aside and return the new path.
+_SIDECARS = ("", "-wal", "-shm")
+
+
+def _rotation_marker(path: Path) -> Path:
+    """`archive.db.rotating`: names the destination of a rotation that has started and not
+    finished. Lives beside the archive so a restarted process finishes the same rotation."""
+    return path.with_name(path.name + ".rotating")
+
+
+def _present(path: Path):
+    return [sfx for sfx in _SIDECARS if Path(str(path) + sfx).exists()]
+
+
+def rotate_corrupt(path: Path = ARCHIVE_DB, stamp=None):
+    """Move a corrupt archive (and its -wal/-shm) aside and return the new path, or None when
+    there was nothing at `path` to move.
 
     Named `archive.corrupt-<YYYYmmddTHHMMSS>.db`, matching the two files a human created by
-    hand for exactly this. Kept, never deleted: salvage recovers almost all of it."""
-    stamp = stamp or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-    dest = path.with_name(f"{path.stem}.corrupt-{stamp}{path.suffix}")
-    # Second-resolution names collide when two rotations land in the same second, and a plain
-    # rename would then DELETE the first corrupt archive — the one thing this must never do.
-    # (Caught by test_brownout, which rotated twice in one second.)
-    n = 1
-    while Path(str(dest)).exists():
-        dest = path.with_name(f"{path.stem}.corrupt-{stamp}-{n}{path.suffix}")
-        n += 1
-    for suffix in ("", "-wal", "-shm"):
-        src = Path(str(path) + suffix)
-        if src.exists():
-            src.rename(Path(str(dest) + suffix))
+    hand for exactly this. Kept, never deleted: salvage recovers almost all of it.
+
+    RESUMABLE. The three renames are three steps, and any one can fail (or the process can die
+    between them). A db moved without its -wal leaves committed rows beside the ORIGINAL name,
+    where a fresh archive would pick them up as its own WAL. So the destination is written to
+    `archive.db.rotating` before the first rename and removed only after the last; a call that
+    finds the marker finishes moving whatever is still at `path` to that same destination."""
+    marker = _rotation_marker(path)
+    dest = None
+    try:
+        name = marker.read_text().strip()
+        dest = path.with_name(name) if name else None
+    except FileNotFoundError:
+        pass
+    if dest is not None:
+        print(f"[archive] finishing an interrupted rotation -> {dest.name}", flush=True)
+    else:
+        if not _present(path):
+            return None
+        stamp = stamp or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+        dest = path.with_name(f"{path.stem}.corrupt-{stamp}{path.suffix}")
+        # Second-resolution names collide when two rotations land in the same second, and a
+        # plain rename would then DELETE the first corrupt archive — the one thing this must
+        # never do. (Caught by test_brownout, which rotated twice in one second.)
+        n = 1
+        while any(Path(str(dest) + sfx).exists() for sfx in _SIDECARS):
+            dest = path.with_name(f"{path.stem}.corrupt-{stamp}-{n}{path.suffix}")
+            n += 1
+        tmp = marker.with_name(marker.name + ".tmp")
+        tmp.write_text(dest.name)
+        os.replace(tmp, marker)
+    for sfx in _SIDECARS:
+        src = Path(str(path) + sfx)
+        if not src.exists():
+            continue
+        target = Path(str(dest) + sfx)
+        if target.exists():               # never overwrite a kept file; park beside it
+            n = 1
+            while Path(f"{target}.{n}").exists():
+                n += 1
+            target = Path(f"{target}.{n}")
+            print(f"[archive] {target.name}: destination already taken, kept beside it",
+                  flush=True)
+        src.rename(target)                # raises on failure: the marker stays, retry resumes
+    marker.unlink(missing_ok=True)
     print(f"[archive] CORRUPT archive moved aside -> {dest.name}; starting a fresh one. "
           f"KEEP that file: pi/archiver/tools/salvage.py recovers ~all of it.", flush=True)
     return dest
+
+
+def _clear_for_fresh(path: Path):
+    """Before opening `path`: finish an interrupted rotation, and move aside a -wal/-shm left
+    at the path with no database (SQLite would replay a foreign WAL into the new file). Returns
+    where things went, or None when there was nothing to do."""
+    if _rotation_marker(path).exists() or (not path.exists() and _present(path)):
+        return rotate_corrupt(path)
+    return None
 
 
 def open_db_resilient(path: Path = ARCHIVE_DB):
@@ -152,7 +206,11 @@ def open_db_resilient(path: Path = ARCHIVE_DB):
     rotated = None
     conn = None
     try:
+        finished = _clear_for_fresh(path)
         conn = open_db(path)
+        if finished is not None:
+            _note_rotation(conn, finished)
+            return conn, finished
         if not integrity_ok(conn):
             raise sqlite3.DatabaseError("quick_check failed: database disk image is malformed")
         return conn, None
@@ -160,15 +218,9 @@ def open_db_resilient(path: Path = ARCHIVE_DB):
         if not _is_corruption(exc):
             raise
         print(f"[archive] {path.name} is unusable ({exc})", flush=True)
-        if conn is not None:
-            try:
-                conn.close()
-            except Exception:
-                pass
-        rotated = rotate_corrupt(path)
-        conn = open_db(path)          # CREATE TABLE IF NOT EXISTS self-initialises
-        _note_rotation(conn, rotated)
-        return conn, rotated
+        # the same close -> resumable move -> check -> open sequence as a mid-run rotation;
+        # CREATE TABLE IF NOT EXISTS self-initialises the fresh file
+        return reopen_fresh(conn, path)
 
 
 def reopen_fresh(conn, path: Path = ARCHIVE_DB):
@@ -187,15 +239,22 @@ def reopen_fresh(conn, path: Path = ARCHIVE_DB):
     SQLite 3.46 notices the move and skips that cleanup (verified), but the archive's safety
     should not rest on that. The cost is a window with no connection at all: the caller sets
     its handle to None BEFORE calling, and None is a handled state (disk guard: free space
-    unknown; pruner: skips; next flush: retries this). If an earlier attempt already moved the
-    file but failed to open the new one, there is nothing left to move."""
+    unknown; pruner: skips; next flush: retries this). A half-done move (db moved, -wal not)
+    is finished to the same destination before any fresh file is opened — see
+    `rotate_corrupt`."""
     if conn is not None:
-        try:
-            conn.close()
-        except Exception as exc:          # a corrupt file may fail its close-time checkpoint
-            print(f"[archive] closing the corrupt archive raised ({exc}); moving it anyway",
-                  flush=True)
-    rotated = rotate_corrupt(path) if path.exists() else None
+        # Under the write lock: the pruner runs on another thread and may be mid-DELETE on this
+        # very connection. Closing it underneath that is undefined; waiting for it is not.
+        with _WRITE_LOCK:
+            try:
+                conn.close()
+            except Exception as exc:      # a corrupt file may fail its close-time checkpoint
+                print(f"[archive] closing the corrupt archive raised ({exc}); moving it anyway",
+                      flush=True)
+    rotated = rotate_corrupt(path)        # resumes a half-done one; None if nothing is left
+    left = _present(path)
+    if left or _rotation_marker(path).exists():
+        raise OSError(f"rotation incomplete, still at {path.name}: {left}")
     new = open_db(path)
     if rotated is not None:
         _note_rotation(new, rotated)
@@ -816,6 +875,10 @@ async def pruner(state, loop):
                 await loop.run_in_executor(None, prune, state["conn"])
         except Exception as exc:      # never let housekeeping kill the recorder
             print(f"[archive] prune error: {exc}", flush=True)
+            if _is_corruption(exc):
+                # the file is bad even if the last write was not: the flusher rotates it next
+                state["rotate_pending"] = True
+                state["_status_dirty"] = True
         await asyncio.sleep(PRUNE_EVERY_S)
 
 

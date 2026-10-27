@@ -395,6 +395,15 @@ with tempfile.TemporaryDirectory() as d:
         check("no prune on a file that just reported corruption", pruned == [])
         asyncio.run(one_prune({"conn": None}))
         check("no prune through a missing connection", pruned == [])
+
+        def corrupt_prune(conn, *a, **k):
+            raise sqlite3.DatabaseError("database disk image is malformed")
+
+        archiver.prune = corrupt_prune
+        st = {"conn": object()}
+        asyncio.run(one_prune(st))
+        check("a prune that hits corruption marks the file for rotation",
+              st.get("rotate_pending") is True)
     finally:
         archiver.prune, archiver.PRUNE_EVERY_S = real_prune, real_every
 
@@ -460,6 +469,102 @@ with tempfile.TemporaryDirectory() as d:
     check(f"a separate reader sees every requeued row in the fresh archive ({got}/250)",
           got == 250 and buf == [])
     state["conn"].close()
+
+
+# --- 9. a rotation that fails halfway is finished, never split (Codex round 4) --------------
+import pathlib  # noqa: E402
+
+print("partial rotation: the db moves, the -wal rename fails once; the retry finishes it:")
+
+
+def wal_archive_with_reader(db, rows):
+    """A WAL archive whose rows are still in its -wal, with a second connection open (the
+    engine, aboard) so closing the writer does not fold the WAL in and delete it."""
+    w = archiver.open_db(db)
+    w.execute("PRAGMA wal_autocheckpoint=0")
+    archiver.write_rows(w, [ROW] * rows)
+    r = sqlite3.connect(db)
+    r.execute("SELECT count(*) FROM readings").fetchone()
+    return w, r
+
+
+with tempfile.TemporaryDirectory() as d:
+    db = Path(d) / "archive.db"
+    w, r = wal_archive_with_reader(db, 1500)
+    real_rename = pathlib.Path.rename
+    failed = {"n": 0}
+
+    def rename_fails_on_wal_once(self, target):
+        if str(self).endswith("-wal") and failed["n"] == 0:
+            failed["n"] += 1
+            raise OSError("I/O error")
+        return real_rename(self, target)
+
+    pathlib.Path.rename = rename_fails_on_wal_once
+    try:
+        try:
+            archiver.reopen_fresh(w, db)
+            first_raised = False
+        except OSError:
+            first_raised = True
+    finally:
+        pathlib.Path.rename = real_rename
+    marker = archiver._rotation_marker(db)
+    check("the first attempt failed on the -wal", first_raised and failed["n"] == 1)
+    check("...after moving the db (the split state)",
+          not db.exists() and Path(str(db) + "-wal").exists())
+    check("...and the marker names where the rest must go", marker.exists())
+    dest = db.with_name(marker.read_text().strip())
+    new, rotated = archiver.reopen_fresh(None, db)
+    check("the retry finished the SAME rotation", rotated == dest and not marker.exists())
+    check("the rotated db and its -wal sit together", dest.exists()
+          and Path(str(dest) + "-wal").exists())
+    check("the fresh archive started empty: no foreign WAL replayed into it",
+          new.execute("SELECT count(*) FROM readings").fetchone()[0] == 0)
+    r.close()
+    kept = sqlite3.connect(dest)
+    check("the rotated archive + its -wal still hold all 1500 rows",
+          kept.execute("SELECT count(*) FROM readings").fetchone()[0] == 1500)
+    kept.close()
+    new.close()
+
+print("a process restart mid-rotation: startup finishes it before opening anything:")
+with tempfile.TemporaryDirectory() as d:
+    db = Path(d) / "archive.db"
+    w, r = wal_archive_with_reader(db, 700)
+    w.close()
+    dest = db.with_name("archive.corrupt-20261027T150000.db")
+    archiver._rotation_marker(db).write_text(dest.name)
+    db.rename(dest)                                     # ...and then the process died
+    r.close()                                           # (the reader lets go of the -wal later)
+    leftover = Path(str(db) + "-wal").exists()
+    conn, rotated = archiver.open_db_resilient(db)
+    check("(setup) the -wal was left at the original name", leftover)
+    check("startup finished the recorded rotation", rotated == dest
+          and not archiver._rotation_marker(db).exists())
+    check("the fresh archive is empty",
+          conn.execute("SELECT count(*) FROM readings").fetchone()[0] == 0)
+    kept = sqlite3.connect(dest)
+    check("the rotated archive has its rows back with its -wal",
+          kept.execute("SELECT count(*) FROM readings").fetchone()[0] == 700)
+    kept.close()
+    conn.close()
+
+print("an orphaned -wal with no database and no rotation in progress is moved aside:")
+with tempfile.TemporaryDirectory() as d:
+    db = Path(d) / "archive.db"
+    w, r = wal_archive_with_reader(db, 300)
+    w.close()
+    db.rename(Path(d) / "moved-by-hand.db")             # someone moved only the db
+    r.close()
+    orphan = Path(str(db) + "-wal").exists()
+    conn, rotated = archiver.open_db_resilient(db)
+    check("(setup) a -wal sat at the path with no db", orphan)
+    check("it was moved aside under a corrupt- name, not reused",
+          rotated is not None and Path(str(rotated) + "-wal").exists())
+    check("the fresh archive is empty",
+          conn.execute("SELECT count(*) FROM readings").fetchone()[0] == 0)
+    conn.close()
 
 
 # --- 6. startup: count(*) corruption rotates --------------------------------------------------
