@@ -233,15 +233,46 @@ check("return-leg dest stays on the return leg (5 or 6)", sent["payload"]["dest_
 
 print("   boat exactly on an interior waypoint")
 LINE = [{"lat": 44.0 + 0.01 * i, "lon": -82.0} for i in range(4)]
+CLEAR = lambda a, b: False      # noqa: E731 — an obstacle test that finds open water everywhere
 for at in (1, 2):
-    d = gpsout._dest_index(LINE, (LINE[at]["lat"], LINE[at]["lon"]))
+    d = gpsout._dest_index(LINE, (LINE[at]["lat"], LINE[at]["lon"]), blocked=CLEAR)
     check(f"boat at waypoint {at} → dest {at + 1} (not {at})", d == at + 1)
-d = gpsout._dest_index(LINE, (LINE[2]["lat"] + 0.0003, LINE[2]["lon"]))   # ~0.02 nm past it
+d = gpsout._dest_index(LINE, (LINE[2]["lat"] + 0.0003, LINE[2]["lon"]), blocked=CLEAR)  # ~0.02 nm past
 check("just past a waypoint (within arrival) → the next one", d == 3)
-d = gpsout._dest_index(LINE, (LINE[1]["lat"] + 0.005, LINE[1]["lon"]))    # mid-segment 1→2
+d = gpsout._dest_index(LINE, (LINE[1]["lat"] + 0.005, LINE[1]["lon"]), blocked=CLEAR)  # mid 1→2
 check("mid-segment → the segment's end", d == 2)
 check("at the last waypoint → stays on it (no overrun)",
-      gpsout._dest_index(LINE, (LINE[3]["lat"], LINE[3]["lon"])) == 3)
+      gpsout._dest_index(LINE, (LINE[3]["lat"], LINE[3]["lon"]), blocked=CLEAR) == 3)
+check("no obstacle test available → keep the attained waypoint (conservative)",
+      gpsout._dest_index(LINE, (LINE[2]["lat"], LINE[2]["lon"])) == 2)
+
+print("   arrival skip never shortcuts an avoidance vertex (Codex round 4)")
+DOG = [{"lat": 44.0, "lon": -82.002}, {"lat": 44.001, "lon": -82.0}, {"lat": 44.0, "lon": -81.998}]
+ROCK = [(44.0, -82.0, 0.04)]
+rock = lambda a, b: routing._seg_blocked(a["lat"], a["lon"], b["lat"], b["lon"], ROCK)  # noqa: E731
+BOAT = (44.0006, -82.0008)
+check("(setup) both route segments clear the rock", not rock(DOG[0], DOG[1]) and not rock(DOG[1], DOG[2]))
+check("(setup) boat is within arrival range of waypoint 1",
+      NAV._hav_nm(BOAT[0], BOAT[1], DOG[1]["lat"], DOG[1]["lon"]) <= gpsout.ARRIVE_NM)
+check("(setup) boat → waypoint 2 crosses the rock", rock({"lat": BOAT[0], "lon": BOAT[1]}, DOG[2]))
+check("rock in the way → keeps steering to waypoint 1", gpsout._dest_index(DOG, BOAT, blocked=rock) == 1)
+check("same geometry in clear water → advances to waypoint 2",
+      gpsout._dest_index(DOG, BOAT, blocked=CLEAR) == 2)
+check("no obstacle test → keeps waypoint 1", gpsout._dest_index(DOG, BOAT) == 1)
+# the same through show(): the bundle's island homework is the obstacle test
+bundle_rock = {"race_id": "u", "recommended": "m",
+               "obstacles": {"islands": [{"lat": 44.0, "lon": -82.0, "radius_nm": 0.04}]},
+               "variants": [{"id": "m", "route": {"path": DOG}}]}
+deviation._load_playbook = lambda: bundle_rock
+_orig_ctx = gpsout._course_context
+gpsout._course_context = lambda route=None: ([], BOAT, None)     # fix only, no course bounds
+gpsout.show()
+check("show(): island homework keeps the steer-to on waypoint 1", sent["payload"]["dest_index"] == 1)
+bundle_rock["obstacles"]["islands"][0]["lat"] = 45.0          # move the rock far away
+gpsout.show()
+check("show(): rock elsewhere → advances to waypoint 2", sent["payload"]["dest_index"] == 2)
+gpsout._course_context = _orig_ctx
+
 check("next mark is the path start (pre-start) → 0",
       gpsout._dest_index(LINE, (43.99, -82.0), {0: 0, 1: 3}, 0) == 0)
 

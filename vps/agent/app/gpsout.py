@@ -159,14 +159,19 @@ def _blocked_fn(bundle):
 ARRIVE_NM = 0.05     # boat this close to a waypoint has attained it — steer to the one after
 
 
-def _dest_index(pts, boat, mark_pos=None, next_k=None):
+def _dest_index(pts, boat, mark_pos=None, next_k=None, blocked=None):
     """The plotter's steer-to: project the boat onto the downsampled path and return the index of
     the first waypoint AHEAD of it. `mark_pos` is {course mark number: index in pts}; with the
     navigator's next-mark number `next_k` the search is confined to the CURRENT leg (previous
     mark's vertex → next mark's), so an out-and-back course can't snap the boat onto the other
-    leg. Ties (the boat exactly on a waypoint, or off a corner where both segments are nearest
-    at it) go to the LATER segment, and a waypoint the boat has reached (within ARRIVE_NM) is
-    skipped. Next mark = the path's first vertex (pre-start) → 0. No fix → 1."""
+    leg. Next mark = the path's first vertex (pre-start) → 0. No fix → 1.
+
+    Moving PAST the projected waypoint — the later segment winning a tie (boat on a waypoint, or
+    off a corner both segments are nearest at), or a waypoint the boat is within ARRIVE_NM of — is
+    a shortcut: the boat would steer straight at the waypoint after it. That is allowed only when
+    `blocked` (the same obstacle test the downsample used) says the boat→that-waypoint line is
+    clear. A waypoint may be an obstacle-avoidance vertex, so with no obstacle test available the
+    attained waypoint is kept (conservative)."""
     if not boat or boat[0] is None or len(pts) < 2:
         return 1
     last = len(pts) - 1
@@ -178,13 +183,21 @@ def _dest_index(pts, boat, mark_pos=None, next_k=None):
             return 0
         prev = [v for k, v in mark_pos.items() if k < next_k and v < hi]
         lo = max(prev) if prev else 0
-    best = min(range(lo, max(lo + 1, hi)),
-               key=lambda i: (round(routing._pt_to_seg_nm(boat[0], boat[1], pts[i]["lat"], pts[i]["lon"],
-                                                          pts[i + 1]["lat"], pts[i + 1]["lon"]), 6),
-                              -i))
+    here = {"lat": boat[0], "lon": boat[1]}
+    dist = {i: round(routing._pt_to_seg_nm(boat[0], boat[1], pts[i]["lat"], pts[i]["lon"],
+                                           pts[i + 1]["lat"], pts[i + 1]["lon"]), 6)
+            for i in range(lo, max(lo + 1, hi))}
+    best = min(dist, key=lambda i: (dist[i], i))          # earliest nearest segment
     dest = min(last, best + 1)
-    while dest < last and NAV._hav_nm(boat[0], boat[1], pts[dest]["lat"], pts[dest]["lon"]) <= ARRIVE_NM:
-        dest += 1
+
+    def _clear_to(j):
+        return blocked is not None and not blocked(here, pts[j])
+
+    if dist.get(best + 1) == dist[best] and dest < last and _clear_to(dest + 1):
+        dest += 1                                         # tie → the later segment, if clear
+    while (dest < last and NAV._hav_nm(boat[0], boat[1], pts[dest]["lat"], pts[dest]["lon"]) <= ARRIVE_NM
+           and _clear_to(dest + 1)):
+        dest += 1                                         # attained → the next one, if clear
     return dest
 
 
@@ -253,10 +266,12 @@ def show(source: str = "playbook", variant=None, route=None):
                  if next_k is not None else {})
     else:
         verts = _mark_vertices(path, marks, leg_end_idx=ends)
-    idx = _downsample_idx(path, MAX_WPTS, set(verts.values()), _blocked_fn(deviation._load_playbook()))
+    blocked = _blocked_fn(deviation._load_playbook())
+    idx = _downsample_idx(path, MAX_WPTS, set(verts.values()), blocked)
     pts = [path[i] for i in idx]
     where = {i: j for j, i in enumerate(idx)}
-    dest = _dest_index(pts, boat, {k: where[i] for k, i in verts.items() if i in where}, next_k)
+    dest = _dest_index(pts, boat, {k: where[i] for k, i in verts.items() if i in where}, next_k,
+                       blocked)
     wpts = [{"name": f"C4-{i + 1:02d}", "lat": p.get("lat"), "lon": p.get("lon"),
              "t": p.get("t")} for i, p in enumerate(pts)]
     st = _post("/route", {"name": wire_name, "waypoints": wpts, "dest_index": dest})
