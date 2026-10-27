@@ -21,10 +21,12 @@ Identical on bench and boat; the only difference is CAN_IFACE (vcan0 vs can0), u
 Signal K.
 """
 import asyncio
+import errno
 import json
 import os
 import sqlite3
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -121,27 +123,114 @@ def integrity_ok(conn) -> bool:
         return False
 
 
-def rotate_corrupt(path: Path = ARCHIVE_DB, stamp=None) -> Path:
-    """Move a corrupt archive (and its -wal/-shm) aside and return the new path.
+_SIDECARS = ("", "-wal", "-shm")
+
+
+def _fsync_dir(d):
+    """fsync a DIRECTORY, which is what makes a rename/create/unlink in it survive a power cut
+    (fsyncing the file alone does not). Two of this archive's four corruptions were power cuts.
+    A filesystem that cannot fsync a directory (EINVAL) is logged, not fatal."""
+    fd = os.open(str(d), os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    except OSError as exc:
+        if exc.errno != errno.EINVAL:
+            raise
+        print(f"[archive] cannot fsync directory {d} ({exc}); continuing", flush=True)
+    finally:
+        os.close(fd)
+
+
+def _durable_write(path: Path, text: str):
+    """Write `text` to `path` so that after a power cut it is either the old file or the
+    complete new one: temp file, fsync it, rename into place, fsync the directory."""
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w") as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+    _fsync_dir(path.parent)
+
+
+def _rotation_marker(path: Path) -> Path:
+    """`archive.db.rotating`: names the destination of a rotation that has started and not
+    finished. Lives beside the archive so a restarted process finishes the same rotation."""
+    return path.with_name(path.name + ".rotating")
+
+
+def _present(path: Path):
+    return [sfx for sfx in _SIDECARS if Path(str(path) + sfx).exists()]
+
+
+def rotate_corrupt(path: Path = ARCHIVE_DB, stamp=None):
+    """Move a corrupt archive (and its -wal/-shm) aside and return the new path, or None when
+    there was nothing at `path` to move.
 
     Named `archive.corrupt-<YYYYmmddTHHMMSS>.db`, matching the two files a human created by
-    hand for exactly this. Kept, never deleted: salvage recovers almost all of it."""
-    stamp = stamp or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-    dest = path.with_name(f"{path.stem}.corrupt-{stamp}{path.suffix}")
-    # Second-resolution names collide when two rotations land in the same second, and a plain
-    # rename would then DELETE the first corrupt archive — the one thing this must never do.
-    # (Caught by test_brownout, which rotated twice in one second.)
-    n = 1
-    while Path(str(dest)).exists():
-        dest = path.with_name(f"{path.stem}.corrupt-{stamp}-{n}{path.suffix}")
-        n += 1
-    for suffix in ("", "-wal", "-shm"):
-        src = Path(str(path) + suffix)
-        if src.exists():
-            src.rename(Path(str(dest) + suffix))
+    hand for exactly this. Kept, never deleted: salvage recovers almost all of it.
+
+    RESUMABLE. The three renames are three steps, and any one can fail (or the process can die
+    between them). A db moved without its -wal leaves committed rows beside the ORIGINAL name,
+    where a fresh archive would pick them up as its own WAL. So the destination is written to
+    `archive.db.rotating` before the first rename and removed only after the last; a call that
+    finds the marker finishes moving whatever is still at `path` to that same destination.
+
+    DURABLE, because the failure this exists for is a power cut: the marker is written durably
+    (temp + fsync + rename + directory fsync) BEFORE anything moves; the directory is fsynced
+    after the moves; the marker is removed and the directory fsynced again before returning —
+    so before any caller opens a fresh archive. Without that, a brownout can keep the db rename
+    and lose the marker's contents, and the restart parks the WAL somewhere else."""
+    marker = _rotation_marker(path)
+    dest = None
+    try:
+        name = marker.read_text().strip()
+        dest = path.with_name(name) if name else None
+    except FileNotFoundError:
+        pass
+    if dest is not None:
+        print(f"[archive] finishing an interrupted rotation -> {dest.name}", flush=True)
+    else:
+        if not _present(path):
+            return None
+        stamp = stamp or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+        dest = path.with_name(f"{path.stem}.corrupt-{stamp}{path.suffix}")
+        # Second-resolution names collide when two rotations land in the same second, and a
+        # plain rename would then DELETE the first corrupt archive — the one thing this must
+        # never do. (Caught by test_brownout, which rotated twice in one second.)
+        n = 1
+        while any(Path(str(dest) + sfx).exists() for sfx in _SIDECARS):
+            dest = path.with_name(f"{path.stem}.corrupt-{stamp}-{n}{path.suffix}")
+            n += 1
+        _durable_write(marker, dest.name)
+    for sfx in _SIDECARS:
+        src = Path(str(path) + sfx)
+        if not src.exists():
+            continue
+        target = Path(str(dest) + sfx)
+        if target.exists():               # never overwrite a kept file; park beside it
+            n = 1
+            while Path(f"{target}.{n}").exists():
+                n += 1
+            target = Path(f"{target}.{n}")
+            print(f"[archive] {target.name}: destination already taken, kept beside it",
+                  flush=True)
+        src.rename(target)                # raises on failure: the marker stays, retry resumes
+    _fsync_dir(path.parent)               # the moves are on disk...
+    marker.unlink(missing_ok=True)
+    _fsync_dir(path.parent)               # ...and so is the marker's removal
     print(f"[archive] CORRUPT archive moved aside -> {dest.name}; starting a fresh one. "
           f"KEEP that file: pi/archiver/tools/salvage.py recovers ~all of it.", flush=True)
     return dest
+
+
+def _clear_for_fresh(path: Path):
+    """Before opening `path`: finish an interrupted rotation, and move aside a -wal/-shm left
+    at the path with no database (SQLite would replay a foreign WAL into the new file). Returns
+    where things went, or None when there was nothing to do."""
+    if _rotation_marker(path).exists() or (not path.exists() and _present(path)):
+        return rotate_corrupt(path)
+    return None
 
 
 def open_db_resilient(path: Path = ARCHIVE_DB):
@@ -151,7 +240,11 @@ def open_db_resilient(path: Path = ARCHIVE_DB):
     rotated = None
     conn = None
     try:
+        finished = _clear_for_fresh(path)
         conn = open_db(path)
+        if finished is not None:
+            _note_rotation(conn, finished)
+            return conn, finished
         if not integrity_ok(conn):
             raise sqlite3.DatabaseError("quick_check failed: database disk image is malformed")
         return conn, None
@@ -159,15 +252,64 @@ def open_db_resilient(path: Path = ARCHIVE_DB):
         if not _is_corruption(exc):
             raise
         print(f"[archive] {path.name} is unusable ({exc})", flush=True)
-        if conn is not None:
+        # the same close -> resumable move -> check -> open sequence as a mid-run rotation;
+        # CREATE TABLE IF NOT EXISTS self-initialises the fresh file
+        return reopen_fresh(conn, path)
+
+
+def reopen_fresh(conn, path: Path = ARCHIVE_DB):
+    """Rotate the archive aside WITHOUT re-checking it, and open a fresh one. Returns
+    (conn, rotated_to).
+
+    For when a statement has already raised a corruption error. `open_db_resilient` gates on
+    `PRAGMA quick_check`, and the boat's archive.db (2026-09-02) is the case where that gate is
+    not enough: a file can pass quick_check and still fail a full `count(*)` or a write. Asking
+    quick_check again would hand back the same broken file and drop every flush, forever. The
+    write already told us the file is bad; believe it.
+
+    Order matters: CLOSE the old connection first, then move the file and its -wal/-shm, then
+    open the fresh one. A WAL connection's close cleans up the sidecars BY NAME
+    (`archive.db-wal`/`-shm`); closed after the move, those names belong to the fresh archive.
+    SQLite 3.46 notices the move and skips that cleanup (verified), but the archive's safety
+    should not rest on that. The cost is a window with no connection at all: the caller sets
+    its handle to None BEFORE calling, and None is a handled state (disk guard: free space
+    unknown; pruner: skips; next flush: retries this). A half-done move (db moved, -wal not)
+    is finished to the same destination before any fresh file is opened — see
+    `rotate_corrupt`."""
+    if conn is not None:
+        # Under the write lock: the pruner runs on another thread and may be mid-DELETE on this
+        # very connection. Closing it underneath that is undefined; waiting for it is not.
+        with _WRITE_LOCK:
             try:
                 conn.close()
-            except Exception:
-                pass
-        rotated = rotate_corrupt(path)
-        conn = open_db(path)          # CREATE TABLE IF NOT EXISTS self-initialises
-        _note_rotation(conn, rotated)
-        return conn, rotated
+            except Exception as exc:      # a corrupt file may fail its close-time checkpoint
+                print(f"[archive] closing the corrupt archive raised ({exc}); moving it anyway",
+                      flush=True)
+    rotated = rotate_corrupt(path)        # resumes a half-done one; None if nothing is left
+    left = _present(path)
+    if left or _rotation_marker(path).exists():
+        raise OSError(f"rotation incomplete, still at {path.name}: {left}")
+    new = open_db(path)
+    if rotated is not None:
+        _note_rotation(new, rotated)
+    return new, rotated
+
+
+def open_for_run(path: Path = ARCHIVE_DB):
+    """Startup open: `open_db_resilient`, then the row count the startup log prints. If the
+    count itself hits corruption, rotate unconditionally — that `count(*)` is the exact line
+    the boat crash-looped on 4,000+ times after 2026-09-02. Returns (conn, rows, rotated)."""
+    conn, rotated = open_db_resilient(path)
+    try:
+        n = conn.execute("SELECT count(*) FROM readings").fetchone()[0]
+    except sqlite3.DatabaseError as exc:
+        if not _is_corruption(exc):
+            raise
+        print(f"[archive] {path.name} passed quick_check but count(*) failed ({exc}) — "
+              f"rotating it anyway", flush=True)
+        conn, rotated = reopen_fresh(conn, path)
+        n = conn.execute("SELECT count(*) FROM readings").fetchone()[0]
+    return conn, n, rotated
 
 
 def _note_rotation(conn, rotated: Path):
@@ -269,29 +411,241 @@ def parse_delta(msg, default_time, state=None):
 
 
 def write_rows(conn, rows):
+    """Insert one batch, all or nothing. A failed `executemany` leaves the rows before the
+    failing one inside an open transaction; without the rollback the requeued batch is written
+    again on top of them on the next commit (reproduced: an I/O error on row 2 of 2 left
+    [1, 1, 2])."""
     with _WRITE_LOCK:
-        conn.executemany(
-            "INSERT INTO readings (time, boat_id, source, path, value, str_value) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            rows,
-        )
-        conn.commit()
+        try:
+            conn.executemany(
+                "INSERT INTO readings (time, boat_id, source, path, value, str_value) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                rows,
+            )
+            conn.commit()
+        except BaseException:
+            try:
+                conn.rollback()
+            except Exception:
+                pass                    # a dead connection has nothing to roll back
+            raise
 
 
-async def flusher(conn, buf, loop, state=None, db=None, wake=None):
+# ---- DISK GUARD + RAM CAP -----------------------------------------------------------------
+# The archive shares the SD card with Signal K, Docker and the uplink's queue. At the dock it
+# grows ~7 GB/day (2026-08-30 → 09-02: 24 GB in 3.4 days), and the retention prune frees
+# nothing while a session is open. A full card takes the whole boat stack down with it, so
+# above DISK_HIGH_PCT the archiver stops writing full-res (the uplink's aggregates still go
+# ashore) and says so, and it resumes only below DISK_LOW_PCT so it does not flap at the line.
+#
+# "Used" counts the archive's own free pages as free: SQLite reuses deleted pages but never
+# gives them back to the filesystem, so after a prune `df` does not move — without this the
+# guard, once tripped, could never resume.
+DISK_HIGH_PCT = float(os.environ.get("ARCHIVE_DISK_HIGH_PCT", "85"))
+DISK_LOW_PCT = float(os.environ.get("ARCHIVE_DISK_LOW_PCT", "80"))
+# The HARD floor is on the filesystem's real free space, with no free-page credit: the WAL and
+# every new page need actual bytes, and a reader holding a snapshot can stop SQLite reusing its
+# own free pages. Either limit trips it, and the free-page credit can never override it.
+DISK_HARD_PCT = float(os.environ.get("ARCHIVE_DISK_HARD_PCT", "95"))
+DISK_MIN_FREE_MB = float(os.environ.get("ARCHIVE_DISK_MIN_FREE_MB", "2048"))
+DISK_CHECK_S = float(os.environ.get("ARCHIVE_DISK_CHECK_S", "30"))
+# While stopped, repeat the loud line this often (a once-only warning scrolls away).
+DISK_NAG_S = float(os.environ.get("ARCHIVE_DISK_NAG_S", "600"))
+# The in-RAM buffer is where rows wait while writes fail. Uncapped, a disk that keeps failing
+# eats the Pi's ~3 GB free RAM in hours and the OOM killer takes Signal K with it. ~300k rows
+# is ~10 minutes at the dock rate and ~150 MB.
+MAX_BUFFER_ROWS = int(os.environ.get("ARCHIVE_MAX_BUFFER_ROWS", "300000"))
+STATUS_FILE = Path(os.environ.get("ARCHIVE_STATUS_FILE",
+                                  str(ARCHIVE_DB.with_name("archiver-status.json"))))
+
+
+def disk_usage(path, conn=None, statvfs=os.statvfs):
+    """(credited_pct, raw_pct, free_bytes) for the archive's filesystem. credited_pct is None
+    when there is no usable connection to read the free pages from — UNKNOWN, not "full".
+
+    raw_pct and free_bytes are what the filesystem really has. credited_pct also counts the
+    archive's SQLite free pages as free — right for "is there room to keep recording once the
+    prune has run", wrong for "is the card about to fill", which is why both are returned."""
+    st = statvfs(str(path))
+    total = st.f_blocks * st.f_frsize
+    free = st.f_bavail * st.f_frsize
+    if total <= 0:
+        return 0.0, 0.0, free
+    used = total - free                          # reserved blocks count as used: conservative
+    raw = 100.0 * used / total
+    if conn is None:
+        return None, raw, free
+    try:
+        with _WRITE_LOCK:
+            free_pages = conn.execute("PRAGMA freelist_count").fetchone()[0]
+            page_size = conn.execute("PRAGMA page_size").fetchone()[0]
+    except Exception:
+        return None, raw, free                   # e.g. a closed or broken connection
+    return max(0.0, 100.0 * (used - free_pages * page_size) / total), raw, free
+
+
+def disk_used_pct(path, conn=None, statvfs=os.statvfs):
+    """Percent of the archive's filesystem in use, counting SQLite free pages as free (the raw
+    figure when they can't be read)."""
+    credited, raw, _free = disk_usage(path, conn, statvfs)
+    return raw if credited is None else credited
+
+
+class DiskGuard:
+    """Hysteresis switch on disk use: stop full-res at `high`, resume below `low`.
+
+    Two kinds of limit. `high`/`low` use the free-page-credited figure, so a prune that frees
+    pages inside the file lets recording resume. The hard floor (`hard_pct` of the filesystem
+    really used, or less than `min_free_mb` really free) ignores that credit: it stops recording
+    on its own, and recording cannot resume until the real numbers are clear of it by a margin
+    (2 points, and twice the minimum free) — so it does not flap at the line either.
+
+    When the free pages can't be read (no connection, or a broken one mid-recovery) the
+    credited figure is UNKNOWN: the high/low marks make no decision that check, and only the
+    hard floor can stop recording. Unknown must never read as "full, discard".
+
+    `allow()` is called before every flush but measures at most every `every_s` (a statvfs and
+    two pragmas — microseconds). If the measurement itself fails it keeps recording: an unknown
+    disk is not a reason to stop the boat's only full-res record."""
+
+    def __init__(self, path, high=None, low=None, every_s=None, nag_s=None,
+                 statvfs=os.statvfs, clock=time.monotonic, hard_pct=None, min_free_mb=None):
+        self.path = path
+        self.high = DISK_HIGH_PCT if high is None else float(high)
+        self.low = DISK_LOW_PCT if low is None else float(low)
+        if self.low >= self.high:
+            self.low = self.high - 5.0
+        self.every_s = DISK_CHECK_S if every_s is None else float(every_s)
+        self.nag_s = DISK_NAG_S if nag_s is None else float(nag_s)
+        self.hard_pct = DISK_HARD_PCT if hard_pct is None else float(hard_pct)
+        self.min_free = (DISK_MIN_FREE_MB if min_free_mb is None else float(min_free_mb)) * 2**20
+        self.statvfs = statvfs
+        self.clock = clock
+        self.paused = False
+        self.pct = None             # credited
+        self.raw_pct = None         # what the filesystem really has in use
+        self.free_bytes = None
+        self.reason = None
+        self.dropped = 0            # rows not written because the disk was too full
+        self.paused_since = None
+        self._last_check = None
+        self._last_nag = None
+
+    def allow(self, conn=None):
+        now = self.clock()
+        if self._last_check is None or now - self._last_check >= self.every_s:
+            self._last_check = now
+            try:
+                self.pct, self.raw_pct, self.free_bytes = disk_usage(self.path, conn, self.statvfs)
+            except OSError as exc:
+                print(f"[archive] disk guard: cannot read disk use ({exc}) — recording anyway",
+                      flush=True)
+                return not self.paused
+            hard_hit = self.raw_pct >= self.hard_pct or self.free_bytes < self.min_free
+            hard_clear = (self.raw_pct < self.hard_pct - 2
+                          and self.free_bytes >= 2 * self.min_free)
+            known = self.pct is not None
+            if not self.paused and ((known and self.pct >= self.high) or hard_hit):
+                self.paused = True
+                self.reason = "hard_floor" if hard_hit else "high_mark"
+                self.paused_since = datetime.now(timezone.utc).isoformat()
+                self._last_nag = now
+                print(f"[archive] !!! DISK {self._describe()} — FULL-RES RECORDING STOPPED to "
+                      f"protect Signal K and the uplink. Resumes below {self.low:.0f}% (and "
+                      f"real use < {self.hard_pct - 2:.0f}%, free >= "
+                      f"{2 * self.min_free / 2**30:.1f} GB). Free space on the card or close "
+                      f"the open race session so the prune can work.", flush=True)
+            elif self.paused and known and self.pct < self.low and hard_clear:
+                self.paused = False
+                self.reason = None
+                print(f"[archive] disk {self._describe()} — full-res recording "
+                      f"RESUMED; {self.dropped} rows were not recorded while stopped "
+                      f"(since {self.paused_since})", flush=True)
+                self.paused_since = None
+        if self.paused and self._last_nag is not None and now - self._last_nag >= self.nag_s:
+            self._last_nag = now
+            print(f"[archive] !!! full-res recording STILL STOPPED: disk {self._describe()}; "
+                  f"{self.dropped} rows not recorded since {self.paused_since}", flush=True)
+        return not self.paused
+
+    def _describe(self):
+        credited = "unknown" if self.pct is None else f"{self.pct:.1f}%"
+        return (f"{credited} counting archive free pages (limit {self.high:.0f}%), "
+                f"{self.raw_pct:.1f}% really used (hard limit {self.hard_pct:.0f}%), "
+                f"{self.free_bytes / 2**30:.1f} GB free (minimum {self.min_free / 2**30:.1f} GB)")
+
+
+def cap_buffer(buf, state, limit=None):
+    """Drop the OLDEST rows past `limit`, counting them in state['buffer_dropped'] and saying so.
+    Oldest, because the newest are what the crew and the engine are looking at."""
+    limit = MAX_BUFFER_ROWS if limit is None else int(limit)
+    over = len(buf) - limit
+    if limit <= 0 or over <= 0:
+        return 0
+    del buf[:over]
+    state["buffer_dropped"] = state.get("buffer_dropped", 0) + over
+    print(f"[archive] !!! write buffer over {limit} rows — DROPPED the oldest {over} "
+          f"({state['buffer_dropped']} dropped since start). Writes are failing; see above.",
+          flush=True)
+    return over
+
+
+def write_status(state, guard=None, path=None):
+    """The archiver's health as a small JSON file next to the archive, for the engine/console
+    (which mount the archive volume read-only) and for a human with `cat`. Best effort."""
+    path = Path(path or STATUS_FILE)
+    doc = {
+        "updated": datetime.now(timezone.utc).isoformat(),
+        "recording": not (guard and guard.paused) and not state.get("rotate_pending"),
+        "reason": ("disk_full" if guard and guard.paused
+                   else "rotation_pending" if state.get("rotate_pending") else None),
+        "disk_used_pct": None if not guard or guard.pct is None else round(guard.pct, 1),
+        "disk_really_used_pct": None if not guard or guard.raw_pct is None
+        else round(guard.raw_pct, 1),
+        "disk_free_bytes": guard.free_bytes if guard else None,
+        "disk_hard_pct": guard.hard_pct if guard else None,
+        "stop_cause": guard.reason if guard and guard.paused else None,
+        "disk_high_pct": guard.high if guard else None,
+        "disk_low_pct": guard.low if guard else None,
+        "paused_since": guard.paused_since if guard else None,
+        "rows_not_recorded_disk_full": guard.dropped if guard else 0,
+        "rows_dropped_buffer_full": state.get("buffer_dropped", 0),
+        "rows_written": state.get("total", 0),
+        "corrupt_rotations_this_run": state.get("rotations", 0),
+    }
+    try:
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(doc, indent=1))
+        os.replace(tmp, path)
+    except Exception as exc:
+        if not state.get("_status_warned"):
+            state["_status_warned"] = True
+            print(f"[archive] could not write {path} ({exc})", flush=True)
+    return doc
+
+
+async def flusher(conn, buf, loop, state=None, db=None, wake=None, guard=None):
     """Drain the buffer to disk every FLUSH_SECONDS, for as long as this process lives.
 
     Wrapped end to end because an unhandled exception here does not crash the service — it
     kills this ONE task, asyncio swallows the traceback, and the archiver goes on looking
     perfectly healthy while recording nothing. That is a worse failure than the crash-loop it
-    replaces, so the recorder must be un-killable: corruption rotates the file and continues,
-    and anything else is logged and retried on the next tick with the rows put back."""
-    total = 0
+    replaces, so the recorder must be un-killable.
+
+    Failure handling, in order:
+      - disk over the guard's limit -> the batch is NOT written (counted, logged, status file);
+      - a write raised corruption   -> rotate on the next attempt, unconditionally (no
+        quick_check re-gate), and the batch is requeued, never dropped;
+      - anything else               -> requeued, retried next tick;
+      - the requeue buffer is capped at MAX_BUFFER_ROWS, dropping the oldest, loudly."""
     state = state if state is not None else {}
+    state.setdefault("conn", conn)
+    state.setdefault("total", 0)
+    path = db or ARCHIVE_DB
     while True:
         # Wake on the timer OR as soon as the reader says the buffer is full (FLUSH_ROWS).
-        # The reader used to write that case itself; it now signals instead, so there is
-        # exactly ONE writer and therefore exactly one place that handles corruption.
+        # The reader signals rather than writes, so there is exactly ONE writer and therefore
+        # exactly one place that handles corruption.
         if wake is None:
             await asyncio.sleep(FLUSH_SECONDS)
         else:
@@ -300,37 +654,89 @@ async def flusher(conn, buf, loop, state=None, db=None, wake=None):
             except asyncio.TimeoutError:
                 pass
             wake.clear()
-        if not buf:
-            continue
-        rows, buf[:] = buf[:], []
+        try:
+            await _flush_once(buf, loop, state, path, guard)
+        except Exception as exc:          # belt and braces: the loop itself must never die
+            print(f"[archive] flusher error ({type(exc).__name__}: {exc}); continuing",
+                  flush=True)
+        if guard is not None and (guard._last_check != state.get("_status_at")
+                                  or state.pop("_status_dirty", False)):
+            state["_status_at"] = guard._last_check
+            write_status(state, guard)
+
+
+async def _recover(buf, loop, state, path):
+    """Finish a pending corruption rotation. True when the archive is usable again. On failure
+    nothing is lost: rows stay in `buf` (capped) and the next flush tries again."""
+    old, state["conn"] = state.get("conn"), None   # closed by reopen_fresh, whatever happens
+    try:
+        state["conn"], _rot = await loop.run_in_executor(None, reopen_fresh, old, path)
+    except Exception as exc:
+        print(f"[archive] rotation failed ({type(exc).__name__}: {exc}); "
+              f"{len(buf)} rows waiting, will retry", flush=True)
+        cap_buffer(buf, state)
+        return False
+    state["rotate_pending"] = False
+    state["rotations"] = state.get("rotations", 0) + 1
+    state["_status_dirty"] = True
+    return True
+
+
+async def _flush_once(buf, loop, state, path, guard):
+    # A pending rotation goes FIRST, before the disk guard: the guard reads free pages through
+    # the connection, and deciding "full" from a half-recovered archive would throw away the
+    # very rows the rotation is meant to save.
+    if state.get("rotate_pending") and not await _recover(buf, loop, state, path):
+        return
+    if guard is not None:
+        allowed = await loop.run_in_executor(None, guard.allow, state.get("conn"))
+        if not allowed:
+            if buf:
+                guard.dropped += len(buf)
+                buf[:] = []
+            return
+    if not buf:
+        return
+    rows, buf[:] = buf[:], []
+    # Two attempts: a corruption error on the first rotates and writes the same batch into the
+    # fresh file straight away. If the rotation or the second write fails too, the rows go back.
+    for attempt in (1, 2):
+        if state.get("rotate_pending"):
+            buf[:0] = rows                # _recover keeps them on failure, in order
+            if not await _recover(buf, loop, state, path):
+                return
+            rows, buf[:] = buf[:], []
         try:
             await loop.run_in_executor(None, write_rows, state["conn"], rows)
+            break
         except sqlite3.DatabaseError as exc:
-            if not _is_corruption(exc):
-                buf[:0] = rows            # transient (locked/busy) — retry next tick, in order
-                print(f"[archive] write failed, {len(rows)} rows requeued ({exc})", flush=True)
-                continue
-            print(f"[archive] CORRUPTION during write ({exc}) — rotating and continuing",
-                  flush=True)
-            try:
-                state["conn"], _rot = await loop.run_in_executor(
-                    None, open_db_resilient, db or ARCHIVE_DB)
-                await loop.run_in_executor(None, write_rows, state["conn"], rows)
-            except Exception as exc2:     # keep recording even if recovery half-failed
-                print(f"[archive] recovery incomplete ({exc2}); {len(rows)} rows dropped",
+            if _is_corruption(exc):
+                # Once a write has said "corrupt", the file is rotated — no quick_check re-gate.
+                state["rotate_pending"] = True
+                state["_status_dirty"] = True
+                print(f"[archive] CORRUPTION during write ({exc}) — rotating the file",
                       flush=True)
-                continue
+                if attempt == 1:
+                    continue
+            _requeue(buf, rows, state, f"write failed ({exc})")
+            return
         except Exception as exc:
-            buf[:0] = rows
-            print(f"[archive] unexpected flush error, {len(rows)} rows requeued ({exc})",
-                  flush=True)
-            continue
-        total += len(rows)
-        # report the AIS skip count too — silence here would look identical to a filter that
-        # had quietly stopped working, or to one wrongly eating own-ship data
-        skipped = state.get("skipped", 0)
-        note = f" (skipped {skipped} AIS deltas)" if skipped else ""
-        print(f"[archive] +{len(rows)} rows (total {total}){note}", flush=True)
+            _requeue(buf, rows, state, f"unexpected flush error ({type(exc).__name__}: {exc})")
+            return
+    state["total"] = state.get("total", 0) + len(rows)
+    # report the AIS skip count too — silence here would look identical to a filter that
+    # had quietly stopped working, or to one wrongly eating own-ship data
+    skipped = state.get("skipped", 0)
+    note = f" (skipped {skipped} AIS deltas)" if skipped else ""
+    print(f"[archive] +{len(rows)} rows (total {state['total']}){note}", flush=True)
+
+
+def _requeue(buf, rows, state, why):
+    """Put a failed batch back at the FRONT (order kept; write_rows rolled it back, so nothing
+    is half-written), then enforce the RAM cap."""
+    buf[:0] = rows
+    print(f"[archive] {why}; {len(rows)} rows requeued ({len(buf)} waiting)", flush=True)
+    cap_buffer(buf, state)
 
 
 # ---- RETENTION PRUNE (race sessions) ------------------------------------------------------
@@ -341,7 +747,8 @@ async def flusher(conn, buf, loop, state=None, db=None, wake=None):
 # stops growing). SAFETY: if the engine DB / sessions table can't be read, NOTHING is pruned —
 # we must never delete a race because a volume didn't mount. 0 disables (the bench keeps its
 # replayed sample data).
-RETAIN_DAYS = float(os.environ.get("ARCHIVE_RETAIN_DAYS", "14"))
+# 7 days on the boat (compose.pi.yml); the default matches so a bare run behaves the same.
+RETAIN_DAYS = float(os.environ.get("ARCHIVE_RETAIN_DAYS", "7"))
 ENGINE_DB = os.environ.get("ENGINE_DB", "/var/lib/sr33/engine/engine.db")
 PRUNE_EVERY_S = float(os.environ.get("ARCHIVE_PRUNE_EVERY_S", "3600"))
 
@@ -495,9 +902,17 @@ def prune(conn, engine_db=None, retain_days=None):
 async def pruner(state, loop):
     while True:
         try:
-            await loop.run_in_executor(None, prune, state["conn"])
+            if state.get("rotate_pending") or state.get("conn") is None:
+                # never prune a file that just reported corruption, nor through a missing handle
+                print("[archive] prune skipped this hour — archive recovery pending", flush=True)
+            else:
+                await loop.run_in_executor(None, prune, state["conn"])
         except Exception as exc:      # never let housekeeping kill the recorder
             print(f"[archive] prune error: {exc}", flush=True)
+            if _is_corruption(exc):
+                # the file is bad even if the last write was not: the flusher rotates it next
+                state["rotate_pending"] = True
+                state["_status_dirty"] = True
         await asyncio.sleep(PRUNE_EVERY_S)
 
 
@@ -507,15 +922,20 @@ async def run():
     # now also the live connection, because a corruption rotation replaces it underneath every
     # writer. One holder, so nobody keeps writing to a file that has been moved aside.
     state = {}
-    conn, rotated = open_db_resilient()
+    conn, n, rotated = open_for_run()
     state["conn"] = conn
-    n = conn.execute("SELECT count(*) FROM readings").fetchone()[0]
+    if rotated:
+        state["rotations"] = 1
     print(f"[archive] {ARCHIVE_DB} ready ({n} rows) <- {SIGNALK_WS} (full resolution)"
           + (f" [recovered from {rotated.name}]" if rotated else ""), flush=True)
+    guard = DiskGuard(ARCHIVE_DB.parent)
+    print(f"[archive] disk guard: stop full-res at {guard.high:.0f}% disk use, resume below "
+          f"{guard.low:.0f}%; RAM buffer cap {MAX_BUFFER_ROWS} rows; status -> {STATUS_FILE}",
+          flush=True)
     buf = []
     loop = asyncio.get_running_loop()
     wake = asyncio.Event()
-    asyncio.create_task(flusher(conn, buf, loop, state, wake=wake))
+    asyncio.create_task(flusher(conn, buf, loop, state, wake=wake, guard=guard))
     asyncio.create_task(pruner(state, loop))
     while True:
         try:
@@ -526,6 +946,8 @@ async def run():
                     rows = parse_delta(msg, now, state)
                     if rows:
                         buf.extend(rows)
+                        if len(buf) > MAX_BUFFER_ROWS:
+                            cap_buffer(buf, state)     # the flusher is stuck; keep RAM bounded
                         if len(buf) >= FLUSH_ROWS:
                             # Signal, don't write: the flusher owns the corruption/retry path,
                             # and a second writer with its own error handling is how you end up
