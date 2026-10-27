@@ -49,18 +49,29 @@ def _get(path):
         return {"available": False, "error": f"n2kout unreachable: {e}"}
 
 
-def _mark_indices(path, marks, tol_nm=0.5):
-    """Path vertices that ARE course marks (or the router's rounding standoff beside one): for each
-    mark, the nearest vertex within `tol_nm`. Those must survive downsampling — the plotter draws
-    the course through them."""
-    out = set()
-    for m in marks or []:
-        mlat, mlon = m.get("lat"), m.get("lon")
-        if mlat is None or mlon is None or not path:
+def _mark_vertices(path, marks, tol_nm=0.5):
+    """{course mark number: path index} for the marks this path sails through. Walks the course IN
+    ORDER and each mark consumes the next matching vertex AFTER the previous mark's, so a mark
+    revisited at the same spot (Finish == Start on the practice course) maps to its own later
+    vertex, not the first one. A match is the closest vertex of the first run that comes within
+    `tol_nm` (the mark itself, or the router's rounding standoff beside it). A mark with no
+    position (or one the path never reaches) consumes nothing."""
+    out, start = {}, 0
+    for k, m in enumerate(marks or []):
+        mlat, mlon = (m or {}).get("lat"), (m or {}).get("lon")
+        if mlat is None or mlon is None:
             continue
-        j = min(range(len(path)), key=lambda i: NAV._hav_nm(path[i]["lat"], path[i]["lon"], mlat, mlon))
-        if NAV._hav_nm(path[j]["lat"], path[j]["lon"], mlat, mlon) <= tol_nm:
-            out.add(j)
+        best = None
+        for i in range(start, len(path)):
+            d = NAV._hav_nm(path[i]["lat"], path[i]["lon"], mlat, mlon)
+            if d <= tol_nm:
+                if best is None or d < best[1]:
+                    best = (i, d)
+            elif best is not None:
+                break                               # left the first matching run
+        if best is not None:
+            out[k] = best[0]
+            start = best[0] + 1
     return out
 
 
@@ -109,21 +120,20 @@ def _blocked_fn(bundle):
                          or routing._seg_crosses_poly(a["lat"], a["lon"], b["lat"], b["lon"], polys))
 
 
-def _dest_index(pts, boat, mark_pos=(), next_mark_pos=None):
+def _dest_index(pts, boat, mark_pos=None, next_k=None):
     """The plotter's steer-to: project the boat onto the downsampled path and return the index of
-    the first waypoint AHEAD of it. The search is confined to the CURRENT leg (between the kept
-    vertices of the previous and next marks) so an out-and-back course can't snap the boat onto
-    the other leg. No fix → 1 (the first leg's end)."""
+    the first waypoint AHEAD of it. `mark_pos` is {course mark number: index in pts}; with the
+    navigator's next-mark number `next_k` the search is confined to the CURRENT leg (previous
+    mark's vertex → next mark's), so an out-and-back course can't snap the boat onto the other
+    leg. No fix → 1 (the first leg's end)."""
     if not boat or boat[0] is None or len(pts) < 2:
         return 1
     lo, hi = 0, len(pts) - 1
-    if next_mark_pos is not None:
-        nk = [k for k in mark_pos if k > 0]
-        hits = [k for k in nk if NAV._hav_nm(pts[k]["lat"], pts[k]["lon"], *next_mark_pos) <= 0.5]
-        if hits:
-            hi = hits[0]
-            prev = [k for k in mark_pos if k < hi]
-            lo = max(prev) if prev else 0
+    mark_pos = mark_pos or {}
+    if next_k is not None and mark_pos.get(next_k):
+        hi = mark_pos[next_k]
+        prev = [v for k, v in mark_pos.items() if k < next_k and v < hi]
+        lo = max(prev) if prev else 0
     best = min(range(lo, max(lo + 1, hi)),
                key=lambda i: routing._pt_to_seg_nm(boat[0], boat[1], pts[i]["lat"], pts[i]["lon"],
                                                    pts[i + 1]["lat"], pts[i + 1]["lon"]))
@@ -131,8 +141,10 @@ def _dest_index(pts, boat, mark_pos=(), next_mark_pos=None):
 
 
 def _course_context(route=None):
-    """(marks, boat (lat, lon), next-mark (lat, lon)) from the navigator — best effort; any miss
-    degrades to 'no marks / no fix' (the downsample still keeps endpoints, dest falls back to 1)."""
+    """(marks, boat (lat, lon), next-mark number) from the navigator — best effort; any miss
+    degrades to 'no marks / no fix' (the downsample still keeps endpoints, dest falls back to 1).
+    The next-mark number is its position in the course sequence (names are unique even when two
+    marks share a spot, e.g. Finish == Start)."""
     try:
         nav = NAV.get_navigator(route)
         if not nav.get("available"):
@@ -141,8 +153,8 @@ def _course_context(route=None):
         s = NAV._latest() or {}
         boat = (s.get("lat"), s.get("lon")) if s.get("lat") is not None else None
         nxt = (nav.get("next_mark") or {}).get("name")
-        nm = next(((m["lat"], m["lon"]) for m in marks if m.get("name") == nxt), None)
-        return marks, boat, nm
+        k = next((i for i, m in enumerate(marks) if m.get("name") == nxt), None)
+        return marks, boat, k
     except Exception:
         return [], None, None
 
@@ -179,12 +191,16 @@ def show(source: str = "playbook", variant=None, route=None):
             return {"shown": False, "note": err}
         # the wire name is what the plotter shows — short and clean (LAU caps at 16 chars)
         wire_name, label = f"C4 {vid}"[:16], f"{vid} (gameplan)"
-    marks, boat, next_pos = _course_context(route)
-    keep = _mark_indices(path, marks)
-    idx = _downsample_idx(path, MAX_WPTS, keep, _blocked_fn(deviation._load_playbook()))
+    marks, boat, next_k = _course_context(route)
+    if source == "reoptimize" and next_k is not None:
+        # the re-route starts at the boat: marks astern aren't on it (blank them so they can't
+        # consume a later vertex — Start would otherwise grab a Finish that shares its spot)
+        marks = [None if k < next_k else m for k, m in enumerate(marks)]
+    verts = _mark_vertices(path, marks)
+    idx = _downsample_idx(path, MAX_WPTS, set(verts.values()), _blocked_fn(deviation._load_playbook()))
     pts = [path[i] for i in idx]
-    mark_pos = [k for k, i in enumerate(idx) if i in keep]
-    dest = _dest_index(pts, boat, mark_pos, next_pos)
+    where = {i: j for j, i in enumerate(idx)}
+    dest = _dest_index(pts, boat, {k: where[i] for k, i in verts.items() if i in where}, next_k)
     wpts = [{"name": f"C4-{i + 1:02d}", "lat": p.get("lat"), "lon": p.get("lon"),
              "t": p.get("t")} for i, p in enumerate(pts)]
     st = _post("/route", {"name": wire_name, "waypoints": wpts, "dest_index": dest})
