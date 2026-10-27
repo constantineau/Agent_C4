@@ -60,33 +60,71 @@ def _callout(cid, category, urgency, headline, detail, grounded_in, confidence="
             "detail": detail, "grounded_in": list(grounded_in), "confidence": confidence}
 
 
-def _safety_callout(ais):
-    """Collision watch — the ONE thing the copilot interrupts for. The nearest CLOSING contact inside
-    the guard becomes a top-priority safety callout, grounded in the boat's own AIS receiver + own
-    CPA/TCPA math (always legal in-race, never RRS-41 'outside help'). The level (act/watch) is in the
-    id so an escalation watch→act re-surfaces, exactly like the staged rounding prep."""
-    if not ais.get("own_fix"):
-        return None                       # no own fix → CPA/TCPA meaningless; don't bark
-    closing = [t for t in (ais.get("targets") or []) if t.get("closing")]
-    if not closing:
+def _ais_level(t):
+    """The guard level a contact sits in: 'act', 'watch', or None (opening / clear / no geometry)."""
+    if not t.get("closing"):
         return None
-    t = closing[0]                        # already threat-sorted: closing, smallest CPA first
     cpa, tcpa = _num(t.get("cpa_nm")), _num(t.get("tcpa_min"))
     if cpa is None or tcpa is None or tcpa < 0:
         return None
-    act = cpa <= AIS_ACT_CPA_NM and tcpa <= AIS_ACT_TCPA_MIN
-    watch = cpa <= AIS_WATCH_CPA_NM and tcpa <= AIS_WATCH_TCPA_MIN
-    if not (act or watch):
-        return None                       # closing but still comfortably clear — nothing to show
+    if cpa <= AIS_ACT_CPA_NM and tcpa <= AIS_ACT_TCPA_MIN:
+        return "act"
+    if cpa <= AIS_WATCH_CPA_NM and tcpa <= AIS_WATCH_TCPA_MIN:
+        return "watch"
+    return None
+
+
+def _safety_callout(ais):
+    """Collision watch — the ONE thing the copilot interrupts for. The worst CLOSING contact inside
+    the guard becomes a top-priority safety callout, grounded in the boat's own AIS receiver + own
+    CPA/TCPA math (always legal in-race, never RRS-41 'outside help'). The level (act/watch) is in the
+    id so an escalation watch→act re-surfaces, exactly like the staged rounding prep.
+
+    EVERY closing contact is tested against the limits — the engine's list is CPA-sorted and ignores
+    TCPA, so the first contact (tiny CPA, an hour out) can hide a second one that is minutes away.
+    Worst = act before watch, then the soonest TCPA, then the smallest CPA."""
+    if not ais.get("own_fix"):
+        return None                       # no own fix → CPA/TCPA meaningless (the blind callout says so)
+    hits = []
+    for t in ais.get("targets") or []:
+        level = _ais_level(t)
+        if level:
+            hits.append((0 if level == "act" else 1, _num(t.get("tcpa_min")), _num(t.get("cpa_nm")),
+                         level, t))
+    if not hits:
+        return None                       # nothing closing inside the guard — nothing to show
+    _, tcpa, cpa, level, t = min(hits, key=lambda h: h[:3])
+    act = level == "act"
     name = t.get("name") or f"MMSI {t.get('mmsi', '?')}"
     brg = _num(t.get("bearing"))
     # compact — this rides the dashboard's one-line coach strip (crew request 2026-07-08)
     detail = (f"CPA {cpa} nm / {tcpa} min"
               + (f" · brg {brg}°" if brg is not None else ""))
-    level = "act" if act else "watch"
     return _callout(f"ais:{t.get('mmsi') or name}:{level}", "safety", "now" if act else "soon",
                     f"Collision risk: {name}" if act else f"Traffic closing: {name}",
                     detail, ["get_ais"], "high" if act else "med")
+
+
+def _blind_callout(ais, cond):
+    """The collision watch can't see — say so instead of reading as all-clear. Engine unreachable,
+    the AIS read failing, or no own-ship fix all leave the guard above with nothing to check, so the
+    callout list would otherwise be empty. Deterministic, safety category (it outranks everything and
+    never goes through the LLM); confirmed over two reads so one dropped request doesn't bark."""
+    if ais.get("available", True) is False:
+        if ais.get("error") and cond.get("error"):     # transport errors on both → engine gone
+            cid, headline, detail = ("blind:engine", "Collision watch blind: engine lost",
+                                     "no engine reads — keep a visual lookout")
+        else:
+            cid, headline, detail = ("blind:ais", "Collision watch blind: AIS read failing",
+                                     "engine up but no AIS answer — keep a visual lookout")
+    elif not ais.get("own_fix"):
+        cid, headline, detail = ("blind:fix", "Collision watch blind: no own GPS fix",
+                                 "CPA/TCPA can't be computed — keep a visual lookout")
+    else:
+        return None
+    c = _callout(cid, "safety", "now", headline, detail, ["get_ais"], "high")
+    c["confirm_rounds"] = 2
+    return c
 
 
 def _corr_str(cd):
@@ -483,6 +521,10 @@ def evaluate(snapshot, playbook=None, engine=None):
         c = _safety_callout(ais)
         if c:
             out.append(c)
+    if "get_ais" in snapshot:                      # …and say so when the watch can't see
+        c = _blind_callout(ais, cond)
+        if c:
+            out.append(c)
     if strat.get("available"):                     # in-race synthesis — the higher-order cross-signal read
         c = _strategy_callout(strat)
         if c:
@@ -534,7 +576,10 @@ def evaluate(snapshot, playbook=None, engine=None):
 
 
 def _sort_key(c):
-    return (URGENCY_RANK.get(c["urgency"], 9), CATEGORY_PRIORITY.get(c["category"], 9))
+    # Safety first, whatever its urgency: the coach line keeps only the top 2-3, and a watch-level
+    # "Traffic closing" must not drop out behind a "now" rounding or helm rotation.
+    return (c["category"] != "safety", URGENCY_RANK.get(c["urgency"], 9),
+            CATEGORY_PRIORITY.get(c["category"], 9))
 
 
 # Per-route dedup state: {route: {callout_id: consecutive_seen_count}}. Module-level — one boat,
@@ -563,7 +608,7 @@ def step(route, snapshot, playbook=None, engine=None):
     for cid, c in found.items():
         n = prev.get(cid, 0) + 1
         counts[cid] = n
-        need = CONFIRM_ROUNDS.get(c["category"], 1)
+        need = c.get("confirm_rounds") or CONFIRM_ROUNDS.get(c["category"], 1)
         if n >= need:
             active.append(c)
             if n == need:               # crossed the threshold this very step → voice once
@@ -598,11 +643,12 @@ def _deterministic_spoken(callouts):
 def narrate(callouts, llm=None):
     """Phrase the (already-sorted) callouts into a coach line. Returns (text, mode). With no
     callouts → ("", "none"). The LLM only rephrases grounded text; any failure falls back to the
-    deterministic line so a call is always available."""
+    deterministic line so a call is always available. A SAFETY callout never goes through the LLM:
+    its own text is the line, word for word, with no model in the way."""
     if not callouts:
         return "", "none"
     fallback = _deterministic_spoken(callouts)
-    if llm is None:
+    if llm is None or any(c.get("category") == "safety" for c in callouts):
         return fallback, "deterministic"
     payload = [{"headline": c["headline"], "detail": c.get("detail", ""),
                 "urgency": c["urgency"]} for c in callouts[:3]]

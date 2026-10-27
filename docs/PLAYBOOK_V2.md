@@ -259,7 +259,9 @@ judgment calls into measured quantities. These are **locked as implementation re
   extended to `play:<id>` + `get_plays` in the copilot gather. The Tier-2 ranked-match prompt
   section shipped next (the LLM reads narratives + ranks compound matches → `play_matches` on
   the strategy brief, unknown ids dropped), and the ranked matches render on the iPad Strategy
-  card's SYNTHESIS section (2026-07-08).
+  card's SYNTHESIS section (2026-07-08). **Since #29 (2026-10-27) the default `/strategy` poll is
+  engine-only, so the iPad shows no narrative `play_matches` unless `use_llm: true` is sent;
+  automatic narrative matching returns with #53.**
   The two v1 limits are closed (2026-07-08): `polar_pct` is a live matcher signal (windowed
   ~10-min mean of STW vs the polar target so a tack's dip can't reset a sustain, instantaneous
   fallback), and `applicability.legs` is GATED for hard-gated plays — pace plays carry
