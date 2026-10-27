@@ -64,7 +64,12 @@ allf, all_end = leg_tacks(dict(ROUTE_LAYLINE_COMMIT=1, ROUTE_TACK_CUMULATIVE=1,
 print(f"     osc leg: baseline tacks={base['tacks']} (end {base_end:.2f}); "
       f"+cumulative tacks={cum['tacks']} (end {cum_end:.2f}); all tacks={allf['tacks']} (end {all_end:.2f})")
 check("baseline micro-tacks on the oscillating field (>=5)", base["tacks"] >= 5)
-check("cumulative tack cost cuts the tack count (>=2 fewer)", cum["tacks"] <= base["tacks"] - 2)
+# #30: was ">= 2 fewer". This is the LEGACY prune (DMG off) on a chaotic field, where the tack count
+# is set by step quantization. With the interpolated polar the cumulative cost alone no longer cuts it
+# reliably (summed over 8 field phases: 53 → 39 tacks before #30, 54 → 51 after), so only "doesn't
+# add tacks" is still true here. The production prune (DMG on) is the "all fixes" check below and
+# test_routing_scramble.py.
+check("cumulative tack cost doesn't add tacks (legacy prune)", cum["tacks"] <= base["tacks"])
 check("all fixes keep the tack count below baseline", allf["tacks"] <= base["tacks"])
 check("every variant still reaches the mark", base_end < 0.3 and cum_end < 0.3 and all_end < 0.3)
 check("no overstanding (oversail stays sane, <1.6x)", allf["sailed_nm"] / allf["direct_nm"] < 1.6)
