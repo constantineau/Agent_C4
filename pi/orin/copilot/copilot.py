@@ -518,6 +518,7 @@ def _strategy_llm(digest: dict, pb: playbook_mod.Playbook, meta: dict) -> dict:
 # engine digest, carrying the last LLM narrative only while the engine's call is still the same one.
 _STRAT_LOCK = threading.Lock()           # single flight: never two LLM /strategy calls at once
 _STRAT_CACHE: dict = {}                  # route -> (at, llm_out | None)  (None = the last try failed)
+_STRAT_GEN = [0]                         # bumped on a playbook change: an in-flight pass can't refill
 
 
 def _rec_key(rec):
@@ -525,14 +526,34 @@ def _rec_key(rec):
     return (rec.get("action"), rec.get("target_variant"), rec.get("vs_playbook"))
 
 
+def reset_strategy_cache():
+    """Forget every cached LLM strategy pass (new homework → its play ids / narrative are stale)."""
+    _STRAT_GEN[0] += 1
+    _STRAT_CACHE.clear()
+
+
 def _strategy_refresh(route, digest, pb, meta):
+    gen = _STRAT_GEN[0]
     try:
         out = _strategy_llm(dict(digest), pb, dict(meta))
-        _STRAT_CACHE[route] = (time.time(), out if out.get("mode") == "llm" else None)
+        entry = (time.time(), out if out.get("mode") == "llm" else None)
     except Exception:                    # a background refresh never takes the service down
-        _STRAT_CACHE[route] = (time.time(), None)
+        entry = (time.time(), None)
     finally:
         _STRAT_LOCK.release()
+    if gen == _STRAT_GEN[0]:             # the playbook didn't change under us
+        _STRAT_CACHE[route] = entry
+
+
+def _fresh_play_matches(cached_matches, digest, pb):
+    """The cached LLM grades, but only for plays that still exist in the loaded playbook AND whose
+    live status in the FRESH digest is the one the LLM graded. The status always comes from the
+    fresh digest — a play that cleared since the LLM pass is dropped, never shown as still armed."""
+    status = {d.get("id"): d.get("status") for d in ((digest.get("plays") or {}).get("detail") or [])}
+    known = set(pb.play_ids())
+    return [{**m, "status": status[m["play_id"]]} for m in cached_matches or []
+            if m.get("play_id") in known and m.get("play_id") in status
+            and status[m["play_id"]] == m.get("status")]
 
 
 def _strategy_cached(route, digest, pb, meta) -> dict:
@@ -550,8 +571,10 @@ def _strategy_cached(route, digest, pb, meta) -> dict:
         if digest.get("recommendation") and cached.get("recommendation"):
             out["recommendation"] = {**digest["recommendation"],
                                      "rationale": cached["recommendation"].get("rationale")}
-        if cached.get("play_matches"):
-            out["play_matches"] = cached["play_matches"]
+        out.pop("play_matches", None)    # never the cache's statuses — rebuilt against the fresh digest
+        matches = _fresh_play_matches(cached.get("play_matches"), digest, pb)
+        if matches:
+            out["play_matches"] = matches
         out["mode"] = "llm"
         meta.update(llm_used=True, model=config.LLM_MODEL, cached_age_s=round(now - at))
         out["_meta"] = meta
@@ -563,4 +586,6 @@ def _strategy_cached(route, digest, pb, meta) -> dict:
 def reset_narration(route=None) -> dict:
     """Clear the per-route show-once dedup state (a race / course change → re-surface from scratch)."""
     narrate_mod.reset(route)
+    if route is None:                    # a full reset = new homework → drop the strategy cache too
+        reset_strategy_cache()
     return {"reset": route or "all"}

@@ -212,7 +212,7 @@ def test_strategy_cache() -> bool:
     StubLLM.calls = 0
     StubLLM.gate.clear()
     config.USE_LLM = True
-    copilot._STRAT_CACHE.clear()
+    copilot.reset_strategy_cache()
 
     t0 = time.monotonic()
     rs = [client.post("/strategy", json={"route": ROUTE}).json() for _ in range(5)]
@@ -239,12 +239,107 @@ def test_strategy_cache() -> bool:
     return ok
 
 
+def _play(pid):
+    return {"id": pid, "conditions": {"narrative": f"{pid} narrative"}}
+
+
+def _load_playbook(*pids):
+    r = client.post("/playbook/load", json={"race_id": "t", "variants": [{"id": "middle"}],
+                                            "plays": [_play(p) for p in pids]}).json()
+    assert r.get("loaded"), r
+
+
+def _wait_idle():
+    for _ in range(100):
+        if not copilot._STRAT_LOCK.locked():
+            return
+        time.sleep(0.05)
+
+
+def test_strategy_cache_plays() -> bool:
+    """The cached LLM play grades never carry stale statuses or stale play ids: statuses always come
+    from the fresh digest, a play that cleared is dropped, and a playbook reload empties the cache
+    (an LLM pass in flight across the reload can't refill it)."""
+    print("\n== 3b. polled /strategy: play matches always match the fresh digest ==")
+    import os
+    import tempfile
+    ok = True
+    tmp = tempfile.mkdtemp()
+    orig_path = config.PLAYBOOK_PATH
+    config.PLAYBOOK_PATH = os.path.join(tmp, "playbook.json")
+    rec = {"action": "Hold: Middle start", "vs_playbook": "on-plan", "target_variant": "middle",
+           "rationale": "no decisive signal", "grounded_in": ["get_selector"], "urgency": "monitor"}
+
+    def digest(statuses):
+        return {"available": True, "mode": "deterministic", "assessment": "Hold: Middle start",
+                "picture": [{"signal": "shift", "read": "osc ±4°", "grounded_in": ["get_tactics"]}],
+                "recommendation": rec,
+                "plays": {"detail": [{"id": k, "status": v} for k, v in statuses.items()]}}
+
+    def poll():
+        return client.post("/strategy", json={"route": ROUTE}).json()
+
+    try:
+        _load_playbook("P1", "P2")
+        config.USE_LLM = True
+        StubLLM.strategy = {"assessment": "Pressure play is on.",
+                            "recommendation": {"action": "x", "rationale": "the left is paying",
+                                               "grounded_in": ["get_tactics"]},
+                            "play_matches": [{"play_id": "P1", "match": "strong", "why": "breeze left"},
+                                             {"play_id": "P2", "match": "partial", "why": "maybe"}]}
+        StubLLM.gate.set()
+        StubEngine.facts = {"strategy": digest({"P1": "armed", "P2": "arming"})}
+        poll()
+        _wait_idle()
+        r = poll()
+        ok &= _check("cached pass shows both graded plays with their live status",
+                     r["mode"] == "llm" and [(m["play_id"], m["status"]) for m in r.get("play_matches", [])]
+                     == [("P1", "armed"), ("P2", "arming")])
+
+        # P1 clears; the engine still says Hold, so the narrative is reused — but not P1's grade
+        StubEngine.facts = {"strategy": digest({"P1": "quiet", "P2": "arming"})}
+        r = poll()
+        ok &= _check("a play that cleared (rec still Hold) is NOT shown armed",
+                     r["mode"] == "llm" and [m["play_id"] for m in r.get("play_matches", [])] == ["P2"])
+        StubEngine.facts = {"strategy": digest({"P2": "armed"})}
+        r = poll()
+        ok &= _check("a play whose status changed since the grade is dropped", not r.get("play_matches"))
+
+        # new homework: the cache is emptied, and the next poll is the plain fresh digest
+        StubEngine.facts = {"strategy": digest({"P1": "armed", "P2": "arming"})}
+        _load_playbook("P3")
+        r = poll()
+        ok &= _check("playbook reload → no cached narrative, no stale play ids",
+                     r["mode"] == "deterministic" and not r.get("play_matches"))
+        _wait_idle()
+        r = poll()
+        ok &= _check("after the reload, matches only ever name plays in the new playbook",
+                     all(m["play_id"] == "P3" for m in r.get("play_matches", [])))
+
+        # a pass in flight across a reload can't refill the cache with the old playbook's grades
+        copilot.reset_strategy_cache()
+        StubLLM.gate.clear()
+        _load_playbook("P1", "P2")
+        poll()                                   # starts a pass graded against P1/P2
+        _load_playbook("P3")
+        StubLLM.gate.set()
+        _wait_idle()
+        ok &= _check("an LLM pass in flight across a reload does not refill the cache",
+                     ROUTE not in copilot._STRAT_CACHE)
+    finally:
+        config.PLAYBOOK_PATH = orig_path
+        config.USE_LLM = False
+        copilot.reset_strategy_cache()
+    return ok
+
+
 def main():
     orig = (copilot.EngineClient, copilot.LLMClient, config.USE_LLM, config.BRIEFS_ENABLED)
     copilot.EngineClient, copilot.LLMClient = StubEngine, StubLLM
     try:
         ok = asyncio.run(scenarios())
         ok &= test_strategy_cache()
+        ok &= test_strategy_cache_plays()
     finally:
         copilot.EngineClient, copilot.LLMClient, config.USE_LLM, config.BRIEFS_ENABLED = orig
     # the bench's pure callout/coach checks (incl. the watch-level ranking) ride along in CI
