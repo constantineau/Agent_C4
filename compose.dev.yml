@@ -9,8 +9,9 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-sr33}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sr33-dev}
       POSTGRES_DB: ${POSTGRES_DB:-sr33_dev}
+    # localhost only. Note: ufw does not filter Docker-published ports, so never publish on 0.0.0.0.
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"
     volumes:
       - sr33_dev_pgdata:/var/lib/postgresql/data
       # migrations in this dir run in filename order on first init
@@ -29,8 +30,10 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql://sr33:sr33-dev@timescaledb:5432/sr33_dev}
       INGEST_TOKEN: ${INGEST_TOKEN:-dev-ingest-token}
+    # localhost + Tailscale only: the boat's uplink posts to 100.88.252.115:8101.
     ports:
-      - "8101:8000"
+      - "127.0.0.1:8101:8000"
+      - "100.88.252.115:8101:8000"
     depends_on:
       timescaledb:
         condition: service_healthy
