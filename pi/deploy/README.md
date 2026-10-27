@@ -15,7 +15,9 @@ passes `--apply` without his go.
    restart count, disk and RAM, the archive volume listing, the archiver's last log lines.
 2. **Diff.** Every data-path file (`pi/archiver`, `pi/uplink`, `pi/signalk`, `shared`,
    `compose.pi.yml`; tests excluded) is checksummed on the Pi and here. Changed files are shown
-   as a unified diff, new files by name. It stops if the Pi has local edits to any of them.
+   as a unified diff, new files by name. It stops if the Pi has local edits to any of them,
+   and it stops if any read on the Pi fails: a failed listing must never look like "every file
+   is new", because rollback deletes the files it thinks were new.
 3. **Backup** to `~/deploy-backups/data-path-<stamp>/` on the Pi: a tar of the files about to
    be overwritten, the list of new files, and the current images tagged `:pre-<stamp>`.
 4. **Copy** the changed and new files into `~/Agent_C4`.
@@ -23,18 +25,21 @@ passes `--apply` without his go.
    `docker compose -f compose.pi.yml build archiver && … up -d --no-deps archiver`.
    Signal K, the engine, the console and n2kout are not touched.
 6. **Verify.** Waits (up to 30 min; checking a 24 GB file on the SD card is slow) for the
-   archiver to log the rotation of the old file and its first write. If it opened the old
-   file without rotating it, the script stops the archiver and exits. Then it lists the volume
-   (`archive.corrupt-<stamp>.db` must be there at the old size — it is never deleted), checks
-   the fresh `archive.db` grows over 60 s, prints `archiver-status.json`, and checks the uplink
-   is still sending.
+   archiver to open its archive and write. Then it lists the volume, checks `archive.db` grows
+   over 60 s, prints `archiver-status.json`, and checks the uplink is still sending.
+   With `--expect-rotation` (the first deploy after the 2026-09-02 corruption) it instead
+   requires the log to show the old file moved aside before the first write. If the archiver
+   opened the old file without rotating it, the script stops the archiver and exits.
+   `archive.corrupt-<stamp>.db` must then be on the volume at the old size; it is never
+   deleted. A later, normal deploy against a healthy archive runs without the flag.
 
 ## Steps
 
 ```bash
 # from a checkout of the branch to deploy, on the VPS
 pi/deploy/deploy-data-path.sh              # dry run: read the inventory and the diff
-pi/deploy/deploy-data-path.sh --apply      # only with Cole's go
+pi/deploy/deploy-data-path.sh --apply --expect-rotation   # first deploy, only with Cole's go
+pi/deploy/deploy-data-path.sh --apply                     # any later deploy
 ```
 
 Tailscale SSH may ask for a browser approval first. `PI_HOST`, `EXPECT_BASE` and

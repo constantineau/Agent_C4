@@ -42,7 +42,10 @@ ROW = ("2026-10-27T12:00:00.000Z", "sr33", "n2k-socketcan.15", "navigation.speed
 MB = 1024 * 1024
 
 
-def fake_statvfs(used_pct, total=100 * MB, frsize=4096):
+GB = 1024 * MB
+
+
+def fake_statvfs(used_pct, total=115 * GB, frsize=4096):
     def f(_path):
         blocks = total // frsize
         return SimpleNamespace(f_blocks=blocks, f_frsize=frsize,
@@ -88,6 +91,42 @@ def broken_statvfs(_p):
     raise OSError("no such device")
 
 
+# --- the hard floor: real free space, no free-page credit ------------------------------------
+print("hard floor: a physically full card stops recording whatever the free-page credit says:")
+real_usage = archiver.disk_usage
+fs = {"raw": 99.0, "credit": 25.0}
+
+
+def usage_with_credit(path, conn=None, statvfs=None):
+    """99% of the filesystem really used, but 25 points of it are archive free pages."""
+    total = 115 * GB
+    return fs["raw"] - fs["credit"], fs["raw"], int(total * (100 - fs["raw"]) / 100)
+
+
+archiver.disk_usage = usage_with_credit
+try:
+    c = Clock()
+    g = archiver.DiskGuard("/x", high=85, low=80, every_s=0, hard_pct=95, min_free_mb=2048,
+                           clock=c)
+    check("99% real use, 74% credited -> STOPPED (the credit cannot hide a full card)",
+          g.allow() is False and g.reason == "hard_floor")
+    fs.update(raw=94.0, credit=25.0)
+    check("94% real (inside the 2-point margin) -> still stopped", g.allow() is False)
+    fs.update(raw=90.0, credit=25.0)
+    check("90% real, 65% credited -> resumed", g.allow() is True)
+    fs.update(raw=50.0, credit=0.0)
+    g2 = archiver.DiskGuard("/x", high=85, low=80, every_s=0, hard_pct=95,
+                            min_free_mb=60 * 1024, clock=c)
+    check("under the minimum free bytes (57 GB free < 60 GB) -> stopped, even at 50%",
+          g2.allow() is False and g2.reason == "hard_floor")
+    fs.update(raw=86.0, credit=0.0)
+    g3 = archiver.DiskGuard("/x", high=85, low=80, every_s=0, hard_pct=95, min_free_mb=2048,
+                            clock=c)
+    check("the ordinary high mark still says why", g3.allow() is False
+          and g3.reason == "high_mark")
+finally:
+    archiver.disk_usage = real_usage
+
 g2 = archiver.DiskGuard("/x", high=85, low=80, every_s=0, statvfs=broken_statvfs, clock=clock)
 check("an unreadable disk does not stop the recorder", g2.allow() is True)
 g3 = archiver.DiskGuard("/x", high=85, low=90, statvfs=fake_statvfs(10), clock=clock)
@@ -103,7 +142,7 @@ with tempfile.TemporaryDirectory() as d:
     conn.commit()
     free = conn.execute("PRAGMA freelist_count").fetchone()[0] * \
         conn.execute("PRAGMA page_size").fetchone()[0]
-    sv = fake_statvfs(90)
+    sv = fake_statvfs(90, total=100 * MB)
     raw = archiver.disk_used_pct(db, None, sv)
     credited = archiver.disk_used_pct(db, conn, sv)
     check("the deleted rows left free pages", free > 0)
@@ -133,6 +172,9 @@ with tempfile.TemporaryDirectory() as d:
     check("status file: carries the level, the marks and the count",
           on_disk["disk_used_pct"] == 95.0 and on_disk["disk_high_pct"] == 85
           and on_disk["rows_not_recorded_disk_full"] == 7)
+    check("status file: carries the real use and free bytes too",
+          on_disk["disk_really_used_pct"] == 95.0 and on_disk["disk_free_bytes"] > 0
+          and on_disk["stop_cause"] in ("high_mark", "hard_floor"))
     check("no temp file left behind", not (Path(d) / "archiver-status.json.tmp").exists())
     g.statvfs = fake_statvfs(50)
     buf = [ROW] * 3

@@ -339,6 +339,11 @@ def write_rows(conn, rows):
 # guard, once tripped, could never resume.
 DISK_HIGH_PCT = float(os.environ.get("ARCHIVE_DISK_HIGH_PCT", "85"))
 DISK_LOW_PCT = float(os.environ.get("ARCHIVE_DISK_LOW_PCT", "80"))
+# The HARD floor is on the filesystem's real free space, with no free-page credit: the WAL and
+# every new page need actual bytes, and a reader holding a snapshot can stop SQLite reusing its
+# own free pages. Either limit trips it, and the free-page credit can never override it.
+DISK_HARD_PCT = float(os.environ.get("ARCHIVE_DISK_HARD_PCT", "95"))
+DISK_MIN_FREE_MB = float(os.environ.get("ARCHIVE_DISK_MIN_FREE_MB", "2048"))
 DISK_CHECK_S = float(os.environ.get("ARCHIVE_DISK_CHECK_S", "30"))
 # While stopped, repeat the loud line this often (a once-only warning scrolls away).
 DISK_NAG_S = float(os.environ.get("ARCHIVE_DISK_NAG_S", "600"))
@@ -350,13 +355,19 @@ STATUS_FILE = Path(os.environ.get("ARCHIVE_STATUS_FILE",
                                   str(ARCHIVE_DB.with_name("archiver-status.json"))))
 
 
-def disk_used_pct(path, conn=None, statvfs=os.statvfs):
-    """Percent of the archive's filesystem in use, counting SQLite free pages as free."""
+def disk_usage(path, conn=None, statvfs=os.statvfs):
+    """(credited_pct, raw_pct, free_bytes) for the archive's filesystem.
+
+    raw_pct and free_bytes are what the filesystem really has. credited_pct also counts the
+    archive's SQLite free pages as free — right for "is there room to keep recording once the
+    prune has run", wrong for "is the card about to fill", which is why both are returned."""
     st = statvfs(str(path))
     total = st.f_blocks * st.f_frsize
+    free = st.f_bavail * st.f_frsize
     if total <= 0:
-        return 0.0
-    used = total - st.f_bavail * st.f_frsize     # reserved blocks count as used: conservative
+        return 0.0, 0.0, free
+    used = total - free                          # reserved blocks count as used: conservative
+    raw = 100.0 * used / total
     if conn is not None:
         try:
             with _WRITE_LOCK:
@@ -365,18 +376,29 @@ def disk_used_pct(path, conn=None, statvfs=os.statvfs):
             used -= free_pages * page_size
         except Exception:
             pass                                 # no credit for free pages — errs toward stopping
-    return max(0.0, 100.0 * used / total)
+    return max(0.0, 100.0 * used / total), raw, free
+
+
+def disk_used_pct(path, conn=None, statvfs=os.statvfs):
+    """Percent of the archive's filesystem in use, counting SQLite free pages as free."""
+    return disk_usage(path, conn, statvfs)[0]
 
 
 class DiskGuard:
     """Hysteresis switch on disk use: stop full-res at `high`, resume below `low`.
+
+    Two kinds of limit. `high`/`low` use the free-page-credited figure, so a prune that frees
+    pages inside the file lets recording resume. The hard floor (`hard_pct` of the filesystem
+    really used, or less than `min_free_mb` really free) ignores that credit: it stops recording
+    on its own, and recording cannot resume until the real numbers are clear of it by a margin
+    (2 points, and twice the minimum free) — so it does not flap at the line either.
 
     `allow()` is called before every flush but measures at most every `every_s` (a statvfs and
     two pragmas — microseconds). If the measurement itself fails it keeps recording: an unknown
     disk is not a reason to stop the boat's only full-res record."""
 
     def __init__(self, path, high=None, low=None, every_s=None, nag_s=None,
-                 statvfs=os.statvfs, clock=time.monotonic):
+                 statvfs=os.statvfs, clock=time.monotonic, hard_pct=None, min_free_mb=None):
         self.path = path
         self.high = DISK_HIGH_PCT if high is None else float(high)
         self.low = DISK_LOW_PCT if low is None else float(low)
@@ -384,10 +406,15 @@ class DiskGuard:
             self.low = self.high - 5.0
         self.every_s = DISK_CHECK_S if every_s is None else float(every_s)
         self.nag_s = DISK_NAG_S if nag_s is None else float(nag_s)
+        self.hard_pct = DISK_HARD_PCT if hard_pct is None else float(hard_pct)
+        self.min_free = (DISK_MIN_FREE_MB if min_free_mb is None else float(min_free_mb)) * 2**20
         self.statvfs = statvfs
         self.clock = clock
         self.paused = False
-        self.pct = None
+        self.pct = None             # credited
+        self.raw_pct = None         # what the filesystem really has in use
+        self.free_bytes = None
+        self.reason = None
         self.dropped = 0            # rows not written because the disk was too full
         self.paused_since = None
         self._last_check = None
@@ -398,31 +425,41 @@ class DiskGuard:
         if self._last_check is None or now - self._last_check >= self.every_s:
             self._last_check = now
             try:
-                self.pct = disk_used_pct(self.path, conn, self.statvfs)
+                self.pct, self.raw_pct, self.free_bytes = disk_usage(self.path, conn, self.statvfs)
             except OSError as exc:
                 print(f"[archive] disk guard: cannot read disk use ({exc}) — recording anyway",
                       flush=True)
                 return not self.paused
-            if not self.paused and self.pct >= self.high:
+            hard_hit = self.raw_pct >= self.hard_pct or self.free_bytes < self.min_free
+            hard_clear = (self.raw_pct < self.hard_pct - 2
+                          and self.free_bytes >= 2 * self.min_free)
+            if not self.paused and (self.pct >= self.high or hard_hit):
                 self.paused = True
+                self.reason = "hard_floor" if hard_hit else "high_mark"
                 self.paused_since = datetime.now(timezone.utc).isoformat()
                 self._last_nag = now
-                print(f"[archive] !!! DISK {self.pct:.1f}% FULL (limit {self.high:.0f}%) — "
-                      f"FULL-RES RECORDING STOPPED to protect Signal K and the uplink. "
-                      f"Resumes below {self.low:.0f}%. Free space on the card or close the "
-                      f"open race session so the prune can work.", flush=True)
-            elif self.paused and self.pct < self.low:
+                print(f"[archive] !!! DISK {self._describe()} — FULL-RES RECORDING STOPPED to "
+                      f"protect Signal K and the uplink. Resumes below {self.low:.0f}% (and "
+                      f"real use < {self.hard_pct - 2:.0f}%, free >= "
+                      f"{2 * self.min_free / 2**30:.1f} GB). Free space on the card or close "
+                      f"the open race session so the prune can work.", flush=True)
+            elif self.paused and self.pct < self.low and hard_clear:
                 self.paused = False
-                print(f"[archive] disk {self.pct:.1f}% (< {self.low:.0f}%) — full-res recording "
+                self.reason = None
+                print(f"[archive] disk {self._describe()} — full-res recording "
                       f"RESUMED; {self.dropped} rows were not recorded while stopped "
                       f"(since {self.paused_since})", flush=True)
                 self.paused_since = None
         if self.paused and self._last_nag is not None and now - self._last_nag >= self.nag_s:
             self._last_nag = now
-            print(f"[archive] !!! full-res recording STILL STOPPED: disk {self.pct:.1f}% "
-                  f"(limit {self.high:.0f}%, resumes < {self.low:.0f}%); {self.dropped} rows "
-                  f"not recorded since {self.paused_since}", flush=True)
+            print(f"[archive] !!! full-res recording STILL STOPPED: disk {self._describe()}; "
+                  f"{self.dropped} rows not recorded since {self.paused_since}", flush=True)
         return not self.paused
+
+    def _describe(self):
+        return (f"{self.pct:.1f}% counting archive free pages (limit {self.high:.0f}%), "
+                f"{self.raw_pct:.1f}% really used (hard limit {self.hard_pct:.0f}%), "
+                f"{self.free_bytes / 2**30:.1f} GB free (minimum {self.min_free / 2**30:.1f} GB)")
 
 
 def cap_buffer(buf, state, limit=None):
@@ -450,6 +487,11 @@ def write_status(state, guard=None, path=None):
         "reason": ("disk_full" if guard and guard.paused
                    else "rotation_pending" if state.get("rotate_pending") else None),
         "disk_used_pct": None if not guard or guard.pct is None else round(guard.pct, 1),
+        "disk_really_used_pct": None if not guard or guard.raw_pct is None
+        else round(guard.raw_pct, 1),
+        "disk_free_bytes": guard.free_bytes if guard else None,
+        "disk_hard_pct": guard.hard_pct if guard else None,
+        "stop_cause": guard.reason if guard and guard.paused else None,
         "disk_high_pct": guard.high if guard else None,
         "disk_low_pct": guard.low if guard else None,
         "paused_since": guard.paused_since if guard else None,
