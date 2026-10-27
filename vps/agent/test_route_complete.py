@@ -296,6 +296,15 @@ gpsout._course_context = _orig_ctx
 check("show(): no clear waypoint → not pushed, named reason, nothing sent",
       r["shown"] is False and "hazard" in r["note"] and "payload" not in sent)
 
+print("   arrival never skips the next mark's own vertex (Codex round 6)")
+RND = [{"lat": 44.0, "lon": -82.0}, {"lat": 44.01, "lon": -82.0023}, {"lat": 44.0, "lon": -82.004}]
+check("boat 0.02 nm from unrounded mark 1 → still steers to it",
+      gpsout._dest_index(RND, (44.0096, -82.0023), {0: 0, 1: 1, 2: 2}, 1, CLEAR) == 1)
+check("navigator advanced to mark 2 → steers on to it",
+      gpsout._dest_index(RND, (44.0096, -82.0023), {0: 0, 1: 1, 2: 2}, 2, CLEAR) == 2)
+check("exactly on the mark (tie) with the mark unpassed → stays",
+      gpsout._dest_index(RND, (44.01, -82.0023), {0: 0, 1: 1, 2: 2}, 1, CLEAR) == 1)
+
 print("   property: seeded random paths around random rocks")
 import math   # noqa: E402
 import random   # noqa: E402
@@ -328,19 +337,25 @@ while cases < 400:
         continue                     # the boat isn't ON the rock
     cases += 1
     here = {"lat": bl, "lon": bo}
-    marks = {0: 0, 1: n - 1} if rng.random() < 0.5 else None
-    nk = 1 if marks else None
+    if rng.random() < 0.6:           # random mark vertices + a random next mark
+        inner = sorted(rng.sample(range(1, n - 1), rng.randint(0, n - 2)))
+        marks = {k: v for k, v in enumerate([0] + inner + [n - 1])}
+        nk = rng.choice(list(marks))
+    else:
+        marks, nk = None, None
     d = gpsout._dest_index(pts, (bl, bo), marks, nk, blk)
     raw, _lo = gpsout._dest_candidate(pts, (bl, bo), marks or {}, nk, blk)
     if d is None:
         refused += 1
-        if any(not blk(here, pts[j]) for j in range(0, raw + 1)):
-            bad.append(("refused but a waypoint at/behind the candidate was clear", cases))
+        if any(not blk(here, pts[j]) for j in range(_lo, raw + 1)):
+            bad.append(("refused but a waypoint in the leg, at/behind the candidate, was clear", cases))
         continue
     if not (0 <= d < n):
         bad.append(("out of range", cases, d))
     elif blk(here, pts[d]):
         bad.append(("boat→dest crosses the rock", cases, d))
+    if marks and nk is not None and d > marks[nk]:
+        bad.append(("past the unrounded next mark", cases, d, marks[nk]))
     if d != raw:
         walked += 1
         if d > raw:
@@ -349,7 +364,7 @@ while cases < 400:
             pts, (bl, bo), marks or {}, nk, CLEAR)[0]:
         bad.append(("clear water changed the projection", cases))
 print(f"     {cases} cases: {walked} walked back, {refused} refused, {len(bad)} violations {bad[:3]}")
-check("every returned destination has a clear boat→destination line", not bad)
+check("every returned destination is clear of the rock and never past the next mark", not bad)
 check("the property actually exercised the walk-back and the refusal", walked > 0 and refused > 0)
 
 check("next mark is the path start (pre-start) → 0",

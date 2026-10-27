@@ -189,7 +189,8 @@ def _dest_index(pts, boat, mark_pos=None, next_k=None, blocked=None):
 
 
 def _dest_candidate(pts, boat, mark_pos, next_k, blocked):
-    """(destination index, current leg's first index) before the clear-line guard."""
+    """(destination index, current leg's first index) before the clear-line guard. The index never
+    exceeds the next mark's vertex when the navigator's next mark is known."""
     last = len(pts) - 1
     lo, hi = 0, last
     mark_pos = mark_pos or {}
@@ -209,9 +210,11 @@ def _dest_candidate(pts, boat, mark_pos, next_k, blocked):
     def _clear_to(j):
         return blocked is not None and not blocked(here, pts[j])
 
-    if dist.get(best + 1) == dist[best] and dest < last and _clear_to(dest + 1):
+    # never past `hi`: the plotter doesn't steer beyond an unrounded mark — only the navigator's
+    # mark advance moves the leg on
+    if dist.get(best + 1) == dist[best] and dest < hi and _clear_to(dest + 1):
         dest += 1                                         # tie → the later segment, if clear
-    while (dest < last and NAV._hav_nm(boat[0], boat[1], pts[dest]["lat"], pts[dest]["lon"]) <= ARRIVE_NM
+    while (dest < hi and NAV._hav_nm(boat[0], boat[1], pts[dest]["lat"], pts[dest]["lon"]) <= ARRIVE_NM
            and _clear_to(dest + 1)):
         dest += 1                                         # attained → the next one, if clear
     return dest, lo
