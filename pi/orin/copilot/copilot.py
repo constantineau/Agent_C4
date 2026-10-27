@@ -12,6 +12,7 @@ Flow of a brief:
 
 The model interprets and prioritizes; it can never exceed or fabricate beyond the engine facts.
 """
+import hashlib
 import json
 import re
 import threading
@@ -448,6 +449,7 @@ def strategy_brief(route=None, hoisted=None, use_llm: bool | None = None) -> dic
     picture / concordance / caveats stay the ENGINE's; an ungrounded LLM narrative is dropped; any
     LLM trouble → the whole deterministic digest stands."""
     route = route or config.DEFAULT_ROUTE
+    gen = _strategy_gen()                # FIRST — before the playbook is read (see _strategy_cached)
     engine = EngineClient()
     pb = playbook_mod.load()
     digest = engine.strategy(route)
@@ -459,7 +461,7 @@ def strategy_brief(route=None, hoisted=None, use_llm: bool | None = None) -> dic
         digest["_meta"] = meta
         return digest
     if use_llm is None:                  # the polled path (the iPad, every ~15 s) → cached, never blocks
-        return _strategy_cached(route, digest, pb, meta)
+        return _strategy_cached(route, digest, pb, meta, gen)
     return _strategy_llm(digest, pb, meta)
 
 
@@ -518,7 +520,7 @@ def _strategy_llm(digest: dict, pb: playbook_mod.Playbook, meta: dict) -> dict:
 # engine digest, carrying the last LLM narrative only while the engine's picture is unchanged.
 _STRAT_LOCK = threading.Lock()           # single flight: never two LLM /strategy calls at once
 _STRAT_STATE = threading.Lock()          # guards the cache + generation: reset vs a worker's publish
-_STRAT_CACHE: dict = {}                  # route -> (at, picture_key, llm_out | None)  (None = last try failed)
+_STRAT_CACHE: dict = {}                  # route -> (at, picture_key, playbook_key, llm_out | None)
 _STRAT_GEN = [0]                         # bumped on a playbook change: an in-flight pass can't refill
 _publish_hook = None                     # test seam: called inside the publish critical section
 
@@ -534,6 +536,16 @@ def _picture_key(digest):
                        [conc.get("strength"), conc.get("lean"), conc.get("note")],
                        [rec.get("action"), rec.get("target_variant"), rec.get("vs_playbook")]],
                       sort_keys=True, default=str)
+
+
+def _strategy_gen() -> int:
+    with _STRAT_STATE:
+        return _STRAT_GEN[0]
+
+
+def _playbook_key(pb) -> str:
+    """The playbook a pass was graded against — catches a bundle swapped on disk without a reset."""
+    return hashlib.sha256(json.dumps(pb.data, sort_keys=True, default=str).encode()).hexdigest()
 
 
 def reset_strategy_cache():
@@ -557,7 +569,7 @@ def _strategy_refresh(route, digest, pb, meta, gen):
             if gen == _STRAT_GEN[0]:
                 if _publish_hook:
                     _publish_hook()
-                _STRAT_CACHE[route] = (time.time(), _picture_key(digest), llm_out)
+                _STRAT_CACHE[route] = (time.time(), _picture_key(digest), _playbook_key(pb), llm_out)
     finally:
         _STRAT_LOCK.release()
 
@@ -573,18 +585,27 @@ def _fresh_play_matches(cached_matches, digest, pb):
             and status[m["play_id"]] == m.get("status")]
 
 
-def _strategy_cached(route, digest, pb, meta) -> dict:
+def _strategy_cached(route, digest, pb, meta, gen) -> dict:
+    """The polled path. Generation rule: `gen` was taken at the very start of the request, before
+    the playbook `pb` was read, so it can only be OLDER than `pb`, never newer. Any reset since then
+    (a reload while we read the playbook or waited on the engine) means: no cached wording served,
+    no LLM pass started, and the worker's publish is rejected — checked again under the lock at the
+    end. The cache entry also records the playbook it was graded against, which must match `pb`."""
     now = time.time()
     with _STRAT_STATE:
-        at, key, cached = _STRAT_CACHE.get(route, (0.0, None, None))
-        gen = _STRAT_GEN[0]              # taken with this request's playbook snapshot `pb`
+        at, key, pb_key, cached = _STRAT_CACHE.get(route, (0.0, None, None, None))
+        current = gen == _STRAT_GEN[0]
+    if not current:                      # the homework changed under this request — plain engine digest
+        digest["_meta"] = meta
+        return digest
     ttl = config.STRATEGY_TTL_S
     if now - at >= ttl and _STRAT_LOCK.acquire(blocking=False):
         meta["llm_refreshing"] = True
         threading.Thread(target=_strategy_refresh, args=(route, dict(digest), pb, dict(meta), gen),
                          daemon=True).start()
-    # cached LLM wording is only reused while the engine's picture is unchanged (see _picture_key)
-    if cached and now - at < 2 * ttl and key == _picture_key(digest):
+    # cached LLM wording is only reused while the engine's picture AND the playbook are unchanged
+    if (cached and now - at < 2 * ttl and key == _picture_key(digest)
+            and pb_key == _playbook_key(pb)):
         out = dict(digest)               # the engine's numbers stay fresh; only the narrative is reused
         out["assessment"] = cached.get("assessment", digest.get("assessment"))
         if digest.get("recommendation") and cached.get("recommendation"):
@@ -597,7 +618,10 @@ def _strategy_cached(route, digest, pb, meta) -> dict:
         out["mode"] = "llm"
         meta.update(llm_used=True, model=config.LLM_MODEL, cached_age_s=round(now - at))
         out["_meta"] = meta
-        return out
+        if _strategy_gen() == gen:       # a reset that landed while we built this → don't serve it
+            return out
+        meta.update(llm_used=False, model=None)
+        meta.pop("cached_age_s", None)
     digest["_meta"] = meta
     return digest
 

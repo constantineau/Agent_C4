@@ -39,6 +39,15 @@ class StubEngine:
     def __init__(self, *a, **k):
         pass
 
+    entered = threading.Event()          # set when strategy() is called…
+    release = None                       # …which then blocks on this Event, if one is set
+
+    def strategy(self, *a, **k):
+        StubEngine.entered.set()
+        if StubEngine.release is not None:
+            StubEngine.release.wait(5)
+        return dict(StubEngine.facts.get("strategy") or {"available": False, "reason": "stub"})
+
     def __getattr__(self, name):
         def read(*a, **k):
             return dict(StubEngine.facts.get(name) or {"available": False, "reason": "stub"})
@@ -364,6 +373,46 @@ def test_strategy_cache_plays() -> bool:
             copilot._publish_hook = None
         ok &= _check("a reset racing the worker's publish still leaves the cache empty",
                      reset_done.is_set() and ROUTE not in copilot._STRAT_CACHE)
+
+        # a reload while a request is between reading the playbook and getting the engine digest:
+        # the request read the OLD playbook, so it must neither serve nor start a pass on it.
+        copilot.reset_strategy_cache()
+        _load_playbook("P1", "P2")
+        StubLLM.strategy = {**StubLLM.strategy, "assessment": "Narrative from old"}
+        calls0 = StubLLM.calls
+        StubEngine.entered.clear()
+        StubEngine.release = threading.Event()
+        got = {}
+        th = threading.Thread(target=lambda: got.update(r=poll()))
+        th.start()
+        try:
+            StubEngine.entered.wait(5)       # the request has read the OLD playbook and is in the engine
+            _load_playbook("P3")
+        finally:
+            StubEngine.release.set()
+            StubEngine.release = None
+        th.join(5)
+        _wait_idle()
+        r = got.get("r") or {}
+        ok &= _check("reload while a request waits on the engine → that request starts no LLM pass",
+                     StubLLM.calls == calls0 and ROUTE not in copilot._STRAT_CACHE
+                     and r.get("mode") == "deterministic")
+        poll()
+        _wait_idle()
+        r = poll()
+        ok &= _check("the next pass is graded against the new playbook only",
+                     r["mode"] == "llm" and all(m["play_id"] == "P3" for m in r.get("play_matches", [])))
+
+        # the bundle swapped on disk with no reset at all → the cached wording isn't reused
+        import json as _json
+        with open(config.PLAYBOOK_PATH, "w") as f:
+            _json.dump({"race_id": "t2", "variants": [{"id": "middle"}], "plays": [_play("P9")]}, f)
+        StubLLM.gate.clear()                 # hold any new pass so this poll sees the cache as-is
+        r = poll()
+        StubLLM.gate.set()
+        _wait_idle()
+        ok &= _check("playbook swapped on disk without a reset → no cached wording",
+                     r["mode"] == "deterministic")
     finally:
         config.PLAYBOOK_PATH = orig_path
         config.USE_LLM = False
