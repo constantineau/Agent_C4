@@ -370,6 +370,82 @@ check("the property actually exercised the walk-back and the refusal", walked > 
 check("next mark is the path start (pre-start) → 0",
       gpsout._dest_index(LINE, (43.99, -82.0), {0: 0, 1: 3}, 0) == 0)
 
+print("   re-route vs navigator from different moments (Codex round 7)")
+routing.weather.wind_at = lambda lat, lon, epoch: (12.0, 90.0)
+deviation._load_playbook = lambda: {"race_id": "u", "variants": [{"id": "m"}]}   # no homework
+up7 = routing.route_leg(43.98, -82.0, 44.22, -82.0, wind, 0.0, 90.0)
+dn7 = routing.route_leg(44.22, -82.0, 43.95, -82.05, wind, 0.0, 90.0)
+RO_PATH = up7["path"] + dn7["path"][1:]
+RO = {"available": True, "marks": ["Top", "Finish"], "path": RO_PATH,
+      "leg_end_idx": [len(up7["path"]) - 1, len(RO_PATH) - 1]}
+COURSE7 = [{"name": "Start", "lat": 43.98, "lon": -82.0}, {"name": "Top", "lat": 44.22, "lon": -82.0},
+           {"name": "Finish", "lat": 43.95, "lon": -82.05}]
+gpsout.reoptimize.get_reoptimize = lambda route=None: RO
+NAV._marks = lambda route: COURSE7
+past_top = dn7["path"][1]                     # the boat rounded Top while the re-route computed
+NAV.get_navigator = lambda route=None: {"available": True, "route": "race",
+                                        "next_mark": {"name": "Finish"},
+                                        "position": {"lat": past_top["lat"], "lon": past_top["lon"]}}
+NAV._latest = lambda: {"lat": 43.5, "lon": -83.0}   # a DIFFERENT moment's fix — must not be used
+sent.clear()
+r = gpsout.show(source="reoptimize")
+wp = sent["payload"]["waypoints"]
+d = sent["payload"]["dest_index"]
+print(f"     dest {d} of {len(wp)}; first waypoint ({wp[0]['lat']},{wp[0]['lon']})")
+check("passed Top during compute: route trimmed to start at Top",
+      NAV._hav_nm(wp[0]["lat"], wp[0]["lon"], 44.22, -82.0) < 0.01)
+top_at = min(range(len(wp)), key=lambda i: NAV._hav_nm(wp[i]["lat"], wp[i]["lon"], 44.22, -82.0))
+check("steer-to is on the Top→Finish leg (after the Top waypoint), never back toward Top",
+      d > top_at and NAV._hav_nm(wp[d]["lat"], wp[d]["lon"], 44.22, -82.0) > 0.01
+      and NAV._hav_nm(wp[d]["lat"], wp[d]["lon"], 43.95, -82.05)
+      <= NAV._hav_nm(past_top["lat"], past_top["lon"], 43.95, -82.05) + 0.05)
+NAV.get_navigator = lambda route=None: {"available": True, "route": "race",
+                                        "next_mark": {"name": "Top"},
+                                        "position": {"lat": up7["path"][1]["lat"],
+                                                     "lon": up7["path"][1]["lon"]}}
+sent.clear()
+gpsout.show(source="reoptimize")
+d = sent["payload"]["dest_index"]
+wp = sent["payload"]["waypoints"]
+check("navigator agrees with the route (next Top): untrimmed, steer-to on the way up",
+      NAV._hav_nm(wp[0]["lat"], wp[0]["lon"], 43.98, -82.0) < 0.01 and 1 <= d
+      <= min(range(len(wp)), key=lambda i: NAV._hav_nm(wp[i]["lat"], wp[i]["lon"], 44.22, -82.0)))
+NAV.get_navigator = lambda route=None: {"available": True, "route": "race",
+                                        "next_mark": {"name": "Gate"}, "position": {"lat": 44.0, "lon": -82.0}}
+sent.clear()
+r = gpsout.show(source="reoptimize")
+check("next mark not on the re-route → refused as stale, by name, nothing sent",
+      r["shown"] is False and "stale" in r["note"] and "Gate" in r["note"] and "payload" not in sent)
+NAV.get_navigator = lambda route=None: {"available": False}
+sent.clear()
+gpsout.show(source="reoptimize")
+check("no navigator: the re-route's own frame (dest 1 from its start), not refused",
+      sent.get("payload", {}).get("dest_index") is not None)
+NAV.get_navigator = lambda route=None: {"available": True, "route": "race",
+                                        "next_mark": {"name": "Finish"}}     # no position reported
+NAV._latest = lambda: {"lat": past_top["lat"], "lon": past_top["lon"]}
+check("navigator without a position → falls back to the latest fix",
+      gpsout._course_context()[1] == (past_top["lat"], past_top["lon"]))
+# a playbook variant that names its own legs: the navigator's next mark is located BY NAME
+VAR = {"race_id": "u", "recommended": "m",
+       "variants": [{"id": "m", "route": {"path": RO_PATH, "leg_end_idx": RO["leg_end_idx"],
+                                          "legs": [{"to": "Top"}, {"to": "Finish"}]}}]}
+deviation._load_playbook = lambda: VAR
+NAV.get_navigator = lambda route=None: {"available": True, "route": "race",
+                                        "next_mark": {"name": "Finish"},
+                                        "position": {"lat": past_top["lat"], "lon": past_top["lon"]}}
+sent.clear()
+gpsout.show()
+wp, d = sent["payload"]["waypoints"], sent["payload"]["dest_index"]
+check("variant: next mark Finish located by its legs' names → steer-to past Top",
+      NAV._hav_nm(wp[d]["lat"], wp[d]["lon"], 44.22, -82.0) > 0.01 and wp[d]["lat"] < 44.22)
+NAV.get_navigator = lambda route=None: {"available": True, "route": "race",
+                                        "next_mark": {"name": "Start"},
+                                        "position": {"lat": 43.97, "lon": -82.0}}
+sent.clear()
+gpsout.show()
+check("variant: pre-start (next mark = Start) → steer-to 0", sent["payload"]["dest_index"] == 0)
+
 print("   re-optimizer carries its leg ends")
 reoptimize.get_reoptimize = _REAL_REOPT
 NAV._marks = lambda route: MARKS

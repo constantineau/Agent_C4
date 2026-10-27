@@ -221,27 +221,28 @@ def _dest_candidate(pts, boat, mark_pos, next_k, blocked):
 
 
 def _course_context(route=None):
-    """(marks, boat (lat, lon), next-mark number) from the navigator — best effort; any miss
-    degrades to 'no marks / no fix' (the downsample still keeps endpoints, dest falls back to 1).
-    The next-mark number is its position in the course sequence (names are unique even when two
-    marks share a spot, e.g. Finish == Start)."""
+    """ONE navigator snapshot: (course marks, boat (lat, lon), next-mark NAME). The boat fix is the
+    position the navigator itself used to pick the next mark (its `position`), so the fix and the
+    next mark can't come from two different moments; a separate latest-fix read is only the
+    fallback when the navigator doesn't report one. Any miss → ([], None, None): the downsample
+    still keeps endpoints and the dest falls back to 1."""
     try:
         nav = NAV.get_navigator(route)
         if not nav.get("available"):
             return [], None, None
         marks = NAV._marks(nav["route"]) or []
-        s = NAV._latest() or {}
-        boat = (s.get("lat"), s.get("lon")) if s.get("lat") is not None else None
-        nxt = (nav.get("next_mark") or {}).get("name")
-        k = next((i for i, m in enumerate(marks) if m.get("name") == nxt), None)
-        return marks, boat, k
+        pos = nav.get("position") or {}
+        if pos.get("lat") is None:
+            pos = NAV._latest() or {}
+        boat = (pos.get("lat"), pos.get("lon")) if pos.get("lat") is not None else None
+        return marks, boat, (nav.get("next_mark") or {}).get("name")
     except Exception:
         return [], None, None
 
 
-def _variant(variant=None):
-    """(label, route dict, error) — the route carries `leg_end_idx` when the Lab recorded it."""
-    bundle = deviation._load_playbook()
+def _variant(variant=None, bundle=None):
+    """(label, route dict, error) from ONE bundle snapshot — the route carries `leg_end_idx` (and
+    its legs' `to` names) when the Lab recorded them."""
     if not bundle:
         return None, None, "no playbook aboard"
     want = variant or bundle.get("recommended")
@@ -255,41 +256,86 @@ def _variant(variant=None):
     return None, None, f"variant '{want}' not in the bundle"
 
 
+def _route_frame(path, ends, names, nav_marks, starts_at_mark):
+    """The route's OWN mark frame: {local mark: path index}. Local mark j is `names[j]` — the mark
+    leg j of THIS route ends at, as the route itself recorded it — and -1 is the course start when
+    the route begins at it (a whole-course variant). Leg ends from the router when they line up
+    with the names; else the ordered best fit against those marks' positions (looked up by name in
+    the navigator's course — positions are static, the numbering stays the route's)."""
+    verts = {}
+    if names and _valid_ends(ends, len(path)) and len(ends) == len(names):
+        verts = _mark_vertices(path, None, leg_end_idx=ends, first_leg_to=0)
+    elif names:
+        by_name = {m.get("name"): m for m in nav_marks or []}
+        verts = _mark_vertices(path, [by_name.get(n) for n in names])
+    if starts_at_mark:
+        verts[-1] = 0
+    return verts
+
+
 def show(source: str = "playbook", variant=None, route=None):
     """Assemble + broadcast. source='playbook' (frozen variant, default recommended) or
-    'reoptimize' (the onboard re-router's cached fresh route, computing it if needed)."""
+    'reoptimize' (the onboard re-router's cached fresh route, computing it if needed).
+
+    Inputs come from different moments — the route (frozen at the gun, or computed seconds to
+    minutes ago), the navigator (now) and the bundle. They are reconciled explicitly: one bundle
+    read, one navigator snapshot (fix + next mark together), and the route's marks numbered in the
+    ROUTE's own frame (its legs' names / the re-route's `marks`); the navigator's next mark is then
+    LOCATED in that frame by name. A re-route whose passed marks the boat has since rounded is
+    trimmed to the leg the boat is on; one that doesn't contain the navigator's next mark at all
+    is stale and refused by name."""
+    bundle = deviation._load_playbook()
     if source == "reoptimize":
         ro = reoptimize.get_reoptimize(route)
         if not ro.get("available"):
             return {"shown": False, "note": ro.get("note") or "no re-route available"}
         wire_name, label, path = "C4 REROUTE", "re-route (off-book)", ro.get("path") or []
-        ends = ro.get("leg_end_idx")
+        ends, names = ro.get("leg_end_idx"), list(ro.get("marks") or [])
         if len(path) < 2:
             return {"shown": False, "note": "re-route carries no path"}
     else:
-        vid, vroute, err = _variant(variant)
+        vid, vroute, err = _variant(variant, bundle)
         if err:
             return {"shown": False, "note": err}
         path, ends = vroute["path"], vroute.get("leg_end_idx")
+        names = [l.get("to") for l in (vroute.get("legs") or []) if l.get("to")]
         # the wire name is what the plotter shows — short and clean (LAU caps at 16 chars)
         wire_name, label = f"C4 {vid}"[:16], f"{vid} (gameplan)"
-    marks, boat, next_k = _course_context(route)
-    if source == "reoptimize" and next_k is not None:
-        # the re-route starts at the boat: marks astern aren't on it (blank them so they can't
-        # consume a later vertex — Start would otherwise grab a Finish that shares its spot)
-        marks = [None if k < next_k else m for k, m in enumerate(marks)]
-    if source == "reoptimize":
-        # re-route leg j ends at course mark next_k + j; without the navigator's next mark the
-        # numbering is unknown, so don't guess it
-        verts = (_mark_vertices(path, marks, leg_end_idx=ends, first_leg_to=next_k)
-                 if next_k is not None else {})
-    else:
-        verts = _mark_vertices(path, marks, leg_end_idx=ends)
-    blocked = _blocked_fn(deviation._load_playbook())
+    nav_marks, boat, next_name = _course_context(route)
+    if source == "playbook" and not names and len(nav_marks) > 1:
+        # a variant frozen before legs carried names: assume it sails the navigator's course
+        names = [m.get("name") for m in nav_marks[1:]]
+    verts = _route_frame(path, ends, names, nav_marks, starts_at_mark=(source == "playbook"))
+
+    # where is the boat in the ROUTE's frame?
+    nxt = None
+    if next_name is not None and next_name in names:
+        nxt = names.index(next_name)
+    elif source == "playbook" and nav_marks and next_name == nav_marks[0].get("name"):
+        nxt = -1                                       # pre-start: steering to the start
+    elif source == "reoptimize" and names:
+        if next_name is not None:
+            return {"shown": False, "note": (
+                f"re-route is stale — it was computed through {', '.join(names)}, but the "
+                f"navigator's next mark is now {next_name}. Recompute the re-route, then push.")}
+        nxt = 0                                        # no navigator: the route's own next mark
+    if source == "reoptimize" and nxt:
+        # the boat rounded marks while the re-route was computing: drop the passed legs so the
+        # route starts at the last rounded mark and the plotter can't steer back to it
+        cut = verts.get(nxt - 1)
+        if cut is None:
+            return {"shown": False, "note": (
+                f"re-route is stale — the boat has passed {names[nxt - 1]} since it was computed "
+                "and that rounding can't be located on it. Recompute the re-route, then push.")}
+        path = path[cut:]
+        verts = {j - nxt: i - cut for j, i in verts.items() if j >= nxt}
+        nxt = 0
+
+    blocked = _blocked_fn(bundle)
     idx = _downsample_idx(path, MAX_WPTS, set(verts.values()), blocked)
     pts = [path[i] for i in idx]
     where = {i: j for j, i in enumerate(idx)}
-    dest = _dest_index(pts, boat, {k: where[i] for k, i in verts.items() if i in where}, next_k,
+    dest = _dest_index(pts, boat, {k: where[i] for k, i in verts.items() if i in where}, nxt,
                        blocked)
     wpts = [{"name": f"C4-{i + 1:02d}", "lat": p.get("lat"), "lon": p.get("lon"),
              "t": p.get("t")} for i, p in enumerate(pts)]
