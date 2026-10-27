@@ -1,0 +1,9 @@
+# `make lint` (part of `make ci`). Bug classes only for now: syntax errors and pyflakes
+# (undefined names, redefinitions, bad comparisons...).
+line-length = 100
+
+[lint]
+select = ["E9", "F"]
+# Unused imports/variables and placeholder-less f-strings: 28 left in files under active fixes
+# (review #29-#32). Turn these back on once those PRs merge.
+ignore = ["F401", "F841", "F541"]
