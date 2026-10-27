@@ -221,7 +221,8 @@ def _dest_candidate(pts, boat, mark_pos, next_k, blocked):
 
 
 def _course_context(route=None):
-    """ONE navigator snapshot: (course marks, boat (lat, lon), next-mark NAME). The boat fix is the
+    """ONE navigator snapshot: (course marks, boat (lat, lon), next-mark NAME, next-mark course
+    INDEX — which occurrence on a lapped course; None when it can't be told). The boat fix is the
     position the navigator itself used to pick the next mark (its `position`), so the fix and the
     next mark can't come from two different moments; a separate latest-fix read is only the
     fallback when the navigator doesn't report one. Any miss → ([], None, None): the downsample
@@ -229,15 +230,16 @@ def _course_context(route=None):
     try:
         nav = NAV.get_navigator(route)
         if not nav.get("available"):
-            return [], None, None
+            return [], None, None, None
         marks = NAV._marks(nav["route"]) or []
         pos = nav.get("position") or {}
         if pos.get("lat") is None:
             pos = NAV._latest() or {}
         boat = (pos.get("lat"), pos.get("lon")) if pos.get("lat") is not None else None
-        return marks, boat, (nav.get("next_mark") or {}).get("name")
+        return (marks, boat, (nav.get("next_mark") or {}).get("name"),
+                reoptimize._next_course_index(nav, marks))
     except Exception:
-        return [], None, None
+        return [], None, None, None
 
 
 def _variant(variant=None, bundle=None):
@@ -291,6 +293,7 @@ def show(source: str = "playbook", variant=None, route=None):
             return {"shown": False, "note": ro.get("note") or "no re-route available"}
         wire_name, label, path = "C4 REROUTE", "re-route (off-book)", ro.get("path") or []
         ends, names = ro.get("leg_end_idx"), list(ro.get("marks") or [])
+        ro_idx = ro.get("mark_idx")
         if len(path) < 2:
             return {"shown": False, "note": "re-route carries no path"}
     else:
@@ -301,24 +304,55 @@ def show(source: str = "playbook", variant=None, route=None):
         names = [l.get("to") for l in (vroute.get("legs") or []) if l.get("to")]
         # the wire name is what the plotter shows — short and clean (LAU caps at 16 chars)
         wire_name, label = f"C4 {vid}"[:16], f"{vid} (gameplan)"
-    nav_marks, boat, next_name = _course_context(route)
+    nav_marks, boat, next_name, next_idx = _course_context(route)
+    nav_names = [m.get("name") for m in nav_marks]
     if source == "playbook" and not names and len(nav_marks) > 1:
         # a variant frozen before legs carried names: assume it sails the navigator's course
-        names = [m.get("name") for m in nav_marks[1:]]
+        names = nav_names[1:]
     verts = _route_frame(path, ends, names, nav_marks, starts_at_mark=(source == "playbook"))
+
+    # Which COURSE position each of the route's marks is — the occurrence, not just the name (a
+    # lapped course repeats Top). A whole-course variant whose legs name the navigator's course
+    # mark for mark is positions 1..N; a re-route records its own `mark_idx`. Either is trusted
+    # only when it names the same marks as the navigator's course at those positions.
+    route_idx = None
+    if source == "reoptimize":
+        if (isinstance(ro_idx, list) and len(ro_idx) == len(names) and all(
+                isinstance(i, int) and 0 <= i < len(nav_names) and nav_names[i] == n
+                for i, n in zip(ro_idx, names))):
+            route_idx = ro_idx
+    elif names and nav_names[1:] == names:
+        route_idx = list(range(1, len(names) + 1))
 
     # where is the boat in the ROUTE's frame?
     nxt = None
-    if next_name is not None and next_name in names:
-        nxt = names.index(next_name)
-    elif source == "playbook" and nav_marks and next_name == nav_marks[0].get("name"):
-        nxt = -1                                       # pre-start: steering to the start
-    elif source == "reoptimize" and names:
-        if next_name is not None:
+    if next_name is None:
+        if source == "reoptimize" and names:
+            nxt = 0                                    # no navigator: the route's own next mark
+    elif route_idx is not None and next_idx is not None:
+        if next_idx in route_idx:
+            nxt = route_idx.index(next_idx)
+        elif source == "playbook" and next_idx == 0:
+            nxt = -1                                   # pre-start: steering to the start
+        elif source == "reoptimize":
             return {"shown": False, "note": (
-                f"re-route is stale — it was computed through {', '.join(names)}, but the "
-                f"navigator's next mark is now {next_name}. Recompute the re-route, then push.")}
-        nxt = 0                                        # no navigator: the route's own next mark
+                f"re-route is stale — it was computed from {names[0]} (course mark "
+                f"{route_idx[0] + 1}) on, but the navigator's next mark is {next_name} (course mark "
+                f"{next_idx + 1}). Recompute the re-route, then push.")}
+    else:
+        # positions can't be aligned: a NAME is only trusted when it names one occurrence
+        hits = names.count(next_name)
+        if hits == 1:
+            nxt = names.index(next_name)
+        elif (source == "playbook" and hits == 0 and nav_names
+              and next_name == nav_names[0] and nav_names.count(next_name) == 1):
+            nxt = -1
+        elif source == "reoptimize" and names:
+            why = ("it doesn't contain it" if hits == 0 else
+                   f"{next_name} occurs {hits}× on it and which lap can't be told")
+            return {"shown": False, "note": (
+                f"re-route is stale — the navigator's next mark is {next_name} but {why}. "
+                "Recompute the re-route, then push.")}
     if source == "reoptimize" and nxt:
         # the boat rounded marks while the re-route was computing: drop the passed legs so the
         # route starts at the last rounded mark and the plotter can't steer back to it

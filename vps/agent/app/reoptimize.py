@@ -89,11 +89,30 @@ def _drifted(ctx, prev, age_s):
     return False
 
 
+def _next_course_index(nav, marks):
+    """The navigator's next mark as a POSITION in the course — by the index it reports, checked
+    against the name; else its seq; else the name only when it occurs once. A lapped course
+    (Top → Bottom → Top) repeats names, so the first name match can be a lap behind."""
+    nm = nav.get("next_mark") or {}
+    name, idx, seq = nm.get("name"), nm.get("index"), nm.get("seq")
+    if isinstance(idx, int) and 0 <= idx < len(marks) and marks[idx].get("name") == name:
+        return idx
+    if seq is not None:
+        hit = [i for i, m in enumerate(marks) if m.get("seq") == seq and m.get("name") == name]
+        if len(hit) == 1:
+            return hit[0]
+    hit = [i for i, m in enumerate(marks) if m.get("name") == name]
+    return hit[0] if len(hit) == 1 else None
+
+
 def _remaining_marks(nav, marks):
-    """The marks from the next one through the finish (inclusive) — what's left to sail."""
-    nxt = (nav.get("next_mark") or {}).get("name")
-    idx = next((i for i, m in enumerate(marks) if m["name"] == nxt), 0)
-    return marks[idx:]
+    """The marks from the next one through the finish (inclusive) — what's left to sail. Each
+    carries its `course_index` so the re-route can say WHICH occurrence of a lapped mark it
+    starts at."""
+    idx = _next_course_index(nav, marks)
+    if idx is None:
+        idx = 0
+    return [dict(m, course_index=i) for i, m in enumerate(marks)][idx:]
 
 
 def _avoid_disks(bundle):
@@ -305,7 +324,9 @@ def _compute(nav, remaining, slat, slon, live, bundle, avoid, polys, ctx):
     out = {
         "available": True, "off_playbook": True, "route": nav["route"],
         "wind_source": "forecast" if use_fcst else "live wind (no forecast)",
-        "marks": [m["name"] for m in remaining], "legs": leg_summ, "sail_plan": sail_plan,
+        "marks": [m["name"] for m in remaining], "legs": leg_summ,
+        "sail_plan": sail_plan,
+        "mark_idx": [m.get("course_index") for m in remaining],   # course positions (laps)
         "eta_min": round((t - t0) / 60, 1), "tacks": tacks, "sailed_nm": round(sailed, 2),
         "recommended_heading": all_legs[0]["hdg"] if all_legs else None,
         "first_tack": all_legs[0]["tack"] if all_legs else None,
