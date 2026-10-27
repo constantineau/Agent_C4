@@ -23,9 +23,21 @@ Deletion from the boat is allowed only *after* an off-boat copy is sha256-verifi
 - **`agent-c4` (Orin)** is up (27 min at check), no containers running, and `dnsmasq` +
   `isc-dhcp-server`/`-server6` are in `failed` state. Whether that matters depends on whether
   the Orin is meant to be serving DHCP on the boat LAN — not established.
-- Open for Cole: set the corrupt `archive.db` aside so the archiver starts a fresh one (after
-  confirming Postgres has its contents); and the real fix — an archive that survives a power
-  cut (two corruptions in two months on the same path).
+- **What the corrupt file holds that the VPS does not** (probed read-only with
+  `?immutable=1`, rowid lookups still work): 115,373,456 rows, Jul 20 → 2026-09-02 22:13:21Z;
+  `sync_state.backfill_last_id` = 95,692,480 (= 07:24:54Z Sep 2). Postgres has full-res to
+  07:24Z, then ~19.5k rows/h thinned. So **ids 95.7 M–115.4 M (Sep 2 07:25–22:13Z, ~19.7 M
+  rows) exist only on the Pi** — boat at the dock (SOG 0 all day). Low value, but kept.
+- **Why the brownout rotation did not fire:** `open_db_resilient()` (on `main`) runs
+  `PRAGMA quick_check`, which PASSED; the full-table `SELECT count(*)` at `archiver.py:201`
+  then hit the malformed page, outside the rotation's `try`, and exited. quick_check is not a
+  sufficient gate. Fourth SQLite corruption on this SD card (Jul 18, Aug 30, live pages, Sep 2).
+- **⚠️ Do NOT just rotate it and let the archiver run:** the dead file grew 24 G in 3.4 days at
+  the dock (~7 G/day) and session 3 is still open, so retention prunes nothing — a fresh archive
+  fills the card's 69 G free in ~10 days and takes Signal K/uplink down with it. Even with
+  retention working, 14 days × 7 G > 69 G. Rotation waits on Cole's pick of a guard.
+- Open for Cole: how to restart full-res safely; and the real fix — an archive that survives a
+  power cut, and a rotation gate that catches what quick_check misses.
 
 **`make ci` (new, `tools/ci/run.sh`):** every test file, each in a throwaway container off its
 own service's image built fresh as `sr33-ci-*`. 2 m 35 s warm. **52/53 pass on `dev`.**
