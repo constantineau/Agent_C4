@@ -196,28 +196,10 @@ def _tactics(d, race_id, pb, models, log):
     t_end = start + hours * 3600
     pv_models = (pb.get("provenance") or {}).get("models") or None
     wf, wind_basis = _oracle_windfield(bbox, start, t_end, models or pv_models, race_id, log)
-    if not wf.loaded:
-        return {"available": False, "start_epoch": start,
-                "windfield": {**wf.status(), "basis": wind_basis},
-                "note": "no wind data for the race window (neither the live sources nor the "
-                        "GFS/HRRR archive served it — no egress?) — the oracle needs the wind "
-                        "that blew"}
-    log("routing the hindsight-optimal (oracle) course…")
-    oracle = optimizer.optimize_course(d, course_id, start, wf, avoid=True)
-    if not oracle.get("available", True) and oracle.get("note"):
-        return {"available": False, "start_epoch": start,
-                "note": "oracle route failed: " + oracle["note"]}
-    # COMPLETENESS GUARD (#31, same rule as retro.py): an oracle that never reaches the finish
-    # (time budget out / a leg blocked) would score regret, time-behind and XTE against half a
-    # course. Refuse the tactics half by name; the boat's own speed is still scored on `wf`.
-    _mk, _, _ = race_def.course_to_marks(d, course_id)
-    why = optimizer.incomplete_reason(oracle, (_mk[-1][2], _mk[-1][3]) if _mk else None)
-    if why:
-        return {"available": False, "start_epoch": start, "wf": wf,
-                "windfield": {**wf.status(), "basis": wind_basis},
-                "note": f"oracle route incomplete — {why}; tactics not scored against a "
-                        "partial course"}
-
+    # The actual-current and sea-state fields come BEFORE any refusal below: every return from here
+    # on lets the caller score the boat's own speed, and that score (polar %, helm %, the learning
+    # bins) must be through-water and wave-separated whether or not the tactics half survives —
+    # a following current would otherwise read as overspeed and the seaway as a helm deficit (#31).
     log("building the actual-current field (for through-water scoring)…")
     try:
         from .current import build_currentfield
@@ -231,6 +213,30 @@ def _tactics(d, race_id, pb, models, log):
         wv = build_wavefield(bbox, start, t_end, on_progress=log)
     except Exception:
         wv = None
+
+    if not wf.loaded:
+        return {"available": False, "start_epoch": start, "cur": cur, "wave": wv,
+                "windfield": {**wf.status(), "basis": wind_basis},
+                "note": "no wind data for the race window (neither the live sources nor the "
+                        "GFS/HRRR archive served it — no egress?) — the oracle needs the wind "
+                        "that blew"}
+    log("routing the hindsight-optimal (oracle) course…")
+    oracle = optimizer.optimize_course(d, course_id, start, wf, avoid=True)
+    if not oracle.get("available", True) and oracle.get("note"):
+        return {"available": False, "start_epoch": start, "wf": wf, "cur": cur, "wave": wv,
+                "windfield": {**wf.status(), "basis": wind_basis},
+                "note": "oracle route failed: " + oracle["note"]}
+    # COMPLETENESS GUARD (#31, same rule as retro.py): an oracle that never reaches the finish
+    # (time budget out / a leg blocked) would score regret, time-behind and XTE against half a
+    # course. Refuse the tactics half by name; the boat's own speed is still scored on the same
+    # wind / current / sea-state fields as a complete debrief.
+    _mk, _, _ = race_def.course_to_marks(d, course_id)
+    why = optimizer.incomplete_reason(oracle, (_mk[-1][2], _mk[-1][3]) if _mk else None)
+    if why:
+        return {"available": False, "start_epoch": start, "wf": wf, "cur": cur, "wave": wv,
+                "windfield": {**wf.status(), "basis": wind_basis},
+                "note": f"oracle route incomplete — {why}; tactics not scored against a "
+                        "partial course"}
 
     marks, _, _ = race_def.course_to_marks(d, course_id)
     start_pt = (marks[0][2], marks[0][3]) if marks else None

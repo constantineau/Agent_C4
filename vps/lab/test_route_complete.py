@@ -226,6 +226,95 @@ try:
 finally:
     JD._oracle_windfield, JD.optimizer.optimize_course = _o_wf, _o_opt
 
+print("7b) incomplete-oracle debrief scores own speed through the water, like a complete one")
+from app import current as CURMOD, wave as WAVEMOD   # noqa: E402
+
+
+class FollowCur:
+    """A 2 kn current setting due north — the boat's own direction."""
+    loaded = True
+
+    def current_at(self, lat, lon, t):
+        return (0.0, 2.0)
+
+    def status(self):
+        return {"loaded": True}
+
+
+class Sea:
+    loaded = True
+
+    def wave_at(self, lat, lon, t):
+        return 1.5
+
+    def status(self):
+        return {"loaded": True}
+
+
+NS = {"courses": [{"id": "x", "start": {"lat": 44.0, "lon": -82.0},
+                   "finish": {"points": [{"lat": 44.1333, "lon": -82.0}]}}]}
+T0 = 1.75e9
+# 6 kn through the water due north + the 2 kn following current = 8 kn over the ground, 60 fixes
+fixes = [{"lat": 44.0 + (8.0 / 60.0) * (i / 60.0) / 1.0, "lon": -82.0, "t": T0 + 60 * i,
+          "sog": 8.0, "cog": 0.0} for i in range(61)]
+gpx = {"fixes": fixes, "source": "gpx", "boat": "C4"}
+beam = WF(tws=12.0, twd=270.0)
+full_path = [{"lat": 44.0, "lon": -82.0, "t": T0}, {"lat": 44.1333, "lon": -82.0, "t": T0 + 3600}]
+ORACLES = {
+    "complete": {"available": True, "complete": True, "total_hours": 1.0, "total_sailed_nm": 8.0,
+                 "path": full_path, "legs": []},
+    "incomplete": {"available": True, "complete": False, "degraded": True, "total_hours": 0.5,
+                   "incomplete": {"to": "Finish", "short_nm": 4.0, "reason": "time budget"},
+                   "path": full_path[:1] + [{"lat": 44.0667, "lon": -82.0, "t": T0 + 1800}]},
+    "failed": {"available": False, "note": "no polars loaded"},
+}
+_saved = (JD._oracle_windfield, JD.optimizer.optimize_course, CURMOD.build_currentfield,
+          WAVEMOD.build_wavefield)
+scores = {}
+try:
+    JD._oracle_windfield = lambda *a, **k: (beam, "archive")
+    CURMOD.build_currentfield = lambda *a, **k: FollowCur()
+    WAVEMOD.build_wavefield = lambda *a, **k: Sea()
+    for kind, orc in ORACLES.items():
+        JD.optimizer.optimize_course = lambda *a, _o=orc, **k: _o
+        tac = JD._tactics(NS, "r", {"course_id": "x", "start_epoch": T0}, None, lambda *_: None)
+        check(f"{kind}: tactics {'available' if kind == 'complete' else 'refused'}",
+              bool(tac.get("available")) == (kind == "complete"))
+        check(f"{kind}: current + sea-state fields ride along", tac.get("cur") is not None
+              and tac.get("wave") is not None and tac.get("wf") is not None)
+        # exactly the judge's call
+        scores[kind] = JD._score_actual_track(gpx, tac.get("oracle") or {}, tac.get("marks") or [],
+                                              tac.get("start_epoch"), tac.get("wf"), tac.get("cur"),
+                                              tac.get("wave"))
+    raw = JD._score_actual_track(gpx, {}, [], T0, beam, None, None)    # the pre-fix shape
+
+    class _NoWind(WF):
+        loaded = False
+    JD._oracle_windfield = lambda *a, **k: (_NoWind(), "live")
+    tac = JD._tactics(NS, "r", {"course_id": "x", "start_epoch": T0}, None, lambda *_: None)
+    check("no wind field: refused, but current + sea state still ride along (measured-wind tracks)",
+          tac.get("available") is False and tac.get("cur") is not None and tac.get("wave") is not None)
+finally:
+    (JD._oracle_windfield, JD.optimizer.optimize_course, CURMOD.build_currentfield,
+     WAVEMOD.build_wavefield) = _saved
+target = OPT._polar_speed(P, 12.0, 90.0)
+want = round(100 * 6.0 / target)
+c, i_, f_ = scores["complete"], scores["incomplete"], scores["failed"]
+print(f"     polar target {target:.2f} kn → expect ~{want}% through water; complete "
+      f"{c.get('polar_pct')}% / incomplete {i_.get('polar_pct')}% / oracle-failed "
+      f"{f_.get('polar_pct')}% / no current {raw.get('polar_pct')}%")
+check("complete: polar % is the through-water 6 kn", abs((c.get("polar_pct") or 0) - want) <= 2
+      and c.get("current_corrected") and c.get("wave_corrected"))
+for kind in ("incomplete", "failed"):
+    sc = scores[kind]
+    check(f"{kind}: same polar % / helm % as the complete debrief",
+          sc.get("polar_pct") == c.get("polar_pct") and sc.get("helm_pct") == c.get("helm_pct"))
+    check(f"{kind}: current- and wave-corrected", sc.get("current_corrected") and sc.get("wave_corrected"))
+    check(f"{kind}: learning bins identical to the complete path",
+          sc.get("perf_bins") and sc.get("perf_bins") == c.get("perf_bins"))
+check("(control) without the current the same track reads ~2 kn fast",
+      (raw.get("polar_pct") or 0) >= (c.get("polar_pct") or 0) + 20)
+
 # ---- 8) synthesis._downsample: marks kept, never across an obstacle ------------------------------
 print("8) synthesis._downsample")
 island = Box(44.05, 44.15, -82.03, -81.97)
