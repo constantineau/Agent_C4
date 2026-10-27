@@ -91,6 +91,14 @@ check("5 kn beat VMG angle is between the 4 and 6 kn rows' (45.3°, 42.6°)",
       42.6 <= OPT._vmg_twa(P, 5, "beat") <= 45.3)
 # downwind, straight-line interpolation between 152.5° and 165° bows the VMG curve a little past the
 # charted run angle (VMG 5.641 at 152.5° vs 5.644 at 154°), so the run angle lands within 2°
+rows = OPT.SPOL.rows_for(P)
+for t in (19.0, 19.04, 21.37, 4.5, 2.0):
+    b = OPT._vmg_twa(P, t, "beat")
+    hd = [h for h in OPT._vmg_headings(P, t, 0.0) if abs(OPT._wrap180(h)) < 90]
+    check(f"{t} kn: the beat VMG angle ({b:.3f}°) is not inside the no-go edge "
+          f"({OPT.SPOL.min_twa(rows, t):.3f}°) and its injected headings sail (> 0 kn)",
+          b >= OPT.SPOL.min_twa(rows, t) and sp(t, b) > 0
+          and hd and all(sp(t, abs(OPT._wrap180(h))) > 0 for h in hd))
 check(f"10 kn run VMG angle ≈ the cert's 152.5° ({OPT._vmg_twa(P, 10, 'run')}°)",
       abs(OPT._vmg_twa(P, 10, "run") - 152.5) <= 2.0)
 
@@ -189,6 +197,16 @@ r1 = OPT.optimize_course(run_def, "x", 0, Const(12.0), avoid=False, emit_explora
 print(f"     8 nm run, S1 out: no overlay {r0.get('total_minutes')} min, 0.85 overlay {r1.get('total_minutes')} min")
 check("gear-loss route keeps the overlay (0.85 everywhere downwind → ≥ 15% slower)",
       r0.get("available") and r1.get("available") and r1["total_minutes"] >= r0["total_minutes"] * 1.15)
+
+print("9b) no wind at all: the course must not come back as a finished 0-minute route (needs #31 / PR #61)")
+r_calm = OPT.optimize_course(run_def, "x", 0, Const(0.0), avoid=False, emit_exploration=False,
+                             resolution="fast", time_budget_s=30)
+print(f"     TWS 0: available={r_calm.get('available')} degraded={r_calm.get('degraded')} "
+      f"minutes={r_calm.get('total_minutes')} warnings={(r_calm.get('warnings') or [])[:1]}")
+check("TWS 0 → not available, or degraded with the stalled leg (Finish) named in a warning",
+      r_calm.get("available") is False
+      or (r_calm.get("degraded") is True
+          and any("Finish" in w for w in (r_calm.get("warnings") or []))))
 
 print("10) `realized` is reported for helm > 1.0; the per-model fan gets the injected polar")
 rh = OPT.optimize_course(run_def, "x", 0, Const(12.0), avoid=False, emit_exploration=False, helm_factor=1.05)

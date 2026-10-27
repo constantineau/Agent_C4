@@ -212,7 +212,11 @@ def _vmg_twa_cached(P, tws, pos):
         if len(_VMG_CACHE) > 20000:
             _VMG_CACHE.clear()
         hit = _VMG_CACHE[k] = (rows, SPOL.vmg_twa(rows, k[1], pos))
-    return hit[1]
+    a = hit[1]
+    if a is not None and pos == "beat":
+        # the cache is keyed to 0.1 kn; never hand back an angle inside THIS wind's no-go edge
+        a = max(a, SPOL.min_twa(rows, float(tws)))
+    return a
 
 
 def _wave_factor(hs, twa, coeffs=None):

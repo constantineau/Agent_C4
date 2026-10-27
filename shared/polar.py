@@ -118,8 +118,8 @@ def lookup(table, tws, twa, lo_margin=0.0):
 def vmg_twa(rows, tws, pos):
     """The VMG-optimal TWA at this TWS on the interpolated polar: 'beat' (upwind, < 90°) or 'run'
     (downwind, > 90°). Scans every charted angle of the bracketing rows plus a 0.5° grid, so the
-    answer is exact wherever the optimum sits on a charted angle (it normally does). None if the
-    table has no speed on that side."""
+    answer is exact wherever the optimum sits on a charted angle (it normally does). Unrounded, so a
+    beat angle is never inside the no-go edge. None if the table has no speed on that side."""
     if not rows or tws is None or tws <= 0:
         return None
     r0, r1, _f, _s = _bracket(rows, float(tws))
@@ -141,7 +141,9 @@ def vmg_twa(rows, tws, pos):
             return None
         if v > best + 1e-12 or (best_a is not None and abs(v - best) <= 1e-12 and a < best_a):
             best, best_a = v, a
-    return round(best_a, 1) if best_a is not None else None
+    # unrounded: rounding can land a beat angle inside the no-go edge (19 kn: edge 35.925° → 35.9°
+    # reads 0 kn). Round only for display.
+    return best_a
 
 
 def target(table, tws, twa, no_go=30.0):
