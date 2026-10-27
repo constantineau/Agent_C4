@@ -69,9 +69,9 @@ in (gathered in parallel); LLM phrasing and the crew briefs run in their own bac
 swap in later. When the collision watch can't see — engine unreachable, the AIS read failing, or no
 own GPS fix — a deterministic **"Collision watch blind: …"** safety callout (urgency now, confirmed
 over two ticks) replaces the old silent all-clear, and `last_error` names an unreachable engine.
-The iPad's polled `POST /strategy` is served from a per-route cache: one LLM pass at a time in the
-background, at most every `COPILOT_STRATEGY_TTL_S` (180 s); each poll answers at once with the
-fresh engine digest plus the last LLM narrative while the engine's call is unchanged.
+`POST /strategy` returns the fresh deterministic engine digest by default (the iPad polls it every
+~15 s); the LLM narrative runs only on an explicit `{"use_llm": true}`. Polling a ~45 s LLM pass
+kept Ollama busy and queued the coach line behind it (an LLM strategy narrative is deferred to #53).
 
 Same guardrails as a brief: every callout is **grounded** in a real engine fact and/or a playbook
 variant (ungrounded ones are dropped) and the engine does the math — reliability discipline; the

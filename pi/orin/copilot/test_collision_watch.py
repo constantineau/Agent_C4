@@ -4,7 +4,7 @@ stubbed LLM, no live engine, no model. Covers GitHub #29:
 
   1. every closing contact is checked — a near-term contact behind a CPA-sorted far one is warned;
   2. the warning is published at once — never waits on the LLM, never phrased by it;
-  3. the polled /strategy never blocks or stacks LLM calls;
+  3. the polled /strategy is the engine digest — it never calls the LLM;
   4. a watch-level contact leads the coach line over "now" items;
   5. engine lost / AIS read failing / no own fix raise a "collision watch blind" callout.
 
@@ -38,15 +38,6 @@ class StubEngine:
 
     def __init__(self, *a, **k):
         pass
-
-    entered = threading.Event()          # set when strategy() is called…
-    release = None                       # …which then blocks on this Event, if one is set
-
-    def strategy(self, *a, **k):
-        StubEngine.entered.set()
-        if StubEngine.release is not None:
-            StubEngine.release.wait(5)
-        return dict(StubEngine.facts.get("strategy") or {"available": False, "reason": "stub"})
 
     def __getattr__(self, name):
         def read(*a, **k):
@@ -202,92 +193,12 @@ async def scenarios() -> bool:
 _RealEngine = copilot.EngineClient
 
 
-def test_strategy_cache() -> bool:
-    """POST /strategy (the iPad's 15-s poll) must answer at once, run at most one LLM pass at a
-    time, reuse the narrative while the engine's call is unchanged, and drop it when it changes."""
-    print("\n== 3. polled /strategy: cached, single-flight, never blocks ==")
+def test_strategy_default() -> bool:
+    """POST /strategy as the iPad polls it (empty body, every ~15 s) is the fresh engine digest:
+    no LLM call, answered at once, play statuses straight from the digest. The LLM narrative runs
+    only on an explicit use_llm=true."""
+    print("\n== 3. polled /strategy: the engine digest, never the LLM ==")
     ok = True
-    rec = {"action": "Hold: Middle start", "vs_playbook": "on-plan", "target_variant": "middle",
-           "rationale": "no decisive signal", "grounded_in": ["get_selector"], "urgency": "monitor",
-           "confidence": "med"}
-    digest = {"available": True, "mode": "deterministic", "assessment": "Hold: Middle start",
-              "picture": [{"signal": "shift", "read": "osc ±4°", "grounded_in": ["get_tactics"]}],
-              "recommendation": rec}
-    StubEngine.facts = {"strategy": digest}
-    StubLLM.strategy = {"assessment": "Signals are quiet — hold the middle.",
-                        "recommendation": {"action": "x", "rationale": "shift is just oscillating",
-                                           "grounded_in": ["get_tactics"], "urgency": "monitor",
-                                           "confidence": "med"}}
-    StubLLM.calls = 0
-    StubLLM.gate.clear()
-    config.USE_LLM = True
-    copilot.reset_strategy_cache()
-
-    t0 = time.monotonic()
-    rs = [client.post("/strategy", json={"route": ROUTE}).json() for _ in range(5)]
-    ok &= _check("5 rapid polls answer at once with the engine digest while the model is busy",
-                 time.monotonic() - t0 < 3 and all(r["mode"] == "deterministic" for r in rs))
-    ok &= _check("…and start exactly ONE LLM pass", StubLLM.calls == 1)
-    StubLLM.gate.set()
-    for _ in range(100):
-        if not copilot._STRAT_LOCK.locked():
-            break
-        time.sleep(0.05)
-    r = client.post("/strategy", json={"route": ROUTE}).json()
-    ok &= _check("next poll carries the LLM narrative on the fresh digest",
-                 r["mode"] == "llm" and r["assessment"].startswith("Signals are quiet")
-                 and r["recommendation"]["action"] == "Hold: Middle start"
-                 and r["recommendation"]["rationale"] == "shift is just oscillating")
-    ok &= _check("still one LLM pass (served from cache)", StubLLM.calls == 1)
-    # the signals move under an unchanged Hold → the engine's own fresh narrative, no cached wording
-    StubEngine.facts = {"strategy": {**digest, "assessment": "Signals split — hold: middle start.",
-                                     "concordance": {"strength": "split", "note": "shift vs fleet"},
-                                     "picture": [{"signal": "shift", "read": "persistent right 9°",
-                                                  "grounded_in": ["get_tactics"]}]}}
-    r = client.post("/strategy", json={"route": ROUTE}).json()
-    ok &= _check("signals change under an unchanged Hold → fresh engine assessment, no cached wording",
-                 r["mode"] == "deterministic" and r["assessment"] == "Signals split — hold: middle start."
-                 and r["recommendation"]["rationale"] == "no decisive signal")
-    StubEngine.facts = {"strategy": digest}
-    r = client.post("/strategy", json={"route": ROUTE}).json()
-    ok &= _check("picture back to what was graded → cached wording again", r["mode"] == "llm")
-    StubEngine.facts = {"strategy": {**digest, "recommendation": {**rec, "action": "Switch → Right",
-                                                                  "target_variant": "right"}}}
-    r = client.post("/strategy", json={"route": ROUTE}).json()
-    ok &= _check("engine's call changed → the old narrative is dropped",
-                 r["mode"] == "deterministic" and r["recommendation"]["action"] == "Switch → Right")
-    config.USE_LLM = False
-    return ok
-
-
-def _play(pid):
-    return {"id": pid, "conditions": {"narrative": f"{pid} narrative"}}
-
-
-def _load_playbook(*pids):
-    r = client.post("/playbook/load", json={"race_id": "t", "variants": [{"id": "middle"}],
-                                            "plays": [_play(p) for p in pids]}).json()
-    assert r.get("loaded"), r
-
-
-def _wait_idle():
-    for _ in range(100):
-        if not copilot._STRAT_LOCK.locked():
-            return
-        time.sleep(0.05)
-
-
-def test_strategy_cache_plays() -> bool:
-    """The cached LLM play grades never carry stale statuses or stale play ids: statuses always come
-    from the fresh digest, a play that cleared is dropped, and a playbook reload empties the cache
-    (an LLM pass in flight across the reload can't refill it)."""
-    print("\n== 3b. polled /strategy: play matches always match the fresh digest ==")
-    import os
-    import tempfile
-    ok = True
-    tmp = tempfile.mkdtemp()
-    orig_path = config.PLAYBOOK_PATH
-    config.PLAYBOOK_PATH = os.path.join(tmp, "playbook.json")
     rec = {"action": "Hold: Middle start", "vs_playbook": "on-plan", "target_variant": "middle",
            "rationale": "no decisive signal", "grounded_in": ["get_selector"], "urgency": "monitor"}
 
@@ -297,126 +208,31 @@ def test_strategy_cache_plays() -> bool:
                 "recommendation": rec,
                 "plays": {"detail": [{"id": k, "status": v} for k, v in statuses.items()]}}
 
-    def poll():
-        return client.post("/strategy", json={"route": ROUTE}).json()
-
+    StubLLM.strategy = {"assessment": "From the model.",
+                        "recommendation": {"action": "x", "rationale": "model rationale",
+                                           "grounded_in": ["get_tactics"]}}
+    StubLLM.calls = 0
+    StubLLM.gate.clear()                 # a stuck model: any default-path LLM call would hang here
+    config.USE_LLM = True
     try:
-        _load_playbook("P1", "P2")
-        config.USE_LLM = True
-        StubLLM.strategy = {"assessment": "Pressure play is on.",
-                            "recommendation": {"action": "x", "rationale": "the left is paying",
-                                               "grounded_in": ["get_tactics"]},
-                            "play_matches": [{"play_id": "P1", "match": "strong", "why": "breeze left"},
-                                             {"play_id": "P2", "match": "partial", "why": "maybe"}]}
+        StubEngine.facts = {"strategy": digest({"P1": "armed"})}
+        t0 = time.monotonic()
+        rs = [client.post("/strategy", json={}).json() for _ in range(5)]
+        ok &= _check("5 polls answer at once with the engine digest",
+                     time.monotonic() - t0 < 3
+                     and all(r["mode"] == "deterministic" and r["assessment"] == "Hold: Middle start"
+                             for r in rs))
+        ok &= _check("…and never call the LLM", StubLLM.calls == 0)
+        StubEngine.facts = {"strategy": digest({"P1": "quiet"})}
+        r = client.post("/strategy", json={}).json()
+        ok &= _check("play statuses come straight from the fresh digest",
+                     r["plays"]["detail"] == [{"id": "P1", "status": "quiet"}] and "play_matches" not in r)
         StubLLM.gate.set()
-        StubEngine.facts = {"strategy": digest({"P1": "armed", "P2": "arming"})}
-        poll()
-        _wait_idle()
-        r = poll()
-        ok &= _check("cached pass shows both graded plays with their live status",
-                     r["mode"] == "llm" and [(m["play_id"], m["status"]) for m in r.get("play_matches", [])]
-                     == [("P1", "armed"), ("P2", "arming")])
-
-        # P1 clears; the engine still says Hold, so the narrative is reused — but not P1's grade
-        StubEngine.facts = {"strategy": digest({"P1": "quiet", "P2": "arming"})}
-        r = poll()
-        ok &= _check("a play that cleared (rec still Hold) is NOT shown armed",
-                     r["mode"] == "llm" and [m["play_id"] for m in r.get("play_matches", [])] == ["P2"])
-        StubEngine.facts = {"strategy": digest({"P2": "armed"})}
-        r = poll()
-        ok &= _check("a play whose status changed since the grade is dropped", not r.get("play_matches"))
-
-        # new homework: the cache is emptied, and the next poll is the plain fresh digest
-        StubEngine.facts = {"strategy": digest({"P1": "armed", "P2": "arming"})}
-        _load_playbook("P3")
-        r = poll()
-        ok &= _check("playbook reload → no cached narrative, no stale play ids",
-                     r["mode"] == "deterministic" and not r.get("play_matches"))
-        _wait_idle()
-        r = poll()
-        ok &= _check("after the reload, matches only ever name plays in the new playbook",
-                     all(m["play_id"] == "P3" for m in r.get("play_matches", [])))
-
-        # a pass in flight across a reload can't refill the cache with the old playbook's grades
-        copilot.reset_strategy_cache()
-        StubLLM.gate.clear()
-        _load_playbook("P1", "P2")
-        poll()                                   # starts a pass graded against P1/P2
-        _load_playbook("P3")
-        StubLLM.gate.set()
-        _wait_idle()
-        ok &= _check("an LLM pass in flight across a reload does not refill the cache",
-                     ROUTE not in copilot._STRAT_CACHE)
-
-        # a reload landing exactly between the worker's generation check and its write: the hook
-        # fires inside that window and starts a reset; the reset must wait for the publish, then
-        # clear it — never let the old pass's result survive the reload.
-        copilot.reset_strategy_cache()
-        in_window, reset_done = threading.Event(), threading.Event()
-
-        def reloader():
-            in_window.wait(5)
-            copilot.reset_strategy_cache()
-            reset_done.set()
-
-        def hook():
-            in_window.set()
-            reset_done.wait(0.5)         # without the shared lock the reset completes right here
-        th = threading.Thread(target=reloader)
-        th.start()
-        copilot._publish_hook = hook
-        try:
-            poll()
-            _wait_idle()
-            th.join(5)
-        finally:
-            copilot._publish_hook = None
-        ok &= _check("a reset racing the worker's publish still leaves the cache empty",
-                     reset_done.is_set() and ROUTE not in copilot._STRAT_CACHE)
-
-        # a reload while a request is between reading the playbook and getting the engine digest:
-        # the request read the OLD playbook, so it must neither serve nor start a pass on it.
-        copilot.reset_strategy_cache()
-        _load_playbook("P1", "P2")
-        StubLLM.strategy = {**StubLLM.strategy, "assessment": "Narrative from old"}
-        calls0 = StubLLM.calls
-        StubEngine.entered.clear()
-        StubEngine.release = threading.Event()
-        got = {}
-        th = threading.Thread(target=lambda: got.update(r=poll()))
-        th.start()
-        try:
-            StubEngine.entered.wait(5)       # the request has read the OLD playbook and is in the engine
-            _load_playbook("P3")
-        finally:
-            StubEngine.release.set()
-            StubEngine.release = None
-        th.join(5)
-        _wait_idle()
-        r = got.get("r") or {}
-        ok &= _check("reload while a request waits on the engine → that request starts no LLM pass",
-                     StubLLM.calls == calls0 and ROUTE not in copilot._STRAT_CACHE
-                     and r.get("mode") == "deterministic")
-        poll()
-        _wait_idle()
-        r = poll()
-        ok &= _check("the next pass is graded against the new playbook only",
-                     r["mode"] == "llm" and all(m["play_id"] == "P3" for m in r.get("play_matches", [])))
-
-        # the bundle swapped on disk with no reset at all → the cached wording isn't reused
-        import json as _json
-        with open(config.PLAYBOOK_PATH, "w") as f:
-            _json.dump({"race_id": "t2", "variants": [{"id": "middle"}], "plays": [_play("P9")]}, f)
-        StubLLM.gate.clear()                 # hold any new pass so this poll sees the cache as-is
-        r = poll()
-        StubLLM.gate.set()
-        _wait_idle()
-        ok &= _check("playbook swapped on disk without a reset → no cached wording",
-                     r["mode"] == "deterministic")
+        r = client.post("/strategy", json={"use_llm": True}).json()
+        ok &= _check("explicit use_llm=true still runs the LLM narrative",
+                     StubLLM.calls == 1 and r["mode"] == "llm" and r["assessment"] == "From the model.")
     finally:
-        config.PLAYBOOK_PATH = orig_path
         config.USE_LLM = False
-        copilot.reset_strategy_cache()
     return ok
 
 
@@ -425,8 +241,7 @@ def main():
     copilot.EngineClient, copilot.LLMClient = StubEngine, StubLLM
     try:
         ok = asyncio.run(scenarios())
-        ok &= test_strategy_cache()
-        ok &= test_strategy_cache_plays()
+        ok &= test_strategy_default()
     finally:
         copilot.EngineClient, copilot.LLMClient, config.USE_LLM, config.BRIEFS_ENABLED = orig
     # the bench's pure callout/coach checks (incl. the watch-level ranking) ride along in CI

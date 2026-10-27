@@ -148,7 +148,7 @@ def playbook_load(body: dict):
     with open(tmp, "w") as f:
         _json.dump(bundle, f)
     _os.replace(tmp, path)
-    copilot.reset_narration()            # new homework → clear the show-once dedup + strategy cache
+    copilot.reset_narration()            # new homework → clear the show-once dedup
     pb = playbook_mod.load()
     return {"loaded": pb.loaded, "race_id": pb.race_id, "variants": len(pb.variants),
             "plays": len(pb.play_ids()), "signed": pb.signed, "signature_ok": pb.signature_ok,
