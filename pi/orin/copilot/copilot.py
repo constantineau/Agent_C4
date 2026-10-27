@@ -515,34 +515,51 @@ def _strategy_llm(digest: dict, pb: playbook_mod.Playbook, meta: dict) -> dict:
 # the server kept running every one of them — Ollama was never free for the coach line or a brief.
 # So the polled path is served from a per-route cache: at most ONE LLM /strategy runs at a time, in
 # the background, at most once per STRATEGY_TTL_S; the request itself answers at once with the fresh
-# engine digest, carrying the last LLM narrative only while the engine's call is still the same one.
+# engine digest, carrying the last LLM narrative only while the engine's picture is unchanged.
 _STRAT_LOCK = threading.Lock()           # single flight: never two LLM /strategy calls at once
-_STRAT_CACHE: dict = {}                  # route -> (at, llm_out | None)  (None = the last try failed)
+_STRAT_STATE = threading.Lock()          # guards the cache + generation: reset vs a worker's publish
+_STRAT_CACHE: dict = {}                  # route -> (at, picture_key, llm_out | None)  (None = last try failed)
 _STRAT_GEN = [0]                         # bumped on a playbook change: an in-flight pass can't refill
+_publish_hook = None                     # test seam: called inside the publish critical section
 
 
-def _rec_key(rec):
-    rec = rec or {}
-    return (rec.get("action"), rec.get("target_variant"), rec.get("vs_playbook"))
+def _picture_key(digest):
+    """What the engine's own narrative is built from: its assessment, the per-signal reads, the
+    concordance and the recommendation's verdict. Cached LLM wording is only reused while this is
+    unchanged — any change in the engine's picture means the fresh engine narrative is shown."""
+    rec = digest.get("recommendation") or {}
+    conc = digest.get("concordance") or {}
+    return json.dumps([digest.get("assessment"),
+                       [(p.get("signal"), p.get("read")) for p in digest.get("picture") or []],
+                       [conc.get("strength"), conc.get("lean"), conc.get("note")],
+                       [rec.get("action"), rec.get("target_variant"), rec.get("vs_playbook")]],
+                      sort_keys=True, default=str)
 
 
 def reset_strategy_cache():
     """Forget every cached LLM strategy pass (new homework → its play ids / narrative are stale)."""
-    _STRAT_GEN[0] += 1
-    _STRAT_CACHE.clear()
+    with _STRAT_STATE:
+        _STRAT_GEN[0] += 1
+        _STRAT_CACHE.clear()
 
 
-def _strategy_refresh(route, digest, pb, meta):
-    gen = _STRAT_GEN[0]
+def _strategy_refresh(route, digest, pb, meta, gen):
+    """One background LLM pass. `gen` was captured with the playbook snapshot `pb` it grades
+    against; the result is published only if no reset happened since — checked and written under
+    the same lock reset takes, so a reload can't slip in between."""
     try:
-        out = _strategy_llm(dict(digest), pb, dict(meta))
-        entry = (time.time(), out if out.get("mode") == "llm" else None)
-    except Exception:                    # a background refresh never takes the service down
-        entry = (time.time(), None)
+        try:
+            out = _strategy_llm(dict(digest), pb, dict(meta))
+            llm_out = out if out.get("mode") == "llm" else None
+        except Exception:                # a background refresh never takes the service down
+            llm_out = None
+        with _STRAT_STATE:
+            if gen == _STRAT_GEN[0]:
+                if _publish_hook:
+                    _publish_hook()
+                _STRAT_CACHE[route] = (time.time(), _picture_key(digest), llm_out)
     finally:
         _STRAT_LOCK.release()
-    if gen == _STRAT_GEN[0]:             # the playbook didn't change under us
-        _STRAT_CACHE[route] = entry
 
 
 def _fresh_play_matches(cached_matches, digest, pb):
@@ -558,14 +575,16 @@ def _fresh_play_matches(cached_matches, digest, pb):
 
 def _strategy_cached(route, digest, pb, meta) -> dict:
     now = time.time()
-    at, cached = _STRAT_CACHE.get(route, (0.0, None))
+    with _STRAT_STATE:
+        at, key, cached = _STRAT_CACHE.get(route, (0.0, None, None))
+        gen = _STRAT_GEN[0]              # taken with this request's playbook snapshot `pb`
     ttl = config.STRATEGY_TTL_S
     if now - at >= ttl and _STRAT_LOCK.acquire(blocking=False):
         meta["llm_refreshing"] = True
-        threading.Thread(target=_strategy_refresh, args=(route, dict(digest), pb, dict(meta)),
+        threading.Thread(target=_strategy_refresh, args=(route, dict(digest), pb, dict(meta), gen),
                          daemon=True).start()
-    if (cached and now - at < 2 * ttl
-            and _rec_key(cached.get("recommendation")) == _rec_key(digest.get("recommendation"))):
+    # cached LLM wording is only reused while the engine's picture is unchanged (see _picture_key)
+    if cached and now - at < 2 * ttl and key == _picture_key(digest):
         out = dict(digest)               # the engine's numbers stay fresh; only the narrative is reused
         out["assessment"] = cached.get("assessment", digest.get("assessment"))
         if digest.get("recommendation") and cached.get("recommendation"):

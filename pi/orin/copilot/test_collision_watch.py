@@ -230,6 +230,18 @@ def test_strategy_cache() -> bool:
                  and r["recommendation"]["action"] == "Hold: Middle start"
                  and r["recommendation"]["rationale"] == "shift is just oscillating")
     ok &= _check("still one LLM pass (served from cache)", StubLLM.calls == 1)
+    # the signals move under an unchanged Hold → the engine's own fresh narrative, no cached wording
+    StubEngine.facts = {"strategy": {**digest, "assessment": "Signals split — hold: middle start.",
+                                     "concordance": {"strength": "split", "note": "shift vs fleet"},
+                                     "picture": [{"signal": "shift", "read": "persistent right 9°",
+                                                  "grounded_in": ["get_tactics"]}]}}
+    r = client.post("/strategy", json={"route": ROUTE}).json()
+    ok &= _check("signals change under an unchanged Hold → fresh engine assessment, no cached wording",
+                 r["mode"] == "deterministic" and r["assessment"] == "Signals split — hold: middle start."
+                 and r["recommendation"]["rationale"] == "no decisive signal")
+    StubEngine.facts = {"strategy": digest}
+    r = client.post("/strategy", json={"route": ROUTE}).json()
+    ok &= _check("picture back to what was graded → cached wording again", r["mode"] == "llm")
     StubEngine.facts = {"strategy": {**digest, "recommendation": {**rec, "action": "Switch → Right",
                                                                   "target_variant": "right"}}}
     r = client.post("/strategy", json={"route": ROUTE}).json()
@@ -326,6 +338,32 @@ def test_strategy_cache_plays() -> bool:
         _wait_idle()
         ok &= _check("an LLM pass in flight across a reload does not refill the cache",
                      ROUTE not in copilot._STRAT_CACHE)
+
+        # a reload landing exactly between the worker's generation check and its write: the hook
+        # fires inside that window and starts a reset; the reset must wait for the publish, then
+        # clear it — never let the old pass's result survive the reload.
+        copilot.reset_strategy_cache()
+        in_window, reset_done = threading.Event(), threading.Event()
+
+        def reloader():
+            in_window.wait(5)
+            copilot.reset_strategy_cache()
+            reset_done.set()
+
+        def hook():
+            in_window.set()
+            reset_done.wait(0.5)         # without the shared lock the reset completes right here
+        th = threading.Thread(target=reloader)
+        th.start()
+        copilot._publish_hook = hook
+        try:
+            poll()
+            _wait_idle()
+            th.join(5)
+        finally:
+            copilot._publish_hook = None
+        ok &= _check("a reset racing the worker's publish still leaves the cache empty",
+                     reset_done.is_set() and ROUTE not in copilot._STRAT_CACHE)
     finally:
         config.PLAYBOOK_PATH = orig_path
         config.USE_LLM = False
