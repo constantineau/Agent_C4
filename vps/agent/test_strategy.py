@@ -17,6 +17,9 @@ BUNDLE = {"race_id": "u", "recommended": "middle", "headline": "Cove Island spli
 
 def stub(bundle=BUNDLE, tac=None, dev=None, dft=None, fleet=None):
     sel = strategy.selector_mod
+    # each scenario is a fresh boat: the selector's settle/confirm state is per-process and
+    # every scenario runs within the same second, so it would carry the last verdict over.
+    sel._SETTLE.clear(); sel._CONFIRM.clear()
     sel.deviation._load_playbook = lambda: bundle
     sel.tactics.get_tactics = lambda route=None: (tac or {"available": False})
     sel.deviation.get_deviation = lambda route=None: (dev or {"available": False, "status": "na"})
