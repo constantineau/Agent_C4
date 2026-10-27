@@ -28,16 +28,22 @@ Deletion from the boat is allowed only *after* an off-boat copy is sha256-verifi
   `sync_state.backfill_last_id` = 95,692,480 (= 07:24:54Z Sep 2). Postgres has full-res to
   07:24Z, then ~19.5k rows/h thinned. So **ids 95.7 M–115.4 M (Sep 2 07:25–22:13Z, ~19.7 M
   rows) exist only on the Pi** — boat at the dock (SOG 0 all day). Low value, but kept.
-- **Why the brownout rotation did not fire:** `open_db_resilient()` (on `main`) runs
-  `PRAGMA quick_check`, which PASSED; the full-table `SELECT count(*)` at `archiver.py:201`
-  then hit the malformed page, outside the rotation's `try`, and exited. quick_check is not a
-  sufficient gate. Fourth SQLite corruption on this SD card (Jul 18, Aug 30, live pages, Sep 2).
+- **Why the brownout rotation did not fire:** it was never aboard. The Pi runs `main` @ b3c30a1
+  (Sep 1); the brownout code (23cc5d4) landed Sep 7. The crash at "archiver.py:201" is b3c30a1's
+  line (`open_db()` then `count(*)`). (An earlier version of this note blamed quick_check — wrong.
+  quick_check is still a weak gate on dev: see #33.) Fourth SQLite corruption on this SD card.
 - **⚠️ Do NOT just rotate it and let the archiver run:** the dead file grew 24 G in 3.4 days at
   the dock (~7 G/day) and session 3 is still open, so retention prunes nothing — a fresh archive
   fills the card's 69 G free in ~10 days and takes Signal K/uplink down with it. Even with
   retention working, 14 days × 7 G > 69 G. Rotation waits on Cole's pick of a guard.
 - Open for Cole: how to restart full-res safely; and the real fix — an archive that survives a
   power cut, and a rotation gate that catches what quick_check misses.
+
+**Full code review (same day):** map issue **#57**, 28 issues #29–#56 (4 blockers: #29 copilot
+collision callouts, #30 Lab polar lookup mixes kn and degrees, #31 routes teleport to unreached
+marks, #32 boat runs Sep 1 code). Security findings are tracked privately, not in this public
+repo. `test_strategy`'s failure is the TEST leaking selector settle state (#40). Cole: full-res
+recording stays off until #32/#33/#34 land.
 
 **`make ci` (new, `tools/ci/run.sh`):** every test file, each in a throwaway container off its
 own service's image built fresh as `sr33-ci-*`. 2 m 35 s warm. **52/53 pass on `dev`.**
