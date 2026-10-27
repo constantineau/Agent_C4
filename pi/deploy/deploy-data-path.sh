@@ -100,7 +100,8 @@ for f in "${all[@]}"; do
 done
 dirty=$(pi "cd ~/$PI_REPO && git status --short -- ${all[*]}" || true)
 if [[ -n $dirty ]]; then
-  echo "The Pi has LOCAL edits to data-path files — stop and look before overwriting them:"; echo "$dirty"; exit 1
+  echo "The Pi has LOCAL edits to data-path files — stop and look before overwriting them:"; echo "$dirty"
+  echo "(An earlier run of this script leaves exactly this state; its backups are in ~/$BACKUPS on the Pi.)"; exit 1
 fi
 if [[ ${#changed[@]} -eq 0 && ${#new[@]} -eq 0 ]]; then echo "Nothing differs. The Pi already runs these files."; exit 0; fi
 echo "changed: ${changed[*]:-none}"
