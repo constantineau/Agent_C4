@@ -356,7 +356,8 @@ Checklists, Fleet, Learnings, Gameplan, Lock-in & Deploy) · RACE (Monitor) · D
 
 ## Verification & tests
 
-- **`make ci` runs every test file** (`tools/ci/run.sh`): each in a throwaway container off its
+- **`make ci` = `make lint` (ruff, `ruff.toml`) + every test file**, and GitHub CI runs exactly
+  that on every push/PR to `dev`/`main` (`.github/workflows/ci.yml`). Tests (`tools/ci/run.sh`): each in a throwaway container off its
   own service's image, built fresh from the tree as `sr33-ci-*` (never the standing stack's
   images). `make ci ONLY=<path part>` runs a subset. Add a new test file's image/path there if
   the defaults don't fit. Build agents follow `tools/agents/agent-rules.md`.
