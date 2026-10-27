@@ -49,30 +49,66 @@ def _get(path):
         return {"available": False, "error": f"n2kout unreachable: {e}"}
 
 
-def _mark_vertices(path, marks, tol_nm=0.5):
-    """{course mark number: path index} for the marks this path sails through. Walks the course IN
-    ORDER and each mark consumes the next matching vertex AFTER the previous mark's, so a mark
-    revisited at the same spot (Finish == Start on the practice course) maps to its own later
-    vertex, not the first one. A match is the closest vertex of the first run that comes within
-    `tol_nm` (the mark itself, or the router's rounding standoff beside it). A mark with no
-    position (or one the path never reaches) consumes nothing."""
-    out, start = {}, 0
-    for k, m in enumerate(marks or []):
-        mlat, mlon = (m or {}).get("lat"), (m or {}).get("lon")
-        if mlat is None or mlon is None:
-            continue
-        best = None
-        for i in range(start, len(path)):
-            d = NAV._hav_nm(path[i]["lat"], path[i]["lon"], mlat, mlon)
-            if d <= tol_nm:
-                if best is None or d < best[1]:
-                    best = (i, d)
-            elif best is not None:
-                break                               # left the first matching run
-        if best is not None:
-            out[k] = best[0]
-            start = best[0] + 1
-    return out
+def _valid_ends(ends, n):
+    """A usable `leg_end_idx`: ints, strictly increasing, inside a path of n points, none at 0."""
+    if not ends or not isinstance(ends, (list, tuple)):
+        return False
+    if not all(isinstance(i, int) and not isinstance(i, bool) for i in ends):
+        return False
+    return ends[0] > 0 and all(a < b for a, b in zip(ends, ends[1:])) and ends[-1] < n
+
+
+def _mark_vertices(path, marks, tol_nm=0.5, leg_end_idx=None, first_leg_to=1):
+    """{course mark number: path index} for the marks this path sails through.
+
+    Preferred: `leg_end_idx` — the path index where each leg ended, recorded by the router as it
+    built the route leg by leg (leg j ends at course mark `first_leg_to + j`; a whole-course route
+    starts AT mark 0, a re-route starts at the boat with `first_leg_to` = the next mark). That is the
+    real rounding, never a guess.
+
+    Fallback (routes frozen before the router carried it): an ORDERED best fit — each mark gets one
+    vertex, strictly after the previous mark's, choosing the assignment with the least total
+    distance over the whole path. So a tack that passes 0.4 nm from Top on the way up loses to the
+    actual rounding, and a Finish on the Start's spot takes the last vertex, not the first. A mark
+    with no position consumes nothing; a best fit farther than `tol_nm` is dropped (that mark isn't
+    on this path)."""
+    n = len(path)
+    if _valid_ends(leg_end_idx, n):
+        out = {0: 0} if first_leg_to == 1 else {}
+        for j, i in enumerate(leg_end_idx):
+            k = first_leg_to + j
+            if not marks or k < len(marks):
+                out[k] = i
+        return out
+    ks = [k for k, m in enumerate(marks or [])
+          if m and m.get("lat") is not None and m.get("lon") is not None]
+    if not ks or not n:
+        return {}
+    strict = len(ks) <= n
+    dist = {k: [NAV._hav_nm(p["lat"], p["lon"], marks[k]["lat"], marks[k]["lon"]) for p in path]
+            for k in ks}
+    cost, back = list(dist[ks[0]]), []
+    for k in ks[1:]:
+        cur, ptr = [float("inf")] * n, [None] * n
+        best, arg = float("inf"), None
+        for i in range(n):
+            if not strict and cost[i] < best:      # non-strict: the same vertex may serve twice
+                best, arg = cost[i], i
+            if best < float("inf"):
+                cur[i], ptr[i] = dist[k][i] + best, arg
+            if strict and cost[i] < best:          # strict: only vertices BEFORE i feed i
+                best, arg = cost[i], i
+        cost = cur
+        back.append(ptr)
+    i = min(range(n), key=lambda x: cost[x])
+    if cost[i] == float("inf"):
+        return {}
+    chosen = [i]
+    for ptr in reversed(back):
+        i = ptr[i]
+        chosen.append(i)
+    chosen.reverse()
+    return {k: i for k, i in zip(ks, chosen) if dist[k][i] <= tol_nm}
 
 
 def _downsample_idx(path, max_n=MAX_WPTS, keep=(), blocked=None):
@@ -120,24 +156,36 @@ def _blocked_fn(bundle):
                          or routing._seg_crosses_poly(a["lat"], a["lon"], b["lat"], b["lon"], polys))
 
 
+ARRIVE_NM = 0.05     # boat this close to a waypoint has attained it — steer to the one after
+
+
 def _dest_index(pts, boat, mark_pos=None, next_k=None):
     """The plotter's steer-to: project the boat onto the downsampled path and return the index of
     the first waypoint AHEAD of it. `mark_pos` is {course mark number: index in pts}; with the
     navigator's next-mark number `next_k` the search is confined to the CURRENT leg (previous
     mark's vertex → next mark's), so an out-and-back course can't snap the boat onto the other
-    leg. No fix → 1 (the first leg's end)."""
+    leg. Ties (the boat exactly on a waypoint, or off a corner where both segments are nearest
+    at it) go to the LATER segment, and a waypoint the boat has reached (within ARRIVE_NM) is
+    skipped. Next mark = the path's first vertex (pre-start) → 0. No fix → 1."""
     if not boat or boat[0] is None or len(pts) < 2:
         return 1
-    lo, hi = 0, len(pts) - 1
+    last = len(pts) - 1
+    lo, hi = 0, last
     mark_pos = mark_pos or {}
-    if next_k is not None and mark_pos.get(next_k):
+    if next_k is not None and next_k in mark_pos:
         hi = mark_pos[next_k]
+        if hi == 0:
+            return 0
         prev = [v for k, v in mark_pos.items() if k < next_k and v < hi]
         lo = max(prev) if prev else 0
     best = min(range(lo, max(lo + 1, hi)),
-               key=lambda i: routing._pt_to_seg_nm(boat[0], boat[1], pts[i]["lat"], pts[i]["lon"],
-                                                   pts[i + 1]["lat"], pts[i + 1]["lon"]))
-    return min(len(pts) - 1, best + 1)
+               key=lambda i: (round(routing._pt_to_seg_nm(boat[0], boat[1], pts[i]["lat"], pts[i]["lon"],
+                                                          pts[i + 1]["lat"], pts[i + 1]["lon"]), 6),
+                              -i))
+    dest = min(last, best + 1)
+    while dest < last and NAV._hav_nm(boat[0], boat[1], pts[dest]["lat"], pts[dest]["lon"]) <= ARRIVE_NM:
+        dest += 1
+    return dest
 
 
 def _course_context(route=None):
@@ -159,8 +207,8 @@ def _course_context(route=None):
         return [], None, None
 
 
-def _variant_route(variant=None):
-    """(label, path) from the frozen bundle — the recommended variant unless one is named."""
+def _variant(variant=None):
+    """(label, route dict, error) — the route carries `leg_end_idx` when the Lab recorded it."""
     bundle = deviation._load_playbook()
     if not bundle:
         return None, None, "no playbook aboard"
@@ -168,9 +216,9 @@ def _variant_route(variant=None):
     for v in bundle.get("variants") or []:
         vid = str(v.get("id") or v.get("name") or "")
         if vid == str(want) or want is None:
-            path = ((v.get("route") or {}).get("path")) or []
-            if len(path) >= 2:
-                return vid, path, None
+            route = v.get("route") or {}
+            if len(route.get("path") or []) >= 2:
+                return vid, route, None
             return vid, None, f"variant '{vid}' carries no route track"
     return None, None, f"variant '{want}' not in the bundle"
 
@@ -183,12 +231,14 @@ def show(source: str = "playbook", variant=None, route=None):
         if not ro.get("available"):
             return {"shown": False, "note": ro.get("note") or "no re-route available"}
         wire_name, label, path = "C4 REROUTE", "re-route (off-book)", ro.get("path") or []
+        ends = ro.get("leg_end_idx")
         if len(path) < 2:
             return {"shown": False, "note": "re-route carries no path"}
     else:
-        vid, path, err = _variant_route(variant)
+        vid, vroute, err = _variant(variant)
         if err:
             return {"shown": False, "note": err}
+        path, ends = vroute["path"], vroute.get("leg_end_idx")
         # the wire name is what the plotter shows — short and clean (LAU caps at 16 chars)
         wire_name, label = f"C4 {vid}"[:16], f"{vid} (gameplan)"
     marks, boat, next_k = _course_context(route)
@@ -196,7 +246,13 @@ def show(source: str = "playbook", variant=None, route=None):
         # the re-route starts at the boat: marks astern aren't on it (blank them so they can't
         # consume a later vertex — Start would otherwise grab a Finish that shares its spot)
         marks = [None if k < next_k else m for k, m in enumerate(marks)]
-    verts = _mark_vertices(path, marks)
+    if source == "reoptimize":
+        # re-route leg j ends at course mark next_k + j; without the navigator's next mark the
+        # numbering is unknown, so don't guess it
+        verts = (_mark_vertices(path, marks, leg_end_idx=ends, first_leg_to=next_k)
+                 if next_k is not None else {})
+    else:
+        verts = _mark_vertices(path, marks, leg_end_idx=ends)
     idx = _downsample_idx(path, MAX_WPTS, set(verts.values()), _blocked_fn(deviation._load_playbook()))
     pts = [path[i] for i in idx]
     where = {i: j for j, i in enumerate(idx)}

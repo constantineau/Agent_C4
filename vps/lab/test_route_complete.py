@@ -152,6 +152,10 @@ r = OPT.optimize_course(THREE, "x", 0, WF(), avoid=False, emit_exploration=False
 check("complete, not degraded, no incomplete",
       r.get("complete") is True and r.get("incomplete") is None and r.get("degraded") is False)
 check("incomplete_reason: None", OPT.incomplete_reason(r, (44.2, -81.7)) is None)
+le = r.get("leg_end_idx") or []
+check("leg_end_idx: one per leg, each at its mark, last = path end",
+      len(le) == 2 and le[-1] == len(r["path"]) - 1
+      and OPT._hav_nm(r["path"][le[0]]["lat"], r["path"][le[0]]["lon"], 44.0, -81.7) < 0.05)
 check("playbook._truncated: None", PB._truncated(r, (44.2, -81.7)) is None)
 clear = r
 
@@ -250,6 +254,11 @@ for budget in (200, 20, 6):
     check(f"budget {budget}: {len(out)} pts, no shortcut across the island", cut == 0)
     check(f"budget {budget}: endpoints + mark vertex kept",
           out[0] is dense[0] and out[-1] is dense[-1] and any(p is dense[mark_i] for p in out))
+thin = SYN._thin_route({"path": dense, "legs": legs, "leg_end_idx": [mark_i, len(dense) - 1]},
+                       island, max_pts=20)
+check("_thin_route remaps leg_end_idx onto the thinned path",
+      thin["path"][thin["leg_end_idx"][0]] is dense[mark_i]
+      and thin["leg_end_idx"][-1] == len(thin["path"]) - 1)
 naive = SYN._downsample(dense, 6, legs=legs)
 check("(control) without the obstacle check a coarse thin DOES cut the island",
       any(island.crosses(a["lat"], a["lon"], b["lat"], b["lon"]) for a, b in zip(naive, naive[1:])))

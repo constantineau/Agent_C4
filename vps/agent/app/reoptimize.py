@@ -254,6 +254,7 @@ def _compute(nav, remaining, slat, slon, live, bundle, avoid, polys, ctx):
     cur = (slat, slon)
     full_path = [{"lat": round(slat, 5), "lon": round(slon, 5)}]
     all_legs, leg_summ = [], []
+    leg_end_idx = []          # full_path index where each leg reaches its mark (gpsout's mark vertices)
     for m in remaining:
         # which sail this leg wants: the direct-course TWA at the leg midpoint → the onboard sail
         # model (same crossovers the sail dial uses). Clamps to the up sail on a beat, like the dial.
@@ -283,6 +284,7 @@ def _compute(nav, remaining, slat, slon, live, bundle, avoid, polys, ctx):
             _cache.update(ctx=dict(ctx, from_live_wind=not use_fcst), t=time.time(), val=out)
             return out
         full_path += leg["path"][1:]          # skip the duplicated leg-start point
+        leg_end_idx.append(len(full_path) - 1)
         all_legs += leg["legs"]
         leg_summ.append({"mark": m["name"], "eta_min": round((leg["reached_t"] - t) / 60, 1),
                          "sailed_nm": round(leg["sailed_nm"], 2), "sail": sail})
@@ -308,6 +310,7 @@ def _compute(nav, remaining, slat, slon, live, bundle, avoid, polys, ctx):
         "recommended_heading": all_legs[0]["hdg"] if all_legs else None,
         "first_tack": all_legs[0]["tack"] if all_legs else None,
         "path": full_path,
+        "leg_end_idx": leg_end_idx,           # one per remaining mark, in order
         "avoids_islands": len(avoid), "avoids_zones": len(polys),
         "vs_playbook": _vs_playbook(bundle, full_path),
         "note": ("Onboard re-optimization — a FRESH route on your own polars through the "

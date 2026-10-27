@@ -16,6 +16,8 @@ import sys
 from app import reoptimize, routing, deviation, gpsout
 from app import navigator as NAV
 
+_REAL_REOPT = reoptimize.get_reoptimize      # later sections stub it on the shared module
+
 ok = True
 
 
@@ -196,6 +198,68 @@ rp = sent["payload"]
 print("     re-route payload:", rp["dest_index"], [(round(w["lat"],4), round(w["lon"],4)) for w in rp["waypoints"]])
 check("re-route: dest is the first waypoint ahead (1), course end kept",
       rp["dest_index"] == 1 and abs(rp["waypoints"][-1]["lat"] - SL[0]) < 1e-6)
+
+print("   near-pass: a tack 0.4 nm from Top before the real rounding (Codex round 2)")
+# up the course: a board that comes within 0.4 nm of Top, sails away, then the actual rounding
+NP = [{"lat": 44.0, "lon": -82.0}, {"lat": 44.02, "lon": -82.01},
+      {"lat": 44.0333 - 0.4 / 60.0, "lon": -82.0},     # 0.4 nm short of Top — NOT the rounding
+      {"lat": 44.03, "lon": -82.03}, {"lat": 44.0333, "lon": -82.0},   # the rounding
+      {"lat": 44.02, "lon": -81.99}, {"lat": 44.0, "lon": -82.0}]
+TOPM = {"name": "Top", "lat": 44.0333, "lon": -82.0}
+course_np = [{"name": "Start", "lat": 44.0, "lon": -82.0}, TOPM,
+             {"name": "Finish", "lat": 44.0, "lon": -82.0}]
+v = gpsout._mark_vertices(NP, course_np)
+print(f"     fallback (no leg ends): {v}")
+check("fallback picks the real rounding (index 4), not the 0.4 nm pass (2)", v.get(1) == 4)
+check("fallback: Start 0, Finish last", v.get(0) == 0 and v.get(2) == 6)
+v = gpsout._mark_vertices(NP, course_np, leg_end_idx=[4, 6])
+check("router's leg ends win: {0:0, 1:4, 2:6}", v == {0: 0, 1: 4, 2: 6})
+v = gpsout._mark_vertices(NP, course_np, leg_end_idx=[2, 6])
+check("leg ends are trusted over proximity (they ARE the rounding)", v.get(1) == 2)
+check("bad leg ends (not increasing / out of range) fall back to the fit",
+      gpsout._mark_vertices(NP, course_np, leg_end_idx=[6, 4]).get(1) == 4
+      and gpsout._mark_vertices(NP, course_np, leg_end_idx=[4, 99]).get(1) == 4)
+check("re-route numbering: leg ends map from the next mark",
+      gpsout._mark_vertices(NP[3:], course_np, leg_end_idx=[1, 3], first_leg_to=1) == {0: 0, 1: 1, 2: 3}
+      and gpsout._mark_vertices(NP[5:], course_np, leg_end_idx=[1], first_leg_to=2) == {2: 1})
+# show() uses the variant's leg ends: return-leg dest never lands on the outbound board
+bundle["variants"] = [{"id": "m", "route": {"path": NP, "leg_end_idx": [4, 6]}}]
+NAV._marks = lambda route: course_np
+NAV.get_navigator = lambda route=None: {"available": True, "route": "race", "next_mark": {"name": "Finish"}}
+NAV._latest = lambda: {"lat": 44.012, "lon": -81.993}    # on the run home, beside the outbound board
+gpsout.show()
+print(f"     dest_index={sent['payload']['dest_index']}")
+check("return-leg dest stays on the return leg (5 or 6)", sent["payload"]["dest_index"] in (5, 6))
+
+print("   boat exactly on an interior waypoint")
+LINE = [{"lat": 44.0 + 0.01 * i, "lon": -82.0} for i in range(4)]
+for at in (1, 2):
+    d = gpsout._dest_index(LINE, (LINE[at]["lat"], LINE[at]["lon"]))
+    check(f"boat at waypoint {at} → dest {at + 1} (not {at})", d == at + 1)
+d = gpsout._dest_index(LINE, (LINE[2]["lat"] + 0.0003, LINE[2]["lon"]))   # ~0.02 nm past it
+check("just past a waypoint (within arrival) → the next one", d == 3)
+d = gpsout._dest_index(LINE, (LINE[1]["lat"] + 0.005, LINE[1]["lon"]))    # mid-segment 1→2
+check("mid-segment → the segment's end", d == 2)
+check("at the last waypoint → stays on it (no overrun)",
+      gpsout._dest_index(LINE, (LINE[3]["lat"], LINE[3]["lon"])) == 3)
+check("next mark is the path start (pre-start) → 0",
+      gpsout._dest_index(LINE, (43.99, -82.0), {0: 0, 1: 3}, 0) == 0)
+
+print("   re-optimizer carries its leg ends")
+reoptimize.get_reoptimize = _REAL_REOPT
+NAV._marks = lambda route: MARKS
+NAV.get_navigator = lambda route=None: {"available": True, "route": "race", "next_mark": {"name": "Rock"}}
+NAV._latest = lambda: {"lat": 44.0, "lon": -82.0, "tws": 12.0, "twd": 90.0, "cog": 0.0, "sog": 6.0}
+routing.weather.wind_at = lambda lat, lon, epoch: (12.0, 90.0)
+deviation._load_playbook = lambda: {"race_id": "u", "variants": [{"id": "m"}]}
+reoptimize._cache.update(ctx=None, t=0, val=None)
+r = reoptimize.get_reoptimize()
+le = r.get("leg_end_idx") or []
+check("one leg end per remaining mark, last = path end",
+      len(le) == 2 and le[-1] == len(r["path"]) - 1)
+check("each leg end IS its mark", all(
+    NAV._hav_nm(r["path"][i]["lat"], r["path"][i]["lon"], m["lat"], m["lon"]) < 0.01
+    for i, m in zip(le, MARKS[1:])))
 
 print("PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)

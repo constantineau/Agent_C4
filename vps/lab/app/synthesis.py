@@ -406,18 +406,22 @@ def _mean_tws(consensus):
     return round(sum(ws) / len(ws), 1) if ws else None
 
 
-def _downsample(path, max_pts=200, legs=None, obstacles=None):
-    """Thin a play's route for the bundle. Keeps the endpoints and every MARK vertex (the path point
-    at each leg's `eta_epoch` — the rounding the plotter must draw through), fills the budget on a
-    uniform stride, then splits any shortcut between kept points that `obstacles.crosses` says cuts
-    land / an island / a zone back toward the router's own (checked) vertices (#31). May exceed
-    `max_pts` only to stay clear."""
-    if not path or len(path) <= max_pts:
-        return path
-    n = len(path)
-    etas = {round(float(l["eta_epoch"])) for l in (legs or []) if l.get("eta_epoch") is not None}
-    keep = {0, n - 1} | {i for i, p in enumerate(path)
-                         if p.get("t") is not None and round(float(p["t"])) in etas}
+def _downsample_idx(path, max_pts=200, legs=None, obstacles=None, leg_end_idx=None):
+    """Indices of the vertices a play's route keeps in the bundle. Keeps the endpoints and every MARK
+    vertex — the router's own `leg_end_idx` when the route carries it, else the path point at each
+    leg's `eta_epoch` — fills the budget on a uniform stride, then splits any shortcut between kept
+    points that `obstacles.crosses` says cuts land / an island / a zone back toward the router's own
+    (checked) vertices (#31). May exceed `max_pts` only to stay clear."""
+    n = len(path or [])
+    if n <= max_pts:
+        return list(range(n))
+    if leg_end_idx:
+        marks = {i for i in leg_end_idx if isinstance(i, int) and 0 <= i < n}
+    else:
+        etas = {round(float(l["eta_epoch"])) for l in (legs or []) if l.get("eta_epoch") is not None}
+        marks = {i for i, p in enumerate(path)
+                 if p.get("t") is not None and round(float(p["t"])) in etas}
+    keep = {0, n - 1} | marks
     room = max(2, max_pts - len(keep) + 2)
     stride = (n - 1) / (room - 1)
     idx = sorted(keep | {round(i * stride) for i in range(room)})
@@ -430,7 +434,27 @@ def _downsample(path, max_pts=200, legs=None, obstacles=None):
             stack += [j, (i + j) // 2]
             continue
         out.append(j)
-    return [path[k] for k in out]
+    return out
+
+
+def _downsample(path, max_pts=200, legs=None, obstacles=None, leg_end_idx=None):
+    if not path or len(path) <= max_pts:
+        return path
+    return [path[k] for k in _downsample_idx(path, max_pts, legs, obstacles, leg_end_idx)]
+
+
+def _thin_route(route, obstacles=None, max_pts=200):
+    """Thin a play route in place-copy: path downsampled, `leg_end_idx` remapped onto the thinned
+    path so the mark vertices stay addressable aboard."""
+    path = route.get("path") or []
+    if len(path) <= max_pts:
+        return route
+    idx = _downsample_idx(path, max_pts, route.get("legs"), obstacles, route.get("leg_end_idx"))
+    where = {i: j for j, i in enumerate(idx)}
+    out = dict(route, path=[path[k] for k in idx])
+    if route.get("leg_end_idx"):
+        out["leg_end_idx"] = [where[i] for i in route["leg_end_idx"] if i in where]
+    return out
 
 
 def _play_obstacles(definition, course_id):
@@ -649,8 +673,7 @@ def _build_plays(playbook, definition, course_id, venue_stats=None, jib_crossove
         if route:
             if len(route.get("path") or []) > 200 and not _obs:
                 _obs.append(_play_obstacles(definition, course_id))
-            route["path"] = _downsample(route.get("path"), legs=route.get("legs"),
-                                        obstacles=_obs[0] if _obs else None)
+            route = _thin_route(route, _obs[0] if _obs else None)
         guidance = p.get("guidance")
         # Leg convention (matcher-enforced): leg N is the leg ARRIVING at course marks[N] — the
         # navigator's next-mark index onboard. Pace plays are HARD-gated (the response is a

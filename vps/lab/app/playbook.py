@@ -168,6 +168,7 @@ def _scenario_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
         diverged = not (xte is not None and xte < 2.0 and abs(deta) < 45)
         if diverged:
             entry["route"] = {"legs": r.get("legs"), "path": r.get("path"),
+                 "leg_end_idx": r.get("leg_end_idx"),
                               "total_sailed_nm": r.get("total_sailed_nm"),
                               "total_tacks": r.get("total_tacks"), "sail_plan": r.get("sail_plan")}
         return entry, diverged
@@ -307,6 +308,7 @@ def _internal_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
                 say(f"pace {sid}: nominal remainder HOLDS — robustness")
             else:
                 entry["route"] = {"legs": r.get("legs"), "path": r.get("path"),
+                 "leg_end_idx": r.get("leg_end_idx"),
                                   "total_sailed_nm": r.get("total_sailed_nm"),
                                   "total_tacks": r.get("total_tacks"),
                                   "sail_plan": r.get("sail_plan")}
@@ -347,6 +349,7 @@ def _internal_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
                        "total_hours": r.get("total_hours"),
                        "favored_side": _favored_side(definition, course_id, r),
                        "route": {"legs": r.get("legs"), "path": r.get("path"),
+                 "leg_end_idx": r.get("leg_end_idx"),
                                  "total_sailed_nm": r.get("total_sailed_nm"),
                                  "total_tacks": r.get("total_tacks"),
                                  "sail_plan": r.get("sail_plan")}})
@@ -388,6 +391,7 @@ def _internal_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
                 "total_hours": r.get("total_hours"),
                 "favored_side": _favored_side(definition, course_id, r),
                 "route": {"legs": r.get("legs"), "path": r.get("path"),
+                 "leg_end_idx": r.get("leg_end_idx"),
                           "total_sailed_nm": r.get("total_sailed_nm"),
                           "total_tacks": r.get("total_tacks"),
                           "sail_plan": r.get("sail_plan")}})
@@ -666,6 +670,7 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
             "first_heading": (rep.get("legs") or [{}])[0].get("first_heading"),
             "route_confidence": rep.get("route_confidence"),
             "route": {"legs": rep.get("legs"), "path": rep.get("path"),
+                      "leg_end_idx": rep.get("leg_end_idx"),
                       "total_sailed_nm": rep.get("total_sailed_nm"),
                       "total_tacks": rep.get("total_tacks"),
                       "sail_plan": rep.get("sail_plan")},
@@ -716,6 +721,7 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
             "favored_side": consensus_side, "total_hours": consensus.get("total_hours"),
             "route_confidence": consensus.get("route_confidence"),
             "legs": consensus.get("legs"), "path": consensus.get("path"),
+            "leg_end_idx": consensus.get("leg_end_idx"),
         },
         "variants": variants,
         "scenarios": [{"model": c["scenario"], "favored_side": c["favored_side"],

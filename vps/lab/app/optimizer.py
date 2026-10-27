@@ -904,6 +904,8 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
     cur_sail = None           # the sail carried into a leg — threaded across marks so a peel at a
     route_track = []          # rounding counts once, and the whole-route sail plan is continuous (2g)
     incomplete = None         # #31: set when a leg never reaches its mark — the course stops there
+    leg_end_idx = []          # full_path index where each REACHED leg ends — the mark vertices,
+                              # known at construction (gpsout/synthesis keep them; no proximity guess)
     for seq, name, dlat, dlon in marks[1:]:
         # #3 rounding side: route to a small standoff on the legal side of a port/starboard mark (the
         # real mark is still displayed + recorded). Gates pass between, finish/none unchanged.
@@ -950,6 +952,8 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
         route_track += leg.get("sail_track", [])
         cur_sail = leg.get("sail_end") or cur_sail
         full_path += [p for p in leg["path"][1:]]
+        if leg.get("reached", True):
+            leg_end_idx.append(len(full_path) - 1)
         if emit_exploration:
             if len(isochrones) < ISO_MAX:
                 isochrones += leg.get("isochrones", [])[:ISO_MAX - len(isochrones)]
@@ -1042,6 +1046,7 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
         "resolution": (resolution or "auto").strip().lower(),
         "degraded": degraded,
         "complete": incomplete is None,
+        "leg_end_idx": leg_end_idx,
         "incomplete": incomplete,
         "warnings": warnings,
         "legs": legs,
