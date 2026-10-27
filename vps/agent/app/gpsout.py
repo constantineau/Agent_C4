@@ -6,12 +6,9 @@ network), which transmits 129285/129284/129283 onto the N2K bus for the Garmin 9
 module never touches the bus itself — assembly and a localhost HTTP call, nothing else.
 
 Paths are DOWNSAMPLED to `GPSOUT_MAX_WPTS` (default 24): an isochrone path's ~40+ points
-draw noisy on a plotter and chunk into more 129285 messages than the display needs. The
-endpoints and every course-mark vertex are always kept, and a shortcut between two kept
-points that would cut an island / exclusion zone from the frozen obstacle homework is split
-back toward the router's own vertices (safety beats the point budget). The destination index
-— the plotter's "steer to" — is the first waypoint AHEAD of the boat, found by projecting its
-position onto the path within the current leg; with no fix it falls back to the second point.
+draw noisy on a plotter and chunk into more 129285 messages than the display needs; the
+endpoints are always kept. The destination index is the SECOND point (the first leg's end)
+— the plotter's "steer to" — until a live-leg refinement is warranted.
 
 Onboard-only (the cloud has no bus): the endpoints answer 'unavailable' when the
 broadcaster isn't reachable. Crew-initiated, crew-cleared: nothing broadcasts on its own.
@@ -23,8 +20,7 @@ import os
 import urllib.error
 import urllib.request
 
-from . import deviation, reoptimize, routing
-from . import navigator as NAV
+from . import deviation, reoptimize
 
 N2KOUT_URL = os.environ.get("N2KOUT_URL", "http://127.0.0.1:8210").rstrip("/")
 MAX_WPTS = int(os.environ.get("GPSOUT_MAX_WPTS", "24"))
@@ -49,307 +45,54 @@ def _get(path):
         return {"available": False, "error": f"n2kout unreachable: {e}"}
 
 
-def _valid_ends(ends, n):
-    """A usable `leg_end_idx`: ints, strictly increasing, inside a path of n points, none at 0."""
-    if not ends or not isinstance(ends, (list, tuple)):
-        return False
-    if not all(isinstance(i, int) and not isinstance(i, bool) for i in ends):
-        return False
-    return ends[0] > 0 and all(a < b for a, b in zip(ends, ends[1:])) and ends[-1] < n
+def _downsample(path, max_n=MAX_WPTS):
+    if len(path) <= max_n:
+        return list(path)
+    stride = (len(path) - 1) / (max_n - 1)
+    idx = sorted({round(i * stride) for i in range(max_n)} | {0, len(path) - 1})
+    return [path[i] for i in idx if i < len(path)]
 
 
-def _mark_vertices(path, marks, tol_nm=0.5, leg_end_idx=None, first_leg_to=1):
-    """{course mark number: path index} for the marks this path sails through.
-
-    Preferred: `leg_end_idx` — the path index where each leg ended, recorded by the router as it
-    built the route leg by leg (leg j ends at course mark `first_leg_to + j`; a whole-course route
-    starts AT mark 0, a re-route starts at the boat with `first_leg_to` = the next mark). That is the
-    real rounding, never a guess.
-
-    Fallback (routes frozen before the router carried it): an ORDERED best fit — each mark gets one
-    vertex, strictly after the previous mark's, choosing the assignment with the least total
-    distance over the whole path. So a tack that passes 0.4 nm from Top on the way up loses to the
-    actual rounding, and a Finish on the Start's spot takes the last vertex, not the first. A mark
-    with no position consumes nothing; a best fit farther than `tol_nm` is dropped (that mark isn't
-    on this path)."""
-    n = len(path)
-    if _valid_ends(leg_end_idx, n):
-        out = {0: 0} if first_leg_to == 1 else {}
-        for j, i in enumerate(leg_end_idx):
-            k = first_leg_to + j
-            if not marks or k < len(marks):
-                out[k] = i
-        return out
-    ks = [k for k, m in enumerate(marks or [])
-          if m and m.get("lat") is not None and m.get("lon") is not None]
-    if not ks or not n:
-        return {}
-    strict = len(ks) <= n
-    dist = {k: [NAV._hav_nm(p["lat"], p["lon"], marks[k]["lat"], marks[k]["lon"]) for p in path]
-            for k in ks}
-    cost, back = list(dist[ks[0]]), []
-    for k in ks[1:]:
-        cur, ptr = [float("inf")] * n, [None] * n
-        best, arg = float("inf"), None
-        for i in range(n):
-            if not strict and cost[i] < best:      # non-strict: the same vertex may serve twice
-                best, arg = cost[i], i
-            if best < float("inf"):
-                cur[i], ptr[i] = dist[k][i] + best, arg
-            if strict and cost[i] < best:          # strict: only vertices BEFORE i feed i
-                best, arg = cost[i], i
-        cost = cur
-        back.append(ptr)
-    i = min(range(n), key=lambda x: cost[x])
-    if cost[i] == float("inf"):
-        return {}
-    chosen = [i]
-    for ptr in reversed(back):
-        i = ptr[i]
-        chosen.append(i)
-    chosen.reverse()
-    return {k: i for k, i in zip(ks, chosen) if dist[k][i] <= tol_nm}
-
-
-def _downsample_idx(path, max_n=MAX_WPTS, keep=(), blocked=None):
-    """Indices of the kept vertices. Endpoints + `keep` (mark vertices) always; a uniform stride
-    fills the rest of the budget; then every shortcut between consecutive kept vertices that
-    `blocked(a, b)` says cuts an obstacle is split at its midpoint until it is clear (consecutive
-    router vertices are the router's own checked steps). May exceed `max_n` only to stay clear."""
-    n = len(path)
-    if n == 0:
-        return []
-    idx = {0, n - 1} | {k for k in keep if 0 <= k < n}
-    if n <= max_n:
-        idx = set(range(n))
-    else:
-        room = max(2, max_n - len(idx) + 2)
-        stride = (n - 1) / (room - 1)
-        idx |= {round(i * stride) for i in range(room)}
-    idx = sorted(idx)
-    if blocked is None:
-        return idx
-    out, stack = [idx[0]], list(reversed(idx[1:]))
-    while stack:
-        j = stack.pop()
-        i = out[-1]
-        if j - i > 1 and blocked(path[i], path[j]):
-            stack += [j, (i + j) // 2]          # split: route through the midpoint first
-            continue
-        out.append(j)
-    return out
-
-
-def _downsample(path, max_n=MAX_WPTS, keep=(), blocked=None):
-    return [path[i] for i in _downsample_idx(path, max_n, keep, blocked)]
-
-
-def _blocked_fn(bundle):
-    """Segment test against the bundle's frozen obstacle homework (islands + zones) — the same
-    geometry the onboard router prunes against. None when there's nothing to hit."""
-    disks = reoptimize._avoid_disks(bundle)
-    zdisks, polys = reoptimize._parse_zones(bundle)
-    disks = disks + zdisks
-    if not disks and not polys:
-        return None
-    return lambda a, b: (routing._seg_blocked(a["lat"], a["lon"], b["lat"], b["lon"], disks)
-                         or routing._seg_crosses_poly(a["lat"], a["lon"], b["lat"], b["lon"], polys))
-
-
-ARRIVE_NM = 0.05     # boat this close to a waypoint has attained it — steer to the one after
-
-
-def _dest_index(pts, boat, mark_pos=None, next_k=None, blocked=None):
-    """The plotter's steer-to: project the boat onto the downsampled path and return the index of
-    the first waypoint AHEAD of it. `mark_pos` is {course mark number: index in pts}; with the
-    navigator's next-mark number `next_k` the search is confined to the CURRENT leg (previous
-    mark's vertex → next mark's), so an out-and-back course can't snap the boat onto the other
-    leg. Next mark = the path's first vertex (pre-start) → 0. No fix → 1.
-
-    Moving PAST the projected waypoint — the later segment winning a tie (boat on a waypoint, or
-    off a corner both segments are nearest at), or a waypoint the boat is within ARRIVE_NM of — is
-    a shortcut: the boat would steer straight at the waypoint after it. That is allowed only when
-    `blocked` (the same obstacle test the downsample used) says the boat→that-waypoint line is
-    clear. A waypoint may be an obstacle-avoidance vertex, so with no obstacle test available the
-    attained waypoint is kept (conservative).
-
-    ONE invariant at the single exit (with an obstacle test): the boat→destination line is clear.
-    Whatever picked the index, a blocked one walks back to the nearest preceding waypoint the boat
-    can reach in a straight line, never before the current leg's start; if none can, None — the
-    caller refuses the push rather than steer through a hazard."""
-    if not boat or boat[0] is None or len(pts) < 2:
-        return 1
-    dest, lo = _dest_candidate(pts, boat, mark_pos, next_k, blocked)
-    if blocked is None:
-        return dest
-    here = {"lat": boat[0], "lon": boat[1]}
-    while dest >= lo and blocked(here, pts[dest]):
-        dest -= 1
-    return dest if dest >= lo else None
-
-
-def _dest_candidate(pts, boat, mark_pos, next_k, blocked):
-    """(destination index, current leg's first index) before the clear-line guard. The index never
-    exceeds the next mark's vertex when the navigator's next mark is known."""
-    last = len(pts) - 1
-    lo, hi = 0, last
-    mark_pos = mark_pos or {}
-    if next_k is not None and next_k in mark_pos:
-        hi = mark_pos[next_k]
-        if hi == 0:
-            return 0, 0
-        prev = [v for k, v in mark_pos.items() if k < next_k and v < hi]
-        lo = max(prev) if prev else 0
-    here = {"lat": boat[0], "lon": boat[1]}
-    dist = {i: round(routing._pt_to_seg_nm(boat[0], boat[1], pts[i]["lat"], pts[i]["lon"],
-                                           pts[i + 1]["lat"], pts[i + 1]["lon"]), 6)
-            for i in range(lo, max(lo + 1, hi))}
-    best = min(dist, key=lambda i: (dist[i], i))          # earliest nearest segment
-    dest = min(last, best + 1)
-
-    def _clear_to(j):
-        return blocked is not None and not blocked(here, pts[j])
-
-    # never past `hi`: the plotter doesn't steer beyond an unrounded mark — only the navigator's
-    # mark advance moves the leg on
-    if dist.get(best + 1) == dist[best] and dest < hi and _clear_to(dest + 1):
-        dest += 1                                         # tie → the later segment, if clear
-    while (dest < hi and NAV._hav_nm(boat[0], boat[1], pts[dest]["lat"], pts[dest]["lon"]) <= ARRIVE_NM
-           and _clear_to(dest + 1)):
-        dest += 1                                         # attained → the next one, if clear
-    return dest, lo
-
-
-def _course_context(route=None):
-    """ONE navigator snapshot: (course marks, boat (lat, lon), next-mark NAME). The boat fix is the
-    position the navigator itself used to pick the next mark (its `position`), so the fix and the
-    next mark can't come from two different moments; a separate latest-fix read is only the
-    fallback when the navigator doesn't report one. Any miss → ([], None, None): the downsample
-    still keeps endpoints and the dest falls back to 1."""
-    try:
-        nav = NAV.get_navigator(route)
-        if not nav.get("available"):
-            return [], None, None
-        marks = NAV._marks(nav["route"]) or []
-        pos = nav.get("position") or {}
-        if pos.get("lat") is None:
-            pos = NAV._latest() or {}
-        boat = (pos.get("lat"), pos.get("lon")) if pos.get("lat") is not None else None
-        return marks, boat, (nav.get("next_mark") or {}).get("name")
-    except Exception:
-        return [], None, None
-
-
-def _variant(variant=None, bundle=None):
-    """(label, route dict, error) from ONE bundle snapshot — the route carries `leg_end_idx` (and
-    its legs' `to` names) when the Lab recorded them."""
+def _variant_route(variant=None):
+    """(label, path) from the frozen bundle — the recommended variant unless one is named."""
+    bundle = deviation._load_playbook()
     if not bundle:
         return None, None, "no playbook aboard"
     want = variant or bundle.get("recommended")
     for v in bundle.get("variants") or []:
         vid = str(v.get("id") or v.get("name") or "")
         if vid == str(want) or want is None:
-            route = v.get("route") or {}
-            if len(route.get("path") or []) >= 2:
-                return vid, route, None
+            path = ((v.get("route") or {}).get("path")) or []
+            if len(path) >= 2:
+                return vid, path, None
             return vid, None, f"variant '{vid}' carries no route track"
     return None, None, f"variant '{want}' not in the bundle"
 
 
-def _route_frame(path, ends, names, nav_marks, starts_at_mark):
-    """The route's OWN mark frame: {local mark: path index}. Local mark j is `names[j]` — the mark
-    leg j of THIS route ends at, as the route itself recorded it — and -1 is the course start when
-    the route begins at it (a whole-course variant). Leg ends from the router when they line up
-    with the names; else the ordered best fit against those marks' positions (looked up by name in
-    the navigator's course — positions are static, the numbering stays the route's)."""
-    verts = {}
-    if names and _valid_ends(ends, len(path)) and len(ends) == len(names):
-        verts = _mark_vertices(path, None, leg_end_idx=ends, first_leg_to=0)
-    elif names:
-        by_name = {m.get("name"): m for m in nav_marks or []}
-        verts = _mark_vertices(path, [by_name.get(n) for n in names])
-    if starts_at_mark:
-        verts[-1] = 0
-    return verts
-
-
 def show(source: str = "playbook", variant=None, route=None):
     """Assemble + broadcast. source='playbook' (frozen variant, default recommended) or
-    'reoptimize' (the onboard re-router's cached fresh route, computing it if needed).
-
-    Inputs come from different moments — the route (frozen at the gun, or computed seconds to
-    minutes ago), the navigator (now) and the bundle. They are reconciled explicitly: one bundle
-    read, one navigator snapshot (fix + next mark together), and the route's marks numbered in the
-    ROUTE's own frame (its legs' names / the re-route's `marks`); the navigator's next mark is then
-    LOCATED in that frame by name. A re-route whose passed marks the boat has since rounded is
-    trimmed to the leg the boat is on; one that doesn't contain the navigator's next mark at all
-    is stale and refused by name."""
-    bundle = deviation._load_playbook()
+    'reoptimize' (the onboard re-router's cached fresh route, computing it if needed)."""
     if source == "reoptimize":
         ro = reoptimize.get_reoptimize(route)
         if not ro.get("available"):
             return {"shown": False, "note": ro.get("note") or "no re-route available"}
         wire_name, label, path = "C4 REROUTE", "re-route (off-book)", ro.get("path") or []
-        ends, names = ro.get("leg_end_idx"), list(ro.get("marks") or [])
         if len(path) < 2:
             return {"shown": False, "note": "re-route carries no path"}
     else:
-        vid, vroute, err = _variant(variant, bundle)
+        vid, path, err = _variant_route(variant)
         if err:
             return {"shown": False, "note": err}
-        path, ends = vroute["path"], vroute.get("leg_end_idx")
-        names = [l.get("to") for l in (vroute.get("legs") or []) if l.get("to")]
         # the wire name is what the plotter shows — short and clean (LAU caps at 16 chars)
         wire_name, label = f"C4 {vid}"[:16], f"{vid} (gameplan)"
-    nav_marks, boat, next_name = _course_context(route)
-    if source == "playbook" and not names and len(nav_marks) > 1:
-        # a variant frozen before legs carried names: assume it sails the navigator's course
-        names = [m.get("name") for m in nav_marks[1:]]
-    verts = _route_frame(path, ends, names, nav_marks, starts_at_mark=(source == "playbook"))
-
-    # where is the boat in the ROUTE's frame?
-    nxt = None
-    if next_name is not None and next_name in names:
-        nxt = names.index(next_name)
-    elif source == "playbook" and nav_marks and next_name == nav_marks[0].get("name"):
-        nxt = -1                                       # pre-start: steering to the start
-    elif source == "reoptimize" and names:
-        if next_name is not None:
-            return {"shown": False, "note": (
-                f"re-route is stale — it was computed through {', '.join(names)}, but the "
-                f"navigator's next mark is now {next_name}. Recompute the re-route, then push.")}
-        nxt = 0                                        # no navigator: the route's own next mark
-    if source == "reoptimize" and nxt:
-        # the boat rounded marks while the re-route was computing: drop the passed legs so the
-        # route starts at the last rounded mark and the plotter can't steer back to it
-        cut = verts.get(nxt - 1)
-        if cut is None:
-            return {"shown": False, "note": (
-                f"re-route is stale — the boat has passed {names[nxt - 1]} since it was computed "
-                "and that rounding can't be located on it. Recompute the re-route, then push.")}
-        path = path[cut:]
-        verts = {j - nxt: i - cut for j, i in verts.items() if j >= nxt}
-        nxt = 0
-
-    blocked = _blocked_fn(bundle)
-    idx = _downsample_idx(path, MAX_WPTS, set(verts.values()), blocked)
-    pts = [path[i] for i in idx]
-    where = {i: j for j, i in enumerate(idx)}
-    dest = _dest_index(pts, boat, {k: where[i] for k, i in verts.items() if i in where}, nxt,
-                       blocked)
+    pts = _downsample(path)
     wpts = [{"name": f"C4-{i + 1:02d}", "lat": p.get("lat"), "lon": p.get("lon"),
              "t": p.get("t")} for i, p in enumerate(pts)]
-    if dest is None:
-        return {"shown": False, "dest_index": None,
-                "note": ("not pushed — no waypoint on the current leg is reachable from the boat in "
-                         "a straight line clear of the charted islands/zones; steering to one would "
-                         "cross a hazard. Steer by eye clear of it, then push again.")}
-    st = _post("/route", {"name": wire_name, "waypoints": wpts, "dest_index": dest})
+    st = _post("/route", {"name": wire_name, "waypoints": wpts, "dest_index": 1})
     if st.get("error"):
         return {"shown": False, "note": st["error"]}
     return {"shown": bool(st.get("broadcasting")), "route": st.get("route"), "label": label,
             "n_waypoints": st.get("n_waypoints"), "downsampled_from": len(path),
-            "dest_index": dest,
             "broadcaster": st}
 
 
