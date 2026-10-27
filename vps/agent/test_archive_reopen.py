@@ -76,5 +76,48 @@ with tempfile.TemporaryDirectory() as d:
     ds.ARCHIVE_RECHECK_S = 0.0
     check("and with the recheck it moves to the new file", count(stale) == 7)
 
+print("with a live WAL writer, the engine's reopen leaves the fresh archive's sidecars alone:")
+# The engine's connection is mode=ro (and aboard the volume is mounted read-only into it), so its
+# close cannot checkpoint or delete `-wal`/`-shm`. Checked here with real WAL files: the engine
+# closes its old connection AFTER the archiver has moved the file and started the fresh one.
+with tempfile.TemporaryDirectory() as d:
+    db = os.path.join(d, "archive.db")
+
+    def wal_writer(path):
+        c = sqlite3.connect(path)
+        c.execute("PRAGMA journal_mode=WAL")
+        c.execute("CREATE TABLE IF NOT EXISTS readings (id INTEGER PRIMARY KEY, time TEXT, "
+                  "path TEXT)")
+        c.commit()
+        return c
+
+    w_old = wal_writer(db)
+    w_old.executemany("INSERT INTO readings (time, path) VALUES (?, ?)", [("t", "p")] * 40)
+    w_old.commit()
+    ds.ARCHIVE_DB = db
+    ds.ARCHIVE_RECHECK_S = 0.0
+    src = source()
+    check("engine reads the old WAL archive", count(src) == 40)
+    # the archiver's rotation: close, move db + sidecars, open fresh, write
+    w_old.close()
+    for suffix in ("", "-wal", "-shm"):
+        if os.path.exists(db + suffix):
+            os.rename(db + suffix, os.path.join(d, "archive.corrupt-x.db" + suffix))
+    w_new = wal_writer(db)
+    w_new.executemany("INSERT INTO readings (time, path) VALUES (?, ?)", [("t", "p")] * 9)
+    w_new.commit()
+    check("(setup) the fresh archive has its -wal", os.path.exists(db + "-wal"))
+    check("engine reopens onto the fresh archive (closing its old connection)", count(src) == 9)
+    check("the fresh -wal is still there after the engine closed its old connection",
+          os.path.exists(db + "-wal") and os.path.exists(db + "-shm"))
+    w_new.executemany("INSERT INTO readings (time, path) VALUES (?, ?)", [("t", "p")] * 3)
+    w_new.commit()
+    r = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    check("a separate reader sees every fresh row",
+          r.execute("SELECT count(*) FROM readings").fetchone()[0] == 12)
+    r.close()
+    check("and so does the engine", count(src) == 12)
+    w_new.close()
+
 print("\n" + ("PASS" if ok else "FAIL"))
 raise SystemExit(0 if ok else 1)

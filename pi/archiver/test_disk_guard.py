@@ -343,8 +343,8 @@ with tempfile.TemporaryDirectory() as d:
         check("rotation failed: all 6 rows still waiting", len(buf) == 6)
         check("...none counted as not-recorded by the guard", g.dropped == 0)
         check("...the rotation is still owed", state.get("rotate_pending") is True)
-        check("...and the old connection was not closed out from under us",
-              isinstance(state["conn"], NoPragmas))
+        check("...and the handle is explicitly None (closed before the move, never reused)",
+              state["conn"] is None)
         flush(buf, state, db, g)
         check("next flush: rotated first", calls["n"] == 2
               and len(list(Path(d).glob("archive.corrupt-*.db"))) == 1
@@ -397,6 +397,69 @@ with tempfile.TemporaryDirectory() as d:
         check("no prune through a missing connection", pruned == [])
     finally:
         archiver.prune, archiver.PRUNE_EVERY_S = real_prune, real_every
+
+
+# --- 8. rotation with REAL WAL connections (no fakes) ----------------------------------------
+# reopen_fresh closes the old connection BEFORE moving the file: a WAL connection's close
+# cleans up `archive.db-wal`/`-shm` by name, and after the move those names are the fresh
+# archive's. These run real sqlite3 WAL connections in a temp dir.
+print("rotation with real WAL connections: the fresh archive's WAL survives, readers see it:")
+with tempfile.TemporaryDirectory() as d:
+    db = Path(d) / "archive.db"
+    old = archiver.open_db(db)
+    old.execute("PRAGMA wal_autocheckpoint=0")       # keep the old rows IN the -wal
+    archiver.write_rows(old, [ROW] * 2000)
+    check("(setup) the old archive has a non-empty -wal", Path(str(db) + "-wal").stat().st_size > 0)
+    new, rotated = archiver.reopen_fresh(old, db)
+    archiver.write_rows(new, [("2026-10-27T13:00:00.000Z",) + ROW[1:]] * 300)
+    check("the fresh archive's -wal exists after the rotation",
+          Path(str(db) + "-wal").exists())
+    reader = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    check("a separate reader sees all 300 fresh rows",
+          reader.execute("SELECT count(*) FROM readings").fetchone()[0] == 300)
+    reader.close()
+    archiver.write_rows(new, [ROW] * 10)              # the writer still works, too
+    reader = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    check("...and the next 10 as well",
+          reader.execute("SELECT count(*) FROM readings").fetchone()[0] == 310)
+    reader.close()
+    kept = sqlite3.connect(f"file:{rotated}?mode=ro", uri=True)
+    check("the moved-aside archive kept all 2000 of its rows (its WAL was folded in on close)",
+          kept.execute("SELECT count(*) FROM readings").fetchone()[0] == 2000)
+    kept.close()
+    new.close()
+
+print("...and through the flusher, on a file that really is corrupt:")
+with tempfile.TemporaryDirectory() as d:
+    db = Path(d) / "archive.db"
+    conn = archiver.open_db(db)
+    archiver.write_rows(conn, [ROW] * 4000)
+    # Corrupt the main file under the live connection, the way the card does: fold the WAL in,
+    # then scribble over the b-tree pages.
+    w = sqlite3.connect(db)
+    w.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    w.close()
+    with open(db, "r+b") as f:
+        f.seek(4096)
+        f.write(os.urandom(64 * 1024))
+        f.flush()
+        os.fsync(f.fileno())
+    state = {"conn": conn}
+    fresh = [("2026-10-27T14:00:%02d.000Z" % (i % 60),) + ROW[1:] for i in range(250)]
+    buf = list(fresh)
+    flush(buf, state, db)
+    if state.get("rotations") != 1:          # the write may need a second try to hit a bad page
+        flush(buf, state, db)
+    check("the write hit the corruption and the file was rotated",
+          state.get("rotations") == 1 and len(list(Path(d).glob("archive.corrupt-*.db"))) == 1)
+    check("the fresh archive's -wal exists", Path(str(db) + "-wal").exists())
+    reader = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    got = reader.execute("SELECT count(*) FROM readings WHERE time LIKE '2026-10-27T14:%'"
+                         ).fetchone()[0]
+    reader.close()
+    check(f"a separate reader sees every requeued row in the fresh archive ({got}/250)",
+          got == 250 and buf == [])
+    state["conn"].close()
 
 
 # --- 6. startup: count(*) corruption rotates --------------------------------------------------

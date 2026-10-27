@@ -181,18 +181,22 @@ def reopen_fresh(conn, path: Path = ARCHIVE_DB):
     quick_check again would hand back the same broken file and drop every flush, forever. The
     write already told us the file is bad; believe it.
 
-    Order matters: move the file, open the fresh one, and only THEN close the old connection.
-    If the move or the open fails, the caller still holds an open connection (on the old file),
-    so the disk guard can still read its free pages and the next attempt starts clean — not a
-    closed handle that every later step trips over. If an earlier attempt already moved the file
-    but failed to open the new one, there is nothing left to move."""
-    rotated = rotate_corrupt(path) if path.exists() else None
-    new = open_db(path)
+    Order matters: CLOSE the old connection first, then move the file and its -wal/-shm, then
+    open the fresh one. A WAL connection's close cleans up the sidecars BY NAME
+    (`archive.db-wal`/`-shm`); closed after the move, those names belong to the fresh archive.
+    SQLite 3.46 notices the move and skips that cleanup (verified), but the archive's safety
+    should not rest on that. The cost is a window with no connection at all: the caller sets
+    its handle to None BEFORE calling, and None is a handled state (disk guard: free space
+    unknown; pruner: skips; next flush: retries this). If an earlier attempt already moved the
+    file but failed to open the new one, there is nothing left to move."""
     if conn is not None:
         try:
             conn.close()
-        except Exception:
-            pass
+        except Exception as exc:          # a corrupt file may fail its close-time checkpoint
+            print(f"[archive] closing the corrupt archive raised ({exc}); moving it anyway",
+                  flush=True)
+    rotated = rotate_corrupt(path) if path.exists() else None
+    new = open_db(path)
     if rotated is not None:
         _note_rotation(new, rotated)
     return new, rotated
@@ -571,8 +575,9 @@ async def flusher(conn, buf, loop, state=None, db=None, wake=None, guard=None):
 async def _recover(buf, loop, state, path):
     """Finish a pending corruption rotation. True when the archive is usable again. On failure
     nothing is lost: rows stay in `buf` (capped) and the next flush tries again."""
+    old, state["conn"] = state.get("conn"), None   # closed by reopen_fresh, whatever happens
     try:
-        state["conn"], _rot = await loop.run_in_executor(None, reopen_fresh, state.get("conn"), path)
+        state["conn"], _rot = await loop.run_in_executor(None, reopen_fresh, old, path)
     except Exception as exc:
         print(f"[archive] rotation failed ({type(exc).__name__}: {exc}); "
               f"{len(buf)} rows waiting, will retry", flush=True)
