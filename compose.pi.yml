@@ -129,7 +129,9 @@ services:
       INGEST_TOKEN: ${INGEST_TOKEN:-dev-ingest-token}
       # retention: full-res data OUTSIDE race-session windows is pruned after this many days
       # (0 = keep everything). Sessions come from the engine store (mounted read-only below).
-      ARCHIVE_RETAIN_DAYS: ${ARCHIVE_RETAIN_DAYS:-14}
+      # 7, not 14 (Cole, 2026-10-27): at the dock the archive grows ~7 GB/day and the card has
+      # ~69 GB free, so 14 days could never fit.
+      ARCHIVE_RETAIN_DAYS: ${ARCHIVE_RETAIN_DAYS:-7}
       ENGINE_DB: /var/lib/sr33/engine/engine.db
     volumes:
       - sk_archive:/var/lib/sr33/archive

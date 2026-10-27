@@ -211,7 +211,7 @@ rendering still needs a dockside eyeball once the N2K cable is plugged**)`.
 RaceDefinition, no cloud): the dashboard's ⏺ LOG button one-tap starts/ends a session
 (name defaults to the date; a loaded playbook's race_id is picked up automatically). The
 archiver records everything all the time, but only SESSION windows are kept long-term and
-backfilled — outside them, readings are pruned after `ARCHIVE_RETAIN_DAYS` (14; bench
+backfilled — outside them, readings are pruned after `ARCHIVE_RETAIN_DAYS` (7 on the boat since 2026-10; bench
 overlay 0) and never leave the boat, so day sails/deliveries don't accumulate anywhere.
 `backfill.py` defaults to session mode (+ pushes the sail log as `crew.sail.state` and a
 `crew.session` marker per closed window; `--all` restores everything-mode); the cloud

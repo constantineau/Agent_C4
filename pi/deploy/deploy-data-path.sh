@@ -12,6 +12,9 @@
 #        # the FIRST deploy after the 2026-09-02 corruption: the archiver must move the corrupt
 #        # archive.db aside; opening it without a rotation stops the archiver. Without the flag
 #        # a healthy open is normal and only successful writes are checked.
+#   pi/deploy/deploy-data-path.sh --apply --allow-open-session
+#        # deploy even though a race session has been open for over 24 h (normally refused:
+#        # an open session keeps everything since its start, so the prune frees nothing)
 #   pi/deploy/deploy-data-path.sh --rollback STAMP            # dry run of a rollback
 #   pi/deploy/deploy-data-path.sh --rollback STAMP --apply    # restore files + previous image
 #
@@ -26,13 +29,14 @@ EXPECT_BASE=${EXPECT_BASE:-b3c30a1}           # what the Pi's clone should be on
 VERIFY_TIMEOUT_S=${VERIFY_TIMEOUT_S:-1800}    # quick_check of a 24 GB file on an SD card is slow
 COMPOSE="docker compose -f compose.pi.yml"
 
-apply=0 rollback="" expect_rotation=0
+apply=0 rollback="" expect_rotation=0 allow_open=0
 while [[ $# -gt 0 ]]; do
   case $1 in
     --apply) apply=1 ;;
     --expect-rotation) expect_rotation=1 ;;
+    --allow-open-session) allow_open=1 ;;
     --rollback) rollback=${2:?--rollback needs the backup STAMP}; shift ;;
-    -h|--help) sed -n 2,20p "$0"; exit 0 ;;
+    -h|--help) sed -n 2,23p "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
   shift
@@ -62,6 +66,31 @@ inventory() {
   echo; echo "archiver log tail:"; pi "docker logs --tail 4 sr33-pi-archiver-1 2>&1" | sed 's/^/  /'
 }
 
+# Effective retention as the running archiver sees it, and whether the Pi's .env overrides it.
+retention_now() {
+  pi "docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' sr33-pi-archiver-1 | sed -n 's/^ARCHIVE_RETAIN_DAYS=//p'"
+}
+retention_env() { pi "cd ~/$PI_REPO && sed -n 's/^ARCHIVE_RETAIN_DAYS=//p' .env"; }
+
+# Race sessions still open in the engine's store. Read-only: engine.db uses SQLite's default
+# rollback journal (no -wal), so an immutable=1 read is exact and creates no file. If a -wal
+# ever appears the check refuses to guess rather than open it in a mode that writes beside it.
+# Prints "OPEN <id> <hours> <name>" lines and DONE.
+open_sessions() {
+  pi "docker exec -i sr33-pi-engine-1 python3 -" <<'PY'
+import os, sqlite3, time
+p = "/var/lib/sr33/engine/engine.db"
+if os.path.exists(p + "-wal"):
+    print("WAL engine.db has a -wal file; not reading it from here")
+    raise SystemExit(3)
+c = sqlite3.connect(f"file:{p}?immutable=1", uri=True)
+now = time.time()
+for i, name, start in c.execute("SELECT id, name, start_ts FROM sessions WHERE end_ts IS NULL"):
+    print(f"OPEN {i} {(now - float(start)) / 3600:.0f} {name}")
+print("DONE")
+PY
+}
+
 if [[ -n $rollback ]]; then
   bdir="$BACKUPS/data-path-$rollback"
   say "ROLLBACK to $bdir"
@@ -89,6 +118,34 @@ echo "local: $(git rev-parse --abbrev-ref HEAD) @ $(git log -1 --format='%h %s')
 [[ -z $(git status --porcelain -- $(files)) ]] || { echo "local data-path files have uncommitted changes — commit first" >&2; exit 1; }
 inventory
 pi_head=$(pi "cd ~/$PI_REPO && git rev-parse --short=7 HEAD")
+
+say "Race sessions (engine.db, read-only)"
+session_block=""
+if sess=$(open_sessions) && [[ $(tail -1 <<<"$sess") == DONE ]]; then
+  stale=$(awk '$1 == "OPEN" && $3 > 24' <<<"$sess")
+  grep '^OPEN' <<<"$sess" | sed 's/^OPEN \([0-9]*\) \([0-9]*\) /  open: session \1, \2 h, /' || echo "  no open session"
+  if [[ -n $stale ]]; then
+    session_block="a race session has been open for more than 24 h. While it is open the prune keeps everything since its start, so it frees nothing. Close it first: tap REC stop on the console."
+  fi
+else
+  echo "$sess" | sed 's/^/  /'
+  session_block="could not read the sessions table, so an open session can't be ruled out."
+fi
+if [[ -n $session_block ]]; then
+  echo "!! $session_block"
+  if [[ $allow_open -eq 0 ]]; then
+    echo "!! --apply will refuse until that is fixed (or pass --allow-open-session on purpose)."
+    [[ $apply -eq 1 ]] && { echo "Refusing to deploy. Nothing on the Pi was changed." >&2; exit 1; }
+  else
+    echo "!! --allow-open-session given: going ahead anyway."
+  fi
+fi
+
+say "Retention (days of out-of-session full-res kept aboard)"
+ret_now=$(retention_now || echo "?"); ret_env=$(retention_env || echo "")
+ret_new=${ret_env:-$(sed -n 's/.*ARCHIVE_RETAIN_DAYS:-\([0-9.]*\)}.*/\1/p' compose.pi.yml)}
+echo "  running archiver now: ${ret_now:-unset (code default)}"
+echo "  after this deploy:    $ret_new  ($([[ -n $ret_env ]] && echo "set in the Pi's .env, which wins" || echo "compose.pi.yml default; the Pi's .env does not set it"))"
 [[ $pi_head == "$EXPECT_BASE"* ]] || echo "WARNING: the Pi is on $pi_head, not $EXPECT_BASE — read the diff below carefully"
 
 # -------------------------------------------------------------------------------------- 2. diff
@@ -137,9 +194,31 @@ rebuild=(archiver)
 for f in "${changed[@]}" "${new[@]}"; do
   [[ $f == pi/uplink/* ]] && { rebuild+=(uplink); break; }
 done
-if printf '%s\n' "${changed[@]}" "${new[@]}" | grep -qE '^(compose\.pi\.yml|pi/signalk/)'; then
-  echo; echo "NOTE: compose.pi.yml or pi/signalk changed. This script rebuilds only ${rebuild[*]};"
-  echo "      anything else those changes touch needs its own look before it is restarted."
+# compose.pi.yml may change only inside the services this script recreates; a change anywhere
+# else would sit on the Pi unapplied until something restarted that service by surprise.
+if printf '%s\n' "${changed[@]}" | grep -qx compose.pi.yml; then
+  theirs=$(pi "cat ~/$PI_REPO/compose.pi.yml")
+  others=$(python3 -I - "$theirs" <<'PY'
+import sys, yaml
+mine = yaml.safe_load(open("compose.pi.yml"))
+theirs = yaml.safe_load(sys.argv[1])
+skip = {"archiver", "uplink"}
+diff = sorted(k for k in set(mine["services"]) | set(theirs["services"])
+              if k not in skip and mine["services"].get(k) != theirs["services"].get(k))
+top = sorted(k for k in set(mine) | set(theirs) if k != "services" and mine.get(k) != theirs.get(k))
+print(" ".join(diff + [f"(top-level {k})" for k in top]))
+print("uplink" if mine["services"].get("uplink") != theirs["services"].get("uplink") else "")
+PY
+)
+  uplink_cfg=$(sed -n 2p <<<"$others"); others=$(sed -n 1p <<<"$others")
+  if [[ -n $uplink_cfg ]] && ! printf '%s\n' "${rebuild[@]}" | grep -qx uplink; then rebuild+=(uplink); fi
+  if [[ -n $others ]]; then
+    echo "!! compose.pi.yml also changes: $others — this script only recreates archiver/uplink. Stopping." >&2; exit 1
+  fi
+  echo; echo "compose.pi.yml changes only the archiver/uplink blocks; ${rebuild[*]} will be recreated, so they apply."
+fi
+if printf '%s\n' "${changed[@]}" "${new[@]}" | grep -q '^pi/signalk/'; then
+  echo "!! pi/signalk changed — Signal K is not restarted by this script. Stopping." >&2; exit 1
 fi
 echo; echo "will rebuild: ${rebuild[*]}   (the uplink's code is unchanged unless listed here)"
 
@@ -209,4 +288,5 @@ echo; echo "status file:"; pi "docker exec sr33-pi-engine-1 cat /var/lib/sr33/ar
 echo; echo -n "uplink sends in the last 2 min: "
 pi "docker logs --since 2m sr33-pi-uplink-1 2>&1 | grep -c 'sent'" || echo "!! uplink quiet"
 echo -n "archiver restarts since recreate: "; pi "docker inspect -f '{{.RestartCount}}' sr33-pi-archiver-1"
+echo "retention in the running archiver: $(retention_now)"
 say "Deployed. Backup stamp: $stamp  (rollback: $0 --rollback $stamp --apply)"

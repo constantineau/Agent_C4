@@ -31,7 +31,7 @@ boxes (and Starlink) doesn't matter — everything reconnects when its counterpa
 - **Power-cycle survival**: every `compose.pi.yml` service is `restart: unless-stopped`;
   `docker` + `tailscaled` enabled at boot on the Pi; `docker`, `tailscaled`, `ollama`,
   `sr33-orin-copilot` enabled on the Orin (reboot-verified earlier — turnkey appliance).
-- **Storage self-limits**: the archiver's retention prune (14 d outside race sessions,
+- **Storage self-limits**: the archiver's retention prune (7 d outside race sessions,
   fail-safe) keeps the SD card from filling; the archive DB is WAL + `synchronous=FULL`
   (power-loss-safe writes).
 - **No WAN dependency in-race**: the iPad → console → copilot → engine loop rides the

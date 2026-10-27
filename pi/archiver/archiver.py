@@ -617,7 +617,8 @@ def _requeue(buf, rows, state, why):
 # stops growing). SAFETY: if the engine DB / sessions table can't be read, NOTHING is pruned —
 # we must never delete a race because a volume didn't mount. 0 disables (the bench keeps its
 # replayed sample data).
-RETAIN_DAYS = float(os.environ.get("ARCHIVE_RETAIN_DAYS", "14"))
+# 7 days on the boat (compose.pi.yml); the default matches so a bare run behaves the same.
+RETAIN_DAYS = float(os.environ.get("ARCHIVE_RETAIN_DAYS", "7"))
 ENGINE_DB = os.environ.get("ENGINE_DB", "/var/lib/sr33/engine/engine.db")
 PRUNE_EVERY_S = float(os.environ.get("ARCHIVE_PRUNE_EVERY_S", "3600"))
 
