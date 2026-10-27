@@ -16,6 +16,7 @@ the prune from freeing anything. Before full-res recording restarts, these must 
 Run:  python3 pi/archiver/test_disk_guard.py
 """
 import asyncio
+import errno
 import json
 import os
 import sqlite3
@@ -565,6 +566,110 @@ with tempfile.TemporaryDirectory() as d:
     check("the fresh archive is empty",
           conn.execute("SELECT count(*) FROM readings").fetchone()[0] == 0)
     conn.close()
+
+
+# --- 10. the rotation journal is durable, in the right order (Codex round 5) -----------------
+print("rotation writes are fsynced in order (a power cut must not split the journal):")
+with tempfile.TemporaryDirectory() as d:
+    db = Path(d) / "archive.db"
+    w, r = wal_archive_with_reader(db, 200)
+    events = []
+    real = {"fsync": os.fsync, "replace": os.replace, "rename": pathlib.Path.rename,
+            "unlink": pathlib.Path.unlink, "open_db": archiver.open_db,
+            "fsync_dir": archiver._fsync_dir}
+
+    def rec_fsync(fd):
+        events.append(("fsync", None))
+        return real["fsync"](fd)
+
+    def rec_replace(a, b):
+        events.append(("replace", Path(b).name))
+        return real["replace"](a, b)
+
+    def rec_rename(self, target):
+        events.append(("rename", self.name))
+        return real["rename"](self, target)
+
+    def rec_unlink(self, *a, **k):
+        events.append(("unlink", self.name))
+        return real["unlink"](self, *a, **k)
+
+    def rec_fsync_dir(dd):
+        events.append(("dirsync", None))
+        return real["fsync_dir"](dd)
+
+    def rec_open_db(path):
+        events.append(("open", None))
+        return real["open_db"](path)
+
+    os.fsync, os.replace = rec_fsync, rec_replace
+    pathlib.Path.rename, pathlib.Path.unlink = rec_rename, rec_unlink
+    archiver._fsync_dir, archiver.open_db = rec_fsync_dir, rec_open_db
+    try:
+        new, rotated = archiver.reopen_fresh(w, db)
+    finally:
+        os.fsync, os.replace = real["fsync"], real["replace"]
+        pathlib.Path.rename, pathlib.Path.unlink = real["rename"], real["unlink"]
+        archiver._fsync_dir, archiver.open_db = real["fsync_dir"], real["open_db"]
+    r.close()
+    kinds = [e for e in events if e[0] in ("fsync", "replace", "rename", "unlink", "dirsync",
+                                           "open")]
+
+    def first(kind, name=None):
+        return next(i for i, e in enumerate(kinds) if e[0] == kind
+                    and (name is None or e[1] == name))
+
+    i_marker = first("replace", "archive.db.rotating")
+    renames = [i for i, e in enumerate(kinds) if e[0] == "rename"]
+    i_unlink = first("unlink", "archive.db.rotating")
+    i_open = first("open")
+    check("the marker's contents are fsynced before it is renamed into place",
+          any(e[0] == "fsync" for e in kinds[:i_marker]))
+    check("the directory is fsynced after the marker lands and BEFORE anything moves",
+          any(e[0] == "dirsync" for e in kinds[i_marker:renames[0]]))
+    check("db, -wal and -shm all moved", [kinds[i][1] for i in renames]
+          == ["archive.db", "archive.db-wal", "archive.db-shm"])
+    check("the directory is fsynced after the moves, before the marker is removed",
+          any(e[0] == "dirsync" for e in kinds[renames[-1]:i_unlink]))
+    check("...and again after the removal, before the fresh archive is opened",
+          any(e[0] == "dirsync" for e in kinds[i_unlink:i_open]))
+    check("the result is a working fresh archive and an intact rotated one",
+          new.execute("SELECT count(*) FROM readings").fetchone()[0] == 0
+          and sqlite3.connect(rotated).execute("SELECT count(*) FROM readings").fetchone()[0]
+          == 200)
+    new.close()
+
+print("_fsync_dir tolerates a filesystem that cannot fsync directories, and nothing else:")
+real_fsync = os.fsync
+
+
+def einval(fd):
+    raise OSError(errno.EINVAL, "Invalid argument")
+
+
+def eio(fd):
+    raise OSError(errno.EIO, "I/O error")
+
+
+with tempfile.TemporaryDirectory() as d:
+    os.fsync = einval
+    try:
+        archiver._fsync_dir(d)
+        tolerated = True
+    except OSError:
+        tolerated = False
+    finally:
+        os.fsync = real_fsync
+    check("EINVAL is logged, not fatal", tolerated)
+    os.fsync = eio
+    try:
+        archiver._fsync_dir(d)
+        raised = False
+    except OSError:
+        raised = True
+    finally:
+        os.fsync = real_fsync
+    check("a real I/O error still raises (the rotation retries)", raised)
 
 
 # --- 6. startup: count(*) corruption rotates --------------------------------------------------

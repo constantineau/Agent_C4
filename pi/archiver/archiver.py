@@ -21,6 +21,7 @@ Identical on bench and boat; the only difference is CAN_IFACE (vcan0 vs can0), u
 Signal K.
 """
 import asyncio
+import errno
 import json
 import os
 import sqlite3
@@ -125,6 +126,33 @@ def integrity_ok(conn) -> bool:
 _SIDECARS = ("", "-wal", "-shm")
 
 
+def _fsync_dir(d):
+    """fsync a DIRECTORY, which is what makes a rename/create/unlink in it survive a power cut
+    (fsyncing the file alone does not). Two of this archive's four corruptions were power cuts.
+    A filesystem that cannot fsync a directory (EINVAL) is logged, not fatal."""
+    fd = os.open(str(d), os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    except OSError as exc:
+        if exc.errno != errno.EINVAL:
+            raise
+        print(f"[archive] cannot fsync directory {d} ({exc}); continuing", flush=True)
+    finally:
+        os.close(fd)
+
+
+def _durable_write(path: Path, text: str):
+    """Write `text` to `path` so that after a power cut it is either the old file or the
+    complete new one: temp file, fsync it, rename into place, fsync the directory."""
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w") as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+    _fsync_dir(path.parent)
+
+
 def _rotation_marker(path: Path) -> Path:
     """`archive.db.rotating`: names the destination of a rotation that has started and not
     finished. Lives beside the archive so a restarted process finishes the same rotation."""
@@ -146,7 +174,13 @@ def rotate_corrupt(path: Path = ARCHIVE_DB, stamp=None):
     between them). A db moved without its -wal leaves committed rows beside the ORIGINAL name,
     where a fresh archive would pick them up as its own WAL. So the destination is written to
     `archive.db.rotating` before the first rename and removed only after the last; a call that
-    finds the marker finishes moving whatever is still at `path` to that same destination."""
+    finds the marker finishes moving whatever is still at `path` to that same destination.
+
+    DURABLE, because the failure this exists for is a power cut: the marker is written durably
+    (temp + fsync + rename + directory fsync) BEFORE anything moves; the directory is fsynced
+    after the moves; the marker is removed and the directory fsynced again before returning —
+    so before any caller opens a fresh archive. Without that, a brownout can keep the db rename
+    and lose the marker's contents, and the restart parks the WAL somewhere else."""
     marker = _rotation_marker(path)
     dest = None
     try:
@@ -168,9 +202,7 @@ def rotate_corrupt(path: Path = ARCHIVE_DB, stamp=None):
         while any(Path(str(dest) + sfx).exists() for sfx in _SIDECARS):
             dest = path.with_name(f"{path.stem}.corrupt-{stamp}-{n}{path.suffix}")
             n += 1
-        tmp = marker.with_name(marker.name + ".tmp")
-        tmp.write_text(dest.name)
-        os.replace(tmp, marker)
+        _durable_write(marker, dest.name)
     for sfx in _SIDECARS:
         src = Path(str(path) + sfx)
         if not src.exists():
@@ -184,7 +216,9 @@ def rotate_corrupt(path: Path = ARCHIVE_DB, stamp=None):
             print(f"[archive] {target.name}: destination already taken, kept beside it",
                   flush=True)
         src.rename(target)                # raises on failure: the marker stays, retry resumes
+    _fsync_dir(path.parent)               # the moves are on disk...
     marker.unlink(missing_ok=True)
+    _fsync_dir(path.parent)               # ...and so is the marker's removal
     print(f"[archive] CORRUPT archive moved aside -> {dest.name}; starting a fresh one. "
           f"KEEP that file: pi/archiver/tools/salvage.py recovers ~all of it.", flush=True)
     return dest
