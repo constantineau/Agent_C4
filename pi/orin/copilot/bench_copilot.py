@@ -232,15 +232,16 @@ def test_coach_logic() -> bool:
 
     seq = []
 
-    def fake_make_narration(route=None, hoisted=None, use_llm=None):
+    def fake_step_narration(route=None, hoisted=None):
         item = seq.pop(0)
         if isinstance(item, Exception):
             raise item
         return item
 
-    orig_mn, orig_rn = copilot.make_narration, copilot.reset_narration
-    copilot.make_narration = fake_make_narration
+    orig_sn, orig_rn, orig_llm = copilot.step_narration, copilot.reset_narration, config.USE_LLM
+    copilot.step_narration = fake_step_narration
     copilot.reset_narration = lambda route=None: None
+    config.USE_LLM = False                       # the timer's own logic only — no phrasing task
     try:
         c = coach_mod._Coach()
         c.route = "_bench_coach"
@@ -269,7 +270,7 @@ def test_coach_logic() -> bool:
         ok &= _check("tick3 error captured, loop survives",
                      bool(st["last_error"]) and "engine down" in st["last_error"] and st["ticks"] == 3)
     finally:
-        copilot.make_narration, copilot.reset_narration = orig_mn, orig_rn
+        copilot.step_narration, copilot.reset_narration, config.USE_LLM = orig_sn, orig_rn, orig_llm
     return ok
 
 
@@ -314,6 +315,16 @@ def test_safety_callout() -> bool:
                  any(x["category"] == "safety" for x in s["new"]) and _grounded(s["new"]))
     ok &= _check("safety sorts ABOVE rotate_now fatigue (top of active)",
                  bool(s["active"]) and s["active"][0]["category"] == "safety")
+    # …and so does a WATCH-level (soon) contact: it must not drop out of the 2-line coach strip
+    # behind the "now" fatigue + rounding items.
+    narrate_mod.reset(route)
+    combined["get_ais"] = snap([watch_tgt])["get_ais"]
+    s = narrate_mod.step(route, combined, None, None)
+    ok &= _check("watch-level safety sorts ABOVE every 'now' item (top of active + new)",
+                 s["active"][0]["category"] == "safety" and s["new"][0]["category"] == "safety"
+                 and s["active"][0]["urgency"] == "soon")
+    ok &= _check("watch-level safety leads the deterministic coach line",
+                 narrate_mod.narrate(s["new"], llm=None)[0].startswith("Traffic closing"))
 
     # escalation watch→act re-surfaces (level is in the id, like the staged rounding prep)
     narrate_mod.reset(route)

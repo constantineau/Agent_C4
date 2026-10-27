@@ -307,8 +307,10 @@ actually used or it is dropped; caveats computed by the engine; deterministic fa
 any LLM trouble. The **auto-coach** timer (30 s) drives the narration engine and holds the
 latest callouts (safety/collision top priority, rounding prep 15/10/5 min, playbook branch,
 sail change-down, deviation/drift, fleet rival, plays) — show-once dedup, priority-sorted.
-`POST /strategy` phrases the engine digest + **ranks `play_matches`** against the play
-library narratives (validated ids only). Engine addressing is boat-local-first with
+`POST /strategy` returns the engine digest by default (no LLM — the iPad's 15 s polls must not
+queue on Ollama, #29). With `use_llm: true` it phrases the digest + **ranks `play_matches`**
+against the play library narratives (validated ids only); automatic narrative matching on the
+iPad is deferred to #53. Engine addressing is boat-local-first with
 `ENGINE_URL_FALLBACK`. Exit test: `python3 -m copilot.bench_copilot [--llm]`.
 
 ## C4 Performance Lab (Tier 3, `vps/lab/`, :8103)

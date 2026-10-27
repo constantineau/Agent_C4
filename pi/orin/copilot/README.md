@@ -49,8 +49,8 @@ The bounded structure enforces the locked design rules **structurally, not just 
 
 The brief is PULL (the crew asks). Narration is **PUSH**: a deterministic callout engine watches
 the gathered engine facts + the frozen playbook and surfaces the few things worth **showing right
-now** — a **closing-traffic collision warning** (safety, top priority — the nearest closing AIS
-contact inside the CPA/TCPA guard, shown "now" inside ~0.5 nm / 12 min, "soon" inside ~1.5 nm / 30
+now** — a **closing-traffic collision warning** (safety, top priority — the worst closing AIS
+contact inside the CPA/TCPA guard, every contact checked: act before watch, then the soonest TCPA, shown "now" inside ~0.5 nm / 12 min, "soon" inside ~1.5 nm / 30
 min; always legal in-race = own receiver + own math), a **timed mark-rounding prep** (escalating ~15
 / 10 / 5-min heads-up, with the leg-after homework: the maneuver, the TWA once round, and the sail to
 stage for the next leg), a **playbook branch trigger** firing, the two **Lab-3 branch triggers** —
@@ -61,6 +61,17 @@ corrected-time band, or one projected AHEAD of us on corrected — grounded in `
 confidence-gated so a fuzzy/aged match stays quiet), an upcoming **sail change-down**, a **helm
 rotation**, **stale instruments**. The LLM only *phrases* the top one or two into a calm coach line;
 the deterministic callout text is the always-on fallback.
+
+Safety rules (#29): safety callouts sort first whatever their urgency (a watch-level "Traffic
+closing" leads the line over any "now" item) and never go through the LLM — their own text is the
+line. The auto-coach publishes each tick's callouts to `GET /coach` the moment the engine reads are
+in (gathered in parallel); LLM phrasing and the crew briefs run in their own background tasks and
+swap in later. When the collision watch can't see — engine unreachable, the AIS read failing, or no
+own GPS fix — a deterministic **"Collision watch blind: …"** safety callout (urgency now, confirmed
+over two ticks) replaces the old silent all-clear, and `last_error` names an unreachable engine.
+`POST /strategy` returns the fresh deterministic engine digest by default (the iPad polls it every
+~15 s); the LLM narrative runs only on an explicit `{"use_llm": true}`. Polling a ~45 s LLM pass
+kept Ollama busy and queued the coach line behind it (an LLM strategy narrative is deferred to #53).
 
 Same guardrails as a brief: every callout is **grounded** in a real engine fact and/or a playbook
 variant (ungrounded ones are dropped) and the engine does the math — reliability discipline; the
@@ -133,6 +144,7 @@ Env: `ENGINE_URL` (Pi engine), `LLM_BASE_URL` (default `http://127.0.0.1:11434/v
 cd pi/orin
 python3 -m copilot.bench_copilot              # deterministic (engine only)
 python3 -m copilot.bench_copilot --llm        # full bounded tool-loop against the LLM
+python3 -m copilot.test_collision_watch       # the #29 collision-watch read path (pure; in `make ci`)
 ```
 
 The exit test asserts: a brief is always produced; every factor/rec is grounded in a tool the run
