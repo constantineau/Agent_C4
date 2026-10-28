@@ -3,7 +3,27 @@
 Goal (Cole): **lose no telemetry**, and **copy all telemetry off the Pi to the VPS**.
 Deletion from the boat is allowed only *after* an off-boat copy is sha256-verified.
 
-## ⏸ PICK UP HERE — 2026-10-28 (dev @ 727f091)
+## ⏸ PICK UP HERE — 2026-10-28 SESSION END (dev @ 47ade1a)
+
+**Done today:** #60 deployed on the boat (full-res recording back on), #62 + #69 merged, dev agent +
+lab rebuilt in place on dev (16:05Z, data intact), Orin security updates applied + rebooted (back in
+~1 min, all services up). Backup access if Tailscale drops: ssh sr33-pi, then agent-c4@10.10.10.2.
+Cole does NOT do deploy visits — boat work is remote, each boat-side write needs his explicit go.
+
+**Next, in order:**
+1. **Gemini UI griller — proposed, not built, waiting on Cole's three picks** (recommended in
+   brackets): Gemini login [Cole's Google account via Gemini CLI, free quota] vs paid API key;
+   iPad source [Race Rewind replay of Jul 18, rebuild the rig first] vs live boat console;
+   findings [verified → GitHub issues, security-flavoured ones to /root/c4-ops] vs private file.
+   Shape: headless browser screenshots every Lab tab + the iPad console at iPad sizes and in
+   several states → Gemini grills screenshots + code → verify → issues; a `/grill-ui` skill like
+   the Codex ones (/root/.claude/codex/), optional weekly cron. Nothing installed yet.
+2. Raise `deploy-data-path.sh` VERIFY_TIMEOUT_S to ≥ 3600 (today's quick_check took 39 min).
+3. Session 3 (closed today) may surface in Debrief → Recordings as a Jul 18 → Oct 28 "race";
+   offer Cole to hide sessions that obviously aren't races.
+4. Then #55 (tests that cannot fail), ruff F401/F841/F541; credential rotation (private notes).
+   Wi-Fi hardening on the boat: Cole said leave it.
+
 
 **#60 IS DEPLOYED ON THE BOAT (2026-10-28, Cole's go, done remotely — Cole will not do a deploy
 visit).** Session 3 (open since Jul 18) was closed via `POST /session/end` on the engine, so its
@@ -16,13 +36,11 @@ kept; holds the Sep 2 07:25–22:13Z dock rows that exist only aboard). Fresh `a
 the 24 G file on the SD card read at ~10 MB/s and took **39 min**, past `VERIFY_TIMEOUT_S`=1800.
 Raise it (≥ 3600) before the next rotation deploy. The Pi's clone is now b3c30a1 + copied files.
 
-**PRs:** #62 (head 39e8506, Codex fix for an unpriced direct-lay heading) and #69 (head 0708598,
-gpsout only) are green + Codex-reviewed, waiting on Cole's "merge N".
+**PRs:** #62 and #69 MERGED 2026-10-28.
 
 **Boat audit 2026-10-28** (private notes: `/root/c4-ops/boat-audit-2026-10-28.md`). Both boxes
-healthy; nothing reachable from the internet. Orin: 335 security updates pending — Cole chose
-security-only, NVIDIA held, no reboot; the classifier blocked the run (command is in the notes
-session; package list at the Orin's `/tmp/sec.txt`). Wi-Fi hardening: Cole said leave it.
+healthy; nothing reachable from the internet. Orin: 335 security updates APPLIED (security
+pocket only, NVIDIA untouched) and rebooted on Cole's go. Wi-Fi hardening: Cole said leave it.
 The Orin's dnsmasq/isc-dhcp failures are unconfigured leftovers (harmless).
 
 ## ⏸ PICK UP HERE — 2026-10-27 end of session (dev @ f49856f)
