@@ -14,6 +14,7 @@ The model interprets and prioritizes; it can never exceed or fabricate beyond th
 """
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor
 
 from . import adherence as adherence_mod
 from . import brief as brief_mod
@@ -27,22 +28,30 @@ _DEFAULT_GATHER = ["get_conditions", "get_navigator", "get_tactics", "get_sail_a
 
 
 def gather(engine: EngineClient, route=None, hoisted=None) -> dict:
-    """Pull the core engine facts, keyed by tool name (so grounding maps cleanly)."""
+    """Pull the core engine facts, keyed by tool name (so grounding maps cleanly). The reads go out
+    in parallel: one after another, a slow or dead engine cost up to 14 × ENGINE_TIMEOUT before the
+    collision watch was even looked at."""
+    reads = {
+        "get_conditions": lambda: engine.conditions(),
+        "get_navigator": lambda: engine.navigator(route),
+        "get_tactics": lambda: engine.tactics(route),
+        "get_sail_advice": lambda: engine.sail(hoisted=hoisted),
+        "get_fatigue": lambda: engine.fatigue(),
+        "get_watch": lambda: engine.watch(),            # watch system: who's on + countdown (change callouts)
+        "get_checklist": lambda: engine.checklist(route),   # SI/NOR requirement reminders (checklist callouts)
+        "get_ais": lambda: engine.ais(),                # collision watch (safety — always legal, shown top-priority)
+        "get_fleet": lambda: engine.fleet(),            # handicap-rival watch (corrected-time tactical callout)
+        "get_deviation": lambda: engine.deviation(route),   # Lab-3 trigger (a): off the playbook line?
+        "get_drift": lambda: engine.drift(route),           # Lab-3 trigger (b): forecast moved since freeze?
+        "get_strategy": lambda: engine.strategy(route),     # in-race synthesis: the higher-order cross-signal read
+        "get_plays": lambda: engine.plays(route),           # Phase D: armed plays from the frozen v2 bundle
+        "get_buoys": lambda: engine.buoys(route),           # up-course leading indicator (live NDBC obs)
+    }
     snap = {"_route": route, "_hoisted": hoisted}
-    snap["get_conditions"] = engine.conditions()
-    snap["get_navigator"] = engine.navigator(route)
-    snap["get_tactics"] = engine.tactics(route)
-    snap["get_sail_advice"] = engine.sail(hoisted=hoisted)
-    snap["get_fatigue"] = engine.fatigue()
-    snap["get_watch"] = engine.watch()    # watch system: who's on + countdown (change callouts)
-    snap["get_checklist"] = engine.checklist(route)   # SI/NOR requirement reminders (checklist callouts)
-    snap["get_ais"] = engine.ais()        # collision watch (safety — always legal, shown top-priority)
-    snap["get_fleet"] = engine.fleet()    # handicap-rival watch (corrected-time tactical callout)
-    snap["get_deviation"] = engine.deviation(route)   # Lab-3 trigger (a): off the playbook line?
-    snap["get_drift"] = engine.drift(route)           # Lab-3 trigger (b): forecast moved since freeze?
-    snap["get_strategy"] = engine.strategy(route)     # in-race synthesis: the higher-order cross-signal read
-    snap["get_plays"] = engine.plays(route)           # Phase D: armed plays from the frozen v2 bundle
-    snap["get_buoys"] = engine.buoys(route)           # up-course leading indicator (live NDBC obs)
+    with ThreadPoolExecutor(max_workers=len(reads)) as pool:
+        futs = {name: pool.submit(fn) for name, fn in reads.items()}
+        for name, fut in futs.items():
+            snap[name] = fut.result()
     return snap
 
 
@@ -251,6 +260,44 @@ def make_brief(question: str = "", route=None, hoisted=None, use_llm: bool | Non
     return validated
 
 
+def step_narration(route=None, hoisted=None) -> dict:
+    """Gather + run the deterministic callout engine — NO LLM. The result is publishable as-is:
+    `spoken` is the callouts' own grounded text. The auto-coach publishes this the moment it's
+    computed (a collision warning must never wait on a model) and phrases separately."""
+    route = route or config.DEFAULT_ROUTE
+    engine = EngineClient()
+    pb = playbook_mod.load()
+    snapshot = gather(engine, route, hoisted)
+
+    # `engine` is threaded in for the targeted exit-leg sail lookup the rounding callout makes.
+    stepped = narrate_mod.step(route, snapshot, pb, engine)
+    spoken, mode = narrate_mod.narrate(stepped["new"], None)
+    return {
+        "active": stepped["active"],
+        "new": stepped["new"],
+        "spoken": spoken,
+        "narration_mode": mode,
+        "_meta": {"route": route, "engine": engine.base_url, "playbook_loaded": pb.loaded,
+                  "model": None, "llm_used": False,
+                  # every read failed on transport → the engine is gone (the blind callout says so)
+                  "engine_lost": all(isinstance(snapshot.get(k), dict) and bool(snapshot[k].get("error"))
+                                     for k in ("get_ais", "get_conditions"))},
+    }
+
+
+def phrase_narration(res: dict, use_llm: bool | None = None) -> dict:
+    """LLM-phrase a `step_narration` result's NEW callouts in place (safety callouts never reach the
+    model — `narrate.narrate` keeps them word for word). Returns `res`."""
+    want_llm = config.USE_LLM if use_llm is None else use_llm
+    if not want_llm or not res.get("new"):
+        return res
+    spoken, mode = narrate_mod.narrate(res["new"], LLMClient())
+    res["spoken"], res["narration_mode"] = spoken, mode
+    res["_meta"]["model"] = config.LLM_MODEL
+    res["_meta"]["llm_used"] = mode == "llm"
+    return res
+
+
 def make_narration(route=None, hoisted=None, use_llm: bool | None = None) -> dict:
     """Proactive crew callouts for the current situation + a coach line for what's newly worth
     showing. This is the PUSH counterpart to make_brief's PULL: a deterministic engine watches the
@@ -261,26 +308,9 @@ def make_narration(route=None, hoisted=None, use_llm: bool | None = None) -> dic
     'surface' callouts that just crossed their confirmation threshold (show-once), exactly like the
     cloud alerting loop — so the iPad can poll this every ~15 s. `active` is the full confirmed set
     for the banner; `spoken` is the LLM-phrased top of the NEW callouts, with the deterministic
-    callout text as the always-available fallback."""
-    route = route or config.DEFAULT_ROUTE
-    engine = EngineClient()
-    pb = playbook_mod.load()
-    snapshot = gather(engine, route, hoisted)
-
-    # `engine` is threaded in for the targeted exit-leg sail lookup the rounding callout makes.
-    stepped = narrate_mod.step(route, snapshot, pb, engine)
-
-    want_llm = config.USE_LLM if use_llm is None else use_llm
-    spoken, mode = narrate_mod.narrate(stepped["new"], LLMClient() if want_llm else None)
-
-    return {
-        "active": stepped["active"],
-        "new": stepped["new"],
-        "spoken": spoken,
-        "narration_mode": mode,
-        "_meta": {"route": route, "engine": engine.base_url, "playbook_loaded": pb.loaded,
-                  "model": config.LLM_MODEL if want_llm else None, "llm_used": mode == "llm"},
-    }
+    callout text as the always-available fallback. (The on-demand path: step + phrase in one call.
+    The auto-coach splits them so nothing waits on the model.)"""
+    return phrase_narration(step_narration(route, hoisted), use_llm)
 
 
 def make_adherence(route=None) -> dict:
@@ -414,7 +444,11 @@ def strategy_brief(route=None, hoisted=None, use_llm: bool | None = None) -> dic
     strategy (descope locked 2026-07-06 — docs/PLAYBOOK_V2.md §7): the ACTION / target variant /
     vs_playbook are the engine's and are never overridden. Structurally grounded: the numbers /
     picture / concordance / caveats stay the ENGINE's; an ungrounded LLM narrative is dropped; any
-    LLM trouble → the whole deterministic digest stands."""
+    LLM trouble → the whole deterministic digest stands.
+
+    The LLM pass runs ONLY when the caller explicitly asks (`use_llm=True`). The default — the
+    iPad's ~15 s poll — is the fresh engine digest: one LLM pass takes ~45 s, and polling it kept
+    Ollama busy with answers nobody waited for, queueing the coach line and briefs behind it."""
     route = route or config.DEFAULT_ROUTE
     engine = EngineClient()
     pb = playbook_mod.load()
@@ -422,8 +456,7 @@ def strategy_brief(route=None, hoisted=None, use_llm: bool | None = None) -> dic
     meta = {"route": route, "engine": engine.base_url, "llm_used": False,
             "playbook_loaded": pb.loaded, "model": None}
 
-    want_llm = config.USE_LLM if use_llm is None else use_llm
-    if not digest.get("available") or not want_llm:
+    if not digest.get("available") or not use_llm:      # default (None) = the engine digest, no LLM
         digest["_meta"] = meta
         return digest
 

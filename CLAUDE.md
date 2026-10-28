@@ -211,7 +211,7 @@ rendering still needs a dockside eyeball once the N2K cable is plugged**)`.
 RaceDefinition, no cloud): the dashboard's ⏺ LOG button one-tap starts/ends a session
 (name defaults to the date; a loaded playbook's race_id is picked up automatically). The
 archiver records everything all the time, but only SESSION windows are kept long-term and
-backfilled — outside them, readings are pruned after `ARCHIVE_RETAIN_DAYS` (14; bench
+backfilled — outside them, readings are pruned after `ARCHIVE_RETAIN_DAYS` (7 on the boat since 2026-10; bench
 overlay 0) and never leave the boat, so day sails/deliveries don't accumulate anywhere.
 `backfill.py` defaults to session mode (+ pushes the sail log as `crew.sail.state` and a
 `crew.session` marker per closed window; `--all` restores everything-mode); the cloud
@@ -307,8 +307,10 @@ actually used or it is dropped; caveats computed by the engine; deterministic fa
 any LLM trouble. The **auto-coach** timer (30 s) drives the narration engine and holds the
 latest callouts (safety/collision top priority, rounding prep 15/10/5 min, playbook branch,
 sail change-down, deviation/drift, fleet rival, plays) — show-once dedup, priority-sorted.
-`POST /strategy` phrases the engine digest + **ranks `play_matches`** against the play
-library narratives (validated ids only). Engine addressing is boat-local-first with
+`POST /strategy` returns the engine digest by default (no LLM — the iPad's 15 s polls must not
+queue on Ollama, #29). With `use_llm: true` it phrases the digest + **ranks `play_matches`**
+against the play library narratives (validated ids only); automatic narrative matching on the
+iPad is deferred to #53. Engine addressing is boat-local-first with
 `ENGINE_URL_FALLBACK`. Exit test: `python3 -m copilot.bench_copilot [--llm]`.
 
 ## C4 Performance Lab (Tier 3, `vps/lab/`, :8103)
