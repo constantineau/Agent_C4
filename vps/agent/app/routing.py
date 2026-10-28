@@ -14,6 +14,8 @@ shore tactical advice — practice/debrief unless the RC clears it; the UI gates
 import math
 import time
 
+from shared import polar as SPOL
+
 from . import navigator as NAV
 from . import weather
 from . import datasource
@@ -36,10 +38,10 @@ def _polars():
 
 
 def _polar_speed(tws, twa):
-    P = _polars()
-    if not P or twa < 30:        # no-go zone / no data → can't make ground to weather
-        return 0.0
-    return min(P, key=lambda p: abs(p[0] - tws) + abs(p[1] - twa))[2]
+    """Polar boatspeed at (tws, twa), interpolated on the grid (`shared.polar`, the same lookup the
+    Lab optimizer uses): 0 below the beat angle (no-go) or with no data, scaled toward 0 under the
+    lightest charted wind."""
+    return SPOL.lookup(_polars(), tws, twa)
 
 
 def _advance(lat, lon, brg, dist_nm):

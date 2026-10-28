@@ -18,6 +18,7 @@ import os
 import time
 
 from shared import race_def
+from shared import polar as SPOL
 from . import polars as POL
 from . import sailplan
 
@@ -191,9 +192,54 @@ def _xtrack_nm(slat, slon, dlat, dlon, plat, plon):
 
 # --- polars ------------------------------------------------------------------
 def _polar_speed(P, tws, twa):
-    if not P or twa < 30:
-        return 0.0
-    return min(P, key=lambda p: abs(p[0] - tws) + abs(p[1] - twa))[2]
+    """Polar boatspeed at (tws, twa), interpolated on the grid (`shared.polar`): linear in TWA within
+    a row and in TWS between rows, 0 below the beat angle, scaled toward 0 under the lowest row."""
+    return SPOL.lookup(P, tws, twa)
+
+
+def _crab_onto(bmark, c_perp, speed_at, iters=6, tol_deg=0.05):
+    """Heading through the water that holds a ground track of `bmark` against a cross current
+    `c_perp` (+ = sets to the right). `speed_at(hdg)` returns (speed, extra) for that heading, or
+    None when it can't sail it. Speed depends on the crab angle and vice versa, so iterate; returns
+    (hdg, speed, crab, extra) once the heading settles AND its own speed was priced, else None — an
+    unsettled last step can land inside the no-go zone with a speed nobody looked up."""
+    hdg = bmark
+    for _ in range(iters):
+        got = speed_at(hdg)
+        if got is None or got[0] < 0.3 or abs(c_perp) >= got[0]:
+            return None
+        crab = math.degrees(math.asin(-c_perp / got[0]))
+        new = (bmark + crab) % 360
+        if abs(_wrap180(new - hdg)) < tol_deg:
+            fin = speed_at(new)
+            if fin is None or fin[0] < 0.3 or abs(c_perp) >= fin[0]:
+                return None
+            crab = math.degrees(math.asin(-c_perp / fin[0]))
+            return new, fin[0], crab, fin[1]
+        hdg = new
+    return None
+
+
+_VMG_CACHE = {}
+
+
+def _vmg_twa_cached(P, tws, pos):
+    """`shared.polar.vmg_twa` on table `P`, memoized per (table, TWS to 0.1 kn, beat/run) — the
+    router asks for it at every node of every generation."""
+    rows = SPOL.rows_for(P)
+    if not rows or tws is None:
+        return None
+    k = (id(rows), round(float(tws), 1), pos)
+    hit = _VMG_CACHE.get(k)
+    if hit is None or hit[0] is not rows:          # the rows ref guards against a recycled id
+        if len(_VMG_CACHE) > 20000:
+            _VMG_CACHE.clear()
+        hit = _VMG_CACHE[k] = (rows, SPOL.vmg_twa(rows, k[1], pos))
+    a = hit[1]
+    if a is not None and pos == "beat":
+        # the cache is keyed to 0.1 kn; never hand back an angle inside THIS wind's no-go edge
+        a = max(a, SPOL.min_twa(rows, float(tws)))
+    return a
 
 
 def _wave_factor(hs, twa, coeffs=None):
@@ -297,8 +343,9 @@ def _sail_domains(SP):
 
 
 def _sail_speed(SP, dom, sail, tws, twa):
-    """A specific sail's polar boatspeed at (tws, twa) — nearest sample, 0 outside its rated TWA domain.
-    This is the speed of HOLDING `sail` here; ≤ the envelope (which is the best sail's speed)."""
+    """A specific sail's polar boatspeed at (tws, twa) — interpolated on its own curve like the
+    envelope (`shared.polar`), 0 outside its rated TWA domain (± SAIL_DOMAIN_MARGIN, held at the edge
+    speed inside the margin). This is the speed of HOLDING `sail` here."""
     key = _sail_polar_key(sail)
     pts = SP.get(key)
     if not pts:
@@ -306,7 +353,7 @@ def _sail_speed(SP, dom, sail, tws, twa):
     lo, hi = dom.get(key, (0.0, 180.0))
     if twa < lo - SAIL_DOMAIN_MARGIN or twa > hi + SAIL_DOMAIN_MARGIN:
         return 0.0
-    return min(pts, key=lambda p: abs(p[0] - tws) + abs(p[1] - twa))[2]
+    return SPOL.lookup(pts, tws, twa, lo_margin=SAIL_DOMAIN_MARGIN)
 
 
 def _point_of_sail(twa):
@@ -318,19 +365,12 @@ def _vmg_headings(P, tws, twd):
     relative to TWD. Injected into the heading fan so the router can sail the TRUE best-VMG tacking/
     gybing angle instead of being limited to the nearest coarse-grid heading — the routing-fidelity-2c
     'VMG gate'. Returns up to 4 headings (port+stbd × upwind+downwind)."""
-    band = [(a, s) for t, a, s in P if abs(t - tws) <= 1.5 and s > 0]
-    if not band:
-        band = [(a, s) for _t, a, s in P if s > 0]
-    if not band:
-        return []
     out = []
-    ups = [(s * math.cos(math.radians(a)), a) for a, s in band if a < 90]
-    downs = [(-s * math.cos(math.radians(a)), a) for a, s in band if a > 90]
-    if ups:
-        beat = max(ups)[1]
+    beat = _vmg_twa_cached(P, tws, "beat")
+    run = _vmg_twa_cached(P, tws, "run")
+    if beat is not None:
         out += [(twd + beat) % 360, (twd - beat) % 360]
-    if downs:
-        run = max(downs)[1]
+    if run is not None:
         out += [(twd + run) % 360, (twd - run) % 360]
     return out
 
@@ -338,17 +378,9 @@ def _vmg_headings(P, tws, twd):
 def _vmg_twa(P, tws, pos):
     """The VMG-optimal TWA (deg off the wind) for a beat or run at this TWS — the half-angle of the
     layline cone. `pos` is 'beat' (upwind) or 'run' (downwind); None for reaches or no polar band."""
-    band = [(a, s) for t, a, s in P if abs(t - tws) <= 1.5 and s > 0] or \
-           [(a, s) for _t, a, s in P if s > 0]
-    if not band:
+    if pos not in ("beat", "run"):
         return None
-    if pos == "beat":
-        cands = [(s * math.cos(math.radians(a)), a) for a, s in band if a < 90]
-    elif pos == "run":
-        cands = [(-s * math.cos(math.radians(a)), a) for a, s in band if a > 90]
-    else:
-        return None
-    return max(cands)[1] if cands else None
+    return _vmg_twa_cached(P, tws, pos)
 
 
 def _layline_pair(P, tws, twd, pos, mlat, mlon, length_nm):
@@ -356,19 +388,11 @@ def _layline_pair(P, tws, twd, pos, mlat, mlon, length_nm):
     boat, sailing its best beat/run angle on each board, just lays the mark). `pos` is 'beat' or
     'run'; returns up to 2 {tack, twa, pts:[[mlat,mlon],[endlat,endlon]]} extending the reciprocal of
     each VMG sailing heading back from the mark. Reaches have no meaningful laylines → []."""
-    band = [(a, s) for t, a, s in P if abs(t - tws) <= 1.5 and s > 0] or \
-           [(a, s) for _t, a, s in P if s > 0]
-    if not band:
+    if pos not in ("beat", "run"):
         return []
-    if pos == "beat":
-        cands = [(s * math.cos(math.radians(a)), a) for a, s in band if a < 90]
-    elif pos == "run":
-        cands = [(-s * math.cos(math.radians(a)), a) for a, s in band if a > 90]
-    else:
+    vmg_twa = _vmg_twa_cached(P, tws, pos)
+    if vmg_twa is None:
         return []
-    if not cands:
-        return []
-    vmg_twa = max(cands)[1]
     length_nm = max(0.5, min(length_nm, LAYLINE_NM))
     out = []
     for tack, h in (("stbd", (twd + vmg_twa) % 360), ("port", (twd - vmg_twa) % 360)):
@@ -551,6 +575,36 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
             placed += 1
         return placed, blocked, back
 
+    def direct_lay(node, tws, twd, dmark, bmark):
+        """The closing board straight to the mark, priced like any other step in `expand`: the held or
+        peeled sail, the realized factor (helm × sea state), and the current — the boat crabs so its
+        track over the ground runs straight at the mark. Returns {gs (kn over the ground toward the
+        mark), hdg (through the water), sail, peel} or None when the mark can't be fetched."""
+        cset = cdrift = 0.0
+        if cur is not None:
+            cset, cdrift = cur.current_at(node["lat"], node["lon"], node["t"])
+            if cdrift <= 0.01:
+                cdrift = 0.0
+        c_par = cdrift * math.cos(math.radians(cset - bmark))     # current along the track to the mark
+        c_perp = cdrift * math.sin(math.radians(cset - bmark))    # …and across it (+ = sets to the right)
+
+        def speed_at(hdg):
+            twa = abs(_wrap180(hdg - twd))
+            sp_env = _polar_speed(P, tws, twa)
+            if sp_env < 0.3:
+                return None
+            sail, sp, is_peel = sail_step(node.get("sail"), tws, twa, sp_env)
+            if realized_on:
+                sp *= _realized_factor(_hs(node["lat"], node["lon"], node["t"]), twa, helm_factor, wave_coeffs)
+            return sp, (sail, is_peel)
+
+        lay = _crab_onto(bmark, c_perp, speed_at)
+        if lay is None:
+            return None
+        hdg, sp, crab, (sail, is_peel) = lay
+        gs = sp * math.cos(math.radians(crab)) + c_par
+        return {"gs": gs, "hdg": hdg, "sail": sail, "peel": is_peel} if gs > 0.3 else None
+
     start = {"lat": slat, "lon": slon, "t": t0, "parent": None, "hdg": None, "sail": start_sail}
     frontier = [start]
     reached = None
@@ -567,20 +621,34 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
         if ENDGAME_DT and frontier:
             d_best = min(_hav_nm(n["lat"], n["lon"], dlat, dlon) for n in frontier)
             gen_dt = min(dt_h, max(ENDGAME_DT_MIN, d_best / ENDGAME_DIV))
+        local = []
         for node in frontier:
             tws, twd = wind(node["lat"], node["lon"], node["t"])
             if cur is not None:            # 2d lever b: the sails feel the wind over the WATER
                 _cs, _cd = cur.current_at(node["lat"], node["lon"], node["t"])
                 tws, twd = _wind_over_water(tws, twd, _cs, _cd)
-            dmark = _hav_nm(node["lat"], node["lon"], dlat, dlon)
-            bmark = _bearing(node["lat"], node["lon"], dlat, dlon)
-            twa_m = abs(_wrap180(bmark - twd))
-            sp_m = _polar_speed(P, tws, twa_m)
-            if sp_m > 0.3 and dmark <= sp_m * dt_h and not (
+            local.append((node, tws, twd, _hav_nm(node["lat"], node["lon"], dlat, dlon),
+                          _bearing(node["lat"], node["lon"], dlat, dlon)))
+        # DIRECT LAY: can any node fetch the mark within one full step? Take the EARLIEST arrival over
+        # the whole frontier (not the first node that happens to fetch), priced like a normal step:
+        # held/peeled sail, helm × sea state, current, and the clock cost of a tack or peel onto it.
+        for node, tws, twd, dmark, bmark in local:
+            lay = direct_lay(node, tws, twd, dmark, bmark)
+            if lay is None or dmark > lay["gs"] * dt_h or (
                     obstacles and obstacles.crosses(node["lat"], node["lon"], dlat, dlon)):
-                reached = {"lat": dlat, "lon": dlon, "t": node["t"] + (dmark / sp_m) * 3600,
-                           "parent": node, "hdg": bmark}
-                break
+                continue
+            is_peel = lay["peel"] and PEEL_COST_S > 0
+            is_tack = (node["hdg"] is not None and
+                       (_wrap180(lay["hdg"] - twd) > 0) != (_wrap180(node["hdg"] - twd) > 0))
+            t_arr = (node["t"] + (dmark / lay["gs"]) * 3600 + (PEEL_COST_S if is_peel else 0.0)
+                     + (TACK_COST_S if is_tack and TACK_CUMULATIVE else 0.0))
+            if reached is None or t_arr < reached["t"]:
+                reached = {"lat": dlat, "lon": dlon, "t": t_arr,
+                           "parent": node, "hdg": lay["hdg"], "sail": lay["sail"],
+                           "pl": node.get("pl", 0) + (1 if is_peel else 0)}
+        if reached:
+            break
+        for node, tws, twd, dmark, bmark in local:
             # CONE GATE: only fan headings within a wide cone of the bearing-to-mark (drops the
             # truly-backward third), plus the VMG-optimal angles (always kept). If the whole cone is
             # obstacle-blocked here, reopen the FULL fan so avoidance can still detour around land.
@@ -602,6 +670,12 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
                         side = 1.0 if off > 0 else -1.0
                         committed = [h for h in fan
                                      if (1.0 if _wrap180(h - axis) >= 0 else -1.0) == side]
+                        if _pos0 == "beat" and committed:
+                            # …and don't FOOT below the mark: a heading lower than the bearing to the
+                            # mark drops the boat under the layline and costs a tack back (#30 — the
+                            # honest no-go zone stopped the old lookup "fetching" the mark at 30°).
+                            above = [h for h in committed if abs(_wrap180(h - axis)) <= abs(off) + 1.0]
+                            committed = above + [bmark] if above else committed
                         fan = committed or [bmark]   # never strand the node — keep the fetch heading
             placed, blocked, back = expand(node, fan, tws, twd, gen_dt, cand)
             if placed == 0 and blocked > 0 and obstacles is not None:
@@ -846,8 +920,11 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
         P = POL.polars_stw()
         if not P:
             return {"available": False, "note": "no polars loaded"}
-        P = POL.apply_adjustments(P, polar_adjustments)   # Lab-4 human-approved refined-polar overlay
-        SP = POL.sail_polars()             # per-sail curves for sail-aware routing (2g); {} → envelope only
+        # Lab-4 human-approved refined-polar overlay — on the envelope AND the per-sail curves, so a
+        # held non-optimal sail (and a gear-loss envelope rebuilt from the curves) sees it too. The
+        # helm factor is applied once, later, on whichever speed the router picks.
+        SP = POL.adjust_sail_polars(POL.sail_polars(), polar_adjustments, P)   # {} → envelope only
+        P = POL.apply_adjustments(P, polar_adjustments)
     if exclude_sails and SP:
         # GEAR-LOSS PLAYS (Playbook v2 Phase C): route as if a sail is out of service — the router
         # must genuinely sail without it, so its curve is removed AND the envelope is rebuilt as the
@@ -1010,7 +1087,7 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
     # sails at (helm skill × sea state), + mean sea state. The gap to 100% is the coaching number;
     # None when nothing degrades it (helm 1.0 + flat water) so the UI hides it.
     realized = None
-    if (helm_factor < 0.999) or (waves is not None and getattr(waves, "loaded", False)):
+    if (abs(helm_factor - 1.0) > 1e-3) or (waves is not None and getattr(waves, "loaded", False)):
         wmin = [(l.get("realized_factor", 1.0), l.get("leg_minutes") or 0.0) for l in legs]
         tot = sum(m for _f, m in wmin) or 1.0
         realized = {
@@ -1030,7 +1107,9 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
         candidate_paths = _per_model_paths(definition, course_id, start_epoch, wf, obstacles, P, marks,
                                            source, safety_depth, jib_crossovers, total_min / 60.0,
                                            cur=cur, waves=waves, helm_factor=helm_factor,
-                                           wave_coeffs=wave_coeffs)
+                                           wave_coeffs=wave_coeffs, polar=polar,
+                                           polar_adjustments=polar_adjustments, sail_config=sail_config,
+                                           exclude_sails=exclude_sails)
     return {
         "available": True, "course_id": cid,
         "start_epoch": round(float(start_epoch)), "finish_epoch": round(t),
@@ -1067,7 +1146,8 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
 
 def _per_model_paths(definition, course_id, start_epoch, wf, obstacles, P, marks,
                      source, safety_depth, jib_crossovers, blended_hours, cur=None,
-                     waves=None, helm_factor=1.0, wave_coeffs=None):
+                     waves=None, helm_factor=1.0, wave_coeffs=None, polar=None,
+                     polar_adjustments=None, sail_config=None, exclude_sails=None):
     """Route the course through EACH model's OWN sub-field (its series only) → the per-model candidate
     paths the blended route's confidence number summarizes. Same split as the playbook's `_subfields`,
     but here it feeds the Gameplan map's 'Model routes' overlay (PR-4): the user literally sees the fan
@@ -1095,7 +1175,9 @@ def _per_model_paths(definition, course_id, start_epoch, wf, obstacles, P, marks
         r = optimize_course(definition, course_id, start_epoch, sub, time_budget_s=per,
                             obstacles=obstacles, avoid=False, source=source, safety_depth=safety_depth,
                             jib_crossovers=jib_crossovers, emit_exploration=False, per_model=False, cur=cur,
-                            waves=waves, helm_factor=helm_factor, wave_coeffs=wave_coeffs)
+                            waves=waves, helm_factor=helm_factor, wave_coeffs=wave_coeffs,
+                            polar=polar, polar_adjustments=polar_adjustments, sail_config=sail_config,
+                            exclude_sails=exclude_sails)
         hrs = r.get("total_hours")
         if (not r.get("available") or not r.get("path") or r.get("degraded") or r.get("timed_out")
                 or hrs is None or hrs < lo or hrs > hi):

@@ -26,6 +26,8 @@ import struct
 import urllib.request
 import xml.etree.ElementTree as ET
 
+from shared import polar as SPOL
+
 from . import optimizer
 
 _R_NM = 3440.065
@@ -527,7 +529,7 @@ def _polar_pct(seg, epochs, wf, polars, cur=None, wave=None, wave_coeffs=None):
         if w is None:
             continue
         tws, twa, stw, _src = w
-        target = optimizer._polar_speed(P, tws, twa)
+        target = SPOL.target(P, tws, twa)      # interpolated; pinching graded vs beat speed
         if target and target > 0.5 and stw > 0.3:
             ratios.append(min(2.0, stw / target))
             hs = wave.wave_at(f["lat"], f["lon"], ep) if wave is not None else 0.0
@@ -582,7 +584,7 @@ def _performance_bins(seg, epochs, wf, polars, cur=None, wave=None, wave_coeffs=
     """Speed-through-water (current-corrected when a current field is given) vs the polar target,
     snapped to the ORC cert's OWN (TWS,TWA) grid cells — the Lab-4 refined-polar input. Snapping to the
     cert grid (not arbitrary bins) is what lets an approved adjustment line up 1:1 with the cell the
-    optimizer samples (`_polar_speed` nearest-neighbour), so the overlay actually bites. A high
+    optimizer reads (the overlay multiplies those cells), so the overlay actually bites. A high
     percentile (80th) per cell = 'best achievable' (rejects lulls/steering scatter); can exceed the
     cert (soft rating). Needs the actual-wind field + ≥ a few samples/cell, else [].
 

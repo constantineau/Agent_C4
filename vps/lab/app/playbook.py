@@ -475,10 +475,11 @@ def _rejoin_tab(definition, course_id, wf, consensus, cur, waves, marks, off_nm,
     legs = consensus.get("legs") or []
     if len(path) < 3 or not legs or len(marks) < 2:
         return []
-    P = POL.apply_adjustments(POL.polars_stw(), polar_adjustments)
+    P0 = POL.polars_stw()
+    P = POL.apply_adjustments(P0, polar_adjustments)
     if not P:
         return []
-    SP = POL.sail_polars()
+    SP = POL.adjust_sail_polars(POL.sail_polars(), polar_adjustments, P0)
     obstacles = None
     try:
         from .geo import build_for_course

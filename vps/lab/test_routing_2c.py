@@ -15,7 +15,10 @@ P = [(12.0, a, s) for a, s in rows.items()]
 # 1) VMG headings (TWD=0 → wind from north)
 vmg = sorted(OPT._vmg_headings(P, 12.0, 0.0))
 check("VMG beat headings 42/318 present", 42 in vmg and 318 in vmg)
-check("VMG run headings 165/195 present (argmax of -s*cos)", 165 in vmg and 195 in vmg)
+# #30: the polar is interpolated now, and straight-line speed between 150° (6.5) and 165° (6.0) puts
+# the run VMG optimum at 162.5° rather than on the 165° table point — so "near", not "exactly".
+check("VMG run headings ~165/195 present (argmax of -s*cos)",
+      any(abs(h - 165) <= 3 for h in vmg) and any(abs(h - 195) <= 3 for h in vmg))
 
 
 # 3) constant-wind WindField stub (TWS 12 FROM north everywhere)

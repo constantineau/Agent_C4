@@ -514,15 +514,13 @@ def _play_synthesis(plays_in, corridor, profile, race_name):
 
 
 def _sail_speed(SP, sail, tws, twa):
-    """Nearest per-sail-polar speed for `sail` at (tws, twa), or None (jib change-downs share the
-    J1 curve, so J2/J3 read as J1)."""
+    """Per-sail-polar speed for `sail` at (tws, twa), interpolated on its curve (`shared.polar`), or
+    None when it has no curve or can't be flown there (jib change-downs share the J1 curve, so J2/J3
+    read as J1)."""
+    from shared import polar as SPOL
     pts = SP.get(sail) or SP.get({"J2": "J1", "J3": "J1", "C0": "J1"}.get(sail, "")) or []
-    best, bd = None, 1e9
-    for t, a, v in pts:
-        d = (t - tws) ** 2 + ((a - twa) / 10.0) ** 2
-        if d < bd:
-            best, bd = v, d
-    return best
+    v = SPOL.lookup(pts, tws, twa) if pts else 0.0
+    return v or None
 
 
 # legs carry beat/reach/run (optimizer._point_of_sail); the older upwind/reaching/downwind
