@@ -3,6 +3,28 @@
 Goal (Cole): **lose no telemetry**, and **copy all telemetry off the Pi to the VPS**.
 Deletion from the boat is allowed only *after* an off-boat copy is sha256-verified.
 
+## ⏸ PICK UP HERE — 2026-10-28 (dev @ 727f091)
+
+**#60 IS DEPLOYED ON THE BOAT (2026-10-28, Cole's go, done remotely — Cole will not do a deploy
+visit).** Session 3 (open since Jul 18) was closed via `POST /session/end` on the engine, so its
+end_ts is 2026-10-28 ~14:58Z, not the race finish; the Lab derives race windows from the data.
+`deploy-data-path.sh --apply --expect-rotation` backed up to `~/deploy-backups/data-path-20261028T150228Z`
+and rebuilt only the archiver. The corrupt file is now `archive.corrupt-20261028T154237.db` (24 G,
+kept; holds the Sep 2 07:25–22:13Z dock rows that exist only aboard). Fresh `archive.db` writing
+~400 rows/s-batch, disk guard 85/80%, retention 7 d, uplink unchanged and reaching Postgres.
+⚠️ **The script's verify step reported failure (exit 1) but the deploy was fine:** quick_check of
+the 24 G file on the SD card read at ~10 MB/s and took **39 min**, past `VERIFY_TIMEOUT_S`=1800.
+Raise it (≥ 3600) before the next rotation deploy. The Pi's clone is now b3c30a1 + copied files.
+
+**PRs:** #62 (head 39e8506, Codex fix for an unpriced direct-lay heading) and #69 (head 0708598,
+gpsout only) are green + Codex-reviewed, waiting on Cole's "merge N".
+
+**Boat audit 2026-10-28** (private notes: `/root/c4-ops/boat-audit-2026-10-28.md`). Both boxes
+healthy; nothing reachable from the internet. Orin: 335 security updates pending — Cole chose
+security-only, NVIDIA held, no reboot; the classifier blocked the run (command is in the notes
+session; package list at the Orin's `/tmp/sec.txt`). Wi-Fi hardening: Cole said leave it.
+The Orin's dnsmasq/isc-dhcp failures are unconfigured leftovers (harmless).
+
 ## ⏸ PICK UP HERE — 2026-10-27 end of session (dev @ f49856f)
 
 **Merged today:** #58 CI + lint (`make ci`, GitHub Actions on dev/main), #59 copilot collision
