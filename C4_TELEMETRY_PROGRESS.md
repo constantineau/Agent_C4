@@ -1,7 +1,31 @@
-# C4 telemetry consolidation — progress (updated 2026-09-15)
+# C4 telemetry consolidation — progress (updated 2026-10-27)
 
 Goal (Cole): **lose no telemetry**, and **copy all telemetry off the Pi to the VPS**.
 Deletion from the boat is allowed only *after* an off-boat copy is sha256-verified.
+
+## ⏸ PICK UP HERE — 2026-10-27 end of session (dev @ f49856f)
+
+**Merged today:** #58 CI + lint (`make ci`, GitHub Actions on dev/main), #59 copilot collision
+callouts (#29), #61 routes no longer teleport to unreached marks (#31), #60 boat prep (#32: disk
+guard, resumable rotation, fsync'd writes, 7-day retention, `pi/deploy/deploy-data-path.sh`).
+**Nothing is deployed to the boat.** The Pi still runs `main` @ b3c30a1; full-res stays off.
+
+**Next, in order:**
+1. **#62 (#30 polar kn/deg)** — its zero-wind test was red only because it needed #61. Resume
+   its agent: merge `origin/dev` into `fix-30` (worktree `/mnt/data/c4-wt/fix-30`), resolve
+   `optimizer.py`, confirm green, then `/codex-review 62`. Merge on Cole's "merge 62".
+2. **#69 (gpsout/chartplotter, `fix-31-gpsout`)** — rebase on dev now that #61 is in, so the
+   diff is gpsout only; then `/codex-review 69`. Accepted behaviours (not defects): with no
+   obstacle data it keeps the reached waypoint; a walk-back may point behind the boat within the
+   current leg; a stale re-route is refused, not recomputed.
+3. **Boat deploy of #60** (Cole's call, he must be at the console): Cole taps REC stop to close
+   session 3 (open since Jul 18) → run `pi/deploy/deploy-data-path.sh` dry-run, show Cole →
+   on his go, `--apply --expect-rotation`. The corrupt `archive.db` is renamed, never deleted.
+   Optionally ship #59 to the Orin the same visit (copy copilot files, restart
+   `sr33-orin-copilot`).
+4. After the blockers: #55 (tests that cannot fail), then turn on ruff F401/F841/F541.
+5. Ops (private notes in `/root/c4-ops/`): credential rotation still owed; the ingest token
+   change touches the Pi's env, so it needs Cole's go.
 
 ## 2026-10-27 — the boat is back, its archive is not; `make ci` exists
 
