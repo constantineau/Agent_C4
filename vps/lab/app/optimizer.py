@@ -197,6 +197,29 @@ def _polar_speed(P, tws, twa):
     return SPOL.lookup(P, tws, twa)
 
 
+def _crab_onto(bmark, c_perp, speed_at, iters=6, tol_deg=0.05):
+    """Heading through the water that holds a ground track of `bmark` against a cross current
+    `c_perp` (+ = sets to the right). `speed_at(hdg)` returns (speed, extra) for that heading, or
+    None when it can't sail it. Speed depends on the crab angle and vice versa, so iterate; returns
+    (hdg, speed, crab, extra) once the heading settles AND its own speed was priced, else None — an
+    unsettled last step can land inside the no-go zone with a speed nobody looked up."""
+    hdg = bmark
+    for _ in range(iters):
+        got = speed_at(hdg)
+        if got is None or got[0] < 0.3 or abs(c_perp) >= got[0]:
+            return None
+        crab = math.degrees(math.asin(-c_perp / got[0]))
+        new = (bmark + crab) % 360
+        if abs(_wrap180(new - hdg)) < tol_deg:
+            fin = speed_at(new)
+            if fin is None or fin[0] < 0.3 or abs(c_perp) >= fin[0]:
+                return None
+            crab = math.degrees(math.asin(-c_perp / fin[0]))
+            return new, fin[0], crab, fin[1]
+        hdg = new
+    return None
+
+
 _VMG_CACHE = {}
 
 
@@ -564,8 +587,8 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
                 cdrift = 0.0
         c_par = cdrift * math.cos(math.radians(cset - bmark))     # current along the track to the mark
         c_perp = cdrift * math.sin(math.radians(cset - bmark))    # …and across it (+ = sets to the right)
-        hdg, out = bmark, None
-        for _ in range(3):                  # speed depends on the crab angle and vice versa — converges fast
+
+        def speed_at(hdg):
             twa = abs(_wrap180(hdg - twd))
             sp_env = _polar_speed(P, tws, twa)
             if sp_env < 0.3:
@@ -573,15 +596,14 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
             sail, sp, is_peel = sail_step(node.get("sail"), tws, twa, sp_env)
             if realized_on:
                 sp *= _realized_factor(_hs(node["lat"], node["lon"], node["t"]), twa, helm_factor, wave_coeffs)
-            if sp < 0.3 or abs(c_perp) >= sp:
-                return None
-            crab = math.degrees(math.asin(-c_perp / sp))
-            out = {"gs": sp * math.cos(math.radians(crab)) + c_par, "hdg": (bmark + crab) % 360,
-                   "sail": sail, "peel": is_peel}
-            if abs(_wrap180(out["hdg"] - hdg)) < 0.05:
-                break
-            hdg = out["hdg"]
-        return out if out is not None and out["gs"] > 0.3 else None
+            return sp, (sail, is_peel)
+
+        lay = _crab_onto(bmark, c_perp, speed_at)
+        if lay is None:
+            return None
+        hdg, sp, crab, (sail, is_peel) = lay
+        gs = sp * math.cos(math.radians(crab)) + c_par
+        return {"gs": gs, "hdg": hdg, "sail": sail, "peel": is_peel} if gs > 0.3 else None
 
     start = {"lat": slat, "lon": slon, "t": t0, "parent": None, "hdg": None, "sail": start_sail}
     frontier = [start]

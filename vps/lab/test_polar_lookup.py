@@ -163,6 +163,18 @@ v = OPT._polar_speed(P, 12.0, 90.0)
 check("fair-current time = d / (polar + drift) on the beam reach",
       near(fair["eta"], 0.3 / (v + 1.0) * 3600, 0.5))
 
+print("8b) the crab onto a direct lay is only accepted once its own heading is priced (Codex, PR #62)")
+# 4 kn from N, mark at 51.2°, 0.4 kn current toward 141.2°: the crab walks 51.2 → 45.75 → 45.32 →
+# 45.285°, a hair inside the 45.3° beat edge where the polar is 0. Three passes used to stop there.
+_c = 0.4 * math.sin(math.radians(141.2 - 51.2))
+_lay = OPT._crab_onto(51.2, _c, lambda h: (lambda v: (v, None) if v >= 0.3 else None)(sp(4.0, abs(OPT._wrap180(h)))))
+check(f"no direct lay onto a heading inside the no-go zone ({_lay})",
+      _lay is None or sp(4.0, abs(OPT._wrap180(_lay[0]))) >= 0.3)
+_c = 0.4 * math.sin(math.radians(180.0 - 90.0))   # beam reach, 12 kn: settles well clear of the edge
+_lay = OPT._crab_onto(90.0, _c, lambda h: (sp(12.0, abs(OPT._wrap180(h))), None))
+check(f"a beam reach with a cross current still settles ({_lay and round(_lay[0], 2)}°, crabbed up)",
+      _lay is not None and 80.0 < _lay[0] < 90.0)
+
 print("9) the approved overlay reaches the per-sail curves, and a gear-loss envelope; clamp 0.85")
 adj = [{"tws": 12, "twa": 150, "mult": 0.85}]
 SPa = POL.adjust_sail_polars(SP, adj, P)
