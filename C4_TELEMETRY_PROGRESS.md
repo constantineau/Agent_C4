@@ -1,7 +1,41 @@
-# C4 telemetry consolidation — progress (updated 2026-10-27)
+# C4 telemetry consolidation — progress (updated 2026-10-30)
 
 Goal (Cole): **lose no telemetry**, and **copy all telemetry off the Pi to the VPS**.
 Deletion from the boat is allowed only *after* an off-boat copy is sha256-verified.
+
+## ⏸ PICK UP HERE — 2026-10-30 SESSION END (dev @ a941e95)
+
+**Done today:**
+- **Jul 18 replay rebuilt on dev e2957f4.** 1,091 frames, 0 errors. Old build kept as
+  `timeline-fullrace-2026-09-17`. What changed: "Rougher than forecast" arms ~3 h instead of 5 h
+  (from the Oct 27 polar fix), and it flickers ~10× between 21:54Z and 22:46Z. The selector card now
+  reads "0 of 60 min", which is correct.
+- **Gemini UI griller built**, the same setup as Tramp's playtester. Branch `grill-ui` @ fdd836f,
+  worktree `/mnt/data/c4-wt/grill-ui`, pushed, NO PR yet. Skill: `/grill-ui`. Key: `C4_GEMINI_API_KEY`
+  in `.env` (the same key as Tramp). Cole's picks: strong model with a $1 cap by default; findings
+  go under a wayfinder map "UI grill — map"; security findings are private; the replay server's
+  binding stays as it is.
+- **Full run:** `/mnt/data/c4/ui-grill/20261030-164830-wMyF8t/`, $0.98, 101 findings. Verified in
+  `verify-*.json`: **80 real public findings** (3 blockers, 19 majors, 58 minors), 1 wrong,
+  1 duplicate of #47, 2 replay-only. **3 security findings are in private notes, not here.**
+  Blockers: console values clipped at 820 px; the Monitor badge is green on 100-day-old fixes;
+  switching Lab tabs drops unsaved edits.
+- #70 merged: the deploy verify timeout is now 3600 s. It is not aboard yet.
+
+**Next, in order:**
+1. **Cole: two security decisions** — see `/root/c4-ops/ui-grill-security-2026-10-30.md` (G5, L1).
+   Recommended: G5 = rotate + sudoers rule + remove from code (boat-side, needs his go); L1 = nginx
+   limit_req on the Lab login.
+2. **File the findings.** The recommended grouping: one issue per blocker or major (22), plus one
+   issue per tab holding that tab's minors (~12). All go under a new "UI grill — map" labelled
+   `wayfinder:map`. Waiting on Cole's pick. Then open a PR for `grill-ui` and run the Codex gate.
+3. **c4.racertracer.net/dashboard is 502.** It was served by the bench stack, which was stopped
+   on Oct 8. Cole approved serving the Jul 18 replay there from the dev checkout. The script is
+   `/root/c4-ops/scripts/c4-replay-dashboard.sh` (a systemd unit on :8110 plus the nginx site,
+   GET-only, with a backup). The classifier blocked it, so Cole has to run it with `!`.
+4. #47 (sail call reads TWA 324° as downwind) shows red "change now" all race in the replay, so it
+   deserves a higher priority.
+5. Then the old queue: Debrief session 3 shows as a race; #55; ruff; credential rotation.
 
 ## ⏸ PICK UP HERE — 2026-10-28 SESSION END (dev @ 47ade1a)
 
