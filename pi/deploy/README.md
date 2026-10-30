@@ -33,7 +33,7 @@ passes `--apply` without his go.
    `docker compose -f compose.pi.yml build archiver && … up -d --no-deps archiver`.
    Signal K, the console and n2kout are not touched. The engine is not rebuilt, but it is
    restarted after a rotation (step 6).
-6. **Verify.** Waits (up to 30 min; checking a 24 GB file on the SD card is slow) for the
+6. **Verify.** Waits (up to 60 min; checking a 24 GB file on the SD card is slow) for the
    archiver to open its archive and write. Then it lists the volume, checks `archive.db` grows
    over 60 s, prints `archiver-status.json` and the retention now in effect, and checks the
    uplink is still sending.
