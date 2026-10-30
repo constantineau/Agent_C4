@@ -1,0 +1,12 @@
+{
+  "name": "c4-grill-ui-gemini",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@google/genai": "2.25.0",
+    "playwright": "1.64.0"
+  }
+}
