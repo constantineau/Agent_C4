@@ -26,7 +26,7 @@ PI_HOST=${PI_HOST:-sr33-pi@100.79.180.102}
 PI_REPO=${PI_REPO:-Agent_C4}                  # relative to the Pi user's home
 BACKUPS=${BACKUPS:-deploy-backups}            # relative to the Pi user's home
 EXPECT_BASE=${EXPECT_BASE:-b3c30a1}           # what the Pi's clone should be on
-VERIFY_TIMEOUT_S=${VERIFY_TIMEOUT_S:-1800}    # quick_check of a 24 GB file on an SD card is slow
+VERIFY_TIMEOUT_S=${VERIFY_TIMEOUT_S:-3600}    # quick_check of the 24 GB archive on the SD card took 39 min on 2026-10-28
 COMPOSE="docker compose -f compose.pi.yml"
 
 apply=0 rollback="" expect_rotation=0 allow_open=0
