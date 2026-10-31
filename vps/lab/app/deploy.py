@@ -86,7 +86,9 @@ def push(race_id):
     res = {"race_id": race_id, "playbook_id": lock.get("playbook_id"),
            "pushed_playbook": bool(bundle), "ok": bool(steps) and all(s["ok"] for s in steps),
            "steps": steps}
-    record_push(res, race_name=pkg.get("race_name"), signature=lock.get("signature"))
+    # the signature of the bundle actually sent — a re-freeze under the same id changes it
+    record_push(res, race_name=pkg.get("race_name"),
+                signature=((bundle or {}).get("signature") or {}).get("value", "")[:16])
     return res
 
 
