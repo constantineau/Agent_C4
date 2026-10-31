@@ -703,6 +703,11 @@ async function optLoadStartDefault() {
     const r = await apiGet("/api/races/" + encodeURIComponent(Opt.raceId) + "/start");
     if (r.ok) Opt.startDefault = await r.json();
   } catch (e) { /* label falls back to the generic line */ }
+  // re-word the note the moment the gun passes, if the screen is still open then
+  clearTimeout(Opt.startTimer);
+  const sd = Opt.startDefault, ms = sd && sd.race_start ? sd.race_start.epoch * 1000 - Date.now() : -1;
+  if (sd && sd.source === "race_start" && ms > 0 && ms < 2 ** 31 - 1)
+    Opt.startTimer = setTimeout(() => optStartInput(Opt.start), ms + 1000);
 }
 function optStartNote() {
   const sd = Opt.startDefault ? Object.assign({}, Opt.startDefault) : null, tz = optTz();
