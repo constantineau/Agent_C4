@@ -423,21 +423,26 @@ async function saveDraft() {
     try { stored = await queueDef(() => apiGet("/api/races/" + encodeURIComponent(r.race_id)).then((x) => x.json())); }
     catch (e) {}
     if (Lab.editDef !== ed) { refreshRaceList(); return true; }
-    const base = JSON.parse(sent);
-    base.race_id = r.race_id;
+    let clean = null;   // null = take the editor as it stands after the paint (nothing pending)
     if (stored && stored.race_id === r.race_id) {
-      if (JSON.stringify(ed) === sent) Lab.editDef = stored;   // untouched since Save → take the stored copy
-      else {   // edited while saving → keep those edits, add the server-kept fields underneath
-        ed.race_id = r.race_id;
-        for (const k of Object.keys(stored)) if (!(k in ed)) { ed[k] = stored[k]; base[k] = stored[k]; }
+      // The stored copy is the truth; overlay only what was edited while the save ran.
+      const was = JSON.parse(sent), storedJSON = JSON.stringify(stored);
+      let changed = false;
+      for (const k of Object.keys(ed)) {
+        if (k === "race_id" || JSON.stringify(ed[k]) === JSON.stringify(was[k])) continue;
+        stored[k] = ed[k]; changed = true;
       }
-    } else ed.race_id = r.race_id;
+      Lab.editDef = stored;
+      if (changed) clean = storedJSON;
+    } else {
+      ed.race_id = r.race_id;
+      const base = JSON.parse(sent); base.race_id = r.race_id;
+      clean = JSON.stringify(base);
+    }
     Lab.sel = r.race_id; Lab.draft = null; Lab.sources = []; Lab.isDraft = false;
-    const fresh = Lab.editDef === stored;
-    if (!fresh) markClean(JSON.stringify(base));
     Lab.editVal = { errors: r.errors || [], warnings: r.warnings || [] };
     if (activeSec === "races") paintDetail();
-    if (fresh) markClean();   // after the paint, as loadRace does (detailWatchCard fills watch_plan)
+    if (clean === null) markClean(); else markClean(clean);   // after the paint, as loadRace does
     if (activeSec === "races") {
       renderSources();
       const m = document.getElementById("ingMsg"); if (m) { m.textContent = "✓ Saved to the library."; m.style.color = "var(--accent2)"; }
