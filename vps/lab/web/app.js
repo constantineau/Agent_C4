@@ -113,7 +113,8 @@ let activeSec = "";
 const stale = (s) => activeSec !== s;
 let routeHash = "", routeAsking = false;   // the hash being shown; true while the unsaved prompt is up
 async function route() {
-  const target = location.hash || "#races";
+  if (!location.hash) history.replaceState(null, "", "#races");   // so a later click on Races is a no-op, not a reload
+  const target = location.hash;
   // Leaving a tab with unsaved edits: put the old hash back (replaceState fires no hashchange) and ask
   // first — Save / Discard / Stay — instead of the next renderer silently refetching over them.
   if (routeAsking) { history.replaceState(null, "", routeHash); return; }   // Back/Forward under the prompt
