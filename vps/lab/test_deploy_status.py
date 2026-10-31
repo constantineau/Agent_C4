@@ -85,6 +85,14 @@ rec = D.record_push({"race_id": "r2", "playbook_id": "r2__1", "pushed_playbook":
                      "steps": [{"target": "pi-engine", "step": "course", "ok": True, "detail": {}}]})
 check("no bundle pushed -> playbook_id None", rec["playbook_id"] is None and rec["signature"] == "")
 
+# concurrent writers (push records from a worker thread, lock-in from the loop) never lose a key
+import threading  # noqa: E402
+ths = [threading.Thread(target=lambda i=i: [labstate.set(f"k{i}_{j}", j) for j in range(20)]) for i in range(6)]
+[t.start() for t in ths]
+[t.join() for t in ths]
+st = labstate.all()
+check("concurrent labstate writes all land", all(st.get(f"k{i}_{j}") == j for i in range(6) for j in range(20)))
+
 # ---- live boat read ------------------------------------------------------------------------
 print("live boat read:")
 

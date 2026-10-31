@@ -121,9 +121,7 @@ def record_push(res, race_name=None, signature=None, now=None):
            "ok": bool(res.get("ok")),
            "steps": [{"target": s.get("target"), "step": s.get("step"), "ok": bool(s.get("ok")),
                       "detail": _trim_detail(s.get("detail"))} for s in res.get("steps") or []]}
-    labstate.set(_PUSH_LAST, rec)
-    if rec["ok"]:
-        labstate.set(_PUSH_LAST_OK, rec)
+    labstate.update({_PUSH_LAST: rec, _PUSH_LAST_OK: rec} if rec["ok"] else {_PUSH_LAST: rec})
     return rec
 
 
