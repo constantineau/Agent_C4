@@ -14,7 +14,7 @@ import json
 import os
 import re
 
-from fastapi import FastAPI, Request, UploadFile, File
+from fastapi import FastAPI, Request, UploadFile, File, Form
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
@@ -22,7 +22,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from shared import race_def, boat_profile
-from . import auth, store, extract, boats, labstate, feedback, pbstore, deploy, monitor, judge, track, learning, fleetimport, report, retro, retrostore, share
+from . import auth, store, extract, boats, labstate, feedback, pbstore, deploy, monitor, judge, track, learning, fleetimport, report, retro, retrostore, share, racestart
 
 INGESTED_DIR = os.environ.get("INGESTED_DIR", "/srv/ingested")
 
@@ -94,6 +94,15 @@ def races():
 def race(rid: str):
     d = store.get_race(rid)
     return d if d else JSONResponse({"detail": "not found"}, status_code=404)
+
+
+@app.get("/api/races/{rid}/start")
+def race_start_default(rid: str):
+    """What a blank Gameplan Start routes from for this race, and the plain-words reason (#92)."""
+    d = store.get_race(rid)
+    if not d:
+        return JSONResponse({"detail": "not found"}, status_code=404)
+    return racestart.resolve(d, None)
 
 
 @app.get("/api/races/{rid}/validate")
@@ -377,8 +386,8 @@ async def optimize(body: dict):
     if not d:
         return JSONResponse({"detail": "unknown race_id"}, status_code=404)
     course_id = body.get("course_id")
-    start_epoch = float(body.get("start_epoch") or datetime.datetime.now(
-        datetime.timezone.utc).timestamp())
+    start = racestart.resolve(d, body.get("start_epoch"))     # blank Start → the race's gun (#92)
+    start_epoch = start["epoch"]
     from .wind.models import DEFAULT_MODELS, MODELS
     models_req = body.get("models") or list(DEFAULT_MODELS)
     model_names = [m for m in models_req if m in MODELS] or list(DEFAULT_MODELS)
@@ -391,8 +400,11 @@ async def optimize(body: dict):
     from . import jobs
 
     def _work(progress):
-        return _run_optimize(d, course_id, start_epoch, model_names, ens, avoid, per_model,
-                             resolution, use_waves, use_current, on_progress=progress)
+        r = _run_optimize(d, course_id, start_epoch, model_names, ens, avoid, per_model,
+                          resolution, use_waves, use_current, on_progress=progress)
+        if isinstance(r, dict):
+            r["start"] = start                   # which start it routed from, and why (UI says it)
+        return r
 
     return jobs.start("optimize", _work, meta={"race_id": rid})
 
@@ -664,8 +676,7 @@ def _playbook_params(body):
     if not d:
         return None, None, None, None, None
     course_id = body.get("course_id")
-    start_epoch = float(body.get("start_epoch") or datetime.datetime.now(
-        datetime.timezone.utc).timestamp())
+    start_epoch = racestart.resolve(d, body.get("start_epoch"))["epoch"]   # blank → race gun (#92)
     from .wind.models import DEFAULT_MODELS, MODELS
     models_req = body.get("models") or list(DEFAULT_MODELS)
     model_names = [m for m in models_req if m in MODELS] or list(DEFAULT_MODELS)
@@ -1220,16 +1231,32 @@ async def learning_reject(pid: int, body: dict = None):
 
 
 # ---- Fleet roster auto-import (public data: YB entry list + ORC handicaps) → DRAFT for review ----
+def _with_draft_fleet(stored, fleet):
+    """The stored race with the Fleet tab's draft roster (unsaved edits included) in place of the saved
+    one, when the client sends it — so 'orc' enriches what the user is looking at and a re-import
+    carries seeded MMSIs over from it. Anything that isn't a list keeps the saved roster."""
+    if isinstance(fleet, str):
+        try:
+            fleet = json.loads(fleet)
+        except ValueError:
+            fleet = None
+    if not isinstance(fleet, list):
+        return stored
+    return dict(stored, fleet=[e for e in fleet if isinstance(e, dict)])
+
+
 @app.post("/api/fleet/import")
 async def fleet_import(body: dict):
     """Build a DRAFT fleet roster from public data — the entry list (YB tracker OR a regatta-website
     URL/pasted text) + ORC cert handicaps. Returns the proposed roster (with match stats); the human
     reviews/edits in the Fleet tab and Saves via POST /api/races (nothing auto-committed). Body:
-    {race_id, source: yb|both|website|orc, country?, course_id?, url?, text?}."""
+    {race_id, source: yb|both|website|orc, country?, course_id?, url?, text?, fleet?} — fleet = the
+    draft roster on screen (see _with_draft_fleet)."""
     b = body or {}
     d = store.get_race(b.get("race_id")) if b.get("race_id") else None
     if not d:
         return JSONResponse({"detail": "unknown race"}, status_code=404)
+    d = _with_draft_fleet(d, b.get("fleet"))
     return await run_in_threadpool(fleetimport.import_fleet, d, b.get("source", "both"),
                                    b.get("country", "USA,CAN"), b.get("course_id"),
                                    b.get("url"), b.get("text"))
@@ -1248,11 +1275,13 @@ def fleet_orc_candidates(body: dict):
 
 @app.post("/api/fleet/import/upload")
 async def fleet_import_upload(race_id: str, country: str = "USA,CAN", course_id: str = None,
-                             file: UploadFile = File(...)):
-    """Extract a fleet roster from an uploaded entry-list PDF → ORC-enrich → DRAFT for review."""
+                             file: UploadFile = File(...), fleet: str = Form(None)):
+    """Extract a fleet roster from an uploaded entry-list PDF → ORC-enrich → DRAFT for review.
+    `fleet` (form field, JSON) = the draft roster on screen, for carrying seeded MMSIs over."""
     d = store.get_race(race_id)
     if not d:
         return JSONResponse({"detail": "unknown race"}, status_code=404)
+    d = _with_draft_fleet(d, fleet)
     raw = await file.read()
     r = await run_in_threadpool(fleetimport.roster_from_pdf, raw)
     if not r.get("ok"):
@@ -1323,6 +1352,15 @@ async def deploy_push(body: dict):
     return res
 
 
+@app.get("/api/deploy/boat")
+async def deploy_boat():
+    """What is on the boat: the last push the Lab recorded + a live read-only check of what the Pi
+    engine and Orin copilot have loaded right now (Tailscale GETs; `reachable: false` when the boat
+    is off the line)."""
+    live = await run_in_threadpool(deploy.boat_status)
+    return {"last_push": deploy.last_push(), "boat": live}
+
+
 @app.get("/api/deploy/package/{race_id}/download")
 async def deploy_package(race_id: str, course_id: str = None):
     """The combined homework package (ready-to-POST course_load + fleet_load + iPad checklists)."""
@@ -1337,11 +1375,12 @@ async def deploy_package(race_id: str, course_id: str = None):
 @app.post("/api/races")
 async def save_race(body: dict):
     """Save a (human-reviewed) RaceDefinition to the library. Errors don't block saving a draft —
-    they're surfaced so the team finishes review — but a race_id is required."""
+    they're surfaced so the team finishes review — but a race_id is required. `{"draft": true}` marks
+    a freshly extracted (re-)ingest draft: its empty prep fields don't wipe the stored ones."""
     definition = (body or {}).get("definition") or body
     if not definition.get("race_id"):
         return JSONResponse({"detail": "definition.race_id required"}, status_code=400)
-    rid = _write_race(definition)
+    rid = _write_race(definition, draft=bool((body or {}).get("draft")))
     errors, warnings = race_def.validate(definition)
     return {"saved": True, "race_id": rid, "errors": errors, "warnings": warnings,
             "reviewed": bool(definition.get("reviewed"))}
@@ -1353,12 +1392,30 @@ _PRESERVE_ON_SAVE = ("fleet", "own", "division_starts", "tracker", "learnings_no
                      "watch_plan")
 
 
-def _write_race(definition):
+def _prep_empty(key, value):
+    """True when a draft's value for a preserved field carries nothing (the extractor emits `fleet: []`,
+    and the review form gives every race an empty two-team watch-plan skeleton)."""
+    if not value:
+        return True
+    if key == "watch_plan" and isinstance(value, dict):
+        teams = value.get("teams") or {}
+        if not isinstance(teams, dict) or not all(isinstance(t, dict) for t in teams.values()):
+            return False   # malformed → treat as real content, never crash the save
+        return not value.get("blocks") and not any(t.get("members") for t in teams.values())
+    return False
+
+
+def _write_race(definition, draft=False):
+    """Persist a RaceDefinition. A preserved field is restored from the stored copy when the save
+    omits the key, or — for a re-ingest `draft` only — sends it empty. An ordinary save that sends
+    an empty value (the user cleared the notes / emptied the roster) is stored as sent."""
     rid = re.sub(r"[^a-z0-9_-]", "", str(definition.get("race_id", "")).lower())
     prior = store.get_race(rid)
     if prior:
         for k in _PRESERVE_ON_SAVE:
-            if not definition.get(k) and prior.get(k):
+            if not prior.get(k):
+                continue
+            if k not in definition or (draft and _prep_empty(k, definition[k])):
                 definition[k] = prior[k]
     os.makedirs(INGESTED_DIR, exist_ok=True)
     with open(os.path.join(INGESTED_DIR, f"{rid}.json"), "w") as f:

@@ -74,6 +74,7 @@ export const SCREENS = [
     sources: [
       { file: "pi/console/dashboard/index.html" },
       { file: "pi/console/dashboard/dashboard.css" },
+      { file: "pi/console/dashboard/crewwatch.js" },
       { file: "pi/console/dashboard/dashboard.js", from: "/* ============================ helpers", to: "/* ============ COURSE MAP" },
       { file: "pi/console/dashboard/dashboard.js", from: "/* ============================ tile builders", to: "/* ============ the STRATEGY STACK" },
       { file: "pi/console/dashboard/dashboard.js", from: "/* ============================ state", to: "/* ============ the COACH WINDOW" },

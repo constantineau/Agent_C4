@@ -342,15 +342,22 @@ body {
 .det-name { font-size:15px; letter-spacing:1.5px; font-weight:800; }
 .det-status { margin-left:auto; display:inline-flex; align-items:center; gap:6px;
   font-size:11px; letter-spacing:1px; font-weight:800; }
-.det-gauge { padding:14px; border-bottom:1px solid var(--line); font-size:13px; color:var(--muted);
-  font-weight:600; }
+/* the gauge (charts, cross-checks, tables, the watch panel) lives INSIDE the scrolling body,
+   after CLEARS WHEN — a tall one used to sit above the body unscrolled and squeeze WHY /
+   CONSIDER into a thin strip (#77). The checklist and coach windows lead with theirs. */
+.det-gauge { padding:12px 0 2px; border-top:1px solid var(--line); font-size:13px; color:var(--muted);
+  font-weight:600; flex:none; }
+.det-gauge:empty { display:none; }
+.detail.gauge-first .det-gauge { order:-1; border-top:none; padding-top:6px;
+  border-bottom:1px solid var(--line); padding-bottom:12px; }
 .det-gauge .bars { display:flex; flex-direction:column; gap:7px; margin-top:8px; }
 .det-gauge .bar { display:flex; align-items:center; gap:8px; font-size:12px; }
 .det-gauge .bar .barlbl { width:120px; color:var(--muted); }
 .det-gauge .bar .bartrk { flex:1; height:8px; border-radius:4px; background:var(--panel2);
   overflow:hidden; }
 .det-gauge .bar .barfil { height:100%; background:var(--accent); border-radius:4px; }
-.det-body { flex:1; overflow-y:auto; padding:8px 14px; display:flex; flex-direction:column; gap:14px; }
+.det-body { flex:1; min-height:0; overflow-y:auto; padding:12px 14px; display:flex; flex-direction:column; gap:14px;
+  -webkit-overflow-scrolling:touch; overscroll-behavior:contain; }
 .slot { display:flex; flex-direction:column; gap:4px; }
 .slot-lbl { font-size:10.5px; letter-spacing:1.6px; font-weight:800; color:var(--muted); }
 .slot-txt { margin:0; font-size:15px; line-height:1.4; }
@@ -391,15 +398,26 @@ body {
   margin-bottom:6px; }
 .st-plays { margin: 6px 0 2px; font-size: 13px; }
 /* Sails bar — the crew sail-configuration chips (multi-select) + reef */
-.sailsbar { display:flex; align-items:center; gap:7px; flex-wrap:wrap; margin-top:8px;
-  padding:7px 12px; border-radius:10px; background:var(--panel); border:1px solid var(--line); }
+/* Every tap target here is >=44px square (#76) — they get hit with wet fingers on a heeling
+   deck; they were ~20px. The bar's height then depends only on the viewport width (the sail
+   inventory is fixed), never on what is flying, so the grid under it never shifts. */
+.sailsbar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:8px;
+  padding:6px 12px; border-radius:10px; background:var(--panel); border:1px solid var(--line); }
+#sbChips, #sbReef, #sbGear { display:inline-flex; flex-wrap:wrap; gap:8px; }
 .sb-tag { font-size:10px; font-weight:800; letter-spacing:1.1px; color:var(--muted); }
-.sb-sep { width:1px; height:18px; background:var(--line); margin:0 2px; }
-.sb-chip { font-size:12px; font-weight:800; padding:3px 10px; border-radius:7px; cursor:pointer;
+.sb-sep { width:1px; height:30px; background:var(--line); margin:0 2px; }
+.sb-chip { font-size:14px; font-weight:800; min-height:44px; min-width:44px; padding:0 12px;
+  border-radius:9px; cursor:pointer; display:inline-flex; align-items:center; justify-content:center;
   background:var(--panel2); color:var(--muted); border:1px solid var(--line); }
 .sb-chip.on { background:var(--ok-fill); color:var(--ok); border-color:var(--ok); }
 .sb-chip.reef.on { background:var(--watch-fill); color:var(--watch); border-color:var(--watch); }
-.sb-note { font-size:11px; color:var(--muted); margin-left:auto; }
+/* the OUT✕ gear toggles: same 44px target; .st-gear stays small where it is only a label
+   (the playbook detail's out-of-service list) */
+.sailsbar .st-gear { font-size:13px; min-height:44px; min-width:44px; padding:0 10px; margin:0;
+  border-radius:9px; display:inline-flex; align-items:center; justify-content:center; cursor:pointer; }
+/* the note never forces a wrap (basis 0) — a longer "flying …" line must not add a bar row */
+.sb-note { font-size:11px; color:var(--muted); flex:1 1 0; min-width:0; text-align:right;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 /* Race checklist bar: active SI/NOR requirement reminders — persistent until acked */
 .chkbar { display:flex; align-items:center; gap:7px; flex-wrap:wrap; margin-top:8px;
   padding:7px 12px; border-radius:10px; background:var(--panel); border:1px solid var(--act); }

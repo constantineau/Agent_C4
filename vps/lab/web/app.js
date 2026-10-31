@@ -34,7 +34,7 @@ function ein(path, val, ph) {
     oninput="eset('${path}', this.value)">`;
 }
 function enm(path, val, ph) {
-  return `<input class="ein num" value="${val == null ? "" : val}" placeholder="${attr(ph || "")}"
+  return `<input class="ein num" value="${esc(val)}" placeholder="${attr(ph || "")}"
     inputmode="decimal" oninput="esetNum('${path}', this.value)">`;
 }
 function etxt(path, val, ph) {
@@ -111,9 +111,25 @@ function start() { window.addEventListener("hashchange", route); route(); }
 // its awaits before writing.
 let activeSec = "";
 const stale = (s) => activeSec !== s;
-function route() {
-  const sec = (location.hash || "#races").slice(1);
+let routeHash = "", routeAsking = false;   // the hash being shown; true while the unsaved prompt is up
+async function route() {
+  if (!location.hash) history.replaceState(null, "", "#races");   // so a later click on Races is a no-op, not a reload
+  const target = location.hash;
+  // Leaving a tab with unsaved edits: put the old hash back (replaceState fires no hashchange) and ask
+  // first — Save / Discard / Stay — instead of the next renderer silently refetching over them.
+  if (routeAsking) { history.replaceState(null, "", routeHash); return; }   // Back/Forward under the prompt
+  if (routeHash && target !== routeHash) {
+    routeAsking = true;
+    history.replaceState(null, "", routeHash);
+    const ok = await confirmLeave();   // settles pending saves first; asks only if still dirty
+    routeAsking = false;
+    if (!ok) { history.replaceState(null, "", routeHash); return; }
+    history.replaceState(null, "", target);
+  }
+  routeHash = target;
+  const sec = target.slice(1);
   activeSec = sec;
+  syncDirty();   // the bar + markers belong to the tab being entered
   document.querySelectorAll("#tabs a").forEach((a) =>
     a.classList.toggle("active", a.getAttribute("href") === "#" + sec));
   if (sec === "races") return renderRaces();
@@ -129,6 +145,160 @@ function route() {
   location.hash = "#races";          // unknown route → the library
 }
 const clone = (o) => JSON.parse(JSON.stringify(o));
+
+/* ---------- unsaved edits — ONE mechanism for every form that holds edits (DIRTY_SOURCES) ----------
+   Races, Course, Rules, Fleet and Learnings all edit the same in-memory RaceDefinition. markClean()
+   snapshots it right after a load or a successful save; it is dirty when it no longer matches the
+   snapshot (or is an unsaved ingest draft). While dirty: a fixed Save bar sits at the bottom of the
+   screen (no scrolling to the end of a long page), the tab gets a ● marker, and leaving the tab,
+   switching race or closing the page asks first. EDIT_SAVE maps each editing tab to its own save (so
+   its normalisation + messages still apply); every save returns true/false and calls markClean(). */
+const EDIT_SAVE = {
+  races: () => (Lab.isDraft ? saveDraft() : detailSave()),
+  course: () => saveCourse(),
+  rules: () => rulesSave(),
+  fleet: () => fleetSave(),
+  learnings: () => learnSaveNotes(),
+};
+// snap = the JSON a save actually sent (taken before the await), so an edit typed while the request
+// is in flight stays dirty; omitted = the editor as it is now (right after a load).
+function markClean(snap) {
+  Lab.cleanDef = snap !== undefined ? snap : (Lab.editDef ? JSON.stringify(Lab.editDef) : null);
+  syncDirty();
+}
+// After a save resolves: only re-baseline if the same definition is still in the editor (the user
+// may have switched race or discarded while the request was in flight).
+function markSaved(snap, ed) { if (Lab.editDef === ed) markClean(snap); }
+// Every RaceDefinition write goes through one queue: two overlapping saves (bar + in-page button)
+// then persist and resolve in the order they were sent, so the last baseline set is what's on disk.
+let saveChain = Promise.resolve();
+function queueDef(fn) {
+  const p = saveChain.then(fn);
+  saveChain = p.catch(() => {});
+  return p;
+}
+const postDef = (path, body) => queueDef(() => apiPost(path, body).then((r) => r.json()));
+// Wait out any save still in flight (and its handler's repaint) before leaving or discarding, so a
+// late response can't repaint another tab or persist edits the user just threw away.
+async function settleSaves() {
+  let c;
+  do { c = saveChain; await c; await new Promise((r) => setTimeout(r, 0)); } while (c !== saveChain);
+}
+// The race definition as a dirty source: edited on the EDIT_SAVE tabs, saved by that tab's own save.
+function raceDirty() {
+  if (!EDIT_SAVE[activeSec] || !Lab.editDef) return false;
+  return Lab.isDraft || JSON.stringify(Lab.editDef) !== Lab.cleanDef;
+}
+function discardRaceEdits() {
+  if (Lab.isDraft) { Lab.draft = null; Lab.isDraft = false; Lab.editDef = null; Lab.editVal = null; }
+  else Lab.editDef = Lab.cleanDef ? JSON.parse(Lab.cleanDef) : null;
+  markClean();
+}
+// Everything on a tab that can hold unsaved edits. Each source: the tabs it lives on, dirty(), a label
+// for the bar/prompt, save() → true/false (its own normalisation + messages), discard(). The Save bar,
+// the ● marker, the leave prompt and beforeunload are driven by ALL of them — the bar's Save saves every
+// dirty one, Discard drops every dirty one, so no form's edits are silently left behind.
+const DIRTY_SOURCES = [
+  { tabs: Object.keys(EDIT_SAVE), dirty: raceDirty,
+    label: () => (Lab.editDef && (Lab.editDef.name || Lab.editDef.race_id)) || "this race",
+    save: () => EDIT_SAVE[activeSec](), discard: discardRaceEdits },
+  // the boat model's crew thresholds (jib change-downs, Code 0, reefs) — not part of any race
+  { tabs: ["learnings", "gameplan"], dirty: () => bmDirty(), label: () => "boat model",
+    save: () => saveBoatModel(), discard: () => bmDiscard() },
+];
+const dirtySources = () => DIRTY_SOURCES.filter((s) => s.tabs.includes(activeSec) && s.dirty());
+function editDirty() { return dirtySources().length > 0; }
+// Save every dirty source in turn; stop at the first failure (its message is on the page).
+async function saveDirty() {
+  for (const s of dirtySources()) { if ((await s.save()) !== true) return false; }
+  return true;
+}
+function discardEdits() { dirtySources().forEach((s) => s.discard()); syncDirty(); }
+// "Fastnet" / "Fastnet and boat model" — what the bar and the leave prompt name.
+const dirtyLabels = (srcs) => srcs.map((s) => s.label());
+const onlyDraft = (srcs) => Lab.isDraft && srcs.length === 1 && srcs[0].dirty === raceDirty;
+// → true when it's OK to replace/drop the edits (clean, saved, or discarded); false = stay put.
+async function confirmLeave() {
+  await settleSaves();
+  if (!editDirty()) return true;
+  const choice = await askUnsaved();
+  if (choice === "save") {
+    if ((await saveDirty()) !== true) return false;
+    return editDirty() ? confirmLeave() : true;   // edited again while the save ran → ask again
+  }
+  if (choice === "discard") { discardEdits(); return true; }
+  return false;
+}
+// A small in-page dialog (big touch targets — native confirm() is tiny on an iPad). buttons =
+// [{c, label, cls}]; resolves with the clicked c, or `dismiss` for a tap outside the box.
+function askModal(title, bodyHtml, buttons, focus, dismiss) {
+  return new Promise((resolve) => {
+    const el = document.createElement("div");
+    el.className = "modal-back";
+    el.innerHTML = `<div class="modal" role="alertdialog" aria-modal="true" aria-labelledby="modalH">
+      <h3 id="modalH">${esc(title)}</h3><p>${bodyHtml}</p>
+      <div class="modal-btns">${buttons.map((b) =>
+        `<button class="${b.cls}" data-c="${b.c}">${esc(b.label)}</button>`).join("")}</div></div>`;
+    el.addEventListener("click", (e) => {
+      const c = e.target.dataset ? e.target.dataset.c : null;
+      if (!c && e.target !== el) return;
+      el.remove(); resolve(c || dismiss);
+    });
+    document.body.appendChild(el);
+    el.querySelector(`[data-c=${focus}]`).focus();
+  });
+}
+function askUnsaved() {
+  const srcs = dirtySources(), names = dirtyLabels(srcs).map((n) => `<b>${esc(n)}</b>`).join(" and ");
+  const body = onlyDraft(srcs) ? `The extracted draft ${names} is not saved yet.`
+    : `Your edits to ${names} are not saved yet.`;
+  return askModal("Unsaved changes", body, [
+    { c: "stay", label: "Stay here", cls: "ghost" },
+    { c: "discard", label: "Discard", cls: "ghost danger" },
+    { c: "save", label: "Save", cls: "primary" }], "save", "stay");
+}
+// Repaint the Save bar + the tab marker. Cheap enough to run after every input (rAF-coalesced).
+let dirtyRaf = 0, savebarNote = "", savebarTimer = 0;
+function syncDirty() {
+  const bar = document.getElementById("savebar");
+  if (!bar) return;
+  const srcs = dirtySources(), dirty = srcs.length > 0;
+  const show = dirty || !!savebarNote;
+  bar.hidden = !show;
+  bar.classList.toggle("ok", !dirty && !!savebarNote);
+  document.body.classList.toggle("has-savebar", show);
+  document.body.classList.toggle("is-dirty", dirty);   // drives the in-page .if-dirty / .if-clean markers
+  document.querySelectorAll("#tabs a").forEach((a) =>
+    a.classList.toggle("dirty", dirty && a.getAttribute("href") === "#" + activeSec));
+  document.getElementById("savebarText").textContent = dirty
+    ? (onlyDraft(srcs) ? "Draft not saved" : "Unsaved changes") + " — " + dirtyLabels(srcs).join(" + ")
+    : savebarNote;
+  document.getElementById("savebarBtns").hidden = !dirty;
+}
+function queueSyncDirty() { if (!dirtyRaf) dirtyRaf = requestAnimationFrame(() => { dirtyRaf = 0; syncDirty(); }); }
+["input", "change", "click"].forEach((t) => document.addEventListener(t, queueSyncDirty, true));
+window.addEventListener("beforeunload", (e) => { if (editDirty()) { e.preventDefault(); e.returnValue = ""; } });
+function flashSavebar(note) {
+  savebarNote = note; clearTimeout(savebarTimer);
+  savebarTimer = setTimeout(() => { savebarNote = ""; syncDirty(); }, 2500);
+  syncDirty();
+}
+async function savebarSave() {
+  const btn = document.getElementById("savebarSave");
+  if (!editDirty()) return;
+  btn.disabled = true; btn.textContent = "Saving…";
+  let ok = false;
+  try { ok = (await saveDirty()) === true; } catch (e) { ok = false; }
+  btn.disabled = false; btn.textContent = "Save";
+  if (ok) flashSavebar("Saved ✓");
+  else { document.getElementById("savebarText").textContent = "Save failed — see the message on the page"; }
+}
+async function savebarDiscard() {
+  if (!confirm("Discard your unsaved edits?")) return;
+  await settleSaves();
+  discardEdits();
+  route();   // repaint the tab from the restored (or reloaded) definition
+}
 
 /* ---------- Races ---------- */
 async function renderRaces() {
@@ -165,8 +335,9 @@ function raceItem(r) {
       <span class="pill">${r.requirements} checklist</span>
       <span class="pill">${r.ipad_items} →iPad</span>${rev}</div></div>`;
 }
-function selectRace(id) {
-  Lab.sel = id; Lab.draft = null;
+async function selectRace(id) {
+  if (!(await confirmLeave())) return;
+  Lab.sel = id; Lab.draft = null; Lab.isDraft = false;
   document.querySelectorAll(".raceitem").forEach((el) =>
     el.classList.toggle("sel", el.dataset.id === id));
   loadRace(id);
@@ -180,7 +351,7 @@ async function loadRace(id) {
     const d = await (await apiGet("/api/races/" + encodeURIComponent(id))).json();
     const v = await (await apiGet("/api/races/" + encodeURIComponent(id) + "/validate")).json();
     Lab.editDef = d; Lab.editVal = v; Lab.isDraft = false;
-    paintDetail();
+    paintDetail(); markClean();   // after the paint: detailWatchCard fills in an empty watch_plan
   } catch (e) { box.innerHTML = '<div class="placeholder">Failed to load race.</div>'; }
 }
 
@@ -232,6 +403,7 @@ async function extractDraft() {
     msg.style.fontWeight = color ? "600" : ""; msg.style.fontSize = "13px";
   };
   if (!Lab.sources.length && !files.length) { setMsg("Add a document URL or upload a PDF first.", "var(--warn)"); return; }
+  if (!(await confirmLeave())) return;   // a new draft replaces whatever is in the editor
   btn.disabled = true; btn.textContent = "Extracting…";
   setMsg("⏳ Extracting with Opus — reading the documents. A large SI/NOR can take 1–2 min; keep this tab open.", "var(--accent)");
   try {
@@ -269,13 +441,51 @@ async function extractDraft() {
   btn.disabled = false; btn.textContent = "Extract →";
 }
 async function saveDraft() {
-  if (!Lab.editDef) return;
+  if (!Lab.editDef) return false;
+  const sent = JSON.stringify(Lab.editDef), ed = Lab.editDef;
   try {
-    const r = await (await apiPost("/api/races", { definition: Lab.editDef })).json();
-    if (!r.saved) { alert("Save failed: " + (r.detail || "unknown")); return; }
-    Lab.races = null; Lab.sel = r.race_id; Lab.draft = null; Lab.sources = []; Lab.isDraft = false;
-    renderRaces();
-  } catch (e) { alert("Save failed."); }
+    // draft: true → the server keeps the stored prep fields (roster, notes, watch plan…) that a
+    // fresh extraction sends empty; an ordinary save stores exactly what it sends.
+    const r = await postDef("/api/races", { definition: JSON.parse(sent), draft: true });
+    if (!r.saved) { alert("Save failed: " + (r.detail || "unknown")); return false; }
+    Lab.races = null;
+    if (Lab.editDef !== ed) { refreshRaceList(); return true; }   // draft discarded/replaced mid-save
+    // Re-read what the server stored: a re-ingest keeps fields the draft lacks (fleet, notes…). Queued
+    // like a save, so leaving the tab waits for it and it can't land on another tab's edits.
+    let stored = null;
+    try { stored = await queueDef(() => apiGet("/api/races/" + encodeURIComponent(r.race_id)).then((x) => x.json())); }
+    catch (e) {}
+    if (Lab.editDef !== ed) { refreshRaceList(); return true; }
+    let clean = null;   // null = take the editor as it stands after the paint (nothing pending)
+    if (stored && stored.race_id === r.race_id) {
+      // The stored copy is the truth; overlay only what was edited while the save ran.
+      const was = JSON.parse(sent), storedJSON = JSON.stringify(stored);
+      let changed = false;
+      for (const k of Object.keys(ed)) {
+        if (k === "race_id" || JSON.stringify(ed[k]) === JSON.stringify(was[k])) continue;
+        stored[k] = ed[k]; changed = true;
+      }
+      Lab.editDef = stored;
+      if (changed) clean = storedJSON;
+    } else {
+      // Saved, but the stored copy didn't come back: stay a draft (its empty roster/notes would
+      // otherwise read as real values, and the next ordinary save would clear the stored ones).
+      ed.race_id = r.race_id; Lab.sel = r.race_id; refreshRaceList();
+      const m = document.getElementById("ingMsg");
+      if (m) { m.textContent = "Saved, but the stored copy couldn't be reloaded — click Save again."; m.style.color = "var(--warn)"; }
+      return false;
+    }
+    Lab.sel = r.race_id; Lab.draft = null; Lab.sources = []; Lab.isDraft = false;
+    Lab.editVal = { errors: r.errors || [], warnings: r.warnings || [] };
+    if (activeSec === "races") paintDetail();
+    if (clean === null) markClean(); else markClean(clean);   // after the paint, as loadRace does
+    if (activeSec === "races") {
+      renderSources();
+      const m = document.getElementById("ingMsg"); if (m) { m.textContent = "✓ Saved to the library."; m.style.color = "var(--accent2)"; }
+    }
+    refreshRaceList();
+    return true;
+  } catch (e) { alert("Save failed."); return false; }
 }
 
 /* ---------- detail rendering (editable review form, bound to Lab.editDef) ----------
@@ -291,6 +501,7 @@ function paintDetail() {
     detailDelegated(d) +
     detailWatchCard(d) +
     detailProvenance(d.provenance || {});
+  syncDirty();
 }
 function detailBanner(v) {
   const errs = (v.errors || []), warns = (v.warnings || []);
@@ -329,7 +540,7 @@ function detailCourseCard(c, ci) {
   const missing = marks.filter((m) => m.lat == null || m.lon == null).length;
   const review = marks.filter((m) => m.coords_source === "needs_review").length;
   const warn = missing || review
-    ? `<span class="pill review">${missing ? missing + " un-geocoded" : ""}${missing && review ? " · " : ""}${review ? review + " need review" : ""}</span>`
+    ? `<span class="pill warn">${missing ? missing + " un-geocoded" : ""}${missing && review ? " · " : ""}${review ? review + " need review" : ""}</span>`
     : `<span class="pill ok">geometry complete</span>`;
   return `<div class="card"><h3>Course — ${ein(`courses.${ci}.name`, c.name, "course name")}</h3>
     <div class="muted" style="margin-bottom:8px">Divisions ${esc((c.applies_to_divisions || []).join(", "))}${
@@ -454,8 +665,8 @@ function detailWatchCard(d) {
       ${w.blocks.length ? `<button class="mini" onclick="watchClearBlocks()">Clear</button>` : ""}
       <span id="watchMsg" class="muted" style="font-size:12px"></span>
     </div>
-    ${w.blocks.length ? `<table class="legs" style="margin-top:8px">
-      <thead><tr><th>on deck from</th><th>until</th><th></th><th>team</th><th>note</th><th></th></tr></thead><tbody>${rows}</tbody></table>
+    ${w.blocks.length ? `<div class="tbl-scroll" style="margin-top:8px"><table class="legs">
+      <thead><tr><th>on deck from</th><th>until</th><th></th><th>team</th><th>note</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
       <button class="mini" style="margin-top:6px" onclick="watchBlockAdd()">+ block</button>` : ""}
   </div>`;
 }
@@ -476,11 +687,12 @@ async function detailSave(silent) {
   const setMsg = (t) => { const m = document.getElementById("detailMsg"); if (m) m.textContent = t; };
   if (btn) btn.disabled = true;
   if (!silent) setMsg("Saving…");
+  const sent = JSON.stringify(Lab.editDef), ed = Lab.editDef;
   try {
-    const r = await (await apiPost("/api/races", { definition: Lab.editDef })).json();
+    const r = await postDef("/api/races", { definition: JSON.parse(sent) });
     if (!r.saved) { setMsg("Save failed: " + (r.detail || "?")); return false; }
     Lab.editVal = { errors: r.errors || [], warnings: r.warnings || [] };
-    Lab.races = null;
+    Lab.races = null; markSaved(sent, ed);
     if (!silent) {
       paintDetail(); refreshRaceList();
       setMsg(`Saved. ${(r.warnings || []).length} item(s) still flagged for review.`);
@@ -491,13 +703,18 @@ async function detailSave(silent) {
 }
 async function detailApprove(approved) {
   const setMsg = (t) => { const m = document.getElementById("detailMsg"); if (m) m.textContent = t; };
+  const sent = JSON.parse(JSON.stringify(Lab.editDef)), ed = Lab.editDef;
   try {
-    const r = await (await apiPost(`/api/races/${encodeURIComponent(Lab.editDef.race_id)}/approve`,
-      { definition: Lab.editDef, approved })).json();
+    const r = await postDef(`/api/races/${encodeURIComponent(sent.race_id)}/approve`,
+      { definition: sent, approved });
     if (r.detail) { paintDetail(); setMsg(r.detail); return; }   // e.g. blocked by validation errors
-    Lab.editDef.reviewed = r.reviewed; Lab.editDef.reviewed_at = r.reviewed_at;
+    // approve persists the definition it was sent (+ the sign-off): that is the new clean baseline
+    for (const o of [ed, sent]) {
+      o.reviewed = r.reviewed; o.reviewed_at = r.reviewed_at;
+      if (!approved) delete o.reviewed_at;
+    }
     Lab.editVal = { errors: r.errors || [], warnings: r.warnings || [] };
-    Lab.races = null;
+    Lab.races = null; markSaved(JSON.stringify(sent), ed);
     paintDetail(); refreshRaceList();
     setMsg(approved ? "Approved — signed off for race use." : "Approval cleared.");
   } catch (e) { setMsg("Approve failed."); }
@@ -520,7 +737,7 @@ async function renderCourse() {
   try { Lab.editDef = await (await apiGet("/api/races/" + encodeURIComponent(Lab.sel))).json(); }
   catch (e) { view.innerHTML = '<div class="placeholder">Failed to load.</div>'; return; }
   if (stale("course")) return;
-  paintCourse();
+  paintCourse(); markClean();   // after the paint: courseEditCard fills in an empty start
 }
 /* Render the Course & Marks view from the in-memory Lab.editDef (no server refetch — so edits and
    geocoded coords are preserved). Callers set #courseMsg AFTER calling this. */
@@ -535,6 +752,7 @@ function paintCourse() {
     <button id="saveCourseBtn" onclick="saveCourse()">Save course geometry</button>
     <button class="mini" onclick="saveAndGameplan()">Save → run optimizer</button>`;
   (d.courses || []).forEach((c, i) => drawCourseMap("map" + i, c));
+  syncDirty();
 }
 function courseEditCard(c, ci) {
   c.start = c.start || {};
@@ -542,8 +760,8 @@ function courseEditCard(c, ci) {
     const need = m.lat == null || m.coords_source === "needs_review";
     const isGate = m.type === "gate", isIsland = m.type === "island";
     return `<tr class="${need ? "needrow" : ""}">
-      <td class="mono">${m.seq}</td>
-      <td><input class="cin" style="width:120px" value="${esc(m.name || "")}"
+      <td class="mono">${esc(m.seq)}</td>
+      <td><input class="cin" style="width:140px" value="${esc(m.name || "")}"
         onchange="editMark(${ci},${mi},'name',this.value)"></td>
       <td><select onchange="editMark(${ci},${mi},'type',this.value)">
         ${["waypoint", "gate", "island", "buoy"].map((t) =>
@@ -551,14 +769,13 @@ function courseEditCard(c, ci) {
       <td><select onchange="editMark(${ci},${mi},'rounding',this.value)">
         ${["none", "port", "starboard", "gate"].map((r) =>
           `<option ${m.rounding === r ? "selected" : ""}>${r}</option>`).join("")}</select></td>
-      <td><input class="cin" value="${m.lat == null ? "" : m.lat}" placeholder="lat"
-        onchange="editMark(${ci},${mi},'lat',this.value)"></td>
-      <td><input class="cin" value="${m.lon == null ? "" : m.lon}" placeholder="lon"
-        onchange="editMark(${ci},${mi},'lon',this.value)"></td>
-      <td>${isGate ? `<input class="cin" value="${m.lat2 == null ? "" : m.lat2}" placeholder="lat2"
-        onchange="editMark(${ci},${mi},'lat2',this.value)"><input class="cin" value="${m.lon2 == null ? "" : m.lon2}"
-        placeholder="lon2" onchange="editMark(${ci},${mi},'lon2',this.value)">` : ""}</td>
-      <td>${isIsland ? `<input class="cin" style="width:48px" value="${m.radius_nm == null ? "" : m.radius_nm}"
+      <td><div class="cstack"><input class="cin" value="${esc(m.lat)}" placeholder="lat"
+        onchange="editMark(${ci},${mi},'lat',this.value)"><input class="cin" value="${esc(m.lon)}"
+        placeholder="lon" onchange="editMark(${ci},${mi},'lon',this.value)"></div></td>
+      <td>${isGate ? `<div class="cstack"><input class="cin" value="${esc(m.lat2)}" placeholder="lat2"
+        onchange="editMark(${ci},${mi},'lat2',this.value)"><input class="cin" value="${esc(m.lon2)}"
+        placeholder="lon2" onchange="editMark(${ci},${mi},'lon2',this.value)"></div>` : ""}</td>
+      <td>${isIsland ? `<input class="cin" style="width:48px" value="${esc(m.radius_nm)}"
         placeholder="nm" onchange="editMark(${ci},${mi},'radius_nm',this.value)">` : ""}</td>
       <td>${esc(m.coords_source || "")}</td>
       <td>${need ? `<button class="mini" onclick="geocodeMark(${ci},${mi})">Geocode</button>` : ""}
@@ -569,16 +786,81 @@ function courseEditCard(c, ci) {
     <div id="map${ci}" class="coursemap"></div>
     <div style="font-size:13px;margin:8px 0">
       <b>Start</b>
-      <input class="cin" value="${c.start.lat == null ? "" : c.start.lat}" placeholder="start lat"
+      <input class="cin" value="${esc(c.start.lat)}" placeholder="start lat"
         onchange="editStart(${ci},'lat',this.value)">
-      <input class="cin" value="${c.start.lon == null ? "" : c.start.lon}" placeholder="start lon"
+      <input class="cin" value="${esc(c.start.lon)}" placeholder="start lon"
         onchange="editStart(${ci},'lon',this.value)">
       <span class="muted">${esc(c.start.coords_source || "")}</span>
     </div>
-    <table><thead><tr><th>#</th><th>Mark</th><th>Type</th><th>Leave</th><th>Lat</th><th>Lon</th>
+    <div class="tablewrap"><table class="marktable"><thead><tr><th>#</th><th>Mark</th><th>Type</th><th>Leave</th><th>Lat / Lon</th>
       <th>Gate 2nd pt</th><th>R&nbsp;nm</th><th>Source</th><th></th></tr></thead>
-      <tbody>${rows}</tbody></table>
-    <button class="mini" onclick="addMark(${ci})">+ Add mark</button></div>`;
+      <tbody>${rows}</tbody></table></div>
+    <button class="mini" onclick="addMark(${ci})">+ Add mark</button>
+    ${finishEditor(c, ci)}</div>`;
+}
+/* The finish: 1 point (a finish mark) or 2 (a line), each name + lat/lon, plus the source — edited
+   in place on Lab.editDef like the start. Nothing is written on render: a course with no finish
+   only gets one when the user adds a point. */
+function finishEditor(c, ci) {
+  const f = (c.finish && typeof c.finish === "object" && !Array.isArray(c.finish)) ? c.finish : {};
+  const pts = Array.isArray(f.points) ? f.points : [];
+  const need = !pts.length || pts.some((p) => !p || p.lat == null || p.lon == null)
+    || ["needs_review", "si_pending"].includes(f.coords_source);
+  const rows = pts.map((p, k) => `<div class="finrow">
+      <span class="mono">${k === 0 ? "Finish" : "Finish (2)"}</span>
+      <input class="cin" style="width:160px" value="${esc((p && p.name) || "")}" placeholder="point name"
+        onchange="editFinish(${ci},${k},'name',this.value)">
+      <input class="cin" value="${esc(p && p.lat)}" placeholder="lat"
+        onchange="editFinish(${ci},${k},'lat',this.value)">
+      <input class="cin" value="${esc(p && p.lon)}" placeholder="lon"
+        onchange="editFinish(${ci},${k},'lon',this.value)">
+      <button class="mini" title="remove finish point" onclick="removeFinishPoint(${ci},${k})">✕</button>
+    </div>`).join("");
+  return `<div class="finedit${need ? " needrow" : ""}">
+    <div><b>Finish</b> <span class="muted">${pts.length === 2 ? "line between two points"
+      : pts.length === 1 ? "single finish mark" : "not set"}${f.crossing ? " · cross " + esc(f.crossing) : ""}</span>
+      ${pts.length ? `<label class="muted" style="margin-left:8px">source
+        <select onchange="editFinishSource(${ci},this.value)">${[...new Set(["si", "approx", "needs_review",
+          f.coords_source || "needs_review"])].map((v) =>
+          `<option ${(f.coords_source || "needs_review") === v ? "selected" : ""}>${esc(v)}</option>`).join("")}</select></label>` : ""}</div>
+    ${rows}
+    ${pts.length < 2 ? `<button class="mini" onclick="addFinishPoint(${ci})">+ Add finish point</button>` : ""}
+  </div>`;
+}
+function finishPoints(ci) {
+  const c = Lab.editDef.courses[ci];
+  if (!c.finish || typeof c.finish !== "object" || Array.isArray(c.finish)) c.finish = { type: "line", points: [], coords_source: "needs_review" };
+  if (!Array.isArray(c.finish.points)) c.finish.points = [];
+  return c.finish;
+}
+function finishSourceAfterEdit(f) {
+  const ok = f.points.length && f.points.every((p) => p && p.lat != null && p.lon != null);
+  if (ok && (!f.coords_source || ["si_pending", "needs_review"].includes(f.coords_source)))
+    f.coords_source = "approx";
+}
+function editFinish(ci, k, field, val) {
+  const f = finishPoints(ci), cur = f.points[k];
+  const p = f.points[k] = (cur && typeof cur === "object" && !Array.isArray(cur)) ? cur : {};
+  if (field === "name") p.name = val;
+  else { const n = parseFloat(val); p[field] = isNaN(n) ? null : n; finishSourceAfterEdit(f); }
+  paintCourse();
+}
+function editFinishSource(ci, val) {
+  finishPoints(ci).coords_source = val;
+  paintCourse();
+}
+function addFinishPoint(ci) {
+  const f = finishPoints(ci);
+  if (f.points.length >= 2) return;
+  f.points.push({ name: f.points.length ? "Finish line end 2" : "Finish", lat: null, lon: null });
+  if (f.points.length === 2 && f.type === "mark") f.type = "line";
+  paintCourse();
+  document.getElementById("courseMsg").textContent = "Added a finish point — set its lat/lon, then Save.";
+}
+function removeFinishPoint(ci, k) {
+  const f = finishPoints(ci);
+  f.points.splice(k, 1);
+  paintCourse();
 }
 function editMark(ci, mi, field, val) {
   const m = Lab.editDef.courses[ci].marks[mi];
@@ -612,7 +894,7 @@ function editStart(ci, field, val) {
   paintCourse();
 }
 async function saveAndGameplan() {
-  await saveCourse();
+  if (!(await saveCourse())) return;
   if (window.Opt) { Opt.raceId = Lab.sel; Opt.def = Lab.editDef; Opt.courseId = null; Opt.result = null; }
   location.hash = "#gameplan";
 }
@@ -636,17 +918,21 @@ async function saveCourse() {
   const btn = document.getElementById("saveCourseBtn");
   const msg = document.getElementById("courseMsg");
   btn.disabled = true; msg.textContent = "Saving…";
+  let ok = false;
   // mark the review touched in provenance
   Lab.editDef.provenance = Lab.editDef.provenance || {};
   Lab.editDef.provenance.review_status =
     "human-reviewed in the Course & Marks tab — verify before race use.";
+  const sent = JSON.stringify(Lab.editDef), ed = Lab.editDef;
   try {
-    const r = await (await apiPost("/api/races", { definition: Lab.editDef })).json();
-    Lab.races = null;
-    msg.textContent = r.saved ? `Saved. ${r.warnings.length} item(s) still flagged for review.`
+    const r = await postDef("/api/races", { definition: JSON.parse(sent) });
+    Lab.races = null; ok = !!r.saved;
+    if (ok) markSaved(sent, ed);
+    msg.textContent = r.saved ? `Saved. ${(r.warnings || []).length} item(s) still flagged for review.`
       : ("Save failed: " + (r.detail || ""));
   } catch (e) { msg.textContent = "Save failed."; }
   btn.disabled = false;
+  return ok;
 }
 // Course & Marks chart — a real slippy map (OSM + OpenSeaMap seamarks) so geocoded marks can be
 // sanity-checked against actual geography (issue #26). Labeled markers per start/mark/gate/finish,
@@ -659,39 +945,102 @@ function drawCourseMap(id, course) {
   const map = L.map(el); Lab._courseMaps[id] = map;
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 18, attribution: "© OpenStreetMap" }).addTo(map);
   L.tileLayer("https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png", { maxZoom: 18, opacity: 0.9 }).addTo(map);
-  const pts = [];
-  const pin = (lat, lon, label, color) => {
-    if (lat == null) return;
-    L.circleMarker([lat, lon], { radius: 6, color: "#0b0b0e", weight: 1, fillColor: color, fillOpacity: 0.95 })
+  const pts = [], pins = [];
+  const pin = (lat, lon, label, color, prio = 2) => {
+    if (lat == null || lon == null) return;
+    const mk = L.circleMarker([lat, lon], { radius: 6, color: "#0b0b0e", weight: 1, fillColor: color, fillOpacity: 0.95 })
       .bindTooltip(label, { permanent: true, direction: "right", className: "cm-pin" }).addTo(map);
-    pts.push([lat, lon]);
+    // a label hidden by the declutter comes back while the pin is hovered/tapped
+    mk.on("mouseover click", () => { const t = mk.getTooltip(); t && t.getElement() && t.getElement().classList.add("cm-force"); });
+    mk.on("mouseout", () => { const t = mk.getTooltip(); t && t.getElement() && t.getElement().classList.remove("cm-force"); });
+    mk._cmPrio = prio; pins.push(mk); pts.push([lat, lon]);
   };
-  if (course.start && course.start.lat != null) pin(course.start.lat, course.start.lon, "Start", "#2ecc71");
+  if (course.start && course.start.lat != null) pin(course.start.lat, course.start.lon, "Start", "#2ecc71", 0);
   (course.marks || []).forEach((m) => {
     if (m.type === "island" && m.lat != null) {
       L.circle([m.lat, m.lon], { radius: (m.radius_nm || 0.5) * 1852, color: "#ff8a5c", weight: 1,
         fillColor: "#ff8a5c", fillOpacity: 0.16 }).addTo(map);
-      pin(m.lat, m.lon, m.name + " · island, leave " + (m.rounding && m.rounding !== "none" ? m.rounding : "either"), "#ff8a5c");
+      pin(m.lat, m.lon, m.name + " · leave " + (m.rounding && m.rounding !== "none" ? m.rounding : "either"), "#ff8a5c");
     } else if (m.type === "gate" && m.lat != null && m.lat2 != null) {
       L.polyline([[m.lat, m.lon], [m.lat2, m.lon2]], { color: "#f5b13d", weight: 3 }).addTo(map);
-      pin(m.lat, m.lon, m.name, "#f5b13d"); pin(m.lat2, m.lon2, m.name + " (NE)", "#f5b13d");
+      pin(m.lat, m.lon, m.name, "#f5b13d"); pin(m.lat2, m.lon2, m.name + " (NE)", "#f5b13d", 3);
     } else if (m.lat != null) {
       pin(m.lat, m.lon, m.name + (m.rounding && m.rounding !== "none" ? " · " + m.rounding : ""), "#2f9bff");
     }
   });
-  const fp = ((course.finish || {}).points || []).filter((p) => p && p.lat != null);
+  const fpRaw = (course.finish || {}).points;
+  const fp = (Array.isArray(fpRaw) ? fpRaw : []).filter((p) => p && p.lat != null && p.lon != null);
   if (fp.length === 2) L.polyline([[fp[0].lat, fp[0].lon], [fp[1].lat, fp[1].lon]], { color: "#f5c451", weight: 3 }).addTo(map);
-  fp.forEach((p, k) => pin(p.lat, p.lon, k === 0 ? "Finish" : "Finish (2)", "#f5c451"));
+  fp.forEach((p, k) => pin(p.lat, p.lon, k === 0 ? "Finish" : "Finish (2)", "#f5c451", k === 0 ? 1 : 3));
+  // Declutter: in priority order (start, finish, marks in course order, 2nd finish/gate points) each
+  // label goes right of its pin, else left, else is hidden until hovered/tapped. Re-run after every
+  // zoom/pan so zooming in brings labels back.
+  const declutter = () => {
+    const kept = [];
+    const hits = (r) => kept.some((k) => r.left < k.right + 2 && r.right > k.left - 2 && r.top < k.bottom + 2 && r.bottom > k.top - 2);
+    pins.slice().sort((a, b) => a._cmPrio - b._cmPrio).forEach((mk) => {
+      const t = mk.getTooltip(), el = t && t.getElement();
+      if (!el) return;
+      el.classList.remove("cm-hidden");
+      let placed = null;
+      for (const dir of ["right", "left"]) {
+        if (t.options.direction !== dir) { t.options.direction = dir; t.update(); }
+        const r = el.getBoundingClientRect();
+        if (!r.width) return;
+        if (!hits(r)) { placed = r; break; }
+      }
+      if (placed) kept.push(placed);
+      else { t.options.direction = "right"; t.update(); el.classList.add("cm-hidden"); }
+    });
+  };
+  map.on("zoomend moveend resize", declutter);
   if (pts.length) map.fitBounds(pts, { padding: [42, 42], maxZoom: 12 });
   else { map.setView([44.5, -82.5], 6); L.popup().setLatLng([44.5, -82.5]).setContent("No coordinates yet — fill marks below.").openOn(map); }
-  setTimeout(() => { try { map.invalidateSize(); } catch (e) {} }, 80);   // settle tiles after the innerHTML layout
+  setTimeout(() => { try { map.invalidateSize(); declutter(); } catch (e) {} }, 80);   // settle tiles after the innerHTML layout
 }
 
 /* ---------- placeholders (all sections are now built) ---------- */
 
 /* ---------- Gameplan / Optimizer (Lab-1) ---------- */
 const Opt = { races: null, models: null, raceId: null, def: null, courseId: null,
-  chosen: null, running: false, result: null, resolution: "auto", start: "" };
+  chosen: null, running: false, result: null, resolution: "auto", start: "", startDefault: null };
+
+// What a BLANK Start routes from (#92) — the server decides (app/racestart.py): our division's gun,
+// else the earliest gun; "now" only when there's no gun time or it has passed. Said in plain text
+// under the field, not a tooltip.
+async function optLoadStartDefault() {
+  Opt.startDefault = null;
+  if (!Opt.raceId) return;
+  try {
+    const r = await apiGet("/api/races/" + encodeURIComponent(Opt.raceId) + "/start");
+    if (r.ok) Opt.startDefault = await r.json();
+  } catch (e) { /* label falls back to the generic line */ }
+  // re-word the note the moment the gun passes, if the screen is still open then
+  clearTimeout(Opt.startTimer);
+  const sd = Opt.startDefault, ms = sd && sd.race_start ? sd.race_start.epoch * 1000 - Date.now() : -1;
+  if (sd && sd.source === "race_start" && ms > 0 && ms < 2 ** 31 - 1)
+    Opt.startTimer = setTimeout(() => optStartInput(Opt.start), ms + 1000);
+}
+function optStartNote() {
+  const sd = Opt.startDefault ? Object.assign({}, Opt.startDefault) : null, tz = optTz();
+  // the screen can sit open past the gun — the server then routes from now, so say that
+  if (sd && sd.source === "race_start" && sd.race_start.epoch <= Date.now() / 1000) sd.source = "now_passed";
+  if ((Opt.start || "").trim())
+    return "Routes from the time you picked. Clear it to route from "
+      + (!sd || sd.source === "race_start" ? "the race start." : "now.");
+  const when = (e) => epochToWall(e, tz || "UTC").replace("T", " ") + (tz ? " race local" : " UTC");
+  if (!sd) return "Blank routes from the race start if a gun time is set, otherwise from now.";
+  const rs = sd.race_start;
+  if (sd.source === "race_start")
+    return `Blank = race start: ${rs.division} gun, ${when(rs.epoch)}.`;
+  if (sd.source === "now_passed")
+    return `Blank = now. The ${rs.division} start (${when(rs.epoch)}) has passed.`;
+  return "Blank = now. No gun time is set for this race — add it on the Fleet tab.";
+}
+function optStartInput(v) {
+  Opt.start = v;
+  const n = document.getElementById("optStartNote"); if (n) n.textContent = optStartNote();
+}
 
 // The race venue's IANA timezone, if the loaded RaceDefinition carries one.
 function optTz() { return (Opt.def && Opt.def.timezone) || ""; }
@@ -740,11 +1089,12 @@ async function renderGameplan() {
     } catch (e) { view.innerHTML = '<div class="placeholder">Failed to load optimizer.</div>'; return; }
   }
   if (!Opt.raceId && Opt.races.length) await optPickRace(Opt.races[0].race_id, false);
+  await optLoadStartDefault();
   if (stale("gameplan")) return;
   const startTz = optTz();
   const startTitle = (startTz
     ? "Pick the start date & time in " + startTz + " race-local time — converted to UTC behind the scenes."
-    : "Pick the start date & time (UTC).") + " Leave blank for the freshest forecast cycle.";
+    : "Pick the start date & time (UTC).") + " Leave blank to route from the race start (or now, if there is no gun time).";
   view.innerHTML = `<div class="opt">
     <div class="card">
       <h3>Gameplan / Optimizer <span class="muted" style="font-weight:400">— multi-model GRIB route (Lab-1)</span></h3>
@@ -757,7 +1107,8 @@ async function renderGameplan() {
             </select></label>
           <label>Course <select id="optCourse" onchange="Opt.courseId=this.value">${optCourseOpts()}</select></label>
           <label>Start (${startTz ? "race local" : "UTC"}) <input type="datetime-local" id="optStart"
-            title="${esc(startTitle)}" value="${esc(Opt.start || "")}" oninput="Opt.start=this.value"></label>
+            title="${esc(startTitle)}" value="${esc(Opt.start || "")}" oninput="optStartInput(this.value)"></label>
+          <span id="optStartNote" class="opt-start-note">${esc(optStartNote())}</span>
         </div>
         <div class="opt-group">
           <div class="opt-group-h">Boat &amp; charts</div>
@@ -901,9 +1252,15 @@ function optBoatControls() {
     <span class="muted">${isEnc ? "depth no-go &lt; " + depthFt + " ft (draft + margin)" : "global coastline backstop"}</span>`;
 }
 async function optPickBoat(id) {
+  // the boat-model thresholds save to the ACTIVE boat — settle unsaved ones before it changes
+  if (!(await confirmLeave())) return renderGameplan();   // Stay → repaint puts the picker back
   Opt.activeBoat = id;
   await apiPost("/api/boats/active", { boat_id: id });
-  await reloadBoats(); renderGameplan();
+  await reloadBoats();
+  if (Opt.boatModel) {   // the card shows the new boat's model, not the old one's
+    try { bmLoaded(await (await apiGet("/api/crossovers")).json()); } catch (e) { bmLoaded({ error: String(e) }); }
+  }
+  renderGameplan();
 }
 async function optSetChart(src) {
   Opt.chartSource = src;
@@ -932,9 +1289,9 @@ async function toggleBoatModel() {
   Opt.showBoatModel = !Opt.showBoatModel;
   if (Opt.showBoatModel && !Opt.boatModel) {
     try {
-      Opt.boatModel = await (await apiGet("/api/crossovers")).json();
+      bmLoaded(await (await apiGet("/api/crossovers")).json());
       Opt.polarGrid = await (await apiGet("/api/polars")).json();
-    } catch (e) { Opt.boatModel = { error: String(e) }; }
+    } catch (e) { bmLoaded({ error: String(e) }); }
   }
   renderGameplan();
 }
@@ -986,6 +1343,10 @@ function boatModelCard(m) {
     <div class="bm-inv">Inventory: ${inv}</div>
     ${renderJibCrossovers(m)}
     ${renderSailConfig(m)}
+    <div class="jib-edit bm-save">
+      <button class="mini" onclick="bmSaveClick()">Save boat-model thresholds</button>
+      <span id="bmSaveMsg" class="muted" style="font-size:11px">jib change-downs, Code 0 and reefs save together</span>
+    </div>
     <h4>Sail crossovers (optimal sail by TWA, per TWS)</h4>
     <div class="muted" style="font-size:11px;margin-bottom:4px">From the ORC cert (one headsail = the jib slot; specialised to J1/J2/J3 by the wind bands above). <b>Hatched ≈</b> = a toss-up: two sails within ~1.5% of target speed, where the winner-take-all bands can't show a tie — carry either (the erased sail reappears in its own colour).</div>
     <div class="xo-axis"><span>0°</span><span>45°</span><span>90°</span><span>135°</span><span>180°</span></div>
@@ -1007,33 +1368,15 @@ function renderJibCrossovers(m) {
     const rng = b.tws_min == null ? `<${b.tws_max}` : b.tws_max == null ? `${b.tws_min}+` : `${b.tws_min}–${b.tws_max}`;
     return `<div class="xo-zone sail-bg-${esc(b.sail)}" style="left:${left}%;width:${w}%" title="${esc(b.sail)} ${rng} kts">${esc(b.sail)} ${esc(rng)}</div>`;
   }).join("");
-  // editable boundaries (assumes ordered J1,J2,J3 with the two interior thresholds)
-  const t1 = jc[0] && jc[0].tws_max, t2 = jc[1] && jc[1].tws_max;
+  const f = Opt.bmEdit || bmFormFrom(m);   // the inputs show the form (edits survive a repaint)
   return `<h4>Upwind jib change-downs (by wind strength)</h4>
     <div class="muted" style="font-size:11px;margin-bottom:6px">The ORC cert rates only the J1 — these J1/J2/J3 change-downs are your crew/sailmaker thresholds (editable), and drive which jib each upwind leg carries.</div>
     <div class="xo-axis"><span>0</span><span>~9</span><span>~17</span><span>~26</span><span>35 kts</span></div>
     <div class="xo"><div class="xo-row"><span class="xo-tws">TWS</span><div class="xo-track">${bars}</div></div></div>
     <div class="jib-edit">
-      <label>J1→J2 at <input type="number" id="jibT1" value="${t1 ?? ""}" min="2" max="34" step="0.5" style="width:58px"> kts</label>
-      <label>J2→J3 at <input type="number" id="jibT2" value="${t2 ?? ""}" min="2" max="34" step="0.5" style="width:58px"> kts</label>
-      <button class="mini" onclick="saveJibCrossovers()">Save change-downs</button>
-      <span id="jibSaveMsg" class="muted" style="font-size:11px"></span>
+      <label>J1→J2 at <input type="number" id="jibT1" value="${attr(f.t1)}" min="2" max="34" step="0.5" style="width:58px" oninput="bmSet('t1',this.value)"> kts</label>
+      <label>J2→J3 at <input type="number" id="jibT2" value="${attr(f.t2)}" min="2" max="34" step="0.5" style="width:58px" oninput="bmSet('t2',this.value)"> kts</label>
     </div>`;
-}
-
-async function saveJibCrossovers() {
-  const t1 = parseFloat(document.getElementById("jibT1").value);
-  const t2 = parseFloat(document.getElementById("jibT2").value);
-  const msg = document.getElementById("jibSaveMsg");
-  if (isNaN(t1) || isNaN(t2) || t1 >= t2) { if (msg) msg.textContent = "J1→J2 must be below J2→J3."; return; }
-  const bands = [{ sail: "J1", tws_max: t1 }, { sail: "J2", tws_min: t1, tws_max: t2 }, { sail: "J3", tws_min: t2 }];
-  if (msg) msg.textContent = "Saving…";
-  try {
-    await apiPost("/api/boats/jib-crossovers", { jib_crossovers: bands });
-    Opt.boatModel = await (await apiGet("/api/crossovers")).json();   // refetch so the bars update
-    if ((location.hash || "").slice(1) === "learnings") { renderLearnings(); }
-    else { Opt.showBoatModel = true; renderGameplan(); }
-  } catch (e) { if (msg) msg.textContent = "Save failed."; }
 }
 
 /* Code 0 band + mainsail reef points — crew sail-config overlays the ORC cert can't express (it
@@ -1041,51 +1384,130 @@ async function saveJibCrossovers() {
    across routing legs, the crossover chart, the frozen bundle boat_model and the copilot digest —
    routing SPEED stays the rated envelope (no invented numbers). */
 function renderSailConfig(m) {
-  const c0 = m.code0 || {};
-  const mr = m.main_reefs || {};
-  const on = c0.enabled !== false && c0.tws_max != null;
+  const f = Opt.bmEdit || bmFormFrom(m);
   return `<h4>Code 0 — light-air reacher (crew band)</h4>
     <div class="muted" style="font-size:11px;margin-bottom:6px">The C0 takes the jib slot within this band (label overlay — the cert doesn't rate it, so routing speed stays the rated envelope; the band sets the <b>call</b>). It shows as C0 zones in the chart below and drives leg sail calls, the frozen playbook and the copilot's peel alerts.</div>
     <div class="jib-edit">
-      <label><input type="checkbox" id="c0On" ${on ? "checked" : ""}> fly the Code 0</label>
-      <label>under <input type="number" id="c0Tws" value="${c0.tws_max ?? 9}" min="3" max="20" step="0.5" style="width:58px"> kts</label>
-      <label>TWA <input type="number" id="c0Alo" value="${c0.twa_min ?? 55}" min="30" max="150" step="5" style="width:58px">–<input type="number" id="c0Ahi" value="${c0.twa_max ?? 110}" min="40" max="170" step="5" style="width:58px">°</label>
+      <label><input type="checkbox" id="c0On" ${f.c0On ? "checked" : ""} onchange="bmSet('c0On',this.checked)"> fly the Code 0</label>
+      <label>under <input type="number" id="c0Tws" value="${attr(f.c0Tws)}" min="3" max="20" step="0.5" style="width:58px" oninput="bmSet('c0Tws',this.value)"> kts</label>
+      <label>TWA <input type="number" id="c0Alo" value="${attr(f.c0Alo)}" min="30" max="150" step="5" style="width:58px" oninput="bmSet('c0Alo',this.value)">–<input type="number" id="c0Ahi" value="${attr(f.c0Ahi)}" min="40" max="170" step="5" style="width:58px" oninput="bmSet('c0Ahi',this.value)">°</label>
     </div>
     <h4>Mainsail reef points (crew thresholds)</h4>
     <div class="muted" style="font-size:11px;margin-bottom:6px">Reef 1 decorates the sail call (▽R1 on the legs + the copilot's reminder): <b>depower</b> once the breeze is up, and — at a lower threshold — <b>open the slot</b> between the A3 and the main when running the kite.</div>
     <div class="jib-edit">
-      <label>Reef 1 (depower) at <input type="number" id="r1Tws" value="${mr.r1_tws_kn ?? ""}" min="4" max="45" step="0.5" style="width:58px"> kts</label>
-      <label>Reef 1 with the A3 (open the slot) at <input type="number" id="r1Slot" value="${mr.r1_a3_slot_tws_kn ?? ""}" min="4" max="45" step="0.5" style="width:58px"> kts</label>
-      <button class="mini" onclick="saveSailConfig()">Save sail config</button>
-      <span id="scSaveMsg" class="muted" style="font-size:11px"></span>
+      <label>Reef 1 (depower) at <input type="number" id="r1Tws" value="${attr(f.r1)}" min="4" max="45" step="0.5" style="width:58px" oninput="bmSet('r1',this.value)"> kts</label>
+      <label>Reef 1 with the A3 (open the slot) at <input type="number" id="r1Slot" value="${attr(f.slot)}" min="4" max="45" step="0.5" style="width:58px" oninput="bmSet('slot',this.value)"> kts</label>
     </div>`;
 }
 
-async function saveSailConfig() {
-  const msg = document.getElementById("scSaveMsg");
-  const on = document.getElementById("c0On").checked;
-  const tws = parseFloat(document.getElementById("c0Tws").value);
-  const alo = parseFloat(document.getElementById("c0Alo").value);
-  const ahi = parseFloat(document.getElementById("c0Ahi").value);
-  if (on && (isNaN(tws) || isNaN(alo) || isNaN(ahi) || alo >= ahi)) {
-    if (msg) msg.textContent = "Code 0: TWA min must be below max."; return;
+/* The boat-model thresholds form — jib change-downs + Code 0 band + reef points — is ONE form with
+   ONE save, and one source in the Lab's unsaved-edits mechanism (DIRTY_SOURCES). Its inputs bind to
+   Opt.bmEdit as you type; Opt.bmClean is the form as the server has it. Saving posts only the
+   section(s) that changed, so an edit in one section is never reverted by saving the other, and a
+   repaint redraws the inputs from Opt.bmEdit. Lives on Learnings and the Gameplan review panel. */
+const BM_JIB = ["t1", "t2"], BM_SC = ["c0On", "c0Tws", "c0Alo", "c0Ahi", "r1", "slot"];
+const bmStr = (v) => (v == null || v === "" ? "" : isNaN(Number(v)) ? String(v) : String(Number(v)));
+function bmFormFrom(m) {
+  const jc = (m && m.jib_crossovers) || [], c0 = (m && m.code0) || {}, mr = (m && m.main_reefs) || {};
+  return { t1: bmStr(jc[0] && jc[0].tws_max), t2: bmStr(jc[1] && jc[1].tws_max),
+    c0On: c0.enabled !== false && c0.tws_max != null, c0Tws: bmStr(c0.tws_max ?? 9),
+    c0Alo: bmStr(c0.twa_min ?? 55), c0Ahi: bmStr(c0.twa_max ?? 110),
+    r1: bmStr(mr.r1_tws_kn), slot: bmStr(mr.r1_a3_slot_tws_kn) };
+}
+// A fresh /api/crossovers: the new baseline. Unsaved edits (if any) are kept on top of it — but only
+// for the same boat; another boat's model starts clean (its thresholds are not this boat's edits).
+function bmLoaded(m) {
+  const keep = bmDirty() && !!m && !!Opt.boatModel && m.boat_id === Opt.boatModel.boat_id;
+  Opt.boatModel = m;
+  const f = m && m.crossovers ? bmFormFrom(m) : null;
+  Opt.bmClean = f ? JSON.stringify(f) : null;
+  if (!keep) Opt.bmEdit = f;
+}
+function bmSet(k, v) { if (Opt.bmEdit) Opt.bmEdit[k] = typeof v === "boolean" ? v : bmStr(v); }
+function bmDirty() { return !!(Opt.bmEdit && Opt.bmClean) && JSON.stringify(Opt.bmEdit) !== Opt.bmClean; }
+function bmDiscard() { Opt.bmEdit = Opt.bmClean ? JSON.parse(Opt.bmClean) : null; repaintBoatModel(); }
+function repaintBoatModel() {
+  const el = document.querySelector(".card.boatmodel");
+  if (el && Opt.boatModel && Opt.boatModel.crossovers) el.outerHTML = boatModelCard(Opt.boatModel);
+  syncDirty();
+}
+function bmMsg(t, bad) {
+  const m = document.getElementById("bmSaveMsg");
+  if (m) { m.textContent = t; m.style.color = bad ? "var(--warn)" : ""; }
+}
+async function bmSaveClick() {
+  if (!bmDirty()) { bmMsg("Nothing to save."); return; }
+  if (await saveBoatModel()) flashSavebar("Saved ✓");
+}
+// The request bodies for the sections of form f that differ from baseline `was`, validated first so
+// a bad value can't leave a half-save. → {jib, sc} (null = section unchanged) or {err}.
+function bmBodies(f, was) {
+  const changed = (keys) => keys.some((k) => f[k] !== was[k]);
+  let jib = null, sc = null;
+  if (changed(BM_JIB)) {
+    const t1 = parseFloat(f.t1), t2 = parseFloat(f.t2);
+    if (isNaN(t1) || isNaN(t2) || t1 <= 0 || t1 >= t2) return { err: "J1→J2 must be below J2→J3." };
+    jib = { jib_crossovers: [{ sail: "J1", tws_max: t1 }, { sail: "J2", tws_min: t1, tws_max: t2 }, { sail: "J3", tws_min: t2 }] };
   }
-  const r1 = parseFloat(document.getElementById("r1Tws").value);
-  const slot = parseFloat(document.getElementById("r1Slot").value);
-  if (!isNaN(r1) && !isNaN(slot) && slot > r1) {
-    if (msg) msg.textContent = "The A3 slot reef normally fires at or below the depower reef."; return;
+  if (changed(BM_SC)) {
+    const tws = parseFloat(f.c0Tws), alo = parseFloat(f.c0Alo), ahi = parseFloat(f.c0Ahi);
+    // the same bounds /api/boats/sail-config enforces, checked before ANY post
+    if (f.c0On && (isNaN(tws) || isNaN(alo) || isNaN(ahi) || alo >= ahi)) return { err: "Code 0: TWA min must be below max." };
+    if (f.c0On && !(tws > 0 && tws <= 30 && alo >= 0 && ahi <= 180)) return { err: "Code 0: wind up to 30 kts, TWA within 0–180°." };
+    const r1 = parseFloat(f.r1), slot = parseFloat(f.slot);
+    if ([r1, slot].some((v) => !isNaN(v) && (v < 4 || v > 45))) return { err: "Reef points must be 4–45 kts (or blank)." };
+    if (!isNaN(r1) && !isNaN(slot) && slot > r1) return { err: "The A3 slot reef normally fires at or below the depower reef." };
+    sc = { code0: f.c0On ? { enabled: true, tws_max: tws, twa_min: alo, twa_max: ahi } : { enabled: false },
+      main_reefs: { r1_tws_kn: isNaN(r1) ? null : r1, r1_a3_slot_tws_kn: isNaN(slot) ? null : slot } };
   }
-  const body = {
-    code0: on ? { enabled: true, tws_max: tws, twa_min: alo, twa_max: ahi } : { enabled: false },
-    main_reefs: { r1_tws_kn: isNaN(r1) ? null : r1, r1_a3_slot_tws_kn: isNaN(slot) ? null : slot },
-  };
-  if (msg) msg.textContent = "Saving…";
-  try {
-    await apiPost("/api/boats/sail-config", body);
-    Opt.boatModel = await (await apiGet("/api/crossovers")).json();
-    if ((location.hash || "").slice(1) === "learnings") { renderLearnings(); }
-    else { Opt.showBoatModel = true; renderGameplan(); }
-  } catch (e) { if (msg) msg.textContent = "Save failed."; }
+  return { jib, sc };
+}
+// → true when saved (or nothing to save); false = a value is invalid or a post failed (message shown).
+async function saveBoatModel() {
+  if (!bmDirty()) return true;
+  const f = JSON.parse(JSON.stringify(Opt.bmEdit)), sent = JSON.stringify(f);
+  const pre = bmBodies(f, JSON.parse(Opt.bmClean));
+  if (pre.err) { bmMsg(pre.err, true); return false; }
+  bmMsg("Saving…");
+  // The whole save — posts, the refetch and the new baseline — is ONE queued step, so leaving the tab
+  // or Discard (both wait out the queue) can't run between the save and its baseline update.
+  const ok = await queueDef(async () => {
+    // diff against the baseline as it is NOW: an earlier save in the queue may have moved it
+    const was = JSON.parse(Opt.bmClean), { jib, sc, err } = bmBodies(f, was);
+    if (err) { bmMsg(err, true); return false; }
+    const post = async (path, body) => {
+      const r = await (await apiPost(path, body)).json();
+      if (!r.saved) throw new Error(r.detail || "not saved");
+      return r;
+    };
+    const clean = Object.assign({}, was);   // what the server holds so far
+    try {
+      if (jib) {
+        await post("/api/boats/jib-crossovers", jib);
+        BM_JIB.forEach((k) => { clean[k] = f[k]; });
+      }
+      if (sc) {
+        await post("/api/boats/sail-config", sc);
+        BM_SC.forEach((k) => { clean[k] = f[k]; });
+      }
+    } catch (e) {
+      Opt.bmClean = JSON.stringify(clean);   // a section that did save is no longer dirty
+      syncDirty(); bmMsg("Save failed — " + e.message, true);
+      return false;
+    }
+    let fresh = null;
+    try { fresh = await (await apiGet("/api/crossovers")).json(); } catch (e) {}
+    if (fresh && fresh.crossovers) {
+      Opt.boatModel = fresh;   // the bars + chart redraw from what the server now has
+      if (JSON.stringify(Opt.bmEdit) === sent) { Opt.bmEdit = bmFormFrom(fresh); Opt.bmClean = JSON.stringify(Opt.bmEdit); }
+      else Opt.bmClean = sent;   // edited again while the save ran → those edits stay unsaved
+    } else Opt.bmClean = sent;
+    return true;
+  }).catch(() => { bmMsg("Save failed.", true); return false; });
+  if (!ok) return false;
+  repaintBoatModel();
+  bmMsg("Saved.");
+  return true;
 }
 
 function renderPolarGrid() {
@@ -1159,6 +1581,7 @@ function renderOptResult(r) {
   const out = document.getElementById("optOut"); if (!out) return;
   if (!r.available) {
     out.innerHTML = `<div class="card"><div class="placeholder">No route: ${esc(r.note || "unavailable")}</div>
+      ${r.start && r.start.note ? `<div class="opt-start-note">${esc(r.start.note)}</div>` : ""}
       ${r.log ? `<div class="muted" style="font-size:12px">${r.log.map(esc).join("<br>")}</div>` : ""}</div>`;
     return;
   }
@@ -1184,6 +1607,7 @@ function renderOptResult(r) {
       </div>
       <div class="rail-actions"><button id="pdfBtn" onclick="downloadGameplanPdf(this)" title="Download a PDF report of this gameplan — route summary + schematic + leg table + briefing + branching playbook — to email the crew">⬇ PDF report</button>
         <button id="shareBtn" onclick="shareGameplan(this)" title="Create a public read-only link to this gameplan's playable route view (boat animating through the forecast) — send it to the crew; no Lab login needed">🔗 Share player</button></div>
+      ${r.start && r.start.note ? `<div class="opt-start-note">${esc(r.start.note)}</div>` : ""}
       ${optDegradedBanner(r)}
       ${r.timed_out ? '<div class="pill warn">routing hit the time budget — route is best-effort</div>' : ""}
       <details class="rail-sec" open><summary>Legs</summary>
@@ -1618,7 +2042,7 @@ async function freezePlaybook() {
 }
 
 /* ---------- Lock-in & Deploy ---------- */
-const Dep = { races: null, raceId: null, ready: null, sel: null, busy: false };
+const Dep = { races: null, raceId: null, ready: null, sel: null, busy: false, boat: null, boatBusy: false };
 
 async function renderDeploy() {
   const view = document.getElementById("view");
@@ -1633,6 +2057,28 @@ async function renderDeploy() {
   catch (e) { view.innerHTML = '<div class="placeholder">Failed to load deploy state.</div>'; return; }
   if (stale("deploy")) return;
   paintDeploy();
+  depCheckBoat();
+}
+
+// Live read of what the boat has loaded (read-only GETs over the Lab's Tailscale line). Slow when
+// the boat is off the line (a few seconds of timeout), so it paints after the rest of the tab.
+let depBoatSeq = 0;
+async function depCheckBoat() {
+  const seq = ++depBoatSeq;       // a slow older check must not overwrite a newer one (e.g. post-push)
+  Dep.boatBusy = true; depPaintBoat();
+  let boat;
+  try {
+    const res = await apiGet("/api/deploy/boat");
+    boat = res.ok ? await res.json() : { error: "check failed (" + res.status + ")" };
+  } catch (e) { boat = { error: e.message }; }
+  if (seq !== depBoatSeq) return;
+  Dep.boat = boat; Dep.boatBusy = false;
+  if (!stale("deploy")) depPaintBoat();
+}
+
+function depPaintBoat() {
+  const el = document.getElementById("depBoat");
+  if (el && Dep.ready) el.innerHTML = boatPanelInner();
 }
 
 async function depPickRace(id) { Dep.raceId = id; Lab.sel = id; Dep.sel = null; renderDeploy(); }
@@ -1677,8 +2123,99 @@ function paintDeploy() {
       ${lock ? `<div class="banner ok" style="margin-top:10px">🔒 Locked in: <code>${esc(lock.playbook_id)}</code>${lock.signed ? ` · sig <code>${esc(lock.signature)}…</code>` : " · <b>unsigned</b>"} · ${esc(fmtDate(lock.locked_at))}</div>` : ""}
     </div>
 
+    <div class="card" id="depBoat">${boatPanelInner()}</div>
+
     ${lock ? deployPanel(lock, t) : ""}
   </div>`;
+}
+
+const depStamp = (e) => e ? new Date(e * 1000).toISOString().slice(0, 16).replace("T", " ") + "Z" : "—";
+function depAgo(e) {
+  if (!e) return "";
+  const m = Math.max(0, Math.round((Date.now() / 1000 - e) / 60));
+  if (m < 1) return "just now";
+  if (m < 60) return m + " min ago";
+  if (m < 48 * 60) return Math.round(m / 60) + " h ago";
+  return Math.round(m / 1440) + " days ago";
+}
+
+// "What's on the boat": the live read when the boat answers, the last recorded push always, and
+// plain warnings when the boat's load is not the homework locked in here.
+function boatPanelInner() {
+  const lp = (Dep.boat && Dep.boat.last_push) || (Dep.ready && Dep.ready.last_push) || {};
+  const last = lp.last, lastOk = lp.last_ok;
+  const b = Dep.boat && Dep.boat.boat;
+  const lock = Dep.ready && Dep.ready.lock_in;
+  const rid = Dep.raceId;
+  const eng = (b && b.engine) || {}, cop = (b && b.copilot) || {};
+  const epb = eng.playbook, cpb = cop.playbook;
+  const warns = [];
+  let liveRace = null;            // the race the boat itself says it holds (live read only)
+
+  // live line
+  let live;
+  if (Dep.boatBusy && !b) live = `<div class="banner">Checking the boat over Tailscale…</div>`;
+  else if (Dep.boat && Dep.boat.error) live = `<div class="banner warn">Couldn't run the boat check (${esc(Dep.boat.error)}). Below is the last push only.</div>`;
+  else if (b && !b.reachable) live = `<div class="banner warn"><b>Boat unreachable</b> over Tailscale — nothing below is live. ${last ? `It is the last push the Lab recorded (${esc(depAgo(last.at))}); the boat may have changed since.` : "The Lab has no push on record either."}<div class="muted" style="font-size:12px;margin-top:4px">${esc(eng.error || cop.error || "")}</div></div>`;
+  else if (b) {
+    const rows = [];
+    const pbText = (p) => !p ? "no answer" : p.loaded === false ? "no playbook loaded" : p.loaded == null ? (p.note || "unknown") :
+      `${esc(p.race_id || "?")}${p.id ? ` · <code>${esc(p.id)}</code>` : ""}${p.variants != null ? ` · ${p.variants} variants` : ""}${p.plays != null ? ` · ${p.plays} plays` : ""}${p.signed != null ? (p.signed ? (p.signature_ok === false ? " · ⚠ signature BAD" : ` · signed${p.signature ? ` <code>${esc(p.signature)}…</code>` : ""}`) : " · unsigned") : ""}${p.partial ? ` · <span class="muted">older engine: race only</span>` : ""}`;
+    const okPill = (ok, label) => `<span class="pill ${ok ? "ok" : "warn"}">${ok ? "●" : "○"} ${esc(label)}</span>`;
+    rows.push(`<div class="dep-row">${okPill(eng.reachable, "Pi engine")}<span>${eng.reachable ? "playbook: " + pbText(epb) : "unreachable" + (eng.error ? " — " + esc(eng.error) : "")}</span></div>`);
+    if (eng.course) rows.push(`<div class="dep-row"><span class="pill" style="visibility:hidden">● Pi engine</span><span>course: ${eng.course.available ? `${esc(eng.course.route || "?")} · ${eng.course.marks} marks${eng.course.mark_names && eng.course.mark_names.length ? ` <span class="muted">(${eng.course.mark_names.map(esc).join(" → ")})</span>` : ""}` : "none loaded"}</span></div>`);
+    rows.push(`<div class="dep-row">${okPill(cop.reachable, "Orin copilot")}<span>${cop.reachable ? "playbook: " + pbText(cpb) : "unreachable" + (cop.error ? " — " + esc(cop.error) : "")}</span></div>`);
+    live = `<div class="muted" style="font-size:12px">Live read · ${esc(depStamp(b.checked_at))}</div><div class="dep-grid">${rows.join("")}</div>`;
+
+    // live mismatches
+    liveRace = (epb && epb.race_id) || (cpb && cpb.loaded && cpb.race_id) || null;
+    if (epb && cpb && epb.race_id && cpb.loaded && cpb.race_id && epb.race_id !== cpb.race_id)
+      warns.push(`The Pi engine has <b>${esc(epb.race_id)}</b> but the Orin copilot has <b>${esc(cpb.race_id)}</b>. Push again so both match.`);
+    if (liveRace && liveRace !== rid) {
+      warns.push(`The boat is loaded for <b>${esc(liveRace)}</b>, not this race.`);
+    } else if (lock && epb && epb.id && (epb.id !== lock.playbook_id ||
+               (epb.signature || "") !== (lock.signature || "")))
+      warns.push(epb.id === lock.playbook_id
+        ? `The boat's copy of <code>${esc(epb.id)}</code> has a different signature than the lock-in (re-frozen in between?). Re-lock and push so the boat runs the version you locked.`
+        : `The boat's playbook (<code>${esc(epb.id)}</code>) is not the one locked in here (<code>${esc(lock.playbook_id)}</code>). Push to replace it.`);
+    if ((epb && epb.loaded === false) || (cop.reachable && cpb && !cpb.loaded))
+      warns.push(`${epb && epb.loaded === false ? "The Pi engine" : "The Orin copilot"} has no playbook loaded.`);
+  }
+
+  // last push
+  const stepPills = (r) => (r.steps || []).map((x) => `<span class="pill ${x.ok ? "ok" : "warn"}" title="${esc(x.ok ? "" : ((x.detail || {}).error || ""))}">${x.ok ? "✓" : "✗"} ${esc(x.target)} · ${esc(x.step)}</span>`).join(" ");
+  const pushLine = (r, label) => `<div style="margin-top:6px"><b>${label}</b> ${esc(depStamp(r.at))} <span class="muted">(${esc(depAgo(r.at))})</span> · ${esc(r.race_name || r.race_id || "?")}${r.playbook_id ? ` · playbook <code>${esc(r.playbook_id)}</code>` : " · <b>no playbook in this push</b>"} · ${r.ok ? `<span style="color:var(--accent2)">✓ all ${(r.steps || []).length} steps loaded</span>` : `<span style="color:var(--warn)">⚠ ${(r.steps || []).filter((x) => x.ok).length} of ${(r.steps || []).length} steps loaded</span>`}<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">${stepPills(r)}</div></div>`;
+  let pushes;
+  if (!last) pushes = `<div class="muted" style="margin-top:6px">No push recorded by the Lab. Whatever is aboard was loaded by hand or before push history was kept.</div>`;
+  else {
+    pushes = pushLine(last, "Last push:");
+    if (!last.ok && lastOk) pushes += pushLine(lastOk, "Last complete push:");
+  }
+
+  // a failed latest push always warns: the copilot's /health carries no bundle signature, so a
+  // matching Pi playbook can't prove the Orin took the new one too
+  if (last && !last.ok) {
+    const bad = [...new Set((last.steps || []).filter((x) => !x.ok).map((x) => x.target))];
+    warns.push(`The last push did not finish${bad.length ? ` (failed on ${bad.map(esc).join(", ")})` : ""} — the boat may hold a mix of old and new loads. Push again.`);
+  }
+
+  // push-record mismatches: the only signal when the boat is unreachable, and the fallback when an
+  // older engine can't say exactly which playbook it holds (no bundle id in its answer), or the
+  // copilot can't be read at all
+  if (!(b && b.reachable && epb && epb.id && cop.reachable)) {
+    const ref = (last && last.ok) ? last : lastOk;
+    if (ref && ref.race_id !== rid) { if (!liveRace) warns.push(`The last complete push was for <b>${esc(ref.race_name || ref.race_id)}</b>, not this race. This race's homework has not gone to the boat.`); }
+    else if (lock && ref && ref.playbook_id === lock.playbook_id && (ref.signature || "") !== (lock.signature || ""))
+      warns.push(`The last push sent <code>${esc(lock.playbook_id)}</code> with a different signature than the lock-in (re-frozen in between?). Re-lock and push so the boat runs the version you locked.`);
+    else if (lock && ref && ref.playbook_id !== lock.playbook_id) warns.push(`The locked playbook <code>${esc(lock.playbook_id)}</code> has not been pushed successfully. The last complete push (${esc(depAgo(ref.at))}) ${ref.playbook_id ? `sent <code>${esc(ref.playbook_id)}</code>` : "sent no playbook, so what the boat holds is unknown"}.`);
+    else if (lock && ref && ref.at < lock.locked_at) warns.push("You re-locked after the last push. Push again to be sure the boat matches.");
+  }
+
+  return `<h3>On the boat <span class="muted" style="font-weight:400">— what the Pi and Orin have loaded</span>
+      <button style="float:right;font-size:12px" onclick="depCheckBoat()" ${Dep.boatBusy ? "disabled" : ""}>${Dep.boatBusy ? "Checking…" : "↻ Check boat"}</button></h3>
+    ${live || ""}
+    ${warns.map((w) => `<div class="banner warn" style="margin:8px 0 0">⚠ ${w}</div>`).join("")}
+    ${pushes}`;
 }
 
 function deployPanel(lock, t) {
@@ -1732,6 +2269,7 @@ async function depPush() {
     if (!res.ok) Dep.pushRes = { ok: false, steps: [], ...Dep.pushRes };
   } catch (e) { Dep.pushRes = { ok: false, steps: [{ target: "lab", step: "push", ok: false, detail: { error: e.message } }] }; }
   Dep.busy = false; paintDeploy();
+  depCheckBoat();                 // the push is now on record — re-read what the boat holds
 }
 
 async function depLockIn() {
@@ -1768,41 +2306,58 @@ async function renderFleet() {
   }
   if (!Lab.sel && Lab.races.length) Lab.sel = Lab.races[0].race_id;
   if (!Lab.sel) { view.innerHTML = '<div class="placeholder">No race — ingest one in the Races tab.</div>'; return; }
+  let fetched = false;
   if (!Lab.editDef || Lab.editDef.race_id !== Lab.sel) {
     view.innerHTML = '<div class="loading">Loading fleet…</div>';
-    try { Lab.editDef = await (await apiGet("/api/races/" + encodeURIComponent(Lab.sel))).json(); Lab.fleetMsg = ""; }
+    try { Lab.editDef = await (await apiGet("/api/races/" + encodeURIComponent(Lab.sel))).json(); Lab.fleetMsg = ""; fetched = true; }
     catch (e) { view.innerHTML = '<div class="placeholder">Failed to load.</div>'; return; }
   }
   if (stale("fleet")) return;
+  const keepDirty = !fetched && raceDirty();   // re-entered with unsaved edits → don't bless them
   if (!Array.isArray(Lab.editDef.fleet)) Lab.editDef.fleet = [];
   if (!Lab.editDef.own || typeof Lab.editDef.own !== "object") Lab.editDef.own = {};
-  Lab.fleetDirty = false;                 // freshly loaded from disk = in sync
   Lab.fleetEdit = !Lab.editDef.fleet.length;   // empty roster → open the editor; populated → show the read-only view
+  if (!keepDirty) markClean();            // freshly loaded from disk = in sync
   paintFleet();
 }
 
-async function fleetPickRace(id) { Lab.sel = id; Lab.editDef = null; Lab.fleetMsg = ""; renderFleet(); }
-function fleetSet(i, f, v) { if (Lab.editDef && Lab.editDef.fleet[i]) { Lab.editDef.fleet[i][f] = v; Lab.fleetDirty = true; } }
-function fleetOwnSet(f, v) { if (!Lab.editDef) return; if (!Lab.editDef.own) Lab.editDef.own = {}; Lab.editDef.own[f] = v; Lab.fleetDirty = true; }
-function fleetAddRow() { Lab.editDef.fleet.push({ boat: "", division: "", cls: "", owner: "", sail: "", orc_gph: null, rating: null, mmsi: "", source: "manual" }); Lab.fleetDirty = true; Lab.fleetEdit = true; paintFleet(); }
-function fleetRemove(i) { Lab.editDef.fleet.splice(i, 1); Lab.fleetDirty = true; paintFleet(); }
+async function fleetPickRace(id) {
+  if (!(await confirmLeave())) return paintFleet();   // Stay → repaint puts the picker back
+  Lab.sel = id; Lab.editDef = null; Lab.fleetMsg = ""; renderFleet(); }
+function fleetSet(i, f, v) { if (Lab.editDef && Lab.editDef.fleet[i]) { Lab.editDef.fleet[i][f] = v; } }
+function fleetOwnSet(f, v) { if (!Lab.editDef) return; if (!Lab.editDef.own) Lab.editDef.own = {}; Lab.editDef.own[f] = v; }
+function fleetAddRow() { Lab.editDef.fleet.push({ boat: "", division: "", cls: "", owner: "", sail: "", orc_gph: null, rating: null, mmsi: "", source: "manual" }); Lab.fleetEdit = true; paintFleet(); }
+function fleetRemove(i) { Lab.editDef.fleet.splice(i, 1); paintFleet(); }
 
 // Auto-import the roster from public data. source: 'yb' = the tracker entry list, 'both' = YB → ORC,
 // 'website' = a regatta-site URL/pasted text → ORC, 'orc' = enrich the current roster. extra = {url|text}
 // for the website source. Replaces the draft roster for review (nothing is saved until Save).
 function _fleetCC() { return (document.getElementById("fleetOrcCC") || {}).value || "USA"; }
-function _fleetApplyResult(r) {
+function _fleetApplyResult(r, ed) {
+  if (Lab.editDef !== ed) return;   // switched race / discarded while the import ran — don't land on it
   if (!r.ok) { Lab.fleetMsg = r.note || r.detail || "import failed — no boats found"; Lab.fleetMsgErr = true; return; }
   Lab.editDef.fleet = r.entries || [];
-  Lab.fleetDirty = true; Lab.fleetMsgErr = false;
+  Lab.fleetMsgErr = false;
   const bits = [`${r.count} boats`];
   if (r.matched != null) bits.push(`${r.matched}/${r.total} matched to ORC certs`);
   if (r.unmatched && r.unmatched.length) bits.push(`${r.unmatched.length} need a handicap by hand`);
   if (r.seeded_mmsi) bits.push(`${r.seeded_mmsi} kept a seeded MMSI`);
   if (r.orc_error) bits.push("ORC lookup failed: " + r.orc_error);
-  Lab.fleetMsg = "Imported " + bits.join(" · ") + " — review below, then click Save roster.";
+  Lab.fleetMsg = "Imported " + bits.join(" · ") + " — review below, then Save (bar at the bottom).";
+}
+// An import REPLACES the draft roster. With boats already in it, ask first and say how many go.
+async function fleetConfirmReplace() {
+  const n = ((Lab.editDef && Lab.editDef.fleet) || []).length;
+  if (!n) return true;
+  const boats = `${n} boat${n === 1 ? "" : "s"}`;
+  return (await askModal("Replace the roster?",
+    `This import replaces all <b>${boats}</b> in the roster with the imported list. Handicaps and fixes you entered by hand on those boats are lost; seeded MMSIs are kept. Nothing is stored until you Save.`,
+    [{ c: "cancel", label: "Cancel", cls: "ghost" }, { c: "replace", label: `Replace ${boats}`, cls: "ghost danger" }],
+    "cancel", "cancel")) === "replace";
 }
 async function fleetAutoImport(source, extra) {
+  if (source !== "orc" && !(await fleetConfirmReplace())) return;
+  const ed = Lab.editDef;
   Lab.fleetBusy = true;
   // a big fleet from a slow entry-list site (e.g. Bayview Mackinac ~200 boats via bycmack's embedded
   // entries page) + ORC enrichment can take a minute or two — set expectations so the wait isn't a mystery.
@@ -1810,10 +2365,12 @@ async function fleetAutoImport(source, extra) {
   paintFleet();
   try {
     const r = await (await apiPost("/api/fleet/import", Object.assign(
-      { race_id: Lab.sel, source, country: _fleetCC() }, extra || {}))).json();
-    _fleetApplyResult(r);
+      // fleet = the roster as it stands here (unsaved edits too): 'orc' enriches it, and seeded
+      // MMSIs are carried over from it rather than from the last save
+      { race_id: Lab.sel, source, country: _fleetCC(), fleet: Lab.editDef.fleet }, extra || {}))).json();
+    _fleetApplyResult(r, ed);
   } catch (e) { Lab.fleetMsg = "import failed: " + e.message; }
-  Lab.fleetBusy = false; paintFleet();
+  Lab.fleetBusy = false; if (activeSec === "fleet" && Lab.editDef) paintFleet();
 }
 function fleetWebImport() {
   const url = (document.getElementById("fleetWebUrl") || {}).value || "";
@@ -1824,14 +2381,16 @@ function fleetWebImport() {
 async function fleetUploadEntry() {
   const f = (document.getElementById("fleetEntryPdf") || {}).files[0];
   if (!f) { Lab.fleetMsg = "Choose an entry-list PDF first."; return paintFleet(); }
+  if (!(await fleetConfirmReplace())) return;
+  const ed = Lab.editDef;
   Lab.fleetBusy = true; Lab.fleetMsg = "Extracting the entry list from the PDF…"; paintFleet();
   try {
-    const fd = new FormData(); fd.append("file", f);
+    const fd = new FormData(); fd.append("file", f); fd.append("fleet", JSON.stringify(Lab.editDef.fleet));
     const q = "?race_id=" + encodeURIComponent(Lab.sel) + "&country=" + encodeURIComponent(_fleetCC());
     const r = await (await api("/api/fleet/import/upload" + q, { method: "POST", body: fd })).json();
-    _fleetApplyResult(r);
+    _fleetApplyResult(r, ed);
   } catch (e) { Lab.fleetMsg = "upload failed: " + e.message; }
-  Lab.fleetBusy = false; paintFleet();
+  Lab.fleetBusy = false; if (activeSec === "fleet" && Lab.editDef) paintFleet();
 }
 
 /* Division GUN TIMES (from the SIs, race morning) — the elapsed-time term that makes the
@@ -1858,7 +2417,7 @@ function fleetGunSet(div, val) {
     ds[div] = tz ? zonedWallToEpoch(y, mo, d, h, mi, tz)
                  : new Date(y, mo - 1, d, h, mi).getTime() / 1000;
   }
-  Lab.fleetDirty = true;
+ 
   paintFleet();
 }
 function fleetGunsCard(roster, own) {
@@ -1872,7 +2431,7 @@ function fleetGunsCard(roster, own) {
     <input type="datetime-local" value="${epochToWall(ds[d], tz)}" onchange="fleetGunSet('${esc(d)}', this.value)"></label>`).join("");
   return `<div class="card">
     <h3>Division gun times <span class="muted" style="font-weight:400">— from the SIs (race morning) · ${set}/${divs.length} set</span></h3>
-    <div class="muted" style="font-size:12px;margin-bottom:8px">The elapsed-time term that turns the onboard corrected standings into a <b>full-race</b> best estimate (without these the boat falls back to the ⏺ race-log start — approximate for staggered divisions — or remaining-race deltas). Times are ${tz ? "race-local (" + esc(tz) + ")" : "in this browser's timezone"}. Save roster to persist.</div>
+    <div class="muted" style="font-size:12px;margin-bottom:8px">The elapsed-time term that turns the onboard corrected standings into a <b>full-race</b> best estimate (without these the boat falls back to the ⏺ race-log start — approximate for staggered divisions — or remaining-race deltas). Times are ${tz ? "race-local (" + esc(tz) + ")" : "in this browser's timezone"}. Saved with the roster — use <b>Save</b> in the bar at the bottom.</div>
     <div class="opt-controls">${rows}</div>
   </div>`;
 }
@@ -1902,8 +2461,8 @@ function fleetApplyCand(i, ci) {
   if (!e.sail && c.sail) e.sail = c.sail;
   e.source = (e.source || "") ? e.source + "+orc" : "orc";
   Lab.fleetCand = null;
-  Lab.fleetDirty = true;
-  Lab.fleetMsg = `Applied ${c.yacht} (${c.country}) to "${e.boat}" — review, then Save roster.`;
+ 
+  Lab.fleetMsg = `Applied ${c.yacht} (${c.country}) to "${e.boat}" — review, then Save (bar at the bottom).`;
   paintFleet();
 }
 
@@ -1917,13 +2476,16 @@ async function fleetSave() {
   Lab.editDef.own = { boat: (own.boat || "").trim(), division: own.division || "",
     orc_gph: fleetNum(own.orc_gph), rating: fleetNum(own.rating), mmsi: (own.mmsi || "").trim() };
   Lab.fleetMsg = "Saving…"; Lab.fleetMsgErr = false; paintFleet();
+  let ok = false;
+  const sent = JSON.stringify(Lab.editDef), ed = Lab.editDef;
   try {
-    const r = await (await apiPost("/api/races", { definition: Lab.editDef })).json();
-    if (r.saved) { Lab.fleetDirty = false; Lab.fleetMsgErr = false;
+    const r = await postDef("/api/races", { definition: JSON.parse(sent) });
+    if (r.saved) { markSaved(sent, ed); ok = true; Lab.fleetMsgErr = false;
       Lab.fleetMsg = `Saved — ${Lab.editDef.fleet.length} boat${Lab.editDef.fleet.length === 1 ? "" : "s"} in the roster.`; }
     else { Lab.fleetMsg = "Save failed."; Lab.fleetMsgErr = true; }
   } catch (e) { Lab.fleetMsg = "Save failed: " + e.message; Lab.fleetMsgErr = true; }
   paintFleet();
+  return ok;
 }
 
 function fleetSrcBadge(e) {
@@ -2015,7 +2577,7 @@ function paintFleet() {
       <div class="muted" style="font-size:12px;margin-bottom:8px">Pull the roster automatically: the <b>YB tracker RaceSetup</b> supplies the entry list (boat, sail #, owner, class) and the public <b>ORC certificate database</b> fills each boat's GPH + rating, matched by sail number / name. Both public; the result is a draft you review &amp; Save. ${ybCfg ? "" : '<b>This race has no YB tracker configured</b> (set it in the Rules/ingest step) — ORC-enrich the existing roster instead, or paste an entry list below.'}</div>
       <div class="opt-controls">
         <span class="muted" style="font-size:12px">Entry list from the <b>YB tracker</b>:</span>
-        <button onclick="fleetAutoImport('both')" ${Lab.fleetBusy || !ybCfg ? "disabled" : ""} title="${ybCfg ? "" : "no YB tracker configured for this race"}">${Lab.fleetBusy ? "Importing…" : "YB entry list + ORC handicaps"}</button>
+        <button class="${roster.length ? "mini" : ""}" onclick="fleetAutoImport('both')" ${Lab.fleetBusy || !ybCfg ? "disabled" : ""} title="${ybCfg ? "" : "no YB tracker configured for this race"}">${Lab.fleetBusy ? "Importing…" : "YB entry list + ORC handicaps"}</button>
         <button class="mini" onclick="fleetAutoImport('yb')" ${Lab.fleetBusy || !ybCfg ? "disabled" : ""}>YB entry list only</button>
         <label>ORC countries <input id="fleetOrcCC" class="ein" style="width:84px" value="USA,CAN" title="comma-separated ORC cert dumps to match against (a Great Lakes fleet spans both)"></label>
         <button class="mini" onclick="fleetAutoImport('orc')" ${Lab.fleetBusy ? "disabled" : ""}>Enrich current roster from ORC</button>
@@ -2024,19 +2586,19 @@ function paintFleet() {
         <div class="muted" style="font-size:12px;margin-bottom:6px">Or from the <b>regatta website</b> (for races with no YB tracker — most races). <b>A YachtScoring or Regatta Network event link works directly</b> — paste the <code>yachtscoring.com/emenu/&lt;id&gt;</code> or <code>regattanetwork.com/…?regatta_id=&lt;id&gt;</code> URL. Most other regatta sites are JavaScript-rendered, so a URL fetch can't see the list — for those, <b>paste the entry-list text</b> (select it on the page → copy → paste below) or upload the PDF. ORC then fills the handicaps:</div>
         <div class="opt-controls">
           <input id="fleetWebUrl" class="ein" style="width:340px" placeholder="YachtScoring or Regatta Network event URL">
-          <button onclick="fleetWebImport()" ${Lab.fleetBusy ? "disabled" : ""}>Fetch &amp; extract + ORC</button>
+          <button class="${roster.length ? "mini" : ""}" onclick="fleetWebImport()" ${Lab.fleetBusy ? "disabled" : ""}>Fetch &amp; extract + ORC</button>
           <label>PDF <input type="file" id="fleetEntryPdf" accept=".pdf,application/pdf"></label>
           <button class="mini" onclick="fleetUploadEntry()" ${Lab.fleetBusy ? "disabled" : ""}>Upload entry-list PDF</button>
         </div>
         <textarea id="fleetWebText" rows="3" style="width:100%;box-sizing:border-box;margin-top:6px" placeholder="…or paste the entry-list text here (best for JS-rendered hubs like YachtScoring/Regatta Network where a fetch can't reach the list) — then Fetch &amp; extract"></textarea>
       </div>
-      <div class="muted" style="font-size:11px;margin-top:6px">Auto-import REPLACES the draft roster with the imported boats (Save to persist). Unmatched boats keep their identity — fill the handicap by hand. Sail # is the ORC match key, so check it on any unmatched boat. <b>MMSIs you've seeded are preserved</b> across a re-import (entry lists never carry MMSI; a seeded MMSI is what makes an AIS target match a roster boat exactly).</div>
+      <div class="muted" style="font-size:11px;margin-top:6px">Auto-import REPLACES the draft roster with the imported boats (it asks first; Save to persist). Unmatched boats keep their identity — fill the handicap by hand. Sail # is the ORC match key, so check it on any unmatched boat. <b>MMSIs you've seeded are preserved</b> across a re-import (entry lists never carry MMSI; a seeded MMSI is what makes an AIS target match a roster boat exactly).</div>
     </div>
 
     <div class="card">
       <h3>Roster <span class="muted" style="font-weight:400">— the ingested fleet</span>
-        ${roster.length ? (Lab.fleetDirty ? '<span class="pill warn" style="margin-left:8px">unsaved draft — click Save roster</span>' : '<span class="pill ok" style="margin-left:8px">saved</span>') : ""}</h3>
-      ${roster.length ? fleetGlance(roster) : `<div class="banner warn">No boats in the roster yet. Auto-import from the YB tracker or the regatta website above (then <b>Save roster</b>), or add/paste boats manually. An import only fills a draft here — it isn't stored until you Save.</div>`}
+        ${roster.length ? '<span class="pill warn if-dirty" style="margin-left:8px">unsaved — Save in the bar at the bottom</span><span class="pill ok if-clean" style="margin-left:8px">saved</span>' : ""}</h3>
+      ${roster.length ? fleetGlance(roster) : `<div class="banner warn">No boats in the roster yet. Auto-import from the YB tracker or the regatta website above (then <b>Save</b> in the bar at the bottom), or add/paste boats manually. An import only fills a draft here — it isn't stored until you Save.</div>`}
       <details ${Lab.fleetEdit ? "open" : ""} style="margin-top:10px" ontoggle="Lab.fleetEdit=this.open">
         <summary style="cursor:pointer;font-size:13px">Edit roster ${roster.length ? `(${roster.length} — add / remove / fix handicaps)` : "(add boats)"}</summary>
         ${roster.length ? `<table class="fleet-tbl" style="margin-top:8px"><thead><tr>
@@ -2048,10 +2610,8 @@ function paintFleet() {
 
     <div class="dep-row" style="margin-top:4px"><a href="#rules">Rules →</a>
       <span class="muted">scoring ${esc(sc.method || "not set")} · tracker ${tr.provider ? esc(tr.provider) + (permitted ? " (permitted onboard)" : " (not permitted onboard)") : "not configured"}</span></div>
-
-    <div class="dactions"><button onclick="fleetSave()">${Lab.fleetDirty ? "Save roster ●" : "Save roster"}</button>
-      <span class="muted" style="font-size:12px">${Lab.fleetDirty ? "you have unsaved changes" : (roster.length ? "roster saved" : "")}</span></div>
   </div>`;
+  syncDirty();
 }
 
 /* ---------- Rules, Safety & Checklists ---------- */
@@ -2066,22 +2626,28 @@ async function renderRules() {
   }
   if (!Lab.sel && Lab.races.length) Lab.sel = Lab.races[0].race_id;
   if (!Lab.sel) { view.innerHTML = '<div class="placeholder">No race — ingest one in the Races tab.</div>'; return; }
+  let fetched = false;
   if (!Lab.editDef || Lab.editDef.race_id !== Lab.sel) {
     view.innerHTML = '<div class="loading">Loading checklist…</div>';
-    try { Lab.editDef = await (await apiGet("/api/races/" + encodeURIComponent(Lab.sel))).json(); }
+    try { Lab.editDef = await (await apiGet("/api/races/" + encodeURIComponent(Lab.sel))).json(); fetched = true; }
     catch (e) { view.innerHTML = '<div class="placeholder">Failed to load.</div>'; return; }
   }
   try { Lab.checked = (await (await apiGet("/api/checklist?race_id=" + encodeURIComponent(Lab.sel))).json()).checked || {}; }
   catch (e) { Lab.checked = {}; }
   if (stale("rules")) return;
+  const keepDirty = !fetched && raceDirty();   // re-entered with unsaved edits → don't bless them
   if (!Lab.editDef.rules_profile || typeof Lab.editDef.rules_profile !== "object") Lab.editDef.rules_profile = {};
   if (!Array.isArray(Lab.editDef.rules_profile.modifications)) Lab.editDef.rules_profile.modifications = [];
   if (!Lab.editDef.rules_profile.scoring) Lab.editDef.rules_profile.scoring = {};
   if (!Array.isArray(Lab.editDef.requirements)) Lab.editDef.requirements = [];
+  if (!keepDirty) markClean();   // after the shape fill-ins above, so they don't read as edits
   paintRules();
 }
 
-async function rulesPickRace(id) { Lab.sel = id; Lab.editDef = null; renderRules(); }
+async function rulesPickRace(id) {
+  if (!(await confirmLeave())) return paintRules();   // Stay → repaint puts the picker back
+  Lab.sel = id; Lab.editDef = null; renderRules();
+}
 function modAdd() { Lab.editDef.rules_profile.modifications.push({ ref: "", rule: "", summary: "" }); paintRules(); }
 function modRemove(i) { Lab.editDef.rules_profile.modifications.splice(i, 1); paintRules(); }
 function reqAdd() {
@@ -2105,12 +2671,15 @@ async function checkToggle(id, on) {
 async function rulesSave() {
   const msg = document.getElementById("rulesMsg");
   if (msg) msg.textContent = "Saving…";
+  const sent = JSON.stringify(Lab.editDef), ed = Lab.editDef;
   try {
-    const r = await (await apiPost("/api/races", { definition: Lab.editDef })).json();
+    const r = await postDef("/api/races", { definition: JSON.parse(sent) });
+    if (r.saved) markSaved(sent, ed);
     paintRules();
     const m2 = document.getElementById("rulesMsg");
     if (m2) m2.textContent = r.saved ? `Saved · ${(r.errors || []).length} error(s), ${(r.warnings || []).length} warning(s).` : "Save failed.";
-  } catch (e) { const m2 = document.getElementById("rulesMsg"); if (m2) m2.textContent = "Save failed: " + e.message; }
+    return !!r.saved;
+  } catch (e) { const m2 = document.getElementById("rulesMsg"); if (m2) m2.textContent = "Save failed: " + e.message; return false; }
 }
 
 function paintRules() {
@@ -2196,6 +2765,7 @@ function paintRules() {
       <span id="rulesMsg" class="muted" style="font-size:12px"></span>
       <span class="muted" style="font-size:11px">(check-off saves on its own)</span></div>
   </div>`;
+  syncDirty();
 }
 
 /* ---------- Monitor (shore-side live view: fleet via tracker + our boat via cloud telemetry) ---------- */
@@ -2254,6 +2824,7 @@ function paintMonitor() {
   const flLine = fixes.length
     ? `<span class="pill ${flCls}">${fixes.length} boats</span> via ${esc(fl.provider || "tracker")}${flAge}${fl.delay_min ? ` <span class="muted">(tracker runs ~${fl.delay_min} min behind)</span>` : ""}${fl.demo || fl.provider === "sample" ? " <span class=\"pill warn\">demo</span>" : ""}`
     : `<span class="pill warn">no fleet</span> <span class="muted">${esc(fl.reason || "unavailable")}</span>`;
+  const rivals = monRivals(fixes, own);
   const permNote = fl.onboard_permitted ? "permitted onboard (in-race)" : "shore-side only (not permitted onboard for this race)";
 
   document.getElementById("view").innerHTML = `<div class="opt">
@@ -2275,14 +2846,41 @@ function paintMonitor() {
     </div>
     <section class="cockpit-map"><div id="monMap" class="routemap routemap-hero"></div></section>
     ${fixes.length ? `<div class="card"><h3>Fleet positions <span class="muted" style="font-weight:400">— aged from the public tracker</span></h3>
-      <table class="fleet-tbl"><thead><tr><th>Boat</th><th>SOG</th><th>COG</th><th>DTF</th><th>Age</th></tr></thead><tbody>
-      ${fixes.slice().sort((a, b) => (a.dtf_nm ?? 1e9) - (b.dtf_nm ?? 1e9)).map((f) => `<tr>
-        <td>${esc(f.name || "?")}</td><td>${f.sog != null ? f.sog.toFixed(1) + " kts" : ""}</td>
+      <div class="muted" style="font-size:12px;margin-bottom:4px">Tap a row to find that boat on the map. ★ us · ● nearest rivals.</div>
+      <table class="fleet-tbl mon-tbl"><thead><tr><th>Boat</th><th>SOG</th><th>COG</th><th>DTF</th><th>Age</th></tr></thead><tbody>
+      ${fixes.map((f, i) => ({ f, i })).sort((a, b) => (b.f.own ? 1 : 0) - (a.f.own ? 1 : 0) || (a.f.dtf_nm ?? 1e9) - (b.f.dtf_nm ?? 1e9)).map(({ f, i }) => `<tr class="mon-row${f.own ? " own" : rivals.idx.has(i) ? " rival" : ""}" onclick="monFocus(${i})" title="Show on the map">
+        <td>${f.own ? "★ " : rivals.idx.has(i) ? "● " : ""}${esc(f.name || "?")}${f.own ? ' <span class="pill warn">us</span>' : ""}</td><td>${f.sog != null ? f.sog.toFixed(1) + " kts" : ""}</td>
         <td>${f.cog != null ? Math.round(f.cog) + "°" : ""}</td><td>${f.dtf_nm != null ? f.dtf_nm.toFixed(1) + " nm" : ""}</td>
         <td>${ageMin(f.time) != null ? ageMin(f.time) + " min" : ""}</td></tr>`).join("")}
       </tbody></table></div>` : ""}
   </div>`;
   initMonitorMap();
+}
+
+// The map labels only what a shore watcher needs to find at a glance: our boat (live telemetry
+// and its own tracker fix) and the MON_RIVALS boats nearest to it. Everyone else is a plain dot
+// with a hover/tap tooltip until the view is zoomed in far enough that few boats remain; labels
+// that would overlap one already placed are skipped (higher priority wins), so a finish-line
+// cluster never turns into a pile of names.
+const MON_RIVALS = 5;
+const MON_LABEL_ALL_MAX = 15;     // label every boat in view once this few are in view
+const MON_GOLD = "#f5c451", MON_BLUE = "#36b3ff";
+const MON_TIP = { direction: "top", offset: [0, -8] };   // above the dot, clear of the side labels
+
+function monDistNm(a, b) {
+  const k = Math.cos(((a.lat + b.lat) / 2) * Math.PI / 180);
+  return Math.hypot((a.lat - b.lat) * 60, (a.lon - b.lon) * 60 * k);
+}
+
+// Which boats are "nearest rivals", measured from our tracker fix when the feed has one (same
+// delay as theirs — like with like), else from the live position.
+function monRivals(fixes, own) {
+  const ownFix = fixes.find((f) => f.own);
+  const ref = ownFix || (own.available ? own : null);
+  if (!ref) return { ref: null, idx: new Set() };
+  const near = fixes.map((f, i) => ({ i, f })).filter((x) => !x.f.own)
+    .map((x) => ({ i: x.i, d: monDistNm(ref, x.f) })).sort((a, b) => a.d - b.d).slice(0, MON_RIVALS);
+  return { ref: ownFix ? "tracker" : "live", idx: new Set(near.map((x) => x.i)) };
 }
 
 function initMonitorMap() {
@@ -2291,20 +2889,105 @@ function initMonitorMap() {
   if (!el || !window.L) return;
   const map = L.map(el, { preferCanvas: true }); Mon.map = map;
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 18, attribution: "© OpenStreetMap" }).addTo(map);
-  const data = Mon.data || {}, fixes = (data.fleet || {}).fixes || [], own = data.own || {};
+  const data = Mon.data || {}, fl = data.fleet || {}, fixes = fl.fixes || [], own = data.own || {};
+  const ownName = fl.own_name || "Our boat";
+  const riv = Mon.rivals = monRivals(fixes, own);
   const pts = [];
-  fixes.forEach((f) => {
-    L.circleMarker([f.lat, f.lon], { radius: 5, color: "#36b3ff", fillColor: "#36b3ff", fillOpacity: 0.65, weight: 1 })
-      .bindTooltip(`${f.name || "?"}${f.sog != null ? " · " + f.sog.toFixed(1) + " kts" : ""}`).addTo(map);
+  Mon.markers = [];
+  // plain fleet first, rivals over them, our boat on top (canvas draws in insertion order)
+  const order = fixes.map((f, i) => i).sort((a, b) =>
+    (fixes[a].own ? 2 : riv.idx.has(a) ? 1 : 0) - (fixes[b].own ? 2 : riv.idx.has(b) ? 1 : 0));
+  order.forEach((i) => {
+    const f = fixes[i], rival = riv.idx.has(i);
+    const style = f.own
+      ? { radius: 7, color: MON_GOLD, weight: 3, fillColor: "#0b0b0e", fillOpacity: 0.9 }
+      : rival ? { radius: 6, color: "#ffffff", weight: 1.5, fillColor: MON_BLUE, fillOpacity: 0.95 }
+        : { radius: 4, color: MON_BLUE, weight: 1, fillColor: MON_BLUE, fillOpacity: 0.55 };
+    Mon.markers[i] = L.circleMarker([f.lat, f.lon], style)
+      .bindTooltip(`${esc(f.name || "?")}${f.own ? " (us, tracker)" : ""}${f.sog != null ? " · " + f.sog.toFixed(1) + " kts" : ""}`, MON_TIP).addTo(map);
     pts.push([f.lat, f.lon]);
   });
   if (own.available) {
-    L.circleMarker([own.lat, own.lon], { radius: 8, color: "#f5c451", fillColor: "#f5c451", fillOpacity: 0.95, weight: 2 })
-      .bindTooltip(`Our boat${own.sog != null ? " · " + own.sog.toFixed(1) + " kts" : ""}`).addTo(map);
+    L.circleMarker([own.lat, own.lon], { radius: 16, color: MON_GOLD, weight: 1, fillColor: MON_GOLD, fillOpacity: 0.18, interactive: false }).addTo(map);
+    Mon.ownMarker = L.circleMarker([own.lat, own.lon], { radius: 8, color: "#0b0b0e", fillColor: MON_GOLD, fillOpacity: 1, weight: 2 })
+      .bindTooltip(`${esc(ownName)} (us, live)${own.sog != null ? " · " + own.sog.toFixed(1) + " kts" : ""}`, MON_TIP).addTo(map);
     pts.push([own.lat, own.lon]);
-  }
+  } else Mon.ownMarker = null;
+  Mon.labelLayer = L.layerGroup().addTo(map);
+  monLegend(map, fixes, own, riv, ownName);
+  map.on("zoomend moveend", monPlaceLabels);
   if (pts.length) map.fitBounds(pts, { padding: [30, 30], maxZoom: 11 });
   else map.setView([44.2, -82.5], 7);   // Lake Huron default
+  monPlaceLabels();
+}
+
+function monLegend(map, fixes, own, riv, ownName) {
+  const ctl = L.control({ position: "bottomleft" });
+  const sw = (css) => `<span class="mon-sw" style="${css}"></span>`;
+  const rows = [];
+  if (own.available) rows.push(`${sw(`background:${MON_GOLD};border:2px solid #0b0b0e;box-shadow:0 0 0 4px rgba(245,196,81,.3)`)} ${esc(ownName)} — live (boat telemetry)`);
+  if (fixes.some((f) => f.own)) rows.push(`${sw(`background:#0b0b0e;border:3px solid ${MON_GOLD}`)} ${esc(ownName)} — public tracker fix`);
+  if (riv.idx.size) rows.push(`${sw(`background:${MON_BLUE};border:1.5px solid #fff`)} ${riv.idx.size} nearest rivals${riv.ref === "live" ? " (to our live position)" : ""}`);
+  if (fixes.filter((f) => !f.own).length > riv.idx.size) rows.push(`${sw(`background:${MON_BLUE};opacity:.6;width:8px;height:8px`)} rest of the fleet — zoom in for names`);
+  if (!rows.length) return;
+  ctl.onAdd = () => {
+    const d = L.DomUtil.create("div", "mon-legend");
+    d.innerHTML = rows.map((r) => `<div>${r}</div>`).join("");
+    L.DomEvent.disableClickPropagation(d);
+    return d;
+  };
+  ctl.addTo(map);
+}
+
+// Greedy label placement in screen space: own boat first, then rivals by distance, then (only
+// when few boats are in view) everyone else. A label goes right of its dot, else left, else
+// is skipped — the dot keeps its tooltip.
+function monPlaceLabels() {
+  const map = Mon.map;
+  if (!map || !Mon.labelLayer) return;
+  Mon.labelLayer.clearLayers();
+  const data = Mon.data || {}, fl = data.fleet || {}, fixes = fl.fixes || [], own = data.own || {};
+  const ownName = fl.own_name || "Our boat";
+  const riv = Mon.rivals || { idx: new Set() };
+  const size = map.getSize(), bounds = map.getBounds();
+  const cands = [];
+  if (own.available) cands.push({ lat: own.lat, lon: own.lon, text: ownName + " · live", cls: "own" });
+  fixes.forEach((f, i) => { if (f.own) cands.push({ lat: f.lat, lon: f.lon, text: (f.name || ownName) + " · tracker", cls: "own" }); });
+  riv.idx.forEach((i) => { const f = fixes[i]; cands.push({ lat: f.lat, lon: f.lon, text: f.name || "?", cls: "rival" }); });   // nearest first
+  const inView = fixes.filter((f, i) => !f.own && !riv.idx.has(i) && bounds.contains([f.lat, f.lon]));
+  const keyInView = cands.filter((c) => bounds.contains([c.lat, c.lon])).length;
+  if (inView.length + keyInView <= MON_LABEL_ALL_MAX) inView.forEach((f) => cands.push({ lat: f.lat, lon: f.lon, text: f.name || "?", cls: "" }));
+  const boxes = [];
+  const hits = (b) => b.x0 < 0 || b.x1 > size.x || b.y0 < 0 || b.y1 > size.y
+    || boxes.some((o) => b.x0 < o.x1 && b.x1 > o.x0 && b.y0 < o.y1 && b.y1 > o.y0);
+  cands.forEach((c) => {
+    const p = map.latLngToContainerPoint([c.lat, c.lon]);
+    const w = c.text.length * (c.cls === "own" ? 7.2 : 6.4) + 12, h = 18, gap = c.cls === "own" ? 12 : 8;
+    const right = { x0: p.x + gap, x1: p.x + gap + w, y0: p.y - h / 2, y1: p.y + h / 2 };
+    const left = { x0: p.x - gap - w, x1: p.x - gap, y0: right.y0, y1: right.y1 };
+    const side = !hits(right) ? "r" : !hits(left) ? "l" : (c.cls === "own" ? "r" : null);   // ours always shows
+    if (!side) return;
+    boxes.push(side === "r" ? right : left);
+    L.marker([c.lat, c.lon], { interactive: false, keyboard: false,
+      icon: L.divIcon({ className: "mon-lbl-wrap", iconSize: null, iconAnchor: [0, 0],
+        html: `<span class="mon-lbl ${c.cls} ${side === "l" ? "left" : ""}" style="--gap:${gap}px">${esc(c.text)}</span>` }) })
+      .addTo(Mon.labelLayer);
+  });
+}
+
+// Table row → pan to that boat and ring it for a moment.
+function monFocus(i) {
+  const f = ((((Mon.data || {}).fleet) || {}).fixes || [])[i], map = Mon.map;
+  if (!f || !map) return;
+  const el = document.getElementById("monMap");
+  if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+  map.setView([f.lat, f.lon], Math.max(map.getZoom(), 12));
+  if (Mon.flash) { try { Mon.flash.remove(); } catch (e) {} }
+  Mon.flash = L.circleMarker([f.lat, f.lon], { radius: 15, color: "#ffffff", weight: 3, fill: false, interactive: false }).addTo(map);
+  const m = Mon.markers && Mon.markers[i];
+  if (m) m.openTooltip();
+  const ring = Mon.flash;
+  setTimeout(() => { if (Mon.flash === ring) { try { ring.remove(); } catch (e) {} Mon.flash = null; } }, 3000);
 }
 
 /* ---------- Debrief (Lab-4 post-race judge loop) ---------- */
@@ -2361,7 +3044,9 @@ function debTrackCard() {
       <button onclick="debFetchYb()" ${Deb.trackBusy ? "disabled" : ""}>${Deb.trackBusy ? "Fetching…" : "Fetch from YB tracker"}</button>
     </div>
     ${t.available && t.window ? `<div class="muted" style="font-size:12px;margin-top:4px">Window: <b>${esc(debWinRange(t.window))}</b> · ${t.window.kind === "derived" ? "derived from the record" : "the ⏺ LOG marker"}${t.window.motion_device ? " · off the " + esc(t.window.motion_device) : ""}${(t.window.provenance || []).map((p) => "<br>· " + esc(p)).join("")}</div>` : ""}
-    ${t.available && t.trust ? `<div class="muted" style="font-size:12px;margin-top:2px">Trust: ${t.trust.available ? `<b>${esc(((t.trust.summary || {}).line) || "swept")}</b> — danger windows are excluded from polar/helm refinement` : `<b>sweep unavailable</b> — ${esc(t.trust.note || "")}`}</div>` : ""}
+    ${t.available && t.trust && t.trust.available && trustDanger((t.trust.summary || {}).danger_s, (t.trust.summary || {}).line)
+      ? `<div style="margin-top:6px">${trustBanner("Instrument fault in this track", (t.trust.summary || {}).line, "Danger windows are excluded from polar/helm refinement. Fix the calibration before the next race.")}</div>`
+      : t.available && t.trust ? `<div class="muted" style="font-size:12px;margin-top:2px">Trust: ${t.trust.available ? `<b>${esc(((t.trust.summary || {}).line) || "swept")}</b> — danger windows are excluded from polar/helm refinement` : `<b>sweep unavailable</b> — ${esc(t.trust.note || "")}`}</div>` : ""}
     <div class="muted" style="font-size:12px;margin-top:4px">GPX: export the track from Expedition / a Vakaros / your instruments / a phone (offline, always works). YB: pulls our boat's full track from the permitted public tracker (shore-side debrief use). ${Deb.trackMsg ? '<b>' + esc(Deb.trackMsg) + '</b>' : ""}</div>
   </div>`;
 }
@@ -2746,28 +3431,38 @@ async function renderLearnings() {
   view.innerHTML = '<div class="loading">Loading learnings…</div>';
   try {
     await reloadBoats();
-    Opt.boatModel = await (await apiGet("/api/crossovers")).json();
+    bmLoaded(await (await apiGet("/api/crossovers")).json());
     Opt.polarGrid = await (await apiGet("/api/polars")).json();
     if (!Lab.races) Lab.races = (await (await apiGet("/api/races")).json()).races || [];
   } catch (e) { view.innerHTML = '<div class="placeholder">Failed to load learnings.</div>'; return; }
   if (!Lab.sel && Lab.races.length) Lab.sel = Lab.races[0].race_id;
+  let fetched = false;
   if (Lab.sel && (!Lab.editDef || Lab.editDef.race_id !== Lab.sel)) {
-    try { Lab.editDef = await (await apiGet("/api/races/" + encodeURIComponent(Lab.sel))).json(); } catch (e) {}
+    try { Lab.editDef = await (await apiGet("/api/races/" + encodeURIComponent(Lab.sel))).json(); fetched = true; } catch (e) {}
   }
   await learnReload();
   if (stale("learnings")) return;
+  // a boat-model save repaints via renderLearnings() — only a fresh load is a clean baseline
+  if (fetched || !raceDirty()) markClean();
   paintLearnings();
 }
 
-async function learnPickRace(id) { Lab.sel = id; Lab.editDef = null; renderLearnings(); }
+async function learnPickRace(id) {
+  if (!(await confirmLeave())) return paintLearnings();   // Stay → repaint puts the picker back
+  Lab.sel = id; Lab.editDef = null; renderLearnings();
+}
 async function learnSaveNotes() {
-  if (!Lab.editDef) return;
-  Lab.editDef.learnings_notes = document.getElementById("learnNotes").value;
+  if (!Lab.editDef) return false;
+  const ta = document.getElementById("learnNotes");
+  if (ta) Lab.editDef.learnings_notes = ta.value;
   const msg = document.getElementById("learnMsg"); if (msg) msg.textContent = "Saving…";
+  const sent = JSON.stringify(Lab.editDef), ed = Lab.editDef;
   try {
-    const r = await (await apiPost("/api/races", { definition: Lab.editDef })).json();
+    const r = await postDef("/api/races", { definition: JSON.parse(sent) });
+    if (r.saved) markSaved(sent, ed);
     if (msg) msg.textContent = r.saved ? "Saved." : "Save failed.";
-  } catch (e) { if (msg) msg.textContent = "Save failed: " + e.message; }
+    return !!r.saved;
+  } catch (e) { if (msg) msg.textContent = "Save failed: " + e.message; return false; }
 }
 
 function paintLearnings() {
@@ -2789,7 +3484,7 @@ function paintLearnings() {
         </select></label>
       </div>
       <div class="muted" style="font-size:12px;margin:8px 0 4px">Venue / conditions knowledge, calibration reminders, what to apply for this race (free text, saved with the race).</div>
-      <textarea id="learnNotes" rows="6" style="width:100%;box-sizing:border-box" placeholder="e.g. Cove Island current sets NE on the ebb; J2 crossover felt early last year — try 15 kts; main calibration +2° at the masthead…">${esc(d.learnings_notes || "")}</textarea>
+      <textarea id="learnNotes" rows="6" oninput="if (Lab.editDef) Lab.editDef.learnings_notes = this.value" style="width:100%;box-sizing:border-box" placeholder="e.g. Cove Island current sets NE on the ebb; J2 crossover felt early last year — try 15 kts; main calibration +2° at the masthead…">${esc(d.learnings_notes || "")}</textarea>
       <div style="margin-top:8px"><button onclick="learnSaveNotes()">Save notes</button> <span id="learnMsg" class="muted" style="font-size:12px"></span></div>
     </div>
     ${learnRefineCard(ab)}
@@ -3328,6 +4023,27 @@ function polDecisionsCard() {
   </div>`;
 }
 
+// A trust sweep that found DANGER windows is an instrument fault (Jul 18: compass 98° off GPS
+// course for 43 min) — not a footnote. `danger_s` is the structured signal; artifacts built
+// before it existed only carry the human line, whose channel entries read "<ch> DANGER for …".
+function trustDanger(dangerS, line) {
+  if (dangerS != null) return dangerS > 0;
+  return /\bDANGER\b/.test(line || "");
+}
+
+function trustBanner(title, line, tail) {
+  const parts = String(line || "").split("; ").filter(Boolean);
+  return `<div class="banner bad" role="alert"><b>⚠ ${esc(title)}</b>
+    ${parts.map((p) => `<div class="banner-line">${esc(p)}</div>`).join("")}
+    ${tail ? `<div class="banner-tail">${tail}</div>` : ""}</div>`;
+}
+
+function polDangerBanner(races) {
+  const bad = races.filter((r) => !r.skipped && trustDanger(r.trust_danger_s, r.trust_line));
+  return bad.map((r) => trustBanner(`Instrument fault — ${r.name}`, r.trust_line,
+    `${r.refused_by_trust ? r.refused_by_trust + " fixes refused — the" : "The"} polar leaves those windows out. Fix the calibration before the next race — the same sensor feeds the live readouts (Monitor HDG) and the onboard engine.`)).join("");
+}
+
 function paintPolar() {
   const d = Pol.data || {};
   const cells = polCells(Pol.tws, Pol.config);
@@ -3362,11 +4078,12 @@ function paintPolar() {
        <td><b>${c.stw}</b></td><td>${c.median_stw}</td><td>${c.seconds != null ? c.seconds : c.samples}</td><td>${esc(c.races ? c.races.join(", ") : polRaceName(c.recording))}</td></tr>`).join("")}
   </table></div>` : '<div class="placeholder">No measured cells at this TWS for this race.</div>';
   document.getElementById("view").innerHTML = `<div class="opt">
+    ${polDangerBanner(d.races || [])}
     <div class="card">
       <h3>Observed polar <span class="muted" style="font-weight:400">— what the boat actually sailed, off the instruments. Measured TWS/TWA/STW only; the ORC cert is the dashed reference, never the source.</span></h3>
       ${(d.races || []).map((r) => r.skipped
         ? `<div class="muted" style="font-size:12px">⊘ ${esc(r.name)} — ${esc(r.skipped)}</div>`
-        : `<div class="muted" style="font-size:12px"><b style="color:var(--ink)">${esc(r.name)}</b> · ${r.hours} h · ${r.fixes} fixes (${r.refused_by_trust} refused by the trust gate) · ${r.measured_samples} measured samples${r.refused_below_min_twa ? ", " + r.refused_below_min_twa + " below " + ((d.grid || {}).min_twa_deg || 30) + "° TWA (not sailing)" : ""}${r.sec_per_fix ? " @ " + r.sec_per_fix + " s/fix" : ""}${r.cells != null ? " → " + r.cells + " cells" : ""}${r.thin_cells ? " (+" + r.thin_cells + " under " + minS + " s, refused)" : ""} · trust: ${esc(r.trust_line || "—")}</div>`).join("")}
+        : `<div class="muted" style="font-size:12px"><b style="color:var(--ink)">${esc(r.name)}</b> · ${r.hours} h · ${r.fixes} fixes (${r.refused_by_trust} refused by the trust gate) · ${r.measured_samples} measured samples${r.refused_below_min_twa ? ", " + r.refused_below_min_twa + " below " + ((d.grid || {}).min_twa_deg || 30) + "° TWA (not sailing)" : ""}${r.sec_per_fix ? " @ " + r.sec_per_fix + " s/fix" : ""}${r.cells != null ? " → " + r.cells + " cells" : ""}${r.thin_cells ? " (+" + r.thin_cells + " under " + minS + " s, refused)" : ""} · trust: ${trustDanger(r.trust_danger_s, r.trust_line) ? '<span class="pill bad">⚠ DANGER — see above</span>' : esc(r.trust_line || "—")}</div>`).join("")}
       <div style="margin-top:6px"><button class="mini" onclick="polRefresh()" ${Pol.busy ? "disabled" : ""}>${Pol.busy ? "Rebuilding from the record…" : "Refresh from the record"}</button>
       <span class="muted" style="font-size:11px"> built ${d.generated_at ? new Date(d.generated_at * 1000).toISOString().slice(0, 16) + "Z" : "—"}${d.refresh_error ? " · last refresh failed: " + esc(d.refresh_error) : ""}</span></div>
     </div>

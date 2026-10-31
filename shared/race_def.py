@@ -217,7 +217,9 @@ def dump(defn: RaceDefinition, path: str) -> None:
 
 
 def _valid_coord(lat, lon) -> bool:
-    return (lat is None or -90 <= lat <= 90) and (lon is None or -180 <= lon <= 180)
+    def ok(v, lim):
+        return v is None or (isinstance(v, (int, float)) and not isinstance(v, bool) and -lim <= v <= lim)
+    return ok(lat, 90) and ok(lon, 180)
 
 
 def validate(d: dict) -> tuple[list, list]:
@@ -233,8 +235,28 @@ def validate(d: dict) -> tuple[list, list]:
             errors.append(f"division {div.get('id')!r} references unknown course "
                           f"{div.get('course_ref')!r}")
     for c in d.get("courses", []):
-        if not c.get("finish"):
+        fin = c.get("finish")
+        if fin is None:
             warnings.append(f"course {c.get('id')!r} has no finish defined")
+        elif not isinstance(fin, dict) or not isinstance(fin.get("points", []), (list, type(None))):
+            errors.append(f"course {c.get('id')!r}: finish is malformed (want {{points: [...]}})")
+        else:
+            fpts = fin.get("points") or []
+            if len(fpts) > 2:
+                errors.append(f"course {c.get('id')!r}: finish has {len(fpts)} points (1 mark or a 2-point line)")
+            for k, p in enumerate(fpts):
+                if not isinstance(p, dict):
+                    errors.append(f"course {c.get('id')!r}: finish point {k + 1} is malformed")
+                    continue
+                if not _valid_coord(p.get("lat"), p.get("lon")):
+                    errors.append(f"course {c.get('id')!r}: finish point {k + 1} coord out of range")
+                if p.get("lat") is None or p.get("lon") is None:
+                    warnings.append(f"course {c.get('id')!r}: finish point {k + 1} has no coordinates "
+                                    f"— needs review")
+            if not fpts:
+                warnings.append(f"course {c.get('id')!r}: finish has no points — needs review")
+            if fin.get("coords_source") in ("needs_review", "si_pending"):
+                warnings.append(f"course {c.get('id')!r}: finish coords need review")
         for m in c.get("marks", []):
             if m.get("rounding", "none") not in ROUNDINGS:
                 errors.append(f"mark {m.get('name')!r}: bad rounding {m.get('rounding')!r}")
@@ -315,7 +337,12 @@ def course_to_marks(definition: dict, course_id: str = None):
             marks.append((seq, name, m["lat"], m["lon"])); seq += 1
         else:
             skipped.append(name)
-    pts = [p for p in ((course.get("finish") or {}).get("points") or []) if p and p.get("lat") is not None]
+    fin = course.get("finish")
+    raw = (fin.get("points") if isinstance(fin, dict) else None) or []
+    raw = raw if isinstance(raw, list) else []
+    pts = [p for p in raw if isinstance(p, dict) and p.get("lat") is not None and p.get("lon") is not None]
+    if fin is not None and len(pts) < max(len(raw), 1):
+        skipped.append("Finish (incomplete coords)")   # half-filled / empty finish: say so, don't hide it
     if len(pts) >= 2:
         la, lo = _mid((pts[0]["lat"], pts[0]["lon"]), (pts[1]["lat"], pts[1]["lon"]))
         marks.append((seq, "Finish", la, lo))

@@ -59,12 +59,21 @@ h1, h2, h3, h4 { font-family: var(--font-display); }
 .ghost:hover { border-color: var(--accent); color: var(--ink); }
 
 main { padding: 18px; max-width: 1200px; margin: 0 auto; }
+/* plain links on the dark cards: steel, same colour visited or not (#94). Zero specificity via
+   :where() so any classed link (a.mini, buttons-as-links) keeps its own styling. */
+:where(main) :where(a:link, a:visited) { color: var(--cyan); text-decoration: underline;
+  text-underline-offset: 2px; text-decoration-color: rgba(205,210,218,.5); }
+:where(main) :where(a:hover) { color: var(--ink); text-decoration-color: currentColor; }
 .loading, .placeholder { color: var(--muted); padding: 40px; text-align: center; }
 .placeholder h2 { color: var(--ink); }
 
 /* races: list + detail */
 .races { display: grid; grid-template-columns: 320px 1fr; gap: 18px; align-items: start; }
 @media (max-width: 820px) { .races { grid-template-columns: 1fr; } }
+/* grid children default to min-width:auto, so a wide table/banner pushes the column off-screen (#93) */
+.races > * { min-width: 0; }
+.detail { min-width: 0; overflow-wrap: anywhere; }
+.tbl-scroll { overflow-x: auto; max-width: 100%; }
 .card { background: linear-gradient(180deg, var(--panel), #0d1d2d); border: 1px solid var(--line);
   border-radius: 12px; padding: 16px 18px; margin-bottom: 16px; box-shadow: 0 1px 2px rgba(0,0,0,.25); }
 .card h3 { margin: 0 0 12px; font-size: 13px; text-transform: uppercase; letter-spacing: .11em;
@@ -105,6 +114,7 @@ input, select, textarea { font-family: var(--font-body); }
 .detail .dmeta { color: var(--muted); font-size: 13px; margin-bottom: 14px; }
 .banner { border-radius: 10px; padding: 10px 14px; font-size: 13px; margin-bottom: 16px; }
 .banner.review { background: rgba(245,196,81,.12); border: 1px solid var(--warn); color: var(--warn); }
+.banner.warn { background: rgba(245,196,81,.12); border: 1px solid var(--warn); color: var(--warn); }
 .banner.ok { background: rgba(126,224,168,.1); border: 1px solid var(--accent2); color: var(--accent2); }
 
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -148,7 +158,24 @@ button.mini:hover { border-color: var(--accent); }
 .coursemap { width: 100%; max-width: 760px; height: 380px; background: var(--bg);
   border: 1px solid var(--line); border-radius: 10px; margin-bottom: 12px; }
 .coursemap .leaflet-tile { filter: none; }
-.cm-pin { font: 700 11px/1.2 var(--font-body); color: #fff; text-shadow: 0 1px 2px #000; white-space: nowrap; }
+/* map labels: dark chip, white text (Leaflet's default tooltip is a white box) */
+.leaflet-tooltip.cm-pin { font: 700 11px/1.2 var(--font-body); color: #fff; white-space: nowrap;
+  background: rgba(11,11,14,.86); border: 1px solid rgba(255,255,255,.25); border-radius: 5px;
+  padding: 2px 6px; box-shadow: 0 1px 3px rgba(0,0,0,.4); text-shadow: none; }
+.leaflet-tooltip-right.cm-pin::before { border-right-color: rgba(11,11,14,.86); }
+.leaflet-tooltip-left.cm-pin::before { border-left-color: rgba(11,11,14,.86); }
+.leaflet-tooltip.cm-pin.cm-hidden { display: none; }   /* declutter: overlaps an earlier label */
+.leaflet-tooltip.cm-pin.cm-hidden.cm-force { display: block; z-index: 700; }
+/* marks table: scroll sideways inside the card instead of running off it (#79) */
+.tablewrap { overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%; }
+.marktable th, .marktable td { padding: 6px 4px; }
+.marktable .cin { width: 100px; }
+.cstack { display: flex; flex-direction: column; gap: 4px; }
+.finedit { font-size: 13px; margin: 12px 0 4px; padding: 8px 10px; border: 1px solid var(--line);
+  border-radius: 8px; }
+.finedit.needrow { background: rgba(245,196,81,.07); }
+.finrow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
+.finrow .mono { min-width: 70px; color: var(--muted); }
 
 /* ---------- Gameplan route map (Leaflet, [C]) ---------- */
 .routemap { width: 100%; height: 480px; border: 1px solid var(--line); border-radius: 10px;
@@ -183,7 +210,7 @@ button.mini:hover { border-color: var(--accent); }
 .mv-canvas { will-change: transform; }
 .cin { width: 92px; padding: 4px 6px; border-radius: 6px; border: 1px solid var(--line);
   background: var(--panel2); color: var(--ink); font-size: 12px; font-variant-numeric: tabular-nums; }
-td select { background: var(--panel2); color: var(--ink); border: 1px solid var(--line);
+td select, .finedit select { background: var(--panel2); color: var(--ink); border: 1px solid var(--line);
   border-radius: 6px; padding: 4px; font-size: 12px; }
 tr.needrow { background: rgba(245,196,81,.07); }
 #saveCourseBtn { padding: 10px 18px; border: none; border-radius: 8px; background: var(--accent);
@@ -222,6 +249,7 @@ tr.needrow { background: rgba(245,196,81,.07); }
 .opt-group-h { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--accent);
   font-weight: 700; border-bottom: 1px solid var(--line); padding-bottom: 5px; width: 100%; }
 .opt-group .opt-models { margin: 0; }
+.opt-start-note { font-size: 12px; color: var(--ink); }
 .opt-run { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; margin-bottom: 6px; }
 .tackbadge { color: var(--warn); font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .peelbadge { color: var(--muted); font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; font-size: 11px; }
@@ -384,3 +412,62 @@ tr.winrow { background: rgba(126,224,168,.12); font-weight: 600; }
   border: 1px solid var(--line); border-radius: 6px; }
 .req-chk input, .req-flag input { transform: scale(1.05); }
 .req-flag { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+
+/* data-quality banners: .banner.warn was used without a rule; .bad is a danger-level fault
+   (e.g. a trust sweep's DANGER window — #89) and must read as one, not as small print */
+.banner.warn { background: rgba(245,177,61,.12); border: 1px solid var(--warn); color: var(--warn); }
+.banner.bad { background: rgba(255,84,54,.14); border: 1px solid var(--bad); border-left: 5px solid var(--bad);
+  color: var(--ink); font-size: 14px; }
+.banner.bad > b { color: var(--bad); font-family: var(--font-display); font-size: 17px; letter-spacing: .02em; }
+.banner .banner-line { margin-top: 4px; font-weight: 600; }
+.banner .banner-tail { margin-top: 6px; font-size: 12px; color: var(--muted); }
+
+/* Monitor map (#87): labels for us + nearest rivals, a legend, tappable fleet rows */
+.mon-lbl-wrap { width: 0; height: 0; overflow: visible; background: none; border: none; }
+.mon-lbl { position: absolute; left: var(--gap, 8px); top: -9px; white-space: nowrap; pointer-events: none;
+  font: 600 11px/16px var(--font-body); color: #fff; background: rgba(11,11,14,.85);
+  border: 1px solid #36b3ff; border-radius: 4px; padding: 0 5px; }
+.mon-lbl.left { left: auto; right: var(--gap, 8px); }
+.mon-lbl.own { color: #f5c451; border-color: #f5c451; font-size: 12px; font-weight: 700; }
+.mon-lbl:not(.own):not(.rival) { border-color: var(--line); color: var(--cyan); }
+.mon-legend { background: rgba(11,11,14,.88); color: var(--ink); border: 1px solid var(--line);
+  border-radius: 8px; padding: 6px 10px; font: 12px/1.7 var(--font-body); }
+.mon-sw { display: inline-block; width: 12px; height: 12px; border-radius: 50%; vertical-align: -1px;
+  margin-right: 6px; box-sizing: border-box; }
+table.mon-tbl tr.mon-row { cursor: pointer; }
+table.mon-tbl tr.mon-row:hover td { background: var(--panel2); }
+table.mon-tbl tr.mon-row.own td { background: rgba(245,196,81,.10); color: #f5c451; font-weight: 700; }
+table.mon-tbl tr.mon-row td { padding-top: 7px; padding-bottom: 7px; }
+
+/* ---------- unsaved edits: fixed Save bar + tab marker + leave prompt (app.js syncDirty) ----------
+   Sits above the bottom edge so a long page (Rules 4,500 px, Course 1,600 px) can be saved without
+   scrolling to its end. Leaves room on the right for the floating Feedback button. */
+.savebar { position: fixed; z-index: 40; left: 16px; right: 150px; max-width: 720px; margin: 0 auto;
+  bottom: calc(12px + env(safe-area-inset-bottom)); display: flex; align-items: center; gap: 12px;
+  padding: 8px 8px 8px 16px; border-radius: 12px; background: #1f1a10; border: 1px solid var(--warn);
+  box-shadow: 0 6px 24px rgba(0,0,0,.55); font-size: 15px; }
+.savebar[hidden], .savebar-btns[hidden] { display: none; }
+.savebar-dot { color: var(--warn); font-size: 14px; }
+.savebar-text { flex: 1; min-width: 0; font-weight: 600; color: var(--ink);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.savebar-btns { display: flex; gap: 8px; }
+.savebar button, .modal button { min-height: 44px; padding: 0 18px; border-radius: 9px; font-size: 15px;
+  font-weight: 700; cursor: pointer; font-family: var(--font-body); }
+.savebar button.primary, .modal button.primary { background: var(--accent); color: var(--ink-on-accent); border: none; }
+.savebar button.primary:disabled { opacity: .6; cursor: default; }
+.savebar.ok { border-color: var(--accent2); background: #0f1d16; }
+.savebar.ok .savebar-dot { color: var(--accent2); }
+body.has-savebar main { padding-bottom: 96px; }
+body:not(.is-dirty) .if-dirty, body.is-dirty .if-clean { display: none; }
+.tabs a.dirty::after { content: " ●"; color: var(--warn); }
+@media (max-width: 600px) { .savebar { right: 16px; bottom: calc(64px + env(safe-area-inset-bottom)); } }
+
+.modal-back { position: fixed; inset: 0; z-index: 60; background: rgba(0,0,0,.6); display: flex;
+  align-items: center; justify-content: center; padding: 16px; }
+.modal { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 22px;
+  width: min(440px, 100%); box-shadow: 0 10px 40px rgba(0,0,0,.6); }
+.modal h3 { margin: 0 0 8px; font-size: 18px; text-transform: uppercase; letter-spacing: .06em; }
+.modal p { margin: 0 0 18px; color: var(--muted); }
+.modal p b { color: var(--ink); }
+.modal-btns { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+.modal button.danger { color: var(--bad); border-color: var(--bad); }
