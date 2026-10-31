@@ -3,6 +3,29 @@
 Goal (Cole): **lose no telemetry**, and **copy all telemetry off the Pi to the VPS**.
 Deletion from the boat is allowed only *after* an off-boat copy is sha256-verified.
 
+## ⏸ PICK UP HERE — 2026-10-31 (dev @ fcf7edf)
+
+**Done today:**
+- **Jul 18 replay is live at https://c4.racertracer.net/dashboard/** (systemd `c4-replay-dashboard` on
+  :8110 from the dev checkout, nginx GET-only). 200 on both pages.
+- **UI grill filed:** map **#72 "UI grill — map"** (`wayfinder:map`), 34 child issues #73–#106 labelled
+  `ui-grill`: 3 blockers (#73 console clipping, #74 Lab unsaved edits, #75 Monitor stale badge),
+  19 majors, 12 per-screen bundles of the 58 minors. Merged duplicates sit inside their parent issue.
+  Filing script: one-off, not in the repo.
+- **Security (details in private notes, `/root/c4-ops/ui-grill-security-2026-10-30.md`):** Cole chose
+  no credential rotation, only removal from code → **PR #71**, Codex clean at 26fcf26. Lab login now
+  rate-limited in host nginx (5/min per IP, burst 5, then 429).
+- **PR #107** opened for `grill-ui`. Codex: 1 major = replay server binds 0.0.0.0 (Cole already said
+  leave it; ufw blocks non-Docker ports anyway), 1 minor = `--shots A` into B doesn't copy screenshots
+  (real, low impact). Review was saved as `grill-ui-<sha>.md` (run from the worktree) — re-run from
+  the main checkout before merging if the gate wants `Agent_C4-<sha>`.
+
+**Next, in order:**
+1. **Cole: one open question in the private notes (L2)** — a host-port exposure that skips nginx.
+2. Merges on Cole's "merge N": #71, #107.
+3. Work the grill map: blockers #73–#75 first, plus #47 (red "change now" all race in the replay).
+4. Then the old queue: Debrief session 3 shows as a race; #55; ruff.
+
 ## ⏸ PICK UP HERE — 2026-10-30 SESSION END (dev @ a941e95)
 
 **Done today:**
