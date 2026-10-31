@@ -63,7 +63,9 @@ def fake_agent(path, timeout=None):
                        for i, v in enumerate(speeds(race))],
              "sail_log": [{"t": start - 10, "flying": ["J1"]}]}
             if path.startswith("/racelog/track")
-            else {"danger": {}, "summary": {"line": "no danger windows"}})
+            else {"danger": {}, "summary": {"line": "no danger windows", "danger_s": 0}} if race == "A"
+            else {"danger": {}, "summary": {"line": "heading DANGER for 43 min — compass misaligned",
+                                            "danger_s": 2580}})
 
 
 monitor.agent_json = fake_agent
@@ -150,6 +152,9 @@ meta = {m.get("name"): m for m in art["races"]}
 check("every race carries its recording = the window start the debrief uses",
       meta["Race A"]["recording"] == A and meta["Race B"]["recording"] == B)
 check("...and how many cells it contributed", meta["Race A"]["cells"] == 1)
+check("each race carries the sweep's DANGER seconds, so the UI can raise a banner (#89)",
+      meta["Race B"]["trust_danger_s"] == 2580 and meta["Race A"]["trust_danger_s"] == 0
+      and "DANGER" in meta["Race B"]["trust_line"])
 check("a session the record can't attribute to this boat is skipped and said, not silently dropped",
       meta["Bench"].get("skipped") and "cells" not in meta["Bench"])
 check("the skipped session contributes nothing to any view",

@@ -162,6 +162,9 @@ def compute(min_seconds=MIN_SECONDS):
                           "measured_samples": n, "refused_below_min_twa": not_sailing,
                           "sec_per_fix": round(strides[rec], 2),
                           "trust_line": (trust.get("summary") or {}).get("line"),
+                          # seconds of DANGER the sweep found — the UI raises a banner on > 0
+                          # rather than parsing the human line
+                          "trust_danger_s": (trust.get("summary") or {}).get("danger_s"),
                           "sail_changes": len(sail_log)})
 
     cells, thin_cells = _rows(
