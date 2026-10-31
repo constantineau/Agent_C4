@@ -1940,7 +1940,8 @@ function boatPanelInner() {
       warns.push(`The Pi engine has <b>${esc(epb.race_id)}</b> but the Orin copilot has <b>${esc(cpb.race_id)}</b>. Push again so both match.`);
     if (liveRace && liveRace !== rid) {
       warns.push(`The boat is loaded for <b>${esc(liveRace)}</b>, not this race.`);
-    } else if (lock && epb && epb.signature && lock.signature && epb.signature !== lock.signature)
+    } else if (lock && epb && epb.id && (epb.id !== lock.playbook_id ||
+               (epb.signature && lock.signature && epb.signature !== lock.signature)))
       warns.push(`The boat's playbook (<code>${esc(epb.id || epb.signature)}</code>) is not the one locked in here (<code>${esc(lock.playbook_id)}</code>). Push to replace it.`);
     if ((epb && epb.loaded === false) || (cop.reachable && cpb && !cpb.loaded))
       warns.push(`${epb && epb.loaded === false ? "The Pi engine" : "The Orin copilot"} has no playbook loaded.`);
@@ -1964,8 +1965,8 @@ function boatPanelInner() {
   }
 
   // push-record mismatches: the only signal when the boat is unreachable, and the fallback when an
-  // older engine can't say exactly which playbook it holds (no signature in its answer)
-  if (!(b && b.reachable && epb && epb.signature)) {
+  // older engine can't say exactly which playbook it holds (no bundle id in its answer)
+  if (!(b && b.reachable && epb && epb.id)) {
     const ref = (last && last.ok) ? last : lastOk;
     if (ref && ref.race_id !== rid) { if (!liveRace) warns.push(`The last complete push was for <b>${esc(ref.race_name || ref.race_id)}</b>, not this race. This race's homework has not gone to the boat.`); }
     else if (lock && ref && ref.playbook_id !== lock.playbook_id) warns.push(`The locked playbook <code>${esc(lock.playbook_id)}</code> has not been pushed successfully. The boat still has <code>${esc(ref.playbook_id || "no playbook")}</code> from ${esc(depAgo(ref.at))}.`);
