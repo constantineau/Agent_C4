@@ -646,7 +646,7 @@ GPX debrief #1 and rejected proposal #1 are untouched. The Debrief tab's track s
 
 ## (2026-09-09, later — the POLAR TAB shipped)
 
-**https://lab.racertracer.net/#polar** (password `CAN100`). The debrief interface Cole asked
+**https://lab.racertracer.net/#polar**. The debrief interface Cole asked
 for: the observed polar as a half-polar diagram (TWS chips + config filter, per-config curves
 with hover tooltips, the ORC cert as a dashed reference only), the cell table, per-race
 provenance (trust line, refused counts, skipped bench sessions), and the Decisions card wired to

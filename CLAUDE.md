@@ -101,7 +101,7 @@ cd ~/Agent_C4
 docker compose -f compose.dev.yml up -d --build          # cloud dev stack
 python3 vps/db/seed/fake_telemetry.py                    # fake raw readings → /ingest/raw → telemetry_raw
 python3 vps/db/seed/ais_inject.py                        # deterministic AIS scenario (own ship + closing target)
-# web http://localhost:8090 (pw sr33-dev) · lab http://localhost:8103 (pw lab-dev; standing container CAN100)
+# web http://localhost:8090 (pw sr33-dev) · lab http://localhost:8103 (pw lab-dev)
 ```
 
 **Bench Pi stack is DOWN by default** (policy 2026-07-08 — its archiver records the sample
@@ -384,8 +384,8 @@ Checklists, Fleet, Learnings, Gameplan, Lock-in & Deploy) · RACE (Monitor) · D
 - **Long Lab jobs** (synthesis fan ~10 min, retro batch, AND live optimize since 2026-07-14)
   run as background jobs with status polling — the nginx gateway 504s past ~300 s. Optimize is
   ~60–70 s cached-warm, but a rate-limited GRIB source can blow past the cap, hence the job.
-- **Passwords:** web dev `sr33-dev`; lab compose default `lab-dev`, the standing
-  lab.racertracer.net container uses `CAN100`.
+- **Passwords:** web dev `sr33-dev`; lab compose default `lab-dev`. The standing
+  lab.racertracer.net password lives in the dev stack env, not in the repo.
 - **`.env` safety:** copy it outside the tree before any risky branch op
   (`cp .env ~/agentc4.env.bak`) — a `git rm --cached` + branch switch once overwrote it.
 - **Don't `compose down` the standing lab container** without restarting it
