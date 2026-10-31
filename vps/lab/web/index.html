@@ -41,6 +41,16 @@
 
   <main id="view"><div class="loading">Loading…</div></main>
 
+  <!-- unsaved-edits bar: shown while the race definition has edits that aren't saved (app.js syncDirty) -->
+  <div id="savebar" class="savebar" role="status" aria-live="polite" hidden>
+    <span class="savebar-dot" aria-hidden="true">●</span>
+    <span id="savebarText" class="savebar-text">Unsaved changes</span>
+    <span id="savebarBtns" class="savebar-btns">
+      <button class="ghost" onclick="savebarDiscard()">Discard</button>
+      <button id="savebarSave" class="primary" onclick="savebarSave()">Save</button>
+    </span>
+  </div>
+
   <script src="/vendor/leaflet.js"></script>
   <script src="/mapview.js"></script>
   <script src="/app.js"></script>
