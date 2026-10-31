@@ -1964,8 +1964,7 @@ function fleetGlance(roster) {
     <td class="muted">${e.orc_gph != null ? esc(e.orc_gph) : ""}</td></tr>` + cand;
   };
   return `<div class="muted" style="font-size:12px;margin-bottom:6px"><b>${roster.length}</b> boat${roster.length === 1 ? "" : "s"} · <b>${rated}</b> with an ORC handicap${rated < roster.length ? ` · <b class="conf bad">${roster.length - rated} missing a rating</b>` : ""} · by division: ${divSummary}</div>
-    <div class="muted" style="font-size:12px;margin-bottom:4px">Tap a row to find that boat on the map. ★ us · ● nearest rivals.</div>
-      <table class="fleet-tbl mon-tbl"><thead><tr><th>Boat</th><th>Sail #</th><th>Class</th><th>Div</th><th>Rating</th><th>GPH</th></tr></thead>
+    <table class="fleet-tbl"><thead><tr><th>Boat</th><th>Sail #</th><th>Class</th><th>Div</th><th>Rating</th><th>GPH</th></tr></thead>
     <tbody>${sorted.map(li).join("")}</tbody></table>`;
 }
 
