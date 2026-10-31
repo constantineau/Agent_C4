@@ -199,7 +199,8 @@ LATCHED active until the crew acks; acks are per-window, so a sunset item re-arm
 evening; kv-persisted; `CHECKLIST_*` tunables) · /session + POST /session/start|end (the RACE LOG — see
 below) · /course · POST /course/practice · POST /course/load (RaceDefinition course →
 marks) · /navigator · /tactics · /forecast · /route · /ais · POST /fleet/load · /fleet ·
-POST /playbook/load (freeze the signed bundle aboard; clears trigger/matcher state) ·
+POST /playbook/load (freeze the signed bundle aboard; clears trigger/matcher state) · GET /playbook
+(which bundle is aboard: race, id, variants/plays, signature prefix — the Lab Deploy tab reads it) ·
 /deviation · /drift · /plangap · /trend · /selector · /reoptimize · /strategy · /plays · /buoys ·
 POST /gps/show + /gps/clear + GET /gps/status (the CHARTPLOTTER push: assembles the frozen
 variant's path — or the onboard re-route — and drives the `pi/n2kout` broadcaster, which

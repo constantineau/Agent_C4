@@ -105,6 +105,7 @@ input, select, textarea { font-family: var(--font-body); }
 .detail .dmeta { color: var(--muted); font-size: 13px; margin-bottom: 14px; }
 .banner { border-radius: 10px; padding: 10px 14px; font-size: 13px; margin-bottom: 16px; }
 .banner.review { background: rgba(245,196,81,.12); border: 1px solid var(--warn); color: var(--warn); }
+.banner.warn { background: rgba(245,196,81,.12); border: 1px solid var(--warn); color: var(--warn); }
 .banner.ok { background: rgba(126,224,168,.1); border: 1px solid var(--accent2); color: var(--accent2); }
 
 table { width: 100%; border-collapse: collapse; font-size: 13px; }

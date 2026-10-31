@@ -142,6 +142,25 @@ def _load_playbook():
     return {}
 
 
+def playbook_summary(bundle):
+    """What playbook is aboard, in a few fields — the Lab's Deploy tab reads it back (GET
+    /playbook on the engine) to show what the boat actually holds. No route geometry; `id` is the
+    Lab's bundle id (`<race_id>__<start_epoch>`) and `signature` the first 16 hex chars, the same
+    prefix the Lab's lock-in records, so the two can be compared exactly."""
+    bundle = bundle or {}
+    if not bundle.get("variants"):
+        return {"loaded": False}
+    import re
+    sig = (bundle.get("signature") or {}).get("value") or ""
+    rid = re.sub(r"[^a-z0-9_-]", "", str(bundle.get("race_id") or "").lower()) or "race"
+    return {"loaded": True, "race_id": bundle.get("race_id"),
+            "id": f"{rid}__{int(bundle.get('start_epoch') or 0)}",
+            "start_epoch": bundle.get("start_epoch"), "generated_at": bundle.get("generated_at"),
+            "headline": bundle.get("headline"), "recommended": bundle.get("recommended"),
+            "variants": len(bundle.get("variants") or []), "plays": len(bundle.get("plays") or []),
+            "signed": bool(sig), "signature": sig[:16]}
+
+
 def _pick_variant(bundle, variant):
     """The ACTIVE variant to measure against: the requested id, else the bundle's recommended start
     default, else the first — mirrors the adherence tile's default."""

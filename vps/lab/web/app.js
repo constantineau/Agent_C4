@@ -1809,7 +1809,7 @@ async function freezePlaybook() {
 }
 
 /* ---------- Lock-in & Deploy ---------- */
-const Dep = { races: null, raceId: null, ready: null, sel: null, busy: false };
+const Dep = { races: null, raceId: null, ready: null, sel: null, busy: false, boat: null, boatBusy: false };
 
 async function renderDeploy() {
   const view = document.getElementById("view");
@@ -1824,6 +1824,24 @@ async function renderDeploy() {
   catch (e) { view.innerHTML = '<div class="placeholder">Failed to load deploy state.</div>'; return; }
   if (stale("deploy")) return;
   paintDeploy();
+  depCheckBoat();
+}
+
+// Live read of what the boat has loaded (read-only GETs over the Lab's Tailscale line). Slow when
+// the boat is off the line (a few seconds of timeout), so it paints after the rest of the tab.
+async function depCheckBoat() {
+  Dep.boatBusy = true; depPaintBoat();
+  try {
+    const res = await apiGet("/api/deploy/boat");
+    Dep.boat = res.ok ? await res.json() : { error: "check failed (" + res.status + ")" };
+  } catch (e) { Dep.boat = { error: e.message }; }
+  Dep.boatBusy = false;
+  if (!stale("deploy")) depPaintBoat();
+}
+
+function depPaintBoat() {
+  const el = document.getElementById("depBoat");
+  if (el && Dep.ready) el.innerHTML = boatPanelInner();
 }
 
 async function depPickRace(id) { Dep.raceId = id; Lab.sel = id; Dep.sel = null; renderDeploy(); }
@@ -1868,8 +1886,87 @@ function paintDeploy() {
       ${lock ? `<div class="banner ok" style="margin-top:10px">🔒 Locked in: <code>${esc(lock.playbook_id)}</code>${lock.signed ? ` · sig <code>${esc(lock.signature)}…</code>` : " · <b>unsigned</b>"} · ${esc(fmtDate(lock.locked_at))}</div>` : ""}
     </div>
 
+    <div class="card" id="depBoat">${boatPanelInner()}</div>
+
     ${lock ? deployPanel(lock, t) : ""}
   </div>`;
+}
+
+const depStamp = (e) => e ? new Date(e * 1000).toISOString().slice(0, 16).replace("T", " ") + "Z" : "—";
+function depAgo(e) {
+  if (!e) return "";
+  const m = Math.max(0, Math.round((Date.now() / 1000 - e) / 60));
+  if (m < 1) return "just now";
+  if (m < 60) return m + " min ago";
+  if (m < 48 * 60) return Math.round(m / 60) + " h ago";
+  return Math.round(m / 1440) + " days ago";
+}
+
+// "What's on the boat": the live read when the boat answers, the last recorded push always, and
+// plain warnings when the boat's load is not the homework locked in here.
+function boatPanelInner() {
+  const lp = (Dep.boat && Dep.boat.last_push) || (Dep.ready && Dep.ready.last_push) || {};
+  const last = lp.last, lastOk = lp.last_ok;
+  const b = Dep.boat && Dep.boat.boat;
+  const lock = Dep.ready && Dep.ready.lock_in;
+  const rid = Dep.raceId;
+  const eng = (b && b.engine) || {}, cop = (b && b.copilot) || {};
+  const epb = eng.playbook, cpb = cop.playbook;
+  const warns = [];
+  let liveRace = null;            // the race the boat itself says it holds (live read only)
+
+  // live line
+  let live;
+  if (Dep.boatBusy && !b) live = `<div class="banner">Checking the boat over Tailscale…</div>`;
+  else if (Dep.boat && Dep.boat.error) live = `<div class="banner warn">Couldn't run the boat check (${esc(Dep.boat.error)}). Below is the last push only.</div>`;
+  else if (b && !b.reachable) live = `<div class="banner warn"><b>Boat unreachable</b> over Tailscale — nothing below is live. ${last ? `It is the last push the Lab recorded (${esc(depAgo(last.at))}); the boat may have changed since.` : "The Lab has no push on record either."}<div class="muted" style="font-size:12px;margin-top:4px">${esc(eng.error || cop.error || "")}</div></div>`;
+  else if (b) {
+    const rows = [];
+    const pbText = (p) => !p ? "no answer" : p.loaded === false ? "no playbook loaded" : p.loaded == null ? (p.note || "unknown") :
+      `${esc(p.race_id || "?")}${p.id ? ` · <code>${esc(p.id)}</code>` : ""}${p.variants != null ? ` · ${p.variants} variants` : ""}${p.plays != null ? ` · ${p.plays} plays` : ""}${p.signed != null ? (p.signed ? (p.signature_ok === false ? " · ⚠ signature BAD" : ` · signed${p.signature ? ` <code>${esc(p.signature)}…</code>` : ""}`) : " · unsigned") : ""}${p.partial ? ` · <span class="muted">older engine: race only</span>` : ""}`;
+    const okPill = (ok, label) => `<span class="pill ${ok ? "ok" : "warn"}">${ok ? "●" : "○"} ${esc(label)}</span>`;
+    rows.push(`<div class="dep-row">${okPill(eng.reachable, "Pi engine")}<span>${eng.reachable ? "playbook: " + pbText(epb) : "unreachable" + (eng.error ? " — " + esc(eng.error) : "")}</span></div>`);
+    if (eng.course) rows.push(`<div class="dep-row"><span class="pill" style="visibility:hidden">● Pi engine</span><span>course: ${eng.course.available ? `${esc(eng.course.route || "?")} · ${eng.course.marks} marks${eng.course.mark_names && eng.course.mark_names.length ? ` <span class="muted">(${eng.course.mark_names.map(esc).join(" → ")})</span>` : ""}` : "none loaded"}</span></div>`);
+    rows.push(`<div class="dep-row">${okPill(cop.reachable, "Orin copilot")}<span>${cop.reachable ? "playbook: " + pbText(cpb) : "unreachable" + (cop.error ? " — " + esc(cop.error) : "")}</span></div>`);
+    live = `<div class="muted" style="font-size:12px">Live read · ${esc(depStamp(b.checked_at))}</div><div class="dep-grid">${rows.join("")}</div>`;
+
+    // live mismatches
+    liveRace = (epb && epb.race_id) || (cpb && cpb.loaded && cpb.race_id) || null;
+    if (epb && cpb && epb.race_id && cpb.loaded && cpb.race_id && epb.race_id !== cpb.race_id)
+      warns.push(`The Pi engine has <b>${esc(epb.race_id)}</b> but the Orin copilot has <b>${esc(cpb.race_id)}</b>. Push again so both match.`);
+    if (liveRace && liveRace !== rid) {
+      warns.push(`The boat is loaded for <b>${esc(liveRace)}</b>, not this race.`);
+    } else if (lock && epb && epb.signature && lock.signature && epb.signature !== lock.signature)
+      warns.push(`The boat's playbook (<code>${esc(epb.id || epb.signature)}</code>) is not the one locked in here (<code>${esc(lock.playbook_id)}</code>). Push to replace it.`);
+    if ((epb && epb.loaded === false) || (cop.reachable && cpb && !cpb.loaded))
+      warns.push(`${epb && epb.loaded === false ? "The Pi engine" : "The Orin copilot"} has no playbook loaded.`);
+  }
+
+  // last push
+  const stepPills = (r) => (r.steps || []).map((x) => `<span class="pill ${x.ok ? "ok" : "warn"}" title="${esc(x.ok ? "" : ((x.detail || {}).error || ""))}">${x.ok ? "✓" : "✗"} ${esc(x.target)} · ${esc(x.step)}</span>`).join(" ");
+  const pushLine = (r, label) => `<div style="margin-top:6px"><b>${label}</b> ${esc(depStamp(r.at))} <span class="muted">(${esc(depAgo(r.at))})</span> · ${esc(r.race_name || r.race_id || "?")}${r.playbook_id ? ` · playbook <code>${esc(r.playbook_id)}</code>` : " · <b>no playbook in this push</b>"} · ${r.ok ? `<span style="color:var(--accent2)">✓ all ${(r.steps || []).length} steps loaded</span>` : `<span style="color:var(--warn)">⚠ ${(r.steps || []).filter((x) => x.ok).length} of ${(r.steps || []).length} steps loaded</span>`}<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">${stepPills(r)}</div></div>`;
+  let pushes;
+  if (!last) pushes = `<div class="muted" style="margin-top:6px">No push recorded by the Lab. Whatever is aboard was loaded by hand or before push history was kept.</div>`;
+  else {
+    pushes = pushLine(last, "Last push:");
+    if (!last.ok && lastOk && lastOk.at !== last.at) pushes += pushLine(lastOk, "Last complete push:");
+  }
+
+  // push-record mismatches: the only signal when the boat is unreachable, and the fallback when an
+  // older engine can't say exactly which playbook it holds (no signature in its answer)
+  if (!(b && b.reachable && epb && epb.signature)) {
+    const ref = (last && last.ok) ? last : lastOk;
+    if (last && !last.ok && !(b && b.reachable)) warns.push("The last push did not finish — the boat may hold a mix of old and new loads.");
+    if (ref && ref.race_id !== rid) { if (!liveRace) warns.push(`The last complete push was for <b>${esc(ref.race_name || ref.race_id)}</b>, not this race. This race's homework has not gone to the boat.`); }
+    else if (lock && ref && ref.playbook_id !== lock.playbook_id) warns.push(`The locked playbook <code>${esc(lock.playbook_id)}</code> has not been pushed successfully. The boat still has <code>${esc(ref.playbook_id || "no playbook")}</code> from ${esc(depAgo(ref.at))}.`);
+    else if (lock && ref && ref.at < lock.locked_at) warns.push("You re-locked after the last push. Push again to be sure the boat matches.");
+  }
+
+  return `<h3>On the boat <span class="muted" style="font-weight:400">— what the Pi and Orin have loaded</span>
+      <button style="float:right;font-size:12px" onclick="depCheckBoat()" ${Dep.boatBusy ? "disabled" : ""}>${Dep.boatBusy ? "Checking…" : "↻ Check boat"}</button></h3>
+    ${live || ""}
+    ${warns.map((w) => `<div class="banner warn" style="margin:8px 0 0">⚠ ${w}</div>`).join("")}
+    ${pushes}`;
 }
 
 function deployPanel(lock, t) {
@@ -1923,6 +2020,7 @@ async function depPush() {
     if (!res.ok) Dep.pushRes = { ok: false, steps: [], ...Dep.pushRes };
   } catch (e) { Dep.pushRes = { ok: false, steps: [{ target: "lab", step: "push", ok: false, detail: { error: e.message } }] }; }
   Dep.busy = false; paintDeploy();
+  depCheckBoat();                 // the push is now on record — re-read what the boat holds
 }
 
 async function depLockIn() {
