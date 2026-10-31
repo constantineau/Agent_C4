@@ -1310,31 +1310,39 @@ async function bmSaveClick() {
   if (!bmDirty()) { bmMsg("Nothing to save."); return; }
   if (await saveBoatModel()) flashSavebar("Saved ✓");
 }
-// → true when saved (or nothing to save); false = a value is invalid or a post failed (message shown).
-async function saveBoatModel() {
-  if (!bmDirty()) return true;
-  const f = JSON.parse(JSON.stringify(Opt.bmEdit)), sent = JSON.stringify(f);
-  const was = JSON.parse(Opt.bmClean);
+// The request bodies for the sections of form f that differ from baseline `was`, validated first so
+// a bad value can't leave a half-save. → {jib, sc} (null = section unchanged) or {err}.
+function bmBodies(f, was) {
   const changed = (keys) => keys.some((k) => f[k] !== was[k]);
-  // validate every changed section before posting any, so a bad value can't leave a half-save
   let jib = null, sc = null;
   if (changed(BM_JIB)) {
     const t1 = parseFloat(f.t1), t2 = parseFloat(f.t2);
-    if (isNaN(t1) || isNaN(t2) || t1 >= t2) { bmMsg("J1→J2 must be below J2→J3.", true); return false; }
+    if (isNaN(t1) || isNaN(t2) || t1 >= t2) return { err: "J1→J2 must be below J2→J3." };
     jib = { jib_crossovers: [{ sail: "J1", tws_max: t1 }, { sail: "J2", tws_min: t1, tws_max: t2 }, { sail: "J3", tws_min: t2 }] };
   }
   if (changed(BM_SC)) {
     const tws = parseFloat(f.c0Tws), alo = parseFloat(f.c0Alo), ahi = parseFloat(f.c0Ahi);
-    if (f.c0On && (isNaN(tws) || isNaN(alo) || isNaN(ahi) || alo >= ahi)) { bmMsg("Code 0: TWA min must be below max.", true); return false; }
+    if (f.c0On && (isNaN(tws) || isNaN(alo) || isNaN(ahi) || alo >= ahi)) return { err: "Code 0: TWA min must be below max." };
     const r1 = parseFloat(f.r1), slot = parseFloat(f.slot);
-    if (!isNaN(r1) && !isNaN(slot) && slot > r1) { bmMsg("The A3 slot reef normally fires at or below the depower reef.", true); return false; }
+    if (!isNaN(r1) && !isNaN(slot) && slot > r1) return { err: "The A3 slot reef normally fires at or below the depower reef." };
     sc = { code0: f.c0On ? { enabled: true, tws_max: tws, twa_min: alo, twa_max: ahi } : { enabled: false },
       main_reefs: { r1_tws_kn: isNaN(r1) ? null : r1, r1_a3_slot_tws_kn: isNaN(slot) ? null : slot } };
   }
+  return { jib, sc };
+}
+// → true when saved (or nothing to save); false = a value is invalid or a post failed (message shown).
+async function saveBoatModel() {
+  if (!bmDirty()) return true;
+  const f = JSON.parse(JSON.stringify(Opt.bmEdit)), sent = JSON.stringify(f);
+  const pre = bmBodies(f, JSON.parse(Opt.bmClean));
+  if (pre.err) { bmMsg(pre.err, true); return false; }
   bmMsg("Saving…");
   // The whole save — posts, the refetch and the new baseline — is ONE queued step, so leaving the tab
   // or Discard (both wait out the queue) can't run between the save and its baseline update.
   const ok = await queueDef(async () => {
+    // diff against the baseline as it is NOW: an earlier save in the queue may have moved it
+    const was = JSON.parse(Opt.bmClean), { jib, sc, err } = bmBodies(f, was);
+    if (err) { bmMsg(err, true); return false; }
     const post = async (path, body) => (await apiPost(path, body)).json();
     const clean = Object.assign({}, was);   // what the server holds so far
     try {
