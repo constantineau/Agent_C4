@@ -1974,7 +1974,7 @@ function boatPanelInner() {
     if (ref && ref.race_id !== rid) { if (!liveRace) warns.push(`The last complete push was for <b>${esc(ref.race_name || ref.race_id)}</b>, not this race. This race's homework has not gone to the boat.`); }
     else if (lock && ref && ref.playbook_id === lock.playbook_id && (ref.signature || "") !== (lock.signature || ""))
       warns.push(`The last push sent <code>${esc(lock.playbook_id)}</code> with a different signature than the lock-in (re-frozen in between?). Re-lock and push so the boat runs the version you locked.`);
-    else if (lock && ref && ref.playbook_id !== lock.playbook_id) warns.push(`The locked playbook <code>${esc(lock.playbook_id)}</code> has not been pushed successfully. The boat still has <code>${esc(ref.playbook_id || "no playbook")}</code> from ${esc(depAgo(ref.at))}.`);
+    else if (lock && ref && ref.playbook_id !== lock.playbook_id) warns.push(`The locked playbook <code>${esc(lock.playbook_id)}</code> has not been pushed successfully. The last complete push (${esc(depAgo(ref.at))}) ${ref.playbook_id ? `sent <code>${esc(ref.playbook_id)}</code>` : "sent no playbook, so what the boat holds is unknown"}.`);
     else if (lock && ref && ref.at < lock.locked_at) warns.push("You re-locked after the last push. Push again to be sure the boat matches.");
   }
 
