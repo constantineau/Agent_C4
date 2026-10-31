@@ -302,7 +302,7 @@ def _island_rounding_marks(definition, course_id):
             seq.append(("nav", (m["lat"] + m["lat2"]) / 2.0, (m["lon"] + m["lon2"]) / 2.0, None, None))
         elif m.get("lat") is not None:
             seq.append(("nav", m["lat"], m["lon"], None, None))
-    fpts = [p for p in ((course.get("finish") or {}).get("points") or []) if p and p.get("lat") is not None]
+    fpts = [p for p in ((course.get("finish") or {}).get("points") or []) if isinstance(p, dict) and p.get("lat") is not None and p.get("lon") is not None]
     if len(fpts) >= 2:
         seq.append(("nav", (fpts[0]["lat"] + fpts[1]["lat"]) / 2.0,
                     (fpts[0]["lon"] + fpts[1]["lon"]) / 2.0, None, None))

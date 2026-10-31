@@ -48,5 +48,16 @@ for label, fin in [("string lat", {"points": [{"lat": "45.8", "lon": -84.6}]}),
     except Exception as e:
         check(f"malformed finish ({label}) raised {type(e).__name__}", False)
 
+# a half-filled finish point (lat but no lon) must not crash the geometry consumers
+d = copy.deepcopy(base); d["courses"][0]["finish"]["points"][1]["lon"] = None
+cid = d["courses"][0]["id"]
+try:
+    marks, _, _ = race_def.course_to_marks(d, cid)
+    fin = [m for m in marks if m[1] == "Finish"]
+    check("course_to_marks: half-filled 2nd point -> finish at the complete point",
+          len(fin) == 1 and fin[0][2:] == (45.8372333, -84.6168667))
+except Exception as e:
+    check(f"course_to_marks raised {type(e).__name__}", False)
+
 print("ALL OK" if ok else "FAILURES")
 raise SystemExit(0 if ok else 1)

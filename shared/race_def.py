@@ -335,7 +335,7 @@ def course_to_marks(definition: dict, course_id: str = None):
             marks.append((seq, name, m["lat"], m["lon"])); seq += 1
         else:
             skipped.append(name)
-    pts = [p for p in ((course.get("finish") or {}).get("points") or []) if p and p.get("lat") is not None]
+    pts = [p for p in ((course.get("finish") or {}).get("points") or []) if isinstance(p, dict) and p.get("lat") is not None and p.get("lon") is not None]
     if len(pts) >= 2:
         la, lo = _mid((pts[0]["lat"], pts[0]["lon"]), (pts[1]["lat"], pts[1]["lon"]))
         marks.append((seq, "Finish", la, lo))

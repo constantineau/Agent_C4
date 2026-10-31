@@ -916,7 +916,7 @@ function drawCourseMap(id, course) {
   L.tileLayer("https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png", { maxZoom: 18, opacity: 0.9 }).addTo(map);
   const pts = [], pins = [];
   const pin = (lat, lon, label, color, prio = 2) => {
-    if (lat == null) return;
+    if (lat == null || lon == null) return;
     const mk = L.circleMarker([lat, lon], { radius: 6, color: "#0b0b0e", weight: 1, fillColor: color, fillOpacity: 0.95 })
       .bindTooltip(label, { permanent: true, direction: "right", className: "cm-pin" }).addTo(map);
     // a label hidden by the declutter comes back while the pin is hovered/tapped
@@ -937,7 +937,7 @@ function drawCourseMap(id, course) {
       pin(m.lat, m.lon, m.name + (m.rounding && m.rounding !== "none" ? " · " + m.rounding : ""), "#2f9bff");
     }
   });
-  const fp = ((course.finish || {}).points || []).filter((p) => p && p.lat != null);
+  const fp = ((course.finish || {}).points || []).filter((p) => p && p.lat != null && p.lon != null);
   if (fp.length === 2) L.polyline([[fp[0].lat, fp[0].lon], [fp[1].lat, fp[1].lon]], { color: "#f5c451", weight: 3 }).addTo(map);
   fp.forEach((p, k) => pin(p.lat, p.lon, k === 0 ? "Finish" : "Finish (2)", "#f5c451", k === 0 ? 1 : 3));
   // Declutter: in priority order (start, finish, marks in course order, 2nd finish/gate points) each
