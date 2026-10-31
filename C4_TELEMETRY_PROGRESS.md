@@ -37,9 +37,9 @@ Deletion from the boat is allowed only *after* an off-boat copy is sha256-verifi
 
 - **Grill fixes merged (dev @ 0cf46d7, `make ci` 69/69, Lab rebuilt):** #112 (#74 unsaved-edits bar + preserve-on-save fix),
   #115 (#87 Monitor map labels, #89 Polar danger banner), #116 (#90/#92/#93/#94), #114 (#78/#79/#88 finish editor),
-  #118 (#76/#77/#80 console — needs a console rebuild ABOARD), #119 (#83/#85/#86). #117 (#82 Deploy "On the boat")
-  is back with its agent: engine `get_course()` re-persists the active route on every GET (write-on-read) — fix in
-  the engine, so it rides the next engine deploy. Left: #81 + #84 Lab-wide touch targets, #113, the 12 minor bundles.
+  #118 (#76/#77/#80 console — needs a console rebuild ABOARD), #119 (#83/#85/#86). #117 (#82 Deploy "On the boat") MERGED 42343f3 + lab/agent rebuilt;
+  engine `get_course()` no longer re-persists the route on a plain GET; that + engine `GET /playbook` need the next
+  engine deploy aboard, along with #118's console. Live boat check works (both boxes report Mackinac). Left: #81 + #84 Lab-wide touch targets, #113, the 12 minor bundles.
   Gotcha: run `codex-review.sh` one at a time (parallel runs fight over the git lock) and from the MAIN checkout
   (the merge gate looks for `Agent_C4-<sha>.md`).
 
