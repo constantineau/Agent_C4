@@ -35,6 +35,14 @@ Deletion from the boat is allowed only *after* an off-boat copy is sha256-verifi
 - **Orin:** pulled main (bdb84b2), old HEAD tagged `pre-deploy-20261031`, imports ok. Restart needs the
   sudo password → Cole ran it 15:47Z; copilot healthy (engine reachable, LLM reachable, playbook loaded).
 
+- **Grill fixes merged (dev @ 0cf46d7, `make ci` 69/69, Lab rebuilt):** #112 (#74 unsaved-edits bar + preserve-on-save fix),
+  #115 (#87 Monitor map labels, #89 Polar danger banner), #116 (#90/#92/#93/#94), #114 (#78/#79/#88 finish editor),
+  #118 (#76/#77/#80 console — needs a console rebuild ABOARD), #119 (#83/#85/#86). #117 (#82 Deploy "On the boat")
+  is back with its agent: engine `get_course()` re-persists the active route on every GET (write-on-read) — fix in
+  the engine, so it rides the next engine deploy. Left: #81 + #84 Lab-wide touch targets, #113, the 12 minor bundles.
+  Gotcha: run `codex-review.sh` one at a time (parallel runs fight over the git lock) and from the MAIN checkout
+  (the merge gate looks for `Agent_C4-<sha>.md`).
+
 **Next, in order:**
 1. Host ports 8102/8090/8103 now bind localhost + Tailscale (#108 merged, applied live). Lab rebuilt.
 2. #71 + #107 MERGED (dev @ 010e19c). The live Lab still serves the old app.js until the lab container is rebuilt — do it together with the 8103 fix.
