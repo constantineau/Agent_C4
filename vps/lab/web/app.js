@@ -1956,11 +1956,17 @@ function boatPanelInner() {
     if (!last.ok && lastOk) pushes += pushLine(lastOk, "Last complete push:");
   }
 
+  // a failed latest push always warns: the copilot's /health carries no bundle signature, so a
+  // matching Pi playbook can't prove the Orin took the new one too
+  if (last && !last.ok) {
+    const bad = [...new Set((last.steps || []).filter((x) => !x.ok).map((x) => x.target))];
+    warns.push(`The last push did not finish${bad.length ? ` (failed on ${bad.map(esc).join(", ")})` : ""} — the boat may hold a mix of old and new loads. Push again.`);
+  }
+
   // push-record mismatches: the only signal when the boat is unreachable, and the fallback when an
   // older engine can't say exactly which playbook it holds (no signature in its answer)
   if (!(b && b.reachable && epb && epb.signature)) {
     const ref = (last && last.ok) ? last : lastOk;
-    if (last && !last.ok && !(b && b.reachable)) warns.push("The last push did not finish — the boat may hold a mix of old and new loads.");
     if (ref && ref.race_id !== rid) { if (!liveRace) warns.push(`The last complete push was for <b>${esc(ref.race_name || ref.race_id)}</b>, not this race. This race's homework has not gone to the boat.`); }
     else if (lock && ref && ref.playbook_id !== lock.playbook_id) warns.push(`The locked playbook <code>${esc(lock.playbook_id)}</code> has not been pushed successfully. The boat still has <code>${esc(ref.playbook_id || "no playbook")}</code> from ${esc(depAgo(ref.at))}.`);
     else if (lock && ref && ref.at < lock.locked_at) warns.push("You re-locked after the last push. Push again to be sure the boat matches.");
