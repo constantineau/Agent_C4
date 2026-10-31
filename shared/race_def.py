@@ -236,7 +236,7 @@ def validate(d: dict) -> tuple[list, list]:
                           f"{div.get('course_ref')!r}")
     for c in d.get("courses", []):
         fin = c.get("finish")
-        if not fin:
+        if fin is None:
             warnings.append(f"course {c.get('id')!r} has no finish defined")
         elif not isinstance(fin, dict) or not isinstance(fin.get("points", []), (list, type(None))):
             errors.append(f"course {c.get('id')!r}: finish is malformed (want {{points: [...]}})")

@@ -46,7 +46,9 @@ for label, fin in [("string lat", {"points": [{"lat": "45.8", "lon": -84.6}]}),
                    ("points not a list", {"points": "nope"}),
                    ("points an empty object", {"points": {}}),
                    ("points an object", {"points": {"a": 1}}),
-                   ("finish not a dict", "line")]:
+                   ("finish not a dict", "line"),
+                   ("finish an empty list", []),
+                   ("finish false", False)]:
     d = copy.deepcopy(base); d["courses"][0]["finish"] = fin
     try:
         errs, _ = race_def.validate(d)
