@@ -705,7 +705,9 @@ async function optLoadStartDefault() {
   } catch (e) { /* label falls back to the generic line */ }
 }
 function optStartNote() {
-  const sd = Opt.startDefault, tz = optTz();
+  const sd = Opt.startDefault ? Object.assign({}, Opt.startDefault) : null, tz = optTz();
+  // the screen can sit open past the gun — the server then routes from now, so say that
+  if (sd && sd.source === "race_start" && sd.race_start.epoch <= Date.now() / 1000) sd.source = "now_passed";
   if ((Opt.start || "").trim())
     return "Routes from the time you picked. Clear it to route from "
       + (!sd || sd.source === "race_start" ? "the race start." : "now.");
