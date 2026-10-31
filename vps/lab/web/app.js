@@ -181,7 +181,10 @@ function discardEdits() {
 async function confirmLeave() {
   if (!editDirty()) return true;
   const choice = await askUnsaved();
-  if (choice === "save") return (await EDIT_SAVE[activeSec]()) === true;
+  if (choice === "save") {
+    if ((await EDIT_SAVE[activeSec]()) !== true) return false;
+    return editDirty() ? confirmLeave() : true;   // edited again while the save ran → ask again
+  }
   if (choice === "discard") { discardEdits(); return true; }
   return false;
 }
@@ -394,9 +397,14 @@ async function saveDraft() {
   try {
     const r = await (await apiPost("/api/races", { definition: JSON.parse(sent) })).json();
     if (!r.saved) { alert("Save failed: " + (r.detail || "unknown")); return false; }
+    const base = JSON.parse(sent);
+    if (Lab.editDef === ed) { ed.race_id = r.race_id; base.race_id = r.race_id; }   // now a library race
     Lab.races = null; Lab.sel = r.race_id; Lab.draft = null; Lab.sources = []; Lab.isDraft = false;
-    markSaved(sent, ed);
-    if (activeSec === "races") renderRaces();
+    markSaved(JSON.stringify(base), ed);
+    if (activeSec === "races") {
+      // edited again while the save ran → keep those edits on screen instead of reloading over them
+      if (editDirty()) { paintDetail(); refreshRaceList(); } else renderRaces();
+    }
     return true;
   } catch (e) { alert("Save failed."); return false; }
 }
