@@ -1332,29 +1332,35 @@ async function saveBoatModel() {
       main_reefs: { r1_tws_kn: isNaN(r1) ? null : r1, r1_a3_slot_tws_kn: isNaN(slot) ? null : slot } };
   }
   bmMsg("Saving…");
-  const post = (path, body) => queueDef(() => apiPost(path, body).then((r) => r.json()));
-  const clean = Object.assign({}, was);   // what the server holds so far
-  try {
-    if (jib) {
-      if (!(await post("/api/boats/jib-crossovers", jib)).saved) throw new Error("jib change-downs not saved");
-      BM_JIB.forEach((k) => { clean[k] = f[k]; });
+  // The whole save — posts, the refetch and the new baseline — is ONE queued step, so leaving the tab
+  // or Discard (both wait out the queue) can't run between the save and its baseline update.
+  const ok = await queueDef(async () => {
+    const post = async (path, body) => (await apiPost(path, body)).json();
+    const clean = Object.assign({}, was);   // what the server holds so far
+    try {
+      if (jib) {
+        if (!(await post("/api/boats/jib-crossovers", jib)).saved) throw new Error("jib change-downs not saved");
+        BM_JIB.forEach((k) => { clean[k] = f[k]; });
+      }
+      if (sc) {
+        if (!(await post("/api/boats/sail-config", sc)).saved) throw new Error("sail config not saved");
+        BM_SC.forEach((k) => { clean[k] = f[k]; });
+      }
+    } catch (e) {
+      Opt.bmClean = JSON.stringify(clean);   // a section that did save is no longer dirty
+      syncDirty(); bmMsg("Save failed — " + e.message, true);
+      return false;
     }
-    if (sc) {
-      if (!(await post("/api/boats/sail-config", sc)).saved) throw new Error("sail config not saved");
-      BM_SC.forEach((k) => { clean[k] = f[k]; });
-    }
-  } catch (e) {
-    Opt.bmClean = JSON.stringify(clean);   // a section that did save is no longer dirty
-    syncDirty(); bmMsg("Save failed — " + e.message, true);
-    return false;
-  }
-  let fresh = null;
-  try { fresh = await (await apiGet("/api/crossovers")).json(); } catch (e) {}
-  if (fresh && fresh.crossovers) {
-    Opt.boatModel = fresh;   // the bars + chart redraw from what the server now has
-    if (JSON.stringify(Opt.bmEdit) === sent) { Opt.bmEdit = bmFormFrom(fresh); Opt.bmClean = JSON.stringify(Opt.bmEdit); }
-    else Opt.bmClean = sent;   // edited again while the save ran → those edits stay unsaved
-  } else Opt.bmClean = sent;
+    let fresh = null;
+    try { fresh = await (await apiGet("/api/crossovers")).json(); } catch (e) {}
+    if (fresh && fresh.crossovers) {
+      Opt.boatModel = fresh;   // the bars + chart redraw from what the server now has
+      if (JSON.stringify(Opt.bmEdit) === sent) { Opt.bmEdit = bmFormFrom(fresh); Opt.bmClean = JSON.stringify(Opt.bmEdit); }
+      else Opt.bmClean = sent;   // edited again while the save ran → those edits stay unsaved
+    } else Opt.bmClean = sent;
+    return true;
+  }).catch(() => { bmMsg("Save failed.", true); return false; });
+  if (!ok) return false;
   repaintBoatModel();
   bmMsg("Saved.");
   return true;
