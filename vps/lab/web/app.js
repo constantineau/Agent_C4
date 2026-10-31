@@ -1123,9 +1123,15 @@ function optBoatControls() {
     <span class="muted">${isEnc ? "depth no-go &lt; " + depthFt + " ft (draft + margin)" : "global coastline backstop"}</span>`;
 }
 async function optPickBoat(id) {
+  // the boat-model thresholds save to the ACTIVE boat — settle unsaved ones before it changes
+  if (!(await confirmLeave())) return renderGameplan();   // Stay → repaint puts the picker back
   Opt.activeBoat = id;
   await apiPost("/api/boats/active", { boat_id: id });
-  await reloadBoats(); renderGameplan();
+  await reloadBoats();
+  if (Opt.boatModel) {   // the card shows the new boat's model, not the old one's
+    try { bmLoaded(await (await apiGet("/api/crossovers")).json()); } catch (e) { bmLoaded({ error: String(e) }); }
+  }
+  renderGameplan();
 }
 async function optSetChart(src) {
   Opt.chartSource = src;
@@ -1279,9 +1285,10 @@ function bmFormFrom(m) {
     c0Alo: bmStr(c0.twa_min ?? 55), c0Ahi: bmStr(c0.twa_max ?? 110),
     r1: bmStr(mr.r1_tws_kn), slot: bmStr(mr.r1_a3_slot_tws_kn) };
 }
-// A fresh /api/crossovers: the new baseline. Unsaved edits (if any) are kept on top of it.
+// A fresh /api/crossovers: the new baseline. Unsaved edits (if any) are kept on top of it — but only
+// for the same boat; another boat's model starts clean (its thresholds are not this boat's edits).
 function bmLoaded(m) {
-  const keep = bmDirty();
+  const keep = bmDirty() && !!m && !!Opt.boatModel && m.boat_id === Opt.boatModel.boat_id;
   Opt.boatModel = m;
   const f = m && m.crossovers ? bmFormFrom(m) : null;
   Opt.bmClean = f ? JSON.stringify(f) : null;
