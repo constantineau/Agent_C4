@@ -6,7 +6,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>SR33 Crew Dashboard</title>
-  <link rel="stylesheet" href="dashboard.css?v=fit1031">
+  <link rel="stylesheet" href="dashboard.css?v=maj1031">
 </head>
 <body>
   <!-- ===== top bar ===== -->
@@ -83,8 +83,10 @@
       <span class="det-status" id="detStatus"></span>
     </header>
 
-    <div class="det-gauge" id="detGauge"></div>
-
+    <!-- ONE scrolling body (#77): the gauge used to sit above it, unscrolled, and a tall one
+         (the DATA cross-checks + provenance table) left WHY/CONSIDER a thin strip. The decision
+         text leads, the evidence follows; the checklist and coach windows, whose gauge IS the
+         working list, put it first (.gauge-first, set in populateDetail). -->
     <div class="det-body">
       <div class="slot">
         <span class="slot-lbl">WHY</span>
@@ -98,6 +100,7 @@
         <span class="slot-lbl">CLEARS WHEN</span>
         <p class="slot-txt" id="detClears"></p>
       </div>
+      <div class="det-gauge" id="detGauge"></div>
       <div class="slot">
         <span class="slot-lbl">BASED ON</span>
         <p class="slot-txt based" id="detBased"></p>
@@ -111,6 +114,7 @@
   </section>
 
   <script src="/sun.js"></script>
-  <script src="dashboard.js?v=fit1031"></script>
+  <script src="crewwatch.js?v=maj1031"></script>
+  <script src="dashboard.js?v=maj1031"></script>
 </body>
 </html>

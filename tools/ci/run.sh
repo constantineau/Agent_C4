@@ -37,6 +37,11 @@ run n2kout /repo /repo/pi/n2kout "pi/n2kout/test_n2k.py"
 run agent /repo/pi/orin /repo/pi/orin:/repo/vps/agent:/repo "pi/orin/copilot/eval/test_eval.py" python3 -m copilot.eval.test_eval
 run agent /repo/pi/orin /repo/pi/orin:/repo/vps/agent:/repo "pi/orin/copilot/test_collision_watch.py" python3 -m copilot.test_collision_watch
 for f in vps/agent/test_*.py; do run agent /repo /repo/vps/agent:/repo:/repo/pi/archiver "$f"; done
+# The console's pure JS modules (no build step, no npm deps): plain node, pinned major.
+docker image inspect node:22-alpine >/dev/null 2>&1 || docker pull -q node:22-alpine >/dev/null \
+  || { echo "PULL FAILED: node:22-alpine"; exit 1; }
+docker tag node:22-alpine sr33-ci-node
+run node /repo /repo "pi/console/test_crewwatch.js" node /repo/pi/console/test_crewwatch.js
 # The lab reads its data from the image's /srv layout (races, boats, polars), built from this tree.
 for f in vps/lab/test_*.py; do run lab /srv /srv "$f"; done
 
