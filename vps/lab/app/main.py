@@ -1352,6 +1352,15 @@ async def deploy_push(body: dict):
     return res
 
 
+@app.get("/api/deploy/boat")
+async def deploy_boat():
+    """What is on the boat: the last push the Lab recorded + a live read-only check of what the Pi
+    engine and Orin copilot have loaded right now (Tailscale GETs; `reachable: false` when the boat
+    is off the line)."""
+    live = await run_in_threadpool(deploy.boat_status)
+    return {"last_push": deploy.last_push(), "boat": live}
+
+
 @app.get("/api/deploy/package/{race_id}/download")
 async def deploy_package(race_id: str, course_id: str = None):
     """The combined homework package (ready-to-POST course_load + fleet_load + iPad checklists)."""

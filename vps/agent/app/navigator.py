@@ -374,9 +374,13 @@ def _marks(route):
 
 
 def get_course(route: str = None):
-    """The course marks + per-leg bearing/distance (for the plot). Sets the active route."""
-    route = route or active_route()
-    set_active(route)
+    """The course marks + per-leg bearing/distance (for the plot). An explicit `route` also makes
+    it the active route (the route picker); a plain read never writes — re-persisting the route it
+    just read could undo a course load that switched routes in between (#82 review)."""
+    if route:
+        set_active(route)
+    else:
+        route = active_route()
     marks = _marks(route)
     legs = []
     for a, b in zip(marks, marks[1:]):

@@ -264,6 +264,13 @@ def playbook_load(body: dict):
             "recommended": bundle.get("recommended")}
 
 
+@app.get("/playbook")
+def playbook_status():
+    """Which playbook is aboard (race, bundle id, variants/plays, signature prefix) — read-only,
+    no geometry. The Lab's Deploy tab polls it to show what the boat actually holds."""
+    return deviation.playbook_summary(deviation._load_playbook())
+
+
 @app.get("/playbook/track")
 def playbook_track(variant: str | None = None):
     """The loaded playbook's optimizer route — the ACTIVE variant's frozen `route.path` points —
