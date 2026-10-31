@@ -1337,11 +1337,12 @@ async def deploy_package(race_id: str, course_id: str = None):
 @app.post("/api/races")
 async def save_race(body: dict):
     """Save a (human-reviewed) RaceDefinition to the library. Errors don't block saving a draft —
-    they're surfaced so the team finishes review — but a race_id is required."""
+    they're surfaced so the team finishes review — but a race_id is required. `{"draft": true}` marks
+    a freshly extracted (re-)ingest draft: its empty prep fields don't wipe the stored ones."""
     definition = (body or {}).get("definition") or body
     if not definition.get("race_id"):
         return JSONResponse({"detail": "definition.race_id required"}, status_code=400)
-    rid = _write_race(definition)
+    rid = _write_race(definition, draft=bool((body or {}).get("draft")))
     errors, warnings = race_def.validate(definition)
     return {"saved": True, "race_id": rid, "errors": errors, "warnings": warnings,
             "reviewed": bool(definition.get("reviewed"))}
@@ -1353,12 +1354,28 @@ _PRESERVE_ON_SAVE = ("fleet", "own", "division_starts", "tracker", "learnings_no
                      "watch_plan")
 
 
-def _write_race(definition):
+def _prep_empty(key, value):
+    """True when a draft's value for a preserved field carries nothing (the extractor emits `fleet: []`,
+    and the review form gives every race an empty two-team watch-plan skeleton)."""
+    if not value:
+        return True
+    if key == "watch_plan" and isinstance(value, dict):
+        teams = (value.get("teams") or {}).values()
+        return not value.get("blocks") and not any((t or {}).get("members") for t in teams)
+    return False
+
+
+def _write_race(definition, draft=False):
+    """Persist a RaceDefinition. A preserved field is restored from the stored copy when the save
+    omits the key, or — for a re-ingest `draft` only — sends it empty. An ordinary save that sends
+    an empty value (the user cleared the notes / emptied the roster) is stored as sent."""
     rid = re.sub(r"[^a-z0-9_-]", "", str(definition.get("race_id", "")).lower())
     prior = store.get_race(rid)
     if prior:
         for k in _PRESERVE_ON_SAVE:
-            if not definition.get(k) and prior.get(k):
+            if not prior.get(k):
+                continue
+            if k not in definition or (draft and _prep_empty(k, definition[k])):
                 definition[k] = prior[k]
     os.makedirs(INGESTED_DIR, exist_ok=True)
     with open(os.path.join(INGESTED_DIR, f"{rid}.json"), "w") as f:

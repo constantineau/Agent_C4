@@ -413,7 +413,9 @@ async function saveDraft() {
   if (!Lab.editDef) return false;
   const sent = JSON.stringify(Lab.editDef), ed = Lab.editDef;
   try {
-    const r = await postDef("/api/races", { definition: JSON.parse(sent) });
+    // draft: true → the server keeps the stored prep fields (roster, notes, watch plan…) that a
+    // fresh extraction sends empty; an ordinary save stores exactly what it sends.
+    const r = await postDef("/api/races", { definition: JSON.parse(sent), draft: true });
     if (!r.saved) { alert("Save failed: " + (r.detail || "unknown")); return false; }
     Lab.races = null;
     if (Lab.editDef !== ed) { refreshRaceList(); return true; }   // draft discarded/replaced mid-save
