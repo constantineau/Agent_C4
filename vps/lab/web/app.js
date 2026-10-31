@@ -1829,13 +1829,17 @@ async function renderDeploy() {
 
 // Live read of what the boat has loaded (read-only GETs over the Lab's Tailscale line). Slow when
 // the boat is off the line (a few seconds of timeout), so it paints after the rest of the tab.
+let depBoatSeq = 0;
 async function depCheckBoat() {
+  const seq = ++depBoatSeq;       // a slow older check must not overwrite a newer one (e.g. post-push)
   Dep.boatBusy = true; depPaintBoat();
+  let boat;
   try {
     const res = await apiGet("/api/deploy/boat");
-    Dep.boat = res.ok ? await res.json() : { error: "check failed (" + res.status + ")" };
-  } catch (e) { Dep.boat = { error: e.message }; }
-  Dep.boatBusy = false;
+    boat = res.ok ? await res.json() : { error: "check failed (" + res.status + ")" };
+  } catch (e) { boat = { error: e.message }; }
+  if (seq !== depBoatSeq) return;
+  Dep.boat = boat; Dep.boatBusy = false;
   if (!stale("deploy")) depPaintBoat();
 }
 
@@ -1949,7 +1953,7 @@ function boatPanelInner() {
   if (!last) pushes = `<div class="muted" style="margin-top:6px">No push recorded by the Lab. Whatever is aboard was loaded by hand or before push history was kept.</div>`;
   else {
     pushes = pushLine(last, "Last push:");
-    if (!last.ok && lastOk && lastOk.at !== last.at) pushes += pushLine(lastOk, "Last complete push:");
+    if (!last.ok && lastOk) pushes += pushLine(lastOk, "Last complete push:");
   }
 
   // push-record mismatches: the only signal when the boat is unreachable, and the fallback when an

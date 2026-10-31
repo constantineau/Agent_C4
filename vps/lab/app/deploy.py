@@ -130,10 +130,7 @@ def record_push(res, race_name=None, signature=None, now=None):
 def last_push() -> dict:
     """{last, last_ok} — the latest push attempt and the latest fully successful one (either may be
     None; they are the same record when the latest attempt succeeded)."""
-    last, last_ok = labstate.get(_PUSH_LAST), labstate.get(_PUSH_LAST_OK)
-    if last and last_ok and last.get("at") == last_ok.get("at"):
-        last_ok = last
-    return {"last": last, "last_ok": last_ok}
+    return {"last": labstate.get(_PUSH_LAST), "last_ok": labstate.get(_PUSH_LAST_OK)}
 
 
 def _get_json(url, timeout=4):

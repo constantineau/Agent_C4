@@ -63,6 +63,11 @@ check("per-step ok kept", [s["ok"] for s in lp["last"]["steps"]] == [True] * 4
 check("stored detail is trimmed to scalars (no echoed objects)",
       "echo" not in lp["last"]["steps"][2]["detail"] and lp["last"]["steps"][2]["detail"]["variants"] == 1)
 check("a full success is also the last complete push", lp["last_ok"] == lp["last"])
+# a failure in the SAME second as the success must still not hide it
+same = D.record_push({"race_id": "r1", "playbook_id": "r1__100", "pushed_playbook": True, "ok": False,
+                      "steps": []}, now=lp["last"]["at"])
+lp2 = D.last_push()
+check("same-second failure keeps the success as last_ok", lp2["last"]["ok"] is False and lp2["last_ok"]["ok"])
 first_at = lp["last"]["at"]
 
 # a later push that fails part-way (boat off the line) must not erase the last good one
