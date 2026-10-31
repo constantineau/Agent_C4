@@ -437,9 +437,12 @@ async function saveDraft() {
       Lab.editDef = stored;
       if (changed) clean = storedJSON;
     } else {
-      ed.race_id = r.race_id;
-      const base = JSON.parse(sent); base.race_id = r.race_id;
-      clean = JSON.stringify(base);
+      // Saved, but the stored copy didn't come back: stay a draft (its empty roster/notes would
+      // otherwise read as real values, and the next ordinary save would clear the stored ones).
+      ed.race_id = r.race_id; Lab.sel = r.race_id; refreshRaceList();
+      const m = document.getElementById("ingMsg");
+      if (m) { m.textContent = "Saved, but the stored copy couldn't be reloaded — click Save again."; m.style.color = "var(--warn)"; }
+      return false;
     }
     Lab.sel = r.race_id; Lab.draft = null; Lab.sources = []; Lab.isDraft = false;
     Lab.editVal = { errors: r.errors || [], warnings: r.warnings || [] };
