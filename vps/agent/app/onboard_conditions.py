@@ -100,7 +100,7 @@ def get_current_conditions(max_age_minutes: int = 5):
         vals = [x["value"] for x in c["readings"]]
         c["freshest_age_s"] = min(x["age_s"] for x in c["readings"])
         if len(vals) > 1:
-            c["spread"] = round(max(vals) - min(vals), 3)
+            c["spread"] = round(units.channel_spread(ch, vals), 3)   # circular for angles (#47)
             c["disagreement"] = c["spread"] > DISAGREE.get(c["unit"], 1e9)
         best, reason, fell_back = _choose_preferred(ch, c["readings"])
         c["preferred"] = {"source": best["source"], "value": best["value"],

@@ -74,5 +74,29 @@ check("12 kn / 324° reads the same bucket as 36°", n324 == n36)
 check("12 kn / −36° reads the same bucket as 36°", nm36 == n36)
 check("…and that bucket is a beat, not a run", n36 and n36["twa"] < 90)
 
+print("source disagreement on TWA is the shortest arc (signed TWA at a dead run)")
+check("179° vs −179° spread is 2°", near(units.channel_spread("twa", [179, -179]), 2))
+check("heading 359° vs 1° spread is 2°", near(units.channel_spread("heading_true", [359, 1]), 2))
+check("non-angle channel stays max − min", near(units.channel_spread("tws", [10, 12.5]), 2.5))
+
+import time as _time                                   # noqa: E402
+from app import datasource                            # noqa: E402
+
+
+class _Readings:
+    def latest_per_source(self, paths, max_age_minutes):
+        now = _time.time()
+        return [{"path": "environment.wind.angleTrueWater", "source": "a.1",
+                 "value": math.radians(179), "epoch": now},
+                {"path": "environment.wind.angleTrueWater", "source": "b.2",
+                 "value": math.radians(181), "epoch": now}]
+
+
+datasource.active = lambda: _Readings()
+cc = onboard_conditions.get_current_conditions()
+tw = cc["channels"]["twa"]
+check("onboard: two sensors 2° apart at a dead run → spread 2°", near(tw["spread"], 2, 1e-3))
+check("onboard: …and no disagreement flag", tw["disagreement"] is False)
+
 print("\nALL OK" if ok else "\nSOME CHECKS FAILED")
 sys.exit(0 if ok else 1)

@@ -58,3 +58,18 @@ def fold_twa(deg):
 def rad_to_signed_twa_deg(v):
     """Signal K's angleTrueWater (radians, any wrap) → signed degrees, [−180, 180)."""
     return None if v is None else signed_twa(v * RAD_TO_DEG)
+
+
+# Channels that are compass/wind ANGLES: their spread across sources is the shortest arc, not
+# max − min (signed TWA at a dead run reads 179° and −179° — 2° apart, not 358°).
+CIRCULAR_CHANNELS = frozenset({"twa", "awa", "twd", "cog", "heading_true", "heading_mag"})
+
+
+def angle_spread(vals):
+    """Largest shortest-arc separation (deg) between any two angles in `vals`."""
+    return max((abs(((a - b + 180.0) % 360.0) - 180.0) for a in vals for b in vals), default=0.0)
+
+
+def channel_spread(channel, vals):
+    """Spread of redundant sources' readings on one channel, circular where the channel is."""
+    return angle_spread(vals) if channel in CIRCULAR_CHANNELS else max(vals) - min(vals)
