@@ -16,6 +16,8 @@ abstracted here.
 """
 import os
 
+from shared import units
+
 # CloudSource needs the TimescaleDB pool; OnboardSource (Pi) does not — and the onboard image
 # ships no psycopg. Guard the import so `DATA_SOURCE=onboard` can run without a Postgres driver.
 # In the cloud, psycopg is present and behavior is identical to a direct import.
@@ -84,7 +86,7 @@ class CloudSource:
             row = conn.execute(
                 "SELECT tws, twa, target_stw, target_vmg, (abs(tws-%s)+abs(twa-%s)) AS dist "
                 "FROM polars WHERE boat_id=%s ORDER BY dist LIMIT 1",
-                (tws, abs(twa), BOAT_ID),
+                (tws, units.fold_twa(twa), BOAT_ID),   # 0–360 → 0–180 (#47)
             ).fetchone()
         return dict(row) if row else None
 
