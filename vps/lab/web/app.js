@@ -172,11 +172,12 @@ function markSaved(snap, ed) { if (Lab.editDef === ed) markClean(snap); }
 // Every RaceDefinition write goes through one queue: two overlapping saves (bar + in-page button)
 // then persist and resolve in the order they were sent, so the last baseline set is what's on disk.
 let saveChain = Promise.resolve();
-function postDef(path, body) {
-  const p = saveChain.then(() => apiPost(path, body)).then((r) => r.json());
+function queueDef(fn) {
+  const p = saveChain.then(fn);
   saveChain = p.catch(() => {});
   return p;
 }
+const postDef = (path, body) => queueDef(() => apiPost(path, body).then((r) => r.json()));
 // Wait out any save still in flight (and its handler's repaint) before leaving or discarding, so a
 // late response can't repaint another tab or persist edits the user just threw away.
 async function settleSaves() {
@@ -416,15 +417,29 @@ async function saveDraft() {
     if (!r.saved) { alert("Save failed: " + (r.detail || "unknown")); return false; }
     Lab.races = null;
     if (Lab.editDef !== ed) { refreshRaceList(); return true; }   // draft discarded/replaced mid-save
+    // Re-read what the server stored: a re-ingest keeps fields the draft lacks (fleet, notes…). Queued
+    // like a save, so leaving the tab waits for it and it can't land on another tab's edits.
+    let stored = null;
+    try { stored = await queueDef(() => apiGet("/api/races/" + encodeURIComponent(r.race_id)).then((x) => x.json())); }
+    catch (e) {}
+    if (Lab.editDef !== ed) { refreshRaceList(); return true; }
     const base = JSON.parse(sent);
-    ed.race_id = base.race_id = r.race_id;   // now a library race
+    base.race_id = r.race_id;
+    if (stored && stored.race_id === r.race_id) {
+      if (JSON.stringify(ed) === sent) Lab.editDef = stored;   // untouched since Save → take the stored copy
+      else {   // edited while saving → keep those edits, add the server-kept fields underneath
+        ed.race_id = r.race_id;
+        for (const k of Object.keys(stored)) if (!(k in ed)) { ed[k] = stored[k]; base[k] = stored[k]; }
+      }
+    } else ed.race_id = r.race_id;
     Lab.sel = r.race_id; Lab.draft = null; Lab.sources = []; Lab.isDraft = false;
-    markClean(JSON.stringify(base));
+    const fresh = Lab.editDef === stored;
+    if (!fresh) markClean(JSON.stringify(base));
     Lab.editVal = { errors: r.errors || [], warnings: r.warnings || [] };
-    // Repaint from memory, never reload: a late reload could land on another tab's edits, and any
-    // edit typed while the save ran stays on screen (still dirty).
+    if (activeSec === "races") paintDetail();
+    if (fresh) markClean();   // after the paint, as loadRace does (detailWatchCard fills watch_plan)
     if (activeSec === "races") {
-      paintDetail(); renderSources();
+      renderSources();
       const m = document.getElementById("ingMsg"); if (m) { m.textContent = "✓ Saved to the library."; m.style.color = "var(--accent2)"; }
     }
     refreshRaceList();
