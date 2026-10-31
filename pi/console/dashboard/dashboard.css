@@ -369,16 +369,18 @@ body {
 /* PORTRAIT iPad (820x1180, 1024x1366): four tile columns plus the copilot column left each
    tile ~125px wide, so names went to "T…" and values to "J1 → S" (#73). Portrait has height to
    spare instead: two tile columns of four rows (same reading order, row by row), the copilot as
-   a strip under the grid, and the value allowed up to 40px in the wider tiles. */
+   a strip under the grid, and the value allowed up to 40px in the wider tiles.
+   Every height here is FIXED, never content-sized: equal rows and a fixed-height copilot strip,
+   so a fleet row or a coach line appearing never shifts a tile (docs/COPILOT_DASHBOARD.md §1).
+   A long table that doesn't fit is cut at the tile's foot; tap the tile for all of it. */
 @media (orientation:portrait) {
-  .dash { grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(0,1fr) auto; }
-  .grid { grid-template-columns:repeat(2,minmax(0,1fr)); grid-template-rows:repeat(4,minmax(0,auto)); }
-  .commentary { max-height:20vh; }
+  .dash { grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(0,1fr) 20vh; }
+  .grid { grid-template-columns:repeat(2,minmax(0,1fr)); grid-template-rows:repeat(4,minmax(0,1fr)); }
   .t-val { font-size:clamp(28px, 11cqi, 40px); }
   .tile.mini .t-val { font-size:28px; }
 }
 /* portrait / narrow fallback so it never breaks on an odd viewport */
-@media (max-width:760px) { .dash { grid-template-columns:1fr; } .commentary { display:none; } }
+@media (max-width:760px) { .dash { grid-template-columns:1fr; grid-template-rows:minmax(0,1fr); } .commentary { display:none; } }
 
 /* ---- Phase-D armed plays (Strategy strip) + the crew gear toggle ---- */
 /* the strategy stack now renders inside the PLAYBOOK tile's tap-detail */
@@ -457,7 +459,7 @@ body {
   cursor:pointer; background:transparent; color:inherit; border:1px solid var(--line); }
 /* tile-face TWS trend (last 3.5 h, 30-min grid) + the direction-arrow strip under it */
 /* the chart scales with its width, so in a wide portrait tile it is capped or it eats the tile */
-.tt-wrap { margin:6px 0 2px; max-width:300px; }
+.tt-wrap { margin:6px 0 2px; max-width:240px; }
 .tt-arrows { display:flex; justify-content:space-between; padding-left:22px; padding-right:6px;
   margin-top:1px; }
 .tt-a { width:16px; height:16px; display:inline-flex; align-items:center; justify-content:center; }
