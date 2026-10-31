@@ -21,7 +21,7 @@ Deletion from the boat is allowed only *after* an off-boat copy is sha256-verifi
   the main checkout before merging if the gate wants `Agent_C4-<sha>`.
 
 **Next, in order:**
-1. **Cole: one open question in the private notes (L2)** — a host-port exposure that skips nginx.
+1. Host ports 8102/8090/8103 now bind localhost + Tailscale (#108 merged, applied live). Lab rebuilt.
 2. #71 + #107 MERGED (dev @ 010e19c). The live Lab still serves the old app.js until the lab container is rebuilt — do it together with the 8103 fix.
 3. Work the grill map: blockers #73–#75 first, plus #47 (red "change now" all race in the replay).
 4. Then the old queue: Debrief session 3 shows as a race; #55; ruff.
