@@ -397,10 +397,12 @@ async function saveDraft() {
   try {
     const r = await (await apiPost("/api/races", { definition: JSON.parse(sent) })).json();
     if (!r.saved) { alert("Save failed: " + (r.detail || "unknown")); return false; }
+    Lab.races = null;
+    if (Lab.editDef !== ed) { refreshRaceList(); return true; }   // draft discarded/replaced mid-save
     const base = JSON.parse(sent);
-    if (Lab.editDef === ed) { ed.race_id = r.race_id; base.race_id = r.race_id; }   // now a library race
-    Lab.races = null; Lab.sel = r.race_id; Lab.draft = null; Lab.sources = []; Lab.isDraft = false;
-    markSaved(JSON.stringify(base), ed);
+    ed.race_id = base.race_id = r.race_id;   // now a library race
+    Lab.sel = r.race_id; Lab.draft = null; Lab.sources = []; Lab.isDraft = false;
+    markClean(JSON.stringify(base));
     if (activeSec === "races") {
       // edited again while the save ran → keep those edits on screen instead of reloading over them
       if (editDirty()) { paintDetail(); refreshRaceList(); } else renderRaces();
@@ -1911,16 +1913,18 @@ async function renderFleet() {
   }
   if (!Lab.sel && Lab.races.length) Lab.sel = Lab.races[0].race_id;
   if (!Lab.sel) { view.innerHTML = '<div class="placeholder">No race — ingest one in the Races tab.</div>'; return; }
+  let fetched = false;
   if (!Lab.editDef || Lab.editDef.race_id !== Lab.sel) {
     view.innerHTML = '<div class="loading">Loading fleet…</div>';
-    try { Lab.editDef = await (await apiGet("/api/races/" + encodeURIComponent(Lab.sel))).json(); Lab.fleetMsg = ""; }
+    try { Lab.editDef = await (await apiGet("/api/races/" + encodeURIComponent(Lab.sel))).json(); Lab.fleetMsg = ""; fetched = true; }
     catch (e) { view.innerHTML = '<div class="placeholder">Failed to load.</div>'; return; }
   }
   if (stale("fleet")) return;
+  const keepDirty = !fetched && editDirty();   // re-entered with unsaved edits → don't bless them
   if (!Array.isArray(Lab.editDef.fleet)) Lab.editDef.fleet = [];
   if (!Lab.editDef.own || typeof Lab.editDef.own !== "object") Lab.editDef.own = {};
   Lab.fleetEdit = !Lab.editDef.fleet.length;   // empty roster → open the editor; populated → show the read-only view
-  markClean();                            // freshly loaded from disk = in sync
+  if (!keepDirty) markClean();            // freshly loaded from disk = in sync
   paintFleet();
 }
 
@@ -2216,19 +2220,21 @@ async function renderRules() {
   }
   if (!Lab.sel && Lab.races.length) Lab.sel = Lab.races[0].race_id;
   if (!Lab.sel) { view.innerHTML = '<div class="placeholder">No race — ingest one in the Races tab.</div>'; return; }
+  let fetched = false;
   if (!Lab.editDef || Lab.editDef.race_id !== Lab.sel) {
     view.innerHTML = '<div class="loading">Loading checklist…</div>';
-    try { Lab.editDef = await (await apiGet("/api/races/" + encodeURIComponent(Lab.sel))).json(); }
+    try { Lab.editDef = await (await apiGet("/api/races/" + encodeURIComponent(Lab.sel))).json(); fetched = true; }
     catch (e) { view.innerHTML = '<div class="placeholder">Failed to load.</div>'; return; }
   }
   try { Lab.checked = (await (await apiGet("/api/checklist?race_id=" + encodeURIComponent(Lab.sel))).json()).checked || {}; }
   catch (e) { Lab.checked = {}; }
   if (stale("rules")) return;
+  const keepDirty = !fetched && editDirty();   // re-entered with unsaved edits → don't bless them
   if (!Lab.editDef.rules_profile || typeof Lab.editDef.rules_profile !== "object") Lab.editDef.rules_profile = {};
   if (!Array.isArray(Lab.editDef.rules_profile.modifications)) Lab.editDef.rules_profile.modifications = [];
   if (!Lab.editDef.rules_profile.scoring) Lab.editDef.rules_profile.scoring = {};
   if (!Array.isArray(Lab.editDef.requirements)) Lab.editDef.requirements = [];
-  markClean();   // after the shape fill-ins above, so they don't read as edits
+  if (!keepDirty) markClean();   // after the shape fill-ins above, so they don't read as edits
   paintRules();
 }
 
@@ -2902,12 +2908,14 @@ async function renderLearnings() {
     if (!Lab.races) Lab.races = (await (await apiGet("/api/races")).json()).races || [];
   } catch (e) { view.innerHTML = '<div class="placeholder">Failed to load learnings.</div>'; return; }
   if (!Lab.sel && Lab.races.length) Lab.sel = Lab.races[0].race_id;
+  let fetched = false;
   if (Lab.sel && (!Lab.editDef || Lab.editDef.race_id !== Lab.sel)) {
-    try { Lab.editDef = await (await apiGet("/api/races/" + encodeURIComponent(Lab.sel))).json(); } catch (e) {}
+    try { Lab.editDef = await (await apiGet("/api/races/" + encodeURIComponent(Lab.sel))).json(); fetched = true; } catch (e) {}
   }
   await learnReload();
   if (stale("learnings")) return;
-  markClean();
+  // a boat-model save repaints via renderLearnings() — only a fresh load is a clean baseline
+  if (fetched || !editDirty()) markClean();
   paintLearnings();
 }
 
