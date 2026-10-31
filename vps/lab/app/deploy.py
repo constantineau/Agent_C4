@@ -159,7 +159,8 @@ def boat_status(get=None):
     with ThreadPoolExecutor(max_workers=3) as ex:
         f_pb = ex.submit(get, f"{eng}/playbook")
         f_course = ex.submit(get, f"{eng}/course")
-        f_cop = ex.submit(get, f"{cop}/health")
+        # the copilot's /health probes the engine (3 s) and Ollama (up to 8 s) before answering
+        f_cop = ex.submit(get, f"{cop}/health", 14)
         pb_ok, pb = f_pb.result()
         course_ok, course = f_course.result()
         cop_ok, health = f_cop.result()

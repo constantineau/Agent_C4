@@ -1967,8 +1967,9 @@ function boatPanelInner() {
   }
 
   // push-record mismatches: the only signal when the boat is unreachable, and the fallback when an
-  // older engine can't say exactly which playbook it holds (no bundle id in its answer)
-  if (!(b && b.reachable && epb && epb.id)) {
+  // older engine can't say exactly which playbook it holds (no bundle id in its answer), or the
+  // copilot can't be read at all
+  if (!(b && b.reachable && epb && epb.id && cop.reachable)) {
     const ref = (last && last.ok) ? last : lastOk;
     if (ref && ref.race_id !== rid) { if (!liveRace) warns.push(`The last complete push was for <b>${esc(ref.race_name || ref.race_id)}</b>, not this race. This race's homework has not gone to the boat.`); }
     else if (lock && ref && ref.playbook_id === lock.playbook_id && (ref.signature || "") !== (lock.signature || ""))
