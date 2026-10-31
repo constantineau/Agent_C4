@@ -30,6 +30,7 @@ from datetime import datetime, timedelta, timezone
 
 from shared import n2k_sources
 from shared import source_policy
+from shared import units
 
 BOAT_ID = os.environ.get("BOAT_ID", "sr33")
 _MS_TO_KN = 1.943844
@@ -489,8 +490,9 @@ class OnboardSource:
         """Nearest polar bucket by abs(tws-)+abs(twa-): {tws,twa,target_stw,target_vmg} or None."""
         if not self._polars:
             return None
+        a = units.fold_twa(twa)            # the record wraps TWA 0–360: 324° is a 36° beat (#47)
         best = min(self._polars,
-                   key=lambda p: abs(p["tws"] - tws) + abs(p["twa"] - abs(twa)))
+                   key=lambda p: abs(p["tws"] - tws) + abs(p["twa"] - a))
         return {"tws": best["tws"], "twa": best["twa"],
                 "target_stw": best["target_stw"], "target_vmg": best["target_vmg"]}
 

@@ -13,6 +13,8 @@ import json
 import os
 import re
 
+from shared import units
+
 _HERE = os.path.dirname(__file__)
 _GUIDE = os.path.join(_HERE, "..", "knowledge", "sr33_speed_guide.md")
 # The crossover model (same file the Lab reads) carries the per-TWS "toss-up" overlap bands — two sails
@@ -213,6 +215,9 @@ def get_sail_advice(tws: float = None, twa: float = None, hoisted: str = None, b
     key = _nearest_tws(tws)
     rows = _SECTIONS[key]
     zones = _zones(rows)
+    # The record wraps TWA to 0–360 (a port beat at 36° arrives as 324°): take it signed first,
+    # or abs() reads a beat as a run and flags the right jib wrong (#47).
+    twa = units.signed_twa(twa)
     a_twa = abs(twa)
     tack = "port" if twa < 0 else "stbd"
 

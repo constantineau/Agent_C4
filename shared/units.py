@@ -34,3 +34,27 @@ def ms_to_kn(v):
 
 def rad_to_deg(v):
     return None if v is None else v * RAD_TO_DEG
+
+
+# True wind angle. The instruments publish a SIGNED angle (+ starboard, − port), but the record
+# carries it WRAPPED to 0–360, so a port-tack beat at 36° arrives as 324°. Anything that takes
+# abs() of the raw value reads that beat as a 324°→"180°-ish" run (issue #47: the Jul 18 replay
+# called the J1 wrong for the whole race). Normalise once at the read path with these.
+
+def signed_twa(deg):
+    """A TWA in degrees, any wrap, as signed [−180, 180): + starboard, − port. None passes."""
+    if deg is None:
+        return None
+    return ((float(deg) + 180.0) % 360.0) - 180.0
+
+
+def fold_twa(deg):
+    """A TWA in degrees, any wrap, as the polar knows it: 0–180, tack dropped. None passes."""
+    if deg is None:
+        return None
+    return abs(signed_twa(deg))
+
+
+def rad_to_signed_twa_deg(v):
+    """Signal K's angleTrueWater (radians, any wrap) → signed degrees, [−180, 180)."""
+    return None if v is None else signed_twa(v * RAD_TO_DEG)

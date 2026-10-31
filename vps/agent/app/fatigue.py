@@ -27,6 +27,8 @@ import time
 from collections import Counter
 from datetime import datetime, timezone
 
+from shared import units
+
 from . import datasource
 
 BOAT_ID = os.environ.get("BOAT_ID", "sr33")
@@ -195,7 +197,7 @@ def _metrics(chans, lo, hi, maneuvers):
     m["speed_deficit"] = None
     if stwv and twsv and twav:
         tws = sorted(twsv)[len(twsv) // 2]
-        twa = sorted(abs(x) for x in twav)[len(twav) // 2]
+        twa = sorted(units.fold_twa(x) for x in twav)[len(twav) // 2]   # 0–360 → 0–180 (#47)
         tgt = _target_stw(tws, twa)
         if tgt:
             m["speed_deficit"] = max(0.0, 1.0 - (sum(stwv) / len(stwv)) / tgt)

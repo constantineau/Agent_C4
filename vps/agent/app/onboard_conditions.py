@@ -13,6 +13,7 @@ mirror it here.
 import os
 
 from shared import n2k_sources
+from shared import units
 from shared import source_policy
 
 from . import datasource
@@ -40,7 +41,7 @@ PRESENT = {
     "environment.wind.speedApparent":  ("aws", "kn", _ms_to_kn),
     "environment.wind.angleApparent":  ("awa", "°", _rad_to_deg),
     "environment.wind.speedTrue":      ("tws", "kn", _ms_to_kn),
-    "environment.wind.angleTrueWater": ("twa", "°", _rad_to_deg),
+    "environment.wind.angleTrueWater": ("twa", "°", units.rad_to_signed_twa_deg),  # signed, #47
     "environment.wind.directionTrue":  ("twd", "°", _rad_to_deg),
     "environment.depth.belowTransducer": ("depth", "m", _id),
     "environment.water.temperature":   ("water_temp", "°C", _k_to_c),
