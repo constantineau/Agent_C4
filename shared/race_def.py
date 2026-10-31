@@ -217,7 +217,9 @@ def dump(defn: RaceDefinition, path: str) -> None:
 
 
 def _valid_coord(lat, lon) -> bool:
-    return (lat is None or -90 <= lat <= 90) and (lon is None or -180 <= lon <= 180)
+    def ok(v, lim):
+        return v is None or (isinstance(v, (int, float)) and not isinstance(v, bool) and -lim <= v <= lim)
+    return ok(lat, 90) and ok(lon, 180)
 
 
 def validate(d: dict) -> tuple[list, list]:
@@ -236,12 +238,16 @@ def validate(d: dict) -> tuple[list, list]:
         fin = c.get("finish")
         if not fin:
             warnings.append(f"course {c.get('id')!r} has no finish defined")
+        elif not isinstance(fin, dict) or not isinstance(fin.get("points") or [], list):
+            errors.append(f"course {c.get('id')!r}: finish is malformed (want {{points: [...]}})")
         else:
             fpts = fin.get("points") or []
             if len(fpts) > 2:
                 errors.append(f"course {c.get('id')!r}: finish has {len(fpts)} points (1 mark or a 2-point line)")
             for k, p in enumerate(fpts):
-                p = p or {}
+                if not isinstance(p, dict):
+                    errors.append(f"course {c.get('id')!r}: finish point {k + 1} is malformed")
+                    continue
                 if not _valid_coord(p.get("lat"), p.get("lon")):
                     errors.append(f"course {c.get('id')!r}: finish point {k + 1} coord out of range")
                 if p.get("lat") is None or p.get("lon") is None:

@@ -36,5 +36,17 @@ errs, warns = race_def.validate(d)
 check("single-point finish mark is valid", not any("finish" in e for e in errs)
       and not any("finish" in w for w in warns))
 
+# malformed finish data is reported, never raises (a raise here 500s the save and the library list)
+for label, fin in [("string lat", {"points": [{"lat": "45.8", "lon": -84.6}]}),
+                   ("non-dict point", {"points": [42]}),
+                   ("points not a list", {"points": "nope"}),
+                   ("finish not a dict", "line")]:
+    d = copy.deepcopy(base); d["courses"][0]["finish"] = fin
+    try:
+        errs, _ = race_def.validate(d)
+        check(f"malformed finish ({label}) -> error, no raise", any("finish" in e for e in errs))
+    except Exception as e:
+        check(f"malformed finish ({label}) raised {type(e).__name__}", False)
+
 print("ALL OK" if ok else "FAILURES")
 raise SystemExit(0 if ok else 1)
