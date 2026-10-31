@@ -116,11 +116,11 @@ async function route() {
   const target = location.hash || "#races";
   // Leaving a tab with unsaved edits: put the old hash back (replaceState fires no hashchange) and ask
   // first — Save / Discard / Stay — instead of the next renderer silently refetching over them.
-  if (routeHash && target !== routeHash && editDirty()) {
-    if (routeAsking) { history.replaceState(null, "", routeHash); return; }   // Back/Forward under the prompt
+  if (routeAsking) { history.replaceState(null, "", routeHash); return; }   // Back/Forward under the prompt
+  if (routeHash && target !== routeHash) {
     routeAsking = true;
     history.replaceState(null, "", routeHash);
-    const ok = await confirmLeave();
+    const ok = await confirmLeave();   // settles pending saves first; asks only if still dirty
     routeAsking = false;
     if (!ok) { history.replaceState(null, "", routeHash); return; }
     history.replaceState(null, "", target);
@@ -176,6 +176,9 @@ function postDef(path, body) {
   saveChain = p.catch(() => {});
   return p;
 }
+// Wait out any save still in flight (and its handler's repaint) before leaving or discarding, so a
+// late response can't repaint another tab or persist edits the user just threw away.
+async function settleSaves() { await saveChain; await new Promise((r) => setTimeout(r, 0)); }
 function editDirty() {
   if (!EDIT_SAVE[activeSec] || !Lab.editDef) return false;
   return Lab.isDraft || JSON.stringify(Lab.editDef) !== Lab.cleanDef;
@@ -187,6 +190,7 @@ function discardEdits() {
 }
 // → true when it's OK to replace/drop Lab.editDef (clean, saved, or discarded); false = stay put.
 async function confirmLeave() {
+  await settleSaves();
   if (!editDirty()) return true;
   const choice = await askUnsaved();
   if (choice === "save") {
@@ -253,8 +257,9 @@ async function savebarSave() {
   if (ok) flashSavebar("Saved ✓");
   else { document.getElementById("savebarText").textContent = "Save failed — see the message on the page"; }
 }
-function savebarDiscard() {
+async function savebarDiscard() {
   if (!confirm("Discard your unsaved edits?")) return;
+  await settleSaves();
   discardEdits();
   route();   // repaint the tab from the restored (or reloaded) definition
 }
