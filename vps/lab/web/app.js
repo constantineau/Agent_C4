@@ -128,6 +128,7 @@ async function route() {
   routeHash = target;
   const sec = target.slice(1);
   activeSec = sec;
+  syncDirty();   // the bar + markers belong to the tab being entered
   document.querySelectorAll("#tabs a").forEach((a) =>
     a.classList.toggle("active", a.getAttribute("href") === "#" + sec));
   if (sec === "races") return renderRaces();
@@ -164,6 +165,9 @@ function markClean(snap) {
   Lab.cleanDef = snap !== undefined ? snap : (Lab.editDef ? JSON.stringify(Lab.editDef) : null);
   syncDirty();
 }
+// After a save resolves: only re-baseline if the same definition is still in the editor (the user
+// may have switched race or discarded while the request was in flight).
+function markSaved(snap, ed) { if (Lab.editDef === ed) markClean(snap); }
 function editDirty() {
   if (!EDIT_SAVE[activeSec] || !Lab.editDef) return false;
   return Lab.isDraft || JSON.stringify(Lab.editDef) !== Lab.cleanDef;
@@ -386,12 +390,12 @@ async function extractDraft() {
 }
 async function saveDraft() {
   if (!Lab.editDef) return false;
-  const sent = JSON.stringify(Lab.editDef);
+  const sent = JSON.stringify(Lab.editDef), ed = Lab.editDef;
   try {
     const r = await (await apiPost("/api/races", { definition: JSON.parse(sent) })).json();
     if (!r.saved) { alert("Save failed: " + (r.detail || "unknown")); return false; }
     Lab.races = null; Lab.sel = r.race_id; Lab.draft = null; Lab.sources = []; Lab.isDraft = false;
-    markClean(sent);
+    markSaved(sent, ed);
     if (activeSec === "races") renderRaces();
     return true;
   } catch (e) { alert("Save failed."); return false; }
@@ -596,12 +600,12 @@ async function detailSave(silent) {
   const setMsg = (t) => { const m = document.getElementById("detailMsg"); if (m) m.textContent = t; };
   if (btn) btn.disabled = true;
   if (!silent) setMsg("Saving…");
-  const sent = JSON.stringify(Lab.editDef);
+  const sent = JSON.stringify(Lab.editDef), ed = Lab.editDef;
   try {
     const r = await (await apiPost("/api/races", { definition: JSON.parse(sent) })).json();
     if (!r.saved) { setMsg("Save failed: " + (r.detail || "?")); return false; }
     Lab.editVal = { errors: r.errors || [], warnings: r.warnings || [] };
-    Lab.races = null; markClean(sent);
+    Lab.races = null; markSaved(sent, ed);
     if (!silent) {
       paintDetail(); refreshRaceList();
       setMsg(`Saved. ${(r.warnings || []).length} item(s) still flagged for review.`);
@@ -612,18 +616,18 @@ async function detailSave(silent) {
 }
 async function detailApprove(approved) {
   const setMsg = (t) => { const m = document.getElementById("detailMsg"); if (m) m.textContent = t; };
-  const sent = JSON.parse(JSON.stringify(Lab.editDef));
+  const sent = JSON.parse(JSON.stringify(Lab.editDef)), ed = Lab.editDef;
   try {
     const r = await (await apiPost(`/api/races/${encodeURIComponent(sent.race_id)}/approve`,
       { definition: sent, approved })).json();
     if (r.detail) { paintDetail(); setMsg(r.detail); return; }   // e.g. blocked by validation errors
     // approve persists the definition it was sent (+ the sign-off): that is the new clean baseline
-    for (const o of [Lab.editDef, sent]) {
+    for (const o of [ed, sent]) {
       o.reviewed = r.reviewed; o.reviewed_at = r.reviewed_at;
       if (!approved) delete o.reviewed_at;
     }
     Lab.editVal = { errors: r.errors || [], warnings: r.warnings || [] };
-    Lab.races = null; markClean(JSON.stringify(sent));
+    Lab.races = null; markSaved(JSON.stringify(sent), ed);
     paintDetail(); refreshRaceList();
     setMsg(approved ? "Approved — signed off for race use." : "Approval cleared.");
   } catch (e) { setMsg("Approve failed."); }
@@ -768,11 +772,11 @@ async function saveCourse() {
   Lab.editDef.provenance = Lab.editDef.provenance || {};
   Lab.editDef.provenance.review_status =
     "human-reviewed in the Course & Marks tab — verify before race use.";
-  const sent = JSON.stringify(Lab.editDef);
+  const sent = JSON.stringify(Lab.editDef), ed = Lab.editDef;
   try {
     const r = await (await apiPost("/api/races", { definition: JSON.parse(sent) })).json();
     Lab.races = null; ok = !!r.saved;
-    if (ok) markClean(sent);
+    if (ok) markSaved(sent, ed);
     msg.textContent = r.saved ? `Saved. ${(r.warnings || []).length} item(s) still flagged for review.`
       : ("Save failed: " + (r.detail || ""));
   } catch (e) { msg.textContent = "Save failed."; }
@@ -2051,10 +2055,10 @@ async function fleetSave() {
     orc_gph: fleetNum(own.orc_gph), rating: fleetNum(own.rating), mmsi: (own.mmsi || "").trim() };
   Lab.fleetMsg = "Saving…"; Lab.fleetMsgErr = false; paintFleet();
   let ok = false;
-  const sent = JSON.stringify(Lab.editDef);
+  const sent = JSON.stringify(Lab.editDef), ed = Lab.editDef;
   try {
     const r = await (await apiPost("/api/races", { definition: JSON.parse(sent) })).json();
-    if (r.saved) { markClean(sent); ok = true; Lab.fleetMsgErr = false;
+    if (r.saved) { markSaved(sent, ed); ok = true; Lab.fleetMsgErr = false;
       Lab.fleetMsg = `Saved — ${Lab.editDef.fleet.length} boat${Lab.editDef.fleet.length === 1 ? "" : "s"} in the roster.`; }
     else { Lab.fleetMsg = "Save failed."; Lab.fleetMsgErr = true; }
   } catch (e) { Lab.fleetMsg = "Save failed: " + e.message; Lab.fleetMsgErr = true; }
@@ -2247,10 +2251,10 @@ async function checkToggle(id, on) {
 async function rulesSave() {
   const msg = document.getElementById("rulesMsg");
   if (msg) msg.textContent = "Saving…";
-  const sent = JSON.stringify(Lab.editDef);
+  const sent = JSON.stringify(Lab.editDef), ed = Lab.editDef;
   try {
     const r = await (await apiPost("/api/races", { definition: JSON.parse(sent) })).json();
-    if (r.saved) markClean(sent);
+    if (r.saved) markSaved(sent, ed);
     paintRules();
     const m2 = document.getElementById("rulesMsg");
     if (m2) m2.textContent = r.saved ? `Saved · ${(r.errors || []).length} error(s), ${(r.warnings || []).length} warning(s).` : "Save failed.";
@@ -2908,10 +2912,10 @@ async function learnSaveNotes() {
   const ta = document.getElementById("learnNotes");
   if (ta) Lab.editDef.learnings_notes = ta.value;
   const msg = document.getElementById("learnMsg"); if (msg) msg.textContent = "Saving…";
-  const sent = JSON.stringify(Lab.editDef);
+  const sent = JSON.stringify(Lab.editDef), ed = Lab.editDef;
   try {
     const r = await (await apiPost("/api/races", { definition: JSON.parse(sent) })).json();
-    if (r.saved) markClean(sent);
+    if (r.saved) markSaved(sent, ed);
     if (msg) msg.textContent = r.saved ? "Saved." : "Save failed.";
     return !!r.saved;
   } catch (e) { if (msg) msg.textContent = "Save failed: " + e.message; return false; }
