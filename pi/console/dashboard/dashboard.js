@@ -87,6 +87,13 @@
      turning a slow ENGINE response into a blank tile. */
   const HOLD_MS = 30000;          // keep showing the last good reading this long after a poll fails
   const STALE_AFTER_MS = 7000;    // ...and show its age once it is older than ~2 missed polls
+  /* LINK state. An iPad that locks or backgrounds Safari freezes the poll; on wake the Wi-Fi takes
+     a few seconds to rejoin, so the first polls fail and every held value is already past HOLD_MS.
+     That read as "Engine unreachable" with blank tiles even though nothing was wrong. So after a
+     wake, or a fresh poll that got nothing back, say "Reconnecting" and keep the last values (with
+     their age) for a grace window; only call the link lost after LOST_AFTER_MS of silence. */
+  const RECONNECT_GRACE_MS = 20000;
+  const LOST_AFTER_MS = 20000;
 
   /* ---- tiny helpers needed early (used in the demo scenarios) ---- */
   const r0 = (x) => (x == null ? "?" : Math.round(x));
@@ -1035,12 +1042,37 @@
     const reachable = p.conditions || p.navigator || p.sources;
     const notes = flagged.slice(0, 3).map((k) => ({ tile: k, status: tiles[k].status, text: tiles[k].consider || tiles[k].why, conf: "engine" }));
     const held = TILES.filter((k) => tiles[k].staleMs);
-    const focus = !reachable ? "Engine unreachable — no live data." :
+    const link = linkMessage(held.length ? Math.max.apply(null, held.map((k) => tiles[k].staleMs)) : 0);
+    const focus = link ? link.text : !reachable ? "Engine unreachable — no live data." :
       held.length ? "Holding last good values (" + fmtAge(Math.max.apply(null, held.map((k) => tiles[k].staleMs))) + " old) — engine slow to answer." :
       flagged.length === 0 ? "All systems nominal (engine read)." :
       flagged.length === 1 ? "1 item needs attention (engine read)." :
       flagged.length + " items need attention (engine read).";
-    return applyBrief({ tiles, focus, notes, confidence: "engine", mode: "engine read" });
+    const d = applyBrief({ tiles, focus, notes, confidence: "engine", mode: "engine read" });
+    if (link) { d.focus = link.text; d.link = link.state; }    // a link problem outranks the LLM's line
+    return d;
+  }
+  /* null while polls are answering; otherwise what to tell the crew about the link to the Pi */
+  function linkMessage(oldestHeldMs) {
+    if (App.lastPollOk) return null;
+    const now = Date.now();
+    if (!App.lastOkAt) return { state: "reconnecting", text: "Connecting to the boat…" };
+    const silent = now - App.lastOkAt;
+    if (now < App.graceUntil || silent < LOST_AFTER_MS)
+      return { state: "reconnecting", text: "Reconnecting to the boat… showing last values" +
+        (oldestHeldMs ? " (" + fmtAge(oldestHeldMs) + " old)" : "") + "." };
+    return { state: "lost", text: "No link to the boat for " + fmtAge(silent) +
+      " — check the iPad is on the boat Wi-Fi. Still trying every 3 s." };
+  }
+  /* the iPad woke (screen on, Safari back in front, or Wi-Fi back): say so at once and poll now
+     instead of showing the frozen pre-sleep screen until the next 3 s tick */
+  function onWake() {
+    if (App.src !== "live") return;
+    App.graceUntil = Date.now() + RECONNECT_GRACE_MS;
+    if (App.data && App.lastOkAt && Date.now() - App.lastOkAt > STALE_AFTER_MS) {
+      App.data.focus = "Reconnecting to the boat…"; App.data.link = "reconnecting"; render();
+    }
+    poll();
   }
   /* overlay the LLM brief (commentary + grounded status nudges) when it's fresh; otherwise the
      deterministic engine-read commentary stands. The engine values are never touched. */
@@ -1652,7 +1684,7 @@
   function hold(key, val, now) {
     const f = App.fresh[key];
     if (val != null) { App.fresh[key] = { v: val, t: now }; App.ages[key] = 0; return val; }
-    if (f && now - f.t <= HOLD_MS) { App.ages[key] = now - f.t; return f.v; }
+    if (f && (now - f.t <= HOLD_MS || now < App.graceUntil)) { App.ages[key] = now - f.t; return f.v; }
     App.ages[key] = Infinity;
     return null;
   }
@@ -1695,6 +1727,7 @@
     plangap: null, trend: null, briefBusy: {}, gps: null, gpsBusy: false, gpsNote: "",
     checklist: null, chkTimer: null,
     detailStreamKey: null, detailAbort: null,
+    lastOkAt: 0, lastPollOk: false, graceUntil: 0,
   };
   function currentData() {
     if (App.src === "demo") {
@@ -1769,7 +1802,9 @@
   }
   function renderCommentary(d) {
     renderCoach();
-    document.getElementById("commFocus").textContent = d.focus || "—";
+    const focusEl = document.getElementById("commFocus");
+    focusEl.textContent = d.focus || "—";
+    if (d.link) focusEl.dataset.link = d.link; else delete focusEl.dataset.link;
     document.getElementById("commConf").textContent = "conf: " + (d.confidence || "—");
     const pill = document.getElementById("modePill");
     pill.dataset.mode = d.mode === "llm-live" ? "llm" : "engine";
@@ -2322,6 +2357,8 @@
       const ms   = [5000, 5000, 5000, 5000, 5000, 9000, 5000, 6000, 5000];
       const res = await Promise.all(eps.map((e, i) => fetchJSON(e, ms[i])));
       const now = Date.now();
+      App.lastPollOk = res.some((r) => r != null);
+      if (App.lastPollOk) App.lastOkAt = now;
       const p = {}; keys.forEach((k, i) => (p[k] = hold(k, res[i], now)));
       App.watch = p.watch;               // the CREW detail panel + quick actions read it
       App.nav = p.navigator;             // the eta-detail course map reads position live
@@ -2332,6 +2369,9 @@
     } finally { App.polling = false; }
   }
   function startPolling() { poll(); if (!App.pollTimer) App.pollTimer = setInterval(poll, 3000); }
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) onWake(); });
+  window.addEventListener("pageshow", (e) => { if (e.persisted) onWake(); });
+  window.addEventListener("online", onWake);
 
   /* ============================ audio ALERT signal ============================
      Narration is VISUAL — but a screen can't grab the eye when the crew is looking at the water. So a
