@@ -6,6 +6,7 @@ sends an empty value — the user cleared the notes or emptied the roster — mu
 (issue #74: the Lab said "Saved" but the old notes came back on reopen).
 Run in-container: python test_race_preserve.py
 """
+import json
 import os
 import sys
 import tempfile
@@ -33,9 +34,17 @@ def test_explicit_clear_persists():
     d = dict(PRIOR, learnings_notes="", fleet=[], own={}, division_starts={}, tracker={},
              watch_plan={"teams": {}, "blocks": []})
     _with_prior(lambda: main._write_race(d))
+    with open(os.path.join(main.INGESTED_DIR, "t-race.json")) as f:
+        disk = json.load(f)   # what's actually stored, not just the mutated input
     for k in ("learnings_notes", "fleet", "own", "division_starts", "tracker"):
-        assert not d[k], (k, d[k])
-    assert d["watch_plan"]["blocks"] == []
+        assert not disk[k], (k, disk[k])
+    assert disk["watch_plan"]["blocks"] == []
+
+
+def test_malformed_watch_plan_draft_does_not_crash():
+    d = {"race_id": "t-race", "watch_plan": {"teams": ["A"]}}
+    _with_prior(lambda: main._write_race(d, draft=True))
+    assert d["watch_plan"] == {"teams": ["A"]}
 
 
 def test_omitted_key_is_kept():

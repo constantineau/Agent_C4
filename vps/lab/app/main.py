@@ -1360,8 +1360,10 @@ def _prep_empty(key, value):
     if not value:
         return True
     if key == "watch_plan" and isinstance(value, dict):
-        teams = (value.get("teams") or {}).values()
-        return not value.get("blocks") and not any((t or {}).get("members") for t in teams)
+        teams = value.get("teams") or {}
+        if not isinstance(teams, dict) or not all(isinstance(t, dict) for t in teams.values()):
+            return False   # malformed → treat as real content, never crash the save
+        return not value.get("blocks") and not any(t.get("members") for t in teams.values())
     return False
 
 
