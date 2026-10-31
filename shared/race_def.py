@@ -255,6 +255,8 @@ def validate(d: dict) -> tuple[list, list]:
                                     f"— needs review")
             if not fpts:
                 warnings.append(f"course {c.get('id')!r}: finish has no points — needs review")
+            if fin.get("coords_source") in ("needs_review", "si_pending"):
+                warnings.append(f"course {c.get('id')!r}: finish coords need review")
         for m in c.get("marks", []):
             if m.get("rounding", "none") not in ROUNDINGS:
                 errors.append(f"mark {m.get('name')!r}: bad rounding {m.get('rounding')!r}")
