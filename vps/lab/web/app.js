@@ -808,7 +808,8 @@ function finishSourceAfterEdit(f) {
     f.coords_source = "approx";
 }
 function editFinish(ci, k, field, val) {
-  const f = finishPoints(ci), p = f.points[k] = f.points[k] || {};
+  const f = finishPoints(ci), cur = f.points[k];
+  const p = f.points[k] = (cur && typeof cur === "object" && !Array.isArray(cur)) ? cur : {};
   if (field === "name") p.name = val;
   else { const n = parseFloat(val); p[field] = isNaN(n) ? null : n; }
   finishSourceAfterEdit(f);
