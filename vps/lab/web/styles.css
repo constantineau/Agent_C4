@@ -385,6 +385,32 @@ tr.winrow { background: rgba(126,224,168,.12); font-weight: 600; }
 .req-chk input, .req-flag input { transform: scale(1.05); }
 .req-flag { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 
+/* data-quality banners: .banner.warn was used without a rule; .bad is a danger-level fault
+   (e.g. a trust sweep's DANGER window — #89) and must read as one, not as small print */
+.banner.warn { background: rgba(245,177,61,.12); border: 1px solid var(--warn); color: var(--warn); }
+.banner.bad { background: rgba(255,84,54,.14); border: 1px solid var(--bad); border-left: 5px solid var(--bad);
+  color: var(--ink); font-size: 14px; }
+.banner.bad > b { color: var(--bad); font-family: var(--font-display); font-size: 17px; letter-spacing: .02em; }
+.banner .banner-line { margin-top: 4px; font-weight: 600; }
+.banner .banner-tail { margin-top: 6px; font-size: 12px; color: var(--muted); }
+
+/* Monitor map (#87): labels for us + nearest rivals, a legend, tappable fleet rows */
+.mon-lbl-wrap { width: 0; height: 0; overflow: visible; background: none; border: none; }
+.mon-lbl { position: absolute; left: var(--gap, 8px); top: -9px; white-space: nowrap; pointer-events: none;
+  font: 600 11px/16px var(--font-body); color: #fff; background: rgba(11,11,14,.85);
+  border: 1px solid #36b3ff; border-radius: 4px; padding: 0 5px; }
+.mon-lbl.left { left: auto; right: var(--gap, 8px); }
+.mon-lbl.own { color: #f5c451; border-color: #f5c451; font-size: 12px; font-weight: 700; }
+.mon-lbl:not(.own):not(.rival) { border-color: var(--line); color: var(--cyan); }
+.mon-legend { background: rgba(11,11,14,.88); color: var(--ink); border: 1px solid var(--line);
+  border-radius: 8px; padding: 6px 10px; font: 12px/1.7 var(--font-body); }
+.mon-sw { display: inline-block; width: 12px; height: 12px; border-radius: 50%; vertical-align: -1px;
+  margin-right: 6px; box-sizing: border-box; }
+table.mon-tbl tr.mon-row { cursor: pointer; }
+table.mon-tbl tr.mon-row:hover td { background: var(--panel2); }
+table.mon-tbl tr.mon-row.own td { background: rgba(245,196,81,.10); color: #f5c451; font-weight: 700; }
+table.mon-tbl tr.mon-row td { padding-top: 7px; padding-bottom: 7px; }
+
 /* ---------- unsaved edits: fixed Save bar + tab marker + leave prompt (app.js syncDirty) ----------
    Sits above the bottom edge so a long page (Rules 4,500 px, Course 1,600 px) can be saved without
    scrolling to its end. Leaves room on the right for the floating Feedback button. */

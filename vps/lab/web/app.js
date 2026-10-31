@@ -2464,6 +2464,7 @@ function paintMonitor() {
   const flLine = fixes.length
     ? `<span class="pill ${flCls}">${fixes.length} boats</span> via ${esc(fl.provider || "tracker")}${flAge}${fl.delay_min ? ` <span class="muted">(tracker runs ~${fl.delay_min} min behind)</span>` : ""}${fl.demo || fl.provider === "sample" ? " <span class=\"pill warn\">demo</span>" : ""}`
     : `<span class="pill warn">no fleet</span> <span class="muted">${esc(fl.reason || "unavailable")}</span>`;
+  const rivals = monRivals(fixes, own);
   const permNote = fl.onboard_permitted ? "permitted onboard (in-race)" : "shore-side only (not permitted onboard for this race)";
 
   document.getElementById("view").innerHTML = `<div class="opt">
@@ -2485,14 +2486,41 @@ function paintMonitor() {
     </div>
     <section class="cockpit-map"><div id="monMap" class="routemap routemap-hero"></div></section>
     ${fixes.length ? `<div class="card"><h3>Fleet positions <span class="muted" style="font-weight:400">— aged from the public tracker</span></h3>
-      <table class="fleet-tbl"><thead><tr><th>Boat</th><th>SOG</th><th>COG</th><th>DTF</th><th>Age</th></tr></thead><tbody>
-      ${fixes.slice().sort((a, b) => (a.dtf_nm ?? 1e9) - (b.dtf_nm ?? 1e9)).map((f) => `<tr>
-        <td>${esc(f.name || "?")}</td><td>${f.sog != null ? f.sog.toFixed(1) + " kts" : ""}</td>
+      <div class="muted" style="font-size:12px;margin-bottom:4px">Tap a row to find that boat on the map. ★ us · ● nearest rivals.</div>
+      <table class="fleet-tbl mon-tbl"><thead><tr><th>Boat</th><th>SOG</th><th>COG</th><th>DTF</th><th>Age</th></tr></thead><tbody>
+      ${fixes.map((f, i) => ({ f, i })).sort((a, b) => (b.f.own ? 1 : 0) - (a.f.own ? 1 : 0) || (a.f.dtf_nm ?? 1e9) - (b.f.dtf_nm ?? 1e9)).map(({ f, i }) => `<tr class="mon-row${f.own ? " own" : rivals.idx.has(i) ? " rival" : ""}" onclick="monFocus(${i})" title="Show on the map">
+        <td>${f.own ? "★ " : rivals.idx.has(i) ? "● " : ""}${esc(f.name || "?")}${f.own ? ' <span class="pill warn">us</span>' : ""}</td><td>${f.sog != null ? f.sog.toFixed(1) + " kts" : ""}</td>
         <td>${f.cog != null ? Math.round(f.cog) + "°" : ""}</td><td>${f.dtf_nm != null ? f.dtf_nm.toFixed(1) + " nm" : ""}</td>
         <td>${ageMin(f.time) != null ? ageMin(f.time) + " min" : ""}</td></tr>`).join("")}
       </tbody></table></div>` : ""}
   </div>`;
   initMonitorMap();
+}
+
+// The map labels only what a shore watcher needs to find at a glance: our boat (live telemetry
+// and its own tracker fix) and the MON_RIVALS boats nearest to it. Everyone else is a plain dot
+// with a hover/tap tooltip until the view is zoomed in far enough that few boats remain; labels
+// that would overlap one already placed are skipped (higher priority wins), so a finish-line
+// cluster never turns into a pile of names.
+const MON_RIVALS = 5;
+const MON_LABEL_ALL_MAX = 15;     // label every boat in view once this few are in view
+const MON_GOLD = "#f5c451", MON_BLUE = "#36b3ff";
+const MON_TIP = { direction: "top", offset: [0, -8] };   // above the dot, clear of the side labels
+
+function monDistNm(a, b) {
+  const k = Math.cos(((a.lat + b.lat) / 2) * Math.PI / 180);
+  return Math.hypot((a.lat - b.lat) * 60, (a.lon - b.lon) * 60 * k);
+}
+
+// Which boats are "nearest rivals", measured from our tracker fix when the feed has one (same
+// delay as theirs — like with like), else from the live position.
+function monRivals(fixes, own) {
+  const ownFix = fixes.find((f) => f.own);
+  const ref = ownFix || (own.available ? own : null);
+  if (!ref) return { ref: null, idx: new Set() };
+  const near = fixes.map((f, i) => ({ i, f })).filter((x) => !x.f.own)
+    .map((x) => ({ i: x.i, d: monDistNm(ref, x.f) })).sort((a, b) => a.d - b.d).slice(0, MON_RIVALS);
+  return { ref: ownFix ? "tracker" : "live", idx: new Set(near.map((x) => x.i)) };
 }
 
 function initMonitorMap() {
@@ -2501,20 +2529,105 @@ function initMonitorMap() {
   if (!el || !window.L) return;
   const map = L.map(el, { preferCanvas: true }); Mon.map = map;
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 18, attribution: "© OpenStreetMap" }).addTo(map);
-  const data = Mon.data || {}, fixes = (data.fleet || {}).fixes || [], own = data.own || {};
+  const data = Mon.data || {}, fl = data.fleet || {}, fixes = fl.fixes || [], own = data.own || {};
+  const ownName = fl.own_name || "Our boat";
+  const riv = Mon.rivals = monRivals(fixes, own);
   const pts = [];
-  fixes.forEach((f) => {
-    L.circleMarker([f.lat, f.lon], { radius: 5, color: "#36b3ff", fillColor: "#36b3ff", fillOpacity: 0.65, weight: 1 })
-      .bindTooltip(`${f.name || "?"}${f.sog != null ? " · " + f.sog.toFixed(1) + " kts" : ""}`).addTo(map);
+  Mon.markers = [];
+  // plain fleet first, rivals over them, our boat on top (canvas draws in insertion order)
+  const order = fixes.map((f, i) => i).sort((a, b) =>
+    (fixes[a].own ? 2 : riv.idx.has(a) ? 1 : 0) - (fixes[b].own ? 2 : riv.idx.has(b) ? 1 : 0));
+  order.forEach((i) => {
+    const f = fixes[i], rival = riv.idx.has(i);
+    const style = f.own
+      ? { radius: 7, color: MON_GOLD, weight: 3, fillColor: "#0b0b0e", fillOpacity: 0.9 }
+      : rival ? { radius: 6, color: "#ffffff", weight: 1.5, fillColor: MON_BLUE, fillOpacity: 0.95 }
+        : { radius: 4, color: MON_BLUE, weight: 1, fillColor: MON_BLUE, fillOpacity: 0.55 };
+    Mon.markers[i] = L.circleMarker([f.lat, f.lon], style)
+      .bindTooltip(`${esc(f.name || "?")}${f.own ? " (us, tracker)" : ""}${f.sog != null ? " · " + f.sog.toFixed(1) + " kts" : ""}`, MON_TIP).addTo(map);
     pts.push([f.lat, f.lon]);
   });
   if (own.available) {
-    L.circleMarker([own.lat, own.lon], { radius: 8, color: "#f5c451", fillColor: "#f5c451", fillOpacity: 0.95, weight: 2 })
-      .bindTooltip(`Our boat${own.sog != null ? " · " + own.sog.toFixed(1) + " kts" : ""}`).addTo(map);
+    L.circleMarker([own.lat, own.lon], { radius: 16, color: MON_GOLD, weight: 1, fillColor: MON_GOLD, fillOpacity: 0.18, interactive: false }).addTo(map);
+    Mon.ownMarker = L.circleMarker([own.lat, own.lon], { radius: 8, color: "#0b0b0e", fillColor: MON_GOLD, fillOpacity: 1, weight: 2 })
+      .bindTooltip(`${esc(ownName)} (us, live)${own.sog != null ? " · " + own.sog.toFixed(1) + " kts" : ""}`, MON_TIP).addTo(map);
     pts.push([own.lat, own.lon]);
-  }
+  } else Mon.ownMarker = null;
+  Mon.labelLayer = L.layerGroup().addTo(map);
+  monLegend(map, fixes, own, riv, ownName);
+  map.on("zoomend moveend", monPlaceLabels);
   if (pts.length) map.fitBounds(pts, { padding: [30, 30], maxZoom: 11 });
   else map.setView([44.2, -82.5], 7);   // Lake Huron default
+  monPlaceLabels();
+}
+
+function monLegend(map, fixes, own, riv, ownName) {
+  const ctl = L.control({ position: "bottomleft" });
+  const sw = (css) => `<span class="mon-sw" style="${css}"></span>`;
+  const rows = [];
+  if (own.available) rows.push(`${sw(`background:${MON_GOLD};border:2px solid #0b0b0e;box-shadow:0 0 0 4px rgba(245,196,81,.3)`)} ${esc(ownName)} — live (boat telemetry)`);
+  if (fixes.some((f) => f.own)) rows.push(`${sw(`background:#0b0b0e;border:3px solid ${MON_GOLD}`)} ${esc(ownName)} — public tracker fix`);
+  if (riv.idx.size) rows.push(`${sw(`background:${MON_BLUE};border:1.5px solid #fff`)} ${riv.idx.size} nearest rivals${riv.ref === "live" ? " (to our live position)" : ""}`);
+  if (fixes.filter((f) => !f.own).length > riv.idx.size) rows.push(`${sw(`background:${MON_BLUE};opacity:.6;width:8px;height:8px`)} rest of the fleet — zoom in for names`);
+  if (!rows.length) return;
+  ctl.onAdd = () => {
+    const d = L.DomUtil.create("div", "mon-legend");
+    d.innerHTML = rows.map((r) => `<div>${r}</div>`).join("");
+    L.DomEvent.disableClickPropagation(d);
+    return d;
+  };
+  ctl.addTo(map);
+}
+
+// Greedy label placement in screen space: own boat first, then rivals by distance, then (only
+// when few boats are in view) everyone else. A label goes right of its dot, else left, else
+// is skipped — the dot keeps its tooltip.
+function monPlaceLabels() {
+  const map = Mon.map;
+  if (!map || !Mon.labelLayer) return;
+  Mon.labelLayer.clearLayers();
+  const data = Mon.data || {}, fl = data.fleet || {}, fixes = fl.fixes || [], own = data.own || {};
+  const ownName = fl.own_name || "Our boat";
+  const riv = Mon.rivals || { idx: new Set() };
+  const size = map.getSize(), bounds = map.getBounds();
+  const cands = [];
+  if (own.available) cands.push({ lat: own.lat, lon: own.lon, text: ownName + " · live", cls: "own" });
+  fixes.forEach((f, i) => { if (f.own) cands.push({ lat: f.lat, lon: f.lon, text: (f.name || ownName) + " · tracker", cls: "own" }); });
+  riv.idx.forEach((i) => { const f = fixes[i]; cands.push({ lat: f.lat, lon: f.lon, text: f.name || "?", cls: "rival" }); });   // nearest first
+  const inView = fixes.filter((f, i) => !f.own && !riv.idx.has(i) && bounds.contains([f.lat, f.lon]));
+  const keyInView = cands.filter((c) => bounds.contains([c.lat, c.lon])).length;
+  if (inView.length + keyInView <= MON_LABEL_ALL_MAX) inView.forEach((f) => cands.push({ lat: f.lat, lon: f.lon, text: f.name || "?", cls: "" }));
+  const boxes = [];
+  const hits = (b) => b.x0 < 0 || b.x1 > size.x || b.y0 < 0 || b.y1 > size.y
+    || boxes.some((o) => b.x0 < o.x1 && b.x1 > o.x0 && b.y0 < o.y1 && b.y1 > o.y0);
+  cands.forEach((c) => {
+    const p = map.latLngToContainerPoint([c.lat, c.lon]);
+    const w = c.text.length * (c.cls === "own" ? 7.2 : 6.4) + 12, h = 18, gap = c.cls === "own" ? 12 : 8;
+    const right = { x0: p.x + gap, x1: p.x + gap + w, y0: p.y - h / 2, y1: p.y + h / 2 };
+    const left = { x0: p.x - gap - w, x1: p.x - gap, y0: right.y0, y1: right.y1 };
+    const side = !hits(right) ? "r" : !hits(left) ? "l" : (c.cls === "own" ? "r" : null);   // ours always shows
+    if (!side) return;
+    boxes.push(side === "r" ? right : left);
+    L.marker([c.lat, c.lon], { interactive: false, keyboard: false,
+      icon: L.divIcon({ className: "mon-lbl-wrap", iconSize: null, iconAnchor: [0, 0],
+        html: `<span class="mon-lbl ${c.cls} ${side === "l" ? "left" : ""}" style="--gap:${gap}px">${esc(c.text)}</span>` }) })
+      .addTo(Mon.labelLayer);
+  });
+}
+
+// Table row → pan to that boat and ring it for a moment.
+function monFocus(i) {
+  const f = ((((Mon.data || {}).fleet) || {}).fixes || [])[i], map = Mon.map;
+  if (!f || !map) return;
+  const el = document.getElementById("monMap");
+  if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+  map.setView([f.lat, f.lon], Math.max(map.getZoom(), 12));
+  if (Mon.flash) { try { Mon.flash.remove(); } catch (e) {} }
+  Mon.flash = L.circleMarker([f.lat, f.lon], { radius: 15, color: "#ffffff", weight: 3, fill: false, interactive: false }).addTo(map);
+  const m = Mon.markers && Mon.markers[i];
+  if (m) m.openTooltip();
+  const ring = Mon.flash;
+  setTimeout(() => { if (Mon.flash === ring) { try { ring.remove(); } catch (e) {} Mon.flash = null; } }, 3000);
 }
 
 /* ---------- Debrief (Lab-4 post-race judge loop) ---------- */
@@ -2571,7 +2684,9 @@ function debTrackCard() {
       <button onclick="debFetchYb()" ${Deb.trackBusy ? "disabled" : ""}>${Deb.trackBusy ? "Fetching…" : "Fetch from YB tracker"}</button>
     </div>
     ${t.available && t.window ? `<div class="muted" style="font-size:12px;margin-top:4px">Window: <b>${esc(debWinRange(t.window))}</b> · ${t.window.kind === "derived" ? "derived from the record" : "the ⏺ LOG marker"}${t.window.motion_device ? " · off the " + esc(t.window.motion_device) : ""}${(t.window.provenance || []).map((p) => "<br>· " + esc(p)).join("")}</div>` : ""}
-    ${t.available && t.trust ? `<div class="muted" style="font-size:12px;margin-top:2px">Trust: ${t.trust.available ? `<b>${esc(((t.trust.summary || {}).line) || "swept")}</b> — danger windows are excluded from polar/helm refinement` : `<b>sweep unavailable</b> — ${esc(t.trust.note || "")}`}</div>` : ""}
+    ${t.available && t.trust && t.trust.available && trustDanger((t.trust.summary || {}).danger_s, (t.trust.summary || {}).line)
+      ? `<div style="margin-top:6px">${trustBanner("Instrument fault in this track", (t.trust.summary || {}).line, "Danger windows are excluded from polar/helm refinement. Fix the calibration before the next race.")}</div>`
+      : t.available && t.trust ? `<div class="muted" style="font-size:12px;margin-top:2px">Trust: ${t.trust.available ? `<b>${esc(((t.trust.summary || {}).line) || "swept")}</b> — danger windows are excluded from polar/helm refinement` : `<b>sweep unavailable</b> — ${esc(t.trust.note || "")}`}</div>` : ""}
     <div class="muted" style="font-size:12px;margin-top:4px">GPX: export the track from Expedition / a Vakaros / your instruments / a phone (offline, always works). YB: pulls our boat's full track from the permitted public tracker (shore-side debrief use). ${Deb.trackMsg ? '<b>' + esc(Deb.trackMsg) + '</b>' : ""}</div>
   </div>`;
 }
@@ -3548,6 +3663,27 @@ function polDecisionsCard() {
   </div>`;
 }
 
+// A trust sweep that found DANGER windows is an instrument fault (Jul 18: compass 98° off GPS
+// course for 43 min) — not a footnote. `danger_s` is the structured signal; artifacts built
+// before it existed only carry the human line, whose channel entries read "<ch> DANGER for …".
+function trustDanger(dangerS, line) {
+  if (dangerS != null) return dangerS > 0;
+  return /\bDANGER\b/.test(line || "");
+}
+
+function trustBanner(title, line, tail) {
+  const parts = String(line || "").split("; ").filter(Boolean);
+  return `<div class="banner bad" role="alert"><b>⚠ ${esc(title)}</b>
+    ${parts.map((p) => `<div class="banner-line">${esc(p)}</div>`).join("")}
+    ${tail ? `<div class="banner-tail">${tail}</div>` : ""}</div>`;
+}
+
+function polDangerBanner(races) {
+  const bad = races.filter((r) => !r.skipped && trustDanger(r.trust_danger_s, r.trust_line));
+  return bad.map((r) => trustBanner(`Instrument fault — ${r.name}`, r.trust_line,
+    `${r.refused_by_trust ? r.refused_by_trust + " fixes refused — the" : "The"} polar leaves those windows out. Fix the calibration before the next race — the same sensor feeds the live readouts (Monitor HDG) and the onboard engine.`)).join("");
+}
+
 function paintPolar() {
   const d = Pol.data || {};
   const cells = polCells(Pol.tws, Pol.config);
@@ -3582,11 +3718,12 @@ function paintPolar() {
        <td><b>${c.stw}</b></td><td>${c.median_stw}</td><td>${c.seconds != null ? c.seconds : c.samples}</td><td>${esc(c.races ? c.races.join(", ") : polRaceName(c.recording))}</td></tr>`).join("")}
   </table></div>` : '<div class="placeholder">No measured cells at this TWS for this race.</div>';
   document.getElementById("view").innerHTML = `<div class="opt">
+    ${polDangerBanner(d.races || [])}
     <div class="card">
       <h3>Observed polar <span class="muted" style="font-weight:400">— what the boat actually sailed, off the instruments. Measured TWS/TWA/STW only; the ORC cert is the dashed reference, never the source.</span></h3>
       ${(d.races || []).map((r) => r.skipped
         ? `<div class="muted" style="font-size:12px">⊘ ${esc(r.name)} — ${esc(r.skipped)}</div>`
-        : `<div class="muted" style="font-size:12px"><b style="color:var(--ink)">${esc(r.name)}</b> · ${r.hours} h · ${r.fixes} fixes (${r.refused_by_trust} refused by the trust gate) · ${r.measured_samples} measured samples${r.refused_below_min_twa ? ", " + r.refused_below_min_twa + " below " + ((d.grid || {}).min_twa_deg || 30) + "° TWA (not sailing)" : ""}${r.sec_per_fix ? " @ " + r.sec_per_fix + " s/fix" : ""}${r.cells != null ? " → " + r.cells + " cells" : ""}${r.thin_cells ? " (+" + r.thin_cells + " under " + minS + " s, refused)" : ""} · trust: ${esc(r.trust_line || "—")}</div>`).join("")}
+        : `<div class="muted" style="font-size:12px"><b style="color:var(--ink)">${esc(r.name)}</b> · ${r.hours} h · ${r.fixes} fixes (${r.refused_by_trust} refused by the trust gate) · ${r.measured_samples} measured samples${r.refused_below_min_twa ? ", " + r.refused_below_min_twa + " below " + ((d.grid || {}).min_twa_deg || 30) + "° TWA (not sailing)" : ""}${r.sec_per_fix ? " @ " + r.sec_per_fix + " s/fix" : ""}${r.cells != null ? " → " + r.cells + " cells" : ""}${r.thin_cells ? " (+" + r.thin_cells + " under " + minS + " s, refused)" : ""} · trust: ${trustDanger(r.trust_danger_s, r.trust_line) ? '<span class="pill bad">⚠ DANGER — see above</span>' : esc(r.trust_line || "—")}</div>`).join("")}
       <div style="margin-top:6px"><button class="mini" onclick="polRefresh()" ${Pol.busy ? "disabled" : ""}>${Pol.busy ? "Rebuilding from the record…" : "Refresh from the record"}</button>
       <span class="muted" style="font-size:11px"> built ${d.generated_at ? new Date(d.generated_at * 1000).toISOString().slice(0, 16) + "Z" : "—"}${d.refresh_error ? " · last refresh failed: " + esc(d.refresh_error) : ""}</span></div>
     </div>
