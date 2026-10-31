@@ -22,7 +22,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from shared import race_def, boat_profile
-from . import auth, store, extract, boats, labstate, feedback, pbstore, deploy, monitor, judge, track, learning, fleetimport, report, retro, retrostore, share
+from . import auth, store, extract, boats, labstate, feedback, pbstore, deploy, monitor, judge, track, learning, fleetimport, report, retro, retrostore, share, racestart
 
 INGESTED_DIR = os.environ.get("INGESTED_DIR", "/srv/ingested")
 
@@ -94,6 +94,15 @@ def races():
 def race(rid: str):
     d = store.get_race(rid)
     return d if d else JSONResponse({"detail": "not found"}, status_code=404)
+
+
+@app.get("/api/races/{rid}/start")
+def race_start_default(rid: str):
+    """What a blank Gameplan Start routes from for this race, and the plain-words reason (#92)."""
+    d = store.get_race(rid)
+    if not d:
+        return JSONResponse({"detail": "not found"}, status_code=404)
+    return racestart.resolve(d, None)
 
 
 @app.get("/api/races/{rid}/validate")
@@ -377,8 +386,8 @@ async def optimize(body: dict):
     if not d:
         return JSONResponse({"detail": "unknown race_id"}, status_code=404)
     course_id = body.get("course_id")
-    start_epoch = float(body.get("start_epoch") or datetime.datetime.now(
-        datetime.timezone.utc).timestamp())
+    start = racestart.resolve(d, body.get("start_epoch"))     # blank Start → the race's gun (#92)
+    start_epoch = start["epoch"]
     from .wind.models import DEFAULT_MODELS, MODELS
     models_req = body.get("models") or list(DEFAULT_MODELS)
     model_names = [m for m in models_req if m in MODELS] or list(DEFAULT_MODELS)
@@ -391,8 +400,11 @@ async def optimize(body: dict):
     from . import jobs
 
     def _work(progress):
-        return _run_optimize(d, course_id, start_epoch, model_names, ens, avoid, per_model,
-                             resolution, use_waves, use_current, on_progress=progress)
+        r = _run_optimize(d, course_id, start_epoch, model_names, ens, avoid, per_model,
+                          resolution, use_waves, use_current, on_progress=progress)
+        if isinstance(r, dict):
+            r["start"] = start                   # which start it routed from, and why (UI says it)
+        return r
 
     return jobs.start("optimize", _work, meta={"race_id": rid})
 
@@ -664,8 +676,7 @@ def _playbook_params(body):
     if not d:
         return None, None, None, None, None
     course_id = body.get("course_id")
-    start_epoch = float(body.get("start_epoch") or datetime.datetime.now(
-        datetime.timezone.utc).timestamp())
+    start_epoch = racestart.resolve(d, body.get("start_epoch"))["epoch"]   # blank → race gun (#92)
     from .wind.models import DEFAULT_MODELS, MODELS
     models_req = body.get("models") or list(DEFAULT_MODELS)
     model_names = [m for m in models_req if m in MODELS] or list(DEFAULT_MODELS)
