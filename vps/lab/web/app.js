@@ -803,7 +803,7 @@ function finishPoints(ci) {
   return c.finish;
 }
 function finishSourceAfterEdit(f) {
-  const ok = f.points.length && f.points.every((p) => p.lat != null && p.lon != null);
+  const ok = f.points.length && f.points.every((p) => p && p.lat != null && p.lon != null);
   if (ok && (!f.coords_source || ["si_pending", "needs_review"].includes(f.coords_source)))
     f.coords_source = "approx";
 }
