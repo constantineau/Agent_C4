@@ -1697,7 +1697,7 @@ function deployPanel(lock, t) {
     ``,
     `# 2. Signed playbook → the Orin copilot (Tailscale host: ${t.orin_host})`,
     `scp ${pb} ${t.orin_host}:${t.orin_playbook_path}`,
-    `ssh ${t.orin_host} 'echo CAN100 | sudo -S systemctl restart ${t.orin_service}'`,
+    `ssh ${t.orin_host} 'sudo systemctl restart ${t.orin_service}'`,
     `#   (ensure PLAYBOOK_PATH=${t.orin_playbook_path} is set in /etc/sr33/copilot.env on the Orin)`,
   ].join("\n");
   const res = Dep.pushRes;
