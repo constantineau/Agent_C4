@@ -233,8 +233,22 @@ def validate(d: dict) -> tuple[list, list]:
             errors.append(f"division {div.get('id')!r} references unknown course "
                           f"{div.get('course_ref')!r}")
     for c in d.get("courses", []):
-        if not c.get("finish"):
+        fin = c.get("finish")
+        if not fin:
             warnings.append(f"course {c.get('id')!r} has no finish defined")
+        else:
+            fpts = fin.get("points") or []
+            if len(fpts) > 2:
+                errors.append(f"course {c.get('id')!r}: finish has {len(fpts)} points (1 mark or a 2-point line)")
+            for k, p in enumerate(fpts):
+                p = p or {}
+                if not _valid_coord(p.get("lat"), p.get("lon")):
+                    errors.append(f"course {c.get('id')!r}: finish point {k + 1} coord out of range")
+                if p.get("lat") is None or p.get("lon") is None:
+                    warnings.append(f"course {c.get('id')!r}: finish point {k + 1} has no coordinates "
+                                    f"— needs review")
+            if not fpts:
+                warnings.append(f"course {c.get('id')!r}: finish has no points — needs review")
         for m in c.get("marks", []):
             if m.get("rounding", "none") not in ROUNDINGS:
                 errors.append(f"mark {m.get('name')!r}: bad rounding {m.get('rounding')!r}")

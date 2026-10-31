@@ -730,7 +730,7 @@ function courseEditCard(c, ci) {
     const isGate = m.type === "gate", isIsland = m.type === "island";
     return `<tr class="${need ? "needrow" : ""}">
       <td class="mono">${m.seq}</td>
-      <td><input class="cin" style="width:120px" value="${esc(m.name || "")}"
+      <td><input class="cin" style="width:140px" value="${esc(m.name || "")}"
         onchange="editMark(${ci},${mi},'name',this.value)"></td>
       <td><select onchange="editMark(${ci},${mi},'type',this.value)">
         ${["waypoint", "gate", "island", "buoy"].map((t) =>
@@ -738,13 +738,12 @@ function courseEditCard(c, ci) {
       <td><select onchange="editMark(${ci},${mi},'rounding',this.value)">
         ${["none", "port", "starboard", "gate"].map((r) =>
           `<option ${m.rounding === r ? "selected" : ""}>${r}</option>`).join("")}</select></td>
-      <td><input class="cin" value="${m.lat == null ? "" : m.lat}" placeholder="lat"
-        onchange="editMark(${ci},${mi},'lat',this.value)"></td>
-      <td><input class="cin" value="${m.lon == null ? "" : m.lon}" placeholder="lon"
-        onchange="editMark(${ci},${mi},'lon',this.value)"></td>
-      <td>${isGate ? `<input class="cin" value="${m.lat2 == null ? "" : m.lat2}" placeholder="lat2"
+      <td><div class="cstack"><input class="cin" value="${m.lat == null ? "" : m.lat}" placeholder="lat"
+        onchange="editMark(${ci},${mi},'lat',this.value)"><input class="cin" value="${m.lon == null ? "" : m.lon}"
+        placeholder="lon" onchange="editMark(${ci},${mi},'lon',this.value)"></div></td>
+      <td>${isGate ? `<div class="cstack"><input class="cin" value="${m.lat2 == null ? "" : m.lat2}" placeholder="lat2"
         onchange="editMark(${ci},${mi},'lat2',this.value)"><input class="cin" value="${m.lon2 == null ? "" : m.lon2}"
-        placeholder="lon2" onchange="editMark(${ci},${mi},'lon2',this.value)">` : ""}</td>
+        placeholder="lon2" onchange="editMark(${ci},${mi},'lon2',this.value)"></div>` : ""}</td>
       <td>${isIsland ? `<input class="cin" style="width:48px" value="${m.radius_nm == null ? "" : m.radius_nm}"
         placeholder="nm" onchange="editMark(${ci},${mi},'radius_nm',this.value)">` : ""}</td>
       <td>${esc(m.coords_source || "")}</td>
@@ -762,10 +761,75 @@ function courseEditCard(c, ci) {
         onchange="editStart(${ci},'lon',this.value)">
       <span class="muted">${esc(c.start.coords_source || "")}</span>
     </div>
-    <table><thead><tr><th>#</th><th>Mark</th><th>Type</th><th>Leave</th><th>Lat</th><th>Lon</th>
+    <div class="tablewrap"><table class="marktable"><thead><tr><th>#</th><th>Mark</th><th>Type</th><th>Leave</th><th>Lat / Lon</th>
       <th>Gate 2nd pt</th><th>R&nbsp;nm</th><th>Source</th><th></th></tr></thead>
-      <tbody>${rows}</tbody></table>
-    <button class="mini" onclick="addMark(${ci})">+ Add mark</button></div>`;
+      <tbody>${rows}</tbody></table></div>
+    <button class="mini" onclick="addMark(${ci})">+ Add mark</button>
+    ${finishEditor(c, ci)}</div>`;
+}
+/* The finish: 1 point (a finish mark) or 2 (a line), each name + lat/lon, plus the source — edited
+   in place on Lab.editDef like the start. Nothing is written on render: a course with no finish
+   only gets one when the user adds a point. */
+function finishEditor(c, ci) {
+  const f = c.finish || {};
+  const pts = f.points || [];
+  const need = !pts.length || pts.some((p) => !p || p.lat == null || p.lon == null)
+    || ["needs_review", "si_pending"].includes(f.coords_source);
+  const rows = pts.map((p, k) => `<div class="finrow">
+      <span class="mono">${k === 0 ? "Finish" : "Finish (2)"}</span>
+      <input class="cin" style="width:160px" value="${esc((p && p.name) || "")}" placeholder="point name"
+        onchange="editFinish(${ci},${k},'name',this.value)">
+      <input class="cin" value="${p && p.lat != null ? p.lat : ""}" placeholder="lat"
+        onchange="editFinish(${ci},${k},'lat',this.value)">
+      <input class="cin" value="${p && p.lon != null ? p.lon : ""}" placeholder="lon"
+        onchange="editFinish(${ci},${k},'lon',this.value)">
+      <button class="mini" title="remove finish point" onclick="removeFinishPoint(${ci},${k})">✕</button>
+    </div>`).join("");
+  return `<div class="finedit${need ? " needrow" : ""}">
+    <div><b>Finish</b> <span class="muted">${pts.length === 2 ? "line between two points"
+      : pts.length === 1 ? "single finish mark" : "not set"}${f.crossing ? " · cross " + esc(f.crossing) : ""}</span>
+      ${pts.length ? `<label class="muted" style="margin-left:8px">source
+        <select onchange="editFinishSource(${ci},this.value)">${[...new Set(["si", "approx", "needs_review",
+          f.coords_source || "needs_review"])].map((v) =>
+          `<option ${(f.coords_source || "needs_review") === v ? "selected" : ""}>${esc(v)}</option>`).join("")}</select></label>` : ""}</div>
+    ${rows}
+    ${pts.length < 2 ? `<button class="mini" onclick="addFinishPoint(${ci})">+ Add finish point</button>` : ""}
+  </div>`;
+}
+function finishPoints(ci) {
+  const c = Lab.editDef.courses[ci];
+  c.finish = c.finish || { type: "line", points: [], coords_source: "needs_review" };
+  c.finish.points = c.finish.points || [];
+  return c.finish;
+}
+function finishSourceAfterEdit(f) {
+  const ok = f.points.length && f.points.every((p) => p.lat != null && p.lon != null);
+  if (ok && (!f.coords_source || ["si_pending", "needs_review"].includes(f.coords_source)))
+    f.coords_source = "approx";
+}
+function editFinish(ci, k, field, val) {
+  const f = finishPoints(ci), p = f.points[k] = f.points[k] || {};
+  if (field === "name") p.name = val;
+  else { const n = parseFloat(val); p[field] = isNaN(n) ? null : n; }
+  finishSourceAfterEdit(f);
+  paintCourse();
+}
+function editFinishSource(ci, val) {
+  finishPoints(ci).coords_source = val;
+  paintCourse();
+}
+function addFinishPoint(ci) {
+  const f = finishPoints(ci);
+  if (f.points.length >= 2) return;
+  f.points.push({ name: f.points.length ? "Finish line end 2" : "Finish", lat: null, lon: null });
+  if (f.points.length === 2 && f.type === "mark") f.type = "line";
+  paintCourse();
+  document.getElementById("courseMsg").textContent = "Added a finish point — set its lat/lon, then Save.";
+}
+function removeFinishPoint(ci, k) {
+  const f = finishPoints(ci);
+  f.points.splice(k, 1);
+  paintCourse();
 }
 function editMark(ci, mi, field, val) {
   const m = Lab.editDef.courses[ci].marks[mi];
@@ -850,32 +914,57 @@ function drawCourseMap(id, course) {
   const map = L.map(el); Lab._courseMaps[id] = map;
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 18, attribution: "© OpenStreetMap" }).addTo(map);
   L.tileLayer("https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png", { maxZoom: 18, opacity: 0.9 }).addTo(map);
-  const pts = [];
-  const pin = (lat, lon, label, color) => {
+  const pts = [], pins = [];
+  const pin = (lat, lon, label, color, prio = 2) => {
     if (lat == null) return;
-    L.circleMarker([lat, lon], { radius: 6, color: "#0b0b0e", weight: 1, fillColor: color, fillOpacity: 0.95 })
+    const mk = L.circleMarker([lat, lon], { radius: 6, color: "#0b0b0e", weight: 1, fillColor: color, fillOpacity: 0.95 })
       .bindTooltip(label, { permanent: true, direction: "right", className: "cm-pin" }).addTo(map);
-    pts.push([lat, lon]);
+    // a label hidden by the declutter comes back while the pin is hovered/tapped
+    mk.on("mouseover click", () => { const t = mk.getTooltip(); t && t.getElement() && t.getElement().classList.add("cm-force"); });
+    mk.on("mouseout", () => { const t = mk.getTooltip(); t && t.getElement() && t.getElement().classList.remove("cm-force"); });
+    mk._cmPrio = prio; pins.push(mk); pts.push([lat, lon]);
   };
-  if (course.start && course.start.lat != null) pin(course.start.lat, course.start.lon, "Start", "#2ecc71");
+  if (course.start && course.start.lat != null) pin(course.start.lat, course.start.lon, "Start", "#2ecc71", 0);
   (course.marks || []).forEach((m) => {
     if (m.type === "island" && m.lat != null) {
       L.circle([m.lat, m.lon], { radius: (m.radius_nm || 0.5) * 1852, color: "#ff8a5c", weight: 1,
         fillColor: "#ff8a5c", fillOpacity: 0.16 }).addTo(map);
-      pin(m.lat, m.lon, m.name + " · island, leave " + (m.rounding && m.rounding !== "none" ? m.rounding : "either"), "#ff8a5c");
+      pin(m.lat, m.lon, m.name + " · leave " + (m.rounding && m.rounding !== "none" ? m.rounding : "either"), "#ff8a5c");
     } else if (m.type === "gate" && m.lat != null && m.lat2 != null) {
       L.polyline([[m.lat, m.lon], [m.lat2, m.lon2]], { color: "#f5b13d", weight: 3 }).addTo(map);
-      pin(m.lat, m.lon, m.name, "#f5b13d"); pin(m.lat2, m.lon2, m.name + " (NE)", "#f5b13d");
+      pin(m.lat, m.lon, m.name, "#f5b13d"); pin(m.lat2, m.lon2, m.name + " (NE)", "#f5b13d", 3);
     } else if (m.lat != null) {
       pin(m.lat, m.lon, m.name + (m.rounding && m.rounding !== "none" ? " · " + m.rounding : ""), "#2f9bff");
     }
   });
   const fp = ((course.finish || {}).points || []).filter((p) => p && p.lat != null);
   if (fp.length === 2) L.polyline([[fp[0].lat, fp[0].lon], [fp[1].lat, fp[1].lon]], { color: "#f5c451", weight: 3 }).addTo(map);
-  fp.forEach((p, k) => pin(p.lat, p.lon, k === 0 ? "Finish" : "Finish (2)", "#f5c451"));
+  fp.forEach((p, k) => pin(p.lat, p.lon, k === 0 ? "Finish" : "Finish (2)", "#f5c451", k === 0 ? 1 : 3));
+  // Declutter: in priority order (start, finish, marks in course order, 2nd finish/gate points) each
+  // label goes right of its pin, else left, else is hidden until hovered/tapped. Re-run after every
+  // zoom/pan so zooming in brings labels back.
+  const declutter = () => {
+    const kept = [];
+    const hits = (r) => kept.some((k) => r.left < k.right + 2 && r.right > k.left - 2 && r.top < k.bottom + 2 && r.bottom > k.top - 2);
+    pins.slice().sort((a, b) => a._cmPrio - b._cmPrio).forEach((mk) => {
+      const t = mk.getTooltip(), el = t && t.getElement();
+      if (!el) return;
+      el.classList.remove("cm-hidden");
+      let placed = null;
+      for (const dir of ["right", "left"]) {
+        if (t.options.direction !== dir) { t.options.direction = dir; t.update(); }
+        const r = el.getBoundingClientRect();
+        if (!r.width) return;
+        if (!hits(r)) { placed = r; break; }
+      }
+      if (placed) kept.push(placed);
+      else { t.options.direction = "right"; t.update(); el.classList.add("cm-hidden"); }
+    });
+  };
+  map.on("zoomend moveend resize", declutter);
   if (pts.length) map.fitBounds(pts, { padding: [42, 42], maxZoom: 12 });
   else { map.setView([44.5, -82.5], 6); L.popup().setLatLng([44.5, -82.5]).setContent("No coordinates yet — fill marks below.").openOn(map); }
-  setTimeout(() => { try { map.invalidateSize(); } catch (e) {} }, 80);   // settle tiles after the innerHTML layout
+  setTimeout(() => { try { map.invalidateSize(); declutter(); } catch (e) {} }, 80);   // settle tiles after the innerHTML layout
 }
 
 /* ---------- placeholders (all sections are now built) ---------- */

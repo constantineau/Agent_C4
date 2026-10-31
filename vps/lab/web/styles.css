@@ -148,7 +148,24 @@ button.mini:hover { border-color: var(--accent); }
 .coursemap { width: 100%; max-width: 760px; height: 380px; background: var(--bg);
   border: 1px solid var(--line); border-radius: 10px; margin-bottom: 12px; }
 .coursemap .leaflet-tile { filter: none; }
-.cm-pin { font: 700 11px/1.2 var(--font-body); color: #fff; text-shadow: 0 1px 2px #000; white-space: nowrap; }
+/* map labels: dark chip, white text (Leaflet's default tooltip is a white box) */
+.leaflet-tooltip.cm-pin { font: 700 11px/1.2 var(--font-body); color: #fff; white-space: nowrap;
+  background: rgba(11,11,14,.86); border: 1px solid rgba(255,255,255,.25); border-radius: 5px;
+  padding: 2px 6px; box-shadow: 0 1px 3px rgba(0,0,0,.4); text-shadow: none; }
+.leaflet-tooltip-right.cm-pin::before { border-right-color: rgba(11,11,14,.86); }
+.leaflet-tooltip-left.cm-pin::before { border-left-color: rgba(11,11,14,.86); }
+.leaflet-tooltip.cm-pin.cm-hidden { display: none; }   /* declutter: overlaps an earlier label */
+.leaflet-tooltip.cm-pin.cm-hidden.cm-force { display: block; z-index: 700; }
+/* marks table: scroll sideways inside the card instead of running off it (#79) */
+.tablewrap { overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%; }
+.marktable th, .marktable td { padding: 6px 4px; }
+.marktable .cin { width: 100px; }
+.cstack { display: flex; flex-direction: column; gap: 4px; }
+.finedit { font-size: 13px; margin: 12px 0 4px; padding: 8px 10px; border: 1px solid var(--line);
+  border-radius: 8px; }
+.finedit.needrow { background: rgba(245,196,81,.07); }
+.finrow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
+.finrow .mono { min-width: 70px; color: var(--muted); }
 
 /* ---------- Gameplan route map (Leaflet, [C]) ---------- */
 .routemap { width: 100%; height: 480px; border: 1px solid var(--line); border-radius: 10px;
@@ -183,7 +200,7 @@ button.mini:hover { border-color: var(--accent); }
 .mv-canvas { will-change: transform; }
 .cin { width: 92px; padding: 4px 6px; border-radius: 6px; border: 1px solid var(--line);
   background: var(--panel2); color: var(--ink); font-size: 12px; font-variant-numeric: tabular-nums; }
-td select { background: var(--panel2); color: var(--ink); border: 1px solid var(--line);
+td select, .finedit select { background: var(--panel2); color: var(--ink); border: 1px solid var(--line);
   border-radius: 6px; padding: 4px; font-size: 12px; }
 tr.needrow { background: rgba(245,196,81,.07); }
 #saveCourseBtn { padding: 10px 18px; border: none; border-radius: 8px; background: var(--accent);
