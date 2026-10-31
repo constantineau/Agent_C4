@@ -406,14 +406,67 @@ def _mean_tws(consensus):
     return round(sum(ws) / len(ws), 1) if ws else None
 
 
-def _downsample(path, max_pts=200):
+def _downsample_idx(path, max_pts=200, legs=None, obstacles=None, leg_end_idx=None):
+    """Indices of the vertices a play's route keeps in the bundle. Keeps the endpoints and every MARK
+    vertex — the router's own `leg_end_idx` when the route carries it, else the path point at each
+    leg's `eta_epoch` — fills the budget on a uniform stride, then splits any shortcut between kept
+    points that `obstacles.crosses` says cuts land / an island / a zone back toward the router's own
+    (checked) vertices (#31). May exceed `max_pts` only to stay clear."""
+    n = len(path or [])
+    if n <= max_pts:
+        return list(range(n))
+    if leg_end_idx:
+        marks = {i for i in leg_end_idx if isinstance(i, int) and 0 <= i < n}
+    else:
+        etas = {round(float(l["eta_epoch"])) for l in (legs or []) if l.get("eta_epoch") is not None}
+        marks = {i for i, p in enumerate(path)
+                 if p.get("t") is not None and round(float(p["t"])) in etas}
+    keep = {0, n - 1} | marks
+    room = max(2, max_pts - len(keep) + 2)
+    stride = (n - 1) / (room - 1)
+    idx = sorted(keep | {round(i * stride) for i in range(room)})
+    out, stack = [idx[0]], list(reversed(idx[1:]))
+    while stack:
+        j = stack.pop()
+        i = out[-1]
+        if (obstacles is not None and j - i > 1 and
+                obstacles.crosses(path[i]["lat"], path[i]["lon"], path[j]["lat"], path[j]["lon"])):
+            stack += [j, (i + j) // 2]
+            continue
+        out.append(j)
+    return out
+
+
+def _downsample(path, max_pts=200, legs=None, obstacles=None, leg_end_idx=None):
     if not path or len(path) <= max_pts:
         return path
-    step = max(1, len(path) // max_pts)
-    out = path[::step]
-    if out[-1] is not path[-1]:
-        out.append(path[-1])
+    return [path[k] for k in _downsample_idx(path, max_pts, legs, obstacles, leg_end_idx)]
+
+
+def _thin_route(route, obstacles=None, max_pts=200):
+    """Thin a play route in place-copy: path downsampled, `leg_end_idx` remapped onto the thinned
+    path so the mark vertices stay addressable aboard."""
+    path = route.get("path") or []
+    if len(path) <= max_pts:
+        return route
+    idx = _downsample_idx(path, max_pts, route.get("legs"), obstacles, route.get("leg_end_idx"))
+    where = {i: j for j, i in enumerate(idx)}
+    out = dict(route, path=[path[k] for k in idx])
+    if route.get("leg_end_idx"):
+        out["leg_end_idx"] = [where[i] for i in route["leg_end_idx"] if i in where]
     return out
+
+
+def _play_obstacles(definition, course_id):
+    """The same (cached) obstacle field the playbook routes were built through — for the downsample's
+    shortcut check. None on any failure: the downsample then keeps marks but can't check land."""
+    try:
+        from . import optimizer
+        from .geo import build_for_course
+        bbox = optimizer.course_bbox(definition, course_id)
+        return build_for_course(definition, course_id, bbox) if bbox else None
+    except Exception:
+        return None
 
 
 def _play_synthesis(plays_in, corridor, profile, race_name):
@@ -461,15 +514,13 @@ def _play_synthesis(plays_in, corridor, profile, race_name):
 
 
 def _sail_speed(SP, sail, tws, twa):
-    """Nearest per-sail-polar speed for `sail` at (tws, twa), or None (jib change-downs share the
-    J1 curve, so J2/J3 read as J1)."""
+    """Per-sail-polar speed for `sail` at (tws, twa), interpolated on its curve (`shared.polar`), or
+    None when it has no curve or can't be flown there (jib change-downs share the J1 curve, so J2/J3
+    read as J1)."""
+    from shared import polar as SPOL
     pts = SP.get(sail) or SP.get({"J2": "J1", "J3": "J1", "C0": "J1"}.get(sail, "")) or []
-    best, bd = None, 1e9
-    for t, a, v in pts:
-        d = (t - tws) ** 2 + ((a - twa) / 10.0) ** 2
-        if d < bd:
-            best, bd = v, d
-    return best
+    v = SPOL.lookup(pts, tws, twa) if pts else 0.0
+    return v or None
 
 
 # legs carry beat/reach/run (optimizer._point_of_sail); the older upwind/reaching/downwind
@@ -599,6 +650,7 @@ def _build_plays(playbook, definition, course_id, venue_stats=None, jib_crossove
     texts, synth_note = _play_synthesis(entries, v2.get("corridor") or {},
                                         v2.get("pos_profile") or {}, definition.get("name", ""))
     plays = []
+    _obs = []                      # built lazily — only a path long enough to thin needs it
     for p in entries:
         t = texts.get(p["id"]) or {}
         stakes = abs((p.get("divergence") or {}).get("delta_eta_min") or 0)
@@ -617,7 +669,9 @@ def _build_plays(playbook, definition, course_id, venue_stats=None, jib_crossove
             corr = []
         route = dict(p.get("route") or {}) or None
         if route:
-            route["path"] = _downsample(route.get("path"))
+            if len(route.get("path") or []) > 200 and not _obs:
+                _obs.append(_play_obstacles(definition, course_id))
+            route = _thin_route(route, _obs[0] if _obs else None)
         guidance = p.get("guidance")
         # Leg convention (matcher-enforced): leg N is the leg ARRIVING at course marks[N] — the
         # navigator's next-mark index onboard. Pace plays are HARD-gated (the response is a

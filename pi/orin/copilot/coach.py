@@ -13,8 +13,9 @@ remembers what was shown. The loop OWNS narration for its route (it is the singl
 show-once dedup is not raced by client polls); `GET /coach` reads the held state cheaply with NO
 recompute. A short rolling history of coach lines lets the crew see "what did the coach just show".
 
-Best-effort like everything onboard: an engine-unreachable tick is recorded in `last_error` and the
-loop keeps ticking. Nothing here takes an action — the coach line shows, it never steers.
+The deterministic result is published the moment it's computed; LLM phrasing swaps a nicer line in
+later, from its own task. Best-effort like everything onboard: an engine-unreachable tick is
+recorded in `last_error` (and raises the "collision watch blind" callout) and the loop keeps ticking. Nothing here takes an action — the coach line shows, it never steers.
 """
 import asyncio
 import time
@@ -28,17 +29,23 @@ _HISTORY_MAX = 12
 _BRIEF_HISTORY_MAX = 10
 
 
+def _busy(task) -> bool:
+    return task is not None and not task.done()
+
+
 class _Coach:
     def __init__(self):
         self.enabled = config.COACH_ENABLED
         self.interval = config.COACH_INTERVAL_S
         self.route = config.DEFAULT_ROUTE
-        self.last = None                              # latest make_narration result (+ _coach_at)
+        self.last = None                              # latest step_narration result (+ _coach_at)
         self.history = deque(maxlen=_HISTORY_MAX)     # coach lines, newest first
         self.ticks = 0
         self.last_tick_at = None
         self.last_error = None
         self._task = None
+        self._phrase_task = None                      # the in-flight LLM phrasing (one at a time)
+        self._brief_task = None                       # the in-flight brief scheduler pass (one at a time)
         # scheduled CREW BRIEFS state (briefs.py): the held latest per kind + a short history,
         # and the show-once keys so each rotation/hour/mark gets its brief exactly once
         self.briefs = {}                              # kind -> latest full payload
@@ -119,29 +126,54 @@ class _Coach:
                 await self._make_brief("mark")
 
     async def tick(self):
-        """One coaching cycle: run the narration engine (off the event loop — it's blocking urllib),
-        store the result, and log any newly-shown line. Never raises — records the error and moves on."""
+        """One coaching cycle: run the deterministic callout engine (off the event loop — it's
+        blocking urllib) and PUBLISH the result straight away, with the callouts' own text as the
+        line. LLM phrasing and the scheduled briefs run as separate background tasks, so a cold or
+        busy model can never hold a collision warning back, or delay the next tick's check. Never
+        raises — records the error and moves on."""
         try:
-            res = await asyncio.to_thread(copilot.make_narration, self.route, None, None)
+            res = await asyncio.to_thread(copilot.step_narration, self.route, None)
             res["_coach_at"] = time.time()
             self.last = res
-            self.last_error = None
+            # an engine that can't be reached is not a quiet tick: the blind callout is up, say so here too
+            self.last_error = ("engine unreachable — collision watch blind"
+                               if res.get("_meta", {}).get("engine_lost") else None)
             if res.get("new"):                        # something newly worth showing → log it
-                self.history.appendleft({
+                entry = {
                     "at": res["_coach_at"],
                     "spoken": res.get("spoken", ""),
                     "narration_mode": res.get("narration_mode"),
                     "callouts": [c.get("headline") for c in res["new"]],
-                })
+                }
+                self.history.appendleft(entry)
+                if config.USE_LLM and not _busy(self._phrase_task):
+                    self._phrase_task = asyncio.create_task(self._phrase(res, entry))
         except Exception as e:                        # best-effort — a flaky link must not kill the loop
             self.last_error = f"{type(e).__name__}: {e}"
-        if config.BRIEFS_ENABLED:
-            try:
-                await self.check_briefs()
-            except Exception as e:                    # a failed brief never kills the coach
-                self.last_error = f"briefs: {type(e).__name__}: {e}"
+        if config.BRIEFS_ENABLED and not _busy(self._brief_task):
+            self._brief_task = asyncio.create_task(self._briefs())
         self.ticks += 1
         self.last_tick_at = time.time()
+
+    async def _phrase(self, res, entry):
+        """Swap the published deterministic line for the LLM's phrasing once it lands — if it does.
+        Safety callouts never reach the model (`narrate.narrate` keeps their own text)."""
+        try:
+            out = await asyncio.to_thread(copilot.phrase_narration,
+                                          {**res, "_meta": dict(res.get("_meta") or {})}, None)
+        except Exception:                             # phrasing is a nicety; the line is already up
+            return
+        if out.get("narration_mode") != "llm":
+            return
+        entry["spoken"], entry["narration_mode"] = out["spoken"], "llm"
+        if self.last is res:                          # still the latest tick → update the held line too
+            res["spoken"], res["narration_mode"] = out["spoken"], "llm"
+
+    async def _briefs(self):
+        try:
+            await self.check_briefs()
+        except Exception as e:                        # a failed brief never kills the coach
+            self.last_error = f"briefs: {type(e).__name__}: {e}"
 
     async def run(self):
         # Fresh start → clear the show-once dedup so the current situation is shown once.
@@ -162,10 +194,12 @@ async def start():
 
 async def stop():
     """Cancel the loop on shutdown."""
-    if COACH._task is not None:
-        COACH._task.cancel()
-        try:
-            await COACH._task
-        except asyncio.CancelledError:
-            pass
-        COACH._task = None
+    for name in ("_task", "_phrase_task", "_brief_task"):
+        task = getattr(COACH, name)
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            setattr(COACH, name, None)

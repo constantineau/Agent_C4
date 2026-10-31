@@ -62,7 +62,8 @@ def compute_window(start, end):
     with pool.connection() as conn:
         rows = conn.execute(
             "SELECT path, count(*) n, avg(value) av, max(value) mx, min(value) mn, "
-            "avg(abs(value)) ava, max(abs(value)) mxa "
+            "avg(abs(value)) ava, max(abs(value)) mxa, "
+            "avg(abs(atan2(sin(value), cos(value)))) avf "   # angle folded to 0–π per sample (#47)
             "FROM telemetry_raw WHERE boat_id=%s AND time BETWEEN %s AND %s "
             "AND value IS NOT NULL AND path = ANY(%s) GROUP BY path",
             (BOAT_ID, start, end, list(_AGG.values())),
@@ -109,7 +110,7 @@ def compute_window(start, end):
 
     # mean |TWA| (deg) for the polar lookup
     twa_r = agg.get(_AGG["twa"])
-    mean_abs_twa = round(twa_r["ava"] * _DEG, 1) if twa_r and twa_r["ava"] is not None else None
+    mean_abs_twa = round(twa_r["avf"] * _DEG, 1) if twa_r and twa_r["avf"] is not None else None
 
     polar_pct = None
     target_stw = None

@@ -19,6 +19,13 @@ _AGENT_URL = os.environ.get("AGENT_URL", "http://agent:8000").rstrip("/")
 _BOAT_PASSWORD = os.environ.get("BOAT_PASSWORD", "")
 
 _YB_PROVIDERS = ("yb", "bycmack", "ybtracking", "yellowbrick")
+
+# How old the NEWEST fleet fix may be before the Monitor stops calling the fleet live. A public
+# tracker runs ~15 min behind and boats ping every 10-30 min, so a healthy feed's newest fix is
+# well under an hour old. Past an hour something is wrong (feed stalled, race over, wrong race id);
+# past three hours the picture is useless for watching a race.
+FRESH_MAX_S = 60 * 60
+STALE_MAX_S = 3 * 60 * 60
 _tok = {"value": None, "exp": 0.0}
 
 
@@ -58,6 +65,20 @@ def _parse_yb(payload):
     return fixes
 
 
+def freshness(fixes, now=None):
+    """Age of the newest fix and a fresh / stale / very_stale verdict (None when no fix has a time).
+
+    Measured from the fixes themselves, never from the configured `delay_min` — that is only what
+    the tracker promises, and a dead feed keeps promising it."""
+    times = [f.get("time") for f in fixes or [] if f.get("time")]
+    if not times:
+        return {"newest_fix_time": None, "newest_age_s": None, "freshness": None}
+    newest = max(times)
+    age = max(0.0, (time.time() if now is None else now) - newest)
+    state = "fresh" if age <= FRESH_MAX_S else "stale" if age <= STALE_MAX_S else "very_stale"
+    return {"newest_fix_time": newest, "newest_age_s": round(age), "freshness": state}
+
+
 def _sample_fleet():
     now = time.time()
     boats = [("Il Mostro", 43.30, -82.20, 7.1, 18), ("Windquest", 43.42, -82.05, 6.4, 25),
@@ -67,6 +88,13 @@ def _sample_fleet():
 
 
 def fleet(definition, demo=False):
+    out = _fleet(definition, demo=demo)
+    out.update(freshness(out["fixes"]))
+    out["fresh_max_s"], out["stale_max_s"] = FRESH_MAX_S, STALE_MAX_S
+    return out
+
+
+def _fleet(definition, demo=False):
     cfg = (definition or {}).get("tracker") or {}
     rp = (definition or {}).get("rules_profile") or {}
     base = {"fixes": [], "provider": (cfg.get("provider") or None), "delay_min": cfg.get("delay_min"),

@@ -795,7 +795,8 @@
       const m = n.next_mark, e = m.eta_min;
       if (e == null) return NA("ETA needs made-good to the mark");
       const st = e < 2 ? "act" : e < 5 ? "watch" : "ok";
-      const txt = e >= 60 ? Math.floor(e / 60) + "h " + r0(e % 60) + " min" : r0(e) + " min";
+      // no-break space keeps "30 min" together when the value wraps in a narrow tile (#73)
+      const txt = e >= 60 ? Math.floor(e / 60) + "h " + r0(e % 60) + "\u00a0min" : r0(e) + "\u00a0min";
       return { status: st, value: txt, sub: m.name,
         why: "~" + r0(e) + " min to " + m.name + " at the current made-good.",
         consider: e < 5 ? "Mark in ~" + r0(e) + " min — start the rounding prep." : "On schedule for the mark.",

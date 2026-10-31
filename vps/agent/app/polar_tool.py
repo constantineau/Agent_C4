@@ -24,6 +24,8 @@ rating, not necessarily that the boat is overperforming. This is a debrief/coach
 import os
 from datetime import datetime, timezone
 
+from shared import units
+
 from .db import pool
 
 BOAT_ID = os.environ.get("BOAT_ID", "sr33")
@@ -72,7 +74,7 @@ def _target_for(tws, twa):
         row = conn.execute(
             "SELECT target_stw FROM polars WHERE boat_id=%s "
             "ORDER BY (abs(tws-%s)+abs(twa-%s)) LIMIT 1",
-            (BOAT_ID, tws, abs(twa)),
+            (BOAT_ID, tws, units.fold_twa(twa)),
         ).fetchone()
     return row["target_stw"] if row else None
 
@@ -88,7 +90,7 @@ def mine(hours=None, min_samples=None, percentile=None):
         rows = conn.execute(
             "SELECT avg(value) FILTER (WHERE path=%s) AS stw, "
             "       avg(value) FILTER (WHERE path=%s) AS tws, "
-            "       avg(value) FILTER (WHERE path=%s) AS twa "
+            "       avg(abs(atan2(sin(value), cos(value)))) FILTER (WHERE path=%s) AS twa "   # folded per sample (#47)
             "FROM telemetry_raw "
             "WHERE boat_id=%s AND time > now() - %s::interval AND value IS NOT NULL "
             "  AND path IN (%s,%s,%s) "

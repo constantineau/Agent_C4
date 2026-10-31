@@ -49,6 +49,8 @@ import bisect
 import os
 import time
 
+from shared import polar as SPOL
+
 from . import buoys
 from . import datasource
 from . import deviation
@@ -146,12 +148,12 @@ def _polar_table():
 
 
 def _target_stw(pol, tws_kn, twa_deg):
-    """Nearest polar bucket (same metric as datasource.polar_nearest) from the cached table —
-    no per-sample DB round-trips."""
+    """Polar target at (tws, twa), interpolated on the cached table (`shared.polar.target`: pinching
+    above the beat angle grades against beat speed) — no per-sample DB round-trips. None when there
+    is no table or no target there (inside 30°)."""
     if not pol:
         return None
-    row = min(pol, key=lambda p: abs(p[0] - tws_kn) + abs(p[1] - abs(twa_deg)))
-    return row[2]
+    return SPOL.target(pol, tws_kn, twa_deg) or None
 
 
 def _scalar(v):

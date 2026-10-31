@@ -14,6 +14,8 @@ shore tactical advice — practice/debrief unless the RC clears it; the UI gates
 import math
 import time
 
+from shared import polar as SPOL
+
 from . import navigator as NAV
 from . import weather
 from . import datasource
@@ -36,10 +38,10 @@ def _polars():
 
 
 def _polar_speed(tws, twa):
-    P = _polars()
-    if not P or twa < 30:        # no-go zone / no data → can't make ground to weather
-        return 0.0
-    return min(P, key=lambda p: abs(p[0] - tws) + abs(p[1] - twa))[2]
+    """Polar boatspeed at (tws, twa), interpolated on the grid (`shared.polar`, the same lookup the
+    Lab optimizer uses): 0 below the beat angle (no-go) or with no data, scaled toward 0 under the
+    lightest charted wind."""
+    return SPOL.lookup(_polars(), tws, twa)
 
 
 def _advance(lat, lon, brg, dist_nm):
@@ -134,7 +136,10 @@ def route_leg(slat, slon, dlat, dlon, wind, t0, live_twd=0.0, avoid=None, avoid_
     is an optional list of (lat,lon,radius_nm) obstacle disks (the frozen island homework) and
     `avoid_polys` a list of exclusion-zone rings [(lon,lat),...]; steps that cross either are pruned,
     so the route detours around land / no-go zones.
-    Returns {path:[{lat,lon}], legs:[{hdg,tack}], reached_t, sailed_nm, direct_nm}."""
+    Returns {path:[{lat,lon}], legs:[{hdg,tack}], reached_t, reached, short_nm, sailed_nm, direct_nm}.
+    `reached` is False when the leg never closed on the mark (MAX_STEPS ran out, or every heading was
+    blocked): the path then ends at the frontier node nearest the mark, `short_nm` from it, and the
+    caller must NOT chain the next leg from the mark (#31)."""
 
     def _blocked(a_lat, a_lon, b_lat, b_lon):
         return _seg_blocked(a_lat, a_lon, b_lat, b_lon, avoid) or \
@@ -186,8 +191,9 @@ def route_leg(slat, slon, dlat, dlon, wind, t0, live_twd=0.0, avoid=None, avoid_
             reached = best
             break
 
+    arrived = reached is not None
     if not reached:
-        # didn't converge — return the frontier point nearest the mark as a best effort
+        # didn't converge — return the frontier point nearest the mark as a best effort, flagged
         reached = min(frontier, key=lambda n: NAV._hav_nm(n["lat"], n["lon"], dlat, dlon))
 
     # backtrack the path
@@ -201,6 +207,8 @@ def route_leg(slat, slon, dlat, dlon, wind, t0, live_twd=0.0, avoid=None, avoid_
     sailed = sum(NAV._hav_nm(path[i]["lat"], path[i]["lon"], path[i + 1]["lat"], path[i + 1]["lon"])
                  for i in range(len(path) - 1))
     return {"path": path, "legs": legs, "reached_t": reached["t"],
+            "reached": arrived,
+            "short_nm": 0.0 if arrived else round(NAV._hav_nm(reached["lat"], reached["lon"], dlat, dlon), 2),
             "sailed_nm": sailed, "direct_nm": direct}
 
 
@@ -228,6 +236,14 @@ def get_route(route: str = None, target: str = "next"):
 
     t0 = time.time()
     leg = route_leg(slat, slon, dest["lat"], dest["lon"], wind, t0, live[1] or 0)
+    if not leg["reached"]:
+        out = {"available": False, "target": dest["name"], "reached": False,
+               "short_nm": leg["short_nm"],
+               "note": (f"No complete route to {dest['name']} — the isochrone stopped "
+                        f"{leg['short_nm']} nm short of it (search horizon "
+                        f"{MAX_STEPS * DT_H:.0f} h). Not reporting a partial ETA.")}
+        _cache.update(key=key, t=time.time(), val=out)
+        return out
     path, legs, direct = leg["path"], leg["legs"], leg["direct_nm"]
 
     # count tacks/gybes = tack changes along the path

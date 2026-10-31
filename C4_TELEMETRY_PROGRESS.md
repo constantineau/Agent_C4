@@ -1,7 +1,179 @@
-# C4 telemetry consolidation — progress (updated 2026-09-15)
+# C4 telemetry consolidation — progress (updated 2026-10-30)
 
 Goal (Cole): **lose no telemetry**, and **copy all telemetry off the Pi to the VPS**.
 Deletion from the boat is allowed only *after* an off-boat copy is sha256-verified.
+
+## ⏸ PICK UP HERE — 2026-10-31 (dev @ fcf7edf)
+
+**Done today:**
+- **Jul 18 replay is live at https://c4.racertracer.net/dashboard/** (systemd `c4-replay-dashboard` on
+  :8110 from the dev checkout, nginx GET-only). 200 on both pages.
+- **UI grill filed:** map **#72 "UI grill — map"** (`wayfinder:map`), 34 child issues #73–#106 labelled
+  `ui-grill`: 3 blockers (#73 console clipping, #74 Lab unsaved edits, #75 Monitor stale badge),
+  19 majors, 12 per-screen bundles of the 58 minors. Merged duplicates sit inside their parent issue.
+  Filing script: one-off, not in the repo.
+- **Security (details in private notes, `/root/c4-ops/ui-grill-security-2026-10-30.md`):** Cole chose
+  no credential rotation, only removal from code → **PR #71**, Codex clean at 26fcf26. Lab login now
+  rate-limited in host nginx (5/min per IP, burst 5, then 429).
+- **PR #107** opened for `grill-ui`. Codex: 1 major = replay server binds 0.0.0.0 (Cole already said
+  leave it; ufw blocks non-Docker ports anyway), 1 minor = `--shots A` into B doesn't copy screenshots
+  (real, low impact). Review was saved as `grill-ui-<sha>.md` (run from the worktree) — re-run from
+  the main checkout before merging if the gate wants `Agent_C4-<sha>`.
+
+**Next, in order:**
+1. Host ports 8102/8090/8103 now bind localhost + Tailscale (#108 merged, applied live). Lab rebuilt.
+2. #71 + #107 MERGED (dev @ 010e19c). The live Lab still serves the old app.js until the lab container is rebuilt — do it together with the 8103 fix.
+3. Work the grill map: blockers #73–#75 first, plus #47 (red "change now" all race in the replay).
+4. Then the old queue: Debrief session 3 shows as a race; #55; ruff.
+
+## ⏸ PICK UP HERE — 2026-10-30 SESSION END (dev @ a941e95)
+
+**Done today:**
+- **Jul 18 replay rebuilt on dev e2957f4.** 1,091 frames, 0 errors. Old build kept as
+  `timeline-fullrace-2026-09-17`. What changed: "Rougher than forecast" arms ~3 h instead of 5 h
+  (from the Oct 27 polar fix), and it flickers ~10× between 21:54Z and 22:46Z. The selector card now
+  reads "0 of 60 min", which is correct.
+- **Gemini UI griller built**, the same setup as Tramp's playtester. Branch `grill-ui` @ fdd836f,
+  worktree `/mnt/data/c4-wt/grill-ui`, pushed, NO PR yet. Skill: `/grill-ui`. Key: `C4_GEMINI_API_KEY`
+  in `.env` (the same key as Tramp). Cole's picks: strong model with a $1 cap by default; findings
+  go under a wayfinder map "UI grill — map"; security findings are private; the replay server's
+  binding stays as it is.
+- **Full run:** `/mnt/data/c4/ui-grill/20261030-164830-wMyF8t/`, $0.98, 101 findings. Verified in
+  `verify-*.json`: **80 real public findings** (3 blockers, 19 majors, 58 minors), 1 wrong,
+  1 duplicate of #47, 2 replay-only. **3 security findings are in private notes, not here.**
+  Blockers: console values clipped at 820 px; the Monitor badge is green on 100-day-old fixes;
+  switching Lab tabs drops unsaved edits.
+- #70 merged: the deploy verify timeout is now 3600 s. It is not aboard yet.
+
+**Next, in order:**
+1. **Cole: two security decisions** — see `/root/c4-ops/ui-grill-security-2026-10-30.md` (G5, L1).
+   Recommended: G5 = rotate + sudoers rule + remove from code (boat-side, needs his go); L1 = nginx
+   limit_req on the Lab login.
+2. **File the findings.** The recommended grouping: one issue per blocker or major (22), plus one
+   issue per tab holding that tab's minors (~12). All go under a new "UI grill — map" labelled
+   `wayfinder:map`. Waiting on Cole's pick. Then open a PR for `grill-ui` and run the Codex gate.
+3. **c4.racertracer.net/dashboard is 502.** It was served by the bench stack, which was stopped
+   on Oct 8. Cole approved serving the Jul 18 replay there from the dev checkout. The script is
+   `/root/c4-ops/scripts/c4-replay-dashboard.sh` (a systemd unit on :8110 plus the nginx site,
+   GET-only, with a backup). The classifier blocked it, so Cole has to run it with `!`.
+4. #47 (sail call reads TWA 324° as downwind) shows red "change now" all race in the replay, so it
+   deserves a higher priority.
+5. Then the old queue: Debrief session 3 shows as a race; #55; ruff; credential rotation.
+
+## ⏸ PICK UP HERE — 2026-10-28 SESSION END (dev @ 47ade1a)
+
+**Done today:** #60 deployed on the boat (full-res recording back on), #62 + #69 merged, dev agent +
+lab rebuilt in place on dev (16:05Z, data intact), Orin security updates applied + rebooted (back in
+~1 min, all services up). Backup access if Tailscale drops: ssh sr33-pi, then agent-c4@10.10.10.2.
+Cole does NOT do deploy visits — boat work is remote, each boat-side write needs his explicit go.
+
+**Next, in order:**
+1. **Gemini UI griller — proposed, not built, waiting on Cole's three picks** (recommended in
+   brackets): Gemini login [Cole's Google account via Gemini CLI, free quota] vs paid API key;
+   iPad source [Race Rewind replay of Jul 18, rebuild the rig first] vs live boat console;
+   findings [verified → GitHub issues, security-flavoured ones to /root/c4-ops] vs private file.
+   Shape: headless browser screenshots every Lab tab + the iPad console at iPad sizes and in
+   several states → Gemini grills screenshots + code → verify → issues; a `/grill-ui` skill like
+   the Codex ones (/root/.claude/codex/), optional weekly cron. Nothing installed yet.
+2. Raise `deploy-data-path.sh` VERIFY_TIMEOUT_S to ≥ 3600 (today's quick_check took 39 min).
+3. Session 3 (closed today) may surface in Debrief → Recordings as a Jul 18 → Oct 28 "race";
+   offer Cole to hide sessions that obviously aren't races.
+4. Then #55 (tests that cannot fail), ruff F401/F841/F541; credential rotation (private notes).
+   Wi-Fi hardening on the boat: Cole said leave it.
+
+
+**#60 IS DEPLOYED ON THE BOAT (2026-10-28, Cole's go, done remotely — Cole will not do a deploy
+visit).** Session 3 (open since Jul 18) was closed via `POST /session/end` on the engine, so its
+end_ts is 2026-10-28 ~14:58Z, not the race finish; the Lab derives race windows from the data.
+`deploy-data-path.sh --apply --expect-rotation` backed up to `~/deploy-backups/data-path-20261028T150228Z`
+and rebuilt only the archiver. The corrupt file is now `archive.corrupt-20261028T154237.db` (24 G,
+kept; holds the Sep 2 07:25–22:13Z dock rows that exist only aboard). Fresh `archive.db` writing
+~400 rows/s-batch, disk guard 85/80%, retention 7 d, uplink unchanged and reaching Postgres.
+⚠️ **The script's verify step reported failure (exit 1) but the deploy was fine:** quick_check of
+the 24 G file on the SD card read at ~10 MB/s and took **39 min**, past `VERIFY_TIMEOUT_S`=1800.
+Raise it (≥ 3600) before the next rotation deploy. The Pi's clone is now b3c30a1 + copied files.
+
+**PRs:** #62 and #69 MERGED 2026-10-28.
+
+**Boat audit 2026-10-28** (private notes: `/root/c4-ops/boat-audit-2026-10-28.md`). Both boxes
+healthy; nothing reachable from the internet. Orin: 335 security updates APPLIED (security
+pocket only, NVIDIA untouched) and rebooted on Cole's go. Wi-Fi hardening: Cole said leave it.
+The Orin's dnsmasq/isc-dhcp failures are unconfigured leftovers (harmless).
+
+## ⏸ PICK UP HERE — 2026-10-27 end of session (dev @ f49856f)
+
+**Merged today:** #58 CI + lint (`make ci`, GitHub Actions on dev/main), #59 copilot collision
+callouts (#29), #61 routes no longer teleport to unreached marks (#31), #60 boat prep (#32: disk
+guard, resumable rotation, fsync'd writes, 7-day retention, `pi/deploy/deploy-data-path.sh`).
+**Nothing is deployed to the boat.** The Pi still runs `main` @ b3c30a1; full-res stays off.
+
+**Next, in order:**
+1. **#62 (#30 polar kn/deg)** — its zero-wind test was red only because it needed #61. Resume
+   its agent: merge `origin/dev` into `fix-30` (worktree `/mnt/data/c4-wt/fix-30`), resolve
+   `optimizer.py`, confirm green, then `/codex-review 62`. Merge on Cole's "merge 62".
+2. **#69 (gpsout/chartplotter, `fix-31-gpsout`)** — rebase on dev now that #61 is in, so the
+   diff is gpsout only; then `/codex-review 69`. Accepted behaviours (not defects): with no
+   obstacle data it keeps the reached waypoint; a walk-back may point behind the boat within the
+   current leg; a stale re-route is refused, not recomputed.
+3. **Boat deploy of #60** (Cole's call, he must be at the console): Cole taps REC stop to close
+   session 3 (open since Jul 18) → run `pi/deploy/deploy-data-path.sh` dry-run, show Cole →
+   on his go, `--apply --expect-rotation`. The corrupt `archive.db` is renamed, never deleted.
+   Optionally ship #59 to the Orin the same visit (copy copilot files, restart
+   `sr33-orin-copilot`).
+4. After the blockers: #55 (tests that cannot fail), then turn on ruff F401/F841/F541.
+5. Ops (private notes in `/root/c4-ops/`): credential rotation still owed; the ingest token
+   change touches the Pi's env, so it needs Cole's go.
+
+## 2026-10-27 — the boat is back, its archive is not; `make ci` exists
+
+**Boxes (read-only check, nothing changed aboard):**
+- **`sr33-pi` is online** (Tailscale direct, booted 2026-10-24 after an unclean shutdown — ext4
+  "orphan cleanup" on mount). Disk 41/115 G, 3.0 G RAM free, `throttled=0x0`. Still on `main`
+  at `b3c30a1` (2026-09-01) — none of September's work is aboard.
+- **The archiver is crash-looping on a corrupt DB, 4,112 restarts:** `archive.db` (24 G) →
+  `sqlite3.DatabaseError: database disk image is malformed` at `archiver.py:201`
+  (`SELECT count(*) FROM readings`). Its mtime is **2026-09-02 22:11Z** — the minute the uplink
+  went quiet, and the Orin's `last` shows a boot at 22:12Z. So both boxes lost power together
+  and the archive corrupted mid-write: **the same failure as Jul 18**
+  (`archive.corrupt-20260718.db`, still on the volume). No full-res telemetry has been recorded
+  since Sep 2.
+- **The uplink is fine**: ~430k rows/day reaching `telemetry_raw` since 2026-09-16 (the thinned
+  live stream, vs ~32 M/day when the archive streamed Aug 30–Sep 2). Newest row = now.
+  Aug 30–Sep 2 full-res is in Postgres (97 M rows), so the corrupt file likely holds little or
+  nothing that is not already ashore — **unverified**; check before anyone touches it.
+- **`agent-c4` (Orin)** is up (27 min at check), no containers running, and `dnsmasq` +
+  `isc-dhcp-server`/`-server6` are in `failed` state. Whether that matters depends on whether
+  the Orin is meant to be serving DHCP on the boat LAN — not established.
+- **What the corrupt file holds that the VPS does not** (probed read-only with
+  `?immutable=1`, rowid lookups still work): 115,373,456 rows, Jul 20 → 2026-09-02 22:13:21Z;
+  `sync_state.backfill_last_id` = 95,692,480 (= 07:24:54Z Sep 2). Postgres has full-res to
+  07:24Z, then ~19.5k rows/h thinned. So **ids 95.7 M–115.4 M (Sep 2 07:25–22:13Z, ~19.7 M
+  rows) exist only on the Pi** — boat at the dock (SOG 0 all day). Low value, but kept.
+- **Why the brownout rotation did not fire:** it was never aboard. The Pi runs `main` @ b3c30a1
+  (Sep 1); the brownout code (23cc5d4) landed Sep 7. The crash at "archiver.py:201" is b3c30a1's
+  line (`open_db()` then `count(*)`). (An earlier version of this note blamed quick_check — wrong.
+  quick_check is still a weak gate on dev: see #33.) Fourth SQLite corruption on this SD card.
+- **⚠️ Do NOT just rotate it and let the archiver run:** the dead file grew 24 G in 3.4 days at
+  the dock (~7 G/day) and session 3 is still open, so retention prunes nothing — a fresh archive
+  fills the card's 69 G free in ~10 days and takes Signal K/uplink down with it. Even with
+  retention working, 14 days × 7 G > 69 G. Rotation waits on Cole's pick of a guard.
+- Open for Cole: how to restart full-res safely; and the real fix — an archive that survives a
+  power cut, and a rotation gate that catches what quick_check misses.
+
+**Full code review (same day):** map issue **#57**, 28 issues #29–#56 (4 blockers: #29 copilot
+collision callouts, #30 Lab polar lookup mixes kn and degrees, #31 routes teleport to unreached
+marks, #32 boat runs Sep 1 code). Security findings are tracked privately, not in this public
+repo. `test_strategy`'s failure is the TEST leaking selector settle state (#40). Cole: full-res
+recording stays off until #32/#33/#34 land.
+
+**`make ci` (new, `tools/ci/run.sh`):** every test file, each in a throwaway container off its
+own service's image built fresh as `sr33-ci-*`. 2 m 35 s warm. **52/53 pass on `dev`.**
+`vps/agent/test_strategy.py` fails "on-plan hold does not chain a re-route" — **broken by
+`5974472` (2026-09-17, the selector card's 2-minute settle)**, verified by running the test at
+`5974472^` (pass) and `5974472` (fail). Not fixed: it goes into the code review. Build/review
+agents follow `tools/agents/agent-rules.md`; worktrees live under `/mnt/data/c4-wt/`. The Codex
+mirror works for this repo (`/root/.claude/codex/mirror.sh`), so `/codex-review`, `/dual-review`
+and the merge gate apply to Agent_C4 PRs.
 
 ## ⏸ PICK UP HERE — REFINEMENT PHASE (set 2026-09-09, horizon: a couple of weeks)
 
@@ -474,7 +646,7 @@ GPX debrief #1 and rejected proposal #1 are untouched. The Debrief tab's track s
 
 ## (2026-09-09, later — the POLAR TAB shipped)
 
-**https://lab.racertracer.net/#polar** (password `CAN100`). The debrief interface Cole asked
+**https://lab.racertracer.net/#polar**. The debrief interface Cole asked
 for: the observed polar as a half-polar diagram (TWS chips + config filter, per-config curves
 with hover tooltips, the ORC cert as a dashed reference only), the cell table, per-race
 provenance (trust line, refused counts, skipped bench sessions), and the Decisions card wired to

@@ -9,8 +9,9 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-sr33}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sr33-dev}
       POSTGRES_DB: ${POSTGRES_DB:-sr33_dev}
+    # localhost only. Note: ufw does not filter Docker-published ports, so never publish on 0.0.0.0.
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"
     volumes:
       - sr33_dev_pgdata:/var/lib/postgresql/data
       # migrations in this dir run in filename order on first init
@@ -29,8 +30,10 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql://sr33:sr33-dev@timescaledb:5432/sr33_dev}
       INGEST_TOKEN: ${INGEST_TOKEN:-dev-ingest-token}
+    # localhost + Tailscale only: the boat's uplink posts to 100.88.252.115:8101.
     ports:
-      - "8101:8000"
+      - "127.0.0.1:8101:8000"
+      - "100.88.252.115:8101:8000"
     depends_on:
       timescaledb:
         condition: service_healthy
@@ -49,7 +52,8 @@ services:
       AUTH_ENABLED: ${AUTH_ENABLED:-true}
       RACE_MODE_DEFAULT: ${RACE_MODE_DEFAULT:-practice}   # 9.2 gate: dev opens; prod omits -> fail-closed 'race'
     ports:
-      - "8102:8000"
+      - "127.0.0.1:8102:8000"
+      - "100.88.252.115:8102:8000"
     depends_on:
       timescaledb:
         condition: service_healthy
@@ -64,7 +68,8 @@ services:
       AGENT_HOST: agent
       AGENT_PORT: "8000"
     ports:
-      - "8090:80"
+      - "127.0.0.1:8090:80"
+      - "100.88.252.115:8090:80"
     depends_on:
       - agent
     restart: unless-stopped
@@ -100,7 +105,8 @@ services:
       GITHUB_REPO: ${GITHUB_REPO:-constantineau/Agent_C4}
       FEEDBACK_ALLOW_ORIGINS: ${FEEDBACK_ALLOW_ORIGINS:-https://c4.racertracer.net,https://lab.racertracer.net,http://localhost:8091}
     ports:
-      - "8103:8000"
+      - "127.0.0.1:8103:8000"
+      - "100.88.252.115:8103:8000"
     volumes:
       - lab_ingested:/srv/ingested
       - lab_gribcache:/srv/gribcache        # Lab-1: cached GRIB subsets (cheap re-runs/members)

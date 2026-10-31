@@ -89,6 +89,12 @@ cheap.
 - **Degraded-field honesty:** a coverage gate + route-sanity guard flag `degraded` + warnings when
   the field is thin (the router falls back to a constant wind where nothing loaded — trust the
   flags). Tunables `GRIB_MIN_FRAME_FRAC` / `GRIB_COVERAGE_MIN` / `GRIB_CYCLE_FALLBACK`.
+- **Incomplete routes stop, never teleport (#31):** a leg that doesn't reach its mark (time budget
+  out, or every heading blocked) ends the course there — `complete: false`, `incomplete` names the
+  leg and how far short, `degraded: true`. `optimizer.incomplete_reason()` (that flag, or a path
+  ending > 3 nm from the finish) is the one check the playbook (consensus retried then refused,
+  per-model candidates dropped into `dropped_scenarios`, fan plays retried/skipped) and the
+  debrief oracle (tactics half refused by name) use. The onboard re-router refuses the same way.
 - **Parse crash isolation (`GRIB_ISOLATE_PARSE`, default ON):** cfgrib/eccodes can intermittently
   SEGFAULT (uncatchable), so the parse runs in a persistent child process (`_grib_parser.py`);
   a crash/hang respawns + retries, then skips the frame — a skipped frame, not a dead optimize.

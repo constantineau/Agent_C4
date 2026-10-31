@@ -30,6 +30,7 @@ from datetime import datetime, timedelta, timezone
 
 from shared import n2k_sources
 from shared import source_policy
+from shared import units
 
 BOAT_ID = os.environ.get("BOAT_ID", "sr33")
 _MS_TO_KN = 1.943844
@@ -91,6 +92,17 @@ AIS_PROBE_ROWS = int(os.environ.get("ONBOARD_AIS_PROBE_ROWS", "5000"))
 # builds a fresh source per replay frame — memoising on the instance re-ran the probe (and
 # re-logged) hundreds of times.
 _AIS_SRC_CACHE = {}
+# How often (per thread) to check whether archive.db is still the file we opened.
+ARCHIVE_RECHECK_S = float(os.environ.get("ONBOARD_ARCHIVE_RECHECK_S", "5"))
+
+
+def _file_identity(path):
+    """(st_dev, st_ino) of `path`, or None when it is missing right now (mid-rotation)."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (st.st_dev, st.st_ino)
 
 
 def _cutoff_str(minutes):
@@ -101,6 +113,39 @@ def _cutoff_str(minutes):
     re-filter precisely by parsed epoch."""
     c = datetime.now(timezone.utc) - timedelta(minutes=minutes)
     return c.strftime("%Y-%m-%dT%H:%M:%S"), c.timestamp()
+
+
+def _open_archive_ro(attempts=3):
+    """Open the archive read-only and return (conn, identity of the file it is on).
+
+    The identity is taken BEFORE the connect and again AFTER a first read (the read is what
+    makes SQLite open the -wal, by name). If the archiver rotated the file in between, the two
+    differ and the connection may be on the old file, or on the old db with the new -wal: close
+    and try again. If it keeps moving, the identity is returned as None, which makes the next
+    recheck reopen — the connection never gets cached under a file it is not on."""
+    conn = None
+    for _ in range(attempts):
+        before = _file_identity(ARCHIVE_DB)
+        conn = sqlite3.connect(
+            f"file:{ARCHIVE_DB}?mode=ro", uri=True, timeout=30, check_same_thread=False
+        )
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchall()
+        except sqlite3.Error:
+            pass                    # a broken file still gets a connection; queries will say so
+        after = _file_identity(ARCHIVE_DB)
+        if before is not None and before == after:
+            return conn, after
+        try:
+            conn.close()
+        except Exception:
+            pass
+    conn = sqlite3.connect(
+        f"file:{ARCHIVE_DB}?mode=ro", uri=True, timeout=30, check_same_thread=False
+    )
+    conn.row_factory = sqlite3.Row
+    return conn, None
 
 
 class OnboardSource:
@@ -124,14 +169,30 @@ class OnboardSource:
         """Per-THREAD read-only archive connection. A single shared connection serialized every
         archive read behind whichever one was stalled on SD-card I/O (the archiver fsyncs every
         flush), which showed up as episodic all-endpoint timeouts under the dashboard's parallel
-        poll. Read-only connections are cheap; one per threadpool thread removes the queue."""
-        conn = getattr(self._archive_local, "conn", None)
+        poll. Read-only connections are cheap; one per threadpool thread removes the queue.
+
+        Reopened when archive.db is REPLACED. The archiver moves a corrupt archive aside and
+        starts a fresh file; a connection opened before that keeps reading the old inode, so
+        history goes stale (or keeps failing on the corrupt pages) while recording is fine.
+        A stat at most every ARCHIVE_RECHECK_S per thread catches it."""
+        local = self._archive_local
+        conn = getattr(local, "conn", None)
+        now = _time.monotonic()
+        if conn is not None and now - getattr(local, "checked", 0.0) >= ARCHIVE_RECHECK_S:
+            local.checked = now
+            ident = _file_identity(ARCHIVE_DB)
+            if ident is not None and ident != getattr(local, "ident", None):
+                print(f"[onboard] {ARCHIVE_DB} was replaced (rotation?) — reopening", flush=True)
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                conn = None
+                _AIS_SRC_CACHE.pop(ARCHIVE_DB, None)   # learned from the old file
         if conn is None:
-            conn = sqlite3.connect(
-                f"file:{ARCHIVE_DB}?mode=ro", uri=True, timeout=30, check_same_thread=False
-            )
-            conn.row_factory = sqlite3.Row
-            self._archive_local.conn = conn
+            conn, local.ident = _open_archive_ro()
+            local.conn = conn
+            local.checked = now
         return conn
 
     # --- AIS-bearing sources (see AIS_MARKER_PATHS) ------------------------
@@ -429,8 +490,9 @@ class OnboardSource:
         """Nearest polar bucket by abs(tws-)+abs(twa-): {tws,twa,target_stw,target_vmg} or None."""
         if not self._polars:
             return None
+        a = units.fold_twa(twa)            # the record wraps TWA 0–360: 324° is a 36° beat (#47)
         best = min(self._polars,
-                   key=lambda p: abs(p["tws"] - tws) + abs(p["twa"] - abs(twa)))
+                   key=lambda p: abs(p["tws"] - tws) + abs(p["twa"] - a))
         return {"tws": best["tws"], "twa": best["twa"],
                 "target_stw": best["target_stw"], "target_vmg": best["target_vmg"]}
 

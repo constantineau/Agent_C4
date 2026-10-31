@@ -101,7 +101,7 @@ cd ~/Agent_C4
 docker compose -f compose.dev.yml up -d --build          # cloud dev stack
 python3 vps/db/seed/fake_telemetry.py                    # fake raw readings → /ingest/raw → telemetry_raw
 python3 vps/db/seed/ais_inject.py                        # deterministic AIS scenario (own ship + closing target)
-# web http://localhost:8090 (pw sr33-dev) · lab http://localhost:8103 (pw lab-dev; standing container CAN100)
+# web http://localhost:8090 (pw sr33-dev) · lab http://localhost:8103 (pw lab-dev)
 ```
 
 **Bench Pi stack is DOWN by default** (policy 2026-07-08 — its archiver records the sample
@@ -211,7 +211,7 @@ rendering still needs a dockside eyeball once the N2K cable is plugged**)`.
 RaceDefinition, no cloud): the dashboard's ⏺ LOG button one-tap starts/ends a session
 (name defaults to the date; a loaded playbook's race_id is picked up automatically). The
 archiver records everything all the time, but only SESSION windows are kept long-term and
-backfilled — outside them, readings are pruned after `ARCHIVE_RETAIN_DAYS` (14; bench
+backfilled — outside them, readings are pruned after `ARCHIVE_RETAIN_DAYS` (7 on the boat since 2026-10; bench
 overlay 0) and never leave the boat, so day sails/deliveries don't accumulate anywhere.
 `backfill.py` defaults to session mode (+ pushes the sail log as `crew.sail.state` and a
 `crew.session` marker per closed window; `--all` restores everything-mode); the cloud
@@ -307,8 +307,10 @@ actually used or it is dropped; caveats computed by the engine; deterministic fa
 any LLM trouble. The **auto-coach** timer (30 s) drives the narration engine and holds the
 latest callouts (safety/collision top priority, rounding prep 15/10/5 min, playbook branch,
 sail change-down, deviation/drift, fleet rival, plays) — show-once dedup, priority-sorted.
-`POST /strategy` phrases the engine digest + **ranks `play_matches`** against the play
-library narratives (validated ids only). Engine addressing is boat-local-first with
+`POST /strategy` returns the engine digest by default (no LLM — the iPad's 15 s polls must not
+queue on Ollama, #29). With `use_llm: true` it phrases the digest + **ranks `play_matches`**
+against the play library narratives (validated ids only); automatic narrative matching on the
+iPad is deferred to #53. Engine addressing is boat-local-first with
 `ENGINE_URL_FALLBACK`. Exit test: `python3 -m copilot.bench_copilot [--llm]`.
 
 ## C4 Performance Lab (Tier 3, `vps/lab/`, :8103)
@@ -356,10 +358,13 @@ Checklists, Fleet, Learnings, Gameplan, Lock-in & Deploy) · RACE (Monitor) · D
 
 ## Verification & tests
 
-- Agent/engine unit tests: `PYTHONPATH=vps/agent:. python3 vps/agent/test_<x>.py`
-  (matcher, deviation, drift, selector, strategy, reoptimize, fleet, buoys…).
-- Lab tests need the baked image: `docker cp vps/lab/test_<x>.py sr33-dev-lab-1:/srv/ &&
-  docker exec sr33-dev-lab-1 sh -c "cd /srv && python3 test_<x>.py"`.
+- **`make ci` = `make lint` (ruff, `ruff.toml`) + every test file**, and GitHub CI runs exactly
+  that on every push/PR to `dev`/`main` (`.github/workflows/ci.yml`). Tests (`tools/ci/run.sh`): each in a throwaway container off its
+  own service's image, built fresh from the tree as `sr33-ci-*` (never the standing stack's
+  images). `make ci ONLY=<path part>` runs a subset. Add a new test file's image/path there if
+  the defaults don't fit. Build agents follow `tools/agents/agent-rules.md`.
+- One file by hand: `PYTHONPATH=vps/agent:. python3 vps/agent/test_<x>.py` (agent tests; the
+  system python lacks some deps, so prefer `make ci ONLY=test_<x>`).
 - Copilot exit test: `python3 -m copilot.bench_copilot` (pure) / `--llm` (on the Orin).
 - Playwright harness: reuse DreamCRM's `playwright-core` (CJS default import
   `import pkg from '…/index.js'`) + the chromium-1228 binary, `--no-sandbox`; dashboard at
@@ -379,8 +384,8 @@ Checklists, Fleet, Learnings, Gameplan, Lock-in & Deploy) · RACE (Monitor) · D
 - **Long Lab jobs** (synthesis fan ~10 min, retro batch, AND live optimize since 2026-07-14)
   run as background jobs with status polling — the nginx gateway 504s past ~300 s. Optimize is
   ~60–70 s cached-warm, but a rate-limited GRIB source can blow past the cap, hence the job.
-- **Passwords:** web dev `sr33-dev`; lab compose default `lab-dev`, the standing
-  lab.racertracer.net container uses `CAN100`.
+- **Passwords:** web dev `sr33-dev`; lab compose default `lab-dev`. The standing
+  lab.racertracer.net password lives in the dev stack env, not in the repo.
 - **`.env` safety:** copy it outside the tree before any risky branch op
   (`cp .env ~/agentc4.env.bak`) — a `git rm --cached` + branch switch once overwrote it.
 - **Don't `compose down` the standing lab container** without restarting it

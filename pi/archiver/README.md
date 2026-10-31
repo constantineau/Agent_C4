@@ -39,6 +39,30 @@ docker compose -f compose.pi.yml exec archiver \
 print(c.execute('select count(*),min(time),max(time) from readings').fetchone())"
 ```
 
+## When things go wrong
+
+- **Disk guard.** Above `ARCHIVE_DISK_HIGH_PCT` of the archive's filesystem the archiver stops
+  writing full-res and logs `!!! DISK …% FULL … FULL-RES RECORDING STOPPED` (repeated every
+  10 min). It resumes below `ARCHIVE_DISK_LOW_PCT`. For those two marks the archive's own free
+  pages count as free, because a prune frees pages inside the file and `df` never sees it. A
+  hard floor ignores that credit: real use at `ARCHIVE_DISK_HARD_PCT` or less than
+  `ARCHIVE_DISK_MIN_FREE_MB` really free also stops recording, and it can't resume until the
+  real numbers are 2 points and twice the minimum clear of it (the WAL and new pages need real
+  bytes, and a reader can stop SQLite reusing its free pages). The uplink's 15-s
+  aggregates keep going ashore either way.
+- **Corruption.** A corrupt file is moved aside as `archive.corrupt-<stamp>.db` (never deleted;
+  `tools/salvage.py` recovers almost all of it) and a fresh one is started. At startup this
+  fires on a failed `quick_check` or a failed row count; mid-run it fires on any write that
+  says the file is corrupt, without asking quick_check again. The batch is kept and written to
+  the fresh file. If the move itself fails, the batch is requeued and the move retried.
+- **Failing writes.** A failed batch is rolled back and requeued in order. The queue is capped
+  at `ARCHIVE_MAX_BUFFER_ROWS`; past it the oldest rows are dropped and counted in the log.
+- **Status file** (`archiver-status.json`, refreshed every disk check): `recording`, `reason`
+  (`disk_full` / `rotation_pending`), `stop_cause` (`high_mark` / `hard_floor`), `disk_used_pct`,
+  `disk_really_used_pct`, `disk_free_bytes`, the marks, `paused_since`, and the counts
+  of rows not recorded, dropped from the buffer, written, and rotations this run. The engine
+  mounts the archive volume read-only, so it can read it; nothing shows it on the console yet.
+
 ## Backfill to the cloud (post-passage)
 
 Resumable; a `sync_state` cursor tracks the highest row id the cloud has accepted, so a
@@ -66,3 +90,8 @@ once a real link is available (dockside wifi after the passage).
 | `ARCHIVE_FLUSH_ROWS` / `ARCHIVE_FLUSH_SECONDS` | `1000` / `2` | flush cadence (durability vs. throughput) |
 | `VPS_URL` / `INGEST_TOKEN` | `http://localhost:8101` / `dev-ingest-token` | backfill target |
 | `BACKFILL_BATCH` | `1000` | readings per cloud POST |
+| `ARCHIVE_DISK_HIGH_PCT` / `ARCHIVE_DISK_LOW_PCT` | `85` / `80` | disk guard: stop full-res at the high mark, resume below the low one |
+| `ARCHIVE_DISK_HARD_PCT` / `ARCHIVE_DISK_MIN_FREE_MB` | `95` / `2048` | hard floor on REAL filesystem use / free space; no free-page credit, stops recording on its own |
+| `ARCHIVE_DISK_CHECK_S` / `ARCHIVE_DISK_NAG_S` | `30` / `600` | how often disk use is measured / how often a stopped archiver repeats its warning |
+| `ARCHIVE_MAX_BUFFER_ROWS` | `300000` | cap on rows waiting in RAM while writes fail (~10 min at the dock); the oldest past it are dropped and counted |
+| `ARCHIVE_STATUS_FILE` | `archiver-status.json` next to the DB | the archiver's health as JSON (see below) |

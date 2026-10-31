@@ -1697,7 +1697,7 @@ function deployPanel(lock, t) {
     ``,
     `# 2. Signed playbook → the Orin copilot (Tailscale host: ${t.orin_host})`,
     `scp ${pb} ${t.orin_host}:${t.orin_playbook_path}`,
-    `ssh ${t.orin_host} 'echo CAN100 | sudo -S systemctl restart ${t.orin_service}'`,
+    `ssh -t ${t.orin_host} 'sudo systemctl restart ${t.orin_service}'`,
     `#   (ensure PLAYBOOK_PATH=${t.orin_playbook_path} is set in /etc/sr33/copilot.env on the Orin)`,
   ].join("\n");
   const res = Dep.pushRes;
@@ -2244,8 +2244,15 @@ function paintMonitor() {
   const ownLine = own.available
     ? `<span class="pill ok">● live</span> ${own.lat.toFixed(3)}, ${own.lon.toFixed(3)} · SOG ${own.sog != null ? own.sog.toFixed(1) : "?"} kts · HDG ${own.heading != null ? Math.round(own.heading) : "?"}°${own.tws != null ? " · TWS " + own.tws.toFixed(0) + " kts" : ""} · ${own.age_s != null ? Math.round(own.age_s) + "s ago" : ""}${own.stale ? " <span class=\"pill warn\">stale</span>" : ""}`
     : `<span class="pill warn">○ no live boat</span> <span class="muted">${esc(own.reason || "unavailable")}</span>`;
+  // Pill colour and age come from the NEWEST fix's measured age (backend `freshness`), not the
+  // tracker's configured delay — a dead feed still "promises" ~15 min.
+  const fmtAge = (s) => s < 3600 ? Math.round(s / 60) + " min" : s < 172800 ? (s / 3600).toFixed(s < 36000 ? 1 : 0) + " h" : Math.round(s / 86400) + " days";
+  const flCls = { fresh: "ok", stale: "warn", very_stale: "bad" }[fl.freshness] || "warn";
+  const flAge = fl.newest_age_s != null
+    ? ` · newest fix ${fmtAge(fl.newest_age_s)} old${fl.freshness === "fresh" ? "" : fl.freshness === "stale" ? " <span class=\"pill warn\">stale</span>" : " <span class=\"pill bad\">not live</span>"}`
+    : " · <span class=\"pill warn\">fix times unknown</span>";
   const flLine = fixes.length
-    ? `<span class="pill ok">${fixes.length} boats</span> via ${esc(fl.provider || "tracker")}${fl.delay_min ? " · ~" + fl.delay_min + " min delayed" : ""}${fl.demo || fl.provider === "sample" ? " <span class=\"pill warn\">demo</span>" : ""}`
+    ? `<span class="pill ${flCls}">${fixes.length} boats</span> via ${esc(fl.provider || "tracker")}${flAge}${fl.delay_min ? ` <span class="muted">(tracker runs ~${fl.delay_min} min behind)</span>` : ""}${fl.demo || fl.provider === "sample" ? " <span class=\"pill warn\">demo</span>" : ""}`
     : `<span class="pill warn">no fleet</span> <span class="muted">${esc(fl.reason || "unavailable")}</span>`;
   const permNote = fl.onboard_permitted ? "permitted onboard (in-race)" : "shore-side only (not permitted onboard for this race)";
 
