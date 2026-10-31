@@ -1942,7 +1942,9 @@ function boatPanelInner() {
       warns.push(`The boat is loaded for <b>${esc(liveRace)}</b>, not this race.`);
     } else if (lock && epb && epb.id && (epb.id !== lock.playbook_id ||
                (epb.signature || "") !== (lock.signature || "")))
-      warns.push(`The boat's playbook (<code>${esc(epb.id || epb.signature)}</code>) is not the one locked in here (<code>${esc(lock.playbook_id)}</code>). Push to replace it.`);
+      warns.push(epb.id === lock.playbook_id
+        ? `The boat's copy of <code>${esc(epb.id)}</code> has a different signature than the lock-in (re-frozen in between?). Re-lock and push so the boat runs the version you locked.`
+        : `The boat's playbook (<code>${esc(epb.id)}</code>) is not the one locked in here (<code>${esc(lock.playbook_id)}</code>). Push to replace it.`);
     if ((epb && epb.loaded === false) || (cop.reachable && cpb && !cpb.loaded))
       warns.push(`${epb && epb.loaded === false ? "The Pi engine" : "The Orin copilot"} has no playbook loaded.`);
   }

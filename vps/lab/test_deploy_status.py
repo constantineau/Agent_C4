@@ -143,6 +143,11 @@ st = D.boat_status(get=g)
 check("older engine: race from /playbook/track, flagged partial",
       st["engine"]["playbook"] == {"loaded": True, "race_id": "r1", "recommended": "left", "partial": True})
 
+g = fake_get({"http://pi:8200/playbook": (False, {"error": "HTTP 404", "status": 404})})
+st = D.boat_status(get=g)
+check("older engine, fallback down too: the real error, not the 404",
+      not st["engine"]["reachable"] and st["engine"]["error"] == "connection refused")
+
 # boat off the line
 st = D.boat_status(get=fake_get({}))
 check("unreachable boat says so", st["reachable"] is False and not st["engine"]["reachable"]

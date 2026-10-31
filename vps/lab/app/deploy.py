@@ -168,7 +168,9 @@ def boat_status(get=None):
     if not pb_ok and pb.get("status") == 404:
         # an engine from before GET /playbook — the route-track endpoint still names the race
         pb_ok, track = get(f"{eng}/playbook/track")
-        if pb_ok:
+        if not pb_ok:
+            pb = track                   # report the fallback's real failure, not the 404
+        else:
             pb = ({"loaded": True, "race_id": track.get("race_id"),
                    "recommended": track.get("recommended"), "partial": True}
                   if track.get("available") or track.get("race_id") else
