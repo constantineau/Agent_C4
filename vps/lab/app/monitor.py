@@ -87,8 +87,26 @@ def _sample_fleet():
             for (n, la, lo, s, c) in boats]
 
 
+def _norm(name):
+    return " ".join(str(name or "").split()).casefold()
+
+
+def mark_own(fixes, own_name):
+    """Flag the tracker fix that is OUR boat (the race's `own.boat`, matched by name) so the map can
+    draw it as ours instead of as one more blue dot. Returns how many fixes matched."""
+    key = _norm(own_name)
+    n = 0
+    for f in fixes or []:
+        if key and _norm(f.get("name")) == key:
+            f["own"] = True
+            n += 1
+    return n
+
+
 def fleet(definition, demo=False):
     out = _fleet(definition, demo=demo)
+    out["own_name"] = (((definition or {}).get("own") or {}).get("boat") or "").strip() or None
+    mark_own(out["fixes"], out["own_name"])
     out.update(freshness(out["fixes"]))
     out["fresh_max_s"], out["stale_max_s"] = FRESH_MAX_S, STALE_MAX_S
     return out
