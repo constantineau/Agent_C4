@@ -419,10 +419,14 @@ async function saveDraft() {
     ed.race_id = base.race_id = r.race_id;   // now a library race
     Lab.sel = r.race_id; Lab.draft = null; Lab.sources = []; Lab.isDraft = false;
     markClean(JSON.stringify(base));
+    Lab.editVal = { errors: r.errors || [], warnings: r.warnings || [] };
+    // Repaint from memory, never reload: a late reload could land on another tab's edits, and any
+    // edit typed while the save ran stays on screen (still dirty).
     if (activeSec === "races") {
-      // edited again while the save ran → keep those edits on screen instead of reloading over them
-      if (editDirty()) { paintDetail(); refreshRaceList(); } else renderRaces();
+      paintDetail(); renderSources();
+      const m = document.getElementById("ingMsg"); if (m) { m.textContent = "✓ Saved to the library."; m.style.color = "var(--accent2)"; }
     }
+    refreshRaceList();
     return true;
   } catch (e) { alert("Save failed."); return false; }
 }
