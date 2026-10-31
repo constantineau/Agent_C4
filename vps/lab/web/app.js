@@ -2385,7 +2385,8 @@ function monPlaceLabels() {
   fixes.forEach((f, i) => { if (f.own) cands.push({ lat: f.lat, lon: f.lon, text: (f.name || ownName) + " · tracker", cls: "own" }); });
   fixes.forEach((f, i) => { if (riv.idx.has(i)) cands.push({ lat: f.lat, lon: f.lon, text: f.name || "?", cls: "rival" }); });
   const inView = fixes.filter((f, i) => !f.own && !riv.idx.has(i) && bounds.contains([f.lat, f.lon]));
-  if (inView.length + cands.length <= MON_LABEL_ALL_MAX) inView.forEach((f) => cands.push({ lat: f.lat, lon: f.lon, text: f.name || "?", cls: "" }));
+  const keyInView = cands.filter((c) => bounds.contains([c.lat, c.lon])).length;
+  if (inView.length + keyInView <= MON_LABEL_ALL_MAX) inView.forEach((f) => cands.push({ lat: f.lat, lon: f.lon, text: f.name || "?", cls: "" }));
   const boxes = [];
   const hits = (b) => b.x0 < 0 || b.x1 > size.x || b.y0 < 0 || b.y1 > size.y
     || boxes.some((o) => b.x0 < o.x1 && b.x1 > o.x0 && b.y0 < o.y1 && b.y1 > o.y0);
