@@ -540,7 +540,7 @@ function detailCourseCard(c, ci) {
   const missing = marks.filter((m) => m.lat == null || m.lon == null).length;
   const review = marks.filter((m) => m.coords_source === "needs_review").length;
   const warn = missing || review
-    ? `<span class="pill review">${missing ? missing + " un-geocoded" : ""}${missing && review ? " · " : ""}${review ? review + " need review" : ""}</span>`
+    ? `<span class="pill warn">${missing ? missing + " un-geocoded" : ""}${missing && review ? " · " : ""}${review ? review + " need review" : ""}</span>`
     : `<span class="pill ok">geometry complete</span>`;
   return `<div class="card"><h3>Course — ${ein(`courses.${ci}.name`, c.name, "course name")}</h3>
     <div class="muted" style="margin-bottom:8px">Divisions ${esc((c.applies_to_divisions || []).join(", "))}${
@@ -665,8 +665,8 @@ function detailWatchCard(d) {
       ${w.blocks.length ? `<button class="mini" onclick="watchClearBlocks()">Clear</button>` : ""}
       <span id="watchMsg" class="muted" style="font-size:12px"></span>
     </div>
-    ${w.blocks.length ? `<table class="legs" style="margin-top:8px">
-      <thead><tr><th>on deck from</th><th>until</th><th></th><th>team</th><th>note</th><th></th></tr></thead><tbody>${rows}</tbody></table>
+    ${w.blocks.length ? `<div class="tbl-scroll" style="margin-top:8px"><table class="legs">
+      <thead><tr><th>on deck from</th><th>until</th><th></th><th>team</th><th>note</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
       <button class="mini" style="margin-top:6px" onclick="watchBlockAdd()">+ block</button>` : ""}
   </div>`;
 }
@@ -913,7 +913,44 @@ function drawCourseMap(id, course) {
 
 /* ---------- Gameplan / Optimizer (Lab-1) ---------- */
 const Opt = { races: null, models: null, raceId: null, def: null, courseId: null,
-  chosen: null, running: false, result: null, resolution: "auto", start: "" };
+  chosen: null, running: false, result: null, resolution: "auto", start: "", startDefault: null };
+
+// What a BLANK Start routes from (#92) — the server decides (app/racestart.py): our division's gun,
+// else the earliest gun; "now" only when there's no gun time or it has passed. Said in plain text
+// under the field, not a tooltip.
+async function optLoadStartDefault() {
+  Opt.startDefault = null;
+  if (!Opt.raceId) return;
+  try {
+    const r = await apiGet("/api/races/" + encodeURIComponent(Opt.raceId) + "/start");
+    if (r.ok) Opt.startDefault = await r.json();
+  } catch (e) { /* label falls back to the generic line */ }
+  // re-word the note the moment the gun passes, if the screen is still open then
+  clearTimeout(Opt.startTimer);
+  const sd = Opt.startDefault, ms = sd && sd.race_start ? sd.race_start.epoch * 1000 - Date.now() : -1;
+  if (sd && sd.source === "race_start" && ms > 0 && ms < 2 ** 31 - 1)
+    Opt.startTimer = setTimeout(() => optStartInput(Opt.start), ms + 1000);
+}
+function optStartNote() {
+  const sd = Opt.startDefault ? Object.assign({}, Opt.startDefault) : null, tz = optTz();
+  // the screen can sit open past the gun — the server then routes from now, so say that
+  if (sd && sd.source === "race_start" && sd.race_start.epoch <= Date.now() / 1000) sd.source = "now_passed";
+  if ((Opt.start || "").trim())
+    return "Routes from the time you picked. Clear it to route from "
+      + (!sd || sd.source === "race_start" ? "the race start." : "now.");
+  const when = (e) => epochToWall(e, tz || "UTC").replace("T", " ") + (tz ? " race local" : " UTC");
+  if (!sd) return "Blank routes from the race start if a gun time is set, otherwise from now.";
+  const rs = sd.race_start;
+  if (sd.source === "race_start")
+    return `Blank = race start: ${rs.division} gun, ${when(rs.epoch)}.`;
+  if (sd.source === "now_passed")
+    return `Blank = now. The ${rs.division} start (${when(rs.epoch)}) has passed.`;
+  return "Blank = now. No gun time is set for this race — add it on the Fleet tab.";
+}
+function optStartInput(v) {
+  Opt.start = v;
+  const n = document.getElementById("optStartNote"); if (n) n.textContent = optStartNote();
+}
 
 // The race venue's IANA timezone, if the loaded RaceDefinition carries one.
 function optTz() { return (Opt.def && Opt.def.timezone) || ""; }
@@ -962,11 +999,12 @@ async function renderGameplan() {
     } catch (e) { view.innerHTML = '<div class="placeholder">Failed to load optimizer.</div>'; return; }
   }
   if (!Opt.raceId && Opt.races.length) await optPickRace(Opt.races[0].race_id, false);
+  await optLoadStartDefault();
   if (stale("gameplan")) return;
   const startTz = optTz();
   const startTitle = (startTz
     ? "Pick the start date & time in " + startTz + " race-local time — converted to UTC behind the scenes."
-    : "Pick the start date & time (UTC).") + " Leave blank for the freshest forecast cycle.";
+    : "Pick the start date & time (UTC).") + " Leave blank to route from the race start (or now, if there is no gun time).";
   view.innerHTML = `<div class="opt">
     <div class="card">
       <h3>Gameplan / Optimizer <span class="muted" style="font-weight:400">— multi-model GRIB route (Lab-1)</span></h3>
@@ -979,7 +1017,8 @@ async function renderGameplan() {
             </select></label>
           <label>Course <select id="optCourse" onchange="Opt.courseId=this.value">${optCourseOpts()}</select></label>
           <label>Start (${startTz ? "race local" : "UTC"}) <input type="datetime-local" id="optStart"
-            title="${esc(startTitle)}" value="${esc(Opt.start || "")}" oninput="Opt.start=this.value"></label>
+            title="${esc(startTitle)}" value="${esc(Opt.start || "")}" oninput="optStartInput(this.value)"></label>
+          <span id="optStartNote" class="opt-start-note">${esc(optStartNote())}</span>
         </div>
         <div class="opt-group">
           <div class="opt-group-h">Boat &amp; charts</div>
@@ -1452,6 +1491,7 @@ function renderOptResult(r) {
   const out = document.getElementById("optOut"); if (!out) return;
   if (!r.available) {
     out.innerHTML = `<div class="card"><div class="placeholder">No route: ${esc(r.note || "unavailable")}</div>
+      ${r.start && r.start.note ? `<div class="opt-start-note">${esc(r.start.note)}</div>` : ""}
       ${r.log ? `<div class="muted" style="font-size:12px">${r.log.map(esc).join("<br>")}</div>` : ""}</div>`;
     return;
   }
@@ -1477,6 +1517,7 @@ function renderOptResult(r) {
       </div>
       <div class="rail-actions"><button id="pdfBtn" onclick="downloadGameplanPdf(this)" title="Download a PDF report of this gameplan — route summary + schematic + leg table + briefing + branching playbook — to email the crew">⬇ PDF report</button>
         <button id="shareBtn" onclick="shareGameplan(this)" title="Create a public read-only link to this gameplan's playable route view (boat animating through the forecast) — send it to the crew; no Lab login needed">🔗 Share player</button></div>
+      ${r.start && r.start.note ? `<div class="opt-start-note">${esc(r.start.note)}</div>` : ""}
       ${optDegradedBanner(r)}
       ${r.timed_out ? '<div class="pill warn">routing hit the time budget — route is best-effort</div>' : ""}
       <details class="rail-sec" open><summary>Legs</summary>
