@@ -31,6 +31,7 @@ Deletion from the boat is allowed only *after* an off-boat copy is sha256-verifi
   Rollback: untar files.tgz, delete the files in new-files.txt, `docker tag sr33-pi-engine:pre-… sr33-pi-engine:latest`
   (same for console), `up -d --no-deps engine console`. Healthy: /health, /power, /health/sensors answer,
   console serves `?v=fit1031`, Orin polling 200s. /sail says "need live wind" (on the hard).
+- **Replay rebuilt** on dev 596a0f5 and swapped in (old one → `timeline-fullrace-2026-10-30`). Kite-on-a-beat calls 1,067 → 0 upwind; red frames 1,091 → 997, now mostly "J1 overpowered" because the replay sail bar is stuck on J1.
 - **Orin:** pulled main (bdb84b2), old HEAD tagged `pre-deploy-20261031`, imports ok. Restart needs the
   sudo password → Cole ran it 15:47Z; copilot healthy (engine reachable, LLM reachable, playbook loaded).
 
