@@ -711,7 +711,7 @@ function optStartNote() {
   if ((Opt.start || "").trim())
     return "Routes from the time you picked. Clear it to route from "
       + (!sd || sd.source === "race_start" ? "the race start." : "now.");
-  const when = (e) => epochToWall(e, tz).replace("T", " ") + (tz ? " race local" : " UTC");
+  const when = (e) => epochToWall(e, tz || "UTC").replace("T", " ") + (tz ? " race local" : " UTC");
   if (!sd) return "Blank routes from the race start if a gun time is set, otherwise from now.";
   const rs = sd.race_start;
   if (sd.source === "race_start")
