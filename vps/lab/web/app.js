@@ -2593,7 +2593,7 @@ function monPlaceLabels() {
   const cands = [];
   if (own.available) cands.push({ lat: own.lat, lon: own.lon, text: ownName + " · live", cls: "own" });
   fixes.forEach((f, i) => { if (f.own) cands.push({ lat: f.lat, lon: f.lon, text: (f.name || ownName) + " · tracker", cls: "own" }); });
-  fixes.forEach((f, i) => { if (riv.idx.has(i)) cands.push({ lat: f.lat, lon: f.lon, text: f.name || "?", cls: "rival" }); });
+  riv.idx.forEach((i) => { const f = fixes[i]; cands.push({ lat: f.lat, lon: f.lon, text: f.name || "?", cls: "rival" }); });   // nearest first
   const inView = fixes.filter((f, i) => !f.own && !riv.idx.has(i) && bounds.contains([f.lat, f.lon]));
   const keyInView = cands.filter((c) => bounds.contains([c.lat, c.lon])).length;
   if (inView.length + keyInView <= MON_LABEL_ALL_MAX) inView.forEach((f) => cands.push({ lat: f.lat, lon: f.lon, text: f.name || "?", cls: "" }));
