@@ -20,6 +20,21 @@ Deletion from the boat is allowed only *after* an off-boat copy is sha256-verifi
   (real, low impact). Review was saved as `grill-ui-<sha>.md` (run from the worktree) — re-run from
   the main checkout before merging if the gate wants `Agent_C4-<sha>`.
 
+**Later 2026-10-31 — DEPLOYED TO THE BOAT (Cole's go; boat on the hard for the winter):**
+- main = dev at bdb84b2 (merge commit, tree identical to dev).
+- **Backup first:** `gs://constantineau-c4-archive/backup-2026-10-31/` (12 files, 1.1 GB, md5 verified,
+  MANIFEST-sha256.txt): boat engine.db (sqlite backup API, integrity ok) + sk_config, VPS sr33_dev
+  pg_dump (88 tables), Lab volumes except gribcache, nginx sites. Local copy `/mnt/data/c4-backup-2026-10-31/`.
+  No nightly C4 backup exists (the old nightly.sh stopped 2026-08-17) — Cole chose one-time only.
+- **Pi:** 25 files copied from main (21 changed, 4 new), engine + console rebuilt, nothing else touched.
+  Backup `~/deploy-backups/engine-console-20261031T153906Z/` + images `:pre-20261031T153906Z`.
+  Rollback: untar files.tgz, delete the files in new-files.txt, `docker tag sr33-pi-engine:pre-… sr33-pi-engine:latest`
+  (same for console), `up -d --no-deps engine console`. Healthy: /health, /power, /health/sensors answer,
+  console serves `?v=fit1031`, Orin polling 200s. /sail says "need live wind" (on the hard).
+- **Replay rebuilt** on dev 596a0f5 and swapped in (old one → `timeline-fullrace-2026-10-30`). Kite-on-a-beat calls 1,067 → 0 upwind; red frames 1,091 → 997, now mostly "J1 overpowered" because the replay sail bar is stuck on J1.
+- **Orin:** pulled main (bdb84b2), old HEAD tagged `pre-deploy-20261031`, imports ok. Restart needs the
+  sudo password → Cole ran it 15:47Z; copilot healthy (engine reachable, LLM reachable, playbook loaded).
+
 **Next, in order:**
 1. Host ports 8102/8090/8103 now bind localhost + Tailscale (#108 merged, applied live). Lab rebuilt.
 2. #71 + #107 MERGED (dev @ 010e19c). The live Lab still serves the old app.js until the lab container is rebuilt — do it together with the 8103 fix.

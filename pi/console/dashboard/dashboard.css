@@ -143,8 +143,11 @@ body {
 .st-flip b { color:var(--c); font-weight:700; }
 
 /* ---------- main layout: tile grid | commentary ---------- */
-.dash { flex:1; display:grid; grid-template-columns: 1fr 300px; gap:10px; padding:10px; min-height:0; }
-.grid { display:grid; grid-template-columns:repeat(4,1fr); grid-template-rows:repeat(2,1fr);
+/* The copilot column gives up a little width on the smaller iPads (248px at 1180 wide, 300px
+   from 1430 up) so the four tile columns keep room for their names and values (#73). */
+.dash { flex:1; display:grid; grid-template-columns:minmax(0,1fr) clamp(240px, 21vw, 300px);
+  gap:10px; padding:10px; min-height:0; }
+.grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); grid-template-rows:repeat(2,minmax(0,1fr));
   gap:10px; min-height:0; }
 
 /* ---------- a status tile ---------- */
@@ -154,6 +157,8 @@ body {
   padding:9px 11px 9px 16px;            /* left pad clears the severity bar */
   display:flex; flex-direction:column; gap:3px;
   cursor:pointer; box-shadow:var(--shadow);
+  /* the name and value size themselves off the TILE's width (cqi), not the screen's */
+  container-type:inline-size; min-width:0;
 }
 /* per-status accent colour resolved once into --c, used by bar/fill/icon/chip */
 .tile.s-ok   { --c:var(--ok);    --cfill:var(--ok-fill); }
@@ -178,8 +183,11 @@ body {
 .tile > * { position:relative; z-index:2; }
 
 .t-head { display:flex; align-items:center; gap:6px; }
-.t-name { font-size:22px; letter-spacing:1px; font-weight:700; color:var(--muted);
-  text-transform:uppercase; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
+/* A tile name never collapses to one letter ("T…", #73): it eases down to 15px in a narrow tile
+   and then wraps to a second line ("TIME TO / MARK") instead of being cut. */
+.t-name { font-size:clamp(15px, 10cqi, 22px); letter-spacing:1px; font-weight:700; color:var(--muted);
+  text-transform:uppercase; line-height:1.1; min-width:0; overflow-wrap:break-word;
+  display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; }
 /* HELD age badge — the readout is a real value that has simply stopped being refreshed. Kept
    deliberately quiet (no status colour, no icon): it must not read as an alarm, because the
    number itself is still good. Its absence is the signal that a tile is live. */
@@ -192,8 +200,12 @@ body {
 .t-icon { font-size:13px; line-height:1; }
 /* CHANNEL 2 — word label (color-independent) lives in .t-word inside the chip */
 
-.t-val { font-size:33px; font-weight:800; letter-spacing:.3px; line-height:1.05; margin-top:2px;
-  white-space:nowrap; /* CHANNEL 3b — luminance: act brightest, na dimmest, even at equal hue */ }
+/* The main value WRAPS to a second line rather than being clipped ("J1 → S", "21 k", #73).
+   It stays big: 33px in any tile 206px or wider, never below 28px — glare on deck reads big
+   numbers, so the fix is room and wrapping, not small type. */
+.t-val { font-size:clamp(28px, 16cqi, 33px); font-weight:800; letter-spacing:.3px; line-height:1.05; margin-top:2px;
+  overflow-wrap:break-word; text-wrap:balance;
+  /* CHANNEL 3b — luminance: act brightest, na dimmest, even at equal hue */ }
 .tile.s-na .t-val { color:var(--muted); font-size:15px; font-weight:700; }
 /* CREW face line 2: the on-watch team, value-weight under the energy score */
 .t-val2 { font-size:21px; font-weight:800; letter-spacing:.3px; margin-top:2px; }
@@ -354,8 +366,21 @@ body {
   padding:0 16px; font-size:18px; font-weight:800; cursor:pointer; }
 :root[data-theme="night"] .det-send { color:#1a0000; }
 
+/* PORTRAIT iPad (820x1180, 1024x1366): four tile columns plus the copilot column left each
+   tile ~125px wide, so names went to "T…" and values to "J1 → S" (#73). Portrait has height to
+   spare instead: two tile columns of four rows (same reading order, row by row), the copilot as
+   a strip under the grid, and the value allowed up to 40px in the wider tiles.
+   Every height here is FIXED, never content-sized: equal rows and a fixed-height copilot strip,
+   so a fleet row or a coach line appearing never shifts a tile (docs/COPILOT_DASHBOARD.md §1).
+   A long table that doesn't fit is cut at the tile's foot; tap the tile for all of it. */
+@media (orientation:portrait) {
+  .dash { grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(0,1fr) 20vh; }
+  .grid { grid-template-columns:repeat(2,minmax(0,1fr)); grid-template-rows:repeat(4,minmax(0,1fr)); }
+  .t-val { font-size:clamp(28px, 11cqi, 40px); }
+  .tile.mini .t-val { font-size:28px; }
+}
 /* portrait / narrow fallback so it never breaks on an odd viewport */
-@media (max-width:760px) { .dash { grid-template-columns:1fr; } .commentary { display:none; } }
+@media (max-width:760px) { .dash { grid-template-columns:1fr; grid-template-rows:minmax(0,1fr); } .commentary { display:none; } }
 
 /* ---- Phase-D armed plays (Strategy strip) + the crew gear toggle ---- */
 /* the strategy stack now renders inside the PLAYBOOK tile's tap-detail */
@@ -433,7 +458,8 @@ body {
 .wq-team { font:inherit; font-size:12px; font-weight:800; padding:1px 9px; border-radius:9px;
   cursor:pointer; background:transparent; color:inherit; border:1px solid var(--line); }
 /* tile-face TWS trend (last 3.5 h, 30-min grid) + the direction-arrow strip under it */
-.tt-wrap { margin:6px 0 2px; }
+/* the chart scales with its width, so in a wide portrait tile it is capped or it eats the tile */
+.tt-wrap { margin:6px 0 2px; max-width:240px; }
 .tt-arrows { display:flex; justify-content:space-between; padding-left:22px; padding-right:6px;
   margin-top:1px; }
 .tt-a { width:16px; height:16px; display:inline-flex; align-items:center; justify-content:center; }
