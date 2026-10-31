@@ -62,10 +62,21 @@ cid = d["courses"][0]["id"]
 try:
     marks, _, _ = race_def.course_to_marks(d, cid)
     fin = [m for m in marks if m[1] == "Finish"]
+    check("course_to_marks: half-filled finish is reported as skipped",
+          "Finish (incomplete coords)" in race_def.course_to_marks(d, cid)[1])
     check("course_to_marks: half-filled 2nd point -> finish at the complete point",
           len(fin) == 1 and fin[0][2:] == (45.8372333, -84.6168667))
 except Exception as e:
     check(f"course_to_marks raised {type(e).__name__}", False)
+
+d = copy.deepcopy(base)
+for p_ in d["courses"][0]["finish"]["points"]:
+    p_["lon"] = None
+marks, skipped, _ = race_def.course_to_marks(d, cid)
+check("both finish lons cleared -> no Finish mark, reported as skipped",
+      not any(m[1] == "Finish" for m in marks) and "Finish (incomplete coords)" in skipped)
+check("bundled course: nothing skipped for the finish",
+      "Finish (incomplete coords)" not in race_def.course_to_marks(base, cid)[1])
 
 print("ALL OK" if ok else "FAILURES")
 raise SystemExit(0 if ok else 1)
