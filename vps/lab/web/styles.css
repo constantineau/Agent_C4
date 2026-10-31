@@ -410,3 +410,36 @@ table.mon-tbl tr.mon-row { cursor: pointer; }
 table.mon-tbl tr.mon-row:hover td { background: var(--panel2); }
 table.mon-tbl tr.mon-row.own td { background: rgba(245,196,81,.10); color: #f5c451; font-weight: 700; }
 table.mon-tbl tr.mon-row td { padding-top: 7px; padding-bottom: 7px; }
+
+/* ---------- unsaved edits: fixed Save bar + tab marker + leave prompt (app.js syncDirty) ----------
+   Sits above the bottom edge so a long page (Rules 4,500 px, Course 1,600 px) can be saved without
+   scrolling to its end. Leaves room on the right for the floating Feedback button. */
+.savebar { position: fixed; z-index: 40; left: 16px; right: 150px; max-width: 720px; margin: 0 auto;
+  bottom: calc(12px + env(safe-area-inset-bottom)); display: flex; align-items: center; gap: 12px;
+  padding: 8px 8px 8px 16px; border-radius: 12px; background: #1f1a10; border: 1px solid var(--warn);
+  box-shadow: 0 6px 24px rgba(0,0,0,.55); font-size: 15px; }
+.savebar[hidden], .savebar-btns[hidden] { display: none; }
+.savebar-dot { color: var(--warn); font-size: 14px; }
+.savebar-text { flex: 1; min-width: 0; font-weight: 600; color: var(--ink);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.savebar-btns { display: flex; gap: 8px; }
+.savebar button, .modal button { min-height: 44px; padding: 0 18px; border-radius: 9px; font-size: 15px;
+  font-weight: 700; cursor: pointer; font-family: var(--font-body); }
+.savebar button.primary, .modal button.primary { background: var(--accent); color: var(--ink-on-accent); border: none; }
+.savebar button.primary:disabled { opacity: .6; cursor: default; }
+.savebar.ok { border-color: var(--accent2); background: #0f1d16; }
+.savebar.ok .savebar-dot { color: var(--accent2); }
+body.has-savebar main { padding-bottom: 96px; }
+body:not(.is-dirty) .if-dirty, body.is-dirty .if-clean { display: none; }
+.tabs a.dirty::after { content: " ●"; color: var(--warn); }
+@media (max-width: 600px) { .savebar { right: 16px; bottom: calc(64px + env(safe-area-inset-bottom)); } }
+
+.modal-back { position: fixed; inset: 0; z-index: 60; background: rgba(0,0,0,.6); display: flex;
+  align-items: center; justify-content: center; padding: 16px; }
+.modal { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 22px;
+  width: min(440px, 100%); box-shadow: 0 10px 40px rgba(0,0,0,.6); }
+.modal h3 { margin: 0 0 8px; font-size: 18px; text-transform: uppercase; letter-spacing: .06em; }
+.modal p { margin: 0 0 18px; color: var(--muted); }
+.modal p b { color: var(--ink); }
+.modal-btns { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+.modal button.danger { color: var(--bad); border-color: var(--bad); }

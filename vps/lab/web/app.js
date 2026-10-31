@@ -111,9 +111,25 @@ function start() { window.addEventListener("hashchange", route); route(); }
 // its awaits before writing.
 let activeSec = "";
 const stale = (s) => activeSec !== s;
-function route() {
-  const sec = (location.hash || "#races").slice(1);
+let routeHash = "", routeAsking = false;   // the hash being shown; true while the unsaved prompt is up
+async function route() {
+  if (!location.hash) history.replaceState(null, "", "#races");   // so a later click on Races is a no-op, not a reload
+  const target = location.hash;
+  // Leaving a tab with unsaved edits: put the old hash back (replaceState fires no hashchange) and ask
+  // first — Save / Discard / Stay — instead of the next renderer silently refetching over them.
+  if (routeAsking) { history.replaceState(null, "", routeHash); return; }   // Back/Forward under the prompt
+  if (routeHash && target !== routeHash) {
+    routeAsking = true;
+    history.replaceState(null, "", routeHash);
+    const ok = await confirmLeave();   // settles pending saves first; asks only if still dirty
+    routeAsking = false;
+    if (!ok) { history.replaceState(null, "", routeHash); return; }
+    history.replaceState(null, "", target);
+  }
+  routeHash = target;
+  const sec = target.slice(1);
   activeSec = sec;
+  syncDirty();   // the bar + markers belong to the tab being entered
   document.querySelectorAll("#tabs a").forEach((a) =>
     a.classList.toggle("active", a.getAttribute("href") === "#" + sec));
   if (sec === "races") return renderRaces();
@@ -129,6 +145,129 @@ function route() {
   location.hash = "#races";          // unknown route → the library
 }
 const clone = (o) => JSON.parse(JSON.stringify(o));
+
+/* ---------- unsaved edits — ONE mechanism for every tab that edits Lab.editDef ----------
+   Races, Course, Rules, Fleet and Learnings all edit the same in-memory RaceDefinition. markClean()
+   snapshots it right after a load or a successful save; it is dirty when it no longer matches the
+   snapshot (or is an unsaved ingest draft). While dirty: a fixed Save bar sits at the bottom of the
+   screen (no scrolling to the end of a long page), the tab gets a ● marker, and leaving the tab,
+   switching race or closing the page asks first. EDIT_SAVE maps each editing tab to its own save (so
+   its normalisation + messages still apply); every save returns true/false and calls markClean(). */
+const EDIT_SAVE = {
+  races: () => (Lab.isDraft ? saveDraft() : detailSave()),
+  course: () => saveCourse(),
+  rules: () => rulesSave(),
+  fleet: () => fleetSave(),
+  learnings: () => learnSaveNotes(),
+};
+// snap = the JSON a save actually sent (taken before the await), so an edit typed while the request
+// is in flight stays dirty; omitted = the editor as it is now (right after a load).
+function markClean(snap) {
+  Lab.cleanDef = snap !== undefined ? snap : (Lab.editDef ? JSON.stringify(Lab.editDef) : null);
+  syncDirty();
+}
+// After a save resolves: only re-baseline if the same definition is still in the editor (the user
+// may have switched race or discarded while the request was in flight).
+function markSaved(snap, ed) { if (Lab.editDef === ed) markClean(snap); }
+// Every RaceDefinition write goes through one queue: two overlapping saves (bar + in-page button)
+// then persist and resolve in the order they were sent, so the last baseline set is what's on disk.
+let saveChain = Promise.resolve();
+function queueDef(fn) {
+  const p = saveChain.then(fn);
+  saveChain = p.catch(() => {});
+  return p;
+}
+const postDef = (path, body) => queueDef(() => apiPost(path, body).then((r) => r.json()));
+// Wait out any save still in flight (and its handler's repaint) before leaving or discarding, so a
+// late response can't repaint another tab or persist edits the user just threw away.
+async function settleSaves() {
+  let c;
+  do { c = saveChain; await c; await new Promise((r) => setTimeout(r, 0)); } while (c !== saveChain);
+}
+function editDirty() {
+  if (!EDIT_SAVE[activeSec] || !Lab.editDef) return false;
+  return Lab.isDraft || JSON.stringify(Lab.editDef) !== Lab.cleanDef;
+}
+function discardEdits() {
+  if (Lab.isDraft) { Lab.draft = null; Lab.isDraft = false; Lab.editDef = null; Lab.editVal = null; }
+  else Lab.editDef = Lab.cleanDef ? JSON.parse(Lab.cleanDef) : null;
+  markClean();
+}
+// → true when it's OK to replace/drop Lab.editDef (clean, saved, or discarded); false = stay put.
+async function confirmLeave() {
+  await settleSaves();
+  if (!editDirty()) return true;
+  const choice = await askUnsaved();
+  if (choice === "save") {
+    if ((await EDIT_SAVE[activeSec]()) !== true) return false;
+    return editDirty() ? confirmLeave() : true;   // edited again while the save ran → ask again
+  }
+  if (choice === "discard") { discardEdits(); return true; }
+  return false;
+}
+function askUnsaved() {
+  return new Promise((resolve) => {
+    const name = (Lab.editDef && (Lab.editDef.name || Lab.editDef.race_id)) || "this race";
+    const el = document.createElement("div");
+    el.className = "modal-back";
+    el.innerHTML = `<div class="modal" role="alertdialog" aria-modal="true" aria-labelledby="unsavedH">
+      <h3 id="unsavedH">Unsaved changes</h3>
+      <p>${Lab.isDraft ? "The extracted draft" : "Your edits to"} <b>${esc(name)}</b> ${Lab.isDraft ? "is" : "are"} not saved yet.</p>
+      <div class="modal-btns"><button class="ghost" data-c="stay">Stay here</button>
+        <button class="ghost danger" data-c="discard">Discard</button>
+        <button class="primary" data-c="save">Save</button></div></div>`;
+    el.addEventListener("click", (e) => {
+      const c = e.target.dataset ? e.target.dataset.c : null;
+      if (!c && e.target !== el) return;
+      el.remove(); resolve(c || "stay");
+    });
+    document.body.appendChild(el);
+    el.querySelector("[data-c=save]").focus();
+  });
+}
+// Repaint the Save bar + the tab marker. Cheap enough to run after every input (rAF-coalesced).
+let dirtyRaf = 0, savebarNote = "", savebarTimer = 0;
+function syncDirty() {
+  const bar = document.getElementById("savebar");
+  if (!bar) return;
+  const dirty = editDirty();
+  const show = dirty || !!savebarNote;
+  bar.hidden = !show;
+  bar.classList.toggle("ok", !dirty && !!savebarNote);
+  document.body.classList.toggle("has-savebar", show);
+  document.body.classList.toggle("is-dirty", dirty);   // drives the in-page .if-dirty / .if-clean markers
+  document.querySelectorAll("#tabs a").forEach((a) =>
+    a.classList.toggle("dirty", dirty && a.getAttribute("href") === "#" + activeSec));
+  const name = (Lab.editDef && (Lab.editDef.name || Lab.editDef.race_id)) || "";
+  document.getElementById("savebarText").textContent = dirty
+    ? (Lab.isDraft ? "Draft not saved" : "Unsaved changes") + (name ? " — " + name : "")
+    : savebarNote;
+  document.getElementById("savebarBtns").hidden = !dirty;
+}
+function queueSyncDirty() { if (!dirtyRaf) dirtyRaf = requestAnimationFrame(() => { dirtyRaf = 0; syncDirty(); }); }
+["input", "change", "click"].forEach((t) => document.addEventListener(t, queueSyncDirty, true));
+window.addEventListener("beforeunload", (e) => { if (editDirty()) { e.preventDefault(); e.returnValue = ""; } });
+function flashSavebar(note) {
+  savebarNote = note; clearTimeout(savebarTimer);
+  savebarTimer = setTimeout(() => { savebarNote = ""; syncDirty(); }, 2500);
+  syncDirty();
+}
+async function savebarSave() {
+  const btn = document.getElementById("savebarSave"), save = EDIT_SAVE[activeSec];
+  if (!save) return;
+  btn.disabled = true; btn.textContent = "Saving…";
+  let ok = false;
+  try { ok = (await save()) === true; } catch (e) { ok = false; }
+  btn.disabled = false; btn.textContent = "Save";
+  if (ok) flashSavebar("Saved ✓");
+  else { document.getElementById("savebarText").textContent = "Save failed — see the message on the page"; }
+}
+async function savebarDiscard() {
+  if (!confirm("Discard your unsaved edits?")) return;
+  await settleSaves();
+  discardEdits();
+  route();   // repaint the tab from the restored (or reloaded) definition
+}
 
 /* ---------- Races ---------- */
 async function renderRaces() {
@@ -165,8 +304,9 @@ function raceItem(r) {
       <span class="pill">${r.requirements} checklist</span>
       <span class="pill">${r.ipad_items} →iPad</span>${rev}</div></div>`;
 }
-function selectRace(id) {
-  Lab.sel = id; Lab.draft = null;
+async function selectRace(id) {
+  if (!(await confirmLeave())) return;
+  Lab.sel = id; Lab.draft = null; Lab.isDraft = false;
   document.querySelectorAll(".raceitem").forEach((el) =>
     el.classList.toggle("sel", el.dataset.id === id));
   loadRace(id);
@@ -180,7 +320,7 @@ async function loadRace(id) {
     const d = await (await apiGet("/api/races/" + encodeURIComponent(id))).json();
     const v = await (await apiGet("/api/races/" + encodeURIComponent(id) + "/validate")).json();
     Lab.editDef = d; Lab.editVal = v; Lab.isDraft = false;
-    paintDetail();
+    paintDetail(); markClean();   // after the paint: detailWatchCard fills in an empty watch_plan
   } catch (e) { box.innerHTML = '<div class="placeholder">Failed to load race.</div>'; }
 }
 
@@ -232,6 +372,7 @@ async function extractDraft() {
     msg.style.fontWeight = color ? "600" : ""; msg.style.fontSize = "13px";
   };
   if (!Lab.sources.length && !files.length) { setMsg("Add a document URL or upload a PDF first.", "var(--warn)"); return; }
+  if (!(await confirmLeave())) return;   // a new draft replaces whatever is in the editor
   btn.disabled = true; btn.textContent = "Extracting…";
   setMsg("⏳ Extracting with Opus — reading the documents. A large SI/NOR can take 1–2 min; keep this tab open.", "var(--accent)");
   try {
@@ -269,13 +410,51 @@ async function extractDraft() {
   btn.disabled = false; btn.textContent = "Extract →";
 }
 async function saveDraft() {
-  if (!Lab.editDef) return;
+  if (!Lab.editDef) return false;
+  const sent = JSON.stringify(Lab.editDef), ed = Lab.editDef;
   try {
-    const r = await (await apiPost("/api/races", { definition: Lab.editDef })).json();
-    if (!r.saved) { alert("Save failed: " + (r.detail || "unknown")); return; }
-    Lab.races = null; Lab.sel = r.race_id; Lab.draft = null; Lab.sources = []; Lab.isDraft = false;
-    renderRaces();
-  } catch (e) { alert("Save failed."); }
+    // draft: true → the server keeps the stored prep fields (roster, notes, watch plan…) that a
+    // fresh extraction sends empty; an ordinary save stores exactly what it sends.
+    const r = await postDef("/api/races", { definition: JSON.parse(sent), draft: true });
+    if (!r.saved) { alert("Save failed: " + (r.detail || "unknown")); return false; }
+    Lab.races = null;
+    if (Lab.editDef !== ed) { refreshRaceList(); return true; }   // draft discarded/replaced mid-save
+    // Re-read what the server stored: a re-ingest keeps fields the draft lacks (fleet, notes…). Queued
+    // like a save, so leaving the tab waits for it and it can't land on another tab's edits.
+    let stored = null;
+    try { stored = await queueDef(() => apiGet("/api/races/" + encodeURIComponent(r.race_id)).then((x) => x.json())); }
+    catch (e) {}
+    if (Lab.editDef !== ed) { refreshRaceList(); return true; }
+    let clean = null;   // null = take the editor as it stands after the paint (nothing pending)
+    if (stored && stored.race_id === r.race_id) {
+      // The stored copy is the truth; overlay only what was edited while the save ran.
+      const was = JSON.parse(sent), storedJSON = JSON.stringify(stored);
+      let changed = false;
+      for (const k of Object.keys(ed)) {
+        if (k === "race_id" || JSON.stringify(ed[k]) === JSON.stringify(was[k])) continue;
+        stored[k] = ed[k]; changed = true;
+      }
+      Lab.editDef = stored;
+      if (changed) clean = storedJSON;
+    } else {
+      // Saved, but the stored copy didn't come back: stay a draft (its empty roster/notes would
+      // otherwise read as real values, and the next ordinary save would clear the stored ones).
+      ed.race_id = r.race_id; Lab.sel = r.race_id; refreshRaceList();
+      const m = document.getElementById("ingMsg");
+      if (m) { m.textContent = "Saved, but the stored copy couldn't be reloaded — click Save again."; m.style.color = "var(--warn)"; }
+      return false;
+    }
+    Lab.sel = r.race_id; Lab.draft = null; Lab.sources = []; Lab.isDraft = false;
+    Lab.editVal = { errors: r.errors || [], warnings: r.warnings || [] };
+    if (activeSec === "races") paintDetail();
+    if (clean === null) markClean(); else markClean(clean);   // after the paint, as loadRace does
+    if (activeSec === "races") {
+      renderSources();
+      const m = document.getElementById("ingMsg"); if (m) { m.textContent = "✓ Saved to the library."; m.style.color = "var(--accent2)"; }
+    }
+    refreshRaceList();
+    return true;
+  } catch (e) { alert("Save failed."); return false; }
 }
 
 /* ---------- detail rendering (editable review form, bound to Lab.editDef) ----------
@@ -291,6 +470,7 @@ function paintDetail() {
     detailDelegated(d) +
     detailWatchCard(d) +
     detailProvenance(d.provenance || {});
+  syncDirty();
 }
 function detailBanner(v) {
   const errs = (v.errors || []), warns = (v.warnings || []);
@@ -476,11 +656,12 @@ async function detailSave(silent) {
   const setMsg = (t) => { const m = document.getElementById("detailMsg"); if (m) m.textContent = t; };
   if (btn) btn.disabled = true;
   if (!silent) setMsg("Saving…");
+  const sent = JSON.stringify(Lab.editDef), ed = Lab.editDef;
   try {
-    const r = await (await apiPost("/api/races", { definition: Lab.editDef })).json();
+    const r = await postDef("/api/races", { definition: JSON.parse(sent) });
     if (!r.saved) { setMsg("Save failed: " + (r.detail || "?")); return false; }
     Lab.editVal = { errors: r.errors || [], warnings: r.warnings || [] };
-    Lab.races = null;
+    Lab.races = null; markSaved(sent, ed);
     if (!silent) {
       paintDetail(); refreshRaceList();
       setMsg(`Saved. ${(r.warnings || []).length} item(s) still flagged for review.`);
@@ -491,13 +672,18 @@ async function detailSave(silent) {
 }
 async function detailApprove(approved) {
   const setMsg = (t) => { const m = document.getElementById("detailMsg"); if (m) m.textContent = t; };
+  const sent = JSON.parse(JSON.stringify(Lab.editDef)), ed = Lab.editDef;
   try {
-    const r = await (await apiPost(`/api/races/${encodeURIComponent(Lab.editDef.race_id)}/approve`,
-      { definition: Lab.editDef, approved })).json();
+    const r = await postDef(`/api/races/${encodeURIComponent(sent.race_id)}/approve`,
+      { definition: sent, approved });
     if (r.detail) { paintDetail(); setMsg(r.detail); return; }   // e.g. blocked by validation errors
-    Lab.editDef.reviewed = r.reviewed; Lab.editDef.reviewed_at = r.reviewed_at;
+    // approve persists the definition it was sent (+ the sign-off): that is the new clean baseline
+    for (const o of [ed, sent]) {
+      o.reviewed = r.reviewed; o.reviewed_at = r.reviewed_at;
+      if (!approved) delete o.reviewed_at;
+    }
     Lab.editVal = { errors: r.errors || [], warnings: r.warnings || [] };
-    Lab.races = null;
+    Lab.races = null; markSaved(JSON.stringify(sent), ed);
     paintDetail(); refreshRaceList();
     setMsg(approved ? "Approved — signed off for race use." : "Approval cleared.");
   } catch (e) { setMsg("Approve failed."); }
@@ -520,7 +706,7 @@ async function renderCourse() {
   try { Lab.editDef = await (await apiGet("/api/races/" + encodeURIComponent(Lab.sel))).json(); }
   catch (e) { view.innerHTML = '<div class="placeholder">Failed to load.</div>'; return; }
   if (stale("course")) return;
-  paintCourse();
+  paintCourse(); markClean();   // after the paint: courseEditCard fills in an empty start
 }
 /* Render the Course & Marks view from the in-memory Lab.editDef (no server refetch — so edits and
    geocoded coords are preserved). Callers set #courseMsg AFTER calling this. */
@@ -535,6 +721,7 @@ function paintCourse() {
     <button id="saveCourseBtn" onclick="saveCourse()">Save course geometry</button>
     <button class="mini" onclick="saveAndGameplan()">Save → run optimizer</button>`;
   (d.courses || []).forEach((c, i) => drawCourseMap("map" + i, c));
+  syncDirty();
 }
 function courseEditCard(c, ci) {
   c.start = c.start || {};
@@ -612,7 +799,7 @@ function editStart(ci, field, val) {
   paintCourse();
 }
 async function saveAndGameplan() {
-  await saveCourse();
+  if (!(await saveCourse())) return;
   if (window.Opt) { Opt.raceId = Lab.sel; Opt.def = Lab.editDef; Opt.courseId = null; Opt.result = null; }
   location.hash = "#gameplan";
 }
@@ -636,17 +823,21 @@ async function saveCourse() {
   const btn = document.getElementById("saveCourseBtn");
   const msg = document.getElementById("courseMsg");
   btn.disabled = true; msg.textContent = "Saving…";
+  let ok = false;
   // mark the review touched in provenance
   Lab.editDef.provenance = Lab.editDef.provenance || {};
   Lab.editDef.provenance.review_status =
     "human-reviewed in the Course & Marks tab — verify before race use.";
+  const sent = JSON.stringify(Lab.editDef), ed = Lab.editDef;
   try {
-    const r = await (await apiPost("/api/races", { definition: Lab.editDef })).json();
-    Lab.races = null;
-    msg.textContent = r.saved ? `Saved. ${r.warnings.length} item(s) still flagged for review.`
+    const r = await postDef("/api/races", { definition: JSON.parse(sent) });
+    Lab.races = null; ok = !!r.saved;
+    if (ok) markSaved(sent, ed);
+    msg.textContent = r.saved ? `Saved. ${(r.warnings || []).length} item(s) still flagged for review.`
       : ("Save failed: " + (r.detail || ""));
   } catch (e) { msg.textContent = "Save failed."; }
   btn.disabled = false;
+  return ok;
 }
 // Course & Marks chart — a real slippy map (OSM + OpenSeaMap seamarks) so geocoded marks can be
 // sanity-checked against actual geography (issue #26). Labeled markers per start/mark/gate/finish,
@@ -1768,24 +1959,28 @@ async function renderFleet() {
   }
   if (!Lab.sel && Lab.races.length) Lab.sel = Lab.races[0].race_id;
   if (!Lab.sel) { view.innerHTML = '<div class="placeholder">No race — ingest one in the Races tab.</div>'; return; }
+  let fetched = false;
   if (!Lab.editDef || Lab.editDef.race_id !== Lab.sel) {
     view.innerHTML = '<div class="loading">Loading fleet…</div>';
-    try { Lab.editDef = await (await apiGet("/api/races/" + encodeURIComponent(Lab.sel))).json(); Lab.fleetMsg = ""; }
+    try { Lab.editDef = await (await apiGet("/api/races/" + encodeURIComponent(Lab.sel))).json(); Lab.fleetMsg = ""; fetched = true; }
     catch (e) { view.innerHTML = '<div class="placeholder">Failed to load.</div>'; return; }
   }
   if (stale("fleet")) return;
+  const keepDirty = !fetched && editDirty();   // re-entered with unsaved edits → don't bless them
   if (!Array.isArray(Lab.editDef.fleet)) Lab.editDef.fleet = [];
   if (!Lab.editDef.own || typeof Lab.editDef.own !== "object") Lab.editDef.own = {};
-  Lab.fleetDirty = false;                 // freshly loaded from disk = in sync
   Lab.fleetEdit = !Lab.editDef.fleet.length;   // empty roster → open the editor; populated → show the read-only view
+  if (!keepDirty) markClean();            // freshly loaded from disk = in sync
   paintFleet();
 }
 
-async function fleetPickRace(id) { Lab.sel = id; Lab.editDef = null; Lab.fleetMsg = ""; renderFleet(); }
-function fleetSet(i, f, v) { if (Lab.editDef && Lab.editDef.fleet[i]) { Lab.editDef.fleet[i][f] = v; Lab.fleetDirty = true; } }
-function fleetOwnSet(f, v) { if (!Lab.editDef) return; if (!Lab.editDef.own) Lab.editDef.own = {}; Lab.editDef.own[f] = v; Lab.fleetDirty = true; }
-function fleetAddRow() { Lab.editDef.fleet.push({ boat: "", division: "", cls: "", owner: "", sail: "", orc_gph: null, rating: null, mmsi: "", source: "manual" }); Lab.fleetDirty = true; Lab.fleetEdit = true; paintFleet(); }
-function fleetRemove(i) { Lab.editDef.fleet.splice(i, 1); Lab.fleetDirty = true; paintFleet(); }
+async function fleetPickRace(id) {
+  if (!(await confirmLeave())) return paintFleet();   // Stay → repaint puts the picker back
+  Lab.sel = id; Lab.editDef = null; Lab.fleetMsg = ""; renderFleet(); }
+function fleetSet(i, f, v) { if (Lab.editDef && Lab.editDef.fleet[i]) { Lab.editDef.fleet[i][f] = v; } }
+function fleetOwnSet(f, v) { if (!Lab.editDef) return; if (!Lab.editDef.own) Lab.editDef.own = {}; Lab.editDef.own[f] = v; }
+function fleetAddRow() { Lab.editDef.fleet.push({ boat: "", division: "", cls: "", owner: "", sail: "", orc_gph: null, rating: null, mmsi: "", source: "manual" }); Lab.fleetEdit = true; paintFleet(); }
+function fleetRemove(i) { Lab.editDef.fleet.splice(i, 1); paintFleet(); }
 
 // Auto-import the roster from public data. source: 'yb' = the tracker entry list, 'both' = YB → ORC,
 // 'website' = a regatta-site URL/pasted text → ORC, 'orc' = enrich the current roster. extra = {url|text}
@@ -1794,7 +1989,7 @@ function _fleetCC() { return (document.getElementById("fleetOrcCC") || {}).value
 function _fleetApplyResult(r) {
   if (!r.ok) { Lab.fleetMsg = r.note || r.detail || "import failed — no boats found"; Lab.fleetMsgErr = true; return; }
   Lab.editDef.fleet = r.entries || [];
-  Lab.fleetDirty = true; Lab.fleetMsgErr = false;
+  Lab.fleetMsgErr = false;
   const bits = [`${r.count} boats`];
   if (r.matched != null) bits.push(`${r.matched}/${r.total} matched to ORC certs`);
   if (r.unmatched && r.unmatched.length) bits.push(`${r.unmatched.length} need a handicap by hand`);
@@ -1858,7 +2053,7 @@ function fleetGunSet(div, val) {
     ds[div] = tz ? zonedWallToEpoch(y, mo, d, h, mi, tz)
                  : new Date(y, mo - 1, d, h, mi).getTime() / 1000;
   }
-  Lab.fleetDirty = true;
+ 
   paintFleet();
 }
 function fleetGunsCard(roster, own) {
@@ -1902,7 +2097,7 @@ function fleetApplyCand(i, ci) {
   if (!e.sail && c.sail) e.sail = c.sail;
   e.source = (e.source || "") ? e.source + "+orc" : "orc";
   Lab.fleetCand = null;
-  Lab.fleetDirty = true;
+ 
   Lab.fleetMsg = `Applied ${c.yacht} (${c.country}) to "${e.boat}" — review, then Save roster.`;
   paintFleet();
 }
@@ -1917,13 +2112,16 @@ async function fleetSave() {
   Lab.editDef.own = { boat: (own.boat || "").trim(), division: own.division || "",
     orc_gph: fleetNum(own.orc_gph), rating: fleetNum(own.rating), mmsi: (own.mmsi || "").trim() };
   Lab.fleetMsg = "Saving…"; Lab.fleetMsgErr = false; paintFleet();
+  let ok = false;
+  const sent = JSON.stringify(Lab.editDef), ed = Lab.editDef;
   try {
-    const r = await (await apiPost("/api/races", { definition: Lab.editDef })).json();
-    if (r.saved) { Lab.fleetDirty = false; Lab.fleetMsgErr = false;
+    const r = await postDef("/api/races", { definition: JSON.parse(sent) });
+    if (r.saved) { markSaved(sent, ed); ok = true; Lab.fleetMsgErr = false;
       Lab.fleetMsg = `Saved — ${Lab.editDef.fleet.length} boat${Lab.editDef.fleet.length === 1 ? "" : "s"} in the roster.`; }
     else { Lab.fleetMsg = "Save failed."; Lab.fleetMsgErr = true; }
   } catch (e) { Lab.fleetMsg = "Save failed: " + e.message; Lab.fleetMsgErr = true; }
   paintFleet();
+  return ok;
 }
 
 function fleetSrcBadge(e) {
@@ -2035,7 +2233,7 @@ function paintFleet() {
 
     <div class="card">
       <h3>Roster <span class="muted" style="font-weight:400">— the ingested fleet</span>
-        ${roster.length ? (Lab.fleetDirty ? '<span class="pill warn" style="margin-left:8px">unsaved draft — click Save roster</span>' : '<span class="pill ok" style="margin-left:8px">saved</span>') : ""}</h3>
+        ${roster.length ? '<span class="pill warn if-dirty" style="margin-left:8px">unsaved draft — click Save roster</span><span class="pill ok if-clean" style="margin-left:8px">saved</span>' : ""}</h3>
       ${roster.length ? fleetGlance(roster) : `<div class="banner warn">No boats in the roster yet. Auto-import from the YB tracker or the regatta website above (then <b>Save roster</b>), or add/paste boats manually. An import only fills a draft here — it isn't stored until you Save.</div>`}
       <details ${Lab.fleetEdit ? "open" : ""} style="margin-top:10px" ontoggle="Lab.fleetEdit=this.open">
         <summary style="cursor:pointer;font-size:13px">Edit roster ${roster.length ? `(${roster.length} — add / remove / fix handicaps)` : "(add boats)"}</summary>
@@ -2049,9 +2247,11 @@ function paintFleet() {
     <div class="dep-row" style="margin-top:4px"><a href="#rules">Rules →</a>
       <span class="muted">scoring ${esc(sc.method || "not set")} · tracker ${tr.provider ? esc(tr.provider) + (permitted ? " (permitted onboard)" : " (not permitted onboard)") : "not configured"}</span></div>
 
-    <div class="dactions"><button onclick="fleetSave()">${Lab.fleetDirty ? "Save roster ●" : "Save roster"}</button>
-      <span class="muted" style="font-size:12px">${Lab.fleetDirty ? "you have unsaved changes" : (roster.length ? "roster saved" : "")}</span></div>
+    <div class="dactions"><button onclick="fleetSave()">Save roster<span class="if-dirty"> ●</span></button>
+      <span class="muted if-dirty" style="font-size:12px">you have unsaved changes</span>
+      ${roster.length ? '<span class="muted if-clean" style="font-size:12px">roster saved</span>' : ""}</div>
   </div>`;
+  syncDirty();
 }
 
 /* ---------- Rules, Safety & Checklists ---------- */
@@ -2066,22 +2266,28 @@ async function renderRules() {
   }
   if (!Lab.sel && Lab.races.length) Lab.sel = Lab.races[0].race_id;
   if (!Lab.sel) { view.innerHTML = '<div class="placeholder">No race — ingest one in the Races tab.</div>'; return; }
+  let fetched = false;
   if (!Lab.editDef || Lab.editDef.race_id !== Lab.sel) {
     view.innerHTML = '<div class="loading">Loading checklist…</div>';
-    try { Lab.editDef = await (await apiGet("/api/races/" + encodeURIComponent(Lab.sel))).json(); }
+    try { Lab.editDef = await (await apiGet("/api/races/" + encodeURIComponent(Lab.sel))).json(); fetched = true; }
     catch (e) { view.innerHTML = '<div class="placeholder">Failed to load.</div>'; return; }
   }
   try { Lab.checked = (await (await apiGet("/api/checklist?race_id=" + encodeURIComponent(Lab.sel))).json()).checked || {}; }
   catch (e) { Lab.checked = {}; }
   if (stale("rules")) return;
+  const keepDirty = !fetched && editDirty();   // re-entered with unsaved edits → don't bless them
   if (!Lab.editDef.rules_profile || typeof Lab.editDef.rules_profile !== "object") Lab.editDef.rules_profile = {};
   if (!Array.isArray(Lab.editDef.rules_profile.modifications)) Lab.editDef.rules_profile.modifications = [];
   if (!Lab.editDef.rules_profile.scoring) Lab.editDef.rules_profile.scoring = {};
   if (!Array.isArray(Lab.editDef.requirements)) Lab.editDef.requirements = [];
+  if (!keepDirty) markClean();   // after the shape fill-ins above, so they don't read as edits
   paintRules();
 }
 
-async function rulesPickRace(id) { Lab.sel = id; Lab.editDef = null; renderRules(); }
+async function rulesPickRace(id) {
+  if (!(await confirmLeave())) return paintRules();   // Stay → repaint puts the picker back
+  Lab.sel = id; Lab.editDef = null; renderRules();
+}
 function modAdd() { Lab.editDef.rules_profile.modifications.push({ ref: "", rule: "", summary: "" }); paintRules(); }
 function modRemove(i) { Lab.editDef.rules_profile.modifications.splice(i, 1); paintRules(); }
 function reqAdd() {
@@ -2105,12 +2311,15 @@ async function checkToggle(id, on) {
 async function rulesSave() {
   const msg = document.getElementById("rulesMsg");
   if (msg) msg.textContent = "Saving…";
+  const sent = JSON.stringify(Lab.editDef), ed = Lab.editDef;
   try {
-    const r = await (await apiPost("/api/races", { definition: Lab.editDef })).json();
+    const r = await postDef("/api/races", { definition: JSON.parse(sent) });
+    if (r.saved) markSaved(sent, ed);
     paintRules();
     const m2 = document.getElementById("rulesMsg");
     if (m2) m2.textContent = r.saved ? `Saved · ${(r.errors || []).length} error(s), ${(r.warnings || []).length} warning(s).` : "Save failed.";
-  } catch (e) { const m2 = document.getElementById("rulesMsg"); if (m2) m2.textContent = "Save failed: " + e.message; }
+    return !!r.saved;
+  } catch (e) { const m2 = document.getElementById("rulesMsg"); if (m2) m2.textContent = "Save failed: " + e.message; return false; }
 }
 
 function paintRules() {
@@ -2196,6 +2405,7 @@ function paintRules() {
       <span id="rulesMsg" class="muted" style="font-size:12px"></span>
       <span class="muted" style="font-size:11px">(check-off saves on its own)</span></div>
   </div>`;
+  syncDirty();
 }
 
 /* ---------- Monitor (shore-side live view: fleet via tracker + our boat via cloud telemetry) ---------- */
@@ -2866,23 +3076,33 @@ async function renderLearnings() {
     if (!Lab.races) Lab.races = (await (await apiGet("/api/races")).json()).races || [];
   } catch (e) { view.innerHTML = '<div class="placeholder">Failed to load learnings.</div>'; return; }
   if (!Lab.sel && Lab.races.length) Lab.sel = Lab.races[0].race_id;
+  let fetched = false;
   if (Lab.sel && (!Lab.editDef || Lab.editDef.race_id !== Lab.sel)) {
-    try { Lab.editDef = await (await apiGet("/api/races/" + encodeURIComponent(Lab.sel))).json(); } catch (e) {}
+    try { Lab.editDef = await (await apiGet("/api/races/" + encodeURIComponent(Lab.sel))).json(); fetched = true; } catch (e) {}
   }
   await learnReload();
   if (stale("learnings")) return;
+  // a boat-model save repaints via renderLearnings() — only a fresh load is a clean baseline
+  if (fetched || !editDirty()) markClean();
   paintLearnings();
 }
 
-async function learnPickRace(id) { Lab.sel = id; Lab.editDef = null; renderLearnings(); }
+async function learnPickRace(id) {
+  if (!(await confirmLeave())) return paintLearnings();   // Stay → repaint puts the picker back
+  Lab.sel = id; Lab.editDef = null; renderLearnings();
+}
 async function learnSaveNotes() {
-  if (!Lab.editDef) return;
-  Lab.editDef.learnings_notes = document.getElementById("learnNotes").value;
+  if (!Lab.editDef) return false;
+  const ta = document.getElementById("learnNotes");
+  if (ta) Lab.editDef.learnings_notes = ta.value;
   const msg = document.getElementById("learnMsg"); if (msg) msg.textContent = "Saving…";
+  const sent = JSON.stringify(Lab.editDef), ed = Lab.editDef;
   try {
-    const r = await (await apiPost("/api/races", { definition: Lab.editDef })).json();
+    const r = await postDef("/api/races", { definition: JSON.parse(sent) });
+    if (r.saved) markSaved(sent, ed);
     if (msg) msg.textContent = r.saved ? "Saved." : "Save failed.";
-  } catch (e) { if (msg) msg.textContent = "Save failed: " + e.message; }
+    return !!r.saved;
+  } catch (e) { if (msg) msg.textContent = "Save failed: " + e.message; return false; }
 }
 
 function paintLearnings() {
@@ -2904,7 +3124,7 @@ function paintLearnings() {
         </select></label>
       </div>
       <div class="muted" style="font-size:12px;margin:8px 0 4px">Venue / conditions knowledge, calibration reminders, what to apply for this race (free text, saved with the race).</div>
-      <textarea id="learnNotes" rows="6" style="width:100%;box-sizing:border-box" placeholder="e.g. Cove Island current sets NE on the ebb; J2 crossover felt early last year — try 15 kts; main calibration +2° at the masthead…">${esc(d.learnings_notes || "")}</textarea>
+      <textarea id="learnNotes" rows="6" oninput="if (Lab.editDef) Lab.editDef.learnings_notes = this.value" style="width:100%;box-sizing:border-box" placeholder="e.g. Cove Island current sets NE on the ebb; J2 crossover felt early last year — try 15 kts; main calibration +2° at the masthead…">${esc(d.learnings_notes || "")}</textarea>
       <div style="margin-top:8px"><button onclick="learnSaveNotes()">Save notes</button> <span id="learnMsg" class="muted" style="font-size:12px"></span></div>
     </div>
     ${learnRefineCard(ab)}
