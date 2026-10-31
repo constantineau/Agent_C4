@@ -1056,8 +1056,8 @@
   function linkMessage(oldestHeldMs) {
     if (App.lastPollOk) return null;
     const now = Date.now();
-    if (!App.lastOkAt) return { state: "reconnecting", text: "Connecting to the boat…" };
-    const silent = now - App.lastOkAt;
+    if (!App.lastOkAt && now - App.startedAt < LOST_AFTER_MS) return { state: "reconnecting", text: "Connecting to the boat…" };
+    const silent = now - (App.lastOkAt || App.startedAt);
     if (now < App.graceUntil || silent < LOST_AFTER_MS)
       return { state: "reconnecting", text: "Reconnecting to the boat… showing last values" +
         (oldestHeldMs ? " (" + fmtAge(oldestHeldMs) + " old)" : "") + "." };
@@ -1727,7 +1727,7 @@
     plangap: null, trend: null, briefBusy: {}, gps: null, gpsBusy: false, gpsNote: "",
     checklist: null, chkTimer: null,
     detailStreamKey: null, detailAbort: null,
-    lastOkAt: 0, lastPollOk: false, graceUntil: 0,
+    lastOkAt: 0, lastPollOk: false, graceUntil: 0, startedAt: Date.now(),
   };
   function currentData() {
     if (App.src === "demo") {
