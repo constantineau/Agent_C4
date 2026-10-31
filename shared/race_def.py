@@ -238,7 +238,7 @@ def validate(d: dict) -> tuple[list, list]:
         fin = c.get("finish")
         if not fin:
             warnings.append(f"course {c.get('id')!r} has no finish defined")
-        elif not isinstance(fin, dict) or not isinstance(fin.get("points") or [], list):
+        elif not isinstance(fin, dict) or not isinstance(fin.get("points", []), (list, type(None))):
             errors.append(f"course {c.get('id')!r}: finish is malformed (want {{points: [...]}})")
         else:
             fpts = fin.get("points") or []

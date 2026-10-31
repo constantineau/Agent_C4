@@ -771,8 +771,8 @@ function courseEditCard(c, ci) {
    in place on Lab.editDef like the start. Nothing is written on render: a course with no finish
    only gets one when the user adds a point. */
 function finishEditor(c, ci) {
-  const f = c.finish || {};
-  const pts = f.points || [];
+  const f = (c.finish && typeof c.finish === "object") ? c.finish : {};
+  const pts = Array.isArray(f.points) ? f.points : [];
   const need = !pts.length || pts.some((p) => !p || p.lat == null || p.lon == null)
     || ["needs_review", "si_pending"].includes(f.coords_source);
   const rows = pts.map((p, k) => `<div class="finrow">
@@ -798,8 +798,8 @@ function finishEditor(c, ci) {
 }
 function finishPoints(ci) {
   const c = Lab.editDef.courses[ci];
-  c.finish = c.finish || { type: "line", points: [], coords_source: "needs_review" };
-  c.finish.points = c.finish.points || [];
+  if (!c.finish || typeof c.finish !== "object") c.finish = { type: "line", points: [], coords_source: "needs_review" };
+  if (!Array.isArray(c.finish.points)) c.finish.points = [];
   return c.finish;
 }
 function finishSourceAfterEdit(f) {
@@ -937,7 +937,8 @@ function drawCourseMap(id, course) {
       pin(m.lat, m.lon, m.name + (m.rounding && m.rounding !== "none" ? " · " + m.rounding : ""), "#2f9bff");
     }
   });
-  const fp = ((course.finish || {}).points || []).filter((p) => p && p.lat != null && p.lon != null);
+  const fpRaw = (course.finish || {}).points;
+  const fp = (Array.isArray(fpRaw) ? fpRaw : []).filter((p) => p && p.lat != null && p.lon != null);
   if (fp.length === 2) L.polyline([[fp[0].lat, fp[0].lon], [fp[1].lat, fp[1].lon]], { color: "#f5c451", weight: 3 }).addTo(map);
   fp.forEach((p, k) => pin(p.lat, p.lon, k === 0 ? "Finish" : "Finish (2)", "#f5c451", k === 0 ? 1 : 3));
   // Declutter: in priority order (start, finish, marks in course order, 2nd finish/gate points) each

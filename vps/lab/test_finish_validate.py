@@ -40,6 +40,8 @@ check("single-point finish mark is valid", not any("finish" in e for e in errs)
 for label, fin in [("string lat", {"points": [{"lat": "45.8", "lon": -84.6}]}),
                    ("non-dict point", {"points": [42]}),
                    ("points not a list", {"points": "nope"}),
+                   ("points an empty object", {"points": {}}),
+                   ("points an object", {"points": {"a": 1}}),
                    ("finish not a dict", "line")]:
     d = copy.deepcopy(base); d["courses"][0]["finish"] = fin
     try:
