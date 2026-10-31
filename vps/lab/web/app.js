@@ -178,7 +178,10 @@ function postDef(path, body) {
 }
 // Wait out any save still in flight (and its handler's repaint) before leaving or discarding, so a
 // late response can't repaint another tab or persist edits the user just threw away.
-async function settleSaves() { await saveChain; await new Promise((r) => setTimeout(r, 0)); }
+async function settleSaves() {
+  let c;
+  do { c = saveChain; await c; await new Promise((r) => setTimeout(r, 0)); } while (c !== saveChain);
+}
 function editDirty() {
   if (!EDIT_SAVE[activeSec] || !Lab.editDef) return false;
   return Lab.isDraft || JSON.stringify(Lab.editDef) !== Lab.cleanDef;
