@@ -471,7 +471,11 @@ def import_fleet(definition, source="both", country="USA", course_id=None, url=N
             return r
         entries = r["entries"]
         if src == "yb":                                   # entry list only (no ORC)
-            return {"ok": True, "source": src, "entries": entries, "count": len(entries)}
+            out = {"ok": True, "source": src, "entries": entries, "count": len(entries)}
+            seeded = _preserve_seeded_mmsi(entries, definition)   # same as pack_with_orc
+            if seeded:
+                out["seeded_mmsi"] = seeded
+            return out
     elif src in ("website", "web"):
         r = roster_from_url(url) if (url or "").strip() else roster_from_text(text)
         if not r.get("ok"):
