@@ -34,7 +34,7 @@ function ein(path, val, ph) {
     oninput="eset('${path}', this.value)">`;
 }
 function enm(path, val, ph) {
-  return `<input class="ein num" value="${val == null ? "" : val}" placeholder="${attr(ph || "")}"
+  return `<input class="ein num" value="${esc(val)}" placeholder="${attr(ph || "")}"
     inputmode="decimal" oninput="esetNum('${path}', this.value)">`;
 }
 function etxt(path, val, ph) {
@@ -729,7 +729,7 @@ function courseEditCard(c, ci) {
     const need = m.lat == null || m.coords_source === "needs_review";
     const isGate = m.type === "gate", isIsland = m.type === "island";
     return `<tr class="${need ? "needrow" : ""}">
-      <td class="mono">${m.seq}</td>
+      <td class="mono">${esc(m.seq)}</td>
       <td><input class="cin" style="width:140px" value="${esc(m.name || "")}"
         onchange="editMark(${ci},${mi},'name',this.value)"></td>
       <td><select onchange="editMark(${ci},${mi},'type',this.value)">
@@ -738,13 +738,13 @@ function courseEditCard(c, ci) {
       <td><select onchange="editMark(${ci},${mi},'rounding',this.value)">
         ${["none", "port", "starboard", "gate"].map((r) =>
           `<option ${m.rounding === r ? "selected" : ""}>${r}</option>`).join("")}</select></td>
-      <td><div class="cstack"><input class="cin" value="${m.lat == null ? "" : m.lat}" placeholder="lat"
-        onchange="editMark(${ci},${mi},'lat',this.value)"><input class="cin" value="${m.lon == null ? "" : m.lon}"
+      <td><div class="cstack"><input class="cin" value="${esc(m.lat)}" placeholder="lat"
+        onchange="editMark(${ci},${mi},'lat',this.value)"><input class="cin" value="${esc(m.lon)}"
         placeholder="lon" onchange="editMark(${ci},${mi},'lon',this.value)"></div></td>
-      <td>${isGate ? `<div class="cstack"><input class="cin" value="${m.lat2 == null ? "" : m.lat2}" placeholder="lat2"
-        onchange="editMark(${ci},${mi},'lat2',this.value)"><input class="cin" value="${m.lon2 == null ? "" : m.lon2}"
+      <td>${isGate ? `<div class="cstack"><input class="cin" value="${esc(m.lat2)}" placeholder="lat2"
+        onchange="editMark(${ci},${mi},'lat2',this.value)"><input class="cin" value="${esc(m.lon2)}"
         placeholder="lon2" onchange="editMark(${ci},${mi},'lon2',this.value)"></div>` : ""}</td>
-      <td>${isIsland ? `<input class="cin" style="width:48px" value="${m.radius_nm == null ? "" : m.radius_nm}"
+      <td>${isIsland ? `<input class="cin" style="width:48px" value="${esc(m.radius_nm)}"
         placeholder="nm" onchange="editMark(${ci},${mi},'radius_nm',this.value)">` : ""}</td>
       <td>${esc(m.coords_source || "")}</td>
       <td>${need ? `<button class="mini" onclick="geocodeMark(${ci},${mi})">Geocode</button>` : ""}
@@ -755,9 +755,9 @@ function courseEditCard(c, ci) {
     <div id="map${ci}" class="coursemap"></div>
     <div style="font-size:13px;margin:8px 0">
       <b>Start</b>
-      <input class="cin" value="${c.start.lat == null ? "" : c.start.lat}" placeholder="start lat"
+      <input class="cin" value="${esc(c.start.lat)}" placeholder="start lat"
         onchange="editStart(${ci},'lat',this.value)">
-      <input class="cin" value="${c.start.lon == null ? "" : c.start.lon}" placeholder="start lon"
+      <input class="cin" value="${esc(c.start.lon)}" placeholder="start lon"
         onchange="editStart(${ci},'lon',this.value)">
       <span class="muted">${esc(c.start.coords_source || "")}</span>
     </div>
@@ -779,9 +779,9 @@ function finishEditor(c, ci) {
       <span class="mono">${k === 0 ? "Finish" : "Finish (2)"}</span>
       <input class="cin" style="width:160px" value="${esc((p && p.name) || "")}" placeholder="point name"
         onchange="editFinish(${ci},${k},'name',this.value)">
-      <input class="cin" value="${p && p.lat != null ? p.lat : ""}" placeholder="lat"
+      <input class="cin" value="${esc(p && p.lat)}" placeholder="lat"
         onchange="editFinish(${ci},${k},'lat',this.value)">
-      <input class="cin" value="${p && p.lon != null ? p.lon : ""}" placeholder="lon"
+      <input class="cin" value="${esc(p && p.lon)}" placeholder="lon"
         onchange="editFinish(${ci},${k},'lon',this.value)">
       <button class="mini" title="remove finish point" onclick="removeFinishPoint(${ci},${k})">✕</button>
     </div>`).join("");
