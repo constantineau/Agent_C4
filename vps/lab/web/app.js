@@ -771,7 +771,7 @@ function courseEditCard(c, ci) {
    in place on Lab.editDef like the start. Nothing is written on render: a course with no finish
    only gets one when the user adds a point. */
 function finishEditor(c, ci) {
-  const f = (c.finish && typeof c.finish === "object") ? c.finish : {};
+  const f = (c.finish && typeof c.finish === "object" && !Array.isArray(c.finish)) ? c.finish : {};
   const pts = Array.isArray(f.points) ? f.points : [];
   const need = !pts.length || pts.some((p) => !p || p.lat == null || p.lon == null)
     || ["needs_review", "si_pending"].includes(f.coords_source);
@@ -798,7 +798,7 @@ function finishEditor(c, ci) {
 }
 function finishPoints(ci) {
   const c = Lab.editDef.courses[ci];
-  if (!c.finish || typeof c.finish !== "object") c.finish = { type: "line", points: [], coords_source: "needs_review" };
+  if (!c.finish || typeof c.finish !== "object" || Array.isArray(c.finish)) c.finish = { type: "line", points: [], coords_source: "needs_review" };
   if (!Array.isArray(c.finish.points)) c.finish.points = [];
   return c.finish;
 }
