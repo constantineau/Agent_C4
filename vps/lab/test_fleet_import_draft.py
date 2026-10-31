@@ -70,6 +70,14 @@ def test_reimport_keeps_mmsi_seeded_in_the_draft():
     assert next(e for e in r["entries"] if e["boat"] == "Hand Added")["mmsi"] == "366555555"
 
 
+def test_yb_only_reimport_keeps_seeded_mmsi():
+    _setup()
+    draft = [{"boat": "Il Mostro", "sail": "USA 60", "mmsi": "366111111"}]
+    r = _import({"race_id": "t-race", "source": "yb", "fleet": draft})
+    assert r["ok"] and r.get("seeded_mmsi") == 1, r
+    assert next(e for e in r["entries"] if e["boat"] == "Il Mostro")["mmsi"] == "366111111"
+
+
 if __name__ == "__main__":
     n = 0
     for name, fn in list(globals().items()):

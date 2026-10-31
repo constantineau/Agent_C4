@@ -1317,13 +1317,16 @@ function bmBodies(f, was) {
   let jib = null, sc = null;
   if (changed(BM_JIB)) {
     const t1 = parseFloat(f.t1), t2 = parseFloat(f.t2);
-    if (isNaN(t1) || isNaN(t2) || t1 >= t2) return { err: "J1→J2 must be below J2→J3." };
+    if (isNaN(t1) || isNaN(t2) || t1 <= 0 || t1 >= t2) return { err: "J1→J2 must be below J2→J3." };
     jib = { jib_crossovers: [{ sail: "J1", tws_max: t1 }, { sail: "J2", tws_min: t1, tws_max: t2 }, { sail: "J3", tws_min: t2 }] };
   }
   if (changed(BM_SC)) {
     const tws = parseFloat(f.c0Tws), alo = parseFloat(f.c0Alo), ahi = parseFloat(f.c0Ahi);
+    // the same bounds /api/boats/sail-config enforces, checked before ANY post
     if (f.c0On && (isNaN(tws) || isNaN(alo) || isNaN(ahi) || alo >= ahi)) return { err: "Code 0: TWA min must be below max." };
+    if (f.c0On && !(tws > 0 && tws <= 30 && alo >= 0 && ahi <= 180)) return { err: "Code 0: wind up to 30 kts, TWA within 0–180°." };
     const r1 = parseFloat(f.r1), slot = parseFloat(f.slot);
+    if ([r1, slot].some((v) => !isNaN(v) && (v < 4 || v > 45))) return { err: "Reef points must be 4–45 kts (or blank)." };
     if (!isNaN(r1) && !isNaN(slot) && slot > r1) return { err: "The A3 slot reef normally fires at or below the depower reef." };
     sc = { code0: f.c0On ? { enabled: true, tws_max: tws, twa_min: alo, twa_max: ahi } : { enabled: false },
       main_reefs: { r1_tws_kn: isNaN(r1) ? null : r1, r1_a3_slot_tws_kn: isNaN(slot) ? null : slot } };
@@ -1343,15 +1346,19 @@ async function saveBoatModel() {
     // diff against the baseline as it is NOW: an earlier save in the queue may have moved it
     const was = JSON.parse(Opt.bmClean), { jib, sc, err } = bmBodies(f, was);
     if (err) { bmMsg(err, true); return false; }
-    const post = async (path, body) => (await apiPost(path, body)).json();
+    const post = async (path, body) => {
+      const r = await (await apiPost(path, body)).json();
+      if (!r.saved) throw new Error(r.detail || "not saved");
+      return r;
+    };
     const clean = Object.assign({}, was);   // what the server holds so far
     try {
       if (jib) {
-        if (!(await post("/api/boats/jib-crossovers", jib)).saved) throw new Error("jib change-downs not saved");
+        await post("/api/boats/jib-crossovers", jib);
         BM_JIB.forEach((k) => { clean[k] = f[k]; });
       }
       if (sc) {
-        if (!(await post("/api/boats/sail-config", sc)).saved) throw new Error("sail config not saved");
+        await post("/api/boats/sail-config", sc);
         BM_SC.forEach((k) => { clean[k] = f[k]; });
       }
     } catch (e) {
