@@ -102,8 +102,9 @@
   const arrowKts = (twd, kts) => windArrow(twd) + r0(kts) + " kts";
 
   /* ---- watch-system formatting (CREW tile) ---- */
-  const fmtHM = (e) => { const d = new Date(e * 1000); return ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2); };
-  const fmtMins = (m) => (m == null ? "?" : m >= 90 ? (Math.round(m / 6) / 10) + "h" : Math.round(m) + "m");
+  // the watch read (status, countdown, CONSIDER) is pure and tested: crewwatch.js (#80)
+  const CW = window.C4CrewWatch;
+  const fmtHM = CW.fmtHM, fmtMins = CW.fmtMins;
   const teamTxt = (w, id) => { const t = ((w || {}).teams || {})[id]; return t ? t.name + ((t.members || []).length ? " (" + t.members.join(", ") + ")" : "") : id; };
   /* a canned watch read for the demo scenarios: 4-on/4-off, mid-block on calm, 4 min from the
      change on escalated (exercises the T-5 act state + the wake-the-next-team consider) */
@@ -120,19 +121,9 @@
   }
   /* who the tile trusts for the watch read: canned in demo, the engine /watch poll live */
   function watchNow() { return App.src === "demo" ? (SCENARIOS[App.demoScn] || {}).watch || null : App.watch; }
-  /* escalation: T-15 = watch (wake the next team), T-5 = act — mirrors the coach callout tiers */
-  function watchTileStatus(w) {
-    if (!w || !w.plan_set || w.mins_to_change == null) return "ok";
-    return w.mins_to_change <= 5 ? "act" : w.mins_to_change <= 15 ? "watch" : "ok";
-  }
-  function watchSubTxt(w) {
-    if (!w || !w.plan_set) return null;
-    if (w.active) {
-      return (w.all_hands ? "ALL HANDS" : (w.on_label || w.on) + " on") + " · change " +
-        fmtMins(w.mins_to_change) + (w.next_on_label ? " → " + w.next_on_label : "");
-    }
-    return w.next_change ? "watches start " + fmtHM(w.next_change) : "watch plan ended";
-  }
+  /* escalation: T-15 = watch (wake the next team), T-5 = act (hand over) — act only while a
+     block is on; before the first block the start of watches caps at watch (crewwatch.js) */
+  const watchTileStatus = CW.status, watchSubTxt = CW.subTxt;
 
   /* Tile-sized TWS trend: the last 3.5 h with 30-min gridlines (−210 … now, crew request
      2026-07-08), the TWS line + min/max, and a direction-arrow strip sampled at each 30-min
@@ -876,14 +867,8 @@
       const stF = !hasF ? "ok" : f.level === "fresh" ? "ok" : f.level === "watch" ? "watch" : "act";
       const st = SEV[wSt] > SEV[stF] ? wSt : stF;
       const rotate = hasF && f.level !== "fresh";
-      const soon = wSet && w.mins_to_change != null && w.mins_to_change <= 15;
       const wake = w && w.next_on ? teamTxt(w, w.next_on) : "the next team";
-      const consider =
-        soon && w.active ? "Watch change in " + fmtMins(w.mins_to_change) + " — wake " + wake +
-          (rotate ? "; rotate the helm at the change." : ".")
-        : rotate && wSet && w.mins_to_change != null ? "Tank getting low — rotate at the watch change (" + fmtMins(w.mins_to_change) + " out), sooner if it slips."
-        : rotate ? "Tank getting low — plan a helm rotation."
-        : "Driver fresh — no rotation needed." + (wSet && w.active && w.mins_to_change != null ? " Next watch change " + fmtMins(w.mins_to_change) + " out." : "");
+      const consider = CW.consider(w, wake, rotate);
       // face: the C4 energy score leads (as the old C4 Energy tile), the on-watch team rides
       // just under it at value weight; countdown + level go to the sub line
       const teamLine = wSet && w.active ? (w.all_hands ? "ALL HANDS" : (w.on_label || w.on) + " on") : null;
@@ -901,7 +886,7 @@
                  (w.next_change ? ", change at " + fmtHM(w.next_change) + (w.next_on_label ? " to " + w.next_on_label : "") + "." : ".")
                : "Watch plan aboard but no block active" + (w.next_change ? " — watches start " + fmtHM(w.next_change) + "." : ".")) : "No watch plan aboard."),
         consider: consider,
-        clears: soon ? "the watch change" : rotate ? "energy back above 65%" : "—",
+        clears: CW.clears(w, rotate),
         based: (hasF ? ["get_fatigue: index " + r0(f.index) + " → energy " + chg + "%, level " + (f.level || "?")] : [])
           .concat(wSet ? ["get_watch: " + (wSub || "plan aboard")] : []), conf: "engine" };
       if (hasF && f.components) o.components = f.components;
@@ -1352,7 +1337,8 @@
     document.getElementById("sbGear").innerHTML = SAILS_INV.map((s) =>
       `<button class="st-gear${out.has(s) ? " oos" : ""}" onclick="toggleGear('${s}')" ` +
       `title="Tap = declare the ${s} ${out.has(s) ? "back IN service" : "OUT of service (blown/damaged)"}">${s}</button>`).join("");
-    document.getElementById("sbNote").textContent = fly.size
+    const note = document.getElementById("sbNote");   // may be cut short on a narrow bar
+    note.textContent = note.title = fly.size
       ? "flying " + [...fly].join(" + ") + (st.reef ? " · reef 1 in" : "") + " — logged for this config's polar"
       : "tap what's flying — every change is logged; each configuration builds its own polar over time";
   }
@@ -1891,6 +1877,8 @@
       fetchCourse().then(() => { if (App.openTile === "eta") populateDetail("eta", false); });
       fetchTrack().then(() => { if (App.openTile === "eta") populateDetail("eta", false); });
     }
+    // the gauge scrolls with the text now (#77): a fresh tile opens at its top
+    document.querySelector("#detail .det-body").scrollTop = 0;
     populateDetail(key, true);
   }
   /* ============ the COACH WINDOW — the commentary panel's tap-detail ============
@@ -2128,6 +2116,8 @@
       '</div>').join("");
   }
   function populateDetail(key, stream) {
+    // the checklist and coach windows ARE their list — it leads; every tile leads with the text
+    document.getElementById("detail").classList.toggle("gauge-first", key === "checklist" || key === "coach");
     if (key === "checklist") {
       document.getElementById("detName").textContent = NAME.checklist;
       const c = App.checklist || {};
