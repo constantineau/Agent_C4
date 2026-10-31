@@ -1070,6 +1070,12 @@
     if (App.src !== "live") return;
     App.graceUntil = Date.now() + RECONNECT_GRACE_MS;
     if (App.data && App.lastOkAt && Date.now() - App.lastOkAt > STALE_AFTER_MS) {
+      const now = Date.now();
+      for (const k of TILES) {        // re-age the pre-sleep tiles so old numbers don't look current
+        const t = App.data.tiles[k]; if (!t) continue;
+        const ts = (TILE_SRC[k] || []).map((src) => (App.fresh[src] || {}).t).filter((x) => x);
+        if (ts.length && now - Math.min.apply(null, ts) >= STALE_AFTER_MS) t.staleMs = now - Math.min.apply(null, ts);
+      }
       App.data.focus = "Reconnecting to the boat…"; App.data.link = "reconnecting"; render();
     }
     poll();
