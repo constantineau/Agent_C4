@@ -32,7 +32,7 @@ Deletion from the boat is allowed only *after* an off-boat copy is sha256-verifi
   (same for console), `up -d --no-deps engine console`. Healthy: /health, /power, /health/sensors answer,
   console serves `?v=fit1031`, Orin polling 200s. /sail says "need live wind" (on the hard).
 - **Orin:** pulled main (bdb84b2), old HEAD tagged `pre-deploy-20261031`, imports ok. Restart needs the
-  sudo password → Cole runs it.
+  sudo password → Cole ran it 15:47Z; copilot healthy (engine reachable, LLM reachable, playbook loaded).
 
 **Next, in order:**
 1. Host ports 8102/8090/8103 now bind localhost + Tailscale (#108 merged, applied live). Lab rebuilt.
