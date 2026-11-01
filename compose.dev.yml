@@ -98,7 +98,7 @@ services:
       # forecast plume: every router model along the planned route, one snapshot per new cycle
       # (48 h kept). PLUME_PUSH=1 also sends it to the Pi engine's POST /plume/load (the Deploy
       # push's line) — off by default: writing to the boat needs the owner's go at deploy time.
-      # Never pushed or recorded for a race between its start and its finish (frozen at the gun).
+      # Never recorded or pushed for a race from its start until it is marked over in the Lab.
       PLUME_DIR: /srv/plume
       PLUME_RECORDER: ${PLUME_RECORDER:-1}
       PLUME_PUSH: ${PLUME_PUSH:-0}

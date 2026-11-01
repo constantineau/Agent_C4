@@ -257,45 +257,60 @@ def build_plume(st, now, back_h=VIEW_BACK_H, ahead_h=AHEAD_H, models=None, windo
            "label": st.get("label"), "basis": st.get("basis"), "generated_at": int(now),
            "built_at": built, "window": [int(w0), int(w1)], "models": out_models}
     if window:
-        out["race_start"], out["race_end"] = int(window[0]), int(window[1])
+        out["race_start"] = int(window[0])
+        out["race_end"] = int(window[1]) if window[1] is not None else None
     return out
 
 
 # ---- frozen at the gun (RRS 41) ---------------------------------------------------------------
 # The plume is shore-computed and route-specific, so it is homework: it may reach the boat only
-# BEFORE the start. From the gun until the race is over the Lab neither records nor pushes it for
-# that race, and the boat keeps the last pre-start plume (labelled frozen on the console). In-race
-# updates belong on board (the Orin), not here. Fail closed: when the end is uncertain, assume the
-# longer race.
-RACE_TAIL_H = 6          # after the latest finish estimate
-RACE_MAX_H = 96          # hard cap on how long a race window can be
+# BEFORE the start. From the gun the Lab neither records nor pushes it for that race, and the boat
+# keeps the last pre-start plume (labelled frozen on the console). In-race updates belong on board
+# (the Orin), not here. Fail closed: the window never reopens on an estimate — it stays shut until
+# someone marks the race finished in the Lab (`mark_finished`).
+_KEY_FINISHED = "plume:finished:"     # labstate: + race_id → {"at": epoch}
+_clock = time.time                    # the real clock (tests swap it)
+
+
+def finished_at(race_id):
+    rec = _labstate_get(_KEY_FINISHED + str(race_id)) or {}
+    return rec.get("at")
+
+
+def mark_finished(race_id, at=None, undo=False):
+    """Record that a race is over (the Lab's "Race over" button) — reopens plume updates for it.
+    `undo` clears it."""
+    from . import labstate
+    if not race_id:
+        return None
+    if undo:
+        labstate.set(_KEY_FINISHED + str(race_id), None)
+        return None
+    rec = {"at": int(_clock() if at is None else at)}
+    labstate.set(_KEY_FINISHED + str(race_id), rec)
+    return rec
 
 
 def race_window(spec):
-    """(start, end) epochs of the race the spec follows, or None when no start is known. Start =
-    our gun (racestart), else the planned route's first ETA. End = the later of the route's
-    finish ETA and the course-length estimate, plus RACE_TAIL_H (72 h when neither is known)."""
-    from . import optimizer, racestart
+    """(start, end) of the race the spec follows, or None when no start is known. Start = our gun
+    (racestart), else the planned route's first ETA. End = the recorded finish for this race_id
+    (only if after this start), else None — open-ended: frozen until marked finished."""
+    from . import racestart
     d = spec.get("definition") or {}
     rs = racestart.race_start(d)
     path = spec.get("path") if spec.get("basis") == "route" else None
     start = rs["epoch"] if rs else (path[0]["t"] if path else None)
     if start is None:
         return None
-    ends = []
-    if path:
-        ends.append(path[-1]["t"])
-    try:
-        if d:
-            ends.append(start + optimizer.estimate_hours(d, spec.get("course_id")) * 3600)
-    except Exception:  # noqa: BLE001 — no estimate → the fallback below
-        pass
-    end = (max(ends) + RACE_TAIL_H * 3600) if ends else start + 72 * 3600
-    return (float(start), float(min(end, start + RACE_MAX_H * 3600)))
+    fin = finished_at(spec.get("race_id")) if spec.get("race_id") else None
+    end = float(fin) if fin is not None and fin >= start else None
+    return (float(start), end)
 
 
 def is_racing(window, now):
-    return bool(window) and window[0] <= now < window[1]
+    """Inside [start, end) — and with no recorded end, from the start on."""
+    return bool(window) and window[0] <= now and (window[1] is None or now < window[1])
+
 
 
 # ---- targets: which route the plume follows -------------------------------------------------
@@ -444,11 +459,12 @@ def push_url():
 
 def push(plume, post=None, now=None):
     """POST the plume to the Pi engine (the Deploy push's line — Tailscale, no extra auth layer).
-    Records the outcome in labstate. Never raises. Refuses once the plume's race has started."""
+    Records the outcome in labstate. Never raises. Refuses once the plume's race has started —
+    checked on the real clock at the moment of sending (`now` only for tests)."""
     from . import deploy, labstate
-    now = time.time() if now is None else now
+    now = _clock() if now is None else now
     if plume.get("race_start") is not None and \
-            is_racing((plume["race_start"], plume.get("race_end") or float("inf")), now):
+            is_racing((plume["race_start"], plume.get("race_end")), now):
         return {"at": int(now), "ok": False, "key": plume.get("key"), "frozen": True,
                 "built_at": plume.get("built_at"), "error": "racing: frozen at the start"}
     post = post or deploy._post_json
@@ -485,27 +501,37 @@ def current(now=None):
 
 
 def run_once(on_progress=None, do_push=None, now=None):
-    """One recorder pass: resolve the target, record new cycles, push to the boat if changed."""
-    t_now = time.time() if now is None else now
+    """One recorder pass: resolve the target, record new cycles, push to the boat if changed.
+    The race window is checked on the real clock before recording AND again right before the push,
+    so a pass that starts just before the gun can never deliver after it."""
+    t_now = _clock() if now is None else now
     spec = resolve_target(t_now)
     if not spec:
         return {"ok": False, "note": "no target — lock in + push a race, or set a plume target"}
     win = race_window(spec)
-    if is_racing(win, t_now):
-        # frozen at the gun: nothing recorded or pushed for this race until it is over
+
+    def frozen_out():
         if on_progress:
-            on_progress("racing — plume frozen at the start; no updates until the race is over")
+            on_progress("racing — plume frozen at the start; no updates until marked finished")
         return {"ok": True, "frozen": True, "key": spec["key"], "race_start": int(win[0]),
-                "race_end": int(win[1])}
+                "race_end": None if win[1] is None else int(win[1])}
+
+    if is_racing(win, t_now):
+        return frozen_out()
     with _REC_LOCK:                          # the recorder thread vs a manual refresh
         st = record(spec, now=t_now, on_progress=on_progress)
+    done = _clock()                          # when the computation actually finished
+    if is_racing(win, done):
+        return frozen_out()                  # the gun went while we were recording
     plume = build_plume(st, t_now, window=win)
+    if plume:
+        plume["generated_at"] = int(done)
     out = {"ok": True, "key": spec["key"], "basis": spec["basis"],
            "models": {m["model"]: len(m["runs"]) for m in (plume or {}).get("models", [])}}
     do_push = (os.environ.get("PLUME_PUSH", "0").strip().lower() in ("1", "true", "yes", "on")
                if do_push is None else do_push)
     if do_push and needs_push(plume, last_push()):
-        out["push"] = push(plume, now=t_now)
+        out["push"] = push(plume)
     return out
 
 

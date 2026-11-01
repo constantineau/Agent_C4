@@ -207,39 +207,67 @@ from app import racestart  # noqa: E402
 gun = racestart.race_start(RACE)["epoch"]
 spec_g = {"definition": RACE, "course_id": "c1", "basis": "route",
           "path": [{"lat": 43.0, "lon": -82.4, "t": gun + 600}, {"lat": 45.8, "lon": -84.6, "t": gun + 30 * H}]}
+spec_g["race_id"] = "r1"
 win = P.race_window(spec_g)
 check("race window starts at our gun", win[0] == gun)
-check("...and runs past the planned finish", win[1] >= gun + 30 * H + P.RACE_TAIL_H * H - 1)
-check("capped", win[1] <= gun + P.RACE_MAX_H * H)
+check("no recorded finish → open-ended (never reopens on an estimate)", win[1] is None)
 check("no gun → the route's first ETA",
       P.race_window({"basis": "route", "path": spec_g["path"]})[0] == gun + 600)
 check("no gun, no route → unknown", P.race_window({"basis": "point", "path": [{"lat": 1, "lon": 1, "t": 0}]}) is None)
-check("racing inside the window only", P.is_racing(win, gun) and not P.is_racing(win, gun - 1)
-      and not P.is_racing(win, win[1]))
+check("racing from the gun on", P.is_racing(win, gun) and not P.is_racing(win, gun - 1)
+      and P.is_racing(win, gun + 30 * 86400))
+P.mark_finished("r1", at=gun - 86400)
+check("a finish recorded before this start (an old edition) doesn't count", P.race_window(spec_g)[1] is None)
+P.mark_finished("r1", undo=True)
 
 # run_once refuses to record or push while racing
 P.set_target(None)
 labstate.set("deploy_push:last_ok", {"race_id": "r1", "playbook_id": "r1__100", "ok": True})
 BUNDLE["variants"][1]["route"]["path"] = spec_g["path"]
 recorded, pushed = [], []
-_orig_record, _orig_push = P.record, P.push
-P.record = lambda spec, **kw: recorded.append(1) or {"key": spec["key"], "runs": {"gfs": [
-    {"cycle": gun - 6 * H, "at": gun - H, "pts": [[gun, 10.0, 200], [gun + H, 11.0, 210]]}]}}
+_orig_record, _orig_push, _orig_clock = P.record, P.push, P._clock
+CLOCK = {"t": gun - H, "step": 0}
+P._clock = lambda: CLOCK["t"]
+
+
+def fake_record(spec, **kw):
+    recorded.append(1)
+    t = CLOCK["t"]
+    CLOCK["t"] += CLOCK["step"]              # the pass takes this long
+    return {"key": spec["key"], "runs": {"gfs": [
+        {"cycle": t - 6 * H, "at": t, "pts": [[t, 10.0, 200], [t + H, 11.0, 210]]}]}}
+
+
+P.record = fake_record
 P.push = lambda plume, post=None, now=None: pushed.append(plume) or {"ok": True}
-r = P.run_once(do_push=True, now=gun - H)
-check("before the gun: recorded + pushed, with the race window aboard",
-      recorded and pushed and pushed[-1]["race_start"] == int(gun) and not r.get("frozen"))
+r = P.run_once(do_push=True)
+check("before the gun: recorded + pushed, with the race start aboard and no end",
+      recorded and pushed and pushed[-1]["race_start"] == int(gun) and pushed[-1]["race_end"] is None
+      and not r.get("frozen"))
+check("generated_at = when the computation finished", pushed[-1]["generated_at"] == int(gun - H))
 recorded.clear(); pushed.clear()
-r = P.run_once(do_push=True, now=gun + 60)
+CLOCK.update(t=gun - 60, step=120)           # starts a minute before the gun, finishes after it
+r = P.run_once(do_push=True)
+check("a pass that ends after the gun pushes nothing", r.get("frozen") and recorded and not pushed)
+recorded.clear(); CLOCK.update(t=gun + 60, step=0)
+r = P.run_once(do_push=True)
 check("after the gun: nothing recorded, nothing pushed", r.get("frozen") and not recorded and not pushed)
-r = P.run_once(do_push=True, now=gun + 20 * H)
-check("mid-race: still frozen", r.get("frozen") and not recorded and not pushed)
-r = P.run_once(do_push=True, now=win[1] + 60)
-check("race over: recording resumes", not r.get("frozen") and recorded)
+CLOCK["t"] = gun + 40 * H
+r = P.run_once(do_push=True)
+check("long after the planned finish, still frozen (no estimate reopens it)",
+      r.get("frozen") and not recorded and not pushed)
+P.mark_finished("r1")
+check("marked finished at the Lab's clock", P.finished_at("r1") == int(gun + 40 * H))
+CLOCK["t"] = gun + 40 * H + 60
+r = P.run_once(do_push=True)
+check("race over: recording resumes and the plume carries the finish",
+      not r.get("frozen") and recorded and pushed and pushed[-1]["race_end"] == int(gun + 40 * H))
 P.record, P.push = _orig_record, _orig_push
-late = dict(pushed[-1] if pushed else {}, race_start=int(gun), race_end=int(win[1]), models=[{"model": "gfs", "runs": []}])
-rec = P.push(dict(late, built_at=1), post=lambda *a, **k: (True, {"loaded": True}), now=gun + 60)
-check("push() itself refuses a plume whose race has started", rec["ok"] is False and rec.get("frozen"))
+P.mark_finished("r1", undo=True)
+rec = P.push({"key": "k", "race_start": int(gun), "race_end": None, "models": [{"model": "gfs", "runs": []}]},
+             post=lambda *a, **k: (True, {"loaded": True}))
+check("push() itself refuses on the real clock once the race has started", rec["ok"] is False and rec.get("frozen"))
+P._clock = _orig_clock
 
 print("\nALL OK" if ok else "\nFAILURES")
 raise SystemExit(0 if ok else 1)

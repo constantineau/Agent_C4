@@ -129,6 +129,8 @@ test("frozen at the start: from the gun until the race is over", () => {
   assert.equal(PL.isFrozen(pl, NOW + 29 * H), true);
   assert.equal(PL.isFrozen(pl, NOW + 30 * H), false);
   assert.equal(PL.isFrozen(PLUME, NOW), false, "no race window → never frozen");
+  const open = Object.assign({}, PLUME, { race_start: NOW + H, race_end: null });
+  assert.equal(PL.isFrozen(open, NOW + 30 * 86400), true, "no recorded finish → frozen until there is one");
   assert.equal(PL.isFrozen(Object.assign({}, PLUME, { frozen: true }), NOW), true, "the engine's flag wins");
   assert.match(PL.frozenText(pl), /^Frozen at the start · \d\d:\d\d$/);
 });

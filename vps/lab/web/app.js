@@ -2076,6 +2076,10 @@ function plumeSet(k, v) {
 document.addEventListener("click", (e) => {
   const b = e.target.closest && e.target.closest("#depPlume button[data-pl-k]");
   if (b) plumeSet(b.dataset.plK, b.dataset.plV);
+  const f = e.target.closest && e.target.closest("#depPlume button[data-pl-finish]");
+  if (f && confirm("Mark " + f.dataset.plFinish + " as finished? Forecast updates for it resume.")) {
+    apiPost("/api/plume/finish", { race_id: f.dataset.plFinish }).then(depLoadPlume);
+  }
 });
 async function plumeRefresh() {
   Plume.busy = true; Plume.note = "Checking every model for a new run…"; depLoadPlume();
@@ -2113,7 +2117,8 @@ function plumePanelInner() {
   const picks = b("only", "", "All models", !Plume.only) + P.models(pl).map((m) => b("only", m.model, P.label(m.model), Plume.only === m.model)).join("");
   return head + ctl +
     `<div class="opt-controls">${b("field", "tws", "Speed", Plume.field === "tws")}${b("field", "twd", "Direction", Plume.field === "twd")} ${picks}</div>
-     <div class="muted" style="font-size:12px">${esc(pl.label || "")} · newest run recorded ${esc(depAgo(pl.built_at))}${P.isFrozen(pl, now) ? ` · <b>${esc(P.frozenText(pl))}</b> — no recording or pushes until the race is over` : ""}</div>
+     <div class="muted" style="font-size:12px">${esc(pl.label || "")} · newest run recorded ${esc(depAgo(pl.built_at))}${P.isFrozen(pl, now) ? ` · <b>${esc(P.frozenText(pl))}</b> — no updates until the race is marked over` : ""}</div>
+     ${P.isFrozen(pl, now) && pl.race_id ? `<div class="opt-controls"><button data-pl-finish="${esc(pl.race_id)}">Race over — resume forecast updates</button></div>` : ""}
      <div class="lab-plume" style="max-width:900px">${P.chartSvg(pl, { w: 860, h: 300, now: now, field: Plume.field, only: Plume.only, allRuns: true, back_h: 6, ahead_h: 24 })}
      ${P.legendHtml(pl, { only: Plume.only, cycles: true, now: now })}${P.runTimesHtml(pl, now)}</div>` + push;
 }

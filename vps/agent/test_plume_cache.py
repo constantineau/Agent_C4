@@ -68,20 +68,61 @@ check("an absurdly large payload is refused", plume.load(big, now=NOW)["loaded"]
 
 print("frozen at the gun:")
 os.remove(path)
-START, END = NOW + 3600, NOW + 30 * 3600
-PRE = dict(GOOD, generated_at=NOW - 60, race_start=START, race_end=END)
+START = NOW + 3600
+PRE = dict(GOOD, generated_at=NOW - 60, race_start=START, race_end=None)
 check("a pre-start plume loads", plume.load(PRE, now=NOW)["loaded"])
 check("before the start it is not frozen", plume.get(NOW)["frozen"] is False)
 g = plume.get(START + 600)
 check("after the gun it is served as frozen (the pre-start copy)", g["available"] and g["frozen"])
+check("...and stays frozen days later with no recorded finish", plume.get(START + 9 * 86400)["frozen"])
 newer = dict(PRE, generated_at=START + 300, built_at=START + 200, key="r1__new")
 check("a plume computed after the start is refused", plume.load(newer, now=START + 400)["loaded"] is False)
-sneaky = dict(GOOD, key="r1__other", generated_at=START + 300)
-check("while racing, any new plume is refused (pre-start one stays)",
-      plume.load(sneaky, now=START + 400)["loaded"] is False and plume.get(START + 500)["key"] == "r1__pb")
-check("after the race the next plume loads again",
-      plume.load(dict(GOOD, key="r1__after", generated_at=END + 60), now=END + 120)["loaded"]
-      and plume.get(END + 200)["frozen"] is False)
+late = dict(PRE, key="r1__late", generated_at=START - 30)
+check("computed before the gun but arriving after it → refused (boat's own clock)",
+      plume.load(late, now=START + 5)["loaded"] is False)
+same_race = dict(GOOD, key="r1__other", generated_at=START + 300, race_start=START + 86400, race_end=None)
+check("same race, any other window while racing → refused; pre-start copy stays",
+      plume.load(same_race, now=START + 400)["loaded"] is False and plume.get(START + 500)["key"] == "r1__pb")
+fin = dict(GOOD, key="r1__after", generated_at=START + 30 * 3600, race_start=START, race_end=START + 20 * 3600)
+check("a plume carrying the recorded finish (already past) loads",
+      plume.load(fin, now=START + 30 * 3600 + 60)["loaded"] and plume.get(START + 31 * 3600)["frozen"] is False)
+
+print("arriving while racing, empty cache:")
+os.remove(path)
+check("its race is on at receipt → refused even with nothing aboard",
+      plume.load(dict(PRE, generated_at=START - 30), now=START + 60)["loaded"] is False
+      and plume.get(START + 60)["available"] is False)
+
+print("a different race starts its own window:")
+plume.load(PRE, now=NOW)
+other = dict(GOOD, race_id="r2", key="r2__pb", generated_at=START + 600, race_start=START + 86400, race_end=None)
+check("while r1 is frozen, r2's pre-start plume loads", plume.load(other, now=START + 700)["loaded"]
+      and plume.get(START + 800)["race_id"] == "r2")
+
+print("concurrent loads:")
+import threading  # noqa: E402
+os.remove(path)
+errs = []
+
+
+def writer(i):
+    for j in range(25):
+        try:
+            r = plume.load(dict(GOOD, key=f"w{i}_{j}"), now=NOW)
+            if not r["loaded"]:
+                errs.append(r)
+        except Exception as exc:  # noqa: BLE001
+            errs.append(repr(exc))
+
+
+ts = [threading.Thread(target=writer, args=(i,)) for i in range(8)]
+[t.start() for t in ts]
+[t.join() for t in ts]
+check("200 concurrent loads, none failed", not errs)
+with open(path) as f:
+    last = json.load(f)
+check("the file is one whole plume afterwards", last["plume"]["key"].startswith("w"))
+check("no temp files left behind", not [n for n in os.listdir(os.path.dirname(path)) if n.endswith(".tmp")])
 
 print("\nALL OK" if ok else "\nFAILURES")
 raise SystemExit(0 if ok else 1)

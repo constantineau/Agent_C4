@@ -81,8 +81,8 @@
   const OLD_S = 3 * 3600;
   const isOld = (plume) => !!(plume && plume.age_s != null && plume.age_s > OLD_S);
 
-  /* frozen at the gun: from the race start until the race is over the boat keeps the pre-start
-     plume (RRS 41) — say so instead of looking live */
+  /* frozen at the gun: from the race start until the Lab records the finish (race_end) the boat
+     keeps the pre-start plume (RRS 41) — say so instead of looking live */
   function isFrozen(plume, now) {
     if (!plume) return false;
     if (plume.frozen === true) return true;

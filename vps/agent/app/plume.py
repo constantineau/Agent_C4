@@ -12,6 +12,8 @@ loaded before or between connections — the boat never asks anyone for advice.
 """
 import json
 import os
+import tempfile
+import threading
 import time
 
 SCHEMA = "c4.plume/v1"
@@ -59,13 +61,17 @@ def validate(plume):
 
 
 def frozen(plume, now):
-    """True once the plume's race has started and until it is over — the boat keeps the pre-start
+    """True from the plume's race start until its RECORDED finish (`race_end`, set only when the
+    Lab marks the race over) — with no finish, from the start on. The boat keeps the pre-start
     plume (RRS 41: shore-computed, route-specific homework is frozen at the gun)."""
     rs = (plume or {}).get("race_start")
     if rs is None:
         return False
     re_ = plume.get("race_end")
-    return rs <= now < (re_ if re_ is not None else float("inf"))
+    return rs <= now and (re_ is None or now < re_)
+
+
+_LOCK = threading.Lock()        # one load at a time: read cache → check → write
 
 
 def _read():
@@ -77,28 +83,40 @@ def _read():
 
 
 def load(plume, now=None):
-    """Store a pushed plume (atomic replace). Returns the /plume/load response."""
+    """Store a pushed plume (atomic replace). Returns the /plume/load response.
+
+    Fail closed on board (judged by the boat's own clock at receipt):
+      * refuse a plume whose race is on right now, or that was computed after its race started;
+      * while the cached plume's race is on, refuse everything for that race until the Lab sends
+        one carrying the recorded finish (race_end, already past) — a different race is judged on
+        its own window."""
     now = time.time() if now is None else now
     ok, why = validate(plume)
     if not ok:
         return {"loaded": False, "detail": why}
-    # fail closed on board too: nothing computed after a start replaces the pre-start plume, and
-    # while the cached plume's race is on, no new plume is taken at all
+    if frozen(plume, now):
+        return {"loaded": False, "detail": "its race is on — frozen at the gun"}
     if frozen(plume, plume.get("generated_at", now)):
         return {"loaded": False, "detail": "computed after the start — frozen at the gun"}
-    cur = (_read() or {}).get("plume")
-    if cur and frozen(cur, now):
-        return {"loaded": False, "detail": "racing — the pre-start plume stays aboard"}
-    body = json.dumps({"received_at": int(now),
-                       "plume": plume}, separators=(",", ":"))
+    body = json.dumps({"received_at": int(now), "plume": plume}, separators=(",", ":"))
     if len(body) > MAX_BYTES:
         return {"loaded": False, "detail": f"plume too large ({len(body)} B)"}
-    p = _path()
-    os.makedirs(os.path.dirname(p), exist_ok=True)
-    tmp = p + ".tmp"
-    with open(tmp, "w") as f:
-        f.write(body)
-    os.replace(tmp, p)
+    with _LOCK:
+        cur = (_read() or {}).get("plume")
+        if cur and frozen(cur, now) and plume.get("race_id") == cur.get("race_id"):
+            fin = plume.get("race_end")
+            if fin is None or fin > now:
+                return {"loaded": False, "detail": "racing — the pre-start plume stays aboard"}
+        p = _path()
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(p), prefix=".plume-", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(body)
+            os.replace(tmp, p)
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
     return {"loaded": True, "key": plume.get("key"), "built_at": plume.get("built_at"),
             "models": len(plume["models"])}
 
