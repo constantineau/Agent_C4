@@ -52,14 +52,14 @@
     ov.innerHTML =
       '<div class="fbw-card" role="dialog" aria-modal="true">' +
         '<h3>Send feedback</h3>' +
-        '<p class="sub">Files an issue on the C4 repo. No personal info needed.</p>' +
+        '<p class="sub">Goes to the C4 team\'s public issue list. Leave out personal info.</p>' +
         '<div class="fbw-row" id="fbwKind">' +
           '<label data-k="bug" class="on"><input type="radio" name="fbwk" checked>🐛 Bug</label>' +
           '<label data-k="feature"><input type="radio" name="fbwk">✨ Feature</label>' +
           '<label data-k="idea"><input type="radio" name="fbwk">💡 Idea</label>' +
         '</div>' +
         '<input type="text" id="fbwTitle" maxlength="160" placeholder="Short summary (required)">' +
-        '<textarea id="fbwBody" maxlength="8000" placeholder="What happened / what would you like? Steps, what you expected, etc."></textarea>' +
+        '<textarea id="fbwBody" maxlength="8000" placeholder="What happened, or what would you like?"></textarea>' +
         '<div class="fbw-acts">' +
           '<div class="grow"><div class="fbw-msg" id="fbwMsg"></div></div>' +
           '<button class="fbw-cancel" id="fbwCancel">Cancel</button>' +
@@ -108,7 +108,7 @@
         }
       })
       .catch(function (e) {
-        msg.className = "fbw-msg err"; msg.textContent = "Network error — " + e;
+        msg.className = "fbw-msg err"; msg.textContent = "Network error: " + e;
         sendBtn.disabled = false; sendBtn.textContent = "Send";
       });
   }

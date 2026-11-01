@@ -35,8 +35,8 @@
 </header>
 <div id="legchips"></div>
 <div id="shareMap"><div id="loading">Loading route…</div></div>
-<div id="foot">SR33 C4 gameplan — read-only share. Press ▶ on the map bar to play the race
-through the forecast; the marker is the boat at that hour.</div>
+<div id="foot">C4 gameplan, view only. Press ▶ on the map bar to play the race.
+The marker shows the boat at that time.</div>
 <script src="/vendor/leaflet.js"></script>
 <script src="/mapview.js"></script>
 <script>
@@ -53,7 +53,7 @@ through the forecast; the marker is the boat at that hour.</div>
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || "HTTP " + res.status);
     bundle = await res.json();
   } catch (e) {
-    return fail(String((e && e.message) || e) + " — ask whoever sent it for a fresh link.");
+    return fail(String((e && e.message) || e) + ". Ask the sender for a new link.");
   }
   const r = bundle.result || {};
   const fmt = (ep) => { try {
@@ -69,7 +69,7 @@ through the forecast; the marker is the boat at that hour.</div>
   const bits = [];
   if (r.start_epoch) bits.push("Start <b>" + fmt(r.start_epoch) + "</b>");
   if (eta) bits.push("ETA <b>" + fmt(eta) + "</b>");
-  if (r.route_confidence) bits.push("route confidence <b>" + r.route_confidence + "</b>");
+  if (r.route_confidence) bits.push("confidence <b>" + r.route_confidence + "</b>");
   document.getElementById("phSub").innerHTML = bits.join(" · ");
 
   // Sail-plan chips: tap a leg to zoom it on the map (MapView.focusLeg).

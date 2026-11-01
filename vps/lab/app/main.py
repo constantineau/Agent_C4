@@ -249,7 +249,7 @@ def _run_optimize(definition, course_id, start_epoch, model_names, ensemble_memb
     from . import optimizer, current, wave
     bbox = optimizer.course_bbox(definition, course_id)
     if not bbox:
-        return {"available": False, "note": "course has no geocoded marks — review Course & Marks"}
+        return {"available": False, "note": "No mark positions yet. Fix them in Course & Marks."}
     hours = optimizer.estimate_hours(definition, course_id)
     t_end = start_epoch + hours * 3600
     class _Log(list):                      # a list whose .append also mirrors to on_progress
@@ -281,8 +281,8 @@ def _run_optimize(definition, course_id, start_epoch, model_names, ensemble_memb
                          ensemble_members=ensemble_members, on_progress=log.append,
                          model_weights=mweights, model_bias=mbias)
     if not wf.loaded:
-        return {"available": False, "note": "no weather model data could be loaded (not yet "
-                "posted, or no egress)", "windfield": wf.status(), "log": log}
+        return {"available": False, "note": "No forecast could be loaded (not out yet, or no "
+                "internet).", "windfield": wf.status(), "log": log}
     # water current: opt-out per run (compare with vs without) — LMHOFS surface currents, ZeroCurrent on any miss
     cur = (current.build_currentfield(bbox, start_epoch, t_end, on_progress=log.append)
            if use_current else current.ZeroCurrent())
@@ -850,8 +850,8 @@ def _recordings(race_id=None):
         sessions = (monitor.agent_json("/racelog/sessions", timeout=30) or {}).get("sessions") or []
         agent = {"available": True}
     except Exception as exc:
-        sessions, agent = [], {"available": False, "note": f"the boat agent is unreachable ({exc}) — "
-                               "recordings already loaded into the Lab are still listed"}
+        sessions, agent = [], {"available": False, "note": f"The boat is unreachable ({exc}). "
+                               "Recordings already in the Lab are still listed."}
     tracks = track.list_tracks(race_id) if race_id else []
     debriefs = learning.list_debriefs(bid, race_id) if race_id else []
 
@@ -1129,8 +1129,8 @@ def load_log_track(body):
         trust["available"] = True
     except Exception as exc:
         trust = {"available": False,
-                 "note": f"trust sweep unavailable ({exc}) — NO bins were refused; treat "
-                         f"refinements from this track as unguarded"}
+                 "note": f"Instrument check didn't run ({exc}). Nothing was left out, so be "
+                         f"careful with boat-model changes from this track."}
     meta = track.save_track(rid, {"source": "boatlog", "boat": body.get("name"),
                                       "fixes": fixes, "n": len(fixes), "window": win,
                                       "trust": trust,

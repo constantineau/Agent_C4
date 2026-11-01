@@ -236,10 +236,10 @@ def fetch_yb_track(definition, boat_name=None):
     except Exception as e:
         return {"ok": False, "note": f"YB fetch failed: {type(e).__name__}"}
     if not teams:
-        return {"ok": False, "note": "YB race not published yet (no teams) — re-check nearer race time"}
+        return {"ok": False, "note": "YB race not published yet. Try nearer race time."}
     blocks = _decode_allpositions3(binb, len(teams))
     if not blocks:
-        return {"ok": False, "note": "YB tracks not available yet (binary empty/dormant)"}
+        return {"ok": False, "note": "YB tracks not available yet."}
 
     # identity by latest-fix match against GetPositions (the reliable, self-validating link)
     latest = {}

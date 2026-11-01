@@ -316,9 +316,9 @@ def _wave_reshape_decision(waves, stats):
     if WAVE_RESHAPE_MODE == "off":
         return (stats["mean"], False, f"ETA-only (forced) — uniform {stats['mean']:.1f} m Hs")
     if stats["spread"] >= WAVE_RESHAPE_MIN_SPREAD:            # auto
-        return (None, True, f"reshape on — sea varies {stats['spread']:.1f} m across the course")
+        return (None, True, f"Waves vary {stats['spread']:.1f} m across the course, so they shape the route.")
     return (stats["mean"], False,
-            f"ETA-only — near-uniform sea ({stats['spread']:.1f} m spread < {WAVE_RESHAPE_MIN_SPREAD:.1f} m gate)")
+            f"Waves are even across the course ({stats['spread']:.1f} m range), so they only slow the boat.")
 
 
 def _sail_polar_key(sail):
@@ -823,12 +823,12 @@ def _route_sanity(wf, legs, coverage, P, timed_out):
     (warnings, degraded). `degraded` means: do not trust this route — the inputs were too thin."""
     warnings, degraded = [], False
     if not wf.loaded:
-        warnings.append("No weather-model data loaded — the route ran entirely on a constant "
-                        "fallback wind. Do NOT trust it; re-run when a model is posted.")
+        warnings.append("No forecast loaded. The route used a made-up steady wind. Don't use it. "
+                        "Try again when a forecast is out.")
         degraded = True
     elif coverage < COVERAGE_MIN:
-        warnings.append(f"Wind coverage only {int(coverage * 100)}% of the route — the remainder ran "
-                        "on fallback wind. Treat the low-coverage legs as unreliable.")
+        warnings.append(f"The forecast covers only {int(coverage * 100)}% of the route. Don't trust "
+                        "the legs it misses.")
         degraded = True
     pmax = max((s for _, _, s in P), default=0.0)
     for l in legs:
@@ -836,15 +836,13 @@ def _route_sanity(wf, legs, coverage, P, timed_out):
         if mins > 0 and pmax > 0 and l.get("sailed_nm"):
             spd = l["sailed_nm"] / (mins / 60.0)
             if spd > pmax * 1.2:
-                warnings.append(f"Leg to {l['to']} averages {spd:.1f} kts — above the boat's polar max "
-                                f"(~{pmax:.0f} kts); almost certainly a wind-data gap.")
+                warnings.append(f"Leg to {l['to']} averages {spd:.1f} kts, faster than the boat can go "
+                                f"(~{pmax:.0f} kts). Probably missing wind data.")
                 degraded = True
         if l.get("wind") is None:
-            warnings.append(f"Leg to {l['to']}: no model wind at its midpoint (sparse GRIB) — its "
-                            "point-of-sail and sail call are fallbacks.")
+            warnings.append(f"Leg to {l['to']}: no forecast wind mid-leg. Its sail call is a guess.")
     if timed_out:
-        warnings.append("Optimizer hit its time budget — the route may be truncated; re-run for a "
-                        "complete solution.")
+        warnings.append("Routing ran out of time. The route may be cut short. Run it again.")
     return warnings, degraded
 
 
@@ -1057,15 +1055,13 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
     if incomplete:
         degraded = True
         rest = incomplete["legs_not_routed"]
-        warnings.insert(0, f"Route INCOMPLETE — the leg to {incomplete['to']} stopped "
+        warnings.insert(0, f"Route INCOMPLETE. The leg to {incomplete['to']} stopped "
                            f"{incomplete['short_nm']} nm short of the mark ({incomplete['reason']})"
-                           + (f"; not routed after it: {', '.join(rest)}" if rest else "")
-                           + ". The times cover only the routed part — do NOT use this route; "
-                           "re-run (more time budget, or check the obstacles near that mark).")
+                           + (f". Not routed after it: {', '.join(rest)}" if rest else "")
+                           + ". Don't use this route. Run it again, or check for land near that mark.")
     for name, n in _leg_self_crossings(full_path, legs, start_epoch).items():
-        warnings.append(f"Route crosses itself {n}x on the leg to {name} — the optimizer chased "
-                        "shifts in light/rotating air. Treat that leg's line as low-confidence "
-                        "and sail the shifts on the water.")
+        warnings.append(f"Route crosses itself {n}x on the leg to {name}. Light, shifty wind. "
+                        "Don't trust that leg's line. Sail the shifts.")
     # route-level sail plan (2g): the PHYSICALLY-REAL sequence of sails flown, from the isochrone's own
     # sail track (where it actually peeled), collapsed across legs — not a post-hoc per-leg guess. Falls
     # back to the per-leg headline sail when sail-aware routing is off / has no per-sail polars.
