@@ -1830,7 +1830,8 @@
     if (App.openTile === "route") populateDetail("route", false);
     const r = await postJSON("/gps/show", { source: source, variant: variant || null }, 12000);
     App.gpsBusy = false;
-    App.gpsNote = r ? (r.shown ? "" : (r.note || "could not show")) : "no link to the boat";
+    // shown without a land chart → say so ("GPS route doesn't check the shore.")
+    App.gpsNote = r ? (r.shown ? (r.warning || "") : (r.note || "could not show")) : "no link to the boat";
     await fetchGps();
   };
   window.gpsClear = async function () {

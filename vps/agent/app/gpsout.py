@@ -23,7 +23,7 @@ import os
 import urllib.error
 import urllib.request
 
-from . import deviation, orinroute, reoptimize, routing
+from . import deviation, landchart, orinroute, reoptimize, routing
 from . import navigator as NAV
 
 N2KOUT_URL = os.environ.get("N2KOUT_URL", "http://127.0.0.1:8210").rstrip("/")
@@ -43,6 +43,8 @@ POST_TIMEOUT_S = float(os.environ.get("GPSOUT_POST_TIMEOUT_S", "3"))
 DEV_TOL_NM = float(os.environ.get("GPSOUT_DEV_TOL_NM", "0.05"))
 HARD_MAX_WPTS = int(os.environ.get("GPSOUT_HARD_MAX_WPTS", "250"))
 TOO_DETAILED = "Route too detailed for the GPS. Not sent."
+NO_SAFE_WPT = "No safe waypoint from here. Press Re-route now."
+NO_SHORE = "GPS route doesn't check the shore."
 
 
 def _post(path, payload=None):
@@ -181,19 +183,24 @@ def _downsample(path, max_n=MAX_WPTS, keep=(), blocked=None):
 
 
 def _blocked_fn(bundle, obstacles=None):
-    """Segment test against the obstacles aboard: `obstacles` = (disks, polygons) from
-    reoptimize.course_avoid (the bundle's AND the deployed course's islands + zones, what the
-    re-route was computed around); without it, the bundle's alone. None when there's nothing."""
+    """Segment test against the obstacles aboard: `obstacles` = (disks, polygons[, land]) from
+    _obstacles (the bundle's AND the deployed course's islands + zones, what the re-route was
+    computed around, and the deployed land chart); without it, the bundle's alone. Used for the
+    thinning AND the boat→steer-to line. None when there's nothing."""
+    land = None
     if obstacles is not None:
-        disks, polys = obstacles
+        disks, polys = obstacles[0], obstacles[1]
+        land = obstacles[2] if len(obstacles) > 2 else None
     else:
         disks = reoptimize._avoid_disks(bundle)
         zdisks, polys = reoptimize._parse_zones(bundle)
         disks = disks + zdisks
-    if not disks and not polys:
+    if not disks and not polys and land is None:
         return None
-    return lambda a, b: (routing._seg_blocked(a["lat"], a["lon"], b["lat"], b["lon"], disks)
-                         or routing._seg_crosses_poly(a["lat"], a["lon"], b["lat"], b["lon"], polys))
+    return lambda a, b: ((disks and routing._seg_blocked(a["lat"], a["lon"], b["lat"], b["lon"], disks))
+                         or (polys and routing._seg_crosses_poly(a["lat"], a["lon"], b["lat"], b["lon"],
+                                                                 polys))
+                         or (land is not None and land.crosses(a["lat"], a["lon"], b["lat"], b["lon"])))
 
 
 ARRIVE_NM = 0.05     # boat this close to a waypoint has attained it — steer to the one after
@@ -260,10 +267,12 @@ def _dest_candidate(pts, boat, mark_pos, next_k, blocked):
     return dest, lo
 
 
-def _obstacles(bundle, route=None):
-    """(disks, polygons) of every obstacle aboard for the navigator's course: the bundle's and
-    the deployed definition's (reoptimize.course_avoid). Read under the course lock show()
-    holds, so it is the course the route was just checked against."""
+def _obstacles(bundle, route=None, boat=None):
+    """(disks, polygons, land) of every obstacle aboard for the navigator's course: the bundle's
+    and the deployed definition's islands + zones (reoptimize.course_avoid), and the deployed LAND
+    chart when it is this course's (landchart.for_course: the same chart, checked the same way,
+    the Orin routes on), else None. Read under the course lock show() holds, so it is the course
+    the route was just checked against."""
     try:
         nav = NAV.get_navigator(route)
         r = nav.get("route") if nav.get("available") else None
@@ -271,7 +280,12 @@ def _obstacles(bundle, route=None):
     except Exception:  # noqa: BLE001
         r, marks = None, []
     disks, polys, _d, _c, _n = reoptimize.course_avoid(r, marks, bundle)
-    return disks, polys
+    try:
+        land = landchart.for_course(r, marks, boat)
+    except Exception as exc:  # noqa: BLE001 — a bad chart is "no chart", never a crash
+        print(f"[gpsout] land chart unreadable: {exc}", flush=True)
+        land = None
+    return disks, polys, land
 
 
 def _course_context(route=None):
@@ -462,7 +476,8 @@ def _show(source: str = "playbook", variant=None, route=None):
         verts = {j - nxt: i - cut for j, i in verts.items() if j >= nxt}
         nxt = 0
 
-    blocked = _blocked_fn(bundle, _obstacles(bundle, route))
+    obstacles = _obstacles(bundle, route, boat)
+    blocked = _blocked_fn(bundle, obstacles)
     idx = _downsample_idx(path, MAX_WPTS, set(verts.values()), blocked)
     if len(idx) > HARD_MAX_WPTS:
         return {"shown": False, "note": TOO_DETAILED}
@@ -474,14 +489,20 @@ def _show(source: str = "playbook", variant=None, route=None):
              "t": p.get("t")} for i, p in enumerate(pts)]
     if dest is None:
         return {"shown": False, "dest_index": None,
-                "note": ("Not sent: every waypoint ahead is behind a hazard. Steer clear "
-                         "by eye, then send again.")}
+                "note": NO_SAFE_WPT if rerouted else
+                ("Not sent: every waypoint ahead is behind a hazard. Steer clear "
+                 "by eye, then send again.")}
+    land = obstacles[2]
+    shore = bool(land is not None and (boat is None or land.covers(boat[0], boat[1]))
+                 and all(land.covers(p["lat"], p["lon"]) for p in pts))
     st = _post("/route", {"name": wire_name, "waypoints": wpts, "dest_index": dest})
     if st.get("error"):
         return {"shown": False, "note": st["error"]}
     return {"shown": bool(st.get("broadcasting")), "route": st.get("route"), "label": label,
             "n_waypoints": st.get("n_waypoints"), "downsampled_from": len(path),
-            "dest_index": dest,
+            "dest_index": dest, "shore_checked": shore,
+            # no land chart for this course (or the route leaves it): said, never implied
+            "warning": None if shore else NO_SHORE,
             "broadcaster": st}
 
 

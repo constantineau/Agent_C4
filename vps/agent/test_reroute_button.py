@@ -619,6 +619,84 @@ o_c = [r for r in h if r["event"] == "done" and r["engine"] == "orin" and r.get(
 check("Orin: same", o_c and o_c[0]["warnings"][0] == "No zones or rounding sides aboard. Redeploy the course."
       and o_c[0]["no_zones"] is True)
 
+print("GPS steer-to never crosses the deployed land chart (Codex, #143 review):")
+import base64  # noqa: E402
+import math  # noqa: E402
+import zlib  # noqa: E402
+
+from app import landchart, orinassets  # noqa: E402
+
+NAV._marks = lambda route: MARKS
+STATE["nav"] = dict(STATE["nav"], route="race", next_mark={"name": "A", "index": 1})
+DEF_L = {"race_id": "race", "courses": [{"id": "c", "start": {"lat": 44.0, "lon": -82.0},
+         "marks": [{"name": "A", "type": "buoy", "lat": 44.1, "lon": -82.0, "rounding": "port"}],
+         "finish": {"points": [{"lat": 44.2, "lon": -82.0}]}}], "zones": []}
+check("deployed", orinroute.save_definition(DEF_L, "c", "race"))
+BB = (44.25, 43.95, -82.1, -81.85)
+RES = 0.002
+NX, NY = max(1, math.ceil((BB[3] - BB[2]) / RES)), max(1, math.ceil((BB[0] - BB[1]) / RES))
+
+
+def chart_with(land_fn, fingerprint=None):
+    mask = bytearray(NX * NY)
+    for iy in range(NY):
+        for ix in range(NX):
+            lat, lon = BB[1] + (iy + 0.5) * RES, BB[2] + (ix + 0.5) * RES
+            mask[iy * NX + ix] = 1 if land_fn(lat, lon) else 0
+    chart = {"schema": "c4.obstacles/v1", "kind": "land-v2", "bbox": list(BB), "res_deg": RES,
+             "nx": NX, "ny": NY, "safety_depth": 2.63, "source": "test",
+             "mask_zb64": base64.b64encode(zlib.compress(bytes(mask))).decode(),
+             "fingerprint": fingerprint or landchart.course_fingerprint(DEF_L, "c", 2.63)}
+    orinassets._write(json.dumps({"received_at": 1, "assets": {
+        "schema": "c4.orin-assets/v1", "race_id": "race", "course_id": "c", "chart": chart}}))
+
+
+# a narrow peninsula reaching west from the east shore, between the boat and the next waypoint
+PENINSULA = lambda lat, lon: 44.05 <= lat <= 44.054 and lon >= -81.99  # noqa: E731
+chart_with(PENINSULA)
+# the stored route runs up lon -82.0, west of the peninsula's tip; the boat is off the track to
+# the east, south of the peninsula: the nearest segment's end (44.07) is across it
+reoptimize._store({"available": True, "source": "pi", "marks": ["A", "Finish"], "mark_idx": [1, 2],
+                   "path": [{"lat": 44.02, "lon": -82.0}, {"lat": 44.07, "lon": -82.0},
+                            {"lat": 44.1, "lon": -82.0}, {"lat": 44.2, "lon": -82.0}],
+                   "leg_end_idx": [2, 3], "computed_at": int(time.time()),
+                   "course_hash": orinroute.current_course_hash()})
+orinroute.stored = lambda: None
+STATE["latest"] = {"lat": 44.035, "lon": -81.95, "tws": 12.0, "twd": 90.0}
+boat_pt = {"lat": 44.035, "lon": -81.95}
+r, w = send()
+land = landchart.for_course("race", MARKS, (44.035, -81.95))
+check("(the chart is this course's, and the line to 44.07 does cross the peninsula)",
+      land is not None and land.crosses(44.035, -81.95, 44.07, -82.0))
+dest_pt = w[r["dest_index"]] if r.get("shown") else None
+check("sent, steering to a waypoint the boat can reach without crossing land",
+      r["shown"] and not land.crosses(boat_pt["lat"], boat_pt["lon"], dest_pt["lat"], dest_pt["lon"]))
+check("…the shore was checked (no warning)", r["shore_checked"] is True and r["warning"] is None)
+_obs = gpsout._obstacles
+gpsout._obstacles = lambda b, route=None, boat=None: _obs(b, route, boat)[:2] + (None,)
+r2, w2 = send()
+gpsout._obstacles = _obs
+check("(control) without the land chart the steer-to bearing crosses the peninsula",
+      r2["shown"] and land.crosses(44.035, -81.95, w2[r2["dest_index"]]["lat"],
+                                   w2[r2["dest_index"]]["lon"]))
+# a wall of land between the boat and every waypoint of the leg: nothing is safely reachable
+chart_with(lambda lat, lon: -81.975 <= lon <= -81.97)
+n_sent = len(SENT)
+r, w = send()
+check("no safe waypoint → refused, nothing sent", r["shown"] is False
+      and r["note"] == "No safe waypoint from here. Press Re-route now." and len(SENT) == n_sent)
+# no chart aboard, or the chart of another deploy: today's behaviour, said plainly
+os.remove(orinassets._path())
+r, w = send()
+check("no land chart: sent, with 'GPS route doesn't check the shore.'", r["shown"]
+      and r["shore_checked"] is False and r["warning"] == "GPS route doesn't check the shore.")
+chart_with(PENINSULA, fingerprint="0123456789abcdef")
+check("a chart from another deploy isn't used", landchart.for_course("race", MARKS) is None
+      and send()[0]["warning"] == "GPS route doesn't check the shore.")
+os.remove(orinassets._path())
+orinroute.stored = _orig_stored
+STATE["latest"] = {"lat": 44.02, "lon": -82.0, "tws": 12.0, "twd": 90.0}
+
 print("the real engine endpoints:")
 from fastapi.testclient import TestClient  # noqa: E402
 
