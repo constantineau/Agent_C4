@@ -707,16 +707,23 @@ def write_rows(conn, rows):
             raise
 
 
-# Errors that belong to ONE ROW's values, not to the file or the connection: a lone UTF-16
-# surrogate in a string (UnicodeEncodeError), an unbindable type, a constraint. Retried row by
-# row (`write_rows_each`) so only the bad row is lost. Locks, I/O and corruption are NOT here —
-# row by row they would fail every row and throw the batch away.
-ROW_ERRORS = (ValueError, TypeError, OverflowError, sqlite3.InterfaceError,
-              sqlite3.IntegrityError, sqlite3.ProgrammingError)
+# Errors that can ONLY come from one row's input values while binding them — an allow-list,
+# nothing broader:
+#   UnicodeEncodeError   a lone UTF-16 surrogate in a str (encoding OUR value to UTF-8)
+#   OverflowError        an int too large for SQLite INTEGER
+#   TypeError / InterfaceError / ProgrammingError "binding parameter"   an unbindable type
+# Retried row by row (`write_rows_each`) so only the bad row is lost. Everything else — locks,
+# I/O, corruption, and in particular UnicodeDecodeError (garbled bytes READ from a damaged page;
+# it is a ValueError too, which is why ValueError is not here) — fails the batch as before, so a
+# damaged file is rotated and its rows requeued, never silently dropped row by row.
+ROW_ERRORS = (UnicodeEncodeError, OverflowError, TypeError, sqlite3.InterfaceError,
+              sqlite3.ProgrammingError)
 
 
 def _is_row_error(exc) -> bool:
-    if isinstance(exc, sqlite3.ProgrammingError):
+    if isinstance(exc, UnicodeDecodeError):
+        return False                        # never: reading the file, not binding a value
+    if isinstance(exc, (sqlite3.ProgrammingError, sqlite3.InterfaceError)):
         return "binding parameter" in str(exc).lower()    # not "closed database" etc.
     return isinstance(exc, ROW_ERRORS)
 
@@ -1130,7 +1137,7 @@ async def _flush_once(buf, loop, state, path, guard):
                 dropped = await loop.run_in_executor(None, write_rows_each, state["conn"], rows)
                 _note_bad_rows(state, dropped, exc)
             break
-        except sqlite3.DatabaseError as exc:
+        except (sqlite3.DatabaseError, UnicodeDecodeError) as exc:
             if _is_corruption(exc):
                 # Once a write has said "corrupt", the file is rotated — no quick_check re-gate.
                 state["rotate_pending"] = True

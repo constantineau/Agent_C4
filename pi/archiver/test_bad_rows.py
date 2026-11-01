@@ -108,5 +108,50 @@ with tempfile.TemporaryDirectory() as d:
         flush(buf, state, Path(d) / "archive.db")
     check("all 5 rows back in the buffer", len(buf) == 5 and not state.get("rows_dropped_bad"))
 
+print("a decode error is the FILE, not a row: rotate and keep the batch (never drop row by row):")
+
+
+class Garbled:
+    """A connection on a damaged page: every write trips over garbled text it reads back."""
+
+    def __init__(self):
+        self.closed = False
+
+    def _boom(self, *a):
+        raise UnicodeDecodeError("utf-8", b"\xea\xff", 0, 1, "invalid continuation byte")
+    executemany = execute = _boom
+
+    def commit(self):
+        pass
+
+    def rollback(self):
+        pass
+
+    def close(self):
+        self.closed = True
+
+
+check("UnicodeDecodeError is not a row error", not archiver._is_row_error(
+    UnicodeDecodeError("utf-8", b"\xea", 0, 1, "bad")))
+check("UnicodeEncodeError (our surrogate) is", archiver._is_row_error(
+    UnicodeEncodeError("utf-8", "\ud800", 0, 1, "surrogates not allowed")))
+check("a plain ValueError is not (no broad catch)", not archiver._is_row_error(ValueError("x")))
+check("'closed database' is not", not archiver._is_row_error(
+    __import__("sqlite3").ProgrammingError("Cannot operate on a closed database.")))
+with tempfile.TemporaryDirectory() as d:
+    db = Path(d) / "archive.db"
+    archiver.open_db(db).close()           # the damaged file on disk that gets rotated
+    state = {"conn": Garbled()}
+    buf = [ROW] * 7
+    with contextlib.redirect_stdout(io.StringIO()):
+        flush(buf, state, db)
+    check("the damaged file was rotated aside (kept)",
+          len(list(Path(d).glob("archive.corrupt-*.db"))) == 1)
+    check("the whole batch landed in the fresh archive",
+          state["conn"].execute("SELECT count(*) FROM readings").fetchone()[0] == 7
+          and buf == [])
+    check("no rows were dropped as 'unwritable'", not state.get("rows_dropped_bad"))
+    state["conn"].close()
+
 print("\n" + ("PASS" if ok else "FAIL"))
 raise SystemExit(0 if ok else 1)
