@@ -45,6 +45,8 @@ HARD_MAX_WPTS = int(os.environ.get("GPSOUT_HARD_MAX_WPTS", "250"))
 TOO_DETAILED = "Route too detailed for the GPS. Not sent."
 NO_SAFE_WPT = "No safe waypoint from here. Press Re-route now."
 NO_SHORE = "GPS route doesn't check the shore."
+PI_CROSSES_LAND = "Pi route crosses land. Not sent to GPS."
+CROSSES_LAND = "Route crosses land. Not sent to GPS."
 
 
 def _post(path, payload=None):
@@ -401,6 +403,7 @@ def _show(source: str = "playbook", variant=None, route=None):
     is stale and refused by name."""
     bundle = deviation._load_playbook()
     rerouted = source in ("reroute", "orin", "reoptimize")
+    ro = None
     if rerouted:
         ro, why = _new_route(source, route)
         if ro is None:
@@ -493,6 +496,18 @@ def _show(source: str = "playbook", variant=None, route=None):
                 ("Not sent: every waypoint ahead is behind a hazard. Steer clear "
                  "by eye, then send again.")}
     land = obstacles[2]
+    if land is not None:
+        # The thinning trusts consecutive router vertices (the router's own steps) — but the Pi's
+        # fallback router never sees land, and a plan may come from a coarser chart. So EVERY
+        # exported segment, and the boat's line to the steer-to waypoint, is checked against the
+        # land chart once more; one crossing refuses the send.
+        legs = list(zip(pts, pts[1:]))
+        if boat is not None and boat[0] is not None:
+            legs.append(({"lat": boat[0], "lon": boat[1]}, pts[dest]))
+        if any(land.crosses(a["lat"], a["lon"], b["lat"], b["lon"]) for a, b in legs):
+            pi_route = rerouted and (ro or {}).get("source") == "pi"
+            return {"shown": False, "dest_index": None,
+                    "note": PI_CROSSES_LAND if pi_route else CROSSES_LAND}
     shore = bool(land is not None and (boat is None or land.covers(boat[0], boat[1]))
                  and all(land.covers(p["lat"], p["lon"]) for p in pts))
     st = _post("/route", {"name": wire_name, "waypoints": wpts, "dest_index": dest})

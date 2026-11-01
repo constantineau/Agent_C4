@@ -694,6 +694,32 @@ chart_with(PENINSULA, fingerprint="0123456789abcdef")
 check("a chart from another deploy isn't used", landchart.for_course("race", MARKS) is None
       and send()[0]["warning"] == "GPS route doesn't check the shore.")
 os.remove(orinassets._path())
+
+print("a Pi route across land is never sent, even between router vertices (Codex):")
+chart_with(PENINSULA)
+# the Pi's fallback router doesn't see land: its own consecutive steps cross the peninsula
+reoptimize._store({"available": True, "source": "pi", "marks": ["A", "Finish"], "mark_idx": [1, 2],
+                   "path": [{"lat": 44.02, "lon": -81.96}, {"lat": 44.07, "lon": -81.96},
+                            {"lat": 44.1, "lon": -82.0}, {"lat": 44.2, "lon": -82.0}],
+                   "leg_end_idx": [2, 3], "computed_at": int(time.time()),
+                   "course_hash": orinroute.current_course_hash()})
+STATE["latest"] = {"lat": 44.02, "lon": -81.96, "tws": 12.0, "twd": 90.0}
+n_sent = len(SENT)
+r, w = send()
+check("refused: 'Pi route crosses land. Not sent to GPS.'", r["shown"] is False
+      and r["note"] == "Pi route crosses land. Not sent to GPS." and len(SENT) == n_sent)
+
+print("only the boat's own cell is opened, not a 0.5 nm disk:")
+land = landchart.for_course("race", MARKS, (44.047, -81.96))
+check("land 0.2 nm from the boat still blocks", land.blocked(44.051, -81.96))
+base = landchart.for_course("race", MARKS)
+inside = landchart.for_course("race", MARKS, (44.0521, -81.9601))   # the raster puts the boat ashore
+opened = sum(1 for a_, b_ in zip(base.mask, inside.mask) if a_ != b_)
+check("a boat on a land cell: its cell and one neighbour opened, nothing more",
+      opened == 2 and not inside.blocked(44.0521, -81.9601))
+check("the Pi's fingerprint is the shared one", landchart.course_fingerprint(DEF_L, "c", 2.63)
+      == __import__("shared.chartid", fromlist=["x"]).course_fingerprint(DEF_L, "c", 2.63))
+os.remove(orinassets._path())
 orinroute.stored = _orig_stored
 STATE["latest"] = {"lat": 44.02, "lon": -82.0, "tws": 12.0, "twd": 90.0}
 

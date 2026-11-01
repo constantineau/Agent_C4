@@ -9,19 +9,18 @@ Used only when it is the chart for the course aboard, exactly as the Orin decide
 (pi/orin/reroute/job.load_obstacles): the deployed definition matches the navigator's marks and
 load (orinroute._definition_for), the chart is for that race and course, and its fingerprint (the
 course, the zones, the no-go depth it was built for) matches the definition. Like the Orin, the
-pocket round each mark and round the boat is opened (MARK_CARVE_NM): those are waters the route
-must reach. Outside the chart's box nothing is known: `covers` says so, and the caller must not
+pocket round each mark is opened (MARK_CARVE_NM): those are waters the route must reach. Round
+the boat only its own cell (and one neighbour when the coarse raster puts the boat on land): the
+steer-to check must still see a headland close aboard. Outside the chart's box nothing is known: `covers` says so, and the caller must not
 claim the shore was checked.
 
 Pure Python (zlib + base64), no GDAL: the Pi holds no shoreline, only this mask.
 """
 import base64
-import hashlib
-import json
 import math
 import zlib
 
-from shared import boat_profile
+from shared import chartid
 
 from . import orinassets, orinroute
 
@@ -30,14 +29,8 @@ MARK_CARVE_NM = 0.5        # = the Lab's geo.MARK_CARVE_NM: the pocket the Orin 
 
 
 def course_fingerprint(definition, course_id, safety_depth):
-    """= vps/lab/app/geo/obstacles.course_fingerprint (the Lab writes it, the Orin checks it)."""
-    courses = (definition or {}).get("courses") or []
-    course = next((c for c in courses if c.get("id") == course_id), None) or \
-        (courses[0] if courses else None)
-    payload = json.dumps({"course": course, "zones": (definition or {}).get("zones") or [],
-                          "depth": None if safety_depth is None else round(float(safety_depth), 3)},
-                         sort_keys=True, separators=(",", ":"))
-    return hashlib.sha1(payload.encode()).hexdigest()[:16]
+    """The shared one (shared/chartid.py): the Lab stamps it, the Orin checks it, so does this."""
+    return chartid.course_fingerprint(definition, course_id, safety_depth)
 
 
 class LandMask:
@@ -83,6 +76,24 @@ class LandMask:
             for ix in range(ia, ib + 1):
                 self.mask[row + ix] = 0
 
+    def open_boat(self, lat, lon):
+        """The boat is afloat: open its own cell, and when that cell reads as land (the raster is
+        coarser than the shore) the ONE neighbour nearest the boat as well. Never a disk: a
+        headland a few hundred metres from the boat is exactly what the steer-to check is for."""
+        c = self._cell(lat, lon)
+        if c is None or self.mask[c] == 0:
+            return
+        self.mask[c] = 0
+        ix, iy = c % self.nx, c // self.nx
+        fx = (lon - self.w) / self.res - ix            # where in its cell the boat sits, 0..1
+        fy = (lat - self.s) / self.res - iy
+        dx = -1 if fx < 0.5 else 1
+        dy = -1 if fy < 0.5 else 1
+        # the nearest cell edge is the neighbour across it
+        nx_, ny_ = (ix + dx, iy) if min(fx, 1 - fx) <= min(fy, 1 - fy) else (ix, iy + dy)
+        if 0 <= nx_ < self.nx and 0 <= ny_ < self.ny:
+            self.mask[ny_ * self.nx + nx_] = 0
+
     def crosses(self, lat1, lon1, lat2, lon2):
         """Does the straight segment pass over land (sampled under half a cell apart)?"""
         dlat, dlon = lat2 - lat1, lon2 - lon1
@@ -107,18 +118,14 @@ def for_course(nav_route, marks, boat=None):
         return None
     if a.get("race_id") != defn.get("race_id") or a.get("course_id") != cid:
         return None
-    # the depth it was built for: the chart's own record of it, else the pushed boat profile's
-    # (draft + margin, as the Lab and the Orin compute it), else the Lab's default
+    # the depth resolved exactly as the Lab (orinassets) and the Orin (job.load_obstacles) do:
+    # the pushed boat profile's draft + margin, else the shared default
     boat_p = a.get("boat") if isinstance(a.get("boat"), dict) else None
-    depths = [chart.get("safety_depth"), 2.63]
-    if boat_p and boat_p.get("draft_m") is not None:
-        try:
-            depths.insert(1, boat_profile.safety_depth_m(boat_p))
-        except (TypeError, ValueError):
-            pass
-    fp = chart.get("fingerprint")
-    if not any(fp == course_fingerprint(defn, cid, d) for d in depths
-               if d is None or isinstance(d, (int, float))):
+    try:
+        depth = chartid.safety_depth_m(boat_p)
+    except (TypeError, ValueError):
+        return None
+    if chart.get("fingerprint") != course_fingerprint(defn, cid, depth):
         return None                                       # a re-deployed course: an old chart
     try:
         land = LandMask(chart)
@@ -128,5 +135,5 @@ def for_course(nav_route, marks, boat=None):
         if m.get("lat") is not None and m.get("lon") is not None:
             land.carve(m["lat"], m["lon"])
     if boat and boat[0] is not None:
-        land.carve(boat[0], boat[1])
+        land.open_boat(boat[0], boat[1])
     return land
