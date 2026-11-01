@@ -288,7 +288,7 @@
         /* The Jul 18 bank, rehearsed: 11.58 V and falling 0.22 V/h with ~2.6 h to the 11.0 V
            floor. This is the state nobody could see during the real race, three hours before the
            archiver and the AIS transceiver died together at the bottom of the curve. */
-        bank:    { status: "act", value: "11.58 V", sub: "-0.22 V/h · ~2.6 h to 11.0 V", why: "Bank 11.58 V, at or under 11.6 V. Reaches 11.0 V in about 2.6 h. Below 11.0 V the recorder and AIS can fail.", consider: "Shed load and start charging. Recorder and AIS fail first.", clears: "bank holds above 11.6 V for 10 min", based: ["11.58 V, -0.22 V/h", "⚠ voltage limits not checked on this boat. Trust the trend."], conf: "high" },
+        bank:    { status: "act", value: "11.58 V", sub: "-0.22 V/h · ~2.6 h to 11.0 V", why: "Bank 11.58 V, at or under 11.6 V. At this rate, 11.0 V in about 2.6 h. Below 11.0 V the recorder and AIS can fail.", consider: "Shed load and start charging. Recorder and AIS fail first.", clears: "bank above 11.6 V for over half of the last 10 min", based: ["11.58 V, -0.22 V/h", "⚠ voltage limits not checked on this boat. Trust the trend."], conf: "high" },
       },
       power: { available: true, status: "danger", volts: 11.58, volts_decided: 11.57, volts_last: 11.52,
         volts_min: 11.31, sustain_min: 10,

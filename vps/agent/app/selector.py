@@ -277,7 +277,7 @@ def _decide(route=None, now=None):
                     # lateral pivots bought little in the runner).
                     "why": (f"Shift favours the {favored}, but downwind needs longer to confirm. "
                             f"Held {held_m} of {need_m} min."),
-                    "consider": f"Stay on '{rec_label}'. Switch after {need_m} min if it holds.",
+                    "consider": f"Stay on '{rec_label}'. Reassess after {need_m} min if it holds.",
                     "clears": "shift reverses, or it holds long enough",
                     "based": ["get_tactics"],
                     "confirming": {"favored": favored, "held_s": round(held_s),
