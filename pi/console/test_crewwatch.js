@@ -70,9 +70,9 @@ test("every non-ok watch status is explained by CONSIDER (never the all-clear li
 
 test("helm rotation before the first block is phrased against the start, not a change", () => {
   assert.equal(CW.consider(preStart(40), "Port", true),
-    "Tank getting low — rotate when watches start (40m out), sooner if it slips.");
+    "Helm getting tired. Rotate when watches start (40m out), sooner if needed.");
   assert.equal(CW.consider(onWatch(40), "Port", true),
-    "Tank getting low — rotate at the watch change (40m out), sooner if it slips.");
+    "Helm getting tired. Rotate at the watch change (40m out), sooner if needed.");
 });
 
 test("no plan, an ended plan and a missing read are all OK and quiet", () => {
@@ -82,7 +82,7 @@ test("no plan, an ended plan and a missing read are all OK and quiet", () => {
   assert.equal(CW.status(ended), "ok");
   assert.equal(CW.subTxt(ended), "watch plan ended");
   assert.equal(CW.consider(ended, "the next team", false), FRESH);
-  assert.equal(CW.consider(null, "the next team", true), "Tank getting low — plan a helm rotation.");
+  assert.equal(CW.consider(null, "the next team", true), "Helm getting tired. Plan a rotation.");
   assert.equal(CW.subTxt(null), null);
 });
 

@@ -156,10 +156,10 @@ def _template_narrative(m, mode):
     if bs.get("avg_stw_kn") is not None:
         line = f"Avg boatspeed {bs['avg_stw_kn']} kts (max {bs['max_stw_kn']})"
         if pol.get("percent_of_polar") is not None:
-            line += f", ~{pol['percent_of_polar']}% of the {pol['target_stw_kn']} kts polar target"
+            line += f", ~{pol['percent_of_polar']}% of {pol['target_stw_kn']} kts target"
         bits.append(line + f"; {bs.get('distance_nm', '?')} nm sailed.")
     if w.get("tws_mean_kn") is not None:
-        bits.append(f"Breeze {w['tws_min_kn']}–{w['tws_max_kn']} kts (mean {w['tws_mean_kn']}), "
+        bits.append(f"Wind {w['tws_min_kn']}–{w['tws_max_kn']} kts (avg {w['tws_mean_kn']}), "
                     f"TWD ~{w['twd_mean_deg']}° oscillating ±{round((w['twd_oscillation_deg'] or 0)/2)}°.")
     if m["heel"].get("avg_abs_deg") is not None:
         bits.append(f"Heel avg {m['heel']['avg_abs_deg']}°, peak {m['heel']['max_abs_deg']}°.")
@@ -177,9 +177,11 @@ def _template_narrative(m, mode):
 def _llm_narrative(m, mode):
     import anthropic
     client = anthropic.Anthropic(api_key=API_KEY)
-    instr = ("You are the SR33 race navigator writing a crew " + mode + ". Be concise and "
-             "concrete, use the numbers given, and surface the 2-3 things that matter most "
-             "(speed vs polar, wind pattern/shifts, any safety alerts, a takeaway). "
+    instr = ("You are the SR33 race navigator writing a crew " + mode + ". Use plain, short "
+             "sentences (about 12 words each), lead with the takeaway, keep the numbers given, and "
+             "cover the 2-3 things that matter most (speed vs target, wind pattern/shifts, any "
+             "safety alerts). No jargon. Say the wind shifted right or left; never say "
+             "veer, veered, back or backed. "
              + ("A debrief is 4-6 sentences with a clear takeaway. "
                 if mode == "debrief" else "A summary is 2-3 sentences. ")
              + "Don't invent data beyond what's provided.")

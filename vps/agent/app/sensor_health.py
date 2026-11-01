@@ -246,12 +246,11 @@ def _hold_danger(out, previous, previous_age_s, why):
     if previous != "danger":
         return out
     if previous_age_s is not None and previous_age_s > HEADING_DANGER_HOLD_MIN * 60.0:
-        out["reason"] = (f"{out['reason']} — and the compass has not been judgeable for "
-                         f"{previous_age_s / 60.0:.0f} min, so the last danger is too old to hold")
+        out["reason"] = (f"{out['reason']}. Compass unchecked for "
+                         f"{previous_age_s / 60.0:.0f} min, old alarm dropped")
         return out
     out.update(status="danger", held=True, held_reason=out.get("reason"),
-               reason=f"compass last read a quarter turn out and this window cannot say "
-                      f"otherwise ({why}) — holding the alarm, not clearing it")
+               reason=f"compass was badly off, can't recheck now ({why}). Alarm held")
     return out
 
 
@@ -279,16 +278,16 @@ def heading_bias(samples, reference=None, previous=None, previous_age_s=None):
         # Still worth running — a magnetometer and a GPS position track are different physics
         # even inside one enclosure, which is why the 24xd-vs-24xd comparison did catch Jul 18.
         # But it cannot survive that box losing power, so say so instead of implying redundancy.
-        note = (f"compared against {ref.get('course') or 'the same device'} — no COG publisher "
-                f"independent of {ref.get('heading') or 'the compass'} on this bus")
+        note = (f"compass checked against {ref.get('course') or 'the same device'}, "
+                f"not a separate GPS")
     usable = [(h, c) for (_t, h, c, s) in samples
               if h is not None and c is not None and s is not None and s >= HEADING_MIN_SOG_KN]
     if len(usable) < HEADING_MIN_SAMPLES:
         return _hold_danger(
             {"available": False, "status": "unknown", "samples": len(usable),
              "reference": ref or None, "note": note,
-             "reason": f"need {HEADING_MIN_SAMPLES} samples over "
-                       f"{HEADING_MIN_SOG_KN:g} kn (COG is meaningless at rest)"},
+             "reason": f"need {HEADING_MIN_SAMPLES} samples above "
+                       f"{HEADING_MIN_SOG_KN:g} kn to check the compass"},
             previous, previous_age_s, "too slow for COG to mean anything")
     mean, spread = _circular([_wrap180(h - c) for h, c in usable])
     # Decide on the value we REPORT, not on the raw float. Otherwise a bias of 14.951 prints as
@@ -310,27 +309,25 @@ def heading_bias(samples, reference=None, previous=None, previous_age_s=None):
         # window that straddles the moment a steady bias appears. The last is self-clearing
         # after one window length; see HEADING_WINDOW_MIN.
         out.update(status="unknown",
-                   reason=f"samples disagree ({spread:.0f}° spread){against} — manoeuvring, "
-                          f"unstable, or a bias that has only just appeared")
+                   # manoeuvring, unstable, or a bias that has only just appeared
+                   reason=f"compass vs GPS course unsteady ({spread:.0f}° spread){against}, may be a new offset")
         return _hold_danger(out, previous, previous_age_s, f"{spread:.0f}° spread")
     a = abs(mean)
     if a >= HEADING_BAD_DEG:
         out.update(status="danger",
-                   reason=f"heading reads {mean:+.0f}° off GPS course{against}, held steadily "
-                          f"({spread:.0f}° spread) — the compass is misaligned, not the boat")
+                   reason=f"compass {mean:+.0f}° off GPS course{against}, steady "
+                          f"({spread:.0f}° spread). Compass misaligned")
     elif a >= HEADING_WARN_DEG:
         out.update(status="warn",
-                   reason=f"heading {mean:+.0f}° off GPS course{against} — more than leeway and "
-                          f"current explain; check the compass mounting")
+                   reason=f"compass {mean:+.0f}° off GPS course{against}. Check its mounting")
     elif previous == "warn" and a >= HEADING_WARN_DEG - HEADING_RELEASE_DEG:
         # Raised, and not yet clearly back. Held rather than dropped, and it SAYS it is held —
         # a tile that changes its mind every other poll teaches the crew to stop reading it.
         out.update(status="warn", held=True,
-                   reason=f"heading {mean:+.0f}° off GPS course{against} — still within "
-                          f"{HEADING_RELEASE_DEG:g}° of the {HEADING_WARN_DEG:g}° line it "
-                          f"crossed; holding the warning until it clears")
+                   # still within HEADING_RELEASE_DEG of the warn line it crossed
+                   reason=f"compass {mean:+.0f}° off GPS course{against}. Warning held")
     else:
-        out.update(status="ok", reason=f"heading within {mean:+.0f}° of GPS course{against}")
+        out.update(status="ok", reason=f"compass within {mean:+.0f}° of GPS course{against}")
     return out
 
 
@@ -371,7 +368,7 @@ def assess_provenance(channels, ais_excluded=(), boat_id=None):
         # check compares matchers against the sources actually observed, so an empty window
         # would report every non-device matcher as unbindable. Say "unknown" and stop.
         return {"available": False, "status": "unknown", "checks": {}, "flags": [], "notes": [],
-                "channels": {}, "reason": "no live channels to attribute"}
+                "channels": {}, "reason": "no live sensor data"}
 
     labels = sorted({r["source"] for c in channels.values() for r in c.get("readings") or []})
     unresolvable = n2k_sources.unresolved(source_policy.all_matchers(), devices, labels)
@@ -433,39 +430,38 @@ def assess_provenance(channels, ais_excluded=(), boat_id=None):
         "policy_binds": {
             "status": "warn" if unresolvable else "ok",
             "unresolvable": unresolvable,
-            "reason": (f"{len(unresolvable)} priority matcher(s) name no device on this bus "
-                       f"({', '.join(unresolvable)}) — those channels are unranked in practice"
+            "reason": (f"{len(unresolvable)} preferred sensor(s) not found "
+                       f"({', '.join(unresolvable)}), using any source"
                        if unresolvable else
-                       f"all {len(source_policy.all_matchers())} priority matchers bind"),
+                       f"all {len(source_policy.all_matchers())} preferred sensors found"),
         },
         "lead_source": {
             "status": "warn" if went_silent else "ok",
             "went_silent": went_silent, "policy_unmet": unmet, "unranked": unranked,
-            "reason": (", ".join(f"{f['channel']} on {f['using'] or '?'} — ranked "
+            "reason": (", ".join(f"{f['channel']} on {f['using'] or '?'}, "
                                  f"{f['expected']} went silent"
                                  + (f" ({f['lead_age_s']:.0f} s ago)"
                                     if f.get("lead_age_s") is not None else "")
                                  for f in went_silent)
                        if went_silent else
-                       "every ranked channel is on its rank-1 device"
-                       + (f"; {len(unranked)} unranked channel(s) take the freshest source"
+                       "all channels on their main sensor"
+                       + (f"; {len(unranked)} use the freshest source"
                           if unranked else "")),
             # A standing configuration fact, not an in-race alarm: it will be true on every poll
             # of every race until someone turns the Orca's attitude sharing on.
-            "note": (f"{len(unmet)} channel(s) never see their ranked lead ("
+            "note": (f"{len(unmet)} channel(s) never get their main sensor ("
                      + ", ".join(f"{f['channel']}→{f['expected']}" for f in unmet)
-                     + ") — the policy names a device that does not publish them"
+                     + ")"
                      if unmet else None),
         },
         "own_ship": {
             "status": "danger" if ais_leading else "ok",
             "ais_excluded": sorted(ais), "ais_leading": ais_leading, "synthetic": synthetic,
-            "reason": ("AIS traffic is leading " + ", ".join(x["channel"] for x in ais_leading)
-                       + " — another vessel's data is being read as own-ship"
+            "reason": ("another boat's AIS data used for " + ", ".join(x["channel"] for x in ais_leading)
                        if ais_leading else
-                       f"AIS filter excluding {', '.join(sorted(ais))} from own-ship reads"
+                       f"AIS {', '.join(sorted(ais))} kept out of own-boat data"
                        if ais else
-                       "no AIS-bearing source identified — nothing to exclude"),
+                       "no AIS source to filter"),
             # The excluded list is POSITIVE evidence the filter bound to something. An empty list
             # on a boat that carries an AIS transceiver is worth an eyebrow, but it is normal on
             # the bench, so it is a note rather than a status.
@@ -481,7 +477,7 @@ def assess_provenance(channels, ais_excluded=(), boat_id=None):
             "checks": checks, "flags": flags, "notes": notes, "channels": prov,
             "reason": ("; ".join(flags) if flags else
                        checks["own_ship"]["reason"] if channels else
-                       "no live channels to attribute")}
+                       "no live sensor data")}
 
 
 def assess(source=None, minutes=None, conditions=None, previous=None, previous_age_s=None):
@@ -567,5 +563,5 @@ def assess(source=None, minutes=None, conditions=None, previous=None, previous_a
     notes = ([hb["note"]] if hb.get("note") else []) + (prov.get("notes") or [])
     return {"available": True, "status": worst, "attitude": att, "heading": hb,
             "provenance": prov, "flags": flags, "notes": notes,
-            "reason": "; ".join(flags) if flags else "instruments cross-check clean",
+            "reason": "; ".join(flags) if flags else "instruments agree",
             "window_min": minutes}

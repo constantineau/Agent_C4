@@ -205,8 +205,7 @@ def positions(cfg, now=None):
         out.append({**fx, "time": t, "age_s": round(age), "confidence": round(_age_conf(age), 2)})
     return {"available": bool(out), "positions": out, "fetched_at": cached["at"],
             "error": cached["error"], "delay_min": cfg.get("delay_min"),
-            "note": "Public tracker is DELAYED — positions are aged + confidence-reduced; use for the "
-                    "over-the-horizon picture, not live tactical calls."}
+            "note": "Tracker is delayed. Good for distant boats, not live calls."}
 
 
 def _reset_cache():

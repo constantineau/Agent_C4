@@ -116,12 +116,12 @@ check("stopped for 3 h -> left open (a lunch stop is not the end of a sail)",
 ds = fresh(MotionDS([(h, 0.0) for h in (30.0, 29.0, 28.0)]))  # three samples, all stopped
 r = racelog.autoclose(now=NOW)
 check("a nearly-silent bus is NOT read as a parked boat — silence is not evidence",
-      r["closed"] is False and "quiet bus" in r["note"] and ds.session_current() is not None)
+      r["closed"] is False and "not closing" in r["note"] and ds.session_current() is not None)
 
 ds = fresh(MotionDS([(h / 10.0, 0.1) for h in range(1, 400)]))  # plenty of samples, never moved
 r = racelog.autoclose(now=NOW)
 check("no under-way moment anywhere in the look-back -> refuses, and says a human must close it",
-      r["closed"] is False and "not closing on a guess" in r["note"])
+      r["closed"] is False and "from the iPad" in r["note"])
 
 # REC tapped at the dock AFTER the sail: the only under-way moments precede the session.
 ds = fresh(MotionDS(parked(underway_h=20, still_h=19)), started_h_ago=6)

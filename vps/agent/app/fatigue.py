@@ -232,13 +232,13 @@ def _compute():
 
     if not heading:
         return {"available": False, "status": "no_helm_data",
-                "note": "no heading data — can't assess steering"}
+                "note": "No heading data yet."}
     base_span_min = (t_split - min(t for t, _ in heading)) / 60.0
     recent_span_min = (max(t for t, _ in heading) - t_split) / 60.0
     if base_span_min < MIN_BASELINE_MIN or recent_span_min < MIN_RECENT_MIN:
         return {"available": False, "status": "warming_up",
-                "note": (f"need ~{MIN_BASELINE_MIN:.0f} min of baseline + {MIN_RECENT_MIN:.0f} min "
-                         f"recent steering; have {base_span_min:.0f}/{recent_span_min:.0f} min"),
+                "note": (f"Warming up: {base_span_min:.0f} of {MIN_BASELINE_MIN:.0f} min, "
+                         f"{recent_span_min:.0f} of {MIN_RECENT_MIN:.0f} min recent."),
                 "baseline_min_have": round(base_span_min, 1),
                 "recent_min_have": round(recent_span_min, 1)}
 
@@ -267,7 +267,7 @@ def _compute():
 
     if wsum < 0.4:  # too few signals to be credible
         return {"available": False, "status": "insufficient_signals",
-                "note": "not enough steering/performance channels to assess fatigue",
+                "note": "Not enough sensor data to judge the helm.",
                 "components": components}
 
     index = round(weighted / wsum)
@@ -290,9 +290,9 @@ def _compute():
 
 def _level(index):
     if index < 35:
-        return "fresh", "Helm steady — no change needed."
+        return "fresh", "Helm steady. No change needed."
     if index < 60:
-        return "watch", "Helm slipping a little versus baseline — keep an eye on the driver."
+        return "watch", "Helm slipping a little. Watch the driver."
     if index < 80:
-        return "rotate_soon", "Steering quality is fading — line up a helm change."
-    return "rotate_now", "Helm well off baseline — rotate the driver now."
+        return "rotate_soon", "Steering fading. Line up a helm change."
+    return "rotate_now", "Rotate the driver now."

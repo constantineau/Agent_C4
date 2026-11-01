@@ -221,16 +221,15 @@ def assess_series(rows, now=None):
     # is a projection — draining fast enough to reach the floor within the watch.
     if _tripped(window, FLOOR_V + DANGER_MARGIN_V, now):
         status = "danger"
-        reason = (f"bank {level:.2f} V — within {DANGER_MARGIN_V:.1f} V of the {FLOOR_V:.1f} V "
-                  f"floor, below everything this bank has recorded")
+        reason = (f"bank {level:.2f} V, lowest ever, near the {FLOOR_V:.1f} V floor")
         if charging:
-            reason += " — recovering, charge source on"
+            reason += ", charging"
     elif charging:
         status = "charging"
-        reason = f"bank {level:.2f} V, rising {slope:+.2f} V/h — charge source on"
+        reason = f"bank {level:.2f} V, charging {slope:+.2f} V/h"
     elif draining:
         status = "warn"
-        reason = (f"bank {level:.2f} V draining {slope:+.2f} V/h — "
+        reason = (f"bank {level:.2f} V, draining {slope:+.2f} V/h, "
                   f"~{hours_to_floor:.1f} h to {FLOOR_V:.1f} V")
     else:
         status = "ok"
@@ -255,11 +254,12 @@ def assess_series(rows, now=None):
         "path": PATH,
         "thresholds": {"danger_v": FLOOR_V + DANGER_MARGIN_V, "floor_v": FLOOR_V,
                        "drain_warn_v_per_h": DRAIN_WARN_V_PER_H},
-        "note": ("Status is trend-first: this bank ordinarily races at 11.5–12.4 V, so absolute "
-                 "alarms exist only near the floor of its own record (sustained ≤ "
-                 f"{FLOOR_V + DANGER_MARGIN_V:.1f} V). The {FLOOR_V:.1f} V floor is an "
-                 "equipment-risk estimate, not a measured failure point — at the minute the "
-                 "Jul 18 archiver died the bank read 11.65 V and kept publishing."),
+        # Status is trend-first: this bank ordinarily races at 11.5–12.4 V, so absolute alarms
+        # exist only near the floor of its own record. The floor is an equipment-risk estimate,
+        # not a measured failure point — at the minute the Jul 18 archiver died the bank read
+        # 11.65 V and kept publishing.
+        "note": (f"Alarm only at {FLOOR_V + DANGER_MARGIN_V:.1f} V or below. "
+                 "Otherwise watch the trend."),
     }
 
 

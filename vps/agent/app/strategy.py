@@ -67,25 +67,24 @@ def _concordance(lean, sig, fleet_side):
         if sides and all(s == sides[0] for s in sides) and len(sides) >= 2:
             return {"agree": True, "lean": sides[0], "strength": "weak",
                     "concur": len(sides), "conflict": 0,
-                    "note": f"no persistent shift yet, but {len(sides)} signals lean {sides[0]}"}
+                    "note": f"no lasting shift yet, but {len(sides)} signals lean {sides[0]}"}
         return {"agree": None, "lean": None, "strength": "none", "concur": 0, "conflict": 0,
-                "note": "no decisive directional signal"}
+                "note": "no clear side yet"}
 
     concur = [n for n, s in votes if s == lean]
     conflict = [n for n, s in votes if s == _OPP.get(lean)]
     if conflict:
         strength = "split"
-        note = (f"the shift leans {lean}, but " + " and ".join(conflict) + " point the other way — "
-                "one read is about to be wrong")
+        note = f"shift says {lean}, but " + " and ".join(conflict) + " say the other way"
     elif len(concur) >= 2:
         strength = "strong"
-        note = f"the shift, {concur[0]} and {concur[1]} all point {lean}"
+        note = f"shift, {concur[0]} and {concur[1]} all say {lean}"
     elif concur:
         strength = "weak"
-        note = f"the shift leans {lean}, {concur[0]} agrees"
+        note = f"shift says {lean}, {concur[0]} agrees"
     else:
         strength = "weak"
-        note = f"the shift leans {lean}; no other signal has confirmed it yet"
+        note = f"shift says {lean}, nothing else confirms yet"
     return {"agree": not conflict, "lean": lean, "strength": strength,
             "concur": len(concur), "conflict": len(conflict), "note": note}
 
@@ -109,17 +108,16 @@ def _picture(sig, flt, conc):
             read = wp.describe_drift(dft["ref_twd"], dft["now_twd"],
                                      tws_change_kn=dft.get("tws_kn"), pos=dft.get("pos"))
         else:   # fallback if the from→to pair isn't carried (e.g. an older signal)
-            read = f"forecast has shifted {dft.get('dir', '')} ~{round(dft.get('deg') or 0)}° since the plan was frozen"
+            read = f"forecast shifted {dft.get('dir', '')} ~{round(dft.get('deg') or 0)}° since the plan"
         out.append({"signal": "forecast", "read": read, "grounded_in": ["get_drift"],
                     "confidence": "med" if dft.get("status") == "act" else "low"})
 
     dev = sig.get("deviation") or {}
     if dev.get("status") in ("watch", "act"):
         behind = dev.get("time_behind_s")
-        btxt = f", {round(behind / 60)} min behind the plan" if behind and behind > 0 else ""
+        btxt = f", {round(behind / 60)} min behind plan" if behind and behind > 0 else ""
         out.append({"signal": "deviation",
-                    "read": f"{abs(dev.get('xte_nm') or 0)} nm {dev.get('side')} of the plan's "
-                            f"line{btxt}",
+                    "read": f"{abs(dev.get('xte_nm') or 0)} nm {dev.get('side')} of the plan{btxt}",
                     "grounded_in": ["get_deviation"],
                     "confidence": "med" if dev.get("status") == "act" else "low"})
 
@@ -141,7 +139,7 @@ def _picture(sig, flt, conc):
             who = "beating us" if d < 0 else "behind us"
             out.append({"signal": "fleet",
                         "read": f"{top.get('boat', 'top rival')}{_fleet_position(top)}projected {who} "
-                                f"by {m}:{s:02d} on corrected time",
+                                f"by {m}:{s:02d} corrected",
                         "grounded_in": ["get_fleet"],
                         "confidence": _conf_label(top.get("confidence") or 0.4)})
 
@@ -156,13 +154,11 @@ def _caveats(sig, flt, has_playbook):
     """Engine-authored uncertainty — each contributing stream's honest caveat (never LLM free-text)."""
     cav = []
     if not has_playbook:
-        cav.append("No gameplan aboard — this reasons from live facts only, with nothing to check it "
-                   "against; treat as low-confidence.")
+        cav.append("No gameplan loaded. Live data only, low confidence.")
     if (sig.get("drift") or {}).get("status") in ("watch", "act"):
-        cav.append("Forecast drift is a forecast vs a forecast — an early warning, not an on-water fact.")
+        cav.append("Forecast change is an early warning, not what's on the water.")
     if flt.get("available"):
-        cav.append("Fleet corrected-time is a projection to the finish and AIS/tracker coverage is "
-                   "partial — a soft, confidence-flagged signal.")
+        cav.append("Fleet times are projections and tracking is patchy. Treat as soft.")
     return cav
 
 
@@ -179,9 +175,9 @@ def _recommendation(sel, conc, flt):
         urg = "now" if sel.get("status") == "act" else "soon"
         rat = sel.get("why", "")
         if strength == "strong":
-            conf = min(0.95, conf + 0.05); rat += " The forecast, fleet and your position agree — high concordance."
+            conf = min(0.95, conf + 0.05); rat += " Forecast, fleet and position all agree."
         elif strength == "split":
-            conf = max(0.4, conf - 0.1); urg = "soon"; rat += " But the signals are split — confirm before you commit."
+            conf = max(0.4, conf - 0.1); urg = "soon"; rat += " Signals are split. Confirm before you commit."
         return {"action": f"Switch → {sel.get('target_label')}", "vs_playbook": "on-plan",
                 "target_variant": sel.get("target_variant"), "rationale": rat,
                 "grounded_in": sel.get("driven_by", []) + ["get_selector"],
@@ -190,8 +186,7 @@ def _recommendation(sel, conc, flt):
     if action == "off_script":
         return {"action": f"Off-book: {sel.get('value', 'sail the favoured side')}",
                 "vs_playbook": "departs", "target_variant": None,
-                "rationale": sel.get("why", "") + " No pre-authored branch for this side — the onboard "
-                             "re-route (GET /reoptimize) is the fallback.",
+                "rationale": sel.get("why", "") + " No plan for this side. Use the new route.",
                 "grounded_in": sel.get("driven_by", []) + ["get_selector"],
                 "urgency": "now" if sel.get("status") == "act" else "soon",
                 "confidence": _conf_label(min(0.7, conf))}, min(0.7, conf)
@@ -202,8 +197,7 @@ def _recommendation(sel, conc, flt):
     if sel.get("status") == "watch":
         urg = "soon"
     if threat:
-        rat += (" A rival is projected ahead on corrected time — if you have leverage to play, this is "
-                "where to press.")
+        rat += " A rival is ahead on corrected time. Press if you have leverage."
         urg = "soon"
     return {"action": f"Hold: {sel.get('recommended_label') or 'the plan'}", "vs_playbook": "on-plan",
             "target_variant": sel.get("target_variant") or sel.get("recommended"),
@@ -219,22 +213,18 @@ def _no_playbook_recommendation(sig, flt):
     sh = sig.get("shift") or {}
     fav = sh.get("favored_side")
     if sh.get("persistent") and fav in ("left", "right"):
-        return ({"action": f"Work the {fav} — favoured, but no gameplan aboard to branch within",
+        return ({"action": f"Work the {fav}. No gameplan loaded.",
                  "vs_playbook": "no-plan", "target_variant": None,
-                 "rationale": (f"A persistent shift favours the {fav} side. No playbook is loaded, so "
-                               "there's no frozen plan to hold or switch — sail your own best read to "
-                               "that side."),
+                 "rationale": f"Lasting shift favours the {fav}. Sail your best read there.",
                  "grounded_in": ["get_tactics"], "urgency": "soon", "confidence": "low"}, 0.4)
     if "shift" in sig:
-        return ({"action": "Sail your phase — oscillating, no gameplan aboard",
+        return ({"action": "Play the shifts. No gameplan loaded.",
                  "vs_playbook": "no-plan", "target_variant": None,
-                 "rationale": ("The breeze is oscillating with no persistent shift and no playbook is "
-                               "loaded — work the shifts on their merits."),
+                 "rationale": "Wind is oscillating. Play each shift.",
                  "grounded_in": ["get_tactics"], "urgency": "monitor", "confidence": "low"}, 0.35)
-    return ({"action": "Reason from live facts — no gameplan aboard to switch within",
+    return ({"action": "Sail on live data. No gameplan loaded.",
              "vs_playbook": "no-plan", "target_variant": None,
-             "rationale": ("No playbook loaded; the fleet/handicap picture is shown but there is no "
-                           "frozen plan to hold or branch."),
+             "rationale": "No gameplan loaded. Fleet picture shown only.",
              "grounded_in": ["get_fleet"], "urgency": "monitor", "confidence": "low"}, 0.35)
 
 
@@ -248,7 +238,7 @@ def _reoptimize_offer(route=None):
     card + coach can offer it inline. `available:False` when there's no fix / no course to route."""
     ro = reoptimize_mod.get_reoptimize(route)
     if not ro.get("available"):
-        return {"available": False, "note": ro.get("note", "no onboard re-route available")}
+        return {"available": False, "note": ro.get("note", "No new route available.")}
     return {k: v for k, v in ro.items() if k not in ("path", "legs")}
 
 
@@ -279,10 +269,9 @@ def get_strategy_signals(route=None):
     # tactical read).
     if not has_playbook and not flt.get("available") and not have_shift:
         return {"available": False, "mode": "deterministic",
-                "assessment": "No gameplan aboard and no fleet/signal data — nothing to synthesise yet.",
+                "assessment": "No gameplan, fleet or wind data yet.",
                 "picture": [], "concordance": {"strength": "none"}, "recommendation": None,
-                "caveats": ["Load a playbook (POST /playbook/load) and/or a fleet roster "
-                            "(POST /fleet/load) to enable strategy synthesis."],
+                "caveats": ["Load a gameplan or fleet list to get a strategy read."],
                 "confidence": "low", "disclaimer": "Advisory. The crew decides."}
 
     lean = (sig.get("shift") or {}).get("favored_side")
@@ -297,19 +286,18 @@ def get_strategy_signals(route=None):
 
     # assessment headline: lead with the concordance verdict when there is one.
     if conc.get("strength") == "strong":
-        assessment = f"Signals converging {conc['lean']} — {rec['action'].lower()}."
+        assessment = f"Signals agree {conc['lean']}. {rec['action']}"
     elif conc.get("strength") == "split":
-        assessment = f"Signals split — {rec['action'].lower()}; one read is about to be wrong."
+        assessment = f"Signals split. {rec['action']}"
     elif not has_playbook:
         sh = sig.get("shift") or {}
         fav = sh.get("favored_side")
         if sh.get("persistent") and fav in ("left", "right"):
-            assessment = (f"No gameplan aboard — but the breeze favours the {fav}; "
-                          "sail your own read to that side.")
+            assessment = f"No gameplan loaded. Wind favours the {fav}."
         else:
-            assessment = ("No gameplan aboard — reasoning from the live "
-                          + ("wind + fleet" if flt.get("available") else "wind")
-                          + " picture only.")
+            assessment = ("No gameplan loaded. Using live "
+                          + ("wind and fleet" if flt.get("available") else "wind")
+                          + " only.")
     else:
         extra = sel.get("value", "") or ""
         assessment = (rec["action"] if not extra or extra.lower() in rec["action"].lower()
@@ -324,8 +312,7 @@ def get_strategy_signals(route=None):
            "caveats": _caveats(sig, flt, has_playbook),
            "confidence": _conf_label(conf), "confidence_value": round(conf, 2),
            "recommended_label": sel.get("recommended_label"),
-           "disclaimer": "Advisory — the boat's own read of its own data + common public info. "
-                         "The crew decides."}
+           "disclaimer": "Advice only. The crew decides."}
 
     # UP-COURSE LEADING INDICATOR — a buoy ahead reporting a material difference from the boat's
     # own wind joins the picture (live common-data observation, the oldest leading indicator)
@@ -354,8 +341,8 @@ def get_strategy_signals(route=None):
         pg = plangap_mod.get_plangap(route)
         if pg.get("available") and pg.get("status") in ("watch", "act"):
             picture.append({"signal": "plan_gap",
-                            "read": (f"The plan promised {pg['plan_tws_kn']:g} kn at "
-                                     f"{pg['plan_twd']}° for here/now; you have "
+                            "read": (f"Plan said {pg['plan_tws_kn']:g} kn at "
+                                     f"{pg['plan_twd']}°, you have "
                                      f"{pg['obs_tws_kn']:g} kn at {pg['obs_twd']}°"),
                             "grounded_in": ["get_plangap"],
                             "confidence": "med" if pg["status"] == "act" else "low"})
@@ -410,5 +397,5 @@ def get_strategy_signals(route=None):
                 eta = (f"{h}h {m:02d}m" if h else f"{m}m")
                 tk = f", {offer['tacks']} tacks" if offer.get("tacks") is not None else ""
                 rec["rationale"] = (rec.get("rationale", "").rstrip()
-                                    + f" A fresh onboard re-route is ready (~{eta}{tk}).").strip()
+                                    + f" New route ready (~{eta}{tk}).").strip()
     return out

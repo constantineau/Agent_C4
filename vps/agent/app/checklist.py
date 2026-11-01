@@ -163,7 +163,7 @@ def _eval_item(item, ctx, now):
 
     if tt == "time" and "sunset" in detail:
         if lat is None:
-            return False, "night", "no position fix — can't time sunset"
+            return False, "night", "no position, can't time sunset"
         ss, sr = _night_window(lat, lon, now)
         if ss is None:
             return False, "night", "no sunset at this latitude"
@@ -179,18 +179,18 @@ def _eval_item(item, ctx, now):
         if mark is None:
             return False, None, None                       # no such mark aboard → manual
         if lat is None:
-            return False, f"loc:{mark['name']}", f"{mark['name']} — no position fix"
+            return False, f"loc:{mark['name']}", f"{mark['name']}: no position"
         d = navigator._hav_nm(lat, lon, mark["lat"], mark["lon"])
         wkey = f"loc:{mark['name']}"
         if d <= LOC_NM:
-            return True, wkey, f"{mark['name']} — {round(d, 1)} nm"
+            return True, wkey, f"{mark['name']} in {round(d, 1)} nm"
         return False, wkey, f"{mark['name']} in {round(d, 1)} nm (arms at {round(LOC_NM)})"
 
     if tt == "event" and "finish" in detail:
         nm, total = ctx.get("next_mark") or {}, ctx.get("marks_total") or 0
         d = nm.get("distance_nm")
         if not nm or d is None or not total:
-            return False, "finish", "no course/position aboard"
+            return False, "finish", "no course or position"
         on_final = nm.get("index") == total - 1
         if on_final and d <= FINISH_NM:
             return True, "finish", f"finish in {round(d, 1)} nm"

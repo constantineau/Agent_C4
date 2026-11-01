@@ -34,7 +34,7 @@ GOOD = {"schema": "c4.plume/v1", "key": "r1__pb", "race_id": "r1", "basis": "rou
 
 print("nothing aboard:")
 g = plume.get(NOW)
-check("available false with a reason", g["available"] is False and "Lab" in g["note"])
+check("available false with a reason", g["available"] is False and "internet" in g["note"])
 
 print("push → disk → read:")
 r = plume.load(GOOD, now=NOW - 300)

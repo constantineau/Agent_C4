@@ -246,7 +246,7 @@ def _variant(variant=None, bundle=None):
     """(label, route dict, error) from ONE bundle snapshot — the route carries `leg_end_idx` (and
     its legs' `to` names) when the Lab recorded them."""
     if not bundle:
-        return None, None, "no playbook aboard"
+        return None, None, "No gameplan loaded."
     want = variant or bundle.get("recommended")
     for v in bundle.get("variants") or []:
         vid = str(v.get("id") or v.get("name") or "")
@@ -254,8 +254,8 @@ def _variant(variant=None, bundle=None):
             route = v.get("route") or {}
             if len(route.get("path") or []) >= 2:
                 return vid, route, None
-            return vid, None, f"variant '{vid}' carries no route track"
-    return None, None, f"variant '{want}' not in the bundle"
+            return vid, None, f"'{vid}' has no track."
+    return None, None, f"'{want}' isn't in the gameplan."
 
 
 def _route_frame(path, ends, names, nav_marks, starts_at_mark):
@@ -290,12 +290,12 @@ def show(source: str = "playbook", variant=None, route=None):
     if source == "reoptimize":
         ro = reoptimize.get_reoptimize(route)
         if not ro.get("available"):
-            return {"shown": False, "note": ro.get("note") or "no re-route available"}
+            return {"shown": False, "note": ro.get("note") or "No new route available."}
         wire_name, label, path = "C4 REROUTE", "re-route (off-book)", ro.get("path") or []
         ends, names = ro.get("leg_end_idx"), list(ro.get("marks") or [])
         ro_idx = ro.get("mark_idx")
         if len(path) < 2:
-            return {"shown": False, "note": "re-route carries no path"}
+            return {"shown": False, "note": "New route has no track."}
     else:
         vid, vroute, err = _variant(variant, bundle)
         if err:
@@ -336,9 +336,8 @@ def show(source: str = "playbook", variant=None, route=None):
             nxt = -1                                   # pre-start: steering to the start
         elif source == "reoptimize":
             return {"shown": False, "note": (
-                f"re-route is stale — it was computed from {names[0]} (course mark "
-                f"{route_idx[0] + 1}) on, but the navigator's next mark is {next_name} (course mark "
-                f"{next_idx + 1}). Recompute the re-route, then push.")}
+                f"New route is stale: starts at {names[0]} (mark {route_idx[0] + 1}), next mark is "
+                f"{next_name} (mark {next_idx + 1}). Recompute, then send.")}
     else:
         # positions can't be aligned: a NAME is only trusted when it names one occurrence
         hits = names.count(next_name)
@@ -348,19 +347,17 @@ def show(source: str = "playbook", variant=None, route=None):
               and next_name == nav_names[0] and nav_names.count(next_name) == 1):
             nxt = -1
         elif source == "reoptimize" and names:
-            why = ("it doesn't contain it" if hits == 0 else
-                   f"{next_name} occurs {hits}× on it and which lap can't be told")
+            why = ("isn't on it" if hits == 0 else
+                   f"is on it {hits}×, can't tell which lap")
             return {"shown": False, "note": (
-                f"re-route is stale — the navigator's next mark is {next_name} but {why}. "
-                "Recompute the re-route, then push.")}
+                f"New route is stale: next mark {next_name} {why}. Recompute, then send.")}
     if source == "reoptimize" and nxt:
         # the boat rounded marks while the re-route was computing: drop the passed legs so the
         # route starts at the last rounded mark and the plotter can't steer back to it
         cut = verts.get(nxt - 1)
         if cut is None:
             return {"shown": False, "note": (
-                f"re-route is stale — the boat has passed {names[nxt - 1]} since it was computed "
-                "and that rounding can't be located on it. Recompute the re-route, then push.")}
+                f"New route is stale: you've passed {names[nxt - 1]} since. Recompute, then send.")}
         path = path[cut:]
         verts = {j - nxt: i - cut for j, i in verts.items() if j >= nxt}
         nxt = 0
@@ -375,9 +372,8 @@ def show(source: str = "playbook", variant=None, route=None):
              "t": p.get("t")} for i, p in enumerate(pts)]
     if dest is None:
         return {"shown": False, "dest_index": None,
-                "note": ("not pushed — no waypoint on the current leg is reachable from the boat in "
-                         "a straight line clear of the charted islands/zones; steering to one would "
-                         "cross a hazard. Steer by eye clear of it, then push again.")}
+                "note": ("Not sent: every waypoint ahead is behind a hazard. Steer clear "
+                         "by eye, then send again.")}
     st = _post("/route", {"name": wire_name, "waypoints": wpts, "dest_index": dest})
     if st.get("error"):
         return {"shown": False, "note": st["error"]}

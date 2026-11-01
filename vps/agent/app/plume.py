@@ -126,16 +126,16 @@ def load(plume, now=None):
     if not ok:
         return {"loaded": False, "detail": why}
     if len(json.dumps(plume, separators=(",", ":"))) + 40 > MAX_BYTES:
-        return {"loaded": False, "detail": "plume too large"}
+        return {"loaded": False, "detail": "Forecast spread too large."}
     with _LOCK, _session_lock():
         t = time.time() if now is None else now
         if race_session():
-            return {"loaded": False, "detail": "a race session is running — not taken while racing"}
+            return {"loaded": False, "detail": "Racing now. Not loaded."}
         if started(plume, t):
-            return {"loaded": False, "detail": "its race has started — not taken"}
+            return {"loaded": False, "detail": "Race already started. Not loaded."}
         gen = plume.get("generated_at")
         if _num(gen) and started(plume, gen):
-            return {"loaded": False, "detail": "computed after its race started — not taken"}
+            return {"loaded": False, "detail": "Made after the start. Not loaded."}
         body = json.dumps({"received_at": int(t), "plume": plume}, separators=(",", ":"))
         p = _path()
         os.makedirs(os.path.dirname(p), exist_ok=True)
@@ -157,8 +157,7 @@ def get(now=None):
     now = time.time() if now is None else now
     rec = _read()
     if not rec:
-        return {"available": False, "note": "no forecast plume aboard yet — it arrives from the "
-                "Lab whenever the boat has internet"}
+        return {"available": False, "note": "No forecast spread yet. It arrives when the boat has internet."}
     plume = rec.get("plume") or {}
     built = plume.get("built_at")
     sess = race_session()

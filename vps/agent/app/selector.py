@@ -194,10 +194,10 @@ def _decide(route=None, now=None):
     now = float(now) if now is not None else time.time()
     bundle = deviation._load_playbook()
     if not bundle:
-        return _na("no playbook aboard")
+        return _na("No gameplan loaded.")
     variants = bundle.get("variants") or []
     if not variants:
-        return _na("playbook has no variants")
+        return _na("Gameplan has no options.")
 
     rec_id = str(bundle.get("recommended") or (variants[0].get("id") if variants else "") or "")
     rec_v = _variant_for_side(bundle, rec_id) or (variants[0] if variants else None)
@@ -273,13 +273,12 @@ def _decide(route=None, now=None):
                     "target_variant": None, "target_label": None,
                     "value": f"Hold: {rec_label}", "driven_by": ["get_tactics"],
                     "confidence": 0.5, "confidence_label": _conf_label(0.5),
-                    "why": (f"A persistent shift now favours the {favored} — but this is a DOWNWIND "
-                            f"leg, and downwind pivots need longer confirmation before they pay "
-                            f"(2025 retro: lateral pivots bought little in the runner). "
+                    # Downwind pivots need longer confirmation before they pay (2025 retro:
+                    # lateral pivots bought little in the runner).
+                    "why": (f"Shift favours the {favored}, but downwind needs longer to confirm. "
                             f"Held {held_m} of {need_m} min."),
-                    "consider": (f"Stay on '{rec_label}' while the {favored} shift confirms — the "
-                                 f"branch fires at {need_m} min sustained."),
-                    "clears": "the shift reverses (clock resets), or confirmation completes",
+                    "consider": f"Stay on '{rec_label}'. Switch after {need_m} min if it holds.",
+                    "clears": "shift reverses, or it holds long enough",
                     "based": ["get_tactics"],
                     "confirming": {"favored": favored, "held_s": round(held_s),
                                    "need_s": SWITCH_CONFIRM_DOWNWIND_S}}
@@ -299,20 +298,19 @@ def _decide(route=None, now=None):
             flip = target.get("what_flips_it") or ""
             extra = []
             if "get_drift" in driven:
-                extra.append(f"the forecast has shifted {dft.get('drift_dir')} ~{round(dft.get('drift_twd_deg', 0))}° the same way")
+                extra.append(f"forecast shifted {dft.get('drift_dir')} ~{round(dft.get('drift_twd_deg', 0))}° too")
             if "get_deviation" in driven:
-                extra.append(f"you're already working the {favored} side ({dev.get('xte_nm')} nm {favored})")
-            why = (f"A persistent shift now favours the {favored} side — against the "
-                   f"recommended '{rec_label}'. That's the playbook's branch trigger"
-                   + (f": {flip}" if flip else ".")
-                   + (" Reinforced: " + "; ".join(extra) + "." if extra else ""))
+                extra.append(f"you're already {dev.get('xte_nm')} nm {favored}")
+            why = (f"Lasting shift favours the {favored}, not '{rec_label}'."
+                   + (f" Plan trigger: {flip.rstrip('.')}." if flip else "")
+                   + (" Also: " + "; ".join(extra) + "." if extra else ""))
             return {**base, "action": "switch", "status": "act", "tier": 1,
                     "target_variant": str(target.get("id")), "target_label": tlabel,
                     "value": f"Switch → {tlabel}", "driven_by": driven,
                     "confidence": round(confidence, 2), "confidence_label": _conf_label(confidence),
                     "why": why,
-                    "consider": f"Execute the branch — commit {favored} per the pre-authored '{tlabel}'.",
-                    "clears": "the shift reverses / settles back toward the rhumb",
+                    "consider": f"Switch to '{tlabel}'. Commit {favored}.",
+                    "clears": "shift reverses or settles back",
                     "based": driven + [f"playbook:{target.get('id')}"], "what_flips_it": flip}
 
         # TIER 2 — favoured side has NO pre-authored variant aboard: off the playbook. The onboard
@@ -323,12 +321,9 @@ def _decide(route=None, now=None):
                 "target_variant": None, "target_label": None,
                 "value": f"Off-script: sail {favored}", "driven_by": driven,
                 "confidence": round(confidence, 2), "confidence_label": _conf_label(confidence),
-                "why": (f"A persistent shift favours the {favored} side, but there is NO "
-                        f"pre-authored variant for that side aboard — you're off the playbook."),
-                "consider": (f"The breeze has committed {favored} and the plan has no branch for it — "
-                             "sail your own best angle to that side and flag it (onboard re-optimize "
-                             "is the next tier, not yet automatic)."),
-                "clears": "the shift reverses", "based": driven}
+                "why": f"Lasting shift favours the {favored}. The gameplan has no option for it.",
+                "consider": f"Sail your best angle {favored}. You're off the gameplan.",
+                "clears": "shift reverses", "based": driven}
 
     # ---- persistent shift CONFIRMS the side we're on → hold, confirmed -------------------------
     if persistent and favored in ("left", "right") and favored == rec_id:
@@ -336,9 +331,8 @@ def _decide(route=None, now=None):
                 "target_variant": rec_id, "target_label": rec_label,
                 "value": f"Hold: {rec_label}", "driven_by": ["get_tactics"],
                 "confidence": 0.75, "confidence_label": "high",
-                "why": (f"A persistent shift favours the {favored} side — exactly what the "
-                        f"recommended '{rec_label}' plays. Stay committed."),
-                "consider": "Commit to the gameplan side — the shift backs it.",
+                "why": f"Lasting shift favours the {favored}, as '{rec_label}' plans. Stay committed.",
+                "consider": "Commit to the gameplan side. The shift supports it.",
                 "clears": "—", "based": ["get_tactics"]}
 
     # ---- no switch signal: is the FORECAST warning us to reassess (drift act, wind not yet shifted)? ----
@@ -347,12 +341,10 @@ def _decide(route=None, now=None):
                 "target_variant": rec_id, "target_label": rec_label,
                 "value": f"Hold · reassess: {rec_label}", "driven_by": ["get_drift"],
                 "confidence": 0.5, "confidence_label": "medium",
-                "why": (f"No persistent on-water shift yet, so hold '{rec_label}' — but the forecast the "
-                        f"plan was built on has moved materially ({dft.get('drift_dir')} "
-                        f"~{round(dft.get('drift_twd_deg', 0))}°). Watch for the breeze to confirm it."),
-                "consider": "Hold the gameplan but stay alert — the forecast has drifted; a real shift "
-                            "may branch the plan soon.",
-                "clears": "the forecast settles / a persistent shift resolves it",
+                "why": (f"Hold '{rec_label}'. Forecast shifted {dft.get('drift_dir')} "
+                        f"~{round(dft.get('drift_twd_deg', 0))}°, wind hasn't followed yet."),
+                "consider": "Hold the gameplan. Watch for the wind to follow the forecast.",
+                "clears": "forecast settles, or a lasting shift appears",
                 "based": ["get_drift"]}
 
     # ---- default: oscillating / no decisive signal → hold the start plan -----------------------
@@ -362,7 +354,6 @@ def _decide(route=None, now=None):
             "target_variant": rec_id, "target_label": rec_label,
             "value": f"Hold: {rec_label}", "driven_by": ["get_tactics"] if tac.get("available") else [],
             "confidence": 0.6, "confidence_label": "medium",
-            "why": (f"No persistent shift and no material forecast drift — the recommended "
-                    f"'{rec_label}' stands ({sub}). Play the shifts within the band."),
-            "consider": "Hold the gameplan — no branch yet.", "clears": "—",
+            "why": f"No lasting shift, forecast unchanged. '{rec_label}' stands ({sub}).",
+            "consider": "Hold the gameplan. Play the shifts.", "clears": "—",
             "based": ["get_tactics"] if tac.get("available") else []}

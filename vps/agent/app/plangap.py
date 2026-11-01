@@ -119,11 +119,11 @@ def get_plangap(route=None):
     `na` with no playbook / no fingerprint / no own wind / a spent plan timeline."""
     bundle = deviation._load_playbook()
     if not bundle:
-        return _na("no playbook aboard")
+        return _na("No gameplan loaded.")
     fp = bundle.get("forecast_fingerprint") or {}
     pts = fp.get("points") or []
     if len(pts) < 2:
-        return _na("no forecast reference in the playbook (re-freeze to enable the plan-gap read)",
+        return _na("Gameplan has no forecast saved. Re-freeze it.",
                    {"race_id": bundle.get("race_id")})
 
     now = time.time()
@@ -131,12 +131,11 @@ def get_plangap(route=None):
             "built_ago_s": (round(now - fp["built_at"]) if fp.get("built_at") else None)}
     promise = _promise_at(pts, now)
     if promise is None:
-        return _na("the plan's forecast timeline is spent (or too far ahead) — no promise to "
-                   "compare against", base)
+        return _na("Gameplan forecast doesn't cover now.", base)
 
     obs_tws, obs_twd, n = _observed_wind()
     if obs_tws is None:
-        return _na("no own wind data — can't measure the gap", base)
+        return _na("No wind data yet.", base)
 
     gap_twd = _ang(promise["twd"], obs_twd)         # + = observed RIGHT of the promise
     gap_tws = obs_tws - promise["tws"]
@@ -154,38 +153,34 @@ def get_plangap(route=None):
     s = navigator._latest()
     if s.get("lat") is not None and s.get("lon") is not None:
         far_nm = round(deviation._hav_nm(s["lat"], s["lon"], promise["lat"], promise["lon"]), 1)
-    far_txt = (f" (the plan expected you ~{far_nm:g} nm from here — part of this can be "
-               "position, not weather)" if far_nm is not None and far_nm > FAR_NM else "")
+    far_txt = (f" You're ~{far_nm:g} nm from the planned spot." if far_nm is not None and far_nm > FAR_NM else "")
 
     side = "right of" if gap_twd > 5 else "left of" if gap_twd < -5 else "on"
-    twd_txt = f"breeze {abs(round(gap_twd))}° {side} the promise" if side != "on" else "direction on the promise"
-    tws_txt = (f"{'+' if gap_tws >= 0 else '−'}{abs(round(gap_tws, 1)):g} kn vs promised"
+    twd_txt = f"wind {abs(round(gap_twd))}° {side} plan" if side != "on" else "direction on plan"
+    tws_txt = (f"{'+' if gap_tws >= 0 else '−'}{abs(round(gap_tws, 1)):g} kn vs plan"
                if abs(gap_tws) >= 1 else None)
     based = ["playbook:forecast_fingerprint", "own wind instruments"]
 
     if band == 0:
-        value = "Plan's breeze showed up"
-        sub = f"promised {round(promise['twd'])}°/{round(promise['tws'], 1):g} kn · have {round(obs_twd)}°/{round(obs_tws, 1):g} kn"
-        why = (f"You have {round(obs_tws, 1):g} kn at {round(obs_twd)}° against a promise of "
-               f"{round(promise['tws'], 1):g} kn at {round(promise['twd'])}° for here/now — the plan is "
-               "running on the weather it was built for.")
-        consider = "The promised breeze is the one you have — the plan's assumptions hold on deck."
+        value = "Wind as planned"
+        sub = f"plan {round(promise['twd'])}°/{round(promise['tws'], 1):g} kn · have {round(obs_twd)}°/{round(obs_tws, 1):g} kn"
+        why = (f"You have {round(obs_tws, 1):g} kn at {round(obs_twd)}°, plan said "
+               f"{round(promise['tws'], 1):g} kn at {round(promise['twd'])}°.")
+        consider = "Wind matches the plan. Keep going."
         clears = "—"
     else:
-        lead = "Promised breeze is NOT this one" if band == 2 else "Breeze straying from the promise"
+        lead = "Wind not as planned" if band == 2 else "Wind drifting from plan"
         value = f"{lead}"
-        sub = (f"promised {round(promise['twd'])}°/{round(promise['tws'], 1):g} kn · "
+        sub = (f"plan {round(promise['twd'])}°/{round(promise['tws'], 1):g} kn · "
                f"have {round(obs_twd)}°/{round(obs_tws, 1):g} kn")
-        why = (f"The plan promised {round(promise['tws'], 1):g} kn at {round(promise['twd'])}° for "
-               f"here/now; you have {round(obs_tws, 1):g} kn at {round(obs_twd)}° — {twd_txt}"
+        why = (f"Plan said {round(promise['tws'], 1):g} kn at {round(promise['twd'])}°, you have "
+               f"{round(obs_tws, 1):g} kn at {round(obs_twd)}°: {twd_txt}"
                + (f", {tws_txt}" if tws_txt else "") + f".{far_txt}"
-               + (" The wind the variant was optimized for hasn't shown up — whatever the live "
-                  "forecast says." if band == 2 else " Keep watching — this may be a local hole/puff."))
-        consider = ("Treat the plan's wind assumptions as broken on deck — weigh the drift and "
-                    "deviation reads together and consider the playbook's pace/pressure plays."
+               + ("" if band == 2 else " May be a local puff or hole."))
+        consider = ("The plan's wind isn't here. Check the plays for this."
                     if band == 2 else
-                    "Own wind is straying from what the plan promised — watch it against the drift read.")
-        clears = "own wind settles back onto what the plan promised"
+                    "Watch it against the forecast.")
+        clears = "wind moves back to plan"
 
     return {
         "available": True, "status": status, "value": value, "sub": sub,
