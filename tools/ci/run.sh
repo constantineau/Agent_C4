@@ -42,6 +42,7 @@ docker image inspect node:22-alpine >/dev/null 2>&1 || docker pull -q node:22-al
   || { echo "PULL FAILED: node:22-alpine"; exit 1; }
 docker tag node:22-alpine sr33-ci-node
 run node /repo /repo "pi/console/test_crewwatch.js" node /repo/pi/console/test_crewwatch.js
+run node /repo /repo "pi/console/test_plume.js" node /repo/pi/console/test_plume.js
 run node /repo /repo "tools/replay/test_overrides.js" node /repo/tools/replay/test_overrides.js
 # The lab reads its data from the image's /srv layout (races, boats, polars), built from this tree.
 for f in vps/lab/test_*.py; do run lab /srv /srv "$f"; done

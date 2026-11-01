@@ -27,7 +27,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app import (navigator, tactics, routing, weather, sails, fatigue, onboard_conditions,
                  datasource, ais, fleet, deviation, drift, selector, reoptimize, strategy,
                  matcher, buoys, racelog, watches, trend, plangap, gpsout, checklist,
-                 power, sensor_health)
+                 power, sensor_health, plume)
 
 app = FastAPI(title="Agent_C4 Onboard Engine", version="0.1.0")
 # The iPad reaches the Pi directly over boat-local Wi-Fi in race mode; allow cross-origin so a
@@ -203,6 +203,21 @@ def forecast_ep(lat: float | None = None, lon: float | None = None, hours: int =
     if lat is None or lon is None:
         return {"available": False, "note": "no position to forecast for"}
     return weather.get_forecast(lat, lon, hours)
+
+
+@app.post("/plume/load")
+def plume_load(body: dict):
+    """Cache the Lab's forecast plume ON DISK (every router model along the planned route, run by
+    run). The Lab pushes it over Tailscale whenever the boat is reachable, the same way its Deploy
+    push loads the playbook. Replaces the previous plume."""
+    return plume.load(body)
+
+
+@app.get("/plume")
+def plume_get():
+    """The cached forecast plume + its age (`age_s` since the Lab recorded the newest run,
+    `received_age_s` since the last push). Survives restarts and works offline."""
+    return plume.get()
 
 
 @app.get("/route")
