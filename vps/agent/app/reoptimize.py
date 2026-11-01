@@ -24,6 +24,7 @@ import uuid
 
 from . import deviation
 from . import navigator as NAV
+from . import orinroute
 from . import reroutelog
 from . import routing
 from . import sails
@@ -154,7 +155,7 @@ def _inputs(route=None):
     return {"nav": nav, "remaining": _remaining_marks(nav, marks), "slat": slat, "slon": slon,
             "live": (s.get("tws"), s.get("twd")), "bundle": bundle,
             "avoid": _avoid_disks(bundle) + zdisks,       # islands + circular zones = disks
-            "polys": polys}, None
+            "polys": polys, "course_hash": orinroute.course_hash(nav["route"], marks)}, None
 
 
 def compute(route=None):
@@ -268,6 +269,7 @@ def _work(job_id, dev, inp):
     if out.get("available"):
         out = dict(out, job_id=job_id, asked_by=dev, asked_at=asked_at, computed_at=now,
                    run_s=run_s, source="pi", label="Off the playbook",
+                   course_hash=inp.get("course_hash"),
                    computed_from={"lat": round(inp["slat"], 5), "lon": round(inp["slon"], 5)})
         try:
             _store(out)
@@ -354,6 +356,9 @@ def _compute(nav, remaining, slat, slon, live, bundle, avoid, polys):
         "sail_plan": sail_plan,
         "mark_idx": [m.get("course_index") for m in remaining],   # course positions (laps)
         "eta_min": round((t - t0) / 60, 1), "tacks": tacks, "sailed_nm": round(sailed, 2),
+        # the routing's own clock: it departs at t0 (when the run read the boat) and arrives at t,
+        # so the finish time doesn't drift by however long the computation took
+        "depart_epoch": int(round(t0)), "finish_eta": int(round(t)),
         "recommended_heading": all_legs[0]["hdg"] if all_legs else None,
         "first_tack": all_legs[0]["tack"] if all_legs else None,
         "path": full_path,

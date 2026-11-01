@@ -151,16 +151,38 @@ test("the Pi fallback runs and reports like the Orin", () => {
   assert.equal(run.button.disabled, true);
   const done = { orin: { reachable: false }, state: null, result: null, latest: "pi",
     pi: { state: "done", result: { available: true, source: "pi", off_playbook: true, asked_by: "Nav iPad",
-      asked_at: S - 100, computed_at: S - 80, eta_min: 254, tacks: 9, sailed_nm: 46.2,
-      wind_source: "forecast" } } };
+      asked_at: S - 100, computed_at: S - 80, depart_epoch: S - 98, finish_eta: S - 98 + 254 * 60,
+      eta_min: 254, tacks: 9, sailed_nm: 46.2, wind_source: "forecast" } } };
   const x = v({ rr: done, press: p });
   assert.equal(x.last.engine, "Pi");
   assert.match(x.last.head, /^Finish at \d\d:\d\d$/);
+  const hm = (e) => { const d = new Date(e * 1000); return ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2); };
+  assert.equal(x.last.head, "Finish at " + hm(S - 98 + 254 * 60), "the route's own arrival, not compute end + duration");
+  const noEta = RT.describe({ source: "pi", r: { available: true, computed_at: S - 80, depart_epoch: S - 200, eta_min: 60 } }, S);
+  assert.equal(noEta.head, "Finish at " + hm(S - 200 + 3600), "older stored route: from its departure");
   assert.equal(x.last.wx, "Forecast · Open-Meteo");
   assert.deepEqual(x.last.labels, ["Off the playbook", "Route doesn't check the shore"]);
   const failed = v({ rr: Object.assign({}, done, { pi: Object.assign({}, done.pi, { state: "error",
     detail: "No new route. Couldn't reach A (3 nm short)." }) }), press: Object.assign({}, p, { at: NOW - 70000 }) });
   assert.equal(failed.say, "Last try failed. No new route. Couldn't reach A (3 nm short).");
+});
+
+test("a route for another course: never looks current, button stays, GPS off", () => {
+  const rr = Object.assign({}, IDLE, { state: "done", latest: "orin",
+    result: Object.assign({}, ORIN_ROUTE, { old_course: true }) });
+  const x = v({ rr: rr });
+  assert.equal(x.say, "Route is for an old course.");
+  assert.equal(x.sayKind, "note");
+  assert.equal(x.last.head, "Route is for an old course.");
+  assert.equal(x.last.old, true);
+  assert.equal(x.button.label, "Re-route now");
+  assert.equal(x.button.disabled, false);
+  assert.equal(x.canShowOnGps, false);
+  assert.ok(!/faster|slower/.test(x.say + (x.sub || "")));
+  const withSug = v({ rr: rr, suggest: { reason: "Off the playbook." }, sugAgeMs: 0 });
+  assert.equal(withSug.sub, "Route is for an old course.");
+  const current = v({ rr: Object.assign({}, rr, { result: Object.assign({}, ORIN_ROUTE, { old_course: false }) }) });
+  assert.equal(current.canShowOnGps, true);
 });
 
 test("stale-safe: a held read shows its age; an old 'running' never blocks the button", () => {

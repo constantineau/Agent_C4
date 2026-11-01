@@ -18,6 +18,9 @@ import sys
 
 from app import reoptimize, routing, deviation, gpsout
 from app import navigator as NAV
+# these pin the path geometry; the course check (#125: a route for another course is refused)
+# is pinned in test_reroute_button.py
+gpsout._course_ok = lambda ro: True
 
 ok = True
 

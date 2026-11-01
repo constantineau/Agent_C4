@@ -4,6 +4,9 @@ re-route source, and honest failure notes. Stubs the bundle + reoptimize + the n
 Run:  PYTHONPATH=vps/agent:. python3 vps/agent/test_gpsout.py
 """
 from app import gpsout
+# these pin the path geometry; the course check (#125: a route for another course is refused)
+# is pinned in test_reroute_button.py
+gpsout._course_ok = lambda ro: True
 
 ok = True
 

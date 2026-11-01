@@ -1621,7 +1621,7 @@
       (v.fallback ? rerouteBtnHtml({ button: { disabled: false, engine: "orin" } }, "orin") : "") + "</div>";
     const L = v.last;
     if (L) {
-      h += '<div class="rc-title" style="margin-top:10px">Last route · ' + L.engine +
+      h += '<div class="rc-title" style="margin-top:10px">' + (L.old ? "Old route · " : "Last route · ") + L.engine +
         (L.age ? " · " + esc2(L.age) : "") + "</div>" +
         '<p class="rt-head">' + esc2(L.head) + "</p>" +
         (L.labels.length ? '<p class="rt-labels">' + L.labels.map((x) =>
@@ -1639,7 +1639,7 @@
         (!g || g.available === false ? '<span class="gps-note">plotter link off</span>'
           : on ? '<span class="gps-on">● showing “' + esc2(g.route || "route") + "”</span>"
             : '<span class="gps-note">not showing</span>') + "</div>" +
-        '<div class="rt-btns"><button class="rt-btn rt-gps"' + (App.gpsBusy || !L ? " disabled" : "") +
+        '<div class="rt-btns"><button class="rt-btn rt-gps"' + (App.gpsBusy || !v.canShowOnGps ? " disabled" : "") +
         ' onclick="gpsShow(\'reroute\')">Show on GPS</button></div>' +
         (App.gpsNote ? '<span class="gps-note">' + esc2(App.gpsNote) + "</span>" : "") + "</div>";
     }

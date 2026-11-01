@@ -276,6 +276,15 @@ def _route_frame(path, ends, names, nav_marks, starts_at_mark):
 
 
 NO_NEW_ROUTE = "No new route yet. Press Re-route now."
+OLD_COURSE = "Route is for an old course. Press Re-route now."
+INCOMPLETE = "Route incomplete. Not sent to GPS."
+
+
+def _course_ok(ro):
+    """Was this route made for the course aboard now (same route, same marks AND positions)? A
+    route with no hash is from before the check, so it counts as another course."""
+    h = ro.get("course_hash")
+    return bool(h) and h == orinroute.current_course_hash()
 
 
 def _new_route(source, route):
@@ -291,6 +300,10 @@ def _new_route(source, route):
     if not ro or not ro.get("available"):
         note = (ro or {}).get("note") if source == "reoptimize" else None
         return None, note or NO_NEW_ROUTE
+    if ro.get("complete") is False:
+        return None, INCOMPLETE              # it stalled short of the finish: never a GPS route
+    if not _course_ok(ro):
+        return None, OLD_COURSE              # moved marks / another course since: old coordinates
     ro = dict(ro)
     if "path" not in ro and ro.get("source") == "orin":
         ro["path"] = ro.get("points") or []          # the Orin's track is `points`

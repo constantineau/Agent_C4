@@ -242,6 +242,62 @@ orinroute.tile(call=orin({("GET", "/status"): (200, {
 o_fail = [r for r in reroutelog.history(100) if r["event"] == "failed" and r["engine"] == "orin"]
 check("an Orin failure logged once, with why", len(o_fail) == 1 and o_fail[0]["job_id"] == "o2")
 
+print("a route keeps the course it was made for (#143 review):")
+pi_r = reoptimize.get_reoptimize()
+check("Pi route: course hash, its own departure + arrival",
+      pi_r["course_hash"] == orinroute.course_hash("race", MARKS)
+      and abs((pi_r["finish_eta"] - pi_r["depart_epoch"]) - pi_r["eta_min"] * 60) <= 1
+      and pi_r["depart_epoch"] <= pi_r["asked_at"] + 1)
+check("Orin route: course hash from its request", orinroute.stored()["course_hash"]
+      == orinroute.course_hash("race", MARKS))
+g = orinroute.tile(call=call, compact=True)
+check("same course → both current on the tile", g["result"]["old_course"] is False
+      and g["pi"]["result"]["old_course"] is False)
+n_sent = len(SENT)
+moved = [dict(m) for m in MARKS]
+moved[1]["lat"] = 44.12                          # mark A moved, same names, course reloaded
+NAV._marks = lambda route: moved
+s = gpsout.show(source="reroute")
+check("a moved mark → refused, old coordinates never broadcast",
+      s["shown"] is False and s["note"] == "Route is for an old course. Press Re-route now."
+      and len(SENT) == n_sent)
+check("…by name too", gpsout.show(source="orin")["shown"] is False
+      and gpsout.show(source="reoptimize")["note"] == "Route is for an old course. Press Re-route now.")
+g = orinroute.tile(call=call, compact=True)
+check("the tile flags both routes as for an old course (kept, not deleted)",
+      g["result"]["old_course"] is True and g["pi"]["result"]["old_course"] is True
+      and g["result"]["job_id"] == "o1")
+NAV._marks = lambda route: MARKS
+STATE["nav"] = dict(STATE["nav"], route="race2")    # another course, same marks
+check("another course name → old course", gpsout.show(source="reroute")["shown"] is False)
+STATE["nav"] = dict(STATE["nav"], route="race")
+check("back on the course it was made for → sent again", gpsout.show(source="reroute")["shown"])
+NAV.get_navigator = lambda route=None: {"available": False, "note": "No course loaded."}
+check("no course aboard → refused", gpsout.show(source="reroute")["shown"] is False)
+NAV.get_navigator = lambda route=None: STATE["nav"]
+legacy = dict(orinroute.stored())
+legacy.pop("course_hash")
+reoptimize_ok = gpsout.show(source="reroute")["shown"]
+_orig_stored = orinroute.stored
+orinroute.stored = lambda: legacy
+check("a stored route from before the hash → old course", gpsout.show(source="orin")["note"]
+      == "Route is for an old course. Press Re-route now." and reoptimize_ok)
+orinroute.stored = _orig_stored
+
+print("an incomplete Orin route is never sent to the GPS:")
+orinroute.run("iPad 3", call=orin({("POST", "/run"): (202, {"ok": True, "job_id": "o3"})}))
+STALL = dict(RESULT, job_id="o3", finished_at=t_new + 10, complete=False, finish_eta=None,
+             vs_plan={"available": False, "note": "Route incomplete."},
+             warnings=["Route incomplete."])
+st3 = {"state": "done", "job_id": "o3", "result_job_id": "o3", "last": {"job_id": "o3", "state": "done"}}
+g = orinroute.tile(call=orin({("GET", "/status"): (200, st3), ("GET", "/result"): (200, STALL)}))
+check("stored and newest", g["latest"] == "orin" and g["result"]["complete"] is False)
+n_sent = len(SENT)
+s = gpsout.show(source="reroute")
+check("refused: 'Route incomplete. Not sent to GPS.'", s["shown"] is False
+      and s["note"] == "Route incomplete. Not sent to GPS." and len(SENT) == n_sent)
+check("…by name too", gpsout.show(source="orin")["note"] == "Route incomplete. Not sent to GPS.")
+
 print("the real engine endpoints:")
 from fastapi.testclient import TestClient  # noqa: E402
 

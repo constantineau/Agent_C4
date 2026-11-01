@@ -99,6 +99,28 @@ def _marks_hash(marks):
     return hashlib.sha1(json.dumps(sig, separators=(",", ":")).encode()).hexdigest()[:16]
 
 
+def course_hash(route, marks):
+    """The course a route was made for: the route name plus every mark's name and position, in
+    order. A route stored with one hash is never sent to the GPS (or shown as current) once the
+    course aboard has another: a moved mark changes it even when the names don't."""
+    try:
+        return f"{route}:{_marks_hash([(m.get('name'), m.get('lat'), m.get('lon')) for m in marks])}"
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+def current_course_hash():
+    """The hash of the course the navigator holds now, or None (no course aboard)."""
+    try:
+        nav = NAV.get_navigator()
+        if not nav.get("route"):
+            return None
+        marks = NAV._marks(nav["route"])
+        return course_hash(nav["route"], marks) if marks else None
+    except Exception:  # noqa: BLE001 — no course read → treated as "not this course"
+        return None
+
+
 def _load_id_path():
     return os.path.join(_dir(), "course-load.json")
 
@@ -247,7 +269,8 @@ def _build_request(device):
            "route": nav["route"], "next_index": nxt,
            "marks": [{"seq": m.get("seq"), "name": m.get("name"), "lat": m.get("lat"),
                       "lon": m.get("lon")} for m in marks],
-           "definition": definition, "course_id": cid, "plan": _plan_track()}
+           "definition": definition, "course_id": cid, "plan": _plan_track(),
+           "course_hash": course_hash(nav["route"], marks)}
     return req, None
 
 
@@ -292,6 +315,7 @@ def run(device=None, call=None):
             with _LOCK:
                 _write(_pending_path(), json.dumps(
                     {"job_id": job, "device": dev, "asked_at": req["asked_at"],
+                     "course_hash": req.get("course_hash"),
                      "route": req["route"], "next_index": req["next_index"],
                      "marks": [m.get("name") for m in req["marks"]]}, separators=(",", ":")))
         except OSError:
@@ -344,6 +368,10 @@ def _store(result):
     idx = _mark_idx(result)
     if idx is not None:
         result["mark_idx"] = idx
+    pend = _read(_pending_path()) or {}
+    if pend.get("job_id") == result.get("job_id") and pend.get("course_hash"):
+        # the course this route answers; unknown (None) counts as an old course
+        result["course_hash"] = pend["course_hash"]
     with _LOCK:
         _write(_result_path(), json.dumps({"received_at": int(time.time()), "result": result},
                                           separators=(",", ":")))
@@ -425,4 +453,10 @@ def tile(call=None, compact=False):
     out["latest"] = src
     if compact and isinstance(out.get("result"), dict):
         out["result"] = {k: v for k, v in out["result"].items() if k not in ("points", "leg_end_idx")}
+    # a route made for another course (moved marks, a new course loaded) must not look current:
+    # it stays stored (the history keeps it), flagged for the tile
+    now_hash = current_course_hash()
+    for r in (out.get("result"), out["pi"].get("result")):
+        if isinstance(r, dict):
+            r["old_course"] = not r.get("course_hash") or r.get("course_hash") != now_hash
     return out
