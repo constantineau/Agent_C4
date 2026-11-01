@@ -71,8 +71,11 @@ for name, bad in (("wrong schema", dict(GOOD, schema="x")),
     check(f"{name} → not loaded", r["loaded"] is False)
 check("...and the good plume is still aboard, readable", plume.get(NOW)["key"] == "r1__pb"
       and plume.get(NOW)["age_s"] == 600)
-big = dict(GOOD, models=[{"model": "gfs", "runs": [{"pts": [[NOW, 1.0, 1]] * 60000}]}])
-check("an absurdly large payload is refused", plume.load(big, now=NOW)["loaded"] is False)
+big = dict(GOOD, models=[{"model": "gfs", "runs": [{"cycle": NOW, "at": NOW,
+                                                   "pts": [[NOW + i, 1.0, 1] for i in range(60000)]}]}])
+check("the big fixture is otherwise valid", plume.validate(big) == (True, ""))
+r = plume.load(big, now=NOW)
+check("an absurdly large payload is refused for its size", r["loaded"] is False and "too large" in r["detail"])
 
 _ORIG_RS = plume.race_session
 
@@ -169,6 +172,45 @@ th.join()
 check("a race session started while it waited → refused", res.get("loaded") is False)
 SESSION["cur"] = None
 plume.time.time = _real_time
+
+print("a race session can't start between the check and the write:")
+from app import racelog  # noqa: E402
+if os.path.exists(path):
+    os.remove(path)
+seen = {}
+
+
+def session_starts_meanwhile():
+    """The check passes (no session) — and right then the crew taps race start."""
+    def tap():
+        with racelog.SESSION_LOCK:         # what racelog.start() takes
+            seen["file_when_session_started"] = os.path.exists(path)
+    th = threading.Thread(target=tap)
+    th.start()
+    time.sleep(0.15)                       # without the shared lock, the session would win this
+    seen["thread"] = th
+    return None
+
+
+plume.race_session = session_starts_meanwhile
+plume.load(dict(PRE, key="race"), now=NOW)
+seen["thread"].join()
+plume.race_session = fake_log
+check("the session start waited until the load had finished writing",
+      seen.get("file_when_session_started") is True)
+import types  # noqa: E402
+_saved_src = racelog._src
+racelog._src = lambda: types.SimpleNamespace(session_start=lambda *a: {"id": 1}, session_current=lambda: None)
+done = {}
+racelog.SESSION_LOCK.acquire()
+th = threading.Thread(target=lambda: done.update(r=racelog.start(race_id="r1", kind="race")))
+th.start()
+time.sleep(0.15)
+blocked = "r" not in done
+racelog.SESSION_LOCK.release()
+th.join()
+racelog._src = _saved_src
+check("racelog.start() takes the same lock", blocked and done["r"]["ok"])
 
 print("engine restart:")
 plume.load(PRE, now=NOW)

@@ -14,6 +14,7 @@ aboard, starting a session picks up its race_id automatically so the debrief can
 from __future__ import annotations
 
 import os
+import threading
 import time
 from datetime import datetime, timezone
 
@@ -95,6 +96,12 @@ def autoclose(now=None, force=False):
         return {"closed": False, "note": f"auto-close check failed: {type(exc).__name__}: {exc}"}
 
 
+# Held while a session starts, and by the forecast-plume load around its "is a race session
+# running?" check + write (app/plume.py), so a plume can't land between the crew tapping race
+# start and the session existing.
+SESSION_LOCK = threading.Lock()
+
+
 def _src():
     s = datasource.active()
     if not hasattr(s, "session_start"):
@@ -118,7 +125,8 @@ def start(name=None, race_id=None, kind=None):
     if not name:
         stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
         name = f"{'Race' if kind == 'race' else 'Sail'} {stamp}Z"
-    cur = s.session_start(str(name), race_id, kind, time.time())
+    with SESSION_LOCK:
+        cur = s.session_start(str(name), race_id, kind, time.time())
     return {"ok": True, "active": cur}
 
 

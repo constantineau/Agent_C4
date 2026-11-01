@@ -93,6 +93,17 @@ def race_session():
 _LOCK = threading.Lock()        # one load at a time: check → write
 
 
+def _session_lock():
+    """The race log's session lock (taken by racelog.start) — held across the race-session check
+    and the write, so a session can't start in between. If the race log can't be imported,
+    race_session() already fails closed, so a private lock is enough."""
+    try:
+        from . import racelog
+        return racelog.SESSION_LOCK
+    except Exception:  # noqa: BLE001
+        return threading.Lock()
+
+
 def _read():
     try:
         with open(_path()) as f:
@@ -116,7 +127,7 @@ def load(plume, now=None):
         return {"loaded": False, "detail": why}
     if len(json.dumps(plume, separators=(",", ":"))) + 40 > MAX_BYTES:
         return {"loaded": False, "detail": "plume too large"}
-    with _LOCK:
+    with _LOCK, _session_lock():
         t = time.time() if now is None else now
         if race_session():
             return {"loaded": False, "detail": "a race session is running — not taken while racing"}
