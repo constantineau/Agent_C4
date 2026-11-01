@@ -1328,7 +1328,9 @@ async def plume_get():
     """The current forecast plume (what the boat gets) + its target and the last push."""
     from . import plume
     p = await run_in_threadpool(plume.current)
+    lock = plume.locked_race()           # drives the "Race over" button, plume or not
     return {"plume": p, "target": plume._labstate_get(plume._KEY_TARGET),
+            "frozen_race": {"race_id": lock["race_id"], "start": lock["start"]} if lock else None,
             "last_push": plume.last_push(), "recorder": plume._THREAD is not None}
 
 

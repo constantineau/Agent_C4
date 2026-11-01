@@ -168,8 +168,14 @@ check("follows what the boat holds: the recommended variant's route",
       sp and sp["basis"] == "route" and sp["path"][0]["lat"] == 43.0 and "Right" in sp["label"])
 check("store key is race + playbook", sp["key"] == "r1__r1__100")
 sp = P.resolve_target(NOW + 40 * H)
-check("route already over → holds at the race start",
+check("route's ETAs over but its race never marked finished → stays on the route (frozen)",
+      sp["basis"] == "route")
+P.mark_finished("r1", at=NOW + 39 * H)
+sp = P.resolve_target(NOW + 40 * H)
+check("marked finished + route over → holds at the race start",
       sp["basis"] == "point" and sp["path"][0]["lat"] == 43.0 and sp["path"][0]["lon"] == -82.4)
+P.mark_finished("r1", undo=True)
+labstate.set("plume:locked", None)
 P.set_target("r1", lat=44.5, lon=-82.1)
 sp = P.resolve_target(NOW)
 check("an explicit point target wins", sp["basis"] == "point" and sp["path"][0]["lat"] == 44.5)
@@ -222,6 +228,7 @@ P.mark_finished("r1", undo=True)
 
 # run_once refuses to record or push while racing
 P.set_target(None)
+labstate.set("plume:locked", None)
 labstate.set("deploy_push:last_ok", {"race_id": "r1", "playbook_id": "r1__100", "ok": True})
 BUNDLE["variants"][1]["route"]["path"] = spec_g["path"]
 recorded, pushed = [], []
@@ -267,6 +274,64 @@ P.mark_finished("r1", undo=True)
 rec = P.push({"key": "k", "race_start": int(gun), "race_end": None, "models": [{"model": "gfs", "runs": []}]},
              post=lambda *a, **k: (True, {"loaded": True}))
 check("push() itself refuses on the real clock once the race has started", rec["ok"] is False and rec.get("frozen"))
+P._clock = _orig_clock
+
+# ---- the target stays locked to a race in its window ---------------------------------------
+print("locked to the race until it is marked over:")
+P._clock = lambda: 0                       # every call below passes `now` explicitly
+NOGUN = {"race_id": "r3", "name": "No Guns", "courses": [{"id": "c1", "marks": [
+    {"name": "Start", "lat": 43.0, "lon": -82.4}, {"name": "Finish", "lat": 45.8, "lon": -84.6}]}]}
+RACES = {"r1": RACE, "r3": NOGUN}
+store.get_race = lambda rid: RACES.get(rid)
+T0 = NOW + 100 * H
+NG_BUNDLE = {"race_id": "r3", "course_id": "c1", "recommended": "a", "variants": [{"id": "a", "name": "Main",
+             "route": {"path": [{"lat": 43.0, "lon": -82.4, "t": T0}, {"lat": 45.8, "lon": -84.6, "t": T0 + 30 * H}]}}]}
+pbstore.get = lambda pid: {"r1__100": BUNDLE, "r3__1": NG_BUNDLE}.get(pid)
+P.set_target(None)
+labstate.set("plume:locked", None)
+labstate.set("deploy_push:last_ok", {"race_id": "r3", "playbook_id": "r3__1", "ok": True})
+
+# (a) no gun times, 3 h past the planned finish
+late = T0 + 30 * H + 3 * H + 600
+sp = P.resolve_target(late)
+check("no guns, never resolved mid-race: still the route (not the point) 3 h past the finish",
+      sp["basis"] == "route" and sp["key"] == "r3__r3__1")
+check("...so the window is still on — nothing recorded or pushed",
+      P.is_racing(P.race_window(sp), late) and P.run_once(do_push=True, now=late).get("frozen"))
+check("the race is locked", (P.locked_race() or {}).get("race_id") == "r3")
+labstate.set("plume:locked", None)
+P.resolve_target(T0 + 60)                  # the normal case: the recorder saw the gun go
+sp = P.resolve_target(late + 5 * 86400)
+check("locked at the gun: days later still the same race, key and start",
+      sp["key"] == "r3__r3__1" and sp["window_start"] == T0 and P.run_once(do_push=True, now=late).get("frozen"))
+P.mark_finished("r3", at=late + 6 * 86400)
+sp = P.resolve_target(late + 6 * 86400 + 60)
+check("marked over → lock released, route over → point fallback, not frozen",
+      P.locked_race() is None and sp["basis"] == "point"
+      and not P.is_racing(P.race_window(sp), late + 6 * 86400 + 60))
+
+# (b) gun times + the route→point switch
+labstate.set("plume:locked", None)
+labstate.set("deploy_push:last_ok", {"race_id": "r1", "playbook_id": "r1__100", "ok": True})
+sp_gun = P.resolve_target(gun + 60)
+key_gun = sp_gun["key"]
+P.save_store({"key": key_gun, "race_id": "r1", "label": "along the Right route", "basis": "route",
+              "runs": {"gfs": [{"cycle": int(gun - 6 * H), "at": int(gun - H),
+                                "pts": [[int(gun + 40 * H), 10.0, 200], [int(gun + 41 * H), 11.0, 210]]}]}})
+after = gun + 30 * H + 3 * H + 600         # 3 h past the planned finish
+sp = P.resolve_target(after)
+check("gun times: past the planned finish the key stays the route's", sp["key"] == key_gun and sp["basis"] == "route")
+cur = P.current(after)
+check("...so the plume is still there, frozen, with no end", cur and cur["models"] and cur["race_start"] == int(gun)
+      and cur["race_end"] is None)
+check("the frozen race is reported for the Race-over button", (P.locked_race() or {}).get("race_id") == "r1")
+P.set_target("r1", lat=44.0, lon=-82.0)    # re-pinning the same race to a point mid-race changes nothing
+check("re-pinning the same race mid-race doesn't move the key", P.resolve_target(after)["key"] == key_gun)
+P.set_target(None)
+labstate.set("deploy_push:last_ok", {"race_id": "r3", "playbook_id": "r3__1", "ok": True})
+sp = P.resolve_target(after)
+check("a different race pushed → the lock moves on and r3 is judged on its own window",
+      sp["race_id"] == "r3" and (P.locked_race() or {}).get("race_id") != "r1")
 P._clock = _orig_clock
 
 print("\nALL OK" if ok else "\nFAILURES")

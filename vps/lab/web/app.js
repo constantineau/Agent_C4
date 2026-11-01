@@ -2102,7 +2102,11 @@ function plumePanelInner() {
   const head = `<h3>Forecast plume <span class="muted" style="font-weight:400">— every router model along the planned route, run by run (what the boat's Forecast tile shows)</span></h3>`;
   if (!d) return head + `<div class="muted">Loading…</div>`;
   if (d.error) return head + `<div class="banner warn">${esc(d.error)}</div>`;
-  const tgt = d.target, lp = d.last_push, pl = d.plume;
+  const tgt = d.target, lp = d.last_push, pl = d.plume, fr = d.frozen_race;
+  // the frozen race comes from the Lab's race state, not from the plume — the button must stay
+  // reachable even when there's nothing to draw
+  const frozenBar = fr ? `<div class="banner warn" style="margin:6px 0">Frozen at the start of <b>${esc(fr.race_id)}</b> (${esc(depStamp(fr.start))}) — no forecast updates while racing.
+      <button data-pl-finish="${esc(fr.race_id)}" style="margin-left:8px">Race over — resume forecast updates</button></div>` : "";
   const follows = tgt ? `pinned to <b>${esc(tgt.race_id)}</b>${tgt.playbook_id ? ` · <code>${esc(tgt.playbook_id)}</code>` : ""}` : "following the race last pushed to the boat";
   const ctl = `<div class="opt-controls">
       <button onclick="plumeRefresh()" ${Plume.busy ? "disabled" : ""}>${Plume.busy ? "Checking…" : "Check for new runs now"}</button>
@@ -2111,14 +2115,13 @@ function plumePanelInner() {
       <span class="muted">${follows}${d.recorder ? " · recorder on (hourly)" : " · recorder off (PLUME_RECORDER)"}</span>
     </div>${Plume.note ? `<div class="muted" style="font-size:12px">${esc(Plume.note)}</div>` : ""}`;
   const push = lp ? `<div class="muted" style="font-size:12px;margin-top:6px">Last push to the boat: ${esc(depStamp(lp.at))} (${esc(depAgo(lp.at))}) · ${lp.ok ? "✓ loaded" : "✗ " + esc(lp.error || "failed")}</div>` : `<div class="muted" style="font-size:12px;margin-top:6px">Not pushed to the boat yet.</div>`;
-  if (!pl || !P || !P.available(pl)) return head + ctl + `<div class="muted">No runs recorded yet for this target.</div>` + push;
+  if (!pl || !P || !P.available(pl)) return head + frozenBar + ctl + `<div class="muted">No runs recorded yet for this target.</div>` + push;
   const now = Date.now() / 1000;
   const b = (k, v, lab, on) => `<button class="${on ? "" : "ghost"}" data-pl-k="${esc(k)}" data-pl-v="${esc(v)}">${lab}</button>`;
   const picks = b("only", "", "All models", !Plume.only) + P.models(pl).map((m) => b("only", m.model, P.label(m.model), Plume.only === m.model)).join("");
-  return head + ctl +
+  return head + frozenBar + ctl +
     `<div class="opt-controls">${b("field", "tws", "Speed", Plume.field === "tws")}${b("field", "twd", "Direction", Plume.field === "twd")} ${picks}</div>
      <div class="muted" style="font-size:12px">${esc(pl.label || "")} · newest run recorded ${esc(depAgo(pl.built_at))}${P.isFrozen(pl, now) ? ` · <b>${esc(P.frozenText(pl))}</b> — no updates until the race is marked over` : ""}</div>
-     ${P.isFrozen(pl, now) && pl.race_id ? `<div class="opt-controls"><button data-pl-finish="${esc(pl.race_id)}">Race over — resume forecast updates</button></div>` : ""}
      <div class="lab-plume" style="max-width:900px">${P.chartSvg(pl, { w: 860, h: 300, now: now, field: Plume.field, only: Plume.only, allRuns: true, back_h: 6, ahead_h: 24 })}
      ${P.legendHtml(pl, { only: Plume.only, cycles: true, now: now })}${P.runTimesHtml(pl, now)}</div>` + push;
 }

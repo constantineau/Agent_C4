@@ -299,7 +299,9 @@ def race_window(spec):
     d = spec.get("definition") or {}
     rs = racestart.race_start(d)
     path = spec.get("path") if spec.get("basis") == "route" else None
-    start = rs["epoch"] if rs else (path[0]["t"] if path else None)
+    start = spec.get("window_start")
+    if start is None:
+        start = rs["epoch"] if rs else (path[0]["t"] if path else None)
     if start is None:
         return None
     fin = finished_at(spec.get("race_id")) if spec.get("race_id") else None
@@ -324,17 +326,20 @@ def _recommended_path(bundle):
     return (path or None), (v or {}).get("name") or (v or {}).get("id")
 
 
-def resolve_target(now=None):
-    """The route spec the plume follows, or None when there's nothing to follow.
+_KEY_LOCK = "plume:locked"            # labstate: the race whose window has started (see below)
 
-    An explicit target (labstate `plume:target`: {race_id, playbook_id?, path?, lat?, lon?}) wins;
-    else the race + playbook last pushed to the boat. The route is the playbook's recommended
-    variant; when there's no playbook, or its route is already over, the plume holds at the race
-    start (first course mark)."""
+
+def _route_spec(race_id, d, course_id, path, tag, variant):
+    return {"race_id": race_id, "course_id": course_id, "definition": d,
+            "key": f"{race_id}__{tag}", "basis": "route", "path": path,
+            "label": f"along the {variant or 'planned'} route"}
+
+
+def _unlocked_target(now):
+    """The target as configured (pinned, else the race last pushed to the boat) — before the lock."""
     from shared import race_def
 
     from . import deploy, pbstore, store
-    now = time.time() if now is None else now
     tgt = _labstate_get(_KEY_TARGET)
     if not tgt:
         lp = (deploy.last_push() or {}).get("last_ok") or {}
@@ -348,13 +353,15 @@ def resolve_target(now=None):
     course_id = (bundle or {}).get("course_id") or tgt.get("course_id")
     path, variant = (clean_path(tgt["path"]), tgt.get("variant")) if tgt.get("path") \
         else _recommended_path(bundle)
-    spec = {"race_id": race_id, "course_id": course_id, "definition": d}
-    if path and path[-1]["t"] >= now - BACK_H * 3600:
+    if path:
         tag = tgt.get("playbook_id") or ("path-" + hashlib.md5(
             json.dumps([path[0], path[-1], len(path)]).encode()).hexdigest()[:8])
-        spec.update(key=f"{race_id}__{tag}", basis="route", path=path,
-                    label=f"along the {variant or 'planned'} route")
-        return spec
+        spec = _route_spec(race_id, d, course_id, path, tag, variant)
+        # the route stays the target while it's current — AND, whatever its ETAs say, while its race
+        # is in its window: the switch to the point fallback may only happen outside a race
+        if path[-1]["t"] >= now - BACK_H * 3600 or is_racing(race_window(spec), now):
+            return spec
+    spec = {"race_id": race_id, "course_id": course_id, "definition": d}
     lat, lon = tgt.get("lat"), tgt.get("lon")
     if lat is None:
         marks, _skip, _cid = race_def.course_to_marks(d, course_id)
@@ -365,6 +372,52 @@ def resolve_target(now=None):
     spec.update(key=f"{race_id}__pt-{round(lat, 2)}_{round(lon, 2)}", basis="point",
                 path=[{"lat": float(lat), "lon": float(lon), "t": 0.0}],
                 label="at the race start (no current route)")
+    return spec
+
+
+def locked_race():
+    """The race whose window has started and that isn't marked finished yet: {race_id, key, start,
+    ...} or None. While set, the target, its store key and its window start are pinned to it."""
+    lock = _labstate_get(_KEY_LOCK)
+    if not lock or not lock.get("race_id"):
+        return None
+    fin = finished_at(lock["race_id"])
+    if fin is not None and fin >= lock.get("start", 0):
+        return None
+    return lock
+
+
+def resolve_target(now=None):
+    """The route spec the plume follows, or None when there's nothing to follow.
+
+    An explicit target (labstate `plume:target`: {race_id, playbook_id?, path?, lat?, lon?}) wins;
+    else the race + playbook last pushed to the boat. The route is the playbook's recommended
+    variant; when there's no playbook, or its route is over (and its race is not on), the plume
+    holds at the race start (first course mark).
+
+    Once a race's window starts, the target is LOCKED to it (same store key, same window start)
+    until the race is marked finished — so nothing that changes mid-race (ETAs running out, a
+    cleared pin) can reopen recording or hide the frozen state. A different race configured as the
+    target (a deliberate new push/pin) releases the lock and is judged on its own window."""
+    from . import labstate, store
+    now = time.time() if now is None else now
+    spec = _unlocked_target(now)
+    lock = locked_race()
+    if lock and (spec is None or spec.get("race_id") == lock["race_id"]):
+        return {"race_id": lock["race_id"], "course_id": lock.get("course_id"),
+                "definition": store.get_race(lock["race_id"]) or {}, "key": lock["key"],
+                "basis": lock["basis"], "path": lock["path"], "label": lock.get("label"),
+                "window_start": lock["start"]}
+    if lock or _labstate_get(_KEY_LOCK):
+        labstate.set(_KEY_LOCK, None)        # finished, or a different race took over
+    if spec:
+        win = race_window(spec)
+        if is_racing(win, now):
+            labstate.set(_KEY_LOCK, {"race_id": spec["race_id"], "key": spec["key"],
+                                     "basis": spec["basis"], "path": spec["path"],
+                                     "label": spec.get("label"), "course_id": spec.get("course_id"),
+                                     "start": win[0], "locked_at": int(now)})
+            spec["window_start"] = win[0]
     return spec
 
 
