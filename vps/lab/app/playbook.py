@@ -235,10 +235,9 @@ def _scenario_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
         "corridor_p90_nm": xs[int(0.9 * (len(xs) - 1))] if xs else None,
         "stakes_min": max(detas) if detas else 0,
         "verdict": ("geometry" if (detas and max(detas) >= 60) else "execution"),
-        "note": ("the lateral decision is worth material time — the side choice matters"
+        "note": ("The side you pick is worth real time."
                  if (detas and max(detas) >= 60) else
-                 "the corridor is wide and the stakes of the line are small — prioritize boat "
-                 "speed and sail choice over the lateral position"),
+                 "Little to gain from the side. Focus on boat speed and sail choice."),
     }
     return routes, robust, profile, corridor
 
@@ -557,7 +556,7 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
     each model's sub-field (scenarios), cluster by favored side into variants."""
     bbox = optimizer.course_bbox(definition, course_id)
     if not bbox:
-        return {"available": False, "note": "course has no geocoded marks — review Course & Marks"}
+        return {"available": False, "note": "No mark positions yet. Fix them in Course & Marks."}
     hours = optimizer.estimate_hours(definition, course_id)
     # the v2 pace plays re-route the remainder after a +4h-late mark arrival — the field must
     # reach past the nominal window or those runs fall onto fallback wind
@@ -631,8 +630,8 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
     why = _truncated(consensus, finish_pt)
     if why:
         return {"available": False, "windfield": wf.status(), "log": log,
-                "note": f"the consensus route did not finish the course — {why}. Re-run with a "
-                        "larger time budget, or check the course marks / obstacles near it."}
+                "note": f"The main route didn't finish the course ({why}). Run it again, or "
+                        "check the marks and any land near them."}
     consensus_side = _favored_side(definition, course_id, consensus)
 
     # one candidate route per model scenario — an incomplete one is DROPPED (its short total_hours

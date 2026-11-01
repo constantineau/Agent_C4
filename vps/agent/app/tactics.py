@@ -50,10 +50,10 @@ def _cross_track_nm(a, b, plat, plon):
 def get_tactics(route: str = None):
     s = NAV._latest()
     if s["twd"] is None or s["lat"] is None:
-        return {"available": False, "note": "need live wind + position for tactics"}
+        return {"available": False, "note": "Need live wind and position."}
     series = _twd_series(WINDOW_MIN)
     if len(series) < 6:
-        return {"available": False, "note": "not enough wind history yet (building baseline)"}
+        return {"available": False, "note": "Not enough wind history yet."}
 
     twds = [v for _, v in series]
     mean = _circ_mean(twds)
@@ -83,10 +83,10 @@ def get_tactics(route: str = None):
     # favored side — POINT-OF-SAIL aware (a right shift favours the right of a beat, the left of a run)
     if persistent:
         favored = wp.favored_side(sign, pos) or "either"
-        fav_reason = f"persistent shift {abs(round(slope, 1))}°/min"
+        fav_reason = f"lasting shift {abs(round(slope, 1))}°/min"
     else:
         favored = "either"
-        fav_reason = f"oscillating ±{round(osc / 2)}° — play the shifts, tack on the headers"
+        fav_reason = f"oscillating ±{round(osc / 2)}°, play the shifts"
 
     # leverage: cross-track from the current leg's rhumb line
     nav = NAV.get_navigator(route)
@@ -118,5 +118,5 @@ def get_tactics(route: str = None):
         "favored_side": favored, "favored_reason": fav_reason,
         "leverage": leverage,
         "recommendation": " ".join(bits),
-        "caveat": "Tactical advice — practice/debrief use; may be 'outside help' under RRS 41 in a race.",
+        "caveat": "Practice use only. May count as outside help in a race (RRS 41).",
     }

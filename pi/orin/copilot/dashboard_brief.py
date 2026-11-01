@@ -38,11 +38,13 @@ _SYSTEM = (
     "already computed by the boat's instruments. You do NOT do the math — you INTERPRET what the "
     "instruments report. " + _READING + "\n\nYour job:\n"
     "1. Write a short 'focus' headline (<= 12 words) on what matters most right now.\n"
-    "2. Give 2-3 'notes', most important first, each about ONE tile — short, concrete, what to do "
-    "or watch, and consistent with that tile's value. Reference only the given tiles (use their key).\n"
+    "2. Give 2-3 'notes', most important first, each about ONE tile — one short, plain sentence "
+    "(about 12 words), leading with what to do or watch, keeping the numbers, and consistent with "
+    "that tile's value. No jargon. Reference only the given tiles (use their key).\n"
     "3. Optionally 'adjust' a tile's status (ok/watch/act) ONLY when the situation clearly warrants "
     "nuance the thresholds miss, each with a one-line reason. Usually adjust nothing.\n"
-    "WIND LANGUAGE: never say 'veer'/'back' — say the wind shifted RIGHT/LEFT, and whenever you "
+    "WIND LANGUAGE: never say 'veer', 'veered', 'back' or 'backed' — say the wind shifted "
+    "RIGHT/LEFT, and whenever you "
     "mention a wind-direction change state the baseline→now in degrees (e.g. 'from 250° to 265°'), "
     "never a bare delta or current value.\n"
     "Be calm and practical, like a good navigator. Respond with ONLY a JSON object."
@@ -86,9 +88,11 @@ _EXAMPLE_ASSISTANT = json.dumps({
 _DETAIL_SYSTEM = (
     "You are the onboard tactical copilot for the SR33 racing yacht 'C4'. The crew tapped one "
     "dashboard tile for a closer look. " + _READING + "\n\n"
-    "In 1-3 short sentences (no JSON, no lists, plain prose), explain what this tile means RIGHT NOW "
-    "and what the crew should do or watch — specific to its actual values, calm and practical like a "
-    "navigator. If the crew asked a question, answer it directly. Stay on this tile's topic."
+    "In 1-3 short, plain sentences (about 12 words each; no JSON, no lists), lead with what the crew "
+    "should do or watch, then what this tile means RIGHT NOW — specific to its actual values, keeping "
+    "the numbers, calm and practical like a navigator. No jargon. Say the wind shifted right or left, "
+    "never veer/veered/back/backed. If the crew asked a question, answer it directly. Stay on this "
+    "tile's topic."
 )
 
 

@@ -207,9 +207,9 @@ def get_sail_advice(tws: float = None, twa: float = None, hoisted: str = None, b
     """Sail-range advice for the dial + agent. tws/twa are live values; hoisted is the
     crew-reported sail (J1/A3/S1) so we can flag flying the wrong one."""
     if not _SECTIONS:
-        return {"available": False, "note": "speed guide not loaded"}
+        return {"available": False, "note": "Speed guide not loaded."}
     if tws is None or twa is None:
-        return {"available": False, "note": "need live TWS and TWA to place the sail",
+        return {"available": False, "note": "Need live wind speed and angle.",
                 "have": {"tws": tws, "twa": twa}}
 
     key = _nearest_tws(tws)
@@ -250,18 +250,16 @@ def get_sail_advice(tws: float = None, twa: float = None, hoisted: str = None, b
 
     _lbl = lambda s: SAIL_LABEL.get(s, s)
     if wrong:
-        rec = f"Optimal sail is {_lbl(optimal)} but {_lbl(hoisted_fam)} is up — peel/change to {_lbl(optimal)}."
+        rec = f"Change to {_lbl(optimal)}. {_lbl(hoisted_fam)} is up."
     elif hoisted_ok_tossup:
-        rec = (f"{_lbl(hoisted_fam)} is fine — a toss-up with {_lbl(optimal)} here (within ~1.5% of target); "
-               f"no need to peel.")
+        rec = f"{_lbl(hoisted_fam)} is fine. {_lbl(optimal)} is equal here, no need to change."
     elif next_xover and next_xover["deg_away"] <= 8:
-        rec = (f"{_lbl(optimal)} is right; {next_xover['to_sail']} peel coming up at "
+        rec = (f"{_lbl(optimal)} is right. {next_xover['to_sail']} at "
                f"{next_xover['at_twa']}° TWA ({next_xover['deg_away']}° away).")
     elif tossup_with:
-        rec = (f"{_lbl(optimal)} — but a toss-up with {', '.join(_lbl(s) for s in tossup_with)} here; "
-               f"carry either.")
+        rec = f"{_lbl(optimal)} or {', '.join(_lbl(s) for s in tossup_with)}. Either works here."
     else:
-        rec = f"{_lbl(optimal)} is the right sail for {round(a_twa)}° TWA / {round(tws)} kts."
+        rec = f"{_lbl(optimal)} for {round(a_twa)}° TWA, {round(tws)} kts."
 
     fit, change_to = _fit_and_change(crew_sail, a_twa, tws, optimal, wrong,
                                      hoisted_ok_tossup, boat_model)
@@ -283,5 +281,5 @@ def get_sail_advice(tws: float = None, twa: float = None, hoisted: str = None, b
         "targets": None if not row else {"btv": row["btv"], "vmg": row["vmg"],
                                           "awa": row["awa"], "heel": row["heel"]},
         "recommendation": rec,
-        "note": f"Zones from the nearest TWS bucket ({key} kts); crossovers shift with breeze.",
+        "note": f"Sail ranges for {key} kts.",
     }

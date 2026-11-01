@@ -249,7 +249,7 @@ def _run_optimize(definition, course_id, start_epoch, model_names, ensemble_memb
     from . import optimizer, current, wave
     bbox = optimizer.course_bbox(definition, course_id)
     if not bbox:
-        return {"available": False, "note": "course has no geocoded marks — review Course & Marks"}
+        return {"available": False, "note": "No mark positions yet. Fix them in Course & Marks."}
     hours = optimizer.estimate_hours(definition, course_id)
     t_end = start_epoch + hours * 3600
     class _Log(list):                      # a list whose .append also mirrors to on_progress
@@ -281,8 +281,8 @@ def _run_optimize(definition, course_id, start_epoch, model_names, ensemble_memb
                          ensemble_members=ensemble_members, on_progress=log.append,
                          model_weights=mweights, model_bias=mbias)
     if not wf.loaded:
-        return {"available": False, "note": "no weather model data could be loaded (not yet "
-                "posted, or no egress)", "windfield": wf.status(), "log": log}
+        return {"available": False, "note": "No forecast could be loaded (not out yet, or no "
+                "internet).", "windfield": wf.status(), "log": log}
     # water current: opt-out per run (compare with vs without) — LMHOFS surface currents, ZeroCurrent on any miss
     cur = (current.build_currentfield(bbox, start_epoch, t_end, on_progress=log.append)
            if use_current else current.ZeroCurrent())
@@ -850,8 +850,8 @@ def _recordings(race_id=None):
         sessions = (monitor.agent_json("/racelog/sessions", timeout=30) or {}).get("sessions") or []
         agent = {"available": True}
     except Exception as exc:
-        sessions, agent = [], {"available": False, "note": f"the boat agent is unreachable ({exc}) — "
-                               "recordings already loaded into the Lab are still listed"}
+        sessions, agent = [], {"available": False, "note": f"The boat is unreachable ({exc}). "
+                               "Recordings already in the Lab are still listed."}
     tracks = track.list_tracks(race_id) if race_id else []
     debriefs = learning.list_debriefs(bid, race_id) if race_id else []
 
@@ -1129,8 +1129,8 @@ def load_log_track(body):
         trust["available"] = True
     except Exception as exc:
         trust = {"available": False,
-                 "note": f"trust sweep unavailable ({exc}) — NO bins were refused; treat "
-                         f"refinements from this track as unguarded"}
+                 "note": f"Instrument check didn't run ({exc}). Nothing was left out, so be "
+                         f"careful with boat-model changes from this track."}
     meta = track.save_track(rid, {"source": "boatlog", "boat": body.get("name"),
                                       "fixes": fixes, "n": len(fixes), "window": win,
                                       "trust": trust,
@@ -1313,6 +1313,45 @@ async def checklist_set(body: dict):
     checked = {k: True for k, v in ((body or {}).get("checked") or {}).items() if v}
     labstate.set("checklist:" + race_id, checked)
     return {"saved": True, "checked": checked}
+
+
+# ---- Forecast plume (every router model along the planned route, run by run) -----------------
+@app.on_event("startup")
+def _plume_startup():
+    """The hourly plume recorder — only when PLUME_RECORDER=1 (see app/plume.py)."""
+    from . import plume
+    plume.start_recorder()
+
+
+@app.get("/api/plume")
+async def plume_get():
+    """The current forecast plume (what the boat gets) + its target and the last push."""
+    from . import plume
+    v = await run_in_threadpool(plume.view)
+    return dict(v, target=plume._labstate_get(plume._KEY_TARGET),
+                last_push=plume.last_push(), recorder=plume._THREAD is not None)
+
+
+@app.post("/api/plume/target")
+async def plume_target(body: dict):
+    """Pin the plume to a race: {race_id, playbook_id?} (empty race_id → follow the boat's push)."""
+    from . import plume
+    b = body or {}
+    return {"target": plume.set_target(b.get("race_id"), b.get("playbook_id"),
+                                       lat=b.get("lat"), lon=b.get("lon"))}
+
+
+@app.post("/api/plume/refresh")
+async def plume_refresh():
+    """Run one recorder pass now (background job; poll /api/plume/refresh/status)."""
+    from . import jobs, plume
+    return jobs.start("plume", lambda progress: plume.run_once(on_progress=progress))
+
+
+@app.get("/api/plume/refresh/status")
+async def plume_refresh_status():
+    from . import jobs
+    return jobs.status("plume")
 
 
 # ---- Lock-in & Deploy -------------------------------------------------------------------------

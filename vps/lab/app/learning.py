@@ -213,8 +213,8 @@ def _fill_report(d):
         rep["tactics_available"] = bool((rep.get("regret") or {}).get("side_paid")
                                         or d.get("oracle_hours") is not None)
         if not rep["tactics_available"] and not rep.get("tactics_note"):
-            rep["tactics_note"] = ("archived before the Lab recorded which halves ran; no oracle "
-                                   "time was stored, so read this as a performance debrief")
+            rep["tactics_note"] = ("Saved before the Lab kept tactics results. Read this as a "
+                                   "speed-only debrief.")
     if not rep.get("recording") and d.get("window_start"):
         rep["recording"] = {"start_ts": d["window_start"], "hours": d.get("elapsed_hours"),
                             "kind": "archived"}
@@ -340,8 +340,8 @@ def propose(boat_id, recordings=None):
     try:
         bins, races = _latest_bins_per_race(c, boat_id)
         if not bins:
-            return {"ok": False, "note": "no archived performance bins for this boat yet — run a "
-                    "debrief with a boat track first"}
+            return {"ok": False, "note": "No debrief data for this boat yet. Run a debrief with a "
+                    "boat track first."}
         offered = len(bins)
         by_choice = 0
         if recordings is not None:
@@ -349,9 +349,9 @@ def propose(boat_id, recordings=None):
             by_choice = len(bins) - len(chosen)
             if not chosen:
                 have = sorted({b.get("window_start") for b in bins}, key=lambda x: x or 0)
-                return {"ok": False, "note": "none of the selected races has archived bins — "
-                        f"{len(bins)} bin(s) are available from {len(have)} recording(s); "
-                        "pick at least one of those, or debrief the race you want first"}
+                return {"ok": False, "note": "none of the selected races has data yet. "
+                        f"{len(bins)} cell(s) are available from {len(have)} recording(s). "
+                        "Pick one of those, or debrief the race you want first."}
             bins = chosen
         # ACTUAL polars only (Cole 2026-09-09): the boat model refines off measured angles and
         # measured wind speed. GRIB-derived bins — including every bin archived before wind_source
@@ -363,9 +363,9 @@ def propose(boat_id, recordings=None):
         used = sorted({_rec(b) for b in bins}, key=lambda k: (k[0], k[1] or 0))
         if not bins:
             return {"ok": False,
-                    "note": f"no MEASURED-wind bins archived yet ({len(excluded)} forecast-based "
-                            f"bin(s) excluded) — re-run the debrief from a boat-log track; the "
-                            f"boat model only refines off the instruments"}
+                    "note": f"No measured-wind data yet ({len(excluded)} from forecasts left "
+                            f"out). Debrief from the boat's log. The boat model only learns "
+                            f"from the instruments."}
         # Refine off the FLAT-WATER-equivalent % (pct_flat = raw pct with the sea-state loss removed)
         # so helm_factor stays a flat-water number and doesn't double-count waves; older bins with no
         # pct_flat fall back to the raw pct (== flat when there was no sea-state field).
@@ -631,8 +631,8 @@ def calibrate_waves(boat_id):
         c.close()
     have_hs = [b for b in bins if b.get("hs_mean") is not None and b.get("pct") is not None]
     if not have_hs:
-        return {"ok": False, "note": "no archived sea-state data yet — run debriefs with a boat track "
-                "in real waves first (flat-water races carry no Hs to calibrate against)"}
+        return {"ok": False, "note": "No wave data yet. Debrief races sailed in real waves "
+                "first."}
     # raw (hs, ratio, samples) per point of sail — keep raw Hs so the deadband knee can be searched
     by_pos_raw = {}
     for b in have_hs:
@@ -675,8 +675,8 @@ def calibrate_waves(boat_id):
                                "(have %d cells / %.1f m)" % (_WAVE_MIN_CELLS, _WAVE_MIN_HS_SPREAD, n, spread))})
         detail[pos] = d
     if not fitted_any and db_source != "fit":
-        return {"ok": False, "note": "not enough sea-state SPREAD in the archive to fit the wave model "
-                "yet — needs races sailed across a range of wave heights.", "by_point_of_sail": detail,
+        return {"ok": False, "note": "Not enough range of wave heights yet. Needs races sailed "
+                "in different wave heights.", "by_point_of_sail": detail,
                 "deadband": db_info, "current_coeffs": {k: round(v, 4) for k, v in cur.items()}}
     summary = {"by_point_of_sail": detail, "deadband": db_info,
                "current_coeffs": {k: round(v, 4) for k, v in cur.items()}, "races": sorted(races)}

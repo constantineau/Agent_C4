@@ -15,7 +15,7 @@
   <div id="gate" class="gate">
     <div class="gatebox">
       <h1>C4 Performance Lab</h1>
-      <p class="sub">Race prep &amp; debrief — shared team login</p>
+      <p class="sub">Race prep and debrief. Team login.</p>
       <input id="pw" type="password" placeholder="Team password" autocomplete="current-password">
       <button onclick="unlock()">Enter</button>
       <div id="gateErr" class="err"></div>
@@ -27,7 +27,7 @@
     <nav class="tabs" id="tabs">
       <a href="#races" data-phase="prep">Races</a>
       <a href="#course" data-phase="prep">Course &amp; Marks</a>
-      <a href="#rules" data-phase="prep">Rules, Safety &amp; Checklists</a>
+      <a href="#rules" data-phase="prep">Rules &amp; Checklist</a>
       <a href="#fleet" data-phase="prep">Fleet</a>
       <a href="#learnings" data-phase="prep">Learnings</a>
       <a href="#gameplan" data-phase="prep">Gameplan</a>
@@ -53,6 +53,7 @@
 
   <script src="/vendor/leaflet.js"></script>
   <script src="/mapview.js"></script>
+  <script src="/plume.js"></script>
   <script src="/app.js"></script>
   <script>window.FEEDBACK_CFG = { endpoint: "/api/feedback", source: "lab" };</script>
   <script src="/feedback.js"></script>

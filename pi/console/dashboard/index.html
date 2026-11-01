@@ -6,7 +6,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>SR33 Crew Dashboard</title>
-  <link rel="stylesheet" href="dashboard.css?v=link1031">
+  <link rel="stylesheet" href="dashboard.css?v=copy1101">
 </head>
 <body>
   <!-- ===== top bar ===== -->
@@ -17,13 +17,13 @@
 
     <!-- RACE LOG: the owner's record switch — one tap starts a session (kept + backfilled +
          debriefed); data outside sessions is pruned and never leaves the boat. No Lab prep needed. -->
-    <button class="ctl rec" id="recBtn" title="Race log — tap to start/end a logged session (races AND practice sails; day sails/deliveries outside a session are pruned and never leave the boat)">⏺ <b id="recLbl">LOG</b></button>
+    <button class="ctl rec" id="recBtn" title="Tap to start or end logging. Unlogged data is deleted after 7 days.">⏺ <b id="recLbl">LOG</b></button>
     <!-- data source: LIVE engine vs canned DEMO scenarios (calm/escalated) -->
-    <button class="ctl" id="srcBtn" title="Live engine ↔ demo scenarios">SRC: <b id="srcLbl">LIVE</b></button>
+    <button class="ctl" id="srcBtn" title="Live or demo">SRC: <b id="srcLbl">LIVE</b></button>
     <button class="ctl" id="themeBtn" title="Day / night theme">☀ <b id="themeLbl">AUTO</b></button>
     <!-- audio ALERT: a short attention tone (no speech) on a new safety/urgent callout; tap to arm + test
          (also satisfies iOS Safari's audio-unlock gesture) -->
-    <button class="ctl" id="alertBtn" title="Sound a short alert tone when a safety callout appears — tap to enable / test">🔔 <b id="alertLbl">OFF</b></button>
+    <button class="ctl" id="alertBtn" title="Beep on a safety callout. Tap to turn on and test.">🔔 <b id="alertLbl">OFF</b></button>
   </header>
 
   <!-- ===== Sails bar: the crew-set sail CONFIGURATION (a set — C0 alone, C0+J2, kite+staysail…)
@@ -33,10 +33,10 @@
     <span class="sb-tag">CURRENT SAILS</span>
     <span id="sbChips"></span>
     <span class="sb-sep"></span>
-    <span class="sb-tag" title="Main reef — tuck in / shake out reef 1">MAIN</span>
+    <span class="sb-tag" title="Tuck in or shake out reef 1">MAIN</span>
     <span id="sbReef"></span>
     <span class="sb-sep"></span>
-    <span class="sb-tag" title="Declare blown/damaged gear — no instrument can see a blown sail; this tap is the signal that arms the gear-loss plays and excludes the sail from re-routes">OUT✕</span>
+    <span class="sb-tag" title="Mark a blown or damaged sail. Arms gear-loss plays.">OUT✕</span>
     <span id="sbGear"></span>
     <span class="sb-note" id="sbNote"></span>
   </section>
@@ -114,7 +114,8 @@
   </section>
 
   <script src="/sun.js"></script>
-  <script src="crewwatch.js?v=link1031"></script>
-  <script src="dashboard.js?v=link1031"></script>
+  <script src="crewwatch.js?v=copy1101"></script>
+  <script src="plume.js?v=copy1101"></script>
+  <script src="dashboard.js?v=copy1101"></script>
 </body>
 </html>

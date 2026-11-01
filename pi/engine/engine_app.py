@@ -21,13 +21,13 @@ import time
 
 os.environ.setdefault("DATA_SOURCE", "onboard")  # this service is always the onboard backend
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import (navigator, tactics, routing, weather, sails, fatigue, onboard_conditions,
                  datasource, ais, fleet, deviation, drift, selector, reoptimize, strategy,
                  matcher, buoys, racelog, watches, trend, plangap, gpsout, checklist,
-                 power, sensor_health)
+                 power, sensor_health, plume)
 
 app = FastAPI(title="Agent_C4 Onboard Engine", version="0.1.0")
 # The iPad reaches the Pi directly over boat-local Wi-Fi in race mode; allow cross-origin so a
@@ -115,7 +115,7 @@ def series(minutes: int = 720, max_points: int = 600):
     tws_rows = src.series("environment.wind.speedTrue", minutes)       # [(epoch, m/s)]
     twd_rows = src.series("environment.wind.directionTrue", minutes)   # [(epoch, rad)]
     if not tws_rows:
-        return {"available": False, "points": [], "note": "no archived wind in the window"}
+        return {"available": False, "points": [], "note": "No wind data for this period."}
     # downsample the TWS series to keep the payload small, then match the nearest TWD by time
     stride = max(1, math.ceil(len(tws_rows) / max_points))
     sampled = tws_rows[::stride]
@@ -201,8 +201,32 @@ def forecast_ep(lat: float | None = None, lon: float | None = None, hours: int =
         lat = lat if lat is not None else s.get("lat")
         lon = lon if lon is not None else s.get("lon")
     if lat is None or lon is None:
-        return {"available": False, "note": "no position to forecast for"}
+        return {"available": False, "note": "No position yet."}
     return weather.get_forecast(lat, lon, hours)
+
+
+@app.post("/plume/load")
+def plume_load(body: dict):
+    """Cache the Lab's forecast plume ON DISK (every router model along the planned route, run by
+    run). The Lab pushes it over Tailscale whenever the boat is reachable, the same way its Deploy
+    push loads the playbook. Replaces the previous plume."""
+    return plume.load(body)
+
+
+@app.post("/plume/onboard")
+def plume_onboard(body: dict, request: Request):
+    """Cache a plume the boat's OWN Orin computed from public model data (pi/orin/plume) — legal
+    in-race, so taken while racing. Accepted only straight from the Orin's boat-local address,
+    never through a proxy; the shore /plume/load rules are unchanged."""
+    return plume.load_onboard(body, request.client.host if request.client else None,
+                              headers=request.headers)
+
+
+@app.get("/plume")
+def plume_get():
+    """The cached forecast plume + its age (`age_s` since the Lab recorded the newest run,
+    `received_age_s` since the last push). Survives restarts and works offline."""
+    return plume.get()
 
 
 @app.get("/route")
@@ -283,12 +307,13 @@ def playbook_track(variant: str | None = None):
     v = deviation._pick_variant(bundle, variant)
     path = ((v or {}).get("route") or {}).get("path") or []
     if not path:
-        return {"available": False, "note": "playbook variant has no route path"}
+        return {"available": False, "note": "Gameplan option has no track."}
     return {"available": True, "race_id": bundle.get("race_id"),
             "variant": str(v.get("id") or v.get("name") or ""),
             "variant_label": v.get("name") or str(v.get("id") or "the plan"),
             "recommended": bundle.get("recommended"),
-            "points": [{"lat": p.get("lat"), "lon": p.get("lon")} for p in path
+            "start_epoch": bundle.get("start_epoch"),
+            "points": [{"lat": p.get("lat"), "lon": p.get("lon"), "t": p.get("t")} for p in path
                        if p.get("lat") is not None and p.get("lon") is not None]}
 
 

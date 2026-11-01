@@ -317,12 +317,12 @@ const MapView = (function () {
     if (marks) {
       items.push(L.polyline(marks.map((m) => [m.lat, m.lon]),
         { color: "#444", weight: 1.5, opacity: 0.8, dashArray: "7,7" })
-        .bindTooltip("Rhumb line (direct course)", { sticky: true }));
+        .bindTooltip("Direct course", { sticky: true }));
     }
 
     // the optimized (sailed) route on top
     items.push(L.polyline(R.path.map((p) => [p.lat, p.lon]),
-      { color: "#111", weight: 3, opacity: 0.9 }).bindTooltip("Optimized route", { sticky: true }));
+      { color: "#111", weight: 3, opacity: 0.9 }).bindTooltip("Best route", { sticky: true }));
 
     // sail-change chips ON the track — the 2g sail_plan carries the real peel points ({sail,lat,lon,t});
     // the per-leg fallback form has no positions and simply draws nothing here.
@@ -404,23 +404,23 @@ const MapView = (function () {
     const hasWind = R && R.wind_grid && (R.wind_grid.frames || []).length;
 
     const scrub = hasFrames ? `<div class="cc-grp cc-scrub">
-        <button id="mvPlay" class="mv-play" title="Play / pause the forecast animation">▶</button>
+        <button id="mvPlay" class="mv-play" title="Play / pause">▶</button>
         <input type="range" id="mvRange" min="0" max="${R.wind_grid.times.length - 1}" value="${frameIdx}" step="1">
         <span id="mvTime">${frameLabel(frameIdx)}</span>
         ${(() => { const sa = sailAt(R.wind_grid.times[frameIdx]);
-          return `<span id="mvSail" title="The sail the route carries at the selected time (+ reef)"
+          return `<span id="mvSail" title="Sail at this time (+ reef)"
             class="${sa ? `sail sail-${sa.sail} mv-sailchip` : ""}">${sa ? sa.sail + (sa.reef ? " +" + sa.reef : "") : ""}</span>`; })()}</div>` : "";
 
     const windSel = hasWind ? `<label class="mv-windmode">Wind <select data-windmode>
         <option value="arrows"${windMode === "arrows" ? " selected" : ""}>arrows</option>
         <option value="barbs"${windMode === "barbs" ? " selected" : ""}>barbs</option>
         <option value="shaded"${windMode === "shaded" ? " selected" : ""}>shaded</option></select></label>` : "";
-    const followChk = hasFrames ? `<label class="mv-chk" title="Pan the map to the projected boat position while scrubbing/playing">
+    const followChk = hasFrames ? `<label class="mv-chk" title="Keep the boat in view while playing">
         <input type="checkbox" data-follow ${followScrub ? "checked" : ""}> Follow</label>` : "";
     const hasCurrent = R && R.current_grid && (R.current_grid.frames || []).length;
     const hasWaves = R && R.wave_grid && (R.wave_grid.frames || []).length;
     const layers = `<div class="cc-grp cc-layers"><span class="cc-lbl">Layers</span>
-        ${chk("wind", "Wind")}${hasCurrent ? chk("current", "Current") : ""}${hasWaves ? chk("waves", "Sea state") : ""}${chk("shoals", "Shoals")}${chk("rocks", "Rocks")}${chk("land", "ENC land")}${chk("sea", "Seamarks")}${chk("scrim", "Dim chart")}` +
+        ${chk("wind", "Wind")}${hasCurrent ? chk("current", "Current") : ""}${hasWaves ? chk("waves", "Waves") : ""}${chk("shoals", "Shoals")}${chk("rocks", "Rocks")}${chk("land", "Chart land")}${chk("sea", "Seamarks")}${chk("scrim", "Dim chart")}` +
         (hasModels ? chk("models", "Model routes") : "") +
         (hasIso ? chk("iso", "Isochrones") : "") + (hasLay ? chk("laylines", "Laylines") : "") +
         windSel + followChk + `</div>`;
@@ -430,12 +430,12 @@ const MapView = (function () {
     const modelLeg = hasModels ? `<span class="cc-sep"></span><span class="cc-lbl">Model routes</span>` +
         R.candidate_paths.map((cp) => `<span class="mv-sw"><i style="background:${modelColor(cp.model)}"></i>${cp.model.toUpperCase()}` +
           `${cp.total_hours != null ? " " + cp.total_hours + "h" : ""} <small>${cp.favored_side || ""}</small></span>`).join("") : "";
-    const curLeg = hasCurrent ? `<span class="cc-sep"></span><span class="mv-sw"><i style="background:#1bb9c4"></i>current (set/drift${R.current_grid.peak_drift_kn ? `, pk ${R.current_grid.peak_drift_kn} kts` : ""})</span>` : "";
+    const curLeg = hasCurrent ? `<span class="cc-sep"></span><span class="mv-sw"><i style="background:#1bb9c4"></i>current${R.current_grid.peak_drift_kn ? ` (peak ${R.current_grid.peak_drift_kn} kts)` : ""}</span>` : "";
     const hsStops = [[0.3, "<0.5"], [0.75, "0.5–1"], [1.25, "1–1.5"], [2, "1.5–2.5"], [3, "2.5+"]];
-    const waveLeg = hasWaves ? `<span class="cc-sep"></span><span class="cc-lbl">Sea m${R.wave_grid.peak_hs_m ? ` (pk ${R.wave_grid.peak_hs_m})` : ""}</span>` +
+    const waveLeg = hasWaves ? `<span class="cc-sep"></span><span class="cc-lbl">Waves m${R.wave_grid.peak_hs_m ? ` (peak ${R.wave_grid.peak_hs_m})` : ""}</span>` +
         hsStops.map(([v, lbl]) => `<span class="mv-sw"><i style="background:${hsColor(v)}"></i>${lbl}</span>`).join("") : "";
     const legend = `<div class="cc-grp cc-legend"><span class="cc-lbl">Wind kts</span>${sw}
-        <span class="mv-legnote">opacity = confidence (faint = models split)</span>${curLeg}${waveLeg}${modelLeg}</div>`;
+        <span class="mv-legnote">faint = forecasts disagree</span>${curLeg}${waveLeg}${modelLeg}</div>`;
 
     const CC = L.Control.extend({
       options: { position: "bottomleft" },

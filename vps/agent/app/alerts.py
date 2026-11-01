@@ -69,7 +69,7 @@ def _conditions():
                     sev = "danger" if (cpa <= AIS_CPA_NM * 0.4 or tcpa <= 6) else "warn"
                     who = t.get("name") or t["mmsi"]
                     out.append({"key": f"ais:{t['mmsi']}", "kind": "ais", "severity": sev,
-                                "message": f"Closing AIS {who}: CPA {cpa} nm in {tcpa} min, "
+                                "message": f"{who} closing: passes {cpa} nm in {tcpa} min, "
                                            f"bearing {t.get('bearing')}°."})
     except Exception:
         pass
@@ -79,22 +79,22 @@ def _conditions():
         s = tools.get_strip()
         if not s.get("available"):
             out.append({"key": "stale_telemetry", "kind": "stale_telemetry", "severity": "danger",
-                        "message": "No live telemetry — link or sensors silent."})
+                        "message": "No live data. Link or sensors down."})
         else:
             age = s.get("data_age_seconds")
             if age is not None and age > STALE_S:
                 sev = "danger" if age > STALE_S * 3 else "warn"
                 out.append({"key": "stale_telemetry", "kind": "stale_telemetry", "severity": sev,
-                            "message": f"Telemetry stale — freshest source {round(age)} s old."})
+                            "message": f"Data stale: newest is {round(age)} s old."})
 
             depth = s.get("depth")
             if depth is not None:
                 if depth <= DEPTH_DANGER_M:
                     out.append({"key": "depth_shoaling", "kind": "depth_shoaling",
-                                "severity": "danger", "message": f"Shallow water — depth {depth} m."})
+                                "severity": "danger", "message": f"Shallow: {depth} m."})
                 elif depth <= DEPTH_WARN_M:
                     out.append({"key": "depth_shoaling", "kind": "depth_shoaling",
-                                "severity": "warn", "message": f"Shoaling — depth {depth} m."})
+                                "severity": "warn", "message": f"Getting shallow: {depth} m."})
 
             stw, tws, twa = s.get("stw"), s.get("tws"), s.get("twa")
             if stw and tws is not None and twa is not None:
@@ -103,8 +103,8 @@ def _conditions():
                 if tgt and stw < tgt * (1 - POLAR_DEFICIT):
                     pct = round(100 * stw / tgt)
                     out.append({"key": "polar_deficit", "kind": "polar_deficit", "severity": "warn",
-                                "message": f"Boatspeed {stw} kts — {pct}% of {tgt} kts target "
-                                           f"({round(twa)}° TWA / {round(tws)} kts)."})
+                                "message": f"Slow: {stw} kts, {pct}% of {tgt} kts target "
+                                           f"({round(twa)}° TWA, {round(tws)} kts)."})
     except Exception:
         pass
 
@@ -115,9 +115,9 @@ def _conditions():
             w = tac.get("wind", {})
             if w.get("persistent") and abs(w.get("shift_deg", 0)) >= SHIFT_DEG:
                 out.append({"key": "wind_shift", "kind": "wind_shift", "severity": "warn",
-                            "message": f"Persistent {w.get('trend')} shift "
-                                       f"{abs(round(w['shift_deg']))}° — {tac.get('favored_side')} "
-                                       f"side favored."})
+                            "message": f"Wind shifted {w.get('trend')} "
+                                       f"{abs(round(w['shift_deg']))}°. Favour the "
+                                       f"{tac.get('favored_side')} side."})
     except Exception:
         pass
 
@@ -126,8 +126,7 @@ def _conditions():
         f = tools.get_fatigue()
         if f.get("available") and f.get("level") == "rotate_now":
             out.append({"key": "fatigue", "kind": "fatigue", "severity": "warn",
-                        "message": f"Helm fatigue {round(f['index'])} — rotate now. "
-                                   f"{f.get('recommendation', '')}".strip()})
+                        "message": f"Helm fatigue {round(f['index'])}. Rotate the driver now."})
     except Exception:
         pass
 

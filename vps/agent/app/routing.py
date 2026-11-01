@@ -216,7 +216,7 @@ def get_route(route: str = None, target: str = "next"):
     """Optimal route from the boat to the next mark (target='next') or the course finish."""
     nav = NAV.get_navigator(route)
     if not nav.get("available"):
-        return {"available": False, "note": nav.get("note", "no navigator fix")}
+        return {"available": False, "note": nav.get("note", "No position yet.")}
     marks = NAV._marks(nav["route"])
     if target == "finish":
         dest = marks[-1]
@@ -225,7 +225,7 @@ def get_route(route: str = None, target: str = "next"):
     s = NAV._latest()
     slat, slon = s["lat"], s["lon"]
     if slat is None:
-        return {"available": False, "note": "no position fix"}
+        return {"available": False, "note": "No position yet."}
 
     live = (s["tws"], s["twd"])
     wind, use_fcst = make_wind_fn(slat, slon, live)
@@ -239,9 +239,8 @@ def get_route(route: str = None, target: str = "next"):
     if not leg["reached"]:
         out = {"available": False, "target": dest["name"], "reached": False,
                "short_nm": leg["short_nm"],
-               "note": (f"No complete route to {dest['name']} — the isochrone stopped "
-                        f"{leg['short_nm']} nm short of it (search horizon "
-                        f"{MAX_STEPS * DT_H:.0f} h). Not reporting a partial ETA.")}
+               # the search horizon (MAX_STEPS * DT_H) ran out; no partial ETA reported
+               "note": f"No route to {dest['name']}. Stopped {leg['short_nm']} nm short."}
         _cache.update(key=key, t=time.time(), val=out)
         return out
     path, legs, direct = leg["path"], leg["legs"], leg["direct_nm"]
@@ -259,9 +258,7 @@ def get_route(route: str = None, target: str = "next"):
         "recommended_heading": legs[0]["hdg"] if legs else None,
         "first_tack": legs[0]["tack"] if legs else None,
         "path": path,
-        "note": ("Isochrone optimal route on the polars through the "
-                 + ("Open-Meteo forecast" if use_fcst else "current measured wind")
-                 + ". Practice/debrief — RRS 41 in a race."),
+        "note": "Fastest route. Practice use only (RRS 41 in a race).",
     }
     _cache.update(key=key, t=time.time(), val=out)
     return out

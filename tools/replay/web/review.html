@@ -47,7 +47,7 @@
   #ipad { position:absolute; top:0; left:0; width:1194px; height:834px; border:0;
           transform-origin: top left; background:#000; }
 
-  #truth { flex:1; overflow:auto; padding:10px 12px; }
+  #truth { padding:10px 12px; }
   .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(132px,1fr)); gap:8px; }
   .cell { background:var(--panel); border:1px solid var(--line); border-radius:7px; padding:7px 9px; }
   .cell .lab { font-size:10px; letter-spacing:.06em; text-transform:uppercase; color:var(--dim); }
@@ -77,6 +77,64 @@
   footer textarea { flex:1; height:46px; resize:vertical; }
   footer .hint { font-size:10.5px; color:var(--dim); margin-top:3px; }
   #noteCount { font-size:11.5px; color:var(--dim); }
+  header { flex-wrap:wrap; }
+  .scrub button.ctl { min-width:44px; min-height:44px; font-size:16px; }
+
+  /* ---- right pane tabs: ground truth | overrides ---- */
+  .tabs { flex:none; display:flex; background:#0a2338; border-bottom:1px solid var(--line); }
+  .tabs button { flex:1; min-height:44px; background:none; border:0; border-bottom:3px solid transparent;
+                 color:var(--dim); font:inherit; font-size:13px; letter-spacing:.06em; text-transform:uppercase;
+                 cursor:pointer; }
+  .tabs button[aria-selected=true] { color:var(--ink); border-bottom-color:var(--accent); }
+  .tabs button .dot { display:none; width:9px; height:9px; border-radius:50%; background:var(--accent);
+                      margin-left:7px; vertical-align:1px; }
+  .tabs button.on .dot { display:inline-block; }
+  .tabpane { flex:1; overflow:auto; min-height:0; }
+  .tabpane[hidden] { display:none; }
+
+  /* ---- the ON banner: on the review page, never inside the console ---- */
+  #ovBanner { flex:none; display:flex; align-items:center; gap:12px; padding:6px 14px;
+              background:#ffd76a; color:#1a1300; font-size:14px; }
+  #ovBanner[hidden] { display:none; }
+  #ovBanner b { letter-spacing:.06em; white-space:nowrap; }
+  #ovBanner span { flex:1; min-width:0; }
+  #ovBanner button { min-height:44px; min-width:88px; border-radius:8px; border:2px solid #1a1300;
+                     background:#1a1300; color:#ffd76a; font:inherit; font-weight:700; font-size:15px; cursor:pointer; }
+
+  /* ---- overrides panel (finger-sized: every target >= 44 px) ---- */
+  #ovPanel { padding:10px 12px 18px; }
+  .ov-sec { font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--dim); margin:14px 0 6px; }
+  .ov-sec:first-child { margin-top:2px; }
+  .ov-presets { display:grid; grid-template-columns:repeat(2, 1fr); gap:8px; }
+  .ov-presets button, .ov-chip, .ov-step button, .ov-clear {
+    min-height:44px; background:#164066; color:var(--ink); border:1px solid var(--line); border-radius:8px;
+    font:inherit; font-size:14px; cursor:pointer; touch-action:manipulation; }
+  .ov-presets button { padding:6px 10px; font-weight:600; }
+  .ov-row { display:flex; align-items:center; gap:8px; padding:5px 0; border-bottom:1px solid #1b4368; }
+  .ov-lab { flex:1; min-width:0; font-size:14px; }
+  .ov-lab small { display:block; color:var(--dim); font-size:11.5px; font-variant-numeric:tabular-nums; }
+  .ov-step { display:flex; align-items:center; gap:6px; }
+  .ov-step button { min-width:48px; font-size:20px; font-weight:600; }
+  .ov-val { min-width:84px; text-align:center; font-size:16px; font-weight:600; font-variant-numeric:tabular-nums; }
+  .ov-val.set { color:var(--accent); }
+  .ov-clear { min-width:44px; font-size:16px; }
+  .ov-clear[disabled] { opacity:.3; cursor:default; }
+  .ov-chips { display:flex; flex-wrap:wrap; gap:6px; padding:4px 0 6px; }
+  .ov-chip { padding:6px 12px; min-width:52px; }
+  .ov-chip[aria-pressed=true] { background:var(--accent); color:#1a1300; border-color:var(--accent); font-weight:700; }
+  .ov-chip.bad[aria-pressed=true] { background:var(--bad); border-color:var(--bad); }
+  .ov-note { font-size:11.5px; color:var(--dim); line-height:1.45; margin-top:12px; }
+  .ov-share { display:flex; gap:8px; align-items:center; margin-top:12px; }
+  .ov-share input { flex:1; min-width:0; min-height:44px; background:#123a5c; color:var(--ink);
+                    border:1px solid var(--line); border-radius:8px; padding:0 10px; font-size:12px; }
+
+  /* iPad portrait: console on top at full width, the panes below it */
+  @media (orientation: portrait) {
+    main { flex-direction:column; }
+    #left { flex:none; border-right:0; border-bottom:1px solid var(--line); }
+    #ipadWrap { flex:none; height:calc(100vw * 834 / 1194); }
+    #right { flex:1 1 auto; min-height:0; }
+  }
 </style>
 </head>
 <body>
@@ -104,14 +162,24 @@
   <span class="idx" id="idx">—</span>
 </div>
 
+<div id="ovBanner" role="status" hidden>
+  <b>OVERRIDES ON</b><span id="ovSummary"></span>
+  <button id="ovReset" type="button">Reset</button>
+</div>
+
 <main>
   <section class="pane" id="left">
     <h2>What the iPad showed — the real console, fed replay frames</h2>
     <div id="ipadWrap"><iframe id="ipad" src="/dashboard/"></iframe></div>
   </section>
   <section class="pane" id="right">
-    <h2>Ground truth — raw archive, per source, no engine</h2>
-    <div id="truth">
+    <div class="tabs" role="tablist">
+      <button type="button" role="tab" id="tabTruth" aria-selected="true">Ground truth</button>
+      <button type="button" role="tab" id="tabOv" aria-selected="false">What if…<span class="dot"></span></button>
+    </div>
+    <div class="tabpane" id="ovPanel" hidden></div>
+    <div class="tabpane" id="truth">
+      <h2 style="margin:0 0 8px;font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--dim);font-weight:500;">Raw archive, per source, no engine</h2>
       <div class="grid" id="cells"></div>
       <h3 class="sec">Boat track (whole timeline · ● = now)</h3>
       <svg id="track" viewBox="0 0 400 190" preserveAspectRatio="xMidYMid meet"></svg>
@@ -136,6 +204,7 @@
   <button class="ctl" id="save">Save note</button>
 </footer>
 
+<script src="/static/overrides.js"></script>
 <script>
 (function () {
   "use strict";
@@ -176,7 +245,7 @@
       + (m.built_at_wall_s ? " · built in " + Math.round(m.built_at_wall_s) + " s" : "");
     drawTrack();
     fitIpad();
-    go(0);
+    go(START.f !== null ? START.f : 0);
     refreshNotes();
   });
 
@@ -186,9 +255,13 @@
     $("range").value = String(i);
     $("idx").textContent = (i + 1) + " / " + IDX.length;
     $("clock").textContent = (IDX[i] || "").replace("T", " ").replace("Z", "Z");
+    writeHash();
+    var want = i;
     fetch("/replay/frame?i=" + i).then(function (r) { return r.json(); }).then(function (f) {
+      if (want !== i) return;            // a later scrub already asked for another frame
       FRAME = f;
-      ipad.contentWindow.postMessage({ type: "replay:frame", frame: f }, "*");
+      postFrame();
+      renderOverrides();
       renderTruth();
       renderCompare();
       markTrack();
@@ -313,6 +386,170 @@
     c.setAttribute("cy", TR.Y(best[1]).toFixed(1));
   }
 
+  /* ---------- what-if overrides ----------
+     The pure maths lives in overrides.js (tested under node). This page owns the state: it
+     bends each frame before posting it to the console, tells the shim how to fake the link,
+     and keeps the scenario in the URL hash so it can be bookmarked or sent. */
+  var OVR = window.ReplayOverrides;
+  var START = OVR.fromHash(location.hash);
+  var OV = START.ov;
+
+  function postFrame() {
+    if (!FRAME) return;
+    ipad.contentWindow.postMessage({ type: "replay:frame", frame: OVR.apply(FRAME, OV) }, "*");
+  }
+  function postLink() {
+    ipad.contentWindow.postMessage({ type: "replay:link", link: OVR.linkOf(OV) }, "*");
+  }
+  function writeHash() {
+    var h = OVR.toHash(OV, i);
+    if (h !== location.hash) history.replaceState(null, "", location.pathname + location.search + h);
+  }
+  function setOv(patch, replace) {
+    OV = OVR.normalize(replace ? patch : Object.assign({}, OV, patch));
+    writeHash();
+    postLink();
+    postFrame();
+    renderOverrides();
+  }
+  window.replayOverrides = function (o) { if (o !== undefined) setOv(o || {}, true); return OV; };
+  window.addEventListener("hashchange", function () {
+    var h = OVR.fromHash(location.hash);
+    OV = h.ov; postLink();
+    if (h.f !== null && h.f !== i) go(h.f); else { postFrame(); renderOverrides(); }
+  });
+
+  function showTab(ov) {
+    $("tabOv").setAttribute("aria-selected", ov ? "true" : "false");
+    $("tabTruth").setAttribute("aria-selected", ov ? "false" : "true");
+    $("ovPanel").hidden = !ov; $("truth").hidden = !!ov;
+  }
+  $("tabTruth").onclick = function () { showTab(false); };
+  $("tabOv").onclick = function () { showTab(true); };
+  $("ovReset").onclick = function () { setOv({}, true); };
+
+  // stepper rows: [key, label, step, absolute?, frame value, unit]
+  var STEPS = {
+    tws: { step: 1, min: -30, max: 30 }, twd: { step: 5, min: -180, max: 180 },
+    hdg: { step: 5, abs: true }, sog: { step: 0.5, abs: true, min: 0, max: 30 },
+    stw: { step: 0.5, abs: true, min: 0, max: 30 },
+    fsh: { step: 5, min: -180, max: 180 }, fsc: { step: 10, min: 0, max: 300, base: 100 },
+    delay: { step: 1, min: 1, max: 30 }
+  };
+  function bump(k, dir) {
+    var cfg = STEPS[k], cur = OV[k], c = ((FRAME || {}).data || {})["/conditions"] || {};
+    if (cfg.abs && cur === null) {
+      var raw = k === "hdg" ? c.heading : c[k];
+      cur = raw == null ? 0 : Math.round(raw / cfg.step) * cfg.step;    // start from what was raced
+    }
+    var v = Math.round((cur + dir * cfg.step) * 10) / 10;
+    if (k === "hdg") v = (v + 360) % 360;
+    if (cfg.min !== undefined) v = Math.max(cfg.min, v);
+    if (cfg.max !== undefined) v = Math.min(cfg.max, v);
+    var p = {}; p[k] = v; setOv(p);
+  }
+  function clearKey(k) {
+    var p = {}; p[k] = STEPS[k] && STEPS[k].abs ? null : OVR.DEFAULTS[k]; setOv(p);
+  }
+
+  var f1 = function (v, d) { return v == null ? "—" : Number(v).toFixed(d === undefined ? 1 : d); };
+  function stepRow(k, label, hint, valTxt, set) {
+    return '<div class="ov-row"><div class="ov-lab">' + label + '<small>' + hint + '</small></div>'
+      + '<div class="ov-step"><button type="button" data-bump="' + k + '" data-dir="-1" aria-label="' + label + ' down">−</button>'
+      + '<span class="ov-val' + (set ? " set" : "") + '" data-val="' + k + '">' + valTxt + '</span>'
+      + '<button type="button" data-bump="' + k + '" data-dir="1" aria-label="' + label + ' up">+</button></div>'
+      + '<button type="button" class="ov-clear" data-clear="' + k + '" aria-label="clear ' + label + '"'
+      + (set ? "" : " disabled") + '>×</button></div>';
+  }
+  function chip(attr, val, label, on, cls) {
+    return '<button type="button" class="ov-chip' + (cls ? " " + cls : "") + '" ' + attr + '="' + val
+      + '" aria-pressed="' + (on ? "true" : "false") + '">' + label + '</button>';
+  }
+
+  function renderOverrides() {
+    var on = OVR.isActive(OV);
+    $("ovBanner").hidden = !on;
+    $("ovSummary").textContent = OVR.summary(OV).join(" · ");
+    $("tabOv").classList.toggle("on", on);
+    requestAnimationFrame(fitIpad);       // the banner coming or going changes the pane height
+
+    var raw = (FRAME || {}).data || {};
+    var c = raw["/conditions"] || {}, bent = on ? (OVR.apply(FRAME, OV) || {}).data || {} : raw;
+    var bc = bent["/conditions"] || {}, ss = raw["/sails/state"] || {}, sl = raw["/sail"] || {};
+    var raced = function (v, u, d) { return "raced " + f1(v, d) + u; };
+    var sgn = function (v, u) { return (v > 0 ? "+" : "") + v + u; };
+    var h = [];
+    h.push('<div class="ov-sec">Presets</div><div class="ov-presets">'
+      + OVR.PRESETS.map(function (p) { return '<button type="button" data-preset="' + p.id + '">' + p.label + '</button>'; }).join("")
+      + '</div>');
+    h.push('<div class="ov-sec">Wind</div>');
+    h.push(stepRow("tws", "Wind speed (TWS)", raced(c.tws, " kts") + (OV.tws ? " → " + f1(bc.tws) + " kts" : ""),
+      OV.tws ? sgn(OV.tws, " kts") : "as raced", !!OV.tws));
+    h.push(stepRow("twd", "Wind direction (TWD)", raced(c.twd, "°", 0) + (OV.twd ? " → " + f1(bc.twd, 0) + "°" : "")
+      + " · now TWA " + f1(bc.twa, 0) + "° AWA " + f1(bc.awa, 0) + "°",
+      OV.twd ? Math.abs(OV.twd) + "° " + (OV.twd > 0 ? "R" : "L") : "as raced", !!OV.twd));
+    h.push('<div class="ov-sec">Boat</div>');
+    h.push(stepRow("hdg", "Heading", raced(c.heading, "°", 0) + " · now COG " + f1(bc.cog, 0) + "°",
+      OV.hdg !== null ? f1(OV.hdg, 0) + "°" : "as raced", OV.hdg !== null));
+    h.push(stepRow("sog", "SOG", raced(c.sog, " kts"), OV.sog !== null ? f1(OV.sog) + " kts" : "as raced", OV.sog !== null));
+    h.push(stepRow("stw", "STW", raced(c.stw, " kts") + " · now AWS " + f1(bc.aws) + " kts",
+      OV.stw !== null ? f1(OV.stw) + " kts" : "as raced", OV.stw !== null));
+    h.push('<div class="ov-sec">Sail up (raced: ' + (ss.hoisted || sl.crew_sail || "not set") + ')</div><div class="ov-chips">'
+      + chip("data-sail", "", "as raced", OV.sail === null)
+      + OVR.SAILS.map(function (x) { return chip("data-sail", x, x, OV.sail === x); }).join("") + '</div>');
+    h.push('<div class="ov-sec">Forecast</div>');
+    h.push(stepRow("fsh", "Forecast shift", "not archived — a flat forecast at the current wind is made up",
+      OV.fsh ? Math.abs(OV.fsh) + "° " + (OV.fsh > 0 ? "R" : "L") : "none", !!OV.fsh));
+    h.push(stepRow("fsc", "Forecast speed", "× of the forecast TWS", OV.fsc + "%", OV.fsc !== 100));
+    h.push('<div class="ov-sec">Link to the boat</div><div class="ov-chips">'
+      + chip("data-link", "normal", "Normal", OV.link === "normal")
+      + chip("data-link", "slow", "Slow", OV.link === "slow")
+      + chip("data-link", "lost", "Lost", OV.link === "lost", "bad") + '</div>');
+    if (OV.link === "slow") h.push(stepRow("delay", "Answer delay", "each /api reply waits this long; the console gives up at 5–12 s",
+      OV.delay + " s", true));
+    h.push('<div class="ov-sec">Fail one endpoint</div><div class="ov-chips">'
+      + OVR.ENDPOINTS.map(function (e) { return chip("data-fail", e, e.slice(1), OV.fail.indexOf(e) >= 0, "bad"); }).join("")
+      + '</div>');
+    h.push('<div class="ov-share"><input id="ovLink" readonly aria-label="link to this scenario" value="'
+      + (location.origin + location.pathname + OVR.toHash(OV, i)).replace(/"/g, "&quot;") + '">'
+      + '<button type="button" class="ov-chip" id="ovCopy">Copy link</button></div>');
+    h.push('<p class="ov-note">Recomputed: TWS/TWD/heading/speeds, TWA, AWA/AWS, the sail read (fit, change-to, '
+      + 'crossover), the navigator and tactics wind. NOT recomputed: ETA, laylines, playbook, plays, strategy, '
+      + 'deviation, trend, fatigue — they keep the raced values. Ground truth on the other tab is always as raced.</p>');
+    $("ovPanel").innerHTML = h.join("");
+  }
+  $("ovPanel").addEventListener("click", function (ev) {
+    var b = ev.target.closest("button");
+    if (!b || b.disabled) return;
+    if (b.dataset.bump) return bump(b.dataset.bump, Number(b.dataset.dir));
+    if (b.dataset.clear) return clearKey(b.dataset.clear);
+    if (b.dataset.sail !== undefined) return setOv({ sail: b.dataset.sail || null });
+    if (b.dataset.link) return setOv({ link: b.dataset.link });
+    if (b.dataset.fail) {
+      var f = OV.fail.slice(), k = f.indexOf(b.dataset.fail);
+      if (k >= 0) f.splice(k, 1); else f.push(b.dataset.fail);
+      return setOv({ fail: f });
+    }
+    if (b.dataset.preset) {
+      var p = OVR.PRESETS.filter(function (x) { return x.id === b.dataset.preset; })[0];
+      return p && setOv(p.set);
+    }
+    if (b.id === "ovCopy") {
+      var inp = $("ovLink");
+      inp.select();
+      var ok = function () { b.textContent = "Copied"; };
+      var fail = function () { inp.focus(); inp.select(); b.textContent = "Select + copy"; };
+      var legacy = function () {
+        try { document.execCommand("copy") ? ok() : fail(); } catch (e) { fail(); }
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(inp.value).then(ok, legacy);
+      } else legacy();
+    }
+  });
+  if (OVR.isActive(OV)) showTab(true);
+  renderOverrides();
+
   /* ---------- transport ---------- */
   function stop() { playing = false; $("playBtn").textContent = "▶ Play"; if (timer) clearInterval(timer); timer = null; }
   function play() {
@@ -342,8 +579,9 @@
     // The shim announces itself once it has patched fetch. Until then a posted frame lands
     // nowhere, so the console would sit on its empty state ("no active course") until the
     // first scrub. Re-send whatever frame we are on the moment it is ready.
-    if (ev.data.type === "replay:ready" && FRAME) {
-      ipad.contentWindow.postMessage({ type: "replay:frame", frame: FRAME }, "*");
+    if (ev.data.type === "replay:ready") {
+      postLink();
+      if (FRAME) postFrame();
     }
   });
   function refreshNotes() {
@@ -358,7 +596,8 @@
     var nav = d["/navigator"] || {}, nm = nav.next_mark || {}, w = nav.wind || {};
     var ctx = "mark=" + (nm.name || "?") + " idx=" + nm.index
       + " eta_min=" + (nm.eta_min == null ? "null" : nm.eta_min)
-      + " dist_nm=" + nm.distance_nm + " tws=" + w.tws + " twd=" + w.twd;
+      + " dist_nm=" + nm.distance_nm + " tws=" + w.tws + " twd=" + w.twd
+      + (OVR.isActive(OV) ? " | WHAT-IF: " + OVR.summary(OV).join(", ") : "");
     fetch("/replay/notes", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ t: IDX[i], frame: i, tile: $("tile").value, text: text, context: ctx })

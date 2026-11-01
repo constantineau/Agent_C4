@@ -70,6 +70,7 @@ pi/n2kout/          N2K route BROADCASTER (:8210, host net) — the iPad's "show
                     129285/129284/129283 onto the bus for the Garmin 943; passive until asked
 pi/console/         onboard race console + crew dashboard (iPad, served from the Pi, :8091)
 pi/orin/            onboard LLM copilot (Tier 2) — Ollama+Qwen2.5-7B :11434; copilot/ svc :8300
+pi/orin/plume/      onboard forecast plume (Orin timer): public model GRIBs → plume → engine /plume/onboard
 vps/ingestion/      FastAPI ingestion API (token-auth → TimescaleDB)
 vps/agent/          Claude tool-use agent + the shared deterministic engine modules
 vps/web/            crew web app (nginx static, no build step)

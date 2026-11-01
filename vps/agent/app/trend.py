@@ -105,12 +105,12 @@ def _read_text(w):
     if r is not None:
         verb = "building" if r > 0.3 else "fading" if r < -0.3 else "holding"
         if verb == "holding":
-            bits.append(f"breeze holding ~{w['tws_to_kn']:g} kn")
+            bits.append(f"wind holding ~{w['tws_to_kn']:g} kn")
         else:
-            bits.append(f"breeze {verb} {abs(r):g} kn/hr ({w['tws_from_kn']:g}→{w['tws_to_kn']:g} kn)")
+            bits.append(f"wind {verb} {abs(r):g} kn/hr ({w['tws_from_kn']:g}→{w['tws_to_kn']:g} kn)")
     d = w.get("twd_rate_deg_per_hr")
     if d is not None and w.get("twd_dir") in ("right", "left"):
-        bits.append(f"walking {w['twd_dir']} ~{abs(d):g}°/hr (was {w['twd_from_deg']}°, "
+        bits.append(f"shifting {w['twd_dir']} ~{abs(d):g}°/hr (was {w['twd_from_deg']}°, "
                     f"now {w['twd_to_deg']}°)")
     hrs = w["window_min"] / 60
     tail = f" over the last {hrs:g} h" if bits else ""
@@ -129,7 +129,7 @@ def get_trend(route=None):
         tws_rows, twd_raw = [], []
     twd_rows = [(t, v * _RAD_TO_DEG % 360 if v is not None else None) for (t, v) in twd_raw]
     if not tws_rows and not twd_rows:
-        return {"available": False, "note": "no archived wind — trend unknown",
+        return {"available": False, "note": "No wind data yet.",
                 "based": ["own wind archive"], "conf": "engine"}
 
     windows = {}
@@ -139,7 +139,7 @@ def get_trend(route=None):
             windows[f"h{m // 60}"] = w
     if not windows:
         return {"available": False,
-                "note": "wind archive too thin for a trend (window not half-covered yet)",
+                "note": "Not enough wind history yet.",
                 "based": ["own wind archive"], "conf": "engine"}
 
     # the 1 h window is the live matcher signal; 3 h is the narrative context
