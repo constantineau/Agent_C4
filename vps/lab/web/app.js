@@ -2319,8 +2319,9 @@ function deployPanel(lock, t) {
     `#   (ensure PLAYBOOK_PATH=${t.orin_playbook_path} is set in /etc/sr33/copilot.env on the Orin)`,
   ].join("\n");
   const res = Dep.pushRes;
-  const stepRow = (s) => `<div class="dep-row"><span class="pill ${s.ok ? "ok" : "warn"}">${s.ok ? "✓" : "✗"} ${esc(s.target)} · ${esc(s.step)}</span><span class="muted">${esc(s.ok ? pushDetail(s) : (s.detail && s.detail.error) || JSON.stringify(s.detail).slice(0, 120))}</span></div>`;
+  const stepRow = (s) => `<div class="dep-row"><span class="pill ${s.ok ? "ok" : "warn"}">${s.ok ? "✓" : "✗"} ${esc(s.target)} · ${esc(s.step)}</span><span class="muted">${esc(s.ok ? pushDetail(s) : (s.detail && (s.detail.error || s.detail.detail)) || JSON.stringify(s.detail).slice(0, 120))}</span></div>`;
   const resHtml = !res ? "" : res.pushing ? `<div class="banner" style="margin-top:10px">Pushing to the boat…</div>`
+    : res.refused ? `<div class="banner warn" style="margin-top:10px">⚠ ${esc(res.detail || "Race started. Not sent.")}</div>`
     : `<div class="banner ${res.ok ? "ok" : "warn"}" style="margin-top:10px">${res.ok ? "✓ Boat loaded. The iPad updates by itself." : "⚠ Push didn't finish. Fix it and push again."}</div>
        <div class="dep-grid" style="margin-top:8px">${(res.steps || []).map(stepRow).join("")}</div>`;
   return `<div class="card">

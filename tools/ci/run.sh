@@ -36,6 +36,7 @@ run uplink /repo /repo "pi/uplink/test_uplink_queue.py" python3 -m pytest -q -p 
 run n2kout /repo /repo/pi/n2kout "pi/n2kout/test_n2k.py"
 run agent /repo/pi/orin /repo/pi/orin:/repo/vps/agent:/repo "pi/orin/copilot/eval/test_eval.py" python3 -m copilot.eval.test_eval
 run agent /repo/pi/orin /repo/pi/orin:/repo/vps/agent:/repo "pi/orin/copilot/test_collision_watch.py" python3 -m copilot.test_collision_watch
+run agent /repo/pi/orin /repo/pi/orin:/repo/vps/agent:/repo "pi/orin/copilot/test_playbook_gate.py" python3 -m copilot.test_playbook_gate
 for f in vps/agent/test_*.py; do run agent /repo /repo/vps/agent:/repo:/repo/pi/archiver "$f"; done
 # The console's pure JS modules (no build step, no npm deps): plain node, pinned major.
 docker image inspect node:22-alpine >/dev/null 2>&1 || docker pull -q node:22-alpine >/dev/null \

@@ -2102,13 +2102,12 @@
     const w = App.watch;
     if (!w || !w.blocks || !w.blocks[i]) return;
     const order = { A: "B", B: "ALL", ALL: "A" };
-    const blocks = w.blocks.map(function (b, j) {
-      return j === i ? Object.assign({}, b, { on: order[b.on] || "A" }) : b;
-    });
+    const b = w.blocks[i];
     try {
+      /* one block's team only: a whole new plan is refused while racing (frozen at the gun) */
       const resp = await fetch(API + "/watch", { method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ plan: { teams: w.teams, blocks: blocks, log: w.log } }) });
+        body: JSON.stringify({ action: "set_on", start: b.start, on: order[b.on] || "A" }) });
       if (resp.ok) {
         App.watch = await resp.json();
         if (App.openTile === "charge") populateDetail("charge", false);

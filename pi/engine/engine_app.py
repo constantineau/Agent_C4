@@ -4,8 +4,11 @@ This is the in-race-legal half of the three-tier architecture. It serves the SAM
 endpoints the iPad already uses against the cloud, but computed ONBOARD from the boat's own
 data (the Phase-2 SQLite archive + a live Signal K cache, via `OnboardSource`) — so it is the
 boat's own computer crunching its own sensors (Expedition-class), not an "outside source"
-under RRS 41. There is **no LLM, no tool-loop, and no race gate** here: every endpoint is a
-direct deterministic response and all of them are legal while racing.
+under RRS 41. There is **no LLM and no tool-loop** here: every read endpoint is a direct
+deterministic response and legal while racing. The one gate is on the WRITES that take shore
+homework (course, fleet, playbook, checklist, a whole watch plan, plume, re-route assets): frozen
+at the gun, refused while a race session runs (`app.racegate`). Crew inputs from the iPad (sail
+state, checklist acks, watch quick edits, the race log, re-route buttons) are never gated.
 
 It reuses the exact engine modules from the cloud agent package (`app.navigator` /
 `app.tactics` / `app.routing` / `app.fatigue` / `app.sails` / `app.weather`), which read
@@ -14,7 +17,8 @@ the same code produces the same outputs from local data. The multi-source instru
 built by `app.onboard_conditions` (the cloud builds it off Postgres in `tools.py`).
 
 Cloud counterpart for parity: `vps/agent/app/main.py`. Differences: no /auth, no /ws chat, no
-alerts/summarizer/polar-analysis (those are cloud / C4 Performance Lab), no race gate.
+alerts/summarizer/polar-analysis (those are cloud / C4 Performance Lab), no race-mode gate on
+reads.
 """
 import os
 import time
@@ -28,7 +32,7 @@ from fastapi.responses import JSONResponse
 from app import (navigator, tactics, routing, weather, sails, fatigue, onboard_conditions,
                  datasource, ais, fleet, deviation, drift, selector, reoptimize, strategy,
                  matcher, buoys, racelog, watches, trend, plangap, gpsout, checklist,
-                 power, sensor_health, plume, orinroute, orinassets)
+                 power, sensor_health, plume, orinroute, orinassets, racegate)
 
 app = FastAPI(title="Agent_C4 Onboard Engine", version="0.1.0")
 # The iPad reaches the Pi directly over boat-local Wi-Fi in race mode; allow cross-origin so a
@@ -176,7 +180,8 @@ def practice_course(leg_nm: float = 1.0):
 @app.post("/course/load")
 def course_load(body: dict):
     """Load a RaceDefinition course into the onboard navigator (the deployed homework). Body:
-    {definition, course_id?, route?}. Writes the flattened marks to the Pi marks store + activates."""
+    {definition, course_id?, route?}. Writes the flattened marks to the Pi marks store + activates.
+    Pre-race homework: refused while a race session runs."""
     from shared.race_def import course_to_marks
     definition = (body or {}).get("definition") or {}
     marks, skipped, cid = course_to_marks(definition, (body or {}).get("course_id"))
@@ -188,7 +193,9 @@ def course_load(body: dict):
     # lock (two loads never interleave; /reroute/run reads under it too). The definition carries the
     # load id, so it only ever pairs with its own load's marks. Any failure: the old definition is
     # dropped and the load reports it.
-    with orinroute.COURSE_LOCK:
+    with racegate.hold() as racing, orinroute.COURSE_LOCK:
+        if racing:
+            return racegate.refused()
         tmp = None
         try:
             load_id = orinroute.new_load_id()
@@ -283,7 +290,8 @@ def ais_ep(max_range_nm: float = 12):
 @app.post("/fleet/load")
 def fleet_load(body: dict):
     """Load the fleet homework (roster + scoring + own rating + public-tracker config) onboard. Body:
-    {definition, own?} or {fleet, scoring, own?, tracker?}. Frozen at the gun; legal in-race."""
+    {definition, own?} or {fleet, scoring, own?, tracker?}. Frozen at the gun: refused while a race
+    session runs (the roster already aboard stays, and reading it is legal in-race)."""
     from shared.race_def import fleet_blob
     body = body or {}
     if body.get("definition") is not None:
@@ -291,7 +299,10 @@ def fleet_load(body: dict):
     else:
         blob = {"fleet": body.get("fleet") or [], "scoring": body.get("scoring") or {},
                 "own": body.get("own") or {}, "tracker": body.get("tracker") or {}}
-    datasource.active().save_fleet(blob)
+    with racegate.hold() as racing:
+        if racing:
+            return racegate.refused()
+        datasource.active().save_fleet(blob)
     return {"loaded": True, "roster_size": len(blob["fleet"])}
 
 
@@ -307,16 +318,20 @@ def fleet_ep(max_range_nm: float = 40.0):
 def playbook_load(body: dict):
     """Load the frozen Lab-2 playbook bundle (`c4.playbook/v1`) onboard — the homework the
     route-deviation core measures against. Body is the bundle itself, or {bundle: ...}. Frozen at
-    the gun; legal in-race (own computer interpreting pre-loaded homework). Replaces any prior."""
+    the gun: refused while a race session runs (reading the one aboard is legal in-race).
+    Replaces any prior."""
     body = body or {}
     bundle = body.get("bundle") if "variants" not in body else body
     if not bundle or not (bundle.get("variants")):
         return {"loaded": False, "detail": "no bundle with variants"}
-    datasource.active().save_playbook(bundle)
-    deviation.reset_state()          # a new playbook → clear the Schmitt/trend memory
-    drift.reset_state()
-    plangap.reset_state()            # the plan-gap read measures against the NEW promise
-    matcher.clear_state()            # forget play arm/sustain memory too
+    with racegate.hold() as racing:
+        if racing:
+            return racegate.refused()
+        datasource.active().save_playbook(bundle)
+        deviation.reset_state()          # a new playbook → clear the Schmitt/trend memory
+        drift.reset_state()
+        plangap.reset_state()            # the plan-gap read measures against the NEW promise
+        matcher.clear_state()            # forget play arm/sustain memory too
     return {"loaded": True, "race_id": bundle.get("race_id"),
             "variants": len(bundle.get("variants") or []),
             "plays": len(bundle.get("plays") or []),
@@ -440,7 +455,14 @@ def watch_status():
 @app.post("/watch")
 def watch_set(body: dict = None):
     """Replace or live-edit the watch plan: {plan: {...}} (Lab homework / block editor) ·
-    {action: 'hold'|'swap'|'all_hands', minutes?} (the iPad quick edits) · {clear: true}."""
+    {action: 'hold'|'swap'|'all_hands'|'set_on', ...} (the iPad quick edits) · {clear: true}.
+    A whole new plan is homework: refused while a race session runs. The crew's quick edits and
+    clear are always taken."""
+    if isinstance(body, dict) and "plan" in body:
+        with racegate.hold() as racing:
+            if racing:
+                return racegate.refused()
+            return watches.set_watch(body)
     return watches.set_watch(body)
 
 
@@ -457,8 +479,12 @@ def checklist_status(route: str | None = None):
 @app.post("/checklist/load")
 def checklist_load(body: dict):
     """Load the iPad checklist (homework `checklists_ipad`). Body: {items: [...]} /
-    {checklists_ipad: [...]} / {definition}. Replaces any prior list; clears acks."""
-    return checklist.load(body)
+    {checklists_ipad: [...]} / {definition}. Replaces any prior list; clears acks. Homework:
+    refused while a race session runs (acks are always taken)."""
+    with racegate.hold() as racing:
+        if racing:
+            return racegate.refused()
+        return checklist.load(body)
 
 
 @app.post("/checklist/ack")
@@ -466,6 +492,14 @@ def checklist_ack(body: dict):
     """Crew ack from the iPad: {id, undo?} — done for the current window (a sunset item
     re-arms the next evening). Returns the fresh checklist state."""
     return checklist.ack(body)
+
+
+@app.get("/racing")
+def racing_status():
+    """Is the boat racing? {racing: bool}. The Orin copilot asks before it takes a playbook
+    (it has no race log). Same rule as the load gate: a running race session, or a race log that
+    can't be read, is racing."""
+    return {"racing": racegate.racing()}
 
 
 @app.get("/session")

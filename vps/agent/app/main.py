@@ -15,7 +15,8 @@ from fastapi.responses import JSONResponse
 from shared.tool_contracts import AGENT_TOOLS
 from shared import n2k_sources, race_window, source_policy
 from .db import pool
-from . import agent, tools, navigator, alerts, summarizer, auth, race_mode, datasource, watches
+from . import (agent, tools, navigator, alerts, summarizer, auth, race_mode, datasource, watches,
+               racegate)
 
 
 def _race_gated(channel: str):
@@ -27,6 +28,17 @@ def _race_gated(channel: str):
             {"withheld": True, "detail": race_mode.REFUSAL, "mode": "race"}, status_code=403
         )
     return None
+
+
+def _homework_refused(channel: str):
+    """Frozen at the gun (RRS 41): while racing, shore homework (a course, a whole watch plan) is
+    not loaded. Returns a 409 refusal (audited) or None. The boat-side twin is app.racegate."""
+    if race_mode.racing():
+        race_mode.audit_refusal(channel)
+        return JSONResponse({"loaded": False, "detail": racegate.RACING, "mode": "race"},
+                            status_code=409)
+    return None
+
 
 API_KEY_PRESENT = bool(os.environ.get("ANTHROPIC_API_KEY", "").strip())
 
@@ -161,8 +173,13 @@ def watch_status():
 
 @app.post("/watch")
 def watch_set(body: dict = None):
-    """Replace or live-edit the watch plan: {plan: {...}} (Lab homework / block editor) ·
-    {action: 'hold'|'swap'|'all_hands', minutes?} (quick edits) · {clear: true}."""
+    """Replace or live-edit the watch plan: {plan: {...}} (Lab homework) ·
+    {action: 'hold'|'swap'|'all_hands'|'set_on', ...} (quick edits) · {clear: true}. A whole new
+    plan is refused in race mode; quick edits and clear are always taken."""
+    if isinstance(body, dict) and "plan" in body:
+        refused = _homework_refused("/watch")
+        if refused:
+            return refused
     return watches.set_watch(body)
 
 
@@ -195,7 +212,11 @@ def practice_course(leg_nm: float = 1.0):
 def course_load(body: dict):
     """Load a RaceDefinition course into the navigator (the homework→onboard link). Body:
     {definition, course_id?, route?}. Writes the flattened marks to the waypoints store and makes
-    the route active so the navigator/plot use the real course. Pre-race setup — not gated."""
+    the route active so the navigator/plot use the real course. Pre-race homework: refused in
+    race mode."""
+    refused = _homework_refused("/course/load")
+    if refused:
+        return refused
     from shared.race_def import course_to_marks
     definition = (body or {}).get("definition") or {}
     marks, skipped, cid = course_to_marks(definition, (body or {}).get("course_id"))

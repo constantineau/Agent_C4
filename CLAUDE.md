@@ -55,6 +55,11 @@ computation is separated from the LLM across three tiers:
   onboard on own data + common public data; never phone the cloud mid-race for a route.
 - **Homework pattern:** everything the boat needs in-race (playbook, obstacles, fleet
   roster, forecast fingerprint, venue stats, course) is compiled ashore and loaded frozen.
+- **Frozen at the gun, enforced:** every endpoint that takes shore homework refuses while the
+  boat's race log has a race session running (an unreadable log counts as racing), via ONE
+  helper, `vps/agent/app/racegate.py`. The Orin copilot asks the Pi (`GET /racing`) and fails
+  closed. The Lab's Deploy sends nothing after the race start. Per-endpoint list:
+  `docs/RRS41_COMPLIANCE.md` §8. A new homework load MUST use `racegate.hold()`.
 - **Human-in-the-loop learning:** Lab proposals never mutate the boat model; a person
   approves every polar/helm/wave-coefficient change.
 - **Collect everything:** every sensor reading, per source, raw SI; readers cross-check.
@@ -198,7 +203,7 @@ edited live on the CREW tile) · /checklist (GET) + POST /checklist/load + POST 
 calc on live position, mark-name proximity (the Cove Island gate photo), finish approach — and
 LATCHED active until the crew acks; acks are per-window, so a sunset item re-arms the next
 evening; kv-persisted; `CHECKLIST_*` tunables) · /session + POST /session/start|end (the RACE LOG — see
-below) · /course · POST /course/practice · POST /course/load (RaceDefinition course →
+below) · /racing (is a race session running? the copilot's gate) · /course · POST /course/practice · POST /course/load (RaceDefinition course →
 marks) · /navigator · /tactics · /forecast · /route · /ais · POST /fleet/load · /fleet ·
 POST /playbook/load (freeze the signed bundle aboard; clears trigger/matcher state) · GET /playbook
 (which bundle is aboard: race, id, variants/plays, signature prefix — the Lab Deploy tab reads it) ·

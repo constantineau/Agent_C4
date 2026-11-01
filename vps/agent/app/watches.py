@@ -37,7 +37,7 @@ def get_watch(now=None):
 def set_watch(body):
     """One write endpoint for both surfaces:
       {plan: {...}}                          — replace the whole plan (Lab homework / block editor)
-      {action: hold|swap|all_hands, minutes} — the iPad quick edits
+      {action: hold|swap|all_hands|set_on, minutes|start+on} — the iPad quick edits
       {clear: true}                          — drop the plan
     Returns the fresh get_watch()."""
     body = body or {}
@@ -48,8 +48,9 @@ def set_watch(body):
         stored = watchplan.normalize(body["plan"])
         stored["updated_at"] = now
     elif body.get("action"):
-        stored = watchplan.apply_edit(get_plan(), str(body["action"]),
-                                      now, minutes=body.get("minutes"))
+        stored = watchplan.apply_edit(get_plan(), str(body["action"]), now,
+                                      minutes=body.get("minutes"), start=body.get("start"),
+                                      on=body.get("on"))
     else:
         return get_watch(now)
     datasource.active().save_watch_plan(stored)

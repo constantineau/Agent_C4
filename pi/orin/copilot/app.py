@@ -128,18 +128,40 @@ def narrate_reset(req: NarrateRequest):
     return copilot.reset_narration(route=req.route)
 
 
+RACING = "Racing now. Not loaded."
+CANT_TELL = "Can't check the race. Not loaded."
+
+
+def race_gate():
+    """None when the Pi says the boat is not racing; else the refusal. Fails closed."""
+    try:
+        state = EngineClient().racing()
+    except Exception:  # noqa: BLE001
+        state = {}
+    racing = state.get("racing") if isinstance(state, dict) else None
+    if racing is False:
+        return None
+    return {"loaded": False, "detail": RACING if racing is True else CANT_TELL}
+
+
 @app.post("/playbook/load")
 def playbook_load(body: dict):
     """Load a frozen playbook bundle — written atomically to PLAYBOOK_PATH, overwriting any prior.
     Every consumer re-reads the file per request, so it takes effect immediately (no restart).
     Body is the bundle itself, or {bundle: ...} — same contract as the engine's /playbook/load.
-    This changes which HOMEWORK the copilot interprets; it still takes no action."""
+    This changes which HOMEWORK the copilot interprets; it still takes no action.
+
+    Frozen at the gun (RRS 41): the Orin has no race log, so it asks the Pi engine (GET /racing)
+    and refuses while the boat is racing, and also when it can't tell (fail closed)."""
     import json as _json
     import os as _os
     body = body or {}
     bundle = body.get("bundle") if "variants" not in body else body
     if not bundle or not bundle.get("variants"):
         return {"loaded": False, "detail": "no bundle with variants"}
+    gate = race_gate()
+    if gate:
+        return gate
     path = config.PLAYBOOK_PATH
     if not path:
         return {"loaded": False, "detail": "PLAYBOOK_PATH is not configured on this copilot"}

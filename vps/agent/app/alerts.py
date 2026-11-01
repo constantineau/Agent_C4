@@ -14,8 +14,10 @@ be run from a threadpool (synchronous DB pool) every ALERT_EVAL_SECONDS.
 Design notes / caveats:
 - Thresholds are env-tunable first-cut values; the exit test is an acceptable false-positive
   rate over two practice sails, so expect to tune ALERT_* against real archives.
-- Safety rules (AIS, depth, stale data) always matter; performance/tactical rules (polar
-  deficit, wind shift) carry the usual RRS 41 caveat in a race — the agent prompt says so.
+- RRS 41: every alert kind is classed below (SAFETY_KINDS vs ADVICE_KINDS). In race mode only
+  safety alerts are made, served or pushed; advice alerts (slow vs polar, a wind shift with a
+  favoured side, rotate the driver) are customized performance/tactical help from shore and are
+  withheld. An unknown kind counts as advice (fail closed).
 - Debounce timing is kept in-process (`_pending`, monotonic); after a restart a condition
   re-accumulates over one window before raising, which is fine. The DB table is the durable
   state + history, not the sub-window debounce clock.
@@ -24,7 +26,7 @@ import os
 import time
 
 from .db import pool
-from . import tools
+from . import race_mode, tools
 
 BOAT_ID = os.environ.get("BOAT_ID", "sr33")
 EVAL_SECONDS = int(os.environ.get("ALERT_EVAL_SECONDS", "15"))
@@ -48,6 +50,26 @@ DEBOUNCE_S = {
     "fatigue": float(os.environ.get("ALERT_DEBOUNCE_FATIGUE", "45")),
 }
 _DEFAULT_DEBOUNCE = 30.0
+
+# RRS 41 class of every alert kind (docs/RRS41_COMPLIANCE.md §2: safety may stay in a race).
+SAFETY_KINDS = frozenset({
+    "ais",              # collision guard: own AIS + CPA math
+    "depth_shoaling",   # running aground
+    "stale_telemetry",  # the data the crew is looking at is old or gone
+})
+ADVICE_KINDS = frozenset({
+    "polar_deficit",    # performance coaching ("Slow: 82% of target")
+    "wind_shift",       # tactics ("Favour the left side")
+    "fatigue",          # crew performance ("Rotate the driver now")
+})
+
+
+def allowed(kind, racing=None) -> bool:
+    """May an alert of this kind reach the crew now? Safety always; anything else only when not
+    racing. `racing` defaults to the cloud's race mode (fail closed: unknown mode is racing)."""
+    if kind in SAFETY_KINDS:
+        return True
+    return not (race_mode.racing() if racing is None else racing)
 _SEV_ORDER = {"danger": 0, "warn": 1, "info": 2}
 
 # key -> monotonic time the condition was first seen (continuously) true
@@ -130,7 +152,8 @@ def _conditions():
     except Exception:
         pass
 
-    return out
+    racing = race_mode.racing()
+    return [c for c in out if allowed(c["kind"], racing)]
 
 
 # --- state helpers ---------------------------------------------------------------------
@@ -187,9 +210,11 @@ def evaluate():
                 if k not in firing:
                     cur.execute("UPDATE alerts SET cleared_at=now(), updated_at=now() WHERE id=%s",
                                 (a["id"],))
-                    changes.append({"event": "cleared", "alert": {
-                        "key": k, "kind": a["kind"], "severity": a["severity"],
-                        "message": a["message"]}})
+                    gone = {"key": k, "kind": a["kind"], "severity": a["severity"],
+                            "message": a["message"]}
+                    if not allowed(a["kind"]):
+                        gone["message"] = ""     # withheld advice: clear it without its text
+                    changes.append({"event": "cleared", "alert": gone})
         conn.commit()
     return changes
 
@@ -197,8 +222,11 @@ def evaluate():
 def active_alerts():
     """Currently-active alerts, most severe first (then oldest first)."""
     rows = _active_rows()
+    racing = race_mode.racing()
     items = []
     for r in rows.values():
+        if not allowed(r["kind"], racing):
+            continue                     # race mode: advice withheld, even if still on record
         items.append({"key": r["key"], "kind": r["kind"], "severity": r["severity"],
                       "message": r["message"],
                       "age_s": round(time.time() - r["raised_epoch"]) if r.get("raised_epoch") else None})

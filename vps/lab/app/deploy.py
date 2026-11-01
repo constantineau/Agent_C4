@@ -50,6 +50,22 @@ def _post_json(url, body, timeout=25):
         return False, {"error": str(exc)}
 
 
+# ---- frozen at the gun (RRS 41) ------------------------------------------------------------------
+# Everything Deploy sends is shore-computed homework. The BOAT is the authority: every load endpoint
+# refuses while its race log has a race session running (vps/agent/app/racegate.py). The Lab is best
+# effort on top: it sends nothing once the race has started, by the plume's rule (plume.race_start_of:
+# our gun, else the first minute of the start date). With no start known it sends, and the boat
+# decides.
+RACE_STARTED = "Race started. Not sent."
+_clock = time.time                    # the real clock (tests swap it)
+
+
+def race_start(definition):
+    """The race's start by the plume's rule, or None when nothing is known."""
+    from . import plume
+    return plume.race_start_of({"definition": definition or {}})
+
+
 def push(race_id):
     """Push the locked homework straight onto the boat — no downloads, no SD card. Course/fleet/
     checklist/watch + the signed playbook → the Pi engine over Tailscale; the same playbook → the
@@ -60,6 +76,10 @@ def push(race_id):
     pkg = package(race_id)
     if not pkg:
         return None
+    rs = race_start(store.get_race(race_id))
+    if rs is not None and _clock() >= rs:
+        return {"race_id": race_id, "ok": False, "refused": True, "race_start": int(rs),
+                "detail": RACE_STARTED, "steps": []}
     lock = labstate.get(_lock_key(race_id)) or {}
     bundle = pbstore.get(lock.get("playbook_id")) if lock.get("playbook_id") else None
     eng = os.environ.get("DEPLOY_PI_ENGINE_URL", "http://100.79.180.102:8200").rstrip("/")
@@ -89,11 +109,13 @@ def push(race_id):
     elif not steps[-1]["ok"] and isinstance(steps[-1]["detail"], dict) \
             and not steps[-1]["detail"].get("error"):
         steps[-1]["detail"]["error"] = str(steps[-1]["detail"].get("detail") or "Not loaded.")[:200]
-    step("pi-engine", "fleet", f"{eng}/fleet/load", pkg["fleet_load"])
+    # a boat that refuses (racing) answers loaded: false — never a green step
+    taken = lambda r: r.get("loaded") is not False  # noqa: E731
+    step("pi-engine", "fleet", f"{eng}/fleet/load", pkg["fleet_load"], check=taken)
     if (pkg.get("checklist_load") or {}).get("items"):
-        step("pi-engine", "checklist", f"{eng}/checklist/load", pkg["checklist_load"])
+        step("pi-engine", "checklist", f"{eng}/checklist/load", pkg["checklist_load"], check=taken)
     if pkg.get("watch_load"):
-        step("pi-engine", "watch", f"{eng}/watch", pkg["watch_load"])
+        step("pi-engine", "watch", f"{eng}/watch", pkg["watch_load"], check=taken)
     if bundle:
         step("pi-engine", "playbook", f"{eng}/playbook/load", bundle,
              check=lambda r: r.get("loaded"))

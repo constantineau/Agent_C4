@@ -99,32 +99,28 @@ def started(plume, t):
 
 
 def race_session():
-    """The boat's own race log: the running session if it is a RACE, else None. The crew taps it on
-    at the gun and off at the finish on the iPad — the authority on "racing" aboard. If the log
-    can't be read, fail closed (treated as racing)."""
+    """The boat's race log check, shared by every homework load (app/racegate.py): the running
+    RACE session, else None; an unreadable log counts as racing. Imported lazily, so this file
+    also loads on its own (the Lab's tests load it by path); then it fails closed."""
     try:
-        from . import racelog
-        src = racelog._src()
-        if src is None:
-            return None                # no onboard race log (cloud) — nothing to consult
-        cur = src.session_current()
-        return cur if cur and str(cur.get("kind") or "").lower() == "race" else None
+        from . import racegate
     except Exception:  # noqa: BLE001
-        return {"kind": "race", "start_ts": None, "note": "race log unreadable"}
-
-
-_LOCK = threading.Lock()        # one load at a time: check → write
+        return {"kind": "race", "start_ts": None, "note": "race gate unavailable"}
+    return racegate.race_session()
 
 
 def _session_lock():
-    """The race log's session lock (taken by racelog.start) — held across the race-session check
-    and the write, so a session can't start in between. If the race log can't be imported,
-    race_session() already fails closed, so a private lock is enough."""
+    """The race log's session lock (racegate.session_lock), held across the check and the write.
+    Standalone, race_session() already fails closed, so a private lock is enough."""
     try:
-        from . import racelog
-        return racelog.SESSION_LOCK
+        from . import racegate
     except Exception:  # noqa: BLE001
         return threading.Lock()
+    return racegate.session_lock()
+
+
+RACING = "Racing now. Not loaded."
+_LOCK = threading.Lock()        # one load at a time: check → write
 
 
 def _read(path=None):
@@ -166,7 +162,7 @@ def load(plume, now=None):
     with _LOCK, _session_lock():
         t = time.time() if now is None else now
         if race_session():
-            return {"loaded": False, "detail": "Racing now. Not loaded."}
+            return {"loaded": False, "detail": RACING}
         if started(plume, t):
             return {"loaded": False, "detail": "Race already started. Not loaded."}
         gen = plume.get("generated_at")

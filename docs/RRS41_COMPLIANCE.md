@@ -331,6 +331,64 @@ mid-race.
 
 ---
 
+## 8. Frozen at the gun — what each path does while racing (2026-11-01)
+
+The bright line (§5, §6) is enforced in code, not by habit. The boat is the authority: its own race
+log (the crew taps race start at the gun, race end at the finish) says whether it is racing. One
+helper, `vps/agent/app/racegate.py`, decides for every load: a running session of kind `race` is
+racing; a race log that can't be read is racing (fail closed); the check and the write happen under
+the race log's session lock, so a session can't start in between. A refusal is
+`{"loaded": false, "detail": "Racing now. Not loaded."}`.
+
+**Pi engine (`pi/engine/engine_app.py`)**
+
+| Endpoint | Sender | While racing | Why |
+|---|---|---|---|
+| POST /course/load | Lab Deploy | **Refused** | Shore homework. A course change mid-race means ending the race session first. |
+| POST /fleet/load | Lab Deploy | **Refused** | Shore homework (roster, scoring, own rating). |
+| POST /playbook/load | Lab Deploy | **Refused** | Shore-computed strategy: the core of the rule. |
+| POST /checklist/load | Lab Deploy | **Refused** | Shore homework. |
+| POST /watch `{plan}` (a whole plan) | Lab Deploy | **Refused** | A whole new schedule is shore homework. |
+| POST /plume/load | Lab plume push | **Refused** (unchanged, now via racegate) | Shore forecast for this route. |
+| POST /reroute/assets | Lab Deploy | **Refused** (unchanged, now via racegate) | Shore chart + boat profile. |
+| POST /plume/onboard | the boat's own Orin | Taken | Own computer on public data. |
+| POST /watch `{action}` / `{clear}` | iPad | Taken | Crew edits: hold, swap, all hands, and one block's team (`set_on`, the tap-a-block edit, which used to send a whole plan). |
+| POST /checklist/ack | iPad | Taken | The crew's own ack. |
+| POST /sails/state | iPad | Taken | The crew's own sail state. |
+| POST /session/start, /session/end | iPad | Taken | The race log itself. |
+| POST /course/practice | iPad | Taken | Built onboard from live position + wind. |
+| POST /gps/show, /gps/clear | iPad | Taken | Sends what's aboard to the plotter; computes nothing ashore. |
+| POST /reoptimize/run, /reroute/run | iPad | Taken | Onboard re-routes (Pi / Orin) on public data. |
+| GET /racing | Orin copilot | — | `{racing: bool}`, the same rule; what the copilot asks. |
+
+**Orin copilot (`pi/orin/copilot/app.py`)**: POST /playbook/load asks the Pi (`GET /racing`) and
+refuses when the Pi says racing, and also when it can't tell (no answer, an engine without /racing,
+a bad answer): "Can't check the race. Not loaded." The other POSTs (/brief, /strategy, /narrate,
+/narrate/reset, /dashboard, /detail) take no shore content.
+
+**Lab Deploy (`vps/lab/app/deploy.py`)**: best effort on top of the boat. Push sends nothing once the
+race has started, by the plume's rule (`plume.race_start_of`: our gun, else the first minute of the
+start date in the venue's time zone): "Race started. Not sent." With no start known it sends and the
+boat decides. A boat refusal on any step is a red step.
+
+**Cloud agent (`vps/agent/app/main.py`)**: the cloud has no race log; its race mode is the gate.
+In race mode POST /course/load and a whole-plan POST /watch answer 409 "Racing now. Not loaded."
+(audited); watch quick edits are taken.
+
+**Cloud alerts (`vps/agent/app/alerts.py`)**: in race mode only safety alerts are made, served
+(/alerts, get_alerts, the /ws opening push) or pushed. An unknown kind counts as advice.
+
+| Alert kind | Class | In race mode |
+|---|---|---|
+| `ais` (closing contact, CPA/TCPA) | Safety | Kept |
+| `depth_shoaling` | Safety | Kept |
+| `stale_telemetry` (no or old data) | Safety | Kept |
+| `polar_deficit` ("Slow: 82% of target") | Performance advice | Withheld; cleared without its text |
+| `wind_shift` ("Favour the left side") | Tactical advice | Withheld; cleared without its text |
+| `fatigue` ("Rotate the driver now") | Performance advice | Withheld; cleared without its text |
+
+---
+
 *Sources: World Sailing RRS 2025–2028 Rule 41 (racingrulesofsailing.org); 2026 Bayview Mackinac
 Race Notice of Race, `2026NOR V6 111925 Approved_Post` (bycmack.com). Re-verify against the
 as-published Sailing Instructions before the race.*
