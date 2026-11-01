@@ -299,5 +299,14 @@ check("GRIBs older than GRIB_KEEP_H deleted, newer kept",
       n >= 1 and not os.path.exists(old) and os.listdir(os.path.join(os.environ["GRIB_CACHE"], "gfs")))
 check("online probe is a fast no on a closed port", ob.online("127.0.0.1:9", timeout=1) is False)
 
+
+# long ids must not truncate away the route hash in the store filename
+_t0 = NOW + 3600
+_long = {"available": True, "race_id": "r" * 100, "variant": "left-route"}
+_a = ob.resolve_spec(dict(_long, points=[{"lat": 44, "lon": -87, "t": _t0}, {"lat": 45, "lon": -86, "t": _t0 + 3600}]), None, NOW)
+_b = ob.resolve_spec(dict(_long, points=[{"lat": 44, "lon": -87, "t": _t0}, {"lat": 45.5, "lon": -86, "t": _t0 + 3600}]), None, NOW)
+check("long ids keep distinct store keys under 120 chars",
+      _a and _b and len(_a["key"]) <= 120 and len(_b["key"]) <= 120 and _a["key"] != _b["key"])
+
 print("\nALL OK" if ok else "\nFAILURES")
 raise SystemExit(0 if ok else 1)

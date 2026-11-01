@@ -139,8 +139,9 @@ def resolve_spec(track, conditions, now):
         shift = progress_shift(pts, boat, now)
         path = [dict(p, t=p["t"] + shift) for p in pts] if shift else pts
         if path[-1]["t"] >= now - lab.BACK_H * 3600:
-            race = lab._safe((track or {}).get("race_id")) or "race"
-            variant = lab._safe((track or {}).get("variant")) or "plan"
+            # ids capped so the hash and shift survive the store's 120-char filename cut
+            race = (lab._safe((track or {}).get("race_id")) or "race")[:40]
+            variant = (lab._safe((track or {}).get("variant")) or "plan")[:40]
             name = (track or {}).get("variant_label") or "planned"
             key = f"onboard__{race}__{variant}__{_route_hash(pts)}"
             if shift:
