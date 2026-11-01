@@ -430,7 +430,7 @@ def run(req, now=None, on_progress=None, on_phase=None, is_online=None):
         if not boat:
             warnings.insert(0, NO_BOAT)
         until = weather.get("forecast_until")
-        if until and res.get("finish_epoch") and res["finish_epoch"] > until + 3600:
+        if until and res.get("finish_epoch") and res["finish_epoch"] > until:
             warnings.insert(0, SHORT_FORECAST)
         if weather.get("missing"):
             warnings.append("No forecast from " + ", ".join(weather["missing"]) + ".")
