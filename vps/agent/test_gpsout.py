@@ -46,12 +46,12 @@ check("waypoints named C4-01…", sent["payload"]["waypoints"][0]["name"] == "C4
 r = gpsout.show(variant="middle")
 check("named variant honored", r["shown"] and "middle" in (r["route"] or ""))
 r = gpsout.show(variant="bare")
-check("pathless variant → honest note", not r["shown"] and "no route track" in r["note"])
+check("pathless variant → honest note", not r["shown"] and "has no track" in r["note"])
 r = gpsout.show(variant="nope")
-check("unknown variant → honest note", not r["shown"] and "not in the bundle" in r["note"])
+check("unknown variant → honest note", not r["shown"] and "isn't in the gameplan" in r["note"])
 gpsout.deviation._load_playbook = lambda: None
 r = gpsout.show()
-check("no playbook → honest note", not r["shown"] and "no playbook" in r["note"])
+check("no playbook → honest note", not r["shown"] and "No gameplan" in r["note"])
 
 print("show (reoptimize):")
 gpsout.reoptimize.get_reoptimize = lambda route=None: {"available": True, "path": PATH[:10]}

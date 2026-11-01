@@ -51,7 +51,7 @@ r = selector.get_selector()
 print("  ", r["action"], "| conf", r["confidence"], "| by", r["driven_by"])
 check("all three signals drive it", set(["get_tactics", "get_drift", "get_deviation"]) <= set(r["driven_by"]))
 check("confidence higher than the bare switch (>0.75)", r["confidence"] > 0.75)
-check("why cites the reinforcement", "Reinforced" in r["why"])
+check("why cites the reinforcement", "Also:" in r["why"])
 
 # --- persistent shift favours RIGHT, but NO right variant aboard → OFF-SCRIPT (tier 2) -----------
 print("off-script (no branch for the favoured side):")
@@ -61,7 +61,7 @@ print("  ", r["action"], "| tier", r["tier"], "|", r["value"])
 check("action off_script", r["action"] == "off_script")
 check("tier 2", r["tier"] == 2)
 check("no target variant", r["target_variant"] is None)
-check("consider mentions sailing your own", "your own" in r["consider"])
+check("consider mentions sailing your best angle", "best angle" in r["consider"])
 
 # --- persistent shift CONFIRMS the recommended side → HOLD confirmed -----------------------------
 print("hold confirmed:")

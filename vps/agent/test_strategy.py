@@ -46,7 +46,7 @@ check("available", r["available"])
 check("concordance strong", r["concordance"]["strength"] == "strong")
 check("lean left", r["concordance"]["lean"] == "left")
 check("recommendation is a switch", r["recommendation"]["action"].startswith("Switch"))
-check("assessment says converging left", "converging left" in r["assessment"].lower())
+check("assessment says agree left", "agree left" in r["assessment"].lower())
 check("every picture item grounded", grounded(r["picture"]))
 check("recommendation grounded", bool(r["recommendation"]["grounded_in"]))
 check("picture has a concordance row", any(p["signal"] == "concordance" for p in r["picture"]))
@@ -108,7 +108,7 @@ stub(bundle=None, tac=wind(False, "either", "steady", osc=10),
      fleet={"available": False, "fleet": [], "traffic": []})
 r = strategy.get_strategy_signals()
 check("oscillating no-playbook still available", r["available"] is True)
-check("oscillating rec mentions phase/oscillating", "phase" in r["recommendation"]["action"].lower() or "oscillat" in r["recommendation"]["action"].lower())
+check("oscillating rec says play the shifts", "shifts" in r["recommendation"]["action"].lower())
 
 # --- 5. NOTHING aboard → not available ---------------------------------------------------------------
 print("nothing aboard:")
@@ -138,7 +138,7 @@ check("re-route offer attached", (r.get("reoptimize") or {}).get("available") is
 check("offer is compact (no heavy path array)", "path" not in (r.get("reoptimize") or {}))
 check("offer keeps eta/tacks/sail_plan", r["reoptimize"].get("eta_min") == 254 and r["reoptimize"].get("tacks") == 9)
 check("rec flagged reoptimize ready", r["recommendation"].get("reoptimize") == "ready")
-check("rationale mentions the re-route ETA", "re-route is ready" in r["recommendation"]["rationale"])
+check("rationale mentions the re-route ETA", "New route ready" in r["recommendation"]["rationale"])
 check("re-optimizer was actually called", _ro_calls["n"] == 1)
 
 # an ON-PLAN hold must NOT run the heavy re-optimizer.

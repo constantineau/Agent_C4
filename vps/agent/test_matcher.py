@@ -82,7 +82,7 @@ check("no playbook -> na", matcher.get_plays().get("available") is False)
 stub(bundle={"race_id": "u", "variants": [{"id": "m"}]})
 r = matcher.get_plays()
 check("v1 bundle (no plays) -> na with a v2 hint", r.get("available") is False
-      and "v2" in (r.get("note") or ""))
+      and "Rebuild" in (r.get("note") or ""))
 
 print("2) arm slow / clear fast (sustain discipline)")
 matcher.SUSTAIN_SCALE = 1.0

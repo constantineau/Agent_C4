@@ -158,20 +158,20 @@ def _vs_playbook(bundle, fresh_path):
     fresh path points onto the frozen variant polyline)."""
     try:
         if not bundle:
-            return {"available": False, "note": "no playbook aboard to compare against"}
+            return {"available": False, "note": "No gameplan to compare."}
         v = deviation._pick_variant(bundle, None)
         frozen = ((v.get("route") or {}).get("path")) if v else None
         if not frozen or len(frozen) < 2:
-            return {"available": False, "note": "active variant has no frozen track"}
+            return {"available": False, "note": "Gameplan option has no track."}
         xtes = [fix["perp"] for p in fresh_path
                 if (fix := deviation._project(p["lat"], p["lon"], frozen))]
         if not xtes:
-            return {"available": False, "note": "could not compare"}
+            return {"available": False, "note": "Could not compare."}
         return {"available": True, "variant": str(v.get("id")),
                 "max_divergence_nm": round(max(xtes), 2),
                 "mean_divergence_nm": round(sum(xtes) / len(xtes), 2)}
     except Exception:
-        return {"available": False, "note": "comparison failed"}
+        return {"available": False, "note": "Comparison failed."}
 
 
 def get_reoptimize(route=None):
@@ -179,15 +179,15 @@ def get_reoptimize(route=None):
     off-playbook, with its divergence from the frozen plan. `available:False` with no fix / no course."""
     nav = NAV.get_navigator(route)
     if not nav.get("available"):
-        return {"available": False, "note": nav.get("note", "no navigator fix")}
+        return {"available": False, "note": nav.get("note", "No position yet.")}
     marks = NAV._marks(nav["route"])
     if not marks:
-        return {"available": False, "note": "no course marks loaded"}
+        return {"available": False, "note": "No course loaded."}
     remaining = _remaining_marks(nav, marks)
     s = NAV._latest()
     slat, slon = s.get("lat"), s.get("lon")
     if slat is None:
-        return {"available": False, "note": "no position fix"}
+        return {"available": False, "note": "No position yet."}
 
     live = (s.get("tws"), s.get("twd"))
     bundle = deviation._load_playbook()
@@ -296,10 +296,10 @@ def _compute(nav, remaining, slat, slon, live, bundle, avoid, polys, ctx):
                                   "routed_marks": done,
                                   "horizon_h": round(routing.MAX_STEPS * routing.DT_H, 1)},
                    "wind_source": "forecast" if use_fcst else "live wind (no forecast)",
-                   "note": (f"Onboard re-route INCOMPLETE — the leg to {m['name']} stopped "
-                            f"{leg.get('short_nm')} nm short of the mark (no clear path within "
-                            f"the {routing.MAX_STEPS * routing.DT_H:.0f} h search horizon, or the "
-                            "obstacle homework blocks it). No route offered rather than a wrong one.")}
+                   # Why: no clear path within the routing.MAX_STEPS * DT_H search horizon, or the
+                   # obstacle homework blocks it. No route offered rather than a wrong one.
+                   "note": (f"No new route. Couldn't reach {m['name']} "
+                            f"({leg.get('short_nm')} nm short).")}
             _cache.update(ctx=dict(ctx, from_live_wind=not use_fcst), t=time.time(), val=out)
             return out
         full_path += leg["path"][1:]          # skip the duplicated leg-start point
@@ -334,15 +334,15 @@ def _compute(nav, remaining, slat, slon, live, bundle, avoid, polys, ctx):
         "leg_end_idx": leg_end_idx,           # one per remaining mark, in order
         "avoids_islands": len(avoid), "avoids_zones": len(polys),
         "vs_playbook": _vs_playbook(bundle, full_path),
-        "note": ("Onboard re-optimization — a FRESH route on your own polars through the "
-                 + ("Open-Meteo forecast" if use_fcst else "current measured wind")
-                 + ", from your position through the remaining marks"
-                 + (", avoiding " + " + ".join(
-                     ([f"{len(avoid)} charted island/disk(s)"] if avoid else [])
-                     + ([f"{len(polys)} exclusion zone(s)"] if polys else []))
+        # Fresh route on the boat's own polars, through the forecast (or measured wind when there
+        # is none), from here through the remaining marks. Off the frozen playbook; legal in-race.
+        "note": ("New route from here, off the gameplan"
+                 + (", avoiding " + " and ".join(
+                     ([f"{len(avoid)} island(s)"] if avoid else [])
+                     + ([f"{len(polys)} no-go zone(s)"] if polys else []))
+                    + "."
                     if (avoid or polys) else
-                    " (open-water — no obstacle homework aboard; verify against the chart)")
-                 + ". OFF THE PLAYBOOK (not the frozen homework) — legal in-race, flagged as a re-route."),
+                    ". No obstacles loaded, check the chart.")),
     }
     # record WHICH wind this route came from — _drifted needs it to decide whether live-wind
     # movement can invalidate the answer at all

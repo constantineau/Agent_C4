@@ -79,7 +79,7 @@ check("leverage ~0 on the rhumb", abs(byboat["Defiance"].get("leverage_nm") or 0
 # --- no roster loaded → graceful unavailable ------------------------------------------------
 fleet.datasource.active = lambda: FakeSource({}, TARGETS, MARKS)
 empty = fleet.get_fleet()
-check("no roster → available False with a note", empty["available"] is False and "roster" in empty["note"].lower())
+check("no roster → available False with a note", empty["available"] is False and "fleet list" in empty["note"].lower())
 
 # --- ToD scoring path -----------------------------------------------------------------------
 BLOB_TOD = {"fleet": ROSTER, "scoring": {"system": "ORC", "method": "Time-on-Distance (ToD)"},
@@ -128,7 +128,7 @@ fleet.datasource.active = lambda: FakeSource(BLOB_NP, TARGETS, MARKS)
 tracker._reset_cache()
 rnp = fleet.get_fleet()
 check("not-permitted tracker → 0 tracker rows", rnp["count_tracker"] == 0)
-check("not-permitted tracker → withheld gap note", any("not permitted" in g.lower() for g in (rnp.get("gaps") or [])))
+check("not-permitted tracker → withheld gap note", any("not allowed" in g.lower() for g in (rnp.get("gaps") or [])))
 check("not-permitted tracker status flags permitted False", rnp["tracker"] and rnp["tracker"]["permitted"] is False)
 
 # (3) identity enrichment: an unmatched AIS target sitting ON a roster boat's tracker fix gets resolved.
@@ -223,7 +223,7 @@ check("DR with no SOG uses the handicap-scaled own pace (Defiance advanced)",
       by["Defiance"]["dtf_nm"] < 61.0 and by["Defiance"].get("dr_nm") is not None)
 check("DR recomputed the corrected delta", by["Windquest"]["corrected_delta_s"] != 400)
 check("no-fix boat unranked at the bottom with a note",
-      by["Ghost"].get("rank") is None and "no fix" in (by["Ghost"].get("note") or ""))
+      by["Ghost"].get("rank") is None and "not seen" in (by["Ghost"].get("note") or ""))
 check("own_rank summary sane", own_rank["of"] == 4 and own_rank["unranked"] == 1)
 check("live AIS row is NOT dead-reckoned", by["Il Mostro"]["dtf_nm"] == 40.0
       and "dr_nm" not in by["Il Mostro"])

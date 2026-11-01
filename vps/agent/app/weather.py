@@ -75,7 +75,7 @@ def get_forecast(lat: float, lon: float, hours: int = 12):
     c = fetch_point(lat, lon)
     hrs = c.get("hours") or []
     if not hrs:
-        return {"available": False, "note": "forecast unavailable (no network?)",
+        return {"available": False, "note": "No forecast. No internet?",
                 "error": c.get("error")}
     now = time.time()
     up = [{"in_h": round((t - now) / 3600, 1), "tws": round(s), "twd": round(w)}

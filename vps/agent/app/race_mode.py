@@ -37,9 +37,8 @@ GATED_TOOLS = frozenset({
 })
 
 REFUSAL = (
-    "Racing — outside tactical help withheld (RRS 41). I can give safety (traffic/depth/alerts), "
-    "your own instrument readings, and information available to all boats. Switch to Practice for "
-    "tactics, routing, polar/sail coaching, fatigue, and navigation calls."
+    "Racing: no tactical help (RRS 41). I can still give safety alerts, your instruments and "
+    "public info. Switch to Practice for tactics."
 )
 
 # Keyword groups for the no-LLM fallback path: if a question matches one of these while racing,

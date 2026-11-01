@@ -345,14 +345,14 @@ try:
     check("a matcher naming no device on the bus is a warn, not silence",
           p["status"] == "warn" and "garmin-gwind" in p["checks"]["policy_binds"]["unresolvable"])
     check("...and says what it means: those channels are unranked in practice",
-          "unranked in practice" in p["checks"]["policy_binds"]["reason"])
+          "using any source" in p["checks"]["policy_binds"]["reason"])
 finally:
     sp.DEFAULT_PRIORITY = _orig
 
 print("provenance — guards:")
 check("no channels at all is 'unknown', never a false all-clear",
       sh.assess_provenance({})["status"] == "unknown")
-check("...and says so", "no live channels" in sh.assess_provenance({})["reason"])
+check("...and says so", "no live sensor data" in sh.assess_provenance({})["reason"])
 check("a computed channel is marked as arithmetic, not measurement",
       sh.assess_provenance(channels(dict(HEALTHY_SPEC,
                                          twd=("°", [("derived-data", 264.4, 1.0)]))))
@@ -478,10 +478,10 @@ check("the check still runs — a magnetometer and a position track are differen
       h1["heading"]["status"] == "danger")
 check("...but it does not pretend to redundancy it does not have",
       h1["heading"]["reference"]["independent"] is False
-      and "no COG publisher independent of" in (h1["heading"]["note"] or ""))
+      and "not a separate GPS" in (h1["heading"]["note"] or ""))
 check("...and that rides as a NOTE, not a flag — it is true on every poll of every race",
-      any("independent of" in n for n in h1["notes"])
-      and not any("independent of" in f for f in h1["flags"]))
+      any("separate GPS" in n for n in h1["notes"])
+      and not any("separate GPS" in f for f in h1["flags"]))
 
 # --- the window is the detection latency, and that is what looked like a bug ----------------
 # The first full-race replay read 35-of-36 `unknown` frames as "the check is silent on the data
@@ -502,7 +502,7 @@ def straddle(after):
 check("a window that is half healthy and half misaligned reports unknown, not a false bias",
       sh.heading_bias(straddle(30))["status"] == "unknown")
 check("...and says the bias may simply be new, rather than blaming the crew's steering",
-      "only just appeared" in sh.heading_bias(straddle(30))["reason"])
+      "new offset" in sh.heading_bias(straddle(30))["reason"])
 check("one window later it is a clean danger — the quiet is self-clearing",
       sh.heading_bias(straddle(STEP))["status"] == "danger")
 check("the window before the fault is a clean ok, so this is a transition and not a blind spot",
@@ -560,7 +560,7 @@ check("a bias that properly clears the band releases", sweep([15.5, 14.5, 12.9])
 check("...and one still inside it does not", sweep([15.5, 13.1])[-1] == "warn")
 check("a held warn says it is held, and why",
       sh.heading_bias(steady(14.0), previous="warn").get("held") is True
-      and "holding the warning" in sh.heading_bias(steady(14.0), previous="warn")["reason"])
+      and "Warning held" in sh.heading_bias(steady(14.0), previous="warn")["reason"])
 check("the band is published with the other thresholds",
       sh.heading_bias(steady(3.0))["thresholds"]["warn_release_deg"] == sh.HEADING_RELEASE_DEG)
 check("the RELEASE BAND is warn-only, so it alone never moves trust_window's danger intervals "
@@ -602,7 +602,7 @@ check("...and so does the slow one — a boat that stopped did not fix its compa
       sh.heading_bias(slow(), previous="danger")["status"] == "danger")
 check("a held danger SAYS it is held, and keeps the window's own reason",
       sh.heading_bias(disagreeing(), previous="danger").get("held") is True
-      and "holding the alarm" in sh.heading_bias(disagreeing(), previous="danger")["reason"]
+      and "Alarm held" in sh.heading_bias(disagreeing(), previous="danger")["reason"]
       and "spread" in sh.heading_bias(disagreeing(), previous="danger")["held_reason"])
 check("only DANGER is held — an `ok` or a `warn` still goes honestly quiet",
       sh.heading_bias(disagreeing(), previous="ok")["status"] == "unknown"
@@ -620,7 +620,7 @@ check("past it the tile admits it cannot say, rather than citing a stale alarm",
       sh.heading_bias(disagreeing(), previous="danger",
                       previous_age_s=HOLD + 60)["status"] == "unknown")
 check("...and says how long it has been unjudgeable rather than just falling silent",
-      "not been judgeable" in sh.heading_bias(disagreeing(), previous="danger",
+      "unchecked for" in sh.heading_bias(disagreeing(), previous="danger",
                                               previous_age_s=HOLD + 60)["reason"])
 check("the bound is generous next to the real runs (16, 20, 9 min on Jul 18)",
       sh.HEADING_DANGER_HOLD_MIN >= 30)
