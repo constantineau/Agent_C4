@@ -149,8 +149,28 @@ d, cid, names = job.remaining_definition(DEF, "c", 2, 44.2, -82.2)
 check("from the boat, next mark on", d["courses"][0]["start"]["lat"] == 44.2 and names == ["Gate", "Finish"])
 check("islands on this leg and ahead kept", [m["name"] for m in d["courses"][0]["marks"]] == ["Rock", "Gate", "Isle"])
 d, cid, names = job.remaining_definition(DEF, "c", 3, 45.0, -82.5)
-check("last leg: only the finish (+ the island ahead)", names == ["Finish"]
-      and [m["name"] for m in d["courses"][0]["marks"]] == ["Isle"])
+check("last leg: only the finish to route to", names == ["Finish"])
+check("…every island still aboard; the rounded one without its side",
+      [(m["name"], m["rounding"]) for m in d["courses"][0]["marks"]]
+      == [("Rock", "none"), ("Isle", "port")])
+# out and back past an island (Codex repro): Start → island → A → Finish, the way home crosses it
+BACK = {"race_id": "back", "zones": [{"name": "Old no-go", "type": "exclusion", "geometry": {
+    "north": 44.25, "south": 44.15, "west": -82.3, "east": -82.2}}],
+    "courses": [{"id": "c", "start": {"lat": 44.0, "lon": -82.0},
+                 "marks": [{"name": "Rocky", "type": "island", "lat": 44.5, "lon": -82.0,
+                            "rounding": "starboard", "radius_nm": 1.5},
+                           {"name": "A", "type": "buoy", "lat": 45.0, "lon": -82.0,
+                            "rounding": "port"}],
+                 "finish": {"points": [{"lat": 44.0, "lon": -82.02}]}}]}
+d6, c6, n6 = job.remaining_definition(BACK, "c", 2, 44.95, -82.0)     # A rounded, heading home
+f6, note6 = job.load_obstacles(d6, c6, None, None, job._get_boat())
+check("way home: the rounded island is still solid", n6 == ["Finish"] and f6.blocked(44.5, -82.0))
+check("…but leaves no rounding barrier", f6.layers["rounding_barrier"] == 0)
+check("…and every zone stays, even on a sailed leg", f6.blocked(44.2, -82.25))
+d7, c7, _n = job.remaining_definition(BACK, "c", 1, 44.1, -82.0)      # before rounding it
+f7, _ = job.load_obstacles(d7, c7, None, None, job._get_boat())
+check("before rounding it: disk and barrier both", f7.blocked(44.5, -82.0)
+      and f7.layers["rounding_barrier"] > 0)
 try:
     job.remaining_definition(DEF, "c", 4, 45.3, -82.4)
     check("past the finish → refused", False)

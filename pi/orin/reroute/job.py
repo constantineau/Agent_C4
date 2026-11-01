@@ -78,8 +78,8 @@ def _nav_index_map(course):
 
 def remaining_definition(definition, course_id, next_index, lat, lon):
     """The deployed course, cut to what's left: it starts at the boat and runs from the next mark
-    (navigator index `next_index`) to the finish. Islands on the legs already sailed are dropped;
-    the ones ahead stay (they carry rounding sides). Returns (definition, course_id, mark names)."""
+    (navigator index `next_index`) to the finish. Every island stays an obstacle; the ones on legs
+    already sailed lose their rounding side (no barrier); the ones ahead keep it. Zones all stay. Returns (definition, course_id, mark names)."""
     d = copy.deepcopy(definition)
     courses = d.get("courses") or []
     course = next((c for c in courses if c.get("id") == course_id), None) or \
@@ -95,9 +95,13 @@ def remaining_definition(definition, course_id, next_index, lat, lon):
     keep, prev_nav = [], 0
     for m, k in zip(course.get("marks") or [], idx):
         if k is None:
-            if m.get("type") == "island" and m.get("lat") is not None and \
-                    (nxt == 0 or prev_nav >= nxt - 1):
-                keep.append(m)            # an island on the current leg or later
+            if m.get("type") == "island" and m.get("lat") is not None:
+                if nxt == 0 or prev_nav >= nxt - 1:
+                    keep.append(m)        # an island on the current leg or later: as deployed
+                else:
+                    # already rounded: still rock (its disk stays), but no rounding side, so its
+                    # wrong-side barrier can't block a later leg
+                    keep.append(dict(m, rounding="none"))
             continue
         prev_nav = k
         if k >= nxt:
