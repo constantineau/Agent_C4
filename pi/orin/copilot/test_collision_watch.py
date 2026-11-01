@@ -7,9 +7,10 @@ stubbed LLM, no live engine, no model. Covers GitHub #29:
   3. the polled /strategy is the engine digest — it never calls the LLM;
   4. a watch-level contact leads the coach line over "now" items;
   5. engine lost / AIS read failing / no own fix raise a "Collision watch OFF" callout;
-  6. (2026-11-02 review) every dangerous contact is shown, by TCPA; our own AIS echo never alarms
-     but a real freighter next to it does; a stale fix, a silent AIS feed and a tick that throws
-     are each "Collision watch OFF"; unknown motion is called on range; the engine's dead-reckoned
+  6. (2026-11-02 review) every dangerous contact is shown, by TCPA; our own MMSI (once set) never alarms
+     but a real freighter next to it does; a stale fix, a missing AIS receiver and a tick that
+     throws are each "Collision watch OFF" (no traffic heard is only a hint); unknown motion is
+     called on range; the engine's dead-reckoned
      numbers flow through; the copilot service binds the cable + loopback only, allow-listed.
 
     cd pi/orin && python3 -m copilot.test_collision_watch
@@ -197,7 +198,7 @@ async def scenarios() -> bool:
     return ok
 
 
-def _engine_ais(rows, own_sog_kn=6.0, fix_age=1.0, own_mmsi=None):
+def _engine_ais(rows, own_sog_kn=6.0, fix_age=1.0, own_mmsi=None, rx_age=None):
     """The ENGINE's real /ais answer (vps/agent/app/ais.py) for own ship at 45N 83W heading north
     and these raw AIS rows — so the copilot is tested on what the engine actually sends."""
     import os
@@ -219,6 +220,9 @@ def _engine_ais(rows, own_sog_kn=6.0, fix_age=1.0, own_mmsi=None):
 
         def get_fleet(self):
             return {}
+
+        def ais_receiver_age_s(self):
+            return rx_age
 
     ais_mod.datasource.active = lambda: Src()
     ais_mod.OWN_FIX_MAX_AGE_S = 30
@@ -244,26 +248,35 @@ async def review_scenarios() -> bool:
                  "sog": 15.0, "cog": 180.0}
     _fresh({"conditions": _COND, "ais": _engine_ais([ghost, freighter])})
     st = await _tick()
-    heads = [a["headline"] for a in st["active"]]
-    ok &= _check("the freighter is 'Collision risk' and leads", heads and heads[0] == "Collision risk: FREIGHTER")
-    ok &= _check("the echo raises no collision callout", not any(GHOST in h and "Collision" in h for h in heads))
+    heads = [a["headline"] for a in st["active"] if a["category"] == "safety"]
+    ok &= _check("own MMSI not set: the suspected echo still alarms (only a set MMSI is dropped)",
+                 f"Collision risk: MMSI {GHOST}" in heads)
+    ok &= _check("…and the freighter is shown too", "Collision risk: FREIGHTER" in heads)
     st = await _tick()
-    ok &= _check("the echo is named quietly: 'Own ship? MMSI 316053364' (monitor, not safety)",
-                 any(a["headline"] == f"Own ship? MMSI {GHOST}" and a["category"] == "data"
-                     and a["urgency"] == "monitor" for a in st["active"]))
+    ok &= _check("plus a quiet hint: 'Possible own-ship echo: MMSI 316053364' (monitor, not safety)",
+                 any(a["headline"] == f"Possible own-ship echo: MMSI {GHOST}" and a["category"] == "data"
+                     and a["urgency"] == "monitor" and a["detail"] == "Set own MMSI if it's us."
+                     for a in st["active"]))
     _fresh({"conditions": _COND, "ais": _engine_ais([ghost, freighter], own_mmsi=GHOST)})
     await _tick()
     st = await _tick()
-    ok &= _check("with OWN_MMSI set: only the freighter, no 'Own ship?' line",
+    ok &= _check("with OWN_MMSI set: only the freighter, no echo alarm and no hint",
                  [a["headline"] for a in st["active"]] == ["Collision risk: FREIGHTER"])
-    # the dock: stopped, the echo at 0.0 nm with SOG 0 — the live false alarm
-    # (GPS jitter: we "move" 0.1 kn toward an echo 3 m off — the live "CPA 0.0 nm / 0.7 min")
+    # Codex on #191: we're northbound at 6 kn, a boat 40 m astern at 7 kn — contact in ~78 s
+    over = {"mmsi": "366999009", "name": "OVERTAKER", "lat": 45.0 - 40 * _M, "lon": -83.0,
+            "sog": 7.0, "cog": 0.0}
+    _fresh({"conditions": _COND, "ais": _engine_ais([over])})
+    st = await _tick()
+    ok &= _check("a real boat 40 m astern overtaking at +1 kn → 'Collision risk: OVERTAKER', now",
+                 st["active"] and st["active"][0]["headline"] == "Collision risk: OVERTAKER"
+                 and st["active"][0]["urgency"] == "now")
+    # the dock: GPS jitter makes us "move" 0.1 kn toward our echo 3 m off (the live alarm). Setting
+    # OWN_MMSI once is what silences it.
     dock_ghost = dict(ghost, lat=45.0 + 3 * _M, sog=0.0, cog=0.0)
-    _fresh({"conditions": _COND, "ais": _engine_ais([dock_ghost], own_sog_kn=0.1)})
+    _fresh({"conditions": _COND, "ais": _engine_ais([dock_ghost], own_sog_kn=0.1, own_mmsi=GHOST)})
     await _tick()
     st = await _tick()
-    ok &= _check("dock: no 'Collision risk' from our own echo",
-                 not any(a["category"] == "safety" for a in st["active"]))
+    ok &= _check("dock with OWN_MMSI set: quiet", st["active"] == [])
 
     print("\n== 6b. every dangerous contact, by TCPA ==")
     _fresh({"conditions": _COND, "ais": _ais(_tgt("21", "FAR", 0.05, 11), _tgt("22", "TUG", 0.4, 3),
@@ -307,8 +320,14 @@ async def review_scenarios() -> bool:
     _fresh({"conditions": _COND, "ais": _engine_ais([], own_sog_kn=6.0)})
     await _tick()
     st = await _tick()
-    ok &= _check("under way, AIS silent → 'Collision watch OFF: no AIS heard'",
-                 [a["headline"] for a in st["active"]] == ["Collision watch OFF: no AIS heard"])
+    ok &= _check("under way, no AIS heard (open water) → a quiet 'No AIS heard for 15 min', not OFF",
+                 [(a["headline"], a["detail"], a["category"], a["urgency"]) for a in st["active"]]
+                 == [("No AIS heard for 15 min", "Check the AIS.", "data", "soon")])
+    _fresh({"conditions": _COND, "ais": _engine_ais([], own_sog_kn=6.0, rx_age=20 * 60)})
+    await _tick()
+    st = await _tick()
+    ok &= _check("the AIS transceiver gone from the bus → 'Collision watch OFF: AIS receiver missing'",
+                 [a["headline"] for a in st["active"]] == ["Collision watch OFF: AIS receiver missing"])
     _fresh({"conditions": _COND, "ais": _engine_ais([], own_sog_kn=0.0)})
     await _tick()
     st = await _tick()

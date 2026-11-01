@@ -67,13 +67,16 @@ closing" leads the line over any "now" item) and never go through the LLM — th
 line. The auto-coach publishes each tick's callouts to `GET /coach` the moment the engine reads are
 in (gathered in parallel); LLM phrasing and the crew briefs run in their own background tasks and
 swap in later. When the collision watch can't see — engine unreachable, the AIS read failing, no
-own GPS fix or one older than 30 s, or no AIS heard for 15 min while under way — a deterministic
-**"Collision watch OFF: …"** safety callout (urgency now, confirmed over two ticks) replaces the old
-silent all-clear, and `last_error` names an unreachable engine. A tick that throws publishes
-"Collision watch OFF: copilot error" instead of keeping the last result. Every contact inside the
-guard gets its own callout (act before watch, soonest TCPA first); our own MMSI is dropped by the
-engine, and a target within 50 m moving with us is called "Own ship?" (quiet, never an alarm).
-Targets are dead-reckoned to now; one with no SOG/COG is "motion unknown" and is called on range.
+own GPS fix or one older than 30 s, or the boat's AIS transceiver gone from the bus — a
+deterministic **"Collision watch OFF: …"** safety callout (urgency now, confirmed over two ticks)
+replaces the old silent all-clear, and `last_error` names an unreachable engine. A tick that throws
+publishes "Collision watch OFF: copilot error" instead of keeping the last result. Hearing no AIS
+traffic for 15 min while under way is only a quiet "No AIS heard for 15 min — Check the AIS." (open
+water can be empty). Every contact inside the guard gets its own callout (act before watch, soonest
+TCPA first). Only our configured MMSI is dropped (by the engine; see `pi/engine/README.md`, "Own
+MMSI"). A target within 50 m moving with us still alarms normally and also gets a quiet "Possible
+own-ship echo" hint to set it. Targets are dead-reckoned to now; one with no SOG/COG is "motion
+unknown" and is called on range.
 `POST /strategy` returns the fresh deterministic engine digest by default (the iPad polls it every
 ~15 s); the LLM narrative runs only on an explicit `{"use_llm": true}`. Polling a ~45 s LLM pass
 kept Ollama busy and queued the coach line behind it (an LLM strategy narrative is deferred to #53).

@@ -24,6 +24,9 @@ from . import brief as brief_mod
 
 _num = brief_mod._num
 
+# Nothing heard on AIS for this long while under way → the engine sets feed_silent (ais.py); the
+# number is only used for the hint's words when the engine didn't send last_heard_s.
+AIS_SILENT_MIN = float(os.environ.get("AIS_SILENT_MIN", "15"))
 # Collision-watch guard (mirrors the dashboard AIS tile): a CLOSING contact inside ACT → show now
 # ("collision risk"), inside the looser WATCH → show soon ("traffic closing"). env-tunable.
 AIS_ACT_CPA_NM = float(os.environ.get("COPILOT_AIS_ACT_CPA_NM", "0.5"))
@@ -89,9 +92,10 @@ def _safety_callouts(ais):
     the list comes back act before watch, then soonest TCPA, then smallest CPA.
 
     Two kinds of contact are handled apart (2026-11-02 review, item 1 + 5):
-      * a probable OWN ECHO (`own_ship: "echo?"` from the engine: within ~50 m, moving with us) is
-        never an alarm, but it is not dropped either: a quiet data callout names it, so the crew
-        can set the boat's MMSI (or see that it is a real boat alongside);
+      * a POSSIBLE OWN ECHO (`possible_echo` from the engine: within ~50 m, moving with us) is
+        checked like any contact and alarms like one (a boat 40 m astern overtaking is real). It
+        also gets a quiet hint to set the boat's MMSI; only a configured MMSI is ever dropped,
+        and the engine does that;
       * a contact with UNKNOWN MOTION (no SOG/COG yet) has no CPA. It is not "stopped": inside the
         watch range it is a safety callout on range alone, and the line says the motion is unknown
         (only while we're under way, or the engine can't say: a marina would bark all day)."""
@@ -99,10 +103,8 @@ def _safety_callouts(ais):
         return []                         # no own fix → CPA/TCPA meaningless (the blind callout says so)
     hits, echoes = [], []
     for t in ais.get("targets") or []:
-        if t.get("own_ship"):
-            if t.get("own_ship") == "echo?":
-                echoes.append(t)
-            continue
+        if t.get("possible_echo"):
+            echoes.append(t)              # a hint below — and the full check here, like any contact
         brg = _num(t.get("bearing"))
         brg_s = f" · brg {brg}°" if brg is not None else ""
         age = _num(t.get("age_s"))
@@ -135,11 +137,14 @@ def _safety_callouts(ais):
     hits.sort(key=lambda h: h[:3])
     out = [h[3] for h in hits]
     for t in echoes:
-        rm = _num(t.get("range_m"))
-        out.append(_callout(f"ais:{t.get('mmsi') or _contact_name(t)}:own?", "data", "monitor",
-                            f"Own ship? {_contact_name(t)}",
-                            (f"{rm:.0f} m off, moves with us. " if rm is not None else "Moves with us. ")
-                            + "Set own MMSI.", ["get_ais"], "med"))
+        out.append(_callout(f"ais:{t.get('mmsi') or _contact_name(t)}:echo?", "data", "monitor",
+                            f"Possible own-ship echo: {_contact_name(t)}",
+                            "Set own MMSI if it's us.", ["get_ais"], "med"))
+    if ais.get("feed_silent"):            # open water can be empty: a quiet hint, not "watch OFF"
+        heard = _num(ais.get("last_heard_s"))
+        mins = round(heard / 60) if heard is not None else round(AIS_SILENT_MIN)
+        out.append(_callout("ais:silent", "data", "soon", f"No AIS heard for {mins} min",
+                            "Check the AIS.", ["get_ais"], "med"))
     return out
 
 
@@ -151,9 +156,10 @@ def _safety_callout(ais):
 
 def _blind_callout(ais, cond):
     """The collision watch can't see — say so instead of reading as all-clear. Engine unreachable,
-    the AIS read failing, no own-ship fix (or one too old to trust), or an AIS feed that has been
-    silent while under way all leave the guard above with nothing to check, so the callout list
-    would otherwise be empty. Deterministic, safety category (it outranks everything and never goes
+    the AIS read failing, no own-ship fix (or one too old to trust), or the boat's AIS transceiver
+    gone from the bus all leave the guard above with nothing to check, so the callout list would
+    otherwise be empty. (Hearing no traffic for a while is not blind — open water can be empty —
+    so that is a quiet "No AIS heard" hint from `_safety_callouts`.) Deterministic, safety category (it outranks everything and never goes
     through the LLM); confirmed over two reads so one dropped request doesn't bark."""
     look = "Keep a lookout."
     if ais.get("available", True) is False:
@@ -171,11 +177,9 @@ def _blind_callout(ais, cond):
         else:
             cid, headline, detail = ("blind:fix", "Collision watch OFF: no GPS fix",
                                      look)
-    elif ais.get("feed_silent"):
-        heard = _num(ais.get("last_heard_s"))
-        cid, headline, detail = ("blind:feed", "Collision watch OFF: no AIS heard",
-                                 (f"Silent {round(heard / 60)} min under way. " if heard is not None
-                                  else "Silent under way. ") + look)
+    elif ais.get("receiver_missing"):
+        cid, headline, detail = ("blind:rx", "Collision watch OFF: AIS receiver missing",
+                                 "Not on the bus. " + look)
     else:
         return None
     c = _callout(cid, "safety", "now", headline, detail, ["get_ais"], "high")

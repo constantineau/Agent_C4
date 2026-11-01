@@ -413,17 +413,41 @@ class OnboardSource:
     def latest_epoch(self, path):
         """Wall-clock epoch of the newest own-ship sample for `path` (any source, any age), or None.
         `latest_value` falls back to the archive with no age limit (by design: replays), so the
-        collision watch asks this to tell a live fix from the last one before the GPS went quiet."""
-        with self._live_lock:
-            live = [e for (p, _s), (e, _v) in self._live.items() if p == path]
+        collision watch asks this to tell a live fix from the last one before the GPS went quiet.
+        Same order as `latest_value`: a live-cache entry only within LIVE_TTL_S, else the archive's
+        newest time (so a dropped Signal K link with the archiver still writing stays a fresh fix)."""
+        live = self._live_fresh(path)              # the same freshness rule as latest_value
         if live:
-            return max(live)
+            return max(e for _s, e, _v in live)
         not_ais, ais_p = self._not_ais()
         row = self._archive.execute(
             "SELECT max(time) AS time FROM readings WHERE boat_id=? AND path=? "
             "AND value IS NOT NULL" + not_ais, (BOAT_ID, path, *ais_p),
         ).fetchone()
         return _epoch(row["time"]) if row and row["time"] else None
+
+    def ais_receiver_age_s(self):
+        """Seconds since the boat's own AIS transceiver (an AIS-bearing source, see ais_sources)
+        last published anything on our own context, from the live cache. None when we can't tell:
+        no AIS source known, or no live data at all (the Signal K link is down). A transceiver
+        never heard since the engine started counts from the engine's start."""
+        srcs = self.ais_sources()
+        if not srcs:
+            return None
+        now = _time.time()
+        with self._live_lock:
+            if not self._live:
+                return None
+            newest_any = max(e for e, _v in self._live.values())
+            seen = [e for (_p, s), (e, _v) in self._live.items() if s in srcs]
+        if now - newest_any > LIVE_TTL_S:
+            return None                            # the live link itself is quiet: can't tell
+        if seen:
+            return max(0.0, now - max(seen))
+        t0 = getattr(self, "_ais_rx_t0", None)
+        if t0 is None:
+            t0 = self._ais_rx_t0 = now
+        return now - t0
 
     # Real N2K sensors write 5–28 Hz, so a 40-min fatigue window is tens of thousands of rows —
     # converting them one-by-one in Python starved the whole engine at first-light (2026-07-15;

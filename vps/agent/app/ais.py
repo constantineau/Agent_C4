@@ -20,16 +20,21 @@ fine at the ranges that matter (a few nm) and matches navigator.py's projection.
 What makes the watch trustworthy (2026-11-02 system review, collision items 1, 4, 5):
   * OWN SHIP. Our own AIS transmission can come back as a target (MMSI 316053364 at 0.0 nm raised
     "Collision risk" at the dock). A target whose MMSI is ours (`own_mmsi()`: env OWN_MMSI, else
-    the boat profile's `mmsi`, else the race's `own.mmsi`) is taken out of the list. A target
-    within ECHO_RANGE_M that moves with us is flagged `own_ship: "echo?"` and never alarms, but it
-    stays in the list so the copilot can say so.
+    the boat profile's `mmsi`, else the race's `own.mmsi`) is taken out of the list. ONLY a
+    configured MMSI is ever dropped. A target within ECHO_RANGE_M that moves with us is flagged
+    `possible_echo: true`, and that is all: it keeps its full CPA/TCPA and alarms like any other
+    contact (a boat 40 m astern overtaking at 1 kn is a real collision). The copilot adds a quiet
+    hint to set OWN_MMSI.
   * A STALE OWN FIX IS NO FIX. Own position older than OWN_FIX_MAX_AGE_S (wall clock) gives
     `own_fix: false` with the reason, so the copilot says the watch is off instead of computing
     CPA against where the boat was. 0 turns the age check off (a replay of an old archive).
   * TARGETS ARE MOVED TO NOW. Each report is dead-reckoned by its age along its SOG/COG. A target
     with no SOG or COG is `motion: "unknown"`: no CPA is claimed for it (it is not "stopped").
-  * A SILENT FEED IS NOT AN EMPTY SEA. `feed_silent` is true when we are under way and nothing at
-    all has been heard on AIS for AIS_SILENT_MIN (our own echo counts as heard).
+  * A SILENT FEED IS NOT AN EMPTY SEA, BUT NOT A BLIND WATCH EITHER. `feed_silent` is true when we
+    are under way and nothing at all has been heard on AIS for AIS_SILENT_MIN (our own echo counts
+    as heard): open water can be empty, so it is a "check the AIS" hint. `receiver_missing` is the
+    real failure: the transceiver's own source has gone quiet on the bus while other data flows
+    (onboard only; None = can't tell).
 """
 import math
 import os
@@ -59,7 +64,7 @@ OWN_FIX_MAX_AGE_S = _envf("AIS_OWN_FIX_MAX_AGE_S",
 # Nothing heard on AIS for this long while under way → the feed is called silent.
 AIS_SILENT_MIN = _envf("AIS_SILENT_MIN", 15)
 UNDERWAY_KN = _envf("AIS_UNDERWAY_KN", 2.0)
-# The own-echo heuristic: a target this close that moves with us is probably us.
+# The own-echo hint: a target this close that moves with us may be us. A hint only, never a filter.
 ECHO_RANGE_M = _envf("AIS_ECHO_RANGE_M", 50)
 ECHO_REL_KN = _envf("AIS_ECHO_REL_KN", 1.5)
 
@@ -196,11 +201,26 @@ def _latest_targets(max_age_min):
     return datasource.active().ais_targets(max_age_min)
 
 
+def _receiver_missing(last_heard_s):
+    """True when the data source can tell the boat's AIS transceiver has gone quiet on the bus for
+    AIS_SILENT_MIN while other data flows, and no target has been heard either. None = can't tell
+    (the cloud, no transceiver known, or the live link is down)."""
+    fn = getattr(datasource.active(), "ais_receiver_age_s", None)
+    if fn is None:
+        return None
+    try:
+        age = fn()
+    except Exception:           # noqa: BLE001
+        return None
+    if age is None:
+        return None
+    limit = AIS_SILENT_MIN * 60
+    return bool(age > limit and (last_heard_s is None or last_heard_s > limit))
+
+
 def _threat_key(t):
     """Closing contacts first, soonest TCPA first; then unknown motion by range; then the rest by
-    range; a probable own echo last."""
-    if t.get("own_ship"):
-        return (3, t["range_nm"] if t.get("range_nm") is not None else 1e9, 0)
+    range."""
     if t.get("closing"):
         return (0, t["tcpa_min"], t["cpa_nm"])
     if t.get("motion") == "unknown":
@@ -236,6 +256,8 @@ def get_ais_targets(max_range_nm: float = 12):
             "last_heard_s": last_heard_s, "own_fix_age_s":
             round(own["age_s"]) if own.get("age_s") is not None else None}
 
+    rx_missing = _receiver_missing(last_heard_s)
+
     reason = None
     if own["lat"] is None or own["lon"] is None:
         reason = "no GPS fix"
@@ -246,10 +268,11 @@ def get_ais_targets(max_range_nm: float = 12):
         targets = [{"mmsi": r["mmsi"], "name": r["name"], "sog": r["sog"], "cog": r["cog"],
                     "range_nm": None, "bearing": None, "cpa_nm": None, "tcpa_min": None,
                     "closing": None, "age_s": round(a) if a is not None else None,
-                    "motion": "known" if _motion_known(r) else "unknown", "own_ship": None}
+                    "motion": "known" if _motion_known(r) else "unknown", "possible_echo": False}
                    for r, a in listed]
         return {**base, "count": len(targets), "own_fix": False, "own_fix_reason": reason,
-                "underway": None, "feed_silent": False, "targets": targets,
+                "underway": None, "feed_silent": False, "receiver_missing": rx_missing,
+                "targets": targets,
                 "note": ("No position yet, so no range or CPA." if reason == "no GPS fix" else
                          f"GPS fix is {base['own_fix_age_s']} s old, so no range or CPA.")}
 
@@ -258,6 +281,8 @@ def get_ais_targets(max_range_nm: float = 12):
     own["lat"], own["lon"] = _dead_reckon(own["lat"], own["lon"], own["sog"], own["cog"], own.get("age_s"))
     underway = own["sog"] is not None and own["sog"] >= UNDERWAY_KN
     feed_silent = bool(underway and (last_heard_s is None or last_heard_s > AIS_SILENT_MIN * 60))
+    if rx_missing:
+        feed_silent = False                  # the louder signal says it
 
     targets = []
     for r, age in listed:
@@ -267,11 +292,10 @@ def get_ais_targets(max_range_nm: float = 12):
         if rng > max_range_nm:
             continue
         known = _motion_known(tgt)
-        own_ship = None
+        possible_echo = False
         if (known and rng * _M_PER_NM <= ECHO_RANGE_M and own["sog"] is not None
                 and _rel_speed_kn(own, tgt) <= ECHO_REL_KN):
-            own_ship = "echo?"               # right on top of us and moving with us: probably us
-            cpa, tcpa, closing = None, None, False
+            possible_echo = True             # maybe us: a hint only, the geometry stands
         targets.append({
             "mmsi": r["mmsi"], "name": r["name"],
             "sog": round(r["sog"], 1) if r.get("sog") is not None else None,
@@ -282,8 +306,9 @@ def get_ais_targets(max_range_nm: float = 12):
             "closing": closing,
             "motion": "known" if known else "unknown",
             "age_s": round(age) if age is not None else None,
-            "own_ship": own_ship,
+            "possible_echo": possible_echo,
         })
     targets.sort(key=_threat_key)
     return {**base, "count": len(targets), "own_fix": True, "own_fix_reason": None,
-            "underway": underway, "feed_silent": feed_silent, "targets": targets}
+            "underway": underway, "feed_silent": feed_silent, "receiver_missing": rx_missing,
+            "targets": targets}
