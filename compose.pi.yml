@@ -157,7 +157,7 @@ services:
       ARCHIVE_DB: /var/lib/sr33/archive/archive.db
       ENGINE_DB: /var/lib/sr33/engine/engine.db
       BOAT_ID: ${BOAT_ID:-sr33}
-      # the Orin copilot over the Pi-Orin cable: /playbook/load forwards the playbook there
+      # the Orin copilot over the Pi-Orin cable: /playbook/load stages + commits the playbook there
       COPILOT_URL: ${COPILOT_URL:-http://10.10.10.2:8300}
     volumes:
       - sk_archive:/var/lib/sr33/archive:ro

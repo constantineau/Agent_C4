@@ -577,7 +577,10 @@ async def ws(websocket: WebSocket):
     # Push the current active alerts so a freshly opened client shows the live banner state.
     try:
         for a in await run_in_threadpool(alerts.active_alerts):     # race mode: safety only
-            await websocket.send_json({"role": "alert", "event": "new", "alert": a})
+            # race mode is read again right before EACH send (it may come on mid-loop)
+            msg = await outgoing({"role": "alert", "event": "new", "alert": a})
+            if msg:
+                await websocket.send_json(msg)
     except Exception:
         pass
 

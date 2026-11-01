@@ -46,8 +46,9 @@ server {
     # boat-local network. The dashboard POSTs its tile snapshot; the brief is best-effort — if the
     # copilot is down the dashboard falls back to the engine-read commentary.
     # A playbook reaches the Orin only through the engine's /playbook/load (it checks the race
-    # log and holds its lock until the Orin has written it). Never through this proxy.
-    location = /copilot/playbook/load {
+    # log and holds its lock across the Orin's stage + time-bounded commit). Never through this
+    # proxy: /copilot/playbook/* is refused here.
+    location ^~ /copilot/playbook/ {
         default_type application/json;
         return 403 '{"loaded": false, "detail": "Load the playbook from the Pi. Not loaded."}';
     }

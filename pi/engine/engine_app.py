@@ -323,8 +323,9 @@ def playbook_load(body: dict):
     Replaces any prior.
 
     The same bundle goes on to the Orin copilot over the Pi-Orin cable (COPILOT_URL) while this
-    load still holds the race log's session lock, so a race can't start between the check and
-    the Orin's write. The Orin takes a playbook only from here. Its answer is under `copilot`."""
+    load still holds the race log's session lock (stage + a time-bounded commit, see
+    copilot_load), so the Orin's write can't land after a race starts. The Orin takes a playbook
+    only from here. Its answer is under `copilot`."""
     body = body or {}
     bundle = body.get("bundle") if "variants" not in body else body
     if not bundle or not (bundle.get("variants")):
@@ -345,20 +346,21 @@ def playbook_load(body: dict):
 
 
 NO_COPILOT = "Can't reach the Orin. Playbook not sent there."
+NO_CONFIRM = "The Orin didn't confirm. Check it."
+MAX_ORIN_TTL_S = 10.0
 
 
-def copilot_load(bundle):
-    """POST the bundle to the Orin copilot's /playbook/load over the cable; its answer, or
-    {loaded: false, detail} when it can't be reached. Never raises. Bounded (COPILOT_TIMEOUT_S),
-    since the race log's session lock is held meanwhile: a race-start tap waits at most this."""
+def _copilot_post(path, body, timeout):
+    """POST JSON to the Orin copilot over the cable: its answer dict, or {loaded: false, detail}.
+    Never raises."""
     import json as _json
     import urllib.error
     import urllib.request
-    url = os.environ.get("COPILOT_URL", "http://10.10.10.2:8300").rstrip("/") + "/playbook/load"
-    req = urllib.request.Request(url, data=_json.dumps(bundle).encode(), method="POST",
+    url = os.environ.get("COPILOT_URL", "http://10.10.10.2:8300").rstrip("/") + path
+    req = urllib.request.Request(url, data=_json.dumps(body).encode(), method="POST",
                                  headers={"Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=float(os.environ.get("COPILOT_TIMEOUT_S", "8"))) as r:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
             out = _json.loads(r.read() or b"{}")
         return out if isinstance(out, dict) else {"loaded": False, "detail": NO_COPILOT}
     except urllib.error.HTTPError as exc:
@@ -371,6 +373,39 @@ def copilot_load(bundle):
         return {"loaded": False, "detail": f"Orin answered {exc.code}. Not loaded."}
     except Exception:  # noqa: BLE001
         return {"loaded": False, "detail": NO_COPILOT}
+
+
+def copilot_load(bundle):
+    """Load the bundle on the Orin copilot in two steps; called with the race log's session lock
+    held, and it returns only when the Orin's write can no longer happen.
+
+      1. stage {nonce, bundle}: the Orin holds it in memory and answers its commit TTL. Its TTL
+         clock starts when it RECEIVES the stage (its own monotonic clock).
+      2. commit {nonce}: sent only after the stage answered. The Orin writes only within the TTL,
+         re-checked right before the file goes live.
+
+    The commit is sent after the stage was received, and the Pi waits for its answer for at least
+    the TTL (+1 s) before returning (urllib's timeout is per socket wait, so never less). So the
+    Orin's write can only happen while this lock is held: a stalled request can't land after the
+    Pi gave up and a race started. No wall clocks are compared (skew-proof). A race-start tap waits
+    at most COPILOT_STAGE_TIMEOUT_S + the commit wait (~8 s). Never raises."""
+    import secrets
+    nonce = secrets.token_hex(12)
+    st = _copilot_post("/playbook/stage", {"nonce": nonce, "bundle": bundle},
+                       float(os.environ.get("COPILOT_STAGE_TIMEOUT_S", "4")))
+    if not st.get("staged") or st.get("nonce") != nonce:
+        return {"loaded": False, "detail": st.get("detail") or NO_COPILOT}
+    try:
+        ttl = float(st.get("ttl_s"))
+    except (TypeError, ValueError):
+        ttl = float("nan")
+    if not 0 < ttl <= MAX_ORIN_TTL_S:
+        return {"loaded": False, "detail": "Orin commit window is wrong. Not loaded."}
+    wait = max(float(os.environ.get("COPILOT_COMMIT_TIMEOUT_S", "4")), ttl + 1.0)
+    out = _copilot_post("/playbook/commit", {"nonce": nonce}, wait)
+    if out.get("detail") == NO_COPILOT:
+        return {"loaded": False, "detail": NO_CONFIRM}
+    return out
 
 
 @app.get("/playbook")

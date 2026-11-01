@@ -9,8 +9,9 @@ Pins:
     push (all read active_alerts), and when it clears the push carries no advice text;
   * an unknown kind counts as advice (fail closed);
   * race mode coming on mid-evaluate: advice collected in practice is not raised;
-  * the gate at delivery: alert_loop and the socket writer check race mode again at send time,
-    so advice queued before race mode came on never goes out.
+  * the gate at delivery: alert_loop, the socket writer and the /ws opening push check race
+    mode again right before each send, so advice queued or read before race mode came on never
+    goes out (tested with the mode flipping between opening sends).
 
 No DB: the reads are stubbed. Run in-container (make ci):
   PYTHONPATH=vps/agent:. python3 vps/agent/test_alerts_race_mode.py
@@ -157,6 +158,34 @@ check("queued advice is dropped at send time", sent[0] is None)
 check("safety and chat still go", sent[1] == queued[1] and sent[2] == queued[2])
 check("a queued advice clear goes without its text", sent[3]["alert"]["message"] == ""
       and sent[3]["role"] == "alert")
+
+print("the /ws opening push (race mode comes on between its sends):")
+from fastapi.testclient import TestClient  # noqa: E402
+
+main.auth.verify_token = lambda tok: True
+ADV1 = dict(ADV["alert"], key="polar_deficit", kind="polar_deficit", message="Slow: 82% of target.")
+ADV2 = dict(ADV["alert"])
+OPEN = [ADV1, ADV2, SAFE["alert"]]           # what active_alerts() returned, read in practice
+main.alerts.active_alerts = lambda: list(OPEN)
+FLIP = {"n": 0}
+
+
+def flips_after_first():
+    """Practice for the first send's check, race for every one after it."""
+    FLIP["n"] += 1
+    return FLIP["n"] > 1
+
+
+race_mode.racing = flips_after_first
+client = TestClient(main.app)                 # no `with` → no lifespan, no DB, no alert loop
+with client.websocket_connect("/ws?token=x") as ws:
+    first = ws.receive_json()
+    got = [ws.receive_json() for _ in range(2)]
+check("the socket opens", first.get("role") == "system")
+check("sent before the flip: delivered", got[0]["alert"]["key"] == "polar_deficit")
+check("after the flip: the next advice is NOT sent, the safety alert is",
+      got[1]["alert"]["key"] == "ais:1" and got[1]["role"] == "alert")
+check("race mode was read once per opening send", FLIP["n"] >= 2)
 
 print("ALL OK" if ok else "FAILED")
 sys.exit(0 if ok else 1)

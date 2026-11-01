@@ -161,9 +161,56 @@ r = client.post("/playbook/load", json=BUNDLE).json()
 check("forwarded once, while the session lock was held", FORWARDS == [("r1", True)])
 check("the Orin's answer is in the response", r["copilot"] == {"loaded": True, "race_id": "r1"})
 os.environ["COPILOT_URL"] = "http://127.0.0.1:9"          # nothing listens there
-os.environ["COPILOT_TIMEOUT_S"] = "1"
+os.environ["COPILOT_STAGE_TIMEOUT_S"] = "1"
 check("Orin unreachable → a plain answer, never raises",
       _REAL_COPILOT_LOAD(BUNDLE) == {"loaded": False, "detail": engine_app.NO_COPILOT})
+
+print("the Pi's side of the two-step Orin load (stage, then a time-bounded commit)")
+CALLS = []
+ORIN = {"stage": None, "commit": None}
+
+
+def fake_orin(path, body, timeout):
+    CALLS.append((path, dict(body), timeout))
+    step = ORIN[path.rsplit("/", 1)[-1]]
+    return step(body) if callable(step) else step
+
+
+_real_post = engine_app._copilot_post
+engine_app._copilot_post = fake_orin
+ORIN["stage"] = lambda b: {"staged": True, "nonce": b["nonce"], "ttl_s": 3}
+ORIN["commit"] = {"loaded": True, "race_id": "r1"}
+r = _REAL_COPILOT_LOAD(BUNDLE)
+check("stage carries the bundle and a fresh nonce; commit carries only that nonce",
+      [c[0] for c in CALLS] == ["/playbook/stage", "/playbook/commit"]
+      and CALLS[0][1]["bundle"] == BUNDLE and CALLS[1][1] == {"nonce": CALLS[0][1]["nonce"]}
+      and len(CALLS[0][1]["nonce"]) >= 16 and r == {"loaded": True, "race_id": "r1"})
+check("the Pi waits for the commit at least the Orin's TTL + 1 s", CALLS[1][2] >= 3 + 1)
+n1 = CALLS[0][1]["nonce"]
+CALLS.clear()
+_REAL_COPILOT_LOAD(BUNDLE)
+check("a new nonce every load", CALLS[0][1]["nonce"] != n1)
+ORIN["stage"] = lambda b: {"staged": True, "nonce": b["nonce"], "ttl_s": 7}
+CALLS.clear()
+_REAL_COPILOT_LOAD(BUNDLE)
+check("a longer Orin TTL makes the Pi wait longer (never less than the TTL)", CALLS[1][2] >= 8)
+for label, stage in (("stage refused", {"loaded": False, "detail": "Load the playbook from the Pi. Not loaded."}),
+                     ("stage unreachable", {"loaded": False, "detail": engine_app.NO_COPILOT}),
+                     ("stage echoes another nonce", {"staged": True, "nonce": "x" * 24, "ttl_s": 3}),
+                     ("TTL missing", lambda b: {"staged": True, "nonce": b["nonce"]}),
+                     ("TTL too long", lambda b: {"staged": True, "nonce": b["nonce"], "ttl_s": 60})):
+    ORIN["stage"] = stage
+    CALLS.clear()
+    r = _REAL_COPILOT_LOAD(BUNDLE)
+    check(f"{label} → no commit sent, not loaded", [c[0] for c in CALLS] == ["/playbook/stage"]
+          and r["loaded"] is False)
+ORIN["stage"] = lambda b: {"staged": True, "nonce": b["nonce"], "ttl_s": 3}
+ORIN["commit"] = {"loaded": False, "detail": engine_app.NO_COPILOT}      # the commit timed out
+check("commit unanswered → 'didn't confirm', plain",
+      _REAL_COPILOT_LOAD(BUNDLE) == {"loaded": False, "detail": engine_app.NO_CONFIRM})
+ORIN["commit"] = {"loaded": False, "detail": "Too late. Not loaded."}
+check("the Orin's 'too late' is passed on", _REAL_COPILOT_LOAD(BUNDLE)["detail"] == "Too late. Not loaded.")
+engine_app._copilot_post = _real_post
 
 print("M14: the scoped close never ends a newer session (real store)")
 ds = datasource.active()

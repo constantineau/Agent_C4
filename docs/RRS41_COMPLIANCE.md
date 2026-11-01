@@ -360,13 +360,19 @@ the race log's session lock, so a session can't start in between. A refusal is
 | POST /gps/show, /gps/clear | iPad | Taken | Sends what's aboard to the plotter; computes nothing ashore. |
 | POST /reoptimize/run, /reroute/run | iPad | Taken | Onboard re-routes (Pi / Orin) on public data. |
 
-**Orin copilot (`pi/orin/copilot/app.py`)**: the Orin has no race log. POST /playbook/load takes a
-bundle only from the Pi engine, straight over the cable (`PLAYBOOK_LOAD_FROM`, default 10.10.10.1,
-and no proxy headers); anything else gets 403 "Load the playbook from the Pi. Not loaded." The Pi
-console's nginx refuses /copilot/playbook/load outright and marks every other proxied request
-with X-Forwarded-For. Because the engine forwards while it holds the session lock, a race can't
-start between the race check and the Orin's write (a race-start tap waits at most
-COPILOT_TIMEOUT_S, 8 s). The other POSTs (/brief, /strategy, /narrate,
+**Orin copilot (`pi/orin/copilot/app.py`)**: the Orin has no race log. A playbook loads in two
+steps, POST /playbook/stage `{nonce, bundle}` then POST /playbook/commit `{nonce}`, both taken
+only from the Pi engine straight over the cable (`PLAYBOOK_LOAD_FROM`, default 10.10.10.1, and no
+proxy headers); anything else gets 403 "Load the playbook from the Pi. Not loaded." The Pi
+console's nginx refuses /copilot/playbook/* outright and marks every other proxied request with
+X-Forwarded-For. The engine sends both steps while it holds the race log's session lock. An HTTP
+timeout doesn't stop the Orin's handler, so the write itself is bounded: the Orin commits only
+within `PLAYBOOK_COMMIT_TTL_S` (3 s) of RECEIVING the stage, on its own monotonic clock, checked
+again right before the file goes live ("Too late. Not loaded."). The Pi sends the commit only
+after the stage answered and waits for it at least the TTL + 1 s before letting go of the lock.
+So the write can only land while the lock is held, whatever the network or the Orin's disk does,
+and no wall clocks are compared (Pi/Orin skew doesn't matter). A race-start tap waits at most
+~8 s. The other POSTs (/brief, /strategy, /narrate,
 /narrate/reset, /dashboard, /detail) take no shore content.
 
 **Lab Deploy (`vps/lab/app/deploy.py`)**: best effort on top of the boat. The start is checked before

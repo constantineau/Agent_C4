@@ -15,6 +15,10 @@ Endpoints:
 
 There is intentionally no endpoint that takes an action — the copilot is read-only and advisory.
 """
+import json
+import os
+import threading
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -136,40 +140,81 @@ _PROXY_HEADERS = ("x-forwarded-for", "x-real-ip", "forwarded", "x-forwarded-host
 
 def from_pi(request) -> bool:
     """Only the Pi engine, straight over the Pi-Orin cable, may load a playbook. The Pi checks
-    its race log and holds the session lock until this write answers (frozen at the gun)."""
+    its race log and holds the session lock across the stage and the commit (frozen at the gun)."""
     host = request.client.host if request.client else None
     if host not in config.PLAYBOOK_LOAD_FROM:
         return False
     return not any(h in request.headers for h in _PROXY_HEADERS)
 
 
-@app.post("/playbook/load")
-def playbook_load(body: dict, request: Request):
-    """Load a frozen playbook bundle — written atomically to PLAYBOOK_PATH, overwriting any prior.
-    Every consumer re-reads the file per request, so it takes effect immediately (no restart).
-    Body is the bundle itself, or {bundle: ...} — same contract as the engine's /playbook/load.
-    This changes which HOMEWORK the copilot interprets; it still takes no action.
+# ---- playbook load: two steps, both from the Pi, the write bounded in time --------------------
+# The Pi engine holds its race-log session lock across BOTH calls (stage, then commit). The Orin
+# commits only within PLAYBOOK_COMMIT_TTL_S of RECEIVING the stage, on its own monotonic clock,
+# and checks that again right before the file goes live. The Pi sends the commit only after the
+# stage answered, so the stage was received before the commit was sent; the Pi then waits at
+# least its commit timeout (>= the TTL) before it lets go of the lock. So a write can only go live
+# while the Pi still holds the lock: a stalled or late request can never land after the Pi gave
+# up and a race started. No wall clocks are compared, so Pi/Orin clock skew doesn't matter.
+TOO_LATE = "Too late. Not loaded."
+NOT_STAGED = "Nothing staged. Not loaded."
+_PB_LOCK = threading.Lock()
+_STAGED: dict = {}                       # the one staged load: {nonce, bundle, received}
 
-    Frozen at the gun (RRS 41): the Orin has no race log, so it takes a playbook ONLY from the Pi
-    engine over the cable (PLAYBOOK_LOAD_FROM, no proxy headers). The engine's own /playbook/load
-    forwards the bundle here while it holds the race log's session lock, so no race session can
-    start between its check and this write."""
-    import json as _json
-    import os as _os
+
+def _write_tmp(path, bundle):
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(bundle, f)
+    return tmp
+
+
+@app.post("/playbook/stage")
+def playbook_stage(body: dict, request: Request):
+    """Step 1 of a playbook load, from the Pi engine only (PLAYBOOK_LOAD_FROM, no proxy headers):
+    {nonce, bundle}. Held in memory, nothing written; replaces any earlier staged load. Its
+    commit TTL starts now (monotonic, at receipt)."""
+    received = time.monotonic()
+    if not from_pi(request):
+        return JSONResponse({"loaded": False, "detail": NOT_FROM_PI}, status_code=403)
     body = body or {}
-    bundle = body.get("bundle") if "variants" not in body else body
-    if not bundle or not bundle.get("variants"):
-        return {"loaded": False, "detail": "no bundle with variants"}
+    nonce, bundle = body.get("nonce"), body.get("bundle")
+    if not isinstance(nonce, str) or not 8 <= len(nonce) <= 64:
+        return {"staged": False, "detail": "bad nonce"}
+    if not isinstance(bundle, dict) or not bundle.get("variants"):
+        return {"staged": False, "detail": "no bundle with variants"}
+    with _PB_LOCK:
+        _STAGED.clear()
+        _STAGED.update(nonce=nonce, bundle=bundle, received=received)
+    return {"staged": True, "nonce": nonce, "ttl_s": config.PLAYBOOK_COMMIT_TTL_S}
+
+
+@app.post("/playbook/commit")
+def playbook_commit(body: dict, request: Request):
+    """Step 2, from the Pi engine only: {nonce}. Writes the staged bundle to PLAYBOOK_PATH
+    (atomic replace) only if it is the staged nonce and still within PLAYBOOK_COMMIT_TTL_S of
+    its stage, checked again right before the file goes live. Every consumer re-reads the file
+    per request, so it takes effect at once. This changes which HOMEWORK the copilot
+    interprets; it still takes no action. Frozen at the gun: see the block comment above."""
     if not from_pi(request):
         return JSONResponse({"loaded": False, "detail": NOT_FROM_PI}, status_code=403)
     path = config.PLAYBOOK_PATH
     if not path:
         return {"loaded": False, "detail": "PLAYBOOK_PATH is not configured on this copilot"}
-    _os.makedirs(_os.path.dirname(path) or ".", exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w") as f:
-        _json.dump(bundle, f)
-    _os.replace(tmp, path)
+    nonce = (body or {}).get("nonce")
+    ttl = float(config.PLAYBOOK_COMMIT_TTL_S)
+    with _PB_LOCK:
+        if not _STAGED or _STAGED.get("nonce") != nonce:
+            return {"loaded": False, "detail": NOT_STAGED}
+        staged = dict(_STAGED)
+        _STAGED.clear()                  # one commit per stage
+        if time.monotonic() - staged["received"] > ttl:
+            return {"loaded": False, "detail": TOO_LATE}
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        tmp = _write_tmp(path, staged["bundle"])
+        if time.monotonic() - staged["received"] > ttl:     # the write itself may have stalled
+            os.remove(tmp)
+            return {"loaded": False, "detail": TOO_LATE}
+        os.replace(tmp, path)
     copilot.reset_narration()            # new homework → clear the show-once dedup
     pb = playbook_mod.load()
     return {"loaded": pb.loaded, "race_id": pb.race_id, "variants": len(pb.variants),
