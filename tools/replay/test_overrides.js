@@ -44,14 +44,15 @@ const near = (a, b, tol, msg) => assert.ok(Math.abs(a - b) <= (tol || 0.05), `${
 
 // 3. TWS +8: true wind and the navigator/tactics copies move; AWS grows, AWA opens a little
 {
-  const f = O.apply(frame(), { tws: 8 }), c = f.data["/conditions"];
+  const input = frame(), before = JSON.parse(JSON.stringify(input));
+  const f = O.apply(input, { tws: 8 }), c = f.data["/conditions"];
   near(c.tws, 35.194, 0.001, "tws"); near(f.data["/navigator"].wind.tws, 35.2, 0.05, "nav tws");
   assert.ok(c.aws > 38.255, "aws grows with tws");
   assert.ok(Math.abs(c.awa) > 30.4, "awa opens (apparent wind swings aft) with more true wind");
   // the jib read follows the sr33 bands: J1 above 14 kts is overpowered -> J3 above 20
   assert.equal(f.data["/sail"].fit, "overpowered"); assert.equal(f.data["/sail"].change_to, "J3");
-  // the original frame is never mutated
-  assert.equal(frame().data["/conditions"].tws, 27.194);
+  // the input frame is never mutated
+  assert.deepEqual(input, before);
 }
 
 // 4. TWD 30° right on port tack: the wind comes round toward the bow -> |TWA| shrinks by 30
@@ -111,6 +112,13 @@ const near = (a, b, tol, msg) => assert.ok(Math.abs(a - b) <= (tol || 0.05), `${
   const junk = O.fromHash("#f=-4&tws=abc&sail=<script>&link=nuke&fail=etc/passwd,fleet");
   assert.equal(junk.f, 0); assert.equal(junk.ov.tws, 0); assert.equal(junk.ov.sail, null);
   assert.equal(junk.ov.link, "normal"); assert.deepEqual(junk.ov.fail, ["/fleet"]);
+}
+
+// 9b. a malformed percent-escape ("/#sail=%") is skipped, not thrown, and the good entries survive
+{
+  const bad = O.fromHash("#sail=%&tws=5&%E0%A4%A=1&f=7");
+  assert.equal(bad.ov.sail, null); assert.equal(bad.ov.tws, 5); assert.equal(bad.f, 7);
+  assert.doesNotThrow(() => O.fromHash("#%"));
 }
 
 // 10. the banner words
