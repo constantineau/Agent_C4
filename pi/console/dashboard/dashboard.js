@@ -1412,7 +1412,7 @@
       b.title = "Logging \"" + a.name + "\". Tap twice to end.";
     } else {
       l.textContent = "LOG";
-      b.title = "Tap to start logging. Data outside a log stays on the boat.";
+      b.title = "Tap to start logging. Unlogged data is deleted after 7 days.";
     }
   }
   async function toggleRec() {
