@@ -53,6 +53,10 @@ check("same file name on both sides",
 os.environ["ARCHIVE_DB"] = "/x/y/archive.db"
 check("the engine finds it beside ARCHIVE_DB",
       archiver_status.default_path() == Path("/x/y/archiver-status.json"))
+os.environ["ARCHIVE_STATUS_FILE"] = "/elsewhere/st.json"
+check("ARCHIVE_STATUS_FILE (the archiver's variable) moves the reader too",
+      archiver_status.default_path() == Path("/elsewhere/st.json"))
+del os.environ["ARCHIVE_STATUS_FILE"]
 
 with tempfile.TemporaryDirectory() as d:
     path = Path(d) / "archiver-status.json"

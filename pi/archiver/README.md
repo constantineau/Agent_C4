@@ -60,10 +60,19 @@ print(c.execute('select count(*),min(time),max(time) from readings').fetchone())
   `tools/salvage.py` recovers almost all of it) and a fresh one is started. At startup any
   database error from the open, the schema read or the bounded checks counts (also `string or
   blob too big` and UTF-8 decode errors from a damaged page) — except transient ones (locked,
-  busy, disk full, can't open), which are retried instead. The moved file is then checked in
+  busy, disk full, can't open), which are retried instead. Errors that clearly mean damage
+  (malformed, not a database, string or blob too big, decode errors) rotate at once; anything
+  else (typically a one-off `disk I/O error` after a brownout) is retried `ARCHIVE_OPEN_RETRIES`
+  times, `ARCHIVE_OPEN_RETRY_S` apart, and rotates only if it persists. The moved file is then checked in
   the background and the verdict logged. Mid-run it fires on any write that says the file is
   corrupt, without asking quick_check again. The batch is kept and written to the fresh file.
-  If the move itself fails, the batch is requeued and the move retried.
+  If the move itself fails, the batch is requeued and the move retried. A rotation never moves
+  the file while a background check still holds it open (a read stalled on a dying card): it
+  keeps recording into the current file and retries on the next flush. A background verdict
+  about a file that has since been replaced is ignored.
+- **Unwritable rows.** Strings are cleaned of lone UTF-16 surrogates before they are buffered.
+  If a batch still fails on a row's values, the rows are written one by one and only the bad
+  ones are dropped (counted, one log line per window). One bad row never blocks a batch.
 - **Failing writes.** A failed batch is rolled back and requeued in order. The queue is capped
   at `ARCHIVE_MAX_BUFFER_ROWS`; past it the oldest rows are dropped and counted. The drop
   warning prints at most once per `ARCHIVE_DROP_LOG_EVERY_S` with the count since the last one.
@@ -112,5 +121,8 @@ once a real link is available (dockside wifi after the passage).
 | `ARCHIVE_STATUS_FILE` | `archiver-status.json` next to the DB | the archiver's health as JSON (see above) |
 | `ARCHIVE_STATUS_EVERY_S` | `10` | how often the status file is rewritten |
 | `ARCHIVE_CHECK_DUTY` | `0.5` | share of wall time the background quick_check may spend reading |
+| `ARCHIVE_CHECK_STOP_TIMEOUT_S` | `30` | how long a rotation waits for the check to let go before deferring |
+| `ARCHIVE_OPEN_RETRIES` / `ARCHIVE_OPEN_RETRY_S` | `3` / `2` | retries of an uncertain open error before rotating |
+| `ARCHIVE_STATUS_STALE_S` | `90` | (engine) a status file older than this reads as "archiver stopped" |
 | `ARCHIVE_DROP_LOG_EVERY_S` | `30` | at most one buffer-drop / requeue warning per this many seconds |
 | `ARCHIVE_PRUNE_CHUNK_ROWS` / `ARCHIVE_PRUNE_PAUSE_S` | `20000` / `0.05` | prune batch size / pause between batches (lock released) |

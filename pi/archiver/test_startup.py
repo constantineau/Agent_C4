@@ -305,5 +305,74 @@ with tempfile.TemporaryDirectory() as d:
     check("the damaged file is kept", len(list(Path(d).glob("archive.corrupt-*.db"))) == 1)
     check("recording continued into the fresh archive", count(db) > 0)
 
+# --- 5. a check that will not let go: the file is NOT moved, recording continues -----------
+print("a rotation never moves the file under a background check that still holds it:")
+with tempfile.TemporaryDirectory() as d:
+    db = Path(d) / "archive.db"
+    conn = archiver.open_db(db)
+    archiver.write_rows(conn, cf.rows(2000))
+    release = threading.Event()
+    parked = threading.Event()
+
+    def stalled(self):
+        """A read stalled on a dying card: ignores the stop request until released."""
+        parked.set()
+        release.wait(30)
+        return 1
+    real_throttle = archiver.BackgroundCheck._throttle
+    archiver.BackgroundCheck._throttle = stalled
+    real_timeout = archiver.CHECK_STOP_TIMEOUT_S
+    archiver.CHECK_STOP_TIMEOUT_S = 0.2
+    try:
+        chk = archiver.BackgroundCheck(db, live=True, duty=1.0).start()
+        parked.wait(10)
+        state = {"conn": conn, "rotate_pending": True}
+        buf = cf.rows(5, start=9000)
+
+        async def flush():
+            await archiver._flush_once(buf, asyncio.get_running_loop(), state, db, None)
+        asyncio.run(flush())
+        check("(setup) the check is stalled holding the file", chk.conn_open)
+        check("nothing was moved while it held the file",
+              not list(Path(d).glob("archive.corrupt-*")))
+        check("the batch was written into the current file",
+              buf == [] and state["conn"] is conn and count(db) == 2005)
+        check("the rotation is still owed", state.get("rotate_pending") is True)
+    finally:
+        release.set()
+        archiver.BackgroundCheck._throttle = real_throttle
+    chk.thread.join(10)
+    check("(setup) the check let go", not chk.conn_open)
+    asyncio.run(flush())
+    check("once it let go, the next flush rotated the file",
+          len(list(Path(d).glob("archive.corrupt-*.db"))) == 1
+          and not state.get("rotate_pending") and state.get("generation") == 1)
+    archiver.CHECK_STOP_TIMEOUT_S = real_timeout
+    state["conn"].close()
+
+# --- 6. a late verdict about a file already replaced is ignored -----------------------------
+print("a background verdict about a file that was already rotated does not rotate the new one:")
+
+
+async def verdicts():
+    loop = asyncio.get_running_loop()
+    with tempfile.TemporaryDirectory() as d:
+        db = Path(d) / "archive.db"
+        archiver.open_db(db).close()
+        out = {}
+        for label, bump in (("same file", False), ("file replaced since", True)):
+            state = {}
+            chk = archiver.start_background_check(state, loop, db, None)
+            chk.stop()
+            if bump:                       # a write found damage first and rotated
+                state["generation"] = state.get("generation", 0) + 1
+            chk.on_corrupt()               # the verdict arrives late
+            await asyncio.sleep(0.05)
+            out[label] = bool(state.get("rotate_pending"))
+        return out
+got = asyncio.run(verdicts())
+check("a verdict about the current file schedules a rotation", got["same file"] is True)
+check("a verdict about a replaced file is ignored", got["file replaced since"] is False)
+
 print("\n" + ("PASS" if ok else "FAIL"))
 raise SystemExit(0 if ok else 1)

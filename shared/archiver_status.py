@@ -18,7 +18,7 @@ from pathlib import Path
 
 FILE_NAME = "archiver-status.json"
 # The archiver writes every ~10 s (ARCHIVE_STATUS_EVERY_S). Older than this, it is not running.
-STALE_S = float(os.environ.get("ARCHIVER_STATUS_STALE_S", "90"))
+STALE_S = float(os.environ.get("ARCHIVE_STATUS_STALE_S", "90"))
 
 # reason key -> what the crew reads after "Not recording: ". Plain, short.
 TEXT = {
@@ -33,8 +33,8 @@ TEXT = {
 
 
 def default_path():
-    """Beside the archive: ARCHIVER_STATUS_FILE, else next to ARCHIVE_DB."""
-    explicit = os.environ.get("ARCHIVER_STATUS_FILE")
+    """ARCHIVE_STATUS_FILE (the archiver's own variable), else next to ARCHIVE_DB."""
+    explicit = os.environ.get("ARCHIVE_STATUS_FILE")
     if explicit:
         return Path(explicit)
     db = Path(os.environ.get("ARCHIVE_DB", "/var/lib/sr33/archive/archive.db"))

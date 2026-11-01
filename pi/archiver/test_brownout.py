@@ -200,6 +200,51 @@ with tempfile.TemporaryDirectory() as d:
     check("...and nothing was moved", not list(Path(d).glob("archive.corrupt-*")))
 
 
+print("an uncertain error at open ('disk I/O error') is retried before rotating; clear "
+      "damage rotates at once:")
+
+
+def flaky_open(errors):
+    """Patch fast_check to raise each of `errors` in turn, then pass. Returns the call log."""
+    calls = []
+    real = archiver.fast_check
+
+    def fake(conn):
+        calls.append(1)
+        if len(calls) <= len(errors):
+            raise errors[len(calls) - 1]
+        return real(conn)
+    archiver.fast_check = fake
+    return calls, real
+
+
+archiver.OPEN_RETRY_S = 0.01
+for label, errs, want_rot, want_calls in (
+        ("I/O error twice, then fine: no rotation", [sqlite3.OperationalError("disk I/O error")] * 2,
+         False, 3),
+        ("I/O error on all 4 tries: rotated", [sqlite3.OperationalError("disk I/O error")] * 4,
+         True, 4),
+        ("'malformed' once: rotated at once, no retry",
+         [sqlite3.DatabaseError("database disk image is malformed")], True, 1),
+        ("'string or blob too big' once: rotated at once",
+         [sqlite3.DataError("string or blob too big")], True, 1),
+        ("a decode error once: rotated at once",
+         [UnicodeDecodeError("utf-8", b"\xea", 0, 1, "bad")], True, 1)):
+    with tempfile.TemporaryDirectory() as d:
+        db = Path(d) / "archive.db"
+        good_db(db, 10).close()
+        calls, real = flaky_open(errs)
+        try:
+            conn, rotated = archiver.open_db_resilient(db)
+        finally:
+            archiver.fast_check = real
+        n = len(calls)
+        check(f"{label} ({n} open(s))", (rotated is not None) == want_rot and n == want_calls)
+        if not want_rot:
+            check("...and the archive kept its rows", count(conn) == 10)
+        conn.close()
+
+
 # --- mid-race corruption, through the real flusher --------------------------
 async def flush_until(state, buf, db, cond, timeout=10.0):
     """Run the real flusher until `cond()` holds, then stop it. True if it held in time.

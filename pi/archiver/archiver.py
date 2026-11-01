@@ -301,31 +301,57 @@ def _clear_for_fresh(path: Path):
     return None
 
 
+# An open error that is neither clearly the file (malformed, not a database, string or blob
+# too big, a decode error) nor clearly transient — typically "disk I/O error", which a brownout
+# can produce once on a healthy card — is retried before the archive is moved aside. Moving a
+# healthy archive loses nothing, but it takes the engine's history with it.
+OPEN_RETRIES = int(os.environ.get("ARCHIVE_OPEN_RETRIES", "3"))
+OPEN_RETRY_S = float(os.environ.get("ARCHIVE_OPEN_RETRY_S", "2"))
+
+
+def _clearly_damaged(exc) -> bool:
+    """The errors that can only mean a damaged file: rotate at once, no retry."""
+    return _is_corruption(exc)
+
+
 def open_db_resilient(path: Path = ARCHIVE_DB):
     """Open the archive, rotating it aside if it is unusable. Returns (conn, rotated_to|None).
 
     This is the whole brownout story: a bad card must cost seconds, not six weeks. BOUNDED:
     open + schema + `fast_check`, never a whole-file scan — the archiver records nothing until
-    this returns (see `BackgroundCheck` for the full check, which runs after recording starts)."""
-    conn = None
-    try:
-        finished = _clear_for_fresh(path)
-        conn = open_db(path)
-        fast_check(conn)
-        if finished is not None:
-            _note_rotation(conn, finished)
-            return conn, finished
-        return conn, None
-    except (sqlite3.DatabaseError, UnicodeDecodeError) as exc:
-        if not _is_bad_file(exc):
-            if conn is not None:
-                conn.close()
-            raise
-        print(f"[archive] {path.name} is unusable ({type(exc).__name__}: {exc}) — moving it "
-              f"aside and recording into a fresh file", flush=True)
-        # the same close -> resumable move -> check -> open sequence as a mid-run rotation;
-        # CREATE TABLE IF NOT EXISTS self-initialises the fresh file
-        return reopen_fresh(conn, path)
+    this returns (see `BackgroundCheck` for the full check, which runs after recording starts).
+    Clearly damaged -> rotate at once; transient -> raise (the caller retries); anything else
+    -> retry the open OPEN_RETRIES times, OPEN_RETRY_S apart, and rotate only if it persists."""
+    finished = _clear_for_fresh(path)
+    attempt = 0
+    while True:
+        conn = None
+        try:
+            conn = open_db(path)
+            fast_check(conn)
+            if finished is not None:
+                _note_rotation(conn, finished)
+                return conn, finished
+            return conn, None
+        except (sqlite3.DatabaseError, UnicodeDecodeError) as exc:
+            if not _is_bad_file(exc):
+                if conn is not None:
+                    conn.close()
+                raise
+            if not _clearly_damaged(exc) and attempt < OPEN_RETRIES:
+                attempt += 1
+                if conn is not None:
+                    conn.close()
+                print(f"[archive] opening {path.name} failed ({type(exc).__name__}: {exc}); "
+                      f"retry {attempt}/{OPEN_RETRIES} in {OPEN_RETRY_S:.0f}s before moving "
+                      f"it aside", flush=True)
+                time.sleep(OPEN_RETRY_S)
+                continue
+            print(f"[archive] {path.name} is unusable ({type(exc).__name__}: {exc}) — moving "
+                  f"it aside and recording into a fresh file", flush=True)
+            # the same close -> resumable move -> check -> open sequence as a mid-run
+            # rotation; CREATE TABLE IF NOT EXISTS self-initialises the fresh file
+            return reopen_fresh(conn, path)
 
 
 def reopen_fresh(conn, path: Path = ARCHIVE_DB):
@@ -348,8 +374,11 @@ def reopen_fresh(conn, path: Path = ARCHIVE_DB):
     is finished to the same destination before any fresh file is opened — see
     `rotate_corrupt`."""
     # A background check reading this file holds its own connection to it, and a WAL
-    # connection's close cleans sidecars by NAME — stop it before anything moves.
-    stop_checks(path)
+    # connection's close cleans sidecars by NAME — stop it before anything moves. If it will
+    # not let go (a read stalled on a dying card), move NOTHING: raise before touching `conn`,
+    # so the caller keeps recording into the current file and retries the rotation later.
+    if not stop_checks(path):
+        raise CheckerBusy(f"a background check still holds {path.name}; rotation deferred")
     if conn is not None:
         # Under the write lock: the pruner runs on another thread and may be mid-DELETE on this
         # very connection. Closing it underneath that is undefined; waiting for it is not.
@@ -398,6 +427,12 @@ def open_for_run(path: Path = ARCHIVE_DB):
 # really damaged or was moved on a false alarm.
 CHECK_DUTY = float(os.environ.get("ARCHIVE_CHECK_DUTY", "0.5"))
 CHECK_SLICE_S = 0.05
+# How long a rotation waits for a check to let go of the file before deferring itself.
+CHECK_STOP_TIMEOUT_S = float(os.environ.get("ARCHIVE_CHECK_STOP_TIMEOUT_S", "30"))
+
+
+class CheckerBusy(OSError):
+    """A rotation was refused because a background check still has the file open."""
 _CHECKS = {}                    # resolved path -> the BackgroundCheck reading it
 _CHECKS_LOCK = threading.Lock()
 
@@ -433,6 +468,7 @@ class BackgroundCheck:
         self.duty = min(1.0, max(0.01, CHECK_DUTY if duty is None else float(duty)))
         self.stop_event = threading.Event()
         self.result = None
+        self.conn_open = False          # True while the check holds a connection to the file
         self.slept = 0.0                # seconds given back by the duty cycle
         self.started = datetime.now(timezone.utc).isoformat()
         self.finished = None
@@ -445,10 +481,14 @@ class BackgroundCheck:
         self.thread.start()
         return self
 
-    def stop(self, timeout=30.0):
+    def stop(self, timeout=None):
+        """Ask the check to stop and wait up to `timeout`. True once it no longer holds a
+        connection to the file — the only state in which the file may be moved."""
         self.stop_event.set()
+        timeout = CHECK_STOP_TIMEOUT_S if timeout is None else timeout
         if self.thread.is_alive() and threading.current_thread() is not self.thread:
             self.thread.join(timeout)
+        return not self.conn_open
 
     def summary(self):
         doc = {"file": self.path.name, "live": self.live, "started": self.started,
@@ -475,6 +515,7 @@ class BackgroundCheck:
         _lower_priority()
         result, conn = None, None
         try:
+            self.conn_open = True       # before connect: a stalled open holds the file too
             conn = sqlite3.connect(f"file:{self.path}?mode=ro", uri=True, timeout=30,
                                    check_same_thread=False)
             self._slice_start = time.monotonic()
@@ -499,6 +540,7 @@ class BackgroundCheck:
                     conn.close()
                 except Exception:
                     pass
+            self.conn_open = False
             with _CHECKS_LOCK:
                 if _CHECKS.get(str(self.path.resolve())) is self:
                     del _CHECKS[str(self.path.resolve())]
@@ -524,12 +566,14 @@ class BackgroundCheck:
                   f"({result['detail']})", flush=True)
 
 
-def stop_checks(path):
-    """Stop (and wait for) any background check reading `path` — before it is closed or moved."""
+def stop_checks(path, timeout=None):
+    """Stop (and wait for) any background check reading `path` — before it is closed or moved.
+    False when one still holds the file after `timeout`: the caller must not move it."""
     with _CHECKS_LOCK:
         chk = _CHECKS.get(str(Path(path).resolve()))
-    if chk is not None:
-        chk.stop()
+    if chk is None:
+        return True
+    return chk.stop(timeout)
 
 
 def _note_rotation(conn, rotated: Path):
@@ -550,8 +594,20 @@ def _note_rotation(conn, rotated: Path):
         print(f"[archive] could not record the rotation: {exc}", flush=True)
 
 
+def _clean(s):
+    """A string SQLite can store: lone UTF-16 surrogates (valid JSON, "\\ud800", invalid
+    UTF-8) become "?". Without this one such string failed its whole batch, forever."""
+    if isinstance(s, str):
+        try:
+            s.encode("utf-8")
+        except UnicodeEncodeError:
+            return s.encode("utf-8", "replace").decode("utf-8")
+    return s
+
+
 def flatten(time, source, path, value, out):
     """Append one or more archive rows for a Signal K value, matching uplink flattening."""
+    time, source, path, value = _clean(time), _clean(source), _clean(path), _clean(value)
     if isinstance(value, bool):
         out.append((time, BOAT_ID, source, path, None, str(value).lower()))
     elif isinstance(value, (int, float)):
@@ -559,7 +615,7 @@ def flatten(time, source, path, value, out):
     elif isinstance(value, dict):
         for k, sub in value.items():
             if isinstance(sub, (int, float)) and not isinstance(sub, bool):
-                out.append((time, BOAT_ID, source, f"{path}.{k}", float(sub), None))
+                out.append((time, BOAT_ID, source, _clean(f"{path}.{k}"), float(sub), None))
     elif isinstance(value, str) and value:
         out.append((time, BOAT_ID, source, path, None, value))
 
@@ -649,6 +705,62 @@ def write_rows(conn, rows):
             except Exception:
                 pass                    # a dead connection has nothing to roll back
             raise
+
+
+# Errors that belong to ONE ROW's values, not to the file or the connection: a lone UTF-16
+# surrogate in a string (UnicodeEncodeError), an unbindable type, a constraint. Retried row by
+# row (`write_rows_each`) so only the bad row is lost. Locks, I/O and corruption are NOT here —
+# row by row they would fail every row and throw the batch away.
+ROW_ERRORS = (ValueError, TypeError, OverflowError, sqlite3.InterfaceError,
+              sqlite3.IntegrityError, sqlite3.ProgrammingError)
+
+
+def _is_row_error(exc) -> bool:
+    if isinstance(exc, sqlite3.ProgrammingError):
+        return "binding parameter" in str(exc).lower()    # not "closed database" etc.
+    return isinstance(exc, ROW_ERRORS)
+
+
+_INSERT = ("INSERT INTO readings (time, boat_id, source, path, value, str_value) "
+           "VALUES (?, ?, ?, ?, ?, ?)")
+
+
+def write_rows_each(conn, rows):
+    """Insert `rows` one statement each in ONE transaction, skipping the rows whose values
+    cannot be written. Returns [(row, exc)] for the skipped ones. Anything that is not a row
+    error (lock, I/O, corruption) rolls back the whole batch and raises, as `write_rows` does."""
+    bad = []
+    with _WRITE_LOCK:
+        try:
+            for r in rows:
+                try:
+                    conn.execute(_INSERT, r)
+                except ROW_ERRORS as exc:
+                    if not _is_row_error(exc):
+                        raise
+                    bad.append((r, exc))
+            conn.commit()
+        except BaseException:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
+    return bad
+
+
+def _note_bad_rows(state, bad, exc):
+    """Count the rows that could not be written, and say so at most once per window."""
+    state["rows_dropped_bad"] = state.get("rows_dropped_bad", 0) + len(bad)
+    state["_bad_unlogged"] = state.get("_bad_unlogged", 0) + len(bad)
+
+    def line(_quiet):
+        n, state["_bad_unlogged"] = state["_bad_unlogged"], 0
+        first = repr(bad[0][0])[:160] if bad else "?"
+        return (f"[archive] dropped {n} unwritable row(s) since the last report "
+                f"({state['rows_dropped_bad']} since start; {type(exc).__name__}: "
+                f"{str(exc)[:120]}); e.g. {first}. The rest of each batch was written.")
+    _log_every(state, "bad_rows", DROP_LOG_EVERY_S, time.monotonic, line)
 
 
 # ---- DISK GUARD + RAM CAP -----------------------------------------------------------------
@@ -885,6 +997,7 @@ def write_status(state, guard=None, path=None, now=None):
         "paused_since": guard.paused_since if guard else None,
         "rows_not_recorded_disk_full": guard.dropped if guard else 0,
         "rows_dropped_buffer_full": state.get("buffer_dropped", 0),
+        "rows_dropped_unwritable": state.get("rows_dropped_bad", 0),
         "rows_waiting": state.get("buffered", 0),
         "rows_written": state.get("total", 0),
         "corrupt_rotations_this_run": state.get("rotations", 0),
@@ -956,6 +1069,13 @@ async def _recover(buf, loop, state, path):
     old, state["conn"] = state.get("conn"), None   # closed by reopen_fresh, whatever happens
     try:
         state["conn"], _rot = await loop.run_in_executor(None, reopen_fresh, old, path)
+    except CheckerBusy as exc:
+        # Nothing was closed or moved: keep writing into the current file, retry next flush.
+        state["conn"] = old
+        why = str(exc)
+        _log_every(state, "busy", DROP_LOG_EVERY_S, time.monotonic,
+                   lambda quiet: f"[archive] {why}; still recording into the current file")
+        return "busy"
     except Exception as exc:
         print(f"[archive] rotation failed ({type(exc).__name__}: {exc}); "
               f"{len(buf)} rows waiting, will retry", flush=True)
@@ -963,6 +1083,7 @@ async def _recover(buf, loop, state, path):
         return False
     state["rotate_pending"] = False
     state["rotations"] = state.get("rotations", 0) + 1
+    state["generation"] = state.get("generation", 0) + 1   # a new file: older verdicts are moot
     state["_status_dirty"] = True
     return True
 
@@ -971,8 +1092,12 @@ async def _flush_once(buf, loop, state, path, guard):
     # A pending rotation goes FIRST, before the disk guard: the guard reads free pages through
     # the connection, and deciding "full" from a half-recovered archive would throw away the
     # very rows the rotation is meant to save.
-    if state.get("rotate_pending") and not await _recover(buf, loop, state, path):
-        return
+    busy = False                          # a check holds the file: write to it, rotate later
+    if state.get("rotate_pending"):
+        got = await _recover(buf, loop, state, path)
+        if not got:
+            return
+        busy = got == "busy"
     if guard is not None:
         allowed = await loop.run_in_executor(None, guard.allow, state.get("conn"))
         if not allowed:
@@ -985,14 +1110,25 @@ async def _flush_once(buf, loop, state, path, guard):
     rows, buf[:] = buf[:], []
     # Two attempts: a corruption error on the first rotates and writes the same batch into the
     # fresh file straight away. If the rotation or the second write fails too, the rows go back.
+    dropped = []
     for attempt in (1, 2):
-        if state.get("rotate_pending"):
+        if state.get("rotate_pending") and not busy:
             buf[:0] = rows                # _recover keeps them on failure, in order
-            if not await _recover(buf, loop, state, path):
+            got = await _recover(buf, loop, state, path)
+            if not got:
                 return
+            busy = got == "busy"
             rows, buf[:] = buf[:], []
         try:
-            await loop.run_in_executor(None, write_rows, state["conn"], rows)
+            try:
+                await loop.run_in_executor(None, write_rows, state["conn"], rows)
+            except ROW_ERRORS as exc:
+                if not _is_row_error(exc):
+                    raise
+                # One bad row must not hold up the batch (it would be requeued at the front
+                # forever): write the rows one by one, drop only the ones that fail.
+                dropped = await loop.run_in_executor(None, write_rows_each, state["conn"], rows)
+                _note_bad_rows(state, dropped, exc)
             break
         except sqlite3.DatabaseError as exc:
             if _is_corruption(exc):
@@ -1008,13 +1144,14 @@ async def _flush_once(buf, loop, state, path, guard):
         except Exception as exc:
             _requeue(buf, rows, state, f"unexpected flush error ({type(exc).__name__}: {exc})")
             return
-    state["total"] = state.get("total", 0) + len(rows)
+    state["total"] = state.get("total", 0) + len(rows) - len(dropped)
     state["last_write_ok"] = time.monotonic()
     # report the AIS skip count too — silence here would look identical to a filter that
     # had quietly stopped working, or to one wrongly eating own-ship data
     skipped = state.get("skipped", 0)
     note = f" (skipped {skipped} AIS deltas)" if skipped else ""
-    print(f"[archive] +{len(rows)} rows (total {state['total']}){note}", flush=True)
+    print(f"[archive] +{len(rows) - len(dropped)} rows (total {state['total']}){note}",
+          flush=True)
 
 
 def _requeue(buf, rows, state, why):
@@ -1238,8 +1375,16 @@ def start_background_check(state, loop, db, rotated):
     if rotated is not None:
         chk = BackgroundCheck(rotated, live=False)
     else:
+        gen = state.get("generation", 0)   # the archive file this check is reading
+
         def on_corrupt():
             def mark():
+                if state.get("generation", 0) != gen:
+                    # The file was already replaced (e.g. a write found the damage first): this
+                    # verdict is about the OLD file. Rotating now would move the healthy new one.
+                    print("[archive] background check verdict is for a file already rotated "
+                          "aside; ignoring", flush=True)
+                    return
                 state["rotate_pending"] = True
                 state["_status_dirty"] = True
             loop.call_soon_threadsafe(mark)
