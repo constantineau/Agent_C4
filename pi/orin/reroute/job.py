@@ -162,11 +162,11 @@ def _race_obstacles(definition, course_id, bbox, res_deg, depth):
     to block a later leg). Pure Python, no shoreline data. Built as "natural_earth" whatever the
     configured coastline source: under "enc" the builder skips the island disks (it expects ENC
     land polygons, which this build doesn't load), and an island must never read as open water."""
-    # carve_start=False: the start here is the boat, and no zone or island disk is ever opened
-    # around it (the boat's pocket is opened in the land mask only)
+    # carve_waypoints=False: no zone or island disk is ever opened, for the boat or any mark (the
+    # pockets go in the land mask only, see load_obstacles)
     return geo.build_for_course(definition, course_id, bbox, res_deg=res_deg, coastline_on=False,
                                 use_cache=False, source="natural_earth", safety_depth=depth,
-                                carve_start=False)
+                                carve_waypoints=False)
 
 
 def _inside(lat, lon, rings):
@@ -181,16 +181,29 @@ def _inside(lat, lon, rings):
     return hit
 
 
-def boat_in_no_go(definition, course_id, lat, lon):
-    """The crew-facing reason the boat itself is inside a race zone or an island's keep-out disk
-    (as the obstacle builder fills them), else None. Routing out of it would mean erasing it."""
+def _no_go_at(definition, course_id, lat, lon):
+    """"zone" / "island" when (lat, lon) is inside a race zone or an island's keep-out disk (as
+    the obstacle builder fills them), else None."""
     for z in definition.get("zones", []) or []:
         if z.get("type") in ("exclusion", "hazard", "tss") and \
                 _inside(lat, lon, geo._zone_rings(z.get("geometry"))):
-            return BOAT_IN_ZONE
+            return "zone"
     for isl in geo._course_islands(definition, course_id):
         if optimizer._hav_nm(lat, lon, isl["lat"], isl["lon"]) <= isl["radius_nm"]:
-            return BOAT_IN_ISLAND
+            return "island"
+    return None
+
+
+def boat_in_no_go(definition, course_id, lat, lon):
+    """The crew-facing reason not to route: the boat, or a mark still to sail to, is inside a race
+    zone or an island's keep-out. Routing there would mean erasing it, which the Orin never does."""
+    hit = _no_go_at(definition, course_id, lat, lon)
+    if hit:
+        return BOAT_IN_ZONE if hit == "zone" else BOAT_IN_ISLAND
+    marks, _skip, _cid = race_def.course_to_marks(definition, course_id)
+    for _s, name, mlat, mlon in marks[1:]:
+        if mlat is not None and _no_go_at(definition, course_id, mlat, mlon):
+            return f"Mark {name} is inside a no-go zone. Re-route not run."
     return None
 
 
@@ -226,12 +239,12 @@ def load_obstacles(definition, course_id, full_definition, full_course_id, boat)
                     # an empty mask = the shoreline never loaded when it was built: not "checked"
                     note = NO_LAND
                 elif land is not None and need and W._contains(land.bbox, need):
-                    # the boat is a new start: open the same pocket the Lab opens at every
-                    # course point, in the land mask only, BEFORE the race layer goes on (so
-                    # zones and rounding barriers near the boat stay)
-                    st = ((definition.get("courses") or [{}])[0].get("start") or {})
-                    if st.get("lat") is not None:
-                        land._carve_disk(st["lat"], st["lon"], geo.MARK_CARVE_NM)
+                    # open the Lab's waypoint pockets in the land mask only, BEFORE the race
+                    # layer goes on, so zones, island disks and barriers are never cleared
+                    # the boat and every mark left get the Lab's pocket, in LAND only
+                    for _s, _n, mla, mlo in race_def.course_to_marks(definition, course_id)[0]:
+                        if mla is not None and mlo is not None:
+                            land._carve_disk(mla, mlo, geo.MARK_CARVE_NM)
                     race = _race_obstacles(definition, course_id, land.bbox, land.res, depth)
                     n = len(land.mask)
                     if len(race.mask) != n:               # can't happen: same box, same cell size

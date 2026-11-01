@@ -139,10 +139,12 @@ no land in it. Route doesn't check the shore.").
 
 The boat is a new start point, so the run opens the Lab's usual start pocket (0.5 nm) around it in
 the land mask before the race layer goes on: a boat close to shore is never boxed in by a
-shoreline cell. Zones, island disks and rounding barriers are never opened around the boat,
-however close (the race layer is built with `carve_start=False`). If the boat itself is inside an
-exclusion zone or an island's disk, the run doesn't route: "Boat is inside an exclusion zone.
-Re-route not run." (or "…inside an island's keep-out…").
+shoreline cell. The same land-only pocket opens at every mark still to sail. Zones, island disks
+and rounding barriers are never opened, for the boat or any mark, however close (the race layer
+is built with `carve_waypoints=False`). If the boat is inside an exclusion zone or an island's
+disk, the run doesn't route: "Boat is inside an exclusion zone. Re-route not run." (or "…inside an
+island's keep-out…"). If a mark still to sail is inside one: "Mark <name> is inside a no-go zone.
+Re-route not run."
 
 Without a usable land file the run uses those race obstacles alone. Island disks are always
 built for them, whatever the coastline source (under ENC the Lab leaves them to ENC land).

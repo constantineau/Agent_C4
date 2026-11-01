@@ -420,6 +420,37 @@ check("chart path: same", nZ2 is None and fZ2.blocked(44.001, -81.994))
 check("(the Lab's own build still opens its start pocket: unchanged)", not geo.build_for_course(
     dict(NEAR, courses=[dict(NEAR["courses"][0], start={"lat": 44.0, "lon": -82.0})]), "c",
     (45.6, 42.9, -83.1, -80.9), coastline_on=False, use_cache=False).blocked(44.001, -81.994))
+# …nor around a mark (Codex repro): the next buoy 0.4 nm from the boat, beside the same zone
+NEARM = dict(NEAR, race_id="nearm", courses=[dict(NEAR["courses"][0], marks=[
+    {"name": "Buoy", "type": "buoy", "lat": 44.0, "lon": -81.99, "rounding": "none"}])])
+dM, cM, _n = job.remaining_definition(NEARM, "c", 1, 44.0, -82.0)
+fM, _ = job.load_obstacles(dM, cM, None, None, job._get_boat())
+check("a mark's pocket doesn't open the zone either", fM.blocked(44.001, -81.994))
+check("(the Lab's default build does open it: unchanged)", not geo.build_for_course(
+    NEARM, "c", (45.6, 42.9, -83.1, -80.9), coastline_on=False, use_cache=False).blocked(44.001, -81.994))
+INZ = dict(NEAR, race_id="inz", courses=[dict(NEAR["courses"][0], marks=[
+    {"name": "Buoy", "type": "buoy", "lat": 44.0, "lon": -81.994, "rounding": "none"}])])
+try:
+    job.run({"device": "x", "position": {"lat": 43.9, "lon": -82.2}, "next_index": 1,
+             "definition": INZ, "course_id": "c", "models": ["gfs"]}, now=NOW,
+            is_online=lambda: False)
+    check("a mark inside a zone → not routed", False)
+except job.RunError as e:
+    check("a mark inside a zone → not routed, said plainly",
+          str(e) == "Mark Buoy is inside a no-go zone. Re-route not run.")
+# land pockets at the remaining marks: the gate sits in a shoreline cell of the carried mask
+f_gate = geo.build_for_course(DEF, "c", (46.0, 42.5, -83.5, -81.5), coastline_on=False,
+                              use_cache=False, zones_on=False, islands_on=False)
+f_gate._fill_polygon([[(-82.35, 44.85), (-82.15, 44.85), (-82.15, 44.95), (-82.35, 44.95)]], 1,
+                     "coastline")
+f_gate.active = True
+with open(job.chart_path("huron", "c"), "w") as fh:
+    json.dump(dict(geo.field_to_dict(f_gate), kind="land",
+                   fingerprint=geo.course_fingerprint(DEF, "c", DEPTH)), fh)
+fG, nG = lo(DEF)
+check("the land under a remaining mark is opened (pocket), the rest stays", nG is None
+      and not fG.blocked(44.9, -82.25) and fG.blocked(44.94, -82.17))
+write_chart(DEF)
 REQ_Z = {"device": "iPad 1", "position": {"lat": 44.0, "lon": -81.994}, "next_index": 1,
          "definition": NEAR, "course_id": "c", "models": ["gfs"]}
 try:
