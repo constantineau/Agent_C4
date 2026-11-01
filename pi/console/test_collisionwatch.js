@@ -1,0 +1,170 @@
+// Collision watch on the iPad coach strip (pi/console/dashboard/collisionwatch.js) — 2026-11-02
+// system review, collision items 2, 3, 6. Pins: an active collision warning holds the strip until
+// it clears (a routine line voiced later can't push it off), every contact shows with live
+// numbers, a watch that can't see says "Collision watch OFF: <reason>" (never a quiet strip), and
+// the tone re-arms when a contact clears and returns or gets worse.
+// Run: node pi/console/test_collisionwatch.js (no deps; tools/ci/run.sh runs it in node:22-alpine).
+"use strict";
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const COL = require(path.join(__dirname, "dashboard", "collisionwatch.js"));
+
+const cases = [];
+const test = (name, fn) => cases.push([name, fn]);
+const words = (s) => String(s).trim().split(/\s+/).length;
+
+const T0 = 1793000000000;
+const risk = (id, name, cpa, tcpa, urgency = "now") => ({ id: "ais:" + id + ":" + (urgency === "now" ? "act" : "watch"),
+  category: "safety", urgency, headline: (urgency === "now" ? "Collision risk: " : "Traffic closing: ") + name,
+  detail: "CPA " + cpa + " nm / " + tcpa + " min" });
+const routine = { id: "checklist:navlights", category: "checklist", urgency: "soon", headline: "Nav lights on", detail: "sunset" };
+const coach = (o) => Object.assign({ enabled: true, running: true, interval_s: 30, updated_at: 1000, active: [], new: [], history: [] }, o);
+// the tone levels dashboard.js uses (alertLevel)
+const levelOf = (c) => c.urgency === "now" ? "act" : (["safety", "watch", "checklist"].includes(c.category) ? "watch" : null);
+
+// a live state that has just polled successfully
+function live(c, nowMs = T0) {
+  const st = COL.newState(nowMs - 1000);
+  COL.track(st, c, nowMs);
+  return st;
+}
+
+test("the warning holds the strip while a routine callout is voiced later", () => {
+  const ferry = risk("1", "FERRY", 0.2, 6);
+  // T0: the collision was voiced; T+30 s: the nav-lights checklist is the newest history line
+  const c = coach({ active: [ferry, routine],
+    history: [{ at: 1030, spoken: "Nav lights on — sunset" }, { at: 1000, spoken: "Collision risk: FERRY — CPA 0.2 nm / 6 min" }] });
+  const v = COL.strip(c, COL.offReason(c, live(c), T0));
+  assert.equal(v.kind, "act");
+  assert.deepEqual(v.lines, ["Collision risk: FERRY — CPA 0.2 nm / 6 min"]);
+  assert.equal(v.fromHistory, false);
+});
+
+test("numbers on the strip are the live ones from `active`, not the first-voiced line", () => {
+  const c = coach({ active: [risk("1", "FERRY", 0.1, 3)], history: [{ at: 1000, spoken: "Collision risk: FERRY — CPA 0.2 nm / 6 min" }] });
+  assert.deepEqual(COL.strip(c, null).lines, ["Collision risk: FERRY — CPA 0.1 nm / 3 min"]);
+});
+
+test("every contact shows, in the copilot's order (soonest first); more than 4 → '+N more'", () => {
+  const list = [risk("1", "TUG", 0.4, 3), risk("2", "BARGE", 0.3, 7), risk("3", "FAR", 0.05, 11), risk("4", "FERRY", 1.2, 8, "soon")];
+  let v = COL.strip(coach({ active: list }), null);
+  assert.deepEqual(v.lines.map((l) => l.split(" — ")[0]),
+    ["Collision risk: TUG", "Collision risk: BARGE", "Collision risk: FAR", "Traffic closing: FERRY"]);
+  v = COL.strip(coach({ active: list.concat([risk("5", "TANKER", 0.4, 9), risk("6", "LAKER", 0.4, 10)]) }), null);
+  assert.equal(v.lines.length, 5);
+  assert.equal(v.lines[4], "+2 more");
+});
+
+test("watch-level only → kind 'watch'; it still beats routine history", () => {
+  const c = coach({ active: [routine, risk("1", "BARGE", 1.2, 25, "soon")], history: [{ at: 1000, spoken: "Nav lights on" }] });
+  const v = COL.strip(c, null);
+  assert.equal(v.kind, "watch");
+  assert.match(v.lines[0], /^Traffic closing: BARGE/);
+});
+
+test("the warning clears → the strip falls back to the coach history", () => {
+  const c = coach({ active: [routine], history: [{ at: 1030, spoken: "Nav lights on — sunset" }] });
+  const v = COL.strip(c, null);
+  assert.equal(v.kind, "coach");
+  assert.deepEqual(v.lines, ["Nav lights on — sunset"]);
+  assert.equal(v.fromHistory, true);
+});
+
+test("the copilot's own blind callout shows as a safety line", () => {
+  const blind = { id: "blind:fix", category: "safety", urgency: "now", headline: "Collision watch OFF: GPS fix stale", detail: "Last fix 45 s ago. Keep a visual lookout." };
+  const v = COL.strip(coach({ active: [blind] }), null);
+  assert.equal(v.kind, "act");
+  assert.match(v.lines[0], /^Collision watch OFF: GPS fix stale/);
+});
+
+test("blind: no answer from the copilot for a minute → OFF: copilot offline (old warning not shown)", () => {
+  const c = coach({ active: [risk("1", "FERRY", 0.2, 6)] });
+  const st = live(c, T0);
+  COL.track(st, null, T0 + 30000);                       // failed polls
+  assert.equal(COL.offReason(c, st, T0 + 30000), null);  // 30 s: one dropped poll isn't "off"
+  COL.track(st, null, T0 + 61000);
+  const off = COL.offReason(c, st, T0 + 61000);
+  assert.equal(off, "copilot offline");
+  const v = COL.strip(c, off);
+  assert.equal(v.kind, "off");
+  assert.deepEqual(v.lines, ["Collision watch OFF: copilot offline. Keep a lookout."]);
+});
+
+test("blind: never reached the copilot since the page loaded → OFF after a minute, not a blank strip", () => {
+  const st = COL.newState(T0);
+  COL.track(st, null, T0 + 5000);
+  assert.equal(COL.offReason(null, st, T0 + 5000), null);
+  assert.equal(COL.offReason(null, st, T0 + 61000), "copilot offline");
+  assert.equal(COL.strip(null, "copilot offline").kind, "off");
+});
+
+test("blind: the copilot answers but its result stopped moving (a stuck tick) → OFF: copilot stalled", () => {
+  const c = coach({ updated_at: 1000 });
+  const st = live(c, T0);
+  for (let t = 15000; t <= 120000; t += 15000) COL.track(st, c, T0 + t);   // same updated_at every poll
+  assert.equal(COL.offReason(c, st, T0 + 90000), null);                   // under 3 ticks + slack
+  assert.equal(COL.offReason(c, st, T0 + 120000), "copilot stalled");
+  COL.track(st, coach({ updated_at: 1120 }), T0 + 121000);                 // it moves again
+  assert.equal(COL.offReason(coach({ updated_at: 1120 }), st, T0 + 121000), null);
+});
+
+test("blind: the coach timer is stopped or disabled → OFF: copilot stopped", () => {
+  for (const c of [coach({ running: false }), coach({ enabled: false, running: false })]) {
+    assert.equal(COL.offReason(c, live(c), T0), "copilot stopped");
+  }
+});
+
+test("a working, quiet copilot is not OFF (and the strip is hidden)", () => {
+  const c = coach({});
+  assert.equal(COL.offReason(c, live(c), T0), null);
+  assert.equal(COL.strip(c, null).kind, "none");
+});
+
+test("the tone re-arms when a contact clears and comes back", () => {
+  const alerted = new Set();
+  const ferry = risk("1", "FERRY", 0.2, 6);
+  assert.equal(COL.alertsFor(coach({ active: [ferry] }), null, alerted, levelOf), "act");
+  assert.equal(COL.alertsFor(coach({ active: [ferry] }), null, alerted, levelOf), null, "no repeat while it stays");
+  assert.equal(COL.alertsFor(coach({ active: [] }), null, alerted, levelOf), null);
+  assert.equal(COL.alertsFor(coach({ active: [ferry] }), null, alerted, levelOf), "act", "it came back: sound again");
+});
+
+test("the tone sounds again when the risk worsens (watch → act is a new id)", () => {
+  const alerted = new Set();
+  assert.equal(COL.alertsFor(coach({ active: [risk("1", "BARGE", 1.2, 20, "soon")] }), null, alerted, levelOf), "watch");
+  assert.equal(COL.alertsFor(coach({ active: [risk("1", "BARGE", 0.4, 9)] }), null, alerted, levelOf), "act");
+});
+
+test("the watch going OFF sounds once per episode; recovery re-arms it", () => {
+  const alerted = new Set();
+  const c = coach({ active: [risk("1", "FERRY", 0.2, 6)] });
+  assert.equal(COL.alertsFor(c, "copilot offline", alerted, levelOf), "act");
+  assert.equal(COL.alertsFor(c, "copilot offline", alerted, levelOf), null);
+  COL.alertsFor(coach({ active: [] }), null, alerted, levelOf);
+  assert.equal(COL.alertsFor(c, "copilot offline", alerted, levelOf), "act");
+});
+
+test("strip words stay short (12 words max per OFF line)", () => {
+  for (const r of ["copilot offline", "copilot stalled", "copilot stopped"]) {
+    assert.ok(words(COL.strip(null, r).lines[0]) <= 12, r);
+  }
+});
+
+test("dashboard.js wires it: renderCoach uses the strip, fetchCoach judges OFF on every poll", () => {
+  const src = fs.readFileSync(path.join(__dirname, "dashboard", "dashboard.js"), "utf8");
+  const html = fs.readFileSync(path.join(__dirname, "dashboard", "index.html"), "utf8");
+  assert.ok(/COL\.strip\(App\.coach, App\.coachOff\)/.test(src));
+  assert.ok(/COL\.track\(colState, r, now\)/.test(src) && /App\.coachOff = COL\.offReason/.test(src));
+  assert.ok(/COL\.alertsFor\(/.test(src));
+  assert.ok(!/c\.history\[0\]\.spoken/.test(src), "the old history-first strip is gone");
+  assert.ok(html.indexOf("collisionwatch.js") > -1 && html.indexOf("collisionwatch.js") < html.indexOf("dashboard.js?"));
+});
+
+let fails = 0;
+for (const [name, fn] of cases) {
+  try { fn(); console.log("  [PASS] " + name); }
+  catch (e) { fails++; console.log("  [FAIL] " + name + "\n         " + (e && e.message)); }
+}
+console.log(fails ? "\nFAIL (" + fails + ")" : "\nPASS");
+process.exit(fails ? 1 : 0);

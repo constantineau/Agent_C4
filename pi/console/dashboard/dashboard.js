@@ -118,6 +118,8 @@
   /* ---- watch-system formatting (CREW tile) ---- */
   // the watch read (status, countdown, CONSIDER) is pure and tested: crewwatch.js (#80)
   const CW = window.C4CrewWatch;
+  const COL = window.C4CollisionWatch;
+  const colState = COL.newState(Date.now());   // when /coach last answered / last moved (tablet clock)
   const fmtHM = CW.fmtHM, fmtMins = CW.fmtMins;
   const teamTxt = (w, id) => { const t = ((w || {}).teams || {})[id]; return t ? t.name + ((t.members || []).length ? " (" + t.members.join(", ") + ")" : "") : id; };
   /* a canned watch read for the demo scenarios: 4-on/4-off, mid-block on calm, 4 min from the
@@ -1163,7 +1165,9 @@
   }
   /* poll the proactive auto-coach: the Orin runs the narration engine on a timer and HOLDS the
      latest coach line; we just read it (no recompute) and show what the copilot last volunteered.
-     A failure leaves the last good read. */
+     A failure keeps the last good read for the briefs, but the collision watch is judged on every
+     poll: no answer for a minute, or a held result that stopped moving, is "Collision watch OFF"
+     on the strip, never a quiet one (collisionwatch.js). */
   async function fetchCoach() {
     if (App.src !== "live") return;
     let r = null;
@@ -1174,8 +1178,11 @@
       clearTimeout(to);
       r = resp.ok ? await resp.json() : null;
     } catch (e) { r = null; }
+    const now = Date.now();
+    COL.track(colState, r, now);
     if (r) App.coach = r;
-    if (r) maybeAlert(r);           // sound a short tone if a new safety/urgent callout arrived
+    App.coachOff = COL.offReason(App.coach, colState, now);
+    maybeAlert(App.coach, App.coachOff);   // tone for a new (or returning, or worse) callout, or the watch going off
     if (App.src === "live") render();
   }
   function agoText(epochSec) {
@@ -1864,24 +1871,21 @@
     if (!parts.length) return "";
     return '<div class="st-stack">' + parts.join("") + "</div>";
   }
-  /* the coach line in the commentary panel — the last thing the copilot volunteered (from the
-     timer's callout history), or, if nothing's been shown yet, the top of the current callout banner.
+  /* the coach line in the commentary panel. An active collision callout owns it until it clears:
+     every contact, soonest first, live numbers (a routine callout voiced later can't push it off).
+     A watch that can't see says "Collision watch OFF: <reason>". Otherwise the last thing the
+     copilot volunteered (the timer's history), or the top of the current callout banner.
      Hidden when there's nothing to coach or off the live source. */
   function renderCoach() {
     const el = document.getElementById("coachLine");
     if (!el) return;
-    const c = App.coach;
-    if (App.src !== "live" || !c) { el.hidden = true; return; }
-    let text = "", ago = "";
-    if (c.history && c.history.length && c.history[0].spoken) {
-      text = c.history[0].spoken; ago = agoText(c.history[0].at);
-    } else if (c.active && c.active.length) {
-      const a = c.active[0];
-      text = a.headline + (a.detail ? " — " + a.detail : "");
-    }
-    if (!text) { el.hidden = true; return; }
-    document.getElementById("coachSay").textContent = text;
-    document.getElementById("coachWhen").textContent = ago;
+    if (App.src !== "live") { el.hidden = true; return; }
+    const v = COL.strip(App.coach, App.coachOff);
+    if (!v.lines.length) { el.hidden = true; return; }
+    const h = App.coach && App.coach.history && App.coach.history[0];
+    el.dataset.kind = v.kind;
+    document.getElementById("coachSay").textContent = v.lines.join("\n");
+    document.getElementById("coachWhen").textContent = v.fromHistory && h ? agoText(h.at) : "";
     el.hidden = false;
   }
   /* HOLD a failed poll's endpoint at its last good value for a bounded window.
@@ -2633,15 +2637,11 @@
     if (c.category === "checklist") return "watch"; // a race requirement came due (DSQ-risk action item)
     return null;                                 // routine coaching stays silent (visual only)
   }
-  function maybeAlert(coach) {
-    if (!Sound.on || App.src !== "live" || !coach) return;
-    let level = null;
-    for (const c of (coach.new || [])) {
-      const lvl = alertLevel(c);
-      if (!lvl || Sound.alerted.has(c.id)) continue;
-      Sound.alerted.add(c.id);
-      if (lvl === "act") level = "act"; else if (level !== "act") level = "watch";
-    }
+  function maybeAlert(coach, off) {
+    if (!Sound.on || App.src !== "live") return;
+    // ids that left `active` are forgotten, so a contact that clears and comes back sounds again;
+    // a worse level is a new id; the watch going OFF sounds once per episode
+    const level = COL.alertsFor(coach, off, Sound.alerted, alertLevel);
     if (level) playAlert(level);
   }
   function toggleSound() {

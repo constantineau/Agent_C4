@@ -44,6 +44,10 @@ DEFAULT_ROUTE = os.environ.get("COPILOT_ROUTE", "").strip() or None
 
 # Service
 COPILOT_PORT = int(os.environ.get("COPILOT_PORT", "8300"))
+# Listen on the boat cable interface + loopback only, and answer only these callers (the Pi's end
+# of the cable, loopback). See copilot/serve.py.
+COPILOT_BIND = os.environ.get("COPILOT_BIND", "10.10.10.2,127.0.0.1")
+COPILOT_ALLOW_FROM = os.environ.get("COPILOT_ALLOW_FROM", "10.10.10.1,127.0.0.1")
 
 # If false, never call the LLM — always return the deterministic brief. Useful when the
 # Orin is busy/serving something else, or to prove the engine-only baseline.

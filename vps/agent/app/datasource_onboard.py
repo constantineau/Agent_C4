@@ -325,6 +325,9 @@ class OnboardSource:
         if path in ("name", "") and isinstance(value, str) and value:
             t["name"] = value
         elif path == "navigation.position" and isinstance(value, dict):
+            # its own clock: `time` above moves on ANY delta (a name update too), and the collision
+            # watch dead-reckons a target by the age of its POSITION
+            t["pos_time"] = now
             if isinstance(value.get("latitude"), (int, float)):
                 t["lat"] = float(value["latitude"])
             if isinstance(value.get("longitude"), (int, float)):
@@ -406,6 +409,21 @@ class OnboardSource:
         cands = [c for c in cands if c[1] is not None]
         best = self._prefer(path, cands)
         return best[2] if best else None
+
+    def latest_epoch(self, path):
+        """Wall-clock epoch of the newest own-ship sample for `path` (any source, any age), or None.
+        `latest_value` falls back to the archive with no age limit (by design: replays), so the
+        collision watch asks this to tell a live fix from the last one before the GPS went quiet."""
+        with self._live_lock:
+            live = [e for (p, _s), (e, _v) in self._live.items() if p == path]
+        if live:
+            return max(live)
+        not_ais, ais_p = self._not_ais()
+        row = self._archive.execute(
+            "SELECT max(time) AS time FROM readings WHERE boat_id=? AND path=? "
+            "AND value IS NOT NULL" + not_ais, (BOAT_ID, path, *ais_p),
+        ).fetchone()
+        return _epoch(row["time"]) if row and row["time"] else None
 
     # Real N2K sensors write 5–28 Hz, so a 40-min fatigue window is tens of thousands of rows —
     # converting them one-by-one in Python starved the whole engine at first-light (2026-07-15;
@@ -686,7 +704,8 @@ class OnboardSource:
                     continue
                 out.append({"mmsi": mmsi, "name": t.get("name"),
                             "lat": t["lat"], "lon": t["lon"],
-                            "sog": t.get("sog"), "cog": t.get("cog"), "time": t.get("time")})
+                            "sog": t.get("sog"), "cog": t.get("cog"), "time": t.get("time"),
+                            "pos_time": t.get("pos_time", t.get("time"))})
         return out
 
     # --- onboard-only helpers for the live instrument strip ---------------
