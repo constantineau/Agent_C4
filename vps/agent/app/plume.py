@@ -177,6 +177,28 @@ def load(plume, now=None):
             "models": len(plume["models"])}
 
 
+def is_waiting(plume):
+    """The Orin's marker: "no onboard forecast for this spot yet" (the target changed while offline
+    and nothing cached covers it). Replaces the old onboard plume so it isn't shown as current."""
+    return isinstance(plume, dict) and plume.get("waiting") is True and plume.get("models") == []
+
+
+def validate_waiting(plume):
+    if plume.get("schema") != SCHEMA:
+        return False, "not a c4.plume/v1 payload"
+    for k in _TEXT_FIELDS:
+        v = plume.get(k)
+        if v is not None and (not isinstance(v, str) or len(v) > 200):
+            return False, f"bad {k}"
+    for k in _NUM_FIELDS:
+        if plume.get(k) is not None and not _num(plume[k]):
+            return False, f"bad {k}"
+    return True, ""
+
+
+WAITING_NOTE = "Onboard forecast: waiting for internet."
+
+
 # Forwarding headers mean the request came through a proxy (the console's nginx on the Pi passes
 # client headers through), so the peer address is not the sender's. An onboard plume never takes
 # that path: the Orin posts straight to the engine over the cable.
@@ -193,7 +215,7 @@ def load_onboard(plume, client_ip, headers=None, now=None):
         return {"loaded": False, "detail": "onboard plumes are not taken through a proxy"}
     if not client_ip or client_ip not in onboard_from():
         return {"loaded": False, "detail": "onboard plumes come only from the Orin's boat-local link"}
-    ok, why = validate(plume, need_race_start=False)
+    ok, why = validate_waiting(plume) if is_waiting(plume) else validate(plume, need_race_start=False)
     if not ok:
         return {"loaded": False, "detail": why}
     if plume.get("source") != "onboard":
@@ -205,7 +227,7 @@ def load_onboard(plume, client_ip, headers=None, now=None):
         _write(_onboard_path(), json.dumps({"received_at": int(t), "plume": plume},
                                            separators=(",", ":")))
     return {"loaded": True, "key": plume.get("key"), "built_at": plume.get("built_at"),
-            "models": len(plume["models"])}
+            "models": len(plume["models"]), "waiting": is_waiting(plume)}
 
 
 def _built(rec):
@@ -231,6 +253,8 @@ def prefer_onboard(onboard, shore):
     (`built_at`), and onboard on a full tie."""
     if not onboard or not onboard.get("plume"):
         return False
+    if is_waiting(onboard["plume"]):
+        return False                          # a marker carries no weather; a shore plume wins
     if not shore:
         return True
     a, b = _cycles(onboard), _cycles(shore)
@@ -254,6 +278,9 @@ def get(now=None):
     if prefer_onboard(onboard, shore):
         return _onboard_view(onboard, now)
     if not shore:
+        if onboard and is_waiting(onboard.get("plume")):
+            return {"available": False, "source": "onboard", "waiting": True, "note": WAITING_NOTE,
+                    "key": onboard["plume"].get("key"), "received_at": onboard.get("received_at")}
         return {"available": False, "note": "no forecast plume aboard yet — it arrives from the "
                 "Lab or the Orin whenever the boat has internet"}
     return _shore_view(shore, now)

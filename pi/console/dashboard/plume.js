@@ -110,6 +110,12 @@
     return "Onboard" + run + (plume.age_s != null ? (run ? ", " : " · ") + ageText(plume.age_s) + " old" : "");
   }
 
+  /* the engine's answer when the Orin has nothing for the boat's current spot yet */
+  function waitingText(r) {
+    return r && r.available === false && r.waiting === true && r.source === "onboard"
+      ? "Onboard forecast: waiting for internet." : "";
+  }
+
   const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   function cycleText(epoch, now) {
     const d = new Date(epoch * 1000), hh = ("0" + d.getUTCHours()).slice(-2) + "Z";
@@ -254,7 +260,7 @@
   }
 
   const api = { ORDER, LABEL, label, known, models, available, valueAt, spreadAt, ageText, isOld, OLD_S,
-    isFrozen, frozenText, sourceText, cycleText, chartSvg, legendHtml, runTimesHtml, summary, esc };
+    isFrozen, frozenText, sourceText, waitingText, cycleText, chartSvg, legendHtml, runTimesHtml, summary, esc };
   root.C4Plume = api;
   if (typeof module === "object" && module.exports) module.exports = api;
 })(typeof window !== "undefined" ? window : globalThis);

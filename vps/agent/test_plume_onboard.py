@@ -147,6 +147,32 @@ os.remove(plume._onboard_path())
 g = plume.get(NOW)
 check("neither → honest available false", g["available"] is False and "Orin" in g["note"])
 
+print("the Orin's 'no onboard forecast for this spot yet' marker:")
+MARK = {"schema": "c4.plume/v1", "source": "onboard", "waiting": True, "models": [],
+        "key": "onboard__pt-45.00_-85.00", "basis": "point", "label": "at the boat", "generated_at": NOW}
+plume.load_onboard(dict(ONBOARD, built_at=NOW - 5), ORIN, now=NOW)
+check("(an onboard plume for the old spot is being served)", plume.get(NOW)["source"] == "onboard")
+r = plume.load_onboard(MARK, ORIN, now=NOW + 60)
+check("marker taken from the Orin", r["loaded"] and r["waiting"] is True)
+g = plume.get(NOW + 60)
+check("no shore plume: the old onboard plume is no longer served; says waiting",
+      g["available"] is False and g["waiting"] is True and g["note"] == "Onboard forecast: waiting for internet.")
+plume.race_session = lambda: None
+check("a shore plume aboard is chosen by the normal rules",
+      plume.load(dict(SHORE, key="pre", race_start=NOW + 86400, generated_at=NOW), now=NOW + 90)["loaded"]
+      and plume.get(NOW + 120)["source"] == "shore")
+plume.race_session = lambda: RACING["cur"]
+check("marker from anywhere but the Orin → refused", plume.load_onboard(MARK, "127.0.0.1", now=NOW)["loaded"] is False)
+check("a marker that carries models isn't a marker (must validate as a plume)",
+      plume.is_waiting(dict(MARK, models=RUNS)) is False)
+check("marker with a bad field → refused",
+      plume.load_onboard(dict(MARK, label={"x": 1}), ORIN, now=NOW)["loaded"] is False)
+plume.load_onboard(dict(ONBOARD, built_at=NOW - 5), ORIN, now=NOW + 200)
+check("the next real onboard plume replaces the marker", plume.get(NOW + 200)["source"] in ("onboard", "shore")
+      and plume._read(plume._onboard_path())["plume"].get("waiting") is None)
+os.remove(plume._path())
+os.remove(plume._onboard_path())
+
 print("the engine endpoint (real app, real peer address):")
 try:
     os.environ.setdefault("DATA_SOURCE", "onboard")

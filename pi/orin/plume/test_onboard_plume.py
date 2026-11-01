@@ -162,6 +162,19 @@ check("the age is when the files were downloaded, not now", pb is not None and p
 check("the new store is kept for the next pass", ob.lab.load_store(s_new["key"]) is not None)
 ENGINE["/playbook/track"] = TRACK
 
+print("offline, crossed a grid line with no playbook, nothing cached for the new spot:")
+ENGINE["/playbook/track"] = {"available": False}
+ENGINE["/conditions"] = {"available": True, "lat": 41.0, "lon": -90.0}    # a box nothing was fetched for
+n_posts = len(POSTS)
+out = ob.run_once(now=NOW + 2500, get=get, post=post, record=record, is_online=lambda: False)
+mk = POSTS[-1][1] if len(POSTS) > n_posts else {}
+check("the engine is told: a waiting marker for the new spot", mk.get("waiting") is True and mk.get("models") == []
+      and mk.get("source") == "onboard" and mk.get("key") == out["key"])
+check("the engine's validator takes the marker",
+      engine_plume.is_waiting(mk) and engine_plume.validate_waiting(mk) == (True, ""))
+ENGINE["/playbook/track"] = TRACK
+ENGINE["/conditions"] = COND
+
 print("engine trouble never crashes a pass:")
 out = ob.run_once(now=NOW, get=lambda _p: None, post=post, record=record, is_online=lambda: True)
 check("engine unreachable → nothing to follow, clean return", out["ok"] is False)

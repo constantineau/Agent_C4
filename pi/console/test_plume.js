@@ -147,6 +147,12 @@ test("an onboard plume says so, with the last run downloaded and its age, and ne
   assert.equal(PL.sourceText(Object.assign({}, ob, { age_s: null })).endsWith("z"), true);
 });
 
+test("no onboard forecast for the boat's spot yet: one short line", () => {
+  assert.equal(PL.waitingText({ available: false, waiting: true, source: "onboard" }), "Onboard forecast: waiting for internet.");
+  assert.equal(PL.waitingText({ available: false, note: "no plume" }), "");
+  assert.equal(PL.waitingText(PLUME), "");
+});
+
 let failed = 0;
 for (const [name, fn] of cases) {
   try { fn(); console.log("  [OK ] " + name); }

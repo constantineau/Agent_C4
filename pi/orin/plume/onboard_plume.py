@@ -372,6 +372,14 @@ def build(st, now):
     return p
 
 
+def waiting_marker(spec, now):
+    """The "no onboard forecast for this spot yet" payload the engine stores in place of the old
+    onboard plume."""
+    return {"schema": lab.SCHEMA, "source": SOURCE, "waiting": True, "models": [],
+            "key": spec["key"], "race_id": spec.get("race_id"), "basis": spec.get("basis"),
+            "label": spec.get("label"), "generated_at": int(time.time() if now is None else now)}
+
+
 def run_once(now=None, get=engine_get, post=engine_post, record=None, is_online=online):
     """One pass: route → download new cycles (if online) → plume → engine. Never raises for a
     missing engine, model or network; returns what happened."""
@@ -404,14 +412,17 @@ def run_once(now=None, get=engine_get, post=engine_post, record=None, is_online=
     plume = build(st, now)
     out = {"ok": True, "key": spec["key"], "basis": spec["basis"], "online": net,
            "models": {m["model"]: len(m["runs"]) for m in (plume or {}).get("models", [])}}
-    if plume and plume.get("models"):
+    if not (plume and plume.get("models")):
+        # nothing usable for this target (e.g. the boat crossed a grid line while offline): tell the
+        # engine, so it stops serving the old target's onboard plume as current
+        plume = waiting_marker(spec, now)
+        _log("no model runs for this target yet — telling the engine")
+    if plume:
         ok, resp = post("/plume/onboard", plume)
         out["push"] = {"ok": bool(ok and (resp or {}).get("loaded")),
                        "detail": None if ok and (resp or {}).get("loaded") else
                        str((resp or {}).get("detail") or (resp or {}).get("error") or resp)[:200]}
         _log(f"pushed to the engine: {out['push']}")
-    else:
-        _log("no model runs on file yet — nothing to push")
     out["pruned"] = prune_gribs(now=now)
     out["pruned_stores"] = prune_stores(spec["key"], now=now)
     return out

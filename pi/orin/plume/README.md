@@ -25,6 +25,10 @@ Every 15 min (systemd timer, short-lived process):
    gfs, nam, hrrr, ecmwf, icon, gem for the route's box. Offline: keep the last runs. If the
    target changed while offline (e.g. the boat fell another hour behind), resample the model
    files already cached, with no network (ICON/GEM need the network and drop out until back online).
+   If nothing usable covers the new target (e.g. no playbook and the boat crossed a 0.25° grid
+   line), it posts a small "waiting" marker instead, so the engine stops serving the old spot's
+   onboard plume. The iPad then says "Onboard forecast: waiting for internet." (a shore plume, if
+   aboard, is still chosen by the normal rules).
 3. Build the plume, mark it `source: onboard`, `POST /plume/onboard` to the engine.
 4. Delete cached GRIBs older than `GRIB_KEEP_H` (30 h), and run stores of targets untouched for 48 h.
 
