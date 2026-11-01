@@ -471,3 +471,24 @@ body:not(.is-dirty) .if-dirty, body.is-dirty .if-clean { display: none; }
 .modal p b { color: var(--ink); }
 .modal-btns { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
 .modal button.danger { color: var(--bad); border-color: var(--bad); }
+
+/* forecast plume (Deploy tab) — classes drawn by the console's plume.js */
+.lab-plume { --m-gfs:#4d9bff; --m-nam:#ff8a3d; --m-hrrr:#ff5fb4; --m-ecmwf:#3ecf8e;
+  --m-icon:#b48cff; --m-gem:#e3c04a; --m-other:#9a9aa6; --m-obs:#f3f4f6; margin-top:8px; }
+.lab-plume .pl-gfs { --mc:var(--m-gfs); } .lab-plume .pl-nam { --mc:var(--m-nam); }
+.lab-plume .pl-hrrr { --mc:var(--m-hrrr); } .lab-plume .pl-ecmwf { --mc:var(--m-ecmwf); }
+.lab-plume .pl-icon { --mc:var(--m-icon); } .lab-plume .pl-gem { --mc:var(--m-gem); }
+.lab-plume .pl-other { --mc:var(--m-other); }
+.lab-plume .rchart { display:block; width:100%; height:auto; }
+.lab-plume .ax-grid { stroke:var(--line); stroke-width:1; }
+.lab-plume .ax-lab { fill:var(--muted); font-size:11px; }
+.lab-plume .pl-run { fill:none; stroke:var(--mc); stroke-linejoin:round; }
+.lab-plume .pl-latest { stroke-width:2.6; } .lab-plume .pl-old { stroke-width:1.2; }
+.lab-plume .pl-nowline { stroke:var(--muted); stroke-dasharray:3 3; }
+.lab-plume .pl-end { fill:var(--mc); font-size:11px; font-weight:700; }
+.lab-plume .pl-legend { display:flex; flex-wrap:wrap; gap:4px 12px; font-size:12px; margin:4px 0; }
+.lab-plume .pl-key { display:inline-flex; align-items:center; gap:5px; }
+.lab-plume .pl-key i { display:inline-block; width:14px; height:4px; border-radius:2px; background:var(--mc); }
+.lab-plume .t-rows { font-size:12.5px; margin-top:6px; }
+.lab-plume .t-row { display:flex; gap:12px; padding:2px 0; border-top:1px solid var(--line); }
+.lab-plume .t-row .rl { min-width:90px; } .lab-plume .t-row.hdr { color:var(--muted); font-size:11px; border-top:none; }

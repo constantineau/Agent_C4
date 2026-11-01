@@ -704,33 +704,67 @@
         clears: st === "ok" ? "—" : "the trend settles",
         based: [App.seriesHist && App.seriesHist.length ? "engine archive (" + App.seriesHist.length + " pts) + live buffer" : "live wind buffer (" + App.windHist.length + " samples)"], conf: "engine" };
     },
+    /* FORECAST: the multi-model PLUME from the Lab (engine /plume, cached aboard) on the face —
+       the latest run of every router model along the planned route, the boat's own wind pinned
+       at now — and the Open-Meteo rows (+60/+120, forecast vs actual) under it in the detail.
+       Either alone is enough; with neither the tile is honestly empty. */
     forecast(p) {
-      const fc = p.forecast;
-      if (!fc || !fc.available || !fc.hours || !fc.hours.length) return NA("no forecast");
-      const obs = observedAt(0) || (p.conditions && p.conditions.available ? { tws: p.conditions.tws, twd: p.conditions.twd } : null);
-      const aug = obs ? [{ in_h: 0, tws: obs.tws, twd: obs.twd }].concat(fc.hours) : fc.hours.slice();
-      const f60 = fcstAt(aug, 1.0), f120 = fcstAt(aug, 2.0);
-      const v60 = fcstVsActual(3600), v120 = fcstVsActual(7200);
-      const fwd = (s) => (s ? arrowKts(s.twd, s.tws) : "—");
+      const fc = p.forecast && p.forecast.available && p.forecast.hours && p.forecast.hours.length ? p.forecast : null;
+      const pl = plumeNow();
+      if (!fc && !pl) return NA("no forecast");
+      // the boat's measured wind — only a REAL reading (a null tws is "no wind", not 0 kts)
+      const live = p.conditions && p.conditions.available && p.conditions.tws != null && p.conditions.twd != null
+        ? { tws: p.conditions.tws, twd: p.conditions.twd } : null;
+      const o0 = observedAt(0);
+      const obs = o0 && o0.tws != null && o0.twd != null ? o0 : live;
+      App.fcObs = obs;                    // the plume detail pins the same reading at now
+      const nowS = Date.now() / 1000;
+      const fromPlume = (h) => {          // the models' mean at +h when there's no Open-Meteo series
+        const sp = pl ? PL.spreadAt(pl, nowS + h * 3600) : null;
+        return sp ? { tws: sp.mean_tws, twd: sp.mean_twd } : null;
+      };
+      let f60, f120;
+      if (fc) {
+        const aug = obs ? [{ in_h: 0, tws: obs.tws, twd: obs.twd }].concat(fc.hours) : fc.hours.slice();
+        f60 = fcstAt(aug, 1.0); f120 = fcstAt(aug, 2.0);
+      } else { f60 = fromPlume(1); f120 = fromPlume(2); }
+      const v60 = fc ? fcstVsActual(3600) : null, v120 = fc ? fcstVsActual(7200) : null;
+      const fwd = (x) => (x && x.tws != null ? arrowKts(x.twd, x.tws) : "—");
       const rows = [
-        { label: "Now", emph: true, cols: [obs ? arrowKts(obs.twd, obs.tws) : "—"] },
+        { label: "Now", emph: true, cols: [obs ? arrowKts(obs.twd, obs.tws) : "no wind reading"] },
         { label: "+60 min", cols: [fwd(f60)] },
         { label: "+120 min", cols: [fwd(f120)] },
+      ];
+      if (fc) rows.push(
         { sep: true, label: "FORECAST VS. ACTUAL" },
         { hdr: true, cols: ["forecast", "actual"] },
         { label: "−60 min", cols: v60 ? [fwd(v60.fcst), fwd(v60.actual)] : ["—", "accumulating"] },
-        { label: "−120 min", cols: v120 ? [fwd(v120.fcst), fwd(v120.actual)] : ["—", "accumulating"] },
-      ];
-      const bigChange = obs && (Math.abs(f120.tws - obs.tws) >= 6 || Math.abs(angDiff(f120.twd, obs.twd)) >= 20);
-      const badSkill = (v60 && (Math.abs(v60.actual.tws - v60.fcst.tws) >= 4 || Math.abs(angDiff(v60.actual.twd, v60.fcst.twd)) >= 15)) ||
-        (v120 && (Math.abs(v120.actual.tws - v120.fcst.tws) >= 5 || Math.abs(angDiff(v120.actual.twd, v120.fcst.twd)) >= 20));
+        { label: "−120 min", cols: v120 ? [fwd(v120.fcst), fwd(v120.actual)] : ["—", "accumulating"] });
+      // WATCH needs real numbers on both sides — a missing reading never raises it
+      const big = (a, b, kt, deg) => !!(a && b && a.tws != null && b.tws != null &&
+        (Math.abs(a.tws - b.tws) >= kt || Math.abs(angDiff(a.twd, b.twd)) >= deg));
+      const bigChange = big(f120, obs, 6, 20);
+      const badSkill = (v60 && big(v60.actual, v60.fcst, 4, 15)) || (v120 && big(v120.actual, v120.fcst, 5, 20));
       const st = bigChange || badSkill ? "watch" : "ok";
-      return { status: st, value: null, rows: rows,
-        why: "Forecast wind speed + direction (arrows show direction — a north wind points down). +60 min " + r0(f60.tws) + " kts, +120 min " + r0(f120.tws) + " kts. " +
-          "\"Forecast vs. actual\" compares the earlier forecast for −60 / −120 min ago against what actually happened — a read on how well the model is verifying" +
-          (v60 || v120 ? "." : " (fills in after the dashboard has run ~1-2 h)."),
-        consider: badSkill ? "Forecast off lately — trust the live trend more." : bigChange ? "A notable change is forecast — plan the gear." : "Forecast steady and verifying.",
-        clears: st === "ok" ? "—" : "forecast comes back in line", based: ["fetch_forecast + live wind buffer"], conf: "engine" };
+      const old = pl && PL.isOld(pl);
+      const chart = pl ? '<div class="pl-tile">' + PL.chartSvg(pl, { w: 270, h: 104, now: nowS, back_h: 3, ahead_h: 24,
+        compact: true, field: "tws", obs: App.src === "live" ? raceData() : null, nowObs: obs }) + PL.legendHtml(pl) + "</div>" : null;
+      const sub = pl ? PL.summary(pl, nowS, 6) + (old ? ' · <b class="pl-old-tag">data ' + PL.ageText(pl.age_s) + " old</b>" : "")
+        : "";
+      const head = f60 && f60.tws != null ? "+60 min " + r0(f60.tws) + " kts" + (f120 && f120.tws != null ? ", +120 min " + r0(f120.tws) + " kts. " : ". ") : "";
+      return { status: st, value: null, rows: rows, chart: chart, sub: sub,
+        why: (pl ? "Every weather model the router uses, along the planned route at the time you'd be at each point " +
+          "(" + (pl.label || "planned route") + "). Bold = each model's latest run; tap a model to see how its runs have changed. " +
+          "The dot at now is your own measured wind — whichever line passes through it is tracking. " : "") +
+          (obs ? "" : "No live wind reading, so nothing is pinned at now. ") + head +
+          (fc ? "\"Forecast vs. actual\" compares the earlier forecast for −60 / −120 min ago against what actually happened" +
+            (v60 || v120 ? "." : " (fills in after the dashboard has run ~1-2 h).") : ""),
+        consider: badSkill ? "Forecast off lately — trust the live trend more." : bigChange ? "A notable change is forecast — plan the gear." :
+          old ? "Forecast data is " + PL.ageText(pl.age_s) + " old — refreshes when the boat is back online." :
+          obs ? "Forecast steady and verifying." : "No wind reading — check the wind instrument.",
+        clears: st === "ok" ? "—" : "forecast comes back in line",
+        based: (pl ? ["Lab plume (" + PL.models(pl).length + " models, " + (pl.age_s != null ? PL.ageText(pl.age_s) + " old" : "age ?") + ")"] : [])
+          .concat(fc ? ["fetch_forecast + live wind buffer"] : []), conf: "engine" };
     },
     /* SAIL: reads the CREW-SET sail (the sails bar) and says how it fits the conditions —
        in range / overpowered / underpowered / wrong angle — with an arrow to the next change
@@ -1163,6 +1197,52 @@
     if (App.src === "demo") return (SCENARIOS[App.demoScn] || {}).strategy || null;
     return App.deviation;
   }
+  /* FORECAST PLUME (engine /plume — the Lab's multi-model run history, cached on the Pi's disk).
+     Slow-moving (new model runs arrive hourly at most), so a minute's poll is plenty. A failed
+     poll keeps the last plume; its age keeps counting so an offline boat shows how old it is. */
+  const PL = window.C4Plume;
+  const PLUME_EVERY = 60000;
+  function fetchPlume() {
+    if (App.src !== "live") return Promise.resolve(null);
+    return fetchJSON("/plume", 8000).then((r) => {
+      if (r && r.available && PL.available(r)) { App.plume = r; App.plumeAt = Date.now(); }
+      else if (r && r.available === false) { App.plume = null; }
+      if (App.openTile === "forecast") populateDetail("forecast", false);
+      return r;
+    });
+  }
+  /* the plume with its age brought up to now (the engine stamped age_s when it answered) */
+  function plumeNow() {
+    if (App.src !== "live" || !App.plume) return null;
+    const extra = App.plumeAt ? (Date.now() - App.plumeAt) / 1000 : 0;
+    return Object.assign({}, App.plume, { age_s: App.plume.age_s != null ? App.plume.age_s + extra : null });
+  }
+  window.plumeView = function (k, v) {
+    App.plumeView[k] = App.plumeView[k] === v && k === "only" ? null : v;
+    if (App.openTile === "forecast") populateDetail("forecast", false);
+  };
+  function plumeDetailHtml(nowObs) {
+    const pl = plumeNow();
+    if (!pl) return "";
+    const v = App.plumeView, now = Date.now() / 1000;
+    const btn = (k, val, lab, on) => '<button class="pl-btn' + (on ? " on" : "") + '" onclick="plumeView(\'' + k + "','" + val + '\')">' + lab + "</button>";
+    const fields = btn("field", "tws", "Speed", v.field === "tws") + btn("field", "twd", "Direction", v.field === "twd");
+    const picks = btn("only", "", "All", !v.only) + PL.models(pl).map((m) =>
+      btn("only", m.model, '<span class="pl-key pl-' + (PL.LABEL[m.model] ? m.model : "other") + '"><i></i>' + PL.label(m.model) + "</span>", v.only === m.model)).join("");
+    const only = v.only && PL.models(pl).some((m) => m.model === v.only) ? v.only : null;
+    const old = PL.isOld(pl);
+    return '<div class="rc-title">Forecast plume · ' + PL.esc(pl.label || "planned route") + "</div>" +
+      (old ? '<div class="pl-age-warn">Forecast data is <b>' + PL.ageText(pl.age_s) + ' old</b> — no new model runs since the boat was last online.</div>' : "") +
+      '<div class="pl-ctl">' + fields + '</div><div class="pl-ctl">' + picks + "</div>" +
+      PL.chartSvg(pl, { w: 512, h: 230, now: now, back_h: 6, ahead_h: 24, field: v.field, only: only, allRuns: true,
+        obs: App.src === "live" ? raceData() : null, nowObs: nowObs }) +
+      PL.legendHtml(pl, { only: only, cycles: true, now: now, boat: true }) +
+      '<div class="dc-foot">Bold = latest run, faded = older runs of the same model (older = fainter). ' +
+      "The dot and the plain line are your own measured wind. Model data " + (pl.age_s != null ? PL.ageText(pl.age_s) + " old" : "age unknown") +
+      (pl.received_at ? " · last update from the Lab " + PL.ageText(now - pl.received_at) + " ago" : "") + ".</div>" +
+      PL.runTimesHtml(pl, now);
+  }
+
   /* forecast-drift (Lab-3 branch trigger b): live common forecast vs the plan's frozen reference.
      Engine-computed, deterministic; polled slowly (it moves slowly + Open-Meteo is cached). */
   async function fetchDrift() {
@@ -1734,6 +1814,7 @@
     coach: null, deviation: null, forecastDrift: null, selector: null, reoptimize: null,
     plangap: null, trend: null, briefBusy: {}, gps: null, gpsBusy: false, gpsNote: "",
     checklist: null, chkTimer: null,
+    plume: null, plumeAt: 0, plumeTimer: null, plumeView: { field: "tws", only: null },
     detailStreamKey: null, detailAbort: null,
     lastOkAt: 0, lastPollOk: false, graceUntil: 0, startedAt: Date.now(),
   };
@@ -2221,6 +2302,10 @@
         (makeTwdSpark(hist, 512, 60) || '<span class="dc-empty">…</span>') +
         '<div class="dc-lab dc-bot">↓ shifted left</div></div>' +
         (App.src === "live" ? buoysLadderHtml() : "") + rowsHtml(t.rows);
+    } else if (key === "forecast" && plumeNow()) {
+      // the full plume (every model, older runs fading, picker + speed/direction toggle), then
+      // the Open-Meteo rows (+60/+120, forecast vs actual) underneath
+      g.innerHTML = plumeDetailHtml(App.fcObs) + rowsHtml(t.rows);
     } else if (key === "playbook") {
       // the full strategy stack lives here now (synthesis → selector → track → drift → plays →
       // re-route), followed by the variant-agreement rows
@@ -2470,6 +2555,8 @@
     App.coachTimer = setInterval(fetchCoach, COACH_EVERY);
     fetchDeviation();               // route-deviation (engine, deterministic), then on its own cadence
     App.devTimer = setInterval(fetchDeviation, DEV_EVERY);
+    fetchPlume();                   // the Lab's forecast plume, cached on the Pi — slow-moving
+    App.plumeTimer = setInterval(fetchPlume, PLUME_EVERY);
     fetchDrift();                   // forecast-drift (engine, common-data), then on its own cadence
     App.driftTimer = setInterval(fetchDrift, DRIFT_EVERY);
     fetchPlangap();                 // plan-gap (own wind vs the frozen promise), drift's cadence
