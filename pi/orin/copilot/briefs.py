@@ -81,7 +81,8 @@ def _data_notes(snap, engine):
     if (pb is None or not pb.loaded) and not engine_has_plan:
         notes.append("No playbook aboard — plan-relative reads (plays, deviation, promise) are off.")
     tr = snap.get("trend") or {}
-    if not tr.get("available") and "thin" in (tr.get("note") or ""):
+    note = (tr.get("note") or "").lower()
+    if not tr.get("available") and ("thin" in note or "not enough" in note):
         notes.append("Wind archive still thin — trend reads not available yet.")
     return notes
 

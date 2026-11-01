@@ -176,28 +176,28 @@
   /* ============================ DEMO scenarios (canned) ============================ */
   const SCENARIOS = {
     calm: {
-      mode: "llm-live", focus: "Solid groove — the left side is paying.", confidence: "high",
+      mode: "llm-live", focus: "In the groove. Left is paying.", confidence: "high",
       watch: genDemoWatch(false),
       notes: [
-        { tile: "playbook", status: "ok", text: "Left has paid the last two oscillations — the Left gameplan stands; stay set up to tack on the next header.", conf: "high" },
-        { tile: "sail",     status: "ok", text: "J1 is the right sail and pointing well. Hold the groove.", conf: "high" },
+        { tile: "playbook", status: "ok", text: "Left paid the last two shifts. Stay left, tack on the next header.", conf: "high" },
+        { tile: "sail",     status: "ok", text: "J1 is right. Hold the groove.", conf: "high" },
       ],
       tiles: {
         wind:    { status: "ok", value: arrowKts(250, 12), sub: "16→12 kts · 8° right", chart: twsTrendTile(genDemoRace(false)),
                    rows: [{ label: "Now", emph: true, cols: [arrowKts(250, 12)] }, { label: "−60 min", cols: [arrowKts(246, 14)] }, { label: "−120 min", cols: [arrowKts(242, 16)] }],
-                   why: "True wind speed + direction now and looking back. Arrows point the way the wind blows (north wind points down, east points left). Eased a touch and edged right over the last couple of hours.", consider: "Oscillating breeze — work the shifts.", clears: "—", based: ["engine archive + live buffer"], conf: "high" },
+                   why: "Arrows point downwind (a north wind points down). Wind eased from 16 to 12 kts.", consider: "Wind is oscillating. Play the shifts.", clears: "—", based: ["boat wind log"], conf: "high" },
         playbook:{ status: "ok", value: "On plan: Left", sub: "oscillating ±6°",
                    rows: [{ hdr: true, cols: ["agree", ""] }, { label: "★ Left", emph: true, cols: ["52%", "start · now"] }, { label: "Middle", cols: ["28%", ""] }, { label: "Right", cols: ["20%", ""] }],
-                   why: "Playbook recommends starting Left (52% of forecasts agree). Wind is oscillating — no persistent shift, so the Left gameplan stands; play the shifts within the band.", consider: "Hold the gameplan — tack on the headers, no branch yet.", clears: "—", based: ["playbook:left", "agreement 52%", "get_tactics"], conf: "high" },
+                   why: "Start left (52% of forecasts). Wind is oscillating.", consider: "Stay with left, play the shifts.", clears: "—", based: ["playbook: left", "52% of forecasts"], conf: "high" },
         forecast:{ status: "ok", value: null,
                    rows: [{ label: "Now", emph: true, cols: [arrowKts(250, 10)] }, { label: "+60 min", cols: [arrowKts(256, 13)] }, { label: "+120 min", cols: [arrowKts(262, 15)] }, { sep: true, label: "FORECAST VS. ACTUAL" }, { hdr: true, cols: ["forecast", "actual"] }, { label: "−60 min", cols: [arrowKts(244, 13), arrowKts(243, 14)] }, { label: "−120 min", cols: [arrowKts(240, 16), arrowKts(238, 17)] }],
-                   why: "Forecast wind speed + direction (arrows show direction; north wind points down). Building to ~15 kts and veering right. \"Forecast vs. actual\" compares the earlier forecast for −60/−120 min ago against what actually happened — within ~1 kt, verifying well.", consider: "Plan the gear for the build.", clears: "—", based: ["fetch_forecast + engine archive"], conf: "high" },
-        sail:    { status: "ok", value: "J1", sub: "in range · no change ahead", why: "Reading the crew-set sail (J1 on the sails bar) — right for 12 kts upwind.", consider: "No change.", clears: "TWS > 16 kts", based: ["sails bar: crew set J1", "get_sail: optimal J1"], conf: "high" },
-        eta:     { status: "ok", value: "16 min", sub: "Cove Island", why: "~16 min to Cove Island at the current made-good.", consider: "On schedule for the mark.", clears: "—", based: ["get_navigator: ETA 16 min"], conf: "high" },
-        ais:     { status: "ok", value: "2nd of 4 (div)", sub: "▲ Defiance 0:40 · ▽ Windquest 1:50", rows: [{ hdr: true, cols: ["to fin", "Δ corrected"] }, { label: "1. Il Mostro ⌛17m", cols: ["1.9 nm", "▲ 3:10 ahead"] }, { label: "2. ◆ Defiance", cols: ["3.4 nm", "▲ 0:40 ahead"] }, { label: "3. ◆ C4 (us)", emph: true, cols: ["3.2 nm", "—"] }, { label: "4. ◆ Windquest", cols: ["3.1 nm", "▽ 1:50 back"] }, { label: "5. Vayu ⌛22m→DR", cols: ["4.8 nm", "▽ 4:05 back"] }], why: "Estimated standings across the 5-boat demo fleet on ToT, FULL-race corrected basis (gun times from the SIs): 2 live on our AIS, 2 via the public tracker (delayed; 1 dead-reckoned forward at their pace). ◆ = our division (B).", consider: "Chase Defiance on corrected — consolidate against Windquest. (Estimates: partial AIS + a delayed tracker.)", clears: "—", based: ["get_fleet standings: 5 ranked / 5 roster", "sources: AIS 2 · tracker 2 · DR 1", "ToT"], conf: "high" },
-        charge:  { status: "ok", value: '72<div class="t-val2">Stbd on</div>', energy: 72, level: "fresh", sub: "change 1.8h → Port · fresh", why: "Crew energy ~72% (inverse of the fatigue index; lower = more depleted). Watch system: Stbd on deck, change to Port in ~1.8 h.", consider: "Driver fresh — no rotation needed. Next watch change 1.8 h out.", clears: "—", based: ["get_fatigue: index 28 → energy 72%", "get_watch: Stbd on · Port at the change"], conf: "high" },
-        data:    { status: "ok", value: "5", sub: "5 sources live · 2 on backup", why: "All five sensor groups fresh. Attitude, heading-vs-GPS-course, sensor priority and the AIS filter all check out.", consider: "Instruments agree — numbers are safe to act on.", clears: "—", based: ["get_sources: 5 live", "health/sensors: instruments cross-check clean"], conf: "high" },
-        bank:    { status: "ok", value: "12.68 V", sub: "-0.04 V/h · ~42 h to 11.0 V", why: "Bank 12.68 V, -0.04 V/h. The status is decided on a 10-min median, so a winch load can't trip it and a bounce shorter than half that can't clear it; the trend is measured over 45 min.", consider: "Bank healthy.", clears: "—", based: ["get_power: 12.68 V over 1890 samples, -0.04 V/h"], conf: "high" },
+                   why: "Building to ~15 kts, wind shifting right. Matching within 1 kt.", consider: "Plan sails for more wind.", clears: "—", based: ["forecast + boat wind"], conf: "high" },
+        sail:    { status: "ok", value: "J1", sub: "in range · no change ahead", why: "You set J1. Right for 12 kts upwind.", consider: "No change.", clears: "TWS > 16 kts", based: ["you set J1", "best sail J1"], conf: "high" },
+        eta:     { status: "ok", value: "16 min", sub: "Cove Island", why: "~16 min to Cove Island at current speed.", consider: "On schedule for the mark.", clears: "—", based: ["ETA 16 min"], conf: "high" },
+        ais:     { status: "ok", value: "2nd of 4 (div)", sub: "▲ Defiance 0:40 · ▽ Windquest 1:50", rows: [{ hdr: true, cols: ["to fin", "Δ corrected"] }, { label: "1. Il Mostro ⌛17m", cols: ["1.9 nm", "▲ 3:10 ahead"] }, { label: "2. ◆ Defiance", cols: ["3.4 nm", "▲ 0:40 ahead"] }, { label: "3. ◆ C4 (us)", emph: true, cols: ["3.2 nm", "—"] }, { label: "4. ◆ Windquest", cols: ["3.1 nm", "▽ 1:50 back"] }, { label: "5. Vayu ⌛22m→DR", cols: ["4.8 nm", "▽ 4:05 back"] }], why: "Estimated corrected standings, 5 boats. 2 on AIS, 2 from the tracker (delayed, 1 estimated forward). ◆ = our division (B).", consider: "Chase Defiance. Stay ahead of Windquest.", clears: "—", based: ["5 of 5 boats ranked", "AIS 2 · tracker 2 · estimated 1"], conf: "high" },
+        charge:  { status: "ok", value: '72<div class="t-val2">Stbd on</div>', energy: 72, level: "fresh", sub: "change 1.8h → Port · fresh", why: "Crew energy 72% (fresh). Stbd on deck. Port takes over in 1.8 h.", consider: "Driver fresh — no rotation needed. Next watch change 1.8h out.", clears: "—", based: ["helm steering: energy 72%", "watch plan: Stbd on · Port next"], conf: "high" },
+        data:    { status: "ok", value: "5", sub: "5 sources live · 2 on backup", why: "5 sensor groups reporting. All sensor checks pass.", consider: "Instruments agree. Safe to use.", clears: "—", based: ["5 sources", "checks: all pass"], conf: "high" },
+        bank:    { status: "ok", value: "12.68 V", sub: "-0.04 V/h · ~42 h to 11.0 V", why: "Bank 12.68 V, -0.04 V/h. Reaches 11.0 V in about 42 h.", consider: "Bank healthy.", clears: "—", based: ["12.68 V, -0.04 V/h"], conf: "high" },
       },
       // the two SYSTEMS endpoints behind the DATA chip and the BANK tile, in their healthy shape
       power: { available: true, status: "ok", volts: 12.68, volts_decided: 12.69, volts_last: 12.66,
@@ -246,49 +246,49 @@
         value: "On the optimal track", xte_nm: 0.15, xte_side: "left", xte_trend: "steady",
         along_pct: 38, along_nm: 54.1, route_nm: 142.0, time_behind_s: -45,
         vmc_kn: 5.4, vmc_optimal_kn: 5.6, vmc_deficit_kn: 0.2,
-        what_flips_it: "a persistent right shift past ~020° for two-plus oscillation cycles",
-        why: "Sailing the 'Left start' variant's optimized track — 0.15 nm off the line (left), 0:45 ahead of plan pace. Hold the groove.",
-        consider: "Stay on the playbook line — no branch, keep sailing the plan." },
-      drift: { available: true, status: "ok", value: "Forecast holding", drift_twd_deg: 6, drift_dir: "veered", drift_tws_kn: 1.2, n_points: 8 },
+        what_flips_it: "wind holds right of 020° for 2+ shifts",
+        why: "On the Left start track. 0.15 nm left, 0:45 ahead of plan.",
+        consider: "Stay on the plan." },
+      drift: { available: true, status: "ok", value: "Forecast holding", drift_twd_deg: 6, drift_dir: "right", drift_tws_kn: 1.2, n_points: 8 },
       selector: { available: true, action: "hold", status: "ok", tier: 1, value: "Hold: Left start",
         target_label: "Left start", confidence: 0.75, confidence_label: "high",
-        why: "No persistent shift and no material forecast drift — the recommended Left start stands. Play the shifts within the band." },
+        why: "No steady shift, forecast holding. Stay with Left start, play the shifts." },
       synthesis: { available: true, mode: "llm", confidence: "high",
-        assessment: "On plan — nothing across the signals argues for leaving the Left start.",
+        assessment: "On plan. Nothing says leave the Left start.",
         concordance: { strength: "weak", lean: "left",
-          note: "the breeze is oscillating with no persistent shift, and the mild fleet lean agrees with Left — no decisive read to act on" },
+          note: "Wind oscillating, fleet leaning left. Nothing to act on." },
         recommendation: { action: "Hold: Left start", vs_playbook: "on-plan", target_variant: "left",
           urgency: "monitor", confidence: "high" } },
     },
     escalated: {
-      mode: "llm-live", focus: "Playbook branch: the right is paying now. Bear-away coming up, and the crew tank is getting low.", confidence: "med",
+      mode: "llm-live", focus: "Switch to the right. Bear-away soon. Crew getting tired.", confidence: "med",
       watch: genDemoWatch(true),
       notes: [
-        { tile: "playbook", status: "act",   text: "Playbook branch fired — the persistent right shift says bail to the right side; the recommended Left start no longer pays.", conf: "high" },
-        { tile: "sail",     status: "act",   text: "Peel J1 → A3 before the bear-away at the gate — start staging now (~4 min out).", conf: "high" },
-        { tile: "bank",     status: "act",   text: "House bank 11.58 V and falling 0.22 V/h — about 2.6 h to the 11.0 V floor. Shed load or get a charge source on; the archive and the AIS transceiver are what die first.", conf: "high" },
-        { tile: "charge",   status: "act",   text: "Crew energy down to 28% (rotate soon) — plan a driver change in the next few minutes.", conf: "med" },
-        { tile: "forecast", status: "watch", text: "Forecast has been under-calling the breeze by ~2-3 kts — expect a bit more than it says.", conf: "med" },
+        { tile: "playbook", status: "act",   text: "Wind shifted right and is holding. Switch to the right side.", conf: "high" },
+        { tile: "sail",     status: "act",   text: "Peel J1 → A3 before the bear-away at the gate (~4 min). Get it ready.", conf: "high" },
+        { tile: "bank",     status: "act",   text: "Bank 11.58 V, falling 0.22 V/h. 2.6 h to 11.0 V. Shed load or charge.", conf: "high" },
+        { tile: "charge",   status: "act",   text: "Crew energy 28%. Change drivers in the next few minutes.", conf: "med" },
+        { tile: "forecast", status: "watch", text: "Forecast is 2-3 kts light. Expect more wind.", conf: "med" },
       ],
       tiles: {
         wind:    { status: "watch", value: arrowKts(262, 16), sub: "9→16 kts · 16° right", chart: twsTrendTile(genDemoRace(true)),
                    rows: [{ label: "Now", emph: true, cols: [arrowKts(262, 16)] }, { label: "−60 min", cols: [arrowKts(252, 12)] }, { label: "−120 min", cols: [arrowKts(246, 9)] }],
-                   why: "True wind speed + direction now and looking back. Arrows point the way the wind blows (north wind points down). Built ~7 kts and veered right ~16° over the last two hours — a persistent right trend.", consider: "Persistent right shift — favor the right side of the course.", clears: "the trend settles", based: ["engine archive + live buffer"], conf: "med" },
-        playbook:{ status: "act", value: "Switch → Right", sub: "branch: persistent veer favors right",
+                   why: "Arrows point downwind (a north wind points down). Wind built 7 kts and shifted right 16° in 2 h.", consider: "Wind shifted right and holding. Favour the right side.", clears: "the trend settles", based: ["boat wind log"], conf: "med" },
+        playbook:{ status: "act", value: "Switch → Right", sub: "wind shifted right · go right",
                    rows: [{ hdr: true, cols: ["agree", ""] }, { label: "★ Left", cols: ["52%", "start"] }, { label: "Right", emph: true, cols: ["20%", "now"] }, { label: "Middle", cols: ["28%", ""] }],
-                   why: "A persistent veering shift now favors the right side — against the recommended Left. The playbook's branch trigger: if the breeze veers and holds right of ~020° for two-plus oscillation cycles, bail to the right.", consider: "Execute the branch — commit right per variant 'Right'.", clears: "the shift reverses / settles back toward the rhumb", based: ["playbook:right", "agreement 52%", "get_tactics"], conf: "high" },
+                   why: "Wind shifted right and is holding. The plan says go right.", consider: "Switch to the Right plan.", clears: "the wind shifts back left", based: ["playbook: right", "52% of forecasts"], conf: "high" },
         forecast:{ status: "watch", value: null,
                    rows: [{ label: "Now", emph: true, cols: [arrowKts(262, 16)] }, { label: "+60 min", cols: [arrowKts(268, 18)] }, { label: "+120 min", cols: [arrowKts(274, 19)] }, { sep: true, label: "FORECAST VS. ACTUAL" }, { hdr: true, cols: ["forecast", "actual"] }, { label: "−60 min", cols: [arrowKts(252, 12), arrowKts(256, 14)] }, { label: "−120 min", cols: [arrowKts(248, 10), arrowKts(252, 12)] }],
-                   why: "Forecast wind speed + direction (arrows show direction; north wind points down). Building to ~19 kts and veering right. \"Forecast vs. actual\" shows it has under-called the wind by ~2 kts and the right shift — trust the trend over the model.", consider: "Forecast running light — plan for more than it says.", clears: "forecast comes back in line", based: ["fetch_forecast + engine archive"], conf: "med" },
-        sail:    { status: "act",   value: "J1 → A3", sub: "in range · at Cove Island (bear away, ~4 min)", why: "Reading the crew-set sail (J1). The leg after the gate bears away to ~135° TWA — an A3 leg. Stage the peel before the rounding.", consider: "Stage the A3 and peel in ~4 min.", clears: "A3 hoisted", based: ["sails bar: crew set J1", "get_sail: A3 for TWA 135°"], conf: "high" },
-        eta:     { status: "watch", value: "4 min", sub: "Cove Island", why: "~4 min to Cove Island at the current made-good.", consider: "Mark in ~4 min — start the rounding prep.", clears: "past the rounding", based: ["get_navigator: ETA 4 min"], conf: "high" },
-        ais:     { status: "watch", value: "2nd of 4 (div)", sub: "▲ Defiance 1:20 · ▽ Windquest 2:10", rows: [{ hdr: true, cols: ["to fin", "Δ corrected"] }, { label: "1. ◆ Defiance", cols: ["2.9 nm", "▲ 1:20 ahead"] }, { label: "2. ◆ C4 (us)", emph: true, cols: ["3.0 nm", "—"] }, { label: "3. ◆ Windquest", cols: ["4.0 nm", "▽ 2:10 back"] }, { label: "4. Il Mostro ⌛31m→DR", cols: ["1.2 nm", "▽ 0:55 back"] }], why: "Estimated standings across the 4-boat demo fleet on ToT, FULL-race corrected basis (gun times from the SIs): 2 live on our AIS, 1 via the public tracker (delayed; dead-reckoned forward). Defiance holds the division lead by 1:20 corrected. ◆ = our division (B).", consider: "Tight on corrected with Defiance — sail your race, cover at the crossings.", clears: "—", based: ["get_fleet standings: 4 ranked / 4 roster", "sources: AIS 2 · tracker 1 · DR 1", "ToT"], conf: "high" },
-        charge:  { status: "act",   value: '28<div class="t-val2">Stbd on</div>', energy: 28, level: "rotate soon", sub: "change 4m → Port · rotate soon", why: "Crew energy ~28% (rotate soon). Heading instability and steering reversals up, speed deficit creeping. Watch change in 4 min — Port up next.", consider: "Watch change in 4 min — wake Port (Grant, Elise); rotate the helm at the change.", clears: "energy back above 65%", based: ["get_fatigue: index 72 → energy 28%", "get_watch: change in 4 min → Port"], conf: "med", components: { heading: 0.7, reversals: 0.8, heel: 0.4, "spd-def": 0.5 } },
-        data:    { status: "watch", value: "4", sub: "⚑ aws", why: "4 sensor groups reporting, one stale. Cross-checks flag: aws on Orca Core — ranked gnd went silent (78 s ago). Standing: 2 channel(s) never see their ranked lead (heading_true→orca, heel→orca) — the policy names a device that does not publish them.", consider: "Do not trust the flagged channel — cross-check it against another instrument before acting on it.", clears: "the flagged cross-check passes again", based: ["get_sources: 4 sources", "health/sensors: aws on Orca Core — ranked gnd went silent (78 s ago)"], conf: "med" },
+                   why: "Building to ~19 kts, shifting right. Forecast ~2 kts light.", consider: "Plan for more wind than forecast.", clears: "forecast matches again", based: ["forecast + boat wind"], conf: "med" },
+        sail:    { status: "act",   value: "J1 → A3", sub: "in range · at Cove Island (bear away, ~4 min)", why: "You set J1. Next leg is 135° TWA, an A3 leg.", consider: "Get the A3 ready. Peel in ~4 min.", clears: "A3 hoisted", based: ["you set J1", "best sail A3 at TWA 135°"], conf: "high" },
+        eta:     { status: "watch", value: "4 min", sub: "Cove Island", why: "~4 min to Cove Island at current speed.", consider: "Mark in ~4 min. Prep the rounding.", clears: "after the rounding", based: ["ETA 4 min"], conf: "high" },
+        ais:     { status: "watch", value: "2nd of 4 (div)", sub: "▲ Defiance 1:20 · ▽ Windquest 2:10", rows: [{ hdr: true, cols: ["to fin", "Δ corrected"] }, { label: "1. ◆ Defiance", cols: ["2.9 nm", "▲ 1:20 ahead"] }, { label: "2. ◆ C4 (us)", emph: true, cols: ["3.0 nm", "—"] }, { label: "3. ◆ Windquest", cols: ["4.0 nm", "▽ 2:10 back"] }, { label: "4. Il Mostro ⌛31m→DR", cols: ["1.2 nm", "▽ 0:55 back"] }], why: "Estimated corrected standings, 4 boats. 2 on AIS, 1 from the tracker (delayed, estimated forward). ◆ = our division (B).", consider: "Close with Defiance on corrected. Cover at the crossings.", clears: "—", based: ["4 of 4 boats ranked", "AIS 2 · tracker 1 · estimated 1"], conf: "high" },
+        charge:  { status: "act",   value: '28<div class="t-val2">Stbd on</div>', energy: 28, level: "rotate soon", sub: "change 4m → Port · rotate soon", why: "Crew energy 28% (rotate soon). Steering getting ragged, speed dropping. Port up in 4 min.", consider: "Watch change in 4m — wake Port (Grant, Elise); rotate the helm at the change.", clears: "energy back above 65%", based: ["helm steering: energy 28%", "watch plan: change in 4m → Port"], conf: "med", components: { heading: 0.7, reversals: 0.8, heel: 0.4, "spd-def": 0.5 } },
+        data:    { status: "watch", value: "4", sub: "⚑ aws", why: "4 sensor groups reporting, one stale. Check failed: masthead wind silent 78 s, using Orca Core.", consider: "Don't trust the flagged reading. Check another instrument first.", clears: "the check passes again", based: ["4 sources", "checks: masthead wind silent 78 s"], conf: "med" },
         /* The Jul 18 bank, rehearsed: 11.58 V and falling 0.22 V/h with ~2.6 h to the 11.0 V
            floor. This is the state nobody could see during the real race, three hours before the
            archiver and the AIS transceiver died together at the bottom of the curve. */
-        bank:    { status: "act", value: "11.58 V", sub: "-0.22 V/h · ~2.6 h to 11.0 V", why: "Bank 11.58 V, at or under 11.60 V. At the current rate the bank reaches 11.0 V in about 2.6 h. Below ~11.0 V the Pi's SD card writes and the AIS transceiver are at risk — that is how the Jul 18 full-res archive and the AIS feed were both lost mid-race, in the same minute, at the bottom of a six-hour discharge.", consider: "Shed load and get a charge source on — the archive and the AIS transceiver go first.", clears: "the 10-min median comes back above 11.6 V", based: ["get_power: 11.58 V over 1890 samples, -0.22 V/h", "⚠ absolute thresholds are unconfirmed 12 V lead-acid defaults — trust the trend"], conf: "high" },
+        bank:    { status: "act", value: "11.58 V", sub: "-0.22 V/h · ~2.6 h to 11.0 V", why: "Bank 11.58 V, at or under 11.6 V. At this rate, 11.0 V in about 2.6 h. Below 11.0 V the recorder and AIS can fail.", consider: "Shed load and start charging. Recorder and AIS fail first.", clears: "bank above 11.6 V for over half of the last 10 min", based: ["11.58 V, -0.22 V/h", "⚠ voltage limits not checked on this boat. Trust the trend."], conf: "high" },
       },
       power: { available: true, status: "danger", volts: 11.58, volts_decided: 11.57, volts_last: 11.52,
         volts_min: 11.31, sustain_min: 10,
@@ -339,28 +339,28 @@
         value: "Off track · 1.3 nm right", xte_nm: 1.3, xte_side: "right", xte_trend: "diverging",
         along_pct: 61, along_nm: 86.6, route_nm: 142.0, time_behind_s: 180,
         vmc_kn: 5.0, vmc_optimal_kn: 5.9, vmc_deficit_kn: 0.9,
-        what_flips_it: "a persistent right shift past ~020° for two-plus oscillation cycles",
-        why: "The boat is 1.3 nm to the right of the 'Left start' variant's optimal track and diverging. This is a genuine departure from the frozen line.",
-        consider: "You're right of the plan — decide: rejoin the 'Left start' line, or if the breeze has genuinely changed sides, check the branch trigger (the playbook tile is calling the right)." },
-      drift: { available: true, status: "act", value: "Forecast moved · 28° veered", drift_twd_deg: 28, drift_twd_max_deg: 41, drift_dir: "veered", drift_tws_kn: 3.5, n_points: 7 },
+        what_flips_it: "wind holds right of 020° for 2+ shifts",
+        why: "1.3 nm right of the Left start track and moving away.",
+        consider: "Rejoin the Left start line, or switch right if the wind has changed." },
+      drift: { available: true, status: "act", value: "Forecast moved · 28° right", drift_twd_deg: 28, drift_twd_max_deg: 41, drift_dir: "right", drift_tws_kn: 3.5, n_points: 7 },
       selector: { available: true, action: "switch", status: "act", tier: 1, value: "Switch → Right start",
         target_variant: "right", target_label: "Right start", confidence: 0.9, confidence_label: "high",
         driven_by: ["get_tactics", "get_drift", "get_deviation"],
-        why: "A persistent veering shift now favours the right — against the recommended Left. That's the playbook's branch trigger. Reinforced: the forecast has veered ~28° the same way; you're already working the right side (1.3 nm right)." },
+        why: "Wind shifted right and holding. Forecast also shifted 28° right. Go right." },
       reoptimize: { available: true, off_playbook: true, eta_min: 254, tacks: 9, sailed_nm: 46.2, avoids_islands: 2, avoids_zones: 1,
         marks: ["Cove Island", "Finish"], sail_plan: ["J1", "A3", "S1"], vs_playbook: { available: true, max_divergence_nm: 2.4, mean_divergence_nm: 0.9 } },
       synthesis: { available: true, mode: "llm", confidence: "med",
-        assessment: "The right has genuinely taken over — this outruns the pre-authored branches. Commit right, off the book.",
+        assessment: "Right has taken over, past what the plan covers. Commit right.",
         concordance: { strength: "strong", lean: "right",
-          note: "the persistent veer, the forecast drift and your position all point right — and you're already 1.3 nm right of the plan; high concordance" },
-        recommendation: { action: "Off-book: commit right and lay the mark", vs_playbook: "departs", target_variant: null,
+          note: "Wind, forecast and position all point right. You're 1.3 nm right already." },
+        recommendation: { action: "Off plan: go right, lay the mark", vs_playbook: "departs", target_variant: null,
           reoptimize: "ready", urgency: "now", confidence: "med",
-          rationale: "all three directional reads agree right and the situation has passed even the Right-start branch — sail the favoured side, onboard re-route ready" },
+          rationale: "Everything points right. New route ready." },
         play_matches: [
           { play_id: "shift_right_20", name: "Breeze 20°+ right of forecast", match: "strong", status: "armed",
-            why: "the persistent veer + 28° forecast drift are exactly this play's described bust" },
+            why: "Wind shifted right, forecast shifted 28° right. This is the play." },
           { play_id: "pressure_up", name: "More pressure than forecast", match: "partial", status: "quiet",
-            why: "breeze running ~2-3 kts over the frozen forecast, not yet sustained" },
+            why: "Wind 2-3 kts over forecast, not steady yet." },
         ],
         reoptimize: { available: true, off_playbook: true, eta_min: 254, tacks: 9, sailed_nm: 46.2, avoids_islands: 2, avoids_zones: 1,
           marks: ["Cove Island", "Finish"], sail_plan: ["J1", "A3", "S1"], vs_playbook: { available: true, max_divergence_nm: 2.4, mean_divergence_nm: 0.9 } } },
@@ -369,7 +369,7 @@
 
   /* ============================ helpers ============================ */
   const API = "/api";
-  const NA = (note) => ({ status: "na", value: "—", sub: note || "no data", why: note || "No data from the engine.",
+  const NA = (note) => ({ status: "na", value: "—", sub: note || "no data", why: note || "No data.",
     consider: "—", clears: "—", based: [], conf: "engine" });
   const stripTags = (s) => String(s).replace(/<[^>]+>/g, "");
 
@@ -457,14 +457,13 @@
         dd(up.tws_delta_kn, " kts", 1) + " vs here, " + dd(up.twd_shift_deg, "°") + " shift" +
         (up.vs_forecast ? " · vs plan " + dd(up.vs_forecast.tws_kn, "k", 1) + " / " + dd(up.vs_forecast.twd_deg, "°") : "") +
         (up.shore ? " (shore)" : "") + "</div>" : "";
-    return "<div class='rc-title' style='margin-top:10px'>Up-course observations · actual vs plan</div>" +
+    return "<div class='rc-title' style='margin-top:10px'>Stations up the course</div>" +
       head +
       "<div class='bl-wrap'><table class='bl-tbl'><thead><tr><th>station</th><th>where</th><th>obs</th>" +
-      "<th title='observation minus own instruments'>vs own</th>" +
-      "<th title='observation minus the frozen forecast the plan routed on'>vs plan</th></tr></thead>" +
+      "<th title='station minus our wind'>vs us</th>" +
+      "<th title='station minus the plan forecast'>vs plan</th></tr></thead>" +
       "<tbody>" + rows + "</tbody></table></div>" +
-      "<div class='dc-foot'>vs plan = the blend frozen in the playbook; shore stations under-read " +
-      "pressure — trust their direction more.</div>";
+      "<div class='dc-foot'>Shore stations read light. Trust their direction more.</div>";
   }
   function esc2(s) { return String(s == null ? "" : s).replace(/[<>&"]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" }[c])); }
   /* ============ COURSE MAP (Time-to-Mark detail): the plan course to scale + the boat ============
@@ -546,9 +545,9 @@
       const cross = (dx * (q[1] - a[1]) - dy * (q[0] - a[0])) / len;  // +ve = right of the leg (screen y down)
       foot += " · " + r1(Math.abs(cross)) + " nm " + (cross > 0 ? "right" : "left") + " of the leg line";
     }
-    if (trk.length) foot += (foot ? " · " : "") + "plan line = optimizer route (" +
+    if (trk.length) foot += (foot ? " · " : "") + "line = plan route (" +
       esc2(App.pbTrack.variant_label || App.pbTrack.variant) + ")";
-    return '<div class="rc-title" style="margin-top:10px">Course · plan legs vs us</div>' +
+    return '<div class="rc-title" style="margin-top:10px">Course and plan</div>' +
       '<svg viewBox="0 0 ' + W + " " + H + '" style="width:100%;height:auto;display:block;background:var(--panel2);border-radius:8px">' + svg + "</svg>" +
       (foot ? '<div class="dc-foot">' + foot + "</div>" : "");
   }
@@ -684,7 +683,7 @@
       const pts = [["Now", 0], ["−60 min", 3600], ["−120 min", 7200]];
       const samples = pts.map(([lbl, ago]) => [lbl, observedAt(ago)]);
       const nowS = samples[0][1] || (p.conditions && p.conditions.available ? { tws: p.conditions.tws, twd: p.conditions.twd } : null);
-      if (!nowS) return NA("building TWS history…");
+      if (!nowS) return NA("collecting wind history…");
       if (!samples[0][1]) samples[0][1] = nowS;
       const rows = samples.map(([lbl, s], i) => ({ label: lbl, emph: i === 0, cols: [s ? arrowKts(s.twd, s.tws) : "—"] }));
       let oldest = null;
@@ -698,39 +697,72 @@
       }
       const chart = twsTrendTile(App.src === "live" ? raceData() : null) || null;
       return { status: st, value: arrowKts(nowS.twd, nowS.tws), sub: sub, chart: chart, rows: rows,
-        why: "True wind speed + direction, now and looking back. Arrows point the way the wind is blowing (a north wind points down, an east wind points left)." +
-          (oldest ? " Over the window TWS " + (nowS.tws >= oldest.tws ? "built" : "eased") + " from " + r0(oldest.tws) + " to " + r0(nowS.tws) + " kts." : ""),
-        consider: st === "ok" ? "Steady — work the oscillations." : "Building/shifting — favor the developing side and watch the gear.",
+        // the one place the arrow legend is explained (the forecast tile uses the same arrows)
+        why: "Arrows point downwind (a north wind points down)." +
+          (oldest ? " Wind " + (nowS.tws >= oldest.tws ? "built" : "eased") + " from " + r0(oldest.tws) + " to " + r0(nowS.tws) + " kts." : ""),
+        consider: st === "ok" ? "Steady. Play the shifts." : "Wind is building or shifting. Favour the new side, check sails.",
         clears: st === "ok" ? "—" : "the trend settles",
-        based: [App.seriesHist && App.seriesHist.length ? "engine archive (" + App.seriesHist.length + " pts) + live buffer" : "live wind buffer (" + App.windHist.length + " samples)"], conf: "engine" };
+        based: [App.seriesHist && App.seriesHist.length ? "boat wind log (" + App.seriesHist.length + " points)" : "boat wind (" + App.windHist.length + " readings)"], conf: "engine" };
     },
+    /* FORECAST: the multi-model PLUME from the Lab (engine /plume, cached aboard) on the face —
+       the latest run of every router model along the planned route, the boat's own wind pinned
+       at now — and the Open-Meteo rows (+60/+120, forecast vs actual) under it in the detail.
+       Either alone is enough; with neither the tile is honestly empty. */
     forecast(p) {
-      const fc = p.forecast;
-      if (!fc || !fc.available || !fc.hours || !fc.hours.length) return NA("no forecast");
-      const obs = observedAt(0) || (p.conditions && p.conditions.available ? { tws: p.conditions.tws, twd: p.conditions.twd } : null);
-      const aug = obs ? [{ in_h: 0, tws: obs.tws, twd: obs.twd }].concat(fc.hours) : fc.hours.slice();
-      const f60 = fcstAt(aug, 1.0), f120 = fcstAt(aug, 2.0);
-      const v60 = fcstVsActual(3600), v120 = fcstVsActual(7200);
-      const fwd = (s) => (s ? arrowKts(s.twd, s.tws) : "—");
+      const fc = p.forecast && p.forecast.available && p.forecast.hours && p.forecast.hours.length ? p.forecast : null;
+      const pl = plumeNow();
+      if (!fc && !pl) return NA("no forecast");
+      // the boat's measured wind — only a REAL reading (a null tws is "no wind", not 0 kts)
+      const live = p.conditions && p.conditions.available && p.conditions.tws != null && p.conditions.twd != null
+        ? { tws: p.conditions.tws, twd: p.conditions.twd } : null;
+      const o0 = observedAt(0);
+      const obs = o0 && o0.tws != null && o0.twd != null ? o0 : live;
+      App.fcObs = obs;                    // the plume detail pins the same reading at now
+      const nowS = Date.now() / 1000;
+      const fromPlume = (h) => {          // the models' mean at +h when there's no Open-Meteo series
+        const sp = pl ? PL.spreadAt(pl, nowS + h * 3600) : null;
+        return sp ? { tws: sp.mean_tws, twd: sp.mean_twd } : null;
+      };
+      let f60, f120;
+      if (fc) {
+        const aug = obs ? [{ in_h: 0, tws: obs.tws, twd: obs.twd }].concat(fc.hours) : fc.hours.slice();
+        f60 = fcstAt(aug, 1.0); f120 = fcstAt(aug, 2.0);
+      } else { f60 = fromPlume(1); f120 = fromPlume(2); }
+      const v60 = fc ? fcstVsActual(3600) : null, v120 = fc ? fcstVsActual(7200) : null;
+      const fwd = (x) => (x && x.tws != null ? arrowKts(x.twd, x.tws) : "—");
       const rows = [
-        { label: "Now", emph: true, cols: [obs ? arrowKts(obs.twd, obs.tws) : "—"] },
+        { label: "Now", emph: true, cols: [obs ? arrowKts(obs.twd, obs.tws) : "no wind reading"] },
         { label: "+60 min", cols: [fwd(f60)] },
         { label: "+120 min", cols: [fwd(f120)] },
+      ];
+      if (fc) rows.push(
         { sep: true, label: "FORECAST VS. ACTUAL" },
         { hdr: true, cols: ["forecast", "actual"] },
-        { label: "−60 min", cols: v60 ? [fwd(v60.fcst), fwd(v60.actual)] : ["—", "accumulating"] },
-        { label: "−120 min", cols: v120 ? [fwd(v120.fcst), fwd(v120.actual)] : ["—", "accumulating"] },
-      ];
-      const bigChange = obs && (Math.abs(f120.tws - obs.tws) >= 6 || Math.abs(angDiff(f120.twd, obs.twd)) >= 20);
-      const badSkill = (v60 && (Math.abs(v60.actual.tws - v60.fcst.tws) >= 4 || Math.abs(angDiff(v60.actual.twd, v60.fcst.twd)) >= 15)) ||
-        (v120 && (Math.abs(v120.actual.tws - v120.fcst.tws) >= 5 || Math.abs(angDiff(v120.actual.twd, v120.fcst.twd)) >= 20));
+        { label: "−60 min", cols: v60 ? [fwd(v60.fcst), fwd(v60.actual)] : ["—", "collecting"] },
+        { label: "−120 min", cols: v120 ? [fwd(v120.fcst), fwd(v120.actual)] : ["—", "collecting"] });
+      // WATCH needs real numbers on both sides — a missing reading never raises it
+      const big = (a, b, kt, deg) => !!(a && b && a.tws != null && b.tws != null &&
+        (Math.abs(a.tws - b.tws) >= kt || Math.abs(angDiff(a.twd, b.twd)) >= deg));
+      const bigChange = big(f120, obs, 6, 20);
+      const badSkill = (v60 && big(v60.actual, v60.fcst, 4, 15)) || (v120 && big(v120.actual, v120.fcst, 5, 20));
       const st = bigChange || badSkill ? "watch" : "ok";
-      return { status: st, value: null, rows: rows,
-        why: "Forecast wind speed + direction (arrows show direction — a north wind points down). +60 min " + r0(f60.tws) + " kts, +120 min " + r0(f120.tws) + " kts. " +
-          "\"Forecast vs. actual\" compares the earlier forecast for −60 / −120 min ago against what actually happened — a read on how well the model is verifying" +
-          (v60 || v120 ? "." : " (fills in after the dashboard has run ~1-2 h)."),
-        consider: badSkill ? "Forecast off lately — trust the live trend more." : bigChange ? "A notable change is forecast — plan the gear." : "Forecast steady and verifying.",
-        clears: st === "ok" ? "—" : "forecast comes back in line", based: ["fetch_forecast + live wind buffer"], conf: "engine" };
+      const frozen = pl && PL.isFrozen(pl, nowS);
+      const old = pl && !frozen && PL.isOld(pl);
+      const chart = pl ? '<div class="pl-tile">' + PL.chartSvg(pl, { w: 270, h: 104, now: nowS, back_h: 3, ahead_h: 24,
+        compact: true, field: "tws", obs: App.src === "live" ? raceData() : null, nowObs: obs }) + PL.legendHtml(pl) + "</div>" : null;
+      const sub = !pl ? "" : frozen ? '<b class="pl-old-tag">' + PL.esc(PL.frozenText(pl)) + "</b>"
+        : PL.summary(pl, nowS, 6) + (old ? ' · <b class="pl-old-tag">data ' + PL.ageText(pl.age_s) + " old</b>" : "");
+      const head = f60 && f60.tws != null ? "+60 min " + r0(f60.tws) + " kts" + (f120 && f120.tws != null ? ", +120 min " + r0(f120.tws) + " kts." : ".") : "";
+      return { status: st, value: null, rows: rows, chart: chart, sub: sub,
+        why: pl ? "Each model's forecast along your route. Bold = latest run." + (frozen ? " Frozen at the start." : "")
+          : head ? "Forecast: " + head : "Forecast wind speed and direction.",
+        consider: badSkill ? "Forecast has been off. Trust the live wind." : bigChange ? "Big change coming. Plan your sails." :
+          frozen ? PL.frozenText(pl) + ". No updates while racing." :
+          old ? "Forecast is " + PL.ageText(pl.age_s) + " old. Updates when back online." :
+          obs ? "Forecast steady and matching." : "No wind reading. Check the wind sensor.",
+        clears: st === "ok" ? "—" : "forecast matches again",
+        based: (pl ? [PL.models(pl).length + " forecast models, " + (pl.age_s != null ? PL.ageText(pl.age_s) + " old" : "age ?")] : [])
+          .concat(fc ? ["forecast + boat wind"] : []), conf: "engine" };
     },
     /* SAIL: reads the CREW-SET sail (the sails bar) and says how it fits the conditions —
        in range / overpowered / underpowered / wrong angle — with an arrow to the next change
@@ -743,7 +775,7 @@
       const fit = s.fit;
       const xo = s.next_crossover;
       const FIT = { in_range: "in range", overpowered: "OVERPOWERED", underpowered: "underpowered",
-                    wrong_angle: "wrong sail for this angle", no_model: "logged (no rating model)" };
+                    wrong_angle: "wrong sail for this angle", no_model: "logged" };
       let to = null, when = null, st = "ok";
       if (crew && fit && fit !== "in_range" && fit !== "no_model") {
         to = s.change_to || s.optimal_sail;
@@ -770,35 +802,35 @@
       }
       const base = crew || s.optimal_sail || "—";
       const value = to ? base + " → " + to : base;
-      const sub = (crew ? (FIT[fit] || "crew-set") : "crew sail not set — optimal shown")
+      const sub = (crew ? (FIT[fit] || "crew-set") : "not set · best sail shown")
         + (when ? " · " + when : (crew && fit === "in_range" ? " · no change ahead" : ""));
       // advisory watch coupling: a pending change with the watch boundary close by = extra
       // hands soon — say so (the crew decides; nothing is re-timed)
       const w = p.watch;
       const wNote = to && w && w.plan_set && w.active && w.mins_to_change != null && w.mins_to_change <= 30
-        ? " Watch change " + fmtMins(w.mins_to_change) + " out — full hands on deck at the change."
+        ? " Watch change in " + fmtMins(w.mins_to_change) + ": extra hands then."
         : "";
       return { status: st, value: value,
         sub: sub,
-        why: (crew ? "Reading the crew-set sail (" + crew + " on the sails bar). " : "No crew sail set — tap what's flying on the SAILS bar. ")
+        why: (crew ? "You set " + crew + ". " : "Tap what's flying on the sails bar. ")
           + (s.recommendation || "") + wNote,
-        consider: (to ? (when === "change now" ? "Change to " + to + " now." : "Stage the " + to + " — " + when + ".") : "No change.") + wNote,
+        consider: (to ? (when === "change now" ? "Change to " + to + " now." : "Get the " + to + " ready: " + when + ".") : "No change.") + wNote,
         clears: st === "ok" ? "—" : (to ? to + " hoisted" : "—"),
-        based: ["sails bar: crew set " + (crew || "—"),
-                "get_sail: optimal " + s.optimal_sail + ", TWA " + r0(s.twa) + "°, TWS " + r0(s.tws_used) + " kts" + (xo ? ", crossover " + xo.to_sail + " " + r0(xo.deg_away) + "°" : "")], conf: "engine" };
+        based: ["you set " + (crew || "—"),
+                "best sail " + s.optimal_sail + " at TWA " + r0(s.twa) + "°, " + r0(s.tws_used) + " kts" + (xo ? "; " + xo.to_sail + " in " + r0(xo.deg_away) + "°" : "")], conf: "engine" };
     },
     eta(p) {
       const n = p.navigator;
       if (!n || !n.available || !n.next_mark) return NA(n && n.note ? n.note : "no active course");
       const m = n.next_mark, e = m.eta_min;
-      if (e == null) return NA("ETA needs made-good to the mark");
+      if (e == null) return NA("no ETA: not closing on the mark");
       const st = e < 2 ? "act" : e < 5 ? "watch" : "ok";
       // no-break space keeps "30 min" together when the value wraps in a narrow tile (#73)
       const txt = e >= 60 ? Math.floor(e / 60) + "h " + r0(e % 60) + "\u00a0min" : r0(e) + "\u00a0min";
       return { status: st, value: txt, sub: m.name,
-        why: "~" + r0(e) + " min to " + m.name + " at the current made-good.",
-        consider: e < 5 ? "Mark in ~" + r0(e) + " min — start the rounding prep." : "On schedule for the mark.",
-        clears: st !== "ok" ? "past the rounding" : "—", based: ["get_navigator: ETA " + r0(e) + " min to " + m.name], conf: "engine" };
+        why: "~" + r0(e) + " min to " + m.name + " at current speed.",
+        consider: e < 5 ? "Mark in ~" + r0(e) + " min. Prep the rounding." : "On schedule for the mark.",
+        clears: st !== "ok" ? "after the rounding" : "—", based: ["ETA " + r0(e) + " min to " + m.name], conf: "engine" };
     },
     /* FLEET: whole-fleet corrected-time STANDINGS estimate (crew decision 2026-07-08). Collision
        avoidance lives on the boat's dedicated gear — NOT here; the copilot's compact safety
@@ -809,9 +841,9 @@
     ais(p) {
       const fl = p.fleet;
       if (!fl) return NA("no fleet feed");
-      if (fl.available === false) return NA(fl.note || "no fleet roster loaded — load it in the Lab's Lock-in & Deploy");
+      if (fl.available === false) return NA(fl.note || "no fleet list. Load it in the Lab.");
       const st = fl.standings || [];
-      if (!st.length) return NA("roster loaded — no positions yet (AIS/tracker)");
+      if (!st.length) return NA("no boat positions yet");
       const orank = fl.own_rank || {};
       const ranked = st.filter((r) => r.rank != null);
       const meIdx = ranked.findIndex((r) => r.source === "own");
@@ -827,7 +859,7 @@
       const subBits = [];
       if (ahead) subBits.push("▲ " + boatName(ahead) + " " + fmtD(ahead.corrected_delta_s));
       if (behind) subBits.push("▽ " + boatName(behind) + " " + fmtD(behind.corrected_delta_s));
-      const basisTag = fl.corrected_basis === "full" ? "" : " · rem-race";
+      const basisTag = fl.corrected_basis === "full" ? "" : " · rest of race";
       const sub = (subBits.join(" · ") || "est. standings") + basisTag;
       // tight racing on either side = watch (informational — there is no safety state here)
       const near = [ahead, behind].some((b) => b && Math.abs(b.corrected_delta_s) <= 120);
@@ -843,22 +875,20 @@
       const nDr = st.filter((r) => r.dr_nm).length;
       const unranked = orank.unranked || 0;
       const basisTxt = fl.corrected_basis === "full"
-        ? "FULL-race corrected basis (gun " + (fl.gun_source === "session" ? "from the race-log start — approximate for staggered divisions" : "times from the SIs") + ")"
-        : "REMAINING-race basis only — load the division gun times (or start the race log) for true standings";
-      const why = "Estimated standings across the " + (fl.roster_size || st.length) + "-boat fleet on " +
-        (fl.scoring_method || "corrected time") + ", " + basisTxt + ": " + nAis + " live on our AIS, " +
-        nTrk + " via the public tracker (delayed" + (nDr ? "; " + nDr + " dead-reckoned forward at their pace" : "") + ")" +
-        (unranked ? ", " + unranked + " with no fix yet" : "") + ". ◆ = our division" +
+        ? (fl.gun_source === "session" ? "Start time from the race log, so rough. " : "")
+        : "Rest of race only. Load start times for full standings. ";
+      const why = "Estimated corrected standings, " + (fl.roster_size || st.length) + " boats. " + basisTxt +
+        nAis + " on AIS, " + nTrk + " from the tracker (delayed" + (nDr ? ", " + nDr + " estimated forward" : "") + ")" +
+        (unranked ? ", " + unranked + " with no position" : "") + ". ◆ = our division" +
         (fl.own_division ? " (" + fl.own_division + ")" : "") + ".";
       const consider = near
-        ? "Tight on corrected with " + boatName(Math.abs((ahead || {}).corrected_delta_s || 9e9) <= Math.abs((behind || {}).corrected_delta_s || 9e9) ? ahead : behind) + " — sail your race, cover at the crossings."
-        : ahead ? "Chase " + boatName(ahead) + " on corrected — consolidate against " + (behind ? boatName(behind) : "the boats behind") + "."
-        : "Leading on corrected (est.) — consolidate, don't take a flyer.";
+        ? "Close with " + boatName(Math.abs((ahead || {}).corrected_delta_s || 9e9) <= Math.abs((behind || {}).corrected_delta_s || 9e9) ? ahead : behind) + " on corrected. Cover at the crossings."
+        : ahead ? "Chase " + boatName(ahead) + ". Stay ahead of " + (behind ? boatName(behind) : "the boats behind") + "."
+        : "Leading on corrected. Cover, no flyers.";
       return { status: status, value: value, sub: sub, rows: rows, why: why, consider: consider,
         clears: "—",
-        based: ["get_fleet standings: " + ranked.length + " ranked / " + st.length + " roster",
-                "sources: AIS " + nAis + " · tracker " + nTrk + (nDr ? " · DR " + nDr : ""),
-                fl.scoring_method || "ToT"].concat(fl.gaps || []), conf: "engine" };
+        based: [ranked.length + " of " + st.length + " boats ranked",
+                "AIS " + nAis + " · tracker " + nTrk + (nDr ? " · estimated " + nDr : "")].concat(fl.gaps || []), conf: "engine" };
     },
     /* CREW: helm energy (fatigue) + the WATCH SYSTEM on one tile — who's on, countdown to the
        change, T-15/T-5 escalation. Rotation advice and the watch boundary compose ("rotate at
@@ -888,14 +918,14 @@
         energy: chg, level: lvl,      // the detail's CREW ENERGY section reads these explicitly
         value: (hasF ? String(chg) : "—") + (teamLine ? '<div class="t-val2">' + teamLine + "</div>" : ""),
         sub: [countdown, lvl].filter(Boolean).join(" · "),
-        why: (hasF ? "Crew energy ~" + chg + "% (inverse of the fatigue index; lower = more depleted). Level: " + lvl + ". " : "No helm data (fatigue needs recent archive history). ") +
-             (wSet ? (w.active ? "Watch system: " + (w.all_hands ? "ALL HANDS" : teamTxt(w, w.on) + " on deck") +
-                 (w.next_change ? ", change at " + fmtHM(w.next_change) + (w.next_on_label ? " to " + w.next_on_label : "") + "." : ".")
-               : "Watch plan aboard but no block active" + (w.next_change ? " — watches start " + fmtHM(w.next_change) + "." : ".")) : "No watch plan aboard."),
+        why: (hasF ? "Crew energy " + chg + "% (" + lvl + "). " : "No helm data yet. ") +
+             (wSet ? (w.active ? (w.all_hands ? "ALL HANDS" : teamTxt(w, w.on) + " on deck") +
+                 (w.next_change ? ". Change at " + fmtHM(w.next_change) + (w.next_on_label ? " to " + w.next_on_label : "") + "." : ".")
+               : (w.next_change ? "Watches start " + fmtHM(w.next_change) + "." : "No watch on now.")) : "No watch plan."),
         consider: consider,
         clears: CW.clears(w, rotate),
-        based: (hasF ? ["get_fatigue: index " + r0(f.index) + " → energy " + chg + "%, level " + (f.level || "?")] : [])
-          .concat(wSet ? ["get_watch: " + (wSub || "plan aboard")] : []), conf: "engine" };
+        based: (hasF ? ["helm steering: energy " + chg + "%"] : [])
+          .concat(wSet ? ["watch plan: " + (wSub || "loaded")] : []), conf: "engine" };
       if (hasF && f.components) o.components = f.components;
       return o;
     },
@@ -938,19 +968,19 @@
       // tap away — and the backlog's loudest v2 note is that the console showed too much.
       return { status: st, value: face, sub: sub,
         flags: flags, notes: notes, health: h || null,
-        why: (!c || !c.available ? "No live conditions from the engine. " :
+        why: (!c || !c.available ? "No live data from the boat. " :
               count + " sensor group" + (count === 1 ? "" : "s") + " reporting"
               + (anyStale ? ", one stale. " : ". "))
-          + (!h || !h.available ? "Instrument cross-checks unavailable."
-             : flags.length ? "Cross-checks flag: " + flags.join("; ") + "."
-             : "Attitude, heading-vs-GPS-course, sensor priority and the AIS filter all check out.")
-          + (notes.length ? " Standing: " + notes.join("; ") + "." : ""),
-        consider: flags.length ? "Do not trust the flagged channel — cross-check it against another instrument before acting on it."
-          : st === "ok" ? "Instruments agree — numbers are safe to act on."
-          : "Cross-check before trusting a lone reading.",
-        clears: flags.length ? "the flagged cross-check passes again" : st === "ok" ? "—" : "all sources fresh",
-        based: ["get_sources: " + count + " sources",
-                h && h.available ? "health/sensors: " + h.reason : "health/sensors: unavailable"]
+          + (!h || !h.available ? "Sensor checks offline."
+             : flags.length ? "Check failed: " + flags.join("; ") + "."
+             : "All sensor checks pass.")
+          + (notes.length ? " Note: " + notes.join("; ") + "." : ""),
+        consider: flags.length ? "Don't trust the flagged reading. Check another instrument first."
+          : st === "ok" ? "Instruments agree. Safe to use."
+          : "Check a second instrument before trusting one reading.",
+        clears: flags.length ? "the check passes again" : st === "ok" ? "—" : "all sources fresh",
+        based: [count + " sources",
+                h && h.available ? "checks: " + h.reason : "checks: offline"]
           .concat(provLine("data") ? [provLine("data")] : []), conf: "engine" };
     },
     /* HOUSE BANK — the tile that did not exist on 2026-07-18. `/power` decides on a smoothed
@@ -973,26 +1003,24 @@
         + " h to " + r1(b.thresholds.floor_v) + " V");
       else if (b.volts_min != null && b.volts_min < b.volts) bits.push("min " + b.volts_min + " V");
       return { status: st, value: (b.volts != null ? b.volts.toFixed(2) : "—") + " V", sub: bits.join(" · "),
-        why: b.reason + ". The status is decided on a " + r0(b.sustain_min) + "-min median, so a "
-          + "winch load can't trip it and a bounce shorter than half that can't clear it; the "
-          + "trend is measured over " + r0(b.window_min) + " min."
-          + (b.hours_to_floor != null ? " At the current rate the bank reaches "
-             + r1(b.thresholds.floor_v) + " V in about " + r1(b.hours_to_floor) + " h." : "")
-          + " Below ~11.0 V the Pi's SD card writes and the AIS transceiver are at risk — that is"
-          + " how the Jul 18 full-res archive and the AIS feed were both lost mid-race, in the"
-          + " same minute, at the bottom of a six-hour discharge.",
-        consider: st === "act" ? "Shed load and get a charge source on — the archive and the AIS transceiver go first."
-          : st === "watch" ? (b.charging ? "Recovering, but still low — leave the charge source on."
-              : "Bank is draining. Decide on a charging window before it reaches the floor, not after.")
+        // Status uses a sustain_min-minute median (a winch load can't trip it, a short bounce
+        // can't clear it); the trend is over window_min. Below ~11.0 V the Pi's SD writes and the
+        // AIS transceiver brown out — how the Jul 18 archive and AIS feed died together.
+        why: b.reason + "."
+          + (b.hours_to_floor != null ? " At this rate, " + r1(b.thresholds.floor_v) + " V in about "
+             + r1(b.hours_to_floor) + " h." : "")
+          + " Below " + r1(b.thresholds.floor_v) + " V the recorder and AIS can fail.",
+        consider: st === "act" ? "Shed load and start charging. Recorder and AIS fail first."
+          : st === "watch" ? (b.charging ? "Charging but still low. Keep charging."
+              : "Bank draining. Plan a charge before " + r1(b.thresholds.floor_v) + " V.")
           : "Bank healthy.",
         // the release condition IS the decision condition now — the dwell median coming back
         // above the line it crossed. No separate band to explain (see power.py `_tripped`).
         clears: st === "ok" ? "—"
-          : "the " + r0(b.sustain_min) + "-min median comes back above "
-            + r1(b.status === "danger" ? b.thresholds.danger_v : b.thresholds.warn_v) + " V",
-        based: ["get_power: " + b.volts + " V over " + b.samples + " samples, "
-                + (trend == null ? "no trend yet" : trend.toFixed(2) + " V/h"),
-                "⚠ absolute thresholds are unconfirmed 12 V lead-acid defaults — trust the trend"]
+          : "bank above "
+            + r1(b.status === "danger" ? b.thresholds.danger_v : b.thresholds.warn_v) + " V for over half of the last " + r0(b.sustain_min) + " min",
+        based: [b.volts + " V, " + (trend == null ? "no trend yet" : trend.toFixed(2) + " V/h"),
+                "⚠ voltage limits not checked on this boat. Trust the trend."]
           .concat(provLine("bank") ? [provLine("bank")] : []), conf: "engine" };
     },
     /* PLAYBOOK: are we on the frozen homework, and has a branch fired? Driven by the engine's
@@ -1014,7 +1042,7 @@
       else if (armed && status === "ok") status = "watch";
       const bits = [(act === "switch" ? "branch fired" : act === "off_script" ? "off the playbook" : "on plan")];
       if (armed) bits.push(armed + " play" + (armed === 1 ? "" : "s") + " ARMED");
-      if (synOff) bits.push("off-book · re-route ready");
+      if (synOff) bits.push("off plan · new route ready");
       if (conf) bits.push(conf);
       return { status: status, value: s.value || "—", sub: bits.join(" · "), rows: s.rows || [],
         why: s.why || "", consider: s.consider || "—", clears: s.clears || "—",
@@ -1043,11 +1071,11 @@
     const notes = flagged.slice(0, 3).map((k) => ({ tile: k, status: tiles[k].status, text: tiles[k].consider || tiles[k].why, conf: "engine" }));
     const held = TILES.filter((k) => tiles[k].staleMs);
     const link = linkMessage(held.length ? Math.max.apply(null, held.map((k) => tiles[k].staleMs)) : 0);
-    const focus = link ? link.text : !reachable ? "Engine unreachable — no live data." :
-      held.length ? "Holding last good values (" + fmtAge(Math.max.apply(null, held.map((k) => tiles[k].staleMs))) + " old) — engine slow to answer." :
-      flagged.length === 0 ? "All systems nominal (engine read)." :
-      flagged.length === 1 ? "1 item needs attention (engine read)." :
-      flagged.length + " items need attention (engine read).";
+    const focus = link ? link.text : !reachable ? "No live data from the boat." :
+      held.length ? "Showing last values (" + fmtAge(Math.max.apply(null, held.map((k) => tiles[k].staleMs))) + " old). Boat slow to answer." :
+      flagged.length === 0 ? "Nothing flagged." :
+      flagged.length === 1 ? "1 item needs attention." :
+      flagged.length + " items need attention.";
     const d = applyBrief({ tiles, focus, notes, confidence: "engine", mode: "engine read" });
     if (link) { d.focus = link.text; d.link = link.state; }    // a link problem outranks the LLM's line
     return d;
@@ -1059,10 +1087,10 @@
     if (!App.lastOkAt && now - App.startedAt < LOST_AFTER_MS) return { state: "reconnecting", text: "Connecting to the boat…" };
     const silent = now - (App.lastOkAt || App.startedAt);
     if (now < App.graceUntil || silent < LOST_AFTER_MS)
-      return { state: "reconnecting", text: "Reconnecting to the boat… showing last values" +
+      return { state: "reconnecting", text: "Reconnecting… showing last values" +
         (oldestHeldMs ? " (" + fmtAge(oldestHeldMs) + " old)" : "") + "." };
-    return { state: "lost", text: "No link to the boat for " + fmtAge(silent) +
-      " — check the iPad is on the boat Wi-Fi. Still trying every 3 s." };
+    return { state: "lost", text: "No link for " + fmtAge(silent) +
+      ". Check the iPad is on boat Wi-Fi. Still trying." };
   }
   /* the iPad woke (screen on, Safari back in front, or Wi-Fi back): say so at once and poll now
      instead of showing the frozen pre-sleep screen until the next 3 s tick */
@@ -1078,7 +1106,7 @@
         const t = App.data.tiles[k], age = tileAge(k);
         if (t && age !== Infinity && age >= STALE_AFTER_MS) t.staleMs = age;
       }
-      App.data.focus = "Reconnecting to the boat…"; App.data.link = "reconnecting"; render();
+      App.data.focus = "Reconnecting…"; App.data.link = "reconnecting"; render();
     }
     poll();
   }
@@ -1150,7 +1178,7 @@
     const r = await fetchJSON("/deviation", 8000);
     if (r) App.deviation = r;
     else if (!App.deviation) App.deviation = { available: false, status: "na", value: "—",
-      why: "The onboard engine (:8200) is unreachable — route-deviation needs it." };
+      why: "Can't reach the boat. No track check." };
     if (App.src === "live") render();
   }
   const behindTxt = (s) => {
@@ -1163,6 +1191,60 @@
     if (App.src === "demo") return (SCENARIOS[App.demoScn] || {}).strategy || null;
     return App.deviation;
   }
+  /* FORECAST PLUME (engine /plume — the Lab's multi-model run history, cached on the Pi's disk).
+     Slow-moving (new model runs arrive hourly at most), so a minute's poll is plenty. A failed
+     poll keeps the last plume; its age keeps counting so an offline boat shows how old it is. */
+  const PL = window.C4Plume;
+  const PLUME_EVERY = 60000;
+  function fetchPlume() {
+    if (App.src !== "live") return Promise.resolve(null);
+    return fetchJSON("/plume", 8000).then((r) => {
+      if (r && r.available && PL.available(r)) { App.plume = r; App.plumeAt = Date.now(); }
+      else if (r && r.available === false) { App.plume = null; }
+      if (App.openTile === "forecast") populateDetail("forecast", false);
+      return r;
+    });
+  }
+  /* the plume with its age brought up to now (the engine stamped age_s when it answered) */
+  function plumeNow() {
+    if (App.src !== "live" || !App.plume) return null;
+    const extra = App.plumeAt ? (Date.now() - App.plumeAt) / 1000 : 0;
+    return Object.assign({}, App.plume, { age_s: App.plume.age_s != null ? App.plume.age_s + extra : null });
+  }
+  /* the detail's Speed/Direction + model buttons: data- attributes, one delegated listener */
+  function plumeView(k, v) {
+    if (k !== "field" && k !== "only") return;
+    if (k === "field" && v !== "tws" && v !== "twd") return;
+    App.plumeView[k] = k === "only" && (!v || App.plumeView.only === v) ? null : v;
+    if (App.openTile === "forecast") populateDetail("forecast", false);
+  }
+  document.addEventListener("click", (e) => {
+    const b = e.target.closest && e.target.closest(".pl-btn[data-pl-k]");
+    if (b) plumeView(b.dataset.plK, b.dataset.plV);
+  });
+  function plumeDetailHtml(nowObs) {
+    const pl = plumeNow();
+    if (!pl) return "";
+    const v = App.plumeView, now = Date.now() / 1000;
+    const btn = (k, val, lab, on) => '<button class="pl-btn' + (on ? " on" : "") + '" data-pl-k="' + PL.esc(k) +
+      '" data-pl-v="' + PL.esc(val) + '">' + lab + "</button>";
+    const fields = btn("field", "tws", "Speed", v.field === "tws") + btn("field", "twd", "Direction", v.field === "twd");
+    const picks = btn("only", "", "All", !v.only) + PL.models(pl).map((m) =>
+      btn("only", m.model, '<span class="pl-key pl-' + m.model + '"><i></i>' + PL.label(m.model) + "</span>", v.only === m.model)).join("");
+    const only = v.only && PL.models(pl).some((m) => m.model === v.only) ? v.only : null;
+    const frozen = PL.isFrozen(pl, now);
+    const old = !frozen && PL.isOld(pl);
+    return '<div class="rc-title">Forecast plume · ' + PL.esc(pl.label || "planned route") + "</div>" +
+      (frozen ? '<div class="pl-age-warn pl-frozen">' + PL.esc(PL.frozenText(pl)) + ". No updates while racing.</div>" : "") +
+      (old ? '<div class="pl-age-warn">Forecast is <b>' + PL.ageText(pl.age_s) + " old</b>. Updates when the boat is online.</div>" : "") +
+      '<div class="pl-ctl">' + fields + '</div><div class="pl-ctl">' + picks + "</div>" +
+      PL.chartSvg(pl, { w: 512, h: 230, now: now, back_h: 6, ahead_h: 24, field: v.field, only: only, allRuns: true,
+        obs: App.src === "live" ? raceData() : null, nowObs: nowObs }) +
+      PL.legendHtml(pl, { only: only, cycles: true, now: now, boat: true }) +
+      '<div class="dc-foot">Faded = older runs. Dot = your wind.</div>' +
+      PL.runTimesHtml(pl, now);
+  }
+
   /* forecast-drift (Lab-3 branch trigger b): live common forecast vs the plan's frozen reference.
      Engine-computed, deterministic; polled slowly (it moves slowly + Open-Meteo is cached). */
   async function fetchDrift() {
@@ -1323,15 +1405,14 @@
     b.classList.toggle("confirm", !!a && Date.now() < recConfirmUntil);
     if (a && Date.now() < recConfirmUntil) {
       l.textContent = "TAP AGAIN TO END";
-      b.title = "Tap again to end \"" + a.name + "\" — or wait and it stays logging";
+      b.title = "Tap again to end \"" + a.name + "\". Or wait to keep logging.";
     } else if (a) {
       const min = Math.max(0, Math.round((Date.now() / 1000 - a.start_ts) / 60));
       l.textContent = (a.kind === "race" ? "REC·RACE " : "REC ") + min + "m";
-      b.title = "Logging \"" + a.name + "\" — tap twice to END the session";
+      b.title = "Logging \"" + a.name + "\". Tap twice to end.";
     } else {
       l.textContent = "LOG";
-      b.title = "Race log — tap to start a logged session (races AND practice sails; " +
-        "data outside sessions is pruned and never leaves the boat)";
+      b.title = "Tap to start logging. Unlogged data is deleted after 7 days.";
     }
   }
   async function toggleRec() {
@@ -1367,7 +1448,7 @@
     const out = new Set(st.out_of_service || []);
     document.getElementById("sbChips").innerHTML = SAILS_INV.map((s) =>
       `<button class="sb-chip${fly.has(s) ? " on" : ""}" onclick="toggleFlying('${s}')" ` +
-      `title="Tap = ${fly.has(s) ? "douse" : "hoist"} the ${s}${out.has(s) ? " (declared out of service)" : ""}">` +
+      `title="Tap = ${fly.has(s) ? "douse" : "hoist"} the ${s}${out.has(s) ? " (marked out)" : ""}">` +
       `${s}${out.has(s) ? "✕" : ""}</button>`).join("");
     document.getElementById("sbReef").innerHTML =
       `<button class="sb-chip reef${st.reef ? " on" : ""}" onclick="toggleReef()" ` +
@@ -1376,11 +1457,11 @@
     // a sail blows regardless of which playbook generation is aboard
     document.getElementById("sbGear").innerHTML = SAILS_INV.map((s) =>
       `<button class="st-gear${out.has(s) ? " oos" : ""}" onclick="toggleGear('${s}')" ` +
-      `title="Tap = declare the ${s} ${out.has(s) ? "back IN service" : "OUT of service (blown/damaged)"}">${s}</button>`).join("");
+      `title="Tap = mark the ${s} ${out.has(s) ? "back in use" : "out (blown or damaged)"}">${s}</button>`).join("");
     const note = document.getElementById("sbNote");   // may be cut short on a narrow bar
     note.textContent = note.title = fly.size
-      ? "flying " + [...fly].join(" + ") + (st.reef ? " · reef 1 in" : "") + " — logged for this config's polar"
-      : "tap what's flying — every change is logged; each configuration builds its own polar over time";
+      ? "flying " + [...fly].join(" + ") + (st.reef ? " · reef 1 in" : "")
+      : "Tap what's flying. Changes are logged.";
   }
   window.toggleGear = async function (sail) {
     const st = App.sailState || ((currentPlays() || {}).sail_state) || {};
@@ -1478,10 +1559,10 @@
         (m.why ? '<span class="st-pm-why">' + stripTags(m.why) + "</span>" : "") + "</div>";
     }).join("") + "</div>" : "";
     return '<div class="st-syn y-' + synthStatus(s) + '"><div class="st-syn-head">' +
-      '<span class="st-syn-tag">SYNTHESIS</span>' +
+      '<span class="st-syn-tag">OVERALL</span>' +
       (off ? '<span class="st-syn-badge">OFF-BOOK</span>' : "") +
       '<span class="st-spacer"></span>' +
-      '<span class="st-syn-mode">' + (s.mode === "llm" ? "LLM" : "ENGINE") + '</span>' +
+      '<span class="st-syn-mode">' + (s.mode === "llm" ? "AI" : "AUTO") + '</span>' +
       (conf ? '<span class="st-syn-conf">' + conf + ' conf</span>' : "") + "</div>" +
       '<p class="st-syn-assess">' + stripTags(s.assessment || rec.action || "") + "</p>" +
       (note ? '<p class="st-syn-conc">' + stripTags(note) + "</p>" : "") + pmHtml + "</div>";
@@ -1489,7 +1570,7 @@
   function selectorHtml() {
     const s = currentSelector();
     if (!s || s.available === false || s.action === "na") return "";
-    const pill = { hold: "HOLD", switch: "SWITCH", off_script: "OFF-SCRIPT" }[s.action] || "—";
+    const pill = { hold: "HOLD", switch: "SWITCH", off_script: "OFF-BOOK" }[s.action] || "—";
     return '<div class="st-rec sr-' + (s.status || "ok") + '">' +
       '<span class="sr-pill">' + pill + '</span>' +
       '<span class="sr-val">' + stripTags(s.value || s.target_label || "") + '</span>' +
@@ -1506,11 +1587,11 @@
     const m = [];
     if (pct != null) {
       const dist = (d.along_nm != null && d.route_nm != null) ? " · " + r1(d.along_nm) + "/" + r1(d.route_nm) + " nm" : "";
-      m.push(metric("Along", pct + "%" + dist, false));
+      m.push(metric("Done", pct + "%" + dist, false));
     }
     if (d.xte_nm != null) {
       const arrow = d.xte_trend === "diverging" ? " ↗" : d.xte_trend === "converging" ? " ↘" : "";
-      m.push(metric("XTE", r1(d.xte_nm) + " nm " + (d.xte_side || "") + arrow, off && (d.xte_trend !== "converging")));
+      m.push(metric("Off line", r1(d.xte_nm) + " nm " + (d.xte_side || "") + arrow, off && (d.xte_trend !== "converging")));
     }
     const bt = behindTxt(d.time_behind_s);
     if (bt) m.push(metric("Pace", bt, d.time_behind_s > 0 && off));
@@ -1519,10 +1600,10 @@
     const prog = pct != null
       ? '<div class="st-progress"><div class="st-fill" style="width:' + pct + '%"></div><div class="st-boat" style="left:' + pct + '%"></div></div>' : "";
     return '<div class="st-dev" style="--c:var(--' + (status === "na" ? "na" : status) + ')">' +
-      '<div class="st-dev-head">TRACK — variant ' + stripTags(d.variant_label || d.variant || "—") + "</div>" +
+      '<div class="st-dev-head">TRACK · ' + stripTags(d.variant_label || d.variant || "—") + "</div>" +
       prog + (m.length ? '<div class="st-metrics">' + m.join("") + "</div>" : "") +
       (d.why || d.sub ? '<p class="st-why">' + stripTags(d.why || d.sub) + "</p>" : "") +
-      (d.what_flips_it ? '<p class="st-flip">Branch trigger — <b>' + stripTags(d.what_flips_it) + "</b></p>" : "") + "</div>";
+      (d.what_flips_it ? '<p class="st-flip">Switch if: <b>' + stripTags(d.what_flips_it) + "</b></p>" : "") + "</div>";
   }
   function driftHtml() {
     const fd = currentDrift();
@@ -1530,13 +1611,15 @@
     const status = fd.status || "na";
     const deg = fd.drift_twd_deg != null ? Math.round(fd.drift_twd_deg) : null;
     const tag = { ok: "holding", watch: "watch", act: "moved" }[status] || "";
+    // always say right/left on deck — an older engine may still send veered/backed
+    const side = { right: "right", left: "left", veered: "right", backed: "left" }[fd.drift_dir] || "";
     let body;
     if (status === "ok") {
-      body = 'Forecast <b>holding</b> — ~' + (deg != null ? deg + "° drift" : "on plan");
+      body = 'Forecast <b>holding</b>' + (deg != null ? " (" + deg + "° off plan)" : "");
     } else {
       const tws = (fd.drift_tws_kn != null && Math.abs(fd.drift_tws_kn) >= 1)
         ? " · " + (fd.drift_tws_kn >= 0 ? "+" : "−") + Math.abs(Math.round(fd.drift_tws_kn)) + " kts" : "";
-      body = 'Forecast drift <b>' + deg + "° " + (fd.drift_dir || "shifted") + '</b>' + tws +
+      body = 'Forecast <b>' + (side ? "shifted " + deg + "° " + side : "moved " + deg + "°") + '</b>' + tws +
         ' <span class="sd-tag">' + tag + '</span>';
     }
     return '<p class="st-drift sd-' + status + '"><span class="sd-dot"></span><span>' + body + '</span></p>';
@@ -1545,11 +1628,11 @@
   function plangapHtml() {
     const pg = currentPlangap();
     if (!pg || pg.available === false || pg.status === "ok" || pg.status === "na") return "";
-    const tag = pg.status === "act" ? "not this breeze" : "straying";
-    const body = 'Promise <b>' + pg.plan_twd + "°/" + pg.plan_tws_kn + ' kts</b> · have <b>' +
+    const tag = pg.status === "act" ? "different wind" : "drifting";
+    const body = 'Plan <b>' + pg.plan_twd + "°/" + pg.plan_tws_kn + ' kts</b> · now <b>' +
       pg.obs_twd + "°/" + pg.obs_tws_kn + ' kts</b> <span class="sd-tag">' + tag + '</span>';
-    return '<p class="st-drift sd-' + pg.status + '" title="Own observed wind vs what the plan\'s ' +
-      'forecast promised for here/now"><span class="sd-dot"></span><span>' + body + '</span></p>';
+    return '<p class="st-drift sd-' + pg.status + '" title="Our wind vs the plan forecast here">' +
+      '<span class="sd-dot"></span><span>' + body + '</span></p>';
   }
   function playsHtml() {
     const pl = currentPlays();
@@ -1559,14 +1642,14 @@
     // regardless of which playbook generation is aboard)
     const out = new Set(((pl.sail_state || {}).out_of_service) || []);
     const gear = [...out].map((s) =>
-      `<span class="st-gear oos" title="${s} declared out of service (toggle on the CURRENT SAILS bar)">${s}</span>`).join("");
+      `<span class="st-gear oos" title="${s} marked out (change it on the sails bar)">${s}</span>`).join("");
     const items = rows.map((x) => {
       const call = x.guidance || x.summary || "";
       const badge = x.status === "armed" ? "ARMED" : "arming…";
       return `<div class="st-play y-${x.status === "armed" ? "act" : "watch"}">` +
         `<b>${x.name}</b> <span class="st-play-badge">${badge}</span>` +
         (x.stakes_min ? ` <span class="st-play-stakes">~${x.stakes_min}m at stake</span>` : "") +
-        (x.corroborated ? ` <span class="st-play-stakes" title="A confidence-raising signal agrees — it never gates arming">✓ ${x.corroborated_by || "corroborated"}</span>` : "") +
+        (x.corroborated ? ` <span class="st-play-stakes" title="Another signal agrees">✓ ${x.corroborated_by || "confirmed"}</span>` : "") +
         (call ? `<span class="st-play-call">${call}</span>` : "") + `</div>`;
     }).join("");
     // the WATCHLIST — quiet plays measurably close to arming ("what flips the plan"), with the
@@ -1580,12 +1663,11 @@
         `<b>${w.name}</b>${num}</div>`;
     }).join("");
     return `<div class="st-plays"><div class="st-plays-head"><span>PLAYS</span>` +
-      (gear ? `<span class="st-gearbox" title="Gear declared out of service — arms the ` +
-        `pre-authored gear-loss plays">out: ${gear}</span>` : "") + `</div>` +
-      (items || `<div class="st-play-none">No plays armed — the library is watching ` +
+      (gear ? `<span class="st-gearbox" title="Gear marked out. Arms the gear-loss plays.">` +
+        `out: ${gear}</span>` : "") + `</div>` +
+      (items || `<div class="st-play-none">No plays armed. Watching ` +
        `${pl.n_plays ?? 0} conditions.</div>`) +
-      (wl ? `<div class="st-watch-head" title="Distance-to-trigger: how close each quiet play's ` +
-        `weakest predicate is to its threshold">CLOSE TO FLIPPING</div>` + wl : "") + `</div>`;
+      (wl ? `<div class="st-watch-head" title="How close each play is to firing">CLOSE TO FIRING</div>` + wl : "") + `</div>`;
   }
   function reoptHtml() {
     const sel = currentSelector();
@@ -1597,17 +1679,17 @@
     const show = offscript || synOff || App.src !== "live";
     if (!ro || ro.available === false || !show) return "";
     const h = ro.eta_min != null ? (Math.floor(ro.eta_min / 60) + "h " + Math.round(ro.eta_min % 60) + "m") : "?";
-    const vs = ro.vs_playbook && ro.vs_playbook.available ? "up to " + r1(ro.vs_playbook.max_divergence_nm) + " nm off the plan" : "";
+    const vs = ro.vs_playbook && ro.vs_playbook.available ? "up to " + r1(ro.vs_playbook.max_divergence_nm) + " nm off plan" : "";
     const sp = Array.isArray(ro.sail_plan) && ro.sail_plan.length ? ro.sail_plan.join("→") : "";
     const avb = [];
     if (ro.avoids_islands) avb.push(ro.avoids_islands + " island" + (ro.avoids_islands > 1 ? "s" : ""));
     if (ro.avoids_zones) avb.push(ro.avoids_zones + " zone" + (ro.avoids_zones > 1 ? "s" : ""));
-    return '<p class="st-reopt"><span class="ro-ico">⟳</span><span>Onboard re-route ready — <b>' + h + '</b>' +
+    return '<p class="st-reopt"><span class="ro-ico">⟳</span><span>New route ready: <b>' + h + '</b>' +
       (ro.tacks != null ? ' · ' + ro.tacks + ' tacks' : '') +
       (ro.sailed_nm != null ? ' · ' + r1(ro.sailed_nm) + ' nm' : '') +
       (sp ? ' · ⛵ ' + sp : '') +
       (avb.length ? ' · avoids ' + avb.join(" + ") : '') +
-      (vs ? ' · ' + vs : '') + ' <span class="ro-tag">off-book</span></span></p>';
+      (vs ? ' · ' + vs : '') + ' <span class="ro-tag">off plan</span></span></p>';
   }
   /* ============ GARMIN 943 — push the gameplan onto the chartplotter (engine /gps/*) ============
      The one WRITE surface on the stack: crew-initiated, crew-cleared. The engine assembles the
@@ -1623,7 +1705,7 @@
     if (App.openTile === "playbook") populateDetail("playbook", false);
     const r = await postJSON("/gps/show", { source: source, variant: variant || null }, 12000);
     App.gpsBusy = false;
-    App.gpsNote = r ? (r.shown ? "" : (r.note || "could not show")) : "engine unreachable";
+    App.gpsNote = r ? (r.shown ? "" : (r.note || "could not show")) : "no link to the boat";
     await fetchGps();
   };
   window.gpsClear = async function () {
@@ -1639,9 +1721,9 @@
     const on = g && g.broadcasting;
     const busy = App.gpsBusy ? " disabled" : "";
     const status = !g || g.available === false
-      ? '<span class="gps-note">broadcaster offline</span>'
+      ? '<span class="gps-note">plotter link off</span>'
       : on ? `<span class="gps-on">● showing “${g.route || "route"}” (${g.n_waypoints} pts)</span>`
-           : '<span class="gps-note">idle</span>';
+           : '<span class="gps-note">not showing</span>';
     const note = App.gpsNote ? ` <span class="gps-note">${App.gpsNote}</span>` : "";
     return '<div class="st-gps"><div class="st-plays-head"><span>GARMIN 943</span>' + status +
       '</div><div class="cw-btns">' +
@@ -1734,6 +1816,7 @@
     coach: null, deviation: null, forecastDrift: null, selector: null, reoptimize: null,
     plangap: null, trend: null, briefBusy: {}, gps: null, gpsBusy: false, gpsNote: "",
     checklist: null, chkTimer: null,
+    plume: null, plumeAt: 0, plumeTimer: null, plumeView: { field: "tws", only: null },
     detailStreamKey: null, detailAbort: null,
     lastOkAt: 0, lastPollOk: false, graceUntil: 0, startedAt: Date.now(),
   };
@@ -1742,7 +1825,7 @@
       const sc = SCENARIOS[App.demoScn];
       return { tiles: sc.tiles, focus: sc.focus, notes: sc.notes, confidence: sc.confidence, mode: sc.mode };
     }
-    return App.data || { tiles: {}, focus: "Connecting to the engine…", notes: [], confidence: "engine", mode: "engine read" };
+    return App.data || { tiles: {}, focus: "Connecting to the boat…", notes: [], confidence: "engine", mode: "engine read" };
   }
 
   /* ============================ theme ============================ */
@@ -1774,15 +1857,14 @@
     el.setAttribute("aria-label", NAME[key] + " " + st.word + " " + stripTags(t.value || ""));
     const valHtml = (t.value != null && t.value !== "") ? '<div class="t-val">' + t.value + '</div>' : "";
     const ageHtml = t.staleMs
-      ? '<span class="t-age" title="Held: the engine has not answered for ' + fmtAge(t.staleMs)
-        + '. This is the last good reading, not a current one.">⏱ ' + fmtAge(t.staleMs) + '</span>'
+      ? '<span class="t-age" title="No update for ' + fmtAge(t.staleMs)
+        + '. Last good reading.">⏱ ' + fmtAge(t.staleMs) + '</span>'
       : "";
     // PROVENANCE, on the tile face: a number coming off a backup sensor is still a number, and
     // the crew is entitled to know which sensor it came from before they steer on it.
     const flagged = provFlagged(key);         // demo-aware: currentHealth() serves the scenario
     const flagHtml = flagged
-      ? '<span class="t-flag" title="Running on a backup sensor: ' + esc2(flagged)
-        + '. Tap for provenance.">⚑</span>'
+      ? '<span class="t-flag" title="On a backup sensor: ' + esc2(flagged) + '">⚑</span>'
       : "";
     el.innerHTML =
       '<div class="t-head"><span class="t-name">' + NAME[key] + '</span>' + flagHtml + ageHtml +
@@ -1821,7 +1903,7 @@
     ul.innerHTML = "";
     if (!d.notes || !d.notes.length) {
       const li = document.createElement("li"); li.className = "tg-ok";
-      li.innerHTML = '<span class="note-txt">Nothing flagged — tap any tile for detail.</span>';
+      li.innerHTML = '<span class="note-txt">Nothing flagged. Tap a tile for detail.</span>';
       ul.appendChild(li); return;
     }
     for (const n of d.notes) {
@@ -1852,7 +1934,7 @@
       '<button class="wq-btn" onclick="watchAct(\'' + act + "'" + (mins != null ? ", " + mins : "") + ')">' + label + "</button>";
     if (!w || !w.plan_set) {
       return '<div class="rc-title" style="margin-top:8px">Watch system</div>' +
-        '<div class="dc-foot">No watch plan aboard — author one in the Lab (Races → Watch plan) and load it with the homework.</div>' +
+        '<div class="dc-foot">No watch plan. Make one in the Lab (Races → Watch plan).</div>' +
         (live ? '<div class="wq-actions">' + btn("Start ALL HANDS 4h", "all_hands", 240) + "</div>" : "");
     }
     const now = Math.floor(Date.now() / 1000);
@@ -1956,7 +2038,7 @@
   };
   function briefCardHtml(kind, label, b) {
     if (!b) return "";
-    const mode = b.mode === "llm" ? "LLM" : "engine";
+    const mode = b.mode === "llm" ? "AI" : "auto";
     const when = b.generated_at ? agoText(b.generated_at) : "";
     return '<div class="cw-card"><div class="cw-card-head"><b>' + label + '</b>' +
       '<span class="cw-tag">' + mode + '</span><span class="cw-when">' + when + '</span></div>' +
@@ -1970,8 +2052,7 @@
       '" onclick="crewBrief(\'' + k + '\')">' +
       (App.briefBusy[k] ? "thinking…" : lbl + " ↻") + '</button>').join("") + '</div>';
     if (!c) {
-      return out + '<div class="dc-foot">Copilot not reachable — no coach state yet. ' +
-        'Briefs need the Orin up.</div>';
+      return out + '<div class="dc-foot">Copilot offline. No briefs yet.</div>';
     }
     const briefs = c.briefs || {};
     out += BRIEF_KINDS.map(([k, lbl]) => briefCardHtml(k, lbl, briefs[k])).join("");
@@ -1993,38 +2074,36 @@
      Five checks, each shown with its own verdict rather than rolled into one word, because they
      fail for different reasons and the crew's response differs: a misaligned compass is a
      navigation problem, an unbindable priority matcher is a configuration problem, and AIS
-     leading own-ship position is a "stop trusting this screen" problem. */
+     leading own-ship position is a "stop trusting this screen" problem.
+     What each check means (kept here, not on the iPad):
+       attitude     — a monohull cannot sit at 133° of roll; one sample is enough (the kicked
+                      sensor at 22:58Z on Jul 18).
+       heading      — under sail heading and GPS course agree within leeway + current; a steady
+                      bias for hours means the compass is misaligned.
+       policy_binds — every ranked device name in the policy must match a device on this bus; an
+                      unmatched rule looks exactly like a satisfied one.
+       lead_source  — channels running on a backup because the ranked sensor went quiet.
+       own_ship     — the AIS transceiver publishes other vessels on the same bus; if one leads an
+                      own-ship channel, the number is another boat's. */
   const HEALTH_ROWS = [
-    ["attitude", "Attitude in range", (h) => h.attitude,
-     "A monohull cannot sit at 133° of roll. One sample is enough — this is what would have " +
-     "caught the kicked sensor at 22:58Z on Jul 18, on the spot."],
-    ["heading", "Heading vs GPS course", (h) => h.heading,
-     "Under sail these agree within a few degrees of leeway and current. A steady bias held " +
-     "for hours means the compass is misaligned, not the boat — and every individual number " +
-     "looks perfectly ordinary while it happens."],
-    ["policy_binds", "Sensor priority binds", (h) => (h.provenance || {}).checks?.policy_binds,
-     "Every ranked device name in the policy has to match a device that is really on this bus. " +
-     "For most of this project's life none of them did, and an unmatched rule looks exactly " +
-     "like a satisfied one."],
-    ["lead_source", "Preferred sensor in use", (h) => (h.provenance || {}).checks?.lead_source,
-     "Which channels are running on a backup because the ranked sensor went quiet."],
-    ["own_ship", "Own-ship data only", (h) => (h.provenance || {}).checks?.own_ship,
-     "The AIS transceiver publishes other vessels' positions on the same bus. If one of them " +
-     "ever leads an own-ship channel again, the number is another boat's."],
+    ["attitude", "Heel and pitch possible", (h) => h.attitude],
+    ["heading", "Compass vs GPS", (h) => h.heading],
+    ["policy_binds", "Sensor list matches boat", (h) => (h.provenance || {}).checks?.policy_binds],
+    ["lead_source", "Main sensors in use", (h) => (h.provenance || {}).checks?.lead_source],
+    ["own_ship", "No other boats' data", (h) => (h.provenance || {}).checks?.own_ship],
   ];
   const HEALTH_WORD = { ok: "OK", warn: "WATCH", danger: "ACT", unknown: "—" };
   function healthPanelHtml() {
     const h = currentHealth();
     if (!h || !h.available) {
-      return '<div class="dc-foot">Instrument cross-checks unavailable — the engine ' +
-        '/health/sensors read did not answer' + (h && h.note ? ": " + esc2(h.note) : "") + '.</div>';
+      return '<div class="dc-foot">Sensor checks offline' + (h && h.note ? " (" + esc2(h.note) + ")" : "") + '.</div>';
     }
-    let out = '<div class="rc-title">Instrument cross-checks</div>';
-    for (const [id, label, pick, why] of HEALTH_ROWS) {
+    let out = '<div class="rc-title">Sensor checks</div>';
+    for (const [, label, pick] of HEALTH_ROWS) {
       let c = null;
       try { c = pick(h); } catch (e) { c = null; }
       const s = (c && c.status) || "unknown";
-      out += '<div class="hc-row st-' + s + '" title="' + esc2(why) + '">' +
+      out += '<div class="hc-row st-' + s + '">' +
         '<span class="hc-word">' + (HEALTH_WORD[s] || s) + '</span>' +
         '<span class="hc-txt"><b>' + label + '</b>' +
         '<span class="hc-sub">' + esc2((c && c.reason) || "no reading") +
@@ -2060,10 +2139,8 @@
         '<span class="rc">' + (e.age_s == null ? "—" : Math.max(0, Math.round(e.age_s)) + "s") +
         (e.sources > 1 ? " /" + e.sources : "") + '</span></div>';
     }
-    out += '</div><div class="dc-legend">⚑ on a backup sensor · ƒ computed, not measured · ' +
-      '≠ sources disagree by more than the channel tolerance · #n the sensor\'s priority rank · ' +
-      '/n how many sources report this channel. Every source is kept — nothing is dropped, ' +
-      'the lead is chosen and labelled.</div>';
+    out += '</div><div class="dc-legend">⚑ backup sensor · ƒ computed · ≠ sources disagree · ' +
+      '#n priority · /n sources reporting</div>';
     return out;
   }
   /* the BANK detail: the number, the trend, and the projection, plus the unconfirmed-threshold
@@ -2071,21 +2148,20 @@
   function bankPanelHtml() {
     const b = currentPower();
     if (!b || b.available === false) {
-      return '<div class="dc-foot">No bank voltage — the engine reported: ' +
-        esc2((b && b.note) || "nothing") + '. The Orca Core publishes ' +
-        'electrical.batteries.0.voltage at ~0.7 Hz when its N2K sharing is on.</div>';
+      return '<div class="dc-foot">No bank voltage' + (b && b.note ? " (" + esc2(b.note) + ")" : "") +
+        '. Check the Orca Core is sharing it.</div>';
     }
     const st = b.status === "danger" ? "act" : b.status === "warn" ? "watch" : "ok";
     const rows = [
-      ["now", b.volts != null ? b.volts.toFixed(2) + " V" : "—", "5-min median"],
-      ["status taken on", b.volts_decided != null ? b.volts_decided.toFixed(2) + " V" : "—",
-       r0(b.sustain_min) + "-min median — raise-slow"],
+      ["now", b.volts != null ? b.volts.toFixed(2) + " V" : "—", "5-min smoothed"],
+      ["status uses", b.volts_decided != null ? b.volts_decided.toFixed(2) + " V" : "—",
+       r0(b.sustain_min) + "-min smoothed"],
       ["last sample", b.volts_last != null ? b.volts_last + " V" : "—", "raw"],
       ["lowest", b.volts_min != null ? b.volts_min + " V" : "—",
        "in the last " + r0(b.window_min) + " min"],
       ["trend", b.trend_v_per_h == null ? "—"
         : (b.trend_v_per_h >= 0 ? "+" : "") + b.trend_v_per_h.toFixed(2) + " V/h",
-       b.charging ? "charge source on" : "median-of-thirds, not least squares"],
+       b.charging ? "charging" : "over " + r0(b.window_min) + " min"],
       ["to " + r1(b.thresholds.floor_v) + " V", b.hours_to_floor == null ? "—"
         : "~" + r1(b.hours_to_floor) + " h",
        b.dark_at_epoch ? "about " + fmtHM(b.dark_at_epoch) : "at the current rate"],
@@ -2098,13 +2174,12 @@
       out += '<div class="t-row"><span class="rl">' + l + '</span><span class="rc">' + v +
         '</span><span class="rc">' + esc2(note) + '</span></div>';
     }
-    out += '</div><div class="dc-foot">Thresholds in use: warn ' + r1(b.thresholds.warn_v) +
-      ' V · danger ' + r1(b.thresholds.danger_v) + ' V · floor ' + r1(b.thresholds.floor_v) +
-      ' V, from ' + b.samples + ' samples of <code>' + esc2(b.path) + '</code>.</div>' +
-      '<div class="dc-foot" style="color:var(--watch)">⚠ Those absolute levels are conservative ' +
-      '12 V lead-acid defaults and are NOT confirmed against this boat — nothing in the system ' +
-      'records the bank\'s chemistry or capacity. Trust the trend and the projection first; ' +
-      'someone at the boat needs to check the bank and set POWER_*.</div>';
+    // the absolute levels are 12 V lead-acid defaults; nothing records this bank's chemistry
+    // or capacity — someone at the boat needs to check it and set POWER_*
+    out += '</div><div class="dc-foot">Limits: warn ' + r1(b.thresholds.warn_v) +
+      ' V · danger ' + r1(b.thresholds.danger_v) + ' V · floor ' + r1(b.thresholds.floor_v) + ' V</div>' +
+      '<div class="dc-foot" style="color:var(--watch)">⚠ Generic 12 V limits, not checked on this boat. ' +
+      'Trust the trend.</div>';
     return out;
   }
 
@@ -2143,12 +2218,11 @@
   function checklistHtml() {
     const c = App.checklist;
     if (!c || !c.plan_set) {
-      return '<div class="dc-foot">No race checklist aboard — it loads with the homework package ' +
-        '(Lab → Lock-in &amp; Deploy → checklist_load → the engine /checklist/load).</div>';
+      return '<div class="dc-foot">No race checklist. Load it from the Lab.</div>';
     }
     const order = { active: 0, pending: 1, manual: 2, done: 3 };
     const items = (c.items || []).slice().sort((a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9));
-    const word = { active: "DUE NOW", pending: "armed", manual: "manual", done: "done ✓" };
+    const word = { active: "DUE NOW", pending: "later", manual: "manual", done: "done ✓" };
     return items.map((it) =>
       '<div class="chk-row st-' + it.status + '"><span class="chk-txt">' + escapeHtml(it.text) +
       '<span class="chk-sub">' + [word[it.status] || it.status, it.measure, it.source]
@@ -2169,33 +2243,28 @@
       ds.innerHTML = c.plan_set ? (n ? n + " due now" : "nothing due") : "not loaded";
       ds.style.color = n ? "var(--act)" : "var(--na)";
       document.getElementById("detGauge").innerHTML = checklistHtml();
-      document.getElementById("detWhy").textContent =
-        "The race checklist from the SIs/NOR (Lab-extracted, human-reviewed): each item arms at " +
-        "its trigger — sunset for lights, the mark approach for the gate photo, the finish " +
-        "approach for the finish procedure — and stays until acked. Acks are logged onboard; " +
-        "a sunset item re-arms the next evening.";
-      document.getElementById("detConsider").textContent =
-        "✓ DONE when the action is complete — the reminder (and its coach callout) clears.";
+      // items arm at their trigger (sunset, mark approach, finish approach) and stay until
+      // acked; acks are logged onboard and a sunset item re-arms the next evening
+      document.getElementById("detWhy").textContent = "Reminders from the race rules (SIs/NOR).";
+      document.getElementById("detConsider").textContent = "Tap ✓ DONE when it's done.";
       document.getElementById("detClears").textContent = "—";
-      document.getElementById("detBased").textContent = "engine /checklist · homework checklists_ipad";
+      document.getElementById("detBased").textContent = "race rules (SIs/NOR)";
       return;
     }
     if (key === "coach") {
       document.getElementById("detName").textContent = NAME.coach;
       const c = App.coach || {};
       const ds = document.getElementById("detStatus");
-      ds.innerHTML = c.running ? "timer on · every " + Math.round(c.interval_s || 30) + " s"
-                               : "timer off";
+      ds.innerHTML = c.running ? "auto · every " + Math.round(c.interval_s || 30) + " s"
+                               : "auto off";
       ds.style.color = "var(--na)";
       document.getElementById("detGauge").innerHTML = coachWindowHtml();
-      document.getElementById("detWhy").textContent =
-        "The coach window: everything the copilot volunteers — scheduled crew briefs (watch " +
-        "handover at T-15, hourly recap while racing, mark pre-brief at ~T-20) plus the live " +
-        "callout stream. Deterministic engine numbers first; LLM phrasing when the Orin is up.";
-      document.getElementById("detConsider").textContent =
-        "Tap a button for a fresh brief on demand.";
+      // scheduled briefs: watch handover at T-15, hourly recap while racing, mark pre-brief
+      // at ~T-20, plus the live callouts; engine numbers first, LLM phrasing when the Orin is up
+      document.getElementById("detWhy").textContent = "Briefs and callouts from the copilot.";
+      document.getElementById("detConsider").textContent = "Tap a button for a fresh brief.";
       document.getElementById("detClears").textContent = "—";
-      document.getElementById("detBased").textContent = "copilot /coach · /briefs/{kind}";
+      document.getElementById("detBased").textContent = "copilot";
       return;
     }
     const t = currentData().tiles[key] || STATUS_PLACEHOLDER();
@@ -2214,13 +2283,17 @@
         ? '<div class="rc-stats">now <b>' + r0(tws[tws.length - 1]) + ' kts</b> · min <b>' + r0(Math.min.apply(null, tws)) + '</b> · max <b>' + r0(Math.max.apply(null, tws)) + '</b> · avg <b>' + r0(tws.reduce((a, b) => a + b, 0) / tws.length) + '</b></div>'
         : "";
       g.innerHTML =
-        '<div class="rc-title">TWS over the race · ' + fmtDur(dur) + '</div>' + stats +
+        '<div class="rc-title">Wind speed over the race · ' + fmtDur(dur) + '</div>' + stats +
         '<div style="--c:' + stColor + '">' + raceChart(hist, 512, 150) + '</div>' +
         '<div class="rc-title" style="margin-top:8px">Direction change over the race</div>' +
         '<div class="detchart" style="--c:' + stColor + '"><div class="dc-lab dc-top">↑ shifted right</div>' +
         (makeTwdSpark(hist, 512, 60) || '<span class="dc-empty">…</span>') +
         '<div class="dc-lab dc-bot">↓ shifted left</div></div>' +
         (App.src === "live" ? buoysLadderHtml() : "") + rowsHtml(t.rows);
+    } else if (key === "forecast" && plumeNow()) {
+      // the full plume (every model, older runs fading, picker + speed/direction toggle), then
+      // the Open-Meteo rows (+60/+120, forecast vs actual) underneath
+      g.innerHTML = plumeDetailHtml(App.fcObs) + rowsHtml(t.rows);
     } else if (key === "playbook") {
       // the full strategy stack lives here now (synthesis → selector → track → drift → plays →
       // re-route), followed by the variant-agreement rows
@@ -2235,14 +2308,14 @@
         energy += '<div class="en-row"><span class="en-score" style="color:var(--' + eSt + ')">' + t.energy + '</span>' +
           '<span class="en-side">/ 100 · ' + eLvl +
           '<span class="bartrk en-trk"><span class="barfil" style="width:' + Math.max(0, Math.min(100, t.energy)) + '%;background:var(--' + eSt + ')"></span></span></span></div>' +
-          '<div class="dc-foot">Inverse of the helm-fatigue index — lower = more depleted. ' +
+          '<div class="dc-foot">Lower = more tired. ' +
           (eSt === "ok" ? "Driver fresh." : eSt === "watch" ? "Keep an eye on it." : "Rotate the helm.") + '</div>';
       } else {
-        energy += '<div class="dc-foot">No helm data yet — the energy score needs recent steering history.</div>';
+        energy += '<div class="dc-foot">No helm data yet.</div>';
       }
       let bars = "";
       if (t.components) {
-        bars = '<div class="rc-title" style="margin-top:10px">Helm fatigue components</div><div class="bars">';
+        bars = '<div class="rc-title" style="margin-top:10px">What is tiring the helm</div><div class="bars">';
         for (const lbl of Object.keys(t.components)) {
           bars += '<div class="bar"><span class="barlbl">' + lbl + '</span><span class="bartrk"><span class="barfil" style="width:' + Math.round(t.components[lbl] * 100) + '%"></span></span></div>';
         }
@@ -2280,8 +2353,7 @@
     if (key === "forecast") {
       const pg = currentPlangap();
       if (pg && pg.available) {   // did the promised breeze show up on deck?
-        g.insertAdjacentHTML("beforeend", '<div class="dc-foot" title="Own observed wind vs ' +
-          'the plan\'s frozen promise for here/now">' + escapeHtml(pg.value || "") +
+        g.insertAdjacentHTML("beforeend", '<div class="dc-foot" title="Our wind vs the plan forecast here">' + escapeHtml(pg.value || "") +
           (pg.sub ? " · " + escapeHtml(pg.sub) : "") + '</div>');
       }
     }
@@ -2470,6 +2542,8 @@
     App.coachTimer = setInterval(fetchCoach, COACH_EVERY);
     fetchDeviation();               // route-deviation (engine, deterministic), then on its own cadence
     App.devTimer = setInterval(fetchDeviation, DEV_EVERY);
+    fetchPlume();                   // the Lab's forecast plume, cached on the Pi — slow-moving
+    App.plumeTimer = setInterval(fetchPlume, PLUME_EVERY);
     fetchDrift();                   // forecast-drift (engine, common-data), then on its own cadence
     App.driftTimer = setInterval(fetchDrift, DRIFT_EVERY);
     fetchPlangap();                 // plan-gap (own wind vs the frozen promise), drift's cadence
@@ -2523,7 +2597,7 @@
       if (!q || !App.openTile) return;
       inp.value = "";
       if (App.src === "live") streamDetail(App.openTile, q);   // scoped, grounded, streamed answer
-      else document.getElementById("detWhy").textContent = "(scoped follow-up runs live against the onboard copilot) — you asked: " + q;
+      else document.getElementById("detWhy").textContent = "Questions work in live mode only. You asked: " + q;
     };
     document.getElementById("detSend").addEventListener("click", ask);
     document.getElementById("detAsk").addEventListener("keydown", (e) => { if (e.key === "Enter") ask(); });

@@ -43,7 +43,10 @@ distance races and practice.
 Ground every factual claim in the tools; never invent telemetry. Always note data
 freshness — if get_current_conditions reports stale=true, say so and caveat the answer.
 Be terse and VHF-brief: crew read you on a phone, often at night, often wet. Lead with
-the number, then one line of context. Units: knots, degrees true unless told otherwise.
+what to do or the number, then one line of context. Keep each line to one short, plain
+sentence (about 12 words). Keep the numbers; drop jargon and never name tools, files or
+data sources unless asked. WIND LANGUAGE: say the wind shifted RIGHT or LEFT — never
+"veer", "veered", "back" or "backed". Units: knots, degrees true unless told otherwise.
 
 COACHING — judge speed against the SR33 ORC Speed Guide provided below (the boat-speed
 gospel). It is the source of truth for target boatspeed (BTV) at a given TWS/TWA, the
@@ -277,7 +280,7 @@ def _fallback(message: str) -> str:
     if any(w in m for w in ("fatigue", "tired", "rotate", "helm change", "driver", "shift change")):
         r = tools.get_fatigue()
         if not r.get("available"):
-            return f"Fatigue index not ready: {r.get('note', r.get('status', 'unavailable'))}."
+            return f"Fatigue not ready. {r.get('note', r.get('status', 'unavailable'))}"
         worst = max(r["components"].items(), key=lambda kv: kv[1]["score"], default=(None, None))
         lead = f" (biggest factor: {worst[0]})" if worst[0] else ""
         return f"Helm fatigue {r['index']}/100 — {r['level']}. {r['recommendation']}{lead}"

@@ -248,8 +248,10 @@
     String(h || "").replace(/^#/, "").split("&").forEach((kv) => {
       if (!kv) return;
       const i = kv.indexOf("=");
-      const k = decodeURIComponent(i < 0 ? kv : kv.slice(0, i));
-      q[k] = i < 0 ? "" : decodeURIComponent(kv.slice(i + 1));
+      try {   // a malformed entry ("sail=%") throws URIError: skip it, keep the rest
+        const k = decodeURIComponent(i < 0 ? kv : kv.slice(0, i));
+        q[k] = i < 0 ? "" : decodeURIComponent(kv.slice(i + 1));
+      } catch (e) { /* ignore */ }
     });
     const ov = {};
     ["tws", "twd", "fsh", "fsc", "hdg", "sog", "stw", "delay", "sail", "link"].forEach((k) => { if (k in q) ov[k] = q[k]; });

@@ -95,6 +95,14 @@ services:
       GSHHG_RES: ${GSHHG_RES:-f}            # GSHHG resolution f(ull)|h|i|l|c — full = all sub-nm islands
       ENC_CACHE: /srv/enc                   # NOAA ENC cells + extracted GeoJSON (prep-time GDAL)
       PLAYBOOK_DIR: /srv/playbooks          # Lab-2b: frozen, signed playbook bundles (onboard homework)
+      # forecast plume: every router model along the planned route, one snapshot per new cycle
+      # (48 h kept). PLUME_PUSH=1 also sends it to the Pi engine's POST /plume/load (the Deploy
+      # push's line) — off by default: writing to the boat needs the owner's go at deploy time.
+      # Never recorded or sent for a race once its start has passed; the boat also refuses a plume
+      # while its race log has a race session running.
+      PLUME_DIR: /srv/plume
+      PLUME_RECORDER: ${PLUME_RECORDER:-1}
+      PLUME_PUSH: ${PLUME_PUSH:-0}
       SHARE_DIR: /srv/shares                # public read-only route-player share bundles
       LAB_PUBLIC_URL: ${LAB_PUBLIC_URL:-https://lab.racertracer.net}  # base for /share links (PDF QR)
       LEARNING_DB: /srv/learning/learning.db  # Lab-4: ongoing performance archive + refinement proposals
@@ -116,6 +124,7 @@ services:
       - lab_learning:/srv/learning          # Lab-4: ongoing performance archive (SQLite)
       - lab_retro:/srv/retro                # fleet-retro archive: SQLite + pinned GRIBs
       - lab_shares:/srv/shares              # route-player share bundles (frozen snapshots)
+      - lab_plume:/srv/plume                # forecast-plume run history (a few KB per model run)
     restart: unless-stopped
 
 volumes:
@@ -128,3 +137,4 @@ volumes:
   lab_learning:
   lab_retro:
   lab_shares:
+  lab_plume:

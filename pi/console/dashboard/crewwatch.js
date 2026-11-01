@@ -47,10 +47,10 @@
         (rotate ? (w.active ? "; rotate the helm at the change." : "; rotate the helm when they're up.") : ".");
     }
     if (rotate && set && m != null) {
-      return "Tank getting low — rotate " + (w.active ? "at the watch change" : "when watches start") +
-        " (" + fmtMins(m) + " out), sooner if it slips.";
+      return "Helm getting tired. Rotate " + (w.active ? "at the watch change" : "when watches start") +
+        " (" + fmtMins(m) + " out), sooner if needed.";
     }
-    if (rotate) return "Tank getting low — plan a helm rotation.";
+    if (rotate) return "Helm getting tired. Plan a rotation.";
     return "Driver fresh — no rotation needed." + (set && m != null
       ? (w.active ? " Next watch change " : " Watches start ") + fmtMins(m) + " out." : "");
   }

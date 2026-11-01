@@ -14,6 +14,7 @@ aboard, starting a session picks up its race_id automatically so the debrief can
 from __future__ import annotations
 
 import os
+import threading
 import time
 from datetime import datetime, timezone
 
@@ -67,9 +68,9 @@ def autoclose(now=None, force=False):
                 (s.series("navigation.speedOverGround", look_h * 60.0) or ())]
         recent = [(t, v) for t, v in rows if t >= now - AUTOCLOSE_IDLE_H * 3600.0]
         if len(recent) < AUTOCLOSE_MIN_SAMPLES:
-            return {"closed": False, "note": f"only {len(recent)} motion sample(s) in the last "
-                                             f"{AUTOCLOSE_IDLE_H:.0f} h — a quiet bus is not a "
-                                             f"parked boat"}
+            # a quiet bus is not a parked boat
+            return {"closed": False, "note": f"only {len(recent)} speed reading(s) in the last "
+                                             f"{AUTOCLOSE_IDLE_H:.0f} h, not closing"}
         if max(v for _, v in recent) >= race_window.UNDERWAY_KN:
             return {"closed": False, "note": "under way within the idle window"}
         # Only moments INSIDE the session can end it. The crew taps REC at the dock often enough
@@ -80,9 +81,9 @@ def autoclose(now=None, force=False):
                     if v >= race_window.UNDERWAY_KN and t > float(cur["start_ts"])]
         if not underway:
             return {"closed": False,
-                    "note": f"no under-way moment inside this session in the last {look_h:.0f} h "
-                            f"— not closing on a guess, because the end decides what gets "
-                            f"deleted. Close '{cur['name']}' from the iPad."}
+                    # not closing on a guess: the end decides what gets deleted
+                    "note": f"Not moving in this session ({look_h:.0f} h). "
+                            f"Close '{cur['name']}' from the iPad."}
         end_ts = max(underway)
         s.session_end(end_ts)
         print(f"[racelog] auto-closed '{cur['name']}' (id {cur['id']}) at "
@@ -93,6 +94,12 @@ def autoclose(now=None, force=False):
                 "note": "closed at the last under-way moment in the record"}
     except Exception as exc:            # never let housekeeping break the race log
         return {"closed": False, "note": f"auto-close check failed: {type(exc).__name__}: {exc}"}
+
+
+# Held while a session starts, and by the forecast-plume load around its "is a race session
+# running?" check + write (app/plume.py), so a plume can't land between the crew tapping race
+# start and the session existing.
+SESSION_LOCK = threading.Lock()
 
 
 def _src():
@@ -118,7 +125,8 @@ def start(name=None, race_id=None, kind=None):
     if not name:
         stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
         name = f"{'Race' if kind == 'race' else 'Sail'} {stamp}Z"
-    cur = s.session_start(str(name), race_id, kind, time.time())
+    with SESSION_LOCK:
+        cur = s.session_start(str(name), race_id, kind, time.time())
     return {"ok": True, "active": cur}
 
 

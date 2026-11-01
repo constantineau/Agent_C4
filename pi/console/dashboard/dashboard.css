@@ -550,3 +550,49 @@ body {
 .st-gps .cw-btns { margin: 4px 0 2px; }
 .gps-on { font-size: 11.5px; color: var(--ok, #3a3); letter-spacing: 0; }
 .gps-note { font-size: 11px; opacity: 0.65; letter-spacing: 0; }
+
+/* ---------- FORECAST PLUME (Forecast tile face + detail; plume.js draws the SVG) ----------
+   One colour per weather model, picked to stay apart in glare on white (Okabe-Ito family,
+   darkened like the status hues). Colour is never the only channel: the detail labels every
+   latest line by name at its end, and NIGHT (red-only for night vision) swaps the hues for
+   red/amber luminance steps plus a dash pattern per model. */
+:root, :root[data-theme="day"] {
+  --m-gfs:#0b5bd3; --m-nam:#d55e00; --m-hrrr:#b0157a; --m-ecmwf:#00835f;
+  --m-icon:#6a3fb5; --m-gem:#8a6a00; --m-other:#5a6876; --m-obs:#0c1116;
+}
+:root[data-theme="night"] {
+  --m-gfs:#ff6a6a; --m-nam:#ff9a3a; --m-hrrr:#d4b04a; --m-ecmwf:#c84a4a;
+  --m-icon:#ffb38a; --m-gem:#a85a3a; --m-other:#8a2a2a; --m-obs:#ffe7dd;
+}
+.pl-gfs { --mc:var(--m-gfs); } .pl-nam { --mc:var(--m-nam); } .pl-hrrr { --mc:var(--m-hrrr); }
+.pl-ecmwf { --mc:var(--m-ecmwf); } .pl-icon { --mc:var(--m-icon); } .pl-gem { --mc:var(--m-gem); }
+.pl-other { --mc:var(--m-other); } .pl-boat { --mc:var(--m-obs); }
+.pl-run { fill:none; stroke:var(--mc); stroke-linejoin:round; stroke-linecap:round;
+  vector-effect:non-scaling-stroke; }
+.pl-latest { stroke-width:2.8; }
+.plume.compact .pl-latest { stroke-width:2.4; }
+.pl-old { stroke-width:1.3; }
+.pl-obs { fill:none; stroke:var(--m-obs); stroke-width:2.4; vector-effect:non-scaling-stroke; }
+.pl-nowdot { fill:var(--m-obs); stroke:var(--bg); stroke-width:1.5; }
+.pl-nowline { stroke:var(--muted); stroke-width:1; stroke-dasharray:3 3; vector-effect:non-scaling-stroke; }
+.pl-end { fill:var(--mc); font-size:11px; font-weight:800; }
+:root[data-theme="night"] .pl-nam.pl-run { stroke-dasharray:7 3; }
+:root[data-theme="night"] .pl-ecmwf.pl-run { stroke-dasharray:2 3; }
+:root[data-theme="night"] .pl-icon.pl-run { stroke-dasharray:9 3 2 3; }
+:root[data-theme="night"] .pl-gem.pl-run { stroke-dasharray:4 4; }
+.pl-tile { margin:6px 0 2px; max-width:320px; }
+.pl-legend { display:flex; flex-wrap:wrap; gap:4px 10px; margin-top:3px; font-size:11.5px; font-weight:800; }
+.pl-key { display:inline-flex; align-items:center; gap:4px; white-space:nowrap; color:var(--text); }
+.pl-key i { display:inline-block; width:14px; height:4px; border-radius:2px; background:var(--mc); }
+.pl-boat i { width:8px; height:8px; border-radius:50%; }
+.pl-ctl { display:flex; flex-wrap:wrap; gap:6px; margin:6px 0; }
+/* 44 px targets — wet fingers on a heeling deck */
+.pl-btn { font:inherit; font-size:13px; font-weight:800; min-height:44px; padding:6px 12px;
+  border-radius:9px; cursor:pointer; background:var(--panel2); color:var(--text);
+  border:1px solid var(--line); }
+.pl-btn.on { border-color:var(--accent); box-shadow:inset 0 0 0 2px var(--accent); }
+.pl-age-warn { font-size:13px; font-weight:700; color:var(--watch); border:1px solid var(--watch);
+  background:var(--watch-fill); border-radius:8px; padding:6px 9px; margin:4px 0; }
+.pl-old-tag { color:var(--watch); }
+.pl-runs { margin-top:8px; font-size:13px; }
+.pl-runs .rc { text-align:left; }

@@ -369,6 +369,9 @@ _WIND_VOCAB = (
     "delta or a bare current value. Lead with the boat-frame effect when the tack is known (LIFTED / "
     "HEADED on port/starboard). The favoured side is point-of-sail aware: a right shift favours the "
     "RIGHT of a beat but the LEFT of a run. Reuse the engine's numbers; don't invent them.\n"
+    "PLAIN LANGUAGE: keep every crew-facing line to one short, plain sentence (about 12 words). "
+    "Lead with what to do or what it is. Keep the numbers. No jargon, no tool, file or data-source "
+    "names, and no explanation of how a number was worked out.\n"
 )
 
 

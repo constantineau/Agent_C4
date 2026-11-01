@@ -1315,6 +1315,45 @@ async def checklist_set(body: dict):
     return {"saved": True, "checked": checked}
 
 
+# ---- Forecast plume (every router model along the planned route, run by run) -----------------
+@app.on_event("startup")
+def _plume_startup():
+    """The hourly plume recorder — only when PLUME_RECORDER=1 (see app/plume.py)."""
+    from . import plume
+    plume.start_recorder()
+
+
+@app.get("/api/plume")
+async def plume_get():
+    """The current forecast plume (what the boat gets) + its target and the last push."""
+    from . import plume
+    v = await run_in_threadpool(plume.view)
+    return dict(v, target=plume._labstate_get(plume._KEY_TARGET),
+                last_push=plume.last_push(), recorder=plume._THREAD is not None)
+
+
+@app.post("/api/plume/target")
+async def plume_target(body: dict):
+    """Pin the plume to a race: {race_id, playbook_id?} (empty race_id → follow the boat's push)."""
+    from . import plume
+    b = body or {}
+    return {"target": plume.set_target(b.get("race_id"), b.get("playbook_id"),
+                                       lat=b.get("lat"), lon=b.get("lon"))}
+
+
+@app.post("/api/plume/refresh")
+async def plume_refresh():
+    """Run one recorder pass now (background job; poll /api/plume/refresh/status)."""
+    from . import jobs, plume
+    return jobs.start("plume", lambda progress: plume.run_once(on_progress=progress))
+
+
+@app.get("/api/plume/refresh/status")
+async def plume_refresh_status():
+    from . import jobs
+    return jobs.status("plume")
+
+
 # ---- Lock-in & Deploy -------------------------------------------------------------------------
 @app.get("/api/deploy")
 async def deploy_readiness(race_id: str, course_id: str = None):

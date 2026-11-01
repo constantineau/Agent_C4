@@ -192,10 +192,9 @@ def get_fleet(max_range_nm: float = 40.0):
 
     gaps = []
     if not roster:
-        return {"available": False, "note": "No fleet roster loaded — load the RaceDefinition "
-                "fleet block onboard (POST /fleet/load).", "fleet": [], "traffic": []}
+        return {"available": False, "note": "No fleet list loaded.", "fleet": [], "traffic": []}
     if not scoring:
-        gaps.append("no scoring method loaded — assuming Time-on-Time")
+        gaps.append("no scoring set, using Time-on-Time")
 
     own = ais._own_ship()
     raw = datasource.active().ais_targets(ais.AIS_WINDOW_MIN)
@@ -209,7 +208,7 @@ def get_fleet(max_range_nm: float = 40.0):
         origin = (marks[0]["lat"], marks[0]["lon"])
         pts = [_nm(origin[0], origin[1], m["lat"], m["lon"]) for m in marks]
     else:
-        gaps.append("no course loaded — distance-to-finish/leverage unavailable")
+        gaps.append("no course loaded, no distance to finish")
 
     # own progress
     own_dtf = own_lev = None
@@ -229,11 +228,9 @@ def get_fleet(max_range_nm: float = 40.0):
     corr = {"now": now, "gun_for": gun_for,
             "e_us": (now - own_gun) if own_gun else None, "course_nm": course_nm}
     if corr["e_us"] is None:
-        gaps.append("no gun time known (division_starts not loaded, no race session running) — "
-                    "corrected deltas are REMAINING-race only, not full standings")
+        gaps.append("no start time known, gaps cover the rest of the race only")
     elif gun_source == "session" and gun_approx:
-        gaps.append("gun = the race-log session start applied to ALL divisions — approximate for "
-                    "staggered starts (load division_starts from the SIs for exact)")
+        gaps.append("one start time used for all divisions, rough if starts were staggered")
 
     fleet, unmatched = [], []
     for r in raw:
@@ -276,8 +273,7 @@ def get_fleet(max_range_nm: float = 40.0):
         "tracker": tk_status,
         "fleet": fleet, "traffic": traffic,
         "gaps": gaps or None,
-        "note": ("Corrected-time is a projection to the finish; AIS coverage is partial and the "
-                 "public tracker is delayed — soft signals, confidence-flagged."),
+        "note": "Corrected times are estimates. AIS is patchy, tracker is delayed.",
     }
 
 
@@ -341,7 +337,7 @@ def _standings(roster, fleet_rows, own_cfg, own_dtf, own_sog, method, is_tod,
                         row["corrected_delta_s"] = round(cd)
         else:
             row.update({"source": None, "confidence": 0.0,
-                        "note": "no fix (not on AIS or the tracker yet)"})
+                        "note": "not seen on AIS or tracker yet"})
         out.append(row)
     # our own boat rides in the ranking at delta 0
     own_row = {"boat": own_cfg.get("boat") or "US", "division": own_div, "our_division": True,
@@ -409,16 +405,15 @@ def _merge_tracker(blob, roster, fleet, unmatched, pts, origin, own, own_dtf,
     if not tcfg:
         return None
     if not tcfg.get("permitted"):
-        gaps.append("public tracker configured but NOT permitted for this race (rules_profile) — "
-                    "over-the-horizon fleet withheld")
+        gaps.append("tracker not allowed this race, distant boats hidden")
         return {"permitted": False, "available": False,
-                "note": "Tracker not permitted for this race — confirm the SI."}
+                "note": "Tracker not allowed this race. Check the SIs."}
     tk = tracker.positions(tcfg)
     status = {"permitted": True, "available": tk["available"], "count": len(tk["positions"]),
               "fetched_at": tk["fetched_at"], "error": tk["error"], "delay_min": tk["delay_min"],
               "note": tk["note"]}
     if tk["error"]:
-        gaps.append(f"public tracker fetch issue: {tk['error']}")
+        gaps.append(f"tracker problem: {tk['error']}")
     # match each tracker fix to a roster entry by NAME (the tracker's value-add is identity)
     tk_matched = []
     for fx in tk["positions"]:
@@ -445,7 +440,7 @@ def _merge_tracker(blob, roster, fleet, unmatched, pts, origin, own, own_dtf,
             row, _ = _fleet_row(resolved, {**r, "_posconf": 0.6}, "tracker_position", 0.5, "ais",
                                 pts, origin, own, own_dtf, method, is_tod, own_tot, own_alw,
                                 corr=corr)
-            row["note"] = "identity from tracker (position match)"
+            row["note"] = "named from tracker position"
             fleet.append(row)
             have.add(_norm(resolved["boat"]))
         else:

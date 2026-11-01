@@ -207,10 +207,10 @@ def get_deviation(route=None, variant=None, since=None):
     to the actual gun epoch (default = the plan's start, so time_behind = now − planned-ETA-here)."""
     bundle = _load_playbook()
     if not bundle:
-        return _na("no playbook aboard")
+        return _na("No gameplan loaded.")
     v = _pick_variant(bundle, variant)
     if not v:
-        return _na("playbook has no variants")
+        return _na("Gameplan has no options.")
     vid = str(v.get("id") or v.get("name") or "")
     vlabel = _label(v)
     what_flips = v.get("what_flips_it") or ""
@@ -218,16 +218,16 @@ def get_deviation(route=None, variant=None, since=None):
     base_extra = {"variant": vid, "variant_label": vlabel, "what_flips_it": what_flips,
                   "race_id": bundle.get("race_id"), "recommended": bundle.get("recommended")}
     if len(path) < 2:
-        return _na(f"variant '{vlabel}' carries no route track", base_extra)
+        return _na(f"'{vlabel}' has no track.", base_extra)
 
     s = navigator._latest()
     if s.get("lat") is None or s.get("lon") is None:
-        return _na("no position fix yet", base_extra)
+        return _na("No position yet.", base_extra)
     blat, blon = s["lat"], s["lon"]
 
     fix = _project(blat, blon, path)
     if fix is None:
-        return _na("route track too short to measure", base_extra)
+        return _na("Track too short to measure.", base_extra)
 
     route_nm = fix["route_nm"]
     along_nm = fix["along"]
@@ -282,17 +282,17 @@ def get_deviation(route=None, variant=None, since=None):
 
     # value / why / consider / clears, phrased for the crew (advisory, never imperative — perflab §5)
     if band == 0:
-        value = "On the optimal track"
+        value = "On track"
         sub_bits = []
         if along_pct is not None:
             sub_bits.append(f"{along_pct}% along")
         if time_behind is not None:
             sub_bits.append(("+" if time_behind >= 0 else "−") + _mmss(time_behind)
                             + (" behind" if time_behind >= 0 else " ahead"))
-        why = (f"Sailing the '{vlabel}' variant's optimized track — {xte_nm} nm off the line "
-               f"({side}), " + (f"{behind_txt} behind plan pace" if time_behind and time_behind > 0
-                                else "on/ahead of plan pace") + ". Hold the groove.")
-        consider = "Stay on the playbook line — no branch, keep sailing the plan."
+        why = (f"On the '{vlabel}' track, {xte_nm} nm {side}, "
+               + (f"{behind_txt} behind pace." if time_behind and time_behind > 0
+                  else "on pace."))
+        consider = "Stay on the plan line."
         clears = "—"
     elif xte_dom:
         drift = "Off track" if band == 2 else "Drifting"
@@ -301,14 +301,12 @@ def get_deviation(route=None, variant=None, since=None):
         if along_pct is not None:
             sub += f" · {along_pct}% along"
         sub_bits = [sub]
-        why = (f"The boat is {xte_nm} nm to the {side} of the '{vlabel}' variant's optimal track "
-               f"and {trend}." + (" This is a genuine departure from the frozen line."
-                                  if band == 2 else " Still within a soft band — could be a lane/traffic detour."))
-        consider = (f"You're {side} of the plan — decide: rejoin the '{vlabel}' line, or if the "
-                    "breeze has genuinely changed sides, check the branch trigger below."
+        why = (f"{xte_nm} nm {side} of the '{vlabel}' track, {trend}."
+               + (" Well off the plan." if band == 2 else " Still close."))
+        consider = (f"Rejoin '{vlabel}', or check the switch trigger if the wind changed."
                     if band == 2 else
-                    f"Watch the {side} drift — nudge back toward the optimal line if it's not tactical.")
-        clears = "the boat converges back onto the optimal track"
+                    "Head back to the line unless it's on purpose.")
+        clears = "back on track"
     else:
         value = f"{'Behind' if band == 2 else 'Slipping'} · {behind_txt}"
         sub = f"{behind_txt} behind plan"
@@ -318,15 +316,12 @@ def get_deviation(route=None, variant=None, since=None):
             sub += f" · {along_pct}% along"
         sub_bits = [sub]
         onliner = xte_nm <= XTE_CONSIDER_NM
-        why = (f"On the '{vlabel}' line but {behind_txt} behind the plan's pace"
-               + (f" — making good {vmc_def} kts less VMC than the optimizer expected here"
-                  if vmc_def else "")
-               + ("; you're on the optimal track, so this is boat-speed / mode, not position."
-                  if onliner else "."))
-        consider = ("Losing time on the optimal line — this is speed/mode, not tactics: check trim, "
-                    "target boatspeed and helm vs the sea state." if onliner else
-                    "Behind plan and off the line — reassess the lane and the trim together.")
-        clears = "boat-speed comes back to the plan's pace"
+        why = (f"{behind_txt} behind pace on '{vlabel}'"
+               + (f", {vmc_def} kts slow toward the mark" if vmc_def else "")
+               + (". On track, so it's speed." if onliner else "."))
+        consider = ("Speed problem, not position. Check trim, targets and helm." if onliner else
+                    "Behind and off the line. Check lane and trim.")
+        clears = "speed back to plan pace"
 
     sub = " · ".join([b for b in (sub_bits if isinstance(sub_bits, list) else [sub_bits]) if b]) \
         if band == 0 else sub_bits[0]

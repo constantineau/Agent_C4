@@ -22,6 +22,8 @@ RUN pip install --no-cache-dir -r requirements.txt \
 COPY shared/ ./shared/
 COPY vps/lab/app/ ./app/
 COPY vps/lab/web/ ./web/
+# the forecast-plume chart is the console's own drawing code — one copy, two surfaces
+COPY pi/console/dashboard/plume.js ./web/plume.js
 COPY vps/lab/races/ ./races/
 COPY vps/lab/boats/ ./boats/
 # the one canonical ORC polar (same source the onboard engine parses) for the optimizer

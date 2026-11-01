@@ -123,7 +123,7 @@ use_bundle(fp_points(200, 12))
 use_wind(12, 235)
 use_fix(45.5, -82.0)                     # ~80 nm from the expected spot
 r = plangap.get_plangap()
-check("far-off-plan caveat in why", "position" in r["why"])
+check("far-off-plan caveat in why", "planned spot" in r["why"])
 check("plan_pos_off_nm reported", (r["plan_pos_off_nm"] or 0) > 15)
 
 # --- spent timeline → na ---------------------------------------------------------------------------

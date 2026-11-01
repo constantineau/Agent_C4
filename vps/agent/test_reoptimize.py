@@ -49,7 +49,7 @@ check("upwind → it tacks (>=1)", r.get("tacks") >= 1)
 check("sailed > direct (tacking oversail)", r.get("sailed_nm") > 0.3 * 60 * (44.2 - 44.05) * 0.9)
 check("reaches the finish (last point near 44.2)", abs(r["path"][-1]["lat"] - 44.2) < 0.03)
 check("wind source is the forecast stub", r.get("wind_source") == "forecast")
-check("note flags OFF THE PLAYBOOK", "OFF THE PLAYBOOK" in r.get("note", ""))
+check("note flags off the gameplan", "off the gameplan" in r.get("note", ""))
 vs = r.get("vs_playbook") or {}
 check("divergence vs the frozen plan computed", vs.get("available") and vs.get("max_divergence_nm") >= 0)
 check("tacking route diverges from the straight plan (>0)", vs.get("max_divergence_nm") > 0.05)
@@ -72,7 +72,7 @@ def _min_clear(path):
 reoptimize._cache["key"] = None
 deviation._load_playbook = lambda: {"race_id": "u", "variants": [{"id": "m"}]}   # no obstacles block
 straight = reoptimize.get_reoptimize()
-check("no obstacles → open-water note", "open-water" in straight.get("note", "") and straight.get("avoids_islands") == 0)
+check("no obstacles → open-water note", "No obstacles loaded" in straight.get("note", "") and straight.get("avoids_islands") == 0)
 check("without avoidance the route passes through the island (< radius)", _min_clear(straight["path"]) < ISLAND[2])
 
 # with the island frozen in the bundle → the route detours around it
@@ -86,7 +86,7 @@ print("  avoids_islands", avoided.get("avoids_islands"), "| min clearance", roun
 check("obstacle count reported", avoided.get("avoids_islands") == 1)
 check("route detours clear of the island (>= ~radius)", _min_clear(avoided["path"]) >= ISLAND[2] * 0.85)
 check("still reaches the mark A (44.22)", abs(avoided["path"][-1]["lat"] - 44.22) < 0.05)
-check("note names the avoided island", "1 charted island" in avoided.get("note", ""))
+check("note names the avoided island", "1 island" in avoided.get("note", ""))
 
 # --- polygon exclusion-zone avoidance -----------------------------------------------------------
 print("exclusion-zone avoidance:")
@@ -110,7 +110,7 @@ print("  avoids_zones", skirt.get("avoids_zones"), "| points inside box", _in_bo
 check("zone count reported", skirt.get("avoids_zones") == 1)
 check("route stays OUT of the exclusion zone", _in_box(skirt["path"]) == 0)
 check("still reaches the mark A", abs(skirt["path"][-1]["lat"] - 44.22) < 0.05)
-check("note names the exclusion zone", "exclusion zone" in skirt.get("note", ""))
+check("note names the exclusion zone", "no-go zone" in skirt.get("note", ""))
 
 # a CIRCLE zone parses to a disk (folded into avoid)
 reoptimize._cache["key"] = None
