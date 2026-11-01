@@ -70,6 +70,83 @@ tr = navcalc.LegTracker(HP, 1)
 check("hairpin: below the mark → 1", tr.update(43.008, -82.0 + east(43.008, 150), 0)["dest_index"] == 1)
 check("hairpin: above the mark (wide) → 2", tr.update(43.0104, -82.0 + east(43.0104, 150), 1)["dest_index"] == 2)
 
+print("navcalc — course marks advance on the arrival radius only:")
+WPM = [dict(w) for w in WP]
+WPM[1]["mark"] = True
+tr = navcalc.LegTracker(WPM, 1)
+n = tr.update(43.0103, -82.0 + east(43.0103, 400), 0)
+check("past a MARK's turn line 400 m wide → still steering to it", n["dest_index"] == 1)
+n = tr.update(43.0102, -82.0 + east(43.0102, 30), 1)
+check("within 0.05 nm of the mark → advances", n["dest_index"] == 2)
+
+
+def local(lat0, lon0):
+    """(x east, y north) metres → (lat, lon) around a point."""
+    return lambda x, y: (lat0 + y / M_LAT, lon0 + east(lat0, x))
+
+
+print("navcalc — every new leg is approved by the engine (Codex repro):")
+L = local(43.0, -82.0)
+CX = [dict(zip(("lat", "lon"), L(0, -500))), dict(zip(("lat", "lon"), L(0, 80))),
+      dict(zip(("lat", "lon"), L(80, 80)))]
+ROCK = L(40, 40)
+
+
+def seg_clear(a, b, c, r=20.0):
+    """Does segment a→b stay r metres clear of point c? (flat metres around a)"""
+    k = east(43.0, 1)
+    bx, by = (b[1] - a[1]) / k, (b[0] - a[0]) * M_LAT
+    cx, cy = (c[1] - a[1]) / k, (c[0] - a[0]) * M_LAT
+    L2 = bx * bx + by * by
+    u = max(0.0, min(1.0, (cx * bx + cy * by) / L2)) if L2 else 0.0
+    return math.hypot(cx - u * bx, cy - u * by) >= r
+
+
+calls = []
+
+
+def approve_rock(frm, idx):
+    calls.append(idx)
+    return seg_clear(frm, (CX[idx]["lat"], CX[idx]["lon"]), ROCK)
+
+
+tr = navcalc.LegTracker(CX, 1)
+n = tr.update(*L(0, 0), 0, approve=approve_rock)
+check("boat 80 m from the waypoint (inside 0.05 nm), next leg through the rock → NOT advanced",
+      n["dest_index"] == 1 and n["blocked"] and calls == [2])
+n = tr.update(*L(0, 1), 2, approve=approve_rock)
+check("refused → not asked again before the retry (5 s)", calls == [2] and n["blocked"])
+n = tr.update(*L(0, 2), 6, approve=approve_rock)
+check("retried after 5 s, still blocked", calls == [2, 2] and n["blocked"]
+      and n["dest_index"] == 1)
+n = tr.update(*L(-60, 80), 12, approve=approve_rock)
+check("boat moves so the line to the next waypoint clears → advances, unblocked",
+      n["dest_index"] == 2 and not n["blocked"])
+tr = navcalc.LegTracker(CX, 1)
+n = tr.update(*L(0, 0), 0, approve=lambda frm, idx: None)
+check("engine doesn't answer → not advanced, blocked", n["dest_index"] == 1 and n["blocked"])
+
+print("navcalc — the current leg is re-checked every 30 s:")
+state = {"clear": True}
+calls.clear()
+
+
+def approve_flag(frm, idx):
+    calls.append(idx)
+    return state["clear"]
+
+
+tr = navcalc.LegTracker(WP, 1)
+tr.update(43.001, -82.0, 0, approve=approve_flag)
+tr.update(43.002, -82.0, 29, approve=approve_flag)
+check("no re-check before 30 s (the send checked the first leg)", calls == [])
+state["clear"] = False
+n = tr.update(43.003, -82.0, 31, approve=approve_flag)
+check("30 s: current leg re-checked, now blocked → paused", calls == [1] and n["blocked"])
+state["clear"] = True
+n = tr.update(43.003, -82.0, 37, approve=approve_flag)
+check("clear again at the retry → resumed", calls == [1, 1] and not n["blocked"])
+
 print("navcalc — XTE is real and signed:")
 tr = navcalc.LegTracker(WP, 1)
 r = tr.update(43.005, -82.0 + east(43.005, 100), 0)["xte_m"]
@@ -128,9 +205,14 @@ def body(**kw):
     return A.RouteBody(**d)
 
 
+def CLEAR(frm, to, course):
+    return True
+
+
 def broadcaster(feed):
     fs, clk = FakeSender(), Clock()
-    b = A._Broadcaster(sender=fs, fix_source=lambda: feed["v"], clock=clk)
+    b = A._Broadcaster(sender=fs, fix_source=lambda: feed["v"], clock=clk,
+                       leg_check=CLEAR)
     b.state["expires_at"] = clk.t + A.ROUTE_TTL_S
     return b, fs, clk
 
@@ -170,6 +252,38 @@ for label, v in (("fix 11 s old", {"fix": {"lat": 43.01, "lon": -82.0, "t": clk.
     check(f"{label} → no 129283/129284, route not ended", r is None and fs.sent == []
           and not b.state["nav_live"])
 
+print("broadcaster — a leg the engine doesn't clear pauses the nav data:")
+fs2, clk2 = FakeSender(), Clock()
+asked = []
+b2 = A._Broadcaster(sender=fs2, clock=clk2,
+                    fix_source=lambda: {"fix": {"lat": L(0, 0)[0], "lon": L(0, 0)[1],
+                                                "t": clk2.t}, "course": "L1:race"},
+                    leg_check=lambda frm, to, course: asked.append((to, course)) or False)
+b2.state["expires_at"] = clk2.t + 100
+BX = A.RouteBody(name="C4 x", waypoints=CX, dest_index=1, course="L1:race")
+trx = navcalc.LegTracker([w.model_dump() for w in BX.waypoints], 1)
+r = b2.cycle(BX, trx, 0)
+check("blocked → route goes on, but no 129283/129284 sent", r is None and fs2.sent == [])
+check("status: steer-to paused (blocked), not live", b2.state["steer_paused"] == "blocked"
+      and not b2.state["nav_live"])
+check("asked the engine about boat → waypoint 2 with the course token",
+      asked and abs(asked[0][0][0] - CX[2]["lat"]) < 1e-9 and asked[0][1] == "L1:race")
+b2.leg_check = lambda frm, to, course: True
+clk2.t += 6
+fs2.sent.clear()
+b2.cycle(BX, trx, 1)
+check("cleared → advances and sends the nav data again", fs2.pgns() == [129283, 129284]
+      and b2.state["steer_paused"] is None and b2.state["nav"]["dest_index"] == 2)
+r = A.RouteBody(name="x", waypoints=[{"lat": 1, "lon": 1, "mark": True}, {"lat": 2, "lon": 2}])
+check("POST /route accepts the mark flag", r.waypoints[0].mark is True)
+
+_s = socket.socket()
+_s.bind(("127.0.0.1", 0))
+A.LEG_CHECK_URL = f"http://127.0.0.1:{_s.getsockname()[1]}/gps/leg-check"
+_s.close()
+check("the real leg check with no engine → None (treated as blocked)",
+      A.check_leg((43.0, -82.0), (43.1, -82.0), "L1:race") is None)
+
 print("broadcaster — expiry and course change end the route:")
 feed["v"] = {"fix": {"lat": 43.005, "lon": -82.0, "t": clk.t}, "course": "L2:race"}
 check("course token changed → 'course changed'", b.cycle(B, tr, 3) == "course changed")
@@ -199,7 +313,7 @@ A.TERMINATE_REPEATS = 2
 print("broadcast thread — clear, expiry, course change send 'navigation terminated':")
 feed = {"v": {"fix": {"lat": 43.005, "lon": -82.0, "t": time.time()}, "course": "L1:race"}}
 fs = FakeSender()
-b = A._Broadcaster(sender=fs, fix_source=lambda: feed["v"])
+b = A._Broadcaster(sender=fs, fix_source=lambda: feed["v"], leg_check=CLEAR)
 b.start(body())
 run_until(b, lambda: 129285 in fs.pgns())
 check("broadcasting: route list + live nav", b.state["broadcasting"] and 129285 in fs.pgns()
@@ -233,7 +347,7 @@ print("POST /route — strict validation:")
 from fastapi.testclient import TestClient  # noqa: E402
 
 feed = {"v": None}
-A.BC = A._Broadcaster(sender=FakeSender(), fix_source=lambda: feed["v"])
+A.BC = A._Broadcaster(sender=FakeSender(), fix_source=lambda: feed["v"], leg_check=CLEAR)
 client = TestClient(A.app)                 # not a context manager: no bus thread started
 good = {"name": "C4 left", "waypoints": [{"name": "C4-01", "lat": 43, "lon": -82.0, "t": 1783000000},
                                          {"name": "C4-02", "lat": 43.1, "lon": -82.1}],
@@ -263,6 +377,7 @@ bad("251 waypoints", lambda d: d.update(waypoints=[{"lat": 43, "lon": -82}] * 25
 bad("dest_index past the end", lambda d: d.update(dest_index=2))
 bad("negative dest_index", lambda d: d.update(dest_index=-1))
 bad("unknown field", lambda d: d.update(steer=True))
+bad("mark as a string", lambda d: d["waypoints"][0].update(mark="yes"))
 bad("non-ASCII name", lambda d: d["waypoints"][0].update(name="Bouée"))
 bad("name over 32 chars", lambda d: d.update(name="x" * 33))
 check("a rejected route leaves the current one running", A.BC.state["broadcasting"])

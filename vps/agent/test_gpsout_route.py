@@ -241,12 +241,14 @@ bundle_rock = {"race_id": "u", "recommended": "m",
 deviation._load_playbook = lambda: bundle_rock
 _orig_ctx = gpsout._course_context
 gpsout._course_context = lambda route=None: ([], BOAT, None, None)   # fix only, no course bounds
+gpsout.own_fix = lambda now=None: (BOAT[0], BOAT[1], 0)   # the send uses the fresh fix
 gpsout.show()
 check("show(): island homework keeps the steer-to on waypoint 1", sent["payload"]["dest_index"] == 1)
 bundle_rock["obstacles"]["islands"][0]["lat"] = 45.0          # move the rock far away
 gpsout.show()
 check("show(): rock elsewhere → advances to waypoint 2", sent["payload"]["dest_index"] == 2)
 gpsout._course_context = _orig_ctx
+gpsout.own_fix = _fix_from_latest
 
 print("   one invariant: the boat→destination line is clear (Codex round 5)")
 BOAT5 = (44.0007, -81.9999)
@@ -259,6 +261,7 @@ check("(control) clear water: the projection's dest 2 stands",
 ALL = lambda a, b: True    # noqa: E731 — every line blocked
 check("nothing reachable → None (refuse)", gpsout._dest_index(DOG, BOAT5, blocked=ALL) is None)
 gpsout._course_context = lambda route=None: ([], BOAT5, None, None)
+gpsout.own_fix = lambda now=None: (BOAT5[0], BOAT5[1], 0)   # the send uses the fresh fix
 bundle_rock["obstacles"]["islands"][0]["lat"] = 44.0
 gpsout.show()
 check("show(): island homework → steer-to waypoint 1", sent["payload"]["dest_index"] == 1)
@@ -268,6 +271,7 @@ sent.clear()
 r = gpsout.show()
 gpsout._blocked_fn = _orig_blk
 gpsout._course_context = _orig_ctx
+gpsout.own_fix = _fix_from_latest
 check("show(): no clear waypoint → not pushed, named reason, nothing sent",
       r["shown"] is False and "hazard" in r["note"] and "payload" not in sent)
 

@@ -14,8 +14,17 @@ Waypoint advance — the two rules a chartplotter uses:
     turn, not before. When the two legs nearly reverse (a hairpin, e.g. a windward mark on an
     out-and-back route) the bisector is ill-defined, so the line perpendicular to the incoming
     leg is used: crossing it means the boat is past the mark along the leg it came up.
+A waypoint that is a COURSE MARK (`mark: true` from the engine) advances on the arrival radius
+only: crossing its bisector isn't rounding it. Route-only points (tacks, gybes, bends) use both.
 The index only ever moves forward. The last waypoint is never passed: arriving there sets the
 arrival flag and the leg stays on it until the route is cleared or expires.
+
+OBSTACLES: n2kout holds no land, islands or zones, so every NEW leg (boat → the next waypoint) is
+approved by the engine before the advance (`approve(boat, index)` → True / False / None for no
+answer), with the same checks gpsout makes at send time. Not approved → the tracker does not
+advance and reports `blocked`: the caller stops the live nav data (as for a stale fix) and the
+crew is told to re-route. A refused check is retried every RETRY_S. The CURRENT leg is re-checked
+every RECHECK_S too (the boat may have sailed off it into a hazard's shadow).
 
 XTE is the signed great-circle distance from the leg origin→destination line: positive = boat
 RIGHT of the track (steer left), the Signal K convention signalk-to-nmea2000 puts in 129283. The
@@ -37,6 +46,8 @@ ARRIVE_M = 0.05 * NM_M
 ETA_WINDOW_S = 120.0
 ETA_MIN_SPAN_S = 20.0
 MIN_CLOSING_MPS = 0.25          # ~0.5 kn: slower than that, an ETA is noise
+RECHECK_S = 30.0                # the current leg's obstacle re-check
+RETRY_S = 5.0                   # a refused / unanswered check is asked again this often
 
 
 def dist_m(lat1, lon1, lat2, lon2):
@@ -97,35 +108,67 @@ def passed(a, b, c, p):
 class LegTracker:
     def __init__(self, wpts, dest_index: int, arrive_m: float = ARRIVE_M):
         self.pts = [(float(w["lat"]), float(w["lon"])) for w in wpts]
+        self.marks = {i for i, w in enumerate(wpts) if w.get("mark")}
         self.last = len(self.pts) - 1
         self.di = max(0, min(self.last, int(dest_index)))
         self.arrive_m = arrive_m
         self.origin = self.pts[self.di - 1] if self.di > 0 else None
         self.hist = deque()
         self.advances = 0
+        self.blocked = False
+        self.checked_at = None          # the send-time check (gpsout) covers the first leg
+        self.retry_at = 0.0
 
     def _origin(self, p):
         if self.origin is None:                  # first leg to waypoint 0: from the first fix
             self.origin = p
         return self.origin
 
-    def _advance(self, p):
-        while self.di < self.last:
-            b = self.pts[self.di]
-            a = self._origin(p)
-            c = self.pts[self.di + 1]
-            if dist_m(p[0], p[1], b[0], b[1]) <= self.arrive_m or passed(a, b, c, p):
-                self.di += 1
-                self.origin = self.pts[self.di - 1]
-                self.hist.clear()
-                self.advances += 1
-                continue
-            break
+    def _due(self, p):
+        """Has the boat attained the active waypoint (arrival radius; or, for a route-only
+        point, its turn line)?"""
+        b = self.pts[self.di]
+        if dist_m(p[0], p[1], b[0], b[1]) <= self.arrive_m:
+            return True
+        if self.di in self.marks:
+            return False
+        return passed(self._origin(p), b, self.pts[self.di + 1], p)
 
-    def update(self, lat: float, lon: float, t: float) -> dict:
+    def _ask(self, approve, p, idx, t):
+        ok = approve(p, idx) is True
+        self.blocked = not ok
+        if ok:
+            self.checked_at = t
+        else:
+            self.retry_at = t + RETRY_S
+        return ok
+
+    def _advance(self, p, t, approve):
+        """→ True when an advance is due but not approved (blocked)."""
+        while self.di < self.last and self._due(p):
+            if approve is not None:
+                if self.blocked and t < self.retry_at:
+                    return True
+                if not self._ask(approve, p, self.di + 1, t):
+                    return True
+            self.di += 1
+            self.origin = self.pts[self.di - 1]
+            self.hist.clear()
+            self.advances += 1
+        return False
+
+    def update(self, lat: float, lon: float, t: float, approve=None) -> dict:
         p = (float(lat), float(lon))
         self._origin(p)
-        self._advance(p)
+        if self.checked_at is None:
+            self.checked_at = t
+        pending = self._advance(p, t, approve)
+        if approve is not None and not pending:
+            if self.blocked:
+                if t >= self.retry_at:
+                    self._ask(approve, p, self.di, t)
+            elif t - self.checked_at >= RECHECK_S:
+                self._ask(approve, p, self.di, t)
         a, b = self.origin, self.pts[self.di]
         dtw = dist_m(p[0], p[1], b[0], b[1])
         final = self.di == self.last
@@ -145,4 +188,4 @@ class LegTracker:
                 "brg_leg_deg": (bearing_deg(a[0], a[1], b[0], b[1])
                                 if dist_m(a[0], a[1], b[0], b[1]) >= 1.0 else None),
                 "xte_m": xte_m(a, b, p), "arrived": arrived, "perp_crossed": perp,
-                "closing_mps": closing, "eta_epoch": eta}
+                "closing_mps": closing, "eta_epoch": eta, "blocked": self.blocked}

@@ -3,15 +3,24 @@
 The Pi's only N2K transmitter. Listens on `127.0.0.1:8210` (host network; the engine on the
 same Pi is its only caller).
 
-- **Always:** a bus device. Claims source address 35 at startup (defends it against a higher
+- **Always, from startup:** a bus device. Claims source address 35 at startup (defends it against a higher
   NAME, moves to 128-247 against a lower one), answers ISO requests for 60928 (address claim),
   126996 (product info: "SR33 C4 Navigator"), 126464 (PGN lists), 126993 (heartbeat), and NAKs
-  any other request sent to it. Heartbeat every 60 s.
+  any other request sent to it. Heartbeat every 60 s. (Behaviour change, 2026-11: before
+  this, n2kout sent nothing until a route was asked for; now the claim and the heartbeat go
+  out from startup, route or not.)
 - **On the crew's "Show on GPS":** the engine posts the route. Every second n2kout reads the
   boat's fix from the engine (`GET :8200/gps/fix`), advances the active waypoint (inside
   0.05 nm, or past the turn's bisector) and sends live 129283 (signed XTE, + = right of track)
   and 129284 (waypoint, distance, bearings, ETA from the closing rate). The route list 129285
   goes out every 5 s.
+- **Obstacles:** n2kout holds no land, islands or zones. Before every advance it asks the
+  engine (`POST :8200/gps/leg-check`) whether boat → next waypoint is clear, with the same
+  checks the send makes. It re-checks the current leg every 30 s. Not clear, or no answer in
+  2 s: no advance, the live nav data pauses (retried every 5 s), and the iPad says "Steer-to
+  paused. Press Re-route now."
+- **Course marks** (flagged by the engine) advance on the 0.05 nm radius only, never on the
+  bisector: crossing it isn't rounding the mark. Route-only points use both.
 - **No fix newer than 10 s:** no 129283/129284 at all. The 129285 route keeps going (it is the
   plan, not a claim about where the boat is).
 - **Ends** on Clear, after 6 h (`N2KOUT_ROUTE_TTL_S`), or when the engine reports another
@@ -61,7 +70,9 @@ sudo systemctl restart sr33-can0`, then `ip -details link show can0` shows `rest
    to a data page. Send a route with a fresh fix. Do they show "C4-0N" and change as the boat
    moves? Is the XTE sign right (boat right of the track shows "steer left")?
 6. **Chart.** Does a route line or the active waypoint appear on the chart?
-7. **No fix / clear.** Unplug the GPS (or stop Signal K): within 10 s the data fields should
+7. **Marks.** A mark the route rounds wider than 0.05 nm keeps the steer-to on it. Check
+   that the route's mark waypoints sit at the marks.
+8. **No fix / clear.** Unplug the GPS (or stop Signal K): within 10 s the data fields should
    blank. Tap Clear: note what the 943 shows after "navigation terminated".
 
 **If it fails, photograph:** the 943's Device List (and the entry's details page), the Preferred

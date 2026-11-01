@@ -387,6 +387,13 @@ def gps_fix():
     return gpsout.fix_feed()
 
 
+@app.post("/gps/leg-check")
+def gps_leg_check(body: dict | None = None):
+    """For n2kout, before it moves the plotter's steer-to on: is boat → waypoint clear of the
+    obstacles aboard (the same checks as /gps/show)? {from, to, course} → {clear, reason}."""
+    return gpsout.leg_check(body or {})
+
+
 @app.get("/gps/status")
 def gps_status(route: str | None = None):
     """The broadcaster's state + the bundle's variant ids (for the iPad's buttons)."""

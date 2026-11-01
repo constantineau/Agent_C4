@@ -10,7 +10,9 @@ The one Tier-1 service that WRITES to the bus. Two jobs:
 2. Broadcast a route, only when the crew asks (`_Broadcaster`): the iPad's "show on GPS" →
    engine `POST /gps/show` → `POST /route` here. Every second, the active waypoint, XTE,
    distance, bearings and ETA are recomputed from the boat's latest position (`navcalc`), read
-   from the engine's `GET /gps/fix`. Without a fresh fix nothing live is sent (no 129283/129284)
+   from the engine's `GET /gps/fix`. Every new leg (and the current one every 30 s) is approved
+   by the engine's `POST /gps/leg-check` against the obstacles it holds; not approved → the live
+   nav data pauses until it is, and the iPad says to re-route. Without a fresh fix nothing live is sent (no 129283/129284)
    — the route list (129285) keeps going, because it is the plan's geometry, not a claim about
    where the boat is. The broadcast ends on `POST /stop`, on expiry (ROUTE_TTL_S, default 6 h)
    and when the engine reports another course than the one the route was sent for; each end
@@ -46,6 +48,9 @@ NAV_EVERY_S = float(os.environ.get("N2KOUT_NAV_EVERY_S", "1"))
 # the engine's own-ship fix (source-policy chosen, with its receive time) + the course token
 FIX_URL = os.environ.get("N2KOUT_FIX_URL", "http://127.0.0.1:8200/gps/fix")
 FIX_TIMEOUT_S = float(os.environ.get("N2KOUT_FIX_TIMEOUT_S", "0.5"))
+# the engine approves every new leg against land / islands / zones (n2kout holds none)
+LEG_CHECK_URL = os.environ.get("N2KOUT_LEG_CHECK_URL", "http://127.0.0.1:8200/gps/leg-check")
+LEG_CHECK_TIMEOUT_S = float(os.environ.get("N2KOUT_LEG_CHECK_TIMEOUT_S", "2"))
 # older than this → no live nav sent. 10 s: GPS writes at 1-10 Hz; a few missed polls are fine
 FIX_MAX_AGE_S = float(os.environ.get("N2KOUT_FIX_MAX_AGE_S", "10"))
 ROUTE_TTL_S = float(os.environ.get("N2KOUT_ROUTE_TTL_S", str(6 * 3600)))
@@ -72,6 +77,7 @@ class Waypoint(BaseModel):
     lat: float = Field(strict=True, ge=-90, le=90)
     lon: float = Field(strict=True, ge=-180, le=180)
     t: float | None = Field(default=None, strict=True)     # plan time (kept, not sent)
+    mark: bool = Field(default=False, strict=True)         # a course mark: arrival radius only
 
     _fin = field_validator("lat", "lon")(_finite)
 
@@ -139,18 +145,35 @@ def fresh_fix(feed, now):
     return lat, lon, t
 
 
+def check_leg(frm, to, course):
+    """Ask the engine whether boat → waypoint is clear of every obstacle it knows: True / False,
+    or None when it doesn't answer in LEG_CHECK_TIMEOUT_S (treated as not clear)."""
+    payload = json.dumps({"from": {"lat": frm[0], "lon": frm[1]},
+                          "to": {"lat": to[0], "lon": to[1]}, "course": course}).encode()
+    req = urllib.request.Request(LEG_CHECK_URL, data=payload, method="POST",
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=LEG_CHECK_TIMEOUT_S) as r:
+            ans = json.loads(r.read())
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+        return None
+    return ans.get("clear") if isinstance(ans, dict) else None
+
+
 # --- the broadcaster --------------------------------------------------------------------------
 
 class _Broadcaster:
-    def __init__(self, sender=BUS, fix_source=fetch_fix, clock=time.time):
+    def __init__(self, sender=BUS, fix_source=fetch_fix, clock=time.time, leg_check=check_leg):
         self.sender, self.fix_source, self.clock = sender, fix_source, clock
+        self.leg_check = leg_check
         self.lock = threading.Lock()
         self.thread = None
         self.stop_evt = threading.Event()
         self.end_reason = None
         self.state = {"broadcasting": False, "iface": CAN_IFACE, "route": None,
                       "n_waypoints": 0, "started_at": None, "expires_at": None,
-                      "nav_live": False, "nav": None, "ended": None, "last_error": None}
+                      "nav_live": False, "nav": None, "steer_paused": None, "ended": None,
+                      "last_error": None}
 
     def start(self, body: RouteBody):
         route_msgs = n2k.chunk_route(body.name, [w.model_dump() for w in body.waypoints])
@@ -162,7 +185,8 @@ class _Broadcaster:
             self.state.update({"broadcasting": True, "route": body.name,
                                "n_waypoints": len(body.waypoints), "started_at": round(now),
                                "expires_at": round(now + ROUTE_TTL_S), "nav_live": False,
-                               "nav": None, "ended": None, "last_error": None})
+                               "nav": None, "steer_paused": None, "ended": None,
+                               "last_error": None})
             self.thread = threading.Thread(target=self._run, args=(body, route_msgs,
                                                                    self.stop_evt, now),
                                            daemon=True, name="n2k-broadcast")
@@ -202,9 +226,16 @@ class _Broadcaster:
             return "course changed"
         fix = fresh_fix(feed, now)
         if fix is None:
-            self.state.update({"nav_live": False, "nav": None})
+            self.state.update({"nav_live": False, "nav": None, "steer_paused": "no position"})
             return None
-        nav = tracker.update(*fix)
+
+        def approve(frm, idx):
+            return self.leg_check(frm, tracker.pts[idx], body.course)
+
+        nav = tracker.update(*fix, approve=approve)
+        if nav["blocked"]:            # the next (or current) leg isn't cleared by the engine
+            self.state.update({"nav_live": False, "nav": None, "steer_paused": "blocked"})
+            return None
         self._send(n2k.encode_129283(nav["xte_m"], sid=sid))
         self._send(n2k.encode_129284(
             nav["dest"][0], nav["dest"][1], dest_wp=nav["dest_index"],
@@ -212,7 +243,7 @@ class _Broadcaster:
             brg_deg=nav["brg_deg"], brg_origin_deg=nav["brg_leg_deg"], sid=sid,
             perp_crossed=nav["perp_crossed"], arrived=nav["arrived"],
             closing_mps=nav["closing_mps"]))
-        self.state.update({"nav_live": True, "nav": {
+        self.state.update({"nav_live": True, "steer_paused": None, "nav": {
             "dest_index": nav["dest_index"], "dest": body.waypoints[nav["dest_index"]].name,
             "dtw_nm": round(nav["dtw_m"] / navcalc.NM_M, 3),
             "brg_deg": round(nav["brg_deg"], 1),
@@ -242,6 +273,7 @@ class _Broadcaster:
         finally:
             self._terminate()
             self.state.update({"broadcasting": False, "nav_live": False, "nav": None,
+                               "steer_paused": None,
                                "ended": reason or self.end_reason or "cleared"})
 
 

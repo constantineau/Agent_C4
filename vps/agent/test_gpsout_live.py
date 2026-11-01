@@ -102,6 +102,71 @@ gpsout.datasource.active = lambda: DS(None)
 check("no fix → fix null, token still there", gpsout.fix_feed()["fix"] is None
       and gpsout.fix_feed()["course"])
 
+print("the send uses the fresh fix, never the navigator's position:")
+NAV.get_navigator = lambda route=None: {"available": True, "route": "race",
+                                        "position": {"lat": PATH[5]["lat"], "lon": -82.0},
+                                        "next_mark": None}
+NAV._marks = lambda route: []
+NAV._latest = lambda: {"lat": PATH[5]["lat"], "lon": -82.0}
+gpsout.datasource.active = lambda: DS((44.003, -82.0, time.time()))
+orinroute.set_load_id("race", "L1")
+r = gpsout.show()
+check("navigator says the boat is at the end, the fresh fix at the start → steer-to 1",
+      r["shown"] and r["dest_index"] == 1)
+
+print("course-mark waypoints are flagged for n2kout:")
+COURSE = [{"name": "Start", "lat": PATH[0]["lat"], "lon": -82.0},
+          {"name": "Top", "lat": PATH[3]["lat"], "lon": -82.0},
+          {"name": "Finish", "lat": PATH[5]["lat"], "lon": -82.0}]
+NAV._marks = lambda route: COURSE
+NAV.get_navigator = lambda route=None: {"available": True, "route": "race",
+                                        "next_mark": {"name": "Top", "index": 1}}
+r = gpsout.show()
+marks = [i for i, w in enumerate(posts[-1][1]["waypoints"]) if w["mark"]]
+check(f"marks at waypoints 0, 3, 5 [{marks}]", r["shown"] and marks == [0, 3, 5])
+
+print("leg check — the engine approves each new leg n2kout wants:")
+ISLAND = {"recommended": "a", "obstacles": {"islands": [{"lat": 44.02, "lon": -82.0,
+                                                         "radius_nm": 0.1}]},
+          "variants": [{"id": "a", "route": {"path": PATH}}]}
+gpsout.deviation._load_playbook = lambda: ISLAND
+NAV.get_navigator = lambda route=None: {"available": False}
+tok = gpsout.course_token()
+through = {"from": {"lat": 44.0, "lon": -82.0}, "to": {"lat": 44.04, "lon": -82.0}, "course": tok}
+beside = {"from": {"lat": 44.0, "lon": -81.99}, "to": {"lat": 44.04, "lon": -81.99},
+          "course": tok}
+r = gpsout.leg_check(through)
+check("line through the island → not clear (obstacle)", r == {"clear": False,
+                                                              "reason": "obstacle"})
+check("line beside it → clear", gpsout.leg_check(beside)["clear"] is True)
+check("another course → not clear", gpsout.leg_check(dict(beside, course="old:race"))
+      == {"clear": False, "reason": "course changed"})
+check("garbage → not clear", gpsout.leg_check({"from": {"lat": "x"}})["clear"] is False
+      and gpsout.leg_check({"from": {"lat": float("nan"), "lon": 1},
+                            "to": {"lat": 1, "lon": 1}})["clear"] is False)
+_real_obst = gpsout._obstacles
+gpsout._obstacles = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("chart"))
+check("a failing check → not clear", gpsout.leg_check(beside) == {"clear": False,
+                                                                  "reason": "error"})
+gpsout._obstacles = _real_obst
+held = threading.Event()
+done = threading.Event()
+
+
+def _hold():
+    with orinroute.COURSE_LOCK:
+        held.set()
+        done.wait(5)
+
+
+threading.Thread(target=_hold, daemon=True).start()
+held.wait(2)
+t0 = time.time()
+r = gpsout.leg_check(beside)
+done.set()
+check("course lock busy (a load running) → not clear within ~1.5 s",
+      r == {"clear": False, "reason": "busy"} and time.time() - t0 < 2.5)
+
 print("the engine endpoints:")
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -129,6 +194,8 @@ check("a failed load leaves the plotter alone", not r.json().get("loaded") and p
 gpsout.datasource.active = lambda: DS((44.0, -82.0, time.time()))
 r = client.get("/gps/fix").json()
 check("GET /gps/fix served", r["fix"]["lat"] == 44.0 and "course" in r)
+r = client.post("/gps/leg-check", json=dict(through, course=gpsout.course_token())).json()
+check("POST /gps/leg-check served (through the island → not clear)", r["clear"] is False)
 
 print("PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)

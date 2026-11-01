@@ -25,6 +25,7 @@ broadcaster isn't reachable. Crew-initiated, crew-cleared: nothing broadcasts on
 from __future__ import annotations
 
 import json
+import math
 import os
 import time
 import urllib.error
@@ -88,6 +89,39 @@ def course_token():
         return f"{load}:{NAV.active_route()}"
     except Exception:  # noqa: BLE001
         return None
+
+
+def leg_check(body):
+    """POST /gps/leg-check — n2kout asks before every advance (and every 30 s for the current
+    leg): is boat → waypoint clear of every obstacle aboard? The same test the send makes: the
+    bundle's and the deployed course's islands + zones and the land chart (_obstacles +
+    _blocked_fn). → {"clear": bool, "reason"}. Not clear when the course changed, when the
+    course lock is busy (a load in progress) or on any error: n2kout then pauses the nav data."""
+    try:
+        a, b = body["from"], body["to"]
+        frm = {"lat": float(a["lat"]), "lon": float(a["lon"])}
+        to = {"lat": float(b["lat"]), "lon": float(b["lon"])}
+        if not all(math.isfinite(v) for v in (*frm.values(), *to.values())):
+            raise ValueError("not finite")
+    except (KeyError, TypeError, ValueError):
+        return {"clear": False, "reason": "bad request"}
+    if not orinroute.COURSE_LOCK.acquire(timeout=1.5):
+        return {"clear": False, "reason": "busy"}
+    try:
+        course = body.get("course")
+        if course is not None and course != course_token():
+            return {"clear": False, "reason": "course changed"}
+        bundle = deviation._load_playbook()
+        blocked = _blocked_fn(bundle, _obstacles(bundle, None, (frm["lat"], frm["lon"])))
+        if blocked is not None and blocked(frm, to):
+            return {"clear": False, "reason": "obstacle"}
+        # no obstacle homework aboard → nothing known in the way (as at send time)
+        return {"clear": True, "reason": None if blocked is not None else "no obstacles aboard"}
+    except Exception as exc:  # noqa: BLE001 — a failed check is never a clear one
+        print(f"[gpsout] leg check failed: {type(exc).__name__}: {exc}", flush=True)
+        return {"clear": False, "reason": "error"}
+    finally:
+        orinroute.COURSE_LOCK.release()
 
 
 def fix_feed():
@@ -474,8 +508,10 @@ def _show(source: str = "playbook", variant=None, route=None):
     fix = own_fix()
     if fix is None:
         return {"shown": False, "dest_index": None, "note": NO_FIX}
-    if boat is None or boat[0] is None:
-        boat = (fix[0], fix[1])
+    # the fresh same-source fix, never the navigator's read (which can fall back to the archive),
+    # for the steer-to choice and every obstacle / land check below; the navigator gives only
+    # the next mark
+    boat = (fix[0], fix[1])
     nav_names = [m.get("name") for m in nav_marks]
     if source == "playbook" and not names and len(nav_marks) > 1:
         # a variant frozen before legs carried names: assume it sails the navigator's course
@@ -542,8 +578,11 @@ def _show(source: str = "playbook", variant=None, route=None):
     where = {i: j for j, i in enumerate(idx)}
     dest = _dest_index(pts, boat, {k: where[i] for k, i in verts.items() if i in where}, nxt,
                        blocked)
+    # course-mark waypoints: n2kout advances past them on the arrival radius only, never on the
+    # turn bisector (crossing that isn't rounding the mark)
+    mark_wps = {where[i] for i in verts.values() if i in where}
     wpts = [{"name": f"C4-{i + 1:02d}", "lat": p.get("lat"), "lon": p.get("lon"),
-             "t": p.get("t")} for i, p in enumerate(pts)]
+             "t": p.get("t"), "mark": i in mark_wps} for i, p in enumerate(pts)]
     if dest is None:
         return {"shown": False, "dest_index": None,
                 "note": NO_SAFE_WPT if rerouted else
