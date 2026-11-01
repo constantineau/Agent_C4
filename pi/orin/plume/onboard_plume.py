@@ -35,6 +35,7 @@ import math
 import os
 import socket
 import sys
+import threading
 import time
 import urllib.request
 
@@ -160,16 +161,29 @@ MISS_BACKOFF_S = float(os.environ.get("PLUME_MISS_BACKOFF_MIN", "60")) * 60
 _MISSES = "misses.state"     # not .json: never mistaken for a run store
 
 
+# Starlink can pass the TCP probe and then stall: bound the whole online download phase, well under
+# the unit's TimeoutStartSec=600, so a pass always saves its state and posts something.
+DOWNLOAD_BUDGET_S = float(os.environ.get("PLUME_DOWNLOAD_BUDGET_S", "240"))
+REQUEST_TIMEOUT_S = float(os.environ.get("PLUME_REQUEST_TIMEOUT_S", "20"))
+
+
 class BackoffFetch:
     """`lab.record`'s fetch, with a back-off for a cycle that is due by the model's nominal lag but
     not posted yet (ECMWF posts hours later than its lag says). After a miss, that cycle isn't
     re-probed for MISS_BACKOFF_S; a newer due cycle is tried at once. While backing off, a target
     with no run on file yet still gets the last cycle that WAS there (from the cache, no download).
-    Uses its own crash-isolated GRIB parser, like `lab.record` does for the stock fetch."""
+    Uses its own crash-isolated GRIB parser, like `lab.record` does for the stock fetch.
 
-    def __init__(self, key, now, backoff_s=MISS_BACKOFF_S, fetch_run=None):
+    Time budget: every request gets at most REQUEST_TIMEOUT_S, and the whole download phase at most
+    DOWNLOAD_BUDGET_S. Each model's fetch runs in a daemon thread joined against what's left of
+    the budget (ICON/GEM's API calls and ECMWF's client can't all be given a timeout). Once the
+    budget is gone `exhausted` is set and every remaining model is skipped at once."""
+
+    def __init__(self, key, now, backoff_s=MISS_BACKOFF_S, fetch_run=None, budget_s=None):
         self.path = os.path.join(os.environ["PLUME_DIR"], _MISSES)
         self.backoff_s, self.now = backoff_s, now
+        self.deadline = time.monotonic() + (DOWNLOAD_BUDGET_S if budget_s is None else budget_s)
+        self.exhausted = False
         self.fetch_run = fetch_run or lab.fetch_run
         st = lab.load_store(key) or {}
         self.have = {m: lab.latest_cycle(st, m) for m in (st.get("runs") or {})}
@@ -186,7 +200,43 @@ class BackoffFetch:
             self._parser = grib.IsolatedGribParser()
         return self._parser
 
+    def left(self):
+        return self.deadline - time.monotonic()
+
+    def _run(self, source, bbox, times, now):
+        """fetch_run in a daemon thread, joined against the budget; None once it's spent."""
+        left = self.left()
+        if left <= 0.5:
+            self.exhausted = True
+            return None
+        box = {}
+        parser = self.parser()
+
+        def work():
+            try:
+                box["r"] = self.fetch_run(_Budgeted(source, self), bbox, times, now, parser)
+            except Exception as exc:  # noqa: BLE001 — re-raised in the caller's thread
+                box["e"] = exc
+
+        th = threading.Thread(target=work, daemon=True)
+        th.start()
+        th.join(left)
+        if th.is_alive():
+            # stalled past the budget: abandon it (a daemon thread, gone when the pass exits) and
+            # drop the parser it may still be using
+            self.exhausted = True
+            _log(f"{source.name}: download budget spent — stopping downloads")
+            if self._parser is not None:
+                self._parser.close()
+                self._parser = None
+            return None
+        if "e" in box:
+            raise box["e"]
+        return box.get("r")
+
     def __call__(self, source, bbox, times, now, _parser=None):
+        if self.exhausted:
+            return None
         when = dt.datetime.fromtimestamp(now, dt.timezone.utc)
         due = int(source.pick_cycle(when).timestamp())
         miss = self.misses.get(source.name) or {}
@@ -194,8 +244,10 @@ class BackoffFetch:
             if self.have.get(source.name) is not None or not miss.get("got"):
                 return None                       # backing off; the target already has a run
             got_dt = dt.datetime.fromtimestamp(miss["got"], dt.timezone.utc)
-            return self.fetch_run(_Pinned(source, got_dt), bbox, times, now, self.parser())
-        got = self.fetch_run(source, bbox, times, now, self.parser())
+            return self._run(_Pinned(source, got_dt), bbox, times, now)
+        got = self._run(source, bbox, times, now)
+        if self.exhausted:
+            return got                            # a stall says nothing about what's posted
         if hasattr(source, "load_series") or (got and int(got[0]) >= due):
             self.misses.pop(source.name, None)
         else:
@@ -299,6 +351,23 @@ class _CachedOnly:
         return getattr(self._src, k)
 
 
+class _Budgeted:
+    """A model source whose downloads get at most REQUEST_TIMEOUT_S each, and none once the pass's
+    download budget is spent."""
+
+    def __init__(self, src, owner):
+        self._src, self._owner = src, owner
+
+    def fetch(self, cycle, fhr, member, bbox, timeout=None):
+        left = self._owner.left()
+        if left <= 0.5:
+            return None
+        return self._src.fetch(cycle, fhr, member, bbox, timeout=min(REQUEST_TIMEOUT_S, left))
+
+    def __getattr__(self, k):
+        return getattr(self._src, k)
+
+
 class _Pinned:
     """A model source whose freshest cycle is pinned (the last one that was actually posted)."""
 
@@ -394,17 +463,18 @@ def run_once(now=None, get=engine_get, post=engine_post, record=None, is_online=
     if not spec:
         _log("no route aboard and no boat position — nothing to follow")
         return {"ok": False, "note": "no route and no position"}
-    net = is_online()
+    net, stalled = is_online(), False
     if net:
         fetch = BackoffFetch(spec["key"], now)
         try:
             st = record(spec, now=now, on_progress=_log, fetch=fetch)
         finally:
-            fetch.close()
-    else:
-        # offline = record from the cache into the current store: any cycle cached for this box
-        # that's newer than what the store holds gets sampled, with no network
-        _log("offline — sampling what's in the cache")
+            fetch.close()                         # always saves the back-off state
+        stalled = fetch.exhausted
+    if not net or stalled:
+        # offline (or the downloads stalled) = record from the cache into the current store: any
+        # cycle cached for this box that's newer than what the store holds, with no network
+        _log("offline — sampling what's in the cache" if not net else "stalled — sampling what's in the cache")
         fetch = CacheOnlyFetch(spec["key"])
         try:
             st = fetch.stamp(record(spec, now=now, on_progress=_log, fetch=fetch), now)
@@ -413,6 +483,7 @@ def run_once(now=None, get=engine_get, post=engine_post, record=None, is_online=
         lab.save_store(st)
     plume = build(st, now)
     out = {"ok": True, "key": spec["key"], "basis": spec["basis"], "online": net,
+           "stalled": bool(net and stalled),
            "models": {m["model"]: len(m["runs"]) for m in (plume or {}).get("models", [])}}
     if not (plume and plume.get("models")):
         # nothing usable for this target (e.g. the boat crossed a grid line while offline): tell the

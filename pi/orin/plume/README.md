@@ -29,6 +29,9 @@ Every 15 min (systemd timer, short-lived process):
    line), it posts a small "waiting" marker instead, so the engine stops serving the old spot's
    onboard plume. The iPad then says "Onboard forecast: waiting for internet." (a shore plume, if
    aboard, is still chosen by the normal rules).
+   Starlink can pass the probe and then stall, so downloads get 20 s a request and 240 s in all.
+   When that runs out the pass stops downloading and samples the cache, as if offline. It always
+   saves its state and posts something, well inside the unit's 600 s limit.
 3. Build the plume, mark it `source: onboard`, `POST /plume/onboard` to the engine.
 4. Delete cached GRIBs older than `GRIB_KEEP_H` (30 h), and run stores of targets untouched for 48 h.
 
@@ -99,6 +102,8 @@ Remove: `sudo systemctl disable --now sr33-orin-plume.timer`, delete the two uni
 | `PLUME_DIR` | `~/c4-plume/store` | run history (48 h per model) |
 | `GRIB_KEEP_H` | `30` | prune age for model files |
 | `PLUME_MISS_BACKOFF_MIN` | `60` | wait before re-probing a due-but-missing cycle |
+| `PLUME_DOWNLOAD_BUDGET_S` | `240` | total time for a pass's downloads; then it samples the cache |
+| `PLUME_REQUEST_TIMEOUT_S` | `20` | per download request |
 | `PLUME_ONLINE_PROBE` | `nomads.ncep.noaa.gov:443` | the "is the internet up" check |
 
 ## Tests

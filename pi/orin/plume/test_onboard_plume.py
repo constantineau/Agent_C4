@@ -183,6 +183,52 @@ check("older store: the newer cached cycle is added on top", runs3[0]["cycle"] =
       and any(r["cycle"] == OLDC for r in runs3))
 ENGINE["/playbook/track"] = TRACK
 
+print("online but stalling (the probe passes, then the downloads hang):")
+import time as _time  # noqa: E402
+
+
+class StallGFS(FixtureGFS):
+    """A newer GFS cycle is due; every download of it hangs far past the budget."""
+
+    def pick_cycle(self, now=None, min_horizon_h=0):
+        return CYCLE + dt.timedelta(hours=6)
+
+    def fetch(self, cycle, fhr, member, bbox, timeout=60):
+        STALLS.append(timeout)
+        _time.sleep(4)
+        return None
+
+
+STALLS = []
+models.MODELS["gfs"] = StallGFS()
+ob.DOWNLOAD_BUDGET_S = 1.5
+four = dict(TRACK, points=[dict(pt, t=pt["t"] - 4 * 3600) for pt in TRACK["points"]])   # same box, new key
+ENGINE["/playbook/track"] = four
+misses = os.path.join(os.environ["PLUME_DIR"], "misses.state")
+if os.path.exists(misses):
+    os.remove(misses)
+n_posts = len(POSTS)
+t0 = _time.monotonic()
+out = ob.run_once(now=NOW + 2800, get=get, post=post, record=record, is_online=lambda: True)
+took = _time.monotonic() - t0
+check("the pass ends on the budget, not the stall (or the 600 s service kill)", took < 3.5)
+check("each request asked for a short timeout", STALLS and max(STALLS) <= ob.REQUEST_TIMEOUT_S)
+ps = POSTS[-1][1] if len(POSTS) > n_posts else {}
+check("falls through to the cache: the new target's plume is posted", out["stalled"] and ps.get("key") == out["key"]
+      and ps["models"][0]["runs"][0]["cycle"] == int(CYCLE.timestamp()))
+check("back-off state saved, with no 'missing' recorded for a stall",
+      os.path.exists(misses) and "gfs" not in open(misses).read())
+ENGINE["/playbook/track"] = {"available": False}
+ENGINE["/conditions"] = {"available": True, "lat": 40.0, "lon": -95.0}     # nothing cached here
+n_posts = len(POSTS)
+ob.run_once(now=NOW + 2900, get=get, post=post, record=record, is_online=lambda: True)
+check("stalled with nothing cached for the spot → the waiting marker is posted",
+      len(POSTS) > n_posts and POSTS[-1][1].get("waiting") is True)
+models.MODELS["gfs"] = FixtureGFS()
+ob.DOWNLOAD_BUDGET_S = 240.0
+ENGINE["/playbook/track"] = TRACK
+ENGINE["/conditions"] = COND
+
 print("offline, crossed a grid line with no playbook, nothing cached for the new spot:")
 ENGINE["/playbook/track"] = {"available": False}
 ENGINE["/conditions"] = {"available": True, "lat": 41.0, "lon": -90.0}    # a box nothing was fetched for
