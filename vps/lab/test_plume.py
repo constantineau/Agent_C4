@@ -209,7 +209,19 @@ RACE["timezone"] = "UTC"
 RACE["own"] = {"division": "PHRF A"}
 gun = racestart.race_start(RACE)["epoch"]
 route = [{"lat": 43.0, "lon": -82.4, "t": gun + 600}, {"lat": 45.8, "lon": -84.6, "t": gun + 30 * H}]
-check("our gun", P.race_start_of({"definition": RACE, "basis": "route", "path": route}) == gun)
+check("our gun (route after it)", P.race_start_of({"definition": RACE, "basis": "route", "path": route}) == gun)
+early = [dict(route[0], t=gun - 3600), route[1]]
+check("a route planned from an EARLIER start wins over the gun (earliest = conservative)",
+      P.race_start_of({"definition": RACE, "basis": "route", "path": early}) == gun - 3600)
+DAY = {"race_id": "r5", "start_date": "2026-07-18", "timezone": "America/Detroit", "courses": []}
+r1400 = [{"lat": 43.0, "lon": -82.4, "t": 1784397600}, {"lat": 45.8, "lon": -84.6, "t": 1784397600 + 30 * H}]
+check("no gun configured, route planned from 14:00, real gun 13:00 → start date's first minute, not 14:00",
+      P.race_start_of({"definition": DAY, "basis": "route", "path": r1400}) == 1784347200 < 1784394000)
+DAYGUN = dict(DAY, division_starts={"X": "2026-07-18 13:00"}, own={"division": "X"})
+check("gun 13:00 + start date: the date's first minute is earlier, so it's used",
+      P.race_start_of({"definition": DAYGUN, "basis": "route", "path": r1400}) == 1784347200)
+check("gun only: the gun", P.race_start_of({"definition": dict(DAYGUN, start_date=None), "basis": "point",
+                                            "path": [{"lat": 1, "lon": 1, "t": 0}]}) == 1784394000)
 NOGUN = {"race_id": "r3", "name": "No Guns", "start_date": "2026-07-18", "timezone": "America/Detroit",
          "courses": [{"id": "c1", "marks": [{"name": "S", "lat": 43.0, "lon": -82.4}, {"name": "F", "lat": 45.8, "lon": -84.6}]}]}
 check("no gun → the route's first ETA", P.race_start_of({"definition": NOGUN, "basis": "route", "path": route}) == gun + 600)
