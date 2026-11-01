@@ -28,7 +28,7 @@ from fastapi.responses import JSONResponse
 from app import (navigator, tactics, routing, weather, sails, fatigue, onboard_conditions,
                  datasource, ais, fleet, deviation, drift, selector, reoptimize, strategy,
                  matcher, buoys, racelog, watches, trend, plangap, gpsout, checklist,
-                 power, sensor_health, plume, orinroute)
+                 power, sensor_health, plume, orinroute, orinassets)
 
 app = FastAPI(title="Agent_C4 Onboard Engine", version="0.1.0")
 # The iPad reaches the Pi directly over boat-local Wi-Fi in race mode; allow cross-origin so a
@@ -206,6 +206,20 @@ def course_load(body: dict):
             print(f"[course/load] failed: {type(exc).__name__}: {exc}", flush=True)
             return {"loaded": False, "detail": "Couldn't save the course. Try again."}
     return {"loaded": True, "route": route, "course_id": cid, "marks": len(marks), "skipped": skipped}
+
+
+@app.post("/reroute/assets")
+def reroute_assets_load(body: dict):
+    """The Orin re-route's land chart + the Lab's reviewed boat profile, from the Lab's Deploy push
+    (#139, #140). Kept here and sent with each re-route request. Pre-race homework: refused while
+    a race session is running."""
+    return orinassets.load(body)
+
+
+@app.get("/reroute/assets")
+def reroute_assets_get():
+    """Which chart and boat profile the Orin's re-route gets (no geometry)."""
+    return orinassets.get()
 
 
 @app.get("/tactics")

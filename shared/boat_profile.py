@@ -128,6 +128,15 @@ def summary(d: dict) -> dict:
     }
 
 
+def version(d: dict) -> str:
+    """A short content hash of profile `d`: any edit (helm factor, an approved polar cell, the
+    draft) gives a new version. The boat's re-route names the profile it used by id + this."""
+    import hashlib
+    import json
+    raw = json.dumps(d or {}, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha1(raw.encode()).hexdigest()[:12]
+
+
 def validate(d: dict):
     """(errors, warnings). Errors block use; warnings flag review (missing optional modelling)."""
     errors, warnings = [], []

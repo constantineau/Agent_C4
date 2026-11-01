@@ -508,7 +508,7 @@ import contextlib  # noqa: E402
 
 import prep_chart  # noqa: E402
 prep_chart.store.get_race = lambda rid: DEF
-_bfc = prep_chart.geo.build_for_course
+_bfc = prep_chart.orinassets.geo.build_for_course
 BUILD_KW = {}
 
 
@@ -517,7 +517,7 @@ def fake_build(*a, **k):
     return geo.ObstacleField((46.0, 42.5, -83.5, -81.5))
 
 
-prep_chart.geo.build_for_course = fake_build
+prep_chart.orinassets.geo.build_for_course = fake_build
 buf, err = io.StringIO(), io.StringIO()
 with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(err):
     rc = prep_chart.main(["x", "huron", "c"])
@@ -530,7 +530,7 @@ check("--open-water → written, flagged", rc == 0 and json.loads(buf.getvalue()
 check("land only, no waypoint pockets, the current format", BUILD_KW.get("carve_waypoints") is False
       and BUILD_KW.get("zones_on") is False and BUILD_KW.get("islands_on") is False
       and json.loads(buf.getvalue())["kind"] == job.CHART_KIND == prep_chart.CHART_KIND)
-prep_chart.geo.build_for_course = _bfc
+prep_chart.orinassets.geo.build_for_course = _bfc
 write_chart(DEF, fingerprint=False)
 check("a chart with no fingerprint → out of date",
       lo(DEF)[1] == job.OLD_CHART)
@@ -690,6 +690,65 @@ out10 = job.run(REQ, now=NOW, is_online=lambda: False)
 job.BOAT_ID = _bid
 check("warning + no boat block", out10["boat"] is None and job.NO_BOAT in out10["warnings"])
 check("with the profile: which one it used", out["boat"]["boat_id"] == "sr33")
+
+print("3e6) the chart + boat profile carried by the Deploy push (#139, #140)")
+from shared import boat_profile  # noqa: E402
+
+REPO_BOAT = job._get_boat()
+REVIEWED = dict(REPO_BOAT, helm_factor=0.931,
+                polar_adjustments=[{"tws": 10, "twa": 90, "mult": 1.04}] * 24)
+CARRY = {"chart": good, "boat": REVIEWED, "boat_version": boat_profile.version(REVIEWED),
+         "received_at": NOW - 600}
+
+
+def lo_carried(defn, chart, boat=None):
+    d_, c_, _n = job.remaining_definition(defn, "c", 2, 44.2, -82.2)
+    return job.load_obstacles(d_, c_, defn, "c", boat or REPO_BOAT, chart=chart)
+
+
+os.remove(job.chart_path("huron", "c"))                       # nothing copied aboard by hand
+check("carried chart for this course → used", lo_carried(DEF, good)[1] is None)
+check("carried chart for an older course → out of date", lo_carried(DEF2, good)[1] == job.OLD_CHART)
+check("carried empty chart (shoreline didn't load) → refused",
+      lo_carried(DEF, dict(good, mask_zb64=geo.field_to_dict(empty)["mask_zb64"]))[1] == job.NO_LAND)
+check("carried chart of another kind → out of date",
+      lo_carried(DEF, dict(good, kind="land"))[1] == job.OLD_CHART)
+with open(job.chart_path("huron", "c"), "w") as fh:            # an old hand-copied chart on disk…
+    json.dump(good, fh)
+check("the push carried no chart → the file on disk is NOT used",
+      lo_carried(DEF, None)[1] == job.NO_CHART)
+check("no assets in the request (an older Pi) → the file on disk, as before", lo(DEF)[1] is None)
+os.remove(job.chart_path("huron", "c"))
+DEEP = dict(REVIEWED, draft_m=REVIEWED["draft_m"] + 0.5)
+check("a chart built for another draft → out of date",
+      lo_carried(DEF, good, boat=DEEP)[1] == job.OLD_CHART)
+
+out11 = job.run(dict(REQ, assets=CARRY), now=NOW, is_online=lambda: False)
+b11 = out11["boat"]
+check("the run used the Deploy's profile and names it (id + version)",
+      b11["boat_id"] == "sr33" and b11["version"] == boat_profile.version(REVIEWED)
+      and b11["source"] == "deploy" and b11["helm_factor"] == 0.931 and b11["polar_cells"] == 24)
+check("…the carried chart, and no profile warning", out11["chart"]["land"] is True
+      and job.NOT_DEPLOYED_BOAT not in out11["warnings"] and job.NO_CHART not in out11["warnings"])
+check("without the push: the Orin's own copy, named and warned", out["boat"]["source"] == "orin"
+      and out["boat"]["version"] == boat_profile.version(REPO_BOAT)
+      and job.NOT_DEPLOYED_BOAT in out["warnings"])
+for name, carry, warn in (
+        ("another boat's profile", dict(CARRY, boat=dict(REVIEWED, boat_id="bravo"),
+                                         boat_version=boat_profile.version(dict(REVIEWED, boat_id="bravo"))),
+         job.OTHER_BOAT),
+        ("a profile that doesn't match its version", dict(CARRY, boat_version="0" * 12), job.BAD_BOAT),
+        ("a profile with errors", dict(CARRY, boat={"boat_id": "sr33"},
+                                       boat_version=boat_profile.version({"boat_id": "sr33"})),
+         job.BAD_BOAT)):
+    bb, info, note = job.pick_boat(carry)
+    check(f"{name} → not used, the Orin's own, said", bb == REPO_BOAT
+          and info["source"] == "orin" and note == warn)
+bb, info, note = job.pick_boat({"chart": None, "boat": None})
+check("the push carried no profile → the Orin's own, warned", info["source"] == "orin"
+      and note == job.NOT_DEPLOYED_BOAT)
+for w_ in (job.NOT_DEPLOYED_BOAT, job.BAD_BOAT, job.OTHER_BOAT):
+    check(f"short: {w_!r}", len(w_.split()) <= 12)
 
 print("3f) an incomplete route makes no finish claim")
 _orig = job.routerun.run_course
