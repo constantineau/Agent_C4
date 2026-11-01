@@ -1,24 +1,18 @@
-"""Build a race's land mask in the Lab and print it as JSON, for the Orin's re-route.
+"""Build a race's land chart in the Lab and print it as JSON — a look at what the Deploy carries.
 
-The Orin can't build the shoreline mask itself (that needs GDAL and the 200 MB GSHHG shoreline),
-so the Lab builds it — the same mask the Lab's optimizer routes on — and it's copied aboard.
-Run it inside the Lab container, where the Lab's code, races and shoreline data live:
+The Lab's Deploy push builds this chart itself (vps/lab/app/orinassets.py) and the Pi hands it to
+the Orin with each re-route request (#139), so nothing needs copying aboard. This prints the same
+chart, for a look or a test. Run it inside the Lab container:
 
     docker exec -i <lab container> python - <race_id> [course_id] [--open-water] \\
         < pi/orin/reroute/prep_chart.py > chart.json
-    scp chart.json agent-c4@<orin>:c4-reroute/chart/<race_id>__<course_id>.json
-
-The file name it should get is printed on stderr. Without it, the Orin's re-route avoids the
-race's islands and zones only, and says so on the result.
 """
 import json
 import sys
 
-from app import optimizer, store, labstate, boats
-from app.geo import obstacles as geo
+from app import boats, optimizer, orinassets, store
 
-# the chart format the Orin takes: land only, no waypoint pockets (job.CHART_KIND must match)
-CHART_KIND = "land-v2"
+CHART_KIND = orinassets.CHART_KIND   # job.CHART_KIND must match
 
 
 def main(argv):
@@ -33,38 +27,18 @@ def main(argv):
         return 1
     courses = d.get("courses") or []
     cid = argv[2] if len(argv) > 2 else (courses[0].get("id") if courses else None)
-    bbox = optimizer.course_bbox(d, cid)
-    if not bbox:
+    if not optimizer.course_bbox(d, cid):
         print("the course has no mark positions", file=sys.stderr)
         return 1
-    # the Lab's own choices: its chart source and the active boat's draft
-    src = (labstate.get("coastline_source") or geo.COASTLINE_SOURCE or "natural_earth").lower()
-    depth = boats.active_safety_depth_m()
-    # LAND ONLY. The race's zones, island disks and rounding-side barriers are rebuilt on the Orin
-    # from what's left of the course: a barrier of an island already rounded must not block a
-    # later leg.
-    # No waypoint pockets either: a pocket at a near-shore mark would clear that shore for good,
-    # and a later leg could cut across it. The Orin opens pockets for the boat and the marks still
-    # to sail, each run.
-    field = geo.build_for_course(d, cid, bbox, source=src, safety_depth=depth,
-                                 zones_on=False, islands_on=False, carve_waypoints=False)
-    # The builder never fails: if the shoreline couldn't load it returns an EMPTY mask, which the
-    # boat would take as "land checked". Refuse that unless the box really is open water.
-    land_cells = sum(field.layers.get(k, 0) for k in ("coastline", "shoal", "obstruction"))
-    if not land_cells and not open_water:
-        print(f"no land in the mask (source {field.source}): the shoreline didn't load. Not "
-              "writing a chart. If this course box truly has no land, add --open-water.",
+    boat = boats.get_boat(orinassets.boat_id())   # the boat the Deploy is for: its draft
+    chart, why = orinassets.build_chart(d, cid, boat, open_water=open_water)
+    if why:
+        print(f"{why} Not writing a chart. If this course box truly has no land, add --open-water.",
               file=sys.stderr)
         return 1
-    out = geo.field_to_dict(field)
-    out["open_water"] = bool(open_water and not land_cells)
-    # what it was built from: the Orin checks this against the course aboard before using it
-    out.update(race_id=d.get("race_id"), course_id=cid, kind=CHART_KIND,
-               fingerprint=geo.course_fingerprint(d, cid, depth))
-    json.dump(out, sys.stdout, separators=(",", ":"))
-    safe = lambda s: "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in str(s))[:60]
-    print(f"\nsave as: {safe(d.get('race_id'))}__{safe(cid)}.json  "
-          f"(source {field.source}, {sum(field.layers.values())} cells blocked)", file=sys.stderr)
+    json.dump(chart, sys.stdout, separators=(",", ":"))
+    print(f"\nsource {chart['source']}, {sum(chart['layers'].values())} cells blocked",
+          file=sys.stderr)
     return 0
 
 

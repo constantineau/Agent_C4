@@ -667,6 +667,7 @@ def cache_key(definition, course_id, bbox, res_deg=RES_DEG, *, source=None, safe
 
 # --- carry a built field to another computer (the boat's Orin, issue #124) ------------------------
 FIELD_SCHEMA = "c4.obstacles/v1"
+MAX_FIELD_CELLS = 20_000_000     # a carried field bigger than this is refused (a course box is ~0.5 M)
 
 
 def field_to_dict(field) -> dict:
@@ -690,29 +691,56 @@ def field_from_dict(d: dict):
         raise ValueError("not a c4.obstacles/v1 field")
     try:
         bbox, res = tuple(float(x) for x in d["bbox"]), float(d["res_deg"])
-    except (ValueError, TypeError, KeyError) as exc:
+    except (ValueError, TypeError, KeyError, OverflowError) as exc:
         raise ValueError(f"bad grid: {type(exc).__name__}") from None
     if len(bbox) != 4 or not all(math.isfinite(x) for x in bbox + (res,)) or res <= 0 \
             or bbox[0] <= bbox[1] or bbox[3] <= bbox[2]:   # (n, s, w, e)
         raise ValueError("bad grid")
+    # the grid the box and cell size make, checked BEFORE anything is allocated: a tiny res_deg
+    # with a small stated nx/ny would otherwise allocate terabytes
+    qx, qy = (bbox[3] - bbox[2]) / res, (bbox[0] - bbox[1]) / res
+    # a vanishing cell size divides to inf (math.ceil would raise OverflowError): refuse it here
+    if not (math.isfinite(qx) and math.isfinite(qy)) or qx > MAX_FIELD_CELLS or qy > MAX_FIELD_CELLS:
+        raise ValueError("grid too large")
+    nx, ny = max(1, int(math.ceil(qx))), max(1, int(math.ceil(qy)))
+    if nx * ny > MAX_FIELD_CELLS:
+        raise ValueError("grid too large")
+    try:
+        if (nx, ny) != (int(d["nx"]), int(d["ny"])):
+            raise ValueError("grid does not match its box")
+    except (KeyError, TypeError, OverflowError) as exc:      # nx = 1e309 → OverflowError
+        raise ValueError(f"bad grid: {type(exc).__name__}") from None
     field = ObstacleField(bbox, res_deg=res)
     try:
-        mask = zlib.decompress(base64.b64decode(d["mask_zb64"], validate=True))
+        dec = zlib.decompressobj()
+        mask = dec.decompress(base64.b64decode(d["mask_zb64"], validate=True), nx * ny + 1)
     except (ValueError, TypeError, KeyError, zlib.error) as exc:   # binascii.Error is a ValueError
         raise ValueError(f"bad mask: {type(exc).__name__}") from None
     if (field.nx, field.ny) != (int(d["nx"]), int(d["ny"])) or len(mask) != field.nx * field.ny:
         raise ValueError("mask size does not match its box")
+    # cells are 0 (water) or 1 (blocked): `blocked` tests == 1, so any other byte would read as
+    # open water while the chart claims land was checked
+    if mask.translate(None, b"\x00\x01"):
+        raise ValueError("mask has values other than 0 and 1")
     field.mask = bytearray(mask)
     layers = d.get("layers") or {}
     if not isinstance(layers, dict):
         raise ValueError("bad layers")
     try:
         field.layers.update({str(k): int(v) for k, v in layers.items()})
-    except (ValueError, TypeError) as exc:
+    except (ValueError, TypeError, OverflowError) as exc:
         raise ValueError(f"bad layers: {type(exc).__name__}") from None
-    field.source = d.get("source") or field.source
-    field.safety_depth = d.get("safety_depth")
-    field.active = bool(d.get("active"))
+    # provenance only (reported, never routed on): the depth the chart was built for is bound by
+    # the fingerprint, which the Orin checks against the boat it routes with
+    field.source = str(d.get("source") or field.source)[:40]
+    sd = d.get("safety_depth")
+    try:
+        field.safety_depth = float(sd) if isinstance(sd, (int, float)) and not isinstance(sd, bool) \
+            and math.isfinite(sd) else None
+    except OverflowError:                       # an int too large for a float
+        field.safety_depth = None
+    # derived from the mask, never taken from the payload: an inactive field ignores every cell
+    field.active = any(field.mask)
     return field
 
 

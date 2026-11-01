@@ -17,7 +17,7 @@ import time
 
 from shared import race_def
 
-from . import store, pbstore, labstate
+from . import store, pbstore, labstate, orinassets
 
 
 def _lock_key(race_id) -> str:
@@ -72,7 +72,23 @@ def push(race_id):
             ok = False
         steps.append({"target": target, "step": name, "ok": ok, "detail": resp})
 
-    step("pi-engine", "course", f"{eng}/course/load", pkg["course_load"])
+    # /course/load answers 200 with loaded: false when it couldn't save: that's a failed step
+    step("pi-engine", "course", f"{eng}/course/load", pkg["course_load"],
+         check=lambda r: r.get("loaded") is True)
+    # the Orin re-route's chart + boat profile, built for THIS course and carried by the Pi with
+    # each re-route request (#139, #140). Right after the course, so the two match.
+    # the boat the locked playbook was built with (else DEPLOY_BOAT_ID), never another's profile
+    assets, problems = orinassets.build((pkg.get("course_load") or {}).get("definition"),
+                                       pkg.get("course_id"), bundle=bundle)
+    step("pi-engine", "orin assets", f"{eng}/reroute/assets", assets,
+         check=lambda r: r.get("loaded") is True)
+    if problems and steps[-1]["ok"]:
+        # sent (the boat dropped its older ones) but incomplete: never a green step
+        steps[-1]["ok"] = False
+        steps[-1]["detail"] = dict(steps[-1]["detail"] or {}, error=problems[0])
+    elif not steps[-1]["ok"] and isinstance(steps[-1]["detail"], dict) \
+            and not steps[-1]["detail"].get("error"):
+        steps[-1]["detail"]["error"] = str(steps[-1]["detail"].get("detail") or "Not loaded.")[:200]
     step("pi-engine", "fleet", f"{eng}/fleet/load", pkg["fleet_load"])
     if (pkg.get("checklist_load") or {}).get("items"):
         step("pi-engine", "checklist", f"{eng}/checklist/load", pkg["checklist_load"])
@@ -149,21 +165,24 @@ def _get_json(url, timeout=4):
 
 def boat_status(get=None):
     """What the boat has loaded RIGHT NOW, read over the Lab's Tailscale line — read-only GETs, never
-    a write. Pi engine: GET /playbook (newer engines) or /playbook/track (older), plus /course;
+    a write. Pi engine: GET /playbook (newer engines) or /playbook/track (older), plus /course and
+    /reroute/assets (the Orin re-route's chart + boat profile);
     Orin copilot: GET /health through the Pi console's proxy. Each side reports `reachable`;
     unreachable sides carry the error so the UI can fall back to the last push honestly."""
     get = get or _get_json
     eng = os.environ.get("DEPLOY_PI_ENGINE_URL", "http://100.79.180.102:8200").rstrip("/")
     cop = os.environ.get("DEPLOY_COPILOT_URL", "http://100.79.180.102:8091/copilot").rstrip("/")
     from concurrent.futures import ThreadPoolExecutor
-    with ThreadPoolExecutor(max_workers=3) as ex:
+    with ThreadPoolExecutor(max_workers=4) as ex:
         f_pb = ex.submit(get, f"{eng}/playbook")
         f_course = ex.submit(get, f"{eng}/course")
+        f_assets = ex.submit(get, f"{eng}/reroute/assets")     # the Orin's chart + boat profile
         # the copilot's /health probes the engine (3 s) and Ollama (up to 8 s) before answering
         f_cop = ex.submit(get, f"{cop}/health", 14)
         pb_ok, pb = f_pb.result()
         course_ok, course = f_course.result()
         cop_ok, health = f_cop.result()
+        assets_ok, assets = f_assets.result()
 
     engine = {"reachable": False, "error": None, "playbook": None, "course": None}
     if not pb_ok and pb.get("status") == 404:
@@ -189,6 +208,10 @@ def boat_status(get=None):
                             "route": course.get("route"),
                             "marks": len(course.get("marks") or []),
                             "mark_names": [m.get("name") for m in (course.get("marks") or [])][:12]}
+
+    if assets_ok:            # an engine from before #139 answers 404: nothing shown
+        engine["orin_assets"] = {k: assets.get(k) for k in (
+            "available", "race_id", "course_id", "chart", "boat_id", "boat_version", "received_at")}
 
     copilot = {"reachable": bool(cop_ok), "error": None if cop_ok else health.get("error"),
                "playbook": None}

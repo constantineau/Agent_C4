@@ -128,6 +128,59 @@ def summary(d: dict) -> dict:
     }
 
 
+def version(d: dict) -> str:
+    """A short content hash of profile `d`: any edit (helm factor, an approved polar cell, the
+    draft) gives a new version. The boat's re-route names the profile it used by id + this."""
+    import hashlib
+    import json
+    raw = json.dumps(d or {}, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha1(raw.encode()).hexdigest()[:12]
+
+
+def _num(x):
+    import math
+    try:
+        return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+    except OverflowError:              # an int too large for a float
+        return False
+
+
+def shape_errors(d) -> list:
+    """Type errors in the fields a CARRIED profile is routed and reported on (the Pi stores it, the
+    Orin routes on it): every one of them either absent/null or of the right shape, numbers finite.
+    `validate` checks the values; this checks nothing downstream can trip on a type."""
+    if not isinstance(d, dict):
+        return ["not an object"]
+    errs = []
+
+    def opt(key, ok):
+        if d.get(key) is not None and not ok(d[key]):
+            errs.append(f"bad {key}")
+
+    if not isinstance(d.get("boat_id"), str) or not d["boat_id"].strip() or len(d["boat_id"]) > 60:
+        errs.append("bad boat_id")
+    if not _num(d.get("draft_m")):
+        errs.append("bad draft_m")
+    for k in ("safety_margin_m", "helm_factor"):
+        opt(k, _num)
+    for k in ("name", "boat_class", "hull_type"):
+        opt(k, lambda v: isinstance(v, str))
+    opt("polar_adjustments", lambda v: isinstance(v, list) and all(
+        isinstance(a, dict) and all(_num(a.get(f)) for f in ("tws", "twa", "mult")) for a in v))
+    opt("wave_coeffs", lambda v: isinstance(v, dict) and all(_num(x) for x in v.values()))
+    opt("cert_polar", lambda v: isinstance(v, list) and all(
+        isinstance(r, (list, tuple)) and len(r) == 3 and all(_num(x) for x in r) for r in v))
+    opt("jib_crossovers", lambda v: isinstance(v, list) and all(
+        isinstance(j, dict) and isinstance(j.get("sail"), str)
+        and all(j.get(f) is None or _num(j[f]) for f in ("tws_min", "tws_max")) for j in v))
+    opt("code0", lambda v: isinstance(v, dict) and all(
+        v.get(f) is None or _num(v[f]) for f in ("tws_max", "twa_min", "twa_max")))
+    opt("main_reefs", lambda v: isinstance(v, dict) and all(
+        x is None or _num(x) for x in v.values()))
+    opt("sail_inventory", lambda v: isinstance(v, list) and all(isinstance(x, str) for x in v))
+    return errs
+
+
 def validate(d: dict):
     """(errors, warnings). Errors block use; warnings flag review (missing optional modelling)."""
     errors, warnings = [], []

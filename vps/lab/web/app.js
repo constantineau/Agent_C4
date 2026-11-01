@@ -2243,6 +2243,8 @@ function boatPanelInner() {
     const okPill = (ok, label) => `<span class="pill ${ok ? "ok" : "warn"}">${ok ? "●" : "○"} ${esc(label)}</span>`;
     rows.push(`<div class="dep-row">${okPill(eng.reachable, "Pi engine")}<span>${eng.reachable ? "playbook: " + pbText(epb) : "unreachable" + (eng.error ? " — " + esc(eng.error) : "")}</span></div>`);
     if (eng.course) rows.push(`<div class="dep-row"><span class="pill" style="visibility:hidden">● Pi engine</span><span>course: ${eng.course.available ? `${esc(eng.course.route || "?")} · ${eng.course.marks} marks${eng.course.mark_names && eng.course.mark_names.length ? ` <span class="muted">(${eng.course.mark_names.map(esc).join(" → ")})</span>` : ""}` : "none loaded"}</span></div>`);
+    const oa = eng.orin_assets;
+    if (oa) rows.push(`<div class="dep-row"><span class="pill" style="visibility:hidden">● Pi engine</span><span>re-route: ${!oa.available ? "no chart or boat profile" : `${oa.chart ? `chart for ${esc(oa.course_id || "?")}` : "no chart"} · ${oa.boat_id ? `boat ${esc(oa.boat_id)} <code>${esc(oa.boat_version || "")}</code>` : "no boat profile"}`}</span></div>`);
     rows.push(`<div class="dep-row">${okPill(cop.reachable, "Orin copilot")}<span>${cop.reachable ? "playbook: " + pbText(cpb) : "unreachable" + (cop.error ? " — " + esc(cop.error) : "")}</span></div>`);
     live = `<div class="muted" style="font-size:12px">Checked · ${esc(depStamp(b.checked_at))}</div><div class="dep-grid">${rows.join("")}</div>`;
 
@@ -2262,7 +2264,7 @@ function boatPanelInner() {
   }
 
   // last push
-  const stepPills = (r) => (r.steps || []).map((x) => `<span class="pill ${x.ok ? "ok" : "warn"}" title="${esc(x.ok ? "" : ((x.detail || {}).error || ""))}">${x.ok ? "✓" : "✗"} ${esc(x.target)} · ${esc(x.step)}</span>`).join(" ");
+  const stepPills = (r) => (r.steps || []).map((x) => `<span class="pill ${x.ok ? "ok" : "warn"}" title="${esc(x.ok ? "" : ((x.detail || {}).error || (x.detail || {}).detail || ""))}">${x.ok ? "✓" : "✗"} ${esc(x.target)} · ${esc(x.step)}</span>`).join(" ");
   const pushLine = (r, label) => `<div style="margin-top:6px"><b>${label}</b> ${esc(depStamp(r.at))} <span class="muted">(${esc(depAgo(r.at))})</span> · ${esc(r.race_name || r.race_id || "?")}${r.playbook_id ? ` · playbook <code>${esc(r.playbook_id)}</code>` : " · <b>no playbook in this push</b>"} · ${r.ok ? `<span style="color:var(--accent2)">✓ all ${(r.steps || []).length} steps loaded</span>` : `<span style="color:var(--warn)">⚠ ${(r.steps || []).filter((x) => x.ok).length} of ${(r.steps || []).length} steps loaded</span>`}<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">${stepPills(r)}</div></div>`;
   let pushes;
   if (!last) pushes = `<div class="muted" style="margin-top:6px">No push on record. Anything on the boat was loaded by hand or long ago.</div>`;

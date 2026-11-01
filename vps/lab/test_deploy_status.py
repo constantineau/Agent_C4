@@ -53,17 +53,20 @@ D.pbstore.get = lambda pid: BUNDLE if pid == "r1__100" else None
 # the signature of the bundle actually sent
 labstate.set("deploy:r1", {"playbook_id": "r1__100", "signature": "cd" * 8, "locked_at": 50})
 D._post_json = fake_post
+# the Orin assets step (chart + boat profile) is pinned in test_deploy_orin_assets.py
+D.orinassets.build = lambda d, cid, bundle=None: ({"schema": "c4.orin-assets/v1"}, [])
 
 res = D.push("r1")
 lp = D.last_push()
-check("push still returns per-step results", res["ok"] and len(res["steps"]) == 4)
+check("push still returns per-step results", res["ok"] and len(res["steps"]) == 5)
 check("last push recorded with race, name, playbook, signature",
       lp["last"] and lp["last"]["race_id"] == "r1" and lp["last"]["race_name"] == "Race One"
       and lp["last"]["playbook_id"] == "r1__100" and lp["last"]["signature"] == "ab" * 8)
-check("per-step ok kept", [s["ok"] for s in lp["last"]["steps"]] == [True] * 4
-      and [s["step"] for s in lp["last"]["steps"]] == ["course", "fleet", "playbook", "playbook"])
+check("per-step ok kept", [s["ok"] for s in lp["last"]["steps"]] == [True] * 5
+      and [s["step"] for s in lp["last"]["steps"]] == ["course", "orin assets", "fleet", "playbook",
+                                                       "playbook"])
 check("stored detail is trimmed to scalars (no echoed objects)",
-      "echo" not in lp["last"]["steps"][2]["detail"] and lp["last"]["steps"][2]["detail"]["variants"] == 1)
+      "echo" not in lp["last"]["steps"][3]["detail"] and lp["last"]["steps"][3]["detail"]["variants"] == 1)
 check("a full success is also the last complete push", lp["last_ok"] == lp["last"])
 # a failure in the SAME second as the success must still not hide it
 same = D.record_push({"race_id": "r1", "playbook_id": "r1__100", "pushed_playbook": True, "ok": False,
@@ -128,8 +131,18 @@ check("engine course summarized", st["engine"]["course"] == {"available": True, 
                                                               "mark_names": ["Start", "Finish"]})
 check("copilot playbook from /health", st["copilot"]["playbook"] == {
     "loaded": True, "race_id": "r1", "variants": 2, "signed": True, "signature_ok": True})
-check("only GETs to the three read endpoints", sorted(g.calls) == sorted([
-    "http://pi:8200/playbook", "http://pi:8200/course", "http://pi:8091/copilot/health"]))
+check("only GETs to the four read endpoints", sorted(g.calls) == sorted([
+    "http://pi:8200/playbook", "http://pi:8200/course", "http://pi:8200/reroute/assets",
+    "http://pi:8091/copilot/health"]))
+check("an engine without /reroute/assets → nothing claimed", "orin_assets" not in st["engine"])
+g = fake_get({"http://pi:8200/course": COURSE,
+              "http://pi:8200/reroute/assets": (True, {"available": True, "race_id": "r1",
+                                                       "course_id": "c", "chart": True,
+                                                       "boat_id": "sr33", "boat_version": "abc",
+                                                       "received_at": 5, "helm_factor": 0.9})})
+check("the Orin's chart + boat profile come through", D.boat_status(get=g)["engine"]["orin_assets"] == {
+    "available": True, "race_id": "r1", "course_id": "c", "chart": True, "boat_id": "sr33",
+    "boat_version": "abc", "received_at": 5})
 
 # an engine from before GET /playbook: fall back to /playbook/track for the race
 g = fake_get({
