@@ -26,7 +26,7 @@ def check(name, cond):
 
 NOW = 1_800_000_000
 GOOD = {"schema": "c4.plume/v1", "key": "r1__pb", "race_id": "r1", "basis": "route",
-        "built_at": NOW - 600, "window": [NOW - 6 * 3600, NOW + 24 * 3600],
+        "race_start": NOW + 10 * 86400, "race_end": None, "built_at": NOW - 600, "window": [NOW - 6 * 3600, NOW + 24 * 3600],
         "models": [{"model": "hrrr", "runs": [{"cycle": NOW - 7200, "at": NOW - 600,
                                                "pts": [[NOW, 11.2, 240], [NOW + 3600, 12.0, 245]]}]}]}
 
@@ -62,6 +62,7 @@ for name, bad in (("wrong schema", dict(GOOD, schema="x")),
                   ("infinite point", dict(GOOD, models=[{"model": "hrrr", "runs": [
                       dict(GOOD["models"][0]["runs"][0], pts=[[NOW, 1e309, 10]])]}])),
                   ("NaN race start", dict(GOOD, race_start=float("nan"))),
+                  ("no race start (can't tell if its race is on)", dict(GOOD, race_start=None)),
                   ("cycle not a number", dict(GOOD, models=[{"model": "hrrr", "runs": [
                       dict(GOOD["models"][0]["runs"][0], cycle="12Z")]}]))):
     r = plume.load(bad, now=NOW)

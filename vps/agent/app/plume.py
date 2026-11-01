@@ -45,6 +45,9 @@ def validate(plume):
     for k in _NUM_FIELDS:
         if plume.get(k) is not None and not _num(plume[k]):
             return False, f"bad {k}"
+    if not _num(plume.get("race_start")):
+        # fail closed: without a known start the boat can't tell whether its race is on
+        return False, "no race start"
     models = plume.get("models")
     if not isinstance(models, list) or not models:
         return False, "no models"

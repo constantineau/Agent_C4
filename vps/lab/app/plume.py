@@ -293,7 +293,7 @@ def mark_finished(race_id, at=None, undo=False):
 
 def race_window(spec):
     """(start, end) of the race the spec follows, or None when no start is known. Start = our gun
-    (racestart), else the planned route's first ETA. End = the recorded finish for this race_id
+    (racestart), else the planned route's first ETA, else the start of the race's start_date. End = the recorded finish for this race_id
     (only if after this start), else None — open-ended: frozen until marked finished."""
     from . import racestart
     d = spec.get("definition") or {}
@@ -301,12 +301,22 @@ def race_window(spec):
     path = spec.get("path") if spec.get("basis") == "route" else None
     start = spec.get("window_start")
     if start is None:
-        start = rs["epoch"] if rs else (path[0]["t"] if path else None)
+        start = rs["epoch"] if rs else (path[0]["t"] if path else _start_date_epoch(d))
     if start is None:
         return None
     fin = finished_at(spec.get("race_id")) if spec.get("race_id") else None
     end = float(fin) if fin is not None and fin >= start else None
     return (float(start), end)
+
+
+def _start_date_epoch(d):
+    """The race's start DATE (no gun times known) as the earliest moment of that day in the venue's
+    timezone — fail closed: the window opens at the day's first minute, never later."""
+    from shared.race_def import _gun_epoch
+    sd = str((d or {}).get("start_date") or "").strip()[:10]
+    if len(sd) != 10:
+        return None
+    return _gun_epoch(sd + "T00:00:00", (d or {}).get("timezone") or "")
 
 
 def is_racing(window, now):
@@ -516,8 +526,10 @@ def push(plume, post=None, now=None):
     checked on the real clock at the moment of sending (`now` only for tests)."""
     from . import deploy, labstate
     now = _clock() if now is None else now
-    if plume.get("race_start") is not None and \
-            is_racing((plume["race_start"], plume.get("race_end")), now):
+    if plume.get("race_start") is None:
+        return {"at": int(now), "ok": False, "key": plume.get("key"), "built_at": plume.get("built_at"),
+                "error": "no race start known — not sent"}
+    if is_racing((plume["race_start"], plume.get("race_end")), now):
         return {"at": int(now), "ok": False, "key": plume.get("key"), "frozen": True,
                 "built_at": plume.get("built_at"), "error": "racing: frozen at the start"}
     post = post or deploy._post_json
@@ -573,6 +585,9 @@ def run_once(on_progress=None, do_push=None, now=None):
     if is_racing(win, t_now):
         return frozen_out()
     with _REC_LOCK:                          # the recorder thread vs a manual refresh
+        # a pass queued behind a slow one may get here after the gun — check the real clock again
+        if is_racing(win, _clock()):
+            return frozen_out()
         st = record(spec, now=t_now, on_progress=on_progress)
     done = _clock()                          # when the computation actually finished
     if is_racing(win, done):
@@ -584,7 +599,10 @@ def run_once(on_progress=None, do_push=None, now=None):
            "models": {m["model"]: len(m["runs"]) for m in (plume or {}).get("models", [])}}
     do_push = (os.environ.get("PLUME_PUSH", "0").strip().lower() in ("1", "true", "yes", "on")
                if do_push is None else do_push)
-    if do_push and needs_push(plume, last_push()):
+    if do_push and not win:
+        # no start known for this race → it could be on right now: record, but never send
+        out["push"] = {"ok": False, "skipped": True, "error": "no race start known — not sent"}
+    elif do_push and needs_push(plume, last_push()):
         out["push"] = push(plume)
     return out
 

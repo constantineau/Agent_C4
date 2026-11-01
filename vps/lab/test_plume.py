@@ -184,6 +184,9 @@ check("clearing the target falls back to the boat's push", P.resolve_target(NOW)
 
 # ---- push to the boat -----------------------------------------------------------------------
 print("push to the boat:")
+rec = P.push(pl, post=lambda *a, **k: (True, {"loaded": True}), now=NOW)
+check("a plume with no race start is never sent", rec["ok"] is False and "no race start" in rec["error"])
+pl = dict(pl, race_start=NOW + 100 * H, race_end=None)
 check("nothing to push without runs", not P.needs_push({"models": []}, None))
 check("never pushed → push", P.needs_push(pl, None))
 posted = []
@@ -337,6 +340,46 @@ sp = P.resolve_target(after)
 check("a different race pushed → the lock moves on and r3 is judged on its own window",
       sp["race_id"] == "r3" and (P.locked_race() or {}).get("race_id") != "r1")
 P._clock = _orig_clock
+
+# ---- point targets with no gun times; a pass queued behind another -------------------------
+print("no gun times, point target:")
+recorded, pushed = [], []
+P.record = lambda spec, **kw: recorded.append(spec["key"]) or {"key": spec["key"], "runs": {"gfs": [
+    {"cycle": int(kw["now"]) - 6 * H, "at": int(kw["now"]),
+     "pts": [[int(kw["now"]), 10.0, 200], [int(kw["now"]) + H, 11.0, 210]]}]}}
+P.push = lambda plume, post=None, now=None: pushed.append(plume) or {"ok": True}
+labstate.set("plume:locked", None)
+NOGUN["start_date"] = "2026-07-18"
+NOGUN["timezone"] = "America/Detroit"
+P.set_target("r3", lat=43.1, lon=-82.4)
+day0 = P._start_date_epoch(NOGUN)
+check("start date → its first minute, venue time", day0 == 1784347200)
+CLOCK.update(t=day0 + 5 * H, step=0)
+P._clock = lambda: CLOCK["t"]
+r = P.run_once(do_push=True, now=day0 + 5 * H)
+check("race day, no guns, point target: frozen — nothing recorded or pushed",
+      r.get("frozen") and not recorded and not pushed)
+CLOCK["t"] = day0 - H
+r = P.run_once(do_push=True, now=day0 - H)
+check("the day before: recorded and sent, with that start aboard",
+      recorded and pushed and pushed[-1]["race_start"] == int(day0))
+recorded.clear(); pushed.clear()
+NOGUN.pop("start_date")
+labstate.set("plume:locked", None)
+r = P.run_once(do_push=True, now=day0 + 5 * H)
+check("no start known at all: records, but never sends", recorded and not pushed
+      and r["push"].get("skipped"))
+
+print("a pass queued behind a slow one:")
+recorded.clear(); pushed.clear()
+labstate.set("plume:locked", None)
+NOGUN["start_date"] = "2026-07-18"
+seq = iter([day0 - 60, day0 + 5, day0 + 5, day0 + 5])
+P._clock = lambda: next(seq)
+r = P.run_once(do_push=True)                 # checked before the gun, got the lock after it
+check("the clock is re-checked inside the lock: nothing recorded after the gun",
+      r.get("frozen") and not recorded and not pushed)
+P.record, P.push, P._clock = _orig_record, _orig_push, _orig_clock
 
 print("\nALL OK" if ok else "\nFAILURES")
 raise SystemExit(0 if ok else 1)
