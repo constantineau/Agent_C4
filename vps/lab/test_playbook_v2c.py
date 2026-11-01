@@ -368,3 +368,4 @@ finally:
     SYN.API_KEY = _saved_key2
 
 print("RESULT-10:", "PASS" if ok else "FAIL")
+raise SystemExit(0 if ok else 1)

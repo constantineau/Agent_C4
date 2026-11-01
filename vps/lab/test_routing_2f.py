@@ -96,3 +96,4 @@ if d:
     check("real-race barriers: legal side open, illegal side blocked", geo_ok)
 
 print("RESULT:", "PASS" if ok else "FAIL")
+raise SystemExit(0 if ok else 1)

@@ -2,9 +2,16 @@
 
 Run in-container:  docker compose -f compose.dev.yml exec -w /srv lab python test_coastline_gshhg.py
 The mask A/B needs the GSHHG data on the lab_coastline volume (fetched lazily on first optimize, or
-`python -m app.geo.coastline 46.2 43.0 -85.0 -81.5`); it self-skips with a note if absent so the
-source-pluggability checks still run with no network.
+`python -m app.geo.coastline 46.2 43.0 -85.0 -81.5`). Without it (CI: no volume, no network) the A/B
+runs on the committed fixture vps/lab/testdata/coastline_cove_island/: the same layers clipped to
+this box with `ogr2ogr -clipsrc` (GSHHG 2.3.7 full-res, LGPL; Natural Earth 10m, public domain, box
+plus 0.5 deg). The GSHHG clips are named by coastline's own cache key, so the fixture tests the
+mask rasterisation and the A/B, not the ogr2ogr clip itself.
 """
+import os
+import shutil
+import tempfile
+
 from app.geo import coastline, obstacles
 
 ok = True
@@ -22,11 +29,30 @@ check("GSHHG hierarchy maps to land/lakes/islands roles",
 BBOX = (46.2, 43.0, -85.0, -81.5)   # (n, s, w, e)
 empty = {"zones": [], "courses": []}
 
+FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "testdata", "coastline_cove_island")
+
+
+def use_fixture():
+    """Point coastline at a temp copy of the fixture. Empty .shp stand-ins satisfy the "GSHHG is
+    installed" check; they are never read, because the clip for this box is already cached."""
+    tmp = os.path.join(tempfile.mkdtemp(), "coastline")
+    shutil.copytree(FIXTURE, tmp)
+    for shp in coastline._gshhg_needed(tmp):
+        os.makedirs(os.path.dirname(shp), exist_ok=True)
+        open(shp, "w").close()
+    coastline.CACHE = tmp
+    coastline._LAYERS.clear()
+
+
+if coastline._gshhg_layers_in_bbox(BBOX, coastline.CACHE) is None:
+    print("  (GSHHG data not on the volume: using the committed clipped fixture)")
+    use_fixture()
+
 coastline.GLOBAL_SOURCE = "gshhg"; obstacles._FIELD_CACHE.clear()
 fg = obstacles.build_for_course(empty, "cove_island", BBOX, source="natural_earth", use_cache=False)
 
 if not fg.active or coastline._gshhg_layers_in_bbox(BBOX, coastline.CACHE) is None:
-    print("  [SKIP] GSHHG data not present on the volume — mask A/B skipped (run an optimize first)")
+    check("GSHHG layers load for the mask A/B (fixture or volume)", False)
 else:
     check("GSHHG field provenance is gshhg", fg.source == "gshhg")
     coastline.GLOBAL_SOURCE = "natural_earth"; obstacles._FIELD_CACHE.clear()
