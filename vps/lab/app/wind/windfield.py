@@ -54,16 +54,19 @@ def _fhrs_for_cycle(source, cycle, t_start, t_end):
     return fhrs[:MAX_FRAMES_PER_MEMBER]
 
 
-def _load_model(source, bbox, t_start, t_end, members, on_progress, parser=None):
+def _load_model(source, bbox, t_start, t_end, members, on_progress, parser=None, fallback_tries=None):
     """Ingest one model's frame-series with CYCLE-FALLBACK: if the freshest cycle is too sparse (not
     fully posted yet) step back a cycle and retry, up to CYCLE_FALLBACK_TRIES. Returns (series, meta).
 
     `parser` (an IsolatedGribParser) runs the cfgrib parse out-of-process so a native segfault on a
-    frame is survived (that frame is skipped, like any other unreadable one) instead of crashing."""
+    frame is survived (that frame is skipped, like any other unreadable one) instead of crashing.
+    `fallback_tries` (None → CYCLE_FALLBACK_TRIES): how many older cycles to try when sparse. The
+    Orin's offline re-route passes 0 — it already picked the best cycle it has on disk."""
+    tries = CYCLE_FALLBACK_TRIES if fallback_tries is None else int(fallback_tries)
     need_h = max(0, math.ceil((t_end - dt.datetime.now(dt.timezone.utc).timestamp()) / 3600.0))
     cycle = source.pick_cycle(min_horizon_h=need_h)
     series, loaded, expected, fallbacks = {}, 0, 0, 0
-    for attempt in range(CYCLE_FALLBACK_TRIES + 1):
+    for attempt in range(tries + 1):
         fhrs = _fhrs_for_cycle(source, cycle, t_start, t_end)
         expected = len(fhrs) * max(1, len(members))
         series, loaded = {}, 0
@@ -83,7 +86,7 @@ def _load_model(source, bbox, t_start, t_end, members, on_progress, parser=None)
                 frames.sort(key=lambda fr: fr.valid_time)
                 series[(source.name, member)] = frames
                 loaded += len(frames)
-        if expected == 0 or loaded >= MIN_FRAME_FRAC * expected or attempt == CYCLE_FALLBACK_TRIES:
+        if expected == 0 or loaded >= MIN_FRAME_FRAC * expected or attempt == tries:
             break
         if on_progress:
             on_progress(f"{source.name}: sparse ({loaded}/{expected}) — retrying previous cycle")
@@ -100,7 +103,7 @@ def _load_model(source, bbox, t_start, t_end, members, on_progress, parser=None)
 
 def build_windfield(bbox, t_start: float, t_end: float, models=DEFAULT_MODELS,
                     ensemble_members: int = 0, on_progress=None,
-                    model_weights=None, model_bias=None):
+                    model_weights=None, model_bias=None, fallback_tries=None):
     """Ingest the selected models over `bbox` for valid times spanning [t_start, t_end].
 
     bbox = (north, south, west, east). Returns a WindField. `on_progress(msg)` is called with
@@ -113,8 +116,9 @@ def build_windfield(bbox, t_start: float, t_end: float, models=DEFAULT_MODELS,
     try:
         for name in models:
             # a ModelSource INSTANCE passes through (the retro study injects archive-backed sources
-            # pinned to a historical as-of moment); a string resolves from the live registry.
-            source = name if isinstance(name, ModelSource) else MODELS.get(name)
+            # pinned to a historical as-of moment; the Orin's re-route wraps the live ones around
+            # its GRIB cache); a string resolves from the live registry.
+            source = MODELS.get(name) if isinstance(name, str) else name
             if source is None:
                 continue
             if hasattr(source, "load_series"):        # API-grid source (ICON via Open-Meteo) —
@@ -123,7 +127,8 @@ def build_windfield(bbox, t_start: float, t_end: float, models=DEFAULT_MODELS,
                 meta.append(m_meta)
                 continue
             members = _members_for(source, ensemble_members)
-            m_series, m_meta = _load_model(source, bbox, t_start, t_end, members, on_progress, parser=parser)
+            m_series, m_meta = _load_model(source, bbox, t_start, t_end, members, on_progress,
+                                           parser=parser, fallback_tries=fallback_tries)
             series.update(m_series)
             meta.append(m_meta)
     finally:

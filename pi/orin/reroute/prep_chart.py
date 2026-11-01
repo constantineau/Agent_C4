@@ -1,0 +1,48 @@
+"""Build a race's land mask in the Lab and print it as JSON, for the Orin's re-route.
+
+The Orin can't build the shoreline mask itself (that needs GDAL and the 200 MB GSHHG shoreline),
+so the Lab builds it — the same mask the Lab's optimizer routes on — and it's copied aboard.
+Run it inside the Lab container, where the Lab's code, races and shoreline data live:
+
+    docker exec -i <lab container> python - <race_id> [course_id] \\
+        < pi/orin/reroute/prep_chart.py > chart.json
+    scp chart.json agent-c4@<orin>:c4-reroute/chart/<race_id>__<course_id>.json
+
+The file name it should get is printed on stderr. Without it, the Orin's re-route avoids the
+race's islands and zones only, and says so on the result.
+"""
+import json
+import sys
+
+from app import optimizer, store, labstate, boats
+from app.geo import obstacles as geo
+
+
+def main(argv):
+    if len(argv) < 2:
+        print("usage: prep_chart.py <race_id> [course_id]", file=sys.stderr)
+        return 2
+    d = store.get_race(argv[1])
+    if not d:
+        print(f"unknown race {argv[1]}", file=sys.stderr)
+        return 1
+    courses = d.get("courses") or []
+    cid = argv[2] if len(argv) > 2 else (courses[0].get("id") if courses else None)
+    bbox = optimizer.course_bbox(d, cid)
+    if not bbox:
+        print("the course has no mark positions", file=sys.stderr)
+        return 1
+    # the Lab's own choices: its chart source and the active boat's draft
+    src = (labstate.get("coastline_source") or geo.COASTLINE_SOURCE or "natural_earth").lower()
+    field = geo.build_for_course(d, cid, bbox, source=src, safety_depth=boats.active_safety_depth_m())
+    out = geo.field_to_dict(field)
+    out.update(race_id=d.get("race_id"), course_id=cid)
+    json.dump(out, sys.stdout, separators=(",", ":"))
+    safe = lambda s: "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in str(s))[:60]
+    print(f"\nsave as: {safe(d.get('race_id'))}__{safe(cid)}.json  "
+          f"(source {field.source}, {sum(field.layers.values())} cells blocked)", file=sys.stderr)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

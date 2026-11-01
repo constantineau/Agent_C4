@@ -23,11 +23,12 @@ os.environ.setdefault("DATA_SOURCE", "onboard")  # this service is always the on
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app import (navigator, tactics, routing, weather, sails, fatigue, onboard_conditions,
                  datasource, ais, fleet, deviation, drift, selector, reoptimize, strategy,
                  matcher, buoys, racelog, watches, trend, plangap, gpsout, checklist,
-                 power, sensor_health, plume)
+                 power, sensor_health, plume, orinroute)
 
 app = FastAPI(title="Agent_C4 Onboard Engine", version="0.1.0")
 # The iPad reaches the Pi directly over boat-local Wi-Fi in race mode; allow cross-origin so a
@@ -184,6 +185,10 @@ def course_load(body: dict):
     route = (body or {}).get("route") or definition.get("race_id") or "race"
     datasource.active().save_course(route, marks)
     navigator.set_active(route)
+    try:                     # the full course (islands, rounding sides) for the Orin's re-route
+        orinroute.save_definition(definition, cid, route)
+    except OSError:
+        pass
     return {"loaded": True, "route": route, "course_id": cid, "marks": len(marks), "skipped": skipped}
 
 
@@ -508,3 +513,21 @@ def reoptimize_ep(route: str | None = None):
     with its divergence from the frozen plan. The fallback when the selector says off-script. CPU-heavy
     (isochrone chain) → cached + on-demand. Legal in-race (own computer + own polars + common data)."""
     return reoptimize.get_reoptimize(route=route)
+
+
+@app.post("/reroute/run")
+def reroute_run(body: dict = None):
+    """Ask the Orin for ONE full re-route (the Lab's multi-model optimizer, pi/orin/reroute) from
+    the boat to the remaining marks. Body: {device?: "iPad 1"} — who asked, kept with the result.
+    Runs only when called (the crew's Re-route button, #125); one at a time. 202 started, 409 busy
+    (with progress) or nothing to route, 503 when the Orin can't be reached. Legal in-race: own
+    computers + public forecasts; the route is labelled "Off the playbook"."""
+    code, out = orinroute.run((body or {}).get("device"))
+    return JSONResponse(out, status_code=code)
+
+
+@app.get("/reroute")
+def reroute_get():
+    """The Orin re-route's status + progress, and the last route (stored here, so it survives a
+    restart and the Orin being off)."""
+    return orinroute.get()

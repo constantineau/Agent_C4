@@ -474,3 +474,38 @@ def cache_key(definition, course_id, bbox, res_deg=RES_DEG, *, source=None, safe
     payload = repr((src, dv, depth, course_id, tuple(round(b, 4) for b in bbox),
                     round(res_deg, 5), z, isl))
     return hashlib.sha1(payload.encode()).hexdigest()[:16]
+
+
+# --- carry a built field to another computer (the boat's Orin, issue #124) ------------------------
+FIELD_SCHEMA = "c4.obstacles/v1"
+
+
+def field_to_dict(field) -> dict:
+    """A built ObstacleField as plain JSON: the mask zlib+base64 (a course box is ~0.5 M cells and
+    packs to tens of KB), plus its provenance. The web-overlay geometry is left out. The Orin can't
+    build the GSHHG/ENC land mask itself (no GDAL aboard), so the Lab builds it and the boat loads
+    it with `field_from_dict` — the same mask the Lab routed on."""
+    import base64
+    import zlib
+    return {"schema": FIELD_SCHEMA, "bbox": list(field.bbox), "res_deg": field.res,
+            "nx": field.nx, "ny": field.ny, "layers": dict(field.layers), "source": field.source,
+            "safety_depth": field.safety_depth, "active": field.active,
+            "mask_zb64": base64.b64encode(zlib.compress(bytes(field.mask), 9)).decode()}
+
+
+def field_from_dict(d: dict):
+    """Rebuild an ObstacleField from `field_to_dict` output. Raises ValueError on a bad payload."""
+    import base64
+    import zlib
+    if not isinstance(d, dict) or d.get("schema") != FIELD_SCHEMA:
+        raise ValueError("not a c4.obstacles/v1 field")
+    field = ObstacleField(tuple(float(x) for x in d["bbox"]), res_deg=float(d["res_deg"]))
+    mask = zlib.decompress(base64.b64decode(d["mask_zb64"]))
+    if (field.nx, field.ny) != (int(d["nx"]), int(d["ny"])) or len(mask) != field.nx * field.ny:
+        raise ValueError("mask size does not match its box")
+    field.mask = bytearray(mask)
+    field.layers.update({k: int(v) for k, v in (d.get("layers") or {}).items()})
+    field.source = d.get("source") or field.source
+    field.safety_depth = d.get("safety_depth")
+    field.active = bool(d.get("active"))
+    return field
