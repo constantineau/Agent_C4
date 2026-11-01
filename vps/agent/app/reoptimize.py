@@ -1,92 +1,55 @@
-"""Onboard RE-OPTIMIZER — the graceful-degradation fallback route (Lab-3 tier 2/3).
+"""Onboard RE-OPTIMIZER — the Pi's own small re-route, the fallback when the Orin is down.
 
-When the branch SELECTOR flags OFF-SCRIPT (a persistent shift favours a side the frozen playbook has no
-pre-authored variant for), the crew still needs a route. This computes a FRESH optimal route ONBOARD —
-from the boat's live position, through the REMAINING course marks to the finish, on the boat's OWN polars
-through the common Open-Meteo forecast. The Pi has no cfgrib, so it reuses the onboard isochrone
-(`routing.route_leg`) chained per remaining mark — NOT the GRIB lab optimizer.
+A FRESH route ONBOARD from the boat's live position through the REMAINING course marks to the
+finish, on the boat's OWN polars through the common Open-Meteo forecast. The Pi has no cfgrib, so it
+reuses the onboard isochrone (`routing.route_leg`) chained per remaining mark, NOT the GRIB optimizer
+(that runs on the Orin: orinroute.py).
 
-It is LEGAL in-race (own computer + own polars + own position + common public data available to all), but
-it is NOT the frozen homework — so it is explicitly flagged `off_playbook` and reports how far it DIVERGES
-from the active variant's frozen track (max/mean cross-track), per perflab item-2's degradation ladder:
-pre-authored branch (the selector) → onboard re-optimize (this) → the LLM/crew are told "this is an onboard
-re-route, off the playbook". Deterministic, Tier-1. The isochrone chain is CPU-heavy → cached, and served
-on demand (`GET /reoptimize`), not on every poll.
+It is LEGAL in-race (own computer + own polars + own position + common public data available to
+all), but it is NOT the frozen homework, so it is flagged `off_playbook` and reports how far it
+DIVERGES from the active variant's frozen track.
+
+BUTTON ONLY (#125, Cole 2026-11-01): a route is computed only when a crew member presses Re-route
+now (`POST /reoptimize/run`, the iPad's fallback when the Orin can't be reached). Nothing else starts
+one: not /strategy going off-book, not the console's selector poll, not the GPS output. `GET
+/reoptimize` only returns the last route made, kept on disk so it survives a restart. One run at a
+time, in a background thread (~15 s on a Pi 4); a second press while it runs is refused.
 """
+import json
 import os
+import tempfile
 import threading
 import time
+import uuid
 
 from . import deviation
 from . import navigator as NAV
+from . import reroutelog
 from . import routing
 from . import sails
 
-# --- when is a cached route still good? ------------------------------------
-# This isochrone is the most expensive thing the engine does — ~14 s for a 259 nm remaining
-# course, and `dashboard.js` polls /strategy (which chains it) every 15 s. It was already meant
-# to be cached, but the key carried raw instrument readings: position to 3 dp (~111 m), TWS to
-# 1 kn, TWD to 1 deg. Measured against the Bayview Mackinac 2026 archive at the real 15 s poll:
-# 466 distinct keys in 480 calls, only 14 of 479 consecutive polls repeating — a ~97% MISS rate,
-# i.e. a 14 s route computation every poll, for the whole race.
-#
-# Bucketing the key is not the fix either: it only moves the problem to the bucket boundaries,
-# where a TWD hovering near an edge chatters between two buckets forever. Measured, coarse
-# buckets still recomputed 287 times in 2 h.
-#
-# So the test is a THRESHOLD ON THE DELTA from the conditions the cached route was actually
-# computed at. There are no boundaries to chatter across: the route is reused until the world
-# has moved enough to change it, however the readings wander in between. The isochrone is still
-# computed from exact live values — this only decides WHEN to recompute.
-CACHE_TTL = float(os.environ.get("REOPT_CACHE_TTL_S", "300"))     # recompute at least this often
-# Stale-while-revalidate refreshes in a background thread, which reads whatever
-# `datasource.active()` currently points at. On the boat that is one stable source. Under replay
-# the harness reassigns it per frame, so a refresh started in one frame can finish reading
-# another's — a route stitched from mixed timestamps, then cached for a later frame. Replay sets
-# this false so every frame depends only on its own timestamp.
-SWR = os.environ.get("REOPT_SWR", "true").strip().lower() != "false"
-POS_TOL_NM = float(os.environ.get("REOPT_POS_TOL_NM", "0.5"))     # boat movement that matters
-TWD_TOL_DEG = float(os.environ.get("REOPT_TWD_TOL_DEG", "15"))    # a real shift, not instrument noise
-TWS_TOL_KN = float(os.environ.get("REOPT_TWS_TOL_KN", "4"))       # a real build/drop
+EXPECTED_S = 30           # what the progress bar assumes until a run has been timed
+BUSY = "A re-route is already running."
+FAILED = "Re-route failed. Try again."
+NO_ROUTE_YET = "No Pi route yet."
 
-_cache = {"ctx": None, "t": 0, "val": None}
-_refresh_lock = threading.Lock()
-_refreshing = False
+_LOCK = threading.Lock()
+_job = {"state": "idle", "job_id": None, "asked_by": None, "started_at": None,
+        "finished_at": None, "detail": None, "last_run_s": None}
+_thread = None            # the running job's thread (tests join it)
 
 
-def _structurally_changed(ctx, prev):
-    """The cached route is about a DIFFERENT PROBLEM, not merely an older one.
-
-    Kept separate from drift because a stale answer is only acceptable when it is still an
-    answer to the same question. If a mark has been rounded, or new obstacle homework has come
-    aboard, the cached track may run through an island or to a mark already behind us — so these
-    force a synchronous recompute and are never served stale."""
-    return (prev is None
-            or ctx["marks"] != prev["marks"]
-            or ctx["obstacles"] != prev["obstacles"])
+def _dir():
+    return os.path.dirname(os.environ.get("ENGINE_DB", "/var/lib/sr33/engine/engine.db"))
 
 
-def _drifted(ctx, prev, age_s):
-    """True when the same problem has drifted far enough to be worth re-solving. Gradual, so it
-    is safe to serve the previous route while a fresh one is computed behind the request."""
-    if prev is None:
-        return True
-    if age_s >= CACHE_TTL:
-        return True
-    if NAV._hav_nm(prev["lat"], prev["lon"], ctx["lat"], ctx["lon"]) > POS_TOL_NM:
-        return True
-    # Live wind only invalidates a route that was actually COMPUTED from live wind. When the
-    # forecast is reachable, make_wind_fn routes on the forecast at every point and `live` is
-    # merely the no-network fallback plus an initial tack reference — so the answer barely
-    # depends on it, and throwing the route away because the masthead moved was discarding work
-    # over an input it hardly used. The forecast moves slowly (Open-Meteo is cached ~30 min);
-    # CACHE_TTL is what picks that up.
-    if prev.get("from_live_wind"):
-        if abs(NAV._wrap180((ctx["twd"] or 0) - (prev["twd"] or 0))) > TWD_TOL_DEG:
-            return True
-        if abs((ctx["tws"] or 0) - (prev["tws"] or 0)) > TWS_TOL_KN:
-            return True
-    return False
+def _result_path():
+    return os.path.join(_dir(), "reroute-pi.json")
+
+
+def _device(raw):
+    s = "".join(ch for ch in str(raw or "") if ch.isprintable()).strip()[:40]
+    return s or None
 
 
 def _next_course_index(nav, marks):
@@ -174,100 +137,164 @@ def _vs_playbook(bundle, fresh_path):
         return {"available": False, "note": "Comparison failed."}
 
 
+def _inputs(route=None):
+    """What a run needs, read once: (inputs dict, None) or (None, crew-facing reason)."""
+    nav = NAV.get_navigator(route)
+    if not nav.get("available"):
+        return None, nav.get("note", "No position yet.")
+    marks = NAV._marks(nav["route"])
+    if not marks:
+        return None, "No course loaded."
+    s = NAV._latest()
+    slat, slon = s.get("lat"), s.get("lon")
+    if slat is None or slon is None:
+        return None, "No position yet."
+    bundle = deviation._load_playbook()
+    zdisks, polys = _parse_zones(bundle)
+    return {"nav": nav, "remaining": _remaining_marks(nav, marks), "slat": slat, "slon": slon,
+            "live": (s.get("tws"), s.get("twd")), "bundle": bundle,
+            "avoid": _avoid_disks(bundle) + zdisks,       # islands + circular zones = disks
+            "polys": polys}, None
+
+
+def compute(route=None):
+    """Compute one fresh route now, synchronously, and return it. Only the button's job (and
+    tests) call this; it stores nothing."""
+    inp, why = _inputs(route)
+    if inp is None:
+        return {"available": False, "note": why}
+    return _compute(inp["nav"], inp["remaining"], inp["slat"], inp["slon"], inp["live"],
+                    inp["bundle"], inp["avoid"], inp["polys"])
+
+
+# ---- the stored route -------------------------------------------------------------------------
+def _read_stored():
+    try:
+        with open(_result_path()) as f:
+            rec = json.load(f)
+        return rec if isinstance(rec, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def _store(result):
+    os.makedirs(_dir(), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=_dir(), suffix=".part")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(json.dumps(result, separators=(",", ":")))
+        os.replace(tmp, _result_path())
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
 def get_reoptimize(route=None):
-    """A fresh onboard route through the remaining marks (own polars + Open-Meteo), flagged
-    off-playbook, with its divergence from the frozen plan. `available:False` with no fix / no course."""
-    nav = NAV.get_navigator(route)
-    if not nav.get("available"):
-        return {"available": False, "note": nav.get("note", "No position yet.")}
-    marks = NAV._marks(nav["route"])
-    if not marks:
-        return {"available": False, "note": "No course loaded."}
-    remaining = _remaining_marks(nav, marks)
-    s = NAV._latest()
-    slat, slon = s.get("lat"), s.get("lon")
-    if slat is None:
-        return {"available": False, "note": "No position yet."}
-
-    live = (s.get("tws"), s.get("twd"))
-    bundle = deviation._load_playbook()
-    zdisks, polys = _parse_zones(bundle)
-    avoid = _avoid_disks(bundle) + zdisks             # islands + circular zones = disks
-
-    ctx = {"lat": slat, "lon": slon, "tws": live[0], "twd": live[1],
-           "marks": tuple(m["name"] for m in remaining),
-           "obstacles": (len(avoid), len(polys))}
-    prev = _cache["ctx"]
-    age = time.time() - _cache["t"]
-    if _structurally_changed(ctx, prev):
-        return _compute(nav, remaining, slat, slon, live, bundle, avoid, polys, ctx)
-    if not _drifted(ctx, prev, age):
-        return _cache["val"]
-
-    # STALE-WHILE-REVALIDATE, for drift only. A recompute costs ~14 s, and /strategy is a
-    # synchronous endpoint the console aborts at 5 s — so blocking does not merely cost CPU, it
-    # blanks the readouts that depend on it (the race-day flapping). The problem is unchanged
-    # and only the conditions have moved, so serve the previous route immediately and refresh
-    # behind the request.
-    if SWR and _cache["val"] is not None:
-        _kick_refresh(route)
-        stale = dict(_cache["val"])
-        stale["stale_s"] = round(age, 1)
-        return stale
-
-    return _compute(nav, remaining, slat, slon, live, bundle, avoid, polys, ctx)
+    """The last route the Pi made (full, with its track), with its age. NEVER computes one: that
+    only happens on the crew's button (`run`). `available: False` until a run has finished."""
+    r = _read_stored()
+    running = _job["state"] == "running"
+    if not r or not r.get("available"):
+        return {"available": False, "note": NO_ROUTE_YET, "running": running}
+    r = dict(r)
+    fin = r.get("computed_at")
+    r["age_s"] = max(0, int(time.time() - fin)) if fin else None
+    r["running"] = running
+    return r
 
 
-def _kick_refresh(route):
-    """Recompute in the background, at most one at a time. Daemon so it can never hold a
-    shutdown open, and failures are swallowed — a stale route is a fine outcome, an exception
-    escaping into a poll thread is not."""
-    global _refreshing
-    with _refresh_lock:
-        if _refreshing:
-            return
-        _refreshing = True
+def compact(r):
+    """A route without its heavy arrays (track, legs' detail), for status polls."""
+    if not r:
+        return None
+    return {k: v for k, v in r.items() if k not in ("path", "leg_end_idx")}
 
-    def run():
-        global _refreshing
+
+def status():
+    """The Pi re-route's state for the iPad: idle|running|done|error, progress while running, the
+    reason a run failed, and the last route (compact)."""
+    with _LOCK:
+        j = dict(_job)
+    out = {"state": j["state"], "job_id": j["job_id"], "asked_by": j["asked_by"],
+           "detail": j["detail"] if j["state"] == "error" else None}
+    if j["state"] == "running" and j["started_at"]:
+        el = max(0.0, time.time() - j["started_at"])
+        exp = float(j["last_run_s"] or EXPECTED_S)
+        out["progress"] = {"elapsed_s": round(el), "expected_s": round(exp),
+                           "pct": min(95, int(100 * el / max(1.0, exp)))}
+    last = get_reoptimize()
+    out["result"] = compact(last) if last.get("available") else None
+    return out
+
+
+# ---- the button -------------------------------------------------------------------------------
+def run(route=None, device=None):
+    """The crew pressed Re-route now and chose the Pi (the Orin can't be reached) → (http status,
+    body). 202 started, 409 busy or nothing to route. The route is computed in a background thread;
+    `status()` reports it."""
+    global _thread
+    dev = _device(device)
+    with _LOCK:
+        if _job["state"] == "running":
+            el = round(time.time() - (_job["started_at"] or time.time()))
+            reroutelog.record("pressed", "pi", device=dev, outcome="busy")
+            return 409, {"ok": False, "busy": True, "engine": "pi", "detail": BUSY,
+                         "progress": {"elapsed_s": el}}
+        inp, why = _inputs(route)
+        if inp is None:
+            reroutelog.record("pressed", "pi", device=dev, outcome="refused", detail=why)
+            return 409, {"ok": False, "engine": "pi", "detail": why}
+        job_id = uuid.uuid4().hex[:12]
+        _job.update(state="running", job_id=job_id, asked_by=dev, started_at=time.time(),
+                    finished_at=None, detail=None)
+    reroutelog.record("pressed", "pi", device=dev, outcome="started", job_id=job_id)
+    _thread = threading.Thread(target=_work, args=(job_id, dev, inp), name="reoptimize-run",
+                               daemon=True)
+    _thread.start()
+    return 202, {"ok": True, "engine": "pi", "job_id": job_id, "state": "running"}
+
+
+def _work(job_id, dev, inp):
+    t0 = time.time()
+    asked_at = int(t0)
+    try:
+        out = _compute(inp["nav"], inp["remaining"], inp["slat"], inp["slon"], inp["live"],
+                       inp["bundle"], inp["avoid"], inp["polys"])
+    except Exception as exc:  # noqa: BLE001 — reported to the crew; the details go to the log
+        print(f"[reoptimize] run failed: {type(exc).__name__}: {exc}", flush=True)
+        out = {"available": False, "note": FAILED}
+    run_s = round(time.time() - t0, 1)
+    now = int(time.time())
+    if out.get("available"):
+        out = dict(out, job_id=job_id, asked_by=dev, asked_at=asked_at, computed_at=now,
+                   run_s=run_s, source="pi", label="Off the playbook",
+                   computed_from={"lat": round(inp["slat"], 5), "lon": round(inp["slon"], 5)})
         try:
-            _recompute_now(route)
-        except Exception as exc:
-            print(f"[reoptimize] background refresh failed ({exc}); keeping the cached route",
-                  flush=True)
-        finally:
-            with _refresh_lock:
-                _refreshing = False
-
-    threading.Thread(target=run, name="reoptimize-refresh", daemon=True).start()
-
-
-def _recompute_now(route=None):
-    """Force a fresh isochrone and cache it (the background refresh path)."""
-    nav = NAV.get_navigator(route)
-    if not nav.get("available"):
-        return None
-    marks = NAV._marks(nav["route"])
-    if not marks:
-        return None
-    remaining = _remaining_marks(nav, marks)
-    s = NAV._latest()
-    slat, slon = s.get("lat"), s.get("lon")
-    if slat is None:
-        return None
-    live = (s.get("tws"), s.get("twd"))
-    bundle = deviation._load_playbook()
-    zdisks, polys = _parse_zones(bundle)
-    avoid = _avoid_disks(bundle) + zdisks
-    ctx = {"lat": slat, "lon": slon, "tws": live[0], "twd": live[1],
-           "marks": tuple(m["name"] for m in remaining),
-           "obstacles": (len(avoid), len(polys))}
-    return _compute(nav, remaining, slat, slon, live, bundle, avoid, polys, ctx)
+            _store(out)
+        except OSError as exc:
+            print(f"[reoptimize] could not store the route: {exc}", flush=True)
+            out = {"available": False, "note": "Couldn't save the route. Try again."}
+    if out.get("available"):
+        reroutelog.record("done", "pi", once_key=job_id, job_id=job_id, asked_by=dev,
+                          asked_at=asked_at, finished_at=now, run_s=run_s,
+                          weather={"models": [{"model": "open-meteo"}],
+                                   "source": out.get("wind_source")},
+                          eta_min=out.get("eta_min"), sailed_nm=out.get("sailed_nm"),
+                          tacks=out.get("tacks"), marks=out.get("marks"))
+        state, detail = "done", None
+    else:
+        detail = str(out.get("note") or FAILED)[:120]
+        reroutelog.record("failed", "pi", once_key=job_id, job_id=job_id, asked_by=dev,
+                          detail=detail, run_s=run_s)
+        state = "error"
+    with _LOCK:
+        if _job["job_id"] == job_id:
+            _job.update(state=state, finished_at=now, detail=detail,
+                        last_run_s=run_s if state == "done" else _job["last_run_s"])
 
 
-def _compute(nav, remaining, slat, slon, live, bundle, avoid, polys, ctx):
-    """The heavy isochrone chain. Split out so the background refresh and the first-call path
-    share exactly one implementation."""
+def _compute(nav, remaining, slat, slon, live, bundle, avoid, polys):
+    """The heavy isochrone chain (~15 s for a long course on a Pi 4)."""
     wind, use_fcst = routing.make_wind_fn(slat, slon, live)
     t0 = t = time.time()
     cur = (slat, slon)
@@ -300,7 +327,6 @@ def _compute(nav, remaining, slat, slon, live, bundle, avoid, polys, ctx):
                    # obstacle homework blocks it. No route offered rather than a wrong one.
                    "note": (f"No new route. Couldn't reach {m['name']} "
                             f"({leg.get('short_nm')} nm short).")}
-            _cache.update(ctx=dict(ctx, from_live_wind=not use_fcst), t=time.time(), val=out)
             return out
         full_path += leg["path"][1:]          # skip the duplicated leg-start point
         leg_end_idx.append(len(full_path) - 1)
@@ -344,8 +370,4 @@ def _compute(nav, remaining, slat, slon, live, bundle, avoid, polys, ctx):
                     if (avoid or polys) else
                     ". No obstacles loaded, check the chart.")),
     }
-    # record WHICH wind this route came from — _drifted needs it to decide whether live-wind
-    # movement can invalidate the answer at all
-    ctx = dict(ctx, from_live_wind=not use_fcst)
-    _cache.update(ctx=ctx, t=time.time(), val=out)
     return out

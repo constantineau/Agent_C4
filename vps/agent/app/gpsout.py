@@ -23,7 +23,7 @@ import os
 import urllib.error
 import urllib.request
 
-from . import deviation, reoptimize, routing
+from . import deviation, orinroute, reoptimize, routing
 from . import navigator as NAV
 
 N2KOUT_URL = os.environ.get("N2KOUT_URL", "http://127.0.0.1:8210").rstrip("/")
@@ -275,9 +275,31 @@ def _route_frame(path, ends, names, nav_marks, starts_at_mark):
     return verts
 
 
+NO_NEW_ROUTE = "No new route yet. Press Re-route now."
+
+
+def _new_route(source, route):
+    """The stored re-route to send → (route dict, None) or (None, crew-facing note). Never computes
+    one: routes are made only on the crew's Re-route now button (#125). 'orin' is the Orin's last
+    route, 'reoptimize' the Pi's, 'reroute' whichever of the two is newest."""
+    if source == "reroute":
+        _src, ro = orinroute.latest()
+    elif source == "orin":
+        ro = orinroute.stored()
+    else:
+        ro = reoptimize.get_reoptimize(route)
+    if not ro or not ro.get("available"):
+        note = (ro or {}).get("note") if source == "reoptimize" else None
+        return None, note or NO_NEW_ROUTE
+    ro = dict(ro)
+    if "path" not in ro and ro.get("source") == "orin":
+        ro["path"] = ro.get("points") or []          # the Orin's track is `points`
+    return ro, None
+
+
 def show(source: str = "playbook", variant=None, route=None):
-    """Assemble + broadcast. source='playbook' (frozen variant, default recommended) or
-    'reoptimize' (the onboard re-router's cached fresh route, computing it if needed).
+    """Assemble + broadcast. source='playbook' (frozen variant, default recommended), or a stored
+    re-route: 'reroute' (the newest), 'orin' or 'reoptimize' (the Pi's). Only on the crew's tap.
 
     Inputs come from different moments — the route (frozen at the gun, or computed seconds to
     minutes ago), the navigator (now) and the bundle. They are reconciled explicitly: one bundle
@@ -287,10 +309,11 @@ def show(source: str = "playbook", variant=None, route=None):
     trimmed to the leg the boat is on; one that doesn't contain the navigator's next mark at all
     is stale and refused by name."""
     bundle = deviation._load_playbook()
-    if source == "reoptimize":
-        ro = reoptimize.get_reoptimize(route)
-        if not ro.get("available"):
-            return {"shown": False, "note": ro.get("note") or "No new route available."}
+    rerouted = source in ("reroute", "orin", "reoptimize")
+    if rerouted:
+        ro, why = _new_route(source, route)
+        if ro is None:
+            return {"shown": False, "note": why or NO_NEW_ROUTE}
         wire_name, label, path = "C4 REROUTE", "re-route (off-book)", ro.get("path") or []
         ends, names = ro.get("leg_end_idx"), list(ro.get("marks") or [])
         ro_idx = ro.get("mark_idx")
@@ -316,7 +339,7 @@ def show(source: str = "playbook", variant=None, route=None):
     # mark for mark is positions 1..N; a re-route records its own `mark_idx`. Either is trusted
     # only when it names the same marks as the navigator's course at those positions.
     route_idx = None
-    if source == "reoptimize":
+    if rerouted:
         if (isinstance(ro_idx, list) and len(ro_idx) == len(names) and all(
                 isinstance(i, int) and 0 <= i < len(nav_names) and nav_names[i] == n
                 for i, n in zip(ro_idx, names))):
@@ -327,17 +350,17 @@ def show(source: str = "playbook", variant=None, route=None):
     # where is the boat in the ROUTE's frame?
     nxt = None
     if next_name is None:
-        if source == "reoptimize" and names:
+        if rerouted and names:
             nxt = 0                                    # no navigator: the route's own next mark
     elif route_idx is not None and next_idx is not None:
         if next_idx in route_idx:
             nxt = route_idx.index(next_idx)
         elif source == "playbook" and next_idx == 0:
             nxt = -1                                   # pre-start: steering to the start
-        elif source == "reoptimize":
+        elif rerouted:
             return {"shown": False, "note": (
                 f"New route is stale: starts at {names[0]} (mark {route_idx[0] + 1}), next mark is "
-                f"{next_name} (mark {next_idx + 1}). Recompute, then send.")}
+                f"{next_name} (mark {next_idx + 1}). Re-route now, then send.")}
     else:
         # positions can't be aligned: a NAME is only trusted when it names one occurrence
         hits = names.count(next_name)
@@ -346,18 +369,18 @@ def show(source: str = "playbook", variant=None, route=None):
         elif (source == "playbook" and hits == 0 and nav_names
               and next_name == nav_names[0] and nav_names.count(next_name) == 1):
             nxt = -1
-        elif source == "reoptimize" and names:
+        elif rerouted and names:
             why = ("isn't on it" if hits == 0 else
                    f"is on it {hits}×, can't tell which lap")
             return {"shown": False, "note": (
-                f"New route is stale: next mark {next_name} {why}. Recompute, then send.")}
-    if source == "reoptimize" and nxt:
+                f"New route is stale: next mark {next_name} {why}. Re-route now, then send.")}
+    if rerouted and nxt:
         # the boat rounded marks while the re-route was computing: drop the passed legs so the
         # route starts at the last rounded mark and the plotter can't steer back to it
         cut = verts.get(nxt - 1)
         if cut is None:
             return {"shown": False, "note": (
-                f"New route is stale: you've passed {names[nxt - 1]} since. Recompute, then send.")}
+                f"New route is stale: you've passed {names[nxt - 1]} since. Re-route now, then send.")}
         path = path[cut:]
         verts = {j - nxt: i - cut for j, i in verts.items() if j >= nxt}
         nxt = 0

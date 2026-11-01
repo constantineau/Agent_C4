@@ -27,6 +27,7 @@ import urllib.request
 
 from . import deviation
 from . import navigator as NAV
+from . import reroutelog
 
 SCHEMA = "c4.reroute/v1"
 LABEL = "Off the playbook"
@@ -59,6 +60,10 @@ def _dir():
 
 def _result_path():
     return os.path.join(_dir(), "reroute-orin.json")
+
+
+def _pending_path():
+    return os.path.join(_dir(), "reroute-orin-pending.json")
 
 
 def _definition_path():
@@ -266,22 +271,41 @@ def _call(method, path, body=None):
 
 
 def run(device=None, call=None):
-    """Ask the Orin for one full re-route → (http status, body). Never starts one any other way."""
+    """Ask the Orin for one full re-route → (http status, body). Never starts one any other way.
+    Every press is logged (reroutelog), whatever came of it."""
     call = call or _call
+    dev = _device(device)
     req, why = build_request(device)
     if req is None:
+        reroutelog.record("pressed", "orin", device=dev, outcome="refused", detail=why)
         return 409, {"ok": False, "detail": why}
     code, body = call("POST", "/run", req)
     if code is None:
+        reroutelog.record("pressed", "orin", device=dev, outcome="unreachable", detail=NO_ORIN)
         return 503, {"ok": False, "orin": "unreachable", "detail": NO_ORIN}
     body = body if isinstance(body, dict) else {}
     if code == 202:
-        return 202, {"ok": True, "job_id": body.get("job_id"), "state": "running"}
+        job = body.get("job_id")
+        # what the Pi asked for, kept until the route comes back: who asked, and which course
+        # position the route starts at (so the GPS output can tell the laps of a lapped course apart)
+        try:
+            with _LOCK:
+                _write(_pending_path(), json.dumps(
+                    {"job_id": job, "device": dev, "asked_at": req["asked_at"],
+                     "route": req["route"], "next_index": req["next_index"],
+                     "marks": [m.get("name") for m in req["marks"]]}, separators=(",", ":")))
+        except OSError:
+            pass
+        reroutelog.record("pressed", "orin", device=dev, outcome="started", job_id=job)
+        return 202, {"ok": True, "job_id": job, "state": "running"}
     if code == 409:
+        reroutelog.record("pressed", "orin", device=dev, outcome="busy", job_id=body.get("job_id"))
         return 409, {"ok": False, "busy": True, "job_id": body.get("job_id"),
                      "progress": body.get("progress"),
                      "detail": body.get("detail") or "A re-route is already running."}
-    return 502, {"ok": False, "detail": str(body.get("detail") or "Re-route failed. Try again.")[:120]}
+    detail = str(body.get("detail") or "Re-route failed. Try again.")[:120]
+    reroutelog.record("pressed", "orin", device=dev, outcome="failed", detail=detail)
+    return 502, {"ok": False, "detail": detail}
 
 
 def _valid_result(r):
@@ -300,11 +324,38 @@ def stored():
     return r
 
 
+def _mark_idx(result):
+    """The course position of each of the route's marks, when the request it answers is known:
+    the Orin routes from the request's next mark on, in course order. Only kept when the names
+    line up with the course the request was made on; the GPS output checks them again."""
+    pend = _read(_pending_path()) or {}
+    names = result.get("marks") or []
+    nxt, course = pend.get("next_index"), pend.get("marks") or []
+    if pend.get("job_id") != result.get("job_id") or not isinstance(nxt, int) or not names:
+        return None
+    idx = list(range(nxt, nxt + len(names)))
+    if idx[-1] >= len(course) or any(course[i] != n for i, n in zip(idx, names)):
+        return None
+    return idx
+
+
 def _store(result):
     result = dict(result, label=LABEL, off_playbook=True, source="orin")
+    idx = _mark_idx(result)
+    if idx is not None:
+        result["mark_idx"] = idx
     with _LOCK:
         _write(_result_path(), json.dumps({"received_at": int(time.time()), "result": result},
                                           separators=(",", ":")))
+    vs = result.get("vs_plan") or {}
+    reroutelog.record("done", "orin", once_key=result.get("job_id"), job_id=result.get("job_id"),
+                      asked_by=result.get("asked_by"), asked_at=result.get("asked_at"),
+                      finished_at=result.get("finished_at"), run_s=result.get("run_s"),
+                      weather=reroutelog.weather_summary(result.get("weather")),
+                      gain_min=vs.get("gain_min") if vs.get("available") else None,
+                      finish_eta=result.get("finish_eta"), complete=result.get("complete"),
+                      boat=result.get("boat"), marks=result.get("marks"),
+                      warnings=(result.get("warnings") or [])[:4])
 
 
 def get(call=None):
@@ -337,4 +388,41 @@ def _get(call):
         out["result_stale"] = True
     if st.get("state") == "error":
         out["note"] = str(last.get("detail") or "Re-route failed. Try again.")[:120]
+        if last.get("job_id"):
+            reroutelog.record("failed", "orin", once_key=last["job_id"], job_id=last["job_id"],
+                              asked_by=last.get("asked_by"), detail=out["note"])
+    return out
+
+
+# ---- what the iPad's Route tile reads ---------------------------------------------------------
+def _finished(r):
+    return (r or {}).get("finished_at") or (r or {}).get("computed_at") or 0
+
+
+def latest():
+    """(source, route) of the newest route made by either re-router: 'orin' or 'pi' (the Pi's
+    own fallback), or (None, None). Full routes, track included."""
+    from . import reoptimize
+    o = stored()
+    o = o if (o or {}).get("available") else None
+    p = reoptimize.get_reoptimize()
+    p = p if p.get("available") else None
+    if o and (not p or _finished(o) >= _finished(p)):
+        return "orin", o
+    if p:
+        return "pi", p
+    return None, None
+
+
+def tile(call=None, compact=False):
+    """GET /reroute: the Orin's status + its last route, the Pi fallback's status + its last
+    route, and which of the two is newest (`latest`). `compact` drops the routes' tracks (the
+    iPad polls this; the GPS output reads the full route itself)."""
+    from . import reoptimize
+    out = get(call)
+    out["pi"] = reoptimize.status()
+    src, _r = latest()
+    out["latest"] = src
+    if compact and isinstance(out.get("result"), dict):
+        out["result"] = {k: v for k, v in out["result"].items() if k not in ("points", "leg_end_idx")}
     return out

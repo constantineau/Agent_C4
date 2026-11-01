@@ -351,7 +351,9 @@ def gps_show(body: dict | None = None):
     """Put a route on the CHARTPLOTTER (Garmin 943) — the iPad's button. Assembles the frozen
     bundle variant's path (default: recommended) or the onboard re-route and hands it to the
     n2kout broadcaster (129285/129284/129283 on the boat's own bus — RRS-41 clean).
-    Body: {source: "playbook"|"reoptimize", variant?: "<id>", route?: "<route>"}."""
+    Body: {source: "playbook"|"reroute"|"orin"|"reoptimize", variant?: "<id>", route?: "<route>"}.
+    "reroute" is the newest route either re-router made (the Route tile's); it is never computed
+    here, only sent."""
     body = body or {}
     return gpsout.show(source=body.get("source") or "playbook",
                        variant=body.get("variant"), route=body.get("route"))
@@ -524,11 +526,20 @@ def strategy_ep(route: str | None = None):
 
 @app.get("/reoptimize")
 def reoptimize_ep(route: str | None = None):
-    """Onboard RE-OPTIMIZER (graceful-degradation tier 2/3): a fresh route from the live position
-    through the remaining marks on own polars + the common Open-Meteo forecast, flagged OFF-PLAYBOOK,
-    with its divergence from the frozen plan. The fallback when the selector says off-script. CPU-heavy
-    (isochrone chain) → cached + on-demand. Legal in-race (own computer + own polars + common data)."""
+    """The Pi's own small re-route (the fallback when the Orin is down): the LAST route it made,
+    flagged OFF-PLAYBOOK, with its divergence from the frozen plan. Never computes one: a route is
+    made only on the crew's button (POST /reoptimize/run). Legal in-race (own computer + own
+    polars + common data)."""
     return reoptimize.get_reoptimize(route=route)
+
+
+@app.post("/reoptimize/run")
+def reoptimize_run(body: dict = None):
+    """The crew's Re-route now, on the Pi (the iPad offers it when the Orin can't be reached).
+    Body: {device?: "iPad 1"}. One run at a time, in the background (~15 s): 202 started, 409 busy
+    or nothing to route. GET /reroute reports progress and the route."""
+    code, out = reoptimize.run(device=(body or {}).get("device"))
+    return JSONResponse(out, status_code=code)
 
 
 @app.post("/reroute/run")
@@ -543,7 +554,17 @@ def reroute_run(body: dict = None):
 
 
 @app.get("/reroute")
-def reroute_get():
+def reroute_get(compact: bool = False):
     """The Orin re-route's status + progress, and the last route (stored here, so it survives a
-    restart and the Orin being off)."""
-    return orinroute.get()
+    restart and the Orin being off); the Pi fallback's status + last route under `pi`; and which
+    is newest (`latest`). `compact=1` drops the tracks (the iPad's Route tile polls this)."""
+    return orinroute.tile(compact=compact)
+
+
+@app.get("/reroute/history")
+def reroute_history(limit: int = 50):
+    """Every Re-route now press and its outcome, newest first: when, which device, which engine,
+    and for a finished route the weather it used (models, cycles, ages) and its gain vs the plan
+    (vps/agent/app/reroutelog.py; the history view is #127)."""
+    from app import reroutelog
+    return {"runs": reroutelog.history(max(1, min(500, limit)))}
