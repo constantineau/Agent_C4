@@ -3,8 +3,9 @@
 The Lab's PREP output is the boat's pre-race homework: a signed playbook (Lab-2), the course marks,
 the fleet roster, and the iPad checklist subset. This module reads what's already been prepared
 (the reviewed RaceDefinition + the frozen playbooks) and reports DEPLOY READINESS per race, then
-builds the combined "homework package" the crew loads onto the Pi engine (:8200 `/course/load` +
-`/fleet/load`) and the Orin copilot (`PLAYBOOK_PATH`).
+builds the combined "homework package" the crew loads onto the Pi engine (:8200 `/course/load`,
+`/fleet/load`, `/playbook/load`). The Pi passes the playbook on to the Orin copilot and approves it;
+nothing writes the copilot's playbook file directly.
 
 The Lab is cloud-only with no line to the boat, so deploy is artifact-download + copy-paste load
 commands — crew in the loop, frozen at the gun (RRS 41). An automated Tailscale push can layer on
@@ -30,10 +31,6 @@ def targets() -> dict:
     return {
         "pi_host": os.environ.get("DEPLOY_PI_HOST", "sr33-pi"),
         "pi_engine": os.environ.get("DEPLOY_PI_ENGINE", "http://localhost:8200"),
-        "orin_host": os.environ.get("DEPLOY_ORIN_HOST", "agent-c4"),
-        "orin_playbook_path": os.environ.get("DEPLOY_ORIN_PLAYBOOK_PATH",
-                                             "/home/agent-c4/sr33/playbook.json"),
-        "orin_service": os.environ.get("DEPLOY_ORIN_SERVICE", "sr33-orin-copilot"),
     }
 
 
@@ -71,7 +68,8 @@ def push(race_id):
     checklist/watch + the signed playbook → the Pi engine over Tailscale; the engine forwards the
     same playbook to the Orin copilot over the Pi↔Orin cable while it holds its race-log lock (the
     Orin takes a playbook from nowhere else). Each push OVERWRITES the previous load on both boxes (the engine
-    clears its trigger/matcher state; the copilot rewrites PLAYBOOK_PATH and re-reads per request).
+    clears its trigger/matcher state; the copilot rewrites PLAYBOOK_PATH, and uses it once the Pi
+    has approved its hash).
     Returns per-step results ({target, step, ok, detail}); None if the race is unknown.
     Frozen at the gun: the start is checked before EVERY post; once it is reached the remaining
     steps are not sent (they show "Race started. Not sent.")."""

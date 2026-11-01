@@ -9,6 +9,8 @@ Pins:
   * the Orin copilot's playbook is never posted by the Lab: the Pi forwards it under its race-log
     lock, and the copilot step reports the Pi's `copilot` answer;
   * no start known: it sends, and the boat decides;
+  * the manual commands load the playbook through the Pi (never scp to the Orin: the copilot only
+    uses a playbook the Pi approved);
   * a boat that refuses (racing) any step answers loaded: false, and that step is never green
     (fleet, checklist and watch used to pass on any answer).
 
@@ -149,6 +151,13 @@ check("gun before the playbook post → neither the Pi nor the Orin gets it",
       "/playbook/load" not in posted and [s["ok"] for s in res["steps"][-2:]] == [False, False])
 TICK["step"] = 0
 labstate.set("deploy:r1", {})
+
+print("the manual-load commands the Deploy tab shows:")
+JS = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "web", "app.js")).read()
+cmds = JS[JS.index("function deployPanel"):JS.index("const res = Dep.pushRes")]
+check("the playbook goes to the Pi's /playbook/load", "/playbook/load" in cmds)
+check("never copied to the Orin or the copilot restarted by hand (the copilot wouldn't use it)",
+      "scp" not in cmds and "orin_playbook_path" not in cmds and "systemctl" not in cmds)
 
 print("ALL OK" if ok else "FAILED")
 sys.exit(0 if ok else 1)

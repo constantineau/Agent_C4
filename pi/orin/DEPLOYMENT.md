@@ -253,7 +253,10 @@ python3 -m venv ~/copilot-venv
 ```
 
 Config goes in `/etc/sr33/copilot.env` (ENGINE_URL → the Pi engine, LLM_* → local Ollama,
-COPILOT_COACH=true, COPILOT_ROUTE, optional PLAYBOOK_PATH). Install + enable the unit:
+COPILOT_COACH=true, COPILOT_ROUTE, PLAYBOOK_PATH = where the Pi's playbook load writes it,
+PLAYBOOK_LOAD_FROM = the Pi's cable IP). Load a playbook only through the Pi engine's
+`/playbook/load`; a file copied in by hand is never approved, so the copilot won't use it.
+Install + enable the unit:
 
 ```bash
 sudo cp pi/systemd/sr33-orin-copilot.service /etc/systemd/system/

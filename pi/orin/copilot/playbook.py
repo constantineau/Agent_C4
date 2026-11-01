@@ -13,8 +13,9 @@ a compact text digest for the LLM system prompt, and otherwise reports "no playb
 copilot honestly restricts itself to interpreting live engine facts. `verify_signature()` recomputes
 the SAME canonical bytes the Lab signed (bundle minus `signature`, sorted-key/no-space JSON), so a
 bundle that arrives byte-for-byte verifies — surfaced (non-fatal) as `signed`/`signature_ok` so the
-crew sees a tampered or unsigned playbook. Wiring a frozen bundle in is just dropping the file at
-`PLAYBOOK_PATH`.
+crew sees a tampered or unsigned playbook. A bundle reaches `PLAYBOOK_PATH` only through the Pi
+engine's `/playbook/load` (stage + commit, app.py), and `load()` uses it only if the Pi approved its
+hash; a file dropped in by hand is never used.
 """
 import hashlib
 import json

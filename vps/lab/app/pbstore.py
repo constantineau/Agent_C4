@@ -1,9 +1,9 @@
 """Frozen-playbook store — persist the signed Lab-2b bundles on a writable volume.
 
-A frozen bundle is the pre-race homework deployed onboard (it becomes the copilot's
-`PLAYBOOK_PATH`). One file per freeze, id = `<race_id>__<start_epoch>` so re-freezing the same race
+A frozen bundle is the pre-race homework deployed onboard (posted to the Pi engine's
+`/playbook/load`, which passes it to the copilot). One file per freeze, id = `<race_id>__<start_epoch>` so re-freezing the same race
 + start overwrites (re-running the gameplan supersedes the old one). The raw bytes are the signed
-artifact — `get_raw` returns them verbatim so a download/scp preserves the signature.
+artifact — `get_raw` returns them verbatim so a download preserves the signature.
 """
 import glob
 import json

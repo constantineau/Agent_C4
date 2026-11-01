@@ -40,7 +40,10 @@ The bounded structure enforces the locked design rules **structurally, not just 
 5. **Always produces a brief.** If the LLM is off, unreachable, slow, or its output fails
    validation, the service returns the **deterministic** brief built from the same facts. The LLM
    interprets and prioritizes on top; it can never exceed the facts.
-6. **Playbook as the strategy library.** A frozen playbook (Lab-2 output) loads via `PLAYBOOK_PATH`;
+6. **Playbook as the strategy library.** A frozen playbook (Lab-2 output) is posted to the Pi
+   engine's `/playbook/load`, which passes it here (stage + commit, only from the Pi) and approves
+   its hash; the copilot uses the file at `PLAYBOOK_PATH` only if the Pi approved it (frozen at the
+   gun, `docs/RRS41_COMPLIANCE.md` §8). Never copy the file in by hand: it won't be used;
    its pre-authored variants/plays are the ONLY strategies the copilot points to — its job is matching
    the live conditions to them, never authoring new ones (a deterministic engine off_script verdict is
    the "situation outran the library" path). Absent → it says so and narrates live engine facts alone.
@@ -129,12 +132,13 @@ curl -s -X POST localhost:8300/brief -H 'Content-Type: application/json' \
      -d '{"question":"What should the crew focus on right now?"}'
 # proactive callouts + a coach line (poll this every ~15 s on the iPad):
 curl -s -X POST localhost:8300/narrate -H 'Content-Type: application/json' -d '{}'
-# playbook-adherence tile (deterministic; needs PLAYBOOK_PATH set to a frozen Lab-2 bundle):
+# playbook-adherence tile (deterministic; needs a playbook loaded through the Pi's /playbook/load):
 curl -s localhost:8300/adherence
 ```
 
 Env: `ENGINE_URL` (Pi engine), `LLM_BASE_URL` (default `http://127.0.0.1:11434/v1`), `LLM_MODEL`,
-`LLM_TIMEOUT`, `MAX_TOOL_ROUNDS`, `PLAYBOOK_PATH`, `COPILOT_ROUTE`, `COPILOT_PORT`,
+`LLM_TIMEOUT`, `MAX_TOOL_ROUNDS`, `PLAYBOOK_PATH` (where the Pi's load writes it),
+`PLAYBOOK_LOAD_FROM` (the Pi's cable IP), `PLAYBOOK_COMMIT_TTL_S`, `COPILOT_ROUTE`, `COPILOT_PORT`,
 `COPILOT_USE_LLM` (false → always deterministic). Systemd unit:
 `pi/systemd/sr33-orin-copilot.service`.
 
