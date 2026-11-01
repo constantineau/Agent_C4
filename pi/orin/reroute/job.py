@@ -95,7 +95,7 @@ def remaining_definition(definition, course_id, next_index, lat, lon):
     # navigator index of the next mark; unknown → the first mark after the start. An explicit 0 is
     # kept: with no positioned start, index 0 is the first real mark.
     nxt = (1 if has_start else 0) if next_index is None else max(0, int(next_index))
-    keep, prev_nav = [], 0
+    keep, prev_nav = [], (0 if has_start else -1)   # nav index of the mark before this island
     for m, k in zip(course.get("marks") or [], idx):
         if k is None:
             if m.get("type") == "island" and m.get("lat") is not None:

@@ -171,6 +171,18 @@ d7, c7, _n = job.remaining_definition(BACK, "c", 1, 44.1, -82.0)      # before r
 f7, _ = job.load_obstacles(d7, c7, None, None, job._get_boat())
 check("before rounding it: disk and barrier both", f7.blocked(44.5, -82.0)
       and f7.layers["rounding_barrier"] > 0)
+NOSTART = {"courses": [{"id": "c", "start": {},
+                       "marks": [{"name": "Rocky", "type": "island", "lat": 44.5, "lon": -82.0,
+                                  "rounding": "port", "radius_nm": 1.5},
+                                 {"name": "A", "type": "buoy", "lat": 45.0, "lon": -82.0,
+                                  "rounding": "port"}],
+                       "finish": {"points": [{"lat": 44.0, "lon": -82.02}]}}]}
+d9, _c9, n9 = job.remaining_definition(NOSTART, "c", 1, 44.95, -82.0)   # no start: A is index 0, rounded
+r9 = {m["name"]: m["rounding"] for m in d9["courses"][0]["marks"]}
+check("no start, island before A: rounded island keeps no barrier", n9 == ["Finish"] and r9.get("Rocky") == "none")
+d10, _c10, _n10 = job.remaining_definition(NOSTART, "c", 0, 44.1, -82.0)   # still heading to A
+check("no start, before A: island keeps its side",
+      {m["name"]: m["rounding"] for m in d10["courses"][0]["marks"]}.get("Rocky") == "port")
 _src = job.geo.COASTLINE_SOURCE
 job.geo.COASTLINE_SOURCE = "enc"                       # the Lab's ENC setting, no chart aboard
 f8, _ = job.load_obstacles(d6, c6, None, None, job._get_boat())
