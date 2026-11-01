@@ -94,12 +94,43 @@ class LandMask:
         if 0 <= nx_ < self.nx and 0 <= ny_ < self.ny:
             self.mask[ny_ * self.nx + nx_] = 0
 
+    def cells_touched(self, lat1, lon1, lat2, lon2):
+        """Every grid cell the straight segment touches — exact (a supercover, no sampling): a
+        segment that clips a cell's corner, or runs along a cell edge, touches the cells on both
+        sides. Swept column by column: in each column the segment spans one y-interval, and every
+        row that interval meets is touched (a boundary exactly on a row edge counts the row on the
+        other side too). Cells outside the grid are left out (unknown water, as `blocked` says)."""
+        x0, y0 = (lon1 - self.w) / self.res, (lat1 - self.s) / self.res
+        x1, y1 = (lon2 - self.w) / self.res, (lat2 - self.s) / self.res
+        if x1 < x0:
+            x0, y0, x1, y1 = x1, y1, x0, y0
+        dx = x1 - x0
+
+        def y_at(x):
+            return y0 if dx == 0 else y0 + (y1 - y0) * (x - x0) / dx
+
+        def rows(ya, yb):
+            lo, hi = min(ya, yb), max(ya, yb)
+            r0 = math.floor(lo) - (1 if lo == math.floor(lo) else 0)   # on an edge: the row below
+            return range(r0, math.floor(hi) + 1)
+
+        c0 = math.floor(x0) - (1 if x0 == math.floor(x0) else 0)       # on an edge: the column left
+        c1 = math.floor(x1)
+        for c in range(c0, c1 + 1):
+            if c < 0 or c >= self.nx:
+                continue
+            xa, xb = max(x0, c), min(x1, c + 1)
+            if xa > xb:
+                continue
+            for r in rows(y_at(xa), y_at(xb)) if dx else rows(y0, y1):
+                if 0 <= r < self.ny:
+                    yield c, r
+
     def crosses(self, lat1, lon1, lat2, lon2):
-        """Does the straight segment pass over land (sampled under half a cell apart)?"""
-        dlat, dlon = lat2 - lat1, lon2 - lon1
-        steps = max(2, int(math.hypot(dlat, dlon) / (self.res * 0.5)) + 1)
-        return any(self.blocked(lat1 + dlat * k / steps, lon1 + dlon * k / steps)
-                   for k in range(steps + 1))
+        """Does the straight segment touch any land cell? Exact grid traversal (cells_touched),
+        corners and edges included — never sampled, so a clipped corner can't slip through."""
+        return any(self.mask[r * self.nx + c] == 1
+                   for c, r in self.cells_touched(lat1, lon1, lat2, lon2))
 
 
 def for_course(nav_route, marks, boat=None):

@@ -717,6 +717,43 @@ inside = landchart.for_course("race", MARKS, (44.0521, -81.9601))   # the raster
 opened = sum(1 for a_, b_ in zip(base.mask, inside.mask) if a_ != b_)
 check("a boat on a land cell: its cell and one neighbour opened, nothing more",
       opened == 2 and not inside.blocked(44.0521, -81.9601))
+print("land crossing is an exact grid traversal (Codex: a clipped corner):")
+
+
+def unit_mask(blocked_cells, n=4):
+    m = bytearray(n * n)
+    for c, r in blocked_cells:
+        m[r * n + c] = 1
+    return landchart.LandMask({"bbox": [n, 0, 0, n], "res_deg": 1.0, "nx": n, "ny": n,
+                               "mask_zb64": base64.b64encode(zlib.compress(bytes(m))).decode()})
+
+
+U = unit_mask([(1, 1)])                      # unit cells; only cell (x=1, y=1) is land
+
+
+def X(x1, y1, x2, y2):                      # (x, y) = (lon, lat) on the unit grid
+    return U.crosses(y1, x1, y2, x2)
+
+
+def sampled(x1, y1, x2, y2, res=1.0):       # the old fixed-distance sampling, for the control
+    steps = max(2, int(math.hypot(x2 - x1, y2 - y1) / (res * 0.5)) + 1)
+    return any(U.blocked(y1 + (y2 - y1) * k / steps, x1 + (x2 - x1) * k / steps)
+               for k in range(steps + 1))
+
+
+check("(control) sampling misses the clipped corner", not sampled(1.09, 0.1, 3.09, 2.1))
+check("Codex's corner case: (1.09,0.1)→(3.09,2.1) crosses the land cell", X(1.09, 0.1, 3.09, 2.1))
+check("…either direction", X(3.09, 2.1, 1.09, 0.1))
+check("along a land cell's edge (y = 1) touches it", X(0.5, 1.0, 3.5, 1.0))
+check("along its other edge (x = 2) too", X(2.0, 0.2, 2.0, 3.8))
+check("through its corner point exactly", X(0.0, 0.0, 4.0, 4.0) and X(0.5, 2.5, 2.5, 0.5))
+check("along an edge with water on both sides: clear", not X(0.5, 3.0, 3.5, 3.0))
+check("a near miss is clear", not X(0.2, 0.9, 0.9, 0.2) and not X(2.1, 0.1, 3.9, 1.9))
+check("a vertical segment inside a water column is clear", not X(3.5, 0.1, 3.5, 3.9))
+check("a point segment in the cell is blocked", X(1.5, 1.5, 1.5, 1.5))
+check("outside the grid is unknown water", not X(-3, -3, -1, -1))
+check("the GPS export uses it (crosses → cells_touched)",
+      "cells_touched(" in open(landchart.__file__).read().split("def crosses")[1][:400])
 check("the Pi's fingerprint is the shared one", landchart.course_fingerprint(DEF_L, "c", 2.63)
       == __import__("shared.chartid", fromlist=["x"]).course_fingerprint(DEF_L, "c", 2.63))
 os.remove(orinassets._path())
