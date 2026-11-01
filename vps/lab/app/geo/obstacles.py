@@ -5,7 +5,9 @@ Race-agnostic. Three layers rasterize into ONE boolean land/blocked mask over th
   2. the race's `zones[]`               — exclusion / hazard / tss polygons (per race);
   3. the race's geocoded `island` marks — buffered to a disk (per race).
 
-The mask is built once per optimize() (cheap; optionally cached) and queried O(1) in the hot loop:
+The optimizer routes each leg on its own mask (`build_leg_fields`, #141): these layers on every
+leg, plus only the rounding barriers of the islands that leg rounds. Masks are cached and
+queried O(1) in the hot loop:
   - `blocked(lat, lon)`          — is this point on an obstacle?
   - `crosses(lat1,lon1,lat2,lon2)` — does this leg step cut through one? (sampled along the segment)
 
@@ -14,9 +16,11 @@ match GeoJSON; the public point/segment API takes (lat, lon) to match the rest o
 """
 from __future__ import annotations
 
+import collections
 import hashlib
 import math
 import os
+import threading
 
 from . import coastline
 from . import enc
@@ -335,12 +339,40 @@ def _island_rounding_marks(definition, course_id):
 
 
 # --- build --------------------------------------------------------------------
-_FIELD_CACHE: dict = {}                   # cache_key -> ObstacleField (reused across scenario fan-out)
+# key -> ObstacleField, reused across Lab-2's scenario fan-out (every scenario routes the same
+# course). Least-recently-used entries go past FIELD_CACHE_MAX: a Bayview-sized mask is ~0.6 MB,
+# and a course adds one entry for its land/zones/islands plus one per leg that rounds an island.
+_FIELD_CACHE: "collections.OrderedDict" = collections.OrderedDict()
+FIELD_CACHE_MAX = int(os.environ.get("GEO_FIELD_CACHE_MAX", "24"))
+_CACHE_LOCK = threading.Lock()            # Lab jobs run in threads; get+touch / put+evict as one
+
+
+def _cache_get(key):
+    with _CACHE_LOCK:
+        f = _FIELD_CACHE.get(key)
+        if f is not None:
+            _FIELD_CACHE.move_to_end(key)
+        return f
+
+
+def _cache_put(key, field):
+    with _CACHE_LOCK:
+        _FIELD_CACHE[key] = field
+        _FIELD_CACHE.move_to_end(key)
+        while len(_FIELD_CACHE) > max(1, FIELD_CACHE_MAX):
+            _FIELD_CACHE.popitem(last=False)
+
+
+def _barrier_sig(rounds):
+    """What a set of rounding barriers draws: position, size, side and the leg's bearing."""
+    return tuple((round(r["lat"], 6), round(r["lon"], 6), round(r["radius_nm"], 4), r["side"],
+                  round(r["transit_brg"], 6)) for r in rounds)
 
 
 def build_for_course(definition: dict, course_id, bbox, *, coastline_on=True, zones_on=True,
                      islands_on=True, res_deg=RES_DEG, cache_dir=None, use_cache=True,
-                     source=None, safety_depth=None, carve_waypoints=True) -> ObstacleField:
+                     source=None, safety_depth=None, carve_waypoints=True,
+                     barriers=True) -> ObstacleField:
     """Assemble the ObstacleField for a course over `bbox` = (north, south, west, east).
 
     Modular: the coastline is global (any race); the zones + island marks come from THIS race's
@@ -349,15 +381,24 @@ def build_for_course(definition: dict, course_id, bbox, *, coastline_on=True, zo
 
     `source` (None → the COASTLINE_SOURCE env default) picks Natural Earth vs NOAA ENC; `safety_depth`
     (None → the env draft+margin default) is the ENC depth no-go = active boat draft + under-keel
-    margin. Both are folded into `cache_key` so a different boat/draft or source builds a fresh mask."""
+    margin. Both are folded into `cache_key` so a different boat/draft or source builds a fresh mask.
+
+    `barriers=False` leaves out every island's rounding-side barrier: the shared base that
+    `build_leg_fields` adds each leg's own barriers to. The default draws ALL of them at once (one
+    course-wide mask); the optimizer no longer routes on that (#141)."""
     src = (source or COASTLINE_SOURCE).strip().lower()
     depth = safety_depth if safety_depth is not None else safety_depth_m()
     ck = None
     # only the Lab's default (pockets carved) build is cached; a no-pocket build is never served from it
     if use_cache and coastline_on and zones_on and islands_on and carve_waypoints:
         ck = cache_key(definition, course_id, bbox, res_deg, source=src, safety_depth=depth)
-        if ck in _FIELD_CACHE:
-            return _FIELD_CACHE[ck]
+        # the key has the islands but not their rounding sides: a barrier build is keyed by them
+        ck += ("|nb" if not (barriers and ROUNDSIDE_ISLANDS) else
+               "|b" + hashlib.sha1(repr(_barrier_sig(
+                   _island_rounding_marks(definition, course_id))).encode()).hexdigest()[:12])
+        hit = _cache_get(ck)
+        if hit is not None:
+            return hit
     field = ObstacleField(bbox, res_deg=res_deg)
     field.source = src
 
@@ -431,18 +472,151 @@ def build_for_course(definition: dict, course_id, bbox, *, coastline_on=True, zo
     #    that is a MARK OF THE RACE (rounding port/starboard) block the illegal side so the route passes
     #    on the legal hand. Source-independent (ENC or backstop) — it's a race rule, not an obstacle —
     #    and scoped to marked islands only (plain hazards stay avoided either side).
-    if islands_on and ROUNDSIDE_ISLANDS:
-        for r in _island_rounding_marks(definition, course_id):
-            n = field._fill_wrong_side_barrier(r["lat"], r["lon"], r["radius_nm"], r["transit_brg"],
-                                               r["side"], ROUNDSIDE_BAND_NM)
-            if n:
-                field.geometry["rounding_barriers"].append(
-                    {"lat": round(r["lat"], 5), "lon": round(r["lon"], 5), "side": r["side"],
-                     "transit_brg": round(r["transit_brg"], 1), "radius_nm": r["radius_nm"]})
+    if islands_on and ROUNDSIDE_ISLANDS and barriers:
+        _add_barriers(field, _island_rounding_marks(definition, course_id))
 
     if ck is not None:
-        _FIELD_CACHE[ck] = field
+        _cache_put(ck, field)
     return field
+
+
+def _add_barriers(field, rounds):
+    """Draw each island's wrong-side barrier into `field` (in place)."""
+    for r in rounds:
+        n = field._fill_wrong_side_barrier(r["lat"], r["lon"], r["radius_nm"], r["transit_brg"],
+                                           r["side"], ROUNDSIDE_BAND_NM)
+        if n:
+            field.geometry["rounding_barriers"].append(
+                {"lat": round(r["lat"], 5), "lon": round(r["lon"], 5), "side": r["side"],
+                 "transit_brg": round(r["transit_brg"], 1), "radius_nm": r["radius_nm"]})
+
+
+# --- one mask per leg (#141) -----------------------------------------------------------------------
+def nav_index_map(course):
+    """For each course mark, the navigator index it gets (course_to_marks order), or None for an
+    island / a mark with no position. Start is index 0 when it has a position. Returns
+    (indices, k) with k = the finish's index (when the course has one)."""
+    k = 1 if (course.get("start") or {}).get("lat") is not None else 0
+    out = []
+    for m in course.get("marks", []) or []:
+        if m.get("type") == "island" or m.get("lat") is None:
+            out.append(None)
+        else:
+            out.append(k)
+            k += 1
+    return out, k
+
+
+def _course(definition, course_id):
+    courses = (definition or {}).get("courses") or []
+    return next((c for c in courses if c.get("id") == course_id), None) or \
+        (courses[0] if courses else None)
+
+
+def island_legs(definition, course_id):
+    """{index in course["marks"]: leg} for every island. Leg k runs navigator point k → k + 1
+    (0 = start → first mark); an island sits on the leg of the nav point before it. An island
+    before the first nav point (no positioned start) is on no leg: -1."""
+    course = _course(definition, course_id)
+    if not course:
+        return {}
+    idx, _fin = nav_index_map(course)
+    cur = 0 if (course.get("start") or {}).get("lat") is not None else -1
+    out = {}
+    for mi, (m, k) in enumerate(zip(course.get("marks") or [], idx)):
+        if k is not None:
+            cur = k
+        elif m.get("type") == "island":
+            out[mi] = cur
+    return out
+
+
+def only_leg_barriers(definition, course_id, leg):
+    """`definition` with rounding sides kept only on the islands of leg `leg`; every other island
+    keeps its disk but no side. A course that rounds the same island twice, once each way, then
+    never has both barriers at once (together they'd wall off the island's whole meridian)."""
+    import copy
+    d = copy.deepcopy(definition)
+    course = _course(d, course_id)
+    if not course:
+        return d
+    marks = course.get("marks") or []
+    for mi, lg in island_legs(d, course_id).items():
+        if lg != leg:
+            marks[mi]["rounding"] = "none"
+    return d
+
+
+def build_leg_fields(definition, course_id, bbox, *, source=None, safety_depth=None,
+                     res_deg=RES_DEG, cache_dir=None):
+    """One ObstacleField per leg of the course → (base, [field per leg]).
+
+    `base` is land, zones and island disks with the waypoint pockets (`build_for_course` without
+    barriers, cached). A leg that rounds no island routes on `base` itself; a leg that rounds one
+    gets a copy of `base` plus only that leg's barriers, cached by the base and those barriers. So
+    a course that rounds the same island twice, once each way, never has both walls at once, and a
+    normal course's leg sees exactly the barriers that leg's island would have drawn on the old
+    course-wide mask."""
+    src = (source or COASTLINE_SOURCE).strip().lower()
+    depth = safety_depth if safety_depth is not None else safety_depth_m()
+    base = build_for_course(definition, course_id, bbox, source=src, safety_depth=depth,
+                            res_deg=res_deg, cache_dir=cache_dir, barriers=False)
+    from shared import race_def
+    n_legs = max(0, len(race_def.course_to_marks(definition, course_id)[0]) - 1)
+    rounds = _island_rounding_marks(definition, course_id) if ROUNDSIDE_ISLANDS else []
+    leg_of = island_legs(definition, course_id)
+    bkey = cache_key(definition, course_id, bbox, res_deg, source=src, safety_depth=depth) + "|nb"
+    out = []
+    for leg in range(n_legs):
+        mine = [r for r in rounds if leg_of.get(r.get("mark_idx")) == leg]
+        if not mine:
+            out.append(base)
+            continue
+        key = bkey + "|leg" + hashlib.sha1(repr(_barrier_sig(mine)).encode()).hexdigest()[:12]
+        f = _cache_get(key)
+        if f is None:
+            f = _copy_field(base)
+            _add_barriers(f, mine)
+            _cache_put(key, f)
+        out.append(f)
+    return base, out
+
+
+def _copy_field(field):
+    """A copy whose mask, layers and barrier list can change; the (read-only) land/zone/island
+    overlay geometry is shared, not copied. Built through __init__, not copy.copy: copy.copy reads
+    `field.__dict__`, and on CPython 3.12 that alone makes every attribute read on `field` slower
+    for good (~30% on the routing hot loop, measured on Bayview)."""
+    f = ObstacleField(field.bbox, res_deg=field.res)
+    f.mask = bytearray(field.mask)
+    f.layers = dict(field.layers)
+    f.geometry = dict(field.geometry, rounding_barriers=list(field.geometry["rounding_barriers"]))
+    f.source, f.safety_depth, f.active = field.source, field.safety_depth, field.active
+    return f
+
+
+def legs_summary(base, legs):
+    """`summary()` for a course routed on per-leg fields: `base`'s, with every leg's barriers in
+    the overlay geometry and the barrier cell count (so the map still draws all of them)."""
+    fields = [f for f in ([base] if base is not None else []) + list(legs or []) if f is not None]
+    if not fields:
+        return {"active": False}
+    first = fields[0]
+    s = first.summary()
+    drawn = list(first.geometry["rounding_barriers"])
+    cells = first.layers.get("rounding_barrier", 0)
+    seen = {id(first)}
+    for f in fields[1:]:
+        if id(f) in seen:
+            continue
+        seen.add(id(f))
+        cells += max(0, f.layers.get("rounding_barrier", 0) - first.layers.get("rounding_barrier", 0))
+        drawn += [g for g in f.geometry["rounding_barriers"] if g not in drawn]
+    s["layers"] = dict(s["layers"], rounding_barrier=cells)
+    s["cells_blocked"] = sum(s["layers"].values())
+    s["geometry"] = dict(s["geometry"], rounding_barriers=drawn)
+    s["active"] = any(f.active for f in fields)
+    return s
 
 
 def _fill_global_backstop(field, cache_dir):

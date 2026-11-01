@@ -479,22 +479,24 @@ def _rejoin_tab(definition, course_id, wf, consensus, cur, waves, marks, off_nm,
     if not P:
         return []
     SP = POL.adjust_sail_polars(POL.sail_polars(), polar_adjustments, P0)
-    obstacles = None
+    base, leg_fields = None, []
     try:
-        from .geo import build_for_course
+        from .geo import build_leg_fields
         bbox = optimizer.course_bbox(definition, course_id)
         if bbox:   # cache-shared with the scenario fan's optimize_course builds
-            obstacles = build_for_course(definition, course_id, bbox)
+            base, leg_fields = build_leg_fields(definition, course_id, bbox)
     except Exception:
-        obstacles = None
+        base, leg_fields = None, []
     rp = optimizer._resolution("fast")
-    kw = dict(obstacles=obstacles, hstep=rp["hstep"], dt_cap=rp["dt_cap"], cur=cur,
+    kw = dict(hstep=rp["hstep"], dt_cap=rp["dt_cap"], cur=cur,
               sail_polars=SP, jib_crossovers=jib_crossovers, sail_config=sail_config, waves=waves,
               helm_factor=helm_factor, wave_coeffs=wave_coeffs)
     rows = []
     leg_start_t = float(consensus.get("start_epoch") or path[0].get("t") or 0)
     for i, leg in enumerate(legs):
         eta = float(leg.get("eta_epoch") or 0)
+        # this leg's mask: its own island barriers only (#141)
+        obstacles = leg_fields[i] if i < len(leg_fields) else base
         try:
             if i + 1 >= len(marks) or not eta:
                 continue
@@ -521,9 +523,11 @@ def _rejoin_tab(definition, course_id, wf, consensus, cur, waves, marks, off_nm,
                 if obstacles is not None and obstacles.blocked(olat, olon):
                     continue                                # the offset position is on land/no-go
                 cont = optimizer.route_leg(wf, P, olat, olon, t_mid, dlat, dlon,
-                                           deadline=time.time() + _REJOIN_LEG_TIMEOUT_S, **kw)
+                                           deadline=time.time() + _REJOIN_LEG_TIMEOUT_S,
+                                           obstacles=obstacles, **kw)
                 rejn = optimizer.route_leg(wf, P, olat, olon, t_mid, rj["lat"], rj["lon"],
-                                           deadline=time.time() + _REJOIN_LEG_TIMEOUT_S, **kw)
+                                           deadline=time.time() + _REJOIN_LEG_TIMEOUT_S,
+                                           obstacles=obstacles, **kw)
                 # route_leg returns the NEAREST node when it can't lay the target — verify arrival
                 ce, re_ = cont["path"][-1], rejn["path"][-1]
                 if (not cont.get("reached", True) or not rejn.get("reached", True) or
