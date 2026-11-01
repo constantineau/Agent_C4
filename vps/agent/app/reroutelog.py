@@ -57,7 +57,7 @@ def record(event, engine, once_key=None, **fields):
         with _LOCK:
             lines = _lines()
             if once_key is not None:
-                for r in _parse(lines[-200:]):
+                for r in _parse(lines):          # every retained line: a repeat never gets a new timestamp
                     if (r.get("event"), r.get("engine"), r.get("key")) == (event, engine, str(once_key)):
                         return False
             os.makedirs(os.path.dirname(_path()), exist_ok=True)
