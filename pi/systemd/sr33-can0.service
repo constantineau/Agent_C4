@@ -20,7 +20,11 @@ Before=docker.service
 Type=oneshot
 RemainAfterExit=yes
 # NMEA 2000 is 250 kbit/s; a deeper tx queue helps under bus load.
-ExecStart=/usr/sbin/ip link set can0 type can bitrate 250000
+# restart-ms 100: after a bus-off the controller restarts itself 100 ms later. Without it (the
+# kernel default 0) a bus-off — which a bad transmit from n2kout could cause — stops RECEIVING
+# too, and every instrument feed is gone until someone runs `ip link set can0 down/up` or
+# reboots. n2kout's /health reports bus-off and restart counts.
+ExecStart=/usr/sbin/ip link set can0 type can bitrate 250000 restart-ms 100
 ExecStart=/usr/sbin/ip link set can0 txqueuelen 1000
 ExecStart=/usr/sbin/ip link set can0 up
 ExecStop=/usr/sbin/ip link set can0 down

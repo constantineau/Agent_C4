@@ -1,0 +1,438 @@
+"""n2kout — live leg, expiry/clear/course change, POST /route validation, the bus thread (ISO
+requests, address-claim contest, restart) and the bus diagnostics. No CAN: fake sender/socket.
+
+Run:  PYTHONPATH=pi/n2kout python3 pi/n2kout/test_n2kout_app.py
+"""
+import json
+import math
+import socket
+import struct
+import sys
+import threading
+import time
+
+sys.path.insert(0, "pi/n2kout")
+import n2k  # noqa: E402
+import n2kout_app as A  # noqa: E402
+import navcalc  # noqa: E402
+
+ok = True
+
+
+def check(name, cond):
+    global ok
+    ok = ok and bool(cond)
+    print(f"  [{'OK ' if cond else 'FAIL'}] {name}")
+
+
+M_LAT = 111195.0                        # metres per degree of latitude (R = 6371008.8)
+
+
+def east(lat, m):                       # degrees of longitude for m metres east at lat
+    return m / (M_LAT * math.cos(math.radians(lat)))
+
+
+# a route north 2 legs, then east: wp0 → wp1 → wp2 → wp3
+WP = [{"name": "C4-01", "lat": 43.00, "lon": -82.0}, {"name": "C4-02", "lat": 43.01, "lon": -82.0},
+      {"name": "C4-03", "lat": 43.02, "lon": -82.0},
+      {"name": "C4-04", "lat": 43.02, "lon": -82.0 + east(43.02, 1500)}]
+
+print("navcalc — the waypoint advances as the boat moves:")
+tr = navcalc.LegTracker(WP, 1)
+n = tr.update(43.002, -82.0, 0)
+check("short of wp 1 → steer to 1", n["dest_index"] == 1)
+n = tr.update(43.0095, -82.0 + east(43.0095, 400), 10)
+check("abeam 400 m off, 55 m short of wp 1 → still 1", n["dest_index"] == 1)
+n = tr.update(43.0103, -82.0 + east(43.0103, 400), 20)
+check("passed the turn line at wp 1 (wide, outside 0.05 nm) → 2", n["dest_index"] == 2)
+n = tr.update(43.0005, -82.0, 30)
+check("never steps back (boat sails back south)", n["dest_index"] == 2)
+n = tr.update(43.0196, -82.0, 40)
+check("within 0.05 nm of wp 2 → 3", n["dest_index"] == 3 and tr.advances == 2)
+n = tr.update(43.02, -82.0 + east(43.02, 1460), 50)
+check("last waypoint: stays on it, arrival flag set", n["dest_index"] == 3 and n["arrived"])
+n = tr.update(43.02, -82.0 + east(43.02, 1700), 60)
+check("past the last one: perpendicular crossed, still on it", n["dest_index"] == 3
+      and n["perp_crossed"] and not n["arrived"])
+
+# the turn at wp 2 is 90°: the bisector, not the perpendicular, decides
+tr = navcalc.LegTracker(WP, 2)
+n = tr.update(43.0185, -82.0 + east(43.0185, 300), 0)
+check("90° turn: across the bisector (300 m E, 167 m short) → advances", n["dest_index"] == 3)
+tr = navcalc.LegTracker(WP, 2)
+n = tr.update(43.0185, -82.0 - east(43.0185, 300), 0)
+check("same distance short but on the other side → not advanced", n["dest_index"] == 2)
+
+# hairpin: up to B and straight back down
+HP = [{"lat": 43.0, "lon": -82.0}, {"lat": 43.01, "lon": -82.0},
+      {"lat": 43.0, "lon": -82.0 + east(43.0, 20)}]
+tr = navcalc.LegTracker(HP, 1)
+check("hairpin: below the mark → 1", tr.update(43.008, -82.0 + east(43.008, 150), 0)["dest_index"] == 1)
+check("hairpin: above the mark (wide) → 2", tr.update(43.0104, -82.0 + east(43.0104, 150), 1)["dest_index"] == 2)
+
+print("navcalc — XTE is real and signed:")
+tr = navcalc.LegTracker(WP, 1)
+r = tr.update(43.005, -82.0 + east(43.005, 100), 0)["xte_m"]
+check(f"100 m east of a northbound leg → +100 m (right) [{r:.2f}]", abs(r - 100) < 0.5)
+r = tr.update(43.005, -82.0 - east(43.005, 37), 1)["xte_m"]
+check(f"37 m west → -37 m (left) [{r:.2f}]", abs(r + 37) < 0.5)
+check("on the line → ~0", abs(tr.update(43.006, -82.0, 2)["xte_m"]) < 0.05)
+tr = navcalc.LegTracker(WP, 0)
+n = tr.update(42.99, -82.0 + east(42.99, 500), 0)
+check("leg to wp 0 starts at the first fix: XTE 0 there, not n/a", n["xte_m"] is not None
+      and abs(n["xte_m"]) < 0.01 and n["dest_index"] == 0)
+
+print("navcalc — distance, bearing, ETA from the closing rate:")
+tr = navcalc.LegTracker(WP, 1)
+lat0 = 43.0
+for k in range(0, 61, 5):
+    n = tr.update(lat0 + 5 * k / M_LAT, -82.0, 1000 + k)
+    if k == 10:
+        check("ETA n/a before 20 s of history", n["eta_epoch"] is None)
+check(f"DTW live [{n['dtw_m']:.0f} m]", abs(n["dtw_m"] - (0.01 * M_LAT - 300)) < 2)
+check("bearing to a waypoint due north ≈ 0°", min(n["brg_deg"], 360 - n["brg_deg"]) < 0.1)
+check(f"closing 5 m/s [{n['closing_mps']:.2f}]", abs(n["closing_mps"] - 5) < 0.05)
+check("ETA = now + DTW / closing", abs(n["eta_epoch"] - (1060 + n["dtw_m"] / 5)) < 3)
+tr = navcalc.LegTracker(WP, 1)
+for k in range(0, 61, 5):
+    n = tr.update(43.002, -82.0 + east(43.002, k), k)       # sailing across, not closing
+check("not closing → ETA n/a", n["eta_epoch"] is None)
+
+
+# --- the broadcaster -----------------------------------------------------------------------
+class FakeSender:
+    def __init__(self):
+        self.sent, self.sa, self.frames_sent, self.send_errors = [], 35, 0, 0
+        self.last_error = self.last_error_at = self.last_ok_at = None
+        self._lock = threading.Lock()
+
+    def send(self, pgn, prio, data, single=None, dest=0xFF, src=None):
+        self.sent.append((pgn, data, dest, self.sa if src is None else src))
+        return 1
+
+    def pgns(self):
+        return [p for p, *_ in self.sent]
+
+
+class Clock:
+    def __init__(self, t=1_800_000_000.0):
+        self.t = t
+
+    def __call__(self):
+        return self.t
+
+
+def body(**kw):
+    d = {"name": "C4 left", "waypoints": WP, "dest_index": 1, "course": "L1:race"}
+    d.update(kw)
+    return A.RouteBody(**d)
+
+
+def broadcaster(feed):
+    fs, clk = FakeSender(), Clock()
+    b = A._Broadcaster(sender=fs, fix_source=lambda: feed["v"], clock=clk)
+    b.state["expires_at"] = clk.t + A.ROUTE_TTL_S
+    return b, fs, clk
+
+
+print("broadcaster — live nav every cycle:")
+feed = {"v": None}
+b, fs, clk = broadcaster(feed)
+B = body()
+tr = navcalc.LegTracker(WP, 1)
+feed["v"] = {"fix": {"lat": 43.005, "lon": -82.0 + east(43.005, 50), "t": clk.t - 1},
+             "course": "L1:race"}
+check("fresh fix → keeps going", b.cycle(B, tr, 0) is None)
+check("sends 129283 + 129284", fs.pgns() == [129283, 129284])
+xte = struct.unpack("<i", fs.sent[0][1][2:6])[0]
+check(f"the XTE on the wire is the real one (+50 m → {xte / 100:.2f})", abs(xte - 5000) < 50)
+check("dest wp 1 on the wire", struct.unpack("<I", fs.sent[1][1][20:24])[0] == 1)
+check("status shows the live leg", b.state["nav_live"] and b.state["nav"]["dest"] == "C4-02")
+fs.sent.clear()
+feed["v"]["fix"] = {"lat": 43.0103, "lon": -82.0 + east(43.0103, 300), "t": clk.t}
+b.cycle(B, tr, 1)
+check("boat past wp 1 → the next cycle steers to wp 2",
+      struct.unpack("<I", fs.sent[1][1][20:24])[0] == 2 and b.state["nav"]["dest"] == "C4-03")
+
+print("broadcaster — a stale or missing position stops the nav data:")
+for label, v in (("fix 11 s old", {"fix": {"lat": 43.01, "lon": -82.0, "t": clk.t - 11},
+                                   "course": "L1:race"}),
+                 ("no fix", {"fix": None, "course": "L1:race"}),
+                 ("engine unreachable", None),
+                 ("garbage fix", {"fix": {"lat": "x", "lon": 1, "t": clk.t}, "course": "L1:race"}),
+                 ("NaN fix", {"fix": {"lat": float("nan"), "lon": 1, "t": clk.t},
+                              "course": "L1:race"}),
+                 ("fix from the future", {"fix": {"lat": 43.01, "lon": -82.0, "t": clk.t + 60},
+                                          "course": "L1:race"})):
+    fs.sent.clear()
+    feed["v"] = v
+    r = b.cycle(B, tr, 2)
+    check(f"{label} → no 129283/129284, route not ended", r is None and fs.sent == []
+          and not b.state["nav_live"])
+
+print("broadcaster — expiry and course change end the route:")
+feed["v"] = {"fix": {"lat": 43.005, "lon": -82.0, "t": clk.t}, "course": "L2:race"}
+check("course token changed → 'course changed'", b.cycle(B, tr, 3) == "course changed")
+feed["v"] = {"fix": None, "course": None}
+check("course gone → 'course changed'", b.cycle(B, tr, 3) == "course changed")
+feed["v"] = {"fix": None, "course": "L1:race"}
+clk.t = b.state["expires_at"] + 1
+check("past expires_at → 'expired'", b.cycle(B, tr, 3) == "expired")
+
+
+def run_until(b, cond, timeout=3.0):
+    t0 = time.time()
+    while time.time() - t0 < timeout and not cond():
+        time.sleep(0.02)
+    return cond()
+
+
+def terminated(fs):
+    t = [d for p, d, *_ in fs.sent if p == 129283 and d[1] == 0x70]
+    nulls = [d for p, d, *_ in fs.sent if p == 129284
+             and struct.unpack("<I", d[20:24])[0] == n2k.NA_U32]
+    return len(t) >= 1 and len(nulls) >= 1
+
+
+A.NAV_EVERY_S = 0.05
+A.TERMINATE_REPEATS = 2
+print("broadcast thread — clear, expiry, course change send 'navigation terminated':")
+feed = {"v": {"fix": {"lat": 43.005, "lon": -82.0, "t": time.time()}, "course": "L1:race"}}
+fs = FakeSender()
+b = A._Broadcaster(sender=fs, fix_source=lambda: feed["v"])
+b.start(body())
+run_until(b, lambda: 129285 in fs.pgns())
+check("broadcasting: route list + live nav", b.state["broadcasting"] and 129285 in fs.pgns()
+      and 129283 in fs.pgns())
+fs.sent.clear()
+b.stop("cleared")
+check("Clear → stopped, terminated + null nav sent", not b.state["broadcasting"]
+      and b.state["ended"] == "cleared" and terminated(fs))
+n_after = len(fs.sent)
+time.sleep(0.15)
+check("nothing more after Clear", len(fs.sent) == n_after)
+
+ttl0 = A.ROUTE_TTL_S
+A.ROUTE_TTL_S = 0.2
+fs.sent.clear()
+b.start(body())
+run_until(b, lambda: not b.state["broadcasting"])
+check("expiry → stopped by itself, 'expired', terminated", not b.state["broadcasting"]
+      and b.state["ended"] == "expired" and terminated(fs))
+A.ROUTE_TTL_S = ttl0
+
+fs.sent.clear()
+b.start(body())
+run_until(b, lambda: 129283 in fs.pgns())
+feed["v"] = {"fix": {"lat": 43.005, "lon": -82.0, "t": time.time()}, "course": "L2:race"}
+run_until(b, lambda: not b.state["broadcasting"])
+check("course load (new token on the fix feed) → stopped, terminated",
+      not b.state["broadcasting"] and b.state["ended"] == "course changed" and terminated(fs))
+
+print("POST /route — strict validation:")
+from fastapi.testclient import TestClient  # noqa: E402
+
+feed = {"v": None}
+A.BC = A._Broadcaster(sender=FakeSender(), fix_source=lambda: feed["v"])
+client = TestClient(A.app)                 # not a context manager: no bus thread started
+good = {"name": "C4 left", "waypoints": [{"name": "C4-01", "lat": 43, "lon": -82.0, "t": 1783000000},
+                                         {"name": "C4-02", "lat": 43.1, "lon": -82.1}],
+        "dest_index": 1, "course": "L1:race"}
+r = client.post("/route", json=good)
+check("a good route → 200, broadcasting", r.status_code == 200 and r.json()["broadcasting"])
+
+
+def bad(label, mutate, raw=None):
+    d = json.loads(json.dumps(good))
+    if mutate:
+        mutate(d)
+    r = client.post("/route", content=raw or json.dumps(d),
+                    headers={"Content-Type": "application/json"})
+    check(f"{label} → 422", r.status_code == 422)
+
+
+bad("lat 95", lambda d: d["waypoints"][0].update(lat=95))
+bad("lon -181", lambda d: d["waypoints"][1].update(lon=-181))
+bad("lon as a string", lambda d: d["waypoints"][1].update(lon="-82"))
+bad("lat true", lambda d: d["waypoints"][1].update(lat=True))
+bad("missing lon", lambda d: d["waypoints"][1].pop("lon"))
+bad("NaN lat", None, raw=json.dumps(good).replace('"lat": 43,', '"lat": NaN,'))
+bad("Infinity lon", None, raw=json.dumps(good).replace('"lon": -82.1', '"lon": Infinity'))
+bad("one waypoint", lambda d: d.update(waypoints=d["waypoints"][:1]))
+bad("251 waypoints", lambda d: d.update(waypoints=[{"lat": 43, "lon": -82}] * 251))
+bad("dest_index past the end", lambda d: d.update(dest_index=2))
+bad("negative dest_index", lambda d: d.update(dest_index=-1))
+bad("unknown field", lambda d: d.update(steer=True))
+bad("non-ASCII name", lambda d: d["waypoints"][0].update(name="Bouée"))
+bad("name over 32 chars", lambda d: d.update(name="x" * 33))
+check("a rejected route leaves the current one running", A.BC.state["broadcasting"])
+r = client.post("/route", json=dict(good, waypoints=[{"lat": 43, "lon": -82}] * 250))
+check("250 waypoints → accepted (packed under the 223-byte cap)", r.status_code == 200)
+client.post("/stop")
+
+print("bus thread — ISO requests:")
+fs = FakeSender()
+clk = Clock()
+bt = A._BusThread("x", sender=fs, clock=clk, link_state=lambda: "ERROR-PASSIVE")
+
+
+def req(pgn, dest=35, sa=7):
+    cid = (6 << 26) | (0xEA << 16) | (dest << 8) | sa
+    fs.sent.clear()
+    bt.handle(cid | n2k.CAN_EFF_FLAG, pgn.to_bytes(3, "little"))
+    return fs.sent
+
+
+s = req(60928, dest=0xFF)
+check("global request for 60928 → our claim (NAME)", [p for p, *_ in s] == [60928]
+      and n2k.decode_name(s[0][1]) == n2k.NAME)
+s = req(126996)
+check("126996 → product info", [p for p, *_ in s] == [126996])
+s = req(126464)
+lists = {d[0]: [int.from_bytes(d[i:i + 3], "little") for i in range(1, len(d), 3)]
+         for p, d, *_ in s}
+check("126464 → transmit list + receive list",
+      [p for p, *_ in s] == [126464, 126464] and 129284 in lists[0] and 59904 in lists[1])
+s = req(126993)
+check("126993 → heartbeat, carries error-passive", [p for p, *_ in s] == [126993]
+      and s[0][1][3] & 3 == 1)
+s = req(126998)
+check("directed request we can't answer → NAK, sent to the requester",
+      [p for p, *_ in s] == [59392] and s[0][1][0] == 1 and s[0][2] == 7
+      and int.from_bytes(s[0][1][5:8], "little") == 126998)
+s = req(126998, dest=0xFF)
+check("global request we can't answer → silence", s == [])
+s = req(126996, dest=50)
+check("request for another device → silence", s == [])
+check("the requester is a peer; 4 directed requests counted",
+      bt.peers_recent() == [7] and bt.requests_to_us == 4)
+check("answered counts kept", bt.state["answered"]["126996"] == 1 and bt.state["naks"] == 1)
+
+print("bus thread — address-claim contest:")
+
+
+def claim_from(sa, name):
+    cid = (6 << 26) | (0xEE << 16) | (0xFF << 8) | sa
+    fs.sent.clear()
+    bt.handle(cid | n2k.CAN_EFF_FLAG, struct.pack("<Q", name))
+    return fs.sent
+
+
+s = claim_from(35, n2k.NAME + 1)
+check("a higher NAME claims our address → we defend (claim again, keep 35)",
+      fs.sa == 35 and [p for p, *_ in s] == [60928] and bt.state["conflicts"] == 1)
+s = claim_from(35, 1)
+check("a lower NAME claims our address → we move to 128 and claim it",
+      fs.sa == 128 and bt.state["address"] == 128 and s[-1][0] == 60928 and s[-1][3] == 128)
+s = claim_from(42, 5)
+check("another device's claim on its own address → no reaction, it's a peer",
+      s == [] and 42 in bt.peers_recent())
+s = claim_from(128, 2)
+check("lose again → next free address (129)", fs.sa == 129)
+clk.t += A.PEER_WINDOW_S + 1
+check("peers age out of the list", bt.peers_recent() == [])
+
+print("bus thread — restarts after a socket error:")
+
+
+class FakeRx:
+    def __init__(self, fail):
+        self.fail, self.closed = fail, False
+
+    def recvmsg(self, n):
+        if self.fail:
+            raise OSError(100, "Network is down")
+        time.sleep(0.02)
+        raise socket.timeout()
+
+    def close(self):
+        self.closed = True
+
+
+opens = {"n": 0}
+
+
+def open_rx(iface):
+    opens["n"] += 1
+    if opens["n"] == 1:
+        raise OSError(19, "No such device")       # the mcp2515 not up yet at boot
+    return FakeRx(fail=opens["n"] == 2)           # then a socket that dies mid-loop
+
+
+fs = FakeSender()
+bt = A._BusThread("x", sender=fs, open_rx=open_rx)
+bt.backoff_s = 0.01
+bt.start()
+run_until(bt, lambda: opens["n"] >= 3 and bt.state["running"])
+check("open failed, then recv failed → restarted, running again",
+      bt.state["running"] and bt.state["restarts"] == 2 and bt.is_alive())
+check("each (re)start claims the address + sends a heartbeat",
+      fs.pgns().count(60928) >= 2 and 126993 in fs.pgns())
+A.RESPONDER = bt
+A.can_link = lambda *a, **k: {"present": True, "up": True, "state": "ERROR-ACTIVE"}
+check("/health ok while it runs", client.get("/health").json()["status"] == "ok")
+bt.stop_evt.set()
+bt.join(2)
+bt.state["running"] = False
+check("/health degraded when it is down", client.get("/health").json()["status"] == "degraded")
+
+print("diagnostics — the CAN state from ip -details link:")
+IP_JSON = json.dumps([{"ifname": "can0", "flags": ["NOARP", "UP", "LOWER_UP", "ECHO"],
+                       "linkinfo": {"info_kind": "can",
+                                    "info_data": {"state": "BUS-OFF", "restart_ms": 100},
+                                    "info_xstats": {"restarts": 3, "bus_error": 0,
+                                                    "error_warning": 1, "error_passive": 2,
+                                                    "bus_off": 3}}}])
+
+
+class R:
+    def __init__(self, rc, out):
+        self.returncode, self.stdout = rc, out
+
+
+import importlib  # noqa: E402
+
+A2 = importlib.reload(A)                          # the real can_link again
+L = A2.can_link("can0", run=lambda *a, **k: R(0, IP_JSON), ttl=0)
+check("state, restart-ms, bus-off and restart counts read", L["state"] == "BUS-OFF"
+      and L["restart_ms"] == 100 and L["bus_off"] == 3 and L["restarts"] == 3 and L["up"])
+L = A2.can_link("can0", run=lambda *a, **k: R(1, ""), ttl=0)
+check("no such interface → not present", not L["present"])
+
+
+def boom(*a, **k):
+    raise FileNotFoundError("ip")
+
+
+check("no ip binary → not present, no crash", not A2.can_link("can0", run=boom, ttl=0)["present"])
+
+print("diagnostics — the iPad's one line:")
+fs = FakeSender()
+now = 1000.0
+up = {"present": True, "up": True, "state": "ERROR-ACTIVE"}
+fs.last_ok_at = now - 1
+check("healthy → sending", A2.link_word(up, fs, True, now) == "sending")
+check("bus-off → no bus", A2.link_word(dict(up, state="BUS-OFF"), fs, True, now) == "no bus")
+check("interface missing → no bus", A2.link_word({"present": False}, fs, True, now) == "no bus")
+check("interface down → no bus", A2.link_word(dict(up, up=False), fs, True, now) == "no bus")
+check("error-passive (nobody acks us) → errors",
+      A2.link_word(dict(up, state="ERROR-PASSIVE"), fs, True, now) == "errors")
+fs.last_error_at = now - 5
+check("a send error in the last minute → errors", A2.link_word(up, fs, True, now) == "errors")
+fs.last_error_at = now - 120
+check("an old send error → sending again", A2.link_word(up, fs, True, now) == "sending")
+check("bus thread down → errors", A2.link_word(up, fs, False, now) == "errors")
+
+A2.can_link = lambda *a, **k: dict(up, restart_ms=100, bus_off=0)
+A2.BUS.frames_sent, A2.BUS.send_errors = 12, 1
+c2 = TestClient(A2.app)
+st = c2.get("/status").json()["bus"]
+check("/status bus: link, address, frames, errors, can state, peers",
+      st["link"] in ("sending", "errors", "no bus") and st["address"] == 35
+      and st["frames_sent"] == 12 and st["send_errors"] == 1
+      and st["can"]["state"] == "ERROR-ACTIVE" and st["peers"] == [])
+h = c2.get("/health").json()
+check("/health carries the same bus block", "bus" in h and h["bus"]["can"]["restart_ms"] == 100)
+
+print("PASS" if ok else "FAIL")
+sys.exit(0 if ok else 1)

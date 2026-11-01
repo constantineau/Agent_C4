@@ -11,7 +11,13 @@ endpoints and every course-mark vertex are always kept, and a shortcut between t
 points that would cut an island / exclusion zone from the frozen obstacle homework is split
 back toward the router's own vertices (safety beats the point budget). The destination index
 — the plotter's "steer to" — is the first waypoint AHEAD of the boat, found by projecting its
-position onto the path within the current leg; with no fix it falls back to the second point.
+position onto the path within the current leg. With no fresh own-ship fix nothing is sent.
+
+After the send, n2kout keeps the leg live by itself: once a second it reads `fix_feed()` (the
+engine's GET /gps/fix — the freshest own-ship position and the course token) and advances the
+waypoint and recomputes XTE / distance / bearing / ETA. The token is the course load id + the
+active route: any course change (a /course/load, a practice course, a switch) changes it and
+n2kout ends the route with "navigation terminated", even if the explicit clear never arrived.
 
 Onboard-only (the cloud has no bus): the endpoints answer 'unavailable' when the
 broadcaster isn't reachable. Crew-initiated, crew-cleared: nothing broadcasts on its own.
@@ -20,10 +26,11 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 
-from . import deviation, landchart, orinroute, reoptimize, routing
+from . import datasource, deviation, landchart, orinroute, reoptimize, routing
 from . import navigator as NAV
 
 N2KOUT_URL = os.environ.get("N2KOUT_URL", "http://127.0.0.1:8210").rstrip("/")
@@ -47,6 +54,47 @@ NO_SAFE_WPT = "No safe waypoint from here. Press Re-route now."
 NO_SHORE = "GPS route doesn't check the shore."
 PI_CROSSES_LAND = "Pi route crosses land. Not sent to GPS."
 CROSSES_LAND = "Route crosses land. Not sent to GPS."
+NO_FIX = "No GPS fix. Not sent to GPS."
+# a fix older than this is no fix (n2kout applies the same limit to its live nav data)
+FIX_MAX_AGE_S = float(os.environ.get("GPSOUT_FIX_MAX_AGE_S", "10"))
+
+
+def own_fix(now=None):
+    """(lat, lon, epoch) of the freshest own-ship position, lat and lon from the SAME source
+    (the source policy's pick), received within FIX_MAX_AGE_S; else None. Only the live Signal K
+    cache counts: the archive fallback can be minutes old."""
+    src = datasource.active()
+    getter = getattr(src, "latest_position", None)
+    if getter is None:
+        return None
+    try:
+        fix = getter()
+    except Exception:  # noqa: BLE001 — no fix read is no fix
+        return None
+    if not fix:
+        return None
+    now = time.time() if now is None else now
+    lat, lon, t = fix
+    if now - t > FIX_MAX_AGE_S:
+        return None
+    return lat, lon, t
+
+
+def course_token():
+    """Which course is aboard: the course load id (new on every /course/load, practice course
+    or switch) + the active route. Cheap: one small file read."""
+    try:
+        load = (orinroute._read(orinroute._load_id_path()) or {}).get("load_id") or "noload"
+        return f"{load}:{NAV.active_route()}"
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def fix_feed():
+    """GET /gps/fix — what n2kout polls every second to keep the plotter's leg live."""
+    fix = own_fix()
+    return {"fix": None if fix is None else {"lat": fix[0], "lon": fix[1], "t": fix[2]},
+            "course": course_token()}
 
 
 def _post(path, payload=None):
@@ -213,7 +261,8 @@ def _dest_index(pts, boat, mark_pos=None, next_k=None, blocked=None):
     the first waypoint AHEAD of it. `mark_pos` is {course mark number: index in pts}; with the
     navigator's next-mark number `next_k` the search is confined to the CURRENT leg (previous
     mark's vertex → next mark's), so an out-and-back course can't snap the boat onto the other
-    leg. Next mark = the path's first vertex (pre-start) → 0. No fix → 1.
+    leg. Next mark = the path's first vertex (pre-start) → 0. No fix → None: the caller refuses
+    (never a default waypoint).
 
     Moving PAST the projected waypoint — the later segment winning a tie (boat on a waypoint, or
     off a corner both segments are nearest at), or a waypoint the boat is within ARRIVE_NM of — is
@@ -227,7 +276,7 @@ def _dest_index(pts, boat, mark_pos=None, next_k=None, blocked=None):
     can reach in a straight line, never before the current leg's start; if none can, None — the
     caller refuses the push rather than steer through a hazard."""
     if not boat or boat[0] is None or len(pts) < 2:
-        return 1
+        return None
     dest, lo = _dest_candidate(pts, boat, mark_pos, next_k, blocked)
     if blocked is None:
         return dest
@@ -422,6 +471,11 @@ def _show(source: str = "playbook", variant=None, route=None):
         # the wire name is what the plotter shows — short and clean (LAU caps at 16 chars)
         wire_name, label = f"C4 {vid}"[:16], f"{vid} (gameplan)"
     nav_marks, boat, next_name, next_idx = _course_context(route)
+    fix = own_fix()
+    if fix is None:
+        return {"shown": False, "dest_index": None, "note": NO_FIX}
+    if boat is None or boat[0] is None:
+        boat = (fix[0], fix[1])
     nav_names = [m.get("name") for m in nav_marks]
     if source == "playbook" and not names and len(nav_marks) > 1:
         # a variant frozen before legs carried names: assume it sails the navigator's course
@@ -502,15 +556,17 @@ def _show(source: str = "playbook", variant=None, route=None):
         # exported segment, and the boat's line to the steer-to waypoint, is checked against the
         # land chart once more; one crossing refuses the send.
         legs = list(zip(pts, pts[1:]))
-        if boat is not None and boat[0] is not None:
-            legs.append(({"lat": boat[0], "lon": boat[1]}, pts[dest]))
+        legs.append(({"lat": boat[0], "lon": boat[1]}, pts[dest]))
         if any(land.crosses(a["lat"], a["lon"], b["lat"], b["lon"]) for a, b in legs):
             pi_route = rerouted and (ro or {}).get("source") == "pi"
             return {"shown": False, "dest_index": None,
                     "note": PI_CROSSES_LAND if pi_route else CROSSES_LAND}
-    shore = bool(land is not None and (boat is None or land.covers(boat[0], boat[1]))
+    # shore-checked only when the chart covers the boat AND every waypoint: the boat→steer-to
+    # line was then checked too
+    shore = bool(land is not None and land.covers(boat[0], boat[1])
                  and all(land.covers(p["lat"], p["lon"]) for p in pts))
-    st = _post("/route", {"name": wire_name, "waypoints": wpts, "dest_index": dest})
+    st = _post("/route", {"name": wire_name, "waypoints": wpts, "dest_index": dest,
+                          "course": course_token()})
     if st.get("error"):
         return {"shown": False, "note": st["error"]}
     return {"shown": bool(st.get("broadcasting")), "route": st.get("route"), "label": label,

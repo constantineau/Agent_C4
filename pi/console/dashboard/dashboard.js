@@ -1637,7 +1637,8 @@
             : '<span class="gps-note">not showing</span>') + "</div>" +
         '<div class="rt-btns"><button class="rt-btn rt-gps"' + (App.gpsBusy || !v.canShowOnGps ? " disabled" : "") +
         ' onclick="gpsShow(\'reroute\')">Show on GPS</button></div>' +
-        (App.gpsNote ? '<span class="gps-note">' + esc2(App.gpsNote) + "</span>" : "") + "</div>";
+        (App.gpsNote ? '<span class="gps-note">' + esc2(App.gpsNote) + "</span>" : "") +
+        gpsLinkLines(g) + "</div>";
     }
     return h + "</div>";
   }
@@ -1841,6 +1842,16 @@
     App.gpsNote = "";
     await fetchGps();
   };
+  /* one plain line on the bus link (n2kout's own read of can0 + its sends), plus why the
+     steer-to isn't live or why the route ended. Nothing when the plotter link is off. */
+  function gpsLinkLines(g) {
+    if (!g || g.available === false || !g.bus) return "";
+    const lines = ["GPS link: " + (g.bus.link || "no bus")];
+    if (g.broadcasting && g.nav_live === false) lines.push("No position. Steer-to paused.");
+    if (!g.broadcasting && g.ended === "expired") lines.push("Route expired. Send again.");
+    if (!g.broadcasting && g.ended === "course changed") lines.push("Course changed. Route cleared.");
+    return lines.map((l) => '<p class="gps-note">' + esc2(l) + "</p>").join("");
+  }
   function gpsHtml() {
     if (App.src !== "live") return "";
     const g = App.gps;
@@ -1856,7 +1867,7 @@
       `<button class="cw-btn"${busy} onclick="gpsShow('playbook')">▶ Gameplan route</button>` +
       `<button class="cw-btn"${busy} onclick="gpsShow('reroute')">⟳ New route</button>` +
       `<button class="cw-btn"${busy} onclick="gpsClear()">✕ Clear</button>` +
-      '</div>' + note + '</div>';
+      '</div>' + note + gpsLinkLines(g) + '</div>';
   }
   function strategyStackHtml() {
     const parts = [synthHtml(), selectorHtml(), deviationHtml(), driftHtml(), plangapHtml(),

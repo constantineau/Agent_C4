@@ -22,6 +22,16 @@ from app import navigator as NAV
 # is pinned in test_reroute_button.py
 gpsout._course_ok = lambda ro: True
 
+
+def _fix_from_latest(now=None):
+    """The tests drive the boat through NAV._latest; the live fix follows it (fresh)."""
+    import time as _t
+    f = NAV._latest() or {}
+    return None if f.get("lat") is None else (f["lat"], f["lon"], _t.time())
+
+
+gpsout.own_fix = _fix_from_latest
+
 ok = True
 
 
@@ -98,8 +108,19 @@ check("dest waypoint lies ahead: closer to the finish than the boat",
       NAV._hav_nm(wp[d]["lat"], wp[d]["lon"], 43.95, -82.05)
       <= NAV._hav_nm(boat["lat"], boat["lon"], 43.95, -82.05) + 0.05)
 NAV._latest = lambda: {"lat": None, "lon": None}
-gpsout.show()
-check("no fix → dest falls back to 1", sent["payload"]["dest_index"] == 1)
+sent.clear()
+res = gpsout.show()
+check("no fix → refused, nothing sent (never a default waypoint 2)",
+      res == {"shown": False, "dest_index": None, "note": "No GPS fix. Not sent to GPS."}
+      and not sent)
+NAV._latest = lambda: {"lat": boat["lat"], "lon": boat["lon"]}
+NAV.get_navigator = lambda route=None: {"available": False}
+gpsout.own_fix = lambda now=None: None
+sent.clear()
+res = gpsout.show()
+check("a stale fix (own_fix None) refuses even when the navigator has a position",
+      res["note"] == "No GPS fix. Not sent to GPS." and not sent)
+gpsout.own_fix = _fix_from_latest
 
 print("   practice course, Finish == Start: the return leg keeps its own bounds (Codex repro)")
 # windward/leeward like make_practice_course: Start and Finish at the SAME spot, Top 2 nm upwind.

@@ -7,6 +7,7 @@ from app import gpsout
 # these pin the path geometry; the course check (#125: a route for another course is refused)
 # is pinned in test_reroute_button.py
 gpsout._course_ok = lambda ro: True
+gpsout.own_fix = lambda now=None: (43.001, -82.4, 0)     # a fresh fix at the start of PATH
 
 ok = True
 

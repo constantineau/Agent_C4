@@ -374,6 +374,21 @@ class OnboardSource:
                 return max(ranked, key=lambda r: r[1])
         return freshest
 
+    def latest_position(self):
+        """(lat, lon, epoch) from the live cache only — lat and lon from ONE source, the source
+        policy's pick — or None. For the chartplotter's live leg (gpsout): the archive fallback
+        of latest_value can be minutes old, and a lat from one GPS with a lon from another is
+        no position at all."""
+        lats = self._live_fresh("navigation.position.latitude")
+        lons = {s: (e, v) for s, e, v in self._live_fresh("navigation.position.longitude")}
+        best = self._prefer("navigation.position.latitude",
+                            [c for c in lats if c[0] in lons])
+        if not best:
+            return None
+        src, e, lat = best
+        le, lon = lons[src]
+        return lat, lon, min(e, le)
+
     # --- CloudSource interface --------------------------------------------
     def latest_value(self, path):
         """Raw SI value for a path from the priority-preferred source — live cache, then archive.

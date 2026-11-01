@@ -29,6 +29,16 @@ os.environ["ENGINE_DB"] = os.path.join(_tmp, "engine", "engine.db")
 from app import deviation, gpsout, orinroute, reoptimize, reroutelog, routing  # noqa: E402
 from app import navigator as NAV  # noqa: E402
 
+
+def _fix_from_latest(now=None):
+    """The tests drive the boat through NAV._latest; the live fix follows it (fresh)."""
+    import time as _t
+    f = NAV._latest() or {}
+    return None if f.get("lat") is None else (f["lat"], f["lon"], _t.time())
+
+
+gpsout.own_fix = _fix_from_latest
+
 ok = True
 
 

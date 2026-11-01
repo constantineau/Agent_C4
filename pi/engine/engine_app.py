@@ -205,6 +205,7 @@ def course_load(body: dict):
             orinroute.drop_definition()
             print(f"[course/load] failed: {type(exc).__name__}: {exc}", flush=True)
             return {"loaded": False, "detail": "Couldn't save the course. Try again."}
+    gpsout.clear()       # the plotter's route was for the old course (n2kout also sees the token)
     return {"loaded": True, "route": route, "course_id": cid, "marks": len(marks), "skipped": skipped}
 
 
@@ -377,6 +378,13 @@ def gps_show(body: dict | None = None):
 def gps_clear():
     """Stop broadcasting — the plotter drops the external route when the stream goes quiet."""
     return gpsout.clear()
+
+
+@app.get("/gps/fix")
+def gps_fix():
+    """For n2kout (polled every second while a route is on the plotter): the freshest own-ship
+    fix {lat, lon, t} or null, and the course token. Read-only."""
+    return gpsout.fix_feed()
 
 
 @app.get("/gps/status")
