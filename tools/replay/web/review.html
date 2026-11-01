@@ -537,8 +537,14 @@
     if (b.id === "ovCopy") {
       var inp = $("ovLink");
       inp.select();
-      try { navigator.clipboard.writeText(inp.value); } catch (e) { document.execCommand("copy"); }
-      b.textContent = "Copied";
+      var ok = function () { b.textContent = "Copied"; };
+      var fail = function () { inp.focus(); inp.select(); b.textContent = "Select + copy"; };
+      var legacy = function () {
+        try { document.execCommand("copy") ? ok() : fail(); } catch (e) { fail(); }
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(inp.value).then(ok, legacy);
+      } else legacy();
     }
   });
   if (OVR.isActive(OV)) showTab(true);
