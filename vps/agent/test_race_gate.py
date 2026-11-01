@@ -178,6 +178,7 @@ def fake_orin(path, body, timeout):
 
 _real_post = engine_app._copilot_post
 engine_app._copilot_post = fake_orin
+engine_app._sleep = lambda sec: None          # the post-commit wait is pinned further down
 ORIN["stage"] = lambda b: {"staged": True, "nonce": b["nonce"], "ttl_s": 3}
 ORIN["commit"] = {"loaded": True, "race_id": "r1"}
 r = _REAL_COPILOT_LOAD(BUNDLE)
@@ -210,6 +211,68 @@ check("commit unanswered → 'didn't confirm', plain",
       _REAL_COPILOT_LOAD(BUNDLE) == {"loaded": False, "detail": engine_app.NO_CONFIRM})
 ORIN["commit"] = {"loaded": False, "detail": "Too late. Not loaded."}
 check("the Orin's 'too late' is passed on", _REAL_COPILOT_LOAD(BUNDLE)["detail"] == "Too late. Not loaded.")
+
+print("a commit the Orin doesn't confirm (connection reset): the Pi keeps the lock past the window")
+engine_app.copilot_load = _REAL_COPILOT_LOAD             # the real two-step, through the endpoint
+SLEPT = []
+engine_app._sleep = lambda sec: SLEPT.append((sec, racelog.SESSION_LOCK.locked()))
+ORIN["commit"] = {"loaded": True, "race_id": "r1"}
+r = client.post("/playbook/load", json=BUNDLE).json()
+h = engine_app.bundle_hash(BUNDLE)
+check("confirmed: approved, no extra wait", r["copilot"]["loaded"] and SLEPT == []
+      and client.get("/playbook/copilot").json() == {"hash": h})
+
+
+def orin_reset(path, body, timeout):
+    """The commit is sent, then the connection resets (the Orin may have taken it). That is what
+    _copilot_post answers for a dropped connection (pinned against a real socket below)."""
+    if path.endswith("/commit"):
+        CALLS.append((path, dict(body), timeout))
+        return {"loaded": False, "detail": engine_app.NO_COPILOT}
+    return fake_orin(path, body, timeout)
+
+
+engine_app._copilot_post = orin_reset
+r = client.post("/playbook/load", json=dict(BUNDLE, race_id="r3")).json()
+check("reset: not loaded, plain", r["copilot"] == {"loaded": False, "detail": engine_app.NO_CONFIRM})
+check("reset: the Pi waited out the Orin's window (TTL 3 s + 1 s) still holding the lock",
+      len(SLEPT) == 1 and 3.9 < SLEPT[0][0] <= 4.0 and SLEPT[0][1] is True)
+check("reset: NO playbook approved for the copilot (not the old one, not the new one)",
+      client.get("/playbook/copilot").json() == {"hash": None})
+SLEPT.clear()
+ORIN["commit"] = {"loaded": False, "detail": "Too late. Not loaded."}
+client.post("/playbook/load", json=BUNDLE)
+check("an Orin refusal also waits out the window", len(SLEPT) == 1 and SLEPT[0][1] is True)
+engine_app._sleep = time.sleep
+engine_app.copilot_load = fake_copilot_load
+
+print("the reset is what _copilot_post really makes of a dropped connection")
+import http.server  # noqa: E402
+
+
+class Drop(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        self.connection.shutdown(2)                  # accepted, then the connection drops
+
+    def log_message(self, *a):
+        pass
+
+
+srv = http.server.HTTPServer(("127.0.0.1", 0), Drop)
+threading.Thread(target=srv.handle_request, daemon=True).start()
+os.environ["COPILOT_URL"] = f"http://127.0.0.1:{srv.server_address[1]}"
+check("a dropped connection → the 'can't reach' answer the Pi then waits on",
+      _real_post("/playbook/commit", {"nonce": "x"}, 2) == {"loaded": False, "detail": engine_app.NO_COPILOT})
+srv.server_close()
+
+print("one hash on both boxes")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "pi", "orin"))
+from copilot import playbook as orin_pb  # noqa: E402
+
+for b in (BUNDLE, {"race_id": "é", "variants": [{"id": 1.5}], "signature": {"value": "ab"}}):
+    check("engine_app.bundle_hash == copilot playbook.bundle_hash", engine_app.bundle_hash(b)
+          == orin_pb.bundle_hash(b))
 engine_app._copilot_post = _real_post
 
 print("M14: the scoped close never ends a newer session (real store)")

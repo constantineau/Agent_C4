@@ -370,9 +370,18 @@ timeout doesn't stop the Orin's handler, so the write itself is bounded: the Ori
 within `PLAYBOOK_COMMIT_TTL_S` (3 s) of RECEIVING the stage, on its own monotonic clock, checked
 again right before the file goes live ("Too late. Not loaded."). The Pi sends the commit only
 after the stage answered and waits for it at least the TTL + 1 s before letting go of the lock.
-So the write can only land while the lock is held, whatever the network or the Orin's disk does,
-and no wall clocks are compared (Pi/Orin skew doesn't matter). A race-start tap waits at most
-~8 s. The other POSTs (/brief, /strategy, /narrate,
+If the commit isn't confirmed (a refusal, a reset, a timeout), the Pi keeps the lock until at
+least TTL + 1 s after it sent the commit: a socket timeout is a maximum, not a minimum. No wall
+clocks are compared (Pi/Orin skew doesn't matter). A race-start tap waits at most ~8 s.
+
+The Pi, not the file, decides WHICH playbook the copilot uses. On a confirmed commit the Pi records
+the bundle's hash (`GET /playbook/copilot`); an unconfirmed commit approves none. That record
+changes only inside a load, i.e. under the session lock with no race running, so it is the
+playbook pinned at the gun. The copilot asks the Pi for it itself, over the cable (cached a few
+seconds), before every use, including its own coach timer. Nothing on the boat Wi-Fi is in that
+path. A playbook file whose hash doesn't match, or a Pi it can't ask, means NO playbook:
+"Playbook not confirmed. Running without it." So a rename that lands late, after the Pi gave up,
+can never become the playbook in use during a race. The other POSTs (/brief, /strategy, /narrate,
 /narrate/reset, /dashboard, /detail) take no shore content.
 
 **Lab Deploy (`vps/lab/app/deploy.py`)**: best effort on top of the boat. The start is checked before

@@ -13,7 +13,10 @@ Pins:
   * a write that stalls past the TTL (delayed remote write) never goes live, even though the
     commit arrived in time: the Pi gives up, and nothing lands afterwards;
   * wrong nonce, or a second commit of the same stage → refused;
-  * PLAYBOOK_LOAD_FROM defaults to the Pi's cable address; the TTL is under the Pi's 4 s wait.
+  * PLAYBOOK_LOAD_FROM defaults to the Pi's cable address; the TTL is under the Pi's 4 s wait;
+  * the copilot USES a playbook only if its hash is the one the Pi approved (GET /playbook/copilot,
+    asked by the copilot itself over the cable): a file that went live late, or that the Pi never
+    confirmed, or a Pi it can't ask → no playbook, "Playbook not confirmed. Running without it."
 
 Temp PLAYBOOK_PATH; no network.
     cd pi/orin && python3 -m copilot.test_playbook_gate
@@ -131,6 +134,59 @@ check("the stalled commit refused itself", res.get("r") == TOO_LATE)
 check("nothing landed after the Pi gave up (a race may have started)", on_disk() == "r2")
 check("no temp file left", not os.path.exists(PATH + ".tmp"))
 app_mod._write_tmp = real_write
+
+print("the Pi decides WHICH playbook the copilot may use (a late rename never counts):")
+from . import engine_client, playbook as pbm  # noqa: E402
+
+PIN = {"answer": {"hash": None}, "asks": 0}
+
+
+class PinEngine:
+    def __init__(self, *a, **k):
+        pass
+
+    def _get(self, path, params=None):
+        PIN["asks"] += 1
+        assert path == "/playbook/copilot"
+        a = PIN["answer"]
+        if isinstance(a, Exception):
+            raise a
+        return a
+
+
+engine_client.EngineClient = PinEngine
+on_file = json.load(open(PATH))                  # r2 is on disk
+
+
+def fresh():
+    pbm._pin.update(at=None, hash=None)
+    return pbm.load()
+
+
+PIN["answer"] = {"hash": pbm.bundle_hash(on_file)}
+pb = fresh()
+check("the file the Pi approved → used", pb.loaded and pb.race_id == "r2" and pb.note is None)
+PIN["answer"] = {"hash": pbm.bundle_hash(A)}     # the Pi approved r1; r2 landed late
+pb = fresh()
+check("a file the Pi didn't approve (late rename) → NOT used", not pb.loaded and pb.race_id is None
+      and pb.note == "Playbook not confirmed. Running without it.")
+PIN["answer"] = {"hash": None}
+check("nothing approved (the commit wasn't confirmed) → not used", not fresh().loaded)
+PIN["answer"] = {"available": False, "error": "timed out"}
+check("the Pi can't be asked → not used (fail closed)", not fresh().loaded)
+PIN["answer"] = {"hash": "0" * 64}
+pbm._pin.update(at=None, hash=None)
+h = client_from("10.10.10.1").get("/health").json()["playbook"]
+check("/health: not loaded, with the plain note", h["loaded"] is False
+      and h["note"] == "Playbook not confirmed. Running without it.")
+PIN["answer"] = {"hash": pbm.bundle_hash(on_file)}
+fresh()
+n = PIN["asks"]
+pbm.load()
+pbm.load()
+check("an approval is cached a few seconds (not a Pi call per read)", PIN["asks"] == n)
+check("the commit itself answers with what it wrote, before the Pi approves it",
+      pbm.load(confirm=False).race_id == "r2")
 
 print("short text:")
 for s in (REFUSED["detail"], TOO_LATE["detail"]):

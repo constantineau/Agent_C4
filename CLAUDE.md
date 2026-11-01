@@ -58,7 +58,8 @@ computation is separated from the LLM across three tiers:
 - **Frozen at the gun, enforced:** every endpoint that takes shore homework refuses while the
   boat's race log has a race session running (an unreadable log counts as racing), via ONE
   helper, `vps/agent/app/racegate.py`. The Orin copilot takes a playbook only from the Pi
-  engine over the cable: the engine's /playbook/load forwards it while still holding the lock.
+  engine over the cable (stage + time-bounded commit, under the lock), and USES it only if its
+  hash is the one the Pi approved (`GET /playbook/copilot`); else it runs without a playbook.
   The Lab's Deploy checks the race start before every post. Per-endpoint list:
   `docs/RRS41_COMPLIANCE.md` §8. A new homework load MUST use `racegate.hold()`.
 - **Human-in-the-loop learning:** Lab proposals never mutate the boat model; a person

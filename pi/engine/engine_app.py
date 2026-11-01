@@ -402,10 +402,63 @@ def copilot_load(bundle):
     if not 0 < ttl <= MAX_ORIN_TTL_S:
         return {"loaded": False, "detail": "Orin commit window is wrong. Not loaded."}
     wait = max(float(os.environ.get("COPILOT_COMMIT_TIMEOUT_S", "4")), ttl + 1.0)
+    sent = time.monotonic()
     out = _copilot_post("/playbook/commit", {"nonce": nonce}, wait)
+    if out.get("loaded") is True:
+        approve_copilot_playbook(bundle_hash(bundle))     # the one the copilot may use
+        return out
+    # Not confirmed (a refusal, a reset, a timeout): the Orin may still be writing. Approve
+    # NOTHING (a late file is never used, see copilot playbook.load), and keep holding the lock
+    # until the Orin's commit window has certainly closed: a timeout is a maximum, not a minimum.
+    approve_copilot_playbook(None)
+    _sleep(max(0.0, sent + ttl + 1.0 - time.monotonic()))
     if out.get("detail") == NO_COPILOT:
         return {"loaded": False, "detail": NO_CONFIRM}
     return out
+
+
+_sleep = time.sleep                      # tests swap it
+
+
+def bundle_hash(bundle):
+    """sha256 of the whole bundle as canonical JSON. MUST match pi/orin/copilot/playbook.bundle_hash."""
+    import hashlib
+    import json as _json
+    return hashlib.sha256(_json.dumps(bundle, sort_keys=True, separators=(",", ":"),
+                                      ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+def _approved_path():
+    base = os.path.dirname(os.environ.get("ENGINE_DB", "/var/lib/sr33/engine/engine.db"))
+    return os.path.join(base, "copilot-playbook.json")
+
+
+def approve_copilot_playbook(h):
+    """Record which playbook the Orin copilot may use (its hash, or None for none). Only ever
+    called from copilot_load, i.e. under the race log's session lock with no race running, so
+    the approved hash can't change during a race: it is the playbook pinned at the gun."""
+    import json as _json
+    import tempfile
+    path = _approved_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".cpb-", suffix=".tmp")
+    with os.fdopen(fd, "w") as f:
+        _json.dump({"hash": h, "at": int(time.time())}, f)
+    os.replace(tmp, path)
+
+
+@app.get("/playbook/copilot")
+def copilot_playbook_approved():
+    """{hash}: the playbook the Orin copilot may use (the last one it confirmed under the race
+    lock), or null for none. The copilot asks before it uses its file; anything else, it runs
+    without a playbook."""
+    import json as _json
+    try:
+        with open(_approved_path()) as f:
+            h = (_json.load(f) or {}).get("hash")
+    except (OSError, ValueError):
+        h = None
+    return {"hash": h if isinstance(h, str) else None}
 
 
 @app.get("/playbook")

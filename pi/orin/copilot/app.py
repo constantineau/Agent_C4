@@ -86,7 +86,8 @@ def health():
         "playbook": {"loaded": pb.loaded, "race_id": pb.race_id,
                      "variants": len(pb.variants),
                      "signed": pb.signed, "signature_ok": pb.signature_ok,
-                     "sail_inventory": pb.boat_model.get("sail_inventory", [])},
+                     "sail_inventory": pb.boat_model.get("sail_inventory", []),
+                     "note": pb.note},
         # Honest degraded modes so the crew knows what they're getting.
         "mode": ("llm" if (eng_ok and llm_ok) else
                  "deterministic" if eng_ok else "engine-unreachable"),
@@ -216,7 +217,8 @@ def playbook_commit(body: dict, request: Request):
             return {"loaded": False, "detail": TOO_LATE}
         os.replace(tmp, path)
     copilot.reset_narration()            # new homework → clear the show-once dedup
-    pb = playbook_mod.load()
+    playbook_mod._pin["at"] = None       # re-ask the Pi which playbook is approved
+    pb = playbook_mod.load(confirm=False)    # the Pi approves it once this answer reaches it
     return {"loaded": pb.loaded, "race_id": pb.race_id, "variants": len(pb.variants),
             "plays": len(pb.play_ids()), "signed": pb.signed, "signature_ok": pb.signature_ok,
             "path": path}
