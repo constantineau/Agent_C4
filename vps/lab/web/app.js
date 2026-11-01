@@ -3682,7 +3682,7 @@ function learnConfigCard() {
   const cp = (Lab.learning || {}).configPolars;
   const inner = !cp ? '<div class="muted">Loading…</div>'
     : !(cp.configs || []).length
-      ? '<div class="muted" style="font-size:12px">Nothing yet. Fills in when the crew taps the CURRENT SAILS bar during races.</div>'
+      ? '<div class="muted" style="font-size:12px">Log sail changes, then run a boat-log debrief.</div>'
       : cp.configs.map((g) => `<details style="margin-bottom:6px"><summary style="cursor:pointer">
           <b>${esc(g.config)}</b> <span class="muted">· ${g.n_cells} cell${g.n_cells === 1 ? "" : "s"} · ${g.samples} samples · ${g.races} race${g.races === 1 ? "" : "s"}</span></summary>
           <table style="margin-top:6px"><thead><tr><th>TWS</th><th>TWA</th><th>best speed</th><th>vs rating</th><th>n</th></tr></thead>
@@ -4100,7 +4100,7 @@ function polDecisionsCard() {
     <h3>Teach the boat model <span class="muted" style="font-weight:400">— pick which races count</span></h3>
     <div class="muted" style="font-size:12px;margin-bottom:6px">Only measured wind counts. Nothing changes until you approve it.
       ${qhelp("The route uses the ORC polar plus the changes you approved. Suggestions use measured wind only. Data from forecasts is left out and counted.")}</div>
-    ${pending ? `<div class="dep-row"><span class="pill warn">suggestion #${pending.id} waiting</span> helm ${pending.helm_current} → <b>${pending.helm_proposed}</b> · ${(pending.adjustments || []).length} polar tweak(s) · from ${((pending.summary || {}).recordings || []).length || "?"} recording(s)${(pending.summary || {}).excluded_by_choice ? `, ${(pending.summary || {}).excluded_by_choice} left out by you` : ""} · <a href="#debrief">review it</a></div>` : ""}
+    ${pending ? `<div class="dep-row"><span class="pill warn">suggestion #${pending.id} waiting</span> helm ${pending.helm_current} → <b>${pending.helm_proposed}</b> · ${(pending.adjustments || []).length} polar tweak(s) · from ${((pending.summary || {}).recordings || []).length || "?"} recording(s)${(pending.summary || {}).excluded_by_choice ? `, ${(pending.summary || {}).excluded_by_choice} left out by you` : ""} · <a href="#learnings">review it</a></div>` : ""}
     ${src.length ? `<div class="muted" style="font-size:12px;margin:8px 0 4px">Which races teach the boat model:</div>
       <table class="fleet-tbl"><thead><tr><th>Race</th><th>Gives</th><th>Debrief</th></tr></thead><tbody>${rows}</tbody></table>
       <div style="margin-top:4px"><button class="mini" onclick="polSetAllUse(true)">All</button> <button class="mini" onclick="polSetAllUse(false)">None</button></div>`

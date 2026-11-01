@@ -167,7 +167,31 @@ DOWNLOAD_BUDGET_S = float(os.environ.get("PLUME_DOWNLOAD_BUDGET_S", "240"))
 REQUEST_TIMEOUT_S = float(os.environ.get("PLUME_REQUEST_TIMEOUT_S", "20"))
 
 
-class BackoffFetch:
+class _StampsDownloads:
+    """A run's `at` should be when its files were downloaded, not when this pass sampled them: a
+    pass that resamples cached GRIBs (a new target, offline or online) would otherwise report old
+    downloads as fresh. `note` keeps each model's newest file time; `stamp` applies it."""
+
+    def note(self, model, t):
+        d = self.downloaded_at
+        d[model] = max(d.get(model, 0), t)
+
+    def stamp(self, st, now):
+        """Runs this pass added get `at` = their files' download time (never later than now)."""
+        for m, t in self.downloaded_at.items():
+            for r in (st.get("runs") or {}).get(m) or []:
+                if r.get("at") == int(now):
+                    r["at"] = min(int(t), int(now))
+        return st
+
+
+def _miss_key(name, bbox):
+    """Back-off is per model AND box: a model with no run for one box (HRRR outside its coverage)
+    may well have one for the next."""
+    return name + "@" + ",".join(f"{float(x):.2f}" for x in bbox)
+
+
+class BackoffFetch(_StampsDownloads):
     """`lab.record`'s fetch, with a back-off for a cycle that is due by the model's nominal lag but
     not posted yet (ECMWF posts hours later than its lag says). After a miss, that cycle isn't
     re-probed for MISS_BACKOFF_S; a newer due cycle is tried at once. While backing off, a target
@@ -182,6 +206,7 @@ class BackoffFetch:
     def __init__(self, key, now, backoff_s=MISS_BACKOFF_S, fetch_run=None, budget_s=None):
         self.path = os.path.join(os.environ["PLUME_DIR"], _MISSES)
         self.backoff_s, self.now = backoff_s, now
+        self.downloaded_at = {}
         self.deadline = time.monotonic() + (DOWNLOAD_BUDGET_S if budget_s is None else budget_s)
         self.exhausted = False
         self.fetch_run = fetch_run or lab.fetch_run
@@ -239,7 +264,8 @@ class BackoffFetch:
             return None
         when = dt.datetime.fromtimestamp(now, dt.timezone.utc)
         due = int(source.pick_cycle(when).timestamp())
-        miss = self.misses.get(source.name) or {}
+        mkey = _miss_key(source.name, bbox)
+        miss = self.misses.get(mkey) or {}
         if miss.get("cycle") == due and now - miss.get("at", 0) < self.backoff_s:
             if self.have.get(source.name) is not None or not miss.get("got"):
                 return None                       # backing off; the target already has a run
@@ -249,15 +275,18 @@ class BackoffFetch:
         if self.exhausted:
             return got                            # a stall says nothing about what's posted
         if hasattr(source, "load_series") or (got and int(got[0]) >= due):
-            self.misses.pop(source.name, None)
+            self.misses.pop(mkey, None)
         else:
-            self.misses[source.name] = {"cycle": due, "at": int(now),
-                                        "got": int(got[0]) if got else None}
+            self.misses[mkey] = {"cycle": due, "at": int(now),
+                                 "got": int(got[0]) if got else None}
         return got
 
     def close(self):
         if self._parser is not None:
             self._parser.close()
+        # drop expired entries (and any keyed the old way, by model only), so boxes don't pile up
+        self.misses = {k: v for k, v in self.misses.items()
+                       if "@" in k and self.now - (v or {}).get("at", 0) < self.backoff_s}
         try:
             os.makedirs(os.path.dirname(self.path), exist_ok=True)
             with open(self.path, "w") as f:
@@ -266,7 +295,7 @@ class BackoffFetch:
             pass
 
 
-class CacheOnlyFetch:
+class CacheOnlyFetch(_StampsDownloads):
     """Offline: sample model runs already in the GRIB cache into the current target's store — never
     touches the network. Covers a target that changed while offline (the boat fell another hour
     behind, so the store key changed) and a store that is empty or older than what's cached (a
@@ -320,14 +349,6 @@ class CacheOnlyFetch:
             return None                           # nothing cached newer than the store — no parse
         return self.fetch_run(_CachedOnly(source, cyc, self), bbox, times, now, self.parser())
 
-    def stamp(self, st, now):
-        """Runs this pass added get `at` = their files' download time, not now."""
-        for m, t in self.downloaded_at.items():
-            for r in (st.get("runs") or {}).get(m) or []:
-                if r.get("at") == int(now):
-                    r["at"] = int(t)
-        return st
-
 
 class _CachedOnly:
     """A model source that only reads the cache: its freshest cycle is the newest cached one, and
@@ -343,8 +364,7 @@ class _CachedOnly:
         path = self._src._cache_path(cycle, fhr, member, bbox)
         if not (os.path.exists(path) and os.path.getsize(path) > 100):
             return None
-        d = self._owner.downloaded_at
-        d[self._src.name] = max(d.get(self._src.name, 0), os.path.getmtime(path))
+        self._owner.note(self._src.name, os.path.getmtime(path))
         return path
 
     def __getattr__(self, k):
@@ -353,7 +373,8 @@ class _CachedOnly:
 
 class _Budgeted:
     """A model source whose downloads get at most REQUEST_TIMEOUT_S each, and none once the pass's
-    download budget is spent."""
+    download budget is spent. Notes each file's download time: a file that was already cached
+    keeps its own (mtime), a fresh one is `now`."""
 
     def __init__(self, src, owner):
         self._src, self._owner = src, owner
@@ -362,7 +383,13 @@ class _Budgeted:
         left = self._owner.left()
         if left <= 0.5:
             return None
-        return self._src.fetch(cycle, fhr, member, bbox, timeout=min(REQUEST_TIMEOUT_S, left))
+        cache_path = getattr(self._src, "_cache_path", None)
+        path = cache_path(cycle, fhr, member, bbox) if cache_path else None
+        cached = bool(path and os.path.exists(path) and os.path.getsize(path) > 100)
+        got = self._src.fetch(cycle, fhr, member, bbox, timeout=min(REQUEST_TIMEOUT_S, left))
+        if got:
+            self._owner.note(self._src.name, os.path.getmtime(got) if cached else self._owner.now)
+        return got
 
     def __getattr__(self, k):
         return getattr(self._src, k)
@@ -467,9 +494,10 @@ def run_once(now=None, get=engine_get, post=engine_post, record=None, is_online=
     if net:
         fetch = BackoffFetch(spec["key"], now)
         try:
-            st = record(spec, now=now, on_progress=_log, fetch=fetch)
+            st = fetch.stamp(record(spec, now=now, on_progress=_log, fetch=fetch), now)
         finally:
             fetch.close()                         # always saves the back-off state
+        lab.save_store(st)
         stalled = fetch.exhausted
     if not net or stalled:
         # offline (or the downloads stalled) = record from the cache into the current store: any

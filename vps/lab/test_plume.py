@@ -260,6 +260,13 @@ P.push = lambda plume, post=None, now=None: pushed.append(plume) or {"ok": True}
 r = P.run_once(do_push=True)
 check("before the start: recorded + sent, race_start aboard, generated_at = when it finished",
       recorded and pushed and pushed[-1]["race_start"] == int(gun) and pushed[-1]["generated_at"] == int(gun - H))
+HELD = []
+P.push = lambda plume, post=None, now=None: HELD.append(P._REC_LOCK.locked()) or {"ok": True}
+labstate.set("plume:push", None)
+P.run_once(do_push=True)
+check("the push happens under the record lock (passes can't send out of order)", HELD == [True])
+check("...and the lock is free afterwards", not P._REC_LOCK.locked())
+P.push = lambda plume, post=None, now=None: pushed.append(plume) or {"ok": True}
 recorded.clear(); pushed.clear()
 CLOCK.update(t=gun - 60, step=120)           # starts a minute before the gun, finishes after it
 r = P.run_once(do_push=True)
