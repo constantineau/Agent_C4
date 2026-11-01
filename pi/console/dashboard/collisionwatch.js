@@ -44,10 +44,19 @@
     return null;
   }
 
+  /* did this coach-history entry voice a safety callout? By its categories (copilot ≥ #191), else by
+     the safety headlines' own words (an older copilot's entries carry headlines only). */
+  const SAFETY_WORDS = /^(Collision watch OFF|Collision risk|Traffic closing|Contact, motion unknown)/;
+  function voicedSafety(e) {
+    if (Array.isArray(e.categories)) return e.categories.includes("safety");
+    return (e.callouts || []).some((h) => SAFETY_WORDS.test(h || "")) || SAFETY_WORDS.test(e.spoken || "");
+  }
+
   const line = (a) => (a.headline || "") + (a.detail ? " — " + a.detail : "");
 
   /* what the strip shows: {kind, lines, fromHistory}. kind = off | act | watch | coach | none.
-     `fromHistory` is true when the line is the last voiced history entry (the strip then shows its age). */
+     `fromHistory` is true when the line is a voiced history entry (the strip then shows its age, from
+     `at`). A history entry that voiced a now-cleared safety callout is skipped. */
   function strip(coach, off) {
     if (off) return { kind: "off", lines: ["Collision watch OFF: " + off + ". Keep a lookout."], fromHistory: false };
     if (!coach) return { kind: "none", lines: [], fromHistory: false };
@@ -57,8 +66,10 @@
       if (safety.length > MAX_LINES) shown.push("+" + (safety.length - MAX_LINES) + " more");
       return { kind: safety.some((a) => a.urgency === "now") ? "act" : "watch", lines: shown, fromHistory: false };
     }
-    const h = coach.history && coach.history[0];
-    if (h && h.spoken) return { kind: "coach", lines: [h.spoken], fromHistory: true };
+    // nothing safety is active now, so a history line that voiced a safety callout is a cleared one
+    // ("Collision watch OFF: GPS fix stale" after the GPS came back): never show it as current
+    const h = (coach.history || []).find((e) => e && e.spoken && !voicedSafety(e));
+    if (h) return { kind: "coach", lines: [h.spoken], fromHistory: true, at: h.at };
     if (coach.active && coach.active.length) return { kind: "coach", lines: [line(coach.active[0])], fromHistory: false };
     return { kind: "none", lines: [], fromHistory: false };
   }

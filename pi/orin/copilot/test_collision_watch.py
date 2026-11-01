@@ -349,8 +349,10 @@ async def review_scenarios() -> bool:
         ok &= _check("tick exception → 'Collision watch OFF: copilot error' replaces the old callout",
                      [a["headline"] for a in st["active"]] == ["Collision watch OFF: copilot error"]
                      and st["new"] and st["updated_at"] > before and "RuntimeError" in st["last_error"])
-        ok &= _check("…and it is the newest history line",
-                     st["history"][0]["spoken"].startswith("Collision watch OFF: copilot error"))
+        ok &= _check("…and it is the newest history line, tagged safety with its id (the iPad skips it once cleared)",
+                     st["history"][0]["spoken"].startswith("Collision watch OFF: copilot error")
+                     and st["history"][0]["categories"] == ["safety"]
+                     and st["history"][0]["ids"] == ["blind:copilot"])
         st = await _tick()
         ok &= _check("a second failing tick keeps it up but doesn't re-announce it",
                      st["active"][0]["headline"] == "Collision watch OFF: copilot error" and st["new"] == [])
@@ -359,6 +361,8 @@ async def review_scenarios() -> bool:
     st = await _tick()
     ok &= _check("ticks recover → the real contact is back and new again",
                  st["active"] and st["active"][0]["headline"] == "Collision risk: OLDSHIP" and st["new"])
+    ok &= _check("…and its history entry carries category + id too",
+                 st["history"][0]["categories"] == ["safety"] and st["history"][0]["ids"] == ["ais:41:act"])
     return ok
 
 

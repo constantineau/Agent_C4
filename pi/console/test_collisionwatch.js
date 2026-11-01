@@ -71,6 +71,31 @@ test("the warning clears → the strip falls back to the coach history", () => {
   assert.equal(v.fromHistory, true);
 });
 
+test("GPS outage recovers: a cleared 'Collision watch OFF' in history is not shown (no stuck OFF)", () => {
+  // the OFF line was the last thing voiced; the fix is back, so `active` has no safety callout
+  const offEntry = { at: 1060, spoken: "Collision watch OFF: GPS fix stale — Last fix 45 s ago. Keep a lookout.",
+    callouts: ["Collision watch OFF: GPS fix stale"], ids: ["blind:fix"], categories: ["safety"] };
+  let v = COL.strip(coach({ active: [], history: [offEntry] }), null);
+  assert.equal(v.kind, "none");
+  assert.deepEqual(v.lines, []);
+  // an older routine line is still fine to show, with its own time
+  v = COL.strip(coach({ active: [routine], history: [offEntry, { at: 1000, spoken: "Nav lights on — sunset",
+    callouts: ["Nav lights on"], ids: ["checklist:navlights"], categories: ["checklist"] }] }), null);
+  assert.equal(v.kind, "coach");
+  assert.deepEqual(v.lines, ["Nav lights on — sunset"]);
+  assert.equal(v.at, 1000);
+  // a cleared collision warning is skipped the same way
+  v = COL.strip(coach({ active: [], history: [{ at: 1000, spoken: "Collision risk: FERRY — CPA 0.2 nm / 6 min",
+    callouts: ["Collision risk: FERRY"], ids: ["ais:1:act"], categories: ["safety"] }] }), null);
+  assert.equal(v.kind, "none");
+});
+
+test("an older copilot's history (headlines only, no categories) is judged by the safety words", () => {
+  const v = COL.strip(coach({ active: [], history: [{ at: 1060, spoken: "Collision watch OFF: no GPS fix — Keep a lookout.",
+    callouts: ["Collision watch OFF: no GPS fix"] }] }), null);
+  assert.equal(v.kind, "none");
+});
+
 test("the copilot's own blind callout shows as a safety line", () => {
   const blind = { id: "blind:fix", category: "safety", urgency: "now", headline: "Collision watch OFF: GPS fix stale", detail: "Last fix 45 s ago. Keep a visual lookout." };
   const v = COL.strip(coach({ active: [blind] }), null);

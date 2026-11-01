@@ -147,6 +147,9 @@ class _Coach:
                     "spoken": res.get("spoken", ""),
                     "narration_mode": res.get("narration_mode"),
                     "callouts": [c.get("headline") for c in res["new"]],
+                    # so the iPad can tell a voiced safety line that has since cleared (#191)
+                    "ids": [c.get("id") for c in res["new"]],
+                    "categories": [c.get("category") for c in res["new"]],
                 }
                 self.history.appendleft(entry)
                 if config.USE_LLM and not _busy(self._phrase_task):
@@ -172,7 +175,8 @@ class _Coach:
                      "_meta": {"tick_failed": True}}
         if not was:
             self.history.appendleft({"at": self.last["_coach_at"], "spoken": line,
-                                     "narration_mode": "deterministic", "callouts": [c["headline"]]})
+                                     "narration_mode": "deterministic", "callouts": [c["headline"]],
+                                     "ids": [c["id"]], "categories": [c["category"]]})
         # the dedup state no longer matches what is shown: start clean when ticks recover
         copilot.reset_narration(self.route)
 

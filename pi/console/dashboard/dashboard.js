@@ -1882,10 +1882,9 @@
     if (App.src !== "live") { el.hidden = true; return; }
     const v = COL.strip(App.coach, App.coachOff);
     if (!v.lines.length) { el.hidden = true; return; }
-    const h = App.coach && App.coach.history && App.coach.history[0];
     el.dataset.kind = v.kind;
     document.getElementById("coachSay").textContent = v.lines.join("\n");
-    document.getElementById("coachWhen").textContent = v.fromHistory && h ? agoText(h.at) : "";
+    document.getElementById("coachWhen").textContent = v.fromHistory ? agoText(v.at) : "";
     el.hidden = false;
   }
   /* HOLD a failed poll's endpoint at its last good value for a bounded window.
