@@ -17,6 +17,7 @@ WorkingDirectory=/home/agent-c4/Agent_C4/pi/orin
 #   LLM_MODEL=qwen2.5:7b-instruct-q4_K_M
 #   LLM_TIMEOUT=180                       (cover the ~2 min cold model load, or pre-warm)
 #   PLAYBOOK_PATH=/home/agent-c4/sr33/playbook.json   (Lab-2 output, when it exists)
+#   PLAYBOOK_LOAD_FROM=10.10.10.1             (who may load a playbook: the Pi engine, on the cable)
 #   COPILOT_ROUTE=bayview-mackinac-2026   (the loaded homework route)
 EnvironmentFile=-/etc/sr33/copilot.env
 Environment=COPILOT_PORT=8300

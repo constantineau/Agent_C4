@@ -34,9 +34,9 @@ class StubDS:
                           "kind": kind, "start_ts": start_ts, "end_ts": None})
         return self.session_current()
 
-    def session_end(self, end_ts):
+    def session_end(self, end_ts, session_id=None):
         for r in self.rows:
-            if r["end_ts"] is None:
+            if r["end_ts"] is None and (session_id is None or r["id"] == session_id):
                 r["end_ts"] = end_ts
 
     def session_current(self):
@@ -139,6 +139,29 @@ ds = fresh(MotionDS(parked(underway_h=20, still_h=19)))
 st = racelog.status()
 check("status() drives it, and TELLS the crew their session was ended for them",
       st["active"] is None and st["auto_closed"]["name"] == "Race")
+
+# M14: the crew taps REC (a new RACE session) while the slow series read is running. The close
+# must not end the new session at the old session's last under-way moment (that reopened the
+# homework gate mid-race).
+class TapMidRead(MotionDS):
+    def series(self, path, minutes):
+        out = super().series(path, minutes)
+        if not self.tapped:
+            self.tapped = True
+            racelog.start(name="Today", kind="race")        # takes SESSION_LOCK, then returns
+        return out
+
+
+ds = TapMidRead(parked(underway_h=20, still_h=19))
+ds.tapped = False
+fresh(ds)
+r = racelog.autoclose(now=NOW)
+cur = ds.session_current()
+check("M14: a race session started during the check is NOT closed by it",
+      r["closed"] is False and cur is not None and cur["name"] == "Today"
+      and cur["end_ts"] is None)
+check("M14: no session ends before it starts", all(
+    x["end_ts"] is None or x["end_ts"] >= x["start_ts"] for x in ds.rows))
 
 racelog.AUTOCLOSE_IDLE_H = 0.0
 ds = fresh(MotionDS(parked(underway_h=20, still_h=19)))

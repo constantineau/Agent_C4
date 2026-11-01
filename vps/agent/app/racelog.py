@@ -85,7 +85,17 @@ def autoclose(now=None, force=False):
                     "note": f"Not moving in this session ({look_h:.0f} h). "
                             f"Close '{cur['name']}' from the iPad."}
         end_ts = max(underway)
-        s.session_end(end_ts)
+        # Close THAT session, never a newer one. The series read above is slow; the crew may tap
+        # REC (a new race session) meanwhile, and an unscoped close would end today's race at
+        # yesterday's last under-way moment, reopening the homework gate (racegate) mid-race. So:
+        # under the session lock, re-check that the same session is still the open one and that
+        # the end is after its start, and close only that id.
+        with SESSION_LOCK:
+            now_cur = s.session_current()
+            if not now_cur or now_cur.get("id") != cur.get("id") \
+                    or end_ts <= float(now_cur["start_ts"]):
+                return {"closed": False, "note": "a new session started; not closing"}
+            s.session_end(end_ts, session_id=cur["id"])
         print(f"[racelog] auto-closed '{cur['name']}' (id {cur['id']}) at "
               f"{datetime.fromtimestamp(end_ts, tz=timezone.utc):%Y-%m-%dT%H:%M:%SZ} — the last "
               f"moment the boat was under way; stopped for "

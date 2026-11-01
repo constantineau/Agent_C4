@@ -41,8 +41,10 @@ posted = []
 def fake_post(url, body, timeout=25):
     posted.append(url)
     if url.endswith("/playbook/load"):
+        # the Pi forwards the playbook to the Orin under its race-log lock: its answer rides along
         return True, {"loaded": True, "race_id": "r1", "variants": 1, "plays": 0, "signed": True,
-                      "echo": {"huge": "nested"}}
+                      "echo": {"huge": "nested"},
+                      "copilot": {"loaded": True, "race_id": "r1", "variants": 1, "signed": True}}
     return True, {"loaded": True, "marks": 3, "skipped": []}
 
 

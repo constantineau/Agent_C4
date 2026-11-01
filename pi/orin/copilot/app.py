@@ -17,9 +17,9 @@ There is intentionally no endpoint that takes an action — the copilot is read-
 """
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from . import briefs as briefs_mod
@@ -128,40 +128,40 @@ def narrate_reset(req: NarrateRequest):
     return copilot.reset_narration(route=req.route)
 
 
-RACING = "Racing now. Not loaded."
-CANT_TELL = "Can't check the race. Not loaded."
+NOT_FROM_PI = "Load the playbook from the Pi. Not loaded."
+# Forwarding headers mean a proxy (e.g. the Pi console's /copilot/ nginx route) sent it, so the
+# peer address is not the sender's.
+_PROXY_HEADERS = ("x-forwarded-for", "x-real-ip", "forwarded", "x-forwarded-host")
 
 
-def race_gate():
-    """None when the Pi says the boat is not racing; else the refusal. Fails closed."""
-    try:
-        state = EngineClient().racing()
-    except Exception:  # noqa: BLE001
-        state = {}
-    racing = state.get("racing") if isinstance(state, dict) else None
-    if racing is False:
-        return None
-    return {"loaded": False, "detail": RACING if racing is True else CANT_TELL}
+def from_pi(request) -> bool:
+    """Only the Pi engine, straight over the Pi-Orin cable, may load a playbook. The Pi checks
+    its race log and holds the session lock until this write answers (frozen at the gun)."""
+    host = request.client.host if request.client else None
+    if host not in config.PLAYBOOK_LOAD_FROM:
+        return False
+    return not any(h in request.headers for h in _PROXY_HEADERS)
 
 
 @app.post("/playbook/load")
-def playbook_load(body: dict):
+def playbook_load(body: dict, request: Request):
     """Load a frozen playbook bundle — written atomically to PLAYBOOK_PATH, overwriting any prior.
     Every consumer re-reads the file per request, so it takes effect immediately (no restart).
     Body is the bundle itself, or {bundle: ...} — same contract as the engine's /playbook/load.
     This changes which HOMEWORK the copilot interprets; it still takes no action.
 
-    Frozen at the gun (RRS 41): the Orin has no race log, so it asks the Pi engine (GET /racing)
-    and refuses while the boat is racing, and also when it can't tell (fail closed)."""
+    Frozen at the gun (RRS 41): the Orin has no race log, so it takes a playbook ONLY from the Pi
+    engine over the cable (PLAYBOOK_LOAD_FROM, no proxy headers). The engine's own /playbook/load
+    forwards the bundle here while it holds the race log's session lock, so no race session can
+    start between its check and this write."""
     import json as _json
     import os as _os
     body = body or {}
     bundle = body.get("bundle") if "variants" not in body else body
     if not bundle or not bundle.get("variants"):
         return {"loaded": False, "detail": "no bundle with variants"}
-    gate = race_gate()
-    if gate:
-        return gate
+    if not from_pi(request):
+        return JSONResponse({"loaded": False, "detail": NOT_FROM_PI}, status_code=403)
     path = config.PLAYBOOK_PATH
     if not path:
         return {"loaded": False, "detail": "PLAYBOOK_PATH is not configured on this copilot"}

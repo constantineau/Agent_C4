@@ -68,11 +68,13 @@ def race_start(definition):
 
 def push(race_id):
     """Push the locked homework straight onto the boat — no downloads, no SD card. Course/fleet/
-    checklist/watch + the signed playbook → the Pi engine over Tailscale; the same playbook → the
-    Orin copilot via the Pi console's /copilot proxy (rides the Pi↔Orin ethernet crossover, so no
-    Orin-Tailscale dependency). Each push OVERWRITES the previous load on both boxes (the engine
+    checklist/watch + the signed playbook → the Pi engine over Tailscale; the engine forwards the
+    same playbook to the Orin copilot over the Pi↔Orin cable while it holds its race-log lock (the
+    Orin takes a playbook from nowhere else). Each push OVERWRITES the previous load on both boxes (the engine
     clears its trigger/matcher state; the copilot rewrites PLAYBOOK_PATH and re-reads per request).
-    Returns per-step results ({target, step, ok, detail}); None if the race is unknown."""
+    Returns per-step results ({target, step, ok, detail}); None if the race is unknown.
+    Frozen at the gun: the start is checked before EVERY post; once it is reached the remaining
+    steps are not sent (they show "Race started. Not sent.")."""
     pkg = package(race_id)
     if not pkg:
         return None
@@ -83,10 +85,15 @@ def push(race_id):
     lock = labstate.get(_lock_key(race_id)) or {}
     bundle = pbstore.get(lock.get("playbook_id")) if lock.get("playbook_id") else None
     eng = os.environ.get("DEPLOY_PI_ENGINE_URL", "http://100.79.180.102:8200").rstrip("/")
-    cop = os.environ.get("DEPLOY_COPILOT_URL", "http://100.79.180.102:8091/copilot").rstrip("/")
     steps = []
+    stopped = []
 
     def step(target, name, url, body, check=None):
+        if stopped or (rs is not None and _clock() >= rs):
+            stopped.append(name)
+            steps.append({"target": target, "step": name, "ok": False, "not_sent": True,
+                          "detail": {"error": RACE_STARTED}})
+            return
         ok, resp = _post_json(url, body)
         if ok and check is not None and not check(resp):
             ok = False
@@ -119,11 +126,22 @@ def push(race_id):
     if bundle:
         step("pi-engine", "playbook", f"{eng}/playbook/load", bundle,
              check=lambda r: r.get("loaded"))
-        step("orin-copilot", "playbook", f"{cop}/playbook/load", bundle,
-             check=lambda r: r.get("loaded"))
+        # the engine forwarded it to the Orin under its race-log lock; its answer is `copilot`
+        pb = steps[-1]
+        cop = (pb["detail"] or {}).get("copilot") if pb["ok"] else None
+        if not isinstance(cop, dict):
+            cop = {"loaded": False, "error": (pb["detail"] or {}).get("error")
+                   or ("Not sent: the Pi didn't load it." if not pb["ok"]
+                       else "The Pi didn't send it to the Orin. Update the Pi.")}
+        elif not cop.get("loaded") and not cop.get("error"):
+            cop = dict(cop, error=str(cop.get("detail") or "Not loaded.")[:200])
+        steps.append({"target": "orin-copilot", "step": "playbook", "ok": bool(cop.get("loaded")),
+                      "detail": cop})
     res = {"race_id": race_id, "playbook_id": lock.get("playbook_id"),
            "pushed_playbook": bool(bundle), "ok": bool(steps) and all(s["ok"] for s in steps),
            "steps": steps}
+    if stopped:
+        res["detail"] = RACE_STARTED
     # the signature of the bundle actually sent — a re-freeze under the same id changes it
     record_push(res, race_name=pkg.get("race_name"),
                 signature=((bundle or {}).get("signature") or {}).get("value", "")[:16])

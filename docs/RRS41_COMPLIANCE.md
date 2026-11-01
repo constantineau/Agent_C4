@@ -344,9 +344,9 @@ the race log's session lock, so a session can't start in between. A refusal is
 
 | Endpoint | Sender | While racing | Why |
 |---|---|---|---|
-| POST /course/load | Lab Deploy | **Refused** | Shore homework. A course change mid-race means ending the race session first. |
+| POST /course/load | Lab Deploy | **Refused** | Shore homework. A course shortened mid-race: the crew uses the practice course (POST /course/practice), or ends the race session first. |
 | POST /fleet/load | Lab Deploy | **Refused** | Shore homework (roster, scoring, own rating). |
-| POST /playbook/load | Lab Deploy | **Refused** | Shore-computed strategy: the core of the rule. |
+| POST /playbook/load | Lab Deploy | **Refused** | Shore-computed strategy: the core of the rule. When taken, the engine forwards the bundle to the Orin copilot (COPILOT_URL, over the cable) while it still holds the session lock, and reports the Orin's answer under `copilot`. |
 | POST /checklist/load | Lab Deploy | **Refused** | Shore homework. |
 | POST /watch `{plan}` (a whole plan) | Lab Deploy | **Refused** | A whole new schedule is shore homework. |
 | POST /plume/load | Lab plume push | **Refused** (unchanged, now via racegate) | Shore forecast for this route. |
@@ -359,14 +359,18 @@ the race log's session lock, so a session can't start in between. A refusal is
 | POST /course/practice | iPad | Taken | Built onboard from live position + wind. |
 | POST /gps/show, /gps/clear | iPad | Taken | Sends what's aboard to the plotter; computes nothing ashore. |
 | POST /reoptimize/run, /reroute/run | iPad | Taken | Onboard re-routes (Pi / Orin) on public data. |
-| GET /racing | Orin copilot | — | `{racing: bool}`, the same rule; what the copilot asks. |
 
-**Orin copilot (`pi/orin/copilot/app.py`)**: POST /playbook/load asks the Pi (`GET /racing`) and
-refuses when the Pi says racing, and also when it can't tell (no answer, an engine without /racing,
-a bad answer): "Can't check the race. Not loaded." The other POSTs (/brief, /strategy, /narrate,
+**Orin copilot (`pi/orin/copilot/app.py`)**: the Orin has no race log. POST /playbook/load takes a
+bundle only from the Pi engine, straight over the cable (`PLAYBOOK_LOAD_FROM`, default 10.10.10.1,
+and no proxy headers); anything else gets 403 "Load the playbook from the Pi. Not loaded." The Pi
+console's nginx refuses /copilot/playbook/load outright and marks every other proxied request
+with X-Forwarded-For. Because the engine forwards while it holds the session lock, a race can't
+start between the race check and the Orin's write (a race-start tap waits at most
+COPILOT_TIMEOUT_S, 8 s). The other POSTs (/brief, /strategy, /narrate,
 /narrate/reset, /dashboard, /detail) take no shore content.
 
-**Lab Deploy (`vps/lab/app/deploy.py`)**: best effort on top of the boat. Push sends nothing once the
+**Lab Deploy (`vps/lab/app/deploy.py`)**: best effort on top of the boat. The start is checked before
+every post, and once it is reached the remaining steps are not sent. Push sends nothing once the
 race has started, by the plume's rule (`plume.race_start_of`: our gun, else the first minute of the
 start date in the venue's time zone): "Race started. Not sent." With no start known it sends and the
 boat decides. A boat refusal on any step is a red step.
@@ -376,7 +380,10 @@ In race mode POST /course/load and a whole-plan POST /watch answer 409 "Racing n
 (audited); watch quick edits are taken.
 
 **Cloud alerts (`vps/agent/app/alerts.py`)**: in race mode only safety alerts are made, served
-(/alerts, get_alerts, the /ws opening push) or pushed. An unknown kind counts as advice.
+(/alerts, get_alerts, the /ws opening push) or pushed. Race mode is read again at every step:
+when the rules run, when a raise or update is written, and when each message is sent on a socket
+(`alerts.deliverable`), so advice computed or queued before race mode came on never goes out. An
+unknown kind counts as advice.
 
 | Alert kind | Class | In race mode |
 |---|---|---|
@@ -386,6 +393,11 @@ In race mode POST /course/load and a whole-plan POST /watch answer 409 "Racing n
 | `polar_deficit` ("Slow: 82% of target") | Performance advice | Withheld; cleared without its text |
 | `wind_shift` ("Favour the left side") | Tactical advice | Withheld; cleared without its text |
 | `fatigue` ("Rotate the driver now") | Performance advice | Withheld; cleared without its text |
+
+**Race log auto-close (`vps/agent/app/racelog.py`)**: the gate is only as good as the race session.
+Auto-close closes a forgotten session at its last under-way moment; it now re-checks under the
+session lock that the same session is still open and closes only that id, so a race the crew
+started during its (slow) check is never ended, and the gate never reopens mid-race.
 
 ---
 

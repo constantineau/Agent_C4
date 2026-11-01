@@ -63,11 +63,6 @@ class EngineClient:
     def health(self) -> dict:
         return self._get("/health")
 
-    def racing(self) -> dict:
-        """{racing: bool} from the Pi's race log (a race session running, or a log it can't read,
-        is racing). Anything else (no answer, an old engine) means "can't tell"."""
-        return self._get("/racing")
-
     def conditions(self) -> dict:
         """Best-value-per-channel instrument strip (own data, always legal in-race)."""
         return self._get("/conditions")

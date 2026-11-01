@@ -7,7 +7,10 @@ Pins:
     deficit are never made;
   * race mode: advice still on record is not served by /alerts, get_alerts or the /ws opening
     push (all read active_alerts), and when it clears the push carries no advice text;
-  * an unknown kind counts as advice (fail closed).
+  * an unknown kind counts as advice (fail closed);
+  * race mode coming on mid-evaluate: advice collected in practice is not raised;
+  * the gate at delivery: alert_loop and the socket writer check race mode again at send time,
+    so advice queued before race mode came on never goes out.
 
 No DB: the reads are stubbed. Run in-container (make ci):
   PYTHONPATH=vps/agent:. python3 vps/agent/test_alerts_race_mode.py
@@ -105,6 +108,55 @@ check("the advice alert is cleared at once", len(gone) == 1)
 check("…and the clear carries no advice text", gone and gone[0]["alert"]["message"] == "")
 check("nothing new or updated is advice", all(c["alert"]["kind"] in alerts.SAFETY_KINDS
                                               for c in changes if c["event"] != "cleared"))
+
+print("race mode comes on mid-evaluate (after the rules ran, before the write):")
+ROWS.clear()
+alerts._active_rows = lambda: dict(ROWS)
+alerts.DEBOUNCE_S = {k: 0.0 for k in alerts.DEBOUNCE_S}
+alerts._DEFAULT_DEBOUNCE = 0.0
+MODE = {"calls": 0}
+
+
+def flips_on():
+    """Practice for the rules' read, race for every read after it."""
+    MODE["calls"] += 1
+    return MODE["calls"] > 1
+
+
+race_mode.racing = flips_on
+changes = alerts.evaluate()
+check("rules ran in practice (advice was collected)", MODE["calls"] >= 2)
+check("…but no advice is raised", [c["alert"]["kind"] for c in changes
+                                   if c["alert"]["kind"] not in alerts.SAFETY_KINDS] == [])
+check("safety still raised", {c["alert"]["kind"] for c in changes} == alerts.SAFETY_KINDS)
+
+print("the gate at delivery (alert_loop and the socket writer, at send time):")
+ADV = {"event": "new", "alert": {"key": "wind_shift", "kind": "wind_shift", "severity": "warn",
+                                 "message": "Wind shifted right 14°. Favour the left side."}}
+SAFE = {"event": "new", "alert": {"key": "ais:1", "kind": "ais", "severity": "danger",
+                                  "message": "Tanker closing."}}
+check("practice: advice delivered", alerts.deliverable(ADV, racing=False) == ADV)
+check("racing: new advice dropped", alerts.deliverable(ADV, racing=True) is None)
+check("racing: updated advice dropped",
+      alerts.deliverable(dict(ADV, event="updated"), racing=True) is None)
+clr = alerts.deliverable(dict(ADV, event="cleared"), racing=True)
+check("racing: advice clear goes, without its text", clr["alert"]["key"] == "wind_shift"
+      and clr["alert"]["message"] == "")
+check("racing: safety delivered", alerts.deliverable(SAFE, racing=True) == SAFE)
+
+import asyncio  # noqa: E402
+
+from app import main  # noqa: E402
+
+race_mode.racing = lambda: False
+queued = [{"role": "alert", **ADV}, {"role": "alert", **SAFE},
+          {"role": "assistant", "text": "hi"}, {"role": "alert", **dict(ADV, event="cleared")}]
+race_mode.racing = lambda: True          # race mode came on while these sat in the queue
+sent = [asyncio.run(main.outgoing(m)) for m in queued]
+check("queued advice is dropped at send time", sent[0] is None)
+check("safety and chat still go", sent[1] == queued[1] and sent[2] == queued[2])
+check("a queued advice clear goes without its text", sent[3]["alert"]["message"] == ""
+      and sent[3]["role"] == "alert")
 
 print("ALL OK" if ok else "FAILED")
 sys.exit(0 if ok else 1)

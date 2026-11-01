@@ -1,14 +1,16 @@
-"""Frozen at the gun on the Orin: the copilot's POST /playbook/load asks the Pi engine whether the
-boat is racing (GET /racing; the Orin has no race log) and refuses unless the Pi says no.
+"""Frozen at the gun on the Orin: the copilot's POST /playbook/load takes a playbook ONLY from the
+Pi engine, straight over the cable. The engine forwards it while it holds the race log's session
+lock (pi/engine/engine_app.py playbook_load), so the race check and this write can't be split by
+a race start.
 
 Pins:
-  * not racing → the bundle is written and loaded;
-  * racing → refused, the file aboard unchanged;
-  * the Pi can't tell (unreachable, an old engine without /racing, a bad answer) → refused
-    (fail closed), file unchanged;
-  * the Pi's real GET /racing answer shape is what the copilot reads (racing: bool).
+  * from the Pi's cable address, no proxy headers → written and loaded;
+  * from anywhere else (the Lab, the iPad, Tailscale) → 403, plain, file unchanged;
+  * from the Pi's address but through a proxy (the console's /copilot/ nginx route sets
+    X-Forwarded-For) → 403, file unchanged;
+  * PLAYBOOK_LOAD_FROM defaults to the Pi's cable address only.
 
-Stubbed engine, temp PLAYBOOK_PATH; no network.
+Temp PLAYBOOK_PATH; no network.
     cd pi/orin && python3 -m copilot.test_playbook_gate
 """
 import json
@@ -21,7 +23,6 @@ from fastapi.testclient import TestClient
 from . import app as app_mod
 from . import config
 
-client = TestClient(app_mod.app)        # no `with` → the coach timer never starts
 ok = True
 
 
@@ -35,26 +36,17 @@ PATH = os.path.join(tempfile.mkdtemp(), "playbook.json")
 config.PLAYBOOK_PATH = PATH
 A = {"race_id": "r1", "variants": [{"id": "a"}], "plays": []}
 B = {"race_id": "r2", "variants": [{"id": "b"}], "plays": []}
-ANSWER = {"v": {"racing": False}}
+REFUSED = {"loaded": False, "detail": "Load the playbook from the Pi. Not loaded."}
 
 
-class StubEngine:
-    base_url = "http://stub:8200"
-
-    def __init__(self, *a, **k):
-        pass
-
-    def racing(self):
-        v = ANSWER["v"]
-        if isinstance(v, Exception):
-            raise v
-        return v
-
-    def __getattr__(self, name):           # any other read: the engine's "not available" shape
-        return lambda *a, **k: {"available": False}
-
-
-app_mod.EngineClient = StubEngine
+def client_from(host):
+    """The app as seen from `host` (sets the ASGI peer address, like uvicorn does). No `with`, so
+    the coach timer never starts."""
+    async def asgi(scope, receive, send):
+        if scope["type"] == "http":
+            scope = dict(scope, client=(host, 50000))
+        await app_mod.app(scope, receive, send)
+    return TestClient(asgi)
 
 
 def on_disk():
@@ -65,30 +57,30 @@ def on_disk():
         return None
 
 
-print("not racing:")
-r = client.post("/playbook/load", json=A).json()
-check("loaded", r.get("loaded") is True and r.get("race_id") == "r1" and on_disk() == "r1")
+check("default: only the Pi's cable address", config.PLAYBOOK_LOAD_FROM == frozenset({"10.10.10.1"}))
 
-print("racing:")
-ANSWER["v"] = {"racing": True}
-r = client.post("/playbook/load", json=B).json()
-check("refused, plain", r == {"loaded": False, "detail": "Racing now. Not loaded."})
+print("from the Pi engine, over the cable:")
+r = client_from("10.10.10.1").post("/playbook/load", json=A)
+check("loaded", r.status_code == 200 and r.json().get("loaded") is True and on_disk() == "r1")
+
+print("from anywhere else:")
+for host in ("100.79.180.102", "192.168.1.20", "127.0.0.1", "10.10.10.2"):
+    r = client_from(host).post("/playbook/load", json=B)
+    check(f"{host}: 403, plain", r.status_code == 403 and r.json() == REFUSED)
 check("file unchanged", on_disk() == "r1")
 
-print("can't tell → refused (fail closed):")
-for label, v in (("engine unreachable", {"available": False, "error": "timed out"}),
-                 ("old engine, no /racing (404)", {"available": False, "error": "HTTP 404"}),
-                 ("bad answer", {"racing": "no"}),
-                 ("client raised", OSError("boom"))):
-    ANSWER["v"] = v
-    r = client.post("/playbook/load", json=B).json()
-    check(f"{label}: refused", r == {"loaded": False, "detail": "Can't check the race. Not loaded."})
+print("from the Pi's address but through the console proxy:")
+for h in ("X-Forwarded-For", "X-Real-IP", "Forwarded"):
+    r = client_from("10.10.10.1").post("/playbook/load", json=B, headers={h: "192.168.1.20"})
+    check(f"{h}: 403", r.status_code == 403 and r.json() == REFUSED)
 check("file unchanged", on_disk() == "r1")
 
-print("not racing again:")
-ANSWER["v"] = {"racing": False}
-r = client.post("/playbook/load", json=B).json()
-check("loaded", r.get("loaded") is True and on_disk() == "r2")
+print("the Pi again:")
+r = client_from("10.10.10.1").post("/playbook/load", json=B)
+check("loaded", r.json().get("loaded") is True and on_disk() == "r2")
+
+print("short text:")
+check("≤ 9 words", len(REFUSED["detail"].split()) <= 9)
 
 print("ALL OK" if ok else "FAILED")
 sys.exit(0 if ok else 1)

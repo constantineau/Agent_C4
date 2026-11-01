@@ -8,7 +8,9 @@ Pins, through the REAL engine endpoints on a temp onboard DB with the REAL race 
   * a practice session doesn't block;
   * crew inputs are never gated: checklist acks, watch quick edits (incl. the tap-a-block edit),
     sail state;
-  * GET /racing answers what the Orin copilot asks (racing, practice, unreadable log);
+  * the playbook goes on to the Orin copilot from inside the gate (the session lock is held
+    during the forward; nothing is forwarded while racing; an unreachable Orin is a plain answer);
+  * the scoped session close (M14) never ends a newer session, on the real SQLite store;
   * the gate holds the race log's session lock, so a session can't start between check and write;
   * the cloud agent's /course/load and whole-plan /watch refuse in race mode.
 
@@ -29,6 +31,18 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 import engine_app  # noqa: E402
 from app import datasource, racegate, racelog  # noqa: E402
+
+FORWARDS = []
+_REAL_COPILOT_LOAD = engine_app.copilot_load
+
+
+def fake_copilot_load(bundle):
+    """Stands in for the Orin: records whether the race log's lock was held during the forward."""
+    FORWARDS.append((bundle.get("race_id"), racelog.SESSION_LOCK.locked()))
+    return {"loaded": True, "race_id": bundle.get("race_id")}
+
+
+engine_app.copilot_load = fake_copilot_load
 
 ok = True
 
@@ -79,13 +93,11 @@ def refused(r):
 print("before the race (no session): every load is taken")
 for name, (url, body) in LOADS.items():
     check(f"{name} loads", loaded(client.post(url, json=body)))
-check("GET /racing → not racing", client.get("/racing").json() == {"racing": False})
 
 print("a practice session doesn't block")
 racelog.start(name="Practice", kind="practice")
 for name, (url, body) in LOADS.items():
     check(f"{name} loads in practice", loaded(client.post(url, json=body)))
-check("GET /racing → not racing in practice", client.get("/racing").json() == {"racing": False})
 
 print("a race session running: every load refused, nothing changes")
 racelog.start(name="Race", kind="race", race_id="r1")
@@ -102,7 +114,8 @@ RACE_LOADS = {
 for name, (url, body) in RACE_LOADS.items():
     check(f"{name} refused", refused(client.post(url, json=body)))
 check("…and nothing aboard changed", aboard() == before)
-check("GET /racing → racing", client.get("/racing").json() == {"racing": True})
+
+check("…and no playbook was forwarded to the Orin", "r2" not in [f[0] for f in FORWARDS])
 
 print("crew inputs while racing are never gated")
 r = client.post("/checklist/ack", json={"id": "lights"})
@@ -125,7 +138,6 @@ saved_src = racelog._src
 racelog._src = lambda: (_ for _ in ()).throw(OSError("db locked"))
 for name, (url, body) in LOADS.items():
     check(f"{name} refused", refused(client.post(url, json=body)))
-check("GET /racing → racing", client.get("/racing").json() == {"racing": True})
 racelog._src = saved_src
 
 print("the gate holds the session lock (no session can start between check and write)")
@@ -141,6 +153,26 @@ check("lock held inside the gate", held["lock"] and not racing)
 check("a race start waits for the load to finish", held["blocked"])
 check("…then starts, and the next load is refused",
       refused(client.post("/playbook/load", json=BUNDLE)))
+racelog.end()
+
+print("the playbook goes on to the Orin from inside the gate")
+FORWARDS.clear()
+r = client.post("/playbook/load", json=BUNDLE).json()
+check("forwarded once, while the session lock was held", FORWARDS == [("r1", True)])
+check("the Orin's answer is in the response", r["copilot"] == {"loaded": True, "race_id": "r1"})
+os.environ["COPILOT_URL"] = "http://127.0.0.1:9"          # nothing listens there
+os.environ["COPILOT_TIMEOUT_S"] = "1"
+check("Orin unreachable → a plain answer, never raises",
+      _REAL_COPILOT_LOAD(BUNDLE) == {"loaded": False, "detail": engine_app.NO_COPILOT})
+
+print("M14: the scoped close never ends a newer session (real store)")
+ds = datasource.active()
+racelog.start(name="Yesterday", kind="practice")
+old = ds.session_current()
+racelog.start(name="Today", kind="race")               # auto-ends yesterday
+ds.session_end(old["start_ts"] + 1, session_id=old["id"])
+cur = ds.session_current()
+check("closing yesterday's id leaves today's race open", cur and cur["name"] == "Today")
 racelog.end()
 
 print("the cloud agent (race mode, no race log)")

@@ -70,6 +70,19 @@ def allowed(kind, racing=None) -> bool:
     if kind in SAFETY_KINDS:
         return True
     return not (race_mode.racing() if racing is None else racing)
+
+
+def deliverable(change, racing=None):
+    """The gate at DELIVERY (the /ws push, at send time): a change as it may go out now, or None.
+    Race mode is read again here, so advice computed or queued before race mode came on never
+    goes out: a new/updated advice alert is dropped, a cleared one goes without its text (the
+    client only needs the key to take the banner down)."""
+    a = (change or {}).get("alert") or {}
+    if allowed(a.get("kind"), racing):
+        return change
+    if change.get("event") == "cleared":
+        return dict(change, alert=dict(a, message=""))
+    return None
 _SEV_ORDER = {"danger": 0, "warn": 1, "info": 2}
 
 # key -> monotonic time the condition was first seen (continuously) true
@@ -186,10 +199,13 @@ def evaluate():
             raised_now[k] = c
 
     active = _active_rows()
+    racing = race_mode.racing()          # read again at write time: race mode may have just come on
     changes = []
     with pool.connection() as conn:
         with conn.cursor() as cur:
             for k, c in raised_now.items():
+                if not allowed(c["kind"], racing):
+                    continue                 # advice is never raised or updated in race mode
                 if k not in active:
                     cur.execute(
                         "INSERT INTO alerts (boat_id, key, kind, severity, message, raised_at, "
@@ -212,7 +228,7 @@ def evaluate():
                                 (a["id"],))
                     gone = {"key": k, "kind": a["kind"], "severity": a["severity"],
                             "message": a["message"]}
-                    if not allowed(a["kind"]):
+                    if not allowed(a["kind"], racing):
                         gone["message"] = ""     # withheld advice: clear it without its text
                     changes.append({"event": "cleared", "alert": gone})
         conn.commit()
@@ -235,5 +251,7 @@ def active_alerts():
 
 
 def get_alerts():
+    """/alerts and the agent's get_alerts tool: active_alerts(), so advice is withheld in race
+    mode at the moment of serving."""
     a = active_alerts()
     return {"count": len(a), "alerts": a}

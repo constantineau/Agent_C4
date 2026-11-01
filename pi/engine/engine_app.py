@@ -7,7 +7,8 @@ boat's own computer crunching its own sensors (Expedition-class), not an "outsid
 under RRS 41. There is **no LLM and no tool-loop** here: every read endpoint is a direct
 deterministic response and legal while racing. The one gate is on the WRITES that take shore
 homework (course, fleet, playbook, checklist, a whole watch plan, plume, re-route assets): frozen
-at the gun, refused while a race session runs (`app.racegate`). Crew inputs from the iPad (sail
+at the gun, refused while a race session runs (`app.racegate`). The Orin copilot's playbook goes
+through here too (POST /playbook/load forwards it under the same lock). Crew inputs from the iPad (sail
 state, checklist acks, watch quick edits, the race log, re-route buttons) are never gated.
 
 It reuses the exact engine modules from the cloud agent package (`app.navigator` /
@@ -319,7 +320,11 @@ def playbook_load(body: dict):
     """Load the frozen Lab-2 playbook bundle (`c4.playbook/v1`) onboard — the homework the
     route-deviation core measures against. Body is the bundle itself, or {bundle: ...}. Frozen at
     the gun: refused while a race session runs (reading the one aboard is legal in-race).
-    Replaces any prior."""
+    Replaces any prior.
+
+    The same bundle goes on to the Orin copilot over the Pi-Orin cable (COPILOT_URL) while this
+    load still holds the race log's session lock, so a race can't start between the check and
+    the Orin's write. The Orin takes a playbook only from here. Its answer is under `copilot`."""
     body = body or {}
     bundle = body.get("bundle") if "variants" not in body else body
     if not bundle or not (bundle.get("variants")):
@@ -332,10 +337,40 @@ def playbook_load(body: dict):
         drift.reset_state()
         plangap.reset_state()            # the plan-gap read measures against the NEW promise
         matcher.clear_state()            # forget play arm/sustain memory too
+        cop = copilot_load(bundle)       # still under the lock: the Orin writes before a race can start
     return {"loaded": True, "race_id": bundle.get("race_id"),
             "variants": len(bundle.get("variants") or []),
             "plays": len(bundle.get("plays") or []),
-            "recommended": bundle.get("recommended")}
+            "recommended": bundle.get("recommended"), "copilot": cop}
+
+
+NO_COPILOT = "Can't reach the Orin. Playbook not sent there."
+
+
+def copilot_load(bundle):
+    """POST the bundle to the Orin copilot's /playbook/load over the cable; its answer, or
+    {loaded: false, detail} when it can't be reached. Never raises. Bounded (COPILOT_TIMEOUT_S),
+    since the race log's session lock is held meanwhile: a race-start tap waits at most this."""
+    import json as _json
+    import urllib.error
+    import urllib.request
+    url = os.environ.get("COPILOT_URL", "http://10.10.10.2:8300").rstrip("/") + "/playbook/load"
+    req = urllib.request.Request(url, data=_json.dumps(bundle).encode(), method="POST",
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=float(os.environ.get("COPILOT_TIMEOUT_S", "8"))) as r:
+            out = _json.loads(r.read() or b"{}")
+        return out if isinstance(out, dict) else {"loaded": False, "detail": NO_COPILOT}
+    except urllib.error.HTTPError as exc:
+        try:
+            out = _json.loads(exc.read() or b"{}")
+            if isinstance(out, dict) and out.get("detail"):
+                return {"loaded": False, "detail": str(out["detail"])[:200]}
+        except Exception:  # noqa: BLE001
+            pass
+        return {"loaded": False, "detail": f"Orin answered {exc.code}. Not loaded."}
+    except Exception:  # noqa: BLE001
+        return {"loaded": False, "detail": NO_COPILOT}
 
 
 @app.get("/playbook")
@@ -492,14 +527,6 @@ def checklist_ack(body: dict):
     """Crew ack from the iPad: {id, undo?} — done for the current window (a sunset item
     re-arms the next evening). Returns the fresh checklist state."""
     return checklist.ack(body)
-
-
-@app.get("/racing")
-def racing_status():
-    """Is the boat racing? {racing: bool}. The Orin copilot asks before it takes a playbook
-    (it has no race log). Same rule as the load gate: a running race session, or a race log that
-    can't be read, is racing."""
-    return {"racing": racegate.racing()}
 
 
 @app.get("/session")

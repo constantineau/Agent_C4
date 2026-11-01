@@ -65,13 +65,24 @@ class Hub:
 hub = Hub()
 
 
+async def outgoing(msg):
+    """What a socket may send now. RRS 41 at the moment of sending: an alert is checked against
+    race mode again here, so advice queued before race mode came on is dropped (a clear goes
+    without its text)."""
+    if isinstance(msg, dict) and msg.get("role") == "alert":
+        return await run_in_threadpool(alerts.deliverable, msg)
+    return msg
+
+
 async def alert_loop():
     """Evaluate alert rules every ALERT_EVAL_SECONDS and push new/updated/cleared deltas."""
     while True:
         try:
             changes = await run_in_threadpool(alerts.evaluate)
             for ch in changes:
-                await hub.broadcast({"role": "alert", **ch})
+                ch = await run_in_threadpool(alerts.deliverable, ch)    # race mode, read now
+                if ch:
+                    await hub.broadcast({"role": "alert", **ch})
         except Exception as exc:  # never let the loop die
             print(f"[alerts] eval error: {exc}", flush=True)
         await asyncio.sleep(alerts.EVAL_SECONDS)
@@ -565,7 +576,7 @@ async def ws(websocket: WebSocket):
     await websocket.send_json({"role": "system", "text": "Navigator online."})
     # Push the current active alerts so a freshly opened client shows the live banner state.
     try:
-        for a in await run_in_threadpool(alerts.active_alerts):
+        for a in await run_in_threadpool(alerts.active_alerts):     # race mode: safety only
             await websocket.send_json({"role": "alert", "event": "new", "alert": a})
     except Exception:
         pass
@@ -581,7 +592,9 @@ async def ws(websocket: WebSocket):
 
     async def writer():
         while True:
-            await websocket.send_json(await q.get())
+            msg = await outgoing(await q.get())
+            if msg:
+                await websocket.send_json(msg)
 
     rt = asyncio.create_task(reader())
     wt = asyncio.create_task(writer())

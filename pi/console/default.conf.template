@@ -45,9 +45,18 @@ server {
     # Tier-2 onboard LLM copilot (writes the dashboard commentary). Separate box (Orin) on the
     # boat-local network. The dashboard POSTs its tile snapshot; the brief is best-effort — if the
     # copilot is down the dashboard falls back to the engine-read commentary.
+    # A playbook reaches the Orin only through the engine's /playbook/load (it checks the race
+    # log and holds its lock until the Orin has written it). Never through this proxy.
+    location = /copilot/playbook/load {
+        default_type application/json;
+        return 403 '{"loaded": false, "detail": "Load the playbook from the Pi. Not loaded."}';
+    }
+
     location /copilot/ {
         proxy_pass ${COPILOT_UPSTREAM};
         proxy_set_header Host $host;
+        # mark proxied requests so the Orin can tell them from the engine's direct ones
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_read_timeout 130s;   # the 7B is slow (~45 s warm, ~2 min cold)
         proxy_buffering off;       # stream the tile deep-dive (/detail) token-by-token
     }

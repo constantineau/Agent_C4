@@ -4,6 +4,10 @@ Pins:
   * before the race start (our gun, else the first minute of the start date: the plume's rule),
     the push sends everything;
   * at or after the start, nothing is sent at all, and the answer says so in plain words;
+  * the start is checked before EVERY post: a push begun just before the gun stops at the gun,
+    and the remaining steps are not sent;
+  * the Orin copilot's playbook is never posted by the Lab: the Pi forwards it under its race-log
+    lock, and the copilot step reports the Pi's `copilot` answer;
   * no start known: it sends, and the boat decides;
   * a boat that refuses (racing) any step answers loaded: false, and that step is never green
     (fleet, checklist and watch used to pass on any answer).
@@ -49,11 +53,21 @@ posted = []
 BOAT = {"racing": False}
 
 
+TICK = {"step": 0}
+
+
 def fake_post(url, body, timeout=25):
     posted.append(url.rsplit(":8200", 1)[-1])
+    CLOCK["t"] += TICK["step"]                   # each post takes this long
     if BOAT["racing"]:
         return True, {"loaded": False, "detail": "Racing now. Not loaded."}
+    if url.endswith("/playbook/load"):
+        return True, {"loaded": True, "race_id": "r1",
+                      "copilot": BOAT.get("copilot", {"loaded": True, "race_id": "r1"})}
     return True, {"loaded": True}
+
+
+CLOCK = {"t": 0}
 
 
 D._post_json = fake_post
@@ -97,6 +111,44 @@ check("every step red", not res["ok"] and [s["ok"] for s in res["steps"]] == [Fa
 
 print("short text:")
 check("≤ 6 words", len(D.RACE_STARTED.split()) <= 6)
+
+print("a push begun just before the gun stops at the gun:")
+BOAT["racing"] = False
+D._clock = lambda: CLOCK["t"]
+CLOCK["t"], TICK["step"] = GUN - 25, 10           # 10 s a post: the gun falls during the 3rd
+posted.clear()
+res = D.push("r1")
+check("only the posts begun before the gun were sent",
+      posted == ["/course/load", "/reroute/assets", "/fleet/load"])
+check("the rest are red, not sent, plain", [s["step"] for s in res["steps"] if s.get("not_sent")]
+      == ["checklist", "watch"] and all(s["detail"]["error"] == "Race started. Not sent."
+                                        for s in res["steps"] if s.get("not_sent")))
+check("the push is not ok and says why", res["ok"] is False and res["detail"] == "Race started. Not sent.")
+TICK["step"] = 0
+
+print("the playbook: the Lab never posts to the Orin; the Pi forwards it:")
+D.pbstore.get = lambda pid: {"race_id": "r1", "variants": [{"id": "a"}]} if pid == "pb1" else None
+labstate.set("deploy:r1", {"playbook_id": "pb1"})
+CLOCK["t"] = GUN - 3600
+posted.clear()
+res = D.push("r1")
+check("one playbook post, to the Pi engine", [u for u in posted if "playbook" in u] == ["/playbook/load"]
+      and not any("copilot" in u for u in posted))
+cop = res["steps"][-1]
+check("copilot step = the Pi's forward answer", cop["target"] == "orin-copilot" and cop["ok"]
+      and cop["detail"]["race_id"] == "r1" and res["ok"])
+BOAT["copilot"] = {"loaded": False, "detail": "Can't reach the Orin. Playbook not sent there."}
+res = D.push("r1")
+check("Orin unreachable → copilot step red with the Pi's reason", not res["steps"][-1]["ok"]
+      and res["steps"][-1]["detail"]["error"] == "Can't reach the Orin. Playbook not sent there.")
+BOAT.pop("copilot")
+CLOCK["t"], TICK["step"] = GUN - 45, 10           # the gun falls before the playbook post
+posted.clear()
+res = D.push("r1")
+check("gun before the playbook post → neither the Pi nor the Orin gets it",
+      "/playbook/load" not in posted and [s["ok"] for s in res["steps"][-2:]] == [False, False])
+TICK["step"] = 0
+labstate.set("deploy:r1", {})
 
 print("ALL OK" if ok else "FAILED")
 sys.exit(0 if ok else 1)

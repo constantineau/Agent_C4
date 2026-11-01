@@ -38,6 +38,10 @@ MAX_TOOL_ROUNDS = int(os.environ.get("MAX_TOOL_ROUNDS", "4"))
 # present the copilot leans on its pre-authored variants as a strong prior — onboard it may
 # depart from them (legal). Absent → the copilot reasons from live engine facts only and says so.
 PLAYBOOK_PATH = os.environ.get("PLAYBOOK_PATH", "").strip()
+# Who may POST /playbook/load: the Pi engine's cable address only (it forwards the Lab's bundle
+# under its race-log lock). Comma list; the bench sets the Pi's Tailscale IP.
+PLAYBOOK_LOAD_FROM = frozenset(x.strip() for x in os.environ.get(
+    "PLAYBOOK_LOAD_FROM", "10.10.10.1").split(",") if x.strip())
 
 # The active route the engine should compute against (the loaded homework course).
 DEFAULT_ROUTE = os.environ.get("COPILOT_ROUTE", "").strip() or None

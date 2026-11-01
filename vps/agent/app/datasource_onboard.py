@@ -604,9 +604,15 @@ class OnboardSource:
         self._engine.commit()
         return self.session_current()
 
-    def session_end(self, end_ts):
-        self._engine.execute(
-            "UPDATE sessions SET end_ts = ? WHERE end_ts IS NULL", (float(end_ts),))
+    def session_end(self, end_ts, session_id=None):
+        """End the open session; with `session_id`, only that one (never a newer session)."""
+        if session_id is None:
+            self._engine.execute(
+                "UPDATE sessions SET end_ts = ? WHERE end_ts IS NULL", (float(end_ts),))
+        else:
+            self._engine.execute(
+                "UPDATE sessions SET end_ts = ? WHERE end_ts IS NULL AND id = ?",
+                (float(end_ts), int(session_id)))
         self._engine.commit()
 
     def session_current(self):
