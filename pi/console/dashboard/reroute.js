@@ -27,6 +27,7 @@
   const FALLBACK_MS = 120000;        // the "Use Pi route" offer lasts this long
   const FALLBACK_WHY = "Pi route: one forecast, no shore check.";
   const OLD_COURSE = "Route is for an old course.";
+  const INCOMPLETE = "Route incomplete.";
 
   const plural = (n, w) => n + " " + w + (n === 1 ? "" : "s");
   function hhmm(epochS) {
@@ -68,6 +69,9 @@
     if (r.old_course) {
       // made for another course (marks moved, a new course loaded): kept, never shown as current
       head = OLD_COURSE;
+    } else if (r.complete === false) {
+      // stalled short of the finish: no finish time, no gain, never sent to the GPS
+      head = INCOMPLETE;
     } else if (orin && vs.available && vs.gain_min != null) {
       const g = Math.round(vs.gain_min);
       head = g > 0 ? g + " min faster than the plan" : g < 0 ? (-g) + " min slower than the plan"
@@ -102,10 +106,12 @@
     const shore = !orin || warns.some((x) => x.indexOf("check the shore") >= 0) ||
       (r.chart && r.chart.land === false);
     if (shore) labels.push("Route doesn't check the shore");
-    const other = warns.filter((x) => x.indexOf("check the shore") < 0).slice(0, 2);
+    const other = warns.filter((x) => x.indexOf("check the shore") < 0 &&
+      !(r.complete === false && x === "Route incomplete.")).slice(0, 2);
     return { source: src.source, engine: orin ? "Orin" : "Pi", head: head, wx: wx, who: who,
       shape: bits.join(" · "), labels: labels, warnings: other,
-      age: fin ? agoTxt(nowS - fin) : "", finished_at: fin, old: !!r.old_course };
+      age: fin ? agoTxt(nowS - fin) : "", finished_at: fin, old: !!r.old_course,
+      incomplete: r.complete === false };
   }
 
   /* what a tap came to, from the POST's answer (code null = no answer: no link) */
@@ -184,7 +190,7 @@
       if ((press.engine || "") === "pi") say = "Asking the Pi…"; }
     else if (note) { say = note; sayKind = "note"; }
     else if (suggest) { say = suggest; sayKind = "suggest"; }
-    else if (last && last.old) { say = last.head; sayKind = "note"; }
+    else if (last && (last.old || last.incomplete)) { say = last.head; sayKind = "note"; }
     else if (last) { say = last.head + (last.age ? " · " + last.age : ""); sayKind = "last"; }
     else if (!rr) { say = "Waiting for the boat…"; sayKind = "none"; }
     else { say = "No new route yet."; sayKind = "none"; }
@@ -193,7 +199,8 @@
     let sub = null;
     if (fallback) sub = FALLBACK_WHY;
     else if (last && last.old && sayKind !== "note") sub = OLD_COURSE;
-    else if (last && !last.old && sayKind !== "last" && !progress) sub = "Last: " + last.head + (last.age ? " · " + last.age : "");
+    else if (last && last.incomplete && sayKind !== "note") sub = INCOMPLETE;
+    else if (last && !last.old && !last.incomplete && sayKind !== "last" && !progress) sub = "Last: " + last.head + (last.age ? " · " + last.age : "");
 
     return {
       status: rr ? "ok" : "na", sub: sub,
@@ -201,7 +208,7 @@
       stale: stale, ageMs: rr ? ageMs : null,
       running: running, progress: progress, button: button, fallback: fallback,
       note: note, suggest: suggest, last: last, say: say, sayKind: sayKind,
-      canShowOnGps: !!(last && !last.old && !running),
+      canShowOnGps: !!(last && !last.old && !last.incomplete && !running),
     };
   }
 

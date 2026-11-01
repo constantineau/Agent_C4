@@ -100,23 +100,41 @@ def _marks_hash(marks):
 
 
 def course_hash(route, marks):
-    """The course a route was made for: the route name plus every mark's name and position, in
-    order. A route stored with one hash is never sent to the GPS (or shown as current) once the
-    course aboard has another: a moved mark changes it even when the names don't."""
+    """The course a route was made for: the course LOAD (every /course/load, practice course or
+    switch of the active course gets a new id, even with identical marks: a new zone or rounding
+    side changes the course without moving a mark), the route name, and every mark's name and
+    position, in order. A route stored with one hash is never sent to the GPS (or shown as
+    current) once the course aboard has another. Read it under COURSE_LOCK."""
     try:
-        return f"{route}:{_marks_hash([(m.get('name'), m.get('lat'), m.get('lon')) for m in marks])}"
+        mh = _marks_hash([(m.get("name"), m.get("lat"), m.get("lon")) for m in marks])
     except (TypeError, ValueError, AttributeError):
         return None
+    load = (_read(_load_id_path()) or {}).get("load_id") or "noload"
+    return f"{load}:{route}:{mh}"
+
+
+def bump_load_id(route):
+    """A course change that isn't a /course/load (a practice course, a switch of the active
+    course): give it a new load id, so every route made before it counts as an old course. The
+    caller holds COURSE_LOCK across its whole change. Never raises (a store without the engine's
+    disk, e.g. the cloud, has no re-route to protect)."""
+    try:
+        with COURSE_LOCK:
+            # the stored definition carries the old id, so it no longer pairs with these marks
+            set_load_id(route, new_load_id())
+    except OSError as exc:
+        print(f"[orinroute] could not bump the course load id: {exc}", flush=True)
 
 
 def current_course_hash():
     """The hash of the course the navigator holds now, or None (no course aboard)."""
     try:
-        nav = NAV.get_navigator()
-        if not nav.get("route"):
-            return None
-        marks = NAV._marks(nav["route"])
-        return course_hash(nav["route"], marks) if marks else None
+        with COURSE_LOCK:
+            nav = NAV.get_navigator()
+            if not nav.get("route"):
+                return None
+            marks = NAV._marks(nav["route"])
+            return course_hash(nav["route"], marks) if marks else None
     except Exception:  # noqa: BLE001 — no course read → treated as "not this course"
         return None
 

@@ -185,6 +185,23 @@ test("a route for another course: never looks current, button stays, GPS off", (
   assert.equal(current.canShowOnGps, true);
 });
 
+test("an incomplete Orin route: says so, never READY-looking, GPS off", () => {
+  const stall = Object.assign({}, ORIN_ROUTE, { complete: false, finish_eta: null,
+    vs_plan: { available: false, note: "Route incomplete." }, warnings: ["Route incomplete."] });
+  const x = v({ rr: Object.assign({}, IDLE, { state: "done", latest: "orin", result: stall }) });
+  assert.equal(x.say, "Route incomplete.");
+  assert.equal(x.sayKind, "note");
+  assert.equal(x.last.head, "Route incomplete.");
+  assert.equal(x.last.incomplete, true);
+  assert.equal(x.canShowOnGps, false);
+  assert.equal(x.button.label, "Re-route now");
+  assert.equal(x.button.disabled, false);
+  const withSug = v({ rr: Object.assign({}, IDLE, { latest: "orin", result: stall }),
+    suggest: { reason: "Off the playbook." }, sugAgeMs: 0 });
+  assert.equal(withSug.sub, "Route incomplete.");
+  assert.ok(!/^Last:/.test(withSug.sub));
+});
+
 test("stale-safe: a held read shows its age; an old 'running' never blocks the button", () => {
   const rr = Object.assign({}, IDLE, { state: "running", progress: { elapsed_s: 30, expected_s: 70, pct: 40 } });
   const held = v({ rr: rr, rrAgeMs: 45000 });

@@ -385,6 +385,62 @@ orinroute.stored = _orig_stored
 NAV._marks = lambda route: MARKS
 check("the broadcast that holds the lock is bounded (a few seconds)", gpsout.POST_TIMEOUT_S <= 3)
 
+print("a route is bound to the course LOAD, not just its marks (#143 review):")
+OLD = "Route is for an old course. Press Re-route now."
+reoptimize._compute = counted
+check("start: the Pi route is current", gpsout.show(source="reoptimize")["shown"])
+# /course/load of the very same marks (say a new exclusion zone or a reversed rounding side):
+# it writes a new load id under the lock; nothing about the marks changes
+with orinroute.COURSE_LOCK:
+    orinroute.set_load_id("race", orinroute.new_load_id())
+check("same marks, new load → old course, refused", gpsout.show(source="reoptimize")["note"] == OLD)
+g = orinroute.tile(compact=True)
+check("…and flagged on the tile", g["pi"]["result"]["old_course"] is True)
+
+
+class _DS:
+    def __init__(self):
+        self.saved = []
+
+    def save_practice_course(self, marks):
+        self.saved.append(marks)
+
+    def save_active_route(self, route):
+        pass
+
+
+DS = _DS()
+NAV.datasource.active = lambda: DS
+CALLS["allowed"] = True
+reoptimize.run(device="iPad 6")
+wait_done()
+CALLS["allowed"] = False
+check("a fresh press on the new load is current again", gpsout.show(source="reoptimize")["shown"])
+before = json.load(open(os.path.join(_tmp, "engine", "course-load.json")))["load_id"]
+r = NAV.make_practice_course(1.0)
+after = json.load(open(os.path.join(_tmp, "engine", "course-load.json")))
+check("a practice course bumps the load id", r["available"] and after["load_id"] != before
+      and after["route"] == "practice")
+check("…so the route made before it is an old course",
+      gpsout.show(source="reoptimize")["note"] == OLD)
+lock_seen = {}
+DS.save_practice_course = lambda marks: lock_seen.setdefault(
+    "held", orinroute.COURSE_LOCK._is_owned())
+NAV.make_practice_course(1.0)
+check("…and writes its marks under the course lock", lock_seen.get("held") is True)
+NAV.set_active("race")                                  # back to the race course
+CALLS["allowed"] = True
+reoptimize.run(device="iPad 6")
+wait_done()
+CALLS["allowed"] = False
+check("route on 'race' current", gpsout.show(source="reoptimize")["shown"])
+NAV.set_active("race")
+check("re-selecting the active course changes nothing", gpsout.show(source="reoptimize")["shown"])
+NAV.set_active("other")
+NAV.set_active("race")
+check("a switch away and back → old course (the course may have changed meanwhile)",
+      gpsout.show(source="reoptimize")["note"] == OLD)
+
 print("the real engine endpoints:")
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -407,6 +463,10 @@ check("POST /reoptimize/run → 202", r.status_code == 202 and r.json()["engine"
 wait_done()
 CALLS["allowed"] = False
 check("…one computation", CALLS["n"] == n0 + 1)
+lid = json.load(open(os.path.join(_tmp, "engine", "course-load.json")))["load_id"]
+r = client.post("/course/practice")
+check("POST /course/practice bumps the course load id", r.status_code == 200
+      and json.load(open(os.path.join(_tmp, "engine", "course-load.json")))["load_id"] != lid)
 r = client.get("/reroute/history?limit=5")
 check("GET /reroute/history → newest first", r.status_code == 200
       and r.json()["runs"][0]["event"] == "done" and r.json()["runs"][0]["asked_by"] == "iPad 4")
