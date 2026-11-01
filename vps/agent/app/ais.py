@@ -31,6 +31,9 @@ What makes the watch trustworthy (2026-11-02 system review, collision items 1, 4
     CPA against where the boat was. 0 turns the age check off (a replay of an old archive).
   * TARGETS ARE MOVED TO NOW. Each report is dead-reckoned by its age along its SOG/COG. A target
     with no SOG or COG is `motion: "unknown"`: no CPA is claimed for it (it is not "stopped").
+  * A DROPPED AIS LINK IS BLIND. Onboard, targets arrive only over the engine's live Signal K
+    link (the archive holds own ship only), so `ais_link_down` (not connected, or silent for
+    AIS_LINK_STALE_S) is reported apart from the own fix, which the archive can keep fresh.
   * A SILENT FEED IS NOT AN EMPTY SEA, BUT NOT A BLIND WATCH EITHER. `feed_silent` is true when we
     are under way and nothing at all has been heard on AIS for AIS_SILENT_MIN (our own echo counts
     as heard): open water can be empty, so it is a "check the AIS" hint. `receiver_missing` is the
@@ -65,6 +68,8 @@ OWN_FIX_MAX_AGE_S = _envf("AIS_OWN_FIX_MAX_AGE_S",
 # Nothing heard on AIS for this long while under way → the feed is called silent.
 AIS_SILENT_MIN = _envf("AIS_SILENT_MIN", 15)
 UNDERWAY_KN = _envf("AIS_UNDERWAY_KN", 2.0)
+# The engine's live Signal K link (its only AIS input onboard) silent this long → AIS link down.
+AIS_LINK_STALE_S = _envf("AIS_LINK_STALE_S", 30)
 # The own-echo hint: a target this close that moves with us may be us. A hint only, never a filter.
 ECHO_RANGE_M = _envf("AIS_ECHO_RANGE_M", 50)
 ECHO_REL_KN = _envf("AIS_ECHO_REL_KN", 1.5)
@@ -206,6 +211,24 @@ def _latest_targets(max_age_min):
     return datasource.active().ais_targets(max_age_min)
 
 
+def _link_down():
+    """(down, age_s): is the data source's live AIS input link down? (None, None) when the source
+    has no such link (the cloud reads AIS from Postgres). Down = switched off, not connected, or
+    no message for AIS_LINK_STALE_S. The archive keeps own-ship contexts only (the archiver drops
+    other vessels), so there is no fallback for targets: a down link is a blind AIS watch."""
+    fn = getattr(datasource.active(), "live_link", None)
+    if fn is None:
+        return None, None
+    try:
+        lk = fn() or {}
+    except Exception:           # noqa: BLE001
+        return True, None
+    age = lk.get("last_msg_age_s")
+    down = (not lk.get("enabled") or not lk.get("connected") or age is None
+            or age > AIS_LINK_STALE_S)
+    return bool(down), (round(age) if age is not None else None)
+
+
 def _receiver_missing(last_heard_s):
     """True when the data source can tell the boat's AIS transceiver has gone quiet on the bus for
     AIS_SILENT_MIN while other data flows, and no target has been heard either. None = can't tell
@@ -261,7 +284,9 @@ def get_ais_targets(max_range_nm: float = 12):
             "last_heard_s": last_heard_s, "own_fix_age_s":
             round(own["age_s"]) if own.get("age_s") is not None else None}
 
-    rx_missing = _receiver_missing(last_heard_s)
+    link_down, link_age = _link_down()
+    rx_missing = None if link_down else _receiver_missing(last_heard_s)
+    base["ais_link_down"], base["ais_link_age_s"] = link_down, link_age
 
     reason = None
     if own["lat"] is None or own["lon"] is None:
@@ -286,7 +311,7 @@ def get_ais_targets(max_range_nm: float = 12):
     own["lat"], own["lon"] = _dead_reckon(own["lat"], own["lon"], own["sog"], own["cog"], own.get("age_s"))
     underway = own["sog"] is not None and own["sog"] >= UNDERWAY_KN
     feed_silent = bool(underway and (last_heard_s is None or last_heard_s > AIS_SILENT_MIN * 60))
-    if rx_missing:
+    if rx_missing or link_down:
         feed_silent = False                  # the louder signal says it
 
     targets = []

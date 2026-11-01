@@ -198,7 +198,7 @@ async def scenarios() -> bool:
     return ok
 
 
-def _engine_ais(rows, own_sog_kn=6.0, fix_age=1.0, own_mmsi=None, rx_age=None):
+def _engine_ais(rows, own_sog_kn=6.0, fix_age=1.0, own_mmsi=None, rx_age=None, link=None):
     """The ENGINE's real /ais answer (vps/agent/app/ais.py) for own ship at 45N 83W heading north
     and these raw AIS rows — so the copilot is tested on what the engine actually sends."""
     import os
@@ -224,6 +224,9 @@ def _engine_ais(rows, own_sog_kn=6.0, fix_age=1.0, own_mmsi=None, rx_age=None):
 
         def ais_receiver_age_s(self):
             return rx_age
+
+        def live_link(self):
+            return link or {"enabled": True, "connected": True, "last_msg_age_s": 0.5}
 
     ais_mod.datasource.active = lambda: Src()
     ais_mod.OWN_FIX_MAX_AGE_S = 30
@@ -329,6 +332,13 @@ async def review_scenarios() -> bool:
     st = await _tick()
     ok &= _check("the AIS transceiver gone from the bus → 'Collision watch OFF: AIS receiver missing'",
                  [a["headline"] for a in st["active"]] == ["Collision watch OFF: AIS receiver missing"])
+    # Codex on #191 at 3530006: the engine's SK link drops, the archiver keeps own GPS fresh
+    _fresh({"conditions": _COND, "ais": _engine_ais(
+        [], own_sog_kn=6.0, link={"enabled": True, "connected": False, "last_msg_age_s": 90.0})})
+    await _tick()
+    st = await _tick()
+    ok &= _check("AIS link down with a fresh own fix → 'Collision watch OFF: AIS link down', not a hint",
+                 [a["headline"] for a in st["active"]] == ["Collision watch OFF: AIS link down"])
     _fresh({"conditions": _COND, "ais": _engine_ais([], own_sog_kn=0.0)})
     await _tick()
     st = await _tick()

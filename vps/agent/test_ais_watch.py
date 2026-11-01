@@ -189,6 +189,36 @@ check("transceiver on the bus, nothing heard → only feed_silent", r["receiver_
       and r["feed_silent"] is True)
 check("a source that can't tell (cloud) → receiver_missing None", run(Src([]))["receiver_missing"] is None)
 
+print("\n== 5b. the engine's AIS input link (Codex on #191 at 3530006) ==")
+
+
+class LinkSrc(Src):
+    link = None
+
+    def live_link(self):
+        return self.link
+
+    def ais_receiver_age_s(self):
+        return None if not self.link.get("connected") else 5.0
+
+
+# the SK link dropped but the archiver keeps own GPS fresh: own fix true, targets gone
+ls_ = LinkSrc([], sog_kn=6.0, fix_age=1)
+ls_.link = {"enabled": True, "connected": False, "last_msg_age_s": 120.0}
+r = run(ls_)
+check("link not connected, own fix fresh → own_fix true AND ais_link_down true",
+      r["own_fix"] is True and r["ais_link_down"] is True and r["ais_link_age_s"] == 120)
+check("…the louder signal wins: not reported as merely 'silent'", r["feed_silent"] is False)
+ls_.link = {"enabled": True, "connected": True, "last_msg_age_s": 60.0}
+check("connected but nothing for 60 s → down", run(ls_)["ais_link_down"] is True)
+ls_.link = {"enabled": False, "connected": False, "last_msg_age_s": None}
+check("live cache switched off → down (no AIS can arrive)", run(ls_)["ais_link_down"] is True)
+ls_.link = {"enabled": True, "connected": True, "last_msg_age_s": 0.4}
+r = run(ls_)
+check("connected and fresh → up; an empty sea is only feed_silent",
+      r["ais_link_down"] is False and r["feed_silent"] is True)
+check("a source with no live link (cloud) → None", run(Src([]))["ais_link_down"] is None)
+
 print("\n== 6. closing contacts sorted by TCPA ==")
 # A: CPA tiny but 40 min out; B: CPA 0.3 nm but 5 min out
 a = row("366999010", 10 * NM_LAT, 9.0, 180.0, name="A")                     # 10 nm, closing 15 kn → 40 min
@@ -264,6 +294,14 @@ with tempfile.TemporaryDirectory() as d:
           and 38 <= r["own_fix_age_s"] <= 42)
     src._live = {(LAT, GPS24): (now - 1, 45.0), (LON, GPS24): (now - 1, -83.0)}
     check("the 24xd live and fresh → own_fix true", ais.get_ais_targets()["own_fix"] is True)
+
+    # the real live-link state the loop keeps
+    src._link_connected, src._link_last_msg = True, now - 2
+    lk = src.live_link()
+    check("OnboardSource.live_link: connected, last message ~2 s ago",
+          lk["connected"] is True and abs(lk["last_msg_age_s"] - 2) < 1)
+    src._link_connected = False
+    check("…and disconnected after a drop", src.live_link()["connected"] is False)
 
     # the transceiver's own-context data in the live cache (#191: only OFF when it's off the bus)
     ds._AIS_SRC_CACHE[db] = {"b951"}

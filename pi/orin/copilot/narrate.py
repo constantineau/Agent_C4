@@ -156,8 +156,8 @@ def _safety_callout(ais):
 
 def _blind_callout(ais, cond):
     """The collision watch can't see — say so instead of reading as all-clear. Engine unreachable,
-    the AIS read failing, no own-ship fix (or one too old to trust), or the boat's AIS transceiver
-    gone from the bus all leave the guard above with nothing to check, so the callout list would
+    the AIS read failing, no own-ship fix (or one too old to trust), the engine's AIS input link down,
+    or the boat's AIS transceiver gone from the bus all leave the guard above with nothing to check, so the callout list would
     otherwise be empty. (Hearing no traffic for a while is not blind — open water can be empty —
     so that is a quiet "No AIS heard" hint from `_safety_callouts`.) Deterministic, safety category (it outranks everything and never goes
     through the LLM); confirmed over two reads so one dropped request doesn't bark."""
@@ -177,6 +177,9 @@ def _blind_callout(ais, cond):
         else:
             cid, headline, detail = ("blind:fix", "Collision watch OFF: no GPS fix",
                                      look)
+    elif ais.get("ais_link_down"):
+        cid, headline, detail = ("blind:link", "Collision watch OFF: AIS link down",
+                                 "No targets coming in. " + look)
     elif ais.get("receiver_missing"):
         cid, headline, detail = ("blind:rx", "Collision watch OFF: AIS receiver missing",
                                  "Not on the bus. " + look)

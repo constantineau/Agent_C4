@@ -158,6 +158,11 @@ class OnboardSource:
         self._ais = {}             # mmsi -> {mmsi, time, name, lat, lon, sog(kn), cog(deg)}
         self._self_ctx = None      # the SK 'self' context urn, from the hello frame
         self._live_lock = threading.Lock()
+        # the live Signal K link's state, for the collision watch: AIS targets arrive ONLY this way
+        # (the archiver keeps own-ship contexts only), so a dropped link is a blind AIS watch even
+        # while the archive's own GPS stays fresh
+        self._link_connected = False
+        self._link_last_msg = None
         self._series_cache = {}    # (kind, path, minutes) -> (mono, rows) — see _cached_series
         self._series_lock = threading.Lock()
         self._polars = _load_polars()
@@ -273,11 +278,15 @@ class OnboardSource:
                 try:
                     async with websockets.connect(SIGNALK_WS, ping_interval=20) as ws:
                         print(f"[onboard] live SK cache connected {SIGNALK_WS}", flush=True)
+                        self._link_connected = True
                         async for msg in ws:
+                            self._link_last_msg = _time.time()
                             self._ingest_live(msg)
                 except Exception as exc:
                     print(f"[onboard] live SK WS error ({exc}); retry 3s", flush=True)
                     await asyncio.sleep(3)
+                finally:
+                    self._link_connected = False
 
         asyncio.new_event_loop().run_until_complete(loop())
 
@@ -418,6 +427,15 @@ class OnboardSource:
         cands = [c for c in cands if c[1] is not None]
         best = self._prefer(path, cands)
         return (best[2], best[1]) if best else None
+
+    def live_link(self):
+        """The live Signal K link — the engine's ONLY AIS input (the archive holds no other vessels):
+        {enabled, connected, last_msg_age_s}. `enabled` false = the live cache is switched off
+        (ONBOARD_LIVE_WS=false, e.g. a replay), so no AIS can arrive at all."""
+        last = getattr(self, "_link_last_msg", None)
+        return {"enabled": LIVE_ENABLED,
+                "connected": bool(getattr(self, "_link_connected", False)),
+                "last_msg_age_s": (max(0.0, _time.time() - last) if last is not None else None)}
 
     def ais_receiver_age_s(self):
         """Seconds since the boat's own AIS transceiver (an AIS-bearing source, see ais_sources)

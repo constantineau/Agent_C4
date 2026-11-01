@@ -67,7 +67,8 @@ closing" leads the line over any "now" item) and never go through the LLM — th
 line. The auto-coach publishes each tick's callouts to `GET /coach` the moment the engine reads are
 in (gathered in parallel); LLM phrasing and the crew briefs run in their own background tasks and
 swap in later. When the collision watch can't see — engine unreachable, the AIS read failing, no
-own GPS fix or one older than 30 s, or the boat's AIS transceiver gone from the bus — a
+own GPS fix or one older than 30 s, the engine's live Signal K link (its only AIS input) down, or
+the boat's AIS transceiver gone from the bus — a
 deterministic **"Collision watch OFF: …"** safety callout (urgency now, confirmed over two ticks)
 replaces the old silent all-clear, and `last_error` names an unreachable engine. A tick that throws
 publishes "Collision watch OFF: copilot error" instead of keeping the last result. Hearing no AIS
