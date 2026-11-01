@@ -25,6 +25,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from shared import archiver_status
 from app import (navigator, tactics, routing, weather, sails, fatigue, onboard_conditions,
                  datasource, ais, fleet, deviation, drift, selector, reoptimize, strategy,
                  matcher, buoys, racelog, watches, trend, plangap, gpsout, checklist,
@@ -40,7 +41,9 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
 @app.get("/health")
 def health():
     return {"status": "ok", "service": "onboard-engine", "llm": "none (deterministic)",
-            "data_source": os.environ.get("DATA_SOURCE", "onboard")}
+            "data_source": os.environ.get("DATA_SOURCE", "onboard"),
+            # is the full-res archive being written? (the archiver's status file, read-only)
+            "archiver": archiver_status.read()}
 
 
 @app.get("/conditions")
@@ -472,8 +475,14 @@ def checklist_ack(body: dict):
 def session_status():
     """The RACE LOG state: active session + recent windows. Sessions mark what the boat KEEPS
     (full-res, backfilled, debriefed); everything outside them is pruned after the retention
-    period and never leaves the boat. No Lab prep / RaceDefinition needed."""
-    return racelog.status()
+    period and never leaves the boat. No Lab prep / RaceDefinition needed.
+
+    `archiver` says whether full-res rows are reaching the disk at all; the LOG button shows
+    "Not recording: <reason>" when they are not (a session marks what to KEEP, it records
+    nothing by itself)."""
+    out = racelog.status()
+    out["archiver"] = archiver_status.read()
+    return out
 
 
 @app.post("/session/start")

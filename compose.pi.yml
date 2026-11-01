@@ -10,10 +10,20 @@
 # because :3000 is taken on this VM (DreamCRM).
 name: sr33-pi
 
+# Every service's Docker log is capped: 3 files x 10 MB, oldest dropped. The default json-file
+# driver never rotates, and these logs sit on the archive's own SD card, where a flood (the
+# archiver once logged ~2 GB/day) eats the disk guard's budget and can stop full-res recording.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   # Renders settings.json from the template, substituting the single CAN_IFACE switch,
   # and hands ownership to the signalk runtime user (uid 1000).
   signalk-init:
+    logging: *logging
     image: alpine:3.20
     environment:
       CAN_IFACE: ${CAN_IFACE:-vcan0}
@@ -35,6 +45,7 @@ services:
   # only on the first boot with a fresh volume; afterwards it's cached in sk_config. Uses the
   # signalk image (it has npm/node) and runs after signalk-init has chowned the volume.
   signalk-derived:
+    logging: *logging
     # Pinned for race-week determinism (was :latest, which pulled different versions on the
     # boat vs the bench). See the entrypoint note on the signalk service below.
     image: cr.signalk.io/signalk/signalk-server:v2.27.0
@@ -70,6 +81,7 @@ services:
         condition: service_completed_successfully
 
   signalk:
+    logging: *logging
     image: cr.signalk.io/signalk/signalk-server:v2.27.0
     # The image's stock startup.sh ends in `signalk-server --securityenabled`, which with no
     # security.json rejects ALL clients ("Missing access token") — the engine/uplink/archiver
@@ -92,6 +104,7 @@ services:
     restart: unless-stopped
 
   uplink:
+    logging: *logging
     build:
       context: .
       dockerfile: pi/uplink/Dockerfile
@@ -117,6 +130,7 @@ services:
   # reboots and container rebuilds). The boat is the source of truth; nothing here depends
   # on the cloud link being up. backfill.py later pushes this full-res log to the VPS.
   archiver:
+    logging: *logging
     build:
       context: .
       dockerfile: pi/archiver/Dockerfile
@@ -147,6 +161,7 @@ services:
   # archive read-only; keeps its own course-marks store on engine_state. Open-Meteo egress
   # (forecast/route) rides the host network like the other Pi services.
   engine:
+    logging: *logging
     build:
       context: .
       dockerfile: pi/engine/Dockerfile
@@ -169,6 +184,7 @@ services:
   # route to the Garmin 943 (129285 route chunks + 129283/129284 nav data; RRS-41 clean — own
   # computer to own display). Passive until asked; harmless with no bus (bench / pre-cable).
   n2kout:
+    logging: *logging
     build:
       context: .
       dockerfile: pi/n2kout/Dockerfile
@@ -182,6 +198,7 @@ services:
   # no LLM chat, every panel available. In race mode the iPad connects to THIS (network-level
   # channel separation) instead of the cloud. Listens on :8091 (host net). http://<pi-ip>:8091
   console:
+    logging: *logging
     build:
       context: .
       dockerfile: pi/console/Dockerfile

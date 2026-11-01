@@ -50,18 +50,33 @@ print(c.execute('select count(*),min(time),max(time) from readings').fetchone())
   real numbers are 2 points and twice the minimum clear of it (the WAL and new pages need real
   bytes, and a reader can stop SQLite reusing its free pages). The uplink's 15-s
   aggregates keep going ashore either way.
+- **Restart.** Recording starts within seconds, whatever the size of the archive. Startup runs
+  only bounded checks (header, schema, and the right-hand edge of every b-tree — where the last
+  writes went), never a whole-file scan: on the SD card a `quick_check` of 24 GB took 39 min.
+  The full `quick_check` runs afterwards in a background thread at low priority (nice 19, idle
+  I/O class, and at most `ARCHIVE_CHECK_DUTY` of the time). If it finds damage in the live
+  file, the file is rotated as below.
 - **Corruption.** A corrupt file is moved aside as `archive.corrupt-<stamp>.db` (never deleted;
-  `tools/salvage.py` recovers almost all of it) and a fresh one is started. At startup this
-  fires on a failed `quick_check` or a failed row count; mid-run it fires on any write that
-  says the file is corrupt, without asking quick_check again. The batch is kept and written to
-  the fresh file. If the move itself fails, the batch is requeued and the move retried.
+  `tools/salvage.py` recovers almost all of it) and a fresh one is started. At startup any
+  database error from the open, the schema read or the bounded checks counts (also `string or
+  blob too big` and UTF-8 decode errors from a damaged page) — except transient ones (locked,
+  busy, disk full, can't open), which are retried instead. The moved file is then checked in
+  the background and the verdict logged. Mid-run it fires on any write that says the file is
+  corrupt, without asking quick_check again. The batch is kept and written to the fresh file.
+  If the move itself fails, the batch is requeued and the move retried.
 - **Failing writes.** A failed batch is rolled back and requeued in order. The queue is capped
-  at `ARCHIVE_MAX_BUFFER_ROWS`; past it the oldest rows are dropped and counted in the log.
-- **Status file** (`archiver-status.json`, refreshed every disk check): `recording`, `reason`
-  (`disk_full` / `rotation_pending`), `stop_cause` (`high_mark` / `hard_floor`), `disk_used_pct`,
-  `disk_really_used_pct`, `disk_free_bytes`, the marks, `paused_since`, and the counts
-  of rows not recorded, dropped from the buffer, written, and rotations this run. The engine
-  mounts the archive volume read-only, so it can read it; nothing shows it on the console yet.
+  at `ARCHIVE_MAX_BUFFER_ROWS`; past it the oldest rows are dropped and counted. The drop
+  warning prints at most once per `ARCHIVE_DROP_LOG_EVERY_S` with the count since the last one.
+- **Prune.** The hourly retention prune deletes in chunks of `ARCHIVE_PRUNE_CHUNK_ROWS`, taking
+  the write lock one chunk at a time, so the flusher keeps writing while it runs.
+- **Status file** (`archiver-status.json`, rewritten every `ARCHIVE_STATUS_EVERY_S`):
+  `recording`, `reason` (`disk_full` / `rotation_pending` / `no_signalk` / `write_failing`),
+  `stop_cause` (`high_mark` / `hard_floor`), `disk_used_pct`, `disk_really_used_pct`,
+  `disk_free_bytes`, the marks, `paused_since`, the counts of rows not recorded, dropped from
+  the buffer, waiting, written, rotations this run, and the background check's state. The
+  engine reads it (`shared/archiver_status.py`) on `/session` and `/health`; a file older than
+  90 s reads as "archiver stopped". The console's LOG button and a red banner show
+  "Not recording: <reason>".
 
 ## Backfill to the cloud (post-passage)
 
@@ -94,4 +109,8 @@ once a real link is available (dockside wifi after the passage).
 | `ARCHIVE_DISK_HARD_PCT` / `ARCHIVE_DISK_MIN_FREE_MB` | `95` / `2048` | hard floor on REAL filesystem use / free space; no free-page credit, stops recording on its own |
 | `ARCHIVE_DISK_CHECK_S` / `ARCHIVE_DISK_NAG_S` | `30` / `600` | how often disk use is measured / how often a stopped archiver repeats its warning |
 | `ARCHIVE_MAX_BUFFER_ROWS` | `300000` | cap on rows waiting in RAM while writes fail (~10 min at the dock); the oldest past it are dropped and counted |
-| `ARCHIVE_STATUS_FILE` | `archiver-status.json` next to the DB | the archiver's health as JSON (see below) |
+| `ARCHIVE_STATUS_FILE` | `archiver-status.json` next to the DB | the archiver's health as JSON (see above) |
+| `ARCHIVE_STATUS_EVERY_S` | `10` | how often the status file is rewritten |
+| `ARCHIVE_CHECK_DUTY` | `0.5` | share of wall time the background quick_check may spend reading |
+| `ARCHIVE_DROP_LOG_EVERY_S` | `30` | at most one buffer-drop / requeue warning per this many seconds |
+| `ARCHIVE_PRUNE_CHUNK_ROWS` / `ARCHIVE_PRUNE_PAUSE_S` | `20000` / `0.05` | prune batch size / pause between batches (lock released) |

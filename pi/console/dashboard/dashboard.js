@@ -1416,11 +1416,20 @@
     const b = document.getElementById("recBtn"), l = document.getElementById("recLbl");
     if (!b || !l) return;
     const a = (App.session || {}).active;
-    b.classList.toggle("on", !!a);
+    // The archiver writing nothing (disk full, damaged file, stopped) beats "Logging": a
+    // session only marks what to KEEP. Absent field (older engine, cloud) = no claim either way.
+    const arch = (App.session || {}).archiver;
+    const down = !!arch && arch.recording === false;
+    const warn = document.getElementById("archWarn");
+    if (warn) { warn.hidden = !down; warn.textContent = down ? arch.text : ""; }
+    b.classList.toggle("on", !!a && !down);
     b.classList.toggle("confirm", !!a && Date.now() < recConfirmUntil);
     if (a && Date.now() < recConfirmUntil) {
       l.textContent = "TAP AGAIN TO END";
       b.title = "Tap again to end \"" + a.name + "\". Or wait to keep logging.";
+    } else if (down) {
+      l.textContent = arch.text;
+      b.title = arch.text + (a ? ". Tap twice to end \"" + a.name + "\"." : ".");
     } else if (a) {
       const min = Math.max(0, Math.round((Date.now() / 1000 - a.start_ts) / 60));
       l.textContent = (a.kind === "race" ? "REC·RACE " : "REC ") + min + "m";
