@@ -1,0 +1,8 @@
+{
+"type": "FeatureCollection",
+"name": "ne_10m_land",
+"xy_coordinate_resolution": 1e-06,
+"features": [
+{ "type": "Feature", "properties": { "featurecla": "Land", "min_zoom": 0.0, "scalerank": 0 }, "geometry": { "type": "Polygon", "coordinates": [ [ [ -85.5, 46.7 ], [ -81.0, 46.7 ], [ -81.0, 42.5 ], [ -85.5, 42.5 ], [ -85.5, 46.7 ] ] ] } }
+]
+}
