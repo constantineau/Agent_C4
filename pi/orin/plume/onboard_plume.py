@@ -8,15 +8,17 @@ public data is legal in-race, so this one keeps updating through the race.
 
 One pass (`run_once`, run by a systemd timer every 15 min as a short-lived process):
   1. Ask the Pi engine (over the direct Pi↔Orin cable) which route the boat holds:
-     GET /playbook/track (the active playbook variant, with ETAs). No route, or its ETAs are over →
-     the boat's own position from GET /conditions.
+     GET /playbook/track (the active playbook variant, with ETAs). Once the race is on and the
+     boat is near the route, the ETAs shift (whole hours) to the boat's real progress. No route,
+     or its ETAs are over → the boat's own position from GET /conditions.
   2. If there's internet, download any NEW model cycle for that route's box (bbox-subset NOMADS
      GRIBs, ECMWF open data, Open-Meteo ICON/GEM — the Lab's own sources and cache layout) and
      record it. No internet → skip the downloads and keep the last runs.
   3. Build the plume (the exact c4.plume/v1 shape the engine and console already use), mark it
      `source: onboard`, POST it to the engine's /plume/onboard. The engine only takes that from
      the Orin's cable address (10.10.10.2).
-  4. Prune GRIB files older than GRIB_KEEP_H.
+  4. Prune GRIB files older than GRIB_KEEP_H and run stores of old targets.
+A cycle that is due but not posted yet is re-probed at most once an hour (BackoffFetch).
 
 It never runs the route optimizer. The GRIB cache it keeps (GRIB_CACHE, the Lab's layout) is the
 download layer #124's onboard optimizer can reuse later.
@@ -26,7 +28,9 @@ Run:  PYTHONPATH=<repo>/vps/lab python3 pi/orin/plume/onboard_plume.py   (see RE
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
+import math
 import os
 import socket
 import sys
@@ -75,22 +79,150 @@ def engine_post(path, body):
 
 
 # ---- which route --------------------------------------------------------------------------------
+POINT_STEP = 0.25            # the boat's position is snapped to this grid (≈ a model cell)
+SHIFT_STEP_S = 3600          # ETA shift to the boat's real progress, in whole hours
+SHIFT_MAX_OFF_NM = 20.0      # ...only while the boat is this close to the planned route
+SHIFT_MAX_S = 12 * 3600      # ...and no more than this off plan (beyond it the plan is history)
+
+
+def _route_hash(pts):
+    """Short hash of the route geometry + ETAs: a replacement playbook that reuses the race and
+    variant ids still gets its own store, so its runs never mix with the old route's."""
+    sig = [[round(p["lat"], 3), round(p["lon"], 3), int(p["t"])] for p in pts]
+    return hashlib.md5(json.dumps(sig, separators=(",", ":")).encode()).hexdigest()[:8]
+
+
+def _nearest_on_path(path, lat, lon):
+    """(distance_nm, plan_t) of the point on `path` nearest (lat, lon) — flat-earth per segment,
+    fine at a few miles."""
+    k = math.cos(math.radians(lat))
+    best = None
+    for a, b in zip(path, path[1:]):
+        ax, ay = (a["lon"] - lon) * k, a["lat"] - lat
+        bx, by = (b["lon"] - lon) * k, b["lat"] - lat
+        dx, dy = bx - ax, by - ay
+        L = dx * dx + dy * dy
+        f = 0.0 if L == 0 else min(1.0, max(0.0, -(ax * dx + ay * dy) / L))
+        d = math.hypot(ax + f * dx, ay + f * dy) * 60.0
+        if best is None or d < best[0]:
+            best = (d, a["t"] + f * (b["t"] - a["t"]))
+    return best
+
+
+def progress_shift(path, boat, now, step=SHIFT_STEP_S, max_off_nm=SHIFT_MAX_OFF_NM):
+    """Seconds to add to the plan's ETAs so they match the boat's real progress: plan time at the
+    boat's nearest point on the route vs now, in whole `step`s (positive = behind plan). 0 before
+    the planned start, with no position, when the boat is off the route (at the dock, delivery),
+    or when it's more than SHIFT_MAX_S off plan (an old playbook, the boat moored weeks later).
+    Assumes the route doesn't pass the same water twice (true for point-to-point races)."""
+    if not boat or len(path) < 2 or now < path[0]["t"]:
+        return 0
+    near = _nearest_on_path(path, boat[0], boat[1])
+    if near is None or near[0] > max_off_nm:
+        return 0
+    shift = int(round((now - near[1]) / step)) * step
+    return shift if abs(shift) <= SHIFT_MAX_S else 0
+
+
 def resolve_spec(track, conditions, now):
-    """The spec `lab.record` follows: the playbook route the boat holds (with ETAs), else the boat's
-    position. None when there's neither."""
-    pts = lab.clean_path((track or {}).get("points")) if (track or {}).get("available") else []
-    if len(pts) >= 2 and pts[-1]["t"] >= now - lab.BACK_H * 3600:
-        race = lab._safe((track or {}).get("race_id")) or "race"
-        variant = lab._safe((track or {}).get("variant")) or "plan"
-        name = (track or {}).get("variant_label") or "planned"
-        return {"key": f"onboard__{race}__{variant}", "race_id": (track or {}).get("race_id"),
-                "basis": "route", "path": pts, "label": f"along the {name} route"}
+    """The spec `lab.record` follows: the playbook route the boat holds (ETAs shifted to the boat's
+    real progress once the race is on), else the boat's position snapped to a POINT_STEP grid.
+    None when there's neither. The store key carries everything the samples depend on — route
+    geometry + ETAs + shift, or the snapped point — so a changed target never reuses old samples
+    (or skips a cycle because the old target already had it)."""
     c = conditions or {}
-    if c.get("available") and c.get("lat") is not None and c.get("lon") is not None:
-        lat, lon = float(c["lat"]), float(c["lon"])
-        return {"key": "onboard__boat", "race_id": (track or {}).get("race_id"), "basis": "point",
-                "path": [{"lat": lat, "lon": lon, "t": 0.0}], "label": "at the boat"}
+    boat = (float(c["lat"]), float(c["lon"])) if c.get("available") and c.get("lat") is not None \
+        and c.get("lon") is not None else None
+    pts = lab.clean_path((track or {}).get("points")) if (track or {}).get("available") else []
+    if len(pts) >= 2:
+        shift = progress_shift(pts, boat, now)
+        path = [dict(p, t=p["t"] + shift) for p in pts] if shift else pts
+        if path[-1]["t"] >= now - lab.BACK_H * 3600:
+            race = lab._safe((track or {}).get("race_id")) or "race"
+            variant = lab._safe((track or {}).get("variant")) or "plan"
+            name = (track or {}).get("variant_label") or "planned"
+            key = f"onboard__{race}__{variant}__{_route_hash(pts)}"
+            if shift:
+                key += f"__s{shift // 3600:+d}h"
+            return {"key": key, "race_id": (track or {}).get("race_id"), "basis": "route",
+                    "path": path, "shift_s": shift, "label": f"along the {name} route"}
+    if boat:
+        lat, lon = (round(x / POINT_STEP) * POINT_STEP for x in boat)
+        return {"key": f"onboard__pt-{lat:.2f}_{lon:.2f}", "race_id": (track or {}).get("race_id"),
+                "basis": "point", "path": [{"lat": lat, "lon": lon, "t": 0.0}], "label": "at the boat"}
     return None
+
+
+# ---- re-check back-off --------------------------------------------------------------------------
+MISS_BACKOFF_S = float(os.environ.get("PLUME_MISS_BACKOFF_MIN", "60")) * 60
+_MISSES = "misses.state"     # not .json: never mistaken for a run store
+
+
+class BackoffFetch:
+    """`lab.record`'s fetch, with a back-off for a cycle that is due by the model's nominal lag but
+    not posted yet (ECMWF posts hours later than its lag says). After a miss, that cycle isn't
+    re-probed for MISS_BACKOFF_S; a newer due cycle is tried at once. While backing off, a target
+    with no run on file yet still gets the last cycle that WAS there (from the cache, no download).
+    Uses its own crash-isolated GRIB parser, like `lab.record` does for the stock fetch."""
+
+    def __init__(self, key, now, backoff_s=MISS_BACKOFF_S, fetch_run=None):
+        self.path = os.path.join(os.environ["PLUME_DIR"], _MISSES)
+        self.backoff_s, self.now = backoff_s, now
+        self.fetch_run = fetch_run or lab.fetch_run
+        st = lab.load_store(key) or {}
+        self.have = {m: lab.latest_cycle(st, m) for m in (st.get("runs") or {})}
+        try:
+            with open(self.path) as f:
+                self.misses = json.load(f)
+        except (OSError, ValueError):
+            self.misses = {}
+        self._parser = None
+
+    def parser(self):
+        from app.wind import grib
+        if self._parser is None and grib.ISOLATE:
+            self._parser = grib.IsolatedGribParser()
+        return self._parser
+
+    def __call__(self, source, bbox, times, now, _parser=None):
+        when = dt.datetime.fromtimestamp(now, dt.timezone.utc)
+        due = int(source.pick_cycle(when).timestamp())
+        miss = self.misses.get(source.name) or {}
+        if miss.get("cycle") == due and now - miss.get("at", 0) < self.backoff_s:
+            if self.have.get(source.name) is not None or not miss.get("got"):
+                return None                       # backing off; the target already has a run
+            got_dt = dt.datetime.fromtimestamp(miss["got"], dt.timezone.utc)
+            return self.fetch_run(_Pinned(source, got_dt), bbox, times, now, self.parser())
+        got = self.fetch_run(source, bbox, times, now, self.parser())
+        if hasattr(source, "load_series") or (got and int(got[0]) >= due):
+            self.misses.pop(source.name, None)
+        else:
+            self.misses[source.name] = {"cycle": due, "at": int(now),
+                                        "got": int(got[0]) if got else None}
+        return got
+
+    def close(self):
+        if self._parser is not None:
+            self._parser.close()
+        try:
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            with open(self.path, "w") as f:
+                json.dump(self.misses, f)
+        except OSError:
+            pass
+
+
+class _Pinned:
+    """A model source whose freshest cycle is pinned (the last one that was actually posted)."""
+
+    def __init__(self, src, cycle):
+        self._src, self._cycle = src, cycle
+
+    def pick_cycle(self, now=None, min_horizon_h=0):
+        return self._cycle
+
+    def __getattr__(self, k):
+        return getattr(self._src, k)
 
 
 # ---- internet + disk ----------------------------------------------------------------------------
@@ -122,6 +254,31 @@ def prune_gribs(cache=None, keep_s=GRIB_KEEP_S, now=None):
     return gone
 
 
+def prune_stores(keep_key=None, keep_s=None, now=None):
+    """Delete run stores (one per target key) untouched for `keep_s` (the run history length,
+    48 h) — a moving boat or a shifted route leaves old keys behind. Never the current one."""
+    d = os.environ["PLUME_DIR"]
+    keep_s = lab.KEEP_S if keep_s is None else keep_s
+    now = time.time() if now is None else now
+    mine = lab._safe(keep_key) + ".json" if keep_key else None
+    gone = 0
+    try:
+        names = os.listdir(d)
+    except OSError:
+        return 0
+    for n in names:
+        if not n.endswith(".json") or n == mine:
+            continue
+        p = os.path.join(d, n)
+        try:
+            if os.path.getmtime(p) < now - keep_s:
+                os.remove(p)
+                gone += 1
+        except OSError:
+            continue
+    return gone
+
+
 # ---- one pass -----------------------------------------------------------------------------------
 def build(st, now):
     """The c4.plume/v1 payload from the store, marked onboard. No race_start: an onboard plume is
@@ -144,7 +301,11 @@ def run_once(now=None, get=engine_get, post=engine_post, record=None, is_online=
         return {"ok": False, "note": "no route and no position"}
     net = is_online()
     if net:
-        st = record(spec, now=now, on_progress=_log)
+        fetch = BackoffFetch(spec["key"], now)
+        try:
+            st = record(spec, now=now, on_progress=_log, fetch=fetch)
+        finally:
+            fetch.close()
     else:
         _log("offline — keeping the last runs")
         st = lab.load_store(spec["key"])
@@ -162,6 +323,7 @@ def run_once(now=None, get=engine_get, post=engine_post, record=None, is_online=
     else:
         _log("no model runs on file yet — nothing to push")
     out["pruned"] = prune_gribs(now=now)
+    out["pruned_stores"] = prune_stores(spec["key"], now=now)
     return out
 
 

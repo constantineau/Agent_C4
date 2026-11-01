@@ -107,7 +107,7 @@ def post(path, body):
 print("first pass, online:")
 out = ob.run_once(now=NOW, get=get, post=post, record=record, is_online=lambda: True)
 check("pass ok, following the playbook route", out["ok"] and out["basis"] == "route"
-      and out["key"] == "onboard__r1__left")
+      and out["key"].startswith("onboard__r1__left__"))
 check("downloaded the run's frames over the plume window", FETCHED and min(FETCHED) <= 6 and max(FETCHED) >= 30)
 check("posted once, to /plume/onboard", len(POSTS) == 1 and POSTS[0][0] == "/plume/onboard")
 p = POSTS[0][1]
@@ -157,13 +157,109 @@ check("engine refusal is reported", out["push"]["ok"] is False and out["push"]["
 print("no current route:")
 ENGINE["/playbook/track"] = dict(TRACK, points=[dict(pt, t=pt["t"] - 10 * 86400) for pt in TRACK["points"]])
 s = ob.resolve_spec(ENGINE["/playbook/track"], COND, NOW)
-check("route ETAs over → at the boat's position", s["basis"] == "point" and s["key"] == "onboard__boat"
-      and s["path"][0]["lat"] == 44.5)
+check("route ETAs over, boat off the route → at the boat's position (snapped to 0.25°)",
+      s["basis"] == "point" and s["key"] == "onboard__pt-44.50_-86.50" and s["path"][0]["lat"] == 44.5)
 check("no playbook, no position → None", ob.resolve_spec({"available": False}, {"available": False}, NOW) is None)
 check("a track without ETAs (older engine) → the boat's position",
       ob.resolve_spec(dict(TRACK, points=[{"lat": 44, "lon": -87}, {"lat": 45, "lon": -85}]), COND, NOW)["basis"] == "point")
 
+print("store keys follow what the samples depend on:")
+FAR = {"available": True, "lat": 42.0, "lon": -80.0}            # nowhere near the route
+k1 = ob.resolve_spec({"available": False}, {"available": True, "lat": 44.0, "lon": -87.0}, NOW)["key"]
+k2 = ob.resolve_spec({"available": False}, {"available": True, "lat": 45.0, "lon": -85.0}, NOW)["key"]
+k1b = ob.resolve_spec({"available": False}, {"available": True, "lat": 44.05, "lon": -87.05}, NOW)["key"]
+check("boat moved 44N 87W → 45N 85W: a different key", k1 != k2)
+check("a few hundred metres of drift: the same key (same grid point)", k1 == k1b)
+r1 = ob.resolve_spec(TRACK, FAR, NOW)["key"]
+moved = dict(TRACK, points=[TRACK["points"][0], dict(TRACK["points"][1], lat=45.5)])
+retimed = dict(TRACK, points=[TRACK["points"][0], dict(TRACK["points"][1], t=NOW + 40 * 3600)])
+check("same race + variant ids, new route geometry: a different key", ob.resolve_spec(moved, FAR, NOW)["key"] != r1)
+check("same race + variant ids, new ETAs: a different key", ob.resolve_spec(retimed, FAR, NOW)["key"] != r1)
+check("same route: the same key", ob.resolve_spec(dict(TRACK), FAR, NOW)["key"] == r1)
+
+print("the boat moved before the next cycle (no skip, no stale samples):")
+ENGINE["/playbook/track"] = {"available": False}
+ENGINE["/conditions"] = {"available": True, "lat": 44.0, "lon": -87.0}
+FETCHED.clear()
+a1 = ob.run_once(now=NOW, get=get, post=post, record=record, is_online=lambda: True)
+ENGINE["/conditions"] = {"available": True, "lat": 45.0, "lon": -85.0}
+a2 = ob.run_once(now=NOW + 900, get=get, post=post, record=record, is_online=lambda: True)
+p2 = POSTS[-1][1]
+check("a new key after the move", a1["key"] != a2["key"] and p2["key"] == a2["key"])
+check("the same cycle is sampled again at the new position (not skipped)",
+      p2["models"] and p2["models"][0]["runs"][0]["cycle"] == int(CYCLE.timestamp()))
+check("history doesn't mix positions: one run in the new store", len(p2["models"][0]["runs"]) == 1)
+
+print("ETAs follow the boat's real progress:")
+# plan: 44N 87W at NOW-1h → 45N 85W at NOW+30h. The boat is only 1/31 of the way along at NOW+3h,
+# where the plan put it at NOW (3 h behind).
+mid = {"available": True, "lat": 44.0 + 1 / 31, "lon": -87.0 + 2 / 31}
+s3 = ob.resolve_spec(TRACK, mid, NOW + 3 * 3600)
+check("3 h behind plan → ETAs shifted +3 h, in the key", s3["shift_s"] == 3 * 3600 and s3["key"].endswith("__s+3h")
+      and s3["path"][0]["t"] == TRACK["points"][0]["t"] + 3 * 3600)
+check("off the route (dock, delivery) → no shift", ob.resolve_spec(TRACK, FAR, NOW + 3 * 3600)["shift_s"] == 0)
+check("before the planned start → no shift",
+      ob.resolve_spec(TRACK, mid, TRACK["points"][0]["t"] - 60)["shift_s"] == 0)
+near_end = {"available": True, "lat": 44.97, "lon": -85.06}
+over = dict(TRACK, points=[dict(pt, t=pt["t"] - 35 * 3600) for pt in TRACK["points"]])   # plan ended NOW-5h
+late = ob.resolve_spec(over, near_end, NOW)
+check("plan ETAs over but the boat is still finishing → keeps the route, shifted",
+      late["basis"] == "route" and 3 * 3600 <= late["shift_s"] <= 6 * 3600)
+check("more than 12 h off plan → no shift (old playbook, boat moored on the course)",
+      ob.progress_shift(ob.lab.clean_path(TRACK["points"]), (44.97, -85.06), NOW + 5 * 86400) == 0)
+
+print("a due cycle that isn't posted yet is re-probed at most hourly:")
+DUE = CYCLE + dt.timedelta(hours=6)
+NAMCALLS = []
+
+
+class LateNAM(models.NAM):
+    """NAM whose due cycle (12Z) isn't posted: every fetch of it misses, 06Z is there."""
+
+    def pick_cycle(self, now=None, min_horizon_h=0):
+        return DUE
+
+    def fetch(self, cycle, fhr, member, bbox, timeout=60):
+        NAMCALLS.append(cycle)
+        if cycle == DUE:
+            return None
+        return write_grib(os.path.join(os.environ["GRIB_CACHE"], "nam", f"f{fhr:03d}.grib2"), u=-4.0, v=0.0)
+
+
+models.MODELS["nam"] = LateNAM()
+
+
+def rec_nam(spec, **kw):
+    return ob.lab.record(spec, models=("nam",), **kw)
+
+
+ENGINE["/conditions"] = {"available": True, "lat": 43.5, "lon": -86.0}
+ob.run_once(now=NOW, get=get, post=post, record=rec_nam, is_online=lambda: True)
+check("first pass probes 12Z, falls back to 06Z", DUE in NAMCALLS and CYCLE in NAMCALLS
+      and POSTS[-1][1]["models"][0]["runs"][0]["cycle"] == int(CYCLE.timestamp()))
+NAMCALLS.clear()
+ob.run_once(now=NOW + 900, get=get, post=post, record=rec_nam, is_online=lambda: True)
+check("15 min later: no probe at all", NAMCALLS == [])
+ENGINE["/conditions"] = {"available": True, "lat": 45.0, "lon": -84.5}   # a new target meanwhile
+ob.run_once(now=NOW + 1200, get=get, post=post, record=rec_nam, is_online=lambda: True)
+check("a new target while backing off gets 06Z without re-probing 12Z",
+      DUE not in NAMCALLS and POSTS[-1][1]["models"][0]["runs"][0]["cycle"] == int(CYCLE.timestamp()))
+NAMCALLS.clear()
+ob.run_once(now=NOW + 3700, get=get, post=post, record=rec_nam, is_online=lambda: True)
+check("after an hour: 12Z probed again", DUE in NAMCALLS)
+
 print("pruning:")
+store_dir = os.environ["PLUME_DIR"]
+oldkey = os.path.join(store_dir, "onboard__pt-40.00_-80.00.json")
+with open(oldkey, "w") as f:
+    f.write("{}")
+os.utime(oldkey, (NOW - 50 * 3600, NOW - 50 * 3600))
+cur = ob.lab._safe(a2["key"]) + ".json"
+os.utime(os.path.join(store_dir, cur), (NOW - 50 * 3600, NOW - 50 * 3600))
+n = ob.prune_stores(keep_key=a2["key"], now=NOW)
+check("old targets' stores pruned after 48 h, the current one kept",
+      n >= 1 and not os.path.exists(oldkey) and os.path.exists(os.path.join(store_dir, cur)))
+check("the back-off state is never pruned as a store", os.path.exists(os.path.join(store_dir, "misses.state")))
 old = os.path.join(os.environ["GRIB_CACHE"], "gfs", "f000.grib2")
 os.utime(old, (NOW - 40 * 3600, NOW - 40 * 3600))
 n = ob.prune_gribs(now=NOW)

@@ -15,18 +15,27 @@ issue #124's onboard optimizer can reuse.
 Every 15 min (systemd timer, short-lived process):
 
 1. `GET /playbook/track` on the Pi engine (over the cable, `http://10.10.10.1:8200`): the active
-   playbook route with ETAs. No route, or its ETAs are over: the boat's position (`GET /conditions`).
+   playbook route with ETAs. Once the planned start has passed and the boat is within 20 nm of
+   the route, the ETAs move in whole hours to the boat's real progress (up to 12 h behind or
+   ahead). No route, or its ETAs are over: the boat's position (`GET /conditions`), snapped to
+   a 0.25° grid.
+   Each target gets its own run store, keyed by what the samples depend on: route geometry +
+   ETAs + shift, or the snapped point. A moved boat or a replaced playbook never reuses old samples.
 2. If the internet is up (a 5 s TCP probe to NOMADS), download any NEW cycle of
    gfs, nam, hrrr, ecmwf, icon, gem for the route's box. Offline: keep the last runs.
 3. Build the plume, mark it `source: onboard`, `POST /plume/onboard` to the engine.
-4. Delete cached GRIBs older than `GRIB_KEEP_H` (30 h).
+4. Delete cached GRIBs older than `GRIB_KEEP_H` (30 h), and run stores of targets untouched for 48 h.
+
+A cycle that is due by the model's nominal lag but not posted yet (ECMWF is often hours late) is
+re-probed at most once an hour. A newer due cycle is tried at once.
 
 The console shows it as `Onboard · GFS 12z, 40 min old` and never as frozen. The engine shows
 whichever of the shore and onboard plumes holds the newer weather.
 
 ## Cost (measured on the Orin, 2026-11-01, Mackinac box)
 
-- Full refresh, all 6 models: ~16.6 MB, ~80 s. Nothing new: ~20 s, ~0 MB.
+- Full refresh, all 6 models: ~16.6 MB, ~80 s. Nothing new: ~0 MB; ~20 s measured, mostly ECMWF re-probes, which
+  the hourly back-off now skips (not re-measured on the Orin).
 - ECMWF is ~88% of that (open data has no box subset: ~1.3 MB a frame, global).
 - About 85 MB/day over Starlink if every new cycle is taken.
 - Peak memory ~250 MB (process) + ~265 MB (GRIB parser child). The unit caps it at 900 MB.
@@ -81,6 +90,7 @@ Remove: `sudo systemctl disable --now sr33-orin-plume.timer`, delete the two uni
 | `GRIB_CACHE` | `~/c4-plume/gribcache` | downloaded model files |
 | `PLUME_DIR` | `~/c4-plume/store` | run history (48 h per model) |
 | `GRIB_KEEP_H` | `30` | prune age for model files |
+| `PLUME_MISS_BACKOFF_MIN` | `60` | wait before re-probing a due-but-missing cycle |
 | `PLUME_ONLINE_PROBE` | `nomads.ncep.noaa.gov:443` | the "is the internet up" check |
 
 ## Tests
