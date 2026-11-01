@@ -751,6 +751,7 @@
       const chart = pl ? '<div class="pl-tile">' + PL.chartSvg(pl, { w: 270, h: 104, now: nowS, back_h: 3, ahead_h: 24,
         compact: true, field: "tws", obs: App.src === "live" ? raceData() : null, nowObs: obs }) + PL.legendHtml(pl) + "</div>" : null;
       const sub = !pl ? "" : frozen ? '<b class="pl-old-tag">' + PL.esc(PL.frozenText(pl)) + "</b>"
+        : pl.source === "onboard" ? PL.summary(pl, nowS, 6) + " · " + (old ? '<b class="pl-old-tag">' + PL.esc(PL.sourceText(pl)) + "</b>" : PL.esc(PL.sourceText(pl)))
         : PL.summary(pl, nowS, 6) + (old ? ' · <b class="pl-old-tag">data ' + PL.ageText(pl.age_s) + " old</b>" : "");
       const head = f60 && f60.tws != null ? "+60 min " + r0(f60.tws) + " kts" + (f120 && f120.tws != null ? ", +120 min " + r0(f120.tws) + " kts." : ".") : "";
       return { status: st, value: null, rows: rows, chart: chart, sub: sub,
@@ -761,7 +762,7 @@
           old ? "Forecast is " + PL.ageText(pl.age_s) + " old — updates when back online." :
           obs ? "Forecast steady and verifying." : "No wind reading — check the wind instrument.",
         clears: st === "ok" ? "—" : "forecast comes back in line",
-        based: (pl ? ["Lab plume (" + PL.models(pl).length + " models, " + (pl.age_s != null ? PL.ageText(pl.age_s) + " old" : "age ?") + ")"] : [])
+        based: (pl ? [(pl.source === "onboard" ? "Onboard plume (" : "Lab plume (") + PL.models(pl).length + " models, " + (pl.age_s != null ? PL.ageText(pl.age_s) + " old" : "age ?") + ")"] : [])
           .concat(fc ? ["fetch_forecast + live wind buffer"] : []), conf: "engine" };
     },
     /* SAIL: reads the CREW-SET sail (the sails bar) and says how it fits the conditions —
@@ -1239,6 +1240,7 @@
     const frozen = PL.isFrozen(pl, now);
     const old = !frozen && PL.isOld(pl);
     return '<div class="rc-title">Forecast plume · ' + PL.esc(pl.label || "planned route") + "</div>" +
+      (pl.source === "onboard" ? '<div class="dc-foot">' + PL.esc(PL.sourceText(pl)) + "</div>" : "") +
       (frozen ? '<div class="pl-age-warn pl-frozen">' + PL.esc(PL.frozenText(pl)) + ". No updates while racing.</div>" : "") +
       (old ? '<div class="pl-age-warn">Forecast is <b>' + PL.ageText(pl.age_s) + " old</b>. Updates when the boat is online.</div>" : "") +
       '<div class="pl-ctl">' + fields + '</div><div class="pl-ctl">' + picks + "</div>" +

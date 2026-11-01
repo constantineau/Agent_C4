@@ -46,6 +46,8 @@ run node /repo /repo "pi/console/test_plume.js" node /repo/pi/console/test_plume
 run node /repo /repo "tools/replay/test_overrides.js" node /repo/tools/replay/test_overrides.js
 # The lab reads its data from the image's /srv layout (races, boats, polars), built from this tree.
 for f in vps/lab/test_*.py; do run lab /srv /srv "$f"; done
+# The Orin's onboard plume reuses the Lab's wind code, so it tests in the Lab image (eccodes/cfgrib).
+run lab /srv /srv "pi/orin/plume/test_onboard_plume.py"
 
 echo; echo "$passes passed, ${#fails[@]} failed"
 [[ ${#fails[@]} -eq 0 ]] || { printf '  %s\n' "${fails[@]}"; exit 1; }

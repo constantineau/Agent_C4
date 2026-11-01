@@ -1,0 +1,33 @@
+[Unit]
+Description=SR33 onboard forecast plume — download new model cycles, build the plume, push to the Pi engine
+# Run by sr33-orin-plume.timer. A short-lived pass (~20 s warm, ~80 s with a full download), so the
+# weather parser's memory goes back to the OS between passes. It never runs the route optimizer.
+# Install notes: pi/orin/plume/README.md. Not installed by any script — the owner enables it.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=agent-c4
+WorkingDirectory=/home/agent-c4/Agent_C4/pi/orin/plume
+# The Lab's wind + plume code, used as-is (vps/lab/app).
+Environment=PYTHONPATH=/home/agent-c4/Agent_C4/vps/lab
+Environment=PYTHONUNBUFFERED=1
+# The Pi engine over the DIRECT Pi<->Orin cable. Must stay the cable address: the engine only takes
+# onboard plumes from the Orin's 10.10.10.2 end, so a Tailscale URL here would be refused.
+Environment=ENGINE_URL=http://10.10.10.1:8200
+Environment=GRIB_CACHE=/home/agent-c4/c4-plume/gribcache
+Environment=PLUME_DIR=/home/agent-c4/c4-plume/store
+Environment=GRIB_KEEP_H=30
+# Optional overrides (PLUME_MODELS, GRIB_KEEP_H, ...) in /etc/sr33/plume.env
+EnvironmentFile=-/etc/sr33/plume.env
+ExecStart=/home/agent-c4/plume-venv/bin/python onboard_plume.py
+# Stay out of the way of llama-server and the copilot: low CPU/IO priority, a hard memory cap
+# (measured peak ~500 MB parent + parser child), and a wall-clock cap per pass.
+Nice=15
+IOSchedulingClass=idle
+MemoryMax=900M
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target

@@ -21,7 +21,7 @@ import time
 
 os.environ.setdefault("DATA_SOURCE", "onboard")  # this service is always the onboard backend
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import (navigator, tactics, routing, weather, sails, fatigue, onboard_conditions,
@@ -213,6 +213,15 @@ def plume_load(body: dict):
     return plume.load(body)
 
 
+@app.post("/plume/onboard")
+def plume_onboard(body: dict, request: Request):
+    """Cache a plume the boat's OWN Orin computed from public model data (pi/orin/plume) — legal
+    in-race, so taken while racing. Accepted only straight from the Orin's boat-local address,
+    never through a proxy; the shore /plume/load rules are unchanged."""
+    return plume.load_onboard(body, request.client.host if request.client else None,
+                              headers=request.headers)
+
+
 @app.get("/plume")
 def plume_get():
     """The cached forecast plume + its age (`age_s` since the Lab recorded the newest run,
@@ -303,7 +312,8 @@ def playbook_track(variant: str | None = None):
             "variant": str(v.get("id") or v.get("name") or ""),
             "variant_label": v.get("name") or str(v.get("id") or "the plan"),
             "recommended": bundle.get("recommended"),
-            "points": [{"lat": p.get("lat"), "lon": p.get("lon")} for p in path
+            "start_epoch": bundle.get("start_epoch"),
+            "points": [{"lat": p.get("lat"), "lon": p.get("lon"), "t": p.get("t")} for p in path
                        if p.get("lat") is not None and p.get("lon") is not None]}
 
 

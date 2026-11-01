@@ -24,6 +24,11 @@ What this module does:
 
 The recorder (`start_recorder`) only runs when `PLUME_RECORDER=1`, so tests and ad-hoc Lab
 processes never fetch weather or write to the boat on their own.
+
+The boat's Orin runs the same sampling/store/payload code ON BOARD (pi/orin/plume/onboard_plume.py:
+`record` + `build_plume` here, fed by the route the Pi engine holds), so the plume keeps updating
+through a race from public model data the boat downloads itself. Keep the core (`record`,
+`fetch_run`, `sample_frames`, the store, `build_plume`) free of Lab-only imports at module level.
 """
 from __future__ import annotations
 
@@ -374,9 +379,12 @@ def set_target(race_id=None, playbook_id=None, path=None, lat=None, lon=None, va
 
 
 def _bbox_for(spec):
-    from . import optimizer
+    """The download box: the route's extent + 0.5°, widened to the router's course box when the
+    spec carries a race definition (the Lab). The boat's onboard plume (pi/orin/plume) passes no
+    definition, so this needs nothing beyond the route — no optimizer import."""
     bb = None
     if spec.get("definition"):
+        from . import optimizer
         bb = optimizer.course_bbox(spec["definition"], spec.get("course_id"))
     lats = [p["lat"] for p in spec["path"]]
     lons = [p["lon"] for p in spec["path"]]
