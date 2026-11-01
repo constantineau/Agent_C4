@@ -218,8 +218,10 @@ r1400 = [{"lat": 43.0, "lon": -82.4, "t": 1784397600}, {"lat": 45.8, "lon": -84.
 check("no gun configured, route planned from 14:00, real gun 13:00 → start date's first minute, not 14:00",
       P.race_start_of({"definition": DAY, "basis": "route", "path": r1400}) == 1784347200 < 1784394000)
 DAYGUN = dict(DAY, division_starts={"X": "2026-07-18 13:00"}, own={"division": "X"})
-check("gun 13:00 + start date: the date's first minute is earlier, so it's used",
-      P.race_start_of({"definition": DAYGUN, "basis": "route", "path": r1400}) == 1784347200)
+check("gun 13:00 + start date + 14:00 route: the gun (race-morning updates still go out)",
+      P.race_start_of({"definition": DAYGUN, "basis": "route", "path": r1400}) == 1784394000)
+check("gun 13:00 + start date, no route: the gun",
+      P.race_start_of({"definition": DAYGUN, "basis": "point", "path": [{"lat": 1, "lon": 1, "t": 0}]}) == 1784394000)
 check("gun only: the gun", P.race_start_of({"definition": dict(DAYGUN, start_date=None), "basis": "point",
                                             "path": [{"lat": 1, "lon": 1, "t": 0}]}) == 1784394000)
 NOGUN = {"race_id": "r3", "name": "No Guns", "start_date": "2026-07-18", "timezone": "America/Detroit",

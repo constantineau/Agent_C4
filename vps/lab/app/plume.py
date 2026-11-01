@@ -271,20 +271,21 @@ _clock = time.time                    # the real clock (tests swap it)
 
 
 def race_start_of(spec):
-    """The start of the race the spec follows — the EARLIEST of what's known, so it is never later
-    than the real start: our gun (racestart), the first minute of the race's start_date in the
-    venue's timezone, and the planned route's first ETA (a route can be planned from a later start
-    than the real gun). None when none of them is known."""
+    """The start of the race the spec follows, never later than the real start: with our gun known,
+    the earlier of the gun and the planned route's first ETA; with no gun, the earlier of the
+    first minute of the race's start_date (venue timezone) and the route's first ETA (a route can be
+    planned from a later start than the real one). None when nothing is known."""
     from . import racestart
     d = spec.get("definition") or {}
     rs = racestart.race_start(d)
     path = spec.get("path") if spec.get("basis") == "route" else None
-    cands = [float(rs["epoch"])] if rs else []
-    sd = _start_date_epoch(d)
-    if sd is not None:
-        cands.append(float(sd))
-    if path:
-        cands.append(float(path[0]["t"]))
+    cands = [float(path[0]["t"])] if path else []
+    if rs:
+        cands.append(float(rs["epoch"]))
+    else:
+        sd = _start_date_epoch(d)
+        if sd is not None:
+            cands.append(float(sd))
     return min(cands) if cands else None
 
 
