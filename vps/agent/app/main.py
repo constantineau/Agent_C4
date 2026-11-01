@@ -202,8 +202,11 @@ def course_load(body: dict):
     if not marks:
         return JSONResponse({"detail": "no usable marks (need coordinates)"}, status_code=400)
     route = (body or {}).get("route") or definition.get("race_id") or "race"
-    datasource.active().save_course(route, marks)
-    navigator.set_active(route)
+    from . import orinroute
+    with orinroute.COURSE_LOCK:          # one course change; a new load id even for the same marks
+        datasource.active().save_course(route, marks)
+        navigator.set_active(route)
+        orinroute.bump_load_id(route)
     return {"loaded": True, "route": route, "course_id": cid, "marks": len(marks),
             "skipped": skipped}
 

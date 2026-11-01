@@ -23,11 +23,30 @@ import os
 import urllib.error
 import urllib.request
 
-from . import deviation, reoptimize, routing
+from . import deviation, landchart, orinroute, reoptimize, routing
 from . import navigator as NAV
 
 N2KOUT_URL = os.environ.get("N2KOUT_URL", "http://127.0.0.1:8210").rstrip("/")
 MAX_WPTS = int(os.environ.get("GPSOUT_MAX_WPTS", "24"))
+POST_TIMEOUT_S = float(os.environ.get("GPSOUT_POST_TIMEOUT_S", "3"))
+# GEOMETRY-FREE GUARD on the thinning. The obstacle test only knows the obstacles aboard (the
+# bundle's + the deployed course's); the Pi holds no land, and a route can bend round anything
+# its router knew. So a thinned segment may stand in for the router's vertices only while every
+# vertex it drops lies within DEV_TOL_NM of it: the exported line stays on the computed one.
+# 0.05 nm (~90 m) is the plotter's own arrival radius (ARRIVE_NM), well inside what a crew
+# steers to at race zoom, and loose enough that the router's straight runs (dozens of
+# collinear steps) still collapse: a real route keeps its tacks, gybes and bends, not its steps.
+# Garmin chartplotters take up to 250 points per route (to be confirmed on the 943 dockside);
+# MAX_WPTS (24) is the drawing budget, not the limit. When even that tolerance needs more than
+# HARD_MAX_WPTS points the route is refused, never thinned further: a shortcut is worse than no
+# route on the plotter.
+DEV_TOL_NM = float(os.environ.get("GPSOUT_DEV_TOL_NM", "0.05"))
+HARD_MAX_WPTS = int(os.environ.get("GPSOUT_HARD_MAX_WPTS", "250"))
+TOO_DETAILED = "Route too detailed for the GPS. Not sent."
+NO_SAFE_WPT = "No safe waypoint from here. Press Re-route now."
+NO_SHORE = "GPS route doesn't check the shore."
+PI_CROSSES_LAND = "Pi route crosses land. Not sent to GPS."
+CROSSES_LAND = "Route crosses land. Not sent to GPS."
 
 
 def _post(path, payload=None):
@@ -35,7 +54,9 @@ def _post(path, payload=None):
                                  data=json.dumps(payload or {}).encode(),
                                  headers={"Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=6) as r:
+        # short: show() holds the course lock across this call, so a slow broadcaster can hold up
+        # a /course/load for at most this long
+        with urllib.request.urlopen(req, timeout=POST_TIMEOUT_S) as r:
             return json.loads(r.read())
     except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as e:
         return {"available": False, "error": f"n2kout unreachable: {e}"}
@@ -111,11 +132,25 @@ def _mark_vertices(path, marks, tol_nm=0.5, leg_end_idx=None, first_leg_to=1):
     return {k: i for k, i in zip(ks, chosen) if dist[k][i] <= tol_nm}
 
 
-def _downsample_idx(path, max_n=MAX_WPTS, keep=(), blocked=None):
+def _worst_dropped(path, i, j):
+    """(index, nm) of the vertex strictly between i and j farthest from the segment i→j."""
+    a, b = path[i], path[j]
+    worst, at = 0.0, None
+    for k in range(i + 1, j):
+        d = routing._pt_to_seg_nm(path[k]["lat"], path[k]["lon"], a["lat"], a["lon"],
+                                  b["lat"], b["lon"])
+        if d > worst:
+            worst, at = d, k
+    return at, worst
+
+
+def _downsample_idx(path, max_n=MAX_WPTS, keep=(), blocked=None, dev_tol_nm=DEV_TOL_NM):
     """Indices of the kept vertices. Endpoints + `keep` (mark vertices) always; a uniform stride
-    fills the rest of the budget; then every shortcut between consecutive kept vertices that
-    `blocked(a, b)` says cuts an obstacle is split at its midpoint until it is clear (consecutive
-    router vertices are the router's own checked steps). May exceed `max_n` only to stay clear."""
+    fills the rest of the budget; then every shortcut between consecutive kept vertices is split
+    until it is safe on BOTH counts: `blocked(a, b)` says it cuts no known obstacle (split at the
+    midpoint), and every vertex it drops lies within `dev_tol_nm` of it (split at the farthest
+    one; None turns this off). Consecutive router vertices are the router's own checked steps.
+    May exceed `max_n` only to stay safe."""
     n = len(path)
     if n == 0:
         return []
@@ -127,15 +162,20 @@ def _downsample_idx(path, max_n=MAX_WPTS, keep=(), blocked=None):
         stride = (n - 1) / (room - 1)
         idx |= {round(i * stride) for i in range(room)}
     idx = sorted(idx)
-    if blocked is None:
+    if blocked is None and dev_tol_nm is None:
         return idx
     out, stack = [idx[0]], list(reversed(idx[1:]))
     while stack:
         j = stack.pop()
         i = out[-1]
-        if j - i > 1 and blocked(path[i], path[j]):
+        if j - i > 1 and blocked is not None and blocked(path[i], path[j]):
             stack += [j, (i + j) // 2]          # split: route through the midpoint first
             continue
+        if j - i > 1 and dev_tol_nm is not None:
+            k, d = _worst_dropped(path, i, j)
+            if k is not None and d > dev_tol_nm:
+                stack += [j, k]                 # split at the vertex it strays farthest from
+                continue
         out.append(j)
     return out
 
@@ -144,16 +184,25 @@ def _downsample(path, max_n=MAX_WPTS, keep=(), blocked=None):
     return [path[i] for i in _downsample_idx(path, max_n, keep, blocked)]
 
 
-def _blocked_fn(bundle):
-    """Segment test against the bundle's frozen obstacle homework (islands + zones) — the same
-    geometry the onboard router prunes against. None when there's nothing to hit."""
-    disks = reoptimize._avoid_disks(bundle)
-    zdisks, polys = reoptimize._parse_zones(bundle)
-    disks = disks + zdisks
-    if not disks and not polys:
+def _blocked_fn(bundle, obstacles=None):
+    """Segment test against the obstacles aboard: `obstacles` = (disks, polygons[, land]) from
+    _obstacles (the bundle's AND the deployed course's islands + zones, what the re-route was
+    computed around, and the deployed land chart); without it, the bundle's alone. Used for the
+    thinning AND the boat→steer-to line. None when there's nothing."""
+    land = None
+    if obstacles is not None:
+        disks, polys = obstacles[0], obstacles[1]
+        land = obstacles[2] if len(obstacles) > 2 else None
+    else:
+        disks = reoptimize._avoid_disks(bundle)
+        zdisks, polys = reoptimize._parse_zones(bundle)
+        disks = disks + zdisks
+    if not disks and not polys and land is None:
         return None
-    return lambda a, b: (routing._seg_blocked(a["lat"], a["lon"], b["lat"], b["lon"], disks)
-                         or routing._seg_crosses_poly(a["lat"], a["lon"], b["lat"], b["lon"], polys))
+    return lambda a, b: ((disks and routing._seg_blocked(a["lat"], a["lon"], b["lat"], b["lon"], disks))
+                         or (polys and routing._seg_crosses_poly(a["lat"], a["lon"], b["lat"], b["lon"],
+                                                                 polys))
+                         or (land is not None and land.crosses(a["lat"], a["lon"], b["lat"], b["lon"])))
 
 
 ARRIVE_NM = 0.05     # boat this close to a waypoint has attained it — steer to the one after
@@ -220,6 +269,27 @@ def _dest_candidate(pts, boat, mark_pos, next_k, blocked):
     return dest, lo
 
 
+def _obstacles(bundle, route=None, boat=None):
+    """(disks, polygons, land) of every obstacle aboard for the navigator's course: the bundle's
+    and the deployed definition's islands + zones (reoptimize.course_avoid), and the deployed LAND
+    chart when it is this course's (landchart.for_course: the same chart, checked the same way,
+    the Orin routes on), else None. Read under the course lock show() holds, so it is the course
+    the route was just checked against."""
+    try:
+        nav = NAV.get_navigator(route)
+        r = nav.get("route") if nav.get("available") else None
+        marks = (NAV._marks(r) or []) if r else []
+    except Exception:  # noqa: BLE001
+        r, marks = None, []
+    disks, polys, _d, _c, _n = reoptimize.course_avoid(r, marks, bundle)
+    try:
+        land = landchart.for_course(r, marks, boat)
+    except Exception as exc:  # noqa: BLE001 — a bad chart is "no chart", never a crash
+        print(f"[gpsout] land chart unreadable: {exc}", flush=True)
+        land = None
+    return disks, polys, land
+
+
 def _course_context(route=None):
     """ONE navigator snapshot: (course marks, boat (lat, lon), next-mark NAME, next-mark course
     INDEX — which occurrence on a lapped course; None when it can't be told). The boat fix is the
@@ -275,9 +345,54 @@ def _route_frame(path, ends, names, nav_marks, starts_at_mark):
     return verts
 
 
+NO_NEW_ROUTE = "No new route yet. Press Re-route now."
+OLD_COURSE = "Route is for an old course. Press Re-route now."
+INCOMPLETE = "Route incomplete. Not sent to GPS."
+
+
+def _course_ok(ro):
+    """Was this route made for the course aboard now (same route, same marks AND positions)? A
+    route with no hash is from before the check, so it counts as another course."""
+    h = ro.get("course_hash")
+    return bool(h) and h == orinroute.current_course_hash()
+
+
+def _new_route(source, route):
+    """The stored re-route to send → (route dict, None) or (None, crew-facing note). Never computes
+    one: routes are made only on the crew's Re-route now button (#125). 'orin' is the Orin's last
+    route, 'reoptimize' the Pi's, 'reroute' whichever of the two is newest."""
+    if source == "reroute":
+        _src, ro = orinroute.latest()
+    elif source == "orin":
+        ro = orinroute.stored()
+    else:
+        ro = reoptimize.get_reoptimize(route)
+    if not ro or not ro.get("available"):
+        note = (ro or {}).get("note") if source == "reoptimize" else None
+        return None, note or NO_NEW_ROUTE
+    if ro.get("complete") is False:
+        return None, INCOMPLETE              # it stalled short of the finish: never a GPS route
+    if not _course_ok(ro):
+        return None, OLD_COURSE              # moved marks / another course since: old coordinates
+    ro = dict(ro)
+    if "path" not in ro and ro.get("source") == "orin":
+        ro["path"] = ro.get("points") or []          # the Orin's track is `points`
+    return ro, None
+
+
 def show(source: str = "playbook", variant=None, route=None):
-    """Assemble + broadcast. source='playbook' (frozen variant, default recommended) or
-    'reoptimize' (the onboard re-router's cached fresh route, computing it if needed).
+    """See _show. Runs under the course lock (orinroute.COURSE_LOCK, the one /course/load holds
+    for its whole load): the course check, the route assembly against the navigator's marks and
+    the broadcast all see ONE course, so a reload can't land between the check and the send.
+    This runs in the engine process, the same one that serves /course/load; the n2kout POST is
+    bounded by POST_TIMEOUT_S, so the lock is held a few seconds at most."""
+    with orinroute.COURSE_LOCK:
+        return _show(source, variant, route)
+
+
+def _show(source: str = "playbook", variant=None, route=None):
+    """Assemble + broadcast. source='playbook' (frozen variant, default recommended), or a stored
+    re-route: 'reroute' (the newest), 'orin' or 'reoptimize' (the Pi's). Only on the crew's tap.
 
     Inputs come from different moments — the route (frozen at the gun, or computed seconds to
     minutes ago), the navigator (now) and the bundle. They are reconciled explicitly: one bundle
@@ -287,10 +402,12 @@ def show(source: str = "playbook", variant=None, route=None):
     trimmed to the leg the boat is on; one that doesn't contain the navigator's next mark at all
     is stale and refused by name."""
     bundle = deviation._load_playbook()
-    if source == "reoptimize":
-        ro = reoptimize.get_reoptimize(route)
-        if not ro.get("available"):
-            return {"shown": False, "note": ro.get("note") or "No new route available."}
+    rerouted = source in ("reroute", "orin", "reoptimize")
+    ro = None
+    if rerouted:
+        ro, why = _new_route(source, route)
+        if ro is None:
+            return {"shown": False, "note": why or NO_NEW_ROUTE}
         wire_name, label, path = "C4 REROUTE", "re-route (off-book)", ro.get("path") or []
         ends, names = ro.get("leg_end_idx"), list(ro.get("marks") or [])
         ro_idx = ro.get("mark_idx")
@@ -316,7 +433,7 @@ def show(source: str = "playbook", variant=None, route=None):
     # mark for mark is positions 1..N; a re-route records its own `mark_idx`. Either is trusted
     # only when it names the same marks as the navigator's course at those positions.
     route_idx = None
-    if source == "reoptimize":
+    if rerouted:
         if (isinstance(ro_idx, list) and len(ro_idx) == len(names) and all(
                 isinstance(i, int) and 0 <= i < len(nav_names) and nav_names[i] == n
                 for i, n in zip(ro_idx, names))):
@@ -327,17 +444,17 @@ def show(source: str = "playbook", variant=None, route=None):
     # where is the boat in the ROUTE's frame?
     nxt = None
     if next_name is None:
-        if source == "reoptimize" and names:
+        if rerouted and names:
             nxt = 0                                    # no navigator: the route's own next mark
     elif route_idx is not None and next_idx is not None:
         if next_idx in route_idx:
             nxt = route_idx.index(next_idx)
         elif source == "playbook" and next_idx == 0:
             nxt = -1                                   # pre-start: steering to the start
-        elif source == "reoptimize":
+        elif rerouted:
             return {"shown": False, "note": (
                 f"New route is stale: starts at {names[0]} (mark {route_idx[0] + 1}), next mark is "
-                f"{next_name} (mark {next_idx + 1}). Recompute, then send.")}
+                f"{next_name} (mark {next_idx + 1}). Re-route now, then send.")}
     else:
         # positions can't be aligned: a NAME is only trusted when it names one occurrence
         hits = names.count(next_name)
@@ -346,24 +463,27 @@ def show(source: str = "playbook", variant=None, route=None):
         elif (source == "playbook" and hits == 0 and nav_names
               and next_name == nav_names[0] and nav_names.count(next_name) == 1):
             nxt = -1
-        elif source == "reoptimize" and names:
+        elif rerouted and names:
             why = ("isn't on it" if hits == 0 else
                    f"is on it {hits}×, can't tell which lap")
             return {"shown": False, "note": (
-                f"New route is stale: next mark {next_name} {why}. Recompute, then send.")}
-    if source == "reoptimize" and nxt:
+                f"New route is stale: next mark {next_name} {why}. Re-route now, then send.")}
+    if rerouted and nxt:
         # the boat rounded marks while the re-route was computing: drop the passed legs so the
         # route starts at the last rounded mark and the plotter can't steer back to it
         cut = verts.get(nxt - 1)
         if cut is None:
             return {"shown": False, "note": (
-                f"New route is stale: you've passed {names[nxt - 1]} since. Recompute, then send.")}
+                f"New route is stale: you've passed {names[nxt - 1]} since. Re-route now, then send.")}
         path = path[cut:]
         verts = {j - nxt: i - cut for j, i in verts.items() if j >= nxt}
         nxt = 0
 
-    blocked = _blocked_fn(bundle)
+    obstacles = _obstacles(bundle, route, boat)
+    blocked = _blocked_fn(bundle, obstacles)
     idx = _downsample_idx(path, MAX_WPTS, set(verts.values()), blocked)
+    if len(idx) > HARD_MAX_WPTS:
+        return {"shown": False, "note": TOO_DETAILED}
     pts = [path[i] for i in idx]
     where = {i: j for j, i in enumerate(idx)}
     dest = _dest_index(pts, boat, {k: where[i] for k, i in verts.items() if i in where}, nxt,
@@ -372,14 +492,32 @@ def show(source: str = "playbook", variant=None, route=None):
              "t": p.get("t")} for i, p in enumerate(pts)]
     if dest is None:
         return {"shown": False, "dest_index": None,
-                "note": ("Not sent: every waypoint ahead is behind a hazard. Steer clear "
-                         "by eye, then send again.")}
+                "note": NO_SAFE_WPT if rerouted else
+                ("Not sent: every waypoint ahead is behind a hazard. Steer clear "
+                 "by eye, then send again.")}
+    land = obstacles[2]
+    if land is not None:
+        # The thinning trusts consecutive router vertices (the router's own steps) — but the Pi's
+        # fallback router never sees land, and a plan may come from a coarser chart. So EVERY
+        # exported segment, and the boat's line to the steer-to waypoint, is checked against the
+        # land chart once more; one crossing refuses the send.
+        legs = list(zip(pts, pts[1:]))
+        if boat is not None and boat[0] is not None:
+            legs.append(({"lat": boat[0], "lon": boat[1]}, pts[dest]))
+        if any(land.crosses(a["lat"], a["lon"], b["lat"], b["lon"]) for a, b in legs):
+            pi_route = rerouted and (ro or {}).get("source") == "pi"
+            return {"shown": False, "dest_index": None,
+                    "note": PI_CROSSES_LAND if pi_route else CROSSES_LAND}
+    shore = bool(land is not None and (boat is None or land.covers(boat[0], boat[1]))
+                 and all(land.covers(p["lat"], p["lon"]) for p in pts))
     st = _post("/route", {"name": wire_name, "waypoints": wpts, "dest_index": dest})
     if st.get("error"):
         return {"shown": False, "note": st["error"]}
     return {"shown": bool(st.get("broadcasting")), "route": st.get("route"), "label": label,
             "n_waypoints": st.get("n_waypoints"), "downsampled_from": len(path),
-            "dest_index": dest,
+            "dest_index": dest, "shore_checked": shore,
+            # no land chart for this course (or the route leaves it): said, never implied
+            "warning": None if shore else NO_SHORE,
             "broadcaster": st}
 
 

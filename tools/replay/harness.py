@@ -53,12 +53,9 @@ NEEDS_NETWORK = ["/forecast", "/drift", "/buoys", "/plangap", "/reoptimize"]
 # forward — which is exactly what the console displays, since it polls each endpoint on its own
 # timer rather than all of them every tick.
 #
-# `/strategy` is here for a substantive reason, not just speed. It runs a FULL isochrone
-# re-optimize of the remaining course on every single call (~14 s here for the 259 nm left at
-# 18:00Z, and this box is far quicker than a Pi 4) while `dashboard.js` polls it every 15 s.
-# That went unnoticed because the broken mark sequencer made `reoptimize` route to the Start —
-# a no-op. Fixing the sequencer turned it into a real 339 nm route. Recomputing a slow-moving
-# strategic digest every 15 s is the wrong shape regardless; logged as a follow-up.
+# `/strategy` used to run a FULL isochrone re-optimize of the remaining course whenever it went
+# off-book (~14 s a call). Since #125 it only suggests a re-route and never computes one, but a
+# slow-moving strategic digest still doesn't need recomputing every frame.
 CADENCE_S = {"/strategy": 600.0}
 
 
@@ -68,9 +65,9 @@ def _hermetic():
     Added 2026-09-08 after a build sat on an ESTABLISHED TLS connection to Open-Meteo for ten
     minutes at frame 282 and would have sat there forever: 376 bytes queued, no response, no
     socket timeout anywhere in the stack. `NEEDS_NETWORK` excludes /forecast, /drift, /buoys,
-    /plangap and /reoptimize for exactly this reason, but `/strategy` is replayable and CHAINS
-    into the same machinery when the verdict goes off-book, so the exclusion list was never
-    enough. Two failures, not one:
+    /plangap and /reoptimize for exactly this reason, but `/strategy` is replayable and used to
+    CHAIN into the same machinery when the verdict went off-book (until #125), so the exclusion
+    list was never enough. Two failures, not one:
 
       - a ~30-minute build can hang indefinitely on a third-party API, and
       - the frames it does write become a mix of replayed race and whatever the live internet
@@ -109,9 +106,6 @@ def _setup(archive_db, engine_db, polars_file, spool_db=None):
         ARCHIVE_DB=archive_db, ENGINE_DB=engine_db, POLARS_FILE=polars_file,
         DATA_SOURCE="onboard", ONBOARD_LIVE_WS="false",
         NAV_PROGRESS_LATCH="false",     # each frame stands alone — see the docstring
-        REOPT_SWR="false",              # ...and so does the re-optimizer: its background
-                                        # refresh would read a source the harness has already
-                                        # moved to the next frame
     )
     # A second, coarser recording of the same race, attached read-only by ReplaySource so the
     # timeline can run past 20:40:30Z where the Pi's archive stops. See spool_to_sqlite.py.

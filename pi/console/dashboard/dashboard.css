@@ -596,3 +596,39 @@ body {
 .pl-old-tag { color:var(--watch); }
 .pl-runs { margin-top:8px; font-size:13px; }
 .pl-runs .rc { text-align:left; }
+
+/* ---------- ROUTE (#125): the Re-route now button, on the tile face (one tap, wet fingers) ----------
+   Shares the TIME TO MARK cell. Quiet by design: no status colour for a suggestion (it is text,
+   not an alarm); the button is the one big target. */
+.rt-tile { gap:4px; }
+.rt-say { font-size:13px; font-weight:700; line-height:1.25; color:var(--text);
+  display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; }
+.rt-say.rt-suggest { font-style:italic; font-weight:600; color:var(--muted); }
+.rt-say.rt-note { color:var(--watch); }
+.rt-say.rt-none { color:var(--muted); font-weight:600; }
+.rt-bar { height:6px; border-radius:3px; background:var(--panel2); border:1px solid var(--line);
+  overflow:hidden; }
+.rt-bar > span { display:block; height:100%; background:var(--accent); transition:width .6s ease; }
+.rt-btn { font:inherit; font-size:clamp(14px, 8.5cqi, 17px); font-weight:800; letter-spacing:.3px;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  min-height:48px; padding:8px 8px; margin-top:auto; width:100%;
+  border-radius:10px; border:2px solid var(--accent); background:var(--accent); color:var(--bg);
+  cursor:pointer; touch-action:manipulation; }
+.rt-btn.rt-pi { background:var(--panel2); color:var(--text); border-color:var(--watch); }
+.rt-btn.rt-gps { background:var(--panel2); color:var(--text); border-color:var(--line); }
+.rt-btn:disabled { opacity:.5; cursor:default; }
+.rt-detail .rt-btns { display:flex; flex-wrap:wrap; gap:8px; margin:8px 0; }
+.rt-detail .rt-btns .rt-btn { width:auto; flex:1 1 200px; margin-top:0; }
+.rt-line { font-size:14px; margin:3px 0; color:var(--muted); }
+.rt-line b { color:var(--text); }
+.rt-note { color:var(--watch); font-weight:700; }
+.rt-suggest { font-style:italic; }
+.rt-warn { color:var(--watch); }
+.rt-head { font-size:22px; font-weight:800; margin:2px 0 4px; color:var(--text); }
+.rt-last { font-size:12px; font-weight:600; color:var(--muted); line-height:1.25;
+  display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; }
+.rt-labels { display:flex; flex-wrap:wrap; gap:6px; margin:4px 0; }
+.rt-label { font-size:12px; font-weight:800; letter-spacing:.4px; padding:2px 8px; border-radius:999px;
+  border:1px solid var(--watch); color:var(--watch); }
+/* portrait: the half cell is short; the button keeps its 48 px, the line keeps one row */
+@media (orientation: portrait) { .rt-say { -webkit-line-clamp:1; } .rt-last { display:none; } }

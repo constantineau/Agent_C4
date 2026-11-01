@@ -20,7 +20,7 @@ the identical synthesis runs cloud or onboard. It re-fetches nothing with Schmit
 does the single gather (its `signals` carry the enriched reads); `fleet` is stateless.
 """
 from shared import windphrase as wp
-from . import fleet as fleet_mod, reoptimize as reoptimize_mod, selector as selector_mod, tactics as tactics_mod
+from . import fleet as fleet_mod, selector as selector_mod, tactics as tactics_mod
 
 _OPP = {"left": "right", "right": "left"}
 
@@ -228,18 +228,38 @@ def _no_playbook_recommendation(sig, flt):
              "grounded_in": ["get_fleet"], "urgency": "monitor", "confidence": "low"}, 0.35)
 
 
-def _reoptimize_offer(route=None):
-    """OFF-BOOK CHAINING (docs/STRATEGY_SYNTHESIS.md Phase 3). When the synthesis departs the frozen
-    playbook, hand the crew a CONCRETE fresh route — not just "go off-book". Chains the already-built
-    onboard RE-OPTIMIZER (`GET /reoptimize`): a fresh isochrone through the remaining marks on the
-    boat's own polars + the common Open-Meteo forecast, avoiding the frozen island/zone homework —
-    legal in-race, flagged off-playbook. Compact: strips the heavy `path`/`legs` arrays (the card
-    fetches the full track from /reoptimize on demand); keeps eta/tacks/sail-plan/divergence so the
-    card + coach can offer it inline. `available:False` when there's no fix / no course to route."""
-    ro = reoptimize_mod.get_reoptimize(route)
-    if not ro.get("available"):
-        return {"available": False, "note": ro.get("note", "No new route available.")}
-    return {k: v for k, v in ro.items() if k not in ("path", "legs")}
+_SIDE = {"right": "right", "left": "left", "veered": "right", "backed": "left"}
+
+
+def _reroute_suggestion(rec, conc, sig, plan_gap):
+    """Should the crew think about a re-route? Quiet text for the Route tile (#125), never an
+    alarm and never a computation: routes are made only when a crew member presses Re-route now.
+    One short reason (12 words max), the strongest first:
+      * the recommendation departs the playbook (the selector's off-script),
+      * our own wind has left the plan's promise (plan gap at act),
+      * the forecast has moved off the plan's (drift at act).
+    None when nothing says so."""
+    if (rec or {}).get("vs_playbook") == "departs":
+        side = conc.get("lean") or (sig.get("shift") or {}).get("favored_side")
+        reason = (f"Off the playbook. The {side} is paying." if side in ("left", "right")
+                  else "Off the playbook.")
+        return {"reason": reason, "why": "off_playbook"}
+    pg = plan_gap or {}
+    if pg.get("status") == "act" and pg.get("obs_twd") is not None and pg.get("plan_twd") is not None:
+        d = ((pg["obs_twd"] - pg["plan_twd"] + 540) % 360) - 180      # + = our wind right of the plan
+        if abs(d) >= 10:
+            return {"reason": f"Wind shifted {round(abs(d))}° {'right' if d > 0 else 'left'} of the plan.",
+                    "why": "plan_gap"}
+        dtws = (pg.get("obs_tws_kn") or 0) - (pg.get("plan_tws_kn") or 0)
+        if abs(dtws) >= 3:
+            return {"reason": f"Wind {round(abs(dtws))} kts {'more' if dtws > 0 else 'less'} than the plan.",
+                    "why": "plan_gap"}
+    dft = sig.get("drift") or {}
+    side = _SIDE.get(dft.get("dir") or "")
+    if dft.get("status") == "act" and side and dft.get("deg") is not None:
+        return {"reason": f"Forecast shifted {round(abs(dft['deg']))}° {side} since the plan.",
+                "why": "forecast"}
+    return None
 
 
 def get_strategy_signals(route=None):
@@ -336,6 +356,7 @@ def get_strategy_signals(route=None):
 
     # PLAN GAP — own observed wind vs the promise the plan was built on (drift stays quiet when
     # the real wind busts before the forecast catches up; this read doesn't)
+    pg = None
     try:
         from . import plangap as plangap_mod
         pg = plangap_mod.get_plangap(route)
@@ -384,18 +405,9 @@ def get_strategy_signals(route=None):
     except Exception:
         pass
 
-    # OFF-BOOK CHAINING: a recommendation that DEPARTS the frozen playbook needs a concrete route,
-    # not just "sail your own side". Chain the onboard re-optimizer only when off-book (it's a heavy
-    # isochrone — cached, but never run on an on-plan hold).
-    if rec and rec.get("vs_playbook") == "departs":
-        offer = _reoptimize_offer(route)
-        out["reoptimize"] = offer
-        if offer.get("available"):
-            rec["reoptimize"] = "ready"
-            if offer.get("eta_min") is not None:
-                h, m = divmod(int(round(offer["eta_min"])), 60)
-                eta = (f"{h}h {m:02d}m" if h else f"{m}m")
-                tk = f", {offer['tacks']} tacks" if offer.get("tacks") is not None else ""
-                rec["rationale"] = (rec.get("rationale", "").rstrip()
-                                    + f" New route ready (~{eta}{tk}).").strip()
+    # RE-ROUTE SUGGESTION (#125): when the plan has run out, SAY so, quietly. Nothing is computed
+    # here: a new route is made only when a crew member presses Re-route now on the iPad.
+    sug = _reroute_suggestion(rec, conc, sig, pg if (pg or {}).get("available") else None)
+    if sug:
+        out["reroute_suggest"] = sug
     return out

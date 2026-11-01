@@ -39,8 +39,15 @@
   const NAME = {
     wind: "TWS Trend", playbook: "Playbook", forecast: "Forecast",
     sail: "Sail", eta: "Time to Mark", ais: "Fleet", charge: "Crew", data: "Data",
-    bank: "House Bank", coach: "Coach", checklist: "Race Checklist",
+    bank: "House Bank", coach: "Coach", checklist: "Race Checklist", route: "Route",
   };
+  /* The grid's cells. ROUTE (#125, the Re-route now button) shares the TIME TO MARK cell, the same
+     way the two SYSTEMS reads share the last one: the 4x2 the crew has learned stays put, and the
+     two course reads sit together. ROUTE isn't in TILES: it isn't built from the 3 s poll and never
+     raises a status (a suggestion is quiet text, not an alarm). */
+  const CELLS = ["wind", "playbook", "forecast", "sail", ["eta", "route"], "ais", "charge", PAIR];
+  const RT = window.C4Reroute;
+  // the re-route status poll: ~every 10 s, every 3 s while one runs (RT.pollEvery)
   const boatName = (r) => { const n = r.boat || r.name || ("MMSI " + (r.mmsi || "?")); return n.length > 14 ? n.slice(0, 13) + "…" : n; };
   const aisName = (t) => { const n = t.name || ("MMSI " + t.mmsi); return n.length > 12 ? n.slice(0, 11) + "…" : n; };
   /* corrected-time delta as a signed m:ss; cd<0 = the competitor is projected AHEAD of us. */
@@ -347,23 +354,27 @@
         target_variant: "right", target_label: "Right start", confidence: 0.9, confidence_label: "high",
         driven_by: ["get_tactics", "get_drift", "get_deviation"],
         why: "Wind shifted right and holding. Forecast also shifted 28° right. Go right." },
-      reoptimize: { available: true, off_playbook: true, eta_min: 254, tacks: 9, sailed_nm: 46.2, avoids_islands: 2, avoids_zones: 1,
-        marks: ["Cove Island", "Finish"], sail_plan: ["J1", "A3", "S1"], vs_playbook: { available: true, max_divergence_nm: 2.4, mean_divergence_nm: 0.9 } },
+      reroute: { orin: { reachable: true }, state: "done", latest: "orin", pi: { state: "idle" },
+        result: { available: true, source: "orin", label: "Off the playbook", off_playbook: true,
+          asked_by: "Nav iPad", asked_at: Math.floor(Date.now() / 1000) - 1500,
+          finished_at: Math.floor(Date.now() / 1000) - 1440, sailed_nm: 46.2, tacks: 9,
+          sail_plan: ["J1", "A3", "S1"], vs_plan: { available: true, gain_min: 12 },
+          weather: { newest_age_h: 2.4, models: [{ model: "gfs" }, { model: "nam" }, { model: "hrrr" }] },
+          warnings: ["No chart aboard. Route doesn't check the shore."] } },
       synthesis: { available: true, mode: "llm", confidence: "med",
         assessment: "Right has taken over, past what the plan covers. Commit right.",
         concordance: { strength: "strong", lean: "right",
           note: "Wind, forecast and position all point right. You're 1.3 nm right already." },
         recommendation: { action: "Off plan: go right, lay the mark", vs_playbook: "departs", target_variant: null,
-          reoptimize: "ready", urgency: "now", confidence: "med",
-          rationale: "Everything points right. New route ready." },
+          urgency: "now", confidence: "med",
+          rationale: "Everything points right." },
         play_matches: [
           { play_id: "shift_right_20", name: "Breeze 20°+ right of forecast", match: "strong", status: "armed",
             why: "Wind shifted right, forecast shifted 28° right. This is the play." },
           { play_id: "pressure_up", name: "More pressure than forecast", match: "partial", status: "quiet",
             why: "Wind 2-3 kts over forecast, not steady yet." },
         ],
-        reoptimize: { available: true, off_playbook: true, eta_min: 254, tacks: 9, sailed_nm: 46.2, avoids_islands: 2, avoids_zones: 1,
-          marks: ["Cove Island", "Finish"], sail_plan: ["J1", "A3", "S1"], vs_playbook: { available: true, max_divergence_nm: 2.4, mean_divergence_nm: 0.9 } } },
+        reroute_suggest: { reason: "Off the playbook. The right is paying.", why: "off_playbook" } },
     },
   };
 
@@ -1044,7 +1055,7 @@
       else if (armed && status === "ok") status = "watch";
       const bits = [(act === "switch" ? "branch fired" : act === "off_script" ? "off the playbook" : "on plan")];
       if (armed) bits.push(armed + " play" + (armed === 1 ? "" : "s") + " ARMED");
-      if (synOff) bits.push("off plan · new route ready");
+      if (synOff) bits.push("off plan");
       if (conf) bits.push(conf);
       return { status: status, value: s.value || "—", sub: bits.join(" · "), rows: s.rows || [],
         why: s.why || "", consider: s.consider || "—", clears: s.clears || "—",
@@ -1111,6 +1122,7 @@
       App.data.focus = "Reconnecting…"; App.data.link = "reconnecting"; render();
     }
     poll();
+    fetchReroute();
   }
   /* overlay the LLM brief (commentary + grounded status nudges) when it's fresh; otherwise the
      deterministic engine-read commentary stands. The engine values are never touched. */
@@ -1484,25 +1496,150 @@
     if (App.src !== "live") return;
     const r = await fetchJSON("/selector", 9000);
     if (r) App.selector = r;
-    // only run the heavy onboard re-optimizer when the plan has actually run out (off-script)
-    if (r && r.action === "off_script") fetchReoptimize();
     if (App.src === "live") render();
   }
   function currentSelector() {
     if (App.src === "demo") return (SCENARIOS[App.demoScn] || {}).selector || null;
     return App.selector;
   }
-  /* the onboard RE-OPTIMIZER (graceful-degradation fallback route). Heavy (isochrone) → fetched
-     on demand ONLY when the selector says off-script (server-cached), never on every poll. */
-  async function fetchReoptimize() {
-    if (App.src !== "live") return;
-    const r = await fetchJSON("/reoptimize", 20000);
-    if (r) App.reoptimize = r;
-    if (App.src === "live") render();
+  /* ============ ROUTE — the Re-route now button (#125) ============
+     BUTTON ONLY: a new route is made only when a crew member presses it. The engine may suggest
+     one (/strategy `reroute_suggest`); nothing here runs on its own. The read and its words are
+     pure and tested: reroute.js. One press posts /reroute/run (the Orin's full optimizer); when the
+     Orin can't be reached the same button offers the Pi's own route (/reoptimize/run). */
+  function deviceLabel() {
+    let d = null;
+    try {
+      const q = new URLSearchParams(location.search).get("device");
+      if (q) localStorage.setItem("sr33.dash.device", q.slice(0, 40));
+      d = localStorage.getItem("sr33.dash.device");
+      if (!d) {
+        d = "iPad " + Math.random().toString(16).slice(2, 6);
+        localStorage.setItem("sr33.dash.device", d);
+      }
+    } catch (e) { d = d || "iPad"; }
+    return d;
   }
-  function currentReoptimize() {
-    if (App.src === "demo") return (SCENARIOS[App.demoScn] || {}).reoptimize || null;
-    return App.reoptimize;
+  async function fetchReroute() {
+    clearTimeout(App.rrTimer);
+    if (App.src === "live") {
+      const r = await fetchJSON("/reroute?compact=1", 12000);
+      if (r) { App.rr = r; App.rrAt = Date.now(); }
+      render();
+    }
+    App.rrTimer = setTimeout(fetchReroute, RT.pollEvery(rerouteView(), App.rtPress, Date.now()));
+  }
+  function rerouteView() {
+    const demo = App.src !== "live";
+    const syn = currentSynthesis() || {};
+    return RT.view({
+      rr: demo ? (SCENARIOS[App.demoScn] || {}).reroute || { orin: { reachable: true }, pi: {} } : App.rr,
+      rrAgeMs: demo ? 0 : Date.now() - App.rrAt, rrAt: App.rrAt,
+      suggest: syn.reroute_suggest || null, sugAgeMs: demo ? 0 : Date.now() - App.synAt,
+      press: App.rtPress, nowMs: Date.now(),
+    });
+  }
+  /* POST that keeps the status code: {code, body}, or null with no answer at all */
+  function postStatus(path, body, ms) {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), ms || 15000);
+    return fetch(API + path, { method: "POST", signal: ctl.signal,
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(body || {}) })
+      .then((r) => r.json().catch(() => ({})).then((b) => ({ code: r.status, body: b })))
+      .catch(() => null).finally(() => clearTimeout(t));
+  }
+  window.rerouteNow = async function (ev, engine) {
+    if (ev) { ev.stopPropagation(); ev.preventDefault(); }
+    const v = rerouteView();
+    if (v.button.disabled) return;
+    const eng = engine || v.button.engine || "orin";
+    if (App.src !== "live") {
+      App.rtPress = { phase: "refused", engine: eng, at: Date.now(), detail: "Demo only. Nothing sent." };
+      render(); return;
+    }
+    App.rtPress = { phase: "posting", engine: eng, at: Date.now() };
+    render();
+    const res = await postStatus(eng === "pi" ? "/reoptimize/run" : "/reroute/run",
+      { device: deviceLabel() }, 15000);
+    App.rtPress = RT.afterPress(eng, res ? res.code : null, res ? res.body : null, Date.now());
+    render();
+    fetchReroute();
+    if (App.rtPress.phase === "unreachable") setTimeout(render, RT.ARM_MS + 50);   // arm the Pi offer
+  };
+  /* the ROUTE tile: a mini tile whose face carries the button itself (one tap, wet fingers);
+     a tap anywhere else opens the detail */
+  function routeTileEl() {
+    const v = rerouteView();
+    const el = document.createElement("div");
+    el.className = "tile mini rt-tile s-" + v.status + (v.running ? " rt-running" : "");
+    el.dataset.tile = "route";
+    el.setAttribute("role", "button"); el.setAttribute("tabindex", "0");
+    el.setAttribute("aria-label", "Route. " + v.say);
+    const age = v.stale ? '<span class="t-age" title="No update for ' + fmtAge(v.ageMs) +
+      '. Last good reading.">⏱ ' + fmtAge(v.ageMs) + "</span>" : "";
+    const bar = v.progress ? '<div class="rt-bar"><span style="width:' + v.progress.pct + '%"></span></div>' : "";
+    el.innerHTML =
+      '<div class="t-head"><span class="t-name">' + NAME.route + "</span>" + age +
+      '<span class="t-chip"><span class="t-word">' + v.chip + "</span></span></div>" +
+      '<div class="rt-say rt-' + v.sayKind + '">' + esc2(v.say) + "</div>" + bar +
+      (v.sub ? '<div class="rt-last">' + esc2(v.sub) + "</div>" : "") +
+      rerouteBtnHtml(v);
+    el.addEventListener("click", () => openDetail("route"));
+    el.addEventListener("keydown", (e) => {
+      if (e.target !== el) return;
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openDetail("route"); }
+    });
+    return el;
+  }
+  function rerouteBtnHtml(v, engine) {
+    const b = v.button;
+    const lbl = engine === "orin" ? "Try the Orin again" : b.label;
+    const eng = engine || b.engine || "orin";
+    return '<button class="rt-btn' + (eng === "pi" ? " rt-pi" : "") + '"' +
+      (b.disabled ? " disabled" : "") + ' onclick="rerouteNow(event,\'' + eng + '\')">' +
+      esc2(lbl) + "</button>";
+  }
+  /* the ROUTE detail: the state, the button, the last route in full, and "show on GPS" */
+  function routeDetailHtml() {
+    const v = rerouteView();
+    let h = '<div class="rt-detail">';
+    if (v.progress) {
+      h += '<p class="rt-line"><b>' + esc2(v.progress.text) + "</b>" +
+        (v.progress.who ? " · asked by " + esc2(v.progress.who) : "") + "</p>" +
+        '<div class="rt-bar"><span style="width:' + v.progress.pct + '%"></span></div>';
+    } else if (v.note) {
+      h += '<p class="rt-line rt-note">' + esc2(v.note) + "</p>" +
+        (v.fallback ? '<p class="rt-line">' + esc2(v.sub) + "</p>" : "");
+    }
+    if (v.suggest && !v.progress) h += '<p class="rt-line rt-suggest">' + esc2(v.suggest) + "</p>";
+    h += '<div class="rt-btns">' + rerouteBtnHtml(v) +
+      (v.fallback ? rerouteBtnHtml({ button: { disabled: false, engine: "orin" } }, "orin") : "") + "</div>";
+    const L = v.last;
+    if (L) {
+      h += '<div class="rc-title" style="margin-top:10px">' + (L.old ? "Old route · " : "Last route · ") + L.engine +
+        (L.age ? " · " + esc2(L.age) : "") + "</div>" +
+        '<p class="rt-head">' + esc2(L.head) + "</p>" +
+        (L.labels.length ? '<p class="rt-labels">' + L.labels.map((x) =>
+          '<span class="rt-label">' + esc2(x) + "</span>").join("") + "</p>" : "") +
+        (L.shape ? '<p class="rt-line">' + esc2(L.shape) + "</p>" : "") +
+        '<p class="rt-line">' + esc2(L.wx) + "</p>" +
+        '<p class="rt-line">' + esc2(L.who) + "</p>" +
+        L.warnings.map((w) => '<p class="rt-line rt-warn">' + esc2(w) + "</p>").join("");
+    } else {
+      h += '<p class="rt-line" style="margin-top:10px">No new route yet.</p>';
+    }
+    if (App.src === "live") {
+      const g = App.gps, on = g && g.broadcasting;
+      h += '<div class="st-gps"><div class="st-plays-head"><span>GARMIN 943</span>' +
+        (!g || g.available === false ? '<span class="gps-note">plotter link off</span>'
+          : on ? '<span class="gps-on">● showing “' + esc2(g.route || "route") + "”</span>"
+            : '<span class="gps-note">not showing</span>') + "</div>" +
+        '<div class="rt-btns"><button class="rt-btn rt-gps"' + (App.gpsBusy || !v.canShowOnGps ? " disabled" : "") +
+        ' onclick="gpsShow(\'reroute\')">Show on GPS</button></div>' +
+        (App.gpsNote ? '<span class="gps-note">' + esc2(App.gpsNote) + "</span>" : "") + "</div>";
+    }
+    return h + "</div>";
   }
   /* the in-race SYNTHESIS: the higher-order cross-signal read. Try the copilot's LLM-phrased brief
      (POST /copilot/strategy) when the Orin is up; fall back to the ENGINE's deterministic digest
@@ -1521,7 +1658,7 @@
       r = resp.ok ? await resp.json() : null;
     } catch (e) { r = null; }
     if (!r) r = await fetchJSON("/strategy", 12000);  // 2) engine deterministic digest (Tier-1 fallback)
-    if (r) App.synthesis = r;
+    if (r) { App.synthesis = r; App.synAt = Date.now(); }
     if (App.src === "live") render();
   }
   function currentSynthesis() {
@@ -1673,26 +1810,10 @@
       (wl ? `<div class="st-watch-head" title="How close each play is to firing">CLOSE TO FIRING</div>` + wl : "") + `</div>`;
   }
   function reoptHtml() {
-    const sel = currentSelector();
-    const syn = currentSynthesis();
-    const offscript = sel && sel.action === "off_script";
-    const synRec = (syn && syn.recommendation) || {};
-    const synOff = synRec.vs_playbook === "departs" || synRec.vs_playbook === "off-book";
-    const ro = (syn && syn.reoptimize && syn.reoptimize.available) ? syn.reoptimize : currentReoptimize();
-    const show = offscript || synOff || App.src !== "live";
-    if (!ro || ro.available === false || !show) return "";
-    const h = ro.eta_min != null ? (Math.floor(ro.eta_min / 60) + "h " + Math.round(ro.eta_min % 60) + "m") : "?";
-    const vs = ro.vs_playbook && ro.vs_playbook.available ? "up to " + r1(ro.vs_playbook.max_divergence_nm) + " nm off plan" : "";
-    const sp = Array.isArray(ro.sail_plan) && ro.sail_plan.length ? ro.sail_plan.join("→") : "";
-    const avb = [];
-    if (ro.avoids_islands) avb.push(ro.avoids_islands + " island" + (ro.avoids_islands > 1 ? "s" : ""));
-    if (ro.avoids_zones) avb.push(ro.avoids_zones + " zone" + (ro.avoids_zones > 1 ? "s" : ""));
-    return '<p class="st-reopt"><span class="ro-ico">⟳</span><span>New route ready: <b>' + h + '</b>' +
-      (ro.tacks != null ? ' · ' + ro.tacks + ' tacks' : '') +
-      (ro.sailed_nm != null ? ' · ' + r1(ro.sailed_nm) + ' nm' : '') +
-      (sp ? ' · ⛵ ' + sp : '') +
-      (avb.length ? ' · avoids ' + avb.join(" + ") : '') +
-      (vs ? ' · ' + vs : '') + ' <span class="ro-tag">off plan</span></span></p>';
+    const v = rerouteView();
+    if (!v.suggest) return "";
+    return '<p class="st-reopt"><span class="ro-ico">⟳</span><span>' + esc2(v.suggest) +
+      ' <span class="ro-tag">Route tile: Re-route now</span></span></p>';
   }
   /* ============ GARMIN 943 — push the gameplan onto the chartplotter (engine /gps/*) ============
      The one WRITE surface on the stack: crew-initiated, crew-cleared. The engine assembles the
@@ -1701,14 +1822,16 @@
   async function fetchGps() {
     if (App.src !== "live") return;
     App.gps = await fetchJSON("/gps/status", 6000);
-    if (App.openTile === "playbook") populateDetail("playbook", false);
+    if (App.openTile === "playbook" || App.openTile === "route") populateDetail(App.openTile, false);
   }
   window.gpsShow = async function (source, variant) {
     App.gpsBusy = true;
     if (App.openTile === "playbook") populateDetail("playbook", false);
+    if (App.openTile === "route") populateDetail("route", false);
     const r = await postJSON("/gps/show", { source: source, variant: variant || null }, 12000);
     App.gpsBusy = false;
-    App.gpsNote = r ? (r.shown ? "" : (r.note || "could not show")) : "no link to the boat";
+    // shown without a land chart → say so ("GPS route doesn't check the shore.")
+    App.gpsNote = r ? (r.shown ? (r.warning || "") : (r.note || "could not show")) : "no link to the boat";
     await fetchGps();
   };
   window.gpsClear = async function () {
@@ -1731,7 +1854,7 @@
     return '<div class="st-gps"><div class="st-plays-head"><span>GARMIN 943</span>' + status +
       '</div><div class="cw-btns">' +
       `<button class="cw-btn"${busy} onclick="gpsShow('playbook')">▶ Gameplan route</button>` +
-      `<button class="cw-btn"${busy} onclick="gpsShow('reoptimize')">⟳ Re-route</button>` +
+      `<button class="cw-btn"${busy} onclick="gpsShow('reroute')">⟳ New route</button>` +
       `<button class="cw-btn"${busy} onclick="gpsClear()">✕ Clear</button>` +
       '</div>' + note + '</div>';
   }
@@ -1816,7 +1939,8 @@
     adhereTimer: null, coachTimer: null, devTimer: null, driftTimer: null, selTimer: null, polling: false,
     powerTimer: null, healthTimer: null, power: null, health: null,
     dwell: {}, fresh: {}, ages: {}, data: null, windHist: [], fcstHist: [], seriesHist: [], lastPersist: 0, brief: null,
-    coach: null, deviation: null, forecastDrift: null, selector: null, reoptimize: null,
+    coach: null, deviation: null, forecastDrift: null, selector: null, synAt: 0,
+    rr: null, rrAt: 0, rrTimer: null, rtPress: {},
     plangap: null, trend: null, briefBusy: {}, gps: null, gpsBusy: false, gpsNote: "",
     checklist: null, chkTimer: null,
     plume: null, plumeAt: 0, plumeWait: "", plumeTimer: null, plumeView: { field: "tws", only: null },
@@ -1881,13 +2005,13 @@
     const d = currentData();
     const grid = document.getElementById("grid");
     grid.innerHTML = "";
-    for (const key of TILES) {
-      if (PAIR.indexOf(key) > 0) continue;              // drawn inside the pair below
-      const t = d.tiles[key] || STATUS_PLACEHOLDER();
-      if (key !== PAIR[0]) { grid.appendChild(tileEl(key, t, false)); continue; }
+    const one = (k, mini) => (k === "route" ? routeTileEl()
+      : tileEl(k, d.tiles[k] || STATUS_PLACEHOLDER(), mini));
+    for (const cell of CELLS) {
+      if (!Array.isArray(cell)) { grid.appendChild(one(cell, false)); continue; }
       const pair = document.createElement("div");
       pair.className = "tile-pair";
-      for (const k of PAIR) pair.appendChild(tileEl(k, d.tiles[k] || STATUS_PLACEHOLDER(), true));
+      for (const k of cell) pair.appendChild(one(k, true));
       grid.appendChild(pair);
     }
     renderCommentary(d);
@@ -2000,7 +2124,7 @@
       fetchSeries().then(() => { if (App.openTile === "wind") populateDetail("wind", false); });
       fetchBuoys().then(() => { if (App.openTile === "wind") populateDetail("wind", false); });
     }
-    if (key === "playbook" && App.src === "live") fetchGps();   // the GARMIN 943 row's live state
+    if ((key === "playbook" || key === "route") && App.src === "live") fetchGps();   // the GARMIN 943 row's live state
     if (key === "eta" && App.src === "live") {
       fetchCourse().then(() => { if (App.openTile === "eta") populateDetail("eta", false); });
       fetchTrack().then(() => { if (App.openTile === "eta") populateDetail("eta", false); });
@@ -2237,7 +2361,7 @@
   }
   function populateDetail(key, stream) {
     // the checklist and coach windows ARE their list — it leads; every tile leads with the text
-    document.getElementById("detail").classList.toggle("gauge-first", key === "checklist" || key === "coach");
+    document.getElementById("detail").classList.toggle("gauge-first", key === "checklist" || key === "coach" || key === "route");
     if (key === "checklist") {
       document.getElementById("detName").textContent = NAME.checklist;
       const c = App.checklist || {};
@@ -2252,6 +2376,22 @@
       document.getElementById("detConsider").textContent = "Tap ✓ DONE when it's done.";
       document.getElementById("detClears").textContent = "—";
       document.getElementById("detBased").textContent = "race rules (SIs/NOR)";
+      return;
+    }
+    if (key === "route") {
+      const v = rerouteView();
+      document.getElementById("detName").textContent = NAME.route;
+      const ds = document.getElementById("detStatus");
+      ds.textContent = v.chip.toLowerCase();
+      ds.style.color = "var(--na)";
+      document.getElementById("detGauge").innerHTML = routeDetailHtml();
+      document.getElementById("detWhy").textContent = v.suggest || "No re-route suggested now.";
+      document.getElementById("detConsider").textContent =
+        "Re-route now runs once. About a minute. Nothing runs by itself.";
+      document.getElementById("detClears").textContent = "—";
+      document.getElementById("detBased").textContent = v.last && v.last.engine === "Pi"
+        ? "Pi re-router: own polars, Open-Meteo forecast"
+        : "Orin optimizer: own polars, public forecasts";
       return;
     }
     if (key === "coach") {
@@ -2553,6 +2693,7 @@
     App.plangapTimer = setInterval(fetchPlangap, DRIFT_EVERY);
     fetchTrend();                   // wind trend (sail-detail read), slow-moving
     App.trendTimer = setInterval(fetchTrend, 60000);
+    fetchReroute();                 // the ROUTE tile: re-route status + last route; faster while one runs
     fetchSelector();                // branch selector (engine, unified recommendation), own cadence
     App.selTimer = setInterval(fetchSelector, DEV_EVERY);
     fetchSynthesis();               // in-race strategy synthesis (copilot LLM → engine fallback), own cadence

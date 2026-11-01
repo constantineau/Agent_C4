@@ -44,10 +44,13 @@ along-track / time-behind / VMC) and `GET /drift` (forecast-drift — the live c
 plan's frozen forecast reference: veered/backed + speed change). `GET /selector` unifies those two
 plus the on-water wind shift into ONE recommendation — HOLD the recommended variant / SWITCH to a
 pre-authored variant / OFF-SCRIPT (no branch aboard for the favoured side), with confidence. When it
-says off-script, `GET /reoptimize` is the fallback: a FRESH route from the live position through the
-remaining marks on own polars + the common Open-Meteo forecast (reuses the onboard isochrone, no GRIB),
-flagged OFF-PLAYBOOK, with its divergence from the frozen plan — the graceful-degradation ladder
-(pre-authored branch → onboard re-route). All deterministic and power the iPad Strategy card.
+says off-script, `/strategy` SUGGESTS a re-route (`reroute_suggest`, quiet text on the iPad's Route
+tile). Nothing computes a route until a crew member presses Re-route now (#125): `POST /reroute/run`
+asks the Orin for the full optimizer; when the Orin can't be reached the same button offers the Pi's
+own route, `POST /reoptimize/run` — a FRESH route from the live position through the remaining marks
+on own polars + the common Open-Meteo forecast (reuses the onboard isochrone, no GRIB), flagged
+OFF-PLAYBOOK. `GET /reroute` reports both (state, progress, last route, which is newest); `GET
+/reoptimize` returns the Pi's last route; `GET /reroute/history` lists every press and route.
 
 Parity reference: `vps/agent/app/main.py` (the cloud serves the same paths, plus auth/chat/
 alerts and the RRS-41 race gate).

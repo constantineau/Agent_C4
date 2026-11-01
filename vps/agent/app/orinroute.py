@@ -27,6 +27,7 @@ import urllib.request
 
 from . import deviation, orinassets
 from . import navigator as NAV
+from . import reroutelog
 
 SCHEMA = "c4.reroute/v1"
 LABEL = "Off the playbook"
@@ -43,6 +44,8 @@ NO_ORIN = "Can't reach the Orin. Re-route not started."
 NO_ORIN_STATUS = "Can't reach the Orin."
 NO_POSITION = "No boat position yet."
 NO_COURSE = "No course loaded."
+NO_ZONES = "No zones or rounding sides aboard. Redeploy the course."
+PENDING_KEEP = 20          # requests remembered until their route comes back (per job id)
 
 
 def orin_url():
@@ -59,6 +62,10 @@ def _dir():
 
 def _result_path():
     return os.path.join(_dir(), "reroute-orin.json")
+
+
+def _pending_path():
+    return os.path.join(_dir(), "reroute-orin-pending.json")
 
 
 def _definition_path():
@@ -92,6 +99,67 @@ def _marks_hash(marks):
     import hashlib
     sig = [[str(m[0]), round(float(m[1]), 5), round(float(m[2]), 5)] for m in marks]
     return hashlib.sha1(json.dumps(sig, separators=(",", ":")).encode()).hexdigest()[:16]
+
+
+def course_hash(route, marks):
+    """The course a route was made for: the course LOAD (every /course/load, practice course or
+    switch of the active course gets a new id, even with identical marks: a new zone or rounding
+    side changes the course without moving a mark), the route name, and every mark's name and
+    position, in order. A route stored with one hash is never sent to the GPS (or shown as
+    current) once the course aboard has another. Read it under COURSE_LOCK."""
+    try:
+        mh = _marks_hash([(m.get("name"), m.get("lat"), m.get("lon")) for m in marks])
+    except (TypeError, ValueError, AttributeError):
+        return None
+    load = (_read(_load_id_path()) or {}).get("load_id") or "noload"
+    return f"{load}:{route}:{mh}"
+
+
+def bump_load_id(route):
+    """A course change that isn't a /course/load (a practice course, a switch of the active
+    course): give it a new load id, so every route made before it counts as an old course. The
+    caller holds COURSE_LOCK across its whole change. Never raises (a store without the engine's
+    disk, e.g. the cloud, has no re-route to protect)."""
+    try:
+        with COURSE_LOCK:
+            load_id = new_load_id()
+            set_load_id(route, load_id)
+            _rebind_definition(route, load_id)
+    except OSError as exc:
+        print(f"[orinroute] could not bump the course load id: {exc}", flush=True)
+
+
+def _rebind_definition(route, load_id):
+    """A switch back to the course the definition was deployed for: the stored definition (its
+    zones, islands and rounding sides) is re-bound to the new load id, so the Orin keeps routing
+    around them. Only when it is that course: same route, and the marks aboard hash to the marks
+    it was deployed with (a moved mark or other marks → not re-bound, never a stale pair). Caller
+    holds COURSE_LOCK."""
+    rec = _read(_definition_path())
+    if not rec or rec.get("route") != route or not rec.get("marks_hash"):
+        return False
+    try:
+        have = _marks_hash([(m.get("name"), m.get("lat"), m.get("lon")) for m in NAV._marks(route)])
+    except Exception:  # noqa: BLE001
+        return False
+    if have != rec["marks_hash"]:
+        return False
+    rec["load_id"] = load_id
+    _write(_definition_path(), json.dumps(rec, separators=(",", ":")))
+    return True
+
+
+def current_course_hash():
+    """The hash of the course the navigator holds now, or None (no course aboard)."""
+    try:
+        with COURSE_LOCK:
+            nav = NAV.get_navigator()
+            if not nav.get("route"):
+                return None
+            marks = NAV._marks(nav["route"])
+            return course_hash(nav["route"], marks) if marks else None
+    except Exception:  # noqa: BLE001 — no course read → treated as "not this course"
+        return None
 
 
 def _load_id_path():
@@ -242,7 +310,8 @@ def _build_request(device):
            "route": nav["route"], "next_index": nxt,
            "marks": [{"seq": m.get("seq"), "name": m.get("name"), "lat": m.get("lat"),
                       "lon": m.get("lon")} for m in marks],
-           "definition": definition, "course_id": cid, "plan": _plan_track()}
+           "definition": definition, "course_id": cid, "plan": _plan_track(),
+           "course_hash": course_hash(nav["route"], marks)}
     assets = orinassets.for_run(definition, cid)     # the chart + boat profile from Deploy
     if assets is not None:
         req["assets"] = assets
@@ -269,22 +338,58 @@ def _call(method, path, body=None):
 
 
 def run(device=None, call=None):
-    """Ask the Orin for one full re-route → (http status, body). Never starts one any other way."""
+    """Ask the Orin for one full re-route → (http status, body). Never starts one any other way.
+    Every press is logged (reroutelog), whatever came of it."""
     call = call or _call
+    dev = _device(device)
     req, why = build_request(device)
     if req is None:
+        reroutelog.record("pressed", "orin", device=dev, outcome="refused", detail=why)
         return 409, {"ok": False, "detail": why}
+    # The POST and the pending write are ONE step under _SYNC_LOCK, the lock get() holds from the
+    # Orin's status through storing a result: a fast job polled by another iPad can't be stored
+    # before its request (course, mark positions) is written. Lock order: build_request took and
+    # released COURSE_LOCK above; nothing takes COURSE_LOCK while holding _SYNC_LOCK, and _LOCK is
+    # only ever taken inside it (here and in _store), so no cycle. The POST is bounded by the
+    # Orin timeout (ORIN_REROUTE_TIMEOUT_S), which bounds how long a poll waits.
+    with _SYNC_LOCK:
+        return _start(call, req, dev)
+
+
+def _start(call, req, dev):
     code, body = call("POST", "/run", req)
     if code is None:
+        reroutelog.record("pressed", "orin", device=dev, outcome="unreachable", detail=NO_ORIN)
         return 503, {"ok": False, "orin": "unreachable", "detail": NO_ORIN}
     body = body if isinstance(body, dict) else {}
     if code == 202:
-        return 202, {"ok": True, "job_id": body.get("job_id"), "state": "running"}
+        job = body.get("job_id")
+        # what the Pi asked for, kept until the route comes back: who asked, and which course
+        # position the route starts at (so the GPS output can tell the laps of a lapped course apart)
+        # Kept PER JOB: a later run never overwrites an earlier one's, so a route that finished
+        # unpolled and is fetched after a newer run is still matched to its own course.
+        try:
+            with _LOCK:
+                pend = _pending_all()
+                pend[str(job)] = {"device": dev, "asked_at": req["asked_at"],
+                                  "course_hash": req.get("course_hash"),
+                                  "route": req["route"], "next_index": req["next_index"],
+                                  "definition": req.get("definition") is not None,
+                                  "marks": [m.get("name") for m in req["marks"]]}
+                keep = sorted(pend.items(), key=lambda kv: kv[1].get("asked_at") or 0)[-PENDING_KEEP:]
+                _write(_pending_path(), json.dumps(dict(keep), separators=(",", ":")))
+        except OSError:
+            pass
+        reroutelog.record("pressed", "orin", device=dev, outcome="started", job_id=job)
+        return 202, {"ok": True, "job_id": job, "state": "running"}
     if code == 409:
+        reroutelog.record("pressed", "orin", device=dev, outcome="busy", job_id=body.get("job_id"))
         return 409, {"ok": False, "busy": True, "job_id": body.get("job_id"),
                      "progress": body.get("progress"),
                      "detail": body.get("detail") or "A re-route is already running."}
-    return 502, {"ok": False, "detail": str(body.get("detail") or "Re-route failed. Try again.")[:120]}
+    detail = str(body.get("detail") or "Re-route failed. Try again.")[:120]
+    reroutelog.record("pressed", "orin", device=dev, outcome="failed", detail=detail)
+    return 502, {"ok": False, "detail": detail}
 
 
 def _valid_result(r):
@@ -303,11 +408,82 @@ def stored():
     return r
 
 
-def _store(result):
+def _pending_all():
+    """{job_id: what the Pi asked for}. An older single-record file reads as one entry."""
+    raw = _read(_pending_path())
+    if not isinstance(raw, dict):
+        return {}
+    if "job_id" in raw and "next_index" in raw:          # the one-record shape before per-job
+        return {str(raw["job_id"]): raw}
+    return {k: v for k, v in raw.items() if isinstance(v, dict)}
+
+
+def _pending_for(job_id):
+    return _pending_all().get(str(job_id)) if job_id else None
+
+
+def _mark_idx(result, pend):
+    """The course position of each of the route's marks, from the request it answers: the Orin
+    routes from the request's next mark on, in course order. Only kept when the names line up
+    with the course the request was made on; the GPS output checks them again."""
+    pend = pend or {}
+    names = result.get("marks") or []
+    nxt, course = pend.get("next_index"), pend.get("marks") or []
+    if not isinstance(nxt, int) or not names:
+        return None
+    idx = list(range(nxt, nxt + len(names)))
+    if idx[-1] >= len(course) or any(course[i] != n for i, n in zip(idx, names)):
+        return None
+    return idx
+
+
+def _store(result, received_at=None):
     result = dict(result, label=LABEL, off_playbook=True, source="orin")
+    result.pop("age_s", None)
+    pend = _pending_for(result.get("job_id"))           # THIS job's request, never another's
+    idx = _mark_idx(result, pend)
+    if idx is not None:
+        result["mark_idx"] = idx
+    if pend and pend.get("course_hash"):
+        # the course this route answers; unknown (None) counts as an old course
+        result["course_hash"] = pend["course_hash"]
+    if pend and pend.get("definition") is False:
+        # routed on the marks alone: say so, whatever the Orin's own wording
+        warns = [w for w in (result.get("warnings") or []) if w != "Course without islands or rounding sides."]
+        if NO_ZONES not in warns:
+            warns.insert(0, NO_ZONES)
+        result["warnings"] = warns
+        result["no_zones"] = True
     with _LOCK:
-        _write(_result_path(), json.dumps({"received_at": int(time.time()), "result": result},
-                                          separators=(",", ":")))
+        _write(_result_path(), json.dumps({"received_at": received_at or int(time.time()),
+                                           "result": result}, separators=(",", ":")))
+    vs = result.get("vs_plan") or {}
+    reroutelog.record("done", "orin", once_key=result.get("job_id"), job_id=result.get("job_id"),
+                      asked_by=result.get("asked_by"), asked_at=result.get("asked_at"),
+                      finished_at=result.get("finished_at"), run_s=result.get("run_s"),
+                      weather=reroutelog.weather_summary(result.get("weather")),
+                      gain_min=vs.get("gain_min") if vs.get("available") else None,
+                      finish_eta=result.get("finish_eta"), complete=result.get("complete"),
+                      boat=result.get("boat"), marks=result.get("marks"),
+                      warnings=(result.get("warnings") or [])[:4], no_zones=result.get("no_zones"))
+
+
+def _heal():
+    """Self-repair: a stored route without its course stamp (stored before its request was
+    written, by any path) is re-stamped from its own pending entry once that exists. Without it
+    the GPS would refuse a valid route forever. Caller holds _SYNC_LOCK."""
+    rec = _read(_result_path())
+    r = (rec or {}).get("result")
+    if not isinstance(r, dict) or r.get("course_hash"):
+        return False
+    pend = _pending_for(r.get("job_id"))
+    if not pend or not pend.get("course_hash"):
+        return False
+    _store(r, received_at=rec.get("received_at"))
+    reroutelog.record("restamped", "orin", once_key=r.get("job_id"), job_id=r.get("job_id"),
+                      warnings=(stored() or {}).get("warnings"),
+                      no_zones=(stored() or {}).get("no_zones"))
+    return True
 
 
 def get(call=None):
@@ -318,6 +494,7 @@ def get(call=None):
 
 
 def _get(call):
+    _heal()                                   # Orin reachable or not
     code, st = call("GET", "/status")
     if code != 200 or not isinstance(st, dict):
         return {"orin": {"reachable": False}, "state": None, "progress": None,
@@ -340,4 +517,47 @@ def _get(call):
         out["result_stale"] = True
     if st.get("state") == "error":
         out["note"] = str(last.get("detail") or "Re-route failed. Try again.")[:120]
+        if last.get("job_id"):
+            reroutelog.record("failed", "orin", once_key=last["job_id"], job_id=last["job_id"],
+                              asked_by=last.get("asked_by"), detail=out["note"])
+    return out
+
+
+# ---- what the iPad's Route tile reads ---------------------------------------------------------
+def _finished(r):
+    return (r or {}).get("finished_at") or (r or {}).get("computed_at") or 0
+
+
+def latest():
+    """(source, route) of the newest route made by either re-router: 'orin' or 'pi' (the Pi's
+    own fallback), or (None, None). Full routes, track included."""
+    from . import reoptimize
+    o = stored()
+    o = o if (o or {}).get("available") else None
+    p = reoptimize.get_reoptimize()
+    p = p if p.get("available") else None
+    if o and (not p or _finished(o) >= _finished(p)):
+        return "orin", o
+    if p:
+        return "pi", p
+    return None, None
+
+
+def tile(call=None, compact=False):
+    """GET /reroute: the Orin's status + its last route, the Pi fallback's status + its last
+    route, and which of the two is newest (`latest`). `compact` drops the routes' tracks (the
+    iPad polls this; the GPS output reads the full route itself)."""
+    from . import reoptimize
+    out = get(call)
+    out["pi"] = reoptimize.status()
+    src, _r = latest()
+    out["latest"] = src
+    if compact and isinstance(out.get("result"), dict):
+        out["result"] = {k: v for k, v in out["result"].items() if k not in ("points", "leg_end_idx")}
+    # a route made for another course (moved marks, a new course loaded) must not look current:
+    # it stays stored (the history keeps it), flagged for the tile
+    now_hash = current_course_hash()
+    for r in (out.get("result"), out["pi"].get("result")):
+        if isinstance(r, dict):
+            r["old_course"] = not r.get("course_hash") or r.get("course_hash") != now_hash
     return out

@@ -101,7 +101,8 @@ check("picture carries the shift read grounded in get_tactics",
 check("favoured side named in the assessment", "right" in r["assessment"].lower())
 check("recommendation is no-plan (nothing to branch within)", r["recommendation"]["vs_playbook"] == "no-plan")
 check("recommendation grounded in get_tactics", "get_tactics" in r["recommendation"]["grounded_in"])
-check("no re-route chained (no-plan ≠ off-book departure)", "reoptimize" not in r)
+check("no re-route suggested (no-plan ≠ off-book departure)", "reoptimize" not in r
+      and "reroute_suggest" not in r)
 
 # oscillating, no playbook → sail-your-phase read (still available, not blind)
 stub(bundle=None, tac=wind(False, "either", "steady", osc=10),
@@ -117,35 +118,53 @@ r = strategy.get_strategy_signals()
 check("not available", r["available"] is False)
 check("still returns a disclaimer + caveat", bool(r["caveats"]) and "disclaimer" in r)
 
-# --- 5b. OFF-BOOK recommendation → chains the onboard re-route offer (Phase 3) ----------------------
-print("off-book → re-route offer chained:")
+# --- 5b. OFF-BOOK recommendation → SUGGESTS a re-route, never computes one (#125) -----------------
+print("off-book → a quiet re-route suggestion, nothing computed:")
 # a persistent shift favouring a side with NO variant aboard drives the selector off_script → off-book.
 BUNDLE_ONESIDED = {"race_id": "u", "recommended": "middle", "headline": "one-sided",
                    "variants": [{"id": "middle", "name": "Middle start"}]}
 stub(bundle=BUNDLE_ONESIDED, tac=wind(True, "right", "veering"))
-# stub the heavy re-optimizer so the test stays standalone (no nav/routing/engine).
+# trip-wire: ANY route computation from the synthesis fails the test (button only)
+from app import reoptimize as _reopt_mod, orinroute as _orin_mod  # noqa: E402
 _ro_calls = {"n": 0}
-def _fake_reopt(route=None):
+def _tripwire(*a, **k):
     _ro_calls["n"] += 1
-    return {"available": True, "off_playbook": True, "eta_min": 254, "tacks": 9, "sailed_nm": 46.2,
-            "sail_plan": ["J1", "A3", "S1"], "path": [{"lat": 45.0, "lon": -83.0}] * 500,
-            "legs": [{"mark": "Finish"}], "vs_playbook": {"available": True, "max_divergence_nm": 2.4}}
-strategy.reoptimize_mod.get_reoptimize = _fake_reopt
+    raise AssertionError("a route was computed without the button")
+_reopt_mod._compute = _tripwire
+_reopt_mod.compute = _tripwire
+_reopt_mod.run = _tripwire
+_orin_mod.run = _tripwire
 r = strategy.get_strategy_signals()
-print("  ", r["recommendation"]["action"], "| vs_playbook", r["recommendation"]["vs_playbook"])
+print("  ", r["recommendation"]["action"], "| suggest", r.get("reroute_suggest"))
 check("recommendation departs the playbook", r["recommendation"]["vs_playbook"] == "departs")
-check("re-route offer attached", (r.get("reoptimize") or {}).get("available") is True)
-check("offer is compact (no heavy path array)", "path" not in (r.get("reoptimize") or {}))
-check("offer keeps eta/tacks/sail_plan", r["reoptimize"].get("eta_min") == 254 and r["reoptimize"].get("tacks") == 9)
-check("rec flagged reoptimize ready", r["recommendation"].get("reoptimize") == "ready")
-check("rationale mentions the re-route ETA", "New route ready" in r["recommendation"]["rationale"])
-check("re-optimizer was actually called", _ro_calls["n"] == 1)
+check("no route computed (no re-optimizer call)", _ro_calls["n"] == 0)
+check("no route offer attached", "reoptimize" not in r and "reoptimize" not in r["recommendation"])
+check("rationale doesn't claim a route is ready", "route ready" not in r["recommendation"]["rationale"].lower())
+sug = r.get("reroute_suggest") or {}
+check("suggestion with a short plain reason", sug.get("reason") == "Off the playbook. The right is paying."
+      and len(sug["reason"].split()) <= 12)
 
-# an ON-PLAN hold must NOT run the heavy re-optimizer.
-_ro_calls["n"] = 0
+# an ON-PLAN hold: no suggestion, no computation
 stub(tac=wind(False, "either", "steady", osc=10))
 r = strategy.get_strategy_signals()
-check("on-plan hold does not chain a re-route", "reoptimize" not in r and _ro_calls["n"] == 0)
+check("on-plan hold: no suggestion, nothing computed", "reroute_suggest" not in r and _ro_calls["n"] == 0)
+
+print("suggestion reasons:")
+S = strategy._reroute_suggestion
+check("off-book with no side", S({"vs_playbook": "departs"}, {}, {}, None)["reason"] == "Off the playbook.")
+check("our wind right of the plan", S({"vs_playbook": "on-plan"}, {}, {},
+      {"status": "act", "obs_twd": 5, "plan_twd": 350, "obs_tws_kn": 12, "plan_tws_kn": 12})["reason"]
+      == "Wind shifted 15° right of the plan.")
+check("our wind left of the plan", "left" in S({}, {}, {}, {"status": "act", "obs_twd": 330,
+                                                          "plan_twd": 350})["reason"])
+check("more wind than the plan", S({}, {}, {}, {"status": "act", "obs_twd": 350, "plan_twd": 352,
+                                               "obs_tws_kn": 17, "plan_tws_kn": 12})["reason"]
+      == "Wind 5 kts more than the plan.")
+check("forecast moved (never veered/backed)", S({}, {}, {"drift": {"status": "act", "dir": "veered",
+                                                                  "deg": 28}}, None)["reason"]
+      == "Forecast shifted 28° right since the plan.")
+check("a watch-level gap stays quiet", S({}, {}, {"drift": {"status": "watch", "dir": "right", "deg": 12}},
+                                          {"status": "watch", "obs_twd": 10, "plan_twd": 350}) is None)
 
 # --- 6. _fleet_lean directly: confidence-weighted side of the threats -------------------------------
 print("fleet-lean math:")

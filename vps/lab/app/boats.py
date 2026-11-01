@@ -98,10 +98,10 @@ def active_boat():
 
 
 def safety_depth_m(b, default=2.63):
-    """No-go depth (draft + margin) for boat profile `b`; `default` if no boat/draft is set."""
-    if b and b.get("draft_m") is not None:
-        return boat_profile.safety_depth_m(b)
-    return default
+    """No-go depth (draft + margin) for boat profile `b`; `default` if no boat/draft is set.
+    ONE implementation (shared/chartid.py) for the Lab, the Pi's GPS export and the Orin."""
+    from shared import chartid
+    return chartid.safety_depth_m(b, default)
 
 
 def helm_factor(b, default=1.0):

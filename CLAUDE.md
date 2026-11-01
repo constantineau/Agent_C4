@@ -202,7 +202,8 @@ below) · /course · POST /course/practice · POST /course/load (RaceDefinition 
 marks) · /navigator · /tactics · /forecast · /route · /ais · POST /fleet/load · /fleet ·
 POST /playbook/load (freeze the signed bundle aboard; clears trigger/matcher state) · GET /playbook
 (which bundle is aboard: race, id, variants/plays, signature prefix — the Lab Deploy tab reads it) ·
-/deviation · /drift · /plangap · /trend · /selector · /reoptimize · /strategy · /plays · /buoys ·
+/deviation · /drift · /plangap · /trend · /selector · /reoptimize (+ POST /reoptimize/run) ·
+POST /reroute/run · /reroute · /reroute/history · /strategy · /plays · /buoys ·
 POST /gps/show + /gps/clear + GET /gps/status (the CHARTPLOTTER push: assembles the frozen
 variant's path — or the onboard re-route — and drives the `pi/n2kout` broadcaster, which
 transmits 129285 route chunks + 129284/129283 nav data on the boat's own N2K bus for the
@@ -239,12 +240,17 @@ raise slow / clear fast):
   alarm status); feeds play predicates + the strategy picture + the copilot's briefs.
 - `selector.py` — unifies shift + deviation + drift over the frozen variants into ONE call:
   **HOLD / SWITCH → variant / OFF-SCRIPT** + confidence (concordance raises it).
-- `reoptimize.py` — the off-script fallback: a fresh route onboard (own polars + Open-Meteo
-  + the bundle's frozen island/zone obstacles), explicitly flagged off-book, with a
-  hoistable sail plan; on-demand + cached (never on every poll).
+- `reoptimize.py` — the Pi's own small re-route, the fallback when the Orin can't be reached:
+  a fresh route onboard (own polars + Open-Meteo + the bundle's frozen island/zone obstacles),
+  flagged off-book, with a hoistable sail plan. **Button only (#125):** computed only on
+  `POST /reoptimize/run` (the iPad's Route tile); `GET /reoptimize` returns the last one made.
+- `orinroute.py` — the Orin's full re-route (#124): `POST /reroute/run`, `GET /reroute` (both
+  engines' state + last route + which is newest). Button only, like the Pi's. Every press and
+  route is logged by `reroutelog.py` (`GET /reroute/history`, for #127).
 - `strategy.py` — the cross-signal synthesis: concordance (strong/split/weak) over
-  shift/drift/deviation/fleet-lean + one grounded recommendation; chains a compact
-  re-route offer on an off-book verdict; works with no playbook (tactics-only read).
+  shift/drift/deviation/fleet-lean + one grounded recommendation; on an off-book
+  verdict (or our wind / the forecast well off the plan) it SUGGESTS a re-route
+  (`reroute_suggest`, never computes one); works with no playbook (tactics-only read).
 - `matcher.py` — the Playbook-v2 **play matcher**: every play's predicates vs live signals
   (deviation/drift/tactics/fatigue/TWS/sail state/**polar_pct** — a windowed ~10-min mean
   of STW vs the polar target so a tack can't reset a sustain/**current_leg** — the
