@@ -100,6 +100,7 @@ class GribSource:
         self._src, self._budget = src, budget
         self._bbox, self._t0, self._t1 = bbox, t_start, t_end
         self._alt = [tuple(b) for b in alt_boxes if tuple(b) != tuple(bbox) and _contains(b, bbox)]
+        self.fell_back_to = None      # the cached cycle used after a live download came out short
 
     def __getattr__(self, k):
         return getattr(self._src, k)
@@ -130,6 +131,26 @@ class GribSource:
         if self._budget.online:
             return self._src.pick_cycle(now, min_horizon_h=min_horizon_h)
         return self.best_cached_cycle() or self._src.pick_cycle(now, min_horizon_h=min_horizon_h)
+
+    def prev_cycle(self, cycle):
+        """The loader found `cycle` too sparse. Online, the next try is the best cycle already
+        cached (a failed or unfinished download must never hide a forecast aboard), and the loader
+        stays on it: it keeps its LAST attempt, which must not be worse. Nothing cached: the live
+        step back."""
+        if self._budget.online:
+            if self.fell_back_to is not None:
+                return self.fell_back_to
+            best = self.best_cached_cycle()
+            if best is not None:
+                self.fell_back_to = best
+                return best
+        return self._src.prev_cycle(cycle)
+
+    def reach(self, cycle):
+        """The last valid time this cycle has on disk inside the run's window (None if none)."""
+        want = set(WFM._fhrs_for_cycle(self._src, cycle, self._t0, self._t1))
+        have = want & self.cached().get(cycle, set())
+        return max((self._src.valid_time(cycle, f) for f in have), default=None)
 
     def fetch(self, cycle, fhr, member, bbox, timeout=None):
         for b in [bbox] + self._alt:
@@ -185,27 +206,6 @@ class ApiSource:
         if series:
             self._budget.downloads += 1
         return series, meta
-
-
-def short_models(status, names, bbox, known, t_start, t_end):
-    """After an online load: the GRIB models that came out short (no frames, or under the Lab's
-    "enough" share) while the cache, read as offline would, holds more of the run's window. The
-    caller then reloads cache-only, so a failed download never hides forecasts already aboard."""
-    got = {m.get("model"): m for m in (status or {}).get("models") or []}
-    out = []
-    for n in names:
-        src = M.MODELS.get(n)
-        if src is None or src.kind != "deterministic" or hasattr(src, "load_series"):
-            continue
-        meta = got.get(n) or {}
-        frames, expected = meta.get("frames") or 0, meta.get("expected_frames") or 0
-        if frames and frames >= WFM.MIN_FRAME_FRAC * max(1, expected):
-            continue
-        cached = GribSource(src, Budget(False), bbox, t_start, t_end, alt_boxes=known)
-        cyc = cached.best_cached_cycle()
-        if cyc is not None and cached.cached_count(cyc) > frames:
-            out.append(n)
-    return out
 
 
 def sources_for(names, budget, bbox, t_start, t_end, known=()):
@@ -283,9 +283,12 @@ def cycle_epoch(cycle):
         return None
 
 
-def summarize(status, now, budget, bbox_why):
-    """The weather block of the result: which models and cycles, how old, online or not."""
-    used, ages = [], []
+def summarize(status, now, budget, bbox_why, sources=(), requested=()):
+    """The weather block of the result: which models and cycles, how old, online or not, which
+    requested models gave nothing, how far the forecast reaches, and which models fell back to a
+    saved run after a live download came out short."""
+    by_name = {getattr(s, "name", None): s for s in sources}
+    used, ages, reaches, fell = [], [], [], []
     for m in (status or {}).get("models") or []:
         if not m.get("frames"):
             continue
@@ -293,12 +296,32 @@ def summarize(status, now, budget, bbox_why):
         age_h = round((now - ce) / 3600.0, 1) if ce else None
         if age_h is not None:
             ages.append(age_h)
+        src = by_name.get(m.get("model"))
+        until = None
+        if isinstance(src, GribSource) and ce:
+            cyc = dt.datetime.fromtimestamp(ce, dt.timezone.utc)
+            until = src.reach(cyc)
+            if until:
+                reaches.append(until)
+            if src.fell_back_to is not None and src.fell_back_to == cyc:
+                fell.append(m.get("model"))
         used.append({"model": m.get("model"), "cycle": m.get("cycle"),
                      "cycle_epoch": int(ce) if ce else None, "age_h": age_h,
-                     "frames": m.get("frames"), "expected_frames": m.get("expected_frames")})
+                     "frames": m.get("frames"), "expected_frames": m.get("expected_frames"),
+                     "partial": bool(m.get("expected_frames")
+                                     and m.get("frames") < m.get("expected_frames")),
+                     "until": int(until) if until else None})
+    got = {u["model"] for u in used}
+    api_ok = any(u["model"] not in by_name or not isinstance(by_name[u["model"]], GribSource)
+                 for u in used)
     return {"models": used,
+            "missing": [n for n in requested if n not in got and n in by_name],
             "newest_age_h": min(ages) if ages else None,
             "oldest_age_h": max(ages) if ages else None,
+            # past this, every GRIB model holds its last frame; unknown when an API model
+            # (ICON/GEM) is in the blend, whose series reaches the whole window
+            "forecast_until": int(max(reaches)) if reaches and not api_ok else None,
             "online": budget.online, "downloads": budget.downloads,
             "download_budget_spent": budget.exhausted,
+            "from_cache_after_failed_download": fell,
             "box": bbox_why}

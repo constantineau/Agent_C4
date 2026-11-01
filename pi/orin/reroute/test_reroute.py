@@ -320,6 +320,35 @@ try:
     check("field_from_dict: corrupt mask → ValueError", False)
 except ValueError:
     check("field_from_dict: corrupt mask → ValueError", True)
+good_ch = json.load(open(job.chart_path("huron", "c")))
+empty = geo.ObstacleField(tuple(good_ch["bbox"]), res_deg=good_ch["res_deg"])
+with open(job.chart_path("huron", "c"), "w") as fh:
+    json.dump(dict(good_ch, mask_zb64=geo.field_to_dict(empty)["mask_zb64"]), fh)
+field_e, note_e = lo(DEF)
+check("a chart with an empty land mask → refused, said plainly",
+      note_e == "Chart has no land in it. Route doesn't check the shore.")
+with open(job.chart_path("huron", "c"), "w") as fh:
+    json.dump(dict(good_ch, mask_zb64=geo.field_to_dict(empty)["mask_zb64"], open_water=True), fh)
+check("…unless it was built as open water on purpose", lo(DEF)[1] is None)
+
+print("3b2) prep_chart refuses a mask with no land")
+import io  # noqa: E402
+import contextlib  # noqa: E402
+
+import prep_chart  # noqa: E402
+prep_chart.store.get_race = lambda rid: DEF
+_bfc = prep_chart.geo.build_for_course
+prep_chart.geo.build_for_course = lambda *a, **k: geo.ObstacleField((46.0, 42.5, -83.5, -81.5))
+buf, err = io.StringIO(), io.StringIO()
+with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(err):
+    rc = prep_chart.main(["x", "huron", "c"])
+check("shoreline didn't load → exit 1, nothing written", rc == 1 and buf.getvalue() == ""
+      and "shoreline didn't load" in err.getvalue())
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
+    rc = prep_chart.main(["x", "huron", "c", "--open-water"])
+check("--open-water → written, flagged", rc == 0 and json.loads(buf.getvalue())["open_water"] is True)
+prep_chart.geo.build_for_course = _bfc
 write_chart(DEF, fingerprint=False)
 check("a chart with no fingerprint → out of date",
       lo(DEF)[1] == job.OLD_CHART)
@@ -404,6 +433,62 @@ check("its age said honestly (29 h)", [m["cycle"] for m in w6["models"]] == ["20
       and w6["newest_age_h"] == 29.0)
 check("online, no downloads, cache used for gfs", w6["online"] is True and w6["downloads"] == 0
       and w6["from_cache_after_failed_download"] == ["gfs"])
+
+print("3e2) gfs fails, icon loads: both kept, one route")
+from app.wind import grib as G  # noqa: E402
+
+
+class FakeICON(models.ICON):
+    """Open-Meteo ICON that answers (online): a steady 6 m/s south-westerly series."""
+
+    def load_series(self, bbox, t_start, t_end, on_progress=None):
+        lat, lon = np.arange(42.0, 47.01, 0.25), np.arange(-86.0, -79.99, 0.25)
+        u = np.full((lat.size, lon.size), 4.0)
+        fr = [G.GribFrame("icon", "det", float(t), lat, lon, u, u.copy(), True)
+              for t in range(int(t_start) - 3600, int(t_end) + 7200, 3 * 3600)]
+        return {("icon", "det"): fr}, {"model": "icon", "cycle": "open-meteo icon_global",
+                                       "members": 1, "frames": len(fr), "expected_frames": len(fr),
+                                       "cycle_fallbacks": 0, "priority": 1.15,
+                                       "kind": "deterministic"}
+
+
+_icon0 = models.MODELS["icon"]
+models.MODELS["gfs"], models.MODELS["icon"] = DownGFS(), FakeICON()
+models.CACHE = os.path.join(_tmp, "gribcache-fail")
+out7 = job.run(dict(REQ, models=["gfs", "icon"]), now=NOW, is_online=lambda: True)
+models.MODELS["gfs"], models.MODELS["icon"], models.CACHE = GFS, _icon0, _cache0
+w7 = out7["weather"]
+check("both models in the route", sorted(m["model"] for m in w7["models"]) == ["gfs", "icon"]
+      and out7["complete"])
+check("gfs from its saved run, icon kept as loaded", w7["from_cache_after_failed_download"] == ["gfs"]
+      and [m for m in w7["models"] if m["model"] == "icon"][0]["frames"] > 0)
+
+print("3e3) a forecast that ends before the finish says so")
+models.CACHE = os.path.join(_tmp, "gribcache-short")
+for f in windfield._fhrs_for_cycle(GFS, CYCLE, NOW, NOW + 3 * 3600):
+    write_grib(GFS._cache_path(CYCLE, f, "det", plume_box), 4.2, 4.2)
+job.STATE_DIR = os.path.join(_tmp, "fresh-short")
+out8 = job.run(REQ, now=NOW, is_online=lambda: False)
+models.CACHE = _cache0
+w8 = out8["weather"]
+check("forecast_until reported", w8["forecast_until"] and w8["forecast_until"] <= NOW + 9 * 3600)
+check("…and the warning, when the finish is later", out8["finish_eta"] > w8["forecast_until"] + 3600
+      and job.SHORT_FORECAST in out8["warnings"])
+check("a model per frame count, marked partial", w8["models"][0]["partial"] is True)
+
+print("3e4) a requested model with nothing aboard is named")
+job.STATE_DIR = os.path.join(_tmp, "fresh")
+out9 = job.run(dict(REQ, models=["gfs", "nam"]), now=NOW, is_online=lambda: False)
+check("missing: nam, said in a warning", out9["weather"]["missing"] == ["nam"]
+      and "No forecast from nam." in out9["warnings"])
+
+print("3e5) no boat profile is said, not hidden")
+_bid = job.BOAT_ID
+job.BOAT_ID = "no-such-boat"
+out10 = job.run(REQ, now=NOW, is_online=lambda: False)
+job.BOAT_ID = _bid
+check("warning + no boat block", out10["boat"] is None and job.NO_BOAT in out10["warnings"])
+check("with the profile: which one it used", out["boat"]["boat_id"] == "sr33")
 
 print("3f) an incomplete route makes no finish claim")
 _orig = job.routerun.run_course

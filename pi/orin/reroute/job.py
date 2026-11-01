@@ -53,6 +53,9 @@ USE_WAVES = os.environ.get("REROUTE_WAVES", "0") == "1"       # GLWU: network on
 NO_CHART = "No chart aboard. Route doesn't check the shore."
 OLD_CHART = "Chart is out of date. Route doesn't check the shore."
 NO_COVER = "Chart doesn't cover the boat. Route doesn't check the shore."
+NO_LAND = "Chart has no land in it. Route doesn't check the shore."
+SHORT_FORECAST = "Forecast ends before the finish. Later legs use its last hour."
+NO_BOAT = "Boat profile missing. Route uses the raw polars."
 INCOMPLETE = "Route incomplete."
 PLAN_NEAR_NM = 20.0          # compare with the plan only while the boat is this close to it
 
@@ -180,7 +183,10 @@ def load_obstacles(definition, course_id, full_definition, full_course_id, boat)
                     land = geo.field_from_dict(chart)
                 except (ValueError, KeyError, TypeError):
                     land = None
-                if land is not None and need and W._contains(land.bbox, need):
+                if land is not None and not chart.get("open_water") and not any(land.mask):
+                    # an empty mask = the shoreline never loaded when it was built: not "checked"
+                    note = NO_LAND
+                elif land is not None and need and W._contains(land.bbox, need):
                     race = _race_obstacles(definition, course_id, land.bbox, land.res, depth)
                     n = len(land.mask)
                     if len(race.mask) != n:               # can't happen: same box, same cell size
@@ -192,8 +198,9 @@ def load_obstacles(definition, course_id, full_definition, full_course_id, boat)
                         land.layers[k] = land.layers.get(k, 0) + v
                     land.active = land.active or race.active
                     return land, None
-                # outside the mask, land would read as open water: don't claim it was checked
-                note = NO_COVER if land is not None else OLD_CHART
+                else:
+                    # outside the mask, land would read as open water: don't claim it was checked
+                    note = NO_COVER if land is not None else OLD_CHART
     # no usable land mask: the race's own obstacles for the remaining course, boat included
     return _race_obstacles(definition, course_id, need, geo.RES_DEG, depth), note
 
@@ -259,6 +266,9 @@ def run(req, now=None, on_progress=None, on_phase=None, is_online=None):
         full = None
         d, cid, names = minimal_definition(req.get("marks"), req.get("next_index"), lat, lon)
     boat = _get_boat()
+    boat_info = ({"boat_id": boat.get("boat_id"), "helm_factor": boats.helm_factor(boat),
+                  "polar_cells": len(boats.polar_adjustments(boat)), "draft_m": boat.get("draft_m")}
+                 if boat else None)
     phase("chart")
     field, chart_note = load_obstacles(d, cid, full, full_cid, boat)
 
@@ -273,39 +283,34 @@ def run(req, now=None, on_progress=None, on_phase=None, is_online=None):
     t_end = now + optimizer.estimate_hours(d, cid) * 3600
     names_req = [m for m in (req.get("models") or MODELS)]
 
-    def attempt(budget):
-        bbox, why = W.choose_bbox(need, known, budget.online)
-        sources = W.sources_for(names_req, budget, bbox, now, t_end, known)
-        res = routerun.run_course(
-            d, cid, now, sources, avoid=True, per_model=False, resolution=RESOLUTION,
-            use_waves=USE_WAVES and budget.online, use_current=USE_CURRENT and budget.online,
-            on_progress=say, on_phase=phase, boat=boat, model_skill=False, obstacles=field,
-            time_budget_s=ROUTE_BUDGET_S, fallback_tries=None if budget.online else 0,
-            bbox=bbox, t_end=t_end, briefing=False, grids=False)
-        return res, bbox, why
-
     say("online — new forecasts may download" if online else "offline — using saved forecasts")
     budget = W.Budget(online)
-    res, bbox, why = attempt(budget)
+    bbox, why = W.choose_bbox(need, known, online)
+    sources = W.sources_for(names_req, budget, bbox, now, t_end, known)
+    # one load, one route: a model whose live download comes out short falls back to its best
+    # cached cycle inside the loader (GribSource.prev_cycle); everything that loaded fine is kept
+    res = routerun.run_course(
+        d, cid, now, sources, avoid=True, per_model=False, resolution=RESOLUTION,
+        use_waves=USE_WAVES and online, use_current=USE_CURRENT and online,
+        on_progress=say, on_phase=phase, boat=boat, model_skill=False, obstacles=field,
+        time_budget_s=ROUTE_BUDGET_S, fallback_tries=None if online else 0,
+        bbox=bbox, t_end=t_end, briefing=False, grids=False)
     if budget.downloads:
         W.remember_box(STATE_DIR, bbox)
-        known.insert(0, tuple(bbox))          # what just came down counts in a cache-only reload
-    cache_fallback = []
-    if online:
-        # the probe passed but downloads failed or ran out of time: any model the cache holds
-        # better than what came down gets its best cached cycle, exactly as offline
-        cache_fallback = W.short_models(res.get("windfield"), names_req, bbox, known, now, t_end)
-        if cache_fallback:
-            say("downloads fell short — using saved forecasts for " + ", ".join(cache_fallback))
-            res, bbox, why = attempt(W.Budget(False))
-    weather = W.summarize(res.get("windfield"), now, budget, why)
-    weather["from_cache_after_failed_download"] = cache_fallback
+    weather = W.summarize(res.get("windfield"), now, budget, why, sources, names_req)
+    extras = {}
+    if USE_CURRENT:
+        extras["current"] = bool((res.get("current") or {}).get("loaded")) if online else "offline"
+    if USE_WAVES:
+        extras["waves"] = bool((res.get("waves") or {}).get("loaded")) if online else "offline"
+    if extras:
+        weather["extras"] = extras
     phase("saving")
     out = {"schema": SCHEMA, "label": LABEL, "off_playbook": True, "source": "orin",
            "job_id": req.get("job_id"), "asked_by": str(req.get("device") or "")[:40] or None,
            "asked_at": req.get("asked_at"), "computed_from": int(now),
            "from": {"lat": round(lat, 5), "lon": round(lon, 5)},
-           "marks": names, "weather": weather}
+           "marks": names, "weather": weather, "boat": boat_info}
     if not res.get("available"):
         no_wind = not (res.get("windfield") or {}).get("loaded")
         out.update(available=False, note="No forecast aboard. Connect to the internet." if no_wind
@@ -321,6 +326,13 @@ def run(req, now=None, on_progress=None, on_phase=None, is_online=None):
             warnings.insert(0, chart_note)
         if not full:
             warnings.insert(0, "Course without islands or rounding sides.")
+        if not boat:
+            warnings.insert(0, NO_BOAT)
+        until = weather.get("forecast_until")
+        if until and res.get("finish_epoch") and res["finish_epoch"] > until + 3600:
+            warnings.insert(0, SHORT_FORECAST)
+        if weather.get("missing"):
+            warnings.append("No forecast from " + ", ".join(weather["missing"]) + ".")
         complete = bool(res.get("complete"))
         if not complete:
             warnings.insert(0, INCOMPLETE)

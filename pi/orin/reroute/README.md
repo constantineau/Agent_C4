@@ -37,9 +37,15 @@ iPad ──GET /api/reroute───────▶ Pi engine ──GET /status,
    Cache files are keyed by download box, so the run uses a box the cache already holds when one
    covers the course: the plume's box (the plan's route + 0.5°), or one an earlier re-route used.
    Files from any cached box that holds the run's box count too.
-   If the internet probe passes but the downloads fail or run out of time, any model that came out
-   short is reloaded from its best cached cycle, as offline. The result lists those models
+   If the internet probe passes but a model's download fails or runs out of time, that model
+   steps back to its best cached cycle inside the same load (not a second run): everything else
+   that loaded (ICON/GEM, current, sea state) is kept. The result lists those models
    (`weather.from_cache_after_failed_download`) and gives their real age.
+   The weather block also says which requested models gave nothing (`missing`, plus a warning),
+   which loaded only part of their frames (`partial`), and how far the GRIB forecast reaches
+   (`forecast_until`); a finish later than that warns "Forecast ends before the finish. Later legs
+   use its last hour." No boat profile aboard warns "Boat profile missing. Route uses the raw
+   polars."; otherwise `boat` says which profile was used.
 5. `routerun.run_course` routes it (Lab defaults; no Opus briefing, no map grids, no venue model
    skill, current and sea state off unless enabled and online).
 6. The result goes to `last_result.json`. The Pi fetches it once, stores it, and serves it to the
@@ -62,7 +68,7 @@ Pi engine (`vps/agent/app/orinroute.py`, through the console's `/api/`):
 | | |
 |---|---|
 | `POST /reroute/run` | body `{device?: "iPad 1"}` → `202` started, `409` busy (with progress) or nothing to route, `503 {detail: "Can't reach the Orin. Re-route not started."}` |
-| `GET /reroute` | `{orin: {reachable}, state, progress, result, note?}`; `result` is the stored route with `age_s` |
+| `GET /reroute` | `{orin: {reachable}, state, progress, result, note?, result_stale?}`; `result` is the stored route with `age_s`; `result_stale` when the Orin has a newer route the Pi couldn't fetch yet |
 
 Run request (Pi → Orin):
 
@@ -127,6 +133,10 @@ scp /tmp/chart.json agent-c4@<orin>:c4-reroute/chart/bayview-mackinac-2026__cove
 The file is LAND ONLY (`"kind": "land"`): shoreline, shoals, rocks. The race's zones, island
 disks and rounding-side barriers are rebuilt on the Orin from what's left of the course, so the
 barrier of an island already rounded never blocks a later leg (pure Python, no shoreline data).
+`prep_chart.py` refuses to write a mask with no land in it (the shoreline didn't load) unless
+it's given `--open-water`; the Orin also refuses an empty mask not flagged open water ("Chart has
+no land in it. Route doesn't check the shore.").
+
 Without a usable land file the run uses those race obstacles alone. Island disks are always
 built for them, whatever the coastline source (under ENC the Lab leaves them to ENC land).
 

@@ -293,6 +293,10 @@ def get(call=None):
             have = stored()
     out = {"orin": {"reachable": True}, "state": st.get("state"), "job_id": st.get("job_id"),
            "asked_by": st.get("asked_by"), "progress": st.get("progress"), "result": have}
+    if want and want != (have or {}).get("job_id"):
+        # the Orin has a newer route we couldn't fetch: never pass the old one off as it
+        out["note"] = "New route not fetched yet. Showing the last one."
+        out["result_stale"] = True
     if st.get("state") == "error":
         out["note"] = str(last.get("detail") or "Re-route failed. Try again.")[:120]
     return out

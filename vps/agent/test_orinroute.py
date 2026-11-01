@@ -144,6 +144,11 @@ orinroute.get(call=orin({("GET", "/status"): (200, dict(st, result_job_id="j9",
                                                         last=dict(st["last"], job_id="j9"))),
                          ("GET", "/result"): (200, bad)}))
 check("a bad result is not stored", orinroute.stored()["job_id"] == "j1")
+g = orinroute.get(call=orin({("GET", "/status"): (200, dict(st, result_job_id="j8")),
+                             ("GET", "/result"): (None, None)}))
+check("a newer route that can't be fetched → the old one, marked stale",
+      g["result"]["job_id"] == "j1" and g["result_stale"] is True
+      and g["note"] == "New route not fetched yet. Showing the last one.")
 g = orinroute.get(call=orin({("GET", "/status"): (None, None)}))
 check("Orin off: the stored route is still served", g["orin"]["reachable"] is False
       and g["result"]["job_id"] == "j1" and g["result"]["age_s"] is not None)

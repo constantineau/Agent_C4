@@ -4,7 +4,7 @@ The Orin can't build the shoreline mask itself (that needs GDAL and the 200 MB G
 so the Lab builds it — the same mask the Lab's optimizer routes on — and it's copied aboard.
 Run it inside the Lab container, where the Lab's code, races and shoreline data live:
 
-    docker exec -i <lab container> python - <race_id> [course_id] \\
+    docker exec -i <lab container> python - <race_id> [course_id] [--open-water] \\
         < pi/orin/reroute/prep_chart.py > chart.json
     scp chart.json agent-c4@<orin>:c4-reroute/chart/<race_id>__<course_id>.json
 
@@ -19,8 +19,10 @@ from app.geo import obstacles as geo
 
 
 def main(argv):
+    open_water = "--open-water" in argv          # a course box with truly no land in it
+    argv = [a for a in argv if a != "--open-water"]
     if len(argv) < 2:
-        print("usage: prep_chart.py <race_id> [course_id]", file=sys.stderr)
+        print("usage: prep_chart.py <race_id> [course_id] [--open-water]", file=sys.stderr)
         return 2
     d = store.get_race(argv[1])
     if not d:
@@ -40,7 +42,16 @@ def main(argv):
     # later leg.
     field = geo.build_for_course(d, cid, bbox, source=src, safety_depth=depth,
                                  zones_on=False, islands_on=False)
+    # The builder never fails: if the shoreline couldn't load it returns an EMPTY mask, which the
+    # boat would take as "land checked". Refuse that unless the box really is open water.
+    land_cells = sum(field.layers.get(k, 0) for k in ("coastline", "shoal", "obstruction"))
+    if not land_cells and not open_water:
+        print(f"no land in the mask (source {field.source}): the shoreline didn't load. Not "
+              "writing a chart. If this course box truly has no land, add --open-water.",
+              file=sys.stderr)
+        return 1
     out = geo.field_to_dict(field)
+    out["open_water"] = bool(open_water and not land_cells)
     # what it was built from: the Orin checks this against the course aboard before using it
     out.update(race_id=d.get("race_id"), course_id=cid, kind="land",
                fingerprint=geo.course_fingerprint(d, cid, depth))
