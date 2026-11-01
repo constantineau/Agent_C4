@@ -30,8 +30,8 @@ uses one obstacle mask per leg: land, zones and island disks on every leg, an is
 barrier only on the leg that rounds it (otherwise two opposite barriers on the same island would
 wall off its meridian). The Lab still routes every leg on one course-wide mask (#141).
 3. Obstacles: the race's zones, islands and rounding barriers, rebuilt for the remaining course.
-   Land: the Lab's land-only mask for the course, carried aboard as a file (see "Chart" below),
-   used only if it was built from the course aboard. Without one, the run avoids the race's
+   Land: the Lab's land-only mask for the course, carried by the Deploy push (see "Chart and boat
+   profile" below), used only if it was built from the course aboard. Without one, the run avoids the race's
    islands and zones only, and the result says "No chart aboard. Route doesn't check the shore."
    (or "Chart is out of date. …" for a mask built from an older course).
 4. Weather (`orin_weather.py`): the Lab's wind loader runs unchanged on wrapped model sources.
@@ -47,8 +47,10 @@ wall off its meridian). The Lab still routes every leg on one course-wide mask (
    The weather block also says which requested models gave nothing (`missing`, plus a warning),
    which loaded only part of their frames (`partial`), and how far the GRIB forecast reaches
    (`forecast_until`); a finish later than that warns "Forecast ends before the finish. Later legs
-   use its last hour." No boat profile aboard warns "Boat profile missing. Route uses the raw
-   polars."; otherwise `boat` says which profile was used.
+   use its last hour." The boat profile is the Lab's reviewed one from the Deploy push; `boat` names
+   the one used (id, version, source). Without it the Orin's own copy is used and the result warns
+   "Boat profile not from Deploy. May be the raw polars."; with none at all, "Boat profile missing.
+   Route uses the raw polars."
 5. `routerun.run_course` routes it (Lab defaults; no Opus briefing, no map grids, no venue model
    skill, current and sea state off unless enabled and online).
 6. The result goes to `last_result.json`. The Pi fetches it once, stores it, and serves it to the
@@ -83,8 +85,15 @@ Run request (Pi → Orin):
  "definition": {"race_id": "...", "courses": ["the deployed course"], "zones": []},
  "course_id": "cove_island",
  "plan": {"variant": "left", "variant_label": "Left side", "points": [{"lat": 0, "lon": 0, "t": 0}]},
- "models": ["gfs", "nam", "hrrr"]}
+ "models": ["gfs", "nam", "hrrr"],
+ "assets": {"chart": {"kind": "land-v2", "fingerprint": "...", "...": "the land mask"},
+            "boat": {"boat_id": "sr33", "helm_factor": 0.931, "...": "the reviewed profile"},
+            "boat_version": "3f2a9c1b7d4e", "race_id": "...", "course_id": "...", "received_at": 0}}
 ```
+
+`assets` is what the Lab's Deploy push left on the Pi (see "Chart and boat profile"). The chart is
+there only when it was pushed for the course aboard, else null. A Pi from before this build sends
+no `assets`; the Orin then reads its own files, as before.
 
 `definition` is null when the course aboard was loaded before this build; the run then uses the
 navigator's marks (no islands, no rounding sides) and says so. `models` is optional.
@@ -109,8 +118,13 @@ Result (`c4.reroute/v1`):
                          "age_h": 5.0, "frames": 21, "expected_frames": 21}],
              "newest_age_h": 5.0, "oldest_age_h": 5.0, "online": false, "downloads": 0,
              "download_budget_spent": false, "box": "cache"},
- "chart": {"land": true, "source": "enc"}}
+ "chart": {"land": true, "source": "enc"},
+ "boat": {"boat_id": "sr33", "version": "3f2a9c1b7d4e", "source": "deploy", "received_at": 0,
+          "helm_factor": 0.931, "polar_cells": 24, "draft_m": 2.1336}}
 ```
+
+`boat.version` is a short hash of the profile's content: any edit gives a new one. `source` is
+`deploy` (the Lab's reviewed profile, pushed) or `orin` (the Orin's own copy, with a warning).
 
 If the optimizer stalls short of the finish, `complete` is false, `finish_eta` and `total_hours`
 are null, `vs_plan` is `{"available": false, "note": "Route incomplete."}` and the first warning is
@@ -121,16 +135,43 @@ boat's nearest point on the plan, minus the new route's time left. The plan's ti
 forecast it was built on, so this is a rough guide. Beyond 20 nm off the plan: "Too far off the
 plan to compare."
 
-## Chart (land), per race
+## Chart and boat profile (from the Lab's Deploy push)
 
-The Orin has no GDAL and no shoreline data, so the Lab builds the land mask (the one its own
-optimizer routes on: ENC or GSHHG, the active boat's draft) and it is copied aboard:
+The Orin has no GDAL and no shoreline data, so it can't build the land mask itself. Nothing is
+copied aboard by hand: the Lab's **Deploy → Push** builds both and the Pi carries them.
+
+```
+Lab Deploy push ──POST /course/load──────▶ Pi engine (the course + definition)
+                ──POST /reroute/assets───▶ Pi engine (chart + boat profile, one file)
+iPad Re-route ──▶ Pi ──POST /run {…, definition, assets}──▶ Orin (routes on what it was sent)
+```
+
+- **Chart:** the land mask the Lab's own optimizer routes on (its chart source, ENC or GSHHG),
+  built for the deployed course with the carried boat's draft (`vps/lab/app/orinassets.py`).
+- **Boat profile:** the Lab's reviewed one from its volume (helm factor, approved polar cells,
+  draft), with its version, for the boat the locked playbook was built with (its
+  `boat_model.boat_id`; `DEPLOY_BOAT_ID`, default `sr33`, only when the bundle doesn't say). If
+  that boat has no profile, nothing is sent for it (never another boat's) and the step is red.
+- **Grid checked first:** the Pi and the Orin derive the chart's grid from its box and cell size,
+  require it to match the stated size and stay under 20 M cells, before anything is allocated.
+- The Pi keeps them (`orin-assets.json` next to the engine store, atomic replace) and puts them
+  in every re-route request. The Orin keeps nothing, so it can't hold an older chart or profile
+  than the Pi's, and it needn't be on when the owner pushes.
+- **Pre-race only.** The Pi refuses new ones while a race session is running ("Racing now. Not
+  loaded."), with the same check and lock as the shore forecast plume. The ones already aboard
+  stay in use.
+- A push sends the pair whole. A part that couldn't be built (the shoreline didn't load) goes as
+  null, so the Pi drops the older one, and the Deploy step shows red with the reason.
+- The Deploy tab's boat check shows what the Pi holds: "re-route: chart for <course> · boat sr33
+  <version>".
+- The Orin uses the carried profile only if it is this boat's (`REROUTE_BOAT`), valid, and matches
+  its version. Otherwise its own copy, and the result says so.
+
+`prep_chart.py` prints the same chart from the Lab container, for a look or a test:
 
 ```bash
-# on the VPS, from the repo checkout
 docker exec -i sr33-dev-lab-1 python - bayview-mackinac-2026 cove_island \
-  < pi/orin/reroute/prep_chart.py > /tmp/chart.json          # ~8 KB; stderr says the file name
-scp /tmp/chart.json agent-c4@<orin>:c4-reroute/chart/bayview-mackinac-2026__cove_island.json
+  < pi/orin/reroute/prep_chart.py > /tmp/chart.json
 ```
 
 The file is LAND ONLY (`"kind": "land-v2"`): shoreline, shoals, rocks, with no pockets at the
@@ -139,9 +180,9 @@ pockets for the boat and the marks still to sail, each run). Files from older bu
 of date. The race's zones, island
 disks and rounding-side barriers are rebuilt on the Orin from what's left of the course, so the
 barrier of an island already rounded never blocks a later leg (pure Python, no shoreline data).
-`prep_chart.py` refuses to write a mask with no land in it (the shoreline didn't load) unless
-it's given `--open-water`; the Orin also refuses an empty mask not flagged open water ("Chart has
-no land in it. Route doesn't check the shore.").
+The Lab won't build a mask with no land in it (the shoreline didn't load); the Pi refuses one
+not flagged open water; the Orin also refuses it ("Chart has no land in it. Route doesn't check
+the shore."). The Deploy never flags open water; `prep_chart.py --open-water` can.
 
 The boat is a new start point, so the run opens the Lab's usual start pocket (0.5 nm) around it in
 the land mask before the race layer goes on: a boat close to shore is never boxed in by a
@@ -155,12 +196,12 @@ Re-route not run."
 Without a usable land file the run uses those race obstacles alone. Island disks are always
 built for them, whatever the coastline source (under ENC the Lab leaves them to ENC land).
 
-Needs the Lab build that has `obstacles.field_to_dict` (this PR). The file also carries a fingerprint
+The chart also carries a fingerprint
 of what it was built from: the course (marks, islands, rounding sides), the race's zones and the
 no-go depth. The Orin checks it against the definition aboard. If the course was re-deployed since
 (a new exclusion zone, a moved mark, another draft), the mask is not used: the run avoids the
 current islands and zones only, and says "Chart is out of date. Route doesn't check the shore."
-Rebuild and copy the chart after every course change. The mask must also cover what's left of
+Push from Deploy after every course change; it rebuilds the chart. The mask must also cover what's left of
 the course with the boat in it (padded 0.5°). If the boat has sailed outside it, the mask is not
 used either: "Chart doesn't cover the boat. Route doesn't check the shore." The islands and zones
 are then built over the wider area.
@@ -194,10 +235,8 @@ On the Orin, as `agent-c4`, from an up-to-date `~/Agent_C4` checkout. It uses th
 (`~/plume-venv`, same packages; see `pi/orin/plume/README.md`), so set that up first.
 
 ```bash
-mkdir -p ~/c4-reroute/chart ~/c4-reroute/ingested/boats
-# the Lab's reviewed boat profile (helm factor, approved polar overlay), if it differs from the repo's:
-scp <vps>:<lab ingested>/boats/sr33.json ~/c4-reroute/ingested/boats/sr33.json
-# the race's chart (see "Chart")
+mkdir -p ~/c4-reroute
+# the chart and the reviewed boat profile come with the Deploy push (see "Chart and boat profile")
 
 sudo cp ~/Agent_C4/pi/systemd/sr33-orin-reroute.service /etc/systemd/system/
 sudo systemctl daemon-reload
@@ -206,9 +245,9 @@ journalctl -u sr33-orin-reroute -n 20    # "listening on 10.10.10.2:8210; runs o
 # then, from the Pi:  curl -s http://10.10.10.2:8210/status   → {"state": "idle", ...}
 ```
 
-The Pi engine needs this build (the `/reroute` endpoints, and `/course/load` keeping the
-definition). Re-push the course from the Lab's Deploy tab once after the engine update, so the
-definition is aboard.
+The Pi engine needs this build (the `/reroute` endpoints, `/reroute/assets`, and `/course/load`
+keeping the definition). Push from the Lab's Deploy tab once after the engine update, so the
+definition, the chart and the boat profile are aboard.
 
 Remove: `sudo systemctl disable --now sr33-orin-reroute`, delete the unit, `rm -rf ~/c4-reroute`.
 
@@ -221,8 +260,8 @@ Remove: `sudo systemctl disable --now sr33-orin-reroute`, delete the unit, `rm -
 | `REROUTE_ALLOW_FROM` | `10.10.10.1,127.0.0.1` | who may call it |
 | `GRIB_CACHE` | `~/c4-plume/gribcache` | the plume's cache |
 | `REROUTE_DIR` | `~/c4-reroute` | state, jobs, last result |
-| `REROUTE_CHART_DIR` | `$REROUTE_DIR/chart` | land masks, `<race_id>__<course_id>.json` |
-| `REROUTE_BOAT` | `sr33` | boat profile id |
+| `REROUTE_CHART_DIR` | `$REROUTE_DIR/chart` | only for a Pi from before the Deploy carried the chart: `<race_id>__<course_id>.json` |
+| `REROUTE_BOAT` | `sr33` | boat profile id; a carried profile for another boat isn't used |
 | `REROUTE_DOWNLOAD_BUDGET_S` / `REROUTE_REQUEST_TIMEOUT_S` | `180` / `20` | downloads, when online |
 | `REROUTE_API_TIMEOUT_S` | `60` | one ICON/GEM load, in all (capped by what's left of the budget) |
 | `REROUTE_ROUTE_BUDGET_S` | `300` | optimizer time cap |
@@ -235,4 +274,6 @@ Remove: `sudo systemctl disable --now sr33-orin-reroute`, delete the unit, `rm -
 `pi/orin/reroute/test_reroute.py` (Lab image): the weather rules, the remaining course, one full
 offline run from a fixture GRIB, the job lifecycle (busy, done, error, too long), the HTTP API.
 `vps/agent/test_orinroute.py`: the Pi side, including refusal with the Orin unreachable.
+`vps/agent/test_orinassets.py` and `vps/lab/test_deploy_orin_assets.py`: the chart and boat
+profile from the Deploy push (#139, #140).
 `vps/lab/test_routerun.py`: the Lab's route is unchanged by the factoring. All run in `make ci`.
