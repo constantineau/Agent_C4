@@ -757,6 +757,12 @@ for name, carry, warn in (
     bb, info, note = job.pick_boat(carry)
     check(f"{name} → not used, the Orin's own, said", bb == REPO_BOAT
           and info["source"] == "orin" and note == warn)
+for name, field, value in (("polar_adjustments = 1", "polar_adjustments", 1),
+                           ("helm factor not a number", "helm_factor", "fast"),
+                           ("a draft too large for a float", "draft_m", 10 ** 400)):
+    _b = dict(REVIEWED, **{field: value})
+    bb, info, note = job.pick_boat(dict(CARRY, boat=_b, boat_version=boat_profile.version(_b)))
+    check(f"a carried profile with {name} → not used, no crash", bb == REPO_BOAT and note == job.BAD_BOAT)
 bb, info, note = job.pick_boat({"chart": None, "boat": None})
 check("the push carried no profile → the Orin's own, warned", info["source"] == "orin"
       and note == job.NOT_DEPLOYED_BOAT)

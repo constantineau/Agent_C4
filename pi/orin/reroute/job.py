@@ -352,7 +352,10 @@ def pick_boat(carried):
     warn = NOT_DEPLOYED_BOAT
     b = (carried or {}).get("boat")
     if isinstance(b, dict):
-        errs, _w = boat_profile.validate(b)
+        try:          # types first (validate converts values), and never a crash on a bad one
+            errs = boat_profile.shape_errors(b) or boat_profile.validate(b)[0]
+        except (ValueError, TypeError, OverflowError):
+            errs = ["bad values"]
         if b.get("boat_id") != BOAT_ID:
             warn = OTHER_BOAT
         elif errs or carried.get("boat_version") != boat_profile.version(b):

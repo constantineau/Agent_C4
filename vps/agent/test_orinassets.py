@@ -108,6 +108,8 @@ BAD = [
     ("zero cell size", dict(GOOD, chart=dict(CHART, res_deg=0))),
     ("no box", dict(GOOD, chart={k: v for k, v in CHART.items() if k != "bbox"})),
     ("profile for another boat than named", dict(GOOD, boat_id="bravo")),
+    ("nx = 1e309", dict(GOOD, chart=dict(CHART, nx=1e309))),
+    ("a 400-digit number in the box", dict(GOOD, chart=dict(CHART, bbox=[10 ** 400, 42.5, -83.5, -81.5]))),
     ("a cell size that divides to infinity", dict(GOOD, chart=dict(CHART, res_deg=1e-320))),
     ("mask bytes other than 0 and 1", dict(GOOD, chart=dict(CHART, mask_zb64=base64.b64encode(
         zlib.compress(bytes([0] * 5 + [2] + [0] * 22))).decode()))),
@@ -118,10 +120,40 @@ BAD = [
     ("profile that doesn't match its version", dict(GOOD, boat_version="0" * 12)),
     ("profile not a dict", dict(GOOD, boat=["x"])),
 ]
+for name, field, value in (("polar_adjustments = 1", "polar_adjustments", 1),
+                           ("a polar cell without numbers", "polar_adjustments", [{"tws": "x"}]),
+                           ("helm factor not a number", "helm_factor", "fast"),
+                           ("helm factor NaN", "helm_factor", float("nan")),
+                           ("draft too large for a float", "draft_m", 10 ** 400),
+                           ("wave coefficients not numbers", "wave_coeffs", {"k_up": "x"}),
+                           ("jib crossovers not a list", "jib_crossovers", "J1"),
+                           ("code 0 band not numbers", "code0", {"tws_max": "x"}),
+                           ("cert polar rows not triples", "cert_polar", [[1, 2]])):
+    _b = dict(BOAT, **{field: value})
+    BAD.append((f"profile with {name} (correctly hashed)",
+                dict(GOOD, boat=_b, boat_version=boat_profile.version(_b))))
 for name, body in BAD:
     r = OA.load(body, now=2000)
     check(f"{name} → refused", r["loaded"] is False and r["detail"])
 check("…and the held file never changed", open(PATH).read() == before)
+check("…and GET still answers", OA.get()["available"] is True)
+_summary = OA.summary
+
+
+def broken_summary(*a, **k):
+    raise TypeError("boom")
+
+
+OA.summary = broken_summary
+r = OA.load(dict(GOOD, course_id="c3", chart=dict(CHART, course_id="c3")), now=2010)
+OA.summary = _summary
+check("anything that fails on the candidate refuses it before the write", r["loaded"] is False
+      and open(PATH).read() == before)
+with open(PATH, "w") as f:                             # a stored file summary can't read
+    json.dump({"received_at": 1, "assets": dict(GOOD, boat=dict(BOAT, polar_adjustments=1))}, f)
+check("a stored file summary can't read → GET says none, no 500", OA.get()["available"] is False)
+with open(PATH, "w") as f:
+    f.write(before)
 r = OA.load(dict(GOOD, chart=dict(CHART, active=False)), now=2050)
 check("a chart sent as inactive is stored active (derived from its mask)", r["loaded"]
       and OA.for_run({"race_id": "r1"}, "c")["chart"]["active"] is True)

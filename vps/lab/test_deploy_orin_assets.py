@@ -131,7 +131,10 @@ for name, bad in (("tiny cells with nx = ny = 1 (16 TB)", EVIL),
         check(f"field_from_dict: {name} → ValueError", False)
     except ValueError:
         check(f"field_from_dict: {name} → ValueError", True)
-for name, bad in (("a cell size that divides to infinity", dict(ch, res_deg=1e-320)),
+for name, bad in (("nx = 1e309", dict(ch, nx=1e309)),
+                  ("a 400-digit number in the box", dict(ch, bbox=[10 ** 400] + ch["bbox"][1:])),
+                  ("a layer count of 1e309", dict(ch, layers={"coastline": 1e309})),
+                  ("a cell size that divides to infinity", dict(ch, res_deg=1e-320)),
                   ("mask bytes other than 0 and 1", dict(ch, mask_zb64=__import__("base64").b64encode(
                       __import__("zlib").compress(bytes([2]) * (ch["nx"] * ch["ny"]))).decode()))):
     try:
@@ -145,6 +148,10 @@ inact = geo.field_from_dict(dict(ch, active=False, safety_depth="deep", source=N
 land_lat, land_lon = ch["bbox"][1] + 0.1, ch["bbox"][2] + 0.1      # inside fake_build's land block
 check("active is derived from the mask, not taken from the payload", inact.active is True
       and inact.blocked(land_lat, land_lon))
+check("a safety depth too large for a float → None, no crash",
+      geo.field_from_dict(dict(ch, safety_depth=10 ** 400)).safety_depth is None)
+check("the repo's and the reviewed SR33 profiles have the right shape",
+      boat_profile.shape_errors(repo) == [] and boat_profile.shape_errors(reviewed) == [])
 check("provenance fields are cleaned, not trusted", inact.safety_depth is None
       and isinstance(inact.source, str))
 empty_d = geo.field_to_dict(geo.ObstacleField(tuple(ch["bbox"]), res_deg=ch["res_deg"]))

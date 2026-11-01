@@ -517,7 +517,7 @@ def field_from_dict(d: dict):
         raise ValueError("not a c4.obstacles/v1 field")
     try:
         bbox, res = tuple(float(x) for x in d["bbox"]), float(d["res_deg"])
-    except (ValueError, TypeError, KeyError) as exc:
+    except (ValueError, TypeError, KeyError, OverflowError) as exc:
         raise ValueError(f"bad grid: {type(exc).__name__}") from None
     if len(bbox) != 4 or not all(math.isfinite(x) for x in bbox + (res,)) or res <= 0 \
             or bbox[0] <= bbox[1] or bbox[3] <= bbox[2]:   # (n, s, w, e)
@@ -534,7 +534,7 @@ def field_from_dict(d: dict):
     try:
         if (nx, ny) != (int(d["nx"]), int(d["ny"])):
             raise ValueError("grid does not match its box")
-    except (KeyError, TypeError) as exc:
+    except (KeyError, TypeError, OverflowError) as exc:      # nx = 1e309 → OverflowError
         raise ValueError(f"bad grid: {type(exc).__name__}") from None
     field = ObstacleField(bbox, res_deg=res)
     try:
@@ -554,13 +554,17 @@ def field_from_dict(d: dict):
         raise ValueError("bad layers")
     try:
         field.layers.update({str(k): int(v) for k, v in layers.items()})
-    except (ValueError, TypeError) as exc:
+    except (ValueError, TypeError, OverflowError) as exc:
         raise ValueError(f"bad layers: {type(exc).__name__}") from None
     # provenance only (reported, never routed on): the depth the chart was built for is bound by
     # the fingerprint, which the Orin checks against the boat it routes with
     field.source = str(d.get("source") or field.source)[:40]
     sd = d.get("safety_depth")
-    field.safety_depth = float(sd) if isinstance(sd, (int, float)) and math.isfinite(sd) else None
+    try:
+        field.safety_depth = float(sd) if isinstance(sd, (int, float)) and not isinstance(sd, bool) \
+            and math.isfinite(sd) else None
+    except OverflowError:                       # an int too large for a float
+        field.safety_depth = None
     # derived from the mask, never taken from the payload: an inactive field ignores every cell
     field.active = any(field.mask)
     return field

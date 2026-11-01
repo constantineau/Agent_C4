@@ -55,7 +55,7 @@ def grid_dims(chart):
         n, s, w, e = (float(x) for x in chart["bbox"])
         res = float(chart["res_deg"])
         stated = (int(chart["nx"]), int(chart["ny"]))
-    except (KeyError, TypeError, ValueError):
+    except (KeyError, TypeError, ValueError, OverflowError):    # e.g. nx = 1e309, a 400-digit int
         return None, None
     if not all(math.isfinite(x) for x in (n, s, w, e, res)) or res <= 0 or n <= s or e <= w:
         return None, None
@@ -111,7 +111,13 @@ def validate(body):
     if boat is not None:
         if not isinstance(boat, dict):
             return False, "bad boat profile"
-        errs, _w = boat_profile.validate(boat)
+        bad = boat_profile.shape_errors(boat)       # types first: validate() converts values
+        if bad:
+            return False, f"boat profile: {bad[0]}"
+        try:
+            errs, _w = boat_profile.validate(boat)
+        except (ValueError, TypeError, OverflowError):
+            return False, "boat profile: bad values"
         if errs:
             return False, f"boat profile: {errs[0]}"
         if body.get("boat_version") != boat_profile.version(boat):
@@ -145,18 +151,26 @@ def load(body, now=None):
     """Store a pushed chart + boat profile (one file, atomic replace) → the /reroute/assets answer.
     A null chart or profile replaces what was held: the boat never keeps an older one as this
     push's. Refused while a race session is running."""
-    ok, why = validate(body)
+    # everything that reads the candidate runs BEFORE the atomic replace: a payload that would
+    # trip any of it is refused and never replaces good assets
+    try:
+        ok, why = validate(body)
+        if ok:
+            t = int(time.time() if now is None else now)
+            answer = dict(summary(body, t), loaded=True)
+            text = json.dumps({"received_at": t, "assets": body}, separators=(",", ":"),
+                              allow_nan=False)
+    except (ValueError, TypeError, OverflowError, AttributeError) as exc:
+        ok, why = False, f"bad payload ({type(exc).__name__})"
     if not ok:
         return {"loaded": False, "detail": why}
-    text = json.dumps({"received_at": None, "assets": body}, separators=(",", ":"))
     if len(text) > MAX_BYTES:
         return {"loaded": False, "detail": "Chart and boat profile too large."}
     with _LOCK, plume._session_lock():
         if plume.race_session():
             return {"loaded": False, "detail": RACING}
-        t = int(time.time() if now is None else now)
-        _write(json.dumps({"received_at": t, "assets": body}, separators=(",", ":")))
-    return dict(summary(body, t), loaded=True)
+        _write(text)
+    return answer
 
 
 def _read():
@@ -184,9 +198,12 @@ def summary(a, received_at=None):
 def get():
     """What's held for the Orin (no geometry): race, course, chart yes/no, boat id + version."""
     rec = _read()
-    if not rec:
-        return {"available": False, "note": "No chart or boat profile aboard."}
-    return dict(summary(rec["assets"], rec.get("received_at")), available=True)
+    try:
+        if rec:
+            return dict(summary(rec["assets"], rec.get("received_at")), available=True)
+    except (ValueError, TypeError, AttributeError):
+        pass                       # a file from an older build that summary can't read
+    return {"available": False, "note": "No chart or boat profile aboard."}
 
 
 def for_run(definition, course_id):
