@@ -13,7 +13,8 @@ One pass (`run_once`, run by a systemd timer every 15 min as a short-lived proce
      or its ETAs are over → the boat's own position from GET /conditions.
   2. If there's internet, download any NEW model cycle for that route's box (bbox-subset NOMADS
      GRIBs, ECMWF open data, Open-Meteo ICON/GEM — the Lab's own sources and cache layout) and
-     record it. No internet → skip the downloads and keep the last runs.
+     record it. No internet → skip the downloads and keep the last runs; if the target changed
+     while offline (new store key), resample the model files already cached, with no network.
   3. Build the plume (the exact c4.plume/v1 shape the engine and console already use), mark it
      `source: onboard`, POST it to the engine's /plume/onboard. The engine only takes that from
      the Orin's cable address (10.10.10.2).
@@ -212,6 +213,87 @@ class BackoffFetch:
             pass
 
 
+class CacheOnlyFetch:
+    """Offline: resample model runs already in the GRIB cache — never touches the network. Used when
+    the target changed while offline (the boat fell another hour behind, so the ETA shift and the
+    store key changed) and the new target has no store yet: without it nothing would be pushed and
+    the engine would keep the samples for the old ETAs. Takes each model's newest cached cycle for
+    this box; the API-grid models (ICON/GEM) need the network and are skipped. A run's `at` is set
+    to when its files were downloaded, so the plume's age stays honest."""
+
+    def __init__(self, fetch_run=None):
+        self.fetch_run = fetch_run or lab.fetch_run
+        self.downloaded_at = {}
+        self._parser = None
+
+    def parser(self):
+        from app.wind import grib
+        if self._parser is None and grib.ISOLATE:
+            self._parser = grib.IsolatedGribParser()
+        return self._parser
+
+    def close(self):
+        if self._parser is not None:
+            self._parser.close()
+
+    @staticmethod
+    def newest_cached(source, bbox):
+        """The newest cycle with a cached file for this model + box, or None."""
+        probe = os.path.basename(source._cache_path(dt.datetime(2000, 1, 1), 0, "det", bbox))
+        suffix = probe[probe.rindex("_"):]                  # _<bbox hash>.grib2
+        try:
+            names = os.listdir(os.path.join(os.environ["GRIB_CACHE"], source.name))
+        except OSError:
+            return None
+        cycles = []
+        for n in names:
+            parts = n.split("_")
+            if n.endswith(suffix) and n.startswith(source.name + "_") and "_det_" in n:
+                try:
+                    cycles.append(dt.datetime.strptime(parts[-4], "%Y%m%d%H").replace(tzinfo=dt.timezone.utc))
+                except (ValueError, IndexError):
+                    continue
+        return max(cycles) if cycles else None
+
+    def __call__(self, source, bbox, times, now, _parser=None):
+        if hasattr(source, "load_series"):
+            return None
+        cyc = self.newest_cached(source, bbox)
+        if cyc is None:
+            return None
+        return self.fetch_run(_CachedOnly(source, cyc, self), bbox, times, now, self.parser())
+
+    def stamp(self, st, now):
+        """Runs this pass added get `at` = their files' download time, not now."""
+        for m, t in self.downloaded_at.items():
+            for r in (st.get("runs") or {}).get(m) or []:
+                if r.get("at") == int(now):
+                    r["at"] = int(t)
+        return st
+
+
+class _CachedOnly:
+    """A model source that only reads the cache: its freshest cycle is the newest cached one, and
+    `fetch` returns a cached file or None — never a download."""
+
+    def __init__(self, src, cycle, owner):
+        self._src, self._cycle, self._owner = src, cycle, owner
+
+    def pick_cycle(self, now=None, min_horizon_h=0):
+        return self._cycle
+
+    def fetch(self, cycle, fhr, member, bbox, timeout=None):
+        path = self._src._cache_path(cycle, fhr, member, bbox)
+        if not (os.path.exists(path) and os.path.getsize(path) > 100):
+            return None
+        d = self._owner.downloaded_at
+        d[self._src.name] = max(d.get(self._src.name, 0), os.path.getmtime(path))
+        return path
+
+    def __getattr__(self, k):
+        return getattr(self._src, k)
+
+
 class _Pinned:
     """A model source whose freshest cycle is pinned (the last one that was actually posted)."""
 
@@ -307,10 +389,18 @@ def run_once(now=None, get=engine_get, post=engine_post, record=None, is_online=
         finally:
             fetch.close()
     else:
-        _log("offline — keeping the last runs")
         st = lab.load_store(spec["key"])
         if st:
+            _log("offline — keeping the last runs")
             lab.prune(st, now)
+        else:
+            _log("offline, new target — resampling the cached model files")
+            fetch = CacheOnlyFetch()
+            try:
+                st = fetch.stamp(record(spec, now=now, on_progress=_log, fetch=fetch), now)
+            finally:
+                fetch.close()
+            lab.save_store(st)
     plume = build(st, now)
     out = {"ok": True, "key": spec["key"], "basis": spec["basis"], "online": net,
            "models": {m["model"]: len(m["runs"]) for m in (plume or {}).get("models", [])}}

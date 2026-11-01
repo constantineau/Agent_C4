@@ -18,7 +18,7 @@ Two sources, two files:
     data is legal in-race, so it is taken while racing. It is only accepted from the Orin's
     boat-local address (the direct Pi↔Orin cable, `PLUME_ONBOARD_FROM`, default 10.10.10.2) and
     never through a proxy, so nothing on shore can post as "onboard".
-`get` serves whichever of the two holds the newer weather.
+`get` serves whichever of the two holds the newer weather, judged by model cycle (`prefer_onboard`).
 """
 import json
 import math
@@ -213,13 +213,45 @@ def _built(rec):
     return b if _num(b) else 0
 
 
+def _cycles(rec):
+    """{model: newest model cycle (epoch)} in a stored plume."""
+    out = {}
+    for m in ((rec or {}).get("plume") or {}).get("models") or []:
+        cs = [r.get("cycle") for r in m.get("runs") or [] if _num(r.get("cycle"))]
+        if cs:
+            out[m.get("model")] = max(cs)
+    return out
+
+
+def prefer_onboard(onboard, shore):
+    """Which plume holds the newer WEATHER — judged by model cycle, not by when it was sampled
+    (a shore GFS 12Z recorded at 16:00 beats an onboard GFS 06Z sampled at 16:15). Over the models
+    both carry, the source with the newer cycle on more of them wins; a tie goes to the one whose
+    freshest shared model is newer; still tied (or nothing shared), the more recently recorded
+    (`built_at`), and onboard on a full tie."""
+    if not onboard or not onboard.get("plume"):
+        return False
+    if not shore:
+        return True
+    a, b = _cycles(onboard), _cycles(shore)
+    common = set(a) & set(b)
+    if common:
+        votes = sum((a[m] > b[m]) - (a[m] < b[m]) for m in common)
+        if votes:
+            return votes > 0
+        fa, fb = max(a[m] for m in common), max(b[m] for m in common)
+        if fa != fb:
+            return fa > fb
+    return _built(onboard) >= _built(shore)
+
+
 def get(now=None):
-    """The plume to show + how old it is: the onboard one when it holds weather at least as new as
-    the shore one, else the shore one. `age_s` = since the newest model run was recorded (what
-    "data age" means to the crew); `received_age_s` = since the boat last got it."""
+    """The plume to show + how old it is: whichever of onboard / shore holds the newer model runs
+    (`prefer_onboard`). `age_s` = since the newest model run was recorded (what "data age" means
+    to the crew); `received_age_s` = since the boat last got it."""
     now = time.time() if now is None else now
     shore, onboard = _read(), _read(_onboard_path())
-    if onboard and onboard.get("plume") and (not shore or _built(onboard) >= _built(shore)):
+    if prefer_onboard(onboard, shore):
         return _onboard_view(onboard, now)
     if not shore:
         return {"available": False, "note": "no forecast plume aboard yet — it arrives from the "

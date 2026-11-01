@@ -22,7 +22,9 @@ Every 15 min (systemd timer, short-lived process):
    Each target gets its own run store, keyed by what the samples depend on: route geometry +
    ETAs + shift, or the snapped point. A moved boat or a replaced playbook never reuses old samples.
 2. If the internet is up (a 5 s TCP probe to NOMADS), download any NEW cycle of
-   gfs, nam, hrrr, ecmwf, icon, gem for the route's box. Offline: keep the last runs.
+   gfs, nam, hrrr, ecmwf, icon, gem for the route's box. Offline: keep the last runs. If the
+   target changed while offline (e.g. the boat fell another hour behind), resample the model
+   files already cached, with no network (ICON/GEM need the network and drop out until back online).
 3. Build the plume, mark it `source: onboard`, `POST /plume/onboard` to the engine.
 4. Delete cached GRIBs older than `GRIB_KEEP_H` (30 h), and run stores of targets untouched for 48 h.
 
@@ -30,7 +32,9 @@ A cycle that is due by the model's nominal lag but not posted yet (ECMWF is ofte
 re-probed at most once an hour. A newer due cycle is tried at once.
 
 The console shows it as `Onboard · GFS 12z, 40 min old` and never as frozen. The engine shows
-whichever of the shore and onboard plumes holds the newer weather.
+whichever of the shore and onboard plumes holds the newer weather, judged by model cycle: over the
+models both carry, the one with the newer cycle on more models wins; a tie goes to the newer
+freshest shared model; then the more recently recorded; onboard on a full tie.
 
 ## Cost (measured on the Orin, 2026-11-01, Mackinac box)
 

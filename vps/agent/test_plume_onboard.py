@@ -107,11 +107,40 @@ check("...and once racing it is refused like any shore plume",
       plume.load(dict(fake, key="claims2"), now=NOW + 10)["loaded"] is False)
 check("...and shows frozen", plume.get(NOW + 20)["frozen"] is True)
 
-print("newer weather wins:")
-plume.load_onboard(dict(ONBOARD, built_at=NOW - 5000), ORIN, now=NOW)
-check("older onboard than the shore plume → shore shown", plume.get(NOW)["source"] == "shore")
-plume.load_onboard(dict(ONBOARD, built_at=NOW - 5), ORIN, now=NOW)
-check("newer onboard → onboard shown", plume.get(NOW)["source"] == "onboard")
+print("newer weather wins — by model cycle, not by when it was sampled:")
+H = 3600
+
+
+def mk(models_cycles, built):
+    return {"plume": {"built_at": built, "models": [
+        {"model": m, "runs": [{"cycle": c, "at": built, "pts": []}, {"cycle": c - 6 * H, "at": built, "pts": []}]}
+        for m, c in models_cycles.items()]}}
+
+
+C12 = NOW - 4 * H
+check("shore GFS 12Z recorded 16:00 beats onboard GFS 06Z sampled 16:15",
+      plume.prefer_onboard(mk({"gfs": C12 - 6 * H}, NOW), mk({"gfs": C12}, NOW - 900)) is False)
+check("onboard GFS 18Z beats shore GFS 12Z (the frozen shore plume mid-race)",
+      plume.prefer_onboard(mk({"gfs": C12 + 6 * H}, NOW - 9000), mk({"gfs": C12}, NOW)) is True)
+check("more shared models newer onboard → onboard, even if shore's HRRR is an hour newer",
+      plume.prefer_onboard(mk({"gfs": C12 + 6 * H, "nam": C12 + 6 * H, "hrrr": C12}, NOW),
+                           mk({"gfs": C12, "nam": C12, "hrrr": C12 + H}, NOW)) is True)
+check("split vote → the freshest shared model decides",
+      plume.prefer_onboard(mk({"gfs": C12 + 6 * H, "hrrr": C12}, NOW), mk({"gfs": C12, "hrrr": C12 + 7 * H}, NOW)) is False)
+check("models only one side has don't vote (ECMWF only ashore)",
+      plume.prefer_onboard(mk({"gfs": C12 + 6 * H}, NOW), mk({"gfs": C12, "ecmwf": C12 + 6 * H}, NOW)) is True)
+check("nothing shared → the more recently recorded",
+      plume.prefer_onboard(mk({"hrrr": C12}, NOW), mk({"gfs": C12}, NOW - 60)) is True
+      and plume.prefer_onboard(mk({"hrrr": C12}, NOW - 60), mk({"gfs": C12}, NOW)) is False)
+check("same cycles everywhere → onboard on a full tie",
+      plume.prefer_onboard(mk({"gfs": C12}, NOW), mk({"gfs": C12}, NOW)) is True)
+older = {"model": "gfs", "runs": [dict(RUNS[0], cycle=START - 30 * H, at=NOW - 5)]}
+plume.load_onboard(dict(ONBOARD, built_at=NOW - 5, models=[older]), ORIN, now=NOW)
+check("through get(): onboard sampled later but an older GFS cycle → shore shown",
+      plume.get(NOW)["source"] == "shore")
+newer = {"model": "gfs", "runs": [dict(RUNS[0], cycle=START + 6 * H, at=NOW - 5)]}
+plume.load_onboard(dict(ONBOARD, built_at=NOW - 5000, models=[newer]), ORIN, now=NOW)
+check("through get(): onboard with the newer GFS cycle → onboard shown", plume.get(NOW)["source"] == "onboard")
 os.remove(plume._path())
 check("onboard alone → onboard shown", plume.get(NOW)["source"] == "onboard")
 os.remove(plume._onboard_path())

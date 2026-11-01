@@ -76,8 +76,7 @@ class FixtureGFS(models.GFS):
 
     def fetch(self, cycle, fhr, member, bbox, timeout=60):
         FETCHED.append(fhr)
-        return write_grib(os.path.join(os.environ["GRIB_CACHE"], "gfs", f"f{fhr:03d}.grib2"),
-                          u=-(5.0 + fhr / 3.0), v=0.0)
+        return write_grib(self._cache_path(cycle, fhr, member, bbox), u=-(5.0 + fhr / 3.0), v=0.0)
 
 
 models.MODELS["gfs"] = FixtureGFS()
@@ -143,6 +142,25 @@ out = ob.run_once(now=NOW + 1800, get=get, post=post, record=boom, is_online=lam
 check("no download attempted, last runs pushed", out["ok"] and out["online"] is False
       and POSTS[-1][1]["models"][0]["runs"][0]["cycle"] == int(CYCLE.timestamp()))
 check("its age keeps counting (built_at unchanged)", POSTS[-1][1]["built_at"] == NOW)
+
+print("offline, and the target changed (fell another hour behind → new key):")
+FETCHED.clear()
+behind = dict(TRACK, points=[dict(pt, t=pt["t"] - 3600) for pt in TRACK["points"]])   # ETAs → new key
+s_new = ob.resolve_spec(behind, COND, NOW + 2400)
+check("a key with no store yet", ob.lab.load_store(s_new["key"]) is None)
+ENGINE["/playbook/track"] = behind
+_g = os.path.join(os.environ["GRIB_CACHE"], "gfs")
+for _n in os.listdir(_g):                                   # downloaded half an hour before NOW
+    os.utime(os.path.join(_g, _n), (NOW - 1800, NOW - 1800))
+n_posts = len(POSTS)
+out = ob.run_once(now=NOW + 2400, get=get, post=post, record=record, is_online=lambda: False)
+pb = POSTS[-1][1] if len(POSTS) > n_posts else None
+check("still pushes: resampled from the cached GRIBs", pb is not None and pb["key"] == s_new["key"]
+      and pb["models"][0]["runs"][0]["cycle"] == int(CYCLE.timestamp()))
+check("no download attempted (cache only)", FETCHED == [])
+check("the age is when the files were downloaded, not now", pb is not None and pb["built_at"] == NOW - 1800)
+check("the new store is kept for the next pass", ob.lab.load_store(s_new["key"]) is not None)
+ENGINE["/playbook/track"] = TRACK
 
 print("engine trouble never crashes a pass:")
 out = ob.run_once(now=NOW, get=lambda _p: None, post=post, record=record, is_online=lambda: True)
@@ -260,7 +278,8 @@ n = ob.prune_stores(keep_key=a2["key"], now=NOW)
 check("old targets' stores pruned after 48 h, the current one kept",
       n >= 1 and not os.path.exists(oldkey) and os.path.exists(os.path.join(store_dir, cur)))
 check("the back-off state is never pruned as a store", os.path.exists(os.path.join(store_dir, "misses.state")))
-old = os.path.join(os.environ["GRIB_CACHE"], "gfs", "f000.grib2")
+gdir = os.path.join(os.environ["GRIB_CACHE"], "gfs")
+old = os.path.join(gdir, sorted(os.listdir(gdir))[0])
 os.utime(old, (NOW - 40 * 3600, NOW - 40 * 3600))
 n = ob.prune_gribs(now=NOW)
 check("GRIBs older than GRIB_KEEP_H deleted, newer kept",
