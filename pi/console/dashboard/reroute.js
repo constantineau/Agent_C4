@@ -28,6 +28,7 @@
   const FALLBACK_WHY = "Pi route: one forecast, no shore check.";
   const OLD_COURSE = "Route is for an old course.";
   const INCOMPLETE = "Route incomplete.";
+  const NO_ZONES = "No zones or rounding sides aboard. Redeploy the course.";
 
   const plural = (n, w) => n + " " + w + (n === 1 ? "" : "s");
   function hhmm(epochS) {
@@ -111,7 +112,8 @@
     return { source: src.source, engine: orin ? "Orin" : "Pi", head: head, wx: wx, who: who,
       shape: bits.join(" · "), labels: labels, warnings: other,
       age: fin ? agoTxt(nowS - fin) : "", finished_at: fin, old: !!r.old_course,
-      incomplete: r.complete === false };
+      incomplete: r.complete === false,
+      noZones: !!r.no_zones || warns.indexOf(NO_ZONES) >= 0 };
   }
 
   /* what a tap came to, from the POST's answer (code null = no answer: no link) */
@@ -200,6 +202,8 @@
     if (fallback) sub = FALLBACK_WHY;
     else if (last && last.old && sayKind !== "note") sub = OLD_COURSE;
     else if (last && last.incomplete && sayKind !== "note") sub = INCOMPLETE;
+    // a route made without the course's zones says so on the face, never silently
+    else if (last && last.noZones && !last.old && !progress) sub = NO_ZONES;
     else if (last && !last.old && !last.incomplete && sayKind !== "last" && !progress) sub = "Last: " + last.head + (last.age ? " · " + last.age : "");
 
     return {

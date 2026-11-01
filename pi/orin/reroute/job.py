@@ -62,6 +62,7 @@ NO_BOAT = "Boat profile missing. Route uses the raw polars."
 BOAT_IN_ZONE = "Boat is inside an exclusion zone. Re-route not run."
 BOAT_IN_ISLAND = "Boat is inside an island's keep-out. Re-route not run."
 INCOMPLETE = "Route incomplete."
+NO_ZONES = "No zones or rounding sides aboard. Redeploy the course."
 PLAN_NEAR_NM = 20.0          # compare with the plan only while the boat is this close to it
 
 
@@ -426,7 +427,7 @@ def run(req, now=None, on_progress=None, on_phase=None, is_online=None):
         if chart_note:
             warnings.insert(0, chart_note)
         if not full:
-            warnings.insert(0, "Course without islands or rounding sides.")
+            warnings.insert(0, NO_ZONES)
         if not boat:
             warnings.insert(0, NO_BOAT)
         until = weather.get("forecast_until")

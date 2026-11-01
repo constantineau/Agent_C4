@@ -44,6 +44,8 @@ NO_ORIN = "Can't reach the Orin. Re-route not started."
 NO_ORIN_STATUS = "Can't reach the Orin."
 NO_POSITION = "No boat position yet."
 NO_COURSE = "No course loaded."
+NO_ZONES = "No zones or rounding sides aboard. Redeploy the course."
+PENDING_KEEP = 20          # requests remembered until their route comes back (per job id)
 
 
 def orin_url():
@@ -120,10 +122,31 @@ def bump_load_id(route):
     disk, e.g. the cloud, has no re-route to protect)."""
     try:
         with COURSE_LOCK:
-            # the stored definition carries the old id, so it no longer pairs with these marks
-            set_load_id(route, new_load_id())
+            load_id = new_load_id()
+            set_load_id(route, load_id)
+            _rebind_definition(route, load_id)
     except OSError as exc:
         print(f"[orinroute] could not bump the course load id: {exc}", flush=True)
+
+
+def _rebind_definition(route, load_id):
+    """A switch back to the course the definition was deployed for: the stored definition (its
+    zones, islands and rounding sides) is re-bound to the new load id, so the Orin keeps routing
+    around them. Only when it is that course: same route, and the marks aboard hash to the marks
+    it was deployed with (a moved mark or other marks → not re-bound, never a stale pair). Caller
+    holds COURSE_LOCK."""
+    rec = _read(_definition_path())
+    if not rec or rec.get("route") != route or not rec.get("marks_hash"):
+        return False
+    try:
+        have = _marks_hash([(m.get("name"), m.get("lat"), m.get("lon")) for m in NAV._marks(route)])
+    except Exception:  # noqa: BLE001
+        return False
+    if have != rec["marks_hash"]:
+        return False
+    rec["load_id"] = load_id
+    _write(_definition_path(), json.dumps(rec, separators=(",", ":")))
+    return True
 
 
 def current_course_hash():
@@ -329,13 +352,18 @@ def run(device=None, call=None):
         job = body.get("job_id")
         # what the Pi asked for, kept until the route comes back: who asked, and which course
         # position the route starts at (so the GPS output can tell the laps of a lapped course apart)
+        # Kept PER JOB: a later run never overwrites an earlier one's, so a route that finished
+        # unpolled and is fetched after a newer run is still matched to its own course.
         try:
             with _LOCK:
-                _write(_pending_path(), json.dumps(
-                    {"job_id": job, "device": dev, "asked_at": req["asked_at"],
-                     "course_hash": req.get("course_hash"),
-                     "route": req["route"], "next_index": req["next_index"],
-                     "marks": [m.get("name") for m in req["marks"]]}, separators=(",", ":")))
+                pend = _pending_all()
+                pend[str(job)] = {"device": dev, "asked_at": req["asked_at"],
+                                  "course_hash": req.get("course_hash"),
+                                  "route": req["route"], "next_index": req["next_index"],
+                                  "definition": req.get("definition") is not None,
+                                  "marks": [m.get("name") for m in req["marks"]]}
+                keep = sorted(pend.items(), key=lambda kv: kv[1].get("asked_at") or 0)[-PENDING_KEEP:]
+                _write(_pending_path(), json.dumps(dict(keep), separators=(",", ":")))
         except OSError:
             pass
         reroutelog.record("pressed", "orin", device=dev, outcome="started", job_id=job)
@@ -366,14 +394,28 @@ def stored():
     return r
 
 
-def _mark_idx(result):
-    """The course position of each of the route's marks, when the request it answers is known:
-    the Orin routes from the request's next mark on, in course order. Only kept when the names
-    line up with the course the request was made on; the GPS output checks them again."""
-    pend = _read(_pending_path()) or {}
+def _pending_all():
+    """{job_id: what the Pi asked for}. An older single-record file reads as one entry."""
+    raw = _read(_pending_path())
+    if not isinstance(raw, dict):
+        return {}
+    if "job_id" in raw and "next_index" in raw:          # the one-record shape before per-job
+        return {str(raw["job_id"]): raw}
+    return {k: v for k, v in raw.items() if isinstance(v, dict)}
+
+
+def _pending_for(job_id):
+    return _pending_all().get(str(job_id)) if job_id else None
+
+
+def _mark_idx(result, pend):
+    """The course position of each of the route's marks, from the request it answers: the Orin
+    routes from the request's next mark on, in course order. Only kept when the names line up
+    with the course the request was made on; the GPS output checks them again."""
+    pend = pend or {}
     names = result.get("marks") or []
     nxt, course = pend.get("next_index"), pend.get("marks") or []
-    if pend.get("job_id") != result.get("job_id") or not isinstance(nxt, int) or not names:
+    if not isinstance(nxt, int) or not names:
         return None
     idx = list(range(nxt, nxt + len(names)))
     if idx[-1] >= len(course) or any(course[i] != n for i, n in zip(idx, names)):
@@ -383,13 +425,20 @@ def _mark_idx(result):
 
 def _store(result):
     result = dict(result, label=LABEL, off_playbook=True, source="orin")
-    idx = _mark_idx(result)
+    pend = _pending_for(result.get("job_id"))           # THIS job's request, never another's
+    idx = _mark_idx(result, pend)
     if idx is not None:
         result["mark_idx"] = idx
-    pend = _read(_pending_path()) or {}
-    if pend.get("job_id") == result.get("job_id") and pend.get("course_hash"):
+    if pend and pend.get("course_hash"):
         # the course this route answers; unknown (None) counts as an old course
         result["course_hash"] = pend["course_hash"]
+    if pend and pend.get("definition") is False:
+        # routed on the marks alone: say so, whatever the Orin's own wording
+        warns = [w for w in (result.get("warnings") or []) if w != "Course without islands or rounding sides."]
+        if NO_ZONES not in warns:
+            warns.insert(0, NO_ZONES)
+        result["warnings"] = warns
+        result["no_zones"] = True
     with _LOCK:
         _write(_result_path(), json.dumps({"received_at": int(time.time()), "result": result},
                                           separators=(",", ":")))

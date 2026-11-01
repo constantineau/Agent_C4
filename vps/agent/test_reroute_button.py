@@ -441,6 +441,74 @@ NAV.set_active("race")
 check("a switch away and back → old course (the course may have changed meanwhile)",
       gpsout.show(source="reoptimize")["note"] == OLD)
 
+print("each Orin job keeps its own request (#143 review):")
+STATE["nav"] = dict(STATE["nav"], next_mark={"name": "A", "index": 1})
+orinroute.run("iPad 7", call=orin({("POST", "/run"): (202, {"ok": True, "job_id": "pA"})}))
+STATE["nav"] = dict(STATE["nav"], next_mark={"name": "Finish", "index": 2})
+orinroute.run("iPad 8", call=orin({("POST", "/run"): (202, {"ok": True, "job_id": "pB"})}))
+STATE["nav"] = dict(STATE["nav"], next_mark={"name": "A", "index": 1})
+RES_A = dict(RESULT, job_id="pA", finished_at=t_new + 20, complete=True, finish_eta=t_new + 900)
+# A finished unpolled, then B started and failed: A is fetched now, after B's request
+g = orinroute.tile(call=orin({("GET", "/status"): (200, {
+    "state": "error", "result_job_id": "pA",
+    "last": {"state": "error", "job_id": "pB", "detail": "Re-route failed. Try again."}}),
+    ("GET", "/result"): (200, RES_A)}))
+a_r = orinroute.stored()
+check("A stored with A's own course hash and mark positions",
+      a_r["job_id"] == "pA" and a_r["course_hash"] == orinroute.course_hash("race", MARKS)
+      and a_r["mark_idx"] == [1, 2])
+check("…so it isn't an old course, and the GPS takes it", g["result"]["old_course"] is False
+      and gpsout.show(source="orin")["shown"])
+
+print("a switch back to the deployed course keeps its zones (#143 review):")
+DEFN = {"race_id": "race", "courses": [{"id": "c", "start": {"lat": 44.0, "lon": -82.0},
+        "marks": [{"name": "A", "type": "buoy", "lat": 44.1, "lon": -82.0, "rounding": "port"},
+                  {"name": "Rock", "type": "island", "lat": 44.15, "lon": -81.9,
+                   "rounding": "starboard", "radius_nm": 0.3}],
+        "finish": {"points": [{"lat": 44.2, "lon": -82.0}]}}],
+        "zones": [{"name": "Box", "type": "exclusion",
+                   "geometry": {"north": 44.07, "south": 44.05, "west": -82.02, "east": -81.98}}]}
+check("deployed", orinroute.save_definition(DEFN, "c", "race")
+      and orinroute._definition_for("race", MARKS)[0] is not None)
+NAV.set_active("other")
+NAV.set_active("race")
+check("switch away and back: the definition is re-bound (zones kept)",
+      (orinroute._definition_for("race", MARKS)[0] or {}).get("zones"))
+req, _why = orinroute.build_request("iPad 9")
+check("…and the Orin request carries it", (req["definition"] or {}).get("race_id") == "race")
+NAV.set_active("other")
+NAV._marks = lambda route: moved                       # 'race' came back with a mark moved
+NAV.set_active("race")
+check("a moved mark: not re-bound (never a stale pair)",
+      orinroute._definition_for("race", moved) == (None, None))
+NAV._marks = lambda route: MARKS
+check("…nor once the marks are back (a new load is needed)",
+      orinroute._definition_for("race", MARKS) == (None, None))
+
+print("a re-route without the course's zones says so (#143 review):")
+orinroute.run("iPad 9", call=orin({("POST", "/run"): (202, {"ok": True, "job_id": "pC"})}))
+RES_C = dict(RESULT, job_id="pC", finished_at=t_new + 30, complete=True, warnings=[
+    "Course without islands or rounding sides."])
+g = orinroute.tile(call=orin({("GET", "/status"): (200, {
+    "state": "done", "result_job_id": "pC", "last": {"state": "done", "job_id": "pC"}}),
+    ("GET", "/result"): (200, RES_C)}), compact=True)
+check("Orin, no definition: the warning leads, plain", g["result"]["no_zones"] is True
+      and g["result"]["warnings"][0] == "No zones or rounding sides aboard. Redeploy the course."
+      and "Course without islands or rounding sides." not in g["result"]["warnings"])
+CALLS["allowed"] = True
+pi_nz = reoptimize.compute()
+check("Pi, no definition and no zones in the bundle: the same warning",
+      pi_nz["no_zones"] is True
+      and pi_nz["warnings"][0] == "No zones or rounding sides aboard. Redeploy the course.")
+check("redeploy", orinroute.save_definition(DEFN, "c", "race"))
+pi_z = reoptimize.compute()
+CALLS["allowed"] = False
+inside = [p for p in pi_z["path"] if 44.05 <= p["lat"] <= 44.07 and -82.02 <= p["lon"] <= -81.98]
+check("Pi with the deployed course: routes around its zone, no zone warning",
+      pi_z["available"] and pi_z["avoids_zones"] >= 1 and not inside and not pi_z.get("no_zones"))
+check("…and says it doesn't check the rounding sides",
+      "Pi route doesn't check rounding sides." in pi_z["warnings"])
+
 print("the real engine endpoints:")
 from fastapi.testclient import TestClient  # noqa: E402
 

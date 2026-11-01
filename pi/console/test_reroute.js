@@ -202,6 +202,17 @@ test("an incomplete Orin route: says so, never READY-looking, GPS off", () => {
   assert.ok(!/^Last:/.test(withSug.sub));
 });
 
+test("a route made without zones says so plainly on the face and in the detail", () => {
+  const nz = Object.assign({}, ORIN_ROUTE, { no_zones: true,
+    warnings: ["No zones or rounding sides aboard. Redeploy the course."] });
+  const x = v({ rr: Object.assign({}, IDLE, { state: "done", latest: "orin", result: nz }) });
+  assert.equal(x.sub, "No zones or rounding sides aboard. Redeploy the course.");
+  assert.deepEqual(x.last.warnings, ["No zones or rounding sides aboard. Redeploy the course."]);
+  const pi = RT.describe({ source: "pi", r: { available: true, computed_at: S - 10,
+    warnings: ["No zones or rounding sides aboard. Redeploy the course."] } }, S);
+  assert.equal(pi.noZones, true);
+});
+
 test("stale-safe: a held read shows its age; an old 'running' never blocks the button", () => {
   const rr = Object.assign({}, IDLE, { state: "running", progress: { elapsed_s: 30, expected_s: 70, pct: 40 } });
   const held = v({ rr: rr, rrAgeMs: 45000 });

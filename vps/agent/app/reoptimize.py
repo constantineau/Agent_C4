@@ -33,6 +33,8 @@ EXPECTED_S = 30           # what the progress bar assumes until a run has been t
 BUSY = "A re-route is already running."
 FAILED = "Re-route failed. Try again."
 NO_ROUTE_YET = "No Pi route yet."
+PI_NO_ROUNDING = "Pi route doesn't check rounding sides."
+NO_ROUNDING = "No rounding sides aboard. Redeploy the course."
 
 _LOCK = threading.Lock()
 _job = {"state": "idle", "job_id": None, "asked_by": None, "started_at": None,
@@ -152,10 +154,29 @@ def _inputs(route=None):
         return None, "No position yet."
     bundle = deviation._load_playbook()
     zdisks, polys = _parse_zones(bundle)
+    avoid = _avoid_disks(bundle) + zdisks                 # islands + circular zones = disks
+    # the DEPLOYED course (its zones and islands), when it is the course aboard: the same
+    # homework the Orin routes around, so the Pi fallback never drops a zone the bundle lacks
+    defn, cid = orinroute._definition_for(nav["route"], marks)
+    warnings = []
+    if defn:
+        from shared.race_def import course_obstacles
+        dob = {"obstacles": course_obstacles(defn, cid)}
+        dz, dp = _parse_zones(dob)
+        avoid += _avoid_disks(dob) + dz
+        polys = polys + dp
+        course = next((c for c in defn.get("courses") or [] if c.get("id") == cid), None) or {}
+        if any(m.get("type") == "island" and m.get("rounding") in ("port", "starboard")
+               for m in course.get("marks") or []):
+            warnings.append(PI_NO_ROUNDING)
+    elif not polys and not zdisks:
+        warnings.append(orinroute.NO_ZONES)               # never route silently without zones
+    else:
+        warnings.append(NO_ROUNDING)
     return {"nav": nav, "remaining": _remaining_marks(nav, marks), "slat": slat, "slon": slon,
             "live": (s.get("tws"), s.get("twd")), "bundle": bundle,
-            "avoid": _avoid_disks(bundle) + zdisks,       # islands + circular zones = disks
-            "polys": polys, "course_hash": orinroute.course_hash(nav["route"], marks)}, None
+            "avoid": avoid, "polys": polys, "warnings": warnings,
+            "course_hash": orinroute.course_hash(nav["route"], marks)}, None
 
 
 def compute(route=None):
@@ -165,8 +186,17 @@ def compute(route=None):
         inp, why = _inputs(route)
     if inp is None:
         return {"available": False, "note": why}
-    return _compute(inp["nav"], inp["remaining"], inp["slat"], inp["slon"], inp["live"],
-                    inp["bundle"], inp["avoid"], inp["polys"])
+    out = _compute(inp["nav"], inp["remaining"], inp["slat"], inp["slon"], inp["live"],
+                   inp["bundle"], inp["avoid"], inp["polys"])
+    return _with_warnings(out, inp)
+
+
+def _with_warnings(out, inp):
+    if out.get("available") and inp.get("warnings"):
+        out = dict(out, warnings=list(inp["warnings"]) + list(out.get("warnings") or []))
+        if orinroute.NO_ZONES in out["warnings"]:
+            out["no_zones"] = True
+    return out
 
 
 # ---- the stored route -------------------------------------------------------------------------
@@ -268,6 +298,7 @@ def _work(job_id, dev, inp):
     except Exception as exc:  # noqa: BLE001 — reported to the crew; the details go to the log
         print(f"[reoptimize] run failed: {type(exc).__name__}: {exc}", flush=True)
         out = {"available": False, "note": FAILED}
+    out = _with_warnings(out, inp)
     run_s = round(time.time() - t0, 1)
     now = int(time.time())
     if out.get("available"):
