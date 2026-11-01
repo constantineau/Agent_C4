@@ -186,7 +186,7 @@ def _recommendation(sel, conc, flt):
     if action == "off_script":
         return {"action": f"Off-book: {sel.get('value', 'sail the favoured side')}",
                 "vs_playbook": "departs", "target_variant": None,
-                "rationale": sel.get("why", "") + " No plan for this side. Use the new route.",
+                "rationale": sel.get("why", "") + " No plan for this side.",
                 "grounded_in": sel.get("driven_by", []) + ["get_selector"],
                 "urgency": "now" if sel.get("status") == "act" else "soon",
                 "confidence": _conf_label(min(0.7, conf))}, min(0.7, conf)

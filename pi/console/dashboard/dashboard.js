@@ -1073,7 +1073,7 @@
     const link = linkMessage(held.length ? Math.max.apply(null, held.map((k) => tiles[k].staleMs)) : 0);
     const focus = link ? link.text : !reachable ? "No live data from the boat." :
       held.length ? "Showing last values (" + fmtAge(Math.max.apply(null, held.map((k) => tiles[k].staleMs))) + " old). Boat slow to answer." :
-      flagged.length === 0 ? "All clear." :
+      flagged.length === 0 ? "Nothing flagged." :
       flagged.length === 1 ? "1 item needs attention." :
       flagged.length + " items need attention.";
     const d = applyBrief({ tiles, focus, notes, confidence: "engine", mode: "engine read" });
@@ -1560,7 +1560,7 @@
     }).join("") + "</div>" : "";
     return '<div class="st-syn y-' + synthStatus(s) + '"><div class="st-syn-head">' +
       '<span class="st-syn-tag">OVERALL</span>' +
-      (off ? '<span class="st-syn-badge">OFF PLAN</span>' : "") +
+      (off ? '<span class="st-syn-badge">OFF-BOOK</span>' : "") +
       '<span class="st-spacer"></span>' +
       '<span class="st-syn-mode">' + (s.mode === "llm" ? "AI" : "AUTO") + '</span>' +
       (conf ? '<span class="st-syn-conf">' + conf + ' conf</span>' : "") + "</div>" +
@@ -1570,7 +1570,7 @@
   function selectorHtml() {
     const s = currentSelector();
     if (!s || s.available === false || s.action === "na") return "";
-    const pill = { hold: "HOLD", switch: "SWITCH", off_script: "OFF PLAN" }[s.action] || "—";
+    const pill = { hold: "HOLD", switch: "SWITCH", off_script: "OFF-BOOK" }[s.action] || "—";
     return '<div class="st-rec sr-' + (s.status || "ok") + '">' +
       '<span class="sr-pill">' + pill + '</span>' +
       '<span class="sr-val">' + stripTags(s.value || s.target_label || "") + '</span>' +
@@ -1903,7 +1903,7 @@
     ul.innerHTML = "";
     if (!d.notes || !d.notes.length) {
       const li = document.createElement("li"); li.className = "tg-ok";
-      li.innerHTML = '<span class="note-txt">All clear. Tap a tile for detail.</span>';
+      li.innerHTML = '<span class="note-txt">Nothing flagged. Tap a tile for detail.</span>';
       ul.appendChild(li); return;
     }
     for (const n of d.notes) {
