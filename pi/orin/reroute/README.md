@@ -36,6 +36,10 @@ iPad ──GET /api/reroute───────▶ Pi engine ──GET /status,
    all). Offline it picks the cached cycle that covers the run best and doesn't step back cycles.
    Cache files are keyed by download box, so the run uses a box the cache already holds when one
    covers the course: the plume's box (the plan's route + 0.5°), or one an earlier re-route used.
+   Files from any cached box that holds the run's box count too.
+   If the internet probe passes but the downloads fail or run out of time, any model that came out
+   short is reloaded from its best cached cycle, as offline. The result lists those models
+   (`weather.from_cache_after_failed_download`) and gives their real age.
 5. `routerun.run_course` routes it (Lab defaults; no Opus briefing, no map grids, no venue model
    skill, current and sea state off unless enabled and online).
 6. The result goes to `last_result.json`. The Pi fetches it once, stores it, and serves it to the
@@ -123,7 +127,8 @@ scp /tmp/chart.json agent-c4@<orin>:c4-reroute/chart/bayview-mackinac-2026__cove
 The file is LAND ONLY (`"kind": "land"`): shoreline, shoals, rocks. The race's zones, island
 disks and rounding-side barriers are rebuilt on the Orin from what's left of the course, so the
 barrier of an island already rounded never blocks a later leg (pure Python, no shoreline data).
-Without a usable land file the run uses those race obstacles alone.
+Without a usable land file the run uses those race obstacles alone. Island disks are always
+built for them, whatever the coastline source (under ENC the Lab leaves them to ENC land).
 
 Needs the Lab build that has `obstacles.field_to_dict` (this PR). The file also carries a fingerprint
 of what it was built from: the course (marks, islands, rounding sides), the race's zones and the

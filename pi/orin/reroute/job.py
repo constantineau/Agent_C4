@@ -142,12 +142,14 @@ def chart_path(race_id, course_id):
     return os.path.join(CHART_DIR, f"{safe(race_id)}__{safe(course_id)}.json")
 
 
-def _race_obstacles(definition, course_id, bbox, res_deg, source, depth):
+def _race_obstacles(definition, course_id, bbox, res_deg, depth):
     """The race's own obstacles for what's LEFT of the course: zones, island disks and the
     rounding-side barriers of islands still to round (an island already rounded leaves no barrier
-    to block a later leg). Pure Python, no shoreline data."""
+    to block a later leg). Pure Python, no shoreline data. Built as "natural_earth" whatever the
+    configured coastline source: under "enc" the builder skips the island disks (it expects ENC
+    land polygons, which this build doesn't load), and an island must never read as open water."""
     return geo.build_for_course(definition, course_id, bbox, res_deg=res_deg, coastline_on=False,
-                                use_cache=False, source=source, safety_depth=depth)
+                                use_cache=False, source="natural_earth", safety_depth=depth)
 
 
 def load_obstacles(definition, course_id, full_definition, full_course_id, boat):
@@ -179,11 +181,10 @@ def load_obstacles(definition, course_id, full_definition, full_course_id, boat)
                 except (ValueError, KeyError, TypeError):
                     land = None
                 if land is not None and need and W._contains(land.bbox, need):
-                    race = _race_obstacles(definition, course_id, land.bbox, land.res,
-                                           land.source, depth)
+                    race = _race_obstacles(definition, course_id, land.bbox, land.res, depth)
                     n = len(land.mask)
                     if len(race.mask) != n:               # can't happen: same box, same cell size
-                        return _race_obstacles(definition, course_id, need, geo.RES_DEG, None,
+                        return _race_obstacles(definition, course_id, need, geo.RES_DEG,
                                                depth), NO_CHART
                     land.mask = bytearray((int.from_bytes(land.mask, "little")
                                            | int.from_bytes(race.mask, "little")).to_bytes(n, "little"))
@@ -194,7 +195,7 @@ def load_obstacles(definition, course_id, full_definition, full_course_id, boat)
                 # outside the mask, land would read as open water: don't claim it was checked
                 note = NO_COVER if land is not None else OLD_CHART
     # no usable land mask: the race's own obstacles for the remaining course, boat included
-    return _race_obstacles(definition, course_id, need, geo.RES_DEG, None, depth), note
+    return _race_obstacles(definition, course_id, need, geo.RES_DEG, depth), note
 
 
 # ---- the comparison with the plan -------------------------------------------------------------
@@ -263,27 +264,42 @@ def run(req, now=None, on_progress=None, on_phase=None, is_online=None):
 
     # weather: the box the cache already holds, if one covers what's left of the course
     online = (is_online or plume_svc.online)()
-    budget = W.Budget(online)
     need = optimizer.course_bbox(d, cid)
     known = []
     plan_pts = lab_plume.clean_path(((req.get("plan") or {}).get("points")))
     if len(plan_pts) >= 2:
         known.append(lab_plume._bbox_for({"path": plan_pts}))      # the plume's own box
     known += W.load_boxes(STATE_DIR)
-    bbox, why = W.choose_bbox(need, known, online)
     t_end = now + optimizer.estimate_hours(d, cid) * 3600
     names_req = [m for m in (req.get("models") or MODELS)]
-    sources = W.sources_for(names_req, budget, bbox, now, t_end)
+
+    def attempt(budget):
+        bbox, why = W.choose_bbox(need, known, budget.online)
+        sources = W.sources_for(names_req, budget, bbox, now, t_end, known)
+        res = routerun.run_course(
+            d, cid, now, sources, avoid=True, per_model=False, resolution=RESOLUTION,
+            use_waves=USE_WAVES and budget.online, use_current=USE_CURRENT and budget.online,
+            on_progress=say, on_phase=phase, boat=boat, model_skill=False, obstacles=field,
+            time_budget_s=ROUTE_BUDGET_S, fallback_tries=None if budget.online else 0,
+            bbox=bbox, t_end=t_end, briefing=False, grids=False)
+        return res, bbox, why
+
     say("online — new forecasts may download" if online else "offline — using saved forecasts")
-    res = routerun.run_course(
-        d, cid, now, sources, avoid=True, per_model=False, resolution=RESOLUTION,
-        use_waves=USE_WAVES and online, use_current=USE_CURRENT and online,
-        on_progress=say, on_phase=phase, boat=boat, model_skill=False, obstacles=field,
-        time_budget_s=ROUTE_BUDGET_S, fallback_tries=None if online else 0, bbox=bbox,
-        t_end=t_end, briefing=False, grids=False)
+    budget = W.Budget(online)
+    res, bbox, why = attempt(budget)
     if budget.downloads:
         W.remember_box(STATE_DIR, bbox)
+        known.insert(0, tuple(bbox))          # what just came down counts in a cache-only reload
+    cache_fallback = []
+    if online:
+        # the probe passed but downloads failed or ran out of time: any model the cache holds
+        # better than what came down gets its best cached cycle, exactly as offline
+        cache_fallback = W.short_models(res.get("windfield"), names_req, bbox, known, now, t_end)
+        if cache_fallback:
+            say("downloads fell short — using saved forecasts for " + ", ".join(cache_fallback))
+            res, bbox, why = attempt(W.Budget(False))
     weather = W.summarize(res.get("windfield"), now, budget, why)
+    weather["from_cache_after_failed_download"] = cache_fallback
     phase("saving")
     out = {"schema": SCHEMA, "label": LABEL, "off_playbook": True, "source": "orin",
            "job_id": req.get("job_id"), "asked_by": str(req.get("device") or "")[:40] or None,

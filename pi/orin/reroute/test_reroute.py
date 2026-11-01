@@ -171,6 +171,11 @@ d7, c7, _n = job.remaining_definition(BACK, "c", 1, 44.1, -82.0)      # before r
 f7, _ = job.load_obstacles(d7, c7, None, None, job._get_boat())
 check("before rounding it: disk and barrier both", f7.blocked(44.5, -82.0)
       and f7.layers["rounding_barrier"] > 0)
+_src = job.geo.COASTLINE_SOURCE
+job.geo.COASTLINE_SOURCE = "enc"                       # the Lab's ENC setting, no chart aboard
+f8, _ = job.load_obstacles(d6, c6, None, None, job._get_boat())
+job.geo.COASTLINE_SOURCE = _src
+check("coastline source ENC, no chart: the island is still solid", f8.blocked(44.5, -82.0))
 try:
     job.remaining_definition(DEF, "c", 4, 45.3, -82.4)
     check("past the finish → refused", False)
@@ -371,7 +376,36 @@ out5 = job.run(dict(far, definition=DEF3), now=NOW, is_online=lambda: False)
 check("the run doesn't claim land", out5["chart"]["land"] is False and out5["warnings"][0] == job.NO_COVER)
 write_chart(DEF)
 
-print("3e) an incomplete route makes no finish claim")
+print("3e) online, but the downloads fail: the forecasts aboard are used")
+_cache0 = models.CACHE
+models.CACHE = os.path.join(_tmp, "gribcache-fail")      # a cache with only yesterday's run
+OLD2 = dt.datetime(2026, 10, 31, 12, tzinfo=dt.timezone.utc)   # 29 h old, past the 2-cycle step-back
+for f in windfield._fhrs_for_cycle(GFS, OLD2, NOW, NOW + 30 * 3600):
+    write_grib(GFS._cache_path(OLD2, f, "det", plume_box), 4.2, 4.2)
+TRIED = []
+
+
+class DownGFS(models.GFS):
+    """The probe passed, but every download fails."""
+
+    def fetch(self, cycle, fhr, member, bbox, timeout=60):
+        TRIED.append(cycle)
+        return None
+
+
+models.MODELS["gfs"] = DownGFS()
+job.STATE_DIR = os.path.join(_tmp, "fresh-fail")
+out6 = job.run(REQ, now=NOW, is_online=lambda: True)
+models.MODELS["gfs"], models.CACHE = GFS, _cache0
+w6 = out6.get("weather") or {}
+check("downloads were tried", len(TRIED) > 0)
+check("a route anyway, from the saved run", out6["available"] and out6["complete"])
+check("its age said honestly (29 h)", [m["cycle"] for m in w6["models"]] == ["2026-10-31 12Z"]
+      and w6["newest_age_h"] == 29.0)
+check("online, no downloads, cache used for gfs", w6["online"] is True and w6["downloads"] == 0
+      and w6["from_cache_after_failed_download"] == ["gfs"])
+
+print("3f) an incomplete route makes no finish claim")
 _orig = job.routerun.run_course
 
 

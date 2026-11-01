@@ -91,22 +91,37 @@ def cached_fhrs(name, member, bbox, cache_dir=None):
 
 
 class GribSource:
-    """A live GRIB model source behind the cache-first, budgeted rules (see the module doc)."""
+    """A live GRIB model source behind the cache-first, budgeted rules (see the module doc).
+    `alt_boxes`: other cached download boxes that hold this run's box. Their files serve too (the
+    loader crops every frame to the course), so the plume's files count even when the run
+    downloads for its own box."""
 
-    def __init__(self, src, budget, bbox, t_start, t_end):
+    def __init__(self, src, budget, bbox, t_start, t_end, alt_boxes=()):
         self._src, self._budget = src, budget
         self._bbox, self._t0, self._t1 = bbox, t_start, t_end
+        self._alt = [tuple(b) for b in alt_boxes if tuple(b) != tuple(bbox) and _contains(b, bbox)]
 
     def __getattr__(self, k):
         return getattr(self._src, k)
+
+    def cached(self):
+        """{cycle: {fhr}} cached for this model under this run's box or any box holding it."""
+        out = {}
+        for b in [self._bbox] + self._alt:
+            for cyc, fh in cached_fhrs(self._src.name, "det", b).items():
+                out.setdefault(cyc, set()).update(fh)
+        return out
+
+    def cached_count(self, cyc):
+        return len(set(WFM._fhrs_for_cycle(self._src, cyc, self._t0, self._t1))
+                   & self.cached().get(cyc, set()))
 
     def best_cached_cycle(self):
         """The cached cycle with the most frames in this run's window; newest on a tie. None if
         nothing is cached for this box."""
         best = None
-        for cyc, have in cached_fhrs(self._src.name, "det", self._bbox).items():
-            want = set(WFM._fhrs_for_cycle(self._src, cyc, self._t0, self._t1))
-            n = len(want & have)
+        for cyc in self.cached():
+            n = self.cached_count(cyc)
             if n and (best is None or (n, cyc) > best):
                 best = (n, cyc)
         return best[1] if best else None
@@ -117,9 +132,10 @@ class GribSource:
         return self.best_cached_cycle() or self._src.pick_cycle(now, min_horizon_h=min_horizon_h)
 
     def fetch(self, cycle, fhr, member, bbox, timeout=None):
-        path = self._src._cache_path(cycle, fhr, member, bbox)
-        if os.path.exists(path) and os.path.getsize(path) > 100:
-            return path
+        for b in [bbox] + self._alt:
+            path = self._src._cache_path(cycle, fhr, member, b)
+            if os.path.exists(path) and os.path.getsize(path) > 100:
+                return path
         if not self._budget.can_download():
             return None
         try:
@@ -171,15 +187,37 @@ class ApiSource:
         return series, meta
 
 
-def sources_for(names, budget, bbox, t_start, t_end):
-    """Wrapped sources for the model names (unknown names and ensembles are dropped)."""
+def short_models(status, names, bbox, known, t_start, t_end):
+    """After an online load: the GRIB models that came out short (no frames, or under the Lab's
+    "enough" share) while the cache, read as offline would, holds more of the run's window. The
+    caller then reloads cache-only, so a failed download never hides forecasts already aboard."""
+    got = {m.get("model"): m for m in (status or {}).get("models") or []}
+    out = []
+    for n in names:
+        src = M.MODELS.get(n)
+        if src is None or src.kind != "deterministic" or hasattr(src, "load_series"):
+            continue
+        meta = got.get(n) or {}
+        frames, expected = meta.get("frames") or 0, meta.get("expected_frames") or 0
+        if frames and frames >= WFM.MIN_FRAME_FRAC * max(1, expected):
+            continue
+        cached = GribSource(src, Budget(False), bbox, t_start, t_end, alt_boxes=known)
+        cyc = cached.best_cached_cycle()
+        if cyc is not None and cached.cached_count(cyc) > frames:
+            out.append(n)
+    return out
+
+
+def sources_for(names, budget, bbox, t_start, t_end, known=()):
+    """Wrapped sources for the model names (unknown names and ensembles are dropped). `known`:
+    the other cached boxes; those that hold `bbox` serve files too."""
     out = []
     for n in names:
         src = M.MODELS.get(n)
         if src is None or src.kind != "deterministic":
             continue
         out.append(ApiSource(src, budget) if hasattr(src, "load_series")
-                   else GribSource(src, budget, bbox, t_start, t_end))
+                   else GribSource(src, budget, bbox, t_start, t_end, alt_boxes=known))
     return out
 
 
