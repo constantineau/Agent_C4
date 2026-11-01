@@ -77,8 +77,9 @@ def push(race_id):
          check=lambda r: r.get("loaded") is True)
     # the Orin re-route's chart + boat profile, built for THIS course and carried by the Pi with
     # each re-route request (#139, #140). Right after the course, so the two match.
+    # the boat the locked playbook was built with (else DEPLOY_BOAT_ID), never another's profile
     assets, problems = orinassets.build((pkg.get("course_load") or {}).get("definition"),
-                                       pkg.get("course_id"))
+                                       pkg.get("course_id"), bundle=bundle)
     step("pi-engine", "orin assets", f"{eng}/reroute/assets", assets,
          check=lambda r: r.get("loaded") is True)
     if problems and steps[-1]["ok"]:

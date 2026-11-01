@@ -711,6 +711,11 @@ check("carried chart for this course → used", lo_carried(DEF, good)[1] is None
 check("carried chart for an older course → out of date", lo_carried(DEF2, good)[1] == job.OLD_CHART)
 check("carried empty chart (shoreline didn't load) → refused",
       lo_carried(DEF, dict(good, mask_zb64=geo.field_to_dict(empty)["mask_zb64"]))[1] == job.NO_LAND)
+EVIL = dict(good, bbox=[46, 42, -84, -80], res_deg=0.000001, nx=1, ny=1,
+            mask_zb64=__import__("base64").b64encode(__import__("zlib").compress(b"\x01")).decode())
+t_evil = time.time()
+check("a carried chart with tiny cells and nx = ny = 1 → refused at once, not 16 TB",
+      lo_carried(DEF, EVIL)[1] == job.OLD_CHART and time.time() - t_evil < 30)
 check("carried chart of another kind → out of date",
       lo_carried(DEF, dict(good, kind="land"))[1] == job.OLD_CHART)
 with open(job.chart_path("huron", "c"), "w") as fh:            # an old hand-copied chart on disk…

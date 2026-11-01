@@ -54,7 +54,7 @@ D.pbstore.get = lambda pid: BUNDLE if pid == "r1__100" else None
 labstate.set("deploy:r1", {"playbook_id": "r1__100", "signature": "cd" * 8, "locked_at": 50})
 D._post_json = fake_post
 # the Orin assets step (chart + boat profile) is pinned in test_deploy_orin_assets.py
-D.orinassets.build = lambda d, cid: ({"schema": "c4.orin-assets/v1"}, [])
+D.orinassets.build = lambda d, cid, bundle=None: ({"schema": "c4.orin-assets/v1"}, [])
 
 res = D.push("r1")
 lp = D.last_push()

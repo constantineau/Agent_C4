@@ -17,6 +17,7 @@ the Lab; nothing here asks for it.
 """
 import base64
 import json
+import math
 import os
 import tempfile
 import threading
@@ -31,7 +32,7 @@ SCHEMA = "c4.orin-assets/v1"
 FIELD_SCHEMA = "c4.obstacles/v1"
 CHART_KIND = "land-v2"               # pi/orin/reroute/job.CHART_KIND
 MAX_BYTES = 1536 * 1024              # well under the Orin's 2 MB request cap, with the course
-MAX_CELLS = 20_000_000
+MAX_CELLS = 20_000_000              # = the Lab's obstacles.MAX_FIELD_CELLS
 RACING = "Racing now. Not loaded."
 _LOCK = threading.Lock()
 
@@ -45,6 +46,26 @@ def _str(x, n=120):
     return isinstance(x, str) and 0 < len(x) <= n
 
 
+def grid_dims(chart):
+    """(nx, ny) of a carried chart, derived from its box and cell size the way the Lab's
+    ObstacleField does, when they match the stated nx/ny and stay under MAX_CELLS; else
+    (None, None). Never trusts the stated size alone: a tiny cell size with nx = ny = 1 would make
+    the Orin allocate terabytes."""
+    try:
+        n, s, w, e = (float(x) for x in chart["bbox"])
+        res = float(chart["res_deg"])
+        stated = (int(chart["nx"]), int(chart["ny"]))
+    except (KeyError, TypeError, ValueError):
+        return None, None
+    if not all(math.isfinite(x) for x in (n, s, w, e, res)) or res <= 0 or n <= s or e <= w:
+        return None, None
+    nx = max(1, int(math.ceil((e - w) / res)))
+    ny = max(1, int(math.ceil((n - s) / res)))
+    if nx * ny > MAX_CELLS or (nx, ny) != stated:
+        return None, None
+    return nx, ny
+
+
 def _check_chart(chart, race_id, course_id):
     """(ok, reason) for a carried land chart. The Orin checks it again before routing."""
     if not isinstance(chart, dict):
@@ -55,10 +76,10 @@ def _check_chart(chart, race_id, course_id):
         return False, "chart has no fingerprint"
     if chart.get("race_id") != race_id or chart.get("course_id") != course_id:
         return False, "chart is for another course"
+    nx, ny = grid_dims(chart)
+    if nx is None:
+        return False, "bad chart grid"
     try:
-        nx, ny = int(chart["nx"]), int(chart["ny"])
-        if nx <= 0 or ny <= 0 or nx * ny > MAX_CELLS:
-            return False, "bad chart grid"
         d = zlib.decompressobj()
         mask = d.decompress(base64.b64decode(chart["mask_zb64"], validate=True), nx * ny + 1)
     except (KeyError, TypeError, ValueError, zlib.error):
@@ -86,6 +107,8 @@ def validate(body):
             return False, f"boat profile: {errs[0]}"
         if body.get("boat_version") != boat_profile.version(boat):
             return False, "boat profile version doesn't match"
+        if body.get("boat_id") is not None and body["boat_id"] != boat.get("boat_id"):
+            return False, "boat profile is for another boat"
     chart = body.get("chart")
     if chart is not None:
         ok, why = _check_chart(chart, body["race_id"], body["course_id"])

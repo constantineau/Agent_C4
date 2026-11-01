@@ -493,6 +493,7 @@ def cache_key(definition, course_id, bbox, res_deg=RES_DEG, *, source=None, safe
 
 # --- carry a built field to another computer (the boat's Orin, issue #124) ------------------------
 FIELD_SCHEMA = "c4.obstacles/v1"
+MAX_FIELD_CELLS = 20_000_000     # a carried field bigger than this is refused (a course box is ~0.5 M)
 
 
 def field_to_dict(field) -> dict:
@@ -521,9 +522,21 @@ def field_from_dict(d: dict):
     if len(bbox) != 4 or not all(math.isfinite(x) for x in bbox + (res,)) or res <= 0 \
             or bbox[0] <= bbox[1] or bbox[3] <= bbox[2]:   # (n, s, w, e)
         raise ValueError("bad grid")
+    # the grid the box and cell size make, checked BEFORE anything is allocated: a tiny res_deg
+    # with a small stated nx/ny would otherwise allocate terabytes
+    nx = max(1, int(math.ceil((bbox[3] - bbox[2]) / res)))
+    ny = max(1, int(math.ceil((bbox[0] - bbox[1]) / res)))
+    if nx * ny > MAX_FIELD_CELLS:
+        raise ValueError("grid too large")
+    try:
+        if (nx, ny) != (int(d["nx"]), int(d["ny"])):
+            raise ValueError("grid does not match its box")
+    except (KeyError, TypeError) as exc:
+        raise ValueError(f"bad grid: {type(exc).__name__}") from None
     field = ObstacleField(bbox, res_deg=res)
     try:
-        mask = zlib.decompress(base64.b64decode(d["mask_zb64"], validate=True))
+        dec = zlib.decompressobj()
+        mask = dec.decompress(base64.b64decode(d["mask_zb64"], validate=True), nx * ny + 1)
     except (ValueError, TypeError, KeyError, zlib.error) as exc:   # binascii.Error is a ValueError
         raise ValueError(f"bad mask: {type(exc).__name__}") from None
     if (field.nx, field.ny) != (int(d["nx"]), int(d["ny"])) or len(mask) != field.nx * field.ny:

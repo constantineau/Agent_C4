@@ -101,7 +101,37 @@ os.environ["DEPLOY_BOAT_ID"] = "nope"
 p4, problems4 = OA.build(DEF, "c")
 os.environ.pop("DEPLOY_BOAT_ID")
 check("no profile for the boat → nothing half-built", p4["boat"] is None and p4["chart"] is None
-      and problems4 == [OA.NO_BOAT])
+      and problems4 == [OA.NO_BOAT.format(boat="nope")])
+
+print("the boat the playbook was built with:")
+pb_deep, pr_deep = OA.build(DEF, "c", bundle={"boat_model": {"boat_id": "deep"}})
+check("the bundle's boat, its profile and its draft", pr_deep == [] and pb_deep["boat"]["boat_id"] == "deep"
+      and pb_deep["boat_id"] == "deep"
+      and pb_deep["chart"]["fingerprint"] == geo.course_fingerprint(DEF, "c", boats.safety_depth_m(deep)))
+pb_x, pr_x = OA.build(DEF, "c", bundle={"boat_model": {"boat_id": "ghost"}})
+check("the bundle's boat has no profile → nothing sent for another boat, said",
+      pb_x["boat"] is None and pb_x["chart"] is None and pb_x["boat_id"] == "ghost"
+      and pr_x == ["No boat profile for ghost. Chart and profile not sent."])
+check("a bundle that doesn't say → DEPLOY_BOAT_ID", OA.boat_id({"boat_model": {}}) == "sr33"
+      and OA.boat_id(None) == "sr33" and OA.boat_id({"boat_model": {"boat_id": " "}}) == "sr33")
+
+print("a carried field's grid is checked before anything is allocated:")
+EVIL = dict(geo.field_to_dict(geo.ObstacleField((46.0, 42.0, -84.0, -80.0), res_deg=1.0)),
+            res_deg=0.000001, nx=1, ny=1)
+EVIL["mask_zb64"] = __import__("base64").b64encode(__import__("zlib").compress(b"\x01")).decode()
+for name, bad in (("tiny cells with nx = ny = 1 (16 TB)", EVIL),
+                  ("nx/ny that don't match the box", dict(ch, nx=ch["nx"] + 1)),
+                  ("a box past the cap", dict(ch, res_deg=0.0001, nx=60000, ny=60000)),
+                  ("reversed box", dict(ch, bbox=[ch["bbox"][1], ch["bbox"][0]] + ch["bbox"][2:])),
+                  ("NaN box", dict(ch, bbox=[float("nan")] + ch["bbox"][1:])),
+                  ("zero cell size", dict(ch, res_deg=0)),
+                  ("no nx", {k: v for k, v in ch.items() if k != "nx"})):
+    try:
+        geo.field_from_dict(bad)
+        check(f"field_from_dict: {name} → ValueError", False)
+    except ValueError:
+        check(f"field_from_dict: {name} → ValueError", True)
+check("a good one still round-trips", geo.field_from_dict(ch).nx == ch["nx"])
 
 print("the Pi's own check takes it:")
 pkg_dir = os.path.join("/repo", "vps", "agent", "app")
@@ -113,6 +143,9 @@ spec.loader.exec_module(piapp)
 pi_oa = importlib.import_module("piapp.orinassets")
 check("valid on the Pi", pi_oa.validate(p) == (True, ""))
 check("…and a no-chart push is valid too (it clears the old one)", pi_oa.validate(p2) == (True, ""))
+check("the Pi refuses the 16 TB grid too", pi_oa.validate(dict(p, chart=dict(EVIL, race_id="r1",
+      course_id="c", kind="land-v2", fingerprint=ch["fingerprint"])))[0] is False)
+check("same cell cap on both sides", pi_oa.MAX_CELLS == geo.MAX_FIELD_CELLS)
 check("same chart format on both sides", pi_oa.CHART_KIND == OA.CHART_KIND == "land-v2")
 
 print("the push:")
@@ -160,13 +193,26 @@ st = res["steps"][1]
 check("no chart built → sent (old one dropped), but the step is not green",
       not st["ok"] and st["detail"]["error"] == OA.NO_LAND and posted[-2][1]["chart"] is None)
 
+PI["assets"] = {"loaded": True, "chart": False}
+D.pbstore.get = lambda pid: {"race_id": "r1", "variants": [{"id": "a"}],
+                             "boat_model": {"boat_id": "ghost"}} if pid == "pb1" else None
+labstate.set("deploy:r1", {"playbook_id": "pb1"})
+posted.clear()
+res = D.push("r1")
+st = res["steps"][1]
+sent = [b for u, b in posted if u == "/reroute/assets"][0]
+check("playbook built for a boat with no profile → red, short, no other boat's profile sent",
+      not st["ok"] and st["detail"]["error"] == "No boat profile for ghost. Chart and profile not sent."
+      and sent["boat"] is None and sent["chart"] is None)
+labstate.set("deploy:r1", {})
+
 PI["assets"] = {"loaded": True}
 PI["course"] = {"loaded": False, "detail": "Couldn't save the course. Try again."}
 res = D.push("r1")
 check("course not saved on the Pi → the course step fails (it used to pass)", not res["steps"][0]["ok"]
       and not res["ok"])
 
-for s in (OA.NO_LAND, OA.NO_MARKS, OA.NO_BOAT, OA.BUILD_FAILED):
+for s in (OA.NO_LAND, OA.NO_MARKS, OA.NO_BOAT.format(boat="sr33"), OA.BUILD_FAILED):
     check(f"short: {s!r}", len(s.split()) <= 12)
 
 print("ALL OK" if ok else "FAILED")

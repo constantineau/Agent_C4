@@ -149,7 +149,11 @@ iPad Re-route ──▶ Pi ──POST /run {…, definition, assets}──▶ Or
 - **Chart:** the land mask the Lab's own optimizer routes on (its chart source, ENC or GSHHG),
   built for the deployed course with the carried boat's draft (`vps/lab/app/orinassets.py`).
 - **Boat profile:** the Lab's reviewed one from its volume (helm factor, approved polar cells,
-  draft), for the boat the Deploy is for (`DEPLOY_BOAT_ID`, default `sr33`), with its version.
+  draft), with its version, for the boat the locked playbook was built with (its
+  `boat_model.boat_id`; `DEPLOY_BOAT_ID`, default `sr33`, only when the bundle doesn't say). If
+  that boat has no profile, nothing is sent for it (never another boat's) and the step is red.
+- **Grid checked first:** the Pi and the Orin derive the chart's grid from its box and cell size,
+  require it to match the stated size and stay under 20 M cells, before anything is allocated.
 - The Pi keeps them (`orin-assets.json` next to the engine store, atomic replace) and puts them
   in every re-route request. The Orin keeps nothing, so it can't hold an older chart or profile
   than the Pi's, and it needn't be on when the owner pushes.

@@ -12,8 +12,10 @@ engine (`POST /reroute/assets`) right after the course; the Pi keeps it and hand
 with each re-route request. Built only when the owner presses Push: nothing here runs on its own.
 
 The chart and the profile go together, so the chart's no-go depth is always the carried boat's.
-The boat is the one the Deploy is for (`DEPLOY_BOAT_ID`, default sr33 = C4), not whichever boat
-is active in the Lab at the time.
+The boat is the one the locked playbook was built with (its `boat_model.boat_id`), so the playbook
+and the re-route sail the same boat. Only when the bundle doesn't say (no playbook locked, an older
+bundle) is it `DEPLOY_BOAT_ID` (default sr33 = C4). Never whichever boat is active in the Lab now,
+and never a different boat's profile when that one is missing.
 """
 import os
 import time
@@ -31,11 +33,15 @@ LAND_LAYERS = ("coastline", "shoal", "obstruction")
 # Lab-facing reasons (shown on the Deploy step)
 NO_MARKS = "Course has no mark positions. No chart built."
 NO_LAND = "No land in the chart. The shoreline didn't load."
-NO_BOAT = "No boat profile for the boat."
+NO_BOAT = "No boat profile for {boat}. Chart and profile not sent."
 BUILD_FAILED = "Chart build failed. Try again."
 
 
-def boat_id():
+def boat_id(bundle=None):
+    """The boat to carry: the one the playbook bundle was built with, else DEPLOY_BOAT_ID."""
+    bid = ((bundle or {}).get("boat_model") or {}).get("boat_id")
+    if isinstance(bid, str) and bid.strip():
+        return bid.strip()
     return os.environ.get("DEPLOY_BOAT_ID", "sr33")
 
 
@@ -67,14 +73,15 @@ def build_chart(definition, course_id, boat, open_water=False):
     return out, None
 
 
-def build(definition, course_id, now=None):
+def build(definition, course_id, now=None, bundle=None):
     """The Deploy payload → (payload, problems). `problems` lists what's missing (empty when the
     chart and the profile are both in it). A missing part is sent as null, never left out: the
     boat then drops what it held, so an older chart or profile is never taken for this push's."""
     problems = []
-    boat = boats.get_boat(boat_id())
+    bid = boat_id(bundle)
+    boat = boats.get_boat(bid)
     if boat is None:
-        problems.append(NO_BOAT)
+        problems.append(NO_BOAT.format(boat=str(bid)[:40]))
     else:
         errs, _warns = boat_profile.validate(boat)
         if errs:
@@ -89,7 +96,7 @@ def build(definition, course_id, now=None):
             chart, why = None, BUILD_FAILED
         if why:
             problems.append(why)
-    payload = {"schema": SCHEMA, "race_id": (definition or {}).get("race_id"),
+    payload = {"schema": SCHEMA, "boat_id": bid, "race_id": (definition or {}).get("race_id"),
                "course_id": course_id, "built_at": int(time.time() if now is None else now),
                "chart": chart, "boat": boat,
                "boat_version": boat_profile.version(boat) if boat else None}
