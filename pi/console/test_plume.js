@@ -112,6 +112,27 @@ test("an empty plume draws nothing", () => {
   assert.equal(PL.chartSvg(null, { now: NOW }), "");
 });
 
+test("only supported model ids are drawn, and names are escaped", () => {
+  const odd = { models: [{ model: "<b>x</b>", runs: [run(NOW, 10, 0)] }, PLUME.models[2]] };
+  assert.deepEqual(PL.models(odd).map((m) => m.model), ["gfs"]);
+  const svg = PL.chartSvg(odd, { now: NOW, allRuns: true });
+  assert.ok(!/<b>/.test(svg) && !/<b>/.test(PL.legendHtml(odd)));
+  assert.equal(PL.esc('a<"b">&\''), "a&lt;&quot;b&quot;&gt;&amp;&#39;");
+  const badPts = { models: [{ model: "gfs", runs: [{ cycle: NOW, at: NOW, pts: [[NOW, "9", 10]] }] }] };
+  assert.equal(PL.available(badPts), false, "a run with non-number points is ignored");
+});
+
+test("frozen at the start: from the gun until the race is over", () => {
+  const pl = Object.assign({}, PLUME, { race_start: NOW + H, race_end: NOW + 30 * H });
+  assert.equal(PL.isFrozen(pl, NOW), false);
+  assert.equal(PL.isFrozen(pl, NOW + H), true);
+  assert.equal(PL.isFrozen(pl, NOW + 29 * H), true);
+  assert.equal(PL.isFrozen(pl, NOW + 30 * H), false);
+  assert.equal(PL.isFrozen(PLUME, NOW), false, "no race window → never frozen");
+  assert.equal(PL.isFrozen(Object.assign({}, PLUME, { frozen: true }), NOW), true, "the engine's flag wins");
+  assert.match(PL.frozenText(pl), /^Frozen at the start · \d\d:\d\d$/);
+});
+
 let failed = 0;
 for (const [name, fn] of cases) {
   try { fn(); console.log("  [OK ] " + name); }

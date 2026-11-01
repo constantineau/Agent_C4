@@ -14,13 +14,20 @@
 
   const ORDER = ["gfs", "nam", "hrrr", "ecmwf", "icon", "gem"];
   const LABEL = { gfs: "GFS", nam: "NAM", hrrr: "HRRR", ecmwf: "ECMWF", icon: "ICON", gem: "GEM" };
-  const label = (m) => LABEL[m] || String(m || "?").toUpperCase();
-  const cls = (m) => "pl-" + (LABEL[m] ? m : "other");
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const known = (m) => Object.prototype.hasOwnProperty.call(LABEL, m);
+  const label = (m) => esc(known(m) ? LABEL[m] : String(m || "?").toUpperCase());
+  const cls = (m) => "pl-" + (known(m) ? m : "other");
   const angDiff = (a, b) => ((a - b + 540) % 360) - 180;     // a−b in [−180, 180]
-  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
   function models(plume) {
-    const ms = ((plume && plume.models) || []).filter((m) => m && m.runs && m.runs.length);
+    // only the supported models, and only runs whose numbers are numbers
+    const num = (x) => typeof x === "number" && isFinite(x);
+    const ms = ((plume && plume.models) || []).filter((m) => m && known(m.model) && Array.isArray(m.runs))
+      .map((m) => ({ model: m.model, runs: m.runs.filter((r) => r && num(r.cycle) && Array.isArray(r.pts) &&
+        r.pts.every((p) => Array.isArray(p) && p.length === 3 && p.every(num))) }))
+      .filter((m) => m.runs.length);
     return ms.slice().sort((a, b) => {
       const ia = ORDER.indexOf(a.model), ib = ORDER.indexOf(b.model);
       return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
@@ -73,6 +80,17 @@
      so a healthy feed is never more than ~2 h behind */
   const OLD_S = 3 * 3600;
   const isOld = (plume) => !!(plume && plume.age_s != null && plume.age_s > OLD_S);
+
+  /* frozen at the gun: from the race start until the race is over the boat keeps the pre-start
+     plume (RRS 41) — say so instead of looking live */
+  function isFrozen(plume, now) {
+    if (!plume) return false;
+    if (plume.frozen === true) return true;
+    const rs = plume.race_start, re = plume.race_end;
+    return typeof rs === "number" && now >= rs && (typeof re !== "number" || now < re);
+  }
+  const hhmm = (epoch) => { const d = new Date(epoch * 1000); return ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2); };
+  const frozenText = (plume) => "Frozen at the start · " + hhmm(plume.race_start);
 
   const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   function cycleText(epoch, now) {
@@ -217,8 +235,8 @@
     return "+" + (hAhead || 6) + " h: " + (lo === hi ? lo : lo + "–" + hi) + " kts · " + sp.n + " model" + (sp.n === 1 ? "" : "s");
   }
 
-  const api = { ORDER, LABEL, label, models, available, valueAt, spreadAt, ageText, isOld, OLD_S,
-    cycleText, chartSvg, legendHtml, runTimesHtml, summary, esc };
+  const api = { ORDER, LABEL, label, known, models, available, valueAt, spreadAt, ageText, isOld, OLD_S,
+    isFrozen, frozenText, cycleText, chartSvg, legendHtml, runTimesHtml, summary, esc };
   root.C4Plume = api;
   if (typeof module === "object" && module.exports) module.exports = api;
 })(typeof window !== "undefined" ? window : globalThis);

@@ -191,7 +191,7 @@
                    why: "Playbook recommends starting Left (52% of forecasts agree). Wind is oscillating — no persistent shift, so the Left gameplan stands; play the shifts within the band.", consider: "Hold the gameplan — tack on the headers, no branch yet.", clears: "—", based: ["playbook:left", "agreement 52%", "get_tactics"], conf: "high" },
         forecast:{ status: "ok", value: null,
                    rows: [{ label: "Now", emph: true, cols: [arrowKts(250, 10)] }, { label: "+60 min", cols: [arrowKts(256, 13)] }, { label: "+120 min", cols: [arrowKts(262, 15)] }, { sep: true, label: "FORECAST VS. ACTUAL" }, { hdr: true, cols: ["forecast", "actual"] }, { label: "−60 min", cols: [arrowKts(244, 13), arrowKts(243, 14)] }, { label: "−120 min", cols: [arrowKts(240, 16), arrowKts(238, 17)] }],
-                   why: "Forecast wind speed + direction (arrows show direction; north wind points down). Building to ~15 kts and veering right. \"Forecast vs. actual\" compares the earlier forecast for −60/−120 min ago against what actually happened — within ~1 kt, verifying well.", consider: "Plan the gear for the build.", clears: "—", based: ["fetch_forecast + engine archive"], conf: "high" },
+                   why: "Building to ~15 kts, wind shifting right. Verifying within 1 kt.", consider: "Plan the gear for the build.", clears: "—", based: ["fetch_forecast + engine archive"], conf: "high" },
         sail:    { status: "ok", value: "J1", sub: "in range · no change ahead", why: "Reading the crew-set sail (J1 on the sails bar) — right for 12 kts upwind.", consider: "No change.", clears: "TWS > 16 kts", based: ["sails bar: crew set J1", "get_sail: optimal J1"], conf: "high" },
         eta:     { status: "ok", value: "16 min", sub: "Cove Island", why: "~16 min to Cove Island at the current made-good.", consider: "On schedule for the mark.", clears: "—", based: ["get_navigator: ETA 16 min"], conf: "high" },
         ais:     { status: "ok", value: "2nd of 4 (div)", sub: "▲ Defiance 0:40 · ▽ Windquest 1:50", rows: [{ hdr: true, cols: ["to fin", "Δ corrected"] }, { label: "1. Il Mostro ⌛17m", cols: ["1.9 nm", "▲ 3:10 ahead"] }, { label: "2. ◆ Defiance", cols: ["3.4 nm", "▲ 0:40 ahead"] }, { label: "3. ◆ C4 (us)", emph: true, cols: ["3.2 nm", "—"] }, { label: "4. ◆ Windquest", cols: ["3.1 nm", "▽ 1:50 back"] }, { label: "5. Vayu ⌛22m→DR", cols: ["4.8 nm", "▽ 4:05 back"] }], why: "Estimated standings across the 5-boat demo fleet on ToT, FULL-race corrected basis (gun times from the SIs): 2 live on our AIS, 2 via the public tracker (delayed; 1 dead-reckoned forward at their pace). ◆ = our division (B).", consider: "Chase Defiance on corrected — consolidate against Windquest. (Estimates: partial AIS + a delayed tracker.)", clears: "—", based: ["get_fleet standings: 5 ranked / 5 roster", "sources: AIS 2 · tracker 2 · DR 1", "ToT"], conf: "high" },
@@ -279,7 +279,7 @@
                    why: "A persistent veering shift now favors the right side — against the recommended Left. The playbook's branch trigger: if the breeze veers and holds right of ~020° for two-plus oscillation cycles, bail to the right.", consider: "Execute the branch — commit right per variant 'Right'.", clears: "the shift reverses / settles back toward the rhumb", based: ["playbook:right", "agreement 52%", "get_tactics"], conf: "high" },
         forecast:{ status: "watch", value: null,
                    rows: [{ label: "Now", emph: true, cols: [arrowKts(262, 16)] }, { label: "+60 min", cols: [arrowKts(268, 18)] }, { label: "+120 min", cols: [arrowKts(274, 19)] }, { sep: true, label: "FORECAST VS. ACTUAL" }, { hdr: true, cols: ["forecast", "actual"] }, { label: "−60 min", cols: [arrowKts(252, 12), arrowKts(256, 14)] }, { label: "−120 min", cols: [arrowKts(248, 10), arrowKts(252, 12)] }],
-                   why: "Forecast wind speed + direction (arrows show direction; north wind points down). Building to ~19 kts and veering right. \"Forecast vs. actual\" shows it has under-called the wind by ~2 kts and the right shift — trust the trend over the model.", consider: "Forecast running light — plan for more than it says.", clears: "forecast comes back in line", based: ["fetch_forecast + engine archive"], conf: "med" },
+                   why: "Building to ~19 kts, shifting right. Forecast ~2 kts light.", consider: "Plan for more wind than forecast.", clears: "forecast comes back in line", based: ["fetch_forecast + engine archive"], conf: "med" },
         sail:    { status: "act",   value: "J1 → A3", sub: "in range · at Cove Island (bear away, ~4 min)", why: "Reading the crew-set sail (J1). The leg after the gate bears away to ~135° TWA — an A3 leg. Stage the peel before the rounding.", consider: "Stage the A3 and peel in ~4 min.", clears: "A3 hoisted", based: ["sails bar: crew set J1", "get_sail: A3 for TWA 135°"], conf: "high" },
         eta:     { status: "watch", value: "4 min", sub: "Cove Island", why: "~4 min to Cove Island at the current made-good.", consider: "Mark in ~4 min — start the rounding prep.", clears: "past the rounding", based: ["get_navigator: ETA 4 min"], conf: "high" },
         ais:     { status: "watch", value: "2nd of 4 (div)", sub: "▲ Defiance 1:20 · ▽ Windquest 2:10", rows: [{ hdr: true, cols: ["to fin", "Δ corrected"] }, { label: "1. ◆ Defiance", cols: ["2.9 nm", "▲ 1:20 ahead"] }, { label: "2. ◆ C4 (us)", emph: true, cols: ["3.0 nm", "—"] }, { label: "3. ◆ Windquest", cols: ["4.0 nm", "▽ 2:10 back"] }, { label: "4. Il Mostro ⌛31m→DR", cols: ["1.2 nm", "▽ 0:55 back"] }], why: "Estimated standings across the 4-boat demo fleet on ToT, FULL-race corrected basis (gun times from the SIs): 2 live on our AIS, 1 via the public tracker (delayed; dead-reckoned forward). Defiance holds the division lead by 1:20 corrected. ◆ = our division (B).", consider: "Tight on corrected with Defiance — sail your race, cover at the crossings.", clears: "—", based: ["get_fleet standings: 4 ranked / 4 roster", "sources: AIS 2 · tracker 1 · DR 1", "ToT"], conf: "high" },
@@ -746,21 +746,19 @@
       const bigChange = big(f120, obs, 6, 20);
       const badSkill = (v60 && big(v60.actual, v60.fcst, 4, 15)) || (v120 && big(v120.actual, v120.fcst, 5, 20));
       const st = bigChange || badSkill ? "watch" : "ok";
-      const old = pl && PL.isOld(pl);
+      const frozen = pl && PL.isFrozen(pl, nowS);
+      const old = pl && !frozen && PL.isOld(pl);
       const chart = pl ? '<div class="pl-tile">' + PL.chartSvg(pl, { w: 270, h: 104, now: nowS, back_h: 3, ahead_h: 24,
         compact: true, field: "tws", obs: App.src === "live" ? raceData() : null, nowObs: obs }) + PL.legendHtml(pl) + "</div>" : null;
-      const sub = pl ? PL.summary(pl, nowS, 6) + (old ? ' · <b class="pl-old-tag">data ' + PL.ageText(pl.age_s) + " old</b>" : "")
-        : "";
-      const head = f60 && f60.tws != null ? "+60 min " + r0(f60.tws) + " kts" + (f120 && f120.tws != null ? ", +120 min " + r0(f120.tws) + " kts. " : ". ") : "";
+      const sub = !pl ? "" : frozen ? '<b class="pl-old-tag">' + PL.esc(PL.frozenText(pl)) + "</b>"
+        : PL.summary(pl, nowS, 6) + (old ? ' · <b class="pl-old-tag">data ' + PL.ageText(pl.age_s) + " old</b>" : "");
+      const head = f60 && f60.tws != null ? "+60 min " + r0(f60.tws) + " kts" + (f120 && f120.tws != null ? ", +120 min " + r0(f120.tws) + " kts." : ".") : "";
       return { status: st, value: null, rows: rows, chart: chart, sub: sub,
-        why: (pl ? "Every weather model the router uses, along the planned route at the time you'd be at each point " +
-          "(" + (pl.label || "planned route") + "). Bold = each model's latest run; tap a model to see how its runs have changed. " +
-          "The dot at now is your own measured wind — whichever line passes through it is tracking. " : "") +
-          (obs ? "" : "No live wind reading, so nothing is pinned at now. ") + head +
-          (fc ? "\"Forecast vs. actual\" compares the earlier forecast for −60 / −120 min ago against what actually happened" +
-            (v60 || v120 ? "." : " (fills in after the dashboard has run ~1-2 h).") : ""),
-        consider: badSkill ? "Forecast off lately — trust the live trend more." : bigChange ? "A notable change is forecast — plan the gear." :
-          old ? "Forecast data is " + PL.ageText(pl.age_s) + " old — refreshes when the boat is back online." :
+        why: pl ? "Each model's forecast along your route. Bold = latest run." + (frozen ? " Frozen at the start." : "")
+          : head ? "Forecast: " + head : "Forecast wind speed and direction.",
+        consider: badSkill ? "Forecast off lately — trust the live trend more." : bigChange ? "Big change coming — plan the gear." :
+          frozen ? PL.frozenText(pl) + " — no updates while racing." :
+          old ? "Forecast is " + PL.ageText(pl.age_s) + " old — updates when back online." :
           obs ? "Forecast steady and verifying." : "No wind reading — check the wind instrument.",
         clears: st === "ok" ? "—" : "forecast comes back in line",
         based: (pl ? ["Lab plume (" + PL.models(pl).length + " models, " + (pl.age_s != null ? PL.ageText(pl.age_s) + " old" : "age ?") + ")"] : [])
@@ -1217,29 +1215,37 @@
     const extra = App.plumeAt ? (Date.now() - App.plumeAt) / 1000 : 0;
     return Object.assign({}, App.plume, { age_s: App.plume.age_s != null ? App.plume.age_s + extra : null });
   }
-  window.plumeView = function (k, v) {
-    App.plumeView[k] = App.plumeView[k] === v && k === "only" ? null : v;
+  /* the detail's Speed/Direction + model buttons: data- attributes, one delegated listener */
+  function plumeView(k, v) {
+    if (k !== "field" && k !== "only") return;
+    if (k === "field" && v !== "tws" && v !== "twd") return;
+    App.plumeView[k] = k === "only" && (!v || App.plumeView.only === v) ? null : v;
     if (App.openTile === "forecast") populateDetail("forecast", false);
-  };
+  }
+  document.addEventListener("click", (e) => {
+    const b = e.target.closest && e.target.closest(".pl-btn[data-pl-k]");
+    if (b) plumeView(b.dataset.plK, b.dataset.plV);
+  });
   function plumeDetailHtml(nowObs) {
     const pl = plumeNow();
     if (!pl) return "";
     const v = App.plumeView, now = Date.now() / 1000;
-    const btn = (k, val, lab, on) => '<button class="pl-btn' + (on ? " on" : "") + '" onclick="plumeView(\'' + k + "','" + val + '\')">' + lab + "</button>";
+    const btn = (k, val, lab, on) => '<button class="pl-btn' + (on ? " on" : "") + '" data-pl-k="' + PL.esc(k) +
+      '" data-pl-v="' + PL.esc(val) + '">' + lab + "</button>";
     const fields = btn("field", "tws", "Speed", v.field === "tws") + btn("field", "twd", "Direction", v.field === "twd");
     const picks = btn("only", "", "All", !v.only) + PL.models(pl).map((m) =>
-      btn("only", m.model, '<span class="pl-key pl-' + (PL.LABEL[m.model] ? m.model : "other") + '"><i></i>' + PL.label(m.model) + "</span>", v.only === m.model)).join("");
+      btn("only", m.model, '<span class="pl-key pl-' + m.model + '"><i></i>' + PL.label(m.model) + "</span>", v.only === m.model)).join("");
     const only = v.only && PL.models(pl).some((m) => m.model === v.only) ? v.only : null;
-    const old = PL.isOld(pl);
+    const frozen = PL.isFrozen(pl, now);
+    const old = !frozen && PL.isOld(pl);
     return '<div class="rc-title">Forecast plume · ' + PL.esc(pl.label || "planned route") + "</div>" +
-      (old ? '<div class="pl-age-warn">Forecast data is <b>' + PL.ageText(pl.age_s) + ' old</b> — no new model runs since the boat was last online.</div>' : "") +
+      (frozen ? '<div class="pl-age-warn pl-frozen">' + PL.esc(PL.frozenText(pl)) + ". No updates while racing.</div>" : "") +
+      (old ? '<div class="pl-age-warn">Forecast is <b>' + PL.ageText(pl.age_s) + " old</b>. Updates when the boat is online.</div>" : "") +
       '<div class="pl-ctl">' + fields + '</div><div class="pl-ctl">' + picks + "</div>" +
       PL.chartSvg(pl, { w: 512, h: 230, now: now, back_h: 6, ahead_h: 24, field: v.field, only: only, allRuns: true,
         obs: App.src === "live" ? raceData() : null, nowObs: nowObs }) +
       PL.legendHtml(pl, { only: only, cycles: true, now: now, boat: true }) +
-      '<div class="dc-foot">Bold = latest run, faded = older runs of the same model (older = fainter). ' +
-      "The dot and the plain line are your own measured wind. Model data " + (pl.age_s != null ? PL.ageText(pl.age_s) + " old" : "age unknown") +
-      (pl.received_at ? " · last update from the Lab " + PL.ageText(now - pl.received_at) + " ago" : "") + ".</div>" +
+      '<div class="dc-foot">Faded = older runs. Dot = your wind.</div>' +
       PL.runTimesHtml(pl, now);
   }
 

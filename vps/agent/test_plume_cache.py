@@ -55,12 +55,33 @@ print("bad payloads refused:")
 for name, bad in (("wrong schema", dict(GOOD, schema="x")),
                   ("no models", dict(GOOD, models=[])),
                   ("bad points", dict(GOOD, models=[{"model": "gfs", "runs": [{"pts": [[1, 2]]}]}])),
-                  ("not a dict", ["nope"])):
+                  ("not a dict", ["nope"]),
+                  ("unknown model id", dict(GOOD, models=[{"model": "xyz", "runs": GOOD["models"][0]["runs"]}])),
+                  ("label not a string", dict(GOOD, label={"a": 1})),
+                  ("cycle not a number", dict(GOOD, models=[{"model": "hrrr", "runs": [
+                      dict(GOOD["models"][0]["runs"][0], cycle="12Z")]}]))):
     r = plume.load(bad, now=NOW)
     check(f"{name} → not loaded", r["loaded"] is False)
 check("...and the good plume is still aboard", plume.get(NOW)["key"] == "r1__pb")
 big = dict(GOOD, models=[{"model": "gfs", "runs": [{"pts": [[NOW, 1.0, 1]] * 60000}]}])
 check("an absurdly large payload is refused", plume.load(big, now=NOW)["loaded"] is False)
+
+print("frozen at the gun:")
+os.remove(path)
+START, END = NOW + 3600, NOW + 30 * 3600
+PRE = dict(GOOD, generated_at=NOW - 60, race_start=START, race_end=END)
+check("a pre-start plume loads", plume.load(PRE, now=NOW)["loaded"])
+check("before the start it is not frozen", plume.get(NOW)["frozen"] is False)
+g = plume.get(START + 600)
+check("after the gun it is served as frozen (the pre-start copy)", g["available"] and g["frozen"])
+newer = dict(PRE, generated_at=START + 300, built_at=START + 200, key="r1__new")
+check("a plume computed after the start is refused", plume.load(newer, now=START + 400)["loaded"] is False)
+sneaky = dict(GOOD, key="r1__other", generated_at=START + 300)
+check("while racing, any new plume is refused (pre-start one stays)",
+      plume.load(sneaky, now=START + 400)["loaded"] is False and plume.get(START + 500)["key"] == "r1__pb")
+check("after the race the next plume loads again",
+      plume.load(dict(GOOD, key="r1__after", generated_at=END + 60), now=END + 120)["loaded"]
+      and plume.get(END + 200)["frozen"] is False)
 
 print("\nALL OK" if ok else "\nFAILURES")
 raise SystemExit(0 if ok else 1)

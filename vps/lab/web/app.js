@@ -2069,7 +2069,14 @@ async function depLoadPlume() {
   const el = document.getElementById("depPlume");
   if (el && !stale("deploy")) el.innerHTML = plumePanelInner();
 }
-function plumeSet(k, v) { Plume[k] = (k === "only" && Plume.only === v) ? null : v; depLoadPlume(); }
+function plumeSet(k, v) {
+  if (k !== "field" && k !== "only") return;
+  Plume[k] = (k === "only" && (!v || Plume.only === v)) ? null : v; depLoadPlume();
+}
+document.addEventListener("click", (e) => {
+  const b = e.target.closest && e.target.closest("#depPlume button[data-pl-k]");
+  if (b) plumeSet(b.dataset.plK, b.dataset.plV);
+});
 async function plumeRefresh() {
   Plume.busy = true; Plume.note = "Checking every model for a new run…"; depLoadPlume();
   try { await apiPost("/api/plume/refresh", {}); } catch (e) { /* status poll below reports it */ }
@@ -2102,11 +2109,11 @@ function plumePanelInner() {
   const push = lp ? `<div class="muted" style="font-size:12px;margin-top:6px">Last push to the boat: ${esc(depStamp(lp.at))} (${esc(depAgo(lp.at))}) · ${lp.ok ? "✓ loaded" : "✗ " + esc(lp.error || "failed")}</div>` : `<div class="muted" style="font-size:12px;margin-top:6px">Not pushed to the boat yet.</div>`;
   if (!pl || !P || !P.available(pl)) return head + ctl + `<div class="muted">No runs recorded yet for this target.</div>` + push;
   const now = Date.now() / 1000;
-  const b = (k, v, lab, on) => `<button class="${on ? "" : "ghost"}" onclick="plumeSet('${k}','${v}')">${lab}</button>`;
+  const b = (k, v, lab, on) => `<button class="${on ? "" : "ghost"}" data-pl-k="${esc(k)}" data-pl-v="${esc(v)}">${lab}</button>`;
   const picks = b("only", "", "All models", !Plume.only) + P.models(pl).map((m) => b("only", m.model, P.label(m.model), Plume.only === m.model)).join("");
   return head + ctl +
     `<div class="opt-controls">${b("field", "tws", "Speed", Plume.field === "tws")}${b("field", "twd", "Direction", Plume.field === "twd")} ${picks}</div>
-     <div class="muted" style="font-size:12px">${esc(pl.label || "")} · newest run recorded ${esc(depAgo(pl.built_at))}</div>
+     <div class="muted" style="font-size:12px">${esc(pl.label || "")} · newest run recorded ${esc(depAgo(pl.built_at))}${P.isFrozen(pl, now) ? ` · <b>${esc(P.frozenText(pl))}</b> — no recording or pushes until the race is over` : ""}</div>
      <div class="lab-plume" style="max-width:900px">${P.chartSvg(pl, { w: 860, h: 300, now: now, field: Plume.field, only: Plume.only, allRuns: true, back_h: 6, ahead_h: 24 })}
      ${P.legendHtml(pl, { only: Plume.only, cycles: true, now: now })}${P.runTimesHtml(pl, now)}</div>` + push;
 }

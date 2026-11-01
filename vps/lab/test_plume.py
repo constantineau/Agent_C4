@@ -102,11 +102,11 @@ P.add_run(st, "hrrr", t0 - 2 * H, [[t0 - 8 * H, 5.0, 100], [t0, 8.0, 120]], NOW 
 P.add_run(st, "hrrr", t0, [[t0, 9.0, 125], [t0 + 30 * H, 9.0, 125]], NOW)
 P.add_run(st, "gfs", t0 - 6 * H, [[t0 - 10 * H, 5.0, 100]], NOW - 6 * H)     # all outside window
 P.add_run(st, "zzz", t0, [[t0, 1.0, 1]], NOW)
-pl = P.build_plume(st, NOW, back_h=6, ahead_h=24, models=("gfs", "hrrr"))
+pl = P.build_plume(st, NOW, back_h=6, ahead_h=24, models=("gfs", "hrrr", "zzz"))
 names = [m["model"] for m in pl["models"]]
 check("schema + race + basis carried", pl["schema"] == "c4.plume/v1" and pl["race_id"] == "r1"
       and pl["basis"] == "route")
-check("model order follows the router's list, unknown ones after", names == ["hrrr", "zzz"])
+check("only supported model ids are carried", names == ["hrrr"])
 hr = pl["models"][0]["runs"]
 check("runs newest first", [r["cycle"] for r in hr] == [t0, t0 - 2 * H])
 check("points clipped to now−6 h .. now+24 h", hr[0]["pts"] == [[t0, 9.0, 125]] and hr[1]["pts"] == [[t0, 8.0, 120]])
@@ -196,6 +196,50 @@ check("new runs → push again", P.needs_push(dict(pl, built_at=NOW + H), P.last
 rec = P.push(pl, post=lambda u, b, timeout=25: (False, {"error": "timed out"}))
 check("a failed push is recorded and retried next pass", not rec["ok"] and "timed out" in rec["error"]
       and P.needs_push(pl, P.last_push()))
+
+# ---- frozen at the gun (RRS 41) ------------------------------------------------------------
+print("frozen at the gun:")
+GUN = NOW + 3 * H
+RACE["division_starts"] = {"PHRF A": "2026-01-15 13:00"}
+RACE["timezone"] = "UTC"
+RACE["own"] = {"division": "PHRF A"}
+from app import racestart  # noqa: E402
+gun = racestart.race_start(RACE)["epoch"]
+spec_g = {"definition": RACE, "course_id": "c1", "basis": "route",
+          "path": [{"lat": 43.0, "lon": -82.4, "t": gun + 600}, {"lat": 45.8, "lon": -84.6, "t": gun + 30 * H}]}
+win = P.race_window(spec_g)
+check("race window starts at our gun", win[0] == gun)
+check("...and runs past the planned finish", win[1] >= gun + 30 * H + P.RACE_TAIL_H * H - 1)
+check("capped", win[1] <= gun + P.RACE_MAX_H * H)
+check("no gun → the route's first ETA",
+      P.race_window({"basis": "route", "path": spec_g["path"]})[0] == gun + 600)
+check("no gun, no route → unknown", P.race_window({"basis": "point", "path": [{"lat": 1, "lon": 1, "t": 0}]}) is None)
+check("racing inside the window only", P.is_racing(win, gun) and not P.is_racing(win, gun - 1)
+      and not P.is_racing(win, win[1]))
+
+# run_once refuses to record or push while racing
+P.set_target(None)
+labstate.set("deploy_push:last_ok", {"race_id": "r1", "playbook_id": "r1__100", "ok": True})
+BUNDLE["variants"][1]["route"]["path"] = spec_g["path"]
+recorded, pushed = [], []
+_orig_record, _orig_push = P.record, P.push
+P.record = lambda spec, **kw: recorded.append(1) or {"key": spec["key"], "runs": {"gfs": [
+    {"cycle": gun - 6 * H, "at": gun - H, "pts": [[gun, 10.0, 200], [gun + H, 11.0, 210]]}]}}
+P.push = lambda plume, post=None, now=None: pushed.append(plume) or {"ok": True}
+r = P.run_once(do_push=True, now=gun - H)
+check("before the gun: recorded + pushed, with the race window aboard",
+      recorded and pushed and pushed[-1]["race_start"] == int(gun) and not r.get("frozen"))
+recorded.clear(); pushed.clear()
+r = P.run_once(do_push=True, now=gun + 60)
+check("after the gun: nothing recorded, nothing pushed", r.get("frozen") and not recorded and not pushed)
+r = P.run_once(do_push=True, now=gun + 20 * H)
+check("mid-race: still frozen", r.get("frozen") and not recorded and not pushed)
+r = P.run_once(do_push=True, now=win[1] + 60)
+check("race over: recording resumes", not r.get("frozen") and recorded)
+P.record, P.push = _orig_record, _orig_push
+late = dict(pushed[-1] if pushed else {}, race_start=int(gun), race_end=int(win[1]), models=[{"model": "gfs", "runs": []}])
+rec = P.push(dict(late, built_at=1), post=lambda *a, **k: (True, {"loaded": True}), now=gun + 60)
+check("push() itself refuses a plume whose race has started", rec["ok"] is False and rec.get("frozen"))
 
 print("\nALL OK" if ok else "\nFAILURES")
 raise SystemExit(0 if ok else 1)

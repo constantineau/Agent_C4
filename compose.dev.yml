@@ -96,11 +96,12 @@ services:
       ENC_CACHE: /srv/enc                   # NOAA ENC cells + extracted GeoJSON (prep-time GDAL)
       PLAYBOOK_DIR: /srv/playbooks          # Lab-2b: frozen, signed playbook bundles (onboard homework)
       # forecast plume: every router model along the planned route, one snapshot per new cycle
-      # (48 h kept), pushed to the Pi engine's POST /plume/load like the Deploy push. Set
-      # PLUME_RECORDER=0 to stop recording, PLUME_PUSH=0 to record without pushing to the boat.
+      # (48 h kept). PLUME_PUSH=1 also sends it to the Pi engine's POST /plume/load (the Deploy
+      # push's line) — off by default: writing to the boat needs the owner's go at deploy time.
+      # Never pushed or recorded for a race between its start and its finish (frozen at the gun).
       PLUME_DIR: /srv/plume
       PLUME_RECORDER: ${PLUME_RECORDER:-1}
-      PLUME_PUSH: ${PLUME_PUSH:-1}
+      PLUME_PUSH: ${PLUME_PUSH:-0}
       SHARE_DIR: /srv/shares                # public read-only route-player share bundles
       LAB_PUBLIC_URL: ${LAB_PUBLIC_URL:-https://lab.racertracer.net}  # base for /share links (PDF QR)
       LEARNING_DB: /srv/learning/learning.db  # Lab-4: ongoing performance archive + refinement proposals
