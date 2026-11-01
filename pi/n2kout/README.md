@@ -19,8 +19,16 @@ same Pi is its only caller).
   checks the send makes. It re-checks the current leg every 30 s. Not clear, or no answer in
   2 s: no advance, the live nav data pauses (retried every 5 s), and the iPad says "Steer-to
   paused. Press Re-route now."
-- **Course marks** (flagged by the engine) advance on the 0.05 nm radius only, never on the
-  bisector: crossing it isn't rounding the mark. Route-only points use both.
+- **Course marks** (flagged by the engine with their course position) never advance on the
+  bisector: crossing it isn't rounding the mark. They advance on the 0.05 nm radius, or when
+  the engine's navigator says the mark is rounded (its next-mark index, on the fix feed, moved
+  past it): islands, gates and wide roundings. Route-only points use the radius and the
+  bisector. At most one advance per second; the fix's age is checked again right before
+  sending.
+- **Stop and replace are final.** Each route runs in a worker with a generation number. Stop
+  retires it first: from then on it can't send or change the status, even if it is stuck in
+  an engine call. A new route starts only after the old worker has exited; if it won't exit,
+  the send is refused ("Previous broadcast didn't stop. Not sent.").
 - **No fix newer than 10 s:** no 129283/129284 at all. The 129285 route keeps going (it is the
   plan, not a claim about where the boat is).
 - **Ends** on Clear, after 6 h (`N2KOUT_ROUTE_TTL_S`), or when the engine reports another
@@ -70,8 +78,8 @@ sudo systemctl restart sr33-can0`, then `ip -details link show can0` shows `rest
    to a data page. Send a route with a fresh fix. Do they show "C4-0N" and change as the boat
    moves? Is the XTE sign right (boat right of the track shows "steer left")?
 6. **Chart.** Does a route line or the active waypoint appear on the chart?
-7. **Marks.** A mark the route rounds wider than 0.05 nm keeps the steer-to on it. Check
-   that the route's mark waypoints sit at the marks.
+7. **Marks.** Round a mark wide (more than 0.05 nm off). The steer-to should move on within a
+   few seconds of the iPad's next mark changing.
 8. **No fix / clear.** Unplug the GPS (or stop Signal K): within 10 s the data fields should
    blank. Tap Clear: note what the 943 shows after "navigation terminated".
 

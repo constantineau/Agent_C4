@@ -14,8 +14,11 @@ Waypoint advance — the two rules a chartplotter uses:
     turn, not before. When the two legs nearly reverse (a hairpin, e.g. a windward mark on an
     out-and-back route) the bisector is ill-defined, so the line perpendicular to the incoming
     leg is used: crossing it means the boat is past the mark along the leg it came up.
-A waypoint that is a COURSE MARK (`mark: true` from the engine) advances on the arrival radius
-only: crossing its bisector isn't rounding it. Route-only points (tacks, gybes, bends) use both.
+A waypoint that is a COURSE MARK (`mark: true` from the engine) never advances on its bisector
+(crossing that isn't rounding it): only on the arrival radius, or when the engine's navigator
+says the mark is rounded (its next-mark index, on the fix feed, is past the mark's `mark_idx`) —
+an island or a gate is rounded far outside 0.05 nm. Route-only points (tacks, gybes, bends) use
+the radius and the bisector. At most one advance per update (one engine approval: see below).
 The index only ever moves forward. The last waypoint is never passed: arriving there sets the
 arrival flag and the leg stays on it until the route is cleared or expires.
 
@@ -109,6 +112,9 @@ class LegTracker:
     def __init__(self, wpts, dest_index: int, arrive_m: float = ARRIVE_M):
         self.pts = [(float(w["lat"]), float(w["lon"])) for w in wpts]
         self.marks = {i for i, w in enumerate(wpts) if w.get("mark")}
+        # the mark's position in the course (the navigator's numbering), when the engine knew it
+        self.mark_idx = {i: w.get("mark_idx") for i, w in enumerate(wpts)
+                         if w.get("mark") and isinstance(w.get("mark_idx"), int)}
         self.last = len(self.pts) - 1
         self.di = max(0, min(self.last, int(dest_index)))
         self.arrive_m = arrive_m
@@ -124,14 +130,18 @@ class LegTracker:
             self.origin = p
         return self.origin
 
-    def _due(self, p):
-        """Has the boat attained the active waypoint (arrival radius; or, for a route-only
-        point, its turn line)?"""
+    def _due(self, p, next_mark_index=None):
+        """Has the boat attained the active waypoint? Arrival radius; for a COURSE MARK also the
+        navigator's verdict that it is rounded (its next mark is past this one — a wide rounding
+        of an island or a gate never comes within the radius); for a route-only point its turn
+        line."""
         b = self.pts[self.di]
         if dist_m(p[0], p[1], b[0], b[1]) <= self.arrive_m:
             return True
         if self.di in self.marks:
-            return False
+            k = self.mark_idx.get(self.di)
+            return (k is not None and isinstance(next_mark_index, int)
+                    and not isinstance(next_mark_index, bool) and next_mark_index > k)
         return passed(self._origin(p), b, self.pts[self.di + 1], p)
 
     def _ask(self, approve, p, idx, t):
@@ -143,27 +153,32 @@ class LegTracker:
             self.retry_at = t + RETRY_S
         return ok
 
-    def _advance(self, p, t, approve):
-        """→ True when an advance is due but not approved (blocked)."""
-        while self.di < self.last and self._due(p):
-            if approve is not None:
-                if self.blocked and t < self.retry_at:
-                    return True
-                if not self._ask(approve, p, self.di + 1, t):
-                    return True
-            self.di += 1
-            self.origin = self.pts[self.di - 1]
-            self.hist.clear()
-            self.advances += 1
-        return False
+    def _advance(self, p, t, approve, next_mark_index):
+        """At most ONE advance (one engine approval) per update: a run of approvals would let
+        the fix age past the limit before anything is sent. → "advanced", "pending" (due but not
+        approved / waiting for the retry) or None (not due). A boat that passed several
+        waypoints catches up one a second."""
+        if not (self.di < self.last and self._due(p, next_mark_index)):
+            return None
+        if approve is not None:
+            if self.blocked and t < self.retry_at:
+                return "pending"
+            if not self._ask(approve, p, self.di + 1, t):
+                return "pending"
+        self.di += 1
+        self.origin = self.pts[self.di - 1]
+        self.hist.clear()
+        self.advances += 1
+        return "advanced"
 
-    def update(self, lat: float, lon: float, t: float, approve=None) -> dict:
+    def update(self, lat: float, lon: float, t: float, approve=None,
+               next_mark_index=None) -> dict:
         p = (float(lat), float(lon))
         self._origin(p)
         if self.checked_at is None:
             self.checked_at = t
-        pending = self._advance(p, t, approve)
-        if approve is not None and not pending:
+        step = self._advance(p, t, approve, next_mark_index)
+        if approve is not None and step is None:          # no approval used this update yet
             if self.blocked:
                 if t >= self.retry_at:
                     self._ask(approve, p, self.di, t)

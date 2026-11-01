@@ -77,7 +77,8 @@ class Waypoint(BaseModel):
     lat: float = Field(strict=True, ge=-90, le=90)
     lon: float = Field(strict=True, ge=-180, le=180)
     t: float | None = Field(default=None, strict=True)     # plan time (kept, not sent)
-    mark: bool = Field(default=False, strict=True)         # a course mark: arrival radius only
+    mark: bool = Field(default=False, strict=True)         # a course mark: never the bisector
+    mark_idx: int | None = Field(default=None, strict=True, ge=0)   # its course position
 
     _fin = field_validator("lat", "lon")(_finite)
 
@@ -162,61 +163,116 @@ def check_leg(frm, to, course):
 
 # --- the broadcaster --------------------------------------------------------------------------
 
+class StuckWorker(RuntimeError):
+    """The previous broadcast's worker didn't exit: no new route is started."""
+
+
+JOIN_S = 5.0
+
+
 class _Broadcaster:
+    """One route at a time, run by a worker thread. Each worker has a GENERATION: Stop, a
+    replacement or the worker's own end bumps `gen`, and a worker may send — and write status —
+    only while its generation is current and its stop event is clear, checked under `slock`
+    immediately before every send. So once stop() returns, the old worker can't put another
+    frame on the bus, even if it is still stuck in an engine call; and a replaced worker can
+    never terminate its successor's navigation. A replacement starts only after the old worker
+    has actually exited."""
+
     def __init__(self, sender=BUS, fix_source=fetch_fix, clock=time.time, leg_check=check_leg):
         self.sender, self.fix_source, self.clock = sender, fix_source, clock
         self.leg_check = leg_check
-        self.lock = threading.Lock()
+        self.lock = threading.Lock()          # one start/stop at a time
+        self.slock = threading.Lock()         # generation check + send / status write
+        self.gen = 0
         self.thread = None
         self.stop_evt = threading.Event()
-        self.end_reason = None
         self.state = {"broadcasting": False, "iface": CAN_IFACE, "route": None,
                       "n_waypoints": 0, "started_at": None, "expires_at": None,
                       "nav_live": False, "nav": None, "steer_paused": None, "ended": None,
                       "last_error": None}
 
+    # -- generation-gated sends and status --
+    def _current(self, g, evt):
+        return g == self.gen and not evt.is_set()
+
+    def _send_g(self, g, evt, msg):
+        with self.slock:
+            if not self._current(g, evt):
+                return False
+            pgn, prio, data = msg
+            self.sender.send(pgn, prio, data)
+            return True
+
+    def _set(self, g, **kw):
+        with self.slock:
+            if g == self.gen:
+                self.state.update(kw)
+
+    def _terminate_msgs(self):
+        return [n2k.encode_129283(None, terminated=True), n2k.encode_129284_null()]
+
+    def _terminate(self, send):
+        """'Navigation terminated' + all-n/a nav data, TERMINATE_REPEATS times. `send(msg)` →
+        False stops it (a worker whose generation was retired mid-way)."""
+        for k in range(TERMINATE_REPEATS):
+            for msg in self._terminate_msgs():
+                if send(msg) is False:
+                    return
+            if k < TERMINATE_REPEATS - 1:
+                time.sleep(0.2)
+
+    # -- control --
     def start(self, body: RouteBody):
         route_msgs = n2k.chunk_route(body.name, [w.model_dump() for w in body.waypoints])
         with self.lock:
-            self._stop_locked("replaced")
-            self.stop_evt = threading.Event()
-            self.end_reason = None
+            if not self._end_locked("replaced"):
+                raise StuckWorker("Previous broadcast didn't stop. Not sent.")
             now = self.clock()
-            self.state.update({"broadcasting": True, "route": body.name,
-                               "n_waypoints": len(body.waypoints), "started_at": round(now),
-                               "expires_at": round(now + ROUTE_TTL_S), "nav_live": False,
-                               "nav": None, "steer_paused": None, "ended": None,
-                               "last_error": None})
-            self.thread = threading.Thread(target=self._run, args=(body, route_msgs,
-                                                                   self.stop_evt, now),
-                                           daemon=True, name="n2k-broadcast")
+            with self.slock:
+                self.gen += 1
+                g = self.gen
+                self.stop_evt = evt = threading.Event()
+                self.state.update({"broadcasting": True, "route": body.name,
+                                   "n_waypoints": len(body.waypoints), "started_at": round(now),
+                                   "expires_at": round(now + ROUTE_TTL_S), "nav_live": False,
+                                   "nav": None, "steer_paused": None, "ended": None,
+                                   "last_error": None})
+            self.thread = threading.Thread(target=self._run, args=(g, evt, body, route_msgs),
+                                           daemon=True, name=f"n2k-broadcast-{g}")
             self.thread.start()
 
     def stop(self, reason="cleared"):
         with self.lock:
-            self._stop_locked(reason)
+            return self._end_locked(reason)
 
-    def _stop_locked(self, reason):
-        if self.thread and self.thread.is_alive():
-            self.end_reason = reason
+    def _end_locked(self, reason):
+        """Retire the current worker: bump the generation (from here it can't send), say
+        'navigation terminated' if it was navigating, then wait for it to exit. → True when no
+        worker is left running."""
+        t = self.thread
+        with self.slock:
+            active = t is not None and t.is_alive() and self.state["broadcasting"]
+            self.gen += 1
             self.stop_evt.set()
-            self.thread.join(timeout=5)
+            if active:
+                self.state.update({"broadcasting": False, "nav_live": False, "nav": None,
+                                   "steer_paused": None, "ended": reason})
+        if active:
+            self._terminate(lambda msg: self.sender.send(*msg) >= 0)
+        if t is not None:
+            t.join(JOIN_S)
+            if t.is_alive():
+                self.state["last_error"] = "Previous broadcast didn't stop."
+                return False
         self.thread = None
-        self.state["broadcasting"] = False
+        return True
 
-    def _send(self, msg):
-        pgn, prio, data = msg
-        return self.sender.send(pgn, prio, data)
-
-    def _terminate(self):
-        for k in range(TERMINATE_REPEATS):
-            self._send(n2k.encode_129283(None, terminated=True))
-            self._send(n2k.encode_129284_null())
-            if k < TERMINATE_REPEATS - 1:
-                time.sleep(0.2)
-
-    def cycle(self, body, tracker, sid):
+    # -- the worker --
+    def cycle(self, body, tracker, sid, g=None, evt=None):
         """One broadcast second: → None to keep going, or the reason it ended."""
+        if g is None:                          # direct calls (tests): the current generation
+            g, evt = self.gen, self.stop_evt
         now = self.clock()
         if now >= self.state["expires_at"]:
             return "expired"
@@ -226,38 +282,51 @@ class _Broadcaster:
             return "course changed"
         fix = fresh_fix(feed, now)
         if fix is None:
-            self.state.update({"nav_live": False, "nav": None, "steer_paused": "no position"})
+            self._set(g, nav_live=False, nav=None, steer_paused="no position")
             return None
 
         def approve(frm, idx):
+            if not self._current(g, evt):      # retired while waiting: approve nothing
+                return False
             return self.leg_check(frm, tracker.pts[idx], body.course)
 
-        nav = tracker.update(*fix, approve=approve)
-        if nav["blocked"]:            # the next (or current) leg isn't cleared by the engine
-            self.state.update({"nav_live": False, "nav": None, "steer_paused": "blocked"})
+        nmi = feed.get("next_mark_index") if isinstance(feed, dict) else None
+        nav = tracker.update(*fix, approve=approve, next_mark_index=nmi)
+        if not self._current(g, evt):
             return None
-        self._send(n2k.encode_129283(nav["xte_m"], sid=sid))
-        self._send(n2k.encode_129284(
-            nav["dest"][0], nav["dest"][1], dest_wp=nav["dest_index"],
-            origin_wp=nav["origin_index"], eta_epoch=nav["eta_epoch"], dtw_m=nav["dtw_m"],
-            brg_deg=nav["brg_deg"], brg_origin_deg=nav["brg_leg_deg"], sid=sid,
-            perp_crossed=nav["perp_crossed"], arrived=nav["arrived"],
-            closing_mps=nav["closing_mps"]))
-        self.state.update({"nav_live": True, "steer_paused": None, "nav": {
+        if nav["blocked"]:            # the next (or current) leg isn't cleared by the engine
+            self._set(g, nav_live=False, nav=None, steer_paused="blocked")
+            return None
+
+        def fresh():                  # the approval may have taken seconds: age it again
+            return self.clock() - fix[2] <= FIX_MAX_AGE_S
+
+        if not fresh():
+            self._set(g, nav_live=False, nav=None, steer_paused="no position")
+            return None
+        sent = self._send_g(g, evt, n2k.encode_129283(nav["xte_m"], sid=sid))
+        if sent and fresh():
+            self._send_g(g, evt, n2k.encode_129284(
+                nav["dest"][0], nav["dest"][1], dest_wp=nav["dest_index"],
+                origin_wp=nav["origin_index"], eta_epoch=nav["eta_epoch"], dtw_m=nav["dtw_m"],
+                brg_deg=nav["brg_deg"], brg_origin_deg=nav["brg_leg_deg"], sid=sid,
+                perp_crossed=nav["perp_crossed"], arrived=nav["arrived"],
+                closing_mps=nav["closing_mps"]))
+        self._set(g, nav_live=True, steer_paused=None, nav={
             "dest_index": nav["dest_index"], "dest": body.waypoints[nav["dest_index"]].name,
             "dtw_nm": round(nav["dtw_m"] / navcalc.NM_M, 3),
             "brg_deg": round(nav["brg_deg"], 1),
             "xte_m": None if nav["xte_m"] is None else round(nav["xte_m"], 1),
             "eta": None if nav["eta_epoch"] is None else round(nav["eta_epoch"]),
-            "arrived": nav["arrived"], "fix_age_s": round(now - fix[2], 1)}})
+            "arrived": nav["arrived"], "fix_age_s": round(self.clock() - fix[2], 1)})
         return None
 
-    def _run(self, body, route_msgs, stop_evt, started):
+    def _run(self, g, evt, body, route_msgs):
         tracker = navcalc.LegTracker([w.model_dump() for w in body.waypoints], body.dest_index)
         last_route, sid, reason = 0.0, 0, None
         try:
-            while not stop_evt.is_set():
-                reason = self.cycle(body, tracker, sid)
+            while self._current(g, evt):
+                reason = self.cycle(body, tracker, sid, g, evt)
                 if reason:
                     break
                 sid = (sid + 1) % 253
@@ -265,16 +334,17 @@ class _Broadcaster:
                 if now - last_route >= ROUTE_EVERY_S:
                     last_route = now
                     for msg in route_msgs:
-                        self._send(msg)
-                stop_evt.wait(NAV_EVERY_S)
+                        if not self._send_g(g, evt, msg):
+                            break
+                evt.wait(NAV_EVERY_S)
         except Exception as e:  # noqa: BLE001 — a bug must still end with "terminated"
             reason = "error"
-            self.state["last_error"] = f"{type(e).__name__}: {e}"
+            self._set(g, last_error=f"{type(e).__name__}: {e}")
         finally:
-            self._terminate()
-            self.state.update({"broadcasting": False, "nav_live": False, "nav": None,
-                               "steer_paused": None,
-                               "ended": reason or self.end_reason or "cleared"})
+            if reason and self._current(g, evt):           # it ended itself (expiry, course…)
+                self._terminate(lambda msg: self._send_g(g, evt, msg))
+                self._set(g, broadcasting=False, nav_live=False, nav=None, steer_paused=None,
+                          ended=reason)
 
 
 # --- the bus thread: identity, requests, heartbeat, diagnostics -----------------------------
@@ -540,6 +610,8 @@ def route(body: RouteBody):
         BC.start(body)                    # encodes every chunk BEFORE the old route stops
     except ValueError as e:
         raise HTTPException(status_code=422, detail=f"route can't be encoded: {e}") from e
+    except StuckWorker as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
     time.sleep(0.3)                       # let the thread hit the bus once
     return dict(BC.state)
 

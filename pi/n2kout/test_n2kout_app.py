@@ -147,6 +147,37 @@ state["clear"] = True
 n = tr.update(43.003, -82.0, 37, approve=approve_flag)
 check("clear again at the retry → resumed", calls == [1, 1] and not n["blocked"])
 
+print("navcalc — one advance (one approval) per update:")
+calls = []
+tr = navcalc.LegTracker(WP, 1)
+n = tr.update(43.02, -82.0 + east(43.02, 1460), 0,
+              approve=lambda frm, idx: calls.append(idx) or True)
+check("boat already past wp 1 and 2 → ONE approval, ONE advance this update",
+      calls == [2] and n["dest_index"] == 2)
+n = tr.update(43.02, -82.0 + east(43.02, 1460), 1,
+              approve=lambda frm, idx: calls.append(idx) or True)
+check("…and the next one on the next update", calls == [2, 3] and n["dest_index"] == 3)
+
+print("navcalc — a wide mark rounding advances on the navigator's verdict:")
+WPR = [dict(w) for w in WP]
+WPR[1].update(mark=True, mark_idx=2)            # course mark #2 (the navigator's numbering)
+tr = navcalc.LegTracker(WPR, 1)
+wide = (43.0103, -82.0 + east(43.0103, 800))     # 800 m out: rounded wide, past its line
+check("navigator's next mark is still this one (2) → stays",
+      tr.update(*wide, 0, next_mark_index=2)["dest_index"] == 1)
+check("no navigator verdict → stays", tr.update(*wide, 1)["dest_index"] == 1)
+asked = []
+n = tr.update(*wide, 2, next_mark_index=3, approve=lambda frm, idx: asked.append(idx) or False)
+check("navigator says rounded (next 3) → advance asked, refused → stays, blocked",
+      asked == [2] and n["dest_index"] == 1 and n["blocked"])
+n = tr.update(*wide, 8, next_mark_index=3, approve=lambda frm, idx: True)
+check("…approved → advances to the next waypoint", n["dest_index"] == 2 and not n["blocked"])
+WPN = [dict(w) for w in WP]
+WPN[1].update(mark=True)                         # a mark with no known course position
+tr = navcalc.LegTracker(WPN, 1)
+check("mark without mark_idx → the navigator can't move it (radius only)",
+      tr.update(*wide, 0, next_mark_index=9)["dest_index"] == 1)
+
 print("navcalc — XTE is real and signed:")
 tr = navcalc.LegTracker(WP, 1)
 r = tr.update(43.005, -82.0 + east(43.005, 100), 0)["xte_m"]
@@ -343,6 +374,91 @@ run_until(b, lambda: not b.state["broadcasting"])
 check("course load (new token on the fix feed) → stopped, terminated",
       not b.state["broadcasting"] and b.state["ended"] == "course changed" and terminated(fs))
 
+print("broadcast thread — a stuck worker never sends after Stop, never kills the next route:")
+A.JOIN_S = 0.3
+gate = threading.Event()
+inside = threading.Event()
+fsx = FakeSender()
+feedx = {"fix": {"lat": 43.0103, "lon": -82.0 + east(43.0103, 300), "t": time.time()},
+         "course": "L1:race"}
+
+
+def slow_check(frm, to, course):                # the engine hangs on a leg check
+    inside.set()
+    gate.wait(5)
+    return True
+
+
+def live_feed():
+    feedx["fix"]["t"] = time.time()
+    return feedx
+
+
+bx = A._Broadcaster(sender=fsx, fix_source=live_feed, leg_check=slow_check)
+bx.start(body())
+inside.wait(3)
+check("(setup) the worker is inside a leg check", inside.is_set())
+ok_stop = bx.stop("cleared")
+n_at_stop = len(fsx.sent)
+check("Stop with a stuck worker → reports it didn't exit", ok_stop is False
+      and bx.state["last_error"] == "Previous broadcast didn't stop.")
+check("Stop still said 'navigation terminated'", terminated(fsx))
+try:
+    bx.start(body())
+    check("a new route while the old worker is stuck → refused", False)
+except A.StuckWorker as e:
+    check("a new route while the old worker is stuck → refused", "didn't stop" in str(e))
+gate.set()                                       # the engine answers: the old worker wakes
+run_until(bx, lambda: not bx.thread.is_alive(), 3)
+time.sleep(0.2)
+late = fsx.sent[n_at_stop:]
+check("the old worker sent NOTHING after Stop returned (no nav, no route, no terminate)",
+      late == [])
+check("…and wrote no status (still stopped, no live nav)", not bx.state["broadcasting"]
+      and not bx.state["nav_live"] and bx.state["nav"] is None)
+bx.leg_check = CLEAR
+fsx.sent.clear()
+bx.start(body())
+run_until(bx, lambda: 129283 in fsx.pgns())
+check("once it has exited, a new route starts", bx.state["broadcasting"]
+      and 129283 in fsx.pgns())
+check("…and nobody terminated it", not terminated(fsx))
+g_old = bx.gen
+bx.stop()
+bx._set(g_old, broadcasting=True, nav_live=True)
+check("a status write from a retired generation is ignored", not bx.state["broadcasting"]
+      and not bx.state["nav_live"])
+
+print("broadcaster — the fix is aged again right before sending:")
+fs3, clk3 = FakeSender(), Clock()
+
+
+def slow_ok(frm, to, course):                    # an approval that takes 11 s
+    clk3.t += 11
+    return True
+
+
+b3 = A._Broadcaster(sender=fs3, clock=clk3, leg_check=slow_ok,
+                    fix_source=lambda: {"fix": {"lat": 43.0103,
+                                                "lon": -82.0 + east(43.0103, 300),
+                                                "t": clk3.t}, "course": "L1:race"})
+b3.state["expires_at"] = clk3.t + 1000
+tr3 = navcalc.LegTracker(WP, 1)
+b3.cycle(body(), tr3, 0)
+check("fix fresh at the start of the cycle, 11 s old after the approval → nothing sent",
+      fs3.sent == [] and b3.state["steer_paused"] == "no position" and not b3.state["nav_live"])
+check("RouteBody takes mark_idx", A.RouteBody(name="x", waypoints=[
+    {"lat": 1, "lon": 1, "mark": True, "mark_idx": 2}, {"lat": 2, "lon": 2}]).waypoints[0]
+      .mark_idx == 2)
+fs4, clk4 = FakeSender(), Clock()
+b4 = A._Broadcaster(sender=fs4, clock=clk4, leg_check=CLEAR,
+                    fix_source=lambda: {"fix": {"lat": wide[0], "lon": wide[1], "t": clk4.t},
+                                        "course": "L1:race", "next_mark_index": 3})
+b4.state["expires_at"] = clk4.t + 1000
+b4.cycle(body(waypoints=WPR), navcalc.LegTracker(WPR, 1), 0)
+check("the fix feed's next_mark_index reaches the tracker (wide rounding → wp 2)",
+      b4.state["nav"]["dest_index"] == 2)
+
 print("POST /route — strict validation:")
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -381,6 +497,21 @@ bad("mark as a string", lambda d: d["waypoints"][0].update(mark="yes"))
 bad("non-ASCII name", lambda d: d["waypoints"][0].update(name="Bouée"))
 bad("name over 32 chars", lambda d: d.update(name="x" * 33))
 check("a rejected route leaves the current one running", A.BC.state["broadcasting"])
+_bc = A.BC
+
+
+class _Stuck:
+    state = {}
+
+    def start(self, body):
+        raise A.StuckWorker("Previous broadcast didn't stop. Not sent.")
+
+
+A.BC = _Stuck()
+r = client.post("/route", json=good)
+check("old worker stuck → 503 'Previous broadcast didn't stop. Not sent.'",
+      r.status_code == 503 and r.json()["detail"] == "Previous broadcast didn't stop. Not sent.")
+A.BC = _bc
 r = client.post("/route", json=dict(good, waypoints=[{"lat": 43, "lon": -82}] * 250))
 check("250 waypoints → accepted (packed under the 223-byte cap)", r.status_code == 200)
 client.post("/stop")

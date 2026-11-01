@@ -124,6 +124,20 @@ NAV.get_navigator = lambda route=None: {"available": True, "route": "race",
 r = gpsout.show()
 marks = [i for i, w in enumerate(posts[-1][1]["waypoints"]) if w["mark"]]
 check(f"marks at waypoints 0, 3, 5 [{marks}]", r["shown"] and marks == [0, 3, 5])
+idxs = [w["mark_idx"] for w in posts[-1][1]["waypoints"] if w["mark"]]
+check(f"…each with its position in the course [{idxs}]", idxs == [0, 1, 2])
+gpsout._NEXT_MARK["at"] = None
+check("the fix feed carries the navigator's next-mark index (Top = 1)",
+      gpsout.fix_feed()["next_mark_index"] == 1)
+NAV.get_navigator = lambda route=None: {"available": True, "route": "race",
+                                        "next_mark": {"name": "Finish", "index": 2}}
+check("…cached for 5 s (n2kout polls every second)", gpsout.fix_feed()["next_mark_index"] == 1)
+gpsout._NEXT_MARK["at"] = None
+check("…then the navigator's new verdict (Finish = 2)",
+      gpsout.fix_feed()["next_mark_index"] == 2)
+NAV.get_navigator = lambda route=None: {"available": False}
+gpsout._NEXT_MARK["at"] = None
+check("no navigator → None", gpsout.fix_feed()["next_mark_index"] is None)
 
 print("leg check — the engine approves each new leg n2kout wants:")
 ISLAND = {"recommended": "a", "obstacles": {"islands": [{"lat": 44.02, "lon": -82.0,

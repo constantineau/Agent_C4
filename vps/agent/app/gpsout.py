@@ -116,7 +116,8 @@ def leg_check(body):
         if blocked is not None and blocked(frm, to):
             return {"clear": False, "reason": "obstacle"}
         # no obstacle homework aboard → nothing known in the way (as at send time)
-        return {"clear": True, "reason": None if blocked is not None else "no obstacles aboard"}
+        return {"clear": True, "reason": None if blocked is not None else "no obstacles aboard",
+                "next_mark_index": next_mark_index()}
     except Exception as exc:  # noqa: BLE001 — a failed check is never a clear one
         print(f"[gpsout] leg check failed: {type(exc).__name__}: {exc}", flush=True)
         return {"clear": False, "reason": "error"}
@@ -124,11 +125,33 @@ def leg_check(body):
         orinroute.COURSE_LOCK.release()
 
 
+NEXT_MARK_TTL_S = 5.0
+_NEXT_MARK = {"at": None, "val": None}
+
+
+def next_mark_index():
+    """The navigator's next mark as a position in the course (its own rounding verdict), or
+    None. Cached NEXT_MARK_TTL_S: n2kout polls every second, the navigator does real work."""
+    now = time.monotonic()
+    if _NEXT_MARK["at"] is not None and now - _NEXT_MARK["at"] < NEXT_MARK_TTL_S:
+        return _NEXT_MARK["val"]
+    try:
+        nav = NAV.get_navigator()
+        val = (reoptimize._next_course_index(nav, NAV._marks(nav["route"]) or [])
+               if nav.get("available") else None)
+    except Exception:  # noqa: BLE001 — no navigator read is no verdict
+        val = None
+    _NEXT_MARK.update({"at": now, "val": val})
+    return val
+
+
 def fix_feed():
-    """GET /gps/fix — what n2kout polls every second to keep the plotter's leg live."""
+    """GET /gps/fix — what n2kout polls every second to keep the plotter's leg live: the fix,
+    the course token, and the navigator's next-mark index (a course-mark waypoint advances
+    when the navigator says it's rounded, however wide)."""
     fix = own_fix()
     return {"fix": None if fix is None else {"lat": fix[0], "lon": fix[1], "t": fix[2]},
-            "course": course_token()}
+            "course": course_token(), "next_mark_index": next_mark_index()}
 
 
 def _post(path, payload=None):
@@ -558,6 +581,19 @@ def _show(source: str = "playbook", variant=None, route=None):
                    f"is on it {hits}×, can't tell which lap")
             return {"shown": False, "note": (
                 f"New route is stale: next mark {next_name} {why}. Re-route now, then send.")}
+    # local mark → its POSITION in the navigator's course (what n2kout compares with the
+    # navigator's next-mark index to tell a wide rounding): by position when the route's marks
+    # line up with the course, else by name when that name occurs once; the start is 0
+    def _course_pos(j):
+        if j == -1:
+            return 0
+        if route_idx is not None and 0 <= j < len(route_idx):
+            return route_idx[j]
+        if 0 <= j < len(names) and nav_names.count(names[j]) == 1:
+            return nav_names.index(names[j])
+        return None
+
+    course_of = {j: _course_pos(j) for j in verts}
     if rerouted and nxt:
         # the boat rounded marks while the re-route was computing: drop the passed legs so the
         # route starts at the last rounded mark and the plotter can't steer back to it
@@ -567,6 +603,7 @@ def _show(source: str = "playbook", variant=None, route=None):
                 f"New route is stale: you've passed {names[nxt - 1]} since. Re-route now, then send.")}
         path = path[cut:]
         verts = {j - nxt: i - cut for j, i in verts.items() if j >= nxt}
+        course_of = {j - nxt: c for j, c in course_of.items() if j >= nxt}
         nxt = 0
 
     obstacles = _obstacles(bundle, route, boat)
@@ -578,11 +615,12 @@ def _show(source: str = "playbook", variant=None, route=None):
     where = {i: j for j, i in enumerate(idx)}
     dest = _dest_index(pts, boat, {k: where[i] for k, i in verts.items() if i in where}, nxt,
                        blocked)
-    # course-mark waypoints: n2kout advances past them on the arrival radius only, never on the
-    # turn bisector (crossing that isn't rounding the mark)
-    mark_wps = {where[i] for i in verts.values() if i in where}
+    # course-mark waypoints: n2kout never advances past them on the turn bisector (crossing that
+    # isn't rounding the mark) — only on the arrival radius or the navigator's rounding
+    mark_wps = {where[i]: course_of.get(j) for j, i in verts.items() if i in where}
     wpts = [{"name": f"C4-{i + 1:02d}", "lat": p.get("lat"), "lon": p.get("lon"),
-             "t": p.get("t"), "mark": i in mark_wps} for i, p in enumerate(pts)]
+             "t": p.get("t"), "mark": i in mark_wps, "mark_idx": mark_wps.get(i)}
+            for i, p in enumerate(pts)]
     if dest is None:
         return {"shown": False, "dest_index": None,
                 "note": NO_SAFE_WPT if rerouted else
