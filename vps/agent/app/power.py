@@ -258,8 +258,8 @@ def assess_series(rows, now=None):
         # exist only near the floor of its own record. The floor is an equipment-risk estimate,
         # not a measured failure point — at the minute the Jul 18 archiver died the bank read
         # 11.65 V and kept publishing.
-        "note": (f"Alarm only at {FLOOR_V + DANGER_MARGIN_V:.1f} V or below. "
-                 "Otherwise watch the trend."),
+        "note": (f"Danger below {FLOOR_V + DANGER_MARGIN_V:.1f} V. "
+                 "A fast drain warns earlier."),
     }
 
 
