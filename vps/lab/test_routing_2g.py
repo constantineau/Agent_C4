@@ -103,7 +103,10 @@ if within and opt != "A3":
     print(f"     reach leg carrying A3 (S1 marginally faster): sail_end={leg.get('sail_end')} peels={leg['peels']}")
     check("a within-tolerance sub-optimal sail is HELD (no thrash)", held)
 else:
-    check("hysteresis precondition (A3 within tol, not optimal) — skipped cleanly", True)
+    # the fixture drifted (polar/sail data changed): the hold-sail case no longer tests anything,
+    # so say so loudly instead of passing — pick a new TWA where A3 is near-tied but not optimal
+    check(f"hysteresis precondition holds at TWA{twa_test} (A3 within tol, not optimal) — "
+          "fixture drifted, re-pick the TWA", False)
 
 # 5) SAIL_AWARE off → geometry identical to the envelope baseline (no per-sail effect).
 Ooff = reload_with(False)

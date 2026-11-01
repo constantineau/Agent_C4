@@ -159,3 +159,4 @@ check("legs' beat/reach/run map to real scan angles",
       and SYN._POS_TWA["run"] == 150.0)
 
 print("RESULT:", "PASS" if ok else "FAIL")
+raise SystemExit(0 if ok else 1)
