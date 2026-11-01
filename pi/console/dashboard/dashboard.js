@@ -1007,7 +1007,7 @@
         // can't clear it); the trend is over window_min. Below ~11.0 V the Pi's SD writes and the
         // AIS transceiver brown out — how the Jul 18 archive and AIS feed died together.
         why: b.reason + "."
-          + (b.hours_to_floor != null ? " Reaches " + r1(b.thresholds.floor_v) + " V in about "
+          + (b.hours_to_floor != null ? " At this rate, " + r1(b.thresholds.floor_v) + " V in about "
              + r1(b.hours_to_floor) + " h." : "")
           + " Below " + r1(b.thresholds.floor_v) + " V the recorder and AIS can fail.",
         consider: st === "act" ? "Shed load and start charging. Recorder and AIS fail first."
