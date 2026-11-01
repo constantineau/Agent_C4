@@ -55,7 +55,7 @@ def run_course(definition, course_id, start_epoch, models, *, ensemble_members=0
                per_model=False, resolution="auto", use_waves=True, use_current=True,
                on_progress=None, boat=None, chart_source=None, model_skill=True,
                obstacles=None, time_budget_s=None, fallback_tries=None, bbox=None, t_end=None,
-               briefing=True, grids=True, on_phase=None):
+               briefing=True, grids=True, on_phase=None, leg_obstacles=None):
     """Blocking: build the multi-model wind field, route the course, write the briefing.
 
     `models` are model names or ModelSource instances (the Orin passes cache-first wrappers).
@@ -107,6 +107,7 @@ def run_course(definition, course_id, start_epoch, models, *, ensemble_members=0
     phase("routing")
     result = optimizer.optimize_course(definition, course_id, start_epoch, wf, avoid=avoid,
                                        source=chart_source, obstacles=obstacles,
+                                       leg_obstacles=leg_obstacles,
                                        time_budget_s=time_budget_s, per_model=per_model,
                                        resolution=resolution, cur=cur, waves=waves,
                                        **boat_inputs(boat))

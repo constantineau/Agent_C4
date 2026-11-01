@@ -25,7 +25,10 @@ iPad ──GET /api/reroute───────▶ Pi engine ──GET /status,
 1. The Pi builds the request: boat position, the deployed course (the RaceDefinition the Lab's
    Deploy push sent to `/course/load`) and which mark is next, the plan's track, who asked.
 2. `job.py` cuts the course to what's left: it starts at the boat and runs from the next mark to the
-   finish. Every island stays an obstacle (its disk) and every zone stays; islands already rounded lose only their rounding side, so their barrier is gone. Islands still to round keep their side and their leg's bearing as deployed (previous mark to next mark), so putting the boat in as the start never turns the barrier. Bearings are kept per occurrence: an island passed twice, once each way, keeps both.
+   finish. Every island stays an obstacle (its disk) and every zone stays; islands already rounded lose only their rounding side, so their barrier is gone. Islands still to round keep their side and their leg's bearing as deployed (previous mark to next mark), so putting the boat in as the start never turns the barrier. Bearings are kept per occurrence: an island passed twice, once each way, keeps both. The route
+uses one obstacle mask per leg: land, zones and island disks on every leg, an island's rounding
+barrier only on the leg that rounds it (otherwise two opposite barriers on the same island would
+wall off its meridian). The Lab still routes every leg on one course-wide mask (#141).
 3. Obstacles: the race's zones, islands and rounding barriers, rebuilt for the remaining course.
    Land: the Lab's land-only mask for the course, carried aboard as a file (see "Chart" below),
    used only if it was built from the course aboard. Without one, the run avoids the race's

@@ -159,14 +159,44 @@ def chart_path(race_id, course_id):
     return os.path.join(CHART_DIR, f"{safe(race_id)}__{safe(course_id)}.json")
 
 
-def _race_obstacles(definition, course_id, bbox, res_deg, depth):
+def leg_count(definition, course_id):
+    """Legs left to sail (nav points after the start)."""
+    return max(0, len(race_def.course_to_marks(definition, course_id)[0]) - 1)
+
+
+def only_leg_barriers(definition, course_id, leg):
+    """`definition` with rounding sides kept only on the islands of leg `leg` (0 = boat → first
+    mark); every other island keeps its disk but no side. A course that rounds the same island
+    twice, once each way, then never has both barriers at once (together they'd wall off the
+    island's whole meridian)."""
+    d = copy.deepcopy(definition)
+    courses = d.get("courses") or []
+    course = next((c for c in courses if c.get("id") == course_id), None) or \
+        (courses[0] if courses else None)
+    if not course:
+        return d
+    idx, _fin = _nav_index_map(course)
+    has_start = (course.get("start") or {}).get("lat") is not None
+    cur = 0 if has_start else -1            # nav index of the last point before this island
+    for m, k in zip(course.get("marks") or [], idx):
+        if k is not None:
+            cur = k
+            continue
+        if m.get("type") == "island" and cur != leg:      # leg k runs nav k → nav k+1
+            m["rounding"] = "none"
+    return d
+
+
+def _race_obstacles(definition, course_id, bbox, res_deg, depth, leg=None):
     """The race's own obstacles for what's LEFT of the course: zones, island disks and the
     rounding-side barriers of islands still to round (an island already rounded leaves no barrier
     to block a later leg). Pure Python, no shoreline data. Built as "natural_earth" whatever the
     configured coastline source: under "enc" the builder skips the island disks (it expects ENC
     land polygons, which this build doesn't load), and an island must never read as open water."""
     # carve_waypoints=False: no zone or island disk is ever opened, for the boat or any mark (the
-    # pockets go in the land mask only, see load_obstacles)
+    # pockets go in the land mask only, see load_obstacles). `leg`: only that leg's barriers.
+    if leg is not None:
+        definition = only_leg_barriers(definition, course_id, leg)
     return geo.build_for_course(definition, course_id, bbox, res_deg=res_deg, coastline_on=False,
                                 use_cache=False, source="natural_earth", safety_depth=depth,
                                 carve_waypoints=False)
@@ -210,7 +240,7 @@ def boat_in_no_go(definition, course_id, lat, lon):
     return None
 
 
-def load_obstacles(definition, course_id, full_definition, full_course_id, boat):
+def load_obstacles(definition, course_id, full_definition, full_course_id, boat, leg=None):
     """The obstacle mask for the remaining course `definition` → (ObstacleField, chart note or
     None). Land: the Lab's land-only mask for the course, carried aboard (prep_chart.py), when it
     was built from this course and covers what's left of it, boat included. On top, always, the
@@ -248,11 +278,12 @@ def load_obstacles(definition, course_id, full_definition, full_course_id, boat)
                     for _s, _n, mla, mlo in race_def.course_to_marks(definition, course_id)[0]:
                         if mla is not None and mlo is not None:
                             land._carve_disk(mla, mlo, geo.MARK_CARVE_NM)
-                    race = _race_obstacles(definition, course_id, land.bbox, land.res, depth)
+                    race = _race_obstacles(definition, course_id, land.bbox, land.res, depth,
+                                           leg)
                     n = len(land.mask)
                     if len(race.mask) != n:               # can't happen: same box, same cell size
                         return _race_obstacles(definition, course_id, need, geo.RES_DEG,
-                                               depth), NO_CHART
+                                               depth, leg), NO_CHART
                     land.mask = bytearray((int.from_bytes(land.mask, "little")
                                            | int.from_bytes(race.mask, "little")).to_bytes(n, "little"))
                     for k, v in race.layers.items():
@@ -263,7 +294,7 @@ def load_obstacles(definition, course_id, full_definition, full_course_id, boat)
                     # outside the mask, land would read as open water: don't claim it was checked
                     note = NO_COVER if land is not None else OLD_CHART
     # no usable land mask: the race's own obstacles for the remaining course, boat included
-    return _race_obstacles(definition, course_id, need, geo.RES_DEG, depth), note
+    return _race_obstacles(definition, course_id, need, geo.RES_DEG, depth, leg), note
 
 
 # ---- the comparison with the plan -------------------------------------------------------------
@@ -334,7 +365,12 @@ def run(req, now=None, on_progress=None, on_phase=None, is_online=None):
     if why_not:
         raise RunError(why_not)
     phase("chart")
-    field, chart_note = load_obstacles(d, cid, full, full_cid, boat)
+    # one mask per leg: island disks, zones and land on every leg; an island's rounding barrier
+    # only on the leg that rounds it
+    leg_fields = [load_obstacles(d, cid, full, full_cid, boat, leg=i)
+                  for i in range(leg_count(d, cid))]
+    field, chart_note = leg_fields[0] if leg_fields else load_obstacles(d, cid, full, full_cid, boat)
+    leg_fields = [f for f, _n in leg_fields]
 
     # weather: the box the cache already holds, if one covers what's left of the course
     online = (is_online or plume_svc.online)()
@@ -357,6 +393,7 @@ def run(req, now=None, on_progress=None, on_phase=None, is_online=None):
         d, cid, now, sources, avoid=True, per_model=False, resolution=RESOLUTION,
         use_waves=USE_WAVES and online, use_current=USE_CURRENT and online,
         on_progress=say, on_phase=phase, boat=boat, model_skill=False, obstacles=field,
+        leg_obstacles=leg_fields,
         time_budget_s=ROUTE_BUDGET_S, fallback_tries=None if online else 0,
         bbox=bbox, t_end=t_end, briefing=False, grids=False)
     if budget.downloads:

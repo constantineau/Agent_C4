@@ -221,6 +221,31 @@ dT, cT, _n = job.remaining_definition(TWICE, "c", 1, 43.9, -82.6)
 brgs = [m.get("transit_brg") for m in dT["courses"][0]["marks"] if m["type"] == "island"]
 check("island passed twice: two bearings, one each way (~090, ~270)", len(brgs) == 2
       and abs(brgs[0] - 90) < 4 and abs(brgs[1] - 270) < 4)
+both = job.load_obstacles(dT, cT, None, None, job._get_boat())[0]          # every barrier at once
+leg0 = job.load_obstacles(dT, cT, None, None, job._get_boat(), leg=0)[0]   # boat → A
+leg1 = job.load_obstacles(dT, cT, None, None, job._get_boat(), leg=1)[0]   # A → finish
+check("(both barriers together wall off the island's meridian)",
+      both.blocked(43.9, -82.0) and both.blocked(44.1, -82.0))
+check("per leg: out, X to port → only the north side blocked", leg0.blocked(44.1, -82.0)
+      and not leg0.blocked(43.9, -82.0))
+check("per leg: back, X to port → only the south side blocked", leg1.blocked(43.9, -82.0)
+      and not leg1.blocked(44.1, -82.0))
+check("island disk and zones on every leg", leg0.blocked(44.0, -82.0) and leg1.blocked(44.0, -82.0))
+needT = job.optimizer.course_bbox(dT, cT)
+for f in windfield._fhrs_for_cycle(GFS, CYCLE, NOW, NOW + 40 * 3600):
+    write_grib(GFS._cache_path(CYCLE, f, "det", needT), 4.2, 4.2)
+job.STATE_DIR = os.path.join(_tmp, "fresh-twice")
+W.remember_box(job.STATE_DIR, needT)
+outT = job.run({"device": "x", "position": {"lat": 43.9, "lon": -82.6}, "next_index": 1,
+                "definition": TWICE, "course_id": "c", "models": ["gfs"]}, now=NOW,
+               is_online=lambda: False)
+check("the TWICE course routes to the finish", outT["available"] and outT["complete"]
+      and [lg["to"] for lg in outT["legs"]] == ["A", "Finish"])
+pts = outT["points"]
+crossings = [(a, b) for a, b in zip(pts, pts[1:]) if (a["lon"] + 82.0) * (b["lon"] + 82.0) <= 0]
+check("…passing X to port both ways (south going out, north coming back)", len(crossings) == 2
+      and (crossings[0][0]["lat"] + crossings[0][1]["lat"]) / 2 < 44.0
+      and (crossings[1][0]["lat"] + crossings[1][1]["lat"]) / 2 > 44.0)
 _src = job.geo.COASTLINE_SOURCE
 job.geo.COASTLINE_SOURCE = "enc"                       # the Lab's ENC setting, no chart aboard
 f8, _ = job.load_obstacles(d6, c6, None, None, job._get_boat())
