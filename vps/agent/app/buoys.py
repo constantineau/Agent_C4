@@ -215,7 +215,7 @@ def get_buoys(route=None):
     live = navigator._latest()
     lat, lon = live.get("lat"), live.get("lon")
     if lat is None or lon is None:
-        return {"available": False, "note": "no position fix"}
+        return {"available": False, "note": "No position yet."}
     # course-to-next-mark from the active route (falls back to COG — practice / no course loaded)
     ref_brg, ref_src = live.get("cog"), "cog"
     try:
@@ -276,10 +276,10 @@ def get_buoys(route=None):
                     upcourse_shore = cand
         else:
             row.update({"tws_kn": None, "stale": True,
-                        "note": "no recent obs (offline or out of season)"})
+                        "note": "no recent reading"})
         rows.append(row)
     if not rows:
-        return {"available": False, "note": f"no configured buoy within {MAX_NM:g} nm"}
+        return {"available": False, "note": f"No buoy within {MAX_NM:g} nm."}
     rows.sort(key=lambda r: (not r["up_course"], r["range_nm"]))
     return {"available": True, "stations": rows, "upcourse": upcourse or upcourse_shore,
             "own": {"tws_kn": round(own_tws, 1) if own_tws is not None else None,

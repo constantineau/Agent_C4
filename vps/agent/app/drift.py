@@ -57,11 +57,11 @@ def get_drift(route=None):
     comparable (all ETAs passed, or the forecast is unreachable)."""
     bundle = deviation._load_playbook()
     if not bundle:
-        return _na("no playbook aboard")
+        return _na("No gameplan loaded.")
     fp = bundle.get("forecast_fingerprint") or {}
     pts = fp.get("points") or []
     if len(pts) < 2:
-        return _na("no forecast reference in the playbook (re-freeze to enable drift)",
+        return _na("Gameplan has no forecast saved. Re-freeze it.",
                    {"race_id": bundle.get("race_id")})
 
     now = time.time()
@@ -89,8 +89,8 @@ def get_drift(route=None):
             "source": fp.get("source")}
     if not diffs:
         if n_future == 0:
-            return _na("all forecast-reference waypoints are in the past — drift no longer meaningful", base)
-        return _na("forecast unreachable / beyond horizon — can't measure drift right now", base)
+            return _na("Gameplan forecast has run out.", base)
+        return _na("No forecast right now.", base)
 
     mean_abs_twd = sum(abs(d[0]) for d in diffs) / len(diffs)
     max_abs_twd = max(abs(d[0]) for d in diffs)
@@ -120,25 +120,22 @@ def get_drift(route=None):
     if band == 0:
         value = "Forecast holding"
         sub = f"~{round(mean_abs_twd)}° drift · {len(diffs)} pts"
-        why = (f"The live forecast is within ~{round(mean_abs_twd)}° of what the plan was built on "
-               f"across {len(diffs)} route waypoints" + (f" (speed {tws_txt})" if tws_txt else "")
-               + " — the wind picture the recommended variant assumes still holds.")
-        consider = "No forecast drift — the plan's assumptions still stand."
+        why = (f"Forecast within ~{round(mean_abs_twd)}° of the plan"
+               + (f" (speed {tws_txt})" if tws_txt else "") + ". Plan still holds.")
+        consider = "No change. The plan still holds."
         clears = "—"
     else:
         lead = "Forecast moved" if band == 2 else "Forecast drifting"
         value = f"{lead} · {twd_txt}"
         sub = f"{twd_txt}{fromto}" + (f" · {tws_txt}" if tws_txt else "")
-        why = (f"Since the plan was frozen the common forecast has {twd_txt}{fromto} "
-               f"(worst {worst['dtwd']:+d}° ~{worst['in_h']} h out)"
-               + (f" and changed {tws_txt} in strength" if tws_txt else "")
-               + (". This is a material move — the recommended variant was optimized for a different "
-                  "wind picture." if band == 2 else ". Keep watching — it may firm up into a real change."))
-        consider = ("Reassess whether the recommended variant still pays — the forecast it was built "
-                    "on has moved. (Onboard re-optimize is not automatic; this is a heads-up.)"
+        why = (f"Forecast {twd_txt}{fromto} since the plan"
+               + (f", speed {tws_txt}" if tws_txt else "")
+               + f" (worst {worst['dtwd']:+d}° in ~{worst['in_h']} h)."
+               + (" Big change." if band == 2 else " Keep watching."))
+        consider = ("Check the plan still pays. The forecast has moved."
                     if band == 2 else
-                    "Forecast is drifting from the plan — watch it; be ready to revisit the variant.")
-        clears = "the forecast settles back toward what the plan assumed"
+                    "Watch it. Be ready to change plan.")
+        clears = "forecast moves back toward the plan"
 
     return {
         "available": True, "status": status, "value": value, "sub": sub,

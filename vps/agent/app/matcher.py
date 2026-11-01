@@ -456,11 +456,11 @@ def get_plays(route=None):
     armed first. `na` with no v2 playbook aboard. Deterministic — works with no Orin."""
     bundle = deviation._load_playbook()
     if not bundle:
-        return {"available": False, "note": "no playbook aboard"}
+        return {"available": False, "note": "No gameplan loaded."}
     plays = bundle.get("plays") or []
     if not plays:
         return {"available": False,
-                "note": "playbook aboard has no plays (a v1 bundle) — synthesize a v2 playbook"}
+                "note": "Gameplan has no plays. Rebuild it in the Lab."}
     now = time.time()
     signals = gather(route)
     out = [_evaluate(p, signals, now) for p in plays]
@@ -481,6 +481,4 @@ def get_plays(route=None):
             "based": ["get_deviation", "get_drift", "get_tactics", "get_fatigue", "sail_state",
                       "get_buoys"],
             "conf": "engine",
-            "disclaimer": ("Deterministic condition-matching of the boat's own signals against the "
-                           "frozen playbook — the crew judges; an armed play is a pointer, not an "
-                           "order.")}
+            "disclaimer": "An armed play is a pointer, not an order. The crew decides."}

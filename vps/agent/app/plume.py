@@ -162,16 +162,16 @@ def load(plume, now=None):
     if not ok:
         return {"loaded": False, "detail": why}
     if len(json.dumps(plume, separators=(",", ":"))) + 40 > MAX_BYTES:
-        return {"loaded": False, "detail": "plume too large"}
+        return {"loaded": False, "detail": "Forecast spread too large."}
     with _LOCK, _session_lock():
         t = time.time() if now is None else now
         if race_session():
-            return {"loaded": False, "detail": "a race session is running — not taken while racing"}
+            return {"loaded": False, "detail": "Racing now. Not loaded."}
         if started(plume, t):
-            return {"loaded": False, "detail": "its race has started — not taken"}
+            return {"loaded": False, "detail": "Race already started. Not loaded."}
         gen = plume.get("generated_at")
         if _num(gen) and started(plume, gen):
-            return {"loaded": False, "detail": "computed after its race started — not taken"}
+            return {"loaded": False, "detail": "Made after the start. Not loaded."}
         _write(_path(), json.dumps({"received_at": int(t), "plume": plume}, separators=(",", ":")))
     return {"loaded": True, "key": plume.get("key"), "built_at": plume.get("built_at"),
             "models": len(plume["models"])}
@@ -281,8 +281,7 @@ def get(now=None):
         if onboard and is_waiting(onboard.get("plume")):
             return {"available": False, "source": "onboard", "waiting": True, "note": WAITING_NOTE,
                     "key": onboard["plume"].get("key"), "received_at": onboard.get("received_at")}
-        return {"available": False, "note": "no forecast plume aboard yet — it arrives from the "
-                "Lab or the Orin whenever the boat has internet"}
+        return {"available": False, "note": "No forecast spread yet. It arrives when the boat has internet."}
     return _shore_view(shore, now)
 
 

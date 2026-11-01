@@ -106,7 +106,7 @@ def get_ais_targets(max_range_nm: float = 12):
                     "closing": None} for r in rows]
         return {"count": len(targets), "max_range_nm": max_range_nm,
                 "own_fix": False, "targets": targets,
-                "note": "No own-ship position fix — range/CPA unavailable."}
+                "note": "No position yet, so no range or CPA."}
 
     targets = []
     for r in rows:

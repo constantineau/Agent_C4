@@ -57,7 +57,7 @@ check("unavailable", r.get("available") is False)
 check("incomplete names the leg (Rock) and how far short",
       (r.get("incomplete") or {}).get("to") == "Rock" and (r["incomplete"].get("short_nm") or 0) >= 1)
 check("no path / ETA offered", "path" not in r and "eta_min" not in r)
-check("note says INCOMPLETE and names the mark", "INCOMPLETE" in r.get("note", "") and "Rock" in r["note"])
+check("note says no new route and names the mark", "No new route" in r.get("note", "") and "Rock" in r["note"])
 deviation._load_playbook = lambda: {"race_id": "u", "variants": [{"id": "m"}]}
 reoptimize._cache.update(ctx=None, t=0, val=None)
 r = reoptimize.get_reoptimize()

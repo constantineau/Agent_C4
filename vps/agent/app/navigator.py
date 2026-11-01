@@ -395,10 +395,10 @@ def get_navigator(route: str = None):
     route = route or active_route()
     marks = _marks(route)
     if not marks:
-        return {"available": False, "note": f"no course loaded for route '{route}'"}
+        return {"available": False, "note": f"No course loaded for '{route}'."}
     s = _latest()
     if s["lat"] is None or s["lon"] is None:
-        return {"available": False, "note": "no position fix yet"}
+        return {"available": False, "note": "No position yet."}
     lat, lon = s["lat"], s["lon"]
 
     # next mark = the first one we have not passed (plane crossing, then the kv ratchet)
@@ -437,7 +437,7 @@ def get_navigator(route: str = None):
             ds, dp = _adiff(brg, stbd), _adiff(brg, port)
             near, name = (ds, "starboard") if ds < dp else (dp, "port")
             if near <= LAYLINE_TOL_DEG:
-                layline_call = f"On the {name}-tack layline — you can {'tack' if leg['type']=='beat' else 'gybe'} and lay {nxt['name']}."
+                layline_call = f"On the {name} layline. {'Tack' if leg['type']=='beat' else 'Gybe'} to lay {nxt['name']}."
             else:
                 layline_call = f"{round(near)}° below the {name} layline to {nxt['name']}."
 
@@ -486,7 +486,7 @@ def make_practice_course(leg_nm: float = 1.0):
     'practice'. Leeward mark at the boat, windward mark leg_nm straight upwind (toward TWD)."""
     s = _latest()
     if s["lat"] is None or s["lon"] is None:
-        return {"available": False, "note": "no position fix to anchor a course"}
+        return {"available": False, "note": "No position yet."}
     twd = s["twd"] if s["twd"] is not None else 0.0
     lat, lon = s["lat"], s["lon"]
     # offset leg_nm in bearing twd (upwind) — simple equirectangular step
