@@ -160,7 +160,9 @@ used either: "Chart doesn't cover the boat. Route doesn't check the shore." The 
 are then built over the wider area.
 
 On the Pi, `/course/load` writes the definition to a temp file, saves the marks, then puts the
-definition live. If any step fails it answers `loaded: false` ("Couldn't save the course. Try
+definition live, all under one lock (two loads never interleave, and `/reroute/run` reads the course
+under it too). Each load gets a load id, stored with the marks and the definition; a definition is
+only used with its own load. If any step fails it answers `loaded: false` ("Couldn't save the course. Try
 again.") and drops the old definition. The stored definition carries a hash of the marks (names
 and positions); the Pi only sends it to the Orin when that matches the marks the navigator holds.
 

@@ -32,6 +32,10 @@ SCHEMA = "c4.reroute/v1"
 LABEL = "Off the playbook"
 MAX_RESULT_BYTES = 1024 * 1024
 _LOCK = threading.Lock()
+# One course change at a time: /course/load holds it for its whole prepare → save marks → activate
+# → commit, and /reroute/run holds it while it reads the course it sends to the Orin, so a run never
+# sees one load's marks with another load's definition.
+COURSE_LOCK = threading.RLock()
 
 # crew-facing (short and plain: they reach the iPad as-is)
 NO_ORIN = "Can't reach the Orin. Re-route not started."
@@ -89,7 +93,22 @@ def _marks_hash(marks):
     return hashlib.sha1(json.dumps(sig, separators=(",", ":")).encode()).hexdigest()[:16]
 
 
-def prepare_definition(definition, course_id, route):
+def _load_id_path():
+    return os.path.join(_dir(), "course-load.json")
+
+
+def new_load_id():
+    import uuid
+    return uuid.uuid4().hex
+
+
+def set_load_id(route, load_id):
+    """Record which course load the marks store now holds (written right after the marks)."""
+    with _LOCK:
+        _write(_load_id_path(), json.dumps({"route": route, "load_id": load_id}))
+
+
+def prepare_definition(definition, course_id, route, load_id=None):
     """Write the RaceDefinition the Lab deployed (POST /course/load) to a temp file, trimmed to
     what routing needs: the course with its islands and rounding sides, and the race's zones. The
     marks store keeps only flattened marks, and the Orin's optimizer needs the rest. Returns the
@@ -106,6 +125,7 @@ def prepare_definition(definition, course_id, route):
             "courses": [course], "zones": d.get("zones") or []}
     flat, _skip, _cid = course_to_marks(keep, course.get("id"))
     rec = {"route": route, "course_id": course.get("id"), "saved_at": int(time.time()),
+           "load_id": load_id,
            "marks_hash": _marks_hash([(n, a, o) for _s, n, a, o in flat]), "definition": keep}
     path = _definition_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -145,12 +165,15 @@ def drop_definition():
 
 
 def save_definition(definition, course_id, route):
-    tmp = prepare_definition(definition, course_id, route)
-    if tmp is None:
-        drop_definition()
-        return False
-    commit_definition(tmp)
-    return True
+    with COURSE_LOCK:
+        load_id = new_load_id()
+        tmp = prepare_definition(definition, course_id, route, load_id)
+        if tmp is None:
+            drop_definition()
+            return False
+        set_load_id(route, load_id)
+        commit_definition(tmp)
+        return True
 
 
 def _definition_for(route, marks):
@@ -158,6 +181,11 @@ def _definition_for(route, marks):
     (names AND positions, by the hash stored with it)."""
     rec = _read(_definition_path())
     if not rec or rec.get("route") != route or not rec.get("marks_hash"):
+        return None, None
+    # the same LOAD as the marks aboard (a definition from another load of the same marks may carry
+    # other zones)
+    cur = _read(_load_id_path()) or {}
+    if not rec.get("load_id") or cur.get("load_id") != rec["load_id"] or cur.get("route") != route:
         return None, None
     try:
         have = _marks_hash([(m.get("name"), m.get("lat"), m.get("lon")) for m in marks])
@@ -190,6 +218,11 @@ def _device(raw):
 
 def build_request(device=None):
     """→ (request dict, None) or (None, crew-facing reason)."""
+    with COURSE_LOCK:                    # a course load can't land half way through this read
+        return _build_request(device)
+
+
+def _build_request(device):
     from .reoptimize import _next_course_index
     nav = NAV.get_navigator()
     if not nav.get("available"):

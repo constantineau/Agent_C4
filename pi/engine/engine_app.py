@@ -184,22 +184,27 @@ def course_load(body: dict):
         return {"loaded": False, "detail": "no usable marks (need coordinates)"}
     route = (body or {}).get("route") or definition.get("race_id") or "race"
     # The full course (islands, rounding sides, zones) for the Orin's re-route is written to a
-    # temp file first, then the marks, then the file goes live. Any failure: the old definition is
-    # dropped (never paired with new marks) and the load reports it.
-    tmp = None
-    try:
-        tmp = orinroute.prepare_definition(definition, cid, route)
-        datasource.active().save_course(route, marks)
-        navigator.set_active(route)
-        if tmp:
-            orinroute.commit_definition(tmp)
-        else:
+    # temp file first, then the marks, then the load id, then the file goes live, all under one
+    # lock (two loads never interleave; /reroute/run reads under it too). The definition carries the
+    # load id, so it only ever pairs with its own load's marks. Any failure: the old definition is
+    # dropped and the load reports it.
+    with orinroute.COURSE_LOCK:
+        tmp = None
+        try:
+            load_id = orinroute.new_load_id()
+            tmp = orinroute.prepare_definition(definition, cid, route, load_id)
+            datasource.active().save_course(route, marks)
+            navigator.set_active(route)
+            orinroute.set_load_id(route, load_id)
+            if tmp:
+                orinroute.commit_definition(tmp)
+            else:
+                orinroute.drop_definition()
+        except Exception as exc:  # noqa: BLE001
+            orinroute.discard(tmp)
             orinroute.drop_definition()
-    except Exception as exc:  # noqa: BLE001
-        orinroute.discard(tmp)
-        orinroute.drop_definition()
-        print(f"[course/load] failed: {type(exc).__name__}: {exc}", flush=True)
-        return {"loaded": False, "detail": "Couldn't save the course. Try again."}
+            print(f"[course/load] failed: {type(exc).__name__}: {exc}", flush=True)
+            return {"loaded": False, "detail": "Couldn't save the course. Try again."}
     return {"loaded": True, "route": route, "course_id": cid, "marks": len(marks), "skipped": skipped}
 
 

@@ -236,5 +236,57 @@ check("definition write fails → loaded false, old one gone", r.json()["loaded"
 r = client.post("/course/load", json={"definition": DEF, "course_id": "c"})
 check("a good load afterwards works again", r.json()["loaded"] and os.path.exists(DEFP))
 
+print("two course loads at once never mix:")
+import threading  # noqa: E402
+import time  # noqa: E402
+
+DEF_A = json.loads(json.dumps(DEF))
+DEF_A["zones"] = [{"name": "A zone", "type": "exclusion", "geometry": {
+    "north": 44.0, "south": 43.9, "west": -82.0, "east": -81.9}}]
+DEF_B = json.loads(json.dumps(DEF))
+DEF_B["zones"] = [{"name": "B zone", "type": "exclusion", "geometry": {
+    "north": 44.5, "south": 44.4, "west": -82.0, "east": -81.9}}]
+gate, seen = threading.Event(), []
+
+
+class SlowDS(_DS):
+    def save_course(self, route, marks):
+        seen.append(route)
+        if len(seen) == 1:
+            gate.wait(5)                  # load A stalls between its prepare and its commit
+
+
+DS2 = SlowDS()
+engine_app.datasource.active = lambda: DS2
+res = {}
+ta = threading.Thread(target=lambda: res.setdefault("a", client.post(
+    "/course/load", json={"definition": DEF_A, "course_id": "c"}).json()))
+ta.start()
+time.sleep(0.3)
+tb = threading.Thread(target=lambda: res.setdefault("b", client.post(
+    "/course/load", json={"definition": DEF_B, "course_id": "c"}).json()))
+tb.start()
+time.sleep(0.5)
+check("B waits while A is mid-load", "b" not in res and len(seen) == 1)
+t_run = threading.Thread(target=lambda: res.setdefault(
+    "run", orinroute.build_request("iPad 1")))
+t_run.start()
+time.sleep(0.3)
+check("a re-route read waits for the load too", "run" not in res)
+gate.set()
+for t in (ta, tb, t_run):
+    t.join(10)
+check("both loads done, in order", res["a"]["loaded"] and res["b"]["loaded"] and len(seen) == 2)
+d_now, _c = orinroute._definition_for("r1", MARKS)
+check("the definition aboard is B's (the later load)", d_now and d_now["zones"][0]["name"] == "B zone")
+rec_b = json.load(open(DEFP))
+client.post("/course/load", json={"definition": DEF_A, "course_id": "c"})
+rec_a = json.load(open(DEFP))
+client.post("/course/load", json={"definition": DEF_B, "course_id": "c"})
+json.dump(rec_a, open(DEFP, "w"))                 # A's definition next to B's marks (same marks)
+check("a definition from another load of the same marks → not used",
+      orinroute._definition_for("r1", MARKS) == (None, None))
+engine_app.datasource.active = lambda: DS
+
 print("ALL OK" if ok else "SOME CHECKS FAILED")
 sys.exit(0 if ok else 1)
