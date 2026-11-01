@@ -899,9 +899,10 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
     `obstacles` (an ObstacleField) keeps the route off land/islands/exclusion-zones; if None and
     `avoid` is set, one is built from the course bbox + this race's zones + island marks. `source`
     (Natural Earth vs NOAA ENC) and `safety_depth` (the active boat draft + margin) flow into it.
-    `leg_obstacles` (optional) is one ObstacleField per leg, used in place of `obstacles` for that
-    leg: island rounding barriers only apply on the leg that rounds the island (the Orin's
-    re-route passes them; the Lab still routes every leg on one course-wide mask)."""
+    `leg_obstacles` (optional) is one ObstacleField per routed leg, used in place of `obstacles` for
+    that leg. With neither given and `avoid` set, both are built here (`geo.build_leg_fields`): land,
+    zones and island disks on every leg, an island's rounding barrier only on the leg that rounds it
+    (#141), so a course passing the same island twice, once each way, doesn't wall itself off."""
     marks, skipped, cid = race_def.course_to_marks(definition, course_id)
     if from_mark:
         # PACE PLAYS (Playbook v2 Phase C): route the REMAINING course from an intermediate mark —
@@ -955,15 +956,18 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
             s = max(SP, key=lambda k: _sail_speed(SP, _dom, k, tws, twa), default=s)
         return s
 
-    if obstacles is None and avoid:
+    all_leg_obstacles = leg_obstacles            # every leg of the course (the per-model fan's)
+    if obstacles is None and leg_obstacles is None and avoid:
         bbox = course_bbox(definition, course_id)
         if bbox:
             try:
-                from .geo import build_for_course
-                obstacles = build_for_course(definition, cid or course_id, bbox,
-                                             source=source, safety_depth=safety_depth)
+                from .geo import build_leg_fields
+                obstacles, all_leg_obstacles = build_leg_fields(
+                    definition, cid or course_id, bbox, source=source, safety_depth=safety_depth)
+                # PACE PLAYS route from mark `from_mark`: their leg 0 is the course's leg from_mark
+                leg_obstacles = all_leg_obstacles[int(from_mark or 0):]
             except Exception:
-                obstacles = None
+                obstacles = leg_obstacles = all_leg_obstacles = None
 
     # reshape gate: does the (spatially-varying) sea state get to BEND the route, or only tax the ETA?
     wave_stats = _wave_field_stats(waves, marks)
@@ -1108,6 +1112,7 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
     if per_model:
         candidate_paths = _per_model_paths(definition, course_id, start_epoch, wf, obstacles, P, marks,
                                            source, safety_depth, jib_crossovers, total_min / 60.0,
+                                           leg_obstacles=all_leg_obstacles,
                                            cur=cur, waves=waves, helm_factor=helm_factor,
                                            wave_coeffs=wave_coeffs, polar=polar,
                                            polar_adjustments=polar_adjustments, sail_config=sail_config,
@@ -1140,16 +1145,27 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
         "candidate_paths": candidate_paths,
         "path": [{"lat": p["lat"], "lon": p["lon"], "t": round(p["t"])} for p in full_path],
         "windfield": wf.status(),
-        "obstacles": obstacles.summary() if obstacles is not None else {"active": False},
+        "obstacles": (_obstacle_summary(obstacles, leg_obstacles) if leg_obstacles
+                      else obstacles.summary() if obstacles is not None else {"active": False}),
         "obstacle_steps_avoided": sum(l.get("blocked_steps", 0) for l in legs),
         "timed_out": timed_out,
     }
 
 
+def _obstacle_summary(obstacles, leg_obstacles):
+    """The result's obstacle summary with per-leg masks: every leg's barriers drawn on the map."""
+    from .geo.obstacles import ObstacleField, legs_summary
+    fields = [obstacles] + list(leg_obstacles)
+    if all(f is None or isinstance(f, ObstacleField) for f in fields):
+        return legs_summary(obstacles, leg_obstacles)
+    return obstacles.summary() if obstacles is not None else {"active": False}
+
+
 def _per_model_paths(definition, course_id, start_epoch, wf, obstacles, P, marks,
                      source, safety_depth, jib_crossovers, blended_hours, cur=None,
                      waves=None, helm_factor=1.0, wave_coeffs=None, polar=None,
-                     polar_adjustments=None, sail_config=None, exclude_sails=None):
+                     polar_adjustments=None, sail_config=None, exclude_sails=None,
+                     leg_obstacles=None):
     """Route the course through EACH model's OWN sub-field (its series only) → the per-model candidate
     paths the blended route's confidence number summarizes. Same split as the playbook's `_subfields`,
     but here it feeds the Gameplan map's 'Model routes' overlay (PR-4): the user literally sees the fan
@@ -1175,7 +1191,8 @@ def _per_model_paths(definition, course_id, start_epoch, wf, obstacles, P, marks
         meta = [m for m in wf.meta if m["model"] == model]
         sub = WindField(series, meta, wf.bbox, wf.t_start, wf.t_end)
         r = optimize_course(definition, course_id, start_epoch, sub, time_budget_s=per,
-                            obstacles=obstacles, avoid=False, source=source, safety_depth=safety_depth,
+                            obstacles=obstacles, leg_obstacles=leg_obstacles, avoid=False,
+                            source=source, safety_depth=safety_depth,
                             jib_crossovers=jib_crossovers, emit_exploration=False, per_model=False, cur=cur,
                             waves=waves, helm_factor=helm_factor, wave_coeffs=wave_coeffs,
                             polar=polar, polar_adjustments=polar_adjustments, sail_config=sail_config,

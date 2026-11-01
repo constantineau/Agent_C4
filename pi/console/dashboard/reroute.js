@@ -216,7 +216,20 @@
     };
   }
 
-  const api = { view: view, afterPress: afterPress, describe: describe, lastRoute: lastRoute,
+  /* how soon to poll /reroute again: fast (3 s) while a run is going, being posted, or in the
+     STARTING_MS window after a 202 (until the poll shows it running); slow (10 s) otherwise.
+     A "started" press never keeps it fast past that window, so a finished run settles back. */
+  const RUN_POLL_MS = 3000, IDLE_POLL_MS = 10000;
+  function pollEvery(v, press, nowMs) {
+    const p = press || {};
+    if (v && v.running) return RUN_POLL_MS;
+    if (p.phase === "posting") return RUN_POLL_MS;
+    if (p.phase === "started" && (nowMs || Date.now()) - p.at < STARTING_MS) return RUN_POLL_MS;
+    return IDLE_POLL_MS;
+  }
+
+  const api = { view: view, pollEvery: pollEvery, RUN_POLL_MS: RUN_POLL_MS,
+    IDLE_POLL_MS: IDLE_POLL_MS, STARTING_MS: STARTING_MS, afterPress: afterPress, describe: describe, lastRoute: lastRoute,
     agoTxt: agoTxt, ARM_MS: ARM_MS, FALLBACK_MS: FALLBACK_MS, STALE_MS: STALE_MS,
     RUN_TRUST_MS: RUN_TRUST_MS };
   if (typeof module !== "undefined" && module.exports) module.exports = api;

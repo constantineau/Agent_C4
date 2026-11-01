@@ -25,7 +25,7 @@ import time
 import urllib.error
 import urllib.request
 
-from . import deviation
+from . import deviation, orinassets
 from . import navigator as NAV
 from . import reroutelog
 
@@ -312,6 +312,9 @@ def _build_request(device):
                       "lon": m.get("lon")} for m in marks],
            "definition": definition, "course_id": cid, "plan": _plan_track(),
            "course_hash": course_hash(nav["route"], marks)}
+    assets = orinassets.for_run(definition, cid)     # the chart + boat profile from Deploy
+    if assets is not None:
+        req["assets"] = assets
     return req, None
 
 

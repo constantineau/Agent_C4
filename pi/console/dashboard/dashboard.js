@@ -47,8 +47,7 @@
      raises a status (a suggestion is quiet text, not an alarm). */
   const CELLS = ["wind", "playbook", "forecast", "sail", ["eta", "route"], "ais", "charge", PAIR];
   const RT = window.C4Reroute;
-  const REROUTE_EVERY = 10000;    // poll the re-route status ~every 10 s, every 3 s while one runs
-  const REROUTE_RUN_EVERY = 3000;
+  // the re-route status poll: ~every 10 s, every 3 s while one runs (RT.pollEvery)
   const boatName = (r) => { const n = r.boat || r.name || ("MMSI " + (r.mmsi || "?")); return n.length > 14 ? n.slice(0, 13) + "…" : n; };
   const aisName = (t) => { const n = t.name || ("MMSI " + t.mmsi); return n.length > 12 ? n.slice(0, 11) + "…" : n; };
   /* corrected-time delta as a signed m:ss; cd<0 = the competitor is projected AHEAD of us. */
@@ -1528,10 +1527,7 @@
       if (r) { App.rr = r; App.rrAt = Date.now(); }
       render();
     }
-    const v = rerouteView();
-    App.rrTimer = setTimeout(fetchReroute,
-      (v.running || App.rtPress.phase === "started" || App.rtPress.phase === "posting")
-        ? REROUTE_RUN_EVERY : REROUTE_EVERY);
+    App.rrTimer = setTimeout(fetchReroute, RT.pollEvery(rerouteView(), App.rtPress, Date.now()));
   }
   function rerouteView() {
     const demo = App.src !== "live";

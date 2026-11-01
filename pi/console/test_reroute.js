@@ -213,6 +213,22 @@ test("a route made without zones says so plainly on the face and in the detail",
   assert.equal(pi.noZones, true);
 });
 
+test("poll cadence: fast while running or just started, back to 10 s once done", () => {
+  const p = RT.afterPress("orin", 202, { ok: true }, NOW);
+  assert.equal(RT.pollEvery(v({ rr: IDLE, press: p }), p, NOW + 1000), RT.RUN_POLL_MS);
+  const runRr = Object.assign({}, IDLE, { state: "running", progress: { elapsed_s: 30, pct: 40 } });
+  assert.equal(RT.pollEvery(v({ rr: runRr, press: p, nowMs: NOW + 40000 }), p, NOW + 40000), RT.RUN_POLL_MS);
+  // the run finished: the press stays "started", but the window has passed → idle cadence
+  const later = NOW + RT.STARTING_MS + 1;
+  const doneRr = Object.assign({}, IDLE, { state: "done", latest: "orin", result: ORIN_ROUTE });
+  assert.equal(RT.pollEvery(v({ rr: doneRr, press: p, nowMs: later }), p, later), RT.IDLE_POLL_MS);
+  assert.equal(RT.pollEvery(v({ rr: doneRr, press: p, nowMs: NOW + 3600000 }), p, NOW + 3600000), RT.IDLE_POLL_MS);
+  assert.equal(RT.pollEvery(v({ rr: IDLE }), { phase: "posting", at: NOW }, NOW), RT.RUN_POLL_MS);
+  assert.equal(RT.pollEvery(v({ rr: IDLE }), {}, NOW), RT.IDLE_POLL_MS);
+  const src = fs.readFileSync(path.join(__dirname, "dashboard", "dashboard.js"), "utf8");
+  assert.ok(/setTimeout\(fetchReroute, RT\.pollEvery\(/.test(src), "the console schedules by RT.pollEvery");
+});
+
 test("stale-safe: a held read shows its age; an old 'running' never blocks the button", () => {
   const rr = Object.assign({}, IDLE, { state: "running", progress: { elapsed_s: 30, expected_s: 70, pct: 40 } });
   const held = v({ rr: rr, rrAgeMs: 45000 });

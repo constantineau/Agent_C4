@@ -37,7 +37,7 @@ import orin_weather as W  # noqa: E402
 from app import boats, optimizer, routerun  # noqa: E402  (vps/lab on PYTHONPATH)
 from app import plume as lab_plume  # noqa: E402
 from app.geo import obstacles as geo  # noqa: E402
-from shared import race_def  # noqa: E402
+from shared import boat_profile, race_def  # noqa: E402
 
 SCHEMA = "c4.reroute/v1"
 LABEL = "Off the playbook"
@@ -50,7 +50,7 @@ ROUTE_BUDGET_S = float(os.environ.get("REROUTE_ROUTE_BUDGET_S", "300"))   # opti
 RESOLUTION = os.environ.get("REROUTE_RESOLUTION", "auto")
 USE_CURRENT = os.environ.get("REROUTE_CURRENT", "0") == "1"   # LMHOFS: network only
 USE_WAVES = os.environ.get("REROUTE_WAVES", "0") == "1"       # GLWU: network only
-# the carried chart format: land only, no waypoint pockets (prep_chart.CHART_KIND). Older formats
+# the carried chart format: land only, no waypoint pockets (vps/lab/app/orinassets.CHART_KIND). Older formats
 # ("land" had pockets at every original mark, clearing shore for good) count as out of date.
 CHART_KIND = "land-v2"
 NO_CHART = "No chart aboard. Route doesn't check the shore."
@@ -59,6 +59,9 @@ NO_COVER = "Chart doesn't cover the boat. Route doesn't check the shore."
 NO_LAND = "Chart has no land in it. Route doesn't check the shore."
 SHORT_FORECAST = "Forecast ends before the finish. Later legs use its last hour."
 NO_BOAT = "Boat profile missing. Route uses the raw polars."
+NOT_DEPLOYED_BOAT = "Boat profile not from Deploy. May be the raw polars."
+BAD_BOAT = "Boat profile from Deploy is bad. Not used."
+OTHER_BOAT = "Boat profile from Deploy is another boat's. Not used."
 BOAT_IN_ZONE = "Boat is inside an exclusion zone. Re-route not run."
 BOAT_IN_ISLAND = "Boat is inside an island's keep-out. Re-route not run."
 INCOMPLETE = "Route incomplete."
@@ -71,20 +74,6 @@ class RunError(Exception):
 
 
 # ---- the remaining course ---------------------------------------------------------------------
-def _nav_index_map(course):
-    """For each course mark, the navigator index it gets (course_to_marks order), or None for an
-    island / a mark with no position. Start is index 0 when it has a position."""
-    k = 1 if (course.get("start") or {}).get("lat") is not None else 0
-    out = []
-    for m in course.get("marks", []) or []:
-        if m.get("type") == "island" or m.get("lat") is None:
-            out.append(None)
-        else:
-            out.append(k)
-            k += 1
-    return out, k              # k = the finish's index (when the course has one)
-
-
 def remaining_definition(definition, course_id, next_index, lat, lon):
     """The deployed course, cut to what's left: it starts at the boat and runs from the next mark
     (navigator index `next_index`) to the finish. Every island stays an obstacle; the ones on legs
@@ -95,7 +84,7 @@ def remaining_definition(definition, course_id, next_index, lat, lon):
         (courses[0] if courses else None)
     if not course:
         raise RunError("No course loaded.")
-    idx, finish_idx = _nav_index_map(course)
+    idx, finish_idx = geo.nav_index_map(course)
     # each rounding island's leg bearing AS DEPLOYED (previous mark → next mark). Trimming puts the
     # boat in as the start, which would rotate the current leg's barrier and could open water the
     # deployed rounding rule closes, so the bearing is pinned on the kept island.
@@ -165,29 +154,6 @@ def leg_count(definition, course_id):
     return max(0, len(race_def.course_to_marks(definition, course_id)[0]) - 1)
 
 
-def only_leg_barriers(definition, course_id, leg):
-    """`definition` with rounding sides kept only on the islands of leg `leg` (0 = boat → first
-    mark); every other island keeps its disk but no side. A course that rounds the same island
-    twice, once each way, then never has both barriers at once (together they'd wall off the
-    island's whole meridian)."""
-    d = copy.deepcopy(definition)
-    courses = d.get("courses") or []
-    course = next((c for c in courses if c.get("id") == course_id), None) or \
-        (courses[0] if courses else None)
-    if not course:
-        return d
-    idx, _fin = _nav_index_map(course)
-    has_start = (course.get("start") or {}).get("lat") is not None
-    cur = 0 if has_start else -1            # nav index of the last point before this island
-    for m, k in zip(course.get("marks") or [], idx):
-        if k is not None:
-            cur = k
-            continue
-        if m.get("type") == "island" and cur != leg:      # leg k runs nav k → nav k+1
-            m["rounding"] = "none"
-    return d
-
-
 def _race_obstacles(definition, course_id, bbox, res_deg, depth, leg=None):
     """The race's own obstacles for what's LEFT of the course: zones, island disks and the
     rounding-side barriers of islands still to round (an island already rounded leaves no barrier
@@ -197,7 +163,7 @@ def _race_obstacles(definition, course_id, bbox, res_deg, depth, leg=None):
     # carve_waypoints=False: no zone or island disk is ever opened, for the boat or any mark (the
     # pockets go in the land mask only, see load_obstacles). `leg`: only that leg's barriers.
     if leg is not None:
-        definition = only_leg_barriers(definition, course_id, leg)
+        definition = geo.only_leg_barriers(definition, course_id, leg)
     return geo.build_for_course(definition, course_id, bbox, res_deg=res_deg, coastline_on=False,
                                 use_cache=False, source="natural_earth", safety_depth=depth,
                                 carve_waypoints=False)
@@ -241,23 +207,32 @@ def boat_in_no_go(definition, course_id, lat, lon):
     return None
 
 
-def load_obstacles(definition, course_id, full_definition, full_course_id, boat, leg=None):
+_ON_DISK = object()      # load_obstacles: read the chart file (a Pi without the Deploy assets)
+
+
+def _disk_chart(full_definition, full_course_id):
+    try:
+        with open(chart_path(full_definition.get("race_id"), full_course_id)) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def load_obstacles(definition, course_id, full_definition, full_course_id, boat, leg=None,
+                   chart=_ON_DISK):
     """The obstacle mask for the remaining course `definition` → (ObstacleField, chart note or
-    None). Land: the Lab's land-only mask for the course, carried aboard (prep_chart.py), when it
-    was built from this course and covers what's left of it, boat included. On top, always, the
-    race's zones/islands/barriers rebuilt from the remaining course. No usable land mask: those
-    alone, and the result warns that land isn't checked."""
+    None). Land: the Lab's land-only mask for the course, when it was built from this course and
+    covers what's left of it, boat included. `chart` is the one the Lab's Deploy push carried (the
+    Pi sends it with the request; None = the push had none); left out, the file in CHART_DIR is
+    read (a Pi engine from before the Deploy carried it). On top, always, the race's
+    zones/islands/barriers rebuilt from the remaining course. No usable land mask: those alone,
+    and the result warns that land isn't checked."""
     depth = boats.safety_depth_m(boat)
     need = optimizer.course_bbox(definition, course_id)      # the boat + the marks left, padded
     note = NO_CHART
     if full_definition:
-        p = chart_path(full_definition.get("race_id"), full_course_id)
-        chart = None
-        try:
-            with open(p) as f:
-                chart = json.load(f)
-        except (OSError, ValueError):
-            pass
+        if chart is _ON_DISK:
+            chart = _disk_chart(full_definition, full_course_id)
         if isinstance(chart, dict):
             # a land-only mask built from this exact course, zones and depth? A re-deployed course
             # (a new zone, a moved mark) or an older full-race mask must never be used.
@@ -331,6 +306,38 @@ def _get_boat():
     return b
 
 
+def pick_boat(carried):
+    """The boat profile to route on → (profile or None, info for the result, warning or None).
+
+    `carried` is the request's `assets` (from the Lab's Deploy push, through the Pi), or None. The
+    Deploy's reviewed profile is used when it is this boat's (REROUTE_BOAT), valid, and matches
+    the version it was sent with. Otherwise the Orin's own copy (the repo's raw sr33.json unless
+    one was copied aboard), and the result says so."""
+    warn = NOT_DEPLOYED_BOAT
+    b = (carried or {}).get("boat")
+    if isinstance(b, dict):
+        try:          # types first (validate converts values), and never a crash on a bad one
+            errs = boat_profile.shape_errors(b) or boat_profile.validate(b)[0]
+        except (ValueError, TypeError, OverflowError):
+            errs = ["bad values"]
+        if b.get("boat_id") != BOAT_ID:
+            warn = OTHER_BOAT
+        elif errs or carried.get("boat_version") != boat_profile.version(b):
+            warn = BAD_BOAT
+        else:
+            return b, _boat_info(b, "deploy", carried.get("received_at")), None
+    own = _get_boat()
+    if own is None:
+        return None, None, NO_BOAT
+    return own, _boat_info(own, "orin", None), warn
+
+
+def _boat_info(b, source, received_at):
+    return {"boat_id": b.get("boat_id"), "version": boat_profile.version(b), "source": source,
+            "received_at": received_at, "helm_factor": boats.helm_factor(b),
+            "polar_cells": len(boats.polar_adjustments(b)), "draft_m": b.get("draft_m")}
+
+
 def _validate(req):
     pos = (req or {}).get("position") or {}
     try:
@@ -358,19 +365,21 @@ def run(req, now=None, on_progress=None, on_phase=None, is_online=None):
     else:
         full = None
         d, cid, names = minimal_definition(req.get("marks"), req.get("next_index"), lat, lon)
-    boat = _get_boat()
-    boat_info = ({"boat_id": boat.get("boat_id"), "helm_factor": boats.helm_factor(boat),
-                  "polar_cells": len(boats.polar_adjustments(boat)), "draft_m": boat.get("draft_m")}
-                 if boat else None)
+    # the chart + boat profile from the Lab's Deploy push, carried by the Pi with this request.
+    # No `assets` at all: a Pi from before this build; the Orin's own files are used, as before.
+    carried = req.get("assets") if isinstance(req.get("assets"), dict) else None
+    boat, boat_info, boat_note = pick_boat(carried)
+    chart_kw = {"chart": carried.get("chart")} if carried is not None else {}
     why_not = boat_in_no_go(d, cid, lat, lon)
     if why_not:
         raise RunError(why_not)
     phase("chart")
     # one mask per leg: island disks, zones and land on every leg; an island's rounding barrier
     # only on the leg that rounds it
-    leg_fields = [load_obstacles(d, cid, full, full_cid, boat, leg=i)
+    leg_fields = [load_obstacles(d, cid, full, full_cid, boat, leg=i, **chart_kw)
                   for i in range(leg_count(d, cid))]
-    field, chart_note = leg_fields[0] if leg_fields else load_obstacles(d, cid, full, full_cid, boat)
+    field, chart_note = leg_fields[0] if leg_fields else \
+        load_obstacles(d, cid, full, full_cid, boat, **chart_kw)
     leg_fields = [f for f, _n in leg_fields]
 
     # weather: the box the cache already holds, if one covers what's left of the course
@@ -428,8 +437,10 @@ def run(req, now=None, on_progress=None, on_phase=None, is_online=None):
             warnings.insert(0, chart_note)
         if not full:
             warnings.insert(0, NO_ZONES)
-        if not boat:
-            warnings.insert(0, NO_BOAT)
+        if boat_note == NO_BOAT:
+            warnings.insert(0, boat_note)
+        elif boat_note:                 # a profile, just not the Lab's reviewed one: after the rest
+            warnings.append(boat_note)
         until = weather.get("forecast_until")
         if until and res.get("finish_epoch") and res["finish_epoch"] > until:
             warnings.insert(0, SHORT_FORECAST)

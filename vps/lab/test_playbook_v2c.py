@@ -163,8 +163,9 @@ check("no crossover -> no play (dead-calm leg skipped)",
 print("6) rejoin-vs-continue tabulation (_rejoin_tab)")
 # synthetic nominal: a straight due-east 40 nm reach at 8 kn (constant wind from the north)
 import app.geo as GEO
-_saved_bfc = GEO.build_for_course
+_saved_bfc, _saved_blf = GEO.build_for_course, GEO.build_leg_fields
 GEO.build_for_course = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no network in tests"))
+GEO.build_leg_fields = GEO.build_for_course
 try:
     lat0, lon0 = 44.0, -82.0
     deg_per_nm = 1.0 / (60.0 * math.cos(math.radians(lat0)))
@@ -194,7 +195,7 @@ try:
     check("short legs are skipped (offset ~ leg length)",
           PB._rejoin_tab({}, "x", WF(), short, None, None, marks_s, 6.0) == [])
 finally:
-    GEO.build_for_course = _saved_bfc
+    GEO.build_for_course, GEO.build_leg_fields = _saved_bfc, _saved_blf
 
 # ---- 7) plays assemble through _build_plays (guidance response + table passthrough) ------------
 print("7) _build_plays assembly (no LLM)")

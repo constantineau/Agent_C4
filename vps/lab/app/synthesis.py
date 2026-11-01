@@ -23,6 +23,7 @@ originates strategy; only the deterministic engine may flag an off-book departur
 """
 from __future__ import annotations
 
+import bisect
 import datetime
 import hashlib
 import json
@@ -406,12 +407,16 @@ def _mean_tws(consensus):
     return round(sum(ws) / len(ws), 1) if ws else None
 
 
-def _downsample_idx(path, max_pts=200, legs=None, obstacles=None, leg_end_idx=None):
+def _downsample_idx(path, max_pts=200, legs=None, obstacles=None, leg_end_idx=None,
+                    leg_obstacles=None):
     """Indices of the vertices a play's route keeps in the bundle. Keeps the endpoints and every MARK
     vertex — the router's own `leg_end_idx` when the route carries it, else the path point at each
     leg's `eta_epoch` — fills the budget on a uniform stride, then splits any shortcut between kept
     points that `obstacles.crosses` says cuts land / an island / a zone back toward the router's own
-    (checked) vertices (#31). May exceed `max_pts` only to stay clear."""
+    (checked) vertices (#31). May exceed `max_pts` only to stay clear.
+
+    `leg_obstacles` (one field per leg of this route, with `leg_end_idx`) checks each shortcut on
+    the mask its own leg was routed on, rounding barrier included (#141); `obstacles` otherwise."""
     n = len(path or [])
     if n <= max_pts:
         return list(range(n))
@@ -425,12 +430,23 @@ def _downsample_idx(path, max_pts=200, legs=None, obstacles=None, leg_end_idx=No
     room = max(2, max_pts - len(keep) + 2)
     stride = (n - 1) / (room - 1)
     idx = sorted(keep | {round(i * stride) for i in range(room)})
+    ends = sorted(i for i in (leg_end_idx or []) if isinstance(i, int)) if leg_obstacles else []
+
+    def _mask(j):
+        # mark vertices are always kept, so a shortcut i → j never spans two legs: j's leg
+        if ends:
+            k = bisect.bisect_left(ends, j)
+            if k < len(leg_obstacles) and leg_obstacles[k] is not None:
+                return leg_obstacles[k]
+        return obstacles
+
     out, stack = [idx[0]], list(reversed(idx[1:]))
     while stack:
         j = stack.pop()
         i = out[-1]
-        if (obstacles is not None and j - i > 1 and
-                obstacles.crosses(path[i]["lat"], path[i]["lon"], path[j]["lat"], path[j]["lon"])):
+        obs = _mask(j)
+        if (obs is not None and j - i > 1 and
+                obs.crosses(path[i]["lat"], path[i]["lon"], path[j]["lat"], path[j]["lon"])):
             stack += [j, (i + j) // 2]
             continue
         out.append(j)
@@ -443,13 +459,14 @@ def _downsample(path, max_pts=200, legs=None, obstacles=None, leg_end_idx=None):
     return [path[k] for k in _downsample_idx(path, max_pts, legs, obstacles, leg_end_idx)]
 
 
-def _thin_route(route, obstacles=None, max_pts=200):
+def _thin_route(route, obstacles=None, max_pts=200, leg_obstacles=None):
     """Thin a play route in place-copy: path downsampled, `leg_end_idx` remapped onto the thinned
     path so the mark vertices stay addressable aboard."""
     path = route.get("path") or []
     if len(path) <= max_pts:
         return route
-    idx = _downsample_idx(path, max_pts, route.get("legs"), obstacles, route.get("leg_end_idx"))
+    idx = _downsample_idx(path, max_pts, route.get("legs"), obstacles, route.get("leg_end_idx"),
+                          leg_obstacles=leg_obstacles)
     where = {i: j for j, i in enumerate(idx)}
     out = dict(route, path=[path[k] for k in idx])
     if route.get("leg_end_idx"):
@@ -458,15 +475,16 @@ def _thin_route(route, obstacles=None, max_pts=200):
 
 
 def _play_obstacles(definition, course_id):
-    """The same (cached) obstacle field the playbook routes were built through — for the downsample's
-    shortcut check. None on any failure: the downsample then keeps marks but can't check land."""
+    """The same (cached) per-leg obstacle fields the playbook routes were built through — for the
+    downsample's shortcut check → (base, [field per course leg]). (None, []) on any failure: the
+    downsample then keeps marks but can't check land."""
     try:
         from . import optimizer
-        from .geo import build_for_course
+        from .geo import build_leg_fields
         bbox = optimizer.course_bbox(definition, course_id)
-        return build_for_course(definition, course_id, bbox) if bbox else None
+        return build_leg_fields(definition, course_id, bbox) if bbox else (None, [])
     except Exception:
-        return None
+        return None, []
 
 
 def _play_synthesis(plays_in, corridor, profile, race_name):
@@ -671,7 +689,10 @@ def _build_plays(playbook, definition, course_id, venue_stats=None, jib_crossove
         if route:
             if len(route.get("path") or []) > 200 and not _obs:
                 _obs.append(_play_obstacles(definition, course_id))
-            route = _thin_route(route, _obs[0] if _obs else None)
+            base, leg_fields = _obs[0] if _obs else (None, [])
+            # a pace play routes the rest of the course from its mark: its leg 0 is that course leg
+            first = int((p.get("params") or {}).get("mark") or 0) if p.get("kind") == "pace" else 0
+            route = _thin_route(route, base, leg_obstacles=leg_fields[first:])
         guidance = p.get("guidance")
         # Leg convention (matcher-enforced): leg N is the leg ARRIVING at course marks[N] — the
         # navigator's next-mark index onboard. Pace plays are HARD-gated (the response is a
