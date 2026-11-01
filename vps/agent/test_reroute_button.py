@@ -298,6 +298,93 @@ check("refused: 'Route incomplete. Not sent to GPS.'", s["shown"] is False
       and s["note"] == "Route incomplete. Not sent to GPS." and len(SENT) == n_sent)
 check("…by name too", gpsout.show(source="orin")["note"] == "Route incomplete. Not sent to GPS.")
 
+print("a course reload can't land mid-read (#143 review, races):")
+import threading  # noqa: E402
+
+COURSE_A = [dict(m) for m in MARKS]
+COURSE_B = [dict(m) for m in MARKS]
+COURSE_B[1]["lat"] = 44.12                      # the same course reloaded with mark A moved
+holder = {"marks": COURSE_A}
+NAV._marks = lambda route: holder["marks"]
+in_read, go = threading.Event(), threading.Event()
+_nav = NAV.get_navigator
+
+
+def slow_nav(route=None):
+    out = _nav(route)
+    in_read.set()                               # the run has read the next mark...
+    go.wait(5)                                  # ...and stalls before reading the marks
+    return out
+
+
+def reload_b():
+    with orinroute.COURSE_LOCK:                 # what /course/load holds for its whole load
+        holder["marks"] = COURSE_B
+        res["loaded_at"] = time.time()
+
+
+res = {}
+NAV.get_navigator = slow_nav
+reoptimize._compute = lambda *a, **k: {"available": True, "marks": ["A", "Finish"],
+                                       "path": [{"lat": 44.02, "lon": -82.0}] * 2}
+CALLS["allowed"] = True
+t_run = threading.Thread(target=lambda: res.setdefault("run", reoptimize.run(device="iPad 5")))
+t_run.start()
+in_read.wait(5)
+t_load = threading.Thread(target=reload_b)
+t_load.start()
+time.sleep(0.3)
+check("Pi run: the reload waits while the run reads the course", "loaded_at" not in res)
+go.set()
+t_run.join(5)
+t_load.join(5)
+wait_done()
+NAV.get_navigator = _nav
+reoptimize._compute = counted
+CALLS["allowed"] = False
+pi_r = reoptimize.get_reoptimize()
+check("…the run's hash is the course it read (A), not the reload's",
+      res["run"][0] == 202 and pi_r["course_hash"] == orinroute.course_hash("race", COURSE_A))
+check("…so after the reload it's an old course and the GPS refuses it",
+      gpsout.show(source="reoptimize")["note"] == "Route is for an old course. Press Re-route now.")
+
+print("the GPS check and the broadcast are one step:")
+holder["marks"] = COURSE_A
+orinroute.stored = lambda: None                 # only the Pi route (made on course A)
+posting, release = threading.Event(), threading.Event()
+_post_orig = gpsout._post
+sent_marks = {}
+
+
+def slow_post(path, payload=None):
+    if path == "/route":
+        sent_marks["course"] = holder["marks"]
+        posting.set()
+        release.wait(5)
+    return {"broadcasting": True, "route": (payload or {}).get("name"), "n_waypoints": 2}
+
+
+gpsout._post = slow_post
+res = {}
+t_show = threading.Thread(target=lambda: res.setdefault("show", gpsout.show(source="reroute")))
+t_show.start()
+posting.wait(5)
+t_load = threading.Thread(target=reload_b)
+t_load.start()
+time.sleep(0.3)
+check("the reload waits until the broadcast is done", "loaded_at" not in res)
+release.set()
+t_show.join(5)
+t_load.join(5)
+check("…the route went out on the course it was checked against",
+      res["show"]["shown"] and sent_marks["course"] is COURSE_A and "loaded_at" in res)
+check("…and the next show sees the reload and refuses",
+      gpsout.show(source="reroute")["note"] == "Route is for an old course. Press Re-route now.")
+gpsout._post = _post_orig
+orinroute.stored = _orig_stored
+NAV._marks = lambda route: MARKS
+check("the broadcast that holds the lock is bounded (a few seconds)", gpsout.POST_TIMEOUT_S <= 3)
+
 print("the real engine endpoints:")
 from fastapi.testclient import TestClient  # noqa: E402
 

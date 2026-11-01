@@ -28,6 +28,7 @@ from . import navigator as NAV
 
 N2KOUT_URL = os.environ.get("N2KOUT_URL", "http://127.0.0.1:8210").rstrip("/")
 MAX_WPTS = int(os.environ.get("GPSOUT_MAX_WPTS", "24"))
+POST_TIMEOUT_S = float(os.environ.get("GPSOUT_POST_TIMEOUT_S", "3"))
 
 
 def _post(path, payload=None):
@@ -35,7 +36,9 @@ def _post(path, payload=None):
                                  data=json.dumps(payload or {}).encode(),
                                  headers={"Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=6) as r:
+        # short: show() holds the course lock across this call, so a slow broadcaster can hold up
+        # a /course/load for at most this long
+        with urllib.request.urlopen(req, timeout=POST_TIMEOUT_S) as r:
             return json.loads(r.read())
     except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as e:
         return {"available": False, "error": f"n2kout unreachable: {e}"}
@@ -311,6 +314,16 @@ def _new_route(source, route):
 
 
 def show(source: str = "playbook", variant=None, route=None):
+    """See _show. Runs under the course lock (orinroute.COURSE_LOCK, the one /course/load holds
+    for its whole load): the course check, the route assembly against the navigator's marks and
+    the broadcast all see ONE course, so a reload can't land between the check and the send.
+    This runs in the engine process, the same one that serves /course/load; the n2kout POST is
+    bounded by POST_TIMEOUT_S, so the lock is held a few seconds at most."""
+    with orinroute.COURSE_LOCK:
+        return _show(source, variant, route)
+
+
+def _show(source: str = "playbook", variant=None, route=None):
     """Assemble + broadcast. source='playbook' (frozen variant, default recommended), or a stored
     re-route: 'reroute' (the newest), 'orin' or 'reoptimize' (the Pi's). Only on the crew's tap.
 

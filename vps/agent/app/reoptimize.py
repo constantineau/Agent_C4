@@ -161,7 +161,8 @@ def _inputs(route=None):
 def compute(route=None):
     """Compute one fresh route now, synchronously, and return it. Only the button's job (and
     tests) call this; it stores nothing."""
-    inp, why = _inputs(route)
+    with orinroute.COURSE_LOCK:
+        inp, why = _inputs(route)
     if inp is None:
         return {"available": False, "note": why}
     return _compute(inp["nav"], inp["remaining"], inp["slat"], inp["slon"], inp["live"],
@@ -235,7 +236,10 @@ def run(route=None, device=None):
     `status()` reports it."""
     global _thread
     dev = _device(device)
-    with _LOCK:
+    # the course lock first (the order /reroute/run uses too): a /course/load can't land between
+    # reading the next mark and reading the marks, so the next-mark index, the marks and the
+    # course hash stamped on the route all come from one course
+    with orinroute.COURSE_LOCK, _LOCK:
         if _job["state"] == "running":
             el = round(time.time() - (_job["started_at"] or time.time()))
             reroutelog.record("pressed", "pi", device=dev, outcome="busy")
