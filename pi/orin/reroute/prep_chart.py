@@ -34,9 +34,12 @@ def main(argv):
         return 1
     # the Lab's own choices: its chart source and the active boat's draft
     src = (labstate.get("coastline_source") or geo.COASTLINE_SOURCE or "natural_earth").lower()
-    field = geo.build_for_course(d, cid, bbox, source=src, safety_depth=boats.active_safety_depth_m())
+    depth = boats.active_safety_depth_m()
+    field = geo.build_for_course(d, cid, bbox, source=src, safety_depth=depth)
     out = geo.field_to_dict(field)
-    out.update(race_id=d.get("race_id"), course_id=cid)
+    # what it was built from: the Orin checks this against the course aboard before using it
+    out.update(race_id=d.get("race_id"), course_id=cid,
+               fingerprint=geo.course_fingerprint(d, cid, depth))
     json.dump(out, sys.stdout, separators=(",", ":"))
     safe = lambda s: "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in str(s))[:60]
     print(f"\nsave as: {safe(d.get('race_id'))}__{safe(cid)}.json  "

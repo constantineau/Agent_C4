@@ -152,7 +152,7 @@ def build_request(device=None):
     definition, cid = _definition_for(nav["route"], marks)
     req = {"device": _device(device), "asked_at": int(time.time()),
            "position": {"lat": s["lat"], "lon": s["lon"], "t": int(time.time())},
-           "route": nav["route"], "next_index": nxt if nxt is not None else 1,
+           "route": nav["route"], "next_index": nxt,
            "marks": [{"seq": m.get("seq"), "name": m.get("name"), "lat": m.get("lat"),
                       "lon": m.get("lon")} for m in marks],
            "definition": definition, "course_id": cid, "plan": _plan_track()}

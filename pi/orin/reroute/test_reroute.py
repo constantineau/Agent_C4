@@ -160,6 +160,18 @@ d, cid, names = job.minimal_definition([{"name": "Start", "lat": 43.07, "lon": -
                                         {"name": "North", "lat": 44.0, "lon": -82.1},
                                         {"name": "Finish", "lat": 45.3, "lon": -82.4}], 1, 43.5, -82.3)
 check("no definition aboard → the navigator's marks", names == ["North", "Finish"])
+NOSTART = {"race_id": "n", "zones": [], "courses": [{"id": "c", "marks": [
+    {"name": "First", "type": "buoy", "lat": 44.0, "lon": -82.1, "rounding": "none"},
+    {"name": "Second", "type": "buoy", "lat": 44.5, "lon": -82.2, "rounding": "none"}],
+    "finish": {"points": [{"lat": 45.0, "lon": -82.3}]}}]}
+d, cid, names = job.remaining_definition(NOSTART, "c", 0, 43.8, -82.0)
+check("no positioned start, next index 0 → no mark skipped", names == ["First", "Second", "Finish"])
+d, cid, names = job.remaining_definition(NOSTART, "c", None, 43.8, -82.0)
+check("…and the default with no start is the first mark", names == ["First", "Second", "Finish"])
+d, cid, names = job.remaining_definition(DEF, "c", None, 43.0, -82.5)
+check("default with a start: the first mark after it", names[0] == "North")
+d, cid, names = job.remaining_definition(DEF, "c", 0, 43.0, -82.5)
+check("before the start (index 0): the start line first", names[:2] == ["Start", "North"])
 
 # ---- 3) one run, end to end, offline -----------------------------------------------------------
 print("3) one full run, offline, from the cache")
@@ -200,12 +212,73 @@ check("no chart aboard → it says so, short", out["warnings"][0] == "No chart a
 check("phases in order", phases[:3] == ["chart", "weather", "routing"] and phases[-1] == "saving")
 
 os.makedirs(job.CHART_DIR, exist_ok=True)
-f = geo.build_for_course(DEF, "c", (46.0, 42.5, -83.5, -81.5), coastline_on=False, use_cache=False)
-with open(job.chart_path("huron", "c"), "w") as fh:
-    json.dump(geo.field_to_dict(f), fh)
+DEPTH = job.boats.safety_depth_m(job._get_boat())
+
+
+def write_chart(defn, fingerprint=True):
+    f = geo.build_for_course(defn, "c", (46.0, 42.5, -83.5, -81.5), coastline_on=False,
+                             use_cache=False)
+    d = geo.field_to_dict(f)
+    if fingerprint:
+        d["fingerprint"] = geo.course_fingerprint(defn, "c", DEPTH)
+    with open(job.chart_path("huron", "c"), "w") as fh:
+        json.dump(d, fh)
+
+
+write_chart(DEF)
 out2 = job.run(REQ, now=NOW, is_online=lambda: False)
-check("with a chart file aboard: used, no warning", out2["chart"]["land"] is True
-      and "No chart aboard. Route doesn't check the shore." not in out2["warnings"])
+check("with a matching chart aboard: used, no warning", out2["chart"]["land"] is True
+      and job.NO_CHART not in out2["warnings"] and job.OLD_CHART not in out2["warnings"])
+
+print("3b) a chart built for an older version of the course is refused")
+ZONE = {"name": "No-go", "type": "exclusion", "geometry": {"north": 44.65, "south": 44.45,
+                                                           "west": -82.5, "east": -81.95}}
+
+
+def in_zone(pts):
+    """Any point, or any point along a leg between them, inside ZONE."""
+    for a, b in zip(pts, pts[1:]):
+        for k in range(21):
+            la, lo = a["lat"] + (b["lat"] - a["lat"]) * k / 20, a["lon"] + (b["lon"] - a["lon"]) * k / 20
+            if 44.45 < la < 44.65 and -82.5 < lo < -81.95:
+                return True
+    return False
+
+
+check("(the plain route does cross that water)", in_zone(out["points"]))
+DEF2 = dict(DEF, zones=[ZONE])                      # re-deployed with a new exclusion zone
+field, note = job.load_obstacles(None, None, DEF2, "c", job._get_boat())
+check("out-of-date chart → not used, said plainly", note == "Chart is out of date. Route doesn't check the shore.")
+check("…and the new zone is still avoided", field.blocked(44.55, -82.2) and not field.blocked(44.2, -82.6))
+out3 = job.run(dict(REQ, definition=DEF2), now=NOW, is_online=lambda: False)
+check("the run says so", out3["warnings"][0] == job.OLD_CHART and out3["chart"]["land"] is False)
+check("the route keeps out of the zone", out3["complete"] and not in_zone(out3["points"]))
+write_chart(DEF, fingerprint=False)
+check("a chart with no fingerprint → out of date",
+      job.load_obstacles(None, None, DEF, "c", job._get_boat())[1] == job.OLD_CHART)
+write_chart(DEF)
+moved = json.loads(json.dumps(DEF))
+moved["courses"][0]["marks"][2]["lat"] = 44.95
+check("a moved mark → out of date", job.load_obstacles(None, None, moved, "c", job._get_boat())[1]
+      == job.OLD_CHART)
+
+print("3c) an incomplete route makes no finish claim")
+_orig = job.routerun.run_course
+
+
+def stalled(*a, **k):
+    r = _orig(*a, **k)
+    r.update(complete=False, finish_epoch=NOW + 3600, total_hours=1.0)
+    return r
+
+
+job.routerun.run_course = stalled
+out4 = job.run(REQ, now=NOW, is_online=lambda: False)
+job.routerun.run_course = _orig
+check("no finish time, no total", out4["finish_eta"] is None and out4["total_hours"] is None
+      and out4["complete"] is False)
+check("no gain vs the plan", out4["vs_plan"] == {"available": False, "note": "Route incomplete."})
+check("said plainly, first", out4["warnings"][0] == "Route incomplete.")
 try:
     job.run(dict(REQ, position={}), now=NOW, is_online=lambda: False)
     check("no position → refused", False)

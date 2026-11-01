@@ -509,3 +509,17 @@ def field_from_dict(d: dict):
     field.safety_depth = d.get("safety_depth")
     field.active = bool(d.get("active"))
     return field
+
+
+def course_fingerprint(definition: dict, course_id, safety_depth) -> str:
+    """What a carried land mask was built from: the course (marks, islands, rounding sides), the
+    race's zones and the no-go depth. The Orin refuses a mask whose fingerprint doesn't match the
+    definition aboard, so a re-deployed course (a new exclusion zone) never routes on an old mask."""
+    import json
+    courses = (definition or {}).get("courses") or []
+    course = next((c for c in courses if c.get("id") == course_id), None) or \
+        (courses[0] if courses else None)
+    payload = json.dumps({"course": course, "zones": (definition or {}).get("zones") or [],
+                          "depth": None if safety_depth is None else round(float(safety_depth), 3)},
+                         sort_keys=True, separators=(",", ":"))
+    return hashlib.sha1(payload.encode()).hexdigest()[:16]

@@ -26,9 +26,10 @@ iPad ──GET /api/reroute───────▶ Pi engine ──GET /status,
    Deploy push sent to `/course/load`) and which mark is next, the plan's track, who asked.
 2. `job.py` cuts the course to what's left: it starts at the boat and runs from the next mark to the
    finish. Islands on legs already sailed are dropped.
-3. Land: the Lab's own land mask for the course, carried aboard as a file (see "Chart" below).
-   Without it, the run avoids the race's islands and zones only, and the result says
-   "No chart aboard. Route doesn't check the shore."
+3. Land: the Lab's own land mask for the course, carried aboard as a file (see "Chart" below),
+   used only if it was built from the course aboard. Without one, the run avoids the race's
+   islands and zones only, and the result says "No chart aboard. Route doesn't check the shore."
+   (or "Chart is out of date. …" for a mask built from an older course).
 4. Weather (`orin_weather.py`): the Lab's wind loader runs unchanged on wrapped model sources.
    Cached file first. Download only while online and inside the budget (20 s a request, 180 s in
    all). Offline it picks the cached cycle that covers the run best and doesn't step back cycles.
@@ -97,6 +98,10 @@ Result (`c4.reroute/v1`):
  "chart": {"land": true, "source": "enc"}}
 ```
 
+If the optimizer stalls short of the finish, `complete` is false, `finish_eta` and `total_hours`
+are null, `vs_plan` is `{"available": false, "note": "Route incomplete."}` and the first warning is
+"Route incomplete." A partial route never claims a finish time or a gain.
+
 `vs_plan.gain_min` > 0 means the new route is faster. It is the plan's own time left from the
 boat's nearest point on the plan, minus the new route's time left. The plan's times come from the
 forecast it was built on, so this is a rough guide. Beyond 20 nm off the plan: "Too far off the
@@ -114,7 +119,12 @@ docker exec -i sr33-dev-lab-1 python - bayview-mackinac-2026 cove_island \
 scp /tmp/chart.json agent-c4@<orin>:c4-reroute/chart/bayview-mackinac-2026__cove_island.json
 ```
 
-Needs the Lab build that has `obstacles.field_to_dict` (this PR).
+Needs the Lab build that has `obstacles.field_to_dict` (this PR). The file carries a fingerprint
+of what it was built from: the course (marks, islands, rounding sides), the race's zones and the
+no-go depth. The Orin checks it against the definition aboard. If the course was re-deployed since
+(a new exclusion zone, a moved mark, another draft), the mask is not used: the run avoids the
+current islands and zones only, and says "Chart is out of date. Route doesn't check the shore."
+Rebuild and copy the chart after every course change.
 
 ## Measured on the Orin (2026-11-01)
 

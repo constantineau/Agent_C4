@@ -50,6 +50,9 @@ ROUTE_BUDGET_S = float(os.environ.get("REROUTE_ROUTE_BUDGET_S", "300"))   # opti
 RESOLUTION = os.environ.get("REROUTE_RESOLUTION", "auto")
 USE_CURRENT = os.environ.get("REROUTE_CURRENT", "0") == "1"   # LMHOFS: network only
 USE_WAVES = os.environ.get("REROUTE_WAVES", "0") == "1"       # GLWU: network only
+NO_CHART = "No chart aboard. Route doesn't check the shore."
+OLD_CHART = "Chart is out of date. Route doesn't check the shore."
+INCOMPLETE = "Route incomplete."
 PLAN_NEAR_NM = 20.0          # compare with the plan only while the boat is this close to it
 
 
@@ -83,16 +86,24 @@ def remaining_definition(definition, course_id, next_index, lat, lon):
     if not course:
         raise RunError("No course loaded.")
     idx, finish_idx = _nav_index_map(course)
-    nxt = max(1, int(next_index or 1))
+    start = course.get("start") or {}
+    has_start = start.get("lat") is not None
+    # navigator index of the next mark; unknown → the first mark after the start. An explicit 0 is
+    # kept: with no positioned start, index 0 is the first real mark.
+    nxt = (1 if has_start else 0) if next_index is None else max(0, int(next_index))
     keep, prev_nav = [], 0
     for m, k in zip(course.get("marks") or [], idx):
         if k is None:
-            if m.get("type") == "island" and m.get("lat") is not None and prev_nav >= nxt - 1:
+            if m.get("type") == "island" and m.get("lat") is not None and \
+                    (nxt == 0 or prev_nav >= nxt - 1):
                 keep.append(m)            # an island on the current leg or later
             continue
         prev_nav = k
         if k >= nxt:
             keep.append(m)
+    if nxt == 0 and has_start:          # not started yet: go to the start line first
+        keep.insert(0, {"name": "Start", "type": "buoy", "lat": start["lat"], "lon": start["lon"],
+                        "rounding": "none"})
     course["marks"] = keep
     course["start"] = {"type": "point", "lat": float(lat), "lon": float(lon), "name": "Boat"}
     if nxt > finish_idx:
@@ -130,18 +141,32 @@ def load_obstacles(definition, course_id, full_definition, full_course_id, boat)
     """The land/island/zone mask → (ObstacleField or None, chart note or None). The Lab's own land
     mask for the course, carried aboard (pi/orin/reroute/prep_chart.py), when there is one. Else
     the race's islands and zones only: the result warns that land isn't checked."""
+    depth = boats.safety_depth_m(boat)
+    note = NO_CHART
     if full_definition:
         p = chart_path(full_definition.get("race_id"), full_course_id)
+        chart = None
         try:
             with open(p) as f:
-                return geo.field_from_dict(json.load(f)), None
-        except (OSError, ValueError, KeyError):
+                chart = json.load(f)
+        except (OSError, ValueError):
             pass
+        if isinstance(chart, dict):
+            # built from this exact course, zones and depth? A re-deployed course (a new exclusion
+            # zone, a moved mark) must never route on the old mask.
+            if chart.get("fingerprint") == geo.course_fingerprint(full_definition, full_course_id,
+                                                                  depth):
+                try:
+                    return geo.field_from_dict(chart), None
+                except (ValueError, KeyError, TypeError):
+                    pass
+            note = OLD_CHART
+    # no usable chart: the race's islands and zones from the definition aboard, never skipped
     base, cid = (full_definition, full_course_id) if full_definition else (definition, course_id)
     bbox = optimizer.course_bbox(base, cid)
     field = geo.build_for_course(base, cid, bbox, coastline_on=False, use_cache=False,
-                                 safety_depth=boats.safety_depth_m(boat))
-    return field, "No chart aboard. Route doesn't check the shore."
+                                 safety_depth=depth)
+    return field, note
 
 
 # ---- the comparison with the plan -------------------------------------------------------------
@@ -252,9 +277,14 @@ def run(req, now=None, on_progress=None, on_phase=None, is_online=None):
             warnings.insert(0, chart_note)
         if not full:
             warnings.insert(0, "Course without islands or rounding sides.")
+        complete = bool(res.get("complete"))
+        if not complete:
+            warnings.insert(0, INCOMPLETE)
         out.update({
-            "available": True, "complete": res.get("complete"), "degraded": res.get("degraded"),
-            "finish_eta": res.get("finish_epoch"), "total_hours": res.get("total_hours"),
+            "available": True, "complete": complete, "degraded": res.get("degraded"),
+            # a stalled route's end isn't the finish: no finish time, no comparison with the plan
+            "finish_eta": res.get("finish_epoch") if complete else None,
+            "total_hours": res.get("total_hours") if complete else None,
             "sailed_nm": res.get("total_sailed_nm"), "tacks": res.get("total_tacks"),
             "first_heading": (legs[0]["first_heading"] if legs else None),
             "confidence": res.get("route_confidence"), "wind_coverage": res.get("wind_coverage"),
@@ -265,7 +295,9 @@ def run(req, now=None, on_progress=None, on_phase=None, is_online=None):
                        for p in path],
             "leg_end_idx": res.get("leg_end_idx"),
             "warnings": warnings,
-            "vs_plan": vs_plan(req.get("plan"), lat, lon, now, res.get("finish_epoch") or now),
+            "vs_plan": (vs_plan(req.get("plan"), lat, lon, now, res.get("finish_epoch"))
+                        if complete and res.get("finish_epoch") else
+                        {"available": False, "note": INCOMPLETE}),
             "chart": {"land": chart_note is None,
                       "source": (res.get("obstacles") or {}).get("source")},
         })
