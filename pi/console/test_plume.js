@@ -138,6 +138,21 @@ test("frozen at the start: from the gun until the race is over", () => {
     "a running race session freezes it at the session's start");
 });
 
+test("an onboard plume says so, with the last run downloaded and its age, and never freezes", () => {
+  const ob = Object.assign({}, PLUME, { source: "onboard", age_s: 40 * 60, race_start: NOW - H, frozen: true });
+  // hrrr's latest run was downloaded last (at = cycle + 2 h → NOW + 1 h)
+  assert.equal(PL.sourceText(ob), "Onboard · HRRR " + ("0" + new Date((NOW - H) * 1000).getUTCHours()).slice(-2) + "z, 40 min old");
+  assert.equal(PL.isFrozen(ob, NOW), false, "computed aboard: keeps updating through the race");
+  assert.equal(PL.sourceText(PLUME), "", "the Lab's plume carries no onboard label");
+  assert.equal(PL.sourceText(Object.assign({}, ob, { age_s: null })).endsWith("z"), true);
+});
+
+test("no onboard forecast for the boat's spot yet: one short line", () => {
+  assert.equal(PL.waitingText({ available: false, waiting: true, source: "onboard" }), "Onboard forecast: waiting for internet.");
+  assert.equal(PL.waitingText({ available: false, note: "no plume" }), "");
+  assert.equal(PL.waitingText(PLUME), "");
+});
+
 let failed = 0;
 for (const [name, fn] of cases) {
   try { fn(); console.log("  [OK ] " + name); }

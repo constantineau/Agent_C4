@@ -711,7 +711,8 @@
     forecast(p) {
       const fc = p.forecast && p.forecast.available && p.forecast.hours && p.forecast.hours.length ? p.forecast : null;
       const pl = plumeNow();
-      if (!fc && !pl) return NA("no forecast");
+      const wait = App.src === "live" && !pl ? App.plumeWait || "" : "";
+      if (!fc && !pl) return NA(wait || "no forecast");
       // the boat's measured wind — only a REAL reading (a null tws is "no wind", not 0 kts)
       const live = p.conditions && p.conditions.available && p.conditions.tws != null && p.conditions.twd != null
         ? { tws: p.conditions.tws, twd: p.conditions.twd } : null;
@@ -750,7 +751,8 @@
       const old = pl && !frozen && PL.isOld(pl);
       const chart = pl ? '<div class="pl-tile">' + PL.chartSvg(pl, { w: 270, h: 104, now: nowS, back_h: 3, ahead_h: 24,
         compact: true, field: "tws", obs: App.src === "live" ? raceData() : null, nowObs: obs }) + PL.legendHtml(pl) + "</div>" : null;
-      const sub = !pl ? "" : frozen ? '<b class="pl-old-tag">' + PL.esc(PL.frozenText(pl)) + "</b>"
+      const sub = !pl ? PL.esc(wait) : frozen ? '<b class="pl-old-tag">' + PL.esc(PL.frozenText(pl)) + "</b>"
+        : pl.source === "onboard" ? PL.summary(pl, nowS, 6) + " · " + (old ? '<b class="pl-old-tag">' + PL.esc(PL.sourceText(pl)) + "</b>" : PL.esc(PL.sourceText(pl)))
         : PL.summary(pl, nowS, 6) + (old ? ' · <b class="pl-old-tag">data ' + PL.ageText(pl.age_s) + " old</b>" : "");
       const head = f60 && f60.tws != null ? "+60 min " + r0(f60.tws) + " kts" + (f120 && f120.tws != null ? ", +120 min " + r0(f120.tws) + " kts." : ".") : "";
       return { status: st, value: null, rows: rows, chart: chart, sub: sub,
@@ -761,7 +763,7 @@
           old ? "Forecast is " + PL.ageText(pl.age_s) + " old. Updates when back online." :
           obs ? "Forecast steady and matching." : "No wind reading. Check the wind sensor.",
         clears: st === "ok" ? "—" : "forecast matches again",
-        based: (pl ? [PL.models(pl).length + " forecast models, " + (pl.age_s != null ? PL.ageText(pl.age_s) + " old" : "age ?")] : [])
+        based: (pl ? [(pl.source === "onboard" ? "Onboard, " : "") + PL.models(pl).length + " forecast models, " + (pl.age_s != null ? PL.ageText(pl.age_s) + " old" : "age ?")] : [])
           .concat(fc ? ["forecast + boat wind"] : []), conf: "engine" };
     },
     /* SAIL: reads the CREW-SET sail (the sails bar) and says how it fits the conditions —
@@ -1199,8 +1201,8 @@
   function fetchPlume() {
     if (App.src !== "live") return Promise.resolve(null);
     return fetchJSON("/plume", 8000).then((r) => {
-      if (r && r.available && PL.available(r)) { App.plume = r; App.plumeAt = Date.now(); }
-      else if (r && r.available === false) { App.plume = null; }
+      if (r && r.available && PL.available(r)) { App.plume = r; App.plumeAt = Date.now(); App.plumeWait = ""; }
+      else if (r && r.available === false) { App.plume = null; App.plumeWait = PL.waitingText(r); }
       if (App.openTile === "forecast") populateDetail("forecast", false);
       return r;
     });
@@ -1235,6 +1237,7 @@
     const frozen = PL.isFrozen(pl, now);
     const old = !frozen && PL.isOld(pl);
     return '<div class="rc-title">Forecast plume · ' + PL.esc(pl.label || "planned route") + "</div>" +
+      (pl.source === "onboard" ? '<div class="dc-foot">' + PL.esc(PL.sourceText(pl)) + "</div>" : "") +
       (frozen ? '<div class="pl-age-warn pl-frozen">' + PL.esc(PL.frozenText(pl)) + ". No updates while racing.</div>" : "") +
       (old ? '<div class="pl-age-warn">Forecast is <b>' + PL.ageText(pl.age_s) + " old</b>. Updates when the boat is online.</div>" : "") +
       '<div class="pl-ctl">' + fields + '</div><div class="pl-ctl">' + picks + "</div>" +
@@ -1816,7 +1819,7 @@
     coach: null, deviation: null, forecastDrift: null, selector: null, reoptimize: null,
     plangap: null, trend: null, briefBusy: {}, gps: null, gpsBusy: false, gpsNote: "",
     checklist: null, chkTimer: null,
-    plume: null, plumeAt: 0, plumeTimer: null, plumeView: { field: "tws", only: null },
+    plume: null, plumeAt: 0, plumeWait: "", plumeTimer: null, plumeView: { field: "tws", only: null },
     detailStreamKey: null, detailAbort: null,
     lastOkAt: 0, lastPollOk: false, graceUntil: 0, startedAt: Date.now(),
   };

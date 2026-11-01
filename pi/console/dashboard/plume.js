@@ -2,7 +2,8 @@
    Pure functions (no DOM, no fetch): loaded by index.html ahead of dashboard.js
    (window.C4Plume) and required by pi/console/test_plume.js under node.
 
-   The plume comes from the Lab (vps/lab/app/plume.py) via the Pi engine's cached GET /plume:
+   The plume comes from the Lab (vps/lab/app/plume.py) or the boat's own Orin (pi/orin/plume,
+   `source: "onboard"`, never frozen) via the Pi engine's cached GET /plume:
      { models: [{ model: "hrrr", runs: [{ cycle, at, pts: [[t, tws_kn, twd_deg], ...], est? }] }],
        basis: "route"|"point", label, built_at, age_s, ... }
    runs are newest first. The chart draws the latest run of each model bold and the older runs
@@ -85,6 +86,7 @@
      passed, the boat keeps the pre-start plume (RRS 41) — say so instead of looking live */
   function isFrozen(plume, now) {
     if (!plume) return false;
+    if (plume.source === "onboard") return false;   // computed aboard: keeps updating while racing
     if (plume.frozen === true) return true;
     const rs = plume.race_start, re = plume.race_end;
     return typeof rs === "number" && now >= rs && (typeof re !== "number" || now < re);
@@ -94,6 +96,25 @@
     const t = typeof plume.frozen_at === "number" ? plume.frozen_at : plume.race_start;
     return "Frozen at the start" + (typeof t === "number" ? " · " + hhmm(t) : "");
   };
+
+  /* where the plume came from, for an onboard one: "Onboard · GFS 12z, 40 min old" — the model
+     run downloaded last and how long ago. Empty for the Lab's plume. */
+  function sourceText(plume) {
+    if (!plume || plume.source !== "onboard") return "";
+    let best = null;
+    for (const m of models(plume)) {
+      const r = m.runs[0];
+      if (typeof r.at === "number" && (!best || r.at > best.r.at)) best = { m: m.model, r: r };
+    }
+    const run = best ? " · " + LABEL[best.m] + " " + ("0" + new Date(best.r.cycle * 1000).getUTCHours()).slice(-2) + "z" : "";
+    return "Onboard" + run + (plume.age_s != null ? (run ? ", " : " · ") + ageText(plume.age_s) + " old" : "");
+  }
+
+  /* the engine's answer when the Orin has nothing for the boat's current spot yet */
+  function waitingText(r) {
+    return r && r.available === false && r.waiting === true && r.source === "onboard"
+      ? "Onboard forecast: waiting for internet." : "";
+  }
 
   const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   function cycleText(epoch, now) {
@@ -239,7 +260,7 @@
   }
 
   const api = { ORDER, LABEL, label, known, models, available, valueAt, spreadAt, ageText, isOld, OLD_S,
-    isFrozen, frozenText, cycleText, chartSvg, legendHtml, runTimesHtml, summary, esc };
+    isFrozen, frozenText, sourceText, waitingText, cycleText, chartSvg, legendHtml, runTimesHtml, summary, esc };
   root.C4Plume = api;
   if (typeof module === "object" && module.exports) module.exports = api;
 })(typeof window !== "undefined" ? window : globalThis);
