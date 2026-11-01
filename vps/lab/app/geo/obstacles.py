@@ -340,7 +340,7 @@ _FIELD_CACHE: dict = {}                   # cache_key -> ObstacleField (reused a
 
 def build_for_course(definition: dict, course_id, bbox, *, coastline_on=True, zones_on=True,
                      islands_on=True, res_deg=RES_DEG, cache_dir=None, use_cache=True,
-                     source=None, safety_depth=None) -> ObstacleField:
+                     source=None, safety_depth=None, carve_start=True) -> ObstacleField:
     """Assemble the ObstacleField for a course over `bbox` = (north, south, west, east).
 
     Modular: the coastline is global (any race); the zones + island marks come from THIS race's
@@ -416,10 +416,18 @@ def build_for_course(definition: dict, course_id, bbox, *, coastline_on=True, zo
 
     # 4) open a navigable pocket at every real course waypoint (start/gate/finish) so the route can
     #    always REACH its marks — finishes/marks are set near shore/islands and ENC blocks that water.
+    #    `carve_start=False` skips the start: the Orin's re-route puts the BOAT in as the start and
+    #    must never erase a zone or island next to it (it opens the boat's pocket in land only).
     if field.active:
         from shared import race_def
         marks, _skip, _cid = race_def.course_to_marks(definition, course_id)
-        for _seq, _name, mlat, mlon in marks:
+        courses = definition.get("courses", []) or []
+        course = next((c for c in courses if c.get("id") == course_id), None) or \
+            (courses[0] if courses else {})
+        has_start = (course.get("start") or {}).get("lat") is not None
+        for i, (_seq, _name, mlat, mlon) in enumerate(marks):
+            if i == 0 and has_start and not carve_start:
+                continue
             if mlat is not None and mlon is not None:
                 field._carve_disk(mlat, mlon, MARK_CARVE_NM)
 

@@ -56,6 +56,8 @@ NO_COVER = "Chart doesn't cover the boat. Route doesn't check the shore."
 NO_LAND = "Chart has no land in it. Route doesn't check the shore."
 SHORT_FORECAST = "Forecast ends before the finish. Later legs use its last hour."
 NO_BOAT = "Boat profile missing. Route uses the raw polars."
+BOAT_IN_ZONE = "Boat is inside an exclusion zone. Re-route not run."
+BOAT_IN_ISLAND = "Boat is inside an island's keep-out. Re-route not run."
 INCOMPLETE = "Route incomplete."
 PLAN_NEAR_NM = 20.0          # compare with the plan only while the boat is this close to it
 
@@ -160,8 +162,36 @@ def _race_obstacles(definition, course_id, bbox, res_deg, depth):
     to block a later leg). Pure Python, no shoreline data. Built as "natural_earth" whatever the
     configured coastline source: under "enc" the builder skips the island disks (it expects ENC
     land polygons, which this build doesn't load), and an island must never read as open water."""
+    # carve_start=False: the start here is the boat, and no zone or island disk is ever opened
+    # around it (the boat's pocket is opened in the land mask only)
     return geo.build_for_course(definition, course_id, bbox, res_deg=res_deg, coastline_on=False,
-                                use_cache=False, source="natural_earth", safety_depth=depth)
+                                use_cache=False, source="natural_earth", safety_depth=depth,
+                                carve_start=False)
+
+
+def _inside(lat, lon, rings):
+    """Even-odd point-in-polygon over (lon, lat) rings (holes included)."""
+    hit = False
+    for ring in rings:
+        n = len(ring)
+        for i in range(n):
+            (x1, y1), (x2, y2) = ring[i], ring[(i + 1) % n]
+            if (y1 > lat) != (y2 > lat) and lon < x1 + (lat - y1) * (x2 - x1) / (y2 - y1):
+                hit = not hit
+    return hit
+
+
+def boat_in_no_go(definition, course_id, lat, lon):
+    """The crew-facing reason the boat itself is inside a race zone or an island's keep-out disk
+    (as the obstacle builder fills them), else None. Routing out of it would mean erasing it."""
+    for z in definition.get("zones", []) or []:
+        if z.get("type") in ("exclusion", "hazard", "tss") and \
+                _inside(lat, lon, geo._zone_rings(z.get("geometry"))):
+            return BOAT_IN_ZONE
+    for isl in geo._course_islands(definition, course_id):
+        if optimizer._hav_nm(lat, lon, isl["lat"], isl["lon"]) <= isl["radius_nm"]:
+            return BOAT_IN_ISLAND
+    return None
 
 
 def load_obstacles(definition, course_id, full_definition, full_course_id, boat):
@@ -284,6 +314,9 @@ def run(req, now=None, on_progress=None, on_phase=None, is_online=None):
     boat_info = ({"boat_id": boat.get("boat_id"), "helm_factor": boats.helm_factor(boat),
                   "polar_cells": len(boats.polar_adjustments(boat)), "draft_m": boat.get("draft_m")}
                  if boat else None)
+    why_not = boat_in_no_go(d, cid, lat, lon)
+    if why_not:
+        raise RunError(why_not)
     phase("chart")
     field, chart_note = load_obstacles(d, cid, full, full_cid, boat)
 

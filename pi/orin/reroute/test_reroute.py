@@ -400,6 +400,41 @@ outN = job.run(REQ, now=NOW, is_online=lambda: False)
 check("…and the route leaves from the boat", outN["available"] and outN["complete"])
 write_chart(DEF)
 
+print("3b1b) a zone right next to the boat is never carved; a boat inside one doesn't route")
+NEAR = {"race_id": "near", "courses": [{"id": "c", "start": {"lat": 43.5, "lon": -82.5}, "marks": [],
+        "finish": {"points": [{"lat": 45.0, "lon": -81.5}]}}],
+        "zones": [{"name": "Tiny no-go", "type": "exclusion", "geometry": {
+            "north": 44.005, "south": 43.995, "west": -81.998, "east": -81.990}}]}
+dZ, cZ, _n = job.remaining_definition(NEAR, "c", 1, 44.0, -82.0)       # Codex repro
+fZ, nZ = job.load_obstacles(dZ, cZ, None, None, job._get_boat())
+check("fallback: the zone 0.15 nm from the boat stays blocked", fZ.blocked(44.001, -81.994))
+landZ = geo.build_for_course(NEAR, "c", (45.6, 42.9, -83.1, -80.9), coastline_on=False,
+                             use_cache=False, zones_on=False, islands_on=False)
+landZ._fill_polygon([[(-83.0, 43.0), (-82.9, 43.0), (-82.9, 43.1), (-83.0, 43.1)]], 1, "coastline")
+landZ.active = True
+with open(job.chart_path("near", "c"), "w") as fh:
+    json.dump(dict(geo.field_to_dict(landZ), kind="land",
+                   fingerprint=geo.course_fingerprint(NEAR, "c", DEPTH)), fh)
+fZ2, nZ2 = job.load_obstacles(dZ, cZ, NEAR, "c", job._get_boat())
+check("chart path: same", nZ2 is None and fZ2.blocked(44.001, -81.994))
+check("(the Lab's own build still opens its start pocket: unchanged)", not geo.build_for_course(
+    dict(NEAR, courses=[dict(NEAR["courses"][0], start={"lat": 44.0, "lon": -82.0})]), "c",
+    (45.6, 42.9, -83.1, -80.9), coastline_on=False, use_cache=False).blocked(44.001, -81.994))
+REQ_Z = {"device": "iPad 1", "position": {"lat": 44.0, "lon": -81.994}, "next_index": 1,
+         "definition": NEAR, "course_id": "c", "models": ["gfs"]}
+try:
+    job.run(REQ_Z, now=NOW, is_online=lambda: False)
+    check("boat inside the zone → not routed", False)
+except job.RunError as e:
+    check("boat inside the zone → not routed, said plainly",
+          str(e) == "Boat is inside an exclusion zone. Re-route not run.")
+try:
+    job.run(dict(REQ, position={"lat": 44.31, "lon": -82.6}), now=NOW, is_online=lambda: False)
+    check("boat inside an island's disk → not routed", False)
+except job.RunError as e:
+    check("boat inside an island's disk → not routed, said plainly",
+          str(e) == "Boat is inside an island's keep-out. Re-route not run.")
+
 print("3b2) prep_chart refuses a mask with no land")
 import io  # noqa: E402
 import contextlib  # noqa: E402
