@@ -140,6 +140,26 @@ def _vs_playbook(bundle, fresh_path):
         return {"available": False, "note": "Comparison failed."}
 
 
+def course_avoid(nav_route, marks, bundle):
+    """Every obstacle aboard for this course: the playbook bundle's islands + zones AND the
+    deployed definition's (when it is the course the navigator holds: orinroute._definition_for),
+    the same homework the Orin routes around. → (disks, polygons, definition, course_id,
+    number of bundle zones). The re-route and the GPS export both use this, so a waypoint thinned
+    for the plotter is checked against exactly what the route was computed around. Caller holds
+    orinroute.COURSE_LOCK."""
+    zdisks, polys = _parse_zones(bundle)
+    disks = _avoid_disks(bundle) + zdisks                 # islands + circular zones = disks
+    n_bundle_zones = len(zdisks) + len(polys)
+    defn, cid = orinroute._definition_for(nav_route, marks) if nav_route else (None, None)
+    if defn:
+        from shared.race_def import course_obstacles
+        dob = {"obstacles": course_obstacles(defn, cid)}
+        dz, dp = _parse_zones(dob)
+        disks = disks + _avoid_disks(dob) + dz
+        polys = polys + dp
+    return disks, polys, defn, cid, n_bundle_zones
+
+
 def _inputs(route=None):
     """What a run needs, read once: (inputs dict, None) or (None, crew-facing reason)."""
     nav = NAV.get_navigator(route)
@@ -153,23 +173,14 @@ def _inputs(route=None):
     if slat is None or slon is None:
         return None, "No position yet."
     bundle = deviation._load_playbook()
-    zdisks, polys = _parse_zones(bundle)
-    avoid = _avoid_disks(bundle) + zdisks                 # islands + circular zones = disks
-    # the DEPLOYED course (its zones and islands), when it is the course aboard: the same
-    # homework the Orin routes around, so the Pi fallback never drops a zone the bundle lacks
-    defn, cid = orinroute._definition_for(nav["route"], marks)
+    avoid, polys, defn, cid, n_bundle_zones = course_avoid(nav["route"], marks, bundle)
     warnings = []
     if defn:
-        from shared.race_def import course_obstacles
-        dob = {"obstacles": course_obstacles(defn, cid)}
-        dz, dp = _parse_zones(dob)
-        avoid += _avoid_disks(dob) + dz
-        polys = polys + dp
         course = next((c for c in defn.get("courses") or [] if c.get("id") == cid), None) or {}
         if any(m.get("type") == "island" and m.get("rounding") in ("port", "starboard")
                for m in course.get("marks") or []):
             warnings.append(PI_NO_ROUNDING)
-    elif not polys and not zdisks:
+    elif not n_bundle_zones:
         warnings.append(orinroute.NO_ZONES)               # never route silently without zones
     else:
         warnings.append(NO_ROUNDING)

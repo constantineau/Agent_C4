@@ -29,6 +29,20 @@ from . import navigator as NAV
 N2KOUT_URL = os.environ.get("N2KOUT_URL", "http://127.0.0.1:8210").rstrip("/")
 MAX_WPTS = int(os.environ.get("GPSOUT_MAX_WPTS", "24"))
 POST_TIMEOUT_S = float(os.environ.get("GPSOUT_POST_TIMEOUT_S", "3"))
+# GEOMETRY-FREE GUARD on the thinning. The obstacle test only knows the obstacles aboard (the
+# bundle's + the deployed course's); the Pi holds no land, and a route can bend round anything
+# its router knew. So a thinned segment may stand in for the router's vertices only while every
+# vertex it drops lies within DEV_TOL_NM of it: the exported line stays on the computed one.
+# 0.05 nm (~90 m) is the plotter's own arrival radius (ARRIVE_NM), well inside what a crew
+# steers to at race zoom, and loose enough that the router's straight runs (dozens of
+# collinear steps) still collapse: a real route keeps its tacks, gybes and bends, not its steps.
+# Garmin chartplotters take up to 250 points per route (to be confirmed on the 943 dockside);
+# MAX_WPTS (24) is the drawing budget, not the limit. When even that tolerance needs more than
+# HARD_MAX_WPTS points the route is refused, never thinned further: a shortcut is worse than no
+# route on the plotter.
+DEV_TOL_NM = float(os.environ.get("GPSOUT_DEV_TOL_NM", "0.05"))
+HARD_MAX_WPTS = int(os.environ.get("GPSOUT_HARD_MAX_WPTS", "250"))
+TOO_DETAILED = "Route too detailed for the GPS. Not sent."
 
 
 def _post(path, payload=None):
@@ -114,11 +128,25 @@ def _mark_vertices(path, marks, tol_nm=0.5, leg_end_idx=None, first_leg_to=1):
     return {k: i for k, i in zip(ks, chosen) if dist[k][i] <= tol_nm}
 
 
-def _downsample_idx(path, max_n=MAX_WPTS, keep=(), blocked=None):
+def _worst_dropped(path, i, j):
+    """(index, nm) of the vertex strictly between i and j farthest from the segment i→j."""
+    a, b = path[i], path[j]
+    worst, at = 0.0, None
+    for k in range(i + 1, j):
+        d = routing._pt_to_seg_nm(path[k]["lat"], path[k]["lon"], a["lat"], a["lon"],
+                                  b["lat"], b["lon"])
+        if d > worst:
+            worst, at = d, k
+    return at, worst
+
+
+def _downsample_idx(path, max_n=MAX_WPTS, keep=(), blocked=None, dev_tol_nm=DEV_TOL_NM):
     """Indices of the kept vertices. Endpoints + `keep` (mark vertices) always; a uniform stride
-    fills the rest of the budget; then every shortcut between consecutive kept vertices that
-    `blocked(a, b)` says cuts an obstacle is split at its midpoint until it is clear (consecutive
-    router vertices are the router's own checked steps). May exceed `max_n` only to stay clear."""
+    fills the rest of the budget; then every shortcut between consecutive kept vertices is split
+    until it is safe on BOTH counts: `blocked(a, b)` says it cuts no known obstacle (split at the
+    midpoint), and every vertex it drops lies within `dev_tol_nm` of it (split at the farthest
+    one; None turns this off). Consecutive router vertices are the router's own checked steps.
+    May exceed `max_n` only to stay safe."""
     n = len(path)
     if n == 0:
         return []
@@ -130,15 +158,20 @@ def _downsample_idx(path, max_n=MAX_WPTS, keep=(), blocked=None):
         stride = (n - 1) / (room - 1)
         idx |= {round(i * stride) for i in range(room)}
     idx = sorted(idx)
-    if blocked is None:
+    if blocked is None and dev_tol_nm is None:
         return idx
     out, stack = [idx[0]], list(reversed(idx[1:]))
     while stack:
         j = stack.pop()
         i = out[-1]
-        if j - i > 1 and blocked(path[i], path[j]):
+        if j - i > 1 and blocked is not None and blocked(path[i], path[j]):
             stack += [j, (i + j) // 2]          # split: route through the midpoint first
             continue
+        if j - i > 1 and dev_tol_nm is not None:
+            k, d = _worst_dropped(path, i, j)
+            if k is not None and d > dev_tol_nm:
+                stack += [j, k]                 # split at the vertex it strays farthest from
+                continue
         out.append(j)
     return out
 
@@ -147,12 +180,16 @@ def _downsample(path, max_n=MAX_WPTS, keep=(), blocked=None):
     return [path[i] for i in _downsample_idx(path, max_n, keep, blocked)]
 
 
-def _blocked_fn(bundle):
-    """Segment test against the bundle's frozen obstacle homework (islands + zones) — the same
-    geometry the onboard router prunes against. None when there's nothing to hit."""
-    disks = reoptimize._avoid_disks(bundle)
-    zdisks, polys = reoptimize._parse_zones(bundle)
-    disks = disks + zdisks
+def _blocked_fn(bundle, obstacles=None):
+    """Segment test against the obstacles aboard: `obstacles` = (disks, polygons) from
+    reoptimize.course_avoid (the bundle's AND the deployed course's islands + zones, what the
+    re-route was computed around); without it, the bundle's alone. None when there's nothing."""
+    if obstacles is not None:
+        disks, polys = obstacles
+    else:
+        disks = reoptimize._avoid_disks(bundle)
+        zdisks, polys = reoptimize._parse_zones(bundle)
+        disks = disks + zdisks
     if not disks and not polys:
         return None
     return lambda a, b: (routing._seg_blocked(a["lat"], a["lon"], b["lat"], b["lon"], disks)
@@ -221,6 +258,20 @@ def _dest_candidate(pts, boat, mark_pos, next_k, blocked):
            and _clear_to(dest + 1)):
         dest += 1                                         # attained → the next one, if clear
     return dest, lo
+
+
+def _obstacles(bundle, route=None):
+    """(disks, polygons) of every obstacle aboard for the navigator's course: the bundle's and
+    the deployed definition's (reoptimize.course_avoid). Read under the course lock show()
+    holds, so it is the course the route was just checked against."""
+    try:
+        nav = NAV.get_navigator(route)
+        r = nav.get("route") if nav.get("available") else None
+        marks = (NAV._marks(r) or []) if r else []
+    except Exception:  # noqa: BLE001
+        r, marks = None, []
+    disks, polys, _d, _c, _n = reoptimize.course_avoid(r, marks, bundle)
+    return disks, polys
 
 
 def _course_context(route=None):
@@ -411,8 +462,10 @@ def _show(source: str = "playbook", variant=None, route=None):
         verts = {j - nxt: i - cut for j, i in verts.items() if j >= nxt}
         nxt = 0
 
-    blocked = _blocked_fn(bundle)
+    blocked = _blocked_fn(bundle, _obstacles(bundle, route))
     idx = _downsample_idx(path, MAX_WPTS, set(verts.values()), blocked)
+    if len(idx) > HARD_MAX_WPTS:
+        return {"shown": False, "note": TOO_DETAILED}
     pts = [path[i] for i in idx]
     where = {i: j for j, i in enumerate(idx)}
     dest = _dest_index(pts, boat, {k: where[i] for k, i in verts.items() if i in where}, nxt,

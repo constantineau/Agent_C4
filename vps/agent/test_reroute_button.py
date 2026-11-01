@@ -509,6 +509,69 @@ check("Pi with the deployed course: routes around its zone, no zone warning",
 check("…and says it doesn't check the rounding sides",
       "Pi route doesn't check rounding sides." in pi_z["warnings"])
 
+print("GPS thinning keeps a detour round a DEPLOYED zone (Codex repro, #143 review):")
+# a 101-vertex route north through A to the Finish with a sharp jog east round a small
+# exclusion zone that only the deployed course has (the playbook bundle has no obstacles)
+BOX = {"north": 44.1435, "south": 44.1385, "west": -82.005, "east": -81.99}
+DEF_Z = json.loads(json.dumps(DEFN))
+DEF_Z["zones"] = [{"name": "Tiny", "type": "exclusion", "geometry": BOX}]
+DEF_Z["courses"][0]["marks"] = [m for m in DEF_Z["courses"][0]["marks"] if m["type"] != "island"]
+RPATH = [{"lat": round(44.0 + 0.002 * k, 5), "lon": -81.98 if 69 <= k <= 72 else -82.0}
+         for k in range(101)]
+ring = [(BOX["west"], BOX["south"]), (BOX["east"], BOX["south"]), (BOX["east"], BOX["north"]),
+        (BOX["west"], BOX["north"]), (BOX["west"], BOX["south"])]
+
+
+def cuts(pts):
+    return sum(routing._seg_crosses_poly(a["lat"], a["lon"], b["lat"], b["lon"], [ring])
+               for a, b in zip(pts, pts[1:]))
+
+
+check("(the route itself is safe)", cuts(RPATH) == 0)
+check("deployed course with the zone", orinroute.save_definition(DEF_Z, "c", "race"))
+reoptimize._store({"available": True, "source": "pi", "path": RPATH, "leg_end_idx": [50, 100],
+                   "marks": ["A", "Finish"], "mark_idx": [1, 2], "computed_at": int(time.time()),
+                   "course_hash": orinroute.current_course_hash()})
+
+
+def send():
+    n = len(SENT)
+    r = gpsout.show(source="reoptimize")
+    return r, (SENT[-1][1]["waypoints"] if len(SENT) > n else None)
+
+
+r, w = send()
+check("sent, and no exported segment cuts the deployed zone", r["shown"] and w and cuts(w) == 0)
+kept = [next(i for i, p in enumerate(RPATH) if p["lat"] == q["lat"] and p["lon"] == q["lon"])
+        for q in w]
+check("…and every dropped vertex stays within 0.05 nm of the exported line",
+      all(gpsout._worst_dropped(RPATH, i, j)[1] <= gpsout.DEV_TOL_NM for i, j in zip(kept, kept[1:])))
+_tol = gpsout.DEV_TOL_NM
+gpsout._downsample_idx.__defaults__ = (gpsout.MAX_WPTS, (), None, None)   # layer 2 off
+r, w = send()
+check("layer 1 alone (deployed obstacles in the check): still clear", r["shown"] and cuts(w) == 0)
+os.remove(os.path.join(_tmp, "engine", "course-definition.json"))          # no definition aboard
+gpsout._downsample_idx.__defaults__ = (gpsout.MAX_WPTS, (), None, _tol)    # layer 2 back on
+r, w = send()
+check("layer 2 alone (no obstacle data at all): still clear", r["shown"] and cuts(w) == 0)
+gpsout._downsample_idx.__defaults__ = (gpsout.MAX_WPTS, (), None, None)
+r, w = send()
+check("(control) neither layer: the thinning cuts straight through the zone",
+      r["shown"] and cuts(w) > 0)
+gpsout._downsample_idx.__defaults__ = (gpsout.MAX_WPTS, (), None, _tol)
+idx = gpsout._downsample_idx(RPATH, 24, {50}, None)
+check("the guard on its own: every dropped vertex within 0.05 nm of its segment",
+      all(gpsout._worst_dropped(RPATH, i, j)[1] <= gpsout.DEV_TOL_NM for i, j in zip(idx, idx[1:])))
+ZIG = [{"lat": 44.0 + 0.001 * k, "lon": -82.0 + (0.01 if k % 2 else 0.0)} for k in range(600)]
+_ds = gpsout._downsample_idx
+check("a route that needs more than 250 points at that tolerance is refused, not thinned",
+      len(_ds(ZIG, 24, (), None)) > gpsout.HARD_MAX_WPTS)
+reoptimize._store({"available": True, "source": "pi", "path": ZIG, "marks": ["A", "Finish"],
+                   "computed_at": int(time.time()), "course_hash": orinroute.current_course_hash()})
+r, w = send()
+check("…'Route too detailed for the GPS. Not sent.'", r["shown"] is False
+      and r["note"] == "Route too detailed for the GPS. Not sent." and w is None)
+
 print("the real engine endpoints:")
 from fastapi.testclient import TestClient  # noqa: E402
 

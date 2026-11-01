@@ -71,7 +71,7 @@ for n in (24, 8, 4):
               for a, b in zip(pts, pts[1:]))
     check(f"max {n}: {len(pts)} pts, 0 segments cut the island", cut == 0)
     check(f"max {n}: endpoints + Top mark kept", idx[0] == 0 and idx[-1] == len(path) - 1 and top_i in idx)
-naive = gpsout._downsample_idx(path, 4, keep, None)
+naive = gpsout._downsample_idx(path, 4, keep, None, None)   # both guards off
 check("(control) without the check a 4-point thin DOES cut the island", any(
     routing._seg_blocked(path[a]["lat"], path[a]["lon"], path[b]["lat"], path[b]["lon"], avoid)
     for a, b in zip(naive, naive[1:])))
@@ -242,7 +242,7 @@ bundle_rock["obstacles"]["islands"][0]["lat"] = 44.0
 gpsout.show()
 check("show(): island homework → steer-to waypoint 1", sent["payload"]["dest_index"] == 1)
 _orig_blk = gpsout._blocked_fn
-gpsout._blocked_fn = lambda b: ALL
+gpsout._blocked_fn = lambda b, obstacles=None: ALL
 sent.clear()
 r = gpsout.show()
 gpsout._blocked_fn = _orig_blk
