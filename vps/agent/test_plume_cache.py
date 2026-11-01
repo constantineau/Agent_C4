@@ -9,6 +9,8 @@ Run:  PYTHONPATH=vps/agent python3 vps/agent/test_plume_cache.py
 import json
 import os
 import tempfile
+import threading
+import time
 
 _tmp = tempfile.mkdtemp()
 os.environ["ENGINE_DB"] = os.path.join(_tmp, "engine", "engine.db")
@@ -99,11 +101,38 @@ check("its race is on at receipt → refused even with nothing aboard",
       plume.load(dict(PRE, generated_at=START - 30), now=START + 60)["loaded"] is False
       and plume.get(START + 60)["available"] is False)
 
-print("a different race starts its own window:")
+print("one rule while r1 is on — any other race is refused too:")
 plume.load(PRE, now=NOW)
 other = dict(GOOD, race_id="r2", key="r2__pb", generated_at=START + 600, race_start=START + 86400, race_end=None)
-check("while r1 is frozen, r2's pre-start plume loads", plume.load(other, now=START + 700)["loaded"]
-      and plume.get(START + 800)["race_id"] == "r2")
+check("while r1 is frozen, r2's pre-start plume is refused; r1's stays",
+      plume.load(other, now=START + 700)["loaded"] is False and plume.get(START + 800)["race_id"] == "r1")
+fin1 = dict(PRE, key="r1__fin", generated_at=START + 9000, race_end=START + 8000)
+check("r1 carrying its recorded finish loads", plume.load(fin1, now=START + 9100)["loaded"])
+check("...after which r2's pre-start plume loads", plume.load(other, now=START + 9200)["loaded"]
+      and plume.get(START + 9300)["race_id"] == "r2")
+
+print("a load queued at the gun is judged when it gets the lock:")
+os.remove(path)
+clock = {"t": START - 1}
+_real_time = plume.time.time
+plume.time.time = lambda: clock["t"]
+res = {}
+plume._LOCK.acquire()
+th = threading.Thread(target=lambda: res.update(plume.load(dict(PRE, generated_at=START - 30))))
+th.start()
+time.sleep(0.2)
+clock["t"] = START + 1                     # the gun goes while it waits for the lock
+plume._LOCK.release()
+th.join()
+check("refused (fresh clock inside the lock)", res.get("loaded") is False)
+plume.time.time = _real_time
+
+print("engine restart:")
+plume.load(PRE, now=NOW)
+import importlib  # noqa: E402
+plume = importlib.reload(plume)
+check("after a restart the cached race is still frozen and other plumes are refused",
+      plume.get(START + 60)["frozen"] and plume.load(other, now=START + 700)["loaded"] is False)
 
 print("concurrent loads:")
 import threading  # noqa: E402

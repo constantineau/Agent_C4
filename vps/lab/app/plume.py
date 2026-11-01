@@ -386,8 +386,9 @@ def _unlocked_target(now):
 
 
 def locked_race():
-    """The race whose window has started and that isn't marked finished yet: {race_id, key, start,
-    ...} or None. While set, the target, its store key and its window start are pinned to it."""
+    """The race whose window has started and that isn't marked finished: {race_id, key, start, ...}
+    or None. The lock record is kept after the finish (so "undo" re-freezes it) and is only
+    replaced when another race's window starts with no unfinished lock in place."""
     lock = _labstate_get(_KEY_LOCK)
     if not lock or not lock.get("race_id"):
         return None
@@ -400,26 +401,21 @@ def locked_race():
 def resolve_target(now=None):
     """The route spec the plume follows, or None when there's nothing to follow.
 
-    An explicit target (labstate `plume:target`: {race_id, playbook_id?, path?, lat?, lon?}) wins;
-    else the race + playbook last pushed to the boat. The route is the playbook's recommended
-    variant; when there's no playbook, or its route is over (and its race is not on), the plume
-    holds at the race start (first course mark).
-
-    Once a race's window starts, the target is LOCKED to it (same store key, same window start)
-    until the race is marked finished — so nothing that changes mid-race (ETAs running out, a
-    cleared pin) can reopen recording or hide the frozen state. A different race configured as the
-    target (a deliberate new push/pin) releases the lock and is judged on its own window."""
+    ONE RULE: once any race's window starts, the target is LOCKED to that race (same store key, same
+    window start) until THAT race is marked finished — whatever is pinned or pushed afterwards,
+    including a different race. Only with no unfinished lock does the configured target apply:
+    an explicit pin (labstate `plume:target`) wins, else the race + playbook last pushed to the
+    boat; the route is the playbook's recommended variant, and the race-start point fallback is
+    used only when there's no route or its race is outside its window."""
     from . import labstate, store
     now = time.time() if now is None else now
-    spec = _unlocked_target(now)
     lock = locked_race()
-    if lock and (spec is None or spec.get("race_id") == lock["race_id"]):
+    if lock:
         return {"race_id": lock["race_id"], "course_id": lock.get("course_id"),
                 "definition": store.get_race(lock["race_id"]) or {}, "key": lock["key"],
                 "basis": lock["basis"], "path": lock["path"], "label": lock.get("label"),
                 "window_start": lock["start"]}
-    if lock or _labstate_get(_KEY_LOCK):
-        labstate.set(_KEY_LOCK, None)        # finished, or a different race took over
+    spec = _unlocked_target(now)
     if spec:
         win = race_window(spec)
         if is_racing(win, now):

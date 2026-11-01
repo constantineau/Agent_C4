@@ -334,12 +334,85 @@ check("...so the plume is still there, frozen, with no end", cur and cur["models
 check("the frozen race is reported for the Race-over button", (P.locked_race() or {}).get("race_id") == "r1")
 P.set_target("r1", lat=44.0, lon=-82.0)    # re-pinning the same race to a point mid-race changes nothing
 check("re-pinning the same race mid-race doesn't move the key", P.resolve_target(after)["key"] == key_gun)
+
+# ---- audit: every path that can record, push or change the target, with race r1 underway ----
+print("audit — every path obeys the lock while r1 is underway:")
+os.environ["LAB_AUTH_ENABLED"] = "false"
+from fastapi.testclient import TestClient  # noqa: E402
+from app import main as M  # noqa: E402
+client = TestClient(M.app)
+calls = {"record": 0, "push": 0}
+_rec0, _push0 = P.record, P.push
+
+
+def _no_record(spec, **kw):
+    calls["record"] += 1
+    return {"key": spec["key"], "runs": {}}
+
+
+def _no_push(plume, post=None, now=None):
+    calls["push"] += 1
+    return {"ok": True}
+
+
+P.record, P.push = _no_record, _no_push
+P._clock = lambda: after
 P.set_target(None)
+labstate.set("deploy_push:last_ok", {"race_id": "r1", "playbook_id": "r1__100", "ok": True})
+check("setup: r1 is the locked race", (P.locked_race() or {}).get("race_id") == "r1")
+
+
+def still_r1(name):
+    sp = P.resolve_target(after)
+    check(name, sp["race_id"] == "r1" and sp["key"] == key_gun and (P.locked_race() or {}).get("race_id") == "r1")
+
+
+# 1. recorder pass
+r = P.run_once(do_push=True)
+check("1 recorder pass: frozen, nothing recorded or pushed", r.get("frozen") and calls == {"record": 0, "push": 0})
+# 2. manual refresh endpoint
+client.post("/api/plume/refresh")
+import time as _t  # noqa: E402
+for _ in range(50):
+    st = client.get("/api/plume/refresh/status").json()
+    if st.get("state") != "running":
+        break
+    _t.sleep(0.05)
+check("2 manual refresh: frozen, nothing recorded or pushed",
+      (st.get("result") or {}).get("frozen") and calls == {"record": 0, "push": 0})
+# 3. pin a different race
+client.post("/api/plume/target", json={"race_id": "r3", "playbook_id": "r3__1"})
+still_r1("3 pinning another race mid-race: target stays r1")
+check("3 ...and a pass still records nothing", P.run_once(do_push=True).get("frozen") and calls["record"] == 0)
+client.post("/api/plume/target", json={})
+# 4. a playbook for another race pushed to the boat
 labstate.set("deploy_push:last_ok", {"race_id": "r3", "playbook_id": "r3__1", "ok": True})
-sp = P.resolve_target(after)
-check("a different race pushed → the lock moves on and r3 is judged on its own window",
-      sp["race_id"] == "r3" and (P.locked_race() or {}).get("race_id") != "r1")
-P._clock = _orig_clock
+still_r1("4 pushing another race's playbook mid-race: target stays r1")
+# 5. finish / undo
+client.post("/api/plume/finish", json={"race_id": "r3"})
+still_r1("5 finishing a DIFFERENT race doesn't release r1")
+client.post("/api/plume/finish", json={"race_id": "r3", "undo": True})
+client.post("/api/plume/finish", json={"race_id": "r1"})
+check("5 finishing r1 releases it", P.locked_race() is None)
+client.post("/api/plume/finish", json={"race_id": "r1", "undo": True})
+check("5 undoing r1's finish freezes it again", (P.locked_race() or {}).get("race_id") == "r1")
+# 6. the read-only plume view
+g = client.get("/api/plume").json()
+check("6 GET /api/plume: reports r1 frozen, records nothing",
+      (g.get("frozen_race") or {}).get("race_id") == "r1" and calls == {"record": 0, "push": 0})
+# 7. direct push during the race
+P.push = _push0
+rec = P.push({"key": "k", "race_start": int(gun), "race_end": None, "models": [{"model": "gfs", "runs": []}]},
+             post=lambda *a, **k: (True, {"loaded": True}), now=after)
+check("7 push() during the race refuses", rec["ok"] is False and rec.get("frozen"))
+# 8. Lab restart: the lock lives in labstate on the volume, not in memory
+import importlib  # noqa: E402
+P2 = importlib.reload(P)
+check("8 after a restart r1 is still locked", (P2.locked_race() or {}).get("race_id") == "r1")
+P = P2
+P.PLUME_DIR = os.environ["PLUME_DIR"]
+_orig_record, _orig_push, _orig_clock = P.record, P.push, P._clock
+labstate.set("deploy_push:last_ok", {"race_id": "r1", "playbook_id": "r1__100", "ok": True})
 
 # ---- point targets with no gun times; a pass queued behind another -------------------------
 print("no gun times, point target:")

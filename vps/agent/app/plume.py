@@ -89,28 +89,29 @@ def _read():
 def load(plume, now=None):
     """Store a pushed plume (atomic replace). Returns the /plume/load response.
 
-    Fail closed on board (judged by the boat's own clock at receipt):
-      * refuse a plume whose race is on right now, or that was computed after its race started;
-      * while the cached plume's race is on, refuse everything for that race until the Lab sends
-        one carrying the recorded finish (race_end, already past) — a different race is judged on
-        its own window."""
-    now = time.time() if now is None else now
+    One rule, checked inside the lock against a fresh clock (fail closed, RRS 41):
+      * if the cached plume's race is on (started, no recorded finish yet), refuse every incoming
+        plume — any race — except that same race carrying its recorded finish (already past);
+      * refuse any plume whose own race is on at receipt, or that was computed after its start.
+    `now` is for tests only; in service the boat's own clock is read inside the lock."""
     ok, why = validate(plume)
     if not ok:
         return {"loaded": False, "detail": why}
-    if frozen(plume, now):
-        return {"loaded": False, "detail": "its race is on — frozen at the gun"}
-    if frozen(plume, plume.get("generated_at", now)):
-        return {"loaded": False, "detail": "computed after the start — frozen at the gun"}
-    body = json.dumps({"received_at": int(now), "plume": plume}, separators=(",", ":"))
+    body = json.dumps({"received_at": 0, "plume": plume}, separators=(",", ":"))
     if len(body) > MAX_BYTES:
         return {"loaded": False, "detail": f"plume too large ({len(body)} B)"}
     with _LOCK:
+        t = time.time() if now is None else now
         cur = (_read() or {}).get("plume")
-        if cur and frozen(cur, now) and plume.get("race_id") == cur.get("race_id"):
+        if cur and frozen(cur, t):
             fin = plume.get("race_end")
-            if fin is None or fin > now:
+            if not (plume.get("race_id") == cur.get("race_id") and fin is not None and fin <= t):
                 return {"loaded": False, "detail": "racing — the pre-start plume stays aboard"}
+        if frozen(plume, t):
+            return {"loaded": False, "detail": "its race is on — frozen at the gun"}
+        if frozen(plume, plume.get("generated_at", t)):
+            return {"loaded": False, "detail": "computed after the start — frozen at the gun"}
+        body = json.dumps({"received_at": int(t), "plume": plume}, separators=(",", ":"))
         p = _path()
         os.makedirs(os.path.dirname(p), exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=os.path.dirname(p), prefix=".plume-", suffix=".tmp")
