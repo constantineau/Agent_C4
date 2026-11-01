@@ -138,11 +138,20 @@ def chart_path(race_id, course_id):
     return os.path.join(CHART_DIR, f"{safe(race_id)}__{safe(course_id)}.json")
 
 
+def _race_obstacles(definition, course_id, bbox, res_deg, source, depth):
+    """The race's own obstacles for what's LEFT of the course: zones, island disks and the
+    rounding-side barriers of islands still to round (an island already rounded leaves no barrier
+    to block a later leg). Pure Python, no shoreline data."""
+    return geo.build_for_course(definition, course_id, bbox, res_deg=res_deg, coastline_on=False,
+                                use_cache=False, source=source, safety_depth=depth)
+
+
 def load_obstacles(definition, course_id, full_definition, full_course_id, boat):
-    """The land/island/zone mask → (ObstacleField or None, chart note or None). The Lab's own land
-    mask for the course, carried aboard (pi/orin/reroute/prep_chart.py), when it was built from
-    this course and covers what's left of it, boat included. Else the race's islands and zones
-    only, over that same area: the result warns that land isn't checked."""
+    """The obstacle mask for the remaining course `definition` → (ObstacleField, chart note or
+    None). Land: the Lab's land-only mask for the course, carried aboard (prep_chart.py), when it
+    was built from this course and covers what's left of it, boat included. On top, always, the
+    race's zones/islands/barriers rebuilt from the remaining course. No usable land mask: those
+    alone, and the result warns that land isn't checked."""
     depth = boats.safety_depth_m(boat)
     need = optimizer.course_bbox(definition, course_id)      # the boat + the marks left, padded
     note = NO_CHART
@@ -155,30 +164,33 @@ def load_obstacles(definition, course_id, full_definition, full_course_id, boat)
         except (OSError, ValueError):
             pass
         if isinstance(chart, dict):
-            # built from this exact course, zones and depth? A re-deployed course (a new exclusion
-            # zone, a moved mark) must never route on the old mask.
-            if chart.get("fingerprint") != geo.course_fingerprint(full_definition, full_course_id,
-                                                                  depth):
+            # a land-only mask built from this exact course, zones and depth? A re-deployed course
+            # (a new zone, a moved mark) or an older full-race mask must never be used.
+            if chart.get("kind") != "land" or chart.get("fingerprint") != \
+                    geo.course_fingerprint(full_definition, full_course_id, depth):
                 note = OLD_CHART
             else:
                 try:
-                    field = geo.field_from_dict(chart)
+                    land = geo.field_from_dict(chart)
                 except (ValueError, KeyError, TypeError):
-                    field = None
-                if field is not None and need and W._contains(field.bbox, need):
-                    return field, None
+                    land = None
+                if land is not None and need and W._contains(land.bbox, need):
+                    race = _race_obstacles(definition, course_id, land.bbox, land.res,
+                                           land.source, depth)
+                    n = len(land.mask)
+                    if len(race.mask) != n:               # can't happen: same box, same cell size
+                        return _race_obstacles(definition, course_id, need, geo.RES_DEG, None,
+                                               depth), NO_CHART
+                    land.mask = bytearray((int.from_bytes(land.mask, "little")
+                                           | int.from_bytes(race.mask, "little")).to_bytes(n, "little"))
+                    for k, v in race.layers.items():
+                        land.layers[k] = land.layers.get(k, 0) + v
+                    land.active = land.active or race.active
+                    return land, None
                 # outside the mask, land would read as open water: don't claim it was checked
-                note = NO_COVER if field is not None else OLD_CHART
-    # no usable chart: the race's islands and zones from the definition aboard, never skipped,
-    # over the course box widened to take in the boat
-    base, cid = (full_definition, full_course_id) if full_definition else (definition, course_id)
-    bbox = optimizer.course_bbox(base, cid)
-    if need:
-        bbox = (max(bbox[0], need[0]), min(bbox[1], need[1]),
-                min(bbox[2], need[2]), max(bbox[3], need[3])) if bbox else need
-    field = geo.build_for_course(base, cid, bbox, coastline_on=False, use_cache=False,
-                                 safety_depth=depth)
-    return field, note
+                note = NO_COVER if land is not None else OLD_CHART
+    # no usable land mask: the race's own obstacles for the remaining course, boat included
+    return _race_obstacles(definition, course_id, need, geo.RES_DEG, None, depth), note
 
 
 # ---- the comparison with the plan -------------------------------------------------------------

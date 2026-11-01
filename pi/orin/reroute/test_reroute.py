@@ -215,10 +215,20 @@ os.makedirs(job.CHART_DIR, exist_ok=True)
 DEPTH = job.boats.safety_depth_m(job._get_boat())
 
 
-def write_chart(defn, fingerprint=True):
+LAND = (44.0, 43.9, -83.0, -82.9)                       # a fake "land" block, away from the route
+
+
+def write_chart(defn, fingerprint=True, kind="land", full=False):
+    """A carried chart like prep_chart.py writes: land only (here one fake block), or — `full` —
+    the old style with the whole race's zones and barriers baked in."""
     f = geo.build_for_course(defn, "c", (46.0, 42.5, -83.5, -81.5), coastline_on=False,
-                             use_cache=False)
+                             use_cache=False, zones_on=full, islands_on=full)
+    n, s_, w, e = LAND
+    f._fill_polygon([[(w, s_), (e, s_), (e, n), (w, n)]], 1, "coastline")
+    f.active = True
     d = geo.field_to_dict(f)
+    if kind:
+        d["kind"] = kind
     if fingerprint:
         d["fingerprint"] = geo.course_fingerprint(defn, "c", DEPTH)
     with open(job.chart_path("huron", "c"), "w") as fh:
@@ -238,8 +248,18 @@ def lo(defn):
     d_, c_, _n = job.remaining_definition(defn, "c", 2, 44.2, -82.2)
     return job.load_obstacles(d_, c_, defn, "c", job._get_boat())
 
-ZONE = {"name": "No-go", "type": "exclusion", "geometry": {"north": 44.65, "south": 44.45,
-                                                           "west": -82.5, "east": -81.95}}
+def _lon_at(pts, lat):
+    """Where the route crosses `lat` (first crossing)."""
+    for a, b in zip(pts, pts[1:]):
+        if (a["lat"] - lat) * (b["lat"] - lat) <= 0 and a["lat"] != b["lat"]:
+            return a["lon"] + (b["lon"] - a["lon"]) * (lat - a["lat"]) / (b["lat"] - a["lat"])
+    return -82.2
+
+
+ZLON = _lon_at(out["points"], 44.55)                # a zone right on the plain route
+ZB = (44.65, 44.45, ZLON - 0.15, ZLON + 0.15)       # n, s, w, e
+ZONE = {"name": "No-go", "type": "exclusion",
+        "geometry": {"north": ZB[0], "south": ZB[1], "west": ZB[2], "east": ZB[3]}}
 
 
 def in_zone(pts):
@@ -247,7 +267,7 @@ def in_zone(pts):
     for a, b in zip(pts, pts[1:]):
         for k in range(21):
             la, lo = a["lat"] + (b["lat"] - a["lat"]) * k / 20, a["lon"] + (b["lon"] - a["lon"]) * k / 20
-            if 44.45 < la < 44.65 and -82.5 < lo < -81.95:
+            if ZB[1] < la < ZB[0] and ZB[2] < lo < ZB[3]:
                 return True
     return False
 
@@ -256,7 +276,7 @@ check("(the plain route does cross that water)", in_zone(out["points"]))
 DEF2 = dict(DEF, zones=[ZONE])                      # re-deployed with a new exclusion zone
 field, note = lo(DEF2)
 check("out-of-date chart → not used, said plainly", note == "Chart is out of date. Route doesn't check the shore.")
-check("…and the new zone is still avoided", field.blocked(44.55, -82.2) and not field.blocked(44.2, -82.6))
+check("…and the new zone is still avoided", field.blocked(44.55, ZLON) and not field.blocked(44.2, -82.6))
 out3 = job.run(dict(REQ, definition=DEF2), now=NOW, is_online=lambda: False)
 check("the run says so", out3["warnings"][0] == job.OLD_CHART and out3["chart"]["land"] is False)
 check("the route keeps out of the zone", out3["complete"] and not in_zone(out3["points"]))
@@ -269,7 +289,35 @@ moved["courses"][0]["marks"][2]["lat"] = 44.95
 check("a moved mark → out of date", lo(moved)[1]
       == job.OLD_CHART)
 
-print("3c) the boat outside the chart's box")
+print("3c) only the remaining course's barriers block water")
+# the boat past Rock (rounded to starboard on leg 1), sailing the gate leg
+BAR = json.loads(json.dumps(DEF))
+whole = geo.build_for_course(BAR, "c", (46.0, 42.5, -83.5, -81.5), coastline_on=False,
+                             use_cache=False)
+d4, c4, _n = job.remaining_definition(BAR, "c", 3, 45.0, -82.5)
+check("(the whole race has rounding barriers)", whole.layers["rounding_barrier"] > 0)
+write_chart(BAR)
+field, note = job.load_obstacles(d4, c4, BAR, "c", job._get_boat())
+check("the chart is used, its land kept", note is None and field.blocked(43.95, -82.95))
+rock = [(la, lo) for la in np.arange(43.5, 45.0, 0.01) for lo in np.arange(-83.4, -81.6, 0.01)
+        if whole.blocked(la, lo) and not geo.build_for_course(
+            BAR, "c", (46.0, 42.5, -83.5, -81.5), coastline_on=False, use_cache=False,
+            islands_on=False).blocked(la, lo) and abs(la - 44.3) + abs(lo + 82.6) > 0.1][:50]
+check("(found water blocked only by Rock's barrier)", len(rock) > 0)
+check("chart path: a rounded island's barrier no longer blocks", not any(
+    field.blocked(la, lo) for la, lo in rock))
+fb, note = job.load_obstacles(d4, c4, None, None, job._get_boat())
+check("fallback path: the same", note == job.NO_CHART and not any(fb.blocked(la, lo) for la, lo in rock))
+d5, c5, _n = job.remaining_definition(BAR, "c", 1, 43.2, -82.4)
+field5, _ = job.load_obstacles(d5, c5, BAR, "c", job._get_boat())
+check("before rounding Rock its barrier still applies", field5.layers["rounding_barrier"] > 0
+      and any(field5.blocked(la, lo) for la, lo in rock))
+write_chart(BAR, full=True, kind=None)
+check("an old full-race chart (no 'land' kind) → out of date",
+      job.load_obstacles(d4, c4, BAR, "c", job._get_boat())[1] == job.OLD_CHART)
+write_chart(DEF)
+
+print("3d) the boat outside the chart's box")
 far = dict(REQ, position={"lat": 44.2, "lon": -80.6, "t": NOW})      # east of the mask (-81.5)
 DEF3 = json.loads(json.dumps(DEF))
 DEF3["zones"] = [{"name": "Far no-go", "type": "exclusion", "geometry": {
@@ -288,7 +336,7 @@ out5 = job.run(dict(far, definition=DEF3), now=NOW, is_online=lambda: False)
 check("the run doesn't claim land", out5["chart"]["land"] is False and out5["warnings"][0] == job.NO_COVER)
 write_chart(DEF)
 
-print("3d) an incomplete route makes no finish claim")
+print("3e) an incomplete route makes no finish claim")
 _orig = job.routerun.run_course
 
 

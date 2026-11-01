@@ -26,7 +26,8 @@ iPad ──GET /api/reroute───────▶ Pi engine ──GET /status,
    Deploy push sent to `/course/load`) and which mark is next, the plan's track, who asked.
 2. `job.py` cuts the course to what's left: it starts at the boat and runs from the next mark to the
    finish. Islands on legs already sailed are dropped.
-3. Land: the Lab's own land mask for the course, carried aboard as a file (see "Chart" below),
+3. Obstacles: the race's zones, islands and rounding barriers, rebuilt for the remaining course.
+   Land: the Lab's land-only mask for the course, carried aboard as a file (see "Chart" below),
    used only if it was built from the course aboard. Without one, the run avoids the race's
    islands and zones only, and the result says "No chart aboard. Route doesn't check the shore."
    (or "Chart is out of date. …" for a mask built from an older course).
@@ -119,7 +120,12 @@ docker exec -i sr33-dev-lab-1 python - bayview-mackinac-2026 cove_island \
 scp /tmp/chart.json agent-c4@<orin>:c4-reroute/chart/bayview-mackinac-2026__cove_island.json
 ```
 
-Needs the Lab build that has `obstacles.field_to_dict` (this PR). The file carries a fingerprint
+The file is LAND ONLY (`"kind": "land"`): shoreline, shoals, rocks. The race's zones, island
+disks and rounding-side barriers are rebuilt on the Orin from what's left of the course, so the
+barrier of an island already rounded never blocks a later leg (pure Python, no shoreline data).
+Without a usable land file the run uses those race obstacles alone.
+
+Needs the Lab build that has `obstacles.field_to_dict` (this PR). The file also carries a fingerprint
 of what it was built from: the course (marks, islands, rounding sides), the race's zones and the
 no-go depth. The Orin checks it against the definition aboard. If the course was re-deployed since
 (a new exclusion zone, a moved mark, another draft), the mask is not used: the run avoids the

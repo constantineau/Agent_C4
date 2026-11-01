@@ -35,10 +35,14 @@ def main(argv):
     # the Lab's own choices: its chart source and the active boat's draft
     src = (labstate.get("coastline_source") or geo.COASTLINE_SOURCE or "natural_earth").lower()
     depth = boats.active_safety_depth_m()
-    field = geo.build_for_course(d, cid, bbox, source=src, safety_depth=depth)
+    # LAND ONLY. The race's zones, island disks and rounding-side barriers are rebuilt on the Orin
+    # from what's left of the course: a barrier of an island already rounded must not block a
+    # later leg.
+    field = geo.build_for_course(d, cid, bbox, source=src, safety_depth=depth,
+                                 zones_on=False, islands_on=False)
     out = geo.field_to_dict(field)
     # what it was built from: the Orin checks this against the course aboard before using it
-    out.update(race_id=d.get("race_id"), course_id=cid,
+    out.update(race_id=d.get("race_id"), course_id=cid, kind="land",
                fingerprint=geo.course_fingerprint(d, cid, depth))
     json.dump(out, sys.stdout, separators=(",", ":"))
     safe = lambda s: "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in str(s))[:60]
