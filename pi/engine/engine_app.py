@@ -183,12 +183,23 @@ def course_load(body: dict):
     if not marks:
         return {"loaded": False, "detail": "no usable marks (need coordinates)"}
     route = (body or {}).get("route") or definition.get("race_id") or "race"
-    datasource.active().save_course(route, marks)
-    navigator.set_active(route)
-    try:                     # the full course (islands, rounding sides) for the Orin's re-route
-        orinroute.save_definition(definition, cid, route)
-    except OSError:
-        pass
+    # The full course (islands, rounding sides, zones) for the Orin's re-route is written to a
+    # temp file first, then the marks, then the file goes live. Any failure: the old definition is
+    # dropped (never paired with new marks) and the load reports it.
+    tmp = None
+    try:
+        tmp = orinroute.prepare_definition(definition, cid, route)
+        datasource.active().save_course(route, marks)
+        navigator.set_active(route)
+        if tmp:
+            orinroute.commit_definition(tmp)
+        else:
+            orinroute.drop_definition()
+    except Exception as exc:  # noqa: BLE001
+        orinroute.discard(tmp)
+        orinroute.drop_definition()
+        print(f"[course/load] failed: {type(exc).__name__}: {exc}", flush=True)
+        return {"loaded": False, "detail": "Couldn't save the course. Try again."}
     return {"loaded": True, "route": route, "course_id": cid, "marks": len(marks), "skipped": skipped}
 
 

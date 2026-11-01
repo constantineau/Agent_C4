@@ -124,7 +124,15 @@ of what it was built from: the course (marks, islands, rounding sides), the race
 no-go depth. The Orin checks it against the definition aboard. If the course was re-deployed since
 (a new exclusion zone, a moved mark, another draft), the mask is not used: the run avoids the
 current islands and zones only, and says "Chart is out of date. Route doesn't check the shore."
-Rebuild and copy the chart after every course change.
+Rebuild and copy the chart after every course change. The mask must also cover what's left of
+the course with the boat in it (padded 0.5°). If the boat has sailed outside it, the mask is not
+used either: "Chart doesn't cover the boat. Route doesn't check the shore." The islands and zones
+are then built over the wider area.
+
+On the Pi, `/course/load` writes the definition to a temp file, saves the marks, then puts the
+definition live. If any step fails it answers `loaded: false` ("Couldn't save the course. Try
+again.") and drops the old definition. The stored definition carries a hash of the marks (names
+and positions); the Pi only sends it to the Orin when that matches the marks the navigator holds.
 
 ## Measured on the Orin (2026-11-01)
 

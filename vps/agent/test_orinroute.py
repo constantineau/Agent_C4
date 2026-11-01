@@ -163,22 +163,64 @@ check("POST /reroute/run with the Orin off → 503 + message", r.status_code == 
 r = client.get("/reroute")
 check("GET /reroute → stored route, Orin unreachable", r.status_code == 200
       and r.json()["result"]["job_id"] == "j1" and r.json()["orin"]["reachable"] is False)
-SAVED = []
-orig = orinroute.save_definition
-orinroute.save_definition = lambda d, cid, route: SAVED.append((d.get("race_id"), cid, route))
 
 
 class _DS:
+    def __init__(self):
+        self.fail = False
+        self.saved = []
+
     def save_course(self, route, marks):
-        pass
+        if self.fail:
+            raise RuntimeError("disk full")
+        self.saved.append((route, marks))
 
 
-engine_app.datasource.active = lambda: _DS()
+DS = _DS()
+engine_app.datasource.active = lambda: DS
 engine_app.navigator.set_active = lambda route: None
+DEFP = os.path.join(_tmp, "engine", "course-definition.json")
 r = client.post("/course/load", json={"definition": DEF, "course_id": "c"})
 check("/course/load keeps the definition for the Orin", r.json()["loaded"]
-      and SAVED == [("r1", "c", "r1")])
-orinroute.save_definition = orig
+      and json.load(open(DEFP))["definition"]["race_id"] == "r1")
+check("…bound to these marks", orinroute._definition_for("r1", MARKS)[0] is not None)
+
+print("a definition never pairs with other marks:")
+moved = [dict(m) for m in MARKS]
+moved[1]["lat"] = 45.0                                   # same names, the gate moved
+check("a moved mark → no definition", orinroute._definition_for("r1", moved) == (None, None))
+legacy = json.load(open(DEFP))
+legacy.pop("marks_hash")
+json.dump(legacy, open(DEFP, "w"))
+check("a stored definition without the hash → not used", orinroute._definition_for("r1", MARKS)
+      == (None, None))
+
+print("a course load that fails half way:")
+client.post("/course/load", json={"definition": DEF, "course_id": "c"})
+DS.fail = True
+DEF2 = json.loads(json.dumps(DEF))
+DEF2["zones"] = [{"name": "No-go", "type": "exclusion", "geometry": {}}]
+r = client.post("/course/load", json={"definition": DEF2, "course_id": "c"})
+check("marks write fails → loaded false, short", r.json() == {
+    "loaded": False, "detail": "Couldn't save the course. Try again."})
+check("…and the old definition is gone", not os.path.exists(DEFP))
+check("…no temp files left", not [n for n in os.listdir(os.path.dirname(DEFP)) if n.endswith(".part")])
+DS.fail = False
+client.post("/course/load", json={"definition": DEF, "course_id": "c"})
+_orig_commit = orinroute.commit_definition
+
+
+def broken_commit(tmp):
+    raise OSError("read-only")
+
+
+orinroute.commit_definition = broken_commit
+r = client.post("/course/load", json={"definition": DEF2, "course_id": "c"})
+orinroute.commit_definition = _orig_commit
+check("definition write fails → loaded false, old one gone", r.json()["loaded"] is False
+      and not os.path.exists(DEFP))
+r = client.post("/course/load", json={"definition": DEF, "course_id": "c"})
+check("a good load afterwards works again", r.json()["loaded"] and os.path.exists(DEFP))
 
 print("ALL OK" if ok else "SOME CHECKS FAILED")
 sys.exit(0 if ok else 1)

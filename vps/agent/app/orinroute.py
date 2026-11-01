@@ -81,38 +81,91 @@ def _read(path):
 
 
 # ---- the deployed course ------------------------------------------------------------------------
-def save_definition(definition, course_id, route):
-    """Keep the RaceDefinition the Lab deployed (POST /course/load), trimmed to what routing needs:
-    the course with its islands and rounding sides, and the race's zones. The marks store keeps
-    only flattened marks, and the Orin's optimizer needs the rest."""
+def _marks_hash(marks):
+    """A short hash of the flattened marks (name + position, in order): binds a stored
+    definition to the marks the navigator holds, so a moved mark never pairs with old geometry."""
+    import hashlib
+    sig = [[str(m[0]), round(float(m[1]), 5), round(float(m[2]), 5)] for m in marks]
+    return hashlib.sha1(json.dumps(sig, separators=(",", ":")).encode()).hexdigest()[:16]
+
+
+def prepare_definition(definition, course_id, route):
+    """Write the RaceDefinition the Lab deployed (POST /course/load) to a temp file, trimmed to
+    what routing needs: the course with its islands and rounding sides, and the race's zones. The
+    marks store keeps only flattened marks, and the Orin's optimizer needs the rest. Returns the
+    temp path for `commit_definition`, or None when the definition has no such course. Raises
+    OSError when it can't be written."""
+    from shared.race_def import course_to_marks
     d = definition or {}
     courses = d.get("courses") or []
     course = next((c for c in courses if c.get("id") == course_id), None) or \
         (courses[0] if courses else None)
     if not course:
-        return False
+        return None
     keep = {"race_id": d.get("race_id"), "name": d.get("name"), "timezone": d.get("timezone"),
             "courses": [course], "zones": d.get("zones") or []}
+    flat, _skip, _cid = course_to_marks(keep, course.get("id"))
     rec = {"route": route, "course_id": course.get("id"), "saved_at": int(time.time()),
-           "definition": keep}
+           "marks_hash": _marks_hash([(n, a, o) for _s, n, a, o in flat]), "definition": keep}
+    path = _definition_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), suffix=".part")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(json.dumps(rec, separators=(",", ":")))
+    except OSError:
+        discard(tmp)
+        raise
+    return tmp
+
+
+def commit_definition(tmp):
     with _LOCK:
-        _write(_definition_path(), json.dumps(rec, separators=(",", ":")))
+        os.replace(tmp, _definition_path())
+
+
+def discard(tmp):
+    if tmp and os.path.exists(tmp):
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+
+
+def drop_definition():
+    """Forget the stored definition (a course load failed half way): the re-route then uses the
+    navigator's marks only, never old geometry."""
+    try:
+        with _LOCK:
+            os.remove(_definition_path())
+    except FileNotFoundError:
+        pass
+    except OSError:
+        pass                  # can't delete: the marks hash still keeps it from being used
+
+
+def save_definition(definition, course_id, route):
+    tmp = prepare_definition(definition, course_id, route)
+    if tmp is None:
+        drop_definition()
+        return False
+    commit_definition(tmp)
     return True
 
 
 def _definition_for(route, marks):
-    """The stored definition, if it's the course the navigator holds (same route, same marks)."""
+    """The stored definition, if it's the course the navigator holds: same route and the same marks
+    (names AND positions, by the hash stored with it)."""
     rec = _read(_definition_path())
-    if not rec or rec.get("route") != route:
+    if not rec or rec.get("route") != route or not rec.get("marks_hash"):
         return None, None
     try:
-        from shared.race_def import course_to_marks
-        flat, _skip, cid = course_to_marks(rec["definition"], rec.get("course_id"))
-    except Exception:  # noqa: BLE001
+        have = _marks_hash([(m.get("name"), m.get("lat"), m.get("lon")) for m in marks])
+    except (TypeError, ValueError):
         return None, None
-    if [n for _s, n, _a, _o in flat] != [m.get("name") for m in marks]:
+    if have != rec["marks_hash"]:
         return None, None
-    return rec["definition"], cid
+    return rec["definition"], rec.get("course_id")
 
 
 def _plan_track():

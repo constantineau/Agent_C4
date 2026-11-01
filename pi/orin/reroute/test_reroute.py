@@ -231,6 +231,13 @@ check("with a matching chart aboard: used, no warning", out2["chart"]["land"] is
       and job.NO_CHART not in out2["warnings"] and job.OLD_CHART not in out2["warnings"])
 
 print("3b) a chart built for an older version of the course is refused")
+
+
+def lo(defn):
+    """load_obstacles for the boat at 44.2N 82.2W, next mark the gate."""
+    d_, c_, _n = job.remaining_definition(defn, "c", 2, 44.2, -82.2)
+    return job.load_obstacles(d_, c_, defn, "c", job._get_boat())
+
 ZONE = {"name": "No-go", "type": "exclusion", "geometry": {"north": 44.65, "south": 44.45,
                                                            "west": -82.5, "east": -81.95}}
 
@@ -247,7 +254,7 @@ def in_zone(pts):
 
 check("(the plain route does cross that water)", in_zone(out["points"]))
 DEF2 = dict(DEF, zones=[ZONE])                      # re-deployed with a new exclusion zone
-field, note = job.load_obstacles(None, None, DEF2, "c", job._get_boat())
+field, note = lo(DEF2)
 check("out-of-date chart → not used, said plainly", note == "Chart is out of date. Route doesn't check the shore.")
 check("…and the new zone is still avoided", field.blocked(44.55, -82.2) and not field.blocked(44.2, -82.6))
 out3 = job.run(dict(REQ, definition=DEF2), now=NOW, is_online=lambda: False)
@@ -255,14 +262,33 @@ check("the run says so", out3["warnings"][0] == job.OLD_CHART and out3["chart"][
 check("the route keeps out of the zone", out3["complete"] and not in_zone(out3["points"]))
 write_chart(DEF, fingerprint=False)
 check("a chart with no fingerprint → out of date",
-      job.load_obstacles(None, None, DEF, "c", job._get_boat())[1] == job.OLD_CHART)
+      lo(DEF)[1] == job.OLD_CHART)
 write_chart(DEF)
 moved = json.loads(json.dumps(DEF))
 moved["courses"][0]["marks"][2]["lat"] = 44.95
-check("a moved mark → out of date", job.load_obstacles(None, None, moved, "c", job._get_boat())[1]
+check("a moved mark → out of date", lo(moved)[1]
       == job.OLD_CHART)
 
-print("3c) an incomplete route makes no finish claim")
+print("3c) the boat outside the chart's box")
+far = dict(REQ, position={"lat": 44.2, "lon": -80.6, "t": NOW})      # east of the mask (-81.5)
+DEF3 = json.loads(json.dumps(DEF))
+DEF3["zones"] = [{"name": "Far no-go", "type": "exclusion", "geometry": {
+    "north": 44.3, "south": 44.1, "west": -80.9, "east": -80.8}}]
+write_chart(DEF3)
+d3, c3, _n = job.remaining_definition(DEF3, "c", 2, 44.2, -80.6)
+field, note = job.load_obstacles(d3, c3, DEF3, "c", job._get_boat())
+check("chart doesn't cover the boat → not used, said plainly",
+      note == "Chart doesn't cover the boat. Route doesn't check the shore.")
+check("the fallback covers the boat's area (zone there blocked)", field.blocked(44.2, -80.85))
+need3 = job.optimizer.course_bbox(d3, c3)              # weather cached for that box too
+for f in windfield._fhrs_for_cycle(GFS, CYCLE, NOW, NOW + 30 * 3600):
+    write_grib(GFS._cache_path(CYCLE, f, "det", need3), 4.2, 4.2)
+W.remember_box(job.STATE_DIR, need3)
+out5 = job.run(dict(far, definition=DEF3), now=NOW, is_online=lambda: False)
+check("the run doesn't claim land", out5["chart"]["land"] is False and out5["warnings"][0] == job.NO_COVER)
+write_chart(DEF)
+
+print("3d) an incomplete route makes no finish claim")
 _orig = job.routerun.run_course
 
 
