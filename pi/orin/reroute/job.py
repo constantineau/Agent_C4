@@ -93,7 +93,9 @@ def remaining_definition(definition, course_id, next_index, lat, lon):
     # each rounding island's leg bearing AS DEPLOYED (previous mark → next mark). Trimming puts the
     # boat in as the start, which would rotate the current leg's barrier and could open water the
     # deployed rounding rule closes, so the bearing is pinned on the kept island.
-    deployed_brg = {(r["lat"], r["lon"]): r["transit_brg"]
+    # keyed by the island's place in the course (a course can pass the same island twice, once
+    # each way: two occurrences, two bearings)
+    deployed_brg = {r["mark_idx"]: r["transit_brg"]
                     for r in geo._island_rounding_marks(d, course.get("id"))}
     start = course.get("start") or {}
     has_start = start.get("lat") is not None
@@ -101,12 +103,12 @@ def remaining_definition(definition, course_id, next_index, lat, lon):
     # kept: with no positioned start, index 0 is the first real mark.
     nxt = (1 if has_start else 0) if next_index is None else max(0, int(next_index))
     keep, prev_nav = [], (0 if has_start else -1)   # nav index of the mark before this island
-    for m, k in zip(course.get("marks") or [], idx):
+    for mi, (m, k) in enumerate(zip(course.get("marks") or [], idx)):
         if k is None:
             if m.get("type") == "island" and m.get("lat") is not None:
                 if nxt == 0 or prev_nav >= nxt - 1:
                     # an island on the current leg or later: as deployed, its leg bearing pinned
-                    brg = deployed_brg.get((m["lat"], m["lon"]))
+                    brg = deployed_brg.get(mi)
                     keep.append(dict(m, transit_brg=brg) if brg is not None else m)
                 else:
                     # already rounded: still rock (its disk stays), but no rounding side, so its
@@ -194,6 +196,12 @@ def load_obstacles(definition, course_id, full_definition, full_course_id, boat)
                     # an empty mask = the shoreline never loaded when it was built: not "checked"
                     note = NO_LAND
                 elif land is not None and need and W._contains(land.bbox, need):
+                    # the boat is a new start: open the same pocket the Lab opens at every
+                    # course point, in the land mask only, BEFORE the race layer goes on (so
+                    # zones and rounding barriers near the boat stay)
+                    st = ((definition.get("courses") or [{}])[0].get("start") or {})
+                    if st.get("lat") is not None:
+                        land._carve_disk(st["lat"], st["lon"], geo.MARK_CARVE_NM)
                     race = _race_obstacles(definition, course_id, land.bbox, land.res, depth)
                     n = len(land.mask)
                     if len(race.mask) != n:               # can't happen: same box, same cell size

@@ -29,6 +29,7 @@ from app.wind import windfield as WFM
 
 REQUEST_TIMEOUT_S = float(os.environ.get("REROUTE_REQUEST_TIMEOUT_S", "20"))
 DOWNLOAD_BUDGET_S = float(os.environ.get("REROUTE_DOWNLOAD_BUDGET_S", "180"))
+API_TIMEOUT_S = float(os.environ.get("REROUTE_API_TIMEOUT_S", "60"))   # one ICON/GEM load, in all
 BOXES_FILE = "boxes.json"        # the boxes past re-routes downloaded for (in REROUTE_DIR)
 MAX_BOXES = 8
 
@@ -36,10 +37,12 @@ MAX_BOXES = 8
 class Budget:
     """Whether this run may download, and for how long. Shared by every wrapped source."""
 
-    def __init__(self, online, budget_s=DOWNLOAD_BUDGET_S, request_s=REQUEST_TIMEOUT_S):
+    def __init__(self, online, budget_s=DOWNLOAD_BUDGET_S, request_s=REQUEST_TIMEOUT_S,
+                 api_s=API_TIMEOUT_S):
         self.online = bool(online)
         self.deadline = time.monotonic() + budget_s
         self.request_s = request_s
+        self.api_s = api_s
         self.downloads = 0
         self.exhausted = False
 
@@ -198,8 +201,8 @@ class ApiSource:
 
         th = threading.Thread(target=work, daemon=True)
         th.start()
-        # one model's whole API load gets one request's time, never the rest of the budget
-        th.join(max(0.5, min(self._budget.request_s, self._budget.left())))
+        # one model's whole API load gets REROUTE_API_TIMEOUT_S, never the rest of the budget
+        th.join(max(0.5, min(self._budget.api_s, self._budget.left())))
         if "r" not in box:
             self._budget.exhausted = self._budget.exhausted or self._budget.left() <= 0.5
             return self._empty("timed out" if th.is_alive() else "failed")

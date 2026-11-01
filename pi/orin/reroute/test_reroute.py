@@ -211,6 +211,16 @@ with open(job.chart_path("port", "c"), "w") as fh:
                        job._get_boat()))), fh)
 fC, nC = job.load_obstacles(dP, cP, PORT, "c", job._get_boat())
 check("chart path: same, the deployed side holds", nC is None and fC.blocked(44.1, -82.0))
+# the same island passed twice, once each way: each occurrence keeps its own deployed bearing
+TWICE = {"race_id": "twice", "zones": [], "courses": [{"id": "c", "start": {"lat": 44.0, "lon": -83.0},
+         "marks": [{"name": "X", "type": "island", "lat": 44.0, "lon": -82.0, "rounding": "port"},
+                   {"name": "A", "type": "buoy", "lat": 44.0, "lon": -81.0, "rounding": "port"},
+                   {"name": "X", "type": "island", "lat": 44.0, "lon": -82.0, "rounding": "port"}],
+         "finish": {"points": [{"lat": 44.05, "lon": -83.0}]}}]}
+dT, cT, _n = job.remaining_definition(TWICE, "c", 1, 43.9, -82.6)
+brgs = [m.get("transit_brg") for m in dT["courses"][0]["marks"] if m["type"] == "island"]
+check("island passed twice: two bearings, one each way (~090, ~270)", len(brgs) == 2
+      and abs(brgs[0] - 90) < 4 and abs(brgs[1] - 270) < 4)
 _src = job.geo.COASTLINE_SOURCE
 job.geo.COASTLINE_SOURCE = "enc"                       # the Lab's ENC setting, no chart aboard
 f8, _ = job.load_obstacles(d6, c6, None, None, job._get_boat())
@@ -371,6 +381,25 @@ with open(job.chart_path("huron", "c"), "w") as fh:
     json.dump(dict(good_ch, mask_zb64=geo.field_to_dict(empty)["mask_zb64"], open_water=True), fh)
 check("…unless it was built as open water on purpose", lo(DEF)[1] is None)
 
+print("3b1) a boat in a shoreline cell gets the Lab's start pocket, nothing more")
+# the shoreline raster has the boat (44.2N 82.2W) just "on land": 0.2 nm inside the edge
+LAND_NEAR = (44.2035, 44.10, -82.35, -82.05)
+f_near = geo.build_for_course(DEF, "c", (46.0, 42.5, -83.5, -81.5), coastline_on=False,
+                              use_cache=False, zones_on=False, islands_on=False)
+n_, s__, w_, e_ = LAND_NEAR
+f_near._fill_polygon([[(w_, s__), (e_, s__), (e_, n_), (w_, n_)]], 1, "coastline")
+f_near.active = True
+with open(job.chart_path("huron", "c"), "w") as fh:
+    json.dump(dict(geo.field_to_dict(f_near), kind="land",
+                   fingerprint=geo.course_fingerprint(DEF, "c", DEPTH)), fh)
+fN, nN = lo(DEF)
+check("chart used; the boat's own cell is open", nN is None and not fN.blocked(44.2, -82.2))
+check("…land beyond the pocket stays", fN.blocked(44.17, -82.2) and fN.blocked(44.2, -82.1))
+check("(without the pocket the boat's cell is land)", f_near.blocked(44.2, -82.2))
+outN = job.run(REQ, now=NOW, is_online=lambda: False)
+check("…and the route leaves from the boat", outN["available"] and outN["complete"])
+write_chart(DEF)
+
 print("3b2) prep_chart refuses a mask with no land")
 import io  # noqa: E402
 import contextlib  # noqa: E402
@@ -492,7 +521,7 @@ class FakeICON(models.ICON):
                                        "kind": "deterministic"}
 
 
-print("3e1b) a stalled ICON gets one request's time, not the budget")
+print("3e1b) a stalled ICON gets its own timeout, not the budget")
 
 
 class SlowICON(models.ICON):
@@ -502,9 +531,10 @@ class SlowICON(models.ICON):
 
 
 t0 = time.time()
-b = W.Budget(True, budget_s=180, request_s=0.5)
+check("ICON/GEM get their own per-load timeout, 60 s by default", W.Budget(True).api_s == 60.0)
+b = W.Budget(True, budget_s=180, request_s=20, api_s=0.5)
 ser, meta = W.ApiSource(SlowICON(), b).load_series(BOX, NOW, NOW + 3600)
-check("gave up after ~the request time", time.time() - t0 < 2.5 and meta["skipped"] == "timed out")
+check("gave up after ~the API timeout", time.time() - t0 < 2.5 and meta["skipped"] == "timed out")
 check("…and the budget is still there for the rest", not b.exhausted and b.left() > 170)
 
 _icon0 = models.MODELS["icon"]

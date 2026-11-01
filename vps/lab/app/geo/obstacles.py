@@ -291,12 +291,14 @@ def _island_rounding_marks(definition, course_id):
     # ordered course points: ('nav'|'island', lat, lon, side, radius)
     seq = []
     pinned = {}       # seq index → a transit bearing carried on the island mark (see below)
+    mark_of = {}      # seq index → the island's index in course["marks"] (one per occurrence)
     start = course.get("start") or {}
     if start.get("lat") is not None:
         seq.append(("nav", start["lat"], start["lon"], None, None))
-    for m in course.get("marks", []):
+    for mi, m in enumerate(course.get("marks", [])):
         t = m.get("type")
         if t == "island" and m.get("lat") is not None:
+            mark_of[len(seq)] = mi
             if m.get("transit_brg") is not None:
                 # the boat's onboard re-route trims sailed legs and starts the course at the boat;
                 # it pins the deployed leg's bearing here so the legal side doesn't rotate
@@ -319,7 +321,7 @@ def _island_rounding_marks(definition, course_id):
             continue
         if i in pinned:
             out.append({"lat": la, "lon": lo, "radius_nm": rad, "side": side,
-                        "transit_brg": pinned[i]})
+                        "transit_brg": pinned[i], "mark_idx": mark_of.get(i)})
             continue
         prev = next((p for p in reversed(seq[:i]) if p[0] == "nav"), None)
         nxt = next((p for p in seq[i + 1:] if p[0] == "nav"), None)
@@ -328,7 +330,7 @@ def _island_rounding_marks(definition, course_id):
         if a[1:3] == b[1:3]:
             continue                                    # can't define a transit axis → skip enforcement
         out.append({"lat": la, "lon": lo, "radius_nm": rad, "side": side,
-                    "transit_brg": _bearing(a[1], a[2], b[1], b[2])})
+                    "transit_brg": _bearing(a[1], a[2], b[1], b[2]), "mark_idx": mark_of.get(i)})
     return out
 
 
