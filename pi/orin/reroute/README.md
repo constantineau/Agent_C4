@@ -130,7 +130,10 @@ docker exec -i sr33-dev-lab-1 python - bayview-mackinac-2026 cove_island \
 scp /tmp/chart.json agent-c4@<orin>:c4-reroute/chart/bayview-mackinac-2026__cove_island.json
 ```
 
-The file is LAND ONLY (`"kind": "land"`): shoreline, shoals, rocks. The race's zones, island
+The file is LAND ONLY (`"kind": "land-v2"`): shoreline, shoals, rocks, with no pockets at the
+marks (a pocket at a near-shore mark would clear that shore for every later leg; the Orin opens
+pockets for the boat and the marks still to sail, each run). Files from older builds count as out
+of date. The race's zones, island
 disks and rounding-side barriers are rebuilt on the Orin from what's left of the course, so the
 barrier of an island already rounded never blocks a later leg (pure Python, no shoreline data).
 `prep_chart.py` refuses to write a mask with no land in it (the shoreline didn't load) unless
@@ -220,7 +223,7 @@ Remove: `sudo systemctl disable --now sr33-orin-reroute`, delete the unit, `rm -
 | `REROUTE_DOWNLOAD_BUDGET_S` / `REROUTE_REQUEST_TIMEOUT_S` | `180` / `20` | downloads, when online |
 | `REROUTE_API_TIMEOUT_S` | `60` | one ICON/GEM load, in all (capped by what's left of the budget) |
 | `REROUTE_ROUTE_BUDGET_S` | `300` | optimizer time cap |
-| `REROUTE_JOB_TIMEOUT_S` | `600` | a run is killed after this |
+| `REROUTE_JOB_TIMEOUT_S` | `600` | a run is killed after this, with its whole process group (job.py + its GRIB parser); no new run starts until that group is gone |
 | `REROUTE_CURRENT` / `REROUTE_WAVES` | `0` / `0` | LMHOFS current / GLWU sea state (online only) |
 | Pi: `ORIN_REROUTE_URL` | `http://10.10.10.2:8210` | |
 

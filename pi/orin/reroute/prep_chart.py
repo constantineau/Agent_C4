@@ -17,6 +17,9 @@ import sys
 from app import optimizer, store, labstate, boats
 from app.geo import obstacles as geo
 
+# the chart format the Orin takes: land only, no waypoint pockets (job.CHART_KIND must match)
+CHART_KIND = "land-v2"
+
 
 def main(argv):
     open_water = "--open-water" in argv          # a course box with truly no land in it
@@ -40,8 +43,11 @@ def main(argv):
     # LAND ONLY. The race's zones, island disks and rounding-side barriers are rebuilt on the Orin
     # from what's left of the course: a barrier of an island already rounded must not block a
     # later leg.
+    # No waypoint pockets either: a pocket at a near-shore mark would clear that shore for good,
+    # and a later leg could cut across it. The Orin opens pockets for the boat and the marks still
+    # to sail, each run.
     field = geo.build_for_course(d, cid, bbox, source=src, safety_depth=depth,
-                                 zones_on=False, islands_on=False)
+                                 zones_on=False, islands_on=False, carve_waypoints=False)
     # The builder never fails: if the shoreline couldn't load it returns an EMPTY mask, which the
     # boat would take as "land checked". Refuse that unless the box really is open water.
     land_cells = sum(field.layers.get(k, 0) for k in ("coastline", "shoal", "obstruction"))
@@ -53,7 +59,7 @@ def main(argv):
     out = geo.field_to_dict(field)
     out["open_water"] = bool(open_water and not land_cells)
     # what it was built from: the Orin checks this against the course aboard before using it
-    out.update(race_id=d.get("race_id"), course_id=cid, kind="land",
+    out.update(race_id=d.get("race_id"), course_id=cid, kind=CHART_KIND,
                fingerprint=geo.course_fingerprint(d, cid, depth))
     json.dump(out, sys.stdout, separators=(",", ":"))
     safe = lambda s: "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in str(s))[:60]

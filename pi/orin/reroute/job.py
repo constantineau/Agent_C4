@@ -50,6 +50,9 @@ ROUTE_BUDGET_S = float(os.environ.get("REROUTE_ROUTE_BUDGET_S", "300"))   # opti
 RESOLUTION = os.environ.get("REROUTE_RESOLUTION", "auto")
 USE_CURRENT = os.environ.get("REROUTE_CURRENT", "0") == "1"   # LMHOFS: network only
 USE_WAVES = os.environ.get("REROUTE_WAVES", "0") == "1"       # GLWU: network only
+# the carried chart format: land only, no waypoint pockets (prep_chart.CHART_KIND). Older formats
+# ("land" had pockets at every original mark, clearing shore for good) count as out of date.
+CHART_KIND = "land-v2"
 NO_CHART = "No chart aboard. Route doesn't check the shore."
 OLD_CHART = "Chart is out of date. Route doesn't check the shore."
 NO_COVER = "Chart doesn't cover the boat. Route doesn't check the shore."
@@ -227,7 +230,7 @@ def load_obstacles(definition, course_id, full_definition, full_course_id, boat)
         if isinstance(chart, dict):
             # a land-only mask built from this exact course, zones and depth? A re-deployed course
             # (a new zone, a moved mark) or an older full-race mask must never be used.
-            if chart.get("kind") != "land" or chart.get("fingerprint") != \
+            if chart.get("kind") != CHART_KIND or chart.get("fingerprint") != \
                     geo.course_fingerprint(full_definition, full_course_id, depth):
                 note = OLD_CHART
             else:

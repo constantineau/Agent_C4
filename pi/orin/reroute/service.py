@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -43,6 +44,37 @@ STEPS = {"start": "Starting", "chart": "Checking the chart", "weather": "Loading
 BUSY = "A re-route is already running."
 FAILED = "Re-route failed. Try again."
 TOO_LONG = "Re-route took too long. Try again."
+STOPPING = "Still stopping the last run. Try again soon."
+
+
+def _group_members(pgid):
+    """PIDs of live (not zombie) processes in process group `pgid` (Linux /proc)."""
+    out = []
+    try:
+        names = os.listdir("/proc")
+    except OSError:
+        return out
+    for n in names:
+        if not n.isdigit():
+            continue
+        try:
+            with open(f"/proc/{n}/stat") as f:
+                rest = f.read().rsplit(")", 1)[1].split()
+        except (OSError, IndexError):
+            continue
+        if len(rest) > 2 and rest[0] != "Z" and int(rest[2]) == pgid:
+            out.append(int(n))
+    return out
+
+
+def _kill_group(pgid, sig):
+    """Signal a run's whole process group (job.py + its GRIB parser). Gone already: fine."""
+    if not pgid:
+        return
+    try:
+        os.killpg(pgid, sig)
+    except (ProcessLookupError, PermissionError):
+        pass
 
 
 def _log(msg):
@@ -67,11 +99,15 @@ def _write_json(path, obj):
 class Jobs:
     """One run at a time. `runner(job_dir) -> Popen-like` starts a run (tests swap it)."""
 
-    def __init__(self, state_dir=STATE_DIR, runner=None, timeout_s=JOB_TIMEOUT_S, clock=time.time):
+    def __init__(self, state_dir=STATE_DIR, runner=None, timeout_s=JOB_TIMEOUT_S, clock=time.time,
+                 groups=None):
         self.dir = state_dir
         self.jobs_dir = os.path.join(state_dir, "jobs")
         os.makedirs(self.jobs_dir, exist_ok=True)
         self.runner = runner or self._spawn
+        # each run is its own process group (the real spawner); a test runner may say so too
+        self.groups = (runner is None) if groups is None else groups
+        self.stopping = None          # the last run's group, until it's gone
         self.timeout_s = timeout_s
         self.clock = clock
         self.lock = threading.Lock()
@@ -85,8 +121,10 @@ class Jobs:
     def _spawn(job_dir):
         log = open(os.path.join(job_dir, "log.txt"), "ab")
         try:
+            # its own session/process group: a timeout kills job.py AND its GRIB parser child
             return subprocess.Popen([sys.executable, os.path.join(HERE, "job.py"), job_dir],
-                                    cwd=HERE, stdout=log, stderr=subprocess.STDOUT)
+                                    cwd=HERE, stdout=log, stderr=subprocess.STDOUT,
+                                    start_new_session=True)
         finally:
             log.close()
 
@@ -97,6 +135,11 @@ class Jobs:
             if self.current is not None:
                 return 409, {"ok": False, "busy": True, "detail": BUSY,
                              "job_id": self.current["job_id"], "progress": self._progress()}
+            if self._group_alive():
+                # what's left of the last run hasn't died yet: no new run on top of it
+                _kill_group(self.stopping, signal.SIGKILL)
+                return 409, {"ok": False, "busy": True, "detail": STOPPING, "job_id": None,
+                             "progress": None}
             job_id = time.strftime("%Y%m%dT%H%M%S", time.gmtime(self.clock())) + "-" + \
                 uuid.uuid4().hex[:6]
             job_dir = os.path.join(self.jobs_dir, job_id)
@@ -126,7 +169,10 @@ class Jobs:
             return
         last = {"job_id": cur["job_id"], "asked_by": cur.get("asked_by"),
                 "started_at": int(cur["started_at"]), "finished_at": int(self.clock())}
+        pgid = getattr(cur["proc"], "pid", None) if self.groups else None
         if rc is None:
+            # the whole group: job.py and its GRIB parser child (which can hang in native code)
+            _kill_group(pgid, signal.SIGTERM)
             for step in (cur["proc"].terminate, cur["proc"].kill):
                 try:
                     step()
@@ -134,8 +180,10 @@ class Jobs:
                     break
                 except Exception:  # noqa: BLE001
                     continue
+            _kill_group(pgid, signal.SIGKILL)
             last.update(state="error", detail=TOO_LONG)
         else:
+            _kill_group(pgid, signal.SIGKILL)     # any child it left behind
             res = _read_json(os.path.join(cur["dir"], "result.json")) if rc == 0 else None
             if res is not None:
                 _write_json(os.path.join(self.dir, "last_result.json"), res)
@@ -145,11 +193,21 @@ class Jobs:
             else:
                 err = _read_json(os.path.join(cur["dir"], "error.json")) or {}
                 last.update(state="error", detail=str(err.get("detail") or FAILED)[:120])
+        self.stopping = pgid
         _write_json(os.path.join(self.dir, "last.json"), last)
         self.last = last
         self.current = None
         _log(f"run {last['job_id']} {last['state']}"
              + (f": {last.get('detail')}" if last.get("detail") else ""))
+
+    def _group_alive(self):
+        """Is any live (non-zombie) process left in the last run's group?"""
+        if not self.stopping:
+            return False
+        if _group_members(self.stopping):
+            return True
+        self.stopping = None
+        return False
 
     def tick(self):
         with self.lock:

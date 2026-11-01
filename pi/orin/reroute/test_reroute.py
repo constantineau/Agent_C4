@@ -206,7 +206,7 @@ _land = geo.build_for_course(PORT, "c", (44.6, 42.9, -83.6, -80.4), coastline_on
 _land._fill_polygon([[(-83.4, 43.1), (-83.3, 43.1), (-83.3, 43.2), (-83.4, 43.2)]], 1, "coastline")
 _land.active = True
 with open(job.chart_path("port", "c"), "w") as fh:
-    json.dump(dict(geo.field_to_dict(_land), kind="land",
+    json.dump(dict(geo.field_to_dict(_land), kind=job.CHART_KIND,
                    fingerprint=geo.course_fingerprint(PORT, "c", DEPTH_P := job.boats.safety_depth_m(
                        job._get_boat()))), fh)
 fC, nC = job.load_obstacles(dP, cP, PORT, "c", job._get_boat())
@@ -293,7 +293,7 @@ DEPTH = job.boats.safety_depth_m(job._get_boat())
 LAND = (44.0, 43.9, -83.0, -82.9)                       # a fake "land" block, away from the route
 
 
-def write_chart(defn, fingerprint=True, kind="land", full=False):
+def write_chart(defn, fingerprint=True, kind=job.CHART_KIND, full=False):
     """A carried chart like prep_chart.py writes: land only (here one fake block), or — `full` —
     the old style with the whole race's zones and barriers baked in."""
     f = geo.build_for_course(defn, "c", (46.0, 42.5, -83.5, -81.5), coastline_on=False,
@@ -390,7 +390,7 @@ n_, s__, w_, e_ = LAND_NEAR
 f_near._fill_polygon([[(w_, s__), (e_, s__), (e_, n_), (w_, n_)]], 1, "coastline")
 f_near.active = True
 with open(job.chart_path("huron", "c"), "w") as fh:
-    json.dump(dict(geo.field_to_dict(f_near), kind="land",
+    json.dump(dict(geo.field_to_dict(f_near), kind=job.CHART_KIND,
                    fingerprint=geo.course_fingerprint(DEF, "c", DEPTH)), fh)
 fN, nN = lo(DEF)
 check("chart used; the boat's own cell is open", nN is None and not fN.blocked(44.2, -82.2))
@@ -413,7 +413,7 @@ landZ = geo.build_for_course(NEAR, "c", (45.6, 42.9, -83.1, -80.9), coastline_on
 landZ._fill_polygon([[(-83.0, 43.0), (-82.9, 43.0), (-82.9, 43.1), (-83.0, 43.1)]], 1, "coastline")
 landZ.active = True
 with open(job.chart_path("near", "c"), "w") as fh:
-    json.dump(dict(geo.field_to_dict(landZ), kind="land",
+    json.dump(dict(geo.field_to_dict(landZ), kind=job.CHART_KIND,
                    fingerprint=geo.course_fingerprint(NEAR, "c", DEPTH)), fh)
 fZ2, nZ2 = job.load_obstacles(dZ, cZ, NEAR, "c", job._get_boat())
 check("chart path: same", nZ2 is None and fZ2.blocked(44.001, -81.994))
@@ -445,7 +445,7 @@ f_gate._fill_polygon([[(-82.35, 44.85), (-82.15, 44.85), (-82.15, 44.95), (-82.3
                      "coastline")
 f_gate.active = True
 with open(job.chart_path("huron", "c"), "w") as fh:
-    json.dump(dict(geo.field_to_dict(f_gate), kind="land",
+    json.dump(dict(geo.field_to_dict(f_gate), kind=job.CHART_KIND,
                    fingerprint=geo.course_fingerprint(DEF, "c", DEPTH)), fh)
 fG, nG = lo(DEF)
 check("the land under a remaining mark is opened (pocket), the rest stays", nG is None
@@ -473,7 +473,15 @@ import contextlib  # noqa: E402
 import prep_chart  # noqa: E402
 prep_chart.store.get_race = lambda rid: DEF
 _bfc = prep_chart.geo.build_for_course
-prep_chart.geo.build_for_course = lambda *a, **k: geo.ObstacleField((46.0, 42.5, -83.5, -81.5))
+BUILD_KW = {}
+
+
+def fake_build(*a, **k):
+    BUILD_KW.update(k)
+    return geo.ObstacleField((46.0, 42.5, -83.5, -81.5))
+
+
+prep_chart.geo.build_for_course = fake_build
 buf, err = io.StringIO(), io.StringIO()
 with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(err):
     rc = prep_chart.main(["x", "huron", "c"])
@@ -483,6 +491,9 @@ buf = io.StringIO()
 with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
     rc = prep_chart.main(["x", "huron", "c", "--open-water"])
 check("--open-water → written, flagged", rc == 0 and json.loads(buf.getvalue())["open_water"] is True)
+check("land only, no waypoint pockets, the current format", BUILD_KW.get("carve_waypoints") is False
+      and BUILD_KW.get("zones_on") is False and BUILD_KW.get("islands_on") is False
+      and json.loads(buf.getvalue())["kind"] == job.CHART_KIND == prep_chart.CHART_KIND)
 prep_chart.geo.build_for_course = _bfc
 write_chart(DEF, fingerprint=False)
 check("a chart with no fingerprint → out of date",
@@ -516,6 +527,9 @@ d5, c5, _n = job.remaining_definition(BAR, "c", 1, 43.2, -82.4)
 field5, _ = job.load_obstacles(d5, c5, BAR, "c", job._get_boat())
 check("before rounding Rock its barrier still applies", field5.layers["rounding_barrier"] > 0
       and any(field5.blocked(la, lo) for la, lo in rock))
+write_chart(BAR, kind="land")
+check("a chart in the old format (pockets at every original mark) → out of date",
+      job.load_obstacles(d4, c4, BAR, "c", job._get_boat())[1] == job.OLD_CHART)
 write_chart(BAR, full=True, kind=None)
 check("an old full-race chart (no 'land' kind) → out of date",
       job.load_obstacles(d4, c4, BAR, "c", job._get_boat())[1] == job.OLD_CHART)
@@ -736,6 +750,41 @@ check("too long → killed, said plainly", PROCS[-1].killed and st["state"] == "
       and st["last"]["detail"] == "Re-route took too long. Try again.")
 check("it survives a restart (last result on disk)",
       service.Jobs(state_dir=os.path.join(_tmp, "svc"), runner=runner).status()["last"]["state"] == "error")
+
+print("4b) a run that's killed takes its child processes with it")
+import signal  # noqa: E402
+import subprocess  # noqa: E402
+
+
+def stuck_runner(job_dir):
+    """A 'job' with a child that would outlive it (like a hung GRIB parser)."""
+    return subprocess.Popen(["sh", "-c", "sleep 60 & sleep 60"], start_new_session=True)
+
+
+gj = service.Jobs(state_dir=os.path.join(_tmp, "groups"), runner=stuck_runner, timeout_s=1,
+                  groups=True)
+code, _b = gj.start({"device": "x"})
+pg = gj.current["proc"].pid
+time.sleep(0.5)
+check("(the job and its child are running)", len(service._group_members(pg)) >= 2)
+time.sleep(1.0)
+st = gj.status()
+deadline = time.time() + 5
+while service._group_members(pg) and time.time() < deadline:
+    time.sleep(0.1)
+check("too long → the whole group is gone", st["last"]["detail"] == service.TOO_LONG
+      and service._group_members(pg) == [])
+left = subprocess.Popen(["sleep", "60"], start_new_session=True)      # a straggler still alive
+gj.stopping = left.pid
+code, body = gj.start({"device": "x"})
+check("no new run while the last run's group is alive", code == 409
+      and body["detail"] == "Still stopping the last run. Try again soon.")
+left.wait(5)
+code, _b = gj.start({"device": "x"})
+check("…and one starts once it's gone", code == 202)
+service._kill_group(gj.current["proc"].pid, signal.SIGKILL)
+gj.current["proc"].wait(5)
+gj.tick()
 
 print("5) the HTTP API")
 srv = service.ThreadingHTTPServer(("127.0.0.1", 0), service.make_handler(jobs, allow_from={"127.0.0.1"}))
