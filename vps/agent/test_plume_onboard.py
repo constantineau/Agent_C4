@@ -145,7 +145,7 @@ os.remove(plume._path())
 check("onboard alone → onboard shown", plume.get(NOW)["source"] == "onboard")
 os.remove(plume._onboard_path())
 g = plume.get(NOW)
-check("neither → honest available false", g["available"] is False and "Orin" in g["note"])
+check("neither → honest available false", g["available"] is False and "internet" in g["note"])
 
 print("the Orin's 'no onboard forecast for this spot yet' marker:")
 MARK = {"schema": "c4.plume/v1", "source": "onboard", "waiting": True, "models": [],
