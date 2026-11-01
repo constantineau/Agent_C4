@@ -328,7 +328,9 @@ def _work(job_id, dev, inp):
                           weather={"models": [{"model": "open-meteo"}],
                                    "source": out.get("wind_source")},
                           eta_min=out.get("eta_min"), sailed_nm=out.get("sailed_nm"),
-                          tacks=out.get("tacks"), marks=out.get("marks"))
+                          tacks=out.get("tacks"), marks=out.get("marks"),
+                          warnings=(out.get("warnings") or [])[:4],
+                          no_zones=out.get("no_zones"))
         state, detail = "done", None
     else:
         detail = str(out.get("note") or FAILED)[:120]

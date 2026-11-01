@@ -343,6 +343,17 @@ def run(device=None, call=None):
     if req is None:
         reroutelog.record("pressed", "orin", device=dev, outcome="refused", detail=why)
         return 409, {"ok": False, "detail": why}
+    # The POST and the pending write are ONE step under _SYNC_LOCK, the lock get() holds from the
+    # Orin's status through storing a result: a fast job polled by another iPad can't be stored
+    # before its request (course, mark positions) is written. Lock order: build_request took and
+    # released COURSE_LOCK above; nothing takes COURSE_LOCK while holding _SYNC_LOCK, and _LOCK is
+    # only ever taken inside it (here and in _store), so no cycle. The POST is bounded by the
+    # Orin timeout (ORIN_REROUTE_TIMEOUT_S), which bounds how long a poll waits.
+    with _SYNC_LOCK:
+        return _start(call, req, dev)
+
+
+def _start(call, req, dev):
     code, body = call("POST", "/run", req)
     if code is None:
         reroutelog.record("pressed", "orin", device=dev, outcome="unreachable", detail=NO_ORIN)
@@ -423,8 +434,9 @@ def _mark_idx(result, pend):
     return idx
 
 
-def _store(result):
+def _store(result, received_at=None):
     result = dict(result, label=LABEL, off_playbook=True, source="orin")
+    result.pop("age_s", None)
     pend = _pending_for(result.get("job_id"))           # THIS job's request, never another's
     idx = _mark_idx(result, pend)
     if idx is not None:
@@ -440,8 +452,8 @@ def _store(result):
         result["warnings"] = warns
         result["no_zones"] = True
     with _LOCK:
-        _write(_result_path(), json.dumps({"received_at": int(time.time()), "result": result},
-                                          separators=(",", ":")))
+        _write(_result_path(), json.dumps({"received_at": received_at or int(time.time()),
+                                           "result": result}, separators=(",", ":")))
     vs = result.get("vs_plan") or {}
     reroutelog.record("done", "orin", once_key=result.get("job_id"), job_id=result.get("job_id"),
                       asked_by=result.get("asked_by"), asked_at=result.get("asked_at"),
@@ -450,7 +462,25 @@ def _store(result):
                       gain_min=vs.get("gain_min") if vs.get("available") else None,
                       finish_eta=result.get("finish_eta"), complete=result.get("complete"),
                       boat=result.get("boat"), marks=result.get("marks"),
-                      warnings=(result.get("warnings") or [])[:4])
+                      warnings=(result.get("warnings") or [])[:4], no_zones=result.get("no_zones"))
+
+
+def _heal():
+    """Self-repair: a stored route without its course stamp (stored before its request was
+    written, by any path) is re-stamped from its own pending entry once that exists. Without it
+    the GPS would refuse a valid route forever. Caller holds _SYNC_LOCK."""
+    rec = _read(_result_path())
+    r = (rec or {}).get("result")
+    if not isinstance(r, dict) or r.get("course_hash"):
+        return False
+    pend = _pending_for(r.get("job_id"))
+    if not pend or not pend.get("course_hash"):
+        return False
+    _store(r, received_at=rec.get("received_at"))
+    reroutelog.record("restamped", "orin", once_key=r.get("job_id"), job_id=r.get("job_id"),
+                      warnings=(stored() or {}).get("warnings"),
+                      no_zones=(stored() or {}).get("no_zones"))
+    return True
 
 
 def get(call=None):
@@ -461,6 +491,7 @@ def get(call=None):
 
 
 def _get(call):
+    _heal()                                   # Orin reachable or not
     code, st = call("GET", "/status")
     if code != 200 or not isinstance(st, dict):
         return {"orin": {"reachable": False}, "state": None, "progress": None,

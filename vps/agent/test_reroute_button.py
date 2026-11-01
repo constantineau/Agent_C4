@@ -572,6 +572,53 @@ r, w = send()
 check("…'Route too detailed for the GPS. Not sent.'", r["shown"] is False
       and r["note"] == "Route too detailed for the GPS. Not sent." and w is None)
 
+print("a fast job polled by another iPad mid-start keeps its course (#143 review):")
+NAV._marks = lambda route: MARKS
+RES_R = dict(RESULT, job_id="pR", finished_at=int(time.time()) + 3600, complete=True,
+             warnings=[])
+st_r = {"state": "done", "job_id": "pR", "result_job_id": "pR", "last": {"job_id": "pR", "state": "done"}}
+poll_call = orin({("GET", "/status"): (200, st_r), ("GET", "/result"): (200, RES_R)})
+race = {}
+
+
+def post_then_poll(method, path, body=None):
+    # the Orin accepted, finished at once, and another iPad polls before we write the request
+    t = threading.Thread(target=lambda: race.setdefault("g", orinroute.get(call=poll_call)))
+    t.start()
+    t.join(0.5)
+    race["poll_waited"] = t.is_alive()
+    race["t"] = t
+    return 202, {"ok": True, "job_id": "pR"}
+
+
+orinroute.run("iPad 10", call=post_then_poll)
+race["t"].join(5)
+check("the other iPad's poll waits for the start to finish", race["poll_waited"] is True)
+check("…so the route is stored with its course (the GPS takes it)",
+      orinroute.stored()["job_id"] == "pR" and orinroute.stored().get("course_hash")
+      == orinroute.current_course_hash())
+
+print("a stored route missing its course stamp heals on the next poll:")
+orinroute.run("iPad 11", call=orin({("POST", "/run"): (202, {"ok": True, "job_id": "pH"})}))
+bare = dict(RES_R, job_id="pH")
+orinroute._write(orinroute._result_path(), json.dumps({"received_at": 123, "result": bare}))
+check("(stored without a course stamp)", not orinroute.stored().get("course_hash"))
+g = orinroute.get(call=orin({("GET", "/status"): (None, None)}))   # even with the Orin off
+check("re-stamped from its own request", g["result"]["course_hash"] == orinroute.current_course_hash()
+      and g["result"]["mark_idx"] == [1, 2])
+check("…kept its receive time", json.load(open(orinroute._result_path()))["received_at"] == 123)
+check("…logged once", sum(1 for r in reroutelog.history(500)
+                          if r["event"] == "restamped" and r.get("job_id") == "pH") == 1)
+
+print("completion records keep the warnings (#143 review):")
+h = reroutelog.history(500)
+pi_nz_done = [r for r in h if r["event"] == "done" and r["engine"] == "pi"
+              and "No zones or rounding sides aboard. Redeploy the course." in (r.get("warnings") or [])]
+check("Pi: a no-zones route's record carries the warning", pi_nz_done and pi_nz_done[0]["no_zones"] is True)
+o_c = [r for r in h if r["event"] == "done" and r["engine"] == "orin" and r.get("job_id") == "pC"]
+check("Orin: same", o_c and o_c[0]["warnings"][0] == "No zones or rounding sides aboard. Redeploy the course."
+      and o_c[0]["no_zones"] is True)
+
 print("the real engine endpoints:")
 from fastapi.testclient import TestClient  # noqa: E402
 
