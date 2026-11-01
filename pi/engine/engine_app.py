@@ -23,11 +23,12 @@ os.environ.setdefault("DATA_SOURCE", "onboard")  # this service is always the on
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app import (navigator, tactics, routing, weather, sails, fatigue, onboard_conditions,
                  datasource, ais, fleet, deviation, drift, selector, reoptimize, strategy,
                  matcher, buoys, racelog, watches, trend, plangap, gpsout, checklist,
-                 power, sensor_health, plume)
+                 power, sensor_health, plume, orinroute)
 
 app = FastAPI(title="Agent_C4 Onboard Engine", version="0.1.0")
 # The iPad reaches the Pi directly over boat-local Wi-Fi in race mode; allow cross-origin so a
@@ -182,8 +183,28 @@ def course_load(body: dict):
     if not marks:
         return {"loaded": False, "detail": "no usable marks (need coordinates)"}
     route = (body or {}).get("route") or definition.get("race_id") or "race"
-    datasource.active().save_course(route, marks)
-    navigator.set_active(route)
+    # The full course (islands, rounding sides, zones) for the Orin's re-route is written to a
+    # temp file first, then the marks, then the load id, then the file goes live, all under one
+    # lock (two loads never interleave; /reroute/run reads under it too). The definition carries the
+    # load id, so it only ever pairs with its own load's marks. Any failure: the old definition is
+    # dropped and the load reports it.
+    with orinroute.COURSE_LOCK:
+        tmp = None
+        try:
+            load_id = orinroute.new_load_id()
+            tmp = orinroute.prepare_definition(definition, cid, route, load_id)
+            datasource.active().save_course(route, marks)
+            navigator.set_active(route)
+            orinroute.set_load_id(route, load_id)
+            if tmp:
+                orinroute.commit_definition(tmp)
+            else:
+                orinroute.drop_definition()
+        except Exception as exc:  # noqa: BLE001
+            orinroute.discard(tmp)
+            orinroute.drop_definition()
+            print(f"[course/load] failed: {type(exc).__name__}: {exc}", flush=True)
+            return {"loaded": False, "detail": "Couldn't save the course. Try again."}
     return {"loaded": True, "route": route, "course_id": cid, "marks": len(marks), "skipped": skipped}
 
 
@@ -508,3 +529,21 @@ def reoptimize_ep(route: str | None = None):
     with its divergence from the frozen plan. The fallback when the selector says off-script. CPU-heavy
     (isochrone chain) → cached + on-demand. Legal in-race (own computer + own polars + common data)."""
     return reoptimize.get_reoptimize(route=route)
+
+
+@app.post("/reroute/run")
+def reroute_run(body: dict = None):
+    """Ask the Orin for ONE full re-route (the Lab's multi-model optimizer, pi/orin/reroute) from
+    the boat to the remaining marks. Body: {device?: "iPad 1"} — who asked, kept with the result.
+    Runs only when called (the crew's Re-route button, #125); one at a time. 202 started, 409 busy
+    (with progress) or nothing to route, 503 when the Orin can't be reached. Legal in-race: own
+    computers + public forecasts; the route is labelled "Off the playbook"."""
+    code, out = orinroute.run((body or {}).get("device"))
+    return JSONResponse(out, status_code=code)
+
+
+@app.get("/reroute")
+def reroute_get():
+    """The Orin re-route's status + progress, and the last route (stored here, so it survives a
+    restart and the Orin being off)."""
+    return orinroute.get()

@@ -1,0 +1,44 @@
+[Unit]
+Description=SR33 onboard re-route — the Lab's full route optimizer, run only when the crew asks
+# A small HTTP API on the Orin's end of the direct Pi<->Orin cable. The Pi engine is its only
+# client (POST /reroute/run, GET /reroute). No timer, no triggers: a run starts only on a request,
+# one at a time, as a child process (memory goes back to the OS after each run).
+# Install notes: pi/orin/reroute/README.md. Not installed by any script — the owner enables it.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=agent-c4
+WorkingDirectory=/home/agent-c4/Agent_C4/pi/orin/reroute
+# The Lab's optimizer + wind code (vps/lab/app) and the shared race code (shared/), used as-is.
+Environment=PYTHONPATH=/home/agent-c4/Agent_C4/vps/lab:/home/agent-c4/Agent_C4
+Environment=PYTHONUNBUFFERED=1
+# Listen on the cable address only; take requests from the Pi's end of the cable (and loopback).
+Environment=REROUTE_BIND=10.10.10.2
+Environment=REROUTE_PORT=8210
+Environment=REROUTE_ALLOW_FROM=10.10.10.1,127.0.0.1
+# One download layer on the boat: the onboard plume's GRIB cache.
+Environment=GRIB_CACHE=/home/agent-c4/c4-plume/gribcache
+Environment=REROUTE_DIR=/home/agent-c4/c4-reroute
+# Boat data from the checkout; an edited boat profile in c4-reroute/ingested/boats/ wins.
+Environment=INGESTED_DIR=/home/agent-c4/c4-reroute/ingested
+Environment=BOATS_DIR=/home/agent-c4/Agent_C4/vps/lab/boats
+Environment=REROUTE_BOAT=sr33
+Environment=POLARS_FILE=/home/agent-c4/Agent_C4/vps/db/seed/polars_sr33.sql
+Environment=CROSSOVERS_FILE=/home/agent-c4/Agent_C4/vps/db/seed/sr33_crossovers.json
+Environment=SAIL_POLARS_FILE=/home/agent-c4/Agent_C4/vps/db/seed/sr33_sail_polars.json
+# Optional overrides (REROUTE_MODELS, budgets, ...) in /etc/sr33/reroute.env
+EnvironmentFile=-/etc/sr33/reroute.env
+ExecStart=/home/agent-c4/plume-venv/bin/python service.py
+Restart=on-failure
+RestartSec=5
+# Stay out of the way of llama-server and the copilot: lower CPU/IO priority and a hard memory cap
+# for the whole service (measured peak ~330 MB with four models, the Orin, 2026-11-01).
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+MemoryMax=800M
+
+[Install]
+WantedBy=multi-user.target

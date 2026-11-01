@@ -48,6 +48,8 @@ run node /repo /repo "tools/replay/test_overrides.js" node /repo/tools/replay/te
 for f in vps/lab/test_*.py; do run lab /srv /srv "$f"; done
 # The Orin's onboard plume reuses the Lab's wind code, so it tests in the Lab image (eccodes/cfgrib).
 run lab /srv /srv "pi/orin/plume/test_onboard_plume.py"
+# ...and so does its onboard re-route (the Lab's optimizer on the Orin, #124).
+run lab /srv /srv "pi/orin/reroute/test_reroute.py"
 
 echo; echo "$passes passed, ${#fails[@]} failed"
 [[ ${#fails[@]} -eq 0 ]] || { printf '  %s\n' "${fails[@]}"; exit 1; }

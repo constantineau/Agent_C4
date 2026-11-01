@@ -290,12 +290,19 @@ def _island_rounding_marks(definition, course_id):
         return []
     # ordered course points: ('nav'|'island', lat, lon, side, radius)
     seq = []
+    pinned = {}       # seq index → a transit bearing carried on the island mark (see below)
+    mark_of = {}      # seq index → the island's index in course["marks"] (one per occurrence)
     start = course.get("start") or {}
     if start.get("lat") is not None:
         seq.append(("nav", start["lat"], start["lon"], None, None))
-    for m in course.get("marks", []):
+    for mi, m in enumerate(course.get("marks", [])):
         t = m.get("type")
         if t == "island" and m.get("lat") is not None:
+            mark_of[len(seq)] = mi
+            if m.get("transit_brg") is not None:
+                # the boat's onboard re-route trims sailed legs and starts the course at the boat;
+                # it pins the deployed leg's bearing here so the legal side doesn't rotate
+                pinned[len(seq)] = float(m["transit_brg"])
             seq.append(("island", m["lat"], m["lon"], m.get("rounding", "none"),
                         float(m.get("radius_nm") or ISLAND_DEFAULT_NM)))
         elif t == "gate" and m.get("lat") is not None and m.get("lat2") is not None:
@@ -312,6 +319,10 @@ def _island_rounding_marks(definition, course_id):
     for i, (kind, la, lo, side, rad) in enumerate(seq):
         if kind != "island" or side not in ("port", "starboard"):
             continue
+        if i in pinned:
+            out.append({"lat": la, "lon": lo, "radius_nm": rad, "side": side,
+                        "transit_brg": pinned[i], "mark_idx": mark_of.get(i)})
+            continue
         prev = next((p for p in reversed(seq[:i]) if p[0] == "nav"), None)
         nxt = next((p for p in seq[i + 1:] if p[0] == "nav"), None)
         a = prev or (kind, la, lo, None, None)          # fall back to the island itself if unbracketed
@@ -319,7 +330,7 @@ def _island_rounding_marks(definition, course_id):
         if a[1:3] == b[1:3]:
             continue                                    # can't define a transit axis → skip enforcement
         out.append({"lat": la, "lon": lo, "radius_nm": rad, "side": side,
-                    "transit_brg": _bearing(a[1], a[2], b[1], b[2])})
+                    "transit_brg": _bearing(a[1], a[2], b[1], b[2]), "mark_idx": mark_of.get(i)})
     return out
 
 
@@ -329,7 +340,7 @@ _FIELD_CACHE: dict = {}                   # cache_key -> ObstacleField (reused a
 
 def build_for_course(definition: dict, course_id, bbox, *, coastline_on=True, zones_on=True,
                      islands_on=True, res_deg=RES_DEG, cache_dir=None, use_cache=True,
-                     source=None, safety_depth=None) -> ObstacleField:
+                     source=None, safety_depth=None, carve_waypoints=True) -> ObstacleField:
     """Assemble the ObstacleField for a course over `bbox` = (north, south, west, east).
 
     Modular: the coastline is global (any race); the zones + island marks come from THIS race's
@@ -342,7 +353,8 @@ def build_for_course(definition: dict, course_id, bbox, *, coastline_on=True, zo
     src = (source or COASTLINE_SOURCE).strip().lower()
     depth = safety_depth if safety_depth is not None else safety_depth_m()
     ck = None
-    if use_cache and coastline_on and zones_on and islands_on:
+    # only the Lab's default (pockets carved) build is cached; a no-pocket build is never served from it
+    if use_cache and coastline_on and zones_on and islands_on and carve_waypoints:
         ck = cache_key(definition, course_id, bbox, res_deg, source=src, safety_depth=depth)
         if ck in _FIELD_CACHE:
             return _FIELD_CACHE[ck]
@@ -405,7 +417,10 @@ def build_for_course(definition: dict, course_id, bbox, *, coastline_on=True, zo
 
     # 4) open a navigable pocket at every real course waypoint (start/gate/finish) so the route can
     #    always REACH its marks — finishes/marks are set near shore/islands and ENC blocks that water.
-    if field.active:
+    #    `carve_waypoints=False` skips this step entirely: the Orin's re-route builds its race layer
+    #    (zones, island disks, barriers) that way and opens pockets in its LAND mask only, so no
+    #    zone or island disk is ever cleared for the boat or a mark (#124).
+    if field.active and carve_waypoints:
         from shared import race_def
         marks, _skip, _cid = race_def.course_to_marks(definition, course_id)
         for _seq, _name, mlat, mlon in marks:
@@ -473,4 +488,69 @@ def cache_key(definition, course_id, bbox, res_deg=RES_DEG, *, source=None, safe
     depth = round(depth, 3) if src == "enc" else None
     payload = repr((src, dv, depth, course_id, tuple(round(b, 4) for b in bbox),
                     round(res_deg, 5), z, isl))
+    return hashlib.sha1(payload.encode()).hexdigest()[:16]
+
+
+# --- carry a built field to another computer (the boat's Orin, issue #124) ------------------------
+FIELD_SCHEMA = "c4.obstacles/v1"
+
+
+def field_to_dict(field) -> dict:
+    """A built ObstacleField as plain JSON: the mask zlib+base64 (a course box is ~0.5 M cells and
+    packs to tens of KB), plus its provenance. The web-overlay geometry is left out. The Orin can't
+    build the GSHHG/ENC land mask itself (no GDAL aboard), so the Lab builds it and the boat loads
+    it with `field_from_dict` — the same mask the Lab routed on."""
+    import base64
+    import zlib
+    return {"schema": FIELD_SCHEMA, "bbox": list(field.bbox), "res_deg": field.res,
+            "nx": field.nx, "ny": field.ny, "layers": dict(field.layers), "source": field.source,
+            "safety_depth": field.safety_depth, "active": field.active,
+            "mask_zb64": base64.b64encode(zlib.compress(bytes(field.mask), 9)).decode()}
+
+
+def field_from_dict(d: dict):
+    """Rebuild an ObstacleField from `field_to_dict` output. Raises ValueError on a bad payload."""
+    import base64
+    import zlib
+    if not isinstance(d, dict) or d.get("schema") != FIELD_SCHEMA:
+        raise ValueError("not a c4.obstacles/v1 field")
+    try:
+        bbox, res = tuple(float(x) for x in d["bbox"]), float(d["res_deg"])
+    except (ValueError, TypeError, KeyError) as exc:
+        raise ValueError(f"bad grid: {type(exc).__name__}") from None
+    if len(bbox) != 4 or not all(math.isfinite(x) for x in bbox + (res,)) or res <= 0 \
+            or bbox[0] <= bbox[1] or bbox[3] <= bbox[2]:   # (n, s, w, e)
+        raise ValueError("bad grid")
+    field = ObstacleField(bbox, res_deg=res)
+    try:
+        mask = zlib.decompress(base64.b64decode(d["mask_zb64"], validate=True))
+    except (ValueError, TypeError, KeyError, zlib.error) as exc:   # binascii.Error is a ValueError
+        raise ValueError(f"bad mask: {type(exc).__name__}") from None
+    if (field.nx, field.ny) != (int(d["nx"]), int(d["ny"])) or len(mask) != field.nx * field.ny:
+        raise ValueError("mask size does not match its box")
+    field.mask = bytearray(mask)
+    layers = d.get("layers") or {}
+    if not isinstance(layers, dict):
+        raise ValueError("bad layers")
+    try:
+        field.layers.update({str(k): int(v) for k, v in layers.items()})
+    except (ValueError, TypeError) as exc:
+        raise ValueError(f"bad layers: {type(exc).__name__}") from None
+    field.source = d.get("source") or field.source
+    field.safety_depth = d.get("safety_depth")
+    field.active = bool(d.get("active"))
+    return field
+
+
+def course_fingerprint(definition: dict, course_id, safety_depth) -> str:
+    """What a carried land mask was built from: the course (marks, islands, rounding sides), the
+    race's zones and the no-go depth. The Orin refuses a mask whose fingerprint doesn't match the
+    definition aboard, so a re-deployed course (a new exclusion zone) never routes on an old mask."""
+    import json
+    courses = (definition or {}).get("courses") or []
+    course = next((c for c in courses if c.get("id") == course_id), None) or \
+        (courses[0] if courses else None)
+    payload = json.dumps({"course": course, "zones": (definition or {}).get("zones") or [],
+                          "depth": None if safety_depth is None else round(float(safety_depth), 3)},
+                         sort_keys=True, separators=(",", ":"))
     return hashlib.sha1(payload.encode()).hexdigest()[:16]

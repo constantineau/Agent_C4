@@ -97,20 +97,18 @@ def active_boat():
     return get_boat(bid) if bid else None
 
 
-def active_safety_depth_m(default=2.63):
-    """No-go depth (draft + margin) for the active boat; `default` if no boat/draft is set."""
-    b = active_boat()
+def safety_depth_m(b, default=2.63):
+    """No-go depth (draft + margin) for boat profile `b`; `default` if no boat/draft is set."""
     if b and b.get("draft_m") is not None:
         return boat_profile.safety_depth_m(b)
     return default
 
 
-def active_helm_factor(default=1.0):
-    """The active boat's helm/realization factor — the fraction of the flat-water ORC polar the boat
+def helm_factor(b, default=1.0):
+    """Boat `b`'s helm/realization factor — the fraction of the flat-water ORC polar the boat
     achieves; the optimizer routes on achievable speed. MAY exceed 1.0 (the polar is a conservative
     rating, not a ceiling — a soft-rated/well-sailed boat sails above the cert). 1.0 if unset/out of
     range; accepted band [0.3, 1.2]."""
-    b = active_boat()
     try:
         hf = float((b or {}).get("helm_factor"))
         if 0.3 <= hf <= 1.2:
@@ -120,29 +118,27 @@ def active_helm_factor(default=1.0):
     return default
 
 
-def active_polar_adjustments():
-    """The active boat's human-APPROVED refined-polar overlay (Lab-4) — [{tws,twa,mult}], or []."""
-    b = active_boat()
+def polar_adjustments(b):
+    """Boat `b`'s human-APPROVED refined-polar overlay (Lab-4) — [{tws,twa,mult}], or []."""
     adj = (b or {}).get("polar_adjustments")
     return adj if isinstance(adj, list) else []
 
 
-def active_wave_coeffs():
-    """The active boat's human-APPROVED sea-state degradation coefficients (Lab-4 calibration) —
+def wave_coeffs(b):
+    """Boat `b`'s human-APPROVED sea-state degradation coefficients (Lab-4 calibration) —
     {hs_deadband, k_up, k_reach, k_down, floor}, or None → the optimizer uses the ROUTE_WAVE_* env
     priors. Keeps helm a flat-water number: the wave model carries the sea-state loss separately."""
-    b = active_boat()
     wc = (b or {}).get("wave_coeffs")
     return wc if isinstance(wc, dict) and wc else None
 
 
-def active_sail_config():
-    """The active boat's crew sail-config overlay (NOT in the ORC cert): the Code 0 band + the main
+def sail_config(b):
+    """Boat `b`'s crew sail-config overlay (NOT in the ORC cert): the Code 0 band + the main
     reef points. {'code0': {enabled,tws_max,twa_min,twa_max}, 'main_reefs': {r1_tws_kn,
     r1_a3_slot_tws_kn}} or None when neither is set. Label-layer only — routing speed stays the
     rated envelope; these drive the sail CALLS (legs, sail plan, crossover chart, bundle boat_model,
     copilot digest, sail-guidance plays)."""
-    b = active_boat() or {}
+    b = b or {}
     c0 = b.get("code0")
     mr = b.get("main_reefs")
     cfg = {}
@@ -151,3 +147,28 @@ def active_sail_config():
     if isinstance(mr, dict) and mr:
         cfg["main_reefs"] = mr
     return cfg or None
+
+
+def active_safety_depth_m(default=2.63):
+    """No-go depth (draft + margin) for the active boat; `default` if no boat/draft is set."""
+    return safety_depth_m(active_boat(), default)
+
+
+def active_helm_factor(default=1.0):
+    """The active boat's helm factor (see `helm_factor`)."""
+    return helm_factor(active_boat(), default)
+
+
+def active_polar_adjustments():
+    """The active boat's approved refined-polar overlay (see `polar_adjustments`)."""
+    return polar_adjustments(active_boat())
+
+
+def active_wave_coeffs():
+    """The active boat's approved sea-state coefficients (see `wave_coeffs`)."""
+    return wave_coeffs(active_boat())
+
+
+def active_sail_config():
+    """The active boat's Code 0 band + reef points (see `sail_config`)."""
+    return sail_config(active_boat())

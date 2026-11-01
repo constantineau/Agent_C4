@@ -244,132 +244,15 @@ def _run_optimize(definition, course_id, start_epoch, model_names, ensemble_memb
                   on_progress=None):
     """Blocking: build the multi-model wind field, route the course, write the briefing.
     `on_progress(msg)` (optional) mirrors the log lines out live — the background-job status
-    endpoint serves them so the UI can show which weather source it's waiting on."""
-    from .wind import build_windfield
-    from . import optimizer, current, wave
-    bbox = optimizer.course_bbox(definition, course_id)
-    if not bbox:
-        return {"available": False, "note": "No mark positions yet. Fix them in Course & Marks."}
-    hours = optimizer.estimate_hours(definition, course_id)
-    t_end = start_epoch + hours * 3600
-    class _Log(list):                      # a list whose .append also mirrors to on_progress
-        def append(self, msg):
-            list.append(self, msg)
-            if on_progress:
-                try:
-                    on_progress(msg)
-                except Exception:
-                    pass
-    log = _Log()
-    # venue-specific model-skill weighting: weight each model by its measured past accuracy here,
-    # de-bias its persistent offset. Best-effort — any failure falls back to the static-priority blend.
-    skill = {"enabled": False}
-    mweights = mbias = None
-    try:
-        from . import venue as venue_mod, modelskill
-        v = venue_mod.resolve(definition, course_id, bbox=bbox)
-        race_date = datetime.datetime.fromtimestamp(start_epoch, datetime.timezone.utc).date()
-        skill = (modelskill.venue_weights(v, models=model_names, race_date=race_date)
-                 if v else {"enabled": False})
-        if skill.get("enabled"):
-            mweights, mbias = skill["model_weights"], skill["model_bias"]
-            log.append(f"model-skill: {v['key']} via {skill['station']} → "
-                       + ", ".join(f"{m}×{w}" for m, w in mweights.items()))
-    except Exception as exc:
-        log.append(f"model-skill: skipped ({exc})")
-    wf = build_windfield(bbox, start_epoch, t_end, models=model_names,
-                         ensemble_members=ensemble_members, on_progress=log.append,
-                         model_weights=mweights, model_bias=mbias)
-    if not wf.loaded:
-        return {"available": False, "note": "No forecast could be loaded (not out yet, or no "
-                "internet).", "windfield": wf.status(), "log": log}
-    # water current: opt-out per run (compare with vs without) — LMHOFS surface currents, ZeroCurrent on any miss
-    cur = (current.build_currentfield(bbox, start_epoch, t_end, on_progress=log.append)
-           if use_current else current.ZeroCurrent())
-    # sea state (phase 1 seam) — opt-out per run; helm factor still applies (it's crew efficiency, not waves)
-    waves = (wave.build_wavefield(bbox, start_epoch, t_end, on_progress=log.append)
-             if use_waves else wave.ZeroWave())
-    # A fleet boat added from its ORC cert (e.g. boats/bravo.json) carries its Allowances envelope
-    # in `cert_polar` — route on THAT instead of the bundled own-boat polar files. Envelope routing
-    # only (optimize_course drops per-sail curves for an injected polar); the crew overlays below
-    # (jibs/sail_config/adjustments/wave_coeffs/helm) all read the SAME active profile, so a fleet
-    # boat contributes its own (empty) overlays and the own boat keeps its refinements.
-    cert_polar = (boats.active_boat() or {}).get("cert_polar") or None
-    result = optimizer.optimize_course(definition, course_id, start_epoch, wf, avoid=avoid,
-                                       source=chart_source(), polar=cert_polar,
-                                       safety_depth=boats.active_safety_depth_m(),
-                                       jib_crossovers=_active_jibs(), sail_config=_active_sails(), per_model=per_model,
-                                       resolution=resolution, cur=cur,
-                                       waves=waves, helm_factor=boats.active_helm_factor(),
-                                       polar_adjustments=_active_adjustments(), wave_coeffs=_active_wave())
-    result["current"] = cur.status()
-    result["waves"] = waves.status()
-    result["model_skill"] = skill                # venue model-skill weights + scorecard (UI panel)
-    result["briefing"] = optimizer.briefing(result, definition.get("name", ""))
-    result["boat"] = boat_profile.summary(boats.active_boat()) if boats.active_boat() else None
-    wg = _wind_grid(wf, bbox, start_epoch, result.get("finish_epoch", t_end))
-    result["wind_grid"] = wg
-    if cur.status().get("loaded"):                       # current overlay on the SAME times as wind
-        cg = _current_grid(cur, wg["bbox"], wg["times"], wg["step_deg"])
-        if cg:                                           # only when some cell actually flows
-            result["current_grid"] = cg
-    if waves.status().get("loaded"):                     # sea-state heatmap on the SAME times as wind
-        sg = _wave_grid(waves, wg["bbox"], wg["times"], wg["step_deg"])
-        if sg:                                           # only when there's meaningful sea state
-            result["wave_grid"] = sg
-    result["log"] = log
-    return result
-
-
-WIND_GRID_STEP_H = float(os.environ.get("WIND_GRID_STEP_H", "1"))     # forecast frame cadence (hours)
-WIND_GRID_MAX_FRAMES = int(os.environ.get("WIND_GRID_MAX_FRAMES", "72"))
-WIND_GRID_CELLS = int(os.environ.get("WIND_GRID_CELLS", "16"))
-
-
-def _wind_grid(wf, bbox, start_epoch, finish_epoch, n_cells=WIND_GRID_CELLS):
-    """Multi-time wind-field grid for the map overlay + forecast time slider ([C]).
-
-    Sampled at HOURLY (`WIND_GRID_STEP_H`) steps across the route window (capped at
-    `WIND_GRID_MAX_FRAMES`); ~`n_cells` cells across the bbox. The slider scrubs the frames + moves
-    the boat marker; each point carries confidence (model agreement) for the fuzzy-adherence shading."""
-    n, s, w, e = bbox
-    step = max(0.05, max(n - s, e - w) / n_cells)
-    span = max(1.0, float(finish_epoch) - float(start_epoch))
-    step_s = max(900.0, WIND_GRID_STEP_H * 3600.0)               # >= 15 min between frames
-    n_times = min(WIND_GRID_MAX_FRAMES, max(2, int(span / step_s) + 1))
-    times = [round(start_epoch + min(span, i * step_s)) for i in range(n_times)]
-    if times[-1] < round(start_epoch + span):
-        times.append(round(start_epoch + span))                  # always include the finish time
-    frames = [wf.sample_grid(t, step, bbox) for t in times]
-    return {"step_deg": round(step, 3), "step_h": WIND_GRID_STEP_H, "bbox": [n, s, w, e],
-            "times": times, "frames": frames}
-
-
-def _current_grid(cur, bbox, times, step):
-    """Set/drift grid for the map's CURRENT overlay (routing fidelity 2d follow-up), on the SAME bbox +
-    times as `_wind_grid` so one slider scrubs both. Returns None when nothing flows (drift < 0.05 kn
-    everywhere) so a no-current race draws no overlay. Frames mirror the wind frames' lattice."""
-    frames = [cur.sample_grid(t, step, bbox) for t in times]
-    peak = max((c.get("drift", 0.0) for fr in frames for c in fr), default=0.0)
-    if peak < 0.05:
-        return None
-    return {"step_deg": step, "bbox": bbox, "times": times, "frames": frames,
-            "peak_drift_kn": round(peak, 2)}
-
-
-WAVE_GRID_MIN_HS = float(os.environ.get("WAVE_GRID_MIN_HS", "0.25"))   # below this = effectively flat
-
-
-def _wave_grid(waves, bbox, times, step):
-    """Significant-wave-height grid for the map's SEA-STATE heatmap (realized-speed follow-up), on the
-    SAME bbox + times as `_wind_grid` so one slider scrubs wind/current/waves together. Returns None
-    when the sea is effectively flat (peak Hs < `WAVE_GRID_MIN_HS`) so a calm day draws no overlay."""
-    frames = [waves.sample_grid(t, step, bbox) for t in times]
-    peak = max((c.get("hs", 0.0) for fr in frames for c in fr), default=0.0)
-    if peak < WAVE_GRID_MIN_HS:
-        return None
-    return {"step_deg": step, "bbox": bbox, "times": times, "frames": frames,
-            "peak_hs_m": round(peak, 1)}
+    endpoint serves them so the UI can show which weather source it's waiting on. The run itself
+    is `routerun.run_course`, shared with the boat's onboard re-route (pi/orin/reroute); the Lab
+    supplies its active boat and chart source."""
+    from . import routerun
+    return routerun.run_course(definition, course_id, start_epoch, model_names,
+                               ensemble_members=ensemble_members, avoid=avoid, per_model=per_model,
+                               resolution=resolution, use_waves=use_waves, use_current=use_current,
+                               on_progress=on_progress, boat=boats.active_boat(),
+                               chart_source=chart_source())
 
 
 @app.post("/api/optimize")

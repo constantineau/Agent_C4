@@ -889,7 +889,8 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
                     jib_crossovers=None, emit_exploration=True, per_model=False,
                     resolution="auto", cur=None, waves=None, helm_factor=1.0,
                     polar_adjustments=None, wave_coeffs=None, polar=None,
-                    from_mark=0, exclude_sails=None, maneuver_prune_mult=1.0, sail_config=None):
+                    from_mark=0, exclude_sails=None, maneuver_prune_mult=1.0, sail_config=None,
+                    leg_obstacles=None):
     """Route the whole course from its start through every mark to the finish via `wf`.
 
     Returns one optimal route with per-leg ETAs, total time/distance/tacks and a route confidence
@@ -897,7 +898,10 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
 
     `obstacles` (an ObstacleField) keeps the route off land/islands/exclusion-zones; if None and
     `avoid` is set, one is built from the course bbox + this race's zones + island marks. `source`
-    (Natural Earth vs NOAA ENC) and `safety_depth` (the active boat draft + margin) flow into it."""
+    (Natural Earth vs NOAA ENC) and `safety_depth` (the active boat draft + margin) flow into it.
+    `leg_obstacles` (optional) is one ObstacleField per leg, used in place of `obstacles` for that
+    leg: island rounding barriers only apply on the leg that rounds the island (the Orin's
+    re-route passes them; the Lab still routes every leg on one course-wide mask)."""
     marks, skipped, cid = race_def.course_to_marks(definition, course_id)
     if from_mark:
         # PACE PLAYS (Playbook v2 Phase C): route the REMAINING course from an intermediate mark —
@@ -985,7 +989,9 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
         # #3 rounding side: route to a small standoff on the legal side of a port/starboard mark (the
         # real mark is still displayed + recorded). Gates pass between, finish/none unchanged.
         rlat, rlon = _rounding_offset(slat, slon, dlat, dlon, roundings.get(name, "none"))
-        leg = route_leg(wf, P, slat, slon, t, rlat, rlon, deadline=deadline, obstacles=obstacles,
+        leg_obs = (leg_obstacles[len(legs)] if leg_obstacles and len(legs) < len(leg_obstacles)
+                   else obstacles)
+        leg = route_leg(wf, P, slat, slon, t, rlat, rlon, deadline=deadline, obstacles=leg_obs,
                         capture=emit_exploration, hstep=rp["hstep"], dt_cap=rp["dt_cap"], cur=cur,
                         sail_polars=SP, jib_crossovers=jib_crossovers, start_sail=cur_sail,
                         waves=waves, helm_factor=helm_factor, wave_coeffs=wave_coeffs,
