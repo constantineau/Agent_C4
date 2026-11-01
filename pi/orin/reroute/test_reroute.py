@@ -280,6 +280,21 @@ check("…and the new zone is still avoided", field.blocked(44.55, ZLON) and not
 out3 = job.run(dict(REQ, definition=DEF2), now=NOW, is_online=lambda: False)
 check("the run says so", out3["warnings"][0] == job.OLD_CHART and out3["chart"]["land"] is False)
 check("the route keeps out of the zone", out3["complete"] and not in_zone(out3["points"]))
+good = json.load(open(job.chart_path("huron", "c")))
+for bad_mask in ("not base64 !!", "aGVsbG8gd29ybGQ="):              # bad base64; not zlib data
+    with open(job.chart_path("huron", "c"), "w") as fh:
+        json.dump(dict(good, mask_zb64=bad_mask), fh)
+    try:
+        fb_field, fb_note = lo(DEF)
+        check(f"corrupt mask ({bad_mask[:8]}…) → the fallback, not a crash",
+              fb_note == job.OLD_CHART and fb_field is not None)
+    except Exception as exc:  # noqa: BLE001
+        check(f"corrupt mask ({bad_mask[:8]}…) → the fallback, not a crash ({type(exc).__name__})", False)
+try:
+    geo.field_from_dict(dict(good, mask_zb64="aGVsbG8gd29ybGQ="))
+    check("field_from_dict: corrupt mask → ValueError", False)
+except ValueError:
+    check("field_from_dict: corrupt mask → ValueError", True)
 write_chart(DEF, fingerprint=False)
 check("a chart with no fingerprint → out of date",
       lo(DEF)[1] == job.OLD_CHART)
@@ -422,6 +437,8 @@ PROCS[-1].finish(1, error={"detail": "Re-route failed. Try again.", "error": "Ke
 st = jobs.status()
 check("error → state error, short reason; last result untouched", st["state"] == "error"
       and st["last"]["detail"] == "Re-route failed. Try again." and jobs.result()["job_id"] == jid)
+check("status still names the job behind /result", st["result_job_id"] == jid
+      and st["last"]["job_id"] != jid)
 jobs.start({})
 CLOCK[0] += 601
 st = jobs.status()

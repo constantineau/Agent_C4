@@ -283,10 +283,12 @@ def get(call=None):
                 "note": NO_ORIN_STATUS, "result": stored()}
     last = st.get("last") or {}
     have = stored()
-    if last.get("state") == "done" and last.get("job_id") and \
-            last.get("job_id") != (have or {}).get("job_id"):
+    # sync on the job behind /result, not on the last run: a run that finished unpolled and was
+    # followed by a failed one is still fetched
+    want = st.get("result_job_id")
+    if want and want != (have or {}).get("job_id"):
         rc, r = call("GET", "/result")
-        if rc == 200 and _valid_result(r) and r.get("job_id") == last.get("job_id"):
+        if rc == 200 and _valid_result(r) and r.get("job_id") == want:
             _store(r)
             have = stored()
     out = {"orin": {"reachable": True}, "state": st.get("state"), "job_id": st.get("job_id"),

@@ -46,7 +46,7 @@ iPad ──GET /api/reroute───────▶ Pi engine ──GET /status,
 | | |
 |---|---|
 | `POST /run` | body: the run request → `202 {ok, job_id}`; `409 {busy, job_id, progress, detail}` while running; `400 {detail}` |
-| `GET /status` | `{state: idle\|running\|done\|error, job_id, asked_by, progress, last}` |
+| `GET /status` | `{state: idle\|running\|done\|error, job_id, asked_by, progress, last, result_job_id}`; `result_job_id` is the job behind `/result` (a later failed run changes `last`, not this) |
 | `GET /result` | the last finished route, `404` if none yet |
 | `GET /health` | `{ok: true}` |
 

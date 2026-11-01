@@ -7,7 +7,7 @@ time. Each run is a child process (job.py) so its memory goes back to the OS whe
 
     POST /run      body: the run request (see README.md) → 202 {ok, job_id}
                    409 {busy, job_id, progress} while a run is going
-    GET  /status   → {state: idle|running|done|error, job_id, progress, last}
+    GET  /status   → {state: idle|running|done|error, job_id, progress, last, result_job_id}
     GET  /result   → the last finished route (c4.reroute/v1), 404 if none yet
     GET  /health   → {ok: true}
 
@@ -77,6 +77,8 @@ class Jobs:
         self.lock = threading.Lock()
         self.current = None
         self.last = _read_json(os.path.join(state_dir, "last.json"))
+        # the job behind /result: a later failed run changes `last`, not this
+        self.last_done = (_read_json(os.path.join(state_dir, "last_result.json")) or {}).get("job_id")
 
     # -- start -----------------------------------------------------------------------------------
     @staticmethod
@@ -137,6 +139,7 @@ class Jobs:
             res = _read_json(os.path.join(cur["dir"], "result.json")) if rc == 0 else None
             if res is not None:
                 _write_json(os.path.join(self.dir, "last_result.json"), res)
+                self.last_done = cur["job_id"]
                 last.update(state="done", run_s=res.get("run_s"),
                             available=bool(res.get("available")))
             else:
@@ -195,11 +198,13 @@ class Jobs:
             if self.current is not None:
                 return {"state": "running", "job_id": self.current["job_id"],
                         "asked_by": self.current.get("asked_by"),
-                        "progress": self._progress(), "last": self.last}
+                        "progress": self._progress(), "last": self.last,
+                        "result_job_id": self.last_done}
             if self.last:
                 return {"state": self.last.get("state"), "job_id": self.last.get("job_id"),
-                        "progress": None, "last": self.last}
-            return {"state": "idle", "job_id": None, "progress": None, "last": None}
+                        "progress": None, "last": self.last, "result_job_id": self.last_done}
+            return {"state": "idle", "job_id": None, "progress": None, "last": None,
+                    "result_job_id": self.last_done}
 
     def result(self):
         with self.lock:

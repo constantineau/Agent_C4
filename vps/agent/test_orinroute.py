@@ -128,7 +128,7 @@ print("done → stored:")
 RESULT = {"schema": "c4.reroute/v1", "job_id": "j1", "available": True, "label": "x",
           "finished_at": 1_000, "points": [{"lat": 44.4, "lon": -81.9, "t": 1}],
           "weather": {"models": [{"model": "gfs"}]}}
-st = {"state": "done", "job_id": "j1", "progress": None,
+st = {"state": "done", "job_id": "j1", "progress": None, "result_job_id": "j1",
       "last": {"job_id": "j1", "state": "done", "run_s": 70}}
 SENT.clear()
 g = orinroute.get(call=orin({("GET", "/status"): (200, st), ("GET", "/result"): (200, RESULT)}))
@@ -140,15 +140,24 @@ SENT.clear()
 orinroute.get(call=orin({("GET", "/status"): (200, st)}))
 check("not fetched again for the same job", [p for _m, p, _b in SENT] == ["/status"])
 bad = dict(RESULT, job_id="j9", schema="other")
-orinroute.get(call=orin({("GET", "/status"): (200, dict(st, last=dict(st["last"], job_id="j9"))),
+orinroute.get(call=orin({("GET", "/status"): (200, dict(st, result_job_id="j9",
+                                                        last=dict(st["last"], job_id="j9"))),
                          ("GET", "/result"): (200, bad)}))
 check("a bad result is not stored", orinroute.stored()["job_id"] == "j1")
 g = orinroute.get(call=orin({("GET", "/status"): (None, None)}))
 check("Orin off: the stored route is still served", g["orin"]["reachable"] is False
       and g["result"]["job_id"] == "j1" and g["result"]["age_s"] is not None)
-g = orinroute.get(call=orin({("GET", "/status"): (200, {"state": "error", "last": {
-    "state": "error", "detail": "Re-route took too long. Try again."}})}))
+g = orinroute.get(call=orin({("GET", "/status"): (200, {"state": "error", "result_job_id": "j1",
+                                                       "last": {"state": "error", "job_id": "j3",
+                                                                "detail": "Re-route took too long. Try again."}})}))
 check("a failed run says why, short", g["note"] == "Re-route took too long. Try again.")
+SENT.clear()
+g = orinroute.get(call=orin({
+    ("GET", "/status"): (200, {"state": "error", "result_job_id": "j2",
+                               "last": {"state": "error", "job_id": "j3", "detail": "x"}}),
+    ("GET", "/result"): (200, dict(RESULT, job_id="j2"))}))
+check("a route that finished unpolled before a failed run is still fetched",
+      g["result"]["job_id"] == "j2" and ("GET", "/result", None) in SENT)
 
 print("the real engine endpoints:")
 from fastapi.testclient import TestClient  # noqa: E402
@@ -162,7 +171,7 @@ check("POST /reroute/run with the Orin off → 503 + message", r.status_code == 
       and r.json()["detail"] == "Can't reach the Orin. Re-route not started.")
 r = client.get("/reroute")
 check("GET /reroute → stored route, Orin unreachable", r.status_code == 200
-      and r.json()["result"]["job_id"] == "j1" and r.json()["orin"]["reachable"] is False)
+      and r.json()["result"]["job_id"] == "j2" and r.json()["orin"]["reachable"] is False)
 
 
 class _DS:

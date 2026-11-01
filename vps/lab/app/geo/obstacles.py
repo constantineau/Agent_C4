@@ -500,7 +500,10 @@ def field_from_dict(d: dict):
     if not isinstance(d, dict) or d.get("schema") != FIELD_SCHEMA:
         raise ValueError("not a c4.obstacles/v1 field")
     field = ObstacleField(tuple(float(x) for x in d["bbox"]), res_deg=float(d["res_deg"]))
-    mask = zlib.decompress(base64.b64decode(d["mask_zb64"]))
+    try:
+        mask = zlib.decompress(base64.b64decode(d["mask_zb64"], validate=True))
+    except (ValueError, TypeError, KeyError, zlib.error) as exc:   # binascii.Error is a ValueError
+        raise ValueError(f"bad mask: {type(exc).__name__}") from None
     if (field.nx, field.ny) != (int(d["nx"]), int(d["ny"])) or len(mask) != field.nx * field.ny:
         raise ValueError("mask size does not match its box")
     field.mask = bytearray(mask)
