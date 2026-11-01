@@ -395,6 +395,12 @@ try:
     check("field_from_dict: corrupt mask → ValueError", False)
 except ValueError:
     check("field_from_dict: corrupt mask → ValueError", True)
+for _bad in (dict(good, res_deg=0), dict(good, res_deg=float("nan")), dict(good, bbox=[1, 2, 3])):
+    try:
+        geo.field_from_dict(_bad)
+        check("field_from_dict: bad grid → ValueError", False)
+    except ValueError:
+        check("field_from_dict: bad grid → ValueError", True)
 good_ch = json.load(open(job.chart_path("huron", "c")))
 empty = geo.ObstacleField(tuple(good_ch["bbox"]), res_deg=good_ch["res_deg"])
 with open(job.chart_path("huron", "c"), "w") as fh:

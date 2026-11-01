@@ -514,7 +514,14 @@ def field_from_dict(d: dict):
     import zlib
     if not isinstance(d, dict) or d.get("schema") != FIELD_SCHEMA:
         raise ValueError("not a c4.obstacles/v1 field")
-    field = ObstacleField(tuple(float(x) for x in d["bbox"]), res_deg=float(d["res_deg"]))
+    try:
+        bbox, res = tuple(float(x) for x in d["bbox"]), float(d["res_deg"])
+    except (ValueError, TypeError, KeyError) as exc:
+        raise ValueError(f"bad grid: {type(exc).__name__}") from None
+    if len(bbox) != 4 or not all(math.isfinite(x) for x in bbox + (res,)) or res <= 0 \
+            or bbox[0] <= bbox[1] or bbox[3] <= bbox[2]:   # (n, s, w, e)
+        raise ValueError("bad grid")
+    field = ObstacleField(bbox, res_deg=res)
     try:
         mask = zlib.decompress(base64.b64decode(d["mask_zb64"], validate=True))
     except (ValueError, TypeError, KeyError, zlib.error) as exc:   # binascii.Error is a ValueError
