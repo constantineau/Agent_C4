@@ -41,15 +41,16 @@ class CloudSource:
             ).fetchone()
         return r["value"] if r else None
 
-    def latest_epoch(self, path):
-        """Epoch of the freshest sample (any source) for a path, or None — the collision watch's
-        age check on the own fix."""
+    def latest_sample(self, path):
+        """(value, epoch) of the freshest sample (any source) for a path, from ONE row, or None —
+        the collision watch judges the own fix's age on the reading it actually uses."""
         with pool.connection() as conn:
             r = conn.execute(
-                "SELECT extract(epoch FROM max(time)) AS t FROM telemetry_raw "
-                "WHERE boat_id=%s AND path=%s AND value IS NOT NULL", (BOAT_ID, path),
+                "SELECT value, extract(epoch FROM time) AS t FROM telemetry_raw "
+                "WHERE boat_id=%s AND path=%s AND value IS NOT NULL ORDER BY time DESC LIMIT 1",
+                (BOAT_ID, path),
             ).fetchone()
-        return float(r["t"]) if r and r["t"] is not None else None
+        return (r["value"], float(r["t"])) if r else None
 
     def series(self, path, minutes):
         """[(epoch_s, raw_value)] for a path over the window, all sources, time-ordered."""

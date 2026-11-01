@@ -25,7 +25,8 @@ What makes the watch trustworthy (2026-11-02 system review, collision items 1, 4
     `possible_echo: true`, and that is all: it keeps its full CPA/TCPA and alarms like any other
     contact (a boat 40 m astern overtaking at 1 kn is a real collision). The copilot adds a quiet
     hint to set OWN_MMSI.
-  * A STALE OWN FIX IS NO FIX. Own position older than OWN_FIX_MAX_AGE_S (wall clock) gives
+  * A STALE OWN FIX IS NO FIX. Own position older than OWN_FIX_MAX_AGE_S (wall clock) — the age of
+    the very reading used (`latest_sample`: value and time from one priority pick) — gives
     `own_fix: false` with the reason, so the copilot says the watch is off instead of computing
     CPA against where the boat was. 0 turns the age check off (a replay of an old archive).
   * TARGETS ARE MOVED TO NOW. Each report is dead-reckoned by its age along its SOG/COG. A target
@@ -103,26 +104,30 @@ def _latest(path):
     return float(v) if v is not None else None
 
 
-def _latest_epoch(path):
-    """Epoch of the newest own-ship sample for `path`, or None (unknown / not supported)."""
-    fn = getattr(datasource.active(), "latest_epoch", None)
+def _latest_sample(path):
+    """(value, epoch) of the own-ship reading actually used for `path`, from the data source's
+    single priority pick (value and time can't come from different sources). epoch is None when
+    the source can't say (a stub with only latest_value)."""
+    src = datasource.active()
+    fn = getattr(src, "latest_sample", None)
     if fn is None:
-        return None
-    try:
-        e = fn(path)
-    except Exception:           # noqa: BLE001 — an unreadable age is treated as unknown
-        return None
-    return float(e) if e is not None else None
+        v = src.latest_value(path)
+        return (float(v) if v is not None else None), None
+    smp = fn(path)
+    if not smp or smp[0] is None:
+        return None, None
+    return float(smp[0]), (float(smp[1]) if smp[1] is not None else None)
 
 
 def _own_ship():
     """Own position (deg) + motion (kn / deg true), best-available freshest source, plus the age
     of the position (`age_s`, None when the source can't say)."""
-    lat = _latest("navigation.position.latitude")
-    lon = _latest("navigation.position.longitude")
+    lat, e_lat = _latest_sample("navigation.position.latitude")
+    lon, e_lon = _latest_sample("navigation.position.longitude")
     sog = _latest("navigation.speedOverGround")
     cog = _latest("navigation.courseOverGroundTrue")
-    e = _latest_epoch("navigation.position.latitude")
+    # the older of the two halves of the fix is the fix's age
+    e = min(e_lat, e_lon) if e_lat is not None and e_lon is not None else None
     return {
         "lat": lat, "lon": lon,
         "sog": sog * _MS_TO_KN if sog is not None else None,

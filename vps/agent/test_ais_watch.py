@@ -8,8 +8,10 @@
   4. targets are dead-reckoned to now; no SOG/COG = unknown motion, never "stopped";
   5. AIS heard nothing for N minutes while under way → feed_silent (a hint); the transceiver gone
      from the bus → receiver_missing (the real blind state);
-  7. the onboard fix age: an expired live-cache entry gives way to the archive's newest time, the
-     same rule latest_value uses (a dropped Signal K link with the archiver running is NOT stale).
+  7. the onboard fix age is the age of the reading actually used: value and time from ONE priority
+     pick (`latest_sample`) — an expired live entry gives way to the archive (a dropped Signal K
+     link with the archiver running is not stale), and a fresher lower-ranked source (Orca 1 s)
+     never lends its time to the lead GPS's 40 s-old position (Codex on #191 at f98bda9).
   6. closing contacts sorted by TCPA; own MMSI from env, then the race homework.
 
 Pure: a stub data source, no DB, no live AIS. Exits non-zero on any failure.
@@ -50,8 +52,9 @@ class Src:
     def latest_value(self, path):
         return self.vals.get(path)
 
-    def latest_epoch(self, path):
-        return self.epoch
+    def latest_sample(self, path):
+        v = self.vals.get(path)
+        return None if v is None else (v, self.epoch)
 
     def ais_targets(self, max_age_min):
         cut = time.time() - max_age_min * 60
@@ -193,7 +196,7 @@ b = row("366999011", 1.25 * NM_LAT, 9.0, 180.0, name="B", dlon_deg=0.3 * NM_LAT 
 r = run(Src([a, b]))
 check("B (sooner) before A (smaller CPA, later)", [t["name"] for t in r["targets"]][:2] == ["B", "A"])
 
-print("\n== 7. onboard fix age: an expired live entry gives way to the archive ==")
+print("\n== 7. onboard fix age: the age of the reading actually used ==")
 import sqlite3  # noqa: E402
 import tempfile  # noqa: E402
 import threading  # noqa: E402
@@ -201,36 +204,66 @@ from datetime import datetime, timezone  # noqa: E402
 
 from app import datasource_onboard as ds  # noqa: E402
 
-LAT = "navigation.position.latitude"
+LAT, LON = "navigation.position.latitude", "navigation.position.longitude"
+GPS24, ORCA = "n2k-socketcan.3", "n2k-socketcan.15"     # the 24xd leads lat/lon; the Orca is #2
 
 
 def iso(epoch):
     return datetime.fromtimestamp(epoch, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
-with tempfile.TemporaryDirectory() as d:
-    db = os.path.join(d, "archive.db")
-    c = sqlite3.connect(db)
+def archive(path, rows):
+    c = sqlite3.connect(path)
+    c.execute("DROP TABLE IF EXISTS readings")
     c.execute("CREATE TABLE readings (id INTEGER PRIMARY KEY, boat_id TEXT, time TEXT, path TEXT, "
               "source TEXT, value REAL)")
-    now = time.time()
-    c.execute("INSERT INTO readings (boat_id, time, path, source, value) VALUES (?,?,?,?,?)",
-              (ds.BOAT_ID, iso(now - 2), LAT, "gps", 45.0))     # the archiver is still writing
+    c.executemany("INSERT INTO readings (boat_id, time, path, source, value) VALUES (?,?,?,?,?)",
+                  [(ds.BOAT_ID, iso(e), p, src, v) for p, src, e, v in rows])
     c.commit()
     c.close()
-    ds.ARCHIVE_DB = db
-    ds._AIS_SRC_CACHE[db] = set()
+
+
+def onboard(db, live):
     src = object.__new__(ds.OnboardSource)
     src._archive_local = threading.local()
     src._live_lock = threading.Lock()
-    src._live = {(LAT, "gps"): (now - 300, 45.0)}                # the SK link dropped 5 min ago
-    e = src.latest_epoch(LAT)
-    check("live entry 5 min old (expired) + archive 2 s old → the archive's time",
-          e is not None and abs(now - e - 2) < 1.5)
-    src._live = {(LAT, "gps"): (now - 1, 45.0)}
-    check("a fresh live entry wins", abs(now - src.latest_epoch(LAT) - 1) < 0.5)
-    src._live = {}
-    check("no live data → the archive's time", abs(now - src.latest_epoch(LAT) - 2) < 1.5)
+    src._live = live
+    src._ais = {}
+    return src
+
+
+with tempfile.TemporaryDirectory() as d:
+    db = os.path.join(d, "archive.db")
+    now = time.time()
+    ds.ARCHIVE_DB, ds.ARCHIVE_RECHECK_S = db, 0.0
+    ds._AIS_SRC_CACHE[db] = set()
+
+    archive(db, [(LAT, "gps", now - 2, 45.0)])                  # the archiver is still writing
+    src = onboard(db, {(LAT, "gps"): (now - 300, 45.0)})         # the SK link dropped 5 min ago
+    smp = src.latest_sample(LAT)
+    check("live entry 5 min old (expired) + archive 2 s old → the archive's reading and time",
+          smp and smp[0] == 45.0 and abs(now - smp[1] - 2) < 1.5)
+    src._live = {(LAT, "gps"): (now - 1, 45.5)}
+    smp = src.latest_sample(LAT)
+    check("a fresh live entry wins, with its own time", smp[0] == 45.5 and abs(now - smp[1] - 1) < 0.5)
+
+    # Codex's repro: archived 24xd fix 40 s old (inside the 45 s failover band, so it still LEADS)
+    # and an Orca fix 1 s old. The position is the 24xd's, so the age must be 40 s, not 1 s.
+    archive(db, [(LAT, GPS24, now - 40, 45.0), (LON, GPS24, now - 40, -83.0),
+                 (LAT, ORCA, now - 1, 45.0003), (LON, ORCA, now - 1, -83.0003)])
+    src = onboard(db, {})
+    smp = src.latest_sample(LAT)
+    check("24xd 40 s + Orca 1 s → the 24xd's value AND its 40 s time, from one pick",
+          smp and smp[0] == 45.0 and abs(now - smp[1] - 40) < 1.5)
+    check("latest_value agrees with latest_sample (one code path)", src.latest_value(LAT) == smp[0])
+    ais.datasource.active = lambda: src
+    ais.OWN_FIX_MAX_AGE_S = 30
+    r = ais.get_ais_targets()
+    check("…so the stale-fix guard trips: own_fix false, 'GPS fix stale', age ~40 s",
+          r["own_fix"] is False and r["own_fix_reason"] == "GPS fix stale"
+          and 38 <= r["own_fix_age_s"] <= 42)
+    src._live = {(LAT, GPS24): (now - 1, 45.0), (LON, GPS24): (now - 1, -83.0)}
+    check("the 24xd live and fresh → own_fix true", ais.get_ais_targets()["own_fix"] is True)
 
     # the transceiver's own-context data in the live cache (#191: only OFF when it's off the bus)
     ds._AIS_SRC_CACHE[db] = {"b951"}

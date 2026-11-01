@@ -212,8 +212,9 @@ def _engine_ais(rows, own_sog_kn=6.0, fix_age=1.0, own_mmsi=None, rx_age=None):
                     "navigation.speedOverGround": own_sog_kn / ais_mod._MS_TO_KN,
                     "navigation.courseOverGroundTrue": 0.0}.get(path)
 
-        def latest_epoch(self, path):
-            return now - fix_age
+        def latest_sample(self, path):
+            v = self.latest_value(path)
+            return None if v is None else (v, now - fix_age)
 
         def ais_targets(self, max_age_min):
             return [dict(r, time=now - fix_age) for r in rows]     # heard as recently as our fix

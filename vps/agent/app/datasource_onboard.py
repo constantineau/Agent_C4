@@ -379,14 +379,23 @@ class OnboardSource:
 
     # --- CloudSource interface --------------------------------------------
     def latest_value(self, path):
-        """Raw SI value for a path from the priority-preferred source — live cache, then archive.
+        """Raw SI value for a path from the priority-preferred source — live cache, then archive."""
+        s = self.latest_sample(path)
+        return s[0] if s else None
+
+    def latest_sample(self, path):
+        """(value, epoch) of the priority-preferred sample for a path — live cache, then archive —
+        or None. The value and its time come from the SAME `_prefer` pick, so a caller judging the
+        reading's age (the collision watch's stale-fix guard, dead reckoning) can never get one
+        source's value with another source's newer time.
 
         Two bounded archive queries rather than one: the newest timestamp for the path (index
         only), then just the last FAILOVER_AGE_S of that path grouped by source. Grouping the
         whole path by source would scan millions of rows on every poll."""
         live = self._live_fresh(path)
         if live:
-            return self._prefer(path, live)[2]
+            best = self._prefer(path, live)
+            return (best[2], best[1])
         not_ais, ais_p = self._not_ais()
         newest = self._archive.execute(
             "SELECT max(time) AS time FROM readings WHERE boat_id=? AND path=? "
@@ -408,23 +417,7 @@ class OnboardSource:
         cands = [(r["source"], _epoch(r["time"]), r["value"]) for r in rows]
         cands = [c for c in cands if c[1] is not None]
         best = self._prefer(path, cands)
-        return best[2] if best else None
-
-    def latest_epoch(self, path):
-        """Wall-clock epoch of the newest own-ship sample for `path` (any source, any age), or None.
-        `latest_value` falls back to the archive with no age limit (by design: replays), so the
-        collision watch asks this to tell a live fix from the last one before the GPS went quiet.
-        Same order as `latest_value`: a live-cache entry only within LIVE_TTL_S, else the archive's
-        newest time (so a dropped Signal K link with the archiver still writing stays a fresh fix)."""
-        live = self._live_fresh(path)              # the same freshness rule as latest_value
-        if live:
-            return max(e for _s, e, _v in live)
-        not_ais, ais_p = self._not_ais()
-        row = self._archive.execute(
-            "SELECT max(time) AS time FROM readings WHERE boat_id=? AND path=? "
-            "AND value IS NOT NULL" + not_ais, (BOAT_ID, path, *ais_p),
-        ).fetchone()
-        return _epoch(row["time"]) if row and row["time"] else None
+        return (best[2], best[1]) if best else None
 
     def ais_receiver_age_s(self):
         """Seconds since the boat's own AIS transceiver (an AIS-bearing source, see ais_sources)
