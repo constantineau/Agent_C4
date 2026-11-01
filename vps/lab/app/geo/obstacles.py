@@ -290,12 +290,17 @@ def _island_rounding_marks(definition, course_id):
         return []
     # ordered course points: ('nav'|'island', lat, lon, side, radius)
     seq = []
+    pinned = {}       # seq index → a transit bearing carried on the island mark (see below)
     start = course.get("start") or {}
     if start.get("lat") is not None:
         seq.append(("nav", start["lat"], start["lon"], None, None))
     for m in course.get("marks", []):
         t = m.get("type")
         if t == "island" and m.get("lat") is not None:
+            if m.get("transit_brg") is not None:
+                # the boat's onboard re-route trims sailed legs and starts the course at the boat;
+                # it pins the deployed leg's bearing here so the legal side doesn't rotate
+                pinned[len(seq)] = float(m["transit_brg"])
             seq.append(("island", m["lat"], m["lon"], m.get("rounding", "none"),
                         float(m.get("radius_nm") or ISLAND_DEFAULT_NM)))
         elif t == "gate" and m.get("lat") is not None and m.get("lat2") is not None:
@@ -311,6 +316,10 @@ def _island_rounding_marks(definition, course_id):
     out = []
     for i, (kind, la, lo, side, rad) in enumerate(seq):
         if kind != "island" or side not in ("port", "starboard"):
+            continue
+        if i in pinned:
+            out.append({"lat": la, "lon": lo, "radius_nm": rad, "side": side,
+                        "transit_brg": pinned[i]})
             continue
         prev = next((p for p in reversed(seq[:i]) if p[0] == "nav"), None)
         nxt = next((p for p in seq[i + 1:] if p[0] == "nav"), None)

@@ -183,6 +183,34 @@ check("no start, island before A: rounded island keeps no barrier", n9 == ["Fini
 d10, _c10, _n10 = job.remaining_definition(NOSTART, "c", 0, 44.1, -82.0)   # still heading to A
 check("no start, before A: island keeps its side",
       {m["name"]: m["rounding"] for m in d10["courses"][0]["marks"]}.get("Rocky") == "port")
+# the current leg's island keeps its DEPLOYED rounding side (Codex repro): Start (44,-83) → island
+# (44,-82) left to port → Finish (44,-81); the boat south of the island, mid-leg
+PORT = {"race_id": "port", "zones": [], "courses": [{"id": "c", "start": {"lat": 44.0, "lon": -83.0},
+        "marks": [{"name": "Isl", "type": "island", "lat": 44.0, "lon": -82.0, "rounding": "port"}],
+        "finish": {"points": [{"lat": 44.0, "lon": -81.0}]}}]}
+deployed = geo.build_for_course(PORT, "c", job.optimizer.course_bbox(PORT, "c"), coastline_on=False,
+                                use_cache=False, source="natural_earth")
+check("(the deployed barrier blocks 44.1N 82W)", deployed.blocked(44.1, -82.0))
+dP, cP, _n = job.remaining_definition(PORT, "c", 1, 43.5, -82.0)
+fP, _ = job.load_obstacles(dP, cP, None, None, job._get_boat())
+check("after trimming (boat as start) it's still blocked", fP.blocked(44.1, -82.0))
+check("…the island carries the deployed leg's bearing (~090)",
+      abs(dP["courses"][0]["marks"][0]["transit_brg"] - 90) < 1.5)
+_unpinned = json.loads(json.dumps(dP))
+_unpinned["courses"][0]["marks"][0].pop("transit_brg")
+check("(without the pinned bearing that water would open)", not job.load_obstacles(
+    _unpinned, cP, None, None, job._get_boat())[0].blocked(44.1, -82.0))
+os.makedirs(job.CHART_DIR, exist_ok=True)
+_land = geo.build_for_course(PORT, "c", (44.6, 42.9, -83.6, -80.4), coastline_on=False,
+                             use_cache=False, zones_on=False, islands_on=False)
+_land._fill_polygon([[(-83.4, 43.1), (-83.3, 43.1), (-83.3, 43.2), (-83.4, 43.2)]], 1, "coastline")
+_land.active = True
+with open(job.chart_path("port", "c"), "w") as fh:
+    json.dump(dict(geo.field_to_dict(_land), kind="land",
+                   fingerprint=geo.course_fingerprint(PORT, "c", DEPTH_P := job.boats.safety_depth_m(
+                       job._get_boat()))), fh)
+fC, nC = job.load_obstacles(dP, cP, PORT, "c", job._get_boat())
+check("chart path: same, the deployed side holds", nC is None and fC.blocked(44.1, -82.0))
 _src = job.geo.COASTLINE_SOURCE
 job.geo.COASTLINE_SOURCE = "enc"                       # the Lab's ENC setting, no chart aboard
 f8, _ = job.load_obstacles(d6, c6, None, None, job._get_boat())
@@ -463,6 +491,21 @@ class FakeICON(models.ICON):
                                        "cycle_fallbacks": 0, "priority": 1.15,
                                        "kind": "deterministic"}
 
+
+print("3e1b) a stalled ICON gets one request's time, not the budget")
+
+
+class SlowICON(models.ICON):
+    def load_series(self, bbox, t_start, t_end, on_progress=None):
+        time.sleep(5)
+        return {}, {}
+
+
+t0 = time.time()
+b = W.Budget(True, budget_s=180, request_s=0.5)
+ser, meta = W.ApiSource(SlowICON(), b).load_series(BOX, NOW, NOW + 3600)
+check("gave up after ~the request time", time.time() - t0 < 2.5 and meta["skipped"] == "timed out")
+check("…and the budget is still there for the rest", not b.exhausted and b.left() > 170)
 
 _icon0 = models.MODELS["icon"]
 models.MODELS["gfs"], models.MODELS["icon"] = DownGFS(), FakeICON()

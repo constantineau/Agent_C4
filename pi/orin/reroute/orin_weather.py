@@ -198,9 +198,10 @@ class ApiSource:
 
         th = threading.Thread(target=work, daemon=True)
         th.start()
-        th.join(max(0.5, self._budget.left()))
+        # one model's whole API load gets one request's time, never the rest of the budget
+        th.join(max(0.5, min(self._budget.request_s, self._budget.left())))
         if "r" not in box:
-            self._budget.exhausted = self._budget.exhausted or th.is_alive()
+            self._budget.exhausted = self._budget.exhausted or self._budget.left() <= 0.5
             return self._empty("timed out" if th.is_alive() else "failed")
         series, meta = box["r"]
         if series:

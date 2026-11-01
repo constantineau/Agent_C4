@@ -25,7 +25,7 @@ iPad ──GET /api/reroute───────▶ Pi engine ──GET /status,
 1. The Pi builds the request: boat position, the deployed course (the RaceDefinition the Lab's
    Deploy push sent to `/course/load`) and which mark is next, the plan's track, who asked.
 2. `job.py` cuts the course to what's left: it starts at the boat and runs from the next mark to the
-   finish. Every island stays an obstacle (its disk) and every zone stays; islands already rounded lose only their rounding side, so their barrier is gone.
+   finish. Every island stays an obstacle (its disk) and every zone stays; islands already rounded lose only their rounding side, so their barrier is gone. Islands still to round keep their side and their leg's bearing as deployed (previous mark to next mark), so putting the boat in as the start never turns the barrier.
 3. Obstacles: the race's zones, islands and rounding barriers, rebuilt for the remaining course.
    Land: the Lab's land-only mask for the course, carried aboard as a file (see "Chart" below),
    used only if it was built from the course aboard. Without one, the run avoids the race's
@@ -206,7 +206,7 @@ Remove: `sudo systemctl disable --now sr33-orin-reroute`, delete the unit, `rm -
 | `REROUTE_DIR` | `~/c4-reroute` | state, jobs, last result |
 | `REROUTE_CHART_DIR` | `$REROUTE_DIR/chart` | land masks, `<race_id>__<course_id>.json` |
 | `REROUTE_BOAT` | `sr33` | boat profile id |
-| `REROUTE_DOWNLOAD_BUDGET_S` / `REROUTE_REQUEST_TIMEOUT_S` | `180` / `20` | downloads, when online |
+| `REROUTE_DOWNLOAD_BUDGET_S` / `REROUTE_REQUEST_TIMEOUT_S` | `180` / `20` | downloads, when online; an ICON/GEM load gets one request's time in all |
 | `REROUTE_ROUTE_BUDGET_S` | `300` | optimizer time cap |
 | `REROUTE_JOB_TIMEOUT_S` | `600` | a run is killed after this |
 | `REROUTE_CURRENT` / `REROUTE_WAVES` | `0` / `0` | LMHOFS current / GLWU sea state (online only) |

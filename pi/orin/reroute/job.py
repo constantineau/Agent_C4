@@ -90,6 +90,11 @@ def remaining_definition(definition, course_id, next_index, lat, lon):
     if not course:
         raise RunError("No course loaded.")
     idx, finish_idx = _nav_index_map(course)
+    # each rounding island's leg bearing AS DEPLOYED (previous mark → next mark). Trimming puts the
+    # boat in as the start, which would rotate the current leg's barrier and could open water the
+    # deployed rounding rule closes, so the bearing is pinned on the kept island.
+    deployed_brg = {(r["lat"], r["lon"]): r["transit_brg"]
+                    for r in geo._island_rounding_marks(d, course.get("id"))}
     start = course.get("start") or {}
     has_start = start.get("lat") is not None
     # navigator index of the next mark; unknown → the first mark after the start. An explicit 0 is
@@ -100,7 +105,9 @@ def remaining_definition(definition, course_id, next_index, lat, lon):
         if k is None:
             if m.get("type") == "island" and m.get("lat") is not None:
                 if nxt == 0 or prev_nav >= nxt - 1:
-                    keep.append(m)        # an island on the current leg or later: as deployed
+                    # an island on the current leg or later: as deployed, its leg bearing pinned
+                    brg = deployed_brg.get((m["lat"], m["lon"]))
+                    keep.append(dict(m, transit_brg=brg) if brg is not None else m)
                 else:
                     # already rounded: still rock (its disk stays), but no rounding side, so its
                     # wrong-side barrier can't block a later leg
