@@ -199,6 +199,10 @@ check("posts to the engine's /plume/load on the Deploy address",
       posted == ["http://pi:8200/plume/load"] and rec["ok"])
 check("same plume confirmed → no re-push", not P.needs_push(pl, P.last_push()))
 check("new runs → push again", P.needs_push(dict(pl, built_at=NOW + H), P.last_push()))
+P.push(dict(pl, race_start=NOW, race_end=None), post=fake_post, now=NOW - H)
+check("same runs, race just marked over (race_end set) → push again",
+      P.needs_push(dict(pl, race_start=NOW, race_end=NOW + 30 * H), P.last_push())
+      and not P.needs_push(dict(pl, race_start=NOW, race_end=None), P.last_push()))
 rec = P.push(pl, post=lambda u, b, timeout=25: (False, {"error": "timed out"}))
 check("a failed push is recorded and retried next pass", not rec["ok"] and "timed out" in rec["error"]
       and P.needs_push(pl, P.last_push()))

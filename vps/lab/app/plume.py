@@ -524,7 +524,8 @@ def push(plume, post=None, now=None):
     ok, resp = post(push_url(), plume)
     ok = bool(ok and (resp or {}).get("loaded"))
     rec = {"at": int(now), "ok": ok, "key": plume.get("key"),
-           "built_at": plume.get("built_at"),
+           "built_at": plume.get("built_at"), "race_start": plume.get("race_start"),
+           "race_end": plume.get("race_end"),
            "error": None if ok else str((resp or {}).get("error") or resp)[:200]}
     labstate.set(_KEY_PUSH, rec)
     return rec
@@ -535,13 +536,13 @@ def last_push():
 
 
 def needs_push(plume, last):
-    """Push when the boat hasn't confirmed this plume yet (new runs, new target, or last try
-    failed)."""
+    """Push when the boat hasn't confirmed this plume yet: new runs, new target, a changed race
+    window (e.g. the race was just marked over), or the last try failed."""
     if not plume or not plume.get("models"):
         return False
     if not last or not last.get("ok"):
         return True
-    return last.get("key") != plume.get("key") or last.get("built_at") != plume.get("built_at")
+    return any(last.get(k) != plume.get(k) for k in ("key", "built_at", "race_start", "race_end"))
 
 
 def current(now=None):

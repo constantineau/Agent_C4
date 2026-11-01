@@ -58,11 +58,16 @@ for name, bad in (("wrong schema", dict(GOOD, schema="x")),
                   ("not a dict", ["nope"]),
                   ("unknown model id", dict(GOOD, models=[{"model": "xyz", "runs": GOOD["models"][0]["runs"]}])),
                   ("label not a string", dict(GOOD, label={"a": 1})),
+                  ("infinite timestamp", dict(GOOD, built_at=float("inf"))),
+                  ("infinite point", dict(GOOD, models=[{"model": "hrrr", "runs": [
+                      dict(GOOD["models"][0]["runs"][0], pts=[[NOW, 1e309, 10]])]}])),
+                  ("NaN race start", dict(GOOD, race_start=float("nan"))),
                   ("cycle not a number", dict(GOOD, models=[{"model": "hrrr", "runs": [
                       dict(GOOD["models"][0]["runs"][0], cycle="12Z")]}]))):
     r = plume.load(bad, now=NOW)
     check(f"{name} → not loaded", r["loaded"] is False)
-check("...and the good plume is still aboard", plume.get(NOW)["key"] == "r1__pb")
+check("...and the good plume is still aboard, readable", plume.get(NOW)["key"] == "r1__pb"
+      and plume.get(NOW)["age_s"] == 600)
 big = dict(GOOD, models=[{"model": "gfs", "runs": [{"pts": [[NOW, 1.0, 1]] * 60000}]}])
 check("an absurdly large payload is refused", plume.load(big, now=NOW)["loaded"] is False)
 

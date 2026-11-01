@@ -11,6 +11,7 @@ Legal in-race: it's common public forecast data (the same GRIB/open-data models 
 loaded before or between connections — the boat never asks anyone for advice.
 """
 import json
+import math
 import os
 import tempfile
 import threading
@@ -30,7 +31,7 @@ def _path():
 
 
 def _num(x):
-    return isinstance(x, (int, float)) and not isinstance(x, bool) and x == x
+    return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
 
 
 def validate(plume):
