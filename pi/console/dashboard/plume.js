@@ -81,8 +81,8 @@
   const OLD_S = 3 * 3600;
   const isOld = (plume) => !!(plume && plume.age_s != null && plume.age_s > OLD_S);
 
-  /* frozen at the gun: from the race start until the Lab records the finish (race_end) the boat
-     keeps the pre-start plume (RRS 41) — say so instead of looking live */
+  /* frozen at the gun: once a race session is running aboard, or the plume's race start has
+     passed, the boat keeps the pre-start plume (RRS 41) — say so instead of looking live */
   function isFrozen(plume, now) {
     if (!plume) return false;
     if (plume.frozen === true) return true;
@@ -90,7 +90,10 @@
     return typeof rs === "number" && now >= rs && (typeof re !== "number" || now < re);
   }
   const hhmm = (epoch) => { const d = new Date(epoch * 1000); return ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2); };
-  const frozenText = (plume) => "Frozen at the start · " + hhmm(plume.race_start);
+  const frozenText = (plume) => {
+    const t = typeof plume.frozen_at === "number" ? plume.frozen_at : plume.race_start;
+    return "Frozen at the start" + (typeof t === "number" ? " · " + hhmm(t) : "");
+  };
 
   const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   function cycleText(epoch, now) {

@@ -168,14 +168,8 @@ check("follows what the boat holds: the recommended variant's route",
       sp and sp["basis"] == "route" and sp["path"][0]["lat"] == 43.0 and "Right" in sp["label"])
 check("store key is race + playbook", sp["key"] == "r1__r1__100")
 sp = P.resolve_target(NOW + 40 * H)
-check("route's ETAs over but its race never marked finished → stays on the route (frozen)",
-      sp["basis"] == "route")
-P.mark_finished("r1", at=NOW + 39 * H)
-sp = P.resolve_target(NOW + 40 * H)
-check("marked finished + route over → holds at the race start",
+check("route over → holds at the race start",
       sp["basis"] == "point" and sp["path"][0]["lat"] == 43.0 and sp["path"][0]["lon"] == -82.4)
-P.mark_finished("r1", undo=True)
-labstate.set("plume:locked", None)
 P.set_target("r1", lat=44.5, lon=-82.1)
 sp = P.resolve_target(NOW)
 check("an explicit point target wins", sp["basis"] == "point" and sp["path"][0]["lat"] == 44.5)
@@ -202,42 +196,35 @@ check("posts to the engine's /plume/load on the Deploy address",
       posted == ["http://pi:8200/plume/load"] and rec["ok"])
 check("same plume confirmed → no re-push", not P.needs_push(pl, P.last_push()))
 check("new runs → push again", P.needs_push(dict(pl, built_at=NOW + H), P.last_push()))
-P.push(dict(pl, race_start=NOW, race_end=None), post=fake_post, now=NOW - H)
-check("same runs, race just marked over (race_end set) → push again",
-      P.needs_push(dict(pl, race_start=NOW, race_end=NOW + 30 * H), P.last_push())
-      and not P.needs_push(dict(pl, race_start=NOW, race_end=None), P.last_push()))
+check("same runs, race start moved → push again", P.needs_push(dict(pl, race_start=NOW + 101 * H), P.last_push()))
 rec = P.push(pl, post=lambda u, b, timeout=25: (False, {"error": "timed out"}))
 check("a failed push is recorded and retried next pass", not rec["ok"] and "timed out" in rec["error"]
       and P.needs_push(pl, P.last_push()))
 
-# ---- frozen at the gun (RRS 41) ------------------------------------------------------------
-print("frozen at the gun:")
-GUN = NOW + 3 * H
+# ---- paused from the start (RRS 41) — the Lab side; the boat decides on receipt ------------
+print("race start:")
+from app import racestart  # noqa: E402
 RACE["division_starts"] = {"PHRF A": "2026-01-15 13:00"}
 RACE["timezone"] = "UTC"
 RACE["own"] = {"division": "PHRF A"}
-from app import racestart  # noqa: E402
 gun = racestart.race_start(RACE)["epoch"]
-spec_g = {"definition": RACE, "course_id": "c1", "basis": "route",
-          "path": [{"lat": 43.0, "lon": -82.4, "t": gun + 600}, {"lat": 45.8, "lon": -84.6, "t": gun + 30 * H}]}
-spec_g["race_id"] = "r1"
-win = P.race_window(spec_g)
-check("race window starts at our gun", win[0] == gun)
-check("no recorded finish → open-ended (never reopens on an estimate)", win[1] is None)
-check("no gun → the route's first ETA",
-      P.race_window({"basis": "route", "path": spec_g["path"]})[0] == gun + 600)
-check("no gun, no route → unknown", P.race_window({"basis": "point", "path": [{"lat": 1, "lon": 1, "t": 0}]}) is None)
-check("racing from the gun on", P.is_racing(win, gun) and not P.is_racing(win, gun - 1)
-      and P.is_racing(win, gun + 30 * 86400))
-P.mark_finished("r1", at=gun - 86400)
-check("a finish recorded before this start (an old edition) doesn't count", P.race_window(spec_g)[1] is None)
-P.mark_finished("r1", undo=True)
+route = [{"lat": 43.0, "lon": -82.4, "t": gun + 600}, {"lat": 45.8, "lon": -84.6, "t": gun + 30 * H}]
+check("our gun", P.race_start_of({"definition": RACE, "basis": "route", "path": route}) == gun)
+NOGUN = {"race_id": "r3", "name": "No Guns", "start_date": "2026-07-18", "timezone": "America/Detroit",
+         "courses": [{"id": "c1", "marks": [{"name": "S", "lat": 43.0, "lon": -82.4}, {"name": "F", "lat": 45.8, "lon": -84.6}]}]}
+check("no gun → the route's first ETA", P.race_start_of({"definition": NOGUN, "basis": "route", "path": route}) == gun + 600)
+check("no gun, no route → the first minute of the start date, venue time",
+      P.race_start_of({"definition": NOGUN, "basis": "point", "path": [{"lat": 1, "lon": 1, "t": 0}]}) == 1784347200)
+check("nothing known → None", P.race_start_of({"definition": {}, "basis": "point", "path": [{"lat": 1, "lon": 1, "t": 0}]}) is None)
 
-# run_once refuses to record or push while racing
+print("run_once around the start:")
+RACES = {"r1": RACE, "r3": NOGUN}
+store.get_race = lambda rid: RACES.get(rid)
+BUNDLE["variants"][1]["route"]["path"] = route
+pbstore.get = lambda pid: BUNDLE if pid == "r1__100" else None
 P.set_target(None)
-labstate.set("plume:locked", None)
 labstate.set("deploy_push:last_ok", {"race_id": "r1", "playbook_id": "r1__100", "ok": True})
-BUNDLE["variants"][1]["route"]["path"] = spec_g["path"]
+labstate.set("plume:push", None)
 recorded, pushed = [], []
 _orig_record, _orig_push, _orig_clock = P.record, P.push, P._clock
 CLOCK = {"t": gun - H, "step": 0}
@@ -245,132 +232,56 @@ P._clock = lambda: CLOCK["t"]
 
 
 def fake_record(spec, **kw):
-    recorded.append(1)
+    recorded.append(spec["key"])
     t = CLOCK["t"]
     CLOCK["t"] += CLOCK["step"]              # the pass takes this long
-    return {"key": spec["key"], "runs": {"gfs": [
-        {"cycle": t - 6 * H, "at": t, "pts": [[t, 10.0, 200], [t + H, 11.0, 210]]}]}}
+    st = {"key": spec["key"], "race_id": spec["race_id"], "label": spec.get("label"), "basis": spec.get("basis"),
+          "runs": {"gfs": [{"cycle": int(t) - 6 * H, "at": int(t), "pts": [[int(t), 10.0, 200], [int(t) + H, 11.0, 210]]}]}}
+    P.save_store(st)
+    return st
 
 
 P.record = fake_record
 P.push = lambda plume, post=None, now=None: pushed.append(plume) or {"ok": True}
 r = P.run_once(do_push=True)
-check("before the gun: recorded + pushed, with the race start aboard and no end",
-      recorded and pushed and pushed[-1]["race_start"] == int(gun) and pushed[-1]["race_end"] is None
-      and not r.get("frozen"))
-check("generated_at = when the computation finished", pushed[-1]["generated_at"] == int(gun - H))
+check("before the start: recorded + sent, race_start aboard, generated_at = when it finished",
+      recorded and pushed and pushed[-1]["race_start"] == int(gun) and pushed[-1]["generated_at"] == int(gun - H))
 recorded.clear(); pushed.clear()
 CLOCK.update(t=gun - 60, step=120)           # starts a minute before the gun, finishes after it
 r = P.run_once(do_push=True)
-check("a pass that ends after the gun pushes nothing", r.get("frozen") and recorded and not pushed)
+check("a pass that ends after the start sends nothing", r.get("paused") and recorded and not pushed)
 recorded.clear(); CLOCK.update(t=gun + 60, step=0)
 r = P.run_once(do_push=True)
-check("after the gun: nothing recorded, nothing pushed", r.get("frozen") and not recorded and not pushed)
+check("after the start: paused — nothing recorded or sent", r.get("paused") and not recorded and not pushed)
 CLOCK["t"] = gun + 40 * H
+check("and stays paused for that race (no estimated end)", P.run_once(do_push=True).get("paused") and not recorded)
+seq = iter([gun - 60, gun + 5, gun + 5, gun + 5])
+P._clock = lambda: next(seq)
+r = P.run_once(do_push=True)                 # checked before the start, got the record lock after it
+check("the clock is re-checked inside the record lock", r.get("paused") and not recorded and not pushed)
+P._clock = lambda: CLOCK["t"]
+P.set_target("r3", lat=43.1, lon=-82.4)
+NOGUN.pop("start_date")
+CLOCK["t"] = gun - H
 r = P.run_once(do_push=True)
-check("long after the planned finish, still frozen (no estimate reopens it)",
-      r.get("frozen") and not recorded and not pushed)
-P.mark_finished("r1")
-check("marked finished at the Lab's clock", P.finished_at("r1") == int(gun + 40 * H))
-CLOCK["t"] = gun + 40 * H + 60
-r = P.run_once(do_push=True)
-check("race over: recording resumes and the plume carries the finish",
-      not r.get("frozen") and recorded and pushed and pushed[-1]["race_end"] == int(gun + 40 * H))
-P.record, P.push = _orig_record, _orig_push
-P.mark_finished("r1", undo=True)
-rec = P.push({"key": "k", "race_start": int(gun), "race_end": None, "models": [{"model": "gfs", "runs": []}]},
-             post=lambda *a, **k: (True, {"loaded": True}))
-check("push() itself refuses on the real clock once the race has started", rec["ok"] is False and rec.get("frozen"))
-P._clock = _orig_clock
-
-# ---- the target stays locked to a race in its window ---------------------------------------
-print("locked to the race until it is marked over:")
-P._clock = lambda: 0                       # every call below passes `now` explicitly
-NOGUN = {"race_id": "r3", "name": "No Guns", "courses": [{"id": "c1", "marks": [
-    {"name": "Start", "lat": 43.0, "lon": -82.4}, {"name": "Finish", "lat": 45.8, "lon": -84.6}]}]}
-RACES = {"r1": RACE, "r3": NOGUN}
-store.get_race = lambda rid: RACES.get(rid)
-T0 = NOW + 100 * H
-NG_BUNDLE = {"race_id": "r3", "course_id": "c1", "recommended": "a", "variants": [{"id": "a", "name": "Main",
-             "route": {"path": [{"lat": 43.0, "lon": -82.4, "t": T0}, {"lat": 45.8, "lon": -84.6, "t": T0 + 30 * H}]}}]}
-pbstore.get = lambda pid: {"r1__100": BUNDLE, "r3__1": NG_BUNDLE}.get(pid)
+check("no start known at all: records, never sends", recorded and not pushed and r["push"].get("skipped"))
+NOGUN["start_date"] = "2026-07-18"
 P.set_target(None)
-labstate.set("plume:locked", None)
-labstate.set("deploy_push:last_ok", {"race_id": "r3", "playbook_id": "r3__1", "ok": True})
 
-# (a) no gun times, 3 h past the planned finish
-late = T0 + 30 * H + 3 * H + 600
-sp = P.resolve_target(late)
-check("no guns, never resolved mid-race: still the route (not the point) 3 h past the finish",
-      sp["basis"] == "route" and sp["key"] == "r3__r3__1")
-check("...so the window is still on — nothing recorded or pushed",
-      P.is_racing(P.race_window(sp), late) and P.run_once(do_push=True, now=late).get("frozen"))
-check("the race is locked", (P.locked_race() or {}).get("race_id") == "r3")
-labstate.set("plume:locked", None)
-P.resolve_target(T0 + 60)                  # the normal case: the recorder saw the gun go
-sp = P.resolve_target(late + 5 * 86400)
-check("locked at the gun: days later still the same race, key and start",
-      sp["key"] == "r3__r3__1" and sp["window_start"] == T0 and P.run_once(do_push=True, now=late).get("frozen"))
-P.mark_finished("r3", at=late + 6 * 86400)
-sp = P.resolve_target(late + 6 * 86400 + 60)
-check("marked over → lock released, route over → point fallback, not frozen",
-      P.locked_race() is None and sp["basis"] == "point"
-      and not P.is_racing(P.race_window(sp), late + 6 * 86400 + 60))
+print("push() on its own:")
+P.push = _orig_push
+rec = P.push({"key": "k", "race_start": int(gun), "models": [{"model": "gfs", "runs": []}]},
+             post=lambda *a, **k: (True, {"loaded": True}), now=gun + 1)
+check("refuses once the race has started (real clock at send)", rec["ok"] is False and rec.get("paused"))
 
-# (b) gun times + the route→point switch
-labstate.set("plume:locked", None)
-labstate.set("deploy_push:last_ok", {"race_id": "r1", "playbook_id": "r1__100", "ok": True})
-sp_gun = P.resolve_target(gun + 60)
-key_gun = sp_gun["key"]
-P.save_store({"key": key_gun, "race_id": "r1", "label": "along the Right route", "basis": "route",
-              "runs": {"gfs": [{"cycle": int(gun - 6 * H), "at": int(gun - H),
-                                "pts": [[int(gun + 40 * H), 10.0, 200], [int(gun + 41 * H), 11.0, 210]]}]}})
-after = gun + 30 * H + 3 * H + 600         # 3 h past the planned finish
-sp = P.resolve_target(after)
-check("gun times: past the planned finish the key stays the route's", sp["key"] == key_gun and sp["basis"] == "route")
-cur = P.current(after)
-check("...so the plume is still there, frozen, with no end", cur and cur["models"] and cur["race_start"] == int(gun)
-      and cur["race_end"] is None)
-check("the frozen race is reported for the Race-over button", (P.locked_race() or {}).get("race_id") == "r1")
-P.set_target("r1", lat=44.0, lon=-82.0)    # re-pinning the same race to a point mid-race changes nothing
-check("re-pinning the same race mid-race doesn't move the key", P.resolve_target(after)["key"] == key_gun)
-
-# ---- audit: every path that can record, push or change the target, with race r1 underway ----
-print("audit — every path obeys the lock while r1 is underway:")
+print("paths that can record, send or change the target:")
 os.environ["LAB_AUTH_ENABLED"] = "false"
 from fastapi.testclient import TestClient  # noqa: E402
 from app import main as M  # noqa: E402
 client = TestClient(M.app)
-calls = {"record": 0, "push": 0}
-_rec0, _push0 = P.record, P.push
-
-
-def _no_record(spec, **kw):
-    calls["record"] += 1
-    return {"key": spec["key"], "runs": {}}
-
-
-def _no_push(plume, post=None, now=None):
-    calls["push"] += 1
-    return {"ok": True}
-
-
-P.record, P.push = _no_record, _no_push
-P._clock = lambda: after
-P.set_target(None)
-labstate.set("deploy_push:last_ok", {"race_id": "r1", "playbook_id": "r1__100", "ok": True})
-check("setup: r1 is the locked race", (P.locked_race() or {}).get("race_id") == "r1")
-
-
-def still_r1(name):
-    sp = P.resolve_target(after)
-    check(name, sp["race_id"] == "r1" and sp["key"] == key_gun and (P.locked_race() or {}).get("race_id") == "r1")
-
-
-# 1. recorder pass
-r = P.run_once(do_push=True)
-check("1 recorder pass: frozen, nothing recorded or pushed", r.get("frozen") and calls == {"record": 0, "push": 0})
-# 2. manual refresh endpoint
+P.push = lambda plume, post=None, now=None: pushed.append(plume) or {"ok": True}
+recorded.clear(); pushed.clear()
+CLOCK["t"] = gun + 2 * H                     # r1 (the boat's race) has started
 client.post("/api/plume/refresh")
 import time as _t  # noqa: E402
 for _ in range(50):
@@ -378,159 +289,64 @@ for _ in range(50):
     if st.get("state") != "running":
         break
     _t.sleep(0.05)
-check("2 manual refresh: frozen, nothing recorded or pushed",
-      (st.get("result") or {}).get("frozen") and calls == {"record": 0, "push": 0})
-# 3. pin a different race
-client.post("/api/plume/target", json={"race_id": "r3", "playbook_id": "r3__1"})
-still_r1("3 pinning another race mid-race: target stays r1")
-check("3 ...and a pass still records nothing", P.run_once(do_push=True).get("frozen") and calls["record"] == 0)
-client.post("/api/plume/target", json={})
-# 4. a playbook for another race pushed to the boat
-labstate.set("deploy_push:last_ok", {"race_id": "r3", "playbook_id": "r3__1", "ok": True})
-still_r1("4 pushing another race's playbook mid-race: target stays r1")
-# 5. finish / undo
-client.post("/api/plume/finish", json={"race_id": "r3"})
-still_r1("5 finishing a DIFFERENT race doesn't release r1")
-client.post("/api/plume/finish", json={"race_id": "r3", "undo": True})
-client.post("/api/plume/finish", json={"race_id": "r1"})
-check("5 finishing r1 releases it", P.locked_race() is None)
-client.post("/api/plume/finish", json={"race_id": "r1", "undo": True})
-check("5 undoing r1's finish freezes it again", (P.locked_race() or {}).get("race_id") == "r1")
-# 6. the read-only plume view
+check("manual refresh after the start: paused, nothing recorded or sent",
+      (st.get("result") or {}).get("paused") and not recorded and not pushed)
 g = client.get("/api/plume").json()
-check("6 GET /api/plume: reports r1 frozen, records nothing",
-      (g.get("frozen_race") or {}).get("race_id") == "r1" and calls == {"record": 0, "push": 0})
-# 7. direct push during the race
-P.push = _push0
-rec = P.push({"key": "k", "race_start": int(gun), "race_end": None, "models": [{"model": "gfs", "runs": []}]},
-             post=lambda *a, **k: (True, {"loaded": True}), now=after)
-check("7 push() during the race refuses", rec["ok"] is False and rec.get("frozen"))
-# 8. Lab restart: the lock lives in labstate on the volume, not in memory
+check("GET /api/plume: says paused since the start, records nothing",
+      g["paused"] and g["race_start"] == gun and not recorded)
+GB = gun + 200 * H
+RB = dict(RACE, race_id="rB", division_starts={"PHRF A": GB})
+RACES["rB"] = RB
+client.post("/api/plume/target", json={"race_id": "rB"})
+r = P.run_once(do_push=True)
+check("pinning a race that hasn't started: recorded and offered to the boat (the boat decides)",
+      not r.get("paused") and pushed and pushed[-1]["race_id"] == "rB" and pushed[-1]["race_start"] == int(GB))
+client.post("/api/plume/target", json={})
 import importlib  # noqa: E402
-P2 = importlib.reload(P)
-check("8 after a restart r1 is still locked", (P2.locked_race() or {}).get("race_id") == "r1")
-P = P2
+P = importlib.reload(P)
 P.PLUME_DIR = os.environ["PLUME_DIR"]
-_orig_record, _orig_push, _orig_clock = P.record, P.push, P._clock
-labstate.set("deploy_push:last_ok", {"race_id": "r1", "playbook_id": "r1__100", "ok": True})
-
-# ---- point targets with no gun times; a pass queued behind another -------------------------
-print("no gun times, point target:")
-recorded, pushed = [], []
-P.record = lambda spec, **kw: recorded.append(spec["key"]) or {"key": spec["key"], "runs": {"gfs": [
-    {"cycle": int(kw["now"]) - 6 * H, "at": int(kw["now"]),
-     "pts": [[int(kw["now"]), 10.0, 200], [int(kw["now"]) + H, 11.0, 210]]}]}}
-P.push = lambda plume, post=None, now=None: pushed.append(plume) or {"ok": True}
-labstate.set("plume:locked", None)
-NOGUN["start_date"] = "2026-07-18"
-NOGUN["timezone"] = "America/Detroit"
-P.set_target("r3", lat=43.1, lon=-82.4)
-day0 = P._start_date_epoch(NOGUN)
-check("start date → its first minute, venue time", day0 == 1784347200)
-CLOCK.update(t=day0 + 5 * H, step=0)
 P._clock = lambda: CLOCK["t"]
-r = P.run_once(do_push=True, now=day0 + 5 * H)
-check("race day, no guns, point target: frozen — nothing recorded or pushed",
-      r.get("frozen") and not recorded and not pushed)
-CLOCK["t"] = day0 - H
-r = P.run_once(do_push=True, now=day0 - H)
-check("the day before: recorded and sent, with that start aboard",
-      recorded and pushed and pushed[-1]["race_start"] == int(day0))
-recorded.clear(); pushed.clear()
-NOGUN.pop("start_date")
-labstate.set("plume:locked", None)
-r = P.run_once(do_push=True, now=day0 + 5 * H)
-check("no start known at all: records, but never sends", recorded and not pushed
-      and r["push"].get("skipped"))
+check("after a Lab restart the started race is still paused (it's derived, not stored)",
+      P.run_once(do_push=True).get("paused"))
+_orig_record, _orig_push = P.record, P.push
 
-print("a pass queued behind a slow one:")
-recorded.clear(); pushed.clear()
-labstate.set("plume:locked", None)
-NOGUN["start_date"] = "2026-07-18"
-seq = iter([day0 - 60, day0 + 5, day0 + 5, day0 + 5])
-P._clock = lambda: next(seq)
-r = P.run_once(do_push=True)                 # checked before the gun, got the lock after it
-check("the clock is re-checked inside the lock: nothing recorded after the gun",
-      r.get("frozen") and not recorded and not pushed)
-P.record, P.push, P._clock = _orig_record, _orig_push, _orig_clock
-
-# ---- end to end: race A finishes, race B follows, against the engine's real load() ----------
-print("A → finish → B, end to end with the engine's load():")
+# ---- end to end with the engine's real load() ---------------------------------------------
+print("end to end with the engine's load():")
 import importlib.util  # noqa: E402
 import json as _json  # noqa: E402
 os.environ["PLUME_CACHE"] = os.path.join(_tmp, "boat", "plume.json")
 _spec = importlib.util.spec_from_file_location("engine_plume", "/repo/vps/agent/app/plume.py")
 ENG = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(ENG)
+SESSION = {"cur": None}
+ENG.race_session = lambda: SESSION["cur"]
 from app import deploy as _deploy  # noqa: E402
-BOAT = {"up": True}
-
-
-def boat_post(url, body, timeout=25):
-    if not BOAT["up"]:
-        return False, {"error": "boat offline"}
-    return True, ENG.load(_json.loads(_json.dumps(body)), now=CLOCK["t"])
-
-
-_deploy._post_json = boat_post
-GA = NOW + 500 * H                          # race A gun
-RA = {"race_id": "rA", "name": "A", "division_starts": {"X": GA}, "own": {"division": "X"},
-      "courses": [{"id": "c1", "marks": [{"name": "S", "lat": 43.0, "lon": -82.4}, {"name": "F", "lat": 45.8, "lon": -84.6}]}]}
-GB = GA + 200 * H                           # race B gun, well after A
-RB = dict(RA, race_id="rB", name="B", division_starts={"X": GB})
-RACES.update(rA=RA, rB=RB)
-pbstore.get = lambda pid: None
-labstate.set("plume:locked", None)
+_deploy._post_json = lambda url, body, timeout=25: (True, ENG.load(_json.loads(_json.dumps(body)), now=CLOCK["t"]))
+P.record = fake_record
 labstate.set("plume:push", None)
-labstate.set("deploy_push:last_ok", None)
-
-
-def runs_at(t):
-    return {"gfs": [{"cycle": int(t) - 6 * H, "at": int(t), "pts": [[int(t), 10.0, 200], [int(t) + H, 11.0, 210]]}]}
-
-
-P.record = lambda spec, **kw: (lambda st: (P.save_store(st), st)[1])(
-    {"key": spec["key"], "race_id": spec["race_id"], "label": spec.get("label"), "basis": spec.get("basis"),
-     "runs": runs_at(kw["now"])})
-P._clock = lambda: CLOCK["t"]
-P.set_target("rA")                          # point target at A's start (no playbook)
+GA = gun + 400 * H
+RA = dict(RACE, race_id="rA", division_starts={"PHRF A": GA})
+RB2 = dict(RACE, race_id="rB2", division_starts={"PHRF A": GA + 300 * H})
+RACES.update(rA=RA, rB2=RB2)
+P.set_target("rA")
 CLOCK.update(t=GA - 2 * H, step=0)
 r = P.run_once(do_push=True)
-check("before A's gun: A's plume goes aboard", r.get("push", {}).get("ok") and ENG.get(CLOCK["t"])["race_id"] == "rA")
-CLOCK["t"] = GA + H
-P.run_once(do_push=True)
-check("A underway: the boat holds A frozen", ENG.get(CLOCK["t"])["frozen"])
-P.set_target("rB")                          # B pinned while A is on
+check("A before its start: taken aboard", r["push"]["ok"] and ENG.get(CLOCK["t"])["race_id"] == "rA")
+CLOCK["t"] = GA + 60
+SESSION["cur"] = {"id": 1, "kind": "race", "start_ts": GA}       # crew taps race start
+check("A underway: Lab paused, boat shows A frozen", P.run_once(do_push=True).get("paused")
+      and ENG.get(CLOCK["t"])["frozen"])
+P.set_target("rB2")
 r = P.run_once(do_push=True)
-check("B pinned mid-race: still frozen, nothing new aboard", r.get("frozen") and ENG.get(CLOCK["t"])["race_id"] == "rA")
+check("B pinned mid-race: offered, refused by the boat (race session running)",
+      r["push"]["ok"] is False and ENG.get(CLOCK["t"])["race_id"] == "rA")
 CLOCK["t"] = GA + 40 * H
-P.mark_finished("rA")
-BOAT["up"] = False
-CLOCK["t"] += 60
-r = P.run_once(do_push=True)
-check("finish marked but the boat is offline: keeps trying to deliver A's finish, B not sent",
-      r.get("finishing") and P.finishing_race() and ENG.get(CLOCK["t"])["race_id"] == "rA")
-BOAT["up"] = True
+SESSION["cur"] = None                                            # crew taps race end
 CLOCK["t"] += 900
 r = P.run_once(do_push=True)
 g = ENG.get(CLOCK["t"])
-check("boat back: A's finish delivered and acknowledged, then B goes aboard in the same pass",
-      P.finishing_race() is None and r.get("push", {}).get("ok") and g["race_id"] == "rB" and not g["frozen"])
-check("...and the Lab is no longer locked to A", P.locked_race() is None)
-
-print("finish with pushing off:")
-labstate.set("plume:locked", None)
-labstate.set("plume:push", None)
-P.set_target("rB")
-CLOCK["t"] = GB + H
-P.run_once(do_push=False)
-check("B locked at its gun", (P.locked_race() or {}).get("race_id") == "rB")
-P.mark_finished("rB")
-CLOCK["t"] += 60
-P.set_target("rA")
-r = P.run_once(do_push=False)
-check("push off: finish releases normally and the next target is recorded",
-      not r.get("finishing") and not r.get("frozen") and r["key"].startswith("rA"))
+check("session ended: B's pre-start plume is taken, no Lab-side handshake",
+      r["push"]["ok"] and g["race_id"] == "rB2" and not g["frozen"])
 P.record, P.push, P._clock = _orig_record, _orig_push, _orig_clock
 
 print("\nALL OK" if ok else "\nFAILURES")

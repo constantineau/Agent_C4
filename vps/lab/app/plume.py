@@ -230,11 +230,11 @@ def latest_cycle(st, model):
 
 
 # ---- the payload the boat caches + the console draws ----------------------------------------
-def build_plume(st, now, back_h=VIEW_BACK_H, ahead_h=AHEAD_H, models=None, window=None):
+def build_plume(st, now, back_h=VIEW_BACK_H, ahead_h=AHEAD_H, models=None, race_start=None):
     """The compact plume: per model, its runs newest-first with points clipped to
     [now - back_h, now + ahead_h]. A run with nothing left in the window is dropped, and only the
-    supported model ids are carried. `window` = the race's (start, end) epochs, sent along so the
-    boat can show the plume as frozen at the start once racing."""
+    supported model ids are carried. `race_start` travels with it: the boat refuses the plume once
+    that has passed, and shows the cached one as frozen from then on."""
     if not st:
         return None
     w0, w1 = now - back_h * 3600, now + ahead_h * 3600
@@ -256,96 +256,38 @@ def build_plume(st, now, back_h=VIEW_BACK_H, ahead_h=AHEAD_H, models=None, windo
     out = {"schema": SCHEMA, "key": st.get("key"), "race_id": st.get("race_id"),
            "label": st.get("label"), "basis": st.get("basis"), "generated_at": int(now),
            "built_at": built, "window": [int(w0), int(w1)], "models": out_models}
-    if window:
-        out["race_start"] = int(window[0])
-        out["race_end"] = int(window[1]) if window[1] is not None else None
+    if race_start is not None:
+        out["race_start"] = int(race_start)
     return out
 
 
-# ---- frozen at the gun (RRS 41) ---------------------------------------------------------------
-# The plume is shore-computed and route-specific, so it is homework: it may reach the boat only
-# BEFORE the start. From the gun the Lab neither records nor pushes it for that race, and the boat
-# keeps the last pre-start plume (labelled frozen on the console). In-race updates belong on board
-# (the Orin), not here. Fail closed: the window never reopens on an estimate — it stays shut until
-# someone marks the race finished in the Lab (`mark_finished`).
-_KEY_FINISHED = "plume:finished:"     # labstate: + race_id → {"at": epoch}
+# ---- paused from the start (RRS 41) -----------------------------------------------------------
+# The plume is shore-computed and route-specific, so it is pre-start homework. The BOAT is the
+# authority on whether it may be taken (vps/agent/app/plume.py: refused while a race session is
+# running, or once the payload's race_start has passed). The Lab is best effort on top: it does
+# not record or send for a race once that race's start has passed, checking the real clock before
+# recording and again before sending. It never sends a plume without a known race_start.
 _clock = time.time                    # the real clock (tests swap it)
 
 
-def finished_at(race_id):
-    rec = _labstate_get(_KEY_FINISHED + str(race_id)) or {}
-    return rec.get("at")
-
-
-def mark_finished(race_id, at=None, undo=False):
-    """Record that a race is over (the Lab's "Race over" button) — reopens plume updates for it.
-    `undo` clears it."""
-    from . import labstate
-    if not race_id:
-        return None
-    lock = _labstate_get(_KEY_LOCK)
-    if lock and lock.get("race_id") == race_id and lock.get("finish_acked"):
-        # a new finish (or an undo) must be acknowledged by the boat again
-        labstate.set(_KEY_LOCK, dict(lock, finish_acked=None))
-    if undo:
-        labstate.set(_KEY_FINISHED + str(race_id), None)
-        return None
-    rec = {"at": int(_clock() if at is None else at)}
-    labstate.set(_KEY_FINISHED + str(race_id), rec)
-    return rec
-
-
-def finishing_race():
-    """(lock, finish) when the locked race is marked finished but the boat hasn't acknowledged that
-    finish yet, else None. The boat keeps refusing other races while its cached race is frozen, so
-    the finish has to reach it first (see `run_once`)."""
-    lock = _labstate_get(_KEY_LOCK)
-    if not lock or not lock.get("race_id") or lock.get("finish_acked"):
-        return None
-    fin = finished_at(lock["race_id"])
-    if fin is None or fin < lock.get("start", 0):
-        return None
-    return lock, fin
-
-
-def _deliver_finish(lock, fin, now):
-    """Send the finished race's own plume carrying its recorded finish. Returns the push record;
-    on success (or when there's nothing that could be aboard) the finish counts as acknowledged."""
-    from . import labstate
-    st = load_store(lock["key"])
-    back_h = max(VIEW_BACK_H, (now - lock["start"]) / 3600.0 + KEEP_S / 3600.0)
-    pl = build_plume(st, now, back_h=back_h, window=(lock["start"], fin))
-    if not pl or not pl.get("models"):
-        rec = {"ok": True, "note": "no plume of this race on file — nothing aboard to update"}
-    else:
-        pl["generated_at"] = int(_clock())
-        rec = push(pl)
-    if rec.get("ok"):
-        labstate.set(_KEY_LOCK, dict(lock, finish_acked=int(now)))
-    return rec
-
-
-def race_window(spec):
-    """(start, end) of the race the spec follows, or None when no start is known. Start = our gun
-    (racestart), else the planned route's first ETA, else the start of the race's start_date. End = the recorded finish for this race_id
-    (only if after this start), else None — open-ended: frozen until marked finished."""
+def race_start_of(spec):
+    """The start of the race the spec follows, or None when it can't be known: our gun
+    (racestart), else the planned route's first ETA, else the first minute of the race's
+    start_date in the venue's timezone."""
     from . import racestart
     d = spec.get("definition") or {}
     rs = racestart.race_start(d)
+    if rs:
+        return float(rs["epoch"])
     path = spec.get("path") if spec.get("basis") == "route" else None
-    start = spec.get("window_start")
-    if start is None:
-        start = rs["epoch"] if rs else (path[0]["t"] if path else _start_date_epoch(d))
-    if start is None:
-        return None
-    fin = finished_at(spec.get("race_id")) if spec.get("race_id") else None
-    end = float(fin) if fin is not None and fin >= start else None
-    return (float(start), end)
+    if path:
+        return float(path[0]["t"])
+    return _start_date_epoch(d)
 
 
 def _start_date_epoch(d):
     """The race's start DATE (no gun times known) as the earliest moment of that day in the venue's
-    timezone — fail closed: the window opens at the day's first minute, never later."""
+    timezone — never later than the real start."""
     from shared.race_def import _gun_epoch
     sd = str((d or {}).get("start_date") or "").strip()[:10]
     if len(sd) != 10:
@@ -353,10 +295,8 @@ def _start_date_epoch(d):
     return _gun_epoch(sd + "T00:00:00", (d or {}).get("timezone") or "")
 
 
-def is_racing(window, now):
-    """Inside [start, end) — and with no recorded end, from the start on."""
-    return bool(window) and window[0] <= now and (window[1] is None or now < window[1])
-
+def started(race_start, now):
+    return race_start is not None and now >= race_start
 
 
 # ---- targets: which route the plume follows -------------------------------------------------
@@ -370,20 +310,15 @@ def _recommended_path(bundle):
     return (path or None), (v or {}).get("name") or (v or {}).get("id")
 
 
-_KEY_LOCK = "plume:locked"            # labstate: the race whose window has started (see below)
-
-
-def _route_spec(race_id, d, course_id, path, tag, variant):
-    return {"race_id": race_id, "course_id": course_id, "definition": d,
-            "key": f"{race_id}__{tag}", "basis": "route", "path": path,
-            "label": f"along the {variant or 'planned'} route"}
-
-
-def _unlocked_target(now):
-    """The target as configured (pinned, else the race last pushed to the boat) — before the lock."""
+def resolve_target(now=None):
+    """The route spec the plume follows, or None when there's nothing to follow: an explicit pin
+    (labstate `plume:target`: {race_id, playbook_id?, path?, lat?, lon?}), else the race + playbook
+    last pushed to the boat. The route is the playbook's recommended variant; with no route, or once
+    its ETAs are over, the plume holds at the race start (first course mark)."""
     from shared import race_def
 
     from . import deploy, pbstore, store
+    now = time.time() if now is None else now
     tgt = _labstate_get(_KEY_TARGET)
     if not tgt:
         lp = (deploy.last_push() or {}).get("last_ok") or {}
@@ -397,15 +332,13 @@ def _unlocked_target(now):
     course_id = (bundle or {}).get("course_id") or tgt.get("course_id")
     path, variant = (clean_path(tgt["path"]), tgt.get("variant")) if tgt.get("path") \
         else _recommended_path(bundle)
-    if path:
+    spec = {"race_id": race_id, "course_id": course_id, "definition": d}
+    if path and path[-1]["t"] >= now - BACK_H * 3600:
         tag = tgt.get("playbook_id") or ("path-" + hashlib.md5(
             json.dumps([path[0], path[-1], len(path)]).encode()).hexdigest()[:8])
-        spec = _route_spec(race_id, d, course_id, path, tag, variant)
-        # the route stays the target while it's current — AND, whatever its ETAs say, while its race
-        # is in its window: the switch to the point fallback may only happen outside a race
-        if path[-1]["t"] >= now - BACK_H * 3600 or is_racing(race_window(spec), now):
-            return spec
-    spec = {"race_id": race_id, "course_id": course_id, "definition": d}
+        spec.update(key=f"{race_id}__{tag}", basis="route", path=path,
+                    label=f"along the {variant or 'planned'} route")
+        return spec
     lat, lon = tgt.get("lat"), tgt.get("lon")
     if lat is None:
         marks, _skip, _cid = race_def.course_to_marks(d, course_id)
@@ -416,48 +349,6 @@ def _unlocked_target(now):
     spec.update(key=f"{race_id}__pt-{round(lat, 2)}_{round(lon, 2)}", basis="point",
                 path=[{"lat": float(lat), "lon": float(lon), "t": 0.0}],
                 label="at the race start (no current route)")
-    return spec
-
-
-def locked_race():
-    """The race whose window has started and that isn't marked finished: {race_id, key, start, ...}
-    or None. The lock record is kept after the finish (so "undo" re-freezes it) and is only
-    replaced when another race's window starts with no unfinished lock in place."""
-    lock = _labstate_get(_KEY_LOCK)
-    if not lock or not lock.get("race_id"):
-        return None
-    fin = finished_at(lock["race_id"])
-    if fin is not None and fin >= lock.get("start", 0):
-        return None
-    return lock
-
-
-def resolve_target(now=None):
-    """The route spec the plume follows, or None when there's nothing to follow.
-
-    ONE RULE: once any race's window starts, the target is LOCKED to that race (same store key, same
-    window start) until THAT race is marked finished — whatever is pinned or pushed afterwards,
-    including a different race. Only with no unfinished lock does the configured target apply:
-    an explicit pin (labstate `plume:target`) wins, else the race + playbook last pushed to the
-    boat; the route is the playbook's recommended variant, and the race-start point fallback is
-    used only when there's no route or its race is outside its window."""
-    from . import labstate, store
-    now = time.time() if now is None else now
-    lock = locked_race()
-    if lock:
-        return {"race_id": lock["race_id"], "course_id": lock.get("course_id"),
-                "definition": store.get_race(lock["race_id"]) or {}, "key": lock["key"],
-                "basis": lock["basis"], "path": lock["path"], "label": lock.get("label"),
-                "window_start": lock["start"]}
-    spec = _unlocked_target(now)
-    if spec:
-        win = race_window(spec)
-        if is_racing(win, now):
-            labstate.set(_KEY_LOCK, {"race_id": spec["race_id"], "key": spec["key"],
-                                     "basis": spec["basis"], "path": spec["path"],
-                                     "label": spec.get("label"), "course_id": spec.get("course_id"),
-                                     "start": win[0], "locked_at": int(now)})
-            spec["window_start"] = win[0]
     return spec
 
 
@@ -552,23 +443,23 @@ def push_url():
 
 def push(plume, post=None, now=None):
     """POST the plume to the Pi engine (the Deploy push's line — Tailscale, no extra auth layer).
-    Records the outcome in labstate. Never raises. Refuses once the plume's race has started —
-    checked on the real clock at the moment of sending (`now` only for tests)."""
+    Records the outcome in labstate. Never raises. Refuses a plume without a race_start, or once
+    that start has passed on the real clock at the moment of sending (`now` only for tests). The
+    boat applies the same rules again on receipt."""
     from . import deploy, labstate
     now = _clock() if now is None else now
     if plume.get("race_start") is None:
         return {"at": int(now), "ok": False, "key": plume.get("key"), "built_at": plume.get("built_at"),
                 "error": "no race start known — not sent"}
-    if is_racing((plume["race_start"], plume.get("race_end")), now):
-        return {"at": int(now), "ok": False, "key": plume.get("key"), "frozen": True,
-                "built_at": plume.get("built_at"), "error": "racing: frozen at the start"}
+    if started(plume["race_start"], now):
+        return {"at": int(now), "ok": False, "key": plume.get("key"), "paused": True,
+                "built_at": plume.get("built_at"), "error": "race started — not sent"}
     post = post or deploy._post_json
     ok, resp = post(push_url(), plume)
     ok = bool(ok and (resp or {}).get("loaded"))
     rec = {"at": int(now), "ok": ok, "key": plume.get("key"),
            "built_at": plume.get("built_at"), "race_start": plume.get("race_start"),
-           "race_end": plume.get("race_end"),
-           "error": None if ok else str((resp or {}).get("error") or resp)[:200]}
+           "error": None if ok else str((resp or {}).get("error") or (resp or {}).get("detail") or resp)[:200]}
     labstate.set(_KEY_PUSH, rec)
     return rec
 
@@ -579,64 +470,62 @@ def last_push():
 
 def needs_push(plume, last):
     """Push when the boat hasn't confirmed this plume yet: new runs, new target, a changed race
-    window (e.g. the race was just marked over), or the last try failed."""
+    start, or the last try failed."""
     if not plume or not plume.get("models"):
         return False
     if not last or not last.get("ok"):
         return True
-    return any(last.get(k) != plume.get(k) for k in ("key", "built_at", "race_start", "race_end"))
+    return any(last.get(k) != plume.get(k) for k in ("key", "built_at", "race_start"))
 
 
-def current(now=None):
-    """The plume for the active target from what's on file (no fetching)."""
+def view(now=None):
+    """What the Lab card shows: the plume for the active target from what's on file (no fetching),
+    its race start, and whether the Lab is paused for it (that race has started)."""
     now = time.time() if now is None else now
     spec = resolve_target(now)
     if not spec:
-        return None
-    return build_plume(load_store(spec["key"]), now, window=race_window(spec))
+        return {"plume": None, "race_start": None, "paused": False}
+    rs = race_start_of(spec)
+    return {"plume": build_plume(load_store(spec["key"]), now, race_start=rs),
+            "race_id": spec["race_id"], "race_start": rs, "paused": started(rs, now)}
+
+
+def current(now=None):
+    return view(now)["plume"]
 
 
 def run_once(on_progress=None, do_push=None, now=None):
     """One recorder pass: resolve the target, record new cycles, push to the boat if changed.
-    The race window is checked on the real clock before recording AND again right before the push,
-    so a pass that starts just before the gun can never deliver after it."""
+    Nothing is recorded or sent for a race once its start has passed — checked on the real clock
+    before recording (inside the record lock) and again after it, right before sending."""
     t_now = _clock() if now is None else now
     do_push = (os.environ.get("PLUME_PUSH", "0").strip().lower() in ("1", "true", "yes", "on")
                if do_push is None else do_push)
-    fr = finishing_race() if do_push else None
-    if fr:
-        # the boat still holds the finished race frozen and refuses everything else until it hears
-        # the finish — deliver that first; only then move on to the next target
-        rec = _deliver_finish(fr[0], fr[1], t_now)
-        if not rec.get("ok"):
-            return {"ok": True, "finishing": True, "race_id": fr[0]["race_id"], "push": rec}
     spec = resolve_target(t_now)
     if not spec:
         return {"ok": False, "note": "no target — lock in + push a race, or set a plume target"}
-    win = race_window(spec)
+    rs = race_start_of(spec)
 
-    def frozen_out():
+    def paused_out():
         if on_progress:
-            on_progress("racing — plume frozen at the start; no updates until marked finished")
-        return {"ok": True, "frozen": True, "key": spec["key"], "race_start": int(win[0]),
-                "race_end": None if win[1] is None else int(win[1])}
+            on_progress("race started — plume paused for this race")
+        return {"ok": True, "paused": True, "key": spec["key"], "race_start": int(rs)}
 
-    if is_racing(win, t_now):
-        return frozen_out()
+    if started(rs, t_now):
+        return paused_out()
     with _REC_LOCK:                          # the recorder thread vs a manual refresh
-        # a pass queued behind a slow one may get here after the gun — check the real clock again
-        if is_racing(win, _clock()):
-            return frozen_out()
+        if started(rs, _clock()):            # a pass queued behind a slow one
+            return paused_out()
         st = record(spec, now=t_now, on_progress=on_progress)
     done = _clock()                          # when the computation actually finished
-    if is_racing(win, done):
-        return frozen_out()                  # the gun went while we were recording
-    plume = build_plume(st, t_now, window=win)
+    if started(rs, done):
+        return paused_out()
+    plume = build_plume(st, t_now, race_start=rs)
     if plume:
         plume["generated_at"] = int(done)
     out = {"ok": True, "key": spec["key"], "basis": spec["basis"],
            "models": {m["model"]: len(m["runs"]) for m in (plume or {}).get("models", [])}}
-    if do_push and not win:
+    if do_push and rs is None:
         # no start known for this race → it could be on right now: record, but never send
         out["push"] = {"ok": False, "skipped": True, "error": "no race start known — not sent"}
     elif do_push and needs_push(plume, last_push()):

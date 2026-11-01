@@ -2076,22 +2076,23 @@ function plumeSet(k, v) {
 document.addEventListener("click", (e) => {
   const b = e.target.closest && e.target.closest("#depPlume button[data-pl-k]");
   if (b) plumeSet(b.dataset.plK, b.dataset.plV);
-  const f = e.target.closest && e.target.closest("#depPlume button[data-pl-finish]");
-  if (f && confirm("Mark " + f.dataset.plFinish + " as finished? Forecast updates for it resume.")) {
-    apiPost("/api/plume/finish", { race_id: f.dataset.plFinish }).then(depLoadPlume);
-  }
 });
 async function plumeRefresh() {
   Plume.busy = true; Plume.note = "Checking every model for a new run…"; depLoadPlume();
-  try { await apiPost("/api/plume/refresh", {}); } catch (e) { /* status poll below reports it */ }
-  for (let i = 0; i < 90; i++) {
-    await new Promise((r) => setTimeout(r, 4000));
-    const st = await (await apiGet("/api/plume/refresh/status")).json();
-    Plume.note = (st.progress || []).slice(-1)[0] || Plume.note;
-    if (st.state !== "running") { Plume.note = st.state === "error" ? "Failed: " + st.error : ""; break; }
-    depLoadPlume();
+  try {
+    await apiPost("/api/plume/refresh", {});
+    for (let i = 0; i < 90; i++) {
+      await new Promise((r) => setTimeout(r, 4000));
+      const st = await (await apiGet("/api/plume/refresh/status")).json();
+      Plume.note = (st.progress || []).slice(-1)[0] || Plume.note;
+      if (st.state !== "running") { Plume.note = st.state === "error" ? "Failed: " + st.error : ""; break; }
+      depLoadPlume();
+    }
+  } catch (e) {
+    Plume.note = "Check failed: " + e.message;
+  } finally {
+    Plume.busy = false; depLoadPlume();
   }
-  Plume.busy = false; depLoadPlume();
 }
 async function plumeFollow(on) {
   await apiPost("/api/plume/target", on ? { race_id: Dep.raceId, playbook_id: (Dep.ready.lock_in || {}).playbook_id } : {});
@@ -2102,11 +2103,8 @@ function plumePanelInner() {
   const head = `<h3>Forecast plume <span class="muted" style="font-weight:400">— every router model along the planned route, run by run (what the boat's Forecast tile shows)</span></h3>`;
   if (!d) return head + `<div class="muted">Loading…</div>`;
   if (d.error) return head + `<div class="banner warn">${esc(d.error)}</div>`;
-  const tgt = d.target, lp = d.last_push, pl = d.plume, fr = d.frozen_race;
-  // the frozen race comes from the Lab's race state, not from the plume — the button must stay
-  // reachable even when there's nothing to draw
-  const frozenBar = fr ? `<div class="banner warn" style="margin:6px 0">Frozen at the start of <b>${esc(fr.race_id)}</b> (${esc(depStamp(fr.start))}) — no forecast updates while racing.
-      <button data-pl-finish="${esc(fr.race_id)}" style="margin-left:8px">Race over — resume forecast updates</button></div>` : "";
+  const tgt = d.target, lp = d.last_push, pl = d.plume;
+  const frozenBar = d.paused ? `<div class="banner warn" style="margin:6px 0">Paused: race started ${esc(depStamp(d.race_start))}.</div>` : "";
   const follows = tgt ? `pinned to <b>${esc(tgt.race_id)}</b>${tgt.playbook_id ? ` · <code>${esc(tgt.playbook_id)}</code>` : ""}` : "following the race last pushed to the boat";
   const ctl = `<div class="opt-controls">
       <button onclick="plumeRefresh()" ${Plume.busy ? "disabled" : ""}>${Plume.busy ? "Checking…" : "Check for new runs now"}</button>
@@ -2121,7 +2119,7 @@ function plumePanelInner() {
   const picks = b("only", "", "All models", !Plume.only) + P.models(pl).map((m) => b("only", m.model, P.label(m.model), Plume.only === m.model)).join("");
   return head + frozenBar + ctl +
     `<div class="opt-controls">${b("field", "tws", "Speed", Plume.field === "tws")}${b("field", "twd", "Direction", Plume.field === "twd")} ${picks}</div>
-     <div class="muted" style="font-size:12px">${esc(pl.label || "")} · newest run recorded ${esc(depAgo(pl.built_at))}${P.isFrozen(pl, now) ? ` · <b>${esc(P.frozenText(pl))}</b> — no updates until the race is marked over` : ""}</div>
+     <div class="muted" style="font-size:12px">${esc(pl.label || "")} · newest run recorded ${esc(depAgo(pl.built_at))}</div>
      <div class="lab-plume" style="max-width:900px">${P.chartSvg(pl, { w: 860, h: 300, now: now, field: Plume.field, only: Plume.only, allRuns: true, back_h: 6, ahead_h: 24 })}
      ${P.legendHtml(pl, { only: Plume.only, cycles: true, now: now })}${P.runTimesHtml(pl, now)}</div>` + push;
 }

@@ -74,42 +74,73 @@ check("...and the good plume is still aboard, readable", plume.get(NOW)["key"] =
 big = dict(GOOD, models=[{"model": "gfs", "runs": [{"pts": [[NOW, 1.0, 1]] * 60000}]}])
 check("an absurdly large payload is refused", plume.load(big, now=NOW)["loaded"] is False)
 
-print("frozen at the gun:")
-os.remove(path)
+_ORIG_RS = plume.race_session
+
+
+def _real_rs(cur):
+    """Run the real race_session() against a stub race log returning `cur`."""
+    import types
+    from app import racelog
+    saved = racelog._src
+    racelog._src = lambda: types.SimpleNamespace(session_current=lambda: cur)
+    try:
+        return _ORIG_RS()
+    finally:
+        racelog._src = saved
+
+
+SESSION = {"cur": None}
+
+
+def fake_log():
+    """Stands in for the race log: what racelog reports, filtered like race_session() does."""
+    cur = SESSION["cur"]
+    return cur if cur and cur.get("kind") == "race" else None
+
+
+plume.race_session = fake_log
 START = NOW + 3600
 PRE = dict(GOOD, generated_at=NOW - 60, race_start=START, race_end=None)
-check("a pre-start plume loads", plume.load(PRE, now=NOW)["loaded"])
-check("before the start it is not frozen", plume.get(NOW)["frozen"] is False)
-g = plume.get(START + 600)
-check("after the gun it is served as frozen (the pre-start copy)", g["available"] and g["frozen"])
-check("...and stays frozen days later with no recorded finish", plume.get(START + 9 * 86400)["frozen"])
-newer = dict(PRE, generated_at=START + 300, built_at=START + 200, key="r1__new")
-check("a plume computed after the start is refused", plume.load(newer, now=START + 400)["loaded"] is False)
-late = dict(PRE, key="r1__late", generated_at=START - 30)
-check("computed before the gun but arriving after it → refused (boat's own clock)",
-      plume.load(late, now=START + 5)["loaded"] is False)
-same_race = dict(GOOD, key="r1__other", generated_at=START + 300, race_start=START + 86400, race_end=None)
-check("same race, any other window while racing → refused; pre-start copy stays",
-      plume.load(same_race, now=START + 400)["loaded"] is False and plume.get(START + 500)["key"] == "r1__pb")
-fin = dict(GOOD, key="r1__after", generated_at=START + 30 * 3600, race_start=START, race_end=START + 20 * 3600)
-check("a plume carrying the recorded finish (already past) loads",
-      plume.load(fin, now=START + 30 * 3600 + 60)["loaded"] and plume.get(START + 31 * 3600)["frozen"] is False)
 
-print("arriving while racing, empty cache:")
+print("a) the boat's race session is the authority:")
 os.remove(path)
-check("its race is on at receipt → refused even with nothing aboard",
-      plume.load(dict(PRE, generated_at=START - 30), now=START + 60)["loaded"] is False
-      and plume.get(START + 60)["available"] is False)
+SESSION["cur"] = {"id": 7, "kind": "race", "start_ts": NOW - 600, "race_id": "r1"}
+check("a race session running → any plume refused, even pre-start, any race",
+      plume.load(PRE, now=NOW)["loaded"] is False
+      and plume.load(dict(PRE, race_id="r9", key="r9__x"), now=NOW)["loaded"] is False)
+SESSION["cur"] = {"id": 8, "kind": "practice", "start_ts": NOW - 600}
+check("a practice session doesn't block", plume.load(PRE, now=NOW)["loaded"])
+from app import racelog as _rl  # noqa: E402
+_saved_src = _rl._src
+_rl._src = lambda: (_ for _ in ()).throw(OSError("db locked"))
+check("race log unreadable → treated as racing (fail closed)", bool(_ORIG_RS()))
+_rl._src = _saved_src
+check("the real race_session() ignores practice and reads race",
+      _real_rs({"kind": "practice"}) is None and _real_rs({"kind": "race", "id": 1})["id"] == 1)
+SESSION["cur"] = {"id": 9, "kind": "race", "start_ts": NOW - 60}
+g = plume.get(NOW)
+check("cached plume shows frozen while a race session runs, at the session's start",
+      g["frozen"] and g["frozen_at"] == NOW - 60)
+SESSION["cur"] = None
+nxt = dict(GOOD, race_id="r2", key="r2__pb", generated_at=NOW + 100, race_start=NOW + 86400, race_end=None)
+check("session ended → the next race's pre-start plume is taken",
+      plume.load(nxt, now=NOW + 200)["loaded"] and plume.get(NOW + 300)["race_id"] == "r2"
+      and plume.get(NOW + 300)["frozen"] is False)
 
-print("one rule while r1 is on — any other race is refused too:")
+print("b-d) payload rules on the boat's clock:")
+check("b) no race_start → refused", plume.load(dict(PRE, race_start=None), now=NOW)["loaded"] is False)
+check("c) its race has started at receipt → refused (empty cache or not)",
+      plume.load(dict(PRE, key="late"), now=START + 5)["loaded"] is False)
+check("c) ...unless it carries a race_end already past",
+      plume.load(dict(PRE, key="after", race_end=START + 100, generated_at=START + 200), now=START + 300)["loaded"])
+check("d) computed after its start → refused",
+      plume.load(dict(PRE, key="d", race_start=NOW - 10, generated_at=NOW - 5), now=NOW - 20)["loaded"] is False)
+g = plume.get(START + 400)
+check("no cache-dependent hold: any race's pre-start plume is taken when no session runs",
+      plume.load(dict(nxt, generated_at=START + 500, race_start=START + 86400), now=START + 600)["loaded"])
 plume.load(PRE, now=NOW)
-other = dict(GOOD, race_id="r2", key="r2__pb", generated_at=START + 600, race_start=START + 86400, race_end=None)
-check("while r1 is frozen, r2's pre-start plume is refused; r1's stays",
-      plume.load(other, now=START + 700)["loaded"] is False and plume.get(START + 800)["race_id"] == "r1")
-fin1 = dict(PRE, key="r1__fin", generated_at=START + 9000, race_end=START + 8000)
-check("r1 carrying its recorded finish loads", plume.load(fin1, now=START + 9100)["loaded"])
-check("...after which r2's pre-start plume loads", plume.load(other, now=START + 9200)["loaded"]
-      and plume.get(START + 9300)["race_id"] == "r2")
+g = plume.get(START + 60)
+check("cached plume past its race_start shows frozen at that start", g["frozen"] and g["frozen_at"] == START)
 
 print("a load queued at the gun is judged when it gets the lock:")
 os.remove(path)
@@ -125,14 +156,27 @@ clock["t"] = START + 1                     # the gun goes while it waits for the
 plume._LOCK.release()
 th.join()
 check("refused (fresh clock inside the lock)", res.get("loaded") is False)
+SESSION["cur"] = None
+clock["t"] = START - 100
+res = {}
+plume._LOCK.acquire()
+th = threading.Thread(target=lambda: res.update(plume.load(dict(PRE, generated_at=START - 130))))
+th.start()
+time.sleep(0.2)
+SESSION["cur"] = {"id": 10, "kind": "race", "start_ts": START - 50}   # crew taps race start meanwhile
+plume._LOCK.release()
+th.join()
+check("a race session started while it waited → refused", res.get("loaded") is False)
+SESSION["cur"] = None
 plume.time.time = _real_time
 
 print("engine restart:")
 plume.load(PRE, now=NOW)
 import importlib  # noqa: E402
 plume = importlib.reload(plume)
-check("after a restart the cached race is still frozen and other plumes are refused",
-      plume.get(START + 60)["frozen"] and plume.load(other, now=START + 700)["loaded"] is False)
+plume.race_session = fake_log
+check("after a restart the cached plume is still there and frozen past its start",
+      plume.get(START + 60)["frozen"] and plume.load(dict(PRE, key="x"), now=START + 70)["loaded"] is False)
 
 print("concurrent loads:")
 import threading  # noqa: E402

@@ -64,18 +64,33 @@ def validate(plume):
     return True, ""
 
 
-def frozen(plume, now):
-    """True from the plume's race start until its RECORDED finish (`race_end`, set only when the
-    Lab marks the race over) — with no finish, from the start on. The boat keeps the pre-start
-    plume (RRS 41: shore-computed, route-specific homework is frozen at the gun)."""
+def _past_end(plume, t):
+    re_ = (plume or {}).get("race_end")
+    return _num(re_) and re_ <= t
+
+
+def started(plume, t):
+    """The payload's own race has started by `t` (and carries no race_end already past)."""
     rs = (plume or {}).get("race_start")
-    if rs is None:
-        return False
-    re_ = plume.get("race_end")
-    return rs <= now and (re_ is None or now < re_)
+    return _num(rs) and t >= rs and not _past_end(plume, t)
 
 
-_LOCK = threading.Lock()        # one load at a time: read cache → check → write
+def race_session():
+    """The boat's own race log: the running session if it is a RACE, else None. The crew taps it on
+    at the gun and off at the finish on the iPad — the authority on "racing" aboard. If the log
+    can't be read, fail closed (treated as racing)."""
+    try:
+        from . import racelog
+        src = racelog._src()
+        if src is None:
+            return None                # no onboard race log (cloud) — nothing to consult
+        cur = src.session_current()
+        return cur if cur and str(cur.get("kind") or "").lower() == "race" else None
+    except Exception:  # noqa: BLE001
+        return {"kind": "race", "start_ts": None, "note": "race log unreadable"}
+
+
+_LOCK = threading.Lock()        # one load at a time: check → write
 
 
 def _read():
@@ -89,28 +104,27 @@ def _read():
 def load(plume, now=None):
     """Store a pushed plume (atomic replace). Returns the /plume/load response.
 
-    One rule, checked inside the lock against a fresh clock (fail closed, RRS 41):
-      * if the cached plume's race is on (started, no recorded finish yet), refuse every incoming
-        plume — any race — except that same race carrying its recorded finish (already past);
-      * refuse any plume whose own race is on at receipt, or that was computed after its start.
-    `now` is for tests only; in service the boat's own clock is read inside the lock."""
+    Stateless and boat-authoritative (RRS 41: a shore-computed, route-specific forecast is
+    pre-start homework). Inside the lock, on the boat's own clock, a plume is refused when:
+      a) the boat's race log has a race session running;
+      b) it has no finite race_start (checked in validate);
+      c) its race has started (now >= race_start) and it carries no race_end already past;
+      d) it was computed after its race started (generated_at >= race_start, no past race_end).
+    `now` is for tests only; in service the clock is read inside the lock."""
     ok, why = validate(plume)
     if not ok:
         return {"loaded": False, "detail": why}
-    body = json.dumps({"received_at": 0, "plume": plume}, separators=(",", ":"))
-    if len(body) > MAX_BYTES:
-        return {"loaded": False, "detail": f"plume too large ({len(body)} B)"}
+    if len(json.dumps(plume, separators=(",", ":"))) + 40 > MAX_BYTES:
+        return {"loaded": False, "detail": "plume too large"}
     with _LOCK:
         t = time.time() if now is None else now
-        cur = (_read() or {}).get("plume")
-        if cur and frozen(cur, t):
-            fin = plume.get("race_end")
-            if not (plume.get("race_id") == cur.get("race_id") and fin is not None and fin <= t):
-                return {"loaded": False, "detail": "racing — the pre-start plume stays aboard"}
-        if frozen(plume, t):
-            return {"loaded": False, "detail": "its race is on — frozen at the gun"}
-        if frozen(plume, plume.get("generated_at", t)):
-            return {"loaded": False, "detail": "computed after the start — frozen at the gun"}
+        if race_session():
+            return {"loaded": False, "detail": "a race session is running — not taken while racing"}
+        if started(plume, t):
+            return {"loaded": False, "detail": "its race has started — not taken"}
+        gen = plume.get("generated_at")
+        if _num(gen) and started(plume, gen):
+            return {"loaded": False, "detail": "computed after its race started — not taken"}
         body = json.dumps({"received_at": int(t), "plume": plume}, separators=(",", ":"))
         p = _path()
         os.makedirs(os.path.dirname(p), exist_ok=True)
@@ -136,6 +150,11 @@ def get(now=None):
                 "Lab whenever the boat has internet"}
     plume = rec.get("plume") or {}
     built = plume.get("built_at")
+    sess = race_session()
+    frozen = bool(sess) or started(plume, now)
+    frozen_at = None
+    if frozen:   # the moment it froze: the race start if passed, else the session's start
+        frozen_at = plume.get("race_start") if started(plume, now) else (sess or {}).get("start_ts")
     return dict(plume, available=True, received_at=rec.get("received_at"),
                 received_age_s=int(now - rec.get("received_at", now)),
-                age_s=int(now - built) if built else None, frozen=frozen(plume, now))
+                age_s=int(now - built) if built else None, frozen=frozen, frozen_at=frozen_at)

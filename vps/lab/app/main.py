@@ -1327,11 +1327,9 @@ def _plume_startup():
 async def plume_get():
     """The current forecast plume (what the boat gets) + its target and the last push."""
     from . import plume
-    p = await run_in_threadpool(plume.current)
-    lock = plume.locked_race()           # drives the "Race over" button, plume or not
-    return {"plume": p, "target": plume._labstate_get(plume._KEY_TARGET),
-            "frozen_race": {"race_id": lock["race_id"], "start": lock["start"]} if lock else None,
-            "last_push": plume.last_push(), "recorder": plume._THREAD is not None}
+    v = await run_in_threadpool(plume.view)
+    return dict(v, target=plume._labstate_get(plume._KEY_TARGET),
+                last_push=plume.last_push(), recorder=plume._THREAD is not None)
 
 
 @app.post("/api/plume/target")
@@ -1341,16 +1339,6 @@ async def plume_target(body: dict):
     b = body or {}
     return {"target": plume.set_target(b.get("race_id"), b.get("playbook_id"),
                                        lat=b.get("lat"), lon=b.get("lon"))}
-
-
-@app.post("/api/plume/finish")
-async def plume_finish(body: dict):
-    """Mark a race over → plume updates for it resume (they stop at the gun). {race_id, undo?}"""
-    from . import plume
-    rid = (body or {}).get("race_id")
-    if not rid:
-        return JSONResponse({"detail": "race_id required"}, status_code=400)
-    return {"race_id": rid, "finished": plume.mark_finished(rid, undo=bool((body or {}).get("undo")))}
 
 
 @app.post("/api/plume/refresh")
