@@ -139,14 +139,12 @@ def run_judge(race_id, playbook_id=None, models=None, on_progress=None, recordin
     pb = pbstore.get(pid) if pid else None
     if not pb and not t:
         return {"available": False, "playbooks": pbs,
-                "note": "nothing to debrief yet — load the boat's log for a race session (or upload "
-                        "a GPX) above. A frozen playbook adds the tactics half; without one you "
-                        "still get the performance debrief."}
+                "note": "Nothing to debrief yet. Upload a GPX above, or load the boat's log for "
+                        "a race."}
     tac = _tactics(d, race_id, pb, models, log) if pb else {
         "available": False,
-        "note": "no frozen playbook for this race — this is a PERFORMANCE debrief: boat speed vs "
-                "the polar, the trust sweep, and the bins the boat model learns from. Freeze a "
-                "playbook in Gameplan before the next race and the debrief judges the tactics too."}
+        "note": "No frozen playbook for this race, so this checks speed only. Freeze a playbook "
+                "in Gameplan next time to check tactics too."}
     if pb and not tac.get("available") and not t:
         return {"available": False, "note": tac.get("note"),
                 "windfield": tac.get("windfield"), "log": []}
@@ -217,15 +215,13 @@ def _tactics(d, race_id, pb, models, log):
     if not wf.loaded:
         return {"available": False, "start_epoch": start, "cur": cur, "wave": wv,
                 "windfield": {**wf.status(), "basis": wind_basis},
-                "note": "no wind data for the race window (neither the live sources nor the "
-                        "GFS/HRRR archive served it — no egress?) — the oracle needs the wind "
-                        "that blew"}
+                "note": "No wind data for the race time, so tactics can't be checked."}
     log("routing the hindsight-optimal (oracle) course…")
     oracle = optimizer.optimize_course(d, course_id, start, wf, avoid=True)
     if not oracle.get("available", True) and oracle.get("note"):
         return {"available": False, "start_epoch": start, "wf": wf, "cur": cur, "wave": wv,
                 "windfield": {**wf.status(), "basis": wind_basis},
-                "note": "oracle route failed: " + oracle["note"]}
+                "note": "best-route check failed: " + oracle["note"]}
     # COMPLETENESS GUARD (#31, same rule as retro.py): an oracle that never reaches the finish
     # (time budget out / a leg blocked) would score regret, time-behind and XTE against half a
     # course. Refuse the tactics half by name; the boat's own speed is still scored on the same
@@ -235,8 +231,7 @@ def _tactics(d, race_id, pb, models, log):
     if why:
         return {"available": False, "start_epoch": start, "wf": wf, "cur": cur, "wave": wv,
                 "windfield": {**wf.status(), "basis": wind_basis},
-                "note": f"oracle route incomplete — {why}; tactics not scored against a "
-                        "partial course"}
+                "note": f"The best route didn't finish ({why}). Tactics not checked."}
 
     marks, _, _ = race_def.course_to_marks(d, course_id)
     start_pt = (marks[0][2], marks[0][3]) if marks else None
@@ -264,14 +259,11 @@ def _tactics(d, race_id, pb, models, log):
                    "side_paid": side_paid, "recommended_side": rec_side,
                    "side_matched": (rec_side == side_paid), "winning_variant": winning},
         "windfield": {**wf.status(), "basis": wind_basis},
-        "caveat": ("Oracle wind is the GFS/HRRR ARCHIVE cycle as of the gun (AWS open data) — the "
-                   "forecast a navigator could have held, not a reanalysis, so regret reflects "
-                   "forecast drift, not full hindsight. Polar/helm bins read the boat's own "
-                   "instruments and do not depend on this field."
+        "caveat": ("The best route uses the forecast from the start, not the wind that really "
+                   "blew. Speed scores use the boat's own instruments."
                    if wind_basis == "archive" else
-                   "Oracle wind is the best-available GRIB over the race window; a true post-race "
-                   "judge uses reanalysis/analysis fields. For a future/near race this is "
-                   "forecast-grade, so regret reflects forecast drift, not full hindsight."),
+                   "The best route uses the best forecast available, not the wind that really "
+                   "blew."),
     }
 
 
@@ -283,7 +275,7 @@ def _score_actual_track(t, oracle, marks, start_epoch, wf=None, cur=None, wave=N
     helm_factor refinement doesn't double-count waves). A no-track default keeps the slot honest."""
     if not t or not t.get("fixes"):
         return {"available": False,
-                "note": "no boat track for this recording — load the boat's log or upload a GPX"}
+                "note": "No boat track for this recording. Load the boat's log or upload a GPX."}
     try:
         from . import polars as POL
         scored = track.score_track(t, oracle, marks, start_epoch, wf=wf, polars=POL.polars_stw(),

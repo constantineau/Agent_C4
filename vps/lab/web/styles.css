@@ -471,3 +471,16 @@ body:not(.is-dirty) .if-dirty, body.is-dirty .if-clean { display: none; }
 .modal p b { color: var(--ink); }
 .modal-btns { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
 .modal button.danger { color: var(--bad); border-color: var(--bad); }
+
+/* "?" detail toggle (app.js qhelp): a small round "?" with a 44px touch target that doesn't grow
+   the line; tap shows/hides the detail text below it. */
+button.qh-btn { min-width: 44px; min-height: 44px; margin: -12px -8px; padding: 0; border: none;
+  background: transparent; display: inline-flex; align-items: center; justify-content: center;
+  vertical-align: middle; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+button.qh-btn > span { width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--line);
+  color: var(--muted); font: 600 12px/18px var(--font-body); text-align: center; background: var(--panel2); }
+button.qh-btn[aria-expanded="true"] > span { color: var(--ink); border-color: var(--muted); }
+.qh-txt { display: block; margin: 6px 0 2px; padding: 8px 10px; border-left: 2px solid var(--line);
+  background: var(--panel2); border-radius: 0 6px 6px 0; color: var(--muted); font-size: 12px;
+  font-weight: 400; line-height: 1.45; text-transform: none; letter-spacing: normal; max-width: 70ch; }
+.qh-txt[hidden] { display: none; }

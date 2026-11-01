@@ -177,7 +177,7 @@ def test_preserve_seeded_mmsi():
 def test_website_empty():
     fleetimport._llm_entry_list = lambda text: []        # JS-rendered page → nothing extracted
     r = fleetimport.roster_from_text("nav menu only, no list")
-    assert not r["ok"] and "JS-rendered" in r["note"], r
+    assert not r["ok"] and "paste it" in r["note"], r
     print("PASS website_empty: no boats → graceful 'paste/upload' note")
 
 

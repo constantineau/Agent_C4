@@ -72,13 +72,13 @@ def roster_from_yb(definition):
     try:
         setup = json.loads(_get(url).decode("utf-8", "replace"))
     except urllib.error.HTTPError as e:
-        return {"ok": False, "note": f"YB entry list unavailable (HTTP {e.code}) — the race likely "
-                "isn't published yet (re-check nearer race time), or paste the entry list below"}
+        return {"ok": False, "note": f"YB entry list not available (HTTP {e.code}). The race may "
+                "not be published yet. Try nearer race time, or paste the entry list below."}
     except Exception as e:
         return {"ok": False, "note": f"YB RaceSetup fetch failed: {type(e).__name__}"}
     teams = setup.get("teams") or []
     if not teams:
-        return {"ok": False, "note": "YB race not published yet (no entry list) — re-check nearer race time"}
+        return {"ok": False, "note": "YB race not published yet. Try nearer race time."}
     entries = []
     for t in teams:
         nm = (t.get("name") or "").strip()
@@ -276,8 +276,8 @@ def roster_from_text(text):
                         "division": (e.get("division") or "").strip(),
                         "orc_gph": None, "rating": None, "mmsi": None, "source": "website"})
     if not entries:
-        return {"ok": False, "note": "no boats found in that content — the page may be JS-rendered; "
-                "paste the visible entry-list text or upload the entry-list PDF"}
+        return {"ok": False, "note": "No boats found there. Copy the entry list from the page "
+                "and paste it, or upload the PDF."}
     return {"ok": True, "entries": entries, "count": len(entries)}
 
 
@@ -318,8 +318,8 @@ def roster_from_yachtscoring(event_id):
             break
         page += 1
     if not entries:
-        return {"ok": False, "note": "YachtScoring returned no entries — check the event id, or the "
-                "entry list may not be public yet"}
+        return {"ok": False, "note": "YachtScoring has no entries. Check the link, or the list "
+                "may not be public yet."}
     return {"ok": True, "entries": entries, "count": len(entries)}
 
 
@@ -374,8 +374,8 @@ def roster_from_regatta_network(regatta_id):
         for e in r["entries"]:
             e["source"] = "regatta_network"
         return r
-    return {"ok": False, "note": "Regatta Network: no entries on the results page — the event may not be "
-            "published/scored yet; paste the entry list or upload the PDF instead"}
+    return {"ok": False, "note": "Regatta Network has no entries yet. Paste the entry list or "
+            "upload the PDF instead."}
 
 
 def roster_from_url(url):
@@ -387,20 +387,20 @@ def roster_from_url(url):
     if "yachtscoring.com" in url.lower():
         m = _YS_EVENT_RE.search(url)
         if not m:
-            return {"ok": False, "note": "couldn't find the YachtScoring event id in that URL "
-                    "(expected .../emenu/<id> or ?eID=<id>)"}
+            return {"ok": False, "note": "That YachtScoring link has no event number "
+                    "(it should look like .../emenu/<id>)."}
         return roster_from_yachtscoring(m.group(1))
     if "regattanetwork.com" in url.lower():
         m = _RN_EVENT_RE.search(url)
         if not m:
-            return {"ok": False, "note": "couldn't find the Regatta Network regatta_id in that URL "
-                    "(expected .../applet_...php?regatta_id=<id>)"}
+            return {"ok": False, "note": "That Regatta Network link has no regatta_id "
+                    "(it should end in ?regatta_id=<id>)."}
         return roster_from_regatta_network(m.group(1))
     try:
         _label, text = extract.text_from_url(url)
     except Exception as e:
-        return {"ok": False, "note": f"entry-list fetch failed: {type(e).__name__} — if the page needs "
-                "a browser to load, paste the entry-list text or upload the PDF instead"}
+        return {"ok": False, "note": f"Couldn't read that page ({type(e).__name__}). Paste the "
+                "entry list or upload the PDF instead."}
     return roster_from_text(text)
 
 

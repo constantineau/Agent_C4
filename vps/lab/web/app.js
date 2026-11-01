@@ -63,6 +63,18 @@ const PHASE_LABEL = {
 };
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+/* "?" toggle: keeps a hint short and puts the how-it-works detail one tap away. `html` is trusted
+   markup written in this file (never data). The button is a 44px touch target; preventDefault so a
+   tap inside a <summary> doesn't also open/close the <details>. Not for use inside a <label>. */
+function qhelp(html) {
+  return `<span class="qh"><button type="button" class="ghost qh-btn" aria-expanded="false" aria-label="More detail"
+    onclick="qhToggle(event, this)"><span aria-hidden="true">?</span></button><span class="qh-txt" hidden>${html}</span></span>`;
+}
+function qhToggle(ev, b) {
+  ev.preventDefault(); ev.stopPropagation();
+  const t = b.nextElementSibling, open = t.hidden;
+  t.hidden = !open; b.setAttribute("aria-expanded", String(open));
+}
 
 /* ---------- auth + api ---------- */
 async function unlock() {
@@ -78,7 +90,7 @@ async function unlock() {
     sessionStorage.setItem("c4lab.token", Lab.token);
     document.getElementById("gate").style.display = "none";
     start();
-  } catch (e) { err.textContent = "Login failed — Lab unreachable."; }
+  } catch (e) { err.textContent = "Can't reach the Lab. Try again."; }
 }
 function logout() { sessionStorage.removeItem("c4lab.token"); Lab.token = null; location.reload(); }
 async function api(path, opts = {}) {
@@ -97,8 +109,8 @@ async function jsonOrFriendly(res) {
   const txt = await res.text();
   try { return JSON.parse(txt); } catch (e) {
     if (res.status === 502 || res.status === 504 || /^\s*</.test(txt))
-      throw new Error("the request timed out at the gateway — a weather source is likely slow/rate-limited. Try fewer models (uncheck ECMWF) and re-run.");
-    throw new Error(`server returned ${res.status}${res.statusText ? " " + res.statusText : ""} (non-JSON response)`);
+      throw new Error("timed out. A weather source is slow. Uncheck ECMWF and try again.");
+    throw new Error(`server error ${res.status}${res.statusText ? " " + res.statusText : ""}`);
   }
 }
 function boot() { if (Lab.token) { document.getElementById("gate").style.display = "none"; start(); } }
@@ -250,8 +262,8 @@ function askModal(title, bodyHtml, buttons, focus, dismiss) {
 }
 function askUnsaved() {
   const srcs = dirtySources(), names = dirtyLabels(srcs).map((n) => `<b>${esc(n)}</b>`).join(" and ");
-  const body = onlyDraft(srcs) ? `The extracted draft ${names} is not saved yet.`
-    : `Your edits to ${names} are not saved yet.`;
+  const body = onlyDraft(srcs) ? `The draft ${names} is not saved.`
+    : `Your changes to ${names} are not saved.`;
   return askModal("Unsaved changes", body, [
     { c: "stay", label: "Stay here", cls: "ghost" },
     { c: "discard", label: "Discard", cls: "ghost danger" },
@@ -291,10 +303,10 @@ async function savebarSave() {
   try { ok = (await saveDirty()) === true; } catch (e) { ok = false; }
   btn.disabled = false; btn.textContent = "Save";
   if (ok) flashSavebar("Saved ✓");
-  else { document.getElementById("savebarText").textContent = "Save failed — see the message on the page"; }
+  else { document.getElementById("savebarText").textContent = "Save failed. See the message on the page."; }
 }
 async function savebarDiscard() {
-  if (!confirm("Discard your unsaved edits?")) return;
+  if (!confirm("Throw away your unsaved changes?")) return;
   await settleSaves();
   discardEdits();
   route();   // repaint the tab from the restored (or reloaded) definition
@@ -315,7 +327,7 @@ async function renderRaces() {
       ${ingestCard()}
       <div class="card"><h3>Race library</h3>
         <div class="racelist" id="racelist">${Lab.races.map(raceItem).join("") ||
-          '<div class="muted">No races yet — ingest one above.</div>'}</div></div>
+          '<div class="muted">No races yet. Add one above.</div>'}</div></div>
     </div>
     <div id="raceDetail" class="detail"><div class="placeholder">Select a race.</div></div>
   </div>`;
@@ -326,14 +338,14 @@ function raceItem(r) {
   const rev = r.reviewed ? `<span class="pill ok">✓ approved</span>`
     : r.errors ? `<span class="pill bad">${r.errors} errors</span>`
     : (r.warnings ? `<span class="pill warn">${r.warnings} to review</span>`
-      : `<span class="pill warn">awaiting approval</span>`);
+      : `<span class="pill warn">not approved</span>`);
   return `<div class="raceitem ${r.race_id === Lab.sel ? "sel" : ""}" data-id="${esc(r.race_id)}"
       onclick="selectRace('${esc(r.race_id)}')">
     <div class="nm">${esc(r.name)}</div>
     <div class="meta">${esc(r.region || "")} · ${esc(r.start_date || r.year)}</div>
     <div class="pills"><span class="pill">${r.courses} courses</span>
       <span class="pill">${r.requirements} checklist</span>
-      <span class="pill">${r.ipad_items} →iPad</span>${rev}</div></div>`;
+      <span class="pill">${r.ipad_items} to iPad</span>${rev}</div></div>`;
 }
 async function selectRace(id) {
   if (!(await confirmLeave())) return;
@@ -357,16 +369,16 @@ async function loadRace(id) {
 
 /* ---------- ingestion ---------- */
 function ingestCard() {
-  return `<div class="card"><h3>Ingest a race</h3>
-    <div class="ing-row"><input id="ingUrl" placeholder="Race or document URL (auto-find)">
+  return `<div class="card"><h3>Add a race</h3>
+    <div class="ing-row"><input id="ingUrl" placeholder="Race website or document link">
       <button class="mini" onclick="discover()">Find docs</button></div>
     <div id="ingCands" class="ing-cands"></div>
-    <div class="ing-row"><input id="ingLink" placeholder="…or paste a direct PDF link">
+    <div class="ing-row"><input id="ingLink" placeholder="Or paste a PDF link">
       <button class="mini" onclick="addLink()">Add</button></div>
     <ul id="ingList" class="ing-list"></ul>
-    <div class="ing-row"><label class="muted" style="font-size:12px">Or upload PDF(s):</label>
+    <div class="ing-row"><label class="muted" style="font-size:12px">Or upload PDFs:</label>
       <input type="file" id="ingFiles" multiple accept="application/pdf"></div>
-    <button onclick="extractDraft()" id="ingBtn">Extract →</button>
+    <button onclick="extractDraft()" id="ingBtn">Read documents →</button>
     <div id="ingMsg" class="muted" style="font-size:12px;margin-top:8px"></div></div>`;
 }
 function renderSources() {
@@ -391,8 +403,8 @@ async function discover() {
       ? list.slice(0, 12).map((c) =>
         `<div class="cand"><span>${esc(c.label)}</span>
          <button class="mini" onclick="addSource('${esc(c.url)}')">Add</button></div>`).join("")
-      : '<div class="muted" style="font-size:12px">No PDFs found — paste a direct link or upload.</div>';
-  } catch (e) { cands.innerHTML = '<div class="muted" style="font-size:12px">Discover failed.</div>'; }
+      : '<div class="muted" style="font-size:12px">No PDFs found. Paste a link or upload one.</div>';
+  } catch (e) { cands.innerHTML = '<div class="muted" style="font-size:12px">Search failed.</div>'; }
 }
 async function extractDraft() {
   const msg = document.getElementById("ingMsg");
@@ -404,8 +416,8 @@ async function extractDraft() {
   };
   if (!Lab.sources.length && !files.length) { setMsg("Add a document URL or upload a PDF first.", "var(--warn)"); return; }
   if (!(await confirmLeave())) return;   // a new draft replaces whatever is in the editor
-  btn.disabled = true; btn.textContent = "Extracting…";
-  setMsg("⏳ Extracting with Opus — reading the documents. A large SI/NOR can take 1–2 min; keep this tab open.", "var(--accent)");
+  btn.disabled = true; btn.textContent = "Reading…";
+  setMsg("⏳ Reading the documents. Takes up to 2 min. Keep this tab open.", "var(--accent)");
   try {
     let res;
     if (files.length) {
@@ -420,25 +432,25 @@ async function extractDraft() {
     try { resp = JSON.parse(txt); }
     catch (e) {
       if (res.status === 502 || res.status === 504 || /^\s*</.test(txt))
-        setMsg("✕ Timed out at the gateway — the document was too large/slow to process. Try uploading the PDF directly, or fewer/smaller docs.", "var(--bad)");
-      else setMsg("✕ Ingest failed — server returned " + res.status + " (non-JSON response).", "var(--bad)");
-      btn.disabled = false; btn.textContent = "Extract →"; return;
+        setMsg("✕ Timed out. The documents were too big. Upload the PDF, or fewer documents.", "var(--bad)");
+      else setMsg("✕ Couldn't read the documents (server error " + res.status + ").", "var(--bad)");
+      btn.disabled = false; btn.textContent = "Read documents →"; return;
     }
     if (resp.detail) {   // the backend detail often already reads "ingest failed: …" — don't double it
-      const d = /^ingest failed/i.test(resp.detail) ? resp.detail : "Ingest failed: " + resp.detail;
-      setMsg("✕ " + d, "var(--bad)"); btn.disabled = false; btn.textContent = "Extract →"; return;
+      const d = /^ingest failed/i.test(resp.detail) ? resp.detail : "Couldn't read the documents: " + resp.detail;
+      setMsg("✕ " + d, "var(--bad)"); btn.disabled = false; btn.textContent = "Read documents →"; return;
     }
     Lab.draft = resp; Lab.editDef = resp.definition;
     Lab.editVal = { errors: resp.errors || [], warnings: resp.warnings || [] }; Lab.isDraft = true;
     const nm = (resp.definition && resp.definition.name) || "the race";
     const nwarn = (resp.warnings || []).length, nerr = (resp.errors || []).length;
-    setMsg("✓ Draft extracted for “" + nm + "” — review it on the right"
-      + (nwarn ? " (" + nwarn + " item" + (nwarn > 1 ? "s" : "") + " flagged for review)" : "")
-      + (nerr ? " (" + nerr + " error" + (nerr > 1 ? "s" : "") + " to fix)" : "")
-      + ", then click SAVE to add it to the library. It is NOT saved yet.", "var(--accent2)");
+    setMsg("✓ Draft ready for “" + nm + "”. Check it on the right."
+      + (nwarn ? " " + nwarn + " to check." : "")
+      + (nerr ? " " + nerr + " error" + (nerr > 1 ? "s" : "") + " to fix." : "")
+      + " Not saved yet. Click Save to keep it.", "var(--accent2)");
     paintDetail();
-  } catch (e) { setMsg("✕ Ingest failed: " + (e && e.message ? e.message : e), "var(--bad)"); }
-  btn.disabled = false; btn.textContent = "Extract →";
+  } catch (e) { setMsg("✕ Couldn't read the documents: " + (e && e.message ? e.message : e), "var(--bad)"); }
+  btn.disabled = false; btn.textContent = "Read documents →";
 }
 async function saveDraft() {
   if (!Lab.editDef) return false;
@@ -472,7 +484,7 @@ async function saveDraft() {
       // otherwise read as real values, and the next ordinary save would clear the stored ones).
       ed.race_id = r.race_id; Lab.sel = r.race_id; refreshRaceList();
       const m = document.getElementById("ingMsg");
-      if (m) { m.textContent = "Saved, but the stored copy couldn't be reloaded — click Save again."; m.style.color = "var(--warn)"; }
+      if (m) { m.textContent = "Saved, but couldn't reload it. Click Save again."; m.style.color = "var(--warn)"; }
       return false;
     }
     Lab.sel = r.race_id; Lab.draft = null; Lab.sources = []; Lab.isDraft = false;
@@ -508,27 +520,27 @@ function detailBanner(v) {
   return errs.length
     ? `<div class="banner review"><b>${errs.length} errors</b>: ${errs.map(esc).join(" · ")}</div>`
     : warns.length
-      ? `<div class="banner review"><b>Needs human review (${warns.length}):</b> ${warns.map(esc).join(" · ")}</div>`
-      : `<div class="banner ok">Validated — ready for review sign-off.</div>`;
+      ? `<div class="banner review"><b>Check these (${warns.length}):</b> ${warns.map(esc).join(" · ")}</div>`
+      : `<div class="banner ok">No problems found. Ready to approve.</div>`;
 }
 function detailActions(d, v) {
   if (Lab.isDraft) {
-    return `<div class="banner draft"><b>DRAFT — machine-extracted, needs human review.</b>
-      Edit any field below, then save to the library.
+    return `<div class="banner draft"><b>Draft read from the documents. Check it.</b>
+      Fix anything below, then save.
       <button class="mini" onclick="saveDraft()">Save to library</button></div>`;
   }
   const hasErrs = (v.errors || []).length > 0;
   const sign = d.reviewed
     ? `<span class="pill ok">✓ Approved${d.reviewed_at ? " · " + esc(d.reviewed_at) : ""}</span>
        <button class="mini" onclick="detailApprove(false)">Un-approve</button>`
-    : `<button class="mini" onclick="detailApprove(true)"${hasErrs ? " disabled title='fix the errors first'" : ""}>Approve &amp; sign off</button>`;
+    : `<button class="mini" onclick="detailApprove(true)"${hasErrs ? " disabled title='fix the errors first'" : ""}>Approve</button>`;
   return `<div class="dactions">
     <button id="detailSaveBtn" onclick="detailSave()">Save edits</button>
     ${sign}<span id="detailMsg" class="muted" style="font-size:12px"></span></div>`;
 }
 function detailHead(d) {
   return `<div class="dhead"><h2>${ein("name", d.name, "Race name")}</h2>
-      <div class="dmeta">${ein("organizing_authority", d.organizing_authority, "organizing authority")}<br>
+      <div class="dmeta">${ein("organizing_authority", d.organizing_authority, "organizer")}<br>
         Start ${ein("start_date", d.start_date, "YYYY-MM-DD")} ·
         ${ein("start_area", d.start_area, "start area")} ·
         ${ein("region", d.region, "region")}</div></div>`;
@@ -540,8 +552,8 @@ function detailCourseCard(c, ci) {
   const missing = marks.filter((m) => m.lat == null || m.lon == null).length;
   const review = marks.filter((m) => m.coords_source === "needs_review").length;
   const warn = missing || review
-    ? `<span class="pill warn">${missing ? missing + " un-geocoded" : ""}${missing && review ? " · " : ""}${review ? review + " need review" : ""}</span>`
-    : `<span class="pill ok">geometry complete</span>`;
+    ? `<span class="pill warn">${missing ? missing + " without a position" : ""}${missing && review ? " · " : ""}${review ? review + " to check" : ""}</span>`
+    : `<span class="pill ok">all marks placed</span>`;
   return `<div class="card"><h3>Course — ${ein(`courses.${ci}.name`, c.name, "course name")}</h3>
     <div class="muted" style="margin-bottom:8px">Divisions ${esc((c.applies_to_divisions || []).join(", "))}${
       c.distance_nm ? " · " + c.distance_nm + " nm" : ""}</div>
@@ -556,11 +568,11 @@ function detailDelegated(d) {
   const mods = ((d.rules_profile || {}).modifications || []).length;
   const fleet = (d.fleet || []).length;
   return `<div class="card"><h3>Rules, scoring, checklist &amp; fleet</h3>
-    <div class="muted" style="font-size:12px;margin-bottom:8px">Reviewed and edited in their own tabs (kept out of here so the Races view stays the ingest + library + sign-off hub):</div>
+    <div class="muted" style="font-size:12px;margin-bottom:8px">Edit these in their own tabs:</div>
     <div class="dep-grid">
-      <div class="dep-row"><a href="#rules">Rules, Safety &amp; Checklists →</a> <span class="muted">${mods} RRS modification${mods === 1 ? "" : "s"} + scoring · ${reqs} checklist item${reqs === 1 ? "" : "s"} (${ipad} →iPad)</span></div>
-      <div class="dep-row"><a href="#fleet">Fleet →</a> <span class="muted">${fleet} competitor${fleet === 1 ? "" : "s"} + ORC handicaps</span></div>
-      <div class="dep-row"><a href="#course">Course &amp; Marks →</a> <span class="muted">geometry on a map</span></div>
+      <div class="dep-row"><a href="#rules">Rules &amp; Checklist →</a> <span class="muted">${mods} rule change${mods === 1 ? "" : "s"}, scoring · ${reqs} checklist item${reqs === 1 ? "" : "s"} (${ipad} to iPad)</span></div>
+      <div class="dep-row"><a href="#fleet">Fleet →</a> <span class="muted">${fleet} boat${fleet === 1 ? "" : "s"} and handicaps</span></div>
+      <div class="dep-row"><a href="#course">Course &amp; Marks →</a> <span class="muted">marks on a map</span></div>
     </div></div>`;
 }
 
@@ -605,7 +617,7 @@ function watchBlockAdd() {
 }
 function watchBlockDel(i) { watchPlanOf(Lab.editDef).blocks.splice(i, 1); paintDetail(); }
 function watchClearBlocks() {
-  if (!confirm("Clear all watch blocks?")) return;
+  if (!confirm("Clear all watches?")) return;
   watchPlanOf(Lab.editDef).blocks = [];
   paintDetail();
 }
@@ -620,17 +632,17 @@ async function watchGen() {
   }
   const firstOn = (document.getElementById("wgFirst") || {}).value || "A";
   const msg = document.getElementById("watchMsg");
-  if (anchor == null || !hours) { if (msg) msg.textContent = "Set the anchor time and total hours first."; return; }
-  if (w.blocks.length && !confirm("Replace the existing blocks with a fresh pattern?")) return;
+  if (anchor == null || !hours) { if (msg) msg.textContent = "Set the start time and total hours first."; return; }
+  if (w.blocks.length && !confirm("Replace the current watches?")) return;
   try {
     const r = await (await apiPost("/api/watchplan/generate",
       { anchor, total_hours: hours, pattern, first_on: firstOn })).json();
-    if (!(r.blocks || []).length) { if (msg) msg.textContent = "Generator returned no blocks — check the pattern."; return; }
+    if (!(r.blocks || []).length) { if (msg) msg.textContent = "No watches made. Check the pattern."; return; }
     w.blocks = r.blocks;
     paintDetail();
     const m2 = document.getElementById("watchMsg");
-    if (m2) m2.textContent = `${r.blocks.length} blocks generated — hand-edit (insert ALL-HANDS around the start), then Save edits.`;
-  } catch (e) { if (msg) msg.textContent = "Generate failed: " + (e.message || e); }
+    if (m2) m2.textContent = `${r.blocks.length} watches made. Set ALL for the start, then save.`;
+  } catch (e) { if (msg) msg.textContent = "Couldn't make watches: " + (e.message || e); }
 }
 function detailWatchCard(d) {
   const w = watchPlanOf(d), tz = d.timezone || "";
@@ -649,11 +661,12 @@ function detailWatchCard(d) {
       <td><input class="ein" value="${attr(b.note || "")}" placeholder="note" onchange="watchBlockSet(${i}, 'note', this.value)"></td>
       <td><button class="mini" onclick="watchBlockDel(${i})">✕</button></td></tr>`).join("");
   return `<div class="card">
-    <h3>Watch plan <span class="muted" style="font-weight:400">— crew rotation · ${w.blocks.length} blocks${w.blocks.length ? "" : " (optional)"}</span></h3>
-    <div class="muted" style="font-size:12px;margin-bottom:8px">Two teams on/off by segment; <b>ALL</b> = all hands (start, finish, big maneuvers). Delivered aboard with the homework — the iPad CREW tile shows who's on + the countdown and can edit it live (hold a watch, swap teams, all hands). Times are ${tz ? "race-local (" + esc(tz) + ")" : "in this browser's timezone"}. Save edits to persist.</div>
+    <h3>Watch plan <span class="muted" style="font-weight:400">— ${w.blocks.length} watches${w.blocks.length ? "" : " (optional)"}</span></h3>
+    <div class="muted" style="font-size:12px;margin-bottom:8px">Two teams take turns. <b>ALL</b> = all hands. Times are ${tz ? "race local (" + esc(tz) + ")" : "this browser's time"}.
+      ${qhelp("Goes to the boat with the rest of the race prep. The iPad crew screen shows who's on and can change it live.")}</div>
     ${teamRow("A")}${teamRow("B")}
     <div class="opt-controls" style="margin-top:8px">
-      <label>Anchor <input type="datetime-local" id="wgAnchor"></label>
+      <label>Start <input type="datetime-local" id="wgAnchor"></label>
       <label>Total <input class="ein num" id="wgHours" value="48" style="width:52px"> h</label>
       <label>Pattern <select id="wgPattern" onchange="document.getElementById('wgCustom').style.display = this.value === 'custom' ? '' : 'none'">
         <option value="4on4off">4 on / 4 off</option><option value="3on3off">3 on / 3 off</option>
@@ -661,13 +674,13 @@ function detailWatchCard(d) {
         <option value="custom">custom…</option></select></label>
       <input class="ein" id="wgCustom" placeholder="hours, e.g. 5,5,4,5,5" style="display:none;width:140px">
       <label>First on <select id="wgFirst"><option>A</option><option>B</option></select></label>
-      <button class="mini" onclick="watchGen()">Generate blocks</button>
+      <button class="mini" onclick="watchGen()">Make watches</button>
       ${w.blocks.length ? `<button class="mini" onclick="watchClearBlocks()">Clear</button>` : ""}
       <span id="watchMsg" class="muted" style="font-size:12px"></span>
     </div>
     ${w.blocks.length ? `<div class="tbl-scroll" style="margin-top:8px"><table class="legs">
-      <thead><tr><th>on deck from</th><th>until</th><th></th><th>team</th><th>note</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
-      <button class="mini" style="margin-top:6px" onclick="watchBlockAdd()">+ block</button>` : ""}
+      <thead><tr><th>from</th><th>until</th><th></th><th>team</th><th>note</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+      <button class="mini" style="margin-top:6px" onclick="watchBlockAdd()">+ watch</button>` : ""}
   </div>`;
 }
 
@@ -675,7 +688,7 @@ function detailProvenance(p) {
   const srcs = (p.sources || []).map((s) =>
     `<li><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.label)}</a>
      <span class="muted">${esc(s.retrieved || "")}</span></li>`).join("");
-  return `<div class="card"><h3>Provenance &amp; review</h3>
+  return `<div class="card"><h3>Sources &amp; notes</h3>
     <ul style="margin:0 0 10px;padding-left:18px">${srcs || '<li class="muted">No sources recorded.</li>'}</ul>
     <label class="muted" style="font-size:12px">SI status ${ein("provenance.si_status", p.si_status, "SI status")}</label>
     <label class="muted" style="font-size:12px">Review notes ${etxt("provenance.review_status", p.review_status, "review notes")}</label></div>`;
@@ -695,7 +708,7 @@ async function detailSave(silent) {
     Lab.races = null; markSaved(sent, ed);
     if (!silent) {
       paintDetail(); refreshRaceList();
-      setMsg(`Saved. ${(r.warnings || []).length} item(s) still flagged for review.`);
+      setMsg(`Saved. ${(r.warnings || []).length} still to check.`);
     }
     return true;
   } catch (e) { setMsg("Save failed."); return false; }
@@ -716,7 +729,7 @@ async function detailApprove(approved) {
     Lab.editVal = { errors: r.errors || [], warnings: r.warnings || [] };
     Lab.races = null; markSaved(JSON.stringify(sent), ed);
     paintDetail(); refreshRaceList();
-    setMsg(approved ? "Approved — signed off for race use." : "Approval cleared.");
+    setMsg(approved ? "Approved for racing." : "Approval cleared.");
   } catch (e) { setMsg("Approve failed."); }
 }
 async function refreshRaceList() {
@@ -732,7 +745,7 @@ async function renderCourse() {
   const view = document.getElementById("view");
   if (!Lab.races) { try { Lab.races = (await (await apiGet("/api/races")).json()).races || []; } catch (e) {} }
   if (!Lab.sel && Lab.races && Lab.races.length) Lab.sel = Lab.races[0].race_id;
-  if (!Lab.sel) { view.innerHTML = '<div class="placeholder">No race — ingest one in the Races tab.</div>'; return; }
+  if (!Lab.sel) { view.innerHTML = '<div class="placeholder">No race yet. Add one in the Races tab.</div>'; return; }
   view.innerHTML = '<div class="loading">Loading course…</div>';
   try { Lab.editDef = await (await apiGet("/api/races/" + encodeURIComponent(Lab.sel))).json(); }
   catch (e) { view.innerHTML = '<div class="placeholder">Failed to load.</div>'; return; }
@@ -745,12 +758,12 @@ function paintCourse() {
   const d = Lab.editDef;
   document.getElementById("view").innerHTML = `<div class="dhead">
       <h2>Course &amp; Marks — ${esc(d.name)}</h2>
-      <div class="dmeta">Review the geometry; fill any <span class="need">needs review</span> marks
-        (type a lat/lon or Geocode), then Save. Reviewed copies override the bundled seed.</div></div>
+      <div class="dmeta">Check each mark. Fill in any marked <span class="need">needs review</span>
+        (type lat/lon or tap Find), then Save.</div></div>
     <div id="courseMsg" class="muted" style="font-size:12px;margin-bottom:10px"></div>
     ${(d.courses || []).map((c, i) => courseEditCard(c, i)).join("")}
-    <button id="saveCourseBtn" onclick="saveCourse()">Save course geometry</button>
-    <button class="mini" onclick="saveAndGameplan()">Save → run optimizer</button>`;
+    <button id="saveCourseBtn" onclick="saveCourse()">Save course</button>
+    <button class="mini" onclick="saveAndGameplan()">Save and route →</button>`;
   (d.courses || []).forEach((c, i) => drawCourseMap("map" + i, c));
   syncDirty();
 }
@@ -778,7 +791,7 @@ function courseEditCard(c, ci) {
       <td>${isIsland ? `<input class="cin" style="width:48px" value="${esc(m.radius_nm)}"
         placeholder="nm" onchange="editMark(${ci},${mi},'radius_nm',this.value)">` : ""}</td>
       <td>${esc(m.coords_source || "")}</td>
-      <td>${need ? `<button class="mini" onclick="geocodeMark(${ci},${mi})">Geocode</button>` : ""}
+      <td>${need ? `<button class="mini" onclick="geocodeMark(${ci},${mi})">Find</button>` : ""}
         <button class="mini" title="remove" onclick="removeMark(${ci},${mi})">✕</button></td>
     </tr>`;
   }).join("");
@@ -793,7 +806,7 @@ function courseEditCard(c, ci) {
       <span class="muted">${esc(c.start.coords_source || "")}</span>
     </div>
     <div class="tablewrap"><table class="marktable"><thead><tr><th>#</th><th>Mark</th><th>Type</th><th>Leave</th><th>Lat / Lon</th>
-      <th>Gate 2nd pt</th><th>R&nbsp;nm</th><th>Source</th><th></th></tr></thead>
+      <th>Gate end 2</th><th>Radius&nbsp;nm</th><th>Source</th><th></th></tr></thead>
       <tbody>${rows}</tbody></table></div>
     <button class="mini" onclick="addMark(${ci})">+ Add mark</button>
     ${finishEditor(c, ci)}</div>`;
@@ -855,7 +868,7 @@ function addFinishPoint(ci) {
   f.points.push({ name: f.points.length ? "Finish line end 2" : "Finish", lat: null, lon: null });
   if (f.points.length === 2 && f.type === "mark") f.type = "line";
   paintCourse();
-  document.getElementById("courseMsg").textContent = "Added a finish point — set its lat/lon, then Save.";
+  document.getElementById("courseMsg").textContent = "Finish point added. Set its lat/lon, then Save.";
 }
 function removeFinishPoint(ci, k) {
   const f = finishPoints(ci);
@@ -876,7 +889,7 @@ function addMark(ci) {
   marks.push({ seq: marks.length + 1, name: "New mark", type: "waypoint", rounding: "none",
     lat: null, lon: null, coords_source: "needs_review" });
   paintCourse();
-  document.getElementById("courseMsg").textContent = "Added a mark — set its name + lat/lon, then Save.";
+  document.getElementById("courseMsg").textContent = "Mark added. Set its name and lat/lon, then Save.";
 }
 function removeMark(ci, mi) {
   const marks = Lab.editDef.courses[ci].marks;
@@ -901,18 +914,18 @@ async function saveAndGameplan() {
 async function geocodeMark(ci, mi) {
   const m = Lab.editDef.courses[ci].marks[mi];
   const msg = document.getElementById("courseMsg");
-  msg.textContent = `Geocoding "${m.name}"…`;
+  msg.textContent = `Finding "${m.name}"…`;
   try {
     // Query the place name alone — appending the body of water (e.g. "Lake Huron") makes Nominatim
     // miss. The human verifies the proposed hit on the map (the display_name is shown) before saving.
     const r = await (await apiPost("/api/geocode", { q: m.name })).json();
     const hit = (r.results || [])[0];
-    if (!hit) { msg.textContent = `No geocode match for "${m.name}" — enter coords manually.`; return; }
+    if (!hit) { msg.textContent = `Couldn't find "${m.name}". Type the lat/lon.`; return; }
     m.lat = hit.lat; m.lon = hit.lon; m.coords_source = "approx";
     paintCourse();   // re-render from Lab.editDef (preserves the edit) — then set the message
     document.getElementById("courseMsg").textContent =
-      `"${m.name}" → ${hit.lat}, ${hit.lon} (${hit.display_name}). VERIFY on the map, then Save.`;
-  } catch (e) { msg.textContent = "Geocode failed."; }
+      `Found "${m.name}" at ${hit.lat}, ${hit.lon} (${hit.display_name}). Check it on the map, then Save.`;
+  } catch (e) { msg.textContent = "Search failed."; }
 }
 async function saveCourse() {
   const btn = document.getElementById("saveCourseBtn");
@@ -922,13 +935,13 @@ async function saveCourse() {
   // mark the review touched in provenance
   Lab.editDef.provenance = Lab.editDef.provenance || {};
   Lab.editDef.provenance.review_status =
-    "human-reviewed in the Course & Marks tab — verify before race use.";
+    "Checked in Course & Marks. Verify before racing.";
   const sent = JSON.stringify(Lab.editDef), ed = Lab.editDef;
   try {
     const r = await postDef("/api/races", { definition: JSON.parse(sent) });
     Lab.races = null; ok = !!r.saved;
     if (ok) markSaved(sent, ed);
-    msg.textContent = r.saved ? `Saved. ${(r.warnings || []).length} item(s) still flagged for review.`
+    msg.textContent = r.saved ? `Saved. ${(r.warnings || []).length} still to check.`
       : ("Save failed: " + (r.detail || ""));
   } catch (e) { msg.textContent = "Save failed."; }
   btn.disabled = false;
@@ -995,7 +1008,7 @@ function drawCourseMap(id, course) {
   };
   map.on("zoomend moveend resize", declutter);
   if (pts.length) map.fitBounds(pts, { padding: [42, 42], maxZoom: 12 });
-  else { map.setView([44.5, -82.5], 6); L.popup().setLatLng([44.5, -82.5]).setContent("No coordinates yet — fill marks below.").openOn(map); }
+  else { map.setView([44.5, -82.5], 6); L.popup().setLatLng([44.5, -82.5]).setContent("No positions yet. Fill in the marks below.").openOn(map); }
   setTimeout(() => { try { map.invalidateSize(); declutter(); } catch (e) {} }, 80);   // settle tiles after the innerHTML layout
 }
 
@@ -1035,7 +1048,7 @@ function optStartNote() {
     return `Blank = race start: ${rs.division} gun, ${when(rs.epoch)}.`;
   if (sd.source === "now_passed")
     return `Blank = now. The ${rs.division} start (${when(rs.epoch)}) has passed.`;
-  return "Blank = now. No gun time is set for this race — add it on the Fleet tab.";
+  return "Blank = now. No gun time is set for this race. Add it on the Fleet tab.";
 }
 function optStartInput(v) {
   Opt.start = v;
@@ -1086,18 +1099,18 @@ async function renderGameplan() {
       Opt.models = md.models; Opt.defaultModels = md.default;
       Opt.chosen = Opt.chosen || md.default.slice();
       await reloadBoats();
-    } catch (e) { view.innerHTML = '<div class="placeholder">Failed to load optimizer.</div>'; return; }
+    } catch (e) { view.innerHTML = '<div class="placeholder">Couldn\'t load Gameplan.</div>'; return; }
   }
   if (!Opt.raceId && Opt.races.length) await optPickRace(Opt.races[0].race_id, false);
   await optLoadStartDefault();
   if (stale("gameplan")) return;
   const startTz = optTz();
   const startTitle = (startTz
-    ? "Pick the start date & time in " + startTz + " race-local time — converted to UTC behind the scenes."
-    : "Pick the start date & time (UTC).") + " Leave blank to route from the race start (or now, if there is no gun time).";
+    ? "Start time, race local (" + startTz + ")."
+    : "Start time (UTC).") + " Leave blank to use the race start.";
   view.innerHTML = `<div class="opt">
     <div class="card">
-      <h3>Gameplan / Optimizer <span class="muted" style="font-weight:400">— multi-model GRIB route (Lab-1)</span></h3>
+      <h3>Gameplan <span class="muted" style="font-weight:400">— best route on the forecast</span></h3>
       <div class="opt-groups">
         <div class="opt-group">
           <div class="opt-group-h">Course</div>
@@ -1113,45 +1126,46 @@ async function renderGameplan() {
         <div class="opt-group">
           <div class="opt-group-h">Boat &amp; charts</div>
           ${optBoatControls()}
-          <button class="mini" onclick="toggleBoatModel()">${Opt.showBoatModel ? "Hide" : "Review"} boat model — polars &amp; sail crossovers</button>
-          <span class="muted" style="font-size:11px">per-leg sail plan + draft frozen into the playbook → loaded onto the copilot</span>
+          <button class="mini" onclick="toggleBoatModel()">${Opt.showBoatModel ? "Hide" : "Show"} boat speeds &amp; sails</button>
         </div>
         <div class="opt-group">
           <div class="opt-group-h">Weather models</div>
           <div class="opt-models">${optModelChecks()}</div>
-          <label>Ensemble members <input type="number" id="optEns" value="0" min="0" style="width:64px" oninput="updateEnsembleControl()"></label>
+          <label>Ensemble runs <input type="number" id="optEns" value="0" min="0" style="width:64px" oninput="updateEnsembleControl()"></label>
           <span id="optEnsHint" class="muted" style="font-size:12px"></span>
           <div id="optEnsCost" class="muted" style="font-size:12px;margin-top:2px"></div>
         </div>
       </div>
       <div id="boatModelOut"></div>
       <div class="opt-run">
-        <label class="optchk"><input type="checkbox" id="optAvoid" checked> Avoid land/islands/zones</label>
-        <label class="optchk" title="Degrade boatspeed for sea state (waves) — routes/ETAs on achievable speed. Conservative model + a low-Hs deadband; uncheck for flat-water (polar) routing. (Helm % still applies — that's crew efficiency, not waves.)"><input type="checkbox" id="optWaves" checked> Sea-state (waves)</label>
-        <label class="optchk" title="Fold water current (set &amp; drift) into the route + leg ETAs — the boat crabs into a cross stream and rides a fair/foul current. Source: NOAA LMHOFS. Uncheck to route in still water, then re-run checked to see what the current is worth."><input type="checkbox" id="optCurrent" checked> Water current</label>
-        <label class="optchk" title="Also route each weather model separately and overlay the candidate routes — the confidence fan made visible (slower)"><input type="checkbox" id="optPerModel"> Per-model route fan <span class="muted">(slower)</span></label>
-        <label class="optchk" title="Routing resolution: Fine = finer heading fan + shorter steps (sharper near shore, slower); Fast = coarser (quicker).">Resolution
+        <label class="optchk"><input type="checkbox" id="optAvoid" checked> Avoid land &amp; zones</label>
+        <label class="optchk" title="Slows the boat in waves. Uncheck for flat water."><input type="checkbox" id="optWaves" checked> Waves</label>
+        <label class="optchk" title="Includes water current. Run once without it to see what it's worth."><input type="checkbox" id="optCurrent" checked> Current</label>
+        <label class="optchk" title="Also routes each weather model on its own and draws them all."><input type="checkbox" id="optPerModel"> Route per model <span class="muted">(slower)</span></label>
+        <label class="optchk" title="Fine is sharper near shore but slower. Fast is quicker.">Detail
           <select id="optRes" oninput="updateResHint()">
             <option value="fast"${Opt.resolution === "fast" ? " selected" : ""}>Fast</option>
             <option value="auto"${(Opt.resolution || "auto") === "auto" ? " selected" : ""}>Auto</option>
             <option value="fine"${Opt.resolution === "fine" ? " selected" : ""}>Fine</option>
           </select></label>
-        <button id="optRun" onclick="runOptimize()" ${Opt.running ? "disabled" : ""}>${Opt.running ? "Optimizing…" : "Run optimizer →"}</button>
+        <button id="optRun" onclick="runOptimize()" ${Opt.running ? "disabled" : ""}>${Opt.running ? "Routing…" : "Find route →"}</button>
         <span id="optResHint" class="muted" style="font-size:11px"></span>
       </div>
-      <div class="muted" style="font-size:12px;margin-top:6px">Downloads live GRIB from NOAA NOMADS / ECMWF and routes the course on the SR33 polars. First run ~30–60 s (then cached). Pre-race cloud homework — frozen at the gun (RRS 41).</div>
+      <div class="muted" style="font-size:12px;margin-top:6px">Routes the course on live weather. First run about 1 min.
+        ${qhelp("Downloads forecasts from NOAA and ECMWF and sails them on the SR33 polar. Later runs reuse the download. Prep only: nothing changes after the start (rule 41).")}</div>
     </div>
     <div id="optOut"></div>
     <div class="card">
-      <h3>Branching playbook <span class="muted" style="font-weight:400">— forecast fan-out → strategic variants (Lab-2b)</span></h3>
-      <div class="muted" style="font-size:12px;margin-bottom:8px">Fans the optimizer across each weather model, clusters the routes into <b>which side of the first beat</b> they favor, then has Opus write each variant's rationale / tradeoffs / <b>what-flips-it</b> + a decision tree. <b>Freeze &amp; sign</b> the bundle to carry it onboard (the copilot's <code>PLAYBOOK_PATH</code>) — frozen at the gun.</div>
-      <label class="muted" style="font-size:12px" title="How wide the scenario fan sweeps. Each scenario is a full re-route, so depth trades synthesis time for decision-space coverage; the dedupe keeps the play library honest at any depth (a scenario that holds becomes robustness evidence, not a play).">Fan depth
+      <h3>Playbook <span class="muted" style="font-weight:400">— which side, and when to switch</span></h3>
+      <div class="muted" style="font-size:12px;margin-bottom:8px">Routes many forecasts. Says which side to start and what would change it.
+        ${qhelp("Groups the routes by which side of the first beat they favour. Claude writes the reasons, the cost and what would change the call, plus a decision tree. Freeze it to take it on the boat.")}</div>
+      <label class="muted" style="font-size:12px" title="More scenarios cover more weather but take longer.">Depth
         <select id="pbFan" style="margin:0 8px 0 4px">
-          <option value="quick">Quick — 6 scenarios (~5 min, race-morning refresh)</option>
-          <option value="standard">Standard — 9 scenarios (~7 min, the core grid)</option>
-          <option value="deep" selected>Deep — 15 scenarios (~15 min, ±30° / ×0.6–1.4 / ±6 h; early-week homework)</option>
+          <option value="quick">Quick: 6 scenarios, ~5 min (race morning)</option>
+          <option value="standard">Standard: 9 scenarios, ~7 min</option>
+          <option value="deep" selected>Deep: 15 scenarios, ~15 min (early in the week)</option>
         </select></label>
-      <button id="pbRun" onclick="synthPlaybook()" ${Pb.running ? "disabled" : ""}>${Pb.running ? "Synthesizing…" : "Synthesize branching playbook →"}</button>
+      <button id="pbRun" onclick="synthPlaybook()" ${Pb.running ? "disabled" : ""}>${Pb.running ? "Building…" : "Build playbook →"}</button>
       <div id="pbOut"></div>
     </div></div>`;
   if (Opt.showBoatModel) renderBoatModel();
@@ -1170,7 +1184,7 @@ function optModelChecks() {
   const m = Opt.models || {};
   return Object.keys(m).map((k) => {
     const on = Opt.chosen.includes(k);
-    const ens = m[k].kind === "ensemble" ? ` <span class="muted">(ens ${m[k].members})</span>` : "";
+    const ens = m[k].kind === "ensemble" ? ` <span class="muted">(${m[k].members} runs)</span>` : "";
     return `<label class="optchk"><input type="checkbox" value="${k}" ${on ? "checked" : ""} onchange="optToggle('${k}',this.checked)"> ${esc(k.toUpperCase())}${ens}</label>`;
   }).join("");
 }
@@ -1194,9 +1208,9 @@ function optEnsembleInfo() {
    control that's inert until it's meaningful, with a dynamic cap + a cost/diminishing-returns hint).
    Called on render and whenever a model checkbox toggles. */
 const RES_HINTS = {
-  fast: "Fast — coarse heading fan + longer steps; quickest, less sharp near shore.",
-  auto: "Auto — balanced heading fan + step (the default).",
-  fine: "Fine — finer heading fan + shorter steps; sharper near shore + tight marks, slower.",
+  fast: "Fast: quickest, less sharp near shore.",
+  auto: "Auto: balanced. The default.",
+  fine: "Fine: sharpest near shore and tight marks. Slower.",
 };
 function updateResHint() {
   const sel = document.getElementById("optRes"), hint = document.getElementById("optResHint");
@@ -1217,12 +1231,12 @@ function updateEnsembleControl() {
   else if (parseInt(inp.value || "0", 10) > max) { inp.value = String(max); }
   inp.style.opacity = on ? "1" : "0.5";
   if (hint) hint.textContent = on
-    ? `0 = deterministic; up to ${max} members of ${names.join(" + ")}`
-    : "select GEFS or ECMWF-ENS to use ensemble members";
+    ? `0 = main forecast only. Up to ${max} runs of ${names.join(" + ")}.`
+    : "Tick GEFS or ECMWF-ENS to use this.";
   if (cost) {
     const n = parseInt(inp.value || "0", 10) || 0;
     cost.textContent = on && n > 0
-      ? `≈ ${n} member${n > 1 ? "s" : ""} × forecast frames in extra GRIB downloads — 10–20 already samples the spread well; more rarely changes the route.`
+      ? `${n} extra forecast${n > 1 ? "s" : ""} to download. 10–20 is plenty.`
       : "";
   }
 }
@@ -1243,13 +1257,13 @@ function optBoatControls() {
         ${(Opt.boats || []).map((b) => `<option value="${esc(b.boat_id)}" ${b.boat_id === Opt.activeBoat ? "selected" : ""}>${esc(b.name)} (${b.draft_ft != null ? b.draft_ft + " ft" : "?"})</option>`).join("")}
       </select></label>
     <label>Draft (ft) <input type="number" id="optDraft" step="0.1" min="0" value="${draftFt}" style="width:64px" onchange="optSaveDraft()"></label>
-    <label title="Fraction of the flat-water ORC polar this crew actually sails — the optimizer routes on achievable speed. 100% = sails the book.">Helm % <input type="number" id="optHelm" step="1" min="30" max="100" value="${Math.round((ab.helm_factor ?? 1) * 100)}" style="width:58px" onchange="optSaveHelm()"></label>
+    <label title="How much of the polar speed this crew sails. 100% = full polar.">Helm % <input type="number" id="optHelm" step="1" min="30" max="100" value="${Math.round((ab.helm_factor ?? 1) * 100)}" style="width:58px" onchange="optSaveHelm()"></label>
     <label>Charts
       <select id="optChart" onchange="optSetChart(this.value)">
-        <option value="natural_earth" ${!isEnc ? "selected" : ""}>Natural Earth (coarse)</option>
-        <option value="enc" ${isEnc ? "selected" : ""}>NOAA ENC (draft-aware)</option>
+        <option value="natural_earth" ${!isEnc ? "selected" : ""}>Basic coastline</option>
+        <option value="enc" ${isEnc ? "selected" : ""}>NOAA charts (uses draft)</option>
       </select></label>
-    <span class="muted">${isEnc ? "depth no-go &lt; " + depthFt + " ft (draft + margin)" : "global coastline backstop"}</span>`;
+    <span class="muted">${isEnc ? "avoids water under " + depthFt + " ft" : "coastline only, no depths"}</span>`;
 }
 async function optPickBoat(id) {
   // the boat-model thresholds save to the ACTIVE boat — settle unsaved ones before it changes
@@ -1300,7 +1314,7 @@ function renderBoatModel() {
   const out = document.getElementById("boatModelOut"); if (!out) return;
   const m = Opt.boatModel;
   if (!m) { out.innerHTML = '<div class="loading">Loading boat model…</div>'; return; }
-  if (m.error || !m.crossovers) { out.innerHTML = `<div class="placeholder">Boat model unavailable — ${esc(m.error || "no crossover data")}</div>`; return; }
+  if (m.error || !m.crossovers) { out.innerHTML = `<div class="placeholder">Boat model not available: ${esc(m.error || "no sail data")}</div>`; return; }
   out.innerHTML = boatModelCard(m);
 }
 
@@ -1332,23 +1346,24 @@ function boatModelCard(m) {
       const w = ((o.twa_max - o.twa_min) / 180 * 100).toFixed(1);
       const c1 = hexRgba(sailColor(o.sails[0]), 0.72), c2 = hexRgba(sailColor(o.sails[1]), 0.72);
       const bg = `repeating-linear-gradient(45deg, ${c1} 0 4px, transparent 4px 8px, ${c2} 8px 12px, transparent 12px 16px)`;
-      return `<div class="xo-ol" style="left:${left}%;width:${w}%;background:${bg}" title="Toss-up: ${esc(o.sails.join(" ≈ "))} within ~1.5% of target ${o.twa_min}–${o.twa_max}° — carry either / peel is optional">≈</div>`;
+      return `<div class="xo-ol" style="left:${left}%;width:${w}%;background:${bg}" title="Toss-up: ${esc(o.sails.join(" ≈ "))} at ${o.twa_min}–${o.twa_max}°. Either sail works.">≈</div>`;
     }).join("");
     return `<div class="xo-row"><span class="xo-tws">${t} kts</span><div class="xo-track">${zones}${overlaps}</div></div>`;
   }).join("");
   const inv = (m.inventory || []).map((s) => `<span class="sail sail-${esc(s)}">${esc(s)}</span>`).join(" ");
   return `<div class="card boatmodel">
-    <h3>Boat model — polars &amp; sail crossovers</h3>
-    <div class="muted" style="font-size:12px;margin-bottom:10px">Source: ${esc(m.source || "—")}. This is the boat sail model the optimizer attaches per leg and <b>freezes into the playbook bundle</b> — what the onboard copilot loads to ground its sail calls. Review before lock-in.</div>
-    <div class="bm-inv">Inventory: ${inv}</div>
+    <h3>Boat model — speeds &amp; sail choice</h3>
+    <div class="muted" style="font-size:12px;margin-bottom:10px">The route and the boat's sail calls use these. Check before you lock in. Source: ${esc(m.source || "—")}.</div>
+    <div class="bm-inv">Sails: ${inv}</div>
     ${renderJibCrossovers(m)}
     ${renderSailConfig(m)}
     <div class="jib-edit bm-save">
-      <button class="mini" onclick="bmSaveClick()">Save boat-model thresholds</button>
-      <span id="bmSaveMsg" class="muted" style="font-size:11px">jib change-downs, Code 0 and reefs save together</span>
+      <button class="mini" onclick="bmSaveClick()">Save sail settings</button>
+      <span id="bmSaveMsg" class="muted" style="font-size:11px">Saves jibs, Code 0 and reefs together.</span>
     </div>
-    <h4>Sail crossovers (optimal sail by TWA, per TWS)</h4>
-    <div class="muted" style="font-size:11px;margin-bottom:4px">From the ORC cert (one headsail = the jib slot; specialised to J1/J2/J3 by the wind bands above). <b>Hatched ≈</b> = a toss-up: two sails within ~1.5% of target speed, where the winner-take-all bands can't show a tie — carry either (the erased sail reappears in its own colour).</div>
+    <h4>Best sail by wind angle and speed</h4>
+    <div class="muted" style="font-size:11px;margin-bottom:4px">From the ORC certificate. <b>Hatched ≈</b> = toss-up, either sail works.
+      ${qhelp("The certificate rates one jib. The J1/J2/J3 split comes from your wind settings above. Hatched means two sails are within 1.5% of each other.")}</div>
     <div class="xo-axis"><span>0°</span><span>45°</span><span>90°</span><span>135°</span><span>180°</span></div>
     <div class="xo">${bands}</div>
     ${renderPolarGrid()}
@@ -1359,7 +1374,7 @@ function boatModelCard(m) {
    these are editable crew/sailmaker thresholds. Two boundaries: J1→J2 and J2→J3. */
 function renderJibCrossovers(m) {
   const jc = m.jib_crossovers || [];
-  if (!jc.length) return `<div class="muted" style="font-size:12px">No upwind jib change-downs set — the optimizer uses the single cert jib (J1).</div>`;
+  if (!jc.length) return `<div class="muted" style="font-size:12px">No jib changes set. The route uses the J1 only.</div>`;
   const max = 35;     // axis ceiling for the TWS bars (kn)
   const bars = jc.map((b) => {
     const lo = b.tws_min != null ? b.tws_min : 0;
@@ -1369,8 +1384,8 @@ function renderJibCrossovers(m) {
     return `<div class="xo-zone sail-bg-${esc(b.sail)}" style="left:${left}%;width:${w}%" title="${esc(b.sail)} ${rng} kts">${esc(b.sail)} ${esc(rng)}</div>`;
   }).join("");
   const f = Opt.bmEdit || bmFormFrom(m);   // the inputs show the form (edits survive a repaint)
-  return `<h4>Upwind jib change-downs (by wind strength)</h4>
-    <div class="muted" style="font-size:11px;margin-bottom:6px">The ORC cert rates only the J1 — these J1/J2/J3 change-downs are your crew/sailmaker thresholds (editable), and drive which jib each upwind leg carries.</div>
+  return `<h4>Upwind jib changes by wind speed</h4>
+    <div class="muted" style="font-size:11px;margin-bottom:6px">Your crew's change points. They set the jib on each upwind leg.</div>
     <div class="xo-axis"><span>0</span><span>~9</span><span>~17</span><span>~26</span><span>35 kts</span></div>
     <div class="xo"><div class="xo-row"><span class="xo-tws">TWS</span><div class="xo-track">${bars}</div></div></div>
     <div class="jib-edit">
@@ -1385,18 +1400,19 @@ function renderJibCrossovers(m) {
    routing SPEED stays the rated envelope (no invented numbers). */
 function renderSailConfig(m) {
   const f = Opt.bmEdit || bmFormFrom(m);
-  return `<h4>Code 0 — light-air reacher (crew band)</h4>
-    <div class="muted" style="font-size:11px;margin-bottom:6px">The C0 takes the jib slot within this band (label overlay — the cert doesn't rate it, so routing speed stays the rated envelope; the band sets the <b>call</b>). It shows as C0 zones in the chart below and drives leg sail calls, the frozen playbook and the copilot's peel alerts.</div>
+  return `<h4>Code 0 — light-air reaching</h4>
+    <div class="muted" style="font-size:11px;margin-bottom:6px">When to fly the Code 0. Sets the sail call, not the boat speed.
+      ${qhelp("The certificate doesn't rate the Code 0, so route speed stays the jib speed. The band shows as C0 in the chart below, in the leg sail calls and in the playbook.")}</div>
     <div class="jib-edit">
       <label><input type="checkbox" id="c0On" ${f.c0On ? "checked" : ""} onchange="bmSet('c0On',this.checked)"> fly the Code 0</label>
       <label>under <input type="number" id="c0Tws" value="${attr(f.c0Tws)}" min="3" max="20" step="0.5" style="width:58px" oninput="bmSet('c0Tws',this.value)"> kts</label>
       <label>TWA <input type="number" id="c0Alo" value="${attr(f.c0Alo)}" min="30" max="150" step="5" style="width:58px" oninput="bmSet('c0Alo',this.value)">–<input type="number" id="c0Ahi" value="${attr(f.c0Ahi)}" min="40" max="170" step="5" style="width:58px" oninput="bmSet('c0Ahi',this.value)">°</label>
     </div>
-    <h4>Mainsail reef points (crew thresholds)</h4>
-    <div class="muted" style="font-size:11px;margin-bottom:6px">Reef 1 decorates the sail call (▽R1 on the legs + the copilot's reminder): <b>depower</b> once the breeze is up, and — at a lower threshold — <b>open the slot</b> between the A3 and the main when running the kite.</div>
+    <h4>Mainsail reef points</h4>
+    <div class="muted" style="font-size:11px;margin-bottom:6px">Reef 1 to depower. A lower setting opens the slot when flying the A3.</div>
     <div class="jib-edit">
       <label>Reef 1 (depower) at <input type="number" id="r1Tws" value="${attr(f.r1)}" min="4" max="45" step="0.5" style="width:58px" oninput="bmSet('r1',this.value)"> kts</label>
-      <label>Reef 1 with the A3 (open the slot) at <input type="number" id="r1Slot" value="${attr(f.slot)}" min="4" max="45" step="0.5" style="width:58px" oninput="bmSet('slot',this.value)"> kts</label>
+      <label>Reef 1 with the A3 at <input type="number" id="r1Slot" value="${attr(f.slot)}" min="4" max="45" step="0.5" style="width:58px" oninput="bmSet('slot',this.value)"> kts</label>
     </div>`;
 }
 
@@ -1456,7 +1472,7 @@ function bmBodies(f, was) {
     if (f.c0On && !(tws > 0 && tws <= 30 && alo >= 0 && ahi <= 180)) return { err: "Code 0: wind up to 30 kts, TWA within 0–180°." };
     const r1 = parseFloat(f.r1), slot = parseFloat(f.slot);
     if ([r1, slot].some((v) => !isNaN(v) && (v < 4 || v > 45))) return { err: "Reef points must be 4–45 kts (or blank)." };
-    if (!isNaN(r1) && !isNaN(slot) && slot > r1) return { err: "The A3 slot reef normally fires at or below the depower reef." };
+    if (!isNaN(r1) && !isNaN(slot) && slot > r1) return { err: "The A3 reef should be at or below the depower reef." };
     sc = { code0: f.c0On ? { enabled: true, tws_max: tws, twa_min: alo, twa_max: ahi } : { enabled: false },
       main_reefs: { r1_tws_kn: isNaN(r1) ? null : r1, r1_a3_slot_tws_kn: isNaN(slot) ? null : slot } };
   }
@@ -1492,7 +1508,7 @@ async function saveBoatModel() {
       }
     } catch (e) {
       Opt.bmClean = JSON.stringify(clean);   // a section that did save is no longer dirty
-      syncDirty(); bmMsg("Save failed — " + e.message, true);
+      syncDirty(); bmMsg("Save failed: " + e.message, true);
       return false;
     }
     let fresh = null;
@@ -1518,9 +1534,9 @@ function renderPolarGrid() {
     const v = g.grid[String(t)][String(a)];
     return `<td>${v == null ? "" : v.toFixed(1)}</td>`;
   }).join("")}</tr>`).join("");
-  return `<h4>Polar grid — target boatspeed (kn), TWS × TWA</h4>
+  return `<h4>Target boat speed (kn) by wind speed and angle</h4>
     <div class="pg-wrap"><table class="pg">${head}${rows}</table></div>
-    <div class="muted" style="font-size:11px;margin-top:4px">${g.n_points} points · Best-Performance ORC envelope (the speed the optimizer routes on).</div>`;
+    <div class="muted" style="font-size:11px;margin-top:4px">${g.n_points} points. The ORC speeds the route uses.</div>`;
 }
 
 async function optPickRace(id, rerender = true) {
@@ -1548,8 +1564,8 @@ async function runOptimize() {
   if (startEpoch != null) body.start_epoch = startEpoch;
   Opt.running = true;
   document.getElementById("optRun").disabled = true;
-  document.getElementById("optRun").textContent = "Optimizing… (downloading GRIB + routing)";
-  out.innerHTML = '<div class="card"><div class="loading">Building the multi-model wind field and routing the course…</div>' +
+  document.getElementById("optRun").textContent = "Routing… (getting weather)";
+  out.innerHTML = '<div class="card"><div class="loading">Getting the weather and routing the course…</div>' +
     '<div class="muted" id="optProg" style="font-size:12px;margin-top:6px"></div></div>';
   try {
     // background job — a slow/rate-limited weather source used to push the synchronous request
@@ -1557,14 +1573,14 @@ async function runOptimize() {
     // like the synthesis fan; the status's progress tail shows which source it's waiting on.
     const start = await (await apiPost("/api/optimize", body)).json();
     if (start.detail) throw new Error(start.detail);
-    if (start.ok === false) throw new Error(start.note || "an optimize run is already in progress");
+    if (start.ok === false) throw new Error(start.note || "a route is already running");
     let r;
     while (true) {
       await new Promise((res) => setTimeout(res, 3000));
       const st = await (await apiGet("/api/optimize/status")).json();
       if (st.state === "done") { r = st.result; break; }
-      if (st.state === "error") throw new Error(st.error || "optimize failed");
-      if (st.state === "idle") throw new Error("optimize job vanished (container restarted?) — re-run");
+      if (st.state === "error") throw new Error(st.error || "routing failed");
+      if (st.state === "idle") throw new Error("the route job stopped. Run it again.");
       const p = document.getElementById("optProg");
       if (p && st.progress && st.progress.length) p.textContent = st.progress[st.progress.length - 1];
     }
@@ -1572,8 +1588,8 @@ async function runOptimize() {
     renderGameplan();
   } catch (e) {
     Opt.running = false;
-    out.innerHTML = '<div class="card"><div class="placeholder">Optimize failed — ' + esc(String(e)) + '</div></div>';
-    const b = document.getElementById("optRun"); if (b) { b.disabled = false; b.textContent = "Run optimizer →"; }
+    out.innerHTML = '<div class="card"><div class="placeholder">Routing failed: ' + esc(String(e)) + '</div></div>';
+    const b = document.getElementById("optRun"); if (b) { b.disabled = false; b.textContent = "Find route →"; }
   }
 }
 
@@ -1599,27 +1615,27 @@ function renderOptResult(r) {
         <div><b>${r.total_sailed_nm}</b><span>nm sailed</span></div>
         <div><b>${r.total_direct_nm}</b><span>nm direct</span></div>
         <div><b>${r.total_tacks}</b><span>tacks/gybes</span></div>
-        ${r.total_peels != null ? `<div title="Sail changes (peels) the route makes — held a sub-optimal sail rather than peel when it didn't pay (2g)"><b>${r.total_peels}</b><span>sail peels</span></div>` : ""}
-        <div><b class="conf ${confCls}">${conf == null ? "—" : conf}</b><span>conf (min ${r.min_confidence == null ? "—" : r.min_confidence})</span></div>
-        <div><b class="conf ${covCls}">${cov == null ? "—" : Math.round(cov * 100) + "%"}</b><span>wind cov</span></div>
+        ${r.total_peels != null ? `<div title="Sail changes on the route. Skips a change when it doesn't pay."><b>${r.total_peels}</b><span>sail changes</span></div>` : ""}
+        <div><b class="conf ${confCls}">${conf == null ? "—" : conf}</b><span>confidence (low ${r.min_confidence == null ? "—" : r.min_confidence})</span></div>
+        <div><b class="conf ${covCls}">${cov == null ? "—" : Math.round(cov * 100) + "%"}</b><span>wind data</span></div>
         ${optCurrentStat(r)}
         ${optRealizedStat(r)}
       </div>
-      <div class="rail-actions"><button id="pdfBtn" onclick="downloadGameplanPdf(this)" title="Download a PDF report of this gameplan — route summary + schematic + leg table + briefing + branching playbook — to email the crew">⬇ PDF report</button>
-        <button id="shareBtn" onclick="shareGameplan(this)" title="Create a public read-only link to this gameplan's playable route view (boat animating through the forecast) — send it to the crew; no Lab login needed">🔗 Share player</button></div>
+      <div class="rail-actions"><button id="pdfBtn" onclick="downloadGameplanPdf(this)" title="PDF of the route, legs, briefing and playbook, for the crew.">⬇ PDF report</button>
+        <button id="shareBtn" onclick="shareGameplan(this)" title="A view-only link to the route player. No login needed.">🔗 Share player</button></div>
       ${r.start && r.start.note ? `<div class="opt-start-note">${esc(r.start.note)}</div>` : ""}
       ${optDegradedBanner(r)}
-      ${r.timed_out ? '<div class="pill warn">routing hit the time budget — route is best-effort</div>' : ""}
+      ${r.timed_out ? '<div class="pill warn">Routing ran out of time. The route may be incomplete.</div>' : ""}
       <details class="rail-sec" open><summary>Legs</summary>
-        <div class="legs-head"><span class="muted" style="font-size:11px">click a leg → highlight on map + jump forecast to its ETA</span>
-          <button class="mini" onclick="exportLegsCsv()" title="Download the leg table as CSV (email the crew)">⬇ CSV</button></div>
+        <div class="legs-head"><span class="muted" style="font-size:11px">Tap a leg to show it on the map.</span>
+          <button class="mini" onclick="exportLegsCsv()" title="Leg table as a spreadsheet file.">⬇ CSV</button></div>
         ${optSailPlan(r)}
         <table class="legs"><thead><tr><th>To</th><th>Min</th><th>Point of sail</th><th>Sail</th><th>Tacks</th><th>TWS</th><th>TWD</th><th>Conf</th></tr></thead>
         <tbody>${r.legs.map((l, i) => optLegRow(l, i)).join("")}</tbody></table></details>
       <details class="rail-sec" open><summary>Briefing</summary><pre class="briefing">${esc(r.briefing || "")}</pre></details>
-      <details class="rail-sec"><summary>Wind field &amp; obstacles</summary>
+      <details class="rail-sec"><summary>Weather data &amp; land</summary>
         ${optObstacleNote(r)}
-        ${(r.skipped_marks || []).length ? `<div class="muted" style="font-size:12px;margin-top:6px">Marks skipped (no coords — review in Course &amp; Marks): ${r.skipped_marks.map(esc).join(", ")}</div>` : ""}
+        ${(r.skipped_marks || []).length ? `<div class="muted" style="font-size:12px;margin-top:6px">Marks skipped (no position, fix in Course &amp; Marks): ${r.skipped_marks.map(esc).join(", ")}</div>` : ""}
         <div class="muted" style="font-size:12px;margin-top:6px">${(r.windfield.models || []).map((m) =>
           `${esc(m.model.toUpperCase())} ${esc(m.cycle)} — ${m.frames}${m.expected_frames ? "/" + m.expected_frames : ""} frames` +
           (m.cycle_fallbacks ? ` <span class="conf warn">(−${m.cycle_fallbacks} cycle)</span>` : "")).join(" · ")} · ${r.windfield.total_frames} frames total</div>
@@ -1633,8 +1649,8 @@ function optLegRow(l, i) {
   const c = w.confidence, cc = c == null ? "" : c >= 0.6 ? "ok" : c >= 0.4 ? "warn" : "bad";
   return `<tr class="legrow" onclick="MapView.focusLeg(${i})" title="Show this leg on the map">
     <td>${esc(l.to)}</td><td>${l.leg_minutes}</td><td>${esc(l.point_of_sail || "—")}</td>
-    <td>${l.sail ? `<span class="sail sail-${esc(l.sail)}">${esc(l.sail)}</span>` : "—"}${l.reef ? ` <span class="peelbadge" title="Main: tuck in ${esc(l.reef)} — ${esc(l.reef_why || "")}">▽${esc(l.reef)}</span>` : ""}${l.peels > 0 ? ` <span class="peelbadge" title="${l.peels} sail change(s)/peel(s) on this leg">⛵${l.peels}</span>` : ""}</td>
-    <td>${l.tacks > 0 ? `<span class="tackbadge" title="${l.tacks} tack/gybe(s) worked into this leg">⇄ ${l.tacks}</span>` : "0"}</td><td>${w.tws ?? "—"}</td><td>${w.twd ?? "—"}°</td>
+    <td>${l.sail ? `<span class="sail sail-${esc(l.sail)}">${esc(l.sail)}</span>` : "—"}${l.reef ? ` <span class="peelbadge" title="Main: ${esc(l.reef)}. ${esc(l.reef_why || "")}">▽${esc(l.reef)}</span>` : ""}${l.peels > 0 ? ` <span class="peelbadge" title="${l.peels} sail change(s) on this leg">⛵${l.peels}</span>` : ""}</td>
+    <td>${l.tacks > 0 ? `<span class="tackbadge" title="${l.tacks} tack(s) or gybe(s) on this leg">⇄ ${l.tacks}</span>` : "0"}</td><td>${w.tws ?? "—"}</td><td>${w.twd ?? "—"}°</td>
     <td><span class="conf ${cc}">${c ?? "—"}</span></td></tr>`;
 }
 
@@ -1669,7 +1685,7 @@ function csvCell(v) {
    also creates one automatically and embeds the link + QR. */
 async function shareGameplan(btn) {
   const r = Opt.result;
-  if (!r || !r.legs) { alert("Run the optimizer first — there's no route to share yet."); return; }
+  if (!r || !r.legs) { alert("Find a route first."); return; }
   const orig = btn ? btn.textContent : "";
   if (btn) { btn.disabled = true; btn.textContent = "Creating link…"; }
   const raceName = (Lab.editDef && (Lab.editDef.name || Lab.editDef.race_id)) || Opt.raceId || "C4";
@@ -1680,10 +1696,10 @@ async function shareGameplan(btn) {
     if (!res.ok) throw new Error(j.detail || ("HTTP " + res.status));
     let copied = false;
     try { await navigator.clipboard.writeText(j.url); copied = true; } catch (e) { /* http or no permission */ }
-    prompt(copied ? "Route-player link (already copied to your clipboard) — paste it to the crew:"
-                  : "Route-player link — copy it and send it to the crew:", j.url);
+    prompt(copied ? "Link copied. Send it to the crew:"
+                  : "Copy this link and send it to the crew:", j.url);
   } catch (e) {
-    alert("Share failed — " + String((e && e.message) || e));
+    alert("Share failed: " + String((e && e.message) || e));
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = orig; }
   }
@@ -1694,9 +1710,9 @@ async function shareGameplan(btn) {
    and downloaded (same "email the crew" pattern as the CSV export, but the full report). */
 async function downloadGameplanPdf(btn) {
   const r = Opt.result;
-  if (!r || !r.legs) { alert("Run the optimizer first — there's no route to report yet."); return; }
+  if (!r || !r.legs) { alert("Find a route first."); return; }
   const orig = btn ? btn.textContent : "";
-  if (btn) { btn.disabled = true; btn.textContent = "Rendering…"; }
+  if (btn) { btn.disabled = true; btn.textContent = "Making PDF…"; }
   const raceName = (Lab.editDef && (Lab.editDef.name || Lab.editDef.race_id)) || Opt.raceId || "C4";
   try {
     const res = await apiPost("/api/gameplan/pdf",
@@ -1714,7 +1730,7 @@ async function downloadGameplanPdf(btn) {
     document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
   } catch (e) {
-    alert("PDF report failed — " + String((e && e.message) || e));
+    alert("PDF failed: " + String((e && e.message) || e));
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = orig; }
   }
@@ -1726,12 +1742,12 @@ function optRealizedStat(r) {
   const pct = Math.round((rz.realized_pct ?? 1) * 100);
   const helm = Math.round((rz.helm_factor ?? 1) * 100);
   const hs = rz.sea_state_hs_mean || 0;
-  const sea = hs > 0.05 ? ` · sea ~${hs.toFixed(1)}m` : "";
+  const sea = hs > 0.05 ? ` · waves ~${hs.toFixed(1)}m` : "";
   const cls = pct >= 92 ? "ok" : pct >= 82 ? "warn" : "bad";
   // reshape gate: did the sea bend the route (⤳) or only tax the ETA (=)?
   const rsh = (hs > 0.05 && "wave_reshape" in rz)
-    ? ` <span class="muted" title="${attr(rz.wave_reshape_note || "")}">${rz.wave_reshape ? "⤳ reshaped" : "= ETA-only"}</span>` : "";
-  return `<div title="Achievable speed: the route is computed at this fraction of the flat-water polar (helm skill × sea state). The gap to 100% is the boatspeed left to find."><b class="conf ${cls}">${pct}%</b><span>realized · helm ${helm}%${sea}${rsh}</span></div>`;
+    ? ` <span class="muted" title="${attr(rz.wave_reshape_note || "")}">${rz.wave_reshape ? "⤳ waves change route" : "= waves slow only"}</span>` : "";
+  return `<div title="Route speed as % of the full polar (helm and waves). The gap is speed left to find."><b class="conf ${cls}">${pct}%</b><span>of polar · helm ${helm}%${sea}${rsh}</span></div>`;
 }
 
 function optCurrentStat(r) {
@@ -1741,8 +1757,8 @@ function optCurrentStat(r) {
   const peak = r.current_grid && r.current_grid.peak_drift_kn;
   const sub = c.source === "constant"
     ? `${c.drift_kn ?? "?"} kts @ ${c.set_deg ?? "?"}°`
-    : `${c.slices ?? "?"} slices${peak ? ` · pk ${peak} kts` : ""}`;
-  return `<div title="Water current folded into the leg ETAs (set & drift). Source ${esc(src)}."><b>${esc(src)}</b><span>current · ${esc(sub)}</span></div>`;
+    : `${peak ? `peak ${peak} kts` : "varies"}`;
+  return `<div title="Water current included in leg times. Source ${esc(src)}."><b>${esc(src)}</b><span>current · ${esc(sub)}</span></div>`;
 }
 
 // Venue weather-model skill panel: each model weighted by its MEASURED past accuracy at this venue
@@ -1752,45 +1768,44 @@ function optModelSkill(r) {
   const s = r.model_skill;
   if (!s) return "";
   const btn = `<button class="mini" onclick="runModelSkillBackfill()" id="mskBackfill"
-    title="Pull the pre-2021 GRIB archives (HRRR 2015+, GEFS reforecast 2005+) for this venue — minutes, runs once, then cached.">⏳ Deepen history (2005+)</button>`;
+    title="Adds older forecasts (back to 2005) for this venue. Runs once.">⏳ Add older years (2005+)</button>`;
   if (!s.enabled) {
     return `<details class="rail-sec"><summary>Model skill</summary>
-      <div class="muted" style="font-size:12px">${esc(s.note || s.reason || "not weighting")} —
-      routing on static model priors.</div>
+      <div class="muted" style="font-size:12px">${esc(s.note || s.reason || "not weighting")}.
+      Using default model weights.</div>
       ${s.venue_key ? `<div class="muted" style="font-size:11px;margin-top:4px">Venue ${esc(s.venue_key)}${s.station ? " · " + esc(s.station) : ""}</div>${btn}` : ""}
     </details>`;
   }
   const rows = (s.table || []).map((t) => {
     const db = (t.bias_speed_kn || t.bias_dir_deg)
-      ? `<span class="muted" title="bias removed before blending">${t.bias_dir_deg > 0 ? "+" : ""}${t.bias_dir_deg || 0}°</span>` : "—";
+      ? `<span class="muted" title="usual direction error, corrected">${t.bias_dir_deg > 0 ? "+" : ""}${t.bias_dir_deg || 0}°</span>` : "—";
     const yrs = t.n_years ? ` <span class="muted" style="font-size:10px">${t.n_years}y</span>` : "";
     const wcell = t.reference
-      ? `<span class="muted" title="tracked for reference — not in the routing blend">ref</span>`
+      ? `<span class="muted" title="Shown for reference. Not used in the route.">ref</span>`
       : `<b class="conf ${(t.weight >= 1.15) ? "ok" : (t.weight <= 0.85) ? "bad" : ""}">×${t.weight == null ? 1 : t.weight}</b>`;
     return `<tr><td>${esc(t.model.toUpperCase())}${yrs}</td><td>${t.vector_rmse_kn}</td>
       <td>${wcell}</td><td>${db}</td><td class="muted">${t.n}</td></tr>`;
   }).join("");
-  const deep = s.deep ? `<span class="pill ok" title="Includes pre-2021 reforecast archives (HRRR 2015+, GEFS 2005+)">deep history</span>` : "";
+  const deep = s.deep ? `<span class="pill ok" title="Includes older forecasts (HRRR 2015+, GEFS 2005+)">older years</span>` : "";
   const total = (s.table || []).reduce((a, t) => a + (t.n || 0), 0);
   const nSt = (s.station || "").split("+").filter(Boolean).length;
-  return `<details class="rail-sec" open><summary>Model skill — venue backtest ${deep}</summary>
+  return `<details class="rail-sec" open><summary>Model skill — past accuracy here ${deep}</summary>
     <div class="muted" style="font-size:11px;margin-bottom:8px">
-      Each model's <b>past forecasts vs the observed wind</b> at this venue (a forecast-vs-observed
-      backtest, not model agreement). Lower vector-RMSE ⇒ more trusted; each model's persistent
-      veer/speed bias is removed before blending. <b>Weights auto-apply to the route above.</b></div>
+      How close each model's past forecasts were to the measured wind here. Better models count more in the route.
+      ${qhelp("Lower error = more trusted. Each model's usual direction and speed error is corrected before mixing. The weights apply to the route above automatically.")}</div>
     <div class="rail-stats opt-stats" style="margin-bottom:8px">
       <div title="${esc(s.station_name || s.station || "")}"><b>${nSt || "—"}</b><span>obs station${nSt === 1 ? "" : "s"}</span></div>
       <div><b>${s.n_years || 1}</b><span>seasons</span></div>
-      <div title="race-window ±21 days, each season"><b>${s.window ? esc(s.window[0]) + "–" + esc(s.window[1]) : "—"}</b><span>years</span></div>
-      <div title="total matched forecast–observation pairs across models"><b>${total.toLocaleString()}</b><span>comparisons</span></div>
-      <div title="recency half-life: how fast older seasons are down-weighted (models drift)"><b>${s.recency_halflife_y}y</b><span>recency t½</span></div>
+      <div title="Race dates ±21 days, each year"><b>${s.window ? esc(s.window[0]) + "–" + esc(s.window[1]) : "—"}</b><span>years</span></div>
+      <div title="Forecast vs measured pairs, all models"><b>${total.toLocaleString()}</b><span>comparisons</span></div>
+      <div title="Older years count less. This is when a year counts half."><b>${s.recency_halflife_y}y</b><span>half weight after</span></div>
     </div>
-    <div class="muted" style="font-size:10px;margin-bottom:3px">obs: ${esc(s.station || "—")} (${esc(s.obs_source || "")}) · forecast: Open-Meteo 2021+ ${s.deep ? "+ HRRR/GEFS reforecast archives" : ""}</div>
+    <div class="muted" style="font-size:10px;margin-bottom:3px">measured: ${esc(s.station || "—")} (${esc(s.obs_source || "")}) · forecasts: 2021+ ${s.deep ? "+ older years" : ""}</div>
     <table class="legs"><thead><tr>
-      <th title="model (with seasons of data)">Model</th><th title="vector RMSE, kn — headline skill (speed+direction error)">RMSE</th>
-      <th title="blend weight applied (×priority); 'ref' = tracked but not routed">Weight</th>
-      <th title="persistent direction bias removed before blending">Bias</th>
-      <th title="matched forecast–obs pairs">n</th></tr></thead>
+      <th title="Model (years of data)">Model</th><th title="Typical wind error, kn. Lower is better.">Error kn</th>
+      <th title="How much this model counts. 'ref' = not used.">Weight</th>
+      <th title="Usual direction error, corrected">Bias</th>
+      <th title="Number of comparisons">n</th></tr></thead>
       <tbody>${rows}</tbody></table>
     <div style="margin-top:6px">${btn}</div>
     <div id="mskMsg" class="muted" style="font-size:11px;margin-top:4px"></div>
@@ -1802,9 +1817,9 @@ function optModelSkill(r) {
 async function runModelSkillBackfill() {
   const b = document.getElementById("mskBackfill"); const msg = document.getElementById("mskMsg");
   if (!b) return;
-  b.disabled = true; b.textContent = "Deepening… (runs server-side; safe to keep working)";
+  b.disabled = true; b.textContent = "Adding older years… (you can keep working)";
   const setMsg = (t) => { const m = document.getElementById("mskMsg"); if (m) m.textContent = t; };
-  setMsg("Starting the deep backfill (pre-2021 HRRR + GEFS-reforecast archives)…");
+  setMsg("Starting…");
   const body = { race_id: Opt.raceId, course_id: Opt.courseId };
   const se = optStartEpoch(); if (se != null) body.start_epoch = se;
   try {
@@ -1815,7 +1830,7 @@ async function runModelSkillBackfill() {
         const st = await (await api("/api/model-skill/backfill/status")).json();
         if (st.state === "running") {
           const last = (st.progress || []).slice(-1)[0];
-          setMsg("Backfill running… " + (last || "") + " (can take ~an hour — safe to leave this page)");
+          setMsg("Running… " + (last || "") + " (up to an hour, you can leave this page)");
           return;
         }
         clearInterval(poll);
@@ -1823,15 +1838,15 @@ async function runModelSkillBackfill() {
           if (Opt.result) Opt.result.model_skill = st.result;
           if ((location.hash || "#races").slice(1) === "gameplan") renderGameplan();
         } else {
-          setMsg("Backfill failed: " + esc(String(st.error || st.state)));
+          setMsg("Failed: " + esc(String(st.error || st.state)));
           const btn = document.getElementById("mskBackfill");
-          if (btn) { btn.disabled = false; btn.textContent = "⏳ Deepen history (2005+)"; }
+          if (btn) { btn.disabled = false; btn.textContent = "⏳ Add older years (2005+)"; }
         }
       } catch (e) { /* transient poll error — keep polling */ }
     }, 5000);
   } catch (e) {
-    setMsg("Backfill failed: " + esc(String(e.message || e)));
-    b.disabled = false; b.textContent = "⏳ Deepen history (2005+)";
+    setMsg("Failed: " + esc(String(e.message || e)));
+    b.disabled = false; b.textContent = "⏳ Add older years (2005+)";
   }
 }
 
@@ -1855,18 +1870,18 @@ async function synthPlaybook() {
   const startEpoch = optStartEpoch();
   if (startEpoch != null) body.start_epoch = startEpoch;
   Pb.running = true; Pb.result = null;
-  const b = document.getElementById("pbRun"); if (b) { b.disabled = true; b.textContent = "Synthesizing… (models + perturbation scenarios)"; }
-  out.innerHTML = '<div class="loading" style="margin-top:10px">Routing each forecast scenario (per-model + the v2 perturbation fan: shifts, pressure, timing), dedup-ing to plays, and writing the playbook… (~10 min; runs server-side, safe to keep working)</div>';
+  const b = document.getElementById("pbRun"); if (b) { b.disabled = true; b.textContent = "Building… (about 10 min)"; }
+  out.innerHTML = '<div class="loading" style="margin-top:10px">Routing each forecast scenario and writing the playbook. About 10 min. You can keep working.</div>';
   try {
     const start = await (await apiPost("/api/playbook/synthesize", body)).json();
-    if (start.ok === false) throw new Error(start.note || "synthesis busy");
+    if (start.ok === false) throw new Error(start.note || "a playbook is already building");
     // background job — poll for the bundle (the fan runs far past the gateway timeout)
     while (true) {
       await new Promise((r) => setTimeout(r, 10000));
       const st = await (await apiGet("/api/playbook/synthesize/status")).json();
       if (st.state === "done") { Pb.result = st.bundle; break; }
       if (st.state === "error") { Pb.result = { available: false, note: st.error }; break; }
-      if (st.state === "idle") { Pb.result = { available: false, note: "synthesis job vanished (container restarted?)" }; break; }
+      if (st.state === "idle") { Pb.result = { available: false, note: "the playbook job stopped. Run it again." }; break; }
     }
   } catch (e) {
     Pb.result = { available: false, note: String(e) };
@@ -1888,10 +1903,9 @@ function renderPbResult(b) {
       <div class="pb-headline">${esc(b.headline || "")}</div>
       <div class="pb-meta">
         <span class="pill ok">Start: ${esc(rec)}</span>
-        <span class="pill">${agree} model agreement</span>
-        <span class="pill ${(b.decision_spread_min || 0) >= 15 ? "warn" : ""}">stakes ~${Math.round(b.decision_spread_min || 0)} min</span>
-        <span class="pill">${b.variants.length} variants · ${(b.provenance || {}).n_scenarios || "?"} scenarios</span>
-        <span class="muted" style="font-size:11px">via ${esc(((b.provenance || {}).synth_model || "").replace("claude-", ""))}</span>
+        <span class="pill">${agree} of forecasts agree</span>
+        <span class="pill ${(b.decision_spread_min || 0) >= 15 ? "warn" : ""}">worth ~${Math.round(b.decision_spread_min || 0)} min</span>
+        <span class="pill">${b.variants.length} options · ${(b.provenance || {}).n_scenarios || "?"} scenarios</span>
       </div>
       ${pbBoatModelNote(b)}
     </div>
@@ -1900,8 +1914,8 @@ function renderPbResult(b) {
     ${pbDecisionTree(b)}
     <div class="pb-freeze">
       ${sig ? pbSigBox(b) :
-        `<button id="pbFreeze" onclick="freezePlaybook()" ${Pb.freezing ? "disabled" : ""}>${Pb.freezing ? "Freezing…" : "🔒 Freeze & sign for onboard"}</button>
-         <span class="muted" style="font-size:12px">Signs the bundle (sha256) + saves it as the frozen, onboard-loadable homework. RRS 41: frozen at the gun.</span>`}
+        `<button id="pbFreeze" onclick="freezePlaybook()" ${Pb.freezing ? "disabled" : ""}>${Pb.freezing ? "Freezing…" : "🔒 Freeze for the boat"}</button>
+         <span class="muted" style="font-size:12px">Saves a locked copy to send to the boat. No changes after the start.</span>`}
     </div></div>`;
 }
 
@@ -1912,14 +1926,14 @@ function pbPlaysSection(b) {
   const cor = b.corridor;
   if (!plays.length && !robust.length) return "";
   const corLine = cor ? `<div class="muted" style="font-size:12px;margin:4px 0">
-      <b>${cor.verdict === "geometry" ? "⚖ The line matters here" : "🎯 Execution race"}:</b>
-      ${esc(cor.note || "")} (fan spread p90 ${cor.corridor_p90_nm ?? "—"} nm · stakes up to ${cor.stakes_min ?? 0} min)</div>` : "";
+      <b>${cor.verdict === "geometry" ? "⚖ The side matters" : "🎯 Boat speed matters most"}:</b>
+      ${esc(cor.note || "")} (most routes within ${cor.corridor_p90_nm ?? "—"} nm · worth up to ${cor.stakes_min ?? 0} min)</div>` : "";
   const robustLine = robust.length ? `<div class="muted" style="font-size:12px;margin:4px 0">
-      ✅ Nominal holds under: ${robust.map((r) => esc(r.name || r.scenario)).join(" · ")}</div>` : "";
+      ✅ Main plan still works if: ${robust.map((r) => esc(r.name || r.scenario)).join(" · ")}</div>` : "";
   const vs = b.venue_stats;
-  const vsLine = vs ? `<div class="muted" style="font-size:11px;margin:4px 0">Venue fleet-normal (from ${(vs.races || []).length} archived race(s), ${vs.n_boats} boats): XTE ${vs.xte_median_nm}/${vs.xte_p90_nm} nm (median/p90) · behind-own-plan ${vs.behind_median_min}/${vs.behind_p90_min} min — frozen into the bundle for onboard phrasing.</div>` : "";
+  const vsLine = vs ? `<div class="muted" style="font-size:11px;margin:4px 0">Typical here (${(vs.races || []).length} past race(s), ${vs.n_boats} boats): ${vs.xte_median_nm} nm off the plan (most within ${vs.xte_p90_nm}), ${vs.behind_median_min} min behind it (most within ${vs.behind_p90_min}).</div>` : "";
   return `<div style="margin-top:12px">
-    <h4 style="margin:4px 0">Plays — pre-routed answers to scenarios (${plays.length})</h4>
+    <h4 style="margin:4px 0">Plays — ready answers if the weather changes (${plays.length})</h4>
     ${corLine}${robustLine}${vsLine}
     ${plays.map(pbPlayCard).join("")}
   </div>`;
@@ -1932,18 +1946,18 @@ function pbPlayCard(p) {
   return `<details class="pb-var" style="margin-top:6px">
     <summary><b>${esc(p.name)}</b>
       <span class="pill">${esc(p.category)}</span>
-      <span class="pill ${p.stakes_min >= 60 ? "warn" : ""}">stakes ~${p.stakes_min ?? 0} min</span>
+      <span class="pill ${p.stakes_min >= 60 ? "warn" : ""}">worth ~${p.stakes_min ?? 0} min</span>
       ${p.favored_side ? `<span class="pill">${esc(p.favored_side)}</span>` : ""}
       <span class="muted" style="font-size:12px">${esc(p.summary || "")}</span></summary>
-    <div class="pb-row"><span class="pb-lbl">You'd observe</span><span>${esc((p.conditions || {}).narrative || "")}</span></div>
-    ${preds ? `<div class="pb-row"><span class="pb-lbl">Arms when</span><span class="mono" style="font-size:11px">${preds}</span></div>` : ""}
+    <div class="pb-row"><span class="pb-lbl">You'll see</span><span>${esc((p.conditions || {}).narrative || "")}</span></div>
+    ${preds ? `<div class="pb-row"><span class="pb-lbl">Triggers when</span><span class="mono" style="font-size:11px">${preds}</span></div>` : ""}
     ${p.rationale ? `<div class="pb-row"><span class="pb-lbl">Why</span><span>${esc(p.rationale)}</span></div>` : ""}
-    ${p.tradeoffs ? `<div class="pb-row"><span class="pb-lbl">Tradeoffs</span><span>${esc(p.tradeoffs)}</span></div>` : ""}
-    ${p.what_flips_it ? `<div class="pb-row flips"><span class="pb-lbl">Hands back when</span><span>${esc(p.what_flips_it)}</span></div>` : ""}
+    ${p.tradeoffs ? `<div class="pb-row"><span class="pb-lbl">Cost</span><span>${esc(p.tradeoffs)}</span></div>` : ""}
+    ${p.what_flips_it ? `<div class="pb-row flips"><span class="pb-lbl">Ends when</span><span>${esc(p.what_flips_it)}</span></div>` : ""}
     ${(p.response || {}).route ? `<div class="pb-row"><span class="pb-lbl">Route</span><span>${(p.response.route.legs || []).length} legs · ${p.response.route.total_sailed_nm ?? "—"} nm · ${p.response.route.total_tacks ?? "—"} tacks · sails ${esc(((p.response.route.sail_plan || []).map((s) => s.sail || s)).join("→") || "—")}</span></div>` : ""}
     ${(p.response || {}).guidance ? `<div class="pb-row"><span class="pb-lbl">The call</span><span><b>${esc(p.response.guidance)}</b></span></div>` : ""}
-    ${p.boundary ? `<div class="pb-row"><span class="pb-lbl">Flip located</span><span>holds at ${p.boundary.holds}, diverges by ${p.boundary.diverges} — bisected: arms at <b>${p.boundary.threshold}</b> (probe ${p.boundary.probe_diverged ? "diverged" : "held"})</span></div>` : ""}
-    ${(p.table || []).length ? `<div class="pb-row"><span class="pb-lbl">Tabulated</span><span class="mono" style="font-size:11px">${p.table.map((r) => `${esc(r.to || `leg ${r.leg + 1}`)} · ${esc(r.side)} ${r.off_nm}nm: <b>${esc(r.verdict)}</b> (continue ${r.continue_min}m / rejoin ${r.rejoin_min}m)`).join("<br>")}</span></div>` : ""}
+    ${p.boundary ? `<div class="pb-row"><span class="pb-lbl">Switch point</span><span>plan holds at ${p.boundary.holds}, changes by ${p.boundary.diverges}. Switch at <b>${p.boundary.threshold}</b>.</span></div>` : ""}
+    ${(p.table || []).length ? `<div class="pb-row"><span class="pb-lbl">Per leg</span><span class="mono" style="font-size:11px">${p.table.map((r) => `${esc(r.to || `leg ${r.leg + 1}`)} · ${esc(r.side)} ${r.off_nm}nm: <b>${esc(r.verdict)}</b> (continue ${r.continue_min}m / rejoin ${r.rejoin_min}m)`).join("<br>")}</span></div>` : ""}
   </details>`;
 }
 
@@ -1953,22 +1967,22 @@ function pbVariantCard(v, recommended) {
   const rng = v.hours_range ? ` · ${v.hours_range[0]}–${v.hours_range[1]} h` : "";
   return `<div class="pb-var${recommended ? " rec" : ""}">
     <div class="pb-var-top">
-      <b>${esc(v.name)}</b>${recommended ? '<span class="pill ok">default</span>' : ""}
+      <b>${esc(v.name)}</b>${recommended ? '<span class="pill ok">recommended</span>' : ""}
       <span class="pill">${share}</span>
-      <span class="muted" style="font-size:12px">${v.total_hours ?? "—"} h${rng} · <span class="conf ${cc}">conf ${conf ?? "—"}</span> · ${esc((v.supported_by || []).map((m) => m.toUpperCase()).join(", "))}</span>
+      <span class="muted" style="font-size:12px">${v.total_hours ?? "—"} h${rng} · <span class="conf ${cc}">confidence ${conf ?? "—"}</span> · ${esc((v.supported_by || []).map((m) => m.toUpperCase()).join(", "))}</span>
     </div>
     <div class="pb-var-sum">${esc(v.summary || "")}</div>
     ${pbSailPlanRow(v)}
     ${v.rationale ? `<div class="pb-row"><span class="pb-lbl">Why</span><span>${esc(v.rationale)}</span></div>` : ""}
-    ${v.tradeoffs ? `<div class="pb-row"><span class="pb-lbl">Tradeoffs</span><span>${esc(v.tradeoffs)}</span></div>` : ""}
-    ${v.what_flips_it ? `<div class="pb-row flips"><span class="pb-lbl">What flips it</span><span>${esc(v.what_flips_it)}</span></div>` : ""}
+    ${v.tradeoffs ? `<div class="pb-row"><span class="pb-lbl">Cost</span><span>${esc(v.tradeoffs)}</span></div>` : ""}
+    ${v.what_flips_it ? `<div class="pb-row flips"><span class="pb-lbl">What changes it</span><span>${esc(v.what_flips_it)}</span></div>` : ""}
   </div>`;
 }
 
 function pbBoatModelNote(b) {
   const m = b.boat_model; if (!m || !m.sail_inventory) return "";
   const inv = (m.sail_inventory || []).map((s) => `<span class="sail sail-${esc(s)}">${esc(s)}</span>`).join(" ");
-  return `<div class="pb-boatmodel muted" style="font-size:12px;margin-top:6px">⛵ Boat model frozen in: ${inv} · draft ${m.draft_ft ?? "?"} ft · ${Object.keys(m.crossovers || {}).length} TWS crossover bands — loaded onto the copilot.</div>`;
+  return `<div class="pb-boatmodel muted" style="font-size:12px;margin-top:6px">⛵ Sails in this plan: ${inv} · draft ${m.draft_ft ?? "?"} ft.</div>`;
 }
 
 function pbSailPlanRow(v) {
@@ -1991,11 +2005,10 @@ function pbSigBox(b) {
   const sig = b.signature;
   const pid = (b.race_id || "race") + "__" + Math.round(b.start_epoch || 0);
   return `<div class="pb-sig">
-    <span class="pill ok">🔒 Frozen &amp; signed</span>
+    <span class="pill ok">🔒 Frozen</span>
     <code title="sha256">${esc((sig.value || "").slice(0, 16))}…</code>
-    <button class="mini" onclick="downloadPlaybook('${esc(pid)}')">Download bundle</button>
-    <button class="mini" onclick="downloadPlaybookGpx('${esc(pid)}')" title="Course marks as waypoints + the recommended variant as a navigable route + every variant as a drawn track — import on the GPSMAP via ActiveCaptain or a memory card and the gameplan draws on the chart">⤓ GPX (chartplotter)</button>
-    <span class="muted" style="font-size:11px">Drop this at the copilot's <code>PLAYBOOK_PATH</code> onboard.</span>
+    <button class="mini" onclick="downloadPlaybook('${esc(pid)}')">Download playbook</button>
+    <button class="mini" onclick="downloadPlaybookGpx('${esc(pid)}')" title="Marks, route and options for the chartplotter. Load it with ActiveCaptain or a memory card.">⤓ GPX for chartplotter</button>
   </div>`;
 }
 
@@ -2011,7 +2024,7 @@ async function downloadPlaybook(pid) {
     a.href = url; a.download = pid + ".json";
     document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
-  } catch (e) { alert("Could not download the bundle: " + e.message); }
+  } catch (e) { alert("Couldn't download the playbook: " + e.message); }
 }
 
 // The gameplan as GPX for the boat's chartplotter (the GPSMAP imports GPX via ActiveCaptain /
@@ -2026,7 +2039,7 @@ async function downloadPlaybookGpx(pid) {
     a.href = url; a.download = pid + ".gpx";
     document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
-  } catch (e) { alert("Could not download the GPX: " + e.message); }
+  } catch (e) { alert("Couldn't download the GPX: " + e.message); }
 }
 
 async function freezePlaybook() {
@@ -2052,9 +2065,9 @@ async function renderDeploy() {
     catch (e) { view.innerHTML = '<div class="placeholder">Failed to load.</div>'; return; }
   }
   if (!Dep.raceId) Dep.raceId = Lab.sel || (Dep.races[0] && Dep.races[0].race_id) || null;
-  if (!Dep.raceId) { view.innerHTML = '<div class="placeholder">No race — ingest one in the Races tab.</div>'; return; }
+  if (!Dep.raceId) { view.innerHTML = '<div class="placeholder">No race yet. Add one in the Races tab.</div>'; return; }
   try { Dep.ready = await (await apiGet("/api/deploy?race_id=" + encodeURIComponent(Dep.raceId))).json(); }
-  catch (e) { view.innerHTML = '<div class="placeholder">Failed to load deploy state.</div>'; return; }
+  catch (e) { view.innerHTML = '<div class="placeholder">Couldn\'t load the deploy page.</div>'; return; }
   if (stale("deploy")) return;
   paintDeploy();
   depCheckBoat();
@@ -2092,11 +2105,11 @@ function paintDeploy() {
   const pbReady = pbs.length > 0;
   const fmtDate = (e) => e ? new Date(e * 1000).toISOString().slice(0, 16).replace("T", " ") + "Z" : "—";
   const pbOpt = (b) => `<option value="${esc(b.id)}" ${b.id === Dep.sel ? "selected" : ""}>${
-    esc((b.signed ? "🔒 " : "draft ") + (b.headline || b.id).slice(0, 60))} · ${b.n_variants} var · ${esc(fmtDate(b.generated_at))}</option>`;
+    esc((b.signed ? "🔒 " : "draft ") + (b.headline || b.id).slice(0, 60))} · ${b.n_variants} options · ${esc(fmtDate(b.generated_at))}</option>`;
 
   document.getElementById("view").innerHTML = `<div class="opt">
     <div class="card">
-      <h3>Lock-in &amp; Deploy <span class="muted" style="font-weight:400">— freeze the homework + push it onboard</span></h3>
+      <h3>Lock-in &amp; Deploy <span class="muted" style="font-weight:400">— send the race prep to the boat</span></h3>
       <div class="opt-controls">
         <label>Race <select id="depRace" onchange="depPickRace(this.value)">
           ${Dep.races.map((x) => `<option value="${esc(x.race_id)}" ${x.race_id === Dep.raceId ? "selected" : ""}>${esc(x.name || x.race_id)}</option>`).join("")}
@@ -2104,23 +2117,23 @@ function paintDeploy() {
       </div>
 
       <div class="dep-grid">
-        <div class="dep-row">${depPill(r.reviewed, "Race reviewed")}<span class="muted">${r.reviewed ? "signed off for race use" : "approve it in the Races tab"}</span></div>
-        <div class="dep-row">${depPill(c.ready, "Course")}<span class="muted">${esc(c.course_id || "—")} · ${c.marks} marks${c.skipped && c.skipped.length ? " · ⚠ " + c.skipped.length + " un-geocoded (" + c.skipped.map(esc).join(", ") + ")" : ""}</span></div>
+        <div class="dep-row">${depPill(r.reviewed, "Race reviewed")}<span class="muted">${r.reviewed ? "approved" : "approve it in the Races tab"}</span></div>
+        <div class="dep-row">${depPill(c.ready, "Course")}<span class="muted">${esc(c.course_id || "—")} · ${c.marks} marks${c.skipped && c.skipped.length ? " · ⚠ " + c.skipped.length + " without a position (" + c.skipped.map(esc).join(", ") + ")" : ""}</span></div>
         <div class="dep-row">${depPill(fl.ready, "Fleet")}<span class="muted">${fl.roster} boats${fl.scoring ? " · " + esc(fl.scoring) : ""}${fl.tracker_permitted ? " · tracker permitted" : ""}</span></div>
-        <div class="dep-row">${depPill(ck.ready, "Checklists")}<span class="muted">${ck.total} items · ${ck.ipad} →iPad (auto-reminders: sunset / gate / finish triggers on the console + coach)</span></div>
-        <div class="dep-row">${depPill((r.watch || {}).ready, "Watch plan")}<span class="muted">${(r.watch || {}).ready ? (r.watch.blocks + " blocks — seeds the CREW tile (iPad can still edit live)") : "optional — author it on the race in the Races tab"}</span></div>
-        <div class="dep-row">${depPill(pbReady, "Playbook")}<span class="muted">${pbReady ? pbs.length + " frozen for this race" : "synthesize + Freeze & sign one in Gameplan"}</span></div>
+        <div class="dep-row">${depPill(ck.ready, "Checklists")}<span class="muted">${ck.total} items · ${ck.ipad} go to the iPad as reminders</span></div>
+        <div class="dep-row">${depPill((r.watch || {}).ready, "Watch plan")}<span class="muted">${(r.watch || {}).ready ? (r.watch.blocks + " watches. The iPad can still change them.") : "optional. Set it up in the Races tab."}</span></div>
+        <div class="dep-row">${depPill(pbReady, "Playbook")}<span class="muted">${pbReady ? pbs.length + " frozen for this race" : "Build and freeze one in Gameplan."}</span></div>
       </div>
     </div>
 
     <div class="card">
-      <h3>Lock in the homework</h3>
+      <h3>Lock in the playbook</h3>
       ${pbReady ? `
         <div class="opt-controls">
           <label>Playbook <select id="depPb" onchange="Dep.sel=this.value" style="min-width:340px">${pbs.map(pbOpt).join("")}</select></label>
           <button id="depLock" onclick="depLockIn()" ${Dep.busy ? "disabled" : ""}>${lock ? "Re-lock selected" : "🔒 Lock in selected playbook"}</button>
-        </div>` : `<div class="muted">No frozen playbook yet — go to <a href="#gameplan">Gameplan</a>, synthesize the branching playbook, and <b>Freeze &amp; sign</b> it. Then lock it in here.</div>`}
-      ${lock ? `<div class="banner ok" style="margin-top:10px">🔒 Locked in: <code>${esc(lock.playbook_id)}</code>${lock.signed ? ` · sig <code>${esc(lock.signature)}…</code>` : " · <b>unsigned</b>"} · ${esc(fmtDate(lock.locked_at))}</div>` : ""}
+        </div>` : `<div class="muted">No frozen playbook yet. Build one in <a href="#gameplan">Gameplan</a> and freeze it. Then lock it in here.</div>`}
+      ${lock ? `<div class="banner ok" style="margin-top:10px">🔒 Locked in: <code>${esc(lock.playbook_id)}</code>${lock.signed ? ` · signature <code>${esc(lock.signature)}…</code>` : " · <b>unsigned</b>"} · ${esc(fmtDate(lock.locked_at))}</div>` : ""}
     </div>
 
     <div class="card" id="depBoat">${boatPanelInner()}</div>
@@ -2154,18 +2167,18 @@ function boatPanelInner() {
 
   // live line
   let live;
-  if (Dep.boatBusy && !b) live = `<div class="banner">Checking the boat over Tailscale…</div>`;
-  else if (Dep.boat && Dep.boat.error) live = `<div class="banner warn">Couldn't run the boat check (${esc(Dep.boat.error)}). Below is the last push only.</div>`;
-  else if (b && !b.reachable) live = `<div class="banner warn"><b>Boat unreachable</b> over Tailscale — nothing below is live. ${last ? `It is the last push the Lab recorded (${esc(depAgo(last.at))}); the boat may have changed since.` : "The Lab has no push on record either."}<div class="muted" style="font-size:12px;margin-top:4px">${esc(eng.error || cop.error || "")}</div></div>`;
+  if (Dep.boatBusy && !b) live = `<div class="banner">Checking the boat…</div>`;
+  else if (Dep.boat && Dep.boat.error) live = `<div class="banner warn">Couldn't check the boat (${esc(Dep.boat.error)}). Showing the last push only.</div>`;
+  else if (b && !b.reachable) live = `<div class="banner warn"><b>Can't reach the boat.</b> Nothing below is live. ${last ? `This is the last push (${esc(depAgo(last.at))}). The boat may have changed since.` : "No push on record either."}<div class="muted" style="font-size:12px;margin-top:4px">${esc(eng.error || cop.error || "")}</div></div>`;
   else if (b) {
     const rows = [];
     const pbText = (p) => !p ? "no answer" : p.loaded === false ? "no playbook loaded" : p.loaded == null ? (p.note || "unknown") :
-      `${esc(p.race_id || "?")}${p.id ? ` · <code>${esc(p.id)}</code>` : ""}${p.variants != null ? ` · ${p.variants} variants` : ""}${p.plays != null ? ` · ${p.plays} plays` : ""}${p.signed != null ? (p.signed ? (p.signature_ok === false ? " · ⚠ signature BAD" : ` · signed${p.signature ? ` <code>${esc(p.signature)}…</code>` : ""}`) : " · unsigned") : ""}${p.partial ? ` · <span class="muted">older engine: race only</span>` : ""}`;
+      `${esc(p.race_id || "?")}${p.id ? ` · <code>${esc(p.id)}</code>` : ""}${p.variants != null ? ` · ${p.variants} variants` : ""}${p.plays != null ? ` · ${p.plays} plays` : ""}${p.signed != null ? (p.signed ? (p.signature_ok === false ? " · ⚠ signature doesn't match" : ` · signed${p.signature ? ` <code>${esc(p.signature)}…</code>` : ""}`) : " · unsigned") : ""}${p.partial ? ` · <span class="muted">older boat software: race only</span>` : ""}`;
     const okPill = (ok, label) => `<span class="pill ${ok ? "ok" : "warn"}">${ok ? "●" : "○"} ${esc(label)}</span>`;
     rows.push(`<div class="dep-row">${okPill(eng.reachable, "Pi engine")}<span>${eng.reachable ? "playbook: " + pbText(epb) : "unreachable" + (eng.error ? " — " + esc(eng.error) : "")}</span></div>`);
     if (eng.course) rows.push(`<div class="dep-row"><span class="pill" style="visibility:hidden">● Pi engine</span><span>course: ${eng.course.available ? `${esc(eng.course.route || "?")} · ${eng.course.marks} marks${eng.course.mark_names && eng.course.mark_names.length ? ` <span class="muted">(${eng.course.mark_names.map(esc).join(" → ")})</span>` : ""}` : "none loaded"}</span></div>`);
     rows.push(`<div class="dep-row">${okPill(cop.reachable, "Orin copilot")}<span>${cop.reachable ? "playbook: " + pbText(cpb) : "unreachable" + (cop.error ? " — " + esc(cop.error) : "")}</span></div>`);
-    live = `<div class="muted" style="font-size:12px">Live read · ${esc(depStamp(b.checked_at))}</div><div class="dep-grid">${rows.join("")}</div>`;
+    live = `<div class="muted" style="font-size:12px">Checked · ${esc(depStamp(b.checked_at))}</div><div class="dep-grid">${rows.join("")}</div>`;
 
     // live mismatches
     liveRace = (epb && epb.race_id) || (cpb && cpb.loaded && cpb.race_id) || null;
@@ -2176,7 +2189,7 @@ function boatPanelInner() {
     } else if (lock && epb && epb.id && (epb.id !== lock.playbook_id ||
                (epb.signature || "") !== (lock.signature || "")))
       warns.push(epb.id === lock.playbook_id
-        ? `The boat's copy of <code>${esc(epb.id)}</code> has a different signature than the lock-in (re-frozen in between?). Re-lock and push so the boat runs the version you locked.`
+        ? `The boat has a different version of <code>${esc(epb.id)}</code> than the one locked in. Re-lock and push.`
         : `The boat's playbook (<code>${esc(epb.id)}</code>) is not the one locked in here (<code>${esc(lock.playbook_id)}</code>). Push to replace it.`);
     if ((epb && epb.loaded === false) || (cop.reachable && cpb && !cpb.loaded))
       warns.push(`${epb && epb.loaded === false ? "The Pi engine" : "The Orin copilot"} has no playbook loaded.`);
@@ -2186,7 +2199,7 @@ function boatPanelInner() {
   const stepPills = (r) => (r.steps || []).map((x) => `<span class="pill ${x.ok ? "ok" : "warn"}" title="${esc(x.ok ? "" : ((x.detail || {}).error || ""))}">${x.ok ? "✓" : "✗"} ${esc(x.target)} · ${esc(x.step)}</span>`).join(" ");
   const pushLine = (r, label) => `<div style="margin-top:6px"><b>${label}</b> ${esc(depStamp(r.at))} <span class="muted">(${esc(depAgo(r.at))})</span> · ${esc(r.race_name || r.race_id || "?")}${r.playbook_id ? ` · playbook <code>${esc(r.playbook_id)}</code>` : " · <b>no playbook in this push</b>"} · ${r.ok ? `<span style="color:var(--accent2)">✓ all ${(r.steps || []).length} steps loaded</span>` : `<span style="color:var(--warn)">⚠ ${(r.steps || []).filter((x) => x.ok).length} of ${(r.steps || []).length} steps loaded</span>`}<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">${stepPills(r)}</div></div>`;
   let pushes;
-  if (!last) pushes = `<div class="muted" style="margin-top:6px">No push recorded by the Lab. Whatever is aboard was loaded by hand or before push history was kept.</div>`;
+  if (!last) pushes = `<div class="muted" style="margin-top:6px">No push on record. Anything on the boat was loaded by hand or long ago.</div>`;
   else {
     pushes = pushLine(last, "Last push:");
     if (!last.ok && lastOk) pushes += pushLine(lastOk, "Last complete push:");
@@ -2196,7 +2209,7 @@ function boatPanelInner() {
   // matching Pi playbook can't prove the Orin took the new one too
   if (last && !last.ok) {
     const bad = [...new Set((last.steps || []).filter((x) => !x.ok).map((x) => x.target))];
-    warns.push(`The last push did not finish${bad.length ? ` (failed on ${bad.map(esc).join(", ")})` : ""} — the boat may hold a mix of old and new loads. Push again.`);
+    warns.push(`The last push didn't finish${bad.length ? ` (failed on ${bad.map(esc).join(", ")})` : ""}. The boat may have a mix of old and new. Push again.`);
   }
 
   // push-record mismatches: the only signal when the boat is unreachable, and the fallback when an
@@ -2204,14 +2217,14 @@ function boatPanelInner() {
   // copilot can't be read at all
   if (!(b && b.reachable && epb && epb.id && cop.reachable)) {
     const ref = (last && last.ok) ? last : lastOk;
-    if (ref && ref.race_id !== rid) { if (!liveRace) warns.push(`The last complete push was for <b>${esc(ref.race_name || ref.race_id)}</b>, not this race. This race's homework has not gone to the boat.`); }
+    if (ref && ref.race_id !== rid) { if (!liveRace) warns.push(`The last complete push was for <b>${esc(ref.race_name || ref.race_id)}</b>, not this race. This race's prep hasn't gone to the boat.`); }
     else if (lock && ref && ref.playbook_id === lock.playbook_id && (ref.signature || "") !== (lock.signature || ""))
-      warns.push(`The last push sent <code>${esc(lock.playbook_id)}</code> with a different signature than the lock-in (re-frozen in between?). Re-lock and push so the boat runs the version you locked.`);
-    else if (lock && ref && ref.playbook_id !== lock.playbook_id) warns.push(`The locked playbook <code>${esc(lock.playbook_id)}</code> has not been pushed successfully. The last complete push (${esc(depAgo(ref.at))}) ${ref.playbook_id ? `sent <code>${esc(ref.playbook_id)}</code>` : "sent no playbook, so what the boat holds is unknown"}.`);
+      warns.push(`The last push sent a different version of <code>${esc(lock.playbook_id)}</code> than the one locked in. Re-lock and push.`);
+    else if (lock && ref && ref.playbook_id !== lock.playbook_id) warns.push(`The locked playbook <code>${esc(lock.playbook_id)}</code> hasn't reached the boat. The last full push (${esc(depAgo(ref.at))}) ${ref.playbook_id ? `sent <code>${esc(ref.playbook_id)}</code>` : "sent no playbook"}.`);
     else if (lock && ref && ref.at < lock.locked_at) warns.push("You re-locked after the last push. Push again to be sure the boat matches.");
   }
 
-  return `<h3>On the boat <span class="muted" style="font-weight:400">— what the Pi and Orin have loaded</span>
+  return `<h3>On the boat <span class="muted" style="font-weight:400">— what's loaded now</span>
       <button style="float:right;font-size:12px" onclick="depCheckBoat()" ${Dep.boatBusy ? "disabled" : ""}>${Dep.boatBusy ? "Checking…" : "↻ Check boat"}</button></h3>
     ${live || ""}
     ${warns.map((w) => `<div class="banner warn" style="margin:8px 0 0">⚠ ${w}</div>`).join("")}
@@ -2240,15 +2253,15 @@ function deployPanel(lock, t) {
   const res = Dep.pushRes;
   const stepRow = (s) => `<div class="dep-row"><span class="pill ${s.ok ? "ok" : "warn"}">${s.ok ? "✓" : "✗"} ${esc(s.target)} · ${esc(s.step)}</span><span class="muted">${esc(s.ok ? pushDetail(s) : (s.detail && s.detail.error) || JSON.stringify(s.detail).slice(0, 120))}</span></div>`;
   const resHtml = !res ? "" : res.pushing ? `<div class="banner" style="margin-top:10px">Pushing to the boat…</div>`
-    : `<div class="banner ${res.ok ? "ok" : "warn"}" style="margin-top:10px">${res.ok ? "✓ Boat loaded — the iPad picks it up on its next poll (nothing to do there)" : "⚠ Push incomplete — fix and push again (a re-push overwrites everything cleanly)"}</div>
+    : `<div class="banner ${res.ok ? "ok" : "warn"}" style="margin-top:10px">${res.ok ? "✓ Boat loaded. The iPad updates by itself." : "⚠ Push didn't finish. Fix it and push again."}</div>
        <div class="dep-grid" style="margin-top:8px">${(res.steps || []).map(stepRow).join("")}</div>`;
   return `<div class="card">
-    <h3>Deploy onboard <span class="muted" style="font-weight:400">— frozen at the gun (RRS 41)</span></h3>
-    <div class="muted" style="font-size:12px;margin-bottom:8px">Push loads everything over the Lab's Tailscale line: course + fleet + checklist + watch plan + the signed playbook onto the Pi engine, and the same playbook onto the Orin copilot (via the console's ethernet proxy — no restart needed). Every push overwrites the previous load. Downloads below are the manual fallback if the boat is unreachable.</div>
+    <h3>Send to the boat</h3>
+    <div class="muted" style="font-size:12px;margin-bottom:8px">Sends course, fleet, checklist, watch plan and playbook to the boat. Replaces what's there. If the boat is offline, use the downloads below.</div>
     <div class="dep-actions">
       <button id="depPush" onclick="depPush()" ${Dep.busy ? "disabled" : ""}>🚀 Push to boat</button>
-      <button onclick="downloadPlaybook('${esc(pid)}')">⬇ Playbook bundle (→ Orin)</button>
-      <button onclick="downloadHomework('${esc(rid)}')">⬇ Homework package (→ Pi)</button>
+      <button onclick="downloadPlaybook('${esc(pid)}')">⬇ Playbook file (Orin)</button>
+      <button onclick="downloadHomework('${esc(rid)}')">⬇ Race prep file (Pi)</button>
     </div>
     ${resHtml}
     <pre class="dep-cmds">${esc(cmds)}</pre>
@@ -2257,7 +2270,7 @@ function deployPanel(lock, t) {
 
 function pushDetail(s) {
   const d = s.detail || {};
-  if (s.step === "playbook") return `${d.race_id || ""} · ${d.variants ?? "?"} variants · ${d.plays ?? 0} plays${d.signed ? " · signed" + (d.signature_ok === false ? " ⚠ SIGNATURE BAD" : " ✓") : ""}`;
+  if (s.step === "playbook") return `${d.race_id || ""} · ${d.variants ?? "?"} variants · ${d.plays ?? 0} plays${d.signed ? " · signed" + (d.signature_ok === false ? " ⚠ signature doesn't match" : " ✓") : ""}`;
   return JSON.stringify(d).slice(0, 120);
 }
 
@@ -2291,7 +2304,7 @@ async function downloadHomework(rid) {
     a.href = url; a.download = "homework_" + rid + ".json";
     document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
-  } catch (e) { alert("Could not download the homework package: " + e.message); }
+  } catch (e) { alert("Couldn't download the race prep file: " + e.message); }
 }
 
 /* ---------- Fleet (roster + ORC handicaps → corrected-time tactics homework) ---------- */
@@ -2305,7 +2318,7 @@ async function renderFleet() {
     catch (e) { view.innerHTML = '<div class="placeholder">Failed to load.</div>'; return; }
   }
   if (!Lab.sel && Lab.races.length) Lab.sel = Lab.races[0].race_id;
-  if (!Lab.sel) { view.innerHTML = '<div class="placeholder">No race — ingest one in the Races tab.</div>'; return; }
+  if (!Lab.sel) { view.innerHTML = '<div class="placeholder">No race yet. Add one in the Races tab.</div>'; return; }
   let fetched = false;
   if (!Lab.editDef || Lab.editDef.race_id !== Lab.sel) {
     view.innerHTML = '<div class="loading">Loading fleet…</div>';
@@ -2335,15 +2348,15 @@ function fleetRemove(i) { Lab.editDef.fleet.splice(i, 1); paintFleet(); }
 function _fleetCC() { return (document.getElementById("fleetOrcCC") || {}).value || "USA"; }
 function _fleetApplyResult(r, ed) {
   if (Lab.editDef !== ed) return;   // switched race / discarded while the import ran — don't land on it
-  if (!r.ok) { Lab.fleetMsg = r.note || r.detail || "import failed — no boats found"; Lab.fleetMsgErr = true; return; }
+  if (!r.ok) { Lab.fleetMsg = r.note || r.detail || "import failed. No boats found."; Lab.fleetMsgErr = true; return; }
   Lab.editDef.fleet = r.entries || [];
   Lab.fleetMsgErr = false;
   const bits = [`${r.count} boats`];
-  if (r.matched != null) bits.push(`${r.matched}/${r.total} matched to ORC certs`);
+  if (r.matched != null) bits.push(`${r.matched}/${r.total} matched to ORC`);
   if (r.unmatched && r.unmatched.length) bits.push(`${r.unmatched.length} need a handicap by hand`);
-  if (r.seeded_mmsi) bits.push(`${r.seeded_mmsi} kept a seeded MMSI`);
+  if (r.seeded_mmsi) bits.push(`${r.seeded_mmsi} kept their MMSI`);
   if (r.orc_error) bits.push("ORC lookup failed: " + r.orc_error);
-  Lab.fleetMsg = "Imported " + bits.join(" · ") + " — review below, then Save (bar at the bottom).";
+  Lab.fleetMsg = "Imported " + bits.join(" · ") + ". Check below, then Save.";
 }
 // An import REPLACES the draft roster. With boats already in it, ask first and say how many go.
 async function fleetConfirmReplace() {
@@ -2351,7 +2364,7 @@ async function fleetConfirmReplace() {
   if (!n) return true;
   const boats = `${n} boat${n === 1 ? "" : "s"}`;
   return (await askModal("Replace the roster?",
-    `This import replaces all <b>${boats}</b> in the roster with the imported list. Handicaps and fixes you entered by hand on those boats are lost; seeded MMSIs are kept. Nothing is stored until you Save.`,
+    `This replaces all <b>${boats}</b> with the imported list. Handicaps you typed in are lost. MMSIs are kept. Nothing is saved until you Save.`,
     [{ c: "cancel", label: "Cancel", cls: "ghost" }, { c: "replace", label: `Replace ${boats}`, cls: "ghost danger" }],
     "cancel", "cancel")) === "replace";
 }
@@ -2361,7 +2374,7 @@ async function fleetAutoImport(source, extra) {
   Lab.fleetBusy = true;
   // a big fleet from a slow entry-list site (e.g. Bayview Mackinac ~200 boats via bycmack's embedded
   // entries page) + ORC enrichment can take a minute or two — set expectations so the wait isn't a mystery.
-  Lab.fleetMsg = "Importing from public data… (a large fleet or a slow site can take a minute or two)";
+  Lab.fleetMsg = "Importing… A big fleet can take 2 min.";
   paintFleet();
   try {
     const r = await (await apiPost("/api/fleet/import", Object.assign(
@@ -2383,7 +2396,7 @@ async function fleetUploadEntry() {
   if (!f) { Lab.fleetMsg = "Choose an entry-list PDF first."; return paintFleet(); }
   if (!(await fleetConfirmReplace())) return;
   const ed = Lab.editDef;
-  Lab.fleetBusy = true; Lab.fleetMsg = "Extracting the entry list from the PDF…"; paintFleet();
+  Lab.fleetBusy = true; Lab.fleetMsg = "Reading the PDF…"; paintFleet();
   try {
     const fd = new FormData(); fd.append("file", f); fd.append("fleet", JSON.stringify(Lab.editDef.fleet));
     const q = "?race_id=" + encodeURIComponent(Lab.sel) + "&country=" + encodeURIComponent(_fleetCC());
@@ -2430,8 +2443,9 @@ function fleetGunsCard(roster, own) {
   const rows = divs.map((d) => `<label style="margin-right:14px">${esc(d)}${(own.division || "").trim() === d ? " ◆" : ""}
     <input type="datetime-local" value="${epochToWall(ds[d], tz)}" onchange="fleetGunSet('${esc(d)}', this.value)"></label>`).join("");
   return `<div class="card">
-    <h3>Division gun times <span class="muted" style="font-weight:400">— from the SIs (race morning) · ${set}/${divs.length} set</span></h3>
-    <div class="muted" style="font-size:12px;margin-bottom:8px">The elapsed-time term that turns the onboard corrected standings into a <b>full-race</b> best estimate (without these the boat falls back to the ⏺ race-log start — approximate for staggered divisions — or remaining-race deltas). Times are ${tz ? "race-local (" + esc(tz) + ")" : "in this browser's timezone"}. Saved with the roster — use <b>Save</b> in the bar at the bottom.</div>
+    <h3>Start times by division <span class="muted" style="font-weight:400">— ${set}/${divs.length} set</span></h3>
+    <div class="muted" style="font-size:12px;margin-bottom:8px">Needed for full-race corrected standings on the boat. Times are ${tz ? "race local (" + esc(tz) + ")" : "this browser's time"}. Save in the bar below.
+      ${qhelp("From the sailing instructions, on race morning. Without these the boat uses the ⏺ LOG start, which is rough when divisions start at different times.")}</div>
     <div class="opt-controls">${rows}</div>
   </div>`;
 }
@@ -2439,15 +2453,15 @@ function fleetGunsCard(roster, own) {
 async function fleetFindOrc(i) {
   const e = (Lab.editDef.fleet || [])[i];
   if (!e) return;
-  Lab.fleetMsg = `Searching the ORC cert DB for "${e.boat}"…`; Lab.fleetMsgErr = false; paintFleet();
+  Lab.fleetMsg = `Searching ORC for "${e.boat}"…`; Lab.fleetMsgErr = false; paintFleet();
   try {
     const cc = (document.getElementById("fleetOrcCC") || {}).value || "USA,CAN";
     const r = await (await apiPost("/api/fleet/orc-candidates",
       { race_id: Lab.sel, boat: e.boat, sail: e.sail, country: cc })).json();
     Lab.fleetCand = { i, list: r.candidates || [] };
     Lab.fleetMsg = (r.candidates || []).length
-      ? `${r.candidates.length} ORC candidate(s) for "${e.boat}" — pick one below the row.`
-      : `No ORC candidates for "${e.boat}" — fill the handicap by hand.`;
+      ? `${r.candidates.length} ORC match(es) for "${e.boat}". Pick one below the row.`
+      : `No ORC match for "${e.boat}". Enter the handicap by hand.`;
   } catch (err) { Lab.fleetMsg = "ORC search failed: " + (err.message || err); Lab.fleetMsgErr = true; }
   paintFleet();
 }
@@ -2462,7 +2476,7 @@ function fleetApplyCand(i, ci) {
   e.source = (e.source || "") ? e.source + "+orc" : "orc";
   Lab.fleetCand = null;
  
-  Lab.fleetMsg = `Applied ${c.yacht} (${c.country}) to "${e.boat}" — review, then Save (bar at the bottom).`;
+  Lab.fleetMsg = `Applied ${c.yacht} (${c.country}) to "${e.boat}". Check it, then Save.`;
   paintFleet();
 }
 
@@ -2481,7 +2495,7 @@ async function fleetSave() {
   try {
     const r = await postDef("/api/races", { definition: JSON.parse(sent) });
     if (r.saved) { markSaved(sent, ed); ok = true; Lab.fleetMsgErr = false;
-      Lab.fleetMsg = `Saved — ${Lab.editDef.fleet.length} boat${Lab.editDef.fleet.length === 1 ? "" : "s"} in the roster.`; }
+      Lab.fleetMsg = `Saved. ${Lab.editDef.fleet.length} boat${Lab.editDef.fleet.length === 1 ? "" : "s"} in the roster.`; }
     else { Lab.fleetMsg = "Save failed."; Lab.fleetMsgErr = true; }
   } catch (e) { Lab.fleetMsg = "Save failed: " + e.message; Lab.fleetMsgErr = true; }
   paintFleet();
@@ -2492,7 +2506,7 @@ function fleetSrcBadge(e) {
   const s = e.source || "";
   if (!s || s === "manual") return "";
   const orc = s.includes("orc");
-  return ` <span class="pill ${orc ? "ok" : "warn"}" title="${esc(orc ? "handicap from ORC cert" : "entry only; no ORC handicap — fill by hand")}" style="font-size:9px;padding:1px 5px">${orc ? "ORC" : "entry"}</span>`;
+  return ` <span class="pill ${orc ? "ok" : "warn"}" title="${esc(orc ? "Handicap from ORC" : "No ORC handicap. Enter it by hand.")}" style="font-size:9px;padding:1px 5px">${orc ? "ORC" : "entry"}</span>`;
 }
 
 // Read-only "fleet at a glance" — the obvious list of the ingested roster (sorted by division, boat),
@@ -2509,20 +2523,20 @@ function fleetGlance(roster) {
     const i = roster.indexOf(e);
     const unrated = e.rating == null && e.orc_gph == null;
     const findBtn = unrated
-      ? ` <button class="mini" onclick="fleetFindOrc(${i})" title="Search the ORC cert DB by name (fuzzy) — pick a candidate to fill the handicap">find</button>`
+      ? ` <button class="mini" onclick="fleetFindOrc(${i})" title="Search ORC by name and pick a match.">find</button>`
       : "";
     const cand = (Lab.fleetCand && Lab.fleetCand.i === i) ? `<tr><td colspan="6" style="padding:4px 8px 8px">${
       Lab.fleetCand.list.length ? Lab.fleetCand.list.map((c, ci) =>
-        `<button class="mini" style="margin:2px" onclick="fleetApplyCand(${i},${ci})" title="score ${c.score}">` +
+        `<button class="mini" style="margin:2px" onclick="fleetApplyCand(${i},${ci})" title="match ${c.score}">` +
         `${esc(c.yacht || "?")} · ${esc(c.sail || "")} · ${esc(c.cls || "")} · GPH ${c.orc_gph ?? "—"}${c.rating != null ? " · " + c.rating : ""} (${esc(c.country)})</button>`).join("")
-      : '<span class="muted">no ORC candidates found — fill the handicap by hand</span>'
+      : '<span class="muted">no ORC match. Enter the handicap by hand.</span>'
     }</td></tr>` : "";
     return `<tr>
     <td><b>${esc(e.boat || "—")}</b>${fleetSrcBadge(e)}</td>
     <td class="muted">${esc(e.sail || "")}</td>
     <td class="muted">${esc(e.cls || "")}</td>
     <td>${esc(e.division || "")}</td>
-    <td>${e.rating != null ? esc(e.rating) : '<span class="conf bad" title="no ORC handicap — fill it in">—</span>' + findBtn}</td>
+    <td>${e.rating != null ? esc(e.rating) : '<span class="conf bad" title="No ORC handicap. Enter it.">—</span>' + findBtn}</td>
     <td class="muted">${e.orc_gph != null ? esc(e.orc_gph) : ""}</td></tr>` + cand;
   };
   return `<div class="muted" style="font-size:12px;margin-bottom:6px"><b>${roster.length}</b> boat${roster.length === 1 ? "" : "s"} · <b>${rated}</b> with an ORC handicap${rated < roster.length ? ` · <b class="conf bad">${roster.length - rated} missing a rating</b>` : ""} · by division: ${divSummary}</div>
@@ -2549,22 +2563,22 @@ function paintFleet() {
 
   document.getElementById("view").innerHTML = `<div class="opt">
     <div class="card">
-      <h3>Fleet <span class="muted" style="font-weight:400">— competitor roster + ORC handicaps (corrected-time tactics homework)</span></h3>
+      <h3>Fleet <span class="muted" style="font-weight:400">— boats and handicaps</span></h3>
       <div class="opt-controls">
         <label>Race <select id="fleetRace" onchange="fleetPickRace(this.value)">
           ${Lab.races.map((x) => `<option value="${esc(x.race_id)}" ${x.race_id === Lab.sel ? "selected" : ""}>${esc(x.name || x.race_id)}</option>`).join("")}
         </select></label>
-        <span class="muted" style="font-size:12px">Frozen at the gun → matched to AIS / the public tracker onboard for who-beats-whom on corrected time.</span>
+        <span class="muted" style="font-size:12px">The boat uses this to show who's ahead on corrected time.</span>
       </div>
     </div>
 
     <div class="card">
-      <h3>Our boat <span class="muted" style="font-weight:400">— the reference for corrected-time deltas</span></h3>
+      <h3>Our boat</h3>
       <div class="opt-controls">
         <label>Boat ${inp(own.boat, "SR33 \"C4\"", "fleetOwnSet('boat',this.value)", 150)}</label>
         <label>Division ${inp(own.division, "div", "fleetOwnSet('division',this.value)", 70)}</label>
         <label>ORC GPH ${inp(own.orc_gph, "GPH", "fleetOwnSet('orc_gph',this.value)", 70)}</label>
-        <label>Rating ${inp(own.rating, "ToT/ToD", "fleetOwnSet('rating',this.value)", 80)}</label>
+        <label>Rating ${inp(own.rating, "rating", "fleetOwnSet('rating',this.value)", 80)}</label>
         <label>MMSI ${inp(own.mmsi, "MMSI", "fleetOwnSet('mmsi',this.value)", 100)}</label>
       </div>
     </div>
@@ -2572,35 +2586,38 @@ function paintFleet() {
     ${fleetGunsCard(roster, own)}
 
     <div class="card">
-      <h3>Auto-import from public data <span class="muted" style="font-weight:400">— entry list (YB) + ORC handicaps</span></h3>
+      <h3>Import the fleet</h3>
       ${Lab.fleetMsg ? `<div class="banner ${Lab.fleetMsgErr ? "warn" : "ok"}" style="margin-bottom:8px">${esc(Lab.fleetMsg)}</div>` : ""}
-      <div class="muted" style="font-size:12px;margin-bottom:8px">Pull the roster automatically: the <b>YB tracker RaceSetup</b> supplies the entry list (boat, sail #, owner, class) and the public <b>ORC certificate database</b> fills each boat's GPH + rating, matched by sail number / name. Both public; the result is a draft you review &amp; Save. ${ybCfg ? "" : '<b>This race has no YB tracker configured</b> (set it in the Rules/ingest step) — ORC-enrich the existing roster instead, or paste an entry list below.'}</div>
+      <div class="muted" style="font-size:12px;margin-bottom:8px">Gets boats from the YB tracker and handicaps from ORC. Check the list, then Save. ${ybCfg ? "" : '<b>No YB tracker set for this race.</b> Use the website import below, or add ORC handicaps to the current list.'}
+        ${qhelp("YB gives boat, sail number, owner and class. ORC matches each boat by sail number or name and adds GPH and rating. Both are public.")}</div>
       <div class="opt-controls">
-        <span class="muted" style="font-size:12px">Entry list from the <b>YB tracker</b>:</span>
-        <button class="${roster.length ? "mini" : ""}" onclick="fleetAutoImport('both')" ${Lab.fleetBusy || !ybCfg ? "disabled" : ""} title="${ybCfg ? "" : "no YB tracker configured for this race"}">${Lab.fleetBusy ? "Importing…" : "YB entry list + ORC handicaps"}</button>
-        <button class="mini" onclick="fleetAutoImport('yb')" ${Lab.fleetBusy || !ybCfg ? "disabled" : ""}>YB entry list only</button>
-        <label>ORC countries <input id="fleetOrcCC" class="ein" style="width:84px" value="USA,CAN" title="comma-separated ORC cert dumps to match against (a Great Lakes fleet spans both)"></label>
-        <button class="mini" onclick="fleetAutoImport('orc')" ${Lab.fleetBusy ? "disabled" : ""}>Enrich current roster from ORC</button>
+        <span class="muted" style="font-size:12px">From the <b>YB tracker</b>:</span>
+        <button class="${roster.length ? "mini" : ""}" onclick="fleetAutoImport('both')" ${Lab.fleetBusy || !ybCfg ? "disabled" : ""} title="${ybCfg ? "" : "No YB tracker set for this race"}">${Lab.fleetBusy ? "Importing…" : "Boats + handicaps"}</button>
+        <button class="mini" onclick="fleetAutoImport('yb')" ${Lab.fleetBusy || !ybCfg ? "disabled" : ""}>Boats only</button>
+        <label>ORC countries <input id="fleetOrcCC" class="ein" style="width:84px" value="USA,CAN" title="Countries to search, comma separated. Great Lakes = USA,CAN."></label>
+        <button class="mini" onclick="fleetAutoImport('orc')" ${Lab.fleetBusy ? "disabled" : ""}>Add ORC handicaps to list</button>
       </div>
       <div style="margin-top:10px;border-top:1px solid var(--line);padding-top:10px">
-        <div class="muted" style="font-size:12px;margin-bottom:6px">Or from the <b>regatta website</b> (for races with no YB tracker — most races). <b>A YachtScoring or Regatta Network event link works directly</b> — paste the <code>yachtscoring.com/emenu/&lt;id&gt;</code> or <code>regattanetwork.com/…?regatta_id=&lt;id&gt;</code> URL. Most other regatta sites are JavaScript-rendered, so a URL fetch can't see the list — for those, <b>paste the entry-list text</b> (select it on the page → copy → paste below) or upload the PDF. ORC then fills the handicaps:</div>
+        <div class="muted" style="font-size:12px;margin-bottom:6px">Or from the <b>regatta website</b>. YachtScoring and Regatta Network links work directly. For other sites, copy the entry list and paste it below, or upload the PDF.
+          ${qhelp("Paste a <code>yachtscoring.com/emenu/…</code> or <code>regattanetwork.com/…?regatta_id=…</code> link. Most other sites build the list in the browser, so the Lab can't read the link. ORC then fills the handicaps.")}</div>
         <div class="opt-controls">
-          <input id="fleetWebUrl" class="ein" style="width:340px" placeholder="YachtScoring or Regatta Network event URL">
-          <button class="${roster.length ? "mini" : ""}" onclick="fleetWebImport()" ${Lab.fleetBusy ? "disabled" : ""}>Fetch &amp; extract + ORC</button>
+          <input id="fleetWebUrl" class="ein" style="width:340px" placeholder="YachtScoring or Regatta Network link">
+          <button class="${roster.length ? "mini" : ""}" onclick="fleetWebImport()" ${Lab.fleetBusy ? "disabled" : ""}>Import from website</button>
           <label>PDF <input type="file" id="fleetEntryPdf" accept=".pdf,application/pdf"></label>
-          <button class="mini" onclick="fleetUploadEntry()" ${Lab.fleetBusy ? "disabled" : ""}>Upload entry-list PDF</button>
+          <button class="mini" onclick="fleetUploadEntry()" ${Lab.fleetBusy ? "disabled" : ""}>Upload PDF</button>
         </div>
-        <textarea id="fleetWebText" rows="3" style="width:100%;box-sizing:border-box;margin-top:6px" placeholder="…or paste the entry-list text here (best for JS-rendered hubs like YachtScoring/Regatta Network where a fetch can't reach the list) — then Fetch &amp; extract"></textarea>
+        <textarea id="fleetWebText" rows="3" style="width:100%;box-sizing:border-box;margin-top:6px" placeholder="…or paste the entry list here, then tap Import from website"></textarea>
       </div>
-      <div class="muted" style="font-size:11px;margin-top:6px">Auto-import REPLACES the draft roster with the imported boats (it asks first; Save to persist). Unmatched boats keep their identity — fill the handicap by hand. Sail # is the ORC match key, so check it on any unmatched boat. <b>MMSIs you've seeded are preserved</b> across a re-import (entry lists never carry MMSI; a seeded MMSI is what makes an AIS target match a roster boat exactly).</div>
+      <div class="muted" style="font-size:11px;margin-top:6px">Import replaces the list (it asks first). Boats with no ORC match keep their name. Enter their handicap by hand.
+        ${qhelp("ORC matches by sail number, so check it on unmatched boats. MMSIs you typed in are kept on a re-import. The MMSI is how a boat on AIS is matched to this list.")}</div>
     </div>
 
     <div class="card">
-      <h3>Roster <span class="muted" style="font-weight:400">— the ingested fleet</span>
-        ${roster.length ? '<span class="pill warn if-dirty" style="margin-left:8px">unsaved — Save in the bar at the bottom</span><span class="pill ok if-clean" style="margin-left:8px">saved</span>' : ""}</h3>
-      ${roster.length ? fleetGlance(roster) : `<div class="banner warn">No boats in the roster yet. Auto-import from the YB tracker or the regatta website above (then <b>Save</b> in the bar at the bottom), or add/paste boats manually. An import only fills a draft here — it isn't stored until you Save.</div>`}
+      <h3>Roster
+        ${roster.length ? '<span class="pill warn if-dirty" style="margin-left:8px">not saved</span><span class="pill ok if-clean" style="margin-left:8px">saved</span>' : ""}</h3>
+      ${roster.length ? fleetGlance(roster) : `<div class="banner warn">No boats yet. Import above or add boats by hand. Then <b>Save</b>.</div>`}
       <details ${Lab.fleetEdit ? "open" : ""} style="margin-top:10px" ontoggle="Lab.fleetEdit=this.open">
-        <summary style="cursor:pointer;font-size:13px">Edit roster ${roster.length ? `(${roster.length} — add / remove / fix handicaps)` : "(add boats)"}</summary>
+        <summary style="cursor:pointer;font-size:13px">Edit roster ${roster.length ? `(${roster.length})` : "(add boats)"}</summary>
         ${roster.length ? `<table class="fleet-tbl" style="margin-top:8px"><thead><tr>
           <th>Boat</th><th>Sail #</th><th>Div</th><th>Class</th><th>Owner</th><th>ORC GPH</th><th>Rating</th><th>MMSI</th><th></th>
           </tr></thead><tbody>${roster.map(row).join("")}</tbody></table>` : ""}
@@ -2609,7 +2626,7 @@ function paintFleet() {
     </div>
 
     <div class="dep-row" style="margin-top:4px"><a href="#rules">Rules →</a>
-      <span class="muted">scoring ${esc(sc.method || "not set")} · tracker ${tr.provider ? esc(tr.provider) + (permitted ? " (permitted onboard)" : " (not permitted onboard)") : "not configured"}</span></div>
+      <span class="muted">scoring ${esc(sc.method || "not set")} · tracker ${tr.provider ? esc(tr.provider) + (permitted ? " (allowed on board)" : " (not allowed on board)") : "not set"}</span></div>
   </div>`;
   syncDirty();
 }
@@ -2625,7 +2642,7 @@ async function renderRules() {
     catch (e) { view.innerHTML = '<div class="placeholder">Failed to load.</div>'; return; }
   }
   if (!Lab.sel && Lab.races.length) Lab.sel = Lab.races[0].race_id;
-  if (!Lab.sel) { view.innerHTML = '<div class="placeholder">No race — ingest one in the Races tab.</div>'; return; }
+  if (!Lab.sel) { view.innerHTML = '<div class="placeholder">No race yet. Add one in the Races tab.</div>'; return; }
   let fetched = false;
   if (!Lab.editDef || Lab.editDef.race_id !== Lab.sel) {
     view.innerHTML = '<div class="loading">Loading checklist…</div>';
@@ -2692,16 +2709,16 @@ function paintRules() {
   const reqBlock = (r, i) => `<div class="req-block ${r.critical ? "crit" : ""}">
     <div class="req-l1">
       <label class="req-chk"><input type="checkbox" ${checked[r.id] ? "checked" : ""} onchange="checkToggle('${attr(r.id)}',this.checked)"></label>
-      ${ein(`requirements.${i}.text`, r.text, "requirement text")}
+      ${ein(`requirements.${i}.text`, r.text, "item")}
       <button class="mini" onclick="reqRemove(${i})" title="remove">✕</button>
     </div>
     <div class="req-l2">
       ${esel(`requirements.${i}.category`, r.category, REQ_CATEGORIES)}
       ${esel(`requirements.${i}.phase`, r.phase, REQ_PHASES)}
       ${esel(`requirements.${i}.trigger_type`, r.trigger_type || "none", TRIGGER_TYPES)}
-      ${ein(`requirements.${i}.trigger_detail`, r.trigger_detail, "trigger detail")}
+      ${ein(`requirements.${i}.trigger_detail`, r.trigger_detail, "when (detail)")}
       ${ein(`requirements.${i}.source`, r.source, "source §")}
-      ${echk(`requirements.${i}.deliver_to_ipad`, r.deliver_to_ipad, "→iPad")}
+      ${echk(`requirements.${i}.deliver_to_ipad`, r.deliver_to_ipad, "to iPad")}
       ${echk(`requirements.${i}.critical`, r.critical, "critical")}
     </div></div>`;
 
@@ -2717,7 +2734,7 @@ function paintRules() {
 
   document.getElementById("view").innerHTML = `<div class="opt">
     <div class="card">
-      <h3>Rules, Safety &amp; Checklists <span class="muted" style="font-weight:400">— the prep checklist + the race rules layer</span></h3>
+      <h3>Rules &amp; Checklist</h3>
       <div class="opt-controls">
         <label>Race <select onchange="rulesPickRace(this.value)">
           ${Lab.races.map((x) => `<option value="${attr(x.race_id)}" ${x.race_id === Lab.sel ? "selected" : ""}>${esc(x.name || x.race_id)}</option>`).join("")}
@@ -2726,44 +2743,44 @@ function paintRules() {
     </div>
 
     <div class="card">
-      <h3>Rules profile <span class="muted" style="font-weight:400">— RRS-41 carve-out, scoring, modifications</span></h3>
+      <h3>Race rules <span class="muted" style="font-weight:400">— outside help, scoring, rule changes</span></h3>
       <div class="opt-controls">
-        <label>RRS edition ${ein("rules_profile.rrs_edition", rp.rrs_edition, "2025-2028")}</label>
-        <label>Tracker permitted onboard? ${etri("rules_profile.tracker_permitted", rp.tracker_permitted)}</label>
+        <label>Rules edition ${ein("rules_profile.rrs_edition", rp.rrs_edition, "2025-2028")}</label>
+        <label>Tracker allowed on board? ${etri("rules_profile.tracker_permitted", rp.tracker_permitted)}</label>
       </div>
       <div class="dep-grid" style="margin-top:8px">
-        ${echk("rules_profile.info_available_to_all_permitted", rp.info_available_to_all_permitted, "Info available to all boats permitted (RRS 41 §2.1(d) carve-out)")}
-        ${echk("rules_profile.customized_advice_while_underway_prohibited", rp.customized_advice_while_underway_prohibited, "Customized advice while underway prohibited")}
-        ${echk("rules_profile.appendix_wp", rp.appendix_wp, "World Sailing Appendix WP (waypoint racing) in force")}
+        ${echk("rules_profile.info_available_to_all_permitted", rp.info_available_to_all_permitted, "Public info allowed on board (rule 41)")}
+        ${echk("rules_profile.customized_advice_while_underway_prohibited", rp.customized_advice_while_underway_prohibited, "No outside advice while racing")}
+        ${echk("rules_profile.appendix_wp", rp.appendix_wp, "Waypoint racing rules apply (Appendix WP)")}
       </div>
       <div class="opt-controls" style="margin-top:8px">
         <label>Scoring system ${ein("rules_profile.scoring.system", sc.system, "ORC")}</label>
         <label>Method ${ein("rules_profile.scoring.method", sc.method, "Single-Number ToT")}</label>
         <label>Ref ${ein("rules_profile.scoring.ref", sc.ref, "NOR §13")}</label>
       </div>
-      <div style="margin-top:10px"><b style="font-size:12px">RRS modifications</b>
-        <div class="muted" style="font-size:11px;margin:2px 0 6px">Ref + rule on top, the full modification text below (wraps — nothing truncated).</div>
+      <div style="margin-top:10px"><b style="font-size:12px">Rule changes</b>
+        <div class="muted" style="font-size:11px;margin:2px 0 6px">Reference and rule on top, full text below.</div>
         ${mods.length ? mods.map((m, i) => `<div class="req-block">
             <div class="req-l1">${ein(`rules_profile.modifications.${i}.ref`, m.ref, "ref (e.g. NOR §2.1)")}
               ${ein(`rules_profile.modifications.${i}.rule`, m.rule, "rule (e.g. RRS 41)")}
               <button class="mini" onclick="modRemove(${i})" title="remove">✕</button></div>
-            <div style="margin-top:5px">${etxt(`rules_profile.modifications.${i}.summary`, m.summary, "what the modification says (full text)")}</div>
+            <div style="margin-top:5px">${etxt(`rules_profile.modifications.${i}.summary`, m.summary, "what the change says")}</div>
           </div>`).join("")
-          : `<div class="muted" style="font-size:12px">No modifications recorded.</div>`}
-        <div style="margin-top:6px"><button class="mini" onclick="modAdd()">+ Add modification</button></div>
+          : `<div class="muted" style="font-size:12px">No rule changes.</div>`}
+        <div style="margin-top:6px"><button class="mini" onclick="modAdd()">+ Add rule change</button></div>
       </div>
     </div>
 
     <div class="card">
-      <h3>Checklist <span class="muted" style="font-weight:400">— ${reqs.length} items · ${ipadN} →iPad · ${critN} critical · ${doneN}/${reqs.length} checked</span></h3>
-      <div class="muted" style="font-size:12px;margin-bottom:8px">The team's prep list (check-off persists separately from the race definition). <b>→iPad</b> items compile into the playbook and surface on the onboard console at their trigger.</div>
-      ${checklistHtml || '<div class="muted">No requirements yet.</div>'}
-      <div style="margin-top:10px"><button class="mini" onclick="reqAdd()">+ Add requirement</button></div>
+      <h3>Checklist <span class="muted" style="font-weight:400">— ${reqs.length} items · ${ipadN} to iPad · ${critN} critical · ${doneN}/${reqs.length} checked</span></h3>
+      <div class="muted" style="font-size:12px;margin-bottom:8px">The team's prep list. <b>To iPad</b> items pop up on the boat at the right time.</div>
+      ${checklistHtml || '<div class="muted">No items yet.</div>'}
+      <div style="margin-top:10px"><button class="mini" onclick="reqAdd()">+ Add item</button></div>
     </div>
 
     <div class="dactions"><button onclick="rulesSave()">Save rules &amp; checklist</button>
       <span id="rulesMsg" class="muted" style="font-size:12px"></span>
-      <span class="muted" style="font-size:11px">(check-off saves on its own)</span></div>
+      <span class="muted" style="font-size:11px">(ticks save by themselves)</span></div>
   </div>`;
   syncDirty();
 }
@@ -2780,7 +2797,7 @@ async function renderMonitor() {
     catch (e) { view.innerHTML = '<div class="placeholder">Failed to load.</div>'; return; }
   }
   if (!Mon.raceId) Mon.raceId = Lab.sel || (Lab.races[0] && Lab.races[0].race_id) || null;
-  if (!Mon.raceId) { view.innerHTML = '<div class="placeholder">No race — ingest one in the Races tab.</div>'; return; }
+  if (!Mon.raceId) { view.innerHTML = '<div class="placeholder">No race yet. Add one in the Races tab.</div>'; return; }
   await monFetch();
   if (stale("monitor")) return;
   paintMonitor();
@@ -2819,23 +2836,23 @@ function paintMonitor() {
   const fmtAge = (s) => s < 3600 ? Math.round(s / 60) + " min" : s < 172800 ? (s / 3600).toFixed(s < 36000 ? 1 : 0) + " h" : Math.round(s / 86400) + " days";
   const flCls = { fresh: "ok", stale: "warn", very_stale: "bad" }[fl.freshness] || "warn";
   const flAge = fl.newest_age_s != null
-    ? ` · newest fix ${fmtAge(fl.newest_age_s)} old${fl.freshness === "fresh" ? "" : fl.freshness === "stale" ? " <span class=\"pill warn\">stale</span>" : " <span class=\"pill bad\">not live</span>"}`
-    : " · <span class=\"pill warn\">fix times unknown</span>";
+    ? ` · latest position ${fmtAge(fl.newest_age_s)} old${fl.freshness === "fresh" ? "" : fl.freshness === "stale" ? " <span class=\"pill warn\">stale</span>" : " <span class=\"pill bad\">not live</span>"}`
+    : " · <span class=\"pill warn\">position times unknown</span>";
   const flLine = fixes.length
     ? `<span class="pill ${flCls}">${fixes.length} boats</span> via ${esc(fl.provider || "tracker")}${flAge}${fl.delay_min ? ` <span class="muted">(tracker runs ~${fl.delay_min} min behind)</span>` : ""}${fl.demo || fl.provider === "sample" ? " <span class=\"pill warn\">demo</span>" : ""}`
     : `<span class="pill warn">no fleet</span> <span class="muted">${esc(fl.reason || "unavailable")}</span>`;
   const rivals = monRivals(fixes, own);
-  const permNote = fl.onboard_permitted ? "permitted onboard (in-race)" : "shore-side only (not permitted onboard for this race)";
+  const permNote = fl.onboard_permitted ? "allowed on board" : "shore only (not allowed on board)";
 
   document.getElementById("view").innerHTML = `<div class="opt">
     <div class="card">
-      <h3>Monitor <span class="muted" style="font-weight:400">— shore-side live view (the boat uses the onboard console in-race)</span></h3>
+      <h3>Monitor <span class="muted" style="font-weight:400">— live view from shore</span></h3>
       <div class="opt-controls">
         <label>Race <select onchange="monPickRace(this.value)">
           ${Lab.races.map((x) => `<option value="${attr(x.race_id)}" ${x.race_id === Mon.raceId ? "selected" : ""}>${esc(x.name || x.race_id)}</option>`).join("")}
         </select></label>
         <button class="mini" onclick="monRefresh()">↻ Refresh</button>
-        <label class="req-flag"><input type="checkbox" ${Mon.auto ? "checked" : ""} onchange="monToggleAuto(this.checked)"> auto (30s)</label>
+        <label class="req-flag"><input type="checkbox" ${Mon.auto ? "checked" : ""} onchange="monToggleAuto(this.checked)"> auto refresh (30 s)</label>
         <label class="req-flag"><input type="checkbox" ${Mon.demo ? "checked" : ""} onchange="monToggleDemo(this.checked)"> demo fleet</label>
         <span class="muted" style="font-size:11px">${Mon.lastAt ? "updated " + new Date(Mon.lastAt).toLocaleTimeString() : ""}</span>
       </div>
@@ -2845,7 +2862,7 @@ function paintMonitor() {
       </div>
     </div>
     <section class="cockpit-map"><div id="monMap" class="routemap routemap-hero"></div></section>
-    ${fixes.length ? `<div class="card"><h3>Fleet positions <span class="muted" style="font-weight:400">— aged from the public tracker</span></h3>
+    ${fixes.length ? `<div class="card"><h3>Fleet positions <span class="muted" style="font-weight:400">— from the public tracker</span></h3>
       <div class="muted" style="font-size:12px;margin-bottom:4px">Tap a row to find that boat on the map. ★ us · ● nearest rivals.</div>
       <table class="fleet-tbl mon-tbl"><thead><tr><th>Boat</th><th>SOG</th><th>COG</th><th>DTF</th><th>Age</th></tr></thead><tbody>
       ${fixes.map((f, i) => ({ f, i })).sort((a, b) => (b.f.own ? 1 : 0) - (a.f.own ? 1 : 0) || (a.f.dtf_nm ?? 1e9) - (b.f.dtf_nm ?? 1e9)).map(({ f, i }) => `<tr class="mon-row${f.own ? " own" : rivals.idx.has(i) ? " rival" : ""}" onclick="monFocus(${i})" title="Show on the map">
@@ -2925,8 +2942,8 @@ function monLegend(map, fixes, own, riv, ownName) {
   const ctl = L.control({ position: "bottomleft" });
   const sw = (css) => `<span class="mon-sw" style="${css}"></span>`;
   const rows = [];
-  if (own.available) rows.push(`${sw(`background:${MON_GOLD};border:2px solid #0b0b0e;box-shadow:0 0 0 4px rgba(245,196,81,.3)`)} ${esc(ownName)} — live (boat telemetry)`);
-  if (fixes.some((f) => f.own)) rows.push(`${sw(`background:#0b0b0e;border:3px solid ${MON_GOLD}`)} ${esc(ownName)} — public tracker fix`);
+  if (own.available) rows.push(`${sw(`background:${MON_GOLD};border:2px solid #0b0b0e;box-shadow:0 0 0 4px rgba(245,196,81,.3)`)} ${esc(ownName)} — live`);
+  if (fixes.some((f) => f.own)) rows.push(`${sw(`background:#0b0b0e;border:3px solid ${MON_GOLD}`)} ${esc(ownName)} — tracker`);
   if (riv.idx.size) rows.push(`${sw(`background:${MON_BLUE};border:1.5px solid #fff`)} ${riv.idx.size} nearest rivals${riv.ref === "live" ? " (to our live position)" : ""}`);
   if (fixes.filter((f) => !f.own).length > riv.idx.size) rows.push(`${sw(`background:${MON_BLUE};opacity:.6;width:8px;height:8px`)} rest of the fleet — zoom in for names`);
   if (!rows.length) return;
@@ -3005,7 +3022,7 @@ async function renderDebrief() {
     catch (e) { view.innerHTML = '<div class="placeholder">Failed to load.</div>'; return; }
   }
   if (!Deb.raceId) Deb.raceId = Lab.sel || (Lab.races[0] && Lab.races[0].race_id) || null;
-  if (!Deb.raceId) { view.innerHTML = '<div class="placeholder">No race — ingest one in the Races tab.</div>'; return; }
+  if (!Deb.raceId) { view.innerHTML = '<div class="placeholder">No race yet. Add one in the Races tab.</div>'; return; }
   try { Deb.playbooks = ((await (await apiGet("/api/playbooks")).json()).playbooks || []).filter((b) => b.race_id === Deb.raceId); }
   catch (e) { Deb.playbooks = []; }
   if (stale("debrief")) return;
@@ -3033,21 +3050,21 @@ function debTrackCard() {
   const t = Deb.track || {};
   const status = t.available
     ? `<span class="pill ok">track loaded</span> <span class="muted">${esc(t.source === "yb" ? "YB" : t.source === "boatlog" ? "boat log" : "GPX")}${t.boat ? " · " + esc(t.boat) : ""} · ${t.n} fixes${t.matched_by ? " · " + esc(t.matched_by) : ""}</span>`
-    : `<span class="muted">No boat track yet — upload a GPX export or fetch our YB track.</span>`;
-  return `<details class="card"><summary><b>Another track source</b> <span class="muted" style="font-weight:400">— a GPX export or the public YB tracker, for a boat-log gap or another boat</span></summary>
+    : `<span class="muted">No track yet. Upload a GPX or get it from YB.</span>`;
+  return `<details class="card"><summary><b>Other track sources</b> <span class="muted" style="font-weight:400">— GPX file or YB tracker</span></summary>
     <div style="margin:4px 0 8px">${status} ${t.available ? '<button class="mini" onclick="debClearTrack()">Remove</button>' : ""}</div>
     <div class="opt-controls">
       <label>GPX <input type="file" id="debGpx" accept=".gpx,application/gpx+xml,text/xml"></label>
       <button onclick="debUploadGpx()" ${Deb.trackBusy ? "disabled" : ""}>Upload GPX</button>
       <span class="muted">or</span>
-      <label>Our boat <input id="debBoat" placeholder="boat name in the YB feed" style="width:200px"></label>
-      <button onclick="debFetchYb()" ${Deb.trackBusy ? "disabled" : ""}>${Deb.trackBusy ? "Fetching…" : "Fetch from YB tracker"}</button>
+      <label>Our boat <input id="debBoat" placeholder="boat name on YB" style="width:200px"></label>
+      <button onclick="debFetchYb()" ${Deb.trackBusy ? "disabled" : ""}>${Deb.trackBusy ? "Fetching…" : "Get from YB"}</button>
     </div>
-    ${t.available && t.window ? `<div class="muted" style="font-size:12px;margin-top:4px">Window: <b>${esc(debWinRange(t.window))}</b> · ${t.window.kind === "derived" ? "derived from the record" : "the ⏺ LOG marker"}${t.window.motion_device ? " · off the " + esc(t.window.motion_device) : ""}${(t.window.provenance || []).map((p) => "<br>· " + esc(p)).join("")}</div>` : ""}
+    ${t.available && t.window ? `<div class="muted" style="font-size:12px;margin-top:4px">Window: <b>${esc(debWinRange(t.window))}</b> · ${t.window.kind === "derived" ? "from the recording" : "from the ⏺ LOG button"}${t.window.motion_device ? " · from the " + esc(t.window.motion_device) : ""}${(t.window.provenance || []).map((p) => "<br>· " + esc(p)).join("")}</div>` : ""}
     ${t.available && t.trust && t.trust.available && trustDanger((t.trust.summary || {}).danger_s, (t.trust.summary || {}).line)
-      ? `<div style="margin-top:6px">${trustBanner("Instrument fault in this track", (t.trust.summary || {}).line, "Danger windows are excluded from polar/helm refinement. Fix the calibration before the next race.")}</div>`
-      : t.available && t.trust ? `<div class="muted" style="font-size:12px;margin-top:2px">Trust: ${t.trust.available ? `<b>${esc(((t.trust.summary || {}).line) || "swept")}</b> — danger windows are excluded from polar/helm refinement` : `<b>sweep unavailable</b> — ${esc(t.trust.note || "")}`}</div>` : ""}
-    <div class="muted" style="font-size:12px;margin-top:4px">GPX: export the track from Expedition / a Vakaros / your instruments / a phone (offline, always works). YB: pulls our boat's full track from the permitted public tracker (shore-side debrief use). ${Deb.trackMsg ? '<b>' + esc(Deb.trackMsg) + '</b>' : ""}</div>
+      ? `<div style="margin-top:6px">${trustBanner("Instrument fault in this track", (t.trust.summary || {}).line, "Bad stretches are left out of the polar. Fix the calibration before the next race.")}</div>`
+      : t.available && t.trust ? `<div class="muted" style="font-size:12px;margin-top:2px">Instrument check: ${t.trust.available ? `<b>${esc(((t.trust.summary || {}).line) || "done")}</b>. Bad stretches are left out.` : `<b>not run</b>. ${esc(t.trust.note || "")}`}</div>` : ""}
+    <div class="muted" style="font-size:12px;margin-top:4px">GPX: export from Expedition, Vakaros, the instruments or a phone. YB: our track from the public tracker. ${Deb.trackMsg ? '<b>' + esc(Deb.trackMsg) + '</b>' : ""}</div>
   </div>`;
 }
 
@@ -3124,7 +3141,7 @@ function debRecordingsCard() {
     const d = x.debrief;
     const when = x.start_ts ? new Date(x.start_ts * 1000).toISOString().slice(0, 16).replace("T", " ") + "Z" : "—";
     const grew = x.marker_hours != null && x.hours != null && x.hours - x.marker_hours > 0.05
-      ? ` <span class="muted" title="the ⏺ LOG button stopped mid-race; the record supports the longer window">(button said ${x.marker_hours} h)</span>` : "";
+      ? ` <span class="muted" title="The ⏺ LOG button stopped early. The recording runs longer.">(button said ${x.marker_hours} h)</span>` : "";
     const state = d
       ? `<span class="pill ok">debriefed</span> <span class="muted">${new Date(d.created_at * 1000).toLocaleDateString()}${d.polar_pct != null ? " · " + d.polar_pct + "% of polar" : ""}${d.n_bins ? " · " + d.n_bins + " measured cells" : ""}${x.n_debriefs > 1 ? " · " + x.n_debriefs + " runs" : ""}</span>`
       : (x.track ? `<span class="pill">track loaded</span> <span class="muted">${x.track.n} fixes</span>`
@@ -3145,13 +3162,14 @@ function debRecordingsCard() {
     ? `<div class="muted" style="font-size:12px;margin-top:6px">Debrief running… <span class="loading-dot"></span><br>${esc((j.progress || []).slice(-3).join(" · "))}</div>`
     : (j.state === "error" ? `<div class="banner warn" style="font-size:12px;margin-top:6px">Debrief failed: ${esc(j.error || "")}</div>` : "");
   return `<div class="card">
-    <h3>Recordings <span class="muted" style="font-weight:400">— every race the boat logged, and which of them has been debriefed</span></h3>
+    <h3>Recordings <span class="muted" style="font-weight:400">— races the boat logged</span></h3>
     ${agentNote}
     ${rows ? `<table class="fleet-tbl"><thead><tr><th>Recording</th><th>Length</th><th>State</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
-           : '<div class="placeholder">No recordings for this race yet — the boat log has no race session here, and no track has been uploaded.</div>'}
+           : '<div class="placeholder">No recordings for this race yet.</div>'}
     ${prog}
     ${Deb.msg ? `<div class="muted" style="font-size:12px;margin-top:6px"><b>${esc(Deb.msg)}</b></div>` : ""}
-    <div class="muted" style="font-size:11px;margin-top:6px">A debrief scores the boat's own speed against its polar and archives the measured cells the boat model learns from — that needs nothing but the recording. With a frozen playbook it also judges the tactics: which side paid, and the regret against the plan you carried.</div>
+    <div class="muted" style="font-size:11px;margin-top:6px">A debrief scores boat speed against the polar. With a frozen playbook it also checks the tactics.
+      ${qhelp("Speed needs only the recording, and it teaches the boat model. Tactics says which side paid and how much time the plan lost.")}</div>
   </div>`;
 }
 
@@ -3175,7 +3193,7 @@ async function debFetchYb() {
   try {
     const r = await (await apiPost("/api/debrief/track/fetch", { race_id: Deb.raceId, boat })).json();
     Deb.trackMsg = r.ok ? `Fetched ${r.n} fixes for ${esc(r.boat || boat)} (${r.matched_by || "matched"}).`
-      : (r.note || r.detail || "fetch failed") + (r.boats ? " — boats: " + r.boats.slice(0, 20).join(", ") : "");
+      : (r.note || r.detail || "fetch failed") + (r.boats ? ". Boats: " + r.boats.slice(0, 20).join(", ") : "");
   } catch (e) { Deb.trackMsg = "fetch failed"; }
   Deb.trackBusy = false;
   await debLoadRecordings();
@@ -3199,7 +3217,7 @@ async function debApply() {
   const msg = document.getElementById("debApplyMsg"); if (msg) msg.textContent = "Saving…";
   try {
     const r = await (await apiPost("/api/debrief/apply", { race_id: Deb.raceId, learnings: ta.value })).json();
-    if (msg) msg.textContent = r.saved ? "Promoted to Learnings ✓" : ("Failed: " + (r.note || ""));
+    if (msg) msg.textContent = r.saved ? "Added to Learnings ✓" : ("Failed: " + (r.note || ""));
   } catch (e) { if (msg) msg.textContent = "Failed: " + e.message; }
 }
 
@@ -3213,14 +3231,14 @@ function paintDebrief() {
 
   document.getElementById("view").innerHTML = `<div class="opt">
     <div class="card">
-      <h3>Debrief <span class="muted" style="font-weight:400">— after every race: what the boat sailed, how fast, and what the model should learn</span></h3>
+      <h3>Debrief <span class="muted" style="font-weight:400">— how the race went</span></h3>
       <div class="opt-controls">
         <label>Race <select onchange="debPickRace(this.value)">
           ${Lab.races.map((x) => `<option value="${attr(x.race_id)}" ${x.race_id === Deb.raceId ? "selected" : ""}>${esc(x.name || x.race_id)}</option>`).join("")}
         </select></label>
         ${(Deb.playbooks || []).length
-          ? `<label title="The frozen plan the debrief judges the tactics against. Without one you still get the performance debrief.">Judge against <select onchange="Deb.playbookId=this.value" style="min-width:300px">${pbOpts}</select></label>`
-          : `<span class="muted">No frozen playbook for this race — the debrief will score the boat's speed, not the tactics. Freeze one in Gameplan before the next race.</span>`}
+          ? `<label title="The plan to check tactics against. Optional.">Compare to plan <select onchange="Deb.playbookId=this.value" style="min-width:300px">${pbOpts}</select></label>`
+          : `<span class="muted">No frozen playbook for this race. The debrief checks speed only.</span>`}
       </div>
     </div>
     ${debRecordingsCard()}
@@ -3242,23 +3260,24 @@ function retroCard() {
        onclick="retroPick('${attr(x.race_id)}')">${esc(x.race_id)} · ${x.entries} boats · ${x.tracks} tracks · ${x.polars} polars · ${x.runs} runs</button>`).join(" ")
     || '<span class="muted">nothing archived yet</span>';
   const jobLine = running
-    ? `<div class="muted" style="font-size:12px;margin-top:6px">Fleet batch running… <span class="loading-dot"></span><br>${esc((j.progress || []).slice(-3).join(" · "))}</div>`
-    : (j.state === "done" && j.result ? `<div class="muted" style="font-size:12px;margin-top:6px"><b>Batch done:</b> ${j.result.ran} boats scored${(j.result.failed || []).length ? ", " + j.result.failed.length + " failed" : ""}.</div>`
-       : (j.state === "error" ? `<div class="muted" style="font-size:12px;margin-top:6px"><b>Batch error:</b> ${esc(j.error || "")}</div>` : ""));
+    ? `<div class="muted" style="font-size:12px;margin-top:6px">Scoring the fleet… <span class="loading-dot"></span><br>${esc((j.progress || []).slice(-3).join(" · "))}</div>`
+    : (j.state === "done" && j.result ? `<div class="muted" style="font-size:12px;margin-top:6px"><b>Done:</b> ${j.result.ran} boats scored${(j.result.failed || []).length ? ", " + j.result.failed.length + " failed" : ""}.</div>`
+       : (j.state === "error" ? `<div class="muted" style="font-size:12px;margin-top:6px"><b>Error:</b> ${esc(j.error || "")}</div>` : ""));
   return `<div class="card">
-    <h3>Fleet retro <span class="muted" style="font-weight:400">— past race, every boat: its ORC polar + the forecast at ITS gun vs the line it actually sailed</span></h3>
+    <h3>Fleet retro <span class="muted" style="font-weight:400">— how every boat sailed a past race</span></h3>
     <div style="margin:4px 0 8px">${archived}</div>
     <div class="opt-controls">
       <label>YB race id <input id="retroYb" value="${attr(Retro.ybId)}" style="width:170px"></label>
-      <button class="mini" onclick="retroIngest()" ${Retro.busy ? "disabled" : ""}>1 · Ingest race</button>
-      <button class="mini" onclick="retroPolars()" ${Retro.busy ? "disabled" : ""}>2 · Match ORC polars</button>
-      <button class="mini" onclick="retroRun()" ${Retro.busy || running ? "disabled" : ""}>${running ? "Batch running…" : "3 · Run fleet batch"}</button>
+      <button class="mini" onclick="retroIngest()" ${Retro.busy ? "disabled" : ""}>1 · Get race</button>
+      <button class="mini" onclick="retroPolars()" ${Retro.busy ? "disabled" : ""}>2 · Find ORC polars</button>
+      <button class="mini" onclick="retroRun()" ${Retro.busy || running ? "disabled" : ""}>${running ? "Scoring…" : "3 · Score the fleet"}</button>
       <button class="mini" onclick="retroReport()" ${Retro.busy ? "disabled" : ""}>4 · Report</button>
       ${Retro.msg ? `<span class="muted" style="font-size:12px">${esc(Retro.msg)}</span>` : ""}
     </div>
     ${jobLine}
     ${retroReportHtml()}
-    <div class="muted" style="font-size:12px;margin-top:6px">Everything gathered is kept in the retro archive (tracks, results, certs/polars, runs, pinned GRIBs). Correlation, not causation — a good crew both routes well and sails fast; correlations run within divisions to blunt rating luck.</div>
+    <div class="muted" style="font-size:12px;margin-top:6px">Compares each boat's line and speed with its best route. Shows patterns, not proof.
+      ${qhelp("Each boat gets its own ORC polar and the forecast at its own start. A good crew both routes well and sails fast. Comparisons run within each division to reduce rating luck. Everything is kept in the retro archive.")}</div>
   </div>`;
 }
 
@@ -3267,16 +3286,16 @@ function retroReportHtml() {
   if (!r) return "";
   if (!r.ok) return `<div class="placeholder" style="margin-top:8px">${esc(r.note || "no report")}</div>`;
   const rho = (v) => v === null || v === undefined ? "—" : `<b style="color:${v > 0.25 ? "var(--ok, #2e7d32)" : (v < -0.25 ? "var(--warn, #b26a00)" : "inherit")}">${v}</b>`;
-  const pooled = r.pooled ? `<div style="margin:6px 0"><b>Pooled (${r.pooled.n} boats):</b>
-      behind-own-optimal vs rank ρ=${rho(r.pooled.rho_behind_min)} ·
-      XTE vs rank ρ=${rho(r.pooled.rho_xte)} ·
-      polar% vs rank ρ=${rho(r.pooled.rho_polar_pct)}
-      <span class="muted" style="font-size:12px">(ρ&gt;0 for behind/XTE = closer to the optimizer line went with a better finish; ρ&lt;0 for polar% = faster execution went with a better finish)</span></div>` : "";
+  const pooled = r.pooled ? `<div style="margin:6px 0"><b>All boats (${r.pooled.n}):</b>
+      time behind best route ρ=${rho(r.pooled.rho_behind_min)} ·
+      distance off best route ρ=${rho(r.pooled.rho_xte)} ·
+      % of polar ρ=${rho(r.pooled.rho_polar_pct)}
+      <span class="muted" style="font-size:12px">(ρ above 0 for the first two: boats closer to the best route finished higher. ρ below 0 for polar: faster boats finished higher.)</span></div>` : "";
   const divs = (r.divisions || []).map((d) => `
     <details style="margin-top:6px"><summary><b>${esc(d.division)}</b> — n=${d.n} ·
-      behind ρ=${rho(d.rho_behind_min)} · XTE ρ=${rho(d.rho_xte)} · extra-dist ρ=${rho(d.rho_extra_distance)} · polar ρ=${rho(d.rho_polar_pct)}
-      · top-third side: ${esc(Object.entries(d.top_third_sides || {}).map(([s, n]) => s + "×" + n).join(", ") || "—")}</summary>
-      <table class="tbl" style="margin-top:4px"><tr><th>#</th><th>boat</th><th>behind own opt</th><th>XTE mean</th><th>extra dist</th><th>polar %</th><th>side</th></tr>
+      behind ρ=${rho(d.rho_behind_min)} · off route ρ=${rho(d.rho_xte)} · extra distance ρ=${rho(d.rho_extra_distance)} · polar ρ=${rho(d.rho_polar_pct)}
+      · top third went: ${esc(Object.entries(d.top_third_sides || {}).map(([s, n]) => s + "×" + n).join(", ") || "—")}</summary>
+      <table class="tbl" style="margin-top:4px"><tr><th>#</th><th>boat</th><th>behind best route</th><th>off route (avg)</th><th>extra distance</th><th>polar %</th><th>side</th></tr>
       ${d.boats.map((b) => `<tr><td>${b.rank}</td><td>${esc(b.boat || "?")}</td><td>${b.behind_min == null ? "—" : Math.round(b.behind_min) + " min"}</td><td>${b.xte_nm == null ? "—" : b.xte_nm + " nm"}</td><td>${b.extra_pct == null ? "—" : b.extra_pct + "%"}</td><td>${b.polar_pct == null ? "—" : b.polar_pct}</td><td>${esc(b.side || "—")}</td></tr>`).join("")}
       </table></details>`).join("");
   return `<div style="margin-top:8px">${pooled}${divs}</div>`;
@@ -3293,16 +3312,16 @@ async function retroPick(raceId) {
 }
 async function retroIngest() {
   Retro.ybId = document.getElementById("retroYb").value.trim();
-  Retro.busy = true; Retro.msg = "ingesting (tracks + results)…"; paintDebrief();
+  Retro.busy = true; Retro.msg = "getting tracks and results…"; paintDebrief();
   try {
     const r = await (await api("/api/retro/ingest", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ race_id: Retro.ybId }) })).json();
-    Retro.msg = r.ok ? `ingested: ${r.tracks} tracks, ${r.results} results, ${r.divisions} divisions` : (r.note || r.detail || "ingest failed");
-  } catch (e) { Retro.msg = "ingest failed"; }
+    Retro.msg = r.ok ? `got ${r.tracks} tracks, ${r.results} results, ${r.divisions} divisions` : (r.note || r.detail || "couldn't get the race");
+  } catch (e) { Retro.msg = "couldn't get the race"; }
   Retro.busy = false; await retroRefresh(); paintDebrief();
 }
 async function retroPolars() {
   Retro.ybId = document.getElementById("retroYb").value.trim();
-  Retro.busy = true; Retro.msg = "matching ORC certs (USA + CAN)…"; paintDebrief();
+  Retro.busy = true; Retro.msg = "finding ORC polars (USA + CAN)…"; paintDebrief();
   try {
     let total = 0;
     for (const cc of ["USA", "CAN"]) {
@@ -3322,7 +3341,7 @@ async function retroRun() {
     Retro.job = { state: "running", progress: [] };
     if (Retro.poll) clearInterval(Retro.poll);
     Retro.poll = setInterval(retroPoll, 8000);
-  } catch (e) { Retro.msg = "batch start failed"; }
+  } catch (e) { Retro.msg = "couldn't start scoring"; }
   paintDebrief();
 }
 async function retroPoll() {
@@ -3343,39 +3362,40 @@ function debTrackScore(at) {
     return `<div class="card"><h3>Speed vs polar</h3><div class="placeholder">${esc(at.note || "No track scored for this recording.")}</div></div>`;
   }
   const tb = at.time_behind_optimal_min;
-  const tbTxt = tb == null ? "—" : (tb >= 0 ? tb + " min behind optimal" : Math.abs(tb) + " min faster than the oracle line");
+  const tbTxt = tb == null ? "—" : (tb >= 0 ? tb + " min behind" : Math.abs(tb) + " min faster");
   const row = (label, val) => `<div class="dep-row"><b style="min-width:150px;display:inline-block">${label}</b> ${val}</div>`;
   // >100% can be real (soft rating / sailing above the cert) once the current is removed — colour it
   // ok when current-corrected, warn when not (likely a fair tide), and a runaway >120 always warns.
   const over = at.polar_pct > 108;
   const polCls = at.polar_pct == null ? "" : (at.polar_pct > 120 ? "warn" : over ? (at.current_corrected ? "ok" : "warn") : (at.polar_pct >= 90 ? "ok" : "bad"));
-  const overNote = over ? (at.current_corrected ? " · &gt;100% = above cert (rated soft?)" : " · &gt;100% — likely current (uncorrected)") : "";
+  const overNote = over ? (at.current_corrected ? " · over 100%: faster than the rating" : " · over 100%: probably current") : "";
   const pol = at.polar_pct == null ? null
     : `<span class="pill ${polCls}">${at.polar_pct}% of polar</span> <span class="muted">(${at.polar_samples} samples${overNote})</span>`;
   const ccNote = at.current_corrected
-    ? `<span class="muted"> · current-corrected (mean ${at.current_mean_kn ?? "?"} kts)</span>`
-    : (at.polar_pct != null ? '<span class="muted"> · no current correction (SOG vs polar)</span>' : "");
+    ? `<span class="muted"> · current removed (avg ${at.current_mean_kn ?? "?"} kts)</span>`
+    : (at.polar_pct != null ? '<span class="muted"> · current not removed</span>' : "");
   // helm_pct = flat-water-equivalent (sea-state loss removed) — the number the learning loop refines
   // helm_factor from. Show it when the seaway materially depressed the raw polar%.
   const helmGap = (at.wave_corrected && at.helm_pct != null && at.polar_pct != null) ? (at.helm_pct - at.polar_pct) : 0;
   const helmRow = helmGap >= 3
-    ? row("Helm (flat-water-equiv)", `<span class="pill ok">${at.helm_pct}%</span> <span class="muted">sea state ~${at.sea_state_hs_mean ?? "?"} m excused ~${helmGap} pts — this is the crew number; polar% above still includes the waves</span>`)
+    ? row("Helm (waves removed)", `<span class="pill ok">${at.helm_pct}%</span> <span class="muted">waves ~${at.sea_state_hs_mean ?? "?"} m cost ~${helmGap} pts. This is the crew's number.</span>`)
     : "";
   const cav = (at.caveats || []).length
     ? `<div class="banner warn" style="margin-top:8px;font-size:12px">${at.caveats.map(esc).join("<br>")}</div>` : "";
   return `<div class="card">
-    <h3>Speed vs polar <span class="muted" style="font-weight:400">— ${esc(at.source === "yb" ? "YB track" : at.source === "boatlog" ? "the boat's own log" : "GPX track")}${at.boat ? " · " + esc(at.boat) : ""} · ${at.fixes_scored}/${at.fixes_total} fixes scored${(at.perf_bins || at.n_bins) ? " · " + ((at.perf_bins || []).length || at.n_bins) + " measured cells archived" : ""}${(at.trust || {}).refused_samples ? " · " + at.trust.refused_samples + " refused (" + esc((at.trust.refused_channels || []).join(", ")) + ")" : ""}</span></h3>
+    <h3>Speed vs polar <span class="muted" style="font-weight:400">— ${esc(at.source === "yb" ? "YB track" : at.source === "boatlog" ? "the boat's own log" : "GPX track")}${at.boat ? " · " + esc(at.boat) : ""} · ${at.fixes_scored}/${at.fixes_total} fixes used${(at.perf_bins || at.n_bins) ? " · " + ((at.perf_bins || []).length || at.n_bins) + " measured cells saved" : ""}${(at.trust || {}).refused_samples ? " · " + at.trust.refused_samples + " left out (" + esc((at.trust.refused_channels || []).join(", ")) + ")" : ""}</span></h3>
     <div class="dep-grid">
-      ${at.oracle_hours != null ? row("Time behind optimal", `${tbTxt} <span class="muted">(sailed ${at.elapsed_hours != null ? at.elapsed_hours.toFixed(1) + " h" : "—"} vs oracle ${at.oracle_hours.toFixed(1)} h)</span>`)
-        : row("Sailed", `${at.elapsed_hours != null ? at.elapsed_hours.toFixed(1) + " h" : "—"} <span class="muted">— no oracle route (no frozen playbook), so there is no time-behind to quote</span>`)}
-      ${row("Distance sailed", `${at.sailed_nm} nm` + (at.extra_distance_pct != null ? ` · <b>${at.extra_distance_pct}% over</b> the optimal ${at.optimal_nm != null ? at.optimal_nm + " nm" : ""}` : "") + (at.rhumb_nm ? ` <span class="muted">(rhumb ${at.rhumb_nm} nm)</span>` : ""))}
-      ${at.xte_mean_nm != null ? row("Cross-track off optimal", `mean ${at.xte_mean_nm} nm · p90 ${at.xte_p90_nm} nm · max ${at.xte_max_nm} nm`) : ""}
-      ${at.side_worked ? row("First beat worked", `<b>${esc(at.side_worked)}</b>`) : ""}
-      ${pol ? row("Polar achieved", pol + ccNote) : ""}
+      ${at.oracle_hours != null ? row("Vs best route", `${tbTxt} <span class="muted">(sailed ${at.elapsed_hours != null ? at.elapsed_hours.toFixed(1) + " h" : "—"}, best route ${at.oracle_hours.toFixed(1)} h)</span>`)
+        : row("Sailed", `${at.elapsed_hours != null ? at.elapsed_hours.toFixed(1) + " h" : "—"} <span class="muted">(no playbook, so no best route to compare)</span>`)}
+      ${row("Distance sailed", `${at.sailed_nm} nm` + (at.extra_distance_pct != null ? ` · <b>${at.extra_distance_pct}% more</b> than the best route${at.optimal_nm != null ? " (" + at.optimal_nm + " nm)" : ""}` : "") + (at.rhumb_nm ? ` <span class="muted">(direct ${at.rhumb_nm} nm)</span>` : ""))}
+      ${at.xte_mean_nm != null ? row("Off the best route", `avg ${at.xte_mean_nm} nm · mostly within ${at.xte_p90_nm} nm · max ${at.xte_max_nm} nm`) : ""}
+      ${at.side_worked ? row("First beat side", `<b>${esc(at.side_worked)}</b>`) : ""}
+      ${pol ? row("% of polar", pol + ccNote) : ""}
       ${helmRow}
     </div>
     ${cav}
-    <div class="muted" style="font-size:11px;margin-top:6px">The boat never sails the optimal line exactly — these are coaching deltas. Oversail + cross-track = steering/tactics; polar% = helm/trim vs conditions. The critique above separates the causes. Measured cells archived here are what <a href="#learnings">Learnings → Refine the boat model</a> proposes from.</div>
+    <div class="muted" style="font-size:11px;margin-top:6px">Nobody sails the best route exactly. Use these for coaching.
+      ${qhelp('Extra distance and distance off route = steering and tactics. % of polar = helm and trim. The measured cells feed <a href="#learnings">Learnings → Refine the boat model</a>.')}</div>
   </div>`;
 }
 
@@ -3384,30 +3404,30 @@ function debReport(r) {
   const w = r.recording || (r.actual_track || {}).window || null;
   const head = `<div class="card">
     <h3>${esc(r.race_name || "Debrief")} <span class="muted" style="font-weight:400">— ${w && w.start_ts ? esc(new Date(w.start_ts * 1000).toISOString().slice(0, 16).replace("T", " ") + "Z") + (w.hours != null ? " · " + w.hours + " h" : "") : "loaded track"}</span></h3>
-    ${r.archived_id ? `<div class="muted" style="font-size:12px">Archived debrief #${r.archived_id}${r.archived_at ? " · " + new Date(r.archived_at * 1000).toLocaleString() : ""} — reopened from the record, not re-run.</div>` : ""}
-    ${r.tactics_available ? "" : `<div class="banner" style="font-size:12px;margin-top:6px"><b>Performance debrief.</b> ${esc(r.tactics_note || "No frozen playbook for this race, so nothing here judges the tactics.")}</div>`}
+    ${r.archived_id ? `<div class="muted" style="font-size:12px">Saved debrief #${r.archived_id}${r.archived_at ? " · " + new Date(r.archived_at * 1000).toLocaleString() : ""}.</div>` : ""}
+    ${r.tactics_available ? "" : `<div class="banner" style="font-size:12px;margin-top:6px"><b>Speed only.</b> ${esc(r.tactics_note || "No frozen playbook, so tactics aren't checked.")}</div>`}
   </div>`;
   return head + (r.tactics_available ? debTacticsCard(r) : "") + `
     <div class="card">
-      <h3>Coach's critique <span class="muted" style="font-weight:400">— ${esc(c.model || "deterministic")}</span></h3>
+      <h3>Coach's critique <span class="muted" style="font-weight:400">— ${esc(c.model || "built-in")}</span></h3>
       <p style="margin:4px 0">${esc(c.assessment || "")}</p>
       ${c.key_lesson ? `<p style="margin:4px 0"><b>Lesson:</b> ${esc(c.key_lesson)}</p>` : ""}
-      ${c.brain_edit ? `<p style="margin:4px 0"><b>Onboard-brain edit:</b> ${esc(c.brain_edit)}</p>` : ""}
+      ${c.brain_edit ? `<p style="margin:4px 0"><b>Change for the boat's advisor:</b> ${esc(c.brain_edit)}</p>` : ""}
       ${c.boat_model_note ? `<p style="margin:4px 0"><b>Boat model:</b> ${esc(c.boat_model_note)}</p>` : ""}
     </div>
     ${debTrackScore(r.actual_track || {})}
     <div class="card">
-      <h3>Write-back → Learnings <span class="muted" style="font-weight:400">— review, then promote to the next prep</span></h3>
+      <h3>Save to Learnings <span class="muted" style="font-weight:400">— check it, then add it</span></h3>
       <textarea id="debLearn" rows="3" style="width:100%;box-sizing:border-box">${esc(c.proposed_learnings || "")}</textarea>
-      <div style="margin-top:8px"><button onclick="debApply()">Promote to Learnings</button> <span id="debApplyMsg" class="muted" style="font-size:12px"></span></div>
+      <div style="margin-top:8px"><button onclick="debApply()">Add to Learnings</button> <span id="debApplyMsg" class="muted" style="font-size:12px"></span></div>
     </div>`;
 }
 
 // The tactics half — only when a frozen playbook gave the oracle something to judge against.
 function debTacticsCard(r) {
   const reg = r.regret, o = r.oracle, pb = r.playbook;
-  const pill = reg.side_matched ? '<span class="pill ok">side held</span>' : '<span class="pill warn">side missed</span>';
-  const regMin = reg.minutes != null ? (reg.minutes >= 0 ? reg.minutes + " min slower than optimal" : Math.abs(reg.minutes) + " min (plan beat the model)") : "—";
+  const pill = reg.side_matched ? '<span class="pill ok">side matched</span>' : '<span class="pill warn">side missed</span>';
+  const regMin = reg.minutes != null ? (reg.minutes >= 0 ? reg.minutes + " min slower than the best route" : Math.abs(reg.minutes) + " min faster (plan beat the best route)") : "—";
   const vrows = (pb.variants || []).map((v) => `<tr class="${v.side === reg.side_paid ? "winrow" : ""}">
       <td>${esc(v.side || "?")}${v.side === pb.recommended ? " ★" : ""}</td>
       <td>${v.total_hours != null ? v.total_hours.toFixed(1) + " h" : ""}</td>
@@ -3417,10 +3437,10 @@ function debTacticsCard(r) {
       <h3>Tactics ${pill}</h3>
       <div class="dep-grid">
         <div class="dep-row"><b style="min-width:130px;display:inline-block">Side that paid</b> <b>${esc(reg.side_paid)}</b> · recommended <b>${esc(reg.recommended_side || "—")}</b> ${reg.side_matched ? "(matched)" : "(missed)"}</div>
-        <div class="dep-row"><b style="min-width:130px;display:inline-block">Oracle optimal</b> ${o.total_hours != null ? o.total_hours.toFixed(1) + " h" : "—"} · plan predicted ${pb.predicted_hours != null ? pb.predicted_hours.toFixed(1) + " h" : "—"}</div>
-        <div class="dep-row"><b style="min-width:130px;display:inline-block">Regret</b> ${esc(regMin)}</div>
+        <div class="dep-row"><b style="min-width:130px;display:inline-block">Best route</b> ${o.total_hours != null ? o.total_hours.toFixed(1) + " h" : "—"} · plan predicted ${pb.predicted_hours != null ? pb.predicted_hours.toFixed(1) + " h" : "—"}</div>
+        <div class="dep-row"><b style="min-width:130px;display:inline-block">Time lost</b> ${esc(regMin)}</div>
       </div>
-      <table class="fleet-tbl" style="margin-top:8px"><thead><tr><th>Variant</th><th>Predicted</th><th>Agreement</th><th>Outcome</th></tr></thead><tbody>${vrows}</tbody></table>
+      <table class="fleet-tbl" style="margin-top:8px"><thead><tr><th>Option</th><th>Predicted</th><th>Forecasts</th><th>Outcome</th></tr></thead><tbody>${vrows}</tbody></table>
       <div class="muted" style="font-size:11px;margin-top:6px">★ = recommended · highlighted = the side that paid. ${esc(r.caveat || "")}</div>
     </div>`;
 }
@@ -3472,18 +3492,18 @@ function paintLearnings() {
   const d = Lab.editDef || {};
   document.getElementById("view").innerHTML = `<div class="opt">
     <div class="card">
-      <h3>Learnings <span class="muted" style="font-weight:400">— the boat-level library (carries across races) + what's applied to this regatta</span></h3>
-      <div class="muted" style="font-size:12px">Active boat: <b>${esc(ab.name || Opt.activeBoat || "—")}</b>${ab.draft_ft != null ? " · draft " + ab.draft_ft + " ft" : ""} · switch boat / draft in <a href="#gameplan">Gameplan</a>. The polars + sail crossovers below are the refined boat model the optimizer routes on and freezes into the playbook.</div>
+      <h3>Learnings <span class="muted" style="font-weight:400">— what we know about the boat and venue</span></h3>
+      <div class="muted" style="font-size:12px">Boat: <b>${esc(ab.name || Opt.activeBoat || "—")}</b>${ab.draft_ft != null ? " · draft " + ab.draft_ft + " ft" : ""} · change it in <a href="#gameplan">Gameplan</a>. The route uses the speeds and sails below.</div>
     </div>
     ${card}
     <div class="card">
-      <h3>Applied to this regatta</h3>
+      <h3>Notes for this race</h3>
       <div class="opt-controls">
         <label>Race <select onchange="learnPickRace(this.value)">
           ${(Lab.races || []).map((x) => `<option value="${attr(x.race_id)}" ${x.race_id === Lab.sel ? "selected" : ""}>${esc(x.name || x.race_id)}</option>`).join("")}
         </select></label>
       </div>
-      <div class="muted" style="font-size:12px;margin:8px 0 4px">Venue / conditions knowledge, calibration reminders, what to apply for this race (free text, saved with the race).</div>
+      <div class="muted" style="font-size:12px;margin:8px 0 4px">Venue tips, calibration reminders, anything for this race.</div>
       <textarea id="learnNotes" rows="6" oninput="if (Lab.editDef) Lab.editDef.learnings_notes = this.value" style="width:100%;box-sizing:border-box" placeholder="e.g. Cove Island current sets NE on the ebb; J2 crossover felt early last year — try 15 kts; main calibration +2° at the masthead…">${esc(d.learnings_notes || "")}</textarea>
       <div style="margin-top:8px"><button onclick="learnSaveNotes()">Save notes</button> <span id="learnMsg" class="muted" style="font-size:12px"></span></div>
     </div>
@@ -3501,17 +3521,18 @@ function learnRefineCard(ab) {
   const pending = (L.proposals || []).find((p) => p.status === "proposed" && (p.kind || "boat_model") === "boat_model");
   const adjN = (ab.polar_adjustments || []).length;
   const applied = (ab.helm_factor != null && Math.abs(ab.helm_factor - 1) > 1e-6) || adjN
-    ? `<div class="muted" style="font-size:12px">Currently applied: helm factor <b>${ab.helm_factor != null ? ab.helm_factor : 1}</b>${ab.helm_factor > 1 ? " (above cert — rated soft)" : ""}${adjN ? ` · <b>${adjN}</b> polar-cell adjustments` : " · no polar overlay"}.</div>` : "";
+    ? `<div class="muted" style="font-size:12px">In use: helm <b>${ab.helm_factor != null ? ab.helm_factor : 1}</b>${ab.helm_factor > 1 ? " (faster than the rating)" : ""}${adjN ? ` · <b>${adjN}</b> polar tweaks` : " · no polar tweaks"}.</div>` : "";
   let body;
   if (L.busy) body = '<div class="loading">Working…</div>';
   else if (pending) body = learnProposalReview(pending);
-  else body = `<div class="muted" style="font-size:12px">Generate a refinement proposal from the archived debriefs for <b>${esc(ab.name || "this boat")}</b>. It suggests a refined helm factor + per-(TWS,TWA) polar adjustments — <b>nothing changes until you approve</b>.</div>
-    <div style="margin-top:8px"><button onclick="learnPropose()">Propose refinements</button> ${L.msg ? `<span class="muted" style="font-size:12px">${esc(L.msg)}</span>` : ""}</div>`;
+  else body = `<div class="muted" style="font-size:12px">Suggest changes to <b>${esc(ab.name || "this boat")}</b>'s boat model from past debriefs. <b>Nothing changes until you approve.</b></div>
+    <div style="margin-top:8px"><button onclick="learnPropose()">Suggest changes</button> ${L.msg ? `<span class="muted" style="font-size:12px">${esc(L.msg)}</span>` : ""}</div>`;
   return `<div class="card">
-    <h3>Refine the boat model <span class="muted" style="font-weight:400">— learning loop · human-approved</span></h3>
+    <h3>Refine the boat model <span class="muted" style="font-weight:400">— you approve every change</span></h3>
     ${applied}
     ${body}
-    <div class="muted" style="font-size:11px;margin-top:8px">The ORC cert stays the canonical polar; approved tweaks are an explicit overlay the optimizer applies. The helm factor sets the overall achievable level; per-cell multipliers capture where the boat is relatively weak/strong by angle.</div>
+    <div class="muted" style="font-size:11px;margin-top:8px">The ORC polar stays the base. Approved changes sit on top.
+      ${qhelp("Helm sets the overall speed level. Polar tweaks show where the boat is fast or slow at a given wind speed and angle.")}</div>
   </div>`;
 }
 
@@ -3524,13 +3545,13 @@ function learnProposalReview(p) {
     <td><b class="conf ${a.mult < 1 ? "bad" : "ok"}">×${a.mult}</b></td>
     <td class="muted">${esc(a.basis || "")}</td></tr>`).join("");
   return `<div class="dep-grid" style="margin-bottom:8px">
-      <div class="dep-row"><b style="min-width:150px;display:inline-block">Overall achieved</b> ${s.overall_pct}% of polar over ${s.n_samples} samples · ${s.recordings ? s.recordings.length + " recording(s) of " : ""}${(s.races || []).length} race(s)${s.excluded_forecast_bins ? ` · <span class="muted">${s.excluded_forecast_bins} forecast-based bin(s) excluded</span>` : ""}${s.thin_cells_skipped ? ` · <span class="muted">${s.thin_cells_skipped} thin cell(s) skipped (&lt; ${s.min_cell_samples} samples)</span>` : ""}</div>
-      <div class="dep-row"><b style="min-width:150px;display:inline-block">Helm factor</b> ${p.helm_current} → <b>${p.helm_proposed}</b>${p.helm_proposed > 1 ? ' <span class="muted">(above cert — rated soft / sailing above the polar)</span>' : ""} <input id="learnHelmEdit" type="number" step="0.01" min="0.5" max="1.2" value="${p.helm_proposed}" style="width:70px;margin-left:8px"> <span class="muted">(editable)</span></div>
+      <div class="dep-row"><b style="min-width:150px;display:inline-block">Overall</b> ${s.overall_pct}% of polar over ${s.n_samples} samples · ${s.recordings ? s.recordings.length + " recording(s) of " : ""}${(s.races || []).length} race(s)${s.excluded_forecast_bins ? ` · <span class="muted">${s.excluded_forecast_bins} from forecasts left out</span>` : ""}${s.thin_cells_skipped ? ` · <span class="muted">${s.thin_cells_skipped} cell(s) under ${s.min_cell_samples} samples skipped</span>` : ""}</div>
+      <div class="dep-row"><b style="min-width:150px;display:inline-block">Helm</b> ${p.helm_current} → <b>${p.helm_proposed}</b>${p.helm_proposed > 1 ? ' <span class="muted">(faster than the rating)</span>' : ""} <input id="learnHelmEdit" type="number" step="0.01" min="0.5" max="1.2" value="${p.helm_proposed}" style="width:70px;margin-left:8px"> <span class="muted">(you can edit)</span></div>
       ${Object.keys(pos).length ? `<div class="dep-row"><b style="min-width:150px;display:inline-block">By point of sail</b> ${Object.entries(pos).map(([k, v]) => `${k} ${v}%`).join(" · ")}</div>` : ""}
     </div>
-    ${rows ? `<div class="muted" style="font-size:12px;margin-bottom:4px">Proposed polar-cell adjustments — untick any you don't want to apply:</div>
-    <table class="fleet-tbl" id="learnAdjTbl"><thead><tr><th></th><th>TWS</th><th>TWA</th><th>Point of sail</th><th>×mult</th><th>Basis</th></tr></thead><tbody>${rows}</tbody></table>`
-      : '<div class="muted" style="font-size:12px">No per-cell adjustments proposed (the boat tracks the polar shape well) — just the helm factor.</div>'}
+    ${rows ? `<div class="muted" style="font-size:12px;margin-bottom:4px">Suggested polar tweaks. Untick any you don't want:</div>
+    <table class="fleet-tbl" id="learnAdjTbl"><thead><tr><th></th><th>TWS</th><th>TWA</th><th>Point of sail</th><th>Change</th><th>Why</th></tr></thead><tbody>${rows}</tbody></table>`
+      : '<div class="muted" style="font-size:12px">No polar tweaks. The boat matches the polar shape. Helm only.</div>'}
     <div style="margin-top:10px">
       <button onclick="learnApply(${p.id})">✓ Approve &amp; apply</button>
       <button class="mini" onclick="learnReject(${p.id})">Reject</button>
@@ -3545,18 +3566,19 @@ function learnWaveCard(ab) {
   const pending = (L.proposals || []).find((p) => p.status === "proposed" && p.kind === "wave_coeffs");
   const wc = ab.wave_coeffs || {};
   const appliedTxt = Object.keys(wc).length
-    ? `<div class="muted" style="font-size:12px">Applied wave model: up <b>${wc.k_up}</b>/m · reach <b>${wc.k_reach}</b>/m · run <b>${wc.k_down}</b>/m (deadband ${wc.hs_deadband} m, floor ${wc.floor}).</div>`
-    : `<div class="muted" style="font-size:12px">Using the conservative default (env) wave priors — calibrate to fit this boat.</div>`;
+    ? `<div class="muted" style="font-size:12px">In use, speed loss per metre of wave: upwind <b>${wc.k_up}</b> · reach <b>${wc.k_reach}</b> · run <b>${wc.k_down}</b> (counts above ${wc.hs_deadband} m, floor ${wc.floor}).</div>`
+    : `<div class="muted" style="font-size:12px">Using default wave settings. Fit them to this boat below.</div>`;
   let body;
   if (L.waveBusy) body = '<div class="loading">Fitting…</div>';
   else if (pending) body = learnWaveReview(pending);
-  else body = `<div class="muted" style="font-size:12px">Fit how much the boat slows per metre of wave height (by point of sail) from the archived debriefs — needs races sailed across a RANGE of sea states. <b>Nothing changes until you approve.</b></div>
-    <div style="margin-top:8px"><button onclick="learnCalibrateWaves()">Calibrate from archive</button> ${L.waveMsg ? `<span class="muted" style="font-size:12px">${esc(L.waveMsg)}</span>` : ""}</div>`;
+  else body = `<div class="muted" style="font-size:12px">Works out how much waves slow the boat, from past debriefs. Needs races in different wave heights. <b>Nothing changes until you approve.</b></div>
+    <div style="margin-top:8px"><button onclick="learnCalibrateWaves()">Fit from past races</button> ${L.waveMsg ? `<span class="muted" style="font-size:12px">${esc(L.waveMsg)}</span>` : ""}</div>`;
   return `<div class="card">
-    <h3>Calibrate the sea-state model <span class="muted" style="font-weight:400">— condition attribution · human-approved</span></h3>
+    <h3>Wave model <span class="muted" style="font-weight:400">— you approve every change</span></h3>
     ${appliedTxt}
     ${body}
-    <div class="muted" style="font-size:11px;margin-top:8px">The wave model carries the sea-state speed loss so <b>helm_factor stays a flat-water number</b> (they don't double-count). Coefficients are fit as k = −slope/intercept of achieved-%-of-polar vs excess Hs, clamped to a sane band; a point of sail with no wave spread keeps its prior.</div>
+    <div class="muted" style="font-size:11px;margin-top:8px">Keeps wave losses out of the helm number.
+      ${qhelp("Waves are counted here, so helm stays a flat-water number. Each point of sail is fit on its own and kept within safe limits. One with no range of wave heights keeps its default.")}</div>
   </div>`;
 }
 
@@ -3564,7 +3586,7 @@ function learnWaveReview(p) {
   const s = p.summary || {};
   const pos = s.by_point_of_sail || {};
   const prop = p.wave || {};
-  const label = { upwind: "Upwind (k_up)", reaching: "Reaching (k_reach)", downwind: "Running (k_down)" };
+  const label = { upwind: "Upwind", reaching: "Reaching", downwind: "Running" };
   const rows = Object.entries(pos).map(([k, d]) => `<tr>
     <td>${esc(label[k] || k)}</td>
     <td>${d.k_current}</td>
@@ -3574,11 +3596,11 @@ function learnWaveReview(p) {
     <td class="muted" style="font-size:11px">${esc(d.note || (d.helm_level != null ? "helm level " + d.helm_level : ""))}</td></tr>`).join("");
   const db = s.deadband || {};
   const dbRow = db.proposed != null
-    ? `<div class="dep-row" style="margin:2px 0"><b style="min-width:150px;display:inline-block">Deadband (knee)</b> ${db.current} → <b>${db.proposed}</b> m <span class="muted">(${esc(db.source === "fit" ? "fit from the data" : "held prior")}${db.floor != null ? ` · floor ${db.floor} held` : ""})</span></div>`
+    ? `<div class="dep-row" style="margin:2px 0"><b style="min-width:150px;display:inline-block">Waves count above</b> ${db.current} → <b>${db.proposed}</b> m <span class="muted">(${esc(db.source === "fit" ? "from the data" : "default")}${db.floor != null ? ` · floor ${db.floor}` : ""})</span></div>`
     : "";
-  return `<div class="muted" style="font-size:12px;margin:4px 0">Fit over ${p.n_bins} cells / ${(s.races || []).length} race(s). Proposed per-metre speed-loss coefficients:</div>
+  return `<div class="muted" style="font-size:12px;margin:4px 0">From ${p.n_bins} cells in ${(s.races || []).length} race(s). Suggested speed loss per metre of wave:</div>
     ${dbRow}
-    <table class="fleet-tbl"><thead><tr><th>Point of sail</th><th>Now</th><th>Proposed</th><th>Cells / Hs spread</th><th>Confidence</th><th></th></tr></thead><tbody>${rows}</tbody></table>
+    <table class="fleet-tbl"><thead><tr><th>Point of sail</th><th>Now</th><th>Proposed</th><th>Cells / wave range</th><th>Confidence</th><th></th></tr></thead><tbody>${rows}</tbody></table>
     <div style="margin-top:10px">
       <button onclick="learnApplyWave(${p.id})">✓ Approve &amp; apply</button>
       <button class="mini" onclick="learnReject(${p.id})">Reject</button>
@@ -3594,14 +3616,14 @@ function learnConfigCard() {
   const cp = (Lab.learning || {}).configPolars;
   const inner = !cp ? '<div class="muted">Loading…</div>'
     : !(cp.configs || []).length
-      ? '<div class="muted" style="font-size:12px">Nothing yet — this fills from boat-log debriefs: the crew taps the CURRENT SAILS bar during a race session, the log rides the backfill, and each configuration accumulates its own observed cells here (incl. combinations the crossover chart doesn\'t rate).</div>'
+      ? '<div class="muted" style="font-size:12px">Nothing yet. Fills in when the crew taps the CURRENT SAILS bar during races.</div>'
       : cp.configs.map((g) => `<details style="margin-bottom:6px"><summary style="cursor:pointer">
           <b>${esc(g.config)}</b> <span class="muted">· ${g.n_cells} cell${g.n_cells === 1 ? "" : "s"} · ${g.samples} samples · ${g.races} race${g.races === 1 ? "" : "s"}</span></summary>
-          <table style="margin-top:6px"><thead><tr><th>TWS</th><th>TWA</th><th>best STW</th><th>vs cert cell</th><th>n</th></tr></thead>
+          <table style="margin-top:6px"><thead><tr><th>TWS</th><th>TWA</th><th>best speed</th><th>vs rating</th><th>n</th></tr></thead>
           <tbody>${g.cells.map((c) => `<tr><td>${c.tws}</td><td>${c.twa}°</td><td><b>${c.best_stw}</b> kts</td><td class="muted">${c.target_stw} (${c.pct}%)</td><td class="muted">${c.samples}</td></tr>`).join("")}</tbody></table>
         </details>`).join("");
   return `<div class="card">
-    <h3>Observed by sail configuration <span class="muted" style="font-weight:400">— the innovation record (from the CURRENT SAILS log)</span></h3>
+    <h3>Speed by sail combination <span class="muted" style="font-weight:400">— from the CURRENT SAILS log</span></h3>
     ${inner}
     ${cp && (cp.configs || []).length ? `<div class="muted" style="font-size:11px;margin-top:6px">${esc(cp.note || "")}</div>` : ""}
   </div>`;
@@ -3626,21 +3648,22 @@ function learnTrendCard() {
     <td>${d.sea_state_hs_mean != null ? d.sea_state_hs_mean + " m" : "—"}</td></tr>`).join("");
   const ms = (t.milestones || []).map((m) => {
     const a = m.applied || {};
-    const what = a.wave_coeffs ? "sea-state model" : (a.helm_factor != null ? `helm ${a.helm_factor}` + ((a.polar_adjustments || []).length ? ` + ${a.polar_adjustments.length} polar cells` : "") : "refinement");
+    const what = a.wave_coeffs ? "wave model" : (a.helm_factor != null ? `helm ${a.helm_factor}` + ((a.polar_adjustments || []).length ? ` + ${a.polar_adjustments.length} polar cells` : "") : "refinement");
     const when = m.decided_at ? new Date(m.decided_at * 1000).toLocaleDateString() : "";
     return `<li>${when} — approved <b>${esc(what)}</b></li>`;
   }).join("");
   return `<div class="card">
     <h3>Performance trend <span class="muted" style="font-weight:400">— ${s.length} race(s), oldest → newest</span></h3>
-    <table class="fleet-tbl"><thead><tr><th>Date</th><th>Race</th><th>Helm (flat-water)</th><th>Polar% (raw)</th><th>vs optimal</th><th>Regret</th><th>Sea state</th></tr></thead><tbody>${rows}</tbody></table>
+    <table class="fleet-tbl"><thead><tr><th>Date</th><th>Race</th><th>Helm (no waves)</th><th>% of polar</th><th>Behind best route</th><th>Time lost</th><th>Waves</th></tr></thead><tbody>${rows}</tbody></table>
     ${ms ? `<div class="muted" style="font-size:12px;margin-top:8px">Applied refinements:</div><ul class="muted" style="font-size:12px;margin:4px 0">${ms}</ul>` : ""}
-    <div class="muted" style="font-size:11px;margin-top:6px">Helm % is the flat-water-equivalent (sea-state loss removed) — the number the refinement loop tracks; Polar% (raw) still includes the seaway, so the gap between them is the conditions. Watch helm trend up and regret/time-behind shrink as approved refinements land.</div>
+    <div class="muted" style="font-size:11px;margin-top:6px">Helm should go up and time lost should go down as changes land.
+      ${qhelp("Helm has the wave loss removed. % of polar still includes waves. The gap between them is the conditions.")}</div>
   </div>`;
 }
 
 function learnArchiveCard() {
   const dbs = (Lab.learning || {}).debriefs || [];
-  if (!dbs.length) return `<div class="card"><h3>Performance archive</h3><div class="muted" style="font-size:12px">No archived debriefs yet — run a debrief with a boat track (in the <a href="#debrief">Debrief</a> tab) and it's recorded here for future review.</div></div>`;
+  if (!dbs.length) return `<div class="card"><h3>Performance archive</h3><div class="muted" style="font-size:12px">No debriefs yet. Run one in the <a href="#debrief">Debrief</a> tab.</div></div>`;
   const rows = dbs.map((d) => `<tr>
     <td>${d.created_at ? new Date(d.created_at * 1000).toLocaleDateString() : ""}</td>
     <td>${esc(d.race_name || d.race_id || "")}${d.window_start ? `<div class="muted" style="font-size:11px">recording ${new Date(d.window_start * 1000).toISOString().slice(0, 16).replace("T", " ")}Z${d.elapsed_hours != null ? " · " + d.elapsed_hours + " h" : ""}</div>` : ""}</td>
@@ -3652,9 +3675,9 @@ function learnArchiveCard() {
     <td>${esc(d.side_worked || "—")}${d.side_matched != null ? (d.side_matched ? " ✓" : " ✗") : ""}</td>
     <td>${esc(d.track_source || "—")}</td></tr>`).join("");
   return `<div class="card">
-    <h3>Performance archive <span class="muted" style="font-weight:400">— ${dbs.length} debrief(s), kept for review · proposals read the latest per recording</span></h3>
-    <table class="fleet-tbl"><thead><tr><th>Date</th><th>Race</th><th>Regret</th><th>vs optimal</th><th>Oversail</th><th>Polar%</th><th>Helm% (flat)</th><th>Side</th><th>Track</th></tr></thead><tbody>${rows}</tbody></table>
-    <div class="muted" style="font-size:11px;margin-top:6px">Every debrief is archived to the ongoing learning database (helm-vs-optimal metrics + observed-vs-polar bins) so race performance is reviewable across the season and feeds the refinement proposals above.</div>
+    <h3>Performance archive <span class="muted" style="font-weight:400">— ${dbs.length} debrief(s)</span></h3>
+    <table class="fleet-tbl"><thead><tr><th>Date</th><th>Race</th><th>Time lost</th><th>Behind best route</th><th>Extra distance</th><th>% of polar</th><th>Helm %</th><th>Side</th><th>Track</th></tr></thead><tbody>${rows}</tbody></table>
+    <div class="muted" style="font-size:11px;margin-top:6px">Every debrief is kept here for the season.</div>
   </div>`;
 }
 
@@ -3664,7 +3687,7 @@ async function learnPropose() {
     const r = await (await apiPost("/api/learning/propose", {})).json();
     if (!r.ok) Lab.learning = Object.assign({}, Lab.learning, { busy: false, msg: r.note || "no proposal" });
     else await learnReload();
-  } catch (e) { Lab.learning = Object.assign({}, Lab.learning, { busy: false, msg: "propose failed" }); }
+  } catch (e) { Lab.learning = Object.assign({}, Lab.learning, { busy: false, msg: "couldn't suggest changes" }); }
   paintLearnings();
 }
 
@@ -3692,7 +3715,7 @@ async function learnCalibrateWaves() {
     const r = await (await apiPost("/api/learning/calibrate-waves", {})).json();
     if (!r.ok) Lab.learning = Object.assign({}, Lab.learning, { waveBusy: false, waveMsg: r.note || "not enough data" });
     else await learnReload();
-  } catch (e) { Lab.learning = Object.assign({}, Lab.learning, { waveBusy: false, waveMsg: "calibrate failed" }); }
+  } catch (e) { Lab.learning = Object.assign({}, Lab.learning, { waveBusy: false, waveMsg: "fit failed" }); }
   Lab.learning = Object.assign({}, Lab.learning, { waveBusy: false }); paintLearnings();
 }
 
@@ -3723,15 +3746,15 @@ function optDegradedBanner(r) {
   const w = r.warnings || [];
   if (!w.length) return "";
   const cls = r.degraded ? "bad" : "warn";
-  const head = r.degraded ? "⚠ Degraded forecast — read before trusting this route" : "⚠ Notes";
+  const head = r.degraded ? "⚠ Weak forecast. Read this before using the route." : "⚠ Notes";
   // when degraded, surface the common-error checklist inline so the cause is actionable (2.5)
   const checklist = r.degraded ? `<div style="margin-top:6px;font-size:12px;font-weight:400">
     <b>What usually fixes it:</b>
     <ul style="margin:3px 0 0 16px;padding:0">
-      <li>The latest model cycle may not be fully posted yet — re-run in ~30 min, or add GFS/NAM (most reliable).</li>
-      <li>Uncheck ECMWF if a source is rate-limited (it can stall the field).</li>
-      <li>Long course past a model's horizon → HRRR only reaches 48 h on synoptic cycles; lean on GFS/NAM.</li>
-      <li>Try <b>Auto</b> or <b>Fast</b> resolution if a Fine run timed out before finishing.</li>
+      <li>The newest forecast may not be out yet. Try again in 30 min, or add GFS/NAM.</li>
+      <li>Uncheck ECMWF if it's slow.</li>
+      <li>HRRR only covers 48 h. For a long race, use GFS/NAM.</li>
+      <li>If a Fine run ran out of time, set Detail to <b>Auto</b> or <b>Fast</b>.</li>
     </ul></div>` : "";
   return `<div class="pill ${cls}" style="display:block;margin-bottom:8px;text-align:left">
     <b>${head}</b><ul style="margin:4px 0 0 16px;padding:0">${w.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>${checklist}</div>`;
@@ -3739,18 +3762,18 @@ function optDegradedBanner(r) {
 
 function optObstacleNote(r) {
   const ob = r.obstacles || {};
-  if (!ob.active) return '<div class="muted" style="font-size:12px;margin-top:6px">Obstacle avoidance off — route may cross land/islands.</div>';
+  if (!ob.active) return '<div class="muted" style="font-size:12px;margin-top:6px">Land avoidance is off. The route may cross land.</div>';
   const L = ob.layers || {};
   const steps = r.obstacle_steps_avoided || 0;
   const boat = r.boat ? esc(r.boat.name) : "boat";
   if (ob.source === "enc") {
-    return `<div class="muted" style="font-size:12px;margin-top:6px">⚓ <b>NOAA ENC charts</b> (draft-aware) — route steered around real land + shoals + obstructions
-      (${steps} candidate steps rejected; cells: land ${L.coastline || 0}, shoal ${L.shoal || 0}, rocks/obstrns ${L.obstruction || 0}, zones ${L.zones || 0}).
-      Shoal no-go = ${boat} draft + margin, depth &lt; <b>${ob.safety_depth_m ?? "?"} m</b>. NOAA GIS export = non-navigational; verify against the official chart.</div>`;
+    return `<div class="muted" style="font-size:12px;margin-top:6px">⚓ <b>NOAA charts</b>: the route avoids land, shoals and obstructions.
+      It keeps out of water under <b>${ob.safety_depth_m ?? "?"} m</b> (${boat} draft plus a margin). Not for navigation. Check the official chart.
+      ${qhelp(`${steps} route steps avoided. Chart cells: land ${L.coastline || 0}, shoal ${L.shoal || 0}, rocks ${L.obstruction || 0}, zones ${L.zones || 0}.`)}</div>`;
   }
-  return `<div class="muted" style="font-size:12px;margin-top:6px">⛰ Natural Earth 1:10m (${esc(ob.data_version || "")}) + this race's islands/zones — route steered around land/islands/zones
-    (${steps} candidate steps rejected; cells: coastline ${L.coastline || 0}, islands ${L.islands || 0}, zones ${L.zones || 0}).
-    Coarse near shore + no depth/shoals — switch Charts to <b>NOAA ENC</b> above for draft-aware accuracy.</div>`;
+  return `<div class="muted" style="font-size:12px;margin-top:6px">⛰ Basic coastline: the route avoids land, islands and race zones.
+    No depths. Pick <b>NOAA charts</b> above to avoid shoals.
+    ${qhelp(`${steps} route steps avoided. Map cells: coastline ${L.coastline || 0}, islands ${L.islands || 0}, zones ${L.zones || 0}. Data: Natural Earth ${esc(ob.data_version || "")}.`)}</div>`;
 }
 
 
@@ -3932,7 +3955,7 @@ function polSvg() {
     const [lx, ly] = XY(a, maxV + 0.35);
     out.push(`<text x="${lx}" y="${ly + 3}" fill="var(--muted)" font-size="11" text-anchor="middle">${a}°</text>`);
   }
-  out.push(`<text x="${CX + R * 0.62}" y="${CY - R - 14}" fill="var(--muted)" font-size="11" text-anchor="middle">TWA · rings = STW kn</text>`);
+  out.push(`<text x="${CX + R * 0.62}" y="${CY - R - 14}" fill="var(--muted)" font-size="11" text-anchor="middle">wind angle · rings = boat speed kn</text>`);
   if (cert) {
     const d = cert.pts.map((p, i) => (i ? "L" : "M") + XY(p.twa, p.stw).map((n) => n.toFixed(1)).join(" ")).join(" ");
     out.push(`<path d="${d}" fill="none" stroke="var(--muted)" stroke-width="2" stroke-dasharray="6 5" opacity="0.75"/>`);
@@ -3969,12 +3992,12 @@ function polTip(ev, i) {
   tip.setAttribute("style", "position:fixed;z-index:99;background:var(--panel2);border:1px solid var(--line);" +
     "border-radius:8px;padding:8px 10px;font-size:12px;pointer-events:none;max-width:260px;" +
     `left:${Math.min(ev.clientX + 14, innerWidth - 280)}px;top:${ev.clientY + 12}px`);
-  const src = c.mode === "race" ? "every sail this race flew at this angle"
+  const src = c.mode === "race" ? "all sails this race flew at this angle"
     : (c.races ? `${c.races.length} race(s): ${esc(c.races.join(", "))}`
                : esc(polRaceName(c.recording)));
   tip.innerHTML = `<b>${esc(c.label)}</b> · TWS ${c.tws} · TWA ${c.twa}°<br>` +
-    `STW <b>${c.stw}</b> kn (p80) · median ${c.median_stw}<br>` +
-    `${c.seconds != null ? c.seconds : c.samples} s of evidence (${c.samples} fixes) · ${src}`;
+    `Speed <b>${c.stw}</b> kn (best held) · typical ${c.median_stw}<br>` +
+    `${c.seconds != null ? c.seconds : c.samples} s of data (${c.samples} fixes) · ${src}`;
 }
 function polTipHide() { const t = document.getElementById("polTipEl"); if (t) t.remove(); }
 
@@ -4003,21 +4026,22 @@ function polDecisionsCard() {
       <td><label style="cursor:pointer"><input type="checkbox" ${on ? "checked" : ""}
         onchange="polToggleUse('${k}', this.checked)"> ${dot}<b>${esc(x.race_name || x.race_id || "recording")}</b></label>
         <div class="muted" style="font-size:11px">${x.recording ? esc(new Date(x.recording * 1000).toISOString().slice(0, 16).replace("T", " ") + "Z") : "uploaded track (no recording)"}${x.hours != null ? " · " + x.hours + " h" : ""}${x.track_source ? " · " + esc(x.track_source) : ""}</div></td>
-      <td>${x.measured_bins} measured cell(s)<div class="muted" style="font-size:11px">${x.samples} samples${x.n_bins > x.measured_bins ? ` · ${x.n_bins - x.measured_bins} forecast-based, always refused` : ""}</div></td>
+      <td>${x.measured_bins} measured cell(s)<div class="muted" style="font-size:11px">${x.samples} samples${x.n_bins > x.measured_bins ? ` · ${x.n_bins - x.measured_bins} from forecasts, not used` : ""}</div></td>
       <td>${x.polar_pct != null ? x.polar_pct + "% of polar" : "—"}<div class="muted" style="font-size:11px">${x.debrief_id ? "debrief #" + x.debrief_id : ""}</div></td></tr>`;
   }).join("");
   const undebriefed = polRaces().filter((r) => !src.some((x) => polSameRec(x.recording, r.recording)));
   return `<div class="card">
-    <h3>Decisions <span class="muted" style="font-weight:400">— what future optimizer runs sail on</span></h3>
-    <div class="muted" style="font-size:12px;margin-bottom:6px">The optimizer routes on the cert polar + the APPROVED overlay. Refinement proposals are built from <b>measured bins only</b> (forecast-derived bins are refused and counted); nothing changes the boat model without approval in <a href="#debrief">Debrief</a>.</div>
-    ${pending ? `<div class="dep-row"><span class="pill warn">proposal #${pending.id} pending</span> helm ${pending.helm_current} → <b>${pending.helm_proposed}</b> · ${(pending.adjustments || []).length} cell adjustment(s) · built from ${((pending.summary || {}).recordings || []).length || "?"} recording(s)${(pending.summary || {}).excluded_by_choice ? `, ${(pending.summary || {}).excluded_by_choice} bin(s) left out by choice` : ""} — <a href="#debrief">review &amp; apply</a></div>` : ""}
+    <h3>Teach the boat model <span class="muted" style="font-weight:400">— pick which races count</span></h3>
+    <div class="muted" style="font-size:12px;margin-bottom:6px">Only measured wind counts. Nothing changes until you approve it.
+      ${qhelp("The route uses the ORC polar plus the changes you approved. Suggestions use measured wind only. Data from forecasts is left out and counted.")}</div>
+    ${pending ? `<div class="dep-row"><span class="pill warn">suggestion #${pending.id} waiting</span> helm ${pending.helm_current} → <b>${pending.helm_proposed}</b> · ${(pending.adjustments || []).length} polar tweak(s) · from ${((pending.summary || {}).recordings || []).length || "?"} recording(s)${(pending.summary || {}).excluded_by_choice ? `, ${(pending.summary || {}).excluded_by_choice} left out by you` : ""} · <a href="#debrief">review it</a></div>` : ""}
     ${src.length ? `<div class="muted" style="font-size:12px;margin:8px 0 4px">Which races teach the boat model:</div>
-      <table class="fleet-tbl"><thead><tr><th>Race instance</th><th>Contributes</th><th>Debrief</th></tr></thead><tbody>${rows}</tbody></table>
+      <table class="fleet-tbl"><thead><tr><th>Race</th><th>Gives</th><th>Debrief</th></tr></thead><tbody>${rows}</tbody></table>
       <div style="margin-top:4px"><button class="mini" onclick="polSetAllUse(true)">All</button> <button class="mini" onclick="polSetAllUse(false)">None</button></div>`
-      : '<div class="placeholder">No archived bins yet — debrief a recording in the <a href="#debrief">Debrief</a> tab and its measured cells land here.</div>'}
-    ${undebriefed.length ? `<div class="muted" style="font-size:12px;margin-top:6px">Not debriefed yet, so they teach nothing: ${undebriefed.map((r) => esc(r.name)).join(", ")} — <a href="#debrief">debrief them</a> to make them selectable.</div>` : ""}
+      : '<div class="placeholder">Nothing yet. Debrief a recording in the <a href="#debrief">Debrief</a> tab first.</div>'}
+    ${undebriefed.length ? `<div class="muted" style="font-size:12px;margin-top:6px">Not debriefed yet: ${undebriefed.map((r) => esc(r.name)).join(", ")}. <a href="#debrief">Debrief them</a> to use them.</div>` : ""}
     <div style="margin-top:8px">
-      <button class="mini" onclick="polPropose()" ${src.length && chosen.length ? "" : "disabled"}>Propose refinement from ${chosen.length} of ${src.length} race(s)</button>
+      <button class="mini" onclick="polPropose()" ${src.length && chosen.length ? "" : "disabled"}>Suggest changes from ${chosen.length} of ${src.length} race(s)</button>
       <span class="muted" id="polMsg" style="font-size:12px">${esc(Pol.msg || "")}</span>
     </div>
   </div>`;
@@ -4041,7 +4065,7 @@ function trustBanner(title, line, tail) {
 function polDangerBanner(races) {
   const bad = races.filter((r) => !r.skipped && trustDanger(r.trust_danger_s, r.trust_line));
   return bad.map((r) => trustBanner(`Instrument fault — ${r.name}`, r.trust_line,
-    `${r.refused_by_trust ? r.refused_by_trust + " fixes refused — the" : "The"} polar leaves those windows out. Fix the calibration before the next race — the same sensor feeds the live readouts (Monitor HDG) and the onboard engine.`)).join("");
+    `${r.refused_by_trust ? r.refused_by_trust + " fixes left out of the polar." : "Those stretches are left out of the polar."} Fix the calibration before the next race. The same sensor feeds the boat's live numbers.`)).join("");
 }
 
 function paintPolar() {
@@ -4057,47 +4081,48 @@ function paintPolar() {
     `<button class="mini" style="${t === Pol.tws ? "background:var(--accent);color:#fff" : ""}"
        onclick="Pol.tws=${t};paintPolar()">${t} kn</button>`).join(" ");
   const cfgSel = `<select ${byRace ? "disabled" : ""} onchange="Pol.config=this.value;paintPolar()">${cfgs.map((c) =>
-    `<option value="${esc(c)}" ${c === Pol.config ? "selected" : ""}>${c === "all" ? "all configs" : c === "—" ? "unattributed" : esc(c)}</option>`).join("")}</select>`;
+    `<option value="${esc(c)}" ${c === Pol.config ? "selected" : ""}>${c === "all" ? "all sails" : c === "—" ? "unknown sails" : esc(c)}</option>`).join("")}</select>`;
   const raceSel = `<select onchange="Pol.race=this.value==='all'?'all':Number(this.value);paintPolar()">
-    <option value="all" ${Pol.race === "all" ? "selected" : ""}>all races together</option>
+    <option value="all" ${Pol.race === "all" ? "selected" : ""}>all races</option>
     ${races.slice().reverse().map((r) => `<option value="${r.recording}" ${polSameRec(Pol.race, r.recording) ? "selected" : ""}>${esc(r.name)}${r.hours != null ? " · " + r.hours + " h" : ""}</option>`).join("")}
   </select>`;
   const splitRadio = ["config", "race"].map((k) =>
     `<label style="cursor:pointer;margin-right:10px"><input type="radio" name="polsplit" value="${k}" ${Pol.split === k ? "checked" : ""}
-      onchange="Pol.split='${k}';paintPolar()"> ${k === "config" ? "sail configuration" : "race instance"}</label>`).join("");
+      onchange="Pol.split='${k}';paintPolar()"> ${k === "config" ? "sails" : "race"}</label>`).join("");
   const legend = byRace
     ? races.map((r) => `<span style="white-space:nowrap"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${polRaceColor(r.recording)};margin-right:4px"></span>${esc(r.name)}</span>`).join(" &nbsp; ")
     : (d.configs || []).map((c) =>
         `<span style="white-space:nowrap"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${polColor(c)};margin-right:4px"></span>${esc(c)}</span>`
-      ).join(" &nbsp; ") + ` &nbsp; <span style="white-space:nowrap"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#9a9aa6;margin-right:4px"></span>unattributed</span>`;
-  const legendTail = ` &nbsp; <span style="white-space:nowrap;color:var(--muted)"><svg width="22" height="8"><line x1="0" y1="4" x2="22" y2="4" stroke="#9a9aa6" stroke-width="2" stroke-dasharray="5 4"/></svg> ORC cert (reference)</span>`;
+      ).join(" &nbsp; ") + ` &nbsp; <span style="white-space:nowrap"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#9a9aa6;margin-right:4px"></span>unknown sails</span>`;
+  const legendTail = ` &nbsp; <span style="white-space:nowrap;color:var(--muted)"><svg width="22" height="8"><line x1="0" y1="4" x2="22" y2="4" stroke="#9a9aa6" stroke-width="2" stroke-dasharray="5 4"/></svg> ORC rating (for reference)</span>`;
   const tbl = cells.length ? `<div class="pg-wrap"><table class="pg">
-    <tr><th>TWA</th><th>config</th><th>STW p80</th><th>median</th><th>evidence (s)</th><th>${Pol.race === "all" ? "races" : "race"}</th></tr>
+    <tr><th>TWA</th><th>sails</th><th>best held</th><th>typical</th><th>data (s)</th><th>${Pol.race === "all" ? "races" : "race"}</th></tr>
     ${cells.slice().sort((a, b) => a.twa - b.twa || String(a.config).localeCompare(String(b.config))).map((c) =>
-      `<tr><td>${c.twa}°</td><td><span style="color:${polColor(c.config)}">●</span> ${esc(c.config || "unattributed")}</td>
+      `<tr><td>${c.twa}°</td><td><span style="color:${polColor(c.config)}">●</span> ${esc(c.config || "unknown")}</td>
        <td><b>${c.stw}</b></td><td>${c.median_stw}</td><td>${c.seconds != null ? c.seconds : c.samples}</td><td>${esc(c.races ? c.races.join(", ") : polRaceName(c.recording))}</td></tr>`).join("")}
   </table></div>` : '<div class="placeholder">No measured cells at this TWS for this race.</div>';
   document.getElementById("view").innerHTML = `<div class="opt">
     ${polDangerBanner(d.races || [])}
     <div class="card">
-      <h3>Observed polar <span class="muted" style="font-weight:400">— what the boat actually sailed, off the instruments. Measured TWS/TWA/STW only; the ORC cert is the dashed reference, never the source.</span></h3>
+      <h3>Observed polar <span class="muted" style="font-weight:400">— what the boat really sailed, from the instruments</span>
+        ${qhelp("Measured wind and boat speed only. The dashed line is the ORC rating, shown for reference.")}</h3>
       ${(d.races || []).map((r) => r.skipped
         ? `<div class="muted" style="font-size:12px">⊘ ${esc(r.name)} — ${esc(r.skipped)}</div>`
-        : `<div class="muted" style="font-size:12px"><b style="color:var(--ink)">${esc(r.name)}</b> · ${r.hours} h · ${r.fixes} fixes (${r.refused_by_trust} refused by the trust gate) · ${r.measured_samples} measured samples${r.refused_below_min_twa ? ", " + r.refused_below_min_twa + " below " + ((d.grid || {}).min_twa_deg || 30) + "° TWA (not sailing)" : ""}${r.sec_per_fix ? " @ " + r.sec_per_fix + " s/fix" : ""}${r.cells != null ? " → " + r.cells + " cells" : ""}${r.thin_cells ? " (+" + r.thin_cells + " under " + minS + " s, refused)" : ""} · trust: ${trustDanger(r.trust_danger_s, r.trust_line) ? '<span class="pill bad">⚠ DANGER — see above</span>' : esc(r.trust_line || "—")}</div>`).join("")}
-      <div style="margin-top:6px"><button class="mini" onclick="polRefresh()" ${Pol.busy ? "disabled" : ""}>${Pol.busy ? "Rebuilding from the record…" : "Refresh from the record"}</button>
+        : `<div class="muted" style="font-size:12px"><b style="color:var(--ink)">${esc(r.name)}</b> · ${r.hours} h · ${r.fixes} fixes (${r.refused_by_trust} failed the instrument check) · ${r.measured_samples} measured${r.refused_below_min_twa ? ", " + r.refused_below_min_twa + " below " + ((d.grid || {}).min_twa_deg || 30) + "° TWA (not sailing)" : ""}${r.cells != null ? " → " + r.cells + " cells" : ""}${r.thin_cells ? " (+" + r.thin_cells + " under " + minS + " s, left out)" : ""} · instruments: ${trustDanger(r.trust_danger_s, r.trust_line) ? '<span class="pill bad">⚠ fault, see above</span>' : esc(r.trust_line || "—")}</div>`).join("")}
+      <div style="margin-top:6px"><button class="mini" onclick="polRefresh()" ${Pol.busy ? "disabled" : ""}>${Pol.busy ? "Rebuilding…" : "Rebuild"}</button>
       <span class="muted" style="font-size:11px"> built ${d.generated_at ? new Date(d.generated_at * 1000).toISOString().slice(0, 16) + "Z" : "—"}${d.refresh_error ? " · last refresh failed: " + esc(d.refresh_error) : ""}</span></div>
     </div>
     <div class="card">
       <div class="opt-controls" style="margin-bottom:6px">TWS: ${chips}</div>
-      <div class="opt-controls" style="margin-bottom:6px">race: ${raceSel} &nbsp; config: ${cfgSel} &nbsp;
-        <span class="muted">curves by:</span> ${splitRadio}</div>
-      ${byRace ? `<div class="muted" style="font-size:12px;margin-bottom:4px">One curve per race instance — each is that race's own p80 at every angle, across whatever sails were up. The sail filter does not apply in this mode.</div>` : ""}
+      <div class="opt-controls" style="margin-bottom:6px">race: ${raceSel} &nbsp; sails: ${cfgSel} &nbsp;
+        <span class="muted">lines by:</span> ${splitRadio}</div>
+      ${byRace ? `<div class="muted" style="font-size:12px;margin-bottom:4px">One line per race, all sails together. The sail filter is off.</div>` : ""}
       ${polSvg()}
       <div class="muted" style="font-size:12px;margin-top:4px">${legend}${legendTail}</div>
-      <div class="muted" style="font-size:11px;margin-top:4px">Rings are fixed at 2 kn out to ${polMaxV()} kn for every TWS, race and sail — the chart never rescales, so a longer curve is a faster boat.</div>
+      <div class="muted" style="font-size:11px;margin-top:4px">Rings every 2 kn, up to ${polMaxV()} kn. The scale never changes, so a longer line is a faster boat.</div>
     </div>
-    <div class="card"><h3>Cells at ${Pol.tws} kn${Pol.race === "all" ? "" : " · " + esc(polRaceName(Pol.race))} <span class="muted" style="font-weight:400">— p80 = best achievable; ≥${minS} s of the record per cell</span></h3>${tbl}
-      ${thin.length ? `<div class="muted" style="font-size:11px;margin-top:6px">Not shown: <b>${thin.length}</b> cell(s) here held less than ${minS} s of the record (${thin.reduce((n, c) => n + c.seconds, 0)} s between them) — ${thin.slice().sort((x, y) => y.seconds - x.seconds).slice(0, 6).map((c) => `${c.twa}°${c.config ? " " + esc(c.config) : ""} ${c.seconds}s`).join(", ")}${thin.length > 6 ? `, +${thin.length - 6} more` : ""}. A p80 over a few seconds is the top of the noise, not a speed the boat can hold.</div>` : ""}</div>
+    <div class="card"><h3>Cells at ${Pol.tws} kn${Pol.race === "all" ? "" : " · " + esc(polRaceName(Pol.race))} <span class="muted" style="font-weight:400">— best speed held, at least ${minS} s of data each</span></h3>${tbl}
+      ${thin.length ? `<div class="muted" style="font-size:11px;margin-top:6px">Not shown: <b>${thin.length}</b> cell(s) with under ${minS} s of data (${thin.slice().sort((x, y) => y.seconds - x.seconds).slice(0, 6).map((c) => `${c.twa}°${c.config ? " " + esc(c.config) : ""} ${c.seconds}s`).join(", ")}${thin.length > 6 ? `, +${thin.length - 6} more` : ""}). Too short to trust.</div>` : ""}</div>
     ${polDecisionsCard()}
   </div>`;
 }
@@ -4106,8 +4131,8 @@ async function polPropose() {
   Pol.msg = "Proposing…"; paintPolar();
   try {
     const r = await (await apiPost("/api/learning/propose", { recordings: polSelectedRecordings() })).json();
-    Pol.msg = r.ok ? `Proposal #${r.id} created from ${(r.summary || {}).n_samples || "?"} samples — review it in Debrief.`
-                   : (r.note || "propose failed");
-  } catch (e) { Pol.msg = "propose failed: " + (e.message || e); }
+    Pol.msg = r.ok ? `Suggestion #${r.id} made from ${(r.summary || {}).n_samples || "?"} samples. Review it in Learnings.`
+                   : (r.note || "couldn't suggest changes");
+  } catch (e) { Pol.msg = "couldn't suggest changes: " + (e.message || e); }
   renderPolar();
 }

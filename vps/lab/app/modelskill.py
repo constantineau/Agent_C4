@@ -550,7 +550,7 @@ def venue_weights(venue, models=DEFAULT_MODELS, race_date=None, refresh=True):
             "deep": any(s.get("deep") for s in scores.values() if s),
             "recency_halflife_y": RECENCY_HALFLIFE_Y,
             "model_weights": model_weights, "model_bias": model_bias, "table": table,
-            "note": None if model_weights else "not enough matched obs yet — routing on static priors"}
+            "note": None if model_weights else "Not enough measured wind here yet"}
 
 
 # ------------------------------------------------------------------------------------- self-test

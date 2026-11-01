@@ -150,9 +150,9 @@ def _deterministic_synthesis(playbook: dict, definition, course_id):
     rec = variants[0]["side"] if variants else None
     rec_label = variants[0]["label"] if variants else "—"
     agree = int(round((playbook.get("agreement") or 0) * 100))
-    headline = (f"Gameplan: start on the {rec_label.lower()} ({agree}% of forecasts agree); "
-                f"the decision is worth ~{round(spread)} min, so watch the first-beat breeze and be "
-                "ready to switch." if rec else "No clear gameplan — insufficient route geometry.")
+    headline = (f"Start {rec_label.lower()} ({agree}% of forecasts). The side is worth about "
+                f"{round(spread)} min. Watch the first-beat wind and be ready to switch." if rec
+                else "No clear gameplan. Not enough route data.")
     # decision tree: default at the gun, then one observe→switch branch per other variant
     tree = []
     if rec:
