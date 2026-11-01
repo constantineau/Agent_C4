@@ -822,6 +822,32 @@ service._kill_group(gj.current["proc"].pid, signal.SIGKILL)
 gj.current["proc"].wait(5)
 gj.tick()
 
+print("4c) a run with no usable route keeps the last good one")
+
+
+def writes(res):
+    def runner(job_dir):
+        with open(os.path.join(job_dir, "result.json"), "w") as f:
+            json.dump(res, f)
+        return subprocess.Popen(["true"], start_new_session=True)
+    return runner
+
+
+kj = service.Jobs(state_dir=os.path.join(_tmp, "keep"), runner=writes({"job_id": "g", "available": True}),
+                  timeout_s=30, groups=True)
+kj.start({"device": "x"})
+kj.current["proc"].wait(5)
+kj.tick()
+good_id = kj.last_done
+kj.runner = writes({"available": False, "note": "No forecast aboard. Connect to the internet."})
+kj.start({"device": "x"})
+kj.current["proc"].wait(5)
+kj.tick()
+kept = json.load(open(os.path.join(_tmp, "keep", "last_result.json")))
+check("no-forecast run: last good route kept, result id unchanged, attempt reported",
+      kept.get("available") is True and kj.last_done == good_id
+      and kj.last["state"] == "error" and "No forecast" in kj.last["detail"])
+
 print("5) the HTTP API")
 srv = service.ThreadingHTTPServer(("127.0.0.1", 0), service.make_handler(jobs, allow_from={"127.0.0.1"}))
 threading.Thread(target=srv.serve_forever, daemon=True).start()
@@ -847,7 +873,7 @@ check("POST /run → 202", code == 202 and body["ok"])
 code, body = call("POST", "/run", {"position": {"lat": 44, "lon": -82}, "marks": [{}]})
 check("POST /run while running → 409 busy", code == 409 and body["busy"])
 check("GET /status → running", call("GET", "/status")[1]["state"] == "running")
-PROCS[-1].finish(0, result={"schema": "c4.reroute/v1", "job_id": "x", "run_s": 1})
+PROCS[-1].finish(0, result={"schema": "c4.reroute/v1", "job_id": "x", "run_s": 1, "available": True})
 check("GET /result → the route", call("GET", "/result")[1]["job_id"] == "x")
 srv2 = service.ThreadingHTTPServer(("127.0.0.1", 0), service.make_handler(jobs, allow_from={"10.10.10.1"}))
 threading.Thread(target=srv2.serve_forever, daemon=True).start()

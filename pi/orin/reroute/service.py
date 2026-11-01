@@ -185,7 +185,11 @@ class Jobs:
         else:
             _kill_group(pgid, signal.SIGKILL)     # any child it left behind
             res = _read_json(os.path.join(cur["dir"], "result.json")) if rc == 0 else None
-            if res is not None:
+            if res is not None and not res.get("available"):
+                # no usable route (e.g. no forecast): keep the last good one; report the attempt only
+                why = res.get("note") or res.get("detail") or (res.get("warnings") or [None])[0]
+                last.update(state="error", detail=str(why or FAILED)[:120])
+            elif res is not None:
                 _write_json(os.path.join(self.dir, "last_result.json"), res)
                 self.last_done = cur["job_id"]
                 last.update(state="done", run_s=res.get("run_s"),
