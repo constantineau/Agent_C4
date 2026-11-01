@@ -134,12 +134,10 @@ check("still one run", len(POSTS[1][1]["models"][0]["runs"]) == 1)
 print("offline:")
 
 
-def boom(*a, **k):
-    raise AssertionError("must not download offline")
-
-
-out = ob.run_once(now=NOW + 1800, get=get, post=post, record=boom, is_online=lambda: False)
-check("no download attempted, last runs pushed", out["ok"] and out["online"] is False
+FETCHED.clear()
+out = ob.run_once(now=NOW + 1800, get=get, post=post, record=record, is_online=lambda: False)
+check("no download attempted (cache only)", FETCHED == [])
+check("last runs pushed", out["ok"] and out["online"] is False
       and POSTS[-1][1]["models"][0]["runs"][0]["cycle"] == int(CYCLE.timestamp()))
 check("its age keeps counting (built_at unchanged)", POSTS[-1][1]["built_at"] == NOW)
 
@@ -160,6 +158,29 @@ check("still pushes: resampled from the cached GRIBs", pb is not None and pb["ke
 check("no download attempted (cache only)", FETCHED == [])
 check("the age is when the files were downloaded, not now", pb is not None and pb["built_at"] == NOW - 1800)
 check("the new store is kept for the next pass", ob.lab.load_store(s_new["key"]) is not None)
+ENGINE["/playbook/track"] = TRACK
+
+print("offline, a store that exists but is empty or older than the cache:")
+FETCHED.clear()
+two = dict(TRACK, points=[dict(pt, t=pt["t"] - 2 * 3600) for pt in TRACK["points"]])   # same box, new key
+k2 = ob.resolve_spec(two, COND, NOW + 2600)["key"]
+ob.lab.save_store({"key": k2, "runs": {}})                    # e.g. left behind by a "waiting" pass
+ENGINE["/playbook/track"] = two
+ob.run_once(now=NOW + 2600, get=get, post=post, record=record, is_online=lambda: False)
+pe = POSTS[-1][1]
+check("empty store: the cached run is sampled, not 'waiting'", not pe.get("waiting") and pe["key"] == k2
+      and pe["models"][0]["runs"][0]["cycle"] == int(CYCLE.timestamp()))
+check("...without a download", FETCHED == [])
+three = dict(TRACK, points=[dict(pt, t=pt["t"] - 3 * 3600) for pt in TRACK["points"]])
+k3 = ob.resolve_spec(three, COND, NOW + 2700)["key"]
+OLDC = int(CYCLE.timestamp()) - 6 * 3600
+ob.lab.save_store({"key": k3, "runs": {"gfs": [{"cycle": OLDC, "at": NOW - 9000,
+                                                "pts": [[NOW + 2700, 5.0, 10]]}]}})
+ENGINE["/playbook/track"] = three
+ob.run_once(now=NOW + 2700, get=get, post=post, record=record, is_online=lambda: False)
+runs3 = POSTS[-1][1]["models"][0]["runs"]
+check("older store: the newer cached cycle is added on top", runs3[0]["cycle"] == int(CYCLE.timestamp())
+      and any(r["cycle"] == OLDC for r in runs3))
 ENGINE["/playbook/track"] = TRACK
 
 print("offline, crossed a grid line with no playbook, nothing cached for the new spot:")

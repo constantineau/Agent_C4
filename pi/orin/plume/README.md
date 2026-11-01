@@ -22,10 +22,10 @@ Every 15 min (systemd timer, short-lived process):
    Each target gets its own run store, keyed by what the samples depend on: route geometry +
    ETAs + shift, or the snapped point. A moved boat or a replaced playbook never reuses old samples.
 2. If the internet is up (a 5 s TCP probe to NOMADS), download any NEW cycle of
-   gfs, nam, hrrr, ecmwf, icon, gem for the route's box. Offline: keep the last runs. If the
-   target changed while offline (e.g. the boat fell another hour behind), resample the model
-   files already cached, with no network (ICON/GEM need the network and drop out until back online).
-   If nothing usable covers the new target (e.g. no playbook and the boat crossed a 0.25° grid
+   gfs, nam, hrrr, ecmwf, icon, gem for the route's box. Offline: record from the cache into
+   the current target's store — any cycle already cached for this box that's newer than what the
+   store holds gets sampled, with no network (ICON/GEM need the network and drop out until back
+   online). If nothing usable covers the target (e.g. no playbook and the boat crossed a 0.25° grid
    line), it posts a small "waiting" marker instead, so the engine stops serving the old spot's
    onboard plume. The iPad then says "Onboard forecast: waiting for internet." (a shore plume, if
    aboard, is still chosen by the normal rules).

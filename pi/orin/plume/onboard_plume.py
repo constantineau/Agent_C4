@@ -13,8 +13,8 @@ One pass (`run_once`, run by a systemd timer every 15 min as a short-lived proce
      or its ETAs are over → the boat's own position from GET /conditions.
   2. If there's internet, download any NEW model cycle for that route's box (bbox-subset NOMADS
      GRIBs, ECMWF open data, Open-Meteo ICON/GEM — the Lab's own sources and cache layout) and
-     record it. No internet → skip the downloads and keep the last runs; if the target changed
-     while offline (new store key), resample the model files already cached, with no network.
+     record it. No internet → record from the cache into the current store (any newer cycle already
+     cached for this box), with no network.
   3. Build the plume (the exact c4.plume/v1 shape the engine and console already use), mark it
      `source: onboard`, POST it to the engine's /plume/onboard. The engine only takes that from
      the Orin's cable address (10.10.10.2).
@@ -215,17 +215,20 @@ class BackoffFetch:
 
 
 class CacheOnlyFetch:
-    """Offline: resample model runs already in the GRIB cache — never touches the network. Used when
-    the target changed while offline (the boat fell another hour behind, so the ETA shift and the
-    store key changed) and the new target has no store yet: without it nothing would be pushed and
-    the engine would keep the samples for the old ETAs. Takes each model's newest cached cycle for
-    this box; the API-grid models (ICON/GEM) need the network and are skipped. A run's `at` is set
+    """Offline: sample model runs already in the GRIB cache into the current target's store — never
+    touches the network. Covers a target that changed while offline (the boat fell another hour
+    behind, so the store key changed) and a store that is empty or older than what's cached (a
+    cycle downloaded under another target for the same box). Takes each model's newest cached
+    cycle for this box, skipping it when the store already holds it (no parse); the API-grid models
+    (ICON/GEM) need the network and are skipped. A run's `at` is set
     to when its files were downloaded, so the plume's age stays honest."""
 
-    def __init__(self, fetch_run=None):
+    def __init__(self, key=None, fetch_run=None):
         self.fetch_run = fetch_run or lab.fetch_run
         self.downloaded_at = {}
         self._parser = None
+        st = (lab.load_store(key) if key else None) or {}
+        self.have = {m: lab.latest_cycle(st, m) for m in (st.get("runs") or {})}
 
     def parser(self):
         from app.wind import grib
@@ -260,8 +263,9 @@ class CacheOnlyFetch:
         if hasattr(source, "load_series"):
             return None
         cyc = self.newest_cached(source, bbox)
-        if cyc is None:
-            return None
+        have = self.have.get(source.name)
+        if cyc is None or (have is not None and cyc.timestamp() <= have):
+            return None                           # nothing cached newer than the store — no parse
         return self.fetch_run(_CachedOnly(source, cyc, self), bbox, times, now, self.parser())
 
     def stamp(self, st, now):
@@ -398,18 +402,15 @@ def run_once(now=None, get=engine_get, post=engine_post, record=None, is_online=
         finally:
             fetch.close()
     else:
-        st = lab.load_store(spec["key"])
-        if st:
-            _log("offline — keeping the last runs")
-            lab.prune(st, now)
-        else:
-            _log("offline, new target — resampling the cached model files")
-            fetch = CacheOnlyFetch()
-            try:
-                st = fetch.stamp(record(spec, now=now, on_progress=_log, fetch=fetch), now)
-            finally:
-                fetch.close()
-            lab.save_store(st)
+        # offline = record from the cache into the current store: any cycle cached for this box
+        # that's newer than what the store holds gets sampled, with no network
+        _log("offline — sampling what's in the cache")
+        fetch = CacheOnlyFetch(spec["key"])
+        try:
+            st = fetch.stamp(record(spec, now=now, on_progress=_log, fetch=fetch), now)
+        finally:
+            fetch.close()
+        lab.save_store(st)
     plume = build(st, now)
     out = {"ok": True, "key": spec["key"], "basis": spec["basis"], "online": net,
            "models": {m["model"]: len(m["runs"]) for m in (plume or {}).get("models", [])}}
