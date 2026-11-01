@@ -68,3 +68,4 @@ check("gate/none rounding leaves the mark unchanged",
       OPT._rounding_offset(44.0, -82.0, mlat, mlon, "none") == (mlat, mlon))
 
 print("RESULT:", "PASS" if ok else "FAIL")
+raise SystemExit(0 if ok else 1)

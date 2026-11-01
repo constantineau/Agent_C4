@@ -67,8 +67,7 @@ print("parse_delta with a state dict (filter enabled):")
 state = {}
 hello = json.dumps({"self": SELF, "version": "2.27.0"})
 check("hello frame yields no rows", archiver.parse_delta(hello, "T") == [])
-check("hello frame records the self context", state == {} or True)
-archiver.parse_delta(hello, "T", state)
+check("hello frame with a state dict yields no rows either", archiver.parse_delta(hello, "T", state) == [])
 check("self context learned", state.get("self") == SELF)
 
 rows = archiver.parse_delta(delta(None), "T", state)

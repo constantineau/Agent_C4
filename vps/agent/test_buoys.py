@@ -189,3 +189,4 @@ check("promise far outside its window → no forecast row (honest)",
       buoys.get_buoys()["stations"][0].get("forecast") is None)
 
 print("RESULT:", "PASS" if ok else "FAIL")
+raise SystemExit(0 if ok else 1)
