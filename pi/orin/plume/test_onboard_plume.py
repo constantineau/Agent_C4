@@ -182,6 +182,36 @@ check("resampled from the cache for the new key", po.get("key") == out["key"] an
       and po["models"][0]["runs"][0]["cycle"] == int(CYCLE.timestamp()))
 check("the age is when the files were downloaded, not now", po.get("built_at") == NOW - 1800)
 check("...and saved that way", ob.lab.load_store(out["key"])["runs"]["gfs"][0]["at"] == NOW - 1800)
+
+print("online, a newer cycle half-downloaded and rejected, the cached one used:")
+LATE = CYCLE + dt.timedelta(hours=6)
+LATE_FILES = []
+
+
+class HalfLateGFS(CachedGFS):
+    """12Z is due but only its first frame downloads (too sparse); 06Z is in the cache."""
+
+    def pick_cycle(self, now=None, min_horizon_h=0):
+        return LATE
+
+    def fetch(self, cycle, fhr, member, bbox, timeout=60):
+        if cycle == LATE:
+            if fhr > 0:
+                return None
+            path = write_grib(self._cache_path(cycle, fhr, member, bbox), u=-6.0, v=0.0)
+            LATE_FILES.append(path)
+            return path
+        return super().fetch(cycle, fhr, member, bbox, timeout)
+
+
+models.MODELS["gfs"] = HalfLateGFS()
+ENGINE["/playbook/track"] = dict(TRACK, points=[dict(pt, t=pt["t"] - 7 * 3600) for pt in TRACK["points"]])
+out = ob.run_once(now=NOW + 2460, get=get, post=post, record=record, is_online=lambda: True)
+ph = POSTS[-1][1]
+check("fell back to the cached 06Z", LATE_FILES and ph["models"][0]["runs"][0]["cycle"] == int(CYCLE.timestamp()))
+check("its age is the 06Z files' time, not the rejected 12Z download's", ph["built_at"] == NOW - 1800)
+for _f in LATE_FILES + [os.path.join(os.environ["PLUME_DIR"], "misses.state")]:
+    os.remove(_f)                                           # leave the cache + back-off as they were
 models.MODELS["gfs"] = FixtureGFS()
 ENGINE["/playbook/track"] = TRACK
 

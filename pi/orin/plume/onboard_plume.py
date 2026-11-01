@@ -170,17 +170,20 @@ REQUEST_TIMEOUT_S = float(os.environ.get("PLUME_REQUEST_TIMEOUT_S", "20"))
 class _StampsDownloads:
     """A run's `at` should be when its files were downloaded, not when this pass sampled them: a
     pass that resamples cached GRIBs (a new target, offline or online) would otherwise report old
-    downloads as fresh. `note` keeps each model's newest file time; `stamp` applies it."""
+    downloads as fresh. `note` keeps the newest file time per model AND cycle (a pass may download
+    part of a newer cycle, reject it, then fall back to an older cached one); `stamp` applies the
+    one for the cycle the run actually came from."""
 
-    def note(self, model, t):
-        d = self.downloaded_at
-        d[model] = max(d.get(model, 0), t)
+    def note(self, model, cycle, t):
+        k = (model, int(cycle.timestamp()))
+        self.downloaded_at[k] = max(self.downloaded_at.get(k, 0), t)
 
     def stamp(self, st, now):
         """Runs this pass added get `at` = their files' download time (never later than now)."""
-        for m, t in self.downloaded_at.items():
-            for r in (st.get("runs") or {}).get(m) or []:
-                if r.get("at") == int(now):
+        for m, runs in (st.get("runs") or {}).items():
+            for r in runs or []:
+                t = self.downloaded_at.get((m, int(r.get("cycle", -1))))
+                if t is not None and r.get("at") == int(now):
                     r["at"] = min(int(t), int(now))
         return st
 
@@ -364,7 +367,7 @@ class _CachedOnly:
         path = self._src._cache_path(cycle, fhr, member, bbox)
         if not (os.path.exists(path) and os.path.getsize(path) > 100):
             return None
-        self._owner.note(self._src.name, os.path.getmtime(path))
+        self._owner.note(self._src.name, cycle, os.path.getmtime(path))
         return path
 
     def __getattr__(self, k):
@@ -388,7 +391,7 @@ class _Budgeted:
         cached = bool(path and os.path.exists(path) and os.path.getsize(path) > 100)
         got = self._src.fetch(cycle, fhr, member, bbox, timeout=min(REQUEST_TIMEOUT_S, left))
         if got:
-            self._owner.note(self._src.name, os.path.getmtime(got) if cached else self._owner.now)
+            self._owner.note(self._src.name, cycle, os.path.getmtime(got) if cached else self._owner.now)
         return got
 
     def __getattr__(self, k):
