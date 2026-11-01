@@ -1017,8 +1017,8 @@
         // the release condition IS the decision condition now — the dwell median coming back
         // above the line it crossed. No separate band to explain (see power.py `_tripped`).
         clears: st === "ok" ? "—"
-          : r0(b.sustain_min) + "-min average back above "
-            + r1(b.status === "danger" ? b.thresholds.danger_v : b.thresholds.warn_v) + " V",
+          : "bank above "
+            + r1(b.status === "danger" ? b.thresholds.danger_v : b.thresholds.warn_v) + " V for over half of the last " + r0(b.sustain_min) + " min",
         based: [b.volts + " V, " + (trend == null ? "no trend yet" : trend.toFixed(2) + " V/h"),
                 "⚠ voltage limits not checked on this boat. Trust the trend."]
           .concat(provLine("bank") ? [provLine("bank")] : []), conf: "engine" };
