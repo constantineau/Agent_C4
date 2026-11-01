@@ -167,7 +167,8 @@ class StuckWorker(RuntimeError):
     """The previous broadcast's worker didn't exit: no new route is started."""
 
 
-JOIN_S = 5.0
+JOIN_S = 5.0          # a replacement waits this long for the old worker to exit
+STOP_JOIN_S = 0.5     # Stop only waits this long: retiring the generation already silenced it
 
 
 class _Broadcaster:
@@ -185,6 +186,7 @@ class _Broadcaster:
         self.lock = threading.Lock()          # one start/stop at a time
         self.slock = threading.Lock()         # generation check + send / status write
         self.gen = 0
+        self.course = None                    # the course token the current route was sent for
         self.thread = None
         self.stop_evt = threading.Event()
         self.state = {"broadcasting": False, "iface": CAN_IFACE, "route": None,
@@ -233,7 +235,8 @@ class _Broadcaster:
                 self.gen += 1
                 g = self.gen
                 self.stop_evt = evt = threading.Event()
-                self.state.update({"broadcasting": True, "route": body.name,
+                self.course = body.course
+            self.state.update({"broadcasting": True, "route": body.name,
                                    "n_waypoints": len(body.waypoints), "started_at": round(now),
                                    "expires_at": round(now + ROUTE_TTL_S), "nav_live": False,
                                    "nav": None, "steer_paused": None, "ended": None,
@@ -242,11 +245,17 @@ class _Broadcaster:
                                            daemon=True, name=f"n2k-broadcast-{g}")
             self.thread.start()
 
-    def stop(self, reason="cleared"):
+    def stop(self, reason="cleared", keep_course=None):
+        """End the route. `keep_course`: a course change's stop — the route is kept when it
+        was sent for that (the new) course, so a late stop can't end a route for the new
+        course. Returns quickly (STOP_JOIN_S): once the generation is retired the worker can't
+        send, and a later start() waits for it to exit."""
         with self.lock:
-            return self._end_locked(reason)
+            if keep_course is not None and self.course == keep_course:
+                return True
+            return self._end_locked(reason, STOP_JOIN_S)
 
-    def _end_locked(self, reason):
+    def _end_locked(self, reason, join_s=None):
         """Retire the current worker: bump the generation (from here it can't send), say
         'navigation terminated' if it was navigating, then wait for it to exit. → True when no
         worker is left running."""
@@ -261,7 +270,7 @@ class _Broadcaster:
         if active:
             self._terminate(lambda msg: self.sender.send(*msg) >= 0)
         if t is not None:
-            t.join(JOIN_S)
+            t.join(JOIN_S if join_s is None else join_s)
             if t.is_alive():
                 self.state["last_error"] = "Previous broadcast didn't stop."
                 return False
@@ -616,7 +625,13 @@ def route(body: RouteBody):
     return dict(BC.state)
 
 
+class StopBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    keep_course: str | None = Field(default=None, max_length=200)
+
+
 @app.post("/stop")
-def stop():
-    BC.stop("cleared")
+def stop(body: StopBody | None = None):
+    BC.stop("cleared" if body is None or body.keep_course is None else "course changed",
+            keep_course=None if body is None else body.keep_course)
     return dict(BC.state)

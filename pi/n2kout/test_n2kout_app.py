@@ -429,6 +429,34 @@ bx._set(g_old, broadcasting=True, nav_live=True)
 check("a status write from a retired generation is ignored", not bx.state["broadcasting"]
       and not bx.state["nav_live"])
 
+print("broadcast thread — Stop is quick; a course change's stop keeps the new course's route:")
+gate2, inside2 = threading.Event(), threading.Event()
+
+
+def hang(frm, to, course):
+    inside2.set()
+    gate2.wait(5)
+    return True
+
+
+fs5 = FakeSender()
+b5 = A._Broadcaster(sender=fs5, fix_source=live_feed, leg_check=hang)
+b5.start(body())
+inside2.wait(3)
+t0 = time.time()
+b5.stop("cleared")
+check(f"Stop with a stuck worker returns in about a second [{time.time() - t0:.2f} s]",
+      time.time() - t0 < 1.5)
+gate2.set()
+run_until(b5, lambda: not b5.thread.is_alive(), 3)
+b5.leg_check = CLEAR
+b5.start(body(course="B1:race"))
+check("keep_course = this route's course → kept", b5.stop(keep_course="B1:race") is True
+      and b5.state["broadcasting"])
+b5.stop(reason="course changed", keep_course="C1:race")
+check("keep_course = another course → stopped, 'course changed'",
+      not b5.state["broadcasting"] and b5.state["ended"] == "course changed")
+
 print("broadcaster — the fix is aged again right before sending:")
 fs3, clk3 = FakeSender(), Clock()
 
@@ -512,6 +540,14 @@ r = client.post("/route", json=good)
 check("old worker stuck → 503 'Previous broadcast didn't stop. Not sent.'",
       r.status_code == 503 and r.json()["detail"] == "Previous broadcast didn't stop. Not sent.")
 A.BC = _bc
+A.BC.start(A.RouteBody(**dict(good, course="B1:race")))
+r = client.post("/stop", json={"keep_course": "B1:race"})
+check("POST /stop {keep_course: this route's} → still broadcasting",
+      r.status_code == 200 and r.json()["broadcasting"])
+r = client.post("/stop", json={"keep_course": "A1:race"})
+check("POST /stop {keep_course: another} → stopped", not r.json()["broadcasting"]
+      and r.json()["ended"] == "course changed")
+check("POST /stop with no body still works", client.post("/stop").status_code == 200)
 r = client.post("/route", json=dict(good, waypoints=[{"lat": 43, "lon": -82}] * 250))
 check("250 waypoints → accepted (packed under the 223-byte cap)", r.status_code == 200)
 client.post("/stop")

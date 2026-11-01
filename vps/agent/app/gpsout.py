@@ -126,23 +126,37 @@ def leg_check(body):
 
 
 NEXT_MARK_TTL_S = 5.0
-_NEXT_MARK = {"at": None, "val": None}
+_NEXT_MARK = {"at": None, "val": None, "course": None}
+
+
+def course_progress(lock_timeout=0.3):
+    """(course token, the navigator's next mark as a position in THAT course) read together
+    under COURSE_LOCK, so the index can never be paired with another course's token. The index
+    is cached NEXT_MARK_TTL_S per token (n2kout polls every second, the navigator does real
+    work); a new token is never served an old course's index. Lock busy (a load or a send in
+    progress) → (token read without the lock, None): no verdict this second."""
+    if not orinroute.COURSE_LOCK.acquire(timeout=lock_timeout):
+        return course_token(), None
+    try:
+        tok = course_token()
+        now = time.monotonic()
+        if (_NEXT_MARK["course"] == tok and _NEXT_MARK["at"] is not None
+                and now - _NEXT_MARK["at"] < NEXT_MARK_TTL_S):
+            return tok, _NEXT_MARK["val"]
+        try:
+            nav = NAV.get_navigator()
+            val = (reoptimize._next_course_index(nav, NAV._marks(nav["route"]) or [])
+                   if nav.get("available") else None)
+        except Exception:  # noqa: BLE001 — no navigator read is no verdict
+            val = None
+        _NEXT_MARK.update({"at": now, "val": val, "course": tok})
+        return tok, val
+    finally:
+        orinroute.COURSE_LOCK.release()
 
 
 def next_mark_index():
-    """The navigator's next mark as a position in the course (its own rounding verdict), or
-    None. Cached NEXT_MARK_TTL_S: n2kout polls every second, the navigator does real work."""
-    now = time.monotonic()
-    if _NEXT_MARK["at"] is not None and now - _NEXT_MARK["at"] < NEXT_MARK_TTL_S:
-        return _NEXT_MARK["val"]
-    try:
-        nav = NAV.get_navigator()
-        val = (reoptimize._next_course_index(nav, NAV._marks(nav["route"]) or [])
-               if nav.get("available") else None)
-    except Exception:  # noqa: BLE001 — no navigator read is no verdict
-        val = None
-    _NEXT_MARK.update({"at": now, "val": val})
-    return val
+    return course_progress()[1]
 
 
 def fix_feed():
@@ -150,18 +164,19 @@ def fix_feed():
     the course token, and the navigator's next-mark index (a course-mark waypoint advances
     when the navigator says it's rounded, however wide)."""
     fix = own_fix()
+    tok, nmi = course_progress()
     return {"fix": None if fix is None else {"lat": fix[0], "lon": fix[1], "t": fix[2]},
-            "course": course_token(), "next_mark_index": next_mark_index()}
+            "course": tok, "next_mark_index": nmi}
 
 
-def _post(path, payload=None):
+def _post(path, payload=None, timeout=None):
     req = urllib.request.Request(N2KOUT_URL + path, method="POST",
                                  data=json.dumps(payload or {}).encode(),
                                  headers={"Content-Type": "application/json"})
     try:
         # short: show() holds the course lock across this call, so a slow broadcaster can hold up
         # a /course/load for at most this long
-        with urllib.request.urlopen(req, timeout=POST_TIMEOUT_S) as r:
+        with urllib.request.urlopen(req, timeout=timeout or POST_TIMEOUT_S) as r:
             return json.loads(r.read())
     except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as e:
         return {"available": False, "error": f"n2kout unreachable: {e}"}
@@ -652,6 +667,22 @@ def _show(source: str = "playbook", variant=None, route=None):
             # no land chart for this course (or the route leaves it): said, never implied
             "warning": None if shore else NO_SHORE,
             "broadcaster": st}
+
+
+CLEAR_TIMEOUT_S = 1.5
+
+
+def clear_other_courses():
+    """A course change: stop the plotter route unless it was sent for the course aboard NOW
+    (`keep_course` = the current token). Called under COURSE_LOCK by /course/load, so it must be
+    short: n2kout's stop retires the worker at once and doesn't wait long for it, and this call
+    gives up after CLEAR_TIMEOUT_S. Even if it fails, n2kout ends the old route itself within a
+    second, from the token on the fix feed. Because it names the course to keep, a late stop
+    can never end a route sent for the new course."""
+    st = _post("/stop", {"keep_course": course_token()}, timeout=CLEAR_TIMEOUT_S)
+    if st.get("error"):
+        return {"cleared": False, "note": st["error"]}
+    return {"cleared": not st.get("broadcasting", False), "broadcaster": st}
 
 
 def clear():

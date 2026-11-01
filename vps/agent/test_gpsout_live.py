@@ -74,7 +74,7 @@ gpsout._course_ok = lambda ro: True
 NAV.get_navigator = lambda route=None: {"available": False}
 NAV._latest = lambda: {"lat": 44.003, "lon": -82.0}            # the navigator's (maybe old) read
 posts = []
-gpsout._post = lambda path, payload=None: (posts.append((path, payload)) or
+gpsout._post = lambda path, payload=None, **kw: (posts.append((path, payload)) or
                                            {"broadcasting": True, "route": "C4 a",
                                             "n_waypoints": 6})
 gpsout.datasource.active = lambda: DS(None)
@@ -139,6 +139,36 @@ NAV.get_navigator = lambda route=None: {"available": False}
 gpsout._NEXT_MARK["at"] = None
 check("no navigator → None", gpsout.fix_feed()["next_mark_index"] is None)
 
+print("the next-mark cache never outlives a course:")
+orinroute.set_load_id("race", "A1")
+NAV.get_navigator = lambda route=None: {"available": True, "route": "race",
+                                        "next_mark": {"name": "Finish", "index": 2}}
+gpsout._NEXT_MARK["at"] = None
+tok_a, idx_a = gpsout.course_progress()
+check("course A: index 2 cached", idx_a == 2 and tok_a.startswith("A1:"))
+orinroute.set_load_id("race", "B1")                 # a new course, within the 5 s
+NAV.get_navigator = lambda route=None: {"available": True, "route": "race",
+                                        "next_mark": {"name": "Start", "index": 0}}
+f = gpsout.fix_feed()
+check("course B within 5 s: B's token with B's index (0), never A's 2",
+      f["course"].startswith("B1:") and f["next_mark_index"] == 0)
+held2, rel2 = threading.Event(), threading.Event()
+
+
+def _hold2():
+    with orinroute.COURSE_LOCK:
+        held2.set()
+        rel2.wait(5)
+
+
+threading.Thread(target=_hold2, daemon=True).start()
+held2.wait(2)
+t0 = time.time()
+tok, idx = gpsout.course_progress()
+rel2.set()
+check("lock busy (a load running) → no index this second, quickly",
+      idx is None and time.time() - t0 < 1.0)
+
 print("leg check — the engine approves each new leg n2kout wants:")
 ISLAND = {"recommended": "a", "obstacles": {"islands": [{"lat": 44.02, "lon": -82.0,
                                                          "radius_nm": 0.1}]},
@@ -199,9 +229,32 @@ DEF = {"race_id": "r1", "courses": [{"id": "c", "start": {"lat": 43.0, "lon": -8
                                      "marks": [], "finish": {"points": [{"lat": 45.8,
                                                                          "lon": -84.6}]}}]}
 posts.clear()
+seen = {}
+_stub = gpsout._post
+
+
+def _post_probe(path, payload=None, **kw):
+    if path == "/stop":
+        free = []
+        th = threading.Thread(target=lambda: free.append(
+            orinroute.COURSE_LOCK.acquire(timeout=0) and not orinroute.COURSE_LOCK.release()))
+        th.start()
+        th.join()
+        seen.update(lock_held=free == [False], payload=payload, timeout=kw.get("timeout"),
+                    token=gpsout.course_token())
+    return _stub(path, payload, **kw)
+
+
+gpsout._post = _post_probe
 r = client.post("/course/load", json={"definition": DEF, "course_id": "c"})
 check("/course/load → loaded, and n2kout told to stop", r.json().get("loaded")
-      and ("/stop", None) in posts)
+      and any(p == "/stop" for p, _ in posts))
+check("…from INSIDE the course lock (no /gps/show can slip in before it)", seen.get("lock_held"))
+check("…keeping only a route for the NEW course (a late stop can't end it)",
+      seen["payload"] == {"keep_course": seen["token"]})
+check("…with a short timeout (the lock is held)", seen["timeout"] is not None
+      and seen["timeout"] <= 2)
+gpsout._post = _stub
 posts.clear()
 r = client.post("/course/load", json={"definition": {"courses": []}})
 check("a failed load leaves the plotter alone", not r.json().get("loaded") and posts == [])

@@ -205,7 +205,10 @@ def course_load(body: dict):
             orinroute.drop_definition()
             print(f"[course/load] failed: {type(exc).__name__}: {exc}", flush=True)
             return {"loaded": False, "detail": "Couldn't save the course. Try again."}
-    gpsout.clear()       # the plotter's route was for the old course (n2kout also sees the token)
+        # still under the lock, so no /gps/show for the new course can slip in before it: stop a
+        # plotter route made for any OTHER course (bounded, ~1.5 s at most; n2kout also ends it
+        # by itself on the token, which the new load id has already changed)
+        gpsout.clear_other_courses()
     return {"loaded": True, "route": route, "course_id": cid, "marks": len(marks), "skipped": skipped}
 
 
