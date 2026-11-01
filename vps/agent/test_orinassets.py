@@ -108,6 +108,10 @@ BAD = [
     ("zero cell size", dict(GOOD, chart=dict(CHART, res_deg=0))),
     ("no box", dict(GOOD, chart={k: v for k, v in CHART.items() if k != "bbox"})),
     ("profile for another boat than named", dict(GOOD, boat_id="bravo")),
+    ("a cell size that divides to infinity", dict(GOOD, chart=dict(CHART, res_deg=1e-320))),
+    ("mask bytes other than 0 and 1", dict(GOOD, chart=dict(CHART, mask_zb64=base64.b64encode(
+        zlib.compress(bytes([0] * 5 + [2] + [0] * 22))).decode()))),
+    ("an open-water flag that isn't true/false", dict(GOOD, chart=dict(CHART, open_water="yes"))),
     ("chart not a dict", dict(GOOD, chart="x")),
     ("profile with errors", dict(GOOD, boat={"boat_id": "sr33"},
                                  boat_version=boat_profile.version({"boat_id": "sr33"}))),
@@ -118,6 +122,12 @@ for name, body in BAD:
     r = OA.load(body, now=2000)
     check(f"{name} → refused", r["loaded"] is False and r["detail"])
 check("…and the held file never changed", open(PATH).read() == before)
+r = OA.load(dict(GOOD, chart=dict(CHART, active=False)), now=2050)
+check("a chart sent as inactive is stored active (derived from its mask)", r["loaded"]
+      and OA.for_run({"race_id": "r1"}, "c")["chart"]["active"] is True)
+r = OA.load(dict(GOOD, chart={k: v for k, v in CHART.items() if k != "active"}), now=2060)
+check("…and with no active flag at all", r["loaded"]
+      and OA.for_run({"race_id": "r1"}, "c")["chart"]["active"] is True)
 check("an empty chart flagged open water is taken",
       OA.load(dict(GOOD, chart=dict(CHART, mask_zb64=mask(4, 7, False), open_water=True)),
               now=2100)["loaded"])

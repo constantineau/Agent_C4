@@ -524,8 +524,11 @@ def field_from_dict(d: dict):
         raise ValueError("bad grid")
     # the grid the box and cell size make, checked BEFORE anything is allocated: a tiny res_deg
     # with a small stated nx/ny would otherwise allocate terabytes
-    nx = max(1, int(math.ceil((bbox[3] - bbox[2]) / res)))
-    ny = max(1, int(math.ceil((bbox[0] - bbox[1]) / res)))
+    qx, qy = (bbox[3] - bbox[2]) / res, (bbox[0] - bbox[1]) / res
+    # a vanishing cell size divides to inf (math.ceil would raise OverflowError): refuse it here
+    if not (math.isfinite(qx) and math.isfinite(qy)) or qx > MAX_FIELD_CELLS or qy > MAX_FIELD_CELLS:
+        raise ValueError("grid too large")
+    nx, ny = max(1, int(math.ceil(qx))), max(1, int(math.ceil(qy)))
     if nx * ny > MAX_FIELD_CELLS:
         raise ValueError("grid too large")
     try:
@@ -541,6 +544,10 @@ def field_from_dict(d: dict):
         raise ValueError(f"bad mask: {type(exc).__name__}") from None
     if (field.nx, field.ny) != (int(d["nx"]), int(d["ny"])) or len(mask) != field.nx * field.ny:
         raise ValueError("mask size does not match its box")
+    # cells are 0 (water) or 1 (blocked): `blocked` tests == 1, so any other byte would read as
+    # open water while the chart claims land was checked
+    if mask.translate(None, b"\x00\x01"):
+        raise ValueError("mask has values other than 0 and 1")
     field.mask = bytearray(mask)
     layers = d.get("layers") or {}
     if not isinstance(layers, dict):
@@ -549,9 +556,13 @@ def field_from_dict(d: dict):
         field.layers.update({str(k): int(v) for k, v in layers.items()})
     except (ValueError, TypeError) as exc:
         raise ValueError(f"bad layers: {type(exc).__name__}") from None
-    field.source = d.get("source") or field.source
-    field.safety_depth = d.get("safety_depth")
-    field.active = bool(d.get("active"))
+    # provenance only (reported, never routed on): the depth the chart was built for is bound by
+    # the fingerprint, which the Orin checks against the boat it routes with
+    field.source = str(d.get("source") or field.source)[:40]
+    sd = d.get("safety_depth")
+    field.safety_depth = float(sd) if isinstance(sd, (int, float)) and math.isfinite(sd) else None
+    # derived from the mask, never taken from the payload: an inactive field ignores every cell
+    field.active = any(field.mask)
     return field
 
 

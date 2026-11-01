@@ -131,6 +131,24 @@ for name, bad in (("tiny cells with nx = ny = 1 (16 TB)", EVIL),
         check(f"field_from_dict: {name} → ValueError", False)
     except ValueError:
         check(f"field_from_dict: {name} → ValueError", True)
+for name, bad in (("a cell size that divides to infinity", dict(ch, res_deg=1e-320)),
+                  ("mask bytes other than 0 and 1", dict(ch, mask_zb64=__import__("base64").b64encode(
+                      __import__("zlib").compress(bytes([2]) * (ch["nx"] * ch["ny"]))).decode()))):
+    try:
+        geo.field_from_dict(bad)
+        check(f"field_from_dict: {name} → ValueError", False)
+    except ValueError:
+        check(f"field_from_dict: {name} → ValueError", True)
+    except Exception as exc:  # noqa: BLE001
+        check(f"field_from_dict: {name} → ValueError, not {type(exc).__name__}", False)
+inact = geo.field_from_dict(dict(ch, active=False, safety_depth="deep", source=None))
+land_lat, land_lon = ch["bbox"][1] + 0.1, ch["bbox"][2] + 0.1      # inside fake_build's land block
+check("active is derived from the mask, not taken from the payload", inact.active is True
+      and inact.blocked(land_lat, land_lon))
+check("provenance fields are cleaned, not trusted", inact.safety_depth is None
+      and isinstance(inact.source, str))
+empty_d = geo.field_to_dict(geo.ObstacleField(tuple(ch["bbox"]), res_deg=ch["res_deg"]))
+check("an empty mask is inactive whatever it says", geo.field_from_dict(dict(empty_d, active=True)).active is False)
 check("a good one still round-trips", geo.field_from_dict(ch).nx == ch["nx"])
 
 print("the Pi's own check takes it:")

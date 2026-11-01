@@ -716,6 +716,14 @@ EVIL = dict(good, bbox=[46, 42, -84, -80], res_deg=0.000001, nx=1, ny=1,
 t_evil = time.time()
 check("a carried chart with tiny cells and nx = ny = 1 → refused at once, not 16 TB",
       lo_carried(DEF, EVIL)[1] == job.OLD_CHART and time.time() - t_evil < 30)
+f_in, n_in = lo_carried(DEF, dict(good, active=False))
+check("a carried chart sent as inactive → its land still blocks (active derived from the mask)",
+      n_in is None and f_in.blocked(43.95, -82.95))
+check("a cell size that divides to infinity → refused, not a crash",
+      lo_carried(DEF, dict(good, res_deg=1e-320))[1] == job.OLD_CHART)
+check("mask bytes other than 0 and 1 → refused", lo_carried(DEF, dict(
+    good, mask_zb64=__import__("base64").b64encode(__import__("zlib").compress(
+        bytes([2]) * (good["nx"] * good["ny"]))).decode()))[1] == job.OLD_CHART)
 check("carried chart of another kind → out of date",
       lo_carried(DEF, dict(good, kind="land"))[1] == job.OLD_CHART)
 with open(job.chart_path("huron", "c"), "w") as fh:            # an old hand-copied chart on disk…

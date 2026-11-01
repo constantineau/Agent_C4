@@ -59,8 +59,11 @@ def grid_dims(chart):
         return None, None
     if not all(math.isfinite(x) for x in (n, s, w, e, res)) or res <= 0 or n <= s or e <= w:
         return None, None
-    nx = max(1, int(math.ceil((e - w) / res)))
-    ny = max(1, int(math.ceil((n - s) / res)))
+    qx, qy = (e - w) / res, (n - s) / res
+    # a vanishing cell size divides to inf (math.ceil would raise OverflowError → a 500)
+    if not (math.isfinite(qx) and math.isfinite(qy)) or qx > MAX_CELLS or qy > MAX_CELLS:
+        return None, None
+    nx, ny = max(1, int(math.ceil(qx))), max(1, int(math.ceil(qy)))
     if nx * ny > MAX_CELLS or (nx, ny) != stated:
         return None, None
     return nx, ny
@@ -86,6 +89,12 @@ def _check_chart(chart, race_id, course_id):
         return False, "bad chart mask"
     if len(mask) != nx * ny or d.unconsumed_tail:
         return False, "chart mask doesn't match its grid"
+    if mask.translate(None, b"\x00\x01"):
+        return False, "chart mask has values other than 0 and 1"
+    if chart.get("open_water") not in (None, False, True):
+        return False, "bad open-water flag"
+    # stored as derived from the mask, never as sent: an inactive field ignores every cell
+    chart["active"] = any(mask)
     if not any(mask) and chart.get("open_water") is not True:
         # the shoreline didn't load when it was built: an empty mask is not "land checked"
         return False, "chart has no land in it"
