@@ -454,5 +454,84 @@ check("the clock is re-checked inside the lock: nothing recorded after the gun",
       r.get("frozen") and not recorded and not pushed)
 P.record, P.push, P._clock = _orig_record, _orig_push, _orig_clock
 
+# ---- end to end: race A finishes, race B follows, against the engine's real load() ----------
+print("A → finish → B, end to end with the engine's load():")
+import importlib.util  # noqa: E402
+import json as _json  # noqa: E402
+os.environ["PLUME_CACHE"] = os.path.join(_tmp, "boat", "plume.json")
+_spec = importlib.util.spec_from_file_location("engine_plume", "/repo/vps/agent/app/plume.py")
+ENG = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(ENG)
+from app import deploy as _deploy  # noqa: E402
+BOAT = {"up": True}
+
+
+def boat_post(url, body, timeout=25):
+    if not BOAT["up"]:
+        return False, {"error": "boat offline"}
+    return True, ENG.load(_json.loads(_json.dumps(body)), now=CLOCK["t"])
+
+
+_deploy._post_json = boat_post
+GA = NOW + 500 * H                          # race A gun
+RA = {"race_id": "rA", "name": "A", "division_starts": {"X": GA}, "own": {"division": "X"},
+      "courses": [{"id": "c1", "marks": [{"name": "S", "lat": 43.0, "lon": -82.4}, {"name": "F", "lat": 45.8, "lon": -84.6}]}]}
+GB = GA + 200 * H                           # race B gun, well after A
+RB = dict(RA, race_id="rB", name="B", division_starts={"X": GB})
+RACES.update(rA=RA, rB=RB)
+pbstore.get = lambda pid: None
+labstate.set("plume:locked", None)
+labstate.set("plume:push", None)
+labstate.set("deploy_push:last_ok", None)
+
+
+def runs_at(t):
+    return {"gfs": [{"cycle": int(t) - 6 * H, "at": int(t), "pts": [[int(t), 10.0, 200], [int(t) + H, 11.0, 210]]}]}
+
+
+P.record = lambda spec, **kw: (lambda st: (P.save_store(st), st)[1])(
+    {"key": spec["key"], "race_id": spec["race_id"], "label": spec.get("label"), "basis": spec.get("basis"),
+     "runs": runs_at(kw["now"])})
+P._clock = lambda: CLOCK["t"]
+P.set_target("rA")                          # point target at A's start (no playbook)
+CLOCK.update(t=GA - 2 * H, step=0)
+r = P.run_once(do_push=True)
+check("before A's gun: A's plume goes aboard", r.get("push", {}).get("ok") and ENG.get(CLOCK["t"])["race_id"] == "rA")
+CLOCK["t"] = GA + H
+P.run_once(do_push=True)
+check("A underway: the boat holds A frozen", ENG.get(CLOCK["t"])["frozen"])
+P.set_target("rB")                          # B pinned while A is on
+r = P.run_once(do_push=True)
+check("B pinned mid-race: still frozen, nothing new aboard", r.get("frozen") and ENG.get(CLOCK["t"])["race_id"] == "rA")
+CLOCK["t"] = GA + 40 * H
+P.mark_finished("rA")
+BOAT["up"] = False
+CLOCK["t"] += 60
+r = P.run_once(do_push=True)
+check("finish marked but the boat is offline: keeps trying to deliver A's finish, B not sent",
+      r.get("finishing") and P.finishing_race() and ENG.get(CLOCK["t"])["race_id"] == "rA")
+BOAT["up"] = True
+CLOCK["t"] += 900
+r = P.run_once(do_push=True)
+g = ENG.get(CLOCK["t"])
+check("boat back: A's finish delivered and acknowledged, then B goes aboard in the same pass",
+      P.finishing_race() is None and r.get("push", {}).get("ok") and g["race_id"] == "rB" and not g["frozen"])
+check("...and the Lab is no longer locked to A", P.locked_race() is None)
+
+print("finish with pushing off:")
+labstate.set("plume:locked", None)
+labstate.set("plume:push", None)
+P.set_target("rB")
+CLOCK["t"] = GB + H
+P.run_once(do_push=False)
+check("B locked at its gun", (P.locked_race() or {}).get("race_id") == "rB")
+P.mark_finished("rB")
+CLOCK["t"] += 60
+P.set_target("rA")
+r = P.run_once(do_push=False)
+check("push off: finish releases normally and the next target is recorded",
+      not r.get("finishing") and not r.get("frozen") and r["key"].startswith("rA"))
+P.record, P.push, P._clock = _orig_record, _orig_push, _orig_clock
+
 print("\nALL OK" if ok else "\nFAILURES")
 raise SystemExit(0 if ok else 1)

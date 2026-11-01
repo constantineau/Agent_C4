@@ -283,11 +283,45 @@ def mark_finished(race_id, at=None, undo=False):
     from . import labstate
     if not race_id:
         return None
+    lock = _labstate_get(_KEY_LOCK)
+    if lock and lock.get("race_id") == race_id and lock.get("finish_acked"):
+        # a new finish (or an undo) must be acknowledged by the boat again
+        labstate.set(_KEY_LOCK, dict(lock, finish_acked=None))
     if undo:
         labstate.set(_KEY_FINISHED + str(race_id), None)
         return None
     rec = {"at": int(_clock() if at is None else at)}
     labstate.set(_KEY_FINISHED + str(race_id), rec)
+    return rec
+
+
+def finishing_race():
+    """(lock, finish) when the locked race is marked finished but the boat hasn't acknowledged that
+    finish yet, else None. The boat keeps refusing other races while its cached race is frozen, so
+    the finish has to reach it first (see `run_once`)."""
+    lock = _labstate_get(_KEY_LOCK)
+    if not lock or not lock.get("race_id") or lock.get("finish_acked"):
+        return None
+    fin = finished_at(lock["race_id"])
+    if fin is None or fin < lock.get("start", 0):
+        return None
+    return lock, fin
+
+
+def _deliver_finish(lock, fin, now):
+    """Send the finished race's own plume carrying its recorded finish. Returns the push record;
+    on success (or when there's nothing that could be aboard) the finish counts as acknowledged."""
+    from . import labstate
+    st = load_store(lock["key"])
+    back_h = max(VIEW_BACK_H, (now - lock["start"]) / 3600.0 + KEEP_S / 3600.0)
+    pl = build_plume(st, now, back_h=back_h, window=(lock["start"], fin))
+    if not pl or not pl.get("models"):
+        rec = {"ok": True, "note": "no plume of this race on file — nothing aboard to update"}
+    else:
+        pl["generated_at"] = int(_clock())
+        rec = push(pl)
+    if rec.get("ok"):
+        labstate.set(_KEY_LOCK, dict(lock, finish_acked=int(now)))
     return rec
 
 
@@ -567,6 +601,15 @@ def run_once(on_progress=None, do_push=None, now=None):
     The race window is checked on the real clock before recording AND again right before the push,
     so a pass that starts just before the gun can never deliver after it."""
     t_now = _clock() if now is None else now
+    do_push = (os.environ.get("PLUME_PUSH", "0").strip().lower() in ("1", "true", "yes", "on")
+               if do_push is None else do_push)
+    fr = finishing_race() if do_push else None
+    if fr:
+        # the boat still holds the finished race frozen and refuses everything else until it hears
+        # the finish — deliver that first; only then move on to the next target
+        rec = _deliver_finish(fr[0], fr[1], t_now)
+        if not rec.get("ok"):
+            return {"ok": True, "finishing": True, "race_id": fr[0]["race_id"], "push": rec}
     spec = resolve_target(t_now)
     if not spec:
         return {"ok": False, "note": "no target — lock in + push a race, or set a plume target"}
@@ -593,8 +636,6 @@ def run_once(on_progress=None, do_push=None, now=None):
         plume["generated_at"] = int(done)
     out = {"ok": True, "key": spec["key"], "basis": spec["basis"],
            "models": {m["model"]: len(m["runs"]) for m in (plume or {}).get("models", [])}}
-    do_push = (os.environ.get("PLUME_PUSH", "0").strip().lower() in ("1", "true", "yes", "on")
-               if do_push is None else do_push)
     if do_push and not win:
         # no start known for this race → it could be on right now: record, but never send
         out["push"] = {"ok": False, "skipped": True, "error": "no race start known — not sent"}
