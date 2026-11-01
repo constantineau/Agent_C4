@@ -346,6 +346,13 @@ Source-independent (ENC or GSHHG/NE), applied after the waypoint carve; provenan
 route takes the wrong side → barrier flips it, both port and starboard, still reaching the mark), and
 the real cove_island Duck/BoisBlanc barriers (legal open, illegal blocked). Tunables
 `ROUTE_ROUNDSIDE_ISLANDS` (default ON) / `ROUTE_ROUNDSIDE_BAND_NM`.
+- **One mask per leg (#141):** each leg routes on its own mask (`geo.build_leg_fields`): land, zones
+  and island disks on every leg, an island's barrier only on the leg that rounds it. One course-wide
+  mask with every barrier walled off a course that passes the same island twice, once each way. The
+  base (no barriers) is cached once per course; a leg that rounds an island adds one cached copy
+  (LRU, `GEO_FIELD_CACHE_MAX`, default 24 masks). The optimizer, the playbook's scenario fan, pace
+  plays (`from_mark`), the rejoin table and the play-route downsample all use it. See
+  `test_leg_obstacles.py`.
 - **Crew-facing roundings summary:** the route enforces island sides but didn't *tell* the crew, so
   `race_def.marks_with_side()` lists the ordered required sides for all marks (nav + islands + gates),
   the optimize result carries `roundings`, and the briefing states them ("leave Duck Islands to

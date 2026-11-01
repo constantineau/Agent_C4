@@ -70,20 +70,6 @@ class RunError(Exception):
 
 
 # ---- the remaining course ---------------------------------------------------------------------
-def _nav_index_map(course):
-    """For each course mark, the navigator index it gets (course_to_marks order), or None for an
-    island / a mark with no position. Start is index 0 when it has a position."""
-    k = 1 if (course.get("start") or {}).get("lat") is not None else 0
-    out = []
-    for m in course.get("marks", []) or []:
-        if m.get("type") == "island" or m.get("lat") is None:
-            out.append(None)
-        else:
-            out.append(k)
-            k += 1
-    return out, k              # k = the finish's index (when the course has one)
-
-
 def remaining_definition(definition, course_id, next_index, lat, lon):
     """The deployed course, cut to what's left: it starts at the boat and runs from the next mark
     (navigator index `next_index`) to the finish. Every island stays an obstacle; the ones on legs
@@ -94,7 +80,7 @@ def remaining_definition(definition, course_id, next_index, lat, lon):
         (courses[0] if courses else None)
     if not course:
         raise RunError("No course loaded.")
-    idx, finish_idx = _nav_index_map(course)
+    idx, finish_idx = geo.nav_index_map(course)
     # each rounding island's leg bearing AS DEPLOYED (previous mark → next mark). Trimming puts the
     # boat in as the start, which would rotate the current leg's barrier and could open water the
     # deployed rounding rule closes, so the bearing is pinned on the kept island.
@@ -164,29 +150,6 @@ def leg_count(definition, course_id):
     return max(0, len(race_def.course_to_marks(definition, course_id)[0]) - 1)
 
 
-def only_leg_barriers(definition, course_id, leg):
-    """`definition` with rounding sides kept only on the islands of leg `leg` (0 = boat → first
-    mark); every other island keeps its disk but no side. A course that rounds the same island
-    twice, once each way, then never has both barriers at once (together they'd wall off the
-    island's whole meridian)."""
-    d = copy.deepcopy(definition)
-    courses = d.get("courses") or []
-    course = next((c for c in courses if c.get("id") == course_id), None) or \
-        (courses[0] if courses else None)
-    if not course:
-        return d
-    idx, _fin = _nav_index_map(course)
-    has_start = (course.get("start") or {}).get("lat") is not None
-    cur = 0 if has_start else -1            # nav index of the last point before this island
-    for m, k in zip(course.get("marks") or [], idx):
-        if k is not None:
-            cur = k
-            continue
-        if m.get("type") == "island" and cur != leg:      # leg k runs nav k → nav k+1
-            m["rounding"] = "none"
-    return d
-
-
 def _race_obstacles(definition, course_id, bbox, res_deg, depth, leg=None):
     """The race's own obstacles for what's LEFT of the course: zones, island disks and the
     rounding-side barriers of islands still to round (an island already rounded leaves no barrier
@@ -196,7 +159,7 @@ def _race_obstacles(definition, course_id, bbox, res_deg, depth, leg=None):
     # carve_waypoints=False: no zone or island disk is ever opened, for the boat or any mark (the
     # pockets go in the land mask only, see load_obstacles). `leg`: only that leg's barriers.
     if leg is not None:
-        definition = only_leg_barriers(definition, course_id, leg)
+        definition = geo.only_leg_barriers(definition, course_id, leg)
     return geo.build_for_course(definition, course_id, bbox, res_deg=res_deg, coastline_on=False,
                                 use_cache=False, source="natural_earth", safety_depth=depth,
                                 carve_waypoints=False)
