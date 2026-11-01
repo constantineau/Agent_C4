@@ -36,6 +36,7 @@ _LOCK = threading.Lock()
 # → commit, and /reroute/run holds it while it reads the course it sends to the Orin, so a run never
 # sees one load's marks with another load's definition.
 COURSE_LOCK = threading.RLock()
+_SYNC_LOCK = threading.Lock()   # status → fetch → store as one step, so an older route never overwrites a newer
 
 # crew-facing (short and plain: they reach the iPad as-is)
 NO_ORIN = "Can't reach the Orin. Re-route not started."
@@ -309,7 +310,11 @@ def _store(result):
 def get(call=None):
     """The Orin's status + progress, and the last stored route. A newly finished route is fetched
     and stored first. Works with the Orin off (then `orin.reachable` is false)."""
-    call = call or _call
+    with _SYNC_LOCK:
+        return _get(call or _call)
+
+
+def _get(call):
     code, st = call("GET", "/status")
     if code != 200 or not isinstance(st, dict):
         return {"orin": {"reachable": False}, "state": None, "progress": None,

@@ -401,6 +401,11 @@ for _bad in (dict(good, res_deg=0), dict(good, res_deg=float("nan")), dict(good,
         check("field_from_dict: bad grid → ValueError", False)
     except ValueError:
         check("field_from_dict: bad grid → ValueError", True)
+try:
+    geo.field_from_dict(dict(good, layers=["coastline"]))
+    check("field_from_dict: layers not a dict → ValueError", False)
+except ValueError:
+    check("field_from_dict: layers not a dict → ValueError", True)
 good_ch = json.load(open(job.chart_path("huron", "c")))
 empty = geo.ObstacleField(tuple(good_ch["bbox"]), res_deg=good_ch["res_deg"])
 with open(job.chart_path("huron", "c"), "w") as fh:

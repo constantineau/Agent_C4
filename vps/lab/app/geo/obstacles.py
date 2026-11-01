@@ -529,7 +529,13 @@ def field_from_dict(d: dict):
     if (field.nx, field.ny) != (int(d["nx"]), int(d["ny"])) or len(mask) != field.nx * field.ny:
         raise ValueError("mask size does not match its box")
     field.mask = bytearray(mask)
-    field.layers.update({k: int(v) for k, v in (d.get("layers") or {}).items()})
+    layers = d.get("layers") or {}
+    if not isinstance(layers, dict):
+        raise ValueError("bad layers")
+    try:
+        field.layers.update({str(k): int(v) for k, v in layers.items()})
+    except (ValueError, TypeError) as exc:
+        raise ValueError(f"bad layers: {type(exc).__name__}") from None
     field.source = d.get("source") or field.source
     field.safety_depth = d.get("safety_depth")
     field.active = bool(d.get("active"))
