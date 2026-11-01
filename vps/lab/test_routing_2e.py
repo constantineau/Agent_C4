@@ -100,3 +100,4 @@ print(f"     counter check: reported={sl['tacks']} recomputed-from-path={crossin
 check("reported tacks == genuine path crossings (local-wind counter)", sl["tacks"] == crossings)
 
 print("RESULT:", "PASS" if ok else "FAIL")
+raise SystemExit(0 if ok else 1)

@@ -236,6 +236,21 @@ def test_strategy_default() -> bool:
     return ok
 
 
+BENCH_PURE = (bench_copilot.test_narrate_logic, bench_copilot.test_safety_callout,
+              bench_copilot.test_fleet_callout, bench_copilot.test_deviation_drift_callout,
+              bench_copilot.test_adherence_logic, bench_copilot.test_coach_logic,
+              bench_copilot.test_strategy_synthesis, bench_copilot.test_strategy_callout,
+              bench_copilot.test_plays_callout, bench_copilot.test_play_match_filter,
+              bench_copilot.test_briefs_logic)
+
+
+def test_bench_list_in_step():
+    """Every pure test_* in bench_copilot runs here, so a new one can't be left out of CI."""
+    have = {n for n in dir(bench_copilot) if n.startswith("test_") and callable(getattr(bench_copilot, n))}
+    run = {t.__name__ for t in BENCH_PURE}
+    return _check(f"every bench_copilot test_* runs in CI (missing: {sorted(have - run)})", have <= run)
+
+
 def main():
     orig = (copilot.EngineClient, copilot.LLMClient, config.USE_LLM, config.BRIEFS_ENABLED)
     copilot.EngineClient, copilot.LLMClient = StubEngine, StubLLM
@@ -244,10 +259,11 @@ def main():
         ok &= test_strategy_default()
     finally:
         copilot.EngineClient, copilot.LLMClient, config.USE_LLM, config.BRIEFS_ENABLED = orig
-    # the bench's pure callout/coach checks (incl. the watch-level ranking) ride along in CI
-    for t in (bench_copilot.test_narrate_logic, bench_copilot.test_safety_callout,
-              bench_copilot.test_coach_logic, bench_copilot.test_strategy_synthesis):
+    # ALL of the bench's pure checks ride along in CI: the same list bench_copilot.main() runs
+    # before it needs a live engine. Keep the two lists in step (test_bench_list_in_step below).
+    for t in BENCH_PURE:
         ok &= t()
+    ok &= test_bench_list_in_step()
     print("\n" + ("PASS" if ok else "FAIL"))
     sys.exit(0 if ok else 1)
 

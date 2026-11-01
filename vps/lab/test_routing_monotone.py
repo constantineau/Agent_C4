@@ -170,3 +170,4 @@ straight = [{"lat": 0.0, "lon": 0.01 * i, "t": i * 3600.0} for i in range(6)]
 check("clean leg silent", OPT._leg_self_crossings(straight, legs, 0.0) == {})
 
 print("RESULT:", "PASS" if ok else "FAIL")
+raise SystemExit(0 if ok else 1)
