@@ -353,7 +353,8 @@ def build_for_course(definition: dict, course_id, bbox, *, coastline_on=True, zo
     src = (source or COASTLINE_SOURCE).strip().lower()
     depth = safety_depth if safety_depth is not None else safety_depth_m()
     ck = None
-    if use_cache and coastline_on and zones_on and islands_on:
+    # only the Lab's default (pockets carved) build is cached; a no-pocket build is never served from it
+    if use_cache and coastline_on and zones_on and islands_on and carve_waypoints:
         ck = cache_key(definition, course_id, bbox, res_deg, source=src, safety_depth=depth)
         if ck in _FIELD_CACHE:
             return _FIELD_CACHE[ck]
