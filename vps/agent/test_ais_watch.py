@@ -200,29 +200,56 @@ check("transceiver on the bus, nothing heard → only feed_silent", r["receiver_
 check("a source that can't tell (cloud) → receiver_missing None", run(Src([]))["receiver_missing"] is None)
 
 print("\n== 5a. unknown own speed is not 'stopped' (Codex on #191 at b646bee) ==")
-ais._PREV_FIX = None
+ais._FIXES.clear()
 nospeed = row("366999030", 0.06 * NM_LAT, None, None, name="NOSPEED")
 r = run(Src([nospeed], sog_kn=None))
 check("fresh own fix, no own SOG → underway None (not False)", r["own_fix"] is True and r["underway"] is None)
 check("…the 0.06 nm unknown-motion contact is listed with motion 'unknown'",
       by(r, "366999030")["motion"] == "unknown")
-ais._PREV_FIX = None
+ais._FIXES.clear()
 check("…and an empty sea under unknown speed still gets the 'No AIS heard' hint",
       run(Src([], sog_kn=None))["feed_silent"] is True)
-ais._PREV_FIX = None
+ais._FIXES.clear()
 r = run(Src([], sog_kn=6.0, sog_age=120))
 check("own SOG 120 s old (fix fresh) → stale → underway None", r["underway"] is None and r["own_sog_kn"] is None)
-ais._PREV_FIX = None
+ais._FIXES.clear()
 check("a MEASURED 0.3 kn → underway False", run(Src([], sog_kn=0.3))["underway"] is False)
 # derived speed: two own fixes 30 s apart, 0.05 nm north → 6 kn, course 000
-ais._PREV_FIX = (LAT0 - 0.05 * NM_LAT, LON0, time.time() - 31)
-r = run(Src([], sog_kn=None, fix_age=1))
+ais._FIXES[:] = [(LAT0 - 0.05 * NM_LAT, LON0, time.time() - 31)]
+two = Src([], sog_kn=None, fix_age=1)
+r = run(two)
 check("no SOG but two fixes 30 s / 0.05 nm apart → derived ~6 kn, under way",
       r["underway"] is True and r["own_motion_source"] == "derived" and abs(r["own_sog_kn"] - 6.0) < 0.3)
-ais._PREV_FIX = (LAT0 - 0.05 * NM_LAT, LON0, time.time() - 600)
+r2, r3 = run(two), run(two)
+check("reading the SAME fix again gives the same derived motion (no read side effect)",
+      r2["own_sog_kn"] == r["own_sog_kn"] == r3["own_sog_kn"] and r3["own_motion_source"] == "derived")
+ais._FIXES[:] = [(LAT0 - 0.05 * NM_LAT, LON0, time.time() - 600)]
 check("fixes 10 min apart → too far apart to derive → None",
       run(Src([], sog_kn=None, fix_age=1))["underway"] is None)
-ais._PREV_FIX = None
+ais._FIXES.clear()
+
+print("\n== 5a'. own motion unusable → no CPA claimed (Codex on #191 at 47fa8a4) ==")
+buoy = row("366999031", 0.1 * NM_LAT, 0.0, 0.0, name="ANCHORED")         # stationary, 0.1 nm dead ahead
+r = run(Src([buoy], sog_kn=None))
+t = by(r, "366999031")
+check("own SOG missing: the stationary target ahead is NOT 'not closing' — relative motion unknown",
+      t["closing"] is None and t["cpa_nm"] is None and t["motion"] == "unknown" and t["unknown_motion"] == "own")
+ais._FIXES.clear()
+src_nocog = Src([buoy], sog_kn=6.0)
+src_nocog.vals["navigation.courseOverGroundTrue"] = None
+t = by(run(src_nocog), "366999031")
+check("own SOG 6 kn but no COG (and nothing to derive from) → unknown too", t["unknown_motion"] == "own")
+ais._FIXES.clear()
+t = by(run(Src([buoy], sog_kn=6.0, cog=0.0)), "366999031")
+check("own motion known (6 kn, 000) → closing, CPA ~0, TCPA ~1 min",
+      t["closing"] is True and t["cpa_nm"] < 0.01 and 0.8 < t["tcpa_min"] < 1.2)
+ais._FIXES.clear()
+stopped = Src([buoy], sog_kn=0.02)
+stopped.vals["navigation.courseOverGroundTrue"] = None
+check("measured ~0 kn with no COG still counts as known (course doesn't matter when stopped)",
+      by(run(stopped), "366999031")["motion"] == "known")
+ais._FIXES.clear()
+ais._FIXES.clear()
 
 print("\n== 5b. the engine's AIS input link (Codex on #191 at 3530006) ==")
 

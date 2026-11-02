@@ -230,7 +230,7 @@ def _engine_ais(rows, own_sog_kn=6.0, fix_age=1.0, own_mmsi=None, rx_age=None, l
             return link or {"enabled": True, "connected": True, "last_msg_age_s": 0.5}
 
     ais_mod.datasource.active = lambda: Src()
-    ais_mod._PREV_FIX = None                 # no derived own speed carried over between cases
+    ais_mod._FIXES.clear()                   # no derived own speed carried over between cases
     ais_mod.OWN_FIX_MAX_AGE_S = 30
     if own_mmsi:
         os.environ["OWN_MMSI"] = own_mmsi
@@ -324,6 +324,15 @@ async def review_scenarios() -> bool:
     ok &= _check("own speed unknown + 0.06 nm contact, motion unknown → 'Contact, motion unknown', now",
                  st["active"] and st["active"][0]["headline"] == "Contact, motion unknown: NOSPEED"
                  and st["active"][0]["urgency"] == "now")
+
+    # Codex on #191 at 47fa8a4: no own speed, a STATIONARY target 0.1 nm dead ahead
+    anch = {"mmsi": "366999031", "name": "ANCHORED", "lat": 45.0 + 0.1 / 60.0, "lon": -83.0,
+            "sog": 0.0, "cog": 0.0}
+    _fresh({"conditions": _COND, "ais": _engine_ais([anch], own_sog_kn=None)})
+    st = await _tick()
+    ok &= _check("own speed unknown + stationary target 0.1 nm ahead → a 'now' callout saying our motion is unknown",
+                 st["active"] and st["active"][0]["headline"] == "Contact, motion unknown: ANCHORED"
+                 and st["active"][0]["urgency"] == "now" and "our speed/course unknown" in st["active"][0]["detail"])
 
     print("\n== 6d. each blind state is 'Collision watch OFF' ==")
     _fresh({"conditions": _COND, "ais": _engine_ais([freighter], fix_age=45)})

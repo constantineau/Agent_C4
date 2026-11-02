@@ -120,7 +120,10 @@ def _safety_callouts(ais):
             act = rng <= AIS_ACT_CPA_NM
             c = _callout(f"ais:{key}:unk-{'act' if act else 'watch'}", "safety", "now" if act else "soon",
                          f"Contact, motion unknown: {name}",
-                         f"{rng} nm{brg_s} · no speed/course{age_s}", ["get_ais"], "high" if act else "med")
+                         f"{rng} nm{brg_s} · "
+                         + ("our speed/course unknown" if t.get("unknown_motion") == "own"
+                            else "no speed/course") + age_s,
+                         ["get_ais"], "high" if act else "med")
             c["tcpa_min"] = None
             hits.append((0 if act else 1, -1.0, rng, c))
             continue

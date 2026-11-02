@@ -42,6 +42,7 @@ What makes the watch trustworthy (2026-11-02 system review, collision items 1, 4
 """
 import math
 import os
+import threading
 import time as _time
 
 from . import datasource
@@ -126,9 +127,37 @@ def _latest_sample(path):
     return float(smp[0]), (float(smp[1]) if smp[1] is not None else None)
 
 
-# The last own fix seen, to derive speed/course when SOG/COG are missing: (lat, lon, epoch).
-_PREV_FIX = None
+# The own fixes seen, newest last, at most two: (lat, lon, epoch) with DISTINCT epochs. Derived
+# speed/course is a pure function of the fix being read and the one before it, so every reader of
+# the same fix gets the same answer (reading twice changes nothing), until a newer fix arrives.
+_FIXES = []
+_FIX_LOCK = threading.Lock()
 DERIVE_MIN_S, DERIVE_MAX_S = 2.0, 120.0
+
+
+def _note_fix(lat, lon, e):
+    """Record an own fix by its time (idempotent: the same fix again is a no-op) and return the fix
+    before it, or None."""
+    with _FIX_LOCK:
+        if _FIXES and e < _FIXES[-1][2] - DERIVE_MAX_S:
+            _FIXES.clear()                   # the clock stepped back: start over from this fix
+        if not _FIXES or e > _FIXES[-1][2]:
+            _FIXES.append((lat, lon, e))
+            del _FIXES[:-2]
+        for i in range(len(_FIXES) - 1, -1, -1):
+            if _FIXES[i][2] == e:
+                return _FIXES[i - 1] if i > 0 else None
+        return None                          # an older fix than any held: nothing to derive from
+
+
+def _derive(prev, lat, lon, e):
+    """(sog kn, cog deg | None) from the previous fix to this one, or None when they are not
+    DERIVE_MIN_S..DERIVE_MAX_S apart."""
+    if prev is None or not (DERIVE_MIN_S <= e - prev[2] <= DERIVE_MAX_S):
+        return None
+    de, dn = _enu_nm(prev[0], prev[1], lat, lon)
+    sog = math.hypot(de, dn) / ((e - prev[2]) / 3600.0)
+    return sog, ((math.degrees(math.atan2(de, dn)) + 360) % 360 if sog > 0 else None)
 
 
 def _motion_sample(path, now):
@@ -148,7 +177,6 @@ def _own_ship():
     of the position (`age_s`, None when the source can't say). With no usable SOG/COG, speed and
     course are derived from two successive own fixes (DERIVE_MIN_S..DERIVE_MAX_S apart) when we
     have them (`motion_source: "derived"`); otherwise they stay None — unknown, never "stopped"."""
-    global _PREV_FIX
     lat, e_lat = _latest_sample("navigation.position.latitude")
     lon, e_lon = _latest_sample("navigation.position.longitude")
     now = _time.time()
@@ -164,15 +192,12 @@ def _own_ship():
     cog_deg = math.degrees(cog) % 360 if cog is not None else None
     src = "measured" if sog_kn is not None else None
     if lat is not None and lon is not None and e is not None:
-        prev = _PREV_FIX
-        if sog_kn is None and prev is not None and DERIVE_MIN_S <= e - prev[2] <= DERIVE_MAX_S:
-            de, dn = _enu_nm(prev[0], prev[1], lat, lon)
-            sog_kn = math.hypot(de, dn) / ((e - prev[2]) / 3600.0)
-            if cog_deg is None and sog_kn > 0:
-                cog_deg = (math.degrees(math.atan2(de, dn)) + 360) % 360
-            src = "derived"
-        if prev is None or e > prev[2]:
-            _PREV_FIX = (lat, lon, e)
+        prev = _note_fix(lat, lon, e)
+        d = _derive(prev, lat, lon, e) if sog_kn is None else None
+        if d is not None:
+            sog_kn, src = d[0], "derived"
+            if cog_deg is None:
+                cog_deg = d[1]
     return {
         "lat": lat, "lon": lon, "sog": sog_kn, "cog": cog_deg, "motion_source": src,
         "age_s": max(0.0, now - e) if e is not None else None,
@@ -198,6 +223,14 @@ def _motion_known(t):
     return t.get("sog") is not None and t.get("cog") is not None
 
 
+def _own_motion_known(own):
+    """Our velocity is usable: SOG and COG (measured or derived), or a SOG so small that the course
+    doesn't matter. A missing or stale own SOG/COG must never become zero velocity — a stationary
+    target dead ahead would then read "not closing" while we sail at it."""
+    sog = own.get("sog")
+    return sog is not None and (own.get("cog") is not None or sog < _EPS_KN)
+
+
 def _dead_reckon(lat, lon, sog, cog, age_s):
     """Move a reported position forward by `age_s` along SOG (kn) / COG (deg true)."""
     if sog is None or cog is None or not age_s or age_s <= 0:
@@ -212,12 +245,13 @@ def _cpa(own, tgt):
     """Range/bearing now + CPA (nm) and TCPA (min) of `tgt` relative to `own`.
 
     Positive TCPA = approaching (CPA in the future); negative/zero = opening or already past.
-    Returns range_nm, bearing, cpa_nm, tcpa_min, closing(bool). A target with no SOG or COG has
-    unknown motion: range and bearing only, CPA/TCPA/closing None (never "stopped")."""
+    Returns range_nm, bearing, cpa_nm, tcpa_min, closing(bool). When the relative motion is
+    unknown — the target has no SOG/COG, OR our own motion is unusable (see _own_motion_known) —
+    it is range and bearing only, CPA/TCPA/closing None: never "stopped", never "not closing"."""
     de, dn = _enu_nm(own["lat"], own["lon"], tgt["lat"], tgt["lon"])
     rng = math.hypot(de, dn)
     brg = (math.degrees(math.atan2(de, dn)) + 360) % 360
-    if not _motion_known(tgt):
+    if not _motion_known(tgt) or not _own_motion_known(own):
         return rng, brg, None, None, None
 
     ove, ovn = _vel_nm_h(own["sog"], own["cog"])
@@ -362,7 +396,8 @@ def get_ais_targets(max_range_nm: float = 12):
         rng, brg, cpa, tcpa, closing = _cpa(own, tgt)
         if rng > max_range_nm:
             continue
-        known = _motion_known(tgt)
+        own_known = _own_motion_known(own)
+        known = _motion_known(tgt) and own_known
         possible_echo = False
         if (known and rng * _M_PER_NM <= ECHO_RANGE_M and own["sog"] is not None
                 and _rel_speed_kn(own, tgt) <= ECHO_REL_KN):
@@ -376,6 +411,8 @@ def get_ais_targets(max_range_nm: float = 12):
             "tcpa_min": round(tcpa, 1) if tcpa is not None else None,
             "closing": closing,
             "motion": "known" if known else "unknown",
+            # which side is unknown: our own motion (no usable SOG/COG) or the target's
+            "unknown_motion": None if known else ("own" if not own_known else "target"),
             "age_s": round(age) if age is not None else None,
             "possible_echo": possible_echo,
         })
