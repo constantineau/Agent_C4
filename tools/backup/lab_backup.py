@@ -238,6 +238,18 @@ def _sqlite_snapshot(src, dst):
         s.close()
 
 
+class _HashingReader:
+    """Hashes exactly the bytes tar reads from one open file."""
+
+    def __init__(self, f):
+        self.f, self.h = f, hashlib.sha256()
+
+    def read(self, n=-1):
+        b = self.f.read(n)
+        self.h.update(b)
+        return b
+
+
 class _HashingWriter(io.RawIOBase):
     """Hashes the uncompressed tar stream (the content key) on its way into gzip."""
 
@@ -274,21 +286,35 @@ def tar_volume(src_dir, out_path, scratch):
                 if p in skip:
                     continue
                 rel = os.path.relpath(p, src_dir)
-                ti = tar.gettarinfo(p, arcname=rel)
-                ti.mtime = int(ti.mtime)
-                if ti.isfile():
+                if os.path.isfile(p) and not os.path.islink(p):
                     data = p
                     if p in dbs:
                         data = os.path.join(scratch, "snap.db")
                         if os.path.exists(data):
                             os.remove(data)
                         _sqlite_snapshot(p, data)
-                        ti.size = os.path.getsize(data)
                         counts[rel] = sqlite_counts(data)
-                    files[rel] = sha256_file(data)
-                    with open(data, "rb") as f:
-                        tar.addfile(ti, f)
+                    # ONE open file for the header, the bytes and the hash. The Lab replaces its
+                    # JSON with tmp + rename: a stat, a hash and a read by NAME could each see a
+                    # different file and publish a tar that does not match INDEX. An open fd
+                    # keeps reading the file it opened, whatever the name now points at.
+                    try:
+                        f = open(data, "rb")
+                    except FileNotFoundError:
+                        log(f"  {rel}: gone before it could be read (deleted) — not archived")
+                        continue
+                    with f:
+                        ti = tar.gettarinfo(arcname=rel, fileobj=f)
+                        ti.mtime = int(ti.mtime)
+                        if data != p:                # the snapshot's bytes, the db's metadata
+                            src = os.stat(p)
+                            ti.mtime, ti.mode = int(src.st_mtime), src.st_mode & 0o7777
+                        hr = _HashingReader(f)
+                        tar.addfile(ti, hr)
+                    files[rel] = hr.h.hexdigest()
                 else:
+                    ti = tar.gettarinfo(p, arcname=rel)
+                    ti.mtime = int(ti.mtime)
                     tar.addfile(ti)
         hw.flush()
     return hw.h.hexdigest(), files, counts
@@ -501,40 +527,56 @@ def run_prune(dest, keep_spec=(7, 4, 12), dry_run=False, min_unfinished_age_h=24
         log("prune: no finished set at the destination — nothing is deleted")
         return 0, 0
     keep = choose_keep(list(done), *keep_spec)
-    needed = {}                                  # set -> objects a kept set still points at
-    for n in keep:
-        for a in done[n]["artifacts"]:
-            needed.setdefault(a["stored_in"], set()).add(a["name"])
-        needed.setdefault(n, set()).update({INDEX, MANIFEST})
-    deleted = refused = 0
+    candidates = []
     for n in dest.sets():
         if not SET_RE.match(n) or n in keep:
             continue
         if n not in done and (now - set_time(n)).total_seconds() < min_unfinished_age_h * 3600:
             continue                             # may be a run in progress
-        hold = needed.get(n, set())
-        # INDEX first: a half-pruned set must read as unfinished, never as a complete backup
-        objs = sorted(dest.objects(n), key=lambda o: (o != INDEX, o))
-        for o in objs:
-            if o in hold:
+        candidates.append(n)
+    deleted = refused = 0
+
+    # Phase 1: retire the obsolete sets by deleting their INDEX. A refused delete (retention
+    # lock) leaves that set complete, and phase 2 then protects everything it points at.
+    for n in candidates:
+        if n not in done:
+            continue
+        if dry_run:
+            log(f"  would delete {n}/{INDEX}")
+            deleted += 1
+        elif dest.delete(n, INDEX):
+            deleted += 1
+        else:
+            refused += 1
+            log(f"  {n}: its {INDEX} could not be deleted — it stays a complete set")
+
+    # Phase 2: protect every object that ANY index still standing points at (re-listed, not
+    # the keep list: a set whose INDEX survived is still a backup someone may restore).
+    standing = ({n: i for n, i in done.items() if n not in candidates} if dry_run
+                else dict(complete_sets(dest)))
+    protected = {}
+    for n, idx in standing.items():
+        for art in idx["artifacts"]:
+            protected.setdefault(art["stored_in"], set()).add(art["name"])
+        protected.setdefault(n, set()).update({INDEX, MANIFEST})
+
+    # Phase 3: delete what nothing standing protects.
+    for n in candidates:
+        hold = protected.get(n, set())
+        for o in dest.objects(n):
+            if o in hold or (dry_run and o == INDEX):
                 continue
             if dry_run:
                 log(f"  would delete {n}/{o}")
                 deleted += 1
-                continue
-            if dest.delete(n, o):
+            elif dest.delete(n, o):
                 deleted += 1
             else:
                 refused += 1
-                if o == INDEX:
-                    # The set still reads as a complete backup: deleting its artifacts now would
-                    # leave a "complete" set that cannot restore. Leave the whole set for later.
-                    log(f"  {n}: its {INDEX} could not be deleted — the set is left whole")
-                    break
         if not dry_run:
             dest.drop_set_if_empty(n)
-        if hold:
-            log(f"  {n}: kept {len(hold)} object(s) that newer sets still use")
+        if hold and n not in standing:
+            log(f"  {n}: kept {len(hold)} object(s) that standing sets still use")
     log(f"prune: keeping {len(keep)} set(s); {deleted} object(s) "
         f"{'would be ' if dry_run else ''}deleted, {refused} refused")
     return deleted, refused

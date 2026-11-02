@@ -246,6 +246,64 @@ with tempfile.TemporaryDirectory() as tmp:
           d == 0 and r == 2 and "vps-lab_ingested.tar.gz" in dest.objects(first))
     check("every set that still reads as complete can still restore", whole)
 
+print("a set whose INDEX survives keeps what it points at (Codex round 3 on #198)")
+with tempfile.TemporaryDirectory() as tmp:
+    class LockB(lb.LocalDest):
+        """Retention lock on set B's INDEX only."""
+        b_name = None
+
+        def delete(self, set_name, name):
+            if set_name == self.b_name and name == lb.INDEX:
+                return False
+            return super().delete(set_name, name)
+    dest = LockB(os.path.join(tmp, "dest"))
+    t = datetime(2026, 9, 1, 3, 0, tzinfo=timezone.utc)
+    for i, content in enumerate((b"x-v1", b"x-v1", b"x-v2")):     # A stores x, B points at A/x
+        lb.run_backup(dest, os.path.join(tmp, "w"), [], None, now=t + timedelta(days=i),
+                      producers=[("vps-lab_retro.tar.gz", "volume", producer(content))])
+    a_set, b_set = lb.set_name_for(t), lb.set_name_for(t + timedelta(days=1))
+    dest.b_name = b_set
+    check("setup: B points at A's copy", dict(lb.complete_sets(dest))[b_set]["artifacts"][0][
+        "stored_in"] == a_set)
+    lb.run_prune(dest, (1, 1, 1), now=t + timedelta(days=3))
+    standing = dict(lb.complete_sets(dest))
+    check("B is still standing (its INDEX was refused)", b_set in standing)
+    check("...and A's copy that B points at survived the prune",
+          all(os.path.isfile(os.path.join(dest.root, a["stored_in"], a["name"]))
+              for idx in standing.values() for a in idx["artifacts"]))
+    check("A itself no longer reads as a backup", a_set not in standing)
+
+print("a file replaced (tmp + rename) while it is being archived (Codex round 3 on #198)")
+with tempfile.TemporaryDirectory() as tmp:
+    vol = os.path.join(tmp, "vol")
+    os.makedirs(vol)
+    target = os.path.join(vol, "race.json")
+    with open(target, "w") as f:
+        f.write("old " * 1000)
+    real_gti, fired = tarfile.TarFile.gettarinfo, []
+
+    def replace_after_stat(self, *a, **kw):
+        ti = real_gti(self, *a, **kw)
+        if ti.name == "race.json" and not fired:             # the Lab saves right now
+            fired.append(1)
+            with open(target + ".tmp", "w") as f:
+                f.write("new, longer content " * 400)
+            os.replace(target + ".tmp", target)
+        return ti
+    tarfile.TarFile.gettarinfo = replace_after_stat
+    try:
+        os.makedirs(os.path.join(tmp, "s"))
+        key, files, _ = lb.tar_volume(vol, os.path.join(tmp, "v.tar.gz"), os.path.join(tmp, "s"))
+    finally:
+        tarfile.TarFile.gettarinfo = real_gti
+    with tarfile.open(os.path.join(tmp, "v.tar.gz")) as t:
+        member = t.extractfile("race.json").read()
+    check("the replace happened mid-archive", fired == [1])
+    check("the archived bytes are one whole version of the file",
+          member in (b"old " * 1000, b"new, longer content " * 400))
+    check("...and INDEX's hash is the hash of exactly those bytes",
+          files["race.json"] == hashlib.sha256(member).hexdigest())
+
 print("prune takes the same lock as backup (Codex on #198)")
 with tempfile.TemporaryDirectory() as tmp:
     import fcntl
