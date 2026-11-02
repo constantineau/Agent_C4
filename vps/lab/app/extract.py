@@ -139,16 +139,36 @@ def _unlocked_copy(reader, label) -> tuple:
                       f"and scanned pages may be missing. Check it by hand.")
 
 
+def _is_text_type(ctype: str, raw: bytes) -> bool:
+    """A web page / text we can read as text (not an image, Word file, zip…)."""
+    mime = ctype.split(";")[0].strip()
+    if (not mime or mime.startswith("text/") or mime.endswith(("+xml", "+json"))
+            or mime in ("application/xml", "application/json")):
+        return True
+    return mime == "application/octet-stream" and b"\x00" not in raw[:2048]   # unlabeled: sniff
+
+
 def load_url(url: str) -> dict:
-    """A document URL → a doc ({label, url, text, pdf, pages}); PDFs keep their bytes."""
+    """A document URL → a doc ({label, url, text, pdf, pages, note, embedded}); PDFs keep their
+    bytes. A web page's embedded PDFs (iframe/embed/object) come back as their own docs in
+    `embedded`, so they go to the model as PDFs exactly like a PDF link; every embedded part that
+    couldn't be read is in `note`."""
     ctype, raw = fetch_doc(url)
     label = doc_label(url)
     if "pdf" in ctype or url.lower().endswith(".pdf") or raw[:5] == b"%PDF-":
         return load_pdf(label, raw, url)
-    failed = []
-    text = _page_text(url, raw, failed=failed)
+    if not _is_text_type(ctype, raw):
+        kind = ctype.split(";")[0].strip() or "unknown"
+        raise IngestError(f"{label} is a {kind} file, not a PDF or web page. Save it as a PDF "
+                          f"and upload it.")
+    failed, pdfs = [], []
+    text = _page_text(url, raw, failed=failed, pdfs=pdfs)
+    if len(text.strip()) < MIN_TEXT_CHARS and not pdfs:
+        failed.append(f"{label} has very little text (a page built by JavaScript?). Little from "
+                      f"it may be in the draft. Download its documents and upload them, or check "
+                      f"it by hand.")
     return {"label": label, "url": url, "text": text, "pdf": None, "pages": 0,
-            "note": " ".join(failed)}
+            "note": " ".join(failed), "embedded": pdfs}
 
 
 def _html_to_text(html: str) -> str:
@@ -157,47 +177,78 @@ def _html_to_text(html: str) -> str:
     return re.sub(r"\s+", " ", text)
 
 
-_IFRAME_SRC = re.compile(r'<iframe[^>]+src=["\']([^"\']+)["\']', re.I)
+# content embedded in a page: <iframe src>, <embed src>, <object data>
+_IFRAME_SRC = re.compile(r'<(?:iframe|embed)[^>]+src=["\']([^"\']+)["\']'
+                         r'|<object[^>]+data=["\']([^"\']+)["\']', re.I)
 # non-content iframes to skip (ads/analytics/social) so we don't waste fetches or add noise
 _IFRAME_SKIP = ("google.com", "googletagmanager", "doubleclick", "facebook.", "youtube.",
                 "gstatic", "recaptcha", "/gtag", "analytics", "hotjar", "twitter.")
+MAX_EMBEDS = 3
 
 
 def _page_text(url: str, raw: bytes, follow_iframes: bool = True,
-               failed: list | None = None) -> str:
-    """The page's text plus up to 3 content iframes'. An iframe that won't load doesn't break the
-    page; its plain-words failure goes into `failed` (when given) so ingest can say so."""
+               failed: list | None = None, pdfs: list | None = None) -> str:
+    """The page's text plus up to MAX_EMBEDS embedded pages' (one level deep). With `pdfs` given,
+    an embedded PDF is loaded as its own doc (sent to the model as a PDF) instead of being
+    flattened to text. With `failed` given, everything embedded that couldn't be read (or wasn't
+    followed) is reported there in plain words; without it (the fleet import) it's skipped."""
     html = raw.decode("utf-8", "ignore")
     text = _html_to_text(html)
-    if follow_iframes:
-        from urllib.parse import urljoin
-        seen = set()
-        for src in _IFRAME_SRC.findall(html):
-            full = urljoin(url, src)
-            low = full.lower()
-            if (not low.startswith(("http://", "https://")) or full in seen
-                    or any(s in low for s in _IFRAME_SKIP)):
-                continue
-            seen.add(full)
-            if len(seen) > 3:                     # bound the fan-out; one level deep, no recursion
-                break
-            # embedded entry-list apps (ColdFusion/etc.) can be slow + flaky (bycmack's entries.cfm
-            # is a ~500 KB dynamic page that takes 5–20 s and sometimes resets) → longer timeout + 1 retry
-            for attempt in range(2):
-                try:
-                    ct, rb = fetch(full, timeout=IFRAME_TIMEOUT)
-                    text += "\n" + (pdf_text(rb) if ("pdf" in ct or low.endswith(".pdf"))
-                                    else _html_to_text(rb.decode("utf-8", "ignore")))
+    if not follow_iframes:
+        return text
+    from urllib.parse import urljoin
+    here = doc_label(url)
+    seen = []
+    for m in _IFRAME_SRC.findall(html):
+        full = urljoin(url, m[0] or m[1])
+        low = full.lower()
+        if (not low.startswith(("http://", "https://")) or full in seen
+                or any(s in low for s in _IFRAME_SKIP)):
+            continue
+        seen.append(full)
+    if len(seen) > MAX_EMBEDS and failed is not None:
+        failed.append(f"{here} embeds {len(seen)} pages; only the first {MAX_EMBEDS} were read "
+                      f"(skipped: {', '.join(doc_label(u) for u in seen[MAX_EMBEDS:])}). Paste "
+                      f"those links on their own.")
+    for full in seen[:MAX_EMBEDS]:
+        low, name = full.lower(), doc_label(full)
+        # embedded entry-list apps (ColdFusion/etc.) can be slow + flaky (bycmack's entries.cfm
+        # is a ~500 KB dynamic page that takes 5–20 s and sometimes resets) → longer timeout + 1 retry
+        for attempt in range(2):
+            try:
+                ct, rb = fetch(full, timeout=IFRAME_TIMEOUT)
+            except Exception as e:  # noqa: BLE001
+                if attempt:                   # a dead/blocked iframe never breaks the outer fetch
+                    if failed is not None:
+                        failed.append(f"Couldn't load the embedded {name} on {here}: "
+                                      f"{_why(e, IFRAME_TIMEOUT)}. Anything in it (an entry "
+                                      f"list, the SIs) is missing from the draft. Check it by "
+                                      f"hand.")
                     break
-                except Exception as e:  # noqa: BLE001
-                    if attempt:                   # a dead/blocked iframe never breaks the outer fetch
-                        if failed is not None:
-                            failed.append(f"Couldn't load the embedded {doc_label(full)} on "
-                                          f"{doc_label(url)}: {_why(e, IFRAME_TIMEOUT)}. Anything "
-                                          f"in it (an entry list, the SIs) is missing from the "
-                                          f"draft. Check it by hand.")
-                        break
-                    time.sleep(1.5)
+                time.sleep(1.5)
+                continue
+            is_pdf = "pdf" in ct or low.endswith(".pdf") or rb[:5] == b"%PDF-"
+            if is_pdf and pdfs is not None:
+                try:
+                    pdfs.append(load_pdf(f"{name} (embedded in {here})", rb, full))
+                except IngestError as e:
+                    if failed is not None:
+                        failed.append(f"Couldn't read the embedded {name} on {here}: {e}")
+            elif is_pdf:
+                try:
+                    text += "\n" + pdf_text(rb)
+                except Exception:  # noqa: BLE001 — fleet import: a bad PDF adds nothing
+                    pass
+            elif _is_text_type(ct, rb):
+                part = _html_to_text(rb.decode("utf-8", "ignore"))
+                if not part.strip() and failed is not None:
+                    failed.append(f"The embedded {name} on {here} had no readable text (built by "
+                                  f"JavaScript?). Check it by hand.")
+                text += "\n" + part
+            elif failed is not None:
+                failed.append(f"The embedded {name} on {here} is a {ct.split(';')[0] or 'binary'} "
+                              f"file the Lab can't read. Check it by hand.")
+            break
     return text
 
 
@@ -379,9 +430,12 @@ def _as_doc(d) -> dict:
     if isinstance(d, dict):
         return {"label": d.get("label") or "document", "url": d.get("url", ""),
                 "text": d.get("text") or "", "pdf": d.get("pdf"), "pages": d.get("pages") or 0,
-                "note": d.get("note") or ""}
+                "note": d.get("note") or "",
+                # a page that only wraps embedded PDFs: its own empty text isn't a loss
+                "wrapper": bool(d.get("wrapper") or d.get("embedded"))}
     label, text = d                       # legacy (label, text) pairs
-    return {"label": label, "url": "", "text": text or "", "pdf": None, "pages": 0, "note": ""}
+    return {"label": label, "url": "", "text": text or "", "pdf": None, "pages": 0, "note": "",
+            "wrapper": False}
 
 
 def _fit_text(lengths: list[int], budget: int) -> int:
@@ -403,7 +457,7 @@ def build_content(docs, notes: list) -> list[dict]:
     """The user-turn content blocks for the model: each PDF as a PDF (within the page/byte budget),
     everything else as its text, never cut without a note. Raises IngestError when nothing is
     readable."""
-    docs = [_as_doc(d) for d in docs]
+    docs = _flatten(docs)
     notes.extend(d["note"] for d in docs if d["note"])
     pages = nbytes = 0
     as_pdf = set()
@@ -430,6 +484,8 @@ def build_content(docs, notes: list) -> list[dict]:
                 "data": base64.standard_b64encode(d["pdf"]).decode("ascii")}})
             continue
         text = d["text"].strip()
+        if not text and d["wrapper"]:
+            continue
         if not text:
             notes.append(f"{d['label']} had no readable text"
                          + (" (a scanned PDF?)" if d["pdf"] else "")
@@ -454,9 +510,19 @@ def build_content(docs, notes: list) -> list[dict]:
     return blocks
 
 
+def _flatten(docs) -> list:
+    """Docs in order, each page followed by the PDFs embedded in it (sent like any PDF)."""
+    out = []
+    for d in docs:
+        out.append(_as_doc(d))
+        if isinstance(d, dict):
+            out.extend(_as_doc(e) for e in d.get("embedded") or [])
+    return out
+
+
 def _text_only(docs) -> list:
     """The same documents with the PDF bytes dropped (the model rejected a PDF)."""
-    return [dict(_as_doc(d), pdf=None, note="") for d in docs]
+    return [dict(d, pdf=None, note="") for d in _flatten(docs)]
 
 
 def _finish(defn: dict) -> dict:

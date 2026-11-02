@@ -3,6 +3,7 @@ and nothing is dropped without saying so. No network or API key: a fake SDK clie
 Claude and a fake fetch for the web.
 Run (make ci): python3 vps/lab/test_extract_robust.py (workdir /srv in the lab image)"""
 import asyncio
+import base64
 import io
 import json
 import os
@@ -370,6 +371,89 @@ check("persisted note names the embedded page", any(n.startswith(
     for n in inotes))
 check("and it's listed for review", any(w.startswith("Ingest: Couldn't load the embedded entries.cfm")
                                         for w in r["warnings"]))
+extract.fetch = fake_fetch
+
+print("a scanned PDF embedded in a page goes to the model as a PDF, like a direct link")
+PAGE_TXT = b"Race page. Notice of Race details and the course. " * 10
+SCAN = blank_pdf(3)
+ROUTES = {}
+
+
+def route_fetch(url, timeout=30):
+    for key, val in ROUTES.items():
+        if key in url:
+            if isinstance(val, Exception):
+                raise val
+            return val
+    raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
+
+
+def page(*embeds, text=PAGE_TXT):
+    return "text/html", (b"<html><body>" + text + b"".join(embeds) + b"</body></html>")
+
+
+extract.fetch = route_fetch
+ROUTES.clear()
+ROUTES.update({"si.pdf": ("application/pdf", SCAN),
+               "/race/": page(b'<iframe src="/docs/si.pdf"></iframe>', text=b"")})
+calls = fake([reply()])
+r = asyncio.run(main.ingest_urls({"urls": ["https://x.org/race/"]}))
+blocks = calls["course"][0]["messages"][0]["content"] if calls["course"] else []
+docs_sent = [b for b in blocks if b["type"] == "document"]
+check("the embedded scan is a document block", len(docs_sent) == 1
+      and base64.standard_b64decode(docs_sent[0]["source"]["data"]) == SCAN)
+check("labelled as embedded", any(b.get("text", "").endswith("si.pdf (embedded in race) =====")
+                                  for b in blocks))
+check("listed as a source", isinstance(r, dict) and any(
+    s["url"] == "https://x.org/docs/si.pdf" for s in r["definition"]["provenance"]["sources"]))
+check("no notes (the wrapper page's empty text isn't a loss)", isinstance(r, dict)
+      and not r["definition"]["provenance"]["ingest_notes"])
+
+print("...and over the PDF budget it falls back to text, with notes")
+saved_pages = extract.PDF_MAX_PAGES
+extract.PDF_MAX_PAGES = 1
+ROUTES["/race/"] = page(b'<iframe src="/docs/si.pdf"></iframe>')
+calls = fake([reply()])
+r = asyncio.run(main.ingest_urls({"urls": ["https://x.org/race/"]}))
+inotes = [n["text"] for n in r["definition"]["provenance"]["ingest_notes"]] if isinstance(r, dict) else []
+check("note: too big to read as a PDF", any("si.pdf (embedded in race) is too big" in n for n in inotes))
+check("note: no readable text (scan)", any("si.pdf (embedded in race) had no readable text" in n
+                                           for n in inotes))
+extract.PDF_MAX_PAGES = saved_pages
+
+print("audit gaps: everything a page can't give us becomes a persisted note")
+ROUTES.clear()
+ROUTES.update({
+    "form.docx": ("application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                  b"PK\x03\x04\x00\x00binary"),
+    "/many/": page(*[f'<iframe src="/e{i}.html"></iframe>'.encode() for i in range(5)]),
+    "/e": ("text/html", b"<p>" + b"entry " * 50 + b"</p>"),
+    "/spa/": page(text=b"You need to enable JavaScript to run this app."),
+    "/blank/": page(b'<iframe src="/app/list.html"></iframe>'),
+    "list.html": ("text/html", b"<html><script>render()</script></html>"),
+    "/withimg/": page(b'<embed src="/pics/map.png">'),
+    "map.png": ("image/png", b"\x89PNG\x00\x00"),
+    "/notpdf/": page(b'<object data="/docs/fake.pdf"></object>'),
+    "fake.pdf": ("application/pdf", b"<html>error page</html>"),
+    "/nor.pdf": ("application/pdf", PDF),
+})
+calls = fake([reply()])
+r = asyncio.run(main.ingest_urls({"urls": [
+    "https://x.org/nor.pdf", "https://x.org/form.docx", "https://x.org/many/",
+    "https://x.org/spa/", "https://x.org/blank/", "https://x.org/withimg/",
+    "https://x.org/notpdf/"]}))
+inotes = " | ".join(n["text"] for n in r["definition"]["provenance"]["ingest_notes"]) \
+    if isinstance(r, dict) else ""
+check("a Word file is skipped by name", "form.docx is a application/vnd.openxmlformats" in inotes)
+check("embeds past the cap are named", "many embeds 5 pages; only the first 3 were read "
+      "(skipped: e3.html, e4.html)" in inotes)
+check("a JavaScript-only page is flagged", "spa has very little text" in inotes)
+check("an empty embedded page is flagged", "The embedded list.html on blank had no readable text"
+      in inotes)
+check("an embedded image is flagged", "The embedded map.png on withimg is a image/png file" in inotes)
+check("an embedded 'PDF' that isn't one is flagged",
+      "Couldn't read the embedded fake.pdf on notpdf: fake.pdf (embedded in notpdf) isn't a PDF"
+      in inotes)
 extract.fetch = fake_fetch
 
 print("a transient failure is retried once")

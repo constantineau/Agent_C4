@@ -190,6 +190,8 @@ async def ingest_urls(body: dict):
                 continue
             docs.append(doc)
             sources.append({"label": doc["label"], "url": u, "retrieved": _today()})
+            sources += [{"label": e["label"], "url": e["url"], "retrieved": _today()}
+                        for e in doc.get("embedded") or []]
         return await _ingest(docs, sources, notes)
     except Exception as exc:
         return _ingest_fail(exc)
