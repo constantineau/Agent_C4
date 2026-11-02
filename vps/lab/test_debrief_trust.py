@@ -32,9 +32,12 @@ N = 120
 
 
 def mktrack(trust=None):
-    """A two-hour straight-line sail at 6 kn, one fix a minute, absolute clock."""
+    """A two-hour sail north at 6 kn, one fix a minute, absolute clock. It weaves (a small
+    zigzag every fix) so distance and XTE depend on which fixes are counted: on a dead-straight
+    line, dropping fixes changes neither, and the "not gated" checks below could not fail."""
     return {"source": "boatlog",
-            "fixes": [{"t": T0 + i * 60, "lat": 45.0 + i * 0.0015, "lon": -83.0,
+            "fixes": [{"t": T0 + i * 60, "lat": 45.0 + i * 0.0015,
+                       "lon": -83.0 + (0.001 if i % 2 else -0.001),
                        "sog": 6.0, "cog": 0.0} for i in range(N)],
             "trust": trust, "sail_log": []}
 
@@ -104,9 +107,15 @@ check("...and both channels are named",
 print("\nthe metrics that must NOT be gated:")
 r_full = score(None)
 r_gated = score(DANGER)
-check("track-shape metrics (distance sailed) are identical gated and ungated — XTE and "
-      "side-worked read GPS geometry, not the compass",
-      r_full.get("dist_nm") == r_gated.get("dist_nm"))
+# Read the keys directly: a renamed key must fail here, not compare None == None (#55 — this
+# check read a "dist_nm" that score_track never wrote, and so passed whatever happened).
+SHAPE = ("sailed_nm", "xte_mean_nm", "xte_max_nm", "side_worked")
+check("the track-shape metrics are all present (a real distance, not None)",
+      all(k in r_full for k in SHAPE) and r_full["sailed_nm"] > 0)
+for k in SHAPE:
+    check(f"{k} is identical gated and ungated — distance, XTE and side-worked read GPS "
+          f"geometry, not the compass ({r_full.get(k)!r} vs {r_gated.get(k)!r})",
+          k in r_full and r_full[k] == r_gated.get(k))
 
 print("\n" + ("PASS" if ok else "FAIL"))
 raise SystemExit(0 if ok else 1)
