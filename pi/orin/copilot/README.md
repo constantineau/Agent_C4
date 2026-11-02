@@ -66,9 +66,18 @@ Safety rules (#29): safety callouts sort first whatever their urgency (a watch-l
 closing" leads the line over any "now" item) and never go through the LLM — their own text is the
 line. The auto-coach publishes each tick's callouts to `GET /coach` the moment the engine reads are
 in (gathered in parallel); LLM phrasing and the crew briefs run in their own background tasks and
-swap in later. When the collision watch can't see — engine unreachable, the AIS read failing, or no
-own GPS fix — a deterministic **"Collision watch blind: …"** safety callout (urgency now, confirmed
-over two ticks) replaces the old silent all-clear, and `last_error` names an unreachable engine.
+swap in later. When the collision watch can't see — engine unreachable, the AIS read failing, no
+own GPS fix or one older than 30 s, the engine's live Signal K link (its only AIS input) down, or
+the boat's AIS transceiver gone from the bus — a
+deterministic **"Collision watch OFF: …"** safety callout (urgency now, confirmed over two ticks)
+replaces the old silent all-clear, and `last_error` names an unreachable engine. A tick that throws
+publishes "Collision watch OFF: copilot error" instead of keeping the last result. Hearing no AIS
+traffic for 15 min while under way is only a quiet "No AIS heard for 15 min — Check the AIS." (open
+water can be empty). Every contact inside the guard gets its own callout (act before watch, soonest
+TCPA first). Only our configured MMSI is dropped (by the engine; see `pi/engine/README.md`, "Own
+MMSI"). A target within 50 m moving with us still alarms normally and also gets a quiet "Possible
+own-ship echo" hint to set it. Targets are dead-reckoned to now; one with no SOG/COG is "motion
+unknown" and is called on range.
 `POST /strategy` returns the fresh deterministic engine digest by default (the iPad polls it every
 ~15 s); the LLM narrative runs only on an explicit `{"use_llm": true}`. Polling a ~45 s LLM pass
 kept Ollama busy and queued the coach line behind it (an LLM strategy narrative is deferred to #53).
@@ -123,7 +132,7 @@ cadence (the copilot does the engine round-trip).
 # on the Orin (co-located with Ollama):
 cd pi/orin
 pip install -r copilot/requirements.txt
-ENGINE_URL=http://<pi-ip>:8200 python3 -m uvicorn copilot.app:app --host 0.0.0.0 --port 8300
+ENGINE_URL=http://<pi-ip>:8200 python3 -m copilot.serve   # cable 10.10.10.2 + loopback (COPILOT_BIND)
 curl -s localhost:8300/health
 curl -s -X POST localhost:8300/brief -H 'Content-Type: application/json' \
      -d '{"question":"What should the crew focus on right now?"}'

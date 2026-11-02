@@ -68,6 +68,62 @@ def _epoch(iso):
         return None
 
 
+_MAX_SOG_MS = 60.0          # ~117 kn: anything faster is a decode error, not a vessel
+
+
+def _finite(x):
+    """x as a finite float, or None (bools, strings, NaN, inf, None are not readings)."""
+    if isinstance(x, bool) or not isinstance(x, (int, float)):
+        return None
+    try:
+        f = float(x)
+    except (OverflowError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
+
+
+def _lat_lon(value):
+    """(lat, lon) from a Signal K position value when BOTH are finite numbers in range, else None.
+    Half a position, an empty `{}`, a NaN or a lat of 91 is not a fix."""
+    if not isinstance(value, dict):
+        return None
+    lat, lon = _finite(value.get("latitude")), _finite(value.get("longitude"))
+    if lat is None or lon is None or not (-90 <= lat <= 90) or not (-180 <= lon <= 180):
+        return None
+    return lat, lon
+
+
+# The Pi has no RTC: its wall clock can step at boot (NTP/GPS time arriving). A wall-vs-monotonic
+# disagreement larger than this between two looks is a step, and the live caches are reset.
+CLOCK_STEP_S = float(os.environ.get("ONBOARD_CLOCK_STEP_S", "5"))
+
+# A target's SOG/COG older than this (by their own report time) is dropped: motion unknown.
+AIS_MOTION_MAX_S = float(os.environ.get("ONBOARD_AIS_MOTION_MAX_S", "300"))
+
+# A Signal K update timestamp later than receipt by more than this is clock nonsense → receipt.
+FUTURE_SKEW_S = 2.0
+
+
+def _update_time(upd, now):
+    """When a Signal K update's readings were taken: its own `timestamp`, not the moment the delta
+    reached us. A position held up 4 min in a queue is 4 min old (at 24 kn, 1.6 nm) — dating it by
+    receipt would call it fresh. Guards: a missing or unparseable stamp → receipt; a stamp slightly
+    in the future (within FUTURE_SKEW_S) → clamped to receipt; one further ahead → None: the caller
+    DISCARDS the update (relabelled with receipt it would pass as fresh); an old one is kept, so its
+    real age shows (the stale-fix guard and the AIS window then treat it as old, which it is)."""
+    ts = upd.get("timestamp") if isinstance(upd, dict) else None
+    e = _epoch(ts) if isinstance(ts, str) else None
+    if e is None:
+        return now
+    if e > now + FUTURE_SKEW_S:
+        return None
+    return min(e, now)
+
+
+def _source_label(upd):
+    return (upd.get("$source") or (upd.get("source") or {}).get("label") or "unknown")
+
+
 # Sources that carry AIS traffic rather than own-ship instruments. Until 2026-09-07 the
 # archiver had no vessel-context filter, so `subscribe=all` put every AIS target into `readings`
 # under the own-ship BOAT_ID (fixed in pi/archiver/archiver.py). Any archive written before that
@@ -158,6 +214,11 @@ class OnboardSource:
         self._ais = {}             # mmsi -> {mmsi, time, name, lat, lon, sog(kn), cog(deg)}
         self._self_ctx = None      # the SK 'self' context urn, from the hello frame
         self._live_lock = threading.Lock()
+        # the live Signal K link's state, for the collision watch: AIS targets arrive ONLY this way
+        # (the archiver keeps own-ship contexts only), so a dropped link is a blind AIS watch even
+        # while the archive's own GPS stays fresh
+        self._link_connected = False
+        self._link_last_msg = None
         self._series_cache = {}    # (kind, path, minutes) -> (mono, rows) — see _cached_series
         self._series_lock = threading.Lock()
         self._polars = _load_polars()
@@ -273,11 +334,15 @@ class OnboardSource:
                 try:
                     async with websockets.connect(SIGNALK_WS, ping_interval=20) as ws:
                         print(f"[onboard] live SK cache connected {SIGNALK_WS}", flush=True)
+                        self._link_connected = True
                         async for msg in ws:
+                            self._link_last_msg = _time.monotonic()   # a receipt age: no wall clock
                             self._ingest_live(msg)
                 except Exception as exc:
                     print(f"[onboard] live SK WS error ({exc}); retry 3s", flush=True)
                     await asyncio.sleep(3)
+                finally:
+                    self._link_connected = False
 
         asyncio.new_event_loop().run_until_complete(loop())
 
@@ -295,49 +360,122 @@ class OnboardSource:
         ctx = data.get("context")
         mmsi = _mmsi_from_context(ctx)
         is_other = bool(ctx) and ctx != self._self_ctx and mmsi is not None
+        self._check_clock()
         now = _time.time()
         with self._live_lock:
+            mono = _time.monotonic()
+            rx = self.__dict__.setdefault("_ais_rx_seen", {})
             if is_other:
                 # An AIS target: accumulate per-MMSI, NEVER into the own-ship live cache.
                 for upd in data.get("updates", []):
+                    # the source that delivers other vessels IS the AIS receiver: learn its label
+                    # from live traffic (the archive drops other vessels, so it can't tell us)
+                    rx[_source_label(upd)] = mono
+                    at = _update_time(upd, now)
+                    if at is None:                      # stamped beyond the skew: discard
+                        self._future_dropped = getattr(self, "_future_dropped", 0) + 1
+                        continue
                     for v in upd.get("values", []):
-                        self._record_ais(mmsi, now, v.get("path"), v.get("value"))
+                        self._record_ais(mmsi, now, v.get("path"), v.get("value"), at)
                 return
             for upd in data.get("updates", []):
-                source = (upd.get("$source")
-                          or (upd.get("source") or {}).get("label") or "unknown")
+                source = _source_label(upd)
+                if source in rx:                        # the receiver publishing on our own context
+                    rx[source] = mono
+                at = _update_time(upd, now)     # when the reading was taken, not when it reached us
+                if at is None:                          # stamped beyond the skew: discard
+                    self._future_dropped = getattr(self, "_future_dropped", 0) + 1
+                    continue
                 for v in upd.get("values", []):
                     path, val = v.get("path"), v.get("value")
                     if not path:
                         continue
-                    if isinstance(val, (int, float)) and not isinstance(val, bool):
-                        self._live[(path, source)] = (now, float(val))
+                    if path == "navigation.position":
+                        # lat and lon only as a valid PAIR, written together (never half a fix, a
+                        # NaN, or an out-of-range coordinate — and never a time without a value)
+                        ll = _lat_lon(val)
+                        if ll:
+                            self._put_live((f"{path}.latitude", source), at, ll[0])
+                            self._put_live((f"{path}.longitude", source), at, ll[1])
+                        if isinstance(val, dict):   # other members (altitude) as before, if finite
+                            for k, sub in val.items():
+                                if k not in ("latitude", "longitude") and _finite(sub) is not None:
+                                    self._put_live((f"{path}.{k}", source), at, _finite(sub))
+                    elif _finite(val) is not None:
+                        self._put_live((path, source), at, _finite(val))
                     elif isinstance(val, dict):  # flatten position/attitude like the archiver
                         for k, sub in val.items():
-                            if isinstance(sub, (int, float)) and not isinstance(sub, bool):
-                                self._live[(f"{path}.{k}", source)] = (now, float(sub))
+                            if _finite(sub) is not None:
+                                self._put_live((f"{path}.{k}", source), at, _finite(sub))
 
-    def _record_ais(self, mmsi, now, path, value):
+    def _put_live(self, key, at, val):
+        """Hold the newest own-ship reading per (path, source): an out-of-order (older-stamped)
+        delta never replaces a newer one (caller holds _live_lock)."""
+        held = self._live.get(key)
+        if held is None or at >= held[0]:
+            self._live[key] = (at, val)
+
+    def _record_ais(self, mmsi, now, path, value, at=None):
         """Accumulate the fields we need from one AIS target's delta, in kn / deg true —
-        the same shape the cloud uplink writes to `ais_targets` (caller holds _live_lock)."""
+        the same shape the cloud uplink writes to `ais_targets` (caller holds _live_lock).
+        `now` = when we heard it (feed liveness); `at` = the update's own timestamp (when the
+        report was made, see _update_time), which dates the position for dead reckoning.
+
+        Out-of-order reports never win: position, SOG and COG each keep their own report time, and
+        an update OLDER than the one held for that field is dropped (a delayed 6-min-old report
+        after a 1-s-old one would otherwise drag the contact out of the 5-min window and clear its
+        collision warning). It still counts as heard (`time`): the feed is alive."""
+        at = now if at is None else at
         t = self._ais.setdefault(mmsi, {"mmsi": mmsi})
         t["time"] = now
+
+        def newer(field):
+            held = t.get(field)
+            return held is None or at >= held
+
+        # validate FIRST, then update the value(s) and their time together: a bad or empty report
+        # must never move a field's time (it would date the old value as new and reject the next
+        # real one)
         if path in ("name", "") and isinstance(value, str) and value:
             t["name"] = value
-        elif path == "navigation.position" and isinstance(value, dict):
-            if isinstance(value.get("latitude"), (int, float)):
-                t["lat"] = float(value["latitude"])
-            if isinstance(value.get("longitude"), (int, float)):
-                t["lon"] = float(value["longitude"])
-        elif path == "navigation.speedOverGround" and isinstance(value, (int, float)) \
-                and not isinstance(value, bool):
-            t["sog"] = round(float(value) * _MS_TO_KN, 2)
-        elif path == "navigation.courseOverGroundTrue" and isinstance(value, (int, float)) \
-                and not isinstance(value, bool):
-            t["cog"] = round(math.degrees(float(value)) % 360, 1)
+        elif path == "navigation.position":
+            ll = _lat_lon(value)
+            if ll and newer("pos_time"):
+                # its own clock: `time` above moves on ANY delta (a name update too), and the
+                # collision watch dead-reckons a target by the age of its POSITION
+                t["lat"], t["lon"], t["pos_time"] = ll[0], ll[1], at
+        elif path == "navigation.speedOverGround":
+            v = _finite(value)
+            if v is not None and 0 <= v <= _MAX_SOG_MS and newer("sog_time"):
+                t["sog"], t["sog_time"] = round(v * _MS_TO_KN, 2), at
+        elif path == "navigation.courseOverGroundTrue":
+            v = _finite(value)
+            if v is not None and newer("cog_time"):
+                t["cog"], t["cog_time"] = round(math.degrees(v) % 360, 1), at
+
+    def _check_clock(self):
+        """Reset the live caches when the wall clock has STEPPED since the last look (the Pi has no
+        RTC; NTP or GPS time can move it hours at boot, either way). Every cached reading and every
+        ordering timestamp is on the old clock: kept, a fix cached at 4600 would reject a fresh one
+        at 1001 as older, and the old geometry would read as fresh. Takes _live_lock; call it
+        before taking the lock. Returns True when it reset."""
+        wall, mono = _time.time(), _time.monotonic()
+        with self._live_lock:
+            prev = getattr(self, "_clk", None)
+            self._clk = (wall, mono)
+            if prev is None:
+                return False
+            step = (wall - prev[0]) - (mono - prev[1])
+            if abs(step) <= CLOCK_STEP_S:
+                return False
+            self._live.clear()
+            getattr(self, "_ais", {}).clear()
+        print(f"[onboard] wall clock stepped {step:+.0f} s — live and AIS caches reset", flush=True)
+        return True
 
     def _live_fresh(self, path):
         """[(source, epoch, value)] for a path from the live cache, only entries within TTL."""
+        self._check_clock()
         cut = _time.time() - LIVE_TTL_S
         with self._live_lock:
             return [(s, e, val) for (p, s), (e, val) in self._live.items()
@@ -376,18 +514,31 @@ class OnboardSource:
 
     # --- CloudSource interface --------------------------------------------
     def latest_value(self, path):
-        """Raw SI value for a path from the priority-preferred source — live cache, then archive.
+        """Raw SI value for a path from the priority-preferred source — live cache, then archive."""
+        s = self.latest_sample(path)
+        return s[0] if s else None
+
+    def latest_sample(self, path):
+        """(value, epoch) of the priority-preferred sample for a path — live cache, then archive —
+        or None. The value and its time come from the SAME `_prefer` pick, so a caller judging the
+        reading's age (the collision watch's stale-fix guard, dead reckoning) can never get one
+        source's value with another source's newer time.
 
         Two bounded archive queries rather than one: the newest timestamp for the path (index
         only), then just the last FAILOVER_AGE_S of that path grouped by source. Grouping the
         whole path by source would scan millions of rows on every poll."""
         live = self._live_fresh(path)
         if live:
-            return self._prefer(path, live)[2]
+            best = self._prefer(path, live)
+            return (best[2], best[1])
         not_ais, ais_p = self._not_ais()
+        # never a row from the future: after a backward clock step the archive holds rows stamped
+        # ahead of "now", and the newest of those would read as a fresh fix
+        upper = datetime.fromtimestamp(_time.time() + FUTURE_SKEW_S, timezone.utc
+                                       ).strftime("%Y-%m-%dT%H:%M:%S") + "Z"
         newest = self._archive.execute(
             "SELECT max(time) AS time FROM readings WHERE boat_id=? AND path=? "
-            "AND value IS NOT NULL" + not_ais, (BOAT_ID, path, *ais_p),
+            "AND value IS NOT NULL AND time <= ?" + not_ais, (BOAT_ID, path, upper, *ais_p),
         ).fetchone()
         if not newest or not newest["time"]:
             return None
@@ -399,13 +550,42 @@ class OnboardSource:
         ).strftime("%Y-%m-%dT%H:%M:%S")
         rows = self._archive.execute(
             "SELECT source, max(time) AS time, value FROM readings WHERE boat_id=? AND path=? "
-            "AND value IS NOT NULL AND time > ?" + not_ais + " GROUP BY source",
-            (BOAT_ID, path, cut, *ais_p),
+            "AND value IS NOT NULL AND time > ? AND time <= ?" + not_ais + " GROUP BY source",
+            (BOAT_ID, path, cut, upper, *ais_p),
         ).fetchall()
         cands = [(r["source"], _epoch(r["time"]), r["value"]) for r in rows]
         cands = [c for c in cands if c[1] is not None]
         best = self._prefer(path, cands)
-        return best[2] if best else None
+        return (best[2], best[1]) if best else None
+
+    def future_dropped(self):
+        """How many live updates were discarded for being stamped beyond FUTURE_SKEW_S (debug)."""
+        return getattr(self, "_future_dropped", 0)
+
+    def live_link(self):
+        """The live Signal K link — the engine's ONLY AIS input (the archive holds no other vessels):
+        {enabled, connected, last_msg_age_s}. `enabled` false = the live cache is switched off
+        (ONBOARD_LIVE_WS=false, e.g. a replay), so no AIS can arrive at all."""
+        last = getattr(self, "_link_last_msg", None)
+        return {"enabled": LIVE_ENABLED,
+                "connected": bool(getattr(self, "_link_connected", False)),
+                "last_msg_age_s": (max(0.0, _time.monotonic() - last) if last is not None else None)}
+
+    def ais_receiver_age_s(self):
+        """Seconds since the boat's AIS receiver last delivered anything: its source label is learned
+        from live other-vessel deltas, and it also counts when it publishes on our own context (the
+        transceiver's own GPS / status). Receipt ages, monotonic. None when we can't tell: no
+        receiver learned yet this run, or the live link itself is quiet."""
+        rx = getattr(self, "_ais_rx_seen", None)
+        if not rx:
+            return None
+        last = getattr(self, "_link_last_msg", None)
+        mono = _time.monotonic()
+        if last is None or mono - last > LIVE_TTL_S:
+            return None                            # the live link itself is quiet: can't tell
+        with self._live_lock:
+            newest = max(rx.values())
+        return max(0.0, mono - newest)
 
     # Real N2K sensors write 5–28 Hz, so a 40-min fatigue window is tens of thousands of rows —
     # converting them one-by-one in Python starved the whole engine at first-light (2026-07-15;
@@ -678,15 +858,23 @@ class OnboardSource:
         """Latest AIS observation per MMSI within the window — other-vessel Signal K contexts
         captured by the live cache. Shape-matched to CloudSource: [{mmsi, name, lat, lon,
         sog(kn), cog(deg true), time(epoch)}]; targets without a position fix are skipped."""
-        cut = _time.time() - max_age_min * 60.0
+        self._check_clock()
+        now = _time.time()
+        cut = now - max_age_min * 60.0
+        mcut = now - AIS_MOTION_MAX_S
         out = []
         with self._live_lock:
             for mmsi, t in self._ais.items():
                 if t.get("time", 0) < cut or t.get("lat") is None or t.get("lon") is None:
                     continue
+                # SOG and COG expire by their OWN report time: a fresh position after hours with no
+                # valid motion must not dead-reckon on the old velocity — None = "motion unknown"
+                sog = t.get("sog") if t.get("sog_time", 0) >= mcut else None
+                cog = t.get("cog") if t.get("cog_time", 0) >= mcut else None
                 out.append({"mmsi": mmsi, "name": t.get("name"),
                             "lat": t["lat"], "lon": t["lon"],
-                            "sog": t.get("sog"), "cog": t.get("cog"), "time": t.get("time")})
+                            "sog": sog, "cog": cog, "time": t.get("time"),
+                            "pos_time": t.get("pos_time", t.get("time"))})
         return out
 
     # --- onboard-only helpers for the live instrument strip ---------------
@@ -700,6 +888,7 @@ class OnboardSource:
         a raw-row flood (28 Hz wind × even a 5-min window starved the Pi at first-light)."""
         cut_s, cut_e = _cutoff_str(max_age_min)
         best = {}
+        self._check_clock()
         with self._live_lock:
             for (p, s), (e, val) in self._live.items():
                 if p in paths and e >= cut_e:

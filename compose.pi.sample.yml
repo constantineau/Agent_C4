@@ -10,7 +10,8 @@ services:
     command: ["--sample-n2k-data"]
   console:
     environment:
-      # bench: no Pi↔Orin cable here — reach the real Orin over Tailscale
+      # bench: no Pi↔Orin cable here — reach the real Orin over Tailscale. The Orin's copilot then
+      # needs COPILOT_BENCH_BIND / COPILOT_BENCH_ALLOW_FROM set (pi/orin/DEPLOYMENT.md §9).
       COPILOT_UPSTREAM: "http://100.70.110.72:8300/"
   archiver:
     environment:

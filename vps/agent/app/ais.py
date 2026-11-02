@@ -16,9 +16,34 @@ ONBOARD the Pi (`OnboardSource`: other-vessel Signal K contexts + the live cache
 
 CPA/TCPA use a local flat-plane (equirectangular) relative-motion model in nautical miles —
 fine at the ranges that matter (a few nm) and matches navigator.py's projection.
+
+What makes the watch trustworthy (2026-11-02 system review, collision items 1, 4, 5):
+  * OWN SHIP. Our own AIS transmission can come back as a target (MMSI 316053364 at 0.0 nm raised
+    "Collision risk" at the dock). A target whose MMSI is ours (`own_mmsi()`: env OWN_MMSI, else
+    the boat profile's `mmsi`, else the race's `own.mmsi`) is taken out of the list. ONLY a
+    configured MMSI is ever dropped. A target within ECHO_RANGE_M that moves with us is flagged
+    `possible_echo: true`, and that is all: it keeps its full CPA/TCPA and alarms like any other
+    contact (a boat 40 m astern overtaking at 1 kn is a real collision). The copilot adds a quiet
+    hint to set OWN_MMSI.
+  * A STALE OWN FIX IS NO FIX. Own position older than OWN_FIX_MAX_AGE_S (wall clock) — the age of
+    the very reading used (`latest_sample`: value and time from one priority pick) — gives
+    `own_fix: false` with the reason, so the copilot says the watch is off instead of computing
+    CPA against where the boat was. 0 turns the age check off (a replay of an old archive).
+  * TARGETS ARE MOVED TO NOW. Each report is dead-reckoned by its age along its SOG/COG. A target
+    with no SOG or COG is `motion: "unknown"`: no CPA is claimed for it (it is not "stopped").
+  * A DROPPED AIS LINK IS BLIND. Onboard, targets arrive only over the engine's live Signal K
+    link (the archive holds own ship only), so `ais_link_down` (not connected, or silent for
+    AIS_LINK_STALE_S) is reported apart from the own fix, which the archive can keep fresh.
+  * A SILENT FEED IS NOT AN EMPTY SEA, BUT NOT A BLIND WATCH EITHER. `feed_silent` is true when we
+    are under way and nothing at all has been heard on AIS for AIS_SILENT_MIN (our own echo counts
+    as heard): open water can be empty, so it is a "check the AIS" hint. `receiver_missing` is the
+    real failure: the transceiver's own source has gone quiet on the bus while other data flows
+    (onboard only; None = can't tell).
 """
 import math
 import os
+import threading
+import time as _time
 
 from . import datasource
 
@@ -26,6 +51,59 @@ BOAT_ID = os.environ.get("BOAT_ID", "sr33")
 AIS_WINDOW_MIN = 5          # a target unheard this long is dropped
 _MS_TO_KN = 1.943844
 _EPS_KN = 0.05              # below this relative speed there's effectively no CPA
+_M_PER_NM = 1852.0
+
+
+def _envf(name, default):
+    try:
+        return float(os.environ.get(name, default))
+    except ValueError:
+        return float(default)
+
+
+# Own position older than this (wall clock) is not a fix. Onboard the GPS writes several times a
+# second; the cloud sees it through the uplink, so it gets more slack. 0 = no age check (replay).
+OWN_FIX_MAX_AGE_S = _envf("AIS_OWN_FIX_MAX_AGE_S",
+                          30 if os.environ.get("DATA_SOURCE", "cloud").strip().lower() == "onboard"
+                          else 120)
+# Nothing heard on AIS for this long while under way → the feed is called silent.
+AIS_SILENT_MIN = _envf("AIS_SILENT_MIN", 15)
+UNDERWAY_KN = _envf("AIS_UNDERWAY_KN", 2.0)
+# A fix stamped more than this into the future is invalid (a clock step), not "age 0".
+FUTURE_SKEW_S = _envf("AIS_FUTURE_SKEW_S", 5)
+# The engine's live Signal K link (its only AIS input onboard) silent this long → AIS link down.
+AIS_LINK_STALE_S = _envf("AIS_LINK_STALE_S", 30)
+# The own-echo hint: a target this close that moves with us may be us. A hint only, never a filter.
+ECHO_RANGE_M = _envf("AIS_ECHO_RANGE_M", 50)
+ECHO_REL_KN = _envf("AIS_ECHO_REL_KN", 1.5)
+
+
+def _mmsi_str(x):
+    s = str(x or "").strip()
+    return s if s.isdigit() and len(s) == 9 else None
+
+
+def own_mmsi():
+    """Our own MMSI, from config: env OWN_MMSI, else the boat profile the Lab pushed aboard
+    (`mmsi`), else the loaded race homework (`own.mmsi`). None when nobody has set it."""
+    m = _mmsi_str(os.environ.get("OWN_MMSI"))
+    if m:
+        return m
+    try:
+        from . import orinassets
+        rec = orinassets._read() or {}
+        m = _mmsi_str(((rec.get("assets") or {}).get("boat") or {}).get("mmsi"))
+        if m:
+            return m
+    except Exception:           # noqa: BLE001 — a missing/odd assets file just means "not set here"
+        pass
+    try:
+        m = _mmsi_str(((datasource.active().get_fleet() or {}).get("own") or {}).get("mmsi"))
+        if m:
+            return m
+    except Exception:           # noqa: BLE001
+        pass
+    return None
 
 
 def _latest(path):
@@ -34,16 +112,109 @@ def _latest(path):
     return float(v) if v is not None else None
 
 
+def _latest_sample(path):
+    """(value, epoch) of the own-ship reading actually used for `path`, from the data source's
+    single priority pick (value and time can't come from different sources). epoch is None when
+    the source can't say (a stub with only latest_value)."""
+    src = datasource.active()
+    fn = getattr(src, "latest_sample", None)
+    if fn is None:
+        v = src.latest_value(path)
+        return (float(v) if v is not None else None), None
+    smp = fn(path)
+    if not smp or smp[0] is None:
+        return None, None
+    return float(smp[0]), (float(smp[1]) if smp[1] is not None else None)
+
+
+# The own fixes seen in the last DERIVE_MAX_S, oldest first, DISTINCT times: (lat, lon, epoch).
+# Derived speed/course for a fix is a pure function of that fix and the ring's older fixes, so every
+# reader of the same fix gets the same answer (reading twice changes nothing) until a newer fix
+# arrives. A ring, not just the previous fix: at 1 Hz the previous fix is 1 s back, under the
+# DERIVE_MIN_S baseline, and the derivation would never run.
+_FIXES = []
+_FIX_LOCK = threading.Lock()
+DERIVE_MIN_S, DERIVE_PREF_S, DERIVE_MAX_S = 2.0, 10.0, 120.0
+
+
+def _note_fix(lat, lon, e):
+    """Record an own fix by its time (idempotent: the same fix again is a no-op) and return the
+    base fix to derive from: the newest fix at least DERIVE_PREF_S older, else the newest at least
+    DERIVE_MIN_S older, within DERIVE_MAX_S. None when there is none."""
+    with _FIX_LOCK:
+        if _FIXES and e < _FIXES[-1][2] - DERIVE_MAX_S:
+            _FIXES.clear()                   # the clock stepped back: start over from this fix
+        if not _FIXES or e > _FIXES[-1][2]:
+            _FIXES.append((lat, lon, e))
+            while _FIXES and _FIXES[0][2] < _FIXES[-1][2] - DERIVE_MAX_S:
+                _FIXES.pop(0)
+        older = [f for f in _FIXES if e - DERIVE_MAX_S <= f[2] <= e - DERIVE_MIN_S]
+    pref = [f for f in older if f[2] <= e - DERIVE_PREF_S]
+    return (pref or older or [None])[-1]
+
+
+def _derive(prev, lat, lon, e):
+    """(sog kn, cog deg | None) from the base fix to this one, or None when they are not
+    DERIVE_MIN_S..DERIVE_MAX_S apart."""
+    if prev is None or not (DERIVE_MIN_S <= e - prev[2] <= DERIVE_MAX_S):
+        return None
+    de, dn = _enu_nm(prev[0], prev[1], lat, lon)
+    sog = math.hypot(de, dn) / ((e - prev[2]) / 3600.0)
+    return sog, ((math.degrees(math.atan2(de, dn)) + 360) % 360 if sog > 0 else None)
+
+
+def _motion_sample(path, now):
+    """An own SOG/COG reading, or None when missing, stamped in the future, or older than the fix
+    age limit (a stale speed is not a speed)."""
+    v, e = _latest_sample(path)
+    if v is None:
+        return None
+    if e is not None and (e > now + FUTURE_SKEW_S
+                          or (OWN_FIX_MAX_AGE_S > 0 and now - e > OWN_FIX_MAX_AGE_S)):
+        return None
+    return v
+
+
 def _own_ship():
-    """Own position (deg) + motion (kn / deg true), best-available freshest source."""
-    lat = _latest("navigation.position.latitude")
-    lon = _latest("navigation.position.longitude")
-    sog = _latest("navigation.speedOverGround")
-    cog = _latest("navigation.courseOverGroundTrue")
+    """Own position (deg) + motion (kn / deg true), best-available freshest source, plus the age
+    of the position (`age_s`, None when the source can't say). With no usable SOG/COG, speed and
+    course are derived from two successive own fixes (DERIVE_MIN_S..DERIVE_MAX_S apart) when we
+    have them (`motion_source: "derived"`); otherwise they stay None — unknown, never "stopped"."""
+    lat, e_lat = _latest_sample("navigation.position.latitude")
+    lon, e_lon = _latest_sample("navigation.position.longitude")
+    now = _time.time()
+    sog = _motion_sample("navigation.speedOverGround", now)
+    cog = _motion_sample("navigation.courseOverGroundTrue", now)
+    # the older of the two halves of the fix is the fix's age
+    e = min(e_lat, e_lon) if e_lat is not None and e_lon is not None else None
+    if e is not None and max(e_lat, e_lon) > now + FUTURE_SKEW_S:
+        # stamped in the future (e.g. archive rows from before a backward clock step): not a fix
+        # at all — never "age 0". The watch says "no GPS fix" until a real one arrives.
+        lat = lon = e = None
+    sog_kn = sog * _MS_TO_KN if sog is not None else None
+    cog_deg = math.degrees(cog) % 360 if cog is not None else None
+    src = "measured" if sog_kn is not None else None
+    cog_src = "measured" if cog_deg is not None else None
+    # course order: MEASURED COG, then the course DERIVED from our own fixes (the real track, drift
+    # included), then HEADING only as a last resort — heading ignores leeway and current, so in a
+    # drift it can point the wrong way entirely (Codex on #191: track north, heading east)
+    if lat is not None and lon is not None and e is not None:
+        d = _derive(_note_fix(lat, lon, e), lat, lon, e)
+        if d is not None and sog_kn is None:
+            sog_kn, src = d[0], "derived"
+        if d is not None and cog_deg is None and d[1] is not None:
+            cog_deg, cog_src = d[1], "derived"
+    if cog_deg is None:
+        hdg = _motion_sample("navigation.headingTrue", now)
+        if hdg is None:
+            mag = _motion_sample("navigation.headingMagnetic", now)
+            var = _motion_sample("navigation.magneticVariation", now)
+            hdg = mag + var if mag is not None and var is not None else None
+        if hdg is not None:
+            cog_deg, cog_src = math.degrees(hdg) % 360, "heading"
     return {
-        "lat": lat, "lon": lon,
-        "sog": sog * _MS_TO_KN if sog is not None else None,
-        "cog": math.degrees(cog) % 360 if cog is not None else None,
+        "lat": lat, "lon": lon, "sog": sog_kn, "cog": cog_deg, "motion_source": src,
+        "cog_source": cog_src, "age_s": max(0.0, now - e) if e is not None else None,
     }
 
 
@@ -62,14 +233,40 @@ def _vel_nm_h(sog, cog):
     return sog * math.sin(r), sog * math.cos(r)
 
 
+def _motion_known(t):
+    return t.get("sog") is not None and t.get("cog") is not None
+
+
+def _own_motion_known(own):
+    """Our velocity is usable: SOG and COG (measured or derived), or a SOG so small that the course
+    doesn't matter. A missing or stale own SOG/COG must never become zero velocity — a stationary
+    target dead ahead would then read "not closing" while we sail at it."""
+    sog = own.get("sog")
+    return sog is not None and (own.get("cog") is not None or sog < _EPS_KN)
+
+
+def _dead_reckon(lat, lon, sog, cog, age_s):
+    """Move a reported position forward by `age_s` along SOG (kn) / COG (deg true)."""
+    if sog is None or cog is None or not age_s or age_s <= 0:
+        return lat, lon
+    ve, vn = _vel_nm_h(sog, cog)
+    h = age_s / 3600.0
+    return (lat + vn * h / 60.0,
+            lon + ve * h / (60.0 * max(0.01, math.cos(math.radians(lat)))))
+
+
 def _cpa(own, tgt):
     """Range/bearing now + CPA (nm) and TCPA (min) of `tgt` relative to `own`.
 
     Positive TCPA = approaching (CPA in the future); negative/zero = opening or already past.
-    Returns range_nm, bearing, cpa_nm, tcpa_min, closing(bool)."""
+    Returns range_nm, bearing, cpa_nm, tcpa_min, closing(bool). When the relative motion is
+    unknown — the target has no SOG/COG, OR our own motion is unusable (see _own_motion_known) —
+    it is range and bearing only, CPA/TCPA/closing None: never "stopped", never "not closing"."""
     de, dn = _enu_nm(own["lat"], own["lon"], tgt["lat"], tgt["lon"])
     rng = math.hypot(de, dn)
     brg = (math.degrees(math.atan2(de, dn)) + 360) % 360
+    if not _motion_known(tgt) or not _own_motion_known(own):
+        return rng, brg, None, None, None
 
     ove, ovn = _vel_nm_h(own["sog"], own["cog"])
     tve, tvn = _vel_nm_h(tgt.get("sog"), tgt.get("cog"))
@@ -86,44 +283,163 @@ def _cpa(own, tgt):
     return rng, brg, math.hypot(ce, cn), tcpa_h * 60.0, True
 
 
+def _rel_speed_kn(own, tgt):
+    ove, ovn = _vel_nm_h(own["sog"], own["cog"])
+    tve, tvn = _vel_nm_h(tgt.get("sog"), tgt.get("cog"))
+    return math.hypot(tve - ove, tvn - ovn)
+
+
 def _latest_targets(max_age_min):
     """Latest raw observation per MMSI within the window, via the active data source.
 
-    Each row is a dict with mmsi/name/lat/lon/sog(kn)/cog(deg true)/time(epoch)."""
+    Each row is a dict with mmsi/name/lat/lon/sog(kn)/cog(deg true)/time(epoch), plus pos_time
+    (epoch of the position report) where the source keeps it."""
     return datasource.active().ais_targets(max_age_min)
+
+
+def _link_down():
+    """(down, age_s): is the data source's live AIS input link down? (None, None) when the source
+    has no such link (the cloud reads AIS from Postgres). Down = switched off, not connected, or
+    no message for AIS_LINK_STALE_S. The archive keeps own-ship contexts only (the archiver drops
+    other vessels), so there is no fallback for targets: a down link is a blind AIS watch."""
+    fn = getattr(datasource.active(), "live_link", None)
+    if fn is None:
+        return None, None
+    try:
+        lk = fn() or {}
+    except Exception:           # noqa: BLE001
+        return True, None
+    age = lk.get("last_msg_age_s")
+    down = (not lk.get("enabled") or not lk.get("connected") or age is None
+            or age > AIS_LINK_STALE_S)
+    return bool(down), (round(age) if age is not None else None)
+
+
+def _receiver_missing(last_heard_s):
+    """True when the data source can tell the boat's AIS transceiver has gone quiet on the bus for
+    AIS_SILENT_MIN while other data flows, and no target has been heard either. None = can't tell
+    (the cloud, no transceiver known, or the live link is down)."""
+    fn = getattr(datasource.active(), "ais_receiver_age_s", None)
+    if fn is None:
+        return None
+    try:
+        age = fn()
+    except Exception:           # noqa: BLE001
+        return None
+    if age is None:
+        return None
+    limit = AIS_SILENT_MIN * 60
+    return bool(age > limit and (last_heard_s is None or last_heard_s > limit))
+
+
+def _threat_key(t):
+    """Closing contacts first, soonest TCPA first; then unknown motion by range; then the rest by
+    range."""
+    if t.get("closing"):
+        return (0, t["tcpa_min"], t["cpa_nm"])
+    if t.get("motion") == "unknown":
+        return (1, t["range_nm"] if t.get("range_nm") is not None else 1e9, 0)
+    return (2, t["range_nm"] if t.get("range_nm") is not None else 1e9, 0)
 
 
 def get_ais_targets(max_range_nm: float = 12):
     """Current AIS traffic with range/bearing and freshly computed CPA/TCPA vs own ship.
 
-    Sorted most-threatening first (smallest CPA among closing targets, then range)."""
+    Sorted most-threatening first: closing contacts by TCPA, then unknown-motion contacts, then the
+    rest by range. Also says whether the watch can see (`own_fix`, `own_fix_reason`,
+    `feed_silent`) so a blind watch never reads as an empty sea."""
+    now = _time.time()
     own = _own_ship()
-    rows = _latest_targets(AIS_WINDOW_MIN)
+    me = own_mmsi()
+    rows = _latest_targets(max(AIS_WINDOW_MIN, AIS_SILENT_MIN))
+    heard = [r.get("time") for r in rows if r.get("time") is not None]
+    last_heard_s = round(max(0.0, now - max(heard))) if heard else None
+    own_seen = None
+    listed = []
+    for r in rows:
+        if me and _mmsi_str(r.get("mmsi")) == me:
+            own_seen = {"mmsi": me}          # it's us: out of the list (still proves the feed is alive)
+            continue
+        pt = r.get("pos_time") or r.get("time")
+        age = max(0.0, now - pt) if pt is not None else None
+        if age is not None and age > AIS_WINDOW_MIN * 60:
+            continue                         # position too old to place the target
+        listed.append((r, age))
+
+    base = {"max_range_nm": max_range_nm, "own_mmsi": me, "own_seen": own_seen,
+            "last_heard_s": last_heard_s, "own_fix_age_s":
+            round(own["age_s"]) if own.get("age_s") is not None else None}
+
+    link_down, link_age = _link_down()
+    rx_missing = None if link_down else _receiver_missing(last_heard_s)
+    base["ais_link_down"], base["ais_link_age_s"] = link_down, link_age
+
+    reason = None
     if own["lat"] is None or own["lon"] is None:
-        # No own fix — we can still list targets, but no geometry.
+        reason = "no GPS fix"
+    elif OWN_FIX_MAX_AGE_S > 0 and own.get("age_s") is not None and own["age_s"] > OWN_FIX_MAX_AGE_S:
+        reason = "GPS fix stale"
+    if reason:
+        # No usable own fix — we can still list targets, but no geometry.
         targets = [{"mmsi": r["mmsi"], "name": r["name"], "sog": r["sog"], "cog": r["cog"],
                     "range_nm": None, "bearing": None, "cpa_nm": None, "tcpa_min": None,
-                    "closing": None} for r in rows]
-        return {"count": len(targets), "max_range_nm": max_range_nm,
-                "own_fix": False, "targets": targets,
-                "note": "No position yet, so no range or CPA."}
+                    "closing": None, "age_s": round(a) if a is not None else None,
+                    "motion": "known" if _motion_known(r) else "unknown", "possible_echo": False}
+                   for r, a in listed]
+        return {**base, "count": len(targets), "own_fix": False, "own_fix_reason": reason,
+                "underway": None, "feed_silent": False, "receiver_missing": rx_missing,
+                "targets": targets,
+                "note": ("No position yet, so no range or CPA." if reason == "no GPS fix" else
+                         f"GPS fix is {base['own_fix_age_s']} s old, so no range or CPA.")}
+
+    # own ship to now as well (the fix can be up to OWN_FIX_MAX_AGE_S old): same clock as the targets
+    own = dict(own)
+    own["lat"], own["lon"] = _dead_reckon(own["lat"], own["lon"], own["sog"], own["cog"], own.get("age_s"))
+    # None = we don't know our speed (no SOG, stale, nothing to derive it from, or only a DERIVED
+    # low speed). False is kept for a MEASURED speed below the threshold; every consumer treats
+    # None as "under way" for safety.
+    underway = (None if own["sog"] is None
+                else True if own["sog"] >= UNDERWAY_KN
+                else False if own.get("motion_source") == "measured" else None)
+    feed_silent = bool(underway is not False
+                       and (last_heard_s is None or last_heard_s > AIS_SILENT_MIN * 60))
+    if rx_missing or link_down:
+        feed_silent = False                  # the louder signal says it
 
     targets = []
-    for r in rows:
-        tgt = {"lat": r["lat"], "lon": r["lon"], "sog": r["sog"], "cog": r["cog"]}
+    for r, age in listed:
+        lat, lon = _dead_reckon(r["lat"], r["lon"], r.get("sog"), r.get("cog"), age)
+        tgt = {"lat": lat, "lon": lon, "sog": r.get("sog"), "cog": r.get("cog")}
         rng, brg, cpa, tcpa, closing = _cpa(own, tgt)
         if rng > max_range_nm:
             continue
+        own_known = _own_motion_known(own)
+        known = _motion_known(tgt) and own_known
+        possible_echo = False
+        if (known and rng * _M_PER_NM <= ECHO_RANGE_M and own["sog"] is not None
+                and _rel_speed_kn(own, tgt) <= ECHO_REL_KN):
+            possible_echo = True             # maybe us: a hint only, the geometry stands
         targets.append({
             "mmsi": r["mmsi"], "name": r["name"],
-            "sog": round(r["sog"], 1) if r["sog"] is not None else None,
-            "cog": round(r["cog"]) if r["cog"] is not None else None,
-            "range_nm": round(rng, 2), "bearing": round(brg),
-            "cpa_nm": round(cpa, 2), "tcpa_min": round(tcpa, 1) if tcpa is not None else None,
+            "sog": round(r["sog"], 1) if r.get("sog") is not None else None,
+            "cog": round(r["cog"]) if r.get("cog") is not None else None,
+            "range_nm": round(rng, 2), "range_m": round(rng * _M_PER_NM), "bearing": round(brg),
+            "cpa_nm": round(cpa, 2) if cpa is not None else None,
+            "tcpa_min": round(tcpa, 1) if tcpa is not None else None,
             "closing": closing,
+            "motion": "known" if known else "unknown",
+            # which side is unknown: our own motion (no usable SOG/COG) or the target's
+            "unknown_motion": None if known else ("own" if not own_known else "target"),
+            "age_s": round(age) if age is not None else None,
+            "possible_echo": possible_echo,
         })
-    # threat order: closing targets by CPA, then everyone by range
-    targets.sort(key=lambda t: (not t["closing"], t["cpa_nm"] if t["cpa_nm"] is not None else 1e9,
-                                t["range_nm"]))
-    return {"count": len(targets), "max_range_nm": max_range_nm, "own_fix": True,
+    targets.sort(key=_threat_key)
+    return {**base, "count": len(targets), "own_fix": True, "own_fix_reason": None,
+            "underway": underway, "own_sog_kn": round(own["sog"], 1) if own["sog"] is not None else None,
+            "own_motion_source": own.get("motion_source"), "own_cog_source": own.get("cog_source"),
+            # our velocity is approximate (a derived speed, or a derived / heading course): the
+            # copilot keeps the range warning alongside the CPA and shows whichever is more urgent
+            "own_motion_approx": bool(own.get("motion_source") == "derived"
+                                      or own.get("cog_source") in ("heading", "derived")),
+            "feed_silent": feed_silent, "receiver_missing": rx_missing,
             "targets": targets}

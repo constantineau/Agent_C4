@@ -157,6 +157,10 @@ services:
       ARCHIVE_DB: /var/lib/sr33/archive/archive.db
       ENGINE_DB: /var/lib/sr33/engine/engine.db
       BOAT_ID: ${BOAT_ID:-sr33}
+      # Our own AIS MMSI: the collision watch drops this target (our own echo). Set it in .env
+      # (OWN_MMSI=...). Blank → the boat profile's `mmsi`, then the race's own.mmsi
+      # (pi/engine/README.md "Own MMSI").
+      OWN_MMSI: ${OWN_MMSI:-}
     volumes:
       - sk_archive:/var/lib/sr33/archive:ro
       - engine_state:/var/lib/sr33/engine

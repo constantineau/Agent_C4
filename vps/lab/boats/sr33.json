@@ -4,6 +4,7 @@
   "name": "SR33 \"C4\"",
   "boat_class": "SR33",
   "sail_number": "",
+  "mmsi": "",
   "draft_m": 2.1336,
   "safety_margin_m": 0.5,
   "polars_file": "",

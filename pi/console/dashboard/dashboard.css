@@ -308,6 +308,12 @@ body {
    (crew request 2026-07-08: the collision callout must take minimal space) */
 #coachSay { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; flex:1; }
 .coach-say { font-size:14px; font-weight:700; line-height:1.3; flex:1; }
+/* a collision warning (every contact, one per line) or "Collision watch OFF" wraps instead of
+   ellipsizing: it holds the strip until it clears */
+.coach-line[data-kind="act"], .coach-line[data-kind="off"] { border-color:var(--act); }
+.coach-line[data-kind="watch"] { border-color:var(--watch); }
+.coach-line[data-kind="act"] #coachSay, .coach-line[data-kind="watch"] #coachSay,
+.coach-line[data-kind="off"] #coachSay { white-space:pre-line; }
 .coach-when { font-size:10.5px; color:var(--muted); font-weight:600; flex:none; white-space:nowrap; }
 .comm-focus { margin:0; font-size:16px; font-weight:700; line-height:1.3; }
 .comm-focus[data-link="reconnecting"] { color:var(--watch, #d39b00); }

@@ -263,6 +263,17 @@ sudo systemctl enable  --now sr33-orin-copilot
 curl -s localhost:8300/health      # expect mode=llm, coach.running=true
 ```
 
+The unit runs `python -m copilot.serve`: it binds the boat cable interface (10.10.10.2) and
+loopback, and answers only the Pi's end of the cable (10.10.10.1) and loopback; anyone else gets
+403 (`COPILOT_BIND` / `COPILOT_ALLOW_FROM` in `/etc/sr33/copilot.env` to change). The Pi console's
+`COPILOT_UPSTREAM` must therefore be `http://10.10.10.2:8300/` (the compose default).
+
+**Bench** (`compose.pi.sample.yml`, where the console proxies to the Orin's Tailscale address): add,
+don't replace. In `/etc/sr33/copilot.env` on the bench Orin set
+`COPILOT_BENCH_BIND=<orin-tailscale-ip>` (`tailscale ip -4` on the Orin) and
+`COPILOT_BENCH_ALLOW_FROM=<bench-host-tailscale-ip>` (`tailscale ip -4` on the bench host), then
+restart the unit. The boat defaults stay in force; leave both unset on the boat.
+
 **Code redeploy** (no rsync on the Orin — push with tar over ssh, then restart):
 
 ```bash

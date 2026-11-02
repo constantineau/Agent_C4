@@ -118,6 +118,8 @@
   /* ---- watch-system formatting (CREW tile) ---- */
   // the watch read (status, countdown, CONSIDER) is pure and tested: crewwatch.js (#80)
   const CW = window.C4CrewWatch;
+  const COL = window.C4CollisionWatch;
+  const colState = COL.newState(Date.now());   // when /coach last answered / last moved (tablet clock)
   const fmtHM = CW.fmtHM, fmtMins = CW.fmtMins;
   const teamTxt = (w, id) => { const t = ((w || {}).teams || {})[id]; return t ? t.name + ((t.members || []).length ? " (" + t.members.join(", ") + ")" : "") : id; };
   /* a canned watch read for the demo scenarios: 4-on/4-off, mid-block on calm, 4 min from the
@@ -1148,13 +1150,9 @@
     App.briefing = true;
     const snap = TILES.map((k) => { const t = App.data.tiles[k] || {}; return { key: k, name: NAME[k], value: tileText(t), sub: t.sub || "", status: t.status || "na" }; });
     let r = null;
-    try {
-      const ctl = new AbortController();
-      const to = setTimeout(() => ctl.abort(), 130000);
-      const resp = await fetch(COPILOT + "/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tiles: snap }), signal: ctl.signal });
-      clearTimeout(to);
-      r = resp.ok ? await resp.json() : null;
-    } catch (e) { r = null; } finally { App.briefing = false; }
+    try {   // the deadline covers the body too (a stalled body must not pin App.briefing forever)
+      r = await COL.fetchJsonWithin(COPILOT + "/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tiles: snap }) }, 130000);
+    } finally { App.briefing = false; }
     if (r && r.mode === "llm") {
       App.brief = { focus: r.focus, notes: r.notes || [], adjust: r.adjust || [], mode: "llm", t: Date.now() / 1000 };
       if (App.src === "live") render();
@@ -1163,21 +1161,26 @@
   }
   /* poll the proactive auto-coach: the Orin runs the narration engine on a timer and HOLDS the
      latest coach line; we just read it (no recompute) and show what the copilot last volunteered.
-     A failure leaves the last good read. */
+     A failure keeps the last good read for the briefs, but the collision watch is judged after
+     every poll AND by an independent watchdog (coachWatchdog, its own timer): no good parse for a
+     minute, or a held result that stopped moving, is "Collision watch OFF" on the strip, never a
+     quiet one (collisionwatch.js). The 12 s deadline covers the body: a stalled body is a failure. */
   async function fetchCoach() {
     if (App.src !== "live") return;
-    let r = null;
-    try {
-      const ctl = new AbortController();
-      const to = setTimeout(() => ctl.abort(), 12000);
-      const resp = await fetch(COPILOT + "/coach", { headers: { Accept: "application/json" }, signal: ctl.signal });
-      clearTimeout(to);
-      r = resp.ok ? await resp.json() : null;
-    } catch (e) { r = null; }
-    if (r) App.coach = r;
-    if (r) maybeAlert(r);           // sound a short tone if a new safety/urgent callout arrived
-    if (App.src === "live") render();
+    const r = await COL.fetchJsonWithin(COPILOT + "/coach", { headers: { Accept: "application/json" } }, 12000);
+    if (COL.track(colState, r, Date.now())) App.coach = r;   // a malformed reply is a failed poll
+    judgeCoach(true);
   }
+  /* judge the collision watch on the tablet clock; re-render when the verdict changes (or always,
+     after a poll) */
+  function judgeCoach(always) {
+    if (App.src !== "live") return;
+    const was = App.coachOff;
+    App.coachOff = COL.watchdogStep(App.coach, colState, Date.now());
+    maybeAlert(App.coach, App.coachOff);   // tone for a new (or returning, or worse) callout, or the watch going off
+    if (always || was !== App.coachOff) render();
+  }
+  const coachWatchdog = () => judgeCoach(false);
   function agoText(epochSec) {
     if (!epochSec) return "";
     const s = Math.max(0, Math.round(Date.now() / 1000 - epochSec));
@@ -1648,15 +1651,10 @@
   async function fetchSynthesis() {
     if (App.src !== "live") return;
     let r = null;
-    try {                                            // 1) the copilot (LLM phrasing) — absent on the bench
-      const ctl = new AbortController();
-      const to = setTimeout(() => ctl.abort(), 15000);
-      const resp = await fetch(COPILOT + "/strategy", { method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({}), signal: ctl.signal });
-      clearTimeout(to);
-      r = resp.ok ? await resp.json() : null;
-    } catch (e) { r = null; }
+    // 1) the copilot (LLM phrasing) — absent on the bench; the deadline covers the body too
+    r = await COL.fetchJsonWithin(COPILOT + "/strategy", { method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({}) }, 15000);
     if (!r) r = await fetchJSON("/strategy", 12000);  // 2) engine deterministic digest (Tier-1 fallback)
     if (r) { App.synthesis = r; App.synAt = Date.now(); }
     if (App.src === "live") render();
@@ -1864,24 +1862,28 @@
     if (!parts.length) return "";
     return '<div class="st-stack">' + parts.join("") + "</div>";
   }
-  /* the coach line in the commentary panel — the last thing the copilot volunteered (from the
-     timer's callout history), or, if nothing's been shown yet, the top of the current callout banner.
+  /* the coach line in the commentary panel. An active collision callout owns it until it clears:
+     every contact, soonest first, live numbers (a routine callout voiced later can't push it off).
+     A watch that can't see says "Collision watch OFF: <reason>". Otherwise the last thing the
+     copilot volunteered (the timer's history), or the top of the current callout banner.
      Hidden when there's nothing to coach or off the live source. */
   function renderCoach() {
     const el = document.getElementById("coachLine");
     if (!el) return;
-    const c = App.coach;
-    if (App.src !== "live" || !c) { el.hidden = true; return; }
-    let text = "", ago = "";
-    if (c.history && c.history.length && c.history[0].spoken) {
-      text = c.history[0].spoken; ago = agoText(c.history[0].at);
-    } else if (c.active && c.active.length) {
-      const a = c.active[0];
-      text = a.headline + (a.detail ? " — " + a.detail : "");
+    if (App.src !== "live") { el.hidden = true; return; }
+    // never fail silently: a strip that can't be built shows "Collision watch OFF: display error"
+    let v = COL.safeStrip(App.coach, App.coachOff);
+    try {
+      if (!v.lines.length) { el.hidden = true; return; }
+      el.dataset.kind = v.kind;
+      document.getElementById("coachSay").textContent = v.lines.join("\n");
+      document.getElementById("coachWhen").textContent = v.fromHistory ? agoText(v.at) : "";
+    } catch (e) {
+      v = COL.safeStrip(null, COL.DISPLAY_ERROR);
+      el.dataset.kind = v.kind;
+      document.getElementById("coachSay").textContent = v.lines.join("\n");
+      document.getElementById("coachWhen").textContent = "";
     }
-    if (!text) { el.hidden = true; return; }
-    document.getElementById("coachSay").textContent = text;
-    document.getElementById("coachWhen").textContent = ago;
     el.hidden = false;
   }
   /* HOLD a failed poll's endpoint at its last good value for a bounded window.
@@ -2148,12 +2150,8 @@
     const btn = document.getElementById("cwb-" + kind);
     if (btn) { btn.classList.add("busy"); btn.textContent = "thinking…"; }
     try {
-      const ctl = new AbortController();
-      const to = setTimeout(() => ctl.abort(), 90000);   // LLM phrasing can take ~a minute
-      const resp = await fetch(COPILOT + "/briefs/" + kind, {
-        headers: { Accept: "application/json" }, signal: ctl.signal });
-      clearTimeout(to);
-      const r = resp.ok ? await resp.json() : null;
+      // LLM phrasing can take ~a minute; the deadline covers the body too
+      const r = await COL.fetchJsonWithin(COPILOT + "/briefs/" + kind, { headers: { Accept: "application/json" } }, 90000);
       if (r && r.available) {
         App.coach = App.coach || {};
         App.coach.briefs = App.coach.briefs || {};
@@ -2633,15 +2631,11 @@
     if (c.category === "checklist") return "watch"; // a race requirement came due (DSQ-risk action item)
     return null;                                 // routine coaching stays silent (visual only)
   }
-  function maybeAlert(coach) {
-    if (!Sound.on || App.src !== "live" || !coach) return;
-    let level = null;
-    for (const c of (coach.new || [])) {
-      const lvl = alertLevel(c);
-      if (!lvl || Sound.alerted.has(c.id)) continue;
-      Sound.alerted.add(c.id);
-      if (lvl === "act") level = "act"; else if (level !== "act") level = "watch";
-    }
+  function maybeAlert(coach, off) {
+    if (!Sound.on || App.src !== "live") return;
+    // ids that left `active` are forgotten, so a contact that clears and comes back sounds again;
+    // a worse level is a new id; the watch going OFF sounds once per episode
+    const level = COL.safeAlerts(coach, off, Sound.alerted, alertLevel);
     if (level) playAlert(level);
   }
   function toggleSound() {
@@ -2683,6 +2677,7 @@
     App.briefTimer = setInterval(fetchBrief, BRIEF_EVERY);
     fetchCoach();                   // proactive auto-coach held state (no recompute), then on its own cadence
     App.coachTimer = setInterval(fetchCoach, COACH_EVERY);
+    App.coachWatchTimer = setInterval(coachWatchdog, 5000);   // judges OFF even if no poll ever finishes
     fetchDeviation();               // route-deviation (engine, deterministic), then on its own cadence
     App.devTimer = setInterval(fetchDeviation, DEV_EVERY);
     fetchPlume();                   // the Lab's forecast plume, cached on the Pi — slow-moving

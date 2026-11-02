@@ -71,6 +71,21 @@ curl -s "localhost:8200/route?target=finish"
 # on the Pi:  CAN_IFACE=can0 docker compose -f compose.pi.yml up -d
 ```
 
+### Own MMSI (collision watch)
+
+Our own AIS transmission can come back as a target and raise "Collision risk" against ourselves
+(the copilot then shows "Possible own-ship echo: MMSI …. Set own MMSI if it's us."). Set our MMSI
+once and the engine drops that target. One line, either place:
+
+- env on the Pi: `OWN_MMSI=316053364` in the stack's `.env` (read by `compose.pi.yml`), then
+  `docker compose -f compose.pi.yml up -d engine`; or
+- the boat profile: `"mmsi": "316053364"` in `vps/lab/boats/sr33.json` (aboard once the Lab's
+  Deploy pushes the profile).
+
+Env wins, then the boat profile, then the race's `own.mmsi`. Only this MMSI is ever dropped; a
+target that merely looks like us still gets the full CPA check. (316053364 is the suspected echo,
+not yet confirmed as C4's MMSI: check the B951's setup before setting it.)
+
 In race mode the iPad points at this service over boat-local Wi-Fi instead of the cloud
 (channel separation — Phase 9.2's iPad-side half). CORS is open so a browser can hit the engine
 directly without a proxy.

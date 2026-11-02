@@ -20,13 +20,16 @@ WorkingDirectory=/home/agent-c4/Agent_C4/pi/orin
 #   COPILOT_ROUTE=bayview-mackinac-2026   (the loaded homework route)
 EnvironmentFile=-/etc/sr33/copilot.env
 Environment=COPILOT_PORT=8300
-# Bind 0.0.0.0 so the iPad can reach it over boat-local Wi-Fi.
+# Listen on the boat cable interface (10.10.10.2) and loopback only; answer only the Pi's end of
+# the cable and loopback (the iPad reaches the copilot through the Pi console's /copilot proxy).
+# Override with COPILOT_BIND / COPILOT_ALLOW_FROM in /etc/sr33/copilot.env. A bench Orin (reached
+# over Tailscale) ADDS COPILOT_BENCH_BIND / COPILOT_BENCH_ALLOW_FROM there. See copilot/serve.py.
 # Runs from an isolated venv: the Orin's system Python is PEP-668 externally-managed (no --user /
 # system pip installs of fastapi/uvicorn). Create it once with:
 #   sudo apt install -y python3-venv
 #   python3 -m venv ~/copilot-venv && ~/copilot-venv/bin/pip install fastapi 'uvicorn[standard]'
 # (See pi/orin/DEPLOYMENT.md §9.) Without a venv, use /usr/bin/env python3 instead.
-ExecStart=/home/agent-c4/copilot-venv/bin/python -m uvicorn copilot.app:app --host 0.0.0.0 --port ${COPILOT_PORT}
+ExecStart=/home/agent-c4/copilot-venv/bin/python -m copilot.serve
 Restart=on-failure
 RestartSec=10
 

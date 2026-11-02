@@ -24,6 +24,9 @@ from . import brief as brief_mod
 
 _num = brief_mod._num
 
+# Nothing heard on AIS for this long while under way → the engine sets feed_silent (ais.py); the
+# number is only used for the hint's words when the engine didn't send last_heard_s.
+AIS_SILENT_MIN = float(os.environ.get("AIS_SILENT_MIN", "15"))
 # Collision-watch guard (mirrors the dashboard AIS tile): a CLOSING contact inside ACT → show now
 # ("collision risk"), inside the looser WATCH → show soon ("traffic closing"). env-tunable.
 AIS_ACT_CPA_NM = float(os.environ.get("COPILOT_AIS_ACT_CPA_NM", "0.5"))
@@ -74,57 +77,145 @@ def _ais_level(t):
     return None
 
 
-def _safety_callout(ais):
-    """Collision watch — the ONE thing the copilot interrupts for. The worst CLOSING contact inside
-    the guard becomes a top-priority safety callout, grounded in the boat's own AIS receiver + own
-    CPA/TCPA math (always legal in-race, never RRS-41 'outside help'). The level (act/watch) is in the
-    id so an escalation watch→act re-surfaces, exactly like the staged rounding prep.
+def _contact_name(t):
+    return t.get("name") or f"MMSI {t.get('mmsi', '?')}"
 
-    EVERY closing contact is tested against the limits — the engine's list is CPA-sorted and ignores
-    TCPA, so the first contact (tiny CPA, an hour out) can hide a second one that is minutes away.
-    Worst = act before watch, then the soonest TCPA, then the smallest CPA."""
+
+def _safety_callouts(ais):
+    """Collision watch — the ONE thing the copilot interrupts for. EVERY contact inside the guard
+    gets its own top-priority safety callout, grounded in the boat's own AIS receiver + own
+    CPA/TCPA math (always legal in-race, never RRS-41 'outside help'). The level is in the id, so an
+    escalation watch→act re-surfaces, exactly like the staged rounding prep. Numbers are live: the
+    callout is rebuilt every tick, so `active` always carries the current CPA/TCPA.
+
+    Every closing contact is tested against the limits (one contact must never hide another), and
+    the list comes back act before watch, then soonest TCPA, then smallest CPA.
+
+    Two kinds of contact are handled apart (2026-11-02 review, item 1 + 5):
+      * a POSSIBLE OWN ECHO (`possible_echo` from the engine: within ~50 m, moving with us) is
+        checked like any contact and alarms like one (a boat 40 m astern overtaking is real). It
+        also gets a quiet hint to set the boat's MMSI; only a configured MMSI is ever dropped,
+        and the engine does that;
+      * a contact with UNKNOWN MOTION (no SOG/COG yet) has no CPA. It is not "stopped": inside the
+        watch range it is a safety callout on range alone, and the line says the motion is unknown
+        (only while we're under way, or the engine can't say: a marina would bark all day)."""
     if not ais.get("own_fix"):
-        return None                       # no own fix → CPA/TCPA meaningless (the blind callout says so)
-    hits = []
+        return []                         # no own fix → CPA/TCPA meaningless (the blind callout says so)
+    hits, echoes = [], []
     for t in ais.get("targets") or []:
+        if t.get("possible_echo"):
+            echoes.append(t)              # a hint below — and the full check here, like any contact
+        brg = _num(t.get("bearing"))
+        brg_s = f" · brg {brg}°" if brg is not None else ""
+        age = _num(t.get("age_s"))
+        age_s = f" · {round(age / 60)} min old" if age is not None and age >= 120 else ""
+        name = _contact_name(t)
+        key = t.get("mmsi") or name
+        if t.get("motion") == "unknown":
+            rng = _num(t.get("range_nm"))
+            # the stopped-boat gate (a marina full of boats with no SOG would bark all day) applies
+            # ONLY to a target whose own motion is unknown while we are MEASURED stopped. When it's
+            # OUR motion that's unknown, the target may be moving fast at us: never suppressed.
+            if rng is None or rng > AIS_WATCH_CPA_NM or (
+                    t.get("unknown_motion", "target") == "target" and ais.get("underway") is False):
+                continue
+            act = rng <= AIS_ACT_CPA_NM
+            c = _callout(f"ais:{key}:unk-{'act' if act else 'watch'}", "safety", "now" if act else "soon",
+                         f"Contact, motion unknown: {name}",
+                         f"{rng} nm{brg_s} · "
+                         + ("our speed/course unknown" if t.get("unknown_motion") == "own"
+                            else "no speed/course") + age_s,
+                         ["get_ais"], "high" if act else "med")
+            c["tcpa_min"] = None
+            hits.append((0 if act else 1, -1.0, rng, c))
+            continue
         level = _ais_level(t)
-        if level:
-            hits.append((0 if level == "act" else 1, _num(t.get("tcpa_min")), _num(t.get("cpa_nm")),
-                         level, t))
-    if not hits:
-        return None                       # nothing closing inside the guard — nothing to show
-    _, tcpa, cpa, level, t = min(hits, key=lambda h: h[:3])
-    act = level == "act"
-    name = t.get("name") or f"MMSI {t.get('mmsi', '?')}"
-    brg = _num(t.get("bearing"))
-    # compact — this rides the dashboard's one-line coach strip (crew request 2026-07-08)
-    detail = (f"CPA {cpa} nm / {tcpa} min"
-              + (f" · brg {brg}°" if brg is not None else ""))
-    return _callout(f"ais:{t.get('mmsi') or name}:{level}", "safety", "now" if act else "soon",
-                    f"Collision risk: {name}" if act else f"Traffic closing: {name}",
-                    detail, ["get_ais"], "high" if act else "med")
+        if ais.get("own_motion_approx"):
+            # our own velocity is approximate (heading for course, or derived from fixes): the CPA
+            # can't be trusted to SUPPRESS a warning. Keep the range warning too; the more urgent wins.
+            rng = _num(t.get("range_nm"))
+            rlevel = (None if rng is None else "act" if rng <= AIS_ACT_CPA_NM
+                      else "watch" if rng <= AIS_WATCH_CPA_NM else None)
+            rank = {"act": 0, "watch": 1, None: 2}
+            if rank[rlevel] < rank[level]:
+                ract = rlevel == "act"
+                c = _callout(f"ais:{key}:rng-{rlevel}", "safety", "now" if ract else "soon",
+                             f"Contact close: {name}",
+                             f"{rng} nm{brg_s} · our course approximate{age_s}", ["get_ais"],
+                             "high" if ract else "med")
+                c["tcpa_min"] = None
+                hits.append((0 if ract else 1, -1.0, rng, c))
+                continue
+        if not level:
+            continue
+        act = level == "act"
+        cpa, tcpa = _num(t.get("cpa_nm")), _num(t.get("tcpa_min"))
+        # compact — this rides the dashboard's coach strip (crew request 2026-07-08)
+        c = _callout(f"ais:{key}:{level}", "safety", "now" if act else "soon",
+                     f"Collision risk: {name}" if act else f"Traffic closing: {name}",
+                     f"CPA {cpa} nm / {tcpa} min{brg_s}{age_s}", ["get_ais"], "high" if act else "med")
+        c["tcpa_min"] = tcpa
+        hits.append((0 if act else 1, tcpa, cpa, c))
+    hits.sort(key=lambda h: h[:3])
+    out = [h[3] for h in hits]
+    for t in echoes:
+        out.append(_callout(f"ais:{t.get('mmsi') or _contact_name(t)}:echo?", "data", "monitor",
+                            f"Possible own-ship echo: {_contact_name(t)}",
+                            "Set own MMSI if it's us.", ["get_ais"], "med"))
+    if ais.get("feed_silent"):            # open water can be empty: a quiet hint, not "watch OFF"
+        heard = _num(ais.get("last_heard_s"))
+        mins = round(heard / 60) if heard is not None else round(AIS_SILENT_MIN)
+        out.append(_callout("ais:silent", "data", "soon", f"No AIS heard for {mins} min",
+                            "Check the AIS.", ["get_ais"], "med"))
+    return out
+
+
+def _safety_callout(ais):
+    """The single most urgent collision callout, or None (kept for callers that want just one)."""
+    out = [c for c in _safety_callouts(ais) if c["category"] == "safety"]
+    return out[0] if out else None
 
 
 def _blind_callout(ais, cond):
     """The collision watch can't see — say so instead of reading as all-clear. Engine unreachable,
-    the AIS read failing, or no own-ship fix all leave the guard above with nothing to check, so the
-    callout list would otherwise be empty. Deterministic, safety category (it outranks everything and
-    never goes through the LLM); confirmed over two reads so one dropped request doesn't bark."""
+    the AIS read failing, no own-ship fix (or one too old to trust), the engine's AIS input link down,
+    or the boat's AIS transceiver gone from the bus all leave the guard above with nothing to check, so the callout list would
+    otherwise be empty. (Hearing no traffic for a while is not blind — open water can be empty —
+    so that is a quiet "No AIS heard" hint from `_safety_callouts`.) Deterministic, safety category (it outranks everything and never goes
+    through the LLM); confirmed over two reads so one dropped request doesn't bark."""
+    look = "Keep a lookout."
     if ais.get("available", True) is False:
         if ais.get("error") and cond.get("error"):     # transport errors on both → engine gone
-            cid, headline, detail = ("blind:engine", "Collision watch blind: engine lost",
-                                     "no engine reads — keep a visual lookout")
+            cid, headline, detail = ("blind:engine", "Collision watch OFF: engine lost",
+                                     "No engine reads. " + look)
         else:
-            cid, headline, detail = ("blind:ais", "Collision watch blind: AIS read failing",
-                                     "engine up but no AIS answer — keep a visual lookout")
+            cid, headline, detail = ("blind:ais", "Collision watch OFF: AIS read failing",
+                                     look)
     elif not ais.get("own_fix"):
-        cid, headline, detail = ("blind:fix", "Collision watch blind: no own GPS fix",
-                                 "CPA/TCPA can't be computed — keep a visual lookout")
+        age = _num(ais.get("own_fix_age_s"))
+        if ais.get("own_fix_reason") == "GPS fix stale":
+            cid, headline, detail = ("blind:fix", "Collision watch OFF: GPS fix stale",
+                                     (f"Last fix {round(age)} s ago. " if age is not None else "") + look)
+        else:
+            cid, headline, detail = ("blind:fix", "Collision watch OFF: no GPS fix",
+                                     look)
+    elif ais.get("ais_link_down"):
+        cid, headline, detail = ("blind:link", "Collision watch OFF: AIS link down",
+                                 "No targets coming in. " + look)
+    elif ais.get("receiver_missing"):
+        cid, headline, detail = ("blind:rx", "Collision watch OFF: AIS receiver missing",
+                                 "Not on the bus. " + look)
     else:
         return None
     c = _callout(cid, "safety", "now", headline, detail, ["get_ais"], "high")
     c["confirm_rounds"] = 2
     return c
+
+
+def blind_now(reason, detail="Keep a lookout."):
+    """A blind callout for a copilot-side failure (the coach tick itself threw). Shown at once."""
+    return _callout("blind:copilot", "safety", "now", f"Collision watch OFF: {reason}", detail,
+                    ["get_ais"], "high")
 
 
 def _corr_str(cd):
@@ -513,9 +604,7 @@ def evaluate(snapshot, playbook=None, engine=None):
 
     out = []
     if ais.get("available", True) is not False:    # SAFETY first — collision watch (always legal)
-        c = _safety_callout(ais)
-        if c:
-            out.append(c)
+        out += _safety_callouts(ais)               # every contact inside the guard, not just the worst
     if "get_ais" in snapshot:                      # …and say so when the watch can't see
         c = _blind_callout(ais, cond)
         if c:
@@ -573,8 +662,11 @@ def evaluate(snapshot, playbook=None, engine=None):
 def _sort_key(c):
     # Safety first, whatever its urgency: the coach line keeps only the top 2-3, and a watch-level
     # "Traffic closing" must not drop out behind a "now" rounding or helm rotation.
+    # Among collision contacts of one urgency: soonest TCPA first (a blind or unknown-motion
+    # callout has none and leads).
+    tcpa = _num(c.get("tcpa_min")) if c["category"] == "safety" else None
     return (c["category"] != "safety", URGENCY_RANK.get(c["urgency"], 9),
-            CATEGORY_PRIORITY.get(c["category"], 9))
+            CATEGORY_PRIORITY.get(c["category"], 9), tcpa if tcpa is not None else -1.0)
 
 
 # Per-route dedup state: {route: {callout_id: consecutive_seen_count}}. Module-level — one boat,
@@ -634,6 +726,9 @@ def _deterministic_spoken(callouts):
     parts = []
     for c in callouts[:2]:
         parts.append(c["headline"] + (f" — {c['detail']}" if c.get("detail") else ""))
+    more = sum(c.get("category") == "safety" for c in callouts[2:])
+    if more:                            # never let the line stop at two contacts silently
+        parts.append(f"+{more} more contact{'s' if more > 1 else ''}")
     return ". ".join(parts)
 
 
