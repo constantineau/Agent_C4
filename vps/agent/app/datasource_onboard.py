@@ -107,14 +107,21 @@ FUTURE_SKEW_S = 2.0
 def _update_time(upd, now):
     """When a Signal K update's readings were taken: its own `timestamp`, not the moment the delta
     reached us. A position held up 4 min in a queue is 4 min old (at 24 kn, 1.6 nm) — dating it by
-    receipt would call it fresh. Guards: a missing or unparseable stamp → receipt; a stamp in the
-    future (beyond FUTURE_SKEW_S) → clamped to receipt; an old one is kept, so its real age shows
-    (the stale-fix guard and the AIS window then treat it as old, which it is)."""
+    receipt would call it fresh. Guards: a missing or unparseable stamp → receipt; a stamp slightly
+    in the future (within FUTURE_SKEW_S) → clamped to receipt; one further ahead → None: the caller
+    DISCARDS the update (relabelled with receipt it would pass as fresh); an old one is kept, so its
+    real age shows (the stale-fix guard and the AIS window then treat it as old, which it is)."""
     ts = upd.get("timestamp") if isinstance(upd, dict) else None
     e = _epoch(ts) if isinstance(ts, str) else None
-    if e is None or e > now + FUTURE_SKEW_S:
+    if e is None:
         return now
+    if e > now + FUTURE_SKEW_S:
+        return None
     return min(e, now)
+
+
+def _source_label(upd):
+    return (upd.get("$source") or (upd.get("source") or {}).get("label") or "unknown")
 
 
 # Sources that carry AIS traffic rather than own-ship instruments. Until 2026-09-07 the
@@ -356,17 +363,29 @@ class OnboardSource:
         self._check_clock()
         now = _time.time()
         with self._live_lock:
+            mono = _time.monotonic()
+            rx = self.__dict__.setdefault("_ais_rx_seen", {})
             if is_other:
                 # An AIS target: accumulate per-MMSI, NEVER into the own-ship live cache.
                 for upd in data.get("updates", []):
+                    # the source that delivers other vessels IS the AIS receiver: learn its label
+                    # from live traffic (the archive drops other vessels, so it can't tell us)
+                    rx[_source_label(upd)] = mono
                     at = _update_time(upd, now)
+                    if at is None:                      # stamped beyond the skew: discard
+                        self._future_dropped = getattr(self, "_future_dropped", 0) + 1
+                        continue
                     for v in upd.get("values", []):
                         self._record_ais(mmsi, now, v.get("path"), v.get("value"), at)
                 return
             for upd in data.get("updates", []):
-                source = (upd.get("$source")
-                          or (upd.get("source") or {}).get("label") or "unknown")
+                source = _source_label(upd)
+                if source in rx:                        # the receiver publishing on our own context
+                    rx[source] = mono
                 at = _update_time(upd, now)     # when the reading was taken, not when it reached us
+                if at is None:                          # stamped beyond the skew: discard
+                    self._future_dropped = getattr(self, "_future_dropped", 0) + 1
+                    continue
                 for v in upd.get("values", []):
                     path, val = v.get("path"), v.get("value")
                     if not path:
@@ -451,7 +470,6 @@ class OnboardSource:
                 return False
             self._live.clear()
             getattr(self, "_ais", {}).clear()
-            self._ais_rx_t0 = None
         print(f"[onboard] wall clock stepped {step:+.0f} s — live and AIS caches reset", flush=True)
         return True
 
@@ -540,6 +558,10 @@ class OnboardSource:
         best = self._prefer(path, cands)
         return (best[2], best[1]) if best else None
 
+    def future_dropped(self):
+        """How many live updates were discarded for being stamped beyond FUTURE_SKEW_S (debug)."""
+        return getattr(self, "_future_dropped", 0)
+
     def live_link(self):
         """The live Signal K link — the engine's ONLY AIS input (the archive holds no other vessels):
         {enabled, connected, last_msg_age_s}. `enabled` false = the live cache is switched off
@@ -550,29 +572,20 @@ class OnboardSource:
                 "last_msg_age_s": (max(0.0, _time.monotonic() - last) if last is not None else None)}
 
     def ais_receiver_age_s(self):
-        """Seconds since the boat's own AIS transceiver (an AIS-bearing source, see ais_sources)
-        last published anything on our own context, from the live cache. None when we can't tell:
-        no AIS source known, or no live data at all (the Signal K link is down). A transceiver
-        never heard since the engine started counts from the engine's start."""
-        srcs = self.ais_sources()
-        if not srcs:
+        """Seconds since the boat's AIS receiver last delivered anything: its source label is learned
+        from live other-vessel deltas, and it also counts when it publishes on our own context (the
+        transceiver's own GPS / status). Receipt ages, monotonic. None when we can't tell: no
+        receiver learned yet this run, or the live link itself is quiet."""
+        rx = getattr(self, "_ais_rx_seen", None)
+        if not rx:
             return None
-        self._check_clock()
-        now = _time.time()
-        with self._live_lock:
-            if not self._live:
-                return None
-            newest_any = max(e for e, _v in self._live.values())
-            seen = [e for (_p, s), (e, _v) in self._live.items() if s in srcs]
-        if now - newest_any > LIVE_TTL_S:
-            return None                            # the live link itself is quiet: can't tell
-        if seen:
-            return max(0.0, now - max(seen))
-        t0 = getattr(self, "_ais_rx_t0", None)          # "never heard since": a receipt age, monotonic
+        last = getattr(self, "_link_last_msg", None)
         mono = _time.monotonic()
-        if t0 is None:
-            t0 = self._ais_rx_t0 = mono
-        return mono - t0
+        if last is None or mono - last > LIVE_TTL_S:
+            return None                            # the live link itself is quiet: can't tell
+        with self._live_lock:
+            newest = max(rx.values())
+        return max(0.0, mono - newest)
 
     # Real N2K sensors write 5–28 Hz, so a 40-min fatigue window is tens of thousands of rows —
     # converting them one-by-one in Python starved the whole engine at first-light (2026-07-15;

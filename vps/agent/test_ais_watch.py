@@ -328,10 +328,22 @@ with tempfile.TemporaryDirectory() as d:
     check("AIS position delayed 4 min: pos_time is the update's stamp (~240 s old), not receipt",
           abs(t_rx - tgt["pos_time"] - 240) < 2)
     check("…while `time` (heard) is receipt, so the feed still counts as alive", abs(tgt["time"] - t_rx) < 2)
+    dropped0 = src.future_dropped()
     src._ingest_live(delta(SHIP, iso(t_rx + 3600), "navigation.position",
+                           {"latitude": 46.9, "longitude": -83.0}))
+    tgt = src.ais_targets(15)[0]
+    check("a target stamped an hour in the FUTURE is discarded (not relabelled as fresh), and counted",
+          tgt["lat"] == 45.1 and abs(t_rx - tgt["pos_time"] - 240) < 2 and src.future_dropped() == dropped0 + 1)
+    src._ingest_live(delta(SHIP, iso(t_rx + 1), "navigation.position",
                            {"latitude": 45.1, "longitude": -83.0}))
-    check("a stamp an hour in the future is clamped to receipt",
+    check("a stamp 1 s ahead (inside the skew) is clamped to receipt",
           abs(src.ais_targets(15)[0]["pos_time"] - t_rx) < 2)
+    own_future = _json.dumps({"updates": [{"$source": GPS24, "timestamp": iso(t_rx + 3600), "values": [
+        {"path": "navigation.position", "value": {"latitude": 47.0, "longitude": -84.0}}]}]})
+    held = dict(src._live)
+    src._ingest_live(own_future)
+    check("an own fix stamped an hour ahead is discarded too (the live cache is unchanged), and counted",
+          src._live == held and src.future_dropped() == dropped0 + 2)
     src._ingest_live(delta(SHIP, "garbage", "navigation.position", {"latitude": 45.1, "longitude": -83.0}))
     check("an unparseable stamp → receipt", abs(src.ais_targets(15)[0]["pos_time"] - t_rx) < 2)
     src._ais = {}                                     # a first report (nothing newer held)
@@ -453,14 +465,44 @@ with tempfile.TemporaryDirectory() as d:
     src._link_connected = False
     check("…and disconnected after a drop", src.live_link()["connected"] is False)
 
-    # the transceiver's own-context data in the live cache (#191: only OFF when it's off the bus)
-    ds._AIS_SRC_CACHE[db] = {"b951"}
-    src._live = {(LAT, "gps"): (now - 1, 45.0), ("sensors.ais.class", "b951"): (now - 30, 1.0)}
-    check("transceiver heard 30 s ago → age ~30 s", abs(src.ais_receiver_age_s() - 30) < 1.5)
-    src._live = {(LAT, "gps"): (now - 300, 45.0)}
-    check("live link itself quiet → can't tell (None)", src.ais_receiver_age_s() is None)
-    ds._AIS_SRC_CACHE[db] = set()
-    check("no transceiver known → can't tell (None)", src.ais_receiver_age_s() is None)
+    # the AIS receiver's label is learned from LIVE other-vessel traffic (the archive has none)
+    real_time = ds._time
+
+    class Clk:
+        wall, mono = time.time(), 5000.0
+
+        def time(self):
+            return self.wall
+
+        def monotonic(self):
+            return self.mono
+
+    clk = Clk()
+    ds._time = clk
+    try:
+        src.__dict__.pop("_ais_rx_seen", None)
+        src._ais, src._live = {}, {}
+        src._link_last_msg = clk.mono
+        check("no AIS traffic yet this run → can't tell (None), never 'missing'", src.ais_receiver_age_s() is None)
+        src._ingest_live(delta(SHIP, iso(clk.wall), "navigation.position",
+                               {"latitude": 45.1, "longitude": -83.0}, source="n2k-socketcan.43"))
+        check("other-vessel traffic teaches the receiver's label", "n2k-socketcan.43" in src._ais_rx_seen)
+        clk.mono += 30
+        src._link_last_msg = clk.mono                  # the link is alive (own data flowing)
+        check("receiver last delivered 30 s ago → age ~30 s", abs(src.ais_receiver_age_s() - 30) < 0.01)
+        own_rx = _json.dumps({"updates": [{"$source": "n2k-socketcan.43", "timestamp": iso(clk.wall),
+                                           "values": [{"path": "sensors.ais.class", "value": 1}]}]})
+        src._ingest_live(own_rx)
+        check("…its own-context publishing (the B951's status/GPS) counts too → age 0",
+              src.ais_receiver_age_s() == 0)
+        clk.mono += 20 * 60
+        src._link_last_msg = clk.mono
+        check("20 min of nothing from it while the link flows → age 1200 s (receiver missing)",
+              abs(src.ais_receiver_age_s() - 1200) < 0.01)
+        src._link_last_msg = clk.mono - 300
+        check("live link itself quiet → can't tell (None)", src.ais_receiver_age_s() is None)
+    finally:
+        ds._time = real_time
 
 print("\n== 8. a backward (or forward) Pi clock step resets the live caches (Codex on #191) ==")
 
