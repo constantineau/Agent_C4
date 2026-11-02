@@ -21,6 +21,7 @@ last one. Nothing here takes an action — the coach line shows, it never steers
 """
 import asyncio
 import time
+import uuid
 from collections import deque
 
 from . import briefs as briefs_mod
@@ -42,6 +43,11 @@ class _Coach:
         self.interval = config.COACH_INTERVAL_S
         self.route = config.DEFAULT_ROUTE
         self.last = None                              # latest step_narration result (+ _coach_at)
+        # progress for the iPad, free of wall clock (an NTP jump back at boot must not read as a
+        # stall): `seq` goes up by one per published result; `instance` is new per process, so a
+        # restart (seq back to 0) still reads as progress
+        self.seq = 0
+        self.instance = uuid.uuid4().hex
         self.history = deque(maxlen=_HISTORY_MAX)     # coach lines, newest first
         self.ticks = 0
         self.last_tick_at = None
@@ -75,7 +81,9 @@ class _Coach:
             "new": last.get("new", []),               # what was newly shown on the last tick
             "spoken": last.get("spoken", ""),         # the phrased line for the new callouts
             "narration_mode": last.get("narration_mode", "none"),
-            "updated_at": last.get("_coach_at"),
+            "updated_at": last.get("_coach_at"),     # display only (the Orin's wall clock)
+            "seq": self.seq,                          # progress: +1 per published result
+            "instance": self.instance,                # …per process (a restart is progress too)
             "history": list(self.history),
             "playbook_loaded": last.get("_meta", {}).get("playbook_loaded"),
             # the coach-window surface: latest full brief per kind + what fired recently
@@ -138,6 +146,7 @@ class _Coach:
             res = await asyncio.to_thread(copilot.step_narration, self.route, None)
             res["_coach_at"] = time.time()
             self.last = res
+            self.seq += 1
             # an engine that can't be reached is not a quiet tick: the blind callout is up, say so here too
             self.last_error = ("engine unreachable — collision watch OFF"
                                if res.get("_meta", {}).get("engine_lost") else None)
@@ -170,6 +179,7 @@ class _Coach:
         c = narrate_mod.blind_now("copilot error")
         was = any(a.get("id") == c["id"] for a in (self.last or {}).get("active", []))
         line = narrate_mod._deterministic_spoken([c])
+        self.seq += 1
         self.last = {"active": [c], "new": [] if was else [c], "spoken": line,
                      "narration_mode": "deterministic", "_coach_at": time.time(),
                      "_meta": {"tick_failed": True}}

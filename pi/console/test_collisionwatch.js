@@ -161,6 +161,35 @@ test("updated_at must ADVANCE: the same (or an older) stamp replayed goes 'copil
   assert.equal(COL.offReason(c, st, T0 + 120000), "copilot stalled");
 });
 
+test("the Orin's clock jumps back (NTP at boot): healthy ticks with rising seq are NOT 'stalled'", () => {
+  const st = COL.newState(T0 - 1000);
+  // updated_at jumps back an hour after the first reply and then creeps up below the old value
+  let c = coach({ updated_at: 5000, seq: 10, instance: "a1" });
+  COL.track(st, c, T0);
+  for (let i = 1; i <= 10; i++) {
+    c = coach({ updated_at: 1400 + 30 * i, seq: 10 + i, instance: "a1" });
+    assert.equal(COL.track(st, c, T0 + 15000 * i), true);
+  }
+  assert.equal(COL.offReason(c, st, T0 + 150000), null);
+});
+
+test("seq not rising goes 'stalled'; a copilot restart (new instance, seq back to 1) is progress", () => {
+  const st = COL.newState(T0 - 1000);
+  let c = coach({ updated_at: 1000, seq: 7, instance: "a1" });
+  COL.track(st, c, T0);
+  for (let t = 15000; t <= 120000; t += 15000) COL.track(st, coach({ updated_at: 1000 + t, seq: 7, instance: "a1" }), T0 + t);
+  assert.equal(COL.offReason(c, st, T0 + 120000), "copilot stalled", "updated_at rising alone isn't progress");
+  c = coach({ updated_at: 10, seq: 1, instance: "b2" });
+  COL.track(st, c, T0 + 125000);
+  assert.equal(COL.offReason(c, st, T0 + 125000), null);
+});
+
+test("a bad seq or instance is a malformed reply", () => {
+  assert.equal(COL.validCoach(coach({ seq: "3", instance: "a1" })), false);
+  assert.equal(COL.validCoach(coach({ seq: 3, instance: "" })), false);
+  assert.equal(COL.validCoach(coach({ seq: 3, instance: "a1" })), true);
+});
+
 test("a working, quiet copilot is not OFF (and the strip is hidden)", () => {
   const c = coach({});
   assert.equal(COL.offReason(c, live(c), T0), null);

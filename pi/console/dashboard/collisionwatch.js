@@ -21,7 +21,8 @@
   const OFF_ID = "local:off";
 
   function newState(nowMs) {
-    return { startMs: nowMs, lastOkMs: null, lastUpdatedAt: undefined, lastChangeMs: null };
+    return { startMs: nowMs, lastOkMs: null, lastUpdatedAt: undefined, lastSeq: undefined,
+      lastInstance: undefined, lastChangeMs: null };
   }
 
   /* is this a real /coach answer? A proxy or a broken copilot can answer 200 with `{}` (or junk);
@@ -30,20 +31,31 @@
     return !!r && typeof r === "object" && !Array.isArray(r)
       && Array.isArray(r.active) && Array.isArray(r.history)
       && typeof r.running === "boolean"
-      && (r.updated_at === null || (typeof r.updated_at === "number" && isFinite(r.updated_at)));
+      && (r.updated_at === null || (typeof r.updated_at === "number" && isFinite(r.updated_at)))
+      && (r.seq === undefined || (typeof r.seq === "number" && isFinite(r.seq)))
+      && (r.instance === undefined || (typeof r.instance === "string" && r.instance.length > 0));
   }
 
   /* fold one poll into the state: `r` is the /coach body, or null when the fetch failed. Returns
      true when `r` is a real answer (the caller then holds it); a malformed one counts as a failed
-     poll. The held result only "moves" when updated_at ADVANCES (a repeated or older stamp does
-     not), so a copilot replaying the same answer goes "stalled". */
+     poll. The held result only "moves" when the copilot's result counter `seq` goes up, or its
+     process `instance` changes (a restart) — never judged on the Orin's wall clock, which can jump
+     back after an NTP sync at boot (Codex on #191). updated_at is for display. A copilot too old
+     to send seq/instance falls back to "updated_at advanced". A replayed answer goes "stalled". */
   function track(st, r, nowMs) {
     if (!validCoach(r)) return false;
     st.lastOkMs = nowMs;
-    const u = r.updated_at;
-    const advanced = st.lastUpdatedAt === undefined
-      || (typeof u === "number" && (typeof st.lastUpdatedAt !== "number" || u > st.lastUpdatedAt));
-    if (advanced) { st.lastUpdatedAt = u; st.lastChangeMs = nowMs; }
+    let advanced;
+    if (typeof r.seq === "number" && typeof r.instance === "string") {
+      advanced = r.instance !== st.lastInstance || st.lastSeq === undefined || r.seq > st.lastSeq;
+      if (advanced) { st.lastInstance = r.instance; st.lastSeq = r.seq; }
+    } else {
+      const u = r.updated_at;
+      advanced = st.lastUpdatedAt === undefined
+        || (typeof u === "number" && (typeof st.lastUpdatedAt !== "number" || u > st.lastUpdatedAt));
+      if (advanced) st.lastUpdatedAt = u;
+    }
+    if (advanced) st.lastChangeMs = nowMs;
     return true;
   }
 

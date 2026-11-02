@@ -363,9 +363,14 @@ async def review_scenarios() -> bool:
                      st["history"][0]["spoken"].startswith("Collision watch OFF: copilot error")
                      and st["history"][0]["categories"] == ["safety"]
                      and st["history"][0]["ids"] == ["blind:copilot"])
+        seq_before = st["seq"]
+        ok &= _check("/coach carries progress free of wall clock: an int seq and a process instance id",
+                     isinstance(st["seq"], int) and isinstance(st["instance"], str) and len(st["instance"]) >= 16)
         st = await _tick()
         ok &= _check("a second failing tick keeps it up but doesn't re-announce it",
                      st["active"][0]["headline"] == "Collision watch OFF: copilot error" and st["new"] == [])
+        ok &= _check("…and still publishes: seq goes up by one per published result",
+                     st["seq"] == seq_before + 1)
     finally:
         copilot.step_narration = real
     st = await _tick()
