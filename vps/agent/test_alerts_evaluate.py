@@ -12,7 +12,8 @@ that keeps the rows and a fake monotonic clock:
   * back again after a clear: debounced again from zero, and a NEW row;
   * after a restart, an alert still on record whose condition still holds is neither cleared nor
     raised twice while its debounce re-accumulates;
-  * a rule that throws does not clear the other rules' alerts.
+  * no live data (the strip read throwing, or unavailable): "No live data" is raised like stale
+    data, and an active depth alarm stays up until a real reading clears it (Cole, 2026-11-02).
 
 No DB, engine or network. Run (make ci):  PYTHONPATH=vps/agent:. python3 vps/agent/test_alerts_evaluate.py
 """
@@ -110,13 +111,15 @@ def reset():
 WORLD = {}
 
 
-def world(depth=30.0, ais=(), strip_boom=False):
-    WORLD.update(depth=depth, ais=list(ais), strip_boom=strip_boom)
+def world(depth=30.0, ais=(), strip_boom=False, strip_gone=False):
+    WORLD.update(depth=depth, ais=list(ais), strip_boom=strip_boom, strip_gone=strip_gone)
 
 
 def _strip():
     if WORLD["strip_boom"]:
         raise RuntimeError("engine down")
+    if WORLD["strip_gone"]:
+        return {"available": False}
     return {"available": True, "data_age_seconds": 2, "depth": WORLD["depth"],
             "stw": 6.0, "tws": 12.0, "twa": 45.0}
 
@@ -200,7 +203,7 @@ world(ais=[], depth=6.0)
 check("t=71: only AIS clears", tick(71) == [("cleared", "ais:366000001", "warn")]
       and [r["key"] for r in db.active()] == ["depth_shoaling"])
 
-print("a rule that throws clears its own alerts, not the others':")
+print("the strip read throws: 'No live data', and the depth alarm stays up:")
 db = reset()
 world(ais=[SHIP], depth=6.0)
 tick(0)
@@ -210,9 +213,35 @@ world(ais=[SHIP], strip_boom=True)
 out = tick(31)
 check("strip throwing: AIS stays up", "ais:366000001" in {r["key"] for r in db.active()}
       and not any(k == "ais:366000001" for _e, k, _s in out))
-check("strip throwing: its depth alert clears", ("cleared", "depth_shoaling", "warn") in out
-      and "depth_shoaling" not in {r["key"] for r in db.active()}
-      and next(r for r in db.rows if r["key"] == "depth_shoaling")["cleared_at"] is not None)
+check("strip throwing: the depth alarm is NOT cleared", out == []
+      and "depth_shoaling" in {r["key"] for r in db.active()})
+check("t=60: still throwing, 29 s: depth still up, 'No live data' not yet (stale debounce 30 s)",
+      tick(60) == [] and "depth_shoaling" in {r["key"] for r in db.active()})
+check("t=61: 30 s of no data → 'No live data' raised, danger",
+      tick(61) == [("new", "stale_telemetry", "danger")]
+      and next(r for r in db.active() if r["key"] == "stale_telemetry")["message"]
+      == "No live data. Link or sensors down.")
+check("…depth still on record beside it", {r["key"] for r in db.active()}
+      == {"ais:366000001", "depth_shoaling", "stale_telemetry"})
+world(ais=[SHIP], depth=30.0)
+out = tick(62)
+check("data back, deep water: depth and 'No live data' both clear", sorted(out) ==
+      [("cleared", "depth_shoaling", "warn"), ("cleared", "stale_telemetry", "danger")])
+
+print("the strip unavailable (not throwing): the same, depth held:")
+db = reset()
+world(depth=3.0)
+tick(0)
+tick(10)
+world(strip_gone=True)
+check("unavailable: depth not cleared", tick(11) == []
+      and [r["key"] for r in db.active()] == ["depth_shoaling"])
+world(strip_gone=True)
+check("…'No live data' after 30 s", tick(41) == [("new", "stale_telemetry", "danger")])
+world(depth=3.0)
+check("data back, still shallow: depth stays, one row, no re-raise", tick(42)
+      == [("cleared", "stale_telemetry", "danger")] and
+      [r["key"] for r in db.rows if r["key"] == "depth_shoaling"] == ["depth_shoaling"])
 
 print("after a restart — an alert on record whose condition still holds:")
 db = reset()

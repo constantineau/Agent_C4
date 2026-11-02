@@ -85,13 +85,23 @@ def deliverable(change, racing=None):
     return None
 _SEV_ORDER = {"danger": 0, "warn": 1, "info": 2}
 
+# Alerts that need a live reading to be judged. With no live data (the strip unavailable, or its
+# read throwing) an active one stays up: "no data" is not "deep water again". It clears only when
+# a real reading says so.
+HOLD_WHEN_BLIND = frozenset({"depth_shoaling"})
+NO_LIVE_DATA = {"key": "stale_telemetry", "kind": "stale_telemetry", "severity": "danger",
+                "message": "No live data. Link or sensors down."}
+
 # key -> monotonic time the condition was first seen (continuously) true
 _pending = {}
 
 
 # --- rules: build the set of conditions firing right now --------------------------------
-def _conditions():
+def _conditions(blind=None):
+    """The conditions firing now. `blind` (a set, optional) is filled with the keys that could
+    not be judged for lack of live data (HOLD_WHEN_BLIND): evaluate() must not clear those."""
     out = []
+    blind = set() if blind is None else blind
 
     # 1) AIS collision guard — a closing target with a small CPA reached soon.
     try:
@@ -110,11 +120,15 @@ def _conditions():
         pass
 
     # 2/3/4) strip-derived: stale telemetry, depth, polar deficit.
+    # A read that THROWS is no live data too: the same alert, never a silent clear of depth.
     try:
         s = tools.get_strip()
+    except Exception:
+        s = {"available": False}
+    try:
         if not s.get("available"):
-            out.append({"key": "stale_telemetry", "kind": "stale_telemetry", "severity": "danger",
-                        "message": "No live data. Link or sensors down."})
+            out.append(dict(NO_LIVE_DATA))
+            blind.update(HOLD_WHEN_BLIND)
         else:
             age = s.get("data_age_seconds")
             if age is not None and age > STALE_S:
@@ -186,7 +200,8 @@ def evaluate():
 
     Returns a list of {event: 'new'|'updated'|'cleared', alert: {...}}."""
     now_m = time.monotonic()
-    firing = {c["key"]: c for c in _conditions()}
+    blind = set()
+    firing = {c["key"]: c for c in _conditions(blind)}
 
     # advance debounce timers: drop keys no longer firing, start/keep timers for firing ones
     for k in list(_pending):
@@ -221,9 +236,10 @@ def evaluate():
                             (c["severity"], c["message"], a["id"]),
                         )
                         changes.append({"event": "updated", "alert": dict(c)})
-            # clear active alerts whose condition is entirely gone (not just inside debounce)
+            # clear active alerts whose condition is entirely gone (not just inside debounce);
+            # one that could not be judged for lack of live data stays up (HOLD_WHEN_BLIND)
             for k, a in active.items():
-                if k not in firing:
+                if k not in firing and k not in blind:
                     cur.execute("UPDATE alerts SET cleared_at=now(), updated_at=now() WHERE id=%s",
                                 (a["id"],))
                     gone = {"key": k, "kind": a["kind"], "severity": a["severity"],
@@ -236,7 +252,8 @@ def evaluate():
 
 
 def active_alerts():
-    """Currently-active alerts, most severe first (then oldest first)."""
+    """Currently-active alerts, most severe first, then newest first within a severity (Cole,
+    2026-11-02: the crew should see what just changed at the top of its band)."""
     rows = _active_rows()
     racing = race_mode.racing()
     items = []
