@@ -57,8 +57,37 @@ def _circ_interp(a, b, f):
 
 def wind_at(lat, lon, epoch):
     """(tws_kn, twd_deg) forecast at a position/time, or None if unavailable."""
-    c = fetch_point(lat, lon)
-    hrs = c.get("hours") or []
+    return _interp(fetch_point(lat, lon).get("hours") or [], epoch)
+
+
+def _fresh(c, now):
+    return bool(c and c.get("hours")) and now - c["fetched"] < TTL_S
+
+
+def cached_wind_at(lat, lon, epoch):
+    """Like `wind_at`, but from the cache only: never fetches, so it never blocks. None when this
+    cell has no fresh forecast in the cache."""
+    c = _cache.get(_cell(lat, lon))
+    return _interp(c["hours"], epoch) if _fresh(c, time.time()) else None
+
+
+def nearest_cached_wind(lat, lon, epoch):
+    """The forecast of the nearest cell that has one in the cache (never fetches), or None. The
+    router fills a forecast gap with it, so a route never mixes forecast and measured wind (#157)."""
+    now = time.time()
+    coslat = math.cos(math.radians(lat))
+    best = None
+    for (clat, clon), c in list(_cache.items()):
+        if not _fresh(c, now):
+            continue
+        d = (clat - lat) ** 2 + ((clon - lon) * coslat) ** 2
+        if best is None or d < best[0]:
+            best = (d, c["hours"])
+    return _interp(best[1], epoch) if best else None
+
+
+def _interp(hrs, epoch):
+    """(tws, twd) from an hourly series at `epoch` (held at either end), or None if empty."""
     if not hrs:
         return None
     if epoch <= hrs[0][0]:

@@ -93,6 +93,7 @@
         (models.length ? " · " + models.join(", ") : "");
     } else {
       wx = String(r.wind_source || "").indexOf("live") === 0 ? "Measured wind only. No forecast."
+        : r.forecast_gaps ? "Forecast with gaps · Open-Meteo"   // gaps filled from nearby (#157)
         : "Forecast · Open-Meteo";
     }
     const who = (r.asked_by ? "Asked by " + r.asked_by : "Asked") +
