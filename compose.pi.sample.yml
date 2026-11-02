@@ -28,3 +28,6 @@ services:
   engine:
     environment:
       BOAT_ID: sr33-bench
+      # bench: the playbook goes on to the real Orin over Tailscale (the Orin must list this
+      # host's Tailscale IP in PLAYBOOK_LOAD_FROM)
+      COPILOT_URL: "http://100.70.110.72:8300"
