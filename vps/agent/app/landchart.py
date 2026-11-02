@@ -21,7 +21,7 @@ import math
 import os
 import zlib
 
-from shared import chartid
+from shared import chartid, gridwalk
 
 from . import orinassets, orinroute
 
@@ -96,42 +96,21 @@ class LandMask:
             self.mask[ny_ * self.nx + nx_] = 0
 
     def cells_touched(self, lat1, lon1, lat2, lon2):
-        """Every grid cell the straight segment touches — exact (a supercover, no sampling): a
-        segment that clips a cell's corner, or runs along a cell edge, touches the cells on both
-        sides. Swept column by column: in each column the segment spans one y-interval, and every
-        row that interval meets is touched (a boundary exactly on a row edge counts the row on the
-        other side too). Cells outside the grid are left out (unknown water, as `blocked` says)."""
-        x0, y0 = (lon1 - self.w) / self.res, (lat1 - self.s) / self.res
-        x1, y1 = (lon2 - self.w) / self.res, (lat2 - self.s) / self.res
-        if x1 < x0:
-            x0, y0, x1, y1 = x1, y1, x0, y0
-        dx = x1 - x0
-
-        def y_at(x):
-            return y0 if dx == 0 else y0 + (y1 - y0) * (x - x0) / dx
-
-        def rows(ya, yb):
-            lo, hi = min(ya, yb), max(ya, yb)
-            r0 = math.floor(lo) - (1 if lo == math.floor(lo) else 0)   # on an edge: the row below
-            return range(r0, math.floor(hi) + 1)
-
-        c0 = math.floor(x0) - (1 if x0 == math.floor(x0) else 0)       # on an edge: the column left
-        c1 = math.floor(x1)
-        for c in range(c0, c1 + 1):
-            if c < 0 or c >= self.nx:
-                continue
-            xa, xb = max(x0, c), min(x1, c + 1)
-            if xa > xb:
-                continue
-            for r in rows(y_at(xa), y_at(xb)) if dx else rows(y0, y1):
-                if 0 <= r < self.ny:
-                    yield c, r
+        """Every grid cell the straight segment touches: exact (a supercover, no sampling; one
+        implementation, shared/gridwalk.py). A clipped corner or a run along a cell edge touches
+        the cells on both sides. Cells outside the grid are left out (unknown water, as `blocked`
+        says)."""
+        for c, r in gridwalk.cells_touched((lon1 - self.w) / self.res, (lat1 - self.s) / self.res,
+                                           (lon2 - self.w) / self.res, (lat2 - self.s) / self.res):
+            if 0 <= c < self.nx and 0 <= r < self.ny:
+                yield c, r
 
     def crosses(self, lat1, lon1, lat2, lon2):
-        """Does the straight segment touch any land cell? Exact grid traversal (cells_touched),
+        """Does the straight segment touch any land cell? Exact grid traversal (gridwalk),
         corners and edges included — never sampled, so a clipped corner can't slip through."""
-        return any(self.mask[r * self.nx + c] == 1
-                   for c, r in self.cells_touched(lat1, lon1, lat2, lon2))
+        return gridwalk.any_set(self.mask, self.nx, self.ny,
+                                (lon1 - self.w) / self.res, (lat1 - self.s) / self.res,
+                                (lon2 - self.w) / self.res, (lat2 - self.s) / self.res)
 
 
 class ChartUnreadable(Exception):

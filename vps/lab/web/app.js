@@ -3815,7 +3815,9 @@ function optDegradedBanner(r) {
   const w = r.warnings || [];
   if (!w.length) return "";
   const cls = r.degraded ? "bad" : "warn";
-  const head = r.degraded ? "⚠ Weak forecast. Read this before using the route." : "⚠ Notes";
+  const landFailed = (r.obstacles || {}).land === "failed";
+  const head = landFailed ? "⚠ Land not checked. Don't use this route."
+    : r.degraded ? "⚠ Weak forecast. Read this before using the route." : "⚠ Notes";
   // when degraded, surface the common-error checklist inline so the cause is actionable (2.5)
   const checklist = r.degraded ? `<div style="margin-top:6px;font-size:12px;font-weight:400">
     <b>What usually fixes it:</b>
@@ -3831,6 +3833,7 @@ function optDegradedBanner(r) {
 
 function optObstacleNote(r) {
   const ob = r.obstacles || {};
+  if (ob.land === "failed") return '<div class="pill bad" style="display:block;font-size:12px;margin-top:6px;text-align:left">Shoreline didn\'t load. The route may cross land.</div>';
   if (!ob.active) return '<div class="muted" style="font-size:12px;margin-top:6px">Land avoidance is off. The route may cross land.</div>';
   const L = ob.layers || {};
   const steps = r.obstacle_steps_avoided || 0;

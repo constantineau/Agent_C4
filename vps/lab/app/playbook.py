@@ -64,7 +64,9 @@ def _subfields(wf: WindField):
     out = {}
     for model, series in by_model.items():
         meta = [m for m in wf.meta if m["model"] == model]
-        out[model] = WindField(series, meta, wf.bbox, wf.t_start, wf.t_end)
+        # a model's own scenario keeps its de-bias (its weight alone changes nothing)
+        out[model] = WindField(series, meta, wf.bbox, wf.t_start, wf.t_end,
+                               model_bias=getattr(wf, "model_bias", None))
     return out
 
 
@@ -555,9 +557,11 @@ def _rejoin_tab(definition, course_id, wf, consensus, cur, waves, marks, off_nm,
 def build_playbook(definition, course_id, start_epoch, models, ensemble_members=0,
                    time_budget_s=200, jib_crossovers=None, sail_config=None, helm_factor=1.0, use_waves=True,
                    polar_adjustments=None, wave_coeffs=None, v2_scenarios=True,
-                   scenario_budget_s=None, max_scenarios=None, fan_depth="standard"):
+                   scenario_budget_s=None, max_scenarios=None, fan_depth="standard",
+                   model_skill=True):
     """Multi-scenario playbook: route the course through the blended field (consensus) and through
-    each model's sub-field (scenarios), cluster by favored side into variants."""
+    each model's sub-field (scenarios), cluster by favored side into variants. The field is
+    weighted by the venue's model skill exactly like the Lab route (`routerun.venue_skill`)."""
     bbox = optimizer.course_bbox(definition, course_id)
     if not bbox:
         return {"available": False, "note": "No mark positions yet. Fix them in Course & Marks."}
@@ -566,8 +570,13 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
     # reach past the nominal window or those runs fall onto fallback wind
     t_end = start_epoch + (hours + (6 if v2_scenarios else 0)) * 3600
     log: list[str] = []
+    from . import routerun
+    skill, mweights, mbias = (routerun.venue_skill(definition, course_id, bbox, start_epoch, models,
+                                                   log.append)
+                              if model_skill else ({"enabled": False}, None, None))
     wf = build_windfield(bbox, start_epoch, t_end, models=models,
-                         ensemble_members=ensemble_members, on_progress=log.append)
+                         ensemble_members=ensemble_members, on_progress=log.append,
+                         model_weights=mweights, model_bias=mbias)
     if not wf.loaded:
         return {"available": False, "note": "no weather model data could be loaded",
                 "windfield": wf.status(), "log": log}
@@ -631,6 +640,10 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
         log.append(f"consensus: incomplete at {per}s ({_truncated(consensus, finish_pt)}) — "
                    "retrying ×2 budget")
         consensus = _route(wf, per * 2)
+    if (consensus.get("obstacles") or {}).get("land") == "failed":
+        # #51: a playbook routed without the shoreline is frozen aboard: never build one
+        return {"available": False, "windfield": wf.status(), "log": log,
+                "note": optimizer.LAND_FAILED.replace("Don't use it.", "No playbook built. Try again.")}
     why = _truncated(consensus, finish_pt)
     if why:
         return {"available": False, "windfield": wf.status(), "log": log,

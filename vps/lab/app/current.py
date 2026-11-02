@@ -142,9 +142,13 @@ class GLOFSCurrent(CurrentField):
         return {"loaded": True, "source": self.source, "slices": len(self.slices), **self.meta}
 
 
-def _cycle_for(epoch):
-    """Freshest LMHOFS cycle (00/06/12/18 UTC) at or before `epoch - lag`."""
+def _cycle_for(epoch, now=None):
+    """Freshest LMHOFS cycle (00/06/12/18 UTC) at or before min(race start, now) - lag. Clamped to
+    `now` like wave.py: a race days out still gets the latest POSTED cycle (its forecast reaches
+    forward to the race), not a cycle near the start that doesn't exist yet (#51)."""
     import datetime
+    import time
+    epoch = min(float(epoch), time.time() if now is None else float(now))
     t = datetime.datetime.utcfromtimestamp(epoch - CYCLE_LAG_H * 3600)
     cyc = (t.hour // 6) * 6
     return t.replace(hour=cyc, minute=0, second=0, microsecond=0)
@@ -181,9 +185,14 @@ def _open_slice(url, bbox, want_axes):
 
 
 def _fetch(url, bbox, want_axes):
-    """Run one OPeNDAP slice with a hard timeout so a slow THREDDS can't stall the optimize."""
-    with ThreadPoolExecutor(max_workers=1) as ex:
+    """Run one OPeNDAP slice with a hard timeout so a slow THREDDS can't stall the optimize. The
+    pool is shut down WITHOUT waiting: leaving a `with` block would wait for the hung worker and
+    the timeout would do nothing (#51). A hung read is left to finish (or not) on its own."""
+    ex = ThreadPoolExecutor(max_workers=1)
+    try:
         return ex.submit(_open_slice, url, bbox, want_axes).result(timeout=FETCH_TIMEOUT)
+    finally:
+        ex.shutdown(wait=False, cancel_futures=True)
 
 
 def build_currentfield(bbox, t_start, t_end, on_progress=None):

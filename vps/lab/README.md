@@ -112,6 +112,12 @@ scenarios share a mask); `POST /api/optimize` takes `avoid_land` (default true) 
 `obstacles` summary; the Gameplan map overlays coast/islands/zones. Rounding **side** is enforced
 for islands that are marks of the race (2f below); plain hazards stay avoided either side.
 Tunables `GEO_RES_DEG` / `GEO_ISLAND_NM` / `GEO_MARK_CARVE_NM`.
+Each route step is checked against the mask exactly (`shared/gridwalk.py`: every cell the segment
+touches, corners included; #145), the same walk the Pi's GPS export uses.
+**A shoreline that doesn't load is never open water (#51):** the field is marked
+`land = "failed"` (not cached, retried next run), the route comes back `degraded` with "Shoreline
+didn't load…" as its first warning and `obstacles.land = "failed"`; the playbook and the Deploy
+chart refuse to build. `obstacles.land` is `ok` / `failed` / `off` (avoid_land unchecked).
 
 ### Higher-res coastline backstop — GSHHG full-res
 
@@ -567,6 +573,7 @@ venue in the past** — forecast-vs-observed verification, not model agreement. 
 seasonal window across many years, **recency-weighted** (t½ 8 y) so recent model versions lead while
 deep history still counts; the better a model has done here, the more it counts (and its persistent
 bias is removed before blending). Automatic + always shown in the GamePlan **Model skill** panel.
+The playbook's field is weighted the same way (`routerun.venue_skill`, #51).
 - **Data:** observed = METAR (Iowa State ASOS) + NDBC buoys; forecast = Open-Meteo Historical Forecast
   (2021+) plus a deep GRIB pipeline — HRRR archive (2015+) + GEFS Reforecast v12 (2005+) via `.idx`
   byte-range subsetting (`app/deepfc.py`), run offline via the "Deepen history" backfill.
