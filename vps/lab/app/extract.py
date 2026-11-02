@@ -186,18 +186,12 @@ _IFRAME_SKIP = ("google.com", "googletagmanager", "doubleclick", "facebook.", "y
 MAX_EMBEDS = 3
 
 
-def _page_text(url: str, raw: bytes, follow_iframes: bool = True,
-               failed: list | None = None, pdfs: list | None = None) -> str:
-    """The page's text plus up to MAX_EMBEDS embedded pages' (one level deep). With `pdfs` given,
-    an embedded PDF is loaded as its own doc (sent to the model as a PDF) instead of being
-    flattened to text. With `failed` given, everything embedded that couldn't be read (or wasn't
-    followed) is reported there in plain words; without it (the fleet import) it's skipped."""
-    html = raw.decode("utf-8", "ignore")
-    text = _html_to_text(html)
-    if not follow_iframes:
-        return text
+MAX_EMBED_DEPTH = 2     # a page → its viewer → the PDF inside it
+
+
+def _embeds(url: str, html: str) -> list:
+    """Content links embedded in a page (iframe/embed/object), absolute, de-duplicated, minus ads."""
     from urllib.parse import urljoin
-    here = doc_label(url)
     seen = []
     for m in _IFRAME_SRC.findall(html):
         full = urljoin(url, m[0] or m[1])
@@ -206,6 +200,24 @@ def _page_text(url: str, raw: bytes, follow_iframes: bool = True,
                 or any(s in low for s in _IFRAME_SKIP)):
             continue
         seen.append(full)
+    return seen
+
+
+def _page_text(url: str, raw: bytes, follow_iframes: bool = True,
+               failed: list | None = None, pdfs: list | None = None, depth: int = 1,
+               visited: set | None = None) -> str:
+    """The page's text plus up to MAX_EMBEDS embedded pages' (one level deep). With `pdfs` given,
+    an embedded PDF is loaded as its own doc (sent to the model as a PDF) instead of being
+    flattened to text. With `failed` given, everything embedded that couldn't be read (or wasn't
+    followed) is reported there in plain words; without it (the fleet import) it's skipped."""
+    html = raw.decode("utf-8", "ignore")
+    text = _html_to_text(html)
+    if not follow_iframes:
+        return text
+    here = doc_label(url)
+    visited = {url} if visited is None else visited
+    seen = [u for u in _embeds(url, html) if u not in visited]
+    visited.update(seen)
     if len(seen) > MAX_EMBEDS and failed is not None:
         failed.append(f"{here} embeds {len(seen)} pages; only the first {MAX_EMBEDS} were read "
                       f"(skipped: {', '.join(doc_label(u) for u in seen[MAX_EMBEDS:])}). Paste "
@@ -240,7 +252,19 @@ def _page_text(url: str, raw: bytes, follow_iframes: bool = True,
                 except Exception:  # noqa: BLE001 — fleet import: a bad PDF adds nothing
                     pass
             elif _is_text_type(ct, rb):
-                part = _html_to_text(rb.decode("utf-8", "ignore"))
+                if pdfs is not None and depth < MAX_EMBED_DEPTH:
+                    # a viewer page holding the real document: follow ITS embeds too
+                    part = _page_text(full, rb, failed=failed, pdfs=pdfs, depth=depth + 1,
+                                      visited=visited)
+                else:
+                    part = _html_to_text(rb.decode("utf-8", "ignore"))
+                    deeper = [u for u in _embeds(full, rb.decode("utf-8", "ignore"))
+                              if u not in visited]
+                    if deeper and failed is not None:
+                        failed.append(f"The embedded {name} on {here} embeds more pages that "
+                                      f"weren't opened (too deep): "
+                                      f"{', '.join(doc_label(u) for u in deeper)}. Paste those "
+                                      f"links on their own.")
                 if not part.strip() and failed is not None:
                     failed.append(f"The embedded {name} on {here} had no readable text (built by "
                                   f"JavaScript?). Check it by hand.")

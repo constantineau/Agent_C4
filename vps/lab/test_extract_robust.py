@@ -421,6 +421,29 @@ check("note: no readable text (scan)", any("si.pdf (embedded in race) had no rea
                                            for n in inotes))
 extract.PDF_MAX_PAGES = saved_pages
 
+print("nested: race page → viewer → si.pdf; the SI still goes as a PDF, deeper links are named")
+ROUTES.clear()
+ROUTES.update({"si.pdf": ("application/pdf", SCAN),
+               "/viewer": page(b'<iframe src="/docs/si.pdf"></iframe>', text=b"PDF viewer"),
+               "/race/": page(b'<iframe src="/viewer"></iframe>')})
+calls = fake([reply()])
+r = asyncio.run(main.ingest_urls({"urls": ["https://x.org/race/"]}))
+blocks = calls["course"][0]["messages"][0]["content"] if calls["course"] else []
+check("the SI behind the viewer is a document block", any(
+    b["type"] == "document" and base64.standard_b64decode(b["source"]["data"]) == SCAN
+    for b in blocks))
+check("listed as a source", isinstance(r, dict) and any(
+    s["url"] == "https://x.org/docs/si.pdf" for s in r["definition"]["provenance"]["sources"]))
+ROUTES.update({"/viewer": page(b'<iframe src="/deeper"></iframe>', text=b"PDF viewer"),
+               "/deeper": page(b'<iframe src="/docs/si.pdf"></iframe>', text=b"inner")})
+calls = fake([reply()])
+r = asyncio.run(main.ingest_urls({"urls": ["https://x.org/race/"]}))
+inotes = " | ".join(n["text"] for n in r["definition"]["provenance"]["ingest_notes"]) \
+    if isinstance(r, dict) else ""
+check("past the depth limit, the skipped link is named in a note",
+      "The embedded deeper on viewer embeds more pages that weren't opened (too deep): si.pdf"
+      in inotes)
+
 print("audit gaps: everything a page can't give us becomes a persisted note")
 ROUTES.clear()
 ROUTES.update({
