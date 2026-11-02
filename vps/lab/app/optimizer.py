@@ -1178,16 +1178,14 @@ def _forecast_held(wf, full_path, start_epoch=None):
     """Did the route sail on a held edge frame (no model's forecast reached that time)? → "end"
     (past the last frame), "start" (before the first) or None. A wind field without the `held`
     flag (a fixed test wind, the boat's own) never holds."""
-    try:
-        last = max(fr[-1].valid_time for fr in (wf.series or {}).values() if fr)
-    except (AttributeError, TypeError, ValueError):
-        last = None
-    shift = getattr(wf, "shift_s", 0.0) or 0.0          # a time-shifted scenario samples early
     hit = None
     for p in full_path or []:
         d = wf.detail_at(p["lat"], p["lon"], p["t"])
         if d and d.get("held"):
-            if last is None or p["t"] + shift > last:
+            # the wind field says which edge it held, from the series it actually used (Codex on
+            # #200: comparing against every model's bounds, off-position grids included, called a
+            # held END a late start)
+            if d.get("held_side", "end") == "end":
                 return "end"
             hit = "start"
     return hit

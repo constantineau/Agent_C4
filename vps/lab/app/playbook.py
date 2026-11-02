@@ -56,6 +56,11 @@ def _truncated(res, finish_pt):
 _LABELS = {"left": "Left side", "right": "Right side", "middle": "Up the middle (rhumb)"}
 
 
+def _health(r):
+    """A route's own health, kept on every playbook entry built from it (#51)."""
+    return {"degraded": bool((r or {}).get("degraded")), "warnings": list((r or {}).get("warnings") or [])}
+
+
 def _merged_warnings(routes):
     """The warnings of these routes, in order, each once."""
     out = []
@@ -176,7 +181,7 @@ def _scenario_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
                  "narrative_seed": s.get("narrative", ""),
                  "divergence": {"delta_eta_min": deta, "xte_mean_nm": xte},
                  "total_hours": r.get("total_hours"),
-                 "favored_side": _favored_side(definition, course_id, r)}
+                 "favored_side": _favored_side(definition, course_id, r), **_health(r)}
         diverged = not (xte is not None and xte < 2.0 and abs(deta) < 45)
         if diverged:
             entry["route"] = {"legs": r.get("legs"), "path": r.get("path"),
@@ -311,7 +316,7 @@ def _internal_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
                                         "what the nominal was optimized through."),
                      "divergence": {"delta_eta_min": drest, "xte_mean_nm": xte},
                      "total_hours": r.get("total_hours"),
-                     "favored_side": _favored_side(definition, course_id, r)}
+                     "favored_side": _favored_side(definition, course_id, r), **_health(r)}
             if xte is not None and xte < 2.0 and same_sails:
                 robust.append({"scenario": sid, "name": entry["name"],
                                "note": (f"{tag} at {mark_name}: the remaining plan HOLDS — same "
@@ -358,7 +363,7 @@ def _internal_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
                                       "xte_mean_nm": _mean_xte_nm(r.get("path"),
                                                                   consensus.get("path"))},
                        "total_hours": r.get("total_hours"),
-                       "favored_side": _favored_side(definition, course_id, r),
+                       "favored_side": _favored_side(definition, course_id, r), **_health(r),
                        "route": {"legs": r.get("legs"), "path": r.get("path"),
                  "leg_end_idx": r.get("leg_end_idx"),
                                  "total_sailed_nm": r.get("total_sailed_nm"),
@@ -400,7 +405,7 @@ def _internal_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
                 "divergence": {"delta_eta_min": deta,
                                "xte_mean_nm": _mean_xte_nm(r.get("path"), consensus.get("path"))},
                 "total_hours": r.get("total_hours"),
-                "favored_side": _favored_side(definition, course_id, r),
+                "favored_side": _favored_side(definition, course_id, r), **_health(r),
                 "route": {"legs": r.get("legs"), "path": r.get("path"),
                  "leg_end_idx": r.get("leg_end_idx"),
                           "total_sailed_nm": r.get("total_sailed_nm"),
@@ -755,8 +760,14 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
             "warnings": list(consensus.get("warnings") or []),
         },
         # every route's warnings, once each: what the Lab shows on the playbook and on Deploy
-        "degraded": bool(consensus.get("degraded")) or any(v["degraded"] for v in variants),
-        "warnings": _merged_warnings([consensus] + [v for v in variants]),
+        "degraded": (bool(consensus.get("degraded")) or any(v["degraded"] for v in variants)
+                     or any(e.get("degraded") for e in ((v2 or {}).get("scenario_routes") or []))),
+        # ...and the v2 plays' (a slow-pressure or late-pace play can run past the forecast when
+        # the nominal doesn't): named, so the crew knows which play it is (Codex on #200)
+        "warnings": _merged_warnings([consensus] + [v for v in variants])
+        + _merged_warnings([{"warnings": [f"{e.get('name') or e.get('id')}: {w}"
+                                          for w in e.get("warnings") or []]}
+                            for e in ((v2 or {}).get("scenario_routes") or [])]),
         "variants": variants,
         "scenarios": [{"model": c["scenario"], "favored_side": c["favored_side"],
                        "total_hours": c["total_hours"], "first_heading": c["first_heading"]}

@@ -727,6 +727,7 @@ def _build_plays(playbook, definition, course_id, venue_stats=None, jib_crossove
                               or "the departure reverses / settles back to the frozen forecast").strip(),
             "stakes_min": stakes,
             "favored_side": p.get("favored_side"),
+            "degraded": bool(p.get("degraded")), "warnings": list(p.get("warnings") or []),
             **({"table": p["table"]} if p.get("table") else {}),   # rejoin-vs-continue rows
             **({"boundary": p["boundary"]} if p.get("boundary") else {}),   # located flip threshold
         })

@@ -156,5 +156,59 @@ row = pbstore.list_bundles()[0]
 check("the stored summary (what Deploy lists) carries it",
       row.get("degraded") and OPT.FORECAST_ENDS in row.get("warnings", []))
 
+print("5) the v2 plays' health reaches the bundle too (Codex on #200, round 3)")
+# the nominal finishes ~+11.6 h inside a forecast to +11 h (hourly, so it counts to +12 h); a
+# slower-pressure play (~+12.4 h) runs past it. Nominal clean, the bundle must still say so.
+LAT5 = np.arange(43.0, 45.51, 0.25)
+FR5 = [grib.GribFrame("gfs", "det", T0 + k * H, LAT5, LON, np.full((LAT5.size, LON.size), 0.0),
+                      np.full((LAT5.size, LON.size), -6.0), True) for k in range(12)]
+WF5 = WindField({("gfs", "det"): FR5}, [{"model": "gfs"}], (45.5, 43, -83.5, -80.5), T0, T0 + 11 * H)
+DEF5 = {"race_id": "p", "name": "P", "zones": [], "courses": [{
+    "id": "c", "start": {"lat": 43.5, "lon": -82.6},
+    "marks": [{"name": "M", "type": "buoy", "lat": 44.0, "lon": -82.0, "rounding": "none"}],
+    "finish": {"points": [{"lat": 44.5, "lon": -82.6}]}}]}
+playbook.build_windfield = lambda *a, **k: WF5
+
+
+def _pb5(*a, **k):
+    k.update(model_skill=False, v2_scenarios=True, time_budget_s=60, fan_depth="quick",
+             scenario_budget_s=240)
+    PB.clear()
+    PB.update(_real_build(*a, **k))
+    return dict(PB)
+
+
+synthesis.pb.build_playbook = _pb5
+b5 = synthesis.synthesize(DEF5, "c", T0, ["gfs"], use_waves=False)
+plays5 = (PB.get("v2") or {}).get("scenario_routes") or []
+bad = [e for e in plays5 if e.get("degraded")]
+print(f"     consensus finish +{(PB['consensus'].get('total_hours') or 0):.1f} h; "
+      f"{len(plays5)} plays, {len(bad)} past the forecast: {[e['id'] for e in bad]}")
+check("(control) the nominal stays inside the forecast", not PB["consensus"].get("degraded"))
+check("(control) at least one play runs past it", bad)
+check("each play keeps its own health", all(OPT.FORECAST_ENDS in e.get("warnings", []) for e in bad))
+check("the bundle is degraded because of it", b5.get("degraded") is True)
+check("…and names the play in its warning",
+      any(w.startswith(bad[0]["name"] + ":") and OPT.FORECAST_ENDS in w for w in b5.get("warnings", []))
+      if bad else False)
+check("the bundle's play carries it", any(p.get("degraded") and OPT.FORECAST_ENDS in p.get("warnings", [])
+                                          for p in b5.get("plays") or []))
+
+print("6) the held side comes from the series actually used (Codex on #200, round 3)")
+# GFS covers the boat and ends +18 h; HRRR misses the boat but runs to +48 h
+WIDE_HRRR = [grib.GribFrame("hrrr", "det", T0 + k * H, LAT, NARROW_LON,
+                            np.full((LAT.size, NARROW_LON.size), 6.0),
+                            np.full((LAT.size, NARROW_LON.size), 0.0), True) for k in range(49)]
+G18 = series("gfs", 18, 1, 0.0, -6.0)
+WF6 = WindField({("hrrr", "det"): WIDE_HRRR, ("gfs", "det"): G18},
+                [{"model": "hrrr"}, {"model": "gfs"}], (45, 43, -83.5, -80.5), T0, T0 + 48 * H)
+d6 = WF6.detail_at(44.0, -82.0, T0 + 30 * H)
+check("+30 h at the boat: GFS's last frame, held at its END", d6 and d6.get("held")
+      and d6["models"] == ["gfs"] and d6.get("held_side") == "end")
+r6 = OPT.optimize_course(DEF, "c", T0 + 16 * H, WF6, avoid=False, emit_exploration=False,
+                         time_budget_s=120, resolution="fast")
+check("the route says the forecast ENDS (not that it starts late)",
+      OPT.FORECAST_ENDS in r6["warnings"] and OPT.FORECAST_STARTS_LATE not in r6["warnings"])
+
 print("PASS" if ok else "FAIL")
 raise SystemExit(0 if ok else 1)

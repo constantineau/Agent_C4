@@ -195,19 +195,24 @@ class WindField:
         blending for the rest of the race, #51). When NO model reaches it, the nearest edge frames
         stand in so the route still has wind, and the result carries `held: True`: the optimizer
         marks that route degraded, never silently."""
-        samples = self._samples(lat, lon, epoch, hold=False)
+        samples, _side = self._samples(lat, lon, epoch, hold=False)
         held = False
         if not samples:
-            samples = self._samples(lat, lon, epoch, hold=True)
+            samples, side = self._samples(lat, lon, epoch, hold=True)
             held = bool(samples)
         if not samples:
             return None
         out = self._blend(samples)
         if held:
             out["held"] = True
+            # which edge stood in, from the series actually used (not every model's bounds):
+            # "end" = past its last frame, "start" = before its first
+            out["held_side"] = side
         return out
 
     def _samples(self, lat, lon, epoch, hold):
+        """→ (samples, held side or None)."""
+        side = None
         items = list(self.series.items())
         if hold:
             # stand-in only from the series whose forecast ends (or begins) NEAREST this time: an
@@ -221,6 +226,7 @@ class WindField:
             if items:
                 best = min(gap(fr) for _k, fr in items)
                 items = [(k, fr) for k, fr in items if gap(fr) <= best + 1.0]
+                side = "end" if epoch > items[0][1][-1].valid_time else "start"
         samples = []                  # (u, v, weight, model)
         for (model, _member), frames in items:
             uv = self._series_uv(frames, lat, lon, epoch, hold=hold)
@@ -232,7 +238,7 @@ class WindField:
                 u, v = _debias_uv(u, v, bias[0], bias[1])
             weight = MODELS[model].priority * self.model_weights.get(model, 1.0)
             samples.append((u, v, weight, model))
-        return samples
+        return samples, side
 
     @staticmethod
     def _blend(samples):
