@@ -156,15 +156,25 @@ def extract_race_definition(docs: list[tuple[str, str]], retrieved: str = "") ->
     from . import llm as lab_llm
     blob = "\n\n".join(f"===== DOCUMENT: {lbl} =====\n{txt}" for lbl, txt in docs)
     blob = blob[:MAX_DOC_CHARS]
-    try:
-        text, _model = lab_llm.complete(
-            "You convert sailing race documents (NOR / SI / SER / entry lists) into a single "
-            "structured RaceDefinition JSON object for a race-strategy tool. Be precise and "
-            "comprehensive; never invent coordinates or facts.",
-            f"{SCHEMA_BRIEF}\n\nDOCUMENTS:\n{blob}", max_tokens=32000)
-    except lab_llm.Truncated:
-        raise RuntimeError("extraction hit the output limit — try fewer/smaller documents at once")
-    return _parse_json(text)
+    system = ("You convert sailing race documents (NOR / SI / SER / entry lists) into a single "
+              "structured RaceDefinition JSON object for a race-strategy tool. Be precise and "
+              "comprehensive; never invent coordinates or facts.")
+    user = f"{SCHEMA_BRIEF}\n\nDOCUMENTS:\n{blob}"
+    # A long JSON reply occasionally has one syntax slip (2026-11-02: "Expecting value: line 450").
+    # Ask once more, saying what was wrong, before giving up.
+    err = None
+    for _attempt in range(2):
+        try:
+            text, _model = lab_llm.complete(system, user, max_tokens=32000)
+        except lab_llm.Truncated:
+            raise RuntimeError("extraction hit the output limit — try fewer/smaller documents at once")
+        try:
+            return _parse_json(text)
+        except ValueError as e:          # json.JSONDecodeError is a ValueError
+            err = e
+            user = (f"{SCHEMA_BRIEF}\n\nDOCUMENTS:\n{blob}\n\nYour previous answer was not valid "
+                    f"JSON ({e}). Return only the JSON object, valid JSON, nothing else.")
+    raise RuntimeError(f"the model's reply wasn't valid JSON twice ({err}). Try again.")
 
 
 def geocode(q: str) -> list[dict]:
