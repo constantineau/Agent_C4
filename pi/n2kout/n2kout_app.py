@@ -385,8 +385,13 @@ def rx_filters():
     """Kernel-side filters: ISO requests (PF 0xEA), address claims (PF 0xEE), heartbeats
     (126993) and product info (126996) — the traffic every certified device makes, so the
     peer list fills within a minute without waking Python for every instrument frame."""
-    pf = n2k.CAN_EFF_FLAG | (0xFF << 16)
-    full = n2k.CAN_EFF_FLAG | (0x3FFFF << 8)
+    # PDU1 PGNs: match EDP + DP + PF (bits 16-25) — PF alone would also let 126464 (DP=1,
+    # PF 0xEE) in as an "address claim"; the destination byte is left free
+    # EFF in the mask (id has it): 11-bit frames stay out; RTR in the mask (id hasn't): no
+    # remote frames
+    rtr = 0x40000000
+    pf = n2k.CAN_EFF_FLAG | rtr | (0x3FF << 16)
+    full = n2k.CAN_EFF_FLAG | rtr | (0x3FFFF << 8)
     return b"".join(struct.pack("<II", i, m) for i, m in (
         (n2k.CAN_EFF_FLAG | (PF_REQUEST << 16), pf),
         (n2k.CAN_EFF_FLAG | (PF_CLAIM << 16), pf),
@@ -472,18 +477,18 @@ class _BusThread(threading.Thread):
         with self.peers_lock:
             cid &= 0x1FFFFFFF
             sa = cid & 0xFF
-            pf = (cid >> 16) & 0xFF
+            pgn = n2k.pgn_of(cid)             # with EDP/DP: 0x1EE00 is NOT a claim
             ps = (cid >> 8) & 0xFF
             now = self.clock()
             me = self.sender.sa
             if sa not in (me, 254):
                 self.peers.setdefault(sa, {"name": None})["last"] = now
-            if pf == PF_REQUEST and len(data) >= 3:
+            if pgn == 59904 and len(data) >= 3:
                 if ps == me:
                     self.requests_to_us += 1
                 if ps in (me, 0xFF):
                     self._answer(int.from_bytes(data[:3], "little"), sa, directed=(ps == me))
-            elif pf == PF_CLAIM and len(data) >= 8:
+            elif pgn == 60928 and len(data) >= 8:
                 theirs = n2k.decode_name(data)
                 if sa != 254:
                     self.peers.setdefault(sa, {})["name"] = theirs

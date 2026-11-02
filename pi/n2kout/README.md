@@ -41,6 +41,15 @@ same Pi is its only caller).
 and restart counts, `restart_ms`), `peers` (source addresses heard in the last 5 min) and
 `requests_to_us` (ISO requests addressed to us: the plotter asking who we are).
 
+## Checking the wire format
+
+`pi/n2kout/test_n2k.py` (in `make ci`) pins the CAN id of every PGN we send against ids
+worked out by hand. After touching `n2k.py`, also run `bash pi/n2kout/canboat_roundtrip.sh`:
+it decodes the exact frames with canboatjs (the decoder Signal K uses) and checks PGN, source,
+destination and priority. Last run 2026-11-02: 11 messages, all right. canboatjs lists two
+zero entries and a null after the real entries of a 126464 PGN list. That's how it reads a
+list with no count field; the frames carry the right length.
+
 ## What we don't know
 
 The route has **never** appeared on the 943 on the water, and we don't know why. Nothing here

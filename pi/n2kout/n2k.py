@@ -57,11 +57,24 @@ def _i32_1e7(deg) -> int:
 
 
 def can_id(pgn: int, sa: int, prio: int, dest: int = 0xFF) -> int:
-    """29-bit extended id. PDU2 (PF>=240) is broadcast; PDU1 carries a destination byte."""
+    """29-bit extended id: priority (3) | EDP (1) | DP (1) | PF (8) | PS (8) | SA (8).
+    PDU2 (PF >= 240): PS is the PGN's group extension, broadcast. PDU1 (PF < 240): PS carries
+    the destination. EDP + DP (PGN bits 16-17) ride in BOTH forms — 126464 (0x1EE00) is PDU1
+    with DP=1; dropping DP turns it into 60928 (0x0EE00), an address claim."""
+    pgn &= 0x3FFFF
+    dp = (pgn >> 16) & 0x3                     # EDP, DP
     pf = (pgn >> 8) & 0xFF
-    if pf >= 240:
-        return (prio << 26) | (pgn << 8) | sa
-    return (prio << 26) | (pf << 16) | (dest << 8) | sa
+    ps = pgn & 0xFF if pf >= 240 else dest & 0xFF
+    return ((prio & 0x7) << 26) | (dp << 24) | (pf << 16) | (ps << 8) | (sa & 0xFF)
+
+
+def pgn_of(cid: int) -> int:
+    """The PGN a 29-bit id carries (PDU1: the destination byte is not part of it)."""
+    cid &= 0x1FFFFFFF
+    dp = (cid >> 24) & 0x3
+    pf = (cid >> 16) & 0xFF
+    ps = (cid >> 8) & 0xFF
+    return (dp << 16) | (pf << 8) | (ps if pf >= 240 else 0)
 
 
 # Manufacturer 2046 is the code open-source / experimental N2K devices use (not a registered

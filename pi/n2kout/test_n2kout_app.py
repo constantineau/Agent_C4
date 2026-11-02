@@ -655,6 +655,34 @@ check("a higher NAME claims our address → we defend (claim again, keep 35)",
 s = claim_from(35, 1)
 check("a lower NAME claims our address → we move to 128 and claim it",
       fs.sa == 128 and bt.state["address"] == 128 and s[-1][0] == 60928 and s[-1][3] == 128)
+fs.sent.clear()
+conf0, sa0 = bt.state["conflicts"], fs.sa
+bt.handle(0x19EE0000 | (0xFF << 8) | fs.sa | n2k.CAN_EFF_FLAG, struct.pack("<Q", 1))
+check("a 126464 PGN list (DP=1, PF EE) from our address is NOT an address claim",
+      bt.state["conflicts"] == conf0 and fs.sa == sa0 and fs.sent == [])
+bt.handle(0x19EA0000 | (35 << 8) | 7 | n2k.CAN_EFF_FLAG, (126996).to_bytes(3, "little"))
+check("a DP=1 frame with PF EA is NOT an ISO request", fs.sent == [])
+
+
+def kernel_match(filters, raw):
+    """SocketCAN: a frame (its can_id WITH the EFF/RTR flags) passes when
+    (can_id & mask) == (filter_id & mask) for any filter."""
+    for k in range(0, len(filters), 8):
+        fid, mask = struct.unpack("<II", filters[k:k + 8])
+        if (raw & mask) == (fid & mask):
+            return True
+    return False
+
+
+EFF, RTR = n2k.CAN_EFF_FLAG, 0x40000000
+F = A.rx_filters()
+check("rx filter: ISO request 18EA2307, address claim 18EEFF07, heartbeat 1DF01107 → in",
+      kernel_match(F, EFF | 0x18EA2307) and kernel_match(F, EFF | 0x18EEFF07)
+      and kernel_match(F, EFF | 0x1DF01107))
+check("rx filter: 126464 (19EEFF07) and other DP=1 PDU1 traffic → out",
+      not kernel_match(F, EFF | 0x19EEFF07) and not kernel_match(F, EFF | 0x19EA2307))
+check("rx filter: an 11-bit frame and a remote (RTR) frame → out",
+      not kernel_match(F, 0x0EE) and not kernel_match(F, EFF | RTR | 0x18EEFF07))
 s = claim_from(42, 5)
 check("another device's claim on its own address → no reaction, it's a peer",
       s == [] and 42 in bt.peers_recent())

@@ -18,6 +18,56 @@ def check(name, cond):
     print(f"  [{'OK ' if cond else 'FAIL'}] {name}")
 
 
+print("GOLDEN wire ids — every PGN we transmit, at SA 35 and its own priority:")
+# Worked out by hand from the ISO 11783 / NMEA 2000 id layout, NOT with can_id():
+#   bits 28-26 priority · 25 EDP · 24 DP · 23-16 PF · 15-8 PS (PDU1: dest, PDU2: PGN low byte)
+#   · 7-0 source address. Cross-checked by decoding these ids with canboatjs (signalk-server
+#   v2.27.0 image), pi/n2kout/canboat_roundtrip.sh.
+GOLDEN = [
+    # (what, pgn, prio, dest, wire id)
+    ("60928 address claim, to global", 60928, 6, 0xFF, 0x18EEFF23),   # DP0 PF EE PS FF
+    ("59392 NAK, to the requester (SA 7)", 59392, 6, 0x07, 0x18E80723),  # DP0 PF E8 PS 07
+    ("126464 PGN list (PDU1, DP=1)", 126464, 6, 0xFF, 0x19EEFF23),     # DP1 PF EE PS FF
+    ("126993 heartbeat", 126993, 7, 0xFF, 0x1DF01123),                 # 7<<26 | 1F011 << 8
+    ("126996 product info", 126996, 6, 0xFF, 0x19F01423),
+    ("129283 XTE", 129283, 3, 0xFF, 0x0DF90323),
+    ("129284 navigation data", 129284, 3, 0xFF, 0x0DF90423),
+    ("129285 route/WP list", 129285, 6, 0xFF, 0x19F90523),
+]
+for what, pgn, prio, dest, wire in GOLDEN:
+    got = n2k.can_id(pgn, 35, prio, dest)
+    check(f"{what}: {wire:08X} [{got:08X}]", got == wire)
+    check(f"  …decodes back to PGN {pgn}", n2k.pgn_of(wire) == pgn)
+check("126464 is NOT sent as 18EEFF23 (that's an address claim)",
+      n2k.can_id(126464, 35, 6) != 0x18EEFF23 and n2k.pgn_of(0x18EEFF23) == 60928)
+check("'cannot claim' from the null address 254: 18EEFFFE", n2k.can_id(60928, 254, 6) == 0x18EEFFFE)
+
+print("GOLDEN wire ids — through the encoders and the sender (what really goes out):")
+wire_frames = []
+
+
+class WireSock:
+    def send(self, raw):
+        wire_frames.append(struct.unpack("<I", raw[:4])[0] & 0x1FFFFFFF)
+
+
+tx = n2k.N2kSender("fake")
+tx._sock = WireSock()
+for (pgn, prio, data), dest, want in (
+        (n2k.encode_60928(), 0xFF, 0x18EEFF23),
+        (n2k.encode_59392_nak(126998), 0x07, 0x18E80723),
+        (n2k.encode_126464(0, n2k.TX_PGNS), 0xFF, 0x19EEFF23),
+        (n2k.encode_126464(1, n2k.RX_PGNS), 0xFF, 0x19EEFF23),
+        (n2k.encode_126993(), 0xFF, 0x1DF01123),
+        (n2k.encode_126996(), 0xFF, 0x19F01423),
+        (n2k.encode_129283(1.0), 0xFF, 0x0DF90323),
+        (n2k.encode_129284(45.0, -82.0), 0xFF, 0x0DF90423),
+        (n2k.encode_129285("C4", [(0, "C4-01", 45.0, -82.0)]), 0xFF, 0x19F90523)):
+    wire_frames.clear()
+    tx.send(pgn, prio, data, dest=dest)
+    check(f"{pgn}: every frame on the wire is {want:08X}",
+          wire_frames and all(f == want for f in wire_frames))
+
 print("can ids:")
 check("PDU2 broadcast id (129285, prio 6, sa 35)",
       n2k.can_id(129285, 35, 6) == (6 << 26) | (129285 << 8) | 35)
