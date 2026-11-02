@@ -431,6 +431,85 @@ with tempfile.TemporaryDirectory() as tmp:
     check("a producer with nothing to store (image pullable by digest) adds no artifact",
           [x["name"] for x in idx["artifacts"]] == ["vps-lab_ingested.tar.gz"])
 
+print("dedup checks the copy it would point at (Codex round 7 on #198)")
+for kind in ("local", "gcs"):
+    with tempfile.TemporaryDirectory() as tmp:
+        if kind == "gcs":
+            dest, fail, root, a, b, t = gcs_world(tmp)
+        else:
+            dest = lb.LocalDest(os.path.join(tmp, "d"))
+            root, t = dest.root, datetime(2026, 9, 1, 3, 0, tzinfo=timezone.utc)
+            for i in range(2):
+                lb.run_backup(dest, os.path.join(tmp, "w"), [], None, now=t + timedelta(days=i),
+                              producers=[("vps-lab_retro.tar.gz", "volume", producer(b"x-v1"))])
+            a = lb.set_name_for(t)
+        with open(os.path.join(root, a, "vps-lab_retro.tar.gz"), "r+b") as f:
+            f.write(b"\0\0\0\0")                    # the shared copy rots in place
+        n, idx = lb.run_backup(dest, os.path.join(tmp, "w"), [], None,
+                               now=t + timedelta(days=5), producers=[
+                                   ("vps-lab_retro.tar.gz", "volume", producer(b"x-v1"))])
+        art = idx["artifacts"][0]
+        check(f"{kind}: a corrupted shared copy is not pointed at; stored again in the new set",
+              art["stored_in"] == n and restorable(root, idx))
+        os.remove(os.path.join(root, n, "vps-lab_retro.tar.gz"))  # and a missing one
+        n2, idx2 = lb.run_backup(dest, os.path.join(tmp, "w"), [], None,
+                                 now=t + timedelta(days=6), producers=[
+                                     ("vps-lab_retro.tar.gz", "volume", producer(b"x-v1"))])
+        check(f"{kind}: a missing shared copy is not pointed at either",
+              idx2["artifacts"][0]["stored_in"] == n2 and restorable(root, idx2))
+
+print("a local destination is durable before INDEX is published (Codex round 7 on #198)")
+with tempfile.TemporaryDirectory() as tmp:
+    dest = lb.LocalDest(os.path.join(tmp, "d"))
+    ev, real_f, real_r = [], os.fsync, os.replace
+    os.fsync = lambda fd: (ev.append(("fsync", os.path.realpath(f"/proc/self/fd/{fd}"))),
+                           real_f(fd))[1]
+    os.replace = lambda x, y: (ev.append(("replace", os.path.realpath(y))), real_r(x, y))[1]
+    try:
+        n, _ = lb.run_backup(dest, os.path.join(tmp, "w"), [], None, now=T0, producers=[
+            ("vps-lab_ingested.tar.gz", "volume", producer(b"x"))])
+    finally:
+        os.fsync, os.replace = real_f, real_r
+    sd = os.path.realpath(os.path.join(dest.root, n))
+    art = os.path.join(sd, "vps-lab_ingested.tar.gz")
+    idx_i = ev.index(("replace", os.path.join(sd, lb.INDEX)))
+    art_i = ev.index(("replace", art))
+    check("the artifact's bytes are fsynced before its rename",
+          any(e[0] == "fsync" and e[1].endswith(".vps-lab_ingested.tar.gz.part")
+              for e in ev[:art_i]))
+    check("the set directory is fsynced after the artifact's rename, before INDEX goes in",
+          ("fsync", sd) in ev[art_i + 1:idx_i])
+    check("the root is fsynced when the set directory is new",
+          ("fsync", os.path.realpath(dest.root)) in ev[:idx_i])
+
+print("temp files and files that vanish mid-backup (Codex round 7 on #198)")
+with tempfile.TemporaryDirectory() as tmp:
+    vol = os.path.join(tmp, "vol")
+    os.makedirs(os.path.join(vol, "sub"))
+    for n in ("race.json", ".race.json.k2j3h4.tmp", ".x.json.123.ab12cd34.tmp", "gone.json"):
+        with open(os.path.join(vol, n), "w") as f:
+            f.write("{}")
+    os.makedirs(os.path.join(tmp, "s"))
+    real_isfile = os.path.isfile
+
+    def vanish(p):                                  # deleted between the listing and the read
+        if os.path.basename(p) == "gone.json" and os.path.exists(p):
+            os.remove(p)
+            return False
+        return real_isfile(p)
+    os.path.isfile = vanish
+    try:
+        _, files, _ = lb.tar_volume(vol, os.path.join(tmp, "v.tgz"), os.path.join(tmp, "s"))
+        failed = None
+    except Exception as exc:
+        failed = exc
+    finally:
+        os.path.isfile = real_isfile
+    check(f"a file that vanishes mid-backup is skipped, not a failed volume ({failed!r})",
+          failed is None)
+    check("atomic-write temp files are not archived",
+          failed is None and sorted(files) == ["race.json"])
+
 print("destinations")
 for bad in ("gs://constantineau-c4-archive", "gs://constantineau-c4-archive/"):
     try:

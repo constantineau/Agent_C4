@@ -63,7 +63,8 @@ def main(argv):
         sys.stdout.write(open(local(url)).read())
     elif cmd == "stat":
         h = hashlib.md5(open(local(url), "rb").read()).digest()
-        print(f"{url}:\n    Hash (md5):    {base64.b64encode(h).decode()}")
+        print(f"{url}:\n    Content-Length:    {os.path.getsize(local(url))}\n"
+              f"    Hash (md5):    {base64.b64encode(h).decode()}")
     elif cmd == "rm":
         os.remove(local(url))
     elif cmd == "cp":

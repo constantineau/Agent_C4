@@ -63,6 +63,7 @@ DEFAULT_PG = "sr33-dev-timescaledb-1:sr33:sr33_dev"
 SET_RE = re.compile(r"^backup-(\d{4}-\d{2}-\d{2})T(\d{6})Z$")
 INDEX = "INDEX.json"
 MANIFEST = "MANIFEST-sha256.txt"
+ATOMIC_TMP_RE = re.compile(r"^\..+\.tmp$")
 SQLITE_MAGIC = b"SQLite format 3\x00"
 CHUNK = 1 << 20
 
@@ -108,11 +109,35 @@ class LocalDest:
         return sorted(n for n in os.listdir(d) if not n.startswith(".")) if os.path.isdir(d) else []
 
     def put(self, local, set_name, name):
+        """Copy, fsync, rename, fsync the set dir (and the root when the set is new): an INDEX
+        that survives a power cut must never name an artifact that did not."""
         d = os.path.join(self.root, set_name)
+        new = not os.path.isdir(d)
         os.makedirs(d, exist_ok=True)
+        if new:
+            _fsync_dir(self.root)
         tmp = os.path.join(d, f".{name}.part")
         shutil.copyfile(local, tmp)
+        fd = os.open(tmp, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
         os.replace(tmp, os.path.join(d, name))
+        _fsync_dir(d)
+
+    def sync(self):
+        """fsync the root and every set dir (prune calls this before it deletes anything)."""
+        if os.path.isdir(self.root):
+            _fsync_dir(self.root)
+            for n in self.sets():
+                _fsync_dir(os.path.join(self.root, n))
+
+    def has(self, set_name, art):
+        """The stored object exists and is the one INDEX describes (size + sha256)."""
+        p = os.path.join(self.root, set_name, art["name"])
+        return (os.path.isfile(p) and os.path.getsize(p) == art.get("bytes")
+                and sha256_file(p) == art.get("sha256"))
 
     def verify(self, local, set_name, name):
         """The stored copy, re-read from the destination, hashes the same as ours."""
@@ -201,6 +226,25 @@ class GcsDest:
     def read_text(self, set_name, name):
         return self._read("cat", f"{self.prefix}/{set_name}/{name}")
 
+    def sync(self):
+        pass                                # an upload that returned is already durable
+
+    def has(self, set_name, art):
+        """The object exists with INDEX's size and MD5 (from `gsutil stat`, no download). An
+        INDEX entry without an md5 (older sets) or any stat failure counts as "no"."""
+        if not art.get("md5"):
+            return False
+        try:
+            out = self._read("stat", f"{self.prefix}/{set_name}/{art['name']}")
+        except DestError:
+            return False
+        if out is None:
+            return False
+        size = re.search(r"Content-Length:\s*(\d+)", out)
+        md5 = re.search(r"Hash \(md5\):\s*(\S+)", out)
+        return (bool(size and md5) and int(size.group(1)) == art.get("bytes")
+                and md5.group(1) == art["md5"])
+
     def fetch(self, set_name, name, local):
         self._run("cp", f"{self.prefix}/{set_name}/{name}", local)
 
@@ -214,6 +258,14 @@ class GcsDest:
 
     def drop_set_if_empty(self, set_name):
         pass                                # GCS has no directories
+
+
+def _fsync_dir(d):
+    fd = os.open(d, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
 def open_dest(spec):
@@ -293,6 +345,9 @@ def tar_volume(src_dir, out_path, scratch):
         dirnames.sort()
         for n in sorted(dirnames) + sorted(filenames):
             entries.append(os.path.join(dirpath, n))
+    # The Lab's atomic writes leave `.<name>.<random>.tmp` beside a file while saving it; it is
+    # never content, and it may vanish at any moment.
+    entries = [p for p in entries if not ATOMIC_TMP_RE.match(os.path.basename(p))]
     entries.sort(key=lambda p: os.path.relpath(p, src_dir))
     dbs = {p for p in entries if os.path.isfile(p) and not os.path.islink(p) and is_sqlite(p)}
     skip = {p + sfx for p in dbs for sfx in ("-wal", "-shm", "-journal")}
@@ -311,7 +366,14 @@ def tar_volume(src_dir, out_path, scratch):
                         data = os.path.join(scratch, "snap.db")
                         if os.path.exists(data):
                             os.remove(data)
-                        _sqlite_snapshot(p, data)
+                        try:
+                            _sqlite_snapshot(p, data)
+                        except sqlite3.Error:
+                            if not os.path.exists(p):
+                                log(f"  {rel}: gone before it could be read (deleted) — "
+                                    f"not archived")
+                                continue
+                            raise
                         counts[rel] = sqlite_counts(data)
                     # ONE open file for the header, the bytes and the hash. The Lab replaces its
                     # JSON with tmp + rename: a stat, a hash and a read by NAME could each see a
@@ -332,7 +394,11 @@ def tar_volume(src_dir, out_path, scratch):
                         tar.addfile(ti, hr)
                     files[rel] = hr.h.hexdigest()
                 else:
-                    ti = tar.gettarinfo(p, arcname=rel)
+                    try:
+                        ti = tar.gettarinfo(p, arcname=rel)
+                    except FileNotFoundError:   # deleted between the listing and now
+                        log(f"  {rel}: gone before it could be read (deleted) — not archived")
+                        continue
                     ti.mtime = int(ti.mtime)
                     tar.addfile(ti)
         hw.flush()
@@ -511,7 +577,13 @@ def run_backup(dest, work, volumes, pg_spec, now=None, producers=None):
             key, extra = made
             size = os.path.getsize(out)
             old = prev_by_name.get(name)
-            if old and old.get("content_key") == key:
+            reuse = old and old.get("content_key") == key
+            if reuse and not dest.has(old["stored_in"], old):
+                # Never point at a copy that is gone or no longer matches: store it again here.
+                log(f"  {name}: unchanged, but the copy in {old['stored_in']} is missing or does "
+                    f"not match INDEX — storing it again")
+                reuse = False
+            if reuse:
                 art = {**old, **extra, "name": name, "kind": kind}
                 art["stored_in"] = old["stored_in"]   # same bytes as before: point, don't store
                 log(f"  {name}: unchanged — kept in {art['stored_in']}")
@@ -523,7 +595,8 @@ def run_backup(dest, work, volumes, pg_spec, now=None, producers=None):
                     failures.append(name)
                     continue
                 art = {"name": name, "kind": kind, "sha256": digest, "bytes": size,
-                       "content_key": key, "stored_in": set_name, **extra}
+                       "md5": md5_b64_file(out), "content_key": key, "stored_in": set_name,
+                       **extra}
                 stored.append(art)
                 log(f"  {name}: {size / 1048576:.1f} MiB stored and verified at the destination")
             artifacts.append(art)
@@ -596,6 +669,7 @@ def run_prune(dest, keep_spec=(7, 4, 12), dry_run=False, min_unfinished_age_h=24
     Returns (deleted, refused) object counts."""
     now = now or datetime.now(timezone.utc)
     try:
+        dest.sync()                          # what prune reasons about is on disk first
         snap = read_indexes(dest)
     except (DestError, OSError) as exc:
         log(f"!! prune ABORTED before deleting anything: {exc}")
