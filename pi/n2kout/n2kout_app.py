@@ -60,7 +60,8 @@ TERMINATE_REPEATS = 3
 PEER_WINDOW_S = 300.0             # "other devices heard" = in the last 5 min
 ERROR_WINDOW_S = 60.0             # a send error this recent makes the link "errors"
 
-BUS = n2k.N2kSender(CAN_IFACE)
+# starts claim-pending: no heartbeat or nav frame goes out before our address claim has
+BUS = n2k.N2kSender(CAN_IFACE, claim=n2k.encode_60928(n2k.NAME))
 
 
 # --- POST /route: strict input ------------------------------------------------------------
@@ -504,7 +505,9 @@ class _BusThread(threading.Thread):
         self._backoff = self.backoff_s                 # opened: the next failure retries fast
         try:
             self.state.update({"running": True, "error": None})
-            self.claim()
+            # (re)claim through the pending mechanism: if this send fails, ordinary traffic
+            # waits and the claim is retried every second
+            self.sender.change_address(self.sender.sa, n2k.encode_60928(self.name_))
             self.stop_evt.wait(0.25)       # ISO 11783-5: 250 ms after a claim before other traffic
             self.heartbeat()
             while not self.stop_evt.is_set():

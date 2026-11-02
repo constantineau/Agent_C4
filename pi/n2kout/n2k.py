@@ -262,11 +262,13 @@ class N2kSender:
     address-claim contest we lose moves us). Counts frames and send errors; a failed send
     closes the socket so the next send reopens it (an interface that came back works again)."""
 
-    def __init__(self, iface: str = "can0", sa: int = DEFAULT_SA):
+    def __init__(self, iface: str = "can0", sa: int = DEFAULT_SA, claim=None):
+        """`claim` = (pgn, prio, data) of our address claim: the sender then STARTS with it
+        pending, so nothing ordinary goes out before the claim is on the bus."""
         self.iface, self.sa = iface, sa
         self._sock = None
         self._seq = {}                       # pgn -> fast-packet sequence counter
-        self.claim_pending = None            # (pgn, prio, data) of a claim not yet on the bus
+        self.claim_pending = claim           # (pgn, prio, data) of a claim not yet on the bus
         self._claim_tried_at = None
         self._lock = threading.Lock()
         self.frames_sent = 0

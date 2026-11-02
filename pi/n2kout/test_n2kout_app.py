@@ -737,6 +737,55 @@ from_new = [pgn for pgn, sa in wire if sa == 128]
 check(f"first frame from the new address 128 is its claim [{from_new}]",
       from_new[:1] == [60928] and 129283 in from_new)
 
+print("startup: nothing ordinary goes out before the address claim:")
+check("the service's sender starts with its claim pending",
+      A.BUS.claim_pending is not None and A.BUS.claim_pending[0] == 60928)
+
+
+class StartSock:
+    def __init__(self):
+        self.down, self.frames = True, []
+
+    def send(self, raw):
+        if self.down:
+            raise OSError(100, "Network is down")
+        cid = struct.unpack("<I", raw[:4])[0] & 0x1FFFFFFF
+        self.frames.append(n2k.pgn_of(cid))
+
+    def close(self):
+        pass
+
+
+ss = StartSock()
+bus0 = n2k.N2kSender("fake", claim=n2k.encode_60928(n2k.NAME))
+bus0._sock = ss
+bus0.open = lambda: setattr(bus0, "_sock", ss)
+
+
+class OneLoopRx:
+    def recvmsg(self, n):
+        raise OSError(100, "stop after one pass")
+
+    def close(self):
+        pass
+
+
+bt0 = A._BusThread("x", sender=bus0, open_rx=lambda iface: OneLoopRx())
+bt0.stop_evt.wait = lambda t=None: None             # no 250 ms pause in the test
+try:
+    bt0._loop_once()                                # claim fails (bus down), heartbeat tries
+except OSError:
+    pass
+check("first claim fails → heartbeat refused, nothing on the wire, claim still pending",
+      ss.frames == [] and bus0.claim_pending is not None)
+n = bus0.send(*n2k.encode_129283(1.0))
+check("a nav frame right after → refused too", n == 0 and ss.frames == [])
+ss.down = False
+bus0._claim_tried_at -= 1.1
+bus0.send(*n2k.encode_126993())
+check("bus back, a second later → the claim goes first, then the heartbeat",
+      ss.frames == [60928, 126993] and bus0.claim_pending is None)
+
 print("bus thread — /health reads the peer list while the bus thread writes it:")
 errs = []
 
