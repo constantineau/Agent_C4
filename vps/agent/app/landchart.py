@@ -18,6 +18,7 @@ Pure Python (zlib + base64), no GDAL: the Pi holds no shoreline, only this mask.
 """
 import base64
 import math
+import os
 import zlib
 
 from shared import chartid
@@ -133,20 +134,30 @@ class LandMask:
                    for c, r in self.cells_touched(lat1, lon1, lat2, lon2))
 
 
+class ChartUnreadable(Exception):
+    """A chart IS aboard but can't be read (corrupt file, bad grid, bad depth profile). Never
+    the same as "no chart": callers fail closed on it."""
+
+
 def for_course(nav_route, marks, boat=None):
     """The land mask for the course aboard, pockets opened at its marks and the boat, or None
     (no chart pushed, or not this course's chart: the caller says the shore isn't checked).
-    Caller holds orinroute.COURSE_LOCK."""
+    Raises ChartUnreadable when a chart is aboard but can't be read. Caller holds
+    orinroute.COURSE_LOCK."""
     if not nav_route or not marks:
         return None
     defn, cid = orinroute._definition_for(nav_route, marks)
     if not defn:
         return None
     rec = orinassets._read()
+    if rec is None and os.path.exists(orinassets._path()):
+        raise ChartUnreadable("assets file unreadable")
     a = (rec or {}).get("assets") or {}
     chart = a.get("chart")
+    if not chart:
+        return None                                       # no chart pushed
     if not isinstance(chart, dict) or chart.get("kind") != CHART_KIND:
-        return None
+        raise ChartUnreadable("chart of an unknown kind")
     if a.get("race_id") != defn.get("race_id") or a.get("course_id") != cid:
         return None
     # the depth resolved exactly as the Lab (orinassets) and the Orin (job.load_obstacles) do:
@@ -154,14 +165,14 @@ def for_course(nav_route, marks, boat=None):
     boat_p = a.get("boat") if isinstance(a.get("boat"), dict) else None
     try:
         depth = chartid.safety_depth_m(boat_p)
-    except (TypeError, ValueError):
-        return None
+    except (TypeError, ValueError) as exc:
+        raise ChartUnreadable(f"boat profile: {exc}") from exc
     if chart.get("fingerprint") != course_fingerprint(defn, cid, depth):
         return None                                       # a re-deployed course: an old chart
     try:
         land = LandMask(chart)
-    except (KeyError, TypeError, ValueError, zlib.error):
-        return None
+    except (KeyError, TypeError, ValueError, zlib.error) as exc:
+        raise ChartUnreadable(f"chart: {exc}") from exc
     for m in marks:
         if m.get("lat") is not None and m.get("lon") is not None:
             land.carve(m["lat"], m["lon"])

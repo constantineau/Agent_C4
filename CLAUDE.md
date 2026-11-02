@@ -55,6 +55,13 @@ computation is separated from the LLM across three tiers:
   onboard on own data + common public data; never phone the cloud mid-race for a route.
 - **Homework pattern:** everything the boat needs in-race (playbook, obstacles, fleet
   roster, forecast fingerprint, venue stats, course) is compiled ashore and loaded frozen.
+- **Frozen at the gun, enforced:** every endpoint that takes shore homework refuses while the
+  boat's race log has a race session running (an unreadable log counts as racing), via ONE
+  helper, `vps/agent/app/racegate.py`. The Orin copilot takes a playbook only from the Pi
+  engine over the cable (stage + time-bounded commit, under the lock), and USES it only if its
+  hash is the one the Pi approved (`GET /playbook/copilot`); else it runs without a playbook.
+  The Lab's Deploy checks the race start before every post. Per-endpoint list:
+  `docs/RRS41_COMPLIANCE.md` §8. A new homework load MUST use `racegate.hold()`.
 - **Human-in-the-loop learning:** Lab proposals never mutate the boat model; a person
   approves every polar/helm/wave-coefficient change.
 - **Collect everything:** every sensor reading, per source, raw SI; readers cross-check.
@@ -66,8 +73,10 @@ computation is separated from the LLM across three tiers:
 ```
 pi/                 Signal K config, systemd units, uplink + full-res archiver, bench tools
 pi/engine/          onboard deterministic engine service (Tier 1) — no LLM, :8200
-pi/n2kout/          N2K route BROADCASTER (:8210, host net) — the iPad's "show on GPS" button:
-                    129285/129284/129283 onto the bus for the Garmin 943; passive until asked
+pi/n2kout/          N2K route BROADCASTER (127.0.0.1:8210, host net) — the iPad's "show on GPS"
+                    button: 129285 route + LIVE 129284/129283 (waypoint advance, signed XTE, ETA
+                    from the engine's GET /gps/fix) for the Garmin 943; a proper bus device
+                    (claim, 126996/126464/126993); dockside checklist in pi/n2kout/README.md
 pi/console/         onboard race console + crew dashboard (iPad, served from the Pi, :8091)
 pi/orin/            onboard LLM copilot (Tier 2) — Ollama+Qwen2.5-7B :11434; copilot/ svc :8300
 pi/orin/plume/      onboard forecast plume (Orin timer): public model GRIBs → plume → engine /plume/onboard
@@ -206,13 +215,17 @@ POST /playbook/load (freeze the signed bundle aboard; clears trigger/matcher sta
 POST /reroute/run · /reroute · /reroute/history · /strategy · /plays · /buoys ·
 POST /gps/show + /gps/clear + GET /gps/status (the CHARTPLOTTER push: assembles the frozen
 variant's path — or the onboard re-route — and drives the `pi/n2kout` broadcaster, which
-transmits 129285 route chunks + 129284/129283 nav data on the boat's own N2K bus for the
-Garmin 943; encodings verified round-trip through canboatjs on vcan0; **the 943's on-screen
-rendering still needs a dockside eyeball once the N2K cable is plugged**)`.
+transmits 129285 route chunks + live 129284/129283 nav data on the boat's own N2K bus for the
+Garmin 943; no fresh fix → refused / nav data stops; expires after 6 h; any course change ends
+it with "navigation terminated"; GET /gps/fix is n2kout's once-a-second position feed;
+encodings verified round-trip through canboatjs on vcan0; **the route has never appeared on
+the 943 on the water — see the dockside checklist in pi/n2kout/README.md**)`.
 
 **Race log (sessions)** — the owner's record switch, fully standalone (no Lab prep, no
-RaceDefinition, no cloud): the dashboard's ⏺ LOG button one-tap starts/ends a session
-(name defaults to the date; a loaded playbook's race_id is picked up automatically). The
+RaceDefinition, no cloud): the dashboard's ⏺ LOG button starts a session with one more tap on
+Race or Practice (Race pre-selected when Deploy homework is aboard; the kind is always sent, and a
+RACE session is what closes the homework gate) and ends it with a double tap (name defaults to the
+date; a loaded playbook's race_id is picked up automatically). The
 archiver records everything all the time, but only SESSION windows are kept long-term and
 backfilled — outside them, readings are pruned after `ARCHIVE_RETAIN_DAYS` (7 on the boat since 2026-10; bench
 overlay 0) and never leave the boat, so day sails/deliveries don't accumulate anywhere.

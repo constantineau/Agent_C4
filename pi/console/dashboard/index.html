@@ -6,7 +6,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>SR33 Crew Dashboard</title>
-  <link rel="stylesheet" href="dashboard.css?v=cw1102">
+  <link rel="stylesheet" href="dashboard.css?v=cw1102z">
 </head>
 <body>
   <!-- ===== top bar ===== -->
@@ -18,6 +18,7 @@
     <!-- RACE LOG: the owner's record switch — one tap starts a session (kept + backfilled +
          debriefed); data outside sessions is pruned and never leaves the boat. No Lab prep needed. -->
     <button class="ctl rec" id="recBtn" title="Tap to start or end logging. Unlogged data is deleted after 7 days.">⏺ <b id="recLbl">LOG</b></button>
+    <span class="rec-pick" id="recPick" hidden><button class="ctl rp" id="recRace">Race</button><button class="ctl rp" id="recPractice">Practice</button></span>
     <!-- data source: LIVE engine vs canned DEMO scenarios (calm/escalated) -->
     <button class="ctl" id="srcBtn" title="Live or demo">SRC: <b id="srcLbl">LIVE</b></button>
     <button class="ctl" id="themeBtn" title="Day / night theme">☀ <b id="themeLbl">AUTO</b></button>
@@ -25,6 +26,9 @@
          (also satisfies iOS Safari's audio-unlock gesture) -->
     <button class="ctl" id="alertBtn" title="Beep on a safety callout. Tap to turn on and test.">🔔 <b id="alertLbl">OFF</b></button>
   </header>
+  <!-- shown only while the full-res archive is NOT being written (engine /session → archiver) -->
+  <div id="archWarn" role="alert" hidden
+       style="background:var(--act);color:#fff;font-weight:700;text-align:center;padding:6px 12px;"></div>
 
   <!-- ===== Sails bar: the crew-set sail CONFIGURATION (a set — C0 alone, C0+J2, kite+staysail…)
        + main reef. Always available in live mode (no playbook / no course needed) — every change
@@ -114,10 +118,11 @@
   </section>
 
   <script src="/sun.js"></script>
-  <script src="crewwatch.js?v=cw1102"></script>
-  <script src="collisionwatch.js?v=cw1102"></script>
-  <script src="plume.js?v=cw1102"></script>
-  <script src="reroute.js?v=cw1102"></script>
-  <script src="dashboard.js?v=cw1102"></script>
+  <script src="crewwatch.js?v=cw1102z"></script>
+  <script src="collisionwatch.js?v=cw1102z"></script>
+  <script src="plume.js?v=cw1102z"></script>
+  <script src="reroute.js?v=cw1102z"></script>
+  <script src="reclog.js?v=cw1102z"></script>
+  <script src="dashboard.js?v=cw1102z"></script>
 </body>
 </html>

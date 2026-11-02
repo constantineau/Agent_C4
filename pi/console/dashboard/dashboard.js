@@ -1407,31 +1407,63 @@
       if (resp.ok) { App.sailState = await resp.json(); renderSailsBar(); fetchPlays(); }
     } catch (e) { /* re-sync on next poll */ }
   };
-  /* RACE LOG (sessions): one-tap record switch. Start needs nothing (the engine defaults the
-     name to the date and picks up the loaded playbook's race_id if one is aboard). */
+  /* RACE LOG (sessions). Start: tap LOG, then Race or Practice (one extra tap; Race is
+     pre-selected when Deploy homework is aboard). A RACE session is what makes the boat refuse
+     shore homework (frozen at the gun), so the kind is always sent. The engine still defaults the
+     name to the date and picks up the playbook's race_id. Pure parts: reclog.js. */
   async function fetchSession() {
     if (App.src !== "live") return;
     const r = await fetchJSON("/session", 8000);
     if (r) { App.session = r; renderRec(); }
   }
   let recConfirmUntil = 0;   // two-step end: first tap arms this window, second tap ends
+  let recPickUntil = 0;      // start: the Race / Practice choice is open until this time
   function renderRec() {
     const b = document.getElementById("recBtn"), l = document.getElementById("recLbl");
     if (!b || !l) return;
+    const RL = window.C4RecLog;
     const a = (App.session || {}).active;
-    b.classList.toggle("on", !!a);
-    b.classList.toggle("confirm", !!a && Date.now() < recConfirmUntil);
-    if (a && Date.now() < recConfirmUntil) {
-      l.textContent = "TAP AGAIN TO END";
-      b.title = "Tap again to end \"" + a.name + "\". Or wait to keep logging.";
-    } else if (a) {
-      const min = Math.max(0, Math.round((Date.now() / 1000 - a.start_ts) / 60));
-      l.textContent = (a.kind === "race" ? "REC·RACE " : "REC ") + min + "m";
-      b.title = "Logging \"" + a.name + "\". Tap twice to end.";
-    } else {
-      l.textContent = "LOG";
-      b.title = "Tap to start logging. Unlogged data is deleted after 7 days.";
+    // The archiver writing nothing (disk full, damaged file, stopped) beats "Logging": a
+    // session only marks what to KEEP. Absent field (older engine, cloud) = no claim either way.
+    const arch = (App.session || {}).archiver;
+    const down = !!arch && arch.recording === false;
+    // Red banner + button label only while a LOG session runs (that is when it costs a race).
+    // With no session, instruments off at the dock is normal: tooltip only.
+    const loud = down && !!a;
+    const warn = document.getElementById("archWarn");
+    if (warn) { warn.hidden = !loud; warn.textContent = loud ? arch.text : ""; }
+    const confirming = !!a && Date.now() < recConfirmUntil;
+    const picking = !a && Date.now() < recPickUntil;
+    b.classList.toggle("on", !!a && !down);
+    b.classList.toggle("confirm", confirming);
+    l.textContent = loud && !confirming ? arch.text
+      : RL.label(a, { confirming: confirming, picking: picking, nowS: Date.now() / 1000 });
+    b.title = confirming ? "Tap again to end \"" + a.name + "\". Or wait to keep logging."
+      : loud ? arch.text + ". Tap twice to end \"" + a.name + "\"."
+      : a ? "Logging \"" + a.name + "\". Tap twice to end."
+      : "Tap to start logging. Unlogged data is deleted after 7 days.";
+    const pick = document.getElementById("recPick");
+    if (pick) {
+      pick.hidden = !picking;
+      const pre = RL.preselect(App.session);
+      document.getElementById("recRace").classList.toggle("pre", pre === "race");
+      document.getElementById("recPractice").classList.toggle("pre", pre === "practice");
     }
+    // quiet: not recording with no session, and housekeeping notes ("Archive check overdue")
+    if (down && !a) b.title += " " + arch.text + ".";
+    if (arch && arch.note && !down) b.title += " " + arch.note + ".";
+  }
+  async function startRec(kind) {
+    recPickUntil = 0;
+    renderRec();
+    const l = document.getElementById("recLbl");
+    if (l) l.textContent = "STARTING…";   // instant feedback — the poll confirms
+    try {
+      await fetch(API + "/session/start", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(window.C4RecLog.startBody(kind)) });
+    } catch (e) { /* engine unreachable — re-sync restores the true state */ }
+    fetchSession();
   }
   async function toggleRec() {
     const a = (App.session || {}).active;
@@ -1446,12 +1478,15 @@
           return;
         }
         recConfirmUntil = 0;
-        await fetch(API + "/session/end", { method: "POST" });
+        // the id this button shows: a session started meanwhile is never ended by this tap
+        await fetch(API + "/session/end", { method: "POST",
+          headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: a.id }) });
       } else {
-        const l = document.getElementById("recLbl");
-        if (l) l.textContent = "STARTING…";   // instant feedback — the poll confirms
-        await fetch(API + "/session/start", { method: "POST",
-          headers: { "Content-Type": "application/json" }, body: "{}" });
+        // open (or close) the Race / Practice choice; a tap there starts the log
+        recPickUntil = Date.now() < recPickUntil ? 0 : Date.now() + window.C4RecLog.PICK_MS;
+        renderRec();
+        setTimeout(renderRec, window.C4RecLog.PICK_MS + 200);   // closes by itself if untouched
+        return;
       }
       fetchSession();
     } catch (e) { fetchSession(); /* engine unreachable — re-sync restores the true state */ }
@@ -1640,7 +1675,8 @@
             : '<span class="gps-note">not showing</span>') + "</div>" +
         '<div class="rt-btns"><button class="rt-btn rt-gps"' + (App.gpsBusy || !v.canShowOnGps ? " disabled" : "") +
         ' onclick="gpsShow(\'reroute\')">Show on GPS</button></div>' +
-        (App.gpsNote ? '<span class="gps-note">' + esc2(App.gpsNote) + "</span>" : "") + "</div>";
+        (App.gpsNote ? '<span class="gps-note">' + esc2(App.gpsNote) + "</span>" : "") +
+        gpsLinkLines(g) + "</div>";
     }
     return h + "</div>";
   }
@@ -1839,6 +1875,19 @@
     App.gpsNote = "";
     await fetchGps();
   };
+  /* one plain line on the bus link (n2kout's own read of can0 + its sends), plus why the
+     steer-to isn't live or why the route ended. Nothing when the plotter link is off. */
+  function gpsLinkLines(g) {
+    if (!g || g.available === false || !g.bus) return "";
+    const lines = ["GPS link: " + (g.bus.link || "no bus")];
+    if (g.broadcasting && g.steer_paused === "chart unreadable") lines.push("Chart unreadable. Steer-to paused.");
+    else if (g.broadcasting && g.steer_paused === "blocked") lines.push("Steer-to paused. Press Re-route now.");
+    else if (g.broadcasting && g.steer_paused === "no position") lines.push("No position. Steer-to paused.");
+    else if (g.broadcasting && g.steer_paused === "not sent") lines.push("Steer-to not reaching the GPS.");
+    if (!g.broadcasting && g.ended === "expired") lines.push("Route expired. Send again.");
+    if (!g.broadcasting && g.ended === "course changed") lines.push("Course changed. Route cleared.");
+    return lines.map((l) => '<p class="gps-note">' + esc2(l) + "</p>").join("");
+  }
   function gpsHtml() {
     if (App.src !== "live") return "";
     const g = App.gps;
@@ -1854,7 +1903,7 @@
       `<button class="cw-btn"${busy} onclick="gpsShow('playbook')">▶ Gameplan route</button>` +
       `<button class="cw-btn"${busy} onclick="gpsShow('reroute')">⟳ New route</button>` +
       `<button class="cw-btn"${busy} onclick="gpsClear()">✕ Clear</button>` +
-      '</div>' + note + '</div>';
+      '</div>' + note + gpsLinkLines(g) + '</div>';
   }
   function strategyStackHtml() {
     const parts = [synthHtml(), selectorHtml(), deviationHtml(), driftHtml(), plangapHtml(),
@@ -2104,13 +2153,12 @@
     const w = App.watch;
     if (!w || !w.blocks || !w.blocks[i]) return;
     const order = { A: "B", B: "ALL", ALL: "A" };
-    const blocks = w.blocks.map(function (b, j) {
-      return j === i ? Object.assign({}, b, { on: order[b.on] || "A" }) : b;
-    });
+    const b = w.blocks[i];
     try {
+      /* one block's team only: a whole new plan is refused while racing (frozen at the gun) */
       const resp = await fetch(API + "/watch", { method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ plan: { teams: w.teams, blocks: blocks, log: w.log } }) });
+        body: JSON.stringify({ action: "set_on", start: b.start, on: order[b.on] || "A" }) });
       if (resp.ok) {
         App.watch = await resp.json();
         if (App.openTile === "charge") populateDetail("charge", false);
@@ -2715,6 +2763,8 @@
       document.getElementById("srcBtn").hidden = true;
     }
     document.getElementById("recBtn").addEventListener("click", toggleRec);
+    document.getElementById("recRace").addEventListener("click", () => startRec("race"));
+    document.getElementById("recPractice").addEventListener("click", () => startRec("practice"));
     document.getElementById("alertBtn").addEventListener("click", toggleSound);
     // reflect a persisted armed state, and re-unlock iOS audio on the first interaction after a reload
     document.getElementById("alertLbl").textContent = Sound.on ? "ON" : "OFF";

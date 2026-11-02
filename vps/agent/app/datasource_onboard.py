@@ -512,6 +512,29 @@ class OnboardSource:
                 return max(ranked, key=lambda r: r[1])
         return freshest
 
+    def latest_position(self, max_age_s=None):
+        """(lat, lon, epoch, source) from the live cache only — lat and lon from ONE source, the
+        source policy's pick — or None. For the chartplotter's live leg (gpsout): the archive
+        fallback of latest_value can be minutes old, and a lat from one GPS with a lon from
+        another is no position at all. `max_age_s`: pairs older than this are dropped BEFORE the
+        ranking, so a fresh backup GPS takes over from a preferred one that went quiet (instead
+        of the stale preferred fix winning and then being rejected as too old)."""
+        lat_p, lon_p = "navigation.position.latitude", "navigation.position.longitude"
+        ttl_cut = _time.time() - LIVE_TTL_S
+        with self._live_lock:          # ONE snapshot: a GPS update can't land between lat and lon
+            snap = [(p, s, e, v) for (p, s), (e, v) in self._live.items()
+                    if p in (lat_p, lon_p) and e >= ttl_cut]
+        lats = [(s, e, v) for p, s, e, v in snap if p == lat_p]
+        lons = {s: (e, v) for p, s, e, v in snap if p == lon_p}
+        cut = None if max_age_s is None else _time.time() - max_age_s
+        pairs = [(s, min(e, lons[s][0]), v) for s, e, v in lats
+                 if s in lons and (cut is None or min(e, lons[s][0]) >= cut)]
+        best = self._prefer("navigation.position.latitude", pairs)
+        if not best:
+            return None
+        src, e, lat = best
+        return lat, lons[src][1], e, src
+
     # --- CloudSource interface --------------------------------------------
     def latest_value(self, path):
         """Raw SI value for a path from the priority-preferred source — live cache, then archive."""
@@ -777,16 +800,19 @@ class OnboardSource:
     def session_start(self, name, race_id, kind, start_ts):
         cur = self.session_current()
         if cur:                                   # only one open window at a time
-            self.session_end(start_ts)
+            self.session_end(start_ts, session_id=cur["id"])
         self._engine.execute(
             "INSERT INTO sessions (name, race_id, kind, start_ts) VALUES (?, ?, ?, ?)",
             (name, race_id, kind, float(start_ts)))
         self._engine.commit()
         return self.session_current()
 
-    def session_end(self, end_ts):
+    def session_end(self, end_ts, session_id):
+        """End ONE open session, by id. Never an unscoped close: a session started in between
+        (a race) must never be ended by a close meant for another."""
         self._engine.execute(
-            "UPDATE sessions SET end_ts = ? WHERE end_ts IS NULL", (float(end_ts),))
+            "UPDATE sessions SET end_ts = ? WHERE end_ts IS NULL AND id = ?",
+            (float(end_ts), int(session_id)))
         self._engine.commit()
 
     def session_current(self):

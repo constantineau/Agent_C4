@@ -15,7 +15,8 @@ time stakes). That's the raw material. Lab-2b turns it into the artifact the cre
 
 The bundle schema is `c4.playbook/v1` and is deliberately a superset of what the onboard copilot's
 `playbook.Playbook` reads (`race_id`, `variants[].id/summary/what_flips_it`) — so freezing a bundle
-and dropping it at the copilot's `PLAYBOOK_PATH` is the whole onboard wiring. The frontier model
+and posting it to the Pi engine's `/playbook/load` (which passes it to the copilot and approves it)
+is the whole onboard wiring. The frontier model
 (Opus) writes the narrative; a deterministic fallback always produces a valid bundle with no key, so
 the Lab never depends on the model being reachable. RRS 41: all pre-race cloud homework, frozen at
 the gun — the strategy library the onboard copilot matches conditions against in-race (the LLM never

@@ -31,7 +31,7 @@ os.environ["ENGINE_DB"] = os.path.join(_tmp, "engine", "engine.db")
 
 from shared import boat_profile  # noqa: E402
 
-from app import orinassets as OA, orinroute, plume, racelog, deviation  # noqa: E402
+from app import orinassets as OA, orinroute, racegate, racelog, deviation  # noqa: E402
 from app import navigator as NAV  # noqa: E402
 
 ok = True
@@ -59,8 +59,8 @@ BOAT = {"schema_version": "0.1", "boat_id": "sr33", "name": "SR33", "draft_m": 2
 GOOD = {"schema": "c4.orin-assets/v1", "race_id": "r1", "course_id": "c", "built_at": 1,
         "chart": CHART, "boat": BOAT, "boat_version": boat_profile.version(BOAT)}
 PATH = OA._path()
-_ORIG_RS = plume.race_session          # the real check, against a stub race log, below
-plume.race_session = lambda: None
+_ORIG_RS = racegate.race_session          # the real check, against a stub race log, below
+racegate.race_session = lambda: None
 
 print("nothing pushed yet:")
 check("GET says none, short", OA.get() == {"available": False, "note": "No chart or boat profile aboard."})
@@ -166,13 +166,13 @@ check("an empty chart flagged open water is taken",
 OA.load(GOOD, now=2200)
 
 print("racing:")
-plume.race_session = lambda: {"kind": "race", "start_ts": 1}
+racegate.race_session = lambda: {"kind": "race", "start_ts": 1}
 before = open(PATH).read()
 r = OA.load(dict(GOOD, course_id="c2", chart=dict(CHART, course_id="c2")), now=3000)
 check("race session running → refused, short", r == {"loaded": False, "detail": "Racing now. Not loaded."})
 check("…the held file is unchanged", open(PATH).read() == before)
 check("…and the held assets still go with a re-route", OA.for_run({"race_id": "r1"}, "c")["chart"] == CHART)
-plume.race_session = _ORIG_RS
+racegate.race_session = _ORIG_RS
 import types  # noqa: E402
 _src = racelog._src
 racelog._src = lambda: (_ for _ in ()).throw(OSError("db locked"))
@@ -183,7 +183,7 @@ check("race log unreadable → treated as racing (fail closed)", r["loaded"] is 
 racelog._src = lambda: types.SimpleNamespace(session_current=lambda: {"kind": "practice"})
 check("a practice session doesn't block it", OA.load(GOOD, now=3200)["loaded"])
 racelog._src = _src
-plume.race_session = lambda: None
+racegate.race_session = lambda: None
 
 print("a race session can't start between the check and the write:")
 seen = {}
@@ -201,10 +201,10 @@ def session_starts_meanwhile():
     return None
 
 
-plume.race_session = session_starts_meanwhile
+racegate.race_session = session_starts_meanwhile
 OA.load(GOOD, now=4000)
 seen["thread"].join()
-plume.race_session = lambda: None
+racegate.race_session = lambda: None
 check("the session start waited for the write", seen.get("file_when_session_started") is True)
 
 print("a push without a chart or profile drops the old one:")
@@ -273,10 +273,10 @@ check("POST /reroute/assets loads", r.status_code == 200 and r.json()["loaded"]
 r = client.get("/reroute/assets")
 check("GET /reroute/assets: what's held, no geometry", r.json()["course_id"] == "c9"
       and "mask_zb64" not in json.dumps(r.json()))
-plume.race_session = lambda: {"kind": "race"}
+racegate.race_session = lambda: {"kind": "race"}
 r = client.post("/reroute/assets", json=GOOD)
 check("racing → refused through the endpoint", r.json() == {"loaded": False, "detail": OA.RACING})
-plume.race_session = lambda: None
+racegate.race_session = lambda: None
 
 print("short text:")
 for s in (OA.RACING, "No chart or boat profile aboard."):
