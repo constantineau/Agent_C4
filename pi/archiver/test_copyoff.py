@@ -342,6 +342,42 @@ with tempfile.TemporaryDirectory() as tmp:
           and os.path.exists(os.path.join(
               outbox, f"seg-{new_ino}-{1:012d}-{1500:012d}.db")))
 
+print("the receiver makes the copy durable before it issues a receipt (Codex round 5 on #198)")
+with tempfile.TemporaryDirectory() as tmp:
+    arc_dir, conn = fake_pi(tmp, n=500)
+    conn.close()
+    outbox, vps = os.path.join(tmp, "outbox"), os.path.join(tmp, "vps")
+    os.makedirs(outbox)
+    os.makedirs(vps)
+    copyoff.seal_segments(arc_dir, outbox, max_rows=1000)
+    copyoff.seal_closed(arc_dir, outbox, settle_s=60)
+    for n in os.listdir(outbox):                    # "received" with plain copies, no fsync
+        if n.startswith(("seg-", "closed-")):
+            shutil.copyfile(os.path.join(outbox, n), os.path.join(vps, n))
+    shutil.copyfile(os.path.join(arc_dir, CORRUPT), os.path.join(vps, CORRUPT))
+    synced, real_fsync = [], os.fsync
+
+    def spy(fd):
+        synced.append(os.path.realpath(f"/proc/self/fd/{fd}"))
+        return real_fsync(fd)
+    os.fsync = spy
+    try:
+        seg = next(n for n in os.listdir(vps) if n.startswith("seg-") and n.endswith(".db"))
+        r1 = copyoff.verify(vps, seg)
+        before_receipt = list(synced)
+        r2 = copyoff.verify(vps, CORRUPT)
+    finally:
+        os.fsync = real_fsync
+    rv = os.path.realpath(vps)
+    check("segment receipt ok", r1["ok"] and r2["ok"])
+    check("the received segment, its sidecar and the directory were fsynced",
+          {os.path.join(rv, seg), os.path.join(rv, seg + ".json"), rv} <= set(before_receipt))
+    check("...before the receipt was written",
+          before_receipt.index(rv) < max(i for i, p in enumerate(before_receipt)
+                                         if p.endswith(".verified.json.tmp")))
+    check("a closed unit's file and sidecar were fsynced too",
+          {os.path.join(rv, CORRUPT), os.path.join(rv, f"closed-{CORRUPT}.json")} <= set(synced))
+
 print("remote destination (rsync + ssh shims)")
 with tempfile.TemporaryDirectory() as tmp:
     arc_dir, conn = fake_pi(tmp, n=2500)

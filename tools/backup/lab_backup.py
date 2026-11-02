@@ -286,7 +286,10 @@ def tar_volume(src_dir, out_path, scratch):
     SQLite databases are archived as `.backup()` snapshots under their own name, and their
     -wal/-shm/-journal companions are left out (the snapshot already holds what they hold)."""
     entries = []
-    for dirpath, dirnames, filenames in os.walk(src_dir):
+    def unreadable(exc):           # os.walk skips a directory it cannot read, silently
+        raise RuntimeError(f"cannot read {exc.filename}: {exc.strerror} — this volume's backup "
+                           f"would be missing it") from exc
+    for dirpath, dirnames, filenames in os.walk(src_dir, onerror=unreadable):
         dirnames.sort()
         for n in sorted(dirnames) + sorted(filenames):
             entries.append(os.path.join(dirpath, n))

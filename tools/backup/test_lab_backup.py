@@ -86,6 +86,30 @@ with tempfile.TemporaryDirectory() as tmp:
     check("...and its count", counts3["learning.db"]["runs"] == 51)
     conn.close()
 
+print("an unreadable directory fails the volume (Codex round 5 on #198)")
+with tempfile.TemporaryDirectory() as tmp:
+    vol = os.path.join(tmp, "vol")
+    os.makedirs(os.path.join(vol, "races"))
+    with open(os.path.join(vol, "races", "mackinac.json"), "w") as f:
+        f.write("{}")
+    bad = os.path.join(vol, "races")
+    real_scandir = os.scandir
+
+    def eio(path="."):
+        if os.fspath(path) == bad:
+            raise OSError(5, "Input/output error", bad)
+        return real_scandir(path)
+    os.scandir = eio
+    try:
+        os.makedirs(os.path.join(tmp, "s"))
+        lb.tar_volume(vol, os.path.join(tmp, "v.tar.gz"), os.path.join(tmp, "s"))
+        raised = False
+    except Exception:
+        raised = True
+    finally:
+        os.scandir = real_scandir
+    check("EIO on a directory raises instead of a 'complete' tar without it", raised)
+
 print("scan_plain_sql")
 sql = (b"-- Dumped from database version 16.4\n"
        b"COPY public.telemetry_raw (time, boat_id) FROM stdin;\n"

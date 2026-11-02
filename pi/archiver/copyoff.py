@@ -328,6 +328,29 @@ def seal_closed(archive_dir, outbox, settle_s=600):
 
 # ---- verify (receiver side) ------------------------------------------------------------------
 
+def _fsync_file(path):
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _durable(dir_, names):
+    """fsync every received file and the directory holding them. A receipt is the boat's licence
+    to prune: the copy it vouches for must survive a power cut on the receiver."""
+    for n in names:
+        _fsync_file(os.path.join(dir_, n))
+    _fsync_file(dir_)
+
+
+def _receipt(dir_, path, rec, names):
+    if rec["ok"]:
+        _durable(dir_, names)
+    _write_json(path + ".verified.json", rec)
+    _fsync_file(dir_)                  # the receipt's own rename
+    return rec
+
 def verify(dir_, name):
     """Check one received artifact against its sidecar. Returns the receipt (and writes it)."""
     side_path = os.path.join(dir_, (f"closed-{name}" if not name.startswith("seg-") else name)
@@ -351,8 +374,8 @@ def verify(dir_, name):
         rec["ok"] = (sorted(got, key=lambda m: m["name"])
                      == sorted(side["members"], key=lambda m: m["name"])
                      and rec["sha256"] == side["sha256"])
-        _write_json(path + ".verified.json", rec)
-        return rec
+        return _receipt(dir_, path, rec,
+                        [m["name"] for m in side["members"]] + [os.path.basename(side_path)])
     if not os.path.isfile(path):
         rec["error"] = "missing"
         return rec
@@ -371,8 +394,7 @@ def verify(dir_, name):
         good = (good and rec.get("integrity") == "ok" and rec.get("rows") == side["rows"]
                 and rec.get("content_sha256") == side["content_sha256"])
     rec["ok"] = bool(good)
-    _write_json(path + ".verified.json", rec)
-    return rec
+    return _receipt(dir_, path, rec, [name, os.path.basename(side_path)])
 
 
 # ---- ship ------------------------------------------------------------------------------------
