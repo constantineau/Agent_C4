@@ -83,8 +83,8 @@ once and the engine drops that target. One line, either place:
   Deploy pushes the profile).
 
 Env wins, then the boat profile, then the race's `own.mmsi`. Only this MMSI is ever dropped; a
-target that merely looks like us still gets the full CPA check. (316053364 is the suspected echo,
-not yet confirmed as C4's MMSI: check the B951's setup before setting it.)
+target that merely looks like us still gets the full CPA check. 316053364 is C4's MMSI (confirmed by
+the owner, 2026-11-02) and is set in the boat profile.
 
 In race mode the iPad points at this service over boat-local Wi-Fi instead of the cloud
 (channel separation — Phase 9.2's iPad-side half). CORS is open so a browser can hit the engine
