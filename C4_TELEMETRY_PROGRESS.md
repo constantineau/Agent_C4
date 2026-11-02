@@ -11,19 +11,18 @@ Deletion from the boat is allowed only *after* an off-boat copy is sha256-verifi
 **CI is now a REQUIRED check on dev and main** (admins exempt, so progress pushes still work).
 **Lab + VPS agent NOT rebuilt yet** for today's merges — do it after the open PRs land, then check the Lab is up.
 
-**DEV CI IS RED until #204 merges.** `pi/orin/reroute/test_reroute.py` was a time bomb (test pins now to 2026-11-01; GribSource.pick_cycle used the wall clock). #204 fixes it, Codex clean. Needs Cole's "merge 204".
+**#204 MERGED (23:21Z, by Cole's account) — dev CI is GREEN again** (the reroute test time bomb).
 
-**Open PRs, in merge order:**
-1. **#204** reroute clock fix (blocks everything else's CI).
-2. **#198** Lab nightly backup + tested restore + boat archive copy-off (#180/#181). Codex done through 10 rounds; dev merged in (coastline conflict resolved, 61860f3). Its CI failed only on the #204 test → re-run CI after #204. Leftovers in **#202**. After merge Cole enables it: README in tools/backup (create gs://constantineau-c4-nightly Standard class, install units, first run, restore drill, enable timer).
-3. **#197** honest-wind routes. Agent was adding Cole's picks (refuse forecast >6 h old, gap-fill ≤10 nm, 90 s re-route limit) when the session ended — check branch w2-router-wind for a new commit, then Codex + CI.
-4. **#199** robust Lab race ingest (schema-bound replies, PDFs as PDFs, nothing dropped silently, notes saved with the race). Agent was adding Cole's picks (background job with progress; models claude-fable-5-1 → claude-opus-5 fallback) + a live check (SORC ×3, Opus fallback ×1, Bayview ×1, < $15) — check branch fix-ingest-json, then Codex + CI. If ANTHROPIC_MODEL_CHAIN is set in the Lab env, the agent reports the line to change.
+**Open PRs, all Codex-clean (only ticketed leftovers), need Cole's "merge N":**
+1. **#198** Lab nightly backup + tested restore + boat copy-off (#180/#181). CI green at 0be7439. Leftovers in **#202**. After merge Cole enables it: tools/backup README (create gs://constantineau-c4-nightly Standard, install units, first run, restore drill, enable timer).
+2. **#197** honest-wind routes + Cole's picks (forecast >6 h refused, gap-fill ≤10 nm with too-old cells dropped first, 90 s re-route limit; old forecast for the router only — drift//forecast say unavailable). Head f812d35, CI was running. Last minor (max-age below cache TTL) noted on #203.
+3. **#199** robust Lab ingest + background job (status polling, results kept per job id) + model chain claude-fable-5-1 → claude-opus-5 (default in compose.dev.yml; .env doesn't set it). Head 827a06e, CI was running. Live: SORC 3/3 on Fable 5.1 (110–151 s, $1.29–1.50), Opus 5 fallback 99 s $0.58, Bayview 301 s $3.74 (why the background job is needed). Lab container must be RECREATED (not just rebuilt) to pick up the chain.
 Agent IDs from this session can't be messaged from a new one: spawn fresh agents in the same worktrees (/mnt/data/c4-wt/<branch>).
 
 **Cole's decisions today (all "your picks"):** alerts newest first; read error = no live data; attitude missing = unknown; CI required; shoreline failure keeps the route with "Don't use it"; past-forecast routes = degraded; forecast >6 h old refused; gap-fill ≤10 nm; 90 s re-route limit; Lab 12 kn northerly fixed (todo, #203, after #200 — now merged, so start it); ingest PDFs as PDFs, background job, broken link = build + flag, models Fable 5.1 / Opus 5; nightlies in a separate bucket with pruning, daily dump, no encryption, copy-off measured in spring.
 **Lab Anthropic credit was topped up 2026-11-02** (it ran out mid-session).
 
-**Next:** merge #204 → re-run #198 CI → merge #198; finish #197 and #199 (Codex + CI, Cole's merge); Lab + VPS agent rebuild; #203 Lab northerly + robustness-run warnings; then the rest of map #188 (engine correctness: #162 shared SQLite connection first, #159–#161, #163, #164, #166, #167; copilot LLM guardrails #53, #176, #54).
+**Next:** Cole merges #198, #197, #199 (CI green first); Lab + VPS agent rebuild; #203 Lab northerly + robustness-run warnings; then the rest of map #188 (engine correctness: #162 shared SQLite connection first, #159–#161, #163, #164, #166, #167; copilot LLM guardrails #53, #176, #54).
 **Gotchas:** parallel agents' `make ci` clobber the shared `sr33-ci-*` images — use private tags or trust GitHub CI; Codex reviews right after a push can read the old head (wait a few seconds); run codex-review.sh one at a time from the main checkout.
 
 ## ⏸ PICK UP HERE — 2026-11-02 SESSION END (dev = main @ 405be7f)
