@@ -31,6 +31,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 import urllib.request
 import zipfile
 
@@ -135,12 +136,17 @@ def _ensure_ne(cache_dir: str) -> dict:
     for role, fn in NE_SOURCES.items():
         p = os.path.join(cache_dir, fn)
         if not os.path.exists(p) or os.path.getsize(p) < 1000:
-            tmp = p + ".part"                 # a cut-off download never lands under the real name
+            # a temp name of its own (two Lab jobs may fetch at once), moved into place only
+            # when complete: a cut-off download never lands under the real name
+            tmp = None
             try:
+                fd, tmp = tempfile.mkstemp(dir=cache_dir, prefix=fn + ".", suffix=".part")
+                os.close(fd)
                 urllib.request.urlretrieve(f"{NE_BASE_URL}/{fn}", tmp)
                 os.replace(tmp, p)
             except Exception:
-                _rm(tmp)
+                if tmp:
+                    _rm(tmp)
                 continue
         if os.path.exists(p):
             out[role] = p
@@ -234,21 +240,24 @@ def _clip_shp(shp: str, out_path: str, bbox) -> bool:
     to the bbox rectangle (a handful of vertices) instead of being returned whole. An empty result
     (open ocean) is a valid success: ogr2ogr writes an empty FeatureCollection with returncode 0."""
     n, s, w, e = bbox
-    # written under a temporary name and moved into place only on success: a timeout or a crash
-    # mid-write must never leave a cut-off clip that later runs read as "no land" (#51)
-    tmp = out_path + ".part.json"
-    _rm(tmp)
+    # written in a temp dir of its own and moved into place only on success: a timeout or a crash
+    # mid-write never leaves a cut-off clip that later runs read as "no land", and two builds of
+    # the same box at once never touch each other's file (#51). ogr2ogr won't write over an
+    # existing file, so the temp is a fresh directory, not a pre-made file.
+    tdir = tempfile.mkdtemp(dir=os.path.dirname(out_path) or ".", prefix=".clip-")
+    tmp = os.path.join(tdir, "clip.json")
     try:
-        r = subprocess.run(["ogr2ogr", "-f", "GeoJSON", "-clipsrc", str(w), str(s), str(e), str(n),
-                            tmp, shp], capture_output=True, timeout=300)
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-        _rm(tmp)
-        return False
-    if r.returncode != 0 or _parse_geojson(tmp) is None:
-        _rm(tmp)
-        return False
-    os.replace(tmp, out_path)
-    return True
+        try:
+            r = subprocess.run(["ogr2ogr", "-f", "GeoJSON", "-clipsrc", str(w), str(s), str(e),
+                                str(n), tmp, shp], capture_output=True, timeout=300)
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            return False
+        if r.returncode != 0 or _parse_geojson(tmp) is None:
+            return False
+        os.replace(tmp, out_path)
+        return True
+    finally:
+        shutil.rmtree(tdir, ignore_errors=True)
 
 
 def _gshhg_layers_in_bbox(bbox, cache_dir: str):

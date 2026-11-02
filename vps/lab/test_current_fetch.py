@@ -10,6 +10,7 @@ No network: the slice reader is stubbed.
 """
 import datetime
 import os
+import threading
 import time
 
 from app import current as CUR
@@ -82,6 +83,40 @@ except CUR.FTimeout:
     timed_out = True
 dt = time.time() - t0
 check(f"the fetch gives up at the timeout ({dt:.1f} s, the read hangs 4 s)", timed_out and dt < 1.5)
+check("…on a daemon thread (a stuck read never blocks the Lab's shutdown)",
+      all(t.daemon for t in threading.enumerate() if t.name == "lmhofs-slice"))
+
+
+# a whole build against a hung THREDDS (Codex on #200): one stuck read, not one per slice, and
+# none of them may hold up the Lab's shutdown
+import threading  # noqa: E402
+
+calls = []
+release = threading.Event()
+
+
+def _hang_until_released(url, bbox, want_axes):
+    calls.append(url)
+    release.wait(30)
+    raise OSError("released")
+
+
+CUR._open_slice = _hang_until_released
+CUR.MAX_SLICES = 8
+CUR._cache.clear()
+before = {t.ident for t in threading.enumerate()}
+CUR._cycle_for = lambda epoch: _real_cycle(epoch, now=NOW)
+t0 = time.time()
+f = CUR.build_currentfield((44.5, 43.5, -86.5, -85.5), START, START + 24 * 3600)
+CUR._cycle_for = _real_cycle
+dt = time.time() - t0
+stuck = [t for t in threading.enumerate() if t.ident not in before and t.is_alive()]
+check(f"a hung THREDDS: one read tried, then no more ({len(calls)} tried, {dt:.1f} s)",
+      len(calls) == 1 and dt < 2.0)
+check("…the route gets no current (not a hang)", isinstance(f, CUR.ZeroCurrent))
+check("…and the stuck read can't block shutdown (daemon thread)", stuck and all(t.daemon for t in stuck))
+release.set()
 
 print("PASS" if ok else "FAIL")
-os._exit(0 if ok else 1)                     # don't wait for the abandoned reader thread
+# a plain exit: a non-daemon stuck reader would hang the test here, which is the point
+raise SystemExit(0 if ok else 1)

@@ -160,7 +160,74 @@ wrote = C._clip_shp("/nonexistent.shp", out, BOX)
 C.subprocess.run = _run
 check("an ogr2ogr timeout → no clip", not wrote)
 check("…and no partial file left behind (under any name)",
-      not [f for f in os.listdir(cache) if f.startswith("clip_timeout")])
+      not [f for f in os.listdir(cache) if f.startswith(("clip_timeout", ".clip-"))])
+
+# two Lab jobs build the same new box at once: each must get a good clip (Codex on #200: a shared
+# temp name let one delete or overwrite the other's half-written file → a false "didn't load")
+import threading  # noqa: E402
+
+GOOD = json.dumps({"type": "FeatureCollection", "features": []})
+
+
+def _slow_ok(args, **kw):
+    with open(args[-2], "w") as f:
+        f.write(GOOD[:20])
+        f.flush()
+        time.sleep(0.4)
+        f.write(GOOD[20:])
+    return subprocess.CompletedProcess(args, 0, b"", b"")
+
+
+import time  # noqa: E402
+C.subprocess.run = _slow_ok
+both = os.path.join(cache, "clip_both.json")
+res = []
+ts = [threading.Thread(target=lambda: res.append(C._clip_shp("/x.shp", both, BOX))) for _ in range(2)]
+for t in ts:
+    t.start()
+    time.sleep(0.15)
+for t in ts:
+    t.join()
+C.subprocess.run = _run
+check("two clips of the same box at once: both succeed", res == [True, True])
+check("…and the clip is whole", C._parse_geojson(both) == [])
+
+# same for a Natural Earth download
+_ur = C.urllib.request.urlretrieve
+NE_OK = json.dumps({"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {},
+                    "geometry": {"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 0]]]}}]})
+NE_OK += " " * (1200 - len(NE_OK))           # over the 1000-byte "already have it" floor
+
+
+_n_get = []
+
+
+def _slow_get(url, path):
+    # each download writes a DIFFERENT (valid) body, so two writers mixing one file shows up
+    _n_get.append(1)
+    body = NE_OK if len(_n_get) % 2 else json.dumps(
+        {"type": "FeatureCollection", "name": "x" * 200, "features": json.loads(NE_OK)["features"]})
+    body += " " * (1200 - len(body))
+    first = len(_n_get) % 2 == 1               # the first download is the slow one: the second
+    with open(path, "w") as f:                  # finishes and lands while the first still writes
+        f.write(body[:100])
+        f.flush()
+        time.sleep(0.6 if first else 0.1)
+        f.write(body[100:])
+
+
+C.urllib.request.urlretrieve = _slow_get
+ne_dir = fresh_cache()
+ts = [threading.Thread(target=_real_ensure_ne, args=(ne_dir,)) for _ in range(2)]
+for t in ts:
+    t.start()
+    time.sleep(0.15)
+for t in ts:
+    t.join()
+C.urllib.request.urlretrieve = _ur
+check("two Natural Earth downloads at once: every file whole",
+      all(C._parse_geojson(os.path.join(ne_dir, fn)) for fn in C.NE_SOURCES.values()))
+check("…and no temp files left", not [f for f in os.listdir(ne_dir) if f.endswith(".part")])
 
 # ---- 2) the obstacle build -------------------------------------------------------------------------
 print("2) the obstacle build marks a failed shoreline and doesn't cache it")
@@ -251,7 +318,8 @@ check("ENC land but no global shoreline → no chart, plain reason",
 playbook.build_windfield = lambda *a, **k: WF(12, 0)
 currentmod.build_currentfield = lambda *a, **k: currentmod.ZeroCurrent()
 wavemod.build_wavefield = lambda *a, **k: wavemod.ZeroWave()
-pb = playbook.build_playbook(CROSS, "c", 0, ["gfs"], time_budget_s=60, v2_scenarios=False)
+pb = playbook.build_playbook(CROSS, "c", 0, ["gfs"], time_budget_s=60, v2_scenarios=False,
+                             model_skill=False)
 check("no playbook is built on it, and it says why",
       pb.get("available") is False and "Shoreline didn't load" in (pb.get("note") or ""))
 
