@@ -2313,14 +2313,15 @@ function deployPanel(lock, t) {
       `jq .watch_load  ${hw} | ssh ${t.pi_host} 'curl -sX POST ${t.pi_engine}/watch       -H "Content-Type: application/json" -d @-'`,
     ] : []),
     ``,
-    `# 2. Signed playbook → the Orin copilot (Tailscale host: ${t.orin_host})`,
-    `scp ${pb} ${t.orin_host}:${t.orin_playbook_path}`,
-    `ssh -t ${t.orin_host} 'sudo systemctl restart ${t.orin_service}'`,
-    `#   (ensure PLAYBOOK_PATH=${t.orin_playbook_path} is set in /etc/sr33/copilot.env on the Orin)`,
+    `# 2. Signed playbook → the Pi engine. The Pi passes it to the Orin copilot and approves it.`,
+    `#    Check the answer: "copilot": {"loaded": true}. Never copy the file to the Orin by hand:`,
+    `#    the copilot only uses a playbook the Pi approved.`,
+    `ssh ${t.pi_host} 'curl -sX POST ${t.pi_engine}/playbook/load -H "Content-Type: application/json" -d @-' < ${pb}`,
   ].join("\n");
   const res = Dep.pushRes;
-  const stepRow = (s) => `<div class="dep-row"><span class="pill ${s.ok ? "ok" : "warn"}">${s.ok ? "✓" : "✗"} ${esc(s.target)} · ${esc(s.step)}</span><span class="muted">${esc(s.ok ? pushDetail(s) : (s.detail && s.detail.error) || JSON.stringify(s.detail).slice(0, 120))}</span></div>`;
+  const stepRow = (s) => `<div class="dep-row"><span class="pill ${s.ok ? "ok" : "warn"}">${s.ok ? "✓" : "✗"} ${esc(s.target)} · ${esc(s.step)}</span><span class="muted">${esc(s.ok ? pushDetail(s) : (s.detail && (s.detail.error || s.detail.detail)) || JSON.stringify(s.detail).slice(0, 120))}</span></div>`;
   const resHtml = !res ? "" : res.pushing ? `<div class="banner" style="margin-top:10px">Pushing to the boat…</div>`
+    : res.refused ? `<div class="banner warn" style="margin-top:10px">⚠ ${esc(res.detail || "Race started. Not sent.")}</div>`
     : `<div class="banner ${res.ok ? "ok" : "warn"}" style="margin-top:10px">${res.ok ? "✓ Boat loaded. The iPad updates by itself." : "⚠ Push didn't finish. Fix it and push again."}</div>
        <div class="dep-grid" style="margin-top:8px">${(res.steps || []).map(stepRow).join("")}</div>`;
   return `<div class="card">
@@ -2328,7 +2329,7 @@ function deployPanel(lock, t) {
     <div class="muted" style="font-size:12px;margin-bottom:8px">Sends course, fleet, checklist, watch plan and playbook to the boat. Replaces what's there. If the boat is offline, use the downloads below.</div>
     <div class="dep-actions">
       <button id="depPush" onclick="depPush()" ${Dep.busy ? "disabled" : ""}>🚀 Push to boat</button>
-      <button onclick="downloadPlaybook('${esc(pid)}')">⬇ Playbook file (Orin)</button>
+      <button onclick="downloadPlaybook('${esc(pid)}')">⬇ Playbook file</button>
       <button onclick="downloadHomework('${esc(rid)}')">⬇ Race prep file (Pi)</button>
     </div>
     ${resHtml}

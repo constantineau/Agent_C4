@@ -188,14 +188,15 @@ synthesized + **signed**, dropped onboard as the copilot's frozen homework. Two 
   `recommended` start default, and an ordered `decision_tree`. A **deterministic fallback** builds a
   valid bundle with no API key. The **`c4.playbook/v1`** schema is a *superset* of what the onboard
   copilot's `playbook.Playbook` reads (`race_id` + `variants[].id/summary/what_flips_it`) — so
-  freezing one and pointing the copilot's `PLAYBOOK_PATH` at it is the whole onboard wiring.
+  freezing one and posting it to the Pi engine's `/playbook/load` is the whole onboard wiring (the
+  Pi passes it to the copilot and approves it; the copilot uses only an approved playbook).
   **Signing:** `sign_bundle()` hashes the canonical content (sha256 over the bundle minus its
   `signature`, sorted-key/no-space JSON) → tamper-evident "frozen at the gun"; the copilot recomputes
   the identical bytes (`playbook.verify_signature`), so a byte-for-byte bundle verifies. `pbstore.py`
   persists frozen bundles on the `lab_playbooks` volume (`/srv/playbooks`). Endpoints: `POST
   /api/playbook/synthesize` (draft) · `POST /api/playbook/freeze` (sign + persist) · `GET
-  /api/playbooks[/{id}]` · `GET /api/playbooks/{id}/download` (the exact signed bytes — scp to the
-  Orin). The **Gameplan tab** gains a "Synthesize branching playbook" panel: headline + recommended +
+  /api/playbooks[/{id}]` · `GET /api/playbooks/{id}/download` (the exact signed bytes — POST
+  them to the Pi engine's `/playbook/load`, never copy them to the Orin). The **Gameplan tab** gains a "Synthesize branching playbook" panel: headline + recommended +
   stakes, per-variant cards (summary/why/tradeoffs/what-flips-it), the decision tree, and **Freeze &
   sign** → signature + download.
 - **Verified end-to-end on the real Bayview Mackinac cove_island course** (live GFS+NAM+HRRR + Opus,

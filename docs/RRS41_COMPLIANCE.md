@@ -331,6 +331,102 @@ mid-race.
 
 ---
 
+## 8. Frozen at the gun — what each path does while racing (2026-11-01)
+
+The bright line (§5, §6) is enforced in code, not by habit. The boat is the authority: its own race
+log (the crew taps race start at the gun, race end at the finish) says whether it is racing. One
+helper, `vps/agent/app/racegate.py`, decides for every load: a running session of kind `race` is
+racing; a race log that can't be read is racing (fail closed); the check and the write happen under
+the race log's session lock, so a session can't start in between. A refusal is
+`{"loaded": false, "detail": "Racing now. Not loaded."}`.
+
+**Pi engine (`pi/engine/engine_app.py`)**
+
+| Endpoint | Sender | While racing | Why |
+|---|---|---|---|
+| POST /course/load | Lab Deploy | **Refused** | Shore homework. A course shortened mid-race: the crew uses the practice course (POST /course/practice), or ends the race session first. |
+| POST /fleet/load | Lab Deploy | **Refused** | Shore homework (roster, scoring, own rating). |
+| POST /playbook/load | Lab Deploy | **Refused** | Shore-computed strategy: the core of the rule. When taken, the engine forwards the bundle to the Orin copilot (COPILOT_URL, over the cable) while it still holds the session lock, and reports the Orin's answer under `copilot`. |
+| POST /checklist/load | Lab Deploy | **Refused** | Shore homework. |
+| POST /watch `{plan}` (a whole plan) | Lab Deploy | **Refused** | A whole new schedule is shore homework. |
+| POST /plume/load | Lab plume push | **Refused** (unchanged, now via racegate) | Shore forecast for this route. |
+| POST /reroute/assets | Lab Deploy | **Refused** (unchanged, now via racegate) | Shore chart + boat profile. |
+| POST /plume/onboard | the boat's own Orin | Taken | Own computer on public data. |
+| POST /watch `{action}` / `{clear}` | iPad | Taken | Crew edits: hold, swap, all hands, and one block's team (`set_on`, the tap-a-block edit, which used to send a whole plan). |
+| POST /checklist/ack | iPad | Taken | The crew's own ack. |
+| POST /sails/state | iPad | Taken | The crew's own sail state. |
+| POST /session/start, /session/end | iPad | Taken | The race log itself. |
+| POST /course/practice | iPad | Taken | Built onboard from live position + wind. |
+| POST /gps/show, /gps/clear | iPad | Taken | Sends what's aboard to the plotter; computes nothing ashore. |
+| POST /reoptimize/run, /reroute/run | iPad | Taken | Onboard re-routes (Pi / Orin) on public data. |
+
+**Orin copilot (`pi/orin/copilot/app.py`)**: the Orin has no race log. A playbook loads in two
+steps, POST /playbook/stage `{nonce, bundle}` then POST /playbook/commit `{nonce}`, both taken
+only from the Pi engine straight over the cable (`PLAYBOOK_LOAD_FROM`, default 10.10.10.1, and no
+proxy headers); anything else gets 403 "Load the playbook from the Pi. Not loaded." The Pi
+console's nginx refuses /copilot/playbook/* outright and marks every other proxied request with
+X-Forwarded-For. The engine sends both steps while it holds the race log's session lock. An HTTP
+timeout doesn't stop the Orin's handler, so the write itself is bounded: the Orin commits only
+within `PLAYBOOK_COMMIT_TTL_S` (3 s) of RECEIVING the stage, on its own monotonic clock, checked
+again right before the file goes live ("Too late. Not loaded."). The Pi sends the commit only
+after the stage answered and waits for it at least the TTL + 1 s before letting go of the lock.
+If the commit isn't confirmed (a refusal, a reset, a timeout), the Pi keeps the lock until at
+least TTL + 1 s after it sent the commit: a socket timeout is a maximum, not a minimum. No wall
+clocks are compared (Pi/Orin skew doesn't matter). A race-start tap waits at most ~8 s.
+
+The Pi, not the file, decides WHICH playbook the copilot uses. On a confirmed commit the Pi records
+the bundle's hash (`GET /playbook/copilot`); an unconfirmed commit approves none. That record
+changes only inside a load, i.e. under the session lock with no race running, so it is the
+playbook pinned at the gun. The copilot asks the Pi for it itself, over the cable (cached a few
+seconds), before every use, including its own coach timer. Nothing on the boat Wi-Fi is in that
+path. A playbook file whose hash doesn't match, or a Pi it can't ask, means NO playbook:
+"Playbook not confirmed. Running without it." So a rename that lands late, after the Pi gave up,
+can never become the playbook in use during a race. The other POSTs (/brief, /strategy, /narrate,
+/narrate/reset, /dashboard, /detail) take no shore content.
+
+**Lab Deploy (`vps/lab/app/deploy.py`)**: best effort on top of the boat. The start is checked before
+every post, and once it is reached the remaining steps are not sent. Push sends nothing once the
+race has started, by the plume's rule (`plume.race_start_of`: our gun, else the first minute of the
+start date in the venue's time zone): "Race started. Not sent." With no start known it sends and the
+boat decides. A boat refusal on any step is a red step.
+
+**Cloud agent (`vps/agent/app/main.py`)**: the cloud has no race log; its race mode is the gate.
+In race mode POST /course/load and a whole-plan POST /watch answer 409 "Racing now. Not loaded."
+(audited); watch quick edits are taken.
+
+**Cloud alerts (`vps/agent/app/alerts.py`)**: in race mode only safety alerts are made, served
+(/alerts, get_alerts, the /ws opening push) or pushed. Race mode is read again at every step:
+when the rules run, when a raise or update is written, and when each message is sent on a socket
+(`alerts.deliverable`), so advice computed or queued before race mode came on never goes out. An
+unknown kind counts as advice.
+
+| Alert kind | Class | In race mode |
+|---|---|---|
+| `ais` (closing contact, CPA/TCPA) | Safety | Kept |
+| `depth_shoaling` | Safety | Kept |
+| `stale_telemetry` (no or old data) | Safety | Kept |
+| `polar_deficit` ("Slow: 82% of target") | Performance advice | Withheld; cleared without its text |
+| `wind_shift` ("Favour the left side") | Tactical advice | Withheld; cleared without its text |
+| `fatigue` ("Rotate the driver now") | Performance advice | Withheld; cleared without its text |
+
+**Starting the race log (the iPad's LOG button)**: the gate is a RACE session, so the kind can't be
+left to chance. Tapping LOG shows two big buttons (48 px+), Race and Practice; Race is pre-selected
+when shore homework from Deploy (a course, fleet or playbook) is aboard, and the crew confirms with
+one tap. The iPad always sends the kind. For old clients, `/session/start` with no kind is always a race
+(fails closed). The pre-selection is UI only, read from the persisted stores
+(`racegate.homework_aboard`); it never decides a session's kind. While running, the button
+reads "LOG · RACE" or "LOG · PRACTICE". Every write to the race log is scoped to one session and taken under the
+session lock: an end carries the id the iPad shows and closes only that id ("Already ended" if
+another session is running now), and a start closes only the session it replaces. The engine's playbook has no file way in (the old
+`PLAYBOOK_PATH` fallback is gone): only `/playbook/load`, through the gate.
+
+**Race log auto-close (`vps/agent/app/racelog.py`)**: the gate is only as good as the race session.
+Auto-close closes a forgotten session at its last under-way moment; it now re-checks under the
+session lock that the same session is still open and closes only that id, so a race the crew
+started during its (slow) check is never ended, and the gate never reopens mid-race.
+
+---
+
 *Sources: World Sailing RRS 2025–2028 Rule 41 (racingrulesofsailing.org); 2026 Bayview Mackinac
 Race Notice of Race, `2026NOR V6 111925 Approved_Post` (bycmack.com). Re-verify against the
 as-published Sailing Instructions before the race.*

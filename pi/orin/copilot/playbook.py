@@ -13,8 +13,9 @@ a compact text digest for the LLM system prompt, and otherwise reports "no playb
 copilot honestly restricts itself to interpreting live engine facts. `verify_signature()` recomputes
 the SAME canonical bytes the Lab signed (bundle minus `signature`, sorted-key/no-space JSON), so a
 bundle that arrives byte-for-byte verifies — surfaced (non-fatal) as `signed`/`signature_ok` so the
-crew sees a tampered or unsigned playbook. Wiring a frozen bundle in is just dropping the file at
-`PLAYBOOK_PATH`.
+crew sees a tampered or unsigned playbook. A bundle reaches `PLAYBOOK_PATH` only through the Pi
+engine's `/playbook/load` (stage + commit, app.py), and `load()` uses it only if the Pi approved its
+hash; a file dropped in by hand is never used.
 """
 import hashlib
 import json
@@ -60,6 +61,7 @@ class Playbook:
     def __init__(self, data: dict | None):
         self.data = data or {}
         self.loaded = bool(data)
+        self.note = None                 # set when a file is aboard but not confirmed
         # Signature is informational, not a gate: a valid bundle with no signature (a draft) still
         # loads, but `signature_ok` is surfaced in /health so the crew sees an unsigned/tampered one.
         self.signed = bool((self.data.get("signature") or {}).get("value"))
@@ -150,12 +152,45 @@ class Playbook:
         return [str(v.get("id") or v.get("name") or i) for i, v in enumerate(self.variants)]
 
 
-def load(path: str | None = None) -> Playbook:
+NOT_CONFIRMED = "Playbook not confirmed. Running without it."
+PIN_CACHE_S = 5.0
+_pin = {"at": None, "hash": None}
+
+
+def bundle_hash(data: dict) -> str:
+    """sha256 of the whole bundle as canonical JSON. MUST match pi/engine/engine_app.bundle_hash."""
+    return hashlib.sha256(json.dumps(data, sort_keys=True, separators=(",", ":"),
+                                     ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+def approved_hash():
+    """The hash of the playbook the Pi confirmed (GET /playbook/copilot over the cable), cached a
+    few seconds (a "none" answer is not cached); None when none is approved or the Pi can't be
+    asked. The copilot asks the Pi itself, so nothing on the boat Wi-Fi can hand it a hash."""
+    import time
+    from .engine_client import EngineClient
+    now = time.monotonic()
+    if _pin["hash"] is None or _pin["at"] is None or now - _pin["at"] > PIN_CACHE_S:
+        r = EngineClient()._get("/playbook/copilot")
+        h = r.get("hash") if isinstance(r, dict) else None
+        _pin.update(at=now, hash=h if isinstance(h, str) else None)
+    return _pin["hash"]
+
+
+def load(path: str | None = None, confirm: bool = True) -> Playbook:
+    """The playbook aboard. With `confirm` (every use), it counts only if its hash is the one the
+    Pi approved under its race-log lock (frozen at the gun): a file that went live late, or that
+    the Pi never confirmed, is not used, and the copilot runs without a playbook."""
     path = (path if path is not None else config.PLAYBOOK_PATH) or ""
     if not path or not os.path.exists(path):
         return Playbook(None)
     try:
         with open(path) as f:
-            return Playbook(json.load(f))
+            data = json.load(f)
     except (OSError, json.JSONDecodeError):
         return Playbook(None)
+    if confirm and (not isinstance(data, dict) or bundle_hash(data) != approved_hash()):
+        pb = Playbook(None)
+        pb.note = NOT_CONFIRMED
+        return pb
+    return Playbook(data)

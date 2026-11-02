@@ -211,6 +211,20 @@ def all_hands(plan, now, minutes):
     return _log(plan, now, "all_hands", f"all hands {int(round(delta / 60))}m")
 
 
+def set_on(plan, now, start, on):
+    """Set who is on for ONE block, picked by its start ('B takes the 0200'). The iPad's
+    tap-a-block edit: it changes a team, never the times, so a shore plan can't ride in on it."""
+    plan, now = normalize(plan), _f(now)
+    start, on = _f(start), str(on or "").upper()
+    if start is None or on not in ON_VALUES:
+        return plan
+    for b in plan["blocks"]:
+        if abs(b["start"] - start) < 1.0 and b["on"] != on:
+            b["on"] = on
+            return _log(plan, now, "set_on", f"{_team_label(plan, on)} on at block {int(start)}")
+    return plan
+
+
 def apply_edit(plan, action, now, **kw):
     """Dispatch a named quick edit; unknown action returns the plan unchanged."""
     if action == "hold":
@@ -219,4 +233,6 @@ def apply_edit(plan, action, now, **kw):
         return swap(plan, now)
     if action == "all_hands":
         return all_hands(plan, now, kw.get("minutes", 30))
+    if action == "set_on":
+        return set_on(plan, now, kw.get("start"), kw.get("on"))
     return normalize(plan)

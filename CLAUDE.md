@@ -55,6 +55,13 @@ computation is separated from the LLM across three tiers:
   onboard on own data + common public data; never phone the cloud mid-race for a route.
 - **Homework pattern:** everything the boat needs in-race (playbook, obstacles, fleet
   roster, forecast fingerprint, venue stats, course) is compiled ashore and loaded frozen.
+- **Frozen at the gun, enforced:** every endpoint that takes shore homework refuses while the
+  boat's race log has a race session running (an unreadable log counts as racing), via ONE
+  helper, `vps/agent/app/racegate.py`. The Orin copilot takes a playbook only from the Pi
+  engine over the cable (stage + time-bounded commit, under the lock), and USES it only if its
+  hash is the one the Pi approved (`GET /playbook/copilot`); else it runs without a playbook.
+  The Lab's Deploy checks the race start before every post. Per-endpoint list:
+  `docs/RRS41_COMPLIANCE.md` §8. A new homework load MUST use `racegate.hold()`.
 - **Human-in-the-loop learning:** Lab proposals never mutate the boat model; a person
   approves every polar/helm/wave-coefficient change.
 - **Collect everything:** every sensor reading, per source, raw SI; readers cross-check.
@@ -211,8 +218,10 @@ Garmin 943; encodings verified round-trip through canboatjs on vcan0; **the 943'
 rendering still needs a dockside eyeball once the N2K cable is plugged**)`.
 
 **Race log (sessions)** — the owner's record switch, fully standalone (no Lab prep, no
-RaceDefinition, no cloud): the dashboard's ⏺ LOG button one-tap starts/ends a session
-(name defaults to the date; a loaded playbook's race_id is picked up automatically). The
+RaceDefinition, no cloud): the dashboard's ⏺ LOG button starts a session with one more tap on
+Race or Practice (Race pre-selected when Deploy homework is aboard; the kind is always sent, and a
+RACE session is what closes the homework gate) and ends it with a double tap (name defaults to the
+date; a loaded playbook's race_id is picked up automatically). The
 archiver records everything all the time, but only SESSION windows are kept long-term and
 backfilled — outside them, readings are pruned after `ARCHIVE_RETAIN_DAYS` (7 on the boat since 2026-10; bench
 overlay 0) and never leave the boat, so day sails/deliveries don't accumulate anywhere.

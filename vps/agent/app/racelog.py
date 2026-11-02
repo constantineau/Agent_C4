@@ -85,7 +85,17 @@ def autoclose(now=None, force=False):
                     "note": f"Not moving in this session ({look_h:.0f} h). "
                             f"Close '{cur['name']}' from the iPad."}
         end_ts = max(underway)
-        s.session_end(end_ts)
+        # Close THAT session, never a newer one. The series read above is slow; the crew may tap
+        # REC (a new race session) meanwhile, and an unscoped close would end today's race at
+        # yesterday's last under-way moment, reopening the homework gate (racegate) mid-race. So:
+        # under the session lock, re-check that the same session is still the open one and that
+        # the end is after its start, and close only that id.
+        with SESSION_LOCK:
+            now_cur = s.session_current()
+            if not now_cur or now_cur.get("id") != cur.get("id") \
+                    or end_ts <= float(now_cur["start_ts"]):
+                return {"closed": False, "note": "a new session started; not closing"}
+            s.session_end(end_ts, session_id=cur["id"])
         print(f"[racelog] auto-closed '{cur['name']}' (id {cur['id']}) at "
               f"{datetime.fromtimestamp(end_ts, tz=timezone.utc):%Y-%m-%dT%H:%M:%SZ} — the last "
               f"moment the boat was under way; stopped for "
@@ -110,34 +120,48 @@ def _src():
 
 
 def start(name=None, race_id=None, kind=None):
-    """Start a session. Everything is optional — one tap at the gun works: race_id defaults
-    to the loaded playbook's (if any), kind to 'race' when there's a race_id else 'practice',
-    name to '<Race|Sail> <UTC date HH:MM>'."""
+    """Start a session. Everything is optional: race_id defaults to the loaded playbook's (if
+    any), name to '<Race|Sail> <UTC date HH:MM>'. kind is race|practice; with no kind it is a
+    RACE (fails closed: a race session is what makes the boat refuse shore homework). The iPad
+    always sends the kind the crew picked. Kind and race id are resolved under SESSION_LOCK, with
+    the start itself."""
     s = _src()
     if s is None:
         return {"ok": False, "note": "race log is onboard-only"}
-    if race_id is None:
-        try:
-            race_id = (deviation._load_playbook() or {}).get("race_id")
-        except Exception:
-            race_id = None
-    kind = (kind or ("race" if race_id else "practice")).lower()
-    if not name:
-        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
-        name = f"{'Race' if kind == 'race' else 'Sail'} {stamp}Z"
+    kind = str(kind or "race").lower()
+    if kind not in ("race", "practice"):
+        return {"ok": False, "note": "kind must be race or practice"}
     with SESSION_LOCK:
+        if race_id is None:
+            try:
+                race_id = (deviation._load_playbook() or {}).get("race_id")
+            except Exception:
+                race_id = None
+        if not name:
+            stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
+            name = f"{'Race' if kind == 'race' else 'Sail'} {stamp}Z"
         cur = s.session_start(str(name), race_id, kind, time.time())
     return {"ok": True, "active": cur}
 
 
-def end():
+ALREADY_ENDED = "Already ended"
+
+
+def end(session_id=None):
+    """End the running session. `session_id` is the one the caller means (the iPad sends the id it
+    shows); when another session is running now, nothing is ended: "Already ended". Read and
+    close happen under SESSION_LOCK and the close is scoped to that one id, so an end can never
+    close a race that started in between."""
     s = _src()
     if s is None:
         return {"ok": False, "note": "race log is onboard-only"}
-    cur = s.session_current()
-    if not cur:
-        return {"ok": False, "note": "no session running"}
-    s.session_end(time.time())
+    with SESSION_LOCK:
+        cur = s.session_current()
+        if not cur:
+            return {"ok": False, "note": "no session running"}
+        if session_id is not None and str(session_id) != str(cur.get("id")):
+            return {"ok": False, "note": ALREADY_ENDED}
+        s.session_end(time.time(), session_id=cur["id"])
     return {"ok": True, "ended": cur}
 
 
@@ -147,7 +171,10 @@ def status(limit=10):
     if s is None:
         return {"available": False, "note": "race log is onboard-only"}
     auto = autoclose()      # throttled; the REC poll is what drives it
-    out = {"available": True, "active": s.session_current(), "recent": s.sessions_list(limit)}
+    from . import racegate
+    out = {"available": True, "active": s.session_current(), "recent": s.sessions_list(limit),
+           # UI only: the iPad pre-selects Race on LOG when Deploy homework is in the stores
+           "homework_aboard": racegate.homework_aboard()}
     if auto.get("closed"):
         # The crew must see that the boat ended their session, and why.
         out["auto_closed"] = {"name": auto["session"]["name"], "end_ts": auto["end_ts"],

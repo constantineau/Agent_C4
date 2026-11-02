@@ -28,15 +28,16 @@ class StubDS:
         self.rows = []
 
     def session_start(self, name, race_id, kind, start_ts):
-        if self.session_current():
-            self.session_end(start_ts)
+        cur = self.session_current()
+        if cur:
+            self.session_end(start_ts, session_id=cur["id"])
         self.rows.append({"id": len(self.rows) + 1, "name": name, "race_id": race_id,
                           "kind": kind, "start_ts": start_ts, "end_ts": None})
         return self.session_current()
 
-    def session_end(self, end_ts):
+    def session_end(self, end_ts, session_id):
         for r in self.rows:
-            if r["end_ts"] is None:
+            if r["end_ts"] is None and r["id"] == session_id:
                 r["end_ts"] = end_ts
 
     def session_current(self):
@@ -52,8 +53,8 @@ ds = StubDS()
 racelog.datasource.active = lambda: ds
 racelog.deviation._load_playbook = lambda: None            # nothing aboard — still works
 r = racelog.start()
-check("one-tap start with NOTHING (no playbook/name/race) works",
-      r["ok"] and r["active"]["kind"] == "practice" and r["active"]["name"].startswith("Sail "))
+check("start with NOTHING (no playbook/name/race/kind) works, and is a RACE (fails closed)",
+      r["ok"] and r["active"]["kind"] == "race" and r["active"]["name"].startswith("Race "))
 r2 = racelog.start(name="Wed beer can", kind="race")
 check("starting again auto-ends the previous window",
       r2["ok"] and ds.rows[0]["end_ts"] is not None and r2["active"]["name"] == "Wed beer can")
@@ -67,6 +68,63 @@ check("status: active + recent", st["active"]["id"] == 3 and len(st["recent"]) =
 racelog.end()
 check("end closes it", racelog.status()["active"] is None)
 check("end with nothing running refuses politely", racelog.end()["ok"] is False)
+rp = racelog.start(kind="practice")
+check("an explicit practice start is a practice ('Sail …')",
+      rp["ok"] and rp["active"]["kind"] == "practice" and rp["active"]["name"].startswith("Sail "))
+check("an unknown kind is refused", racelog.start(kind="regatta")["ok"] is False)
+racelog.end()
+
+print("1a) end is scoped to one session, under the session lock")
+import threading  # noqa: E402
+
+ds = StubDS()
+racelog.datasource.active = lambda: ds
+racelog.deviation._load_playbook = lambda: None
+a1 = racelog.start(name="A", kind="practice")["active"]
+racelog.end()
+b1 = racelog.start(name="B", kind="race")["active"]
+r = racelog.end(session_id=a1["id"])
+check("ending A (the id the iPad showed) while race B runs: 'Already ended', B still open",
+      r == {"ok": False, "note": "Already ended"} and ds.session_current()["id"] == b1["id"])
+r = racelog.end(session_id=b1["id"])
+check("ending B by its id ends B", r["ok"] and r["ended"]["id"] == b1["id"]
+      and ds.session_current() is None)
+
+
+class SlowRead(StubDS):
+    """session_current() stalls once while end() is reading it."""
+    def __init__(self):
+        super().__init__()
+        self.reading, self.go = threading.Event(), threading.Event()
+        self.slow = False
+
+    def session_current(self):
+        if self.slow:
+            self.slow = False
+            self.reading.set()
+            self.go.wait(5)
+        return super().session_current()
+
+
+ds = SlowRead()
+racelog.datasource.active = lambda: ds
+a2 = racelog.start(name="A", kind="practice")["active"]
+ds.slow = True
+t_end = threading.Thread(target=lambda: racelog.end())
+t_end.start()
+ds.reading.wait(5)                                   # end() has read the current session (A)
+t_start = threading.Thread(target=lambda: racelog.start(name="B", kind="race"))
+t_start.start()
+t_start.join(0.3)
+check("a race start waits while an end is between its read and its close", t_start.is_alive())
+ds.go.set()
+t_end.join(5)
+t_start.join(5)
+cur = ds.session_current()
+check("…so the end closes A only, and race B is open after it",
+      cur is not None and cur["name"] == "B" and cur["end_ts"] is None
+      and [r["end_ts"] is not None for r in ds.rows] == [True, False])
+racelog.end()
 
 print("1b) auto-close — one mis-tap must not suspend retention forever")
 # The Jul 18 shape: a session started at the kite hoist and never stopped. Retention keeps every
@@ -139,6 +197,29 @@ ds = fresh(MotionDS(parked(underway_h=20, still_h=19)))
 st = racelog.status()
 check("status() drives it, and TELLS the crew their session was ended for them",
       st["active"] is None and st["auto_closed"]["name"] == "Race")
+
+# M14: the crew taps REC (a new RACE session) while the slow series read is running. The close
+# must not end the new session at the old session's last under-way moment (that reopened the
+# homework gate mid-race).
+class TapMidRead(MotionDS):
+    def series(self, path, minutes):
+        out = super().series(path, minutes)
+        if not self.tapped:
+            self.tapped = True
+            racelog.start(name="Today", kind="race")        # takes SESSION_LOCK, then returns
+        return out
+
+
+ds = TapMidRead(parked(underway_h=20, still_h=19))
+ds.tapped = False
+fresh(ds)
+r = racelog.autoclose(now=NOW)
+cur = ds.session_current()
+check("M14: a race session started during the check is NOT closed by it",
+      r["closed"] is False and cur is not None and cur["name"] == "Today"
+      and cur["end_ts"] is None)
+check("M14: no session ends before it starts", all(
+    x["end_ts"] is None or x["end_ts"] >= x["start_ts"] for x in ds.rows))
 
 racelog.AUTOCLOSE_IDLE_H = 0.0
 ds = fresh(MotionDS(parked(underway_h=20, still_h=19)))
