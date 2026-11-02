@@ -49,6 +49,9 @@ class BoatProfile:
     draft_m: float                                   # canonical metres (UI enters/shows feet)
     boat_class: str = ""                             # e.g. "SR33"
     sail_number: str = ""
+    # Our own AIS MMSI (9 digits). The collision watch drops a target with this MMSI: it is our
+    # own transmission coming back. Blank → not set (env OWN_MMSI or the race's own.mmsi may say).
+    mmsi: str = ""
     safety_margin_m: float = DEFAULT_MARGIN_M        # under-keel margin → no-go depth = draft + this
     polars_file: str = ""                            # per-boat polars (blank → the Lab default)
     orc: Optional[dict] = None

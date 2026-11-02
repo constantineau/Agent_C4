@@ -58,7 +58,7 @@ archiver.STATUS_EVERY_S = 0.1
 # The disk guard measures the REAL filesystem, and a nearly full CI disk would stop recording
 # for reasons this test is not about (test_disk_guard covers the guard).
 archiver.DISK_HIGH_PCT, archiver.DISK_LOW_PCT = 101.0, 100.0
-archiver.DISK_HARD_PCT, archiver.DISK_MIN_FREE_MB = 101.0, 0.0
+archiver.DISK_HARD_PCT, archiver.DISK_MIN_FREE_MB = 200.0, 0.0   # the check steps aside at HARD - 3
 FULL_SCAN = re.compile(r"quick_check|integrity_check|count\(\*\)", re.I)
 BIG_ROWS = 300_000
 

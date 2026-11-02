@@ -147,9 +147,13 @@ class ReplaySource(OnboardSource):
 
     # --- overrides: every archive read that is otherwise unbounded above ------
     def latest_value(self, path):
-        """Priority-preferred value AT OR BEFORE `at`; archive only (the live cache is off).
+        s = self.latest_sample(path)
+        return s[0] if s else None
 
-        Mirrors `OnboardSource.latest_value` with the upper bound added — same two bounded
+    def latest_sample(self, path):
+        """Priority-preferred (value, epoch) AT OR BEFORE `at`; archive only (the live cache is off).
+
+        Mirrors `OnboardSource.latest_sample` with the upper bound added — same two bounded
         queries, same `_prefer`. It has to: the rig exists to measure what the boat does, so a
         read-path change that skipped this override would be measured as if it had never
         shipped."""
@@ -173,7 +177,7 @@ class ReplaySource(OnboardSource):
             "source, max(time) AS time, value", group_by="source")
         cands = [(r["source"], _epoch(r["time"]), r["value"]) for r in rows]
         best = self._prefer(path, [c for c in cands if c[1] is not None])
-        return best[2] if best else None
+        return (best[2], best[1]) if best else None
 
     def series(self, path, minutes):
         def fetch():
