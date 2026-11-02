@@ -31,7 +31,7 @@ MAX_DOC_CHARS = int(os.environ.get("LAB_MAX_DOC_CHARS", "300000"))
 # Docs past the budget go as extracted text (and the review step says so).
 PDF_MAX_PAGES = int(os.environ.get("LAB_PDF_MAX_PAGES", "100"))
 PDF_MAX_BYTES = int(os.environ.get("LAB_PDF_MAX_BYTES", str(32 * 1024 * 1024)))
-MIN_TEXT_CHARS = 200          # less than this from a document = effectively unreadable as text
+MIN_TEXT_CHARS = 200          # chars/page below which a PDF read as text is probably a scan
 EXTRACT_MAX_TOKENS = int(os.environ.get("LAB_EXTRACT_MAX_TOKENS", "64000"))
 IFRAME_TIMEOUT = int(os.environ.get("LAB_IFRAME_TIMEOUT", "60"))   # embedded entry apps can be slow
 FETCH_TIMEOUT = int(os.environ.get("LAB_FETCH_TIMEOUT", "30"))
@@ -107,16 +107,33 @@ def load_pdf(label: str, raw: bytes, url: str = "") -> dict:
         raise IngestError(f"{label} isn't a PDF file. Upload the PDF, or paste its link.")
     try:
         reader = _pdf_reader(raw)
+        note = ""
         if reader.is_encrypted:
-            raise IngestError(f"{label} is password-protected. Upload an unlocked copy.")
+            # Many race PDFs are "encrypted" with an EMPTY open password (print/copy limits
+            # only): those open fine. Only a real open password is a dead end.
+            if not reader.decrypt(""):
+                raise IngestError(f"{label} is password-protected. Upload an unlocked copy.")
+            raw, note = _unlocked_copy(reader, label)
         pages = len(reader.pages)
         text = "\n".join((p.extract_text() or "") for p in reader.pages)
     except IngestError:
         raise
     except Exception:  # noqa: BLE001 — pypdf can't parse it; count pages the crude way
         pages = max(1, len(re.findall(rb"/Type\s*/Page(?!s)", raw)))
-        text = ""
-    return {"label": label, "url": url, "text": text, "pdf": raw, "pages": pages}
+        text, note = "", ""
+    return {"label": label, "url": url, "text": text, "pdf": raw, "pages": pages, "note": note}
+
+
+def _unlocked_copy(reader, label) -> tuple:
+    """An empty-password PDF → (an unencrypted copy to send as a PDF, ""), or (None, note) when it
+    can't be rewritten: then only its text goes to the model, and the review says so."""
+    try:
+        out = io.BytesIO()
+        pypdf.PdfWriter(clone_from=reader).write(out)
+        return out.getvalue(), ""
+    except Exception:  # noqa: BLE001
+        return None, (f"{label} has copy restrictions, so only its plain text was read. Tables "
+                      f"and scanned pages may be missing. Check it by hand.")
 
 
 def load_url(url: str) -> dict:
@@ -347,9 +364,10 @@ _SYSTEM = ("You convert sailing race documents (NOR / SI / SER / amendments / en
 def _as_doc(d) -> dict:
     if isinstance(d, dict):
         return {"label": d.get("label") or "document", "url": d.get("url", ""),
-                "text": d.get("text") or "", "pdf": d.get("pdf"), "pages": d.get("pages") or 0}
+                "text": d.get("text") or "", "pdf": d.get("pdf"), "pages": d.get("pages") or 0,
+                "note": d.get("note") or ""}
     label, text = d                       # legacy (label, text) pairs
-    return {"label": label, "url": "", "text": text or "", "pdf": None, "pages": 0}
+    return {"label": label, "url": "", "text": text or "", "pdf": None, "pages": 0, "note": ""}
 
 
 def _fit_text(lengths: list[int], budget: int) -> int:
@@ -372,6 +390,7 @@ def build_content(docs, notes: list) -> list[dict]:
     everything else as its text, never cut without a note. Raises IngestError when nothing is
     readable."""
     docs = [_as_doc(d) for d in docs]
+    notes.extend(d["note"] for d in docs if d["note"])
     pages = nbytes = 0
     as_pdf = set()
     for i, d in enumerate(docs):
@@ -397,15 +416,17 @@ def build_content(docs, notes: list) -> list[dict]:
                 "data": base64.standard_b64encode(d["pdf"]).decode("ascii")}})
             continue
         text = d["text"].strip()
-        if len(text) < MIN_TEXT_CHARS:
-            notes.append(f"{d['label']} had almost no readable text"
+        if not text:
+            notes.append(f"{d['label']} had no readable text"
                          + (" (a scanned PDF?)" if d["pdf"] else "")
-                         + ". Little or nothing from it is in the draft. Upload it as a PDF, or "
-                           "check it by hand.")
-            if not text:
-                continue
-        else:
-            readable = True
+                         + ". Nothing from it is in the draft. Check it by hand.")
+            continue
+        readable = True              # a short amendment ("start postponed to 1100") is real content
+        if d["pdf"] and len(text) < MIN_TEXT_CHARS * max(1, d["pages"]):
+            # a PDF going as text with next to no text layer: likely a scan (sent as a PDF when
+            # it fits the budget — then this branch isn't reached)
+            notes.append(f"{d['label']} has very little text (a scanned PDF?). Little from it may "
+                         f"be in the draft. Check it by hand.")
         if len(text) > cap:
             pct = round(100 * cap / len(text))
             notes.append(f"{d['label']} is too long: only its first {pct}% was read. Check the "
@@ -421,7 +442,7 @@ def build_content(docs, notes: list) -> list[dict]:
 
 def _text_only(docs) -> list:
     """The same documents with the PDF bytes dropped (the model rejected a PDF)."""
-    return [dict(_as_doc(d), pdf=None) for d in docs]
+    return [dict(_as_doc(d), pdf=None, note="") for d in docs]
 
 
 def _finish(defn: dict) -> dict:
@@ -454,6 +475,9 @@ def _plain_llm_error(e) -> IngestError:
                            "SI separately (one at a time).")
     name = type(e).__name__
     status = getattr(e, "status_code", None)
+    if "credit balance" in str(e).lower():
+        return IngestError("The Lab's AI account is out of credit. Top it up (Anthropic console, "
+                           "Plans & Billing), then try again.")
     if name == "AuthenticationError" or status == 401:
         return IngestError("The Lab's AI key was rejected. The API key needs fixing (server side).")
     if name in ("RateLimitError", "OverloadedError") or status in (429, 529) or (

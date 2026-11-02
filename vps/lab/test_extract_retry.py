@@ -53,7 +53,7 @@ def fake(replies):
 
 
 extract.API_KEY = "test"
-DOCS = [("nor.pdf", "NOTICE OF RACE ... " * 20)]
+DOCS = [("nor.pdf", "NOTICE OF RACE ...")]
 
 print("one bad reply, then a good one: retried and parsed")
 calls = fake([BAD, GOOD])

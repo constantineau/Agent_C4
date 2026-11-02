@@ -211,6 +211,49 @@ check("plain error, no API call", d is None and "readable text" in err
 check("the note says it was too big", any("scan.pdf is too big" in n for n in notes))
 extract.PDF_MAX_PAGES = saved
 
+print("restricted PDF (empty open password): read, and sent as an unlocked PDF")
+
+
+def locked_pdf(user_pw):
+    from reportlab.lib.pdfencrypt import StandardEncryption
+    from reportlab.pdfgen import canvas
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, encrypt=StandardEncryption(user_pw, ownerPassword="owner",
+                                                      canPrint=0, canCopy=0))
+    c.drawString(100, 700, "AMENDMENT 1: The start is postponed to 1100.")
+    c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
+import pypdf  # noqa: E402
+
+rdoc = extract.load_pdf("amendment.pdf", locked_pdf(""))
+check("its text is read", "postponed to 1100" in rdoc["text"] and not rdoc["note"])
+check("the copy sent is not encrypted", not pypdf.PdfReader(io.BytesIO(rdoc["pdf"])).is_encrypted)
+calls = fake([reply()])
+d, err, notes = run([rdoc])
+check("sent as a document block, no notes", d and not notes and any(
+    b["type"] == "document" for b in calls["course"][0]["messages"][0]["content"]))
+try:
+    extract.load_pdf("locked.pdf", locked_pdf("secret"))
+    err = ""
+except extract.IngestError as e:
+    err = str(e)
+check("a real open password is refused plainly", err == "locked.pdf is password-protected. "
+      "Upload an unlocked copy.")
+
+print("a short amendment as text counts as content")
+calls = fake([reply()])
+d, err, notes = run([("amendment-1.html", "Amendment 1: Start postponed to 1100")])
+check("read, no error, no note", d and not err and not notes)
+check("its text was sent", "Start postponed to 1100" in json.dumps(calls["course"][0]["messages"]))
+
+print("out of API credit: says so")
+calls = fake([bad_request("Your credit balance is too low to access the Anthropic API.")] * 2)
+d, err, _ = run([("nor.pdf", NOR)])
+check("plain credit message", "out of credit" in err)
+
 print("the API rejects a PDF: resent as text, and the draft says so")
 pdfdoc = dict(extract.load_pdf("scan.pdf", scan), text=NOR)
 calls = fake([bad_request("messages.0.content.1: The PDF specified could not be processed"),
