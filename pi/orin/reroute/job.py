@@ -291,7 +291,9 @@ def vs_plan(plan, lat, lon, now, finish_eta):
             "plan_finish_eta": round(now + plan_left),
             "plan_left_min": round(plan_left / 60.0),
             "new_left_min": round(new_left / 60.0),
-            "gain_min": round((plan_left - new_left) / 60.0)}
+            # from the two shown numbers, so the crew's sum always adds up (rounded separately,
+            # 549.6 - 740.5 showed as 550 - 741 = -190)
+            "gain_min": round(plan_left / 60.0) - round(new_left / 60.0)}
 
 
 # ---- one run ----------------------------------------------------------------------------------

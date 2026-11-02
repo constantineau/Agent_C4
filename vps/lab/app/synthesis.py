@@ -727,6 +727,7 @@ def _build_plays(playbook, definition, course_id, venue_stats=None, jib_crossove
                               or "the departure reverses / settles back to the frozen forecast").strip(),
             "stakes_min": stakes,
             "favored_side": p.get("favored_side"),
+            "degraded": bool(p.get("degraded")), "warnings": list(p.get("warnings") or []),
             **({"table": p["table"]} if p.get("table") else {}),   # rejoin-vs-continue rows
             **({"boundary": p["boundary"]} if p.get("boundary") else {}),   # located flip threshold
         })
@@ -764,6 +765,7 @@ def synthesize(definition, course_id, start_epoch, models, ensemble_members=0, t
             "first_heading": v.get("first_heading"), "route_confidence": v.get("route_confidence"),
             "sail_plan": (v.get("route") or {}).get("sail_plan"),
             "route": v.get("route"),
+            "degraded": bool(v.get("degraded")), "warnings": list(v.get("warnings") or []),
         })
 
     # ---- Playbook v2: the play library from the scenario fan (docs/PLAYBOOK_V2.md) --------------
@@ -800,6 +802,9 @@ def synthesize(definition, course_id, start_epoch, models, ensemble_members=0, t
         "decision_spread_min": playbook.get("decision_spread_min"),
         "first_beat_rhumb_deg": first_beat_rhumb(definition, course_id),
         "consensus": playbook.get("consensus"),
+        # the routes' own warnings (forecast ended, shoreline, …): the Lab shows them before Deploy
+        "degraded": bool(playbook.get("degraded")),
+        "warnings": list(playbook.get("warnings") or []),
         "boat_model": _boat_model(),      # polars/sail crossovers + draft frozen into the homework
         # the common forecast the plan was built on → the onboard forecast-drift branch trigger
         "forecast_fingerprint": _fingerprint(variants, syn.get("recommended")),

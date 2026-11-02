@@ -63,6 +63,8 @@ def build_chart(definition, course_id, boat, open_water=False):
     # The builder never fails: if the shoreline couldn't load it returns an EMPTY mask, which the
     # boat would take as "land checked". Refuse that unless the box really is open water.
     land_cells = sum(field.layers.get(k, 0) for k in LAND_LAYERS)
+    if getattr(field, "land", None) == "failed":     # #51: some US ENC land is not the whole shore
+        return None, NO_LAND
     if not land_cells and not open_water:
         return None, NO_LAND
     out = geo.field_to_dict(field)

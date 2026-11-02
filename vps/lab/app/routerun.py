@@ -51,6 +51,28 @@ class _Log(list):
                 pass
 
 
+def venue_skill(definition, course_id, bbox, start_epoch, models, say=None):
+    """The venue's model-skill weighting for this race → (skill, model_weights, model_bias); the
+    two drop-ins are None when there is none. ONE implementation for the route run and the
+    playbook (#51: the playbook used to route on the plain blend). Best-effort, never raises."""
+    say = say or (lambda *_: None)
+    try:
+        from . import venue as venue_mod, modelskill
+        names = [m if isinstance(m, str) else m.name for m in models]
+        v = venue_mod.resolve(definition, course_id, bbox=bbox)
+        race_date = datetime.datetime.fromtimestamp(start_epoch, datetime.timezone.utc).date()
+        skill = (modelskill.venue_weights(v, models=names, race_date=race_date)
+                 if v else {"enabled": False})
+        if skill.get("enabled"):
+            say(f"model-skill: {v['key']} via {skill['station']} → "
+                + ", ".join(f"{m}×{w}" for m, w in skill["model_weights"].items()))
+            return skill, skill["model_weights"], skill["model_bias"]
+        return skill, None, None
+    except Exception as exc:  # noqa: BLE001
+        say(f"model-skill: skipped ({exc})")
+        return {"enabled": False}, None, None
+
+
 def run_course(definition, course_id, start_epoch, models, *, ensemble_members=0, avoid=True,
                per_model=False, resolution="auto", use_waves=True, use_current=True,
                on_progress=None, boat=None, chart_source=None, model_skill=True,
@@ -76,22 +98,8 @@ def run_course(definition, course_id, start_epoch, models, *, ensemble_members=0
     phase("weather")
     # venue-specific model-skill weighting: weight each model by its measured past accuracy here,
     # de-bias its persistent offset. Best-effort — any failure falls back to the static-priority blend.
-    skill = {"enabled": False}
-    mweights = mbias = None
-    if model_skill:
-        try:
-            from . import venue as venue_mod, modelskill
-            names = [m if isinstance(m, str) else m.name for m in models]
-            v = venue_mod.resolve(definition, course_id, bbox=bbox)
-            race_date = datetime.datetime.fromtimestamp(start_epoch, datetime.timezone.utc).date()
-            skill = (modelskill.venue_weights(v, models=names, race_date=race_date)
-                     if v else {"enabled": False})
-            if skill.get("enabled"):
-                mweights, mbias = skill["model_weights"], skill["model_bias"]
-                log.append(f"model-skill: {v['key']} via {skill['station']} → "
-                           + ", ".join(f"{m}×{w}" for m, w in mweights.items()))
-        except Exception as exc:
-            log.append(f"model-skill: skipped ({exc})")
+    skill, mweights, mbias = (venue_skill(definition, course_id, bbox, start_epoch, models, log.append)
+                              if model_skill else ({"enabled": False}, None, None))
     wf = build_windfield(bbox, start_epoch, t_end, models=models,
                          ensemble_members=ensemble_members, on_progress=log.append,
                          model_weights=mweights, model_bias=mbias, fallback_tries=fallback_tries)

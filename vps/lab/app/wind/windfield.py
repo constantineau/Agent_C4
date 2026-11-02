@@ -25,6 +25,7 @@ MAX_FRAMES_PER_MEMBER = 64        # safety cap on downloads per series
 CYCLE_FALLBACK_TRIES = int(os.environ.get("GRIB_CYCLE_FALLBACK", "2"))   # step back N cycles if sparse
 MIN_FRAME_FRAC = float(os.environ.get("GRIB_MIN_FRAME_FRAC", "0.5"))     # "enough coverage" threshold
 _PAD = 3 * 3600                  # keep frames just outside the window so we can bracket the ends
+EDGE_HOLD_S = 3 * 3600           # a one-frame series counts this far either side of its frame
 
 
 def _debias_uv(u, v, speed_bias_kn, dir_bias_deg):
@@ -154,9 +155,24 @@ class WindField:
     def loaded(self) -> bool:
         return any(self.series.values())
 
-    def _series_uv(self, frames, lat, lon, epoch):
-        """Time-interpolated (u, v) from one frame series at a position, or None."""
+    @staticmethod
+    def _in_span(frames, epoch):
+        """Is `epoch` within one frame step of this series' frames? Past that, the series has
+        ended (or not begun): its edge frame is NOT a forecast for that time (#51)."""
+        if len(frames) > 1:
+            before = frames[1].valid_time - frames[0].valid_time
+            after = frames[-1].valid_time - frames[-2].valid_time
+        else:
+            before = after = EDGE_HOLD_S
+        return frames[0].valid_time - before <= epoch <= frames[-1].valid_time + after
+
+    def _series_uv(self, frames, lat, lon, epoch, hold=False):
+        """Time-interpolated (u, v) from one frame series at a position, or None. Outside the
+        series' own span (more than one frame step past its ends) it is None, unless `hold`:
+        then the edge frame stands in (the caller marks that sample as held)."""
         if not frames:
+            return None
+        if not hold and not self._in_span(frames, epoch):
             return None
         if epoch <= frames[0].valid_time:
             return frames[0].sample_uv(lat, lon)
@@ -173,10 +189,47 @@ class WindField:
         return None
 
     def detail_at(self, lat: float, lon: float, epoch: float):
-        """Blended wind + per-member spread/confidence at a position/time, or None."""
+        """Blended wind + per-member spread/confidence at a position/time, or None.
+
+        Only models whose forecast reaches `epoch` blend (an ended model's last frame used to keep
+        blending for the rest of the race, #51). When NO model reaches it, the nearest edge frames
+        stand in so the route still has wind, and the result carries `held: True`: the optimizer
+        marks that route degraded, never silently."""
+        samples, _side = self._samples(lat, lon, epoch, hold=False)
+        held = False
+        if not samples:
+            samples, side = self._samples(lat, lon, epoch, hold=True)
+            held = bool(samples)
+        if not samples:
+            return None
+        out = self._blend(samples)
+        if held:
+            out["held"] = True
+            # which edge stood in, from the series actually used (not every model's bounds):
+            # "end" = past its last frame, "start" = before its first
+            out["held_side"] = side
+        return out
+
+    def _samples(self, lat, lon, epoch, hold):
+        """→ (samples, held side or None)."""
+        side = None
+        items = list(self.series.items())
+        if hold:
+            # stand-in only from the series whose forecast ends (or begins) NEAREST this time: an
+            # 18 h model's last frame must not blend into hour 120 beside a 72 h model's
+            def gap(fr):
+                return max(fr[0].valid_time - epoch, epoch - fr[-1].valid_time, 0.0)
+            # ...among the series that actually cover this POSITION (Codex on #200: a nearer-ending
+            # model whose grid misses the boat must not hide a usable one → no wind at all)
+            items = [(k, fr) for k, fr in items
+                     if fr and self._series_uv(fr, lat, lon, epoch, hold=True) is not None]
+            if items:
+                best = min(gap(fr) for _k, fr in items)
+                items = [(k, fr) for k, fr in items if gap(fr) <= best + 1.0]
+                side = "end" if epoch > items[0][1][-1].valid_time else "start"
         samples = []                  # (u, v, weight, model)
-        for (model, _member), frames in self.series.items():
-            uv = self._series_uv(frames, lat, lon, epoch)
+        for (model, _member), frames in items:
+            uv = self._series_uv(frames, lat, lon, epoch, hold=hold)
             if uv is None:
                 continue
             u, v = uv
@@ -185,9 +238,10 @@ class WindField:
                 u, v = _debias_uv(u, v, bias[0], bias[1])
             weight = MODELS[model].priority * self.model_weights.get(model, 1.0)
             samples.append((u, v, weight, model))
-        if not samples:
-            return None
+        return samples, side
 
+    @staticmethod
+    def _blend(samples):
         wsum = sum(s[2] for s in samples) or 1.0
         mu = sum(s[0] * s[2] for s in samples) / wsum
         mv = sum(s[1] * s[2] for s in samples) / wsum
