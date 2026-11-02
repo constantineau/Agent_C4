@@ -142,8 +142,18 @@ class LocalDest:
             os.rmdir(d)
 
 
+class DestError(RuntimeError):
+    """The destination could not be read. Never the same as "not there": prune stops on it."""
+
+
+_GCS_MISSING = ("matched no objects", "No URLs matched", "NotFound", "404")
+
+
 class GcsDest:
-    """gs://bucket/prefix via gsutil. Never touches anything outside the prefix."""
+    """gs://bucket/prefix via gsutil. Never touches anything outside the prefix.
+
+    Reads separate "not there" (gsutil's no-match / 404) from every other failure, which
+    raises DestError: a 503 on a listing must never read as an empty or missing set."""
 
     def __init__(self, url, gsutil="gsutil"):
         m = re.match(r"^gs://([^/]+)/(.+?)/*$", url)
@@ -158,19 +168,26 @@ class GcsDest:
         return subprocess.run([self.gsutil, "-q", *args], check=check, capture_output=True,
                               text=True, **kw)
 
+    def _read(self, *args):
+        """stdout, or None when the object/prefix does not exist; DestError on anything else."""
+        r = self._run(*args, check=False)
+        if r.returncode == 0:
+            return r.stdout
+        if any(k in r.stderr for k in _GCS_MISSING):
+            return None
+        raise DestError(f"gsutil {' '.join(args)} failed: {r.stderr.strip()[:300]}")
+
     def sets(self):
-        r = self._run("ls", f"{self.prefix}/", check=False)
         out = []
-        for line in r.stdout.splitlines():
+        for line in (self._read("ls", f"{self.prefix}/") or "").splitlines():
             line = line.rstrip("/")
             if line.startswith(self.prefix + "/"):
                 out.append(line[len(self.prefix) + 1:])
         return sorted(n for n in out if n and "/" not in n)
 
     def objects(self, set_name):
-        r = self._run("ls", f"{self.prefix}/{set_name}/", check=False)
         base = f"{self.prefix}/{set_name}/"
-        return sorted(line[len(base):] for line in r.stdout.splitlines()
+        return sorted(line[len(base):] for line in (self._read("ls", base) or "").splitlines()
                       if line.startswith(base) and line[len(base):])
 
     def put(self, local, set_name, name):
@@ -182,8 +199,7 @@ class GcsDest:
         return bool(m) and m.group(1) == md5_b64_file(local)
 
     def read_text(self, set_name, name):
-        r = self._run("cat", f"{self.prefix}/{set_name}/{name}", check=False)
-        return r.stdout if r.returncode == 0 else None
+        return self._read("cat", f"{self.prefix}/{set_name}/{name}")
 
     def fetch(self, set_name, name, local):
         self._run("cp", f"{self.prefix}/{set_name}/{name}", local)
@@ -358,6 +374,29 @@ def pg_image(container):
     return r.stdout.strip()
 
 
+def image_meta(image_id):
+    """What a NEW machine needs to get this exact image: a pullable `repo@sha256:...` digest
+    (from RepoDigests) and the tag, as well as the local id. The local id alone is useless on a
+    replacement VPS: nothing can pull it."""
+    r = subprocess.run(["docker", "image", "inspect", "-f",
+                        "{{json .RepoDigests}}|{{json .RepoTags}}", image_id],
+                       capture_output=True, text=True, check=True)
+    digests, tags = (json.loads(x) for x in r.stdout.strip().split("|", 1))
+    return {"image": image_id, "image_ref": (digests or [None])[0],
+            "image_tag": (tags or [None])[0]}
+
+
+def save_image(image_id, out_path):
+    """docker save | gzip: the fallback when an image has no registry digest to pull."""
+    with open(out_path, "wb") as raw, \
+            gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0, compresslevel=6) as gz:
+        p = subprocess.Popen(["docker", "save", image_id], stdout=subprocess.PIPE)
+        while b := p.stdout.read(CHUNK):
+            gz.write(b)
+        if p.wait() != 0:
+            raise RuntimeError(f"docker save {image_id} failed")
+
+
 def dump_pg(spec, out_path):
     """pg_dump -Fc of the live DB (pg_dump reads in one read-only snapshot transaction), then a
     content scan of the dump in a throwaway, network-less container from the same image."""
@@ -375,7 +414,7 @@ def dump_pg(spec, out_path):
     ver = subprocess.run(["docker", "exec", container, "psql", "-U", user, "-d", db, "-Atc",
                           "SELECT extversion FROM pg_extension WHERE extname='timescaledb'"],
                          capture_output=True, text=True).stdout.strip()
-    return key, counts, {"image": image, "timescaledb": ver, "db": db, "user": user}
+    return key, counts, {**image_meta(image), "timescaledb": ver, "db": db, "user": user}
 
 
 # ---- the run ---------------------------------------------------------------------------------
@@ -384,20 +423,31 @@ def set_name_for(now):
     return now.strftime("backup-%Y-%m-%dT%H%M%SZ")
 
 
-def complete_sets(dest):
-    """[(name, index)] of finished sets, oldest first."""
-    out = []
+def read_indexes(dest, strict=True):
+    """{set: INDEX dict, or None for a set with no INDEX (unfinished)} for every set named like
+    ours. FAILS CLOSED: a listing or read error (DestError/OSError) or an INDEX that does not
+    parse raises DestError — prune must not guess what an unreadable set points at."""
+    out = {}
     for n in dest.sets():
         if not SET_RE.match(n):
             continue
         txt = dest.read_text(n, INDEX)
         if txt is None:
+            out[n] = None
             continue
         try:
-            out.append((n, json.loads(txt)))
+            out[n] = json.loads(txt)
         except ValueError:
-            log(f"  {n}/{INDEX} is unreadable — treated as unfinished")
+            if strict:
+                raise DestError(f"{n}/{INDEX} exists but does not parse")
+            log(f"  {n}/{INDEX} does not parse — skipped")
     return out
+
+
+def complete_sets(dest, strict=True):
+    """[(name, index)] of finished sets, oldest first. Read errors always raise; strict=False
+    (restore, list) only skips an INDEX that does not parse instead of raising."""
+    return sorted((n, i) for n, i in read_indexes(dest, strict).items() if i is not None)
 
 
 def run_backup(dest, work, volumes, pg_spec, now=None, producers=None):
@@ -407,7 +457,7 @@ def run_backup(dest, work, volumes, pg_spec, now=None, producers=None):
     set_name = set_name_for(now)
     if set_name in dest.sets():
         raise SystemExit(f"{set_name} already exists at {dest.label}")
-    prev = complete_sets(dest)
+    prev = complete_sets(dest, strict=False)   # a bad old INDEX must not stop tonight's backup
     prev_index = prev[-1][1] if prev else {"artifacts": []}
     prev_by_name = {a["name"]: a for a in prev_index.get("artifacts", [])}
 
@@ -428,6 +478,14 @@ def run_backup(dest, work, volumes, pg_spec, now=None, producers=None):
                 return key, {"tables": counts, **meta}
             producers.append((f"vps-{db}.pgdump", "postgres", mk_pg))
 
+            def mk_img(out, scratch, spec=pg_spec):
+                meta = image_meta(pg_image(spec.split(":")[0]))
+                if meta["image_ref"]:
+                    return None                  # pullable by digest: nothing to store
+                save_image(meta["image"], out)
+                return meta["image"], meta       # content key = image id (dedups for free)
+            producers.append(("vps-pg-image.tar.gz", "image", mk_img))
+
     os.makedirs(work, exist_ok=True)
     stage = tempfile.mkdtemp(prefix="stage-", dir=work)
     artifacts, stored, failures = [], [], []
@@ -436,13 +494,18 @@ def run_backup(dest, work, volumes, pg_spec, now=None, producers=None):
             out = os.path.join(stage, name)
             scratch = tempfile.mkdtemp(dir=stage)
             try:
-                key, extra = fn(out, scratch)
+                made = fn(out, scratch)
             except Exception as exc:              # one bad volume must not cost the others
                 log(f"!! {name}: FAILED — {exc}")
                 failures.append(name)
                 continue
             finally:
                 shutil.rmtree(scratch, ignore_errors=True)
+            if made is None:                      # this producer had nothing to store
+                if os.path.exists(out):
+                    os.remove(out)
+                continue
+            key, extra = made
             size = os.path.getsize(out)
             old = prev_by_name.get(name)
             if old and old.get("content_key") == key:
@@ -518,42 +581,58 @@ def choose_keep(names, daily, weekly, monthly):
 
 
 def run_prune(dest, keep_spec=(7, 4, 12), dry_run=False, min_unfinished_age_h=24, now=None):
-    """Delete sets outside the keep rule, but never an object a kept set's INDEX points at.
-    Unfinished sets (no INDEX) older than `min_unfinished_age_h` are cleared the same way.
+    """Delete sets outside the keep rule. Conservative by construction:
+
+    - it reads every set's INDEX first, and ANY read or listing error stops it (fail closed);
+    - phase 1 deletes only INDEX files (that retires a set; its bytes stay);
+    - phase 2 protects every object pointed at by an INDEX that is still standing: the first
+      snapshot minus the INDEX deletes that actually succeeded, UNION a fresh re-list (if the
+      re-list fails, it stops before deleting any artifact);
+    - phase 3 deletes only unprotected objects of the retired / long-unfinished sets, and stops
+      at the first listing error.
     Returns (deleted, refused) object counts."""
     now = now or datetime.now(timezone.utc)
-    done = dict(complete_sets(dest))
+    try:
+        snap = read_indexes(dest)
+    except (DestError, OSError) as exc:
+        log(f"!! prune ABORTED before deleting anything: {exc}")
+        return 0, 0
+    done = {n: i for n, i in snap.items() if i is not None}
     if not done:
         log("prune: no finished set at the destination — nothing is deleted")
         return 0, 0
     keep = choose_keep(list(done), *keep_spec)
-    candidates = []
-    for n in dest.sets():
-        if not SET_RE.match(n) or n in keep:
-            continue
-        if n not in done and (now - set_time(n)).total_seconds() < min_unfinished_age_h * 3600:
-            continue                             # may be a run in progress
-        candidates.append(n)
+    candidates = sorted(n for n in snap if n not in keep and (
+        n in done or (now - set_time(n)).total_seconds() >= min_unfinished_age_h * 3600))
     deleted = refused = 0
 
-    # Phase 1: retire the obsolete sets by deleting their INDEX. A refused delete (retention
-    # lock) leaves that set complete, and phase 2 then protects everything it points at.
+    # Phase 1: retire obsolete sets (INDEX only).
+    retired = set()
     for n in candidates:
         if n not in done:
             continue
         if dry_run:
             log(f"  would delete {n}/{INDEX}")
-            deleted += 1
+            retired.add(n)
         elif dest.delete(n, INDEX):
-            deleted += 1
+            retired.add(n)
         else:
             refused += 1
             log(f"  {n}: its {INDEX} could not be deleted — it stays a complete set")
+    deleted += len(retired)
 
-    # Phase 2: protect every object that ANY index still standing points at (re-listed, not
-    # the keep list: a set whose INDEX survived is still a backup someone may restore).
-    standing = ({n: i for n, i in done.items() if n not in candidates} if dry_run
-                else dict(complete_sets(dest)))
+    # Phase 2: everything any standing INDEX points at is protected.
+    standing = {n: i for n, i in done.items() if n not in retired}
+    if not dry_run:
+        try:
+            again = read_indexes(dest)
+        except (DestError, OSError) as exc:
+            log(f"!! prune stopped before deleting any artifact (re-list failed: {exc}); "
+                f"{len(retired)} set(s) retired, their bytes are still there")
+            return deleted, refused
+        for n, i in again.items():
+            if i is not None:
+                standing.setdefault(n, i)
     protected = {}
     for n, idx in standing.items():
         for art in idx["artifacts"]:
@@ -563,7 +642,12 @@ def run_prune(dest, keep_spec=(7, 4, 12), dry_run=False, min_unfinished_age_h=24
     # Phase 3: delete what nothing standing protects.
     for n in candidates:
         hold = protected.get(n, set())
-        for o in dest.objects(n):
+        try:
+            objs = dest.objects(n)
+        except (DestError, OSError) as exc:
+            log(f"!! prune stopped: could not list {n} ({exc})")
+            break
+        for o in objs:
             if o in hold or (dry_run and o == INDEX):
                 continue
             if dry_run:
@@ -603,7 +687,7 @@ def main(argv=None):
     keep = _keep_spec(os.environ.get("C4_BACKUP_KEEP", "7,4,12"))
 
     if a.cmd == "list":
-        for n, idx in complete_sets(dest):
+        for n, idx in complete_sets(dest, strict=False):
             here = [x for x in idx["artifacts"] if x["stored_in"] == n]
             print(f"{n}  {len(idx['artifacts'])} artifacts, {len(here)} stored here, "
                   f"{sum(x['bytes'] for x in here) / 1048576:.1f} MiB")

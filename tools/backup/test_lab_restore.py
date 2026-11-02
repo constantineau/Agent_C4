@@ -23,13 +23,17 @@ def check(name, cond):
 
 lr.time.sleep = lambda s: None
 lr.print = lambda *a, **k: None
-ART = {"name": "vps-sr33_dev.pgdump", "image": "img", "user": "sr33", "db": "sr33_dev",
+RUNS = []
+ART = {"name": "vps-sr33_dev.pgdump", "image": "sha256:localid", "user": "sr33", "db": "sr33_dev",
+       "image_ref": "timescale/timescaledb@sha256:d833",
        "timescaledb": "2.27.2", "tables": {"public.alerts": 3, "public.telemetry_raw": 10}}
 
 
 def fake_docker(restore_rc=0, restore_err="", fail_sql=()):
     def docker(*args, **kw):
         r = SimpleNamespace(returncode=0, stdout="", stderr="")
+        if args[0] == "run":
+            RUNS.append(args)
         if args[0] == "logs":
             r.stdout = "PostgreSQL init process complete; ready for start up."
         elif args[0] == "exec" and args[2] == "pg_restore":
@@ -57,6 +61,12 @@ def drill(**kw):
 
 
 check("a clean restore passes", drill())
+check("the throwaway postgres runs the image pulled by digest, not the local image id",
+      RUNS and RUNS[-1][-1] == ART["image_ref"] and "sha256:localid" not in RUNS[-1])
+ref = ART.pop("image_ref")
+check("no digest recorded and no image in the set -> FAILS (a new machine could not restore)",
+      not drill())
+ART["image_ref"] = ref
 check("pg_restore exit 1 with an error, counts all matching -> FAILS",
       not drill(restore_rc=1, restore_err="pg_restore: error: could not execute query: "
                 "ERROR: could not create unique index \"x\"\n"))

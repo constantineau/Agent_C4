@@ -20,6 +20,7 @@ import sqlite3
 import sys
 import tarfile
 import tempfile
+from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -325,6 +326,86 @@ with tempfile.TemporaryDirectory() as tmp:
     rc = lb.main(["prune", "--dest", dest_dir, "--work", work])
     check("...and prunes once the lock is free", rc == 0 and len(lb.complete_sets(dest)) == 1)
     del os.environ["C4_BACKUP_KEEP"]
+
+print("prune fails closed on a destination read error (Codex round 4 on #198)")
+
+
+def gcs_world(tmp):
+    """A GcsDest over fake_gsutil.py: sets A (stores x), B (points at A/x), C (new x)."""
+    root, fail = os.path.join(tmp, "gcs"), os.path.join(tmp, "fail.json")
+    wrapper = os.path.join(tmp, "gsutil")
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(wrapper, "w") as f:
+        f.write(f'#!/bin/sh\nFAKEGCS_ROOT={root} FAKEGCS_FAIL={fail} '
+                f'exec {sys.executable} {here}/fake_gsutil.py "$@"\n')
+    os.chmod(wrapper, 0o755)
+    dest = lb.GcsDest("gs://bkt/vps-nightly", gsutil=wrapper)
+    t = datetime(2026, 9, 1, 3, 0, tzinfo=timezone.utc)
+    for i, content in enumerate((b"x-v1", b"x-v1", b"x-v2")):
+        lb.run_backup(dest, os.path.join(tmp, "w"), [], None, now=t + timedelta(days=i),
+                      producers=[("vps-lab_retro.tar.gz", "volume", producer(content))])
+    a, b = lb.set_name_for(t), lb.set_name_for(t + timedelta(days=1))
+    return dest, fail, os.path.join(root, "bkt", "vps-nightly"), a, b, t
+
+
+def restorable(root, idx):
+    return all(os.path.isfile(os.path.join(root, x["stored_in"], x["name"]))
+               for x in idx["artifacts"])
+
+
+with tempfile.TemporaryDirectory() as tmp:
+    dest, fail, root, a, b, t = gcs_world(tmp)
+    check("fake GCS: B points at A's copy",
+          dict(lb.complete_sets(dest))[b]["artifacts"][0]["stored_in"] == a)
+    # B's INDEX is under a retention lock; the RE-LIST read of it hits a transient 503.
+    json.dump({f"rm gs://bkt/vps-nightly/{b}/INDEX.json": "always",
+               f"cat gs://bkt/vps-nightly/{b}/INDEX.json": {"calls": [2]}}, open(fail, "w"))
+    lb.run_prune(dest, (1, 1, 1), now=t + timedelta(days=3))
+    idx_b = json.load(open(os.path.join(root, b, "INDEX.json")))
+    check("a 503 on the re-list does not unprotect B: A's copy that B uses survives",
+          restorable(root, idx_b))
+
+with tempfile.TemporaryDirectory() as tmp:
+    dest, fail, root, a, b, t = gcs_world(tmp)
+    before = sorted(os.path.join(d, f) for d, _, fs in os.walk(root) for f in fs)
+    # the FIRST read of B's INDEX fails: B must not be mistaken for an unfinished set
+    json.dump({f"cat gs://bkt/vps-nightly/{b}/INDEX.json": {"calls": [1]}}, open(fail, "w"))
+    d, r = lb.run_prune(dest, (1, 1, 1), now=t + timedelta(days=3))
+    after = sorted(os.path.join(dp, f) for dp, _, fs in os.walk(root) for f in fs)
+    check(f"a 503 on the first snapshot aborts the prune: nothing deleted ({d} deleted)",
+          before == after and d == 0)
+
+with tempfile.TemporaryDirectory() as tmp:
+    dest, fail, root, a, b, t = gcs_world(tmp)
+    json.dump({"ls gs://bkt/vps-nightly/": {"calls": [1]}}, open(fail, "w"))
+    try:
+        lb.complete_sets(dest)
+        raised = False
+    except lb.DestError:
+        raised = True
+    check("a 503 on the listing raises, never reads as 'no sets'", raised)
+    check("...while a prefix that really is empty reads as no sets",
+          lb.GcsDest("gs://bkt/empty", gsutil=dest.gsutil).sets() == [])
+
+print("the dump's image is recorded so a new machine can get it (Codex round 4 on #198)")
+real_run = lb.subprocess.run
+lb.subprocess.run = lambda *a, **k: SimpleNamespace(
+    returncode=0, stderr="",
+    stdout='["timescale/timescaledb@sha256:d833"]|["timescale/timescaledb:latest-pg16"]\n')
+try:
+    meta = lb.image_meta("sha256:d833")
+finally:
+    lb.subprocess.run = real_run
+check("image_meta records the pullable repo@sha256 digest and the tag",
+      meta.get("image_ref") == "timescale/timescaledb@sha256:d833"
+      and meta.get("image_tag") == "timescale/timescaledb:latest-pg16")
+with tempfile.TemporaryDirectory() as tmp:
+    dest = lb.LocalDest(os.path.join(tmp, "d"))
+    _, idx = lb.run_backup(dest, os.path.join(tmp, "w"), [], None, now=T0, producers=[
+        ("vps-lab_ingested.tar.gz", "volume", producer(b"x")),
+        ("vps-pg-image.tar.gz", "image", lambda out, scratch: None)])
+    check("a producer with nothing to store (image pullable by digest) adds no artifact",
+          [x["name"] for x in idx["artifacts"]] == ["vps-lab_ingested.tar.gz"])
 
 print("destinations")
 for bad in ("gs://constantineau-c4-archive", "gs://constantineau-c4-archive/"):

@@ -128,8 +128,39 @@ def _step(label, r):
                  + (r.stderr or r.stdout or "").strip()[-300:])
 
 
-def verify_pg(art, path, work, tmpfs=None):
-    image, user, db = art["image"], art["user"], art["db"]
+def resolve_image(art, loaded=()):
+    """The image to restore into, obtained the way a NEW machine would: pulled from the
+    registry by its recorded digest, or loaded from the image saved in the set. Never just
+    "whatever this host has cached" (the local id the old backups recorded is not pullable)."""
+    ref = art.get("image_ref")
+    if ref:
+        r = docker("pull", ref, capture_output=True, text=True)
+        if not check(f"image pulled from the registry by digest ({ref})", r.returncode == 0,
+                     "" if r.returncode == 0 else (r.stderr or r.stdout).strip()[-300:]):
+            return None
+        return ref
+    if art.get("image") in loaded:
+        return art["image"]
+    check("the dump's image can be obtained on a new machine", False,
+          f"no registry digest recorded and no image saved in the set ({art.get('image')})")
+    return None
+
+
+def load_image(path, art):
+    """docker load the image saved in the set; it must be the image id the backup recorded."""
+    r = docker("load", "-i", path, capture_output=True, text=True)
+    got = docker("image", "inspect", "-f", "{{.Id}}", art["content_key"],
+                 capture_output=True, text=True)
+    return check(f"image loaded from the set ({art['content_key'][:19]}…)",
+                 r.returncode == 0 and got.stdout.strip() == art["content_key"],
+                 (r.stderr or "").strip()[-200:])
+
+
+def verify_pg(art, path, work, tmpfs=None, loaded=()):
+    user, db = art["user"], art["db"]
+    image = resolve_image(art, loaded)
+    if image is None:
+        return
     name = f"c4restore-pg-{os.getpid()}"
     data = None
     if tmpfs:
@@ -222,7 +253,7 @@ def main(argv=None):
     ap.add_argument("--skip-pg", action="store_true")
     a = ap.parse_args(argv)
     dest = open_dest(a.dest)
-    sets = dict(complete_sets(dest))
+    sets = dict(complete_sets(dest, strict=False))
     if not sets:
         print(f"no finished backup set at {dest.label}")
         return 1
@@ -235,8 +266,10 @@ def main(argv=None):
     os.makedirs(a.work, exist_ok=True)
     stage = tempfile.mkdtemp(prefix="restore-", dir=a.work)
     os.chmod(stage, 0o755)                    # the verify container reads it as a non-root user
+    loaded = set()
     try:
-        for art in index["artifacts"]:
+        # A saved image first: the database restore needs it.
+        for art in sorted(index["artifacts"], key=lambda x: x["kind"] != "image"):
             path = os.path.join(stage, art["name"])
             try:
                 dest.fetch(art["stored_in"], art["name"], path)
@@ -257,8 +290,11 @@ def main(argv=None):
                         continue
                     docker("volume", "create", target, capture_output=True, check=True)
                 verify_volume(art, path, target)
+            elif art["kind"] == "image" and not a.skip_pg:
+                if load_image(path, art):
+                    loaded.add(art["content_key"])
             elif art["kind"] == "postgres" and not a.skip_pg:
-                verify_pg(art, path, stage, a.pg_tmpfs)
+                verify_pg(art, path, stage, a.pg_tmpfs, loaded)
             os.remove(path)
     finally:
         shutil.rmtree(stage, ignore_errors=True)
