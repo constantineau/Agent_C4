@@ -4,6 +4,7 @@ counts intact. Docker is faked here; the real drill is in tools/backup/README.md
 
 Run: python3 tools/backup/test_lab_restore.py
 """
+import json
 import os
 import sys
 import tempfile
@@ -83,6 +84,32 @@ check("an error that IS on the benign list is accepted",
 check("...but an unlisted one beside it still fails",
       not drill(restore_rc=1, restore_err="pg_restore: error: some listed benign thing\n"
                 "pg_restore: error: something else\n"))
+
+print("volume drill: SQLite files must arrive as counted snapshots (Codex round 8 on #198)")
+VOL = {"name": "vps-lab_learning.tar.gz", "files": {"learning.db": "h1", "a.json": "h2"},
+       "sqlite_counts": {"learning.db": {"runs": 3}}}
+
+
+def vol_drill(art, got):
+    lr.results.clear()
+    lr.docker = lambda *a, **k: SimpleNamespace(returncode=0, stdout=json.dumps(got), stderr="")
+    lr.verify_volume(art, "/x/v.tgz")
+    return all(lr.results) and bool(lr.results)
+
+
+good_db = {"learning.db": {"integrity": "ok", "counts": {"runs": 3}}}
+check("volume: a counted snapshot passes",
+      vol_drill(VOL, {"files": VOL["files"], "dbs": good_db}))
+check("volume: the expected DB missing -> FAILS",
+      not vol_drill(VOL, {"files": {"a.json": "h2"}, "dbs": {}}))
+check("volume: the expected DB arriving as a non-SQLite file -> FAILS",
+      not vol_drill(VOL, {"files": VOL["files"], "dbs": {}}))
+plain = dict(VOL, sqlite_counts={})            # the backup tarred it as loose bytes
+check("volume: a SQLite file the backup did not snapshot -> FAILS",
+      not vol_drill(plain, {"files": VOL["files"], "dbs": good_db}))
+files_wal = dict(VOL["files"], **{"learning.db-wal": "h3"})
+check("volume: a -wal in the archive -> FAILS",
+      not vol_drill(dict(VOL, files=files_wal), {"files": files_wal, "dbs": good_db}))
 
 print("\nALL OK" if ok else "\nFAILURES")
 sys.exit(0 if ok else 1)

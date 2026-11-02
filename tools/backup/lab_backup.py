@@ -289,10 +289,12 @@ def sqlite_counts(path):
 
 
 def is_sqlite(path):
+    """True for a SQLite file. A file that is gone is not one (it is skipped later); any OTHER
+    read error raises: guessing "plain file" would tar a live DB and its WAL as loose bytes."""
     try:
         with open(path, "rb") as f:
             return f.read(16) == SQLITE_MAGIC
-    except OSError:
+    except FileNotFoundError:
         return False
 
 

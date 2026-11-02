@@ -100,6 +100,15 @@ def verify_volume(art, path, into_volume=None):
     check(f"{art['name']}: {len(want)} files, every sha256 matches",
           not bad and not extra,
           f"mismatch {bad[:5]} unexpected {extra[:5]}" if bad or extra else "")
+    # Every SQLite file must have come through as a snapshot the backup counted: one INDEX does
+    # not know about was archived as loose bytes (live file + WAL), and a -wal/-shm beside it
+    # means the same. An expected DB that is missing or not SQLite fails below.
+    expected = set(art.get("sqlite_counts", {}))
+    stray = sorted(set(got["dbs"]) - expected)
+    check(f"{art['name']}: every SQLite file is a counted snapshot", not stray,
+          f"not snapshotted: {stray[:5]}" if stray else "")
+    wal = sorted(k for k in got["files"] if k.endswith(("-wal", "-shm", "-journal")))
+    check(f"{art['name']}: no SQLite -wal/-shm/-journal in the archive", not wal, str(wal[:5]))
     for rel, counts in art.get("sqlite_counts", {}).items():
         d = got["dbs"].get(rel, {})
         rows = sum(counts.values())

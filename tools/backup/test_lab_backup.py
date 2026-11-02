@@ -510,6 +510,32 @@ with tempfile.TemporaryDirectory() as tmp:
     check("atomic-write temp files are not archived",
           failed is None and sorted(files) == ["race.json"])
 
+print("a read error on a DB header fails the volume (Codex round 8 on #198)")
+with tempfile.TemporaryDirectory() as tmp:
+    vol = os.path.join(tmp, "vol")
+    conn = make_volume(vol)                         # learning.db, live, with a WAL
+    real_open = open
+    target = os.path.join(vol, "learning.db")
+
+    hits = []
+
+    def eio_open(p, *a, **k):                      # transient: only the FIRST read fails
+        if p == target and a[:1] == ("rb",) and not hits:
+            hits.append(1)
+            raise OSError(5, "Input/output error", p)
+        return real_open(p, *a, **k)
+    lb.open = eio_open
+    try:
+        os.makedirs(os.path.join(tmp, "s"))
+        lb.tar_volume(vol, os.path.join(tmp, "v.tgz"), os.path.join(tmp, "s"))
+        raised = False
+    except OSError:
+        raised = True
+    finally:
+        del lb.open
+        conn.close()
+    check("EIO reading learning.db's header raises (not tarred live as a plain file)", raised)
+
 print("destinations")
 for bad in ("gs://constantineau-c4-archive", "gs://constantineau-c4-archive/"):
     try:
