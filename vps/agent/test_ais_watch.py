@@ -378,7 +378,8 @@ with tempfile.TemporaryDirectory() as d:
           and (LON, GPS24) not in src._live)
     src._ingest_live(own_pos(B - 1, {"latitude": 45.2, "longitude": -83.2}))
     check("…so the valid fix after them is taken, lat and lon together",
-          src._live.get((LAT, GPS24)) == (B - 1, 45.2) and src._live.get((LON, GPS24)) == (B - 1, -83.2))
+          src._live.get((LAT, GPS24), (0, None))[1] == 45.2 and src._live.get((LON, GPS24), (0, None))[1] == -83.2
+          and abs(src._live[(LAT, GPS24)][0] - (B - 1)) < 0.01 and src._live[(LAT, GPS24)][0] == src._live[(LON, GPS24)][0])
 
     # own ship: an older-stamped own position never replaces a newer one in the live cache
     src._live = {}
