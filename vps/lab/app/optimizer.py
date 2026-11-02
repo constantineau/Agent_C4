@@ -957,6 +957,7 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
         return s
 
     all_leg_obstacles = leg_obstacles            # every leg of the course (the per-model fan's)
+    land_failed = False                          # #51: land was asked for and couldn't be checked
     if obstacles is None and leg_obstacles is None and avoid:
         bbox = course_bbox(definition, course_id)
         if bbox:
@@ -966,8 +967,11 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
                     definition, cid or course_id, bbox, source=source, safety_depth=safety_depth)
                 # PACE PLAYS route from mark `from_mark`: their leg 0 is the course's leg from_mark
                 leg_obstacles = all_leg_obstacles[int(from_mark or 0):]
-            except Exception:
+            except Exception as exc:  # noqa: BLE001 — reported on the route, never open water
+                print(f"[optimize] obstacle build failed: {type(exc).__name__}: {exc}", flush=True)
                 obstacles = leg_obstacles = all_leg_obstacles = None
+                land_failed = True
+    land_failed = land_failed or _land_failed(obstacles, all_leg_obstacles)
 
     # reshape gate: does the (spatially-varying) sea state get to BEND the route, or only tax the ETA?
     wave_stats = _wave_field_stats(waves, marks)
@@ -1069,6 +1073,13 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
                            f"{incomplete['short_nm']} nm short of the mark ({incomplete['reason']})"
                            + (f". Not routed after it: {', '.join(rest)}" if rest else "")
                            + ". Don't use this route. Run it again, or check for land near that mark.")
+    if land_failed:
+        degraded = True
+        warnings.insert(0, LAND_FAILED)
+    held = _forecast_held(wf, full_path, float(start_epoch))
+    if held:                       # #51: wind past every model's end is the last frame, held
+        degraded = True
+        warnings.append(FORECAST_ENDS if held == "end" else FORECAST_STARTS_LATE)
     for name, n in _leg_self_crossings(full_path, legs, start_epoch).items():
         warnings.append(f"Route crosses itself {n}x on the leg to {name}. Light, shifty wind. "
                         "Don't trust that leg's line. Sail the shifts.")
@@ -1109,7 +1120,7 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
             realized["wave_spread_hs"] = wave_stats["spread"]
     # per-model candidate paths (the confidence moat made VISUAL — the fan the blended route summarizes)
     candidate_paths = []
-    if per_model:
+    if per_model and not land_failed:          # no land check → no model routes drawn either
         candidate_paths = _per_model_paths(definition, course_id, start_epoch, wf, obstacles, P, marks,
                                            source, safety_depth, jib_crossovers, total_min / 60.0,
                                            leg_obstacles=all_leg_obstacles,
@@ -1145,11 +1156,44 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
         "candidate_paths": candidate_paths,
         "path": [{"lat": p["lat"], "lon": p["lon"], "t": round(p["t"])} for p in full_path],
         "windfield": wf.status(),
-        "obstacles": (_obstacle_summary(obstacles, leg_obstacles) if leg_obstacles
-                      else obstacles.summary() if obstacles is not None else {"active": False}),
+        "obstacles": dict((_obstacle_summary(obstacles, leg_obstacles) if leg_obstacles
+                           else obstacles.summary() if obstacles is not None
+                           else {"active": False, "land": "off"}),
+                          **({"land": "failed"} if land_failed else {})),
         "obstacle_steps_avoided": sum(l.get("blocked_steps", 0) for l in legs),
         "timed_out": timed_out,
     }
+
+
+# #51: the shoreline didn't load. Shown first on the route; the route is marked degraded.
+LAND_FAILED = "Shoreline didn't load. Land not checked: the route may cross land. Don't use it."
+
+
+# #51: past every model's last frame the route sails on that frame, held. Kept, but never silent.
+FORECAST_ENDS = "Forecast ends before the finish: last hours use the final forecast."
+FORECAST_STARTS_LATE = "Forecast starts after the gun: first hours use the first forecast."
+
+
+def _forecast_held(wf, full_path, start_epoch=None):
+    """Did the route sail on a held edge frame (no model's forecast reached that time)? → "end"
+    (past the last frame), "start" (before the first) or None. A wind field without the `held`
+    flag (a fixed test wind, the boat's own) never holds."""
+    hit = None
+    for p in full_path or []:
+        d = wf.detail_at(p["lat"], p["lon"], p["t"])
+        if d and d.get("held"):
+            # the wind field says which edge it held, from the series it actually used (Codex on
+            # #200: comparing against every model's bounds, off-position grids included, called a
+            # held END a late start)
+            if d.get("held_side", "end") == "end":
+                return "end"
+            hit = "start"
+    return hit
+
+
+def _land_failed(obstacles, leg_obstacles):
+    """Was land asked for on any of these fields and failed to load? (geo ObstacleField.land)"""
+    return any(getattr(f, "land", None) == "failed" for f in [obstacles] + list(leg_obstacles or []))
 
 
 def _obstacle_summary(obstacles, leg_obstacles):

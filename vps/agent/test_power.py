@@ -250,6 +250,46 @@ check("a single sample has no trend", one["trend_v_per_h"] is None)
 check("unsorted input is handled",
       power.assess_series(list(reversed(SERIES[:20])), now=SERIES[19][0])["available"] is True)
 
+# --- assess(): the datasource read the engine actually calls ----------------
+# Everything above drives the pure `assess_series`. `assess` is the wrapper the tile and the
+# alert loop call, and it has three behaviours of its own (#55): a read that raises must not take
+# the engine down, an empty window falls back to the latest value, and a normal window is passed
+# through unchanged.
+print("assess() through a datasource:")
+
+
+class FakeSource:
+    def __init__(self, rows=None, latest=None, raises=None):
+        self.rows, self.latest, self.raises, self.asked = rows, latest, raises, []
+
+    def series(self, path, minutes):
+        self.asked.append((path, minutes))
+        if self.raises:
+            raise self.raises
+        return list(self.rows or [])
+
+    def latest_value(self, path):
+        return self.latest
+
+
+src = FakeSource(rows=[r for r in SERIES if r[0] <= T0 + 460 * 60])
+via = power.assess(src, now=T0 + 460 * 60)
+check("a normal window is read on the voltage path over the trend window",
+      src.asked == [(power.PATH, power.WINDOW_MIN)])
+check("...and gives exactly what assess_series gives on the same rows",
+      via == power.assess_series(src.rows, now=T0 + 460 * 60))
+down = power.assess(FakeSource(raises=RuntimeError("archive locked")), now=T0)
+check("a read that raises is 'unknown', never an exception into the engine",
+      down["status"] == "unknown" and down["available"] is False
+      and "archive locked" in down["note"])
+lone = power.assess(FakeSource(rows=[], latest=12.41), now=T0)
+check("an empty window falls back to the latest value (one sample, shown, no alarm)",
+      lone["available"] is True and lone["volts"] == 12.41 and lone["samples"] == 1
+      and lone["status"] == "ok")
+none = power.assess(FakeSource(rows=[], latest=None), now=T0)
+check("no window and no latest value -> unknown", none["status"] == "unknown"
+      and none["available"] is False)
+
 print("\nthe headline, for the record:")
 for m in (30, 180, 300, 400, 460, 660, 950):
     r = at(m)

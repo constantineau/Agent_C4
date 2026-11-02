@@ -3,6 +3,29 @@
 Goal (Cole): **lose no telemetry**, and **copy all telemetry off the Pi to the VPS**.
 Deletion from the boat is allowed only *after* an off-boat copy is sha256-verified.
 
+## ⏸ PICK UP HERE — 2026-11-02 LATE SESSION END (dev @ e56fd0c, main @ 405be7f)
+
+**C4 is OUT OF THE WATER UNTIL SPRING.** Shore work only. Boat steps (Lab Deploy push, Garmin dockside check, practice sail) are spring items.
+
+**Merged to dev today (wave 2, Cole's "merge N"):** #201 timing tests, #195 backfill/alert tests (+ alerts newest first, engine read error = "No live data", silent depth sensor holds the alarm), #196 hollow tests + archiver kept-window fix (#34 first half) + attitude "unknown", #200 coastline failure degrades routes + exact obstacle check + "Forecast ends before the finish" warning (closes #51, #145). Wave-1 issues closed on map #188 (it opens with a "Where we are" block).
+**CI is now a REQUIRED check on dev and main** (admins exempt, so progress pushes still work).
+**Lab + VPS agent NOT rebuilt yet** for today's merges — do it after the open PRs land, then check the Lab is up.
+
+**DEV CI IS RED until #204 merges.** `pi/orin/reroute/test_reroute.py` was a time bomb (test pins now to 2026-11-01; GribSource.pick_cycle used the wall clock). #204 fixes it, Codex clean. Needs Cole's "merge 204".
+
+**Open PRs, in merge order:**
+1. **#204** reroute clock fix (blocks everything else's CI).
+2. **#198** Lab nightly backup + tested restore + boat archive copy-off (#180/#181). Codex done through 10 rounds; dev merged in (coastline conflict resolved, 61860f3). Its CI failed only on the #204 test → re-run CI after #204. Leftovers in **#202**. After merge Cole enables it: README in tools/backup (create gs://constantineau-c4-nightly Standard class, install units, first run, restore drill, enable timer).
+3. **#197** honest-wind routes. Agent was adding Cole's picks (refuse forecast >6 h old, gap-fill ≤10 nm, 90 s re-route limit) when the session ended — check branch w2-router-wind for a new commit, then Codex + CI.
+4. **#199** robust Lab race ingest (schema-bound replies, PDFs as PDFs, nothing dropped silently, notes saved with the race). Agent was adding Cole's picks (background job with progress; models claude-fable-5-1 → claude-opus-5 fallback) + a live check (SORC ×3, Opus fallback ×1, Bayview ×1, < $15) — check branch fix-ingest-json, then Codex + CI. If ANTHROPIC_MODEL_CHAIN is set in the Lab env, the agent reports the line to change.
+Agent IDs from this session can't be messaged from a new one: spawn fresh agents in the same worktrees (/mnt/data/c4-wt/<branch>).
+
+**Cole's decisions today (all "your picks"):** alerts newest first; read error = no live data; attitude missing = unknown; CI required; shoreline failure keeps the route with "Don't use it"; past-forecast routes = degraded; forecast >6 h old refused; gap-fill ≤10 nm; 90 s re-route limit; Lab 12 kn northerly fixed (todo, #203, after #200 — now merged, so start it); ingest PDFs as PDFs, background job, broken link = build + flag, models Fable 5.1 / Opus 5; nightlies in a separate bucket with pruning, daily dump, no encryption, copy-off measured in spring.
+**Lab Anthropic credit was topped up 2026-11-02** (it ran out mid-session).
+
+**Next:** merge #204 → re-run #198 CI → merge #198; finish #197 and #199 (Codex + CI, Cole's merge); Lab + VPS agent rebuild; #203 Lab northerly + robustness-run warnings; then the rest of map #188 (engine correctness: #162 shared SQLite connection first, #159–#161, #163, #164, #166, #167; copilot LLM guardrails #53, #176, #54).
+**Gotchas:** parallel agents' `make ci` clobber the shared `sr33-ci-*` images — use private tags or trust GitHub CI; Codex reviews right after a push can read the old head (wait a few seconds); run codex-review.sh one at a time from the main checkout.
+
 ## ⏸ PICK UP HERE — 2026-11-02 SESSION END (dev = main @ 405be7f)
 
 **Done this session:**

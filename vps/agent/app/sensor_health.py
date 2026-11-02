@@ -230,6 +230,14 @@ def attitude_plausible(roll_deg=None, pitch_deg=None):
 
     One sample is enough — that is the whole value of a range gate. At 22:58Z on Jul 18 the
     first bad sample was roll 133.1°, and this would have flagged it on the spot."""
+    if roll_deg is None and pitch_deg is None:
+        # No reading is not a pass (Cole 2026-11-02: "attitude is a less important parameter,
+        # unknown is best here"). `ok` stays True — no limit was broken — but the status says we
+        # could not look. `assess` keeps this out of the roll-up, so a boat whose Orca does not
+        # share attitude doesn't sit on a grey chip for it.
+        return {"ok": True, "status": "unknown", "reason": "no attitude reading",
+                "roll_deg": None, "pitch_deg": None,
+                "limits": {"roll_deg": ROLL_LIMIT_DEG, "pitch_deg": PITCH_LIMIT_DEG}}
     bad = []
     if roll_deg is not None and abs(roll_deg) > ROLL_LIMIT_DEG:
         bad.append(f"roll {roll_deg:+.1f}° beyond ±{ROLL_LIMIT_DEG:g}°")
@@ -546,14 +554,17 @@ def assess(source=None, minutes=None, conditions=None, previous=None, previous_a
 
     prov = assess_provenance((conditions or {}).get("channels") or {}, ais_excluded=ais)
 
-    statuses = (att["status"], hb.get("status"), prov["status"])
+    # attitude is the least important check: no reading shows as unknown on its own row but does
+    # not pull the whole chip to unknown; a broken limit still counts in full
+    statuses = ("ok" if att["status"] == "unknown" else att["status"], hb.get("status"),
+                prov["status"])
     worst = "danger" if "danger" in statuses else (
         "warn" if "warn" in statuses else
         "unknown" if "unknown" in statuses else "ok")
     # One line the iPad's health chip can show verbatim: every check that is not clean, worst
     # first. A chip that says "3 flags" and makes the crew go looking is a chip they ignore.
     flags = []
-    if att["status"] != "ok":
+    if att["status"] in ("warn", "danger"):
         flags.append(att["reason"])
     if hb.get("status") in ("warn", "danger"):
         flags.append(hb["reason"])
