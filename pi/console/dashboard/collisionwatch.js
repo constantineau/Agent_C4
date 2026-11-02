@@ -96,7 +96,34 @@
     return level;
   }
 
-  const api = { newState, track, offReason, strip, alertsFor, OFFLINE_MS, MAX_LINES };
+  /* GET/POST `url` and parse the JSON body, all inside ONE `ms` deadline: the abort timer stays
+     armed through the body read, so a server that sends its headers and then stalls mid-body can't
+     hang the poll (Codex on #191: clearing the timer before resp.json() did exactly that). Resolves
+     the parsed body, or null on any failure, non-2xx, timeout or bad JSON. Never rejects. */
+  async function fetchJsonWithin(url, opts, ms, fetchImpl) {
+    const f = fetchImpl || ((typeof fetch === "function") ? fetch : null);
+    if (!f) return null;
+    const ctl = new AbortController();
+    const to = setTimeout(() => ctl.abort(), ms);
+    try {
+      const resp = await f(url, Object.assign({}, opts || {}, { signal: ctl.signal }));
+      return resp.ok ? await resp.json() : null;
+    } catch (e) {
+      return null;
+    } finally {
+      clearTimeout(to);
+    }
+  }
+
+  /* the independent watchdog's one step: judge the watch on the tablet clock from the last good
+     parse (track() is fed only by successful polls), whether or not a poll ever completes.
+     Returns the new off reason. */
+  function watchdogStep(coach, st, nowMs) {
+    return offReason(coach, st, nowMs);
+  }
+
+  const api = { newState, track, offReason, strip, alertsFor, fetchJsonWithin, watchdogStep,
+    OFFLINE_MS, MAX_LINES };
   root.C4CollisionWatch = api;
   if (typeof module === "object" && module.exports) module.exports = api;
 })(typeof window !== "undefined" ? window : globalThis);

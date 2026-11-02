@@ -7,6 +7,7 @@
 "use strict";
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const http = require("node:http");
 const path = require("node:path");
 const COL = require(path.join(__dirname, "dashboard", "collisionwatch.js"));
 
@@ -180,16 +181,76 @@ test("dashboard.js wires it: renderCoach uses the strip, fetchCoach judges OFF o
   const src = fs.readFileSync(path.join(__dirname, "dashboard", "dashboard.js"), "utf8");
   const html = fs.readFileSync(path.join(__dirname, "dashboard", "index.html"), "utf8");
   assert.ok(/COL\.strip\(App\.coach, App\.coachOff\)/.test(src));
-  assert.ok(/COL\.track\(colState, r, now\)/.test(src) && /App\.coachOff = COL\.offReason/.test(src));
+  assert.ok(/COL\.track\(colState, r, Date\.now\(\)\)/.test(src) && /App\.coachOff = COL\.watchdogStep/.test(src));
   assert.ok(/COL\.alertsFor\(/.test(src));
   assert.ok(!/c\.history\[0\]\.spoken/.test(src), "the old history-first strip is gone");
   assert.ok(html.indexOf("collisionwatch.js") > -1 && html.indexOf("collisionwatch.js") < html.indexOf("dashboard.js?"));
 });
 
-let fails = 0;
-for (const [name, fn] of cases) {
-  try { fn(); console.log("  [PASS] " + name); }
-  catch (e) { fails++; console.log("  [FAIL] " + name + "\n         " + (e && e.message)); }
+/* ---- a stalled body (Codex on #191 at dedaf39): headers sent, body never finishes ---- */
+function server(handler) {
+  return new Promise((resolve) => {
+    const srv = http.createServer(handler);
+    srv.listen(0, "127.0.0.1", () => resolve(srv));
+  });
 }
-console.log(fails ? "\nFAIL (" + fails + ")" : "\nPASS");
-process.exit(fails ? 1 : 0);
+const urlOf = (srv, p) => "http://127.0.0.1:" + srv.address().port + p;
+
+test("a /coach body that stalls after the headers → null within the deadline (no hung poll)", async () => {
+  const srv = await server((req, res) => {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.write('{"active":[{"id":"ais:1:act","category":"safety"');   // ...and never ends
+  });
+  try {
+    const t0 = Date.now();
+    const r = await COL.fetchJsonWithin(urlOf(srv, "/coach"), { headers: { Accept: "application/json" } }, 400);
+    const took = Date.now() - t0;
+    assert.equal(r, null);
+    assert.ok(took >= 350 && took < 3000, "returned after " + took + " ms");
+  } finally { srv.closeAllConnections(); srv.close(); }
+});
+
+test("fetchJsonWithin: a good body parses; non-2xx, bad JSON and no server are null, never a throw", async () => {
+  const srv = await server((req, res) => {
+    if (req.url === "/ok") { res.writeHead(200, { "Content-Type": "application/json" }); res.end('{"a":1}'); }
+    else if (req.url === "/bad") { res.writeHead(200); res.end("{not json"); }
+    else { res.writeHead(503); res.end("{}"); }
+  });
+  try {
+    assert.deepEqual(await COL.fetchJsonWithin(urlOf(srv, "/ok"), {}, 2000), { a: 1 });
+    assert.equal(await COL.fetchJsonWithin(urlOf(srv, "/bad"), {}, 2000), null);
+    assert.equal(await COL.fetchJsonWithin(urlOf(srv, "/down"), {}, 2000), null);
+  } finally { srv.closeAllConnections(); srv.close(); }
+  assert.equal(await COL.fetchJsonWithin("http://127.0.0.1:9/coach", {}, 2000), null);
+});
+
+test("stalled polls: the watchdog alone takes the watch OFF a minute after the last good parse", () => {
+  const c = coach({ active: [risk("1", "FERRY", 0.2, 6)] });
+  const st = live(c, T0);                                // last good parse at T0
+  // no poll completes after this (each one stalls); only the watchdog runs, every 5 s
+  let off = null;
+  for (let t = 5000; t <= 65000; t += 5000) off = COL.watchdogStep(c, st, T0 + t);
+  assert.equal(off, "copilot offline");
+  assert.equal(COL.strip(c, off).kind, "off");           // the old collision result is not on screen
+});
+
+test("dashboard.js: every copilot fetch keeps its deadline through the body, and the watchdog runs on its own timer", () => {
+  const src = fs.readFileSync(path.join(__dirname, "dashboard", "dashboard.js"), "utf8");
+  // the old shape: clearTimeout(to) right after `await fetch(...)`, before resp.json()
+  assert.ok(!/clearTimeout\(to\);\s*\n\s*(r = |const r = )resp\.ok \? await resp\.json\(\)/.test(src));
+  for (const ep of ["/coach", "/dashboard", "/strategy", "/briefs/"]) {
+    assert.ok(new RegExp('COL\\.fetchJsonWithin\\(COPILOT \\+ "' + ep.replace(/\//g, "\\/")).test(src), ep);
+  }
+  assert.ok(/setInterval\(coachWatchdog, \d+\)/.test(src));
+  assert.ok(/COL\.watchdogStep\(App\.coach, colState, Date\.now\(\)\)/.test(src));
+});
+
+(async () => {
+  let fails = 0;
+  for (const [name, fn] of cases) {
+    try { await fn(); console.log("  [PASS] " + name); }
+    catch (e) { fails++; console.log("  [FAIL] " + name + "\n         " + (e && e.message)); }
+  }
+  console.log(fails ? "\nFAIL (" + fails + ")" : "\nPASS");
+  process.exit(fails ? 1 : 0);
+})();
