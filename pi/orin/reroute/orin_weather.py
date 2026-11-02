@@ -131,6 +131,11 @@ class GribSource:
         return best[1] if best else None
 
     def pick_cycle(self, now=None, min_horizon_h=0):
+        # The run's own "now" (its window start), not the wall clock: the job is told what time it
+        # is (`job.run(now=...)`), and a replay or test with a fixed now must get the cycle that
+        # was freshest then. On the boat the two are the same moment.
+        if now is None and self._t0 is not None:
+            now = dt.datetime.fromtimestamp(float(self._t0), dt.timezone.utc)
         if self._budget.online:
             return self._src.pick_cycle(now, min_horizon_h=min_horizon_h)
         return self.best_cached_cycle() or self._src.pick_cycle(now, min_horizon_h=min_horizon_h)
