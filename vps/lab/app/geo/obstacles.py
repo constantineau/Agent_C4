@@ -9,7 +9,7 @@ The optimizer routes each leg on its own mask (`build_leg_fields`, #141): these 
 leg, plus only the rounding barriers of the islands that leg rounds. Masks are cached and
 queried O(1) in the hot loop:
   - `blocked(lat, lon)`          — is this point on an obstacle?
-  - `crosses(lat1,lon1,lat2,lon2)` — does this leg step cut through one? (sampled along the segment)
+  - `crosses(lat1,lon1,lat2,lon2)` — does this leg step touch one? (exact grid walk, #145)
 
 Coordinates everywhere here are decimal degrees, WGS84. Ring/polygon vertices are (lon, lat) to
 match GeoJSON; the public point/segment API takes (lat, lon) to match the rest of the app.
@@ -21,6 +21,8 @@ import hashlib
 import math
 import os
 import threading
+
+from shared import gridwalk
 
 from . import coastline
 from . import enc
@@ -76,6 +78,10 @@ class ObstacleField:
         self.source = COASTLINE_SOURCE                     # which coastline/obstacle dataset built this
         self.safety_depth = None                           # ENC no-go depth used (draft + margin), m
         self.active = False                                # any obstacle present at all
+        # the shoreline: "off" (not asked for), "ok" (loaded; an empty box is real open water) or
+        # "failed" (couldn't load: the mask has NO land in it, and must never pass as checked, #51)
+        self.land = "off"
+        self.land_error = None
 
     # --- cell <-> coord ------------------------------------------------------
     def _ix(self, lon):
@@ -93,18 +99,14 @@ class ObstacleField:
         return self.mask[iy * self.nx + ix] == 1
 
     def crosses(self, lat1, lon1, lat2, lon2) -> bool:
-        """True if the great-ish-circle segment passes over any obstacle (sampled < 1 cell apart)."""
+        """True if the straight segment touches any blocked cell. Exact (shared/gridwalk.py, a
+        supercover): a step that clips a cell's corner is caught, which half-cell sampling missed
+        (#145). Outside the grid is open water, as in `blocked`."""
         if not self.active:
             return False
-        dlat = lat2 - lat1
-        dlon = lon2 - lon1
-        span = math.hypot(dlat, dlon)
-        steps = max(2, int(span / (self.res * 0.5)) + 1)
-        for k in range(steps + 1):
-            f = k / steps
-            if self.blocked(lat1 + dlat * f, lon1 + dlon * f):
-                return True
-        return False
+        return gridwalk.any_set(self.mask, self.nx, self.ny,
+                                (lon1 - self.w) / self.res, (lat1 - self.s) / self.res,
+                                (lon2 - self.w) / self.res, (lat2 - self.s) / self.res)
 
     # --- rasterization -------------------------------------------------------
     def _fill_polygon(self, rings, value: int, layer: str):
@@ -227,6 +229,7 @@ class ObstacleField:
     def summary(self) -> dict:
         return {
             "active": self.active,
+            "land": self.land,
             "bbox": self.bbox,
             "res_deg": self.res,
             "grid": [self.nx, self.ny],
@@ -410,6 +413,7 @@ def build_for_course(definition: dict, course_id, bbox, *, coastline_on=True, zo
     #    land was never blocked → routes cut straight through it.) The backstop defaults to GSHHG
     #    full-res (catches the sub-nm Great-Lakes islands NE omits, e.g. Cove Island), NE as fallback.
     if coastline_on:
+        field.land = "ok"                                    # _fill_global_backstop says if not
         if field.source == "enc":
             try:
                 enc.ensure_bbox(bbox, cache_dir)
@@ -475,7 +479,7 @@ def build_for_course(definition: dict, course_id, bbox, *, coastline_on=True, zo
     if islands_on and ROUNDSIDE_ISLANDS and barriers:
         _add_barriers(field, _island_rounding_marks(definition, course_id))
 
-    if ck is not None:
+    if ck is not None and field.land != "failed":            # a failed load is retried next run
         _cache_put(ck, field)
     return field
 
@@ -573,11 +577,12 @@ def build_leg_fields(definition, course_id, bbox, *, source=None, safety_depth=N
             out.append(base)
             continue
         key = bkey + "|leg" + hashlib.sha1(repr(_barrier_sig(mine)).encode()).hexdigest()[:12]
-        f = _cache_get(key)
+        f = _cache_get(key) if base.land != "failed" else None
         if f is None:
             f = _copy_field(base)
             _add_barriers(f, mine)
-            _cache_put(key, f)
+            if base.land != "failed":
+                _cache_put(key, f)
         out.append(f)
     return base, out
 
@@ -592,6 +597,7 @@ def _copy_field(field):
     f.layers = dict(field.layers)
     f.geometry = dict(field.geometry, rounding_barriers=list(field.geometry["rounding_barriers"]))
     f.source, f.safety_depth, f.active = field.source, field.safety_depth, field.active
+    f.land, f.land_error = field.land, field.land_error
     return f
 
 
@@ -616,6 +622,8 @@ def legs_summary(base, legs):
     s["cells_blocked"] = sum(s["layers"].values())
     s["geometry"] = dict(s["geometry"], rounding_barriers=drawn)
     s["active"] = any(f.active for f in fields)
+    if any(getattr(f, "land", None) == "failed" for f in fields):
+        s["land"] = "failed"
     return s
 
 
@@ -627,12 +635,19 @@ def _fill_global_backstop(field, cache_dir):
     expose the same land/lakes/islands roles so this code is source-agnostic. Used both as the primary
     source in non-ENC mode and as an always-on UNION BACKSTOP under ENC (which is US-only) so
     Canadian/non-US land is never missed. Only ADDS land + carves lakes; safe to run before ENC
-    overlays it. Returns the loaded layers."""
+    overlays it. Returns the loaded layers.
+
+    When no shoreline can be loaded the field is marked `land = "failed"` (with the reason) and
+    nothing is drawn: the caller must say the route's land was not checked, never treat the
+    empty mask as open water (#51)."""
     try:
         coastline.ensure_global(cache_dir)
         layers = coastline.layers_in_bbox(field.bbox, cache_dir)
-    except Exception:
-        layers = {}
+    except Exception as exc:  # noqa: BLE001 — any failure is "not loaded", reported, never water
+        field.land = "failed"
+        field.land_error = f"{type(exc).__name__}: {exc}"[:200]
+        print(f"[obstacles] shoreline did not load: {field.land_error}", flush=True)
+        return {}
     for poly in layers.get("land", []):
         field._fill_polygon(poly, 1, "coastline")
     for poly in layers.get("lakes", []):

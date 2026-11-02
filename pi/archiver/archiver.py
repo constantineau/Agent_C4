@@ -1410,7 +1410,11 @@ def _derived_window(conn, sessions, s, now):
     if s["end_ts"] is None:
         return None                     # an open session already reaches into the future
     key = (s["id"], s["start_ts"], s["end_ts"])
-    settled = now - s["end_ts"] > 3600  # a race that ended an hour ago cannot grow new telemetry
+    # Settled = the motion this derivation reads (up to end_ts + DERIVE_AHEAD_S) is all in the
+    # past, so no new telemetry can change the answer. NOT "an hour after the button": on Jul 18
+    # the stop was pressed with five hours still to sail, so a window cached an hour after the
+    # button froze on the motion so far and the rest of the race went on the deletion path (#34).
+    settled = now - s["end_ts"] > DERIVE_AHEAD_S
     if settled and key in _DERIVED_CACHE:
         return _DERIVED_CACHE[key]
     motion = motion_series(conn, s["start_ts"] - DERIVE_BEHIND_S, s["end_ts"] + DERIVE_AHEAD_S,
@@ -1434,7 +1438,7 @@ def _derived_window(conn, sessions, s, now):
     return out
 
 
-def session_windows(engine_db=None, conn=None):
+def session_windows(engine_db=None, conn=None, now=None):
     """Everything the prune must KEEP, as [(start_iso, end_iso)]; None = unreadable (DON'T prune).
 
     The markers are taps on the iPad's ⏺ LOG button, and Jul 18 2026 is what trusting them costs:
@@ -1453,7 +1457,7 @@ def session_windows(engine_db=None, conn=None):
         ec.close()
     except Exception:
         return None
-    now = datetime.now(timezone.utc).timestamp()
+    now = datetime.now(timezone.utc).timestamp() if now is None else now
     sessions = [{"id": i, "race_id": rid, "start_ts": float(a),
                  "end_ts": None if b is None else float(b)} for i, rid, a, b in rows]
     wins = [(_iso(s["start_ts"]),

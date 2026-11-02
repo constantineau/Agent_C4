@@ -37,7 +37,10 @@ def test_lockstep():
             for a in (None, 0, 14.3, 15.0, 15.7, -12, True, False, "C0", ["J1", "C0"], [], "15")
             for v in (15, -12, 0.0, True, False, "C0", "c0", "15")]
     bad = [(op, a, v) for op, a, v in grid if oracle.pred_ok(op, a, v) != real(op, a, v)]
-    return _check(f"pred_ok agrees on {len(grid)} cases", not bad) or print("   drift:", bad[:5])
+    agrees = _check(f"pred_ok agrees on {len(grid)} cases", not bad)
+    if bad:     # was `_check(...) or print(...)`: None on a failure, so `ok &=` raised (#55)
+        print("   drift:", bad[:5])
+    return agrees
 
 
 def test_generator_labels():
