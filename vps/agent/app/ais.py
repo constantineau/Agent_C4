@@ -127,31 +127,34 @@ def _latest_sample(path):
     return float(smp[0]), (float(smp[1]) if smp[1] is not None else None)
 
 
-# The own fixes seen, newest last, at most two: (lat, lon, epoch) with DISTINCT epochs. Derived
-# speed/course is a pure function of the fix being read and the one before it, so every reader of
-# the same fix gets the same answer (reading twice changes nothing), until a newer fix arrives.
+# The own fixes seen in the last DERIVE_MAX_S, oldest first, DISTINCT times: (lat, lon, epoch).
+# Derived speed/course for a fix is a pure function of that fix and the ring's older fixes, so every
+# reader of the same fix gets the same answer (reading twice changes nothing) until a newer fix
+# arrives. A ring, not just the previous fix: at 1 Hz the previous fix is 1 s back, under the
+# DERIVE_MIN_S baseline, and the derivation would never run.
 _FIXES = []
 _FIX_LOCK = threading.Lock()
-DERIVE_MIN_S, DERIVE_MAX_S = 2.0, 120.0
+DERIVE_MIN_S, DERIVE_PREF_S, DERIVE_MAX_S = 2.0, 10.0, 120.0
 
 
 def _note_fix(lat, lon, e):
-    """Record an own fix by its time (idempotent: the same fix again is a no-op) and return the fix
-    before it, or None."""
+    """Record an own fix by its time (idempotent: the same fix again is a no-op) and return the
+    base fix to derive from: the newest fix at least DERIVE_PREF_S older, else the newest at least
+    DERIVE_MIN_S older, within DERIVE_MAX_S. None when there is none."""
     with _FIX_LOCK:
         if _FIXES and e < _FIXES[-1][2] - DERIVE_MAX_S:
             _FIXES.clear()                   # the clock stepped back: start over from this fix
         if not _FIXES or e > _FIXES[-1][2]:
             _FIXES.append((lat, lon, e))
-            del _FIXES[:-2]
-        for i in range(len(_FIXES) - 1, -1, -1):
-            if _FIXES[i][2] == e:
-                return _FIXES[i - 1] if i > 0 else None
-        return None                          # an older fix than any held: nothing to derive from
+            while _FIXES and _FIXES[0][2] < _FIXES[-1][2] - DERIVE_MAX_S:
+                _FIXES.pop(0)
+        older = [f for f in _FIXES if e - DERIVE_MAX_S <= f[2] <= e - DERIVE_MIN_S]
+    pref = [f for f in older if f[2] <= e - DERIVE_PREF_S]
+    return (pref or older or [None])[-1]
 
 
 def _derive(prev, lat, lon, e):
-    """(sog kn, cog deg | None) from the previous fix to this one, or None when they are not
+    """(sog kn, cog deg | None) from the base fix to this one, or None when they are not
     DERIVE_MIN_S..DERIVE_MAX_S apart."""
     if prev is None or not (DERIVE_MIN_S <= e - prev[2] <= DERIVE_MAX_S):
         return None
@@ -191,16 +194,26 @@ def _own_ship():
     sog_kn = sog * _MS_TO_KN if sog is not None else None
     cog_deg = math.degrees(cog) % 360 if cog is not None else None
     src = "measured" if sog_kn is not None else None
+    cog_src = "measured" if cog_deg is not None else None
+    if cog_deg is None:
+        # no COG: the boat's HEADING is the next best course (true, else magnetic + variation);
+        # leeway/current make it approximate, and the reply says so (own_cog_source "heading")
+        hdg = _motion_sample("navigation.headingTrue", now)
+        if hdg is None:
+            mag = _motion_sample("navigation.headingMagnetic", now)
+            var = _motion_sample("navigation.magneticVariation", now)
+            hdg = mag + var if mag is not None and var is not None else None
+        if hdg is not None:
+            cog_deg, cog_src = math.degrees(hdg) % 360, "heading"
     if lat is not None and lon is not None and e is not None:
-        prev = _note_fix(lat, lon, e)
-        d = _derive(prev, lat, lon, e) if sog_kn is None else None
-        if d is not None:
+        d = _derive(_note_fix(lat, lon, e), lat, lon, e)
+        if d is not None and sog_kn is None:
             sog_kn, src = d[0], "derived"
-            if cog_deg is None:
-                cog_deg = d[1]
+        if d is not None and cog_deg is None and d[1] is not None:
+            cog_deg, cog_src = d[1], "derived"
     return {
         "lat": lat, "lon": lon, "sog": sog_kn, "cog": cog_deg, "motion_source": src,
-        "age_s": max(0.0, now - e) if e is not None else None,
+        "cog_source": cog_src, "age_s": max(0.0, now - e) if e is not None else None,
     }
 
 
@@ -381,9 +394,12 @@ def get_ais_targets(max_range_nm: float = 12):
     # own ship to now as well (the fix can be up to OWN_FIX_MAX_AGE_S old): same clock as the targets
     own = dict(own)
     own["lat"], own["lon"] = _dead_reckon(own["lat"], own["lon"], own["sog"], own["cog"], own.get("age_s"))
-    # None = we don't know our speed (no SOG, stale, nothing to derive it from). False is kept for
-    # a MEASURED speed below the threshold; every consumer treats None as "under way" for safety.
-    underway = None if own["sog"] is None else own["sog"] >= UNDERWAY_KN
+    # None = we don't know our speed (no SOG, stale, nothing to derive it from, or only a DERIVED
+    # low speed). False is kept for a MEASURED speed below the threshold; every consumer treats
+    # None as "under way" for safety.
+    underway = (None if own["sog"] is None
+                else True if own["sog"] >= UNDERWAY_KN
+                else False if own.get("motion_source") == "measured" else None)
     feed_silent = bool(underway is not False
                        and (last_heard_s is None or last_heard_s > AIS_SILENT_MIN * 60))
     if rx_missing or link_down:
@@ -419,6 +435,6 @@ def get_ais_targets(max_range_nm: float = 12):
     targets.sort(key=_threat_key)
     return {**base, "count": len(targets), "own_fix": True, "own_fix_reason": None,
             "underway": underway, "own_sog_kn": round(own["sog"], 1) if own["sog"] is not None else None,
-            "own_motion_source": own.get("motion_source"),
+            "own_motion_source": own.get("motion_source"), "own_cog_source": own.get("cog_source"),
             "feed_silent": feed_silent, "receiver_missing": rx_missing,
             "targets": targets}

@@ -223,6 +223,35 @@ check("no SOG but two fixes 30 s / 0.05 nm apart → derived ~6 kn, under way",
 r2, r3 = run(two), run(two)
 check("reading the SAME fix again gives the same derived motion (no read side effect)",
       r2["own_sog_kn"] == r["own_sog_kn"] == r3["own_sog_kn"] and r3["own_motion_source"] == "derived")
+# 1 Hz fixes (Codex on #191 at b73677d): the previous fix is always 1 s back, under the 2 s
+# baseline; the ring keeps 2 min and derives from the newest fix >= 10 s older
+ais._FIXES.clear()
+t1 = time.time()
+step_nm = 6.0 / 3600.0                                     # 6 kn, 1 s
+r1hz = None
+for i in range(15):
+    s1 = Src([], sog_kn=None, fix_age=0, lat=LAT0 + i * step_nm * NM_LAT)
+    s1.vals["navigation.courseOverGroundTrue"] = None
+    s1.epoch = t1 - 14 + i
+    r1hz = run(s1)
+check("1 Hz fixes at 6 kn → derived ~6 kn, course ~000 (not None)",
+      r1hz["own_motion_source"] == "derived" and abs(r1hz["own_sog_kn"] - 6.0) < 0.3
+      and r1hz["own_cog_source"] == "derived")
+check("…the same fix read again gives the same answer", run(s1)["own_sog_kn"] == r1hz["own_sog_kn"])
+ais._FIXES[:] = [(LAT0 - 0.0001 * NM_LAT, LON0, time.time() - 31)]
+check("a DERIVED low speed (0.01 kn) is not 'measured stopped': underway None, not False", run(Src([], sog_kn=None, fix_age=1))["underway"] is None)
+# heading as the COG stand-in
+ais._FIXES.clear()
+hs = Src([], sog_kn=6.0)
+hs.vals["navigation.courseOverGroundTrue"] = None
+hs.vals["navigation.headingTrue"] = math.radians(90.0)
+r = run(hs)
+check("no COG but a true heading → own_cog_source 'heading'", r["own_cog_source"] == "heading")
+hs.vals["navigation.headingTrue"] = None
+hs.vals["navigation.headingMagnetic"] = math.radians(95.0)
+hs.vals["navigation.magneticVariation"] = math.radians(-7.0)
+ais._FIXES.clear()
+check("…else magnetic + variation", run(hs)["own_cog_source"] == "heading")
 ais._FIXES[:] = [(LAT0 - 0.05 * NM_LAT, LON0, time.time() - 600)]
 check("fixes 10 min apart → too far apart to derive → None",
       run(Src([], sog_kn=None, fix_age=1))["underway"] is None)

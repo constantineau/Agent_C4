@@ -198,7 +198,8 @@ async def scenarios() -> bool:
     return ok
 
 
-def _engine_ais(rows, own_sog_kn=6.0, fix_age=1.0, own_mmsi=None, rx_age=None, link=None):
+def _engine_ais(rows, own_sog_kn=6.0, fix_age=1.0, own_mmsi=None, rx_age=None, link=None,
+                own_cog=0.0, heading=None):
     """The ENGINE's real /ais answer (vps/agent/app/ais.py) for own ship at 45N 83W heading north
     and these raw AIS rows — so the copilot is tested on what the engine actually sends."""
     import os
@@ -211,7 +212,8 @@ def _engine_ais(rows, own_sog_kn=6.0, fix_age=1.0, own_mmsi=None, rx_age=None, l
             return {"navigation.position.latitude": 45.0, "navigation.position.longitude": -83.0,
                     "navigation.speedOverGround": (None if own_sog_kn is None
                                                    else own_sog_kn / ais_mod._MS_TO_KN),
-                    "navigation.courseOverGroundTrue": 0.0}.get(path)
+                    "navigation.courseOverGroundTrue": own_cog,
+                    "navigation.headingTrue": heading}.get(path)
 
         def latest_sample(self, path):
             v = self.latest_value(path)
@@ -333,6 +335,25 @@ async def review_scenarios() -> bool:
     ok &= _check("own speed unknown + stationary target 0.1 nm ahead → a 'now' callout saying our motion is unknown",
                  st["active"] and st["active"][0]["headline"] == "Contact, motion unknown: ANCHORED"
                  and st["active"][0]["urgency"] == "now" and "our speed/course unknown" in st["active"][0]["detail"])
+
+    # Codex on #191 at b73677d: own SOG 1 kn MEASURED, own COG missing, a target at 20 kn from 0.1 nm
+    fast = {"mmsi": "366999032", "name": "FAST", "lat": 45.0 + 0.1 / 60.0, "lon": -83.0,
+            "sog": 20.0, "cog": 180.0}
+    _fresh({"conditions": _COND, "ais": _engine_ais([fast], own_sog_kn=1.0, own_cog=None)})
+    st = await _tick()
+    ok &= _check("own 1 kn, no COG/heading, target at 20 kn from 0.1 nm → NOT hidden by the stopped gate",
+                 st["active"] and st["active"][0]["headline"] == "Contact, motion unknown: FAST"
+                 and st["active"][0]["urgency"] == "now")
+    _fresh({"conditions": _COND, "ais": _engine_ais([fast], own_sog_kn=1.0, own_cog=None, heading=0.0)})
+    st = await _tick()
+    ok &= _check("…with a true heading as the COG stand-in: full CPA → 'Collision risk: FAST'",
+                 st["active"] and st["active"][0]["headline"] == "Collision risk: FAST")
+    nos2 = {"mmsi": "366999033", "name": "MOORED", "lat": 45.0 + 0.2 / 60.0, "lon": -83.0,
+            "sog": None, "cog": None}
+    _fresh({"conditions": _COND, "ais": _engine_ais([nos2], own_sog_kn=0.3, own_cog=0.0)})
+    st = await _tick()
+    ok &= _check("we're MEASURED stopped and the TARGET's motion is unknown → the marina gate still applies",
+                 st["active"] == [])
 
     print("\n== 6d. each blind state is 'Collision watch OFF' ==")
     _fresh({"conditions": _COND, "ais": _engine_ais([freighter], fix_age=45)})

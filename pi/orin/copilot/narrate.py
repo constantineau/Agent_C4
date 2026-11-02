@@ -113,9 +113,11 @@ def _safety_callouts(ais):
         key = t.get("mmsi") or name
         if t.get("motion") == "unknown":
             rng = _num(t.get("range_nm"))
-            # not while we're MEASURED stopped (a marina full of boats with no SOG would bark all
-            # day); an unknown own speed (underway None) counts as under way — the safe side
-            if rng is None or rng > AIS_WATCH_CPA_NM or ais.get("underway") is False:
+            # the stopped-boat gate (a marina full of boats with no SOG would bark all day) applies
+            # ONLY to a target whose own motion is unknown while we are MEASURED stopped. When it's
+            # OUR motion that's unknown, the target may be moving fast at us: never suppressed.
+            if rng is None or rng > AIS_WATCH_CPA_NM or (
+                    t.get("unknown_motion", "target") == "target" and ais.get("underway") is False):
                 continue
             act = rng <= AIS_ACT_CPA_NM
             c = _callout(f"ais:{key}:unk-{'act' if act else 'watch'}", "safety", "now" if act else "soon",
