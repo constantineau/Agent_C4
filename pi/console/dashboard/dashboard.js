@@ -1420,12 +1420,23 @@
     if (!b || !l) return;
     const RL = window.C4RecLog;
     const a = (App.session || {}).active;
+    // The archiver writing nothing (disk full, damaged file, stopped) beats "Logging": a
+    // session only marks what to KEEP. Absent field (older engine, cloud) = no claim either way.
+    const arch = (App.session || {}).archiver;
+    const down = !!arch && arch.recording === false;
+    // Red banner + button label only while a LOG session runs (that is when it costs a race).
+    // With no session, instruments off at the dock is normal: tooltip only.
+    const loud = down && !!a;
+    const warn = document.getElementById("archWarn");
+    if (warn) { warn.hidden = !loud; warn.textContent = loud ? arch.text : ""; }
     const confirming = !!a && Date.now() < recConfirmUntil;
     const picking = !a && Date.now() < recPickUntil;
-    b.classList.toggle("on", !!a);
+    b.classList.toggle("on", !!a && !down);
     b.classList.toggle("confirm", confirming);
-    l.textContent = RL.label(a, { confirming: confirming, picking: picking, nowS: Date.now() / 1000 });
+    l.textContent = loud && !confirming ? arch.text
+      : RL.label(a, { confirming: confirming, picking: picking, nowS: Date.now() / 1000 });
     b.title = confirming ? "Tap again to end \"" + a.name + "\". Or wait to keep logging."
+      : loud ? arch.text + ". Tap twice to end \"" + a.name + "\"."
       : a ? "Logging \"" + a.name + "\". Tap twice to end."
       : "Tap to start logging. Unlogged data is deleted after 7 days.";
     const pick = document.getElementById("recPick");
@@ -1435,6 +1446,9 @@
       document.getElementById("recRace").classList.toggle("pre", pre === "race");
       document.getElementById("recPractice").classList.toggle("pre", pre === "practice");
     }
+    // quiet: not recording with no session, and housekeeping notes ("Archive check overdue")
+    if (down && !a) b.title += " " + arch.text + ".";
+    if (arch && arch.note && !down) b.title += " " + arch.note + ".";
   }
   async function startRec(kind) {
     recPickUntil = 0;
