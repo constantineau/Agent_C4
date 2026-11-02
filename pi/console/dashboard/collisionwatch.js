@@ -27,9 +27,24 @@
 
   /* is this a real /coach answer? A proxy or a broken copilot can answer 200 with `{}` (or junk);
      counting that as a good poll kept the watchdog from ever tripping (Codex on #191). */
+  const isObj = (x) => !!x && typeof x === "object" && !Array.isArray(x);
+  const optStr = (x) => x === undefined || x === null || typeof x === "string";
+  const strArr = (x) => x === undefined || (Array.isArray(x) && x.every((v) => v === null || typeof v === "string"));
+  /* one callout in `active`: what strip() and alertsFor() read */
+  function validCallout(c) {
+    return isObj(c) && typeof c.id === "string" && typeof c.category === "string"
+      && typeof c.urgency === "string" && typeof c.headline === "string" && optStr(c.detail);
+  }
+  /* one coach-history entry: what the strip's history fallback reads */
+  function validEntry(e) {
+    return isObj(e) && typeof e.spoken === "string"
+      && (e.at === undefined || e.at === null || (typeof e.at === "number" && isFinite(e.at)))
+      && strArr(e.callouts) && strArr(e.categories) && strArr(e.ids);
+  }
   function validCoach(r) {
-    return !!r && typeof r === "object" && !Array.isArray(r)
-      && Array.isArray(r.active) && Array.isArray(r.history)
+    return isObj(r)
+      && Array.isArray(r.active) && r.active.every(validCallout)
+      && Array.isArray(r.history) && r.history.every(validEntry)
       && typeof r.running === "boolean"
       && (r.updated_at === null || (typeof r.updated_at === "number" && isFinite(r.updated_at)))
       && (r.seq === undefined || (typeof r.seq === "number" && isFinite(r.seq)))
@@ -149,7 +164,23 @@
     return offReason(coach, st, nowMs);
   }
 
-  const api = { newState, track, validCoach, offReason, strip, alertsFor, fetchJsonWithin, watchdogStep,
+  const DISPLAY_ERROR = "display error";
+  /* the render path can never fail silently: any exception → the OFF state */
+  function safeStrip(coach, off) {
+    try { return strip(coach, off); }
+    catch (e) { return strip(null, DISPLAY_ERROR); }
+  }
+  function safeAlerts(coach, off, alerted, levelOf) {
+    const wasOff = alerted.has(OFF_ID);           // alertsFor may clear it before it throws
+    try { return alertsFor(coach, off, alerted, levelOf); }
+    catch (e) {
+      if (wasOff) { alerted.add(OFF_ID); return null; }   // still the same OFF episode: no repeat
+      return alertsFor(null, DISPLAY_ERROR, alerted, levelOf);
+    }
+  }
+
+  const api = { newState, track, validCoach, validCallout, validEntry, safeStrip, safeAlerts,
+    DISPLAY_ERROR, offReason, strip, alertsFor, fetchJsonWithin, watchdogStep,
     OFFLINE_MS, MAX_LINES };
   root.C4CollisionWatch = api;
   if (typeof module === "object" && module.exports) module.exports = api;

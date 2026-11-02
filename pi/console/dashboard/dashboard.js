@@ -1871,11 +1871,19 @@
     const el = document.getElementById("coachLine");
     if (!el) return;
     if (App.src !== "live") { el.hidden = true; return; }
-    const v = COL.strip(App.coach, App.coachOff);
-    if (!v.lines.length) { el.hidden = true; return; }
-    el.dataset.kind = v.kind;
-    document.getElementById("coachSay").textContent = v.lines.join("\n");
-    document.getElementById("coachWhen").textContent = v.fromHistory ? agoText(v.at) : "";
+    // never fail silently: a strip that can't be built shows "Collision watch OFF: display error"
+    let v = COL.safeStrip(App.coach, App.coachOff);
+    try {
+      if (!v.lines.length) { el.hidden = true; return; }
+      el.dataset.kind = v.kind;
+      document.getElementById("coachSay").textContent = v.lines.join("\n");
+      document.getElementById("coachWhen").textContent = v.fromHistory ? agoText(v.at) : "";
+    } catch (e) {
+      v = COL.safeStrip(null, COL.DISPLAY_ERROR);
+      el.dataset.kind = v.kind;
+      document.getElementById("coachSay").textContent = v.lines.join("\n");
+      document.getElementById("coachWhen").textContent = "";
+    }
     el.hidden = false;
   }
   /* HOLD a failed poll's endpoint at its last good value for a bounded window.
@@ -2627,7 +2635,7 @@
     if (!Sound.on || App.src !== "live") return;
     // ids that left `active` are forgotten, so a contact that clears and comes back sounds again;
     // a worse level is a new id; the watch going OFF sounds once per episode
-    const level = COL.alertsFor(coach, off, Sound.alerted, alertLevel);
+    const level = COL.safeAlerts(coach, off, Sound.alerted, alertLevel);
     if (level) playAlert(level);
   }
   function toggleSound() {

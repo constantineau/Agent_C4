@@ -190,6 +190,49 @@ test("a bad seq or instance is a malformed reply", () => {
   assert.equal(COL.validCoach(coach({ seq: 3, instance: "a1" })), true);
 });
 
+test("`active: [null]` and other malformed entries are a failed poll (Codex on #191)", () => {
+  const bads = [
+    coach({ active: [null] }), coach({ active: [{}] }), coach({ active: ["x"] }),
+    coach({ active: [Object.assign(risk("1", "F", 0.2, 6), { headline: 5 })] }),
+    coach({ active: [Object.assign(risk("1", "F", 0.2, 6), { detail: {} })] }),
+    coach({ active: [Object.assign(risk("1", "F", 0.2, 6), { id: null })] }),
+    coach({ history: [null] }), coach({ history: [{ at: 1 }] }), coach({ history: [{ spoken: "x", at: "1" }] }),
+    coach({ history: [{ spoken: "x", categories: "safety" }] }), coach({ history: [{ spoken: "x", callouts: [1] }] }),
+  ];
+  for (const b of bads) assert.equal(COL.validCoach(b), false, JSON.stringify(b));
+  // a stream of them is a dead copilot to the watchdog
+  const st = COL.newState(T0);
+  for (let t = 0; t <= 75000; t += 15000) assert.equal(COL.track(st, coach({ active: [null] }), T0 + t), false);
+  assert.equal(COL.offReason(null, st, T0 + 75000), "copilot offline");
+  // well-formed entries still pass, incl. a safety history entry and detail-less callouts
+  assert.equal(COL.validCoach(coach({ active: [risk("1", "F", 0.2, 6), { id: "x", category: "data", urgency: "soon", headline: "h" }],
+    history: [{ at: 1, spoken: "s", callouts: ["h"], ids: ["x"], categories: ["safety"] }, { at: null, spoken: "" }] })), true);
+});
+
+test("any exception in the render path forces 'Collision watch OFF: display error'", () => {
+  // things that would throw inside strip() / alertsFor() if they ever got past validation
+  const poison = { active: [null, { category: "safety" }], history: [null] };
+  const v = COL.safeStrip(poison, null);
+  assert.equal(v.kind, "off");
+  assert.deepEqual(v.lines, ["Collision watch OFF: display error. Keep a lookout."]);
+  const throwing = { get active() { throw new Error("boom"); } };
+  assert.equal(COL.safeStrip(throwing, null).kind, "off");
+  const alerted = new Set();
+  assert.equal(COL.safeAlerts(poison, null, alerted, levelOf), "act", "the OFF tone sounds");
+  assert.equal(COL.safeAlerts(poison, null, alerted, levelOf), null, "once per episode");
+  assert.equal(COL.safeAlerts({ active: [{ id: "a", category: "safety", urgency: "now" }] }, null, alerted,
+    () => { throw new Error("levelOf broke"); }), null);
+  // the good path is untouched
+  assert.equal(COL.safeStrip(coach({ active: [risk("1", "FERRY", 0.2, 6)] }), null).kind, "act");
+});
+
+test("dashboard.js renders and alerts only through the safe wrappers", () => {
+  const src = fs.readFileSync(path.join(__dirname, "dashboard", "dashboard.js"), "utf8");
+  assert.ok(/COL\.safeStrip\(App\.coach, App\.coachOff\)/.test(src));
+  assert.ok(/COL\.safeAlerts\(coach, off, Sound\.alerted, alertLevel\)/.test(src));
+  assert.ok(!/COL\.strip\(/.test(src) && !/COL\.alertsFor\(/.test(src));
+});
+
 test("a working, quiet copilot is not OFF (and the strip is hidden)", () => {
   const c = coach({});
   assert.equal(COL.offReason(c, live(c), T0), null);
@@ -229,9 +272,9 @@ test("strip words stay short (12 words max per OFF line)", () => {
 test("dashboard.js wires it: renderCoach uses the strip, fetchCoach judges OFF on every poll", () => {
   const src = fs.readFileSync(path.join(__dirname, "dashboard", "dashboard.js"), "utf8");
   const html = fs.readFileSync(path.join(__dirname, "dashboard", "index.html"), "utf8");
-  assert.ok(/COL\.strip\(App\.coach, App\.coachOff\)/.test(src));
+  assert.ok(/COL\.safeStrip\(App\.coach, App\.coachOff\)/.test(src));
   assert.ok(/if \(COL\.track\(colState, r, Date\.now\(\)\)\) App\.coach = r;/.test(src) && /App\.coachOff = COL\.watchdogStep/.test(src));
-  assert.ok(/COL\.alertsFor\(/.test(src));
+  assert.ok(/COL\.safeAlerts\(/.test(src));
   assert.ok(!/c\.history\[0\]\.spoken/.test(src), "the old history-first strip is gone");
   assert.ok(html.indexOf("collisionwatch.js") > -1 && html.indexOf("collisionwatch.js") < html.indexOf("dashboard.js?"));
 });
