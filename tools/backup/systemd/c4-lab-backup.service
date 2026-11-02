@@ -1,0 +1,20 @@
+# Nightly backup of the Lab's Docker volumes + the dev Postgres (#180). See tools/backup/README.md.
+# Install (as root; the timer is what schedules it):
+#   install -m 644 tools/backup/systemd/c4-lab-backup.{service,timer} /etc/systemd/system/
+#   install -m 600 tools/backup/systemd/c4-lab-backup.env.example /etc/c4-lab-backup.env
+#   systemctl daemon-reload && systemctl enable --now c4-lab-backup.timer
+[Unit]
+Description=Agent C4 Lab + sr33_dev backup (lab_backup.py)
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+RequiresMountsFor=/mnt/data
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/c4-lab-backup.env
+ExecStart=/usr/bin/python3 /home/constantineau/Agent_C4/tools/backup/lab_backup.py backup
+# Background work: never compete with the live stacks for CPU or disk.
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=3h

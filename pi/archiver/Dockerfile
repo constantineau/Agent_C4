@@ -10,5 +10,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY shared/ ./shared/
 COPY pi/archiver/archiver.py ./archiver.py
 COPY pi/archiver/backfill.py ./backfill.py
+COPY pi/archiver/copyoff.py ./copyoff.py
 
 CMD ["python", "archiver.py"]
