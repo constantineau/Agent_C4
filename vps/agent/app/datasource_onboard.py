@@ -339,35 +339,58 @@ class OnboardSource:
                     if not path:
                         continue
                     if isinstance(val, (int, float)) and not isinstance(val, bool):
-                        self._live[(path, source)] = (at, float(val))
+                        self._put_live((path, source), at, float(val))
                     elif isinstance(val, dict):  # flatten position/attitude like the archiver
                         for k, sub in val.items():
                             if isinstance(sub, (int, float)) and not isinstance(sub, bool):
-                                self._live[(f"{path}.{k}", source)] = (at, float(sub))
+                                self._put_live((f"{path}.{k}", source), at, float(sub))
+
+    def _put_live(self, key, at, val):
+        """Hold the newest own-ship reading per (path, source): an out-of-order (older-stamped)
+        delta never replaces a newer one (caller holds _live_lock)."""
+        held = self._live.get(key)
+        if held is None or at >= held[0]:
+            self._live[key] = (at, val)
 
     def _record_ais(self, mmsi, now, path, value, at=None):
         """Accumulate the fields we need from one AIS target's delta, in kn / deg true —
         the same shape the cloud uplink writes to `ais_targets` (caller holds _live_lock).
         `now` = when we heard it (feed liveness); `at` = the update's own timestamp (when the
-        report was made, see _update_time), which dates the position for dead reckoning."""
+        report was made, see _update_time), which dates the position for dead reckoning.
+
+        Out-of-order reports never win: position, SOG and COG each keep their own report time, and
+        an update OLDER than the one held for that field is dropped (a delayed 6-min-old report
+        after a 1-s-old one would otherwise drag the contact out of the 5-min window and clear its
+        collision warning). It still counts as heard (`time`): the feed is alive."""
+        at = now if at is None else at
         t = self._ais.setdefault(mmsi, {"mmsi": mmsi})
         t["time"] = now
+
+        def newer(field):
+            held = t.get(field)
+            if held is not None and at < held:
+                return False
+            t[field] = at
+            return True
+
+        num = isinstance(value, (int, float)) and not isinstance(value, bool)
         if path in ("name", "") and isinstance(value, str) and value:
             t["name"] = value
         elif path == "navigation.position" and isinstance(value, dict):
             # its own clock: `time` above moves on ANY delta (a name update too), and the collision
             # watch dead-reckons a target by the age of its POSITION
-            t["pos_time"] = now if at is None else at
+            if not newer("pos_time"):
+                return
             if isinstance(value.get("latitude"), (int, float)):
                 t["lat"] = float(value["latitude"])
             if isinstance(value.get("longitude"), (int, float)):
                 t["lon"] = float(value["longitude"])
-        elif path == "navigation.speedOverGround" and isinstance(value, (int, float)) \
-                and not isinstance(value, bool):
-            t["sog"] = round(float(value) * _MS_TO_KN, 2)
-        elif path == "navigation.courseOverGroundTrue" and isinstance(value, (int, float)) \
-                and not isinstance(value, bool):
-            t["cog"] = round(math.degrees(float(value)) % 360, 1)
+        elif path == "navigation.speedOverGround" and num:
+            if newer("sog_time"):
+                t["sog"] = round(float(value) * _MS_TO_KN, 2)
+        elif path == "navigation.courseOverGroundTrue" and num:
+            if newer("cog_time"):
+                t["cog"] = round(math.degrees(float(value)) % 360, 1)
 
     def _live_fresh(self, path):
         """[(source, epoch, value)] for a path from the live cache, only entries within TTL."""

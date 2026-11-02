@@ -320,10 +320,37 @@ with tempfile.TemporaryDirectory() as d:
           abs(src.ais_targets(15)[0]["pos_time"] - t_rx) < 2)
     src._ingest_live(delta(SHIP, "garbage", "navigation.position", {"latitude": 45.1, "longitude": -83.0}))
     check("an unparseable stamp → receipt", abs(src.ais_targets(15)[0]["pos_time"] - t_rx) < 2)
+    src._ais = {}                                     # a first report (nothing newer held)
     src._ingest_live(delta(SHIP, iso(t_rx - 3 * 3600), "navigation.position",
                            {"latitude": 45.1, "longitude": -83.0}))
     check("a stamp 3 h old keeps its real age (and drops out of the 15-min window)",
           src.ais_targets(15)[0]["pos_time"] < t_rx - 3 * 3600 + 5)
+    # Codex on #191 at 690dd12: a 1 s-old position, then a delayed 360 s-old report
+    src._ais = {}
+    src._ingest_live(delta(SHIP, iso(t_rx - 1), "navigation.position", {"latitude": 45.05, "longitude": -83.0}))
+    src._ingest_live(delta(SHIP, iso(t_rx - 1), "navigation.speedOverGround", 10 / ais._MS_TO_KN))
+    src._ingest_live(delta(SHIP, iso(t_rx - 1), "navigation.courseOverGroundTrue", math.pi))
+    src._ingest_live(delta(SHIP, iso(t_rx - 360), "navigation.position", {"latitude": 45.2, "longitude": -83.0}))
+    src._ingest_live(delta(SHIP, iso(t_rx - 360), "navigation.speedOverGround", 2 / ais._MS_TO_KN))
+    src._ingest_live(delta(SHIP, iso(t_rx - 360), "navigation.courseOverGroundTrue", 0.0))
+    got = src.ais_targets(5)
+    check("a delayed 360 s report after a 1 s one: the contact stays in the 5-min list",
+          len(got) == 1 and abs(t_rx - got[0]["pos_time"] - 1) < 2)
+    check("…with the newer position, SOG and COG (the old ones are dropped per field)",
+          got and got[0]["lat"] == 45.05 and got[0]["sog"] == 10.0 and got[0]["cog"] == 180.0)
+    check("…and the late report still counts as heard (feed health)", got and abs(got[0]["time"] - time.time()) < 2)
+    src._ingest_live(delta(SHIP, iso(t_rx), "navigation.speedOverGround", 12 / ais._MS_TO_KN))
+    check("a newer SOG on its own still applies", src.ais_targets(5)[0]["sog"] == 12.0)
+    # own ship: an older-stamped own position never replaces a newer one in the live cache
+    src._live = {}
+    own_at = lambda ts, lat: _json.dumps({"updates": [{"$source": GPS24, "timestamp": iso(ts),  # noqa: E731
+                                                       "values": [{"path": "navigation.position",
+                                                                   "value": {"latitude": lat, "longitude": -83.0}}]}]})
+    src._ingest_live(own_at(t_rx - 1, 45.01))
+    src._ingest_live(own_at(t_rx - 90, 44.9))
+    check("own ship: a delayed older fix doesn't overwrite the newer one",
+          src._live[(LAT, GPS24)][1] == 45.01 and abs(t_rx - src._live[(LAT, GPS24)][0] - 1) < 2)
+
     # end to end: 24 kn ship, report stamped 4 min ago 6 nm north, steaming at us; we're stopped
     src._ais = {}
     src._ingest_live(delta(SHIP, iso(t_rx - 240), "navigation.speedOverGround", 24 / ais._MS_TO_KN))
