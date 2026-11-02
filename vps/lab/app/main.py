@@ -132,12 +132,10 @@ def _today():
     return datetime.date.today().isoformat()
 
 
-def _drafted(definition, notes=()):
-    """Validate a draft RaceDefinition and return it with its validation for the review step.
-    Ingest `notes` (a document trimmed, unreadable, skipped…) lead the warnings: the person
-    reviewing must see what the AI did NOT read."""
+def _drafted(definition):
+    """Validate a draft RaceDefinition and return it with its validation for the review step."""
     errors, warnings = race_def.validate(definition)
-    return {"definition": definition, "errors": errors, "warnings": list(notes) + warnings}
+    return {"definition": definition, "errors": errors, "warnings": warnings}
 
 
 def _ingest_fail(exc):
@@ -152,9 +150,12 @@ async def _ingest(docs, sources, skipped):
         raise extract.IngestError(" ".join(skipped) if skipped else "No documents to read.")
     notes = [f"{m} The draft was built WITHOUT it." for m in skipped]
     definition = await run_in_threadpool(extract.extract_race_definition, docs, _today(), notes)
-    definition.setdefault("provenance", {}).setdefault("sources", [])
-    definition["provenance"]["sources"] = sources + definition["provenance"]["sources"]
-    return _drafted(definition, notes)
+    prov = definition.setdefault("provenance", {})
+    prov["sources"] = sources + (prov.get("sources") or [])
+    # what the AI did NOT read travels with the definition (saved with it, listed first by
+    # validate until dismissed in the review), not just in this response
+    prov["ingest_notes"] = [{"text": n, "acknowledged": False} for n in notes]
+    return _drafted(definition)
 
 
 @app.post("/api/ingest/discover")

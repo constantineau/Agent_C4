@@ -687,10 +687,24 @@ function detailProvenance(p) {
   const srcs = (p.sources || []).map((s) =>
     `<li><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.label)}</a>
      <span class="muted">${esc(s.retrieved || "")}</span></li>`).join("");
+  // what ingestion couldn't read: stays in "Check these" until dismissed here (then Save)
+  const notes = (p.ingest_notes || []).map((n, i) => n.acknowledged
+    ? `<li class="muted">${esc(n.text)} (dismissed)</li>`
+    : `<li>${esc(n.text)} <button class="mini" onclick="dismissIngestNote(${i})">Dismiss</button></li>`).join("");
   return `<div class="card"><h3>Sources &amp; notes</h3>
     <ul style="margin:0 0 10px;padding-left:18px">${srcs || '<li class="muted">No sources recorded.</li>'}</ul>
+    ${notes ? `<div class="muted" style="font-size:12px">Not fully read when ingested:</div>
+    <ul style="margin:0 0 10px;padding-left:18px">${notes}</ul>` : ""}
     <label class="muted" style="font-size:12px">SI status ${ein("provenance.si_status", p.si_status, "SI status")}</label>
     <label class="muted" style="font-size:12px">Review notes ${etxt("provenance.review_status", p.review_status, "review notes")}</label></div>`;
+}
+
+function dismissIngestNote(i) {
+  const n = Lab.editDef.provenance.ingest_notes[i];
+  n.acknowledged = true;
+  const v = Lab.editVal || {};
+  v.warnings = (v.warnings || []).filter((w) => w !== "Ingest: " + n.text);
+  paintDetail(); queueSyncDirty();
 }
 
 /* ---------- detail edit: structural mutations (repaint), then save / approve ---------- */

@@ -105,6 +105,7 @@ def load_pdf(label: str, raw: bytes, url: str = "") -> dict:
     (odd or scanned files) isn't fatal: the model can still read the PDF itself."""
     if b"%PDF" not in raw[:1024]:
         raise IngestError(f"{label} isn't a PDF file. Upload the PDF, or paste its link.")
+    original = raw                      # kept for the crude page count if pypdf fails later
     try:
         reader = _pdf_reader(raw)
         note = ""
@@ -119,8 +120,10 @@ def load_pdf(label: str, raw: bytes, url: str = "") -> dict:
     except IngestError:
         raise
     except Exception:  # noqa: BLE001 — pypdf can't parse it; count pages the crude way
-        pages = max(1, len(re.findall(rb"/Type\s*/Page(?!s)", raw)))
+        pages = max(1, len(re.findall(rb"/Type\s*/Page(?!s)", original)))
         text, note = "", ""
+        if raw is None:                 # the unlocked copy failed and then pypdf did too
+            raw = original
     return {"label": label, "url": url, "text": text, "pdf": raw, "pages": pages, "note": note}
 
 

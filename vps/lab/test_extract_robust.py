@@ -243,6 +243,33 @@ except extract.IngestError as e:
 check("a real open password is refused plainly", err == "locked.pdf is password-protected. "
       "Upload an unlocked copy.")
 
+print("restricted PDF whose unlocked copy fails, then pypdf fails: a doc, not a TypeError")
+
+
+class _BrokenReader:
+    is_encrypted = True
+
+    def decrypt(self, pw):
+        return 1
+
+    @property
+    def pages(self):
+        raise ValueError("broken xref")
+
+
+saved_reader, saved_unlock = extract._pdf_reader, extract._unlocked_copy
+extract._pdf_reader = lambda raw: _BrokenReader()
+extract._unlocked_copy = lambda reader, label: (None, "copy failed")
+try:
+    rdoc = extract.load_pdf("odd.pdf", PDF_ODD := blank_pdf(2))
+    got = ""
+except Exception as e:  # noqa: BLE001
+    rdoc, got = None, type(e).__name__
+extract._pdf_reader, extract._unlocked_copy = saved_reader, saved_unlock
+check(f"no crash ({got or 'ok'})", rdoc is not None)
+check("original bytes kept, pages counted the crude way", rdoc and rdoc["pdf"] == PDF_ODD
+      and rdoc["pages"] == 2)
+
 print("a short amendment as text counts as content")
 calls = fake([reply()])
 d, err, notes = run([("amendment-1.html", "Amendment 1: Start postponed to 1100")])
@@ -300,8 +327,25 @@ r = asyncio.run(main.ingest_urls({"urls": ["https://x.org/nor.pdf", "https://x.o
 w = r.get("warnings", []) if isinstance(r, dict) else []
 check("draft built from the good one", isinstance(r, dict) and r["definition"]["name"] == "SORC")
 check("first warning names the skipped doc, plainly",
-      w and w[0].startswith("Couldn't download gone.pdf: the link is broken (404 not found).")
+      w and w[0].startswith("Ingest: Couldn't download gone.pdf: the link is broken (404 not found).")
       and "WITHOUT it" in w[0])
+inotes = r["definition"]["provenance"].get("ingest_notes") or []
+check("the note is kept IN the definition, unacknowledged", len(inotes) == 1
+      and inotes[0]["text"].startswith("Couldn't download gone.pdf") and inotes[0]["acknowledged"] is False)
+
+print("the note survives a save and stays listed until dismissed")
+defn = r["definition"]
+saved = asyncio.run(main.save_race({"definition": defn, "draft": True}))
+check("save keeps listing it", saved["warnings"][0].startswith("Ingest: Couldn't download gone.pdf"))
+stored = main.store.get_race(saved["race_id"]) or {}
+check("stored on disk with the definition",
+      (stored.get("provenance") or {}).get("ingest_notes") == inotes)
+v = main.validate(saved["race_id"])
+check("a later validation (reopen) still lists it", isinstance(v, dict)
+      and any(x.startswith("Ingest: Couldn't download gone.pdf") for x in v["warnings"]))
+defn["provenance"]["ingest_notes"][0]["acknowledged"] = True
+saved = asyncio.run(main.save_race({"definition": defn}))
+check("dismissed → no longer listed", not any(x.startswith("Ingest:") for x in saved["warnings"]))
 check("only the good doc is a source", [s["label"] for s in r["definition"]["provenance"]["sources"]]
       == ["nor.pdf"])
 check("a 404 is not retried", fetched.count("https://x.org/gone.pdf") == 1)
@@ -335,7 +379,7 @@ class _Up:
 calls = fake([reply()])
 r = asyncio.run(main.ingest_upload([_Up("nor.pdf", PDF), _Up("photo.jpg", b"\xff\xd8\xff")]))
 check("draft from the PDF, note for the other", isinstance(r, dict)
-      and r["warnings"][0].startswith("photo.jpg isn't a PDF file"))
+      and r["warnings"][0].startswith("Ingest: photo.jpg isn't a PDF file"))
 
 print("PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)
