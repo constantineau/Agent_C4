@@ -121,9 +121,11 @@ def leg_check(body):
             return {"clear": False, "reason": "course changed"}
         bundle = deviation._load_playbook()
         try:
-            obst = _obstacles(bundle, None, (frm["lat"], frm["lon"]), strict=True)
+            obst = _obstacles(bundle, None, (frm["lat"], frm["lon"]))
         except landchart.ChartUnreadable:
             return {"clear": False, "reason": "chart unreadable"}
+        except CourseUnreadable:
+            return {"clear": False, "reason": "course unreadable"}
         blocked = _blocked_fn(bundle, obst)
         if blocked is not None and blocked(frm, to):
             return {"clear": False, "reason": "obstacle"}
@@ -404,31 +406,33 @@ def _dest_candidate(pts, boat, mark_pos, next_k, blocked):
 
 
 CHART_UNREADABLE = "Chart unreadable. Not sent to GPS."
+COURSE_UNREADABLE = "Course unreadable. Not sent to GPS."
 
 
-def _obstacles(bundle, route=None, boat=None, strict=False):
-    """(disks, polygons, land) of every obstacle aboard for the navigator's course: the bundle's
-    and the deployed definition's islands + zones (reoptimize.course_avoid), and the deployed LAND
+class CourseUnreadable(Exception):
+    """The active course (or its islands / zones) couldn't be read: nothing is checked against
+    it, so nothing is sent or approved."""
+
+
+def _obstacles(bundle, route=None, boat=None):
+    """(disks, polygons, land) of every obstacle aboard for the ACTIVE course: the bundle's and
+    the deployed definition's islands + zones (reoptimize.course_avoid), and the deployed LAND
     chart when it is this course's (landchart.for_course: the same chart, checked the same way,
-    the Orin routes on), else None. Read under the course lock show() holds, so it is the course
-    the route was just checked against.
+    the Orin routes on), else None. THE one obstacle path: the send, the leg check and its
+    30 s re-check all use it. Read under COURSE_LOCK.
 
-    "No chart aboard" (land None) is a known state: the send goes out with the shore warning. A
-    chart aboard that can't be read raises landchart.ChartUnreadable — always: never treated as
-    "no chart", so nothing is sent or approved across land nobody could check. `strict` (the
-    live leg check) also raises when the course itself can't be read, and reads the active
-    course directly when the navigator has no answer (no position yet)."""
+    The course comes from the active route itself, never from the navigator (which has no
+    answer without a position, or can fail): a navigator miss must not drop the course's
+    zones and chart. "No chart aboard" (land None) is a known state: the send goes out with
+    the shore warning. Anything that can't be READ fails closed: CourseUnreadable (the course,
+    its islands or zones), landchart.ChartUnreadable (a chart aboard that can't be read)."""
     try:
-        nav = NAV.get_navigator(route)
-        r = nav.get("route") if nav.get("available") else None
-        if r is None and strict:
-            r = route or NAV.active_route()
+        r = route or NAV.active_route()
         marks = (NAV._marks(r) or []) if r else []
-    except Exception:  # noqa: BLE001
-        if strict:
-            raise
-        r, marks = None, []
-    disks, polys, _d, _c, _n = reoptimize.course_avoid(r, marks, bundle)
+        disks, polys, _d, _c, _n = reoptimize.course_avoid(r, marks, bundle)
+    except Exception as exc:  # noqa: BLE001 — an unread course is never "no obstacles"
+        print(f"[gpsout] course unreadable: {type(exc).__name__}: {exc}", flush=True)
+        raise CourseUnreadable(str(exc)) from exc
     try:
         land = landchart.for_course(r, marks, boat)
     except landchart.ChartUnreadable as exc:
@@ -659,6 +663,8 @@ def _show(source: str = "playbook", variant=None, route=None):
         obstacles = _obstacles(bundle, route, boat)
     except landchart.ChartUnreadable:
         return {"shown": False, "dest_index": None, "note": CHART_UNREADABLE}
+    except CourseUnreadable:
+        return {"shown": False, "dest_index": None, "note": COURSE_UNREADABLE}
     blocked = _blocked_fn(bundle, obstacles)
     idx = _downsample_idx(path, MAX_WPTS, set(verts.values()), blocked)
     if len(idx) > HARD_MAX_WPTS:

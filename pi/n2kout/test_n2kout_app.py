@@ -218,6 +218,10 @@ class FakeSender:
         self.sent.append((pgn, data, dest, self.sa if src is None else src))
         return 1
 
+    def retry_claim(self):
+        self.retries = getattr(self, "retries", 0) + 1
+        return True
+
     def change_address(self, new, claim):
         self.sa = new
         self.sent.append((claim[0], claim[2], 0xFF, new))
@@ -798,6 +802,7 @@ bt.start()
 run_until(bt, lambda: opens["n"] >= 3 and bt.state["running"])
 check("open failed, then recv failed → restarted, running again",
       bt.state["running"] and bt.state["restarts"] == 2 and bt.is_alive())
+check("the bus loop retries a pending claim every second", getattr(fs, "retries", 0) >= 1)
 check("each (re)start claims the address + sends a heartbeat",
       fs.pgns().count(60928) >= 2 and 126993 in fs.pgns())
 A.RESPONDER = bt

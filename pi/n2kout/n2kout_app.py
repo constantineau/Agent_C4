@@ -508,6 +508,7 @@ class _BusThread(threading.Thread):
             self.stop_evt.wait(0.25)       # ISO 11783-5: 250 ms after a claim before other traffic
             self.heartbeat()
             while not self.stop_evt.is_set():
+                self.sender.retry_claim()      # a claim at a new address that didn't go out
                 if self.clock() - self._last_hb >= HEARTBEAT_S:
                     self.heartbeat()
                 try:

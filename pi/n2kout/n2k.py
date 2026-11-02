@@ -266,6 +266,8 @@ class N2kSender:
         self.iface, self.sa = iface, sa
         self._sock = None
         self._seq = {}                       # pgn -> fast-packet sequence counter
+        self.claim_pending = None            # (pgn, prio, data) of a claim not yet on the bus
+        self._claim_tried_at = None
         self._lock = threading.Lock()
         self.frames_sent = 0
         self.send_errors = 0
@@ -306,20 +308,50 @@ class N2kSender:
         with self._lock:
             return self._send_counted(pgn, prio, data, single, dest, src)
 
+    CLAIM_RETRY_S = 1.0
+
     def change_address(self, new_sa: int, claim):
         """Move to `new_sa` and send its address claim (`claim` = (pgn, prio, data)) in ONE hold
         of the send lock: no other thread's frame can go out from the new address before the
-        claim that announces it. new_sa 254 = "cannot claim" (sent from 254; nothing after)."""
+        claim that announces it. Until the claim has actually gone out the claim is PENDING:
+        ordinary sends are refused, and the claim is retried at most once a second (by
+        retry_claim(), which the bus thread calls every second, or by the next send). new_sa
+        254 = "cannot claim" (sent from 254; nothing after)."""
         with self._lock:
             self.sa = new_sa
-            pgn, prio, data = claim
-            return self._send_counted(pgn, prio, data, None, 0xFF, new_sa)
+            self.claim_pending = claim
+            self._claim_tried_at = None
+            return self._try_claim_locked(force=True)
 
-    def _send_counted(self, pgn, prio, data, single, dest, src):
+    def retry_claim(self):
+        """Send a pending claim again if CLAIM_RETRY_S has passed. → True when none is pending."""
+        with self._lock:
+            return self._try_claim_locked()
+
+    def _try_claim_locked(self, force=False):
+        if self.claim_pending is None:
+            return True
+        now = time.monotonic()
+        if not force and self._claim_tried_at is not None \
+                and now - self._claim_tried_at < self.CLAIM_RETRY_S:
+            return False
+        self._claim_tried_at = now
+        pgn, prio, data = self.claim_pending
+        if self._send_counted(pgn, prio, data, None, 0xFF, self.sa, claim=True) > 0:
+            self.claim_pending = None
+            return True
+        return False
+
+    def _send_counted(self, pgn, prio, data, single, dest, src, claim=False):
         sa = self.sa if src is None else src
         if src is None and self.sa > 253:
             self.send_errors += 1
             self.last_error = "no address (claim lost)"
+            self.last_error_at = time.time()
+            return 0
+        if not claim and self.claim_pending is not None and not self._try_claim_locked():
+            self.send_errors += 1
+            self.last_error = "address claim pending"
             self.last_error_at = time.time()
             return 0
         try:

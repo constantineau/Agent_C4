@@ -111,6 +111,8 @@ check("older than FIX_MAX_AGE_S → no fix", gpsout.own_fix(now) is None)
 gpsout.datasource.active = lambda: object()                   # the cloud: no live position
 check("a source without live positions → no fix", gpsout.own_fix(now) is None)
 
+NAV.active_route = lambda: "race"            # the active course, read directly
+NAV._marks = lambda route: []
 print("no fix → refuse:")
 PATH = [{"lat": 44.0 + i * 0.01, "lon": -82.0} for i in range(6)]
 gpsout.deviation._load_playbook = lambda: {"recommended": "a",
@@ -313,9 +315,39 @@ check("no chart aboard → leg check clear (as before)", gpsout.leg_check(leg)["
 r = gpsout.show()
 check("no chart aboard → sent with the shore warning (as before)", r["shown"]
       and r["shore_checked"] is False and r["warning"] == "GPS route doesn't check the shore.")
-NAV.get_navigator = lambda route=None: (_ for _ in ()).throw(RuntimeError("nav down"))
-check("strict: the course can't be read → leg check not clear",
-      gpsout.leg_check(leg)["clear"] is False)
+print("ONE obstacle path: the course comes from the active route, never the navigator:")
+_real_avoid = gpsout.reoptimize.course_avoid
+ROCK_DISK = (44.007, -82.0, 0.1)                     # on the line boat → waypoint 1
+
+
+def avoid_for_race(r, marks, bundle):
+    return ([ROCK_DISK] if r == "race" else []), [], None, None, 0
+
+
+gpsout.reoptimize.course_avoid = avoid_for_race
+leg_rock = {"from": {"lat": 44.003, "lon": -82.0}, "to": {"lat": 44.01, "lon": -82.0},
+            "course": gpsout.course_token()}
+for label, navfn in (("navigator unavailable", lambda route=None: {"available": False}),
+                     ("navigator throwing",
+                      lambda route=None: (_ for _ in ()).throw(RuntimeError("nav down")))):
+    NAV.get_navigator = navfn
+    posts.clear()
+    r = gpsout.show()
+    check(f"{label}: the send still sees the course's zone → steer-to walked back off "
+          f"the line through it (waypoint 0, not 1) [{r.get('dest_index')}]",
+          r.get("dest_index") == 0 and posts and posts[-1][1]["dest_index"] == 0)
+    check(f"{label}: the leg check too → not clear (obstacle)",
+          gpsout.leg_check(leg_rock) == {"clear": False, "reason": "obstacle"})
+gpsout.reoptimize.course_avoid = _real_avoid
+NAV._marks = lambda route: (_ for _ in ()).throw(RuntimeError("marks store down"))
+posts.clear()
+r = gpsout.show()
+check("the course can't be read → send refused 'Course unreadable. Not sent to GPS.'",
+      r == {"shown": False, "dest_index": None, "note": "Course unreadable. Not sent to GPS."}
+      and posts == [])
+check("…and the leg check: not clear, 'course unreadable'",
+      gpsout.leg_check(leg) == {"clear": False, "reason": "course unreadable"})
+NAV._marks = lambda route: MK
 landchart.orinroute._definition_for = _real_def_for
 
 print("a route that isn't the active course is refused:")

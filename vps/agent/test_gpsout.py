@@ -8,6 +8,9 @@ from app import gpsout
 # is pinned in test_reroute_button.py
 gpsout._course_ok = lambda ro: True
 gpsout.own_fix = lambda now=None: (43.001, -82.4, 0)     # a fresh fix at the start of PATH
+# the obstacle lookup reads the ACTIVE course directly: an active course with no marks aboard
+gpsout.NAV.active_route = lambda: "race"
+gpsout.NAV._marks = lambda route: []
 
 ok = True
 

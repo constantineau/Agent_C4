@@ -218,5 +218,50 @@ s2.sa = 254
 s2._sock = FakeSock()
 check("no address (claim lost) → nothing sent", s2.send(*n2k.encode_129283(1.0)) == 0)
 
+print("a claim at a new address that fails is retried, and holds ordinary traffic:")
+
+
+class FlakySock:
+    def __init__(self):
+        self.down, self.frames, self.tries = True, [], 0
+
+    def send(self, raw):
+        self.tries += 1
+        if self.down:
+            raise OSError(105, "No buffer space available")
+        cid = struct.unpack("<I", raw[:4])[0] & 0x1FFFFFFF
+        self.frames.append((n2k.pgn_of(cid), cid & 0xFF))
+
+    def close(self):
+        pass
+
+
+fsock = FlakySock()
+s3 = n2k.N2kSender("fake")
+s3._sock = fsock
+s3.open = lambda: setattr(s3, "_sock", fsock)      # "reopen" the same flaky socket
+ok_claim = s3.change_address(128, n2k.encode_60928())
+check("claim send fails → pending, address already 128", ok_claim is False
+      and s3.claim_pending is not None and s3.sa == 128)
+n = s3.send(*n2k.encode_129283(1.0))
+check("ordinary send while the claim is pending → refused, nothing on the wire",
+      n == 0 and fsock.frames == [] and s3.last_error == "address claim pending")
+tries = fsock.tries
+check("no retry storm: a retry inside 1 s doesn't touch the bus",
+      s3.retry_claim() is False and fsock.tries == tries)
+fsock.down = False
+s3._claim_tried_at -= 1.1                            # a second later
+check("retried after 1 s → the claim goes out from 128, pending cleared",
+      s3.retry_claim() is True and fsock.frames == [(60928, 128)] and s3.claim_pending is None)
+s3.send(*n2k.encode_129283(1.0))
+check("then ordinary traffic flows, after the claim", fsock.frames == [(60928, 128), (129283, 128)])
+fsock.down, fsock.frames = True, []
+s3.change_address(129, n2k.encode_60928())
+fsock.down = False
+s3._claim_tried_at -= 1.1
+s3.send(*n2k.encode_129283(1.0))
+check("a send after the retry interval sends the pending claim first",
+      fsock.frames == [(60928, 129), (129283, 129)])
+
 print("PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)
