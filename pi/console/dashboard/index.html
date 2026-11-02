@@ -25,6 +25,9 @@
          (also satisfies iOS Safari's audio-unlock gesture) -->
     <button class="ctl" id="alertBtn" title="Beep on a safety callout. Tap to turn on and test.">🔔 <b id="alertLbl">OFF</b></button>
   </header>
+  <!-- shown only while the full-res archive is NOT being written (engine /session → archiver) -->
+  <div id="archWarn" role="alert" hidden
+       style="background:var(--act);color:#fff;font-weight:700;text-align:center;padding:6px 12px;"></div>
 
   <!-- ===== Sails bar: the crew-set sail CONFIGURATION (a set — C0 alone, C0+J2, kite+staysail…)
        + main reef. Always available in live mode (no playbook / no course needed) — every change

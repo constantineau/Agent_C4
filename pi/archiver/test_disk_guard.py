@@ -672,15 +672,16 @@ with tempfile.TemporaryDirectory() as d:
     check("a real I/O error still raises (the rotation retries)", raised)
 
 
-# --- 6. startup: count(*) corruption rotates --------------------------------------------------
+# --- 6. startup: a failing probe rotates --------------------------------------------------
 class CountFails:
-    """Wraps a real connection; the startup count(*) says malformed (the boat, 2026-09-02 on)."""
+    """Wraps a real connection; a startup probe says malformed (the boat, 2026-09-02 on, where
+    it was the count(*) — now replaced by the bounded `max(id)` probe)."""
 
     def __init__(self, real):
         self.real = real
 
     def execute(self, sql, *a):
-        if "count(*)" in sql:
+        if "count(*)" in sql or "max(id)" in sql:
             raise sqlite3.DatabaseError("database disk image is malformed")
         return self.real.execute(sql, *a)
 
@@ -688,7 +689,7 @@ class CountFails:
         self.real.close()
 
 
-print("startup: a file that passes quick_check but fails count(*) is rotated, not crash-looped:")
+print("startup: a file that opens but fails a probe is rotated, not crash-looped:")
 with tempfile.TemporaryDirectory() as d:
     db = Path(d) / "archive.db"
     c = archiver.open_db(db)

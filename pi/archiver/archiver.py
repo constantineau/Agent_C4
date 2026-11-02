@@ -43,6 +43,18 @@ except ImportError:                     # pragma: no cover - image without share
 # Writes are offloaded to executor threads (fsync on a slow SD card shouldn't stall the
 # event loop), so the connection is shared across threads and a lock serializes writers.
 _WRITE_LOCK = threading.Lock()
+# ROTATION. One lock orders "replace the archive file" against "start reading it": a rotation
+# (reopen_fresh) holds it from stopping the checks to opening the fresh file, and a background
+# check is registered and started only while holding it, after re-validating the connection,
+# generation and rotation state with no await in between. So a check can never be started on a
+# file that is being moved, whatever the event loop interleaves.
+_ROTATION_LOCK = threading.Lock()
+# The prune holds _PRUNE_LOCK for its whole run (its window derivation reads the connection
+# outside _WRITE_LOCK), and gives up at the next chunk once _ROTATING is set; the rotation takes
+# _PRUNE_LOCK before closing the connection. So no query of the prune is ever running on a
+# connection while it is closed, and the rotation waits at most one query.
+_PRUNE_LOCK = threading.Lock()
+_ROTATING = threading.Event()
 
 SIGNALK_WS = os.environ.get(
     "SIGNALK_WS", "ws://localhost:3010/signalk/v1/stream?subscribe=all"
@@ -80,10 +92,22 @@ CREATE TABLE IF NOT EXISTS sync_state (
 def open_db(path: Path = ARCHIVE_DB) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path, timeout=30, check_same_thread=False)
-    conn.execute("PRAGMA journal_mode=WAL")     # readers (backfill) never block the writer
-    conn.execute("PRAGMA synchronous=FULL")     # durable across power loss — boat-grade
-    conn.executescript(SCHEMA)
-    conn.commit()
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")     # readers (backfill) never block the writer
+        conn.execute("PRAGMA synchronous=FULL")     # durable across power loss — boat-grade
+        # After a checkpoint resets the WAL, truncate the file back to this — so a WAL that grew
+        # while a reader held it (a long check, a debrief) gives its space back.
+        conn.execute("PRAGMA journal_size_limit=67108864")
+        conn.executescript(SCHEMA)
+        conn.commit()
+    except BaseException:
+        # Close BEFORE the caller rotates the file: a leaked WAL connection closed later (by the
+        # garbage collector) cleans up sidecars by NAME, and by then the names are the fresh file's.
+        try:
+            conn.close()
+        except Exception:
+            pass
+        raise
     return conn
 
 
@@ -104,23 +128,82 @@ def open_db(path: Path = ARCHIVE_DB) -> sqlite3.Connection:
 # So: check on startup, rotate on detection, never exit, and never delete. The corrupt file is
 # KEPT — pi/archiver/tools/salvage.py recovered 99.9994% of one of them, which is how the
 # Jul 15–17 archive exists at all.
-CORRUPT_MARKERS = ("malformed", "not a database", "disk image")
+CORRUPT_MARKERS = ("malformed", "not a database", "disk image", "string or blob too big",
+                   "file is encrypted", "unsupported file format", "database corrupt",
+                   "could not decode")
+# Errors that say nothing about the FILE. A good archive must never be moved aside for these:
+# a lock clears, and a full disk, a missing directory or a read-only mount would fail the fresh
+# file exactly the same way (rotating would only litter the card with empty "corrupt" files).
+TRANSIENT_MARKERS = ("locked", "busy", "disk is full", "unable to open", "readonly",
+                     "read-only", "out of memory", "interrupted")
 
 
 def _is_corruption(exc: Exception) -> bool:
-    """True for the errors that mean the FILE is bad, not that the statement was."""
+    """MID-RUN: True for the errors that mean the FILE is bad, not that the statement was.
+
+    Narrow on purpose — a write that fails on a schema bug must not rotate a good archive. But a
+    damaged page does not always say "malformed": a garbled record header comes back as
+    `DataError: string or blob too big`, and garbled text as a UnicodeDecodeError (Python decoding
+    SQLite's own error message). Both are the file."""
+    if isinstance(exc, (UnicodeDecodeError, sqlite3.DataError)):
+        return True
     if not isinstance(exc, sqlite3.DatabaseError):
         return False
     return any(m in str(exc).lower() for m in CORRUPT_MARKERS)
 
 
+def _is_bad_file(exc: Exception) -> bool:
+    """AT OPEN (open, schema read, the bounded startup probes): every database error is the
+    file, except the transient ones above.
+
+    Wider than `_is_corruption` because at open no statement of ours can be wrong — the SQL is
+    fixed — so an error here is the file. Re-raising instead is the crash loop: exit, Docker
+    restarts, same error, forever (Jul 18: 48 times; test_brownout found two more shapes of it,
+    `string or blob too big` and a UnicodeDecodeError from a damaged schema page)."""
+    if isinstance(exc, UnicodeDecodeError):
+        return True
+    if not isinstance(exc, sqlite3.DatabaseError):
+        return False
+    msg = str(exc).lower()
+    return not any(m in msg for m in TRANSIENT_MARKERS)
+
+
 def integrity_ok(conn) -> bool:
-    """`PRAGMA quick_check` — the cheap variant (skips per-row index cross-checks), which still
-    catches the malformed-page case and returns in well under a second on a multi-GB archive."""
+    """`PRAGMA quick_check` over the WHOLE file. Not for the startup path: on the boat's SD card
+    it reads ~10 MB/s, so a 24 GB archive took 39 min (2026-10-28). Only the low-priority
+    background check (`BackgroundCheck`) calls this kind of scan."""
     try:
         return conn.execute("PRAGMA quick_check").fetchone()[0] == "ok"
-    except sqlite3.DatabaseError:
+    except (sqlite3.DatabaseError, UnicodeDecodeError):
         return False
+
+
+# Bounded startup probes: each reads O(tree depth) pages, whatever the size of the file. They
+# cover what a brownout most likely damaged — the header, the schema page, and the right-hand
+# edge of every b-tree, where the last writes went. A damaged page in the MIDDLE of the file is
+# left to the background check; the first insert also walks the index leaves it lands on, and a
+# write that hits damage rotates (see `_flush_once`).
+FAST_PROBES = (
+    "SELECT name, rootpage FROM sqlite_master",
+    "SELECT max(id) FROM readings",
+    "SELECT * FROM readings ORDER BY id DESC LIMIT 64",
+    "SELECT time FROM readings INDEXED BY readings_time_idx ORDER BY time DESC LIMIT 64",
+    "SELECT path, time FROM readings INDEXED BY readings_path_time_idx "
+    "ORDER BY path DESC, time DESC LIMIT 64",
+    "SELECT k, v FROM sync_state LIMIT 64",
+)
+
+
+def fast_check(conn) -> int:
+    """The startup check: the bounded probes above. Returns the highest row id (0 when empty),
+    which the startup log prints instead of a `count(*)` — a count reads every page of the table.
+    Raises whatever the file raises; the caller classifies it."""
+    top = 0
+    for sql in FAST_PROBES:
+        rows = conn.execute(sql).fetchall()
+        if sql == "SELECT max(id) FROM readings":
+            top = rows[0][0] or 0
+    return int(top)
 
 
 _SIDECARS = ("", "-wal", "-shm")
@@ -233,28 +316,57 @@ def _clear_for_fresh(path: Path):
     return None
 
 
+# An open error that is neither clearly the file (malformed, not a database, string or blob
+# too big, a decode error) nor clearly transient — typically "disk I/O error", which a brownout
+# can produce once on a healthy card — is retried before the archive is moved aside. Moving a
+# healthy archive loses nothing, but it takes the engine's history with it.
+OPEN_RETRIES = int(os.environ.get("ARCHIVE_OPEN_RETRIES", "3"))
+OPEN_RETRY_S = float(os.environ.get("ARCHIVE_OPEN_RETRY_S", "2"))
+
+
+def _clearly_damaged(exc) -> bool:
+    """The errors that can only mean a damaged file: rotate at once, no retry."""
+    return _is_corruption(exc)
+
+
 def open_db_resilient(path: Path = ARCHIVE_DB):
     """Open the archive, rotating it aside if it is unusable. Returns (conn, rotated_to|None).
 
-    This is the whole brownout story: a bad card must cost minutes, not six weeks."""
-    rotated = None
-    conn = None
-    try:
-        finished = _clear_for_fresh(path)
-        conn = open_db(path)
-        if finished is not None:
-            _note_rotation(conn, finished)
-            return conn, finished
-        if not integrity_ok(conn):
-            raise sqlite3.DatabaseError("quick_check failed: database disk image is malformed")
-        return conn, None
-    except sqlite3.DatabaseError as exc:
-        if not _is_corruption(exc):
-            raise
-        print(f"[archive] {path.name} is unusable ({exc})", flush=True)
-        # the same close -> resumable move -> check -> open sequence as a mid-run rotation;
-        # CREATE TABLE IF NOT EXISTS self-initialises the fresh file
-        return reopen_fresh(conn, path)
+    This is the whole brownout story: a bad card must cost seconds, not six weeks. BOUNDED:
+    open + schema + `fast_check`, never a whole-file scan — the archiver records nothing until
+    this returns (see `BackgroundCheck` for the full check, which runs after recording starts).
+    Clearly damaged -> rotate at once; transient -> raise (the caller retries); anything else
+    -> retry the open OPEN_RETRIES times, OPEN_RETRY_S apart, and rotate only if it persists."""
+    finished = _clear_for_fresh(path)
+    attempt = 0
+    while True:
+        conn = None
+        try:
+            conn = open_db(path)
+            fast_check(conn)
+            if finished is not None:
+                _note_rotation(conn, finished)
+                return conn, finished
+            return conn, None
+        except (sqlite3.DatabaseError, UnicodeDecodeError) as exc:
+            if not _is_bad_file(exc):
+                if conn is not None:
+                    conn.close()
+                raise
+            if not _clearly_damaged(exc) and attempt < OPEN_RETRIES:
+                attempt += 1
+                if conn is not None:
+                    conn.close()
+                print(f"[archive] opening {path.name} failed ({type(exc).__name__}: {exc}); "
+                      f"retry {attempt}/{OPEN_RETRIES} in {OPEN_RETRY_S:.0f}s before moving "
+                      f"it aside", flush=True)
+                time.sleep(OPEN_RETRY_S)
+                continue
+            print(f"[archive] {path.name} is unusable ({type(exc).__name__}: {exc}) — moving "
+                  f"it aside and recording into a fresh file", flush=True)
+            # the same close -> resumable move -> check -> open sequence as a mid-run
+            # rotation; CREATE TABLE IF NOT EXISTS self-initialises the fresh file
+            return reopen_fresh(conn, path)
 
 
 def reopen_fresh(conn, path: Path = ARCHIVE_DB):
@@ -276,40 +388,344 @@ def reopen_fresh(conn, path: Path = ARCHIVE_DB):
     unknown; pruner: skips; next flush: retries this). A half-done move (db moved, -wal not)
     is finished to the same destination before any fresh file is opened — see
     `rotate_corrupt`."""
-    if conn is not None:
-        # Under the write lock: the pruner runs on another thread and may be mid-DELETE on this
-        # very connection. Closing it underneath that is undefined; waiting for it is not.
-        with _WRITE_LOCK:
-            try:
-                conn.close()
-            except Exception as exc:      # a corrupt file may fail its close-time checkpoint
-                print(f"[archive] closing the corrupt archive raised ({exc}); moving it anyway",
-                      flush=True)
-    rotated = rotate_corrupt(path)        # resumes a half-done one; None if nothing is left
-    left = _present(path)
-    if left or _rotation_marker(path).exists():
-        raise OSError(f"rotation incomplete, still at {path.name}: {left}")
-    new = open_db(path)
+    # A background check reading this file holds its own connection to it, and a WAL
+    # connection's close cleans sidecars by NAME — stop it before anything moves. If it will
+    # not let go (a read stalled on a dying card), move NOTHING: raise before touching `conn`,
+    # so the caller keeps recording into the current file and retries the rotation later.
+    # The whole sequence holds _ROTATION_LOCK, so no new check can be started on this file
+    # until the fresh one is open.
+    with _ROTATION_LOCK:
+        _ROTATING.set()                   # the prune bails out at its next chunk
+        try:
+            if not stop_checks(path):
+                raise CheckerBusy(f"a background check still holds {path.name}; rotation "
+                                  f"deferred")
+            if conn is not None:
+                # Under the prune lock (its window reads run outside the write lock) and the
+                # write lock (the flusher, a prune chunk): never close under a running query.
+                with _PRUNE_LOCK, _WRITE_LOCK:
+                    try:
+                        conn.close()
+                    except Exception as exc:  # a corrupt file may fail its close checkpoint
+                        print(f"[archive] closing the corrupt archive raised ({exc}); moving "
+                              f"it anyway", flush=True)
+            rotated = rotate_corrupt(path)    # resumes a half-done one; None if nothing left
+            left = _present(path)
+            if left or _rotation_marker(path).exists():
+                raise OSError(f"rotation incomplete, still at {path.name}: {left}")
+            new = open_db(path)
+        finally:
+            _ROTATING.clear()
     if rotated is not None:
         _note_rotation(new, rotated)
     return new, rotated
 
 
 def open_for_run(path: Path = ARCHIVE_DB):
-    """Startup open: `open_db_resilient`, then the row count the startup log prints. If the
-    count itself hits corruption, rotate unconditionally — that `count(*)` is the exact line
-    the boat crash-looped on 4,000+ times after 2026-09-02. Returns (conn, rows, rotated)."""
+    """Startup open, BOUNDED: `open_db_resilient`, whose `fast_check` also yields the highest row
+    id for the startup log. No `count(*)` (it read the whole table — the line the boat
+    crash-looped on 4,000+ times after 2026-09-02, and 40+ min of no recording on a big file)
+    and no quick_check (the background check does that once recording runs). Returns
+    (conn, highest_row_id, rotated)."""
     conn, rotated = open_db_resilient(path)
     try:
-        n = conn.execute("SELECT count(*) FROM readings").fetchone()[0]
-    except sqlite3.DatabaseError as exc:
-        if not _is_corruption(exc):
+        top = fast_check(conn)
+    except (sqlite3.DatabaseError, UnicodeDecodeError) as exc:
+        if not _is_bad_file(exc):
             raise
-        print(f"[archive] {path.name} passed quick_check but count(*) failed ({exc}) — "
+        print(f"[archive] {path.name} passed the open but its probes failed ({exc}) — "
               f"rotating it anyway", flush=True)
         conn, rotated = reopen_fresh(conn, path)
-        n = conn.execute("SELECT count(*) FROM readings").fetchone()[0]
-    return conn, n, rotated
+        top = fast_check(conn)
+    return conn, top, rotated
+
+
+# ---- BACKGROUND CHECK ---------------------------------------------------------------------
+# The whole-file `PRAGMA quick_check` the startup path used to run, moved off it. It runs on its
+# own read-only connection in a thread, AFTER recording has started, at low priority: nice 19,
+# the idle I/O class where the kernel offers it, and a duty cycle (`ARCHIVE_CHECK_DUTY`, the
+# share of wall time it may read) enforced by SQLite's progress handler — which is also how it
+# is stopped mid-scan. On the live file a failed check rotates it (as the startup check used
+# to); on a file already rotated aside it only reports, so a human knows whether that file is
+# really damaged or was moved on a false alarm.
+CHECK_DUTY = float(os.environ.get("ARCHIVE_CHECK_DUTY", "0.5"))
+CHECK_SLICE_S = 0.05
+# How long a rotation waits for a check to let go of the file before deferring itself.
+CHECK_STOP_TIMEOUT_S = float(os.environ.get("ARCHIVE_CHECK_STOP_TIMEOUT_S", "30"))
+# An uncertain error during the check (I/O, busy, locked) is retried this often before a verdict.
+CHECK_RETRIES = int(os.environ.get("ARCHIVE_CHECK_RETRIES", "3"))
+CHECK_RETRY_S = float(os.environ.get("ARCHIVE_CHECK_RETRY_S", "3.5"))
+# A live quick_check holds ONE read snapshot for the whole scan (~78 min on 24 GB), and the WAL
+# cannot recycle past it: at the dock rate it grows until the disk guard stops recording. So
+# the live check runs only when no race/practice session is open, is watched every
+# CHECK_WATCH_S, and steps aside (closes, checkpoint, retry CHECK_LATER_S later) when the WAL
+# passes CHECK_WAL_CAP_MB, free space nears the guard, or a session starts. During a session
+# the bounded startup probes and write errors (which rotate) are the protection.
+CHECK_WAL_CAP_MB = float(os.environ.get("ARCHIVE_CHECK_WAL_CAP_MB", "256"))
+CHECK_WATCH_S = float(os.environ.get("ARCHIVE_CHECK_WATCH_S", "5"))
+CHECK_LATER_S = float(os.environ.get("ARCHIVE_CHECK_LATER_S", "3600"))
+CHECK_OVERDUE_DAYS = float(os.environ.get("ARCHIVE_CHECK_OVERDUE_DAYS", "7"))
+# Aim to re-check the live file this often — inside the overdue limit, so one deferred race
+# weekend does not make it overdue straight away.
+CHECK_EVERY_DAYS = float(os.environ.get("ARCHIVE_CHECK_EVERY_DAYS", "5"))
+
+
+def session_open(engine_db=None):
+    """True when a race/practice session is open, False when none is, None when the engine's
+    sessions table cannot be read."""
+    try:
+        ec = sqlite3.connect(f"file:{engine_db or ENGINE_DB}?mode=ro", uri=True, timeout=5)
+        try:
+            n = ec.execute("SELECT count(*) FROM sessions WHERE end_ts IS NULL").fetchone()[0]
+        finally:
+            ec.close()
+    except Exception:
+        return None
+    return n > 0
+
+
+def check_watch(db, engine_db=None, live=True, statvfs=os.statvfs):
+    """The watcher a background check consults every CHECK_WATCH_S: a reason to step aside, or
+    None. An unreadable sessions table counts as a session: a check that never runs is safer
+    than one running during a race (it still shows as overdue after CHECK_OVERDUE_DAYS)."""
+    def watch():
+        open_ = session_open(engine_db)
+        if open_ is None:
+            return "race sessions unreadable (treated as a session)"
+        if open_:
+            return "a race/practice session is open"
+        if live:
+            try:
+                wal = Path(str(db) + "-wal").stat().st_size
+            except OSError:
+                wal = 0
+            if wal > CHECK_WAL_CAP_MB * 2**20:
+                return f"WAL at {wal / 2**20:.0f} MB, over the {CHECK_WAL_CAP_MB:.0f} MB cap"
+        try:
+            st = statvfs(str(Path(db).parent))
+            total, free = st.f_blocks * st.f_frsize, st.f_bavail * st.f_frsize
+            if total > 0 and (free < 2 * DISK_MIN_FREE_MB * 2**20
+                              or 100.0 * (total - free) / total >= DISK_HARD_PCT - 3):
+                return f"disk nearly full ({free / 2**30:.1f} GB free)"
+        except OSError:
+            pass
+        return None
+    return watch
+
+
+class CheckerBusy(OSError):
+    """A rotation was refused because a background check still has the file open."""
+_CHECKS = {}                    # resolved path -> the BackgroundCheck reading it
+_CHECKS_LOCK = threading.Lock()
+
+
+def _lower_priority():
+    """This THREAD only (Linux priorities are per-thread): CPU nice 19 and, on the two
+    architectures whose syscall number is known here, the idle I/O class. Best effort."""
+    try:
+        tid = threading.get_native_id()
+        os.setpriority(os.PRIO_PROCESS, tid, 19)
+    except (AttributeError, OSError):
+        return
+    try:
+        import ctypes
+        import platform
+        nr = {"x86_64": 251, "aarch64": 30}.get(platform.machine())
+        if nr is not None:
+            # ioprio_set(IOPRIO_WHO_PROCESS=1, tid, IOPRIO_CLASS_IDLE=3 << 13)
+            ctypes.CDLL(None, use_errno=True).syscall(nr, 1, tid, 3 << 13)
+    except Exception:
+        pass
+
+
+class _CheckStopped(Exception):
+    """Raised inside the check thread when stop() came first: open nothing, finish."""
+
+
+class BackgroundCheck:
+    """`PRAGMA quick_check` of `path` in a low-priority thread. `result` is None while running,
+    then a dict {status: ok|corrupt|aborted|error, detail}. `on_corrupt()` is called (from the
+    thread) when the check finds damage — after its connection is closed."""
+
+    def __init__(self, path, live, on_corrupt=None, duty=None, watch=None):
+        self.path = Path(path)
+        self.live = live
+        self.watch = watch              # () -> reason to step aside, or None
+        self.defer_reason = None
+        self._last_watch = None
+        self.on_corrupt = on_corrupt
+        self.duty = min(1.0, max(0.01, CHECK_DUTY if duty is None else float(duty)))
+        self.stop_event = threading.Event()
+        self._lock = threading.Lock()   # orders stop() against opening a connection
+        self.result = None
+        self.conn_open = False          # True while the check holds a connection to the file
+        self.slept = 0.0                # seconds given back by the duty cycle
+        self.started = datetime.now(timezone.utc).isoformat()
+        self.finished = None
+        self.thread = threading.Thread(target=self._run, daemon=True,
+                                       name=f"check-{self.path.name}")
+
+    def start(self):
+        with _CHECKS_LOCK:
+            _CHECKS[str(self.path.resolve())] = self
+        self.thread.start()
+        return self
+
+    def stop(self, timeout=None):
+        """Ask the check to stop and wait up to `timeout`. True only once its thread has
+        TERMINATED — the only state in which the file may be moved. ("No connection open right
+        now" is not enough: a thread stalled in its watcher would open one the moment it
+        returns.) The stop flag is set under the same lock `_attempt` takes to open, so after
+        this returns no new connection can be opened, whatever it returns."""
+        with self._lock:
+            self.stop_event.set()
+        timeout = CHECK_STOP_TIMEOUT_S if timeout is None else timeout
+        if not self.thread.is_alive():
+            return True
+        if threading.current_thread() is self.thread:
+            return False
+        self.thread.join(timeout)
+        return not self.thread.is_alive()
+
+    def summary(self):
+        doc = {"file": self.path.name, "live": self.live, "started": self.started,
+               "finished": self.finished}
+        doc.update(self.result or {"status": "running"})
+        return doc
+
+    def _throttle(self):
+        """SQLite's progress handler: nonzero aborts the statement (stop requested); otherwise
+        sleep so the check reads at most `duty` of the time."""
+        if self.stop_event.is_set():
+            return 1
+        now = time.monotonic()
+        if self.watch is not None and (self._last_watch is None
+                                       or now - self._last_watch >= CHECK_WATCH_S):
+            self._last_watch = now
+            try:
+                reason = self.watch()
+            except Exception:
+                reason = None
+            if reason:
+                self.defer_reason = reason
+                return 1                  # abort the scan: its snapshot is released on close
+        if now - self._slice_start >= CHECK_SLICE_S:
+            if self.duty < 1.0:
+                pause = (now - self._slice_start) * (1.0 - self.duty) / self.duty
+                self.slept += pause
+                if self.stop_event.wait(pause):
+                    return 1
+            self._slice_start = time.monotonic()
+        return 0
+
+    def _attempt(self):
+        """One quick_check on a fresh read-only connection. Returns a result dict, or raises
+        what the file raised."""
+        conn = None
+        try:
+            with self._lock:            # stop() sets the flag under this lock: never open after
+                if self.stop_event.is_set():
+                    raise _CheckStopped()
+                self.conn_open = True   # before connect: a stalled open holds the file too
+            conn = sqlite3.connect(f"file:{self.path}?mode=ro", uri=True, timeout=30,
+                                   check_same_thread=False)
+            self._slice_start = time.monotonic()
+            conn.set_progress_handler(self._throttle, 1000)
+            rows = [r[0] for r in conn.execute("PRAGMA quick_check(10)").fetchall()]
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            self.conn_open = False
+        if rows == ["ok"]:
+            return {"status": "ok", "detail": None}
+        return {"status": "corrupt", "detail": "; ".join(map(str, rows))[:500]}
+
+    def _run(self):
+        """The startup rule, applied here too: clear damage -> corrupt at once; anything
+        uncertain (a one-off "disk I/O error", busy, locked) is retried CHECK_RETRIES times,
+        CHECK_RETRY_S apart (~10 s) before a verdict. A persistent I/O-type error then reads
+        as corrupt; a persistent lock/busy stays an error (no rotation — not the file)."""
+        _lower_priority()
+        result, attempt = None, 0
+        try:
+            while True:
+                if self.watch is not None:
+                    self.defer_reason = self.watch()
+                    if self.defer_reason:
+                        result = {"status": "deferred", "detail": self.defer_reason}
+                        break
+                try:
+                    result = self._attempt()
+                    break
+                except _CheckStopped:
+                    result = {"status": "aborted", "detail": "stopped"}
+                    break
+                except (sqlite3.DatabaseError, UnicodeDecodeError) as exc:
+                    detail = f"{type(exc).__name__}: {exc}"[:500]
+                    if self.defer_reason:
+                        result = {"status": "deferred", "detail": self.defer_reason}
+                        break
+                    if self.stop_event.is_set():
+                        result = {"status": "aborted", "detail": "stopped"}
+                        break
+                    if _clearly_damaged(exc):
+                        result = {"status": "corrupt", "detail": detail}
+                        break
+                    if attempt < CHECK_RETRIES:
+                        attempt += 1
+                        print(f"[archive] background check of {self.path.name}: {detail}; "
+                              f"retry {attempt}/{CHECK_RETRIES} in {CHECK_RETRY_S:.0f}s",
+                              flush=True)
+                        if self.stop_event.wait(CHECK_RETRY_S):
+                            result = {"status": "aborted", "detail": "stopped"}
+                            break
+                        continue
+                    result = {"status": "corrupt" if _is_bad_file(exc) else "error",
+                              "detail": f"{detail} (persisted over {attempt + 1} tries)"}
+                    break
+        except Exception as exc:            # never let the check take anything else down
+            result = {"status": "error", "detail": f"{type(exc).__name__}: {exc}"[:500]}
+        finally:
+            self.conn_open = False
+            with _CHECKS_LOCK:
+                if _CHECKS.get(str(self.path.resolve())) is self:
+                    del _CHECKS[str(self.path.resolve())]
+        self.finished = datetime.now(timezone.utc).isoformat()
+        self.result = result
+        what = "the live archive" if self.live else "the file moved aside"
+        if result["status"] == "ok":
+            print(f"[archive] background check of {self.path.name} ({what}): ok"
+                  + ("" if self.live else " — it was moved on a false alarm; its data is "
+                     "intact, merge it back by hand if needed"), flush=True)
+        elif result["status"] == "corrupt":
+            print(f"[archive] background check of {self.path.name} ({what}): DAMAGED "
+                  f"({result['detail']})"
+                  + (" — rotating it aside" if self.live else " — keep it for salvage.py"),
+                  flush=True)
+            if self.live and self.on_corrupt is not None:
+                try:
+                    self.on_corrupt()
+                except Exception as exc:
+                    print(f"[archive] could not schedule the rotation: {exc}", flush=True)
+        elif result["status"] == "deferred":
+            print(f"[archive] background check of {self.path.name} stepped aside "
+                  f"({result['detail']}); retrying later", flush=True)
+        else:
+            print(f"[archive] background check of {self.path.name}: {result['status']} "
+                  f"({result['detail']})", flush=True)
+
+
+def stop_checks(path, timeout=None):
+    """Stop (and wait for) any background check reading `path` — before it is closed or moved.
+    False when one still holds the file after `timeout`: the caller must not move it."""
+    with _CHECKS_LOCK:
+        chk = _CHECKS.get(str(Path(path).resolve()))
+    if chk is None:
+        return True
+    return chk.stop(timeout)
 
 
 def _note_rotation(conn, rotated: Path):
@@ -330,8 +746,20 @@ def _note_rotation(conn, rotated: Path):
         print(f"[archive] could not record the rotation: {exc}", flush=True)
 
 
+def _clean(s):
+    """A string SQLite can store: lone UTF-16 surrogates (valid JSON, "\\ud800", invalid
+    UTF-8) become "?". Without this one such string failed its whole batch, forever."""
+    if isinstance(s, str):
+        try:
+            s.encode("utf-8")
+        except UnicodeEncodeError:
+            return s.encode("utf-8", "replace").decode("utf-8")
+    return s
+
+
 def flatten(time, source, path, value, out):
     """Append one or more archive rows for a Signal K value, matching uplink flattening."""
+    time, source, path, value = _clean(time), _clean(source), _clean(path), _clean(value)
     if isinstance(value, bool):
         out.append((time, BOAT_ID, source, path, None, str(value).lower()))
     elif isinstance(value, (int, float)):
@@ -339,7 +767,7 @@ def flatten(time, source, path, value, out):
     elif isinstance(value, dict):
         for k, sub in value.items():
             if isinstance(sub, (int, float)) and not isinstance(sub, bool):
-                out.append((time, BOAT_ID, source, f"{path}.{k}", float(sub), None))
+                out.append((time, BOAT_ID, source, _clean(f"{path}.{k}"), float(sub), None))
     elif isinstance(value, str) and value:
         out.append((time, BOAT_ID, source, path, None, value))
 
@@ -429,6 +857,69 @@ def write_rows(conn, rows):
             except Exception:
                 pass                    # a dead connection has nothing to roll back
             raise
+
+
+# Errors that can ONLY come from one row's input values while binding them — an allow-list,
+# nothing broader:
+#   UnicodeEncodeError   a lone UTF-16 surrogate in a str (encoding OUR value to UTF-8)
+#   OverflowError        an int too large for SQLite INTEGER
+#   TypeError / InterfaceError / ProgrammingError "binding parameter"   an unbindable type
+# Retried row by row (`write_rows_each`) so only the bad row is lost. Everything else — locks,
+# I/O, corruption, and in particular UnicodeDecodeError (garbled bytes READ from a damaged page;
+# it is a ValueError too, which is why ValueError is not here) — fails the batch as before, so a
+# damaged file is rotated and its rows requeued, never silently dropped row by row.
+ROW_ERRORS = (UnicodeEncodeError, OverflowError, TypeError, sqlite3.InterfaceError,
+              sqlite3.ProgrammingError)
+
+
+def _is_row_error(exc) -> bool:
+    if isinstance(exc, UnicodeDecodeError):
+        return False                        # never: reading the file, not binding a value
+    if isinstance(exc, (sqlite3.ProgrammingError, sqlite3.InterfaceError)):
+        return "binding parameter" in str(exc).lower()    # not "closed database" etc.
+    return isinstance(exc, ROW_ERRORS)
+
+
+_INSERT = ("INSERT INTO readings (time, boat_id, source, path, value, str_value) "
+           "VALUES (?, ?, ?, ?, ?, ?)")
+
+
+def write_rows_each(conn, rows):
+    """Insert `rows` one statement each in ONE transaction, skipping the rows whose values
+    cannot be written. Returns [(row, exc)] for the skipped ones. Anything that is not a row
+    error (lock, I/O, corruption) rolls back the whole batch and raises, as `write_rows` does."""
+    bad = []
+    with _WRITE_LOCK:
+        try:
+            for r in rows:
+                try:
+                    conn.execute(_INSERT, r)
+                except ROW_ERRORS as exc:
+                    if not _is_row_error(exc):
+                        raise
+                    bad.append((r, exc))
+            conn.commit()
+        except BaseException:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
+    return bad
+
+
+def _note_bad_rows(state, bad, exc):
+    """Count the rows that could not be written, and say so at most once per window."""
+    state["rows_dropped_bad"] = state.get("rows_dropped_bad", 0) + len(bad)
+    state["_bad_unlogged"] = state.get("_bad_unlogged", 0) + len(bad)
+
+    def line(_quiet):
+        n, state["_bad_unlogged"] = state["_bad_unlogged"], 0
+        first = repr(bad[0][0])[:160] if bad else "?"
+        return (f"[archive] dropped {n} unwritable row(s) since the last report "
+                f"({state['rows_dropped_bad']} since start; {type(exc).__name__}: "
+                f"{str(exc)[:120]}); e.g. {first}. The rest of each batch was written.")
+    _log_every(state, "bad_rows", DROP_LOG_EVERY_S, time.monotonic, line)
 
 
 # ---- DISK GUARD + RAM CAP -----------------------------------------------------------------
@@ -575,30 +1066,88 @@ class DiskGuard:
                 f"{self.free_bytes / 2**30:.1f} GB free (minimum {self.min_free / 2**30:.1f} GB)")
 
 
-def cap_buffer(buf, state, limit=None):
-    """Drop the OLDEST rows past `limit`, counting them in state['buffer_dropped'] and saying so.
-    Oldest, because the newest are what the crew and the engine are looking at."""
+# Once the buffer is full EVERY incoming delta trims a few rows. Logging each trim was ~200
+# lines/s (~2 GB/day of Docker logs on the archive's own card), so the line is rate-limited:
+# at most one per DROP_LOG_EVERY_S, carrying how many rows were dropped since the last one.
+DROP_LOG_EVERY_S = float(os.environ.get("ARCHIVE_DROP_LOG_EVERY_S", "30"))
+
+
+def _log_every(state, key, every_s, clock, make_line):
+    """Print `make_line(suppressed)` at most once per `every_s` for `key`; returns True when it
+    printed. `suppressed` = calls swallowed since the last line."""
+    now = clock()
+    last = state.get(f"_log_{key}_at")
+    if last is not None and now - last < every_s:
+        state[f"_log_{key}_quiet"] = state.get(f"_log_{key}_quiet", 0) + 1
+        return False
+    quiet = state.pop(f"_log_{key}_quiet", 0)
+    state[f"_log_{key}_at"] = now
+    print(make_line(quiet), flush=True)
+    return True
+
+
+def cap_buffer(buf, state, limit=None, clock=time.monotonic):
+    """Drop the OLDEST rows past `limit`, counting them in state['buffer_dropped'] and saying so
+    (at most once per DROP_LOG_EVERY_S). Oldest, because the newest are what the crew and the
+    engine are looking at."""
     limit = MAX_BUFFER_ROWS if limit is None else int(limit)
     over = len(buf) - limit
     if limit <= 0 or over <= 0:
         return 0
     del buf[:over]
     state["buffer_dropped"] = state.get("buffer_dropped", 0) + over
-    print(f"[archive] !!! write buffer over {limit} rows — DROPPED the oldest {over} "
-          f"({state['buffer_dropped']} dropped since start). Writes are failing; see above.",
-          flush=True)
+    state["_drop_unlogged"] = state.get("_drop_unlogged", 0) + over
+
+    def line(_quiet):
+        n, state["_drop_unlogged"] = state["_drop_unlogged"], 0
+        return (f"[archive] !!! write buffer over {limit} rows — DROPPED the oldest {n} since "
+                f"the last report ({state['buffer_dropped']} dropped since start). Writes are "
+                f"failing; see above.")
+    _log_every(state, "drop", DROP_LOG_EVERY_S, clock, line)
     return over
 
 
-def write_status(state, guard=None, path=None):
-    """The archiver's health as a small JSON file next to the archive, for the engine/console
-    (which mount the archive volume read-only) and for a human with `cat`. Best effort."""
-    path = Path(path or STATUS_FILE)
+# The status file is rewritten this often (a small temp + rename), so the engine can tell a live
+# archiver from a dead one by its age.
+STATUS_EVERY_S = float(os.environ.get("ARCHIVE_STATUS_EVERY_S", "10"))
+# Not writing for this long, with rows waiting, reads as "not recording: writes failing".
+WRITE_STALL_S = float(os.environ.get("ARCHIVE_WRITE_STALL_S", "30"))
+# No usable telemetry for this long reads as "not recording: no instrument data".
+WS_DOWN_S = float(os.environ.get("ARCHIVE_WS_DOWN_S", "30"))
+WS_RETRY_S = 3.0                # pause before reconnecting to Signal K
+
+
+def recording_state(state, guard=None, now=None):
+    """(recording, reason) — whether full-res rows are reaching the disk right now, and if not
+    the first cause, in order of what the crew can act on. Reasons are the keys the engine maps
+    to text (shared/archiver_status.py)."""
+    now = time.monotonic() if now is None else now
+    if guard is not None and guard.paused:
+        return False, "disk_full"
+    if state.get("rotate_pending"):
+        return False, "rotation_pending"
+    # The clock is the last USABLE telemetry (rows out of a delta), not the socket: a Signal K
+    # that is connected but sends no instrument data records nothing either.
+    last_data = state.get("last_telemetry")
+    if last_data is not None and now - last_data >= WS_DOWN_S:
+        return False, "no_signalk"
+    last_ok = state.get("last_write_ok")
+    if state.get("buffered", 0) and last_ok is not None and now - last_ok >= WRITE_STALL_S:
+        return False, "write_failing"
+    return True, None
+
+
+def write_status(state, guard=None, path=None, now=None):
+    """The archiver's health as a small JSON file next to the archive, for the engine (which
+    mounts the archive volume read-only and serves it on /session and /health) and for a human
+    with `cat`. Best effort."""
+    path = Path(path or state.get("status_path") or STATUS_FILE)
+    recording, reason = recording_state(state, guard, now)
+    chk = state.get("check")
     doc = {
         "updated": datetime.now(timezone.utc).isoformat(),
-        "recording": not (guard and guard.paused) and not state.get("rotate_pending"),
-        "reason": ("disk_full" if guard and guard.paused
-                   else "rotation_pending" if state.get("rotate_pending") else None),
+        "recording": recording,
+        "reason": reason,
         "disk_used_pct": None if not guard or guard.pct is None else round(guard.pct, 1),
         "disk_really_used_pct": None if not guard or guard.raw_pct is None
         else round(guard.raw_pct, 1),
@@ -610,8 +1159,14 @@ def write_status(state, guard=None, path=None):
         "paused_since": guard.paused_since if guard else None,
         "rows_not_recorded_disk_full": guard.dropped if guard else 0,
         "rows_dropped_buffer_full": state.get("buffer_dropped", 0),
+        "rows_dropped_unwritable": state.get("rows_dropped_bad", 0),
+        "rows_waiting": state.get("buffered", 0),
         "rows_written": state.get("total", 0),
         "corrupt_rotations_this_run": state.get("rotations", 0),
+        "background_check": chk.summary() if chk is not None else None,
+        "moved_file_check": (state["moved_file_check"].summary()
+                             if state.get("moved_file_check") is not None else None),
+        "note": state.get("check_note"),       # quiet: not a "Not recording" reason
     }
     try:
         tmp = path.with_name(path.name + ".tmp")
@@ -659,10 +1214,23 @@ async def flusher(conn, buf, loop, state=None, db=None, wake=None, guard=None):
         except Exception as exc:          # belt and braces: the loop itself must never die
             print(f"[archive] flusher error ({type(exc).__name__}: {exc}); continuing",
                   flush=True)
-        if guard is not None and (guard._last_check != state.get("_status_at")
-                                  or state.pop("_status_dirty", False)):
-            state["_status_at"] = guard._last_check
-            write_status(state, guard)
+        if state.pop("checkpoint_due", False) and state.get("conn") is not None:
+            try:
+                await loop.run_in_executor(None, _checkpoint, state["conn"])
+            except Exception as exc:
+                print(f"[archive] checkpoint after a deferred check failed ({exc})", flush=True)
+        state["buffered"] = len(buf)
+        now = time.monotonic()
+        if not buf:
+            state["last_write_ok"] = now  # nothing stuck: a quiet bus is not a failing disk
+        if (guard is not None or state.get("status_path")) and (
+                state.pop("_status_dirty", False)
+                or now - state.get("_status_t", float("-inf")) >= STATUS_EVERY_S):
+            state["_status_t"] = now
+            try:
+                write_status(state, guard)
+            except Exception as exc:
+                print(f"[archive] status error ({exc})", flush=True)
 
 
 async def _recover(buf, loop, state, path):
@@ -671,6 +1239,13 @@ async def _recover(buf, loop, state, path):
     old, state["conn"] = state.get("conn"), None   # closed by reopen_fresh, whatever happens
     try:
         state["conn"], _rot = await loop.run_in_executor(None, reopen_fresh, old, path)
+    except CheckerBusy as exc:
+        # Nothing was closed or moved: keep writing into the current file, retry next flush.
+        state["conn"] = old
+        why = str(exc)
+        _log_every(state, "busy", DROP_LOG_EVERY_S, time.monotonic,
+                   lambda quiet: f"[archive] {why}; still recording into the current file")
+        return "busy"
     except Exception as exc:
         print(f"[archive] rotation failed ({type(exc).__name__}: {exc}); "
               f"{len(buf)} rows waiting, will retry", flush=True)
@@ -678,6 +1253,7 @@ async def _recover(buf, loop, state, path):
         return False
     state["rotate_pending"] = False
     state["rotations"] = state.get("rotations", 0) + 1
+    state["generation"] = state.get("generation", 0) + 1   # a new file: older verdicts are moot
     state["_status_dirty"] = True
     return True
 
@@ -686,8 +1262,12 @@ async def _flush_once(buf, loop, state, path, guard):
     # A pending rotation goes FIRST, before the disk guard: the guard reads free pages through
     # the connection, and deciding "full" from a half-recovered archive would throw away the
     # very rows the rotation is meant to save.
-    if state.get("rotate_pending") and not await _recover(buf, loop, state, path):
-        return
+    busy = False                          # a check holds the file: write to it, rotate later
+    if state.get("rotate_pending"):
+        got = await _recover(buf, loop, state, path)
+        if not got:
+            return
+        busy = got == "busy"
     if guard is not None:
         allowed = await loop.run_in_executor(None, guard.allow, state.get("conn"))
         if not allowed:
@@ -700,16 +1280,27 @@ async def _flush_once(buf, loop, state, path, guard):
     rows, buf[:] = buf[:], []
     # Two attempts: a corruption error on the first rotates and writes the same batch into the
     # fresh file straight away. If the rotation or the second write fails too, the rows go back.
+    dropped = []
     for attempt in (1, 2):
-        if state.get("rotate_pending"):
+        if state.get("rotate_pending") and not busy:
             buf[:0] = rows                # _recover keeps them on failure, in order
-            if not await _recover(buf, loop, state, path):
+            got = await _recover(buf, loop, state, path)
+            if not got:
                 return
+            busy = got == "busy"
             rows, buf[:] = buf[:], []
         try:
-            await loop.run_in_executor(None, write_rows, state["conn"], rows)
+            try:
+                await loop.run_in_executor(None, write_rows, state["conn"], rows)
+            except ROW_ERRORS as exc:
+                if not _is_row_error(exc):
+                    raise
+                # One bad row must not hold up the batch (it would be requeued at the front
+                # forever): write the rows one by one, drop only the ones that fail.
+                dropped = await loop.run_in_executor(None, write_rows_each, state["conn"], rows)
+                _note_bad_rows(state, dropped, exc)
             break
-        except sqlite3.DatabaseError as exc:
+        except (sqlite3.DatabaseError, UnicodeDecodeError) as exc:
             if _is_corruption(exc):
                 # Once a write has said "corrupt", the file is rotated — no quick_check re-gate.
                 state["rotate_pending"] = True
@@ -723,19 +1314,23 @@ async def _flush_once(buf, loop, state, path, guard):
         except Exception as exc:
             _requeue(buf, rows, state, f"unexpected flush error ({type(exc).__name__}: {exc})")
             return
-    state["total"] = state.get("total", 0) + len(rows)
+    state["total"] = state.get("total", 0) + len(rows) - len(dropped)
+    state["last_write_ok"] = time.monotonic()
     # report the AIS skip count too — silence here would look identical to a filter that
     # had quietly stopped working, or to one wrongly eating own-ship data
     skipped = state.get("skipped", 0)
     note = f" (skipped {skipped} AIS deltas)" if skipped else ""
-    print(f"[archive] +{len(rows)} rows (total {state['total']}){note}", flush=True)
+    print(f"[archive] +{len(rows) - len(dropped)} rows (total {state['total']}){note}",
+          flush=True)
 
 
 def _requeue(buf, rows, state, why):
     """Put a failed batch back at the FRONT (order kept; write_rows rolled it back, so nothing
     is half-written), then enforce the RAM cap."""
     buf[:0] = rows
-    print(f"[archive] {why}; {len(rows)} rows requeued ({len(buf)} waiting)", flush=True)
+    _log_every(state, "requeue", DROP_LOG_EVERY_S, time.monotonic,
+               lambda quiet: f"[archive] {why}; {len(rows)} rows requeued ({len(buf)} waiting)"
+               + (f" [{quiet} more failed flushes not logged]" if quiet else ""))
     cap_buffer(buf, state)
 
 
@@ -873,30 +1468,90 @@ def session_windows(engine_db=None, conn=None):
     return wins
 
 
-def prune(conn, engine_db=None, retain_days=None):
-    """Delete out-of-session readings older than the retention window. Returns rows deleted,
-    or None when pruning was skipped (disabled / engine DB unreadable)."""
+# The prune deletes in chunks, taking the write lock for one chunk at a time and pausing between
+# them, so the flusher gets in. One big DELETE held the lock for as long as it ran — days of
+# rows on a ~10 MB/s card is minutes — and the 300k-row buffer fills in ~7 min of that.
+PRUNE_CHUNK_ROWS = int(os.environ.get("ARCHIVE_PRUNE_CHUNK_ROWS", "20000"))
+PRUNE_PAUSE_S = float(os.environ.get("ARCHIVE_PRUNE_PAUSE_S", "0.05"))
+
+
+def _prune_gaps(wins, cutoff):
+    """The time ranges the prune may delete: before `cutoff` and outside every kept window
+    (windows are inclusive [a, b], compared as strings like the rows' ISO times). Yields
+    (lo, lo_inclusive, hi) meaning lo <(=) time < hi."""
+    merged = []
+    for a, b in sorted(w for w in wins if w[0] < cutoff):
+        if merged and a <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], b)
+        else:
+            merged.append([a, b])
+    lo, incl = "", True
+    for a, b in merged:
+        if a > lo or (incl and a >= lo):
+            yield lo, incl, a
+        if b >= cutoff:
+            return
+        lo, incl = b, False
+    yield lo, incl, cutoff
+
+
+def prune(conn, engine_db=None, retain_days=None, chunk_rows=None, pause_s=None):
+    """See `_prune`; this holds _PRUNE_LOCK around it (a rotation waits for, at most, the query
+    in flight, then the prune stops at its next chunk)."""
+    if _ROTATING.is_set():
+        return None
+    with _PRUNE_LOCK:
+        return _prune(conn, engine_db, retain_days, chunk_rows, pause_s)
+
+
+def _prune(conn, engine_db=None, retain_days=None, chunk_rows=None, pause_s=None):
+    """Delete out-of-session readings older than the retention window, `chunk_rows` at a time
+    under the write lock (released between chunks). Returns rows deleted, or None when pruning
+    was skipped (disabled / engine DB unreadable)."""
     days = RETAIN_DAYS if retain_days is None else float(retain_days)
     if days <= 0:
         return None
+    chunk = max(1, int(PRUNE_CHUNK_ROWS if chunk_rows is None else chunk_rows))
+    pause = PRUNE_PAUSE_S if pause_s is None else float(pause_s)
     wins = session_windows(engine_db, conn=conn)
     if wins is None:
         print("[archive] prune SKIPPED — engine sessions table unreadable (never delete blind)",
               flush=True)
         return None
     cutoff = _iso(datetime.now(timezone.utc).timestamp() - days * 86400)
-    cond = "time < ?"
-    args = [cutoff]
-    for a, b in wins:
-        cond += " AND NOT (time >= ? AND time <= ?)"
-        args += [a, b]
-    with _WRITE_LOCK:
-        cur = conn.execute(f"DELETE FROM readings WHERE {cond}", args)
-        conn.commit()
-    if cur.rowcount:
-        print(f"[archive] pruned {cur.rowcount} out-of-session rows older than {cutoff} "
-              f"({len(wins)} session window(s) kept)", flush=True)
-    return cur.rowcount
+    # Delete only inside the GAPS between kept windows, never filtering windows row by row: a
+    # LIMIT bounds the rows a query returns, not the rows it scans, so a filter over a big kept
+    # session would scan all of it under the write lock and return nothing (Codex: 300k kept
+    # rows, 1.8M VM steps, recording blocked). Inside a gap every row is deletable, so each
+    # chunk scans exactly the rows it deletes; kept rows are never read.
+    total, chunks = 0, 0
+    for lo, lo_incl, hi in _prune_gaps(wins, cutoff):
+        since = lo
+        while True:
+            if _ROTATING.is_set():
+                print(f"[archive] prune stopped after {total} rows — the archive is being "
+                      f"rotated", flush=True)
+                return total
+            with _WRITE_LOCK:
+                sel = conn.execute(
+                    f"SELECT id, time FROM readings WHERE time {'>=' if lo_incl else '>'} ? "
+                    f"AND time >= ? AND time < ? ORDER BY time LIMIT ?",
+                    (lo, since, hi, chunk)).fetchall()
+                if not sel:
+                    break
+                conn.execute("DELETE FROM readings WHERE id IN "
+                             "(SELECT value FROM json_each(?))",
+                             (json.dumps([r[0] for r in sel]),))
+                conn.commit()
+            total += len(sel)
+            chunks += 1
+            since = sel[-1][1]            # everything selected was deleted: always progresses
+            if pause > 0:
+                time.sleep(pause)         # outside the write lock: the flusher's turn
+    if total:
+        print(f"[archive] pruned {total} out-of-session rows older than {cutoff} in {chunks} "
+              f"chunk(s) ({len(wins)} session window(s) kept)", flush=True)
+    return total
 
 
 async def pruner(state, loop):
@@ -916,35 +1571,211 @@ async def pruner(state, loop):
         await asyncio.sleep(PRUNE_EVERY_S)
 
 
-async def run():
+def start_background_check(state, loop, db, rotated, engine_db=None):
+    """After recording has started: quick_check, in the background. The live file when it opened
+    cleanly (damage found -> the flusher rotates it); the file just moved aside when it did not
+    (a verdict for the human; the live file is fresh and has nothing to check)."""
+    if rotated is not None:
+        chk = BackgroundCheck(rotated, live=False,
+                              watch=check_watch(rotated, engine_db, live=False))
+        state["moved_file_check"] = chk   # its verdict stays visible after the live checks
+    else:
+        gen = state.get("generation", 0)   # the archive file this check is reading
+
+        def on_corrupt():
+            def mark():
+                if state.get("generation", 0) != gen:
+                    # The file was already replaced (e.g. a write found the damage first): this
+                    # verdict is about the OLD file. Rotating now would move the healthy new one.
+                    print("[archive] background check verdict is for a file already rotated "
+                          "aside; ignoring", flush=True)
+                    return
+                state["rotate_pending"] = True
+                state["_status_dirty"] = True
+            loop.call_soon_threadsafe(mark)
+        chk = BackgroundCheck(db, live=True, on_corrupt=on_corrupt,
+                              watch=check_watch(db, engine_db, live=True))
+    state["check"] = chk
+    return chk.start()
+
+
+def _meta(conn, key, value=None, delete=False):
+    """Read (or write/delete) one sync_state key on the archive. Best effort: None on error."""
+    try:
+        with _WRITE_LOCK:
+            if delete:
+                conn.execute("DELETE FROM sync_state WHERE k = ?", (key,))
+                conn.commit()
+                return None
+            if value is not None:
+                conn.execute("INSERT OR REPLACE INTO sync_state (k, v) VALUES (?, ?)",
+                             (key, value))
+                conn.commit()
+                return value
+            row = conn.execute("SELECT v FROM sync_state WHERE k = ?", (key,)).fetchone()
+            return row[0] if row else None
+    except Exception:
+        return None
+
+
+def _overdue_note(conn, now=None):
+    """"Archive check overdue" when the last full check that passed (or, if none ever did, the
+    first time one was deferred) is more than CHECK_OVERDUE_DAYS ago. Persisted in sync_state,
+    so restarts don't reset the clock."""
+    now = datetime.now(timezone.utc) if now is None else now
+    base = _meta(conn, "last_full_check") or _meta(conn, "full_check_pending_since")
+    if base is None:
+        _meta(conn, "full_check_pending_since", now.isoformat())
+        return None
+    try:
+        age = now - datetime.fromisoformat(base)
+    except ValueError:
+        return None
+    return "Archive check overdue" if age > timedelta(days=CHECK_OVERDUE_DAYS) else None
+
+
+async def check_scheduler(state, loop, db, rotated, engine_db=None, later_s=None):
+    """Keep the archive checked, for as long as the process runs.
+
+    First the file moved aside at startup, if any (a verdict for the human). Then the live file
+    whenever its last passing check is CHECK_EVERY_DAYS old (persisted in sync_state, so a
+    restart does not re-scan a file checked yesterday). Every `later_s` it re-evaluates: a
+    check that is due but cannot run (session open, WAL cap, disk) is retried, and after
+    CHECK_OVERDUE_DAYS without a pass the quiet note says "Archive check overdue" — also on a
+    long run after an earlier pass. A deferral asks the flusher for a checkpoint, so the WAL the
+    check held back is recycled."""
+    later = CHECK_LATER_S if later_s is None else later_s
+    while True:
+        conn, gen = state.get("conn"), state.get("generation", 0)
+        if state.get("rotate_pending") or conn is None:
+            await asyncio.sleep(later)          # the flusher is replacing the file
+            continue
+        if rotated is None:
+            last = await loop.run_in_executor(None, _meta, conn, "last_full_check")
+            try:
+                age = (datetime.now(timezone.utc) - datetime.fromisoformat(last)
+                       ).total_seconds() if last else None
+            except ValueError:
+                age = None
+            if age is not None and age < CHECK_EVERY_DAYS * 86400:
+                note = await loop.run_in_executor(None, _overdue_note, conn)
+                if note != state.get("check_note"):
+                    state["check_note"] = note
+                    state["_status_dirty"] = True
+                await asyncio.sleep(later)
+                continue
+        chk = _start_check_if_current(state, loop, db, rotated, engine_db, conn, gen)
+        if chk is None:                     # a rotation began or ran during the awaits above
+            await asyncio.sleep(min(later, 1.0))
+            continue
+        while chk.result is None:
+            await asyncio.sleep(0.2)
+        status = chk.result["status"]
+        if status in ("deferred", "error"):
+            if chk.live:
+                state["checkpoint_due"] = True
+                note = await loop.run_in_executor(None, _overdue_note, conn)
+                state["check_note"] = note or f"Archive check waiting: {chk.result['detail']}"
+                state["_status_dirty"] = True
+            await asyncio.sleep(later)
+            continue
+        if not chk.live:
+            rotated = None                      # the evidence check is done; now the live file
+            continue
+        if status == "ok" and (state.get("conn") is not conn
+                               or state.get("generation", 0) != gen):
+            continue                            # the file it passed is no longer the archive
+        if status == "ok":
+            now = datetime.now(timezone.utc).isoformat()
+            await loop.run_in_executor(None, _meta, conn, "last_full_check", now)
+            await loop.run_in_executor(
+                None, lambda: _meta(conn, "full_check_pending_since", delete=True))
+            state["check_passes"] = state.get("check_passes", 0) + 1
+            state["check_note"] = None
+            state["_status_dirty"] = True
+        # corrupt -> the flusher rotates (rotate_pending); aborted -> a rotation stopped it
+
+
+def _start_check_if_current(state, loop, db, rotated, engine_db, conn, gen):
+    """Register and start a check ONLY if, under _ROTATION_LOCK and with no await in between,
+    the archive is still the one the caller looked at: same connection, same generation, no
+    rotation pending or running. None otherwise (the caller retries). Non-blocking: this runs
+    on the event loop, which must never wait on a rotation's file moves."""
+    if not _ROTATION_LOCK.acquire(blocking=False):
+        return None
+    try:
+        if (state.get("conn") is not conn or state.get("generation", 0) != gen
+                or state.get("rotate_pending") or _ROTATING.is_set()):
+            return None
+        return start_background_check(state, loop, db, rotated, engine_db)
+    finally:
+        _ROTATION_LOCK.release()
+
+
+def _checkpoint(conn):
+    """A PASSIVE checkpoint (never waits on readers); with journal_size_limit the WAL file then
+    shrinks once the next write resets it."""
+    with _WRITE_LOCK:
+        return conn.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()  # (busy, log, done)
+
+
+async def open_until_ready(db, loop, retry_s=5.0):
+    """`open_for_run`, retried instead of exiting. An error that rotation cannot fix (a missing
+    or read-only directory, a dead card) must not become a crash loop that rotates a fresh file
+    on every restart; wait and try again."""
+    while True:
+        try:
+            return await loop.run_in_executor(None, open_for_run, db)
+        except Exception as exc:
+            print(f"[archive] cannot open {db} ({type(exc).__name__}: {exc}); "
+                  f"retrying in {retry_s:.0f}s", flush=True)
+            await asyncio.sleep(retry_s)
+
+
+async def run(db=None, ws_connect=None, state=None, check=True):
+    """Open (bounded, seconds), start recording, THEN check the file in the background.
+
+    `db`/`ws_connect`/`state` are for tests; the boat runs `run()`."""
     # `state` carries the `self` context from the hello frame + the AIS skip count (surviving
     # reconnects, so a dropped socket does not briefly re-admit AIS before the next hello) and
     # now also the live connection, because a corruption rotation replaces it underneath every
     # writer. One holder, so nobody keeps writing to a file that has been moved aside.
-    state = {}
-    conn, n, rotated = open_for_run()
+    db = Path(db or ARCHIVE_DB)
+    ws_connect = ws_connect or websockets.connect
+    state = {} if state is None else state
+    state["status_path"] = (STATUS_FILE if db == ARCHIVE_DB
+                            else db.with_name("archiver-status.json"))
+    loop = asyncio.get_running_loop()
+    conn, top, rotated = await open_until_ready(db, loop)
     state["conn"] = conn
+    state["last_write_ok"] = time.monotonic()
+    state["last_telemetry"] = time.monotonic()   # grace from startup, then the real clock
     if rotated:
         state["rotations"] = 1
-    print(f"[archive] {ARCHIVE_DB} ready ({n} rows) <- {SIGNALK_WS} (full resolution)"
+    print(f"[archive] {db} ready (highest row id {top}) <- {SIGNALK_WS} (full resolution)"
           + (f" [recovered from {rotated.name}]" if rotated else ""), flush=True)
-    guard = DiskGuard(ARCHIVE_DB.parent)
+    guard = DiskGuard(db.parent)
     print(f"[archive] disk guard: stop full-res at {guard.high:.0f}% disk use, resume below "
-          f"{guard.low:.0f}%; RAM buffer cap {MAX_BUFFER_ROWS} rows; status -> {STATUS_FILE}",
-          flush=True)
+          f"{guard.low:.0f}%; RAM buffer cap {MAX_BUFFER_ROWS} rows; status -> "
+          f"{state['status_path']}", flush=True)
+    write_status(state, guard)            # visible from the first second, not the first flush
     buf = []
-    loop = asyncio.get_running_loop()
     wake = asyncio.Event()
-    asyncio.create_task(flusher(conn, buf, loop, state, wake=wake, guard=guard))
+    asyncio.create_task(flusher(conn, buf, loop, state, db=db, wake=wake, guard=guard))
     asyncio.create_task(pruner(state, loop))
+    if check:
+        asyncio.create_task(check_scheduler(state, loop, db, rotated))
     while True:
         try:
-            async with websockets.connect(SIGNALK_WS, ping_interval=20) as ws:
+            async with ws_connect(SIGNALK_WS, ping_interval=20) as ws:
                 print("[archive] connected to Signal K", flush=True)
                 async for msg in ws:
                     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
                     rows = parse_delta(msg, now, state)
                     if rows:
+                        # Only usable telemetry ends an outage: a Signal K that accepts and
+                        # closes (or sends only hellos) must still read "no instrument data".
+                        state["last_telemetry"] = time.monotonic()
                         buf.extend(rows)
                         if len(buf) > MAX_BUFFER_ROWS:
                             cap_buffer(buf, state)     # the flusher is stuck; keep RAM bounded
@@ -955,7 +1786,7 @@ async def run():
                             wake.set()
         except Exception as exc:
             print(f"[archive] Signal K WS error ({exc}); retrying in 3s", flush=True)
-            await asyncio.sleep(3)
+        await asyncio.sleep(WS_RETRY_S)
 
 
 if __name__ == "__main__":
