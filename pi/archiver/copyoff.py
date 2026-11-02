@@ -39,6 +39,9 @@ COPYOFF_RSYNC / COPYOFF_SSH. On the receiver, `verify` needs only python3 and th
 Standard library only, so it runs on the Pi host (python3) or in the archiver image.
 """
 import argparse
+import contextlib
+import fcntl
+import functools
 import hashlib
 import json
 import os
@@ -109,7 +112,30 @@ def load_ledger(outbox):
 
 
 def save_ledger(outbox, ledger):
-    _write_json(os.path.join(outbox, LEDGER), ledger)
+    _write_json(os.path.join(outbox, LEDGER), ledger)        # tmp + fsync + rename
+
+
+@contextlib.contextmanager
+def outbox_lock(outbox):
+    """One seal or ship at a time per outbox. Both read-modify-write the ledger: without this a
+    seal that loaded it before a ship saved would write back the ship's verified ranges as
+    missing (after the ship deleted those segments), or the reverse, a stale cursor."""
+    os.makedirs(outbox, exist_ok=True)
+    with open(os.path.join(outbox, ".lock"), "w") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
+
+
+def _locked(fn):
+    """Hold the outbox lock for the WHOLE operation (`outbox` is the second argument)."""
+    @functools.wraps(fn)
+    def wrapper(archive_dir, outbox, *a, **kw):
+        with outbox_lock(outbox):
+            return fn(archive_dir, outbox, *a, **kw)
+    return wrapper
 
 
 def contiguous_through(ranges):
@@ -129,6 +155,7 @@ def outbox_bytes(outbox):
                if n.startswith("seg-"))
 
 
+@_locked
 def seal_segments(archive_dir, outbox, max_rows=2_000_000, max_segments=50, max_outbox_mb=4096):
     """Cut the next id ranges of the live archive into outbox segments. Returns segments made."""
     live = os.path.join(archive_dir, LIVE)
@@ -203,44 +230,78 @@ def seal_segments(archive_dir, outbox, max_rows=2_000_000, max_segments=50, max_
     return made
 
 
+# What a rotation leaves beside a moved-aside db (archiver.rotate_corrupt moves all three).
+COMPANIONS = ("-wal", "-shm")
+ROTATING_MARKER = LIVE + ".rotating"
+
+
 def closed_files(archive_dir):
-    """Every SQLite file in the archive dir except the live one and its companions."""
-    out = []
-    for n in sorted(os.listdir(archive_dir)):
+    """{db name: [member names]} for every closed SQLite file: the db plus whichever of its -wal
+    and -shm exist. They are ONE unit: rows committed only in the -wal are not in the .db, so a
+    .db shipped without its -wal is not a copy of what the card holds."""
+    names = set(os.listdir(archive_dir))
+    out = {}
+    for n in sorted(names):
         p = os.path.join(archive_dir, n)
         if (n == LIVE or not n.endswith(".db") or not os.path.isfile(p)
                 or os.path.islink(p)):
             continue
-        out.append(n)
+        out[n] = [n] + [n + c for c in COMPANIONS if n + c in names]
+    for n in sorted(names):
+        for c in COMPANIONS:
+            if n.endswith(".db" + c) and n[:-len(c)] not in names and n[:-len(c)] != LIVE:
+                log(f"!! {n}: a {c} with no {n[:-len(c)]} beside it — not shipped, look at it")
     return out
 
 
+def _unit_stat(archive_dir, members):
+    return [(m, *(lambda st: (st.st_size, st.st_mtime_ns, st.st_ino))(
+        os.stat(os.path.join(archive_dir, m)))) for m in members]
+
+
+def unit_sha256(members):
+    """One hash over a unit's members: "<sha256>  <name>" lines, sorted by name."""
+    h = hashlib.sha256()
+    for m in sorted(members, key=lambda x: x["name"]):
+        h.update(f"{m['sha256']}  {m['name']}\n".encode())
+    return h.hexdigest()
+
+
+@_locked
 def seal_closed(archive_dir, outbox, settle_s=600):
-    """Hash each closed file (in place, read-only) and write its sidecar to the outbox."""
+    """Hash each closed unit (in place, read-only) and write its sidecar to the outbox."""
+    if os.path.exists(os.path.join(archive_dir, ROTATING_MARKER)):
+        log("a rotation is in progress (archive.db.rotating) — not sealing closed files now")
+        return 0
     ledger = load_ledger(outbox)
     made = 0
-    for n in closed_files(archive_dir):
-        p = os.path.join(archive_dir, n)
-        st = os.stat(p)
-        if time.time() - st.st_mtime < settle_s:
-            log(f"{n}: changed {time.time() - st.st_mtime:.0f} s ago — waiting for it to settle")
+    for n, members in closed_files(archive_dir).items():
+        st = _unit_stat(archive_dir, members)
+        age = time.time() - max(x[2] for x in st) / 1e9
+        if age < settle_s:
+            log(f"{n}: changed {age:.0f} s ago — waiting for it to settle")
             continue
-        key = f"{n}:{st.st_ino}"
+        # Keyed by what the unit IS on disk (members, sizes, mtimes, inodes): a -wal that turns
+        # up later, or a file that changes, is a new unit and ships again.
+        key = f"{n}:" + hashlib.sha256(json.dumps(st).encode()).hexdigest()[:16]
         if key in ledger["closed"]:
             continue
-        digest = sha256_file(p)
-        st2 = os.stat(p)
-        if (st2.st_size, st2.st_mtime) != (st.st_size, st.st_mtime):
+        hashed = [{"name": m, "sha256": sha256_file(os.path.join(archive_dir, m)),
+                   "bytes": os.path.getsize(os.path.join(archive_dir, m))} for m in members]
+        if _unit_stat(archive_dir, members) != st:
             log(f"{n}: changed while being hashed — not sealing (it is not closed)")
             continue
-        side = {"kind": "closed", "name": n, "sha256": digest, "bytes": st.st_size,
-                "archive_inode": str(st.st_ino), "sealed": _now()}
+        digest = unit_sha256(hashed)
+        side = {"kind": "closed", "name": n, "members": hashed, "sha256": digest,
+                "bytes": sum(m["bytes"] for m in hashed), "key": key,
+                "archive_inode": str(os.stat(os.path.join(archive_dir, n)).st_ino),
+                "sealed": _now()}
         _write_json(os.path.join(outbox, f"closed-{n}.json"), side)
-        ledger["closed"][key] = {"name": n, "sha256": digest, "bytes": st.st_size,
+        ledger["closed"][key] = {"name": n, "members": hashed, "sha256": digest,
                                  "verified": None}
         save_ledger(outbox, ledger)
         made += 1
-        log(f"sealed closed file {n}: {st.st_size / 1048576:.1f} MiB sha256 {digest[:16]}…")
+        log(f"sealed closed unit {n} ({len(hashed)} file(s), {side['bytes'] / 1048576:.1f} MiB)")
     return made
 
 
@@ -254,6 +315,23 @@ def verify(dir_, name):
         side = json.load(f)
     path = os.path.join(dir_, name)
     rec = {"name": name, "kind": side["kind"], "checked": _now(), "ok": False}
+    if side["kind"] == "closed":
+        # Every member of the unit (db + -wal + -shm), each against the boat's hash.
+        got = []
+        for m in side["members"]:
+            p = os.path.join(dir_, m["name"])
+            if not os.path.isfile(p):
+                rec["error"] = f"missing {m['name']}"
+                return rec
+            got.append({"name": m["name"], "sha256": sha256_file(p), "bytes": os.path.getsize(p)})
+        rec["members"] = got
+        rec["sha256"] = unit_sha256(got)
+        rec["bytes"] = sum(m["bytes"] for m in got)
+        rec["ok"] = (sorted(got, key=lambda m: m["name"])
+                     == sorted(side["members"], key=lambda m: m["name"])
+                     and rec["sha256"] == side["sha256"])
+        _write_json(path + ".verified.json", rec)
+        return rec
     if not os.path.isfile(path):
         rec["error"] = "missing"
         return rec
@@ -313,6 +391,7 @@ def _remote_verify(dest, name):
         return {"name": name, "ok": False, "error": (r.stderr or r.stdout).strip()[-300:]}
 
 
+@_locked
 def ship(archive_dir, outbox, dest):
     """Send everything sealed and not yet verified. Returns (verified, failed)."""
     ledger = load_ledger(outbox)
@@ -326,19 +405,24 @@ def ship(archive_dir, outbox, dest):
             src = os.path.join(outbox, name)
             if not os.path.exists(src):
                 continue                      # shipped and cleaned up already
+            files = [(src, name)]
         else:
-            key = f"{name}:{side['archive_inode']}"
-            if ledger["closed"].get(key, {}).get("verified"):
+            if ledger["closed"].get(side["key"], {}).get("verified"):
                 continue
             src = os.path.join(archive_dir, name)
+            files = [(os.path.join(archive_dir, m["name"]), m["name"]) for m in side["members"]]
         try:
-            _transfer(src, dest, name)
+            for f_src, f_name in files:
+                _transfer(f_src, dest, f_name)
             _transfer(os.path.join(outbox, side_name), dest, side_name)
             rec = _remote_verify(dest, name)
         except (OSError, subprocess.CalledProcessError) as exc:
             rec = {"ok": False, "error": str(exc)}
         # Our numbers, not just the receiver's "ok": the receipt must name the same bytes/rows.
         match = (rec.get("ok") and rec.get("sha256") == side["sha256"]
+                 and (side["kind"] != "closed"
+                      or sorted(rec.get("members") or [], key=lambda m: m["name"])
+                      == sorted(side["members"], key=lambda m: m["name"]))
                  and (side["kind"] != "segment"
                       or (rec.get("content_sha256") == side["content_sha256"]
                           and rec.get("rows") == side["rows"])))
@@ -361,7 +445,7 @@ def ship(archive_dir, outbox, dest):
             os.remove(src)                    # the outbox copy only; archive.db is untouched
             os.remove(os.path.join(outbox, side_name))
         else:
-            ledger["closed"][f"{name}:{side['archive_inode']}"]["verified"] = stamp
+            ledger["closed"][side["key"]]["verified"] = stamp
             save_ledger(outbox, ledger)
         done += 1
         log(f"{name}: verified off the boat at {dest} (sha256 {rec['sha256'][:16]}…)")

@@ -111,8 +111,21 @@ def verify_volume(art, path, into_volume=None):
 
 
 def _psql(name, user, db, sql):
-    return docker("exec", name, "psql", "-U", user, "-d", db, "-Atc", sql,
-                  capture_output=True, text=True)
+    return docker("exec", name, "psql", "-U", user, "-d", db, "-v", "ON_ERROR_STOP=1",
+                  "-Atc", sql, capture_output=True, text=True)
+
+
+# pg_restore stderr lines a drill may accept. EMPTY ON PURPOSE: the real-data restore of
+# 2026-11-02 exited 0 with no error lines once the extension version matched. Add an entry here
+# only with the reason; anything not listed fails the drill.
+KNOWN_BENIGN_RESTORE_ERRORS = ()
+
+
+def _step(label, r):
+    """A restore command as a check: a non-zero exit fails the drill, whatever the counts say."""
+    return check(label, r.returncode == 0,
+                 "" if r.returncode == 0 else f"exit {r.returncode}: "
+                 + (r.stderr or r.stdout or "").strip()[-300:])
 
 
 def verify_pg(art, path, work, tmpfs=None):
@@ -148,23 +161,33 @@ def verify_pg(art, path, work, tmpfs=None):
         # database; a dump restores only into the version it was taken from (the live DB was
         # created on an older one and never `ALTER EXTENSION ... UPDATE`d).
         want = art.get("timescaledb")
-        _psql(name, user, db, "DROP EXTENSION IF EXISTS timescaledb CASCADE")
-        _psql(name, user, db, "CREATE EXTENSION timescaledb"
-              + (f" VERSION '{want}'" if want else ""))
+        _step("drop the image's own timescaledb",
+              _psql(name, user, db, "DROP EXTENSION IF EXISTS timescaledb CASCADE"))
+        _step(f"create timescaledb {want or ''}".rstrip(),
+              _psql(name, user, db, "CREATE EXTENSION timescaledb"
+                    + (f" VERSION '{want}'" if want else "")))
         ext =_psql(name, user, db,
                     "SELECT extversion FROM pg_extension WHERE extname='timescaledb'").stdout
         check("timescaledb version matches the dump's", ext.strip() == art.get("timescaledb"),
               f"restore {ext.strip()} vs dump {art.get('timescaledb')}")
-        _psql(name, user, db, "SELECT timescaledb_pre_restore()")
+        _step("timescaledb_pre_restore()",
+              _psql(name, user, db, "SELECT timescaledb_pre_restore()"))
         t0 = time.time()
         pr = docker("exec", name, "pg_restore", "-U", user, "-d", db,
                     f"/in/{os.path.basename(path)}", capture_output=True, text=True)
-        _psql(name, user, db, "SELECT timescaledb_post_restore()")
+        _step("timescaledb_post_restore()",
+              _psql(name, user, db, "SELECT timescaledb_post_restore()"))
         errs = [ln for ln in pr.stderr.splitlines() if "error" in ln.lower()]
+        unknown = [ln for ln in errs
+                   if not any(k in ln for k in KNOWN_BENIGN_RESTORE_ERRORS)]
         print(f"  pg_restore took {time.time() - t0:.0f} s, exit {pr.returncode}, "
-              f"{len(errs)} error line(s)")
-        for ln in errs[:8]:
+              f"{len(errs)} error line(s), {len(errs) - len(unknown)} known-benign")
+        for ln in unknown[:8]:
             print(f"    {ln}")
+        # A non-zero exit fails unless every error line it reported is a listed benign one.
+        check("pg_restore succeeded (exit 0, or only known-benign errors)",
+              not unknown and (pr.returncode == 0 or bool(errs)),
+              f"exit {pr.returncode}, {len(unknown)} unlisted error line(s)")
         tables = art.get("tables", {})
         bad, total = [], 0
         for t, want in sorted(tables.items()):

@@ -121,7 +121,8 @@ with tempfile.TemporaryDirectory() as tmp:
     check("verified_through_id == sealed_through_id", ledger["live"][ino][
         "verified_through_id"] == sealed)
     check("outbox emptied of shipped segments (only the closed sidecar + ledger left)",
-          sorted(os.listdir(outbox)) == ["closed-archive.corrupt-20261028T154237.db.json",
+          sorted(n for n in os.listdir(outbox) if not n.startswith(".")) == [
+              "closed-archive.corrupt-20261028T154237.db.json",
                                          "ledger.json"])
     check("closed file verified and recorded",
           all(v["verified"] for v in ledger["closed"].values()))
@@ -210,6 +211,95 @@ with tempfile.TemporaryDirectory() as tmp:
     side["bytes"] = os.path.getsize(os.path.join(vps, seg))
     json.dump(side, open(os.path.join(vps, seg + ".json"), "w"))
     check("receiver verify: a lost row fails the content hash", not copyoff.verify(vps, seg)["ok"])
+
+print("a rotated db travels with its -wal/-shm (Codex on #198)")
+CORRUPT = "archive.corrupt-20261028T154237.db"
+with tempfile.TemporaryDirectory() as tmp:
+    arc_dir, conn = fake_pi(tmp, n=10)
+    conn.close()
+    old = time.time() - 3600
+    for sfx, payload in (("-wal", b"WAL: rows committed only here " + os.urandom(5000)),
+                         ("-shm", os.urandom(32768))):
+        with open(os.path.join(arc_dir, CORRUPT + sfx), "wb") as f:
+            f.write(payload)
+        os.utime(os.path.join(arc_dir, CORRUPT + sfx), (old, old))
+    outbox, vps = os.path.join(tmp, "outbox"), os.path.join(tmp, "vps")
+    os.makedirs(outbox)
+    copyoff.seal_closed(arc_dir, outbox, settle_s=60)
+    side = json.load(open(os.path.join(outbox, f"closed-{CORRUPT}.json")))
+    check("the sidecar lists the db, its -wal and its -shm",
+          sorted(m["name"] for m in side["members"]) == [CORRUPT, CORRUPT + "-shm",
+                                                         CORRUPT + "-wal"])
+    real = copyoff._transfer
+
+    def bad_wal(src, dest, name):                   # the -wal arrives damaged
+        real(src, dest, name)
+        if name.endswith("-wal"):
+            with open(os.path.join(dest, name), "r+b") as f:
+                f.write(b"X")
+    copyoff._transfer = bad_wal
+    done, fail = copyoff.ship(arc_dir, outbox, vps)
+    copyoff._transfer = real
+    led = copyoff.load_ledger(outbox)
+    check("a damaged -wal fails the whole unit: the db is NOT marked verified",
+          fail == 1 and not any(v["verified"] for v in led["closed"].values()))
+    done, fail = copyoff.ship(arc_dir, outbox, vps)
+    led = copyoff.load_ledger(outbox)
+    check("the retry ships the unit and it verifies",
+          fail == 0 and all(v["verified"] for v in led["closed"].values()))
+    check("the -wal on the receiver is byte-identical to the boat's",
+          copyoff.sha256_file(os.path.join(vps, CORRUPT + "-wal"))
+          == copyoff.sha256_file(os.path.join(arc_dir, CORRUPT + "-wal")))
+    rec = json.load(open(os.path.join(vps, CORRUPT + ".verified.json")))
+    check("the receipt covers all three files", len(rec.get("members", [])) == 3)
+    # a -wal that appears after the db was verified is a new unit, not "already done"
+    with open(os.path.join(arc_dir, CORRUPT + "-wal"), "ab") as f:
+        f.write(b"more")
+    os.utime(os.path.join(arc_dir, CORRUPT + "-wal"), (old, old))
+    check("a changed -wal re-seals the unit", copyoff.seal_closed(arc_dir, outbox, 60) == 1)
+    open(os.path.join(arc_dir, "archive.db.rotating"), "w").close()
+    check("no closed unit is sealed while a rotation is half-done",
+          copyoff.seal_closed(arc_dir, outbox, 60) == 0)
+
+print("seal and ship never overwrite each other's ledger (Codex on #198)")
+with tempfile.TemporaryDirectory() as tmp:
+    arc_dir, conn = fake_pi(tmp, n=1000)
+    os.remove(os.path.join(arc_dir, CORRUPT))
+    outbox, vps = os.path.join(tmp, "outbox"), os.path.join(tmp, "vps")
+    os.makedirs(outbox)
+    copyoff.seal_segments(arc_dir, outbox, max_rows=1000)        # seg 1..1000
+    conn.executemany("INSERT INTO readings (time, boat_id, source, path, value) VALUES "
+                     "(?,?,?,?,?)", [(iso(time.time()), "sr33", "s", "p", i) for i in range(500)])
+    conn.commit()
+    conn.close()
+    in_verify, release = threading.Event(), threading.Event()
+    real_v = copyoff._remote_verify
+
+    def slow_verify(dest, name):                    # ship pauses mid-flight, ledger loaded
+        in_verify.set()
+        release.wait(3)
+        return real_v(dest, name)
+    copyoff._remote_verify = slow_verify
+    shipper = threading.Thread(target=copyoff.ship, args=(arc_dir, outbox, vps))
+    shipper.start()
+    in_verify.wait(5)
+    sealer = threading.Thread(target=copyoff.seal_segments, args=(arc_dir, outbox),
+                              kwargs={"max_rows": 1000})
+    sealer.start()
+    sealer.join(1.0)                                # with the lock it is still waiting here
+    release.set()
+    shipper.join()
+    sealer.join()
+    copyoff._remote_verify = real_v
+    led = copyoff.load_ledger(outbox)
+    ent = next(iter(led["live"].values()))
+    check(f"ship's verified range survives an overlapping seal (verified_through_id "
+          f"{ent.get('verified_through_id')})", ent.get("verified_through_id") == 1000)
+    check(f"seal's cursor survives an overlapping ship (sealed_through_id "
+          f"{ent['sealed_through_id']})", ent["sealed_through_id"] == 1500)
+    segs = sorted(n for n in os.listdir(outbox) if n.startswith("seg-") and n.endswith(".db"))
+    check("exactly the new segment is waiting in the outbox", len(segs) == 1
+          and segs[0].endswith("-000000001001-000000001500.db"))
 
 print("remote destination (rsync + ssh shims)")
 with tempfile.TemporaryDirectory() as tmp:

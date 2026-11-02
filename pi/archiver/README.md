@@ -138,7 +138,11 @@ copyoff.py status --outbox D/outbox
   `outbox/seg-<inode>-<first>-<last>.db` + a JSON sidecar (sha256, row count, a hash of the rows
   as read from the archive). The segment is re-read after it is written, so a bad write on the
   card is caught on the boat. Closed files (`archive.corrupt-*.db`) get a sidecar only; they ship
-  in place, untouched.
+  in place, untouched, as ONE unit with their `-wal`/`-shm` (rows committed only in the -wal
+  are not in the .db); the receipt must match every member. Nothing closed is sealed while
+  `archive.db.rotating` says a rotation is half-done.
+- Seal and ship each hold one lock on the outbox (`outbox/.lock`) for the whole operation;
+  the ledger is written tmp + fsync + rename.
 - `ship` copies artifact + sidecar to the destination (a directory, or `host:dir` via rsync -z
   and ssh) and runs `copyoff.py verify` there, which re-hashes the bytes and, for a segment,
   re-reads every row. Only a receipt matching the boat's own numbers counts: then the ledger
