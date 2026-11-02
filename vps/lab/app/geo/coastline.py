@@ -33,6 +33,7 @@ import os
 from .. import atomicio
 import shutil
 import subprocess
+import tempfile
 import urllib.request
 import zipfile
 
@@ -65,23 +66,33 @@ DATA_VERSION = (f"{GSHHG_VERSION}_{GSHHG_RES}" if GLOBAL_SOURCE == "gshhg" else 
 _LAYERS: dict = {}                        # NE: (role, cache_dir) -> [polygon]; polygon=[ring]; ring=[(lon,lat)]
 
 
+class CoastlineUnavailable(Exception):
+    """No shoreline could be loaded for the box (no download, no ogr2ogr, a broken file). Never
+    the same as "no land here": the caller must not route as if the box were open water (#51)."""
+
+
 def active_source() -> str:
     """The configured global dataset name ('gshhg' or 'natural_earth'), for field provenance."""
     return "gshhg" if GLOBAL_SOURCE == "gshhg" else "natural_earth"
 
 
 # --- shared GeoJSON parser ----------------------------------------------------
-def _parse_geojson(path: str) -> list:
-    """Parse a GeoJSON file into [polygon] where polygon = [ring], ring = [(lon, lat)]."""
+def _parse_geojson(path: str):
+    """Parse a GeoJSON file into [polygon] where polygon = [ring], ring = [(lon, lat)].
+
+    None when the file is missing or unreadable (a failed download, a cut-off clip): that is
+    "unknown", never "no land". [] only for a readable FeatureCollection with no polygons (#51)."""
     if not path or not os.path.exists(path):
-        return []
+        return None
     try:
         with open(path) as f:
             gj = json.load(f)
     except Exception:
-        return []
+        return None
+    if not isinstance(gj, dict) or not isinstance(gj.get("features"), list):
+        return None
     polys = []
-    for ft in gj.get("features", []):
+    for ft in gj["features"]:
         geom = ft.get("geometry") or {}
         t = geom.get("type")
         coords = geom.get("coordinates") or []
@@ -110,7 +121,8 @@ def layers_in_bbox(bbox, cache_dir: str = None) -> dict:
     (polygon = [ring]; ring = [(lon, lat)], outer ring first then holes). The obstacle mask fills
     land, carves lakes, then re-adds islands. Falls back to Natural Earth automatically if GSHHG is
     the configured source but unavailable (missing files / ogr2ogr error). Empty roles are valid
-    (e.g. an open-ocean bbox has no land)."""
+    (e.g. an open-ocean bbox has no land). Raises CoastlineUnavailable when neither dataset can
+    be read: a failed load is never handed back as empty water (#51)."""
     cache_dir = cache_dir or CACHE
     if active_source() == "gshhg":
         out = _gshhg_layers_in_bbox(bbox, cache_dir)
@@ -126,19 +138,35 @@ def _ensure_ne(cache_dir: str) -> dict:
     for role, fn in NE_SOURCES.items():
         p = os.path.join(cache_dir, fn)
         if not os.path.exists(p) or os.path.getsize(p) < 1000:
+            # a temp name of its own (two Lab jobs may fetch at once), moved into place only
+            # when complete: a cut-off download never lands under the real name
+            tmp = None
             try:
-                urllib.request.urlretrieve(f"{NE_BASE_URL}/{fn}", p)
+                fd, tmp = tempfile.mkstemp(dir=cache_dir, prefix=fn + ".", suffix=".part")
+                os.close(fd)
+                urllib.request.urlretrieve(f"{NE_BASE_URL}/{fn}", tmp)
+                os.replace(tmp, p)
             except Exception:
+                if tmp:
+                    _rm(tmp)
                 continue
         if os.path.exists(p):
             out[role] = p
     return out
 
 
-def _ne_layer(role: str, cache_dir: str) -> list:
+def _ne_layer(role: str, cache_dir: str):
+    """One global NE layer, parsed once per process. None (and NOT cached) when it can't be read,
+    or when the LAND layer is empty (the world's land is never empty: a bad file). A bad file is
+    deleted so the next `ensure_global` fetches it again."""
     key = (role, cache_dir)
     if key not in _LAYERS:
-        _LAYERS[key] = _parse_geojson(os.path.join(cache_dir, NE_SOURCES[role]))
+        p = os.path.join(cache_dir, NE_SOURCES[role])
+        polys = _parse_geojson(p)
+        if polys is None or (role == "land" and not polys):
+            _rm(p)                        # cut off / empty land: fetched again next time
+            return None
+        _LAYERS[key] = polys
     return _LAYERS[key]
 
 
@@ -146,8 +174,18 @@ def _ne_layers_in_bbox(bbox, cache_dir: str) -> dict:
     n, s, w, e = bbox
     out = {}
     for role in NE_SOURCES:
-        out[role] = [poly for poly in _ne_layer(role, cache_dir) if _poly_touches(poly, w, s, e, n)]
+        layer = _ne_layer(role, cache_dir)
+        if layer is None:
+            raise CoastlineUnavailable(f"Natural Earth {role} layer missing or unreadable")
+        out[role] = [poly for poly in layer if _poly_touches(poly, w, s, e, n)]
     return out
+
+
+def _rm(path):
+    try:
+        os.remove(path)
+    except OSError:
+        pass
 
 
 # --- GSHHG implementation -----------------------------------------------------
@@ -204,20 +242,26 @@ def _clip_shp(shp: str, out_path: str, bbox) -> bool:
     to the bbox rectangle (a handful of vertices) instead of being returned whole. An empty result
     (open ocean) is a valid success: ogr2ogr writes an empty FeatureCollection with returncode 0."""
     n, s, w, e = bbox
-    tmp = atomicio.tmp_name(out_path)        # ogr2ogr writes a temp; it becomes out_path whole
+    # ogr2ogr writes a unique temp beside the target (it refuses an existing output), which
+    # becomes out_path whole and durably only on success: a timeout or crash mid-write never
+    # leaves a cut-off clip that later runs read as "no land", and two builds of the same box
+    # never touch each other's file (#51). The temp name is one the backup skips (#180).
+    tmp = atomicio.tmp_name(out_path)
     try:
-        r = subprocess.run(["ogr2ogr", "-f", "GeoJSON", "-clipsrc", str(w), str(s), str(e), str(n),
-                            tmp, shp], capture_output=True, timeout=300)
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        r = None
-    if r is None or r.returncode != 0 or not os.path.exists(tmp):
+        try:
+            r = subprocess.run(["ogr2ogr", "-f", "GeoJSON", "-clipsrc", str(w), str(s), str(e),
+                                str(n), tmp, shp], capture_output=True, timeout=300)
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            return False
+        if r.returncode != 0 or _parse_geojson(tmp) is None:
+            return False
+        atomicio.commit(tmp, out_path)
+        return True
+    finally:
         try:
             os.remove(tmp)
         except OSError:
             pass
-        return False
-    atomicio.commit(tmp, out_path)
-    return True
 
 
 def _gshhg_layers_in_bbox(bbox, cache_dir: str):
@@ -235,7 +279,11 @@ def _gshhg_layers_in_bbox(bbox, cache_dir: str):
         if not os.path.exists(gj):
             if not os.path.exists(shp) or not _clip_shp(shp, gj, bbox):
                 return None               # a missing level / ogr2ogr failure → fall back to NE
-        out[role] = _parse_geojson(gj)
+        polys = _parse_geojson(gj)
+        if polys is None:                 # a broken cached clip: drop it (re-clipped next time)
+            _rm(gj)
+            return None
+        out[role] = polys
     return out
 
 

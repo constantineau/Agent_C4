@@ -136,6 +136,29 @@ check("a derivation that RAISES keeps the marker window rather than deleting on 
       survived == markers)
 broken.close()
 
+print("\nthe window is not frozen while the race can still grow (#34):")
+# Jul 18 in miniature, live: the button stopped an hour in, and the prune runs while the boat is
+# still sailing. Until #34 the derived window was cached an hour after the BUTTON, so the first
+# prune froze it on the motion recorded so far, and everything sailed after that went on the
+# deletion path.
+archiver._DERIVED_CACHE.clear()
+arcL, engL = build()
+early = archiver.session_windows(engL, conn=arcL, now=RACE_END + 600)
+arcL.executemany("INSERT INTO readings (time, boat_id, source, path, value) VALUES (?,?,?,?,?)",
+                 [(iso(RACE_END + k * 60), "sr33", GPS, SOG, 3.09) for k in range(1, 121)]
+                 + [(iso(RACE_END + k * 60), "sr33", GPS, COG, 0.349) for k in range(1, 121)])
+arcL.commit()
+later = archiver.session_windows(engL, conn=arcL, now=RACE_END + 3 * 3600)
+check("the two hours sailed after an early prune are kept by the next one "
+      f"(derived end {early[1][1]} -> {later[1][1]})",
+      later[1][1] >= iso(RACE_END + 120 * 60))
+check("...and nothing was cached while the derivation could still see new telemetry",
+      len(archiver._DERIVED_CACHE) == 0)
+settled = archiver.session_windows(engL, conn=arcL,
+                                   now=MARKER_END + archiver.DERIVE_AHEAD_S + 60)
+check("once its whole look-ahead is in the past, the session is cached (and unchanged)",
+      settled == later and len(archiver._DERIVED_CACHE) == 1)
+
 print("\nthe cache does not outlive the truth:")
 archiver._DERIVED_CACHE.clear()
 arc3, eng3 = build()
@@ -145,6 +168,8 @@ arc3.executemany("INSERT INTO readings (time, boat_id, source, path, value) VALU
                  + [(iso(RACE_END + k * 60), "sr33", GPS, COG, 0.349) for k in range(1, 61)])
 arc3.commit()
 grown = archiver.session_windows(eng3, conn=arc3)
+# (The session is a month old, so its look-ahead is long past: rows appearing inside it now are
+# artificial, which is exactly what shows whether the cache is used.)
 check("a settled session is cached (the Pi must not re-scan the archive every hour)",
       grown == first and len(archiver._DERIVED_CACHE) == 1)
 archiver._DERIVED_CACHE.clear()

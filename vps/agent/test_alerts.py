@@ -129,7 +129,13 @@ print("one broken read never hides the others:")
 c = fire(get_ais_targets=boom, get_tactics=boom, get_fatigue=boom, get_strip=strip(depth=3.0))
 check("depth still fires with AIS, tactics and fatigue throwing", set(c) == {"depth_shoaling"})
 c = fire(get_strip=boom, get_ais_targets=ais(tgt("1", 0.3, 4)))
-check("AIS still fires with the strip throwing", set(c) == {"ais:1"})
+check("AIS still fires with the strip throwing", "ais:1" in c)
+check("strip throwing = no live data: 'No live data', danger (Cole, 2026-11-02)",
+      set(c) == {"ais:1", "stale_telemetry"} and c["stale_telemetry"]["severity"] == "danger"
+      and c["stale_telemetry"]["message"] == "No live data. Link or sensors down.")
+blind = set()
+alerts._conditions(blind)
+check("…and depth is reported as not judgeable (held, not cleared)", blind == {"depth_shoaling"})
 
 print("active_alerts order:")
 now = time.time()
@@ -140,8 +146,8 @@ alerts._active_rows = lambda: {
     "d": {"key": "d", "kind": "ais", "severity": "warn", "message": "", "raised_epoch": now - 300},
 }
 order = [a["key"] for a in alerts.active_alerts()]
-check(f"danger first, then warn, then info: {order}", order[0] == "b" and order[-1] == "c"
-      and set(order[1:3]) == {"a", "d"})
+check(f"danger first, then warn (newest first: a 10 s before d 300 s), then info: {order}",
+      order == ["b", "a", "d", "c"])
 check("get_alerts counts them", alerts.get_alerts()["count"] == 4)
 
 print("\n" + ("PASS" if ok else "FAIL"))

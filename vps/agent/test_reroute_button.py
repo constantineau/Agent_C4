@@ -762,8 +762,8 @@ check("a near miss is clear", not X(0.2, 0.9, 0.9, 0.2) and not X(2.1, 0.1, 3.9,
 check("a vertical segment inside a water column is clear", not X(3.5, 0.1, 3.5, 3.9))
 check("a point segment in the cell is blocked", X(1.5, 1.5, 1.5, 1.5))
 check("outside the grid is unknown water", not X(-3, -3, -1, -1))
-check("the GPS export uses it (crosses → cells_touched)",
-      "cells_touched(" in open(landchart.__file__).read().split("def crosses")[1][:400])
+check("the GPS export uses it (crosses → the shared exact walk)",
+      "gridwalk.any_set(" in open(landchart.__file__).read().split("def crosses")[1][:400])
 check("the Pi's fingerprint is the shared one", landchart.course_fingerprint(DEF_L, "c", 2.63)
       == __import__("shared.chartid", fromlist=["x"]).course_fingerprint(DEF_L, "c", 2.63))
 os.remove(orinassets._path())

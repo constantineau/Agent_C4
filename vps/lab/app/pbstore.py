@@ -74,6 +74,7 @@ def list_bundles():
             "course_id": b.get("course_id"), "start_epoch": b.get("start_epoch"),
             "generated_at": b.get("generated_at"), "headline": b.get("headline"),
             "recommended": b.get("recommended"), "n_variants": len(b.get("variants", [])),
+            "degraded": bool(b.get("degraded")), "warnings": list(b.get("warnings") or []),
             "signed": bool(sig.get("value")), "signed_at": sig.get("signed_at"),
             "synth_model": (b.get("provenance") or {}).get("synth_model"),
         })

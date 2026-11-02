@@ -91,19 +91,23 @@ check("...and kept every row", len(buf) == 50)
 
 # --- 2. the prune deletes in small batches, releasing the lock between them ---------------
 class SpyLock:
-    """Stands in for archiver._WRITE_LOCK: records who held it, and for how long."""
+    """Stands in for archiver._WRITE_LOCK: records who held it, for how long, and how much
+    SQLite work ran inside (VM steps from `steps`, a one-item counter a progress handler bumps).
+    Work, not seconds, is what a slow box cannot inflate (#186: a 100-row chunk read 12 s)."""
 
-    def __init__(self):
+    def __init__(self, steps=None):
         self.real = threading.Lock()
-        self.log = []                   # (thread name, held seconds)
+        self.steps = steps if steps is not None else [0]
+        self.log = []                   # (thread name, held seconds, VM steps while held)
 
     def __enter__(self):
         self.real.acquire()
-        self._t = time.monotonic()
+        self._t, self._s = time.monotonic(), self.steps[0]
         return self
 
     def __exit__(self, *a):
-        self.log.append((threading.current_thread().name, time.monotonic() - self._t))
+        self.log.append((threading.current_thread().name, time.monotonic() - self._t,
+                         self.steps[0] - self._s))
         self.real.release()
         return False
 
@@ -135,7 +139,13 @@ with tempfile.TemporaryDirectory() as d:
     archiver.write_rows(conn, rows)
     s0 = (old0 + timedelta(minutes=1000)).timestamp()
     engine_db(eng, [(1, None, s0, s0 + 199 * 60 + 1)])
-    real_lock, archiver._WRITE_LOCK = archiver._WRITE_LOCK, SpyLock()
+    vm = [0]
+
+    def count_vm():
+        vm[0] += 100
+        return 0
+    conn.set_progress_handler(count_vm, 100)
+    real_lock, archiver._WRITE_LOCK = archiver._WRITE_LOCK, SpyLock(vm)
     real_win = archiver.session_windows
     # the marker window only: the derived-window maths has its own test (test_prune_window)
     archiver.session_windows = lambda e, conn=None: real_win(e, conn=None)
@@ -161,8 +171,10 @@ with tempfile.TemporaryDirectory() as d:
     finally:
         archiver._WRITE_LOCK = real_lock
         archiver.session_windows = real_win
-    prune_holds = [h for name, h in spy.log if name == "MainThread"]
-    order = [name for name, _ in spy.log]
+        conn.set_progress_handler(None, 0)
+    prune_holds = [h for name, h, _ in spy.log if name == "MainThread"]
+    prune_work = [w for name, _, w in spy.log if name == "MainThread"]
+    order = [name for name, _, _ in spy.log]
     first = order.index("MainThread")
     last = len(order) - 1 - order[::-1].index("MainThread")
     check(f"deleted the 2,800 out-of-session old rows ({deleted})", deleted == 2800)
@@ -170,8 +182,12 @@ with tempfile.TemporaryDirectory() as d:
           len(prune_holds) >= 28)
     check("the flusher wrote between the prune's batches",
           "flusher" in order[first:last])
-    check(f"longest single prune hold {max(prune_holds) * 1000:.0f} ms (< 1 s)",
-          max(prune_holds) < 1.0)
+    # The flusher waits for each hold, so no hold may do much of the prune's work. Measured in
+    # VM steps, which a loaded box cannot stretch the way it stretches milliseconds; batched,
+    # each of the ~28 holds is a few percent of the total.
+    check(f"largest single prune hold {max(prune_work)} of {sum(prune_work)} VM steps "
+          f"(< 25%; it took {max(prune_holds) * 1000:.0f} ms here)",
+          sum(prune_work) > 0 and max(prune_work) < 0.25 * sum(prune_work))
     n_old = conn.execute("SELECT count(*) FROM readings WHERE time < ?",
                          (iso(now - timedelta(days=7)),)).fetchone()[0]
     check("exactly the session window's 200 old rows are kept", n_old == 200)
