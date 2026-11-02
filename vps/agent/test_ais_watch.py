@@ -341,6 +341,45 @@ with tempfile.TemporaryDirectory() as d:
     check("…and the late report still counts as heard (feed health)", got and abs(got[0]["time"] - time.time()) < 2)
     src._ingest_live(delta(SHIP, iso(t_rx), "navigation.speedOverGround", 12 / ais._MS_TO_KN))
     check("a newer SOG on its own still applies", src.ais_targets(5)[0]["sog"] == 12.0)
+    # Codex on #191 at 11e57e4: a position at T-400, then `{}` stamped T, then a valid one at T-1.
+    # The empty report must not move pos_time (it dated the old coordinates T and rejected the fix).
+    B = t_rx - 100
+    src._ais = {}
+    src._ingest_live(delta(SHIP, iso(B - 400), "navigation.position", {"latitude": 45.0, "longitude": -83.0}))
+    src._ingest_live(delta(SHIP, iso(B), "navigation.position", {}))
+    src._ingest_live(delta(SHIP, iso(B - 1), "navigation.position", {"latitude": 45.3, "longitude": -83.1}))
+    got = src._ais[366999020]
+    check("`{}` doesn't move pos_time: the later valid fix (T-1) is taken, dated T-1",
+          got["lat"] == 45.3 and got["lon"] == -83.1 and abs(got["pos_time"] - (B - 1)) < 0.01)
+    for bad in ({"latitude": 45.5}, {"latitude": float("nan"), "longitude": -83.0},
+                {"latitude": 91.0, "longitude": -83.0}, {"latitude": "45", "longitude": -83.0},
+                {"latitude": True, "longitude": -83.0}, None, "45,-83"):
+        src._ingest_live(delta(SHIP, iso(B + 5), "navigation.position", bad))
+    got = src._ais[366999020]
+    check("half, NaN, out-of-range, string, bool and non-dict positions change nothing",
+          got["lat"] == 45.3 and abs(got["pos_time"] - (B - 1)) < 0.01)
+    src._ingest_live(delta(SHIP, iso(B - 2), "navigation.speedOverGround", 5.0))
+    for bad in (float("nan"), "5", None, -1.0, 500.0):
+        src._ingest_live(delta(SHIP, iso(B + 5), "navigation.speedOverGround", bad))
+    src._ingest_live(delta(SHIP, iso(B + 5), "navigation.courseOverGroundTrue", float("inf")))
+    src._ingest_live(delta(SHIP, iso(B - 3), "navigation.courseOverGroundTrue", 1.0))
+    got = src._ais[366999020]
+    check("bad SOG/COG values don't move their times; the valid older-than-junk ones still apply",
+          got["sog"] == round(5.0 * ais._MS_TO_KN, 2) and abs(got["sog_time"] - (B - 2)) < 0.01
+          and got["cog"] == round(math.degrees(1.0), 1) and abs(got["cog_time"] - (B - 3)) < 0.01)
+    # own ship: the same rule
+    src._live = {}
+    own_pos = lambda ts, val: _json.dumps({"updates": [{"$source": GPS24, "timestamp": iso(ts),  # noqa: E731
+                                                        "values": [{"path": "navigation.position", "value": val}]}]})
+    src._ingest_live(own_pos(B, {}))
+    src._ingest_live(own_pos(B, {"latitude": 45.2}))
+    src._ingest_live(own_pos(B, {"latitude": float("nan"), "longitude": -83.0}))
+    check("own ship: `{}`, half or NaN positions write nothing", (LAT, GPS24) not in src._live
+          and (LON, GPS24) not in src._live)
+    src._ingest_live(own_pos(B - 1, {"latitude": 45.2, "longitude": -83.2}))
+    check("…so the valid fix after them is taken, lat and lon together",
+          src._live.get((LAT, GPS24)) == (B - 1, 45.2) and src._live.get((LON, GPS24)) == (B - 1, -83.2))
+
     # own ship: an older-stamped own position never replaces a newer one in the live cache
     src._live = {}
     own_at = lambda ts, lat: _json.dumps({"updates": [{"$source": GPS24, "timestamp": iso(ts),  # noqa: E731

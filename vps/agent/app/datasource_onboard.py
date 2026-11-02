@@ -68,6 +68,31 @@ def _epoch(iso):
         return None
 
 
+_MAX_SOG_MS = 60.0          # ~117 kn: anything faster is a decode error, not a vessel
+
+
+def _finite(x):
+    """x as a finite float, or None (bools, strings, NaN, inf, None are not readings)."""
+    if isinstance(x, bool) or not isinstance(x, (int, float)):
+        return None
+    try:
+        f = float(x)
+    except (OverflowError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
+
+
+def _lat_lon(value):
+    """(lat, lon) from a Signal K position value when BOTH are finite numbers in range, else None.
+    Half a position, an empty `{}`, a NaN or a lat of 91 is not a fix."""
+    if not isinstance(value, dict):
+        return None
+    lat, lon = _finite(value.get("latitude")), _finite(value.get("longitude"))
+    if lat is None or lon is None or not (-90 <= lat <= 90) or not (-180 <= lon <= 180):
+        return None
+    return lat, lon
+
+
 # A Signal K update timestamp later than receipt by more than this is clock nonsense → receipt.
 FUTURE_SKEW_S = 2.0
 
@@ -338,12 +363,23 @@ class OnboardSource:
                     path, val = v.get("path"), v.get("value")
                     if not path:
                         continue
-                    if isinstance(val, (int, float)) and not isinstance(val, bool):
-                        self._put_live((path, source), at, float(val))
+                    if path == "navigation.position":
+                        # lat and lon only as a valid PAIR, written together (never half a fix, a
+                        # NaN, or an out-of-range coordinate — and never a time without a value)
+                        ll = _lat_lon(val)
+                        if ll:
+                            self._put_live((f"{path}.latitude", source), at, ll[0])
+                            self._put_live((f"{path}.longitude", source), at, ll[1])
+                        if isinstance(val, dict):   # other members (altitude) as before, if finite
+                            for k, sub in val.items():
+                                if k not in ("latitude", "longitude") and _finite(sub) is not None:
+                                    self._put_live((f"{path}.{k}", source), at, _finite(sub))
+                    elif _finite(val) is not None:
+                        self._put_live((path, source), at, _finite(val))
                     elif isinstance(val, dict):  # flatten position/attitude like the archiver
                         for k, sub in val.items():
-                            if isinstance(sub, (int, float)) and not isinstance(sub, bool):
-                                self._put_live((f"{path}.{k}", source), at, float(sub))
+                            if _finite(sub) is not None:
+                                self._put_live((f"{path}.{k}", source), at, _finite(sub))
 
     def _put_live(self, key, at, val):
         """Hold the newest own-ship reading per (path, source): an out-of-order (older-stamped)
@@ -368,29 +404,27 @@ class OnboardSource:
 
         def newer(field):
             held = t.get(field)
-            if held is not None and at < held:
-                return False
-            t[field] = at
-            return True
+            return held is None or at >= held
 
-        num = isinstance(value, (int, float)) and not isinstance(value, bool)
+        # validate FIRST, then update the value(s) and their time together: a bad or empty report
+        # must never move a field's time (it would date the old value as new and reject the next
+        # real one)
         if path in ("name", "") and isinstance(value, str) and value:
             t["name"] = value
-        elif path == "navigation.position" and isinstance(value, dict):
-            # its own clock: `time` above moves on ANY delta (a name update too), and the collision
-            # watch dead-reckons a target by the age of its POSITION
-            if not newer("pos_time"):
-                return
-            if isinstance(value.get("latitude"), (int, float)):
-                t["lat"] = float(value["latitude"])
-            if isinstance(value.get("longitude"), (int, float)):
-                t["lon"] = float(value["longitude"])
-        elif path == "navigation.speedOverGround" and num:
-            if newer("sog_time"):
-                t["sog"] = round(float(value) * _MS_TO_KN, 2)
-        elif path == "navigation.courseOverGroundTrue" and num:
-            if newer("cog_time"):
-                t["cog"] = round(math.degrees(float(value)) % 360, 1)
+        elif path == "navigation.position":
+            ll = _lat_lon(value)
+            if ll and newer("pos_time"):
+                # its own clock: `time` above moves on ANY delta (a name update too), and the
+                # collision watch dead-reckons a target by the age of its POSITION
+                t["lat"], t["lon"], t["pos_time"] = ll[0], ll[1], at
+        elif path == "navigation.speedOverGround":
+            v = _finite(value)
+            if v is not None and 0 <= v <= _MAX_SOG_MS and newer("sog_time"):
+                t["sog"], t["sog_time"] = round(v * _MS_TO_KN, 2), at
+        elif path == "navigation.courseOverGroundTrue":
+            v = _finite(value)
+            if v is not None and newer("cog_time"):
+                t["cog"], t["cog_time"] = round(math.degrees(v) % 360, 1), at
 
     def _live_fresh(self, path):
         """[(source, epoch, value)] for a path from the live cache, only entries within TTL."""
