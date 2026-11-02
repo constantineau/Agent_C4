@@ -143,7 +143,7 @@ each play carries a compact digest; full play text is fetched per-play through a
   producer of the compat `variants[]`; adds route-vs-nominal divergence scoring for the dedupe.
 - **`synthesis.py`**: writes the plays — crew-facing narrative + BOTH condition forms + tradeoffs +
   `what_flips_it` + the library-wide decision tree. **Model chain: Fable primary
-  (`claude-fable-5`), Opus fallback (`claude-opus-4-8`)** — env `ANTHROPIC_MODEL_CHAIN`, tried in
+  (`claude-fable-5-1` since 2026-11-02; was `claude-fable-5`), Opus fallback (`claude-opus-5`; was `claude-opus-4-8`)** — env `ANTHROPIC_MODEL_CHAIN`, tried in
   order; the deterministic no-LLM fallback bundle remains below both. Signing/freezing unchanged.
 
 ## 5. v1 compatibility

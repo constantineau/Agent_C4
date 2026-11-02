@@ -61,6 +61,12 @@ Dual input → Opus extraction → a **draft** RaceDefinition → human review �
   streamed), with a JSON check + one retry as backstop. Nothing is dropped silently: a link that
   won't download, a trimmed or unreadable document, or a PDF read only as text becomes the first
   "Check these" item in the review; failures come back as one plain sentence (what, and what to do).
+- **Runs as a background job** (2026-11-02; same pattern as the Debrief): the page POSTs
+  `/api/ingest/run` (URLs) or `/api/ingest/run/upload` (files) → `{job_id}`, then polls
+  `/api/ingest/run/status?job_id=…` for a progress line ("Reading documents… / Building the course
+  and the checklist… / Course done.") and finally the draft or the plain error. One ingest at a
+  time (a second start gets a plain "already running"). A Lab restart mid-job answers "Ingest was
+  interrupted. Run it again." The one-request `/api/ingest` + `/api/ingest/upload` stay for scripts.
 - **Review + sign-off**: the Races tab renders an inline-editable review form (header, marks,
   requirements, rules & scoring, tracker, provenance) bound to the in-memory definition; **Save**
   (`POST /api/races`) persists to the `lab_ingested` volume (overrides the bundled seed) +

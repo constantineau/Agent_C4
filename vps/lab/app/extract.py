@@ -617,11 +617,19 @@ def _extract_part(name: str, content: list, usage) -> tuple[dict, str]:
     raise IngestError(f"The AI's reply wasn't valid JSON twice ({err}). Try again.")
 
 
-def _extract_parts(content: list, usage) -> tuple[dict, str]:
-    from concurrent.futures import ThreadPoolExecutor
+PART_DONE = {"course": "Course done.", "rules": "Checklist done."}
+
+
+def _extract_parts(content: list, usage, say=None) -> tuple[dict, str]:
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    say = say or (lambda m: None)
+    say("Building the course and the checklist… (1 to 3 min)")
     with ThreadPoolExecutor(max_workers=len(PARTS)) as pool:
-        futs = {n: pool.submit(_extract_part, n, content, usage) for n in PARTS}
-        results = {n: f.result() for n, f in futs.items()}   # the first failure raises
+        futs = {pool.submit(_extract_part, n, content, usage): n for n in PARTS}
+        results = {}
+        for f in as_completed(futs):
+            results[futs[f]] = f.result()      # the first failure raises
+            say(PART_DONE.get(futs[f], f"{futs[f]} done."))
     merged = {}
     for name in PARTS:
         part = results[name][0]
@@ -630,7 +638,7 @@ def _extract_parts(content: list, usage) -> tuple[dict, str]:
 
 
 def extract_race_definition(docs, retrieved: str = "", notes: list | None = None,
-                            usage: dict | None = None) -> dict:
+                            usage: dict | None = None, on_progress=None) -> dict:
     """docs = doc dicts (load_url/load_pdf) or legacy [(label, text)]; returns a draft
     RaceDefinition dict. `notes` collects plain review notes (trimmed/empty/oversized docs);
     `usage` collects model + token counts. Raises IngestError with a plain message."""
@@ -642,13 +650,14 @@ def extract_race_definition(docs, retrieved: str = "", notes: list | None = None
     content = build_content(docs, notes)
     try:
         try:
-            defn, model = _extract_parts(content, usage)
+            defn, model = _extract_parts(content, usage, on_progress)
         except lab_llm.BadDocument:
             if not any(b.get("type") == "document" for b in content):
                 raise
             notes.append("The AI couldn't open a PDF as a PDF, so only the documents' plain text "
                          "was read. Tables and scanned pages may be missing.")
-            defn, model = _extract_parts(build_content(_text_only(docs), notes), usage)
+            defn, model = _extract_parts(build_content(_text_only(docs), notes), usage,
+                                         on_progress)
     except IngestError:
         raise
     except Exception as e:  # noqa: BLE001 — every model failure becomes a plain message

@@ -1,10 +1,18 @@
 """Frontier-LLM helper for the Lab — a MODEL CHAIN with fallback.
 
 EVERY Lab frontier call routes through here (synthesis, briefing, race-doc extraction, entry-list
-extraction, the debrief critique): primary **Fable** (`claude-fable-5`), falling back to **Opus**
-(`claude-opus-4-8`) if Fable errors or is unavailable (user decision 2026-07-06 —
-docs/PLAYBOOK_V2.md §4). `ANTHROPIC_MODEL_CHAIN` overrides the chain (comma-separated, tried in
-order); the old single-model `ANTHROPIC_MODEL` env is no longer consulted.
+extraction, the debrief critique): primary **Fable 5.1** (`claude-fable-5-1`), falling back to
+**Opus 5** (`claude-opus-5`) if Fable errors, refuses or is unavailable (user decision 2026-07-06 —
+docs/PLAYBOOK_V2.md §4; models moved up from claude-fable-5 / claude-opus-4-8 on 2026-11-02).
+`ANTHROPIC_MODEL_CHAIN` overrides the chain (comma-separated, tried in order); the old
+single-model `ANTHROPIC_MODEL` env is no longer consulted.
+
+These models think on every request (Fable always; Opus 5 by default), and `max_tokens` caps the
+thinking AND the answer, so a call never gets less than MIN_MAX_TOKENS. No sampling parameters,
+prefill or forced tool_choice are used here (sampling and prefill 400 on both models; forced
+tool_choice 400s on Fable 5.1). A refusal
+(stop_reason "refusal", HTTP 200) falls through to the next model; its partial text is never
+returned as an answer.
 
 Callers keep their own deterministic no-LLM fallback below this chain: `complete()` raising means
 "no frontier model answered", and the Lab never depends on one.
@@ -13,10 +21,11 @@ import logging
 import os
 
 log = logging.getLogger("lab.llm")
-DEFAULT_CHAIN = "claude-fable-5,claude-opus-4-8"
+DEFAULT_CHAIN = "claude-fable-5-1,claude-opus-5"
 MODEL_CHAIN = [m.strip() for m in
                os.environ.get("ANTHROPIC_MODEL_CHAIN", DEFAULT_CHAIN).split(",") if m.strip()]
 API_KEY = os.environ.get("ANTHROPIC_API_KEY")
+MIN_MAX_TOKENS = 16000     # room for thinking + a short answer (judge used to ask for 1200)
 
 
 class Truncated(RuntimeError):
@@ -28,18 +37,23 @@ def complete(system: str, user: str, max_tokens: int = 4000) -> tuple[str, str]:
     """One system+user completion through the chain. Returns (text, model_used) from the FIRST
     model that answers with non-empty text; raises Truncated on a max_tokens stop, else the last
     error when the whole chain fails (callers treat that like any LLM failure → their
-    deterministic fallback)."""
-    import anthropic
-    client = anthropic.Anthropic(api_key=API_KEY)
+    deterministic fallback). Streamed, so a long answer never waits on one idle HTTP read."""
+    client = _client()
+    max_tokens = max(max_tokens, MIN_MAX_TOKENS)
     last_err = None
     for model in MODEL_CHAIN:
         try:
-            resp = client.messages.create(
+            with client.messages.stream(
                 model=model, max_tokens=max_tokens, system=system,
                 messages=[{"role": "user", "content": user}],
-            )
-            if getattr(resp, "stop_reason", "") == "max_tokens":
+            ) as stream:
+                resp = stream.get_final_message()
+            stop = getattr(resp, "stop_reason", "")
+            if stop == "max_tokens":
                 raise Truncated(f"{model}: output hit max_tokens={max_tokens}")
+            if stop == "refusal":       # partial text before a mid-stream refusal is not an answer
+                last_err = RuntimeError(f"{model}: refused")
+                continue
             txt = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text").strip()
             if txt:
                 return txt, model
