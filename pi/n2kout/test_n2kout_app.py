@@ -457,6 +457,37 @@ b5.stop(reason="course changed", keep_course="C1:race")
 check("keep_course = another course → stopped, 'course changed'",
       not b5.state["broadcasting"] and b5.state["ended"] == "course changed")
 
+print("broadcaster — nav_live only when the nav PGNs really reached the bus:")
+real = n2k.N2kSender("can-nope")               # no such interface: every send fails
+
+
+clk6 = Clock()
+b6 = A._Broadcaster(sender=real, clock=clk6, leg_check=CLEAR,
+                    fix_source=lambda: {"fix": {"lat": 43.005, "lon": -82.0, "t": clk6.t},
+                                        "course": "L1:race"})
+b6.state["expires_at"] = clk6.t + 1000
+b6.cycle(body(), navcalc.LegTracker(WP, 1), 0)
+check("CAN down → sends fail → NOT nav_live, 'not sent', the error counted",
+      not b6.state["nav_live"] and b6.state["steer_paused"] == "not sent"
+      and real.send_errors >= 1 and real.frames_sent == 0)
+check("…and the iPad's line isn't 'sending'",
+      A.link_word({"present": True, "up": True, "state": "ERROR-ACTIVE"}, real, True,
+                  time.time()) == "errors")
+
+
+class HalfSender(FakeSender):                      # 129283 goes, 129284 fails
+    def send(self, pgn, prio, data, single=None, dest=0xFF, src=None):
+        return 0 if pgn == 129284 else super().send(pgn, prio, data)
+
+
+b7 = A._Broadcaster(sender=HalfSender(), clock=clk6, leg_check=CLEAR,
+                    fix_source=lambda: {"fix": {"lat": 43.005, "lon": -82.0, "t": clk6.t},
+                                        "course": "L1:race"})
+b7.state["expires_at"] = clk6.t + 1000
+b7.cycle(body(), navcalc.LegTracker(WP, 1), 0)
+check("only one of the two nav PGNs went out → not live", not b7.state["nav_live"]
+      and b7.state["steer_paused"] == "not sent")
+
 print("broadcaster — the fix is aged again right before sending:")
 fs3, clk3 = FakeSender(), Clock()
 
@@ -735,6 +766,11 @@ check("a send error in the last minute → errors", A2.link_word(up, fs, True, n
 fs.last_error_at = now - 120
 check("an old send error → sending again", A2.link_word(up, fs, True, now) == "sending")
 check("bus thread down → errors", A2.link_word(up, fs, False, now) == "errors")
+fs7 = FakeSender()
+check("nothing has ever reached the bus → no bus (not 'sending')",
+      A2.link_word(up, fs7, True, now) == "no bus")
+fs7.last_ok_at = now - A2.OK_WINDOW_S - 1
+check("nothing sent for over 2 min → no bus", A2.link_word(up, fs7, True, now) == "no bus")
 
 A2.can_link = lambda *a, **k: dict(up, restart_ms=100, bus_off=0)
 A2.BUS.frames_sent, A2.BUS.send_errors = 12, 1

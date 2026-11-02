@@ -199,12 +199,13 @@ class _Broadcaster:
         return g == self.gen and not evt.is_set()
 
     def _send_g(self, g, evt, msg):
+        """→ True when frames reached the socket, False when the send failed (no bus, buffer
+        full…), None when this worker is retired (nothing attempted)."""
         with self.slock:
             if not self._current(g, evt):
-                return False
+                return None
             pgn, prio, data = msg
-            self.sender.send(pgn, prio, data)
-            return True
+            return self.sender.send(pgn, prio, data) > 0
 
     def _set(self, g, **kw):
         with self.slock:
@@ -216,10 +217,10 @@ class _Broadcaster:
 
     def _terminate(self, send):
         """'Navigation terminated' + all-n/a nav data, TERMINATE_REPEATS times. `send(msg)` →
-        False stops it (a worker whose generation was retired mid-way)."""
+        None stops it (a worker whose generation was retired mid-way); a failed send doesn't."""
         for k in range(TERMINATE_REPEATS):
             for msg in self._terminate_msgs():
-                if send(msg) is False:
+                if send(msg) is None:
                     return
             if k < TERMINATE_REPEATS - 1:
                 time.sleep(0.2)
@@ -314,14 +315,17 @@ class _Broadcaster:
             self._set(g, nav_live=False, nav=None, steer_paused="no position")
             return None
         sent = self._send_g(g, evt, n2k.encode_129283(nav["xte_m"], sid=sid))
+        sent2 = None
         if sent and fresh():
-            self._send_g(g, evt, n2k.encode_129284(
+            sent2 = self._send_g(g, evt, n2k.encode_129284(
                 nav["dest"][0], nav["dest"][1], dest_wp=nav["dest_index"],
                 origin_wp=nav["origin_index"], eta_epoch=nav["eta_epoch"], dtw_m=nav["dtw_m"],
                 brg_deg=nav["brg_deg"], brg_origin_deg=nav["brg_leg_deg"], sid=sid,
                 perp_crossed=nav["perp_crossed"], arrived=nav["arrived"],
                 closing_mps=nav["closing_mps"]))
-        self._set(g, nav_live=True, steer_paused=None, nav={
+        # live only when BOTH nav PGNs reached the bus; a failed send (CAN down) is "not sent"
+        live = sent is True and sent2 is True
+        self._set(g, nav_live=live, steer_paused=None if live else "not sent", nav={
             "dest_index": nav["dest_index"], "dest": body.waypoints[nav["dest_index"]].name,
             "dtw_nm": round(nav["dtw_m"] / navcalc.NM_M, 3),
             "brg_deg": round(nav["brg_deg"], 1),
@@ -554,15 +558,22 @@ def can_link(iface=CAN_IFACE, run=subprocess.run, ttl=5.0):
     return out
 
 
+OK_WINDOW_S = 2 * HEARTBEAT_S     # "sending" needs a frame that really went out this recently
+
+
 def link_word(link, sender, bus_alive, now):
-    """The iPad's one line: "sending" / "no bus" / "errors"."""
+    """The iPad's one line: "sending" / "no bus" / "errors". "sending" only on REAL sends: a
+    frame reached the socket in the last OK_WINDOW_S (the heartbeat alone does that every
+    60 s) and no send has failed in the last ERROR_WINDOW_S."""
     if not link.get("present") or not link.get("up") or link.get("state") in ("BUS-OFF",
                                                                               "STOPPED"):
         return "no bus"
-    if not bus_alive and sender.last_ok_at is None:
-        return "no bus"
     recent_err = sender.last_error_at is not None and now - sender.last_error_at <= ERROR_WINDOW_S
-    if recent_err or link.get("state") == "ERROR-PASSIVE" or not bus_alive:
+    if recent_err:
+        return "errors"
+    if sender.last_ok_at is None or now - sender.last_ok_at > OK_WINDOW_S:
+        return "no bus"
+    if link.get("state") == "ERROR-PASSIVE" or not bus_alive:
         return "errors"
     return "sending"
 
