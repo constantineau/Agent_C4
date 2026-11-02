@@ -132,6 +132,10 @@ check("…and no geometry is claimed", all(t["cpa_nm"] is None and t["closing"] 
 check("fix 2 s old → own_fix true", run(Src([freighter], fix_age=2))["own_fix"] is True)
 r = run(Src([freighter], fix_age=1, lat=None))
 check("no position at all → own_fix false, 'no GPS fix'", r["own_fix"] is False and r["own_fix_reason"] == "no GPS fix")
+r = run(Src([freighter], fix_age=-3600))
+check("a fix stamped an hour in the FUTURE (clock stepped back) → 'no GPS fix', not age 0",
+      r["own_fix"] is False and r["own_fix_reason"] == "no GPS fix")
+check("a fix 3 s in the future (inside the skew) still counts", run(Src([freighter], fix_age=-3))["own_fix"] is True)
 saved = ais.OWN_FIX_MAX_AGE_S
 ais.OWN_FIX_MAX_AGE_S = 0
 check("AIS_OWN_FIX_MAX_AGE_S=0 (replay) → the age check is off",
@@ -286,6 +290,16 @@ with tempfile.TemporaryDirectory() as d:
     check("24xd 40 s + Orca 1 s → the 24xd's value AND its 40 s time, from one pick",
           smp and smp[0] == 45.0 and abs(now - smp[1] - 40) < 1.5)
     check("latest_value agrees with latest_sample (one code path)", src.latest_value(LAT) == smp[0])
+    # after a backward clock step the archive holds rows stamped AHEAD of now: never read them
+    archive(db, [(LAT, GPS24, now + 3600, 46.0), (LON, GPS24, now + 3600, -84.0),
+                 (LAT, GPS24, now - 10, 45.0), (LON, GPS24, now - 10, -83.0)])
+    smp = onboard(db, {}).latest_sample(LAT)
+    check("archive rows an hour in the future are skipped: the newest real row (10 s) is used",
+          smp and smp[0] == 45.0 and abs(now - smp[1] - 10) < 1.5)
+    archive(db, [(LAT, GPS24, now + 3600, 46.0), (LON, GPS24, now + 3600, -84.0)])
+    check("only future rows → no fix at all", onboard(db, {}).latest_sample(LAT) is None)
+    archive(db, [(LAT, GPS24, now - 40, 45.0), (LON, GPS24, now - 40, -83.0),
+                 (LAT, ORCA, now - 1, 45.0003), (LON, ORCA, now - 1, -83.0003)])
     ais.datasource.active = lambda: src
     ais.OWN_FIX_MAX_AGE_S = 30
     r = ais.get_ais_targets()
@@ -341,6 +355,20 @@ with tempfile.TemporaryDirectory() as d:
     check("…and the late report still counts as heard (feed health)", got and abs(got[0]["time"] - time.time()) < 2)
     src._ingest_live(delta(SHIP, iso(t_rx), "navigation.speedOverGround", 12 / ais._MS_TO_KN))
     check("a newer SOG on its own still applies", src.ais_targets(5)[0]["sog"] == 12.0)
+    # Codex on #191 at e71ecb3: SOG/COG expire by their own time (5 min). A fresh position after 2 h
+    # with no valid motion must not dead-reckon on the 2-h-old velocity.
+    src._ais = {}
+    src._ingest_live(delta(SHIP, iso(t_rx - 7200), "navigation.speedOverGround", 10 / ais._MS_TO_KN))
+    src._ingest_live(delta(SHIP, iso(t_rx - 7200), "navigation.courseOverGroundTrue", math.pi))
+    src._ingest_live(delta(SHIP, iso(t_rx - 1), "navigation.position", {"latitude": 45.002, "longitude": -83.0}))
+    got = src.ais_targets(5)
+    check("2-h-old SOG/COG with a fresh position → sog/cog None (motion unknown)",
+          len(got) == 1 and got[0]["sog"] is None and got[0]["cog"] is None)
+    src._ingest_live(delta(SHIP, iso(t_rx - 2), "navigation.speedOverGround", 10 / ais._MS_TO_KN))
+    got = src.ais_targets(5)
+    check("…a fresh SOG comes back on its own; the stale COG stays unknown",
+          got[0]["sog"] == round(10.0, 2) and got[0]["cog"] is None)
+
     # Codex on #191 at 11e57e4: a position at T-400, then `{}` stamped T, then a valid one at T-1.
     # The empty report must not move pos_time (it dated the old coordinates T and rejected the fix).
     B = t_rx - 100

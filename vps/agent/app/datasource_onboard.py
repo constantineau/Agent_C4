@@ -97,6 +97,9 @@ def _lat_lon(value):
 # disagreement larger than this between two looks is a step, and the live caches are reset.
 CLOCK_STEP_S = float(os.environ.get("ONBOARD_CLOCK_STEP_S", "5"))
 
+# A target's SOG/COG older than this (by their own report time) is dropped: motion unknown.
+AIS_MOTION_MAX_S = float(os.environ.get("ONBOARD_AIS_MOTION_MAX_S", "300"))
+
 # A Signal K update timestamp later than receipt by more than this is clock nonsense → receipt.
 FUTURE_SKEW_S = 2.0
 
@@ -511,9 +514,13 @@ class OnboardSource:
             best = self._prefer(path, live)
             return (best[2], best[1])
         not_ais, ais_p = self._not_ais()
+        # never a row from the future: after a backward clock step the archive holds rows stamped
+        # ahead of "now", and the newest of those would read as a fresh fix
+        upper = datetime.fromtimestamp(_time.time() + FUTURE_SKEW_S, timezone.utc
+                                       ).strftime("%Y-%m-%dT%H:%M:%S") + "Z"
         newest = self._archive.execute(
             "SELECT max(time) AS time FROM readings WHERE boat_id=? AND path=? "
-            "AND value IS NOT NULL" + not_ais, (BOAT_ID, path, *ais_p),
+            "AND value IS NOT NULL AND time <= ?" + not_ais, (BOAT_ID, path, upper, *ais_p),
         ).fetchone()
         if not newest or not newest["time"]:
             return None
@@ -525,8 +532,8 @@ class OnboardSource:
         ).strftime("%Y-%m-%dT%H:%M:%S")
         rows = self._archive.execute(
             "SELECT source, max(time) AS time, value FROM readings WHERE boat_id=? AND path=? "
-            "AND value IS NOT NULL AND time > ?" + not_ais + " GROUP BY source",
-            (BOAT_ID, path, cut, *ais_p),
+            "AND value IS NOT NULL AND time > ? AND time <= ?" + not_ais + " GROUP BY source",
+            (BOAT_ID, path, cut, upper, *ais_p),
         ).fetchall()
         cands = [(r["source"], _epoch(r["time"]), r["value"]) for r in rows]
         cands = [c for c in cands if c[1] is not None]
@@ -839,15 +846,21 @@ class OnboardSource:
         captured by the live cache. Shape-matched to CloudSource: [{mmsi, name, lat, lon,
         sog(kn), cog(deg true), time(epoch)}]; targets without a position fix are skipped."""
         self._check_clock()
-        cut = _time.time() - max_age_min * 60.0
+        now = _time.time()
+        cut = now - max_age_min * 60.0
+        mcut = now - AIS_MOTION_MAX_S
         out = []
         with self._live_lock:
             for mmsi, t in self._ais.items():
                 if t.get("time", 0) < cut or t.get("lat") is None or t.get("lon") is None:
                     continue
+                # SOG and COG expire by their OWN report time: a fresh position after hours with no
+                # valid motion must not dead-reckon on the old velocity — None = "motion unknown"
+                sog = t.get("sog") if t.get("sog_time", 0) >= mcut else None
+                cog = t.get("cog") if t.get("cog_time", 0) >= mcut else None
                 out.append({"mmsi": mmsi, "name": t.get("name"),
                             "lat": t["lat"], "lon": t["lon"],
-                            "sog": t.get("sog"), "cog": t.get("cog"), "time": t.get("time"),
+                            "sog": sog, "cog": cog, "time": t.get("time"),
                             "pos_time": t.get("pos_time", t.get("time"))})
         return out
 

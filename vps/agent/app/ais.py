@@ -68,6 +68,8 @@ OWN_FIX_MAX_AGE_S = _envf("AIS_OWN_FIX_MAX_AGE_S",
 # Nothing heard on AIS for this long while under way → the feed is called silent.
 AIS_SILENT_MIN = _envf("AIS_SILENT_MIN", 15)
 UNDERWAY_KN = _envf("AIS_UNDERWAY_KN", 2.0)
+# A fix stamped more than this into the future is invalid (a clock step), not "age 0".
+FUTURE_SKEW_S = _envf("AIS_FUTURE_SKEW_S", 5)
 # The engine's live Signal K link (its only AIS input onboard) silent this long → AIS link down.
 AIS_LINK_STALE_S = _envf("AIS_LINK_STALE_S", 30)
 # The own-echo hint: a target this close that moves with us may be us. A hint only, never a filter.
@@ -133,11 +135,16 @@ def _own_ship():
     cog = _latest("navigation.courseOverGroundTrue")
     # the older of the two halves of the fix is the fix's age
     e = min(e_lat, e_lon) if e_lat is not None and e_lon is not None else None
+    now = _time.time()
+    if e is not None and max(e_lat, e_lon) > now + FUTURE_SKEW_S:
+        # stamped in the future (e.g. archive rows from before a backward clock step): not a fix
+        # at all — never "age 0". The watch says "no GPS fix" until a real one arrives.
+        lat = lon = e = None
     return {
         "lat": lat, "lon": lon,
         "sog": sog * _MS_TO_KN if sog is not None else None,
         "cog": math.degrees(cog) % 360 if cog is not None else None,
-        "age_s": max(0.0, _time.time() - e) if e is not None else None,
+        "age_s": max(0.0, now - e) if e is not None else None,
     }
 
 
