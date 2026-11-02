@@ -2243,6 +2243,8 @@ function boatPanelInner() {
     const okPill = (ok, label) => `<span class="pill ${ok ? "ok" : "warn"}">${ok ? "●" : "○"} ${esc(label)}</span>`;
     rows.push(`<div class="dep-row">${okPill(eng.reachable, "Pi engine")}<span>${eng.reachable ? "playbook: " + pbText(epb) : "unreachable" + (eng.error ? " — " + esc(eng.error) : "")}</span></div>`);
     if (eng.course) rows.push(`<div class="dep-row"><span class="pill" style="visibility:hidden">● Pi engine</span><span>course: ${eng.course.available ? `${esc(eng.course.route || "?")} · ${eng.course.marks} marks${eng.course.mark_names && eng.course.mark_names.length ? ` <span class="muted">(${eng.course.mark_names.map(esc).join(" → ")})</span>` : ""}` : "none loaded"}</span></div>`);
+    const oa = eng.orin_assets;
+    if (oa) rows.push(`<div class="dep-row"><span class="pill" style="visibility:hidden">● Pi engine</span><span>re-route: ${!oa.available ? "no chart or boat profile" : `${oa.chart ? `chart for ${esc(oa.course_id || "?")}` : "no chart"} · ${oa.boat_id ? `boat ${esc(oa.boat_id)} <code>${esc(oa.boat_version || "")}</code>` : "no boat profile"}`}</span></div>`);
     rows.push(`<div class="dep-row">${okPill(cop.reachable, "Orin copilot")}<span>${cop.reachable ? "playbook: " + pbText(cpb) : "unreachable" + (cop.error ? " — " + esc(cop.error) : "")}</span></div>`);
     live = `<div class="muted" style="font-size:12px">Checked · ${esc(depStamp(b.checked_at))}</div><div class="dep-grid">${rows.join("")}</div>`;
 
@@ -2262,7 +2264,7 @@ function boatPanelInner() {
   }
 
   // last push
-  const stepPills = (r) => (r.steps || []).map((x) => `<span class="pill ${x.ok ? "ok" : "warn"}" title="${esc(x.ok ? "" : ((x.detail || {}).error || ""))}">${x.ok ? "✓" : "✗"} ${esc(x.target)} · ${esc(x.step)}</span>`).join(" ");
+  const stepPills = (r) => (r.steps || []).map((x) => `<span class="pill ${x.ok ? "ok" : "warn"}" title="${esc(x.ok ? "" : ((x.detail || {}).error || (x.detail || {}).detail || ""))}">${x.ok ? "✓" : "✗"} ${esc(x.target)} · ${esc(x.step)}</span>`).join(" ");
   const pushLine = (r, label) => `<div style="margin-top:6px"><b>${label}</b> ${esc(depStamp(r.at))} <span class="muted">(${esc(depAgo(r.at))})</span> · ${esc(r.race_name || r.race_id || "?")}${r.playbook_id ? ` · playbook <code>${esc(r.playbook_id)}</code>` : " · <b>no playbook in this push</b>"} · ${r.ok ? `<span style="color:var(--accent2)">✓ all ${(r.steps || []).length} steps loaded</span>` : `<span style="color:var(--warn)">⚠ ${(r.steps || []).filter((x) => x.ok).length} of ${(r.steps || []).length} steps loaded</span>`}<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">${stepPills(r)}</div></div>`;
   let pushes;
   if (!last) pushes = `<div class="muted" style="margin-top:6px">No push on record. Anything on the boat was loaded by hand or long ago.</div>`;
@@ -2311,14 +2313,15 @@ function deployPanel(lock, t) {
       `jq .watch_load  ${hw} | ssh ${t.pi_host} 'curl -sX POST ${t.pi_engine}/watch       -H "Content-Type: application/json" -d @-'`,
     ] : []),
     ``,
-    `# 2. Signed playbook → the Orin copilot (Tailscale host: ${t.orin_host})`,
-    `scp ${pb} ${t.orin_host}:${t.orin_playbook_path}`,
-    `ssh -t ${t.orin_host} 'sudo systemctl restart ${t.orin_service}'`,
-    `#   (ensure PLAYBOOK_PATH=${t.orin_playbook_path} is set in /etc/sr33/copilot.env on the Orin)`,
+    `# 2. Signed playbook → the Pi engine. The Pi passes it to the Orin copilot and approves it.`,
+    `#    Check the answer: "copilot": {"loaded": true}. Never copy the file to the Orin by hand:`,
+    `#    the copilot only uses a playbook the Pi approved.`,
+    `ssh ${t.pi_host} 'curl -sX POST ${t.pi_engine}/playbook/load -H "Content-Type: application/json" -d @-' < ${pb}`,
   ].join("\n");
   const res = Dep.pushRes;
-  const stepRow = (s) => `<div class="dep-row"><span class="pill ${s.ok ? "ok" : "warn"}">${s.ok ? "✓" : "✗"} ${esc(s.target)} · ${esc(s.step)}</span><span class="muted">${esc(s.ok ? pushDetail(s) : (s.detail && s.detail.error) || JSON.stringify(s.detail).slice(0, 120))}</span></div>`;
+  const stepRow = (s) => `<div class="dep-row"><span class="pill ${s.ok ? "ok" : "warn"}">${s.ok ? "✓" : "✗"} ${esc(s.target)} · ${esc(s.step)}</span><span class="muted">${esc(s.ok ? pushDetail(s) : (s.detail && (s.detail.error || s.detail.detail)) || JSON.stringify(s.detail).slice(0, 120))}</span></div>`;
   const resHtml = !res ? "" : res.pushing ? `<div class="banner" style="margin-top:10px">Pushing to the boat…</div>`
+    : res.refused ? `<div class="banner warn" style="margin-top:10px">⚠ ${esc(res.detail || "Race started. Not sent.")}</div>`
     : `<div class="banner ${res.ok ? "ok" : "warn"}" style="margin-top:10px">${res.ok ? "✓ Boat loaded. The iPad updates by itself." : "⚠ Push didn't finish. Fix it and push again."}</div>
        <div class="dep-grid" style="margin-top:8px">${(res.steps || []).map(stepRow).join("")}</div>`;
   return `<div class="card">
@@ -2326,7 +2329,7 @@ function deployPanel(lock, t) {
     <div class="muted" style="font-size:12px;margin-bottom:8px">Sends course, fleet, checklist, watch plan and playbook to the boat. Replaces what's there. If the boat is offline, use the downloads below.</div>
     <div class="dep-actions">
       <button id="depPush" onclick="depPush()" ${Dep.busy ? "disabled" : ""}>🚀 Push to boat</button>
-      <button onclick="downloadPlaybook('${esc(pid)}')">⬇ Playbook file (Orin)</button>
+      <button onclick="downloadPlaybook('${esc(pid)}')">⬇ Playbook file</button>
       <button onclick="downloadHomework('${esc(rid)}')">⬇ Race prep file (Pi)</button>
     </div>
     ${resHtml}
@@ -3682,7 +3685,7 @@ function learnConfigCard() {
   const cp = (Lab.learning || {}).configPolars;
   const inner = !cp ? '<div class="muted">Loading…</div>'
     : !(cp.configs || []).length
-      ? '<div class="muted" style="font-size:12px">Nothing yet. Fills in when the crew taps the CURRENT SAILS bar during races.</div>'
+      ? '<div class="muted" style="font-size:12px">Log sail changes, then run a boat-log debrief.</div>'
       : cp.configs.map((g) => `<details style="margin-bottom:6px"><summary style="cursor:pointer">
           <b>${esc(g.config)}</b> <span class="muted">· ${g.n_cells} cell${g.n_cells === 1 ? "" : "s"} · ${g.samples} samples · ${g.races} race${g.races === 1 ? "" : "s"}</span></summary>
           <table style="margin-top:6px"><thead><tr><th>TWS</th><th>TWA</th><th>best speed</th><th>vs rating</th><th>n</th></tr></thead>
@@ -4100,7 +4103,7 @@ function polDecisionsCard() {
     <h3>Teach the boat model <span class="muted" style="font-weight:400">— pick which races count</span></h3>
     <div class="muted" style="font-size:12px;margin-bottom:6px">Only measured wind counts. Nothing changes until you approve it.
       ${qhelp("The route uses the ORC polar plus the changes you approved. Suggestions use measured wind only. Data from forecasts is left out and counted.")}</div>
-    ${pending ? `<div class="dep-row"><span class="pill warn">suggestion #${pending.id} waiting</span> helm ${pending.helm_current} → <b>${pending.helm_proposed}</b> · ${(pending.adjustments || []).length} polar tweak(s) · from ${((pending.summary || {}).recordings || []).length || "?"} recording(s)${(pending.summary || {}).excluded_by_choice ? `, ${(pending.summary || {}).excluded_by_choice} left out by you` : ""} · <a href="#debrief">review it</a></div>` : ""}
+    ${pending ? `<div class="dep-row"><span class="pill warn">suggestion #${pending.id} waiting</span> helm ${pending.helm_current} → <b>${pending.helm_proposed}</b> · ${(pending.adjustments || []).length} polar tweak(s) · from ${((pending.summary || {}).recordings || []).length || "?"} recording(s)${(pending.summary || {}).excluded_by_choice ? `, ${(pending.summary || {}).excluded_by_choice} left out by you` : ""} · <a href="#learnings">review it</a></div>` : ""}
     ${src.length ? `<div class="muted" style="font-size:12px;margin:8px 0 4px">Which races teach the boat model:</div>
       <table class="fleet-tbl"><thead><tr><th>Race</th><th>Gives</th><th>Debrief</th></tr></thead><tbody>${rows}</tbody></table>
       <div style="margin-top:4px"><button class="mini" onclick="polSetAllUse(true)">All</button> <button class="mini" onclick="polSetAllUse(false)">None</button></div>`

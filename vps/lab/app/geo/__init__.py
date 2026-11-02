@@ -9,5 +9,7 @@ router consults so a route can't cut across land, islands, or a race's exclusion
   - the race's geocoded `island` marks as buffered obstacles — per race.
 
 All three rasterize into one boolean mask the hot routing loop queries in O(1). See README.
+`obstacles.build_leg_fields` gives one mask per leg: an island's rounding-side barrier only on the
+leg that rounds it (#141).
 """
-from .obstacles import ObstacleField, build_for_course  # noqa: F401
+from .obstacles import ObstacleField, build_for_course, build_leg_fields  # noqa: F401

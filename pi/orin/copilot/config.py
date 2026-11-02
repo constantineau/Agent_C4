@@ -38,12 +38,33 @@ MAX_TOOL_ROUNDS = int(os.environ.get("MAX_TOOL_ROUNDS", "4"))
 # present the copilot leans on its pre-authored variants as a strong prior — onboard it may
 # depart from them (legal). Absent → the copilot reasons from live engine facts only and says so.
 PLAYBOOK_PATH = os.environ.get("PLAYBOOK_PATH", "").strip()
+# Who may POST /playbook/stage + /playbook/commit: the Pi engine's cable address only (it forwards the Lab's bundle
+# under its race-log lock). Comma list; the bench sets the Pi's Tailscale IP.
+PLAYBOOK_LOAD_FROM = frozenset(x.strip() for x in os.environ.get(
+    "PLAYBOOK_LOAD_FROM", "10.10.10.1").split(",") if x.strip())
+# A staged playbook must be committed within this many seconds of the stage's RECEIPT (Orin
+# monotonic clock), checked again right before the file goes live. Keep it <= the Pi engine's
+# COPILOT_COMMIT_TIMEOUT_S (4 s), so a write can only land while the Pi still holds its lock.
+PLAYBOOK_COMMIT_TTL_S = float(os.environ.get("PLAYBOOK_COMMIT_TTL_S", "3"))
 
 # The active route the engine should compute against (the loaded homework course).
 DEFAULT_ROUTE = os.environ.get("COPILOT_ROUTE", "").strip() or None
 
 # Service
 COPILOT_PORT = int(os.environ.get("COPILOT_PORT", "8300"))
+# Listen on the boat cable interface + loopback only, and answer only these callers (the Pi's end
+# of the cable, loopback). See copilot/serve.py.
+COPILOT_BIND = os.environ.get("COPILOT_BIND", "10.10.10.2,127.0.0.1")
+COPILOT_ALLOW_FROM = os.environ.get("COPILOT_ALLOW_FROM", "10.10.10.1,127.0.0.1")
+# BENCH override (added to the boat defaults above, never replacing them): the bench console
+# (compose.pi.sample.yml) reaches the Orin over Tailscale, so the bench adds the Orin's Tailscale
+# address to listen on and the bench host's Tailscale address as a caller. In
+# /etc/sr33/copilot.env on a bench Orin:
+#   COPILOT_BENCH_BIND=<orin-tailscale-ip>         (tailscale ip -4, on the Orin)
+#   COPILOT_BENCH_ALLOW_FROM=<bench-host-tailscale-ip>   (tailscale ip -4, on the bench host)
+# Leave both unset on the boat.
+COPILOT_BENCH_BIND = os.environ.get("COPILOT_BENCH_BIND", "")
+COPILOT_BENCH_ALLOW_FROM = os.environ.get("COPILOT_BENCH_ALLOW_FROM", "")
 
 # If false, never call the LLM — always return the deterministic brief. Useful when the
 # Orin is busy/serving something else, or to prove the engine-only baseline.

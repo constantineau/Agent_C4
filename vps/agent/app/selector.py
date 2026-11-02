@@ -313,9 +313,9 @@ def _decide(route=None, now=None):
                     "clears": "shift reverses or settles back",
                     "based": driven + [f"playbook:{target.get('id')}"], "what_flips_it": flip}
 
-        # TIER 2 — favoured side has NO pre-authored variant aboard: off the playbook. The onboard
-        # RE-OPTIMIZER (GET /reoptimize) is the fallback route — hint it (don't run the heavy
-        # isochrone here; the card/crew fetch it on demand).
+        # TIER 2 — favoured side has NO pre-authored variant aboard: off the playbook. A re-route is
+        # the fallback — hint it; /strategy turns that into a suggestion, and a route is made only
+        # when the crew presses Re-route now (#125). Nothing is computed here.
         confidence = min(0.7, confidence)
         return {**base, "action": "off_script", "status": "act", "tier": 2, "reoptimize_hint": True,
                 "target_variant": None, "target_label": None,

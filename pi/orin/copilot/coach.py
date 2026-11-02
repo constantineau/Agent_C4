@@ -15,14 +15,18 @@ recompute. A short rolling history of coach lines lets the crew see "what did th
 
 The deterministic result is published the moment it's computed; LLM phrasing swaps a nicer line in
 later, from its own task. Best-effort like everything onboard: an engine-unreachable tick is
-recorded in `last_error` (and raises the "collision watch blind" callout) and the loop keeps ticking. Nothing here takes an action — the coach line shows, it never steers.
+recorded in `last_error` (and raises the "Collision watch OFF" callout) and the loop keeps ticking;
+a tick that throws publishes a "Collision watch OFF: copilot error" result rather than keeping the
+last one. Nothing here takes an action — the coach line shows, it never steers.
 """
 import asyncio
 import time
+import uuid
 from collections import deque
 
 from . import briefs as briefs_mod
 from . import config, copilot
+from . import narrate as narrate_mod
 from .engine_client import EngineClient
 
 _HISTORY_MAX = 12
@@ -39,6 +43,11 @@ class _Coach:
         self.interval = config.COACH_INTERVAL_S
         self.route = config.DEFAULT_ROUTE
         self.last = None                              # latest step_narration result (+ _coach_at)
+        # progress for the iPad, free of wall clock (an NTP jump back at boot must not read as a
+        # stall): `seq` goes up by one per published result; `instance` is new per process, so a
+        # restart (seq back to 0) still reads as progress
+        self.seq = 0
+        self.instance = uuid.uuid4().hex
         self.history = deque(maxlen=_HISTORY_MAX)     # coach lines, newest first
         self.ticks = 0
         self.last_tick_at = None
@@ -72,7 +81,9 @@ class _Coach:
             "new": last.get("new", []),               # what was newly shown on the last tick
             "spoken": last.get("spoken", ""),         # the phrased line for the new callouts
             "narration_mode": last.get("narration_mode", "none"),
-            "updated_at": last.get("_coach_at"),
+            "updated_at": last.get("_coach_at"),     # display only (the Orin's wall clock)
+            "seq": self.seq,                          # progress: +1 per published result
+            "instance": self.instance,                # …per process (a restart is progress too)
             "history": list(self.history),
             "playbook_loaded": last.get("_meta", {}).get("playbook_loaded"),
             # the coach-window surface: latest full brief per kind + what fired recently
@@ -135,8 +146,9 @@ class _Coach:
             res = await asyncio.to_thread(copilot.step_narration, self.route, None)
             res["_coach_at"] = time.time()
             self.last = res
+            self.seq += 1
             # an engine that can't be reached is not a quiet tick: the blind callout is up, say so here too
-            self.last_error = ("engine unreachable — collision watch blind"
+            self.last_error = ("engine unreachable — collision watch OFF"
                                if res.get("_meta", {}).get("engine_lost") else None)
             if res.get("new"):                        # something newly worth showing → log it
                 entry = {
@@ -144,16 +156,39 @@ class _Coach:
                     "spoken": res.get("spoken", ""),
                     "narration_mode": res.get("narration_mode"),
                     "callouts": [c.get("headline") for c in res["new"]],
+                    # so the iPad can tell a voiced safety line that has since cleared (#191)
+                    "ids": [c.get("id") for c in res["new"]],
+                    "categories": [c.get("category") for c in res["new"]],
                 }
                 self.history.appendleft(entry)
                 if config.USE_LLM and not _busy(self._phrase_task):
                     self._phrase_task = asyncio.create_task(self._phrase(res, entry))
         except Exception as e:                        # best-effort — a flaky link must not kill the loop
             self.last_error = f"{type(e).__name__}: {e}"
+            self._publish_blind()
         if config.BRIEFS_ENABLED and not _busy(self._brief_task):
             self._brief_task = asyncio.create_task(self._briefs())
         self.ticks += 1
         self.last_tick_at = time.time()
+
+    def _publish_blind(self):
+        """A tick that threw computed nothing, so the held result must not stand in for it (old
+        callouts, or none, would read as a working watch). Publish a blind result instead: the
+        "Collision watch OFF" callout, new on the first failing tick, and a fresh `updated_at` so
+        the iPad sees the copilot is alive but the watch is not."""
+        c = narrate_mod.blind_now("copilot error")
+        was = any(a.get("id") == c["id"] for a in (self.last or {}).get("active", []))
+        line = narrate_mod._deterministic_spoken([c])
+        self.seq += 1
+        self.last = {"active": [c], "new": [] if was else [c], "spoken": line,
+                     "narration_mode": "deterministic", "_coach_at": time.time(),
+                     "_meta": {"tick_failed": True}}
+        if not was:
+            self.history.appendleft({"at": self.last["_coach_at"], "spoken": line,
+                                     "narration_mode": "deterministic", "callouts": [c["headline"]],
+                                     "ids": [c["id"]], "categories": [c["category"]]})
+        # the dedup state no longer matches what is shown: start clean when ticks recover
+        copilot.reset_narration(self.route)
 
     async def _phrase(self, res, entry):
         """Swap the published deterministic line for the LLM's phrasing once it lands — if it does.

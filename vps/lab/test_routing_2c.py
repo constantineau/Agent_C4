@@ -58,3 +58,4 @@ check("route avoids the obstacle box", not in_box)
 check("route still reaches the mark past the obstacle", endd < 0.5)
 
 print("RESULT:", "PASS" if ok else "FAIL")
+raise SystemExit(0 if ok else 1)

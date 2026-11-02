@@ -47,3 +47,4 @@ check("briefing states leave Bois Blanc Island to port", "leave Bois Blanc Islan
 check("briefing notes the gate", "Cove Island Virtual Gate (gate" in txt)
 
 print("RESULT:", "PASS" if ok else "FAIL")
+raise SystemExit(0 if ok else 1)

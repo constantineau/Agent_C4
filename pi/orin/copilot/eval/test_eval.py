@@ -28,6 +28,8 @@ def test_lockstep():
     try:
         from app.matcher import _pred_ok as real
     except Exception as e:
+        if os.environ.get("C4_CI"):                  # CI has the engine stack: a skip there hides a break
+            return _check(f"engine matcher importable in CI ({type(e).__name__}: {e})", False)
         print(f"  [SKIP] engine matcher not importable here ({type(e).__name__}) — run on the VM")
         return True
     grid = [(op, a, v)

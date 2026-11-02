@@ -308,6 +308,12 @@ body {
    (crew request 2026-07-08: the collision callout must take minimal space) */
 #coachSay { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; flex:1; }
 .coach-say { font-size:14px; font-weight:700; line-height:1.3; flex:1; }
+/* a collision warning (every contact, one per line) or "Collision watch OFF" wraps instead of
+   ellipsizing: it holds the strip until it clears */
+.coach-line[data-kind="act"], .coach-line[data-kind="off"] { border-color:var(--act); }
+.coach-line[data-kind="watch"] { border-color:var(--watch); }
+.coach-line[data-kind="act"] #coachSay, .coach-line[data-kind="watch"] #coachSay,
+.coach-line[data-kind="off"] #coachSay { white-space:pre-line; }
 .coach-when { font-size:10.5px; color:var(--muted); font-weight:600; flex:none; white-space:nowrap; }
 .comm-focus { margin:0; font-size:16px; font-weight:700; line-height:1.3; }
 .comm-focus[data-link="reconnecting"] { color:var(--watch, #d39b00); }
@@ -503,6 +509,11 @@ body {
 /* in-button end confirmation (replaces window.confirm, which iOS standalone can swallow) */
 .ctl.rec.confirm { background:var(--act); border-color:var(--act); color:#fff; }
 .ctl.rec.confirm b { color:#fff; }
+/* LOG start: Race or Practice, one tap (a race session closes the homework gate) */
+.rec-pick { display:inline-flex; gap:8px; }
+.rec-pick[hidden] { display:none; }
+.ctl.rp { min-height:48px; min-width:110px; padding:10px 18px; font-size:17px; font-weight:700; }
+.ctl.rp.pre { background:var(--act); border-color:var(--act); color:#fff; }
 .st-plays-head { display: flex; justify-content: space-between; align-items: center;
   font-size: 11px; letter-spacing: 1px; opacity: 0.75; margin-bottom: 3px; }
 .st-gearbox { letter-spacing: 0; }
@@ -596,3 +607,39 @@ body {
 .pl-old-tag { color:var(--watch); }
 .pl-runs { margin-top:8px; font-size:13px; }
 .pl-runs .rc { text-align:left; }
+
+/* ---------- ROUTE (#125): the Re-route now button, on the tile face (one tap, wet fingers) ----------
+   Shares the TIME TO MARK cell. Quiet by design: no status colour for a suggestion (it is text,
+   not an alarm); the button is the one big target. */
+.rt-tile { gap:4px; }
+.rt-say { font-size:13px; font-weight:700; line-height:1.25; color:var(--text);
+  display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; }
+.rt-say.rt-suggest { font-style:italic; font-weight:600; color:var(--muted); }
+.rt-say.rt-note { color:var(--watch); }
+.rt-say.rt-none { color:var(--muted); font-weight:600; }
+.rt-bar { height:6px; border-radius:3px; background:var(--panel2); border:1px solid var(--line);
+  overflow:hidden; }
+.rt-bar > span { display:block; height:100%; background:var(--accent); transition:width .6s ease; }
+.rt-btn { font:inherit; font-size:clamp(14px, 8.5cqi, 17px); font-weight:800; letter-spacing:.3px;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  min-height:48px; padding:8px 8px; margin-top:auto; width:100%;
+  border-radius:10px; border:2px solid var(--accent); background:var(--accent); color:var(--bg);
+  cursor:pointer; touch-action:manipulation; }
+.rt-btn.rt-pi { background:var(--panel2); color:var(--text); border-color:var(--watch); }
+.rt-btn.rt-gps { background:var(--panel2); color:var(--text); border-color:var(--line); }
+.rt-btn:disabled { opacity:.5; cursor:default; }
+.rt-detail .rt-btns { display:flex; flex-wrap:wrap; gap:8px; margin:8px 0; }
+.rt-detail .rt-btns .rt-btn { width:auto; flex:1 1 200px; margin-top:0; }
+.rt-line { font-size:14px; margin:3px 0; color:var(--muted); }
+.rt-line b { color:var(--text); }
+.rt-note { color:var(--watch); font-weight:700; }
+.rt-suggest { font-style:italic; }
+.rt-warn { color:var(--watch); }
+.rt-head { font-size:22px; font-weight:800; margin:2px 0 4px; color:var(--text); }
+.rt-last { font-size:12px; font-weight:600; color:var(--muted); line-height:1.25;
+  display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; }
+.rt-labels { display:flex; flex-wrap:wrap; gap:6px; margin:4px 0; }
+.rt-label { font-size:12px; font-weight:800; letter-spacing:.4px; padding:2px 8px; border-radius:999px;
+  border:1px solid var(--watch); color:var(--watch); }
+/* portrait: the half cell is short; the button keeps its 48 px, the line keeps one row */
+@media (orientation: portrait) { .rt-say { -webkit-line-clamp:1; } .rt-last { display:none; } }

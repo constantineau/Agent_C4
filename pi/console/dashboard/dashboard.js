@@ -39,8 +39,15 @@
   const NAME = {
     wind: "TWS Trend", playbook: "Playbook", forecast: "Forecast",
     sail: "Sail", eta: "Time to Mark", ais: "Fleet", charge: "Crew", data: "Data",
-    bank: "House Bank", coach: "Coach", checklist: "Race Checklist",
+    bank: "House Bank", coach: "Coach", checklist: "Race Checklist", route: "Route",
   };
+  /* The grid's cells. ROUTE (#125, the Re-route now button) shares the TIME TO MARK cell, the same
+     way the two SYSTEMS reads share the last one: the 4x2 the crew has learned stays put, and the
+     two course reads sit together. ROUTE isn't in TILES: it isn't built from the 3 s poll and never
+     raises a status (a suggestion is quiet text, not an alarm). */
+  const CELLS = ["wind", "playbook", "forecast", "sail", ["eta", "route"], "ais", "charge", PAIR];
+  const RT = window.C4Reroute;
+  // the re-route status poll: ~every 10 s, every 3 s while one runs (RT.pollEvery)
   const boatName = (r) => { const n = r.boat || r.name || ("MMSI " + (r.mmsi || "?")); return n.length > 14 ? n.slice(0, 13) + "…" : n; };
   const aisName = (t) => { const n = t.name || ("MMSI " + t.mmsi); return n.length > 12 ? n.slice(0, 11) + "…" : n; };
   /* corrected-time delta as a signed m:ss; cd<0 = the competitor is projected AHEAD of us. */
@@ -111,6 +118,8 @@
   /* ---- watch-system formatting (CREW tile) ---- */
   // the watch read (status, countdown, CONSIDER) is pure and tested: crewwatch.js (#80)
   const CW = window.C4CrewWatch;
+  const COL = window.C4CollisionWatch;
+  const colState = COL.newState(Date.now());   // when /coach last answered / last moved (tablet clock)
   const fmtHM = CW.fmtHM, fmtMins = CW.fmtMins;
   const teamTxt = (w, id) => { const t = ((w || {}).teams || {})[id]; return t ? t.name + ((t.members || []).length ? " (" + t.members.join(", ") + ")" : "") : id; };
   /* a canned watch read for the demo scenarios: 4-on/4-off, mid-block on calm, 4 min from the
@@ -347,23 +356,27 @@
         target_variant: "right", target_label: "Right start", confidence: 0.9, confidence_label: "high",
         driven_by: ["get_tactics", "get_drift", "get_deviation"],
         why: "Wind shifted right and holding. Forecast also shifted 28° right. Go right." },
-      reoptimize: { available: true, off_playbook: true, eta_min: 254, tacks: 9, sailed_nm: 46.2, avoids_islands: 2, avoids_zones: 1,
-        marks: ["Cove Island", "Finish"], sail_plan: ["J1", "A3", "S1"], vs_playbook: { available: true, max_divergence_nm: 2.4, mean_divergence_nm: 0.9 } },
+      reroute: { orin: { reachable: true }, state: "done", latest: "orin", pi: { state: "idle" },
+        result: { available: true, source: "orin", label: "Off the playbook", off_playbook: true,
+          asked_by: "Nav iPad", asked_at: Math.floor(Date.now() / 1000) - 1500,
+          finished_at: Math.floor(Date.now() / 1000) - 1440, sailed_nm: 46.2, tacks: 9,
+          sail_plan: ["J1", "A3", "S1"], vs_plan: { available: true, gain_min: 12 },
+          weather: { newest_age_h: 2.4, models: [{ model: "gfs" }, { model: "nam" }, { model: "hrrr" }] },
+          warnings: ["No chart aboard. Route doesn't check the shore."] } },
       synthesis: { available: true, mode: "llm", confidence: "med",
         assessment: "Right has taken over, past what the plan covers. Commit right.",
         concordance: { strength: "strong", lean: "right",
           note: "Wind, forecast and position all point right. You're 1.3 nm right already." },
         recommendation: { action: "Off plan: go right, lay the mark", vs_playbook: "departs", target_variant: null,
-          reoptimize: "ready", urgency: "now", confidence: "med",
-          rationale: "Everything points right. New route ready." },
+          urgency: "now", confidence: "med",
+          rationale: "Everything points right." },
         play_matches: [
           { play_id: "shift_right_20", name: "Breeze 20°+ right of forecast", match: "strong", status: "armed",
             why: "Wind shifted right, forecast shifted 28° right. This is the play." },
           { play_id: "pressure_up", name: "More pressure than forecast", match: "partial", status: "quiet",
             why: "Wind 2-3 kts over forecast, not steady yet." },
         ],
-        reoptimize: { available: true, off_playbook: true, eta_min: 254, tacks: 9, sailed_nm: 46.2, avoids_islands: 2, avoids_zones: 1,
-          marks: ["Cove Island", "Finish"], sail_plan: ["J1", "A3", "S1"], vs_playbook: { available: true, max_divergence_nm: 2.4, mean_divergence_nm: 0.9 } } },
+        reroute_suggest: { reason: "Off the playbook. The right is paying.", why: "off_playbook" } },
     },
   };
 
@@ -1044,7 +1057,7 @@
       else if (armed && status === "ok") status = "watch";
       const bits = [(act === "switch" ? "branch fired" : act === "off_script" ? "off the playbook" : "on plan")];
       if (armed) bits.push(armed + " play" + (armed === 1 ? "" : "s") + " ARMED");
-      if (synOff) bits.push("off plan · new route ready");
+      if (synOff) bits.push("off plan");
       if (conf) bits.push(conf);
       return { status: status, value: s.value || "—", sub: bits.join(" · "), rows: s.rows || [],
         why: s.why || "", consider: s.consider || "—", clears: s.clears || "—",
@@ -1111,6 +1124,7 @@
       App.data.focus = "Reconnecting…"; App.data.link = "reconnecting"; render();
     }
     poll();
+    fetchReroute();
   }
   /* overlay the LLM brief (commentary + grounded status nudges) when it's fresh; otherwise the
      deterministic engine-read commentary stands. The engine values are never touched. */
@@ -1136,13 +1150,9 @@
     App.briefing = true;
     const snap = TILES.map((k) => { const t = App.data.tiles[k] || {}; return { key: k, name: NAME[k], value: tileText(t), sub: t.sub || "", status: t.status || "na" }; });
     let r = null;
-    try {
-      const ctl = new AbortController();
-      const to = setTimeout(() => ctl.abort(), 130000);
-      const resp = await fetch(COPILOT + "/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tiles: snap }), signal: ctl.signal });
-      clearTimeout(to);
-      r = resp.ok ? await resp.json() : null;
-    } catch (e) { r = null; } finally { App.briefing = false; }
+    try {   // the deadline covers the body too (a stalled body must not pin App.briefing forever)
+      r = await COL.fetchJsonWithin(COPILOT + "/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tiles: snap }) }, 130000);
+    } finally { App.briefing = false; }
     if (r && r.mode === "llm") {
       App.brief = { focus: r.focus, notes: r.notes || [], adjust: r.adjust || [], mode: "llm", t: Date.now() / 1000 };
       if (App.src === "live") render();
@@ -1151,21 +1161,26 @@
   }
   /* poll the proactive auto-coach: the Orin runs the narration engine on a timer and HOLDS the
      latest coach line; we just read it (no recompute) and show what the copilot last volunteered.
-     A failure leaves the last good read. */
+     A failure keeps the last good read for the briefs, but the collision watch is judged after
+     every poll AND by an independent watchdog (coachWatchdog, its own timer): no good parse for a
+     minute, or a held result that stopped moving, is "Collision watch OFF" on the strip, never a
+     quiet one (collisionwatch.js). The 12 s deadline covers the body: a stalled body is a failure. */
   async function fetchCoach() {
     if (App.src !== "live") return;
-    let r = null;
-    try {
-      const ctl = new AbortController();
-      const to = setTimeout(() => ctl.abort(), 12000);
-      const resp = await fetch(COPILOT + "/coach", { headers: { Accept: "application/json" }, signal: ctl.signal });
-      clearTimeout(to);
-      r = resp.ok ? await resp.json() : null;
-    } catch (e) { r = null; }
-    if (r) App.coach = r;
-    if (r) maybeAlert(r);           // sound a short tone if a new safety/urgent callout arrived
-    if (App.src === "live") render();
+    const r = await COL.fetchJsonWithin(COPILOT + "/coach", { headers: { Accept: "application/json" } }, 12000);
+    if (COL.track(colState, r, Date.now())) App.coach = r;   // a malformed reply is a failed poll
+    judgeCoach(true);
   }
+  /* judge the collision watch on the tablet clock; re-render when the verdict changes (or always,
+     after a poll) */
+  function judgeCoach(always) {
+    if (App.src !== "live") return;
+    const was = App.coachOff;
+    App.coachOff = COL.watchdogStep(App.coach, colState, Date.now());
+    maybeAlert(App.coach, App.coachOff);   // tone for a new (or returning, or worse) callout, or the watch going off
+    if (always || was !== App.coachOff) render();
+  }
+  const coachWatchdog = () => judgeCoach(false);
   function agoText(epochSec) {
     if (!epochSec) return "";
     const s = Math.max(0, Math.round(Date.now() / 1000 - epochSec));
@@ -1392,31 +1407,63 @@
       if (resp.ok) { App.sailState = await resp.json(); renderSailsBar(); fetchPlays(); }
     } catch (e) { /* re-sync on next poll */ }
   };
-  /* RACE LOG (sessions): one-tap record switch. Start needs nothing (the engine defaults the
-     name to the date and picks up the loaded playbook's race_id if one is aboard). */
+  /* RACE LOG (sessions). Start: tap LOG, then Race or Practice (one extra tap; Race is
+     pre-selected when Deploy homework is aboard). A RACE session is what makes the boat refuse
+     shore homework (frozen at the gun), so the kind is always sent. The engine still defaults the
+     name to the date and picks up the playbook's race_id. Pure parts: reclog.js. */
   async function fetchSession() {
     if (App.src !== "live") return;
     const r = await fetchJSON("/session", 8000);
     if (r) { App.session = r; renderRec(); }
   }
   let recConfirmUntil = 0;   // two-step end: first tap arms this window, second tap ends
+  let recPickUntil = 0;      // start: the Race / Practice choice is open until this time
   function renderRec() {
     const b = document.getElementById("recBtn"), l = document.getElementById("recLbl");
     if (!b || !l) return;
+    const RL = window.C4RecLog;
     const a = (App.session || {}).active;
-    b.classList.toggle("on", !!a);
-    b.classList.toggle("confirm", !!a && Date.now() < recConfirmUntil);
-    if (a && Date.now() < recConfirmUntil) {
-      l.textContent = "TAP AGAIN TO END";
-      b.title = "Tap again to end \"" + a.name + "\". Or wait to keep logging.";
-    } else if (a) {
-      const min = Math.max(0, Math.round((Date.now() / 1000 - a.start_ts) / 60));
-      l.textContent = (a.kind === "race" ? "REC·RACE " : "REC ") + min + "m";
-      b.title = "Logging \"" + a.name + "\". Tap twice to end.";
-    } else {
-      l.textContent = "LOG";
-      b.title = "Tap to start logging. Unlogged data is deleted after 7 days.";
+    // The archiver writing nothing (disk full, damaged file, stopped) beats "Logging": a
+    // session only marks what to KEEP. Absent field (older engine, cloud) = no claim either way.
+    const arch = (App.session || {}).archiver;
+    const down = !!arch && arch.recording === false;
+    // Red banner + button label only while a LOG session runs (that is when it costs a race).
+    // With no session, instruments off at the dock is normal: tooltip only.
+    const loud = down && !!a;
+    const warn = document.getElementById("archWarn");
+    if (warn) { warn.hidden = !loud; warn.textContent = loud ? arch.text : ""; }
+    const confirming = !!a && Date.now() < recConfirmUntil;
+    const picking = !a && Date.now() < recPickUntil;
+    b.classList.toggle("on", !!a && !down);
+    b.classList.toggle("confirm", confirming);
+    l.textContent = loud && !confirming ? arch.text
+      : RL.label(a, { confirming: confirming, picking: picking, nowS: Date.now() / 1000 });
+    b.title = confirming ? "Tap again to end \"" + a.name + "\". Or wait to keep logging."
+      : loud ? arch.text + ". Tap twice to end \"" + a.name + "\"."
+      : a ? "Logging \"" + a.name + "\". Tap twice to end."
+      : "Tap to start logging. Unlogged data is deleted after 7 days.";
+    const pick = document.getElementById("recPick");
+    if (pick) {
+      pick.hidden = !picking;
+      const pre = RL.preselect(App.session);
+      document.getElementById("recRace").classList.toggle("pre", pre === "race");
+      document.getElementById("recPractice").classList.toggle("pre", pre === "practice");
     }
+    // quiet: not recording with no session, and housekeeping notes ("Archive check overdue")
+    if (down && !a) b.title += " " + arch.text + ".";
+    if (arch && arch.note && !down) b.title += " " + arch.note + ".";
+  }
+  async function startRec(kind) {
+    recPickUntil = 0;
+    renderRec();
+    const l = document.getElementById("recLbl");
+    if (l) l.textContent = "STARTING…";   // instant feedback — the poll confirms
+    try {
+      await fetch(API + "/session/start", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(window.C4RecLog.startBody(kind)) });
+    } catch (e) { /* engine unreachable — re-sync restores the true state */ }
+    fetchSession();
   }
   async function toggleRec() {
     const a = (App.session || {}).active;
@@ -1431,12 +1478,15 @@
           return;
         }
         recConfirmUntil = 0;
-        await fetch(API + "/session/end", { method: "POST" });
+        // the id this button shows: a session started meanwhile is never ended by this tap
+        await fetch(API + "/session/end", { method: "POST",
+          headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: a.id }) });
       } else {
-        const l = document.getElementById("recLbl");
-        if (l) l.textContent = "STARTING…";   // instant feedback — the poll confirms
-        await fetch(API + "/session/start", { method: "POST",
-          headers: { "Content-Type": "application/json" }, body: "{}" });
+        // open (or close) the Race / Practice choice; a tap there starts the log
+        recPickUntil = Date.now() < recPickUntil ? 0 : Date.now() + window.C4RecLog.PICK_MS;
+        renderRec();
+        setTimeout(renderRec, window.C4RecLog.PICK_MS + 200);   // closes by itself if untouched
+        return;
       }
       fetchSession();
     } catch (e) { fetchSession(); /* engine unreachable — re-sync restores the true state */ }
@@ -1484,25 +1534,151 @@
     if (App.src !== "live") return;
     const r = await fetchJSON("/selector", 9000);
     if (r) App.selector = r;
-    // only run the heavy onboard re-optimizer when the plan has actually run out (off-script)
-    if (r && r.action === "off_script") fetchReoptimize();
     if (App.src === "live") render();
   }
   function currentSelector() {
     if (App.src === "demo") return (SCENARIOS[App.demoScn] || {}).selector || null;
     return App.selector;
   }
-  /* the onboard RE-OPTIMIZER (graceful-degradation fallback route). Heavy (isochrone) → fetched
-     on demand ONLY when the selector says off-script (server-cached), never on every poll. */
-  async function fetchReoptimize() {
-    if (App.src !== "live") return;
-    const r = await fetchJSON("/reoptimize", 20000);
-    if (r) App.reoptimize = r;
-    if (App.src === "live") render();
+  /* ============ ROUTE — the Re-route now button (#125) ============
+     BUTTON ONLY: a new route is made only when a crew member presses it. The engine may suggest
+     one (/strategy `reroute_suggest`); nothing here runs on its own. The read and its words are
+     pure and tested: reroute.js. One press posts /reroute/run (the Orin's full optimizer); when the
+     Orin can't be reached the same button offers the Pi's own route (/reoptimize/run). */
+  function deviceLabel() {
+    let d = null;
+    try {
+      const q = new URLSearchParams(location.search).get("device");
+      if (q) localStorage.setItem("sr33.dash.device", q.slice(0, 40));
+      d = localStorage.getItem("sr33.dash.device");
+      if (!d) {
+        d = "iPad " + Math.random().toString(16).slice(2, 6);
+        localStorage.setItem("sr33.dash.device", d);
+      }
+    } catch (e) { d = d || "iPad"; }
+    return d;
   }
-  function currentReoptimize() {
-    if (App.src === "demo") return (SCENARIOS[App.demoScn] || {}).reoptimize || null;
-    return App.reoptimize;
+  async function fetchReroute() {
+    clearTimeout(App.rrTimer);
+    if (App.src === "live") {
+      const r = await fetchJSON("/reroute?compact=1", 12000);
+      if (r) { App.rr = r; App.rrAt = Date.now(); }
+      render();
+    }
+    App.rrTimer = setTimeout(fetchReroute, RT.pollEvery(rerouteView(), App.rtPress, Date.now()));
+  }
+  function rerouteView() {
+    const demo = App.src !== "live";
+    const syn = currentSynthesis() || {};
+    return RT.view({
+      rr: demo ? (SCENARIOS[App.demoScn] || {}).reroute || { orin: { reachable: true }, pi: {} } : App.rr,
+      rrAgeMs: demo ? 0 : Date.now() - App.rrAt, rrAt: App.rrAt,
+      suggest: syn.reroute_suggest || null, sugAgeMs: demo ? 0 : Date.now() - App.synAt,
+      press: App.rtPress, nowMs: Date.now(),
+    });
+  }
+  /* POST that keeps the status code: {code, body}, or null with no answer at all */
+  function postStatus(path, body, ms) {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), ms || 15000);
+    return fetch(API + path, { method: "POST", signal: ctl.signal,
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(body || {}) })
+      .then((r) => r.json().catch(() => ({})).then((b) => ({ code: r.status, body: b })))
+      .catch(() => null).finally(() => clearTimeout(t));
+  }
+  window.rerouteNow = async function (ev, engine) {
+    if (ev) { ev.stopPropagation(); ev.preventDefault(); }
+    const v = rerouteView();
+    if (v.button.disabled) return;
+    const eng = engine || v.button.engine || "orin";
+    if (App.src !== "live") {
+      App.rtPress = { phase: "refused", engine: eng, at: Date.now(), detail: "Demo only. Nothing sent." };
+      render(); return;
+    }
+    App.rtPress = { phase: "posting", engine: eng, at: Date.now() };
+    render();
+    const res = await postStatus(eng === "pi" ? "/reoptimize/run" : "/reroute/run",
+      { device: deviceLabel() }, 15000);
+    App.rtPress = RT.afterPress(eng, res ? res.code : null, res ? res.body : null, Date.now());
+    render();
+    fetchReroute();
+    if (App.rtPress.phase === "unreachable") setTimeout(render, RT.ARM_MS + 50);   // arm the Pi offer
+  };
+  /* the ROUTE tile: a mini tile whose face carries the button itself (one tap, wet fingers);
+     a tap anywhere else opens the detail */
+  function routeTileEl() {
+    const v = rerouteView();
+    const el = document.createElement("div");
+    el.className = "tile mini rt-tile s-" + v.status + (v.running ? " rt-running" : "");
+    el.dataset.tile = "route";
+    el.setAttribute("role", "button"); el.setAttribute("tabindex", "0");
+    el.setAttribute("aria-label", "Route. " + v.say);
+    const age = v.stale ? '<span class="t-age" title="No update for ' + fmtAge(v.ageMs) +
+      '. Last good reading.">⏱ ' + fmtAge(v.ageMs) + "</span>" : "";
+    const bar = v.progress ? '<div class="rt-bar"><span style="width:' + v.progress.pct + '%"></span></div>' : "";
+    el.innerHTML =
+      '<div class="t-head"><span class="t-name">' + NAME.route + "</span>" + age +
+      '<span class="t-chip"><span class="t-word">' + v.chip + "</span></span></div>" +
+      '<div class="rt-say rt-' + v.sayKind + '">' + esc2(v.say) + "</div>" + bar +
+      (v.sub ? '<div class="rt-last">' + esc2(v.sub) + "</div>" : "") +
+      rerouteBtnHtml(v);
+    el.addEventListener("click", () => openDetail("route"));
+    el.addEventListener("keydown", (e) => {
+      if (e.target !== el) return;
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openDetail("route"); }
+    });
+    return el;
+  }
+  function rerouteBtnHtml(v, engine) {
+    const b = v.button;
+    const lbl = engine === "orin" ? "Try the Orin again" : b.label;
+    const eng = engine || b.engine || "orin";
+    return '<button class="rt-btn' + (eng === "pi" ? " rt-pi" : "") + '"' +
+      (b.disabled ? " disabled" : "") + ' onclick="rerouteNow(event,\'' + eng + '\')">' +
+      esc2(lbl) + "</button>";
+  }
+  /* the ROUTE detail: the state, the button, the last route in full, and "show on GPS" */
+  function routeDetailHtml() {
+    const v = rerouteView();
+    let h = '<div class="rt-detail">';
+    if (v.progress) {
+      h += '<p class="rt-line"><b>' + esc2(v.progress.text) + "</b>" +
+        (v.progress.who ? " · asked by " + esc2(v.progress.who) : "") + "</p>" +
+        '<div class="rt-bar"><span style="width:' + v.progress.pct + '%"></span></div>';
+    } else if (v.note) {
+      h += '<p class="rt-line rt-note">' + esc2(v.note) + "</p>" +
+        (v.fallback ? '<p class="rt-line">' + esc2(v.sub) + "</p>" : "");
+    }
+    if (v.suggest && !v.progress) h += '<p class="rt-line rt-suggest">' + esc2(v.suggest) + "</p>";
+    h += '<div class="rt-btns">' + rerouteBtnHtml(v) +
+      (v.fallback ? rerouteBtnHtml({ button: { disabled: false, engine: "orin" } }, "orin") : "") + "</div>";
+    const L = v.last;
+    if (L) {
+      h += '<div class="rc-title" style="margin-top:10px">' + (L.old ? "Old route · " : "Last route · ") + L.engine +
+        (L.age ? " · " + esc2(L.age) : "") + "</div>" +
+        '<p class="rt-head">' + esc2(L.head) + "</p>" +
+        (L.labels.length ? '<p class="rt-labels">' + L.labels.map((x) =>
+          '<span class="rt-label">' + esc2(x) + "</span>").join("") + "</p>" : "") +
+        (L.shape ? '<p class="rt-line">' + esc2(L.shape) + "</p>" : "") +
+        '<p class="rt-line">' + esc2(L.wx) + "</p>" +
+        '<p class="rt-line">' + esc2(L.who) + "</p>" +
+        L.warnings.map((w) => '<p class="rt-line rt-warn">' + esc2(w) + "</p>").join("");
+    } else {
+      h += '<p class="rt-line" style="margin-top:10px">No new route yet.</p>';
+    }
+    if (App.src === "live") {
+      const g = App.gps, on = g && g.broadcasting;
+      h += '<div class="st-gps"><div class="st-plays-head"><span>GARMIN 943</span>' +
+        (!g || g.available === false ? '<span class="gps-note">plotter link off</span>'
+          : on ? '<span class="gps-on">● showing “' + esc2(g.route || "route") + "”</span>"
+            : '<span class="gps-note">not showing</span>') + "</div>" +
+        '<div class="rt-btns"><button class="rt-btn rt-gps"' + (App.gpsBusy || !v.canShowOnGps ? " disabled" : "") +
+        ' onclick="gpsShow(\'reroute\')">Show on GPS</button></div>' +
+        (App.gpsNote ? '<span class="gps-note">' + esc2(App.gpsNote) + "</span>" : "") +
+        gpsLinkLines(g) + "</div>";
+    }
+    return h + "</div>";
   }
   /* the in-race SYNTHESIS: the higher-order cross-signal read. Try the copilot's LLM-phrased brief
      (POST /copilot/strategy) when the Orin is up; fall back to the ENGINE's deterministic digest
@@ -1511,17 +1687,12 @@
   async function fetchSynthesis() {
     if (App.src !== "live") return;
     let r = null;
-    try {                                            // 1) the copilot (LLM phrasing) — absent on the bench
-      const ctl = new AbortController();
-      const to = setTimeout(() => ctl.abort(), 15000);
-      const resp = await fetch(COPILOT + "/strategy", { method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({}), signal: ctl.signal });
-      clearTimeout(to);
-      r = resp.ok ? await resp.json() : null;
-    } catch (e) { r = null; }
+    // 1) the copilot (LLM phrasing) — absent on the bench; the deadline covers the body too
+    r = await COL.fetchJsonWithin(COPILOT + "/strategy", { method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({}) }, 15000);
     if (!r) r = await fetchJSON("/strategy", 12000);  // 2) engine deterministic digest (Tier-1 fallback)
-    if (r) App.synthesis = r;
+    if (r) { App.synthesis = r; App.synAt = Date.now(); }
     if (App.src === "live") render();
   }
   function currentSynthesis() {
@@ -1673,26 +1844,10 @@
       (wl ? `<div class="st-watch-head" title="How close each play is to firing">CLOSE TO FIRING</div>` + wl : "") + `</div>`;
   }
   function reoptHtml() {
-    const sel = currentSelector();
-    const syn = currentSynthesis();
-    const offscript = sel && sel.action === "off_script";
-    const synRec = (syn && syn.recommendation) || {};
-    const synOff = synRec.vs_playbook === "departs" || synRec.vs_playbook === "off-book";
-    const ro = (syn && syn.reoptimize && syn.reoptimize.available) ? syn.reoptimize : currentReoptimize();
-    const show = offscript || synOff || App.src !== "live";
-    if (!ro || ro.available === false || !show) return "";
-    const h = ro.eta_min != null ? (Math.floor(ro.eta_min / 60) + "h " + Math.round(ro.eta_min % 60) + "m") : "?";
-    const vs = ro.vs_playbook && ro.vs_playbook.available ? "up to " + r1(ro.vs_playbook.max_divergence_nm) + " nm off plan" : "";
-    const sp = Array.isArray(ro.sail_plan) && ro.sail_plan.length ? ro.sail_plan.join("→") : "";
-    const avb = [];
-    if (ro.avoids_islands) avb.push(ro.avoids_islands + " island" + (ro.avoids_islands > 1 ? "s" : ""));
-    if (ro.avoids_zones) avb.push(ro.avoids_zones + " zone" + (ro.avoids_zones > 1 ? "s" : ""));
-    return '<p class="st-reopt"><span class="ro-ico">⟳</span><span>New route ready: <b>' + h + '</b>' +
-      (ro.tacks != null ? ' · ' + ro.tacks + ' tacks' : '') +
-      (ro.sailed_nm != null ? ' · ' + r1(ro.sailed_nm) + ' nm' : '') +
-      (sp ? ' · ⛵ ' + sp : '') +
-      (avb.length ? ' · avoids ' + avb.join(" + ") : '') +
-      (vs ? ' · ' + vs : '') + ' <span class="ro-tag">off plan</span></span></p>';
+    const v = rerouteView();
+    if (!v.suggest) return "";
+    return '<p class="st-reopt"><span class="ro-ico">⟳</span><span>' + esc2(v.suggest) +
+      ' <span class="ro-tag">Route tile: Re-route now</span></span></p>';
   }
   /* ============ GARMIN 943 — push the gameplan onto the chartplotter (engine /gps/*) ============
      The one WRITE surface on the stack: crew-initiated, crew-cleared. The engine assembles the
@@ -1701,14 +1856,16 @@
   async function fetchGps() {
     if (App.src !== "live") return;
     App.gps = await fetchJSON("/gps/status", 6000);
-    if (App.openTile === "playbook") populateDetail("playbook", false);
+    if (App.openTile === "playbook" || App.openTile === "route") populateDetail(App.openTile, false);
   }
   window.gpsShow = async function (source, variant) {
     App.gpsBusy = true;
     if (App.openTile === "playbook") populateDetail("playbook", false);
+    if (App.openTile === "route") populateDetail("route", false);
     const r = await postJSON("/gps/show", { source: source, variant: variant || null }, 12000);
     App.gpsBusy = false;
-    App.gpsNote = r ? (r.shown ? "" : (r.note || "could not show")) : "no link to the boat";
+    // shown without a land chart → say so ("GPS route doesn't check the shore.")
+    App.gpsNote = r ? (r.shown ? (r.warning || "") : (r.note || "could not show")) : "no link to the boat";
     await fetchGps();
   };
   window.gpsClear = async function () {
@@ -1718,6 +1875,19 @@
     App.gpsNote = "";
     await fetchGps();
   };
+  /* one plain line on the bus link (n2kout's own read of can0 + its sends), plus why the
+     steer-to isn't live or why the route ended. Nothing when the plotter link is off. */
+  function gpsLinkLines(g) {
+    if (!g || g.available === false || !g.bus) return "";
+    const lines = ["GPS link: " + (g.bus.link || "no bus")];
+    if (g.broadcasting && g.steer_paused === "chart unreadable") lines.push("Chart unreadable. Steer-to paused.");
+    else if (g.broadcasting && g.steer_paused === "blocked") lines.push("Steer-to paused. Press Re-route now.");
+    else if (g.broadcasting && g.steer_paused === "no position") lines.push("No position. Steer-to paused.");
+    else if (g.broadcasting && g.steer_paused === "not sent") lines.push("Steer-to not reaching the GPS.");
+    if (!g.broadcasting && g.ended === "expired") lines.push("Route expired. Send again.");
+    if (!g.broadcasting && g.ended === "course changed") lines.push("Course changed. Route cleared.");
+    return lines.map((l) => '<p class="gps-note">' + esc2(l) + "</p>").join("");
+  }
   function gpsHtml() {
     if (App.src !== "live") return "";
     const g = App.gps;
@@ -1731,9 +1901,9 @@
     return '<div class="st-gps"><div class="st-plays-head"><span>GARMIN 943</span>' + status +
       '</div><div class="cw-btns">' +
       `<button class="cw-btn"${busy} onclick="gpsShow('playbook')">▶ Gameplan route</button>` +
-      `<button class="cw-btn"${busy} onclick="gpsShow('reoptimize')">⟳ Re-route</button>` +
+      `<button class="cw-btn"${busy} onclick="gpsShow('reroute')">⟳ New route</button>` +
       `<button class="cw-btn"${busy} onclick="gpsClear()">✕ Clear</button>` +
-      '</div>' + note + '</div>';
+      '</div>' + note + gpsLinkLines(g) + '</div>';
   }
   function strategyStackHtml() {
     const parts = [synthHtml(), selectorHtml(), deviationHtml(), driftHtml(), plangapHtml(),
@@ -1741,24 +1911,28 @@
     if (!parts.length) return "";
     return '<div class="st-stack">' + parts.join("") + "</div>";
   }
-  /* the coach line in the commentary panel — the last thing the copilot volunteered (from the
-     timer's callout history), or, if nothing's been shown yet, the top of the current callout banner.
+  /* the coach line in the commentary panel. An active collision callout owns it until it clears:
+     every contact, soonest first, live numbers (a routine callout voiced later can't push it off).
+     A watch that can't see says "Collision watch OFF: <reason>". Otherwise the last thing the
+     copilot volunteered (the timer's history), or the top of the current callout banner.
      Hidden when there's nothing to coach or off the live source. */
   function renderCoach() {
     const el = document.getElementById("coachLine");
     if (!el) return;
-    const c = App.coach;
-    if (App.src !== "live" || !c) { el.hidden = true; return; }
-    let text = "", ago = "";
-    if (c.history && c.history.length && c.history[0].spoken) {
-      text = c.history[0].spoken; ago = agoText(c.history[0].at);
-    } else if (c.active && c.active.length) {
-      const a = c.active[0];
-      text = a.headline + (a.detail ? " — " + a.detail : "");
+    if (App.src !== "live") { el.hidden = true; return; }
+    // never fail silently: a strip that can't be built shows "Collision watch OFF: display error"
+    let v = COL.safeStrip(App.coach, App.coachOff);
+    try {
+      if (!v.lines.length) { el.hidden = true; return; }
+      el.dataset.kind = v.kind;
+      document.getElementById("coachSay").textContent = v.lines.join("\n");
+      document.getElementById("coachWhen").textContent = v.fromHistory ? agoText(v.at) : "";
+    } catch (e) {
+      v = COL.safeStrip(null, COL.DISPLAY_ERROR);
+      el.dataset.kind = v.kind;
+      document.getElementById("coachSay").textContent = v.lines.join("\n");
+      document.getElementById("coachWhen").textContent = "";
     }
-    if (!text) { el.hidden = true; return; }
-    document.getElementById("coachSay").textContent = text;
-    document.getElementById("coachWhen").textContent = ago;
     el.hidden = false;
   }
   /* HOLD a failed poll's endpoint at its last good value for a bounded window.
@@ -1816,7 +1990,8 @@
     adhereTimer: null, coachTimer: null, devTimer: null, driftTimer: null, selTimer: null, polling: false,
     powerTimer: null, healthTimer: null, power: null, health: null,
     dwell: {}, fresh: {}, ages: {}, data: null, windHist: [], fcstHist: [], seriesHist: [], lastPersist: 0, brief: null,
-    coach: null, deviation: null, forecastDrift: null, selector: null, reoptimize: null,
+    coach: null, deviation: null, forecastDrift: null, selector: null, synAt: 0,
+    rr: null, rrAt: 0, rrTimer: null, rtPress: {},
     plangap: null, trend: null, briefBusy: {}, gps: null, gpsBusy: false, gpsNote: "",
     checklist: null, chkTimer: null,
     plume: null, plumeAt: 0, plumeWait: "", plumeTimer: null, plumeView: { field: "tws", only: null },
@@ -1881,13 +2056,13 @@
     const d = currentData();
     const grid = document.getElementById("grid");
     grid.innerHTML = "";
-    for (const key of TILES) {
-      if (PAIR.indexOf(key) > 0) continue;              // drawn inside the pair below
-      const t = d.tiles[key] || STATUS_PLACEHOLDER();
-      if (key !== PAIR[0]) { grid.appendChild(tileEl(key, t, false)); continue; }
+    const one = (k, mini) => (k === "route" ? routeTileEl()
+      : tileEl(k, d.tiles[k] || STATUS_PLACEHOLDER(), mini));
+    for (const cell of CELLS) {
+      if (!Array.isArray(cell)) { grid.appendChild(one(cell, false)); continue; }
       const pair = document.createElement("div");
       pair.className = "tile-pair";
-      for (const k of PAIR) pair.appendChild(tileEl(k, d.tiles[k] || STATUS_PLACEHOLDER(), true));
+      for (const k of cell) pair.appendChild(one(k, true));
       grid.appendChild(pair);
     }
     renderCommentary(d);
@@ -1978,13 +2153,12 @@
     const w = App.watch;
     if (!w || !w.blocks || !w.blocks[i]) return;
     const order = { A: "B", B: "ALL", ALL: "A" };
-    const blocks = w.blocks.map(function (b, j) {
-      return j === i ? Object.assign({}, b, { on: order[b.on] || "A" }) : b;
-    });
+    const b = w.blocks[i];
     try {
+      /* one block's team only: a whole new plan is refused while racing (frozen at the gun) */
       const resp = await fetch(API + "/watch", { method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ plan: { teams: w.teams, blocks: blocks, log: w.log } }) });
+        body: JSON.stringify({ action: "set_on", start: b.start, on: order[b.on] || "A" }) });
       if (resp.ok) {
         App.watch = await resp.json();
         if (App.openTile === "charge") populateDetail("charge", false);
@@ -2000,7 +2174,7 @@
       fetchSeries().then(() => { if (App.openTile === "wind") populateDetail("wind", false); });
       fetchBuoys().then(() => { if (App.openTile === "wind") populateDetail("wind", false); });
     }
-    if (key === "playbook" && App.src === "live") fetchGps();   // the GARMIN 943 row's live state
+    if ((key === "playbook" || key === "route") && App.src === "live") fetchGps();   // the GARMIN 943 row's live state
     if (key === "eta" && App.src === "live") {
       fetchCourse().then(() => { if (App.openTile === "eta") populateDetail("eta", false); });
       fetchTrack().then(() => { if (App.openTile === "eta") populateDetail("eta", false); });
@@ -2024,12 +2198,8 @@
     const btn = document.getElementById("cwb-" + kind);
     if (btn) { btn.classList.add("busy"); btn.textContent = "thinking…"; }
     try {
-      const ctl = new AbortController();
-      const to = setTimeout(() => ctl.abort(), 90000);   // LLM phrasing can take ~a minute
-      const resp = await fetch(COPILOT + "/briefs/" + kind, {
-        headers: { Accept: "application/json" }, signal: ctl.signal });
-      clearTimeout(to);
-      const r = resp.ok ? await resp.json() : null;
+      // LLM phrasing can take ~a minute; the deadline covers the body too
+      const r = await COL.fetchJsonWithin(COPILOT + "/briefs/" + kind, { headers: { Accept: "application/json" } }, 90000);
       if (r && r.available) {
         App.coach = App.coach || {};
         App.coach.briefs = App.coach.briefs || {};
@@ -2237,7 +2407,7 @@
   }
   function populateDetail(key, stream) {
     // the checklist and coach windows ARE their list — it leads; every tile leads with the text
-    document.getElementById("detail").classList.toggle("gauge-first", key === "checklist" || key === "coach");
+    document.getElementById("detail").classList.toggle("gauge-first", key === "checklist" || key === "coach" || key === "route");
     if (key === "checklist") {
       document.getElementById("detName").textContent = NAME.checklist;
       const c = App.checklist || {};
@@ -2252,6 +2422,22 @@
       document.getElementById("detConsider").textContent = "Tap ✓ DONE when it's done.";
       document.getElementById("detClears").textContent = "—";
       document.getElementById("detBased").textContent = "race rules (SIs/NOR)";
+      return;
+    }
+    if (key === "route") {
+      const v = rerouteView();
+      document.getElementById("detName").textContent = NAME.route;
+      const ds = document.getElementById("detStatus");
+      ds.textContent = v.chip.toLowerCase();
+      ds.style.color = "var(--na)";
+      document.getElementById("detGauge").innerHTML = routeDetailHtml();
+      document.getElementById("detWhy").textContent = v.suggest || "No re-route suggested now.";
+      document.getElementById("detConsider").textContent =
+        "Re-route now runs once. About a minute. Nothing runs by itself.";
+      document.getElementById("detClears").textContent = "—";
+      document.getElementById("detBased").textContent = v.last && v.last.engine === "Pi"
+        ? "Pi re-router: own polars, Open-Meteo forecast"
+        : "Orin optimizer: own polars, public forecasts";
       return;
     }
     if (key === "coach") {
@@ -2493,15 +2679,11 @@
     if (c.category === "checklist") return "watch"; // a race requirement came due (DSQ-risk action item)
     return null;                                 // routine coaching stays silent (visual only)
   }
-  function maybeAlert(coach) {
-    if (!Sound.on || App.src !== "live" || !coach) return;
-    let level = null;
-    for (const c of (coach.new || [])) {
-      const lvl = alertLevel(c);
-      if (!lvl || Sound.alerted.has(c.id)) continue;
-      Sound.alerted.add(c.id);
-      if (lvl === "act") level = "act"; else if (level !== "act") level = "watch";
-    }
+  function maybeAlert(coach, off) {
+    if (!Sound.on || App.src !== "live") return;
+    // ids that left `active` are forgotten, so a contact that clears and comes back sounds again;
+    // a worse level is a new id; the watch going OFF sounds once per episode
+    const level = COL.safeAlerts(coach, off, Sound.alerted, alertLevel);
     if (level) playAlert(level);
   }
   function toggleSound() {
@@ -2543,6 +2725,7 @@
     App.briefTimer = setInterval(fetchBrief, BRIEF_EVERY);
     fetchCoach();                   // proactive auto-coach held state (no recompute), then on its own cadence
     App.coachTimer = setInterval(fetchCoach, COACH_EVERY);
+    App.coachWatchTimer = setInterval(coachWatchdog, 5000);   // judges OFF even if no poll ever finishes
     fetchDeviation();               // route-deviation (engine, deterministic), then on its own cadence
     App.devTimer = setInterval(fetchDeviation, DEV_EVERY);
     fetchPlume();                   // the Lab's forecast plume, cached on the Pi — slow-moving
@@ -2553,6 +2736,7 @@
     App.plangapTimer = setInterval(fetchPlangap, DRIFT_EVERY);
     fetchTrend();                   // wind trend (sail-detail read), slow-moving
     App.trendTimer = setInterval(fetchTrend, 60000);
+    fetchReroute();                 // the ROUTE tile: re-route status + last route; faster while one runs
     fetchSelector();                // branch selector (engine, unified recommendation), own cadence
     App.selTimer = setInterval(fetchSelector, DEV_EVERY);
     fetchSynthesis();               // in-race strategy synthesis (copilot LLM → engine fallback), own cadence
@@ -2579,6 +2763,8 @@
       document.getElementById("srcBtn").hidden = true;
     }
     document.getElementById("recBtn").addEventListener("click", toggleRec);
+    document.getElementById("recRace").addEventListener("click", () => startRec("race"));
+    document.getElementById("recPractice").addEventListener("click", () => startRec("practice"));
     document.getElementById("alertBtn").addEventListener("click", toggleSound);
     // reflect a persisted armed state, and re-unlock iOS audio on the first interaction after a reload
     document.getElementById("alertLbl").textContent = Sound.on ? "ON" : "OFF";

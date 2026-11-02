@@ -4,8 +4,12 @@ This is the in-race-legal half of the three-tier architecture. It serves the SAM
 endpoints the iPad already uses against the cloud, but computed ONBOARD from the boat's own
 data (the Phase-2 SQLite archive + a live Signal K cache, via `OnboardSource`) — so it is the
 boat's own computer crunching its own sensors (Expedition-class), not an "outside source"
-under RRS 41. There is **no LLM, no tool-loop, and no race gate** here: every endpoint is a
-direct deterministic response and all of them are legal while racing.
+under RRS 41. There is **no LLM and no tool-loop** here: every read endpoint is a direct
+deterministic response and legal while racing. The one gate is on the WRITES that take shore
+homework (course, fleet, playbook, checklist, a whole watch plan, plume, re-route assets): frozen
+at the gun, refused while a race session runs (`app.racegate`). The Orin copilot's playbook goes
+through here too (POST /playbook/load forwards it under the same lock). Crew inputs from the iPad (sail
+state, checklist acks, watch quick edits, the race log, re-route buttons) are never gated.
 
 It reuses the exact engine modules from the cloud agent package (`app.navigator` /
 `app.tactics` / `app.routing` / `app.fatigue` / `app.sails` / `app.weather`), which read
@@ -14,7 +18,8 @@ the same code produces the same outputs from local data. The multi-source instru
 built by `app.onboard_conditions` (the cloud builds it off Postgres in `tools.py`).
 
 Cloud counterpart for parity: `vps/agent/app/main.py`. Differences: no /auth, no /ws chat, no
-alerts/summarizer/polar-analysis (those are cloud / C4 Performance Lab), no race gate.
+alerts/summarizer/polar-analysis (those are cloud / C4 Performance Lab), no race-mode gate on
+reads.
 """
 import os
 import time
@@ -23,11 +28,13 @@ os.environ.setdefault("DATA_SOURCE", "onboard")  # this service is always the on
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
+from shared import archiver_status
 from app import (navigator, tactics, routing, weather, sails, fatigue, onboard_conditions,
                  datasource, ais, fleet, deviation, drift, selector, reoptimize, strategy,
                  matcher, buoys, racelog, watches, trend, plangap, gpsout, checklist,
-                 power, sensor_health, plume)
+                 power, sensor_health, plume, orinroute, orinassets, racegate)
 
 app = FastAPI(title="Agent_C4 Onboard Engine", version="0.1.0")
 # The iPad reaches the Pi directly over boat-local Wi-Fi in race mode; allow cross-origin so a
@@ -39,7 +46,9 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
 @app.get("/health")
 def health():
     return {"status": "ok", "service": "onboard-engine", "llm": "none (deterministic)",
-            "data_source": os.environ.get("DATA_SOURCE", "onboard")}
+            "data_source": os.environ.get("DATA_SOURCE", "onboard"),
+            # is the full-res archive being written? (the archiver's status file, read-only)
+            "archiver": archiver_status.read()}
 
 
 @app.get("/conditions")
@@ -175,16 +184,57 @@ def practice_course(leg_nm: float = 1.0):
 @app.post("/course/load")
 def course_load(body: dict):
     """Load a RaceDefinition course into the onboard navigator (the deployed homework). Body:
-    {definition, course_id?, route?}. Writes the flattened marks to the Pi marks store + activates."""
+    {definition, course_id?, route?}. Writes the flattened marks to the Pi marks store + activates.
+    Pre-race homework: refused while a race session runs."""
     from shared.race_def import course_to_marks
     definition = (body or {}).get("definition") or {}
     marks, skipped, cid = course_to_marks(definition, (body or {}).get("course_id"))
     if not marks:
         return {"loaded": False, "detail": "no usable marks (need coordinates)"}
     route = (body or {}).get("route") or definition.get("race_id") or "race"
-    datasource.active().save_course(route, marks)
-    navigator.set_active(route)
+    # The full course (islands, rounding sides, zones) for the Orin's re-route is written to a
+    # temp file first, then the marks, then the load id, then the file goes live, all under one
+    # lock (two loads never interleave; /reroute/run reads under it too). The definition carries the
+    # load id, so it only ever pairs with its own load's marks. Any failure: the old definition is
+    # dropped and the load reports it.
+    with racegate.hold() as racing, orinroute.COURSE_LOCK:
+        if racing:
+            return racegate.refused()
+        tmp = None
+        try:
+            load_id = orinroute.new_load_id()
+            tmp = orinroute.prepare_definition(definition, cid, route, load_id)
+            datasource.active().save_course(route, marks)
+            navigator.set_active(route)
+            orinroute.set_load_id(route, load_id)
+            if tmp:
+                orinroute.commit_definition(tmp)
+            else:
+                orinroute.drop_definition()
+        except Exception as exc:  # noqa: BLE001
+            orinroute.discard(tmp)
+            orinroute.drop_definition()
+            print(f"[course/load] failed: {type(exc).__name__}: {exc}", flush=True)
+            return {"loaded": False, "detail": "Couldn't save the course. Try again."}
+        # still under the lock, so no /gps/show for the new course can slip in before it: stop a
+        # plotter route made for any OTHER course (bounded, ~1.5 s at most; n2kout also ends it
+        # by itself on the token, which the new load id has already changed)
+        gpsout.clear_other_courses()
     return {"loaded": True, "route": route, "course_id": cid, "marks": len(marks), "skipped": skipped}
+
+
+@app.post("/reroute/assets")
+def reroute_assets_load(body: dict):
+    """The Orin re-route's land chart + the Lab's reviewed boat profile, from the Lab's Deploy push
+    (#139, #140). Kept here and sent with each re-route request. Pre-race homework: refused while
+    a race session is running."""
+    return orinassets.load(body)
+
+
+@app.get("/reroute/assets")
+def reroute_assets_get():
+    """Which chart and boat profile the Orin's re-route gets (no geometry)."""
+    return orinassets.get()
 
 
 @app.get("/tactics")
@@ -248,7 +298,8 @@ def ais_ep(max_range_nm: float = 12):
 @app.post("/fleet/load")
 def fleet_load(body: dict):
     """Load the fleet homework (roster + scoring + own rating + public-tracker config) onboard. Body:
-    {definition, own?} or {fleet, scoring, own?, tracker?}. Frozen at the gun; legal in-race."""
+    {definition, own?} or {fleet, scoring, own?, tracker?}. Frozen at the gun: refused while a race
+    session runs (the roster already aboard stays, and reading it is legal in-race)."""
     from shared.race_def import fleet_blob
     body = body or {}
     if body.get("definition") is not None:
@@ -256,7 +307,10 @@ def fleet_load(body: dict):
     else:
         blob = {"fleet": body.get("fleet") or [], "scoring": body.get("scoring") or {},
                 "own": body.get("own") or {}, "tracker": body.get("tracker") or {}}
-    datasource.active().save_fleet(blob)
+    with racegate.hold() as racing:
+        if racing:
+            return racegate.refused()
+        datasource.active().save_fleet(blob)
     return {"loaded": True, "roster_size": len(blob["fleet"])}
 
 
@@ -272,20 +326,146 @@ def fleet_ep(max_range_nm: float = 40.0):
 def playbook_load(body: dict):
     """Load the frozen Lab-2 playbook bundle (`c4.playbook/v1`) onboard — the homework the
     route-deviation core measures against. Body is the bundle itself, or {bundle: ...}. Frozen at
-    the gun; legal in-race (own computer interpreting pre-loaded homework). Replaces any prior."""
+    the gun: refused while a race session runs (reading the one aboard is legal in-race).
+    Replaces any prior.
+
+    The same bundle goes on to the Orin copilot over the Pi-Orin cable (COPILOT_URL) while this
+    load still holds the race log's session lock (stage + a time-bounded commit, see
+    copilot_load), so the Orin's write can't land after a race starts. The Orin takes a playbook
+    only from here. Its answer is under `copilot`."""
     body = body or {}
     bundle = body.get("bundle") if "variants" not in body else body
     if not bundle or not (bundle.get("variants")):
         return {"loaded": False, "detail": "no bundle with variants"}
-    datasource.active().save_playbook(bundle)
-    deviation.reset_state()          # a new playbook → clear the Schmitt/trend memory
-    drift.reset_state()
-    plangap.reset_state()            # the plan-gap read measures against the NEW promise
-    matcher.clear_state()            # forget play arm/sustain memory too
+    with racegate.hold() as racing:
+        if racing:
+            return racegate.refused()
+        datasource.active().save_playbook(bundle)
+        deviation.reset_state()          # a new playbook → clear the Schmitt/trend memory
+        drift.reset_state()
+        plangap.reset_state()            # the plan-gap read measures against the NEW promise
+        matcher.clear_state()            # forget play arm/sustain memory too
+        cop = copilot_load(bundle)       # still under the lock: the Orin writes before a race can start
     return {"loaded": True, "race_id": bundle.get("race_id"),
             "variants": len(bundle.get("variants") or []),
             "plays": len(bundle.get("plays") or []),
-            "recommended": bundle.get("recommended")}
+            "recommended": bundle.get("recommended"), "copilot": cop}
+
+
+NO_COPILOT = "Can't reach the Orin. Playbook not sent there."
+NO_CONFIRM = "The Orin didn't confirm. Check it."
+MAX_ORIN_TTL_S = 10.0
+
+
+def _copilot_post(path, body, timeout):
+    """POST JSON to the Orin copilot over the cable: its answer dict, or {loaded: false, detail}.
+    Never raises."""
+    import json as _json
+    import urllib.error
+    import urllib.request
+    url = os.environ.get("COPILOT_URL", "http://10.10.10.2:8300").rstrip("/") + path
+    req = urllib.request.Request(url, data=_json.dumps(body).encode(), method="POST",
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            out = _json.loads(r.read() or b"{}")
+        return out if isinstance(out, dict) else {"loaded": False, "detail": NO_COPILOT}
+    except urllib.error.HTTPError as exc:
+        try:
+            out = _json.loads(exc.read() or b"{}")
+            if isinstance(out, dict) and out.get("detail"):
+                return {"loaded": False, "detail": str(out["detail"])[:200]}
+        except Exception:  # noqa: BLE001
+            pass
+        return {"loaded": False, "detail": f"Orin answered {exc.code}. Not loaded."}
+    except Exception:  # noqa: BLE001
+        return {"loaded": False, "detail": NO_COPILOT}
+
+
+def copilot_load(bundle):
+    """Load the bundle on the Orin copilot in two steps; called with the race log's session lock
+    held, and it returns only when the Orin's write can no longer happen.
+
+      1. stage {nonce, bundle}: the Orin holds it in memory and answers its commit TTL. Its TTL
+         clock starts when it RECEIVES the stage (its own monotonic clock).
+      2. commit {nonce}: sent only after the stage answered. The Orin writes only within the TTL,
+         re-checked right before the file goes live.
+
+    The commit is sent after the stage was received, and the Pi waits for its answer for at least
+    the TTL (+1 s) before returning (urllib's timeout is per socket wait, so never less). So the
+    Orin's write can only happen while this lock is held: a stalled request can't land after the
+    Pi gave up and a race started. No wall clocks are compared (skew-proof). A race-start tap waits
+    at most COPILOT_STAGE_TIMEOUT_S + the commit wait (~8 s). Never raises."""
+    import secrets
+    nonce = secrets.token_hex(12)
+    st = _copilot_post("/playbook/stage", {"nonce": nonce, "bundle": bundle},
+                       float(os.environ.get("COPILOT_STAGE_TIMEOUT_S", "4")))
+    if not st.get("staged") or st.get("nonce") != nonce:
+        return {"loaded": False, "detail": st.get("detail") or NO_COPILOT}
+    try:
+        ttl = float(st.get("ttl_s"))
+    except (TypeError, ValueError):
+        ttl = float("nan")
+    if not 0 < ttl <= MAX_ORIN_TTL_S:
+        return {"loaded": False, "detail": "Orin commit window is wrong. Not loaded."}
+    wait = max(float(os.environ.get("COPILOT_COMMIT_TIMEOUT_S", "4")), ttl + 1.0)
+    sent = time.monotonic()
+    out = _copilot_post("/playbook/commit", {"nonce": nonce}, wait)
+    if out.get("loaded") is True:
+        approve_copilot_playbook(bundle_hash(bundle))     # the one the copilot may use
+        return out
+    # Not confirmed (a refusal, a reset, a timeout): the Orin may still be writing. Approve
+    # NOTHING (a late file is never used, see copilot playbook.load), and keep holding the lock
+    # until the Orin's commit window has certainly closed: a timeout is a maximum, not a minimum.
+    approve_copilot_playbook(None)
+    _sleep(max(0.0, sent + ttl + 1.0 - time.monotonic()))
+    if out.get("detail") == NO_COPILOT:
+        return {"loaded": False, "detail": NO_CONFIRM}
+    return out
+
+
+_sleep = time.sleep                      # tests swap it
+
+
+def bundle_hash(bundle):
+    """sha256 of the whole bundle as canonical JSON. MUST match pi/orin/copilot/playbook.bundle_hash."""
+    import hashlib
+    import json as _json
+    return hashlib.sha256(_json.dumps(bundle, sort_keys=True, separators=(",", ":"),
+                                      ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+def _approved_path():
+    base = os.path.dirname(os.environ.get("ENGINE_DB", "/var/lib/sr33/engine/engine.db"))
+    return os.path.join(base, "copilot-playbook.json")
+
+
+def approve_copilot_playbook(h):
+    """Record which playbook the Orin copilot may use (its hash, or None for none). Only ever
+    called from copilot_load, i.e. under the race log's session lock with no race running, so
+    the approved hash can't change during a race: it is the playbook pinned at the gun."""
+    import json as _json
+    import tempfile
+    path = _approved_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".cpb-", suffix=".tmp")
+    with os.fdopen(fd, "w") as f:
+        _json.dump({"hash": h, "at": int(time.time())}, f)
+    os.replace(tmp, path)
+
+
+@app.get("/playbook/copilot")
+def copilot_playbook_approved():
+    """{hash}: the playbook the Orin copilot may use (the last one it confirmed under the race
+    lock), or null for none. The copilot asks before it uses its file; anything else, it runs
+    without a playbook."""
+    import json as _json
+    try:
+        with open(_approved_path()) as f:
+            h = (_json.load(f) or {}).get("hash")
+    except (OSError, ValueError):
+        h = None
+    return {"hash": h if isinstance(h, str) else None}
 
 
 @app.get("/playbook")
@@ -330,7 +510,9 @@ def gps_show(body: dict | None = None):
     """Put a route on the CHARTPLOTTER (Garmin 943) — the iPad's button. Assembles the frozen
     bundle variant's path (default: recommended) or the onboard re-route and hands it to the
     n2kout broadcaster (129285/129284/129283 on the boat's own bus — RRS-41 clean).
-    Body: {source: "playbook"|"reoptimize", variant?: "<id>", route?: "<route>"}."""
+    Body: {source: "playbook"|"reroute"|"orin"|"reoptimize", variant?: "<id>", route?: "<route>"}.
+    "reroute" is the newest route either re-router made (the Route tile's); it is never computed
+    here, only sent."""
     body = body or {}
     return gpsout.show(source=body.get("source") or "playbook",
                        variant=body.get("variant"), route=body.get("route"))
@@ -340,6 +522,20 @@ def gps_show(body: dict | None = None):
 def gps_clear():
     """Stop broadcasting — the plotter drops the external route when the stream goes quiet."""
     return gpsout.clear()
+
+
+@app.get("/gps/fix")
+def gps_fix():
+    """For n2kout (polled every second while a route is on the plotter): the freshest own-ship
+    fix {lat, lon, t} or null, and the course token. Read-only."""
+    return gpsout.fix_feed()
+
+
+@app.post("/gps/leg-check")
+def gps_leg_check(body: dict | None = None):
+    """For n2kout, before it moves the plotter's steer-to on: is boat → waypoint clear of the
+    obstacles aboard (the same checks as /gps/show)? {from, to, course} → {clear, reason}."""
+    return gpsout.leg_check(body or {})
 
 
 @app.get("/gps/status")
@@ -403,7 +599,14 @@ def watch_status():
 @app.post("/watch")
 def watch_set(body: dict = None):
     """Replace or live-edit the watch plan: {plan: {...}} (Lab homework / block editor) ·
-    {action: 'hold'|'swap'|'all_hands', minutes?} (the iPad quick edits) · {clear: true}."""
+    {action: 'hold'|'swap'|'all_hands'|'set_on', ...} (the iPad quick edits) · {clear: true}.
+    A whole new plan is homework: refused while a race session runs. The crew's quick edits and
+    clear are always taken."""
+    if isinstance(body, dict) and "plan" in body:
+        with racegate.hold() as racing:
+            if racing:
+                return racegate.refused()
+            return watches.set_watch(body)
     return watches.set_watch(body)
 
 
@@ -420,8 +623,12 @@ def checklist_status(route: str | None = None):
 @app.post("/checklist/load")
 def checklist_load(body: dict):
     """Load the iPad checklist (homework `checklists_ipad`). Body: {items: [...]} /
-    {checklists_ipad: [...]} / {definition}. Replaces any prior list; clears acks."""
-    return checklist.load(body)
+    {checklists_ipad: [...]} / {definition}. Replaces any prior list; clears acks. Homework:
+    refused while a race session runs (acks are always taken)."""
+    with racegate.hold() as racing:
+        if racing:
+            return racegate.refused()
+        return checklist.load(body)
 
 
 @app.post("/checklist/ack")
@@ -435,22 +642,31 @@ def checklist_ack(body: dict):
 def session_status():
     """The RACE LOG state: active session + recent windows. Sessions mark what the boat KEEPS
     (full-res, backfilled, debriefed); everything outside them is pruned after the retention
-    period and never leaves the boat. No Lab prep / RaceDefinition needed."""
-    return racelog.status()
+    period and never leaves the boat. No Lab prep / RaceDefinition needed.
+
+    `archiver` says whether full-res rows are reaching the disk at all; the LOG button shows
+    "Not recording: <reason>" when they are not (a session marks what to KEEP, it records
+    nothing by itself)."""
+    out = racelog.status()
+    out["archiver"] = archiver_status.read()
+    return out
 
 
 @app.post("/session/start")
 def session_start(body: dict = None):
-    """Start a session: {name?, race_id?, kind?: race|practice} — all optional (one tap at the
-    gun; the loaded playbook's race_id is picked up automatically when aboard)."""
+    """Start a session: {name?, race_id?, kind?: race|practice}. The iPad always sends the kind
+    the crew picked. With no kind (old clients) it is a RACE: a race session is what closes the
+    homework gate, so the default fails closed."""
     body = body or {}
     return racelog.start(name=body.get("name"), race_id=body.get("race_id"),
                          kind=body.get("kind"))
 
 
 @app.post("/session/end")
-def session_end():
-    return racelog.end()
+def session_end(body: dict = None):
+    """End the running session: {id?}. The iPad sends the id it shows; if another session is
+    running now (one started in between), nothing is ended: "Already ended"."""
+    return racelog.end(session_id=(body or {}).get("id"))
 
 
 @app.get("/sails/log")
@@ -503,8 +719,45 @@ def strategy_ep(route: str | None = None):
 
 @app.get("/reoptimize")
 def reoptimize_ep(route: str | None = None):
-    """Onboard RE-OPTIMIZER (graceful-degradation tier 2/3): a fresh route from the live position
-    through the remaining marks on own polars + the common Open-Meteo forecast, flagged OFF-PLAYBOOK,
-    with its divergence from the frozen plan. The fallback when the selector says off-script. CPU-heavy
-    (isochrone chain) → cached + on-demand. Legal in-race (own computer + own polars + common data)."""
+    """The Pi's own small re-route (the fallback when the Orin is down): the LAST route it made,
+    flagged OFF-PLAYBOOK, with its divergence from the frozen plan. Never computes one: a route is
+    made only on the crew's button (POST /reoptimize/run). Legal in-race (own computer + own
+    polars + common data)."""
     return reoptimize.get_reoptimize(route=route)
+
+
+@app.post("/reoptimize/run")
+def reoptimize_run(body: dict = None):
+    """The crew's Re-route now, on the Pi (the iPad offers it when the Orin can't be reached).
+    Body: {device?: "iPad 1"}. One run at a time, in the background (~15 s): 202 started, 409 busy
+    or nothing to route. GET /reroute reports progress and the route."""
+    code, out = reoptimize.run(device=(body or {}).get("device"))
+    return JSONResponse(out, status_code=code)
+
+
+@app.post("/reroute/run")
+def reroute_run(body: dict = None):
+    """Ask the Orin for ONE full re-route (the Lab's multi-model optimizer, pi/orin/reroute) from
+    the boat to the remaining marks. Body: {device?: "iPad 1"} — who asked, kept with the result.
+    Runs only when called (the crew's Re-route button, #125); one at a time. 202 started, 409 busy
+    (with progress) or nothing to route, 503 when the Orin can't be reached. Legal in-race: own
+    computers + public forecasts; the route is labelled "Off the playbook"."""
+    code, out = orinroute.run((body or {}).get("device"))
+    return JSONResponse(out, status_code=code)
+
+
+@app.get("/reroute")
+def reroute_get(compact: bool = False):
+    """The Orin re-route's status + progress, and the last route (stored here, so it survives a
+    restart and the Orin being off); the Pi fallback's status + last route under `pi`; and which
+    is newest (`latest`). `compact=1` drops the tracks (the iPad's Route tile polls this)."""
+    return orinroute.tile(compact=compact)
+
+
+@app.get("/reroute/history")
+def reroute_history(limit: int = 50):
+    """Every Re-route now press and its outcome, newest first: when, which device, which engine,
+    and for a finished route the weather it used (models, cycles, ages) and its gain vs the plan
+    (vps/agent/app/reroutelog.py; the history view is #127)."""
+    from app import reroutelog
+    return {"runs": reroutelog.history(max(1, min(500, limit)))}

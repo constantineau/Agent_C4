@@ -50,8 +50,7 @@ NAV._latest = lambda: {"lat": 44.0, "lon": -82.0, "tws": 12.0, "twd": 90.0, "cog
 deviation._load_playbook = lambda: {"race_id": "u", "variants": [{"id": "m"}],
                                     "obstacles": {"islands": [{"lat": 44.2, "lon": -82.0,
                                                                "radius_nm": 1.0}]}}
-reoptimize._cache.update(ctx=None, t=0, val=None)
-r = reoptimize.get_reoptimize()
+r = reoptimize.compute()
 print(f"     {r.get('note')}")
 check("unavailable", r.get("available") is False)
 check("incomplete names the leg (Rock) and how far short",
@@ -59,8 +58,7 @@ check("incomplete names the leg (Rock) and how far short",
 check("no path / ETA offered", "path" not in r and "eta_min" not in r)
 check("note says no new route and names the mark", "No new route" in r.get("note", "") and "Rock" in r["note"])
 deviation._load_playbook = lambda: {"race_id": "u", "variants": [{"id": "m"}]}
-reoptimize._cache.update(ctx=None, t=0, val=None)
-r = reoptimize.get_reoptimize()
+r = reoptimize.compute()
 check("(control) same course with no island: available + reaches the finish",
       r.get("available") and abs(r["path"][-1]["lat"] - 44.4) < 0.02)
 
@@ -84,8 +82,7 @@ NAV.get_navigator = lambda route=None: {"available": True, "route": "race", "nex
 NAV._latest = lambda: {"lat": 44.0, "lon": -82.0, "tws": 12.0, "twd": 90.0, "cog": 0.0, "sog": 6.0}
 routing.weather.wind_at = lambda lat, lon, epoch: (12.0, 90.0)
 deviation._load_playbook = lambda: {"race_id": "u", "variants": [{"id": "m"}]}
-reoptimize._cache.update(ctx=None, t=0, val=None)
-r = reoptimize.get_reoptimize()
+r = reoptimize.compute()
 le = r.get("leg_end_idx") or []
 check("one leg end per remaining mark, last = path end",
       len(le) == 2 and le[-1] == len(r["path"]) - 1)

@@ -672,15 +672,16 @@ with tempfile.TemporaryDirectory() as d:
     check("a real I/O error still raises (the rotation retries)", raised)
 
 
-# --- 6. startup: count(*) corruption rotates --------------------------------------------------
+# --- 6. startup: a failing probe rotates --------------------------------------------------
 class CountFails:
-    """Wraps a real connection; the startup count(*) says malformed (the boat, 2026-09-02 on)."""
+    """Wraps a real connection; a startup probe says malformed (the boat, 2026-09-02 on, where
+    it was the count(*) — now replaced by the bounded `max(id)` probe)."""
 
     def __init__(self, real):
         self.real = real
 
     def execute(self, sql, *a):
-        if "count(*)" in sql:
+        if "count(*)" in sql or "max(id)" in sql:
             raise sqlite3.DatabaseError("database disk image is malformed")
         return self.real.execute(sql, *a)
 
@@ -688,22 +689,45 @@ class CountFails:
         self.real.close()
 
 
-print("startup: a file that passes quick_check but fails count(*) is rotated, not crash-looped:")
+print("startup: a file that opens but fails a probe is rotated, not crash-looped:")
 with tempfile.TemporaryDirectory() as d:
     db = Path(d) / "archive.db"
     c = archiver.open_db(db)
     archiver.write_rows(c, [ROW] * 3)
     c.close()
-    real_resilient = archiver.open_db_resilient
-    archiver.open_db_resilient = lambda p: (CountFails(archiver.open_db(p)), None)
+    real_resilient = archiver._open_resilient
+    archiver._open_resilient = lambda p: (CountFails(archiver.open_db(p)), None, None)
     try:
         conn, n, rotated = archiver.open_for_run(db)
     finally:
-        archiver.open_db_resilient = real_resilient
+        archiver._open_resilient = real_resilient
     check("it returns instead of raising", conn is not None)
     check("the old file is kept under a corrupt- name",
           rotated is not None and rotated.exists() and "corrupt-" in rotated.name)
     check("the fresh archive is empty and usable", n == 0)
+    conn.close()
+
+print("startup: a healthy file is probed once, so a later passing I/O error can't rotate it:")
+with tempfile.TemporaryDirectory() as d:
+    db = Path(d) / "archive.db"
+    c = archiver.open_db(db)
+    archiver.write_rows(c, [ROW] * 3)
+    c.close()
+    real_fast = archiver.fast_check
+    calls = []
+
+    def flaky_fast(conn):
+        calls.append(1)
+        if len(calls) > 1:
+            raise sqlite3.OperationalError("disk I/O error")
+        return real_fast(conn)
+    archiver.fast_check = flaky_fast
+    try:
+        conn, n, rotated = archiver.open_for_run(db)
+    finally:
+        archiver.fast_check = real_fast
+    check("probed once", len(calls) == 1)
+    check("not rotated, rows kept", rotated is None and n == 3)
     conn.close()
 
 print("\n" + ("PASS" if ok else "FAIL"))

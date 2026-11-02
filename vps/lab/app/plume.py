@@ -525,23 +525,26 @@ def run_once(on_progress=None, do_push=None, now=None):
 
     if started(rs, t_now):
         return paused_out()
-    with _REC_LOCK:                          # the recorder thread vs a manual refresh
+    # The recorder thread vs a manual refresh: held from recording through the push, so two passes
+    # can't send out of order (an older plume landing after a newer one). Nothing under it takes
+    # this lock again; push() only takes labstate's own short lock.
+    with _REC_LOCK:
         if started(rs, _clock()):            # a pass queued behind a slow one
             return paused_out()
         st = record(spec, now=t_now, on_progress=on_progress)
-    done = _clock()                          # when the computation actually finished
-    if started(rs, done):
-        return paused_out()
-    plume = build_plume(st, t_now, race_start=rs)
-    if plume:
-        plume["generated_at"] = int(done)
-    out = {"ok": True, "key": spec["key"], "basis": spec["basis"],
-           "models": {m["model"]: len(m["runs"]) for m in (plume or {}).get("models", [])}}
-    if do_push and rs is None:
-        # no start known for this race → it could be on right now: record, but never send
-        out["push"] = {"ok": False, "skipped": True, "error": "no race start known — not sent"}
-    elif do_push and needs_push(plume, last_push()):
-        out["push"] = push(plume)
+        done = _clock()                      # when the computation actually finished
+        if started(rs, done):
+            return paused_out()
+        plume = build_plume(st, t_now, race_start=rs)
+        if plume:
+            plume["generated_at"] = int(done)
+        out = {"ok": True, "key": spec["key"], "basis": spec["basis"],
+               "models": {m["model"]: len(m["runs"]) for m in (plume or {}).get("models", [])}}
+        if do_push and rs is None:
+            # no start known for this race → it could be on right now: record, but never send
+            out["push"] = {"ok": False, "skipped": True, "error": "no race start known — not sent"}
+        elif do_push and needs_push(plume, last_push()):
+            out["push"] = push(plume)
     return out
 
 

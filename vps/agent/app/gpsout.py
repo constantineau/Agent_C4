@@ -11,7 +11,13 @@ endpoints and every course-mark vertex are always kept, and a shortcut between t
 points that would cut an island / exclusion zone from the frozen obstacle homework is split
 back toward the router's own vertices (safety beats the point budget). The destination index
 — the plotter's "steer to" — is the first waypoint AHEAD of the boat, found by projecting its
-position onto the path within the current leg; with no fix it falls back to the second point.
+position onto the path within the current leg. With no fresh own-ship fix nothing is sent.
+
+After the send, n2kout keeps the leg live by itself: once a second it reads `fix_feed()` (the
+engine's GET /gps/fix — the freshest own-ship position and the course token) and advances the
+waypoint and recomputes XTE / distance / bearing / ETA. The token is the course load id + the
+active route: any course change (a /course/load, a practice course, a switch) changes it and
+n2kout ends the route with "navigation terminated", even if the explicit clear never arrived.
 
 Onboard-only (the cloud has no bus): the endpoints answer 'unavailable' when the
 broadcaster isn't reachable. Crew-initiated, crew-cleared: nothing broadcasts on its own.
@@ -19,23 +25,173 @@ broadcaster isn't reachable. Crew-initiated, crew-cleared: nothing broadcasts on
 from __future__ import annotations
 
 import json
+import math
 import os
+import time
 import urllib.error
 import urllib.request
 
-from . import deviation, reoptimize, routing
+from . import datasource, deviation, landchart, orinroute, reoptimize, routing
 from . import navigator as NAV
 
 N2KOUT_URL = os.environ.get("N2KOUT_URL", "http://127.0.0.1:8210").rstrip("/")
 MAX_WPTS = int(os.environ.get("GPSOUT_MAX_WPTS", "24"))
+POST_TIMEOUT_S = float(os.environ.get("GPSOUT_POST_TIMEOUT_S", "3"))
+# GEOMETRY-FREE GUARD on the thinning. The obstacle test only knows the obstacles aboard (the
+# bundle's + the deployed course's); the Pi holds no land, and a route can bend round anything
+# its router knew. So a thinned segment may stand in for the router's vertices only while every
+# vertex it drops lies within DEV_TOL_NM of it: the exported line stays on the computed one.
+# 0.05 nm (~90 m) is the plotter's own arrival radius (ARRIVE_NM), well inside what a crew
+# steers to at race zoom, and loose enough that the router's straight runs (dozens of
+# collinear steps) still collapse: a real route keeps its tacks, gybes and bends, not its steps.
+# Garmin chartplotters take up to 250 points per route (to be confirmed on the 943 dockside);
+# MAX_WPTS (24) is the drawing budget, not the limit. When even that tolerance needs more than
+# HARD_MAX_WPTS points the route is refused, never thinned further: a shortcut is worse than no
+# route on the plotter.
+DEV_TOL_NM = float(os.environ.get("GPSOUT_DEV_TOL_NM", "0.05"))
+HARD_MAX_WPTS = int(os.environ.get("GPSOUT_HARD_MAX_WPTS", "250"))
+TOO_DETAILED = "Route too detailed for the GPS. Not sent."
+NO_SAFE_WPT = "No safe waypoint from here. Press Re-route now."
+NO_SHORE = "GPS route doesn't check the shore."
+PI_CROSSES_LAND = "Pi route crosses land. Not sent to GPS."
+CROSSES_LAND = "Route crosses land. Not sent to GPS."
+NO_FIX = "No GPS fix. Not sent to GPS."
+NOT_ACTIVE = "Route isn't the active course. Switch to it first."
+# a fix older than this is no fix (n2kout applies the same limit to its live nav data)
+FIX_MAX_AGE_S = float(os.environ.get("GPSOUT_FIX_MAX_AGE_S", "10"))
 
 
-def _post(path, payload=None):
+def _fix_with_source(now=None):
+    """(lat, lon, epoch, source) of the freshest own-ship position, lat and lon from the SAME
+    source (the source policy's pick among sources no older than FIX_MAX_AGE_S: a fresh backup
+    GPS takes over from a preferred one that went quiet), else None. Only the live Signal K
+    cache counts: the archive fallback can be minutes old."""
+    src = datasource.active()
+    getter = getattr(src, "latest_position", None)
+    if getter is None:
+        return None
+    try:
+        fix = getter(max_age_s=FIX_MAX_AGE_S)
+    except Exception:  # noqa: BLE001 — no fix read is no fix
+        return None
+    if not fix:
+        return None
+    now = time.time() if now is None else now
+    lat, lon, t = fix[:3]
+    if now - t > FIX_MAX_AGE_S:
+        return None
+    return lat, lon, t, (fix[3] if len(fix) > 3 else None)
+
+
+def own_fix(now=None):
+    """(lat, lon, epoch) — see _fix_with_source."""
+    fix = _fix_with_source(now)
+    return None if fix is None else fix[:3]
+
+
+def course_token():
+    """Which course is aboard: the course load id (new on every /course/load, practice course
+    or switch) + the active route. Cheap: one small file read."""
+    try:
+        load = (orinroute._read(orinroute._load_id_path()) or {}).get("load_id") or "noload"
+        return f"{load}:{NAV.active_route()}"
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def leg_check(body):
+    """POST /gps/leg-check — n2kout asks before every advance (and every 30 s for the current
+    leg): is boat → waypoint clear of every obstacle aboard? The same test the send makes: the
+    bundle's and the deployed course's islands + zones and the land chart (_obstacles +
+    _blocked_fn). → {"clear": bool, "reason"}. Not clear when the course changed, when the
+    course lock is busy (a load in progress) or on any error: n2kout then pauses the nav data."""
+    try:
+        a, b = body["from"], body["to"]
+        frm = {"lat": float(a["lat"]), "lon": float(a["lon"])}
+        to = {"lat": float(b["lat"]), "lon": float(b["lon"])}
+        if not all(math.isfinite(v) for v in (*frm.values(), *to.values())):
+            raise ValueError("not finite")
+    except (KeyError, TypeError, ValueError):
+        return {"clear": False, "reason": "bad request"}
+    if not orinroute.COURSE_LOCK.acquire(timeout=1.5):
+        return {"clear": False, "reason": "busy"}
+    try:
+        course = body.get("course")
+        if course is not None and course != course_token():
+            return {"clear": False, "reason": "course changed"}
+        bundle = deviation._load_playbook()
+        try:
+            obst = _obstacles(bundle, None, (frm["lat"], frm["lon"]))
+        except landchart.ChartUnreadable:
+            return {"clear": False, "reason": "chart unreadable"}
+        except CourseUnreadable:
+            return {"clear": False, "reason": "course unreadable"}
+        blocked = _blocked_fn(bundle, obst)
+        if blocked is not None and blocked(frm, to):
+            return {"clear": False, "reason": "obstacle"}
+        # no obstacle homework aboard → nothing known in the way (as at send time)
+        return {"clear": True, "reason": None if blocked is not None else "no obstacles aboard",
+                "next_mark_index": next_mark_index()}
+    except Exception as exc:  # noqa: BLE001 — a failed check is never a clear one
+        print(f"[gpsout] leg check failed: {type(exc).__name__}: {exc}", flush=True)
+        return {"clear": False, "reason": "error"}
+    finally:
+        orinroute.COURSE_LOCK.release()
+
+
+NEXT_MARK_TTL_S = 5.0
+_NEXT_MARK = {"at": None, "val": None, "course": None}
+
+
+def course_progress(lock_timeout=0.3):
+    """(course token, the navigator's next mark as a position in THAT course) read together
+    under COURSE_LOCK, so the index can never be paired with another course's token. The index
+    is cached NEXT_MARK_TTL_S per token (n2kout polls every second, the navigator does real
+    work); a new token is never served an old course's index. Lock busy (a load or a send in
+    progress) → (token read without the lock, None): no verdict this second."""
+    if not orinroute.COURSE_LOCK.acquire(timeout=lock_timeout):
+        return course_token(), None
+    try:
+        tok = course_token()
+        now = time.monotonic()
+        if (_NEXT_MARK["course"] == tok and _NEXT_MARK["at"] is not None
+                and now - _NEXT_MARK["at"] < NEXT_MARK_TTL_S):
+            return tok, _NEXT_MARK["val"]
+        try:
+            nav = NAV.get_navigator()
+            val = (reoptimize._next_course_index(nav, NAV._marks(nav["route"]) or [])
+                   if nav.get("available") else None)
+        except Exception:  # noqa: BLE001 — no navigator read is no verdict
+            val = None
+        _NEXT_MARK.update({"at": now, "val": val, "course": tok})
+        return tok, val
+    finally:
+        orinroute.COURSE_LOCK.release()
+
+
+def next_mark_index():
+    return course_progress()[1]
+
+
+def fix_feed():
+    """GET /gps/fix — what n2kout polls every second to keep the plotter's leg live: the fix,
+    the course token, and the navigator's next-mark index (a course-mark waypoint advances
+    when the navigator says it's rounded, however wide)."""
+    fix = _fix_with_source()
+    tok, nmi = course_progress()
+    return {"fix": None if fix is None else {"lat": fix[0], "lon": fix[1], "t": fix[2],
+                                             "source": fix[3]},
+            "course": tok, "next_mark_index": nmi}
+
+
+def _post(path, payload=None, timeout=None):
     req = urllib.request.Request(N2KOUT_URL + path, method="POST",
                                  data=json.dumps(payload or {}).encode(),
                                  headers={"Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=6) as r:
+        # short: show() holds the course lock across this call, so a slow broadcaster can hold up
+        # a /course/load for at most this long
+        with urllib.request.urlopen(req, timeout=timeout or POST_TIMEOUT_S) as r:
             return json.loads(r.read())
     except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as e:
         return {"available": False, "error": f"n2kout unreachable: {e}"}
@@ -111,11 +267,25 @@ def _mark_vertices(path, marks, tol_nm=0.5, leg_end_idx=None, first_leg_to=1):
     return {k: i for k, i in zip(ks, chosen) if dist[k][i] <= tol_nm}
 
 
-def _downsample_idx(path, max_n=MAX_WPTS, keep=(), blocked=None):
+def _worst_dropped(path, i, j):
+    """(index, nm) of the vertex strictly between i and j farthest from the segment i→j."""
+    a, b = path[i], path[j]
+    worst, at = 0.0, None
+    for k in range(i + 1, j):
+        d = routing._pt_to_seg_nm(path[k]["lat"], path[k]["lon"], a["lat"], a["lon"],
+                                  b["lat"], b["lon"])
+        if d > worst:
+            worst, at = d, k
+    return at, worst
+
+
+def _downsample_idx(path, max_n=MAX_WPTS, keep=(), blocked=None, dev_tol_nm=DEV_TOL_NM):
     """Indices of the kept vertices. Endpoints + `keep` (mark vertices) always; a uniform stride
-    fills the rest of the budget; then every shortcut between consecutive kept vertices that
-    `blocked(a, b)` says cuts an obstacle is split at its midpoint until it is clear (consecutive
-    router vertices are the router's own checked steps). May exceed `max_n` only to stay clear."""
+    fills the rest of the budget; then every shortcut between consecutive kept vertices is split
+    until it is safe on BOTH counts: `blocked(a, b)` says it cuts no known obstacle (split at the
+    midpoint), and every vertex it drops lies within `dev_tol_nm` of it (split at the farthest
+    one; None turns this off). Consecutive router vertices are the router's own checked steps.
+    May exceed `max_n` only to stay safe."""
     n = len(path)
     if n == 0:
         return []
@@ -127,15 +297,20 @@ def _downsample_idx(path, max_n=MAX_WPTS, keep=(), blocked=None):
         stride = (n - 1) / (room - 1)
         idx |= {round(i * stride) for i in range(room)}
     idx = sorted(idx)
-    if blocked is None:
+    if blocked is None and dev_tol_nm is None:
         return idx
     out, stack = [idx[0]], list(reversed(idx[1:]))
     while stack:
         j = stack.pop()
         i = out[-1]
-        if j - i > 1 and blocked(path[i], path[j]):
+        if j - i > 1 and blocked is not None and blocked(path[i], path[j]):
             stack += [j, (i + j) // 2]          # split: route through the midpoint first
             continue
+        if j - i > 1 and dev_tol_nm is not None:
+            k, d = _worst_dropped(path, i, j)
+            if k is not None and d > dev_tol_nm:
+                stack += [j, k]                 # split at the vertex it strays farthest from
+                continue
         out.append(j)
     return out
 
@@ -144,16 +319,25 @@ def _downsample(path, max_n=MAX_WPTS, keep=(), blocked=None):
     return [path[i] for i in _downsample_idx(path, max_n, keep, blocked)]
 
 
-def _blocked_fn(bundle):
-    """Segment test against the bundle's frozen obstacle homework (islands + zones) — the same
-    geometry the onboard router prunes against. None when there's nothing to hit."""
-    disks = reoptimize._avoid_disks(bundle)
-    zdisks, polys = reoptimize._parse_zones(bundle)
-    disks = disks + zdisks
-    if not disks and not polys:
+def _blocked_fn(bundle, obstacles=None):
+    """Segment test against the obstacles aboard: `obstacles` = (disks, polygons[, land]) from
+    _obstacles (the bundle's AND the deployed course's islands + zones, what the re-route was
+    computed around, and the deployed land chart); without it, the bundle's alone. Used for the
+    thinning AND the boat→steer-to line. None when there's nothing."""
+    land = None
+    if obstacles is not None:
+        disks, polys = obstacles[0], obstacles[1]
+        land = obstacles[2] if len(obstacles) > 2 else None
+    else:
+        disks = reoptimize._avoid_disks(bundle)
+        zdisks, polys = reoptimize._parse_zones(bundle)
+        disks = disks + zdisks
+    if not disks and not polys and land is None:
         return None
-    return lambda a, b: (routing._seg_blocked(a["lat"], a["lon"], b["lat"], b["lon"], disks)
-                         or routing._seg_crosses_poly(a["lat"], a["lon"], b["lat"], b["lon"], polys))
+    return lambda a, b: ((disks and routing._seg_blocked(a["lat"], a["lon"], b["lat"], b["lon"], disks))
+                         or (polys and routing._seg_crosses_poly(a["lat"], a["lon"], b["lat"], b["lon"],
+                                                                 polys))
+                         or (land is not None and land.crosses(a["lat"], a["lon"], b["lat"], b["lon"])))
 
 
 ARRIVE_NM = 0.05     # boat this close to a waypoint has attained it — steer to the one after
@@ -164,7 +348,8 @@ def _dest_index(pts, boat, mark_pos=None, next_k=None, blocked=None):
     the first waypoint AHEAD of it. `mark_pos` is {course mark number: index in pts}; with the
     navigator's next-mark number `next_k` the search is confined to the CURRENT leg (previous
     mark's vertex → next mark's), so an out-and-back course can't snap the boat onto the other
-    leg. Next mark = the path's first vertex (pre-start) → 0. No fix → 1.
+    leg. Next mark = the path's first vertex (pre-start) → 0. No fix → None: the caller refuses
+    (never a default waypoint).
 
     Moving PAST the projected waypoint — the later segment winning a tie (boat on a waypoint, or
     off a corner both segments are nearest at), or a waypoint the boat is within ARRIVE_NM of — is
@@ -178,7 +363,7 @@ def _dest_index(pts, boat, mark_pos=None, next_k=None, blocked=None):
     can reach in a straight line, never before the current leg's start; if none can, None — the
     caller refuses the push rather than steer through a hazard."""
     if not boat or boat[0] is None or len(pts) < 2:
-        return 1
+        return None
     dest, lo = _dest_candidate(pts, boat, mark_pos, next_k, blocked)
     if blocked is None:
         return dest
@@ -218,6 +403,45 @@ def _dest_candidate(pts, boat, mark_pos, next_k, blocked):
            and _clear_to(dest + 1)):
         dest += 1                                         # attained → the next one, if clear
     return dest, lo
+
+
+CHART_UNREADABLE = "Chart unreadable. Not sent to GPS."
+COURSE_UNREADABLE = "Course unreadable. Not sent to GPS."
+
+
+class CourseUnreadable(Exception):
+    """The active course (or its islands / zones) couldn't be read: nothing is checked against
+    it, so nothing is sent or approved."""
+
+
+def _obstacles(bundle, route=None, boat=None):
+    """(disks, polygons, land) of every obstacle aboard for the ACTIVE course: the bundle's and
+    the deployed definition's islands + zones (reoptimize.course_avoid), and the deployed LAND
+    chart when it is this course's (landchart.for_course: the same chart, checked the same way,
+    the Orin routes on), else None. THE one obstacle path: the send, the leg check and its
+    30 s re-check all use it. Read under COURSE_LOCK.
+
+    The course comes from the active route itself, never from the navigator (which has no
+    answer without a position, or can fail): a navigator miss must not drop the course's
+    zones and chart. "No chart aboard" (land None) is a known state: the send goes out with
+    the shore warning. Anything that can't be READ fails closed: CourseUnreadable (the course,
+    its islands or zones), landchart.ChartUnreadable (a chart aboard that can't be read)."""
+    try:
+        r = route or NAV.active_route()
+        marks = (NAV._marks(r) or []) if r else []
+        disks, polys, _d, _c, _n = reoptimize.course_avoid(r, marks, bundle)
+    except Exception as exc:  # noqa: BLE001 — an unread course is never "no obstacles"
+        print(f"[gpsout] course unreadable: {type(exc).__name__}: {exc}", flush=True)
+        raise CourseUnreadable(str(exc)) from exc
+    try:
+        land = landchart.for_course(r, marks, boat)
+    except landchart.ChartUnreadable as exc:
+        print(f"[gpsout] land chart unreadable: {exc}", flush=True)
+        raise
+    except Exception as exc:  # noqa: BLE001 — any failure reading a chart is "unreadable"
+        print(f"[gpsout] land chart unreadable: {exc}", flush=True)
+        raise landchart.ChartUnreadable(str(exc)) from exc
+    return disks, polys, land
 
 
 def _course_context(route=None):
@@ -275,9 +499,59 @@ def _route_frame(path, ends, names, nav_marks, starts_at_mark):
     return verts
 
 
+NO_NEW_ROUTE = "No new route yet. Press Re-route now."
+OLD_COURSE = "Route is for an old course. Press Re-route now."
+INCOMPLETE = "Route incomplete. Not sent to GPS."
+
+
+def _course_ok(ro):
+    """Was this route made for the course aboard now (same route, same marks AND positions)? A
+    route with no hash is from before the check, so it counts as another course."""
+    h = ro.get("course_hash")
+    return bool(h) and h == orinroute.current_course_hash()
+
+
+def _new_route(source, route):
+    """The stored re-route to send → (route dict, None) or (None, crew-facing note). Never computes
+    one: routes are made only on the crew's Re-route now button (#125). 'orin' is the Orin's last
+    route, 'reoptimize' the Pi's, 'reroute' whichever of the two is newest."""
+    if source == "reroute":
+        _src, ro = orinroute.latest()
+    elif source == "orin":
+        ro = orinroute.stored()
+    else:
+        ro = reoptimize.get_reoptimize(route)
+    if not ro or not ro.get("available"):
+        note = (ro or {}).get("note") if source == "reoptimize" else None
+        return None, note or NO_NEW_ROUTE
+    if ro.get("complete") is False:
+        return None, INCOMPLETE              # it stalled short of the finish: never a GPS route
+    if not _course_ok(ro):
+        return None, OLD_COURSE              # moved marks / another course since: old coordinates
+    ro = dict(ro)
+    if "path" not in ro and ro.get("source") == "orin":
+        ro["path"] = ro.get("points") or []          # the Orin's track is `points`
+    return ro, None
+
+
 def show(source: str = "playbook", variant=None, route=None):
-    """Assemble + broadcast. source='playbook' (frozen variant, default recommended) or
-    'reoptimize' (the onboard re-router's cached fresh route, computing it if needed).
+    """See _show. Runs under the course lock (orinroute.COURSE_LOCK, the one /course/load holds
+    for its whole load): the course check, the route assembly against the navigator's marks and
+    the broadcast all see ONE course, so a reload can't land between the check and the send.
+    This runs in the engine process, the same one that serves /course/load; the n2kout POST is
+    bounded by POST_TIMEOUT_S, so the lock is held a few seconds at most."""
+    with orinroute.COURSE_LOCK:
+        # the live leg after the send (course token, mark progress, leg checks) follows the
+        # ACTIVE course, so the route must be that course. The iPad never names another one
+        # (it sends no `route`); a direct caller that does is refused, never mixed.
+        if route and route != NAV.active_route():
+            return {"shown": False, "dest_index": None, "note": NOT_ACTIVE}
+        return _show(source, variant, route)
+
+
+def _show(source: str = "playbook", variant=None, route=None):
+    """Assemble + broadcast. source='playbook' (frozen variant, default recommended), or a stored
+    re-route: 'reroute' (the newest), 'orin' or 'reoptimize' (the Pi's). Only on the crew's tap.
 
     Inputs come from different moments — the route (frozen at the gun, or computed seconds to
     minutes ago), the navigator (now) and the bundle. They are reconciled explicitly: one bundle
@@ -287,10 +561,12 @@ def show(source: str = "playbook", variant=None, route=None):
     trimmed to the leg the boat is on; one that doesn't contain the navigator's next mark at all
     is stale and refused by name."""
     bundle = deviation._load_playbook()
-    if source == "reoptimize":
-        ro = reoptimize.get_reoptimize(route)
-        if not ro.get("available"):
-            return {"shown": False, "note": ro.get("note") or "No new route available."}
+    rerouted = source in ("reroute", "orin", "reoptimize")
+    ro = None
+    if rerouted:
+        ro, why = _new_route(source, route)
+        if ro is None:
+            return {"shown": False, "note": why or NO_NEW_ROUTE}
         wire_name, label, path = "C4 REROUTE", "re-route (off-book)", ro.get("path") or []
         ends, names = ro.get("leg_end_idx"), list(ro.get("marks") or [])
         ro_idx = ro.get("mark_idx")
@@ -305,6 +581,13 @@ def show(source: str = "playbook", variant=None, route=None):
         # the wire name is what the plotter shows — short and clean (LAU caps at 16 chars)
         wire_name, label = f"C4 {vid}"[:16], f"{vid} (gameplan)"
     nav_marks, boat, next_name, next_idx = _course_context(route)
+    fix = own_fix()
+    if fix is None:
+        return {"shown": False, "dest_index": None, "note": NO_FIX}
+    # the fresh same-source fix, never the navigator's read (which can fall back to the archive),
+    # for the steer-to choice and every obstacle / land check below; the navigator gives only
+    # the next mark
+    boat = (fix[0], fix[1])
     nav_names = [m.get("name") for m in nav_marks]
     if source == "playbook" and not names and len(nav_marks) > 1:
         # a variant frozen before legs carried names: assume it sails the navigator's course
@@ -316,7 +599,7 @@ def show(source: str = "playbook", variant=None, route=None):
     # mark for mark is positions 1..N; a re-route records its own `mark_idx`. Either is trusted
     # only when it names the same marks as the navigator's course at those positions.
     route_idx = None
-    if source == "reoptimize":
+    if rerouted:
         if (isinstance(ro_idx, list) and len(ro_idx) == len(names) and all(
                 isinstance(i, int) and 0 <= i < len(nav_names) and nav_names[i] == n
                 for i, n in zip(ro_idx, names))):
@@ -327,17 +610,17 @@ def show(source: str = "playbook", variant=None, route=None):
     # where is the boat in the ROUTE's frame?
     nxt = None
     if next_name is None:
-        if source == "reoptimize" and names:
+        if rerouted and names:
             nxt = 0                                    # no navigator: the route's own next mark
     elif route_idx is not None and next_idx is not None:
         if next_idx in route_idx:
             nxt = route_idx.index(next_idx)
         elif source == "playbook" and next_idx == 0:
             nxt = -1                                   # pre-start: steering to the start
-        elif source == "reoptimize":
+        elif rerouted:
             return {"shown": False, "note": (
                 f"New route is stale: starts at {names[0]} (mark {route_idx[0] + 1}), next mark is "
-                f"{next_name} (mark {next_idx + 1}). Recompute, then send.")}
+                f"{next_name} (mark {next_idx + 1}). Re-route now, then send.")}
     else:
         # positions can't be aligned: a NAME is only trusted when it names one occurrence
         hits = names.count(next_name)
@@ -346,41 +629,103 @@ def show(source: str = "playbook", variant=None, route=None):
         elif (source == "playbook" and hits == 0 and nav_names
               and next_name == nav_names[0] and nav_names.count(next_name) == 1):
             nxt = -1
-        elif source == "reoptimize" and names:
+        elif rerouted and names:
             why = ("isn't on it" if hits == 0 else
                    f"is on it {hits}×, can't tell which lap")
             return {"shown": False, "note": (
-                f"New route is stale: next mark {next_name} {why}. Recompute, then send.")}
-    if source == "reoptimize" and nxt:
+                f"New route is stale: next mark {next_name} {why}. Re-route now, then send.")}
+    # local mark → its POSITION in the navigator's course (what n2kout compares with the
+    # navigator's next-mark index to tell a wide rounding): by position when the route's marks
+    # line up with the course, else by name when that name occurs once; the start is 0
+    def _course_pos(j):
+        if j == -1:
+            return 0
+        if route_idx is not None and 0 <= j < len(route_idx):
+            return route_idx[j]
+        if 0 <= j < len(names) and nav_names.count(names[j]) == 1:
+            return nav_names.index(names[j])
+        return None
+
+    course_of = {j: _course_pos(j) for j in verts}
+    if rerouted and nxt:
         # the boat rounded marks while the re-route was computing: drop the passed legs so the
         # route starts at the last rounded mark and the plotter can't steer back to it
         cut = verts.get(nxt - 1)
         if cut is None:
             return {"shown": False, "note": (
-                f"New route is stale: you've passed {names[nxt - 1]} since. Recompute, then send.")}
+                f"New route is stale: you've passed {names[nxt - 1]} since. Re-route now, then send.")}
         path = path[cut:]
         verts = {j - nxt: i - cut for j, i in verts.items() if j >= nxt}
+        course_of = {j - nxt: c for j, c in course_of.items() if j >= nxt}
         nxt = 0
 
-    blocked = _blocked_fn(bundle)
+    try:
+        obstacles = _obstacles(bundle, route, boat)
+    except landchart.ChartUnreadable:
+        return {"shown": False, "dest_index": None, "note": CHART_UNREADABLE}
+    except CourseUnreadable:
+        return {"shown": False, "dest_index": None, "note": COURSE_UNREADABLE}
+    blocked = _blocked_fn(bundle, obstacles)
     idx = _downsample_idx(path, MAX_WPTS, set(verts.values()), blocked)
+    if len(idx) > HARD_MAX_WPTS:
+        return {"shown": False, "note": TOO_DETAILED}
     pts = [path[i] for i in idx]
     where = {i: j for j, i in enumerate(idx)}
     dest = _dest_index(pts, boat, {k: where[i] for k, i in verts.items() if i in where}, nxt,
                        blocked)
+    # course-mark waypoints: n2kout never advances past them on the turn bisector (crossing that
+    # isn't rounding the mark) — only on the arrival radius or the navigator's rounding
+    mark_wps = {where[i]: course_of.get(j) for j, i in verts.items() if i in where}
     wpts = [{"name": f"C4-{i + 1:02d}", "lat": p.get("lat"), "lon": p.get("lon"),
-             "t": p.get("t")} for i, p in enumerate(pts)]
+             "t": p.get("t"), "mark": i in mark_wps, "mark_idx": mark_wps.get(i)}
+            for i, p in enumerate(pts)]
     if dest is None:
         return {"shown": False, "dest_index": None,
-                "note": ("Not sent: every waypoint ahead is behind a hazard. Steer clear "
-                         "by eye, then send again.")}
-    st = _post("/route", {"name": wire_name, "waypoints": wpts, "dest_index": dest})
+                "note": NO_SAFE_WPT if rerouted else
+                ("Not sent: every waypoint ahead is behind a hazard. Steer clear "
+                 "by eye, then send again.")}
+    land = obstacles[2]
+    if land is not None:
+        # The thinning trusts consecutive router vertices (the router's own steps) — but the Pi's
+        # fallback router never sees land, and a plan may come from a coarser chart. So EVERY
+        # exported segment, and the boat's line to the steer-to waypoint, is checked against the
+        # land chart once more; one crossing refuses the send.
+        legs = list(zip(pts, pts[1:]))
+        legs.append(({"lat": boat[0], "lon": boat[1]}, pts[dest]))
+        if any(land.crosses(a["lat"], a["lon"], b["lat"], b["lon"]) for a, b in legs):
+            pi_route = rerouted and (ro or {}).get("source") == "pi"
+            return {"shown": False, "dest_index": None,
+                    "note": PI_CROSSES_LAND if pi_route else CROSSES_LAND}
+    # shore-checked only when the chart covers the boat AND every waypoint: the boat→steer-to
+    # line was then checked too
+    shore = bool(land is not None and land.covers(boat[0], boat[1])
+                 and all(land.covers(p["lat"], p["lon"]) for p in pts))
+    st = _post("/route", {"name": wire_name, "waypoints": wpts, "dest_index": dest,
+                          "course": course_token()})
     if st.get("error"):
         return {"shown": False, "note": st["error"]}
     return {"shown": bool(st.get("broadcasting")), "route": st.get("route"), "label": label,
             "n_waypoints": st.get("n_waypoints"), "downsampled_from": len(path),
-            "dest_index": dest,
+            "dest_index": dest, "shore_checked": shore,
+            # no land chart for this course (or the route leaves it): said, never implied
+            "warning": None if shore else NO_SHORE,
             "broadcaster": st}
+
+
+CLEAR_TIMEOUT_S = 1.5
+
+
+def clear_other_courses():
+    """A course change: stop the plotter route unless it was sent for the course aboard NOW
+    (`keep_course` = the current token). Called under COURSE_LOCK by /course/load, so it must be
+    short: n2kout's stop retires the worker at once and doesn't wait long for it, and this call
+    gives up after CLEAR_TIMEOUT_S. Even if it fails, n2kout ends the old route itself within a
+    second, from the token on the fix feed. Because it names the course to keep, a late stop
+    can never end a route sent for the new course."""
+    st = _post("/stop", {"keep_course": course_token()}, timeout=CLEAR_TIMEOUT_S)
+    if st.get("error"):
+        return {"cleared": False, "note": st["error"]}
+    return {"cleared": not st.get("broadcasting", False), "broadcaster": st}
 
 
 def clear():

@@ -219,16 +219,19 @@ class GribFrame:
                     u, v = self.u[x0:x1, y0:y1], self.v[x0:x1, y0:y1]
                 else:
                     return self
+                # copies, not views: a view keeps the whole parsed field alive (a global ECMWF
+                # frame is ~17 MB; 21 of them held ~350 MB for a few KB of course box)
                 return GribFrame(self.model, self.member, self.valid_time,
-                                 self.lat[y0:y1], self.lon[x0:x1], u, v, True)
+                                 self.lat[y0:y1].copy(), self.lon[x0:x1].copy(), u.copy(),
+                                 v.copy(), True)
             m = (self.lat >= s) & (self.lat <= n) & (self.lon >= w) & (self.lon <= e)
             if not m.any():
                 return self
             ys, xs = np.where(m)
             y0, y1, x0, x1 = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
             return GribFrame(self.model, self.member, self.valid_time,
-                             self.lat[y0:y1, x0:x1], self.lon[y0:y1, x0:x1],
-                             self.u[y0:y1, x0:x1], self.v[y0:y1, x0:x1], False)
+                             self.lat[y0:y1, x0:x1].copy(), self.lon[y0:y1, x0:x1].copy(),
+                             self.u[y0:y1, x0:x1].copy(), self.v[y0:y1, x0:x1].copy(), False)
         except Exception:
             return self
 

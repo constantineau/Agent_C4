@@ -40,7 +40,7 @@ FROZEN = [{"lat": 44.05 + i * 0.015, "lon": -82.0, "t": i} for i in range(11)]
 deviation._load_playbook = lambda: {"race_id": "u", "recommended": "middle",
                                      "variants": [{"id": "middle", "route": {"path": FROZEN}}]}
 
-r = reoptimize.get_reoptimize()
+r = reoptimize.compute()
 print("  ", r.get("marks"), "| eta_min", r.get("eta_min"), "| tacks", r.get("tacks"),
       "| sailed", r.get("sailed_nm"), "| vs", r.get("vs_playbook"))
 check("available + off_playbook flagged", r.get("available") and r.get("off_playbook") is True)
@@ -69,18 +69,16 @@ def _min_clear(path):
                                      path[i + 1]["lat"], path[i + 1]["lon"]) for i in range(len(path) - 1))
 
 # with NO obstacle homework → the reach route runs straight through the island's location
-reoptimize._cache["key"] = None
 deviation._load_playbook = lambda: {"race_id": "u", "variants": [{"id": "m"}]}   # no obstacles block
-straight = reoptimize.get_reoptimize()
+straight = reoptimize.compute()
 check("no obstacles → open-water note", "No obstacles loaded" in straight.get("note", "") and straight.get("avoids_islands") == 0)
 check("without avoidance the route passes through the island (< radius)", _min_clear(straight["path"]) < ISLAND[2])
 
 # with the island frozen in the bundle → the route detours around it
-reoptimize._cache["key"] = None
 deviation._load_playbook = lambda: {"race_id": "u", "variants": [{"id": "m"}],
                                     "obstacles": {"islands": [{"name": "Rock", "lat": ISLAND[0],
                                                                "lon": ISLAND[1], "radius_nm": ISLAND[2]}]}}
-avoided = reoptimize.get_reoptimize()
+avoided = reoptimize.compute()
 print("  avoids_islands", avoided.get("avoids_islands"), "| min clearance", round(_min_clear(avoided["path"]), 2),
       "nm (radius", ISLAND[2], ") | reaches", round(avoided["path"][-1]["lat"], 3))
 check("obstacle count reported", avoided.get("avoids_islands") == 1)
@@ -95,16 +93,14 @@ BOX = [[-82.02, 44.08], [-81.98, 44.08], [-81.98, 44.12], [-82.02, 44.12], [-82.
 def _in_box(path):
     return sum(1 for p in path if routing._pt_in_ring(p["lon"], p["lat"], BOX))
 
-reoptimize._cache["key"] = None
 deviation._load_playbook = lambda: {"race_id": "u", "variants": [{"id": "m"}]}   # no zones
-thru = reoptimize.get_reoptimize()
+thru = reoptimize.compute()
 check("without the zone, the route enters the box", _in_box(thru["path"]) > 0)
 
-reoptimize._cache["key"] = None
 deviation._load_playbook = lambda: {"race_id": "u", "variants": [{"id": "m"}],
     "obstacles": {"islands": [], "zones": [{"name": "NoGo", "type": "exclusion",
                                             "geometry": {"coordinates": [BOX]}}]}}
-skirt = reoptimize.get_reoptimize()
+skirt = reoptimize.compute()
 print("  avoids_zones", skirt.get("avoids_zones"), "| points inside box", _in_box(skirt["path"]),
       "| reaches", round(skirt["path"][-1]["lat"], 3))
 check("zone count reported", skirt.get("avoids_zones") == 1)
@@ -113,29 +109,25 @@ check("still reaches the mark A", abs(skirt["path"][-1]["lat"] - 44.22) < 0.05)
 check("note names the exclusion zone", "no-go zone" in skirt.get("note", ""))
 
 # a CIRCLE zone parses to a disk (folded into avoid)
-reoptimize._cache["key"] = None
 deviation._load_playbook = lambda: {"race_id": "u", "variants": [{"id": "m"}],
     "obstacles": {"islands": [], "zones": [{"name": "Ring", "type": "hazard",
                                             "geometry": {"center": [44.10, -82.0], "radius_nm": 1.0}}]}}
-circ = reoptimize.get_reoptimize()
+circ = reoptimize.compute()
 check("circle zone → disk avoidance (avoids_islands counts it)", circ.get("avoids_islands") == 1)
 
 # --- na paths ------------------------------------------------------------------------------------
 print("na paths:")
-reoptimize._cache["key"] = None
 NAV._latest = lambda: {"lat": None, "lon": None}
-check("no fix → unavailable", reoptimize.get_reoptimize().get("available") is False)
-reoptimize._cache["key"] = None
+check("no fix → unavailable", reoptimize.compute().get("available") is False)
 NAV.get_navigator = lambda route=None: {"available": False, "note": "no fix"}
-check("no navigator → unavailable", reoptimize.get_reoptimize().get("available") is False)
+check("no navigator → unavailable", reoptimize.compute().get("available") is False)
 
 # --- reoptimize with NO playbook aboard → still routes, vs_playbook unavailable -------------------
 print("no playbook:")
-reoptimize._cache["key"] = None
 NAV.get_navigator = lambda route=None: {"available": True, "route": "race", "next_mark": {"name": "A"}}
 NAV._latest = lambda: {"lat": 44.05, "lon": -82.0, "tws": 12.0, "twd": 0.0}
 deviation._load_playbook = lambda: {}
-r = reoptimize.get_reoptimize()
+r = reoptimize.compute()
 check("routes even with no playbook", r.get("available") is True)
 check("vs_playbook unavailable (nothing to compare)", (r.get("vs_playbook") or {}).get("available") is False)
 

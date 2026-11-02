@@ -50,18 +50,59 @@ print(c.execute('select count(*),min(time),max(time) from readings').fetchone())
   real numbers are 2 points and twice the minimum clear of it (the WAL and new pages need real
   bytes, and a reader can stop SQLite reusing its free pages). The uplink's 15-s
   aggregates keep going ashore either way.
+- **Restart.** Recording starts within seconds, whatever the size of the archive. Startup runs
+  only bounded checks (header, schema, and the right-hand edge of every b-tree — where the last
+  writes went), never a whole-file scan: on the SD card a `quick_check` of 24 GB took 39 min.
+  The full `quick_check` runs afterwards in a background thread at low priority (nice 19, idle
+  I/O class, and at most `ARCHIVE_CHECK_DUTY` of the time). If it finds damage in the live
+  file, the file is rotated as below. Same rule as at startup: clear damage is a verdict at
+  once; an uncertain error (I/O, busy, locked) is retried `ARCHIVE_CHECK_RETRIES` times,
+  `ARCHIVE_CHECK_RETRY_S` apart, and only a persistent I/O-type error counts as damage.
+  The live check holds one read snapshot for the whole scan, so the WAL cannot recycle behind
+  it. It therefore runs only when no race/practice session is open, and steps aside (closes,
+  checkpoint, retry `ARCHIVE_CHECK_LATER_S` later) when a session starts, the WAL passes
+  `ARCHIVE_CHECK_WAL_CAP_MB` or free space nears the guard's hard floor. During a session the
+  bounded startup checks and write errors are the protection. An unreadable sessions table
+  counts as an open session. The check repeats every `ARCHIVE_CHECK_EVERY_DAYS`. If no check has passed for
+  `ARCHIVE_CHECK_OVERDUE_DAYS`, the status carries a quiet note, "Archive check overdue" (the
+  LOG button's tooltip; never the red banner).
 - **Corruption.** A corrupt file is moved aside as `archive.corrupt-<stamp>.db` (never deleted;
-  `tools/salvage.py` recovers almost all of it) and a fresh one is started. At startup this
-  fires on a failed `quick_check` or a failed row count; mid-run it fires on any write that
-  says the file is corrupt, without asking quick_check again. The batch is kept and written to
-  the fresh file. If the move itself fails, the batch is requeued and the move retried.
+  `tools/salvage.py` recovers almost all of it) and a fresh one is started. At startup any
+  database error from the open, the schema read or the bounded checks counts (also `string or
+  blob too big` and UTF-8 decode errors from a damaged page) — except transient ones (locked,
+  busy, disk full, can't open), which are retried instead. Errors that clearly mean damage
+  (malformed, not a database, string or blob too big, decode errors) rotate at once; anything
+  else (typically a one-off `disk I/O error` after a brownout) is retried `ARCHIVE_OPEN_RETRIES`
+  times, `ARCHIVE_OPEN_RETRY_S` apart, and rotates only if it persists. The moved file is then checked in
+  the background and the verdict logged. Mid-run it fires on any write that says the file is
+  corrupt, without asking quick_check again. The batch is kept and written to the fresh file.
+  If the move itself fails, the batch is requeued and the move retried. A rotation never moves
+  the file while a background check still holds it open (a read stalled on a dying card): it
+  keeps recording into the current file and retries on the next flush. A background verdict
+  about a file that has since been replaced is ignored. One rotation lock orders "replace the file"
+  against "start a check on it": a check is started only under that lock, after re-checking
+  that the connection and generation are still current. A running prune stops at its next
+  chunk when a rotation begins, and the connection is never closed under one of its queries.
+- **Unwritable rows.** Strings are cleaned of lone UTF-16 surrogates before they are buffered.
+  If a batch still fails on a row's values, the rows are written one by one and only the bad
+  ones are dropped (counted, one log line per window). One bad row never blocks a batch.
 - **Failing writes.** A failed batch is rolled back and requeued in order. The queue is capped
-  at `ARCHIVE_MAX_BUFFER_ROWS`; past it the oldest rows are dropped and counted in the log.
-- **Status file** (`archiver-status.json`, refreshed every disk check): `recording`, `reason`
-  (`disk_full` / `rotation_pending`), `stop_cause` (`high_mark` / `hard_floor`), `disk_used_pct`,
-  `disk_really_used_pct`, `disk_free_bytes`, the marks, `paused_since`, and the counts
-  of rows not recorded, dropped from the buffer, written, and rotations this run. The engine
-  mounts the archive volume read-only, so it can read it; nothing shows it on the console yet.
+  at `ARCHIVE_MAX_BUFFER_ROWS`; past it the oldest rows are dropped and counted. The drop
+  warning prints at most once per `ARCHIVE_DROP_LOG_EVERY_S` with the count since the last one.
+- **Prune.** The hourly retention prune deletes only inside the gaps between kept session
+  windows, in chunks of `ARCHIVE_PRUNE_CHUNK_ROWS`, taking the write lock one chunk at a time.
+  Kept rows are never scanned, so a big kept session costs nothing and the flusher keeps
+  writing while it runs.
+- **Status file** (`archiver-status.json`, rewritten every `ARCHIVE_STATUS_EVERY_S`):
+  `recording`, `reason` (`disk_full` / `rotation_pending` / `no_signalk` = no usable telemetry for 30 s /
+  `write_failing`),
+  `stop_cause` (`high_mark` / `hard_floor`), `disk_used_pct`, `disk_really_used_pct`,
+  `disk_free_bytes`, the marks, `paused_since`, the counts of rows not recorded, dropped from
+  the buffer, waiting, written, rotations this run, and the background check's state. The
+  engine reads it (`shared/archiver_status.py`) on `/session` and `/health`; a file older than
+  90 s reads as "archiver stopped". While a LOG session runs, the console's LOG button and a
+  red banner show "Not recording: <reason>"; with no session (instruments off at the dock is
+  normal) the reason is only in the LOG button's tooltip.
 
 ## Backfill to the cloud (post-passage)
 
@@ -94,4 +135,14 @@ once a real link is available (dockside wifi after the passage).
 | `ARCHIVE_DISK_HARD_PCT` / `ARCHIVE_DISK_MIN_FREE_MB` | `95` / `2048` | hard floor on REAL filesystem use / free space; no free-page credit, stops recording on its own |
 | `ARCHIVE_DISK_CHECK_S` / `ARCHIVE_DISK_NAG_S` | `30` / `600` | how often disk use is measured / how often a stopped archiver repeats its warning |
 | `ARCHIVE_MAX_BUFFER_ROWS` | `300000` | cap on rows waiting in RAM while writes fail (~10 min at the dock); the oldest past it are dropped and counted |
-| `ARCHIVE_STATUS_FILE` | `archiver-status.json` next to the DB | the archiver's health as JSON (see below) |
+| `ARCHIVE_STATUS_FILE` | `archiver-status.json` next to the DB | the archiver's health as JSON (see above) |
+| `ARCHIVE_STATUS_EVERY_S` | `10` | how often the status file is rewritten |
+| `ARCHIVE_CHECK_DUTY` | `0.5` | share of wall time the background quick_check may spend reading |
+| `ARCHIVE_CHECK_WAL_CAP_MB` / `ARCHIVE_CHECK_WATCH_S` | `256` / `5` | the live check steps aside when the WAL passes this; how often it looks |
+| `ARCHIVE_CHECK_LATER_S` / `ARCHIVE_CHECK_OVERDUE_DAYS` | `3600` / `7` | retry delay after stepping aside; when "Archive check overdue" shows |
+| `ARCHIVE_CHECK_EVERY_DAYS` | `5` | the live file is re-checked when its last pass is this old (kept in sync_state) |
+| `ARCHIVE_CHECK_STOP_TIMEOUT_S` | `30` | how long a rotation waits for the check to let go before deferring |
+| `ARCHIVE_OPEN_RETRIES` / `ARCHIVE_OPEN_RETRY_S` | `3` / `2` | retries of an uncertain open error before rotating |
+| `ARCHIVE_STATUS_STALE_S` | `90` | (engine) a status file older than this reads as "archiver stopped" |
+| `ARCHIVE_DROP_LOG_EVERY_S` | `30` | at most one buffer-drop / requeue warning per this many seconds |
+| `ARCHIVE_PRUNE_CHUNK_ROWS` / `ARCHIVE_PRUNE_PAUSE_S` | `20000` / `0.05` | prune batch size / pause between batches (lock released) |

@@ -160,6 +160,61 @@ check("the age is when the files were downloaded, not now", pb is not None and p
 check("the new store is kept for the next pass", ob.lab.load_store(s_new["key"]) is not None)
 ENGINE["/playbook/track"] = TRACK
 
+print("online, the target changed, its GRIBs already cached:")
+
+
+class CachedGFS(FixtureGFS):
+    """The real fetch's cache hit: a cached file is returned as is, nothing new is written."""
+
+    def fetch(self, cycle, fhr, member, bbox, timeout=60):
+        FETCHED.append(fhr)
+        path = self._cache_path(cycle, fhr, member, bbox)
+        return path if os.path.exists(path) else None
+
+
+models.MODELS["gfs"] = CachedGFS()
+six = dict(TRACK, points=[dict(pt, t=pt["t"] - 6 * 3600) for pt in TRACK["points"]])   # ETAs → new key
+ENGINE["/playbook/track"] = six
+n_posts = len(POSTS)
+out = ob.run_once(now=NOW + 2450, get=get, post=post, record=record, is_online=lambda: True)
+po = POSTS[-1][1] if len(POSTS) > n_posts else {}
+check("resampled from the cache for the new key", po.get("key") == out["key"] and po.get("models")
+      and po["models"][0]["runs"][0]["cycle"] == int(CYCLE.timestamp()))
+check("the age is when the files were downloaded, not now", po.get("built_at") == NOW - 1800)
+check("...and saved that way", ob.lab.load_store(out["key"])["runs"]["gfs"][0]["at"] == NOW - 1800)
+
+print("online, a newer cycle half-downloaded and rejected, the cached one used:")
+LATE = CYCLE + dt.timedelta(hours=6)
+LATE_FILES = []
+
+
+class HalfLateGFS(CachedGFS):
+    """12Z is due but only its first frame downloads (too sparse); 06Z is in the cache."""
+
+    def pick_cycle(self, now=None, min_horizon_h=0):
+        return LATE
+
+    def fetch(self, cycle, fhr, member, bbox, timeout=60):
+        if cycle == LATE:
+            if fhr > 0:
+                return None
+            path = write_grib(self._cache_path(cycle, fhr, member, bbox), u=-6.0, v=0.0)
+            LATE_FILES.append(path)
+            return path
+        return super().fetch(cycle, fhr, member, bbox, timeout)
+
+
+models.MODELS["gfs"] = HalfLateGFS()
+ENGINE["/playbook/track"] = dict(TRACK, points=[dict(pt, t=pt["t"] - 7 * 3600) for pt in TRACK["points"]])
+out = ob.run_once(now=NOW + 2460, get=get, post=post, record=record, is_online=lambda: True)
+ph = POSTS[-1][1]
+check("fell back to the cached 06Z", LATE_FILES and ph["models"][0]["runs"][0]["cycle"] == int(CYCLE.timestamp()))
+check("its age is the 06Z files' time, not the rejected 12Z download's", ph["built_at"] == NOW - 1800)
+for _f in LATE_FILES + [os.path.join(os.environ["PLUME_DIR"], "misses.state")]:
+    os.remove(_f)                                           # leave the cache + back-off as they were
+models.MODELS["gfs"] = FixtureGFS()
+ENGINE["/playbook/track"] = TRACK
+
 print("offline, a store that exists but is empty or older than the cache:")
 FETCHED.clear()
 two = dict(TRACK, points=[dict(pt, t=pt["t"] - 2 * 3600) for pt in TRACK["points"]])   # same box, new key
@@ -340,11 +395,39 @@ ob.run_once(now=NOW + 900, get=get, post=post, record=rec_nam, is_online=lambda:
 check("15 min later: no probe at all", NAMCALLS == [])
 ENGINE["/conditions"] = {"available": True, "lat": 45.0, "lon": -84.5}   # a new target meanwhile
 ob.run_once(now=NOW + 1200, get=get, post=post, record=rec_nam, is_online=lambda: True)
-check("a new target while backing off gets 06Z without re-probing 12Z",
-      DUE not in NAMCALLS and POSTS[-1][1]["models"][0]["runs"][0]["cycle"] == int(CYCLE.timestamp()))
+check("a new box gets its own probe of 12Z, then 06Z",
+      DUE in NAMCALLS and POSTS[-1][1]["models"][0]["runs"][0]["cycle"] == int(CYCLE.timestamp()))
 NAMCALLS.clear()
+ENGINE["/conditions"] = {"available": True, "lat": 43.5, "lon": -86.0}  # the first box again
 ob.run_once(now=NOW + 3700, get=get, post=post, record=rec_nam, is_online=lambda: True)
 check("after an hour: 12Z probed again", DUE in NAMCALLS)
+
+print("no run outside a model's coverage doesn't block it inside (HRRR):")
+EDGE = []
+
+
+class EdgeNAM(models.NAM):
+    """A regional model whose grid ends at 44N: nothing for a box north edge below that."""
+
+    def pick_cycle(self, now=None, min_horizon_h=0):
+        return CYCLE
+
+    def fetch(self, cycle, fhr, member, bbox, timeout=60):
+        EDGE.append(bbox[0])
+        if bbox[0] < 44:
+            return None
+        return write_grib(self._cache_path(cycle, fhr, member, bbox), u=-4.0, v=0.0)
+
+
+models.MODELS["nam"] = EdgeNAM()
+ENGINE["/conditions"] = {"available": True, "lat": 42.0, "lon": -86.0}       # outside coverage
+ob.run_once(now=NOW + 600, get=get, post=post, record=rec_nam, is_online=lambda: True)
+check("outside coverage: no run", EDGE and POSTS[-1][1].get("waiting") is True)
+EDGE.clear()
+ENGINE["/conditions"] = {"available": True, "lat": 44.5, "lon": -86.0}       # inside, 10 min later
+ob.run_once(now=NOW + 1200, get=get, post=post, record=rec_nam, is_online=lambda: True)
+check("moved into coverage within the hour: fetched, not backed off",
+      EDGE and not POSTS[-1][1].get("waiting") and POSTS[-1][1]["models"][0]["model"] == "nam")
 
 print("pruning:")
 store_dir = os.environ["PLUME_DIR"]

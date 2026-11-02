@@ -188,14 +188,15 @@ synthesized + **signed**, dropped onboard as the copilot's frozen homework. Two 
   `recommended` start default, and an ordered `decision_tree`. A **deterministic fallback** builds a
   valid bundle with no API key. The **`c4.playbook/v1`** schema is a *superset* of what the onboard
   copilot's `playbook.Playbook` reads (`race_id` + `variants[].id/summary/what_flips_it`) — so
-  freezing one and pointing the copilot's `PLAYBOOK_PATH` at it is the whole onboard wiring.
+  freezing one and posting it to the Pi engine's `/playbook/load` is the whole onboard wiring (the
+  Pi passes it to the copilot and approves it; the copilot uses only an approved playbook).
   **Signing:** `sign_bundle()` hashes the canonical content (sha256 over the bundle minus its
   `signature`, sorted-key/no-space JSON) → tamper-evident "frozen at the gun"; the copilot recomputes
   the identical bytes (`playbook.verify_signature`), so a byte-for-byte bundle verifies. `pbstore.py`
   persists frozen bundles on the `lab_playbooks` volume (`/srv/playbooks`). Endpoints: `POST
   /api/playbook/synthesize` (draft) · `POST /api/playbook/freeze` (sign + persist) · `GET
-  /api/playbooks[/{id}]` · `GET /api/playbooks/{id}/download` (the exact signed bytes — scp to the
-  Orin). The **Gameplan tab** gains a "Synthesize branching playbook" panel: headline + recommended +
+  /api/playbooks[/{id}]` · `GET /api/playbooks/{id}/download` (the exact signed bytes — POST
+  them to the Pi engine's `/playbook/load`, never copy them to the Orin). The **Gameplan tab** gains a "Synthesize branching playbook" panel: headline + recommended +
   stakes, per-variant cards (summary/why/tradeoffs/what-flips-it), the decision tree, and **Freeze &
   sign** → signature + download.
 - **Verified end-to-end on the real Bayview Mackinac cove_island course** (live GFS+NAM+HRRR + Opus,
@@ -346,6 +347,13 @@ Source-independent (ENC or GSHHG/NE), applied after the waypoint carve; provenan
 route takes the wrong side → barrier flips it, both port and starboard, still reaching the mark), and
 the real cove_island Duck/BoisBlanc barriers (legal open, illegal blocked). Tunables
 `ROUTE_ROUNDSIDE_ISLANDS` (default ON) / `ROUTE_ROUNDSIDE_BAND_NM`.
+- **One mask per leg (#141):** each leg routes on its own mask (`geo.build_leg_fields`): land, zones
+  and island disks on every leg, an island's barrier only on the leg that rounds it. One course-wide
+  mask with every barrier walled off a course that passes the same island twice, once each way. The
+  base (no barriers) is cached once per course; a leg that rounds an island adds one cached copy
+  (LRU, `GEO_FIELD_CACHE_MAX`, default 24 masks). The optimizer, the playbook's scenario fan, pace
+  plays (`from_mark`), the rejoin table and the play-route downsample all use it. See
+  `test_leg_obstacles.py`.
 - **Crew-facing roundings summary:** the route enforces island sides but didn't *tell* the crew, so
   `race_def.marks_with_side()` lists the ordered required sides for all marks (nav + islands + gates),
   the optimize result carries `roundings`, and the briefing states them ("leave Duck Islands to
@@ -413,7 +421,7 @@ design hinges on.
 - **Map overlay:** the Hs field is drawn on the slippy map as a shaded **heatmap** (`mapview.js`
   `drawWaves`, calm-teal→rough-red ramp, low opacity, UNDER the wind/current arrows so they stay
   legible), scrubbed by the same forecast slider. Fed by `result.wave_grid` (Hs on the same bbox/times
-  as the wind/current grids via `WaveField.sample_grid`, emitted by `_wave_grid` only when peak Hs ≥
+  as the wind/current grids via `WaveField.sample_grid`, emitted by `routerun.wave_grid` only when peak Hs ≥
   `WAVE_GRID_MIN_HS`=0.25 m). A **"Sea state"** layer toggle (default OFF) + an Hs legend join the
   Control Center.
 

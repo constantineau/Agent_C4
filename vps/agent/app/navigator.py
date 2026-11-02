@@ -26,10 +26,26 @@ _active = "default"
 _restored = False
 
 
+def _course_changed(route):
+    """Tell the re-route (orinroute) the course aboard changed: routes made before count as an
+    old course (#125). Lazy import: orinroute imports this module."""
+    from . import orinroute
+    orinroute.bump_load_id(route)
+
+
 def set_active(route):
+    """Make `route` the active course. A SWITCH to another route is a course change, so it gets
+    a new course load id (a /course/load then sets its own). Callers that also write marks hold
+    orinroute.COURSE_LOCK across both."""
     global _active, _restored
-    _active = route or "default"
-    _restored = True
+    from . import orinroute
+    new = route or "default"
+    with orinroute.COURSE_LOCK:          # a switch is a course change (re-entrant for callers)
+        changed = new != active_route()
+        _active = new
+        _restored = True
+        if changed:
+            _course_changed(new)
     try:
         ds = datasource.active()
         if hasattr(ds, "save_active_route"):
@@ -495,7 +511,10 @@ def make_practice_course(leg_nm: float = 1.0):
     wlon = lon + d_rad * math.sin(math.radians(twd)) / max(0.1, math.cos(math.radians(lat)))
     marks = [(1, "Leeward (start)", lat, lon), (2, "Windward", wlat, wlon),
              (3, "Leeward (finish)", lat, lon)]
-    datasource.active().save_practice_course(marks)
-    set_active("practice")
+    from . import orinroute
+    with orinroute.COURSE_LOCK:          # one course change, like /course/load (#125)
+        datasource.active().save_practice_course(marks)
+        set_active("practice")
+        _course_changed("practice")      # new marks under the same name: always a new course
     return {"available": True, "route": "practice", "leg_nm": leg_nm,
             "twd": round(twd, 1), "marks": len(marks)}
