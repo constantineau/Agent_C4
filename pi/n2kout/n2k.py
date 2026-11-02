@@ -304,25 +304,37 @@ class N2kSender:
         Returns frames sent; 0 on error (counted, never raised). `src` overrides the source
         address for one message (the 254 "cannot claim")."""
         with self._lock:
-            sa = self.sa if src is None else src
-            if src is None and self.sa > 253:
-                self.send_errors += 1
-                self.last_error = "no address (claim lost)"
-                self.last_error_at = time.time()
-                return 0
-            try:
-                if self._sock is None:
-                    self.open()
-                n = self._send_locked(pgn, prio, data, single, dest, sa)
-            except OSError as e:
-                self.send_errors += 1
-                self.last_error = f"{type(e).__name__}: {e}"
-                self.last_error_at = time.time()
-                self._close_locked()
-                return 0
-            self.frames_sent += n
-            self.last_ok_at = time.time()
-            return n
+            return self._send_counted(pgn, prio, data, single, dest, src)
+
+    def change_address(self, new_sa: int, claim):
+        """Move to `new_sa` and send its address claim (`claim` = (pgn, prio, data)) in ONE hold
+        of the send lock: no other thread's frame can go out from the new address before the
+        claim that announces it. new_sa 254 = "cannot claim" (sent from 254; nothing after)."""
+        with self._lock:
+            self.sa = new_sa
+            pgn, prio, data = claim
+            return self._send_counted(pgn, prio, data, None, 0xFF, new_sa)
+
+    def _send_counted(self, pgn, prio, data, single, dest, src):
+        sa = self.sa if src is None else src
+        if src is None and self.sa > 253:
+            self.send_errors += 1
+            self.last_error = "no address (claim lost)"
+            self.last_error_at = time.time()
+            return 0
+        try:
+            if self._sock is None:
+                self.open()
+            n = self._send_locked(pgn, prio, data, single, dest, sa)
+        except OSError as e:
+            self.send_errors += 1
+            self.last_error = f"{type(e).__name__}: {e}"
+            self.last_error_at = time.time()
+            self._close_locked()
+            return 0
+        self.frames_sent += n
+        self.last_ok_at = time.time()
+        return n
 
     def _send_locked(self, pgn, prio, data, single, dest, sa):
         cid = can_id(pgn, sa, prio, dest)

@@ -50,6 +50,33 @@ check("A's lat with A's lon; time = the older of the two; source named",
 src._live[(LAT, "gpsA")] = (now - 60, 44.1)                   # past the live cache TTL
 src._live[(LON, "gpsA")] = (now - 60, -82.1)
 check("only stale entries → None (no archive fallback)", src.latest_position() is None)
+print("lat and lon come from one snapshot (a GPS update can't land in between):")
+
+
+class UpdatingLock:
+    """Each release lets a GPS update land (lat and lon of gpsA move together)."""
+
+    def __init__(self, live):
+        self.live, self.inner, self.n = live, threading.Lock(), 0
+
+    def __enter__(self):
+        self.inner.acquire()
+
+    def __exit__(self, *a):
+        self.inner.release()
+        self.n += 1
+        t = time.time()
+        self.live[(LAT, "gpsA")] = (t, 50.0 + self.n)
+        self.live[(LON, "gpsA")] = (t, -80.0 - self.n)
+
+
+src3 = object.__new__(datasource_onboard.OnboardSource)
+src3._live = {(LAT, "gpsA"): (now, 50.0), (LON, "gpsA"): (now, -80.0)}
+src3._live_lock = UpdatingLock(src3._live)
+p = src3.latest_position()
+check(f"a real pair (lat 50+k with lon -80-k, same k) [{p[:2]}]",
+      p is not None and round(p[0] - 50.0, 6) == round(-80.0 - p[1], 6))
+
 print("a fresh backup GPS takes over from a preferred one that went quiet:")
 src2 = object.__new__(datasource_onboard.OnboardSource)
 src2._live, src2._live_lock = {}, threading.Lock()

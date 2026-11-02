@@ -218,6 +218,11 @@ class FakeSender:
         self.sent.append((pgn, data, dest, self.sa if src is None else src))
         return 1
 
+    def change_address(self, new, claim):
+        self.sa = new
+        self.sent.append((claim[0], claim[2], 0xFF, new))
+        return 1
+
     def pgns(self):
         return [p for p, *_ in self.sent]
 
@@ -690,6 +695,43 @@ s = claim_from(128, 2)
 check("lose again → next free address (129)", fs.sa == 129)
 clk.t += A.PEER_WINDOW_S + 1
 check("peers age out of the list", bt.peers_recent() == [])
+
+print("bus thread — after a lost contest, nothing goes out from the new address before its claim:")
+wire = []
+
+
+class OrderSock:
+    def send(self, raw):
+        cid = struct.unpack("<I", raw[:4])[0] & 0x1FFFFFFF
+        wire.append((n2k.pgn_of(cid), cid & 0xFF))
+
+
+class RacySender(n2k.N2kSender):
+    """The moment the address changes, another thread (the broadcaster) tries to send."""
+    _sa = 35
+
+    @property
+    def sa(self):
+        return self._sa
+
+    @sa.setter
+    def sa(self, v):
+        self._sa = v
+        if v != 35:
+            th = threading.Thread(target=lambda: self.send(*n2k.encode_129283(1.0)))
+            th.start()
+            th.join(0.2)                  # old code: it gets through here, before the claim
+            self.racer = th
+
+
+rs = RacySender("fake")
+rs._sock = OrderSock()
+btr = A._BusThread("x", sender=rs, clock=Clock())
+btr.handle(((6 << 26) | (0xEE << 16) | (0xFF << 8) | 35) | n2k.CAN_EFF_FLAG, struct.pack("<Q", 1))
+rs.racer.join(2)
+from_new = [pgn for pgn, sa in wire if sa == 128]
+check(f"first frame from the new address 128 is its claim [{from_new}]",
+      from_new[:1] == [60928] and 129283 in from_new)
 
 print("bus thread — /health reads the peer list while the bus thread writes it:")
 errs = []

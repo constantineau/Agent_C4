@@ -466,12 +466,10 @@ class _BusThread(threading.Thread):
         self-configurable range) and claim it; none free → "cannot claim" from the null
         address 254, after which the sender refuses to transmit."""
         new = next((a for a in range(128, 248) if a not in self.peers), 254)
-        if new == 254:
-            self.sender.send(*n2k.encode_60928(self.name_), src=254)
-        self.sender.sa = new
+        # the move and the claim from the new address in one hold of the send lock: the
+        # broadcast thread can't send from the new address before it is claimed
+        self.sender.change_address(new, n2k.encode_60928(self.name_))
         self.state["address"] = new
-        if new != 254:
-            self.claim()
 
     def handle(self, cid: int, data: bytes):
         with self.peers_lock:
