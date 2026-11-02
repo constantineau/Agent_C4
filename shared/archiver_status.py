@@ -72,7 +72,8 @@ def read(path=None, now=None, stale_s=None):
     if age > stale_s:
         return _not_recording("stale", **extra)
     if doc.get("recording") is False:
-        return _not_recording(doc.get("reason") or "unknown", **extra)
+        reason = doc.get("reason")
+        return _not_recording(reason if isinstance(reason, str) and reason else "unknown", **extra)
     out = {"recording": True, "reason": None, "text": None}
     out.update(extra)
     return out

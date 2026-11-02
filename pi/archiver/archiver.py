@@ -331,6 +331,14 @@ def _clearly_damaged(exc) -> bool:
 
 def open_db_resilient(path: Path = ARCHIVE_DB):
     """Open the archive, rotating it aside if it is unusable. Returns (conn, rotated_to|None).
+    See `_open_resilient`."""
+    conn, rotated, _top = _open_resilient(path)
+    return conn, rotated
+
+
+def _open_resilient(path: Path = ARCHIVE_DB):
+    """`open_db_resilient`, plus the highest row id its probe saw (None after a rotation: the
+    fresh file has not been probed). Returns (conn, rotated_to|None, top|None).
 
     This is the whole brownout story: a bad card must cost seconds, not six weeks. BOUNDED:
     open + schema + `fast_check`, never a whole-file scan — the archiver records nothing until
@@ -343,11 +351,11 @@ def open_db_resilient(path: Path = ARCHIVE_DB):
         conn = None
         try:
             conn = open_db(path)
-            fast_check(conn)
+            top = fast_check(conn)
             if finished is not None:
                 _note_rotation(conn, finished)
-                return conn, finished
-            return conn, None
+                return conn, finished, top
+            return conn, None, top
         except (sqlite3.DatabaseError, UnicodeDecodeError) as exc:
             if not _is_bad_file(exc):
                 if conn is not None:
@@ -366,7 +374,7 @@ def open_db_resilient(path: Path = ARCHIVE_DB):
                   f"it aside and recording into a fresh file", flush=True)
             # the same close -> resumable move -> check -> open sequence as a mid-run
             # rotation; CREATE TABLE IF NOT EXISTS self-initialises the fresh file
-            return reopen_fresh(conn, path)
+            return (*reopen_fresh(conn, path), None)
 
 
 def reopen_fresh(conn, path: Path = ARCHIVE_DB):
@@ -427,9 +435,11 @@ def open_for_run(path: Path = ARCHIVE_DB):
     crash-looped on 4,000+ times after 2026-09-02, and 40+ min of no recording on a big file)
     and no quick_check (the background check does that once recording runs). Returns
     (conn, highest_row_id, rotated)."""
-    conn, rotated = open_db_resilient(path)
+    conn, rotated, top = _open_resilient(path)
+    if top is not None:
+        return conn, top, rotated    # probed once, with retries: never re-probe a healthy file
     try:
-        top = fast_check(conn)
+        top = fast_check(conn)       # only the fresh file after a rotation
     except (sqlite3.DatabaseError, UnicodeDecodeError) as exc:
         if not _is_bad_file(exc):
             raise

@@ -116,5 +116,11 @@ with tempfile.TemporaryDirectory() as d:
     check("garbage: Not recording, and no exception",
           got["recording"] is False and got["reason"] == "unreadable")
 
+    path.write_text(json.dumps({"updated": datetime.now(timezone.utc).isoformat(),
+                                "recording": False, "reason": 123}))
+    got = archiver_status.read(path)
+    check("a non-text reason: Not recording: unknown, and no exception",
+          got["recording"] is False and got["reason"] == "unknown")
+
 print("\n" + ("PASS" if ok else "FAIL"))
 raise SystemExit(0 if ok else 1)
