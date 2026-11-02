@@ -73,18 +73,53 @@ every SQLite file's `integrity_check` and row counts, and restores the dump into
 # a set into a local directory, then the drill against it
 C4_BACKUP_DEST=/mnt/data/c4-backup/local python3 tools/backup/lab_backup.py backup --no-prune
 C4_BACKUP_DEST=/mnt/data/c4-backup/local python3 tools/backup/lab_restore.py
-python3 tools/backup/lab_backup.py list  --dest gs://constantineau-c4-archive/vps-nightly
+python3 tools/backup/lab_backup.py list  --dest gs://constantineau-c4-nightly/vps-nightly
 python3 tools/backup/lab_backup.py prune --dest /mnt/data/c4-backup/local --dry-run
 ```
 
-Scheduling: `systemd/c4-lab-backup.{service,timer}` (02:15 UTC) with `/etc/c4-lab-backup.env`
-from `systemd/c4-lab-backup.env.example`.
+Scheduling: `systemd/c4-lab-backup.{service,timer}` (02:15 UTC, daily, database dump
+included every night) with `/etc/c4-lab-backup.env` from `systemd/c4-lab-backup.env.example`.
 
-### Retention in the bucket
+### Where the nightlies go (Cole's picks, 2026-11-02)
 
-`constantineau-c4-archive` has a 1-year retention policy and versioning. A delete of an object
-younger than a year is refused, and after that a delete only turns it into a non-current version,
-which is still billed until a lifecycle rule removes it. So the shipped env file sets
-`C4_BACKUP_PRUNE=0`, and the bucket keeps every stored set for at least a year. Pruning there
-only saves money once Cole adds a lifecycle rule for non-current versions (or picks another
-bucket for the nightlies).
+- **A separate bucket, `gs://constantineau-c4-nightly`, pruning ON (7 daily / 4 weekly /
+  12 monthly).** The archive bucket keeps its 1-year retention lock and versioning and gets no
+  nightlies: there a delete is refused for a year and then only becomes a billed non-current
+  version, so pruning could never work.
+- **Storage class STANDARD.** Nearline bills every object for at least 30 days and Coldline for
+  90, but most nightly dumps live 7 days, so those minimums would bill each ~550 MB dump for
+  30–90 days. The saving per GB doesn't cover that, and both charge a retrieval fee on every
+  restore drill. Standard has no minimum and no retrieval fee. At steady state the bucket holds
+  ~21 distinct dumps plus the volumes, ~12 GB: about $0.30 a month.
+- **Same region as the archive (`northamerica-northeast1`), uniform bucket-level access, public
+  access prevention on, no retention policy, no versioning** (a prune must really free space).
+- **The database dump stays daily.**
+- **No encryption.** The bucket is private (uniform access, public access prevention, only this
+  project's credentials), and the data is race telemetry and Lab state, not personal data. A
+  client-side key adds one more thing to lose: if the passphrase went with the VPS, every backup
+  would be unreadable exactly when it is needed.
+
+### Enable it (commands for Cole)
+
+```bash
+# 1. the nightly bucket (once)
+gsutil mb -l northamerica-northeast1 -c STANDARD -b on gs://constantineau-c4-nightly
+gsutil pap set enforced gs://constantineau-c4-nightly
+gsutil ls -L -b gs://constantineau-c4-nightly | grep -iE 'storage class|location|retention|versioning|bucket policy'
+
+# 2. the units (after #198 merges and the main checkout is pulled)
+cd /home/constantineau/Agent_C4 && git pull
+sudo install -m 644 tools/backup/systemd/c4-lab-backup.service tools/backup/systemd/c4-lab-backup.timer /etc/systemd/system/
+sudo install -m 600 tools/backup/systemd/c4-lab-backup.env.example /etc/c4-lab-backup.env
+sudo systemctl daemon-reload
+
+# 3. first real run (~10 min), then a restore drill from the bucket (~30 min)
+sudo systemctl start c4-lab-backup.service
+journalctl -u c4-lab-backup.service -n 30
+python3 tools/backup/lab_backup.py list --dest gs://constantineau-c4-nightly/vps-nightly
+sudo C4_BACKUP_DEST=gs://constantineau-c4-nightly/vps-nightly python3 tools/backup/lab_restore.py
+
+# 4. schedule it
+sudo systemctl enable --now c4-lab-backup.timer
+systemctl list-timers c4-lab-backup.timer
+```

@@ -151,6 +151,21 @@ copyoff.py status --outbox D/outbox
   set `ARCHIVE_OFFBOAT_LEDGER=/var/lib/sr33/archive/outbox/ledger.json` and the prune deletes
   only verified rows. Missing or unreadable ledger = nothing pruned. Unset (today) = old behaviour.
 
+### Spring deploy steps (#181)
+
+1. An SSH key from the Pi to the VPS, limited to rsync into the receive dir and `copyoff.py
+   verify` (forced command); check the Pi host has rsync and python3.
+2. A Pi timer running `seal` then `ship` (hourly, when the link is up).
+3. **Measure the real copy-off volume before leaving it on Starlink.** The estimate is
+   ~0.7–1 GB/day with `rsync -z` against ~3.2 GB/day of raw archive growth at the dock, but it
+   is not measured. Run `seal` + `ship` for a day or two and read the bytes sent (rsync
+   `--stats`, or the Starlink app) before deciding the cadence.
+4. The one-time backlog (~15 GB live archive + the 24 GB `archive.corrupt-20261028T154237.db`)
+   on dock Wi-Fi, or by pulling the card.
+5. Rebuild the archiver and set `ARCHIVE_OFFBOAT_LEDGER=/var/lib/sr33/archive/outbox/ledger.json`
+   so the prune deletes only rows verified off the boat.
+6. On the VPS: compress what arrives and copy it to the archive bucket.
+
 ## Env
 
 | Var | Default | Meaning |
