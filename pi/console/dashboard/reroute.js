@@ -93,8 +93,8 @@
         (models.length ? " · " + models.join(", ") : "");
     } else {
       wx = String(r.wind_source || "").indexOf("live") === 0 ? "Measured wind only. No forecast."
-        : r.forecast_gaps ? "Forecast with gaps · Open-Meteo"   // gaps filled from nearby (#157)
-        : "Forecast · Open-Meteo";
+        : (r.forecast_old ? "Old forecast" : "Forecast") +      // #157: an expired forecast,
+          (r.forecast_gaps ? " with gaps" : "") + " · Open-Meteo";  // gaps filled from nearby
     }
     const who = (r.asked_by ? "Asked by " + r.asked_by : "Asked") +
       (r.asked_at ? " at " + hhmm(r.asked_at) : fin ? " · done " + hhmm(fin) : "");

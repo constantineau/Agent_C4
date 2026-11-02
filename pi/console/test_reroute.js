@@ -166,6 +166,9 @@ test("the Pi fallback runs and reports like the Orin", () => {
   const gappy = RT.describe({ source: "pi", r: Object.assign({}, done.pi.result,
     { wind_source: "forecast, gaps filled from nearby", forecast_gaps: 3 }) }, S);
   assert.equal(gappy.wx, "Forecast with gaps · Open-Meteo");
+  const old = RT.describe({ source: "pi", r: Object.assign({}, done.pi.result,
+    { wind_source: "old forecast", forecast_old: true }) }, S);
+  assert.equal(old.wx, "Old forecast · Open-Meteo");
   const measured = RT.describe({ source: "pi", r: Object.assign({}, done.pi.result,
     { wind_source: "live wind (no forecast)" }) }, S);
   assert.equal(measured.wx, "Measured wind only. No forecast.");

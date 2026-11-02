@@ -180,6 +180,53 @@ weather._cache.clear()                                    # nothing cached to bo
 err = raises(lambda: wf(44.1, -82.0, time.time()))
 check(f"the wind field refuses with '{FCST_GAP}'", err is not None and str(err) == FCST_GAP)
 
+print("#157 an EXPIRED forecast + no network → one failed fetch per run, labelled 'old forecast'")
+
+
+def expired(tws, twd):
+    """Fill the cache with forecasts that are past their TTL (fetched before the link died)."""
+    t0 = int(time.time()) - 3600
+    for a in range(-6, 10):
+        for b in range(-6, 7):
+            weather._cache[(round(44.0 + a * 0.1, 1), round(-82.0 + b * 0.1, 1))] = {
+                "fetched": time.time() - weather.TTL_S - 60,
+                "hours": [(t0 + 3600 * i, tws, twd) for i in range(48)]}
+
+
+net({})
+expired(15.0, 90.0)
+boat(44.0, -82.0, 8.0, 270.0, MARKS_N, "A")
+r = routing.get_route()
+check("/route still routes on the old forecast", r.get("available") is True)
+check(f"only the start cell's refresh hit the dead link (fetches: {len(CALLS)})", len(CALLS) == 1)
+check("labelled 'old forecast'", r.get("wind_source") == "old forecast" and r.get("forecast_old") is True)
+check("old forecast, not the boat's 270° wind → a straight reach, no tacks", r.get("tacks") == 0)
+net({})
+expired(15.0, 90.0)
+p = reoptimize.compute()
+check(f"Pi re-route: one failed fetch only (fetches: {len(CALLS)})", len(CALLS) == 1)
+check("Pi route labelled 'old forecast' and warns 'Old forecast.'",
+      p.get("wind_source") == "old forecast" and "Old forecast." in (p.get("warnings") or []))
+
+# fresh start cell (the link answers it), expired cells further out: the first failed refresh
+# switches the run to the cache, so the dead link is tried once more, not once per expired cell
+net({(44.0, -82.0): (15.0, 90.0)})
+expired(15.0, 90.0)
+del weather._cache[(44.0, -82.0)]
+r = routing.get_route()
+check(f"fresh start, expired cells beyond: 1 good + 1 failed fetch (fetches: {len(CALLS)})",
+      len(CALLS) == 2)
+check("…labelled 'old forecast'", r.get("wind_source") == "old forecast")
+
+print("#157 weather: a failed refresh keeps the old forecast and doesn't retry at once")
+net({})
+expired(15.0, 90.0)
+w1 = weather.wind_at(44.0, -82.0, time.time())
+w2 = weather.wind_at(44.0, -82.0, time.time())
+check("the old forecast is served", w1 is not None and round(w1[0]) == 15)
+check(f"the second read doesn't wait on the network again (fetches: {len(CALLS)})", len(CALLS) == 1)
+check("the cell reads as stale", weather.cell_status(44.0, -82.0) == "stale")
+
 # ==== #158: tack labels from the route's wind, not the live TWD ===============================
 print("#158 tacks judged against the route's wind")
 # forecast from 270 everywhere; the mark is due west (dead upwind). Live wind sensor dead.

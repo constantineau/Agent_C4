@@ -411,6 +411,7 @@ def _chain(nav, remaining, slat, slon, wind, bundle, avoid, polys):
     out = {
         "available": True, "off_playbook": True, "route": nav["route"],
         "wind_source": wind.source, "forecast_gaps": len(wind.filled),
+        "forecast_old": bool(wind.stale),
         "marks": [m["name"] for m in remaining], "legs": leg_summ,
         "sail_plan": sail_plan,
         "mark_idx": [m.get("course_index") for m in remaining],   # course positions (laps)
@@ -424,7 +425,7 @@ def _chain(nav, remaining, slat, slon, wind, bundle, avoid, polys):
         "leg_end_idx": leg_end_idx,           # one per remaining mark, in order
         "avoids_islands": len(avoid), "avoids_zones": len(polys),
         "vs_playbook": _vs_playbook(bundle, full_path),
-        **({"warnings": [routing.GAPS_FILLED]} if wind.filled else {}),
+        **({"warnings": wind.warnings()} if wind.warnings() else {}),
         # Fresh route on the boat's own polars, through the forecast (or measured wind when there
         # is none), from here through the remaining marks. Off the frozen playbook; legal in-race.
         "note": ("New route from here, off the gameplan"

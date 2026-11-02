@@ -119,8 +119,10 @@ def _seg_crosses_poly(alat, alon, blat, blon, polys):
 NO_WIND = "No wind data. Can't route."
 FCST_GAP = "Forecast incomplete. Can't route."
 GAPS_FILLED = "Forecast gaps filled from nearby."
+OLD_FCST = "Old forecast."
 SRC_FCST = "forecast"
 SRC_FCST_FILLED = "forecast, gaps filled from nearby"
+SRC_FCST_OLD = "old forecast"
 SRC_LIVE = "live wind (no forecast)"
 
 
@@ -131,29 +133,43 @@ class NoWindError(Exception):
 class WindField:
     """wind(lat, lon, epoch) → (tws, twd), one source for the whole route.
 
-    Forecast mode: the Open-Meteo forecast per ~0.1° cell. A cell whose fetch fails takes the
-    nearest cell that has a forecast cached (counted in `filled`), and after the first failure the
-    run stops fetching new cells, so a dead link costs one 10 s timeout, not one per cell (#157).
-    It never falls back to the boat's measured wind mid-route.
+    Forecast mode: the Open-Meteo forecast per ~0.1° cell. After the first failed fetch (a new
+    cell, or the refresh of an expired one) the run reads the cache only, so a dead link costs one
+    10 s timeout, not one per cell (#157). A cell with no fresh forecast takes, in order: its own
+    old forecast, the nearest fresh cached cell, the nearest old one. Gaps are counted in `filled`,
+    old forecast in `stale`, and the label says so. It never falls back to the boat's measured
+    wind mid-route.
     Live mode: the measured wind (tws, twd) held constant."""
 
     def __init__(self, use_forecast, live=None):
         self.use_forecast = use_forecast
         self.live = live
         self.filled = set()          # cells whose forecast came from a nearby cell
+        self.stale = set()           # cells routed on an old forecast (its refresh failed)
         self._offline = False
 
     def __call__(self, lat, lon, epoch):
         if not self.use_forecast:
             return self.live
-        w = weather.cached_wind_at(lat, lon, epoch) if self._offline else weather.wind_at(lat, lon, epoch)
+        if not self._offline:
+            w = weather.wind_at(lat, lon, epoch)
+            if w and weather.cell_status(lat, lon) != "stale":
+                return w
+            self._offline = True     # a fetch just failed: the cache only from here on
+        cell = weather._cell(lat, lon)
+        w = weather.cached_wind_at(lat, lon, epoch)
         if w:
             return w
-        self._offline = True
-        w = weather.nearest_cached_wind(lat, lon, epoch)
+        w = weather.cached_wind_at(lat, lon, epoch, stale_ok=True)
+        if w:
+            self.stale.add(cell)
+            return w
+        w, fresh = weather.nearest_cached_wind(lat, lon, epoch)
         if not w:
             raise NoWindError(FCST_GAP)
-        self.filled.add(weather._cell(lat, lon))
+        self.filled.add(cell)
+        if not fresh:
+            self.stale.add(cell)
         return w
 
     @property
@@ -161,7 +177,12 @@ class WindField:
         """The label a route carries: what wind it was really computed in."""
         if not self.use_forecast:
             return SRC_LIVE
-        return SRC_FCST_FILLED if self.filled else SRC_FCST
+        base = SRC_FCST_OLD if self.stale else SRC_FCST
+        return base + SRC_FCST_FILLED[len(SRC_FCST):] if self.filled else base
+
+    def warnings(self):
+        """Short crew notes for what the label says."""
+        return ([OLD_FCST] if self.stale else []) + ([GAPS_FILLED] if self.filled else [])
 
 
 def make_wind_fn(slat, slon, live):
@@ -171,7 +192,10 @@ def make_wind_fn(slat, slon, live):
     Returns (WindField, use_forecast), or (None, False) when there is no forecast and no complete
     live wind: the caller must refuse with NO_WIND rather than route on made-up wind (#156)."""
     if weather.wind_at(slat, slon, time.time()) is not None:
-        return WindField(True), True
+        wf = WindField(True)
+        if weather.cell_status(slat, slon) == "stale":
+            wf._offline = True       # the start cell's refresh just failed: no more fetches
+        return wf, True
     tws, twd = (tuple(live) + (None, None))[:2] if live else (None, None)
     if tws is None or twd is None:
         return None, False
@@ -315,6 +339,7 @@ def get_route(route: str = None, target: str = "next"):
     out = {
         "available": True, "route": nav["route"], "target": dest["name"],
         "wind_source": wind.source, "forecast_gaps": len(wind.filled),
+        "forecast_old": bool(wind.stale),
         "direct_nm": round(direct, 2), "sailed_nm": round(sailed, 2),
         "eta_min": eta_min, "tacks": tacks,
         "recommended_heading": legs[0]["hdg"] if legs else None,

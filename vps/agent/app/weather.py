@@ -16,6 +16,7 @@ import urllib.request
 
 API = "https://api.open-meteo.com/v1/forecast"
 TTL_S = 1800
+RETRY_S = 60           # after a failed refresh, serve the old forecast this long before trying again
 _cache = {}            # (rlat, rlon) -> {"fetched": ts, "hours": [(epoch, tws, twd)]}
 
 
@@ -30,6 +31,8 @@ def fetch_point(lat, lon):
     c = _cache.get(key)
     if c and now - c["fetched"] < TTL_S:
         return c
+    if c and c.get("hours") and now - c.get("failed_at", 0) < RETRY_S:
+        return c                      # a refresh just failed: the old forecast, no new timeout
     q = urllib.parse.urlencode({
         "latitude": key[0], "longitude": key[1],
         "hourly": "wind_speed_10m,wind_direction_10m",
@@ -44,7 +47,11 @@ def fetch_point(lat, lon):
                  zip(h["time"], h["wind_speed_10m"], h["wind_direction_10m"])]
         c = {"fetched": now, "hours": hours}
     except Exception as exc:
-        c = c or {"fetched": now, "hours": [], "error": str(exc)}
+        if c and c.get("hours"):
+            # keep the old forecast, marked: `fetched` stays old so it reads as stale (#157)
+            c = dict(c, error=str(exc), failed_at=now)
+        else:
+            c = c or {"fetched": now, "hours": [], "error": str(exc)}
     _cache[key] = c
     return c
 
@@ -64,26 +71,41 @@ def _fresh(c, now):
     return bool(c and c.get("hours")) and now - c["fetched"] < TTL_S
 
 
-def cached_wind_at(lat, lon, epoch):
-    """Like `wind_at`, but from the cache only: never fetches, so it never blocks. None when this
-    cell has no fresh forecast in the cache."""
+def cell_status(lat, lon):
+    """'fresh', 'stale' (a forecast older than TTL_S: its refresh failed) or 'missing'. Never fetches."""
     c = _cache.get(_cell(lat, lon))
-    return _interp(c["hours"], epoch) if _fresh(c, time.time()) else None
+    if not (c and c.get("hours")):
+        return "missing"
+    return "fresh" if _fresh(c, time.time()) else "stale"
+
+
+def cached_wind_at(lat, lon, epoch, stale_ok=False):
+    """Like `wind_at`, but from the cache only: never fetches, so it never blocks. None when this
+    cell has no fresh forecast cached (or none at all, with `stale_ok`)."""
+    c = _cache.get(_cell(lat, lon))
+    if not (c and c.get("hours")):
+        return None
+    return _interp(c["hours"], epoch) if stale_ok or _fresh(c, time.time()) else None
 
 
 def nearest_cached_wind(lat, lon, epoch):
-    """The forecast of the nearest cell that has one in the cache (never fetches), or None. The
-    router fills a forecast gap with it, so a route never mixes forecast and measured wind (#157)."""
+    """(wind, fresh): the forecast of the nearest cell with a fresh one in the cache, else of the
+    nearest with an old one (fresh False), else (None, False). Never fetches. The router fills a
+    forecast gap with it, so a route never mixes forecast and measured wind (#157)."""
     now = time.time()
     coslat = math.cos(math.radians(lat))
-    best = None
+    best = {True: None, False: None}
     for (clat, clon), c in list(_cache.items()):
-        if not _fresh(c, now):
+        if not (c and c.get("hours")):
             continue
+        fresh = _fresh(c, now)
         d = (clat - lat) ** 2 + ((clon - lon) * coslat) ** 2
-        if best is None or d < best[0]:
-            best = (d, c["hours"])
-    return _interp(best[1], epoch) if best else None
+        if best[fresh] is None or d < best[fresh][0]:
+            best[fresh] = (d, c["hours"])
+    for fresh in (True, False):
+        if best[fresh]:
+            return _interp(best[fresh][1], epoch), fresh
+    return None, False
 
 
 def _interp(hrs, epoch):
