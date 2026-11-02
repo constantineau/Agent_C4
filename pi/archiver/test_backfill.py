@@ -178,8 +178,8 @@ check("no day-sail row sent", not set(sent) & set(in_window(arc, DAY, DAY + 3600
 check("each row exactly once", len(sent) == len(set(sent)))
 check("sent in batches of BACKFILL_BATCH", max(len(b) for b in cloud.batches) <= 50
       and len(cloud.batches) > 2)
-check("cursor = the archive's top id (the day sail is passed over for good)",
-      backfill.get_cursor(arc) == top_id(arc))
+check("cursor = the last race row (here also the top id: the day sail came first)",
+      backfill.get_cursor(arc) == max(race_ids) == top_id(arc))
 autop = [r for r in cloud.telemetry() if r["path"] == "steering.autopilot.state"]
 check("a string reading keeps str_value and has no value key",
       autop == [{"time": iso(RACE + 30), "source": "signalk", "path": "steering.autopilot.state",
@@ -204,6 +204,20 @@ print("re-run — nothing new, nothing sent:")
 again = Cloud()
 run(cloud=again)
 check("no POST at all on a re-run", again.calls == 0)
+
+print("rows after the race with no session: not sent, cursor stays at the last race row:")
+arc = fresh()
+add_rows(arc, sail(RACE, 120, label="race"))
+add_session(RACE, RACE_END)
+add_rows(arc, sail(RACE_END + 3600, 30, label="day"))   # a day sail after the race
+run_cloud = Cloud()
+run(cloud=run_cloud)
+check("only race rows sent", sorted(ids_sent(arc, run_cloud)) == in_window(arc, RACE, RACE_END))
+check("cursor = the last race row, not the top id",
+      backfill.get_cursor(arc) == max(in_window(arc, RACE, RACE_END)) < top_id(arc))
+again = Cloud()
+run(cloud=again)
+check("a re-run still sends nothing", again.calls == 0)
 
 # --- 2. a failed POST half-way --------------------------------------------------------------
 print("a POST that fails before the cloud accepts it loses nothing and duplicates nothing:")
