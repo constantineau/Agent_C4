@@ -83,6 +83,9 @@ def open_db(path: Path = ARCHIVE_DB) -> sqlite3.Connection:
     try:
         conn.execute("PRAGMA journal_mode=WAL")     # readers (backfill) never block the writer
         conn.execute("PRAGMA synchronous=FULL")     # durable across power loss — boat-grade
+        # After a checkpoint resets the WAL, truncate the file back to this — so a WAL that grew
+        # while a reader held it (a long check, a debrief) gives its space back.
+        conn.execute("PRAGMA journal_size_limit=67108864")
         conn.executescript(SCHEMA)
         conn.commit()
     except BaseException:
@@ -432,6 +435,55 @@ CHECK_STOP_TIMEOUT_S = float(os.environ.get("ARCHIVE_CHECK_STOP_TIMEOUT_S", "30"
 # An uncertain error during the check (I/O, busy, locked) is retried this often before a verdict.
 CHECK_RETRIES = int(os.environ.get("ARCHIVE_CHECK_RETRIES", "3"))
 CHECK_RETRY_S = float(os.environ.get("ARCHIVE_CHECK_RETRY_S", "3.5"))
+# A live quick_check holds ONE read snapshot for the whole scan (~78 min on 24 GB), and the WAL
+# cannot recycle past it: at the dock rate it grows until the disk guard stops recording. So
+# the live check runs only when no race/practice session is open, is watched every
+# CHECK_WATCH_S, and steps aside (closes, checkpoint, retry CHECK_LATER_S later) when the WAL
+# passes CHECK_WAL_CAP_MB, free space nears the guard, or a session starts. During a session
+# the bounded startup probes and write errors (which rotate) are the protection.
+CHECK_WAL_CAP_MB = float(os.environ.get("ARCHIVE_CHECK_WAL_CAP_MB", "256"))
+CHECK_WATCH_S = float(os.environ.get("ARCHIVE_CHECK_WATCH_S", "5"))
+CHECK_LATER_S = float(os.environ.get("ARCHIVE_CHECK_LATER_S", "3600"))
+CHECK_OVERDUE_DAYS = float(os.environ.get("ARCHIVE_CHECK_OVERDUE_DAYS", "7"))
+
+
+def session_open(engine_db=None):
+    """True when a race/practice session is open, False when none is, None when the engine's
+    sessions table cannot be read."""
+    try:
+        ec = sqlite3.connect(f"file:{engine_db or ENGINE_DB}?mode=ro", uri=True, timeout=5)
+        try:
+            n = ec.execute("SELECT count(*) FROM sessions WHERE end_ts IS NULL").fetchone()[0]
+        finally:
+            ec.close()
+    except Exception:
+        return None
+    return n > 0
+
+
+def check_watch(db, engine_db=None, live=True, statvfs=os.statvfs):
+    """The watcher a background check consults every CHECK_WATCH_S: a reason to step aside, or
+    None. An unreadable sessions table is not a session (the WAL and disk caps still apply)."""
+    def watch():
+        if session_open(engine_db):
+            return "a race/practice session is open"
+        if live:
+            try:
+                wal = Path(str(db) + "-wal").stat().st_size
+            except OSError:
+                wal = 0
+            if wal > CHECK_WAL_CAP_MB * 2**20:
+                return f"WAL at {wal / 2**20:.0f} MB, over the {CHECK_WAL_CAP_MB:.0f} MB cap"
+        try:
+            st = statvfs(str(Path(db).parent))
+            total, free = st.f_blocks * st.f_frsize, st.f_bavail * st.f_frsize
+            if total > 0 and (free < 2 * DISK_MIN_FREE_MB * 2**20
+                              or 100.0 * (total - free) / total >= DISK_HARD_PCT - 3):
+                return f"disk nearly full ({free / 2**30:.1f} GB free)"
+        except OSError:
+            pass
+        return None
+    return watch
 
 
 class CheckerBusy(OSError):
@@ -464,9 +516,12 @@ class BackgroundCheck:
     then a dict {status: ok|corrupt|aborted|error, detail}. `on_corrupt()` is called (from the
     thread) when the check finds damage — after its connection is closed."""
 
-    def __init__(self, path, live, on_corrupt=None, duty=None):
+    def __init__(self, path, live, on_corrupt=None, duty=None, watch=None):
         self.path = Path(path)
         self.live = live
+        self.watch = watch              # () -> reason to step aside, or None
+        self.defer_reason = None
+        self._last_watch = None
         self.on_corrupt = on_corrupt
         self.duty = min(1.0, max(0.01, CHECK_DUTY if duty is None else float(duty)))
         self.stop_event = threading.Event()
@@ -505,6 +560,16 @@ class BackgroundCheck:
         if self.stop_event.is_set():
             return 1
         now = time.monotonic()
+        if self.watch is not None and (self._last_watch is None
+                                       or now - self._last_watch >= CHECK_WATCH_S):
+            self._last_watch = now
+            try:
+                reason = self.watch()
+            except Exception:
+                reason = None
+            if reason:
+                self.defer_reason = reason
+                return 1                  # abort the scan: its snapshot is released on close
         if now - self._slice_start >= CHECK_SLICE_S:
             if self.duty < 1.0:
                 pause = (now - self._slice_start) * (1.0 - self.duty) / self.duty
@@ -545,11 +610,19 @@ class BackgroundCheck:
         result, attempt = None, 0
         try:
             while True:
+                if self.watch is not None:
+                    self.defer_reason = self.watch()
+                    if self.defer_reason:
+                        result = {"status": "deferred", "detail": self.defer_reason}
+                        break
                 try:
                     result = self._attempt()
                     break
                 except (sqlite3.DatabaseError, UnicodeDecodeError) as exc:
                     detail = f"{type(exc).__name__}: {exc}"[:500]
+                    if self.defer_reason:
+                        result = {"status": "deferred", "detail": self.defer_reason}
+                        break
                     if self.stop_event.is_set():
                         result = {"status": "aborted", "detail": "stopped"}
                         break
@@ -592,6 +665,9 @@ class BackgroundCheck:
                     self.on_corrupt()
                 except Exception as exc:
                     print(f"[archive] could not schedule the rotation: {exc}", flush=True)
+        elif result["status"] == "deferred":
+            print(f"[archive] background check of {self.path.name} stepped aside "
+                  f"({result['detail']}); retrying later", flush=True)
         else:
             print(f"[archive] background check of {self.path.name}: {result['status']} "
                   f"({result['detail']})", flush=True)
@@ -1040,6 +1116,7 @@ def write_status(state, guard=None, path=None, now=None):
         "rows_written": state.get("total", 0),
         "corrupt_rotations_this_run": state.get("rotations", 0),
         "background_check": chk.summary() if chk is not None else None,
+        "note": state.get("check_note"),       # quiet: not a "Not recording" reason
     }
     try:
         tmp = path.with_name(path.name + ".tmp")
@@ -1087,6 +1164,11 @@ async def flusher(conn, buf, loop, state=None, db=None, wake=None, guard=None):
         except Exception as exc:          # belt and braces: the loop itself must never die
             print(f"[archive] flusher error ({type(exc).__name__}: {exc}); continuing",
                   flush=True)
+        if state.pop("checkpoint_due", False) and state.get("conn") is not None:
+            try:
+                await loop.run_in_executor(None, _checkpoint, state["conn"])
+            except Exception as exc:
+                print(f"[archive] checkpoint after a deferred check failed ({exc})", flush=True)
         state["buffered"] = len(buf)
         now = time.monotonic()
         if not buf:
@@ -1426,12 +1508,13 @@ async def pruner(state, loop):
         await asyncio.sleep(PRUNE_EVERY_S)
 
 
-def start_background_check(state, loop, db, rotated):
+def start_background_check(state, loop, db, rotated, engine_db=None):
     """After recording has started: quick_check, in the background. The live file when it opened
     cleanly (damage found -> the flusher rotates it); the file just moved aside when it did not
     (a verdict for the human; the live file is fresh and has nothing to check)."""
     if rotated is not None:
-        chk = BackgroundCheck(rotated, live=False)
+        chk = BackgroundCheck(rotated, live=False,
+                              watch=check_watch(rotated, engine_db, live=False))
     else:
         gen = state.get("generation", 0)   # the archive file this check is reading
 
@@ -1446,9 +1529,82 @@ def start_background_check(state, loop, db, rotated):
                 state["rotate_pending"] = True
                 state["_status_dirty"] = True
             loop.call_soon_threadsafe(mark)
-        chk = BackgroundCheck(db, live=True, on_corrupt=on_corrupt)
+        chk = BackgroundCheck(db, live=True, on_corrupt=on_corrupt,
+                              watch=check_watch(db, engine_db, live=True))
     state["check"] = chk
     return chk.start()
+
+
+def _meta(conn, key, value=None, delete=False):
+    """Read (or write/delete) one sync_state key on the archive. Best effort: None on error."""
+    try:
+        with _WRITE_LOCK:
+            if delete:
+                conn.execute("DELETE FROM sync_state WHERE k = ?", (key,))
+                conn.commit()
+                return None
+            if value is not None:
+                conn.execute("INSERT OR REPLACE INTO sync_state (k, v) VALUES (?, ?)",
+                             (key, value))
+                conn.commit()
+                return value
+            row = conn.execute("SELECT v FROM sync_state WHERE k = ?", (key,)).fetchone()
+            return row[0] if row else None
+    except Exception:
+        return None
+
+
+def _overdue_note(conn, now=None):
+    """"Archive check overdue" when the last full check that passed (or, if none ever did, the
+    first time one was deferred) is more than CHECK_OVERDUE_DAYS ago. Persisted in sync_state,
+    so restarts don't reset the clock."""
+    now = datetime.now(timezone.utc) if now is None else now
+    base = _meta(conn, "last_full_check") or _meta(conn, "full_check_pending_since")
+    if base is None:
+        _meta(conn, "full_check_pending_since", now.isoformat())
+        return None
+    try:
+        age = now - datetime.fromisoformat(base)
+    except ValueError:
+        return None
+    return "Archive check overdue" if age > timedelta(days=CHECK_OVERDUE_DAYS) else None
+
+
+async def check_scheduler(state, loop, db, rotated, engine_db=None, later_s=None):
+    """Run the background check until it reaches a verdict, stepping aside as `check_watch`
+    says (session open, WAL cap, disk) and retrying `later_s` later. A deferral asks the flusher
+    for a checkpoint, so the WAL the check held back is recycled."""
+    later = CHECK_LATER_S if later_s is None else later_s
+    while True:
+        chk = start_background_check(state, loop, db, rotated, engine_db)
+        while chk.result is None:
+            await asyncio.sleep(0.2)
+        status = chk.result["status"]
+        conn = state.get("conn")
+        if status == "deferred" or status == "error":
+            if chk.live:
+                state["checkpoint_due"] = True
+                note = (await loop.run_in_executor(None, _overdue_note, conn)
+                        if conn is not None else None)
+                state["check_note"] = note or f"Archive check waiting: {chk.result['detail']}"
+                state["_status_dirty"] = True
+            await asyncio.sleep(later)
+            continue
+        if chk.live and status == "ok" and conn is not None:
+            now = datetime.now(timezone.utc).isoformat()
+            await loop.run_in_executor(None, _meta, conn, "last_full_check", now)
+            await loop.run_in_executor(
+                None, lambda: _meta(conn, "full_check_pending_since", delete=True))
+        state["check_note"] = None
+        state["_status_dirty"] = True
+        return chk
+
+
+def _checkpoint(conn):
+    """A PASSIVE checkpoint (never waits on readers); with journal_size_limit the WAL file then
+    shrinks once the next write resets it."""
+    with _WRITE_LOCK:
+        return conn.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()  # (busy, log, done)
 
 
 async def open_until_ready(db, loop, retry_s=5.0):
@@ -1496,7 +1652,7 @@ async def run(db=None, ws_connect=None, state=None, check=True):
     asyncio.create_task(flusher(conn, buf, loop, state, db=db, wake=wake, guard=guard))
     asyncio.create_task(pruner(state, loop))
     if check:
-        start_background_check(state, loop, db, rotated)
+        asyncio.create_task(check_scheduler(state, loop, db, rotated))
     while True:
         try:
             async with ws_connect(SIGNALK_WS, ping_interval=20) as ws:

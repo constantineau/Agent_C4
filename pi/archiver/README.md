@@ -58,6 +58,13 @@ print(c.execute('select count(*),min(time),max(time) from readings').fetchone())
   file, the file is rotated as below. Same rule as at startup: clear damage is a verdict at
   once; an uncertain error (I/O, busy, locked) is retried `ARCHIVE_CHECK_RETRIES` times,
   `ARCHIVE_CHECK_RETRY_S` apart, and only a persistent I/O-type error counts as damage.
+  The live check holds one read snapshot for the whole scan, so the WAL cannot recycle behind
+  it. It therefore runs only when no race/practice session is open, and steps aside (closes,
+  checkpoint, retry `ARCHIVE_CHECK_LATER_S` later) when a session starts, the WAL passes
+  `ARCHIVE_CHECK_WAL_CAP_MB` or free space nears the guard's hard floor. During a session the
+  bounded startup checks and write errors are the protection. If no check has passed for
+  `ARCHIVE_CHECK_OVERDUE_DAYS`, the status carries a quiet note, "Archive check overdue" (the
+  LOG button's tooltip; never the red banner).
 - **Corruption.** A corrupt file is moved aside as `archive.corrupt-<stamp>.db` (never deleted;
   `tools/salvage.py` recovers almost all of it) and a fresh one is started. At startup any
   database error from the open, the schema read or the bounded checks counts (also `string or
@@ -125,6 +132,8 @@ once a real link is available (dockside wifi after the passage).
 | `ARCHIVE_STATUS_FILE` | `archiver-status.json` next to the DB | the archiver's health as JSON (see above) |
 | `ARCHIVE_STATUS_EVERY_S` | `10` | how often the status file is rewritten |
 | `ARCHIVE_CHECK_DUTY` | `0.5` | share of wall time the background quick_check may spend reading |
+| `ARCHIVE_CHECK_WAL_CAP_MB` / `ARCHIVE_CHECK_WATCH_S` | `256` / `5` | the live check steps aside when the WAL passes this; how often it looks |
+| `ARCHIVE_CHECK_LATER_S` / `ARCHIVE_CHECK_OVERDUE_DAYS` | `3600` / `7` | retry delay after stepping aside; when "Archive check overdue" shows |
 | `ARCHIVE_CHECK_STOP_TIMEOUT_S` | `30` | how long a rotation waits for the check to let go before deferring |
 | `ARCHIVE_OPEN_RETRIES` / `ARCHIVE_OPEN_RETRY_S` | `3` / `2` | retries of an uncertain open error before rotating |
 | `ARCHIVE_STATUS_STALE_S` | `90` | (engine) a status file older than this reads as "archiver stopped" |

@@ -24,6 +24,7 @@ import sys
 import tempfile
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -432,6 +433,144 @@ with tempfile.TemporaryDirectory() as d:
     status, n, flagged = check_with([sqlite3.DatabaseError("database disk image is malformed")])
     check(f"'malformed' once: verdict {status} at once ({n} attempt)",
           status == "corrupt" and n == 1 and flagged)
+
+# --- 8. the live check never lets the WAL run away, and never runs in a session ---------------
+print("the live check steps aside when the WAL passes its cap (it holds one snapshot):")
+
+
+def engine_with_session(path, open_):
+    c = sqlite3.connect(path)
+    c.execute("CREATE TABLE IF NOT EXISTS sessions (id INTEGER PRIMARY KEY, race_id TEXT, "
+              "start_ts REAL, end_ts REAL)")
+    c.execute("DELETE FROM sessions")
+    c.execute("INSERT INTO sessions (start_ts, end_ts) VALUES (?, ?)",
+              (time.time() - 600, None if open_ else time.time() - 60))
+    c.commit()
+    c.close()
+
+
+real_cap, real_watch_s = archiver.CHECK_WAL_CAP_MB, archiver.CHECK_WATCH_S
+with tempfile.TemporaryDirectory() as d:
+    db = Path(d) / "archive.db"
+    eng = Path(d) / "engine.db"
+    engine_with_session(eng, open_=False)
+    big_db(db, 100_000)
+    writer = archiver.open_db(db)
+    archiver.CHECK_WATCH_S = 0.0
+    archiver.CHECK_WAL_CAP_MB = 2.0
+    grow = threading.Event()
+    real_throttle = archiver.BackgroundCheck._throttle
+
+    def throttle_and_note(self):
+        grow.set()                         # the scan is running: its snapshot is held
+        return real_throttle(self)
+    archiver.BackgroundCheck._throttle = throttle_and_note
+    try:
+        chk = archiver.BackgroundCheck(db, live=True, duty=0.05,
+                                       watch=archiver.check_watch(db, str(eng))).start()
+        grow.wait(10)
+        # recording goes on during the scan: the WAL grows past the cap behind its snapshot
+        for i in range(10):
+            archiver.write_rows(writer, cf.rows(5000, start=200_000 + 5000 * i))
+        chk.thread.join(60)
+    finally:
+        archiver.BackgroundCheck._throttle = real_throttle
+        archiver.CHECK_WAL_CAP_MB, archiver.CHECK_WATCH_S = real_cap, real_watch_s
+    wal_mb = Path(str(db) + "-wal").stat().st_size / 2**20
+    check(f"(setup) the WAL grew past the 2 MB cap ({wal_mb:.0f} MB)", wal_mb > 2)
+    check(f"the check stepped aside: {chk.result}",
+          (chk.result or {}).get("status") == "deferred" and "WAL" in chk.result["detail"])
+    check("...and let go of the file (its snapshot is released)", not chk.conn_open)
+    busy, log, done = archiver._checkpoint(writer)
+    check(f"once it let go, a checkpoint recycles the whole WAL ({done}/{log} frames)",
+          busy == 0 and log > 0 and done == log)
+    archiver.write_rows(writer, cf.rows(5000, start=900_000))
+    after = Path(str(db) + "-wal").stat().st_size / 2**20
+    check(f"...so new writes reuse it instead of growing it ({wal_mb:.0f} -> {after:.0f} MB)",
+          after <= wal_mb)
+    writer.close()
+
+print("no live full check runs while a race/practice session is open:")
+
+
+async def scheduled(eng_open):
+    loop = asyncio.get_running_loop()
+    with tempfile.TemporaryDirectory() as d:
+        db = Path(d) / "archive.db"
+        eng = Path(d) / "engine.db"
+        engine_with_session(eng, open_=eng_open)
+        conn = archiver.open_db(db)
+        archiver.write_rows(conn, cf.rows(1000))
+        state = {"conn": conn}
+        started = []
+        real_attempt = archiver.BackgroundCheck._attempt
+
+        def spy(self):
+            started.append(self.path)
+            return real_attempt(self)
+        archiver.BackgroundCheck._attempt = spy
+        try:
+            task = asyncio.create_task(archiver.check_scheduler(state, loop, db, None,
+                                                                engine_db=str(eng),
+                                                                later_s=0.2))
+            await asyncio.sleep(1.0)
+            during = (list(started), state.get("check_note"), state.get("checkpoint_due"))
+            engine_with_session(eng, open_=False)          # the session ends
+            done = await asyncio.wait_for(task, 10)
+        finally:
+            archiver.BackgroundCheck._attempt = real_attempt
+        last = conn.execute("SELECT v FROM sync_state WHERE k='last_full_check'").fetchone()
+        conn.close()
+        return during, done.result, last
+
+
+(started, note, ckpt), result, last = asyncio.run(scheduled(True))
+check("during the session: no full check was started", started == [])
+check(f"...a quiet note says it is waiting ({note!r})",
+      note and note.startswith("Archive check waiting") and "session" in note)
+check("...and a checkpoint was asked for", ckpt is True)
+check(f"after the session closed it ran and passed ({result})", result["status"] == "ok")
+check("...and the pass is remembered in the archive", last is not None)
+
+print("a session starting mid-scan makes the check step aside:")
+with tempfile.TemporaryDirectory() as d:
+    db = Path(d) / "archive.db"
+    eng = Path(d) / "engine.db"
+    engine_with_session(eng, open_=False)
+    big_db(db, 100_000)
+    archiver.CHECK_WATCH_S = 0.0
+    entered = threading.Event()
+    real_throttle = archiver.BackgroundCheck._throttle
+
+    def first_then_session(self):
+        if not entered.is_set():
+            entered.set()
+            engine_with_session(eng, open_=True)            # the crew taps LOG
+        return real_throttle(self)
+    archiver.BackgroundCheck._throttle = first_then_session
+    try:
+        chk = archiver.BackgroundCheck(db, live=True, duty=1.0,
+                                       watch=archiver.check_watch(db, str(eng))).start()
+        chk.thread.join(30)
+    finally:
+        archiver.BackgroundCheck._throttle = real_throttle
+        archiver.CHECK_WATCH_S = real_watch_s
+    check(f"stepped aside: {chk.result}", (chk.result or {}).get("status") == "deferred"
+          and "session" in chk.result["detail"] and not chk.conn_open)
+
+print("a check deferred for more than 7 days says 'Archive check overdue':")
+with tempfile.TemporaryDirectory() as d:
+    conn = archiver.open_db(Path(d) / "archive.db")
+    now = datetime.now(timezone.utc)
+    check("first deferral starts the clock, no note", archiver._overdue_note(conn, now) is None)
+    check("6 days later: still quiet",
+          archiver._overdue_note(conn, now + timedelta(days=6)) is None)
+    check("8 days later: overdue",
+          archiver._overdue_note(conn, now + timedelta(days=8)) == "Archive check overdue")
+    archiver._meta(conn, "last_full_check", (now + timedelta(days=8)).isoformat())
+    check("a passing check resets it",
+          archiver._overdue_note(conn, now + timedelta(days=9)) is None)
+    conn.close()
 
 print("\n" + ("PASS" if ok else "FAIL"))
 raise SystemExit(0 if ok else 1)

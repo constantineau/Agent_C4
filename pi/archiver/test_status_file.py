@@ -82,6 +82,14 @@ with tempfile.TemporaryDirectory() as d:
         check(f"{name}: recording={recording}, text={text!r}",
               got["recording"] is recording and got["text"] == text)
 
+    print("a quiet note rides along without stopping 'recording':")
+    archiver.write_status({"check_note": "Archive check overdue", "last_write_ok": mono},
+                          Guard(), path=path, now=mono)
+    got = archiver_status.read(path)
+    check("note passed through, still recording",
+          got["recording"] is True and got["note"] == "Archive check overdue"
+          and got["text"] is None)
+
     print("disk full carries its numbers through:")
     archiver.write_status({}, Guard(paused=True), path=path, now=mono)
     got = archiver_status.read(path)

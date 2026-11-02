@@ -66,7 +66,9 @@ def read(path=None, now=None, stale_s=None):
              "rows_dropped_buffer_full": doc.get("rows_dropped_buffer_full", 0),
              "rows_not_recorded_disk_full": doc.get("rows_not_recorded_disk_full", 0),
              "corrupt_rotations_this_run": doc.get("corrupt_rotations_this_run", 0),
-             "background_check": doc.get("background_check")}
+             "background_check": doc.get("background_check"),
+             # quiet housekeeping note, e.g. "Archive check overdue" — never a banner
+             "note": doc.get("note")}
     if age > stale_s:
         return _not_recording("stale", **extra)
     if doc.get("recording") is False:

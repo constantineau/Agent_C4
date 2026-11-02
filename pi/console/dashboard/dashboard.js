@@ -1438,6 +1438,8 @@
       l.textContent = "LOG";
       b.title = "Tap to start logging. Unlogged data is deleted after 7 days.";
     }
+    // quiet housekeeping note (e.g. "Archive check overdue"): tooltip only, no banner
+    if (arch && arch.note && !down) b.title += " " + arch.note + ".";
   }
   async function toggleRec() {
     const a = (App.session || {}).active;
