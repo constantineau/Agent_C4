@@ -155,7 +155,9 @@ class LocalDest:
         shutil.copyfile(os.path.join(self.root, set_name, name), local)
 
     def delete(self, set_name, name):
-        os.remove(os.path.join(self.root, set_name, name))
+        d = os.path.join(self.root, set_name)
+        os.remove(os.path.join(d, name))
+        _fsync_dir(d)            # a retired INDEX stays retired before any artifact goes
         return True
 
     def drop_set_if_empty(self, set_name):
@@ -334,24 +336,49 @@ class _HashingWriter(io.RawIOBase):
         return self.inner.write(b)
 
 
+def _listing(src_dir):
+    """Every path under src_dir, sorted; atomic-write temps left out; unreadable dirs raise."""
+    def unreadable(exc):           # os.walk skips a directory it cannot read, silently
+        raise RuntimeError(f"cannot read {exc.filename}: {exc.strerror} — this volume's backup "
+                           f"would be missing it") from exc
+    entries = []
+    for dirpath, dirnames, filenames in os.walk(src_dir, onerror=unreadable):
+        dirnames.sort()
+        for n in sorted(dirnames) + sorted(filenames):
+            # The Lab's atomic writes leave `.<name>.<random>.tmp` beside a file while saving
+            # it; it is never content, and it may vanish at any moment.
+            if not ATOMIC_TMP_RE.match(n):
+                entries.append(os.path.join(dirpath, n))
+    return sorted(entries, key=lambda p: os.path.relpath(p, src_dir))
+
+
 def tar_volume(src_dir, out_path, scratch):
     """Deterministic tar.gz of `src_dir`. Returns (content_key, {relpath: sha256}, {db: counts}).
 
     SQLite databases are archived as `.backup()` snapshots under their own name, and their
     -wal/-shm/-journal companions are left out (the snapshot already holds what they hold)."""
-    entries = []
-    def unreadable(exc):           # os.walk skips a directory it cannot read, silently
-        raise RuntimeError(f"cannot read {exc.filename}: {exc.strerror} — this volume's backup "
-                           f"would be missing it") from exc
-    for dirpath, dirnames, filenames in os.walk(src_dir, onerror=unreadable):
-        dirnames.sort()
-        for n in sorted(dirnames) + sorted(filenames):
-            entries.append(os.path.join(dirpath, n))
-    # The Lab's atomic writes leave `.<name>.<random>.tmp` beside a file while saving it; it is
-    # never content, and it may vanish at any moment.
-    entries = [p for p in entries if not ATOMIC_TMP_RE.match(os.path.basename(p))]
-    entries.sort(key=lambda p: os.path.relpath(p, src_dir))
-    dbs = {p for p in entries if os.path.isfile(p) and not os.path.islink(p) and is_sqlite(p)}
+    # SQLite FIRST, files after: a DB row may name a file (retro.db -> pinned GRIBs, which the
+    # Lab copies in before it inserts the row). Snapshotting the DBs before listing the files
+    # means every file a snapshot names is already on disk when the listing runs.
+    snaps = {}
+
+    def snapshot(p):
+        out = os.path.join(scratch, f"snap-{len(snaps)}.db")
+        try:
+            _sqlite_snapshot(p, out)
+        except sqlite3.Error:
+            if not os.path.exists(p):
+                return None                      # deleted meanwhile: not archived
+            raise
+        snaps[p] = out
+        return out
+
+    for p in _listing(src_dir):
+        if os.path.isfile(p) and not os.path.islink(p) and is_sqlite(p):
+            snapshot(p)
+    entries = _listing(src_dir)
+    dbs = {p for p in entries if p in snaps or (os.path.isfile(p) and not os.path.islink(p)
+                                                 and is_sqlite(p))}
     skip = {p + sfx for p in dbs for sfx in ("-wal", "-shm", "-journal")}
     files, counts = {}, {}
     with open(out_path, "wb") as raw, \
@@ -365,17 +392,11 @@ def tar_volume(src_dir, out_path, scratch):
                 if os.path.isfile(p) and not os.path.islink(p):
                     data = p
                     if p in dbs:
-                        data = os.path.join(scratch, "snap.db")
-                        if os.path.exists(data):
-                            os.remove(data)
-                        try:
-                            _sqlite_snapshot(p, data)
-                        except sqlite3.Error:
-                            if not os.path.exists(p):
-                                log(f"  {rel}: gone before it could be read (deleted) — "
-                                    f"not archived")
-                                continue
-                            raise
+                        data = snaps.get(p) or snapshot(p)   # a DB that appeared since
+                        if data is None:
+                            log(f"  {rel}: gone before it could be read (deleted) — "
+                                f"not archived")
+                            continue
                         counts[rel] = sqlite_counts(data)
                     # ONE open file for the header, the bytes and the hash. The Lab replaces its
                     # JSON with tmp + rename: a stat, a hash and a read by NAME could each see a

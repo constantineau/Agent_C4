@@ -536,6 +536,61 @@ with tempfile.TemporaryDirectory() as tmp:
         conn.close()
     check("EIO reading learning.db's header raises (not tarred live as a plain file)", raised)
 
+print("a GRIB pinned mid-backup is in the tar if retro.db names it (Codex round 9 on #198)")
+with tempfile.TemporaryDirectory() as tmp:
+    vol = os.path.join(tmp, "retro")
+    os.makedirs(os.path.join(vol, "grib", "gfs"))
+    db = os.path.join(vol, "retro.db")
+    c = sqlite3.connect(db)
+    c.execute("CREATE TABLE grib_files (id INTEGER PRIMARY KEY, sha256 TEXT, path TEXT)")
+
+    def pin(name):                                  # retrostore.pin_grib: copy, then the row
+        p = os.path.join(vol, "grib", "gfs", name)
+        with open(p, "wb") as f:
+            f.write(name.encode() * 100)
+        c.execute("INSERT INTO grib_files (sha256, path) VALUES (?, ?)",
+                  (name, "/srv/retro/grib/gfs/" + name))
+        c.commit()
+    pin("a.grib2")
+    real_snap, fired = lb._sqlite_snapshot, []
+
+    def snap_after_pin(src, dst):
+        if not fired:                               # the Lab pins a GRIB right now
+            fired.append(1)
+            pin("b.grib2")
+        return real_snap(src, dst)
+    lb._sqlite_snapshot = snap_after_pin
+    try:
+        os.makedirs(os.path.join(tmp, "s"))
+        _, files, _ = lb.tar_volume(vol, os.path.join(tmp, "v.tgz"), os.path.join(tmp, "s"))
+    finally:
+        lb._sqlite_snapshot = real_snap
+        c.close()
+    x = os.path.join(tmp, "x")
+    with tarfile.open(os.path.join(tmp, "v.tgz")) as t:
+        t.extractall(x, filter="tar")
+    named = [r[0] for r in sqlite3.connect(os.path.join(x, "retro.db")).execute(
+        "SELECT path FROM grib_files")]
+    check(f"every GRIB the archived retro.db names is in the tar ({len(named)} named)",
+          named and all(os.path.isfile(os.path.join(x, p[len("/srv/retro/"):])) for p in named))
+
+print("LocalDest.delete is durable (Codex round 9 on #198)")
+with tempfile.TemporaryDirectory() as tmp:
+    dest = lb.LocalDest(os.path.join(tmp, "d"))
+    n, _ = lb.run_backup(dest, os.path.join(tmp, "w"), [], None, now=T0, producers=[
+        ("vps-lab_ingested.tar.gz", "volume", producer(b"x"))])
+    ev, real_f, real_rm = [], os.fsync, os.remove
+    os.fsync = lambda fd: (ev.append(("fsync", os.path.realpath(f"/proc/self/fd/{fd}"))),
+                           real_f(fd))[1]
+    os.remove = lambda p: (ev.append(("remove", os.path.realpath(p))), real_rm(p))[1]
+    try:
+        dest.delete(n, lb.INDEX)
+    finally:
+        os.fsync, os.remove = real_f, real_rm
+    sd = os.path.realpath(os.path.join(dest.root, n))
+    check("the set directory is fsynced after the unlink",
+          ev[:1] == [("remove", os.path.join(sd, lb.INDEX))] and ("fsync", sd) in ev[1:])
+
 print("destinations")
 for bad in ("gs://constantineau-c4-archive", "gs://constantineau-c4-archive/"):
     try:

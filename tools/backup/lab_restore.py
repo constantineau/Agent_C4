@@ -63,7 +63,10 @@ for d, _, fs in os.walk(root):
             ok = c.execute("PRAGMA integrity_check").fetchone()[0]
             names = [r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table' "
                                              "AND name NOT LIKE 'sqlite_%' ORDER BY name")]
-            dbs[rel] = {"integrity": ok,
+            refs = []
+            if "grib_files" in names:          # retro.db: the pinned GRIBs it points at
+                refs = [r[0] for r in c.execute("SELECT path FROM grib_files") if r[0]]
+            dbs[rel] = {"integrity": ok, "refs": refs,
                         "counts": {x: c.execute(f'SELECT count(*) FROM "{x}"').fetchone()[0]
                                    for x in names}}
             c.close()
@@ -109,6 +112,16 @@ def verify_volume(art, path, into_volume=None):
           f"not snapshotted: {stray[:5]}" if stray else "")
     wal = sorted(k for k in got["files"] if k.endswith(("-wal", "-shm", "-journal")))
     check(f"{art['name']}: no SQLite -wal/-shm/-journal in the archive", not wal, str(wal[:5]))
+    for rel, d in sorted(got["dbs"].items()):
+        # A DB row that names a file (retro.db's pinned GRIBs, stored as /srv/retro/grib/...)
+        # needs that file in the same restore: match the path's tail against restored files.
+        refs = d.get("refs") or []
+        missing = [r for r in refs
+                   if not any("/".join(r.split("/")[i:]) in got["files"]
+                              for i in range(1, r.count("/") + 1))]
+        if refs:
+            check(f"{art['name']}: all {len(refs)} files {rel} points at were restored",
+                  not missing, f"missing {missing[:3]}")
     for rel, counts in art.get("sqlite_counts", {}).items():
         d = got["dbs"].get(rel, {})
         rows = sum(counts.values())

@@ -111,5 +111,15 @@ files_wal = dict(VOL["files"], **{"learning.db-wal": "h3"})
 check("volume: a -wal in the archive -> FAILS",
       not vol_drill(dict(VOL, files=files_wal), {"files": files_wal, "dbs": good_db}))
 
+RETRO = {"name": "vps-lab_retro.tar.gz", "files": {"retro.db": "h", "grib/gfs/a.grib2": "g"},
+         "sqlite_counts": {"retro.db": {"grib_files": 2}}}
+db_two = {"retro.db": {"integrity": "ok", "counts": {"grib_files": 2},
+                       "refs": ["/srv/retro/grib/gfs/a.grib2", "/srv/retro/grib/gfs/b.grib2"]}}
+check("volume: a GRIB retro.db names but the restore lacks -> FAILS",
+      not vol_drill(RETRO, {"files": RETRO["files"], "dbs": db_two}))
+files_both = dict(RETRO["files"], **{"grib/gfs/b.grib2": "g2"})
+check("volume: ...and passes when every named GRIB is there",
+      vol_drill(dict(RETRO, files=files_both), {"files": files_both, "dbs": db_two}))
+
 print("\nALL OK" if ok else "\nFAILURES")
 sys.exit(0 if ok else 1)
