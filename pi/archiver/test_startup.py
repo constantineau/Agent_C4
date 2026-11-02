@@ -13,6 +13,11 @@ How this proves it without an 80-minute file:
   - the background check is made to hang mid-scan (its progress handler blocks), standing in
     for an 80-minute scan, and rows must reach the disk while it hangs.
 
+Slow boxes (#186): every wait below is a deadline that ends as soon as the condition holds, set
+far above what a fast box needs, and the claims are causal ("rows reached the disk WHILE the
+check hung"), not stopwatch readings. A loaded CI runner must not fail this file, and a real
+regression must still fail it.
+
 Run:  python3 pi/archiver/test_startup.py
 """
 import asyncio
@@ -129,7 +134,7 @@ class FakeWS:
             await asyncio.sleep(0.01)
 
 
-async def run_until(db, cond, timeout=20.0, check=True, ws=None):
+async def run_until(db, cond, timeout=90.0, check=True, ws=None):
     """Start the real `archiver.run` on `db` against a fake Signal K; wait for `cond(state)`.
     Returns (held, seconds_to_hold, state)."""
     state = {}
@@ -147,19 +152,34 @@ async def run_until(db, cond, timeout=20.0, check=True, ws=None):
             await asyncio.sleep(0.02)
     finally:
         took = time.monotonic() - t0
-        task.cancel()
-        for t in asyncio.all_tasks():
-            if t is not asyncio.current_task():
-                t.cancel()
-        await asyncio.sleep(0.1)
+        await shutdown(task)
     if state.get("check") is not None:
         state["check"].stop()
-    if state.get("conn") is not None:
+    close_quietly(state.get("conn"))
+    return held, took, state
+
+
+async def shutdown(*tasks):
+    """Cancel the archiver's tasks and WAIT for them, then for the executor jobs they started.
+    A cancelled `run_in_executor` await leaves its job running in a worker thread; closing the
+    connection under it crashed the interpreter (SIGSEGV, no traceback) on a loaded box — the
+    GitHub run on dev ce3897e."""
+    others = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+    for t in set(tasks) | set(others):
+        t.cancel()
+    await asyncio.gather(*(set(tasks) | set(others)), return_exceptions=True)
+    await asyncio.get_running_loop().shutdown_default_executor()
+
+
+def close_quietly(conn):
+    """Close the way the archiver itself does: under the write lock, never under a query."""
+    if conn is None:
+        return
+    with archiver._WRITE_LOCK:
         try:
-            state["conn"].close()
+            conn.close()
         except Exception:
             pass
-    return held, took, state
 
 
 with tempfile.TemporaryDirectory() as d:
@@ -180,13 +200,16 @@ with tempfile.TemporaryDirectory() as d:
     scans = [s for s in tr.sql if FULL_SCAN.search(s)]
     check(f"no quick_check / integrity_check / count(*) on the startup path {scans or ''}",
           not scans and len(tr.sql) > 0)
-    check(f"the startup open took {took:.2f} s (< 2 s)", took < 2.0)
     check("it reports the highest row id", top == BIG_ROWS and rotated is None)
     c = sqlite3.connect(db)
     t = time.monotonic()
     c.execute("PRAGMA quick_check").fetchall()
     qc = time.monotonic() - t
     c.close()
+    # relative, so a slow box slows both sides: a startup that scans the file takes at least a
+    # quick_check (the trace above is the exact proof; this is the stopwatch view of it)
+    check(f"the startup open took {took:.2f} s (< 2 s, or under one quick_check: {qc:.2f} s)",
+          took < max(2.0, qc))
     print(f"    (for scale: a quick_check of this file took {qc:.2f} s here; on the boat's card "
           f"a 24 GB archive took 39 min)")
 
@@ -219,7 +242,8 @@ with tempfile.TemporaryDirectory() as d:
             return False
         held, took, state = asyncio.run(run_until(db, recorded_while_checking))
         chk = state.get("check")
-        check(f"rows reached the disk {took:.2f} s after start (< 5 s)", held and took < 5)
+        # causal, not a stopwatch: the check hangs (up to 30 s) and rows must land meanwhile
+        check(f"rows reached the disk {took:.2f} s after start, with the check hung", held)
         check("...while the background check was still mid-scan (it never blocks recording)",
               seen.get("check_running") is True)
         check("it was checking the live file", chk is not None and chk.live and chk.path == db)
@@ -283,12 +307,35 @@ with tempfile.TemporaryDirectory() as d:
     cf.damage("table_tail_leaf", db)
     size = db.stat().st_size
     archiver.CHECK_DUTY = 1.0
-    held, took, state = asyncio.run(run_until(
-        db, lambda s: s.get("total", 0) >= 20
-        and s.get("moved_file_check") is not None
-        and s["moved_file_check"].result is not None))
+    # The aside check is held mid-scan (up to 30 s) until 20 rows reach the fresh archive, so
+    # "at once" is causal: an archiver that waited for the verdict would see its rows only after
+    # the hold gave up, with the verdict already in.
+    aside_gate, aside_seen, aside_give_up = threading.Event(), {}, []
+
+    def hold_aside(self):
+        if not self.live:
+            if not aside_give_up:
+                aside_give_up.append(time.monotonic() + 30)     # one hold, not one per slice
+            while not aside_gate.is_set() and time.monotonic() < aside_give_up[0]:
+                if self.stop_event.wait(0.01):
+                    return 1
+        return real_throttle(self)
+
+    def fresh_rows_then_verdict(s):
+        m = s.get("moved_file_check")
+        if "rows_mid_check" not in aside_seen and s.get("total", 0) >= 20:
+            aside_seen["rows_mid_check"] = m is not None and m.result is None
+            aside_gate.set()
+        return "rows_mid_check" in aside_seen and m is not None and m.result is not None
+    archiver.BackgroundCheck._throttle = hold_aside
+    try:
+        held, took, state = asyncio.run(run_until(db, fresh_rows_then_verdict))
+    finally:
+        aside_gate.set()
+        archiver.BackgroundCheck._throttle = real_throttle
     corrupt = list(Path(d).glob("archive.corrupt-*.db"))
-    check(f"rows reached a fresh archive {took:.2f} s after start", held and took < 10)
+    check(f"rows reached a fresh archive while the old file was still being checked "
+          f"({took:.2f} s to the verdict)", held and aside_seen.get("rows_mid_check") is True)
     check("the damaged file was moved aside whole", len(corrupt) == 1
           and corrupt[0].stat().st_size == size)
     chk = state.get("moved_file_check")
@@ -296,7 +343,8 @@ with tempfile.TemporaryDirectory() as d:
           chk is not None and not chk.live and chk.path == corrupt[0])
     check("...and found it damaged (a verdict for the human)",
           chk is not None and (chk.result or {}).get("status") == "corrupt")
-    check("the fresh archive holds the new rows only", 20 <= count(db) < 1000)
+    check("the fresh archive holds the new rows only (none of the old file's)",
+          20 <= count(db) < BIG_ROWS)
 
 # --- 4. damage the probes cannot see: the background check finds it, the flusher rotates ----
 print("damage in the MIDDLE of the file (missed by the bounded probes) is found by the "
@@ -524,19 +572,22 @@ async def scheduled(eng_open):
             task = asyncio.create_task(archiver.check_scheduler(state, loop, db, None,
                                                                 engine_db=str(eng),
                                                                 later_s=0.2))
-            await asyncio.sleep(1.0)
+            for _ in range(3000):                          # up to 60 s; a fast box: ~0.2 s
+                if state.get("check_note") and state.get("checkpoint_due"):
+                    break
+                await asyncio.sleep(0.02)
             during = (list(started), state.get("check_note"), state.get("checkpoint_due"))
             engine_with_session(eng, open_=False)          # the session ends
-            for _ in range(500):
+            for _ in range(3000):
                 if state.get("check_passes"):
                     break
                 await asyncio.sleep(0.02)
             result = state["check"].result
         finally:
             archiver.BackgroundCheck._attempt = real_attempt
-            task.cancel()
+            await shutdown(task)
         last = conn.execute("SELECT v FROM sync_state WHERE k='last_full_check'").fetchone()
-        conn.close()
+        close_quietly(conn)
         return during, result, last
 
 
@@ -612,14 +663,16 @@ async def long_run():
         archiver.write_rows(conn, cf.rows(500))
         state = {"conn": conn}
         real = (archiver.CHECK_EVERY_DAYS, archiver.CHECK_OVERDUE_DAYS)
-        archiver.CHECK_EVERY_DAYS = 0.6 / 86400          # re-check every 0.6 s
-        archiver.CHECK_OVERDUE_DAYS = 1.0 / 86400        # overdue after 1 s
+        # re-check every 3 s, overdue after 4 s: a scheduler stall of 0.6 s (the old figure)
+        # between the first pass and the session opening let a second pass in on a loaded box
+        archiver.CHECK_EVERY_DAYS = 3.0 / 86400
+        archiver.CHECK_OVERDUE_DAYS = 4.0 / 86400
         out = {}
         task = asyncio.create_task(archiver.check_scheduler(state, loop, db, None,
                                                             engine_db=str(eng),
                                                             later_s=0.05))
         try:
-            async def until(cond, t=10):
+            async def until(cond, t=60):
                 for _ in range(int(t / 0.02)):
                     if cond():
                         return True
@@ -628,18 +681,23 @@ async def long_run():
             out["first pass"] = await until(lambda: state.get("check_passes", 0) >= 1)
             out["scheduler alive after the pass"] = not task.done()
             engine_with_session(eng, open_=True)          # a long race weekend begins
+            # counted from the moment the session opened: on a loaded box a second routine pass
+            # can land before it does, and that is not a pass DURING the session
+            at_open = state.get("check_passes", 0)
             out["overdue while held back"] = await until(
                 lambda: state.get("check_note") == "Archive check overdue")
-            out["no pass during the session"] = state.get("check_passes") == 1
+            out["no pass during the session"] = state.get("check_passes", 0) == at_open
+            at_close = state.get("check_passes", 0)
             engine_with_session(eng, open_=False)
-            out["checked again after"] = await until(lambda: state.get("check_passes", 0) >= 2)
+            out["checked again after"] = await until(
+                lambda: state.get("check_passes", 0) > at_close)
             out["note cleared"] = state.get("check_note") is None
         finally:
-            task.cancel()
+            await shutdown(task)
             archiver.CHECK_EVERY_DAYS, archiver.CHECK_OVERDUE_DAYS = real
             if state.get("check") is not None:
                 state["check"].stop()
-            conn.close()
+            close_quietly(conn)
         return out
 for label, good in asyncio.run(long_run()).items():
     check(label, good)
@@ -661,13 +719,13 @@ try:
         db = Path(d) / "archive.db"
         held, took, state = asyncio.run(run_until(
             db, lambda s: archiver.recording_state(s)[1] == "no_signalk",
-            timeout=5, ws=lambda *a, **k: EmptyWS(), check=False))
+            timeout=60, ws=lambda *a, **k: EmptyWS(), check=False))
         check(f"reported as no_signalk after {took:.2f} s despite constant reconnects", held)
     with tempfile.TemporaryDirectory() as d:
         db = Path(d) / "archive.db"
         held, took, state = asyncio.run(run_until(
             db, lambda s: s.get("total", 0) >= 5 and archiver.recording_state(s)[0],
-            timeout=5, check=False))
+            timeout=60, check=False))
         check("real telemetry ends the outage", held)
 finally:
     archiver.WS_DOWN_S, archiver.WS_RETRY_S = real_down, real_retry
@@ -729,11 +787,16 @@ try:
 
         def silent_outage(s):
             if s.get("last_telemetry") and "first" not in seen and s.get("total", 0) >= 1:
-                seen["first"] = archiver.recording_state(s)[0]
-            return archiver.recording_state(s)[1] == "no_signalk"
+                # judged half a window after the delta, not whenever this poll ran: a stalled
+                # poll on a loaded box read a fresh delta as stale
+                seen["first"] = archiver.recording_state(
+                    s, now=s["last_telemetry"] + archiver.WS_DOWN_S / 2)
+            # wait for the row to land too: on a loaded box WS_DOWN_S can pass before the flush
+            return "first" in seen and archiver.recording_state(s)[1] == "no_signalk"
         held, took, state = asyncio.run(run_until(
-            db, silent_outage, timeout=5, ws=lambda *a, **k: OneThenSilent(), check=False))
-        check("recording while the delta was fresh", seen.get("first") is True)
+            db, silent_outage, timeout=60, ws=lambda *a, **k: OneThenSilent(), check=False))
+        check(f"recording while the delta was fresh ({seen.get('first')})",
+              (seen.get("first") or (None,))[0] is True)
         check(f"no_signalk {took:.2f} s in, with the socket still open", held)
 finally:
     archiver.WS_DOWN_S = real_down
@@ -783,22 +846,21 @@ async def gated(scenario):
             during = list(starts)
             # the rotation finishes: a fresh connection, a new generation, lock free
             if scenario == "conn cleared":
-                conn.close()
+                close_quietly(conn)
                 state["conn"] = archiver.open_db(db)
                 state["generation"] = 1
             hold.set()
-            for _ in range(250):
+            for _ in range(3000):
                 if starts:
                     break
                 await asyncio.sleep(0.02)
             after = list(starts)
         finally:
-            task.cancel()
+            await shutdown(task)
             archiver.BackgroundCheck.start, archiver._meta = real_start, real_meta
             if state.get("check") is not None:
                 state["check"].stop()
-            if state.get("conn") is not None:
-                state["conn"].close()
+            close_quietly(state.get("conn"))
         return during, after, state
 
 

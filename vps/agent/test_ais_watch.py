@@ -379,6 +379,15 @@ def onboard(db, live):
 with tempfile.TemporaryDirectory() as d:
     db = os.path.join(d, "archive.db")
     now = time.time()
+
+    class Frozen:
+        """The wall clock held at `now`, the moment these fixtures are stamped from. The archive
+        writes below took up to ~19 s on a loaded CI box, and a live clock read a 40 s fix as
+        59 s and a 1 s live entry as expired (#186). The ages under test are the fixtures'."""
+        monotonic = staticmethod(time.monotonic)
+        time = staticmethod(lambda: now)
+    clocks = (ds._time, ais._time)
+    ds._time = ais._time = Frozen
     ds.ARCHIVE_DB, ds.ARCHIVE_RECHECK_S = db, 0.0
     ds._AIS_SRC_CACHE[db] = set()
 
@@ -412,12 +421,17 @@ with tempfile.TemporaryDirectory() as d:
                  (LAT, ORCA, now - 1, 45.0003), (LON, ORCA, now - 1, -83.0003)])
     ais.datasource.active = lambda: src
     ais.OWN_FIX_MAX_AGE_S = 30
-    r = ais.get_ais_targets()
-    check("…so the stale-fix guard trips: own_fix false, 'GPS fix stale', age ~40 s",
+    try:
+        r = ais.get_ais_targets()
+        src._live = {(LAT, GPS24): (now - 1, 45.0), (LON, GPS24): (now - 1, -83.0)}
+        fresh = ais.get_ais_targets()
+    finally:
+        ds._time, ais._time = clocks
+    check(f"…so the stale-fix guard trips: own_fix false, 'GPS fix stale', age 40 s "
+          f"({r['own_fix_age_s']})",
           r["own_fix"] is False and r["own_fix_reason"] == "GPS fix stale"
-          and 38 <= r["own_fix_age_s"] <= 42)
-    src._live = {(LAT, GPS24): (now - 1, 45.0), (LON, GPS24): (now - 1, -83.0)}
-    check("the 24xd live and fresh → own_fix true", ais.get_ais_targets()["own_fix"] is True)
+          and r["own_fix_age_s"] == 40)
+    check("the 24xd live and fresh → own_fix true", fresh["own_fix"] is True)
 
     # Codex on #191 at a86c000: date a reading by the Signal K update's own timestamp, not receipt
     import json as _json
