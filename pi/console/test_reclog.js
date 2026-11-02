@@ -48,6 +48,8 @@ test("dashboard.js never starts a session without the kind (no empty body)", () 
   assert.ok(!/session\/start[\s\S]{0,200}body:\s*"\{\}"/.test(js), "an empty /session/start body is back");
   assert.match(js, /C4RecLog\.startBody\(/);
 });
+test("ending the log sends the id the button shows", () =>
+  assert.match(js, /session\/end[\s\S]{0,200}JSON\.stringify\(\{ id: a\.id \}\)/));
 test("the pick buttons are at least 48 px", () => {
   const m = css.match(/\.ctl\.rp\s*\{[^}]*min-height:\s*(\d+)px/);
   assert.ok(m && Number(m[1]) >= 48);

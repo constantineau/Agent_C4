@@ -329,7 +329,11 @@ racelog.start(name="Today", kind="race")               # auto-ends yesterday
 ds.session_end(old["start_ts"] + 1, session_id=old["id"])
 cur = ds.session_current()
 check("closing yesterday's id leaves today's race open", cur and cur["name"] == "Today")
-racelog.end()
+r = client.post("/session/end", json={"id": old["id"]}).json()
+check("POST /session/end with a stale id: 'Already ended', today's race still open",
+      r == {"ok": False, "note": "Already ended"} and ds.session_current()["name"] == "Today")
+r = client.post("/session/end", json={"id": cur["id"]}).json()
+check("POST /session/end with today's id ends it", r["ok"] and ds.session_current() is None)
 
 print("the cloud agent (race mode, no race log)")
 from app import main as cloud, race_mode  # noqa: E402

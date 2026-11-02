@@ -144,14 +144,24 @@ def start(name=None, race_id=None, kind=None):
     return {"ok": True, "active": cur}
 
 
-def end():
+ALREADY_ENDED = "Already ended"
+
+
+def end(session_id=None):
+    """End the running session. `session_id` is the one the caller means (the iPad sends the id it
+    shows); when another session is running now, nothing is ended: "Already ended". Read and
+    close happen under SESSION_LOCK and the close is scoped to that one id, so an end can never
+    close a race that started in between."""
     s = _src()
     if s is None:
         return {"ok": False, "note": "race log is onboard-only"}
-    cur = s.session_current()
-    if not cur:
-        return {"ok": False, "note": "no session running"}
-    s.session_end(time.time())
+    with SESSION_LOCK:
+        cur = s.session_current()
+        if not cur:
+            return {"ok": False, "note": "no session running"}
+        if session_id is not None and str(session_id) != str(cur.get("id")):
+            return {"ok": False, "note": ALREADY_ENDED}
+        s.session_end(time.time(), session_id=cur["id"])
     return {"ok": True, "ended": cur}
 
 

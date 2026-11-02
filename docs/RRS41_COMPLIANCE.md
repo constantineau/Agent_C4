@@ -415,7 +415,9 @@ when shore homework from Deploy (a course, fleet or playbook) is aboard, and the
 one tap. The iPad always sends the kind. For old clients, `/session/start` with no kind is always a race
 (fails closed). The pre-selection is UI only, read from the persisted stores
 (`racegate.homework_aboard`); it never decides a session's kind. While running, the button
-reads "LOG · RACE" or "LOG · PRACTICE". The engine's playbook has no file way in (the old
+reads "LOG · RACE" or "LOG · PRACTICE". Every write to the race log is scoped to one session and taken under the
+session lock: an end carries the id the iPad shows and closes only that id ("Already ended" if
+another session is running now), and a start closes only the session it replaces. The engine's playbook has no file way in (the old
 `PLAYBOOK_PATH` fallback is gone): only `/playbook/load`, through the gate.
 
 **Race log auto-close (`vps/agent/app/racelog.py`)**: the gate is only as good as the race session.

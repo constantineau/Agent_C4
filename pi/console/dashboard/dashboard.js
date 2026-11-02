@@ -1461,7 +1461,9 @@
           return;
         }
         recConfirmUntil = 0;
-        await fetch(API + "/session/end", { method: "POST" });
+        // the id this button shows: a session started meanwhile is never ended by this tap
+        await fetch(API + "/session/end", { method: "POST",
+          headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: a.id }) });
       } else {
         // open (or close) the Race / Practice choice; a tap there starts the log
         recPickUntil = Date.now() < recPickUntil ? 0 : Date.now() + window.C4RecLog.PICK_MS;

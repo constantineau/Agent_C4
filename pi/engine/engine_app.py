@@ -636,8 +636,10 @@ def session_start(body: dict = None):
 
 
 @app.post("/session/end")
-def session_end():
-    return racelog.end()
+def session_end(body: dict = None):
+    """End the running session: {id?}. The iPad sends the id it shows; if another session is
+    running now (one started in between), nothing is ended: "Already ended"."""
+    return racelog.end(session_id=(body or {}).get("id"))
 
 
 @app.get("/sails/log")
