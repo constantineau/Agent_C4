@@ -518,6 +518,10 @@ def _lower_priority():
         pass
 
 
+class _CheckStopped(Exception):
+    """Raised inside the check thread when stop() came first: open nothing, finish."""
+
+
 class BackgroundCheck:
     """`PRAGMA quick_check` of `path` in a low-priority thread. `result` is None while running,
     then a dict {status: ok|corrupt|aborted|error, detail}. `on_corrupt()` is called (from the
@@ -532,6 +536,7 @@ class BackgroundCheck:
         self.on_corrupt = on_corrupt
         self.duty = min(1.0, max(0.01, CHECK_DUTY if duty is None else float(duty)))
         self.stop_event = threading.Event()
+        self._lock = threading.Lock()   # orders stop() against opening a connection
         self.result = None
         self.conn_open = False          # True while the check holds a connection to the file
         self.slept = 0.0                # seconds given back by the duty cycle
@@ -547,13 +552,20 @@ class BackgroundCheck:
         return self
 
     def stop(self, timeout=None):
-        """Ask the check to stop and wait up to `timeout`. True once it no longer holds a
-        connection to the file — the only state in which the file may be moved."""
-        self.stop_event.set()
+        """Ask the check to stop and wait up to `timeout`. True only once its thread has
+        TERMINATED — the only state in which the file may be moved. ("No connection open right
+        now" is not enough: a thread stalled in its watcher would open one the moment it
+        returns.) The stop flag is set under the same lock `_attempt` takes to open, so after
+        this returns no new connection can be opened, whatever it returns."""
+        with self._lock:
+            self.stop_event.set()
         timeout = CHECK_STOP_TIMEOUT_S if timeout is None else timeout
-        if self.thread.is_alive() and threading.current_thread() is not self.thread:
-            self.thread.join(timeout)
-        return not self.conn_open
+        if not self.thread.is_alive():
+            return True
+        if threading.current_thread() is self.thread:
+            return False
+        self.thread.join(timeout)
+        return not self.thread.is_alive()
 
     def summary(self):
         doc = {"file": self.path.name, "live": self.live, "started": self.started,
@@ -591,7 +603,10 @@ class BackgroundCheck:
         what the file raised."""
         conn = None
         try:
-            self.conn_open = True       # before connect: a stalled open holds the file too
+            with self._lock:            # stop() sets the flag under this lock: never open after
+                if self.stop_event.is_set():
+                    raise _CheckStopped()
+                self.conn_open = True   # before connect: a stalled open holds the file too
             conn = sqlite3.connect(f"file:{self.path}?mode=ro", uri=True, timeout=30,
                                    check_same_thread=False)
             self._slice_start = time.monotonic()
@@ -624,6 +639,9 @@ class BackgroundCheck:
                         break
                 try:
                     result = self._attempt()
+                    break
+                except _CheckStopped:
+                    result = {"status": "aborted", "detail": "stopped"}
                     break
                 except (sqlite3.DatabaseError, UnicodeDecodeError) as exc:
                     detail = f"{type(exc).__name__}: {exc}"[:500]
@@ -1074,7 +1092,7 @@ def cap_buffer(buf, state, limit=None, clock=time.monotonic):
 STATUS_EVERY_S = float(os.environ.get("ARCHIVE_STATUS_EVERY_S", "10"))
 # Not writing for this long, with rows waiting, reads as "not recording: writes failing".
 WRITE_STALL_S = float(os.environ.get("ARCHIVE_WRITE_STALL_S", "30"))
-# Signal K down this long reads as "not recording: no data from Signal K".
+# No usable telemetry for this long reads as "not recording: no instrument data".
 WS_DOWN_S = float(os.environ.get("ARCHIVE_WS_DOWN_S", "30"))
 WS_RETRY_S = 3.0                # pause before reconnecting to Signal K
 
@@ -1088,8 +1106,10 @@ def recording_state(state, guard=None, now=None):
         return False, "disk_full"
     if state.get("rotate_pending"):
         return False, "rotation_pending"
-    down = state.get("ws_down_since")
-    if down is not None and now - down >= WS_DOWN_S:
+    # The clock is the last USABLE telemetry (rows out of a delta), not the socket: a Signal K
+    # that is connected but sends no instrument data records nothing either.
+    last_data = state.get("last_telemetry")
+    if last_data is not None and now - last_data >= WS_DOWN_S:
         return False, "no_signalk"
     last_ok = state.get("last_write_ok")
     if state.get("buffered", 0) and last_ok is not None and now - last_ok >= WRITE_STALL_S:
@@ -1674,7 +1694,7 @@ async def run(db=None, ws_connect=None, state=None, check=True):
     conn, top, rotated = await open_until_ready(db, loop)
     state["conn"] = conn
     state["last_write_ok"] = time.monotonic()
-    state["ws_down_since"] = time.monotonic()
+    state["last_telemetry"] = time.monotonic()   # grace from startup, then the real clock
     if rotated:
         state["rotations"] = 1
     print(f"[archive] {db} ready (highest row id {top}) <- {SIGNALK_WS} (full resolution)"
@@ -1700,7 +1720,7 @@ async def run(db=None, ws_connect=None, state=None, check=True):
                     if rows:
                         # Only usable telemetry ends an outage: a Signal K that accepts and
                         # closes (or sends only hellos) must still read "no instrument data".
-                        state["ws_down_since"] = None
+                        state["last_telemetry"] = time.monotonic()
                         buf.extend(rows)
                         if len(buf) > MAX_BUFFER_ROWS:
                             cap_buffer(buf, state)     # the flusher is stuck; keep RAM bounded
@@ -1711,8 +1731,6 @@ async def run(db=None, ws_connect=None, state=None, check=True):
                             wake.set()
         except Exception as exc:
             print(f"[archive] Signal K WS error ({exc}); retrying in 3s", flush=True)
-        if state.get("ws_down_since") is None:
-            state["ws_down_since"] = time.monotonic()
         await asyncio.sleep(WS_RETRY_S)
 
 

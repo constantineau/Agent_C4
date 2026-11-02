@@ -91,7 +91,8 @@ print(c.execute('select count(*),min(time),max(time) from readings').fetchone())
   Kept rows are never scanned, so a big kept session costs nothing and the flusher keeps
   writing while it runs.
 - **Status file** (`archiver-status.json`, rewritten every `ARCHIVE_STATUS_EVERY_S`):
-  `recording`, `reason` (`disk_full` / `rotation_pending` / `no_signalk` / `write_failing`),
+  `recording`, `reason` (`disk_full` / `rotation_pending` / `no_signalk` = no usable telemetry for 30 s /
+  `write_failing`),
   `stop_cause` (`high_mark` / `hard_floor`), `disk_used_pct`, `disk_really_used_pct`,
   `disk_free_bytes`, the marks, `paused_since`, the counts of rows not recorded, dropped from
   the buffer, waiting, written, rotations this run, and the background check's state. The

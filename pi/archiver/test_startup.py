@@ -672,5 +672,71 @@ try:
 finally:
     archiver.WS_DOWN_S, archiver.WS_RETRY_S = real_down, real_retry
 
+# --- 11. stop() means the thread is gone; a stalled watcher never opens afterwards ----------
+print("a check stalled in its watcher: stop() does not claim success, and it never opens "
+      "the file after being stopped:")
+with tempfile.TemporaryDirectory() as d:
+    db = Path(d) / "archive.db"
+    archiver.open_db(db).close()
+    in_watch, release = threading.Event(), threading.Event()
+
+    def stalled_watch():
+        in_watch.set()
+        release.wait(30)                   # e.g. the engine DB read hangs on a dying card
+        return None
+    opened = []
+    real_connect = sqlite3.connect
+
+    def spy_connect(target, *a, **k):
+        if "archive.db" in str(target):
+            opened.append(str(target))
+        return real_connect(target, *a, **k)
+    sqlite3.connect = spy_connect
+    try:
+        chk = archiver.BackgroundCheck(db, live=True, duty=1.0, watch=stalled_watch).start()
+        in_watch.wait(10)
+        stopped = chk.stop(timeout=0.2)
+        check("stop() returns False while the thread is still alive (no connection open is "
+              "not enough)", stopped is False and chk.thread.is_alive())
+        check("(setup) it holds no connection at that moment", not chk.conn_open)
+        release.set()                      # the watcher returns: 'nothing to step aside for'
+        chk.thread.join(10)
+    finally:
+        sqlite3.connect = real_connect
+    check("after the stall it did NOT open the archive", opened == [])
+    check(f"...and finished as aborted ({chk.result})",
+          (chk.result or {}).get("status") == "aborted")
+    check("stop() on the finished thread returns True", chk.stop(timeout=0) is True)
+
+# --- 12. connected but silent is an outage too ------------------------------------------------
+print("Signal K connected, one delta, then silence: 'no instrument data' after WS_DOWN_S:")
+
+
+class OneThenSilent(FakeWS):
+    async def _gen(self):
+        yield HELLO
+        yield delta(1)
+        await asyncio.sleep(3600)          # stays connected, sends nothing
+        yield delta(2)
+
+
+real_down = archiver.WS_DOWN_S
+archiver.WS_DOWN_S = 0.5
+try:
+    with tempfile.TemporaryDirectory() as d:
+        db = Path(d) / "archive.db"
+        seen = {}
+
+        def silent_outage(s):
+            if s.get("last_telemetry") and "first" not in seen and s.get("total", 0) >= 1:
+                seen["first"] = archiver.recording_state(s)[0]
+            return archiver.recording_state(s)[1] == "no_signalk"
+        held, took, state = asyncio.run(run_until(
+            db, silent_outage, timeout=5, ws=lambda *a, **k: OneThenSilent(), check=False))
+        check("recording while the delta was fresh", seen.get("first") is True)
+        check(f"no_signalk {took:.2f} s in, with the socket still open", held)
+finally:
+    archiver.WS_DOWN_S = real_down
+
 print("\n" + ("PASS" if ok else "FAIL"))
 raise SystemExit(0 if ok else 1)
