@@ -526,6 +526,11 @@ def run_prune(dest, keep_spec=(7, 4, 12), dry_run=False, min_unfinished_age_h=24
                 deleted += 1
             else:
                 refused += 1
+                if o == INDEX:
+                    # The set still reads as a complete backup: deleting its artifacts now would
+                    # leave a "complete" set that cannot restore. Leave the whole set for later.
+                    log(f"  {n}: its {INDEX} could not be deleted — the set is left whole")
+                    break
         if not dry_run:
             dest.drop_set_if_empty(n)
         if hold:
@@ -561,17 +566,19 @@ def main(argv=None):
             print(f"{n}  {len(idx['artifacts'])} artifacts, {len(here)} stored here, "
                   f"{sum(x['bytes'] for x in here) / 1048576:.1f} MiB")
         return 0
-    if a.cmd == "prune":
-        run_prune(dest, keep, dry_run=a.dry_run)
-        return 0
-
+    # One lock for everything that reads the destination and then writes or deletes there: a
+    # prune that listed the sets before a backup published its INDEX could delete artifacts that
+    # INDEX points at (unchanged artifacts are referenced, not re-stored).
     os.makedirs(a.work, exist_ok=True)
     lock = open(os.path.join(a.work, ".lock"), "w")
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
-        log("another backup is running — exiting")
+        log(f"another backup or prune holds {a.work}/.lock — exiting")
         return 1
+    if a.cmd == "prune":
+        run_prune(dest, keep, dry_run=a.dry_run)
+        return 0
     volumes = os.environ.get("C4_BACKUP_VOLUMES", DEFAULT_VOLUMES).split()
     pg = os.environ.get("C4_BACKUP_PG", DEFAULT_PG)
     log(f"backup -> {dest.label}: {len(volumes)} volume(s)" + (f" + {pg}" if pg else ""))

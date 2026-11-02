@@ -162,11 +162,32 @@ def seal_segments(archive_dir, outbox, max_rows=2_000_000, max_segments=50, max_
     if not os.path.exists(live):
         log(f"no {LIVE} in {archive_dir}")
         return 0
-    ino = str(os.stat(live).st_ino)
+    if os.path.exists(os.path.join(archive_dir, ROTATING_MARKER)):
+        log("a rotation is in progress (archive.db.rotating) — not sealing now")
+        return 0
+    # The cursor belongs to an inode, so the file actually OPENED must be the one whose inode
+    # we look up. Stat the path, open and read it, stat again: if both stats name the same
+    # inode, the open file is that inode (a rotation in between would have replaced the path
+    # with a NEW file, and the old inode lives on as archive.corrupt-*, so it can't come back
+    # under the name). Otherwise do nothing this run; the next one binds to the fresh file.
+    before = os.stat(live).st_ino
+    src = sqlite3.connect(f"file:{live}?mode=ro", uri=True, timeout=30)
+    try:
+        src.execute("SELECT 1 FROM readings LIMIT 1").fetchall()   # SQLite opens lazily
+        after = os.stat(live).st_ino
+    except (OSError, sqlite3.Error) as exc:
+        src.close()
+        log(f"{LIVE} could not be opened ({exc}) — not sealing now")
+        return 0
+    if before != after:
+        src.close()
+        log(f"{LIVE} was replaced while being opened (inode {before} -> {after}, a rotation) "
+            f"— not sealing now; the next run starts the new file from id 1")
+        return 0
+    ino = str(before)
     ledger = load_ledger(outbox)
     ent = ledger["live"].setdefault(ino, {"sealed_through_id": 0, "verified": [],
                                           "first_seen": _now()})
-    src = sqlite3.connect(f"file:{live}?mode=ro", uri=True, timeout=30)
     made = 0
     try:
         while made < max_segments:

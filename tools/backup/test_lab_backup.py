@@ -226,6 +226,48 @@ with tempfile.TemporaryDirectory() as tmp:
         d, r = lb.run_prune(lb.LocalDest(empty), (7, 4, 12), now=now)
         check("no finished set -> nothing deleted", (d, r) == (0, 0))
 
+print("prune and a refused INDEX delete (Codex on #198)")
+with tempfile.TemporaryDirectory() as tmp:
+    class Locked(lb.LocalDest):
+        """A bucket under a retention lock: INDEX.json deletes are refused."""
+        def delete(self, set_name, name):
+            return False if name == lb.INDEX else super().delete(set_name, name)
+    dest = Locked(os.path.join(tmp, "dest"))
+    t = datetime(2026, 9, 1, 3, 0, tzinfo=timezone.utc)
+    for i in range(3):
+        lb.run_backup(dest, os.path.join(tmp, "w"), [], None, now=t + timedelta(days=i),
+                      producers=[("vps-lab_ingested.tar.gz", "volume",
+                                  producer(f"i-{i}".encode()))])
+    first = lb.set_name_for(t)
+    d, r = lb.run_prune(dest, (1, 1, 1), now=t + timedelta(days=3))
+    whole = all(os.path.isfile(os.path.join(dest.root, a["stored_in"], a["name"]))
+                for idx in dict(lb.complete_sets(dest)).values() for a in idx["artifacts"])
+    check(f"INDEX refused -> the rest of that set is left alone ({d} deleted, {r} refused)",
+          d == 0 and r == 2 and "vps-lab_ingested.tar.gz" in dest.objects(first))
+    check("every set that still reads as complete can still restore", whole)
+
+print("prune takes the same lock as backup (Codex on #198)")
+with tempfile.TemporaryDirectory() as tmp:
+    import fcntl
+    dest_dir, work = os.path.join(tmp, "dest"), os.path.join(tmp, "work")
+    dest = lb.LocalDest(dest_dir)
+    t = datetime(2026, 9, 1, 3, 0, tzinfo=timezone.utc)
+    for i in range(3):
+        lb.run_backup(dest, work, [], None, now=t + timedelta(days=i),
+                      producers=[("vps-lab_ingested.tar.gz", "volume",
+                                  producer(f"i-{i}".encode()))])
+    held = open(os.path.join(work, ".lock"), "w")
+    fcntl.flock(held, fcntl.LOCK_EX)                 # a backup is running
+    os.environ["C4_BACKUP_KEEP"] = "1,1,1"
+    rc = lb.main(["prune", "--dest", dest_dir, "--work", work])
+    check("prune while a backup holds the lock -> exits 1, deletes nothing",
+          rc == 1 and len(lb.complete_sets(dest)) == 3)
+    fcntl.flock(held, fcntl.LOCK_UN)
+    held.close()
+    rc = lb.main(["prune", "--dest", dest_dir, "--work", work])
+    check("...and prunes once the lock is free", rc == 0 and len(lb.complete_sets(dest)) == 1)
+    del os.environ["C4_BACKUP_KEEP"]
+
 print("destinations")
 for bad in ("gs://constantineau-c4-archive", "gs://constantineau-c4-archive/"):
     try:

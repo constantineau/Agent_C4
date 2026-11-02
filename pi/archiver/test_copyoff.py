@@ -301,6 +301,47 @@ with tempfile.TemporaryDirectory() as tmp:
     check("exactly the new segment is waiting in the outbox", len(segs) == 1
           and segs[0].endswith("-000000001001-000000001500.db"))
 
+print("a rotation between looking up the inode and opening the file (Codex on #198)")
+with tempfile.TemporaryDirectory() as tmp:
+    arc_dir, conn = fake_pi(tmp, n=1000)
+    conn.close()
+    os.remove(os.path.join(arc_dir, CORRUPT))
+    outbox = os.path.join(tmp, "outbox")
+    os.makedirs(outbox)
+    live = os.path.join(arc_dir, "archive.db")
+    old_ino = str(os.stat(live).st_ino)
+    copyoff.seal_segments(arc_dir, outbox, max_rows=5000)     # old file sealed through id 1000
+    real_connect, fired = sqlite3.connect, []
+
+    def rotate_then_connect(target, *a, **kw):
+        if "mode=ro" in str(target) and not fired:            # the archiver rotates right here
+            fired.append(1)
+            os.rename(live, os.path.join(arc_dir, "archive.corrupt-20261103T000000.db"))
+            fresh = real_connect(live)
+            fresh.executescript(archiver.SCHEMA)
+            fresh.executemany("INSERT INTO readings (time, boat_id, source, path, value) "
+                              "VALUES (?,?,?,?,?)",
+                              [(iso(time.time() + i), "sr33", "s", "p", i) for i in range(1500)])
+            fresh.commit()
+            fresh.close()
+        return real_connect(target, *a, **kw)
+    sqlite3.connect = rotate_then_connect
+    try:
+        copyoff.seal_segments(arc_dir, outbox, max_rows=5000)
+    finally:
+        sqlite3.connect = real_connect
+    led = copyoff.load_ledger(outbox)
+    check("the fresh file's rows are NOT sealed under the old file's cursor",
+          led["live"][old_ino]["sealed_through_id"] == 1000
+          and not [n for n in os.listdir(outbox) if n.startswith(f"seg-{old_ino}-000000001001")])
+    copyoff.seal_segments(arc_dir, outbox, max_rows=5000)
+    new_ino = str(os.stat(live).st_ino)
+    led = copyoff.load_ledger(outbox)
+    check("the next run seals the fresh file from id 1 under its own inode",
+          new_ino != old_ino and led["live"].get(new_ino, {}).get("sealed_through_id") == 1500
+          and os.path.exists(os.path.join(
+              outbox, f"seg-{new_ino}-{1:012d}-{1500:012d}.db")))
+
 print("remote destination (rsync + ssh shims)")
 with tempfile.TemporaryDirectory() as tmp:
     arc_dir, conn = fake_pi(tmp, n=2500)
