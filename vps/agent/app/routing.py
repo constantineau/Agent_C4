@@ -144,7 +144,8 @@ class WindField:
     10 s timeout, not one per cell (#157). A cell with no fresh forecast takes, in order: its own
     old forecast, the nearest fresh cached cell, the nearest old one. Gaps are counted in `filled`,
     old forecast in `stale`, and the label says so. A hole is filled only from a cell within
-    weather.FILL_NM, and an old forecast past weather.MAX_AGE_S is refused. It never falls back
+    weather.FILL_NM, and a forecast past weather.MAX_AGE_S is never used: with nothing younger
+    in reach the route is refused (FCST_TOO_OLD). It never falls back
     to the boat's measured wind mid-route.
     Live mode: the measured wind (tws, twd) held constant.
     `deadline` (epoch): past it, the next sample raises RouteTimeout, which stops route_leg cleanly
@@ -164,32 +165,26 @@ class WindField:
         if not self.use_forecast:
             return self.live
         if not self._offline:
-            w = weather.wind_at(lat, lon, epoch)
-            if w and weather.cell_status(lat, lon) != "stale":
+            w = weather.wind_at(lat, lon, epoch)   # fresh only: None when a refresh failed
+            if w:
                 return w
             self._offline = True     # a fetch just failed: the cache only from here on
         cell = weather._cell(lat, lon)
         w = weather.cached_wind_at(lat, lon, epoch)
         if w:
             return w
+        age = weather.cell_age_s(lat, lon)
         w = weather.cached_wind_at(lat, lon, epoch, stale_ok=True)
-        if w:
-            self._old(weather.cell_age_s(lat, lon))
+        if w and age <= weather.MAX_AGE_S:   # too old: a younger cell nearby may still fill it
             self.stale.add(cell)
             return w
         w, fresh, age = weather.nearest_cached_wind(lat, lon, epoch)
         if not w:
-            raise NoWindError(FCST_GAP)
+            raise NoWindError(FCST_TOO_OLD if age is not None else FCST_GAP)
         if not fresh:
-            self._old(age)
             self.stale.add(cell)
         self.filled.add(cell)
         return w
-
-    @staticmethod
-    def _old(age_s):
-        if age_s is not None and age_s > weather.MAX_AGE_S:
-            raise NoWindError(FCST_TOO_OLD)
 
     @property
     def source(self):
@@ -211,9 +206,12 @@ def make_wind_fn(slat, slon, live):
     Returns (WindField, use_forecast), or (None, False) when there is no forecast and no complete
     live wind: the caller must refuse with NO_WIND rather than route on made-up wind (#156)."""
     if weather.wind_at(slat, slon, time.time()) is not None:
+        return WindField(True), True
+    if weather.cell_status(slat, slon) == "stale":
+        # the start cell's forecast expired and its refresh just failed: route on the old one
+        # from the cache (labelled "old forecast", refused past MAX_AGE_S), no more fetches
         wf = WindField(True)
-        if weather.cell_status(slat, slon) == "stale":
-            wf._offline = True       # the start cell's refresh just failed: no more fetches
+        wf._offline = True
         return wf, True
     tws, twd = (tuple(live) + (None, None))[:2] if live else (None, None)
     if tws is None or twd is None:

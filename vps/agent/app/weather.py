@@ -28,15 +28,22 @@ def _cell(lat, lon):
     return (round(lat, 1), round(lon, 1))
 
 
+def _unavailable(c):
+    """What a caller sees for an expired forecast whose refresh failed: no hours. The old hours
+    stay in the cache, where only the router reads them (cached_wind_at(stale_ok=True)), labelled."""
+    return {"fetched": c["fetched"], "hours": [], "error": c.get("error"), "stale": True}
+
+
 def fetch_point(lat, lon):
-    """Hourly wind forecast at the nearest ~0.1° cell, cached. Returns the cache entry."""
+    """Hourly wind forecast at the nearest ~0.1° cell, cached. Returns the cache entry, or no
+    hours when the forecast has expired and its refresh failed (never old wind as current)."""
     key = _cell(lat, lon)
     now = time.time()
     c = _cache.get(key)
     if c and now - c["fetched"] < TTL_S:
         return c
     if c and c.get("hours") and now - c.get("failed_at", 0) < RETRY_S:
-        return c                      # a refresh just failed: the old forecast, no new timeout
+        return _unavailable(c)        # a refresh just failed: no new timeout yet
     q = urllib.parse.urlencode({
         "latitude": key[0], "longitude": key[1],
         "hourly": "wind_speed_10m,wind_direction_10m",
@@ -53,9 +60,9 @@ def fetch_point(lat, lon):
     except Exception as exc:
         if c and c.get("hours"):
             # keep the old forecast, marked: `fetched` stays old so it reads as stale (#157)
-            c = dict(c, error=str(exc), failed_at=now)
-        else:
-            c = c or {"fetched": now, "hours": [], "error": str(exc)}
+            _cache[key] = c = dict(c, error=str(exc), failed_at=now)
+            return _unavailable(c)
+        c = c or {"fetched": now, "hours": [], "error": str(exc)}
     _cache[key] = c
     return c
 
@@ -99,28 +106,34 @@ def cell_age_s(lat, lon):
 
 
 def nearest_cached_wind(lat, lon, epoch, max_nm=None):
-    """(wind, fresh, age_s): the forecast of the nearest cell within `max_nm` (default FILL_NM)
-    with a fresh one in the cache, else of the nearest with an old one (fresh False), else
-    (None, False, None). Never fetches. The router fills a forecast gap with it, so a route never
-    mixes forecast and measured wind (#157)."""
+    """(wind, fresh, age_s): among cached cells within `max_nm` (default FILL_NM) and no older
+    than MAX_AGE_S, the nearest fresh one, else the nearest old one (fresh False). Never fetches.
+    The router fills a forecast gap with it, so a route never mixes forecast and measured wind
+    (#157). With none usable: (None, False, age_s) when only too-old cells were in reach (age of
+    the youngest), else (None, False, None)."""
     now = time.time()
     lim = FILL_NM if max_nm is None else max_nm
     coslat = math.cos(math.radians(lat))
     best = {True: None, False: None}
+    too_old = None
     for (clat, clon), c in list(_cache.items()):
         if not (c and c.get("hours")):
             continue
-        fresh = _fresh(c, now)
         d_nm = 60.0 * math.hypot(clat - lat, (clon - lon) * coslat)
         if d_nm > lim:
             continue
+        age = now - c["fetched"]
+        if age > MAX_AGE_S:                   # too old to use: skip it before choosing the nearest
+            too_old = age if too_old is None else min(too_old, age)
+            continue
+        fresh = _fresh(c, now)
         if best[fresh] is None or d_nm < best[fresh][0]:
             best[fresh] = (d_nm, c)
     for fresh in (True, False):
         if best[fresh]:
             c = best[fresh][1]
             return _interp(c["hours"], epoch), fresh, now - c["fetched"]
-    return None, False, None
+    return None, False, too_old
 
 
 def _interp(hrs, epoch):

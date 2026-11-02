@@ -252,14 +252,76 @@ check(f"fresh start, expired cells beyond: 1 good + 1 failed fetch (fetches: {le
       len(CALLS) == 2)
 check("…labelled 'old forecast'", r.get("wind_source") == "old forecast")
 
-print("#157 weather: a failed refresh keeps the old forecast and doesn't retry at once")
+print("#157 weather: a failed refresh never hands old wind to other callers as current")
 net({})
-expired(15.0, 90.0)
+expired(15.0, 90.0, 3 * 86400)                 # a 3-day-old cache, link down
 w1 = weather.wind_at(44.0, -82.0, time.time())
 w2 = weather.wind_at(44.0, -82.0, time.time())
-check("the old forecast is served", w1 is not None and round(w1[0]) == 15)
+check("wind_at says unavailable (None), not the old wind", w1 is None and w2 is None)
 check(f"the second read doesn't wait on the network again (fetches: {len(CALLS)})", len(CALLS) == 1)
-check("the cell reads as stale", weather.cell_status(44.0, -82.0) == "stale")
+check("the old hours stay in the cache for the router (cell reads as stale)",
+      weather.cell_status(44.0, -82.0) == "stale")
+fc = weather.get_forecast(44.0, -82.0)
+check("/forecast says unavailable", fc.get("available") is False)
+net({})
+expired(15.0, 90.0, 3 * 86400)
+fc = weather.get_forecast(44.0, -82.0)
+check("/forecast says unavailable on the first (failing) read too", fc.get("available") is False)
+
+print("#157 drift: an expired cache + no link reads as 'No forecast right now.', never 'holding'")
+from app import drift  # noqa: E402
+fp_t = time.time()
+pts = [{"lat": 44.0 + i * 0.1, "lon": -82.0, "t": fp_t + (i + 2) * 3600, "twd": 90.0, "tws": 15.0}
+       for i in range(4)]
+_bundle = {"race_id": "unit", "recommended": "m", "variants": [{"id": "m"}],
+           "forecast_fingerprint": {"source": "open-meteo-gfs", "built_at": fp_t - 3600, "points": pts}}
+_saved_pb = deviation._load_playbook
+deviation._load_playbook = lambda: _bundle
+net({})
+expired(15.0, 90.0, 3 * 86400)                 # the old forecast matches the plan exactly
+drift.reset_state()
+d = drift.get_drift()
+deviation._load_playbook = _saved_pb
+check(f"drift is not available ({d.get('sub')!r})", d.get("available") is False
+      and d.get("sub") == "No forecast right now.")
+# control: the same plan with a fresh forecast is compared (so the check above can fail)
+net({"*": (15.0, 90.0)})
+deviation._load_playbook = lambda: _bundle
+drift.reset_state()
+d = drift.get_drift()
+deviation._load_playbook = _saved_pb
+check(f"control: with a fresh forecast drift is available ({d.get('status')})", d.get("available") is not False)
+
+print("#157 gap fill skips too-old cells BEFORE picking the nearest")
+TOO_OLD_MSG = routing.FCST_TOO_OLD
+net({(44.0, -82.0): (15.0, 90.0)})
+wf, _ = routing.make_wind_fn(44.0, -82.0, (8.0, 270.0))
+weather._cache.clear()
+t0h = int(time.time()) - 3600
+weather._cache[(44.3, -82.32)] = {"fetched": time.time() - 7 * 3600,        # ~0.9 nm, 7 h old
+                                  "hours": [(t0h + 3600 * i, 30.0, 180.0) for i in range(48)]}
+weather._cache[(44.38, -82.3)] = {"fetched": time.time() - 5 * 3600,        # ~4.8 nm, 5 h old
+                                  "hours": [(t0h + 3600 * i, 15.0, 90.0) for i in range(48)]}
+err = raises(lambda: wf(44.3, -82.3, time.time()))
+w = wf(44.3, -82.3, time.time()) if err is None else None
+check(f"the 5 h cell at 4.8 nm is used, not refused for the 7 h one at 0.9 nm ({err})",
+      err is None and w is not None and round(w[0]) == 15)
+check("…and the route is labelled old", wf.source.startswith("old forecast"))
+# the same for the point's own cell: 7 h old there, a 5 h cell 6 nm away → the 5 h one is used
+net({(44.0, -82.0): (15.0, 90.0)})
+wf, _ = routing.make_wind_fn(44.0, -82.0, (8.0, 270.0))
+weather._cache.clear()
+weather._cache[(44.3, -82.3)] = {"fetched": time.time() - 7 * 3600,
+                                 "hours": [(t0h + 3600 * i, 30.0, 180.0) for i in range(48)]}
+weather._cache[(44.4, -82.3)] = {"fetched": time.time() - 5 * 3600,
+                                 "hours": [(t0h + 3600 * i, 15.0, 90.0) for i in range(48)]}
+err = raises(lambda: wf(44.3, -82.3, time.time()))
+w = wf(44.3, -82.3, time.time()) if err is None else None
+check(f"own cell 7 h old: the 5 h cell 6 nm away fills it ({err})",
+      err is None and w is not None and round(w[0]) == 15 and wf.source == "old forecast, gaps filled from nearby")
+del weather._cache[(44.4, -82.3)]
+err = raises(lambda: wf(44.3, -82.3, time.time()))
+check(f"own cell 7 h old and nothing younger near: '{TOO_OLD_MSG}'", err is not None and str(err) == TOO_OLD_MSG)
 
 print("#157 a forecast older than 6 h is refused; under 6 h it routes, labelled old")
 TOO_OLD = "Forecast too old. Can't route."
