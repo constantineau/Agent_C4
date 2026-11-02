@@ -56,6 +56,16 @@ def _truncated(res, finish_pt):
 _LABELS = {"left": "Left side", "right": "Right side", "middle": "Up the middle (rhumb)"}
 
 
+def _merged_warnings(routes):
+    """The warnings of these routes, in order, each once."""
+    out = []
+    for r in routes:
+        for w in (r or {}).get("warnings") or []:
+            if w not in out:
+                out.append(w)
+    return out
+
+
 def _subfields(wf: WindField):
     """Split the blended field into one scenario sub-field per model (its own series only)."""
     by_model: dict[str, dict] = {}
@@ -686,6 +696,8 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
             "hours_range": [min(hrs), max(hrs)] if hrs else None,
             "first_heading": (rep.get("legs") or [{}])[0].get("first_heading"),
             "route_confidence": rep.get("route_confidence"),
+            # the route's own health (forecast ended, shoreline, …): shown before Deploy (#51)
+            "degraded": bool(rep.get("degraded")), "warnings": list(rep.get("warnings") or []),
             "route": {"legs": rep.get("legs"), "path": rep.get("path"),
                       "leg_end_idx": rep.get("leg_end_idx"),
                       "total_sailed_nm": rep.get("total_sailed_nm"),
@@ -739,7 +751,12 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
             "route_confidence": consensus.get("route_confidence"),
             "legs": consensus.get("legs"), "path": consensus.get("path"),
             "leg_end_idx": consensus.get("leg_end_idx"),
+            "degraded": bool(consensus.get("degraded")),
+            "warnings": list(consensus.get("warnings") or []),
         },
+        # every route's warnings, once each: what the Lab shows on the playbook and on Deploy
+        "degraded": bool(consensus.get("degraded")) or any(v["degraded"] for v in variants),
+        "warnings": _merged_warnings([consensus] + [v for v in variants]),
         "variants": variants,
         "scenarios": [{"model": c["scenario"], "favored_side": c["favored_side"],
                        "total_hours": c["total_hours"], "first_heading": c["first_heading"]}

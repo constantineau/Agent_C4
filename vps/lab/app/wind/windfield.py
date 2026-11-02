@@ -214,7 +214,10 @@ class WindField:
             # 18 h model's last frame must not blend into hour 120 beside a 72 h model's
             def gap(fr):
                 return max(fr[0].valid_time - epoch, epoch - fr[-1].valid_time, 0.0)
-            items = [(k, fr) for k, fr in items if fr]
+            # ...among the series that actually cover this POSITION (Codex on #200: a nearer-ending
+            # model whose grid misses the boat must not hide a usable one → no wind at all)
+            items = [(k, fr) for k, fr in items
+                     if fr and self._series_uv(fr, lat, lon, epoch, hold=True) is not None]
             if items:
                 best = min(gap(fr) for _k, fr in items)
                 items = [(k, fr) for k, fr in items if gap(fr) <= best + 1.0]

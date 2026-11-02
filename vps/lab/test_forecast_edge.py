@@ -80,6 +80,21 @@ check("before the first frame by more than a step: held too",
 check("a scenario's shifted view keeps the flag",
       TransformedWind(wf, rot_deg=10).detail_at(44.0, -82.0, T0 + 120 * H).get("held") is True)
 
+# Codex on #200: the stand-in must come from a model that covers the POSITION. GFS (wide grid)
+# ends +1 h; HRRR ends +2 h but its grid stops short of the boat: at +2.2 h GFS's last frame must
+# stand in, not "no wind" (which drops the router to its made-up fallback)
+NARROW_LON = np.arange(-81.5, -80.49, 0.25)                 # HRRR misses -82.0
+NARROW = [grib.GribFrame("hrrr", "det", T0 + k * H, LAT, NARROW_LON,
+                         np.full((LAT.size, NARROW_LON.size), 6.0),
+                         np.full((LAT.size, NARROW_LON.size), 0.0), True) for k in range(0, 3)]
+SHORT = series("gfs", 1, 1, 0.0, -6.0)
+CODEX = WindField({("hrrr", "det"): NARROW, ("gfs", "det"): SHORT},
+                  [{"model": "hrrr"}, {"model": "gfs"}], (45, 43, -83.5, -80.5), T0, T0 + 3 * H)
+dc = CODEX.detail_at(44.0, -82.0, T0 + 2.2 * H)
+check("(control) HRRR doesn't cover the boat", NARROW[-1].sample_uv(44.0, -82.0) is None)
+check("a nearer-ending model off the boat's position doesn't hide GFS: wind, held, from GFS",
+      dc is not None and dc.get("held") and dc["models"] == ["gfs"])
+
 print("3) the route: kept, degraded, says so plainly")
 DEF = {"race_id": "long", "name": "Long", "zones": [], "courses": [{
     "id": "c", "start": {"lat": 43.3, "lon": -82.0}, "marks": [],
@@ -101,6 +116,45 @@ r3 = OPT.optimize_course(DEF, "c", T0, LATE, avoid=False, emit_exploration=False
                          time_budget_s=120, resolution="fast")
 check("a forecast that starts after the gun: degraded, says so",
       r3["degraded"] and OPT.FORECAST_STARTS_LATE in r3["warnings"])
+
+print("4) the playbook carries the warning to the Lab, before Deploy (Codex on #200)")
+from app import current as currentmod, pbstore, playbook, synthesis, wave as wavemod  # noqa: E402
+
+playbook.build_windfield = lambda *a, **k: wf
+from app.geo import obstacles as OB  # noqa: E402
+OB._fill_global_backstop = lambda field, cache_dir=None: {}   # open water, loaded (no data in CI)
+currentmod.build_currentfield = lambda *a, **k: currentmod.ZeroCurrent()
+wavemod.build_wavefield = lambda *a, **k: wavemod.ZeroWave()
+_real_build = playbook.build_playbook
+PB = {}
+
+
+def _pb(*a, **k):
+    k.update(model_skill=False, v2_scenarios=False, time_budget_s=120)
+    PB.update(_real_build(*a, **k))
+    return dict(PB)
+
+
+playbook.build_playbook = _pb
+synthesis.pb.build_playbook = _pb
+synthesis._buoy_stations = lambda *a, **k: []          # no network
+synthesis._venue_stats = lambda: None
+bundle = synthesis.synthesize(DEF, "c", T0 + 60 * H, ["gfs", "hrrr"], use_waves=False)
+print(f"     playbook: available={PB.get('available')} variants={len(PB.get('variants') or [])}")
+check("(control) a playbook was built", PB.get("available") and PB.get("variants"))
+check("the consensus carries degraded + the forecast warning",
+      PB["consensus"].get("degraded") and OPT.FORECAST_ENDS in PB["consensus"].get("warnings", []))
+check("every variant carries it", all(v.get("degraded") and OPT.FORECAST_ENDS in v.get("warnings", [])
+                                      for v in PB["variants"]))
+check("the bundle: degraded, warning listed once",
+      bundle.get("degraded") and bundle.get("warnings", []).count(OPT.FORECAST_ENDS) == 1)
+check("…and on each bundle variant", all(OPT.FORECAST_ENDS in v.get("warnings", [])
+                                          for v in bundle.get("variants") or [{}]))
+pbstore.PLAYBOOK_DIR = tempfile.mkdtemp()
+pbstore.save(bundle)
+row = pbstore.list_bundles()[0]
+check("the stored summary (what Deploy lists) carries it",
+      row.get("degraded") and OPT.FORECAST_ENDS in row.get("warnings", []))
 
 print("PASS" if ok else "FAIL")
 raise SystemExit(0 if ok else 1)
