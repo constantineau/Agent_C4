@@ -421,6 +421,11 @@ def tar_volume(src_dir, out_path, scratch):
                         log(f"  {rel}: gone before it could be read (deleted) — not archived")
                         continue
                     with f:
+                        if data == p:                # a plain file: still not a DB, by this fd?
+                            if f.read(16) == SQLITE_MAGIC:
+                                raise RuntimeError(f"{rel} became a database during the "
+                                                   f"backup; retry the volume")
+                            f.seek(0)
                         ti = tar.gettarinfo(arcname=rel, fileobj=f)
                         ti.mtime = int(ti.mtime)
                         if data != p:                # the snapshot's bytes, the db's metadata

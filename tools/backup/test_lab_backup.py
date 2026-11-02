@@ -637,5 +637,33 @@ with tempfile.TemporaryDirectory() as tmp:
     check("...and the file its row names is in the same tar", "grib/new.grib" in files)
     check("it listed again after snapshotting the new DB", len(calls) == 3)
 
+print("an empty file that becomes a DB before it is read fails the volume (Codex on #198)")
+with tempfile.TemporaryDirectory() as tmp:
+    vol = os.path.join(tmp, "vol")
+    os.makedirs(vol)
+    target = os.path.join(vol, "retro.db")
+    open(target, "wb").close()                      # empty when classified: not a DB yet
+    real_is_sqlite = lb.is_sqlite
+
+    def is_sqlite(p):
+        r = real_is_sqlite(p)
+        if p == target and os.path.getsize(target) == 0:   # initialised right after the check
+            c = sqlite3.connect(target)
+            c.execute("CREATE TABLE pins (path TEXT)")
+            c.commit()
+            c.close()
+        return r
+    lb.is_sqlite = is_sqlite
+    try:
+        os.makedirs(os.path.join(tmp, "s"))
+        lb.tar_volume(vol, os.path.join(tmp, "v.tgz"), os.path.join(tmp, "s"))
+        failed = None
+    except RuntimeError as exc:
+        failed = exc
+    finally:
+        lb.is_sqlite = real_is_sqlite
+    check(f"the volume fails, to be retried ({failed!r})",
+          failed is not None and "became a database" in str(failed))
+
 print("\nALL OK" if ok else "\nFAILURES")
 sys.exit(0 if ok else 1)
