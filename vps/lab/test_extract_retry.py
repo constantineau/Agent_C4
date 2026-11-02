@@ -1,6 +1,9 @@
 """Race ingest: a model reply with a JSON slip is retried once, then fails plainly.
-No network or API key. Run (make ci): PYTHONPATH=vps/lab python3 vps/lab/test_extract_retry.py"""
+No network or API key: a fake SDK client stands in for Claude.
+Run (make ci): PYTHONPATH=vps/lab python3 vps/lab/test_extract_retry.py"""
+import json
 import sys
+from types import SimpleNamespace
 
 from app import extract, llm
 
@@ -17,18 +20,40 @@ GOOD = '{"race_id": "sorc-2027", "name": "Islands in the Stream"}'
 BAD = '{"race_id": "sorc-2027", "name": }'      # the kind of slip seen 2026-11-02
 
 
+class _Stream:
+    def __init__(self, msg):
+        self.msg = msg
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def get_final_message(self):
+        return self.msg
+
+
 def fake(replies):
+    """Swap in a fake client. The course part's streamed replies are `replies` in order (the
+    rules part always answers validly); returns the course part's user turns (as JSON text)."""
     calls = []
 
-    def complete(system, user, max_tokens=4000):
-        calls.append(user)
-        return replies[len(calls) - 1], "fake-model"
-    llm.complete = complete
+    def stream(**kw):
+        schema = kw["extra_body"]["output_config"]["format"]["schema"]
+        if "courses" in schema["properties"]:
+            calls.append(json.dumps(kw["messages"]))
+            text = replies[len(calls) - 1]
+        else:
+            text = '{"requirements": []}'
+        return _Stream(SimpleNamespace(stop_reason="end_turn", content=[
+            SimpleNamespace(type="text", text=text)], usage=None))
+    llm._client = lambda: SimpleNamespace(messages=SimpleNamespace(stream=stream))
     return calls
 
 
 extract.API_KEY = "test"
-DOCS = [("nor.pdf", "NOTICE OF RACE ...")]
+DOCS = [("nor.pdf", "NOTICE OF RACE ... " * 20)]
 
 print("one bad reply, then a good one: retried and parsed")
 calls = fake([BAD, GOOD])

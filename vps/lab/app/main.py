@@ -132,10 +132,29 @@ def _today():
     return datetime.date.today().isoformat()
 
 
-def _drafted(definition):
-    """Validate a draft RaceDefinition and return it with its validation for the review step."""
+def _drafted(definition, notes=()):
+    """Validate a draft RaceDefinition and return it with its validation for the review step.
+    Ingest `notes` (a document trimmed, unreadable, skipped…) lead the warnings: the person
+    reviewing must see what the AI did NOT read."""
     errors, warnings = race_def.validate(definition)
-    return {"definition": definition, "errors": errors, "warnings": warnings}
+    return {"definition": definition, "errors": errors, "warnings": list(notes) + warnings}
+
+
+def _ingest_fail(exc):
+    """IngestError messages are already plain; anything else gets a short prefix."""
+    msg = str(exc) if isinstance(exc, extract.IngestError) else f"ingest failed: {exc}"
+    return JSONResponse({"detail": msg}, status_code=502)
+
+
+async def _ingest(docs, sources, skipped):
+    """skipped = plain messages for documents that couldn't be loaded (the rest go ahead)."""
+    if not docs:
+        raise extract.IngestError(" ".join(skipped) if skipped else "No documents to read.")
+    notes = [f"{m} The draft was built WITHOUT it." for m in skipped]
+    definition = await run_in_threadpool(extract.extract_race_definition, docs, _today(), notes)
+    definition.setdefault("provenance", {}).setdefault("sources", [])
+    definition["provenance"]["sources"] = sources + definition["provenance"]["sources"]
+    return _drafted(definition, notes)
 
 
 @app.post("/api/ingest/discover")
@@ -146,47 +165,53 @@ async def ingest_discover(body: dict):
         return JSONResponse({"detail": "url required"}, status_code=400)
     try:
         return {"candidates": await run_in_threadpool(extract.discover_pdfs, url)}
+    except extract.IngestError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=502)
     except Exception as exc:
         return JSONResponse({"detail": f"discover failed: {exc}"}, status_code=502)
 
 
 @app.post("/api/ingest")
 async def ingest_urls(body: dict):
-    """Ingest from one or more document URLs (auto-find selections or pasted direct links)."""
+    """Ingest from one or more document URLs (auto-find selections or pasted direct links).
+    A link that won't download doesn't sink the rest: the draft is built from the others and the
+    review step names the one that was skipped."""
     urls = [u.strip() for u in (body or {}).get("urls", []) if u and u.strip()]
     if not urls:
         return JSONResponse({"detail": "urls required"}, status_code=400)
     try:
-        docs, sources = [], []
+        docs, sources, notes = [], [], []
         for u in urls:
-            label, text = await run_in_threadpool(extract.text_from_url, u)
-            docs.append((label, text))
-            sources.append({"label": label, "url": u, "retrieved": _today()})
-        definition = await run_in_threadpool(extract.extract_race_definition, docs, _today())
-        definition.setdefault("provenance", {}).setdefault("sources", [])
-        definition["provenance"]["sources"] = sources + definition["provenance"]["sources"]
-        return _drafted(definition)
+            try:
+                doc = await run_in_threadpool(extract.load_url, u)
+            except extract.IngestError as exc:
+                notes.append(str(exc))
+                continue
+            docs.append(doc)
+            sources.append({"label": doc["label"], "url": u, "retrieved": _today()})
+        return await _ingest(docs, sources, notes)
     except Exception as exc:
-        return JSONResponse({"detail": f"ingest failed: {exc}"}, status_code=502)
+        return _ingest_fail(exc)
 
 
 @app.post("/api/ingest/upload")
 async def ingest_upload(files: list[UploadFile] = File(...)):
     """Ingest from uploaded PDF(s) — for JS-rendered race hubs a crawler can't reach."""
     try:
-        docs, sources = [], []
+        docs, sources, notes = [], [], []
+        if not files:
+            return JSONResponse({"detail": "no files"}, status_code=400)
         for f in files:
             raw = await f.read()
-            docs.append((f.filename, await run_in_threadpool(extract.pdf_text, raw)))
+            try:
+                docs.append(await run_in_threadpool(extract.load_pdf, f.filename, raw))
+            except extract.IngestError as exc:
+                notes.append(str(exc))
+                continue
             sources.append({"label": f.filename, "url": "(uploaded)", "retrieved": _today()})
-        if not docs:
-            return JSONResponse({"detail": "no files"}, status_code=400)
-        definition = await run_in_threadpool(extract.extract_race_definition, docs, _today())
-        definition.setdefault("provenance", {}).setdefault("sources", [])
-        definition["provenance"]["sources"] = sources + definition["provenance"]["sources"]
-        return _drafted(definition)
+        return await _ingest(docs, sources, notes)
     except Exception as exc:
-        return JSONResponse({"detail": f"ingest failed: {exc}"}, status_code=502)
+        return _ingest_fail(exc)
 
 
 @app.post("/api/geocode")

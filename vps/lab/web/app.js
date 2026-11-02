@@ -436,9 +436,8 @@ async function extractDraft() {
       else setMsg("✕ Couldn't read the documents (server error " + res.status + ").", "var(--bad)");
       btn.disabled = false; btn.textContent = "Read documents →"; return;
     }
-    if (resp.detail) {   // the backend detail often already reads "ingest failed: …" — don't double it
-      const d = /^ingest failed/i.test(resp.detail) ? resp.detail : "Couldn't read the documents: " + resp.detail;
-      setMsg("✕ " + d, "var(--bad)"); btn.disabled = false; btn.textContent = "Read documents →"; return;
+    if (resp.detail) {   // the backend detail is already a plain sentence (what failed, what to do)
+      setMsg("✕ " + resp.detail, "var(--bad)"); btn.disabled = false; btn.textContent = "Read documents →"; return;
     }
     Lab.draft = resp; Lab.editDef = resp.definition;
     Lab.editVal = { errors: resp.errors || [], warnings: resp.warnings || [] }; Lab.isDraft = true;
