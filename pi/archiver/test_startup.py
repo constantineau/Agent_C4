@@ -43,7 +43,17 @@ def check(name, cond):
 
 archiver.FLUSH_SECONDS = 0.05
 archiver.PRUNE_EVERY_S = 3600
-archiver.ENGINE_DB = "/nonexistent/engine.db"     # prune skips (never deletes blind)
+# A readable sessions table with no open session: the background check may run (an UNREADABLE
+# one counts as a session and holds it back). Retention off, so the prune keeps every test row.
+_ENGINE_DIR = tempfile.TemporaryDirectory()
+archiver.ENGINE_DB = os.path.join(_ENGINE_DIR.name, "engine.db")
+_c = sqlite3.connect(archiver.ENGINE_DB)
+_c.execute("CREATE TABLE sessions (id INTEGER PRIMARY KEY, race_id TEXT, start_ts REAL, "
+           "end_ts REAL)")
+_c.execute("INSERT INTO sessions (start_ts, end_ts) VALUES (0, 1)")
+_c.commit()
+_c.close()
+archiver.RETAIN_DAYS = 0
 archiver.STATUS_EVERY_S = 0.1
 # The disk guard measures the REAL filesystem, and a nearly full CI disk would stop recording
 # for reasons this test is not about (test_disk_guard covers the guard).
@@ -119,12 +129,12 @@ class FakeWS:
             await asyncio.sleep(0.01)
 
 
-async def run_until(db, cond, timeout=20.0, check=True):
+async def run_until(db, cond, timeout=20.0, check=True, ws=None):
     """Start the real `archiver.run` on `db` against a fake Signal K; wait for `cond(state)`.
     Returns (held, seconds_to_hold, state)."""
     state = {}
     t0 = time.monotonic()
-    task = asyncio.create_task(archiver.run(db=db, ws_connect=lambda *a, **k: FakeWS(),
+    task = asyncio.create_task(archiver.run(db=db, ws_connect=ws or (lambda *a, **k: FakeWS()),
                                             state=state, check=check))
     held = False
     try:
@@ -275,12 +285,13 @@ with tempfile.TemporaryDirectory() as d:
     archiver.CHECK_DUTY = 1.0
     held, took, state = asyncio.run(run_until(
         db, lambda s: s.get("total", 0) >= 20
-        and s.get("check") is not None and s["check"].result is not None))
+        and s.get("moved_file_check") is not None
+        and s["moved_file_check"].result is not None))
     corrupt = list(Path(d).glob("archive.corrupt-*.db"))
     check(f"rows reached a fresh archive {took:.2f} s after start", held and took < 10)
     check("the damaged file was moved aside whole", len(corrupt) == 1
           and corrupt[0].stat().st_size == size)
-    chk = state.get("check")
+    chk = state.get("moved_file_check")
     check("the background check read the moved file, not the live one",
           chk is not None and not chk.live and chk.path == corrupt[0])
     check("...and found it damaged (a verdict for the human)",
@@ -516,12 +527,17 @@ async def scheduled(eng_open):
             await asyncio.sleep(1.0)
             during = (list(started), state.get("check_note"), state.get("checkpoint_due"))
             engine_with_session(eng, open_=False)          # the session ends
-            done = await asyncio.wait_for(task, 10)
+            for _ in range(500):
+                if state.get("check_passes"):
+                    break
+                await asyncio.sleep(0.02)
+            result = state["check"].result
         finally:
             archiver.BackgroundCheck._attempt = real_attempt
+            task.cancel()
         last = conn.execute("SELECT v FROM sync_state WHERE k='last_full_check'").fetchone()
         conn.close()
-        return during, done.result, last
+        return during, result, last
 
 
 (started, note, ckpt), result, last = asyncio.run(scheduled(True))
@@ -571,6 +587,90 @@ with tempfile.TemporaryDirectory() as d:
     check("a passing check resets it",
           archiver._overdue_note(conn, now + timedelta(days=9)) is None)
     conn.close()
+
+# --- 9. unreadable sessions = wait; the scheduler keeps going after a pass -----------------
+print("an unreadable sessions table counts as a session (the check waits):")
+with tempfile.TemporaryDirectory() as d:
+    db = Path(d) / "archive.db"
+    archiver.open_db(db).close()
+    chk = archiver.BackgroundCheck(db, live=True, duty=1.0,
+                                   watch=archiver.check_watch(db, str(Path(d) / "nope.db")))
+    chk.start().thread.join(10)
+    check(f"deferred: {chk.result}", (chk.result or {}).get("status") == "deferred"
+          and "unreadable" in chk.result["detail"])
+
+print("after a pass the scheduler keeps watching: overdue later, then checks again:")
+
+
+async def long_run():
+    loop = asyncio.get_running_loop()
+    with tempfile.TemporaryDirectory() as d:
+        db = Path(d) / "archive.db"
+        eng = Path(d) / "engine.db"
+        engine_with_session(eng, open_=False)
+        conn = archiver.open_db(db)
+        archiver.write_rows(conn, cf.rows(500))
+        state = {"conn": conn}
+        real = (archiver.CHECK_EVERY_DAYS, archiver.CHECK_OVERDUE_DAYS)
+        archiver.CHECK_EVERY_DAYS = 0.6 / 86400          # re-check every 0.6 s
+        archiver.CHECK_OVERDUE_DAYS = 1.0 / 86400        # overdue after 1 s
+        out = {}
+        task = asyncio.create_task(archiver.check_scheduler(state, loop, db, None,
+                                                            engine_db=str(eng),
+                                                            later_s=0.05))
+        try:
+            async def until(cond, t=10):
+                for _ in range(int(t / 0.02)):
+                    if cond():
+                        return True
+                    await asyncio.sleep(0.02)
+                return False
+            out["first pass"] = await until(lambda: state.get("check_passes", 0) >= 1)
+            out["scheduler alive after the pass"] = not task.done()
+            engine_with_session(eng, open_=True)          # a long race weekend begins
+            out["overdue while held back"] = await until(
+                lambda: state.get("check_note") == "Archive check overdue")
+            out["no pass during the session"] = state.get("check_passes") == 1
+            engine_with_session(eng, open_=False)
+            out["checked again after"] = await until(lambda: state.get("check_passes", 0) >= 2)
+            out["note cleared"] = state.get("check_note") is None
+        finally:
+            task.cancel()
+            archiver.CHECK_EVERY_DAYS, archiver.CHECK_OVERDUE_DAYS = real
+            if state.get("check") is not None:
+                state["check"].stop()
+            conn.close()
+        return out
+for label, good in asyncio.run(long_run()).items():
+    check(label, good)
+
+# --- 10. a Signal K that accepts and closes is still an outage ------------------------------
+print("Signal K accepting then closing, with no telemetry, reads as 'no instrument data':")
+
+
+class EmptyWS(FakeWS):
+    async def _gen(self):
+        yield HELLO                                     # a hello is not telemetry
+        return
+
+
+real_down, real_retry = archiver.WS_DOWN_S, archiver.WS_RETRY_S
+archiver.WS_DOWN_S, archiver.WS_RETRY_S = 0.5, 0.02
+try:
+    with tempfile.TemporaryDirectory() as d:
+        db = Path(d) / "archive.db"
+        held, took, state = asyncio.run(run_until(
+            db, lambda s: archiver.recording_state(s)[1] == "no_signalk",
+            timeout=5, ws=lambda *a, **k: EmptyWS(), check=False))
+        check(f"reported as no_signalk after {took:.2f} s despite constant reconnects", held)
+    with tempfile.TemporaryDirectory() as d:
+        db = Path(d) / "archive.db"
+        held, took, state = asyncio.run(run_until(
+            db, lambda s: s.get("total", 0) >= 5 and archiver.recording_state(s)[0],
+            timeout=5, check=False))
+        check("real telemetry ends the outage", held)
+finally:
+    archiver.WS_DOWN_S, archiver.WS_RETRY_S = real_down, real_retry
 
 print("\n" + ("PASS" if ok else "FAIL"))
 raise SystemExit(0 if ok else 1)

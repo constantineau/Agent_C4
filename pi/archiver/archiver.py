@@ -445,6 +445,9 @@ CHECK_WAL_CAP_MB = float(os.environ.get("ARCHIVE_CHECK_WAL_CAP_MB", "256"))
 CHECK_WATCH_S = float(os.environ.get("ARCHIVE_CHECK_WATCH_S", "5"))
 CHECK_LATER_S = float(os.environ.get("ARCHIVE_CHECK_LATER_S", "3600"))
 CHECK_OVERDUE_DAYS = float(os.environ.get("ARCHIVE_CHECK_OVERDUE_DAYS", "7"))
+# Aim to re-check the live file this often — inside the overdue limit, so one deferred race
+# weekend does not make it overdue straight away.
+CHECK_EVERY_DAYS = float(os.environ.get("ARCHIVE_CHECK_EVERY_DAYS", "5"))
 
 
 def session_open(engine_db=None):
@@ -463,9 +466,13 @@ def session_open(engine_db=None):
 
 def check_watch(db, engine_db=None, live=True, statvfs=os.statvfs):
     """The watcher a background check consults every CHECK_WATCH_S: a reason to step aside, or
-    None. An unreadable sessions table is not a session (the WAL and disk caps still apply)."""
+    None. An unreadable sessions table counts as a session: a check that never runs is safer
+    than one running during a race (it still shows as overdue after CHECK_OVERDUE_DAYS)."""
     def watch():
-        if session_open(engine_db):
+        open_ = session_open(engine_db)
+        if open_ is None:
+            return "race sessions unreadable (treated as a session)"
+        if open_:
             return "a race/practice session is open"
         if live:
             try:
@@ -1069,6 +1076,7 @@ STATUS_EVERY_S = float(os.environ.get("ARCHIVE_STATUS_EVERY_S", "10"))
 WRITE_STALL_S = float(os.environ.get("ARCHIVE_WRITE_STALL_S", "30"))
 # Signal K down this long reads as "not recording: no data from Signal K".
 WS_DOWN_S = float(os.environ.get("ARCHIVE_WS_DOWN_S", "30"))
+WS_RETRY_S = 3.0                # pause before reconnecting to Signal K
 
 
 def recording_state(state, guard=None, now=None):
@@ -1116,6 +1124,8 @@ def write_status(state, guard=None, path=None, now=None):
         "rows_written": state.get("total", 0),
         "corrupt_rotations_this_run": state.get("rotations", 0),
         "background_check": chk.summary() if chk is not None else None,
+        "moved_file_check": (state["moved_file_check"].summary()
+                             if state.get("moved_file_check") is not None else None),
         "note": state.get("check_note"),       # quiet: not a "Not recording" reason
     }
     try:
@@ -1515,6 +1525,7 @@ def start_background_check(state, loop, db, rotated, engine_db=None):
     if rotated is not None:
         chk = BackgroundCheck(rotated, live=False,
                               watch=check_watch(rotated, engine_db, live=False))
+        state["moved_file_check"] = chk   # its verdict stays visible after the live checks
     else:
         gen = state.get("generation", 0)   # the archive file this check is reading
 
@@ -1571,33 +1582,59 @@ def _overdue_note(conn, now=None):
 
 
 async def check_scheduler(state, loop, db, rotated, engine_db=None, later_s=None):
-    """Run the background check until it reaches a verdict, stepping aside as `check_watch`
-    says (session open, WAL cap, disk) and retrying `later_s` later. A deferral asks the flusher
-    for a checkpoint, so the WAL the check held back is recycled."""
+    """Keep the archive checked, for as long as the process runs.
+
+    First the file moved aside at startup, if any (a verdict for the human). Then the live file
+    whenever its last passing check is CHECK_EVERY_DAYS old (persisted in sync_state, so a
+    restart does not re-scan a file checked yesterday). Every `later_s` it re-evaluates: a
+    check that is due but cannot run (session open, WAL cap, disk) is retried, and after
+    CHECK_OVERDUE_DAYS without a pass the quiet note says "Archive check overdue" — also on a
+    long run after an earlier pass. A deferral asks the flusher for a checkpoint, so the WAL the
+    check held back is recycled."""
     later = CHECK_LATER_S if later_s is None else later_s
     while True:
+        conn = state.get("conn")
+        if state.get("rotate_pending") or conn is None:
+            await asyncio.sleep(later)          # the flusher is replacing the file
+            continue
+        if rotated is None:
+            last = await loop.run_in_executor(None, _meta, conn, "last_full_check")
+            try:
+                age = (datetime.now(timezone.utc) - datetime.fromisoformat(last)
+                       ).total_seconds() if last else None
+            except ValueError:
+                age = None
+            if age is not None and age < CHECK_EVERY_DAYS * 86400:
+                note = await loop.run_in_executor(None, _overdue_note, conn)
+                if note != state.get("check_note"):
+                    state["check_note"] = note
+                    state["_status_dirty"] = True
+                await asyncio.sleep(later)
+                continue
         chk = start_background_check(state, loop, db, rotated, engine_db)
         while chk.result is None:
             await asyncio.sleep(0.2)
         status = chk.result["status"]
-        conn = state.get("conn")
-        if status == "deferred" or status == "error":
+        if status in ("deferred", "error"):
             if chk.live:
                 state["checkpoint_due"] = True
-                note = (await loop.run_in_executor(None, _overdue_note, conn)
-                        if conn is not None else None)
+                note = await loop.run_in_executor(None, _overdue_note, conn)
                 state["check_note"] = note or f"Archive check waiting: {chk.result['detail']}"
                 state["_status_dirty"] = True
             await asyncio.sleep(later)
             continue
-        if chk.live and status == "ok" and conn is not None:
+        if not chk.live:
+            rotated = None                      # the evidence check is done; now the live file
+            continue
+        if status == "ok":
             now = datetime.now(timezone.utc).isoformat()
             await loop.run_in_executor(None, _meta, conn, "last_full_check", now)
             await loop.run_in_executor(
                 None, lambda: _meta(conn, "full_check_pending_since", delete=True))
-        state["check_note"] = None
-        state["_status_dirty"] = True
-        return chk
+            state["check_passes"] = state.get("check_passes", 0) + 1
+            state["check_note"] = None
+            state["_status_dirty"] = True
+        # corrupt -> the flusher rotates (rotate_pending); aborted -> a rotation stopped it
 
 
 def _checkpoint(conn):
@@ -1657,11 +1694,13 @@ async def run(db=None, ws_connect=None, state=None, check=True):
         try:
             async with ws_connect(SIGNALK_WS, ping_interval=20) as ws:
                 print("[archive] connected to Signal K", flush=True)
-                state["ws_down_since"] = None
                 async for msg in ws:
                     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
                     rows = parse_delta(msg, now, state)
                     if rows:
+                        # Only usable telemetry ends an outage: a Signal K that accepts and
+                        # closes (or sends only hellos) must still read "no instrument data".
+                        state["ws_down_since"] = None
                         buf.extend(rows)
                         if len(buf) > MAX_BUFFER_ROWS:
                             cap_buffer(buf, state)     # the flusher is stuck; keep RAM bounded
@@ -1674,7 +1713,7 @@ async def run(db=None, ws_connect=None, state=None, check=True):
             print(f"[archive] Signal K WS error ({exc}); retrying in 3s", flush=True)
         if state.get("ws_down_since") is None:
             state["ws_down_since"] = time.monotonic()
-        await asyncio.sleep(3)
+        await asyncio.sleep(WS_RETRY_S)
 
 
 if __name__ == "__main__":
