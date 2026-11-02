@@ -374,5 +374,64 @@ got = asyncio.run(verdicts())
 check("a verdict about the current file schedules a rotation", got["same file"] is True)
 check("a verdict about a replaced file is ignored", got["file replaced since"] is False)
 
+# --- 7. the background check retries uncertain errors before a verdict ----------------------
+print("background check: a one-off 'disk I/O error' is retried, not a corruption verdict:")
+
+
+class FailingConn:
+    def __init__(self, exc):
+        self.exc = exc
+
+    def set_progress_handler(self, *a):
+        pass
+
+    def execute(self, *a):
+        raise self.exc
+
+    def close(self):
+        pass
+
+
+def check_with(errors):
+    """Run a live BackgroundCheck whose first len(errors) attempts raise those errors."""
+    real_connect = sqlite3.connect
+    calls = []
+
+    def connect(*a, **k):
+        calls.append(1)
+        if len(calls) <= len(errors):
+            return FailingConn(errors[len(calls) - 1])
+        return real_connect(*a, **k)
+    flagged = []
+    sqlite3.connect = connect
+    try:
+        chk = archiver.BackgroundCheck(db, live=True, duty=1.0,
+                                       on_corrupt=lambda: flagged.append(1)).start()
+        chk.thread.join(30)
+    finally:
+        sqlite3.connect = real_connect
+    return chk.result["status"], len(calls), bool(flagged)
+
+
+archiver.CHECK_RETRY_S = 0.01
+with tempfile.TemporaryDirectory() as d:
+    db = Path(d) / "archive.db"
+    c = archiver.open_db(db)
+    archiver.write_rows(c, cf.rows(100))
+    c.close()
+    io_err = sqlite3.OperationalError("disk I/O error")
+    status, n, flagged = check_with([io_err])
+    check(f"I/O error once, then ok: verdict {status}, {n} attempts, no rotation",
+          status == "ok" and n == 2 and not flagged)
+    status, n, flagged = check_with([io_err] * 4)
+    check(f"I/O error on every try: verdict {status} after {n} attempts, rotation",
+          status == "corrupt" and n == 4 and flagged)
+    status, n, flagged = check_with([sqlite3.OperationalError("database is locked")] * 4)
+    check(f"locked on every try: verdict {status}, never a rotation",
+          status == "error" and n == 4 and not flagged)
+    status, n, flagged = check_with([sqlite3.DatabaseError("database disk image is malformed")])
+    check(f"'malformed' once: verdict {status} at once ({n} attempt)",
+          status == "corrupt" and n == 1 and flagged)
+
 print("\n" + ("PASS" if ok else "FAIL"))
 raise SystemExit(0 if ok else 1)

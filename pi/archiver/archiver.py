@@ -429,6 +429,9 @@ CHECK_DUTY = float(os.environ.get("ARCHIVE_CHECK_DUTY", "0.5"))
 CHECK_SLICE_S = 0.05
 # How long a rotation waits for a check to let go of the file before deferring itself.
 CHECK_STOP_TIMEOUT_S = float(os.environ.get("ARCHIVE_CHECK_STOP_TIMEOUT_S", "30"))
+# An uncertain error during the check (I/O, busy, locked) is retried this often before a verdict.
+CHECK_RETRIES = int(os.environ.get("ARCHIVE_CHECK_RETRIES", "3"))
+CHECK_RETRY_S = float(os.environ.get("ARCHIVE_CHECK_RETRY_S", "3.5"))
 
 
 class CheckerBusy(OSError):
@@ -511,9 +514,10 @@ class BackgroundCheck:
             self._slice_start = time.monotonic()
         return 0
 
-    def _run(self):
-        _lower_priority()
-        result, conn = None, None
+    def _attempt(self):
+        """One quick_check on a fresh read-only connection. Returns a result dict, or raises
+        what the file raised."""
+        conn = None
         try:
             self.conn_open = True       # before connect: a stalled open holds the file too
             conn = sqlite3.connect(f"file:{self.path}?mode=ro", uri=True, timeout=30,
@@ -521,25 +525,52 @@ class BackgroundCheck:
             self._slice_start = time.monotonic()
             conn.set_progress_handler(self._throttle, 1000)
             rows = [r[0] for r in conn.execute("PRAGMA quick_check(10)").fetchall()]
-            if rows == ["ok"]:
-                result = {"status": "ok", "detail": None}
-            else:
-                result = {"status": "corrupt", "detail": "; ".join(map(str, rows))[:500]}
-        except (sqlite3.DatabaseError, UnicodeDecodeError) as exc:
-            if self.stop_event.is_set():
-                result = {"status": "aborted", "detail": "stopped"}
-            elif _is_bad_file(exc):
-                result = {"status": "corrupt", "detail": f"{type(exc).__name__}: {exc}"[:500]}
-            else:
-                result = {"status": "error", "detail": f"{type(exc).__name__}: {exc}"[:500]}
-        except Exception as exc:            # never let the check take anything else down
-            result = {"status": "error", "detail": f"{type(exc).__name__}: {exc}"[:500]}
         finally:
             if conn is not None:
                 try:
                     conn.close()
                 except Exception:
                     pass
+            self.conn_open = False
+        if rows == ["ok"]:
+            return {"status": "ok", "detail": None}
+        return {"status": "corrupt", "detail": "; ".join(map(str, rows))[:500]}
+
+    def _run(self):
+        """The startup rule, applied here too: clear damage -> corrupt at once; anything
+        uncertain (a one-off "disk I/O error", busy, locked) is retried CHECK_RETRIES times,
+        CHECK_RETRY_S apart (~10 s) before a verdict. A persistent I/O-type error then reads
+        as corrupt; a persistent lock/busy stays an error (no rotation — not the file)."""
+        _lower_priority()
+        result, attempt = None, 0
+        try:
+            while True:
+                try:
+                    result = self._attempt()
+                    break
+                except (sqlite3.DatabaseError, UnicodeDecodeError) as exc:
+                    detail = f"{type(exc).__name__}: {exc}"[:500]
+                    if self.stop_event.is_set():
+                        result = {"status": "aborted", "detail": "stopped"}
+                        break
+                    if _clearly_damaged(exc):
+                        result = {"status": "corrupt", "detail": detail}
+                        break
+                    if attempt < CHECK_RETRIES:
+                        attempt += 1
+                        print(f"[archive] background check of {self.path.name}: {detail}; "
+                              f"retry {attempt}/{CHECK_RETRIES} in {CHECK_RETRY_S:.0f}s",
+                              flush=True)
+                        if self.stop_event.wait(CHECK_RETRY_S):
+                            result = {"status": "aborted", "detail": "stopped"}
+                            break
+                        continue
+                    result = {"status": "corrupt" if _is_bad_file(exc) else "error",
+                              "detail": f"{detail} (persisted over {attempt + 1} tries)"}
+                    break
+        except Exception as exc:            # never let the check take anything else down
+            result = {"status": "error", "detail": f"{type(exc).__name__}: {exc}"[:500]}
+        finally:
             self.conn_open = False
             with _CHECKS_LOCK:
                 if _CHECKS.get(str(self.path.resolve())) is self:
@@ -1312,6 +1343,26 @@ PRUNE_CHUNK_ROWS = int(os.environ.get("ARCHIVE_PRUNE_CHUNK_ROWS", "20000"))
 PRUNE_PAUSE_S = float(os.environ.get("ARCHIVE_PRUNE_PAUSE_S", "0.05"))
 
 
+def _prune_gaps(wins, cutoff):
+    """The time ranges the prune may delete: before `cutoff` and outside every kept window
+    (windows are inclusive [a, b], compared as strings like the rows' ISO times). Yields
+    (lo, lo_inclusive, hi) meaning lo <(=) time < hi."""
+    merged = []
+    for a, b in sorted(w for w in wins if w[0] < cutoff):
+        if merged and a <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], b)
+        else:
+            merged.append([a, b])
+    lo, incl = "", True
+    for a, b in merged:
+        if a > lo or (incl and a >= lo):
+            yield lo, incl, a
+        if b >= cutoff:
+            return
+        lo, incl = b, False
+    yield lo, incl, cutoff
+
+
 def prune(conn, engine_db=None, retain_days=None, chunk_rows=None, pause_s=None):
     """Delete out-of-session readings older than the retention window, `chunk_rows` at a time
     under the write lock (released between chunks). Returns rows deleted, or None when pruning
@@ -1327,31 +1378,31 @@ def prune(conn, engine_db=None, retain_days=None, chunk_rows=None, pause_s=None)
               flush=True)
         return None
     cutoff = _iso(datetime.now(timezone.utc).timestamp() - days * 86400)
-    cond = "time < ?"
-    args = [cutoff]
-    for a, b in wins:
-        cond += " AND NOT (time >= ? AND time <= ?)"
-        args += [a, b]
-    # Walk the time index forward from a cursor, so rows kept inside a session window are read
-    # once in all, not once per chunk. Each chunk deletes every row it selected, so the loop
-    # always progresses and ends.
-    total, chunks, since = 0, 0, ""
-    while True:
-        with _WRITE_LOCK:
-            sel = conn.execute(
-                f"SELECT id, time FROM readings "
-                f"WHERE time >= ? AND {cond} ORDER BY time LIMIT ?",
-                [since] + args + [chunk]).fetchall()
-            if not sel:
-                break
-            conn.execute("DELETE FROM readings WHERE id IN (SELECT value FROM json_each(?))",
-                         (json.dumps([r[0] for r in sel]),))
-            conn.commit()
-        total += len(sel)
-        chunks += 1
-        since = sel[-1][1]
-        if pause > 0:
-            time.sleep(pause)             # outside the lock: the flusher's turn
+    # Delete only inside the GAPS between kept windows, never filtering windows row by row: a
+    # LIMIT bounds the rows a query returns, not the rows it scans, so a filter over a big kept
+    # session would scan all of it under the write lock and return nothing (Codex: 300k kept
+    # rows, 1.8M VM steps, recording blocked). Inside a gap every row is deletable, so each
+    # chunk scans exactly the rows it deletes; kept rows are never read.
+    total, chunks = 0, 0
+    for lo, lo_incl, hi in _prune_gaps(wins, cutoff):
+        since = lo
+        while True:
+            with _WRITE_LOCK:
+                sel = conn.execute(
+                    f"SELECT id, time FROM readings WHERE time {'>=' if lo_incl else '>'} ? "
+                    f"AND time >= ? AND time < ? ORDER BY time LIMIT ?",
+                    (lo, since, hi, chunk)).fetchall()
+                if not sel:
+                    break
+                conn.execute("DELETE FROM readings WHERE id IN "
+                             "(SELECT value FROM json_each(?))",
+                             (json.dumps([r[0] for r in sel]),))
+                conn.commit()
+            total += len(sel)
+            chunks += 1
+            since = sel[-1][1]            # everything selected was deleted: always progresses
+            if pause > 0:
+                time.sleep(pause)         # outside the lock: the flusher's turn
     if total:
         print(f"[archive] pruned {total} out-of-session rows older than {cutoff} in {chunks} "
               f"chunk(s) ({len(wins)} session window(s) kept)", flush=True)

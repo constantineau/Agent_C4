@@ -55,7 +55,9 @@ print(c.execute('select count(*),min(time),max(time) from readings').fetchone())
   writes went), never a whole-file scan: on the SD card a `quick_check` of 24 GB took 39 min.
   The full `quick_check` runs afterwards in a background thread at low priority (nice 19, idle
   I/O class, and at most `ARCHIVE_CHECK_DUTY` of the time). If it finds damage in the live
-  file, the file is rotated as below.
+  file, the file is rotated as below. Same rule as at startup: clear damage is a verdict at
+  once; an uncertain error (I/O, busy, locked) is retried `ARCHIVE_CHECK_RETRIES` times,
+  `ARCHIVE_CHECK_RETRY_S` apart, and only a persistent I/O-type error counts as damage.
 - **Corruption.** A corrupt file is moved aside as `archive.corrupt-<stamp>.db` (never deleted;
   `tools/salvage.py` recovers almost all of it) and a fresh one is started. At startup any
   database error from the open, the schema read or the bounded checks counts (also `string or
@@ -76,8 +78,10 @@ print(c.execute('select count(*),min(time),max(time) from readings').fetchone())
 - **Failing writes.** A failed batch is rolled back and requeued in order. The queue is capped
   at `ARCHIVE_MAX_BUFFER_ROWS`; past it the oldest rows are dropped and counted. The drop
   warning prints at most once per `ARCHIVE_DROP_LOG_EVERY_S` with the count since the last one.
-- **Prune.** The hourly retention prune deletes in chunks of `ARCHIVE_PRUNE_CHUNK_ROWS`, taking
-  the write lock one chunk at a time, so the flusher keeps writing while it runs.
+- **Prune.** The hourly retention prune deletes only inside the gaps between kept session
+  windows, in chunks of `ARCHIVE_PRUNE_CHUNK_ROWS`, taking the write lock one chunk at a time.
+  Kept rows are never scanned, so a big kept session costs nothing and the flusher keeps
+  writing while it runs.
 - **Status file** (`archiver-status.json`, rewritten every `ARCHIVE_STATUS_EVERY_S`):
   `recording`, `reason` (`disk_full` / `rotation_pending` / `no_signalk` / `write_failing`),
   `stop_cause` (`high_mark` / `hard_floor`), `disk_used_pct`, `disk_really_used_pct`,

@@ -182,5 +182,67 @@ with tempfile.TemporaryDirectory() as d:
     check("a second prune finds nothing", again == 0)
     conn.close()
 
+print("prune: a big kept session is never scanned under the lock (Codex: 1.8M VM steps):")
+with tempfile.TemporaryDirectory() as d:
+    db = Path(d) / "archive.db"
+    eng = Path(d) / "engine.db"
+    now = datetime.now(timezone.utc)
+    t0 = now - timedelta(days=20)
+    conn = archiver.open_db(db)
+    # 200k old rows, one per second, ALL inside one kept session: nothing is deletable
+    for start in range(0, 200_000, 50_000):
+        archiver.write_rows(conn, [(iso(t0 + timedelta(seconds=i)),) + ROW[1:]
+                                   for i in range(start, start + 50_000)])
+    engine_db(eng, [(1, None, t0.timestamp() - 60, t0.timestamp() + 200_000 + 60)])
+    real_win = archiver.session_windows
+    archiver.session_windows = lambda e, conn=None: real_win(e, conn=None)
+    steps = [0]
+
+    def count_steps():
+        steps[0] += 100
+        return 0
+    conn.set_progress_handler(count_steps, 100)
+    try:
+        deleted = archiver.prune(conn, engine_db=str(eng), retain_days=7, chunk_rows=1000,
+                                 pause_s=0)
+    finally:
+        archiver.session_windows = real_win
+        conn.set_progress_handler(None, 0)
+    check("nothing deleted", deleted == 0)
+    check(f"{steps[0]} VM steps for the whole prune (< 20,000; a scan of the kept rows is "
+          f"millions)", steps[0] < 20_000)
+    conn.close()
+
+print("prune: the gaps between windows delete exactly what the plain filter would:")
+with tempfile.TemporaryDirectory() as d:
+    db = Path(d) / "archive.db"
+    eng = Path(d) / "engine.db"
+    now = datetime.now(timezone.utc)
+    t0 = now - timedelta(days=30)
+    conn = archiver.open_db(db)
+    times = [iso(t0 + timedelta(minutes=7 * i)) for i in range(6000)]   # ~29 days
+    archiver.write_rows(conn, [(t,) + ROW[1:] for t in times])
+    ts = t0.timestamp()
+    sessions = [(1, None, ts + 3600, ts + 7200),          # two overlapping
+                (2, None, ts + 5000, ts + 9000),
+                (3, None, ts + 86400 * 5, ts + 86400 * 5 + 1800),
+                (4, None, ts - 999, ts + 60),              # starts before the first row
+                (5, None, ts + 86400 * 22, ts + 86400 * 25),   # straddles the cutoff
+                (6, None, ts + 86400 * 10 + 420, ts + 86400 * 10 + 420)]   # zero length
+    engine_db(eng, sessions)
+    wins = real_win(str(eng), conn=None)
+    cutoff = archiver._iso(now.timestamp() - 7 * 86400)
+    expect = [t for t in times
+              if not (t < cutoff and not any(a <= t <= b for a, b in wins))]
+    archiver.session_windows = lambda e, conn=None: real_win(e, conn=None)
+    try:
+        archiver.prune(conn, engine_db=str(eng), retain_days=7, chunk_rows=97, pause_s=0)
+    finally:
+        archiver.session_windows = real_win
+    left = [r[0] for r in conn.execute("SELECT time FROM readings ORDER BY time")]
+    check(f"same rows kept as the plain filter ({len(left)} vs {len(expect)})",
+          left == sorted(expect))
+    conn.close()
+
 print("\n" + ("PASS" if ok else "FAIL"))
 raise SystemExit(0 if ok else 1)
