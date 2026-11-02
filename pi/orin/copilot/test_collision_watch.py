@@ -16,6 +16,7 @@ stubbed LLM, no live engine, no model. Covers GitHub #29:
     cd pi/orin && python3 -m copilot.test_collision_watch
 """
 import asyncio
+import math
 import sys
 import threading
 import time
@@ -348,6 +349,16 @@ async def review_scenarios() -> bool:
     st = await _tick()
     ok &= _check("…with a true heading as the COG stand-in: full CPA → 'Collision risk: FAST'",
                  st["active"] and st["active"][0]["headline"] == "Collision risk: FAST")
+    # Codex on #191 at c4282b1: heading EAST is the only course, a stationary target 0.1 nm NORTH.
+    # The heading-based CPA says "not closing"; the range warning must still win.
+    anch2 = {"mmsi": "366999034", "name": "ANCH", "lat": 45.0 + 0.1 / 60.0, "lon": -83.0,
+             "sog": 0.0, "cog": 0.0}
+    _fresh({"conditions": _COND, "ais": _engine_ais([anch2], own_sog_kn=6.0, own_cog=None,
+                                                    heading=math.radians(90.0))})
+    st = await _tick()
+    ok &= _check("heading-only course can't suppress: 'Contact close: ANCH', now, 'our course approximate'",
+                 st["active"] and st["active"][0]["headline"] == "Contact close: ANCH"
+                 and st["active"][0]["urgency"] == "now" and "our course approximate" in st["active"][0]["detail"])
     nos2 = {"mmsi": "366999033", "name": "MOORED", "lat": 45.0 + 0.2 / 60.0, "lon": -83.0,
             "sog": None, "cog": None}
     _fresh({"conditions": _COND, "ais": _engine_ais([nos2], own_sog_kn=0.3, own_cog=0.0)})

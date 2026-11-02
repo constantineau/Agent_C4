@@ -195,9 +195,16 @@ def _own_ship():
     cog_deg = math.degrees(cog) % 360 if cog is not None else None
     src = "measured" if sog_kn is not None else None
     cog_src = "measured" if cog_deg is not None else None
+    # course order: MEASURED COG, then the course DERIVED from our own fixes (the real track, drift
+    # included), then HEADING only as a last resort — heading ignores leeway and current, so in a
+    # drift it can point the wrong way entirely (Codex on #191: track north, heading east)
+    if lat is not None and lon is not None and e is not None:
+        d = _derive(_note_fix(lat, lon, e), lat, lon, e)
+        if d is not None and sog_kn is None:
+            sog_kn, src = d[0], "derived"
+        if d is not None and cog_deg is None and d[1] is not None:
+            cog_deg, cog_src = d[1], "derived"
     if cog_deg is None:
-        # no COG: the boat's HEADING is the next best course (true, else magnetic + variation);
-        # leeway/current make it approximate, and the reply says so (own_cog_source "heading")
         hdg = _motion_sample("navigation.headingTrue", now)
         if hdg is None:
             mag = _motion_sample("navigation.headingMagnetic", now)
@@ -205,12 +212,6 @@ def _own_ship():
             hdg = mag + var if mag is not None and var is not None else None
         if hdg is not None:
             cog_deg, cog_src = math.degrees(hdg) % 360, "heading"
-    if lat is not None and lon is not None and e is not None:
-        d = _derive(_note_fix(lat, lon, e), lat, lon, e)
-        if d is not None and sog_kn is None:
-            sog_kn, src = d[0], "derived"
-        if d is not None and cog_deg is None and d[1] is not None:
-            cog_deg, cog_src = d[1], "derived"
     return {
         "lat": lat, "lon": lon, "sog": sog_kn, "cog": cog_deg, "motion_source": src,
         "cog_source": cog_src, "age_s": max(0.0, now - e) if e is not None else None,
@@ -436,5 +437,9 @@ def get_ais_targets(max_range_nm: float = 12):
     return {**base, "count": len(targets), "own_fix": True, "own_fix_reason": None,
             "underway": underway, "own_sog_kn": round(own["sog"], 1) if own["sog"] is not None else None,
             "own_motion_source": own.get("motion_source"), "own_cog_source": own.get("cog_source"),
+            # our velocity is approximate (a derived speed, or a derived / heading course): the
+            # copilot keeps the range warning alongside the CPA and shows whichever is more urgent
+            "own_motion_approx": bool(own.get("motion_source") == "derived"
+                                      or own.get("cog_source") in ("heading", "derived")),
             "feed_silent": feed_silent, "receiver_missing": rx_missing,
             "targets": targets}

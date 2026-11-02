@@ -252,6 +252,25 @@ hs.vals["navigation.headingMagnetic"] = math.radians(95.0)
 hs.vals["navigation.magneticVariation"] = math.radians(-7.0)
 ais._FIXES.clear()
 check("…else magnetic + variation", run(hs)["own_cog_source"] == "heading")
+# Codex on #191 at c4282b1 (drift): our fixes track 6 kn NORTH, the heading says EAST, no COG.
+# A stationary target 0.1 nm north must be closing: the derived track beats the heading.
+anch = row("366999034", 0.1 * NM_LAT, 0.0, 0.0, name="ANCH")
+ais._FIXES[:] = [(LAT0 - 0.0333 * NM_LAT, LON0, time.time() - 21)]    # 20 s back, 0.0333 nm south
+dr = Src([anch], sog_kn=6.0)
+dr.vals["navigation.courseOverGroundTrue"] = None
+dr.vals["navigation.headingTrue"] = math.radians(90.0)
+r = run(dr)
+t = by(r, "366999034")
+check("drift: fixes north + heading east → course from the derived track (~000), not the heading",
+      r["own_cog_source"] == "derived" and t["closing"] is True and t["cpa_nm"] < 0.02)
+check("…flagged approximate (the copilot keeps the range warning too)", r["own_motion_approx"] is True)
+ais._FIXES.clear()
+r = run(dr)
+t = by(r, "366999034")
+check("heading the only course (east): CPA says 'not closing' — but it's flagged approximate",
+      r["own_cog_source"] == "heading" and t["closing"] is not True and r["own_motion_approx"] is True)
+ais._FIXES.clear()
+check("measured SOG + COG → not approximate", run(Src([anch], sog_kn=6.0))["own_motion_approx"] is False)
 ais._FIXES[:] = [(LAT0 - 0.05 * NM_LAT, LON0, time.time() - 600)]
 check("fixes 10 min apart → too far apart to derive → None",
       run(Src([], sog_kn=None, fix_age=1))["underway"] is None)

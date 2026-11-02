@@ -130,6 +130,22 @@ def _safety_callouts(ais):
             hits.append((0 if act else 1, -1.0, rng, c))
             continue
         level = _ais_level(t)
+        if ais.get("own_motion_approx"):
+            # our own velocity is approximate (heading for course, or derived from fixes): the CPA
+            # can't be trusted to SUPPRESS a warning. Keep the range warning too; the more urgent wins.
+            rng = _num(t.get("range_nm"))
+            rlevel = (None if rng is None else "act" if rng <= AIS_ACT_CPA_NM
+                      else "watch" if rng <= AIS_WATCH_CPA_NM else None)
+            rank = {"act": 0, "watch": 1, None: 2}
+            if rank[rlevel] < rank[level]:
+                ract = rlevel == "act"
+                c = _callout(f"ais:{key}:rng-{rlevel}", "safety", "now" if ract else "soon",
+                             f"Contact close: {name}",
+                             f"{rng} nm{brg_s} · our course approximate{age_s}", ["get_ais"],
+                             "high" if ract else "med")
+                c["tcpa_min"] = None
+                hits.append((0 if ract else 1, -1.0, rng, c))
+                continue
         if not level:
             continue
         act = level == "act"
