@@ -141,6 +141,26 @@ test("blind: the coach timer is stopped or disabled → OFF: copilot stopped", (
   }
 });
 
+test("repeated HTTP 200 `{}` replies are failed polls: the watchdog still trips (Codex on #191)", () => {
+  const st = COL.newState(T0);
+  for (let t = 0; t <= 75000; t += 15000) assert.equal(COL.track(st, {}, T0 + t), false);
+  assert.equal(COL.offReason(null, st, T0 + 75000), "copilot offline");
+  // junk shapes too
+  for (const bad of [[], "ok", { active: [] }, { active: [], history: [], running: "yes", updated_at: 1 },
+    { active: [], history: [], running: true, updated_at: "1000" }, { active: {}, history: [], running: true, updated_at: 1 }]) {
+    assert.equal(COL.validCoach(bad), false, JSON.stringify(bad));
+  }
+  assert.equal(COL.validCoach(coach({})), true);
+  assert.equal(COL.validCoach(coach({ updated_at: null })), true);    // before the copilot's first tick
+});
+
+test("updated_at must ADVANCE: the same (or an older) stamp replayed goes 'copilot stalled'", () => {
+  const c = coach({ updated_at: 1000 });
+  const st = live(c, T0);
+  for (let t = 15000; t <= 120000; t += 15000) COL.track(st, coach({ updated_at: t % 30000 ? 1000 : 900 }), T0 + t);
+  assert.equal(COL.offReason(c, st, T0 + 120000), "copilot stalled");
+});
+
 test("a working, quiet copilot is not OFF (and the strip is hidden)", () => {
   const c = coach({});
   assert.equal(COL.offReason(c, live(c), T0), null);
@@ -181,7 +201,7 @@ test("dashboard.js wires it: renderCoach uses the strip, fetchCoach judges OFF o
   const src = fs.readFileSync(path.join(__dirname, "dashboard", "dashboard.js"), "utf8");
   const html = fs.readFileSync(path.join(__dirname, "dashboard", "index.html"), "utf8");
   assert.ok(/COL\.strip\(App\.coach, App\.coachOff\)/.test(src));
-  assert.ok(/COL\.track\(colState, r, Date\.now\(\)\)/.test(src) && /App\.coachOff = COL\.watchdogStep/.test(src));
+  assert.ok(/if \(COL\.track\(colState, r, Date\.now\(\)\)\) App\.coach = r;/.test(src) && /App\.coachOff = COL\.watchdogStep/.test(src));
   assert.ok(/COL\.alertsFor\(/.test(src));
   assert.ok(!/c\.history\[0\]\.spoken/.test(src), "the old history-first strip is gone");
   assert.ok(html.indexOf("collisionwatch.js") > -1 && html.indexOf("collisionwatch.js") < html.indexOf("dashboard.js?"));

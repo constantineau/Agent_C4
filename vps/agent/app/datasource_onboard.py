@@ -68,6 +68,23 @@ def _epoch(iso):
         return None
 
 
+# A Signal K update timestamp later than receipt by more than this is clock nonsense → receipt.
+FUTURE_SKEW_S = 2.0
+
+
+def _update_time(upd, now):
+    """When a Signal K update's readings were taken: its own `timestamp`, not the moment the delta
+    reached us. A position held up 4 min in a queue is 4 min old (at 24 kn, 1.6 nm) — dating it by
+    receipt would call it fresh. Guards: a missing or unparseable stamp → receipt; a stamp in the
+    future (beyond FUTURE_SKEW_S) → clamped to receipt; an old one is kept, so its real age shows
+    (the stale-fix guard and the AIS window then treat it as old, which it is)."""
+    ts = upd.get("timestamp") if isinstance(upd, dict) else None
+    e = _epoch(ts) if isinstance(ts, str) else None
+    if e is None or e > now + FUTURE_SKEW_S:
+        return now
+    return min(e, now)
+
+
 # Sources that carry AIS traffic rather than own-ship instruments. Until 2026-09-07 the
 # archiver had no vessel-context filter, so `subscribe=all` put every AIS target into `readings`
 # under the own-ship BOAT_ID (fixed in pi/archiver/archiver.py). Any archive written before that
@@ -309,26 +326,30 @@ class OnboardSource:
             if is_other:
                 # An AIS target: accumulate per-MMSI, NEVER into the own-ship live cache.
                 for upd in data.get("updates", []):
+                    at = _update_time(upd, now)
                     for v in upd.get("values", []):
-                        self._record_ais(mmsi, now, v.get("path"), v.get("value"))
+                        self._record_ais(mmsi, now, v.get("path"), v.get("value"), at)
                 return
             for upd in data.get("updates", []):
                 source = (upd.get("$source")
                           or (upd.get("source") or {}).get("label") or "unknown")
+                at = _update_time(upd, now)     # when the reading was taken, not when it reached us
                 for v in upd.get("values", []):
                     path, val = v.get("path"), v.get("value")
                     if not path:
                         continue
                     if isinstance(val, (int, float)) and not isinstance(val, bool):
-                        self._live[(path, source)] = (now, float(val))
+                        self._live[(path, source)] = (at, float(val))
                     elif isinstance(val, dict):  # flatten position/attitude like the archiver
                         for k, sub in val.items():
                             if isinstance(sub, (int, float)) and not isinstance(sub, bool):
-                                self._live[(f"{path}.{k}", source)] = (now, float(sub))
+                                self._live[(f"{path}.{k}", source)] = (at, float(sub))
 
-    def _record_ais(self, mmsi, now, path, value):
+    def _record_ais(self, mmsi, now, path, value, at=None):
         """Accumulate the fields we need from one AIS target's delta, in kn / deg true —
-        the same shape the cloud uplink writes to `ais_targets` (caller holds _live_lock)."""
+        the same shape the cloud uplink writes to `ais_targets` (caller holds _live_lock).
+        `now` = when we heard it (feed liveness); `at` = the update's own timestamp (when the
+        report was made, see _update_time), which dates the position for dead reckoning."""
         t = self._ais.setdefault(mmsi, {"mmsi": mmsi})
         t["time"] = now
         if path in ("name", "") and isinstance(value, str) and value:
@@ -336,7 +357,7 @@ class OnboardSource:
         elif path == "navigation.position" and isinstance(value, dict):
             # its own clock: `time` above moves on ANY delta (a name update too), and the collision
             # watch dead-reckons a target by the age of its POSITION
-            t["pos_time"] = now
+            t["pos_time"] = now if at is None else at
             if isinstance(value.get("latitude"), (int, float)):
                 t["lat"] = float(value["latitude"])
             if isinstance(value.get("longitude"), (int, float)):

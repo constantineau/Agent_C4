@@ -295,6 +295,61 @@ with tempfile.TemporaryDirectory() as d:
     src._live = {(LAT, GPS24): (now - 1, 45.0), (LON, GPS24): (now - 1, -83.0)}
     check("the 24xd live and fresh → own_fix true", ais.get_ais_targets()["own_fix"] is True)
 
+    # Codex on #191 at a86c000: date a reading by the Signal K update's own timestamp, not receipt
+    import json as _json
+    src._self_ctx = "vessels.urn:mrn:signalk:uuid:c4"
+    src._ais = {}
+    t_rx = time.time()
+
+    def delta(ctx, ts, path, value, source="n2k-socketcan.3"):
+        upd = {"$source": source, "values": [{"path": path, "value": value}]}
+        if ts is not None:
+            upd["timestamp"] = ts
+        return _json.dumps({"context": ctx, "updates": [upd]})
+
+    SHIP = "vessels.urn:mrn:imo:mmsi:366999020"
+    src._ingest_live(delta(SHIP, iso(t_rx - 240), "navigation.position",
+                           {"latitude": 45.1, "longitude": -83.0}))
+    tgt = src.ais_targets(15)[0]
+    check("AIS position delayed 4 min: pos_time is the update's stamp (~240 s old), not receipt",
+          abs(t_rx - tgt["pos_time"] - 240) < 2)
+    check("…while `time` (heard) is receipt, so the feed still counts as alive", abs(tgt["time"] - t_rx) < 2)
+    src._ingest_live(delta(SHIP, iso(t_rx + 3600), "navigation.position",
+                           {"latitude": 45.1, "longitude": -83.0}))
+    check("a stamp an hour in the future is clamped to receipt",
+          abs(src.ais_targets(15)[0]["pos_time"] - t_rx) < 2)
+    src._ingest_live(delta(SHIP, "garbage", "navigation.position", {"latitude": 45.1, "longitude": -83.0}))
+    check("an unparseable stamp → receipt", abs(src.ais_targets(15)[0]["pos_time"] - t_rx) < 2)
+    src._ingest_live(delta(SHIP, iso(t_rx - 3 * 3600), "navigation.position",
+                           {"latitude": 45.1, "longitude": -83.0}))
+    check("a stamp 3 h old keeps its real age (and drops out of the 15-min window)",
+          src.ais_targets(15)[0]["pos_time"] < t_rx - 3 * 3600 + 5)
+    # end to end: 24 kn ship, report stamped 4 min ago 6 nm north, steaming at us; we're stopped
+    src._ais = {}
+    src._ingest_live(delta(SHIP, iso(t_rx - 240), "navigation.speedOverGround", 24 / ais._MS_TO_KN))
+    src._ingest_live(delta(SHIP, iso(t_rx - 240), "navigation.courseOverGroundTrue", math.pi))
+    src._ingest_live(delta(SHIP, iso(t_rx - 240), "navigation.position",
+                           {"latitude": 45.0 + 6 / 60.0, "longitude": -83.0}))
+    # own ship, also via the live link (own context, no context key), stamped 1 s ago
+    own_d = lambda path, v: _json.dumps({"updates": [{"$source": GPS24, "timestamp": iso(t_rx - 1),  # noqa: E731
+                                                      "values": [{"path": path, "value": v}]}]})
+    src._live = {}
+    src._ingest_live(own_d("navigation.position", {"latitude": 45.0, "longitude": -83.0}))
+    src._ingest_live(own_d("navigation.speedOverGround", 0.0))
+    src._ingest_live(own_d("navigation.courseOverGroundTrue", 0.0))
+    src._link_connected, src._link_last_msg = True, time.time()
+    ais.datasource.active = lambda: src
+    t = by(ais.get_ais_targets(), 366999020)          # onboard MMSIs are ints
+    check("…the delayed report is dead-reckoned 4 min: range ~4.4 nm, not 6", t and abs(t["range_nm"] - 4.4) < 0.1)
+    # own ship: a delayed own fix is dated by its stamp too, so the stale-fix guard sees it
+    src._live = {}
+    own_old = lambda path, v: _json.dumps({"updates": [{"$source": GPS24, "timestamp": iso(t_rx - 60),  # noqa: E731
+                                                        "values": [{"path": path, "value": v}]}]})
+    src._ingest_live(own_old("navigation.position", {"latitude": 45.0, "longitude": -83.0}))
+    e = src._live.get((LAT, GPS24), (None,))[0]
+    check("own position stamped 60 s ago is cached at its stamp, not receipt",
+          e is not None and abs(t_rx - e - 60) < 2)
+
     # the real live-link state the loop keeps
     src._link_connected, src._link_last_msg = True, now - 2
     lk = src.live_link()

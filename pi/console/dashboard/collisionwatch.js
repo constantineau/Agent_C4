@@ -24,12 +24,27 @@
     return { startMs: nowMs, lastOkMs: null, lastUpdatedAt: undefined, lastChangeMs: null };
   }
 
-  /* fold one poll into the state: `r` is the /coach body, or null when the fetch failed */
+  /* is this a real /coach answer? A proxy or a broken copilot can answer 200 with `{}` (or junk);
+     counting that as a good poll kept the watchdog from ever tripping (Codex on #191). */
+  function validCoach(r) {
+    return !!r && typeof r === "object" && !Array.isArray(r)
+      && Array.isArray(r.active) && Array.isArray(r.history)
+      && typeof r.running === "boolean"
+      && (r.updated_at === null || (typeof r.updated_at === "number" && isFinite(r.updated_at)));
+  }
+
+  /* fold one poll into the state: `r` is the /coach body, or null when the fetch failed. Returns
+     true when `r` is a real answer (the caller then holds it); a malformed one counts as a failed
+     poll. The held result only "moves" when updated_at ADVANCES (a repeated or older stamp does
+     not), so a copilot replaying the same answer goes "stalled". */
   function track(st, r, nowMs) {
-    if (!r) return st;
+    if (!validCoach(r)) return false;
     st.lastOkMs = nowMs;
-    if (r.updated_at !== st.lastUpdatedAt) { st.lastUpdatedAt = r.updated_at; st.lastChangeMs = nowMs; }
-    return st;
+    const u = r.updated_at;
+    const advanced = st.lastUpdatedAt === undefined
+      || (typeof u === "number" && (typeof st.lastUpdatedAt !== "number" || u > st.lastUpdatedAt));
+    if (advanced) { st.lastUpdatedAt = u; st.lastChangeMs = nowMs; }
+    return true;
   }
 
   /* why the watch is off from the tablet's side, or null. Uses only the tablet's clock (the Orin's
@@ -122,7 +137,7 @@
     return offReason(coach, st, nowMs);
   }
 
-  const api = { newState, track, offReason, strip, alertsFor, fetchJsonWithin, watchdogStep,
+  const api = { newState, track, validCoach, offReason, strip, alertsFor, fetchJsonWithin, watchdogStep,
     OFFLINE_MS, MAX_LINES };
   root.C4CollisionWatch = api;
   if (typeof module === "object" && module.exports) module.exports = api;

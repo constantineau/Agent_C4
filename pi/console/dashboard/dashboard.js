@@ -1168,8 +1168,7 @@
   async function fetchCoach() {
     if (App.src !== "live") return;
     const r = await COL.fetchJsonWithin(COPILOT + "/coach", { headers: { Accept: "application/json" } }, 12000);
-    COL.track(colState, r, Date.now());
-    if (r) App.coach = r;
+    if (COL.track(colState, r, Date.now())) App.coach = r;   // a malformed reply is a failed poll
     judgeCoach(true);
   }
   /* judge the collision watch on the tablet clock; re-render when the verdict changes (or always,
