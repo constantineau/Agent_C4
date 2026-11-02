@@ -36,10 +36,13 @@ def mktrack(trust=None):
     zigzag every fix) so distance and XTE depend on which fixes are counted: on a dead-straight
     line, dropping fixes changes neither, and the "not gated" checks below could not fail. The
     weave is five times wider during minutes 60-80 (the danger window below), so dropping those
-    fixes would change mean and max XTE too, not just distance."""
+    fixes would change mean and max XTE too, not just distance. One fix in that window (minute
+    70) swings 0.51 nm east, past side_worked's 0.4 nm band, while every other fix stays inside
+    it: dropping the danger fixes would turn side_worked from "right" to "middle"."""
     return {"source": "boatlog",
             "fixes": [{"t": T0 + i * 60, "lat": 45.0 + i * 0.0015,
-                       "lon": -83.0 + (1 if i % 2 else -1) * (0.005 if 60 <= i <= 80 else 0.001),
+                       "lon": -83.0 + (0.012 if i == 70 else
+                                       (1 if i % 2 else -1) * (0.005 if 60 <= i <= 80 else 0.001)),
                        "sog": 6.0, "cog": 0.0} for i in range(N)],
             "trust": trust, "sail_log": []}
 
