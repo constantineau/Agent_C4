@@ -48,6 +48,15 @@ COPILOT_PORT = int(os.environ.get("COPILOT_PORT", "8300"))
 # of the cable, loopback). See copilot/serve.py.
 COPILOT_BIND = os.environ.get("COPILOT_BIND", "10.10.10.2,127.0.0.1")
 COPILOT_ALLOW_FROM = os.environ.get("COPILOT_ALLOW_FROM", "10.10.10.1,127.0.0.1")
+# BENCH override (added to the boat defaults above, never replacing them): the bench console
+# (compose.pi.sample.yml) reaches the Orin over Tailscale, so the bench adds the Orin's Tailscale
+# address to listen on and the bench host's Tailscale address as a caller. In
+# /etc/sr33/copilot.env on a bench Orin:
+#   COPILOT_BENCH_BIND=<orin-tailscale-ip>         (tailscale ip -4, on the Orin)
+#   COPILOT_BENCH_ALLOW_FROM=<bench-host-tailscale-ip>   (tailscale ip -4, on the bench host)
+# Leave both unset on the boat.
+COPILOT_BENCH_BIND = os.environ.get("COPILOT_BENCH_BIND", "")
+COPILOT_BENCH_ALLOW_FROM = os.environ.get("COPILOT_BENCH_ALLOW_FROM", "")
 
 # If false, never call the LLM — always return the deterministic brief. Useful when the
 # Orin is busy/serving something else, or to prove the engine-only baseline.

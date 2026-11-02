@@ -22,7 +22,8 @@ EnvironmentFile=-/etc/sr33/copilot.env
 Environment=COPILOT_PORT=8300
 # Listen on the boat cable interface (10.10.10.2) and loopback only; answer only the Pi's end of
 # the cable and loopback (the iPad reaches the copilot through the Pi console's /copilot proxy).
-# Override with COPILOT_BIND / COPILOT_ALLOW_FROM in /etc/sr33/copilot.env. See copilot/serve.py.
+# Override with COPILOT_BIND / COPILOT_ALLOW_FROM in /etc/sr33/copilot.env. A bench Orin (reached
+# over Tailscale) ADDS COPILOT_BENCH_BIND / COPILOT_BENCH_ALLOW_FROM there. See copilot/serve.py.
 # Runs from an isolated venv: the Orin's system Python is PEP-668 externally-managed (no --user /
 # system pip installs of fastapi/uvicorn). Create it once with:
 #   sudo apt install -y python3-venv

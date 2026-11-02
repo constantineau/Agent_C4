@@ -93,6 +93,10 @@ def _lat_lon(value):
     return lat, lon
 
 
+# The Pi has no RTC: its wall clock can step at boot (NTP/GPS time arriving). A wall-vs-monotonic
+# disagreement larger than this between two looks is a step, and the live caches are reset.
+CLOCK_STEP_S = float(os.environ.get("ONBOARD_CLOCK_STEP_S", "5"))
+
 # A Signal K update timestamp later than receipt by more than this is clock nonsense → receipt.
 FUTURE_SKEW_S = 2.0
 
@@ -322,7 +326,7 @@ class OnboardSource:
                         print(f"[onboard] live SK cache connected {SIGNALK_WS}", flush=True)
                         self._link_connected = True
                         async for msg in ws:
-                            self._link_last_msg = _time.time()
+                            self._link_last_msg = _time.monotonic()   # a receipt age: no wall clock
                             self._ingest_live(msg)
                 except Exception as exc:
                     print(f"[onboard] live SK WS error ({exc}); retry 3s", flush=True)
@@ -346,6 +350,7 @@ class OnboardSource:
         ctx = data.get("context")
         mmsi = _mmsi_from_context(ctx)
         is_other = bool(ctx) and ctx != self._self_ctx and mmsi is not None
+        self._check_clock()
         now = _time.time()
         with self._live_lock:
             if is_other:
@@ -426,8 +431,30 @@ class OnboardSource:
             if v is not None and newer("cog_time"):
                 t["cog"], t["cog_time"] = round(math.degrees(v) % 360, 1), at
 
+    def _check_clock(self):
+        """Reset the live caches when the wall clock has STEPPED since the last look (the Pi has no
+        RTC; NTP or GPS time can move it hours at boot, either way). Every cached reading and every
+        ordering timestamp is on the old clock: kept, a fix cached at 4600 would reject a fresh one
+        at 1001 as older, and the old geometry would read as fresh. Takes _live_lock; call it
+        before taking the lock. Returns True when it reset."""
+        wall, mono = _time.time(), _time.monotonic()
+        with self._live_lock:
+            prev = getattr(self, "_clk", None)
+            self._clk = (wall, mono)
+            if prev is None:
+                return False
+            step = (wall - prev[0]) - (mono - prev[1])
+            if abs(step) <= CLOCK_STEP_S:
+                return False
+            self._live.clear()
+            getattr(self, "_ais", {}).clear()
+            self._ais_rx_t0 = None
+        print(f"[onboard] wall clock stepped {step:+.0f} s — live and AIS caches reset", flush=True)
+        return True
+
     def _live_fresh(self, path):
         """[(source, epoch, value)] for a path from the live cache, only entries within TTL."""
+        self._check_clock()
         cut = _time.time() - LIVE_TTL_S
         with self._live_lock:
             return [(s, e, val) for (p, s), (e, val) in self._live.items()
@@ -513,7 +540,7 @@ class OnboardSource:
         last = getattr(self, "_link_last_msg", None)
         return {"enabled": LIVE_ENABLED,
                 "connected": bool(getattr(self, "_link_connected", False)),
-                "last_msg_age_s": (max(0.0, _time.time() - last) if last is not None else None)}
+                "last_msg_age_s": (max(0.0, _time.monotonic() - last) if last is not None else None)}
 
     def ais_receiver_age_s(self):
         """Seconds since the boat's own AIS transceiver (an AIS-bearing source, see ais_sources)
@@ -523,6 +550,7 @@ class OnboardSource:
         srcs = self.ais_sources()
         if not srcs:
             return None
+        self._check_clock()
         now = _time.time()
         with self._live_lock:
             if not self._live:
@@ -533,10 +561,11 @@ class OnboardSource:
             return None                            # the live link itself is quiet: can't tell
         if seen:
             return max(0.0, now - max(seen))
-        t0 = getattr(self, "_ais_rx_t0", None)
+        t0 = getattr(self, "_ais_rx_t0", None)          # "never heard since": a receipt age, monotonic
+        mono = _time.monotonic()
         if t0 is None:
-            t0 = self._ais_rx_t0 = now
-        return now - t0
+            t0 = self._ais_rx_t0 = mono
+        return mono - t0
 
     # Real N2K sensors write 5–28 Hz, so a 40-min fatigue window is tens of thousands of rows —
     # converting them one-by-one in Python starved the whole engine at first-light (2026-07-15;
@@ -809,6 +838,7 @@ class OnboardSource:
         """Latest AIS observation per MMSI within the window — other-vessel Signal K contexts
         captured by the live cache. Shape-matched to CloudSource: [{mmsi, name, lat, lon,
         sog(kn), cog(deg true), time(epoch)}]; targets without a position fix are skipped."""
+        self._check_clock()
         cut = _time.time() - max_age_min * 60.0
         out = []
         with self._live_lock:
@@ -832,6 +862,7 @@ class OnboardSource:
         a raw-row flood (28 Hz wind × even a 5-min window starved the Pi at first-light)."""
         cut_s, cut_e = _cutoff_str(max_age_min)
         best = {}
+        self._check_clock()
         with self._live_lock:
             for (p, s), (e, val) in self._live.items():
                 if p in paths and e >= cut_e:

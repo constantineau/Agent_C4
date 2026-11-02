@@ -404,7 +404,7 @@ with tempfile.TemporaryDirectory() as d:
     src._ingest_live(own_d("navigation.position", {"latitude": 45.0, "longitude": -83.0}))
     src._ingest_live(own_d("navigation.speedOverGround", 0.0))
     src._ingest_live(own_d("navigation.courseOverGroundTrue", 0.0))
-    src._link_connected, src._link_last_msg = True, time.time()
+    src._link_connected, src._link_last_msg = True, time.monotonic()
     ais.datasource.active = lambda: src
     t = by(ais.get_ais_targets(), 366999020)          # onboard MMSIs are ints
     check("…the delayed report is dead-reckoned 4 min: range ~4.4 nm, not 6", t and abs(t["range_nm"] - 4.4) < 0.1)
@@ -418,7 +418,7 @@ with tempfile.TemporaryDirectory() as d:
           e is not None and abs(t_rx - e - 60) < 2)
 
     # the real live-link state the loop keeps
-    src._link_connected, src._link_last_msg = True, now - 2
+    src._link_connected, src._link_last_msg = True, time.monotonic() - 2
     lk = src.live_link()
     check("OnboardSource.live_link: connected, last message ~2 s ago",
           lk["connected"] is True and abs(lk["last_msg_age_s"] - 2) < 1)
@@ -433,6 +433,73 @@ with tempfile.TemporaryDirectory() as d:
     check("live link itself quiet → can't tell (None)", src.ais_receiver_age_s() is None)
     ds._AIS_SRC_CACHE[db] = set()
     check("no transceiver known → can't tell (None)", src.ais_receiver_age_s() is None)
+
+print("\n== 8. a backward (or forward) Pi clock step resets the live caches (Codex on #191) ==")
+
+
+class FakeClock:
+    """Stands in for datasource_onboard's `time` module: a settable wall clock + a monotonic one."""
+
+    def __init__(self, wall, mono=1000.0):
+        self.wall, self.mono = wall, mono
+
+    def time(self):
+        return self.wall
+
+    def monotonic(self):
+        return self.mono
+
+    def tick(self, s):
+        self.wall += s
+        self.mono += s
+
+
+real_time = ds._time
+with tempfile.TemporaryDirectory() as d:
+    db = os.path.join(d, "archive.db")
+    archive(db, [])
+    ds.ARCHIVE_DB = db
+    ds._AIS_SRC_CACHE[db] = set()
+    clk = FakeClock(1_790_000_000 + 4600)
+    ds._time = clk
+    try:
+        src = onboard(db, {})
+        src._self_ctx = "vessels.urn:mrn:signalk:uuid:c4"
+        own = lambda ts, lat: _json.dumps({"updates": [{"$source": GPS24, "timestamp": iso(ts),  # noqa: E731
+                                                        "values": [{"path": "navigation.position",
+                                                                    "value": {"latitude": lat, "longitude": -83.0}}]}]})
+        src._ingest_live(own(clk.wall, 45.0))                      # fix cached at "4600"
+        src._ingest_live(delta(SHIP, iso(clk.wall), "navigation.position", {"latitude": 45.1, "longitude": -83.0}))
+        clk.tick(1)
+        clk.wall -= 3600                                           # the clock steps back an hour
+        src._ingest_live(own(clk.wall, 45.2))                      # a fresh fix at "1001"
+        smp = src.latest_sample(LAT)
+        check("Codex's repro: after a backward step the fresh fix is taken (not rejected as older)",
+              smp and smp[0] == 45.2 and abs(smp[1] - clk.wall) < 0.01)
+        check("…and the old AIS target (on the old clock) is gone, not shown as fresh",
+              src.ais_targets(15) == [])
+        # a step with no message after it: the stale entries must not read as fresh on the next read
+        src._ingest_live(own(clk.wall, 45.3))
+        clk.tick(1)
+        clk.wall -= 7200
+        check("a step with no new message: the next read resets too (no old fix served as live)",
+              src.latest_sample(LAT) is None)
+        # forward step (NTP corrects a lagging clock): same reset
+        src._ingest_live(own(clk.wall, 45.4))
+        clk.tick(1)
+        clk.wall += 86400
+        check("a forward step resets too", src.latest_sample(LAT) is None)
+        # ordinary time passing (no step) keeps the cache
+        src._ingest_live(own(clk.wall, 45.5))
+        clk.tick(3)
+        check("no step (3 s pass on both clocks) → the cache stays", src.latest_sample(LAT)[0] == 45.5)
+        # receipt ages are monotonic: a wall step doesn't make the link look fresh or dead
+        src._link_connected, src._link_last_msg = True, clk.monotonic() - 4
+        clk.wall -= 3600
+        check("the link's last-message age is monotonic (4 s), whatever the wall clock did",
+              abs(src.live_link()["last_msg_age_s"] - 4) < 0.01)
+    finally:
+        ds._time = real_time
 
 print("\n" + ("PASS" if ok else "FAIL"))
 sys.exit(0 if ok else 1)

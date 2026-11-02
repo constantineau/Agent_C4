@@ -10,6 +10,11 @@ the Orin itself (bench_copilot, smoke_api). Same shape as pi/orin/reroute/servic
 
   COPILOT_BIND        addresses to listen on      (default 10.10.10.2,127.0.0.1)
   COPILOT_ALLOW_FROM  caller addresses allowed     (default 10.10.10.1,127.0.0.1)
+
+Bench (compose.pi.sample.yml: the bench console proxies to the Orin's Tailscale address) ADDS, on
+top of the boat defaults, in /etc/sr33/copilot.env:
+  COPILOT_BENCH_BIND        the Orin's Tailscale address         (tailscale ip -4, on the Orin)
+  COPILOT_BENCH_ALLOW_FROM  the bench host's Tailscale address   (tailscale ip -4, on that host)
   COPILOT_PORT        port                         (default 8300)
 
 Each address is bound with IP_FREEBIND, so the service starts even when the cable is unplugged at
@@ -26,6 +31,23 @@ IP_FREEBIND = getattr(socket, "IP_FREEBIND", 15)        # Linux
 
 def _addrs(raw):
     return [a.strip() for a in (raw or "").split(",") if a.strip()]
+
+
+def _merged(base, extra):
+    """The boat addresses plus any bench extras, in order, no duplicates."""
+    out = []
+    for a in _addrs(base) + _addrs(extra):
+        if a not in out:
+            out.append(a)
+    return out
+
+
+def binds():
+    return _merged(config.COPILOT_BIND, config.COPILOT_BENCH_BIND)
+
+
+def callers():
+    return _merged(config.COPILOT_ALLOW_FROM, config.COPILOT_BENCH_ALLOW_FROM)
 
 
 class AllowList:
@@ -72,13 +94,13 @@ def main():
     import uvicorn
 
     from .app import app
-    socks = bind_sockets(_addrs(config.COPILOT_BIND), config.COPILOT_PORT)
-    guarded = AllowList(app, _addrs(config.COPILOT_ALLOW_FROM))
+    socks = bind_sockets(binds(), config.COPILOT_PORT)
+    guarded = AllowList(app, callers())
     # proxy_headers off: the allow-list judges the real peer address, never an X-Forwarded-For
     server = uvicorn.Server(uvicorn.Config(guarded, lifespan="on", log_level="info",
                                            proxy_headers=False))
-    print(f"[copilot] listening on {config.COPILOT_BIND} :{config.COPILOT_PORT}; "
-          f"callers {config.COPILOT_ALLOW_FROM}", flush=True)
+    print(f"[copilot] listening on {','.join(binds())} :{config.COPILOT_PORT}; "
+          f"callers {','.join(callers())}", flush=True)
     asyncio.run(server.serve(sockets=socks))
 
 

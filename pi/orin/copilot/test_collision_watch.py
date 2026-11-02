@@ -391,6 +391,16 @@ def test_service_binding() -> bool:
                  serve._addrs(config.COPILOT_BIND) == ["10.10.10.2", "127.0.0.1"])
     ok &= _check("default callers = the Pi's cable end + loopback",
                  set(serve._addrs(config.COPILOT_ALLOW_FROM)) == {"10.10.10.1", "127.0.0.1"})
+    ok &= _check("no bench extras by default: binds/callers are exactly the boat defaults",
+                 serve.binds() == ["10.10.10.2", "127.0.0.1"] and serve.callers() == ["10.10.10.1", "127.0.0.1"])
+    saved = (config.COPILOT_BENCH_BIND, config.COPILOT_BENCH_ALLOW_FROM)
+    config.COPILOT_BENCH_BIND, config.COPILOT_BENCH_ALLOW_FROM = "100.70.110.72", "100.64.0.9, 127.0.0.1"
+    try:
+        ok &= _check("bench override ADDS the Tailscale addresses, keeps the boat ones",
+                     serve.binds() == ["10.10.10.2", "127.0.0.1", "100.70.110.72"]
+                     and serve.callers() == ["10.10.10.1", "127.0.0.1", "100.64.0.9"])
+    finally:
+        config.COPILOT_BENCH_BIND, config.COPILOT_BENCH_ALLOW_FROM = saved
     denied = TestClient(serve.AllowList(app_mod.app, {"10.10.10.1"}))     # TestClient's host is 'testclient'
     r = denied.get("/tools")
     ok &= _check("a caller not on the list → 403", r.status_code == 403)
