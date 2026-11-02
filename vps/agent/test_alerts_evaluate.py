@@ -150,6 +150,15 @@ check("…one row in the table", len(db.active()) == 1 and db.active()[0]["messa
 check("t=20: same condition, same text → no push, no second row",
       tick(20) == [] and len(db.rows) == 1)
 
+print("same severity, new text — updated in place:")
+world(depth=7.0)                                  # still warn, different depth
+row_id = db.rows[0]["id"]
+check("t=20.5: 7 m → updated, still warn", tick(20.5) == [("updated", "depth_shoaling", "warn")])
+check("…the same row, new text", len(db.rows) == 1 and db.rows[0]["id"] == row_id and
+      db.rows[0]["message"] == "Getting shallow: 7.0 m.")
+world(depth=6.0)
+check("t=20.7: back to 6 m → updated again", tick(20.7) == [("updated", "depth_shoaling", "warn")])
+
 print("worse — updated in place:")
 world(depth=3.0)
 check("t=21: 3 m → updated to danger", tick(21) == [("updated", "depth_shoaling", "danger")])
