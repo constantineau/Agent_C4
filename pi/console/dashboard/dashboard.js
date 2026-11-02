@@ -1349,7 +1349,7 @@
   function healthChips(h) {
     if (!h || !h.available) return [];
     const out = [];
-    if ((h.attitude || {}).status !== "ok" && (h.attitude || {}).status) out.push("attitude");
+    if (["warn", "danger"].indexOf((h.attitude || {}).status) >= 0) out.push("attitude");
     if (["warn", "danger"].indexOf((h.heading || {}).status) >= 0) out.push("compass vs GPS");
     const c = (h.provenance || {}).checks || {};
     for (const f of (c.lead_source || {}).went_silent || []) out.push(f.channel);
