@@ -79,7 +79,10 @@ print(c.execute('select count(*),min(time),max(time) from readings').fetchone())
   If the move itself fails, the batch is requeued and the move retried. A rotation never moves
   the file while a background check still holds it open (a read stalled on a dying card): it
   keeps recording into the current file and retries on the next flush. A background verdict
-  about a file that has since been replaced is ignored.
+  about a file that has since been replaced is ignored. One rotation lock orders "replace the file"
+  against "start a check on it": a check is started only under that lock, after re-checking
+  that the connection and generation are still current. A running prune stops at its next
+  chunk when a rotation begins, and the connection is never closed under one of its queries.
 - **Unwritable rows.** Strings are cleaned of lone UTF-16 surrogates before they are buffered.
   If a batch still fails on a row's values, the rows are written one by one and only the bad
   ones are dropped (counted, one log line per window). One bad row never blocks a batch.
@@ -97,8 +100,9 @@ print(c.execute('select count(*),min(time),max(time) from readings').fetchone())
   `disk_free_bytes`, the marks, `paused_since`, the counts of rows not recorded, dropped from
   the buffer, waiting, written, rotations this run, and the background check's state. The
   engine reads it (`shared/archiver_status.py`) on `/session` and `/health`; a file older than
-  90 s reads as "archiver stopped". The console's LOG button and a red banner show
-  "Not recording: <reason>".
+  90 s reads as "archiver stopped". While a LOG session runs, the console's LOG button and a
+  red banner show "Not recording: <reason>"; with no session (instruments off at the dock is
+  normal) the reason is only in the LOG button's tooltip.
 
 ## Backfill to the cloud (post-passage)
 

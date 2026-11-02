@@ -738,5 +738,123 @@ try:
 finally:
     archiver.WS_DOWN_S = real_down
 
+# --- 13. a check is never started on a file that is being rotated -------------------------
+print("the scheduler never starts a check across a rotation that began during its awaits:")
+
+
+async def gated(scenario):
+    loop = asyncio.get_running_loop()
+    with tempfile.TemporaryDirectory() as d:
+        db = Path(d) / "archive.db"
+        eng = Path(d) / "engine.db"
+        engine_with_session(eng, open_=False)
+        conn = archiver.open_db(db)
+        state = {"conn": conn}
+        starts = []
+        real_start, real_meta = archiver.BackgroundCheck.start, archiver._meta
+
+        def spy_start(self):
+            starts.append((state.get("conn"), archiver._ROTATING.is_set()))
+            return real_start(self)
+        hold = threading.Event()
+        holder_ready = threading.Event()
+
+        def hold_rotation_lock():           # a rotation in flight on an executor thread
+            with archiver._ROTATION_LOCK:
+                holder_ready.set()
+                hold.wait(10)
+
+        def meta_during_await(c, key, *a, **k):
+            # the scheduler is awaiting this read: a rotation starts right now
+            if key == "last_full_check" and not starts and "fired" not in state:
+                state["fired"] = True
+                if scenario == "conn cleared":
+                    state["conn"] = None    # what _recover does before reopen_fresh
+                else:
+                    threading.Thread(target=hold_rotation_lock, daemon=True).start()
+                    holder_ready.wait(5)
+            return real_meta(c, key, *a, **k)
+        archiver.BackgroundCheck.start = spy_start
+        archiver._meta = meta_during_await
+        task = asyncio.create_task(archiver.check_scheduler(
+            state, loop, db, None, engine_db=str(eng), later_s=0.05))
+        try:
+            await asyncio.sleep(0.6)
+            during = list(starts)
+            # the rotation finishes: a fresh connection, a new generation, lock free
+            if scenario == "conn cleared":
+                conn.close()
+                state["conn"] = archiver.open_db(db)
+                state["generation"] = 1
+            hold.set()
+            for _ in range(250):
+                if starts:
+                    break
+                await asyncio.sleep(0.02)
+            after = list(starts)
+        finally:
+            task.cancel()
+            archiver.BackgroundCheck.start, archiver._meta = real_start, real_meta
+            if state.get("check") is not None:
+                state["check"].stop()
+            if state.get("conn") is not None:
+                state["conn"].close()
+        return during, after, state
+
+
+for scenario in ("conn cleared", "rotation lock held"):
+    during, after, st = asyncio.run(gated(scenario))
+    check(f"{scenario}: no check started while the rotation was in progress", during == [])
+    check(f"{scenario}: one started once it was over, on the current connection",
+          len(after) == 1 and after[0][0] is not None and after[0][1] is False)
+
+print("reopen_fresh holds the rotation lock while it stops the checks and moves the file:")
+with tempfile.TemporaryDirectory() as d:
+    db = Path(d) / "archive.db"
+    conn = archiver.open_db(db)
+    seen = {}
+    real_stop = archiver.stop_checks
+
+    def spy_stop(path, timeout=None):
+        seen["locked"] = archiver._ROTATION_LOCK.locked()
+        seen["rotating"] = archiver._ROTATING.is_set()
+        return real_stop(path, timeout)
+    archiver.stop_checks = spy_stop
+    try:
+        new, rot = archiver.reopen_fresh(conn, db)
+    finally:
+        archiver.stop_checks = real_stop
+    check("rotation lock held and 'rotating' set during stop_checks",
+          seen == {"locked": True, "rotating": True})
+    check("...both released after", not archiver._ROTATION_LOCK.locked()
+          and not archiver._ROTATING.is_set())
+    new.close()
+
+print("a prune running during a rotation stops at its next chunk; the close never races it:")
+with tempfile.TemporaryDirectory() as d:
+    db = Path(d) / "archive.db"
+    eng = Path(d) / "engine.db"
+    engine_with_session(eng, open_=False)
+    conn = archiver.open_db(db)
+    old = datetime.now(timezone.utc) - timedelta(days=30)
+    archiver.write_rows(conn, [((old + timedelta(seconds=i)).strftime("%Y-%m-%dT%H:%M:%S.000Z"),)
+                               + cf.ROW[1:] for i in range(5000)])
+    out = {}
+    real_win = archiver.session_windows
+    archiver.session_windows = lambda e, conn=None: []
+    try:
+        th = threading.Thread(target=lambda: out.setdefault("n", archiver.prune(
+            conn, engine_db=str(eng), retain_days=7, chunk_rows=50, pause_s=0.02)))
+        th.start()
+        time.sleep(0.2)                         # a few chunks in
+        new, rot = archiver.reopen_fresh(conn, db)
+        th.join(10)
+    finally:
+        archiver.session_windows = real_win
+    check(f"the prune stopped early ({out.get('n')} of 5000 rows) without an error",
+          out.get("n") is not None and 0 < out["n"] < 5000)
+    check("the rotation completed", rot is not None and rot.exists())
+    new.close()
+
 print("\n" + ("PASS" if ok else "FAIL"))
 raise SystemExit(0 if ok else 1)

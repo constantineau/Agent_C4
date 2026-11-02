@@ -43,6 +43,18 @@ except ImportError:                     # pragma: no cover - image without share
 # Writes are offloaded to executor threads (fsync on a slow SD card shouldn't stall the
 # event loop), so the connection is shared across threads and a lock serializes writers.
 _WRITE_LOCK = threading.Lock()
+# ROTATION. One lock orders "replace the archive file" against "start reading it": a rotation
+# (reopen_fresh) holds it from stopping the checks to opening the fresh file, and a background
+# check is registered and started only while holding it, after re-validating the connection,
+# generation and rotation state with no await in between. So a check can never be started on a
+# file that is being moved, whatever the event loop interleaves.
+_ROTATION_LOCK = threading.Lock()
+# The prune holds _PRUNE_LOCK for its whole run (its window derivation reads the connection
+# outside _WRITE_LOCK), and gives up at the next chunk once _ROTATING is set; the rotation takes
+# _PRUNE_LOCK before closing the connection. So no query of the prune is ever running on a
+# connection while it is closed, and the rotation waits at most one query.
+_PRUNE_LOCK = threading.Lock()
+_ROTATING = threading.Event()
 
 SIGNALK_WS = os.environ.get(
     "SIGNALK_WS", "ws://localhost:3010/signalk/v1/stream?subscribe=all"
@@ -380,22 +392,30 @@ def reopen_fresh(conn, path: Path = ARCHIVE_DB):
     # connection's close cleans sidecars by NAME — stop it before anything moves. If it will
     # not let go (a read stalled on a dying card), move NOTHING: raise before touching `conn`,
     # so the caller keeps recording into the current file and retries the rotation later.
-    if not stop_checks(path):
-        raise CheckerBusy(f"a background check still holds {path.name}; rotation deferred")
-    if conn is not None:
-        # Under the write lock: the pruner runs on another thread and may be mid-DELETE on this
-        # very connection. Closing it underneath that is undefined; waiting for it is not.
-        with _WRITE_LOCK:
-            try:
-                conn.close()
-            except Exception as exc:      # a corrupt file may fail its close-time checkpoint
-                print(f"[archive] closing the corrupt archive raised ({exc}); moving it anyway",
-                      flush=True)
-    rotated = rotate_corrupt(path)        # resumes a half-done one; None if nothing is left
-    left = _present(path)
-    if left or _rotation_marker(path).exists():
-        raise OSError(f"rotation incomplete, still at {path.name}: {left}")
-    new = open_db(path)
+    # The whole sequence holds _ROTATION_LOCK, so no new check can be started on this file
+    # until the fresh one is open.
+    with _ROTATION_LOCK:
+        _ROTATING.set()                   # the prune bails out at its next chunk
+        try:
+            if not stop_checks(path):
+                raise CheckerBusy(f"a background check still holds {path.name}; rotation "
+                                  f"deferred")
+            if conn is not None:
+                # Under the prune lock (its window reads run outside the write lock) and the
+                # write lock (the flusher, a prune chunk): never close under a running query.
+                with _PRUNE_LOCK, _WRITE_LOCK:
+                    try:
+                        conn.close()
+                    except Exception as exc:  # a corrupt file may fail its close checkpoint
+                        print(f"[archive] closing the corrupt archive raised ({exc}); moving "
+                              f"it anyway", flush=True)
+            rotated = rotate_corrupt(path)    # resumes a half-done one; None if nothing left
+            left = _present(path)
+            if left or _rotation_marker(path).exists():
+                raise OSError(f"rotation incomplete, still at {path.name}: {left}")
+            new = open_db(path)
+        finally:
+            _ROTATING.clear()
     if rotated is not None:
         _note_rotation(new, rotated)
     return new, rotated
@@ -1476,6 +1496,15 @@ def _prune_gaps(wins, cutoff):
 
 
 def prune(conn, engine_db=None, retain_days=None, chunk_rows=None, pause_s=None):
+    """See `_prune`; this holds _PRUNE_LOCK around it (a rotation waits for, at most, the query
+    in flight, then the prune stops at its next chunk)."""
+    if _ROTATING.is_set():
+        return None
+    with _PRUNE_LOCK:
+        return _prune(conn, engine_db, retain_days, chunk_rows, pause_s)
+
+
+def _prune(conn, engine_db=None, retain_days=None, chunk_rows=None, pause_s=None):
     """Delete out-of-session readings older than the retention window, `chunk_rows` at a time
     under the write lock (released between chunks). Returns rows deleted, or None when pruning
     was skipped (disabled / engine DB unreadable)."""
@@ -1499,6 +1528,10 @@ def prune(conn, engine_db=None, retain_days=None, chunk_rows=None, pause_s=None)
     for lo, lo_incl, hi in _prune_gaps(wins, cutoff):
         since = lo
         while True:
+            if _ROTATING.is_set():
+                print(f"[archive] prune stopped after {total} rows — the archive is being "
+                      f"rotated", flush=True)
+                return total
             with _WRITE_LOCK:
                 sel = conn.execute(
                     f"SELECT id, time FROM readings WHERE time {'>=' if lo_incl else '>'} ? "
@@ -1514,7 +1547,7 @@ def prune(conn, engine_db=None, retain_days=None, chunk_rows=None, pause_s=None)
             chunks += 1
             since = sel[-1][1]            # everything selected was deleted: always progresses
             if pause > 0:
-                time.sleep(pause)         # outside the lock: the flusher's turn
+                time.sleep(pause)         # outside the write lock: the flusher's turn
     if total:
         print(f"[archive] pruned {total} out-of-session rows older than {cutoff} in {chunks} "
               f"chunk(s) ({len(wins)} session window(s) kept)", flush=True)
@@ -1613,7 +1646,7 @@ async def check_scheduler(state, loop, db, rotated, engine_db=None, later_s=None
     check held back is recycled."""
     later = CHECK_LATER_S if later_s is None else later_s
     while True:
-        conn = state.get("conn")
+        conn, gen = state.get("conn"), state.get("generation", 0)
         if state.get("rotate_pending") or conn is None:
             await asyncio.sleep(later)          # the flusher is replacing the file
             continue
@@ -1631,7 +1664,10 @@ async def check_scheduler(state, loop, db, rotated, engine_db=None, later_s=None
                     state["_status_dirty"] = True
                 await asyncio.sleep(later)
                 continue
-        chk = start_background_check(state, loop, db, rotated, engine_db)
+        chk = _start_check_if_current(state, loop, db, rotated, engine_db, conn, gen)
+        if chk is None:                     # a rotation began or ran during the awaits above
+            await asyncio.sleep(min(later, 1.0))
+            continue
         while chk.result is None:
             await asyncio.sleep(0.2)
         status = chk.result["status"]
@@ -1646,6 +1682,9 @@ async def check_scheduler(state, loop, db, rotated, engine_db=None, later_s=None
         if not chk.live:
             rotated = None                      # the evidence check is done; now the live file
             continue
+        if status == "ok" and (state.get("conn") is not conn
+                               or state.get("generation", 0) != gen):
+            continue                            # the file it passed is no longer the archive
         if status == "ok":
             now = datetime.now(timezone.utc).isoformat()
             await loop.run_in_executor(None, _meta, conn, "last_full_check", now)
@@ -1655,6 +1694,22 @@ async def check_scheduler(state, loop, db, rotated, engine_db=None, later_s=None
             state["check_note"] = None
             state["_status_dirty"] = True
         # corrupt -> the flusher rotates (rotate_pending); aborted -> a rotation stopped it
+
+
+def _start_check_if_current(state, loop, db, rotated, engine_db, conn, gen):
+    """Register and start a check ONLY if, under _ROTATION_LOCK and with no await in between,
+    the archive is still the one the caller looked at: same connection, same generation, no
+    rotation pending or running. None otherwise (the caller retries). Non-blocking: this runs
+    on the event loop, which must never wait on a rotation's file moves."""
+    if not _ROTATION_LOCK.acquire(blocking=False):
+        return None
+    try:
+        if (state.get("conn") is not conn or state.get("generation", 0) != gen
+                or state.get("rotate_pending") or _ROTATING.is_set()):
+            return None
+        return start_background_check(state, loop, db, rotated, engine_db)
+    finally:
+        _ROTATION_LOCK.release()
 
 
 def _checkpoint(conn):
