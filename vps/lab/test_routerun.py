@@ -15,6 +15,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 
 import numpy as np
 
@@ -212,6 +213,9 @@ check("adjustments / wave coeffs", boats.polar_adjustments(BOAT) == BOAT["polar_
       and boats.wave_coeffs(BOAT) is None and boats.polar_adjustments(None) == [])
 
 print("3) windfield: fallback_tries + duck-typed sources")
+# A window in the future: the loader only asks for forecast hours that are still ahead of now, so a
+# fixed past date would request nothing and the fetch counts below would read zero.
+TF = (int(time.time()) // 3600 + 6) * 3600
 
 
 class Sparse(models.GFS):
@@ -226,10 +230,10 @@ class Sparse(models.GFS):
 
 
 s = Sparse()
-windfield.build_windfield(BBOX, T0, T0 + 6 * 3600, models=[s])
+windfield.build_windfield(BBOX, TF, TF + 6 * 3600, models=[s])
 check("default: tries older cycles (Lab behaviour)", len(set(s.picked)) == windfield.CYCLE_FALLBACK_TRIES + 1)
 s = Sparse()
-windfield.build_windfield(BBOX, T0, T0 + 6 * 3600, models=[s], fallback_tries=0)
+windfield.build_windfield(BBOX, TF, TF + 6 * 3600, models=[s], fallback_tries=0)
 check("fallback_tries=0: one cycle only", len(set(s.picked)) == 1)
 
 
@@ -242,7 +246,7 @@ class Wrapped:
 
 
 s = Sparse()
-wf = windfield.build_windfield(BBOX, T0, T0 + 6 * 3600, models=[Wrapped(s)], fallback_tries=0)
+wf = windfield.build_windfield(BBOX, TF, TF + 6 * 3600, models=[Wrapped(s)], fallback_tries=0)
 check("a wrapper around a source is used, not dropped", s.picked and wf.meta[0]["model"] == "gfs")
 
 print("4) grib crop copies")
