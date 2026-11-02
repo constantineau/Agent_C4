@@ -10,8 +10,9 @@ Pins, through the REAL engine endpoints on a temp onboard DB with the REAL race 
     sail state;
   * the playbook goes on to the Orin copilot from inside the gate (the session lock is held
     during the forward; nothing is forwarded while racing; an unreachable Orin is a plain answer);
-  * a LOG start with no kind (old clients) is practice only with no shore homework aboard; with a
-    course, fleet or playbook from Deploy aboard it is a race; the crew's explicit kind is kept;
+  * a LOG start with no kind (old clients) is always a race (fails closed), with or without
+    homework; the crew's explicit kind is kept; the iPad's Race pre-selection (UI only) reads the
+    persisted stores (course, fleet, playbook), no marker file;
   * no PLAYBOOK_PATH file way in: the engine's playbook is only what /playbook/load saved;
   * the scoped session close (M14) never ends a newer session, on the real SQLite store;
   * the gate holds the race log's session lock, so a session can't start between check and write;
@@ -93,10 +94,10 @@ def refused(r):
     return r.status_code == 200 and r.json() == {"loaded": False, "detail": "Racing now. Not loaded."}
 
 
-print("LOG start with no kind (old clients): practice only when no shore homework is aboard")
-check("nothing aboard → /session says so", client.get("/session").json()["homework_aboard"] is False)
+print("LOG start with no kind (old clients) is always a race")
+check("nothing in the stores → no pre-selection of Race", client.get("/session").json()["homework_aboard"] is False)
 r = client.post("/session/start", json={}).json()
-check("nothing aboard, no kind → practice", r["active"]["kind"] == "practice")
+check("nothing aboard, no kind → RACE (fails closed)", r["active"]["kind"] == "race")
 racelog.end()
 check("an unknown kind is refused", client.post("/session/start", json={"kind": "regatta"}).json()["ok"] is False)
 
@@ -113,8 +114,8 @@ print("before the race (no session): every load is taken")
 for name, (url, body) in LOADS.items():
     check(f"{name} loads", loaded(client.post(url, json=body)))
 
-print("homework aboard: a LOG start with no kind is a RACE")
-check("/session says homework is aboard", client.get("/session").json()["homework_aboard"] is True)
+print("homework aboard: a LOG start with no kind is a RACE; Race is pre-selected")
+check("/session says homework is aboard (from the stores)", client.get("/session").json()["homework_aboard"] is True)
 r = client.post("/session/start", json={}).json()
 check("no kind → race", r["active"]["kind"] == "race")
 check("…and the gate is closed", refused(client.post("/fleet/load", json={"fleet": []})))
@@ -122,8 +123,22 @@ racelog.end()
 r = client.post("/session/start", json={"kind": "practice"}).json()
 check("the crew's explicit Practice is kept", r["active"]["kind"] == "practice")
 racelog.end()
-for k in ("course", "fleet", "playbook"):
-    check(f"the {k} load is recorded as homework aboard", k in engine_app.racegate.homework_aboard_detail())
+check("the pre-selection reads the stores: course, fleet and playbook all aboard",
+      engine_app.racegate.homework_aboard_detail() == {"course": True, "fleet": True, "playbook": True})
+check("no marker file: an upgraded boat with homework in its stores is right",
+      not [f for f in os.listdir(os.path.dirname(os.environ["ENGINE_DB"])) if "homework" in f])
+_ds = datasource.active()
+_saved = (_ds.get_playbook(), _ds.get_fleet(), engine_app.navigator.active_route())
+_ds.save_playbook({})
+_ds.save_fleet({"fleet": []})
+check("…a course alone pre-selects Race", engine_app.racegate.homework_aboard_detail()
+      == {"course": True, "fleet": False, "playbook": False} and engine_app.racegate.homework_aboard())
+engine_app.navigator.set_active("practice")
+check("…a practice course isn't Deploy homework → Practice pre-selected",
+      engine_app.racegate.homework_aboard() is False)
+_ds.save_playbook(_saved[0])
+_ds.save_fleet(_saved[1])
+engine_app.navigator.set_active(_saved[2])
 
 print("a practice session doesn't block")
 racelog.start(name="Practice", kind="practice")

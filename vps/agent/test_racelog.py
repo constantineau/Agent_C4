@@ -52,8 +52,8 @@ ds = StubDS()
 racelog.datasource.active = lambda: ds
 racelog.deviation._load_playbook = lambda: None            # nothing aboard — still works
 r = racelog.start()
-check("one-tap start with NOTHING (no playbook/name/race) works",
-      r["ok"] and r["active"]["kind"] == "practice" and r["active"]["name"].startswith("Sail "))
+check("start with NOTHING (no playbook/name/race/kind) works, and is a RACE (fails closed)",
+      r["ok"] and r["active"]["kind"] == "race" and r["active"]["name"].startswith("Race "))
 r2 = racelog.start(name="Wed beer can", kind="race")
 check("starting again auto-ends the previous window",
       r2["ok"] and ds.rows[0]["end_ts"] is not None and r2["active"]["name"] == "Wed beer can")
@@ -67,6 +67,11 @@ check("status: active + recent", st["active"]["id"] == 3 and len(st["recent"]) =
 racelog.end()
 check("end closes it", racelog.status()["active"] is None)
 check("end with nothing running refuses politely", racelog.end()["ok"] is False)
+rp = racelog.start(kind="practice")
+check("an explicit practice start is a practice ('Sail …')",
+      rp["ok"] and rp["active"]["kind"] == "practice" and rp["active"]["name"].startswith("Sail "))
+check("an unknown kind is refused", racelog.start(kind="regatta")["ok"] is False)
+racelog.end()
 
 print("1b) auto-close — one mis-tap must not suspend retention forever")
 # The Jul 18 shape: a session started at the kite hoist and never stopped. Retention keeps every

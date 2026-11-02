@@ -121,28 +121,25 @@ def _src():
 
 def start(name=None, race_id=None, kind=None):
     """Start a session. Everything is optional: race_id defaults to the loaded playbook's (if
-    any); kind to 'race' when there's a race_id OR any shore homework from Deploy is aboard (a
-    course, fleet or playbook: racegate.homework_aboard), else 'practice'. The iPad always sends
-    the kind the crew picked; the default only covers old clients, and errs to race (the gate
-    closes). Name defaults to '<Race|Sail> <UTC date HH:MM>'."""
+    any), name to '<Race|Sail> <UTC date HH:MM>'. kind is race|practice; with no kind it is a
+    RACE (fails closed: a race session is what makes the boat refuse shore homework). The iPad
+    always sends the kind the crew picked. Kind and race id are resolved under SESSION_LOCK, with
+    the start itself."""
     s = _src()
     if s is None:
         return {"ok": False, "note": "race log is onboard-only"}
-    if race_id is None:
-        try:
-            race_id = (deviation._load_playbook() or {}).get("race_id")
-        except Exception:
-            race_id = None
-    if not kind:
-        from . import racegate
-        kind = "race" if (race_id or racegate.homework_aboard()) else "practice"
-    kind = str(kind).lower()
+    kind = str(kind or "race").lower()
     if kind not in ("race", "practice"):
         return {"ok": False, "note": "kind must be race or practice"}
-    if not name:
-        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
-        name = f"{'Race' if kind == 'race' else 'Sail'} {stamp}Z"
     with SESSION_LOCK:
+        if race_id is None:
+            try:
+                race_id = (deviation._load_playbook() or {}).get("race_id")
+            except Exception:
+                race_id = None
+        if not name:
+            stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
+            name = f"{'Race' if kind == 'race' else 'Sail'} {stamp}Z"
         cur = s.session_start(str(name), race_id, kind, time.time())
     return {"ok": True, "active": cur}
 
@@ -166,7 +163,7 @@ def status(limit=10):
     auto = autoclose()      # throttled; the REC poll is what drives it
     from . import racegate
     out = {"available": True, "active": s.session_current(), "recent": s.sessions_list(limit),
-           # the iPad pre-selects Race on LOG when shore homework is aboard
+           # UI only: the iPad pre-selects Race on LOG when Deploy homework is in the stores
            "homework_aboard": racegate.homework_aboard()}
     if auto.get("closed"):
         # The crew must see that the boat ended their session, and why.

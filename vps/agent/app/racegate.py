@@ -66,47 +66,24 @@ def refused():
     return {"loaded": False, "detail": RACING}
 
 
-# ---- is shore homework aboard? (the race log's default kind) -----------------------------------
-HOMEWORK_KINDS = ("course", "fleet", "playbook")
-
-
-def _homework_path():
-    import os
-    base = os.path.dirname(os.environ.get("ENGINE_DB", "/var/lib/sr33/engine/engine.db"))
-    return os.path.join(base, "homework-aboard.json")
-
-
-def mark_homework(kind):
-    """Record that a Deploy load of `kind` (course/fleet/playbook) landed. Never raises."""
-    import json
-    import os
-    import tempfile
-    import time
+# ---- is shore homework aboard? (the iPad's LOG pre-selection: UI only, never a gate) ---------
+def homework_aboard_detail() -> dict:
+    """Which Deploy homework the stores hold right now: {course, fleet, playbook} booleans. Read
+    from the persisted stores (so an upgraded boat is right too). Never raises."""
+    out = {"course": False, "fleet": False, "playbook": False}
     try:
-        path = _homework_path()
-        cur = homework_aboard_detail()
-        cur[kind] = int(time.time())
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".hw-", suffix=".tmp")
-        with os.fdopen(fd, "w") as f:
-            json.dump(cur, f)
-        os.replace(tmp, path)
+        from . import datasource, navigator
+        ds = datasource.active()
+        out["playbook"] = bool(ds.get_playbook())
+        out["fleet"] = bool((ds.get_fleet() or {}).get("fleet"))
+        route = navigator.active_route()
+        out["course"] = route not in ("practice", "default", None) and bool(ds.marks(route))
     except Exception:  # noqa: BLE001
         pass
-
-
-def homework_aboard_detail() -> dict:
-    """{kind: when} for each Deploy load aboard; {} when none (or unreadable)."""
-    import json
-    try:
-        with open(_homework_path()) as f:
-            d = json.load(f)
-        return {k: v for k, v in d.items() if k in HOMEWORK_KINDS} if isinstance(d, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    return out
 
 
 def homework_aboard() -> bool:
-    """Is any shore homework (a course, fleet or playbook from Deploy) aboard? Then a session
-    started with no kind is a RACE (old clients); the iPad pre-selects Race."""
-    return bool(homework_aboard_detail())
+    """Any course, fleet or playbook from Deploy aboard? Only the iPad's LOG pre-selection reads
+    this (Race pre-selected); the race session itself always comes from an explicit kind, or race."""
+    return any(homework_aboard_detail().values())

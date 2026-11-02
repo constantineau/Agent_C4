@@ -412,8 +412,9 @@ unknown kind counts as advice.
 **Starting the race log (the iPad's LOG button)**: the gate is a RACE session, so the kind can't be
 left to chance. Tapping LOG shows two big buttons (48 px+), Race and Practice; Race is pre-selected
 when shore homework from Deploy (a course, fleet or playbook) is aboard, and the crew confirms with
-one tap. The iPad always sends the kind. For old clients, `/session/start` with no kind is a race
-when such homework is aboard, else practice (`racegate.homework_aboard`). While running, the button
+one tap. The iPad always sends the kind. For old clients, `/session/start` with no kind is always a race
+(fails closed). The pre-selection is UI only, read from the persisted stores
+(`racegate.homework_aboard`); it never decides a session's kind. While running, the button
 reads "LOG · RACE" or "LOG · PRACTICE". The engine's playbook has no file way in (the old
 `PLAYBOOK_PATH` fallback is gone): only `/playbook/load`, through the gate.
 
