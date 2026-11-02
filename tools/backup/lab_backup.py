@@ -373,12 +373,25 @@ def tar_volume(src_dir, out_path, scratch):
         snaps[p] = out
         return out
 
-    for p in _listing(src_dir):
-        if os.path.isfile(p) and not os.path.islink(p) and is_sqlite(p):
-            snapshot(p)
+    def unsnapped(listing):
+        return [p for p in listing if p not in snaps and os.path.isfile(p)
+                and not os.path.islink(p) and is_sqlite(p)]
+
+    # A DB that appears between the snapshot pass and the file listing would otherwise be
+    # snapshotted AFTER the listing, and could name a file the listing missed. Snapshot it and
+    # list again, until a listing finds no new DB.
     entries = _listing(src_dir)
-    dbs = {p for p in entries if p in snaps or (os.path.isfile(p) and not os.path.islink(p)
-                                                 and is_sqlite(p))}
+    for _ in range(3):
+        new_dbs = unsnapped(entries)
+        if not new_dbs:
+            break
+        for p in new_dbs:
+            snapshot(p)
+        entries = _listing(src_dir)
+    else:
+        if unsnapped(entries):
+            raise RuntimeError("databases kept appearing during the backup; retry the volume")
+    dbs = {p for p in entries if p in snaps}
     skip = {p + sfx for p in dbs for sfx in ("-wal", "-shm", "-journal")}
     files, counts = {}, {}
     with open(out_path, "wb") as raw, \
@@ -392,8 +405,8 @@ def tar_volume(src_dir, out_path, scratch):
                 if os.path.isfile(p) and not os.path.islink(p):
                     data = p
                     if p in dbs:
-                        data = snaps.get(p) or snapshot(p)   # a DB that appeared since
-                        if data is None:
+                        data = snaps.get(p)
+                        if data is None:             # snapshot found it deleted
                             log(f"  {rel}: gone before it could be read (deleted) — "
                                 f"not archived")
                             continue

@@ -601,5 +601,41 @@ for bad in ("gs://constantineau-c4-archive", "gs://constantineau-c4-archive/"):
     check(f"bucket root refused ({bad})", refused)
 check("prefix accepted", lb.open_dest("gs://b/vps-nightly").prefix == "gs://b/vps-nightly")
 
+print("a DB that appears after the snapshot pass is snapshotted BEFORE the final listing (Codex on #198)")
+with tempfile.TemporaryDirectory() as tmp:
+    vol = os.path.join(tmp, "vol")
+    os.makedirs(os.path.join(vol, "grib"))
+    with open(os.path.join(vol, "race.json"), "w") as f:
+        f.write("{}")
+    c = sqlite3.connect(os.path.join(vol, "learning.db"))   # a DB already there: 2nd listing runs
+    c.execute("CREATE TABLE t (x)")
+    c.commit()
+    c.close()
+    real_listing = lb._listing
+    calls = []
+
+    def listing(src):
+        calls.append(1)
+        if len(calls) == 2:                         # after the snapshot pass, before the listing:
+            c = sqlite3.connect(os.path.join(vol, "retro.db"))   # the Lab creates retro.db,
+            c.execute("CREATE TABLE pins (path TEXT)")
+            c.execute("INSERT INTO pins VALUES ('grib/new.grib')")
+            c.commit()
+            c.close()
+        out = real_listing(src)
+        if len(calls) == 2:                         # ...then pins a GRIB once the listing ran
+            with open(os.path.join(vol, "grib", "new.grib"), "wb") as f:
+                f.write(b"GRIB")
+        return out
+    lb._listing = listing
+    try:
+        os.makedirs(os.path.join(tmp, "s"))
+        _, files, counts = lb.tar_volume(vol, os.path.join(tmp, "v.tgz"), os.path.join(tmp, "s"))
+    finally:
+        lb._listing = real_listing
+    check("the new DB is archived", "retro.db" in files)
+    check("...and the file its row names is in the same tar", "grib/new.grib" in files)
+    check("it listed again after snapshotting the new DB", len(calls) == 3)
+
 print("\nALL OK" if ok else "\nFAILURES")
 sys.exit(0 if ok else 1)
