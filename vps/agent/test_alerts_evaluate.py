@@ -210,6 +210,9 @@ world(ais=[SHIP], strip_boom=True)
 out = tick(31)
 check("strip throwing: AIS stays up", "ais:366000001" in {r["key"] for r in db.active()}
       and not any(k == "ais:366000001" for _e, k, _s in out))
+check("strip throwing: its depth alert clears", ("cleared", "depth_shoaling", "warn") in out
+      and "depth_shoaling" not in {r["key"] for r in db.active()}
+      and next(r for r in db.rows if r["key"] == "depth_shoaling")["cleared_at"] is not None)
 
 print("after a restart — an alert on record whose condition still holds:")
 db = reset()

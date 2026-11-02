@@ -206,7 +206,7 @@ run(cloud=again)
 check("no POST at all on a re-run", again.calls == 0)
 
 # --- 2. a failed POST half-way --------------------------------------------------------------
-print("a POST that fails half-way loses nothing and duplicates nothing:")
+print("a POST that fails before the cloud accepts it loses nothing and duplicates nothing:")
 arc = fresh()
 add_rows(arc, sail(RACE, 120))
 add_session(RACE, RACE_END)
@@ -228,6 +228,39 @@ race_ids = in_window(arc, RACE, RACE_END)
 check(f"the re-run sends exactly the rest ({len(first)} + {len(second)} = {len(race_ids)})",
       sorted(first + second) == race_ids)
 check("…with no row sent twice", not set(first) & set(second))
+
+print("a POST the cloud accepts but whose reply is lost (documents today's behaviour):")
+arc = fresh()
+add_rows(arc, sail(RACE, 120))
+add_session(RACE, RACE_END)
+
+
+class LostReply(Cloud):
+    """Accepts the Nth batch, then the reply never arrives."""
+
+    def __call__(self, readings):
+        self.calls += 1
+        self.batches.append(list(readings))
+        if self.fail_on == self.calls:
+            raise OSError("reply lost")
+
+
+c1 = LostReply()
+c1.fail_on = 3
+try:
+    run(cloud=c1)
+except OSError:
+    pass
+c2 = Cloud()
+run(cloud=c2)
+dup = set(ids_sent(arc, c1)) & set(ids_sent(arc, c2))
+check("nothing lost", sorted(set(ids_sent(arc, c1)) | set(ids_sent(arc, c2)))
+      == in_window(arc, RACE, RACE_END))
+if dup:
+    # telemetry_raw has no primary key, so the cloud can't drop a resent batch. Known, not fixed here.
+    print(f"  [KNOWN-FAIL] lost reply: the retry resends the accepted batch ({len(dup)} rows twice)")
+else:
+    check("no row sent twice after a lost reply", True)
 
 # --- 3. a later race, then an open session --------------------------------------------------
 print("a later race: only its rows go up on the next run:")
