@@ -13,6 +13,8 @@ import datetime
 import json
 import os
 import re
+import threading
+import time
 
 from fastapi import FastAPI, Request, UploadFile, File, Form
 from fastapi.concurrency import run_in_threadpool
@@ -241,6 +243,30 @@ async def ingest_upload(files: list[UploadFile] = File(...)):
 # registry is in memory, so after a Lab restart the id is unknown → "interrupted", not a spinner.
 INGEST_INTERRUPTED = "Ingest was interrupted. Run it again."
 INGEST_BUSY = "Another ingest is already running. Wait for it to finish, then try again."
+# Finished ingests by job_id, kept apart from the single-flight job slot: starting the next ingest
+# clears that slot, and a draft that cost $1-4 must still reach the page that asked for it.
+_INGEST_DONE: dict = {}          # job_id -> {"state": "done", "result", "progress", "finished_at"}
+_INGEST_DONE_LOCK = threading.Lock()
+INGEST_KEEP_S, INGEST_KEEP_N = 3600, 10
+
+
+def _keep_ingest(job_id, entry):
+    now = time.time()
+    with _INGEST_DONE_LOCK:
+        _INGEST_DONE[job_id] = dict(entry, finished_at=now)
+        for k in [k for k, v in _INGEST_DONE.items() if now - v["finished_at"] > INGEST_KEEP_S]:
+            del _INGEST_DONE[k]
+        while len(_INGEST_DONE) > INGEST_KEEP_N:          # oldest first (insertion order)
+            del _INGEST_DONE[next(iter(_INGEST_DONE))]
+
+
+def _kept_ingest(job_id):
+    with _INGEST_DONE_LOCK:
+        e = _INGEST_DONE.get(job_id)
+        if e and time.time() - e["finished_at"] > INGEST_KEEP_S:
+            del _INGEST_DONE[job_id]
+            e = None
+        return dict(e) if e else None
 
 
 def _start_ingest(fn, arg, kind):
@@ -248,11 +274,19 @@ def _start_ingest(fn, arg, kind):
     from . import jobs
     job_id = uuid.uuid4().hex[:12]
 
+    said = []
+
     def _work(progress):
+        def say(m):
+            said.append(str(m))
+            progress(m)
         try:
-            return fn(arg, progress)
+            result = fn(arg, say)
         except Exception as exc:  # noqa: BLE001 — the page shows one plain sentence
-            return {"detail": _plain_ingest_error(exc)}
+            result = {"detail": _plain_ingest_error(exc)}
+        _keep_ingest(job_id, {"state": "done", "job_id": job_id, "kind": kind,
+                              "result": result, "progress": said[-12:]})
+        return result
 
     started = jobs.start("ingest", _work, result_key="result", meta={"job_id": job_id,
                                                                      "kind": kind})
@@ -285,6 +319,9 @@ async def ingest_run_status(job_id: str = ""):
     result is the same {definition, errors, warnings} the one-request endpoints return, or
     {detail} with the plain failure."""
     from . import jobs
+    kept = _kept_ingest(job_id) if job_id else None
+    if kept:
+        return kept
     st = jobs.status("ingest")
     if job_id and st.get("job_id") != job_id:
         return {"state": "error", "job_id": job_id, "error": INGEST_INTERRUPTED}

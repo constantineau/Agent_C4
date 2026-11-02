@@ -146,6 +146,32 @@ check("the first job is still the one reported", asyncio.run(
 GATE.set()
 poll(r1["job_id"])
 
+print("a finished draft survives the next ingest starting before its page polls again")
+rA = asyncio.run(main.ingest_run({"urls": ["https://x.org/nor.pdf"]}))
+for _ in range(600):                       # wait for A to finish WITHOUT reading its status
+    if __import__("app.jobs", fromlist=["x"]).status("ingest").get("state") != "running":
+        break
+    _sleep(0.1)
+GATE.clear()
+rB = asyncio.run(main.ingest_run({"urls": ["https://x.org/nor.pdf"]}))
+stA = asyncio.run(main.ingest_run_status(rA["job_id"]))
+check("B started", isinstance(rB, dict) and rB.get("ok"))
+check("A's draft is still there, not 'interrupted'", stA.get("state") == "done"
+      and stA["result"]["definition"]["name"] == "SORC" and "Course done." in stA["progress"])
+check("B reports as running", asyncio.run(main.ingest_run_status(rB["job_id"])).get("state")
+      == "running")
+GATE.set()
+check("B finishes too", poll(rB["job_id"]).get("state") == "done")
+
+print("kept results expire (bounded)")
+main._INGEST_DONE.clear()
+for i in range(main.INGEST_KEEP_N + 3):
+    main._keep_ingest(f"j{i}", {"state": "done", "result": {}})
+check("only the last few are kept", len(main._INGEST_DONE) == main.INGEST_KEEP_N
+      and "j0" not in main._INGEST_DONE and f"j{main.INGEST_KEEP_N + 2}" in main._INGEST_DONE)
+main._INGEST_DONE["old"] = {"state": "done", "result": {}, "finished_at": time.time() - 7200}
+check("an hour-old result is gone", main._kept_ingest("old") is None)
+
 print("model chain: Fable 5.1 then Opus 5, for every Lab LLM call")
 check("default chain", llm.DEFAULT_CHAIN == "claude-fable-5-1,claude-opus-5"
       and llm.MODEL_CHAIN == ["claude-fable-5-1", "claude-opus-5"])
