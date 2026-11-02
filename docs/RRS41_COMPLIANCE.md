@@ -409,6 +409,14 @@ unknown kind counts as advice.
 | `wind_shift` ("Favour the left side") | Tactical advice | Withheld; cleared without its text |
 | `fatigue` ("Rotate the driver now") | Performance advice | Withheld; cleared without its text |
 
+**Starting the race log (the iPad's LOG button)**: the gate is a RACE session, so the kind can't be
+left to chance. Tapping LOG shows two big buttons (48 px+), Race and Practice; Race is pre-selected
+when shore homework from Deploy (a course, fleet or playbook) is aboard, and the crew confirms with
+one tap. The iPad always sends the kind. For old clients, `/session/start` with no kind is a race
+when such homework is aboard, else practice (`racegate.homework_aboard`). While running, the button
+reads "LOG · RACE" or "LOG · PRACTICE". The engine's playbook has no file way in (the old
+`PLAYBOOK_PATH` fallback is gone): only `/playbook/load`, through the gate.
+
 **Race log auto-close (`vps/agent/app/racelog.py`)**: the gate is only as good as the race session.
 Auto-close closes a forgotten session at its last under-way moment; it now re-checks under the
 session lock that the same session is still open and closes only that id, so a race the crew

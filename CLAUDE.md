@@ -218,8 +218,10 @@ Garmin 943; encodings verified round-trip through canboatjs on vcan0; **the 943'
 rendering still needs a dockside eyeball once the N2K cable is plugged**)`.
 
 **Race log (sessions)** — the owner's record switch, fully standalone (no Lab prep, no
-RaceDefinition, no cloud): the dashboard's ⏺ LOG button one-tap starts/ends a session
-(name defaults to the date; a loaded playbook's race_id is picked up automatically). The
+RaceDefinition, no cloud): the dashboard's ⏺ LOG button starts a session with one more tap on
+Race or Practice (Race pre-selected when Deploy homework is aboard; the kind is always sent, and a
+RACE session is what closes the homework gate) and ends it with a double tap (name defaults to the
+date; a loaded playbook's race_id is picked up automatically). The
 archiver records everything all the time, but only SESSION windows are kept long-term and
 backfilled — outside them, readings are pruned after `ARCHIVE_RETAIN_DAYS` (7 on the boat since 2026-10; bench
 overlay 0) and never leave the boat, so day sails/deliveries don't accumulate anywhere.

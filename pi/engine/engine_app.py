@@ -208,6 +208,7 @@ def course_load(body: dict):
                 orinroute.commit_definition(tmp)
             else:
                 orinroute.drop_definition()
+            racegate.mark_homework("course")      # a LOG start defaults to race from now on
         except Exception as exc:  # noqa: BLE001
             orinroute.discard(tmp)
             orinroute.drop_definition()
@@ -304,6 +305,7 @@ def fleet_load(body: dict):
         if racing:
             return racegate.refused()
         datasource.active().save_fleet(blob)
+        racegate.mark_homework("fleet")
     return {"loaded": True, "roster_size": len(blob["fleet"])}
 
 
@@ -334,6 +336,7 @@ def playbook_load(body: dict):
         if racing:
             return racegate.refused()
         datasource.active().save_playbook(bundle)
+        racegate.mark_homework("playbook")
         deviation.reset_state()          # a new playbook → clear the Schmitt/trend memory
         drift.reset_state()
         plangap.reset_state()            # the plan-gap read measures against the NEW promise
@@ -627,8 +630,10 @@ def session_status():
 
 @app.post("/session/start")
 def session_start(body: dict = None):
-    """Start a session: {name?, race_id?, kind?: race|practice} — all optional (one tap at the
-    gun; the loaded playbook's race_id is picked up automatically when aboard)."""
+    """Start a session: {name?, race_id?, kind?: race|practice}. The iPad always sends the kind
+    the crew picked. With no kind (old clients) it is race when any shore homework from Deploy is
+    aboard (course, fleet or playbook), else practice: never silently practice with homework
+    aboard, since a race session is what closes the homework gate."""
     body = body or {}
     return racelog.start(name=body.get("name"), race_id=body.get("race_id"),
                          kind=body.get("kind"))

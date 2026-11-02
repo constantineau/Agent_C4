@@ -64,3 +64,49 @@ def hold():
 
 def refused():
     return {"loaded": False, "detail": RACING}
+
+
+# ---- is shore homework aboard? (the race log's default kind) -----------------------------------
+HOMEWORK_KINDS = ("course", "fleet", "playbook")
+
+
+def _homework_path():
+    import os
+    base = os.path.dirname(os.environ.get("ENGINE_DB", "/var/lib/sr33/engine/engine.db"))
+    return os.path.join(base, "homework-aboard.json")
+
+
+def mark_homework(kind):
+    """Record that a Deploy load of `kind` (course/fleet/playbook) landed. Never raises."""
+    import json
+    import os
+    import tempfile
+    import time
+    try:
+        path = _homework_path()
+        cur = homework_aboard_detail()
+        cur[kind] = int(time.time())
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".hw-", suffix=".tmp")
+        with os.fdopen(fd, "w") as f:
+            json.dump(cur, f)
+        os.replace(tmp, path)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def homework_aboard_detail() -> dict:
+    """{kind: when} for each Deploy load aboard; {} when none (or unreadable)."""
+    import json
+    try:
+        with open(_homework_path()) as f:
+            d = json.load(f)
+        return {k: v for k, v in d.items() if k in HOMEWORK_KINDS} if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def homework_aboard() -> bool:
+    """Is any shore homework (a course, fleet or playbook from Deploy) aboard? Then a session
+    started with no kind is a RACE (old clients); the iPad pre-selects Race."""
+    return bool(homework_aboard_detail())

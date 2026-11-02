@@ -6,7 +6,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>SR33 Crew Dashboard</title>
-  <link rel="stylesheet" href="dashboard.css?v=rr1101f">
+  <link rel="stylesheet" href="dashboard.css?v=rl1102a">
 </head>
 <body>
   <!-- ===== top bar ===== -->
@@ -18,6 +18,7 @@
     <!-- RACE LOG: the owner's record switch — one tap starts a session (kept + backfilled +
          debriefed); data outside sessions is pruned and never leaves the boat. No Lab prep needed. -->
     <button class="ctl rec" id="recBtn" title="Tap to start or end logging. Unlogged data is deleted after 7 days.">⏺ <b id="recLbl">LOG</b></button>
+    <span class="rec-pick" id="recPick" hidden><button class="ctl rp" id="recRace">Race</button><button class="ctl rp" id="recPractice">Practice</button></span>
     <!-- data source: LIVE engine vs canned DEMO scenarios (calm/escalated) -->
     <button class="ctl" id="srcBtn" title="Live or demo">SRC: <b id="srcLbl">LIVE</b></button>
     <button class="ctl" id="themeBtn" title="Day / night theme">☀ <b id="themeLbl">AUTO</b></button>
@@ -114,9 +115,10 @@
   </section>
 
   <script src="/sun.js"></script>
-  <script src="crewwatch.js?v=rr1101f"></script>
-  <script src="plume.js?v=rr1101f"></script>
-  <script src="reroute.js?v=rr1101f"></script>
-  <script src="dashboard.js?v=rr1101f"></script>
+  <script src="crewwatch.js?v=rl1102a"></script>
+  <script src="plume.js?v=rl1102a"></script>
+  <script src="reroute.js?v=rl1102a"></script>
+  <script src="reclog.js?v=rl1102a"></script>
+  <script src="dashboard.js?v=rl1102a"></script>
 </body>
 </html>
