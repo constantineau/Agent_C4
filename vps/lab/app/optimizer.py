@@ -1076,6 +1076,10 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
     if land_failed:
         degraded = True
         warnings.insert(0, LAND_FAILED)
+    held = _forecast_held(wf, full_path, float(start_epoch))
+    if held:                       # #51: wind past every model's end is the last frame, held
+        degraded = True
+        warnings.append(FORECAST_ENDS if held == "end" else FORECAST_STARTS_LATE)
     for name, n in _leg_self_crossings(full_path, legs, start_epoch).items():
         warnings.append(f"Route crosses itself {n}x on the leg to {name}. Light, shifty wind. "
                         "Don't trust that leg's line. Sail the shifts.")
@@ -1163,6 +1167,30 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
 
 # #51: the shoreline didn't load. Shown first on the route; the route is marked degraded.
 LAND_FAILED = "Shoreline didn't load. Land not checked: the route may cross land. Don't use it."
+
+
+# #51: past every model's last frame the route sails on that frame, held. Kept, but never silent.
+FORECAST_ENDS = "Forecast ends before the finish: last hours use the final forecast."
+FORECAST_STARTS_LATE = "Forecast starts after the gun: first hours use the first forecast."
+
+
+def _forecast_held(wf, full_path, start_epoch=None):
+    """Did the route sail on a held edge frame (no model's forecast reached that time)? → "end"
+    (past the last frame), "start" (before the first) or None. A wind field without the `held`
+    flag (a fixed test wind, the boat's own) never holds."""
+    try:
+        last = max(fr[-1].valid_time for fr in (wf.series or {}).values() if fr)
+    except (AttributeError, TypeError, ValueError):
+        last = None
+    shift = getattr(wf, "shift_s", 0.0) or 0.0          # a time-shifted scenario samples early
+    hit = None
+    for p in full_path or []:
+        d = wf.detail_at(p["lat"], p["lon"], p["t"])
+        if d and d.get("held"):
+            if last is None or p["t"] + shift > last:
+                return "end"
+            hit = "start"
+    return hit
 
 
 def _land_failed(obstacles, leg_obstacles):

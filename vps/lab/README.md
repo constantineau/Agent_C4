@@ -574,6 +574,9 @@ seasonal window across many years, **recency-weighted** (t½ 8 y) so recent mode
 deep history still counts; the better a model has done here, the more it counts (and its persistent
 bias is removed before blending). Automatic + always shown in the GamePlan **Model skill** panel.
 The playbook's field is weighted the same way (`routerun.venue_skill`, #51).
+A model counts only within one frame step of its own frames (HRRR's last frame no longer blends
+into hour 40). Past every model's end the last frame stands in, flagged `held`; the route is kept
+but marked degraded: "Forecast ends before the finish: last hours use the final forecast." (#51)
 - **Data:** observed = METAR (Iowa State ASOS) + NDBC buoys; forecast = Open-Meteo Historical Forecast
   (2021+) plus a deep GRIB pipeline — HRRR archive (2015+) + GEFS Reforecast v12 (2005+) via `.idx`
   byte-range subsetting (`app/deepfc.py`), run offline via the "Deepen history" backfill.
