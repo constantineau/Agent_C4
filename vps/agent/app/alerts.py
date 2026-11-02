@@ -137,7 +137,9 @@ def _conditions(blind=None):
                             "message": f"Data stale: newest is {round(age)} s old."})
 
             depth = s.get("depth")
-            if depth is not None:
+            if depth is None:
+                blind.add("depth_shoaling")      # depth sensor silent: keep any alarm up
+            else:
                 if depth <= DEPTH_DANGER_M:
                     out.append({"key": "depth_shoaling", "kind": "depth_shoaling",
                                 "severity": "danger", "message": f"Shallow: {depth} m."})

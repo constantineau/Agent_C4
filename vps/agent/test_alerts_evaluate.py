@@ -243,6 +243,19 @@ check("data back, still shallow: depth stays, one row, no re-raise", tick(42)
       == [("cleared", "stale_telemetry", "danger")] and
       [r["key"] for r in db.rows if r["key"] == "depth_shoaling"] == ["depth_shoaling"])
 
+print("the depth sensor alone goes silent (GPS still live): depth held:")
+db = reset()
+world(depth=3.0)
+tick(0)
+tick(10)
+world(depth=None)
+check("depth missing: the alarm is not cleared", tick(11) == []
+      and [r["key"] for r in db.active()] == ["depth_shoaling"])
+check("…and still not 60 s later", tick(71) == []
+      and [r["key"] for r in db.active()] == ["depth_shoaling"])
+world(depth=30.0)
+check("a real deep reading clears it", tick(72) == [("cleared", "depth_shoaling", "danger")])
+
 print("after a restart — an alert on record whose condition still holds:")
 db = reset()
 world(depth=6.0)
