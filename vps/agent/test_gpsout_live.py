@@ -291,6 +291,25 @@ check("strict: the course can't be read → leg check not clear",
       gpsout.leg_check(leg)["clear"] is False)
 landchart.orinroute._definition_for = _real_def_for
 
+print("a route that isn't the active course is refused:")
+_pb = gpsout.deviation._load_playbook
+gpsout.deviation._load_playbook = lambda: {"recommended": "a",
+                                           "variants": [{"id": "a", "route": {"path": PATH}}]}
+NAV.active_route = lambda: "race"
+NAV.get_navigator = lambda route=None: {"available": False}
+NAV._marks = lambda route: []
+gpsout.datasource.active = lambda: DS((44.003, -82.0, time.time()))
+posts.clear()
+r = gpsout.show(route="B")
+check("/gps/show {route: B} while A is active → refused, nothing posted",
+      r == {"shown": False, "dest_index": None,
+            "note": "Route isn't the active course. Switch to it first."} and posts == [])
+r = gpsout.show(route="race")
+check("naming the active course → sent", r["shown"] and posts)
+r = gpsout.show()
+check("no route named (the iPad) → sent", r["shown"])
+gpsout.deviation._load_playbook = _pb
+
 print("the engine endpoints:")
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -341,8 +360,12 @@ check("a failed load leaves the plotter alone", not r.json().get("loaded") and p
 gpsout.datasource.active = lambda: DS((44.0, -82.0, time.time()))
 r = client.get("/gps/fix").json()
 check("GET /gps/fix served", r["fix"]["lat"] == 44.0 and "course" in r)
+gpsout.deviation._load_playbook = lambda: ISLAND
 r = client.post("/gps/leg-check", json=dict(through, course=gpsout.course_token())).json()
-check("POST /gps/leg-check served (through the island → not clear)", r["clear"] is False)
+check("POST /gps/leg-check served (through the island → not clear, 'obstacle')",
+      r == {"clear": False, "reason": "obstacle"})
+r = client.post("/gps/leg-check", json=dict(beside, course=gpsout.course_token())).json()
+check("POST /gps/leg-check beside the island → clear", r["clear"] is True)
 
 print("PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)

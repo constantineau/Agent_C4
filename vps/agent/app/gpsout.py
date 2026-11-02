@@ -56,6 +56,7 @@ NO_SHORE = "GPS route doesn't check the shore."
 PI_CROSSES_LAND = "Pi route crosses land. Not sent to GPS."
 CROSSES_LAND = "Route crosses land. Not sent to GPS."
 NO_FIX = "No GPS fix. Not sent to GPS."
+NOT_ACTIVE = "Route isn't the active course. Switch to it first."
 # a fix older than this is no fix (n2kout applies the same limit to its live nav data)
 FIX_MAX_AGE_S = float(os.environ.get("GPSOUT_FIX_MAX_AGE_S", "10"))
 
@@ -536,6 +537,11 @@ def show(source: str = "playbook", variant=None, route=None):
     This runs in the engine process, the same one that serves /course/load; the n2kout POST is
     bounded by POST_TIMEOUT_S, so the lock is held a few seconds at most."""
     with orinroute.COURSE_LOCK:
+        # the live leg after the send (course token, mark progress, leg checks) follows the
+        # ACTIVE course, so the route must be that course. The iPad never names another one
+        # (it sends no `route`); a direct caller that does is refused, never mixed.
+        if route and route != NAV.active_route():
+            return {"shown": False, "dest_index": None, "note": NOT_ACTIVE}
         return _show(source, variant, route)
 
 
