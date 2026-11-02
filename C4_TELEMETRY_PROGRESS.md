@@ -1,7 +1,24 @@
-# C4 telemetry consolidation — progress (updated 2026-10-30)
+# C4 telemetry consolidation — progress (updated 2026-11-02)
 
 Goal (Cole): **lose no telemetry**, and **copy all telemetry off the Pi to the VPS**.
 Deletion from the boat is allowed only *after* an off-boat copy is sha256-verified.
+
+## ⏸ PICK UP HERE — 2026-11-02 SESSION END (dev = main @ 405be7f)
+
+**Done this session:**
+- System review map #188 (children #146–#187). Wave-1 fixes merged in order #194 (dated route test), #189 (race-time gate, Race/Practice LOG), #193 (archiver robustness), #192 (chartplotter live waypoint/XTE + NMEA 2000 identity), #191 (collision watch: own MMSI, all contacts, OFF states). Earlier: #137, #138 (Orin optimizer), #142, #143 (Re-route now button), #144, #190 (CI gate).
+- C4's MMSI 316053364 in `vps/lab/boats/sr33.json` and the Pi `.env` (`OWN_MMSI`).
+- **BOAT DEPLOYED 2026-11-02 13:28Z** (stamp 20261102T132822Z): Pi all 6 services rebuilt/recreated (log caps), `sr33-can0` reinstalled (restart-ms 100); backup `~/deploy-backups/full-20261102T132822Z`, rollback images `:pre-20261102T132822Z`. Orin copilot updated (now cable + loopback only; backup `~/pre-pull-backup/20261102T132822Z`). Orin `~/plume-venv` created; `sr33-orin-reroute` enabled (idle); `sr33-orin-plume.timer` enabled (~85 MB/day over Starlink; Cole chose on). VPS Lab + agent rebuilt (rollback `:pre-20261102`), replay site restarted.
+- Verified after deploy: archiver recording; n2kout on the bus (11 peers, requests to us > 0, ERROR-ACTIVE, no send errors); copilot reaches the engine over the cable; Pi reaches the re-route service; one manual plume pass pushed 6 models in 77 s.
+- VPS: Docker + containerd moved to `/mnt/data/var-lib` (bind mounts in fstab, systemd `RequiresMountsFor`); data disk grown to 500 GB; root disk 98% → 34%.
+
+**Next, in order:**
+1. Lab Deploy tab: one Push (course definition, chart, boat profile) — the Re-route button needs it aboard. Playbook also loads only this way now (the Orin ignores its old file: "Playbook not confirmed").
+2. Dockside shakedown with power on: Garmin checklist in `pi/n2kout/README.md` (Device List shows "SR33 C4 Navigator", data sources, XTE/waypoint fields, route line). Also check GPS fix and AIS link (both stale/down on the hard).
+3. Practice sail.
+4. Later waves from #188: copilot grounding / left-right variant (#53), LLM turning tiles green, 2048-token context (#54), coastline-fail silent land routes (#51), invented wind / mixed sources / tack labels, dead-sensor green (#46), shared SQLite connection (#162), backups (#180, #181), deploy drift, router corner gap (#145). Small follow-ups on #184.
+
+**Open questions for Cole:** pace vs. plan usage; whether to write the one-page Garmin dock checklist.
 
 ## ⏸ PICK UP HERE — 2026-10-31 (dev @ fcf7edf)
 
