@@ -206,6 +206,7 @@ def _engine_ais(rows, own_sog_kn=6.0, fix_age=1.0, own_mmsi=None, rx_age=None, l
     import os
 
     from app import ais as ais_mod
+    ais_mod._WATCH_START = time.monotonic() - 3600     # an engine that has been listening a while
     now = time.time()
 
     class Src:

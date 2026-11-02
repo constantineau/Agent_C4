@@ -168,6 +168,10 @@ old = row("366999006", 1 * NM_LAT, 10.0, 180.0, age_s=60, pos_age_s=400)
 check("a position older than the 5-min window is not placed", by(run(Src([old])), "366999006") is None)
 
 print("\n== 5. a silent feed is not an empty sea ==")
+ais._WATCH_START = time.monotonic()
+check("just started, nothing heard yet → not silent (we haven't listened 15 min)",
+      run(Src([], sog_kn=6.0))["feed_silent"] is False)
+ais._WATCH_START = time.monotonic() - (ais.AIS_SILENT_MIN * 60 + 1)   # listened long enough
 r = run(Src([], sog_kn=6.0))
 check("under way, nothing heard → feed_silent", r["feed_silent"] is True and r["last_heard_s"] is None)
 r = run(Src([row("366999008", 30 * NM_LAT, 10.0, 0.0, age_s=600)], sog_kn=6.0))

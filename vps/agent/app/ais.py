@@ -68,6 +68,9 @@ OWN_FIX_MAX_AGE_S = _envf("AIS_OWN_FIX_MAX_AGE_S",
                           else 120)
 # Nothing heard on AIS for this long while under way → the feed is called silent.
 AIS_SILENT_MIN = _envf("AIS_SILENT_MIN", 15)
+# When this process started watching: never-heard only counts as silent once we have listened
+# for AIS_SILENT_MIN ourselves (not seconds after a restart).
+_WATCH_START = _time.monotonic()
 UNDERWAY_KN = _envf("AIS_UNDERWAY_KN", 2.0)
 # A fix stamped more than this into the future is invalid (a clock step), not "age 0".
 FUTURE_SKEW_S = _envf("AIS_FUTURE_SKEW_S", 5)
@@ -402,7 +405,8 @@ def get_ais_targets(max_range_nm: float = 12):
                 else True if own["sog"] >= UNDERWAY_KN
                 else False if own.get("motion_source") == "measured" else None)
     feed_silent = bool(underway is not False
-                       and (last_heard_s is None or last_heard_s > AIS_SILENT_MIN * 60))
+                       and (last_heard_s > AIS_SILENT_MIN * 60 if last_heard_s is not None
+                            else _time.monotonic() - _WATCH_START > AIS_SILENT_MIN * 60))
     if rx_missing or link_down:
         feed_silent = False                  # the louder signal says it
 
