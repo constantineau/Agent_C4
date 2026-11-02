@@ -24,10 +24,9 @@ No LLM: the deviation truth is deterministic and always available; a copilot nar
 reference it later through grounding-as-routing.
 
 Loading the homework: `POST /playbook/load` persists the bundle via `datasource.save_playbook`; this
-module reads it back with `datasource.active().get_playbook()`. A file fallback (`PLAYBOOK_PATH`, the
-same env the copilot uses) makes "drop the signed bundle at a path" work too.
+module reads it back with `datasource.active().get_playbook()`. That is the ONLY way in: there is no
+file fallback, so every playbook passes the race-time gate (frozen at the gun, app/racegate.py).
 """
-import json
 import math
 import os
 import time
@@ -124,22 +123,12 @@ def _project(blat, blon, path):
 # --- playbook / variant ------------------------------------------------------------------------
 
 def _load_playbook():
-    """The frozen bundle aboard — from the datasource (POST /playbook/load) first, else the file at
-    PLAYBOOK_PATH (the same env the copilot reads), so either deploy path works."""
+    """The frozen bundle aboard: only what POST /playbook/load saved (through the race-time gate).
+    No file fallback: a file dropped on the box would skip the gate."""
     try:
-        blob = datasource.active().get_playbook() or {}
+        return datasource.active().get_playbook() or {}
     except Exception:
-        blob = {}
-    if blob:
-        return blob
-    path = os.environ.get("PLAYBOOK_PATH", "").strip()
-    if path and os.path.exists(path):
-        try:
-            with open(path) as f:
-                return json.load(f)
-        except (OSError, json.JSONDecodeError):
-            return {}
-    return {}
+        return {}
 
 
 def playbook_summary(bundle):

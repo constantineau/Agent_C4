@@ -26,14 +26,14 @@ import zlib
 
 from shared import boat_profile
 
-from . import plume
+from . import racegate
 
 SCHEMA = "c4.orin-assets/v1"
 FIELD_SCHEMA = "c4.obstacles/v1"
 CHART_KIND = "land-v2"               # pi/orin/reroute/job.CHART_KIND
 MAX_BYTES = 1536 * 1024              # well under the Orin's 2 MB request cap, with the course
 MAX_CELLS = 20_000_000              # = the Lab's obstacles.MAX_FIELD_CELLS
-RACING = "Racing now. Not loaded."
+RACING = racegate.RACING
 _LOCK = threading.Lock()
 
 
@@ -166,9 +166,9 @@ def load(body, now=None):
         return {"loaded": False, "detail": why}
     if len(text) > MAX_BYTES:
         return {"loaded": False, "detail": "Chart and boat profile too large."}
-    with _LOCK, plume._session_lock():
-        if plume.race_session():
-            return {"loaded": False, "detail": RACING}
+    with _LOCK, racegate.session_lock():
+        if racegate.race_session():
+            return racegate.refused()
         _write(text)
     return answer
 

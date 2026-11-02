@@ -665,7 +665,8 @@ async def playbook_gpx(pid: str, variants: str = "recommended"):
 
 @app.get("/api/playbooks/{pid}/download")
 async def playbook_download(pid: str):
-    """The exact signed bytes — scp this to the Orin and point the copilot's PLAYBOOK_PATH at it."""
+    """The exact signed bytes. To load it by hand, POST it to the Pi engine's /playbook/load (the
+    Pi passes it to the Orin copilot and approves it); never copy it to the Orin directly."""
     raw = pbstore.get_raw(pid)
     if raw is None:
         return JSONResponse({"detail": "unknown playbook id"}, status_code=404)

@@ -503,6 +503,11 @@ body {
 /* in-button end confirmation (replaces window.confirm, which iOS standalone can swallow) */
 .ctl.rec.confirm { background:var(--act); border-color:var(--act); color:#fff; }
 .ctl.rec.confirm b { color:#fff; }
+/* LOG start: Race or Practice, one tap (a race session closes the homework gate) */
+.rec-pick { display:inline-flex; gap:8px; }
+.rec-pick[hidden] { display:none; }
+.ctl.rp { min-height:48px; min-width:110px; padding:10px 18px; font-size:17px; font-weight:700; }
+.ctl.rp.pre { background:var(--act); border-color:var(--act); color:#fff; }
 .st-plays-head { display: flex; justify-content: space-between; align-items: center;
   font-size: 11px; letter-spacing: 1px; opacity: 0.75; margin-bottom: 3px; }
 .st-gearbox { letter-spacing: 0; }

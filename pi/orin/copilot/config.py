@@ -38,6 +38,14 @@ MAX_TOOL_ROUNDS = int(os.environ.get("MAX_TOOL_ROUNDS", "4"))
 # present the copilot leans on its pre-authored variants as a strong prior — onboard it may
 # depart from them (legal). Absent → the copilot reasons from live engine facts only and says so.
 PLAYBOOK_PATH = os.environ.get("PLAYBOOK_PATH", "").strip()
+# Who may POST /playbook/stage + /playbook/commit: the Pi engine's cable address only (it forwards the Lab's bundle
+# under its race-log lock). Comma list; the bench sets the Pi's Tailscale IP.
+PLAYBOOK_LOAD_FROM = frozenset(x.strip() for x in os.environ.get(
+    "PLAYBOOK_LOAD_FROM", "10.10.10.1").split(",") if x.strip())
+# A staged playbook must be committed within this many seconds of the stage's RECEIPT (Orin
+# monotonic clock), checked again right before the file goes live. Keep it <= the Pi engine's
+# COPILOT_COMMIT_TIMEOUT_S (4 s), so a write can only land while the Pi still holds its lock.
+PLAYBOOK_COMMIT_TTL_S = float(os.environ.get("PLAYBOOK_COMMIT_TTL_S", "3"))
 
 # The active route the engine should compute against (the loaded homework course).
 DEFAULT_ROUTE = os.environ.get("COPILOT_ROUTE", "").strip() or None
