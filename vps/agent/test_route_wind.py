@@ -15,8 +15,14 @@ Run:  PYTHONPATH=vps/agent:. python3 vps/agent/test_route_wind.py
 """
 import io
 import json
+import os
+import subprocess
+import sys
+import tempfile
 import time
 import urllib.parse
+
+os.environ["ENGINE_DB"] = os.path.join(tempfile.mkdtemp(), "engine", "engine.db")
 
 from app import deviation, reoptimize, routing, weather
 from app import navigator as NAV
@@ -85,6 +91,21 @@ MARKS_N = [{"seq": 1, "name": "Start", "lat": 44.0, "lon": -82.0},
            {"seq": 2, "name": "A", "lat": 44.3, "lon": -82.0}]
 
 
+def grid(tws, twd, age_s=0.0, keep=lambda a, b: True):
+    """Put forecasts in the cache as if fetched `age_s` ago (past TTL_S = expired), for the cells
+    around the test courses that `keep(a, b)` picks (a, b = 0.1° steps from 44.0 N, 82.0 W)."""
+    t0 = int(time.time()) - 3600
+    for a in range(-6, 10):
+        for b in range(-6, 7):
+            if keep(a, b):
+                weather._cache[(round(44.0 + a * 0.1, 1), round(-82.0 + b * 0.1, 1))] = {
+                    "fetched": time.time() - age_s,
+                    "hours": [(t0 + 3600 * i, tws, twd) for i in range(48)]}
+
+
+CHECKER = lambda a, b: (a + b) % 2 == 0      # noqa: E731 — every other cell; holes are ≤ 7.4 nm from one
+
+
 def raises(fn):
     try:
         fn()
@@ -146,13 +167,15 @@ check("next cell (fetch fails) takes the start cell's forecast (20 kn / 090), no
       w_next is not None and tuple(round(x) for x in w_next) == (20, 90))
 check("label says the forecast had gaps", getattr(wf, "source", None) == "forecast, gaps filled from nearby")
 n_calls = len(CALLS)
-for k in range(2, 12):
-    wf(44.0 + k * 0.1, -82.0, time.time())
+for la in (43.9, 44.0, 44.1):
+    for lo in (-82.1, -81.9):
+        wf(la, lo, time.time())
 check("after the first failure no more fetches (a dead link costs one timeout per run)",
       len(CALLS) == n_calls)
 
 print("#157 /route and the Pi re-route report the gaps")
-net({(44.0, -82.0): (20.0, 90.0)})
+net({})
+grid(20.0, 90.0, keep=CHECKER)            # every other cell cached fresh, the link down for the rest
 boat(44.0, -82.0, 8.0, 270.0, MARKS_N, "A")
 r = routing.get_route()
 check("/route available", r.get("available") is True)
@@ -160,7 +183,8 @@ check("/route wind_source is not plain 'forecast'", r.get("wind_source") == "for
 check("/route counts the filled cells", (r.get("forecast_gaps") or 0) >= 1)
 # a reach north in 20 kn from 090: if the 270 boat wind had leaked in, legs would show both tacks
 check("one wind across the route → a straight reach, no phantom tacks", r.get("tacks") == 0)
-net({(44.0, -82.0): (20.0, 90.0)})
+net({})
+grid(20.0, 90.0, keep=CHECKER)
 p = reoptimize.compute()
 check("Pi route available", p.get("available") is True)
 check("Pi route labelled with gaps", p.get("wind_source") == "forecast, gaps filled from nearby"
@@ -180,17 +204,27 @@ weather._cache.clear()                                    # nothing cached to bo
 err = raises(lambda: wf(44.1, -82.0, time.time()))
 check(f"the wind field refuses with '{FCST_GAP}'", err is not None and str(err) == FCST_GAP)
 
+print("#157 a hole is filled only from a cell within 10 nm")
+net({(44.0, -82.0): (20.0, 90.0)})
+wf, _ = routing.make_wind_fn(44.0, -82.0, (8.0, 270.0))
+check("6 nm from the forecast cell: filled", wf(44.1, -82.0, time.time()) is not None)
+err = raises(lambda: wf(44.2, -82.0, time.time()))
+check(f"12 nm away: refused with '{FCST_GAP}'", err is not None and str(err) == FCST_GAP)
+net({(44.0, -82.0): (20.0, 90.0)})
+boat(44.0, -82.0, 8.0, 270.0, MARKS_N, "A")
+r = routing.get_route()
+check(f"/route through an 18 nm forecast hole refuses with '{FCST_GAP}'",
+      r.get("available") is False and r.get("note") == FCST_GAP)
+net({(44.0, -82.0): (20.0, 90.0)})
+p = reoptimize.compute()
+check("Pi re-route through it refuses the same way", p.get("available") is False and p.get("note") == FCST_GAP)
+
 print("#157 an EXPIRED forecast + no network → one failed fetch per run, labelled 'old forecast'")
 
 
-def expired(tws, twd):
-    """Fill the cache with forecasts that are past their TTL (fetched before the link died)."""
-    t0 = int(time.time()) - 3600
-    for a in range(-6, 10):
-        for b in range(-6, 7):
-            weather._cache[(round(44.0 + a * 0.1, 1), round(-82.0 + b * 0.1, 1))] = {
-                "fetched": time.time() - weather.TTL_S - 60,
-                "hours": [(t0 + 3600 * i, tws, twd) for i in range(48)]}
+def expired(tws, twd, age_s=None):
+    """Fill the cache with forecasts past their TTL (fetched before the link died)."""
+    grid(tws, twd, weather.TTL_S + 60 if age_s is None else age_s)
 
 
 net({})
@@ -226,6 +260,65 @@ w2 = weather.wind_at(44.0, -82.0, time.time())
 check("the old forecast is served", w1 is not None and round(w1[0]) == 15)
 check(f"the second read doesn't wait on the network again (fetches: {len(CALLS)})", len(CALLS) == 1)
 check("the cell reads as stale", weather.cell_status(44.0, -82.0) == "stale")
+
+print("#157 a forecast older than 6 h is refused; under 6 h it routes, labelled old")
+TOO_OLD = "Forecast too old. Can't route."
+net({})
+expired(15.0, 90.0, 7 * 3600)
+r = routing.get_route()
+check(f"7 h old: /route refuses with '{TOO_OLD}'", r.get("available") is False and r.get("note") == TOO_OLD)
+net({})
+expired(15.0, 90.0, 7 * 3600)
+p = reoptimize.compute()
+check(f"7 h old: Pi re-route refuses with '{TOO_OLD}'", p.get("available") is False and p.get("note") == TOO_OLD)
+net({})
+expired(15.0, 90.0, 5 * 3600)
+r = routing.get_route()
+check("5 h old: routes, labelled 'old forecast'", r.get("available") is True
+      and r.get("wind_source") == "old forecast")
+# a fresh start, but the hole beside it can only borrow a 7 h old cell → refused too
+net({(44.0, -82.0): (15.0, 90.0)})
+wf, _ = routing.make_wind_fn(44.0, -82.0, (8.0, 270.0))
+weather._cache.clear()
+grid(15.0, 90.0, 7 * 3600, keep=lambda a, b: (a, b) == (0, 0))
+err = raises(lambda: wf(44.1, -82.0, time.time()))
+check("a gap filled from a 7 h old cell is refused too", err is not None and str(err) == TOO_OLD)
+
+print("the limits are set by env (C4_FORECAST_MAX_AGE_H, C4_FORECAST_FILL_NM, C4_REROUTE_BUDGET_S)")
+env = dict(os.environ, C4_FORECAST_MAX_AGE_H="2", C4_FORECAST_FILL_NM="4", C4_REROUTE_BUDGET_S="30")
+got = subprocess.run([sys.executable, "-c", "from app import weather, reoptimize; "
+                      "print(weather.MAX_AGE_S, weather.FILL_NM, reoptimize.BUDGET_S)"],
+                     env=env, capture_output=True, text=True).stdout.split()
+check(f"env read: {got}", got == ["7200.0", "4.0", "30.0"])
+got = subprocess.run([sys.executable, "-c", "from app import weather, reoptimize; "
+                      "print(weather.MAX_AGE_S, weather.FILL_NM, reoptimize.BUDGET_S)"],
+                     env={k: v for k, v in os.environ.items() if not k.startswith(("C4_FORECAST", "C4_REROUTE"))},
+                     capture_output=True, text=True).stdout.split()
+check(f"defaults 6 h / 10 nm / 90 s: {got}", got == ["21600.0", "10.0", "90.0"])
+
+print("Pi re-route: 90 s wall-clock limit, then a plain refusal and no half route")
+TOO_LONG = "Re-route took too long. Try again."
+net({"*": (12.0, 90.0)})
+p = reoptimize._compute(NAV.get_navigator(), [MARKS_N[1]], 44.0, -82.0, (12.0, 90.0),
+                        None, [], [], deadline=time.time() - 1)
+check(f"past the deadline: '{TOO_LONG}', no route", p.get("available") is False
+      and p.get("note") == TOO_LONG and "path" not in p)
+# the button's job, with a slow wind (each sample 20 ms) and a 0.3 s budget
+_real_wind_at = weather.wind_at
+weather.wind_at = lambda la, lo, t: (time.sleep(0.02), _real_wind_at(la, lo, t))[1]
+reoptimize.BUDGET_S = 0.3
+t_start = time.time()
+code, body = reoptimize.run(device="test")
+if reoptimize._thread:
+    reoptimize._thread.join(30)
+took = time.time() - t_start
+st = reoptimize.status()
+weather.wind_at = _real_wind_at
+reoptimize.BUDGET_S = 90.0
+check("the press started a run", code == 202)
+check(f"it stopped near its budget (took {took:.1f} s)", took < 3)
+check(f"the job ends in error saying '{TOO_LONG}'", st.get("state") == "error" and st.get("detail") == TOO_LONG)
+check("no half route was stored", reoptimize.get_reoptimize().get("available") is False)
 
 # ==== #158: tack labels from the route's wind, not the live TWD ===============================
 print("#158 tacks judged against the route's wind")

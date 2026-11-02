@@ -120,6 +120,8 @@ NO_WIND = "No wind data. Can't route."
 FCST_GAP = "Forecast incomplete. Can't route."
 GAPS_FILLED = "Forecast gaps filled from nearby."
 OLD_FCST = "Old forecast."
+FCST_TOO_OLD = "Forecast too old. Can't route."
+TOO_LONG = "Re-route took too long. Try again."
 SRC_FCST = "forecast"
 SRC_FCST_FILLED = "forecast, gaps filled from nearby"
 SRC_FCST_OLD = "old forecast"
@@ -127,7 +129,11 @@ SRC_LIVE = "live wind (no forecast)"
 
 
 class NoWindError(Exception):
-    """The wind field had nothing for a point the route needed. The crew-facing reason is str()."""
+    """The wind field had nothing usable for a point the route needed. str() is the crew's reason."""
+
+
+class RouteTimeout(Exception):
+    """The route ran past its wall-clock deadline. str() is the crew's reason."""
 
 
 class WindField:
@@ -137,18 +143,24 @@ class WindField:
     cell, or the refresh of an expired one) the run reads the cache only, so a dead link costs one
     10 s timeout, not one per cell (#157). A cell with no fresh forecast takes, in order: its own
     old forecast, the nearest fresh cached cell, the nearest old one. Gaps are counted in `filled`,
-    old forecast in `stale`, and the label says so. It never falls back to the boat's measured
-    wind mid-route.
-    Live mode: the measured wind (tws, twd) held constant."""
+    old forecast in `stale`, and the label says so. A hole is filled only from a cell within
+    weather.FILL_NM, and an old forecast past weather.MAX_AGE_S is refused. It never falls back
+    to the boat's measured wind mid-route.
+    Live mode: the measured wind (tws, twd) held constant.
+    `deadline` (epoch): past it, the next sample raises RouteTimeout, which stops route_leg cleanly
+    (it samples the wind at every node)."""
 
-    def __init__(self, use_forecast, live=None):
+    def __init__(self, use_forecast, live=None, deadline=None):
         self.use_forecast = use_forecast
         self.live = live
+        self.deadline = deadline
         self.filled = set()          # cells whose forecast came from a nearby cell
         self.stale = set()           # cells routed on an old forecast (its refresh failed)
         self._offline = False
 
     def __call__(self, lat, lon, epoch):
+        if self.deadline is not None and time.time() > self.deadline:
+            raise RouteTimeout(TOO_LONG)
         if not self.use_forecast:
             return self.live
         if not self._offline:
@@ -162,15 +174,22 @@ class WindField:
             return w
         w = weather.cached_wind_at(lat, lon, epoch, stale_ok=True)
         if w:
+            self._old(weather.cell_age_s(lat, lon))
             self.stale.add(cell)
             return w
-        w, fresh = weather.nearest_cached_wind(lat, lon, epoch)
+        w, fresh, age = weather.nearest_cached_wind(lat, lon, epoch)
         if not w:
             raise NoWindError(FCST_GAP)
-        self.filled.add(cell)
         if not fresh:
+            self._old(age)
             self.stale.add(cell)
+        self.filled.add(cell)
         return w
+
+    @staticmethod
+    def _old(age_s):
+        if age_s is not None and age_s > weather.MAX_AGE_S:
+            raise NoWindError(FCST_TOO_OLD)
 
     @property
     def source(self):

@@ -10,6 +10,7 @@ not trimming. Spatial resolution is the model's; we cache by ~0.1° cell.
 """
 import json
 import math
+import os
 import time
 import urllib.parse
 import urllib.request
@@ -17,6 +18,9 @@ import urllib.request
 API = "https://api.open-meteo.com/v1/forecast"
 TTL_S = 1800
 RETRY_S = 60           # after a failed refresh, serve the old forecast this long before trying again
+# a route refuses a forecast older than this (h), and fills a hole only from a cell this close (nm)
+MAX_AGE_S = float(os.environ.get("C4_FORECAST_MAX_AGE_H", "6")) * 3600
+FILL_NM = float(os.environ.get("C4_FORECAST_FILL_NM", "10"))
 _cache = {}            # (rlat, rlon) -> {"fetched": ts, "hours": [(epoch, tws, twd)]}
 
 
@@ -88,24 +92,35 @@ def cached_wind_at(lat, lon, epoch, stale_ok=False):
     return _interp(c["hours"], epoch) if stale_ok or _fresh(c, time.time()) else None
 
 
-def nearest_cached_wind(lat, lon, epoch):
-    """(wind, fresh): the forecast of the nearest cell with a fresh one in the cache, else of the
-    nearest with an old one (fresh False), else (None, False). Never fetches. The router fills a
-    forecast gap with it, so a route never mixes forecast and measured wind (#157)."""
+def cell_age_s(lat, lon):
+    """Seconds since this cell's cached forecast was fetched, or None if none is cached."""
+    c = _cache.get(_cell(lat, lon))
+    return time.time() - c["fetched"] if c and c.get("hours") else None
+
+
+def nearest_cached_wind(lat, lon, epoch, max_nm=None):
+    """(wind, fresh, age_s): the forecast of the nearest cell within `max_nm` (default FILL_NM)
+    with a fresh one in the cache, else of the nearest with an old one (fresh False), else
+    (None, False, None). Never fetches. The router fills a forecast gap with it, so a route never
+    mixes forecast and measured wind (#157)."""
     now = time.time()
+    lim = FILL_NM if max_nm is None else max_nm
     coslat = math.cos(math.radians(lat))
     best = {True: None, False: None}
     for (clat, clon), c in list(_cache.items()):
         if not (c and c.get("hours")):
             continue
         fresh = _fresh(c, now)
-        d = (clat - lat) ** 2 + ((clon - lon) * coslat) ** 2
-        if best[fresh] is None or d < best[fresh][0]:
-            best[fresh] = (d, c["hours"])
+        d_nm = 60.0 * math.hypot(clat - lat, (clon - lon) * coslat)
+        if d_nm > lim:
+            continue
+        if best[fresh] is None or d_nm < best[fresh][0]:
+            best[fresh] = (d_nm, c)
     for fresh in (True, False):
         if best[fresh]:
-            return _interp(best[fresh][1], epoch), fresh
-    return None, False
+            c = best[fresh][1]
+            return _interp(c["hours"], epoch), fresh, now - c["fetched"]
+    return None, False, None
 
 
 def _interp(hrs, epoch):

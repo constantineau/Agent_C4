@@ -30,6 +30,7 @@ from . import routing
 from . import sails
 
 EXPECTED_S = 30           # what the progress bar assumes until a run has been timed
+BUDGET_S = float(os.environ.get("C4_REROUTE_BUDGET_S", "90"))   # wall-clock limit on one run
 BUSY = "A re-route is already running."
 FAILED = "Re-route failed. Try again."
 NO_ROUTE_YET = "No Pi route yet."
@@ -305,7 +306,7 @@ def _work(job_id, dev, inp):
     asked_at = int(t0)
     try:
         out = _compute(inp["nav"], inp["remaining"], inp["slat"], inp["slon"], inp["live"],
-                       inp["bundle"], inp["avoid"], inp["polys"])
+                       inp["bundle"], inp["avoid"], inp["polys"], deadline=t0 + BUDGET_S)
     except Exception as exc:  # noqa: BLE001 — reported to the crew; the details go to the log
         print(f"[reoptimize] run failed: {type(exc).__name__}: {exc}", flush=True)
         out = {"available": False, "note": FAILED}
@@ -343,16 +344,18 @@ def _work(job_id, dev, inp):
                         last_run_s=run_s if state == "done" else _job["last_run_s"])
 
 
-def _compute(nav, remaining, slat, slon, live, bundle, avoid, polys):
+def _compute(nav, remaining, slat, slon, live, bundle, avoid, polys, deadline=None):
     """The heavy isochrone chain (~15 s for a long course on a Pi 4). No wind (no forecast and no
-    complete measured wind) or a forecast hole with nothing near to fill it → no route, said
-    plainly (#156, #157)."""
+    complete measured wind), a forecast hole with nothing near to fill it, a forecast too old, or
+    a run past `deadline` (epoch; the button's job sets BUDGET_S) → no route, said plainly, never
+    a half result (#156, #157)."""
     wind, _ = routing.make_wind_fn(slat, slon, live)
     if wind is None:
         return {"available": False, "note": routing.NO_WIND}
+    wind.deadline = deadline
     try:
         return _chain(nav, remaining, slat, slon, wind, bundle, avoid, polys)
-    except routing.NoWindError as exc:
+    except (routing.NoWindError, routing.RouteTimeout) as exc:
         return {"available": False, "note": str(exc)}
 
 
