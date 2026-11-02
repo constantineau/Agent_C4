@@ -19,6 +19,7 @@ import threading
 import time
 import urllib.parse
 
+from .. import atomicio
 from . import grib
 
 CACHE = os.environ.get("GRIB_CACHE", "/srv/gribcache")
@@ -393,8 +394,7 @@ class ICON(ModelSource):
         if isinstance(data, dict):                     # single-location responses aren't wrapped
             data = [data]
         os.makedirs(os.path.dirname(cpath), exist_ok=True)
-        with open(cpath, "w") as f:
-            _json.dump(data, f)
+        atomicio.write_json(cpath, data)
         return data
 
     def load_series(self, bbox, t_start, t_end, on_progress=None):

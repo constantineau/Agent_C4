@@ -378,6 +378,57 @@ with tempfile.TemporaryDirectory() as tmp:
     check("a closed unit's file and sidecar were fsynced too",
           {os.path.join(rv, CORRUPT), os.path.join(rv, f"closed-{CORRUPT}.json")} <= set(synced))
 
+print("outbox renames are durable, in order (Codex round 6 on #198)")
+with tempfile.TemporaryDirectory() as tmp:
+    arc_dir, conn = fake_pi(tmp, n=300)
+    conn.close()
+    os.remove(os.path.join(arc_dir, CORRUPT))
+    outbox, vps = os.path.join(tmp, "outbox"), os.path.join(tmp, "vps")
+    os.makedirs(outbox)
+    ob = os.path.realpath(outbox)
+    events = []
+    real = {"fsync": os.fsync, "replace": os.replace, "remove": os.remove}
+
+    def ev_fsync(fd):
+        events.append(("fsync", os.path.realpath(f"/proc/self/fd/{fd}")))
+        return real["fsync"](fd)
+
+    def ev_replace(a, b):
+        events.append(("replace", os.path.realpath(b)))
+        return real["replace"](a, b)
+
+    def ev_remove(p):
+        events.append(("remove", os.path.realpath(p)))
+        return real["remove"](p)
+    os.fsync, os.replace, os.remove = ev_fsync, ev_replace, ev_remove
+    try:
+        copyoff.seal_segments(arc_dir, outbox, max_rows=1000)
+        seal_events = list(events)
+        events.clear()
+        copyoff.ship(arc_dir, outbox, vps)
+        ship_events = list(events)
+    finally:
+        os.fsync, os.replace, os.remove = real["fsync"], real["replace"], real["remove"]
+    led_path = os.path.join(ob, "ledger.json")
+
+    def dir_synced_between(evs, after_i, before_i):
+        return any(e == ("fsync", ob) for e in evs[after_i + 1:before_i])
+    seg_i = next(i for i, e in enumerate(seal_events) if e[0] == "replace"
+                 and e[1].endswith(".db") and "/seg-" in e[1])
+    side_i = next(i for i, e in enumerate(seal_events) if e[0] == "replace"
+                  and e[1].endswith(".db.json"))
+    led_i = next(i for i, e in enumerate(seal_events) if e == ("replace", led_path))
+    check("seal: the segment's rename is made durable (dir fsync) before the cursor moves",
+          seg_i < led_i and dir_synced_between(seal_events, seg_i, led_i))
+    check("seal: the sidecar's rename is made durable before the cursor moves",
+          side_i < led_i and dir_synced_between(seal_events, side_i, led_i))
+    check("seal: the cursor's own rename is made durable",
+          dir_synced_between(seal_events, led_i, len(seal_events)))
+    led_s = next(i for i, e in enumerate(ship_events) if e == ("replace", led_path))
+    rm_s = next(i for i, e in enumerate(ship_events) if e[0] == "remove")
+    check("ship: the ledger update is durable before any shipped file is deleted",
+          led_s < rm_s and dir_synced_between(ship_events, led_s, rm_s))
+
 print("remote destination (rsync + ssh shims)")
 with tempfile.TemporaryDirectory() as tmp:
     arc_dir, conn = fake_pi(tmp, n=2500)

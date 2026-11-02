@@ -101,6 +101,10 @@ def _write_json(path, obj):
         f.flush()
         os.fsync(f.fileno())
     os.replace(tmp, path)
+    # The rename is durable only once the DIRECTORY is synced. Without it a power cut can keep
+    # a ledger cursor while losing the segment it counts, or lose a ledger update after the
+    # shipped files it records were deleted.
+    _fsync_file(os.path.dirname(os.path.abspath(path)))
 
 
 def load_ledger(outbox):
@@ -236,6 +240,7 @@ def seal_segments(archive_dir, outbox, max_rows=2_000_000, max_segments=50, max_
             with open(tmp, "rb") as f:
                 os.fsync(f.fileno())
             os.replace(tmp, path)
+            _fsync_file(outbox)               # segment durable before its sidecar and cursor
             side = {"kind": "segment", "name": name, "sha256": sha256_file(path),
                     "bytes": os.path.getsize(path), "rows": n, "content_sha256": got,
                     "min_time": lo, "max_time": hi, "sealed": _now(), **meta}
@@ -347,8 +352,7 @@ def _durable(dir_, names):
 def _receipt(dir_, path, rec, names):
     if rec["ok"]:
         _durable(dir_, names)
-    _write_json(path + ".verified.json", rec)
-    _fsync_file(dir_)                  # the receipt's own rename
+    _write_json(path + ".verified.json", rec)   # tmp + fsync + rename + dir fsync
     return rec
 
 def verify(dir_, name):

@@ -10,7 +10,7 @@ import json
 import os
 
 from shared import boat_profile
-from . import labstate
+from . import atomicio, labstate
 
 BUNDLED_DIR = os.environ.get("BOATS_DIR", "/srv/boats")
 EDITED_DIR = os.path.join(os.environ.get("INGESTED_DIR", "/srv/ingested"), "boats")
@@ -68,10 +68,7 @@ def save_boat(d: dict) -> dict:
     d.setdefault("schema_version", boat_profile.SCHEMA_VERSION)
     os.makedirs(EDITED_DIR, exist_ok=True)
     path = os.path.join(EDITED_DIR, f"{bid}.json")
-    tmp = path + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(d, f, indent=2)
-    os.replace(tmp, path)
+    atomicio.write_json(path, d, indent=2)
     return d
 
 

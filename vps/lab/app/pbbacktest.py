@@ -27,7 +27,7 @@ import json
 import math
 import os
 
-from . import retrostore, store, synthesis
+from . import atomicio, retrostore, store, synthesis
 from .wind import archive, grib
 from .wind.windfield import WindField, build_windfield
 from . import optimizer
@@ -95,8 +95,7 @@ def synth_asof(def_race_id=DEF_RACE, retro_race_id=RETRO_RACE, course_id=COURSE,
     else:
         bundle["forecast_fingerprint"] = None     # never ship a live-2026 fingerprint here
     synthesis.sign_bundle(bundle, signed_by="pbbacktest")
-    with open(_out("bundle.json"), "w") as f:
-        json.dump(bundle, f)
+    atomicio.write_json(_out("bundle.json"), bundle)
     print(f"[backtest] bundle: recommended={bundle.get('recommended')!r} "
           f"agreement={bundle.get('agreement')} plays={len(bundle.get('plays') or [])} "
           f"fingerprint={'archive' if fp else 'NONE'}", flush=True)
@@ -250,8 +249,7 @@ def sample_replay(bundle=None, team_ids=(3168, 1676), step_s=900, retro_race_id=
         },
         "boats": boats,
     }
-    with open(_out("replay_input.json"), "w") as f:
-        json.dump(out, f)
+    atomicio.write_json(_out("replay_input.json"), out)
     print(f"[backtest] replay_input.json written ({len(boats)} boats)", flush=True)
     return {"ok": True, "boats": {k: len(v['steps']) for k, v in boats.items()}}
 
