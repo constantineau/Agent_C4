@@ -205,6 +205,10 @@ def course_load(body: dict):
             orinroute.drop_definition()
             print(f"[course/load] failed: {type(exc).__name__}: {exc}", flush=True)
             return {"loaded": False, "detail": "Couldn't save the course. Try again."}
+        # still under the lock, so no /gps/show for the new course can slip in before it: stop a
+        # plotter route made for any OTHER course (bounded, ~1.5 s at most; n2kout also ends it
+        # by itself on the token, which the new load id has already changed)
+        gpsout.clear_other_courses()
     return {"loaded": True, "route": route, "course_id": cid, "marks": len(marks), "skipped": skipped}
 
 
@@ -377,6 +381,20 @@ def gps_show(body: dict | None = None):
 def gps_clear():
     """Stop broadcasting — the plotter drops the external route when the stream goes quiet."""
     return gpsout.clear()
+
+
+@app.get("/gps/fix")
+def gps_fix():
+    """For n2kout (polled every second while a route is on the plotter): the freshest own-ship
+    fix {lat, lon, t} or null, and the course token. Read-only."""
+    return gpsout.fix_feed()
+
+
+@app.post("/gps/leg-check")
+def gps_leg_check(body: dict | None = None):
+    """For n2kout, before it moves the plotter's steer-to on: is boat → waypoint clear of the
+    obstacles aboard (the same checks as /gps/show)? {from, to, course} → {clear, reason}."""
+    return gpsout.leg_check(body or {})
 
 
 @app.get("/gps/status")
