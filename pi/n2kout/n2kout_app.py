@@ -147,8 +147,9 @@ def fresh_fix(feed, now):
 
 
 def check_leg(frm, to, course):
-    """Ask the engine whether boat → waypoint is clear of every obstacle it knows: True / False,
-    or None when it doesn't answer in LEG_CHECK_TIMEOUT_S (treated as not clear)."""
+    """Ask the engine whether boat → waypoint is clear of every obstacle it knows → (clear,
+    reason): clear True / False, or None when it doesn't answer in LEG_CHECK_TIMEOUT_S (treated
+    as not clear); reason as the engine gave it (e.g. "chart unreadable")."""
     payload = json.dumps({"from": {"lat": frm[0], "lon": frm[1]},
                           "to": {"lat": to[0], "lon": to[1]}, "course": course}).encode()
     req = urllib.request.Request(LEG_CHECK_URL, data=payload, method="POST",
@@ -157,8 +158,10 @@ def check_leg(frm, to, course):
         with urllib.request.urlopen(req, timeout=LEG_CHECK_TIMEOUT_S) as r:
             ans = json.loads(r.read())
     except (urllib.error.URLError, TimeoutError, OSError, ValueError):
-        return None
-    return ans.get("clear") if isinstance(ans, dict) else None
+        return None, "no answer"
+    if not isinstance(ans, dict):
+        return None, "no answer"
+    return ans.get("clear"), ans.get("reason")
 
 
 # --- the broadcaster --------------------------------------------------------------------------
@@ -187,6 +190,7 @@ class _Broadcaster:
         self.slock = threading.Lock()         # generation check + send / status write
         self.gen = 0
         self.course = None                    # the course token the current route was sent for
+        self.leg_reason = None                # why the engine last refused a leg
         self.thread = None
         self.stop_evt = threading.Event()
         self.state = {"broadcasting": False, "iface": CAN_IFACE, "route": None,
@@ -237,6 +241,7 @@ class _Broadcaster:
                 g = self.gen
                 self.stop_evt = evt = threading.Event()
                 self.course = body.course
+            self.leg_reason = None
             self.state.update({"broadcasting": True, "route": body.name,
                                    "n_waypoints": len(body.waypoints), "started_at": round(now),
                                    "expires_at": round(now + ROUTE_TTL_S), "nav_live": False,
@@ -298,15 +303,25 @@ class _Broadcaster:
         def approve(frm, idx):
             if not self._current(g, evt):      # retired while waiting: approve nothing
                 return False
-            return self.leg_check(frm, tracker.pts[idx], body.course)
+            ans = self.leg_check(frm, tracker.pts[idx], body.course)
+            clear, why = ans if isinstance(ans, tuple) else (ans, None)
+            reasons[0] = why
+            return clear
+
+        reasons = [None]
 
         nmi = feed.get("next_mark_index") if isinstance(feed, dict) else None
         nav = tracker.update(*fix, approve=approve, next_mark_index=nmi)
         if not self._current(g, evt):
             return None
         if nav["blocked"]:            # the next (or current) leg isn't cleared by the engine
-            self._set(g, nav_live=False, nav=None, steer_paused="blocked")
+            if reasons[0] is not None:
+                self.leg_reason = reasons[0]
+            self._set(g, nav_live=False, nav=None,
+                      steer_paused=("chart unreadable" if self.leg_reason == "chart unreadable"
+                                    else "blocked"))
             return None
+        self.leg_reason = None
 
         def fresh():                  # the approval may have taken seconds: age it again
             return self.clock() - fix[2] <= FIX_MAX_AGE_S

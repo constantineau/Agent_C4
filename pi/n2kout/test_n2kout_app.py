@@ -312,8 +312,26 @@ _s = socket.socket()
 _s.bind(("127.0.0.1", 0))
 A.LEG_CHECK_URL = f"http://127.0.0.1:{_s.getsockname()[1]}/gps/leg-check"
 _s.close()
-check("the real leg check with no engine → None (treated as blocked)",
-      A.check_leg((43.0, -82.0), (43.1, -82.0), "L1:race") is None)
+check("the real leg check with no engine → (None, 'no answer') (treated as blocked)",
+      A.check_leg((43.0, -82.0), (43.1, -82.0), "L1:race") == (None, "no answer"))
+fs8, clk8 = FakeSender(), Clock()
+b8 = A._Broadcaster(sender=fs8, clock=clk8,
+                    leg_check=lambda frm, to, course: (False, "chart unreadable"),
+                    fix_source=lambda: {"fix": {"lat": L(0, 0)[0], "lon": L(0, 0)[1],
+                                                "t": clk8.t}, "course": "L1:race"})
+b8.state["expires_at"] = clk8.t + 100
+tr8 = navcalc.LegTracker([w.model_dump() for w in BX.waypoints], 1)
+b8.cycle(BX, tr8, 0)
+check("engine says chart unreadable → nothing sent, steer_paused 'chart unreadable'",
+      fs8.sent == [] and b8.state["steer_paused"] == "chart unreadable")
+clk8.t += 2                                       # within the retry: no new answer
+b8.cycle(BX, tr8, 1)
+check("…the reason holds while waiting for the retry",
+      b8.state["steer_paused"] == "chart unreadable")
+b8.leg_check = lambda frm, to, course: (False, "obstacle")
+clk8.t += 5
+b8.cycle(BX, tr8, 2)
+check("an obstacle refusal → plain 'blocked'", b8.state["steer_paused"] == "blocked")
 
 print("broadcaster — expiry and course change end the route:")
 feed["v"] = {"fix": {"lat": 43.005, "lon": -82.0, "t": clk.t}, "course": "L2:race"}

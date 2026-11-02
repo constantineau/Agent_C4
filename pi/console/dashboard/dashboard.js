@@ -1847,7 +1847,8 @@
   function gpsLinkLines(g) {
     if (!g || g.available === false || !g.bus) return "";
     const lines = ["GPS link: " + (g.bus.link || "no bus")];
-    if (g.broadcasting && g.steer_paused === "blocked") lines.push("Steer-to paused. Press Re-route now.");
+    if (g.broadcasting && g.steer_paused === "chart unreadable") lines.push("Chart unreadable. Steer-to paused.");
+    else if (g.broadcasting && g.steer_paused === "blocked") lines.push("Steer-to paused. Press Re-route now.");
     else if (g.broadcasting && g.steer_paused === "no position") lines.push("No position. Steer-to paused.");
     else if (g.broadcasting && g.steer_paused === "not sent") lines.push("Steer-to not reaching the GPS.");
     if (!g.broadcasting && g.ended === "expired") lines.push("Route expired. Send again.");

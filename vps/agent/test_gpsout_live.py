@@ -229,6 +229,68 @@ done.set()
 check("course lock busy (a load running) → not clear within ~1.5 s",
       r == {"clear": False, "reason": "busy"} and time.time() - t0 < 2.5)
 
+print("a chart aboard that can't be read fails closed; no chart aboard stays as today:")
+from app import landchart  # noqa: E402
+from shared import chartid  # noqa: E402
+
+ASSETS = os.path.join(_tmp, "engine", "orin-assets.json")
+DEFN = {"race_id": "r1", "courses": [{"id": "c"}]}
+_real_def_for = landchart.orinroute._definition_for
+landchart.orinroute._definition_for = lambda route, marks: (DEFN, "c")
+MK = [{"name": "Start", "lat": 44.0, "lon": -82.0}]
+if os.path.exists(ASSETS):
+    os.remove(ASSETS)
+check("no assets file → no chart (None)", landchart.for_course("race", MK) is None)
+with open(ASSETS, "w") as fh:
+    fh.write("{not json")
+try:
+    landchart.for_course("race", MK)
+    check("corrupt assets file → ChartUnreadable", False)
+except landchart.ChartUnreadable:
+    check("corrupt assets file → ChartUnreadable", True)
+import json as _json  # noqa: E402
+
+with open(ASSETS, "w") as fh:
+    _json.dump({"assets": {"race_id": "r1", "course_id": "c", "boat": None}}, fh)
+check("assets aboard but no chart pushed → None (known: shore warning)",
+      landchart.for_course("race", MK) is None)
+fp = landchart.course_fingerprint(DEFN, "c", chartid.safety_depth_m(None))
+with open(ASSETS, "w") as fh:
+    _json.dump({"assets": {"race_id": "r1", "course_id": "c", "boat": None,
+                           "chart": {"kind": landchart.CHART_KIND, "fingerprint": fp,
+                                     "bbox": [45, 43, -83, -81], "res_deg": 0.01,
+                                     "mask_zb64": "!!not base64!!"}}}, fh)
+try:
+    landchart.for_course("race", MK)
+    check("this course's chart with a broken mask → ChartUnreadable (not None)", False)
+except landchart.ChartUnreadable:
+    check("this course's chart with a broken mask → ChartUnreadable (not None)", True)
+
+# through gpsout: the leg check and the send both refuse
+gpsout.deviation._load_playbook = lambda: {"recommended": "a",
+                                           "variants": [{"id": "a", "route": {"path": PATH}}]}
+NAV.get_navigator = lambda route=None: {"available": True, "route": "race", "next_mark": None}
+NAV._marks = lambda route: MK
+gpsout.datasource.active = lambda: DS((44.003, -82.0, time.time()))
+tok = gpsout.course_token()
+leg = {"from": {"lat": 44.0, "lon": -82.0}, "to": {"lat": 44.04, "lon": -82.0}, "course": tok}
+check("leg check, chart unreadable → clear: false, 'chart unreadable'",
+      gpsout.leg_check(leg) == {"clear": False, "reason": "chart unreadable"})
+posts.clear()
+r = gpsout.show()
+check("send, chart unreadable → refused 'Chart unreadable. Not sent to GPS.', nothing posted",
+      r == {"shown": False, "dest_index": None, "note": "Chart unreadable. Not sent to GPS."}
+      and posts == [])
+os.remove(ASSETS)
+check("no chart aboard → leg check clear (as before)", gpsout.leg_check(leg)["clear"] is True)
+r = gpsout.show()
+check("no chart aboard → sent with the shore warning (as before)", r["shown"]
+      and r["shore_checked"] is False and r["warning"] == "GPS route doesn't check the shore.")
+NAV.get_navigator = lambda route=None: (_ for _ in ()).throw(RuntimeError("nav down"))
+check("strict: the course can't be read → leg check not clear",
+      gpsout.leg_check(leg)["clear"] is False)
+landchart.orinroute._definition_for = _real_def_for
+
 print("the engine endpoints:")
 from fastapi.testclient import TestClient  # noqa: E402
 
