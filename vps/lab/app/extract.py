@@ -145,7 +145,10 @@ def load_url(url: str) -> dict:
     label = doc_label(url)
     if "pdf" in ctype or url.lower().endswith(".pdf") or raw[:5] == b"%PDF-":
         return load_pdf(label, raw, url)
-    return {"label": label, "url": url, "text": _page_text(url, raw), "pdf": None, "pages": 0}
+    failed = []
+    text = _page_text(url, raw, failed=failed)
+    return {"label": label, "url": url, "text": text, "pdf": None, "pages": 0,
+            "note": " ".join(failed)}
 
 
 def _html_to_text(html: str) -> str:
@@ -160,7 +163,10 @@ _IFRAME_SKIP = ("google.com", "googletagmanager", "doubleclick", "facebook.", "y
                 "gstatic", "recaptcha", "/gtag", "analytics", "hotjar", "twitter.")
 
 
-def _page_text(url: str, raw: bytes, follow_iframes: bool = True) -> str:
+def _page_text(url: str, raw: bytes, follow_iframes: bool = True,
+               failed: list | None = None) -> str:
+    """The page's text plus up to 3 content iframes'. An iframe that won't load doesn't break the
+    page; its plain-words failure goes into `failed` (when given) so ingest can say so."""
     html = raw.decode("utf-8", "ignore")
     text = _html_to_text(html)
     if follow_iframes:
@@ -183,8 +189,13 @@ def _page_text(url: str, raw: bytes, follow_iframes: bool = True) -> str:
                     text += "\n" + (pdf_text(rb) if ("pdf" in ct or low.endswith(".pdf"))
                                     else _html_to_text(rb.decode("utf-8", "ignore")))
                     break
-                except Exception:
+                except Exception as e:  # noqa: BLE001
                     if attempt:                   # a dead/blocked iframe never breaks the outer fetch
+                        if failed is not None:
+                            failed.append(f"Couldn't load the embedded {doc_label(full)} on "
+                                          f"{doc_label(url)}: {_why(e, IFRAME_TIMEOUT)}. Anything "
+                                          f"in it (an entry list, the SIs) is missing from the "
+                                          f"draft. Check it by hand.")
                         break
                     time.sleep(1.5)
     return text

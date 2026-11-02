@@ -350,6 +350,28 @@ check("only the good doc is a source", [s["label"] for s in r["definition"]["pro
       == ["nor.pdf"])
 check("a 404 is not retried", fetched.count("https://x.org/gone.pdf") == 1)
 
+print("an embedded iframe that won't load: the page still goes, and the draft says what's missing")
+
+
+def iframe_fetch(url, timeout=30):
+    if "entries.cfm" in url:
+        raise urllib.error.URLError(TimeoutError("timed out"))
+    return "text/html", (b"<html><body>" + b"Race page. Notice of Race details. " * 20
+                         + b'<iframe src="https://cf.x.org/entries.cfm"></iframe></body></html>')
+
+
+extract.fetch = iframe_fetch
+calls = fake([reply()])
+r = asyncio.run(main.ingest_urls({"urls": ["https://x.org/current-entries/"]}))
+inotes = [n["text"] for n in r["definition"]["provenance"]["ingest_notes"]] if isinstance(r, dict) else []
+check("draft built from the page", isinstance(r, dict) and r["definition"]["name"] == "SORC")
+check("persisted note names the embedded page", any(n.startswith(
+    "Couldn't load the embedded entries.cfm on current-entries: the site didn't answer")
+    for n in inotes))
+check("and it's listed for review", any(w.startswith("Ingest: Couldn't load the embedded entries.cfm")
+                                        for w in r["warnings"]))
+extract.fetch = fake_fetch
+
 print("a transient failure is retried once")
 fetched.clear()
 calls = fake([reply()])
