@@ -60,25 +60,32 @@ NO_FIX = "No GPS fix. Not sent to GPS."
 FIX_MAX_AGE_S = float(os.environ.get("GPSOUT_FIX_MAX_AGE_S", "10"))
 
 
-def own_fix(now=None):
-    """(lat, lon, epoch) of the freshest own-ship position, lat and lon from the SAME source
-    (the source policy's pick), received within FIX_MAX_AGE_S; else None. Only the live Signal K
+def _fix_with_source(now=None):
+    """(lat, lon, epoch, source) of the freshest own-ship position, lat and lon from the SAME
+    source (the source policy's pick among sources no older than FIX_MAX_AGE_S: a fresh backup
+    GPS takes over from a preferred one that went quiet), else None. Only the live Signal K
     cache counts: the archive fallback can be minutes old."""
     src = datasource.active()
     getter = getattr(src, "latest_position", None)
     if getter is None:
         return None
     try:
-        fix = getter()
+        fix = getter(max_age_s=FIX_MAX_AGE_S)
     except Exception:  # noqa: BLE001 — no fix read is no fix
         return None
     if not fix:
         return None
     now = time.time() if now is None else now
-    lat, lon, t = fix
+    lat, lon, t = fix[:3]
     if now - t > FIX_MAX_AGE_S:
         return None
-    return lat, lon, t
+    return lat, lon, t, (fix[3] if len(fix) > 3 else None)
+
+
+def own_fix(now=None):
+    """(lat, lon, epoch) — see _fix_with_source."""
+    fix = _fix_with_source(now)
+    return None if fix is None else fix[:3]
 
 
 def course_token():
@@ -163,9 +170,10 @@ def fix_feed():
     """GET /gps/fix — what n2kout polls every second to keep the plotter's leg live: the fix,
     the course token, and the navigator's next-mark index (a course-mark waypoint advances
     when the navigator says it's rounded, however wide)."""
-    fix = own_fix()
+    fix = _fix_with_source()
     tok, nmi = course_progress()
-    return {"fix": None if fix is None else {"lat": fix[0], "lon": fix[1], "t": fix[2]},
+    return {"fix": None if fix is None else {"lat": fix[0], "lon": fix[1], "t": fix[2],
+                                             "source": fix[3]},
             "course": tok, "next_mark_index": nmi}
 
 

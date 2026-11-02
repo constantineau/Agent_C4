@@ -45,17 +45,35 @@ src._live[(LON, "gpsB")] = (now - 1, -82.9)
 check("lat from A + lon from B is never paired", src.latest_position() is None)
 src._live[(LON, "gpsA")] = (now - 2, -82.1)
 p = src.latest_position()
-check("A's lat with A's lon; time = the older of the two", p == (44.1, -82.1, now - 2))
+check("A's lat with A's lon; time = the older of the two; source named",
+      p == (44.1, -82.1, now - 2, "gpsA"))
 src._live[(LAT, "gpsA")] = (now - 60, 44.1)                   # past the live cache TTL
 src._live[(LON, "gpsA")] = (now - 60, -82.1)
 check("only stale entries → None (no archive fallback)", src.latest_position() is None)
+print("a fresh backup GPS takes over from a preferred one that went quiet:")
+src2 = object.__new__(datasource_onboard.OnboardSource)
+src2._live, src2._live_lock = {}, threading.Lock()
+src2._prefer = lambda path, cands: (min(cands, key=lambda c: c[0]) if cands else None)  # "a" ranks first
+src2._live[(LAT, "a-preferred")] = (now - 11, 44.5)
+src2._live[(LON, "a-preferred")] = (now - 11, -82.5)
+src2._live[(LAT, "b-backup")] = (now - 1, 44.6)
+src2._live[(LON, "b-backup")] = (now - 1, -82.6)
+check("(control) no age limit: the 11 s-old preferred fix wins the ranking",
+      src2.latest_position()[3] == "a-preferred")
+p = src2.latest_position(max_age_s=10)
+check("age limit 10 s: the stale pair is dropped first, the fresh backup wins",
+      p == (44.6, -82.6, now - 1, "b-backup"))
+gpsout.datasource.active = lambda: src2
+f = gpsout.fix_feed()
+check("own_fix/fix feed use it: a fix (not a pause), and the feed names the backup",
+      gpsout.own_fix() == (44.6, -82.6, now - 1) and f["fix"]["source"] == "b-backup")
 
 
 class DS:
     def __init__(self, fix):
         self.fix = fix
 
-    def latest_position(self):
+    def latest_position(self, max_age_s=None):
         return self.fix
 
 

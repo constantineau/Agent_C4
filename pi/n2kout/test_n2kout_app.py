@@ -614,6 +614,37 @@ check("lose again → next free address (129)", fs.sa == 129)
 clk.t += A.PEER_WINDOW_S + 1
 check("peers age out of the list", bt.peers_recent() == [])
 
+print("bus thread — /health reads the peer list while the bus thread writes it:")
+errs = []
+
+
+def writer():
+    for k in range(200000):
+        bt.handle(((6 << 26) | (0xEE << 16) | (0xFF << 8) | (k % 120 + 1)) | n2k.CAN_EFF_FLAG,
+                  struct.pack("<Q", (1 << 62) + k))
+        if k % 50 == 0:
+            with bt.peers_lock:
+                bt.peers.clear()          # churn: entries come and go
+
+
+def reader():
+    try:
+        for _ in range(4000):
+            bt.peers_recent()
+    except RuntimeError as e:
+        errs.append(e)
+
+
+bt.sender = FakeSender()
+bt.sender.sa = 200
+wt = threading.Thread(target=writer)
+rt = threading.Thread(target=reader)
+wt.start()
+rt.start()
+rt.join()
+wt.join()
+check("no 'dictionary changed size during iteration' while reading", errs == [])
+
 print("bus thread — restarts after a socket error:")
 
 

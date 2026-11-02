@@ -374,20 +374,23 @@ class OnboardSource:
                 return max(ranked, key=lambda r: r[1])
         return freshest
 
-    def latest_position(self):
-        """(lat, lon, epoch) from the live cache only — lat and lon from ONE source, the source
-        policy's pick — or None. For the chartplotter's live leg (gpsout): the archive fallback
-        of latest_value can be minutes old, and a lat from one GPS with a lon from another is
-        no position at all."""
+    def latest_position(self, max_age_s=None):
+        """(lat, lon, epoch, source) from the live cache only — lat and lon from ONE source, the
+        source policy's pick — or None. For the chartplotter's live leg (gpsout): the archive
+        fallback of latest_value can be minutes old, and a lat from one GPS with a lon from
+        another is no position at all. `max_age_s`: pairs older than this are dropped BEFORE the
+        ranking, so a fresh backup GPS takes over from a preferred one that went quiet (instead
+        of the stale preferred fix winning and then being rejected as too old)."""
         lats = self._live_fresh("navigation.position.latitude")
         lons = {s: (e, v) for s, e, v in self._live_fresh("navigation.position.longitude")}
-        best = self._prefer("navigation.position.latitude",
-                            [c for c in lats if c[0] in lons])
+        cut = None if max_age_s is None else _time.time() - max_age_s
+        pairs = [(s, min(e, lons[s][0]), v) for s, e, v in lats
+                 if s in lons and (cut is None or min(e, lons[s][0]) >= cut)]
+        best = self._prefer("navigation.position.latitude", pairs)
         if not best:
             return None
         src, e, lat = best
-        le, lon = lons[src]
-        return lat, lon, min(e, le)
+        return lat, lons[src][1], e, src
 
     # --- CloudSource interface --------------------------------------------
     def latest_value(self, path):

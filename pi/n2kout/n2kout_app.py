@@ -327,7 +327,8 @@ class _Broadcaster:
             "brg_deg": round(nav["brg_deg"], 1),
             "xte_m": None if nav["xte_m"] is None else round(nav["xte_m"], 1),
             "eta": None if nav["eta_epoch"] is None else round(nav["eta_epoch"]),
-            "arrived": nav["arrived"], "fix_age_s": round(self.clock() - fix[2], 1)})
+            "arrived": nav["arrived"], "fix_age_s": round(self.clock() - fix[2], 1),
+            "gps_source": (feed.get("fix") or {}).get("source")})
         return None
 
     def _run(self, g, evt, body, route_msgs):
@@ -399,6 +400,7 @@ class _BusThread(threading.Thread):
         self.state = {"running": False, "answered": {}, "naks": 0, "error": None,
                       "restarts": 0, "conflicts": 0, "address": sender.sa}
         self.peers = {}                   # sa -> {"last": epoch, "name": NAME or None}
+        self.peers_lock = threading.RLock()   # the bus thread writes, /health and /status read
         self.requests_to_us = 0
         self._hb_seq = 0
         self._last_hb = 0.0
@@ -448,30 +450,31 @@ class _BusThread(threading.Thread):
             self.claim()
 
     def handle(self, cid: int, data: bytes):
-        cid &= 0x1FFFFFFF
-        sa = cid & 0xFF
-        pf = (cid >> 16) & 0xFF
-        ps = (cid >> 8) & 0xFF
-        now = self.clock()
-        me = self.sender.sa
-        if sa not in (me, 254):
-            self.peers.setdefault(sa, {"name": None})["last"] = now
-        if pf == PF_REQUEST and len(data) >= 3:
-            if ps == me:
-                self.requests_to_us += 1
-            if ps in (me, 0xFF):
-                self._answer(int.from_bytes(data[:3], "little"), sa, directed=(ps == me))
-        elif pf == PF_CLAIM and len(data) >= 8:
-            theirs = n2k.decode_name(data)
-            if sa != 254:
-                self.peers.setdefault(sa, {})["name"] = theirs
-                self.peers[sa]["last"] = now
-            if sa == me and theirs != self.name_:
-                self.state["conflicts"] += 1
-                if self.name_ < theirs:                # lower NAME wins the address
-                    self.claim()                       # we win: defend
-                else:
-                    self._move()                       # we lose: move
+        with self.peers_lock:
+            cid &= 0x1FFFFFFF
+            sa = cid & 0xFF
+            pf = (cid >> 16) & 0xFF
+            ps = (cid >> 8) & 0xFF
+            now = self.clock()
+            me = self.sender.sa
+            if sa not in (me, 254):
+                self.peers.setdefault(sa, {"name": None})["last"] = now
+            if pf == PF_REQUEST and len(data) >= 3:
+                if ps == me:
+                    self.requests_to_us += 1
+                if ps in (me, 0xFF):
+                    self._answer(int.from_bytes(data[:3], "little"), sa, directed=(ps == me))
+            elif pf == PF_CLAIM and len(data) >= 8:
+                theirs = n2k.decode_name(data)
+                if sa != 254:
+                    self.peers.setdefault(sa, {})["name"] = theirs
+                    self.peers[sa]["last"] = now
+                if sa == me and theirs != self.name_:
+                    self.state["conflicts"] += 1
+                    if self.name_ < theirs:                # lower NAME wins the address
+                        self.claim()                       # we win: defend
+                    else:
+                        self._move()                       # we lose: move
 
     # -- the loop --
     def _loop_once(self):
@@ -514,8 +517,9 @@ class _BusThread(threading.Thread):
 
     def peers_recent(self):
         now = self.clock()
-        return sorted(sa for sa, p in self.peers.items()
-                      if now - p.get("last", 0) <= PEER_WINDOW_S)
+        with self.peers_lock:
+            snap = [(sa, p.get("last", 0)) for sa, p in self.peers.items()]
+        return sorted(sa for sa, last in snap if now - last <= PEER_WINDOW_S)
 
 
 # --- CAN interface state (kernel) ---------------------------------------------------------
