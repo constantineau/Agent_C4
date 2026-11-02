@@ -12,6 +12,8 @@ Deletion from the boat is allowed only *after* an off-boat copy is sha256-verifi
 - Verified after deploy: archiver recording; n2kout on the bus (11 peers, requests to us > 0, ERROR-ACTIVE, no send errors); copilot reaches the engine over the cable; Pi reaches the re-route service; one manual plume pass pushed 6 models in 77 s.
 - VPS: Docker + containerd moved to `/mnt/data/var-lib` (bind mounts in fstab, systemd `RequiresMountsFor`); data disk grown to 500 GB; root disk 98% → 34%.
 
+**2026-11-02 later:** C4 is OUT OF THE WATER UNTIL SPRING (Cole). Steps 1-3 below are spring items at the boat. The 11 issues wave 1 fixed but GitHub left open are closed, and map #188 now opens with a "Where we are" block. Next on shore: wave 2, Cole's pick still owed.
+
 **Next, in order:**
 1. Lab Deploy tab: one Push (course definition, chart, boat profile) — the Re-route button needs it aboard. Playbook also loads only this way now (the Orin ignores its old file: "Playbook not confirmed").
 2. Dockside shakedown with power on: Garmin checklist in `pi/n2kout/README.md` (Device List shows "SR33 C4 Navigator", data sources, XTE/waypoint fields, route line). Also check GPS fix and AIS link (both stale/down on the hard).
