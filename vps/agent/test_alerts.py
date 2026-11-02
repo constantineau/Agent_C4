@@ -9,7 +9,11 @@ Run:  PYTHONPATH=vps/agent:. python3 vps/agent/test_alerts.py
 """
 import time
 
-from app import alerts, tools
+from app import alerts, race_mode, tools
+
+# Practice mode: every rule may fire. With no DB, race mode would fail closed to RACE and withhold
+# the advice rules (polar, shift, fatigue); that is pinned in test_alerts_race_mode.py.
+race_mode.racing = lambda: False
 
 ok = True
 
