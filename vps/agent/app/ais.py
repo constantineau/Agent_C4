@@ -126,24 +126,55 @@ def _latest_sample(path):
     return float(smp[0]), (float(smp[1]) if smp[1] is not None else None)
 
 
+# The last own fix seen, to derive speed/course when SOG/COG are missing: (lat, lon, epoch).
+_PREV_FIX = None
+DERIVE_MIN_S, DERIVE_MAX_S = 2.0, 120.0
+
+
+def _motion_sample(path, now):
+    """An own SOG/COG reading, or None when missing, stamped in the future, or older than the fix
+    age limit (a stale speed is not a speed)."""
+    v, e = _latest_sample(path)
+    if v is None:
+        return None
+    if e is not None and (e > now + FUTURE_SKEW_S
+                          or (OWN_FIX_MAX_AGE_S > 0 and now - e > OWN_FIX_MAX_AGE_S)):
+        return None
+    return v
+
+
 def _own_ship():
     """Own position (deg) + motion (kn / deg true), best-available freshest source, plus the age
-    of the position (`age_s`, None when the source can't say)."""
+    of the position (`age_s`, None when the source can't say). With no usable SOG/COG, speed and
+    course are derived from two successive own fixes (DERIVE_MIN_S..DERIVE_MAX_S apart) when we
+    have them (`motion_source: "derived"`); otherwise they stay None — unknown, never "stopped"."""
+    global _PREV_FIX
     lat, e_lat = _latest_sample("navigation.position.latitude")
     lon, e_lon = _latest_sample("navigation.position.longitude")
-    sog = _latest("navigation.speedOverGround")
-    cog = _latest("navigation.courseOverGroundTrue")
+    now = _time.time()
+    sog = _motion_sample("navigation.speedOverGround", now)
+    cog = _motion_sample("navigation.courseOverGroundTrue", now)
     # the older of the two halves of the fix is the fix's age
     e = min(e_lat, e_lon) if e_lat is not None and e_lon is not None else None
-    now = _time.time()
     if e is not None and max(e_lat, e_lon) > now + FUTURE_SKEW_S:
         # stamped in the future (e.g. archive rows from before a backward clock step): not a fix
         # at all — never "age 0". The watch says "no GPS fix" until a real one arrives.
         lat = lon = e = None
+    sog_kn = sog * _MS_TO_KN if sog is not None else None
+    cog_deg = math.degrees(cog) % 360 if cog is not None else None
+    src = "measured" if sog_kn is not None else None
+    if lat is not None and lon is not None and e is not None:
+        prev = _PREV_FIX
+        if sog_kn is None and prev is not None and DERIVE_MIN_S <= e - prev[2] <= DERIVE_MAX_S:
+            de, dn = _enu_nm(prev[0], prev[1], lat, lon)
+            sog_kn = math.hypot(de, dn) / ((e - prev[2]) / 3600.0)
+            if cog_deg is None and sog_kn > 0:
+                cog_deg = (math.degrees(math.atan2(de, dn)) + 360) % 360
+            src = "derived"
+        if prev is None or e > prev[2]:
+            _PREV_FIX = (lat, lon, e)
     return {
-        "lat": lat, "lon": lon,
-        "sog": sog * _MS_TO_KN if sog is not None else None,
-        "cog": math.degrees(cog) % 360 if cog is not None else None,
+        "lat": lat, "lon": lon, "sog": sog_kn, "cog": cog_deg, "motion_source": src,
         "age_s": max(0.0, now - e) if e is not None else None,
     }
 
@@ -316,8 +347,11 @@ def get_ais_targets(max_range_nm: float = 12):
     # own ship to now as well (the fix can be up to OWN_FIX_MAX_AGE_S old): same clock as the targets
     own = dict(own)
     own["lat"], own["lon"] = _dead_reckon(own["lat"], own["lon"], own["sog"], own["cog"], own.get("age_s"))
-    underway = own["sog"] is not None and own["sog"] >= UNDERWAY_KN
-    feed_silent = bool(underway and (last_heard_s is None or last_heard_s > AIS_SILENT_MIN * 60))
+    # None = we don't know our speed (no SOG, stale, nothing to derive it from). False is kept for
+    # a MEASURED speed below the threshold; every consumer treats None as "under way" for safety.
+    underway = None if own["sog"] is None else own["sog"] >= UNDERWAY_KN
+    feed_silent = bool(underway is not False
+                       and (last_heard_s is None or last_heard_s > AIS_SILENT_MIN * 60))
     if rx_missing or link_down:
         feed_silent = False                  # the louder signal says it
 
@@ -347,5 +381,7 @@ def get_ais_targets(max_range_nm: float = 12):
         })
     targets.sort(key=_threat_key)
     return {**base, "count": len(targets), "own_fix": True, "own_fix_reason": None,
-            "underway": underway, "feed_silent": feed_silent, "receiver_missing": rx_missing,
+            "underway": underway, "own_sog_kn": round(own["sog"], 1) if own["sog"] is not None else None,
+            "own_motion_source": own.get("motion_source"),
+            "feed_silent": feed_silent, "receiver_missing": rx_missing,
             "targets": targets}

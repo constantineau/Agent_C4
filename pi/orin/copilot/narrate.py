@@ -113,7 +113,8 @@ def _safety_callouts(ais):
         key = t.get("mmsi") or name
         if t.get("motion") == "unknown":
             rng = _num(t.get("range_nm"))
-            # not while we're stopped (a marina full of boats with no SOG would bark all day)
+            # not while we're MEASURED stopped (a marina full of boats with no SOG would bark all
+            # day); an unknown own speed (underway None) counts as under way — the safe side
             if rng is None or rng > AIS_WATCH_CPA_NM or ais.get("underway") is False:
                 continue
             act = rng <= AIS_ACT_CPA_NM

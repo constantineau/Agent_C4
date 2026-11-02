@@ -41,9 +41,10 @@ M_LAT = 1 / (60.0 * 1852.0)                         # 1 m of latitude in degrees
 class Src:
     """Own ship at (LAT0, LON0) with `own` motion; `fix_age` seconds old; raw AIS `rows`."""
 
-    def __init__(self, rows, sog_kn=6.0, cog=0.0, fix_age=1.0, fleet=None, lat=LAT0):
+    def __init__(self, rows, sog_kn=6.0, cog=0.0, fix_age=1.0, fleet=None, lat=LAT0, sog_age=None):
         now = time.time()
         self.rows, self.fleet = rows, fleet or {}
+        self.sog_epoch = None if sog_age is None else now - sog_age
         self.vals = {"navigation.position.latitude": lat, "navigation.position.longitude": LON0,
                      "navigation.speedOverGround": None if sog_kn is None else sog_kn / ais._MS_TO_KN,
                      "navigation.courseOverGroundTrue": math.radians(cog)}
@@ -54,7 +55,12 @@ class Src:
 
     def latest_sample(self, path):
         v = self.vals.get(path)
-        return None if v is None else (v, self.epoch)
+        if v is None:
+            return None
+        if self.sog_epoch is not None and path in ("navigation.speedOverGround",
+                                                   "navigation.courseOverGroundTrue"):
+            return (v, self.sog_epoch)
+        return (v, self.epoch)
 
     def ais_targets(self, max_age_min):
         cut = time.time() - max_age_min * 60
@@ -192,6 +198,31 @@ r = run(rs)
 check("transceiver on the bus, nothing heard → only feed_silent", r["receiver_missing"] is False
       and r["feed_silent"] is True)
 check("a source that can't tell (cloud) → receiver_missing None", run(Src([]))["receiver_missing"] is None)
+
+print("\n== 5a. unknown own speed is not 'stopped' (Codex on #191 at b646bee) ==")
+ais._PREV_FIX = None
+nospeed = row("366999030", 0.06 * NM_LAT, None, None, name="NOSPEED")
+r = run(Src([nospeed], sog_kn=None))
+check("fresh own fix, no own SOG → underway None (not False)", r["own_fix"] is True and r["underway"] is None)
+check("…the 0.06 nm unknown-motion contact is listed with motion 'unknown'",
+      by(r, "366999030")["motion"] == "unknown")
+ais._PREV_FIX = None
+check("…and an empty sea under unknown speed still gets the 'No AIS heard' hint",
+      run(Src([], sog_kn=None))["feed_silent"] is True)
+ais._PREV_FIX = None
+r = run(Src([], sog_kn=6.0, sog_age=120))
+check("own SOG 120 s old (fix fresh) → stale → underway None", r["underway"] is None and r["own_sog_kn"] is None)
+ais._PREV_FIX = None
+check("a MEASURED 0.3 kn → underway False", run(Src([], sog_kn=0.3))["underway"] is False)
+# derived speed: two own fixes 30 s apart, 0.05 nm north → 6 kn, course 000
+ais._PREV_FIX = (LAT0 - 0.05 * NM_LAT, LON0, time.time() - 31)
+r = run(Src([], sog_kn=None, fix_age=1))
+check("no SOG but two fixes 30 s / 0.05 nm apart → derived ~6 kn, under way",
+      r["underway"] is True and r["own_motion_source"] == "derived" and abs(r["own_sog_kn"] - 6.0) < 0.3)
+ais._PREV_FIX = (LAT0 - 0.05 * NM_LAT, LON0, time.time() - 600)
+check("fixes 10 min apart → too far apart to derive → None",
+      run(Src([], sog_kn=None, fix_age=1))["underway"] is None)
+ais._PREV_FIX = None
 
 print("\n== 5b. the engine's AIS input link (Codex on #191 at 3530006) ==")
 

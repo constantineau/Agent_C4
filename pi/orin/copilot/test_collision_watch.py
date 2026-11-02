@@ -209,7 +209,8 @@ def _engine_ais(rows, own_sog_kn=6.0, fix_age=1.0, own_mmsi=None, rx_age=None, l
     class Src:
         def latest_value(self, path):
             return {"navigation.position.latitude": 45.0, "navigation.position.longitude": -83.0,
-                    "navigation.speedOverGround": own_sog_kn / ais_mod._MS_TO_KN,
+                    "navigation.speedOverGround": (None if own_sog_kn is None
+                                                   else own_sog_kn / ais_mod._MS_TO_KN),
                     "navigation.courseOverGroundTrue": 0.0}.get(path)
 
         def latest_sample(self, path):
@@ -229,6 +230,7 @@ def _engine_ais(rows, own_sog_kn=6.0, fix_age=1.0, own_mmsi=None, rx_age=None, l
             return link or {"enabled": True, "connected": True, "last_msg_age_s": 0.5}
 
     ais_mod.datasource.active = lambda: Src()
+    ais_mod._PREV_FIX = None                 # no derived own speed carried over between cases
     ais_mod.OWN_FIX_MAX_AGE_S = 30
     if own_mmsi:
         os.environ["OWN_MMSI"] = own_mmsi
@@ -313,6 +315,15 @@ async def review_scenarios() -> bool:
     _fresh({"conditions": _COND, "ais": dict(_ais(unk), underway=False)})
     st = await _tick()
     ok &= _check("stopped (at the dock) → no unknown-motion callout", st["active"] == [])
+
+    # Codex on #191 at b646bee: fresh own position, NO own speed, a contact at 0.06 nm with no SOG/COG
+    nos = {"mmsi": "366999030", "name": "NOSPEED", "lat": 45.0 + 0.06 / 60.0, "lon": -83.0,
+           "sog": None, "cog": None}
+    _fresh({"conditions": _COND, "ais": _engine_ais([nos], own_sog_kn=None)})
+    st = await _tick()
+    ok &= _check("own speed unknown + 0.06 nm contact, motion unknown → 'Contact, motion unknown', now",
+                 st["active"] and st["active"][0]["headline"] == "Contact, motion unknown: NOSPEED"
+                 and st["active"][0]["urgency"] == "now")
 
     print("\n== 6d. each blind state is 'Collision watch OFF' ==")
     _fresh({"conditions": _COND, "ais": _engine_ais([freighter], fix_age=45)})
