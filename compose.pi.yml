@@ -146,6 +146,11 @@ services:
       # 7, not 14 (Cole, 2026-10-27): at the dock the archive grows ~7 GB/day and the card has
       # ~69 GB free, so 14 days could never fit.
       ARCHIVE_RETAIN_DAYS: ${ARCHIVE_RETAIN_DAYS:-7}
+      # The live archive's full check steps aside when the WAL passes this. At the dock the WAL
+      # grows ~14 MB/min during a check, so the old 256 MB cap stopped every check after ~18 min
+      # and none ever finished (a 20 GB archive needs ~65 min, ~0.9 GB of WAL). 2 GB gives it
+      # room and is ~4% of the card's free space.
+      ARCHIVE_CHECK_WAL_CAP_MB: ${ARCHIVE_CHECK_WAL_CAP_MB:-2048}
       ENGINE_DB: /var/lib/sr33/engine/engine.db
     volumes:
       - sk_archive:/var/lib/sr33/archive
