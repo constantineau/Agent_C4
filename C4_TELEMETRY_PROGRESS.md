@@ -13,7 +13,9 @@ Deletion from the boat is allowed only *after* an off-boat copy is sha256-verifi
 - **Left open:** #210 (ground.py: unit-less engine JSON values ground any unit, so give engine fields units; m/s parsed as m). Minor on #208 (resume fingerprint lacks server URL/settings), minor on #209 (datasource_onboard session_start nested commit), both noted on the PRs.
 - **Deploy reminders (spring):** the copilot needs Orin OLLAMA_CONTEXT_LENGTH=6144 before it ships (#208). Engine image rebuild for #209. Fix #210 before the copilot deploy if possible.
 
-**Still open from the block below:** the damaged archive copy-off + salvage (needs Cole's go, boat side); the Opus-for-Lab-AI question; rest of map #188 (#159–#161, #163, #164, #166, #167; #203).
+**Damaged archives (Cole, 2026-11-03): NOT valuable — do not copy off or salvage** archive.corrupt-20261103T125947.db or archive.corrupt-20261028T154237.db (a copy-off was started and stopped; partial VPS copy removed). Both still sit on the Pi's card (~45 GB with Jul 18's); deleting them is Cole's call. Measured boat → VPS copy-off: ~0.6 MB/s (~5 Mbit/s). The SD card (unbranded "ASTC", 3 corruptions, no undervoltage in 10 days) is the likely cause: swap for a high-endurance card or USB SSD before spring.
+**In flight (2026-11-03 evening):** agents on Opus 5.5 for Lab imports only (branch w3-opus-imports) and #159 #160 #161 #163 #164 (branches w3-<n>-*).
+**Still open from the block below:** rest of map #188 (#159–#161, #163, #164, #166, #167; #203).
 
 ## ⏸ PICK UP HERE — 2026-11-03 MIDDAY (dev @ 3a9fdd2, main @ 405be7f)
 
