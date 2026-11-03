@@ -77,7 +77,7 @@
   const SERIES_MIN = 720;         // ask the engine for ~12 h of archived wind for the chart
   const COPILOT = "/copilot";     // proxied to the Orin copilot (:8300); writes the commentary
   const BRIEF_EVERY = 90000;      // ask the LLM for a fresh brief ~every 90 s (it's slow, ~45 s)
-  const BRIEF_TTL = 300;          // an LLM brief stays "fresh" 5 min before reverting to engine-read
+  // how long an LLM brief and its status raises stay up: briefguard.js (BRIEF_TTL_S, ADJUST_TTL_S)
   const DEV_EVERY = 5000;         // poll the ENGINE's deterministic route-deviation ~every 5 s (Tier-1, no LLM)
   const DRIFT_EVERY = 20000;      // poll forecast-drift ~every 20 s (slow-moving; Open-Meteo is cached ~30 min)
   const COACH_EVERY = 15000;      // poll the proactive auto-coach held state ~every 15 s (no recompute — the Orin timer drives it)
@@ -119,6 +119,7 @@
   // the watch read (status, countdown, CONSIDER) is pure and tested: crewwatch.js (#80)
   const CW = window.C4CrewWatch;
   const COL = window.C4CollisionWatch;
+  const BG = window.C4BriefGuard;              // the LLM brief may only raise a tile, never lower it
   const colState = COL.newState(Date.now());   // when /coach last answered / last moved (tablet clock)
   const fmtHM = CW.fmtHM, fmtMins = CW.fmtMins;
   const teamTxt = (w, id) => { const t = ((w || {}).teams || {})[id]; return t ? t.name + ((t.members || []).length ? " (" + t.members.join(", ") + ")" : "") : id; };
@@ -1126,17 +1127,11 @@
     poll();
     fetchReroute();
   }
-  /* overlay the LLM brief (commentary + grounded status nudges) when it's fresh; otherwise the
-     deterministic engine-read commentary stands. The engine values are never touched. */
+  /* overlay the LLM brief (commentary + status raises) when it's fresh; otherwise the deterministic
+     engine-read commentary stands. The engine values are never touched, and the LLM can only raise
+     a tile while it is still at the status the model saw (briefguard.js). */
   function applyBrief(d) {
-    const b = App.brief;
-    if (!b || b.mode !== "llm" || Date.now() / 1000 - b.t > BRIEF_TTL) return d;
-    for (const a of b.adjust || []) {
-      const t = d.tiles[a.tile];
-      if (t && t.status !== "na") { t.status = a.status; t.llmNote = a.reason; }
-    }
-    const notes = (b.notes || []).map((n) => ({ tile: n.tile, status: (d.tiles[n.tile] || {}).status || "ok", text: n.text, conf: n.conf || "med" }));
-    return { tiles: d.tiles, focus: b.focus || d.focus, notes: notes.length ? notes : d.notes, confidence: "llm", mode: "llm-live" };
+    return BG.overlay(d, App.brief, Date.now() / 1000, App.track);
   }
   /* a compact text value for each tile to send to the copilot (rows flattened, arrows stripped) */
   function tileText(t) {
@@ -1148,13 +1143,17 @@
   async function fetchBrief() {
     if (App.src !== "live" || !App.data || !App.data.tiles || App.briefing) return;
     App.briefing = true;
-    const snap = TILES.map((k) => { const t = App.data.tiles[k] || {}; return { key: k, name: NAME[k], value: tileText(t), sub: t.sub || "", status: t.status || "na" }; });
+    // the ENGINE's statuses, never one this brief layer raised earlier (no feeding the model its own
+    // call back as fact), and stamped now: the brief's clock starts at the snapshot, not the reply
+    const snap = TILES.map((k) => { const t = App.data.tiles[k] || {}; return { key: k, name: NAME[k], value: tileText(t), sub: t.sub || "", status: BG.engineStatus(t) }; });
+    const snapAt = Date.now() / 1000;
+    const moves = Object.assign({}, App.track.moves);   // tile changes during the reply void its raises
     let r = null;
     try {   // the deadline covers the body too (a stalled body must not pin App.briefing forever)
       r = await COL.fetchJsonWithin(COPILOT + "/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tiles: snap }) }, 130000);
     } finally { App.briefing = false; }
     if (r && r.mode === "llm") {
-      App.brief = { focus: r.focus, notes: r.notes || [], adjust: r.adjust || [], mode: "llm", t: Date.now() / 1000 };
+      App.brief = { focus: r.focus, notes: r.notes || [], adjust: r.adjust || [], mode: "llm", t: snapAt, moves };
       if (App.src === "live") render();
     }
     // deterministic / unreachable → leave the last brief to expire; the dashboard stays engine-read
@@ -1989,7 +1988,7 @@
     openTile: null, streamTimer: null, pollTimer: null, seriesTimer: null, briefTimer: null,
     adhereTimer: null, coachTimer: null, devTimer: null, driftTimer: null, selTimer: null, polling: false,
     powerTimer: null, healthTimer: null, power: null, health: null,
-    dwell: {}, fresh: {}, ages: {}, data: null, windHist: [], fcstHist: [], seriesHist: [], lastPersist: 0, brief: null,
+    dwell: {}, fresh: {}, ages: {}, data: null, windHist: [], fcstHist: [], seriesHist: [], lastPersist: 0, brief: null, track: BG.newTrack(),
     coach: null, deviation: null, forecastDrift: null, selector: null, synAt: 0,
     rr: null, rrAt: 0, rrTimer: null, rtPress: {},
     plangap: null, trend: null, briefBusy: {}, gps: null, gpsBusy: false, gpsNote: "",
