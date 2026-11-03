@@ -225,10 +225,12 @@ def test_dashboard_status():
              {"key": "fleet", "name": "Fleet", "value": "—", "sub": "", "status": "na"}]
     reply = {"focus": "Bank at 11.9 V, shed load.",
              "notes": [{"tile": "bank", "text": "Bank 11.9 V, charging — fine.", "confidence": "high"},
-                       {"tile": "wind", "text": "Wind built 12 to 25 kts.", "confidence": "high"}],
+                       {"tile": "wind", "text": "Wind built 12 to 25 kts.", "confidence": "high"},
+                       {"tile": "wind", "text": "Wind now 11.9 kts.", "confidence": "high"}],
              "adjust": [{"tile": "bank", "status": "ok", "reason": "charging"},
                         {"tile": "data", "status": "watch", "reason": "same"},
                         {"tile": "wind", "status": "watch", "reason": "building fast"},
+                        {"tile": "data", "status": "act", "reason": "down to 11.9 sources"},
                         {"tile": "fleet", "status": "act", "reason": "?"}]}
     config_use = config.USE_LLM
     config.USE_LLM = True
@@ -243,8 +245,9 @@ def test_dashboard_status():
     check("a no-op adjust is dropped", "data" not in adj)
     check("ok → watch on the wind is kept", adj.get("wind") == "watch")
     check("an n/a tile is never adjusted", "fleet" not in adj)
-    check("note with an invented number dropped, grounded note kept",
+    check("note with an invented number dropped (also one borrowing the bank's 11.9), grounded note kept",
           [n["tile"] for n in out["notes"]] == ["bank"])
+    check("a raise whose reason borrows another tile's number is dropped", "data" not in adj)
     check("focus with only tile numbers kept", out["focus"] == "Bank at 11.9 V, shed load.")
 
 

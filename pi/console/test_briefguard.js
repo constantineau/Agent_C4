@@ -59,6 +59,22 @@ test("…also when the engine itself reached the raised status and dropped back 
   assert.equal(BG.overlay(read({ wind: tile("ok") }), b, T + 20).tiles.wind.status, "ok");
 });
 
+test("a tile that moved while the model was answering voids the raise (ok, watch, ok, then reply)", () => {
+  const track = BG.newTrack();
+  BG.overlay(read({ wind: tile("ok") }), null, T, track);                 // snapshot polled
+  const moves = Object.assign({}, track.moves);                            // taken with the snapshot
+  BG.overlay(read({ wind: tile("watch") }), null, T + 5, track);          // engine moves...
+  BG.overlay(read({ wind: tile("ok") }), null, T + 10, track);            // ...and back, reply pending
+  const b = Object.assign(brief([{ tile: "wind", status: "act", reason: "squall", from: "ok" }]), { moves });
+  assert.equal(BG.overlay(read({ wind: tile("ok") }), b, T + 15, track).tiles.wind.status, "ok");
+  // control: no move during the reply → the raise shows
+  const track2 = BG.newTrack();
+  BG.overlay(read({ wind: tile("ok") }), null, T, track2);
+  const b2 = Object.assign(brief([{ tile: "wind", status: "act", reason: "squall", from: "ok" }]),
+    { moves: Object.assign({}, track2.moves) });
+  assert.equal(BG.overlay(read({ wind: tile("ok") }), b2, T + 15, track2).tiles.wind.status, "act");
+});
+
 test("a raise expires ADJUST_TTL_S after the snapshot, not after the reply", () => {
   const b = brief([{ tile: "wind", status: "watch", reason: "building", from: "ok" }]);
   assert.ok(BG.ADJUST_TTL_S <= 180);
@@ -93,9 +109,11 @@ test("dashboard.js wires it: overlay via briefguard, engine status in the snapsh
   const js = fs.readFileSync(path.join(dir, "dashboard.js"), "utf8");
   const html = fs.readFileSync(path.join(dir, "index.html"), "utf8");
   assert.ok(html.indexOf("briefguard.js") > 0 && html.indexOf("briefguard.js") < html.indexOf("dashboard.js?"));
-  assert.match(js, /return BG\.overlay\(d, App\.brief, Date\.now\(\) \/ 1000\);/);
+  assert.match(js, /return BG\.overlay\(d, App\.brief, Date\.now\(\) \/ 1000, App\.track\);/);
+  assert.match(js, /track: BG\.newTrack\(\)/);
+  assert.match(js, /const moves = Object\.assign\(\{\}, App\.track\.moves\)/);
   assert.match(js, /status: BG\.engineStatus\(t\)/);
-  assert.match(js, /mode: "llm", t: snapAt \}/);
+  assert.match(js, /mode: "llm", t: snapAt, moves \}/);
   assert.doesNotMatch(js, /t\.status = a\.status/);
 });
 

@@ -8,7 +8,10 @@
         warning, or touch an n/a tile.
      2. A raise lasts only while the tile is still at the status the model saw. Once the engine
         moves that tile, either way, the raise is gone for good (it does not come back if the tile
-        returns to the old status; the brief's adjustment is marked `gone`). It also expires ADJUST_TTL_S after the
+        returns to the old status; the brief's adjustment is marked `gone`). That includes moves
+        made while the model was still answering: `track` counts every engine status change per
+        tile, the brief carries the counts at its snapshot (`moves`), and a raise whose tile has
+        moved since is dropped. It also expires ADJUST_TTL_S after the
         snapshot the model read, not after the slow reply arrived.
      3. The snapshot sent to the model is the engine's own statuses, never a status the model
         itself raised earlier. */
@@ -38,7 +41,15 @@
      `d` ({tiles, focus, notes, ...}) at `nowS`. `d.tiles` must be the fresh engine build. Each
      tile is replaced by a copy carrying `engineStatus`; the engine commentary stands when the brief
      is missing, not an LLM brief, or older than BRIEF_TTL_S. */
-  function overlay(d, b, nowS) {
+  function overlay(d, b, nowS, track) {
+    // count engine status changes per tile (across polls), before any raise is applied
+    if (track) {
+      for (const k in d.tiles) {
+        const s = d.tiles[k] ? (d.tiles[k].status || "na") : "na";
+        if (k in track.last && track.last[k] !== s) track.moves[k] = (track.moves[k] || 0) + 1;
+        track.last[k] = s;
+      }
+    }
     // copy each tile (a build may reuse a source object; a raise must never stick to it) and
     // record the engine's status before anything else touches it
     for (const k in d.tiles) {
@@ -52,6 +63,7 @@
     const ageS = nowS - b.t;
     for (const a of b.adjust || []) {
       const t = d.tiles[a && a.tile];
+      if (a && track && b.moves && (track.moves[a.tile] || 0) !== (b.moves[a.tile] || 0)) a.gone = true;
       if (raiseOk(a, t, ageS)) { t.status = a.status; t.llmNote = a.reason; }
     }
     const notes = (b.notes || []).map((n) => ({ tile: n.tile, status: (d.tiles[n.tile] || {}).status || "ok",
@@ -60,7 +72,10 @@
       confidence: "llm", mode: "llm-live" };
   }
 
-  const api = { overlay, engineStatus, raiseOk, SEV, BRIEF_TTL_S, ADJUST_TTL_S };
+  /* per-tile engine status change counts; keep one per dashboard and pass it to every overlay */
+  function newTrack() { return { last: {}, moves: {} }; }
+
+  const api = { overlay, engineStatus, raiseOk, newTrack, SEV, BRIEF_TTL_S, ADJUST_TTL_S };
   root.C4BriefGuard = api;
   if (typeof module === "object" && module.exports) module.exports = api;
 })(typeof window !== "undefined" ? window : globalThis);

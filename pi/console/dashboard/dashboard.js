@@ -1131,7 +1131,7 @@
      engine-read commentary stands. The engine values are never touched, and the LLM can only raise
      a tile while it is still at the status the model saw (briefguard.js). */
   function applyBrief(d) {
-    return BG.overlay(d, App.brief, Date.now() / 1000);
+    return BG.overlay(d, App.brief, Date.now() / 1000, App.track);
   }
   /* a compact text value for each tile to send to the copilot (rows flattened, arrows stripped) */
   function tileText(t) {
@@ -1147,12 +1147,13 @@
     // call back as fact), and stamped now: the brief's clock starts at the snapshot, not the reply
     const snap = TILES.map((k) => { const t = App.data.tiles[k] || {}; return { key: k, name: NAME[k], value: tileText(t), sub: t.sub || "", status: BG.engineStatus(t) }; });
     const snapAt = Date.now() / 1000;
+    const moves = Object.assign({}, App.track.moves);   // tile changes during the reply void its raises
     let r = null;
     try {   // the deadline covers the body too (a stalled body must not pin App.briefing forever)
       r = await COL.fetchJsonWithin(COPILOT + "/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tiles: snap }) }, 130000);
     } finally { App.briefing = false; }
     if (r && r.mode === "llm") {
-      App.brief = { focus: r.focus, notes: r.notes || [], adjust: r.adjust || [], mode: "llm", t: snapAt };
+      App.brief = { focus: r.focus, notes: r.notes || [], adjust: r.adjust || [], mode: "llm", t: snapAt, moves };
       if (App.src === "live") render();
     }
     // deterministic / unreachable → leave the last brief to expire; the dashboard stays engine-read
@@ -1987,7 +1988,7 @@
     openTile: null, streamTimer: null, pollTimer: null, seriesTimer: null, briefTimer: null,
     adhereTimer: null, coachTimer: null, devTimer: null, driftTimer: null, selTimer: null, polling: false,
     powerTimer: null, healthTimer: null, power: null, health: null,
-    dwell: {}, fresh: {}, ages: {}, data: null, windHist: [], fcstHist: [], seriesHist: [], lastPersist: 0, brief: null,
+    dwell: {}, fresh: {}, ages: {}, data: null, windHist: [], fcstHist: [], seriesHist: [], lastPersist: 0, brief: null, track: BG.newTrack(),
     coach: null, deviation: null, forecastDrift: null, selector: null, synAt: 0,
     rr: null, rrAt: 0, rrTimer: null, rtPress: {},
     plangap: null, trend: null, briefBusy: {}, gps: null, gpsBusy: false, gpsNote: "",

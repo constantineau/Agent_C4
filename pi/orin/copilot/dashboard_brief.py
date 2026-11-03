@@ -114,8 +114,8 @@ def _extract_json(text: str):
 def _validate(obj, tiles):
     """Ground the LLM output against the tiles it was shown (`tiles`: {key: tile}).
 
-    - A note must name a real tile; the focus and every note may carry only numbers the tiles
-      already show (a dropped focus/note leaves the dashboard's own engine-read text).
+    - A note must name a real tile and may carry only numbers THAT tile shows (wind 12 kts plus
+      bank 25 V must not ground "wind now 25 kts"); the focus may use any tile's numbers (a dropped focus/note leaves the dashboard's own engine-read text).
     - A status adjust may only RAISE a tile (ok → watch → act), never lower it and never touch an
       n/a tile. The instruments own "fine"; the LLM can add caution, never take it away (#176)."""
     if not isinstance(obj, dict):
@@ -130,7 +130,7 @@ def _validate(obj, tiles):
             continue
         tile = str(n.get("tile") or "").strip()
         text = str(n.get("text") or "").strip()
-        if tile in tiles and text and ground.grounded(text, facts):
+        if tile in tiles and text and ground.grounded(text, tiles[tile]):
             conf = str(n.get("confidence") or n.get("conf") or "med").strip().lower()
             notes_out.append({"tile": tile, "text": text, "conf": conf if conf in _CONF else "med"})
     adj_out = []
@@ -142,7 +142,7 @@ def _validate(obj, tiles):
         reason = str(a.get("reason") or "").strip()
         engine = str((tiles.get(tile) or {}).get("status") or "").strip().lower()
         if (tile in tiles and status in _STATUSES and reason and engine in _SEV
-                and _SEV[status] > _SEV[engine] and ground.grounded(reason, facts)):
+                and _SEV[status] > _SEV[engine] and ground.grounded(reason, tiles[tile])):
             # `from` is the status the model saw: the iPad drops the raise once the tile moves.
             adj_out.append({"tile": tile, "status": status, "reason": reason, "from": engine})
     if not focus and not notes_out:
