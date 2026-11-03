@@ -25,7 +25,7 @@ Deletion from the boat is allowed only *after* an off-boat copy is sha256-verifi
 | w3-164-gps-loss | Closes #164 | DONE → PR #215, queued |
 | — | #166 | ALREADY FIXED by #189 (ce38c45); issue still open — close it (needs Cole OK) |
 | w3-167-wind-source | Closes #167 | DONE → PR #218, queued (Jul 18 had 2 TWD publishers — bug was live) |
-| w3-203-route-followups | #203 | agent started ~19:40Z: each item fixed / not a defect / needs Cole |
+| w3-203-route-followups | Closes #203 | DONE → PR #220, queued (all 5 items fixed) |
 | w3-210-ground-units | Closes #210 | DONE → PR #217, queued |
 CI+Codex queue (systemd unit c4-prep-queue, survives the session): append `PR WORKTREE` to /root/c4-ops/prep-queue.txt; results in /root/c4-ops/prep-chain.log; restart with `systemd-run --unit=c4-prep-queue --collect -p StandardOutput=append:/root/c4-ops/prep-chain.log /root/c4-ops/prep-queue.sh` if it idled out.
 To resume: `git -C <worktree> status` / `diff`, finish each (respawn an agent with the brief above + tools/agents/agent-rules.md), then per PR: push, open PR to dev, `bash /root/c4-ops/prep.sh <pr> <worktree>` SERIALLY (CI + Codex), fix confirmed findings, Cole merges. Agents must not run `make ci` in parallel (shared sr33-ci-* tags). Next after these: #166, #167, #203, #210.
