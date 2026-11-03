@@ -55,16 +55,23 @@ def gather(engine: EngineClient, route=None, hoisted=None) -> dict:
     return snap
 
 
-def _facts_digest(snapshot: dict) -> str:
-    """A compact, grounding-tagged fact list for the LLM seed message. Each line is prefixed
-    with the tool name to cite in `grounded_in`."""
-    lines = []
+def _facts(snapshot: dict) -> dict:
+    """The gathered facts the seed message shows, {tool name: fact dict}."""
+    out = {}
     for name in _DEFAULT_GATHER:
         d = snapshot.get(name)
         if not isinstance(d, dict) or not d.get("available", True) or d.get("available") is False:
             continue
+        out[name] = {k: v for k, v in d.items() if k not in ("available",) and v is not None}
+    return out
+
+
+def _facts_digest(snapshot: dict) -> str:
+    """A compact, grounding-tagged fact list for the LLM seed message. Each line is prefixed
+    with the tool name to cite in `grounded_in`."""
+    lines = []
+    for name, compact in _facts(snapshot).items():
         # Trim each fact blob so the 7B's context isn't blown out.
-        compact = {k: v for k, v in d.items() if k not in ("available",) and v is not None}
         s = json.dumps(compact, separators=(",", ":"))
         if len(s) > 600:
             s = s[:600] + "…"
@@ -157,6 +164,7 @@ def llm_brief(engine: EngineClient, llm: LLMClient, snapshot: dict, question: st
     ]
 
     final_text = None
+    results = []                # tool results as data: grounding needs the field names (#210)
     for _round in range(config.MAX_TOOL_ROUNDS):
         msg = llm.chat(messages, tools=tools.TOOL_SPECS, tool_choice="auto")
         messages.append(msg)
@@ -167,6 +175,7 @@ def llm_brief(engine: EngineClient, llm: LLMClient, snapshot: dict, question: st
         for tc in tcs:
             name, args, call_id = _norm_tool_call(tc)
             result, tool_name = tools.dispatch(engine, name, args)
+            results.append(result)
             if isinstance(result, dict) and result.get("available", True) is not False:
                 used_sources.add(tool_name)
             messages.append({"role": "tool", "tool_call_id": call_id,
@@ -184,9 +193,9 @@ def llm_brief(engine: EngineClient, llm: LLMClient, snapshot: dict, question: st
 
     # Every number in the brief must come from the engine: the gathered facts, the playbook and
     # the tool results. NOT the system prompt (its worked examples carry degrees like 250/265) and
-    # NOT the crew's question (a number they typed is not a measurement).
-    shown = [_facts_digest(snapshot), pb.digest()] + [
-        m.get("content") or "" for m in messages if m.get("role") == "tool"]
+    # NOT the crew's question (a number they typed is not a measurement). The facts go in as data,
+    # not their JSON dump, so each value keeps its field's unit (twd 180 is not 180 kts).
+    shown = [_facts(snapshot), pb.digest()] + results
     cleaned = brief_mod.validate(parsed, used_sources, pb.variant_ids(), pb.play_ids(), facts=shown)
     cleaned["engine_only"] = False
     # The LLM is not trusted to author factual caveats — replace its free text with the
