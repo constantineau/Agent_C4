@@ -20,6 +20,7 @@ Every method returns **raw SI** values and **epoch-second** timestamps, identica
 
 Selected by env `DATA_SOURCE=onboard` (datasource.active() imports this lazily).
 """
+import contextlib
 import math
 import os
 import re
@@ -210,6 +211,9 @@ class OnboardSource:
     def __init__(self):
         self._archive_local = threading.local()
         self._engine = self._open_engine()
+        # the engine store is ONE writable connection shared by every threadpool thread; every use
+        # goes through _store() (see there). Re-entrant so session_start can call its siblings.
+        self._engine_lock = threading.RLock()
         self._live = {}            # (path, source) -> (epoch, value)  [own ship only]
         self._ais = {}             # mmsi -> {mmsi, time, name, lat, lon, sog(kn), cog(deg)}
         self._self_ctx = None      # the SK 'self' context urn, from the hello frame
@@ -314,6 +318,17 @@ class OnboardSource:
                      "kind TEXT NOT NULL, start_ts REAL NOT NULL, end_ts REAL)")
         conn.commit()
         return conn
+
+    @contextlib.contextmanager
+    def _store(self):
+        """The engine store for one unit of work: held under _engine_lock and run as one
+        transaction (commit on success, roll back on any error). Every read and write goes
+        through here. The connection is shared across threads, so without the lock concurrent
+        calls interleave on it (InterfaceError / IndexError / a course read mid-replace), and
+        without the rollback a write that fails part-way stays open on the connection until the
+        next commit from any other write makes it permanent (#162)."""
+        with self._engine_lock, self._engine:
+            yield self._engine
 
     # --- live Signal K cache (optional, lowest-latency current values) ------
     def _start_live(self):
@@ -701,19 +716,20 @@ class OnboardSource:
 
     def marks(self, route):
         """Course waypoints in sequence: [{seq,name,lat,lon}]."""
-        rows = self._engine.execute(
-            "SELECT seq, name, lat, lon FROM marks WHERE route=? ORDER BY seq", (route,),
-        ).fetchall()
-        return [dict(r) for r in rows]
+        with self._store() as db:
+            rows = db.execute(
+                "SELECT seq, name, lat, lon FROM marks WHERE route=? ORDER BY seq", (route,),
+            ).fetchall()
+            return [dict(r) for r in rows]
 
     def save_course(self, route, marks):
         """Replace `route` with these [(seq, name, lat, lon)] marks."""
-        self._engine.execute("DELETE FROM marks WHERE route=?", (route,))
-        self._engine.executemany(
-            "INSERT INTO marks (route, seq, name, lat, lon) VALUES (?,?,?,?,?)",
-            [(route, seq, name, mlat, mlon) for seq, name, mlat, mlon in marks],
-        )
-        self._engine.commit()
+        with self._store() as db:
+            db.execute("DELETE FROM marks WHERE route=?", (route,))
+            db.executemany(
+                "INSERT INTO marks (route, seq, name, lat, lon) VALUES (?,?,?,?,?)",
+                [(route, seq, name, mlat, mlon) for seq, name, mlat, mlon in marks],
+            )
 
     def save_practice_course(self, marks):
         """Replace the 'practice' route with these [(seq, name, lat, lon)] marks."""
@@ -722,112 +738,119 @@ class OnboardSource:
     def save_active_route(self, route):
         """Persist the navigator's active route name (kv 'active_route') so an engine restart
         resumes the loaded course instead of silently falling back to 'default'."""
-        self._engine.execute(
-            "INSERT INTO kv (key, value) VALUES ('active_route', ?) "
-            "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (route,))
-        self._engine.commit()
+        with self._store() as db:
+            db.execute(
+                "INSERT INTO kv (key, value) VALUES ('active_route', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (route,))
 
     def get_active_route(self):
         """The persisted active route name, or None if never set."""
-        row = self._engine.execute("SELECT value FROM kv WHERE key = 'active_route'").fetchone()
-        return row["value"] if row else None
+        with self._store() as db:
+            row = db.execute("SELECT value FROM kv WHERE key = 'active_route'").fetchone()
+            return row["value"] if row else None
 
     def save_nav_progress(self, route, blob):
         """Persist how far round the course we are ({fp, i}) so a mid-race engine restart does
         not reset the navigator to the first mark. The ratchet is advisory — plane crossing
         alone is already correct on a normal course (see navigator._passed)."""
         import json
-        self._engine.execute(
-            "INSERT INTO kv (key, value) VALUES (?, ?) "
-            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            (f"nav_progress:{route}", json.dumps(blob)))
-        self._engine.commit()
+        with self._store() as db:
+            db.execute(
+                "INSERT INTO kv (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (f"nav_progress:{route}", json.dumps(blob)))
 
     def get_nav_progress(self, route):
         """Stored course progress for `route`, or {} if none. The caller discards it when the
         fingerprint does not match the loaded course."""
         import json
-        row = self._engine.execute("SELECT value FROM kv WHERE key = ?",
-                                   (f"nav_progress:{route}",)).fetchone()
-        return json.loads(row["value"]) if row else {}
+        with self._store() as db:
+            row = db.execute("SELECT value FROM kv WHERE key = ?",
+                             (f"nav_progress:{route}",)).fetchone()
+            return json.loads(row["value"]) if row else {}
 
     def save_fleet(self, blob):
         """Persist the loaded fleet homework (roster + scoring + own rating) as a JSON blob in the
         engine SQLite `kv` store (key 'race_fleet'). Replaces any prior roster."""
         import json
-        self._engine.execute(
-            "INSERT INTO kv (key, value) VALUES ('race_fleet', ?) "
-            "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (json.dumps(blob),))
-        self._engine.commit()
+        with self._store() as db:
+            db.execute(
+                "INSERT INTO kv (key, value) VALUES ('race_fleet', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (json.dumps(blob),))
 
     def get_fleet(self):
         """The loaded fleet homework blob ({fleet, scoring, own}) or {} if none."""
         import json
-        row = self._engine.execute("SELECT value FROM kv WHERE key = 'race_fleet'").fetchone()
-        return json.loads(row["value"]) if row else {}
+        with self._store() as db:
+            row = db.execute("SELECT value FROM kv WHERE key = 'race_fleet'").fetchone()
+            return json.loads(row["value"]) if row else {}
 
     def save_playbook(self, blob):
         """Persist the frozen playbook bundle (Lab-2 `c4.playbook/v1`) in the engine SQLite `kv`
         store (key 'race_playbook'). The route-deviation core reads the active variant's frozen
         track from it. Replaces any prior playbook."""
         import json
-        self._engine.execute(
-            "INSERT INTO kv (key, value) VALUES ('race_playbook', ?) "
-            "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (json.dumps(blob),))
-        self._engine.commit()
+        with self._store() as db:
+            db.execute(
+                "INSERT INTO kv (key, value) VALUES ('race_playbook', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (json.dumps(blob),))
 
     def get_playbook(self):
         """The loaded playbook bundle or {} if none aboard."""
         import json
-        row = self._engine.execute("SELECT value FROM kv WHERE key = 'race_playbook'").fetchone()
-        return json.loads(row["value"]) if row else {}
+        with self._store() as db:
+            row = db.execute("SELECT value FROM kv WHERE key = 'race_playbook'").fetchone()
+            return json.loads(row["value"]) if row else {}
 
     def save_sail_state(self, blob):
         """Persist the crew-set sail state ({flying, reef, out_of_service, hoisted, ts}) in the
         engine kv — the matcher's crew-armed signals (a blown kite has no instrument) — and
         APPEND it to sail_log (the timestamped history the race log / debrief reads)."""
         import json
-        self._engine.execute(
-            "INSERT INTO kv (key, value) VALUES ('sail_state', ?) "
-            "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (json.dumps(blob),))
-        self._engine.execute(
-            "INSERT INTO sail_log (ts, flying, reef, out_of_service) VALUES (?, ?, ?, ?)",
-            (blob.get("ts"), json.dumps(blob.get("flying") or []), blob.get("reef"),
-             json.dumps(blob.get("out_of_service") or [])))
-        self._engine.commit()
+        with self._store() as db:
+            db.execute(
+                "INSERT INTO kv (key, value) VALUES ('sail_state', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (json.dumps(blob),))
+            db.execute(
+                "INSERT INTO sail_log (ts, flying, reef, out_of_service) VALUES (?, ?, ?, ?)",
+                (blob.get("ts"), json.dumps(blob.get("flying") or []), blob.get("reef"),
+                 json.dumps(blob.get("out_of_service") or [])))
 
     # --- race sessions (onboard-only capability, like sail_log) -------------
     def session_start(self, name, race_id, kind, start_ts):
-        cur = self.session_current()
-        if cur:                                   # only one open window at a time
-            self.session_end(start_ts, session_id=cur["id"])
-        self._engine.execute(
-            "INSERT INTO sessions (name, race_id, kind, start_ts) VALUES (?, ?, ?, ?)",
-            (name, race_id, kind, float(start_ts)))
-        self._engine.commit()
-        return self.session_current()
+        # held across the close + open, so no other thread's session call lands in between
+        with self._store() as db:
+            cur = self.session_current()
+            if cur:                                   # only one open window at a time
+                self.session_end(start_ts, session_id=cur["id"])
+            db.execute(
+                "INSERT INTO sessions (name, race_id, kind, start_ts) VALUES (?, ?, ?, ?)",
+                (name, race_id, kind, float(start_ts)))
+            return self.session_current()
 
     def session_end(self, end_ts, session_id):
         """End ONE open session, by id. Never an unscoped close: a session started in between
         (a race) must never be ended by a close meant for another."""
-        self._engine.execute(
-            "UPDATE sessions SET end_ts = ? WHERE end_ts IS NULL AND id = ?",
-            (float(end_ts), int(session_id)))
-        self._engine.commit()
+        with self._store() as db:
+            db.execute(
+                "UPDATE sessions SET end_ts = ? WHERE end_ts IS NULL AND id = ?",
+                (float(end_ts), int(session_id)))
 
     def session_current(self):
-        r = self._engine.execute(
-            "SELECT id, name, race_id, kind, start_ts FROM sessions "
-            "WHERE end_ts IS NULL ORDER BY id DESC LIMIT 1").fetchone()
-        return ({"id": r[0], "name": r[1], "race_id": r[2], "kind": r[3], "start_ts": r[4]}
-                if r else None)
+        with self._store() as db:
+            r = db.execute(
+                "SELECT id, name, race_id, kind, start_ts FROM sessions "
+                "WHERE end_ts IS NULL ORDER BY id DESC LIMIT 1").fetchone()
+            return ({"id": r[0], "name": r[1], "race_id": r[2], "kind": r[3], "start_ts": r[4]}
+                    if r else None)
 
     def sessions_list(self, limit=20):
-        rows = self._engine.execute(
-            "SELECT id, name, race_id, kind, start_ts, end_ts FROM sessions "
-            "ORDER BY start_ts DESC LIMIT ?", (int(limit),)).fetchall()
-        return [{"id": r[0], "name": r[1], "race_id": r[2], "kind": r[3],
-                 "start_ts": r[4], "end_ts": r[5]} for r in rows]
+        with self._store() as db:
+            rows = db.execute(
+                "SELECT id, name, race_id, kind, start_ts, end_ts FROM sessions "
+                "ORDER BY start_ts DESC LIMIT ?", (int(limit),)).fetchall()
+            return [{"id": r[0], "name": r[1], "race_id": r[2], "kind": r[3],
+                     "start_ts": r[4], "end_ts": r[5]} for r in rows]
 
     def sail_log(self, since=None, until=None):
         """[{ts, flying, reef, out_of_service}] time-ordered — the crew sail history."""
@@ -840,45 +863,49 @@ class OnboardSource:
             conds.append("ts <= ?"); args.append(float(until))
         if conds:
             q += " WHERE " + " AND ".join(conds)
-        rows = self._engine.execute(q + " ORDER BY ts", args).fetchall()
-        return [{"ts": r[0], "flying": json.loads(r[1] or "[]"), "reef": r[2],
-                 "out_of_service": json.loads(r[3] or "[]")} for r in rows]
+        with self._store() as db:
+            rows = db.execute(q + " ORDER BY ts", args).fetchall()
+            return [{"ts": r[0], "flying": json.loads(r[1] or "[]"), "reef": r[2],
+                     "out_of_service": json.loads(r[3] or "[]")} for r in rows]
 
     def get_sail_state(self):
         """The crew-set sail state or {} if never set."""
         import json
-        row = self._engine.execute("SELECT value FROM kv WHERE key = 'sail_state'").fetchone()
-        return json.loads(row["value"]) if row else {}
+        with self._store() as db:
+            row = db.execute("SELECT value FROM kv WHERE key = 'sail_state'").fetchone()
+            return json.loads(row["value"]) if row else {}
 
     def save_watch_plan(self, blob):
         """Persist the watch plan (shared/watchplan.py block list) in the engine kv — seeded
         by the Lab homework, edited live from the iPad."""
         import json
-        self._engine.execute(
-            "INSERT INTO kv (key, value) VALUES ('watch_plan', ?) "
-            "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (json.dumps(blob),))
-        self._engine.commit()
+        with self._store() as db:
+            db.execute(
+                "INSERT INTO kv (key, value) VALUES ('watch_plan', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (json.dumps(blob),))
 
     def get_watch_plan(self):
         """The watch plan or {} if never set."""
         import json
-        row = self._engine.execute("SELECT value FROM kv WHERE key = 'watch_plan'").fetchone()
-        return json.loads(row["value"]) if row else {}
+        with self._store() as db:
+            row = db.execute("SELECT value FROM kv WHERE key = 'watch_plan'").fetchone()
+            return json.loads(row["value"]) if row else {}
 
     def save_checklist(self, blob):
         """Persist the race checklist (items + acks/latches) in the engine kv — the homework's
         `checklists_ipad` subset, acked live from the iPad."""
         import json
-        self._engine.execute(
-            "INSERT INTO kv (key, value) VALUES ('checklist', ?) "
-            "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (json.dumps(blob),))
-        self._engine.commit()
+        with self._store() as db:
+            db.execute(
+                "INSERT INTO kv (key, value) VALUES ('checklist', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (json.dumps(blob),))
 
     def get_checklist(self):
         """The checklist blob or {} if never set."""
         import json
-        row = self._engine.execute("SELECT value FROM kv WHERE key = 'checklist'").fetchone()
-        return json.loads(row["value"]) if row else {}
+        with self._store() as db:
+            row = db.execute("SELECT value FROM kv WHERE key = 'checklist'").fetchone()
+            return json.loads(row["value"]) if row else {}
 
     def ais_targets(self, max_age_min):
         """Latest AIS observation per MMSI within the window — other-vessel Signal K contexts
