@@ -23,6 +23,24 @@ threshold discrimination without hints is the residual weakness. Calibration not
 model uses `partial` per the training semantics (= conditions present, sustain not met), so the
 harness's partial-vs-armed accuracy metric reads 0 by construction — not a defect.
 
+**Caveat (#54, 2026-11): the table above does not show matching, and must be re-measured.**
+- *Hinted measured tag copying.* In the hinted view the matcher's [armed] tags equal the oracle
+  labels, so the no-LLM `--dry` parrot scores F1 1.0. And train and eval drew from the same ten play
+  templates × two phrasings: "disjoint libraries" was true by seed, not by content.
+- *Train/serve skew.* The generator wrote its own seed (picture rows keyed `text`, a sail-state row
+  production never sends, `on_plan` vs the schema's `on-plan`, no urgency/confidence) — the model
+  was tuned on inputs it never sees on the boat.
+- *2k context.* The Orin ran Ollama at 2048 tokens; the matcher prompt is ~1.7-2k and `/brief`
+  ~3.4k, and Ollama truncates silently.
+Fixed in code: the eval now gates on the BLIND view only, with held-out phrasings for every family
+and held-out families training never sees; seeds for training and eval are rendered by the
+engine's own strategy code and sent through the copilot's own prompt functions; one context
+number (6144) across Ollama, the copilot's size guard and the training max length. Still owed: a
+fresh eval corpus + blind run of stock and tuned models on the Orin, and (if the tuned model fails)
+a retrain on the new corpus. Plays keyed on sail state, polar %, fatigue or leg can't be matched
+blind at all — the strategy seed carries none of those reads; the eval leaves them out of the blind
+score and reports how many it left out.
+
 **Known regression (accepted, documented):** on the open `/brief` DecisionBrief tool-loop the
 tuned model produced no grounded content in the dockside bench and fell back to deterministic
 (stock had produced one grounded factor) — mild catastrophic forgetting toward the matcher task.

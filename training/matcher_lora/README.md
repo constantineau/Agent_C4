@@ -31,10 +31,19 @@ deterministic Tier-1 matcher is untouched, and rollback is one model-name change
 
 ```bash
 cd ~/Agent_C4/pi/orin
+export PYTHONPATH=../../vps/agent:../..     # seeds are rendered by the engine's strategy code
 python3 -m copilot.eval.gen_train --libraries 400 --per-lib 8 --seed 1001 \
-    --blind-frac 0.35 --out /tmp/matcher_train.jsonl        # ~3200 examples
-# NEVER seed 7 — that's the held-out eval corpus.
+    --blind-frac 0.35 --out /tmp/matcher_train.jsonl        # ~3200 examples (train split)
+python3 -m copilot.eval.gen_corpus --libraries 30 --per-lib 8 --seed 7 \
+    --out /tmp/matcher_corpus.jsonl                         # eval split -> copy to the Orin
+# NEVER seed 7 for training. Since #54 the eval is also held out by CONTENT: held-out phrasings
+# for every family + families training never sees (libgen.py), so a seed mix-up can't leak it.
 ```
+
+Since #54 the prompt is built by the copilot's own functions over a digest the engine's own
+`strategy.get_strategy_signals` renders — the exact shape the boat sends. A corpus or a model
+trained before #54 saw a different seed shape (`text` rows, a sail-state row, `on_plan`): re-run
+both the corpus and the eval before trusting an old model's numbers.
 
 ## 2. RunPod pod
 
@@ -44,8 +53,10 @@ python3 -m copilot.eval.gen_train --libraries 400 --per-lib 8 --seed 1001 \
 
 ```bash
 pip install -r requirements.txt
-python3 train_qlora.py --data matcher_train.jsonl --out ./out
+python3 train_qlora.py --data matcher_train.jsonl --out ./out   # --max-len 6144 = serving ctx
 ```
+
+Rows longer than `--max-len` are skipped and counted, never truncated (#54).
 
 ## 3. GGUF + quantize (still on the pod)
 
@@ -64,22 +75,27 @@ llama.cpp/build/bin/llama-quantize matcher-f16.gguf matcher-q4_K_M.gguf q4_K_M
 cat > Modelfile <<'EOF'
 FROM ./matcher-q4_K_M.gguf
 TEMPLATE chatml
+PARAMETER num_ctx 6144
 EOF
 ollama create qwen2.5-matcher:7b-q4_K_M -f Modelfile
 ```
 
 ## 5. Gate before it goes near the race (§4)
 
-Same harness, same held-out corpus, blind A/B vs stock — all on the Orin at q4:
+Same harness, same held-out corpus, blind A/B vs stock — all on the Orin at q4. The gate is the
+BLIND run (the default). `--hinted` is a diagnostic only: there the matcher's tags equal the
+labels, so copying them scores F1 1.0 without any matching (#54).
 
 ```bash
 cd ~/eval-dev/pi/orin
 LLM_MODEL=qwen2.5-matcher:7b-q4_K_M ~/copilot-venv/bin/python -m copilot.eval.run_eval \
-    --corpus ~/matcher_corpus.jsonl --out ~/tuned_hinted.json
+    --corpus ~/matcher_corpus.jsonl --out ~/tuned_blind.json          # THE GATE
 LLM_MODEL=qwen2.5-matcher:7b-q4_K_M ~/copilot-venv/bin/python -m copilot.eval.run_eval \
-    --corpus ~/matcher_corpus.jsonl --blind --out ~/tuned_blind.json
+    --corpus ~/matcher_corpus.jsonl --hinted --out ~/tuned_hinted.json   # diagnostic
 ENGINE_URL=http://10.10.10.1:8200 LLM_MODEL=qwen2.5-matcher:7b-q4_K_M \
     ~/copilot-venv/bin/python -m copilot.bench_copilot --llm     # regression: must not regress
+# --llm FAILS (exit 2) if the engine is down, if any LLM path fell back to deterministic text,
+# or if the model's coach line breaks the wording/number checks (#54).
 ```
 
 Deploy = set `LLM_MODEL=qwen2.5-matcher:7b-q4_K_M` in `/etc/sr33/copilot.env` + restart

@@ -1,15 +1,16 @@
-"""Baseline/eval runner — drives the REAL production prompt path (copilot._strategy_prompt →
-LLMClient → copilot._filter_play_matches) over a generated corpus and scores it against the
-oracle labels (§4). Run on the Orin so the number measured is q4_K_M on the real hardware.
+"""Baseline/eval runner — drives the REAL production prompt path (copilot._strategy_prompt +
+copilot.strategy_seed → LLMClient → copilot._filter_play_matches) over a generated corpus and
+scores it against the oracle labels (§4). Run on the Orin so the number measured is q4_K_M on the
+real hardware.
 
-    python3 -m copilot.eval.run_eval --corpus /tmp/matcher_corpus.jsonl --out /tmp/baseline.json
-    ... --dry     # no LLM: a hint-parrot floor (predict strong for every [armed] hint) + pipe sanity
-    ... --blind   # status hints withheld (all [quiet]) — pure narrative matching, the §3.4 axis
+    python3 -m copilot.eval.run_eval --corpus /tmp/matcher_corpus.jsonl --out /tmp/eval.json
+    ... --dry      # no LLM: a hint-parrot (strong for every [armed] tag) — pipe sanity; blind it
+                   #   scores ~0, which is the point: the blind gate can't be passed without reading
+    ... --hinted   # the matcher's tags ride along — DIAGNOSTIC only (a tag-copier scores 1.0)
 
-Two hint modes, because production has both regimes: normally the deterministic matcher's
-[armed]/[arming] tags ride in the prompt (agreeing with them is most of the job); but the
-compound/fuzzy cases the predicates can't see arrive tagged [quiet] — --blind measures whether
-the model can out-read a hint that is present and unhelpful, exactly that regime."""
+The default and the only GATED view is blind (#54): no matcher tags, no "Armed play(s)" row; the
+model must match each play's narrative against the engine picture. The corpus must come from
+gen_corpus of this version (it carries both rendered views and the blind labels)."""
 
 import argparse
 import json
@@ -17,15 +18,32 @@ import os
 import time
 
 from .. import copilot, playbook as playbook_mod
-from ..llm import LLMClient, LLMUnavailable
+from ..llm import LLMClient, LLMUnavailable, PromptTooLong
 from . import metrics
 
 
 def _schema_ok(parsed):
-    if not isinstance(parsed, dict) or not isinstance(parsed.get("play_matches", []), list):
+    """The copilot's _STRATEGY_SCHEMA, checked: required top-level keys, the recommendation's
+    required fields, and well-formed play_matches. (`{}` used to pass.)"""
+    schema = copilot._STRATEGY_SCHEMA
+    if not isinstance(parsed, dict) or any(k not in parsed for k in schema["required"]):
+        return False
+    if not isinstance(parsed.get("assessment"), str):
+        return False
+    rec = parsed.get("recommendation")
+    rec_schema = schema["properties"]["recommendation"]
+    if not isinstance(rec, dict) or any(k not in rec for k in rec_schema["required"]):
+        return False
+    for k, spec in rec_schema["properties"].items():
+        if k in rec and "enum" in spec and rec[k] not in spec["enum"]:
+            return False
+    if not isinstance(rec.get("grounded_in"), list):
+        return False
+    matches = parsed.get("play_matches", [])
+    if not isinstance(matches, list):
         return False
     return all(isinstance(m, dict) and m.get("play_id") and m.get("match") in ("strong", "partial")
-               and m.get("why") for m in parsed.get("play_matches", []))
+               and m.get("why") for m in matches)
 
 
 def _chat_with_recovery(llm, messages, attempts=3, recovery_s=180):
@@ -36,6 +54,8 @@ def _chat_with_recovery(llm, messages, attempts=3, recovery_s=180):
     for i in range(attempts):
         try:
             return llm.chat(messages, schema=copilot._STRATEGY_SCHEMA)
+        except PromptTooLong:
+            raise                                 # same prompt, same size: don't wait and retry
         except LLMUnavailable as e:
             last = e
             deadline = time.time() + recovery_s
@@ -47,9 +67,21 @@ def _chat_with_recovery(llm, messages, attempts=3, recovery_s=180):
     raise last
 
 
-def _predict(ex, llm, blind=False, dry=False):
+def messages_for(ex, mode):
+    """The chat the copilot would send for this example's view: system = the production strategy
+    prompt over the example's play library + the view's status tags; user = the rendered seed."""
+    if "views" not in ex:
+        raise ValueError(f"example {ex.get('id')} predates #54 (no rendered views) — regenerate "
+                         "the corpus with this version of gen_corpus")
+    view = ex["views"][mode]
     pb = playbook_mod.Playbook(ex["bundle"])
-    smap = ({pid: "quiet" for pid in pb.play_ids()} if blind else ex["status_map"])
+    return pb, view["status_map"], [
+        {"role": "system", "content": copilot._strategy_prompt(pb, view["status_map"])},
+        {"role": "user", "content": view["seed"]}]
+
+
+def _predict(ex, llm, mode="blind", dry=False):
+    pb, smap, messages = messages_for(ex, mode)
     if dry:
         raw = [{"play_id": pid, "match": "strong", "why": "hint"}
                for pid, st in smap.items() if st == "armed"]
@@ -59,9 +91,7 @@ def _predict(ex, llm, blind=False, dry=False):
                 "filtered": copilot._filter_play_matches(parsed, pb, smap), "latency_s": 0.0}
     t0 = time.time()
     try:
-        msg = _chat_with_recovery(
-            llm, [{"role": "system", "content": copilot._strategy_prompt(pb, smap)},
-                  {"role": "user", "content": ex["seed"]}])
+        msg = _chat_with_recovery(llm, messages)
         parsed = copilot._extract_json(msg.get("content") or "")
     except LLMUnavailable as e:
         return {"parse_ok": False, "schema_ok": False, "raw": [], "filtered": [],
@@ -78,7 +108,9 @@ def main():
     ap.add_argument("--corpus", required=True)
     ap.add_argument("--out")
     ap.add_argument("--n", type=int, help="cap examples (quick pass)")
-    ap.add_argument("--blind", action="store_true")
+    ap.add_argument("--hinted", action="store_true",
+                    help="score the hinted view (diagnostic; never a gate)")
+    ap.add_argument("--blind", action="store_true", help="(the default; kept for old commands)")
     ap.add_argument("--dry", action="store_true")
     ap.add_argument("--resume", action="store_true",
                     help="reuse non-error predictions already in --out; re-run the rest")
@@ -97,20 +129,21 @@ def main():
                 if not p.get("error")}
         print(f"resume: {len(done)} prior predictions reused")
 
+    mode = "hinted" if args.hinted else "blind"
     llm = None if args.dry else LLMClient()
     preds = []
     for i, ex in enumerate(examples):
         if ex["id"] in done:
             preds.append(done[ex["id"]])
             continue
-        pr = _predict(ex, llm, blind=args.blind, dry=args.dry)
+        pr = _predict(ex, llm, mode=mode, dry=args.dry)
         preds.append(pr)
         if not args.dry:
             print(f"[{i + 1}/{len(examples)}] {ex['id']} {pr['latency_s']}s "
                   f"raw={len(pr['raw'])} armed={ex['oracle']['armed']}", flush=True)
 
-    m = metrics.score(examples, preds)
-    m["mode"] = "dry" if args.dry else ("blind" if args.blind else "hinted")
+    m = metrics.score(examples, preds, mode=mode)
+    m["dry"] = bool(args.dry)
     if not args.dry:
         lats = sorted(p["latency_s"] for p in preds)
         m["latency_s"] = {"p50": lats[len(lats) // 2], "max": lats[-1]}

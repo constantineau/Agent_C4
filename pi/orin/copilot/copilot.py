@@ -440,6 +440,32 @@ def _strategy_prompt(pb: playbook_mod.Playbook, status_map=None) -> str:
     )
 
 
+def strategy_seed(digest: dict) -> str:
+    """The user turn of the strategy pass: the engine digest's four fixed facts. The matcher-LoRA
+    corpus generators (eval/scengen.py) call THIS function on a digest rendered by the engine's own
+    shared/strategy_render.py, so training, eval and serving send byte-identical shapes (#54)."""
+    return ("STRATEGIC PICTURE (engine-computed facts — reuse these, invent nothing):\n"
+            + json.dumps({"assessment": digest.get("assessment"),
+                          "picture": digest.get("picture"),
+                          "concordance": digest.get("concordance"),
+                          "recommendation": digest.get("recommendation")}, separators=(",", ":")))
+
+
+def strategy_status_map(digest: dict) -> dict:
+    """{play_id: armed|arming} from the deterministic matcher's block on the digest. Plays not
+    listed render as [quiet] in the prompt."""
+    return {d.get("id"): d.get("status")
+            for d in ((digest.get("plays") or {}).get("detail") or [])}
+
+
+def strategy_messages(pb: playbook_mod.Playbook, digest: dict, status_map=None) -> list:
+    """The exact chat the strategy pass sends: system = role + playbook + play library, user = seed.
+    Shared by strategy_brief, the eval runner and the SFT generator."""
+    sm = strategy_status_map(digest) if status_map is None else status_map
+    return [{"role": "system", "content": _strategy_prompt(pb, sm)},
+            {"role": "user", "content": strategy_seed(digest)}]
+
+
 def strategy_brief(route=None, hoisted=None, use_llm: bool | None = None) -> dict:
     """In-race STRATEGY SYNTHESIS (Tier-2): the onboard LLM phrases the engine's deterministic
     cross-signal digest into a crew-facing assessment and enriches the recommendation's RATIONALE by
@@ -464,19 +490,16 @@ def strategy_brief(route=None, hoisted=None, use_llm: bool | None = None) -> dic
         return digest
 
     # Grounding allow-list = the signal tools that actually contributed a picture item (+ the synthesis).
+    # (an engine older than #54 sends some rows' grounded_in as a bare string — take it whole,
+    # don't iterate its characters)
     allowed = {"get_strategy", "get_selector"} | {
-        g for item in digest.get("picture", []) for g in (item.get("grounded_in") or [])}
+        g for item in digest.get("picture", [])
+        for g in ([item["grounded_in"]] if isinstance(item.get("grounded_in"), str)
+                  else (item.get("grounded_in") or []))}
     try:
         llm = LLMClient()
-        seed = ("STRATEGIC PICTURE (engine-computed facts — reuse these, invent nothing):\n"
-                + json.dumps({"assessment": digest.get("assessment"),
-                              "picture": digest.get("picture"),
-                              "concordance": digest.get("concordance"),
-                              "recommendation": digest.get("recommendation")}, separators=(",", ":")))
-        _plq = (digest.get("plays") or {})
-        status_map = {d.get("id"): d.get("status") for d in (_plq.get("detail") or [])}
-        msg = llm.chat([{"role": "system", "content": _strategy_prompt(pb, status_map)},
-                        {"role": "user", "content": seed}], schema=_STRATEGY_SCHEMA)
+        status_map = strategy_status_map(digest)
+        msg = llm.chat(strategy_messages(pb, digest, status_map), schema=_STRATEGY_SCHEMA)
         parsed = _extract_json(msg.get("content") or "")
         if not parsed:
             raise LLMUnavailable("strategy: no parseable JSON")
