@@ -1,0 +1,12 @@
+# 02:15 UTC: clear of the DreamCRM backup (03:00, which also dumps sr33_dev) and Tramp's
+# off-site copy (04:30). Persistent: a run missed while the VPS was down happens at boot.
+[Unit]
+Description=Nightly Agent C4 Lab + sr33_dev backup
+
+[Timer]
+OnCalendar=*-*-* 02:15:00 UTC
+RandomizedDelaySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

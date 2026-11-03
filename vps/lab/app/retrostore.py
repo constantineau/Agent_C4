@@ -18,6 +18,8 @@ import shutil
 import sqlite3
 import time
 
+from . import atomicio
+
 RETRO_DB = os.environ.get("RETRO_DB", "/srv/retro/retro.db")
 RETRO_GRIB_DIR = os.environ.get("RETRO_GRIB_DIR", "/srv/retro/grib")
 
@@ -176,7 +178,7 @@ def pin_grib(path, model=None, cycle=None, fhr=None, member=None, bbox=None,
         row = c.execute("SELECT path FROM grib_files WHERE sha256=?", (sha,)).fetchone()
         if row is None:
             if not os.path.exists(dest):
-                shutil.copy2(path, dest)
+                atomicio.copy_file(path, dest)
             c.execute("INSERT OR IGNORE INTO grib_files (sha256, bytes, path, model, cycle, fhr, "
                       "member, bbox, source_url, pinned_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
                       (sha, os.path.getsize(path), dest, model,

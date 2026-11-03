@@ -9,6 +9,8 @@ import json
 import os
 import threading
 
+from . import atomicio
+
 _PATH = os.path.join(os.environ.get("INGESTED_DIR", "/srv/ingested"), "_labstate.json")
 
 
@@ -35,10 +37,7 @@ def update(values: dict):
         os.makedirs(os.path.dirname(_PATH), exist_ok=True)
         state = _read()
         state.update(values)
-        tmp = _PATH + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(state, f)
-        os.replace(tmp, _PATH)        # atomic
+        atomicio.write_json(_PATH, state)
     return values
 
 

@@ -121,6 +121,51 @@ docker compose -f compose.pi.yml exec archiver python backfill.py --reset
 On the boat, point `VPS_URL`/`INGEST_TOKEN` at the production ingestion API and run this
 once a real link is available (dockside wifi after the passage).
 
+## Copy-off: every row off the boat, verified (#181)
+
+`copyoff.py` (stdlib only; runs on the Pi host or in this image) copies the full-res archive to
+the VPS and proves each copy before anything may delete it. **Built and tested ashore; not yet
+deployed aboard** (C4 is out of the water until spring).
+
+```bash
+# on the Pi (host), e.g. from a timer; D = the sk_archive volume's directory
+copyoff.py seal --archive-dir D --outbox D/outbox      # cut new rows into segments
+copyoff.py ship --archive-dir D --outbox D/outbox --dest c4-offboat@vps:/mnt/data/c4-offboat
+copyoff.py status --outbox D/outbox
+```
+
+- `seal` opens `archive.db` read-only and cuts every row by id, `--max-rows` at a time, into
+  `outbox/seg-<inode>-<first>-<last>.db` + a JSON sidecar (sha256, row count, a hash of the rows
+  as read from the archive). The segment is re-read after it is written, so a bad write on the
+  card is caught on the boat. Closed files (`archive.corrupt-*.db`) get a sidecar only; they ship
+  in place, untouched, as ONE unit with their `-wal`/`-shm` (rows committed only in the -wal
+  are not in the .db); the receipt must match every member. Nothing closed is sealed while
+  `archive.db.rotating` says a rotation is half-done.
+- Seal and ship each hold one lock on the outbox (`outbox/.lock`) for the whole operation;
+  the ledger is written tmp + fsync + rename.
+- `ship` copies artifact + sidecar to the destination (a directory, or `host:dir` via rsync -z
+  and ssh) and runs `copyoff.py verify` there, which re-hashes the bytes and, for a segment,
+  re-reads every row. Only a receipt matching the boat's own numbers counts: then the ledger
+  (`outbox/ledger.json`) records it and the segment's outbox copy is deleted.
+- The ledger's `verified_through_id` (per archive inode, contiguous from id 1) gates the prune:
+  set `ARCHIVE_OFFBOAT_LEDGER=/var/lib/sr33/archive/outbox/ledger.json` and the prune deletes
+  only verified rows. Missing or unreadable ledger = nothing pruned. Unset (today) = old behaviour.
+
+### Spring deploy steps (#181)
+
+1. An SSH key from the Pi to the VPS, limited to rsync into the receive dir and `copyoff.py
+   verify` (forced command); check the Pi host has rsync and python3.
+2. A Pi timer running `seal` then `ship` (hourly, when the link is up).
+3. **Measure the real copy-off volume before leaving it on Starlink.** The estimate is
+   ~0.7–1 GB/day with `rsync -z` against ~3.2 GB/day of raw archive growth at the dock, but it
+   is not measured. Run `seal` + `ship` for a day or two and read the bytes sent (rsync
+   `--stats`, or the Starlink app) before deciding the cadence.
+4. The one-time backlog (~15 GB live archive + the 24 GB `archive.corrupt-20261028T154237.db`)
+   on dock Wi-Fi, or by pulling the card.
+5. Rebuild the archiver and set `ARCHIVE_OFFBOAT_LEDGER=/var/lib/sr33/archive/outbox/ledger.json`
+   so the prune deletes only rows verified off the boat.
+6. On the VPS: compress what arrives and copy it to the archive bucket.
+
 ## Env
 
 | Var | Default | Meaning |
@@ -145,4 +190,5 @@ once a real link is available (dockside wifi after the passage).
 | `ARCHIVE_OPEN_RETRIES` / `ARCHIVE_OPEN_RETRY_S` | `3` / `2` | retries of an uncertain open error before rotating |
 | `ARCHIVE_STATUS_STALE_S` | `90` | (engine) a status file older than this reads as "archiver stopped" |
 | `ARCHIVE_DROP_LOG_EVERY_S` | `30` | at most one buffer-drop / requeue warning per this many seconds |
+| `ARCHIVE_OFFBOAT_LEDGER` | (empty = off) | copyoff.py's ledger: the prune deletes only rows verified off the boat |
 | `ARCHIVE_PRUNE_CHUNK_ROWS` / `ARCHIVE_PRUNE_PAUSE_S` | `20000` / `0.05` | prune batch size / pause between batches (lock released) |
