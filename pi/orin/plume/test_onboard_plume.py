@@ -250,7 +250,7 @@ class StallGFS(FixtureGFS):
 
     def fetch(self, cycle, fhr, member, bbox, timeout=60):
         STALLS.append(timeout)
-        _time.sleep(4)
+        _time.sleep(12)     # far past the 1.5 s budget, so the check below has real headroom
         return None
 
 
@@ -266,7 +266,9 @@ n_posts = len(POSTS)
 t0 = _time.monotonic()
 out = ob.run_once(now=NOW + 2800, get=get, post=post, record=record, is_online=lambda: True)
 took = _time.monotonic() - t0
-check("the pass ends on the budget, not the stall (or the 600 s service kill)", took < 3.5)
+# < 8 s: the budget is 1.5 s and a stalled download takes 12 s. (It was 3.5 s against a 4 s stall,
+# which a busy CI host crossed with a correct pass: flaky.)
+check("the pass ends on the budget, not the stall (or the 600 s service kill)", took < 8)
 check("each request asked for a short timeout", STALLS and max(STALLS) <= ob.REQUEST_TIMEOUT_S)
 ps = POSTS[-1][1] if len(POSTS) > n_posts else {}
 check("falls through to the cache: the new target's plume is posted", out["stalled"] and ps.get("key") == out["key"]
