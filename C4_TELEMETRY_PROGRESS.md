@@ -23,7 +23,7 @@ Deletion from the boat is allowed only *after* an off-boat copy is sha256-verifi
 | w3-161-tod-delta | Closes #161 | DONE → PR #212, queued |
 | w3-163-wind-stale | Closes #163 | DONE → PR #214, queued |
 | w3-164-gps-loss | Closes #164 | DONE → PR #215, queued |
-| w3-166-autoclose | Closes #166 | agent started ~19:50Z, test-first |
+| — | #166 | ALREADY FIXED by #189 (ce38c45); issue still open — close it (needs Cole OK) |
 | w3-167-wind-source | Closes #167 | agent started; two TWD publishers interleaved must not read as oscillation |
 | w3-210-ground-units | Closes #210 | agent started; engine field→unit map + compound units in pi/orin/copilot/ground.py |
 CI+Codex queue (systemd unit c4-prep-queue, survives the session): append `PR WORKTREE` to /root/c4-ops/prep-queue.txt; results in /root/c4-ops/prep-chain.log; restart with `systemd-run --unit=c4-prep-queue --collect -p StandardOutput=append:/root/c4-ops/prep-chain.log /root/c4-ops/prep-queue.sh` if it idled out.
