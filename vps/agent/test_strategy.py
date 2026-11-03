@@ -177,5 +177,26 @@ check("n_threats excludes the behind boat", n == 2)
 side2, _, _ = strategy._fleet_lean({"available": False})
 check("no fleet → no lean", side2 is None)
 
+# --- 7. Rival side is relative to US, not to the course (#160) -------------------------------------
+# leverage_nm is each boat's cross-track from the course line. We're 5 nm right, the rival 2 nm
+# right: the rival is 3 nm to our LEFT.
+print("rival side relative to us (#160):")
+def fleet_read(flt):
+    rows = [p for p in strategy._picture({}, flt, {"strength": "none"}) if p["signal"] == "fleet"]
+    return rows[0]["read"] if rows else ""
+rival = {"boat": "Rival", "tag": "rival", "leverage_nm": 2.0, "on_water_lead_nm": 0.5,
+         "confidence": 0.6, "corrected_delta_s": -120}
+rd = fleet_read({"available": True, "own": {"leverage_nm": 5.0}, "fleet": [rival]})
+print("  ", rd)
+check("rival 3 nm to our left", "3.0 nm to our left" in rd)
+check("not 'to our right'", "to our right" not in rd)
+rd = fleet_read({"available": True, "own": {"leverage_nm": 2.0}, "fleet": [rival]})
+print("  ", rd)
+check("same offset → no side claimed", "to our" not in rd and "ahead" in rd)
+rd = fleet_read({"available": True, "own": {"leverage_nm": None}, "fleet": [rival]})
+print("  ", rd)
+check("own offset unknown → says 'of the course', not 'to our'",
+      "2.0 nm right of the course" in rd and "to our" not in rd)
+
 print("\nRESULT:", "ALL GREEN" if ok else "FAILURES ABOVE")
 import sys; sys.exit(0 if ok else 1)

@@ -95,11 +95,18 @@ def picture(sig, flt, conc):
                     "confidence": "med" if dev.get("status") == "act" else "low"})
 
     def _fleet_position(row):
-        """Where a rival is RELATIVE to us — cross-track side + on-water ahead/behind."""
+        """Where a rival is RELATIVE to us — cross-track side + on-water ahead/behind.
+        leverage_nm is each boat's offset from the COURSE line (+ = right), so the side relative to
+        us is rival minus own (#160). Own offset unknown → say it against the course instead."""
         lev, lead = row.get("leverage_nm"), row.get("on_water_lead_nm")
+        own_lev = (flt.get("own") or {}).get("leverage_nm")
         bits = []
-        if lev:
-            bits.append(f"{abs(round(lev, 1))} nm to our {'right' if lev > 0 else 'left'}")
+        if lev is not None and own_lev is not None:
+            rel = round(lev - own_lev, 1)
+            if rel:
+                bits.append(f"{abs(rel)} nm to our {'right' if rel > 0 else 'left'}")
+        elif lev and round(lev, 1):
+            bits.append(f"{abs(round(lev, 1))} nm {'right' if lev > 0 else 'left'} of the course")
         if lead:
             bits.append("ahead" if lead > 0 else "behind")
         return f" — {' and '.join(bits)}, " if bits else " "
