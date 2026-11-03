@@ -15,11 +15,37 @@ class LLMUnavailable(Exception):
     pass
 
 
+class PromptTooLong(LLMUnavailable):
+    """The request would not fit the context window. Retrying can't help."""
+
+
+def estimate_tokens(messages, tools=None) -> int:
+    """Rough prompt size in tokens (chars / LLM_CHARS_PER_TOKEN). Tool specs count: the server
+    renders them into the prompt."""
+    chars = len(json.dumps(messages, ensure_ascii=False))
+    if tools:
+        chars += len(json.dumps(tools, ensure_ascii=False))
+    return int(chars / config.LLM_CHARS_PER_TOKEN) + 1
+
+
+def check_budget(messages, tools=None, num_ctx=None):
+    """Refuse a request that would not fit the context window. Ollama silently truncates instead of
+    failing, so without this an over-long prompt loses its middle (the seed facts) and the model
+    still answers. Raising LLMUnavailable sends every caller down its deterministic fallback."""
+    num_ctx = num_ctx or config.LLM_NUM_CTX
+    need = estimate_tokens(messages, tools) + config.LLM_REPLY_RESERVE
+    if need > num_ctx:
+        raise PromptTooLong(f"prompt too long: ~{need} tokens incl. reply reserve "
+                             f"> context {num_ctx}")
+    return need
+
+
 class LLMClient:
     def __init__(self, base_url=None, model=None, timeout=None):
         self.base_url = (base_url or config.LLM_BASE_URL).rstrip("/")
         self.model = model or config.LLM_MODEL
         self.timeout = timeout if timeout is not None else config.LLM_TIMEOUT
+        self.num_ctx = config.LLM_NUM_CTX
 
     def _post(self, path: str, payload: dict) -> dict:
         url = self.base_url + path
@@ -41,6 +67,7 @@ class LLMClient:
         """One chat round. Returns the assistant message dict, which may contain `tool_calls`.
         `schema` (a JSON Schema) forces schema-valid JSON output (constrained decoding) — the most
         reliable structured-output mode; `json_object=True` is the looser JSON-only fallback."""
+        check_budget(messages, tools, self.num_ctx)
         payload = {
             "model": self.model,
             "messages": messages,
@@ -64,6 +91,7 @@ class LLMClient:
     def chat_stream(self, messages, temperature=None):
         """Stream a chat completion, yielding content deltas as they arrive (SSE). Used for the
         dashboard tile deep-dive so words appear token-by-token instead of after a long blank."""
+        check_budget(messages, None, self.num_ctx)
         payload = {
             "model": self.model,
             "messages": messages,

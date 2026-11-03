@@ -91,7 +91,17 @@ inference compute … library=CUDA compute=8.7 name=CUDA0 description=Orin libdi
 
 ### `/etc/systemd/system/ollama.service`
 Runs as **`agent-c4`** (not the stock `ollama` user — that user can't see the model in
-`/home/agent-c4`). Uses the GPU binary, binds localhost, 2048 ctx.
+`/home/agent-c4`). Uses the GPU binary, binds localhost, **6144 ctx** (#54).
+
+> **Context window (#54).** The box ran `OLLAMA_CONTEXT_LENGTH=2048` until this change was applied.
+> Ollama never errors on a prompt that is too long: it drops part of it and answers anyway. The
+> `/brief` prompt is ~3,400 tokens before the first tool round and the strategy matcher prompt
+> ~1,700-2,000, so at 2048 both lost content silently. The value here MUST equal the copilot's
+> `LLM_NUM_CTX` (default 6144, `copilot/config.py`): the copilot refuses — and falls back to the
+> deterministic engine text — any request whose estimated size would not fit that number. If the
+> box is still at 2048, either apply this unit or set `LLM_NUM_CTX=2048` in
+> `/etc/sr33/copilot.env` (then most LLM passes fall back, honestly). KV cost of 6144 on the 7B
+> q4 is ~350 MB (2048: ~120 MB).
 ```ini
 [Unit]
 Description=Ollama (from-source GPU build, cuda_v13 sm_87)
@@ -106,7 +116,7 @@ Restart=always
 RestartSec=3
 Environment="HOME=/home/agent-c4"
 Environment="OLLAMA_HOST=127.0.0.1:11434"
-Environment="OLLAMA_CONTEXT_LENGTH=2048"
+Environment="OLLAMA_CONTEXT_LENGTH=6144"
 Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 [Install]

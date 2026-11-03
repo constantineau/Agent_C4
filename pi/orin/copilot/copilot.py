@@ -403,10 +403,13 @@ def _filter_play_matches(parsed, pb: playbook_mod.Playbook, status_map=None, cap
     status_map = status_map or {}
     known = set(pb.play_ids())
     out = []
-    for m in (parsed.get("play_matches") or []):
-        pid = str((m or {}).get("play_id") or "")
-        if pid not in known:
+    matches = parsed.get("play_matches") if isinstance(parsed, dict) else None
+    for m in (matches if isinstance(matches, list) else []):
+        if not isinstance(m, dict):
             continue
+        pid = m.get("play_id")
+        if not isinstance(pid, str) or pid not in known or not isinstance(m.get("why") or "", str):
+            continue                     # a malformed match is dropped, never a crash
         # Id + grade only. The model's `why` is free text the crew would read as advice ("tack
         # now"), so it never leaves here; the play's own pre-authored text is what the iPad shows.
         out.append({"play_id": pid, "match": "strong" if m.get("match") == "strong" else "partial",
@@ -446,6 +449,32 @@ def _strategy_prompt(pb: playbook_mod.Playbook, status_map=None) -> str:
     )
 
 
+def strategy_seed(digest: dict) -> str:
+    """The user turn of the strategy pass: the engine digest's four fixed facts. The matcher-LoRA
+    corpus generators (eval/scengen.py) call THIS function on a digest rendered by the engine's own
+    shared/strategy_render.py, so training, eval and serving send byte-identical shapes (#54)."""
+    return ("STRATEGIC PICTURE (engine-computed facts — reuse these, invent nothing):\n"
+            + json.dumps({"assessment": digest.get("assessment"),
+                          "picture": digest.get("picture"),
+                          "concordance": digest.get("concordance"),
+                          "recommendation": digest.get("recommendation")}, separators=(",", ":")))
+
+
+def strategy_status_map(digest: dict) -> dict:
+    """{play_id: armed|arming} from the deterministic matcher's block on the digest. Plays not
+    listed render as [quiet] in the prompt."""
+    return {d.get("id"): d.get("status")
+            for d in ((digest.get("plays") or {}).get("detail") or [])}
+
+
+def strategy_messages(pb: playbook_mod.Playbook, digest: dict, status_map=None) -> list:
+    """The exact chat the strategy pass sends: system = role + playbook + play library, user = seed.
+    Shared by strategy_brief, the eval runner and the SFT generator."""
+    sm = strategy_status_map(digest) if status_map is None else status_map
+    return [{"role": "system", "content": _strategy_prompt(pb, sm)},
+            {"role": "user", "content": strategy_seed(digest)}]
+
+
 def strategy_brief(route=None, hoisted=None, use_llm: bool | None = None) -> dict:
     """In-race STRATEGY SYNTHESIS (Tier-2): the engine's deterministic cross-signal digest, plus the
     onboard LLM's condition-match of the live picture against the playbook's play library. It does
@@ -471,15 +500,8 @@ def strategy_brief(route=None, hoisted=None, use_llm: bool | None = None) -> dic
 
     try:
         llm = LLMClient()
-        seed = ("STRATEGIC PICTURE (engine-computed facts — reuse these, invent nothing):\n"
-                + json.dumps({"assessment": digest.get("assessment"),
-                              "picture": digest.get("picture"),
-                              "concordance": digest.get("concordance"),
-                              "recommendation": digest.get("recommendation")}, separators=(",", ":")))
-        _plq = (digest.get("plays") or {})
-        status_map = {d.get("id"): d.get("status") for d in (_plq.get("detail") or [])}
-        msg = llm.chat([{"role": "system", "content": _strategy_prompt(pb, status_map)},
-                        {"role": "user", "content": seed}], schema=_STRATEGY_SCHEMA)
+        status_map = strategy_status_map(digest)
+        msg = llm.chat(strategy_messages(pb, digest, status_map), schema=_STRATEGY_SCHEMA)
         parsed = _extract_json(msg.get("content") or "")
         if not parsed:
             raise LLMUnavailable("strategy: no parseable JSON")

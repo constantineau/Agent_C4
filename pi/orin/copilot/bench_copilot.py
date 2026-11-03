@@ -16,12 +16,14 @@ Pure stdlib + the copilot package (no FastAPI needed). Run from `pi/orin/`:
 """
 import argparse
 import json
+import re
 import sys
 
 from . import adherence as adherence_mod
 from . import brief as brief_mod
 from . import config, copilot, narrate as narrate_mod, playbook as playbook_mod
 from .engine_client import EngineClient
+from .llm import LLMClient
 
 
 def _check(name, ok):
@@ -703,6 +705,37 @@ def test_briefs_logic() -> bool:
     return ok
 
 
+_NUM = re.compile(r"\d+(?:\.\d+)?")
+
+
+def _numbers(text):
+    """The numbers in a line, normalized (8.0 -> 8)."""
+    return {f"{float(n):g}" for n in _NUM.findall(text or "")}
+
+
+def llm_check_narration_line() -> bool:
+    """The model phrases KNOWN callouts (the synthetic snapshot), and the line it writes is
+    checked: it must be the model's (not the deterministic fallback), non-empty, free of
+    veer/backed wording, and every number in it must come from the callouts. Needs the LLM, not the
+    engine."""
+    print(f"\n== LLM coach line on known callouts ==  (model {config.LLM_MODEL})")
+    route = "_bench_llm_line"
+    narrate_mod.reset(route)
+    new = narrate_mod.step(route, _SYNTH_SNAPSHOT, None, None)["new"]
+    new = [c for c in new if c.get("category") != "safety"]      # safety never goes to the model
+    spoken, mode = narrate_mod.narrate(new, LLMClient())
+    print("  callouts:", [c["headline"] for c in new[:3]])
+    print("  line:", repr(spoken))
+    src = " ".join(f"{c['headline']} {c.get('detail', '')}" for c in new[:3])
+    ok = _check("the model phrased the line (no fallback)", mode == "llm" and bool(spoken.strip()))
+    ok &= _check("no 'veer'/'back' wind words",
+                 not re.search(r"\b(veer|veered|veering|veers|backed|backing)\b", spoken, re.I))
+    stray = _numbers(spoken) - _numbers(src)
+    ok &= _check(f"every number in the line comes from the callouts (stray: {sorted(stray)})",
+                 not stray)
+    return ok
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--llm", action="store_true", help="also exercise the LLM tool-loop")
@@ -723,12 +756,18 @@ def main():
     overall &= test_play_match_filter()
     overall &= test_briefs_logic()
 
+    if args.llm:
+        # Before the engine check: this one needs no engine, only the model.
+        overall &= llm_check_narration_line()
+
     print(f"\n>> engine: {config.ENGINE_URL}")
     engine = EngineClient()
     if not _check("engine reachable", engine.reachable()):
         print("!! engine not reachable — start the Pi engine (:8200) first; "
               "narration logic test above still ran.", file=sys.stderr)
-        sys.exit(0 if overall else 2)
+        # --llm asks for the live LLM paths; with no engine they never ran, so that is a FAIL
+        # (it used to exit 0 here and a model regression went unseen — #54).
+        sys.exit(2 if (args.llm or not overall) else 0)
 
     print("\n== deterministic (engine-only) brief ==")
     det = copilot.make_brief(question=args.question, route=args.route, use_llm=False)
@@ -751,6 +790,23 @@ def main():
         else:
             print(f"  (fell back to deterministic — {meta.get('llm_error','?')})")
         overall &= _audit_brief(llm_b)
+        # A fallback is a pass for the crew but a FAIL for a model check: the bench must notice
+        # when the model stops producing usable briefs (the matcher-LoRA /brief regression).
+        overall &= _check("LLM brief: the model answered (no deterministic fallback)",
+                          meta.get("llm_used") and not llm_b.get("engine_only"))
+        overall &= _check("LLM brief: at least one grounded factor or recommendation",
+                          bool(llm_b.get("factors") or llm_b.get("recommendations")))
+
+        print(f"\n== LLM strategy synthesis ==  (model {config.LLM_MODEL})")
+        strat = copilot.strategy_brief(route=args.route, use_llm=True)
+        smeta = strat.get("_meta", {})
+        print(f"  assessment: {strat.get('assessment')!r}")
+        print(f"  play_matches: {strat.get('play_matches')}")
+        if not smeta.get("llm_used"):
+            print(f"  (no LLM pass — available={strat.get('available')}, "
+                  f"error={smeta.get('llm_error')})")
+        overall &= _check("LLM strategy: the model answered (no fallback)",
+                          bool(smeta.get("llm_used")))
         # The grounding validator itself, exercised directly with a poisoned brief:
         print("\n== validator rejects ungrounded content ==")
         poisoned = brief_mod.new_brief()

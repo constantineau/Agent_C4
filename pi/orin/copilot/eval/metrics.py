@@ -1,9 +1,16 @@
 """§4 metrics + gates. Predictions are scored twice: RAW (straight from the model, before the
 production validator) for the grounding/reliability axes — the validator would mask exactly what
 we're measuring — and FILTERED (post `_filter_play_matches`) for the accuracy axes, because that
-is the surface the crew actually sees."""
+is the surface the crew actually sees.
 
-GATES = {"f1": 0.90, "top1": 0.90, "near_fp": 0.10, "schema": 0.98}
+Only the BLIND view gates (#54). In the hinted view the matcher's [armed] tags ARE the oracle
+labels, so a model that copies the tags (the `--dry` parrot) scores F1 1.0 without reading
+anything: a hinted score measures tag-copying, not matching. Blind scoring uses the example's
+`blind_oracle` (scengen.blind_label): plays whose evidence the seed doesn't show, and near-misses
+the seed can't distinguish from armed (sustain, wrong leg), are left out rather than scored."""
+
+GATES = {"f1": 0.90, "top1": 0.90, "near_fp": 0.10, "schema": 0.98, "grounding": 0.02}
+MODES = ("blind", "hinted")
 
 
 def _prf(tp, fp, fn):
@@ -13,9 +20,22 @@ def _prf(tp, fp, fn):
     return round(p, 3), round(r, 3), round(f1, 3)
 
 
-def score(examples, predictions):
-    """examples[i]['oracle'] vs predictions[i] = {parse_ok, schema_ok, raw: [...], filtered: [...]}
-    (raw/filtered entries: {play_id, match, why}). Returns the aggregate metrics + gate verdicts."""
+def _label(ex, mode):
+    if mode == "hinted":
+        return ex["oracle"]
+    if "blind_oracle" not in ex:
+        raise ValueError(f"example {ex.get('id')} has no blind_oracle — regenerate the corpus "
+                         "with this version of gen_corpus (#54)")
+    return ex["blind_oracle"]
+
+
+def score(examples, predictions, mode="blind"):
+    """The mode's label (oracle / blind_oracle) vs predictions[i] = {parse_ok, schema_ok,
+    raw: [...], filtered: [...]} (entries: {play_id, match, why}). Returns the aggregate metrics +
+    gate verdicts; `pass` is None for the hinted view (diagnostic only, never a gate)."""
+    if mode not in MODES:
+        raise ValueError(f"mode must be one of {MODES}")
+    excluded_n = 0
     tp = fp = fn = ltp = lfp = lfn = 0
     top1_num = top1_den = 0
     near_fp = near_n = 0
@@ -24,17 +44,22 @@ def score(examples, predictions):
     cal = {"strong": [0, 0], "partial": [0, 0]}         # [correct, total]
 
     for ex, pr in zip(examples, predictions):
-        armed = set(ex["oracle"]["armed"])
-        near = ex["oracle"]["near"]
+        label = _label(ex, mode)
+        armed = set(label["armed"])
+        near = label["near"]
+        excluded = set(label.get("excluded") or [])
+        excluded_n += len(excluded)
         known = {str(p["id"]) for p in ex["bundle"]["plays"]}
         parse_ok += bool(pr.get("parse_ok"))
         schema_ok += bool(pr.get("schema_ok"))
 
         raw = pr.get("raw") or []
+        raw = raw if isinstance(raw, list) else [raw]
         ground_total += len(raw)
-        ground_bad += sum(1 for m in raw if str(m.get("play_id")) not in known)
+        ground_bad += sum(1 for m in raw
+                          if not isinstance(m, dict) or str(m.get("play_id")) not in known)
 
-        filt = pr.get("filtered") or []
+        filt = [m for m in (pr.get("filtered") or []) if m.get("play_id") not in excluded]
         strong = {m["play_id"] for m in filt if m.get("match") == "strong"}
         listed = {m["play_id"] for m in filt}
         tp += len(strong & armed); fp += len(strong - armed); fn += len(armed - strong)
@@ -61,6 +86,9 @@ def score(examples, predictions):
     partial_acc = cal["partial"][0] / cal["partial"][1] if cal["partial"][1] else None
     out = {
         "n": len(examples),
+        "mode": mode,
+        "excluded_n": excluded_n,
+        "armed_n": sum(len(_label(ex, mode)["armed"]) for ex in examples),
         "armed_set": {"precision": p, "recall": r, "f1": f1},
         "armed_set_lenient": {"precision": lp, "recall": lr, "f1": lf1},
         "top1": round(top1_num / top1_den, 3) if top1_den else None,
@@ -79,6 +107,11 @@ def score(examples, predictions):
         "near_fp<=10%": (out["near_miss_fp_rate"] or 0) <= GATES["near_fp"] if near_n else None,
         "calibration_monotone": out["calibration"]["monotone"],
         "schema>=98%": out["reliability"]["schema_rate"] >= GATES["schema"],
+        "grounding<=2%": out["grounding_violation_rate"] <= GATES["grounding"],
     }
-    out["pass"] = all(v for v in out["gates"].values() if v is not None)
+    out["pass"] = (all(v for v in out["gates"].values() if v is not None)
+                   if mode == "blind" else None)
+    if mode == "hinted":
+        out["note"] = ("hinted = agreement with the matcher's tags; a tag-copier scores 1.0 here. "
+                       "Not a gate — use the blind run.")
     return out

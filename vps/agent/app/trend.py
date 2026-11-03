@@ -22,6 +22,7 @@ import math
 import os
 
 from . import datasource
+from shared import strategy_render as sr
 
 TREND_BUCKET_MIN = float(os.environ.get("TREND_BUCKET_MIN", "15"))
 TREND_MIN_SAMPLES = int(os.environ.get("TREND_MIN_SAMPLES", "5"))
@@ -98,23 +99,7 @@ def _window(tws_rows, twd_rows, minutes):
     return out if have else None
 
 
-def _read_text(w):
-    """One crew-facing sentence for a window record — racer wind language (right/left, from→to)."""
-    bits = []
-    r = w.get("tws_rate_kn_per_hr")
-    if r is not None:
-        verb = "building" if r > 0.3 else "fading" if r < -0.3 else "holding"
-        if verb == "holding":
-            bits.append(f"wind holding ~{w['tws_to_kn']:g} kn")
-        else:
-            bits.append(f"wind {verb} {abs(r):g} kn/hr ({w['tws_from_kn']:g}→{w['tws_to_kn']:g} kn)")
-    d = w.get("twd_rate_deg_per_hr")
-    if d is not None and w.get("twd_dir") in ("right", "left"):
-        bits.append(f"shifting {w['twd_dir']} ~{abs(d):g}°/hr (was {w['twd_from_deg']}°, "
-                    f"now {w['twd_to_deg']}°)")
-    hrs = w["window_min"] / 60
-    tail = f" over the last {hrs:g} h" if bits else ""
-    return (", ".join(bits) + tail) if bits else None
+_read_text = sr.trend_read_text     # shared with the strategy picture + the LoRA generators (#54)
 
 
 def get_trend(route=None):

@@ -30,6 +30,18 @@ LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "http://127.0.0.1:11434/v1").rstri
 LLM_MODEL = os.environ.get("LLM_MODEL", "qwen2.5:7b-instruct-q4_K_M")
 LLM_TIMEOUT = float(os.environ.get("LLM_TIMEOUT", "120"))
 LLM_TEMPERATURE = float(os.environ.get("LLM_TEMPERATURE", "0.2"))
+# The model's context window in tokens. MUST equal what the server really runs: Ollama takes it from
+# OLLAMA_CONTEXT_LENGTH (ollama.service, pi/orin/DEPLOYMENT.md) or a Modelfile `PARAMETER num_ctx`,
+# and its OpenAI /v1 endpoint accepts no per-request num_ctx. Ollama does NOT error on an over-long
+# prompt — it drops the middle and answers anyway, so the copilot's fallback never fires (#54). The
+# client therefore refuses a request whose estimated size would not fit (llm.py), and the LoRA
+# training max length uses the same number (training/matcher_lora/train_qlora.py --max-len).
+LLM_NUM_CTX = int(os.environ.get("LLM_NUM_CTX", "6144"))
+# Tokens kept free for the reply (the strategy JSON is ~150-400 tokens).
+LLM_REPLY_RESERVE = int(os.environ.get("LLM_REPLY_RESERVE", "512"))
+# Size estimate without a tokenizer on the box: Qwen2.5 runs ~3.6-4 chars/token on this
+# English + JSON text; 3.5 errs toward refusing rather than truncating.
+LLM_CHARS_PER_TOKEN = float(os.environ.get("LLM_CHARS_PER_TOKEN", "3.5"))
 # Cap on the bounded tool-calling loop — how many rounds of engine-fact requests the LLM
 # may make before we force it to conclude. Keeps a confused 7B from looping forever.
 MAX_TOOL_ROUNDS = int(os.environ.get("MAX_TOOL_ROUNDS", "4"))
