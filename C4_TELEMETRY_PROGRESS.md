@@ -3,7 +3,19 @@
 Goal (Cole): **lose no telemetry**, and **copy all telemetry off the Pi to the VPS**.
 Deletion from the boat is allowed only *after* an off-boat copy is sha256-verified.
 
-## ⏸ PICK UP HERE — 2026-11-03 SESSION END (dev @ 3a9fdd2, main @ 405be7f)
+## ⏸ PICK UP HERE — 2026-11-03 EVENING (dev @ db5ee63, main @ 405be7f)
+
+**C4 is still OUT OF THE WATER UNTIL SPRING.** Shore work only.
+
+**Wave 2 copilot/engine PRs all merged:** #209 (engine store lock + rollback, Fixes #162), #208 (matcher eval, Part of #54), #207 (copilot guardrails, Fixes #53 #176). None deployed. #207 and #208 each took several Codex rounds; every fix has a regression test that fails on the old code.
+- #207 final shape: the LLM can only RAISE a dashboard tile; a raise is gone for good once the engine moves that tile, including moves while the LLM was answering (per-tile change counter, App.track). Numbers in LLM text are grounded WITH units, against engine facts / playbook / tool results only (not the system prompt or crew question), per tile for notes and reasons. The model's play-match `why` never reaches the crew.
+- #208: --resume refuses results from a different run (mode, dry, model, corpus sha256); replies are type-checked against _STRATEGY_SCHEMA; malformed play matches count as violations, never a crash.
+- **Left open:** #210 (ground.py: unit-less engine JSON values ground any unit, so give engine fields units; m/s parsed as m). Minor on #208 (resume fingerprint lacks server URL/settings), minor on #209 (datasource_onboard session_start nested commit), both noted on the PRs.
+- **Deploy reminders (spring):** the copilot needs Orin OLLAMA_CONTEXT_LENGTH=6144 before it ships (#208). Engine image rebuild for #209. Fix #210 before the copilot deploy if possible.
+
+**Still open from the block below:** the damaged archive copy-off + salvage (needs Cole's go, boat side); the Opus-for-Lab-AI question; rest of map #188 (#159–#161, #163, #164, #166, #167; #203).
+
+## ⏸ PICK UP HERE — 2026-11-03 MIDDAY (dev @ 3a9fdd2, main @ 405be7f)
 
 **C4 is still OUT OF THE WATER UNTIL SPRING.** Shore work only.
 
