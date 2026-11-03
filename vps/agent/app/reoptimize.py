@@ -30,6 +30,7 @@ from . import routing
 from . import sails
 
 EXPECTED_S = 30           # what the progress bar assumes until a run has been timed
+BUDGET_S = float(os.environ.get("C4_REROUTE_BUDGET_S", "90"))   # wall-clock limit on one run
 BUSY = "A re-route is already running."
 FAILED = "Re-route failed. Try again."
 NO_ROUTE_YET = "No Pi route yet."
@@ -305,7 +306,7 @@ def _work(job_id, dev, inp):
     asked_at = int(t0)
     try:
         out = _compute(inp["nav"], inp["remaining"], inp["slat"], inp["slon"], inp["live"],
-                       inp["bundle"], inp["avoid"], inp["polys"])
+                       inp["bundle"], inp["avoid"], inp["polys"], deadline=t0 + BUDGET_S)
     except Exception as exc:  # noqa: BLE001 — reported to the crew; the details go to the log
         print(f"[reoptimize] run failed: {type(exc).__name__}: {exc}", flush=True)
         out = {"available": False, "note": FAILED}
@@ -343,9 +344,22 @@ def _work(job_id, dev, inp):
                         last_run_s=run_s if state == "done" else _job["last_run_s"])
 
 
-def _compute(nav, remaining, slat, slon, live, bundle, avoid, polys):
-    """The heavy isochrone chain (~15 s for a long course on a Pi 4)."""
-    wind, use_fcst = routing.make_wind_fn(slat, slon, live)
+def _compute(nav, remaining, slat, slon, live, bundle, avoid, polys, deadline=None):
+    """The heavy isochrone chain (~15 s for a long course on a Pi 4). No wind (no forecast and no
+    complete measured wind), a forecast hole with nothing near to fill it, a forecast too old, or
+    a run past `deadline` (epoch; the button's job sets BUDGET_S) → no route, said plainly, never
+    a half result (#156, #157)."""
+    wind, _ = routing.make_wind_fn(slat, slon, live)
+    if wind is None:
+        return {"available": False, "note": routing.NO_WIND}
+    wind.deadline = deadline
+    try:
+        return _chain(nav, remaining, slat, slon, wind, bundle, avoid, polys)
+    except (routing.NoWindError, routing.RouteTimeout) as exc:
+        return {"available": False, "note": str(exc)}
+
+
+def _chain(nav, remaining, slat, slon, wind, bundle, avoid, polys):
     t0 = t = time.time()
     cur = (slat, slon)
     full_path = [{"lat": round(slat, 5), "lon": round(slon, 5)}]
@@ -360,7 +374,7 @@ def _compute(nav, remaining, slat, slon, live, bundle, avoid, polys):
         if tws_l:
             twa_l = abs(NAV._wrap180(NAV._bearing(cur[0], cur[1], m["lat"], m["lon"]) - twd_l))
             sail = (sails.get_sail_advice(tws_l, twa_l) or {}).get("optimal_sail")
-        leg = routing.route_leg(cur[0], cur[1], m["lat"], m["lon"], wind, t, live[1] or 0,
+        leg = routing.route_leg(cur[0], cur[1], m["lat"], m["lon"], wind, t,
                                 avoid=avoid, avoid_polys=polys)
         if not leg.get("reached", True):
             # #31: the leg never closed on its mark (search horizon out on a long light-air leg, or
@@ -372,7 +386,7 @@ def _compute(nav, remaining, slat, slon, live, bundle, avoid, polys):
                    "incomplete": {"to": m["name"], "short_nm": leg.get("short_nm"),
                                   "routed_marks": done,
                                   "horizon_h": round(routing.MAX_STEPS * routing.DT_H, 1)},
-                   "wind_source": "forecast" if use_fcst else "live wind (no forecast)",
+                   "wind_source": wind.source,
                    # Why: no clear path within the routing.MAX_STEPS * DT_H search horizon, or the
                    # obstacle homework blocks it. No route offered rather than a wrong one.
                    "note": (f"No new route. Couldn't reach {m['name']} "
@@ -399,7 +413,8 @@ def _compute(nav, remaining, slat, slon, live, bundle, avoid, polys):
 
     out = {
         "available": True, "off_playbook": True, "route": nav["route"],
-        "wind_source": "forecast" if use_fcst else "live wind (no forecast)",
+        "wind_source": wind.source, "forecast_gaps": len(wind.filled),
+        "forecast_old": bool(wind.stale),
         "marks": [m["name"] for m in remaining], "legs": leg_summ,
         "sail_plan": sail_plan,
         "mark_idx": [m.get("course_index") for m in remaining],   # course positions (laps)
@@ -413,6 +428,7 @@ def _compute(nav, remaining, slat, slon, live, bundle, avoid, polys):
         "leg_end_idx": leg_end_idx,           # one per remaining mark, in order
         "avoids_islands": len(avoid), "avoids_zones": len(polys),
         "vs_playbook": _vs_playbook(bundle, full_path),
+        **({"warnings": wind.warnings()} if wind.warnings() else {}),
         # Fresh route on the boat's own polars, through the forecast (or measured wind when there
         # is none), from here through the remaining marks. Off the frozen playbook; legal in-race.
         "note": ("New route from here, off the gameplan"

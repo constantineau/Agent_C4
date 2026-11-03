@@ -161,6 +161,17 @@ test("the Pi fallback runs and reports like the Orin", () => {
   const noEta = RT.describe({ source: "pi", r: { available: true, computed_at: S - 80, depart_epoch: S - 200, eta_min: 60 } }, S);
   assert.equal(noEta.head, "Finish at " + hm(S - 200 + 3600), "older stored route: from its departure");
   assert.equal(x.last.wx, "Forecast · Open-Meteo");
+  // #157: a route whose forecast had holes says so (they were filled from nearby, never from the
+  // boat's own wind); a measured-wind route says it has no forecast
+  const gappy = RT.describe({ source: "pi", r: Object.assign({}, done.pi.result,
+    { wind_source: "forecast, gaps filled from nearby", forecast_gaps: 3 }) }, S);
+  assert.equal(gappy.wx, "Forecast with gaps · Open-Meteo");
+  const old = RT.describe({ source: "pi", r: Object.assign({}, done.pi.result,
+    { wind_source: "old forecast", forecast_old: true }) }, S);
+  assert.equal(old.wx, "Old forecast · Open-Meteo");
+  const measured = RT.describe({ source: "pi", r: Object.assign({}, done.pi.result,
+    { wind_source: "live wind (no forecast)" }) }, S);
+  assert.equal(measured.wx, "Measured wind only. No forecast.");
   assert.deepEqual(x.last.labels, ["Off the playbook", "Route doesn't check the shore"]);
   const failed = v({ rr: Object.assign({}, done, { pi: Object.assign({}, done.pi, { state: "error",
     detail: "No new route. Couldn't reach A (3 nm short)." }) }), press: Object.assign({}, p, { at: NOW - 70000 }) });
