@@ -26,7 +26,7 @@ from __future__ import annotations
 import json
 import time
 
-from . import config
+from . import config, ground
 from . import playbook as playbook_mod
 from .engine_client import EngineClient
 from .llm import LLMClient, LLMUnavailable
@@ -440,6 +440,18 @@ def _phrase(kind, headline, body_text, llm):
     return (parsed.get("headline") or headline).strip()[:120], parsed["body"].strip()[:1200]
 
 
+def _grounded_phrase(kind, headline, body_text, llm):
+    """`_phrase`, kept only when every number in the rewrite is one the deterministic brief already
+    had. A changed or added number raises LLMUnavailable, so the caller keeps the deterministic
+    text."""
+    head2, body2 = _phrase(kind, headline, body_text, llm)
+    extra = ground.ungrounded_numbers(head2 + " " + body2, headline, body_text)
+    if extra:
+        raise LLMUnavailable("brief phrasing: numbers not in the brief: "
+                             + ", ".join(f"{n:g}" for n in sorted(extra)[:5]))
+    return head2, body2
+
+
 def make(kind, route=None, use_llm: bool | None = None) -> dict:
     """One crew brief, always produced: deterministic sections + optional LLM phrasing on top."""
     if kind not in KINDS:
@@ -466,7 +478,7 @@ def make(kind, route=None, use_llm: bool | None = None) -> dict:
     want_llm = config.USE_LLM if use_llm is None else use_llm
     if want_llm and sections:
         try:
-            head2, body2 = _phrase(kind, headline, body, LLMClient())
+            head2, body2 = _grounded_phrase(kind, headline, body, LLMClient())
             out.update({"headline": head2, "body": body2, "mode": "llm"})
             out["deterministic_body"] = body
             out["_meta"].update({"llm_used": True, "model": config.LLM_MODEL})

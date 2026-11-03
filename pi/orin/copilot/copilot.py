@@ -18,7 +18,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from . import adherence as adherence_mod
 from . import brief as brief_mod
-from . import config, narrate as narrate_mod, playbook as playbook_mod, tools
+from . import config, ground, narrate as narrate_mod, playbook as playbook_mod, tools
 from .engine_client import EngineClient
 from .llm import LLMClient, LLMUnavailable
 
@@ -182,7 +182,9 @@ def llm_brief(engine: EngineClient, llm: LLMClient, snapshot: dict, question: st
     if not parsed:
         raise LLMUnavailable("LLM did not return parseable JSON")
 
-    cleaned = brief_mod.validate(parsed, used_sources, pb.variant_ids(), pb.play_ids())
+    # Every number in the brief must be one the model was shown (prompt, facts, tool results).
+    shown = [m.get("content") or "" for m in messages if m.get("role") != "assistant"]
+    cleaned = brief_mod.validate(parsed, used_sources, pb.variant_ids(), pb.play_ids(), facts=shown)
     cleaned["engine_only"] = False
     # The LLM is not trusted to author factual caveats — replace its free text with the
     # engine's grounded caveats, keeping only the validator's own "dropped item" note.
@@ -221,8 +223,8 @@ def _whale_touch(llm: LLMClient, cleaned: dict) -> str | None:
              + ((cleaned.get("situation") or "quiet, nothing urgent")[:300])},
         ])
         line = " ".join((msg.get("content") or "").strip().strip('"').split())
-        if not line or len(line) > 220:
-            return None
+        if not line or len(line) > 220 or ground.numbers(line):
+            return None                  # voice only: a number in the aside would read as a fact
         return "🐋 " + line
     except Exception:
         return None
@@ -402,8 +404,9 @@ def _filter_play_matches(parsed, pb: playbook_mod.Playbook, status_map=None, cap
         pid = str((m or {}).get("play_id") or "")
         if pid not in known:
             continue
-        out.append({"play_id": pid, "match": m.get("match") or "partial",
-                    "why": (m.get("why") or "").strip()[:300],
+        # Id + grade only. The model's `why` is free text the crew would read as advice ("tack
+        # now"), so it never leaves here; the play's own pre-authored text is what the iPad shows.
+        out.append({"play_id": pid, "match": "strong" if m.get("match") == "strong" else "partial",
                     "status": status_map.get(pid, "quiet"),
                     "grounded_in": [f"play:{pid}"]})
         if len(out) >= cap:
@@ -441,13 +444,13 @@ def _strategy_prompt(pb: playbook_mod.Playbook, status_map=None) -> str:
 
 
 def strategy_brief(route=None, hoisted=None, use_llm: bool | None = None) -> dict:
-    """In-race STRATEGY SYNTHESIS (Tier-2): the onboard LLM phrases the engine's deterministic
-    cross-signal digest into a crew-facing assessment and enriches the recommendation's RATIONALE by
-    matching the live picture against the playbook's own frozen conditions. It does NOT originate
-    strategy (descope locked 2026-07-06 — docs/PLAYBOOK_V2.md §7): the ACTION / target variant /
-    vs_playbook are the engine's and are never overridden. Structurally grounded: the numbers /
-    picture / concordance / caveats stay the ENGINE's; an ungrounded LLM narrative is dropped; any
-    LLM trouble → the whole deterministic digest stands.
+    """In-race STRATEGY SYNTHESIS (Tier-2): the engine's deterministic cross-signal digest, plus the
+    onboard LLM's condition-match of the live picture against the playbook's play library. It does
+    NOT originate strategy (descope locked 2026-07-06 — docs/PLAYBOOK_V2.md §7): the assessment,
+    action, target variant, vs_playbook and rationale are all the engine's, verbatim. The LLM adds
+    only `play_matches` (real play ids + strong/partial). The prompt and schema still ask for an
+    assessment and rationale because the tuned matcher was trained on that shape; those fields are
+    read and discarded. Any LLM trouble → the deterministic digest stands.
 
     The LLM pass runs ONLY when the caller explicitly asks (`use_llm=True`). The default — the
     iPad's ~15 s poll — is the fresh engine digest: one LLM pass takes ~45 s, and polling it kept
@@ -463,9 +466,6 @@ def strategy_brief(route=None, hoisted=None, use_llm: bool | None = None) -> dic
         digest["_meta"] = meta
         return digest
 
-    # Grounding allow-list = the signal tools that actually contributed a picture item (+ the synthesis).
-    allowed = {"get_strategy", "get_selector"} | {
-        g for item in digest.get("picture", []) for g in (item.get("grounded_in") or [])}
     try:
         llm = LLMClient()
         seed = ("STRATEGIC PICTURE (engine-computed facts — reuse these, invent nothing):\n"
@@ -481,19 +481,12 @@ def strategy_brief(route=None, hoisted=None, use_llm: bool | None = None) -> dic
         if not parsed:
             raise LLMUnavailable("strategy: no parseable JSON")
 
-        out = dict(digest)   # keep the engine's picture / concordance / caveats / confidence / disclaimer
-        assessment = (parsed.get("assessment") or "").strip()
-        if assessment:
-            out["assessment"] = assessment
-        # DESCOPE (2026-07-06, docs/PLAYBOOK_V2.md §7): the LLM never authors or replaces the
-        # recommendation — the engine's action / target_variant / vs_playbook stand. The LLM may only
-        # ENRICH the rationale (its condition-matching narrative), and only when grounded.
-        rec = parsed.get("recommendation") or {}
-        rg = [g for g in (rec.get("grounded_in") or []) if g in allowed]
-        det_rec = digest.get("recommendation")
-        if det_rec and rec.get("rationale") and rg:
-            out["recommendation"] = {**det_rec, "rationale": rec["rationale"].strip()}
-        # else: ungrounded / empty narrative → the deterministic recommendation stands untouched.
+        # The engine's assessment and recommendation (action, target, vs_playbook AND rationale)
+        # stand verbatim: rationale is pre-authored (glass box) and the LLM never originates strategy
+        # (descope 2026-07-06, docs/PLAYBOOK_V2.md §7). Citing a tool name proves nothing about what
+        # the text says, so the model's assessment/rationale are not used. The LLM pass contributes
+        # only the play matches: real play ids + a strong/partial grade (#53).
+        out = dict(digest)
         matches = _filter_play_matches(parsed, pb, status_map)
         if matches:
             out["play_matches"] = matches

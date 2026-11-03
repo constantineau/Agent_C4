@@ -82,8 +82,18 @@ MMSI"). A target within 50 m moving with us still alarms normally and also gets 
 own-ship echo" hint to set it. Targets are dead-reckoned to now; one with no SOG/COG is "motion
 unknown" and is called on range.
 `POST /strategy` returns the fresh deterministic engine digest by default (the iPad polls it every
-~15 s); the LLM narrative runs only on an explicit `{"use_llm": true}`. Polling a ~45 s LLM pass
-kept Ollama busy and queued the coach line behind it (an LLM strategy narrative is deferred to #53).
+~15 s); the LLM pass runs only on an explicit `{"use_llm": true}`. Polling a ~45 s LLM pass
+kept Ollama busy and queued the coach line behind it. That pass adds only `play_matches` (real play
+ids + strong/partial); the assessment and the whole recommendation, rationale included, stay the
+engine's (#53).
+
+**LLM text never replaces engine text unchecked** (`ground.py`, #53/#176). A coach line with a
+safety or "now" callout is the engine's own words. Any other LLM line, crew-brief rewrite, decision
+brief item or dashboard note is used only if every number in it was in the facts the model was
+given (the coach line must also keep the top callout's numbers); else the deterministic text stays.
+The dashboard brief may only RAISE a tile's status (ok → watch → act), never lower it; the iPad drops
+the raise once the engine moves that tile, or 180 s after the snapshot the model read
+(`pi/console/dashboard/briefguard.js`).
 
 Same guardrails as a brief: every callout is **grounded** in a real engine fact and/or a playbook
 variant (ungrounded ones are dropped) and the engine does the math — reliability discipline; the
@@ -124,7 +134,7 @@ cadence (the copilot does the engine round-trip).
 | `copilot.py` | orchestration: gather facts → bounded tool loop → validate → fallback; `make_narration()` |
 | `narrate.py` | the **PUSH** callout engine: grounded callouts (safety/rounding/playbook/deviation/drift/sail/fleet/plays/fatigue/data) + show-once dedup + LLM phrasing with deterministic fallback |
 | `coach.py` | the proactive auto-coach timer — drives `narrate` on a cadence + holds the latest callouts for `GET /coach` |
-| `dashboard_brief.py` | dashboard commentary + grounded status refinement (`POST /dashboard`) and the streamed tile deep-dive (`POST /detail`) |
+| `dashboard_brief.py` | dashboard commentary + raise-only status suggestions (`POST /dashboard`) and the streamed tile deep-dive (`POST /detail`) |
 | `app.py` | FastAPI service (`/health`, `/tools`, `POST /brief`, `POST /narrate[/reset]`, `GET /coach`, `GET /adherence`, `/snapshot`, `POST /strategy`, `POST /dashboard`, `POST /detail`) |
 | `bench_copilot.py` | exit test for the layer (deterministic + `--llm`); pure stdlib |
 | `requirements.txt` | only `fastapi`+`uvicorn` (the logic is stdlib) |

@@ -20,7 +20,9 @@ holding module state is fine (the same shape as the cloud alerting loop).
 """
 import os
 
+from . import adherence as adherence_mod
 from . import brief as brief_mod
+from . import ground
 
 _num = brief_mod._num
 
@@ -348,16 +350,13 @@ def _sail_callouts(sail):
 
 
 def _variant_for_side(playbook, side):
-    """Find a playbook variant whose flip-trigger / id / summary points at `side` (left/right).
-    The match ties the switch target to a real pre-authored variant (grounding), not a fabricated one."""
+    """The pre-authored variant for a favored side: an EXACT id match (variant ids are the side —
+    left|middle|right), the same lookup the adherence tile uses. Never a text search: every
+    variant's what_flips_it names the OTHER side ("left" flips on "a persistent right shift"), so a
+    substring match sent a right shift to the left variant."""
     if side not in ("left", "right") or playbook is None or not getattr(playbook, "loaded", False):
         return None
-    for v in playbook.variants:
-        hay = " ".join(str(v.get(k, "")) for k in ("id", "name", "summary", "what_flips_it",
-                                                    "favored_side")).lower()
-        if side in hay:
-            return v
-    return None
+    return adherence_mod._variant_for_side(playbook, side)
 
 
 def _tactics_callouts(tac, playbook):
@@ -735,15 +734,20 @@ def _deterministic_spoken(callouts):
 def narrate(callouts, llm=None):
     """Phrase the (already-sorted) callouts into a coach line. Returns (text, mode). With no
     callouts → ("", "none"). The LLM only rephrases grounded text; any failure falls back to the
-    deterministic line so a call is always available. A SAFETY callout never goes through the LLM:
-    its own text is the line, word for word, with no model in the way."""
+    deterministic line so a call is always available.
+
+    The engine's own words, no model in the way, when any callout shown is SAFETY or urgency
+    "now". Otherwise the LLM line is used only when every number in it came from the callouts it
+    was given and it still carries every number of the top callout (a CPA, a distance, a time);
+    anything else is the deterministic line."""
     if not callouts:
         return "", "none"
     fallback = _deterministic_spoken(callouts)
-    if llm is None or any(c.get("category") == "safety" for c in callouts):
+    shown = callouts[:3]
+    if llm is None or any(c.get("category") == "safety" or c.get("urgency") == "now" for c in callouts):
         return fallback, "deterministic"
     payload = [{"headline": c["headline"], "detail": c.get("detail", ""),
-                "urgency": c["urgency"]} for c in callouts[:3]]
+                "urgency": c["urgency"]} for c in shown]
     import json
     from .llm import LLMUnavailable
     try:
@@ -752,4 +756,7 @@ def narrate(callouts, llm=None):
         text = (msg.get("content") or "").strip()
     except LLMUnavailable:
         return fallback, "deterministic"
-    return (text, "llm") if text else (fallback, "deterministic")
+    top = shown[0]["headline"] + " " + (shown[0].get("detail") or "")
+    if text and ground.grounded(text, payload) and ground.keeps_numbers(text, top):
+        return text, "llm"
+    return fallback, "deterministic"

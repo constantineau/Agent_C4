@@ -13,7 +13,7 @@ is the engine-only baseline: it proves the whole decision structure works on phy
 it is the fallback whenever the LLM is unreachable or its output fails validation. The LLM layer
 (see `copilot.py`) re-prioritizes and explains on top of this — it can never exceed the facts.
 """
-from . import tools
+from . import ground, tools
 
 DISCLAIMER = (
     "Advisory decision support, not a command and not the sole authority — verify against the "
@@ -80,18 +80,27 @@ def structural_caveats(snapshot: dict, used_sources, playbook=None) -> list[str]
 # Grounding validator — the structural guardrail.
 # ---------------------------------------------------------------------------------------------
 def validate(brief: dict, allowed_sources: set[str], playbook_ids: list[str] | None = None,
-             play_ids: list[str] | None = None) -> dict:
+             play_ids: list[str] | None = None, facts=None) -> dict:
     """Enforce that every factor/recommendation is grounded in a real engine source or a real
     playbook variant. Ungrounded items are removed and recorded in `caveats`. Confidence is
-    capped by how much survived. Returns a cleaned copy; never raises."""
+    capped by how much survived. Returns a cleaned copy; never raises.
+
+    A citation must name a real source: `playbook:<variant id>` or `play:<id>`, never a bare
+    "playbook" (that was valid even with no playbook aboard). With `facts` (everything the engine
+    gave the model), an item whose text carries a number the facts don't have is dropped too, and a
+    situation line with one is blanked: a cited tool name says nothing about what the text claims."""
     playbook_ids = playbook_ids or []
     play_ids = play_ids or []
-    valid_refs = (set(allowed_sources) | {f"playbook:{v}" for v in playbook_ids} | {"playbook"}
+    valid_refs = (set(allowed_sources) | {f"playbook:{v}" for v in playbook_ids}
                   | {f"play:{p}" for p in play_ids})
+
+    def _facts_ok(text):
+        return facts is None or ground.grounded(text, facts)
 
     out = new_brief()
     out["disclaimer"] = DISCLAIMER
-    out["situation"] = str(brief.get("situation", "")).strip()
+    situation = str(brief.get("situation", "")).strip()
+    out["situation"] = situation if _facts_ok(situation) else ""
     out["engine_only"] = bool(brief.get("engine_only", False))
 
     dropped = 0
@@ -104,7 +113,8 @@ def validate(brief: dict, allowed_sources: set[str], playbook_ids: list[str] | N
                 dropped += 1
                 continue
             refs = [r for r in (it.get("grounded_in") or []) if r in valid_refs]
-            if not refs:
+            text = " ".join(str(it.get(k) or "") for k in ("factor", "detail", "action", "rationale"))
+            if not refs or not _facts_ok(text):
                 dropped += 1
                 continue
             it = dict(it)

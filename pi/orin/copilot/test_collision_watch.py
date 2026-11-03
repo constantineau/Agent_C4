@@ -54,7 +54,7 @@ class StubEngine:
 class StubLLM:
     calls = 0
     gate = threading.Event()             # chat() blocks until set — a cold / busy model
-    reply = "Coach line from the model."
+    reply = "Windward mark in about 8 minutes."   # a faithful rephrase: keeps the callout's numbers
     strategy = None
 
     def __init__(self, *a, **k):
@@ -512,8 +512,8 @@ def test_strategy_default() -> bool:
                      r["plays"]["detail"] == [{"id": "P1", "status": "quiet"}] and "play_matches" not in r)
         StubLLM.gate.set()
         r = client.post("/strategy", json={"use_llm": True}).json()
-        ok &= _check("explicit use_llm=true still runs the LLM narrative",
-                     StubLLM.calls == 1 and r["mode"] == "llm" and r["assessment"] == "From the model.")
+        ok &= _check("explicit use_llm=true still runs the LLM pass (engine assessment kept)",
+                     StubLLM.calls == 1 and r["mode"] == "llm" and r["assessment"] == "Hold: Middle start")
     finally:
         config.USE_LLM = False
     return ok
