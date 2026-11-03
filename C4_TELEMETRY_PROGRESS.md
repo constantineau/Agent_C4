@@ -17,7 +17,7 @@ Deletion from the boat is allowed only *after* an off-boat copy is sha256-verifi
 **In flight (2026-11-03 ~19:10Z) — IF THE SESSION DIED, RESUME HERE:** six agents were mid-work; none had committed or pushed yet. Their work is uncommitted in these worktrees (all from origin/dev):
 | Worktree /mnt/data/c4-wt/… | Task | Notes |
 |---|---|---|
-| w3-opus-imports | Lab race imports use a separate chain ANTHROPIC_IMPORT_MODEL_CHAIN (default claude-opus-5-5,claude-fable-5-1); everything else stays on ANTHROPIC_MODEL_CHAIN | Cole said "Opus for imports". Needs ONE live Bayview import on Opus 5.5 (≤ $5, never written to the live Lab DB) before PR. Merge needs Lab container RECREATE. |
+| w3-opus-imports | DONE → PR #216 queued (Bayview on Opus 5.5: correct, 168 s, ~$1.30). Lab race imports use a separate chain ANTHROPIC_IMPORT_MODEL_CHAIN (default claude-opus-5-5,claude-fable-5-1); everything else stays on ANTHROPIC_MODEL_CHAIN | Cole said "Opus for imports". Needs ONE live Bayview import on Opus 5.5 (≤ $5, never written to the live Lab DB) before PR. Merge needs Lab container RECREATE. |
 | w3-159-tactics-side | Closes #159 | DONE → PR #211, in the CI+Codex queue |
 | w3-160-rival-offset | Closes #160 | DONE → PR #213, queued |
 | w3-161-tod-delta | Closes #161 | DONE → PR #212, queued |
