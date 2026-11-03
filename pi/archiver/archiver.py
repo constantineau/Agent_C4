@@ -1356,6 +1356,22 @@ def _requeue(buf, rows, state, why):
 RETAIN_DAYS = float(os.environ.get("ARCHIVE_RETAIN_DAYS", "7"))
 ENGINE_DB = os.environ.get("ENGINE_DB", "/var/lib/sr33/engine/engine.db")
 PRUNE_EVERY_S = float(os.environ.get("ARCHIVE_PRUNE_EVERY_S", "3600"))
+# Off-boat gate (#181). When set, the prune deletes only rows that copyoff.py has already copied
+# off the boat AND had verified there: its ledger's `verified_through_id` for THIS archive file
+# (keyed by inode, so a rotated fresh file starts at 0). No ledger, an unreadable one, or one that
+# does not know this file = nothing is pruned. Empty (the default until the copy-off job runs
+# aboard) = the old behaviour.
+OFFBOAT_LEDGER = os.environ.get("ARCHIVE_OFFBOAT_LEDGER", "")
+
+
+def offboat_verified_through(ledger_path, archive_path):
+    """Highest row id verified off the boat for this archive file; None = can't tell."""
+    try:
+        with open(ledger_path) as f:
+            ent = json.load(f)["live"].get(str(os.stat(archive_path).st_ino))
+        return int(ent.get("verified_through_id", 0)) if ent else 0
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
 
 
 def _iso(epoch):
@@ -1509,22 +1525,35 @@ def _prune_gaps(wins, cutoff):
     yield lo, incl, cutoff
 
 
-def prune(conn, engine_db=None, retain_days=None, chunk_rows=None, pause_s=None):
+def prune(conn, engine_db=None, retain_days=None, chunk_rows=None, pause_s=None,
+          offboat_ledger=None, archive_path=None):
     """See `_prune`; this holds _PRUNE_LOCK around it (a rotation waits for, at most, the query
     in flight, then the prune stops at its next chunk)."""
     if _ROTATING.is_set():
         return None
     with _PRUNE_LOCK:
-        return _prune(conn, engine_db, retain_days, chunk_rows, pause_s)
+        return _prune(conn, engine_db, retain_days, chunk_rows, pause_s, offboat_ledger,
+                      archive_path)
 
 
-def _prune(conn, engine_db=None, retain_days=None, chunk_rows=None, pause_s=None):
+def _prune(conn, engine_db=None, retain_days=None, chunk_rows=None, pause_s=None,
+           offboat_ledger=None, archive_path=None):
     """Delete out-of-session readings older than the retention window, `chunk_rows` at a time
     under the write lock (released between chunks). Returns rows deleted, or None when pruning
-    was skipped (disabled / engine DB unreadable)."""
+    was skipped (disabled / engine DB unreadable / off-boat ledger unreadable)."""
     days = RETAIN_DAYS if retain_days is None else float(retain_days)
     if days <= 0:
         return None
+    ledger = OFFBOAT_LEDGER if offboat_ledger is None else offboat_ledger
+    id_cap, through = "", None
+    if ledger:
+        through = offboat_verified_through(ledger, archive_path or ARCHIVE_DB)
+        if through is None:
+            print(f"[archive] prune SKIPPED — off-boat ledger {ledger} unreadable (never delete "
+                  f"what is not verified off the boat)", flush=True)
+            return None
+        # `+id`: keep the planner on the time index (a bare `id <=` invites a rowid scan from 1)
+        id_cap = " AND +id <= ?"
     chunk = max(1, int(PRUNE_CHUNK_ROWS if chunk_rows is None else chunk_rows))
     pause = PRUNE_PAUSE_S if pause_s is None else float(pause_s)
     wins = session_windows(engine_db, conn=conn)
@@ -1549,8 +1578,8 @@ def _prune(conn, engine_db=None, retain_days=None, chunk_rows=None, pause_s=None
             with _WRITE_LOCK:
                 sel = conn.execute(
                     f"SELECT id, time FROM readings WHERE time {'>=' if lo_incl else '>'} ? "
-                    f"AND time >= ? AND time < ? ORDER BY time LIMIT ?",
-                    (lo, since, hi, chunk)).fetchall()
+                    f"AND time >= ? AND time < ?{id_cap} ORDER BY time LIMIT ?",
+                    (lo, since, hi, *((through,) if id_cap else ()), chunk)).fetchall()
                 if not sel:
                     break
                 conn.execute("DELETE FROM readings WHERE id IN "

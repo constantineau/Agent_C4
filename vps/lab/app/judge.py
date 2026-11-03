@@ -19,7 +19,7 @@ import time
 
 from shared import race_def
 
-from . import store, pbstore, optimizer, track, learning, boats
+from . import atomicio, store, pbstore, optimizer, track, learning, boats
 
 API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 
@@ -474,6 +474,5 @@ def apply_writeback(race_id, learnings_text):
     rid = re.sub(r"[^a-z0-9_-]", "", str(d.get("race_id", "")).lower())
     ingested = os.environ.get("INGESTED_DIR", "/srv/ingested")
     os.makedirs(ingested, exist_ok=True)
-    with open(os.path.join(ingested, f"{rid}.json"), "w") as f:
-        json.dump(d, f, indent=2)
+    atomicio.write_json(os.path.join(ingested, f"{rid}.json"), d, indent=2)
     return {"saved": True, "learnings_notes": d["learnings_notes"]}

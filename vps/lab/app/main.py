@@ -22,7 +22,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from shared import race_def, boat_profile
-from . import auth, store, extract, boats, labstate, feedback, pbstore, deploy, monitor, judge, track, learning, fleetimport, report, retro, retrostore, share, racestart
+from . import atomicio, auth, store, extract, boats, labstate, feedback, pbstore, deploy, monitor, judge, track, learning, fleetimport, report, retro, retrostore, share, racestart
 
 INGESTED_DIR = os.environ.get("INGESTED_DIR", "/srv/ingested")
 
@@ -1341,8 +1341,7 @@ def _write_race(definition, draft=False):
             if k not in definition or (draft and _prep_empty(k, definition[k])):
                 definition[k] = prior[k]
     os.makedirs(INGESTED_DIR, exist_ok=True)
-    with open(os.path.join(INGESTED_DIR, f"{rid}.json"), "w") as f:
-        json.dump(definition, f, indent=2)
+    atomicio.write_json(os.path.join(INGESTED_DIR, f"{rid}.json"), definition, indent=2)
     return rid
 
 

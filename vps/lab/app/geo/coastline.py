@@ -29,6 +29,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+
+from .. import atomicio
 import shutil
 import subprocess
 import tempfile
@@ -208,7 +210,7 @@ def _ensure_gshhg(cache_dir: str) -> bool:
     if not (os.path.exists(zpath) and os.path.getsize(zpath) > 1_000_000):
         try:
             req = urllib.request.Request(GSHHG_URL, headers=_HDRS)
-            with urllib.request.urlopen(req, timeout=600) as r, open(zpath, "wb") as f:
+            with urllib.request.urlopen(req, timeout=600) as r, atomicio.atomic_open(zpath, "wb") as f:
                 shutil.copyfileobj(r, f)
         except Exception:
             return False
@@ -222,7 +224,7 @@ def _ensure_gshhg(cache_dir: str) -> bool:
                 bn = os.path.basename(m)
                 lvl = bn[len(f"GSHHS_{GSHHG_RES}_L"):len(f"GSHHS_{GSHHG_RES}_L") + 1]
                 if lvl in ("1", "2", "3"):
-                    with z.open(m) as src, open(os.path.join(rd, bn), "wb") as dst:
+                    with z.open(m) as src, atomicio.atomic_open(os.path.join(rd, bn), "wb") as dst:
                         shutil.copyfileobj(src, dst)
     except Exception:
         return False
@@ -240,12 +242,11 @@ def _clip_shp(shp: str, out_path: str, bbox) -> bool:
     to the bbox rectangle (a handful of vertices) instead of being returned whole. An empty result
     (open ocean) is a valid success: ogr2ogr writes an empty FeatureCollection with returncode 0."""
     n, s, w, e = bbox
-    # written in a temp dir of its own and moved into place only on success: a timeout or a crash
-    # mid-write never leaves a cut-off clip that later runs read as "no land", and two builds of
-    # the same box at once never touch each other's file (#51). ogr2ogr won't write over an
-    # existing file, so the temp is a fresh directory, not a pre-made file.
-    tdir = tempfile.mkdtemp(dir=os.path.dirname(out_path) or ".", prefix=".clip-")
-    tmp = os.path.join(tdir, "clip.json")
+    # ogr2ogr writes a unique temp beside the target (it refuses an existing output), which
+    # becomes out_path whole and durably only on success: a timeout or crash mid-write never
+    # leaves a cut-off clip that later runs read as "no land", and two builds of the same box
+    # never touch each other's file (#51). The temp name is one the backup skips (#180).
+    tmp = atomicio.tmp_name(out_path)
     try:
         try:
             r = subprocess.run(["ogr2ogr", "-f", "GeoJSON", "-clipsrc", str(w), str(s), str(e),
@@ -254,10 +255,13 @@ def _clip_shp(shp: str, out_path: str, bbox) -> bool:
             return False
         if r.returncode != 0 or _parse_geojson(tmp) is None:
             return False
-        os.replace(tmp, out_path)
+        atomicio.commit(tmp, out_path)
         return True
     finally:
-        shutil.rmtree(tdir, ignore_errors=True)
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
 
 
 def _gshhg_layers_in_bbox(bbox, cache_dir: str):
