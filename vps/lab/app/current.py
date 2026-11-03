@@ -32,6 +32,7 @@ _DOMAIN = (41.6, 46.37, -88.06, -79.70)   # s, n, w, e
 FILL = -9000.0                            # GLOFS land/missing sentinel is -99999
 
 _cache = {}
+_stuck = None          # the last read that timed out and may still be hung (#203)
 
 
 class CurrentField:
@@ -192,7 +193,13 @@ def _fetch(url, bbox, want_axes):
     can't be interrupted, so it runs on a DAEMON thread: on a timeout we stop waiting, and a still
     hung read never blocks the Lab's shutdown. The build stops launching slices after the first
     timeout, so a dead THREDDS costs at most one stuck thread per build (Codex on #200). A
-    subprocess could be killed, but would have to ship every slice's arrays back."""
+    subprocess could be killed, but would have to ship every slice's arrays back.
+
+    Across builds (#203): while an earlier timed-out read is still hung, no new read starts, so
+    repeated Optimize/Playbook runs against a hung THREDDS never pile up more stuck threads."""
+    global _stuck
+    if _stuck is not None and _stuck.is_alive():
+        raise FTimeout("an earlier read is still hung")
     box = {}
 
     def work():
@@ -205,6 +212,7 @@ def _fetch(url, bbox, want_axes):
     t.start()
     t.join(FETCH_TIMEOUT)
     if t.is_alive():
+        _stuck = t
         raise FTimeout(f"no answer in {FETCH_TIMEOUT:.0f} s")
     if "e" in box:
         raise box["e"]

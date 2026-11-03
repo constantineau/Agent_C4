@@ -164,14 +164,17 @@ class WindField:
             raise RouteTimeout(TOO_LONG)
         if not self.use_forecast:
             return self.live
+        # a max age set below the cache TTL (C4_FORECAST_MAX_AGE_H < 0.5) must hold for a cell
+        # still inside the TTL too (#203): too old here falls through to a younger cell nearby
         if not self._offline:
             w = weather.wind_at(lat, lon, epoch)   # fresh only: None when a refresh failed
-            if w:
+            if w and self._young(lat, lon):
                 return w
-            self._offline = True     # a fetch just failed: the cache only from here on
+            if not w:
+                self._offline = True     # a fetch just failed: the cache only from here on
         cell = weather._cell(lat, lon)
         w = weather.cached_wind_at(lat, lon, epoch)
-        if w:
+        if w and self._young(lat, lon):
             return w
         age = weather.cell_age_s(lat, lon)
         w = weather.cached_wind_at(lat, lon, epoch, stale_ok=True)
@@ -185,6 +188,11 @@ class WindField:
             self.stale.add(cell)
         self.filled.add(cell)
         return w
+
+    @staticmethod
+    def _young(lat, lon):
+        age = weather.cell_age_s(lat, lon)
+        return age is None or age <= weather.MAX_AGE_S
 
     @property
     def source(self):

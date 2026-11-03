@@ -85,6 +85,9 @@ dt = time.time() - t0
 check(f"the fetch gives up at the timeout ({dt:.1f} s, the read hangs 4 s)", timed_out and dt < 1.5)
 check("…on a daemon thread (a stuck read never blocks the Lab's shutdown)",
       all(t.daemon for t in threading.enumerate() if t.name == "lmhofs-slice"))
+for _t in threading.enumerate():          # let that sleeper finish: the builds below start clean
+    if _t.name == "lmhofs-slice":
+        _t.join(5)
 
 
 # a whole build against a hung THREDDS (Codex on #200): one stuck read, not one per slice, and
@@ -115,7 +118,35 @@ check(f"a hung THREDDS: one read tried, then no more ({len(calls)} tried, {dt:.1
       len(calls) == 1 and dt < 2.0)
 check("…the route gets no current (not a hang)", isinstance(f, CUR.ZeroCurrent))
 check("…and the stuck read can't block shutdown (daemon thread)", stuck and all(t.daemon for t in stuck))
+
+# #203: the stuck read from the build above is still hung. More Optimize/Playbook runs must not
+# each add another stuck thread: no new read starts while an earlier one is stuck.
+calls.clear()
+for _ in range(3):
+    CUR._cache.clear()
+    CUR._cycle_for = lambda epoch: _real_cycle(epoch, now=NOW)
+    f2 = CUR.build_currentfield((44.5, 43.5, -86.5, -85.5), START, START + 24 * 3600)
+    CUR._cycle_for = _real_cycle
+alive = [t for t in threading.enumerate() if t.ident not in before and t.is_alive()]
+check(f"3 more builds while it's stuck: no new reads ({len(calls)} tried, {len(alive)} stuck threads)",
+      len(calls) == 0 and len(alive) == 1)
+check("…they route without current", isinstance(f2, CUR.ZeroCurrent))
 release.set()
+for t in alive:
+    t.join(5)
+
+
+def _ok_slice(url, bbox, want_axes):
+    calls.append(url)
+    raise OSError("answered (no data)")
+
+
+CUR._open_slice = _ok_slice
+CUR._cache.clear()
+CUR._cycle_for = lambda epoch: _real_cycle(epoch, now=NOW)
+CUR.build_currentfield((44.5, 43.5, -86.5, -85.5), START, START + 24 * 3600)
+CUR._cycle_for = _real_cycle
+check(f"once the stuck read ends, the next build reads again ({len(calls)} tried)", len(calls) >= 1)
 
 print("PASS" if ok else "FAIL")
 # a plain exit: a non-daemon stuck reader would hang the test here, which is the point

@@ -424,5 +424,29 @@ for i, lg in enumerate(leg["legs"]):
 check("after a wind shift, each leg is labelled against the wind where it starts",
       seen and all(seen))
 
+print("#203 a max age below the 30-min cache TTL is enforced on fresh cells too")
+# C4_FORECAST_MAX_AGE_H=0.1 (6 min): a cell fetched 20 min ago is still inside the cache TTL
+# ("fresh", never refetched) but older than the limit. Ages are relative to the clock the code
+# reads, so nothing here depends on the date.
+TOO_OLD = routing.FCST_TOO_OLD
+_max_age = weather.MAX_AGE_S
+weather.MAX_AGE_S = 0.1 * 3600
+net({})
+grid(15.0, 90.0, 20 * 60)
+wf = routing.WindField(True)
+err = raises(lambda: wf(44.1, -82.0, time.time()))
+check(f"live path: a 20 min old cell past a 6 min limit is refused (got {err})",
+      err is not None and str(err) == TOO_OLD)
+wf = routing.WindField(True)
+wf._offline = True                           # the cache-only path (after a failed fetch)
+err = raises(lambda: wf(44.1, -82.0, time.time()))
+check(f"cache-only path: refused too (got {err})", err is not None and str(err) == TOO_OLD)
+net({})
+grid(15.0, 90.0, 2 * 60)                     # 2 min old: inside the limit
+wf = routing.WindField(True)
+err = raises(lambda: wf(44.1, -82.0, time.time()))
+check(f"(control) a 2 min old cell routes normally ({err})", err is None and wf.source == "forecast")
+weather.MAX_AGE_S = _max_age
+
 print("PASS" if ok else "FAIL")
 raise SystemExit(0 if ok else 1)
