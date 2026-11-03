@@ -13,7 +13,22 @@ Deletion from the boat is allowed only *after* an off-boat copy is sha256-verifi
 - **Left open:** #210 (ground.py: unit-less engine JSON values ground any unit, so give engine fields units; m/s parsed as m). Minor on #208 (resume fingerprint lacks server URL/settings), minor on #209 (datasource_onboard session_start nested commit), both noted on the PRs.
 - **Deploy reminders (spring):** the copilot needs Orin OLLAMA_CONTEXT_LENGTH=6144 before it ships (#208). Engine image rebuild for #209. Fix #210 before the copilot deploy if possible.
 
-**Still open from the block below:** the damaged archive copy-off + salvage (needs Cole's go, boat side); the Opus-for-Lab-AI question; rest of map #188 (#159–#161, #163, #164, #166, #167; #203).
+**Damaged archives (Cole, 2026-11-03): NOT valuable — do not copy off or salvage** archive.corrupt-20261103T125947.db or archive.corrupt-20261028T154237.db (a copy-off was started and stopped; partial VPS copy removed). **All three damaged archives (Jul 18, Oct 28, Nov 3) DELETED from the Pi on Cole's go, 2026-11-03 ~19:00Z; card now 10% used (99 GB free).** Everything important was already on the VPS (Jul 18 + Aug 30–Sep 2 full-res, plus the daily uplink) and in the nightly GCS backup. Measured boat → VPS copy-off: ~0.6 MB/s (~5 Mbit/s). The SD card (unbranded "ASTC", 3 corruptions, no undervoltage in 10 days) is the likely cause: swap for a high-endurance card or USB SSD before spring.
+**In flight (2026-11-03 ~19:10Z) — IF THE SESSION DIED, RESUME HERE:** six agents were mid-work; none had committed or pushed yet. Their work is uncommitted in these worktrees (all from origin/dev):
+| Worktree /mnt/data/c4-wt/… | Task | Notes |
+|---|---|---|
+| w3-opus-imports | Lab race imports use a separate chain ANTHROPIC_IMPORT_MODEL_CHAIN (default claude-opus-5-5,claude-fable-5-1); everything else stays on ANTHROPIC_MODEL_CHAIN | Cole said "Opus for imports". Needs ONE live Bayview import on Opus 5.5 (≤ $5, never written to the live Lab DB) before PR. Merge needs Lab container RECREATE. |
+| w3-159-tactics-side | Closes #159 | DONE → PR #211, in the CI+Codex queue |
+| w3-160-rival-offset | Closes #160 | DONE → PR #213, queued |
+| w3-161-tod-delta | Closes #161 | DONE → PR #212, queued |
+| w3-163-wind-stale | Closes #163 | DONE → PR #214, queued |
+| w3-164-gps-loss | Closes #164 | DONE → PR #215, queued |
+| w3-166-autoclose | Closes #166 | agent started ~19:50Z, test-first |
+| w3-167-wind-source | Closes #167 | agent started; two TWD publishers interleaved must not read as oscillation |
+| w3-210-ground-units | Closes #210 | agent started; engine field→unit map + compound units in pi/orin/copilot/ground.py |
+CI+Codex queue (systemd unit c4-prep-queue, survives the session): append `PR WORKTREE` to /root/c4-ops/prep-queue.txt; results in /root/c4-ops/prep-chain.log; restart with `systemd-run --unit=c4-prep-queue --collect -p StandardOutput=append:/root/c4-ops/prep-chain.log /root/c4-ops/prep-queue.sh` if it idled out.
+To resume: `git -C <worktree> status` / `diff`, finish each (respawn an agent with the brief above + tools/agents/agent-rules.md), then per PR: push, open PR to dev, `bash /root/c4-ops/prep.sh <pr> <worktree>` SERIALLY (CI + Codex), fix confirmed findings, Cole merges. Agents must not run `make ci` in parallel (shared sr33-ci-* tags). Next after these: #166, #167, #203, #210.
+**Still open from the block below:** rest of map #188 (#159–#161, #163, #164, #166, #167; #203).
 
 ## ⏸ PICK UP HERE — 2026-11-03 MIDDAY (dev @ 3a9fdd2, main @ 405be7f)
 
