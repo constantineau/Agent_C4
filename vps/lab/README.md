@@ -50,10 +50,23 @@ python3 -m shared.race_def vps/lab/races/bayview_mackinac_2026.json
 Dual input → Opus extraction → a **draft** RaceDefinition → human review → save:
 - **Ingest** (Races tab): auto-find PDFs on a race page (`POST /api/ingest/discover`), paste
   direct links (`POST /api/ingest`), or upload PDFs (`POST /api/ingest/upload`); `app/extract.py`
-  (pypdf + `ANTHROPIC_MODEL`) emits a schema-conformant draft — coordinates only when the docs
-  state them (else `needs_review`), a comprehensive `requirements` checklist with race-time items
-  flagged `deliver_to_ipad`, and the `rules_profile`. Drafts are always machine-extracted →
-  **human review before use**.
+  (the `ANTHROPIC_MODEL_CHAIN` via `app/llm.complete_json`) emits a schema-conformant draft —
+  coordinates only when the docs state them (else `needs_review`), a comprehensive `requirements`
+  checklist with race-time items flagged `deliver_to_ipad`, and the `rules_profile`. Drafts are
+  always machine-extracted → **human review before use**.
+- **How the documents reach the model** (2026-11-02): PDFs are sent as PDFs (the model sees tables
+  and scanned pages) up to `LAB_PDF_MAX_PAGES` (100) / `LAB_PDF_MAX_BYTES` (32 MB) per ingest; past
+  that, and for web pages, the pypdf/HTML text goes instead, shared fairly within
+  `LAB_MAX_DOC_CHARS`. The reply is constrained to `extract.RACE_SCHEMA` (structured outputs,
+  streamed), with a JSON check + one retry as backstop. Nothing is dropped silently: a link that
+  won't download, a trimmed or unreadable document, or a PDF read only as text becomes the first
+  "Check these" item in the review; failures come back as one plain sentence (what, and what to do).
+- **Runs as a background job** (2026-11-02; same pattern as the Debrief): the page POSTs
+  `/api/ingest/run` (URLs) or `/api/ingest/run/upload` (files) → `{job_id}`, then polls
+  `/api/ingest/run/status?job_id=…` for a progress line ("Reading documents… / Building the course
+  and the checklist… / Course done.") and finally the draft or the plain error. One ingest at a
+  time (a second start gets a plain "already running"). A Lab restart mid-job answers "Ingest was
+  interrupted. Run it again." The one-request `/api/ingest` + `/api/ingest/upload` stay for scripts.
 - **Review + sign-off**: the Races tab renders an inline-editable review form (header, marks,
   requirements, rules & scoring, tracker, provenance) bound to the in-memory definition; **Save**
   (`POST /api/races`) persists to the `lab_ingested` volume (overrides the bundled seed) +

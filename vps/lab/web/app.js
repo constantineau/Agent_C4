@@ -417,29 +417,35 @@ async function extractDraft() {
   if (!Lab.sources.length && !files.length) { setMsg("Add a document URL or upload a PDF first.", "var(--warn)"); return; }
   if (!(await confirmLeave())) return;   // a new draft replaces whatever is in the editor
   btn.disabled = true; btn.textContent = "Reading…";
-  setMsg("⏳ Reading the documents. Takes up to 2 min. Keep this tab open.", "var(--accent)");
+  setMsg("⏳ Reading the documents. Takes 1 to 3 min.", "var(--accent)");
+  const fail = (t) => { setMsg("✕ " + t, "var(--bad)"); btn.disabled = false; btn.textContent = "Read documents →"; };
   try {
+    // a background job (POST starts it, then poll its status) — a big set outlasts one request
     let res;
     if (files.length) {
       const fd = new FormData();
       for (const f of files) fd.append("files", f);
-      res = await api("/api/ingest/upload", { method: "POST", body: fd });
+      res = await api("/api/ingest/run/upload", { method: "POST", body: fd });
     } else {
-      res = await apiPost("/api/ingest", { urls: Lab.sources });
+      res = await apiPost("/api/ingest/run", { urls: Lab.sources });
     }
-    const txt = await res.text();
-    let resp;
-    try { resp = JSON.parse(txt); }
-    catch (e) {
-      if (res.status === 502 || res.status === 504 || /^\s*</.test(txt))
-        setMsg("✕ Timed out. The documents were too big. Upload the PDF, or fewer documents.", "var(--bad)");
-      else setMsg("✕ Couldn't read the documents (server error " + res.status + ").", "var(--bad)");
-      btn.disabled = false; btn.textContent = "Read documents →"; return;
+    let start;
+    try { start = await res.json(); } catch (e) { return fail("Couldn't start reading (server error " + res.status + ")."); }
+    if (!start.ok) return fail(start.detail || start.note || "Couldn't start reading.");
+    let resp = null, misses = 0;
+    for (let i = 0; i < 600 && !resp; i++) {          // ~25 min ceiling, 2.5 s apart
+      await new Promise((r) => setTimeout(r, 2500));
+      let st;
+      try { st = await (await api("/api/ingest/run/status?job_id=" + encodeURIComponent(start.job_id))).json(); misses = 0; }
+      catch (e) { if (++misses >= 8) return fail("Lost contact with the Lab. Run it again."); continue; }
+      if (st.state === "running") {
+        const p = st.progress || [];
+        setMsg("⏳ " + (p.length ? p[p.length - 1] : "Reading the documents…") + " Keep this tab open.", "var(--accent)");
+      } else if (st.state === "error") return fail(st.error || "Ingest was interrupted. Run it again.");
+      else if (st.state === "done") resp = st.result || {};
     }
-    if (resp.detail) {   // the backend detail often already reads "ingest failed: …" — don't double it
-      const d = /^ingest failed/i.test(resp.detail) ? resp.detail : "Couldn't read the documents: " + resp.detail;
-      setMsg("✕ " + d, "var(--bad)"); btn.disabled = false; btn.textContent = "Read documents →"; return;
-    }
+    if (!resp) return fail("Still not done after 25 min. Run it again.");
+    if (resp.detail) return fail(resp.detail);   // already one plain sentence (what failed, what to do)
     Lab.draft = resp; Lab.editDef = resp.definition;
     Lab.editVal = { errors: resp.errors || [], warnings: resp.warnings || [] }; Lab.isDraft = true;
     const nm = (resp.definition && resp.definition.name) || "the race";
@@ -688,10 +694,24 @@ function detailProvenance(p) {
   const srcs = (p.sources || []).map((s) =>
     `<li><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.label)}</a>
      <span class="muted">${esc(s.retrieved || "")}</span></li>`).join("");
+  // what ingestion couldn't read: stays in "Check these" until dismissed here (then Save)
+  const notes = (p.ingest_notes || []).map((n, i) => n.acknowledged
+    ? `<li class="muted">${esc(n.text)} (dismissed)</li>`
+    : `<li>${esc(n.text)} <button class="mini" onclick="dismissIngestNote(${i})">Dismiss</button></li>`).join("");
   return `<div class="card"><h3>Sources &amp; notes</h3>
     <ul style="margin:0 0 10px;padding-left:18px">${srcs || '<li class="muted">No sources recorded.</li>'}</ul>
+    ${notes ? `<div class="muted" style="font-size:12px">Not fully read when ingested:</div>
+    <ul style="margin:0 0 10px;padding-left:18px">${notes}</ul>` : ""}
     <label class="muted" style="font-size:12px">SI status ${ein("provenance.si_status", p.si_status, "SI status")}</label>
     <label class="muted" style="font-size:12px">Review notes ${etxt("provenance.review_status", p.review_status, "review notes")}</label></div>`;
+}
+
+function dismissIngestNote(i) {
+  const n = Lab.editDef.provenance.ingest_notes[i];
+  n.acknowledged = true;
+  const v = Lab.editVal || {};
+  v.warnings = (v.warnings || []).filter((w) => w !== "Ingest: " + n.text);
+  paintDetail(); queueSyncDirty();
 }
 
 /* ---------- detail edit: structural mutations (repaint), then save / approve ---------- */
