@@ -14,7 +14,16 @@ Deletion from the boat is allowed only *after* an off-boat copy is sha256-verifi
 - **Deploy reminders (spring):** the copilot needs Orin OLLAMA_CONTEXT_LENGTH=6144 before it ships (#208). Engine image rebuild for #209. Fix #210 before the copilot deploy if possible.
 
 **Damaged archives (Cole, 2026-11-03): NOT valuable — do not copy off or salvage** archive.corrupt-20261103T125947.db or archive.corrupt-20261028T154237.db (a copy-off was started and stopped; partial VPS copy removed). **All three damaged archives (Jul 18, Oct 28, Nov 3) DELETED from the Pi on Cole's go, 2026-11-03 ~19:00Z; card now 10% used (99 GB free).** Everything important was already on the VPS (Jul 18 + Aug 30–Sep 2 full-res, plus the daily uplink) and in the nightly GCS backup. Measured boat → VPS copy-off: ~0.6 MB/s (~5 Mbit/s). The SD card (unbranded "ASTC", 3 corruptions, no undervoltage in 10 days) is the likely cause: swap for a high-endurance card or USB SSD before spring.
-**In flight (2026-11-03 evening):** agents on Opus 5.5 for Lab imports only (branch w3-opus-imports) and #159 #160 #161 #163 #164 (branches w3-<n>-*).
+**In flight (2026-11-03 ~19:10Z) — IF THE SESSION DIED, RESUME HERE:** six agents were mid-work; none had committed or pushed yet. Their work is uncommitted in these worktrees (all from origin/dev):
+| Worktree /mnt/data/c4-wt/… | Task | Notes |
+|---|---|---|
+| w3-opus-imports | Lab race imports use a separate chain ANTHROPIC_IMPORT_MODEL_CHAIN (default claude-opus-5-5,claude-fable-5-1); everything else stays on ANTHROPIC_MODEL_CHAIN | Cole said "Opus for imports". Needs ONE live Bayview import on Opus 5.5 (≤ $5, never written to the live Lab DB) before PR. Merge needs Lab container RECREATE. |
+| w3-159-tactics-side | Closes #159 | test-first |
+| w3-160-rival-offset | Closes #160 | test-first |
+| w3-161-tod-delta | Closes #161 | test-first, before/after numbers |
+| w3-163-wind-stale | Closes #163 | stale wind = "no live data"; inject now |
+| w3-164-gps-loss | Closes #164 | missing GPS course = unknown, not danger |
+To resume: `git -C <worktree> status` / `diff`, finish each (respawn an agent with the brief above + tools/agents/agent-rules.md), then per PR: push, open PR to dev, `bash /root/c4-ops/prep.sh <pr> <worktree>` SERIALLY (CI + Codex), fix confirmed findings, Cole merges. Agents must not run `make ci` in parallel (shared sr33-ci-* tags). Next after these: #166, #167, #203, #210.
 **Still open from the block below:** rest of map #188 (#159–#161, #163, #164, #166, #167; #203).
 
 ## ⏸ PICK UP HERE — 2026-11-03 MIDDAY (dev @ 3a9fdd2, main @ 405be7f)
