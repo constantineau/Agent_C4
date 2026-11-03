@@ -104,7 +104,15 @@ def _predict(ex, llm, mode="blind", dry=False):
     except LLMUnavailable as e:
         return {"parse_ok": False, "schema_ok": False, "raw": [], "filtered": [],
                 "latency_s": round(time.time() - t0, 1), "error": str(e)}
-    raw = list((parsed or {}).get("play_matches") or []) if isinstance(parsed, dict) else []
+    # a malformed container or entry is kept as a non-dict marker so scoring counts it as a
+    # grounding violation, never a crash ({"play_matches": 7}, [null], ["p"])
+    pm = parsed.get("play_matches") if isinstance(parsed, dict) else None
+    if pm is None:
+        raw = []
+    elif isinstance(pm, list):
+        raw = [m if isinstance(m, dict) else {"malformed": repr(m)[:80]} for m in pm]
+    else:
+        raw = [{"malformed": repr(pm)[:80]}]
     return {"parse_ok": parsed is not None, "schema_ok": _schema_ok(parsed),
             "raw": raw,
             "filtered": copilot._filter_play_matches(parsed or {}, pb, smap),

@@ -292,6 +292,21 @@ def test_schema_ok():
         f = copilot._filter_play_matches({"play_matches": [{"play_id": "p", "match": "strong", "why": 7},
                                                            5, {"play_id": 3}]}, pb)
         ok &= _check("malformed matches are dropped by the filter, not a crash", f == [])
+        ex = {"id": "x", "bundle": {"race_id": "r", "plays": [{"id": "p"}]},
+              "oracle": {"armed": ["p"], "near": []}, "blind_oracle": {"armed": ["p"], "near": []}}
+        for bad_reply in ('{"play_matches": 7}', '{"play_matches": [null, "p"]}', '[1]'):
+            class _L:
+                def chat(self, *a, **k):
+                    return {"content": bad_reply}
+            orig = run_eval.messages_for
+            run_eval.messages_for = lambda e, mode: (pb, {}, [])
+            try:
+                pr = run_eval._predict(ex, _L(), mode="blind")
+            finally:
+                run_eval.messages_for = orig
+            m = metrics.score([ex], [pr], mode="blind")
+            ok &= _check(f"reply {bad_reply} is scored (schema fail, no crash)",
+                          not pr["schema_ok"] and m["n"] == 1)
     except Exception as e:
         ok &= _check(f"malformed matches are dropped by the filter, not a crash ({e!r})", False)
     return ok

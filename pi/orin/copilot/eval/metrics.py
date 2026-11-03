@@ -54,8 +54,10 @@ def score(examples, predictions, mode="blind"):
         schema_ok += bool(pr.get("schema_ok"))
 
         raw = pr.get("raw") or []
+        raw = raw if isinstance(raw, list) else [raw]
         ground_total += len(raw)
-        ground_bad += sum(1 for m in raw if str(m.get("play_id")) not in known)
+        ground_bad += sum(1 for m in raw
+                          if not isinstance(m, dict) or str(m.get("play_id")) not in known)
 
         filt = [m for m in (pr.get("filtered") or []) if m.get("play_id") not in excluded]
         strong = {m["play_id"] for m in filt if m.get("match") == "strong"}
