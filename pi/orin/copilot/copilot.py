@@ -398,12 +398,17 @@ def _filter_play_matches(parsed, pb: playbook_mod.Playbook, status_map=None, cap
     status_map = status_map or {}
     known = set(pb.play_ids())
     out = []
-    for m in (parsed.get("play_matches") or []):
-        pid = str((m or {}).get("play_id") or "")
-        if pid not in known:
+    matches = parsed.get("play_matches") if isinstance(parsed, dict) else None
+    for m in (matches if isinstance(matches, list) else []):
+        if not isinstance(m, dict):
             continue
-        out.append({"play_id": pid, "match": m.get("match") or "partial",
-                    "why": (m.get("why") or "").strip()[:300],
+        pid = m.get("play_id")
+        why = m.get("why") or ""
+        if not isinstance(pid, str) or pid not in known or not isinstance(why, str):
+            continue                     # a malformed match is dropped, never a crash
+        match = m.get("match") if m.get("match") in ("strong", "partial") else "partial"
+        out.append({"play_id": pid, "match": match,
+                    "why": why.strip()[:300],
                     "status": status_map.get(pid, "quiet"),
                     "grounded_in": [f"play:{pid}"]})
         if len(out) >= cap:

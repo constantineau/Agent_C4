@@ -287,6 +287,13 @@ def test_schema_ok():
         bad = json.loads(json.dumps(good))
         bad["play_matches"][0][k] = val
         ok &= _check(f"play match {k}={val!r} fails", not run_eval._schema_ok(bad))
+    pb = playbook_mod.Playbook({"race_id": "r", "plays": [{"id": "p"}]})
+    try:
+        f = copilot._filter_play_matches({"play_matches": [{"play_id": "p", "match": "strong", "why": 7},
+                                                           5, {"play_id": 3}]}, pb)
+        ok &= _check("malformed matches are dropped by the filter, not a crash", f == [])
+    except Exception as e:
+        ok &= _check(f"malformed matches are dropped by the filter, not a crash ({e!r})", False)
     return ok
 
 
