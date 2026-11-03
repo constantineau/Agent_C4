@@ -97,6 +97,43 @@ def rank_for(path_or_channel, source, devices, priority=None):
     return None
 
 
+def series_publisher(path_or_channel, rows, devices, priority=None,
+                     failover_s=FAILOVER_AGE_S):
+    """Name the ONE publisher a window series should follow, or None when `rows` is empty.
+
+    `rows` is a `series_by_source` result: [(source, epoch, value)]. A window read that keeps
+    "whichever source wrote last each second" alternates between devices sample to sample; two
+    TWD publishers ~10 deg apart then read as a 10 deg oscillation, and when one drops out
+    mid-window as a lasting shift (#167). So the whole window follows one device.
+
+    The pick mirrors the live reads (`OnboardSource._prefer`, `tools._choose_preferred`): the
+    best-ranked source that is still current wins, current meaning its last sample is within
+    `failover_s` of the newest sample of any publisher (relative, never the wall clock, so a
+    replay works). A ranked lead that went quiet mid-window is passed over for the whole window,
+    which removes the handover step. With no current ranked source, or an unranked path, any
+    current source: most samples first, then label, so the same window always gives the same
+    answer. Unranked sources are never dropped, only ranked below the policy's picks."""
+    pubs = {}
+    for src, t, _v in rows:
+        n, last = pubs.get(src, (0, t))
+        pubs[src] = (n + 1, max(last, t))
+    if not pubs:
+        return None
+    newest = max(last for _n, last in pubs.values())
+    current = {s: n for s, (n, last) in pubs.items() if newest - last <= failover_s}
+    for m in matchers_for(path_or_channel, priority):
+        ranked = [s for s in current if n2k_sources.matches(s, m, devices)]
+        if ranked:
+            return min(ranked, key=lambda s: (-current[s], s))
+    return min(current, key=lambda s: (-current[s], s))
+
+
+def one_publisher(path, rows, devices, priority=None):
+    """[(epoch, value)] of the `series_publisher` pick, from a `series_by_source` result."""
+    pick = series_publisher(path, rows, devices, priority)
+    return [(t, v) for s, t, v in rows if s == pick]
+
+
 def all_matchers(priority=None):
     """Every matcher named anywhere in the policy, de-duplicated — feed to
     `n2k_sources.unresolved()` to assert the policy can bind."""

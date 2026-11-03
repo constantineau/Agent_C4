@@ -16,7 +16,7 @@ abstracted here.
 """
 import os
 
-from shared import units
+from shared import n2k_sources, source_policy, units
 
 # CloudSource needs the TimescaleDB pool; OnboardSource (Pi) does not — and the onboard image
 # ships no psycopg. Guard the import so `DATA_SOURCE=onboard` can run without a Postgres driver.
@@ -53,15 +53,11 @@ class CloudSource:
         return (r["value"], float(r["t"])) if r else None
 
     def series(self, path, minutes):
-        """[(epoch_s, raw_value)] for a path over the window, all sources, time-ordered."""
-        with pool.connection() as conn:
-            rows = conn.execute(
-                "SELECT extract(epoch FROM time) AS t, value FROM telemetry_raw "
-                "WHERE boat_id=%s AND path=%s AND value IS NOT NULL "
-                "AND time > now() - %s::interval ORDER BY time",
-                (BOAT_ID, path, f"{minutes} minutes"),
-            ).fetchall()
-        return [(float(r["t"]), float(r["value"])) for r in rows]
+        """[(epoch_s, raw_value)] for a path over the window, time-ordered, from ONE publisher
+        for the whole window — the source policy's pick (`source_policy.series_publisher`), as
+        onboard. All sources interleaved read two TWD publishers 10 deg apart as oscillation (#167)."""
+        return source_policy.one_publisher(path, self.series_by_source(path, minutes),
+                                           n2k_sources.devices_for(BOAT_ID))
 
     def series_by_source(self, path, minutes):
         """[(source, epoch_s, raw_value)] for a path over the window, time-ordered."""

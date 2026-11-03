@@ -650,24 +650,12 @@ class OnboardSource:
         return rows
 
     def series(self, path, minutes):
-        """[(epoch_s, raw_value)] for a path over the window, all sources, time-ordered,
-        decimated to the last sample per second."""
-        def fetch():
-            cut_s, cut_e = _cutoff_str(minutes)
-            not_ais, ais_p = self._not_ais()
-            rows = self._archive.execute(
-                "SELECT max(time) AS time, value FROM readings WHERE boat_id=? AND path=? "
-                "AND value IS NOT NULL AND time > ?" + not_ais
-                + " GROUP BY substr(time,1,19) ORDER BY time",
-                (BOAT_ID, path, cut_s, *ais_p),
-            ).fetchall()
-            out = []
-            for r in rows:
-                e = _epoch(r["time"])
-                if e is not None and e >= cut_e:
-                    out.append((e, float(r["value"])))
-            return out
-        return self._cached_series("series", path, minutes, fetch)
+        """[(epoch_s, raw_value)] for a path over the window, decimated to one sample per second,
+        from ONE publisher for the whole window — the source policy's pick
+        (`source_policy.series_publisher`). Mixing publishers second by second turned two TWD
+        sources 10 deg apart into a 10 deg oscillation, and a dropout into a false shift (#167)."""
+        return source_policy.one_publisher(path, self.series_by_source(path, minutes),
+                                           n2k_sources.devices_for(BOAT_ID))
 
     def series_by_source(self, path, minutes):
         """[(source, epoch_s, raw_value)] for a path over the window, time-ordered,
