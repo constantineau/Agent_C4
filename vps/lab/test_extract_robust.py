@@ -112,7 +112,7 @@ def blank_pdf(pages=1):
 
 
 extract.API_KEY = "test"
-llm.MODEL_CHAIN = ["model-a", "model-b"]
+llm.IMPORT_CHAIN = ["model-a", "model-b"]     # race import runs on the import chain
 
 print("structured outputs + streaming: the schema goes out, the reply comes back parsed")
 calls = fake([reply()])
