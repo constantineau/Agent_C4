@@ -62,6 +62,8 @@ def main(argv):
     if cmd == "cat":
         sys.stdout.write(open(local(url)).read())
     elif cmd == "stat":
+        if "-q" in argv:                    # like the real gsutil: -q stat prints nothing
+            return 0
         h = hashlib.md5(open(local(url), "rb").read()).digest()
         print(f"{url}:\n    Content-Length:    {os.path.getsize(local(url))}\n"
               f"    Hash (md5):    {base64.b64encode(h).decode()}")

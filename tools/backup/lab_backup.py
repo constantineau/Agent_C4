@@ -192,7 +192,10 @@ class GcsDest:
         self.gsutil = gsutil
 
     def _run(self, *args, check=True, **kw):
-        return subprocess.run([self.gsutil, "-q", *args], check=check, capture_output=True,
+        # -q hides progress lines, but on `stat` it hides the whole answer (size, md5): stat
+        # runs without it, or every verify reads "no hash" and fails.
+        quiet = [] if args[0] == "stat" else ["-q"]
+        return subprocess.run([self.gsutil, *quiet, *args], check=check, capture_output=True,
                               text=True, **kw)
 
     def _read(self, *args):
