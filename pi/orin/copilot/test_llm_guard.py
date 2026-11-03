@@ -63,6 +63,13 @@ def test_ground():
     check("a new number is caught", ground.ungrounded_numbers("CPA 0.3 nm", "CPA 0.5 nm") == {0.3})
     check("keeps_numbers needs every required number",
           ground.keeps_numbers("0.6 nm off", "0.6 nm right") and not ground.keeps_numbers("off line", "0.6 nm"))
+    check("numbers keep their units: 0.6 nm / 9 min can't become 9 nm / 0.6 min",
+          not ground.grounded("9 nm right; mark in 0.6 minutes", "0.6 nm right; mark in 9 minutes"))
+    check("-60 min doesn't ground 60 kts", not ground.grounded("Wind now 60 kts", "Now 18 kts; -60 min 12 kts"))
+    check("a unit-less engine value grounds the same value with a unit",
+          ground.grounded("TWS 12.4 kts from 180°", {"tws": 12.4, "twd": 180}))
+    check("an invented number glued to a label (TWS30) is caught", not ground.grounded("Wind TWS30 kts", "Wind 12 kts"))
+    check("a name the source has (J1) still passes", ground.grounded("J1 up", "sail J1"))
     check("a leading-dot decimal is a number (.9 nm is not 0.5 nm)",
           not ground.grounded("CPA .9 nm", "CPA 0.5 nm") and ground.grounded("CPA .9 nm", "CPA 0.9 nm"))
 

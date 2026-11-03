@@ -14,35 +14,89 @@ import re
 # A standalone number: not preceded by a letter/digit/dot (so "J1" and the "5" in "1.5" are not
 # picked up on their own), optional thousands separators and decimals. A leading-dot decimal
 # (".9 nm") counts as 0.9 — a dot after a digit/letter ("v1.9", "1.5") is not a leading dot.
-_NUM = re.compile(r"(?<![A-Za-z0-9_.])(?:\d+(?:,\d{3})*(?:\.\d+)?|\.\d+)")
+# The unit right after it, if any, rides along: "0.6 nm" and "9 min" are different facts from
+# "9 nm" and "0.6 min", and "-60 min" does not ground "60 kts".
+_NUM = re.compile(r"(?<![A-Za-z0-9_.])(\d+(?:,\d{3})*(?:\.\d+)?|\.\d+)"
+                  r"(?:\s?(°|%|[A-Za-z]+))?")
+# A name with digits glued to letters ("J1", "M2", "TWS30"). Names are not numbers, but an
+# invented one is still invented: every name in the text must appear in a source.
+_NAME = re.compile(r"(?<![A-Za-z0-9_])[A-Za-z]+\d[A-Za-z0-9]*")
+
+_UNITS = {
+    "kt": "kt", "kts": "kt", "knot": "kt", "knots": "kt",
+    "nm": "nm", "nmi": "nm", "mi": "nm",
+    "m": "m", "meter": "m", "meters": "m", "metre": "m", "metres": "m",
+    "s": "s", "sec": "s", "secs": "s", "second": "s", "seconds": "s",
+    "min": "min", "mins": "min", "minute": "min", "minutes": "min",
+    "h": "h", "hr": "h", "hrs": "h", "hour": "h", "hours": "h",
+    "°": "deg", "deg": "deg", "degree": "deg", "degrees": "deg",
+    "v": "V", "volt": "V", "volts": "V", "a": "A", "amp": "A", "amps": "A",
+    "%": "%", "pct": "%", "percent": "%",
+}
 
 
-def numbers(text) -> set[float]:
-    """Every standalone number in `text` (dicts/lists are JSON-dumped first)."""
+def _text(text):
     if text is None:
-        return set()
-    if not isinstance(text, str):
-        text = json.dumps(text, ensure_ascii=False)
+        return ""
+    return text if isinstance(text, str) else json.dumps(text, ensure_ascii=False)
+
+
+def quantities(text) -> set[tuple[float, str | None]]:
+    """Every standalone number in `text` as (value, unit or None). Dicts/lists are JSON-dumped."""
     out = set()
-    for m in _NUM.finditer(text):
+    for m in _NUM.finditer(_text(text)):
         try:
-            out.add(round(float(m.group(0).replace(",", "")), 6))
+            v = round(float(m.group(1).replace(",", "")), 6)
         except ValueError:
             continue
+        out.add((v, _UNITS.get((m.group(2) or "").lower())))
     return out
 
 
-def ungrounded_numbers(text, *sources) -> set[float]:
-    """The numbers in `text` that appear in none of `sources`."""
+def numbers(text) -> set[float]:
+    """Every standalone number's value in `text` (dicts/lists are JSON-dumped first)."""
+    return {v for v, _ in quantities(text)}
+
+
+def names(text) -> set[str]:
+    """Every digit-bearing name ("J1", "TWS30"), upper-cased."""
+    return {m.group(0).upper() for m in _NAME.finditer(_text(text))}
+
+
+def _sources(sources):
     have = set()
     for s in sources:
-        have |= numbers(s)
-    return numbers(text) - have
+        have |= quantities(s)
+    return have
+
+
+def ungrounded_numbers(text, *sources) -> set[float]:
+    """The numbers in `text` that no source backs. A number with a unit needs the same value
+    with the same unit, or the same value with no unit (raw engine data like {"tws": 12.4});
+    a bare number needs the same value in any unit."""
+    have = _sources(sources)
+    values = {v for v, _ in have}
+    out = set()
+    for v, u in quantities(text):
+        ok = (v, u) in have or (v, None) in have if u else v in values
+        if not ok:
+            out.add(v)
+    return out
+
+
+def ungrounded(text, *sources) -> list[str]:
+    """Human-readable list of everything in `text` the sources don't back (numbers and names)."""
+    have_names = set()
+    for s in sources:
+        have_names |= names(s)
+    return ([f"{v:g}" for v in sorted(ungrounded_numbers(text, *sources))]
+            + sorted(names(text) - have_names))
 
 
 def grounded(text, *sources) -> bool:
-    """True when every number in `text` appears in at least one of `sources`."""
-    return not ungrounded_numbers(text, *sources)
+    """True when every number (with its unit) and every digit-bearing name in `text` appears in at
+    least one of `sources`."""
+    return not ungrounded(text, *sources)
 
 
 def keeps_numbers(text, required) -> bool:

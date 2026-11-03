@@ -445,10 +445,9 @@ def _grounded_phrase(kind, headline, body_text, llm):
     had. A changed or added number raises LLMUnavailable, so the caller keeps the deterministic
     text."""
     head2, body2 = _phrase(kind, headline, body_text, llm)
-    extra = ground.ungrounded_numbers(head2 + " " + body2, headline, body_text)
+    extra = ground.ungrounded(head2 + " " + body2, headline, body_text)
     if extra:
-        raise LLMUnavailable("brief phrasing: numbers not in the brief: "
-                             + ", ".join(f"{n:g}" for n in sorted(extra)[:5]))
+        raise LLMUnavailable("brief phrasing: numbers not in the brief: " + ", ".join(extra[:5]))
     return head2, body2
 
 
