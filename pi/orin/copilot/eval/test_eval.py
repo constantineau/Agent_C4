@@ -275,6 +275,43 @@ def test_schema_ok():
     bad = json.loads(json.dumps(good))
     bad["recommendation"]["vs_playbook"] = "on_plan"
     ok &= _check("'on_plan' (not a schema value) fails", not run_eval._schema_ok(bad))
+    for path, val in ((("recommendation", "action"), 123), (("recommendation", "rationale"), []),
+                      (("recommendation", "grounded_in"), [17]), (("assessment",), None)):
+        bad = json.loads(json.dumps(good))
+        d = bad
+        for k in path[:-1]:
+            d = d[k]
+        d[path[-1]] = val
+        ok &= _check(f"{'.'.join(path)}={val!r} (wrong type) fails", not run_eval._schema_ok(bad))
+    for k, val in (("play_id", 5), ("why", 7), ("why", " ")):
+        bad = json.loads(json.dumps(good))
+        bad["play_matches"][0][k] = val
+        ok &= _check(f"play match {k}={val!r} fails", not run_eval._schema_ok(bad))
+    return ok
+
+
+def test_resume_refuses_other_run():
+    print("\n== --resume only reuses the same run ==")
+    import subprocess
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        corpus = os.path.join(d, "c.jsonl")
+        with open(corpus, "w") as f:
+            f.write("{}\n")
+        out = os.path.join(d, "r.json")
+        with open(out, "w") as f:
+            json.dump({"run": run_eval.run_fingerprint(corpus, "hinted", True, None),
+                       "predictions": [], "example_ids": []}, f)
+        r = subprocess.run([sys.executable, "-m", "copilot.eval.run_eval", "--corpus", corpus,
+                            "--out", out, "--dry", "--resume"], capture_output=True, text=True,
+                           cwd=os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+        ok = _check("a hinted/dry result can't be resumed into a blind run",
+                    r.returncode != 0 and "--resume refused" in (r.stdout + r.stderr))
+    same_a = run_eval.run_fingerprint(corpus_path=__file__, mode="blind", dry=False, model="m")
+    same_b = run_eval.run_fingerprint(corpus_path=__file__, mode="blind", dry=False, model="m")
+    ok &= _check("the same run matches", same_a == same_b)
+    ok &= _check("another model doesn't",
+                 same_a != run_eval.run_fingerprint(__file__, "blind", False, "other"))
     return ok
 
 
@@ -412,6 +449,7 @@ def main():
     ok &= test_train_serve_parity()
     ok &= test_prompt_path()
     ok &= test_schema_ok()
+    ok &= test_resume_refuses_other_run()
     ok &= test_metrics_math()
     ok &= test_blind_gate_needs_reading()
     ok &= test_context_budget()

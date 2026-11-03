@@ -13,6 +13,7 @@ model must match each play's narrative against the engine picture. The corpus mu
 gen_corpus of this version (it carries both rendered views and the blind labels)."""
 
 import argparse
+import hashlib
 import json
 import os
 import time
@@ -22,28 +23,35 @@ from ..llm import LLMClient, LLMUnavailable, PromptTooLong
 from . import metrics
 
 
-def _schema_ok(parsed):
-    """The copilot's _STRATEGY_SCHEMA, checked: required top-level keys, the recommendation's
-    required fields, and well-formed play_matches. (`{}` used to pass.)"""
-    schema = copilot._STRATEGY_SCHEMA
-    if not isinstance(parsed, dict) or any(k not in parsed for k in schema["required"]):
+_TYPES = {"object": dict, "array": list, "string": str}
+
+
+def _fits(v, spec):
+    """`v` matches a JSON-schema node of the kinds _STRATEGY_SCHEMA uses: type (object, array,
+    string), enum, required, properties, items."""
+    want = _TYPES.get(spec.get("type"))
+    if want is not None and not isinstance(v, want):
         return False
-    if not isinstance(parsed.get("assessment"), str):
+    if "enum" in spec and v not in spec["enum"]:
         return False
-    rec = parsed.get("recommendation")
-    rec_schema = schema["properties"]["recommendation"]
-    if not isinstance(rec, dict) or any(k not in rec for k in rec_schema["required"]):
-        return False
-    for k, spec in rec_schema["properties"].items():
-        if k in rec and "enum" in spec and rec[k] not in spec["enum"]:
+    if isinstance(v, dict):
+        if any(k not in v for k in spec.get("required", [])):
             return False
-    if not isinstance(rec.get("grounded_in"), list):
+        props = spec.get("properties", {})
+        if not all(_fits(v[k], props[k]) for k in props if k in v):
+            return False
+    if isinstance(v, list) and "items" in spec:
+        return all(_fits(x, spec["items"]) for x in v)
+    return True
+
+
+def _schema_ok(parsed):
+    """The reply matches the copilot's _STRATEGY_SCHEMA: required keys, every field's type
+    (action=123 or grounded_in=[17] fail), enums; plus a play match needs a non-empty id and why.
+    (`{}` used to pass.)"""
+    if not _fits(parsed, copilot._STRATEGY_SCHEMA):
         return False
-    matches = parsed.get("play_matches", [])
-    if not isinstance(matches, list):
-        return False
-    return all(isinstance(m, dict) and m.get("play_id") and m.get("match") in ("strong", "partial")
-               and m.get("why") for m in matches)
+    return all(m["play_id"].strip() and m["why"].strip() for m in parsed.get("play_matches", []))
 
 
 def _chat_with_recovery(llm, messages, attempts=3, recovery_s=180):
@@ -103,6 +111,13 @@ def _predict(ex, llm, mode="blind", dry=False):
             "latency_s": round(time.time() - t0, 1)}
 
 
+def run_fingerprint(corpus_path, mode, dry, model):
+    """What a saved prediction depends on. --resume only reuses predictions from the same run."""
+    with open(corpus_path, "rb") as f:
+        corpus = hashlib.sha256(f.read()).hexdigest()
+    return {"mode": mode, "dry": bool(dry), "model": model, "corpus_sha256": corpus}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--corpus", required=True)
@@ -121,16 +136,22 @@ def main():
     if args.n:
         examples = examples[:args.n]
 
+    mode = "hinted" if args.hinted else "blind"
+    llm = None if args.dry else LLMClient()
+    run = run_fingerprint(args.corpus, mode, args.dry, llm.model if llm else None)
+
     done = {}
     if args.resume and args.out and os.path.exists(args.out):
         with open(args.out) as f:
             prev = json.load(f)
+        if prev.get("run") != run:
+            # a hinted or dry run's predictions would sail through the blind gate
+            raise SystemExit(f"--resume refused: {args.out} is from a different run "
+                             f"({prev.get('run')} vs {run}); use a new --out")
         done = {eid: p for eid, p in zip(prev.get("example_ids", []), prev.get("predictions", []))
                 if not p.get("error")}
         print(f"resume: {len(done)} prior predictions reused")
 
-    mode = "hinted" if args.hinted else "blind"
-    llm = None if args.dry else LLMClient()
     preds = []
     for i, ex in enumerate(examples):
         if ex["id"] in done:
@@ -150,7 +171,7 @@ def main():
     print(json.dumps(m, indent=2))
     if args.out:
         with open(args.out, "w") as f:
-            json.dump({"metrics": m, "predictions": preds,
+            json.dump({"run": run, "metrics": m, "predictions": preds,
                        "example_ids": [e["id"] for e in examples]}, f, indent=1)
         print(f"-> {args.out}")
 
