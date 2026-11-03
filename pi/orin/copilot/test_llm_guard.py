@@ -63,6 +63,8 @@ def test_ground():
     check("a new number is caught", ground.ungrounded_numbers("CPA 0.3 nm", "CPA 0.5 nm") == {0.3})
     check("keeps_numbers needs every required number",
           ground.keeps_numbers("0.6 nm off", "0.6 nm right") and not ground.keeps_numbers("off line", "0.6 nm"))
+    check("a leading-dot decimal is a number (.9 nm is not 0.5 nm)",
+          not ground.grounded("CPA .9 nm", "CPA 0.5 nm") and ground.grounded("CPA .9 nm", "CPA 0.9 nm"))
 
 
 def test_coach_line():
@@ -175,6 +177,25 @@ def test_decision_brief():
           v["recommendations"] == [] and len(v["factors"]) == 1)
     check("situation with an invented number is blanked", "30" not in v["situation"])
     check("confidence drops with a dropped item", v["confidence"] == "low")
+
+    # The full loop grounds against the engine's facts only: the system prompt's worked example
+    # ("from 250° to 265°") and the crew's typed question are not measurements.
+    snap = {"get_conditions": {"tws": 12.4, "twd": 180}}
+    reply = {"situation": "Wind shifted right to 265°.",
+             "factors": [{"factor": "Wind 265°", "detail": "TWD 265", "grounded_in": ["get_conditions"],
+                          "confidence": "high"}],
+             "recommendations": [{"action": "Tack at 33 kts", "rationale": "TWS 33",
+                                  "grounded_in": ["get_conditions"], "urgency": "soon", "confidence": "high"}]}
+    try:
+        copilot.llm_brief(None, FakeLLM(reply), snap, "Is 33 kts coming?", playbook_mod.Playbook(None))
+        check("numbers from the prompt example / question don't ground a brief", False)
+    except LLMUnavailable:
+        check("numbers from the prompt example / question don't ground a brief", True)
+    good = {"situation": "Wind 12.4 kts from 180°.",
+            "factors": [{"factor": "TWS 12.4 kts", "detail": "from 180°", "grounded_in": ["get_conditions"],
+                         "confidence": "high"}], "recommendations": []}
+    out = copilot.llm_brief(None, FakeLLM(good), snap, "", playbook_mod.Playbook(None))
+    check("a brief built from the engine's numbers passes", out["factors"] and "180" in out["situation"])
 
     w = copilot._whale_touch(FakeLLM("The breeze builds like a 40-ton humpback."), {"situation": "calm"})
     check("whale aside with a number is skipped", w is None)

@@ -12,8 +12,9 @@ import json
 import re
 
 # A standalone number: not preceded by a letter/digit/dot (so "J1" and the "5" in "1.5" are not
-# picked up on their own), optional thousands separators and decimals.
-_NUM = re.compile(r"(?<![A-Za-z0-9_.])\d+(?:,\d{3})*(?:\.\d+)?")
+# picked up on their own), optional thousands separators and decimals. A leading-dot decimal
+# (".9 nm") counts as 0.9 — a dot after a digit/letter ("v1.9", "1.5") is not a leading dot.
+_NUM = re.compile(r"(?<![A-Za-z0-9_.])(?:\d+(?:,\d{3})*(?:\.\d+)?|\.\d+)")
 
 
 def numbers(text) -> set[float]:

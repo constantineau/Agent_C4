@@ -46,11 +46,17 @@ test("an n/a tile is never touched", () => {
   assert.equal(d.tiles.fleet.status, "na");
 });
 
-test("a raise ends once the engine moves the tile (it no longer matches what the model saw)", () => {
+test("a raise ends for good once the engine moves the tile, even if it moves back", () => {
   const b = brief([{ tile: "wind", status: "act", reason: "squall", from: "ok" }]);
   assert.equal(BG.overlay(read({ wind: tile("ok") }), b, T + 10).tiles.wind.status, "act");
   assert.equal(BG.overlay(read({ wind: tile("watch") }), b, T + 20).tiles.wind.status, "watch");
-  assert.equal(BG.overlay(read({ wind: tile("ok") }), b, T + 30).tiles.wind.status, "act");  // same condition again
+  assert.equal(BG.overlay(read({ wind: tile("ok") }), b, T + 30).tiles.wind.status, "ok");   // no comeback (ok → watch → ok)
+});
+
+test("…also when the engine itself reached the raised status and dropped back (ok → act → ok)", () => {
+  const b = brief([{ tile: "wind", status: "act", reason: "squall", from: "ok" }]);
+  assert.equal(BG.overlay(read({ wind: tile("act") }), b, T + 10).tiles.wind.status, "act");
+  assert.equal(BG.overlay(read({ wind: tile("ok") }), b, T + 20).tiles.wind.status, "ok");
 });
 
 test("a raise expires ADJUST_TTL_S after the snapshot, not after the reply", () => {

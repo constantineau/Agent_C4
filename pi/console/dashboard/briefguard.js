@@ -7,7 +7,8 @@
      1. It may only RAISE a tile (ok → watch → act). It can never turn a tile green, lower a
         warning, or touch an n/a tile.
      2. A raise lasts only while the tile is still at the status the model saw. Once the engine
-        moves that tile, either way, the raise is gone. It also expires ADJUST_TTL_S after the
+        moves that tile, either way, the raise is gone for good (it does not come back if the tile
+        returns to the old status; the brief's adjustment is marked `gone`). It also expires ADJUST_TTL_S after the
         snapshot the model read, not after the slow reply arrived.
      3. The snapshot sent to the model is the engine's own statuses, never a status the model
         itself raised earlier. */
@@ -26,11 +27,11 @@
 
   /* is this raise allowed on this tile right now? */
   function raiseOk(a, t, ageS) {
-    if (!a || !t || ageS > ADJUST_TTL_S) return false;
+    if (!a || a.gone || !t || ageS > ADJUST_TTL_S) return false;
     const now = engineStatus(t);
+    if (a.from !== now) { a.gone = true; return false; }             // engine moved: gone for good
     if (!(now in SEV) || !(a.status in SEV)) return false;          // n/a tile or junk status
-    if (SEV[a.status] <= SEV[now]) return false;                     // never down, no no-ops
-    return a.from === now;                                           // the condition still holds
+    return SEV[a.status] > SEV[now];                                 // never down, no no-ops
   }
 
   /* overlay the brief `b` ({focus, notes, adjust, mode, t: snapshot epoch s}) on the engine read

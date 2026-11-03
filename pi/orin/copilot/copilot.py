@@ -182,8 +182,11 @@ def llm_brief(engine: EngineClient, llm: LLMClient, snapshot: dict, question: st
     if not parsed:
         raise LLMUnavailable("LLM did not return parseable JSON")
 
-    # Every number in the brief must be one the model was shown (prompt, facts, tool results).
-    shown = [m.get("content") or "" for m in messages if m.get("role") != "assistant"]
+    # Every number in the brief must come from the engine: the gathered facts, the playbook and
+    # the tool results. NOT the system prompt (its worked examples carry degrees like 250/265) and
+    # NOT the crew's question (a number they typed is not a measurement).
+    shown = [_facts_digest(snapshot), pb.digest()] + [
+        m.get("content") or "" for m in messages if m.get("role") == "tool"]
     cleaned = brief_mod.validate(parsed, used_sources, pb.variant_ids(), pb.play_ids(), facts=shown)
     cleaned["engine_only"] = False
     # The LLM is not trusted to author factual caveats — replace its free text with the
