@@ -17,14 +17,14 @@ import re
 # The unit right after it, if any, rides along: "0.6 nm" and "9 min" are different facts from
 # "9 nm" and "0.6 min", and "-60 min" does not ground "60 kts" or "60-knot gusts".
 _NUM = re.compile(r"(?<![A-Za-z0-9_.])(\d+(?:,\d{3})*(?:\.\d+)?|\.\d+)"
-                  r"(?:[\s-]?(°|%|[A-Za-z]+(?:/h)?))?")
+                  r"(?:[\s-]*(°|%|[A-Za-z]+(?:/h)?))?")
 # A name with digits glued to letters ("J1", "M2", "TWS30"). Names are not numbers, but an
 # invented one is still invented: every name in the text must appear in a source.
 _NAME = re.compile(r"(?<![A-Za-z0-9_])[A-Za-z]+\d[A-Za-z0-9]*")
 
 _UNITS = {
-    "kt": "kt", "kts": "kt", "knot": "kt", "knots": "kt",
-    "nm": "nm", "nmi": "nm", "mi": "nm",
+    "kt": "kt", "kts": "kt", "kn": "kt", "kns": "kt", "knot": "kt", "knots": "kt",
+    "nm": "nm", "nmi": "nm", "mi": "mi", "mile": "mi", "miles": "mi",
     "m": "m", "meter": "m", "meters": "m", "metre": "m", "metres": "m",
     "s": "s", "sec": "s", "secs": "s", "second": "s", "seconds": "s",
     "min": "min", "mins": "min", "minute": "min", "minutes": "min",

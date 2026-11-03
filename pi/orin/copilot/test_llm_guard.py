@@ -69,6 +69,10 @@ def test_ground():
     check("...nor 60-knot gusts, nor 60 mph",
           not ground.grounded("Prepare for 60-knot gusts", "Now 18 kts; -60 min 12 kts")
           and not ground.grounded("Gusts 60 mph", "Now 18 kts; -60 min 12 kts"))
+    check("...nor 60 kn, nor '60  kts' with two spaces",
+          not ground.grounded("Prepare for 60 kn gusts", "Now 18 kts; -60 min 12 kts")
+          and not ground.grounded("Prepare for 60  kts gusts", "Now 18 kts; -60 min 12 kts"))
+    check("statute miles are not nautical miles", not ground.grounded("CPA 0.5 mi", "CPA 0.5 nm"))
     check("a hyphenated unit matching the source passes", ground.grounded("an 18-knot breeze", "Now 18 kts"))
     check("a plain word after a number isn't a unit", ground.grounded("Wind built 12 to 18 kts", "Now 18 kts; -60 min 12 kts"))
     check("a unit-less engine value grounds the same value with a unit",
