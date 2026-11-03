@@ -1,7 +1,25 @@
-# C4 telemetry consolidation — progress (updated 2026-11-02)
+# C4 telemetry consolidation — progress (updated 2026-11-03)
 
 Goal (Cole): **lose no telemetry**, and **copy all telemetry off the Pi to the VPS**.
 Deletion from the boat is allowed only *after* an off-boat copy is sha256-verified.
+
+## ⏸ PICK UP HERE — 2026-11-03 SESSION END (dev @ 3a9fdd2, main @ 405be7f)
+
+**C4 is still OUT OF THE WATER UNTIL SPRING.** Shore work only.
+
+**Done since the last block:** #197 #198 #199 #205 merged; Lab + agent rebuilt (rollback tags :pre-20261103). **Nightly Lab backup LIVE**: c4-lab-backup.timer, gs://constantineau-c4-nightly/vps-nightly, first run 9 artifacts 1.1 GB, restore drill 56/56 (sr33_dev 87 tables, 5.28 M rows). The failed first set (backup-2026-11-03T003759Z) prunes itself after 24 h.
+**#206 merged + DEPLOYED to the Pi 12:22Z** (Cole's go): compose passes ARCHIVE_CHECK_WAL_CAP_MB, default 2048. The old 256 MB cap stopped every hourly live archive check after ~18 min, so none had ever finished (WAL grows ~10–14 MB/min during a check; 20 GB archive needs ~65 min). Only the archiver was recreated; old compose in ~/deploy-backups/walcap-20261103T122258Z on the Pi. The check FINISHED for the first time at 12:59Z and found the live archive DAMAGED (btreeInitPage error 11 on ~8+ pages of tree 2). The archiver did what it is built to do: moved it aside to **archive.corrupt-20261103T125947.db** (20.2 GB + 482 MB WAL, covers 2026-10-28 → 11-03) and started a fresh archive.db; recording continued with no gap worth noting. Third corruption on this card (Jul 18, Oct 28, Nov 3). **Next (needs Cole's go, boat side):** copy the file off to the VPS (sha256-verified) and run pi/archiver/tools/salvage.py on the copy; look for the cause (SD card health / power) before spring.
+
+**Open PRs (wave 2), need CI + Codex, then Cole's "merge N":**
+1. **#207** copilot LLM guardrails (Fixes #53, #176): shared number check (ground.py), LLM can only raise a tile, never lower; iPad raise ends 180 s after the snapshot; /strategy keeps the engine's assessment + rationale. Left: engine_client off-boat fallback note in #53.
+2. **#208** matcher eval (Part of #54): held-out eval, blind mode gates, one prompt renderer (shared/strategy_render.py) for boat/eval/training, context 6144. **Do not deploy the copilot until the Orin has OLLAMA_CONTEXT_LENGTH=6144** (else most LLM calls fall back). Then re-measure stock + tuned blind on the Orin; retrain if tuned fails.
+3. **#209** engine store lock + rollback (Fixes #162): one re-entrant lock + `with conn:`; failed course loads now roll back. Engine image rebuild only.
+CI + Codex for 207→208→209 run serially in a detached chain: **/root/c4-ops/prep-chain.log** (CI logs /root/c4-ops/ci<PR>.log). Check it first; re-run `bash /root/c4-ops/prep.sh <pr> <worktree>` for any that didn't finish.
+
+**Open question for Cole — Opus for the Lab's AI:** Opus 5 passed Bayview on 2026-11-03 (courses, roundings, distances, start, gate, date all match; 232 s, ~$1.70 vs Fable $3.74). Island marks left blank as "needs review" (docs give none — correct). ANTHROPIC_MODEL_CHAIN covers EVERY Lab AI call (synthesis, debrief too), so the pick is: Opus first for imports only (small PR, recommended) vs everything (settings only, untested on playbooks/debriefs) vs keep Fable. Opus 5.5 is also out, 20% cheaper than Opus 5. Draft saved in the old session scratchpad only.
+
+**Next after that:** rest of map #188 — engine correctness #159–#161, #163, #164, #166, #167 (after #209 lands); #203 Lab northerly + robustness warnings. Spring: Lab Deploy push, Garmin dockside check, practice sail.
+**Gotcha:** a `while pgrep -f "prep.sh N"` waiter matches its own command line and waits forever — use one serial script.
 
 ## ⏸ PICK UP HERE — 2026-11-02 LATE SESSION END (dev @ e56fd0c, main @ 405be7f)
 
