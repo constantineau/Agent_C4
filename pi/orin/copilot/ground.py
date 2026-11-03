@@ -15,9 +15,9 @@ import re
 # picked up on their own), optional thousands separators and decimals. A leading-dot decimal
 # (".9 nm") counts as 0.9 — a dot after a digit/letter ("v1.9", "1.5") is not a leading dot.
 # The unit right after it, if any, rides along: "0.6 nm" and "9 min" are different facts from
-# "9 nm" and "0.6 min", and "-60 min" does not ground "60 kts".
+# "9 nm" and "0.6 min", and "-60 min" does not ground "60 kts" or "60-knot gusts".
 _NUM = re.compile(r"(?<![A-Za-z0-9_.])(\d+(?:,\d{3})*(?:\.\d+)?|\.\d+)"
-                  r"(?:\s?(°|%|[A-Za-z]+))?")
+                  r"(?:[\s-]?(°|%|[A-Za-z]+(?:/h)?))?")
 # A name with digits glued to letters ("J1", "M2", "TWS30"). Names are not numbers, but an
 # invented one is still invented: every name in the text must appear in a source.
 _NAME = re.compile(r"(?<![A-Za-z0-9_])[A-Za-z]+\d[A-Za-z0-9]*")
@@ -32,7 +32,13 @@ _UNITS = {
     "°": "deg", "deg": "deg", "degree": "deg", "degrees": "deg",
     "v": "V", "volt": "V", "volts": "V", "a": "A", "amp": "A", "amps": "A",
     "%": "%", "pct": "%", "percent": "%",
+    # units the engine never uses still count as units: "60 mph" must not borrow a bare 60
+    "mph": "mph", "kph": "kph", "kmh": "kph", "km/h": "kph", "km": "km", "ft": "ft", "feet": "ft",
+    "mb": "hPa", "mbar": "hPa", "hpa": "hPa", "c": "C", "f": "F", "nmph": "kt",
 }
+for _k in list(_UNITS):                         # "knot", "60-knot", "knots" alike
+    if len(_k) > 2:
+        _UNITS.setdefault(_k.rstrip("s"), _UNITS[_k])
 
 
 def _text(text):

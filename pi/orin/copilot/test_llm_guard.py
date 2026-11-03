@@ -66,6 +66,11 @@ def test_ground():
     check("numbers keep their units: 0.6 nm / 9 min can't become 9 nm / 0.6 min",
           not ground.grounded("9 nm right; mark in 0.6 minutes", "0.6 nm right; mark in 9 minutes"))
     check("-60 min doesn't ground 60 kts", not ground.grounded("Wind now 60 kts", "Now 18 kts; -60 min 12 kts"))
+    check("...nor 60-knot gusts, nor 60 mph",
+          not ground.grounded("Prepare for 60-knot gusts", "Now 18 kts; -60 min 12 kts")
+          and not ground.grounded("Gusts 60 mph", "Now 18 kts; -60 min 12 kts"))
+    check("a hyphenated unit matching the source passes", ground.grounded("an 18-knot breeze", "Now 18 kts"))
+    check("a plain word after a number isn't a unit", ground.grounded("Wind built 12 to 18 kts", "Now 18 kts; -60 min 12 kts"))
     check("a unit-less engine value grounds the same value with a unit",
           ground.grounded("TWS 12.4 kts from 180°", {"tws": 12.4, "twd": 180}))
     check("an invented number glued to a label (TWS30) is caught", not ground.grounded("Wind TWS30 kts", "Wind 12 kts"))
