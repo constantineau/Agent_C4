@@ -124,5 +124,15 @@ check(f"the boat borrows the corner's wind ({w5})", w5 is not None and abs(w5[0]
 leg5 = OPT.route_leg(CORNER, POL.polars_stw(), 44.0, -82.0, T0, 44.6, -81.5)
 check(f"a leg starting there reaches its mark ({leg5.get('reached')})", leg5.get("reached"))
 
+print("6) the closing board can't run past the fill limit (Codex on #220)")
+# the forecast stops at 45 N. The start, 9.9 nm north of it, borrows wind; the finish, 10.4 nm
+# north, has none. The one short board between them used to finish anyway.
+S6, F6 = 45.0 + 9.9 / 60.0, 45.0 + 10.4 / 60.0
+check("(control) the start has borrowed wind", OPT._nearby_wind(WF, S6, -82.5, T0) is not None)
+check("(control) the finish has none", OPT._nearby_wind(WF, F6, -82.5, T0) is None)
+leg6 = OPT.route_leg(WF, POL.polars_stw(), S6, -82.5, T0, F6, -82.5)
+check(f"the leg doesn't reach a mark with no wind ({leg6.get('reached')})",
+      leg6.get("reached") is False)
+
 print("PASS" if ok else "FAIL")
 raise SystemExit(0 if ok else 1)

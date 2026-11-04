@@ -517,6 +517,14 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, deadline=None,
     def wind(lat, lon, epoch):
         return wf.wind_at(lat, lon, epoch) or _nearby_wind(wf, lat, lon, epoch)
 
+    def wind_along(lat0, lon0, t_a, lat1, lon1, t_b):
+        """Wind (forecast or borrowed) all along a board, its end included, sampled every ~2 nm.
+        A board that leaves the fill limit isn't sailed (Codex on #220: the closing board finished
+        on a mark with no wind)."""
+        n = max(1, int(math.ceil(_hav_nm(lat0, lon0, lat1, lon1) / 2.0)))
+        return all(wind(lat0 + (lat1 - lat0) * k / n, lon0 + (lon1 - lon0) * k / n,
+                        t_a + (t_b - t_a) * k / n) for k in range(1, n + 1))
+
     # Overstand axis (#2 layline gate): on a beat the mark is to windward, on a run to leeward — in
     # both cases sailing PAST the mark along the wind axis is overstanding (the "go past then double
     # back" the user sees near a mark). Classify the leg from the wind AT THE MARK (which sets the
@@ -697,7 +705,8 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, deadline=None,
                        (_wrap180(lay["hdg"] - twd) > 0) != (_wrap180(node["hdg"] - twd) > 0))
             t_arr = (node["t"] + (dmark / lay["gs"]) * 3600 + (PEEL_COST_S if is_peel else 0.0)
                      + (TACK_COST_S if is_tack and TACK_CUMULATIVE else 0.0))
-            if reached is None or t_arr < reached["t"]:
+            if (reached is None or t_arr < reached["t"]) and wind_along(
+                    node["lat"], node["lon"], node["t"], dlat, dlon, t_arr):
                 reached = {"lat": dlat, "lon": dlon, "t": t_arr,
                            "parent": node, "hdg": lay["hdg"], "sail": lay["sail"],
                            "pl": node.get("pl", 0) + (1 if is_peel else 0)}
