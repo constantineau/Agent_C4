@@ -177,5 +177,57 @@ check("n_threats excludes the behind boat", n == 2)
 side2, _, _ = strategy._fleet_lean({"available": False})
 check("no fleet → no lean", side2 is None)
 
+# --- 7. Rival side is relative to US, not to the course (#160) -------------------------------------
+# leverage_nm is each boat's cross-track from the course line. We're 5 nm right, the rival 2 nm
+# right: the rival is 3 nm to our LEFT.
+print("rival side relative to us (#160):")
+def fleet_read(flt):
+    rows = [p for p in strategy._picture({}, flt, {"strength": "none"}) if p["signal"] == "fleet"]
+    return rows[0]["read"] if rows else ""
+rival = {"boat": "Rival", "tag": "rival", "leverage_nm": 2.0, "on_water_lead_nm": 0.5,
+         "confidence": 0.6, "corrected_delta_s": -120}
+rd = fleet_read({"available": True, "own": {"leverage_nm": 5.0}, "fleet": [rival]})
+print("  ", rd)
+check("rival 3 nm to our left", "3.0 nm to our left" in rd)
+check("not 'to our right'", "to our right" not in rd)
+rd = fleet_read({"available": True, "own": {"leverage_nm": 2.0}, "fleet": [rival]})
+print("  ", rd)
+check("same offset → no side claimed", "to our" not in rd and "ahead" in rd)
+rd = fleet_read({"available": True, "own": {"leverage_nm": None}, "fleet": [rival]})
+print("  ", rd)
+check("own offset unknown → says 'of the course', not 'to our'",
+      "2.0 nm right of the course" in rd and "to our" not in rd)
+
+# Leverage is measured against each boat's NEAREST leg, so across a turn the two offsets can belong to
+# different legs and their difference means nothing. Course (0,0)→(0,10)→(10,10): we're at (1,9),
+# +1 nm right of the north leg; the rival at (9,11) is −1 nm (left) of the east leg. Subtracting says
+# "2.0 nm to our left", but the rival is ~8 nm to our RIGHT. Different legs → claim no side.
+print("rival on a different leg (#160 turn):")
+from app import fleet as _fleet
+_pts = [(0.0, 0.0), (0.0, 10.0), (10.0, 10.0)]
+_, own_lev, own_leg = _fleet._course_progress(1.0, 9.0, _pts)
+_, riv_lev, riv_leg = _fleet._course_progress(9.0, 11.0, _pts)
+check("repro geometry: own on leg 0, rival on leg 1", (own_leg, riv_leg) == (0, 1))
+rival_turn = {**rival, "leverage_nm": riv_lev, "leg_index": riv_leg}
+rd = fleet_read({"available": True, "own": {"leverage_nm": own_lev, "leg_index": own_leg},
+                 "fleet": [rival_turn]})
+print("  ", rd)
+check("different legs → no side claimed", "to our" not in rd and "of the course" not in rd and "ahead" in rd)
+rd = fleet_read({"available": True, "own": {"leverage_nm": 5.0, "leg_index": 1},
+                 "fleet": [{**rival, "leg_index": 1}]})
+check("same leg → side still given", "3.0 nm to our left" in rd)
+
+# Behind a leg's start the clamped projection lands on the endpoint, so "cross-track" became the
+# distance to the mark and the side could flip. Course (0,0)→(0,10): we're at (1,-5), the rival at
+# (2,-1) — the rival is 1 nm to our RIGHT. Leverage must be the offset from the leg's LINE.
+print("rival beyond a leg endpoint (#160):")
+_pts1 = [(0.0, 0.0), (0.0, 10.0)]
+_, own_lev, own_leg = _fleet._course_progress(1.0, -5.0, _pts1)
+_, riv_lev, riv_leg = _fleet._course_progress(2.0, -1.0, _pts1)
+rd = fleet_read({"available": True, "own": {"leverage_nm": own_lev, "leg_index": own_leg},
+                 "fleet": [{**rival, "leverage_nm": riv_lev, "leg_index": riv_leg}]})
+print("  ", rd)
+check("behind the start: rival 1.0 nm to our right", "1.0 nm to our right" in rd)
+
 print("\nRESULT:", "ALL GREEN" if ok else "FAILURES ABOVE")
 import sys; sys.exit(0 if ok else 1)
