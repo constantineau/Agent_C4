@@ -128,6 +128,25 @@ def series_publisher(path_or_channel, rows, devices, priority=None,
     return min(current, key=lambda s: (-current[s], s))
 
 
+def preferred(path_or_channel, candidates, devices, priority=None,
+              failover_s=FAILOVER_AGE_S):
+    """The live pick: one (source, epoch, value) from each publisher's latest sample, or None.
+
+    Same rule as `OnboardSource._prefer` and `series_publisher`: the best-ranked source whose
+    sample is within `failover_s` of the newest one wins (freshest within that rank), else the
+    freshest of all. A live read that took "whoever wrote last" disagreed with the window read
+    whenever two publishers differ, and tactics reported the gap as a current shift (#167)."""
+    if not candidates:
+        return None
+    freshest = max(candidates, key=lambda r: r[1])
+    for m in matchers_for(path_or_channel, priority):
+        ranked = [r for r in candidates if n2k_sources.matches(r[0], m, devices)
+                  and freshest[1] - r[1] <= failover_s]
+        if ranked:
+            return max(ranked, key=lambda r: r[1])
+    return freshest
+
+
 def one_publisher(path, rows, devices, priority=None):
     """[(epoch, value)] of the `series_publisher` pick, from a `series_by_source` result."""
     pick = series_publisher(path, rows, devices, priority)

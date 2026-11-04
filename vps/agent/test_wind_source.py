@@ -28,9 +28,11 @@ os.environ.setdefault("ONBOARD_LIVE_WS", "false")
 from freezegun import freeze_time   # noqa: E402
 
 from app import datasource, datasource_onboard as ds, tactics   # noqa: E402
+from shared import source_policy   # noqa: E402
 from app import navigator as NAV   # noqa: E402
 
 ok = True
+_REAL_LATEST, _REAL_NAVIGATOR = NAV._latest, NAV.get_navigator
 
 
 def check(name, cond):
@@ -168,29 +170,122 @@ with tempfile.TemporaryDirectory() as d, freeze_time(NOW):
     vals = {v for _, v in src.series("some.unranked.path", 5)}
     check(f"one publisher's values only (got {sorted(vals)})", len(vals) == 1)
 
-print("cloud source: the same pick from series_by_source rows:")
+print("cloud source: the same pick, live and window, through a fake Postgres pool:")
 
 
-class _Cloud(datasource.CloudSource):
-    def __init__(self, rows):
-        self._rows = rows
+class _FakeConn:
+    """Answers the CloudSource queries from in-memory rows [(source, path, epoch, value)] and a
+    `source_priority` table {channel: [match, ...]}. Dispatches on the SQL text."""
 
-    def series_by_source(self, path, minutes):
-        return self._rows
+    def __init__(self, pool):
+        self.p = pool
+        self._out = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def execute(self, sql, params=()):
+        p = self.p
+        if "FROM source_priority" in sql:
+            self._out = [{"channel": ch, "match": m}
+                         for ch, ms in sorted(p.prio.items()) for m in ms]
+            return self
+        path = params[1]
+        rows = sorted((r for r in p.rows if r[1] == path), key=lambda r: r[2])
+        if "DISTINCT ON (source)" in sql:
+            newest = rows[-1][2] if rows else None
+            last = {}
+            for s, _p, t, v in rows:
+                if newest - t <= float(params[-1]):
+                    last[s] = {"source": s, "value": v, "t": t}
+            self._out = list(last.values())
+        elif "LIMIT 1" in sql:
+            self._out = [{"value": rows[-1][3], "t": rows[-1][2]}] if rows else []
+        else:
+            self._out = [{"source": s, "value": v, "t": t} for s, _p, t, v in rows]
+        return self
+
+    def fetchone(self):
+        return self._out[0] if self._out else None
+
+    def fetchall(self):
+        return self._out
+
+
+class _FakePool:
+    def __init__(self, rows, prio):
+        self.rows, self.prio = rows, prio
+
+    def connection(self):
+        return _FakeConn(self)
 
 
 T = NOW.timestamp()
-rows = []
-for i in range(720):
-    rows.append((ORCA, T - 720 + i, math.radians(200.0)))
-    rows.append((DERIVED, T - 720 + i + 0.5, math.radians(210.0)))
-vals = {round(math.degrees(v), 3) for _, v in _Cloud(rows).series(TWD, 12)}
+
+
+def cloud_rows(orca_deg=200.0, derived_deg=210.0, orca_quiet_s=0):
+    """12 min of TWD from both publishers (derived lands 0.5 s after the Orca, so it is always
+    the last writer), plus a single-source position/speed/TWS for the navigator."""
+    rows = []
+    for i in range(720):
+        t = T - 720 + i
+        if t <= T - orca_quiet_s:
+            rows.append((ORCA, TWD, t, math.radians(orca_deg)))
+        rows.append((DERIVED, TWD, t + 0.5, math.radians(derived_deg)))
+    for path, v in (("navigation.position.latitude", 44.0),
+                    ("navigation.position.longitude", -79.0),
+                    ("navigation.speedOverGround", 3.0),
+                    ("environment.wind.speedTrue", 6.0)):
+        rows.append(("gps", path, T, v))
+    return rows
+
+
+def run_cloud(rows, prio):
+    datasource.pool = _FakePool(rows, prio)
+    datasource._priority_cache = (None, 0.0)   # a new boat DB: no cached ranking
+    cloud = datasource.CloudSource()
+    datasource.active = lambda: cloud
+    NAV._latest = _REAL_LATEST
+    NAV.get_navigator = lambda route=None: {"available": False}
+    return cloud
+
+
+SEEDED = {k: list(v) for k, v in source_policy.DEFAULT_PRIORITY.items()}
+cloud = run_cloud(cloud_rows(), SEEDED)
+vals = {round(math.degrees(v), 3) for _, v in cloud.series(TWD, 12)}
 check(f"cloud series is the Orca only (got {sorted(vals)})", vals == {200.0})
-rows = [r for r in rows if not (r[0] == ORCA and r[1] > T - 300)]
-vals = {round(math.degrees(v), 3) for _, v in _Cloud(rows).series(TWD, 12)}
+live = round(math.degrees(cloud.latest_value(TWD)), 3)
+check(f"cloud live TWD is the Orca too, though derived wrote last (got {live})", live == 200.0)
+with freeze_time(NOW):
+    r = tactics.get_tactics()
+check(f"cloud tactics through the real navigator: no false shift (shift {r['wind']['shift_deg']}°)",
+      r["available"] and abs(r["wind"]["shift_deg"]) < 1.0)
+
+cloud = run_cloud(cloud_rows(orca_quiet_s=300), SEEDED)
+vals = {round(math.degrees(v), 3) for _, v in cloud.series(TWD, 12)}
 check(f"cloud series fails over to derived when the Orca goes quiet (got {sorted(vals)})",
       vals == {210.0})
-check("cloud series of nothing is empty", _Cloud([]).series(TWD, 12) == [])
+live = round(math.degrees(cloud.latest_value(TWD)), 3)
+check(f"…and so does the live read (got {live})", live == 210.0)
+
+print("cloud source: the operator's DB priority, not the committed default, picks the publisher:")
+PROMOTED = dict(SEEDED, twd=["derived", "orca"])
+cloud = run_cloud(cloud_rows(), PROMOTED)
+vals = {round(math.degrees(v), 3) for _, v in cloud.series(TWD, 12)}
+check(f"derived promoted in source_priority: the window follows derived (got {sorted(vals)})",
+      vals == {210.0})
+# make the Orca the last writer, so a freshest-wins live read would give 200
+rows = [(s, p, t + (1.0 if s == ORCA else 0.0), v) for s, p, t, v in cloud_rows()]
+cloud = run_cloud(rows, PROMOTED)
+live = round(math.degrees(cloud.latest_value(TWD)), 3)
+check(f"…and so does the live read, though the Orca wrote last (got {live})", live == 210.0)
+
+cloud = run_cloud([], SEEDED)
+check("cloud series of nothing is empty", cloud.series(TWD, 12) == [])
+check("cloud live read of nothing is None", cloud.latest_value(TWD) is None)
 
 print("PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)
