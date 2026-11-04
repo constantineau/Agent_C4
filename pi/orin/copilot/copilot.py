@@ -55,21 +55,68 @@ def gather(engine: EngineClient, route=None, hoisted=None) -> dict:
     return snap
 
 
-def _facts_digest(snapshot: dict) -> str:
-    """A compact, grounding-tagged fact list for the LLM seed message. Each line is prefixed
-    with the tool name to cite in `grounded_in`."""
-    lines = []
+def _facts(snapshot: dict) -> dict:
+    """The gathered facts the seed message shows, {tool name: fact dict}."""
+    out = {}
     for name in _DEFAULT_GATHER:
         d = snapshot.get(name)
         if not isinstance(d, dict) or not d.get("available", True) or d.get("available") is False:
             continue
-        # Trim each fact blob so the 7B's context isn't blown out.
-        compact = {k: v for k, v in d.items() if k not in ("available",) and v is not None}
-        s = json.dumps(compact, separators=(",", ":"))
-        if len(s) > 600:
-            s = s[:600] + "…"
-        lines.append(f"[{name}] {s}")
+        out[name] = {k: v for k, v in d.items() if k not in ("available",) and v is not None}
+    return out
+
+
+def _facts_digest(snapshot: dict) -> str:
+    """A compact, grounding-tagged fact list for the LLM seed message. Each line is prefixed
+    with the tool name to cite in `grounded_in`."""
+    lines = [f"[{name}] {_compact(fact)}" for name, fact in _shown_facts(snapshot).items()]
     return "\n".join(lines) if lines else "(no live facts available)"
+
+
+_FACT_CHARS = 600           # per gathered fact in the seed, so the 7B's context isn't blown out
+_TOOL_CHARS = 2000          # per tool result
+
+
+def _compact(obj) -> str:
+    return json.dumps(obj, separators=(",", ":"))
+
+
+def _trim(obj, limit: int, dump=_compact):
+    """`obj` cut down so dump(obj) fits in `limit` chars: leading fields/items kept, the first one
+    that overflows trimmed in turn, the rest dropped. The model is shown dump(_trim(obj)) and
+    grounding checks the same trimmed data, so a number cut off the prompt can't ground a claim."""
+    if len(dump(obj)) <= limit:
+        return obj
+    if isinstance(obj, str):
+        lo, hi = 0, len(obj)            # longest prefix that still fits once escaped
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            lo, hi = (mid, hi) if len(dump(obj[:mid])) <= limit else (lo, mid - 1)
+        return obj[:lo]
+    if isinstance(obj, (dict, list)):
+        is_dict = isinstance(obj, dict)
+        out = {} if is_dict else []
+        for k, v in (obj.items() if is_dict else enumerate(obj)):
+            probe = {**out, k: ""} if is_dict else out + [""]
+            if len(dump(probe)) > limit:
+                break
+            room = limit - len(dump(probe)) + len(dump(""))
+            part = _trim(v, room, dump)
+            if len(dump(part)) > room:
+                break
+            if is_dict:
+                out[k] = part
+            else:
+                out.append(part)
+            if part is not v:
+                break                   # this one was cut: nothing after it was shown
+        return out
+    return None                         # a bare number that doesn't fit is not shown
+
+
+def _shown_facts(snapshot: dict) -> dict:
+    """The gathered facts exactly as the seed message shows them (trimmed)."""
+    return {name: _trim(fact, _FACT_CHARS) for name, fact in _facts(snapshot).items()}
 
 
 def _system_prompt(pb: playbook_mod.Playbook) -> str:
@@ -157,6 +204,7 @@ def llm_brief(engine: EngineClient, llm: LLMClient, snapshot: dict, question: st
     ]
 
     final_text = None
+    results = []                # tool results as data: grounding needs the field names (#210)
     for _round in range(config.MAX_TOOL_ROUNDS):
         msg = llm.chat(messages, tools=tools.TOOL_SPECS, tool_choice="auto")
         messages.append(msg)
@@ -169,8 +217,10 @@ def llm_brief(engine: EngineClient, llm: LLMClient, snapshot: dict, question: st
             result, tool_name = tools.dispatch(engine, name, args)
             if isinstance(result, dict) and result.get("available", True) is not False:
                 used_sources.add(tool_name)
+            shown_result = _trim(result, _TOOL_CHARS, json.dumps)
+            results.append(shown_result)
             messages.append({"role": "tool", "tool_call_id": call_id,
-                             "content": json.dumps(result)[:2000]})
+                             "content": json.dumps(shown_result)})
     else:
         # Hit the round cap still wanting tools — force a JSON conclusion with no tools.
         msg = llm.chat(messages + [{"role": "user",
@@ -184,9 +234,9 @@ def llm_brief(engine: EngineClient, llm: LLMClient, snapshot: dict, question: st
 
     # Every number in the brief must come from the engine: the gathered facts, the playbook and
     # the tool results. NOT the system prompt (its worked examples carry degrees like 250/265) and
-    # NOT the crew's question (a number they typed is not a measurement).
-    shown = [_facts_digest(snapshot), pb.digest()] + [
-        m.get("content") or "" for m in messages if m.get("role") == "tool"]
+    # NOT the crew's question (a number they typed is not a measurement). The facts go in as data,
+    # not their JSON dump, so each value keeps its field's unit (twd 180 is not 180 kts).
+    shown = [_shown_facts(snapshot), pb.digest()] + results
     cleaned = brief_mod.validate(parsed, used_sources, pb.variant_ids(), pb.play_ids(), facts=shown)
     cleaned["engine_only"] = False
     # The LLM is not trusted to author factual caveats — replace its free text with the

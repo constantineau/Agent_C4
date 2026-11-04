@@ -81,6 +81,33 @@ def test_ground():
     check("a name the source has (J1) still passes", ground.grounded("J1 up", "sail J1"))
     check("a leading-dot decimal is a number (.9 nm is not 0.5 nm)",
           not ground.grounded("CPA .9 nm", "CPA 0.5 nm") and ground.grounded("CPA .9 nm", "CPA 0.9 nm"))
+    # #210: engine JSON carries no units, so known fields get theirs before comparing.
+    eng = {"tws": 18, "twd": 60}
+    check("a heading doesn't ground a wind speed (60 knots vs twd 60)",
+          not ground.grounded("Wind now 60 knots", eng))
+    check("...but the speed and heading in their own units pass",
+          ground.grounded("Wind now 18 knots from 60°", eng))
+    check("suffixed fields carry their unit (cpa_nm, tcpa_min, twa_min is degrees)",
+          ground.grounded("CPA 0.4 nm in 6 min", {"cpa_nm": 0.4, "tcpa_min": 6})
+          and not ground.grounded("CPA 6 nm", {"cpa_nm": 0.4, "tcpa_min": 6})
+          and not ground.grounded("in 40 min", {"twa_min": 40}))
+    check("a channel's unit reaches its readings ({tws: {unit: kn, preferred: {value: 18}}})",
+          ground.grounded("18 kts", {"tws": {"unit": "kn", "preferred": {"value": 18}}})
+          and not ground.grounded("60 knots", {"twd": {"unit": "°", "readings": [{"value": 60, "age_s": 3}]}}))
+    check("a unit-less index doesn't ground a unit (fatigue 0.82 → 0.82 kts)",
+          not ground.grounded("0.82 kts", {"fatigue_index": 0.82}) and ground.grounded("index 0.82", {"fatigue_index": 0.82}))
+    check("an unknown field still grounds any unit", ground.grounded("7 nm", {"foo": 7}))
+    check("a bare number in text doesn't ground a unit", not ground.grounded("Fatigue 0.82 kts", "fatigue index 0.82"))
+    check("a bare number in text is grounded by any unit", ground.grounded("index 0.82", "0.82 kts"))
+    # #210: compound units are whole units.
+    check("60 m/s is not 60 m", not ground.grounded("Gusts 60 m/s", "60 m off track"))
+    check("compound units match themselves (m/s, km/h = kph, kts/hr = kn/h)",
+          ground.grounded("60 m/s", "60 m/s") and ground.grounded("20 km/h", "20 kph")
+          and ground.grounded("3 kts/hr", "3 kn/h"))
+    check("a rate is not its base unit (12 kn/h vs 12 kn; 5 °/hr vs 5°)",
+          not ground.grounded("building 12 kn/h", "12 kn") and not ground.grounded("5 °/hr", "veer 5°"))
+    check("an unknown compound unit is its own unit (60 ft/s vs 60 ft, 60 xyz/s vs 60 xyz)",
+          not ground.grounded("60 ft/s", "60 ft") and not ground.grounded("60 xyz/s", "60 xyz"))
 
 
 def test_coach_line():
@@ -212,6 +239,46 @@ def test_decision_brief():
                          "confidence": "high"}], "recommendations": []}
     out = copilot.llm_brief(None, FakeLLM(good), snap, "", playbook_mod.Playbook(None))
     check("a brief built from the engine's numbers passes", out["factors"] and "180" in out["situation"])
+    # #210: the facts reach the check as data, not a JSON dump, so twd 180 can't become 180 kts.
+    bad = {"situation": "Wind 180 kts.",
+           "factors": [{"factor": "TWS 180 kts", "grounded_in": ["get_conditions"], "confidence": "high"},
+                       {"factor": "TWS 12.4 kts", "grounded_in": ["get_conditions"], "confidence": "high"}],
+           "recommendations": []}
+    out = copilot.llm_brief(None, FakeLLM(bad), snap, "", playbook_mod.Playbook(None))
+    check("a brief can't borrow the heading as a wind speed (180 kts vs twd 180)",
+          out["situation"] == "" and [f["factor"] for f in out["factors"]] == ["TWS 12.4 kts"])
+
+    # The check sees only what the model saw: a fact cut off by the 600-char trim grounds nothing.
+    long_snap = {"get_conditions": {"description": "x" * 650, "tws": 60}}
+    cut = {"situation": "Wind 60 kts.",
+           "factors": [{"factor": "Wind 60 kts", "grounded_in": ["get_conditions"], "confidence": "high"}],
+           "recommendations": []}
+    check("the trimmed seed doesn't show the cut-off number", "60" not in copilot._facts_digest(long_snap))
+    try:
+        copilot.llm_brief(None, FakeLLM(cut), long_snap, "", playbook_mod.Playbook(None))
+        check("a number trimmed out of a gathered fact doesn't ground a brief", False)
+    except LLMUnavailable:
+        check("a number trimmed out of a gathered fact doesn't ground a brief", True)
+    # Same for a tool result past the 2,000-char trim.
+    class ToolLLM(FakeLLM):
+        def chat(self, messages, **kw):
+            self.calls += 1
+            if self.calls == 1:
+                return {"content": "", "tool_calls": [{"id": "c1", "function": {
+                    "name": "get_forecast", "arguments": "{}"}}]}
+            self.seen = [m for m in messages if m.get("role") == "tool"]
+            return {"content": json.dumps(cut)}
+    orig_dispatch = copilot.tools.dispatch
+    copilot.tools.dispatch = lambda eng, name, args: ({"notes": "y" * 2100, "tws": 60}, name)
+    try:
+        llm = ToolLLM()
+        copilot.llm_brief(None, llm, {"get_conditions": {"tws": 12.4}}, "", playbook_mod.Playbook(None))
+        check("a number trimmed out of a tool result doesn't ground a brief", False)
+    except LLMUnavailable:
+        check("a number trimmed out of a tool result doesn't ground a brief",
+              "60" not in llm.seen[0]["content"])
+    finally:
+        copilot.tools.dispatch = orig_dispatch
 
     w = copilot._whale_touch(FakeLLM("The breeze builds like a 40-ton humpback."), {"situation": "calm"})
     check("whale aside with a number is skipped", w is None)
