@@ -61,6 +61,13 @@ def _health(r):
     return {"degraded": bool((r or {}).get("degraded")), "warnings": list((r or {}).get("warnings") or [])}
 
 
+def _v2_entries(v2):
+    """Every v2 entry built from a route: the plays AND the robustness runs (a run that held the
+    line can still have sailed past the forecast, #203)."""
+    v2 = v2 or {}
+    return list(v2.get("scenario_routes") or []) + list(v2.get("robustness") or [])
+
+
 def _merged_warnings(routes):
     """The warnings of these routes, in order, each once."""
     out = []
@@ -208,7 +215,10 @@ def _scenario_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
             say(f"scenario {s['id']}: DIVERGES ({xte} nm, {deta:+d} min) — play candidate")
         else:
             robust.append({"scenario": s["id"], "name": entry["name"],
-                           "note": f"route holds within {xte} nm / {abs(deta)} min of the nominal"})
+                           "note": f"route holds within {xte} nm / {abs(deta)} min of the nominal",
+                           # its route's health stays with it: a run that held the line on held
+                           # wind past the forecast is not clean evidence (#203)
+                           "degraded": entry["degraded"], "warnings": entry["warnings"]})
             say(f"scenario {s['id']}: nominal HOLDS ({xte} nm, {deta:+d} min) — robustness")
 
     # BOUNDARY BISECTION (the method refinement, 2026-07-08): where adjacent scenarios of the same
@@ -320,7 +330,7 @@ def _internal_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
             if xte is not None and xte < 2.0 and same_sails:
                 robust.append({"scenario": sid, "name": entry["name"],
                                "note": (f"{tag} at {mark_name}: the remaining plan HOLDS — same "
-                                        f"line, same sails (rest {drest:+d} min)")})
+                                        f"line, same sails (rest {drest:+d} min)"), **_health(r)})
                 say(f"pace {sid}: nominal remainder HOLDS — robustness")
             else:
                 entry["route"] = {"legs": r.get("legs"), "path": r.get("path"),
@@ -392,7 +402,8 @@ def _internal_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
         if low_m >= base_m - 1:      # require a real reduction (≥2) — resolution noise isn't a play
             robust.append({"scenario": "low_maneuver", "name": "Low-maneuver (conserve the crew)",
                            "note": (f"the nominal is already the quiet route ({base_m} maneuvers — "
-                                    f"biasing ×{mult:g} against tacks/peels found nothing quieter)")})
+                                    f"biasing ×{mult:g} against tacks/peels found nothing quieter)"),
+                           **_health(r)})
             say("low-maneuver: nominal already minimal — robustness")
         else:
             routes.append({
@@ -432,6 +443,9 @@ def _internal_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
                     f"REJOIN the line (pressing on costs ~{-row['delta_min']} min)")
             parts.append(f"~{row['off_nm']:g} nm {row['side']} on the {row['to']} leg: {call}")
         worst = max(abs(row["delta_min"]) for row in tab)
+        held = {row["held"] for row in tab if row.get("held")}
+        tab_warnings = [optimizer.FORECAST_ENDS] if "end" in held else []
+        tab_warnings += [optimizer.FORECAST_STARTS_LATE] if "start" in held else []
         routes.append({
             "id": "rejoin_vs_continue", "name": "Off the line — rejoin or continue?",
             "kind": "rejoin", "category": "internal",
@@ -444,7 +458,8 @@ def _internal_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
             "divergence": {"delta_eta_min": worst, "xte_mean_nm": off_nm},
             "guidance": ("; ".join(parts) + ". Frozen-forecast numbers — if the onboard re-route "
                          "disagrees, trust the fresher one."),
-            "table": tab, "total_hours": None, "favored_side": None})
+            "table": tab, "total_hours": None, "favored_side": None,
+            "degraded": bool(tab_warnings), "warnings": tab_warnings})
         say(f"rejoin tab: {len(tab)} rows — guidance play")
     else:
         say("rejoin tab: no rows (legs too short or routing failed) — skipped")
@@ -552,6 +567,10 @@ def _rejoin_tab(definition, course_id, wf, consensus, cur, waves, marks, off_nm,
                         track_mod._hav_nm((re_["lat"], re_["lon"]), (rj["lat"], rj["lon"])) > 1.0):
                     say(f"rejoin tab leg {i} {side}: truncated isochrone — cell skipped")
                     continue
+                # #203: these rows are routed from mid-leg, so they can run past the forecast
+                # when the nominal doesn't — same check as a full route
+                held = (optimizer._forecast_held(wf, cont["path"], t_mid)
+                        or optimizer._forecast_held(wf, rejn["path"], t_mid))
                 cont_min = round((cont["eta"] - t_mid) / 60.0)
                 rejn_min = round((rejn["eta"] - t_mid) / 60.0 + rj_nominal_min)
                 if cont_min <= 0 or rejn_min <= 0:
@@ -561,7 +580,8 @@ def _rejoin_tab(definition, course_id, wf, consensus, cur, waves, marks, off_nm,
                            else "continue" if delta > 0 else "rejoin")
                 rows.append({"leg": i, "to": leg.get("to"), "side": side, "off_nm": off_nm,
                              "continue_min": cont_min, "rejoin_min": rejn_min,
-                             "delta_min": int(delta), "verdict": verdict})
+                             "delta_min": int(delta), "verdict": verdict,
+                             **({"held": held} if held else {})})
                 say(f"rejoin tab leg {i} ({leg.get('to')}) {side}: continue {cont_min}m vs "
                     f"rejoin {rejn_min}m → {verdict}")
         finally:
@@ -761,13 +781,13 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
         },
         # every route's warnings, once each: what the Lab shows on the playbook and on Deploy
         "degraded": (bool(consensus.get("degraded")) or any(v["degraded"] for v in variants)
-                     or any(e.get("degraded") for e in ((v2 or {}).get("scenario_routes") or []))),
+                     or any(e.get("degraded") for e in _v2_entries(v2))),
         # ...and the v2 plays' (a slow-pressure or late-pace play can run past the forecast when
         # the nominal doesn't): named, so the crew knows which play it is (Codex on #200)
         "warnings": _merged_warnings([consensus] + [v for v in variants])
         + _merged_warnings([{"warnings": [f"{e.get('name') or e.get('id')}: {w}"
                                           for w in e.get("warnings") or []]}
-                            for e in ((v2 or {}).get("scenario_routes") or [])]),
+                            for e in _v2_entries(v2)]),
         "variants": variants,
         "scenarios": [{"model": c["scenario"], "favored_side": c["favored_side"],
                        "total_hours": c["total_hours"], "first_heading": c["first_heading"]}
