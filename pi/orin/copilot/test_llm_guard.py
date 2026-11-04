@@ -248,6 +248,38 @@ def test_decision_brief():
     check("a brief can't borrow the heading as a wind speed (180 kts vs twd 180)",
           out["situation"] == "" and [f["factor"] for f in out["factors"]] == ["TWS 12.4 kts"])
 
+    # The check sees only what the model saw: a fact cut off by the 600-char trim grounds nothing.
+    long_snap = {"get_conditions": {"description": "x" * 650, "tws": 60}}
+    cut = {"situation": "Wind 60 kts.",
+           "factors": [{"factor": "Wind 60 kts", "grounded_in": ["get_conditions"], "confidence": "high"}],
+           "recommendations": []}
+    check("the trimmed seed doesn't show the cut-off number", "60" not in copilot._facts_digest(long_snap))
+    try:
+        copilot.llm_brief(None, FakeLLM(cut), long_snap, "", playbook_mod.Playbook(None))
+        check("a number trimmed out of a gathered fact doesn't ground a brief", False)
+    except LLMUnavailable:
+        check("a number trimmed out of a gathered fact doesn't ground a brief", True)
+    # Same for a tool result past the 2,000-char trim.
+    class ToolLLM(FakeLLM):
+        def chat(self, messages, **kw):
+            self.calls += 1
+            if self.calls == 1:
+                return {"content": "", "tool_calls": [{"id": "c1", "function": {
+                    "name": "get_forecast", "arguments": "{}"}}]}
+            self.seen = [m for m in messages if m.get("role") == "tool"]
+            return {"content": json.dumps(cut)}
+    orig_dispatch = copilot.tools.dispatch
+    copilot.tools.dispatch = lambda eng, name, args: ({"notes": "y" * 2100, "tws": 60}, name)
+    try:
+        llm = ToolLLM()
+        copilot.llm_brief(None, llm, {"get_conditions": {"tws": 12.4}}, "", playbook_mod.Playbook(None))
+        check("a number trimmed out of a tool result doesn't ground a brief", False)
+    except LLMUnavailable:
+        check("a number trimmed out of a tool result doesn't ground a brief",
+              "60" not in llm.seen[0]["content"])
+    finally:
+        copilot.tools.dispatch = orig_dispatch
+
     w = copilot._whale_touch(FakeLLM("The breeze builds like a 40-ton humpback."), {"situation": "calm"})
     check("whale aside with a number is skipped", w is None)
     w = copilot._whale_touch(FakeLLM("The plush whale approves of this breeze."), {"situation": "calm"})
