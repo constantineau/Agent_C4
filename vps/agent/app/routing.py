@@ -7,8 +7,9 @@ angle, then prune the candidates to the outer envelope (one per bearing sector) 
 envelope is the isochrone. When the envelope reaches the destination, backtrack parents to
 recover the optimal path (which naturally tacks upwind / gybes downwind).
 
-Wind comes from weather.wind_at (Open-Meteo); if the forecast is unavailable it falls back to
-the live measured wind held constant, so routing still runs on the bench. RRS 41: routing is
+Wind comes from weather.wind_at (Open-Meteo); if the forecast is unavailable at the start it
+falls back to the live measured wind held constant, so routing still runs on the bench. One route
+never mixes the two (#157), and with neither there is no route at all (#156). RRS 41: routing is
 shore tactical advice — practice/debrief unless the RC clears it; the UI gates it by race mode.
 """
 import math
@@ -115,19 +116,119 @@ def _seg_crosses_poly(alat, alon, blat, blon, polys):
     return False
 
 
-def make_wind_fn(slat, slon, live):
-    """A wind(lat,lon,epoch)→(tws,twd) closure: the Open-Meteo forecast if reachable at the start,
-    else the live measured wind held constant (so routing still runs with no network). `live` is
-    (tws_kn, twd_deg). Returns (wind_fn, use_forecast)."""
-    use_fcst = weather.wind_at(slat, slon, time.time()) is not None
+NO_WIND = "No wind data. Can't route."
+FCST_GAP = "Forecast incomplete. Can't route."
+GAPS_FILLED = "Forecast gaps filled from nearby."
+OLD_FCST = "Old forecast."
+FCST_TOO_OLD = "Forecast too old. Can't route."
+TOO_LONG = "Re-route took too long. Try again."
+SRC_FCST = "forecast"
+SRC_FCST_FILLED = "forecast, gaps filled from nearby"
+SRC_FCST_OLD = "old forecast"
+SRC_LIVE = "live wind (no forecast)"
 
-    def wind(lat, lon, epoch):
-        if use_fcst:
-            w = weather.wind_at(lat, lon, epoch)
-            if w:
+
+class NoWindError(Exception):
+    """The wind field had nothing usable for a point the route needed. str() is the crew's reason."""
+
+
+class RouteTimeout(Exception):
+    """The route ran past its wall-clock deadline. str() is the crew's reason."""
+
+
+class WindField:
+    """wind(lat, lon, epoch) → (tws, twd), one source for the whole route.
+
+    Forecast mode: the Open-Meteo forecast per ~0.1° cell. After the first failed fetch (a new
+    cell, or the refresh of an expired one) the run reads the cache only, so a dead link costs one
+    10 s timeout, not one per cell (#157). A cell with no fresh forecast takes, in order: its own
+    old forecast, the nearest fresh cached cell, the nearest old one. Gaps are counted in `filled`,
+    old forecast in `stale`, and the label says so. A hole is filled only from a cell within
+    weather.FILL_NM, and a forecast past weather.MAX_AGE_S is never used: with nothing younger
+    in reach the route is refused (FCST_TOO_OLD). It never falls back
+    to the boat's measured wind mid-route.
+    Live mode: the measured wind (tws, twd) held constant.
+    `deadline` (epoch): past it, the next sample raises RouteTimeout, which stops route_leg cleanly
+    (it samples the wind at every node)."""
+
+    def __init__(self, use_forecast, live=None, deadline=None):
+        self.use_forecast = use_forecast
+        self.live = live
+        self.deadline = deadline
+        self.filled = set()          # cells whose forecast came from a nearby cell
+        self.stale = set()           # cells routed on an old forecast (its refresh failed)
+        self._offline = False
+
+    def __call__(self, lat, lon, epoch):
+        if self.deadline is not None and time.time() > self.deadline:
+            raise RouteTimeout(TOO_LONG)
+        if not self.use_forecast:
+            return self.live
+        # a max age set below the cache TTL (C4_FORECAST_MAX_AGE_H < 0.5) must hold for a cell
+        # still inside the TTL too (#203): too old here falls through to a younger cell nearby
+        if not self._offline:
+            w = weather.wind_at(lat, lon, epoch)   # fresh only: None when a refresh failed
+            if w and self._young(lat, lon):
                 return w
-        return live if live[0] is not None else (12.0, 0.0)
-    return wind, use_fcst
+            if not w:
+                self._offline = True     # a fetch just failed: the cache only from here on
+        cell = weather._cell(lat, lon)
+        w = weather.cached_wind_at(lat, lon, epoch)
+        if w and self._young(lat, lon):
+            return w
+        age = weather.cell_age_s(lat, lon)
+        w = weather.cached_wind_at(lat, lon, epoch, stale_ok=True)
+        if w and age <= weather.MAX_AGE_S:   # too old: a younger cell nearby may still fill it
+            self.stale.add(cell)
+            return w
+        w, fresh, age = weather.nearest_cached_wind(lat, lon, epoch)
+        if not w:
+            raise NoWindError(FCST_TOO_OLD if age is not None else FCST_GAP)
+        if not fresh:
+            self.stale.add(cell)
+        self.filled.add(cell)
+        return w
+
+    @staticmethod
+    def _young(lat, lon):
+        age = weather.cell_age_s(lat, lon)
+        return age is None or age <= weather.MAX_AGE_S
+
+    @property
+    def source(self):
+        """The label a route carries: what wind it was really computed in."""
+        if not self.use_forecast:
+            return SRC_LIVE
+        base = SRC_FCST_OLD if self.stale else SRC_FCST
+        return base + SRC_FCST_FILLED[len(SRC_FCST):] if self.filled else base
+
+    def warnings(self):
+        """Short crew notes for what the label says."""
+        return ([OLD_FCST] if self.stale else []) + ([GAPS_FILLED] if self.filled else [])
+
+
+def make_wind_fn(slat, slon, live):
+    """The route's wind field: the Open-Meteo forecast if reachable at the start, else the live
+    measured wind held constant (so routing still runs with no network). `live` is
+    (tws_kn, twd_deg); a partial live wind (either one None) counts as none.
+    Returns (WindField, use_forecast), or (None, False) when there is no forecast and no complete
+    live wind: the caller must refuse with NO_WIND rather than route on made-up wind (#156)."""
+    if weather.wind_at(slat, slon, time.time()) is not None:
+        return WindField(True), True
+    if weather.cell_status(slat, slon) == "stale":
+        # the start cell's forecast expired and its refresh just failed: route on the old one
+        # from the cache (labelled "old forecast", refused past MAX_AGE_S), no more fetches
+        wf = WindField(True)
+        wf._offline = True
+        return wf, True
+    tws, twd = (tuple(live) + (None, None))[:2] if live else (None, None)
+    if tws is None or twd is None:
+        return None, False
+    return WindField(False, (tws, twd)), False
+
+
+def _wind_ok(w):
+    return bool(w) and w[0] is not None and w[1] is not None
 
 
 def route_leg(slat, slon, dlat, dlon, wind, t0, live_twd=0.0, avoid=None, avoid_polys=None):
@@ -139,7 +240,10 @@ def route_leg(slat, slon, dlat, dlon, wind, t0, live_twd=0.0, avoid=None, avoid_
     Returns {path:[{lat,lon}], legs:[{hdg,tack}], reached_t, reached, short_nm, sailed_nm, direct_nm}.
     `reached` is False when the leg never closed on the mark (MAX_STEPS ran out, or every heading was
     blocked): the path then ends at the frontier node nearest the mark, `short_nm` from it, and the
-    caller must NOT chain the next leg from the mark (#31)."""
+    caller must NOT chain the next leg from the mark (#31).
+    Each leg's tack is judged against the wind the route was computed in at that node (#158);
+    `live_twd` is no longer used and stays only for the call signature. Raises NoWindError when
+    `wind()` has nothing for a node (it never invents a wind)."""
 
     def _blocked(a_lat, a_lon, b_lat, b_lon):
         return _seg_blocked(a_lat, a_lon, b_lat, b_lon, avoid) or \
@@ -153,9 +257,10 @@ def route_leg(slat, slon, dlat, dlon, wind, t0, live_twd=0.0, avoid=None, avoid_
     for _ in range(MAX_STEPS):
         cand = {}
         for node in frontier:
-            tws, twd = wind(node["lat"], node["lon"], node["t"])
-            if tws is None:
-                tws, twd = 12.0, 0.0
+            w = wind(node["lat"], node["lon"], node["t"])
+            if not _wind_ok(w):
+                raise NoWindError(NO_WIND)
+            tws, twd = w
             # can we lay the mark from here this step? (only if the direct segment is clear of land)
             dmark = NAV._hav_nm(node["lat"], node["lon"], dlat, dlon)
             bmark = NAV._bearing(node["lat"], node["lon"], dlat, dlon)
@@ -164,7 +269,8 @@ def route_leg(slat, slon, dlat, dlon, wind, t0, live_twd=0.0, avoid=None, avoid_
             if sp_m > 0.3 and dmark <= sp_m * DT_H and \
                     not _blocked(node["lat"], node["lon"], dlat, dlon):
                 reached = {"lat": dlat, "lon": dlon,
-                           "t": node["t"] + (dmark / sp_m) * 3600, "parent": node, "hdg": bmark}
+                           "t": node["t"] + (dmark / sp_m) * 3600, "parent": node, "hdg": bmark,
+                           "twd": twd}
                 break
             for hdg in headings:
                 twa = abs(NAV._wrap180(hdg - twd))
@@ -179,7 +285,7 @@ def route_leg(slat, slon, dlat, dlon, wind, t0, live_twd=0.0, avoid=None, avoid_
                 # keep the farthest-advanced candidate per bearing sector (the isochrone)
                 if sec not in cand or rng > cand[sec]["rng"]:
                     cand[sec] = {"lat": nlat, "lon": nlon, "t": node["t"] + DT_H * 3600,
-                                 "parent": node, "hdg": hdg, "rng": rng}
+                                 "parent": node, "hdg": hdg, "rng": rng, "twd": twd}
         if reached:
             break
         if not cand:
@@ -201,7 +307,7 @@ def route_leg(slat, slon, dlat, dlon, wind, t0, live_twd=0.0, avoid=None, avoid_
     while node is not None:
         path.append({"lat": round(node["lat"], 5), "lon": round(node["lon"], 5)})
         if node["hdg"] is not None:
-            legs.append({"hdg": round(node["hdg"]), "tack": _tack(node["hdg"], live_twd or 0)})
+            legs.append({"hdg": round(node["hdg"]), "tack": _tack(node["hdg"], node["twd"])})
         node = node["parent"]
     path.reverse(); legs.reverse()
     sailed = sum(NAV._hav_nm(path[i]["lat"], path[i]["lon"], path[i + 1]["lat"], path[i + 1]["lon"])
@@ -227,15 +333,20 @@ def get_route(route: str = None, target: str = "next"):
     if slat is None:
         return {"available": False, "note": "No position yet."}
 
-    live = (s["tws"], s["twd"])
+    live = (s.get("tws"), s.get("twd"))
     wind, use_fcst = make_wind_fn(slat, slon, live)
+    if wind is None:
+        return {"available": False, "target": dest["name"], "note": NO_WIND}
 
     key = (round(slat, 3), round(slon, 3), dest["name"], target, round(live[0] or 0), round(live[1] or 0), use_fcst)
     if _cache["key"] == key and time.time() - _cache["t"] < CACHE_TTL:
         return _cache["val"]
 
     t0 = time.time()
-    leg = route_leg(slat, slon, dest["lat"], dest["lon"], wind, t0, live[1] or 0)
+    try:
+        leg = route_leg(slat, slon, dest["lat"], dest["lon"], wind, t0)
+    except NoWindError as exc:
+        return {"available": False, "target": dest["name"], "note": str(exc)}
     if not leg["reached"]:
         out = {"available": False, "target": dest["name"], "reached": False,
                "short_nm": leg["short_nm"],
@@ -252,7 +363,8 @@ def get_route(route: str = None, target: str = "next"):
 
     out = {
         "available": True, "route": nav["route"], "target": dest["name"],
-        "wind_source": "forecast" if use_fcst else "live wind (no forecast)",
+        "wind_source": wind.source, "forecast_gaps": len(wind.filled),
+        "forecast_old": bool(wind.stale),
         "direct_nm": round(direct, 2), "sailed_nm": round(sailed, 2),
         "eta_min": eta_min, "tacks": tacks,
         "recommended_heading": legs[0]["hdg"] if legs else None,

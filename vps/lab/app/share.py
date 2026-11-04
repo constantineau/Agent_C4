@@ -13,6 +13,8 @@ import re
 import secrets
 import time
 
+from . import atomicio
+
 SHARE_DIR = os.environ.get("SHARE_DIR", "/srv/shares")
 PUBLIC_URL = os.environ.get("LAB_PUBLIC_URL", "https://lab.racertracer.net").rstrip("/")
 
@@ -42,8 +44,8 @@ def create(body: dict) -> dict:
         raise ValueError("no optimized route to share — run the optimizer first")
     os.makedirs(SHARE_DIR, exist_ok=True)
     token = secrets.token_urlsafe(16)
-    with open(os.path.join(SHARE_DIR, token + ".json"), "w") as f:
-        json.dump(bundle, f, separators=(",", ":"))
+    atomicio.write_json(os.path.join(SHARE_DIR, token + ".json"), bundle,
+                        separators=(",", ":"))
     return {"token": token, "url": f"{PUBLIC_URL}/share/{token}"}
 
 

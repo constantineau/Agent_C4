@@ -61,8 +61,10 @@ boxes (and Starlink) doesn't matter — everything reconnects when its counterpa
   `check` action for these nodes in the Tailscale admin ACLs (admin console — a tailnet
   setting, not a boat setting).
 - **SD card mortality (Pi)**: the retention prune limits wear, but SD cards die eventually.
-  Race data leaves the boat via the session backfill, so a dead card costs configuration, not
-  history. Recovery = the owner flashes a spare card per `pi/SETUP.md` (a fresh clone + one
+  **A dead card today costs full-res history.** The backfill sends the cloud session windows
+  (and the uplink only 15-s aggregates, ~1.7% of the rows); the full-res `archive.db` and every
+  `archive.corrupt-*.db` exist only on the card (#181). `pi/archiver/copyoff.py` is the fix,
+  built and tested ashore but not yet deployed aboard: see "Copy-off" in `pi/archiver/README.md`. Recovery = the owner flashes a spare card per `pi/SETUP.md` (a fresh clone + one
   `compose up` rebuilds everything; the engine store re-learns its kv on the next fleet/
   playbook load).
 - **Starlink power posture**: if the owner powers Starlink down between visits, the boxes are

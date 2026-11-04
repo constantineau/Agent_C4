@@ -50,10 +50,24 @@ python3 -m shared.race_def vps/lab/races/bayview_mackinac_2026.json
 Dual input → Opus extraction → a **draft** RaceDefinition → human review → save:
 - **Ingest** (Races tab): auto-find PDFs on a race page (`POST /api/ingest/discover`), paste
   direct links (`POST /api/ingest`), or upload PDFs (`POST /api/ingest/upload`); `app/extract.py`
-  (pypdf + `ANTHROPIC_MODEL`) emits a schema-conformant draft — coordinates only when the docs
-  state them (else `needs_review`), a comprehensive `requirements` checklist with race-time items
-  flagged `deliver_to_ipad`, and the `rules_profile`. Drafts are always machine-extracted →
-  **human review before use**.
+  (its own chain, `ANTHROPIC_IMPORT_MODEL_CHAIN`, default Opus 5.5 → Fable 5.1, via
+  `app/llm.complete_json`; every other Lab AI call stays on `ANTHROPIC_MODEL_CHAIN`) emits a schema-conformant draft —
+  coordinates only when the docs state them (else `needs_review`), a comprehensive `requirements`
+  checklist with race-time items flagged `deliver_to_ipad`, and the `rules_profile`. Drafts are
+  always machine-extracted → **human review before use**.
+- **How the documents reach the model** (2026-11-02): PDFs are sent as PDFs (the model sees tables
+  and scanned pages) up to `LAB_PDF_MAX_PAGES` (100) / `LAB_PDF_MAX_BYTES` (32 MB) per ingest; past
+  that, and for web pages, the pypdf/HTML text goes instead, shared fairly within
+  `LAB_MAX_DOC_CHARS`. The reply is constrained to `extract.RACE_SCHEMA` (structured outputs,
+  streamed), with a JSON check + one retry as backstop. Nothing is dropped silently: a link that
+  won't download, a trimmed or unreadable document, or a PDF read only as text becomes the first
+  "Check these" item in the review; failures come back as one plain sentence (what, and what to do).
+- **Runs as a background job** (2026-11-02; same pattern as the Debrief): the page POSTs
+  `/api/ingest/run` (URLs) or `/api/ingest/run/upload` (files) → `{job_id}`, then polls
+  `/api/ingest/run/status?job_id=…` for a progress line ("Reading documents… / Building the course
+  and the checklist… / Course done.") and finally the draft or the plain error. One ingest at a
+  time (a second start gets a plain "already running"). A Lab restart mid-job answers "Ingest was
+  interrupted. Run it again." The one-request `/api/ingest` + `/api/ingest/upload` stay for scripts.
 - **Review + sign-off**: the Races tab renders an inline-editable review form (header, marks,
   requirements, rules & scoring, tracker, provenance) bound to the in-memory definition; **Save**
   (`POST /api/races`) persists to the `lab_ingested` volume (overrides the bundled seed) +
@@ -112,6 +126,12 @@ scenarios share a mask); `POST /api/optimize` takes `avoid_land` (default true) 
 `obstacles` summary; the Gameplan map overlays coast/islands/zones. Rounding **side** is enforced
 for islands that are marks of the race (2f below); plain hazards stay avoided either side.
 Tunables `GEO_RES_DEG` / `GEO_ISLAND_NM` / `GEO_MARK_CARVE_NM`.
+Each route step is checked against the mask exactly (`shared/gridwalk.py`: every cell the segment
+touches, corners included; #145), the same walk the Pi's GPS export uses.
+**A shoreline that doesn't load is never open water (#51):** the field is marked
+`land = "failed"` (not cached, retried next run), the route comes back `degraded` with "Shoreline
+didn't load…" as its first warning and `obstacles.land = "failed"`; the playbook and the Deploy
+chart refuse to build. `obstacles.land` is `ok` / `failed` / `off` (avoid_land unchecked).
 
 ### Higher-res coastline backstop — GSHHG full-res
 
@@ -567,6 +587,10 @@ venue in the past** — forecast-vs-observed verification, not model agreement. 
 seasonal window across many years, **recency-weighted** (t½ 8 y) so recent model versions lead while
 deep history still counts; the better a model has done here, the more it counts (and its persistent
 bias is removed before blending). Automatic + always shown in the GamePlan **Model skill** panel.
+The playbook's field is weighted the same way (`routerun.venue_skill`, #51).
+A model counts only within one frame step of its own frames (HRRR's last frame no longer blends
+into hour 40). Past every model's end the last frame stands in, flagged `held`; the route is kept
+but marked degraded: "Forecast ends before the finish: last hours use the final forecast." (#51)
 - **Data:** observed = METAR (Iowa State ASOS) + NDBC buoys; forecast = Open-Meteo Historical Forecast
   (2021+) plus a deep GRIB pipeline — HRRR archive (2015+) + GEFS Reforecast v12 (2005+) via `.idx`
   byte-range subsetting (`app/deepfc.py`), run offline via the "Deepen history" backfill.

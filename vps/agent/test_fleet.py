@@ -251,6 +251,18 @@ d_tod, b_tod, _ = F._corrected_delta(tod_them, "time-on-distance", True, 30.0, 3
                                      course_nm=200.0)
 check("ToD full basis labeled", b_tod == "full")
 
+# ToD remaining (no gun known, #161): allowance over ONE common distance, so a real lead counts.
+# Equal GPH 600, equal 6 kn, they are 1 nm closer to the finish (60 vs 61 nm) → 10 min ahead.
+d_r, b_r, _ = F._corrected_delta({"orc_gph": 600}, "time on distance", True, 60.0, 61.0,
+                                 6.0, 6.0, 1.0, 600.0)
+print(f"    ToD remaining, 1 nm lead at equal GPH: delta={d_r} basis={b_r}")
+check("ToD remaining keeps a 1 nm lead (-600 s, not a tie)", b_r == "remaining"
+      and d_r is not None and abs(d_r - (-600.0)) < 1)
+# same position, they rate slower (GPH 660 vs 600): they earn 60 s/nm over our 30 nm → -1800 s
+d_g, _, _ = F._corrected_delta({"orc_gph": 660}, "time on distance", True, 30.0, 30.0,
+                               6.0, 6.0, 1.0, 600.0)
+check("ToD remaining allowance gap over the common distance (-1800 s)", abs(d_g - (-1800.0)) < 1)
+
 print("H) gun resolver — SIs beat the session; session flagged approximate")
 gf, src, approx = F._gun_resolver({"division_starts": {"B": 1000.0, "I": 1600.0}})
 check("division_starts exact per division", src == "division_starts"

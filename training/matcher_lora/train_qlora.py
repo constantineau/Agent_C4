@@ -5,65 +5,88 @@ no Ollama ADAPTER, the runtime loads one q4_K_M blob).
 
     python3 train_qlora.py --data matcher_train.jsonl --out ./out
     # then convert + quantize (llama.cpp) and `ollama create` on the Orin — see README.md
+
+--max-len is the SERVING context window (pi/orin/copilot/config.py LLM_NUM_CTX, Ollama's
+OLLAMA_CONTEXT_LENGTH / Modelfile num_ctx): train on what the Orin can actually hold. A row longer
+than that is SKIPPED, never truncated — truncating from the right cut the assistant turn off, and
+a row with no assistant marker left was trained with its whole prompt unmasked (#54).
 """
 
 import argparse
 import json
 
-import torch
-from datasets import Dataset
-from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
-from transformers import (AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig,
-                          DataCollatorForLanguageModeling, Trainer, TrainingArguments)
-
 BASE = "Qwen/Qwen2.5-7B-Instruct"
 ASSISTANT_MARK = "<|im_start|>assistant"      # chatml — loss only on the assistant turn
+SERVE_NUM_CTX = 6144                          # keep equal to copilot config.LLM_NUM_CTX
+
+
+def mask_row(ids, mark_ids, max_len):
+    """input_ids -> {input_ids, labels, attention_mask} with everything up to and including the
+    LAST assistant marker masked (-100), or None when the row is longer than max_len or has no
+    assistant marker (nothing safe to train on)."""
+    if len(ids) > max_len:
+        return None
+    for i in range(len(ids) - len(mark_ids), -1, -1):
+        if ids[i:i + len(mark_ids)] == mark_ids:
+            labels = [-100] * (i + len(mark_ids)) + list(ids[i + len(mark_ids):])
+            return {"input_ids": list(ids), "labels": labels, "attention_mask": [1] * len(ids)}
+    return None
 
 
 def load_rows(path, tok, max_len):
     """Tokenize full chat transcripts; mask everything before (and including) the assistant
-    marker so the model is trained ONLY to produce the target JSON, not to parrot the prompt."""
-    rows = []
+    marker so the model is trained ONLY to produce the target JSON, not to parrot the prompt.
+    Returns (rows, skipped)."""
+    rows, skipped = [], 0
     mark_ids = tok(ASSISTANT_MARK, add_special_tokens=False)["input_ids"]
     for line in open(path):
         msgs = json.loads(line)["messages"]
         text = tok.apply_chat_template(msgs, tokenize=False)
-        ids = tok(text, truncation=True, max_length=max_len)["input_ids"]
-        labels = list(ids)
-        # find the LAST assistant marker (the system prompt itself contains no chatml tokens)
-        for i in range(len(ids) - len(mark_ids), -1, -1):
-            if ids[i:i + len(mark_ids)] == mark_ids:
-                for j in range(i + len(mark_ids)):
-                    labels[j] = -100
-                break
-        rows.append({"input_ids": ids, "labels": labels, "attention_mask": [1] * len(ids)})
-    return Dataset.from_list(rows)
+        row = mask_row(tok(text)["input_ids"], mark_ids, max_len)
+        if row is None:
+            skipped += 1
+            continue
+        rows.append(row)
+    return rows, skipped
 
 
-class Collator(DataCollatorForLanguageModeling):
-    def __init__(self, tok):
-        super().__init__(tok, mlm=False)
+def _collator(tok):
+    import torch
+    from transformers import DataCollatorForLanguageModeling
 
-    def torch_call(self, features):
-        max_len = max(len(f["input_ids"]) for f in features)
-        pad = self.tokenizer.pad_token_id
-        batch = {"input_ids": [], "labels": [], "attention_mask": []}
-        for f in features:
-            n = max_len - len(f["input_ids"])
-            batch["input_ids"].append(f["input_ids"] + [pad] * n)
-            batch["labels"].append(f["labels"] + [-100] * n)
-            batch["attention_mask"].append(f["attention_mask"] + [0] * n)
-        return {k: torch.tensor(v) for k, v in batch.items()}
+    class Collator(DataCollatorForLanguageModeling):
+        def __init__(self, tok):
+            super().__init__(tok, mlm=False)
+
+        def torch_call(self, features):
+            max_len = max(len(f["input_ids"]) for f in features)
+            pad = self.tokenizer.pad_token_id
+            batch = {"input_ids": [], "labels": [], "attention_mask": []}
+            for f in features:
+                n = max_len - len(f["input_ids"])
+                batch["input_ids"].append(f["input_ids"] + [pad] * n)
+                batch["labels"].append(f["labels"] + [-100] * n)
+                batch["attention_mask"].append(f["attention_mask"] + [0] * n)
+            return {k: torch.tensor(v) for k, v in batch.items()}
+
+    return Collator(tok)
 
 
 def main():
+    import torch
+    from datasets import Dataset
+    from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+    from transformers import (AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, Trainer,
+                              TrainingArguments)
+
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", required=True)
     ap.add_argument("--out", default="./out")
     ap.add_argument("--epochs", type=float, default=2.0)
     ap.add_argument("--lr", type=float, default=1e-4)
     ap.add_argument("--rank", type=int, default=32)
-    ap.add_argument("--max-len", type=int, default=2048)
+    ap.add_argument("--max-len", type=int, default=SERVE_NUM_CTX,
+                    help="tokens; the serving context window (LLM_NUM_CTX)")
     ap.add_argument("--batch", type=int, default=4)
     ap.add_argument("--grad-accum", type=int, default=4)
     args = ap.parse_args()
@@ -83,10 +106,12 @@ def main():
                         "gate_proj", "up_proj", "down_proj"]))
     model.print_trainable_parameters()
 
-    ds = load_rows(args.data, tok, args.max_len)
-    print(f"{len(ds)} examples")
+    rows, skipped = load_rows(args.data, tok, args.max_len)
+    ds = Dataset.from_list(rows)
+    print(f"{len(ds)} examples ({skipped} skipped: longer than {args.max_len} tokens or no "
+          "assistant turn)")
     Trainer(
-        model=model, train_dataset=ds, data_collator=Collator(tok),
+        model=model, train_dataset=ds, data_collator=_collator(tok),
         args=TrainingArguments(
             output_dir=args.out + "/ckpt", num_train_epochs=args.epochs,
             per_device_train_batch_size=args.batch, gradient_accumulation_steps=args.grad_accum,

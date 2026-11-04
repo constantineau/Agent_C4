@@ -39,7 +39,7 @@ def use_series(tws_fn, twd_fn, minutes_covered=180, step_s=60):
 # --- steady breeze → available, ~0 rates, "steady" -----------------------------------------------
 print("steady:")
 use_series(lambda a: 12.0, lambda a: 200.0)
-r = trend.get_trend()
+r = trend.get_trend(now=NOW)
 print("  ", r.get("read"))
 check("available", r["available"])
 check("~0 tws rate", abs(r["h1"]["tws_rate_kn_per_hr"]) < 0.2)
@@ -49,7 +49,7 @@ check("both windows present", "h1" in r and "h3" in r)
 # --- building 2 kn/hr + walking right 8°/hr ------------------------------------------------------
 print("building + right:")
 use_series(lambda a: 12.0 - 2.0 * a / 3600, lambda a: 220.0 - 8.0 * a / 3600)
-r = trend.get_trend()
+r = trend.get_trend(now=NOW)
 print("  ", r.get("read"))
 check("tws rate ~ +2 kn/hr (1h)", abs(r["h1"]["tws_rate_kn_per_hr"] - 2.0) < 0.4)
 check("twd rate ~ +8°/hr, right", r["h1"]["twd_dir"] == "right"
@@ -63,7 +63,7 @@ check("read states from→to degrees",
 # --- fading + walking left across the 0/360 wrap -------------------------------------------------
 print("fading + left across north:")
 use_series(lambda a: 15.0 + 1.5 * a / 3600, lambda a: (10.0 + 12.0 * a / 3600))
-r = trend.get_trend()
+r = trend.get_trend(now=NOW)
 print("  ", r.get("read"))
 check("tws rate ~ −1.5 kn/hr", abs(r["h1"]["tws_rate_kn_per_hr"] + 1.5) < 0.4)
 check("left across the wrap (no ±360 blowup)", r["h1"]["twd_dir"] == "left"
@@ -72,20 +72,98 @@ check("left across the wrap (no ±360 blowup)", r["h1"]["twd_dir"] == "left"
 # --- thin archive (20 min of data) → honest na ---------------------------------------------------
 print("thin archive:")
 use_series(lambda a: 12.0, lambda a: 200.0, minutes_covered=20)
-r = trend.get_trend()
+r = trend.get_trend(now=NOW)
 print("  ", r.get("note"))
 check("na when window not half-covered", not r["available"])
 
 # --- no data at all ------------------------------------------------------------------------------
 trend.datasource.active = lambda: type("S", (), {"series": lambda self, p, m: []})()
-r = trend.get_trend()
+r = trend.get_trend(now=NOW)
 check("na with an empty archive", not r["available"])
 
 # --- 1h-only coverage: h3 absent, h1 present -----------------------------------------------------
 print("1h coverage:")
 use_series(lambda a: 10.0 + 1.0 * a / 3600, lambda a: 200.0, minutes_covered=70)
-r = trend.get_trend()
+r = trend.get_trend(now=NOW)
 check("h1 present, h3 absent", r["available"] and "h1" in r and "h3" not in r)
+
+# --- wind stopped 90 min ago (#163) → na, not an old window passed off as "the last 1 h" -----------
+# Archive covers [now-180, now-90 min]. Anchored to its own newest sample, the 1 h window used to be
+# [now-150, now-90] and read "wind building ... over the last 1 h". `now` is injected, never the
+# wall clock.
+print("wind stopped 90 min ago:")
+
+
+def use_series_ending(end_age_s, tws_fn, twd_fn, minutes_covered=180, step_s=60):
+    """Like use_series, but the newest sample is end_age_s old (the instrument went quiet)."""
+    def series(self, path, minutes):
+        rows = []
+        for age in range(int(end_age_s), int(minutes_covered * 60), step_s):
+            t = NOW - age
+            if path == "environment.wind.speedTrue":
+                rows.append((t, tws_fn(age) * KN))
+            else:
+                rows.append((t, (twd_fn(age) % 360) * DEG))
+        rows.sort()
+        return rows
+    trend.datasource.active = lambda: type("S", (), {"series": series})()
+
+
+use_series_ending(90 * 60, lambda a: 12.0 - 2.0 * a / 3600, lambda a: 220.0)
+r = trend.get_trend(now=NOW)
+print("  ", r.get("note"), "|", r.get("read"))
+check("na when the newest wind sample is 90 min old", not r["available"])
+check("no 1 h / 3 h window served", "h1" not in r and "h3" not in r)
+check("no matcher signal", r.get("tws_trend_kn_per_hr") is None
+      and r.get("twd_trend_deg_per_hr") is None)
+check("says no live wind", "no live wind" in (r.get("note") or "").lower())
+check("as_of = newest sample time", r.get("as_of") == NOW - 90 * 60)
+
+# --- just went quiet (1 min) → still live, windows anchored to now --------------------------------
+print("wind 1 min old:")
+use_series_ending(60, lambda a: 12.0 - 2.0 * a / 3600, lambda a: 220.0)
+r = trend.get_trend(now=NOW)
+check("available with a 1-min-old newest sample", r["available"])
+check("as_of exposed on a live read", r.get("as_of") == NOW - 60)
+check("rate still ~ +2 kn/hr", abs(r["h1"]["tws_rate_kn_per_hr"] - 2.0) < 0.4)
+
+# --- mixed freshness: TWS quiet 10 min, TWD still live (10-s samples) ------------------------------
+# Freshness used to be checked across both channels together, so a live TWD kept a stale TWS rate
+# (built from 10-15 min-old samples in the tail bucket) on the matcher signal.
+print("TWS quiet 10 min, TWD live:")
+
+
+def use_series_mixed(tws_end_age_s, twd_end_age_s, tws_fn, twd_fn, minutes_covered=180, step_s=10):
+    def series(self, path, minutes):
+        speed = path == "environment.wind.speedTrue"
+        end = tws_end_age_s if speed else twd_end_age_s
+        rows = []
+        for age in range(int(end), int(minutes_covered * 60), step_s):
+            t = NOW - age
+            rows.append((t, tws_fn(age) * KN if speed else (twd_fn(age) % 360) * DEG))
+        rows.sort()
+        return rows
+    trend.datasource.active = lambda: type("S", (), {"series": series})()
+
+
+use_series_mixed(600, 0, lambda a: 12.0 - 2.0 * a / 3600, lambda a: 220.0 - 8.0 * a / 3600)
+r = trend.get_trend(now=NOW)
+print("  ", r.get("note"), "|", r.get("read"))
+check("still available on live TWD", r["available"])
+check("no stale TWS matcher signal", r.get("tws_trend_kn_per_hr") is None)
+check("no TWS rate in the 1 h window", "tws_rate_kn_per_hr" not in r.get("h1", {}))
+check("TWD signal still live", r.get("twd_trend_deg_per_hr") is not None)
+check("read doesn't quote a speed trend", "kn" not in (r.get("read") or ""))
+check("says no live wind speed", "no live wind speed" in (r.get("note") or "").lower())
+
+print("TWD quiet 10 min, TWS live:")
+use_series_mixed(0, 600, lambda a: 12.0 - 2.0 * a / 3600, lambda a: 220.0 - 8.0 * a / 3600)
+r = trend.get_trend(now=NOW)
+print("  ", r.get("note"), "|", r.get("read"))
+check("available on live TWS", r["available"])
+check("no stale TWD matcher signal", r.get("twd_trend_deg_per_hr") is None)
+check("TWS signal still live", r.get("tws_trend_kn_per_hr") is not None)
+check("says no live wind direction", "no live wind direction" in (r.get("note") or "").lower())
 
 print("PASS" if ok else "FAIL")
 raise SystemExit(0 if ok else 1)

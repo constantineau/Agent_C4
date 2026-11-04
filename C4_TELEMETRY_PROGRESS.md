@@ -1,7 +1,103 @@
-# C4 telemetry consolidation — progress (updated 2026-10-30)
+# C4 telemetry consolidation — progress (updated 2026-11-03)
 
 Goal (Cole): **lose no telemetry**, and **copy all telemetry off the Pi to the VPS**.
 Deletion from the boat is allowed only *after* an off-boat copy is sha256-verified.
+
+## ⏸ PICK UP HERE — 2026-11-04 (dev @ db5ee63+, main @ 405be7f)
+
+**Cole's decision 2026-11-04: deploy engine/copilot fixes to the boat REMOTELY AS THEY MERGE** (not one spring batch). Each deploy: backup + rollback images first, Orin OLLAMA_CONTEXT_LENGTH=6144 before the first copilot deploy (#208). Fixes can't be checked against live wind/GPS on the hard — only that services come up healthy.
+**The c4-prep-queue job HUNG 2026-11-03 19:47Z** on #212: the systemd unit has no GitHub login, so `git push` failed and prep.sh looped forever waiting for the head (log 5 MB of gh auth errors). Stopping it was blocked by the classifier — Cole: `! systemctl stop c4-prep-queue; pkill -f prep.sh`. Don't use the unit again without GH auth in its environment.
+**MERGED 2026-11-04 (Cole: "merge all"), squash, dev @ 180f2bd:** #219 #211 #212 #213 #215 #216 #218 #214 #217 — each Codex-clean at its head. Fix rounds: #213 ×2, #214, #217, #218 ×2 (also made the live query fast: 60 s timeout → 0.9 s + 7 ms on dev DB).
+**#220 MERGED** after 4 fix rounds (route can no longer count a leg reached with no wind). All ten wave-3 PRs are in.
+**Follow-ups to file:** #220 minors (closing-board borrowed wind not counted in wind_filled; vps/lab/README.md:104 still documents the constant-wind fallback); #215 minor (the 1 s pairing test passes at zero tolerance); #218 minor (cloud preferred() 45 s relative gap vs /conditions 45 s wall clock can pick different sources).
+**NOT DEPLOYED YET:** classifier blocked `docker compose up --build --force-recreate agent lab` (rollback tags would be :pre-20261104). Needs Cole to run it or say "you do it" explicitly. Then boat: Pi engine rebuild (#209 #213 #214 #218), Orin copilot (#207 #208 #217) after OLLAMA_CONTEXT_LENGTH=6144 on the Orin (needs sudo). Lab: #216 needs RECREATE.
+
+## ⏸ PICK UP HERE — 2026-11-03 EVENING (dev @ db5ee63, main @ 405be7f)
+
+**C4 is still OUT OF THE WATER UNTIL SPRING.** Shore work only.
+
+**Wave 2 copilot/engine PRs all merged:** #209 (engine store lock + rollback, Fixes #162), #208 (matcher eval, Part of #54), #207 (copilot guardrails, Fixes #53 #176). None deployed. #207 and #208 each took several Codex rounds; every fix has a regression test that fails on the old code.
+- #207 final shape: the LLM can only RAISE a dashboard tile; a raise is gone for good once the engine moves that tile, including moves while the LLM was answering (per-tile change counter, App.track). Numbers in LLM text are grounded WITH units, against engine facts / playbook / tool results only (not the system prompt or crew question), per tile for notes and reasons. The model's play-match `why` never reaches the crew.
+- #208: --resume refuses results from a different run (mode, dry, model, corpus sha256); replies are type-checked against _STRATEGY_SCHEMA; malformed play matches count as violations, never a crash.
+- **Left open:** #210 (ground.py: unit-less engine JSON values ground any unit, so give engine fields units; m/s parsed as m). Minor on #208 (resume fingerprint lacks server URL/settings), minor on #209 (datasource_onboard session_start nested commit), both noted on the PRs.
+- **Deploy reminders (spring):** the copilot needs Orin OLLAMA_CONTEXT_LENGTH=6144 before it ships (#208). Engine image rebuild for #209. Fix #210 before the copilot deploy if possible.
+
+**Damaged archives (Cole, 2026-11-03): NOT valuable — do not copy off or salvage** archive.corrupt-20261103T125947.db or archive.corrupt-20261028T154237.db (a copy-off was started and stopped; partial VPS copy removed). **All three damaged archives (Jul 18, Oct 28, Nov 3) DELETED from the Pi on Cole's go, 2026-11-03 ~19:00Z; card now 10% used (99 GB free).** Everything important was already on the VPS (Jul 18 + Aug 30–Sep 2 full-res, plus the daily uplink) and in the nightly GCS backup. Measured boat → VPS copy-off: ~0.6 MB/s (~5 Mbit/s). The SD card (unbranded "ASTC", 3 corruptions, no undervoltage in 10 days) is the likely cause: swap for a high-endurance card or USB SSD before spring.
+**In flight (2026-11-03 ~19:10Z) — IF THE SESSION DIED, RESUME HERE:** six agents were mid-work; none had committed or pushed yet. Their work is uncommitted in these worktrees (all from origin/dev):
+| Worktree /mnt/data/c4-wt/… | Task | Notes |
+|---|---|---|
+| w3-opus-imports | DONE → PR #216 queued (Bayview on Opus 5.5: correct, 168 s, ~$1.30). Lab race imports use a separate chain ANTHROPIC_IMPORT_MODEL_CHAIN (default claude-opus-5-5,claude-fable-5-1); everything else stays on ANTHROPIC_MODEL_CHAIN | Cole said "Opus for imports". Needs ONE live Bayview import on Opus 5.5 (≤ $5, never written to the live Lab DB) before PR. Merge needs Lab container RECREATE. |
+| w3-159-tactics-side | Closes #159 | DONE → PR #211, in the CI+Codex queue |
+| w3-160-rival-offset | Closes #160 | DONE → PR #213, queued |
+| w3-161-tod-delta | Closes #161 | DONE → PR #212, queued |
+| w3-163-wind-stale | Closes #163 | DONE → PR #214, queued |
+| w3-164-gps-loss | Closes #164 | DONE → PR #215, queued |
+| — | #166 | ALREADY FIXED by #189 (ce38c45); issue still open — close it (needs Cole OK) |
+| w3-167-wind-source | Closes #167 | DONE → PR #218, queued (Jul 18 had 2 TWD publishers — bug was live) |
+| w3-203-route-followups | Closes #203 | DONE → PR #220, queued (all 5 items fixed) |
+| w3-210-ground-units | Closes #210 | DONE → PR #217, queued |
+CI+Codex queue (systemd unit c4-prep-queue, survives the session): append `PR WORKTREE` to /root/c4-ops/prep-queue.txt; results in /root/c4-ops/prep-chain.log; restart with `systemd-run --unit=c4-prep-queue --collect -p StandardOutput=append:/root/c4-ops/prep-chain.log /root/c4-ops/prep-queue.sh` if it idled out.
+To resume: `git -C <worktree> status` / `diff`, finish each (respawn an agent with the brief above + tools/agents/agent-rules.md), then per PR: push, open PR to dev, `bash /root/c4-ops/prep.sh <pr> <worktree>` SERIALLY (CI + Codex), fix confirmed findings, Cole merges. Agents must not run `make ci` in parallel (shared sr33-ci-* tags). Next after these: #166, #167, #203, #210.
+**Still open from the block below:** rest of map #188 (#159–#161, #163, #164, #166, #167; #203).
+
+## ⏸ PICK UP HERE — 2026-11-03 MIDDAY (dev @ 3a9fdd2, main @ 405be7f)
+
+**C4 is still OUT OF THE WATER UNTIL SPRING.** Shore work only.
+
+**Done since the last block:** #197 #198 #199 #205 merged; Lab + agent rebuilt (rollback tags :pre-20261103). **Nightly Lab backup LIVE**: c4-lab-backup.timer, gs://constantineau-c4-nightly/vps-nightly, first run 9 artifacts 1.1 GB, restore drill 56/56 (sr33_dev 87 tables, 5.28 M rows). The failed first set (backup-2026-11-03T003759Z) prunes itself after 24 h.
+**#206 merged + DEPLOYED to the Pi 12:22Z** (Cole's go): compose passes ARCHIVE_CHECK_WAL_CAP_MB, default 2048. The old 256 MB cap stopped every hourly live archive check after ~18 min, so none had ever finished (WAL grows ~10–14 MB/min during a check; 20 GB archive needs ~65 min). Only the archiver was recreated; old compose in ~/deploy-backups/walcap-20261103T122258Z on the Pi. The check FINISHED for the first time at 12:59Z and found the live archive DAMAGED (btreeInitPage error 11 on ~8+ pages of tree 2). The archiver did what it is built to do: moved it aside to **archive.corrupt-20261103T125947.db** (20.2 GB + 482 MB WAL, covers 2026-10-28 → 11-03) and started a fresh archive.db; recording continued with no gap worth noting. Third corruption on this card (Jul 18, Oct 28, Nov 3). **Next (needs Cole's go, boat side):** copy the file off to the VPS (sha256-verified) and run pi/archiver/tools/salvage.py on the copy; look for the cause (SD card health / power) before spring.
+
+**Open PRs (wave 2), need CI + Codex, then Cole's "merge N":**
+1. **#207** copilot LLM guardrails (Fixes #53, #176): shared number check (ground.py), LLM can only raise a tile, never lower; iPad raise ends 180 s after the snapshot; /strategy keeps the engine's assessment + rationale. Left: engine_client off-boat fallback note in #53.
+2. **#208** matcher eval (Part of #54): held-out eval, blind mode gates, one prompt renderer (shared/strategy_render.py) for boat/eval/training, context 6144. **Do not deploy the copilot until the Orin has OLLAMA_CONTEXT_LENGTH=6144** (else most LLM calls fall back). Then re-measure stock + tuned blind on the Orin; retrain if tuned fails.
+3. **#209** engine store lock + rollback (Fixes #162): one re-entrant lock + `with conn:`; failed course loads now roll back. Engine image rebuild only.
+CI + Codex for 207→208→209 run serially in a detached chain: **/root/c4-ops/prep-chain.log** (CI logs /root/c4-ops/ci<PR>.log). Check it first; re-run `bash /root/c4-ops/prep.sh <pr> <worktree>` for any that didn't finish.
+
+**Open question for Cole — Opus for the Lab's AI:** Opus 5 passed Bayview on 2026-11-03 (courses, roundings, distances, start, gate, date all match; 232 s, ~$1.70 vs Fable $3.74). Island marks left blank as "needs review" (docs give none — correct). ANTHROPIC_MODEL_CHAIN covers EVERY Lab AI call (synthesis, debrief too), so the pick is: Opus first for imports only (small PR, recommended) vs everything (settings only, untested on playbooks/debriefs) vs keep Fable. Opus 5.5 is also out, 20% cheaper than Opus 5. Draft saved in the old session scratchpad only.
+
+**Next after that:** rest of map #188 — engine correctness #159–#161, #163, #164, #166, #167 (after #209 lands); #203 Lab northerly + robustness warnings. Spring: Lab Deploy push, Garmin dockside check, practice sail.
+**Gotcha:** a `while pgrep -f "prep.sh N"` waiter matches its own command line and waits forever — use one serial script.
+
+## ⏸ PICK UP HERE — 2026-11-02 LATE SESSION END (dev @ e56fd0c, main @ 405be7f)
+
+**C4 is OUT OF THE WATER UNTIL SPRING.** Shore work only. Boat steps (Lab Deploy push, Garmin dockside check, practice sail) are spring items.
+
+**Merged to dev today (wave 2, Cole's "merge N"):** #201 timing tests, #195 backfill/alert tests (+ alerts newest first, engine read error = "No live data", silent depth sensor holds the alarm), #196 hollow tests + archiver kept-window fix (#34 first half) + attitude "unknown", #200 coastline failure degrades routes + exact obstacle check + "Forecast ends before the finish" warning (closes #51, #145). Wave-1 issues closed on map #188 (it opens with a "Where we are" block).
+**CI is now a REQUIRED check on dev and main** (admins exempt, so progress pushes still work).
+**Lab + VPS agent NOT rebuilt yet** for today's merges — do it after the open PRs land, then check the Lab is up.
+
+**#204 MERGED (23:21Z, by Cole's account) — dev CI is GREEN again** (the reroute test time bomb).
+
+**Open PRs, all Codex-clean (only ticketed leftovers), need Cole's "merge N":**
+1. **#198** Lab nightly backup + tested restore + boat copy-off (#180/#181). CI green at 0be7439. Leftovers in **#202**. After merge Cole enables it: tools/backup README (create gs://constantineau-c4-nightly Standard, install units, first run, restore drill, enable timer).
+2. **#197** honest-wind routes + Cole's picks (forecast >6 h refused, gap-fill ≤10 nm with too-old cells dropped first, 90 s re-route limit; old forecast for the router only — drift//forecast say unavailable). Head f812d35, CI was running. Last minor (max-age below cache TTL) noted on #203.
+3. **#199** robust Lab ingest + background job (status polling, results kept per job id) + model chain claude-fable-5-1 → claude-opus-5 (default in compose.dev.yml; .env doesn't set it). Head 827a06e, CI was running. Live: SORC 3/3 on Fable 5.1 (110–151 s, $1.29–1.50), Opus 5 fallback 99 s $0.58, Bayview 301 s $3.74 (why the background job is needed). Lab container must be RECREATED (not just rebuilt) to pick up the chain.
+Agent IDs from this session can't be messaged from a new one: spawn fresh agents in the same worktrees (/mnt/data/c4-wt/<branch>).
+
+**Cole's decisions today (all "your picks"):** alerts newest first; read error = no live data; attitude missing = unknown; CI required; shoreline failure keeps the route with "Don't use it"; past-forecast routes = degraded; forecast >6 h old refused; gap-fill ≤10 nm; 90 s re-route limit; Lab 12 kn northerly fixed (todo, #203, after #200 — now merged, so start it); ingest PDFs as PDFs, background job, broken link = build + flag, models Fable 5.1 / Opus 5; nightlies in a separate bucket with pruning, daily dump, no encryption, copy-off measured in spring.
+**Lab Anthropic credit was topped up 2026-11-02** (it ran out mid-session).
+
+**Next:** Cole merges #198, #197, #199 (CI green first); Lab + VPS agent rebuild; #203 Lab northerly + robustness-run warnings; then the rest of map #188 (engine correctness: #162 shared SQLite connection first, #159–#161, #163, #164, #166, #167; copilot LLM guardrails #53, #176, #54).
+**Gotchas:** parallel agents' `make ci` clobber the shared `sr33-ci-*` images — use private tags or trust GitHub CI; Codex reviews right after a push can read the old head (wait a few seconds); run codex-review.sh one at a time from the main checkout.
+
+## ⏸ PICK UP HERE — 2026-11-02 SESSION END (dev = main @ 405be7f)
+
+**Done this session:**
+- System review map #188 (children #146–#187). Wave-1 fixes merged in order #194 (dated route test), #189 (race-time gate, Race/Practice LOG), #193 (archiver robustness), #192 (chartplotter live waypoint/XTE + NMEA 2000 identity), #191 (collision watch: own MMSI, all contacts, OFF states). Earlier: #137, #138 (Orin optimizer), #142, #143 (Re-route now button), #144, #190 (CI gate).
+- C4's MMSI 316053364 in `vps/lab/boats/sr33.json` and the Pi `.env` (`OWN_MMSI`).
+- **BOAT DEPLOYED 2026-11-02 13:28Z** (stamp 20261102T132822Z): Pi all 6 services rebuilt/recreated (log caps), `sr33-can0` reinstalled (restart-ms 100); backup `~/deploy-backups/full-20261102T132822Z`, rollback images `:pre-20261102T132822Z`. Orin copilot updated (now cable + loopback only; backup `~/pre-pull-backup/20261102T132822Z`). Orin `~/plume-venv` created; `sr33-orin-reroute` enabled (idle); `sr33-orin-plume.timer` enabled (~85 MB/day over Starlink; Cole chose on). VPS Lab + agent rebuilt (rollback `:pre-20261102`), replay site restarted.
+- Verified after deploy: archiver recording; n2kout on the bus (11 peers, requests to us > 0, ERROR-ACTIVE, no send errors); copilot reaches the engine over the cable; Pi reaches the re-route service; one manual plume pass pushed 6 models in 77 s.
+- VPS: Docker + containerd moved to `/mnt/data/var-lib` (bind mounts in fstab, systemd `RequiresMountsFor`); data disk grown to 500 GB; root disk 98% → 34%.
+
+**2026-11-02 later:** C4 is OUT OF THE WATER UNTIL SPRING (Cole). Steps 1-3 below are spring items at the boat. The 11 issues wave 1 fixed but GitHub left open are closed, and map #188 now opens with a "Where we are" block. Next on shore: wave 2, Cole's pick still owed.
+
+**Next, in order:**
+1. Lab Deploy tab: one Push (course definition, chart, boat profile) — the Re-route button needs it aboard. Playbook also loads only this way now (the Orin ignores its old file: "Playbook not confirmed").
+2. Dockside shakedown with power on: Garmin checklist in `pi/n2kout/README.md` (Device List shows "SR33 C4 Navigator", data sources, XTE/waypoint fields, route line). Also check GPS fix and AIS link (both stale/down on the hard).
+3. Practice sail.
+4. Later waves from #188: copilot grounding / left-right variant (#53), LLM turning tiles green, 2048-token context (#54), coastline-fail silent land routes (#51), invented wind / mixed sources / tack labels, dead-sensor green (#46), shared SQLite connection (#162), backups (#180, #181), deploy drift, router corner gap (#145). Small follow-ups on #184.
+
+**Open questions for Cole:** pace vs. plan usage; whether to write the one-page Garmin dock checklist.
 
 ## ⏸ PICK UP HERE — 2026-10-31 (dev @ fcf7edf)
 

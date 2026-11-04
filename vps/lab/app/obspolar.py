@@ -19,6 +19,7 @@ import os
 import time
 
 from . import monitor
+from . import atomicio
 from . import track as T
 
 CACHE = os.path.join(os.path.dirname(os.environ.get("LEARNING_DB", "/srv/learning/learning.db")),
@@ -226,8 +227,5 @@ def build(force=False):
             return {"cells": [], "races": [], "configs": [], "tws_buckets": [],
                     "error": f"agent unreachable and no cached build: {exc}"}
     os.makedirs(os.path.dirname(CACHE), exist_ok=True)
-    tmp = CACHE + ".tmp"
-    with open(tmp, "w") as fh:
-        json.dump(art, fh)
-    os.replace(tmp, CACHE)
+    atomicio.write_json(CACHE, art)
     return art

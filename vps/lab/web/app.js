@@ -417,29 +417,35 @@ async function extractDraft() {
   if (!Lab.sources.length && !files.length) { setMsg("Add a document URL or upload a PDF first.", "var(--warn)"); return; }
   if (!(await confirmLeave())) return;   // a new draft replaces whatever is in the editor
   btn.disabled = true; btn.textContent = "Reading…";
-  setMsg("⏳ Reading the documents. Takes up to 2 min. Keep this tab open.", "var(--accent)");
+  setMsg("⏳ Reading the documents. Takes 1 to 3 min.", "var(--accent)");
+  const fail = (t) => { setMsg("✕ " + t, "var(--bad)"); btn.disabled = false; btn.textContent = "Read documents →"; };
   try {
+    // a background job (POST starts it, then poll its status) — a big set outlasts one request
     let res;
     if (files.length) {
       const fd = new FormData();
       for (const f of files) fd.append("files", f);
-      res = await api("/api/ingest/upload", { method: "POST", body: fd });
+      res = await api("/api/ingest/run/upload", { method: "POST", body: fd });
     } else {
-      res = await apiPost("/api/ingest", { urls: Lab.sources });
+      res = await apiPost("/api/ingest/run", { urls: Lab.sources });
     }
-    const txt = await res.text();
-    let resp;
-    try { resp = JSON.parse(txt); }
-    catch (e) {
-      if (res.status === 502 || res.status === 504 || /^\s*</.test(txt))
-        setMsg("✕ Timed out. The documents were too big. Upload the PDF, or fewer documents.", "var(--bad)");
-      else setMsg("✕ Couldn't read the documents (server error " + res.status + ").", "var(--bad)");
-      btn.disabled = false; btn.textContent = "Read documents →"; return;
+    let start;
+    try { start = await res.json(); } catch (e) { return fail("Couldn't start reading (server error " + res.status + ")."); }
+    if (!start.ok) return fail(start.detail || start.note || "Couldn't start reading.");
+    let resp = null, misses = 0;
+    for (let i = 0; i < 600 && !resp; i++) {          // ~25 min ceiling, 2.5 s apart
+      await new Promise((r) => setTimeout(r, 2500));
+      let st;
+      try { st = await (await api("/api/ingest/run/status?job_id=" + encodeURIComponent(start.job_id))).json(); misses = 0; }
+      catch (e) { if (++misses >= 8) return fail("Lost contact with the Lab. Run it again."); continue; }
+      if (st.state === "running") {
+        const p = st.progress || [];
+        setMsg("⏳ " + (p.length ? p[p.length - 1] : "Reading the documents…") + " Keep this tab open.", "var(--accent)");
+      } else if (st.state === "error") return fail(st.error || "Ingest was interrupted. Run it again.");
+      else if (st.state === "done") resp = st.result || {};
     }
-    if (resp.detail) {   // the backend detail often already reads "ingest failed: …" — don't double it
-      const d = /^ingest failed/i.test(resp.detail) ? resp.detail : "Couldn't read the documents: " + resp.detail;
-      setMsg("✕ " + d, "var(--bad)"); btn.disabled = false; btn.textContent = "Read documents →"; return;
-    }
+    if (!resp) return fail("Still not done after 25 min. Run it again.");
+    if (resp.detail) return fail(resp.detail);   // already one plain sentence (what failed, what to do)
     Lab.draft = resp; Lab.editDef = resp.definition;
     Lab.editVal = { errors: resp.errors || [], warnings: resp.warnings || [] }; Lab.isDraft = true;
     const nm = (resp.definition && resp.definition.name) || "the race";
@@ -688,10 +694,24 @@ function detailProvenance(p) {
   const srcs = (p.sources || []).map((s) =>
     `<li><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.label)}</a>
      <span class="muted">${esc(s.retrieved || "")}</span></li>`).join("");
+  // what ingestion couldn't read: stays in "Check these" until dismissed here (then Save)
+  const notes = (p.ingest_notes || []).map((n, i) => n.acknowledged
+    ? `<li class="muted">${esc(n.text)} (dismissed)</li>`
+    : `<li>${esc(n.text)} <button class="mini" onclick="dismissIngestNote(${i})">Dismiss</button></li>`).join("");
   return `<div class="card"><h3>Sources &amp; notes</h3>
     <ul style="margin:0 0 10px;padding-left:18px">${srcs || '<li class="muted">No sources recorded.</li>'}</ul>
+    ${notes ? `<div class="muted" style="font-size:12px">Not fully read when ingested:</div>
+    <ul style="margin:0 0 10px;padding-left:18px">${notes}</ul>` : ""}
     <label class="muted" style="font-size:12px">SI status ${ein("provenance.si_status", p.si_status, "SI status")}</label>
     <label class="muted" style="font-size:12px">Review notes ${etxt("provenance.review_status", p.review_status, "review notes")}</label></div>`;
+}
+
+function dismissIngestNote(i) {
+  const n = Lab.editDef.provenance.ingest_notes[i];
+  n.acknowledged = true;
+  const v = Lab.editVal || {};
+  v.warnings = (v.warnings || []).filter((w) => w !== "Ingest: " + n.text);
+  paintDetail(); queueSyncDirty();
 }
 
 /* ---------- detail edit: structural mutations (repaint), then save / approve ---------- */
@@ -1908,6 +1928,7 @@ function renderPbResult(b) {
         <span class="pill">${b.variants.length} options · ${(b.provenance || {}).n_scenarios || "?"} scenarios</span>
       </div>
       ${pbBoatModelNote(b)}
+      ${pbWarnings(b)}
     </div>
     <div class="pb-variants">${b.variants.map((v) => pbVariantCard(v, v.id === b.recommended)).join("")}</div>
     ${pbPlaysSection(b)}
@@ -1961,6 +1982,15 @@ function pbPlayCard(p) {
   </details>`;
 }
 
+// the routes' own warnings (forecast ended, shoreline, …), plain, before anything is deployed (#51)
+function pbWarnings(b) {
+  const w = b.warnings || [];
+  if (!w.length) return "";
+  return `<div class="pill ${b.degraded ? "bad" : "warn"}" style="display:block;margin-top:8px;text-align:left">
+    <b>⚠ ${b.degraded ? "Check before you deploy" : "Notes"}</b>
+    <ul style="margin:4px 0 0 16px;padding:0">${w.map((x) => `<li>${esc(x)}</li>`).join("")}</ul></div>`;
+}
+
 function pbVariantCard(v, recommended) {
   const conf = v.route_confidence, cc = conf == null ? "" : conf >= 0.6 ? "ok" : conf >= 0.4 ? "warn" : "bad";
   const share = v.share == null ? "—" : Math.round(v.share * 100) + "%";
@@ -1972,6 +2002,7 @@ function pbVariantCard(v, recommended) {
       <span class="muted" style="font-size:12px">${v.total_hours ?? "—"} h${rng} · <span class="conf ${cc}">confidence ${conf ?? "—"}</span> · ${esc((v.supported_by || []).map((m) => m.toUpperCase()).join(", "))}</span>
     </div>
     <div class="pb-var-sum">${esc(v.summary || "")}</div>
+    ${(v.warnings || []).length ? `<div class="pb-row"><span class="pb-lbl">⚠</span><span>${(v.warnings || []).map(esc).join(" ")}</span></div>` : ""}
     ${pbSailPlanRow(v)}
     ${v.rationale ? `<div class="pb-row"><span class="pb-lbl">Why</span><span>${esc(v.rationale)}</span></div>` : ""}
     ${v.tradeoffs ? `<div class="pb-row"><span class="pb-lbl">Cost</span><span>${esc(v.tradeoffs)}</span></div>` : ""}
@@ -2169,7 +2200,8 @@ function paintDeploy() {
   const pbReady = pbs.length > 0;
   const fmtDate = (e) => e ? new Date(e * 1000).toISOString().slice(0, 16).replace("T", " ") + "Z" : "—";
   const pbOpt = (b) => `<option value="${esc(b.id)}" ${b.id === Dep.sel ? "selected" : ""}>${
-    esc((b.signed ? "🔒 " : "draft ") + (b.headline || b.id).slice(0, 60))} · ${b.n_variants} options · ${esc(fmtDate(b.generated_at))}</option>`;
+    esc((b.degraded ? "⚠ " : "") + (b.signed ? "🔒 " : "draft ") + (b.headline || b.id).slice(0, 60))} · ${b.n_variants} options · ${esc(fmtDate(b.generated_at))}</option>`;
+  const selPb = pbs.find((b) => b.id === Dep.sel) || {};
 
   document.getElementById("view").innerHTML = `<div class="opt">
     <div class="card">
@@ -2194,9 +2226,10 @@ function paintDeploy() {
       <h3>Lock in the playbook</h3>
       ${pbReady ? `
         <div class="opt-controls">
-          <label>Playbook <select id="depPb" onchange="Dep.sel=this.value" style="min-width:340px">${pbs.map(pbOpt).join("")}</select></label>
+          <label>Playbook <select id="depPb" onchange="Dep.sel=this.value; paintDeploy()" style="min-width:340px">${pbs.map(pbOpt).join("")}</select></label>
           <button id="depLock" onclick="depLockIn()" ${Dep.busy ? "disabled" : ""}>${lock ? "Re-lock selected" : "🔒 Lock in selected playbook"}</button>
-        </div>` : `<div class="muted">No frozen playbook yet. Build one in <a href="#gameplan">Gameplan</a> and freeze it. Then lock it in here.</div>`}
+        </div>
+        ${pbWarnings(selPb)}` : `<div class="muted">No frozen playbook yet. Build one in <a href="#gameplan">Gameplan</a> and freeze it. Then lock it in here.</div>`}
       ${lock ? `<div class="banner ok" style="margin-top:10px">🔒 Locked in: <code>${esc(lock.playbook_id)}</code>${lock.signed ? ` · signature <code>${esc(lock.signature)}…</code>` : " · <b>unsigned</b>"} · ${esc(fmtDate(lock.locked_at))}</div>` : ""}
     </div>
 
@@ -3815,7 +3848,9 @@ function optDegradedBanner(r) {
   const w = r.warnings || [];
   if (!w.length) return "";
   const cls = r.degraded ? "bad" : "warn";
-  const head = r.degraded ? "⚠ Weak forecast. Read this before using the route." : "⚠ Notes";
+  const landFailed = (r.obstacles || {}).land === "failed";
+  const head = landFailed ? "⚠ Land not checked. Don't use this route."
+    : r.degraded ? "⚠ Weak forecast. Read this before using the route." : "⚠ Notes";
   // when degraded, surface the common-error checklist inline so the cause is actionable (2.5)
   const checklist = r.degraded ? `<div style="margin-top:6px;font-size:12px;font-weight:400">
     <b>What usually fixes it:</b>
@@ -3831,6 +3866,7 @@ function optDegradedBanner(r) {
 
 function optObstacleNote(r) {
   const ob = r.obstacles || {};
+  if (ob.land === "failed") return '<div class="pill bad" style="display:block;font-size:12px;margin-top:6px;text-align:left">Shoreline didn\'t load. The route may cross land.</div>';
   if (!ob.active) return '<div class="muted" style="font-size:12px;margin-top:6px">Land avoidance is off. The route may cross land.</div>';
   const L = ob.layers || {};
   const steps = r.obstacle_steps_avoided || 0;

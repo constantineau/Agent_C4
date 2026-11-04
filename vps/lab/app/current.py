@@ -16,7 +16,8 @@ deterministically with ConstantCurrent (test_routing_currents.py).
 import bisect
 import math
 import os
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FTimeout
+import threading
+from concurrent.futures import TimeoutError as FTimeout
 
 ENABLED = os.environ.get("CURRENTS_ENABLED", "1").strip().lower() in ("1", "true", "yes", "on")
 STEP_H = float(os.environ.get("CURRENTS_STEP_H", "6"))         # sample cadence across the race window
@@ -31,6 +32,8 @@ _DOMAIN = (41.6, 46.37, -88.06, -79.70)   # s, n, w, e
 FILL = -9000.0                            # GLOFS land/missing sentinel is -99999
 
 _cache = {}
+_stuck = None          # the last read that timed out and may still be hung (#203)
+_fetch_lock = threading.Lock()   # check/start/join/update of `_stuck` as one step (Codex on #220)
 
 
 class CurrentField:
@@ -142,9 +145,13 @@ class GLOFSCurrent(CurrentField):
         return {"loaded": True, "source": self.source, "slices": len(self.slices), **self.meta}
 
 
-def _cycle_for(epoch):
-    """Freshest LMHOFS cycle (00/06/12/18 UTC) at or before `epoch - lag`."""
+def _cycle_for(epoch, now=None):
+    """Freshest LMHOFS cycle (00/06/12/18 UTC) at or before min(race start, now) - lag. Clamped to
+    `now` like wave.py: a race days out still gets the latest POSTED cycle (its forecast reaches
+    forward to the race), not a cycle near the start that doesn't exist yet (#51)."""
     import datetime
+    import time
+    epoch = min(float(epoch), time.time() if now is None else float(now))
     t = datetime.datetime.utcfromtimestamp(epoch - CYCLE_LAG_H * 3600)
     cyc = (t.hour // 6) * 6
     return t.replace(hour=cyc, minute=0, second=0, microsecond=0)
@@ -181,9 +188,40 @@ def _open_slice(url, bbox, want_axes):
 
 
 def _fetch(url, bbox, want_axes):
-    """Run one OPeNDAP slice with a hard timeout so a slow THREDDS can't stall the optimize."""
-    with ThreadPoolExecutor(max_workers=1) as ex:
-        return ex.submit(_open_slice, url, bbox, want_axes).result(timeout=FETCH_TIMEOUT)
+    """Run one OPeNDAP slice with a hard timeout so a slow THREDDS can't stall the optimize (#51).
+
+    The read is in netCDF4's C code (libcurl), which no Python socket timeout reaches and which
+    can't be interrupted, so it runs on a DAEMON thread: on a timeout we stop waiting, and a still
+    hung read never blocks the Lab's shutdown. The build stops launching slices after the first
+    timeout, so a dead THREDDS costs at most one stuck thread per build (Codex on #200). A
+    subprocess could be killed, but would have to ship every slice's arrays back.
+
+    Across builds (#203): while an earlier timed-out read is still hung, no new read starts, so
+    repeated Optimize/Playbook runs against a hung THREDDS never pile up more stuck threads. Reads
+    run one at a time, so two jobs racing can't both slip past that check."""
+    global _stuck
+    # one at a time (Codex on #220): concurrent Optimize and Playbook jobs both passed the check
+    # before either timed out, each started a read, and only the last stuck one stayed tracked
+    with _fetch_lock:
+        if _stuck is not None and _stuck.is_alive():
+            raise FTimeout("an earlier read is still hung")
+        box = {}
+
+        def work():
+            try:
+                box["v"] = _open_slice(url, bbox, want_axes)
+            except BaseException as exc:  # noqa: BLE001 — handed to the caller below
+                box["e"] = exc
+
+        t = threading.Thread(target=work, daemon=True, name="lmhofs-slice")
+        t.start()
+        t.join(FETCH_TIMEOUT)
+        if t.is_alive():
+            _stuck = t
+            raise FTimeout(f"no answer in {FETCH_TIMEOUT:.0f} s")
+        if "e" in box:
+            raise box["e"]
+        return box["v"]
 
 
 def build_currentfield(bbox, t_start, t_end, on_progress=None):
@@ -215,6 +253,7 @@ def build_currentfield(bbox, t_start, t_end, on_progress=None):
         return _cache[key]
 
     # pick the freshest posted cycle (step back a few if not yet available)
+    hung = False
     for back in range(CYCLE_FALLBACKS + 1):
         import datetime
         cyc = _cycle_for(t_start) - datetime.timedelta(hours=6 * back)
@@ -233,16 +272,24 @@ def build_currentfield(bbox, t_start, t_end, on_progress=None):
                 else:
                     u, v = _fetch(url, sub_bbox, False)
                 slices.append((tt, u, v))
-            except (FTimeout, Exception) as ex:   # noqa: B014 — any failure → skip this slice
+            except FTimeout:
+                # THREDDS isn't answering: stop here, don't stack up another stuck read per slice
+                log(f"currents: slice f{fhr:03d} timed out — THREDDS not answering, no more tries")
+                hung = True
+                break
+            except Exception as ex:   # any other failure → skip this slice
                 log(f"currents: slice f{fhr:03d} skipped ({type(ex).__name__})")
                 continue
         if slices and lons:
             meta = {"cycle": cyc.strftime("%Y-%m-%d %HZ"), "fhr_span": [int(round((times[0]-cyc_ep)/3600)),
                     int(round((times[-1]-cyc_ep)/3600))], "domain": "lmhofs"}
             field = GLOFSCurrent(lons, lats, slices, meta)
-            _cache[key] = field
+            if not hung:                      # a cut-short field is used once, not kept
+                _cache[key] = field
             log(f"currents: LMHOFS {len(slices)} slices from {cyc.strftime('%Y-%m-%d %HZ')}")
             return field
+        if hung:
+            break
         log(f"currents: cycle {cyc.strftime('%Y-%m-%d %HZ')} not available — stepping back")
     log("currents: no LMHOFS data for the window — routing without current")
     return ZeroCurrent()

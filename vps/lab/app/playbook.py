@@ -56,6 +56,28 @@ def _truncated(res, finish_pt):
 _LABELS = {"left": "Left side", "right": "Right side", "middle": "Up the middle (rhumb)"}
 
 
+def _health(r):
+    """A route's own health, kept on every playbook entry built from it (#51)."""
+    return {"degraded": bool((r or {}).get("degraded")), "warnings": list((r or {}).get("warnings") or [])}
+
+
+def _v2_entries(v2):
+    """Every v2 entry built from a route: the plays AND the robustness runs (a run that held the
+    line can still have sailed past the forecast, #203)."""
+    v2 = v2 or {}
+    return list(v2.get("scenario_routes") or []) + list(v2.get("robustness") or [])
+
+
+def _merged_warnings(routes):
+    """The warnings of these routes, in order, each once."""
+    out = []
+    for r in routes:
+        for w in (r or {}).get("warnings") or []:
+            if w not in out:
+                out.append(w)
+    return out
+
+
 def _subfields(wf: WindField):
     """Split the blended field into one scenario sub-field per model (its own series only)."""
     by_model: dict[str, dict] = {}
@@ -64,7 +86,9 @@ def _subfields(wf: WindField):
     out = {}
     for model, series in by_model.items():
         meta = [m for m in wf.meta if m["model"] == model]
-        out[model] = WindField(series, meta, wf.bbox, wf.t_start, wf.t_end)
+        # a model's own scenario keeps its de-bias (its weight alone changes nothing)
+        out[model] = WindField(series, meta, wf.bbox, wf.t_start, wf.t_end,
+                               model_bias=getattr(wf, "model_bias", None))
     return out
 
 
@@ -164,7 +188,7 @@ def _scenario_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
                  "narrative_seed": s.get("narrative", ""),
                  "divergence": {"delta_eta_min": deta, "xte_mean_nm": xte},
                  "total_hours": r.get("total_hours"),
-                 "favored_side": _favored_side(definition, course_id, r)}
+                 "favored_side": _favored_side(definition, course_id, r), **_health(r)}
         diverged = not (xte is not None and xte < 2.0 and abs(deta) < 45)
         if diverged:
             entry["route"] = {"legs": r.get("legs"), "path": r.get("path"),
@@ -191,7 +215,10 @@ def _scenario_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
             say(f"scenario {s['id']}: DIVERGES ({xte} nm, {deta:+d} min) — play candidate")
         else:
             robust.append({"scenario": s["id"], "name": entry["name"],
-                           "note": f"route holds within {xte} nm / {abs(deta)} min of the nominal"})
+                           "note": f"route holds within {xte} nm / {abs(deta)} min of the nominal",
+                           # its route's health stays with it: a run that held the line on held
+                           # wind past the forecast is not clean evidence (#203)
+                           "degraded": entry["degraded"], "warnings": entry["warnings"]})
             say(f"scenario {s['id']}: nominal HOLDS ({xte} nm, {deta:+d} min) — robustness")
 
     # BOUNDARY BISECTION (the method refinement, 2026-07-08): where adjacent scenarios of the same
@@ -299,11 +326,11 @@ def _internal_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
                                         "what the nominal was optimized through."),
                      "divergence": {"delta_eta_min": drest, "xte_mean_nm": xte},
                      "total_hours": r.get("total_hours"),
-                     "favored_side": _favored_side(definition, course_id, r)}
+                     "favored_side": _favored_side(definition, course_id, r), **_health(r)}
             if xte is not None and xte < 2.0 and same_sails:
                 robust.append({"scenario": sid, "name": entry["name"],
                                "note": (f"{tag} at {mark_name}: the remaining plan HOLDS — same "
-                                        f"line, same sails (rest {drest:+d} min)")})
+                                        f"line, same sails (rest {drest:+d} min)"), **_health(r)})
                 say(f"pace {sid}: nominal remainder HOLDS — robustness")
             else:
                 entry["route"] = {"legs": r.get("legs"), "path": r.get("path"),
@@ -346,7 +373,7 @@ def _internal_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
                                       "xte_mean_nm": _mean_xte_nm(r.get("path"),
                                                                   consensus.get("path"))},
                        "total_hours": r.get("total_hours"),
-                       "favored_side": _favored_side(definition, course_id, r),
+                       "favored_side": _favored_side(definition, course_id, r), **_health(r),
                        "route": {"legs": r.get("legs"), "path": r.get("path"),
                  "leg_end_idx": r.get("leg_end_idx"),
                                  "total_sailed_nm": r.get("total_sailed_nm"),
@@ -375,7 +402,8 @@ def _internal_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
         if low_m >= base_m - 1:      # require a real reduction (≥2) — resolution noise isn't a play
             robust.append({"scenario": "low_maneuver", "name": "Low-maneuver (conserve the crew)",
                            "note": (f"the nominal is already the quiet route ({base_m} maneuvers — "
-                                    f"biasing ×{mult:g} against tacks/peels found nothing quieter)")})
+                                    f"biasing ×{mult:g} against tacks/peels found nothing quieter)"),
+                           **_health(r)})
             say("low-maneuver: nominal already minimal — robustness")
         else:
             routes.append({
@@ -388,7 +416,7 @@ def _internal_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
                 "divergence": {"delta_eta_min": deta,
                                "xte_mean_nm": _mean_xte_nm(r.get("path"), consensus.get("path"))},
                 "total_hours": r.get("total_hours"),
-                "favored_side": _favored_side(definition, course_id, r),
+                "favored_side": _favored_side(definition, course_id, r), **_health(r),
                 "route": {"legs": r.get("legs"), "path": r.get("path"),
                  "leg_end_idx": r.get("leg_end_idx"),
                           "total_sailed_nm": r.get("total_sailed_nm"),
@@ -415,6 +443,9 @@ def _internal_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
                     f"REJOIN the line (pressing on costs ~{-row['delta_min']} min)")
             parts.append(f"~{row['off_nm']:g} nm {row['side']} on the {row['to']} leg: {call}")
         worst = max(abs(row["delta_min"]) for row in tab)
+        held = {row["held"] for row in tab if row.get("held")}
+        tab_warnings = [optimizer.FORECAST_ENDS] if "end" in held else []
+        tab_warnings += [optimizer.FORECAST_STARTS_LATE] if "start" in held else []
         routes.append({
             "id": "rejoin_vs_continue", "name": "Off the line — rejoin or continue?",
             "kind": "rejoin", "category": "internal",
@@ -427,7 +458,8 @@ def _internal_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
             "divergence": {"delta_eta_min": worst, "xte_mean_nm": off_nm},
             "guidance": ("; ".join(parts) + ". Frozen-forecast numbers — if the onboard re-route "
                          "disagrees, trust the fresher one."),
-            "table": tab, "total_hours": None, "favored_side": None})
+            "table": tab, "total_hours": None, "favored_side": None,
+            "degraded": bool(tab_warnings), "warnings": tab_warnings})
         say(f"rejoin tab: {len(tab)} rows — guidance play")
     else:
         say("rejoin tab: no rows (legs too short or routing failed) — skipped")
@@ -535,6 +567,10 @@ def _rejoin_tab(definition, course_id, wf, consensus, cur, waves, marks, off_nm,
                         track_mod._hav_nm((re_["lat"], re_["lon"]), (rj["lat"], rj["lon"])) > 1.0):
                     say(f"rejoin tab leg {i} {side}: truncated isochrone — cell skipped")
                     continue
+                # #203: these rows are routed from mid-leg, so they can run past the forecast
+                # when the nominal doesn't — same check as a full route
+                held = (optimizer._forecast_held(wf, cont["path"], t_mid)
+                        or optimizer._forecast_held(wf, rejn["path"], t_mid))
                 cont_min = round((cont["eta"] - t_mid) / 60.0)
                 rejn_min = round((rejn["eta"] - t_mid) / 60.0 + rj_nominal_min)
                 if cont_min <= 0 or rejn_min <= 0:
@@ -544,7 +580,8 @@ def _rejoin_tab(definition, course_id, wf, consensus, cur, waves, marks, off_nm,
                            else "continue" if delta > 0 else "rejoin")
                 rows.append({"leg": i, "to": leg.get("to"), "side": side, "off_nm": off_nm,
                              "continue_min": cont_min, "rejoin_min": rejn_min,
-                             "delta_min": int(delta), "verdict": verdict})
+                             "delta_min": int(delta), "verdict": verdict,
+                             **({"held": held} if held else {})})
                 say(f"rejoin tab leg {i} ({leg.get('to')}) {side}: continue {cont_min}m vs "
                     f"rejoin {rejn_min}m → {verdict}")
         finally:
@@ -555,9 +592,11 @@ def _rejoin_tab(definition, course_id, wf, consensus, cur, waves, marks, off_nm,
 def build_playbook(definition, course_id, start_epoch, models, ensemble_members=0,
                    time_budget_s=200, jib_crossovers=None, sail_config=None, helm_factor=1.0, use_waves=True,
                    polar_adjustments=None, wave_coeffs=None, v2_scenarios=True,
-                   scenario_budget_s=None, max_scenarios=None, fan_depth="standard"):
+                   scenario_budget_s=None, max_scenarios=None, fan_depth="standard",
+                   model_skill=True):
     """Multi-scenario playbook: route the course through the blended field (consensus) and through
-    each model's sub-field (scenarios), cluster by favored side into variants."""
+    each model's sub-field (scenarios), cluster by favored side into variants. The field is
+    weighted by the venue's model skill exactly like the Lab route (`routerun.venue_skill`)."""
     bbox = optimizer.course_bbox(definition, course_id)
     if not bbox:
         return {"available": False, "note": "No mark positions yet. Fix them in Course & Marks."}
@@ -566,8 +605,13 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
     # reach past the nominal window or those runs fall onto fallback wind
     t_end = start_epoch + (hours + (6 if v2_scenarios else 0)) * 3600
     log: list[str] = []
+    from . import routerun
+    skill, mweights, mbias = (routerun.venue_skill(definition, course_id, bbox, start_epoch, models,
+                                                   log.append)
+                              if model_skill else ({"enabled": False}, None, None))
     wf = build_windfield(bbox, start_epoch, t_end, models=models,
-                         ensemble_members=ensemble_members, on_progress=log.append)
+                         ensemble_members=ensemble_members, on_progress=log.append,
+                         model_weights=mweights, model_bias=mbias)
     if not wf.loaded:
         return {"available": False, "note": "no weather model data could be loaded",
                 "windfield": wf.status(), "log": log}
@@ -631,6 +675,10 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
         log.append(f"consensus: incomplete at {per}s ({_truncated(consensus, finish_pt)}) — "
                    "retrying ×2 budget")
         consensus = _route(wf, per * 2)
+    if (consensus.get("obstacles") or {}).get("land") == "failed":
+        # #51: a playbook routed without the shoreline is frozen aboard: never build one
+        return {"available": False, "windfield": wf.status(), "log": log,
+                "note": optimizer.LAND_FAILED.replace("Don't use it.", "No playbook built. Try again.")}
     why = _truncated(consensus, finish_pt)
     if why:
         return {"available": False, "windfield": wf.status(), "log": log,
@@ -673,6 +721,8 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
             "hours_range": [min(hrs), max(hrs)] if hrs else None,
             "first_heading": (rep.get("legs") or [{}])[0].get("first_heading"),
             "route_confidence": rep.get("route_confidence"),
+            # the route's own health (forecast ended, shoreline, …): shown before Deploy (#51)
+            "degraded": bool(rep.get("degraded")), "warnings": list(rep.get("warnings") or []),
             "route": {"legs": rep.get("legs"), "path": rep.get("path"),
                       "leg_end_idx": rep.get("leg_end_idx"),
                       "total_sailed_nm": rep.get("total_sailed_nm"),
@@ -726,7 +776,18 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
             "route_confidence": consensus.get("route_confidence"),
             "legs": consensus.get("legs"), "path": consensus.get("path"),
             "leg_end_idx": consensus.get("leg_end_idx"),
+            "degraded": bool(consensus.get("degraded")),
+            "warnings": list(consensus.get("warnings") or []),
         },
+        # every route's warnings, once each: what the Lab shows on the playbook and on Deploy
+        "degraded": (bool(consensus.get("degraded")) or any(v["degraded"] for v in variants)
+                     or any(e.get("degraded") for e in _v2_entries(v2))),
+        # ...and the v2 plays' (a slow-pressure or late-pace play can run past the forecast when
+        # the nominal doesn't): named, so the crew knows which play it is (Codex on #200)
+        "warnings": _merged_warnings([consensus] + [v for v in variants])
+        + _merged_warnings([{"warnings": [f"{e.get('name') or e.get('id')}: {w}"
+                                          for w in e.get("warnings") or []]}
+                            for e in _v2_entries(v2)]),
         "variants": variants,
         "scenarios": [{"model": c["scenario"], "favored_side": c["favored_side"],
                        "total_hours": c["total_hours"], "first_heading": c["first_heading"]}

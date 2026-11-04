@@ -98,7 +98,7 @@ def _nm(lat0, lon0, lat, lon):
 def _course_progress(pe, pn, pts):
     """pts = [(e,n)] course marks in nm (start..finish). Project (pe,pn) onto the polyline.
     Returns (dtf_nm, leverage_nm, leg_index). dtf = remaining distance along the course to the
-    finish; leverage = signed cross-track on the nearest leg (+ = right of the course heading)."""
+    finish; leverage = signed offset from the nearest leg's line (+ = right of the course heading)."""
     best = None
     for i in range(len(pts) - 1):
         ax, ay = pts[i]
@@ -111,14 +111,15 @@ def _course_progress(pe, pn, pts):
         tc = max(0.0, min(1.0, t))
         projx, projy = ax + tc * vx, ay + tc * vy
         perp = math.hypot(pe - projx, pn - projy)
-        # signed cross-track: cross product sign of leg vector × (point - proj)
-        sign = 1.0 if (vx * (pn - ay) - vy * (pe - ax)) < 0 else -1.0
+        # signed cross-track from the leg's LINE (not the clamped point, which past an endpoint is
+        # the distance to the mark and makes two boats' offsets incomparable). + = right.
+        xte = -(vx * (pn - ay) - vy * (pe - ax)) / math.sqrt(seg2)
         if best is None or perp < best[0]:
             # remaining distance: rest of this leg + all later legs
             rem = math.hypot(bx - projx, by - projy)
             for j in range(i + 1, len(pts) - 1):
                 rem += math.hypot(pts[j + 1][0] - pts[j][0], pts[j + 1][1] - pts[j][1])
-            best = (perp, rem, sign * perp, i)
+            best = (perp, rem, xte, i)
     if best is None:
         return None, None, None
     return best[1], best[2], best[3]
@@ -152,9 +153,10 @@ def _fleet_row(entry, obj, matched_by, mconf, source, pts, origin, own, own_dtf,
     dtf = None
     if pts and obj.get("lat") is not None:
         te, tn = _nm(origin[0], origin[1], obj["lat"], obj["lon"])
-        dtf, lev, _ = _course_progress(te, tn, pts)
+        dtf, lev, leg = _course_progress(te, tn, pts)
         row["dtf_nm"] = round(dtf, 2) if dtf is not None else None
         row["leverage_nm"] = round(lev, 2) if lev is not None else None
+        row["leg_index"] = leg   # which leg leverage_nm is measured against
         if own_dtf is not None and dtf is not None:
             row["on_water_lead_nm"] = round(own_dtf - dtf, 2)   # + = they're ahead on the water
     c = corr or {}
@@ -211,12 +213,12 @@ def get_fleet(max_range_nm: float = 40.0):
         gaps.append("no course loaded, no distance to finish")
 
     # own progress
-    own_dtf = own_lev = None
+    own_dtf = own_lev = own_leg = None
     own_tot = _tot_coeff(own_cfg, method) or 1.0
     own_alw = _allowance_s_per_nm(own_cfg)
     if pts and own.get("lat") is not None:
         oe, on = _nm(origin[0], origin[1], own["lat"], own["lon"])
-        own_dtf, own_lev, _ = _course_progress(oe, on, pts)
+        own_dtf, own_lev, own_leg = _course_progress(oe, on, pts)
 
     # elapsed-time context: division guns (SIs) / the race-log session → FULL-race corrected
     # (the best estimate); no gun anywhere → remaining-race basis, flagged
@@ -266,6 +268,7 @@ def get_fleet(max_range_nm: float = 40.0):
         "own_division": (own_cfg.get("division") or "").strip() or None,
         "own": {"dtf_nm": round(own_dtf, 2) if own_dtf is not None else None,
                 "leverage_nm": round(own_lev, 2) if own_lev is not None else None,
+                "leg_index": own_leg,
                 "fix": own.get("lat") is not None},
         "count_matched": len(fleet), "count_traffic": len(traffic),
         "count_ais": sum(1 for f in fleet if f.get("source") == "ais"),
@@ -491,10 +494,9 @@ def _corrected_delta(entry, method, is_tod, dtf, own_dtf, sog, own_sog, own_tot,
             corr_them = (e_them + ttf_them) - alw * course_nm
             corr_us = (e_us + ttf_us) - own_alw * course_nm
             return corr_them - corr_us, "full", 0.65
-        # remaining: each boat owes its allowance on the miles still to sail
-        corr_them = ttf_them - alw * dtf
-        corr_us = ttf_us - own_alw * own_dtf
-        return corr_them - corr_us, "remaining", 0.6
+        # remaining: allowance over ONE common distance (ours). Charging each boat over its own
+        # remaining miles cancels a real lead at equal GPH (#161): 1 nm ahead scored as a tie.
+        return (ttf_them - ttf_us) - (alw - own_alw) * own_dtf, "remaining", 0.6
     tot_them = _tot_coeff(entry, method)
     if tot_them is None:
         return None, None, 0.0

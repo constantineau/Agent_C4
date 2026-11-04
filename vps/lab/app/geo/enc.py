@@ -37,6 +37,8 @@ import urllib.request
 import xml.etree.ElementTree as ET
 import zipfile
 
+from .. import atomicio
+
 CACHE = os.environ.get("ENC_CACHE", "/srv/enc")
 CATALOG_URL = "https://charts.noaa.gov/ENCs/ENCProdCat.xml"
 DOWNLOAD_BASE = "https://www.charts.noaa.gov/ENCs"
@@ -97,8 +99,7 @@ def cell_index(cache_dir: str = None, refresh: bool = False) -> dict:
         if not url.endswith(".zip"):
             url += ".zip"
         idx[name] = {"bbox": [max(ys), min(ys), min(xs), max(xs)], "url": url, "band": name[2]}
-    with open(p, "w") as f:
-        json.dump(idx, f)
+    atomicio.write_json(p, idx)
     return idx
 
 
@@ -162,21 +163,25 @@ def _extract_layer(s57_path: str, layer: str, out_path: str) -> bool:
     env = dict(os.environ)
     # keep only feature geometry; drop the S-57 graph primitives/linkages we don't need
     env["OGR_S57_OPTIONS"] = "RETURN_PRIMITIVES=OFF,RETURN_LINKAGES=OFF,LNAM_REFS=OFF"
+    tmp = atomicio.tmp_name(out_path)        # ogr2ogr writes a temp; it becomes out_path whole
     try:
         r = subprocess.run(
-            ["ogr2ogr", "-f", "GeoJSON", "-skipfailures", out_path, s57_path, layer],
+            ["ogr2ogr", "-f", "GeoJSON", "-skipfailures", tmp, s57_path, layer],
             env=env, capture_output=True, timeout=180)
     except (FileNotFoundError, subprocess.TimeoutExpired):
+        r = None
+    # Same outcomes as before: exit 0 keeps whatever was written; a non-zero exit keeps a
+    # non-empty file (-skipfailures) and drops an empty one.
+    failed_empty = (r is not None and r.returncode != 0 and os.path.exists(tmp)
+                    and os.path.getsize(tmp) < 2)
+    if r is None or not os.path.exists(tmp) or failed_empty:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
         return False
-    if r.returncode != 0:
-        # ogr2ogr may still have written an empty file or none; clean a partial empty
-        if os.path.exists(out_path) and os.path.getsize(out_path) < 2:
-            try:
-                os.remove(out_path)
-            except OSError:
-                pass
-        return os.path.exists(out_path)
-    return os.path.exists(out_path)
+    atomicio.commit(tmp, out_path)
+    return True
 
 
 def ensure_bbox(bbox, cache_dir: str = None, on_progress=None) -> dict:

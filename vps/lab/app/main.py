@@ -13,6 +13,8 @@ import datetime
 import json
 import os
 import re
+import threading
+import time
 
 from fastapi import FastAPI, Request, UploadFile, File, Form
 from fastapi.concurrency import run_in_threadpool
@@ -22,7 +24,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from shared import race_def, boat_profile
-from . import auth, store, extract, boats, labstate, feedback, pbstore, deploy, monitor, judge, track, learning, fleetimport, report, retro, retrostore, share, racestart
+from . import atomicio, auth, store, extract, boats, labstate, feedback, pbstore, deploy, monitor, judge, track, learning, fleetimport, report, retro, retrostore, share, racestart
 
 INGESTED_DIR = os.environ.get("INGESTED_DIR", "/srv/ingested")
 
@@ -138,6 +140,64 @@ def _drafted(definition):
     return {"definition": definition, "errors": errors, "warnings": warnings}
 
 
+def _ingest_fail(exc):
+    """IngestError messages are already plain; anything else gets a short prefix."""
+    msg = str(exc) if isinstance(exc, extract.IngestError) else f"ingest failed: {exc}"
+    return JSONResponse({"detail": msg}, status_code=502)
+
+
+def _build_draft(docs, sources, skipped, progress=None):
+    """skipped = plain messages for documents that couldn't be loaded (the rest go ahead)."""
+    if not docs:
+        raise extract.IngestError(" ".join(skipped) if skipped else "No documents to read.")
+    notes = [f"{m} The draft was built WITHOUT it." for m in skipped]
+    definition = extract.extract_race_definition(docs, _today(), notes, on_progress=progress)
+    prov = definition.setdefault("provenance", {})
+    prov["sources"] = sources + (prov.get("sources") or [])
+    # what the AI did NOT read travels with the definition (saved with it, listed first by
+    # validate until dismissed in the review), not just in this response
+    prov["ingest_notes"] = [{"text": n, "acknowledged": False} for n in notes]
+    return _drafted(definition)
+
+
+def _ingest_urls(urls, progress=None):
+    """URLs → a draft (the whole ingest, blocking). A link that won't download doesn't sink the
+    rest: the draft is built from the others and the review names the one skipped."""
+    say = progress or (lambda m: None)
+    docs, sources, skipped = [], [], []
+    for i, u in enumerate(urls, 1):
+        say(f"Reading documents… ({i} of {len(urls)}) {extract.doc_label(u)}")
+        try:
+            doc = extract.load_url(u)
+        except extract.IngestError as exc:
+            skipped.append(str(exc))
+            continue
+        docs.append(doc)
+        sources.append({"label": doc["label"], "url": u, "retrieved": _today()})
+        sources += [{"label": e["label"], "url": e["url"], "retrieved": _today()}
+                    for e in doc.get("embedded") or []]
+    return _build_draft(docs, sources, skipped, progress)
+
+
+def _ingest_files(files, progress=None):
+    """[(filename, bytes)] → a draft (blocking)."""
+    say = progress or (lambda m: None)
+    docs, sources, skipped = [], [], []
+    for i, (name, raw) in enumerate(files, 1):
+        say(f"Reading documents… ({i} of {len(files)}) {name}")
+        try:
+            docs.append(extract.load_pdf(name, raw))
+        except extract.IngestError as exc:
+            skipped.append(str(exc))
+            continue
+        sources.append({"label": name, "url": "(uploaded)", "retrieved": _today()})
+    return _build_draft(docs, sources, skipped, progress)
+
+
+def _plain_ingest_error(exc) -> str:
+    return str(exc) if isinstance(exc, extract.IngestError) else f"ingest failed: {exc}"
+
+
 @app.post("/api/ingest/discover")
 async def ingest_discover(body: dict):
     """Auto-find: scrape a race page for candidate document PDF links."""
@@ -146,47 +206,128 @@ async def ingest_discover(body: dict):
         return JSONResponse({"detail": "url required"}, status_code=400)
     try:
         return {"candidates": await run_in_threadpool(extract.discover_pdfs, url)}
+    except extract.IngestError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=502)
     except Exception as exc:
         return JSONResponse({"detail": f"discover failed: {exc}"}, status_code=502)
 
 
 @app.post("/api/ingest")
 async def ingest_urls(body: dict):
-    """Ingest from one or more document URLs (auto-find selections or pasted direct links)."""
+    """Ingest from document URLs in ONE request (kept for scripts; the Lab page uses the
+    background job below, which can't hit the gateway's ~300 s request cap)."""
     urls = [u.strip() for u in (body or {}).get("urls", []) if u and u.strip()]
     if not urls:
         return JSONResponse({"detail": "urls required"}, status_code=400)
     try:
-        docs, sources = [], []
-        for u in urls:
-            label, text = await run_in_threadpool(extract.text_from_url, u)
-            docs.append((label, text))
-            sources.append({"label": label, "url": u, "retrieved": _today()})
-        definition = await run_in_threadpool(extract.extract_race_definition, docs, _today())
-        definition.setdefault("provenance", {}).setdefault("sources", [])
-        definition["provenance"]["sources"] = sources + definition["provenance"]["sources"]
-        return _drafted(definition)
+        return await run_in_threadpool(_ingest_urls, urls)
     except Exception as exc:
-        return JSONResponse({"detail": f"ingest failed: {exc}"}, status_code=502)
+        return _ingest_fail(exc)
 
 
 @app.post("/api/ingest/upload")
 async def ingest_upload(files: list[UploadFile] = File(...)):
-    """Ingest from uploaded PDF(s) — for JS-rendered race hubs a crawler can't reach."""
+    """Ingest uploaded PDF(s) in ONE request (kept for scripts; the page uses the job below)."""
+    if not files:
+        return JSONResponse({"detail": "no files"}, status_code=400)
     try:
-        docs, sources = [], []
-        for f in files:
-            raw = await f.read()
-            docs.append((f.filename, await run_in_threadpool(extract.pdf_text, raw)))
-            sources.append({"label": f.filename, "url": "(uploaded)", "retrieved": _today()})
-        if not docs:
-            return JSONResponse({"detail": "no files"}, status_code=400)
-        definition = await run_in_threadpool(extract.extract_race_definition, docs, _today())
-        definition.setdefault("provenance", {}).setdefault("sources", [])
-        definition["provenance"]["sources"] = sources + definition["provenance"]["sources"]
-        return _drafted(definition)
+        got = [(f.filename, await f.read()) for f in files]
+        return await run_in_threadpool(_ingest_files, got)
     except Exception as exc:
-        return JSONResponse({"detail": f"ingest failed: {exc}"}, status_code=502)
+        return _ingest_fail(exc)
+
+
+# ---- Ingest as a background job (same pattern as /api/debrief/run + /run/status) ----------
+# A big document set takes minutes (Bayview NOR+SER+SI: 164 s) against the gateway's 300 s cap.
+# POST starts the job and returns its job_id; the page polls the status with that id. The jobs
+# registry is in memory, so after a Lab restart the id is unknown → "interrupted", not a spinner.
+INGEST_INTERRUPTED = "Ingest was interrupted. Run it again."
+INGEST_BUSY = "Another ingest is already running. Wait for it to finish, then try again."
+# Finished ingests by job_id, kept apart from the single-flight job slot: starting the next ingest
+# clears that slot, and a draft that cost $1-4 must still reach the page that asked for it.
+_INGEST_DONE: dict = {}          # job_id -> {"state": "done", "result", "progress", "finished_at"}
+_INGEST_DONE_LOCK = threading.Lock()
+INGEST_KEEP_S, INGEST_KEEP_N = 3600, 10
+
+
+def _keep_ingest(job_id, entry):
+    now = time.time()
+    with _INGEST_DONE_LOCK:
+        _INGEST_DONE[job_id] = dict(entry, finished_at=now)
+        for k in [k for k, v in _INGEST_DONE.items() if now - v["finished_at"] > INGEST_KEEP_S]:
+            del _INGEST_DONE[k]
+        while len(_INGEST_DONE) > INGEST_KEEP_N:          # oldest first (insertion order)
+            del _INGEST_DONE[next(iter(_INGEST_DONE))]
+
+
+def _kept_ingest(job_id):
+    with _INGEST_DONE_LOCK:
+        e = _INGEST_DONE.get(job_id)
+        if e and time.time() - e["finished_at"] > INGEST_KEEP_S:
+            del _INGEST_DONE[job_id]
+            e = None
+        return dict(e) if e else None
+
+
+def _start_ingest(fn, arg, kind):
+    import uuid
+    from . import jobs
+    job_id = uuid.uuid4().hex[:12]
+
+    said = []
+
+    def _work(progress):
+        def say(m):
+            said.append(str(m))
+            progress(m)
+        try:
+            result = fn(arg, say)
+        except Exception as exc:  # noqa: BLE001 — the page shows one plain sentence
+            result = {"detail": _plain_ingest_error(exc)}
+        _keep_ingest(job_id, {"state": "done", "job_id": job_id, "kind": kind,
+                              "result": result, "progress": said[-12:]})
+        return result
+
+    started = jobs.start("ingest", _work, result_key="result", meta={"job_id": job_id,
+                                                                     "kind": kind})
+    if not started.get("ok"):
+        return JSONResponse({"ok": False, "detail": INGEST_BUSY}, status_code=409)
+    return {"ok": True, "job_id": job_id, "state": "running"}
+
+
+@app.post("/api/ingest/run")
+async def ingest_run(body: dict):
+    """Start ingesting document URLs as a background job → {job_id}."""
+    urls = [u.strip() for u in (body or {}).get("urls", []) if u and u.strip()]
+    if not urls:
+        return JSONResponse({"detail": "urls required"}, status_code=400)
+    return _start_ingest(_ingest_urls, urls, "urls")
+
+
+@app.post("/api/ingest/run/upload")
+async def ingest_run_upload(files: list[UploadFile] = File(...)):
+    """Start ingesting uploaded PDF(s) as a background job → {job_id}."""
+    if not files:
+        return JSONResponse({"detail": "no files"}, status_code=400)
+    got = [(f.filename, await f.read()) for f in files]
+    return _start_ingest(_ingest_files, got, "upload")
+
+
+@app.get("/api/ingest/run/status")
+async def ingest_run_status(job_id: str = ""):
+    """{state: running|done|error, progress, result?, error?} for the job with this id. The
+    result is the same {definition, errors, warnings} the one-request endpoints return, or
+    {detail} with the plain failure."""
+    from . import jobs
+    kept = _kept_ingest(job_id) if job_id else None
+    if kept:
+        return kept
+    st = jobs.status("ingest")
+    if job_id and st.get("job_id") != job_id:
+        return {"state": "error", "job_id": job_id, "error": INGEST_INTERRUPTED}
+    if st.get("state") == "error":
+        st["error"] = f"Ingest failed ({st.get('error')}). Run it again."
+    return st
 
 
 @app.post("/api/geocode")
@@ -1341,8 +1482,7 @@ def _write_race(definition, draft=False):
             if k not in definition or (draft and _prep_empty(k, definition[k])):
                 definition[k] = prior[k]
     os.makedirs(INGESTED_DIR, exist_ok=True)
-    with open(os.path.join(INGESTED_DIR, f"{rid}.json"), "w") as f:
-        json.dump(definition, f, indent=2)
+    atomicio.write_json(os.path.join(INGESTED_DIR, f"{rid}.json"), definition, indent=2)
     return rid
 
 

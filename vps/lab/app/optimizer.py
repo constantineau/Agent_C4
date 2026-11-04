@@ -26,6 +26,10 @@ HSTEP = 12          # heading fan resolution (deg)
 SECTOR = 3.0        # isochrone pruning bucket (deg of bearing from leg start)
 API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 COVERAGE_MIN = float(os.environ.get("GRIB_COVERAGE_MIN", "0.6"))   # below this → degraded route
+# #203 (the Lab side of #156): a point no forecast reaches borrows the nearest covered point's wind
+# within this many nm (the boat's limit, same env); past it there is no wind and no route there
+FILL_NM = float(os.environ.get("C4_FORECAST_FILL_NM", "10"))
+GAPS_FILLED = "Forecast gaps filled from nearby."
 ROUTE_CONE_DEG = float(os.environ.get("ROUTE_CONE_DEG", "120"))    # prune headings >this° off the mark
 TACK_COST_S = float(os.environ.get("ROUTE_TACK_COST_S", "30"))     # time a tack/gybe costs (anti-over-tack)
 ISO_CURVES = int(os.environ.get("ROUTE_ISO_CURVES", "10"))         # frontier polylines emitted per leg (viz)
@@ -403,7 +407,52 @@ def _layline_pair(P, tws, twd, pos, mlat, mlon, length_nm):
 
 
 # --- one leg -----------------------------------------------------------------
-def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=None,
+def _nearby_wind(wf, lat, lon, epoch, max_nm=None):
+    """The wind of the nearest point the forecast covers, within `max_nm` (default FILL_NM), or
+    None. Searched on rings (a quarter of the limit apart, every 45°), nearest ring first."""
+    p = _nearby_point(wf, lat, lon, epoch, max_nm)
+    return wf.wind_at(*p, epoch) if p else None
+
+
+def _nearby_point(wf, lat, lon, epoch, max_nm=None):
+    """The (lat, lon) whose wind `_nearby_wind` borrows, or None: the nearest candidate with wind
+    within `max_nm`. Candidates are rings (a quarter of the limit apart, every 45°) plus the
+    nearest point on each forecast grid's edge, which the rays can pass either side of (Codex on
+    #220: a corner 9.4 nm off sat between them)."""
+    max_nm = FILL_NM if max_nm is None else max_nm
+    if max_nm <= 0:
+        return None
+    cands = [_advance(lat, lon, brg, max_nm * k / 4.0)
+             for k in range(1, 5) for brg in range(0, 360, 45)]
+    cands += _grid_edge_points(wf, lat, lon)
+    best = None
+    for d, p in sorted((_hav_nm(lat, lon, *p), p) for p in cands):
+        if d > max_nm:
+            break
+        if wf.wind_at(*p, epoch):
+            best = p
+            break
+    return best
+
+
+def _grid_edge_points(wf, lat, lon):
+    """The point of each forecast series' grid box nearest (lat, lon), nudged just inside it."""
+    out = []
+    for frames in (getattr(wf, "series", None) or {}).values():
+        if not frames:
+            continue
+        f = frames[0]
+        try:
+            la0, la1 = float(f.lat.min()), float(f.lat.max())
+            lo0, lo1 = float(f.lon.min()), float(f.lon.max())
+        except (AttributeError, TypeError, ValueError):
+            continue
+        eps = 1e-6
+        out.append((min(max(lat, la0 + eps), la1 - eps), min(max(lon, lo0 + eps), lo1 - eps)))
+    return out
+
+
+def route_leg(wf, P, slat, slon, t0, dlat, dlon, deadline=None,
               obstacles=None, capture=False, hstep=HSTEP, dt_cap=1.0, cur=None,
               sail_polars=None, jib_crossovers=None, start_sail=None,
               waves=None, helm_factor=1.0, wave_coeffs=None, wave_uniform_hs=None,
@@ -422,7 +471,10 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
     `sail_polars` (+ `jib_crossovers`, `start_sail`) enable SAIL-AWARE routing (2g): the node carries
     the current sail, each step holds it (at its own per-sail speed) or PEELS to the envelope-optimal
     sail (full speed + a peel cost), so the route peels only when it pays and the sail plan is real.
-    `start_sail` = the sail the boat is already carrying into this leg (continuity across marks)."""
+    `start_sail` = the sail the boat is already carrying into this leg (continuity across marks).
+    No invented wind (#203): where the forecast has nothing, the nearest covered point's wind within
+    FILL_NM stands in (`wind_filled` counts the path nodes sailed from on it); past that the route doesn't sail from that node,
+    so a leg that needs it comes back `reached: False`."""
     direct = _hav_nm(slat, slon, dlat, dlon)
     SP = sail_polars or {}
     sail_aware = SAIL_AWARE and bool(SP)
@@ -463,16 +515,26 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
     blocked_hits = 0
 
     def wind(lat, lon, epoch):
-        w = wf.wind_at(lat, lon, epoch)
-        return w if w else fallback
+        return wf.wind_at(lat, lon, epoch) or _nearby_wind(wf, lat, lon, epoch)
+
+    def wind_along(lat0, lon0, t_a, lat1, lon1, t_b):
+        """Wind (forecast or borrowed) all along a board, its end included, sampled every ~2 nm.
+        A board that leaves the fill limit isn't sailed (Codex on #220). A leg arrives only two
+        ways: this closing board, or a fan step landing within 0.05 nm of the mark, which needs
+        wind at the mark too. Fan steps aren't sampled (that made routing ~9x slower): a node
+        with no wind just never sails on."""
+        n = max(1, int(math.ceil(_hav_nm(lat0, lon0, lat1, lon1) / 2.0)))
+        return all(wind(lat0 + (lat1 - lat0) * k / n, lon0 + (lon1 - lon0) * k / n,
+                        t_a + (t_b - t_a) * k / n) for k in range(1, n + 1))
 
     # Overstand axis (#2 layline gate): on a beat the mark is to windward, on a run to leeward — in
     # both cases sailing PAST the mark along the wind axis is overstanding (the "go past then double
     # back" the user sees near a mark). Classify the leg from the wind AT THE MARK (which sets the
     # laylines) and build a unit (north,east) vector pointing the OVERSTAND way; reaches → no gate.
-    _twd_m = wind(dlat, dlon, t0)[1]
-    _twa_m0 = abs(_wrap180(_bearing(slat, slon, dlat, dlon) - _twd_m))
-    _pos0 = _point_of_sail(_twa_m0)
+    _wm = wind(dlat, dlon, t0)
+    _twd_m = _wm[1] if _wm else None
+    _pos0 = (_point_of_sail(abs(_wrap180(_bearing(slat, slon, dlat, dlon) - _twd_m)))
+             if _wm else None)                 # no wind at the mark: no layline gate
     leg_axis = None
     if LAYLINE_GATE and _pos0 in ("beat", "run"):
         wb = _twd_m if _pos0 == "beat" else (_twd_m + 180.0)        # windward (beat) / leeward (run) bearing
@@ -623,7 +685,10 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
             gen_dt = min(dt_h, max(ENDGAME_DT_MIN, d_best / ENDGAME_DIV))
         local = []
         for node in frontier:
-            tws, twd = wind(node["lat"], node["lon"], node["t"])
+            w = wind(node["lat"], node["lon"], node["t"])
+            if not w:
+                continue               # no forecast in reach: the route doesn't sail from here
+            tws, twd = w
             if cur is not None:            # 2d lever b: the sails feel the wind over the WATER
                 _cs, _cd = cur.current_at(node["lat"], node["lon"], node["t"])
                 tws, twd = _wind_over_water(tws, twd, _cs, _cd)
@@ -642,7 +707,8 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
                        (_wrap180(lay["hdg"] - twd) > 0) != (_wrap180(node["hdg"] - twd) > 0))
             t_arr = (node["t"] + (dmark / lay["gs"]) * 3600 + (PEEL_COST_S if is_peel else 0.0)
                      + (TACK_COST_S if is_tack and TACK_CUMULATIVE else 0.0))
-            if reached is None or t_arr < reached["t"]:
+            if (reached is None or t_arr < reached["t"]) and wind_along(
+                    node["lat"], node["lon"], node["t"], dlat, dlon, t_arr):
                 reached = {"lat": dlat, "lon": dlon, "t": t_arr,
                            "parent": node, "hdg": lay["hdg"], "sail": lay["sail"],
                            "pl": node.get("pl", 0) + (1 if is_peel else 0)}
@@ -691,7 +757,7 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
         if capture:
             snaps.append(frontier)
         best = min(frontier, key=lambda n: _hav_nm(n["lat"], n["lon"], dlat, dlon))
-        if _hav_nm(best["lat"], best["lon"], dlat, dlon) < 0.05:
+        if _hav_nm(best["lat"], best["lon"], dlat, dlon) < 0.05 and wind(dlat, dlon, best["t"]):
             reached = best
             break
     # #31: a leg that never closes on its target (time budget out, or every heading blocked) returns
@@ -736,6 +802,8 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
     for k, h in enumerate(hdgs):
         p = path[k] if k < len(path) else path[-1]
         w = wind(p["lat"], p["lon"], p["t"])
+        if not w:
+            continue
         side = "stbd" if _wrap180(w[1] - h) > 0 else "port"
         if prev_side and side != prev_side:
             tacks += 1
@@ -766,7 +834,9 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, fallback=(12.0, 0.0), deadline=
             "first_heading": round(hdgs[0]) if hdgs else None,
             "blocked_steps": blocked_hits, "isochrones": isochrones,
             "sail_track": sail_track, "peels": peels, "sail_end": sail_end,
-            "realized_factor": realized_mean, "hs_mean": hs_mean}
+            "realized_factor": realized_mean, "hs_mean": hs_mean,
+            # path nodes sailed from on borrowed nearby wind (the forecast itself had none there)
+            "wind_filled": sum(1 for p in path[:-1] if not wf.wind_at(p["lat"], p["lon"], p["t"]))}
 
 
 def _rounding_offset(plat, plon, mlat, mlon, side, nm=None):
@@ -823,7 +893,7 @@ def _route_sanity(wf, legs, coverage, P, timed_out):
     (warnings, degraded). `degraded` means: do not trust this route — the inputs were too thin."""
     warnings, degraded = [], False
     if not wf.loaded:
-        warnings.append("No forecast loaded. The route used a made-up steady wind. Don't use it. "
+        warnings.append("No forecast loaded. No wind to route on. Don't use it. "
                         "Try again when a forecast is out.")
         degraded = True
     elif coverage < COVERAGE_MIN:
@@ -957,6 +1027,7 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
         return s
 
     all_leg_obstacles = leg_obstacles            # every leg of the course (the per-model fan's)
+    land_failed = False                          # #51: land was asked for and couldn't be checked
     if obstacles is None and leg_obstacles is None and avoid:
         bbox = course_bbox(definition, course_id)
         if bbox:
@@ -966,8 +1037,11 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
                     definition, cid or course_id, bbox, source=source, safety_depth=safety_depth)
                 # PACE PLAYS route from mark `from_mark`: their leg 0 is the course's leg from_mark
                 leg_obstacles = all_leg_obstacles[int(from_mark or 0):]
-            except Exception:
+            except Exception as exc:  # noqa: BLE001 — reported on the route, never open water
+                print(f"[optimize] obstacle build failed: {type(exc).__name__}: {exc}", flush=True)
                 obstacles = leg_obstacles = all_leg_obstacles = None
+                land_failed = True
+    land_failed = land_failed or _land_failed(obstacles, all_leg_obstacles)
 
     # reshape gate: does the (spatially-varying) sea state get to BEND the route, or only tax the ETA?
     wave_stats = _wave_field_stats(waves, marks)
@@ -1032,6 +1106,7 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
             "wind": ({"tws": det["tws"], "twd": det["twd"], "confidence": det["confidence"]}
                      if det else None),
             "reached": leg.get("reached", True),
+            "wind_filled": leg.get("wind_filled", 0),    # nodes on borrowed nearby wind (#203)
         })
         # accumulate the real sails-flown track + carry the ending sail into the next leg (2g)
         route_track += leg.get("sail_track", [])
@@ -1069,6 +1144,15 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
                            f"{incomplete['short_nm']} nm short of the mark ({incomplete['reason']})"
                            + (f". Not routed after it: {', '.join(rest)}" if rest else "")
                            + ". Don't use this route. Run it again, or check for land near that mark.")
+    if land_failed:
+        degraded = True
+        warnings.insert(0, LAND_FAILED)
+    if any(l.get("wind_filled") for l in legs):
+        warnings.append(GAPS_FILLED)
+    held = _forecast_held(wf, full_path, float(start_epoch))
+    if held:                       # #51: wind past every model's end is the last frame, held
+        degraded = True
+        warnings.append(FORECAST_ENDS if held == "end" else FORECAST_STARTS_LATE)
     for name, n in _leg_self_crossings(full_path, legs, start_epoch).items():
         warnings.append(f"Route crosses itself {n}x on the leg to {name}. Light, shifty wind. "
                         "Don't trust that leg's line. Sail the shifts.")
@@ -1109,7 +1193,7 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
             realized["wave_spread_hs"] = wave_stats["spread"]
     # per-model candidate paths (the confidence moat made VISUAL — the fan the blended route summarizes)
     candidate_paths = []
-    if per_model:
+    if per_model and not land_failed:          # no land check → no model routes drawn either
         candidate_paths = _per_model_paths(definition, course_id, start_epoch, wf, obstacles, P, marks,
                                            source, safety_depth, jib_crossovers, total_min / 60.0,
                                            leg_obstacles=all_leg_obstacles,
@@ -1145,11 +1229,49 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
         "candidate_paths": candidate_paths,
         "path": [{"lat": p["lat"], "lon": p["lon"], "t": round(p["t"])} for p in full_path],
         "windfield": wf.status(),
-        "obstacles": (_obstacle_summary(obstacles, leg_obstacles) if leg_obstacles
-                      else obstacles.summary() if obstacles is not None else {"active": False}),
+        "obstacles": dict((_obstacle_summary(obstacles, leg_obstacles) if leg_obstacles
+                           else obstacles.summary() if obstacles is not None
+                           else {"active": False, "land": "off"}),
+                          **({"land": "failed"} if land_failed else {})),
         "obstacle_steps_avoided": sum(l.get("blocked_steps", 0) for l in legs),
         "timed_out": timed_out,
     }
+
+
+# #51: the shoreline didn't load. Shown first on the route; the route is marked degraded.
+LAND_FAILED = "Shoreline didn't load. Land not checked: the route may cross land. Don't use it."
+
+
+# #51: past every model's last frame the route sails on that frame, held. Kept, but never silent.
+FORECAST_ENDS = "Forecast ends before the finish: last hours use the final forecast."
+FORECAST_STARTS_LATE = "Forecast starts after the gun: first hours use the first forecast."
+
+
+def _forecast_held(wf, full_path, start_epoch=None):
+    """Did the route sail on a held edge frame (no model's forecast reached that time)? → "end"
+    (past the last frame), "start" (before the first) or None. A wind field without the `held`
+    flag (a fixed test wind, the boat's own) never holds."""
+    hit = None
+    for p in full_path or []:
+        d = wf.detail_at(p["lat"], p["lon"], p["t"])
+        if not d:
+            # borrowed wind carries its donor's health (Codex on #220): a held frame borrowed
+            # from nearby is still a held frame
+            q = _nearby_point(wf, p["lat"], p["lon"], p["t"])
+            d = wf.detail_at(*q, p["t"]) if q else None
+        if d and d.get("held"):
+            # the wind field says which edge it held, from the series it actually used (Codex on
+            # #200: comparing against every model's bounds, off-position grids included, called a
+            # held END a late start)
+            if d.get("held_side", "end") == "end":
+                return "end"
+            hit = "start"
+    return hit
+
+
+def _land_failed(obstacles, leg_obstacles):
+    """Was land asked for on any of these fields and failed to load? (geo ObstacleField.land)"""
+    return any(getattr(f, "land", None) == "failed" for f in [obstacles] + list(leg_obstacles or []))
 
 
 def _obstacle_summary(obstacles, leg_obstacles):

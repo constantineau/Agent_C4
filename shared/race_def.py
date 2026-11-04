@@ -180,6 +180,7 @@ class Provenance:
     sources: list = field(default_factory=list)        # [{label, url, retrieved}]
     si_status: str = ""
     review_status: str = "machine-extracted — NEEDS HUMAN REVIEW"
+    ingest_notes: list = field(default_factory=list)   # [{text, acknowledged}] — what ingest missed
     extracted_by: str = ""
 
 
@@ -226,6 +227,12 @@ def validate(d: dict) -> tuple[list, list]:
     """Return (errors, warnings). Errors must block activation; warnings flag review items
     (e.g. unknown island coords) that are expected before the human-review step signs off."""
     errors, warnings = [], []
+    # What ingestion could NOT read (a link that failed, a trimmed or text-only document): kept in
+    # provenance.ingest_notes and listed first until a person dismisses it (acknowledged=true),
+    # so a saved draft can't look complete when it was built on part of the documents.
+    for n in (d.get("provenance") or {}).get("ingest_notes") or []:
+        if isinstance(n, dict) and n.get("text") and not n.get("acknowledged"):
+            warnings.append(f"Ingest: {n['text']}")
     for key in ("race_id", "name", "year", "courses", "rules_profile"):
         if not d.get(key):
             errors.append(f"missing required field: {key}")

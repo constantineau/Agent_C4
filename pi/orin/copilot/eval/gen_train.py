@@ -1,6 +1,8 @@
 """SFT training-corpus generator (MATCHER_LORA_PLAN §3) — the same generators as the eval corpus,
-a DIFFERENT seed (libraries are disjoint by construction; the seed-7 eval corpus is the held-out
-set and must never be trained on), targets rendered from the oracle labels.
+the TRAIN split (libgen.py: training families and phrasings only — the eval split's held-out
+phrasings and families are never produced here, so a trained model can't pass the eval by recall),
+targets rendered from the oracle labels. The prompt is the copilot's own: `_strategy_prompt` over
+the library + the seed the engine's strategy code renders (scengen.py) — train == serve (#54).
 
 Teaching signal per example (what the baseline measurably gets wrong):
   - oracle-ARMED plays  -> match "strong", ranked first, why quoting the play's own condition
@@ -10,18 +12,21 @@ Teaching signal per example (what the baseline measurably gets wrong):
   - every other near-miss (threshold / wrong-leg / confounder) -> ABSENT from play_matches.
     Saying no-match to a near-miss is most of the value (§3.3), so the assistant target for a
     quiet scenario is an EMPTY play_matches — silence is a verdict.
-A slice of examples renders the prompt with all-[quiet] status hints (the blind regime): the
-compound/fuzzy cases the predicates can't see arrive exactly like that in production.
+A slice of examples uses the BLIND view (no matcher tags, no "Armed play(s)" row): there the
+target is the blind label — the armed plays whose evidence the seed shows, nothing else — and the
+near-misses are only the kinds the seed can disprove (threshold, confounder).
+Rows whose prompt + target would not fit the serving context window (config.LLM_NUM_CTX) are
+dropped and counted: training on a row the Orin would truncate teaches nothing usable.
 
-    python3 -m copilot.eval.gen_train --libraries 400 --per-lib 8 --seed 1001 \\
-        --blind-frac 0.35 --out /tmp/matcher_train.jsonl
+    PYTHONPATH=../../vps/agent:../.. python3 -m copilot.eval.gen_train --libraries 400 \\
+        --per-lib 8 --seed 1001 --blind-frac 0.35 --out /tmp/matcher_train.jsonl
 """
 
 import argparse
 import json
-import random
 
-from .. import copilot, playbook as playbook_mod
+from .. import config, copilot, playbook as playbook_mod
+from ..llm import estimate_tokens
 from . import gen_corpus
 
 _EVAL_SEED = 7   # gen_corpus default — refuse to generate training data from the held-out seed
@@ -50,14 +55,17 @@ def _why(play, signals, partial=False):
     return why[:300]
 
 
-def _target(ex, seed_payload):
-    """The assistant turn: engine facts reused verbatim, play_matches from the oracle."""
+def _target(ex, seed_payload, blind=False):
+    """The assistant turn: engine facts reused verbatim, play_matches from the view's label."""
     signals = ex["signals"]
     plays = {str(p["id"]): p for p in ex["bundle"]["plays"]}
+    label = ex["blind_oracle"] if blind else ex["oracle"]
     matches = [{"play_id": pid, "match": "strong", "why": _why(plays[pid], signals)}
-               for pid in ex["oracle"]["armed"]]
-    matches += [{"play_id": pid, "match": "partial", "why": _why(plays[pid], signals, partial=True)}
-                for pid, mode in ex["oracle"]["near"].items() if mode == "sustain"]
+               for pid in label["armed"]]
+    if not blind:       # "arming" is only knowable from the matcher's tag
+        matches += [{"play_id": pid, "match": "partial",
+                     "why": _why(plays[pid], signals, partial=True)}
+                    for pid, mode in label["near"].items() if mode == "sustain"]
     rec = dict(seed_payload["recommendation"])
     if matches:
         rec["rationale"] = (f"Pre-authored condition met — {plays[matches[0]['play_id']]['name']}: "
@@ -68,24 +76,30 @@ def _target(ex, seed_payload):
             "play_matches": matches}
 
 
-def generate(libraries=400, per_lib=8, seed=1001, blind_frac=0.35):
+def generate(libraries=400, per_lib=8, seed=1001, blind_frac=0.35, num_ctx=None):
+    """Returns (rows, dropped_overlong)."""
     if seed == _EVAL_SEED:
         raise SystemExit(f"seed {seed} is the held-out EVAL seed — pick another")
-    rows = gen_corpus.generate(libraries=libraries, per_lib=per_lib, seed=seed)
-    rng = random.Random(seed + 1)
-    out = []
+    num_ctx = num_ctx or config.LLM_NUM_CTX
+    rows = gen_corpus.generate(libraries=libraries, per_lib=per_lib, seed=seed, split="train",
+                               blind_frac=blind_frac)
+    out, dropped = [], 0
     for ex in rows:
+        blind = ex["regime"] == "blind"
+        view = ex["views"]["blind" if blind else "hinted"]
         pb = playbook_mod.Playbook(ex["bundle"])
-        blind = rng.random() < blind_frac
-        smap = {pid: "quiet" for pid in pb.play_ids()} if blind else ex["status_map"]
-        seed_payload = json.loads(ex["seed"].split("\n", 1)[1])
-        out.append({"id": ex["id"], "blind": blind, "messages": [
-            {"role": "system", "content": copilot._strategy_prompt(pb, smap)},
-            {"role": "user", "content": ex["seed"]},
-            {"role": "assistant", "content": json.dumps(_target(ex, seed_payload),
+        seed_payload = json.loads(view["seed"].split("\n", 1)[1])
+        messages = [
+            {"role": "system", "content": copilot._strategy_prompt(pb, view["status_map"])},
+            {"role": "user", "content": view["seed"]},
+            {"role": "assistant", "content": json.dumps(_target(ex, seed_payload, blind),
                                                         separators=(",", ":"))},
-        ]})
-    return out
+        ]
+        if estimate_tokens(messages) > num_ctx:
+            dropped += 1
+            continue
+        out.append({"id": ex["id"], "blind": blind, "messages": messages})
+    return out, dropped
 
 
 def main():
@@ -96,7 +110,7 @@ def main():
     ap.add_argument("--blind-frac", type=float, default=0.35)
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
-    rows = generate(args.libraries, args.per_lib, args.seed, args.blind_frac)
+    rows, dropped = generate(args.libraries, args.per_lib, args.seed, args.blind_frac)
     with open(args.out, "w") as f:
         for r in rows:
             f.write(json.dumps(r, separators=(",", ":")) + "\n")
@@ -104,7 +118,8 @@ def main():
     n_match = sum(1 for r in rows if json.loads(r["messages"][2]["content"])["play_matches"])
     print(f"wrote {len(rows)} SFT examples -> {args.out}")
     print(f"  blind-hint slice: {n_blind} · with >=1 match: {n_match} · "
-          f"quiet (empty matches): {len(rows) - n_match}")
+          f"quiet (empty matches): {len(rows) - n_match} · dropped over "
+          f"{config.LLM_NUM_CTX} tokens: {dropped}")
 
 
 if __name__ == "__main__":

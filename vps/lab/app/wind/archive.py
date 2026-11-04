@@ -19,7 +19,7 @@ batches need it.
 import datetime as dt
 import os
 
-from .. import deepfc
+from .. import atomicio, deepfc
 from . import models as live
 
 GFS_BASE = "https://noaa-gfs-bdp-pds.s3.amazonaws.com"
@@ -64,8 +64,7 @@ class _ArchiveMixin:
         except Exception:
             return None
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "wb") as f:
-            f.write(blob)
+        atomicio.write_bytes(path, blob)
         _pin(path, self.name, cycle, fhr, member, bbox, base, self.pin_context)
         return path
 

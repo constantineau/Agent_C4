@@ -18,7 +18,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from . import adherence as adherence_mod
 from . import brief as brief_mod
-from . import config, narrate as narrate_mod, playbook as playbook_mod, tools
+from . import config, ground, narrate as narrate_mod, playbook as playbook_mod, tools
 from .engine_client import EngineClient
 from .llm import LLMClient, LLMUnavailable
 
@@ -55,21 +55,68 @@ def gather(engine: EngineClient, route=None, hoisted=None) -> dict:
     return snap
 
 
-def _facts_digest(snapshot: dict) -> str:
-    """A compact, grounding-tagged fact list for the LLM seed message. Each line is prefixed
-    with the tool name to cite in `grounded_in`."""
-    lines = []
+def _facts(snapshot: dict) -> dict:
+    """The gathered facts the seed message shows, {tool name: fact dict}."""
+    out = {}
     for name in _DEFAULT_GATHER:
         d = snapshot.get(name)
         if not isinstance(d, dict) or not d.get("available", True) or d.get("available") is False:
             continue
-        # Trim each fact blob so the 7B's context isn't blown out.
-        compact = {k: v for k, v in d.items() if k not in ("available",) and v is not None}
-        s = json.dumps(compact, separators=(",", ":"))
-        if len(s) > 600:
-            s = s[:600] + "…"
-        lines.append(f"[{name}] {s}")
+        out[name] = {k: v for k, v in d.items() if k not in ("available",) and v is not None}
+    return out
+
+
+def _facts_digest(snapshot: dict) -> str:
+    """A compact, grounding-tagged fact list for the LLM seed message. Each line is prefixed
+    with the tool name to cite in `grounded_in`."""
+    lines = [f"[{name}] {_compact(fact)}" for name, fact in _shown_facts(snapshot).items()]
     return "\n".join(lines) if lines else "(no live facts available)"
+
+
+_FACT_CHARS = 600           # per gathered fact in the seed, so the 7B's context isn't blown out
+_TOOL_CHARS = 2000          # per tool result
+
+
+def _compact(obj) -> str:
+    return json.dumps(obj, separators=(",", ":"))
+
+
+def _trim(obj, limit: int, dump=_compact):
+    """`obj` cut down so dump(obj) fits in `limit` chars: leading fields/items kept, the first one
+    that overflows trimmed in turn, the rest dropped. The model is shown dump(_trim(obj)) and
+    grounding checks the same trimmed data, so a number cut off the prompt can't ground a claim."""
+    if len(dump(obj)) <= limit:
+        return obj
+    if isinstance(obj, str):
+        lo, hi = 0, len(obj)            # longest prefix that still fits once escaped
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            lo, hi = (mid, hi) if len(dump(obj[:mid])) <= limit else (lo, mid - 1)
+        return obj[:lo]
+    if isinstance(obj, (dict, list)):
+        is_dict = isinstance(obj, dict)
+        out = {} if is_dict else []
+        for k, v in (obj.items() if is_dict else enumerate(obj)):
+            probe = {**out, k: ""} if is_dict else out + [""]
+            if len(dump(probe)) > limit:
+                break
+            room = limit - len(dump(probe)) + len(dump(""))
+            part = _trim(v, room, dump)
+            if len(dump(part)) > room:
+                break
+            if is_dict:
+                out[k] = part
+            else:
+                out.append(part)
+            if part is not v:
+                break                   # this one was cut: nothing after it was shown
+        return out
+    return None                         # a bare number that doesn't fit is not shown
+
+
+def _shown_facts(snapshot: dict) -> dict:
+    """The gathered facts exactly as the seed message shows them (trimmed)."""
+    return {name: _trim(fact, _FACT_CHARS) for name, fact in _facts(snapshot).items()}
 
 
 def _system_prompt(pb: playbook_mod.Playbook) -> str:
@@ -157,6 +204,7 @@ def llm_brief(engine: EngineClient, llm: LLMClient, snapshot: dict, question: st
     ]
 
     final_text = None
+    results = []                # tool results as data: grounding needs the field names (#210)
     for _round in range(config.MAX_TOOL_ROUNDS):
         msg = llm.chat(messages, tools=tools.TOOL_SPECS, tool_choice="auto")
         messages.append(msg)
@@ -169,8 +217,10 @@ def llm_brief(engine: EngineClient, llm: LLMClient, snapshot: dict, question: st
             result, tool_name = tools.dispatch(engine, name, args)
             if isinstance(result, dict) and result.get("available", True) is not False:
                 used_sources.add(tool_name)
+            shown_result = _trim(result, _TOOL_CHARS, json.dumps)
+            results.append(shown_result)
             messages.append({"role": "tool", "tool_call_id": call_id,
-                             "content": json.dumps(result)[:2000]})
+                             "content": json.dumps(shown_result)})
     else:
         # Hit the round cap still wanting tools — force a JSON conclusion with no tools.
         msg = llm.chat(messages + [{"role": "user",
@@ -182,7 +232,12 @@ def llm_brief(engine: EngineClient, llm: LLMClient, snapshot: dict, question: st
     if not parsed:
         raise LLMUnavailable("LLM did not return parseable JSON")
 
-    cleaned = brief_mod.validate(parsed, used_sources, pb.variant_ids(), pb.play_ids())
+    # Every number in the brief must come from the engine: the gathered facts, the playbook and
+    # the tool results. NOT the system prompt (its worked examples carry degrees like 250/265) and
+    # NOT the crew's question (a number they typed is not a measurement). The facts go in as data,
+    # not their JSON dump, so each value keeps its field's unit (twd 180 is not 180 kts).
+    shown = [_shown_facts(snapshot), pb.digest()] + results
+    cleaned = brief_mod.validate(parsed, used_sources, pb.variant_ids(), pb.play_ids(), facts=shown)
     cleaned["engine_only"] = False
     # The LLM is not trusted to author factual caveats — replace its free text with the
     # engine's grounded caveats, keeping only the validator's own "dropped item" note.
@@ -221,8 +276,8 @@ def _whale_touch(llm: LLMClient, cleaned: dict) -> str | None:
              + ((cleaned.get("situation") or "quiet, nothing urgent")[:300])},
         ])
         line = " ".join((msg.get("content") or "").strip().strip('"').split())
-        if not line or len(line) > 220:
-            return None
+        if not line or len(line) > 220 or ground.numbers(line):
+            return None                  # voice only: a number in the aside would read as a fact
         return "🐋 " + line
     except Exception:
         return None
@@ -398,12 +453,16 @@ def _filter_play_matches(parsed, pb: playbook_mod.Playbook, status_map=None, cap
     status_map = status_map or {}
     known = set(pb.play_ids())
     out = []
-    for m in (parsed.get("play_matches") or []):
-        pid = str((m or {}).get("play_id") or "")
-        if pid not in known:
+    matches = parsed.get("play_matches") if isinstance(parsed, dict) else None
+    for m in (matches if isinstance(matches, list) else []):
+        if not isinstance(m, dict):
             continue
-        out.append({"play_id": pid, "match": m.get("match") or "partial",
-                    "why": (m.get("why") or "").strip()[:300],
+        pid = m.get("play_id")
+        if not isinstance(pid, str) or pid not in known or not isinstance(m.get("why") or "", str):
+            continue                     # a malformed match is dropped, never a crash
+        # Id + grade only. The model's `why` is free text the crew would read as advice ("tack
+        # now"), so it never leaves here; the play's own pre-authored text is what the iPad shows.
+        out.append({"play_id": pid, "match": "strong" if m.get("match") == "strong" else "partial",
                     "status": status_map.get(pid, "quiet"),
                     "grounded_in": [f"play:{pid}"]})
         if len(out) >= cap:
@@ -440,14 +499,40 @@ def _strategy_prompt(pb: playbook_mod.Playbook, status_map=None) -> str:
     )
 
 
+def strategy_seed(digest: dict) -> str:
+    """The user turn of the strategy pass: the engine digest's four fixed facts. The matcher-LoRA
+    corpus generators (eval/scengen.py) call THIS function on a digest rendered by the engine's own
+    shared/strategy_render.py, so training, eval and serving send byte-identical shapes (#54)."""
+    return ("STRATEGIC PICTURE (engine-computed facts — reuse these, invent nothing):\n"
+            + json.dumps({"assessment": digest.get("assessment"),
+                          "picture": digest.get("picture"),
+                          "concordance": digest.get("concordance"),
+                          "recommendation": digest.get("recommendation")}, separators=(",", ":")))
+
+
+def strategy_status_map(digest: dict) -> dict:
+    """{play_id: armed|arming} from the deterministic matcher's block on the digest. Plays not
+    listed render as [quiet] in the prompt."""
+    return {d.get("id"): d.get("status")
+            for d in ((digest.get("plays") or {}).get("detail") or [])}
+
+
+def strategy_messages(pb: playbook_mod.Playbook, digest: dict, status_map=None) -> list:
+    """The exact chat the strategy pass sends: system = role + playbook + play library, user = seed.
+    Shared by strategy_brief, the eval runner and the SFT generator."""
+    sm = strategy_status_map(digest) if status_map is None else status_map
+    return [{"role": "system", "content": _strategy_prompt(pb, sm)},
+            {"role": "user", "content": strategy_seed(digest)}]
+
+
 def strategy_brief(route=None, hoisted=None, use_llm: bool | None = None) -> dict:
-    """In-race STRATEGY SYNTHESIS (Tier-2): the onboard LLM phrases the engine's deterministic
-    cross-signal digest into a crew-facing assessment and enriches the recommendation's RATIONALE by
-    matching the live picture against the playbook's own frozen conditions. It does NOT originate
-    strategy (descope locked 2026-07-06 — docs/PLAYBOOK_V2.md §7): the ACTION / target variant /
-    vs_playbook are the engine's and are never overridden. Structurally grounded: the numbers /
-    picture / concordance / caveats stay the ENGINE's; an ungrounded LLM narrative is dropped; any
-    LLM trouble → the whole deterministic digest stands.
+    """In-race STRATEGY SYNTHESIS (Tier-2): the engine's deterministic cross-signal digest, plus the
+    onboard LLM's condition-match of the live picture against the playbook's play library. It does
+    NOT originate strategy (descope locked 2026-07-06 — docs/PLAYBOOK_V2.md §7): the assessment,
+    action, target variant, vs_playbook and rationale are all the engine's, verbatim. The LLM adds
+    only `play_matches` (real play ids + strong/partial). The prompt and schema still ask for an
+    assessment and rationale because the tuned matcher was trained on that shape; those fields are
+    read and discarded. Any LLM trouble → the deterministic digest stands.
 
     The LLM pass runs ONLY when the caller explicitly asks (`use_llm=True`). The default — the
     iPad's ~15 s poll — is the fresh engine digest: one LLM pass takes ~45 s, and polling it kept
@@ -463,37 +548,20 @@ def strategy_brief(route=None, hoisted=None, use_llm: bool | None = None) -> dic
         digest["_meta"] = meta
         return digest
 
-    # Grounding allow-list = the signal tools that actually contributed a picture item (+ the synthesis).
-    allowed = {"get_strategy", "get_selector"} | {
-        g for item in digest.get("picture", []) for g in (item.get("grounded_in") or [])}
     try:
         llm = LLMClient()
-        seed = ("STRATEGIC PICTURE (engine-computed facts — reuse these, invent nothing):\n"
-                + json.dumps({"assessment": digest.get("assessment"),
-                              "picture": digest.get("picture"),
-                              "concordance": digest.get("concordance"),
-                              "recommendation": digest.get("recommendation")}, separators=(",", ":")))
-        _plq = (digest.get("plays") or {})
-        status_map = {d.get("id"): d.get("status") for d in (_plq.get("detail") or [])}
-        msg = llm.chat([{"role": "system", "content": _strategy_prompt(pb, status_map)},
-                        {"role": "user", "content": seed}], schema=_STRATEGY_SCHEMA)
+        status_map = strategy_status_map(digest)
+        msg = llm.chat(strategy_messages(pb, digest, status_map), schema=_STRATEGY_SCHEMA)
         parsed = _extract_json(msg.get("content") or "")
         if not parsed:
             raise LLMUnavailable("strategy: no parseable JSON")
 
-        out = dict(digest)   # keep the engine's picture / concordance / caveats / confidence / disclaimer
-        assessment = (parsed.get("assessment") or "").strip()
-        if assessment:
-            out["assessment"] = assessment
-        # DESCOPE (2026-07-06, docs/PLAYBOOK_V2.md §7): the LLM never authors or replaces the
-        # recommendation — the engine's action / target_variant / vs_playbook stand. The LLM may only
-        # ENRICH the rationale (its condition-matching narrative), and only when grounded.
-        rec = parsed.get("recommendation") or {}
-        rg = [g for g in (rec.get("grounded_in") or []) if g in allowed]
-        det_rec = digest.get("recommendation")
-        if det_rec and rec.get("rationale") and rg:
-            out["recommendation"] = {**det_rec, "rationale": rec["rationale"].strip()}
-        # else: ungrounded / empty narrative → the deterministic recommendation stands untouched.
+        # The engine's assessment and recommendation (action, target, vs_playbook AND rationale)
+        # stand verbatim: rationale is pre-authored (glass box) and the LLM never originates strategy
+        # (descope 2026-07-06, docs/PLAYBOOK_V2.md §7). Citing a tool name proves nothing about what
+        # the text says, so the model's assessment/rationale are not used. The LLM pass contributes
+        # only the play matches: real play ids + a strong/partial grade (#53).
+        out = dict(digest)
         matches = _filter_play_matches(parsed, pb, status_map)
         if matches:
             out["play_matches"] = matches

@@ -40,6 +40,8 @@ import re
 import threading
 import time
 
+from . import atomicio
+
 PLUME_DIR = os.environ.get("PLUME_DIR", "/srv/plume")
 SCHEMA = "c4.plume/v1"
 KEEP_S = float(os.environ.get("PLUME_KEEP_H", "48")) * 3600       # run history per model
@@ -194,10 +196,7 @@ def load_store(key):
 def save_store(st):
     os.makedirs(PLUME_DIR, exist_ok=True)
     p = _path(st["key"])
-    tmp = p + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(st, f, separators=(",", ":"))
-    os.replace(tmp, p)                      # atomic: a reader never sees half a file
+    atomicio.write_json(p, st, separators=(",", ":"))  # a reader never sees half a file
 
 
 def prune(st, now, keep_s=KEEP_S):

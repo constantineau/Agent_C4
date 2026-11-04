@@ -10,6 +10,8 @@ import json
 import os
 import re
 
+from . import atomicio
+
 PLAYBOOK_DIR = os.environ.get("PLAYBOOK_DIR", "/srv/playbooks")
 
 
@@ -29,8 +31,7 @@ def save(bundle: dict) -> str:
     """Persist a (signed) bundle; returns its id. The file IS the onboard-loadable artifact."""
     os.makedirs(PLAYBOOK_DIR, exist_ok=True)
     pid = bundle_id(bundle)
-    with open(_path(pid), "w") as f:
-        json.dump(bundle, f, indent=2)
+    atomicio.write_json(_path(pid), bundle, indent=2)
     return pid
 
 
@@ -73,6 +74,7 @@ def list_bundles():
             "course_id": b.get("course_id"), "start_epoch": b.get("start_epoch"),
             "generated_at": b.get("generated_at"), "headline": b.get("headline"),
             "recommended": b.get("recommended"), "n_variants": len(b.get("variants", [])),
+            "degraded": bool(b.get("degraded")), "warnings": list(b.get("warnings") or []),
             "signed": bool(sig.get("value")), "signed_at": sig.get("signed_at"),
             "synth_model": (b.get("provenance") or {}).get("synth_model"),
         })

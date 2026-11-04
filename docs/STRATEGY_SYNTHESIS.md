@@ -33,7 +33,9 @@ The value is the **cross-signal narrative** the siloed callouts miss:
 Keep the **numbers and the mechanical concordance deterministic** (Tier-1, reliable, math-correct), and
 let the **LLM synthesize the picture and explain the interplay** (Tier-2). ~~The LLM may now propose
 strategy beyond the playbook~~ — **amended: the LLM never proposes strategy; the recommendation is
-always the engine's** (it may enrich the rationale with its playbook condition-matching narrative).
+always the engine's**, rationale included. ~~It may enrich the rationale~~ — **amended (#53): the
+LLM pass adds only play matches (play ids + strong/partial); assessment and rationale stay the
+engine's.**
 The guardrails are for *reliability*, not compliance:
 1. **The engine does the math.** Every number in the synthesis comes from the deterministic signal
    streams; the 7B never computes XTE, corrected-time, or drift itself.

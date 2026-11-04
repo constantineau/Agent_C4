@@ -28,7 +28,7 @@ import xml.etree.ElementTree as ET
 
 from shared import polar as SPOL
 
-from . import optimizer
+from . import atomicio, optimizer
 
 _R_NM = 3440.065
 TRACK_DIR = os.environ.get("INGESTED_DIR", "/srv/ingested")
@@ -672,7 +672,7 @@ def save_track(race_id, track):
             # danger intervals score_track refuses bins from
             "trust": track.get("trust"),
             "sail_changes": len(track.get("sail_log") or [])}
-    with open(_path(race_id, recording_of(track)), "w") as fh:
+    with atomicio.atomic_open(_path(race_id, recording_of(track)), "w") as fh:
         # sail_log = the crew's timestamped CONFIGURATION history (boat-log tracks) — the
         # per-config polar-development input; GPX/YB tracks simply don't carry one
         json.dump({**meta, "fixes": track.get("fixes") or [],

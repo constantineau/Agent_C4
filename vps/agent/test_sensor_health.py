@@ -215,7 +215,15 @@ check("at rest there is nothing to compare (COG is meaningless)",
 check("too few samples -> unknown, not a verdict",
       sh.heading_bias([(T0, 40.0, 130.0, 6.0)])["status"] == "unknown")
 check("empty input is safe", sh.heading_bias([])["available"] is False)
-check("missing attitude is not a failure", sh.attitude_plausible(None, None)["ok"] is True)
+# Cole 2026-11-02: "attitude is a less important parameter, unknown is best here". No reading
+# was reported as "ok — attitude within limits", a pass for a check that never looked.
+none_att = sh.attitude_plausible(None, None)
+check(f"missing attitude is unknown, not ok ({none_att['status']}: {none_att['reason']})",
+      none_att["status"] == "unknown" and "within limits" not in none_att["reason"])
+check("...and not a failure either (no limit was broken)", none_att["ok"] is True)
+check("one axis present is still judged on that axis",
+      sh.attitude_plausible(12.0, None)["status"] == "ok"
+      and sh.attitude_plausible(133.1, None)["status"] == "danger")
 check("the wrap is handled: 359 vs 1 is 2 degrees, not 358",
       abs(sh.heading_bias([(T0 + i * 60, 359.0, 1.0, 6.0)
                            for i in range(20)])["bias_deg"]) < 3)
@@ -629,6 +637,71 @@ check("the bound is published with the other thresholds",
       == sh.HEADING_DANGER_HOLD_MIN)
 check("a caller that passes no age still holds (the bound is opt-in, the hold is not)",
       sh.heading_bias(disagreeing(), previous="danger")["status"] == "danger")
+
+print("\nassess() — missing attitude is unknown on its own row, and does not grey the chip:")
+
+
+class HealthSource:
+    """A datasource with a clean compass/GPS pair and whatever attitude it is given (radians)."""
+    def __init__(self, roll=None, pitch=None):
+        self.att = {"navigation.attitude.roll": roll, "navigation.attitude.pitch": pitch}
+
+    def ais_sources(self):
+        return {AIS}
+
+    def latest_value(self, path):
+        return self.att.get(path)
+
+    def series_by_source(self, path, minutes):
+        r = 0.0174533
+        val = {"navigation.headingTrue": 40 * r, "navigation.courseOverGroundTrue": 41 * r,
+               "navigation.speedOverGround": 3.0}[path]
+        src = ORCA if path == "navigation.headingTrue" else G24XD
+        return [(src, T0 + i * 60, val + (0.01 * (i % 3) if path != "navigation.speedOverGround"
+                                          else 0)) for i in range(20)]
+
+
+h_none = sh.assess(HealthSource(), conditions={"channels": HEALTHY})
+check(f"no attitude: the attitude row says unknown ({h_none['attitude']['status']})",
+      h_none["attitude"]["status"] == "unknown")
+check(f"...but the overall chip stays ok and unflagged ({h_none['status']}, {h_none['flags']})",
+      h_none["status"] == "ok" and not h_none["flags"])
+h_kick = sh.assess(HealthSource(roll=133.1 * 0.0174533, pitch=0.0),
+                   conditions={"channels": HEALTHY})
+check("a broken attitude limit still drives the chip to danger",
+      h_kick["status"] == "danger" and h_kick["attitude"]["status"] == "danger")
+
+print("\nassess() — the GPS course stops (#164):")
+
+
+class GpsLost:
+    """The GPS publishes one course and speed, then goes quiet; the boat turns 90° and the
+    compass follows it. 600 heading samples at 090°, one COG of 000° a minute before them."""
+    def __init__(self, gap_s=60):
+        self.gap = gap_s
+
+    def ais_sources(self):
+        return {AIS}
+
+    def latest_value(self, path):
+        return None
+
+    def series_by_source(self, path, minutes):
+        r = 0.0174533
+        if path == "navigation.headingTrue":
+            return [(G24XD, T0 + self.gap + i, 90 * r) for i in range(600)]
+        if path == "navigation.courseOverGroundTrue":
+            return [(ORCA, T0, 0.0)]
+        return [(ORCA, T0, 3.5)]          # speedOverGround, m/s
+
+
+h_lost = sh.assess(GpsLost(), conditions={"channels": HEALTHY})["heading"]
+check(f"a stale course is not paired with fresh headings ({h_lost['status']}: {h_lost['reason']})",
+      h_lost["status"] == "unknown" and h_lost["samples"] == 0)
+check("...and the reason says the course is missing, not that the boat is slow",
+      "no GPS course" in h_lost["reason"])
+check("a course 1 s away still pairs (the uplink and the archive are both whole seconds)",
+      sh.assess(GpsLost(gap_s=-599), conditions={"channels": HEALTHY})["heading"]["samples"] >= 1)
 
 print("\n" + ("PASS" if ok else "FAIL"))
 raise SystemExit(0 if ok else 1)

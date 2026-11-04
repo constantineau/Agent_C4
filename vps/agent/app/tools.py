@@ -65,15 +65,9 @@ FAILOVER_AGE_S = 45
 
 
 def _load_priority():
-    """channel -> ordered list of source matchers (rank 1 first)."""
-    with pool.connection() as conn:
-        rows = conn.execute(
-            "SELECT channel, match FROM source_priority WHERE boat_id = %s ORDER BY channel, rank",
-            (BOAT_ID,),
-        ).fetchall()
-    prio = {}
-    for r in rows:
-        prio.setdefault(r["channel"], []).append(r["match"].lower())
+    """channel -> ordered list of source matchers (rank 1 first) — the same table the engine's
+    cloud reads use (`datasource.load_priority`)."""
+    prio = datasource.load_priority()
     _warn_unresolved(prio)
     return prio
 
