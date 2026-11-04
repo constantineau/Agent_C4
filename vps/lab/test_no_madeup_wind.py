@@ -133,6 +133,13 @@ check("(control) the finish has none", OPT._nearby_wind(WF, F6, -82.5, T0) is No
 leg6 = OPT.route_leg(WF, POL.polars_stw(), S6, -82.5, T0, F6, -82.5)
 check(f"the leg doesn't reach a mark with no wind ({leg6.get('reached')})",
       leg6.get("reached") is False)
+# …nor can an ordinary step that happens to land on the mark (Codex on #220, 8d8eff1): the
+# finish is 11.09 nm past the forecast, a step from a start that borrows wind
+S6b, F6b = 45.165, 45.184833
+check("(control) the step's end has no wind", OPT._nearby_wind(WF, F6b, -82.0, T0) is None)
+leg6b = OPT.route_leg(WF, POL.polars_stw(), S6b, -82.0, T0, F6b, -82.0)
+check(f"a step onto a mark with no wind isn't an arrival ({leg6b.get('reached')})",
+      leg6b.get("reached") is False)
 
 print("PASS" if ok else "FAIL")
 raise SystemExit(0 if ok else 1)

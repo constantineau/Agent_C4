@@ -519,8 +519,10 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, deadline=None,
 
     def wind_along(lat0, lon0, t_a, lat1, lon1, t_b):
         """Wind (forecast or borrowed) all along a board, its end included, sampled every ~2 nm.
-        A board that leaves the fill limit isn't sailed (Codex on #220: the closing board finished
-        on a mark with no wind)."""
+        A board that leaves the fill limit isn't sailed (Codex on #220). A leg arrives only two
+        ways: this closing board, or a fan step landing within 0.05 nm of the mark, which needs
+        wind at the mark too. Fan steps aren't sampled (that made routing ~9x slower): a node
+        with no wind just never sails on."""
         n = max(1, int(math.ceil(_hav_nm(lat0, lon0, lat1, lon1) / 2.0)))
         return all(wind(lat0 + (lat1 - lat0) * k / n, lon0 + (lon1 - lon0) * k / n,
                         t_a + (t_b - t_a) * k / n) for k in range(1, n + 1))
@@ -755,7 +757,7 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, deadline=None,
         if capture:
             snaps.append(frontier)
         best = min(frontier, key=lambda n: _hav_nm(n["lat"], n["lon"], dlat, dlon))
-        if _hav_nm(best["lat"], best["lon"], dlat, dlon) < 0.05:
+        if _hav_nm(best["lat"], best["lon"], dlat, dlon) < 0.05 and wind(dlat, dlon, best["t"]):
             reached = best
             break
     # #31: a leg that never closes on its target (time budget out, or every heading blocked) returns
