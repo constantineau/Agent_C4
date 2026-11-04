@@ -15,7 +15,9 @@ consumer that needs the trend simply doesn't get one rather than getting a lie.
 
 Windows end at NOW, not at the newest stored sample (#163). When the newest wind sample is older
 than `TREND_FRESH_S` the read is `na` ("No live wind data.") rather than an old window passed off
-as "the last 1 h". Every read carries `as_of`, the newest sample's epoch.
+as "the last 1 h". Freshness is per channel: if only TWS (or only TWD) has gone quiet, that
+channel drops out of the windows and the read carries "No live wind speed/direction data.".
+Every read carries `as_of`, the newest sample's epoch.
 
 Matcher signals contributed (per-hour, 1 h window): `tws_trend_kn_per_hr`,
 `twd_trend_deg_per_hr` (signed, + = walking right). TIER-1: own archive only, legal in-race.
@@ -131,6 +133,15 @@ def get_trend(route=None, now=None):
         return {"available": False, "note": "No live wind data.", "as_of": as_of,
                 "based": ["own wind archive"], "conf": "engine"}
 
+    # freshness is per channel: a quiet TWS next to a live TWD must not keep serving an old rate
+    stale = []
+    if tws_rows and now - max(r[0] for r in tws_rows) > TREND_FRESH_S:
+        tws_rows, stale = [], stale + ["speed"]
+    if twd_rows and now - max(r[0] for r in twd_rows) > TREND_FRESH_S:
+        twd_rows, stale = [], stale + ["direction"]
+    note = {"speed": "No live wind speed data.",
+            "direction": "No live wind direction data."}.get(stale[0]) if stale else None
+
     windows = {}
     for m in WINDOWS_MIN:
         w = _window(tws_rows, twd_rows, m, now)
@@ -151,5 +162,6 @@ def get_trend(route=None, now=None):
         "twd_trend_deg_per_hr": h1.get("twd_rate_deg_per_hr"),
         "read": _read_text(primary),
         "as_of": as_of,
+        **({"note": note} if note else {}),
         "based": ["own wind archive"], "conf": "engine",
     }

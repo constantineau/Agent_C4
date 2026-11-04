@@ -127,5 +127,43 @@ check("available with a 1-min-old newest sample", r["available"])
 check("as_of exposed on a live read", r.get("as_of") == NOW - 60)
 check("rate still ~ +2 kn/hr", abs(r["h1"]["tws_rate_kn_per_hr"] - 2.0) < 0.4)
 
+# --- mixed freshness: TWS quiet 10 min, TWD still live (10-s samples) ------------------------------
+# Freshness used to be checked across both channels together, so a live TWD kept a stale TWS rate
+# (built from 10-15 min-old samples in the tail bucket) on the matcher signal.
+print("TWS quiet 10 min, TWD live:")
+
+
+def use_series_mixed(tws_end_age_s, twd_end_age_s, tws_fn, twd_fn, minutes_covered=180, step_s=10):
+    def series(self, path, minutes):
+        speed = path == "environment.wind.speedTrue"
+        end = tws_end_age_s if speed else twd_end_age_s
+        rows = []
+        for age in range(int(end), int(minutes_covered * 60), step_s):
+            t = NOW - age
+            rows.append((t, tws_fn(age) * KN if speed else (twd_fn(age) % 360) * DEG))
+        rows.sort()
+        return rows
+    trend.datasource.active = lambda: type("S", (), {"series": series})()
+
+
+use_series_mixed(600, 0, lambda a: 12.0 - 2.0 * a / 3600, lambda a: 220.0 - 8.0 * a / 3600)
+r = trend.get_trend(now=NOW)
+print("  ", r.get("note"), "|", r.get("read"))
+check("still available on live TWD", r["available"])
+check("no stale TWS matcher signal", r.get("tws_trend_kn_per_hr") is None)
+check("no TWS rate in the 1 h window", "tws_rate_kn_per_hr" not in r.get("h1", {}))
+check("TWD signal still live", r.get("twd_trend_deg_per_hr") is not None)
+check("read doesn't quote a speed trend", "kn" not in (r.get("read") or ""))
+check("says no live wind speed", "no live wind speed" in (r.get("note") or "").lower())
+
+print("TWD quiet 10 min, TWS live:")
+use_series_mixed(0, 600, lambda a: 12.0 - 2.0 * a / 3600, lambda a: 220.0 - 8.0 * a / 3600)
+r = trend.get_trend(now=NOW)
+print("  ", r.get("note"), "|", r.get("read"))
+check("available on live TWS", r["available"])
+check("no stale TWD matcher signal", r.get("twd_trend_deg_per_hr") is None)
+check("TWS signal still live", r.get("tws_trend_kn_per_hr") is not None)
+check("says no live wind direction", "no live wind direction" in (r.get("note") or "").lower())
+
 print("PASS" if ok else "FAIL")
 raise SystemExit(0 if ok else 1)
