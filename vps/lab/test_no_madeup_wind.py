@@ -107,5 +107,22 @@ check("outside the grid, on borrowed wind: still says the forecast ends",
 check("…the held-edge check sees the borrowed frame",
       OPT._forecast_held(SHORT, [{"lat": 43.9, "lon": -81.94, "t": T0 + 5 * H}]) == "end")
 
+print("5) a forecast just inside the fill limit is found, not missed between rays (Codex on #220)")
+# the forecast starts NE of the boat: its nearest corner is ~9.4 nm off, inside the 10 nm limit,
+# but between the 8 search rays (every 45°, every 2.5 nm), which all miss it
+CLAT = np.linspace(44.15, 45.0, 18)
+CLON = np.linspace(-81.94, -81.0, 19)
+CORNER = WindField({("gfs", "det"): [grib.GribFrame(
+    "gfs", "det", T0 + k * H, CLAT, CLON, np.full((CLAT.size, CLON.size), 6.0),
+    np.full((CLAT.size, CLON.size), 0.0), True) for k in range(25)]},
+    [{"model": "gfs"}], (45, 44.15, -81.94, -81.0), T0, T0 + 24 * H)
+check("(control) no forecast at the boat", CORNER.wind_at(44.0, -82.0, T0) is None)
+check(f"(control) the corner is {OPT._hav_nm(44.0, -82.0, 44.15, -81.94):.2f} nm off",
+      OPT._hav_nm(44.0, -82.0, 44.15, -81.94) < OPT.FILL_NM)
+w5 = OPT._nearby_wind(CORNER, 44.0, -82.0, T0)
+check(f"the boat borrows the corner's wind ({w5})", w5 is not None and abs(w5[0] - 11.7) < 0.5)
+leg5 = OPT.route_leg(CORNER, POL.polars_stw(), 44.0, -82.0, T0, 44.6, -81.5)
+check(f"a leg starting there reaches its mark ({leg5.get('reached')})", leg5.get("reached"))
+
 print("PASS" if ok else "FAIL")
 raise SystemExit(0 if ok else 1)

@@ -150,26 +150,34 @@ check(f"once the stuck read ends, the next build reads again ({len(calls)} tried
 
 # Codex on #220: Optimize and Playbook can fetch at the same moment. Both used to pass the
 # "is a read stuck?" check before either had timed out, so both started reads, and only the last
-# one stayed tracked. Two callers start together (a barrier); every read hangs until released.
+# one stayed tracked. Caller A's read starts and holds until caller B is about to call in; every
+# read then hangs until released. With reads serialized the result doesn't depend on timing:
+# whoever reads second finds a stuck read and never starts one. (The generous timeout only
+# makes the old race show reliably.)
 print("3) two builds fetching at once start one read, not two")
-CUR.FETCH_TIMEOUT = 0.5
+CUR.FETCH_TIMEOUT = 2.0
 reads = []
 hold = threading.Event()
+a_reading = threading.Event()
+b_calling = threading.Event()
 
 
 def _hang_on_hold(url, bbox, want_axes):
     reads.append(url)
+    if len(reads) == 1:
+        a_reading.set()
+        b_calling.wait(10)
     hold.wait(30)
     raise OSError("released")
 
 
 CUR._open_slice = _hang_on_hold
-gate = threading.Barrier(2)
 outcome = []
 
 
-def _caller():
-    gate.wait(5)
+def _caller(before=None):
+    if before:
+        before.set()
     try:
         CUR._fetch("http://thredds/y.nc", (0, 1, 0, 1), True)
         outcome.append("read")
@@ -177,11 +185,13 @@ def _caller():
         outcome.append("timeout")
 
 
-callers = [threading.Thread(target=_caller) for _ in range(2)]
-for c in callers:
-    c.start()
-for c in callers:
-    c.join(10)
+ca = threading.Thread(target=_caller)
+ca.start()
+a_reading.wait(10)
+cb = threading.Thread(target=_caller, args=(b_calling,))
+cb.start()
+for c in (ca, cb):
+    c.join(15)
 check(f"one read started ({len(reads)}), both callers gave up ({outcome})",
       len(reads) == 1 and outcome == ["timeout", "timeout"])
 hold.set()

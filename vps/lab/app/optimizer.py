@@ -415,16 +415,41 @@ def _nearby_wind(wf, lat, lon, epoch, max_nm=None):
 
 
 def _nearby_point(wf, lat, lon, epoch, max_nm=None):
-    """The (lat, lon) whose wind `_nearby_wind` borrows, or None."""
+    """The (lat, lon) whose wind `_nearby_wind` borrows, or None: the nearest candidate with wind
+    within `max_nm`. Candidates are rings (a quarter of the limit apart, every 45°) plus the
+    nearest point on each forecast grid's edge, which the rays can pass either side of (Codex on
+    #220: a corner 9.4 nm off sat between them)."""
     max_nm = FILL_NM if max_nm is None else max_nm
     if max_nm <= 0:
         return None
-    for k in range(1, 5):
-        for brg in range(0, 360, 45):
-            p = _advance(lat, lon, brg, max_nm * k / 4.0)
-            if wf.wind_at(*p, epoch):
-                return p
-    return None
+    cands = [_advance(lat, lon, brg, max_nm * k / 4.0)
+             for k in range(1, 5) for brg in range(0, 360, 45)]
+    cands += _grid_edge_points(wf, lat, lon)
+    best = None
+    for d, p in sorted((_hav_nm(lat, lon, *p), p) for p in cands):
+        if d > max_nm:
+            break
+        if wf.wind_at(*p, epoch):
+            best = p
+            break
+    return best
+
+
+def _grid_edge_points(wf, lat, lon):
+    """The point of each forecast series' grid box nearest (lat, lon), nudged just inside it."""
+    out = []
+    for frames in (getattr(wf, "series", None) or {}).values():
+        if not frames:
+            continue
+        f = frames[0]
+        try:
+            la0, la1 = float(f.lat.min()), float(f.lat.max())
+            lo0, lo1 = float(f.lon.min()), float(f.lon.max())
+        except (AttributeError, TypeError, ValueError):
+            continue
+        eps = 1e-6
+        out.append((min(max(lat, la0 + eps), la1 - eps), min(max(lon, lo0 + eps), lo1 - eps)))
+    return out
 
 
 def route_leg(wf, P, slat, slon, t0, dlat, dlon, deadline=None,
