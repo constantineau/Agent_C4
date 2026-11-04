@@ -198,5 +198,24 @@ print("  ", rd)
 check("own offset unknown → says 'of the course', not 'to our'",
       "2.0 nm right of the course" in rd and "to our" not in rd)
 
+# Leverage is measured against each boat's NEAREST leg, so across a turn the two offsets can belong to
+# different legs and their difference means nothing. Course (0,0)→(0,10)→(10,10): we're at (1,9),
+# +1 nm right of the north leg; the rival at (9,11) is −1 nm (left) of the east leg. Subtracting says
+# "2.0 nm to our left", but the rival is ~8 nm to our RIGHT. Different legs → claim no side.
+print("rival on a different leg (#160 turn):")
+from app import fleet as _fleet
+_pts = [(0.0, 0.0), (0.0, 10.0), (10.0, 10.0)]
+_, own_lev, own_leg = _fleet._course_progress(1.0, 9.0, _pts)
+_, riv_lev, riv_leg = _fleet._course_progress(9.0, 11.0, _pts)
+check("repro geometry: own on leg 0, rival on leg 1", (own_leg, riv_leg) == (0, 1))
+rival_turn = {**rival, "leverage_nm": riv_lev, "leg_index": riv_leg}
+rd = fleet_read({"available": True, "own": {"leverage_nm": own_lev, "leg_index": own_leg},
+                 "fleet": [rival_turn]})
+print("  ", rd)
+check("different legs → no side claimed", "to our" not in rd and "of the course" not in rd and "ahead" in rd)
+rd = fleet_read({"available": True, "own": {"leverage_nm": 5.0, "leg_index": 1},
+                 "fleet": [{**rival, "leg_index": 1}]})
+check("same leg → side still given", "3.0 nm to our left" in rd)
+
 print("\nRESULT:", "ALL GREEN" if ok else "FAILURES ABOVE")
 import sys; sys.exit(0 if ok else 1)

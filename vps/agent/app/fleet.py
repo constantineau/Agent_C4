@@ -152,9 +152,10 @@ def _fleet_row(entry, obj, matched_by, mconf, source, pts, origin, own, own_dtf,
     dtf = None
     if pts and obj.get("lat") is not None:
         te, tn = _nm(origin[0], origin[1], obj["lat"], obj["lon"])
-        dtf, lev, _ = _course_progress(te, tn, pts)
+        dtf, lev, leg = _course_progress(te, tn, pts)
         row["dtf_nm"] = round(dtf, 2) if dtf is not None else None
         row["leverage_nm"] = round(lev, 2) if lev is not None else None
+        row["leg_index"] = leg   # which leg leverage_nm is measured against
         if own_dtf is not None and dtf is not None:
             row["on_water_lead_nm"] = round(own_dtf - dtf, 2)   # + = they're ahead on the water
     c = corr or {}
@@ -211,12 +212,12 @@ def get_fleet(max_range_nm: float = 40.0):
         gaps.append("no course loaded, no distance to finish")
 
     # own progress
-    own_dtf = own_lev = None
+    own_dtf = own_lev = own_leg = None
     own_tot = _tot_coeff(own_cfg, method) or 1.0
     own_alw = _allowance_s_per_nm(own_cfg)
     if pts and own.get("lat") is not None:
         oe, on = _nm(origin[0], origin[1], own["lat"], own["lon"])
-        own_dtf, own_lev, _ = _course_progress(oe, on, pts)
+        own_dtf, own_lev, own_leg = _course_progress(oe, on, pts)
 
     # elapsed-time context: division guns (SIs) / the race-log session → FULL-race corrected
     # (the best estimate); no gun anywhere → remaining-race basis, flagged
@@ -266,6 +267,7 @@ def get_fleet(max_range_nm: float = 40.0):
         "own_division": (own_cfg.get("division") or "").strip() or None,
         "own": {"dtf_nm": round(own_dtf, 2) if own_dtf is not None else None,
                 "leverage_nm": round(own_lev, 2) if own_lev is not None else None,
+                "leg_index": own_leg,
                 "fix": own.get("lat") is not None},
         "count_matched": len(fleet), "count_traffic": len(traffic),
         "count_ais": sum(1 for f in fleet if f.get("source") == "ais"),
