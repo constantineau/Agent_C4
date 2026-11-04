@@ -15,8 +15,9 @@ NOTE: the archive-mining polar analysis (`polar_tool.py`, Timescale `time_bucket
 abstracted here.
 """
 import os
+import time
 
-from shared import units
+from shared import n2k_sources, source_policy, units
 
 # CloudSource needs the TimescaleDB pool; OnboardSource (Pi) does not — and the onboard image
 # ships no psycopg. Guard the import so `DATA_SOURCE=onboard` can run without a Postgres driver.
@@ -28,40 +29,72 @@ except ImportError:
 
 BOAT_ID = os.environ.get("BOAT_ID", "sr33")
 
+# `source_priority` is tuned live in the DB; a few seconds' cache keeps one navigator read (seven
+# latest_value calls plus the series) to a single priority query.
+PRIORITY_TTL_S = 10.0
+_priority_cache = (None, 0.0)
+
+
+def load_priority():
+    """channel -> ordered matchers (rank 1 first) from the boat's `source_priority` table — the
+    cloud's one priority source, shared by `/conditions` (`tools`) and the engine reads here, so
+    an operator who re-ranks a channel moves every read at once."""
+    global _priority_cache
+    prio, at = _priority_cache
+    if prio is not None and time.monotonic() - at < PRIORITY_TTL_S:
+        return prio
+    with pool.connection() as conn:
+        rows = conn.execute(
+            "SELECT channel, match FROM source_priority WHERE boat_id = %s ORDER BY channel, rank",
+            (BOAT_ID,),
+        ).fetchall()
+    prio = {}
+    for r in rows:
+        prio.setdefault(r["channel"], []).append(r["match"].lower())
+    _priority_cache = (prio, time.monotonic())
+    return prio
+
 
 class CloudSource:
     """TimescaleDB-backed source — reproduces the exact queries the modules used pre-9.0."""
 
     def latest_value(self, path):
-        """Freshest raw SI value (any source) for a path, or None."""
-        with pool.connection() as conn:
-            r = conn.execute(
-                "SELECT value FROM telemetry_raw WHERE boat_id=%s AND path=%s "
-                "AND value IS NOT NULL ORDER BY time DESC LIMIT 1", (BOAT_ID, path),
-            ).fetchone()
-        return r["value"] if r else None
+        """Raw SI value for a path from the priority-preferred publisher, or None."""
+        s = self.latest_sample(path)
+        return s[0] if s else None
 
     def latest_sample(self, path):
-        """(value, epoch) of the freshest sample (any source) for a path, from ONE row, or None —
-        the collision watch judges the own fix's age on the reading it actually uses."""
+        """(value, epoch) of the priority-preferred publisher's latest sample, from ONE row, or None
+        — the same pick as `series()` (and the onboard read), so the live value and the window
+        agree on which device they read (#167). Candidates are each publisher's latest sample
+        within FAILOVER_AGE_S of the newest, judged against the data, not the wall clock."""
+        # Two queries on purpose: with the newest time as a subquery bound, TimescaleDB cannot
+        # exclude chunks and the read ran past 60 s on the dev DB; a literal bound takes ~10 ms.
         with pool.connection() as conn:
-            r = conn.execute(
-                "SELECT value, extract(epoch FROM time) AS t FROM telemetry_raw "
-                "WHERE boat_id=%s AND path=%s AND value IS NOT NULL ORDER BY time DESC LIMIT 1",
-                (BOAT_ID, path),
+            newest = conn.execute(
+                "SELECT time FROM telemetry_raw WHERE boat_id=%s AND path=%s "
+                "AND value IS NOT NULL ORDER BY time DESC LIMIT 1", (BOAT_ID, path),
             ).fetchone()
-        return (r["value"], float(r["t"])) if r else None
+            if not newest:
+                return None
+            rows = conn.execute(
+                "SELECT DISTINCT ON (source) source, value, extract(epoch FROM time) AS t "
+                "FROM telemetry_raw WHERE boat_id=%s AND path=%s AND value IS NOT NULL "
+                "AND time >= %s - make_interval(secs => %s) ORDER BY source, time DESC",
+                (BOAT_ID, path, newest["time"], source_policy.FAILOVER_AGE_S),
+            ).fetchall()
+        best = source_policy.preferred(
+            path, [(r["source"], float(r["t"]), r["value"]) for r in rows],
+            n2k_sources.devices_for(BOAT_ID), load_priority())
+        return (best[2], best[1]) if best else None
 
     def series(self, path, minutes):
-        """[(epoch_s, raw_value)] for a path over the window, all sources, time-ordered."""
-        with pool.connection() as conn:
-            rows = conn.execute(
-                "SELECT extract(epoch FROM time) AS t, value FROM telemetry_raw "
-                "WHERE boat_id=%s AND path=%s AND value IS NOT NULL "
-                "AND time > now() - %s::interval ORDER BY time",
-                (BOAT_ID, path, f"{minutes} minutes"),
-            ).fetchall()
-        return [(float(r["t"]), float(r["value"])) for r in rows]
+        """[(epoch_s, raw_value)] for a path over the window, time-ordered, from ONE publisher
+        for the whole window — the source policy's pick (`source_policy.series_publisher`) under
+        the boat's `source_priority` table, as `/conditions` uses. All sources interleaved read
+        two TWD publishers 10 deg apart as oscillation (#167)."""
+        return source_policy.one_publisher(path, self.series_by_source(path, minutes),
+                                           n2k_sources.devices_for(BOAT_ID), load_priority())
 
     def series_by_source(self, path, minutes):
         """[(source, epoch_s, raw_value)] for a path over the window, time-ordered."""
