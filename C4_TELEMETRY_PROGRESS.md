@@ -3,6 +3,12 @@
 Goal (Cole): **lose no telemetry**, and **copy all telemetry off the Pi to the VPS**.
 Deletion from the boat is allowed only *after* an off-boat copy is sha256-verified.
 
+## ⏸ PICK UP HERE — 2026-11-04 (dev @ db5ee63+, main @ 405be7f)
+
+**Cole's decision 2026-11-04: deploy engine/copilot fixes to the boat REMOTELY AS THEY MERGE** (not one spring batch). Each deploy: backup + rollback images first, Orin OLLAMA_CONTEXT_LENGTH=6144 before the first copilot deploy (#208). Fixes can't be checked against live wind/GPS on the hard — only that services come up healthy.
+**The c4-prep-queue job HUNG 2026-11-03 19:47Z** on #212: the systemd unit has no GitHub login, so `git push` failed and prep.sh looped forever waiting for the head (log 5 MB of gh auth errors). Stopping it was blocked by the classifier — Cole: `! systemctl stop c4-prep-queue; pkill -f prep.sh`. Don't use the unit again without GH auth in its environment.
+PRs #211–#220: GitHub CI green on all. Codex reviews running serially from a session script (order 219, 211–215, 218, 217, 216, 220). Then fix confirmed findings, Cole merges, deploy.
+
 ## ⏸ PICK UP HERE — 2026-11-03 EVENING (dev @ db5ee63, main @ 405be7f)
 
 **C4 is still OUT OF THE WATER UNTIL SPRING.** Shore work only.
