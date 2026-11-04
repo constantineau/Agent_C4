@@ -3,6 +3,12 @@
 Goal (Cole): **lose no telemetry**, and **copy all telemetry off the Pi to the VPS**.
 Deletion from the boat is allowed only *after* an off-boat copy is sha256-verified.
 
+## ⏸ PICK UP HERE — 2026-11-04 (dev @ db5ee63+, main @ 405be7f)
+
+**Cole's decision 2026-11-04: deploy engine/copilot fixes to the boat REMOTELY AS THEY MERGE** (not one spring batch). Each deploy: backup + rollback images first, Orin OLLAMA_CONTEXT_LENGTH=6144 before the first copilot deploy (#208). Fixes can't be checked against live wind/GPS on the hard — only that services come up healthy.
+**The c4-prep-queue job HUNG 2026-11-03 19:47Z** on #212: the systemd unit has no GitHub login, so `git push` failed and prep.sh looped forever waiting for the head (log 5 MB of gh auth errors). Stopping it was blocked by the classifier — Cole: `! systemctl stop c4-prep-queue; pkill -f prep.sh`. Don't use the unit again without GH auth in its environment.
+PRs #211–#220: GitHub CI green on all. Codex reviews running serially from a session script (order 219, 211–215, 218, 217, 216, 220). Then fix confirmed findings, Cole merges, deploy.
+
 ## ⏸ PICK UP HERE — 2026-11-03 EVENING (dev @ db5ee63, main @ 405be7f)
 
 **C4 is still OUT OF THE WATER UNTIL SPRING.** Shore work only.
@@ -17,12 +23,16 @@ Deletion from the boat is allowed only *after* an off-boat copy is sha256-verifi
 **In flight (2026-11-03 ~19:10Z) — IF THE SESSION DIED, RESUME HERE:** six agents were mid-work; none had committed or pushed yet. Their work is uncommitted in these worktrees (all from origin/dev):
 | Worktree /mnt/data/c4-wt/… | Task | Notes |
 |---|---|---|
-| w3-opus-imports | Lab race imports use a separate chain ANTHROPIC_IMPORT_MODEL_CHAIN (default claude-opus-5-5,claude-fable-5-1); everything else stays on ANTHROPIC_MODEL_CHAIN | Cole said "Opus for imports". Needs ONE live Bayview import on Opus 5.5 (≤ $5, never written to the live Lab DB) before PR. Merge needs Lab container RECREATE. |
+| w3-opus-imports | DONE → PR #216 queued (Bayview on Opus 5.5: correct, 168 s, ~$1.30). Lab race imports use a separate chain ANTHROPIC_IMPORT_MODEL_CHAIN (default claude-opus-5-5,claude-fable-5-1); everything else stays on ANTHROPIC_MODEL_CHAIN | Cole said "Opus for imports". Needs ONE live Bayview import on Opus 5.5 (≤ $5, never written to the live Lab DB) before PR. Merge needs Lab container RECREATE. |
 | w3-159-tactics-side | Closes #159 | DONE → PR #211, in the CI+Codex queue |
-| w3-160-rival-offset | Closes #160 | test-first |
-| w3-161-tod-delta | Closes #161 | test-first, before/after numbers |
-| w3-163-wind-stale | Closes #163 | stale wind = "no live data"; inject now |
-| w3-164-gps-loss | Closes #164 | missing GPS course = unknown, not danger |
+| w3-160-rival-offset | Closes #160 | DONE → PR #213, queued |
+| w3-161-tod-delta | Closes #161 | DONE → PR #212, queued |
+| w3-163-wind-stale | Closes #163 | DONE → PR #214, queued |
+| w3-164-gps-loss | Closes #164 | DONE → PR #215, queued |
+| — | #166 | ALREADY FIXED by #189 (ce38c45); issue still open — close it (needs Cole OK) |
+| w3-167-wind-source | Closes #167 | DONE → PR #218, queued (Jul 18 had 2 TWD publishers — bug was live) |
+| w3-203-route-followups | Closes #203 | DONE → PR #220, queued (all 5 items fixed) |
+| w3-210-ground-units | Closes #210 | DONE → PR #217, queued |
 CI+Codex queue (systemd unit c4-prep-queue, survives the session): append `PR WORKTREE` to /root/c4-ops/prep-queue.txt; results in /root/c4-ops/prep-chain.log; restart with `systemd-run --unit=c4-prep-queue --collect -p StandardOutput=append:/root/c4-ops/prep-chain.log /root/c4-ops/prep-queue.sh` if it idled out.
 To resume: `git -C <worktree> status` / `diff`, finish each (respawn an agent with the brief above + tools/agents/agent-rules.md), then per PR: push, open PR to dev, `bash /root/c4-ops/prep.sh <pr> <worktree>` SERIALLY (CI + Codex), fix confirmed findings, Cole merges. Agents must not run `make ci` in parallel (shared sr33-ci-* tags). Next after these: #166, #167, #203, #210.
 **Still open from the block below:** rest of map #188 (#159–#161, #163, #164, #166, #167; #203).
