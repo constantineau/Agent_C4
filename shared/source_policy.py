@@ -110,22 +110,17 @@ def series_publisher(path_or_channel, rows, devices, priority=None,
     best-ranked source that is still current wins, current meaning its last sample is within
     `failover_s` of the newest sample of any publisher (relative, never the wall clock, so a
     replay works). A ranked lead that went quiet mid-window is passed over for the whole window,
-    which removes the handover step. With no current ranked source, or an unranked path, any
-    current source: most samples first, then label, so the same window always gives the same
-    answer. Unranked sources are never dropped, only ranked below the policy's picks."""
-    pubs = {}
+    which removes the handover step. Within the winning rank — or among all current sources when
+    none is ranked — the one with the latest sample wins, label breaking a tie: exactly the
+    `preferred()` live pick, so the window and the live value never name different devices
+    (picking by sample count here read 200 deg history against a 210 deg live value). Unranked
+    sources are never dropped, only ranked below the policy's picks."""
+    last = {}
     for src, t, _v in rows:
-        n, last = pubs.get(src, (0, t))
-        pubs[src] = (n + 1, max(last, t))
-    if not pubs:
-        return None
-    newest = max(last for _n, last in pubs.values())
-    current = {s: n for s, (n, last) in pubs.items() if newest - last <= failover_s}
-    for m in matchers_for(path_or_channel, priority):
-        ranked = [s for s in current if n2k_sources.matches(s, m, devices)]
-        if ranked:
-            return min(ranked, key=lambda s: (-current[s], s))
-    return min(current, key=lambda s: (-current[s], s))
+        last[src] = max(last.get(src, t), t)
+    best = preferred(path_or_channel, [(s, t, None) for s, t in last.items()], devices,
+                     priority, failover_s)
+    return best[0] if best else None
 
 
 def preferred(path_or_channel, candidates, devices, priority=None,
@@ -135,15 +130,17 @@ def preferred(path_or_channel, candidates, devices, priority=None,
     Same rule as `OnboardSource._prefer` and `series_publisher`: the best-ranked source whose
     sample is within `failover_s` of the newest one wins (freshest within that rank), else the
     freshest of all. A live read that took "whoever wrote last" disagreed with the window read
-    whenever two publishers differ, and tactics reported the gap as a current shift (#167)."""
+    whenever two publishers differ, and tactics reported the gap as a current shift (#167).
+    Ties on time go to the larger label, so the pick never depends on row order."""
     if not candidates:
         return None
-    freshest = max(candidates, key=lambda r: r[1])
+    latest = lambda r: (r[1], r[0])
+    freshest = max(candidates, key=latest)
     for m in matchers_for(path_or_channel, priority):
         ranked = [r for r in candidates if n2k_sources.matches(r[0], m, devices)
                   and freshest[1] - r[1] <= failover_s]
         if ranked:
-            return max(ranked, key=lambda r: r[1])
+            return max(ranked, key=latest)
     return freshest
 
 

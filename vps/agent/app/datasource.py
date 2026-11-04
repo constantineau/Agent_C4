@@ -68,13 +68,20 @@ class CloudSource:
         — the same pick as `series()` (and the onboard read), so the live value and the window
         agree on which device they read (#167). Candidates are each publisher's latest sample
         within FAILOVER_AGE_S of the newest, judged against the data, not the wall clock."""
+        # Two queries on purpose: with the newest time as a subquery bound, TimescaleDB cannot
+        # exclude chunks and the read ran past 60 s on the dev DB; a literal bound takes ~10 ms.
         with pool.connection() as conn:
+            newest = conn.execute(
+                "SELECT time FROM telemetry_raw WHERE boat_id=%s AND path=%s "
+                "AND value IS NOT NULL ORDER BY time DESC LIMIT 1", (BOAT_ID, path),
+            ).fetchone()
+            if not newest:
+                return None
             rows = conn.execute(
                 "SELECT DISTINCT ON (source) source, value, extract(epoch FROM time) AS t "
                 "FROM telemetry_raw WHERE boat_id=%s AND path=%s AND value IS NOT NULL "
-                "AND time >= (SELECT max(time) FROM telemetry_raw WHERE boat_id=%s AND path=%s "
-                "AND value IS NOT NULL) - make_interval(secs => %s) ORDER BY source, time DESC",
-                (BOAT_ID, path, BOAT_ID, path, source_policy.FAILOVER_AGE_S),
+                "AND time >= %s - make_interval(secs => %s) ORDER BY source, time DESC",
+                (BOAT_ID, path, newest["time"], source_policy.FAILOVER_AGE_S),
             ).fetchall()
         best = source_policy.preferred(
             path, [(r["source"], float(r["t"]), r["value"]) for r in rows],

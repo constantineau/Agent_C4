@@ -203,7 +203,8 @@ class _FakeConn:
                     last[s] = {"source": s, "value": v, "t": t}
             self._out = list(last.values())
         elif "LIMIT 1" in sql:
-            self._out = [{"value": rows[-1][3], "t": rows[-1][2]}] if rows else []
+            self._out = ([{"value": rows[-1][3], "t": rows[-1][2], "time": rows[-1][2]}]
+                         if rows else [])
         else:
             self._out = [{"source": s, "value": v, "t": t} for s, _p, t, v in rows]
         return self
@@ -282,6 +283,22 @@ rows = [(s, p, t + (1.0 if s == ORCA else 0.0), v) for s, p, t, v in cloud_rows(
 cloud = run_cloud(rows, PROMOTED)
 live = round(math.degrees(cloud.latest_value(TWD)), 3)
 check(f"…and so does the live read, though the Orca wrote last (got {live})", live == 210.0)
+
+print("cloud source: two publishers on ONE rank — window and live read pick the same one:")
+rows = cloud_rows()
+rows = [r for r in rows if r[1] != TWD]
+rows += [("derived-a", TWD, T - 100 + i, math.radians(200.0)) for i in range(100)]   # last T-1
+rows += [("derived-b", TWD, T - 10 + i, math.radians(210.0)) for i in range(11)]     # last T
+for prio_name, prio in (("same rank", SEEDED), ("unranked", dict(SEEDED, twd=[]))):
+    cloud = run_cloud(rows, prio)
+    win = {round(math.degrees(v), 3) for _, v in cloud.series(TWD, 12)}
+    live = round(math.degrees(cloud.latest_value(TWD)), 3)
+    check(f"{prio_name}: window {sorted(win)} and live {live} are the same publisher",
+          win == {live})
+    with freeze_time(NOW):
+        r = tactics.get_tactics()
+    check(f"{prio_name}: no false shift (shift {r['wind']['shift_deg']}°)",
+          r["available"] and abs(r["wind"]["shift_deg"]) < 1.0)
 
 cloud = run_cloud([], SEEDED)
 check("cloud series of nothing is empty", cloud.series(TWD, 12) == [])

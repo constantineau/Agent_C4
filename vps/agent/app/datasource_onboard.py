@@ -512,20 +512,8 @@ class OnboardSource:
         Freshest wins when the path is unranked, or when no ranked source has a sample within
         FAILOVER_AGE_S of the newest one — an unranked source is still real data and must never
         be dropped for want of an opinion about it."""
-        if not candidates:
-            return None
-        freshest = max(candidates, key=lambda r: r[1])
-        matchers = source_policy.matchers_for(path)
-        if not matchers:
-            return freshest
-        devices = n2k_sources.devices_for(BOAT_ID)
-        for m in matchers:
-            ranked = [r for r in candidates
-                      if n2k_sources.matches(r[0], m, devices)
-                      and freshest[1] - r[1] <= source_policy.FAILOVER_AGE_S]
-            if ranked:
-                return max(ranked, key=lambda r: r[1])
-        return freshest
+        # One rule for live and window picks (`source_policy.preferred`/`series_publisher`).
+        return source_policy.preferred(path, candidates, n2k_sources.devices_for(BOAT_ID))
 
     def latest_position(self, max_age_s=None):
         """(lat, lon, epoch, source) from the live cache only — lat and lon from ONE source, the
