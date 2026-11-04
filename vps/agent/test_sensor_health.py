@@ -671,5 +671,37 @@ h_kick = sh.assess(HealthSource(roll=133.1 * 0.0174533, pitch=0.0),
 check("a broken attitude limit still drives the chip to danger",
       h_kick["status"] == "danger" and h_kick["attitude"]["status"] == "danger")
 
+print("\nassess() — the GPS course stops (#164):")
+
+
+class GpsLost:
+    """The GPS publishes one course and speed, then goes quiet; the boat turns 90° and the
+    compass follows it. 600 heading samples at 090°, one COG of 000° a minute before them."""
+    def __init__(self, gap_s=60):
+        self.gap = gap_s
+
+    def ais_sources(self):
+        return {AIS}
+
+    def latest_value(self, path):
+        return None
+
+    def series_by_source(self, path, minutes):
+        r = 0.0174533
+        if path == "navigation.headingTrue":
+            return [(G24XD, T0 + self.gap + i, 90 * r) for i in range(600)]
+        if path == "navigation.courseOverGroundTrue":
+            return [(ORCA, T0, 0.0)]
+        return [(ORCA, T0, 3.5)]          # speedOverGround, m/s
+
+
+h_lost = sh.assess(GpsLost(), conditions={"channels": HEALTHY})["heading"]
+check(f"a stale course is not paired with fresh headings ({h_lost['status']}: {h_lost['reason']})",
+      h_lost["status"] == "unknown" and h_lost["samples"] == 0)
+check("...and the reason says the course is missing, not that the boat is slow",
+      "no GPS course" in h_lost["reason"])
+check("a course 1 s away still pairs (the uplink and the archive are both whole seconds)",
+      sh.assess(GpsLost(gap_s=-599), conditions={"channels": HEALTHY})["heading"]["samples"] >= 1)
+
 print("\n" + ("PASS" if ok else "FAIL"))
 raise SystemExit(0 if ok else 1)
