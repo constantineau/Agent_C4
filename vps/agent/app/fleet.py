@@ -491,10 +491,9 @@ def _corrected_delta(entry, method, is_tod, dtf, own_dtf, sog, own_sog, own_tot,
             corr_them = (e_them + ttf_them) - alw * course_nm
             corr_us = (e_us + ttf_us) - own_alw * course_nm
             return corr_them - corr_us, "full", 0.65
-        # remaining: each boat owes its allowance on the miles still to sail
-        corr_them = ttf_them - alw * dtf
-        corr_us = ttf_us - own_alw * own_dtf
-        return corr_them - corr_us, "remaining", 0.6
+        # remaining: allowance over ONE common distance (ours). Charging each boat over its own
+        # remaining miles cancels a real lead at equal GPH (#161): 1 nm ahead scored as a tie.
+        return (ttf_them - ttf_us) - (alw - own_alw) * own_dtf, "remaining", 0.6
     tot_them = _tot_coeff(entry, method)
     if tot_them is None:
         return None, None, 0.0
