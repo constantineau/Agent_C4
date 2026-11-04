@@ -217,5 +217,17 @@ rd = fleet_read({"available": True, "own": {"leverage_nm": 5.0, "leg_index": 1},
                  "fleet": [{**rival, "leg_index": 1}]})
 check("same leg → side still given", "3.0 nm to our left" in rd)
 
+# Behind a leg's start the clamped projection lands on the endpoint, so "cross-track" became the
+# distance to the mark and the side could flip. Course (0,0)→(0,10): we're at (1,-5), the rival at
+# (2,-1) — the rival is 1 nm to our RIGHT. Leverage must be the offset from the leg's LINE.
+print("rival beyond a leg endpoint (#160):")
+_pts1 = [(0.0, 0.0), (0.0, 10.0)]
+_, own_lev, own_leg = _fleet._course_progress(1.0, -5.0, _pts1)
+_, riv_lev, riv_leg = _fleet._course_progress(2.0, -1.0, _pts1)
+rd = fleet_read({"available": True, "own": {"leverage_nm": own_lev, "leg_index": own_leg},
+                 "fleet": [{**rival, "leverage_nm": riv_lev, "leg_index": riv_leg}]})
+print("  ", rd)
+check("behind the start: rival 1.0 nm to our right", "1.0 nm to our right" in rd)
+
 print("\nRESULT:", "ALL GREEN" if ok else "FAILURES ABOVE")
 import sys; sys.exit(0 if ok else 1)

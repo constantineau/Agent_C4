@@ -98,7 +98,7 @@ def _nm(lat0, lon0, lat, lon):
 def _course_progress(pe, pn, pts):
     """pts = [(e,n)] course marks in nm (start..finish). Project (pe,pn) onto the polyline.
     Returns (dtf_nm, leverage_nm, leg_index). dtf = remaining distance along the course to the
-    finish; leverage = signed cross-track on the nearest leg (+ = right of the course heading)."""
+    finish; leverage = signed offset from the nearest leg's line (+ = right of the course heading)."""
     best = None
     for i in range(len(pts) - 1):
         ax, ay = pts[i]
@@ -111,14 +111,15 @@ def _course_progress(pe, pn, pts):
         tc = max(0.0, min(1.0, t))
         projx, projy = ax + tc * vx, ay + tc * vy
         perp = math.hypot(pe - projx, pn - projy)
-        # signed cross-track: cross product sign of leg vector × (point - proj)
-        sign = 1.0 if (vx * (pn - ay) - vy * (pe - ax)) < 0 else -1.0
+        # signed cross-track from the leg's LINE (not the clamped point, which past an endpoint is
+        # the distance to the mark and makes two boats' offsets incomparable). + = right.
+        xte = -(vx * (pn - ay) - vy * (pe - ax)) / math.sqrt(seg2)
         if best is None or perp < best[0]:
             # remaining distance: rest of this leg + all later legs
             rem = math.hypot(bx - projx, by - projy)
             for j in range(i + 1, len(pts) - 1):
                 rem += math.hypot(pts[j + 1][0] - pts[j][0], pts[j + 1][1] - pts[j][1])
-            best = (perp, rem, sign * perp, i)
+            best = (perp, rem, xte, i)
     if best is None:
         return None, None, None
     return best[1], best[2], best[3]
