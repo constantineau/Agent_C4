@@ -64,9 +64,14 @@ def get_tactics(route: str = None):
     t0 = series[0][0]
     slope = _slope([(t - t0) / 60 for t, _ in series], devs)     # deg/min
     span_min = (series[-1][0] - t0) / 60
-    persistent = abs(slope) * span_min > max(3.0, osc * 0.6)
     trend = "steady" if abs(slope) <= 0.2 else ("right" if slope > 0 else "left")  # compass-shift dir
     sign = 1 if slope > 0 else -1                                                  # +1 = shifted RIGHT
+    # ONE sign drives the favoured side, the phase AND the sentence (#159). The sentence reads
+    # now-vs-mean (describe_shift), so a shift only counts as lasting when now-vs-mean points the
+    # same way as the slope. At the end of an oscillation they disagree (wind went right for 12 min,
+    # then swung back left): that is not a lasting shift either way.
+    persistent = (abs(slope) * span_min > max(3.0, osc * 0.6)
+                  and wp.shift_sign(mean, cur) == sign)
 
     # current tack + point of sail (from the boat's true wind angle) + lifted/headed
     hdg = s["heading"] if s["heading"] is not None else s["cog"]
