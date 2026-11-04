@@ -91,5 +91,21 @@ leg = OPT.route_leg(WF, POL.polars_stw(), 43.5, -81.3, T0, 44.3, -81.3)
 check(f"a leg with no wind anywhere near never reaches its mark ({leg.get('reached')})",
       leg.get("reached") is False)
 
+print("4) borrowed wind keeps its forecast health (Codex on #220)")
+# the forecast ends 1 h after the gun, so the route sails on the held last frame; on a course
+# ~3 nm east of the grid every node borrows that held frame, and the route must still say so
+SHORT = WindField({("gfs", "det"): [grib.GribFrame(
+    "gfs", "det", T0 + k * H, LAT, LON, np.full((LAT.size, LON.size), 6.0),
+    np.full((LAT.size, LON.size), 0.0), True) for k in range(2)]},
+    [{"model": "gfs"}], (45, 43, -83.5, -82.0), T0, T0 + H)
+check("(control) inside the grid: says the forecast ends",
+      OPT.FORECAST_ENDS in route(-82.5, SHORT).get("warnings", []))
+r4 = route(-81.94, SHORT)
+print(f"     complete={r4.get('complete')} degraded={r4.get('degraded')} warnings={r4.get('warnings')}")
+check("outside the grid, on borrowed wind: still says the forecast ends",
+      OPT.FORECAST_ENDS in r4.get("warnings", []) and r4.get("degraded"))
+check("…the held-edge check sees the borrowed frame",
+      OPT._forecast_held(SHORT, [{"lat": 43.9, "lon": -81.94, "t": T0 + 5 * H}]) == "end")
+
 print("PASS" if ok else "FAIL")
 raise SystemExit(0 if ok else 1)

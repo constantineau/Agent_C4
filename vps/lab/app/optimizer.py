@@ -410,14 +410,20 @@ def _layline_pair(P, tws, twd, pos, mlat, mlon, length_nm):
 def _nearby_wind(wf, lat, lon, epoch, max_nm=None):
     """The wind of the nearest point the forecast covers, within `max_nm` (default FILL_NM), or
     None. Searched on rings (a quarter of the limit apart, every 45°), nearest ring first."""
+    p = _nearby_point(wf, lat, lon, epoch, max_nm)
+    return wf.wind_at(*p, epoch) if p else None
+
+
+def _nearby_point(wf, lat, lon, epoch, max_nm=None):
+    """The (lat, lon) whose wind `_nearby_wind` borrows, or None."""
     max_nm = FILL_NM if max_nm is None else max_nm
     if max_nm <= 0:
         return None
     for k in range(1, 5):
         for brg in range(0, 360, 45):
-            w = wf.wind_at(*_advance(lat, lon, brg, max_nm * k / 4.0), epoch)
-            if w:
-                return w
+            p = _advance(lat, lon, brg, max_nm * k / 4.0)
+            if wf.wind_at(*p, epoch):
+                return p
     return None
 
 
@@ -1212,6 +1218,11 @@ def _forecast_held(wf, full_path, start_epoch=None):
     hit = None
     for p in full_path or []:
         d = wf.detail_at(p["lat"], p["lon"], p["t"])
+        if not d:
+            # borrowed wind carries its donor's health (Codex on #220): a held frame borrowed
+            # from nearby is still a held frame
+            q = _nearby_point(wf, p["lat"], p["lon"], p["t"])
+            d = wf.detail_at(*q, p["t"]) if q else None
         if d and d.get("held"):
             # the wind field says which edge it held, from the series it actually used (Codex on
             # #200: comparing against every model's bounds, off-position grids included, called a

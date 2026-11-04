@@ -148,6 +148,47 @@ CUR.build_currentfield((44.5, 43.5, -86.5, -85.5), START, START + 24 * 3600)
 CUR._cycle_for = _real_cycle
 check(f"once the stuck read ends, the next build reads again ({len(calls)} tried)", len(calls) >= 1)
 
+# Codex on #220: Optimize and Playbook can fetch at the same moment. Both used to pass the
+# "is a read stuck?" check before either had timed out, so both started reads, and only the last
+# one stayed tracked. Two callers start together (a barrier); every read hangs until released.
+print("3) two builds fetching at once start one read, not two")
+CUR.FETCH_TIMEOUT = 0.5
+reads = []
+hold = threading.Event()
+
+
+def _hang_on_hold(url, bbox, want_axes):
+    reads.append(url)
+    hold.wait(30)
+    raise OSError("released")
+
+
+CUR._open_slice = _hang_on_hold
+gate = threading.Barrier(2)
+outcome = []
+
+
+def _caller():
+    gate.wait(5)
+    try:
+        CUR._fetch("http://thredds/y.nc", (0, 1, 0, 1), True)
+        outcome.append("read")
+    except CUR.FTimeout:
+        outcome.append("timeout")
+
+
+callers = [threading.Thread(target=_caller) for _ in range(2)]
+for c in callers:
+    c.start()
+for c in callers:
+    c.join(10)
+check(f"one read started ({len(reads)}), both callers gave up ({outcome})",
+      len(reads) == 1 and outcome == ["timeout", "timeout"])
+hold.set()
+for _t in threading.enumerate():
+    if _t.name == "lmhofs-slice":
+        _t.join(5)
+
 print("PASS" if ok else "FAIL")
 # a plain exit: a non-daemon stuck reader would hang the test here, which is the point
 raise SystemExit(0 if ok else 1)

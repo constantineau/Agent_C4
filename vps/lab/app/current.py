@@ -33,6 +33,7 @@ FILL = -9000.0                            # GLOFS land/missing sentinel is -9999
 
 _cache = {}
 _stuck = None          # the last read that timed out and may still be hung (#203)
+_fetch_lock = threading.Lock()   # check/start/join/update of `_stuck` as one step (Codex on #220)
 
 
 class CurrentField:
@@ -196,27 +197,31 @@ def _fetch(url, bbox, want_axes):
     subprocess could be killed, but would have to ship every slice's arrays back.
 
     Across builds (#203): while an earlier timed-out read is still hung, no new read starts, so
-    repeated Optimize/Playbook runs against a hung THREDDS never pile up more stuck threads."""
+    repeated Optimize/Playbook runs against a hung THREDDS never pile up more stuck threads. Reads
+    run one at a time, so two jobs racing can't both slip past that check."""
     global _stuck
-    if _stuck is not None and _stuck.is_alive():
-        raise FTimeout("an earlier read is still hung")
-    box = {}
+    # one at a time (Codex on #220): concurrent Optimize and Playbook jobs both passed the check
+    # before either timed out, each started a read, and only the last stuck one stayed tracked
+    with _fetch_lock:
+        if _stuck is not None and _stuck.is_alive():
+            raise FTimeout("an earlier read is still hung")
+        box = {}
 
-    def work():
-        try:
-            box["v"] = _open_slice(url, bbox, want_axes)
-        except BaseException as exc:  # noqa: BLE001 — handed to the caller below
-            box["e"] = exc
+        def work():
+            try:
+                box["v"] = _open_slice(url, bbox, want_axes)
+            except BaseException as exc:  # noqa: BLE001 — handed to the caller below
+                box["e"] = exc
 
-    t = threading.Thread(target=work, daemon=True, name="lmhofs-slice")
-    t.start()
-    t.join(FETCH_TIMEOUT)
-    if t.is_alive():
-        _stuck = t
-        raise FTimeout(f"no answer in {FETCH_TIMEOUT:.0f} s")
-    if "e" in box:
-        raise box["e"]
-    return box["v"]
+        t = threading.Thread(target=work, daemon=True, name="lmhofs-slice")
+        t.start()
+        t.join(FETCH_TIMEOUT)
+        if t.is_alive():
+            _stuck = t
+            raise FTimeout(f"no answer in {FETCH_TIMEOUT:.0f} s")
+        if "e" in box:
+            raise box["e"]
+        return box["v"]
 
 
 def build_currentfield(bbox, t_start, t_end, on_progress=None):
