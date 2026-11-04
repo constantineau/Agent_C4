@@ -53,6 +53,7 @@ the first replay read it:
     never silent on the fault; it was silent for one window length either side of it, and the
     first replay only ever saw that stretch because the timeline stopped at 00:09Z.
 """
+import bisect
 import math
 import os
 
@@ -133,6 +134,11 @@ HEADING_BAD_DEG = float(os.environ.get("HEALTH_HEADING_BAD_DEG", "35"))
 # tumbling sensor, which is the range gate's business, not this one's.
 HEADING_MAX_SPREAD_DEG = float(os.environ.get("HEALTH_HEADING_MAX_SPREAD_DEG", "25"))
 HEADING_MIN_SAMPLES = int(os.environ.get("HEALTH_HEADING_MIN_SAMPLES", "8"))
+# A heading is compared only with a COG/SOG this close to it in time (#164). With no limit, a GPS
+# that went quiet left one old course paired with every new heading, and the first turn after
+# that read as "compass misaligned". Both feeds are whole seconds (the onboard read keeps the last
+# sample per second; the uplink stamps heading and COG together), so 2 s pairs every live sample.
+HEADING_PAIR_TOL_S = float(os.environ.get("HEALTH_HEADING_PAIR_TOL_S", "2"))
 
 # --- provenance / policy-in-force checks ------------------------------------
 BOAT_ID = os.environ.get("BOAT_ID", "sr33")
@@ -291,12 +297,17 @@ def heading_bias(samples, reference=None, previous=None, previous_age_s=None):
     usable = [(h, c) for (_t, h, c, s) in samples
               if h is not None and c is not None and s is not None and s >= HEADING_MIN_SOG_KN]
     if len(usable) < HEADING_MIN_SAMPLES:
+        # Headings but no course beside them: the GPS reference is gone, not the boat slow (#164).
+        no_cog = any(h is not None for (_t, h, _c, _s) in samples) and \
+            not any(c is not None for (_t, _h, c, _s) in samples)
         return _hold_danger(
             {"available": False, "status": "unknown", "samples": len(usable),
              "reference": ref or None, "note": note,
-             "reason": f"need {HEADING_MIN_SAMPLES} samples above "
+             "reason": "no GPS course, compass unchecked" if no_cog else
+                       f"need {HEADING_MIN_SAMPLES} samples above "
                        f"{HEADING_MIN_SOG_KN:g} kn to check the compass"},
-            previous, previous_age_s, "too slow for COG to mean anything")
+            previous, previous_age_s, "no GPS course" if no_cog else
+            "too slow for COG to mean anything")
     mean, spread = _circular([_wrap180(h - c) for h, c in usable])
     # Decide on the value we REPORT, not on the raw float. Otherwise a bias of 14.951 prints as
     # "+15.0°" and is classified `ok` against a 15° threshold — a readout that contradicts its
@@ -541,13 +552,16 @@ def assess(source=None, minutes=None, conditions=None, previous=None, previous_a
     deg = 57.29577951308232
     att = attitude_plausible(None if roll is None else roll * deg,
                              None if pitch is None else pitch * deg)
-    # align the three series on the heading timestamps — nearest sample, no interpolation
-    def nearest(rows, t):
-        if not rows:
-            return None
-        return min(rows, key=lambda r: abs(r[0] - t))[1]
-    samples = [(t, h * deg, (lambda v: None if v is None else (v * deg) % 360)(nearest(cog, t)),
-                (lambda v: None if v is None else v * 1.943844)(nearest(sog, t)))
+    # align the three series on the heading timestamps — nearest sample within
+    # HEADING_PAIR_TOL_S, no interpolation. Nothing that close means no reference (#164).
+    def nearest(rows, times, t):
+        i = bisect.bisect_left(times, t)
+        best = min((rows[j] for j in (i - 1, i) if 0 <= j < len(rows)),
+                   key=lambda r: abs(r[0] - t), default=None)
+        return best[1] if best and abs(best[0] - t) <= HEADING_PAIR_TOL_S else None
+    cog_t, sog_t = [r[0] for r in cog], [r[0] for r in sog]
+    samples = [(t, h * deg, (lambda v: None if v is None else (v * deg) % 360)(nearest(cog, cog_t, t)),
+                (lambda v: None if v is None else v * 1.943844)(nearest(sog, sog_t, t)))
                for t, h in hdg]
     hb = heading_bias(samples, reference=ref, previous=previous,
                       previous_age_s=previous_age_s)

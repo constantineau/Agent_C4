@@ -7,7 +7,10 @@ Deletion from the boat is allowed only *after* an off-boat copy is sha256-verifi
 
 **Cole's decision 2026-11-04: deploy engine/copilot fixes to the boat REMOTELY AS THEY MERGE** (not one spring batch). Each deploy: backup + rollback images first, Orin OLLAMA_CONTEXT_LENGTH=6144 before the first copilot deploy (#208). Fixes can't be checked against live wind/GPS on the hard — only that services come up healthy.
 **The c4-prep-queue job HUNG 2026-11-03 19:47Z** on #212: the systemd unit has no GitHub login, so `git push` failed and prep.sh looped forever waiting for the head (log 5 MB of gh auth errors). Stopping it was blocked by the classifier — Cole: `! systemctl stop c4-prep-queue; pkill -f prep.sh`. Don't use the unit again without GH auth in its environment.
-PRs #211–#220: GitHub CI green on all. Codex reviews running serially from a session script (order 219, 211–215, 218, 217, 216, 220). Then fix confirmed findings, Cole merges, deploy.
+**MERGED 2026-11-04 (Cole: "merge all"), squash, dev @ 180f2bd:** #219 #211 #212 #213 #215 #216 #218 #214 #217 — each Codex-clean at its head. Fix rounds: #213 ×2, #214, #217, #218 ×2 (also made the live query fast: 60 s timeout → 0.9 s + 7 ms on dev DB).
+**#220 still open:** 4th Codex round in progress — every finding is the same class (a route path reaching "reached" with no wind); agent asked to sweep every reached=True path.
+**Follow-ups to file:** #215 minor (the 1 s pairing test passes at zero tolerance); #218 minor (cloud preferred() 45 s relative gap vs /conditions 45 s wall clock can pick different sources).
+**NOT DEPLOYED YET:** classifier blocked `docker compose up --build --force-recreate agent lab` (rollback tags would be :pre-20261104). Needs Cole to run it or say "you do it" explicitly. Then boat: Pi engine rebuild (#209 #213 #214 #218), Orin copilot (#207 #208 #217) after OLLAMA_CONTEXT_LENGTH=6144 on the Orin (needs sudo). Lab: #216 needs RECREATE.
 
 ## ⏸ PICK UP HERE — 2026-11-03 EVENING (dev @ db5ee63, main @ 405be7f)
 

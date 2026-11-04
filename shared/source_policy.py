@@ -97,6 +97,59 @@ def rank_for(path_or_channel, source, devices, priority=None):
     return None
 
 
+def series_publisher(path_or_channel, rows, devices, priority=None,
+                     failover_s=FAILOVER_AGE_S):
+    """Name the ONE publisher a window series should follow, or None when `rows` is empty.
+
+    `rows` is a `series_by_source` result: [(source, epoch, value)]. A window read that keeps
+    "whichever source wrote last each second" alternates between devices sample to sample; two
+    TWD publishers ~10 deg apart then read as a 10 deg oscillation, and when one drops out
+    mid-window as a lasting shift (#167). So the whole window follows one device.
+
+    The pick mirrors the live reads (`OnboardSource._prefer`, `tools._choose_preferred`): the
+    best-ranked source that is still current wins, current meaning its last sample is within
+    `failover_s` of the newest sample of any publisher (relative, never the wall clock, so a
+    replay works). A ranked lead that went quiet mid-window is passed over for the whole window,
+    which removes the handover step. Within the winning rank — or among all current sources when
+    none is ranked — the one with the latest sample wins, label breaking a tie: exactly the
+    `preferred()` live pick, so the window and the live value never name different devices
+    (picking by sample count here read 200 deg history against a 210 deg live value). Unranked
+    sources are never dropped, only ranked below the policy's picks."""
+    last = {}
+    for src, t, _v in rows:
+        last[src] = max(last.get(src, t), t)
+    best = preferred(path_or_channel, [(s, t, None) for s, t in last.items()], devices,
+                     priority, failover_s)
+    return best[0] if best else None
+
+
+def preferred(path_or_channel, candidates, devices, priority=None,
+              failover_s=FAILOVER_AGE_S):
+    """The live pick: one (source, epoch, value) from each publisher's latest sample, or None.
+
+    Same rule as `OnboardSource._prefer` and `series_publisher`: the best-ranked source whose
+    sample is within `failover_s` of the newest one wins (freshest within that rank), else the
+    freshest of all. A live read that took "whoever wrote last" disagreed with the window read
+    whenever two publishers differ, and tactics reported the gap as a current shift (#167).
+    Ties on time go to the larger label, so the pick never depends on row order."""
+    if not candidates:
+        return None
+    latest = lambda r: (r[1], r[0])
+    freshest = max(candidates, key=latest)
+    for m in matchers_for(path_or_channel, priority):
+        ranked = [r for r in candidates if n2k_sources.matches(r[0], m, devices)
+                  and freshest[1] - r[1] <= failover_s]
+        if ranked:
+            return max(ranked, key=latest)
+    return freshest
+
+
+def one_publisher(path, rows, devices, priority=None):
+    """[(epoch, value)] of the `series_publisher` pick, from a `series_by_source` result."""
+    pick = series_publisher(path, rows, devices, priority)
+    return [(t, v) for s, t, v in rows if s == pick]
+
+
 def all_matchers(priority=None):
     """Every matcher named anywhere in the policy, de-duplicated — feed to
     `n2k_sources.unresolved()` to assert the policy can bind."""

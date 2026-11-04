@@ -7,6 +7,10 @@ docs/PLAYBOOK_V2.md §4; models moved up from claude-fable-5 / claude-opus-4-8 o
 `ANTHROPIC_MODEL_CHAIN` overrides the chain (comma-separated, tried in order); the old
 single-model `ANTHROPIC_MODEL` env is no longer consulted.
 
+RACE IMPORT (race-doc extraction, extract.py) is the one exception: it runs on IMPORT_CHAIN,
+**Opus 5.5 first, Fable 5.1 fallback** (`ANTHROPIC_IMPORT_MODEL_CHAIN`; 2026-11-03 — Opus 5 read
+Bayview correctly at under half Fable's cost). Every other call stays on MODEL_CHAIN.
+
 These models think on every request (Fable always; Opus 5 by default), and `max_tokens` caps the
 thinking AND the answer, so a call never gets less than MIN_MAX_TOKENS. No sampling parameters,
 prefill or forced tool_choice are used here (sampling and prefill 400 on both models; forced
@@ -24,6 +28,9 @@ log = logging.getLogger("lab.llm")
 DEFAULT_CHAIN = "claude-fable-5-1,claude-opus-5"
 MODEL_CHAIN = [m.strip() for m in
                os.environ.get("ANTHROPIC_MODEL_CHAIN", DEFAULT_CHAIN).split(",") if m.strip()]
+DEFAULT_IMPORT_CHAIN = "claude-opus-5-5,claude-fable-5-1"
+IMPORT_CHAIN = [m.strip() for m in os.environ.get("ANTHROPIC_IMPORT_MODEL_CHAIN",
+                                                  DEFAULT_IMPORT_CHAIN).split(",") if m.strip()]
 API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 MIN_MAX_TOKENS = 16000     # room for thinking + a short answer (judge used to ask for 1200)
 
@@ -93,7 +100,7 @@ def _add_usage(usage, model, msg, seconds, structured):
 
 
 def complete_json(system: str, content: list, schema: dict | None, max_tokens: int = 64000,
-                  usage: dict | None = None) -> tuple[str, str]:
+                  usage: dict | None = None, chain: list | None = None) -> tuple[str, str]:
     """One long, structured completion through the chain → (json_text, model_used).
 
     - STREAMED (get_final_message): a long reply never sits on one idle HTTP read.
@@ -105,12 +112,14 @@ def complete_json(system: str, content: list, schema: dict | None, max_tokens: i
     - A 400 about the attached PDF → BadDocument (the caller resends as text).
     Other errors fall through the chain; the last one is raised.
     `content` is the user turn's content blocks. `usage`, if given, collects per-call tokens.
+    `chain` overrides MODEL_CHAIN (race import passes IMPORT_CHAIN).
     output_config goes through extra_body: the pinned SDK (0.42) predates the named parameter."""
     import time
     import anthropic
     client = _client()
+    chain = chain or MODEL_CHAIN
     last_err, refused = None, []
-    for model in MODEL_CHAIN:
+    for model in chain:
         use_schema = schema is not None
         for _ in range(2):                       # second pass only when the schema was rejected
             kw = {"model": model, "max_tokens": max_tokens, "system": system,
@@ -149,6 +158,6 @@ def complete_json(system: str, content: list, schema: dict | None, max_tokens: i
                 return txt, model
             last_err = RuntimeError(f"{model}: empty completion")
             break
-    if refused and len(refused) == len(MODEL_CHAIN):
+    if refused and len(refused) == len(chain):
         raise Refused(f"refused by {', '.join(refused)}")
     raise last_err if last_err else RuntimeError("empty model chain")
