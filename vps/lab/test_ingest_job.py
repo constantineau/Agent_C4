@@ -14,6 +14,7 @@ from types import SimpleNamespace
 
 os.environ["INGESTED_DIR"] = tempfile.mkdtemp()
 os.environ.pop("ANTHROPIC_MODEL_CHAIN", None)
+os.environ.pop("ANTHROPIC_IMPORT_MODEL_CHAIN", None)
 
 from app import extract, llm, main  # noqa: E402
 
@@ -181,6 +182,28 @@ if os.path.exists(compose):
           in open(compose).read())
 else:
     print("  [SKIP] compose.dev.yml not mounted")
+
+print("race import runs on its own chain (Opus 5.5 → Fable 5.1); nothing else does")
+check("default import chain", llm.DEFAULT_IMPORT_CHAIN == "claude-opus-5-5,claude-fable-5-1"
+      and llm.IMPORT_CHAIN == ["claude-opus-5-5", "claude-fable-5-1"])
+if os.path.exists(compose):
+    check("compose import default matches",
+          "${ANTHROPIC_IMPORT_MODEL_CHAIN:-claude-opus-5-5,claude-fable-5-1}" in open(compose).read())
+SENT.clear()
+r = asyncio.run(main.ingest_run({"urls": ["https://x.org/nor.pdf"]}))
+st = poll(r["job_id"])
+check("an import asks Opus 5.5 for every part", st.get("state") == "done" and SENT
+      and all(kw["model"] == "claude-opus-5-5" for kw in SENT)
+      and "claude-opus-5-5" in st["result"]["definition"]["provenance"]["extracted_by"])
+SENT.clear()
+llm.complete_json("sys", [{"type": "text", "text": "x"}], None)
+check("complete_json without a chain stays on MODEL_CHAIN (Fable 5.1)",
+      SENT[0]["model"] == "claude-fable-5-1")
+import inspect  # noqa: E402
+from app import fleetimport, judge, optimizer, synthesis  # noqa: E402
+check("no other Lab caller names IMPORT_CHAIN",
+      not any("IMPORT_CHAIN" in inspect.getsource(m)
+              for m in (synthesis, judge, optimizer, fleetimport, main)))
 
 print("complete(): streamed, room for thinking, no params these models reject")
 SENT.clear()

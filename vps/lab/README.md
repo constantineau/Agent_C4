@@ -50,7 +50,8 @@ python3 -m shared.race_def vps/lab/races/bayview_mackinac_2026.json
 Dual input → Opus extraction → a **draft** RaceDefinition → human review → save:
 - **Ingest** (Races tab): auto-find PDFs on a race page (`POST /api/ingest/discover`), paste
   direct links (`POST /api/ingest`), or upload PDFs (`POST /api/ingest/upload`); `app/extract.py`
-  (the `ANTHROPIC_MODEL_CHAIN` via `app/llm.complete_json`) emits a schema-conformant draft —
+  (its own chain, `ANTHROPIC_IMPORT_MODEL_CHAIN`, default Opus 5.5 → Fable 5.1, via
+  `app/llm.complete_json`; every other Lab AI call stays on `ANTHROPIC_MODEL_CHAIN`) emits a schema-conformant draft —
   coordinates only when the docs state them (else `needs_review`), a comprehensive `requirements`
   checklist with race-time items flagged `deliver_to_ipad`, and the `rules_profile`. Drafts are
   always machine-extracted → **human review before use**.

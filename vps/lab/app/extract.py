@@ -603,7 +603,8 @@ def _extract_part(name: str, content: list, usage) -> tuple[dict, str]:
     err = None
     for _attempt in range(2):
         text, model = lab_llm.complete_json(_SYSTEM, content, part_schema(keys),
-                                            max_tokens=EXTRACT_MAX_TOKENS, usage=usage)
+                                            max_tokens=EXTRACT_MAX_TOKENS, usage=usage,
+                                            chain=lab_llm.IMPORT_CHAIN)
         try:
             part = _parse_json(text)
             if not isinstance(part, dict):
