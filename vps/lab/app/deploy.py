@@ -54,6 +54,7 @@ def _post_json(url, body, timeout=25):
 # our gun, else the first minute of the start date). With no start known it sends, and the boat
 # decides.
 RACE_STARTED = "Race started. Not sent."
+MISSING_MARKS = "Missing positions: {names}. Not sent."
 _clock = time.time                    # the real clock (tests swap it)
 
 
@@ -82,6 +83,11 @@ def push(race_id):
                 "detail": RACE_STARTED, "steps": []}
     lock = labstate.get(_lock_key(race_id)) or {}
     bundle = pbstore.get(lock.get("playbook_id")) if lock.get("playbook_id") else None
+    # #151: never send a course (or a playbook routed on one) with marks dropped for no position
+    missing = pkg.get("skipped_marks") or (bundle or {}).get("skipped_marks")
+    if missing:
+        return {"race_id": race_id, "ok": False, "refused": True, "steps": [],
+                "detail": MISSING_MARKS.format(names=", ".join(map(str, missing)))}
     eng = os.environ.get("DEPLOY_PI_ENGINE_URL", "http://100.79.180.102:8200").rstrip("/")
     steps = []
     stopped = []
