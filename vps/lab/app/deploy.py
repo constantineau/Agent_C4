@@ -84,7 +84,10 @@ def push(race_id):
     lock = labstate.get(_lock_key(race_id)) or {}
     bundle = pbstore.get(lock.get("playbook_id")) if lock.get("playbook_id") else None
     # #151: never send a course (or a playbook routed on one) with marks dropped for no position
-    missing = pkg.get("skipped_marks") or (bundle or {}).get("skipped_marks")
+    from . import coursecheck
+    missing = (coursecheck.missing((pkg.get("course_load") or {}).get("definition"),
+                                   pkg.get("course_id"))
+               or (bundle or {}).get("skipped_marks"))
     if missing:
         return {"race_id": race_id, "ok": False, "refused": True, "steps": [],
                 "detail": MISSING_MARKS.format(names=", ".join(map(str, missing)))}

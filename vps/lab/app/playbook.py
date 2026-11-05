@@ -611,9 +611,11 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
     bbox = optimizer.course_bbox(definition, course_id)
     if not bbox:
         return {"available": False, "note": "No mark positions yet. Fix them in Course & Marks."}
-    # #151: a mark or finish with no position is dropped from the routed course, so the plan would
-    # be frozen for a SHORTER course and its completeness check run against the wrong finish
-    _m, skipped, _c = race_def.course_to_marks(definition, course_id)
+    # #151: a mark or finish with no position (or a gate with one end) is dropped or misplaced in
+    # the routed course, so the plan would be frozen for the wrong course and its completeness
+    # check run against the wrong finish
+    from . import coursecheck
+    skipped = coursecheck.missing(definition, course_id)
     if skipped:
         return {"available": False, "skipped_marks": skipped,
                 "note": MISSING_MARKS.format(names=", ".join(skipped))}

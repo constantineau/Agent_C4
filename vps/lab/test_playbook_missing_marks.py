@@ -2,7 +2,8 @@
 
 `course_to_marks` drops a mark with no position, and a finish line with a blank point. The
 playbook then routed and froze the SHORTER course, and its completeness check passed against the
-last surviving mark. Deploy pushed it anyway.
+last surviving mark. Deploy pushed it anyway. A gate with one end set routed TO that end, and a
+course with no finish ended at its last mark, both with nothing reported.
 
 Pinned:
   * build_playbook refuses (available: false, the names in plain words) before any wind is fetched;
@@ -44,6 +45,13 @@ HALF_FINISH = copy.deepcopy(FULL)
 HALF_FINISH["courses"][0]["finish"]["points"][1] = {"lat": None, "lon": None}
 NO_MARK = copy.deepcopy(FULL)
 NO_MARK["courses"][0]["marks"][1].update(lat=None, lon=None)
+GATE = {"name": "G", "type": "gate", "lat": 44.1, "lon": -82.1, "lat2": 44.1, "lon2": -82.0,
+        "rounding": "gate"}
+FULL["courses"][0]["marks"].insert(1, dict(GATE))
+HALF_GATE = copy.deepcopy(FULL)
+HALF_GATE["courses"][0]["marks"][1].update(lat2=None, lon2=None)
+NO_FINISH = copy.deepcopy(FULL)
+del NO_FINISH["courses"][0]["finish"]
 
 fetched = []
 
@@ -64,7 +72,9 @@ playbook.build_windfield = fake_wind
 
 print("1) build_playbook refuses a course with a missing position")
 for name, d, missing in (("finish with a blank point", HALF_FINISH, "Finish"),
-                         ("turning mark with no position", NO_MARK, "M2")):
+                         ("turning mark with no position", NO_MARK, "M2"),
+                         ("gate with one end", HALF_GATE, "G (one end)"),
+                         ("no finish at all", NO_FINISH, "Finish")):
     fetched.clear()
     pb = playbook.build_playbook(d, "c", 0, ["gfs"], v2_scenarios=False, model_skill=False)
     check(f"{name}: no playbook", pb.get("available") is False)
@@ -108,6 +118,11 @@ check("course missing the finish: refused, nothing sent",
       res["ok"] is False and res.get("refused") and not posted)
 check("…and says why in plain words", "Missing positions" in res.get("detail", "")
       and "Finish" in res.get("detail", ""))
+res = push(HALF_GATE, bundle={"race_id": "m", "course_id": "c", "skipped_marks": []})
+check("a half gate, even under a bundle that lists nothing: refused, nothing sent",
+      res.get("refused") and not posted and "G (one end)" in res.get("detail", ""))
+res = push(NO_FINISH)
+check("no finish at all: refused", res.get("refused") and not posted)
 res = push(FULL, bundle={"race_id": "m", "course_id": "c", "skipped_marks": ["M2"]})
 check("an older playbook frozen on a short course: refused, nothing sent",
       res["ok"] is False and res.get("refused") and not posted and "M2" in res.get("detail", ""))
