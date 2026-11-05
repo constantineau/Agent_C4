@@ -188,9 +188,19 @@ _real_bfc = orinassets.geo.build_for_course
 orinassets.geo.build_for_course = fake_for_course
 orinassets.boats.get_boat = lambda bid: {"boat_id": bid, "draft_m": 2.1336}
 orinassets.boat_profile.validate = lambda b: ([], [])
-orinassets.build(DEF, "c", bundle={"boat_model": {"boat_id": "sr33"},
-                                   "chart": {"source": "enc", "safety_depth_m": 2.63}})
+DEPTH = chartid.safety_depth_m({"draft_m": 2.1336})
+_, probs = orinassets.build(DEF, "c", bundle={"boat_model": {"boat_id": "sr33"},
+                                             "chart": {"source": "enc", "safety_depth_m": DEPTH}})
 check("the playbook's chart, not the Lab's current one", got.get("source") == "enc")
+check("(control) same draft: no draft problem", orinassets.DRAFT_CHANGED not in probs)
+got.clear()
+orinassets.boats.get_boat = lambda bid: {"boat_id": bid, "draft_m": 1.5}     # draft lowered
+payload, probs = orinassets.build(DEF, "c", bundle={
+    "boat_model": {"boat_id": "sr33"}, "chart": {"source": "enc", "safety_depth_m": DEPTH}})
+check("draft changed since the playbook: a problem, in plain words",
+      probs == [orinassets.DRAFT_CHANGED])
+check("…and no chart at the new draft is sent", payload["chart"] is None and "source" not in got)
+orinassets.boats.get_boat = lambda bid: {"boat_id": bid, "draft_m": 2.1336}
 got.clear()
 orinassets.build(DEF, "c", bundle={"boat_model": {"boat_id": "sr33"}})
 check("an older bundle with no chart: the Lab's chart, as before",

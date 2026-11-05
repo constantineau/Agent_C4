@@ -35,6 +35,7 @@ NO_MARKS = "Course has no mark positions. No chart built."
 NO_LAND = "No land in the chart. The shoreline didn't load."
 NO_BOAT = "No boat profile for {boat}. Chart and profile not sent."
 BUILD_FAILED = "Chart build failed. Try again."
+DRAFT_CHANGED = "Boat draft changed since this playbook. Build it again."
 
 
 def boat_id(bundle=None):
@@ -92,7 +93,13 @@ def build(definition, course_id, now=None, bundle=None):
             problems.append(f"Boat profile has errors: {errs[0]}.")
             boat = None
     chart = None
-    if boat is not None:              # the chart's depth is the carried boat's draft
+    pb_depth = ((bundle or {}).get("chart") or {}).get("safety_depth_m")
+    if boat is not None and pb_depth is not None \
+            and abs(float(pb_depth) - boats.safety_depth_m(boat)) > 1e-6:
+        # #149: the playbook routed on another no-go depth; a chart at today's draft would let the
+        # Orin re-route over water the playbook avoided (or the reverse). Send no chart, say why.
+        problems.append(DRAFT_CHANGED)
+    elif boat is not None:            # the chart's depth is the carried boat's draft
         try:
             # the chart the playbook was routed on (#149), not whatever the Lab has selected now
             src = ((bundle or {}).get("chart") or {}).get("source")
