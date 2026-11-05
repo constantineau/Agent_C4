@@ -161,7 +161,10 @@ class GFS(ModelSource):
 
 
 class NAM(ModelSource):
+    # RETIRED by NOAA 2026-11-03 (SCN 26-89): RRFS replaces it. Kept so cached/archived NAM
+    # cycles still load; no default asks for it and /api/models hides it.
     name = "nam"
+    retired = True
     cycles = (0, 6, 12, 18)
     lag_h = 1.8
     horizon_h = 84         # awphys files run 3-hourly past f36 out to f84
@@ -474,9 +477,10 @@ class GEM(ICON):
 MODELS = {m.name: m for m in (GFS(), NAM(), HRRR(), GEFS(), ECMWF(), ECMWF_ENS(), ICON(), GEM())}
 # Default blend: the fast, reliable deterministic models (model spread = confidence). Ensembles
 # (gefs, ecmwf-ens) are opt-in via the request because they multiply the download count.
-DEFAULT_MODELS = ("gfs", "nam", "hrrr")
+DEFAULT_MODELS = ("gfs", "hrrr")   # NAM retired 2026-11-03; RRFS to follow
 
 
 def available_models():
     return {name: {"kind": m.kind, "horizon_h": m.horizon_h, "members": len(m.members),
-                   "priority": m.priority} for name, m in MODELS.items()}
+                   "priority": m.priority} for name, m in MODELS.items()
+            if not getattr(m, "retired", False)}

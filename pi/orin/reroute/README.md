@@ -85,7 +85,7 @@ Run request (Pi → Orin):
  "definition": {"race_id": "...", "courses": ["the deployed course"], "zones": []},
  "course_id": "cove_island",
  "plan": {"variant": "left", "variant_label": "Left side", "points": [{"lat": 0, "lon": 0, "t": 0}]},
- "models": ["gfs", "nam", "hrrr"],
+ "models": ["gfs", "hrrr"],
  "assets": {"chart": {"kind": "land-v2", "fingerprint": "...", "...": "the land mask"},
             "boat": {"boat_id": "sr33", "helm_factor": 0.931, "...": "the reviewed profile"},
             "boat_version": "3f2a9c1b7d4e", "race_id": "...", "course_id": "...", "received_at": 0}}
@@ -255,7 +255,7 @@ Remove: `sudo systemctl disable --now sr33-orin-reroute`, delete the unit, `rm -
 
 | var | default | |
 |---|---|---|
-| `REROUTE_MODELS` | `gfs,nam,hrrr` | the Lab's default blend. Add `ecmwf` (+16 s on the Orin) or `icon,gem` (online only) |
+| `REROUTE_MODELS` | `gfs,hrrr` | the Lab's default blend (NAM retired by NOAA 2026-11-03). Add `ecmwf` (+16 s on the Orin) or `icon,gem` (online only) |
 | `REROUTE_BIND` / `REROUTE_PORT` | `10.10.10.2` / `8210` | the cable address |
 | `REROUTE_ALLOW_FROM` | `10.10.10.1,127.0.0.1` | who may call it |
 | `GRIB_CACHE` | `~/c4-plume/gribcache` | the plume's cache |
