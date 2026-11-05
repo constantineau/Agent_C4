@@ -97,7 +97,7 @@ Remove: `sudo systemctl disable --now sr33-orin-plume.timer`, delete the two uni
 | var | default | |
 |---|---|---|
 | `ENGINE_URL` | `http://10.10.10.1:8200` | Pi engine over the cable. Not Tailscale (refused). |
-| `PLUME_MODELS` | `gfs,nam,hrrr,ecmwf,icon,gem` | drop `ecmwf` to cut ~88% of the download |
+| `PLUME_MODELS` | `gfs,hrrr,ecmwf,icon,gem` (NAM retired 2026-11-03) | drop `ecmwf` to cut ~88% of the download |
 | `GRIB_CACHE` | `~/c4-plume/gribcache` | downloaded model files |
 | `PLUME_DIR` | `~/c4-plume/store` | run history (48 h per model) |
 | `GRIB_KEEP_H` | `30` | prune age for model files |

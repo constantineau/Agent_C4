@@ -3,14 +3,19 @@
 Goal (Cole): **lose no telemetry**, and **copy all telemetry off the Pi to the VPS**.
 Deletion from the boat is allowed only *after* an off-boat copy is sha256-verified.
 
-## ⏸ PICK UP HERE — 2026-11-04 (dev @ db5ee63+, main @ 405be7f)
+## ⏸ PICK UP HERE — 2026-11-04 (dev = main @ 62315d1, DEPLOYED)
 
 **Cole's decision 2026-11-04: deploy engine/copilot fixes to the boat REMOTELY AS THEY MERGE** (not one spring batch). Each deploy: backup + rollback images first, Orin OLLAMA_CONTEXT_LENGTH=6144 before the first copilot deploy (#208). Fixes can't be checked against live wind/GPS on the hard — only that services come up healthy.
 **The c4-prep-queue job HUNG 2026-11-03 19:47Z** on #212: the systemd unit has no GitHub login, so `git push` failed and prep.sh looped forever waiting for the head (log 5 MB of gh auth errors). Stopping it was blocked by the classifier — Cole: `! systemctl stop c4-prep-queue; pkill -f prep.sh`. Don't use the unit again without GH auth in its environment.
 **MERGED 2026-11-04 (Cole: "merge all"), squash, dev @ 180f2bd:** #219 #211 #212 #213 #215 #216 #218 #214 #217 — each Codex-clean at its head. Fix rounds: #213 ×2, #214, #217, #218 ×2 (also made the live query fast: 60 s timeout → 0.9 s + 7 ms on dev DB).
 **#220 MERGED** after 4 fix rounds (route can no longer count a leg reached with no wind). All ten wave-3 PRs are in.
 **Follow-ups to file:** #220 minors (closing-board borrowed wind not counted in wind_filled; vps/lab/README.md:104 still documents the constant-wind fallback); #215 minor (the 1 s pairing test passes at zero tolerance); #218 minor (cloud preferred() 45 s relative gap vs /conditions 45 s wall clock can pick different sources).
-**NOT DEPLOYED YET:** classifier blocked `docker compose up --build --force-recreate agent lab` (rollback tags would be :pre-20261104). Needs Cole to run it or say "you do it" explicitly. Then boat: Pi engine rebuild (#209 #213 #214 #218), Orin copilot (#207 #208 #217) after OLLAMA_CONTEXT_LENGTH=6144 on the Orin (needs sudo). Lab: #216 needs RECREATE.
+**DEPLOYED 2026-11-04 ~17:10Z on Cole's "proceed"** — main @ 62315d1 (merge commit, tree == dev):
+- VPS: Lab + agent rebuilt/recreated, rollback `:pre-20261104`. Lab has ANTHROPIC_IMPORT_MODEL_CHAIN=claude-opus-5-5,claude-fable-5-1. Both answer 200.
+- Pi (stamp 20261104T170741Z): 25 files copied (4 new), engine + console + archiver rebuilt, `up -d --no-deps`. Backup `~/deploy-backups/wave3-20261104T170741Z` (files.tgz + new-files.txt), images `:pre-20261104T170741Z`. Uplink/n2kout/signalk untouched. vps/db/seed/source_*.sql differ on the Pi but no Pi image uses them — left alone. Verified: engine /health /power /health/sensors /playbook 200, archiver recording, console :8091 serves briefguard.js, 0 restarts.
+- Orin: ff to 62315d1 (old HEAD tag `pre-deploy-20261104`), backup `~/pre-pull-backup/20261104T170741Z` (ollama.service, copilot.env). **ollama.service now OLLAMA_CONTEXT_LENGTH=6144** (sudo now works passwordless). ollama, copilot, reroute restarted and active; copilot health ok (engine + LLM reachable), model answers. "Playbook not confirmed" = the known Lab Deploy push owed in spring.
+- Rollback Pi: untar files.tgz in ~/Agent_C4, delete new-files.txt entries, `docker tag sr33-pi-<svc>:pre-20261104T170741Z sr33-pi-<svc>:latest`, `up -d --no-deps engine console archiver`. Orin: `git reset --hard pre-deploy-20261104`, restore ollama.service, daemon-reload, restart.
+- Not checkable on the hard: behaviour against live wind/GPS. Next: re-measure the matcher (stock + tuned, blind) on the Orin at 6144 (#208).
 
 ## ⏸ PICK UP HERE — 2026-11-03 EVENING (dev @ db5ee63, main @ 405be7f)
 
