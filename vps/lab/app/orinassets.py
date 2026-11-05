@@ -45,10 +45,11 @@ def boat_id(bundle=None):
     return os.environ.get("DEPLOY_BOAT_ID", "sr33")
 
 
-def build_chart(definition, course_id, boat, open_water=False):
+def build_chart(definition, course_id, boat, open_water=False, source=None):
     """The course's land-only mask for the Orin → (chart dict, None) or (None, reason).
 
-    The Lab's own choices (its chart source), the carried boat's draft. LAND ONLY: the race's
+    The Lab's own choices (its chart source, or `source`: the one the playbook was routed on,
+    #149), the carried boat's draft. LAND ONLY: the race's
     zones, island disks and rounding barriers are rebuilt on the Orin from what's left of the
     course, so the barrier of an island already rounded can't block a later leg. No waypoint
     pockets either: a pocket at a near-shore mark would clear that shore for every later leg; the
@@ -56,7 +57,8 @@ def build_chart(definition, course_id, boat, open_water=False):
     bbox = optimizer.course_bbox(definition, course_id)
     if not bbox:
         return None, NO_MARKS
-    src = (labstate.get("coastline_source") or geo.COASTLINE_SOURCE or "natural_earth").lower()
+    src = (source or labstate.get("coastline_source") or geo.COASTLINE_SOURCE
+           or "natural_earth").lower()
     depth = boats.safety_depth_m(boat)
     field = geo.build_for_course(definition, course_id, bbox, source=src, safety_depth=depth,
                                  zones_on=False, islands_on=False, carve_waypoints=False)
@@ -92,7 +94,9 @@ def build(definition, course_id, now=None, bundle=None):
     chart = None
     if boat is not None:              # the chart's depth is the carried boat's draft
         try:
-            chart, why = build_chart(definition, course_id, boat)
+            # the chart the playbook was routed on (#149), not whatever the Lab has selected now
+            src = ((bundle or {}).get("chart") or {}).get("source")
+            chart, why = build_chart(definition, course_id, boat, source=src)
         except Exception as exc:  # noqa: BLE001 — reported on the Deploy step, never half-sent
             print(f"[deploy] chart build failed: {type(exc).__name__}: {exc}", flush=True)
             chart, why = None, BUILD_FAILED

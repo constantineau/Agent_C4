@@ -356,6 +356,13 @@ def chart_source():
     return (labstate.get("coastline_source") or obstacles.COASTLINE_SOURCE or "natural_earth").lower()
 
 
+def _playbook_chart():
+    """The chart and no-go depth a playbook routes on, snapshot when synthesis starts (#149): the
+    Lab's chart source and the active boat's draft + margin, the same two the Gameplan uses and
+    Deploy sends to the Orin."""
+    return {"source": chart_source(), "safety_depth": boats.safety_depth_m(boats.active_boat())}
+
+
 def _active_jibs():
     """The active boat's upwind jib change-down bands (J1/J2/J3 by TWS) — drives the per-leg jib
     in the route/playbook. Empty if the boat doesn't carry them (→ the generic J1)."""
@@ -720,7 +727,7 @@ async def playbook_synthesize(body: dict):
     kw = dict(jib_crossovers=_active_jibs(), sail_config=_active_sails(), helm_factor=boats.active_helm_factor(),
               polar_adjustments=_active_adjustments(), wave_coeffs=_active_wave(),
               use_waves=(body or {}).get("use_waves", True),
-              fan_depth=(body or {}).get("fan_depth", "standard"))
+              fan_depth=(body or {}).get("fan_depth", "standard"), chart=_playbook_chart())
     if (body or {}).get("sync"):
         # legacy synchronous path (fits the gateway only for small fans) — the UI uses the job
         try:
@@ -756,7 +763,8 @@ async def playbook_freeze(body: dict):
                                          polar_adjustments=_active_adjustments(),
                                          wave_coeffs=_active_wave(),
                                          use_waves=body.get("use_waves", True),
-                                         fan_depth=body.get("fan_depth", "standard"))
+                                         fan_depth=body.get("fan_depth", "standard"),
+                                         chart=_playbook_chart())
         if not bundle.get("variants"):
             return JSONResponse({"detail": "nothing to freeze — no variants",
                                  "bundle": bundle}, status_code=422)
