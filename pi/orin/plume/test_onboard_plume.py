@@ -368,8 +368,10 @@ DUE = CYCLE + dt.timedelta(hours=6)
 NAMCALLS = []
 
 
-class LateNAM(models.NAM):
-    """NAM whose due cycle (12Z) isn't posted: every fetch of it misses, 06Z is there."""
+class LateHRRR(models.HRRR):
+    """A 6-hourly regional model (NAM's old schedule; NAM itself retired 2026-11-03) whose due
+    cycle (12Z) isn't posted: every fetch of it misses, 06Z is there."""
+    cycles = (0, 6, 12, 18)
 
     def pick_cycle(self, now=None, min_horizon_h=0):
         return DUE
@@ -378,14 +380,14 @@ class LateNAM(models.NAM):
         NAMCALLS.append(cycle)
         if cycle == DUE:
             return None
-        return write_grib(os.path.join(os.environ["GRIB_CACHE"], "nam", f"f{fhr:03d}.grib2"), u=-4.0, v=0.0)
+        return write_grib(os.path.join(os.environ["GRIB_CACHE"], "hrrr", f"f{fhr:03d}.grib2"), u=-4.0, v=0.0)
 
 
-models.MODELS["nam"] = LateNAM()
+models.MODELS["hrrr"] = LateHRRR()
 
 
 def rec_nam(spec, **kw):
-    return ob.lab.record(spec, models=("nam",), **kw)
+    return ob.lab.record(spec, models=("hrrr",), **kw)
 
 
 ENGINE["/conditions"] = {"available": True, "lat": 43.5, "lon": -86.0}
@@ -408,7 +410,7 @@ print("no run outside a model's coverage doesn't block it inside (HRRR):")
 EDGE = []
 
 
-class EdgeNAM(models.NAM):
+class EdgeHRRR(models.HRRR):
     """A regional model whose grid ends at 44N: nothing for a box north edge below that."""
 
     def pick_cycle(self, now=None, min_horizon_h=0):
@@ -421,7 +423,7 @@ class EdgeNAM(models.NAM):
         return write_grib(self._cache_path(cycle, fhr, member, bbox), u=-4.0, v=0.0)
 
 
-models.MODELS["nam"] = EdgeNAM()
+models.MODELS["hrrr"] = EdgeHRRR()
 ENGINE["/conditions"] = {"available": True, "lat": 42.0, "lon": -86.0}       # outside coverage
 ob.run_once(now=NOW + 600, get=get, post=post, record=rec_nam, is_online=lambda: True)
 check("outside coverage: no run", EDGE and POSTS[-1][1].get("waiting") is True)
@@ -429,7 +431,7 @@ EDGE.clear()
 ENGINE["/conditions"] = {"available": True, "lat": 44.5, "lon": -86.0}       # inside, 10 min later
 ob.run_once(now=NOW + 1200, get=get, post=post, record=rec_nam, is_online=lambda: True)
 check("moved into coverage within the hour: fetched, not backed off",
-      EDGE and not POSTS[-1][1].get("waiting") and POSTS[-1][1]["models"][0]["model"] == "nam")
+      EDGE and not POSTS[-1][1].get("waiting") and POSTS[-1][1]["models"][0]["model"] == "hrrr")
 
 print("pruning:")
 store_dir = os.environ["PLUME_DIR"]

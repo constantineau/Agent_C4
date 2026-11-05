@@ -50,7 +50,7 @@ BACK_H = int(os.environ.get("PLUME_BACK_H", "3"))                  # ...plus thi
 VIEW_BACK_H = 6                                                     # payload window: now-6 h ..
 EVERY_S = float(os.environ.get("PLUME_EVERY_S", "900"))            # recorder check cadence
 # deterministic, key-free models the router knows (ensembles deliberately left out)
-MODELS = tuple(m for m in os.environ.get("PLUME_MODELS", "gfs,nam,hrrr,ecmwf,icon,gem").split(",")
+MODELS = tuple(m for m in os.environ.get("PLUME_MODELS", "gfs,hrrr,ecmwf,icon,gem").split(",")
                if m.strip())
 # the model ids a plume may carry (the router's deterministic sources; the boat checks the same list)
 SUPPORTED = ("gfs", "nam", "hrrr", "ecmwf", "icon", "gem")
