@@ -41,8 +41,15 @@ REFUSAL = (
     "public info. Switch to Practice for tactics."
 )
 
+# Fallback-only actions that are not LLM tools but compute the same kind of advice: a fresh
+# summary/debrief scores boatspeed vs polar. Their REST endpoints (/summary, /debrief) are already
+# race-gated in main.py; the chat fallback must match.
+GATED_FALLBACK_ACTIONS = GATED_TOOLS | frozenset({"make_summary", "make_debrief"})
+
 # Keyword groups for the no-LLM fallback path: if a question matches one of these while racing,
 # it would route to a gated tool, so refuse instead. (Mirrors the routing in agent._fallback.)
+# This is the first line only: agent._fallback also checks `withheld()` right before every gated
+# call, so a question that slips past these words still cannot reach a gated tool.
 _GATED_INTENT_KEYWORDS = (
     "tactic", "favored", "favoured", "which side", "which way", "lifted", "headed", "shift", "leverage",
     "route", "routing", "best way", "weather route", "fastest", "which tack first",
@@ -50,6 +57,8 @@ _GATED_INTENT_KEYWORDS = (
     "sail", "peel", "kite", "spinnaker", "jib", "hoist", "change up", "change down",
     "fatigue", "tired", "rotate", "helm change", "driver", "shift change",
     "mark", "finish", "eta", "distance", "layline", "lay ", "next leg",
+    "fleet", "competitor", "rival", "corrected", "handicap", "who am i racing", "who are we racing",
+    "debrief", "recap", "how did we do", "how'd we do", "summarize", "summary", "session report",
 )
 
 _cache: dict = {}  # {'mode': 'race'|'practice'} — populated lazily, updated on set_mode
@@ -111,6 +120,12 @@ def audit_refusal(channel: str, **detail) -> None:
 def is_gated(tool_name: str) -> bool:
     """True if this tool is withheld right now (racing AND in the gated set)."""
     return racing() and tool_name in GATED_TOOLS
+
+
+def withheld(action: str) -> bool:
+    """True if the chat fallback must refuse this action right now (racing AND a gated tool or a
+    gated fallback-only action). Fail-closed: racing() reads 'race' when the mode is unknown."""
+    return racing() and action in GATED_FALLBACK_ACTIONS
 
 
 def allowed_tools(all_tools: list) -> list:
