@@ -329,3 +329,22 @@ def test_retry_list_is_bounded(q):
     win = asyncio.run(go())
     assert len(retry) == 3
     assert win                                        # newest values still held in the window
+
+
+def test_held_batches_go_out_after_trust_even_on_a_quiet_bus(q, monkeypatch):
+    import asyncio
+    up = _load_uplink(q)
+    monkeypatch.setattr(up.clock_trust, "boot_id", lambda: "boot-1")
+    up.hold([{"time": None, "source": "s", "path": "p", "value": 5}])
+    up.CLOCK = _Clock(True)
+    up.AGG_SECONDS = 0.01
+    posted = []
+    up._post = posted.append
+
+    async def go():
+        task = asyncio.create_task(up.flusher({}, asyncio.get_running_loop()))
+        await asyncio.sleep(0.2)
+        task.cancel()
+    asyncio.run(go())
+    assert [b["readings"][0]["value"] for b in posted] == [5]
+    assert _names(q / "undated") == [] and _names(q) == []

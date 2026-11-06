@@ -275,6 +275,13 @@ def send(readings):
         _send(readings)
 
 
+def drain_held():
+    """Date and queue the held batches, then try the queue, with no live batch to send."""
+    with _SEND_LOCK:
+        _date_held()
+        _flush_queue()
+
+
 def _send(readings):
     try:
         _date_held()
@@ -329,6 +336,13 @@ async def flusher(window, loop, retry=None):
                 break
             retry.pop(0)
         if not window:
+            # A quiet bus: still deliver batches held before the clock was trusted.
+            if not retry and UNDATED_DIR.exists() and any(UNDATED_DIR.glob("*.json")) \
+                    and clock_trusted():
+                try:
+                    await loop.run_in_executor(None, drain_held)
+                except Exception as exc:
+                    print(f"[uplink] could not drain held batches ({exc})", flush=True)
             continue
         if len(retry) >= RETRY_MAX:
             # The disk has refused every hand-off for a long while. Stop cutting new batches

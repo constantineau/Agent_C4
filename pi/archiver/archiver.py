@@ -1561,11 +1561,13 @@ def _clock_windows(conn):
     that silently failed to save is a stretch the prune would delete."""
     with _WRITE_LOCK:
         row = conn.execute("SELECT v FROM sync_state WHERE k = ?", (_CLOCK_KEY,)).fetchone()
-    try:
-        wins = json.loads(row[0]) if row and row[0] else []
-    except ValueError:
-        wins = []
-    return wins if isinstance(wins, list) else []
+    if not row or row[0] is None:
+        return []
+    wins = json.loads(row[0])               # damaged: raise, never read it as "nothing kept"
+    if not isinstance(wins, list) or not all(isinstance(w, dict) and "from_id" in w
+                                             for w in wins):
+        raise ValueError(f"sync_state[{_CLOCK_KEY!r}] is damaged: {row[0][:200]!r}")
+    return wins
 
 
 def _save_clock_windows(conn, wins):

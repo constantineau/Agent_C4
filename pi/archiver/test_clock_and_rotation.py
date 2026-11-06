@@ -289,6 +289,20 @@ with tempfile.TemporaryDirectory() as d:
     check("the next pass saves the stretch", state["clock_saved"] is True
           and archiver.clock_window_open(real))
 
+print("#184-9 damaged stretch metadata stops the prune instead of reading as 'none':")
+with tempfile.TemporaryDirectory() as d:
+    conn, eng = archive(d), engine(d)
+    add(conn, NOW - 300 * 86400, 3)
+    conn.execute("INSERT INTO sync_state (k, v) VALUES ('untrusted_clock', '{broken')")
+    conn.commit()
+    raised = False
+    try:
+        archiver.prune(conn, engine_db=eng, retain_days=7)
+    except ValueError:
+        raised = True
+    check("prune raises (the pruner skips the pass) and deletes nothing",
+          raised and count(conn, NOW - 301 * 86400, NOW) == 3)
+
 print("#184-12 the prune stops between window derivations when a rotation starts:")
 with tempfile.TemporaryDirectory() as d:
     conn = archive(d)
