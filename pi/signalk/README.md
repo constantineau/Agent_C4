@@ -7,9 +7,12 @@ DreamCRM on this VM). Config lives on the `sk_config` named volume; these files 
   `settings.json` on the volume, substituting `__CAN_IFACE__` with `$CAN_IFACE` (vcan0 bench /
   can0 boat — the single portability switch), then chowns the volume to uid 1000.
 - **`derived-data.json`** — enable config for the `signalk-derived-data` plugin (id
-  `derived-data`). The `signalk-derived` init service installs the plugin into the config
-  volume (idempotent; network needed only on first boot with a fresh volume) and copies this
-  file into `plugin-config-data/` if absent. Enables true wind (`environment.wind.speedTrue`,
+  `derived-data`). The `signalk-derived` init service (`install-derived.sh`) installs the
+  plugin pinned to exactly 1.45.0 (network needed only when the volume lacks that version),
+  copies this file into `plugin-config-data/` if absent, and applies
+  `patch-windground-path.sh`. It never blocks Signal K: a failed install or patch logs
+  `[derived] FAILED` and leaves only those channels missing (a failed patch turns off just
+  `groundWind`). Enables true wind (`environment.wind.speedTrue`,
   `angleTrueWater`, `directionTrue`), ground wind, and VMG (`performance.velocityMadeGood`).
   Output carries `$source` `derived-data`.
 - Bench runs add `-f compose.pi.sample.yml` for the `--sample-n2k-data` provider (no CAN
