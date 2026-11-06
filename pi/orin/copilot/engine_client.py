@@ -20,13 +20,14 @@ from . import config
 class EngineClient:
     """Boat-local-first addressing: the primary ENGINE_URL is the direct Pi<->Orin ethernet
     address in a race; when it doesn't answer (bench / cable unplugged) the client fails over
-    ONCE per instance to ENGINE_URL_FALLBACK (e.g. the Tailscale IP, shore-side dev only) and
-    sticks with whichever answered. In-race the cable path always wins — no Tailscale hop."""
+    ONCE per instance to ENGINE_URL_FALLBACK and sticks with whichever answered. The fallback must
+    be on the boat (cable subnet or loopback) unless ENGINE_FALLBACK_OFFBOAT=1 (shore-side dev
+    only), so a dead cable never leads to an off-boat engine. No Tailscale hop in a race."""
 
     def __init__(self, base_url: str | None = None, timeout: float | None = None):
         self.base_url = (base_url or config.ENGINE_URL).rstrip("/")
         self.timeout = timeout if timeout is not None else config.ENGINE_TIMEOUT
-        fb = (getattr(config, "ENGINE_URL_FALLBACK", "") or "").rstrip("/")
+        fb = config.engine_fallback_url()     # "" unless the fallback is on the boat (#53)
         if base_url is None and fb and fb != self.base_url:
             if not self._probe(self.base_url):
                 if self._probe(fb):

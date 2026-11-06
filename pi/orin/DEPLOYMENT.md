@@ -158,7 +158,7 @@ engine answers over the cable in ~4 ms.
 
 Who uses it:
 - the copilot's engine client (`ENGINE_URL=http://10.10.10.1:8200`, with `ENGINE_URL_FALLBACK`
-  for Tailscale/dev — boat-local-first failover, 2026-07-07);
+  only if it is boat-local; a Tailscale fallback also needs `ENGINE_FALLBACK_OFFBOAT=1`, shore dev only, #53);
 - the Pi console's `/copilot/*` proxy (the iPad's route to the Orin):
   `COPILOT_UPSTREAM=http://10.10.10.2:8300/` (compose default; the bench overlay overrides to
   the Tailscale IP below — no cable on the VPS).

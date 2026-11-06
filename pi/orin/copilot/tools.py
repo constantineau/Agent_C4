@@ -12,8 +12,8 @@ gets added to the brief's `sources_used`.
 """
 from .engine_client import EngineClient
 
-# All tools take a `route` where the engine accepts one, so the LLM stays on the loaded
-# homework course. None of them write anything.
+# The route is never the model's to pick: dispatch() pins the brief's own route, so the LLM stays
+# on the loaded homework course. None of them write anything.
 TOOL_SPECS = [
     {
         "type": "function",
@@ -55,10 +55,7 @@ TOOL_SPECS = [
                 "Next mark name, distance + bearing to it, ETA, leg type (beat/reach/run), and "
                 "the layline call. Use for 'where are we on the course / what's the next mark'."
             ),
-            "parameters": {
-                "type": "object",
-                "properties": {"route": {"type": "string", "description": "route id; omit for the active route"}},
-            },
+            "parameters": {"type": "object", "properties": {}},
         },
     },
     {
@@ -71,7 +68,7 @@ TOOL_SPECS = [
             ),
             "parameters": {
                 "type": "object",
-                "properties": {"route": {"type": "string"}},
+                "properties": {},
             },
         },
     },
@@ -80,18 +77,10 @@ TOOL_SPECS = [
         "function": {
             "name": "get_sail_advice",
             "description": (
-                "The optimal sail for a given TWS/TWA against the SR33 sail crossovers, plus "
-                "whether what's hoisted is right and any imminent peel. Omit tws/twa to use the "
-                "live values; pass `hoisted` (e.g. 'A3') to check the current sail."
+                "The optimal sail for the live TWS/TWA against the SR33 sail crossovers, plus "
+                "whether the sail actually hoisted is right and any imminent peel."
             ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "tws": {"type": "number"},
-                    "twa": {"type": "number"},
-                    "hoisted": {"type": "string"},
-                },
-            },
+            "parameters": {"type": "object", "properties": {}},
         },
     },
     {
@@ -127,7 +116,7 @@ TOOL_SPECS = [
                 "'sunset in 40 min'). Use when asked what the crew must do / has missed — "
                 "nav lights, the gate photo, the finish procedure. Never invent requirements."
             ),
-            "parameters": {"type": "object", "properties": {"route": {"type": "string"}}},
+            "parameters": {"type": "object", "properties": {}},
         },
     },
     {
@@ -155,7 +144,7 @@ TOOL_SPECS = [
                 "and which way the breeze is walking (deg/hr, right/left, from->to degrees). "
                 "Use for 'what has the wind been doing' — never estimate a trend yourself."
             ),
-            "parameters": {"type": "object", "properties": {"route": {"type": "string"}}},
+            "parameters": {"type": "object", "properties": {}},
         },
     },
     {
@@ -168,7 +157,7 @@ TOOL_SPECS = [
                 "for 'did the plan's breeze show up' — distinct from get_drift, which compares "
                 "forecast to forecast."
             ),
-            "parameters": {"type": "object", "properties": {"route": {"type": "string"}}},
+            "parameters": {"type": "object", "properties": {}},
         },
     },
     {
@@ -183,7 +172,6 @@ TOOL_SPECS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "route": {"type": "string"},
                     "target": {"type": "string", "enum": ["next", "finish"]},
                 },
             },
@@ -191,37 +179,52 @@ TOOL_SPECS = [
     },
 ]
 
-# Map tool name -> (EngineClient method, allowed arg names). Anything outside this map is
-# rejected — the LLM cannot invent a tool.
+# Map tool name -> (EngineClient method, args the MODEL may set). Anything outside this map is
+# rejected — the LLM cannot invent a tool. A tool result counts as a fact that grounds the brief's
+# numbers, so the model may only choose WHICH real read it wants (forecast horizon, next mark vs
+# finish), never feed in a hypothetical: no tws/twa/hoisted for the sail read (a "what if 25 kts"
+# result would ground "wind is 25 kts"), and no route id (#185). The route and hoisted sail are
+# the caller's, passed to dispatch() as `pinned`.
 _DISPATCH = {
     "get_conditions": ("conditions", []),
     "get_conditions_full": ("conditions_full", []),
     "get_sources": ("sources", []),
-    "get_navigator": ("navigator", ["route"]),
-    "get_tactics": ("tactics", ["route"]),
-    "get_sail_advice": ("sail", ["tws", "twa", "hoisted"]),
+    "get_navigator": ("navigator", []),
+    "get_tactics": ("tactics", []),
+    "get_sail_advice": ("sail", []),
     "get_fatigue": ("fatigue", []),
     "get_watch": ("watch", []),
-    "get_checklist": ("checklist", ["route"]),
+    "get_checklist": ("checklist", []),
     # lat/lon deliberately NOT accepted from the model — the 7B hallucinated coordinates
     # (wrong-location forecast fails silently); the engine always uses the live position.
     "get_forecast": ("forecast", ["hours"]),
-    "get_route": ("route", ["route", "target"]),
-    "get_trend": ("trend", ["route"]),
-    "get_plangap": ("plangap", ["route"]),
+    "get_route": ("route", ["target"]),
+    "get_trend": ("trend", []),
+    "get_plangap": ("plangap", []),
+}
+
+# Caller-owned args, filled from `pinned` for the methods that take them (never from the model).
+_PINNED = {
+    "navigator": ("route",), "tactics": ("route",), "checklist": ("route",), "route": ("route",),
+    "trend": ("route",), "plangap": ("route",), "sail": ("hoisted",),
 }
 
 TOOL_NAMES = set(_DISPATCH)
 
 
-def dispatch(engine: EngineClient, name: str, arguments: dict | None) -> tuple[dict, str]:
+def dispatch(engine: EngineClient, name: str, arguments: dict | None,
+             pinned: dict | None = None) -> tuple[dict, str]:
     """Run one tool call. Returns (result, tool_name). Unknown tools are refused (defense in
-    depth — the model should only ever see the registered set)."""
+    depth — the model should only ever see the registered set). `pinned` holds the caller's
+    route / hoisted sail; the model's own values for those are ignored."""
     spec = _DISPATCH.get(name)
     if spec is None:
         return ({"available": False, "error": f"unknown tool '{name}' (not permitted)"}, name)
     method, allowed = spec
     args = {k: v for k, v in (arguments or {}).items() if k in allowed}
+    for k in _PINNED.get(method, ()):
+        if (pinned or {}).get(k) is not None:
+            args[k] = pinned[k]
     try:
         result = getattr(engine, method)(**args)
     except TypeError as e:

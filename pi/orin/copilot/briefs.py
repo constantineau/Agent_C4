@@ -26,7 +26,7 @@ from __future__ import annotations
 import json
 import time
 
-from . import config, ground
+from . import config, ground, narrate
 from . import playbook as playbook_mod
 from .engine_client import EngineClient
 from .llm import LLMClient, LLMUnavailable
@@ -70,7 +70,7 @@ def _data_notes(snap, engine):
         notes.append("Engine unreachable for instruments — everything below may be stale.")
     elif cond.get("stale"):
         notes.append("Instrument feed is STALE — treat wind/speed reads below as suspect.")
-    fb = (getattr(config, "ENGINE_URL_FALLBACK", "") or "").rstrip("/")
+    fb = config.engine_fallback_url()
     if fb and engine.base_url == fb:
         notes.append("Engine reached over the FALLBACK link (not the race cable).")
     # plan-relative honesty keys off the ENGINE's read — the engine holds the frozen bundle;
@@ -273,15 +273,24 @@ def _crew_lines(snap):
     return _sec("Crew", lines, ["get_watch", "get_fatigue", "get_plays"])
 
 
+def _conf(row):
+    try:
+        return float(row.get("confidence") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _fleet_lines(snap):
     flt = snap.get("fleet") or {}
     rows = flt.get("fleet") or []
     if not (flt.get("available") and rows):
         return None
-    top = rows[0]
-    d = top.get("corrected_delta_s")
-    if d is None:
+    # Same confidence gate as the fleet callout (#185): a low-confidence roster match is not named.
+    top = next((r for r in rows if isinstance(r, dict) and r.get("corrected_delta_s") is not None
+                and _conf(r) >= narrate.FLEET_MIN_CONF), None)
+    if top is None:
         return None
+    d = top.get("corrected_delta_s")
     m, s = divmod(abs(int(d)), 60)
     who = "beating us" if d < 0 else "behind us"
     return _sec("Fleet", [f"{top.get('boat', 'Top rival')} projected {who} by {m}:{s:02d} "
