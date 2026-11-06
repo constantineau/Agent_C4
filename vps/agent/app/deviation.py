@@ -50,8 +50,13 @@ TREND_EPS_NM = float(os.environ.get("DEV_TREND_EPS_NM", "0.05"))       # XTE cha
 # previous CALL, and the selector and the matcher call back to back, so the gap was milliseconds
 # and the trend read "steady" almost always.
 TREND_MIN_AGE_S = float(os.environ.get("DEV_TREND_MIN_AGE_S", "60"))
-# Segments this close to the nearest one count as "as near" when picking which leg we're on (#183-10)
-LEG_TIE_NM = float(os.environ.get("DEV_LEG_TIE_NM", "0.5"))
+# Which leg we're on where the track doubles back (#183-10): costs in nm added to a segment's
+# cross-track. Jumping more than one segment from last poll's costs LEG_JUMP_NM per extra
+# segment, capped; sailing against a segment's direction costs LEG_DIR_NM.
+LEG_JUMP_NM = float(os.environ.get("DEV_LEG_JUMP_NM", "0.5"))
+LEG_JUMP_CAP_NM = float(os.environ.get("DEV_LEG_JUMP_CAP_NM", "1.0"))
+LEG_DIR_NM = float(os.environ.get("DEV_LEG_DIR_NM", "1.0"))
+LEG_MEMORY_S = float(os.environ.get("DEV_LEG_MEMORY_S", "600"))   # older history is ignored
 
 _BANDS = {0: "ok", 1: "watch", 2: "act"}
 
@@ -85,18 +90,18 @@ def _seg_len_nm(a, b):
     return _hav_nm(a["lat"], a["lon"], b["lat"], b["lon"])
 
 
-def _project(blat, blon, path, prev_idx=None, now=None):
+def _project(blat, blon, path, prev_idx=None, now=None, cog=None, sog=None):
     """Project the boat onto the frozen route polyline. Returns the chosen segment's fix: signed
     cross-track (nm, + side), cumulative along-track distance (nm), the interpolated plan time `t`
     at that point, the local segment bearing + the plan's along-track speed there, and `idx`.
     A flat local tangent plane about each segment's first point keeps the projection accurate.
 
     Which segment (#183-10): the globally nearest one jumps legs where the track doubles back
-    (out-and-back, a windward-leeward), since both legs are about as close. Every segment within
-    LEG_TIE_NM of the nearest is a candidate, and neighbouring candidates form one stretch. The
-    stretch holding (or nearest, forward on a tie) `prev_idx`, the last poll's segment, wins;
-    with no history, the stretch whose plan time is nearest `now`, else the earliest. Within
-    the stretch, the nearest segment. Called with neither, it is the plain nearest segment."""
+    (out-and-back, a windward-leeward), since both legs are about as close. Each segment's
+    cross-track gets extra nm costs: a jump of more than one segment from `prev_idx` (last
+    poll's segment), capped; sailing against the segment's direction (COG, when moving); and,
+    with no history, the distance between this point and where the plan put us at `now`
+    (capped). Lowest total wins. Called with none of these, it is the plain nearest segment."""
     if not path or len(path) < 2:
         return None
     cum = 0.0
@@ -128,32 +133,19 @@ def _project(blat, blon, path, prev_idx=None, now=None):
             "seg_speed": (seg / dt_h) if (dt_h and dt_h > 0) else None,
         })
         cum += seg
-    near = min(c["perp"] for c in cands)
-    if prev_idx is None and now is None:
-        best = min(cands, key=lambda c: c["perp"])     # a bare geometric query (reoptimize)
-        best["route_nm"] = cum
-        best["t0"] = path[0].get("t")
-        return best
-    ties = [c for c in cands if c["perp"] <= near + LEG_TIE_NM]
-    # neighbouring segments form one stretch of track; the doubled-back leg is another stretch
-    runs = []
-    for c in ties:
-        if runs and c["idx"] == runs[-1][-1]["idx"] + 1:
-            runs[-1].append(c)
-        else:
-            runs.append([c])
-    if prev_idx is not None:
-        def _gap(run):
-            lo, hi = run[0]["idx"], run[-1]["idx"]
-            return (0 if lo <= prev_idx <= hi else min(abs(lo - prev_idx), abs(hi - prev_idx)),
-                    hi < prev_idx)                      # forward wins a tie
-        run = min(runs, key=_gap)
-    elif now is not None and all(c["t_here"] is not None for c in ties):
-        pick = min(ties, key=lambda c: (abs(c["t_here"] - now), c["idx"]))
-        run = next(r for r in runs if pick in r)
-    else:
-        run = runs[0]
-    best = min(run, key=lambda c: c["perp"])
+    moving = cog is not None and sog is not None and sog > 1.0
+
+    def _cost(c):
+        k = c["perp"]
+        if prev_idx is not None:
+            k += min(LEG_JUMP_CAP_NM, LEG_JUMP_NM * max(0, abs(c["idx"] - prev_idx) - 1))
+        elif now is not None and c["t_here"] is not None and c["seg_speed"]:
+            k += min(LEG_JUMP_CAP_NM, abs(c["t_here"] - now) / 3600.0 * c["seg_speed"])
+        if moving and abs(_wrap180(cog - c["seg_bearing"])) > 90:
+            k += LEG_DIR_NM
+        return (k, c["idx"])
+
+    best = min(cands, key=_cost)
     best["route_nm"] = cum
     best["t0"] = path[0].get("t")
     return best
@@ -256,7 +248,9 @@ def get_deviation(route=None, variant=None, since=None):
     now = time.time()
     key = f"{route or navigator.active_route()}|{vid}"
     st = _state.get(key, {})
-    fix = _project(blat, blon, path, prev_idx=st.get("seg_idx"), now=now)
+    fresh = st.get("at") is not None and 0 <= now - st["at"] <= LEG_MEMORY_S
+    fix = _project(blat, blon, path, prev_idx=st.get("seg_idx") if fresh else None, now=now,
+                   cog=s.get("cog"), sog=s.get("sog"))
     if fix is None:
         return _na("Track too short to measure.", base_extra)
 

@@ -155,12 +155,24 @@ set_boat(nm_north(2.5), LON0 + nm_east(0.13), cog=0.0)
 set_now(T0 + 2.5 * 600)
 r = deviation.get_deviation()
 check(f"next poll stays outbound (along {r['along_nm']} nm)", r["along_nm"] < 3.5)
-# walk up, round the top and come back down: the return leg is picked up in order
-for k, (n, e) in enumerate([(3.5, 0.1), (4.5, 0.1), (5.0, 0.1), (4.5, 0.15), (3.0, 0.15)]):
-    set_boat(nm_north(n), LON0 + nm_east(e), cog=0.0)
+# just before the turn, still northbound, nearer the return line: not the return leg yet
+for k, n in enumerate((3.5, 4.5)):
+    set_boat(nm_north(n), LON0 + nm_east(0.13), cog=0.0)
     set_now(T0 + (3 + k) * 600)
     r = deviation.get_deviation()
+check(f"pre-turn, northbound, still outbound (along {r['along_nm']} nm)", r["along_nm"] < 5.0)
+# round the top and come back down southbound: the return leg is picked up
+for k, (n, e, c) in enumerate([(5.0, 0.1, 90.0), (4.5, 0.15, 180.0), (3.0, 0.15, 180.0)]):
+    set_boat(nm_north(n), LON0 + nm_east(e), cog=c)
+    set_now(T0 + (5 + k) * 600)
+    r = deviation.get_deviation()
 check(f"after the turn it reads the return leg (along {r['along_nm']} nm)", r["along_nm"] > 6.5)
+# a fresh read (no history) on the return leg, heading south, lands on the return leg
+deviation.reset_state()
+set_boat(nm_north(3.0), LON0 + nm_east(0.08), cog=180.0)
+set_now(T0 + 8 * 600)
+r = deviation.get_deviation()
+check(f"no history, southbound: return leg (along {r['along_nm']} nm)", r["along_nm"] > 6.5)
 use_bundle(BUNDLE)
 deviation.reset_state()
 
