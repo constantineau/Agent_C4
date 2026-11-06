@@ -291,4 +291,9 @@ def assess(source=None, now=None):
                                 f"(last {float(latest[0]):.2f} V, {age / 60.0:.0f} min ago)"}
             rows = [(float(latest[1]), float(latest[0]))]
             now = t_now
-    return assess_series(rows, now=now)
+    out = assess_series(rows, now=now)
+    if now is None and rows and out.get("available"):
+        # assess_series without `now` takes the newest sample as now (replay semantics), so its
+        # age would always read 0; the live read reports age against the wall clock.
+        out["age_s"] = round(max(0.0, _time.time() - max(t for t, _ in rows)))
+    return out

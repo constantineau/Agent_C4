@@ -299,6 +299,10 @@ check(f"a 6-hour-old voltage is unknown, not ok ({old['status']})",
       old["status"] == "unknown" and old["available"] is False)
 check(f"...and says how old it is ({old.get('age_s')} s, {old.get('note')!r})",
       old.get("age_s") == 6 * 3600 and "360 min ago" in old.get("note", ""))
+import time as _t   # noqa: E402
+live = power.assess(FakeSource(rows=[(_t.time() - 600, 12.5), (_t.time() - 590, 12.5)]))
+check(f"a live read (no `now`) ages its newest sample by the wall clock ({live.get('age_s')} s)",
+      live.get("age_s") is not None and 585 <= live["age_s"] <= 600)
 none = power.assess(FakeSource(rows=[], latest=None), now=T0)
 check("no window and no latest value -> unknown", none["status"] == "unknown"
       and none["available"] is False)
