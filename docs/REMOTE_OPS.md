@@ -41,9 +41,21 @@ boxes (and Starlink) doesn't matter — everything reconnects when its counterpa
 
 1. **Never touch `wlan0`, `tailscale0`, or the default route** on either box. The Pi↔Orin
    ethernet (`eth0` / `enP8p1s0`, 10.10.10.0/24) is also load-bearing — don't re-address it.
-2. **Deploys are always**: `cd ~/Agent_C4 && git fetch && git reset --hard origin/main &&
-   docker compose -f compose.pi.yml up -d --build <changed services>`. Never `compose down`
-   remotely (a failed rebuild after a down = dead stack); `up -d --build` replaces in place.
+2. **Pi deploys copy files; they never pull or reset.** The method is `pi/deploy/README.md`:
+   diff, back up (files + `:pre-<stamp>` images in `~/deploy-backups/`), copy single files,
+   `build` + `up -d --no-deps` only the changed services, record, verify, and keep the rollback.
+   `pi/deploy/deploy-data-path.sh` does it for the archiver/uplink; other services follow the same
+   steps by hand. The Pi's clone sits on an old commit with copied files on top, so a `git pull`
+   or `git reset` there would switch every service at once. Never `compose down` remotely (a
+   failed rebuild after a down = dead stack); `up -d --no-deps` replaces in place.
+   **Orin:** the copilot runs straight from its clone (systemd units, no images). Tag the old
+   HEAD `pre-deploy-<stamp>`, back up any `/etc/sr33` or unit file you change, then
+   `git fetch && git merge --ff-only origin/main` and restart the units. Rollback: check out the
+   tag, restore the backups, restart.
+   **Every deploy is recorded on the box**: `pi/deploy/record-deployed.sh` appends the commit,
+   the hash of each file that landed and, on the Pi, each service's running image to `~/DEPLOYED`
+   (for the Orin, pass the files the merge changed and no services). `cat ~/DEPLOYED` answers
+   "what's on the boat".
 3. **One box at a time.** Update + verify the Pi, then the Orin — never both in one shot, so
    the untouched box stays a working hop.
 4. **Verify before you leave**: `curl localhost:8200/health` (engine), `:8091/dashboard/`

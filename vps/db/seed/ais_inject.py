@@ -15,7 +15,10 @@ Usage:
     python3 vps/db/seed/ais_inject.py                     # 10 min, 5-s ticks, with own ship
     python3 vps/db/seed/ais_inject.py --once              # single observation, then exit
     python3 vps/db/seed/ais_inject.py --minutes 30 --dt 5
-    python3 vps/db/seed/ais_inject.py --no-own            # use the live own-ship fix instead
+    python3 vps/db/seed/ais_inject.py --no-own            # use the boat id's live own-ship fix
+
+Writes under boat id `demo-boat` by default and refuses a real boat id or a non-local URL
+without --allow-real (seed_guard.py). Point the agent at the same id (BOAT_ID=demo-boat) to see it.
 """
 import argparse
 import json
@@ -23,6 +26,8 @@ import math
 import time
 import urllib.request
 from datetime import datetime, timezone
+
+import seed_guard  # sibling module: keeps fake data off a real boat (#39)
 
 OWN_START = (43.00, -82.42)   # Port Huron-ish; only used when injecting a synthetic own ship
 OWN_SOG_KN = 6.5
@@ -94,13 +99,14 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--url", default="http://localhost:8101")
     ap.add_argument("--token", default="dev-ingest-token")
-    ap.add_argument("--boat-id", default="sr33")
+    seed_guard.add_args(ap)
     ap.add_argument("--minutes", type=float, default=10)
     ap.add_argument("--dt", type=float, default=5, help="seconds between observations")
     ap.add_argument("--once", action="store_true", help="post a single observation and exit")
     ap.add_argument("--no-own", action="store_true",
                     help="don't inject a synthetic own ship (use the live fix)")
     args = ap.parse_args()
+    seed_guard.check(ap, args)
 
     inject_own = not args.no_own
     own_lat, own_lon = OWN_START

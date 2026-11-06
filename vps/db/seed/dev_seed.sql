@@ -13,7 +13,8 @@ INSERT INTO waypoints (route, seq, name, lat, lon) VALUES
   ('default', 2, 'Cove Island',          45.300, -81.730),
   ('default', 3, 'Finish (Mackinac)',    45.847, -84.618);
 
--- A couple of recent AIS targets so get_ais_targets() is non-empty.
+-- A couple of recent AIS targets so get_ais_targets() is non-empty for the demo boat
+-- (BOAT_ID=demo-boat). Never a real boat id: fake targets would sit in its live record (#39).
 INSERT INTO ais_targets (time, boat_id, mmsi, name, lat, lon, sog, cog, range_nm, bearing, cpa_nm, tcpa_min) VALUES
-  (now() - interval '20 seconds', 'sr33', 366123456, 'GORDON C', 43.05, -82.40, 11.2, 200, 3.1, 015, 0.4, 12.5),
-  (now() - interval '25 seconds', 'sr33', 316987654, 'CSL NIAGARA', 43.12, -82.30, 13.8, 185, 7.8, 040, 2.2, 28.0);
+  (now() - interval '20 seconds', 'demo-boat', 366123456, 'GORDON C', 43.05, -82.40, 11.2, 200, 3.1, 015, 0.4, 12.5),
+  (now() - interval '25 seconds', 'demo-boat', 316987654, 'CSL NIAGARA', 43.12, -82.30, 13.8, 185, 7.8, 040, 2.2, 28.0);

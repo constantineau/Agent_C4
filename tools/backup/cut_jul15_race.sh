@@ -8,8 +8,8 @@
 # debrief, which reads Postgres and not this disk.
 set -euo pipefail
 
-SRC=/home/constantineau/backups/c4-boat-pull-2026-08-30/recovered/archive-jul1517-recovered.db
-OUT=/home/constantineau/backups/race-data/archive-jul15-race.db
+SRC=${SRC:-/home/constantineau/backups/c4-boat-pull-2026-08-30/recovered/archive-jul1517-recovered.db}
+OUT=${OUT:-/home/constantineau/backups/race-data/archive-jul15-race.db}
 FROM='2026-07-15T22:30:00'
 TO='2026-07-16T00:20:00'      # the derived window (22:39 -> 00:07) with room either side
 
@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS readings (
     path      TEXT NOT NULL, value REAL, str_value TEXT);
 CREATE INDEX IF NOT EXISTS readings_time_idx      ON readings(time);
 CREATE INDEX IF NOT EXISTS readings_path_time_idx ON readings(path, time);
-CREATE TABLE IF NOT EXISTS sync_state (key TEXT PRIMARY KEY, value TEXT);
+-- Same columns as the archiver's own table (pi/archiver/archiver.py): backfill.py reads k, v.
+CREATE TABLE IF NOT EXISTS sync_state (k TEXT PRIMARY KEY, v TEXT);
 """)
 c.execute("ATTACH DATABASE ? AS s", (f"file:{src}?immutable=1",))
 c.execute("INSERT INTO readings (time, boat_id, source, path, value, str_value) "

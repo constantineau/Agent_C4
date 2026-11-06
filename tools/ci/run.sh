@@ -101,6 +101,8 @@ area agent /repo /repo shared/**/test_*.py
 area agent /repo /repo tools/backup/**/test_*.py
 # The replay rig's python half (truth.py) is stdlib + shared/; same reasoning.
 area agent /repo /repo tools/replay/**/test_*.py
+# The seed scripts (#39) and the Pi deploy record (#187) are stdlib python / bash run on the host.
+area agent /repo /repo vps/db/seed/**/test_*.py pi/deploy/**/test_*.py
 # The lab reads its data from the image's /srv layout (races, boats, polars), built from this tree.
 area lab /srv /srv vps/lab/**/test_*.py
 # The Orin's onboard plume and re-route reuse the Lab's wind code and optimizer (#124), so they
