@@ -1058,10 +1058,14 @@ function optStartNote() {
   const sd = Opt.startDefault ? Object.assign({}, Opt.startDefault) : null, tz = optTz();
   // the screen can sit open past the gun — the server then routes from now, so say that
   if (sd && sd.source === "race_start" && sd.race_start.epoch <= Date.now() / 1000) sd.source = "now_passed";
-  if ((Opt.start || "").trim())
-    return "Routes from the time you picked. Clear it to route from "
+  if ((Opt.start || "").trim()) {
+    // echo the UTC the route will use, so the zone can't be misread (#100 G31)
+    const e = optStartEpoch();
+    const utc = tz && e != null ? `${new Date(e * 1000).toISOString().slice(0, 16).replace("T", " ")} UTC. ` : "";
+    return utc + "Routes from the time you picked. Clear it to route from "
       + (!sd || sd.source === "race_start" ? "the race start." : "now.");
-  const when = (e) => epochToWall(e, tz || "UTC").replace("T", " ") + (tz ? " race local" : " UTC");
+  }
+  const when = (e) => epochToWall(e, tz || "UTC").replace("T", " ") + " " + (tz ? tzAbbr(tz, e) : "UTC");
   if (!sd) return "Blank routes from the race start if a gun time is set, otherwise from now.";
   const rs = sd.race_start;
   if (sd.source === "race_start")
@@ -1073,6 +1077,21 @@ function optStartNote() {
 function optStartInput(v) {
   Opt.start = v;
   const n = document.getElementById("optStartNote"); if (n) n.textContent = optStartNote();
+  const z = document.getElementById("optStartTz"); if (z) z.textContent = optStartZone();
+}
+// The zone's short name at a moment, e.g. "EDT" (or "GMT-4" where the zone has none).
+function tzAbbr(tz, epoch) {
+  try {
+    const p = new Intl.DateTimeFormat("en-US", { timeZone: tz, timeZoneName: "short" })
+      .formatToParts(new Date((epoch != null ? epoch : Date.now() / 1000) * 1000));
+    return (p.find((x) => x.type === "timeZoneName") || {}).value || tz;
+  } catch (e) { return tz; }
+}
+// The Start label's zone: the race zone's short name at the picked time (else the race start).
+function optStartZone() {
+  const tz = optTz(); if (!tz) return "UTC";
+  const sd = Opt.startDefault, e = optStartEpoch();
+  return tzAbbr(tz, e != null ? e : sd && sd.race_start ? sd.race_start.epoch : null);
 }
 
 // The race venue's IANA timezone, if the loaded RaceDefinition carries one.
@@ -1124,10 +1143,6 @@ async function renderGameplan() {
   if (!Opt.raceId && Opt.races.length) await optPickRace(Opt.races[0].race_id, false);
   await optLoadStartDefault();
   if (stale("gameplan")) return;
-  const startTz = optTz();
-  const startTitle = (startTz
-    ? "Start time, race local (" + startTz + ")."
-    : "Start time (UTC).") + " Leave blank to use the race start.";
   view.innerHTML = `<div class="opt">
     <div class="card">
       <h3>Gameplan <span class="muted" style="font-weight:400">— best route on the forecast</span></h3>
@@ -1139,8 +1154,8 @@ async function renderGameplan() {
               ${Opt.races.map((r) => `<option value="${esc(r.race_id)}" ${r.race_id === Opt.raceId ? "selected" : ""}>${esc(r.name)}</option>`).join("")}
             </select></label>
           <label>Course <select id="optCourse" onchange="Opt.courseId=this.value">${optCourseOpts()}</select></label>
-          <label>Start (${startTz ? "race local" : "UTC"}) <input type="datetime-local" id="optStart"
-            title="${esc(startTitle)}" value="${esc(Opt.start || "")}" oninput="optStartInput(this.value)"></label>
+          <label>Start (<span id="optStartTz">${esc(optStartZone())}</span>) <input type="datetime-local" id="optStart"
+            value="${esc(Opt.start || "")}" oninput="optStartInput(this.value)"></label>
           <span id="optStartNote" class="opt-start-note">${esc(optStartNote())}</span>
         </div>
         <div class="opt-group">
@@ -1159,15 +1174,15 @@ async function renderGameplan() {
       <div id="boatModelOut"></div>
       <div class="opt-run">
         <label class="optchk"><input type="checkbox" id="optAvoid" checked> Avoid land &amp; zones</label>
-        <label class="optchk" title="Slows the boat in waves. Uncheck for flat water."><input type="checkbox" id="optWaves" checked> Waves</label>
-        <label class="optchk" title="Includes water current. Run once without it to see what it's worth."><input type="checkbox" id="optCurrent" checked> Current</label>
-        <label class="optchk" title="Also routes each weather model on its own and draws them all."><input type="checkbox" id="optPerModel"> Route per model <span class="muted">(slower)</span></label>
-        <label class="optchk" title="Fine is sharper near shore but slower. Fast is quicker.">Detail
+        <label class="optchk"><input type="checkbox" id="optWaves" checked> Waves</label>${qhelp("Slows the boat in waves. Uncheck for flat water.")}
+        <label class="optchk"><input type="checkbox" id="optCurrent" checked> Current</label>${qhelp("Includes water current. Run once without it to see what it's worth.")}
+        <label class="optchk"><input type="checkbox" id="optPerModel"> Route per model <span class="muted">(slower)</span></label>${qhelp("Also routes each weather model on its own and draws them all.")}
+        <label class="optchk">Detail
           <select id="optRes" oninput="updateResHint()">
             <option value="fast"${Opt.resolution === "fast" ? " selected" : ""}>Fast</option>
             <option value="auto"${(Opt.resolution || "auto") === "auto" ? " selected" : ""}>Auto</option>
             <option value="fine"${Opt.resolution === "fine" ? " selected" : ""}>Fine</option>
-          </select></label>
+          </select></label>${qhelp("Fine is sharper near shore but slower. Fast is quicker.")}
         <button id="optRun" onclick="runOptimize()" ${Opt.running ? "disabled" : ""}>${Opt.running ? "Routing…" : "Find route →"}</button>
         <span id="optResHint" class="muted" style="font-size:11px"></span>
       </div>
@@ -1179,12 +1194,12 @@ async function renderGameplan() {
       <h3>Playbook <span class="muted" style="font-weight:400">— which side, and when to switch</span></h3>
       <div class="muted" style="font-size:12px;margin-bottom:8px">Routes many forecasts. Says which side to start and what would change it.
         ${qhelp("Groups the routes by which side of the first beat they favour. Claude writes the reasons, the cost and what would change the call, plus a decision tree. Freeze it to take it on the boat.")}</div>
-      <label class="muted" style="font-size:12px" title="More scenarios cover more weather but take longer.">Depth
+      <label class="muted" style="font-size:12px">Depth
         <select id="pbFan" style="margin:0 8px 0 4px">
           <option value="quick">Quick: 6 scenarios, ~5 min (race morning)</option>
           <option value="standard">Standard: 9 scenarios, ~7 min</option>
           <option value="deep" selected>Deep: 15 scenarios, ~15 min (early in the week)</option>
-        </select></label>
+        </select></label>${qhelp("More scenarios cover more weather but take longer.")}
       <button id="pbRun" onclick="synthPlaybook()" ${Pb.running ? "disabled" : ""}>${Pb.running ? "Building…" : "Build playbook →"}</button>
       <div id="pbOut"></div>
     </div></div>`;
@@ -1358,17 +1373,17 @@ function boatModelCard(m) {
       const w = ((z.twa_max - z.twa_min) / 180 * 100).toFixed(1);
       return `<div class="xo-zone sail-bg-${esc(z.short)}" style="left:${left}%;width:${w}%" title="${esc(z.label)} ${z.twa_min}–${z.twa_max}°">${esc(z.short)}</div>`;
     }).join("");
-    // toss-up overlays: two sails within ~2% of target → a translucent two-colour diagonal hatch drawn
-    // over the solid zones (the zones still show through the gaps), so a sail the winner-take-all bands
-    // erased on a near-tie reappears in its own colour.
+    // toss-up overlays: two sails within ~2% of target → a thin two-colour striped strip along the
+    // bottom of the track, so a sail the winner-take-all bands erased on a near-tie reappears in its
+    // own colour without covering the zone labels (#101 G32).
     const overlaps = ((m.overlaps || {})[String(t)] || []).map((o) => {
       const left = (o.twa_min / 180 * 100).toFixed(1);
       const w = ((o.twa_max - o.twa_min) / 180 * 100).toFixed(1);
-      const c1 = hexRgba(sailColor(o.sails[0]), 0.72), c2 = hexRgba(sailColor(o.sails[1]), 0.72);
-      const bg = `repeating-linear-gradient(45deg, ${c1} 0 4px, transparent 4px 8px, ${c2} 8px 12px, transparent 12px 16px)`;
-      return `<div class="xo-ol" style="left:${left}%;width:${w}%;background:${bg}" title="Toss-up: ${esc(o.sails.join(" ≈ "))} at ${o.twa_min}–${o.twa_max}°. Either sail works.">≈</div>`;
+      const c1 = hexRgba(sailColor(o.sails[0]), 1), c2 = hexRgba(sailColor(o.sails[1]), 1);
+      const bg = `repeating-linear-gradient(90deg, ${c1} 0 6px, ${c2} 6px 12px)`;
+      return `<div class="xo-ol" style="left:${left}%;width:${w}%;background:${bg}" title="Toss-up: ${esc(o.sails.join(" ≈ "))} at ${o.twa_min}–${o.twa_max}°. Either sail works."></div>`;
     }).join("");
-    return `<div class="xo-row"><span class="xo-tws">${t} kts</span><div class="xo-track">${zones}${overlaps}</div></div>`;
+    return `<div class="xo-row"><span class="xo-tws">${t} kts</span><div class="xo-track xo-tu">${zones}${overlaps}</div></div>`;
   }).join("");
   const inv = (m.inventory || []).map((s) => `<span class="sail sail-${esc(s)}">${esc(s)}</span>`).join(" ");
   return `<div class="card boatmodel">
@@ -1382,8 +1397,8 @@ function boatModelCard(m) {
       <span id="bmSaveMsg" class="muted" style="font-size:11px">Saves jibs, Code 0 and reefs together.</span>
     </div>
     <h4>Best sail by wind angle and speed</h4>
-    <div class="muted" style="font-size:11px;margin-bottom:4px">From the ORC certificate. <b>Hatched ≈</b> = toss-up, either sail works.
-      ${qhelp("The certificate rates one jib. The J1/J2/J3 split comes from your wind settings above. Hatched means two sails are within 1.5% of each other.")}</div>
+    <div class="muted" style="font-size:11px;margin-bottom:4px">From the ORC certificate. <b>Striped strip</b> under a band = toss-up, either sail works.
+      ${qhelp("The certificate rates one jib. The J1/J2/J3 split comes from your wind settings above. Striped means two sails are within 1.5% of each other.")}</div>
     <div class="xo-axis"><span>0°</span><span>45°</span><span>90°</span><span>135°</span><span>180°</span></div>
     <div class="xo">${bands}</div>
     ${renderPolarGrid()}
@@ -1554,9 +1569,12 @@ function renderPolarGrid() {
     const v = g.grid[String(t)][String(a)];
     return `<td>${v == null ? "" : v.toFixed(1)}</td>`;
   }).join("")}</tr>`).join("");
-  return `<h4>Target boat speed (kn) by wind speed and angle</h4>
+  // folded by default: the full table pushed the Learnings tab's own cards far down (#101 G34)
+  return `<details class="pg-fold" ${Opt.polarGridOpen ? "open" : ""} ontoggle="Opt.polarGridOpen=this.open">
+    <summary><h4>Target boat speed (kn) by wind speed and angle</h4></summary>
     <div class="pg-wrap"><table class="pg">${head}${rows}</table></div>
-    <div class="muted" style="font-size:11px;margin-top:4px">${g.n_points} points. The ORC speeds the route uses.</div>`;
+    <div class="muted" style="font-size:11px;margin-top:4px">${g.n_points} points. The ORC speeds the route uses.</div>
+  </details>`;
 }
 
 async function optPickRace(id, rerender = true) {
@@ -2202,6 +2220,9 @@ function paintDeploy() {
   const pbOpt = (b) => `<option value="${esc(b.id)}" ${b.id === Dep.sel ? "selected" : ""}>${
     esc((b.degraded ? "⚠ " : "") + (b.signed ? "🔒 " : "draft ") + (b.headline || b.id).slice(0, 60))} · ${b.n_variants} options · ${esc(fmtDate(b.generated_at))}</option>`;
   const selPb = pbs.find((b) => b.id === Dep.sel) || {};
+  // the selection IS the lock (and the file wasn't re-signed since): nothing to re-lock (#98 G70)
+  const isLocked = !!lock && Dep.sel === lock.playbook_id && !r.lock_problem
+    && !((selPb.signed_at || 0) > (lock.locked_at || 0));
 
   document.getElementById("view").innerHTML = `<div class="opt">
     <div class="card">
@@ -2227,7 +2248,7 @@ function paintDeploy() {
       ${pbReady ? `
         <div class="opt-controls">
           <label>Playbook <select id="depPb" onchange="Dep.sel=this.value; paintDeploy()" style="min-width:340px">${pbs.map(pbOpt).join("")}</select></label>
-          <button id="depLock" onclick="depLockIn()" ${Dep.busy ? "disabled" : ""}>${lock ? "Re-lock selected" : "🔒 Lock in selected playbook"}</button>
+          <button id="depLock" class="${lock ? "mini" : ""}" onclick="depLockIn()" ${Dep.busy || isLocked ? "disabled" : ""}>${isLocked ? "✓ Locked in" : lock ? "Re-lock selected" : "🔒 Lock in selected playbook"}</button>
         </div>
         ${pbWarnings(selPb)}` : `<div class="muted">No frozen playbook yet. Build one in <a href="#gameplan">Gameplan</a> and freeze it. Then lock it in here.</div>`}
       ${lock ? `<div class="banner ok" style="margin-top:10px">🔒 Locked in: <code>${esc(lock.playbook_id)}</code>${lock.signed ? ` · signature <code>${esc(lock.signature)}…</code>` : " · <b>unsigned</b>"} · ${esc(fmtDate(lock.locked_at))}</div>` : ""}
@@ -2364,12 +2385,29 @@ function deployPanel(lock, t) {
     <div class="muted" style="font-size:12px;margin-bottom:8px">Sends course, fleet, checklist, watch plan and playbook to the boat. Replaces what's there. If the boat is offline, use the downloads below.</div>
     <div class="dep-actions">
       <button id="depPush" onclick="depPush()" ${Dep.busy || (Dep.ready || {}).lock_problem ? "disabled" : ""}>🚀 Push to boat</button>
-      <button onclick="downloadPlaybook('${esc(pid)}')">⬇ Playbook file</button>
-      <button onclick="downloadHomework('${esc(rid)}')">⬇ Race prep file (Pi)</button>
+      <button class="mini" onclick="downloadPlaybook('${esc(pid)}')">⬇ Playbook file</button>
+      <button class="mini" onclick="downloadHomework('${esc(rid)}')">⬇ Race prep file (Pi)</button>
     </div>
     ${resHtml}
-    <pre class="dep-cmds">${esc(cmds)}</pre>
+    <div class="dep-cmds-h"><span class="muted">Boat offline? Run these by hand.</span>
+      <button class="mini" onclick="depCopyCmds(this)">Copy</button></div>
+    <pre class="dep-cmds" id="depCmds">${esc(cmds)}</pre>
   </div>`;
+}
+
+// Copy the hand-run commands (#98 G22). The clipboard API needs https; on plain http fall back to
+// selecting the block and the old copy command, and if that fails too, leave it selected.
+async function depCopyCmds(btn) {
+  const pre = document.getElementById("depCmds"); if (!pre) return;
+  let ok = false;
+  try { await navigator.clipboard.writeText(pre.textContent); ok = true; } catch (e) { /* http */ }
+  if (!ok) {
+    const sel = window.getSelection(), range = document.createRange();
+    range.selectNodeContents(pre); sel.removeAllRanges(); sel.addRange(range);
+    try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+  }
+  btn.textContent = ok ? "Copied" : "Selected. Copy it.";
+  setTimeout(() => { btn.textContent = "Copy"; }, 2500);
 }
 
 function pushDetail(s) {
@@ -2546,13 +2584,19 @@ function fleetGunsCard(roster, own) {
   const ds = Lab.editDef.division_starts || {};
   const tz = Lab.editDef.timezone || "";
   const set = divs.filter((d) => ds[d] != null).length;
-  const rows = divs.map((d) => `<label style="margin-right:14px">${esc(d)}${(own.division || "").trim() === d ? " ◆" : ""}
+  const rows = divs.map((d) => `<label style="margin-right:14px">${esc(d)}${(own.division || "").trim() === d ? " (us)" : ""}
     <input type="datetime-local" value="${epochToWall(ds[d], tz)}" onchange="fleetGunSet('${esc(d)}', this.value)"></label>`).join("");
+  const body = `<div class="muted" style="font-size:12px;margin-bottom:8px">Needed for full-race corrected standings on the boat. Times are ${tz ? "race local (" + esc(tz) + ")" : "this browser's time"}. Save in the bar below.
+      ${qhelp("From the sailing instructions, on race morning. Without these the boat uses the ⏺ LOG start, which is rough when divisions start at different times.")}</div>
+    <div class="opt-controls">${rows}</div>`;
+  // all set: fold the inputs away so the roster isn't pushed below the fold (#99 G25)
+  if (set === divs.length) return `<details class="card" ${Lab.fleetGunsOpen ? "open" : ""} ontoggle="Lab.fleetGunsOpen=this.open">
+    <summary><b>Start times by division</b> <span class="muted" style="font-weight:400">— all ${set} set</span></summary>
+    <div style="margin-top:8px">${body}</div>
+  </details>`;
   return `<div class="card">
     <h3>Start times by division <span class="muted" style="font-weight:400">— ${set}/${divs.length} set</span></h3>
-    <div class="muted" style="font-size:12px;margin-bottom:8px">Needed for full-race corrected standings on the boat. Times are ${tz ? "race local (" + esc(tz) + ")" : "this browser's time"}. Save in the bar below.
-      ${qhelp("From the sailing instructions, on race morning. Without these the boat uses the ⏺ LOG start, which is rough when divisions start at different times.")}</div>
-    <div class="opt-controls">${rows}</div>
+    ${body}
   </div>`;
 }
 
@@ -2634,7 +2678,7 @@ function fleetGlance(roster) {
     const cand = (Lab.fleetCand && Lab.fleetCand.i === i) ? `<tr><td colspan="6" style="padding:4px 8px 8px">${
       Lab.fleetCand.list.length ? Lab.fleetCand.list.map((c, ci) =>
         `<button class="mini" style="margin:2px" onclick="fleetApplyCand(${i},${ci})" title="match ${c.score}">` +
-        `${esc(c.yacht || "?")} · ${esc(c.sail || "")} · ${esc(c.cls || "")} · GPH ${c.orc_gph ?? "—"}${c.rating != null ? " · " + c.rating : ""} (${esc(c.country)})</button>`).join("")
+        `${esc(c.yacht || "?")} · ${esc(c.sail || "")} · ${esc(c.cls || "")} · GPH ${c.orc_gph ?? "—"}${c.rating != null ? " · ToT " + c.rating : ""} (${esc(c.country)})</button>`).join("")
       : '<span class="muted">no ORC match. Enter the handicap by hand.</span>'
     }</td></tr>` : "";
     return `<tr>
@@ -2645,8 +2689,8 @@ function fleetGlance(roster) {
     <td>${e.rating != null ? esc(e.rating) : '<span class="conf bad" title="No ORC handicap. Enter it.">—</span>' + findBtn}</td>
     <td class="muted">${e.orc_gph != null ? esc(e.orc_gph) : ""}</td></tr>` + cand;
   };
-  return `<div class="muted" style="font-size:12px;margin-bottom:6px"><b>${roster.length}</b> boat${roster.length === 1 ? "" : "s"} · <b>${rated}</b> with an ORC handicap${rated < roster.length ? ` · <b class="conf bad">${roster.length - rated} missing a rating</b>` : ""} · by division: ${divSummary}</div>
-    <table class="fleet-tbl"><thead><tr><th>Boat</th><th>Sail #</th><th>Class</th><th>Div</th><th>Rating</th><th>GPH</th></tr></thead>
+  return `<div class="muted" style="font-size:12px;margin-bottom:6px"><b>${roster.length}</b> boat${roster.length === 1 ? "" : "s"} · <b>${rated}</b> with an ORC handicap${rated < roster.length ? ` · <b class="conf bad">${roster.length - rated} missing a handicap</b>` : ""} · by division: ${divSummary}</div>
+    <table class="fleet-tbl"><thead><tr><th>Boat</th><th>Sail #</th><th>Class</th><th>Div</th><th>ToT</th><th>GPH (s/nm)</th></tr></thead>
     <tbody>${sorted.map(li).join("")}</tbody></table>`;
 }
 
@@ -2661,7 +2705,7 @@ function paintFleet() {
     <td>${inp(e.cls, "class", `fleetSet(${i},'cls',this.value)`, 64)}</td>
     <td>${inp(e.owner, "owner", `fleetSet(${i},'owner',this.value)`, 110)}</td>
     <td>${inp(e.orc_gph, "GPH", `fleetSet(${i},'orc_gph',this.value)`, 56)}</td>
-    <td>${inp(e.rating, "rating", `fleetSet(${i},'rating',this.value)`, 56)}</td>
+    <td>${inp(e.rating, "ToT", `fleetSet(${i},'rating',this.value)`, 56)}</td>
     <td>${inp(e.mmsi, "MMSI", `fleetSet(${i},'mmsi',this.value)`, 90)}</td>
     <td><button class="mini" onclick="fleetRemove(${i})" title="remove">✕</button></td></tr>`;
   const permitted = !!rp.tracker_permitted;
@@ -2683,17 +2727,23 @@ function paintFleet() {
       <div class="opt-controls">
         <label>Boat ${inp(own.boat, "SR33 \"C4\"", "fleetOwnSet('boat',this.value)", 150)}</label>
         <label>Division ${inp(own.division, "div", "fleetOwnSet('division',this.value)", 70)}</label>
-        <label>ORC GPH ${inp(own.orc_gph, "GPH", "fleetOwnSet('orc_gph',this.value)", 70)}</label>
-        <label>Rating ${inp(own.rating, "rating", "fleetOwnSet('rating',this.value)", 80)}</label>
+        <label>ORC GPH (s/nm) ${inp(own.orc_gph, "GPH", "fleetOwnSet('orc_gph',this.value)", 70)}</label>
+        <label>ORC ToT coefficient ${inp(own.rating, "ToT", "fleetOwnSet('rating',this.value)", 80)}</label>
         <label>MMSI ${inp(own.mmsi, "MMSI", "fleetOwnSet('mmsi',this.value)", 100)}</label>
       </div>
+      <div class="muted" style="font-size:12px;margin-top:6px">Race scoring: <b>${esc(sc.method || "not set")}</b>. Set it in <a href="#rules">Rules</a>.</div>
     </div>
 
     ${fleetGunsCard(roster, own)}
 
-    <div class="card">
+    ${Lab.fleetMsg ? `<div class="banner ${Lab.fleetMsgErr ? "warn" : "ok"}" style="margin-bottom:8px">${esc(Lab.fleetMsg)}</div>` : ""}
+    ${roster.length
+      ? `<details class="card" ${Lab.fleetImportOpen ? "open" : ""} ontoggle="Lab.fleetImportOpen=this.open">
+      <summary><b>Import the fleet</b> <span class="muted" style="font-weight:400">— replaces the list</span></summary>
+      <div style="margin-top:8px">`
+      : `<div class="card">
       <h3>Import the fleet</h3>
-      ${Lab.fleetMsg ? `<div class="banner ${Lab.fleetMsgErr ? "warn" : "ok"}" style="margin-bottom:8px">${esc(Lab.fleetMsg)}</div>` : ""}
+      <div>`}
       <div class="muted" style="font-size:12px;margin-bottom:8px">Gets boats from the YB tracker and handicaps from ORC. Check the list, then Save. ${ybCfg ? "" : '<b>No YB tracker set for this race.</b> Use the website import below, or add ORC handicaps to the current list.'}
         ${qhelp("YB gives boat, sail number, owner and class. ORC matches each boat by sail number or name and adds GPH and rating. Both are public.")}</div>
       <div class="opt-controls">
@@ -2716,7 +2766,8 @@ function paintFleet() {
       </div>
       <div class="muted" style="font-size:11px;margin-top:6px">Import replaces the list (it asks first). Boats with no ORC match keep their name. Enter their handicap by hand.
         ${qhelp("ORC matches by sail number, so check it on unmatched boats. MMSIs you typed in are kept on a re-import. The MMSI is how a boat on AIS is matched to this list.")}</div>
-    </div>
+      </div>
+    ${roster.length ? "</details>" : "</div>"}
 
     <div class="card">
       <h3>Roster
@@ -2725,7 +2776,7 @@ function paintFleet() {
       <details ${Lab.fleetEdit ? "open" : ""} style="margin-top:10px" ontoggle="Lab.fleetEdit=this.open">
         <summary style="cursor:pointer;font-size:13px">Edit roster ${roster.length ? `(${roster.length})` : "(add boats)"}</summary>
         ${roster.length ? `<table class="fleet-tbl" style="margin-top:8px"><thead><tr>
-          <th>Boat</th><th>Sail #</th><th>Div</th><th>Class</th><th>Owner</th><th>ORC GPH</th><th>Rating</th><th>MMSI</th><th></th>
+          <th>Boat</th><th>Sail #</th><th>Div</th><th>Class</th><th>Owner</th><th>GPH (s/nm)</th><th>ToT</th><th>MMSI</th><th></th>
           </tr></thead><tbody>${roster.map(row).join("")}</tbody></table>` : ""}
         <div style="margin-top:8px"><button class="mini" onclick="fleetAddRow()">+ Add boat</button></div>
       </details>

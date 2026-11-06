@@ -367,10 +367,16 @@ a.mini { text-decoration: none; display: inline-block; }
 .xo-zone { position: absolute; top: 0; height: 100%; display: flex; align-items: center;
   justify-content: center; font-size: 10px; font-weight: 700; color: #04121f;
   border-right: 1px solid rgba(0,0,0,.25); }
-/* toss-up overlay: a two-colour diagonal hatch over the solid zones marking a near-tie (carry either) */
-.xo-ol { position: absolute; top: 0; height: 100%; display: flex; align-items: flex-start;
-  justify-content: center; font-size: 10px; font-weight: 800; color: rgba(4,18,31,.75);
-  border-left: 1px dashed rgba(0,0,0,.55); border-right: 1px dashed rgba(0,0,0,.55); }
+/* toss-up: a thin two-colour striped strip along the track's bottom edge marking a near-tie (carry
+   either). It sits under the zones, so it never covers their labels. */
+.xo-track.xo-tu { height: 24px; }
+.xo-tu .xo-zone { height: calc(100% - 5px); }
+.xo-ol { position: absolute; bottom: 0; height: 5px; }
+.pg-fold > summary { cursor: pointer; list-style: none; }
+.pg-fold > summary::-webkit-details-marker { display: none; }
+.pg-fold > summary h4 { display: inline-block; }
+.pg-fold > summary h4::before { content: "▸ "; }
+.pg-fold[open] > summary h4::before { content: "▾ "; }
 .pg-wrap { overflow-x: auto; }
 table.pg { border-collapse: collapse; font-size: 11px; margin-top: 4px; }
 table.pg th, table.pg td { border: 1px solid var(--line); padding: 3px 7px; text-align: right; color: var(--ink); }
@@ -381,6 +387,8 @@ table.pg td.pg-twa { color: var(--muted); font-weight: 600; }
 .dep-grid { display: flex; flex-direction: column; gap: 7px; margin-top: 10px; }
 .dep-row { display: flex; align-items: center; gap: 10px; font-size: 13px; }
 .dep-row .muted { font-size: 12px; }
+.dep-cmds-h { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  margin: 6px 0; font-size: 12px; }
 .dep-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
 .dep-cmds { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px;
   padding: 11px 13px; font-size: 12px; line-height: 1.55; color: var(--ink); overflow-x: auto;
