@@ -56,6 +56,9 @@ _RETRY_LATER = {408, 429}
 # One sender at a time: two overlapping sends would each read the same queued file and post it
 # twice (the file is only removed after its POST returns).
 _SEND_LOCK = threading.Lock()
+# Batches kept in RAM after a failed hand-off (disk full / I/O error) before the flusher stops
+# cutting new ones: 240 x 15 s = an hour.
+RETRY_MAX = int(os.environ.get("UPLINK_RETRY_MAX", "240"))
 CLOCK = clock_trust.ClockTrust(QUEUE_DIR / "clock-trusted") if clock_trust else None
 
 
@@ -187,16 +190,24 @@ def _date_held():
     """Once the clock is trusted: give every batch held in this boot its real time (now minus
     the monotonic time since it was held) and move it into the queue, oldest first. A batch
     held in an EARLIER boot cannot be dated (the monotonic clock restarted); it is left where
-    it is, untouched, and said once."""
+    it is, untouched, and said once.
+
+    Two steps, each atomic, so a crash or a failed step can never queue a batch twice: the held
+    file is first rewritten in place as the dated batch, then MOVED (one rename) into the queue
+    under a name fixed by its held name. A held file found already dated is just moved."""
     if not UNDATED_DIR.exists():
         return
     boot = clock_trust.boot_id() if clock_trust else ""
     for f in sorted(UNDATED_DIR.glob("*.json")):
         try:
             batch = json.loads(f.read_text())
-            mono = float(batch["mono"])
-        except (OSError, ValueError, KeyError, TypeError) as exc:
+            dated = batch["readings"][0]["time"]
+            mono = None if dated else float(batch["mono"])
+        except (OSError, ValueError, KeyError, TypeError, IndexError) as exc:
             _quarantine(f, f"unreadable held batch ({exc})")
+            continue
+        if dated:
+            _promote(f, dated)
             continue
         if not boot or batch.get("boot") != boot:
             if f.name not in _other_boot_warned:
@@ -208,8 +219,15 @@ def _date_held():
         stamp = datetime.fromtimestamp(t, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         for r in batch["readings"]:
             r["time"] = stamp
-        _enqueue({"boat_id": batch.get("boat_id", BOAT_ID), "readings": batch["readings"]})
-        f.unlink(missing_ok=True)
+        _write_atomic(UNDATED_DIR, f.name,
+                      {"boat_id": batch.get("boat_id", BOAT_ID), "readings": batch["readings"]})
+        _promote(f, stamp)
+
+
+def _promote(f, stamp):
+    """Move a dated held file into the queue: one rename, same filesystem."""
+    QUEUE_DIR.mkdir(parents=True, exist_ok=True)
+    os.replace(f, QUEUE_DIR / f"{stamp.replace(':', '').replace('-', '')}-h{f.stem}.json")
 
 
 def _quarantine(f, why):
@@ -311,6 +329,11 @@ async def flusher(window, loop, retry=None):
                 break
             retry.pop(0)
         if not window:
+            continue
+        if len(retry) >= RETRY_MAX:
+            # The disk has refused every hand-off for a long while. Stop cutting new batches
+            # (RAM would grow until the process is killed and every pending batch is lost);
+            # the window keeps the latest value of every reading until a hand-off works.
             continue
         trusted = clock_trusted()
         now = (datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") if trusted else None)

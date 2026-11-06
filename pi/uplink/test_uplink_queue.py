@@ -277,3 +277,55 @@ def test_a_failing_hold_does_not_kill_the_flusher_or_lose_the_batch(q):
     held = _names(q / "undated")
     assert len(held) == 1
     assert json.loads((q / "undated" / held[0]).read_text())["readings"][0]["value"] == 3.0
+
+
+def test_promotion_is_a_single_move_and_never_queues_twice(q, monkeypatch):
+    """A crash after dating but before the move: the next pass just moves it, once."""
+    up = _load_uplink(q)
+    monkeypatch.setattr(up.clock_trust, "boot_id", lambda: "boot-1")
+    up.hold([{"time": None, "source": "s", "path": "p", "value": 7}])
+    real_promote = up._promote
+
+    def crash(f, stamp):
+        raise OSError("power cut")
+    up._promote = crash
+    try:
+        up._date_held()
+    except OSError:
+        pass
+    assert _names(q) == []                           # nothing queued yet
+    held = _names(q / "undated")
+    assert len(held) == 1
+    assert json.loads((q / "undated" / held[0]).read_text())["readings"][0]["time"]
+    up._promote = real_promote
+    up._date_held()
+    up._date_held()
+    queued = _names(q)
+    assert len(queued) == 1 and _names(q / "undated") == []
+    body = json.loads((q / queued[0]).read_text())
+    assert set(body) == {"boat_id", "readings"} and body["readings"][0]["value"] == 7
+
+
+def test_retry_list_is_bounded(q):
+    import asyncio
+    up = _load_uplink(q)
+    up.CLOCK = _Clock(False)
+    up.AGG_SECONDS = 0.005
+    up.RETRY_MAX = 3
+
+    def broken(readings, mono=None):
+        raise OSError(28, "No space left on device")
+    up.hold = broken
+    retry = []
+
+    async def go():
+        win = {}
+        task = asyncio.create_task(up.flusher(win, asyncio.get_running_loop(), retry))
+        for k in range(40):
+            win[("gps", "p")] = ("num", float(k))
+            await asyncio.sleep(0.01)
+        task.cancel()
+        return win
+    win = asyncio.run(go())
+    assert len(retry) == 3
+    assert win                                        # newest values still held in the window
