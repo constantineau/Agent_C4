@@ -18,11 +18,12 @@ import os
 import select
 import subprocess
 import sys
-import tempfile
 import urllib.request
 from dataclasses import dataclass
 
 import numpy as np
+
+from .. import atomicio
 
 KN_PER_MS = 1.9438445
 _UA = "Agent_C4-C4PerformanceLab/1.0 (+sailing race optimizer)"
@@ -45,14 +46,9 @@ def http_download(url: str, dest: str, timeout: int = 60) -> str:
         data = r.read()
     if len(data) < 100:                       # NOMADS returns a tiny HTML error page on a miss
         raise OSError(f"grib download too small ({len(data)} B) — likely not yet posted: {url}")
-    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(dest) or ".", suffix=".part")
-    try:
-        with os.fdopen(fd, "wb") as f:
-            f.write(data)
-        os.replace(tmp, dest)
-    finally:
-        if os.path.exists(tmp):
-            os.remove(tmp)
+    # fsync + replace + fsync dir (#202): a power cut must not leave a zero-length or torn GRIB
+    # under the final name, which the cache would then trust as a hit.
+    atomicio.write_bytes(dest, data)
     return dest
 
 

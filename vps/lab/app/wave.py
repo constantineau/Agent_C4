@@ -30,6 +30,7 @@ import math
 import os
 import subprocess
 import sys
+import tempfile
 import urllib.parse
 
 import numpy as np
@@ -240,23 +241,27 @@ def _cache_path(cyc, key):
 def _parse_isolated(path, t_lo, t_hi, log):
     """Parse the GLWU GRIB in a child process → (lat2d, lon2d, epochs, hs3d), or None on
     crash/timeout/error. Isolates a native eccodes segfault from the optimize worker."""
-    out = path + ".npz"
+    # A private temp file, NOT a fixed `path + ".npz"` beside the GRIB (#202): two workers
+    # parsing the same cycle collided on that name (one read the other's half-written file), and
+    # a killed parent left it in the cache dir for good. It is read once and deleted, so it needs
+    # no fsync. Same handoff as the wind parser (wind/_grib_parser.py).
+    fd, out = tempfile.mkstemp(suffix=".npz", prefix="glwu_")
+    os.close(fd)
     try:
-        r = subprocess.run([sys.executable, "-c", _CHILD, path, out, str(float(t_lo)),
-                            str(float(t_hi)), str(STEP_H), str(MAX_SLICES)],
-                           capture_output=True, text=True, timeout=PARSE_TIMEOUT)
-    except subprocess.TimeoutExpired:
-        log("waves: GLWU parse timed out")
-        return None
-    if r.returncode != 0 or not os.path.exists(out):
-        return None
-    try:
-        d = np.load(out)
-        res = (d["lat"].copy(), d["lon"].copy(), d["ep"].copy(), d["hs"].copy())
-        d.close()
-        return res
-    except Exception:
-        return None
+        try:
+            r = subprocess.run([sys.executable, "-c", _CHILD, path, out, str(float(t_lo)),
+                                str(float(t_hi)), str(STEP_H), str(MAX_SLICES)],
+                               capture_output=True, text=True, timeout=PARSE_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            log("waves: GLWU parse timed out")
+            return None
+        if r.returncode != 0:
+            return None
+        try:
+            with np.load(out) as d:
+                return (d["lat"].copy(), d["lon"].copy(), d["ep"].copy(), d["hs"].copy())
+        except Exception:
+            return None
     finally:
         try:
             os.remove(out)
