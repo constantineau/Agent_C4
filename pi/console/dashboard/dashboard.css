@@ -112,6 +112,11 @@ body {
 .sr-val { font-size:15px; font-weight:800; color:var(--text); }
 .sr-conf { font-size:11px; font-weight:700; color:var(--rc); text-transform:uppercase; letter-spacing:.5px; }
 .sr-why { flex:1 1 100%; font-size:12.5px; line-height:1.35; color:var(--muted); margin-top:1px; }
+/* a changed call waiting out the selector's settle (#40): what is coming, in its own colour */
+.sr-settle { flex:1 1 100%; font-size:12.5px; font-weight:700; line-height:1.35; margin-top:2px; }
+.sr-settle.sr-watch { color:var(--watch); } .sr-settle.sr-act { color:var(--act); }
+/* a slow read held after failed polls says how old it is (#45.5b, #45.7) */
+.st-old { font-size:11px; font-weight:700; color:var(--watch); white-space:nowrap; }
 .st-body { margin-top:8px; }
 .st-progress { position:relative; height:8px; border-radius:6px; background:var(--panel2);
   border:1px solid var(--line); overflow:hidden; }
@@ -262,6 +267,9 @@ body {
 .t-row.hdr .rc { font-size:9px; letter-spacing:.5px; text-transform:uppercase; color:var(--muted); font-weight:700; }
 .detchart .t-rows, .det-gauge .t-rows { margin-top:10px; font-size:14.5px; }
 .det-gauge .t-row .rc { min-width:84px; }
+/* the DATA detail's provenance table: fixed columns so value / device / age line up row to row (#95 G14) */
+.prov-tab .t-row { display:grid; grid-template-columns:minmax(64px,1fr) minmax(76px,auto) minmax(90px,1.4fr) 56px; }
+.prov-tab .t-row .rc { min-width:0; overflow:hidden; text-overflow:ellipsis; }
 
 /* wind-angle vector arrow (points the way the wind blows to: N wind = down, E = left) */
 .warr { display:inline-block; vertical-align:-3px; margin-right:3px; }
@@ -434,7 +442,7 @@ body {
    something is due", and the sails bar before any sail state had loaded. Both JS paths set
    `.hidden` correctly and neither could take effect. `.strategy[hidden]` and `.detail[hidden]`
    below already carry this guard; these two were missed. Found 2026-09-08. */
-.sailsbar[hidden], .chkbar[hidden] { display:none; }
+.sailsbar[hidden], .chkbar[hidden], .coach-line[hidden] { display:none; }   /* coach-line: #95 G55 */
 .chk-tag { cursor:pointer; color:var(--act); }
 .chk-item { display:inline-flex; align-items:center; gap:7px; font-size:12px; font-weight:700;
   padding:3px 4px 3px 10px; border-radius:7px; background:var(--panel2);
