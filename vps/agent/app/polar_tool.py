@@ -14,7 +14,8 @@ Method:
   * For each (TWS, TWA) bin with enough samples, take a HIGH PERCENTILE of observed STW (default
     90th) as "best achievable" — this rejects momentary surf/GPS spikes (a max would chase noise)
     while still representing potential, not the average cruise.
-  * Compare to the ORC target boatspeed at the bin centre (nearest polar bucket).
+  * Compare to the ORC target boatspeed at the bin centre, interpolated on the polar grid
+    (`shared.polar.target`, the same grading the live polar % uses; #67).
 
 Caveats (surfaced in the output): aggregates span ALL sources for a path (a flaky paddlewheel STW
 or uncalibrated wind can bias a bin); the observed polar reflects sea-state/current/crew on the
@@ -24,7 +25,7 @@ rating, not necessarily that the boat is overperforming. This is a debrief/coach
 import os
 from datetime import datetime, timezone
 
-from shared import units
+from shared import polar as SPOL
 
 from .db import pool
 
@@ -68,15 +69,19 @@ def _point_of_sail(twa):
     return "downwind"
 
 
-def _target_for(tws, twa):
-    """Nearest ORC polar target_stw for a bin centre (same nearest-bucket logic as get_polar_target)."""
+def _polar_table():
+    """[(tws, twa, target_stw)] for this boat — fetched once per mine()."""
     with pool.connection() as conn:
-        row = conn.execute(
-            "SELECT target_stw FROM polars WHERE boat_id=%s "
-            "ORDER BY (abs(tws-%s)+abs(twa-%s)) LIMIT 1",
-            (BOAT_ID, tws, units.fold_twa(twa)),
-        ).fetchone()
-    return row["target_stw"] if row else None
+        rows = conn.execute("SELECT tws, twa, target_stw FROM polars WHERE boat_id=%s",
+                            (BOAT_ID,)).fetchall()
+    return [(r["tws"], r["twa"], r["target_stw"]) for r in rows]
+
+
+def _target_for(table, tws, twa):
+    """ORC target_stw at a bin centre, interpolated on the grid (`shared.polar.target`: pinching
+    above the beat angle grades against beat speed). Was the nearest bucket by |dTWS kn| +
+    |dTWA deg|, which read e.g. 11 kn off the 10 or 12 kn row (#67). None inside 30° or no polar."""
+    return SPOL.target(table, tws, twa) or None
 
 
 def mine(hours=None, min_samples=None, percentile=None):
@@ -118,13 +123,14 @@ def mine(hours=None, min_samples=None, percentile=None):
         bins.setdefault((tws_bin, twa_bin), []).append(stw)
         total += 1
 
+    table = _polar_table() if bins else []
     buckets = []
     for (tws_bin, twa_bin), stws in sorted(bins.items()):
         if len(stws) < min_samples:
             continue
         best = _percentile(stws, percentile)
         median = _percentile(stws, 50)
-        target = _target_for(tws_bin, twa_bin)
+        target = _target_for(table, tws_bin, twa_bin)
         pct = round(100 * best / target) if target else None
         buckets.append({
             "tws_kn": tws_bin, "twa_deg": twa_bin, "point_of_sail": _point_of_sail(twa_bin),
