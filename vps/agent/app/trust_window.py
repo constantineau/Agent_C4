@@ -55,6 +55,7 @@ def heading_segments(samples, step_s=None):
     segs = []
     t = t0 + win_s
     i0 = 0
+    last_status = last_at = None
     while t <= t1 + step_s * 0.5:
         # advance the left edge instead of rescanning — the sweep is O(n) over the race
         while i0 < len(samples) and samples[i0][0] < t - win_s:
@@ -65,12 +66,14 @@ def heading_segments(samples, step_s=None):
         # The last DECIDED verdict (never `unknown`) and when it was decided. It carries the
         # warn release band across windows — so the strip shows one warning instead of six
         # crossings of the same line — and holds a danger across windows that cannot judge, so a
-        # real fault does not go quiet every time the boat manoeuvres.
-        last = next((g for g in reversed(segs)
-                     if g["status"] in ("ok", "warn", "danger")), None)
+        # real fault does not go quiet every time the boat manoeuvres. A HELD danger is not a
+        # decision: it must not refresh its own age, or the hold never expires (the same rule
+        # the boat's live poll follows in pi/engine/engine_app.py).
         v = sensor_health.heading_bias(
-            samples[i0:i1], previous=(last or {}).get("status"),
-            previous_age_s=None if last is None else max(0.0, t - last["t1"]))
+            samples[i0:i1], previous=last_status,
+            previous_age_s=None if last_at is None else max(0.0, t - last_at))
+        if v["status"] in ("ok", "warn", "danger") and not v.get("held"):
+            last_status, last_at = v["status"], t
         step = {"status": v["status"], "bias_deg": v.get("bias_deg"),
                 "spread_deg": v.get("spread_deg"), "reason": v.get("reason")}
         if segs and segs[-1]["status"] == step["status"]:
@@ -87,7 +90,7 @@ def attitude_segments(samples, step_s=None):
     step_s = STEP_S if step_s is None else float(step_s)
     if not samples:
         return []
-    samples = sorted(samples)
+    samples = sorted(samples, key=lambda r: r[0])   # rows may carry None: sort on time only
     segs = []
     t = samples[0][0] + step_s
     i0 = 0
@@ -98,13 +101,17 @@ def attitude_segments(samples, step_s=None):
         while i1 < len(samples) and samples[i1][0] <= t:
             i1 += 1
         window = samples[i0:i1]
-        if not window:
+        # judge the step on its worst excursion — a capsized reading for one second is the
+        # signal here (the Jul 18 kick was a 36->133 deg step), not the average. Roll and pitch
+        # are judged separately (their limits differ, and a step may hold rows with only one
+        # of them), so a pitch fault is not hidden behind a bigger but legal roll.
+        rolls = [r[1] for r in window if r[1] is not None]
+        pitches = [r[2] for r in window if r[2] is not None]
+        if not rolls and not pitches:
             status, reason = "unknown", "no attitude samples in this step"
         else:
-            # judge the step on its worst excursion — a capsized reading for one second is the
-            # signal here (the Jul 18 kick was a 36->133 deg step), not the average
-            worst = max(window, key=lambda r: max(abs(r[1] or 0.0), abs(r[2] or 0.0)))
-            v = sensor_health.attitude_plausible(worst[1], worst[2])
+            v = sensor_health.attitude_plausible(max(rolls, key=abs) if rolls else None,
+                                                 max(pitches, key=abs) if pitches else None)
             status, reason = v["status"], v["reason"]
         if segs and segs[-1]["status"] == status:
             segs[-1]["t1"] = t
@@ -121,21 +128,30 @@ def danger_intervals(segments):
 
 
 def summarize(channels):
-    """One human line + machine totals for {'heading': [segs], 'attitude': [segs], ...}."""
+    """One human line + machine totals for {'heading': [segs], 'attitude': [segs], ...}.
+
+    A channel with no segments, or only `unknown` ones, was never checked; it is listed in
+    `unchecked` and named in the line, so "no danger windows" only ever means the checks ran."""
     total = {"danger_s": 0.0, "warn_s": 0.0, "unknown_s": 0.0}
-    lines = []
+    lines, unchecked = [], []
     for ch, segs in sorted((channels or {}).items()):
         for s in segs or ():
             d = s["t1"] - s["t0"]
             key = f"{s['status']}_s"
             if key in total:
                 total[key] += d
+        if not any(s["status"] != "unknown" for s in segs or ()):
+            unchecked.append(ch)
         worst = [s for s in segs or () if s["status"] == "danger"]
         if worst:
             span = sum(s["t1"] - s["t0"] for s in worst)
             lines.append(f"{ch} DANGER for {span / 60:.0f} min — {worst[-1]['reason']}")
+    if unchecked:
+        lines.append(f"{', '.join(unchecked)} not checked (no usable data)")
+    elif not lines:
+        lines.append("no danger windows")
     return {**{k: round(v) for k, v in total.items()},
-            "line": "; ".join(lines) or "no danger windows"}
+            "unchecked": unchecked, "line": "; ".join(lines)}
 
 
 def pick_source(by_source, channel, devices):
@@ -149,6 +165,21 @@ def pick_source(by_source, channel, devices):
                 99 if rank is None else rank, -len(by_source[s]), s)
 
     return min(by_source, key=key)
+
+
+def pick_path_sources(by_path, devices):
+    """{path: chosen source} for {path: {source: series}}. Ranked by the Signal K path itself,
+    which source_policy maps to its channel (headingTrue -> heading_true, roll -> heel). The
+    path's last segment ("headingtrue", "roll") is not a channel name and ranks nothing."""
+    return {p: pick_source(by_source, p, devices) for p, by_source in (by_path or {}).items()}
+
+
+def attitude_rows(roll, pitch):
+    """attitude_segments() rows from [(t, roll_deg)] and [(t, pitch_deg)]: every sample its own
+    row. Roll and pitch rarely share an exact epoch, and pairing on one drops pitch (and with it
+    any pitch-only fault)."""
+    return sorted([(t, v, None) for t, v in roll or ()] + [(t, None, v) for t, v in pitch or ()],
+                  key=lambda r: r[0])
 
 
 def merge_heading_samples(hdg, cog, sog, tol_s=30.0):
