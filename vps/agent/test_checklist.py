@@ -159,5 +159,48 @@ StubDS.blob = {}
 st = checklist.get_checklist(now=T_AFTERNOON)
 check("nothing loaded → empty-but-valid", st["available"] and not st["plan_set"])
 
+# --- #183-6: a poll in flight must not write away a crew ack -----------------------------------
+print("\nack vs poll race:")
+checklist.load({"items": ITEMS})
+POS.update({"lat": 45.30, "lon": -81.85})             # a couple of nm from the gate: it arms now
+_real_nav = navigator.get_navigator
+_fired = {"n": 0}
+
+
+def _nav_with_ack(route=None):
+    # the crew taps an ack while this poll is between its blob read and its latch save
+    if _fired["n"] == 0:
+        _fired["n"] += 1
+        checklist.ack({"id": "sponsor-flag"}, now=T_AFTERNOON)
+    return _real_nav(route)
+
+
+navigator.get_navigator = _nav_with_ack
+by = {i["id"]: i for i in checklist.get_checklist(now=T_AFTERNOON)["items"]}
+navigator.get_navigator = _real_nav
+check("the poll armed the gate item", by["gate-photo"]["status"] == "active")
+by = {i["id"]: i for i in checklist.get_checklist(now=T_AFTERNOON)["items"]}
+check("the ack made mid-poll survives the poll's save", by["sponsor-flag"]["status"] == "done")
+check("and the poll's new latch is kept", "gate-photo" in (StubDS.blob.get("armed") or {}))
+POS.update({"lat": 44.0, "lon": -82.3})
+# a poll that started before a reload must not save its latches into the new list
+checklist.load({"items": ITEMS})
+_old_loaded = StubDS.blob["loaded_at"]
+POS.update({"lat": 45.30, "lon": -81.85})
+
+
+def _nav_with_reload(route=None):
+    if _fired["n"] == 1:
+        _fired["n"] += 1
+        StubDS.blob = {**StubDS.blob, "loaded_at": _old_loaded + 1, "armed": {}, "acks": {}}
+    return _real_nav(route)
+
+
+navigator.get_navigator = _nav_with_reload
+checklist.get_checklist(now=T_AFTERNOON)
+navigator.get_navigator = _real_nav
+check("a reload mid-poll keeps the new list clean", StubDS.blob.get("armed") == {})
+POS.update({"lat": 44.0, "lon": -82.3})
+
 print("\nPASS" if ok else "\nFAIL")
 raise SystemExit(0 if ok else 1)

@@ -174,6 +174,86 @@ try:
 except Exception as e:
     ISSUE(f"crash: {type(e).__name__}: {e}")
 
+# ---------------------------------------------------------------------------
+print("\n== 10. #183-1: no own rating withholds corrected gaps (no ToT 1.0 guess) ==")
+try:
+    blob = {"scoring": {"method": "Time-on-Time"}, "own": {"boat": "C4"},
+            "fleet": [{"boat": "Defiance", "mmsi": "111", "rating": 1.050}]}
+    setup(blob, [tgt("111", 45.10, -83.02, 6.4)])
+    f = fleet.get_fleet()
+    r = f["fleet"][0]
+    if r.get("corrected_delta_s") is not None: ISSUE(f"corrected delta shown with no own rating: {r.get('corrected_delta_s')}")
+    else: OK("no corrected delta without our rating")
+    if not any("own rating missing" in g for g in (f.get("gaps") or [])): ISSUE(f"no gap note: {f.get('gaps')}")
+    else: OK("gap note says own rating missing")
+    if f["own_rank"]["overall"] is not None: ISSUE(f"own boat still ranked: {f['own_rank']}")
+    else: OK("own boat not ranked either")
+    if r.get("dtf_nm") is None: ISSUE("positions dropped too (only corrected gaps should go)")
+    # with our rating back, the same picture scores again
+    blob["own"]["rating"] = 1.0
+    f = fleet.get_fleet()
+    if f["fleet"][0].get("corrected_delta_s") is None: ISSUE("rating present but no corrected delta")
+    else: OK("own rating present -> corrected delta back")
+except Exception as e:
+    ISSUE(f"crash: {type(e).__name__}: {e}")
+
+print("\n== 11. #240: unsupported scoring is not scored as ToT ==")
+try:
+    for meth in ("Performance Curve Scoring", "One-Design", "ToT or ToD per SI"):
+        blob = {"scoring": {"method": meth}, "own": {"rating": 1.0, "orc_gph": 600.0},
+                "fleet": [{"boat": "Defiance", "mmsi": "111", "rating": 1.050, "orc_gph": 580.0}]}
+        setup(blob, [tgt("111", 45.10, -83.02, 6.4)])
+        f = fleet.get_fleet()
+        if f["fleet"][0].get("corrected_delta_s") is not None: ISSUE(f"{meth!r} scored anyway")
+        elif not any("not supported" in g for g in (f.get("gaps") or [])): ISSUE(f"{meth!r}: no gap note {f.get('gaps')}")
+        else: OK(f"{meth!r}: no corrected gaps, gap note")
+    for meth, tod in (("Single-Number Time-on-Time (ToT)", False), ("ToD", True), ("time on distance", True)):
+        blob = {"scoring": {"method": meth}, "own": {"rating": 1.0, "orc_gph": 600.0},
+                "fleet": [{"boat": "Defiance", "mmsi": "111", "rating": 1.050, "orc_gph": 580.0}]}
+        setup(blob, [tgt("111", 45.10, -83.02, 6.4)])
+        f = fleet.get_fleet()
+        if f["fleet"][0].get("corrected_delta_s") is None: ISSUE(f"{meth!r} should score")
+        else: OK(f"{meth!r} scores")
+    # no method but a system that names one; no method at all keeps ToT with a note
+    blob = {"scoring": {"system": "ORC"}, "own": {"rating": 1.0},
+            "fleet": [{"boat": "Defiance", "mmsi": "111", "rating": 1.050}]}
+    setup(blob, [tgt("111", 45.10, -83.02, 6.4)])
+    f = fleet.get_fleet()
+    if f["fleet"][0].get("corrected_delta_s") is None or not any("using Time-on-Time" in g for g in (f.get("gaps") or [])):
+        ISSUE(f"system-only scoring: {f.get('gaps')}")
+    else: OK("no method set -> ToT with a gap note")
+except Exception as e:
+    ISSUE(f"crash: {type(e).__name__}: {e}")
+
+print("\n== 12. #183-7: a tracker fix with no time is not brand new ==")
+try:
+    from app import tracker
+    tracker._reset_cache()
+    _orig_fetch = tracker._fetch
+    tracker._fetch = lambda cfg: ([{"name": "Defiance", "lat": 45.20, "lon": -83.00, "sog": 6.0,
+                                    "cog": 0, "time": None}], None)
+    tk = tracker.positions({"provider": "x", "url": "u"}, now=1_000_000.0)
+    fx = tk["positions"][0]
+    if fx["age_s"] is not None and fx["age_s"] < 60: ISSUE(f"no-time fix aged {fx['age_s']} s (looks fresh)")
+    else: OK(f"age unknown (age_s={fx['age_s']}), confidence {fx['confidence']}")
+    if fx["confidence"] > 0.2: ISSUE(f"no-time fix confidence {fx['confidence']}")
+    # through the fleet: shown, not scored
+    tracker._reset_cache()
+    blob = {"scoring": {"method": "ToT"}, "own": {"rating": 1.0},
+            "fleet": [{"boat": "Defiance", "rating": 1.05}],
+            "tracker": {"provider": "x", "url": "u", "permitted": True}}
+    setup(blob, [])
+    f = fleet.get_fleet()
+    rows = [r for r in f["fleet"] if r["boat"] == "Defiance"]
+    if not rows: ISSUE("no-time tracker boat vanished")
+    elif rows[0].get("corrected_delta_s") is not None: ISSUE("scored off a fix of unknown age")
+    elif not rows[0].get("age_unknown"): ISSUE("row not flagged age_unknown")
+    else: OK("shown, flagged, not scored")
+    tracker._fetch = _orig_fetch
+    tracker._reset_cache()
+except Exception as e:
+    ISSUE(f"crash: {type(e).__name__}: {e}")
+
 print("\n" + ("ALL CLEAN — no issues found" if not issues else f"{len(issues)} ISSUE(S) FOUND:"))
 for i in issues: print("  -", i)
 sys.exit(1 if issues else 0)

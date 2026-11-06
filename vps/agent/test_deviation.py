@@ -136,6 +136,34 @@ set_now(t + 65)
 check("closing in → converging", deviation.get_deviation()["xte_trend"] == "converging")
 
 # --- graceful na paths ------------------------------------------------------------------------
+# --- #183-10: out-and-back — the boat stays on its own leg ------------------------------------
+print("out-and-back (#183-10):")
+# 5 nm north in 1 nm points, then back south on a line 0.2 nm east. Every point 10 min apart.
+OB = ([{"lat": nm_north(i), "lon": LON0, "t": T0 + i * 600} for i in range(6)]
+      + [{"lat": nm_north(5 - i), "lon": LON0 + nm_east(0.2), "t": T0 + (6 + i) * 600}
+         for i in range(6)])
+use_bundle({"race_id": "ob", "recommended": "ob",
+            "variants": [{"id": "ob", "name": "Out and back", "route": {"path": OB}}]})
+deviation.reset_state()
+# outbound, 2 nm up, 0.12 nm east: nearer the RETURN line (0.08) than its own (0.12)
+set_boat(nm_north(2), LON0 + nm_east(0.12), cog=0.0)
+set_now(T0 + 2 * 600)
+r = deviation.get_deviation()
+check(f"first read sits on the outbound leg (along {r['along_nm']} nm)", r["along_nm"] < 3.0)
+check("time behind ~0, not a leg's worth", abs(r["time_behind_s"] or 0) < 120)
+set_boat(nm_north(2.5), LON0 + nm_east(0.13), cog=0.0)
+set_now(T0 + 2.5 * 600)
+r = deviation.get_deviation()
+check(f"next poll stays outbound (along {r['along_nm']} nm)", r["along_nm"] < 3.5)
+# walk up, round the top and come back down: the return leg is picked up in order
+for k, (n, e) in enumerate([(3.5, 0.1), (4.5, 0.1), (5.0, 0.1), (4.5, 0.15), (3.0, 0.15)]):
+    set_boat(nm_north(n), LON0 + nm_east(e), cog=0.0)
+    set_now(T0 + (3 + k) * 600)
+    r = deviation.get_deviation()
+check(f"after the turn it reads the return leg (along {r['along_nm']} nm)", r["along_nm"] > 6.5)
+use_bundle(BUNDLE)
+deviation.reset_state()
+
 print("na paths:")
 use_bundle({})
 check("no playbook → na", deviation.get_deviation()["status"] == "na")

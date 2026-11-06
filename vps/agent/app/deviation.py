@@ -50,6 +50,8 @@ TREND_EPS_NM = float(os.environ.get("DEV_TREND_EPS_NM", "0.05"))       # XTE cha
 # previous CALL, and the selector and the matcher call back to back, so the gap was milliseconds
 # and the trend read "steady" almost always.
 TREND_MIN_AGE_S = float(os.environ.get("DEV_TREND_MIN_AGE_S", "60"))
+# Segments this close to the nearest one count as "as near" when picking which leg we're on (#183-10)
+LEG_TIE_NM = float(os.environ.get("DEV_LEG_TIE_NM", "0.5"))
 
 _BANDS = {0: "ok", 1: "watch", 2: "act"}
 
@@ -83,15 +85,22 @@ def _seg_len_nm(a, b):
     return _hav_nm(a["lat"], a["lon"], b["lat"], b["lon"])
 
 
-def _project(blat, blon, path):
-    """Project the boat onto the frozen route polyline. Returns the nearest-segment fix: signed
+def _project(blat, blon, path, prev_idx=None, now=None):
+    """Project the boat onto the frozen route polyline. Returns the chosen segment's fix: signed
     cross-track (nm, + side), cumulative along-track distance (nm), the interpolated plan time `t`
-    at that point, and the local segment bearing + the plan's along-track speed there. A flat local
-    tangent plane about each segment's first point keeps the projection accurate over a leg."""
+    at that point, the local segment bearing + the plan's along-track speed there, and `idx`.
+    A flat local tangent plane about each segment's first point keeps the projection accurate.
+
+    Which segment (#183-10): the globally nearest one jumps legs where the track doubles back
+    (out-and-back, a windward-leeward), since both legs are about as close. Every segment within
+    LEG_TIE_NM of the nearest is a candidate, and neighbouring candidates form one stretch. The
+    stretch holding (or nearest, forward on a tie) `prev_idx`, the last poll's segment, wins;
+    with no history, the stretch whose plan time is nearest `now`, else the earliest. Within
+    the stretch, the nearest segment. Called with neither, it is the plain nearest segment."""
     if not path or len(path) < 2:
         return None
     cum = 0.0
-    best = None
+    cands = []
     for i in range(len(path) - 1):
         A, B = path[i], path[i + 1]
         seg = _seg_len_nm(A, B)
@@ -105,20 +114,46 @@ def _project(blat, blon, path):
         s = 0.0 if L2 == 0 else max(0.0, min(1.0, (px * bx + py * by) / L2))
         projx, projy = bx * s, by * s
         perp = math.hypot(px - projx, py - projy)
-        if best is None or perp < best["perp"]:
-            # cross-product z of A→B × A→P : >0 = boat is LEFT of the track direction
-            cross = bx * py - by * px
-            ta, tb = A.get("t"), B.get("t")
-            dt_h = ((tb - ta) / 3600.0) if (ta is not None and tb is not None) else None
-            best = {
-                "perp": perp,
-                "side": "left" if cross > 0 else "right",
-                "along": cum + s * seg,
-                "t_here": (ta + s * (tb - ta)) if (ta is not None and tb is not None) else None,
-                "seg_bearing": _bearing(A["lat"], A["lon"], B["lat"], B["lon"]),
-                "seg_speed": (seg / dt_h) if (dt_h and dt_h > 0) else None,
-            }
+        # cross-product z of A→B × A→P : >0 = boat is LEFT of the track direction
+        cross = bx * py - by * px
+        ta, tb = A.get("t"), B.get("t")
+        dt_h = ((tb - ta) / 3600.0) if (ta is not None and tb is not None) else None
+        cands.append({
+            "idx": i,
+            "perp": perp,
+            "side": "left" if cross > 0 else "right",
+            "along": cum + s * seg,
+            "t_here": (ta + s * (tb - ta)) if (ta is not None and tb is not None) else None,
+            "seg_bearing": _bearing(A["lat"], A["lon"], B["lat"], B["lon"]),
+            "seg_speed": (seg / dt_h) if (dt_h and dt_h > 0) else None,
+        })
         cum += seg
+    near = min(c["perp"] for c in cands)
+    if prev_idx is None and now is None:
+        best = min(cands, key=lambda c: c["perp"])     # a bare geometric query (reoptimize)
+        best["route_nm"] = cum
+        best["t0"] = path[0].get("t")
+        return best
+    ties = [c for c in cands if c["perp"] <= near + LEG_TIE_NM]
+    # neighbouring segments form one stretch of track; the doubled-back leg is another stretch
+    runs = []
+    for c in ties:
+        if runs and c["idx"] == runs[-1][-1]["idx"] + 1:
+            runs[-1].append(c)
+        else:
+            runs.append([c])
+    if prev_idx is not None:
+        def _gap(run):
+            lo, hi = run[0]["idx"], run[-1]["idx"]
+            return (0 if lo <= prev_idx <= hi else min(abs(lo - prev_idx), abs(hi - prev_idx)),
+                    hi < prev_idx)                      # forward wins a tie
+        run = min(runs, key=_gap)
+    elif now is not None and all(c["t_here"] is not None for c in ties):
+        pick = min(ties, key=lambda c: (abs(c["t_here"] - now), c["idx"]))
+        run = next(r for r in runs if pick in r)
+    else:
+        run = runs[0]
+    best = min(run, key=lambda c: c["perp"])
     best["route_nm"] = cum
     best["t0"] = path[0].get("t")
     return best
@@ -218,7 +253,10 @@ def get_deviation(route=None, variant=None, since=None):
         return _na("No position yet.", base_extra)
     blat, blon = s["lat"], s["lon"]
 
-    fix = _project(blat, blon, path)
+    now = time.time()
+    key = f"{route or navigator.active_route()}|{vid}"
+    st = _state.get(key, {})
+    fix = _project(blat, blon, path, prev_idx=st.get("seg_idx"), now=now)
     if fix is None:
         return _na("Track too short to measure.", base_extra)
 
@@ -229,7 +267,6 @@ def get_deviation(route=None, variant=None, since=None):
     side = fix["side"]
 
     # time behind: (elapsed since the anchor) − (the plan's elapsed to reach this along-point).
-    now = time.time()
     t0, t_here = fix["t0"], fix["t_here"]
     time_behind = None
     if t0 is not None and t_here is not None:
@@ -249,8 +286,6 @@ def get_deviation(route=None, variant=None, since=None):
         vmc_def = round(vmc_opt - vmc, 2)
 
     # --- fuzzy status (Schmitt bands with hysteresis + an XTE trend) --------------------------
-    key = f"{route or navigator.active_route()}|{vid}"
-    st = _state.get(key, {})
     xb = _band(xte_nm, st.get("xte_band", 0), XTE_CONSIDER_NM, XTE_COMMIT_NM)
     bb = 0
     if time_behind is not None and time_behind > 0:
@@ -271,7 +306,8 @@ def get_deviation(route=None, variant=None, since=None):
         elif xte_nm < ref - TREND_EPS_NM:
             trend = "converging"
     hist = (hist + [(now, xte_nm)])[-500:]
-    _state[key] = {"xte_band": xb, "behind_band": bb, "xte_hist": hist, "at": now}
+    _state[key] = {"xte_band": xb, "behind_band": bb, "xte_hist": hist, "at": now,
+                   "seg_idx": fix["idx"]}
 
     band = max(xb, bb)
     status = _BANDS[band]

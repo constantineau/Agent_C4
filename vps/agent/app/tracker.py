@@ -200,7 +200,13 @@ def positions(cfg, now=None):
         _CACHE[key] = cached
     out = []
     for fx in cached["fixes"]:
-        t = fx.get("time") or cached["at"]
+        t = fx.get("time")
+        if t is None:
+            # no fix time: the age is unknown, not zero (#183-7). Stamping it with the fetch
+            # time made an hours-old position look brand new. Lowest confidence, age None.
+            out.append({**fx, "time": None, "age_s": None, "age_unknown": True,
+                        "confidence": round(_CONF_FLOOR, 2)})
+            continue
         age = max(0.0, now - t)
         out.append({**fx, "time": t, "age_s": round(age), "confidence": round(_age_conf(age), 2)})
     return {"available": bool(out), "positions": out, "fetched_at": cached["at"],
