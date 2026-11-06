@@ -121,6 +121,7 @@ def compute(min_seconds=MIN_SECONDS):
     track and the learning archive use, so a race means the same thing on every surface.
     """
     raw, names_by_cell, strides = {}, {}, {}
+    pooled = {}          # raw minus seconds an earlier overlapping window already counted
     race_meta = []
     by_window, counted = {}, []        # (start, end) -> its race_meta row; intervals already read
     for s in monitor.agent_json("/racelog/sessions")["sessions"]:
@@ -144,11 +145,11 @@ def compute(min_seconds=MIN_SECONDS):
         trust = monitor.agent_json(f"/racelog/trust?start={w['start_ts']}&end={w['end_ts']}",
                                    timeout=180)
         fixes, refused = _gate(r["fixes"], trust)
-        # ...and a window that only OVERLAPS one already read keeps just its new seconds
-        n_before = len(fixes)
-        fixes = [f for f in fixes if not any(a <= f["t"] <= b for a, b in counted)]
-        already = n_before - len(fixes)
+        # ...and a window that only OVERLAPS one already read keeps every second for its own
+        # per-race views, but adds only its new seconds to the pooled ones
+        prior = list(counted)
         counted.append(wkey)
+        already = 0
         strides[rec] = _stride_s(r["fixes"])
         sail_log = r.get("sail_log") or []
         n, not_sailing = 0, 0
@@ -170,7 +171,11 @@ def compute(min_seconds=MIN_SECONDS):
             key = (round(tws / TWS_STEP_KN) * TWS_STEP_KN,
                    round(twa / TWA_STEP_DEG) * TWA_STEP_DEG, cfg, rec)
             raw.setdefault(key, []).append(stw)
-            names_by_cell.setdefault(key[:3], set()).add(s["name"])
+            if any(a <= f["t"] <= b for a, b in prior):
+                already += 1
+            else:
+                pooled.setdefault(key, []).append(stw)
+                names_by_cell.setdefault(key[:3], set()).add(s["name"])
             n += 1
         race_meta.append({"recording": rec, "race_id": s.get("race_id"), "session_id": s.get("id"),
                           "name": s["name"], "hours": w.get("hours"),
@@ -187,14 +192,14 @@ def compute(min_seconds=MIN_SECONDS):
         by_window[wkey] = race_meta[-1]
 
     cells, thin_cells = _rows(
-        raw, lambda k: (("tws", k[0]), ("twa", k[1]), ("config", k[2])), min_seconds, strides,
+        pooled, lambda k: (("tws", k[0]), ("twa", k[1]), ("config", k[2])), min_seconds, strides,
         names={(k[0], k[1], k[2]): v for k, v in names_by_cell.items()})
     race_cells, thin_race_cells = _rows(
         raw, lambda k: (("tws", k[0]), ("twa", k[1]), ("config", k[2]), ("recording", k[3])),
         min_seconds, strides)
     race_curves, thin_race_curves = _rows(
         raw, lambda k: (("tws", k[0]), ("twa", k[1]), ("recording", k[3])), min_seconds, strides)
-    curve, thin_curve = _rows(raw, lambda k: (("tws", k[0]), ("twa", k[1])), min_seconds, strides)
+    curve, thin_curve = _rows(pooled, lambda k: (("tws", k[0]), ("twa", k[1])), min_seconds, strides)
     for m in race_meta:
         if m.get("skipped"):       # a skipped session contributed nothing; saying "0 cells" would
             continue               # read as a race that sailed badly rather than one not counted

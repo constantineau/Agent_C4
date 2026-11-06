@@ -365,6 +365,8 @@ def propose(boat_id, recordings=None):
         # tide is in it, so it is left out the same way.
         excluded = [b for b in bins if b.get("wind_source") != "measured"]
         inferred = sum(1 for b in excluded if b.get("wind_source") == "inferred")
+        mixed = sum(1 for b in excluded if b.get("wind_source") == "mixed")
+        forecast = len(excluded) - inferred - mixed
         bins = [b for b in bins if b.get("wind_source") == "measured"]
         races = {b["race_id"] for b in bins}
         used = sorted({_rec(b) for b in bins}, key=lambda k: (k[0], k[1] or 0))
@@ -372,9 +374,9 @@ def propose(boat_id, recordings=None):
             return {"ok": False,
                     "note": "No measured data yet ("
                             + ", ".join(x for x in (
-                                f"{len(excluded) - inferred} from forecasts"
-                                if len(excluded) > inferred else "",
-                                f"{inferred} from GPS speed" if inferred else "") if x)
+                                f"{forecast} from forecasts" if forecast else "",
+                                f"{inferred} from GPS speed" if inferred else "",
+                                f"{mixed} partly measured" if mixed else "") if x)
                             + " left out). Debrief from the boat's log. The boat model only "
                               "learns from the instruments."}
         # Refine off the FLAT-WATER-equivalent % (pct_flat = raw pct with the sea-state loss removed)
@@ -429,8 +431,9 @@ def propose(boat_id, recordings=None):
                                         for k, x in by_pos.items()},
                    "races": sorted(races), "wind_source": "measured",
                    "recordings": [{"race_id": r, "window_start": w} for r, w in used],
-                   "excluded_forecast_bins": len(excluded) - inferred,
+                   "excluded_forecast_bins": forecast,
                    "excluded_inferred_bins": inferred,
+                   "excluded_mixed_bins": mixed,
                    "thin_cells_skipped": thin, "min_cell_samples": _MIN_SAMPLES_FOR_CELL}
         row = c.execute(
             """INSERT INTO proposals (created_at,boat_id,status,helm_current,helm_proposed,overall_pct,

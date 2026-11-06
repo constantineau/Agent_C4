@@ -173,6 +173,34 @@ check(f"the race is listed once ({len(listed)} rows), naming the other session",
 check("50 seconds stays 50 seconds: under the 60-second gate, no cell published",
       art["cells"] == [] and art["thin"]["cells"] == 1)
 
+OVL = {"sessions": [
+    {"id": 1, "name": "one", "race_id": "x",
+     "window": {"start_ts": T0, "end_ts": T0 + 119, "hours": 0.03, "provenance": []}},
+    {"id": 2, "name": "two", "race_id": "x",
+     "window": {"start_ts": T0 + 60, "end_ts": T0 + 179, "hours": 0.03, "provenance": []}}]}
+
+
+def overlap_agent(path, timeout=None):
+    if path.startswith("/racelog/sessions"):
+        return OVL
+    if path.startswith("/racelog/track"):
+        a = float(path.split("start=")[1].split("&")[0])
+        b = float(path.split("end=")[1].split("&")[0])
+        return {"fixes": [{"t": a + i, "lat": 45.0, "lon": -83.0, "tws": 10.0, "twa": 90.0,
+                           "stw": 6.0} for i in range(int(b - a) + 1)], "sail_log": []}
+    return {"danger": {}, "summary": {"line": "ok", "danger_s": 0}}
+
+
+monitor.agent_json = overlap_agent
+try:
+    art = OP.compute(min_seconds=60)
+finally:
+    monitor.agent_json = _ag
+per = {r["recording"]: r["seconds"] for r in art["race_curves"]}
+pool = sum(r["seconds"] for r in art["curve"])
+check(f"overlapping windows: each race keeps all its seconds ({per}), the pool counts "
+      f"the overlap once ({pool} s)", per == {T0: 120, T0 + 60: 120} and pool == 180)
+
 # ---- 5) judge: scoring fields cover the recording's own time ---------------------------------
 print("5) debrief: current and sea state over the recording's own time")
 calls = []
