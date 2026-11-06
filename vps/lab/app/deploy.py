@@ -14,6 +14,7 @@ under `deploy:<race_id>`.
 """
 import json
 import os
+import threading
 import time
 
 from shared import race_def
@@ -102,7 +103,24 @@ def bundle_problem(race_id, b, definition):
     return None
 
 
+# One push at a time (#182-10): two at once would interleave their course/assets/playbook posts
+# on the boat and leave it with a mix of both. A second push is refused, not queued.
+_PUSH_LOCK = threading.Lock()
+PUSH_BUSY = "Another push is running. Wait for it to finish, then push again."
+
+
 def push(race_id):
+    """`_push` under the one-at-a-time lock; refused (nothing sent) while another push runs."""
+    if not _PUSH_LOCK.acquire(blocking=False):
+        return {"race_id": race_id, "ok": False, "refused": True, "busy": True,
+                "detail": PUSH_BUSY, "steps": []}
+    try:
+        return _push(race_id)
+    finally:
+        _PUSH_LOCK.release()
+
+
+def _push(race_id):
     """Push the locked homework straight onto the boat — no downloads, no SD card. Course/fleet/
     checklist/watch + the signed playbook → the Pi engine over Tailscale; the engine forwards the
     same playbook to the Orin copilot over the Pi↔Orin cable while it holds its race-log lock (the
