@@ -109,5 +109,56 @@ for d, _, fs in os.walk(app_dir):
 check("no in-place writer left in vps/lab/app" + ("" if not raw else ": " + "; ".join(raw[:5])),
       not raw)
 
+print("GRIB cache files land whole and durably (#202)")
+import io                                                                    # noqa: E402
+from app import wave                                                         # noqa: E402
+from app.wind import grib                                                    # noqa: E402
+
+gdir = os.path.join(_tmp, "gribcache")
+dest = os.path.join(gdir, "gfs", "x.grib2")
+body = b"GRIB" + b"\0" * 500
+synced = []
+real_fsync, real_urlopen = os.fsync, grib.urllib.request.urlopen
+os.fsync = lambda fd: (synced.append(fd), real_fsync(fd))[1]
+grib.urllib.request.urlopen = lambda req, timeout=None: io.BytesIO(body)
+try:
+    grib.http_download("http://example.invalid/x", dest)
+finally:
+    os.fsync, grib.urllib.request.urlopen = real_fsync, real_urlopen
+check("http_download writes the bytes", open(dest, "rb").read() == body)
+check(f"http_download fsyncs the file and its directory ({len(synced)} fsyncs)", len(synced) >= 2)
+check("http_download leaves no temp file", os.listdir(os.path.dirname(dest)) == ["x.grib2"])
+
+seen = []
+
+
+def fake_run(mode):
+    def run(argv, **kw):
+        out = argv[4]
+        seen.append(out)
+        if mode == "timeout":
+            raise wave.subprocess.TimeoutExpired(argv, 1)
+        if mode == "ok":
+            import numpy as np
+            np.savez(out, lat=np.zeros(2), lon=np.zeros(2), ep=np.zeros(1), hs=np.zeros((1, 2)))
+        return type("R", (), {"returncode": 0 if mode == "ok" else 1})()
+    return run
+
+
+real_run = wave.subprocess.run
+try:
+    for mode in ("ok", "fail", "timeout"):
+        wave.subprocess.run = fake_run(mode)
+        res = wave._parse_isolated(dest, 0, 1, lambda m: None)
+        check(f"wave parse ({mode}): result {'returned' if mode == 'ok' else 'is None'}",
+              (res is not None) == (mode == "ok"))
+finally:
+    wave.subprocess.run = real_run
+check("wave parse hands off through a private temp file, not one beside the cached GRIB",
+      all(os.path.dirname(o) != os.path.dirname(dest) for o in seen) and len(set(seen)) == 3)
+check("wave parse removes its temp file every time (ok, failed, timed out)",
+      not any(os.path.exists(o) for o in seen)
+      and os.listdir(os.path.dirname(dest)) == ["x.grib2"])
+
 print("\nALL OK" if ok else "\nFAILURES")
 sys.exit(0 if ok else 1)
