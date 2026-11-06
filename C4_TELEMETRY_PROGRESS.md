@@ -10,6 +10,8 @@ Deletion from the boat is allowed only *after* an off-boat copy is sha256-verifi
 - Pi: engine only (sails.py, engine_app.py, shared/race_def.py copied; no drift before). Backup `~/deploy-backups/batch4-20261106T152956Z`, image `sr33-pi-engine:pre-20261106T152956Z`. /health /power /health/sensors /playbook 200, 0 restarts.
 - Orin: ff 903ee80 → 83cb9f3 (tag `pre-deploy-20261106`), copilot restarted, all active.
 - Shore push test: the old playbook (no hash) pushed 7/7 green, Deploy tab says "Frozen before course checks. Freeze again to check it." Fresh playbook (course_hash e09417dc473e89b3, chart enc, safety 2.63 m) synthesized, frozen, locked, pushed 7/7 green; boat holds signature f34717a78a6d7061.
+- **#229 (#227 Code 0 limits) MERGED + DEPLOYED 2026-11-06 ~17:26Z** (main 0621e4f): VPS agent rebuilt (rollback `sr33-dev-agent:pre-20261106b`); Pi engine sails.py swapped (backup `~/deploy-backups/c0-20261106T172609Z`, image `sr33-pi-engine:pre-20261106T172609Z`), all endpoints 200. The iPad now calls "change now" with the C0 up above 9 kn TWS or outside 55-110 deg TWA.
+- Import prompt caching DROPPED: the two parts send different output schemas, which invalidates the cache.
 - Still open: #166/#176 already fixed (close them), #53 leftover, #227 Code 0 key, #181 SD card, close proven re-route tickets #124 #125 #139 #140, update map #188.
 
 ## ⏸ PICK UP HERE — 2026-11-04 (dev = main @ 62315d1, DEPLOYED)
