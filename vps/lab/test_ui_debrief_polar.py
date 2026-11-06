@@ -57,6 +57,9 @@ latest = fn("debLatestId")
 check("G65 'newest' is by created_at", "created_at" in latest)
 check("G65 the row on screen is marked", "onScreen" in card and "showing" in card)
 check("G65 a late open does not paint over another tab", 'if (!stale("debrief")) paintDebrief();' in fn("debOpenDebrief"))
+opn = fn("debOpenDebrief")
+check("G65 an open answer for a race or debrief the user left is dropped",
+      "Deb.raceId !== race" in opn and "Deb.viewing !== id" in opn and opn.count("if (moved()) return;") == 2)
 no_race = render[:render.index("Deb.playbooks")]
 check("G66 no race no longer returns a bare placeholder", "Add one in the Races tab.</div>'; return;" not in no_race)
 check("G66 no race still loads and paints Fleet retro", "retroLoad()" in no_race and "paintDebrief()" in no_race)
@@ -72,6 +75,8 @@ check("sail colours come from SAIL_COLORS (one colour per sail across the Lab)",
 check("SS falls back to the staysail pink until SAIL_COLORS has it", 'POL_SS = "#f28cc4"' in JS)
 check("a two-sail set draws its second sail dashed in that sail's colour",
       "sr.color2" in fn("polSvg") and "stroke-dasharray" in fn("polSvg"))
+check("S1 and S2 cells at one angle make one line point, not a radial zigzag",
+      "polLinePts(pts)" in fn("polSeries") and "sr.line || sr.pts" in fn("polSvg"))
 paintp = fn("paintPolar")
 check("legend, table and filter use the crew names", "polConfigNames()" in paintp
       and "polSailName(c.config)" in paintp and "d.configs || []" not in paintp)

@@ -3267,13 +3267,20 @@ async function debPoll() {
 // way to see it again.
 async function debOpenDebrief(id) {
   Deb.msg = ""; Deb.viewing = id; Deb.report = null; paintDebrief();
+  const race = Deb.raceId;
+  // an answer for a race, debrief or run the user has since moved off is dropped, not shown
+  const moved = () => Deb.raceId !== race || Deb.viewing !== id;
   try {
     const d = await (await apiGet("/api/learning/debriefs/" + id)).json();
+    if (moved()) return;
     const rep = d.report || {};
     Deb.report = Object.assign({ available: true, race_name: d.race_name, archived_id: d.id,
                                  archived_at: d.created_at }, rep);
     if (Deb.report.actual_track && d.perf_bins) Deb.report.actual_track.n_bins = d.perf_bins.length;
-  } catch (e) { Deb.msg = "could not open that debrief"; Deb.viewing = null; }
+  } catch (e) {
+    if (moved()) return;
+    Deb.msg = "could not open that debrief"; Deb.viewing = null;
+  }
   if (!stale("debrief")) paintDebrief();
 }
 
@@ -3988,6 +3995,17 @@ function polSwatch(cfg) {
   const bg = b ? `linear-gradient(135deg, ${a} 50%, ${b} 50%)` : a;
   return `<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${bg};margin-right:4px"></span>`;
 }
+// The line through one series: one point per TWA. Logs that call the kite S2 and logs that call it
+// S1 are cells built apart, so one angle can carry two; the line takes the one with more data and
+// both still show as dots and table rows.
+function polLinePts(pts) {
+  const best = {};
+  pts.forEach((p) => {
+    const b = best[p.twa], w = (q) => (q.seconds != null ? q.seconds : q.samples) || 0;
+    if (!b || w(p) > w(b)) best[p.twa] = p;
+  });
+  return pts.filter((p) => best[p.twa] === p);
+}
 // The configs as the crew names them, one entry per name ("S2" and "S1" logs are the same sail).
 function polConfigNames() {
   const out = [];
@@ -4112,8 +4130,9 @@ function polSeries() {
     .sort((x, y) => (POL_ORDER.indexOf(x) + 1 || 99) - (POL_ORDER.indexOf(y) + 1 || 99) || x.localeCompare(y))
     .map((name) => {
       const [color, color2] = polColors(name === "—" ? null : name);
-      return { key: name, label: name === "—" ? "unknown sails" : name, color, color2,
-               pts: by[name].slice().sort((m, n) => m.twa - n.twa) };
+      const pts = by[name].slice().sort((m, n) => m.twa - n.twa);
+      return { key: name, label: name === "—" ? "unknown sails" : name, color, color2, pts,
+               line: polLinePts(pts) };
     });
 }
 
@@ -4158,8 +4177,9 @@ function polSvg() {
     // observed labels live, and the reference must never crowd the record
   }
   for (const sr of series) {
-    if (sr.pts.length > 1) {
-      const d = sr.pts.map((p, i) => (i ? "L" : "M") + XY(p.twa, p.stw).map((n) => n.toFixed(1)).join(" ")).join(" ");
+    const line = sr.line || sr.pts;
+    if (line.length > 1) {
+      const d = line.map((p, i) => (i ? "L" : "M") + XY(p.twa, p.stw).map((n) => n.toFixed(1)).join(" ")).join(" ");
       out.push(`<path d="${d}" fill="none" stroke="${sr.color}" stroke-width="2"/>`);
       if (sr.color2) out.push(`<path d="${d}" fill="none" stroke="${sr.color2}" stroke-width="2" stroke-dasharray="7 7"/>`);
     }
@@ -4303,7 +4323,7 @@ function paintPolar() {
   const tbl = cells.length ? `<div class="pg-wrap"><table class="pg">
     <tr><th>TWA</th><th>sails</th><th>best held (kn)</th><th>typical (kn)</th><th>data (s)</th><th>${Pol.race === "all" ? "races" : "race"}</th></tr>
     ${cells.slice().sort((a, b) => a.twa - b.twa || String(a.config).localeCompare(String(b.config))).map((c) =>
-      `<tr><td>${c.twa}°</td><td>${polSwatch(c.config)}${esc(polSailName(c.config) || "unknown")}</td>
+      `<tr><td>${c.twa}°</td><td>${polSwatch(c.config)}${esc(polSailName(c.config) || "unknown")}${c.config && polSailName(c.config) !== c.config ? ` <span class="muted" style="font-size:11px">(logged ${esc(c.config)})</span>` : ""}</td>
        <td><b>${kn2(c.stw)}</b></td><td>${kn2(c.median_stw)}</td><td>${c.seconds != null ? c.seconds : c.samples}</td><td>${esc(c.races ? c.races.join(", ") : polRaceName(c.recording))}</td></tr>`).join("")}
   </table></div>` : '<div class="placeholder">No measured cells at this TWS for this race.</div>';
   document.getElementById("view").innerHTML = `<div class="opt">
