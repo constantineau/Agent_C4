@@ -81,4 +81,15 @@ with tempfile.TemporaryDirectory() as tmp:
           r.returncode != 0 and os.path.exists(src)
           and sqlite3.connect(src).execute("SELECT count(*) FROM readings").fetchone()[0] == 4)
 
+    # ... nor when the source is OUT's -wal sidecar, nor a hard link to it.
+    wal_src = os.path.join(tmp, "race.db-wal")
+    os.link(src, wal_src)
+    for label, out_path in (("OUT-wal = the source", os.path.join(tmp, "race.db")),
+                            ("OUT = a hard link to the source", wal_src)):
+        r = subprocess.run(["bash", os.path.join(HERE, "cut_jul15_race.sh")],
+                           env={**os.environ, "SRC": src, "OUT": out_path},
+                           capture_output=True, text=True)
+        check(f"{label} is refused and the source survives",
+              r.returncode != 0 and os.path.exists(src) and os.path.exists(wal_src))
+
 sys.exit(0 if ok else 1)

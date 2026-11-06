@@ -15,11 +15,13 @@ TO='2026-07-16T00:20:00'      # the derived window (22:39 -> 00:07) with room ei
 
 [ -f "$SRC" ] || { echo "no source archive at $SRC" >&2; exit 1; }
 mkdir -p "$(dirname "$OUT")"
-# OUT is deleted and rewritten: never let it be the source (or the source's WAL/SHM).
-src_real=$(realpath "$SRC"); out_real=$(realpath -m "$OUT")
-case "$out_real" in
-  "$src_real"|"$src_real-wal"|"$src_real-shm") echo "OUT must not be the source archive" >&2; exit 1 ;;
-esac
+# OUT and its -wal/-shm are deleted and rewritten: none may be the source or its sidecars
+# (-ef compares device + inode, so symlinks and hard links count too).
+for o in "$OUT" "$OUT-wal" "$OUT-shm"; do
+  for s in "$SRC" "$SRC-wal" "$SRC-shm"; do
+    if [ -e "$o" ] && [ "$o" -ef "$s" ]; then echo "OUT ($o) is the source archive ($s)" >&2; exit 1; fi
+  done
+done
 rm -f "$OUT" "$OUT-wal" "$OUT-shm"
 
 python3 - "$SRC" "$OUT" "$FROM" "$TO" <<'PY'
