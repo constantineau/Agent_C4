@@ -14,10 +14,22 @@ Matchers are device names, resolved against `$source` labels by `shared/n2k_sour
 Read that module first: for most of this project's life these matchers matched *nothing*,
 which is indistinguishable from a policy that is being honoured.
 """
+import time as _time
+
 from . import n2k_sources
 
 # A ranked source must be fresher than this to be used before falling back to the next rank.
 # Mirrors tools.FAILOVER_AGE_S; the same 45 s applies onboard.
+#
+# "Fresher" means age against the WALL CLOCK (`now - sample_time`), the same test `/conditions`
+# applies (`tools._choose_preferred`, `onboard_conditions._choose_preferred`, both on `age_s`).
+# Until #221 this module measured age from the newest sample of any publisher instead, so with
+# the Orca last seen 90 s ago and `derived` 60 s ago tactics followed the Orca (30 s behind the
+# newest) while `/conditions` followed `derived` (both stale, freshest wins). Two rules for one
+# question let two screens name different leads. The relative rule existed so an archive replay
+# would not call every source stale; the replay rig now freezes the process clock (freezegun,
+# tools/replay/harness.py), so the wall clock is the replay's clock too. Onboard, a lead that has
+# gone quiet must lose even when every other publisher went quiet with it.
 FAILOVER_AGE_S = 45
 
 # channel -> device matchers, best first. Keep in lockstep with source_priority.sql.
@@ -98,7 +110,7 @@ def rank_for(path_or_channel, source, devices, priority=None):
 
 
 def series_publisher(path_or_channel, rows, devices, priority=None,
-                     failover_s=FAILOVER_AGE_S):
+                     failover_s=FAILOVER_AGE_S, now=None):
     """Name the ONE publisher a window series should follow, or None when `rows` is empty.
 
     `rows` is a `series_by_source` result: [(source, epoch, value)]. A window read that keeps
@@ -108,8 +120,7 @@ def series_publisher(path_or_channel, rows, devices, priority=None,
 
     The pick mirrors the live reads (`OnboardSource._prefer`, `tools._choose_preferred`): the
     best-ranked source that is still current wins, current meaning its last sample is within
-    `failover_s` of the newest sample of any publisher (relative, never the wall clock, so a
-    replay works). A ranked lead that went quiet mid-window is passed over for the whole window,
+    `failover_s` of `now` (the wall clock unless given; see FAILOVER_AGE_S). A ranked lead that went quiet mid-window is passed over for the whole window,
     which removes the handover step. Within the winning rank — or among all current sources when
     none is ranked — the one with the latest sample wins, label breaking a tie: exactly the
     `preferred()` live pick, so the window and the live value never name different devices
@@ -119,26 +130,29 @@ def series_publisher(path_or_channel, rows, devices, priority=None,
     for src, t, _v in rows:
         last[src] = max(last.get(src, t), t)
     best = preferred(path_or_channel, [(s, t, None) for s, t in last.items()], devices,
-                     priority, failover_s)
+                     priority, failover_s, now)
     return best[0] if best else None
 
 
 def preferred(path_or_channel, candidates, devices, priority=None,
-              failover_s=FAILOVER_AGE_S):
+              failover_s=FAILOVER_AGE_S, now=None):
     """The live pick: one (source, epoch, value) from each publisher's latest sample, or None.
 
-    Same rule as `OnboardSource._prefer` and `series_publisher`: the best-ranked source whose
-    sample is within `failover_s` of the newest one wins (freshest within that rank), else the
-    freshest of all. A live read that took "whoever wrote last" disagreed with the window read
+    Same rule as `OnboardSource._prefer`, `series_publisher` and `/conditions`: the best-ranked
+    source whose sample is at most `failover_s` old wins (freshest within that rank), else the
+    freshest of all. Age is `now - epoch`; `now` defaults to the wall clock (see FAILOVER_AGE_S)
+    and is a parameter so a caller holding a better-trusted time can pass it. A live read that took "whoever wrote last" disagreed with the window read
     whenever two publishers differ, and tactics reported the gap as a current shift (#167).
     Ties on time go to the larger label, so the pick never depends on row order."""
     if not candidates:
         return None
+    if now is None:
+        now = _time.time()
     latest = lambda r: (r[1], r[0])
     freshest = max(candidates, key=latest)
     for m in matchers_for(path_or_channel, priority):
         ranked = [r for r in candidates if n2k_sources.matches(r[0], m, devices)
-                  and freshest[1] - r[1] <= failover_s]
+                  and now - r[1] <= failover_s]
         if ranked:
             return max(ranked, key=latest)
     return freshest

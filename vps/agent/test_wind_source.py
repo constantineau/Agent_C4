@@ -255,6 +255,10 @@ def run_cloud(rows, prio):
 
 
 SEEDED = {k: list(v) for k, v in source_policy.DEFAULT_PRIORITY.items()}
+# The source pick judges freshness on the wall clock (#221, same rule as /conditions), so every
+# cloud read below runs on the fixtures' clock, not today's.
+_cloud_clock = freeze_time(NOW)
+_cloud_clock.start()
 cloud = run_cloud(cloud_rows(), SEEDED)
 vals = {round(math.degrees(v), 3) for _, v in cloud.series(TWD, 12)}
 check(f"cloud series is the Orca only (got {sorted(vals)})", vals == {200.0})
@@ -303,6 +307,7 @@ for prio_name, prio in (("same rank", SEEDED), ("unranked", dict(SEEDED, twd=[])
 cloud = run_cloud([], SEEDED)
 check("cloud series of nothing is empty", cloud.series(TWD, 12) == [])
 check("cloud live read of nothing is None", cloud.latest_value(TWD) is None)
+_cloud_clock.stop()
 
 print("PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)
