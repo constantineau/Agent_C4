@@ -144,6 +144,7 @@ async function route() {
   syncDirty();   // the bar + markers belong to the tab being entered
   document.querySelectorAll("#tabs a").forEach((a) =>
     a.classList.toggle("active", a.getAttribute("href") === "#" + sec));
+  keepTabVisible(document.querySelector("#tabs a.active"));
   if (sec === "races") return renderRaces();
   if (sec === "course") return renderCourse();
   if (sec === "gameplan") return renderGameplan();
@@ -156,6 +157,16 @@ async function route() {
   if (sec === "polar") return renderPolar();
   location.hash = "#races";          // unknown route → the library
 }
+// The tab row scrolls sideways when it doesn't fit (iPad upright): bring the selected tab into view.
+// Scrolls only the row itself (not scrollIntoView, which can also move the page).
+function keepTabVisible(a) {
+  const row = a && a.parentElement;
+  if (!row || row.scrollWidth <= row.clientWidth) return;
+  const r = row.getBoundingClientRect(), t = a.getBoundingClientRect(), pad = 24;
+  if (t.left < r.left) row.scrollLeft -= r.left - t.left + pad;
+  else if (t.right > r.right) row.scrollLeft += t.right - r.right + pad;
+}
+window.addEventListener("resize", () => keepTabVisible(document.querySelector("#tabs a.active")));
 const clone = (o) => JSON.parse(JSON.stringify(o));
 
 /* ---------- unsaved edits — ONE mechanism for every form that holds edits (DIRTY_SOURCES) ----------
@@ -1339,7 +1350,7 @@ function renderBoatModel() {
 }
 
 // Sail palette (mirrors the .sail-bg-* CSS) — used to hatch the toss-up overlap bands in two colors.
-const SAIL_COLORS = { J1: "#36b3ff", J2: "#66a9e0", J3: "#9b8cff", C0: "#4dd6c9", A3: "#f5c451", S1: "#ff8042" };
+const SAIL_COLORS = { J1: "#36b3ff", J2: "#66a9e0", J3: "#9b8cff", C0: "#4dd6c9", SS: "#f28cc4", A3: "#f5c451", S1: "#ff8042" };
 const sailColor = (s) => SAIL_COLORS[s] || "#8899a6";
 function hexRgba(hex, a) {
   const h = String(hex).replace("#", "");
