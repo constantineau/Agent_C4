@@ -336,8 +336,9 @@ async def flusher(window, loop, retry=None):
                 break
             retry.pop(0)
         if not window:
-            # A quiet bus: still deliver batches held before the clock was trusted.
-            if not retry and UNDATED_DIR.exists() and any(UNDATED_DIR.glob("*.json")) \
+            # A quiet bus: still deliver batches held before the clock was trusted, and keep
+            # retrying queued ones (a post that failed once would otherwise wait for traffic).
+            if not retry and (any(UNDATED_DIR.glob("*.json")) or any(QUEUE_DIR.glob("*.json"))) \
                     and clock_trusted():
                 try:
                     await loop.run_in_executor(None, drain_held)

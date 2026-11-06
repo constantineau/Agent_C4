@@ -348,3 +348,23 @@ def test_held_batches_go_out_after_trust_even_on_a_quiet_bus(q, monkeypatch):
     asyncio.run(go())
     assert [b["readings"][0]["value"] for b in posted] == [5]
     assert _names(q / "undated") == [] and _names(q) == []
+
+
+def test_queued_batches_are_retried_on_a_quiet_bus(q):
+    """The link was down when held batches were queued; when it comes back, the queue drains
+    even with no new telemetry."""
+    import asyncio
+    up = _load_uplink(q)
+    _write(q, "20261106T120000Z.json", _batch("2026-11-06T12:00:00Z", 8))
+    up.CLOCK = _Clock(True)
+    up.AGG_SECONDS = 0.01
+    posted = []
+    up._post = posted.append
+
+    async def go():
+        task = asyncio.create_task(up.flusher({}, asyncio.get_running_loop()))
+        await asyncio.sleep(0.2)
+        task.cancel()
+    asyncio.run(go())
+    assert [b["readings"][0]["value"] for b in posted] == [8]
+    assert _names(q) == []
