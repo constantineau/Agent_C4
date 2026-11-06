@@ -90,7 +90,7 @@ def attitude_segments(samples, step_s=None):
     step_s = STEP_S if step_s is None else float(step_s)
     if not samples:
         return []
-    samples = sorted(samples)
+    samples = sorted(samples, key=lambda r: r[0])   # rows may carry None: sort on time only
     segs = []
     t = samples[0][0] + step_s
     i0 = 0

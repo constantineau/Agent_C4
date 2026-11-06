@@ -137,6 +137,13 @@ check("pitch-only stream is judged, not unknown",
       [s["status"] for s in TW.attitude_segments(TW.attitude_rows([], [(T0 + i, 2.0) for i in range(130)]), 60)]
       == ["ok"])
 
+try:
+    same = TW.attitude_segments(TW.attitude_rows([(T0 + i, 10.0) for i in range(130)],
+                                                 [(T0 + i, 2.0) for i in range(130)]), 60)
+    check("roll and pitch on the same epoch do not crash", [s["status"] for s in same] == ["ok"])
+except TypeError as exc:
+    check(f"roll and pitch on the same epoch do not crash ({exc})", False)
+
 print("#46.4c no data is not all-clear:")
 e = TW.summarize({"heading": [], "attitude": TW.attitude_segments([], 60)})
 print(f"      {e['line']}")
