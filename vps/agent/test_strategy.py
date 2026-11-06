@@ -27,8 +27,10 @@ def stub(bundle=BUNDLE, tac=None, dev=None, dft=None, fleet=None):
     strategy.fleet_mod.get_fleet = lambda max_range_nm=40.0: (fleet or {"available": False, "fleet": [], "traffic": []})
 
 def wind(persistent, favored, trend="steady", osc=8):
+    # tactics always carries now/mean_12min when available; the shift row needs them (#46)
     return {"available": True, "favored_side": favored,
-            "wind": {"persistent": persistent, "trend": trend, "oscillation_deg": osc}}
+            "wind": {"persistent": persistent, "trend": trend, "oscillation_deg": osc,
+                     "now": 220.0 if persistent else 212.0, "mean_12min": 210.0}}
 
 def grounded(items):
     return all(it.get("grounded_in") for it in items)
@@ -36,7 +38,7 @@ def grounded(items):
 # --- 1. CONCORDANT switch: shift-left + drift-backed(→left) + deviation-left + fleet-left → STRONG ---
 print("concordant → strong, consolidate:")
 stub(tac=wind(True, "left", "backing"),
-     dev={"available": True, "status": "watch", "xte_side": "left", "xte_nm": 0.6, "time_behind_s": 0, "variant": "middle"},
+     dev={"available": True, "status": "watch", "xte_status": "watch", "xte_side": "left", "xte_nm": 0.6, "time_behind_s": 0, "variant": "middle"},
      dft={"available": True, "status": "act", "drift_dir": "backed", "drift_twd_deg": 22, "drift_tws_kn": 1.5},
      fleet={"available": True, "fleet": [
          {"boat": "Rival A", "tag": "rival", "leverage_nm": -0.8, "confidence": 0.6, "corrected_delta_s": -40}], "traffic": []})
@@ -163,6 +165,9 @@ check("more wind than the plan", S({}, {}, {}, {"status": "act", "obs_twd": 350,
 check("forecast moved (never veered/backed)", S({}, {}, {"drift": {"status": "act", "dir": "veered",
                                                                   "deg": 28}}, None)["reason"]
       == "Forecast shifted 28° right since the plan.")
+check("forecast size is the signed mean, not the mean |shift| (#43)",
+      S({}, {}, {"drift": {"status": "act", "dir": "right", "deg": 30, "signed_deg": 10}}, None)["reason"]
+      == "Forecast shifted 10° right since the plan.")
 check("a watch-level gap stays quiet", S({}, {}, {"drift": {"status": "watch", "dir": "right", "deg": 12}},
                                           {"status": "watch", "obs_twd": 10, "plan_twd": 350}) is None)
 
@@ -228,6 +233,86 @@ rd = fleet_read({"available": True, "own": {"leverage_nm": own_lev, "leg_index":
                  "fleet": [{**rival, "leverage_nm": riv_lev, "leg_index": riv_leg}]})
 print("  ", rd)
 check("behind the start: rival 1.0 nm to our right", "1.0 nm to our right" in rd)
+
+# --- 8. one boat, a clock that moves: a settling change reaches the strategy output (#40) ---------
+print("continuous boat: settling reaches /strategy, built from fresh signals (#40):")
+_sel = strategy.selector_mod
+_real_time = _sel.time.time
+CLOCK = [1_800_000_000.0]
+_sel.time.time = lambda: CLOCK[0]
+try:
+    stub(tac=wind(False, "either", osc=10))
+    r = strategy.get_strategy_signals()
+    check("t=0: hold, nothing settling", r["recommendation"]["action"].startswith("Hold")
+          and "settling" not in r)
+    # same boat (no stub reset): a lasting left shift and a forecast that agrees
+    sel_ = strategy.selector_mod
+    sel_.tactics.get_tactics = lambda route=None: wind(True, "left", "backing")
+    sel_.drift_mod.get_drift = lambda route=None: {"available": True, "status": "act",
+                                                   "drift_dir": "backed", "drift_twd_deg": 22}
+    CLOCK[0] += 30
+    r = strategy.get_strategy_signals()
+    print("  ", r["recommendation"]["action"], "| settling", r.get("settling"), "|", r["concordance"]["note"])
+    check("the card's hold stands while the switch settles", r["recommendation"]["action"].startswith("Hold"))
+    check("…and the strategy output says what it is moving to",
+          (r.get("settling") or {}).get("to_action") == "switch")
+    check("concordance is built from the fresh shift (lean left)", r["concordance"]["lean"] == "left")
+    check("the forecast row is in the picture (fresh drift)",
+          any(p["signal"] == "forecast" for p in r["picture"]))
+    CLOCK[0] += _sel.SETTLE_S
+    r = strategy.get_strategy_signals()
+    check("after the settle: switch, nothing settling",
+          r["recommendation"]["action"].startswith("Switch") and "settling" not in r)
+finally:
+    _sel.time.time = _real_time
+
+# --- 8b. a switch on the card while the signals turn the other way: never "agree" (#40) ------------
+print("settling switch vs signals that reversed (#40):")
+CLOCK = [1_900_000_000.0]
+_sel.time.time = lambda: CLOCK[0]
+try:
+    stub(tac=wind(True, "left", "backing"))
+    r = strategy.get_strategy_signals()
+    check("t=0: switch left", r["recommendation"]["action"].startswith("Switch"))
+    sel_ = strategy.selector_mod
+    sel_.tactics.get_tactics = lambda route=None: wind(True, "right", "veering")
+    sel_.drift_mod.get_drift = lambda route=None: {"available": True, "status": "act",
+                                                   "drift_dir": "veered", "drift_twd_deg": 22}
+    sel_.deviation.get_deviation = lambda route=None: {"available": True, "status": "watch",
+                                                       "xte_status": "watch", "xte_side": "right",
+                                                       "xte_nm": 0.6, "variant": "middle"}
+    CLOCK[0] += 30
+    r = strategy.get_strategy_signals()
+    print("  ", r["assessment"], "|", r["recommendation"]["urgency"])
+    check("still settling on the old switch", r["recommendation"]["action"].startswith("Switch")
+          and "settling" in r)
+    check("the headline doesn't say the signals agree", "agree" not in r["assessment"].lower())
+    check("rationale asks to confirm, not 'all agree'",
+          "all agree" not in r["recommendation"]["rationale"] and "confirm" in r["recommendation"]["rationale"].lower())
+    check("urgency not 'now'", r["recommendation"]["urgency"] != "now")
+finally:
+    _sel.time.time = _real_time
+
+# --- 9. time behind alone doesn't vote a side in the concordance (#43) ------------------------------
+print("time behind alone doesn't vote a side (#43):")
+stub(tac=wind(True, "left", "backing"),
+     dev={"available": True, "status": "act", "xte_status": "ok", "xte_side": "right", "xte_nm": 0.02,
+          "time_behind_s": 400, "variant": "middle"})
+r = strategy.get_strategy_signals()
+print("  ", r["concordance"]["note"])
+check("not split by a boat that is merely behind", r["concordance"]["strength"] != "split")
+check("the picture still says we're behind", any(p["signal"] == "deviation" and "behind" in p["read"]
+                                                 for p in r["picture"]))
+
+# --- 10. no wind data with a gameplan aboard: no all-clear, no 'steady near 0°' (#46) ---------------
+print("no wind data, gameplan aboard (#46):")
+stub()
+r = strategy.get_strategy_signals()
+print("  ", r["assessment"], "|", [p["read"] for p in r["picture"]])
+check("not a Hold recommendation", not r["recommendation"]["action"].startswith("Hold"))
+check("says there's no wind read", "No wind read" in r["assessment"])
+check("no shift row describing 0°", not any(p["signal"] == "shift" for p in r["picture"]))
+check("not in no-gameplan mode", r["recommendation"]["vs_playbook"] == "on-plan")
 
 print("\nRESULT:", "ALL GREEN" if ok else "FAILURES ABOVE")
 import sys; sys.exit(0 if ok else 1)

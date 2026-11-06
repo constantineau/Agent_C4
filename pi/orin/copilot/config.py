@@ -23,6 +23,38 @@ ENGINE_URL = os.environ.get("ENGINE_URL", "http://127.0.0.1:8200").rstrip("/")
 # the boat-local address; ENGINE_URL_FALLBACK (e.g. the Tailscale IP) keeps DEV working while the
 # cable is down. The client health-probes the primary once and fails over transparently.
 ENGINE_URL_FALLBACK = os.environ.get("ENGINE_URL_FALLBACK", "")
+# The fallback is used only when its host is ON the boat: the Pi<->Orin cable subnet or loopback
+# (#53). Anything else (a Tailscale IP, the VPS bench engine on sample data, a hostname) is ignored,
+# so a dead cable in a race gives "engine unreachable", never advice from an off-boat engine.
+# Shore-side dev that really wants a Tailscale fallback sets ENGINE_FALLBACK_OFFBOAT=1. Never on the boat.
+ENGINE_BOAT_NETS = os.environ.get("ENGINE_BOAT_NETS", "10.10.10.0/24,127.0.0.0/8")
+ENGINE_FALLBACK_OFFBOAT = _b("ENGINE_FALLBACK_OFFBOAT", False)
+
+
+def engine_url_on_boat(url: str) -> bool:
+    """True when `url`'s host is a literal IP inside ENGINE_BOAT_NETS (the cable or loopback)."""
+    import ipaddress
+    import urllib.parse
+    try:
+        host = urllib.parse.urlsplit(url).hostname or ""
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False                      # a hostname can resolve anywhere: not provably on the boat
+    for net in ENGINE_BOAT_NETS.split(","):
+        try:
+            if net.strip() and ip in ipaddress.ip_network(net.strip(), strict=False):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def engine_fallback_url() -> str:
+    """The fallback engine address the client may use, or "" when none is allowed."""
+    fb = (ENGINE_URL_FALLBACK or "").strip().rstrip("/")
+    if fb and (ENGINE_FALLBACK_OFFBOAT or engine_url_on_boat(fb)):
+        return fb
+    return ""
 ENGINE_TIMEOUT = float(os.environ.get("ENGINE_TIMEOUT", "12"))
 
 # Where the local LLM lives (Tier 2, this Orin). OpenAI-compatible /v1.

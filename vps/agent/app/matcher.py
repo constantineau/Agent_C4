@@ -74,8 +74,6 @@ WATCHLIST_MAX = int(os.environ.get("MATCHER_WATCHLIST_MAX", "3"))
 _MS_TO_KN = 1.943844
 _RAD_TO_DEG = 57.29577951308232
 
-_DRIFT_SIGN = {"right": 1, "left": -1, "veered": 1, "backed": -1}
-
 # per-play Schmitt state: {play_id: {"since": epoch|None, "armed_at": epoch|None}}
 _ST: dict = {}
 
@@ -133,17 +131,26 @@ def set_sail_state(hoisted=None, flying=None, reef=None, out_of_service=None):
 
 # ---------------------------------------------------------------------------- polar % (live)
 
-_POLAR_TABLE = None      # [(tws_kn, twa_deg, target_stw_kn)] — static per session, fetched once
+_POLAR_TABLE = None      # [(tws_kn, twa_deg, target_stw_kn)] — last good read (None = never read)
+_POLAR_AT = 0.0          # monotonic time of the last read attempt
+POLAR_TTL_S = 300.0      # re-read a good table this often, so an applied polar reaches the matcher
+POLAR_RETRY_S = 30.0     # an empty/failed read retries sooner (was cached as [] for the process)
 
 
 def _polar_table():
-    global _POLAR_TABLE
-    if _POLAR_TABLE is None:
+    """The polar table, re-read every POLAR_TTL_S (POLAR_RETRY_S while empty). A failed or empty
+    read keeps the last good table rather than wiping it."""
+    global _POLAR_TABLE, _POLAR_AT
+    now = time.monotonic()
+    ttl = POLAR_TTL_S if _POLAR_TABLE else POLAR_RETRY_S
+    if _POLAR_TABLE is None or now - _POLAR_AT >= ttl:
+        _POLAR_AT = now
         try:
-            _POLAR_TABLE = [(t, a, s) for (t, a, s) in datasource.active().polars_stw()
-                            if s is not None]
+            fresh = [(t, a, s) for (t, a, s) in datasource.active().polars_stw() if s is not None]
         except Exception:
-            _POLAR_TABLE = []
+            fresh = []
+        if fresh or not _POLAR_TABLE:
+            _POLAR_TABLE = fresh
     return _POLAR_TABLE
 
 
@@ -279,15 +286,17 @@ def gather(route=None):
     except Exception:
         pg, pg_ok = {}, False
     dev_ok, dft_ok = dev.get("available"), dft.get("available")
-    sign = _DRIFT_SIGN.get(dft.get("drift_dir")) if dft_ok else None
     deg = dft.get("drift_twd_deg") if dft_ok else None
+    signed = dft.get("drift_twd_signed_deg") if dft_ok else None
     wind = (tac.get("wind") or {}) if tac.get("available") else {}
     tb = dev.get("time_behind_s") if dev_ok else None
     return {
         "time_behind_min": round(tb / 60.0, 1) if isinstance(tb, (int, float)) else None,
         "xte_nm": abs(dev.get("xte_nm")) if (dev_ok and dev.get("xte_nm") is not None) else None,
         "drift_twd_deg": deg,
-        "drift_twd_signed_deg": (sign * deg if (sign and isinstance(deg, (int, float))) else None),
+        # drift's own mean SIGNED shift. It was rebuilt as sign(drift_dir) × mean |shift|, which
+        # overstated a mixed (left-then-right) drift and went None inside drift's ±tol "steady"
+        "drift_twd_signed_deg": signed if isinstance(signed, (int, float)) else None,
         "drift_tws_kn": dft.get("drift_tws_kn") if dft_ok else None,
         "shift_persistent": bool(wind.get("persistent")) if wind else None,
         "tws_kn": _live_tws_kn(),

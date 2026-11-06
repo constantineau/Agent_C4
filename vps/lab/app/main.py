@@ -441,10 +441,11 @@ async def optimize(body: dict):
 
 
 @app.get("/api/optimize/status")
-async def optimize_status():
-    """Poll the background optimize job; the route rides on state=done under `result`."""
+async def optimize_status(job_id: str = ""):
+    """Poll the background optimize job; the route rides on state=done under `result`. Pass the
+    job_id the start returned to get that run only, never another user's (#182-9)."""
     from . import jobs
-    return jobs.status("optimize")
+    return jobs.status("optimize", job_id=job_id)
 
 
 @app.post("/api/gameplan/pdf")
@@ -739,10 +740,11 @@ async def playbook_synthesize(body: dict):
 
 
 @app.get("/api/playbook/synthesize/status")
-async def playbook_synthesize_status():
-    """Poll the background synthesis job; `bundle` rides on state=done."""
-    from . import synthesis
-    return synthesis.job_status()
+async def playbook_synthesize_status(job_id: str = ""):
+    """Poll the background synthesis job; `bundle` rides on state=done. Pass the job_id the start
+    returned to get that run only, never another user's (#182-9)."""
+    from . import jobs
+    return jobs.status("synthesis", job_id=job_id)
 
 
 @app.post("/api/playbook/freeze")

@@ -1597,7 +1597,7 @@ async function runOptimize() {
     let r;
     while (true) {
       await new Promise((res) => setTimeout(res, 3000));
-      const st = await (await apiGet("/api/optimize/status")).json();
+      const st = await (await apiGet("/api/optimize/status?job_id=" + encodeURIComponent(start.job_id || ""))).json();
       if (st.state === "done") { r = st.result; break; }
       if (st.state === "error") throw new Error(st.error || "routing failed");
       if (st.state === "idle") throw new Error("the route job stopped. Run it again.");
@@ -1898,7 +1898,7 @@ async function synthPlaybook() {
     // background job — poll for the bundle (the fan runs far past the gateway timeout)
     while (true) {
       await new Promise((r) => setTimeout(r, 10000));
-      const st = await (await apiGet("/api/playbook/synthesize/status")).json();
+      const st = await (await apiGet("/api/playbook/synthesize/status?job_id=" + encodeURIComponent(start.job_id || ""))).json();
       if (st.state === "done") { Pb.result = st.bundle; break; }
       if (st.state === "error") { Pb.result = { available: false, note: st.error }; break; }
       if (st.state === "idle") { Pb.result = { available: false, note: "the playbook job stopped. Run it again." }; break; }
@@ -2392,8 +2392,10 @@ async function depPush() {
 async function depLockIn() {
   if (!Dep.sel) return;
   Dep.busy = true;
-  try { await apiPost("/api/deploy/lock-in", { race_id: Dep.raceId, playbook_id: Dep.sel }); }
-  catch (e) { alert("Lock-in failed: " + e.message); }
+  try {
+    const res = await apiPost("/api/deploy/lock-in", { race_id: Dep.raceId, playbook_id: Dep.sel });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || "error " + res.status);
+  } catch (e) { alert("Lock-in failed: " + e.message); }
   Dep.busy = false; renderDeploy();
 }
 
@@ -2782,11 +2784,21 @@ function reqAdd() {
 function reqRemove(i) { Lab.editDef.requirements.splice(i, 1); paintRules(); }
 
 async function checkToggle(id, on) {
+  // one save at a time, so a failed save can be undone exactly (nothing else saved meanwhile)
+  if (Lab.checkSaving) { paintRules(); return; }
   Lab.checked = Lab.checked || {};
-  if (on) Lab.checked[id] = true; else delete Lab.checked[id];
+  const checked = Lab.checked, rid = Lab.sel;  // this race's: the user may switch races meanwhile
+  if (on) checked[id] = true; else delete checked[id];
   // persist progress (labstate-backed, separate from the RaceDefinition)
-  try { await apiPost("/api/checklist", { race_id: Lab.sel, checked: Lab.checked }); } catch (e) {}
-  paintRules();
+  Lab.checkSaving = true;
+  try {
+    const res = await apiPost("/api/checklist", { race_id: rid, checked });
+    if (!res.ok) throw new Error("error " + res.status);
+  } catch (e) {                    // not saved: undo the tick so the box shows what's stored
+    if (on) delete checked[id]; else checked[id] = true;
+    alert("Couldn't save that tick. Try again.");
+  } finally { Lab.checkSaving = false; }
+  if (Lab.checked === checked) paintRules();
 }
 
 async function rulesSave() {

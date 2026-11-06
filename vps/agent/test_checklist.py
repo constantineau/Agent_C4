@@ -102,6 +102,19 @@ check("still active mid-night", by["nav-lights"]["status"] == "active"
 checklist.ack({"id": "nav-lights"}, now=t_night)
 by = {i["id"]: i for i in checklist.get_checklist(now=t_night)["items"]}
 check("acked → done for this night", by["nav-lights"]["status"] == "done")
+# #43: the boat MOVES all night, so each poll computes a slightly different sunset. The ack must
+# hold (it was keyed on int(sunset) and re-armed after a few nm of westing)
+POS.update(lon=-82.6)                       # ~13 nm west: sunset ~70 s later
+ss2, _ = checklist._night_window(POS["lat"], POS["lon"], t_night)
+check("moving west shifts the computed sunset", int(ss2) != int(ss))
+saves = []
+_orig_save = StubDS.save_checklist
+StubDS.save_checklist = lambda self, blob: (saves.append(1), _orig_save(self, blob))
+by = {i["id"]: i for i in checklist.get_checklist(now=t_night + 600)["items"]}
+check("ack holds after the boat moves (same night)", by["nav-lights"]["status"] == "done")
+check("no blob rewrite on a plain poll", not saves)
+StubDS.save_checklist = _orig_save
+POS.update(lon=-82.3)
 t_tomorrow = sr + 5 * 3600                  # next morning, well past sunrise
 by = {i["id"]: i for i in checklist.get_checklist(now=t_tomorrow)["items"]}
 check("next day: ack expired, pending again", by["nav-lights"]["status"] == "pending")

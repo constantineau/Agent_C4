@@ -37,6 +37,9 @@ from lab_backup import INDEX, complete_sets, log, open_dest, sha256_file  # noqa
 EXTENSION_SEEDED = {"_timescaledb_catalog.bgw_job", "_timescaledb_config.bgw_job",
                     "_timescaledb_catalog.metadata"}
 VERIFY_IMAGE = os.environ.get("C4_RESTORE_VERIFY_IMAGE", "python:3.12-alpine")
+# Where the Lab mounts the retro volume (compose.dev.yml `lab_retro:/srv/retro`); retro.db's
+# grib_files.path rows are absolute paths under it.
+RETRO_MOUNT = "/srv/retro/"
 
 # Runs INSIDE the throwaway container: unpack /in/<tar> into /v, then report what is there.
 _UNPACK_AND_HASH = r"""
@@ -114,11 +117,14 @@ def verify_volume(art, path, into_volume=None):
     check(f"{art['name']}: no SQLite -wal/-shm/-journal in the archive", not wal, str(wal[:5]))
     for rel, d in sorted(got["dbs"].items()):
         # A DB row that names a file (retro.db's pinned GRIBs, stored as /srv/retro/grib/...)
-        # needs that file in the same restore: match the path's tail against restored files.
+        # needs that exact file in the same restore. The volume is mounted at RETRO_MOUNT, so
+        # strip that and require the exact relative path (#202): matching any tail let
+        # /srv/retro/grib/gfs/a.grib2 pass on a stray a.grib2 at the volume root. A path outside
+        # the mount cannot be in this volume, so it counts as missing.
         refs = d.get("refs") or []
         missing = [r for r in refs
-                   if not any("/".join(r.split("/")[i:]) in got["files"]
-                              for i in range(1, r.count("/") + 1))]
+                   if not (r.startswith(RETRO_MOUNT)
+                           and os.path.normpath(r[len(RETRO_MOUNT):]) in got["files"])]
         if refs:
             check(f"{art['name']}: all {len(refs)} files {rel} points at were restored",
                   not missing, f"missing {missing[:3]}")

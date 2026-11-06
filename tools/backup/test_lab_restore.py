@@ -121,5 +121,16 @@ files_both = dict(RETRO["files"], **{"grib/gfs/b.grib2": "g2"})
 check("volume: ...and passes when every named GRIB is there",
       vol_drill(dict(RETRO, files=files_both), {"files": files_both, "dbs": db_two}))
 
+files_stray = dict(RETRO["files"], **{"b.grib2": "g2"})
+check("volume: a named GRIB matched only by a same-named file elsewhere -> FAILS (#202)",
+      not vol_drill(dict(RETRO, files=files_stray), {"files": files_stray, "dbs": db_two}))
+files_gfs = dict(RETRO["files"], **{"gfs/b.grib2": "g2"})
+check("volume: ...or by a shorter tail of its path -> FAILS (#202)",
+      not vol_drill(dict(RETRO, files=files_gfs), {"files": files_gfs, "dbs": db_two}))
+db_out = {"retro.db": dict(db_two["retro.db"], refs=["/srv/retro/grib/gfs/a.grib2",
+                                                     "/elsewhere/grib/gfs/b.grib2"])}
+check("volume: a named GRIB outside the retro mount -> FAILS (#202)",
+      not vol_drill(dict(RETRO, files=files_both), {"files": files_both, "dbs": db_out}))
+
 print("\nALL OK" if ok else "\nFAILURES")
 sys.exit(0 if ok else 1)

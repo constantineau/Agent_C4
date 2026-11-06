@@ -11,7 +11,11 @@ The engine computes; the LLM may only rephrase. These pins hold that line on eve
     the facts don't have is dropped; the whale aside carries no numbers;
   * crew briefs: an LLM rewrite with a new number is thrown away, the deterministic body stays;
   * dashboard brief: the LLM can only RAISE a tile's status (ok → watch → act), never lower it or
-    touch an n/a tile, and its focus/notes may not carry numbers the tiles don't have.
+    touch an n/a tile, and its focus/notes may not carry numbers the tiles don't have, nor say
+    "fine"/"no action" about a watch/act tile;
+  * engine fallback: only a boat-local address (cable or loopback) unless shore dev opts in;
+  * tool args: the model can't feed a hypothetical TWS/TWA/sail/route into a fact read;
+  * hourly recap: the fleet line names only a confident roster match.
 
 Pure: stub LLM + stub engine, no network.
     cd pi/orin && python3 -m copilot.test_llm_guard
@@ -269,7 +273,7 @@ def test_decision_brief():
             self.seen = [m for m in messages if m.get("role") == "tool"]
             return {"content": json.dumps(cut)}
     orig_dispatch = copilot.tools.dispatch
-    copilot.tools.dispatch = lambda eng, name, args: ({"notes": "y" * 2100, "tws": 60}, name)
+    copilot.tools.dispatch = lambda eng, name, args, **kw: ({"notes": "y" * 2100, "tws": 60}, name)
     try:
         llm = ToolLLM()
         copilot.llm_brief(None, llm, {"get_conditions": {"tws": 12.4}}, "", playbook_mod.Playbook(None))
@@ -328,15 +332,106 @@ def test_dashboard_status():
     check("a no-op adjust is dropped", "data" not in adj)
     check("ok → watch on the wind is kept", adj.get("wind") == "watch")
     check("an n/a tile is never adjusted", "fleet" not in adj)
-    check("note with an invented number dropped (also one borrowing the bank's 11.9), grounded note kept",
-          [n["tile"] for n in out["notes"]] == ["bank"])
+    check("note with an invented number dropped (also one borrowing the bank's 11.9)",
+          not any(n["tile"] == "wind" for n in out["notes"]))
+    check("'fine' note on the red bank tile dropped (#53)", not any(n["tile"] == "bank" for n in out["notes"]))
     check("a raise whose reason borrows another tile's number is dropped", "data" not in adj)
     check("focus with only tile numbers kept", out["focus"] == "Bank at 11.9 V, shed load.")
 
 
+def test_dashboard_all_clear():
+    print("\n== dashboard brief (no all-clear on a watch/act tile, #53) ==")
+    tiles = {"bank": {"key": "bank", "name": "House Bank", "value": "11.9 V", "status": "act"},
+             "crew": {"key": "crew", "name": "Crew", "value": "40", "status": "watch"},
+             "sail": {"key": "sail", "name": "Sail", "value": "J1", "status": "ok"}}
+    out = dashboard_brief._validate({
+        "focus": "All good, bank is fine.",
+        "notes": [{"tile": "bank", "text": "Bank is fine.", "confidence": "high"},
+                  {"tile": "crew", "text": "Crew at 40, no action needed.", "confidence": "high"},
+                  {"tile": "sail", "text": "J1 is fine for now.", "confidence": "med"}],
+        "adjust": []}, tiles)
+    texts = [n["text"] for n in out["notes"]]
+    out2 = dashboard_brief._validate({"focus": "", "adjust": [], "notes": [
+        {"tile": "bank", "text": "Bank 11.9 V: shed load now.", "confidence": "high"}]}, tiles)
+    texts += [n["text"] for n in out2["notes"]]
+    check("'Bank is fine.' under a red bank tile dropped", "Bank is fine." not in texts)
+    check("'no action needed' under an amber crew tile dropped", not any("no action" in t for t in texts))
+    check("a caution note on the red tile kept", "Bank 11.9 V: shed load now." in texts)
+    check("'fine' on an ok tile kept", "J1 is fine for now." in texts)
+    check("all-clear focus dropped while a tile is red", out["focus"] == "")
+    calm = dashboard_brief._validate({"focus": "All good, sail is fine.", "notes": [], "adjust": []},
+                                     {"sail": tiles["sail"]})
+    check("all-clear focus kept when every tile is ok", calm and calm["focus"] == "All good, sail is fine.")
+
+
+def test_engine_fallback():
+    print("\n== engine fallback stays on the boat (#53) ==")
+    from . import engine_client
+    saved = (config.ENGINE_URL, config.ENGINE_URL_FALLBACK, config.ENGINE_FALLBACK_OFFBOAT)
+    probed = []
+    orig_probe = engine_client.EngineClient._probe
+    engine_client.EngineClient._probe = lambda self, base: (probed.append(base), base != "http://10.10.10.9:1")[1]
+    try:
+        config.ENGINE_URL, config.ENGINE_FALLBACK_OFFBOAT = "http://10.10.10.9:1", False
+        config.ENGINE_URL_FALLBACK = "http://100.79.0.1:8200"
+        c = engine_client.EngineClient()
+        check("a Tailscale fallback is never used (cable down → stays on the cable address)",
+              c.base_url == "http://10.10.10.9:1" and "http://100.79.0.1:8200" not in probed)
+        config.ENGINE_URL_FALLBACK = "http://bench.example:8200"
+        check("a hostname fallback is never used", engine_client.EngineClient().base_url == "http://10.10.10.9:1")
+        config.ENGINE_URL_FALLBACK = "http://127.0.0.1:8200"
+        check("a loopback fallback is used", engine_client.EngineClient().base_url == "http://127.0.0.1:8200")
+        config.ENGINE_URL_FALLBACK = "http://10.10.10.1:8200/"
+        check("a cable-subnet fallback is used", engine_client.EngineClient().base_url == "http://10.10.10.1:8200")
+        config.ENGINE_URL_FALLBACK, config.ENGINE_FALLBACK_OFFBOAT = "http://100.79.0.1:8200", True
+        check("ENGINE_FALLBACK_OFFBOAT=1 (shore dev) allows it",
+              engine_client.EngineClient().base_url == "http://100.79.0.1:8200")
+    finally:
+        engine_client.EngineClient._probe = orig_probe
+        config.ENGINE_URL, config.ENGINE_URL_FALLBACK, config.ENGINE_FALLBACK_OFFBOAT = saved
+
+
+def test_tool_args():
+    print("\n== model tool args can't create facts (#185-1) ==")
+    from . import tools
+
+    class Eng:
+        def __getattr__(self, method):
+            return lambda **kw: {"method": method, "args": kw}
+    eng = Eng()
+    r, _ = tools.dispatch(eng, "get_sail_advice", {"tws": 25, "twa": 90, "hoisted": "A2"},
+                          pinned={"hoisted": "J1"})
+    check("sail read ignores the model's tws/twa/hoisted, uses the crew's sail", r["args"] == {"hoisted": "J1"})
+    r, _ = tools.dispatch(eng, "get_sail_advice", {"tws": 25}, pinned={})
+    check("sail read with nothing pinned asks the engine for live values", r["args"] == {})
+    r, _ = tools.dispatch(eng, "get_route", {"route": "other", "target": "finish"}, pinned={"route": "r1"})
+    check("route is the brief's own; target is the model's choice",
+          r["args"] == {"route": "r1", "target": "finish"})
+    r, _ = tools.dispatch(eng, "get_tactics", {"route": "other"})
+    check("a model-picked route is dropped", r["args"] == {})
+    specs = {t["function"]["name"]: t["function"]["parameters"]["properties"] for t in tools.TOOL_SPECS}
+    check("no tool spec offers tws/twa/hoisted/route",
+          not any(k in p for p in specs.values() for k in ("tws", "twa", "hoisted", "route")))
+
+
+def test_recap_fleet_conf():
+    print("\n== hourly recap fleet line needs confidence (#185-3) ==")
+    snap = {"fleet": {"available": True, "fleet": [
+        {"boat": "Guess", "corrected_delta_s": -90, "confidence": 0.1},
+        {"boat": "Rival", "corrected_delta_s": 75, "confidence": 0.8}]}}
+    sec = briefs_mod._fleet_lines(snap)
+    line = " ".join(sec["lines"]) if sec else ""
+    check("a low-confidence top row is not named", "Guess" not in line)
+    check("the first confident row is named", "Rival" in line and "1:15" in line)
+    sec = briefs_mod._fleet_lines({"fleet": {"available": True, "fleet": [
+        {"boat": "Guess", "corrected_delta_s": -90}]}})
+    check("no confident row → no fleet line", sec is None)
+
+
 def main():
     for fn in (test_ground, test_coach_line, test_variant_lookup, test_strategy, test_decision_brief,
-               test_crew_brief, test_dashboard_status):
+               test_crew_brief, test_dashboard_status, test_dashboard_all_clear, test_engine_fallback,
+               test_tool_args, test_recap_fleet_conf):
         try:
             fn()
         except Exception as e:          # an old build without the guard crashes here: that is a FAIL

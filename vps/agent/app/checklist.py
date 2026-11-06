@@ -167,7 +167,11 @@ def _eval_item(item, ctx, now):
         ss, sr = _night_window(lat, lon, now)
         if ss is None:
             return False, "night", "no sunset at this latitude"
-        wkey = f"night:{int(ss)}"
+        # key the NIGHT, not the sunset second: a moving boat's sunset shifts by seconds-to-minutes
+        # every poll, so `int(ss)` dropped the crew's ack and rewrote the blob each poll. The
+        # date at local SOLAR time (lon/15 h from UTC) of sunset is stable all night — sunset is
+        # evening solar time, far from solar midnight — and differs night to night.
+        wkey = "night:" + time.strftime("%Y-%m-%d", time.gmtime(ss + (lon or 0.0) * 240.0))
         if ss - LEAD_MIN * 60 <= now <= sr:
             left = ("sunset in " + _fmt_min((ss - now) / 60)) if now < ss else \
                    ("until sunrise (" + _fmt_min((sr - now) / 60) + ")")

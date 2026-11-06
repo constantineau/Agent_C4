@@ -214,7 +214,8 @@ def llm_brief(engine: EngineClient, llm: LLMClient, snapshot: dict, question: st
             break
         for tc in tcs:
             name, args, call_id = _norm_tool_call(tc)
-            result, tool_name = tools.dispatch(engine, name, args)
+            result, tool_name = tools.dispatch(engine, name, args, pinned={
+                "route": snapshot.get("_route"), "hoisted": snapshot.get("_hoisted")})
             if isinstance(result, dict) and result.get("available", True) is not False:
                 used_sources.add(tool_name)
             shown_result = _trim(result, _TOOL_CHARS, json.dumps)

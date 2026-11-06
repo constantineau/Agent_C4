@@ -45,7 +45,8 @@ check("driven by the shift", "get_tactics" in r["driven_by"])
 # --- + concurring drift (backed → favours left) + deviation working left → higher confidence -----
 print("reinforced by drift + deviation:")
 stub(tac=wind(True, "left", "backing"),
-     dev={"available": True, "status": "watch", "xte_side": "left", "xte_nm": 0.6, "variant": "middle"},
+     dev={"available": True, "status": "watch", "xte_status": "watch", "xte_side": "left", "xte_nm": 0.6,
+          "variant": "middle"},
      dft={"available": True, "status": "act", "drift_dir": "backed", "drift_twd_deg": 22})
 r = selector.get_selector()
 print("  ", r["action"], "| conf", r["confidence"], "| by", r["driven_by"])
@@ -217,6 +218,74 @@ stub(bundle={})
 check("an `na` read is passed straight through, never a held stale verdict",
       selector.get_selector(now=T0)["action"] == "na")
 selector._SETTLE.clear()
+
+# --- while a change settles, only the VERDICT is held; the signals are this instant's (#40) -----
+print("settling holds the verdict, not the signals (#40):")
+selector._SETTLE.clear(); selector._CONFIRM.clear()
+stub(tac=wind(False, "either"), reset=False)
+selector.get_selector(now=T0)                                           # hold on the card
+stub(tac=wind(True, "left", "backing"), reset=False,
+     dft={"available": True, "status": "act", "drift_dir": "backed", "drift_twd_deg": 25})
+r = selector.get_selector(now=T0 + 30)
+check("the card still shows the hold while the switch settles",
+      r["action"] == "hold" and r["settling"]["to_action"] == "switch")
+check("…but its signals are fresh: the new shift and the new drift are there",
+      r["signals"]["shift"]["persistent"] is True and r["signals"]["drift"]["status"] == "act")
+check("…and the agreement table flags the side favoured NOW",
+      any("now" in (row.get("cols") or ["", ""])[1] for row in r["rows"] if not row.get("hdr")))
+
+print("reset_state forgets the held verdict and the downwind clock (#40):")
+selector._SETTLE["r"] = {"key": ("act", "switch", "left")}
+selector._CONFIRM[("r", "left")] = {"first": T0, "lapsed": None}
+selector.reset_state()
+check("both cleared", not selector._SETTLE and not selector._CONFIRM)
+
+# --- deviation votes a side only on its XTE band, never on time behind alone (#43) ---------------
+print("deviation votes on XTE, not time behind (#43):")
+stub(tac=wind(True, "left", "backing"),
+     dev={"available": True, "status": "act", "xte_status": "ok", "xte_side": "left", "xte_nm": 0.02,
+          "time_behind_s": 400, "variant": "middle"})
+r = selector.get_selector(now=T0)
+check("6+ min behind but on the line: deviation does not concur",
+      r["action"] == "switch" and "get_deviation" not in r["driven_by"])
+check("signals carry the XTE band separately", r["signals"]["deviation"]["xte_status"] == "ok")
+stub(tac=wind(True, "left", "backing"),
+     dev={"available": True, "status": "act", "xte_status": "watch", "xte_side": "left", "xte_nm": 0.6,
+          "time_behind_s": 400, "variant": "middle"})
+check("off the line to the favoured side: it does",
+      "get_deviation" in selector.get_selector(now=T0)["driven_by"])
+
+# --- the forecast's size is drift's signed mean shift, not direction x mean |shift| (#43) ---------
+print("forecast shift size from drift's signed value (#43, as #231 did for the matcher):")
+stub(tac=wind(False, "either"), dft={"available": True, "status": "act", "drift_dir": "right",
+                                     "drift_twd_deg": 30.0, "drift_twd_signed_deg": 10.0})
+r = selector.get_selector(now=T0)
+print("  ", r["why"])
+check("+40/-20 reads 'right ~10°', not ~30°", "right ~10°" in r["why"] and "30" not in r["why"])
+check("signals carry the signed value", r["signals"]["drift"]["signed_deg"] == 10.0)
+stub(tac=wind(False, "either"), dft={"available": True, "status": "act", "drift_dir": "steady",
+                                     "drift_twd_deg": 30.0, "drift_twd_signed_deg": 1.0})
+r = selector.get_selector(now=T0)
+print("  ", r["why"])
+check("steady band: no side named ('shifted steady' was the old text)",
+      "steady" not in r["why"] and "moved ~30°" in r["why"])
+
+# --- no wind read: never an all-clear (#46) -------------------------------------------------------
+print("no wind data → na, not a green hold (#46):")
+stub()                                                                  # tactics down, no forecast
+r = selector.get_selector(now=T0)
+print("  ", r["status"], "|", r["value"], "|", r["why"])
+check("status na, not ok", r["status"] == "na" and r["action"] == "na")
+check("says it can't check the plan", "Can't check the plan" in r["why"])
+stub(tac={"available": False, "note": "Not enough wind history yet."})
+check("…and passes on tactics' reason (not 'check the sensor')",
+      "Not enough wind history yet." in selector.get_selector(now=T0)["why"])
+check("the gameplan is still aboard (available)", r["available"] is True)
+check("no 'no lasting shift' claim", "lasting" not in r["why"].lower())
+check("shift.persistent is unknown, not False", r["signals"]["shift"]["persistent"] is None)
+stub(dft={"available": True, "status": "act", "drift_dir": "veered", "drift_twd_deg": 30})
+check("a forecast alone doesn't stand in for the wind", selector.get_selector(now=T0)["status"] == "na")
+selector._SETTLE.clear(); selector._CONFIRM.clear()
 
 print("\n", "ALL PASS" if ok else "FAILURES ABOVE")
 raise SystemExit(0 if ok else 1)

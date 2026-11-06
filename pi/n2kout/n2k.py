@@ -257,6 +257,14 @@ def chunk_route(route_name: str, wpts, per_msg: int = 10):
 SINGLE_FRAME = (59392, 59904, 60928, 126993, 129283)
 
 
+class _Settling(Exception):
+    """Internal: an ordinary send inside the post-claim settle; `left` = seconds to wait."""
+
+    def __init__(self, left):
+        super().__init__(left)
+        self.left = left
+
+
 class N2kSender:
     """SocketCAN writer with NMEA-2000 fast-packet framing. Thread-safe; `sa` may change (an
     address-claim contest we lose moves us). Counts frames and send errors; a failed send
@@ -270,6 +278,8 @@ class N2kSender:
         self._seq = {}                       # pgn -> fast-packet sequence counter
         self.claim_pending = claim           # (pgn, prio, data) of a claim not yet on the bus
         self._claim_tried_at = None
+        self._settle_until = float("-inf")   # monotonic: ordinary traffic held until then
+        self._clock, self._sleep = time.monotonic, time.sleep    # tests swap these
         self._lock = threading.Lock()
         self.frames_sent = 0
         self.send_errors = 0
@@ -306,11 +316,22 @@ class N2kSender:
              dest: int = 0xFF, src: int | None = None) -> int:
         """Send one PGN — single-frame when it fits and the PGN is single-frame; else fast-packet.
         Returns frames sent; 0 on error (counted, never raised). `src` overrides the source
-        address for one message (the 254 "cannot claim")."""
-        with self._lock:
-            return self._send_counted(pgn, prio, data, single, dest, src)
+        address for one message (the 254 "cannot claim").
+
+        Within CLAIM_SETTLE_S of an address claim going out, an ordinary send WAITS (outside
+        the lock) and then goes: held, not dropped."""
+        while True:
+            with self._lock:
+                try:
+                    return self._send_counted(pgn, prio, data, single, dest, src)
+                except _Settling as s:
+                    left = s.left
+            self._sleep(left)
 
     CLAIM_RETRY_S = 1.0
+    # ISO 11783-5: after an address claim, 250 ms before other traffic from that address.
+    # Claims themselves (60928) are exempt: we must still answer and defend during it.
+    CLAIM_SETTLE_S = 0.25
 
     def change_address(self, new_sa: int, claim):
         """Move to `new_sa` and send its address claim (`claim` = (pgn, prio, data)) in ONE hold
@@ -333,7 +354,7 @@ class N2kSender:
     def _try_claim_locked(self, force=False):
         if self.claim_pending is None:
             return True
-        now = time.monotonic()
+        now = self._clock()
         if not force and self._claim_tried_at is not None \
                 and now - self._claim_tried_at < self.CLAIM_RETRY_S:
             return False
@@ -341,6 +362,7 @@ class N2kSender:
         pgn, prio, data = self.claim_pending
         if self._send_counted(pgn, prio, data, None, 0xFF, self.sa, claim=True) > 0:
             self.claim_pending = None
+            self._settle_until = self._clock() + self.CLAIM_SETTLE_S
             return True
         return False
 
@@ -356,6 +378,10 @@ class N2kSender:
             self.last_error = "address claim pending"
             self.last_error_at = time.time()
             return 0
+        if not claim and src is None and pgn != 60928:
+            left = self._settle_until - self._clock()
+            if left > 0:
+                raise _Settling(left)
         try:
             if self._sock is None:
                 self.open()

@@ -136,6 +136,7 @@ def build_deviation(step, path, rec_id, band_state):
     band_state["x"], band_state["b"] = xb, bb
     status = ["ok", "watch", "act"][max(xb, bb)]
     return {"available": True, "status": status, "variant": rec_id,
+            "xte_status": ["ok", "watch", "act"][xb],      # the side vote reads this (#43)
             "xte_nm": round(abs(xte), 2), "xte_side": "right" if xte > 0 else "left",
             "time_behind_s": round(behind)}
 

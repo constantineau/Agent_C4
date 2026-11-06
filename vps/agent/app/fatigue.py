@@ -27,6 +27,7 @@ import time
 from collections import Counter
 from datetime import datetime, timezone
 
+from shared import polar as SPOL
 from shared import units
 
 from . import datasource
@@ -95,8 +96,10 @@ def _heading_series(since_min):
 
 
 def _target_stw(tws_kn, twa_deg):
-    row = datasource.active().polar_nearest(tws_kn, twa_deg)
-    return row["target_stw"] if row and row.get("target_stw") else None
+    """Polar target at (tws, twa), interpolated on the grid like the matcher's live polar %
+    (`shared.polar.target`), not the nearest bucket by |dTWS kn| + |dTWA deg| (#67). None inside
+    30° or with no polar."""
+    return SPOL.target(datasource.active().polars_stw(), tws_kn, twa_deg) or None
 
 
 # --- stats helpers -----------------------------------------------------------

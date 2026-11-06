@@ -172,24 +172,40 @@ if SPEED_GUIDE:
     })
 
 
+def _withheld(action: str, m: str) -> str | None:
+    """RRS 41, checked right before each gated call: the refusal if racing, else None."""
+    if race_mode.withheld(action):
+        race_mode.audit_refusal("chat_fallback", action=action, intent=m[:120])
+        return race_mode.REFUSAL
+    return None
+
+
 def _fallback(message: str) -> str:
     """No-LLM responder: keyword-route to a tool and format the result."""
     m = message.lower()
     # RRS 41: while racing, withhold customized tactical/routing/perf/sail/fatigue/nav advice.
     # (Allowed intents — alerts/AIS/conditions/sources/forecast — fall through to their routes.)
+    # Two layers, fail-closed: the keyword pre-check below, then `_withheld()` before every gated
+    # call, so a question the keywords miss still can't reach a gated tool.
     if race_mode.racing() and race_mode.gated_intent(m):
         race_mode.audit_refusal("chat_fallback", intent=m[:120])
         return race_mode.REFUSAL
     if any(w in m for w in ("debrief", "recap", "how did we do", "how'd we do",
                             "summarize", "summary", "session report")):
         from . import summarizer
-        r = summarizer.make_debrief() if ("debrief" in m or "recap" in m or "session" in m) \
-            else summarizer.make_summary()
+        debrief = "debrief" in m or "recap" in m or "session" in m
+        refused = _withheld("make_debrief" if debrief else "make_summary", m)
+        if refused:
+            return refused
+        r = summarizer.make_debrief() if debrief else summarizer.make_summary()
         return r["summary"] if r.get("available") else "Nothing to report — no telemetry in the window yet."
     if any(w in m for w in ("polar analysis", "observed polar", "polar trend", "polar mining",
                             "where are we slow", "where we're slow", "leave speed",
                             "leaving speed", "vs polar over", "vs the polar over",
                             "how are we doing vs", "polar over the")):
+        refused = _withheld("get_polar_analysis", m)
+        if refused:
+            return refused
         r = tools.get_polar_analysis()
         if not r.get("available"):
             return r.get("note", "Not enough archived data to mine a polar yet.")
@@ -227,6 +243,9 @@ def _fallback(message: str) -> str:
                 f"{t.get('range_nm')} nm, bearing {t.get('bearing')}° — opening / no CPA.")
     if any(w in m for w in ("fleet", "competitor", "rival", "corrected", "handicap", "beat",
                             "who am i racing", "who are we racing", "on the water")):
+        refused = _withheld("get_fleet", m)
+        if refused:
+            return refused
         r = tools.get_fleet()
         if not r.get("available"):
             return r.get("note", "No fleet roster loaded.")
@@ -244,6 +263,9 @@ def _fallback(message: str) -> str:
                 f"handicap: {who} — projected {mins:.0f} min {side} (conf {f.get('confidence')}). "
                 "Fuzzy: partial AIS + projection.")
     if any(w in m for w in ("route", "routing", "best way", "weather route", "fastest", "which tack first")):
+        refused = _withheld("get_route", m)
+        if refused:
+            return refused
         r = tools.get_route()
         if not r.get("available"):
             return r.get("note", "Routing unavailable.")
@@ -259,11 +281,17 @@ def _fallback(message: str) -> str:
         return ("Forecast: " + (f"now ~{h[0]['tws']} kts @ {h[0]['twd']}°, "
                 f"in {nxt['in_h']} h ~{nxt['tws']} kts @ {nxt['twd']}°." if nxt else "no data."))
     if any(w in m for w in ("favored", "favoured", "which side", "which way", "lifted", "headed", "shift", "leverage", "tactic")):
+        refused = _withheld("get_tactics", m)
+        if refused:
+            return refused
         r = tools.get_tactics()
         if not r.get("available"):
             return r.get("note", "Tactics unavailable.")
         return r["recommendation"] + "  (practice/debrief — RRS 41)"
     if any(w in m for w in ("mark", "finish", "eta", "distance", "layline", "lay ", "tack", "next leg")):
+        refused = _withheld("get_navigator", m)
+        if refused:
+            return refused
         r = tools.get_navigator()
         if not r.get("available"):
             return r.get("note", "Navigator unavailable.")
@@ -273,11 +301,17 @@ def _fallback(message: str) -> str:
         return (f"Next: {nm['name']} {nm['distance_nm']} nm, brg {nm['bearing_deg']}° "
                 f"({r['leg']['type']}){eta}.{lay}")
     if any(w in m for w in ("sail", "peel", "kite", "spinnaker", "jib", "hoist", "change up", "change down")):
+        refused = _withheld("get_sail_advice", m)
+        if refused:
+            return refused
         r = tools.get_sail_advice()
         if not r.get("available"):
             return r.get("note", "Sail advice unavailable (need live TWS/TWA).")
         return r["recommendation"]
     if any(w in m for w in ("fatigue", "tired", "rotate", "helm change", "driver", "shift change")):
+        refused = _withheld("get_fatigue", m)
+        if refused:
+            return refused
         r = tools.get_fatigue()
         if not r.get("available"):
             return f"Fatigue not ready. {r.get('note', r.get('status', 'unavailable'))}"
@@ -295,6 +329,9 @@ def _fallback(message: str) -> str:
     if not s.get("available"):
         return "No telemetry recorded yet."
     if "polar" in m or "target" in m:
+        refused = _withheld("get_polar_target", m)
+        if refused:
+            return refused
         if s.get("tws") is None or s.get("twa") is None:
             return "No true wind (TWS/TWA) yet — can't place us on the polar."
         p = tools.get_polar_target(s["tws"], s["twa"])

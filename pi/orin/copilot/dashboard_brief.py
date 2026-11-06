@@ -10,6 +10,7 @@ any LLM failure it returns mode "deterministic" and the dashboard keeps its own 
 commentary. This keeps the engine as the source of truth and the LLM strictly as interpreter.
 """
 import json
+import re
 
 from . import config, ground
 from .llm import LLMClient, LLMUnavailable
@@ -17,6 +18,19 @@ from .llm import LLMClient, LLMUnavailable
 _STATUSES = {"ok", "watch", "act"}
 _SEV = {"ok": 0, "watch": 1, "act": 2}        # an adjust may only move a tile UP this scale
 _CONF = {"high", "med", "low"}
+
+# All-clear wording. On a tile the instruments rate watch/act, a note saying "fine"/"normal"/"no
+# action" tells the crew the opposite of the tile (#53: "bank is fine" under a red bank tile). The
+# model may add caution, never take it away, so such a note (or focus) is dropped and the
+# dashboard keeps its own engine-read text. Errs toward dropping ("not fine" is dropped too).
+_ALL_CLEAR = re.compile(
+    r"\b(fine|ok|okay|normal|healthy|good|nominal|stable|safe|fresh|plenty|comfortable|"
+    r"all\s+(good|clear|set)|on\s+track|under\s+control|no\s+(action|problem|issue|concern|worry|need)s?|"
+    r"nothing\s+to\s+(do|worry)|not\s+(a\s+)?(concern|problem|issue|worry))\b", re.I)
+
+
+def _all_clear(text: str) -> bool:
+    return bool(_ALL_CLEAR.search(text or ""))
 
 # Shared guidance on how to read the dashboard tiles correctly (the 7B otherwise misreads trends).
 _READING = (
@@ -116,13 +130,16 @@ def _validate(obj, tiles):
 
     - A note must name a real tile and may carry only numbers THAT tile shows (wind 12 kts plus
       bank 25 V must not ground "wind now 25 kts"); the focus may use any tile's numbers (a dropped focus/note leaves the dashboard's own engine-read text).
+    - A note on a watch/act tile may not sound all-clear ("fine", "normal", "no action"), and the
+      focus may not while any tile is at watch/act: that would contradict the instruments.
     - A status adjust may only RAISE a tile (ok → watch → act), never lower it and never touch an
       n/a tile. The instruments own "fine"; the LLM can add caution, never take it away (#176)."""
     if not isinstance(obj, dict):
         return None
     facts = list(tiles.values())
     focus = str(obj.get("focus") or "").strip()
-    if not ground.grounded(focus, facts):
+    alarmed = any(_SEV.get(str(t.get("status") or "").strip().lower(), 0) > 0 for t in facts)
+    if not ground.grounded(focus, facts) or (alarmed and _all_clear(focus)):
         focus = ""
     notes_out = []
     for n in (obj.get("notes") or [])[:3]:
@@ -130,6 +147,9 @@ def _validate(obj, tiles):
             continue
         tile = str(n.get("tile") or "").strip()
         text = str(n.get("text") or "").strip()
+        sev = _SEV.get(str(tiles.get(tile, {}).get("status") or "").strip().lower(), 0)
+        if sev > 0 and _all_clear(text):
+            continue                  # contradicts the tile's own watch/act status
         if tile in tiles and text and ground.grounded(text, tiles[tile]):
             conf = str(n.get("confidence") or n.get("conf") or "med").strip().lower()
             notes_out.append({"tile": tile, "text": text, "conf": conf if conf in _CONF else "med"})

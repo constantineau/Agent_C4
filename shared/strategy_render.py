@@ -29,7 +29,8 @@ def concordance(lean, sig, fleet_side):
     dev = sig.get("deviation") or {}
     if dft.get("status") in ("watch", "act"):
         votes.append(("forecast", dft.get("favored")))   # point-of-sail-aware, set by the selector
-    if dev.get("status") in ("watch", "act"):
+    # the XTE band only (#43): a boat minutes behind plan but on the line has no side to vote for
+    if dev.get("xte_status") in ("watch", "act"):
         votes.append(("deviation", dev.get("side")))
     if fleet_side:
         votes.append(("fleet", fleet_side))
@@ -67,7 +68,10 @@ def picture(sig, flt, conc):
     the grounding for free)."""
     out = []
     sh = sig.get("shift") or {}
-    if sh.get("favored_side") or sh.get("persistent") is not None:
+    # only with a real wind read (#46): with the sensor down this used to describe 0° → 0° as
+    # "wind steady near 0°"
+    if (sh.get("base_twd") is not None and sh.get("now_twd") is not None
+            and (sh.get("favored_side") or sh.get("persistent") is not None)):
         read = wp.describe_shift(sh.get("base_twd") or 0, sh.get("now_twd") or 0,
                                  tack=sh.get("tack"), pos=sh.get("pos"),
                                  persistent=bool(sh.get("persistent")),
@@ -81,7 +85,9 @@ def picture(sig, flt, conc):
             read = wp.describe_drift(dft["ref_twd"], dft["now_twd"],
                                      tws_change_kn=dft.get("tws_kn"), pos=dft.get("pos"))
         else:   # fallback if the from→to pair isn't carried (e.g. an older signal)
-            read = f"forecast shifted {dft.get('dir', '')} ~{round(dft.get('deg') or 0)}° since the plan"
+            sd = dft.get("signed_deg")
+            deg = abs(sd) if sd is not None and dft.get("dir") in ("right", "left") else dft.get("deg")
+            read = f"forecast shifted {dft.get('dir', '')} ~{round(deg or 0)}° since the plan"
         out.append({"signal": "forecast", "read": read, "grounded_in": ["get_drift"],
                     "confidence": "med" if dft.get("status") == "act" else "low"})
 
@@ -149,6 +155,12 @@ def recommendation(sel, conc, flt):
     if action == "switch":
         urg = "now" if sel.get("status") == "act" else "soon"
         rat = sel.get("why", "")
+        # The concordance is built from THIS instant's signals, and a settling selector can still
+        # be showing a switch the signals have since turned against (#40). Agreement only counts
+        # when it is agreement with the switch's own side.
+        tgt = sel.get("target_variant")
+        if conc.get("lean") in ("left", "right") and tgt in ("left", "right") and conc["lean"] != tgt:
+            strength = "split"
         if strength == "strong":
             conf = min(0.95, conf + 0.05); rat += " Forecast, fleet and position all agree."
         elif strength == "split":
@@ -157,6 +169,13 @@ def recommendation(sel, conc, flt):
                 "target_variant": sel.get("target_variant"), "rationale": rat,
                 "grounded_in": sel.get("driven_by", []) + ["get_selector"],
                 "urgency": urg, "confidence": conf_label(conf)}, conf
+
+    if action == "na":
+        # the gameplan is aboard but there's no wind read to check it against (#46): no all-clear
+        return {"action": "No wind read. Can't check the plan.",
+                "vs_playbook": "on-plan", "target_variant": sel.get("recommended"),
+                "rationale": sel.get("why", ""), "grounded_in": ["get_selector"],
+                "urgency": "monitor", "confidence": "low"}, 0.3
 
     if action == "off_script":
         return {"action": f"Off-book: {sel.get('value', 'sail the favoured side')}",
@@ -182,8 +201,12 @@ def recommendation(sel, conc, flt):
 
 def assessment(conc, rec, sel, sig, flt, has_playbook):
     """The digest's headline: lead with the concordance verdict when there is one."""
-    if conc.get("strength") == "strong":
+    tgt = (rec or {}).get("target_variant") if (sel or {}).get("action") == "switch" else None
+    against = tgt in ("left", "right") and conc.get("lean") in ("left", "right") and conc["lean"] != tgt
+    if conc.get("strength") == "strong" and not against:
         return f"Signals agree {conc['lean']}. {rec['action']}"
+    if against:
+        return f"Signals split. {rec['action']}"
     if conc.get("strength") == "split":
         return f"Signals split. {rec['action']}"
     if not has_playbook:

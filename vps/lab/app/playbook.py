@@ -290,7 +290,7 @@ def _internal_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
     eta_min = 0.0
     for k in range(1, len(marks) - 1):
         eta_min += float((legs[k - 1] or {}).get("leg_minutes") or 0) if k - 1 < len(legs) else 0
-        mark_name = marks[k][0]
+        mark_name = marks[k][1]          # marks are (seq, name, lat, lon) — the name, not the seq (#52)
         eta_epoch = start_epoch + eta_min * 60
         nominal_rest_h = max(0.0, (consensus.get("total_hours") or 0) - eta_min / 60.0)
         for dh in _PACE_DELAYS_H:
@@ -478,11 +478,32 @@ def _sail_seq(result):
     return out
 
 
+def _remainder_start_t(consensus, k):
+    """Time of the nominal's first path point AFTER mark k (the end of the segment leaving the mark):
+    the sail flown on that segment is the one in force at that time. Falls back to the mark ETA."""
+    path = consensus.get("path") or []
+    idx = consensus.get("leg_end_idx") or []
+    if 0 < k <= len(idx) and idx[k - 1] + 1 < len(path):
+        return path[idx[k - 1] + 1].get("t")
+    legs = consensus.get("legs") or []
+    return (legs[k - 1] or {}).get("eta_epoch") if 0 < k <= len(legs) else None
+
+
 def _sail_seq_from(consensus, k):
-    """The nominal's sail sequence from leg k onward (consecutive-deduped)."""
+    """The nominal's sail sequence from mark k onward (consecutive-deduped), from the sails it
+    actually flies — the timed sail plan, so a mid-leg peel counts — and the same shape `_sail_seq`
+    reads off a re-route (#52). Falls back to the per-leg headline sails only when the nominal has
+    no timed sail plan (sail-aware routing off: the re-route then has the same per-leg plan)."""
+    timed = [s for s in (consensus.get("sail_plan") or [])
+             if isinstance(s, dict) and s.get("sail") and s.get("t") is not None]
+    t0 = _remainder_start_t(consensus, k) if timed else None
+    if t0 is not None:
+        in_force = [s["sail"] for s in timed if s["t"] <= t0]
+        seq = in_force[-1:] + [s["sail"] for s in timed if s["t"] > t0]
+    else:
+        seq = [leg.get("sail") for leg in (consensus.get("legs") or [])[k:]]
     out = []
-    for leg in (consensus.get("legs") or [])[k:]:
-        s = leg.get("sail")
+    for s in seq:
         if s and (not out or out[-1] != s):
             out.append(s)
     return out

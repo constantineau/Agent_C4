@@ -346,5 +346,46 @@ p = next(x for x in r["plays"] if x["id"] == "gear_loss_s1")
 check("discrete predicate: closeness 0, not 'almost'", p["closeness"] in (0.0, None)
       or p["closeness"] == 0)
 print("RESULT-10:", "PASS" if ok else "FAIL")
+
+print("11) drift signed value + polar cache refresh (#43, #44.4)")
+stub()
+matcher.drift_mod.get_drift = lambda route=None: {
+    "available": True, "drift_dir": "steady", "drift_twd_deg": 6.0, "drift_twd_signed_deg": 1.5}
+r = matcher.get_plays()
+check("steady drift keeps drift's signed value (was None)",
+      r["signals"]["drift_twd_signed_deg"] == 1.5)
+matcher.drift_mod.get_drift = lambda route=None: {
+    "available": True, "drift_dir": "right", "drift_twd_deg": 10.0, "drift_twd_signed_deg": 3.0}
+r = matcher.get_plays()
+check("mixed drift: signed is drift's mean (3), not sign x mean |shift| (10)",
+      r["signals"]["drift_twd_signed_deg"] == 3.0)
+
+
+class FlakyPolars:
+    table = None            # None -> raise (DB down)
+
+    def polars_stw(self):
+        if FlakyPolars.table is None:
+            raise RuntimeError("db down")
+        return list(FlakyPolars.table)
+
+
+matcher.datasource.active = lambda: FlakyPolars()
+matcher._POLAR_TABLE = None
+check("first read fails -> empty table", matcher._polar_table() == [])
+FlakyPolars.table = [(10.0, 90.0, 7.0)]
+matcher._POLAR_AT -= matcher.POLAR_RETRY_S + 1
+check("failed read is retried (was cached [] for the process)",
+      matcher._polar_table() == [(10.0, 90.0, 7.0)])
+FlakyPolars.table = [(10.0, 90.0, 7.5)]
+check("within the TTL the cached table is served", matcher._polar_table() == [(10.0, 90.0, 7.0)])
+matcher._POLAR_AT -= matcher.POLAR_TTL_S + 1
+check("after the TTL an applied polar is picked up",
+      matcher._polar_table() == [(10.0, 90.0, 7.5)])
+FlakyPolars.table = None
+matcher._POLAR_AT -= matcher.POLAR_TTL_S + 1
+check("a failed refresh keeps the last good table", matcher._polar_table() == [(10.0, 90.0, 7.5)])
+matcher._POLAR_TABLE = None
+print("RESULT-11:", "PASS" if ok else "FAIL")
 import sys
 sys.exit(0 if ok else 1)
