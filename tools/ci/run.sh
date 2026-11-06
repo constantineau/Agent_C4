@@ -99,6 +99,8 @@ area agent /repo /repo/vps/agent:/repo:/repo/pi/archiver vps/agent/**/test_*.py
 area agent /repo /repo shared/**/test_*.py
 # The VPS backup tooling (#180) is stdlib python run on the host; any python image will do.
 area agent /repo /repo tools/backup/**/test_*.py
+# The replay rig's python half (truth.py) is stdlib + shared/; same reasoning.
+area agent /repo /repo tools/replay/**/test_*.py
 # The lab reads its data from the image's /srv layout (races, boats, polars), built from this tree.
 area lab /srv /srv vps/lab/**/test_*.py
 # The Orin's onboard plume and re-route reuse the Lab's wind code and optimizer (#124), so they

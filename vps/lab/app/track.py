@@ -480,7 +480,11 @@ def _fix_wind(f, ep, wf, cur):
     if f.get("tws") is not None and f.get("twa") is not None and f["tws"] > 0:
         stw = f.get("stw")
         if stw is None:
+            # The paddlewheel dropped out. SOG (current-corrected only when a current field
+            # exists) stands in, but it is GPS speed with the tide in it: label it INFERRED,
+            # never "measured", so `propose()` and the wave fit leave it out (#49, #240).
             stw, _ = _speed_angle(f, ep, None, cur)
+            return f["tws"], fold_twa(f["twa"]), stw, "inferred"
         return f["tws"], fold_twa(f["twa"]), stw, "measured"
     if wf is None or not getattr(wf, "loaded", False):
         return None
@@ -521,16 +525,17 @@ def _polar_pct(seg, epochs, wf, polars, cur=None, wave=None, wave_coeffs=None):
     if polars is None or (not has_measured and (wf is None or not getattr(wf, "loaded", False))):
         return None
     P = polars
-    ratios, helm_ratios, hss = [], [], []
+    ratios, helm_ratios, hss, srcs = [], [], [], set()
     for f, ep in zip(seg, epochs):
         if ep is None or f.get("sog") is None or f.get("cog") is None:
             continue
         w = _fix_wind(f, ep, wf, cur)
         if w is None:
             continue
-        tws, twa, stw, _src = w
+        tws, twa, stw, src = w
         target = SPOL.target(P, tws, twa)      # interpolated; pinching graded vs beat speed
         if target and target > 0.5 and stw > 0.3:
+            srcs.add(src)
             ratios.append(min(2.0, stw / target))
             hs = wave.wave_at(f["lat"], f["lon"], ep) if wave is not None else 0.0
             wfac = optimizer._wave_factor(hs, twa, wave_coeffs) if wave is not None else 1.0
@@ -541,10 +546,28 @@ def _polar_pct(seg, epochs, wf, polars, cur=None, wave=None, wave_coeffs=None):
     out = {"polar_pct": round(100 * sum(ratios) / len(ratios)),
            "helm_pct": round(100 * sum(helm_ratios) / len(helm_ratios)),
            "polar_samples": len(ratios), "wave_corrected": wave is not None,
-           "wind_source": "measured" if has_measured else "grib"}
+           # "measured" only when every scored fix had measured wind AND measured STW (#49)
+           "wind_source": _source_label(srcs)}
     if wave is not None and hss:
         out["sea_state_hs_mean"] = round(sum(hss) / len(hss), 2)
     return out
+
+
+def _source_label(srcs):
+    """One label for a set of per-sample sources: the source when they all agree, else "mixed"."""
+    srcs = set(srcs)
+    return next(iter(srcs)) if len(srcs) == 1 else "mixed"
+
+
+def _nearest_cell(polars, tws, twa):
+    """The cert cell a sample belongs to: the nearest TWS ROW first, then the nearest TWA in that
+    row. Adding |ΔTWS kn| to |ΔTWA °| (the rule here until #63, removed from the optimizer by #30)
+    mixes units, so a sample could land in a cell a whole wind row away."""
+    rows = sorted({p[0] for p in polars})
+    if not rows:
+        return None
+    row = min(rows, key=lambda r: abs(r - tws))
+    return min((p for p in polars if p[0] == row), key=lambda p: abs(p[1] - twa))
 
 
 _BIN_MIN_SAMPLES, _BIN_PCTILE = 4, 80.0       # min slices to trust a cell; "best achievable" percentile
@@ -595,7 +618,7 @@ def _performance_bins(seg, epochs, wf, polars, cur=None, wave=None, wave_coeffs=
     has_measured = any(f.get("tws") is not None for f in seg)
     if polars is None or (not has_measured and (wf is None or not getattr(wf, "loaded", False))):
         return []
-    cells = {}            # (cert_tws, cert_twa, target) -> [(through-water stw, hs)]
+    cells = {}            # (cert_tws, cert_twa, target, cfg) -> [(stw / own target, hs, src)]
     for f, ep in zip(seg, epochs):
         if ep is None or f.get("sog") is None or f.get("cog") is None or f["sog"] <= 0.3:
             continue
@@ -605,8 +628,14 @@ def _performance_bins(seg, epochs, wf, polars, cur=None, wave=None, wave_coeffs=
         tws, twa, stw, wsrc = w
         if twa is None or twa < 30 or stw is None or stw <= 0.3:
             continue
-        cell = min(polars, key=lambda p: abs(p[0] - tws) + abs(p[1] - twa))   # nearest cert cell
-        if abs(cell[0] - tws) > 3.0 or abs(cell[1] - twa) > 18.0:             # too far → off-grid, skip
+        cell = _nearest_cell(polars, tws, twa)
+        if cell is None or abs(cell[0] - tws) > 3.0 or abs(cell[1] - twa) > 18.0:   # off-grid, skip
+            continue
+        # Each sample is graded against the polar at ITS OWN wind, not its cell's corner (#63):
+        # the 80th percentile of raw speeds in a cell picks the windier side of it, so a boat
+        # sailing exactly on the polar read 112% at 4 kn.
+        own = SPOL.target(polars, tws, twa)
+        if not own or own <= 0.5:
             continue
         hs = wave.wave_at(f["lat"], f["lon"], ep) if wave is not None else 0.0
         cfg = config_at(sail_log, ep)
@@ -614,26 +643,24 @@ def _performance_bins(seg, epochs, wf, polars, cur=None, wave=None, wave_coeffs=
             # the log says spinnaker, the wind angle says impossible — a douse nobody tapped.
             # UNATTRIBUTED, per Cole 2026-09-09: never credited to the wrong sail, never dropped.
             cfg = None
-        cells.setdefault((cell[0], cell[1], cell[2], cfg), []).append((stw, hs, wsrc))
+        cells.setdefault((cell[0], cell[1], cell[2], cfg), []).append((stw / own, hs, wsrc))
     out = []
     for (tws_c, twa_c, target, cfg), samples in sorted(
             cells.items(), key=lambda kv: (kv[0][0], kv[0][1], kv[0][3] or "")):
         if len(samples) < _BIN_MIN_SAMPLES or not target or target <= 0.5:
             continue
-        stws = [s for s, _h, _w in samples]
-        best = _pctile(stws, _BIN_PCTILE)
-        hs_mean = round(sum(h for _s, h, _w in samples) / len(samples), 2)
-        pct = round(100 * best / target)
-        n_meas = sum(1 for _s, _h, w in samples if w == "measured")
+        ratio = _pctile([r for r, _h, _w in samples], _BIN_PCTILE)
+        hs_mean = round(sum(h for _r, h, _w in samples) / len(samples), 2)
+        pct = round(100 * ratio)
         row = {"tws": tws_c, "twa": twa_c, "point_of_sail": _point_of_sail(twa_c),
-               "samples": len(samples), "best_stw": round(best, 2),
+               # best_stw is that ratio at the cell's own wind, so best/target == pct
+               "samples": len(samples), "best_stw": round(ratio * target, 2),
                "target_stw": round(target, 2), "pct": pct,
                "config": cfg,      # the crew sail configuration this cell was sailed under
-               # a cell is only "measured" when EVERY sample's TWS and TWA came off the boat
+               # a cell is only "measured" when EVERY sample's TWS, TWA and STW came off the boat
                # (Cole 2026-09-09: actual polars, off measured angles and measured wind speed —
-               # one forecast-derived sample disqualifies the cell for refinement)
-               "wind_source": ("measured" if n_meas == len(samples)
-                               else "grib" if n_meas == 0 else "mixed")}
+               # one forecast-derived or SOG-inferred sample disqualifies the cell for refinement)
+               "wind_source": _source_label(w for _r, _h, w in samples)}
         if wave is not None:
             wfac = optimizer._wave_factor(hs_mean, twa_c, wave_coeffs)
             row["hs_mean"] = hs_mean

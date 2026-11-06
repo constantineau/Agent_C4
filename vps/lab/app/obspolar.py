@@ -47,6 +47,9 @@ MIN_SECONDS = float(os.environ.get("POLAR_MIN_SECONDS", "60"))
 MIN_TWA_DEG = float(os.environ.get("POLAR_MIN_TWA_DEG", "30"))
 PCTILE = 80.0
 MAX_POINTS = 20000
+# Bumped when a fix changes what a build means, so an older cache is a miss, not served as current.
+# 2: stitched sessions' shared window read once (#49).
+BUILD_VERSION = 2
 
 
 def _gate(fixes, trust):
@@ -119,6 +122,7 @@ def compute(min_seconds=MIN_SECONDS):
     """
     raw, names_by_cell, strides = {}, {}, {}
     race_meta = []
+    by_window, counted = {}, []        # (start, end) -> its race_meta row; intervals already read
     for s in monitor.agent_json("/racelog/sessions")["sessions"]:
         w = s.get("window") or {}
         if not w.get("hours"):
@@ -128,11 +132,23 @@ def compute(min_seconds=MIN_SECONDS):
             race_meta.append({"recording": rec, "name": s["name"], "skipped":
                               "window derived from a source that is not this boat"})
             continue
+        # Stitched sessions share ONE derived window (#49). Reading it once per session counted
+        # every second twice, so a 30-second cell passed the 60-second gate and the race was
+        # listed twice. The window is read once; the other session is named on its row.
+        wkey = (round(float(w["start_ts"]), 3), round(float(w["end_ts"]), 3))
+        if wkey in by_window:
+            by_window[wkey].setdefault("also_sessions", []).append(s["name"])
+            continue
         r = monitor.agent_json(f"/racelog/track?start={w['start_ts']}&end={w['end_ts']}"
                                f"&max_points={MAX_POINTS}", timeout=180)
         trust = monitor.agent_json(f"/racelog/trust?start={w['start_ts']}&end={w['end_ts']}",
                                    timeout=180)
         fixes, refused = _gate(r["fixes"], trust)
+        # ...and a window that only OVERLAPS one already read keeps just its new seconds
+        n_before = len(fixes)
+        fixes = [f for f in fixes if not any(a <= f["t"] <= b for a, b in counted)]
+        already = n_before - len(fixes)
+        counted.append(wkey)
         strides[rec] = _stride_s(r["fixes"])
         sail_log = r.get("sail_log") or []
         n, not_sailing = 0, 0
@@ -160,6 +176,7 @@ def compute(min_seconds=MIN_SECONDS):
                           "name": s["name"], "hours": w.get("hours"),
                           "start_ts": w.get("start_ts"), "end_ts": w.get("end_ts"),
                           "fixes": len(r["fixes"]), "refused_by_trust": refused,
+                          "already_counted": already,
                           "measured_samples": n, "refused_below_min_twa": not_sailing,
                           "sec_per_fix": round(strides[rec], 2),
                           "trust_line": (trust.get("summary") or {}).get("line"),
@@ -167,6 +184,7 @@ def compute(min_seconds=MIN_SECONDS):
                           # rather than parsing the human line
                           "trust_danger_s": (trust.get("summary") or {}).get("danger_s"),
                           "sail_changes": len(sail_log)})
+        by_window[wkey] = race_meta[-1]
 
     cells, thin_cells = _rows(
         raw, lambda k: (("tws", k[0]), ("twa", k[1]), ("config", k[2])), min_seconds, strides,
@@ -186,7 +204,7 @@ def compute(min_seconds=MIN_SECONDS):
         m["thin_cells"] = sum(1 for r in thin_race_cells if r["recording"] == m.get("recording"))
         m["thin_seconds"] = round(sum(r["seconds"] for r in thin_race_cells
                                       if r["recording"] == m.get("recording")))
-    return {"generated_at": time.time(), "wind_source": "measured",
+    return {"generated_at": time.time(), "wind_source": "measured", "build_version": BUILD_VERSION,
             "grid": {"tws_step_kn": TWS_STEP_KN, "twa_step_deg": TWA_STEP_DEG,
                      "pctile": PCTILE, "min_seconds": min_seconds, "min_twa_deg": MIN_TWA_DEG},
             "races": race_meta, "cells": cells, "race_cells": race_cells,
@@ -211,7 +229,8 @@ def build(force=False):
             # are seconds — the failure this project keeps meeting: present, wired, silently not
             # in force. Treat it as a miss.
             if all(k in art for k in ("race_cells", "race_curves", "curve", "refused_thin")) \
-                    and "min_seconds" in (art.get("grid") or {}):
+                    and "min_seconds" in (art.get("grid") or {}) \
+                    and art.get("build_version") == BUILD_VERSION:
                 return art
         except (OSError, ValueError):
             pass
