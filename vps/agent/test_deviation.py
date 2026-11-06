@@ -173,6 +173,13 @@ set_boat(nm_north(3.0), LON0 + nm_east(0.08), cog=180.0)
 set_now(T0 + 8 * 600)
 r = deviation.get_deviation()
 check(f"no history, southbound: return leg (along {r['along_nm']} nm)", r["along_nm"] > 6.5)
+# a late gun (since = 70 min after the plan start): the leg comes from the plan's clock
+deviation.reset_state()
+set_boat(nm_north(2.0), LON0, sog=0.0, cog=0.0)
+set_now(T0 + 70 * 60 + 2 * 600)
+r = deviation.get_deviation(since=T0 + 70 * 60)
+check(f"late gun, no history: outbound, on pace (along {r['along_nm']}, behind {r['time_behind_s']})",
+      r["along_nm"] < 3.0 and abs(r["time_behind_s"] or 0) < 120)
 use_bundle(BUNDLE)
 deviation.reset_state()
 

@@ -202,5 +202,22 @@ navigator.get_navigator = _real_nav
 check("a reload mid-poll keeps the new list clean", StubDS.blob.get("armed") == {})
 POS.update({"lat": 44.0, "lon": -82.3})
 
+# an ack that started before a reload must not land on the new list
+checklist.load({"items": ITEMS})
+
+
+def _nav_reload_during_ack(route=None):
+    if _fired["n"] == 2:
+        _fired["n"] += 1
+        StubDS.blob = {**StubDS.blob, "loaded_at": StubDS.blob["loaded_at"] + 1}
+    return _real_nav(route)
+
+
+navigator.get_navigator = _nav_reload_during_ack
+res = checklist.ack({"id": "sponsor-flag"}, now=T_AFTERNOON)
+navigator.get_navigator = _real_nav
+check("an ack across a reload is refused", res.get("available") is False
+      and "sponsor-flag" not in (StubDS.blob.get("acks") or {}))
+
 print("\nPASS" if ok else "\nFAIL")
 raise SystemExit(0 if ok else 1)

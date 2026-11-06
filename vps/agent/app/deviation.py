@@ -249,7 +249,10 @@ def get_deviation(route=None, variant=None, since=None):
     key = f"{route or navigator.active_route()}|{vid}"
     st = _state.get(key, {})
     fresh = st.get("at") is not None and 0 <= now - st["at"] <= LEG_MEMORY_S
-    fix = _project(blat, blon, path, prev_idx=st.get("seg_idx") if fresh else None, now=now,
+    # the plan's clock: re-anchored to the real gun when `since` is given
+    t0_plan = path[0].get("t")
+    plan_now = (now - since + t0_plan) if (since is not None and t0_plan is not None) else now
+    fix = _project(blat, blon, path, prev_idx=st.get("seg_idx") if fresh else None, now=plan_now,
                    cog=s.get("cog"), sog=s.get("sog"))
     if fix is None:
         return _na("Track too short to measure.", base_extra)

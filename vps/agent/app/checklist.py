@@ -307,8 +307,12 @@ def ack(body, now=None):
     if not body.get("undo"):
         # the live read (navigator) stays outside the lock; only the blob update is inside
         _, wkey, _ = _eval_item(items[iid], _context(body.get("route")), now)
+    loaded_at = blob.get("loaded_at")
     with _LOCK:
         blob = _blob()
+        if blob.get("loaded_at") != loaded_at:
+            # the list was reloaded while we read: the same id may now be a different item
+            return {"available": False, "note": "checklist was reloaded, try again"}
         if iid not in {i["id"] for i in (blob.get("items") or [])}:
             return {"available": False, "note": f"no checklist item '{iid}'"}
         acks = dict(blob.get("acks") or {})
