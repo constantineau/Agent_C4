@@ -3,6 +3,15 @@
 Goal (Cole): **lose no telemetry**, and **copy all telemetry off the Pi to the VPS**.
 Deletion from the boat is allowed only *after* an off-boat copy is sha256-verified.
 
+## ⏸ PICK UP HERE — 2026-11-06 (dev 7d94462 = main 83cb9f3, DEPLOYED)
+
+**Batch 4 MERGED + DEPLOYED 2026-11-06 ~15:30Z on Cole's "merge 224 225 226 228 go deploy":** #224 (#153 timing plays manual-only), #225 (#149 playbook routes on the Lab's chart + boat draft, #151 refuse missing mark positions), #226 (#113 sail text follows the tile's verdict), #228 (#150 course hash, #152 refuse a missing/broken locked playbook; fsync on copilot + Pi approval writes). #228 was squashed onto dev after #225 by hand: push() runs the missing-marks check first, then the bundle check; _course_for ignores a non-dict bundle.
+- VPS: Lab + agent rebuilt, rollback `sr33-dev-lab:pre-20261106`, `sr33-dev-agent:pre-20261106`.
+- Pi: engine only (sails.py, engine_app.py, shared/race_def.py copied; no drift before). Backup `~/deploy-backups/batch4-20261106T152956Z`, image `sr33-pi-engine:pre-20261106T152956Z`. /health /power /health/sensors /playbook 200, 0 restarts.
+- Orin: ff 903ee80 → 83cb9f3 (tag `pre-deploy-20261106`), copilot restarted, all active.
+- Shore push test: the old playbook (no hash) pushed 7/7 green, Deploy tab says "Frozen before course checks. Freeze again to check it." Fresh playbook (course_hash e09417dc473e89b3, chart enc, safety 2.63 m) synthesized, frozen, locked, pushed 7/7 green; boat holds signature f34717a78a6d7061.
+- Still open: #166/#176 already fixed (close them), #53 leftover, #227 Code 0 key, #181 SD card, close proven re-route tickets #124 #125 #139 #140, update map #188.
+
 ## ⏸ PICK UP HERE — 2026-11-04 (dev = main @ 62315d1, DEPLOYED)
 
 **Cole's decision 2026-11-04: deploy engine/copilot fixes to the boat REMOTELY AS THEY MERGE** (not one spring batch). Each deploy: backup + rollback images first, Orin OLLAMA_CONTEXT_LENGTH=6144 before the first copilot deploy (#208). Fixes can't be checked against live wind/GPS on the hard — only that services come up healthy.
@@ -13,7 +22,7 @@ Deletion from the boat is allowed only *after* an off-boat copy is sha256-verifi
 **DEPLOYED 2026-11-04 ~17:10Z on Cole's "proceed"** — main @ 62315d1 (merge commit, tree == dev):
 - VPS: Lab + agent rebuilt/recreated, rollback `:pre-20261104`. Lab has ANTHROPIC_IMPORT_MODEL_CHAIN=claude-opus-5-5,claude-fable-5-1. Both answer 200.
 - Pi (stamp 20261104T170741Z): 25 files copied (4 new), engine + console + archiver rebuilt, `up -d --no-deps`. Backup `~/deploy-backups/wave3-20261104T170741Z` (files.tgz + new-files.txt), images `:pre-20261104T170741Z`. Uplink/n2kout/signalk untouched. vps/db/seed/source_*.sql differ on the Pi but no Pi image uses them — left alone. Verified: engine /health /power /health/sensors /playbook 200, archiver recording, console :8091 serves briefguard.js, 0 restarts.
-- Orin: ff to 62315d1 (old HEAD tag `pre-deploy-20261104`), backup `~/pre-pull-backup/20261104T170741Z` (ollama.service, copilot.env). **ollama.service now OLLAMA_CONTEXT_LENGTH=6144** (sudo now works passwordless). ollama, copilot, reroute restarted and active; copilot health ok (engine + LLM reachable), model answers. "Playbook not confirmed" = the known Lab Deploy push owed in spring.
+- Orin: ff to 62315d1 (old HEAD tag `pre-deploy-20261104`), backup `~/pre-pull-backup/20261104T170741Z` (ollama.service, copilot.env). **ollama.service now OLLAMA_CONTEXT_LENGTH=6144** (sudo now works passwordless). ollama, copilot, reroute restarted and active; copilot health ok (engine + LLM reachable), model answers. "Playbook not confirmed" = no Lab Deploy push yet. The push is an any-time tool (Cole 2026-11-05), not a spring step — PROVEN 2026-11-05: pushed test race push-test-2026-11 (Bayview course, start 2026-11-07 15:00Z, playbook a882a5eb), all 7 steps green, Orin signature_ok. Past races are refused ("Race started"), so a test needs a future race. Re-route from shore also WORKS 2026-11-05 (job 20261105T143637-70829c, 88 s, GFS+HRRR, NAM missing; warns "Chart doesn't cover the boat" because the yard position is outside the course chart).
 - Rollback Pi: untar files.tgz in ~/Agent_C4, delete new-files.txt entries, `docker tag sr33-pi-<svc>:pre-20261104T170741Z sr33-pi-<svc>:latest`, `up -d --no-deps engine console archiver`. Orin: `git reset --hard pre-deploy-20261104`, restore ollama.service, daemon-reload, restart.
 - Not checkable on the hard: behaviour against live wind/GPS. Next: re-measure the matcher (stock + tuned, blind) on the Orin at 6144 (#208).
 
@@ -60,12 +69,12 @@ CI + Codex for 207→208→209 run serially in a detached chain: **/root/c4-ops/
 
 **Open question for Cole — Opus for the Lab's AI:** Opus 5 passed Bayview on 2026-11-03 (courses, roundings, distances, start, gate, date all match; 232 s, ~$1.70 vs Fable $3.74). Island marks left blank as "needs review" (docs give none — correct). ANTHROPIC_MODEL_CHAIN covers EVERY Lab AI call (synthesis, debrief too), so the pick is: Opus first for imports only (small PR, recommended) vs everything (settings only, untested on playbooks/debriefs) vs keep Fable. Opus 5.5 is also out, 20% cheaper than Opus 5. Draft saved in the old session scratchpad only.
 
-**Next after that:** rest of map #188 — engine correctness #159–#161, #163, #164, #166, #167 (after #209 lands); #203 Lab northerly + robustness warnings. Spring: Lab Deploy push, Garmin dockside check, practice sail.
+**Next after that:** rest of map #188 — engine correctness #159–#161, #163, #164, #166, #167 (after #209 lands); #203 Lab northerly + robustness warnings. Lab Deploy push works any time (Cole 2026-11-05) — prove it end to end from shore. Spring: Garmin dockside check, practice sail.
 **Gotcha:** a `while pgrep -f "prep.sh N"` waiter matches its own command line and waits forever — use one serial script.
 
 ## ⏸ PICK UP HERE — 2026-11-02 LATE SESSION END (dev @ e56fd0c, main @ 405be7f)
 
-**C4 is OUT OF THE WATER UNTIL SPRING.** Shore work only. Boat steps (Lab Deploy push, Garmin dockside check, practice sail) are spring items.
+**C4 is OUT OF THE WATER UNTIL SPRING.** Shore work only. Boat steps (Garmin dockside check, practice sail) are spring items. The Lab Deploy push is NOT seasonal: Cole wants a playbook pushable for racing at any time.
 
 **Merged to dev today (wave 2, Cole's "merge N"):** #201 timing tests, #195 backfill/alert tests (+ alerts newest first, engine read error = "No live data", silent depth sensor holds the alarm), #196 hollow tests + archiver kept-window fix (#34 first half) + attitude "unknown", #200 coastline failure degrades routes + exact obstacle check + "Forecast ends before the finish" warning (closes #51, #145). Wave-1 issues closed on map #188 (it opens with a "Where we are" block).
 **CI is now a REQUIRED check on dev and main** (admins exempt, so progress pushes still work).
@@ -94,7 +103,7 @@ Agent IDs from this session can't be messaged from a new one: spawn fresh agents
 - Verified after deploy: archiver recording; n2kout on the bus (11 peers, requests to us > 0, ERROR-ACTIVE, no send errors); copilot reaches the engine over the cable; Pi reaches the re-route service; one manual plume pass pushed 6 models in 77 s.
 - VPS: Docker + containerd moved to `/mnt/data/var-lib` (bind mounts in fstab, systemd `RequiresMountsFor`); data disk grown to 500 GB; root disk 98% → 34%.
 
-**2026-11-02 later:** C4 is OUT OF THE WATER UNTIL SPRING (Cole). Steps 1-3 below are spring items at the boat. The 11 issues wave 1 fixed but GitHub left open are closed, and map #188 now opens with a "Where we are" block. Next on shore: wave 2, Cole's pick still owed.
+**2026-11-02 later:** C4 is OUT OF THE WATER UNTIL SPRING (Cole). Steps 2-3 below are spring items at the boat; step 1 (push) works any time. The 11 issues wave 1 fixed but GitHub left open are closed, and map #188 now opens with a "Where we are" block. Next on shore: wave 2, Cole's pick still owed.
 
 **Next, in order:**
 1. Lab Deploy tab: one Push (course definition, chart, boat profile) — the Re-route button needs it aboard. Playbook also loads only this way now (the Orin ignores its old file: "Playbook not confirmed").
