@@ -56,10 +56,31 @@ def _due(c, now):
     return not (c and c.get("failed_at") and now - c["failed_at"] < _backoff_s(c.get("fails", 1)))
 
 
-def _fetch(key, now):
-    """One network fetch for a cell; stores and returns the cache entry. A failure keeps any old
-    hours (with `fetched` left old, so they read as stale, #157) and counts toward the back-off."""
-    c = _cache.get(key)
+_cell_locks = {}       # cell -> Lock: one fetch per cell at a time (background vs request path)
+_cell_locks_guard = threading.Lock()
+
+
+def _cell_lock(key):
+    with _cell_locks_guard:
+        return _cell_locks.setdefault(key, threading.Lock())
+
+
+def _fetch(key, on_fetch=None):
+    """One network fetch for a cell; stores and returns (cache entry, fetched?). Fetches one cell
+    at a time and re-checks after taking the cell's lock, so a fetch that finished meanwhile is
+    used, not overwritten by a slower failing one. A failure keeps any old hours (with `fetched`
+    left old, so they read as stale, #157) and counts toward the back-off. `on_fetch` runs just
+    before the network call (the background refresh counts its budget there)."""
+    with _cell_lock(key):
+        c = _cache.get(key)
+        if not _due(c, time.time()):
+            return c, False
+        if on_fetch:
+            on_fetch()
+        return _fetch_locked(key, time.time(), c), True
+
+
+def _fetch_locked(key, now, c):
     q = urllib.parse.urlencode({
         "latitude": key[0], "longitude": key[1],
         "hourly": "wind_speed_10m,wind_direction_10m",
@@ -90,8 +111,8 @@ def fetch_point(lat, lon):
     c = _cache.get(key)
     if not _due(c, now):
         return c if _fresh(c, now) or not c.get("hours") else _unavailable(c)
-    c = _fetch(key, now)
-    return _unavailable(c) if c.get("hours") and not _fresh(c, now) else c
+    c, _ = _fetch(key)
+    return _unavailable(c) if c.get("hours") and not _fresh(c, time.time()) else c
 
 
 # --- background refresh (#42): /strategy never waits on the network --------------------------
@@ -119,11 +140,10 @@ def _refresh_once(now=None):
     """One pass of the refresh: fetch the asked-for cells that are due, within the request budget,
     and stop at the first failure (the link is likely down; the worker backs off). Returns the
     number of network fetches made."""
-    now = time.time() if now is None else now
+    clock = time.time if now is None else (lambda: now)
+    now = clock()
     if _link["fails"] and now - _link["failed_at"] < _backoff_s(_link["fails"]):
         return 0
-    while _spent and now - _spent[0] > BUDGET_WINDOW_S:
-        _spent.popleft()
     n = 0
     for key, asked in list(_want.items()):
         c = _cache.get(key)
@@ -132,13 +152,19 @@ def _refresh_once(now=None):
             continue
         if not _due(c, now):
             continue
+        t = clock()                    # each fetch is budgeted at its own start time
+        while _spent and t - _spent[0] > BUDGET_WINDOW_S:
+            _spent.popleft()
         if len(_spent) >= FETCH_BUDGET:
             break
-        _spent.append(now)
-        n += 1
-        c = _fetch(key, now)
-        if not _fresh(c, now):
-            _link.update(fails=_link["fails"] + 1, failed_at=now)
+        c, fetched = _fetch(key, on_fetch=lambda: _spent.append(clock()))
+        n += fetched
+        if not fetched:                # someone else refreshed it meanwhile
+            if _fresh(c, clock()):
+                _want.pop(key, None)
+            continue
+        if not _fresh(c, clock()):
+            _link.update(fails=_link["fails"] + 1, failed_at=clock())
             break
         _link.update(fails=0, failed_at=0.0)
         _want.pop(key, None)

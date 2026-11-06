@@ -161,6 +161,51 @@ check("a second pass in the same window fetches none", weather._refresh_once() =
 NOW[0] += weather.BUDGET_WINDOW_S + 1
 check("the next window fetches the rest", weather._refresh_once() == 10)
 
+print("each background fetch is budgeted at its own start time")
+reset()
+_plain = weather.urllib.request.urlopen
+
+
+def _slow(url, timeout=None):
+    r = _plain(url, timeout)
+    NOW[0] += 9                                        # each fetch takes 9 s
+    return r
+
+
+weather.urllib.request.urlopen = _slow
+t0 = NOW[0]
+for i in range(3):
+    weather.request_refresh((42.0 + i * 0.1, -80.0))
+weather._refresh_once()
+weather.urllib.request.urlopen = _plain
+check(f"budget stamps are the real start times ({[s - t0 for s in weather._spent]})",
+      [s - t0 for s in weather._spent] == [0, 9, 18])
+
+print("a request-path fetch waits for a background fetch of the same cell")
+import threading  # noqa: E402
+
+reset()
+LINK["up"] = False
+seen = {}
+
+
+def _bg_then_fg(url, timeout=None):
+    if not seen:                                       # the background fetch, mid-flight
+        seen["fg"] = th = threading.Thread(target=weather.fetch_point, args=(43.0, -80.0))
+        th.start()
+        th.join(0.2)
+        seen["blocked"] = th.is_alive()
+    return _plain(url, timeout)
+
+
+weather.urllib.request.urlopen = _bg_then_fg
+weather.request_refresh((43.0, -80.0))
+weather._refresh_once()
+seen["fg"].join(5)
+weather.urllib.request.urlopen = _plain
+check("the request-path fetch waited for the background one", seen.get("blocked") is True)
+check(f"…then saw its result and did not fetch again ({len(CALLS)})", len(CALLS) == 1)
+
 print("a cell nobody asks about again drops off the list")
 reset()
 LINK["up"] = False
