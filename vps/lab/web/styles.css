@@ -508,8 +508,8 @@ body:not(.is-dirty) .if-dirty, body.is-dirty .if-clean { display: none; }
   label:has(> input:is([type=checkbox], [type=radio])), .optchk, .echk, .req-flag, .req-chk,
   .jib-edit label, .mv-chk { display: inline-flex; align-items: center; gap: 8px; min-height: 44px;
     cursor: pointer; }
-  /* a box alone in a table cell (Learnings adjust table) gets a 44 px hit area from its padding */
-  td > input[type=checkbox] { margin: 11px; }
+  /* a label holding only a box (checklist ticks, Learnings adjust table) is a 44 px square */
+  .req-chk { min-width: 44px; justify-content: center; }
   .routemap .mv-play, .routemap .mv-cc .cc-collapse { min-width: 44px; min-height: 44px; }
 }
 

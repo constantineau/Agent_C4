@@ -3667,7 +3667,7 @@ function learnProposalReview(p) {
   const s = p.summary || {};
   const pos = s.by_point_of_sail || {};
   const rows = (p.adjustments || []).map((a, i) => `<tr>
-    <td><input type="checkbox" data-adj="${i}" checked></td>
+    <td><label class="req-chk"><input type="checkbox" data-adj="${i}" checked></label></td>
     <td>${a.tws} kts</td><td>${a.twa}°</td><td>${esc(a.point_of_sail)}</td>
     <td><b class="conf ${a.mult < 1 ? "bad" : "ok"}">×${a.mult}</b></td>
     <td class="muted">${esc(a.basis || "")}</td></tr>`).join("");

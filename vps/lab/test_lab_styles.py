@@ -97,6 +97,8 @@ for s in (".tabs a", ".ghost", "button.mini", ".cin", ".ein", "td select", ".jib
     check(s in coarse_44, f"coarse pointer: {s} gets min-height 44px")
 check(any("label:has(> input:is([type=checkbox], [type=radio]))" in s for s in coarse_44),
       "coarse pointer: a label wrapping a checkbox/radio is a 44 px target (whole label clickable)")
+check(not re.search(r'<td><input type="checkbox"', JS),
+      "no bare checkbox in a table cell: each sits in a label so the 44 px area toggles it")
 check(not any("(pointer: coarse)" in (m or "") for m, _, _ in RULES),
       "uses any-pointer, not pointer (an iPad with a trackpad still gets 44 px)")
 
