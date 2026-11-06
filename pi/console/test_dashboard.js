@@ -39,9 +39,12 @@ function stubEl() {
 function load() {
   let nowMs = 1793000000000;
   const els = {};
+  let timers = [], tid = 0;          // timers run only when a test calls fire(), on the fake clock
   const ctx = {
     console, JSON, Math, Promise, Set, Map, URLSearchParams, AbortController, TextDecoder,
-    setTimeout: () => 0, clearTimeout: () => {}, setInterval: () => 0, clearInterval: () => {},
+    setTimeout: (fn, ms) => { timers.push({ id: ++tid, fn: fn, at: nowMs + (ms || 0) }); return tid; },
+    clearTimeout: (id) => { timers = timers.filter((t) => t.id !== id); },
+    setInterval: () => 0, clearInterval: () => {},
     localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
     location: { search: "" },
     navigator: { userAgent: "test" },
@@ -69,7 +72,8 @@ function load() {
   ctx.__C4DashTest = (api) => { D = api; };
   vm.runInContext(fs.readFileSync(path.join(DIR, "dashboard.js"), "utf8"), ctx, { filename: "dashboard.js" });
   if (!D) throw new Error("dashboard.js did not hand over its test seam");
-  return { D: D, ctx: ctx, now: () => nowMs, set: (t) => { nowMs = t; }, tick: (ms) => { nowMs += ms; } };
+  const fire = () => { const due = timers.filter((t) => t.at <= nowMs); timers = timers.filter((t) => t.at > nowMs); due.forEach((t) => t.fn()); };
+  return { D: D, ctx: ctx, now: () => nowMs, set: (t) => { nowMs = t; }, tick: (ms) => { nowMs += ms; }, fire: fire };
 }
 
 const json = (body) => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) });
@@ -129,6 +133,24 @@ test("#184-4 a slow answer from one endpoint doesn't age the others (no false st
   await T.D.poll();
   ok(T.D.App.ages.conditions < 1000, "conditions aged " + T.D.App.ages.conditions + " ms by a slow forecast");
   ok(T.D.App.ages.forecast < 1000, "an 8 s answer inside its 9 s timeout is not old: " + T.D.App.ages.forecast);
+});
+test("#184-4 an answer that landed before a freeze keeps its landing time", async () => {
+  const T = load();
+  let releaseForecast;
+  T.ctx.fetchImpl = (url) => {
+    if (url === "/api/conditions") return json(COND);
+    if (url.indexOf("/api/forecast") === 0) return new Promise((res) => { releaseForecast = () => res({ ok: true, status: 200, json: () => Promise.resolve({ available: false }) }); });
+    return Promise.reject(new Error("down"));
+  };
+  const landed = T.now();
+  const p = T.D.poll();
+  await flush(); await flush();
+  T.tick(3600e3);                        // the page froze with /forecast still pending
+  releaseForecast();
+  await p;
+  ok(T.D.App.ages.conditions >= 3600e3 - 1000, "conditions landed before an hour's freeze, aged " + T.D.App.ages.conditions + " ms");
+  const last = T.D.App.windHist[T.D.App.windHist.length - 1];
+  ok(last && Math.abs(last.t - landed / 1000) < 1, "wind history logged the pre-freeze reading as now");
 });
 test("#184-4 a held wind reading is not logged as a new one", async () => {
   const T = load();
@@ -230,6 +252,33 @@ test("#56 two quick sail taps keep both sails", async () => {
   ok(last.flying.indexOf("J1") >= 0 && last.flying.indexOf("A3") >= 0,
     "second tap lost the first sail: " + JSON.stringify(posted));
   ok(T.D.App.sailState.flying.length === 2, "state after both taps: " + JSON.stringify(T.D.App.sailState));
+});
+test("#56 a stalled sail POST can't hold the queue; the next tap builds on the re-read state", async () => {
+  const T = load();
+  T.D.App.sailState = { flying: [], out_of_service: [], reef: "" };
+  const posted = [];
+  let first = true;
+  T.ctx.fetchImpl = (url, opts) => {
+    if (url === "/api/sails/state" && opts.method === "POST") {
+      posted.push(JSON.parse(opts.body));
+      if (first) {                       // the first POST stalls until its deadline aborts it
+        first = false;
+        return new Promise((res, rej) => opts.signal.addEventListener("abort", () => rej(new Error("aborted"))));
+      }
+      return json(Object.assign({}, T.D.App.sailState, JSON.parse(opts.body)));
+    }
+    if (url === "/api/sails/state") return json({ flying: ["J1"], out_of_service: [], reef: "" });   // it did land
+    return Promise.reject(new Error("down"));
+  };
+  const a = T.ctx.toggleFlying("J1"), b = T.ctx.toggleFlying("A3");
+  await flush(); await flush();
+  ok(posted.length === 1, "second tap sent while the first was pending");
+  T.tick(9000); T.fire();                // past the POST deadline
+  await a; await b;
+  ok(posted.length === 2, "the queue stayed blocked after a stalled POST: " + JSON.stringify(posted));
+  const last = posted[1].flying || [];
+  ok(last.indexOf("J1") >= 0 && last.indexOf("A3") >= 0, "second tap didn't build on the re-read state: " + JSON.stringify(posted[1]));
+  ok(T.D.App.sailQ === null, "queue not released");
 });
 test("#56 a sail-state read in flight during a tap does not undo the tap", async () => {
   const T = load();

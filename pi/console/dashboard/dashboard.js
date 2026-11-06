@@ -1414,15 +1414,19 @@
   }
   /* Sail taps go to the engine ONE AT A TIME (#56). Each POST sends the whole set, so two quick
      taps that both built it from the same App.sailState lost one sail: the second POST overwrote
-     the first. Queued, each tap builds its body from the state the previous POST returned. */
+     the first. Queued, each tap builds its body from the state the previous POST returned.
+     Each POST (body included) has a deadline, so a stalled one can't hold the queue; when one
+     fails, the state is read back before the next queued tap builds on it. */
+  const SAIL_POST_MS = 8000;
   function sailPost(build) {
     App.sailSeq++;
     const run = async () => {
       try {
-        const resp = await fetch(API + "/sails/state", { method: "POST",
+        const r = await COL.fetchJsonWithin(API + "/sails/state", { method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(build(App.sailState || {})) });
-        if (resp.ok) { App.sailState = await resp.json(); renderSailsBar(); }
+          body: JSON.stringify(build(App.sailState || {})) }, SAIL_POST_MS);
+        const st = r || await fetchJSON("/sails/state", 5000);   // failed: re-sync before the next tap
+        if (st) { App.sailState = st; renderSailsBar(); }
         fetchPlays();
       } catch (e) { /* engine unreachable — the next poll re-syncs */ }
     };
@@ -2715,14 +2719,17 @@
       const eps = ["/conditions", "/sail", "/navigator", "/tactics", "/fatigue", "/forecast?hours=6", "/sources", "/fleet", "/watch"];
       const keys = ["conditions", "sail", "navigator", "tactics", "fatigue", "forecast", "sources", "fleet", "watch"];
       const ms   = [5000, 5000, 5000, 5000, 5000, 9000, 5000, 6000, 5000];
-      // each answer judged as it lands: one slow endpoint must not make the other eight look
-      // frozen. A normal answer counts as current when the poll completes, as it always has.
-      const frozen = [];
+      // Each answer is judged as it lands, so one slow endpoint can't make the others look old.
+      // Normally waiting for the slowest is bounded by its timeout, and the batch counts as current
+      // when it completes, as it always has. Past that bound the page froze, either with the
+      // request in flight (dated to when it was asked) or after the answer landed (dated to then).
+      const landed = [], frozenIn = [];
       const res = await Promise.all(eps.map((e, i) => fetchJSON(e, ms[i]).then((r) => {
-        frozen[i] = frozenSince(askedAt, ms[i]); return r; })));
+        landed[i] = Date.now(); frozenIn[i] = frozenSince(askedAt, ms[i]); return r; })));
       if (gen !== App.pollGen) return;   // superseded by a wake poll
       const now = Date.now();
-      const at = frozen.map((f) => (f ? askedAt : now));
+      const waitMax = Math.max.apply(null, ms) + 1000;
+      const at = keys.map((k, i) => (frozenIn[i] ? askedAt : now - landed[i] > waitMax ? landed[i] : now));
       App.lastPollOk = res.some((r) => r != null);
       if (App.lastPollOk) App.lastOkAt = Math.max.apply(null, at.filter((t, i) => res[i] != null));
       const p = {}; keys.forEach((k, i) => (p[k] = hold(k, res[i], now, at[i])));
