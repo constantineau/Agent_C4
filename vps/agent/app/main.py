@@ -495,8 +495,7 @@ def racelog_trust(start: float, end: float, step_s: float = None):
     by = {p: {} for p in paths}
     for r in rows:
         by[r["path"]].setdefault(r["source"], []).append((r["epoch"], float(r["value"])))
-    chosen = {p: trust_window.pick_source(by[p], p.rsplit(".", 1)[-1].lower(), devices)
-              for p in paths}
+    chosen = trust_window.pick_path_sources(by, devices)
 
     def series(path, scale=1.0):
         src = chosen[path]
@@ -523,9 +522,7 @@ def racelog_trust(start: float, end: float, step_s: float = None):
         [(t, v * deg) for t, v in by[paths[1]].get(cog_src, [])],
         series(paths[2], 1.943844))
     heading = trust_window.heading_segments(merged, step_s)
-    roll = dict(series(paths[3], deg))
-    pitch = dict(series(paths[4], deg))
-    att = [(t, v, pitch.get(t)) for t, v in sorted(roll.items())]
+    att = trust_window.attitude_rows(series(paths[3], deg), series(paths[4], deg))
     attitude = trust_window.attitude_segments(att, step_s)
     channels = {"heading": heading, "attitude": attitude}
     return {"window": {"start": float(start), "end": float(end)},
