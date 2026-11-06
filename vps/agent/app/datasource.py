@@ -17,7 +17,7 @@ abstracted here.
 import os
 import time
 
-from shared import n2k_sources, source_policy, units
+from shared import n2k_sources, source_policy
 
 # CloudSource needs the TimescaleDB pool; OnboardSource (Pi) does not — and the onboard image
 # ships no psycopg. Guard the import so `DATA_SOURCE=onboard` can run without a Postgres driver.
@@ -54,9 +54,61 @@ def load_priority():
     _priority_cache = (prio, time.monotonic())
     return prio
 
+# AIS-bearing sources (#44.5, #45.2b). A non-empty answer is kept for the process (which sources
+# are AIS receivers is a property of the boat's bus); an empty or failed probe is kept only for
+# AIS_RECHECK_S, then run again — memoising it turned the filter off until restart.
+AIS_RECHECK_S = float(os.environ.get("AIS_RECHECK_S", "60"))
+_ais_cache = None            # set, once a probe found AIS sources
+_ais_retry = (None, 0.0)     # (set, monotonic) after an empty or failed probe
+
+
+def ais_bearing_sources():
+    """Sources in `telemetry_raw` that carry AIS traffic, to be excluded from own-ship reads.
+
+    The cloud twin of `datasource_onboard.OnboardSource.ais_sources()`: Signal K's
+    `subscribe=all` put every AIS target into the archive under the own-ship `boat_id`, so
+    `navigation.position/SOG/COG` from an AIS channel is somebody else's boat. Identified from the
+    data via `n2k_sources.AIS_MARKER_PATHS`, never by source name. Returns an empty set on any
+    error: callers degrade to unfiltered data rather than to no data."""
+    global _ais_cache, _ais_retry
+    if _ais_cache is not None:
+        return _ais_cache
+    found, at = _ais_retry
+    if found is not None and time.monotonic() - at < AIS_RECHECK_S:
+        return found
+    try:
+        with pool.connection() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT source FROM telemetry_raw WHERE boat_id = %s AND path = ANY(%s)",
+                (BOAT_ID, list(n2k_sources.AIS_MARKER_PATHS))).fetchall()
+        found = {r["source"] for r in rows}
+    except Exception as exc:
+        print(f"[datasource] could not identify AIS-bearing sources ({exc}); not filtering "
+              f"for {AIS_RECHECK_S:g} s", flush=True)
+        found = set()
+    if found:
+        _ais_cache, _ais_retry = found, (None, 0.0)
+        print(f"[datasource] AIS-bearing source(s) excluded from own-ship reads: "
+              f"{sorted(found)}", flush=True)
+    else:
+        _ais_retry = (found, time.monotonic())
+    return found
+
+
+def _not_ais():
+    """SQL fragment + params that drop AIS-bearing sources, or ('', ()) when there are none."""
+    srcs = sorted(ais_bearing_sources())
+    if not srcs:
+        return "", ()
+    return " AND NOT (source = ANY(%s))", (srcs,)
+
 
 class CloudSource:
     """TimescaleDB-backed source — reproduces the exact queries the modules used pre-9.0."""
+
+    def ais_sources(self):
+        """AIS-bearing source labels (excluded from own-ship reads) — same contract as onboard."""
+        return ais_bearing_sources()
 
     def latest_value(self, path):
         """Raw SI value for a path from the priority-preferred publisher, or None."""
@@ -70,18 +122,23 @@ class CloudSource:
         within FAILOVER_AGE_S of the newest, judged against the data, not the wall clock."""
         # Two queries on purpose: with the newest time as a subquery bound, TimescaleDB cannot
         # exclude chunks and the read ran past 60 s on the dev DB; a literal bound takes ~10 ms.
+        # AIS-bearing sources are someone else's boat (#45.2b): backfilled rows from the AIS
+        # receiver must never become own-ship lat/lon.
+        not_ais, ais_p = _not_ais()
         with pool.connection() as conn:
             newest = conn.execute(
                 "SELECT time FROM telemetry_raw WHERE boat_id=%s AND path=%s "
-                "AND value IS NOT NULL ORDER BY time DESC LIMIT 1", (BOAT_ID, path),
+                "AND value IS NOT NULL" + not_ais + " ORDER BY time DESC LIMIT 1",
+                (BOAT_ID, path, *ais_p),
             ).fetchone()
             if not newest:
                 return None
             rows = conn.execute(
                 "SELECT DISTINCT ON (source) source, value, extract(epoch FROM time) AS t "
                 "FROM telemetry_raw WHERE boat_id=%s AND path=%s AND value IS NOT NULL "
-                "AND time >= %s - make_interval(secs => %s) ORDER BY source, time DESC",
-                (BOAT_ID, path, newest["time"], source_policy.FAILOVER_AGE_S),
+                "AND time >= %s - make_interval(secs => %s)" + not_ais
+                + " ORDER BY source, time DESC",
+                (BOAT_ID, path, newest["time"], source_policy.FAILOVER_AGE_S, *ais_p),
             ).fetchall()
         best = source_policy.preferred(
             path, [(r["source"], float(r["t"]), r["value"]) for r in rows],
@@ -98,11 +155,12 @@ class CloudSource:
 
     def series_by_source(self, path, minutes):
         """[(source, epoch_s, raw_value)] for a path over the window, time-ordered."""
+        not_ais, ais_p = _not_ais()
         with pool.connection() as conn:
             rows = conn.execute(
                 "SELECT source, value, extract(epoch FROM time) AS t FROM telemetry_raw "
-                "WHERE boat_id=%s AND path=%s AND time > now() - %s::interval AND value IS NOT NULL "
-                "ORDER BY time", (BOAT_ID, path, f"{minutes} minutes"),
+                "WHERE boat_id=%s AND path=%s AND time > now() - %s::interval AND value IS NOT NULL"
+                + not_ais + " ORDER BY time", (BOAT_ID, path, f"{minutes} minutes", *ais_p),
             ).fetchall()
         return [(r["source"], float(r["t"]), float(r["value"])) for r in rows]
 
@@ -123,16 +181,6 @@ class CloudSource:
             rows = conn.execute("SELECT tws, twa, target_stw FROM polars WHERE boat_id=%s",
                                 (BOAT_ID,)).fetchall()
         return [(r["tws"], r["twa"], r["target_stw"]) for r in rows]
-
-    def polar_nearest(self, tws, twa):
-        """Nearest polar bucket by abs(tws-)+abs(twa-): {tws,twa,target_stw,target_vmg} or None."""
-        with pool.connection() as conn:
-            row = conn.execute(
-                "SELECT tws, twa, target_stw, target_vmg, (abs(tws-%s)+abs(twa-%s)) AS dist "
-                "FROM polars WHERE boat_id=%s ORDER BY dist LIMIT 1",
-                (tws, units.fold_twa(twa), BOAT_ID),   # 0–360 → 0–180 (#47)
-            ).fetchone()
-        return dict(row) if row else None
 
     def marks(self, route):
         """Course waypoints in sequence: [{seq,name,lat,lon}]."""

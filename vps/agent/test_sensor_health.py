@@ -23,6 +23,7 @@ Run:  PYTHONPATH=vps/agent:. python3 vps/agent/test_sensor_health.py
 """
 import os
 import sys
+import time
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 for _p in (_ROOT, os.path.join(_ROOT, "vps", "agent")):
@@ -438,6 +439,10 @@ class FakeSource:
     def latest_value(self, path):
         return {"navigation.attitude.roll": 0.20, "navigation.attitude.pitch": 0.04}.get(path)
 
+    def latest_sample(self, path):
+        v = self.latest_value(path)
+        return None if v is None else (v, time.time())
+
     def series_by_source(self, path, minutes):
         rad = 0.017453292519943295
         out = []
@@ -643,14 +648,19 @@ print("\nassess() — missing attitude is unknown on its own row, and does not g
 
 class HealthSource:
     """A datasource with a clean compass/GPS pair and whatever attitude it is given (radians)."""
-    def __init__(self, roll=None, pitch=None):
+    def __init__(self, roll=None, pitch=None, age_s=0.0):
         self.att = {"navigation.attitude.roll": roll, "navigation.attitude.pitch": pitch}
+        self.age = age_s
 
     def ais_sources(self):
         return {AIS}
 
     def latest_value(self, path):
         return self.att.get(path)
+
+    def latest_sample(self, path):
+        v = self.att.get(path)
+        return None if v is None else (v, time.time() - self.age)
 
     def series_by_source(self, path, minutes):
         r = 0.0174533
@@ -670,6 +680,17 @@ h_kick = sh.assess(HealthSource(roll=133.1 * 0.0174533, pitch=0.0),
                    conditions={"channels": HEALTHY})
 check("a broken attitude limit still drives the chip to danger",
       h_kick["status"] == "danger" and h_kick["attitude"]["status"] == "danger")
+# #45.1: the attitude read used `latest_value`, which onboard falls back to the archive's last
+# row of any age. An hours-old 133° roll raised danger now; it is no reading (unknown), with its age.
+h_old = sh.assess(HealthSource(roll=133.1 * 0.0174533, pitch=0.0, age_s=3 * 3600),
+                  conditions={"channels": HEALTHY})
+check(f"a 3-hour-old roll is not judged now ({h_old['attitude']['status']}, {h_old['status']})",
+      h_old["attitude"]["status"] == "unknown" and h_old["status"] == "ok")
+check(f"...and its age is reported ({h_old['attitude'].get('age_s')})",
+      (h_old["attitude"].get("age_s") or {}).get("roll", 0) >= 3 * 3600 - 5)
+check("a fresh reading carries its age too",
+      (h_kick["attitude"].get("age_s") or {}).get("roll") is not None
+      and h_kick["attitude"]["age_s"]["roll"] < 5)
 
 print("\nassess() — the GPS course stops (#164):")
 
@@ -684,6 +705,9 @@ class GpsLost:
         return {AIS}
 
     def latest_value(self, path):
+        return None
+
+    def latest_sample(self, path):
         return None
 
     def series_by_source(self, path, minutes):

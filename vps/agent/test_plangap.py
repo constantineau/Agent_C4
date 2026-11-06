@@ -35,7 +35,7 @@ def fp_points(twd=200.0, tws=12.0, twd2=None, tws2=None):
 
 
 # deviation and plangap share ONE datasource module — a single stub carries playbook + wind
-_STATE = {"bundle": None, "tws": None, "twd": None, "n": 0}
+_STATE = {"bundle": None, "tws": None, "twd": None, "n": 0, "latest": None}
 
 
 class _Stub:
@@ -49,7 +49,15 @@ class _Stub:
         return [(NOW - i * 30, val) for i in range(_STATE["n"])]
 
     def latest_value(self, path):
-        return None
+        lt = _STATE["latest"]
+        return None if lt is None else self.latest_sample(path)[0]
+
+    def latest_sample(self, path):
+        lt = _STATE["latest"]              # (tws_kn, twd_deg, epoch)
+        if lt is None:
+            return None
+        val = lt[0] * KN if path == "environment.wind.speedTrue" else lt[1] * DEG
+        return (val, lt[2])
 
 
 deviation.datasource.active = lambda: _Stub()
@@ -151,6 +159,20 @@ check("na with no playbook", not plangap.get_plangap()["available"])
 use_bundle(fp_points())
 _STATE.update({"tws": None, "n": 0})
 check("na with no own wind", not plangap.get_plangap()["available"])
+
+# --- #45.1: the instantaneous fallback is held to the window ---------------------------------------
+# It read `latest_value`, which has no time and onboard falls back to the archive's last row
+# forever: wind from hours ago was graded against the plan for now as if the boat had it.
+print("instantaneous fallback:")
+plangap.reset_state()
+_STATE["latest"] = (12.0, 200.0, NOW - 60)          # a minute old, thin archive (no window rows)
+r = plangap.get_plangap()
+check("a 1-minute-old sample still serves as the fallback", r["available"] and r["n_samples"] == 1)
+plangap.reset_state()
+_STATE["latest"] = (12.0, 200.0, NOW - 5 * 3600)    # five hours old
+r = plangap.get_plangap()
+check(f"a 5-hour-old sample is no wind ({r.get('why')!r})", not r["available"])
+_STATE["latest"] = None
 
 print("PASS" if ok else "FAIL")
 raise SystemExit(0 if ok else 1)

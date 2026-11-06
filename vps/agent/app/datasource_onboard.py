@@ -149,6 +149,16 @@ AIS_PROBE_ROWS = int(os.environ.get("ONBOARD_AIS_PROBE_ROWS", "5000"))
 # builds a fresh source per replay frame — memoising on the instance re-ran the probe (and
 # re-logged) hundreds of times.
 _AIS_SRC_CACHE = {}
+# An EMPTY or failed probe is only provisional (#44.5): if archive.db could not be read at the
+# first call, or the AIS receiver had not written yet, that empty answer used to turn the filter
+# off until the engine restarted, and AIS rows could become own-ship position. It is stored as a
+# `_ProvisionalAis` and probed again after AIS_RECHECK_S (monotonic).
+AIS_RECHECK_S = float(os.environ.get("ONBOARD_AIS_RECHECK_S", "60"))
+
+
+class _ProvisionalAis(set):
+    """An AIS-source answer from an empty or partly failed probe, with the time it was taken."""
+    at = 0.0
 # How often (per thread) to check whether archive.db is still the file we opened.
 ARCHIVE_RECHECK_S = float(os.environ.get("ONBOARD_ARCHIVE_RECHECK_S", "5"))
 
@@ -269,9 +279,10 @@ class OnboardSource:
         if not AIS_FILTER:
             return set()
         cached = _AIS_SRC_CACHE.get(ARCHIVE_DB)
-        if cached is not None:
+        if cached is not None and not (isinstance(cached, _ProvisionalAis)
+                                       and _time.monotonic() - cached.at >= AIS_RECHECK_S):
             return cached
-        found = set()
+        found, failed = set(), False
         for p in AIS_MARKER_PATHS:
             try:
                 # (path, time) is indexed, so this walks that path's newest rows and stops
@@ -279,8 +290,15 @@ class OnboardSource:
                     "SELECT DISTINCT source FROM (SELECT source FROM readings WHERE path=? "
                     "ORDER BY time DESC LIMIT ?)", (p, AIS_PROBE_ROWS)))
             except Exception:
+                failed = True
                 continue
+        if not found or failed:
+            # empty or partly failed: use it for now, look again in AIS_RECHECK_S (#44.5)
+            found = _ProvisionalAis(found)
+            found.at = _time.monotonic()
         _AIS_SRC_CACHE[ARCHIVE_DB] = found
+        if cached is not None and set(cached) == set(found):
+            return found                    # a re-probe that changed nothing: don't re-log
         print(f"[onboard] AIS-bearing source(s) excluded from own-ship reads: {sorted(found)}"
               if found else "[onboard] no AIS-bearing sources in the archive", flush=True)
         return found
@@ -552,11 +570,38 @@ class OnboardSource:
 
         Two bounded archive queries rather than one: the newest timestamp for the path (index
         only), then just the last FAILOVER_AGE_S of that path grouped by source. Grouping the
-        whole path by source would scan millions of rows on every poll."""
+        whole path by source would scan millions of rows on every poll.
+
+        Live and archive are ONE candidate pool (#45.4). The live cache holds only the last
+        LIVE_TTL_S, the failover window is FAILOVER_AGE_S: a ranked source that went quiet on the
+        live link 20 s ago still beats a lower-ranked one under the policy, and returning the live
+        pick alone hid it. The archive is read only when the live pick is not already the lead
+        source (or the path is unranked), so the usual case stays a cache hit."""
         live = self._live_fresh(path)
         if live:
             best = self._prefer(path, live)
-            return (best[2], best[1])
+            devices = n2k_sources.devices_for(BOAT_ID)
+            if (not source_policy.matchers_for(path)
+                    or source_policy.rank_for(path, best[0], devices) == 0):
+                return (best[2], best[1])
+        try:
+            arch = self._archive_candidates(path)
+        except Exception:
+            if not live:
+                raise
+            arch = []                   # archive unreadable right now: the live pick stands
+        if live:
+            merged = {}
+            for c in list(arch) + list(live):
+                if c[0] not in merged or c[1] > merged[c[0]][1]:
+                    merged[c[0]] = c
+            arch = list(merged.values())
+        best = self._prefer(path, arch)
+        return (best[2], best[1]) if best else None
+
+    def _archive_candidates(self, path):
+        """[(source, epoch, value)]: each archive source's latest sample within FAILOVER_AGE_S of
+        the path's newest (AIS sources and future-stamped rows excluded)."""
         not_ais, ais_p = self._not_ais()
         # never a row from the future: after a backward clock step the archive holds rows stamped
         # ahead of "now", and the newest of those would read as a fresh fix
@@ -567,10 +612,10 @@ class OnboardSource:
             "AND value IS NOT NULL AND time <= ?" + not_ais, (BOAT_ID, path, upper, *ais_p),
         ).fetchone()
         if not newest or not newest["time"]:
-            return None
+            return []
         newest_e = _epoch(newest["time"])
         if newest_e is None:
-            return None
+            return []
         cut = datetime.fromtimestamp(
             newest_e - source_policy.FAILOVER_AGE_S, timezone.utc
         ).strftime("%Y-%m-%dT%H:%M:%S")
@@ -580,9 +625,7 @@ class OnboardSource:
             (BOAT_ID, path, cut, upper, *ais_p),
         ).fetchall()
         cands = [(r["source"], _epoch(r["time"]), r["value"]) for r in rows]
-        cands = [c for c in cands if c[1] is not None]
-        best = self._prefer(path, cands)
-        return (best[2], best[1]) if best else None
+        return [c for c in cands if c[1] is not None]
 
     def future_dropped(self):
         """How many live updates were discarded for being stamped beyond FUTURE_SKEW_S (debug)."""
@@ -679,16 +722,6 @@ class OnboardSource:
     def polars_stw(self):
         """[(tws, twa, target_stw)] across the whole polar table (callers filter NULL)."""
         return [(p["tws"], p["twa"], p["target_stw"]) for p in self._polars]
-
-    def polar_nearest(self, tws, twa):
-        """Nearest polar bucket by abs(tws-)+abs(twa-): {tws,twa,target_stw,target_vmg} or None."""
-        if not self._polars:
-            return None
-        a = units.fold_twa(twa)            # the record wraps TWA 0–360: 324° is a 36° beat (#47)
-        best = min(self._polars,
-                   key=lambda p: abs(p["tws"] - tws) + abs(p["twa"] - a))
-        return {"tws": best["tws"], "twa": best["twa"],
-                "target_stw": best["target_stw"], "target_vmg": best["target_vmg"]}
 
     def marks(self, route):
         """Course waypoints in sequence: [{seq,name,lat,lon}]."""

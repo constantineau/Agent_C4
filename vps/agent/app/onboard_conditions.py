@@ -144,6 +144,9 @@ def get_strip():
         "available": True, "as_of": cc["as_of"],
         "data_age_seconds": min(ages) if ages else None,
         "stale": (min(ages) if ages else 999) > 30,
+        # Age of each value shown (the lead source's sample), per channel (#45.3): the two
+        # fields above are the FRESHEST channel's, which the 0.7 Hz bank voltage keeps near 0.
+        "ages": {name: c["preferred"]["age_s"] for name, c in ch.items()},
         "stw": best("stw"), "sog": best("sog"), "tws": best("tws"), "twa": best("twa"),
         "twd": best("twd"), "aws": best("aws"), "awa": best("awa"), "heading": heading,
         "heel": best("heel"), "depth": best("depth"),
