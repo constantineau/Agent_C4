@@ -29,8 +29,8 @@ function esetNum(path, raw) {
   const v = Number(t); if (!Number.isNaN(v)) eset(path, v);
 }
 const attr = (s) => esc(s).replace(/'/g, "&#39;");
-function ein(path, val, ph) {
-  return `<input class="ein" value="${attr(val == null ? "" : val)}" placeholder="${attr(ph || "")}"
+function ein(path, val, ph, cls) {
+  return `<input class="ein${cls ? " " + cls : ""}" value="${attr(val == null ? "" : val)}" placeholder="${attr(ph || "")}"
     oninput="eset('${path}', this.value)">`;
 }
 function enm(path, val, ph) {
@@ -39,8 +39,16 @@ function enm(path, val, ph) {
 }
 function etxt(path, val, ph) {
   return `<textarea class="ein ta" placeholder="${attr(ph || "")}"
-    oninput="eset('${path}', this.value)">${esc(val == null ? "" : val)}</textarea>`;
+    oninput="eset('${path}', this.value); growTa(this)">${esc(val == null ? "" : val)}</textarea>`;
 }
+// Grow a review textarea to fit its text, so nothing is cut off (#105 G46). Skips hidden ones
+// (scrollHeight 0) so they don't collapse.
+function growTa(el) {
+  el.style.height = "auto";
+  if (el.scrollHeight) el.style.height = (el.scrollHeight + el.offsetHeight - el.clientHeight) + "px";
+}
+function growAllTa() { document.querySelectorAll("textarea.ein.ta").forEach(growTa); }
+window.addEventListener("resize", () => requestAnimationFrame(growAllTa));
 function esel(path, val, opts) {
   return `<select class="esel" onchange="eset('${path}', this.value)">` +
     opts.map((o) => `<option ${o === val ? "selected" : ""} value="${attr(o)}">${esc(o)}</option>`).join("") +
@@ -260,6 +268,25 @@ function askModal(title, bodyHtml, buttons, focus, dismiss) {
     el.querySelector(`[data-c=${focus}]`).focus();
   });
 }
+// "Removed X · Undo" for one-tap ✕ removals (#96 G19, #105 G50). undo() puts the item back; the
+// caller checks it still applies. The toast closes after 8 s or when the tab changes.
+let undoTimer = 0;
+function undoToast(text, undo) {
+  let el = document.getElementById("undoToast");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "undoToast"; el.className = "undo-toast"; el.setAttribute("role", "status");
+    document.body.appendChild(el);
+    window.addEventListener("hashchange", () => { el.hidden = true; });
+  }
+  el.innerHTML = `<span>${esc(text)}</span><button type="button" class="ghost">Undo</button>`;
+  el.hidden = false;
+  clearTimeout(undoTimer);
+  undoTimer = setTimeout(() => { el.hidden = true; }, 8000);
+  el.querySelector("button").onclick = () => { el.hidden = true; clearTimeout(undoTimer); undo(); };
+}
+// Empty state for the tabs that need a race: links to Races (#96 G60, #97 G66, #104 G94).
+function noRaceYet() { return '<div class="placeholder">No race yet. <a href="#races">Add one in Races</a>.</div>'; }
 function askUnsaved() {
   const srcs = dirtySources(), names = dirtyLabels(srcs).map((n) => `<b>${esc(n)}</b>`).join(" and ");
   const body = onlyDraft(srcs) ? `The draft ${names} is not saved.`
@@ -329,10 +356,15 @@ async function renderRaces() {
         <div class="racelist" id="racelist">${Lab.races.map(raceItem).join("") ||
           '<div class="muted">No races yet. Add one above.</div>'}</div></div>
     </div>
-    <div id="raceDetail" class="detail"><div class="placeholder">Select a race.</div></div>
+    <div id="raceDetail" class="detail">${raceDetailEmpty()}</div>
   </div>`;
   renderSources();
   if (Lab.sel) loadRace(Lab.sel);
+}
+// Nothing open on the right: say what to do (#104 G94). An empty library has nothing to select.
+function raceDetailEmpty() {
+  return (Lab.races || []).length ? '<div class="placeholder">Pick a race from the library.</div>'
+    : '<div class="placeholder">No race yet. Add one with <b>Add a race</b>.</div>';
 }
 function raceItem(r) {
   const rev = r.reviewed ? `<span class="pill ok">✓ approved</span>`
@@ -513,21 +545,64 @@ function paintDetail() {
   const box = document.getElementById("raceDetail");
   if (!box) return;
   const d = Lab.editDef, v = Lab.editVal || {};
-  if (!d) { box.innerHTML = '<div class="placeholder">Select a race.</div>'; return; }
+  if (!d) { box.innerHTML = raceDetailEmpty(); return; }
   box.innerHTML = detailActions(d, v) + detailBanner(v) + detailHead(d) +
     (d.courses || []).map((c, i) => detailCourseCard(c, i)).join("") +
     detailDelegated(d) +
     detailWatchCard(d) +
     detailProvenance(d.provenance || {});
+  growAllTa();
   syncDirty();
 }
 function detailBanner(v) {
   const errs = (v.errors || []), warns = (v.warnings || []);
   return errs.length
-    ? `<div class="banner review"><b>${errs.length} errors</b>: ${errs.map(esc).join(" · ")}</div>`
+    ? `<div class="banner review"><b>${errs.length} errors</b>: ${errs.map((m) => plainCheck(m, Lab.editDef)).join(" · ")}</div>`
     : warns.length
-      ? `<div class="banner review"><b>Check these (${warns.length}):</b> ${warns.map(esc).join(" · ")}</div>`
+      ? `<div class="banner review"><b>Check these (${warns.length}):</b> ${warns.map((m) => plainCheck(m, Lab.editDef)).join(" · ")}</div>`
       : `<div class="banner ok">No problems found. Ready to approve.</div>`;
+}
+// The validator (shared/race_def.py) speaks in field paths and ids; the banner says the same thing
+// in plain words with a link to the tab that fixes it (#104 G96). Anything not listed shows as is.
+const PYS = String.raw`('(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|None)`;   // one Python repr'd value
+const pyUnq = (v) => (v === "None" || v == null ? "?" : v.slice(1, -1).replace(/\\(.)/g, "$1"));
+const CHECK_WORDS = [   // [pattern, what the first value names, (values) => [plain text, tab]]
+  [/^rules_profile\.tracker_permitted unset/, "", () => ["Tracker allowed on board? Not set. Check the SI.", "rules"]],
+  [/^no requirements\/checklist items/, "", () => ["No checklist items yet.", "rules"]],
+  [`^requirement ${PYS} is delivered to the iPad but has no trigger`, "req",
+    (r) => [`Checklist item ${r} goes to the iPad but has no "when".`, "rules"]],
+  [`^requirement ${PYS}: bad (category|phase|trigger_type) ${PYS}`, "req",
+    (r, f, v) => [`Checklist item ${r}: unknown ${f === "trigger_type" ? "trigger" : f} "${v}".`, "rules"]],
+  [`^mark ${PYS} \\(\\w+\\) has no coordinates`, "mark", (m) => [`Mark ${m} has no position.`, "course"]],
+  [`^mark ${PYS}: coords need review`, "mark", (m) => [`Mark ${m}: check its position.`, "course"]],
+  [`^mark ${PYS}: coord out of range`, "mark", (m) => [`Mark ${m}: position is out of range.`, "course"]],
+  [`^mark ${PYS}: bad (rounding|type) ${PYS}`, "mark", (m, f, v) => [`Mark ${m}: unknown ${f} "${v}".`, "course"]],
+  [`^course ${PYS} has no finish defined`, "course", (c) => [`Course ${c}: no finish.`, "course"]],
+  [`^course ${PYS}: finish has no points`, "course", (c) => [`Course ${c}: finish has no position.`, "course"]],
+  [`^course ${PYS}: finish coords need review`, "course", (c) => [`Course ${c}: check the finish position.`, "course"]],
+  [`^course ${PYS}: finish point (\\d+) has no coordinates`, "course", (c, k) => [`Course ${c}: finish point ${k} has no position.`, "course"]],
+  [/^tracker block has no provider/, "", () => ["Tracker: no provider set.", "fleet"]],
+  [/^tracker is permitted but not fetchable/, "", () => ["Tracker allowed, but no race id or link, so no fleet.", "fleet"]],
+  [`^tracker provider ${PYS} not fetchable`, "name", (t) => [`Tracker ${t}: no race id or link.`, "fleet"]],
+].map(([re, kind, say]) => [typeof re === "string" ? new RegExp(re) : re, kind, say]);
+const CHECK_TAB = { rules: "Rules", course: "Course", fleet: "Fleet" };
+function plainCheck(msg, d) {
+  d = d || {};
+  for (const [re, kind, say] of CHECK_WORDS) {
+    const m = re.exec(String(msg));
+    if (!m) continue;
+    const vals = m.slice(1).map((v) => (/^(?:'[^]*'|"[^]*"|None)$/.test(v) ? pyUnq(v) : v));
+    if (kind === "req") {   // name the item by its text, not its id
+      const r = (d.requirements || []).find((x) => x.id === vals[0]);
+      vals[0] = `"${r && r.text ? r.text : vals[0]}"`;
+    } else if (kind === "course") {
+      const c = (d.courses || []).find((x) => x.id === vals[0]);
+      vals[0] = `"${c && c.name ? c.name : vals[0]}"`;
+    } else if (kind) vals[0] = `"${vals[0]}"`;
+    const [text, tab] = say(...vals);
+    return `${esc(text)} <a href="#${tab}">${CHECK_TAB[tab]} →</a>`;
+  }
+  return esc(msg);
 }
 function detailActions(d, v) {
   if (Lab.isDraft) {
@@ -546,10 +621,10 @@ function detailActions(d, v) {
 }
 function detailHead(d) {
   return `<div class="dhead"><h2>${ein("name", d.name, "Race name")}</h2>
-      <div class="dmeta">${ein("organizing_authority", d.organizing_authority, "organizer")}<br>
+      <div class="dmeta">${ein("organizing_authority", d.organizing_authority, "organizer", "wide")}<br>
         Start ${ein("start_date", d.start_date, "YYYY-MM-DD")} ·
-        ${ein("start_area", d.start_area, "start area")} ·
-        ${ein("region", d.region, "region")}</div></div>`;
+        ${ein("start_area", d.start_area, "start area", "wide")} ·
+        ${ein("region", d.region, "region", "wide")}</div></div>`;
 }
 // Course geometry is edited in ONE place — the Course & Marks tab (map + geocode + gate/island
 // fields). The Races detail just summarizes each course, same delegation pattern as rules/fleet.
@@ -660,8 +735,8 @@ function detailWatchCard(d) {
   const onSel = (i, on) => `<select class="esel" onchange="watchBlockSet(${i}, 'on', this.value)">` +
     ["A", "B", "ALL"].map((o) => `<option ${o === on ? "selected" : ""}>${o}</option>`).join("") + `</select>`;
   const rows = w.blocks.map((b, i) => `<tr>
-      <td><input type="datetime-local" value="${epochToWall(b.start, tz)}" onchange="watchBlockSet(${i}, 'start', this.value)"></td>
-      <td><input type="datetime-local" value="${epochToWall(b.end, tz)}" onchange="watchBlockSet(${i}, 'end', this.value)"></td>
+      <td><input class="ein" type="datetime-local" value="${epochToWall(b.start, tz)}" onchange="watchBlockSet(${i}, 'start', this.value)"></td>
+      <td><input class="ein" type="datetime-local" value="${epochToWall(b.end, tz)}" onchange="watchBlockSet(${i}, 'end', this.value)"></td>
       <td class="muted">${hours(b)}h</td>
       <td>${onSel(i, b.on)}</td>
       <td><input class="ein" value="${attr(b.note || "")}" placeholder="note" onchange="watchBlockSet(${i}, 'note', this.value)"></td>
@@ -672,7 +747,7 @@ function detailWatchCard(d) {
       ${qhelp("Goes to the boat with the rest of the race prep. The iPad crew screen shows who's on and can change it live.")}</div>
     ${teamRow("A")}${teamRow("B")}
     <div class="opt-controls" style="margin-top:8px">
-      <label>Start <input type="datetime-local" id="wgAnchor"></label>
+      <label>Start <input class="ein" type="datetime-local" id="wgAnchor"></label>
       <label>Total <input class="ein num" id="wgHours" value="48" style="width:52px"> h</label>
       <label>Pattern <select id="wgPattern" onchange="document.getElementById('wgCustom').style.display = this.value === 'custom' ? '' : 'none'">
         <option value="4on4off">4 on / 4 off</option><option value="3on3off">3 on / 3 off</option>
@@ -765,7 +840,7 @@ async function renderCourse() {
   const view = document.getElementById("view");
   if (!Lab.races) { try { Lab.races = (await (await apiGet("/api/races")).json()).races || []; } catch (e) {} }
   if (!Lab.sel && Lab.races && Lab.races.length) Lab.sel = Lab.races[0].race_id;
-  if (!Lab.sel) { view.innerHTML = '<div class="placeholder">No race yet. Add one in the Races tab.</div>'; return; }
+  if (!Lab.sel) { view.innerHTML = noRaceYet(); return; }
   view.innerHTML = '<div class="loading">Loading course…</div>';
   try { Lab.editDef = await (await apiGet("/api/races/" + encodeURIComponent(Lab.sel))).json(); }
   catch (e) { view.innerHTML = '<div class="placeholder">Failed to load.</div>'; return; }
@@ -794,7 +869,7 @@ function courseEditCard(c, ci) {
     const isGate = m.type === "gate", isIsland = m.type === "island";
     return `<tr class="${need ? "needrow" : ""}">
       <td class="mono">${esc(m.seq)}</td>
-      <td><input class="cin" style="width:140px" value="${esc(m.name || "")}"
+      <td><input class="cin" style="min-width:140px" size="${Math.max(16, String(m.name || "").length + 2)}" value="${esc(m.name || "")}"
         onchange="editMark(${ci},${mi},'name',this.value)"></td>
       <td><select onchange="editMark(${ci},${mi},'type',this.value)">
         ${["waypoint", "gate", "island", "buoy"].map((t) =>
@@ -912,10 +987,16 @@ function addMark(ci) {
   document.getElementById("courseMsg").textContent = "Mark added. Set its name and lat/lon, then Save.";
 }
 function removeMark(ci, mi) {
-  const marks = Lab.editDef.courses[ci].marks;
-  marks.splice(mi, 1);
+  const def = Lab.editDef, marks = def.courses[ci].marks;
+  const [gone] = marks.splice(mi, 1);
   marks.forEach((m, i) => { m.seq = i + 1; });   // re-sequence
   paintCourse();
+  undoToast(`Removed mark ${gone.name || gone.seq}.`, () => {
+    if (Lab.editDef !== def || activeSec !== "course") return;   // another race or tab now
+    marks.splice(mi, 0, gone);
+    marks.forEach((m, i) => { m.seq = i + 1; });
+    paintCourse();
+  });
 }
 function editStart(ci, field, val) {
   const c = Lab.editDef.courses[ci]; c.start = c.start || {};
@@ -2096,7 +2177,7 @@ async function renderDeploy() {
     catch (e) { view.innerHTML = '<div class="placeholder">Failed to load.</div>'; return; }
   }
   if (!Dep.raceId) Dep.raceId = Lab.sel || (Dep.races[0] && Dep.races[0].race_id) || null;
-  if (!Dep.raceId) { view.innerHTML = '<div class="placeholder">No race yet. Add one in the Races tab.</div>'; return; }
+  if (!Dep.raceId) { view.innerHTML = noRaceYet(); return; }
   try { Dep.ready = await (await apiGet("/api/deploy?race_id=" + encodeURIComponent(Dep.raceId))).json(); }
   catch (e) { view.innerHTML = '<div class="placeholder">Couldn\'t load the deploy page.</div>'; return; }
   if (stale("deploy")) return;
@@ -2424,7 +2505,7 @@ async function renderFleet() {
     catch (e) { view.innerHTML = '<div class="placeholder">Failed to load.</div>'; return; }
   }
   if (!Lab.sel && Lab.races.length) Lab.sel = Lab.races[0].race_id;
-  if (!Lab.sel) { view.innerHTML = '<div class="placeholder">No race yet. Add one in the Races tab.</div>'; return; }
+  if (!Lab.sel) { view.innerHTML = noRaceYet(); return; }
   let fetched = false;
   if (!Lab.editDef || Lab.editDef.race_id !== Lab.sel) {
     view.innerHTML = '<div class="loading">Loading fleet…</div>';
@@ -2748,7 +2829,7 @@ async function renderRules() {
     catch (e) { view.innerHTML = '<div class="placeholder">Failed to load.</div>'; return; }
   }
   if (!Lab.sel && Lab.races.length) Lab.sel = Lab.races[0].race_id;
-  if (!Lab.sel) { view.innerHTML = '<div class="placeholder">No race yet. Add one in the Races tab.</div>'; return; }
+  if (!Lab.sel) { view.innerHTML = noRaceYet(); return; }
   let fetched = false;
   if (!Lab.editDef || Lab.editDef.race_id !== Lab.sel) {
     view.innerHTML = '<div class="loading">Loading checklist…</div>';
@@ -2772,7 +2853,7 @@ async function rulesPickRace(id) {
   Lab.sel = id; Lab.editDef = null; renderRules();
 }
 function modAdd() { Lab.editDef.rules_profile.modifications.push({ ref: "", rule: "", summary: "" }); paintRules(); }
-function modRemove(i) { Lab.editDef.rules_profile.modifications.splice(i, 1); paintRules(); }
+function modRemove(i) { rulesRemove(Lab.editDef.rules_profile.modifications, i, "rule change"); }
 function reqAdd() {
   const ids = new Set(Lab.editDef.requirements.map((r) => r.id));
   let n = Lab.editDef.requirements.length + 1, id = "req-" + n;
@@ -2781,7 +2862,16 @@ function reqAdd() {
     trigger_type: "none", trigger_detail: "", deliver_to_ipad: false, critical: false, source: "" });
   paintRules();
 }
-function reqRemove(i) { Lab.editDef.requirements.splice(i, 1); paintRules(); }
+function reqRemove(i) { rulesRemove(Lab.editDef.requirements, i, "checklist item"); }
+function rulesRemove(list, i, what) {
+  const def = Lab.editDef, [gone] = list.splice(i, 1);
+  paintRules();
+  undoToast(`Removed ${what}.`, () => {
+    if (Lab.editDef !== def || activeSec !== "rules") return;   // another race or tab now
+    list.splice(i, 0, gone);
+    paintRules();
+  });
+}
 
 async function checkToggle(id, on) {
   // one save at a time, so a failed save can be undone exactly (nothing else saved meanwhile)
@@ -2859,6 +2949,13 @@ function paintRules() {
     </div>
 
     <div class="card">
+      <h3>Checklist <span class="muted" style="font-weight:400">— ${reqs.length} items · ${ipadN} to iPad · ${critN} critical · ${doneN}/${reqs.length} checked</span></h3>
+      <div class="muted" style="font-size:12px;margin-bottom:8px">The team's prep list. <b>To iPad</b> items pop up on the boat at the right time.</div>
+      ${checklistHtml || '<div class="muted">No items yet.</div>'}
+      <div style="margin-top:10px"><button class="mini" onclick="reqAdd()">+ Add item</button></div>
+    </div>
+
+    <div class="card">
       <h3>Race rules <span class="muted" style="font-weight:400">— outside help, scoring, rule changes</span></h3>
       <div class="opt-controls">
         <label>Rules edition ${ein("rules_profile.rrs_edition", rp.rrs_edition, "2025-2028")}</label>
@@ -2871,7 +2968,7 @@ function paintRules() {
       </div>
       <div class="opt-controls" style="margin-top:8px">
         <label>Scoring system ${ein("rules_profile.scoring.system", sc.system, "ORC")}</label>
-        <label>Method ${ein("rules_profile.scoring.method", sc.method, "Single-Number ToT")}</label>
+        <label>Method ${ein("rules_profile.scoring.method", sc.method, "Single-Number ToT", "wide")}</label>
         <label>Ref ${ein("rules_profile.scoring.ref", sc.ref, "NOR §13")}</label>
       </div>
       <div style="margin-top:10px"><b style="font-size:12px">Rule changes</b>
@@ -2887,17 +2984,11 @@ function paintRules() {
       </div>
     </div>
 
-    <div class="card">
-      <h3>Checklist <span class="muted" style="font-weight:400">— ${reqs.length} items · ${ipadN} to iPad · ${critN} critical · ${doneN}/${reqs.length} checked</span></h3>
-      <div class="muted" style="font-size:12px;margin-bottom:8px">The team's prep list. <b>To iPad</b> items pop up on the boat at the right time.</div>
-      ${checklistHtml || '<div class="muted">No items yet.</div>'}
-      <div style="margin-top:10px"><button class="mini" onclick="reqAdd()">+ Add item</button></div>
-    </div>
-
     <div class="dactions"><button onclick="rulesSave()">Save rules &amp; checklist</button>
       <span id="rulesMsg" class="muted" style="font-size:12px"></span>
       <span class="muted" style="font-size:11px">(ticks save by themselves)</span></div>
   </div>`;
+  growAllTa();
   syncDirty();
 }
 
