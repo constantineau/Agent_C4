@@ -28,7 +28,7 @@ _XOVER_CANDS = [
 
 # Friendly order + colors (hex) used by the dial, keyed by sail family prefix.
 SAIL_ORDER = ["J1", "A3", "S1"]
-SAIL_LABEL = {"J1": "Jib (J1)", "A3": "Asym A3", "S1": "Kite (S1)"}
+SAIL_LABEL = {"J1": "Jib (J1)", "A3": "Asym A3", "S1": "Kite (S1)", "C0": "Code 0"}
 # the CREW inventory is richer than the cert: jib change-downs, the Code 0 and the staysail are
 # crew-config sails (rated bands come from the frozen boat model, not the cert)
 CREW_SAILS = ("J1", "J2", "J3", "C0", "SS", "A3", "S1")
@@ -170,12 +170,16 @@ def _fit_and_change(crew, a_twa, tws, optimal, wrong, tossup_ok, boat_model):
     if crew == "SS":
         return "no_model", None
     if crew == "C0":
-        c0 = ((bm.get("sail_config") or {}).get("code0")) or {}
-        if not c0.get("enabled"):
+        # the frozen bundle keeps the C0 band at boat_model["code0"] (synthesis.boat_model) — #227.
+        # Same rule as the Lab's sailplan._code0_band: off only when enabled is False, and a band
+        # missing any limit is no band at all (never guess 0–180° / 99 kn).
+        c0 = bm.get("code0") or {}
+        if (c0.get("enabled") is False
+                or any(c0.get(k) is None for k in ("tws_max", "twa_min", "twa_max"))):
             return "no_model", None
-        if not (float(c0.get("twa_min", 0)) <= a_twa <= float(c0.get("twa_max", 180))):
+        if not (float(c0["twa_min"]) <= a_twa <= float(c0["twa_max"])):
             return "wrong_angle", optimal
-        if tws > float(c0.get("tws_max", 99)):
+        if tws > float(c0["tws_max"]):
             return "overpowered", optimal
         return "in_range", None
     if crew in ("J1", "J2", "J3"):
@@ -264,6 +268,9 @@ def get_sail_advice(tws: float = None, twa: float = None, hoisted: str = None, b
            "wrong_angle": "{} is wrong for this angle."}
     if change_now:
         rec = f"Change to {_lbl(change_to)}. " + why[fit].format(_lbl(crew_sail))
+    elif fit == "in_range" and crew_sail == "C0":
+        # the cert has no Code 0, so `best` would name the cert's sail here — say the C0 is right
+        rec = f"{_lbl('C0')} is right for {round(a_twa)}° TWA, {round(tws)} kts."
     elif wrong:
         rec = f"Change to {_lbl(optimal)}. {_lbl(hoisted_fam)} is up."
     elif hoisted_ok_tossup:
