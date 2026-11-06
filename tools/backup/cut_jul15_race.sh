@@ -13,7 +13,13 @@ OUT=${OUT:-/home/constantineau/backups/race-data/archive-jul15-race.db}
 FROM='2026-07-15T22:30:00'
 TO='2026-07-16T00:20:00'      # the derived window (22:39 -> 00:07) with room either side
 
+[ -f "$SRC" ] || { echo "no source archive at $SRC" >&2; exit 1; }
 mkdir -p "$(dirname "$OUT")"
+# OUT is deleted and rewritten: never let it be the source (or the source's WAL/SHM).
+src_real=$(realpath "$SRC"); out_real=$(realpath -m "$OUT")
+case "$out_real" in
+  "$src_real"|"$src_real-wal"|"$src_real-shm") echo "OUT must not be the source archive" >&2; exit 1 ;;
+esac
 rm -f "$OUT" "$OUT-wal" "$OUT-shm"
 
 python3 - "$SRC" "$OUT" "$FROM" "$TO" <<'PY'

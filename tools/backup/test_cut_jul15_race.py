@@ -73,4 +73,12 @@ with tempfile.TemporaryDirectory() as tmp:
     except sqlite3.OperationalError as e:
         check(f"backfill's cursor write + read work on the cut ({e})", False)
 
+    # OUT pointing at the source must be refused before anything is deleted.
+    r = subprocess.run(["bash", os.path.join(HERE, "cut_jul15_race.sh")],
+                       env={**os.environ, "SRC": src, "OUT": os.path.join(tmp, ".", "src.db")},
+                       capture_output=True, text=True)
+    check("OUT = the source archive is refused and the source survives",
+          r.returncode != 0 and os.path.exists(src)
+          and sqlite3.connect(src).execute("SELECT count(*) FROM readings").fetchone()[0] == 4)
+
 sys.exit(0 if ok else 1)
