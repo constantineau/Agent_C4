@@ -29,7 +29,8 @@ def concordance(lean, sig, fleet_side):
     dev = sig.get("deviation") or {}
     if dft.get("status") in ("watch", "act"):
         votes.append(("forecast", dft.get("favored")))   # point-of-sail-aware, set by the selector
-    if dev.get("status") in ("watch", "act"):
+    # the XTE band only (#43): a boat minutes behind plan but on the line has no side to vote for
+    if dev.get("xte_status") in ("watch", "act"):
         votes.append(("deviation", dev.get("side")))
     if fleet_side:
         votes.append(("fleet", fleet_side))
@@ -67,7 +68,10 @@ def picture(sig, flt, conc):
     the grounding for free)."""
     out = []
     sh = sig.get("shift") or {}
-    if sh.get("favored_side") or sh.get("persistent") is not None:
+    # only with a real wind read (#46): with the sensor down this used to describe 0° → 0° as
+    # "wind steady near 0°"
+    if (sh.get("base_twd") is not None and sh.get("now_twd") is not None
+            and (sh.get("favored_side") or sh.get("persistent") is not None)):
         read = wp.describe_shift(sh.get("base_twd") or 0, sh.get("now_twd") or 0,
                                  tack=sh.get("tack"), pos=sh.get("pos"),
                                  persistent=bool(sh.get("persistent")),
@@ -157,6 +161,13 @@ def recommendation(sel, conc, flt):
                 "target_variant": sel.get("target_variant"), "rationale": rat,
                 "grounded_in": sel.get("driven_by", []) + ["get_selector"],
                 "urgency": urg, "confidence": conf_label(conf)}, conf
+
+    if action == "na":
+        # the gameplan is aboard but there's no wind read to check it against (#46): no all-clear
+        return {"action": sel.get("why") or "No wind data. Can't check the plan.",
+                "vs_playbook": "on-plan", "target_variant": sel.get("recommended"),
+                "rationale": sel.get("why", ""), "grounded_in": ["get_selector"],
+                "urgency": "monitor", "confidence": "low"}, 0.3
 
     if action == "off_script":
         return {"action": f"Off-book: {sel.get('value', 'sail the favoured side')}",

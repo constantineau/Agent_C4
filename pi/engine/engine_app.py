@@ -345,6 +345,7 @@ def playbook_load(body: dict):
         drift.reset_state()
         plangap.reset_state()            # the plan-gap read measures against the NEW promise
         matcher.clear_state()            # forget play arm/sustain memory too
+        selector.reset_state()           # and the card's held verdict + downwind clock (#40)
         cop = copilot_load(bundle)       # still under the lock: the Orin writes before a race can start
     return {"loaded": True, "race_id": bundle.get("race_id"),
             "variants": len(bundle.get("variants") or []),

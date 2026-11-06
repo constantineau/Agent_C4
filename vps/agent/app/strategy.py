@@ -221,4 +221,8 @@ def get_strategy_signals(route=None):
     sug = _reroute_suggestion(rec, conc, sig, pg if (pg or {}).get("available") else None)
     if sug:
         out["reroute_suggest"] = sug
+    # A changed verdict waiting out the selector's settle (#40): the recommendation above is still
+    # the one on screen, and this says what it is moving to. Passed through for the iPad/copilot.
+    if sel.get("settling"):
+        out["settling"] = sel["settling"]
     return out
