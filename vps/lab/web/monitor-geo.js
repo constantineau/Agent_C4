@@ -25,8 +25,10 @@ const MonGeo = (function () {
   function ownSymbol(own) {
     own = own || {};
     const num = (v) => typeof v === "number" && isFinite(v);
-    const age = (a) => (num(a) ? a : num(own.age_s) ? own.age_s : null);
-    const hAge = age(own.heading_age_s), cAge = age(own.cog_age_s);
+    // Per-channel ages only: the strip's age_s is its YOUNGEST sensor, so falling back to it would
+    // let fresh wind vouch for a stale compass or GPS.
+    const hAge = num(own.heading_age_s) ? own.heading_age_s : null;
+    const cAge = num(own.cog_age_s) ? own.cog_age_s : null;
     const headingFresh = num(own.heading) && hAge != null && hAge <= FRESH_S;
     const hull = headingFresh && own.heading_ref === "true" ? own.heading : null;
     const cogFresh = num(own.cog) && cAge != null && cAge <= FRESH_S;
@@ -41,7 +43,8 @@ const MonGeo = (function () {
     if (typeof own.heading !== "number") return "HDG ?";
     const s = ownSymbol(own);
     const ref = own.heading_ref === "true" ? "T" : own.heading_ref === "magnetic" ? "M" : "";
-    return `HDG ${Math.round(own.heading)}°${ref}${s.headingFresh ? "" : " (old)"}`;
+    const old = typeof own.heading_age_s === "number" && !s.headingFresh;
+    return `HDG ${Math.round(own.heading)}°${ref}${old ? " (old)" : ""}`;
   }
 
   function distNm(a, b) {

@@ -37,6 +37,11 @@ s = G.ownSymbol(Object.assign({}, base, { sog: null }));
 check("COG dimmed when SOG unknown", s.cogDim === true);
 s = G.ownSymbol(Object.assign({}, base, { cog_age_s: 90 }));
 check("old COG not drawn", s.cog === null);
+s = G.ownSymbol(Object.assign({}, base, { cog_age_s: null, age_s: 1 }));
+check("COG with no per-channel age is not drawn (strip age is the youngest sensor)", s.cog === null);
+s = G.ownSymbol({ heading: 5, heading_ref: "true", heading_age_s: null, age_s: 1 });
+check("true heading with no per-channel age -> no hull", s.hull === null);
+check("unknown heading age is not called old", G.headingText({ heading: 5, heading_ref: null }) === "HDG 5°");
 check("heading text names the reference", G.headingText({ heading: 339.4, heading_ref: "magnetic", heading_age_s: 1 }) === "HDG 339°M");
 check("heading text flags an old heading", G.headingText({ heading: 10, heading_ref: "true", heading_age_s: 99 }) === "HDG 10°T (old)");
 
