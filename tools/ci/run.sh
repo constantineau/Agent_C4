@@ -97,6 +97,8 @@ orin_area agent pi/orin/copilot/**/test_*.py
 area agent /repo /repo/vps/agent:/repo:/repo/pi/archiver vps/agent/**/test_*.py
 # shared/ is pure stdlib, imported by every service; the agent image is as good as any.
 area agent /repo /repo shared/**/test_*.py
+# The Signal K plugin step (#171) is shell scripts; the test drives them with sh (stdlib python).
+area agent /repo /repo pi/signalk/**/test_*.py
 # The VPS backup tooling (#180) is stdlib python run on the host; any python image will do.
 area agent /repo /repo tools/backup/**/test_*.py
 # The lab reads its data from the image's /srv layout (races, boats, polars), built from this tree.

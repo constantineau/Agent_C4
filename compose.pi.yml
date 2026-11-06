@@ -39,11 +39,12 @@ services:
         echo "[init] rendered /home/node/.signalk/settings.json for CAN_IFACE=${CAN_IFACE:-vcan0}:"
         cat /config/settings.json
 
-  # Installs + enables the signalk-derived-data plugin into the config volume so true wind
-  # (TWS/TWA/TWD) and VMG are computed from apparent wind — without it those paths are null
-  # and the agent can't coach against the polars. Idempotent: the npm install needs network
-  # only on the first boot with a fresh volume; afterwards it's cached in sk_config. Uses the
-  # signalk image (it has npm/node) and runs after signalk-init has chowned the volume.
+  # Installs (pinned 1.45.0), enables and patches the signalk-derived-data plugin in the config
+  # volume so true wind (TWS/TWA/TWD) and VMG are computed from apparent wind. Needs network only
+  # when the volume lacks the pinned version. It never exits non-zero: a failed install or patch
+  # logs "[derived] FAILED" and leaves only those channels missing, and Signal K starts anyway
+  # (#171). Uses the signalk image (it has npm/node) and runs after signalk-init has chowned the
+  # volume. Logic and rules: pi/signalk/install-derived.sh.
   signalk-derived:
     logging: *logging
     # Pinned for race-week determinism (was :latest, which pulled different versions on the
@@ -53,29 +54,7 @@ services:
     volumes:
       - ./pi/signalk:/src:ro
       - sk_config:/home/node/.signalk
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        set -e
-        cd /home/node/.signalk
-        if [ ! -d node_modules/signalk-derived-data ]; then
-          echo "[derived] installing signalk-derived-data into the config volume..."
-          npm install --prefix /home/node/.signalk signalk-derived-data
-        else
-          echo "[derived] signalk-derived-data already installed"
-        fi
-        mkdir -p plugin-config-data
-        if [ ! -f plugin-config-data/derived-data.json ]; then
-          cp /src/derived-data.json plugin-config-data/derived-data.json
-          echo "[derived] enabled derived-data plugin config:"
-          cat plugin-config-data/derived-data.json
-        else
-          echo "[derived] derived-data.json already present (leaving as-is)"
-        fi
-        # Split the two true-wind directions onto separate paths. Runs unconditionally
-        # (the script is idempotent) so a fresh volume, which reinstalls the plugin above,
-        # comes back patched instead of silently reverting to the double-emit.
-        sh /src/patch-windground-path.sh
+    entrypoint: ["/bin/sh", "/src/install-derived.sh"]
     depends_on:
       signalk-init:
         condition: service_completed_successfully
@@ -99,8 +78,11 @@ services:
     depends_on:
       signalk-init:
         condition: service_completed_successfully
+      # Wait for the plugin step so Signal K loads the plugin, but start even if that container
+      # itself fails (required: false): raw Signal K never waits on derived data (#171).
       signalk-derived:
         condition: service_completed_successfully
+        required: false
     restart: unless-stopped
 
   uplink:
