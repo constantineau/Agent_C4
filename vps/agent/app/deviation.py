@@ -103,7 +103,9 @@ def _project(blat, blon, path, prev_along=None, reach_nm=None, now=None, cog=Non
     poll's) beyond `reach_nm` (what the boat could have sailed since), capped; sailing against
     the segment's direction (COG, when moving); and,
     with no history, the distance between this point and where the plan put us at `now`
-    (capped). Lowest total wins. Called with none of these, it is the plain nearest segment."""
+    (capped). Only the local closest points of the track compete (see below), so a cost never
+    trades against a projection pinned at a segment end. Lowest total wins. Called with none of
+    these, it is the plain nearest segment."""
     if not path or len(path) < 2:
         return None
     cum = 0.0
@@ -126,7 +128,7 @@ def _project(blat, blon, path, prev_along=None, reach_nm=None, now=None, cog=Non
         ta, tb = A.get("t"), B.get("t")
         dt_h = ((tb - ta) / 3600.0) if (ta is not None and tb is not None) else None
         cands.append({
-            "idx": i,
+            "idx": i, "s": 0.0 if L2 == 0 else (px * bx + py * by) / L2,
             "perp": perp,
             "side": "left" if cross > 0 else "right",
             "along": cum + s * seg,
@@ -135,6 +137,21 @@ def _project(blat, blon, path, prev_along=None, reach_nm=None, now=None, cog=Non
             "seg_speed": (seg / dt_h) if (dt_h and dt_h > 0) else None,
         })
         cum += seg
+    # Only the places where the track passes closest to the boat compete: a segment whose
+    # projection falls off its end is beaten by the neighbour that shares that end. A straight
+    # run of short segments is one candidate; an out-and-back is two. A corner the boat sits
+    # outside of is kept once, on the later segment.
+    n = len(cands)
+    passes = []
+    for c in cands:
+        i, t = c["idx"], c["s"]
+        if 0.0 < t < 1.0:
+            passes.append(c)
+        elif t <= 0.0 and (i == 0 or cands[i - 1]["s"] >= 1.0):
+            passes.append(c)
+        elif t >= 1.0 and i == n - 1:
+            passes.append(c)
+    cands = passes or cands
     moving = cog is not None and sog is not None and sog > 1.0
 
     def _cost(c):

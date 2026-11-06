@@ -195,6 +195,13 @@ set_now(T0 + 330)
 r = deviation.get_deviation()
 check(f"dense straight route after a 5-min gap: on the line (xte {r['xte_nm']}, behind {r['time_behind_s']})",
       r["xte_nm"] < 0.05 and abs(r["time_behind_s"] or 0) < 30)
+# first read, on the line but 8 min behind plan: no pull toward the plan's position
+deviation.reset_state()
+set_boat(nm_north(3.0), LON0, sog=6.0, cog=0.0)
+set_now(T0 + 30 * 60 + 8 * 60)
+r = deviation.get_deviation()
+check(f"dense route, 8 min behind, no history: on the line (xte {r['xte_nm']}, along {r['along_nm']})",
+      r["xte_nm"] < 0.05 and abs(r["along_nm"] - 3.0) < 0.15)
 use_bundle({"race_id": "ob", "recommended": "ob",
             "variants": [{"id": "ob", "name": "Out and back", "route": {"path": OB}}]})
 # a late gun (since = 70 min after the plan start): the leg comes from the plan's clock
