@@ -160,6 +160,18 @@ def _na(note):
 _DRIFT_SIGN = {"right": 1, "left": -1, "veered": 1, "backed": -1}
 
 
+def _forecast_moved(dft):
+    """'shifted right ~10°' from drift's own SIGNED mean shift, not its direction times its mean
+    |shift| (#43, the bug #231 fixed in the matcher): +40°/-20° is 10° right, not 30°. Inside
+    drift's steady band there is no direction to name, so it says how far it moved, no side."""
+    d = dft.get("drift_dir")
+    signed = dft.get("drift_twd_signed_deg")
+    if d in _DRIFT_SIGN:
+        deg = abs(signed) if signed is not None else (dft.get("drift_twd_deg") or 0)
+        return f"shifted {d} ~{round(deg)}°"
+    return f"moved ~{round(dft.get('drift_twd_deg') or 0)}°"
+
+
 def get_selector(route=None, now=None):
     """The unified branch recommendation, SETTLED — what the crew is actually shown.
 
@@ -252,6 +264,7 @@ def _decide(route=None, now=None):
                       "time_behind_s": dev.get("time_behind_s") if dev_ok else None},
         "drift": {"status": dft_status, "dir": dft.get("drift_dir") if dft_ok else None,
                   "deg": dft.get("drift_twd_deg") if dft_ok else None,
+                  "signed_deg": dft.get("drift_twd_signed_deg") if dft_ok else None,
                   "tws_kn": dft.get("drift_tws_kn") if dft_ok else None,
                   "ref_twd": drift_ref, "now_twd": drift_now, "pos": pos, "favored": drift_favored},
     }
@@ -329,7 +342,7 @@ def _decide(route=None, now=None):
             flip = target.get("what_flips_it") or ""
             extra = []
             if "get_drift" in driven:
-                extra.append(f"forecast shifted {dft.get('drift_dir')} ~{round(dft.get('drift_twd_deg', 0))}° too")
+                extra.append(f"forecast {_forecast_moved(dft)} too")
             if "get_deviation" in driven:
                 extra.append(f"you're already {dev.get('xte_nm')} nm {favored}")
             why = (f"Lasting shift favours the {favored}, not '{rec_label}'."
@@ -372,8 +385,8 @@ def _decide(route=None, now=None):
                 "target_variant": rec_id, "target_label": rec_label,
                 "value": f"Hold · reassess: {rec_label}", "driven_by": ["get_drift"],
                 "confidence": 0.5, "confidence_label": "medium",
-                "why": (f"Hold '{rec_label}'. Forecast shifted {dft.get('drift_dir')} "
-                        f"~{round(dft.get('drift_twd_deg', 0))}°, wind hasn't followed yet."),
+                "why": (f"Hold '{rec_label}'. Forecast {_forecast_moved(dft)}, "
+                        "wind hasn't followed yet."),
                 "consider": "Hold the gameplan. Watch for the wind to follow the forecast.",
                 "clears": "forecast settles, or a lasting shift appears",
                 "based": ["get_drift"]}

@@ -165,6 +165,9 @@ check("more wind than the plan", S({}, {}, {}, {"status": "act", "obs_twd": 350,
 check("forecast moved (never veered/backed)", S({}, {}, {"drift": {"status": "act", "dir": "veered",
                                                                   "deg": 28}}, None)["reason"]
       == "Forecast shifted 28° right since the plan.")
+check("forecast size is the signed mean, not the mean |shift| (#43)",
+      S({}, {}, {"drift": {"status": "act", "dir": "right", "deg": 30, "signed_deg": 10}}, None)["reason"]
+      == "Forecast shifted 10° right since the plan.")
 check("a watch-level gap stays quiet", S({}, {}, {"drift": {"status": "watch", "dir": "right", "deg": 12}},
                                           {"status": "watch", "obs_twd": 10, "plan_twd": 350}) is None)
 

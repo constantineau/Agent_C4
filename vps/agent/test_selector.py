@@ -255,6 +255,21 @@ stub(tac=wind(True, "left", "backing"),
 check("off the line to the favoured side: it does",
       "get_deviation" in selector.get_selector(now=T0)["driven_by"])
 
+# --- the forecast's size is drift's signed mean shift, not direction x mean |shift| (#43) ---------
+print("forecast shift size from drift's signed value (#43, as #231 did for the matcher):")
+stub(tac=wind(False, "either"), dft={"available": True, "status": "act", "drift_dir": "right",
+                                     "drift_twd_deg": 30.0, "drift_twd_signed_deg": 10.0})
+r = selector.get_selector(now=T0)
+print("  ", r["why"])
+check("+40/-20 reads 'right ~10°', not ~30°", "right ~10°" in r["why"] and "30" not in r["why"])
+check("signals carry the signed value", r["signals"]["drift"]["signed_deg"] == 10.0)
+stub(tac=wind(False, "either"), dft={"available": True, "status": "act", "drift_dir": "steady",
+                                     "drift_twd_deg": 30.0, "drift_twd_signed_deg": 1.0})
+r = selector.get_selector(now=T0)
+print("  ", r["why"])
+check("steady band: no side named ('shifted steady' was the old text)",
+      "steady" not in r["why"] and "moved ~30°" in r["why"])
+
 # --- no wind read: never an all-clear (#46) -------------------------------------------------------
 print("no wind data → na, not a green hold (#46):")
 stub()                                                                  # tactics down, no forecast

@@ -85,7 +85,9 @@ def picture(sig, flt, conc):
             read = wp.describe_drift(dft["ref_twd"], dft["now_twd"],
                                      tws_change_kn=dft.get("tws_kn"), pos=dft.get("pos"))
         else:   # fallback if the from→to pair isn't carried (e.g. an older signal)
-            read = f"forecast shifted {dft.get('dir', '')} ~{round(dft.get('deg') or 0)}° since the plan"
+            sd = dft.get("signed_deg")
+            deg = abs(sd) if sd is not None and dft.get("dir") in ("right", "left") else dft.get("deg")
+            read = f"forecast shifted {dft.get('dir', '')} ~{round(deg or 0)}° since the plan"
         out.append({"signal": "forecast", "read": read, "grounded_in": ["get_drift"],
                     "confidence": "med" if dft.get("status") == "act" else "low"})
 
