@@ -1803,8 +1803,8 @@ async def pruner(state, loop):
         # While the clock is untrusted, look again soon: the stretch must be closed (and a
         # rotated file's stretch opened) close to when trust arrives, not an hour later.
         clock = state.get("clock")
-        await asyncio.sleep(PRUNE_EVERY_S if clock is None or clock.source
-                            else min(PRUNE_EVERY_S, CLOCK_RECHECK_S))
+        settled = clock is None or (clock.source and state.get("clock_open_gen") is None)
+        await asyncio.sleep(PRUNE_EVERY_S if settled else min(PRUNE_EVERY_S, CLOCK_RECHECK_S))
 
 
 def start_background_check(state, loop, db, rotated, engine_db=None):
