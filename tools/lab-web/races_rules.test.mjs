@@ -174,7 +174,7 @@ test("long header, method and mark name fields don't clip (G44)", () => {
   assert.match(grab("detailHead"), /"organizer", "wide"/);
   assert.match(grab("paintRules"), /"Single-Number ToT", "wide"/);
   const card = grab("courseEditCard");
-  assert.ok(!card.includes('style="width:140px"') && card.includes("size="));
+  assert.ok(!card.includes('style="width:140px"') && card.includes("size=") && card.includes("width:auto"));   // .marktable .cin sets 100px
 });
 
 test("watch-plan date boxes use the dark field style (G93)", () => {

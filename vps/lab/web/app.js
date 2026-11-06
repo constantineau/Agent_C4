@@ -869,7 +869,7 @@ function courseEditCard(c, ci) {
     const isGate = m.type === "gate", isIsland = m.type === "island";
     return `<tr class="${need ? "needrow" : ""}">
       <td class="mono">${esc(m.seq)}</td>
-      <td><input class="cin" style="min-width:140px" size="${Math.max(16, String(m.name || "").length + 2)}" value="${esc(m.name || "")}"
+      <td><input class="cin" style="width:auto;min-width:140px" size="${Math.max(16, String(m.name || "").length + 2)}" value="${esc(m.name || "")}"
         onchange="editMark(${ci},${mi},'name',this.value)"></td>
       <td><select onchange="editMark(${ci},${mi},'type',this.value)">
         ${["waypoint", "gate", "island", "buoy"].map((t) =>
