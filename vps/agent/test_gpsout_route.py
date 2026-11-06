@@ -21,6 +21,7 @@ from app import navigator as NAV
 # these pin the path geometry; the course check (#125: a route for another course is refused)
 # is pinned in test_reroute_button.py
 gpsout._course_ok = lambda ro: True
+gpsout._playbook_course_ok = lambda bundle, route=None: None   # gameplan course check: test_gpsout_course.py
 
 
 def _fix_from_latest(now=None):

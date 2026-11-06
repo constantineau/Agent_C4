@@ -118,6 +118,7 @@ PATH = [{"lat": 44.0 + i * 0.01, "lon": -82.0} for i in range(6)]
 gpsout.deviation._load_playbook = lambda: {"recommended": "a",
                                            "variants": [{"id": "a", "route": {"path": PATH}}]}
 gpsout._course_ok = lambda ro: True
+gpsout._playbook_course_ok = lambda bundle, route=None: None   # gameplan course check: test_gpsout_course.py
 NAV.get_navigator = lambda route=None: {"available": False}
 NAV._latest = lambda: {"lat": 44.003, "lon": -82.0}            # the navigator's (maybe old) read
 posts = []

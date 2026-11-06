@@ -511,6 +511,32 @@ def _course_ok(ro):
     return bool(h) and h == orinroute.current_course_hash()
 
 
+PLAN_OLD_COURSE = "Gameplan is for another course. Not sent to GPS."
+PLAN_UNCHECKED = "Gameplan can't be checked against the course. Freeze it again."
+
+
+def _playbook_course_ok(bundle, route=None):
+    """Was this gameplan routed on the course aboard NOW? → None when it was, else the crew note.
+    The bundle carries the Lab's hash of the course + zones it was routed on (#150); the engine
+    keeps the definition the Lab deployed, bound to the marks and the course load it came with
+    (orinroute._definition_for). A course re-laid or switched aboard after the push changes the
+    marks or the load, so the definition no longer counts, and the gameplan is refused: its track
+    and leg ends are for the old marks. A bundle without a hash is from before the check (#183-11).
+    Caller holds COURSE_LOCK."""
+    want = (bundle or {}).get("course_hash")
+    if not want:
+        return PLAN_UNCHECKED
+    try:
+        from shared import race_def
+        route = route or NAV.active_route()
+        definition, cid = orinroute._definition_for(route, NAV._marks(route) or [])
+        if definition and race_def.course_hash(definition, cid) == want:
+            return None
+    except Exception as exc:  # noqa: BLE001 — no course read → not this course
+        print(f"[gpsout] gameplan course check failed: {exc}", flush=True)
+    return PLAN_OLD_COURSE
+
+
 def _new_route(source, route):
     """The stored re-route to send → (route dict, None) or (None, crew-facing note). Never computes
     one: routes are made only on the crew's Re-route now button (#125). 'orin' is the Orin's last
@@ -576,6 +602,9 @@ def _show(source: str = "playbook", variant=None, route=None):
         vid, vroute, err = _variant(variant, bundle)
         if err:
             return {"shown": False, "note": err}
+        why = _playbook_course_ok(bundle, route)
+        if why:
+            return {"shown": False, "note": why}
         path, ends = vroute["path"], vroute.get("leg_end_idx")
         names = [l.get("to") for l in (vroute.get("legs") or []) if l.get("to")]
         # the wire name is what the plotter shows — short and clean (LAU caps at 16 chars)
