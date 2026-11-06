@@ -104,8 +104,8 @@ area lab /srv /srv vps/lab/**/test_*.py
 # The Orin's onboard plume and re-route reuse the Lab's wind code and optimizer (#124), so they
 # test in the Lab image (eccodes/cfgrib).
 area lab /srv /srv pi/orin/plume/**/test_*.py pi/orin/reroute/**/test_*.py
-# The console's pure JS modules and the replay rig: plain node, pinned major.
-node_area pi/console/**/test_*.js tools/replay/**/test_*.js tools/**/*.test.mjs
+# The console's pure JS modules, the Lab's pure web helpers and the replay rig: plain node, pinned major.
+node_area pi/console/**/test_*.js vps/lab/test_*.js tools/replay/**/test_*.js tools/**/*.test.mjs
 
 # Every tracked test file must have run (or be excluded with a reason): nothing is missed silently.
 unwired=()

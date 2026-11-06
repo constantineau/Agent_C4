@@ -93,6 +93,15 @@ async function unlock() {
   } catch (e) { err.textContent = "Can't reach the Lab. Try again."; }
 }
 function logout() { sessionStorage.removeItem("c4lab.token"); Lab.token = null; location.reload(); }
+/* Show / Hide the typed password (#106 G99): easy to mistype on an iPad keyboard. */
+function pwToggle() {
+  const pw = document.getElementById("pw"), b = document.getElementById("pwShow");
+  const show = pw.type === "password";
+  pw.type = show ? "text" : "password";
+  b.textContent = show ? "Hide" : "Show";
+  b.setAttribute("aria-pressed", String(show));
+  pw.focus();
+}
 async function api(path, opts = {}) {
   const headers = Object.assign({}, opts.headers, Lab.token ? { Authorization: "Bearer " + Lab.token } : {});
   const res = await fetch(path, Object.assign({}, opts, { headers }));
@@ -2913,7 +2922,7 @@ async function renderMonitor() {
     catch (e) { view.innerHTML = '<div class="placeholder">Failed to load.</div>'; return; }
   }
   if (!Mon.raceId) Mon.raceId = Lab.sel || (Lab.races[0] && Lab.races[0].race_id) || null;
-  if (!Mon.raceId) { view.innerHTML = '<div class="placeholder">No race yet. Add one in the Races tab.</div>'; return; }
+  if (!Mon.raceId) { view.innerHTML = '<div class="placeholder">No race yet. <a href="#races">Add one in Races</a>.</div>'; return; }
   await monFetch();
   if (stale("monitor")) return;
   paintMonitor();
@@ -2943,13 +2952,19 @@ function paintMonitor() {
   const fl = data.fleet || { fixes: [], reason: data.error || "no data" };
   const own = data.own || { available: false, reason: data.error || "no data" };
   const fixes = fl.fixes || [];
-  const ageMin = (t) => t ? Math.max(0, Math.round((Date.now() / 1000 - t) / 60)) : null;
+  const fmtAge = MonGeo.fmtAge;
+  const fixAge = (t) => t ? Math.max(0, Date.now() / 1000 - t) : null;
+  const staleAfter = fl.fresh_max_s || 3600;
+  // COG (true, same as the fleet column) first; heading says which compass it came from. Both
+  // dim when the boat is barely moving (COG is noise then; heading is still the compass).
+  const sym = MonGeo.ownSymbol(own);
+  const slow = !(own.sog != null && own.sog >= MonGeo.SLOW_KN);
+  const dimIf = (on, t) => on ? `<span class="muted">${t}</span>` : t;
   const ownLine = own.available
-    ? `<span class="pill ok">● live</span> ${own.lat.toFixed(3)}, ${own.lon.toFixed(3)} · SOG ${own.sog != null ? own.sog.toFixed(1) : "?"} kts · HDG ${own.heading != null ? Math.round(own.heading) : "?"}°${own.tws != null ? " · TWS " + own.tws.toFixed(0) + " kts" : ""} · ${own.age_s != null ? Math.round(own.age_s) + "s ago" : ""}${own.stale ? " <span class=\"pill warn\">stale</span>" : ""}`
+    ? `<span class="pill ok">● live</span> ${own.lat.toFixed(3)}, ${own.lon.toFixed(3)} · SOG ${own.sog != null ? own.sog.toFixed(1) : "?"} kts · ${dimIf(slow || sym.cog == null, `COG ${own.cog != null ? Math.round(own.cog) + "°T" : "?"}`)} · ${dimIf(slow || !sym.headingFresh, esc(MonGeo.headingText(own)))}${own.tws != null ? " · TWS " + own.tws.toFixed(0) + " kts" : ""} · ${own.age_s != null ? Math.round(own.age_s) + "s ago" : ""}${own.stale ? " <span class=\"pill warn\">stale</span>" : ""}`
     : `<span class="pill warn">○ no live boat</span> <span class="muted">${esc(own.reason || "unavailable")}</span>`;
   // Pill colour and age come from the NEWEST fix's measured age (backend `freshness`), not the
   // tracker's configured delay — a dead feed still "promises" ~15 min.
-  const fmtAge = (s) => s < 3600 ? Math.round(s / 60) + " min" : s < 172800 ? (s / 3600).toFixed(s < 36000 ? 1 : 0) + " h" : Math.round(s / 86400) + " days";
   const flCls = { fresh: "ok", stale: "warn", very_stale: "bad" }[fl.freshness] || "warn";
   const flAge = fl.newest_age_s != null
     ? ` · latest position ${fmtAge(fl.newest_age_s)} old${fl.freshness === "fresh" ? "" : fl.freshness === "stale" ? " <span class=\"pill warn\">stale</span>" : " <span class=\"pill bad\">not live</span>"}`
@@ -2958,7 +2973,9 @@ function paintMonitor() {
     ? `<span class="pill ${flCls}">${fixes.length} boats</span> via ${esc(fl.provider || "tracker")}${flAge}${fl.delay_min ? ` <span class="muted">(tracker runs ~${fl.delay_min} min behind)</span>` : ""}${fl.demo || fl.provider === "sample" ? " <span class=\"pill warn\">demo</span>" : ""}`
     : `<span class="pill warn">no fleet</span> <span class="muted">${esc(fl.reason || "unavailable")}</span>`;
   const rivals = monRivals(fixes, own);
-  const permNote = fl.onboard_permitted ? "allowed on board" : "shore only (not allowed on board)";
+  const permNote = fl.onboard_permitted === true ? "race rules: tracker data allowed aboard"
+    : fl.onboard_permitted === false ? "race rules: tracker data not allowed aboard"
+      : "race rules: tracker use aboard not set";
 
   document.getElementById("view").innerHTML = `<div class="opt">
     <div class="card">
@@ -2979,12 +2996,12 @@ function paintMonitor() {
     </div>
     <section class="cockpit-map"><div id="monMap" class="routemap routemap-hero"></div></section>
     ${fixes.length ? `<div class="card"><h3>Fleet positions <span class="muted" style="font-weight:400">— from the public tracker</span></h3>
-      <div class="muted" style="font-size:12px;margin-bottom:4px">Tap a row to find that boat on the map. ★ us · ● nearest rivals.</div>
-      <table class="fleet-tbl mon-tbl"><thead><tr><th>Boat</th><th>SOG</th><th>COG</th><th>DTF</th><th>Age</th></tr></thead><tbody>
-      ${fixes.map((f, i) => ({ f, i })).sort((a, b) => (b.f.own ? 1 : 0) - (a.f.own ? 1 : 0) || (a.f.dtf_nm ?? 1e9) - (b.f.dtf_nm ?? 1e9)).map(({ f, i }) => `<tr class="mon-row${f.own ? " own" : rivals.idx.has(i) ? " rival" : ""}" onclick="monFocus(${i})" title="Show on the map">
+      <div class="muted" style="font-size:12px;margin-bottom:4px">Tap a row to find that boat on the map. ★ us · ● nearest rivals · grey = position over ${fmtAge(staleAfter)} old.</div>
+      <table class="fleet-tbl mon-tbl"><thead><tr><th>Boat</th><th>SOG</th><th>COG °T</th><th>DTF</th><th>Age</th></tr></thead><tbody>
+      ${fixes.map((f, i) => ({ f, i })).sort((a, b) => (b.f.own ? 1 : 0) - (a.f.own ? 1 : 0) || (a.f.dtf_nm ?? 1e9) - (b.f.dtf_nm ?? 1e9)).map(({ f, i }) => `<tr class="mon-row${f.own ? " own" : rivals.idx.has(i) ? " rival" : ""}${fixAge(f.time) != null && fixAge(f.time) > staleAfter ? " old" : ""}" onclick="monFocus(${i})" title="Show on the map">
         <td>${f.own ? "★ " : rivals.idx.has(i) ? "● " : ""}${esc(f.name || "?")}${f.own ? ' <span class="pill warn">us</span>' : ""}</td><td>${f.sog != null ? f.sog.toFixed(1) + " kts" : ""}</td>
         <td>${f.cog != null ? Math.round(f.cog) + "°" : ""}</td><td>${f.dtf_nm != null ? f.dtf_nm.toFixed(1) + " nm" : ""}</td>
-        <td>${ageMin(f.time) != null ? ageMin(f.time) + " min" : ""}</td></tr>`).join("")}
+        <td>${fmtAge(fixAge(f.time))}</td></tr>`).join("")}
       </tbody></table></div>` : ""}
   </div>`;
   initMonitorMap();
@@ -3025,7 +3042,16 @@ function initMonitorMap() {
   const data = Mon.data || {}, fl = data.fleet || {}, fixes = fl.fixes || [], own = data.own || {};
   const ownName = fl.own_name || "Our boat";
   const riv = Mon.rivals = monRivals(fixes, own);
-  const pts = [];
+  // Fit to the course marks + our boat + fixes near the course; a fix far off is drawn faint.
+  const fit = MonGeo.fitView(data.marks, fixes, own);
+  Mon.far = fit.far;
+  // the course, faint, under everything: legs per course in sailing order, marks with their names
+  const marks = (data.marks || []).filter((m) => m && m.lat != null && m.lon != null);
+  const byCourse = {};
+  marks.forEach((m) => { (byCourse[m.course] = byCourse[m.course] || []).push([m.lat, m.lon]); });
+  Object.values(byCourse).forEach((ll) => { if (ll.length > 1) L.polyline(ll, { color: "#cdd2da", weight: 1.5, opacity: 0.5, dashArray: "4 6", interactive: false }).addTo(map); });
+  marks.forEach((m) => L.circleMarker([m.lat, m.lon], { radius: 4, color: "#cdd2da", weight: 1.5, fillColor: "#0b0b0e", fillOpacity: 0.8 })
+    .bindTooltip(esc(m.name || "mark"), MON_TIP).addTo(map));
   Mon.markers = [];
   // plain fleet first, rivals over them, our boat on top (canvas draws in insertion order)
   const order = fixes.map((f, i) => i).sort((a, b) =>
@@ -3036,22 +3062,38 @@ function initMonitorMap() {
       ? { radius: 7, color: MON_GOLD, weight: 3, fillColor: "#0b0b0e", fillOpacity: 0.9 }
       : rival ? { radius: 6, color: "#ffffff", weight: 1.5, fillColor: MON_BLUE, fillOpacity: 0.95 }
         : { radius: 4, color: MON_BLUE, weight: 1, fillColor: MON_BLUE, fillOpacity: 0.55 };
+    if (fit.far.has(i)) Object.assign(style, { opacity: 0.35, fillOpacity: 0.2 });
     Mon.markers[i] = L.circleMarker([f.lat, f.lon], style)
-      .bindTooltip(`${esc(f.name || "?")}${f.own ? " (us, tracker)" : ""}${f.sog != null ? " · " + f.sog.toFixed(1) + " kts" : ""}`, MON_TIP).addTo(map);
-    pts.push([f.lat, f.lon]);
+      .bindTooltip(`${esc(f.name || "?")}${f.own ? " (us, tracker)" : ""}${f.sog != null ? " · " + f.sog.toFixed(1) + " kts" : ""}${fit.far.has(i) ? " · far off the course" : ""}`, MON_TIP).addTo(map);
   });
-  if (own.available) {
-    L.circleMarker([own.lat, own.lon], { radius: 16, color: MON_GOLD, weight: 1, fillColor: MON_GOLD, fillOpacity: 0.18, interactive: false }).addTo(map);
-    Mon.ownMarker = L.circleMarker([own.lat, own.lon], { radius: 8, color: "#0b0b0e", fillColor: MON_GOLD, fillOpacity: 1, weight: 2 })
-      .bindTooltip(`${esc(ownName)} (us, live)${own.sog != null ? " · " + own.sog.toFixed(1) + " kts" : ""}`, MON_TIP).addTo(map);
-    pts.push([own.lat, own.lon]);
-  } else Mon.ownMarker = null;
+  if (own.available) monDrawOwn(map, own, ownName);
+  else Mon.ownMarker = null;
   Mon.labelLayer = L.layerGroup().addTo(map);
   monLegend(map, fixes, own, riv, ownName);
   map.on("zoomend moveend", monPlaceLabels);
-  if (pts.length) map.fitBounds(pts, { padding: [30, 30], maxZoom: 11 });
+  if (fit.pts.length) map.fitBounds(fit.pts, { padding: [30, 30], maxZoom: 11 });
   else map.setView([44.2, -82.5], 7);   // Lake Huron default
   monPlaceLabels();
+}
+
+// Our live boat (#240): a hull along heading only when MonGeo.ownSymbol says the heading is fresh
+// and true; COG as its own line, dimmed when slow; otherwise the plain gold dot.
+function monDrawOwn(map, own, ownName) {
+  const sym = MonGeo.ownSymbol(own);
+  const tip = `${esc(ownName)} (us, live)${own.sog != null ? " · " + own.sog.toFixed(1) + " kts" : ""}`;
+  L.circleMarker([own.lat, own.lon], { radius: 16, color: MON_GOLD, weight: 1, fillColor: MON_GOLD, fillOpacity: 0.18, interactive: false }).addTo(map);
+  if (sym.cog != null) {
+    L.marker([own.lat, own.lon], { interactive: false, keyboard: false, icon: L.divIcon({ className: "mon-vec-wrap", iconSize: [96, 96], iconAnchor: [48, 48],
+      html: `<svg class="mon-cog${sym.cogDim ? " dim" : ""}" width="96" height="96" viewBox="-48 -48 96 96" style="transform:rotate(${sym.cog}deg)"><line x1="0" y1="0" x2="0" y2="-44"/><path d="M-5 -36 L0 -46 L5 -36"/></svg>` }) }).addTo(map);
+  }
+  if (sym.hull != null) {
+    Mon.ownMarker = L.marker([own.lat, own.lon], { keyboard: false, icon: L.divIcon({ className: "mon-vec-wrap", iconSize: [28, 28], iconAnchor: [14, 14],
+      html: `<svg class="mon-hull" width="28" height="28" viewBox="-14 -14 28 28" style="transform:rotate(${sym.hull}deg)"><path d="M0 -13 C6 -5 6 6 4 12 L-4 12 C-6 6 -6 -5 0 -13 Z"/></svg>` }) })
+      .bindTooltip(tip, MON_TIP).addTo(map);
+  } else {
+    Mon.ownMarker = L.circleMarker([own.lat, own.lon], { radius: 8, color: "#0b0b0e", fillColor: MON_GOLD, fillOpacity: 1, weight: 2 })
+      .bindTooltip(tip, MON_TIP).addTo(map);
+  }
 }
 
 function monLegend(map, fixes, own, riv, ownName) {
@@ -3062,6 +3104,13 @@ function monLegend(map, fixes, own, riv, ownName) {
   if (fixes.some((f) => f.own)) rows.push(`${sw(`background:#0b0b0e;border:3px solid ${MON_GOLD}`)} ${esc(ownName)} — tracker`);
   if (riv.idx.size) rows.push(`${sw(`background:${MON_BLUE};border:1.5px solid #fff`)} ${riv.idx.size} nearest rivals${riv.ref === "live" ? " (to our live position)" : ""}`);
   if (fixes.filter((f) => !f.own).length > riv.idx.size) rows.push(`${sw(`background:${MON_BLUE};opacity:.6;width:8px;height:8px`)} rest of the fleet — zoom in for names`);
+  if (own.available) {
+    const sym = MonGeo.ownSymbol(own);
+    if (sym.cog != null) rows.push(`<span class="mon-sw mon-sw-line${sym.cogDim ? " dim" : ""}"></span> our course over ground${sym.cogDim ? " (barely moving)" : ""}`);
+    if (sym.hull == null) rows.push(`<span class="mon-sw" style="background:none;border:none"></span> <span class="muted">${sym.headingFresh && sym.headingRef === "magnetic" ? "heading is magnetic: not drawn" : "no fresh heading: plain dot"}</span>`);
+  }
+  if (((Mon.data || {}).marks || []).length) rows.push(`<span class="mon-sw" style="background:#0b0b0e;border:1.5px solid #cdd2da;width:9px;height:9px"></span> course marks`);
+  if (Mon.far && Mon.far.size) rows.push(`${sw(`background:${MON_BLUE};opacity:.25;width:8px;height:8px`)} ${Mon.far.size} far off the course (faint, not in view)`);
   if (!rows.length) return;
   ctl.onAdd = () => {
     const d = L.DomUtil.create("div", "mon-legend");

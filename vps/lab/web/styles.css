@@ -438,6 +438,20 @@ table.mon-tbl tr.mon-row { cursor: pointer; }
 table.mon-tbl tr.mon-row:hover td { background: var(--panel2); }
 table.mon-tbl tr.mon-row.own td { background: rgba(245,196,81,.10); color: #f5c451; font-weight: 700; }
 table.mon-tbl tr.mon-row td { padding-top: 7px; padding-bottom: 7px; }
+table.mon-tbl tr.mon-row.old:not(.own) td { color: var(--muted); }
+/* our live boat: hull along a fresh true heading, COG as its own line (dim when barely moving) */
+.mon-vec-wrap { background: none; border: none; }
+.mon-vec-wrap svg { display: block; overflow: visible; }
+.mon-hull path { fill: #f5c451; stroke: #0b0b0e; stroke-width: 2; }
+.mon-cog line, .mon-cog path { stroke: #f5c451; stroke-width: 2.5; fill: none; stroke-linecap: round; }
+.mon-cog.dim { opacity: .35; }
+.mon-sw-line { width: 14px; height: 0; border-radius: 0; border-top: 2.5px solid #f5c451; vertical-align: 3px; }
+.mon-sw-line.dim { opacity: .35; }
+/* sign-in: password box with a Show/Hide toggle beside it (#106 G99) */
+.gatebox .pw-row { display: flex; gap: 8px; margin-bottom: 12px; }
+.gatebox .pw-row input { flex: 1; min-width: 0; margin-bottom: 0; }
+.gatebox .pw-row button { width: auto; min-width: 64px; min-height: 44px; padding: 0 12px;
+  background: var(--panel2); color: var(--ink); border: 1px solid var(--line); font-weight: 600; font-size: 13px; }
 
 /* ---------- unsaved edits: fixed Save bar + tab marker + leave prompt (app.js syncDirty) ----------
    Sits above the bottom edge so a long page (Rules 4,500 px, Course 1,600 px) can be saved without
