@@ -50,7 +50,7 @@ function harness(extra) {
   vm.createContext(ctx);
   const names = ["esc", "attr", "ein", "etxt", "growTa", "growAllTa", "undoTimer", "undoToast", "noRaceYet",
     "raceDetailEmpty", "PYS", "pyUnq", "CHECK_WORDS", "CHECK_TAB", "plainCheck", "removeMark",
-    "modRemove", "reqRemove", "rulesRemove", ...(extra || [])];
+    "modRemove", "reqAdd", "reqRemove", "rulesUndoHeld", "rulesRemove", ...(extra || [])];
   const code = names.map(grab).join("\n").replace(/^(const|let) /gm, "var ");
   vm.runInContext(code + "\nvar paintCourse = () => { paints++; }, paintRules = () => { paints++; };", ctx);
   return { ctx, byId, listeners, timers };
@@ -133,6 +133,18 @@ test("removing a rule change or checklist item offers Undo (G50)", () => {
   timers.at(-1)();                       // 8 s pass
   assert.ok(byId.undoToast.hidden);
   assert.match(css, /\.undo-toast \{/);
+});
+
+test("Add item after a removal doesn't reuse the id Undo would bring back (G50)", () => {
+  const { ctx, byId } = harness();
+  const reqs = [{ id: "req-1" }, { id: "req-2" }];
+  ctx.Lab.editDef = { rules_profile: { modifications: [] }, requirements: reqs }; ctx.activeSec = "rules";
+  ctx.reqRemove(1);
+  ctx.reqAdd();
+  byId.undoToast._btn.onclick();
+  const ids = reqs.map((r) => r.id);
+  assert.equal(new Set(ids).size, ids.length, ids.join(","));
+  assert.ok(ids.includes("req-2"));
 });
 
 test("Rules tab: checklist card comes before the rules profile (G47)", () => {

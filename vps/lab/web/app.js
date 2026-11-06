@@ -2856,6 +2856,7 @@ function modAdd() { Lab.editDef.rules_profile.modifications.push({ ref: "", rule
 function modRemove(i) { rulesRemove(Lab.editDef.rules_profile.modifications, i, "rule change"); }
 function reqAdd() {
   const ids = new Set(Lab.editDef.requirements.map((r) => r.id));
+  if (rulesUndoHeld && rulesUndoHeld.id) ids.add(rulesUndoHeld.id);   // an Undo may still bring it back
   let n = Lab.editDef.requirements.length + 1, id = "req-" + n;
   while (ids.has(id)) { n++; id = "req-" + n; }
   Lab.editDef.requirements.push({ id, category: "safety", phase: "pre_start", text: "",
@@ -2863,11 +2864,14 @@ function reqAdd() {
   paintRules();
 }
 function reqRemove(i) { rulesRemove(Lab.editDef.requirements, i, "checklist item"); }
+let rulesUndoHeld = null;   // the last removed row, while its Undo may still restore it
 function rulesRemove(list, i, what) {
   const def = Lab.editDef, [gone] = list.splice(i, 1);
+  rulesUndoHeld = gone;
   paintRules();
   undoToast(`Removed ${what}.`, () => {
     if (Lab.editDef !== def || activeSec !== "rules") return;   // another race or tab now
+    if (gone.id && list.some((r) => r.id === gone.id)) return;   // never two rows with one id
     list.splice(i, 0, gone);
     paintRules();
   });
