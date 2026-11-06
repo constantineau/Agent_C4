@@ -263,6 +263,33 @@ try:
 finally:
     _sel.time.time = _real_time
 
+# --- 8b. a switch on the card while the signals turn the other way: never "agree" (#40) ------------
+print("settling switch vs signals that reversed (#40):")
+CLOCK = [1_900_000_000.0]
+_sel.time.time = lambda: CLOCK[0]
+try:
+    stub(tac=wind(True, "left", "backing"))
+    r = strategy.get_strategy_signals()
+    check("t=0: switch left", r["recommendation"]["action"].startswith("Switch"))
+    sel_ = strategy.selector_mod
+    sel_.tactics.get_tactics = lambda route=None: wind(True, "right", "veering")
+    sel_.drift_mod.get_drift = lambda route=None: {"available": True, "status": "act",
+                                                   "drift_dir": "veered", "drift_twd_deg": 22}
+    sel_.deviation.get_deviation = lambda route=None: {"available": True, "status": "watch",
+                                                       "xte_status": "watch", "xte_side": "right",
+                                                       "xte_nm": 0.6, "variant": "middle"}
+    CLOCK[0] += 30
+    r = strategy.get_strategy_signals()
+    print("  ", r["assessment"], "|", r["recommendation"]["urgency"])
+    check("still settling on the old switch", r["recommendation"]["action"].startswith("Switch")
+          and "settling" in r)
+    check("the headline doesn't say the signals agree", "agree" not in r["assessment"].lower())
+    check("rationale asks to confirm, not 'all agree'",
+          "all agree" not in r["recommendation"]["rationale"] and "confirm" in r["recommendation"]["rationale"].lower())
+    check("urgency not 'now'", r["recommendation"]["urgency"] != "now")
+finally:
+    _sel.time.time = _real_time
+
 # --- 9. time behind alone doesn't vote a side in the concordance (#43) ------------------------------
 print("time behind alone doesn't vote a side (#43):")
 stub(tac=wind(True, "left", "backing"),

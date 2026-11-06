@@ -153,6 +153,12 @@ def recommendation(sel, conc, flt):
     if action == "switch":
         urg = "now" if sel.get("status") == "act" else "soon"
         rat = sel.get("why", "")
+        # The concordance is built from THIS instant's signals, and a settling selector can still
+        # be showing a switch the signals have since turned against (#40). Agreement only counts
+        # when it is agreement with the switch's own side.
+        tgt = sel.get("target_variant")
+        if conc.get("lean") in ("left", "right") and tgt in ("left", "right") and conc["lean"] != tgt:
+            strength = "split"
         if strength == "strong":
             conf = min(0.95, conf + 0.05); rat += " Forecast, fleet and position all agree."
         elif strength == "split":
@@ -193,8 +199,12 @@ def recommendation(sel, conc, flt):
 
 def assessment(conc, rec, sel, sig, flt, has_playbook):
     """The digest's headline: lead with the concordance verdict when there is one."""
-    if conc.get("strength") == "strong":
+    tgt = (rec or {}).get("target_variant") if (sel or {}).get("action") == "switch" else None
+    against = tgt in ("left", "right") and conc.get("lean") in ("left", "right") and conc["lean"] != tgt
+    if conc.get("strength") == "strong" and not against:
         return f"Signals agree {conc['lean']}. {rec['action']}"
+    if against:
+        return f"Signals split. {rec['action']}"
     if conc.get("strength") == "split":
         return f"Signals split. {rec['action']}"
     if not has_playbook:
