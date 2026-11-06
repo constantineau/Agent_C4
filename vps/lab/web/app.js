@@ -2785,15 +2785,23 @@ function reqRemove(i) { Lab.editDef.requirements.splice(i, 1); paintRules(); }
 
 async function checkToggle(id, on) {
   Lab.checked = Lab.checked || {};
-  const checked = Lab.checked;     // this race's ticks: the user may switch races while it saves
+  const checked = Lab.checked, rid = Lab.sel;  // this race's: the user may switch races meanwhile
   if (on) checked[id] = true; else delete checked[id];
   // persist progress (labstate-backed, separate from the RaceDefinition)
   try {
-    const res = await apiPost("/api/checklist", { race_id: Lab.sel, checked });
+    const res = await apiPost("/api/checklist", { race_id: rid, checked });
     if (!res.ok) throw new Error("error " + res.status);
-  } catch (e) {                    // not saved: undo the tick so the box shows what's stored
+  } catch (e) {                    // not saved: show what's stored (a later tick may have saved it)
     if (on) delete checked[id]; else checked[id] = true;
     alert("Couldn't save that tick. Try again.");
+    try {
+      const got = await apiGet("/api/checklist?race_id=" + encodeURIComponent(rid));
+      if (got.ok) {
+        const stored = (await got.json()).checked || {};
+        Object.keys(checked).forEach((k) => delete checked[k]);
+        Object.assign(checked, stored);
+      }
+    } catch (e2) {}                // offline: the undo above stands
   }
   if (Lab.checked === checked) paintRules();
 }
