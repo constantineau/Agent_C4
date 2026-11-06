@@ -107,7 +107,7 @@ def push(definition, bundle=None):
     BUNDLES.clear()
     labstate.set(D._lock_key("m"), {})
     if bundle is not None:
-        BUNDLES["pb1"] = bundle
+        BUNDLES["pb1"] = synthesis.sign_bundle(bundle)    # a real, signed bundle (#152)
         labstate.set(D._lock_key("m"), {"playbook_id": "pb1", "course_id": "c"})
     posted.clear()
     return D.push("m")

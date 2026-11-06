@@ -124,10 +124,6 @@ def push(race_id):
     if rs is not None and _clock() >= rs:
         return {"race_id": race_id, "ok": False, "refused": True, "race_start": int(rs),
                 "detail": RACE_STARTED, "steps": []}
-    problem = bundle_problem(race_id, bundle, sent_def) if lock.get("playbook_id") else None
-    if problem:                          # before any post: never a push that skips the playbook
-        return {"race_id": race_id, "playbook_id": lock.get("playbook_id"), "ok": False,
-                "refused": True, "detail": problem + NOT_SENT, "steps": []}
     # #151: never send a course (or a playbook routed on one) with marks dropped for no position
     from . import coursecheck
     missing = (coursecheck.missing(sent_def, pkg.get("course_id"))
@@ -135,6 +131,10 @@ def push(race_id):
     if missing:
         return {"race_id": race_id, "ok": False, "refused": True, "steps": [],
                 "detail": MISSING_MARKS.format(names=", ".join(map(str, missing)))}
+    problem = bundle_problem(race_id, bundle, sent_def) if lock.get("playbook_id") else None
+    if problem:                          # before any post: never a push that skips the playbook
+        return {"race_id": race_id, "playbook_id": lock.get("playbook_id"), "ok": False,
+                "refused": True, "detail": problem + NOT_SENT, "steps": []}
     eng = os.environ.get("DEPLOY_PI_ENGINE_URL", "http://100.79.180.102:8200").rstrip("/")
     steps = []
     stopped = []
@@ -324,7 +324,7 @@ def _course_for(d: dict, race_id: str, course_id=None, bundle=False):
         if bundle is False:
             lock = labstate.get(_lock_key(race_id)) or {}
             bundle = pbstore.get(lock.get("playbook_id")) if lock.get("playbook_id") else None
-        course_id = (bundle or {}).get("course_id")
+        course_id = bundle.get("course_id") if isinstance(bundle, dict) else None
     return race_def.course_to_marks(d, course_id)
 
 

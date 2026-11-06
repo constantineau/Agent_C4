@@ -35,7 +35,8 @@ def check(name, cond):
 
 
 RACE = {"race_id": "r1", "name": "Race", "courses": [{"id": "c", "marks": [
-    {"name": "A", "lat": 45.0, "lon": -83.0}, {"name": "B", "lat": 45.5, "lon": -83.5}]}],
+    {"name": "A", "lat": 45.0, "lon": -83.0}, {"name": "B", "lat": 45.5, "lon": -83.5}],
+    "finish": {"points": [{"lat": 45.6, "lon": -83.6}, {"lat": 45.6, "lon": -83.5}]}}],
     "fleet": [{"name": "X"}]}
 D.store.get_race = lambda rid: RACE if rid == "r1" else None
 orinassets.build = lambda *a, **k: ({"schema": "c4.orin-assets/v1"}, [])
