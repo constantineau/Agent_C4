@@ -51,10 +51,11 @@ TREND_EPS_NM = float(os.environ.get("DEV_TREND_EPS_NM", "0.05"))       # XTE cha
 # and the trend read "steady" almost always.
 TREND_MIN_AGE_S = float(os.environ.get("DEV_TREND_MIN_AGE_S", "60"))
 # Which leg we're on where the track doubles back (#183-10): costs in nm added to a segment's
-# cross-track. Jumping more than one segment from last poll's costs LEG_JUMP_NM per extra
-# segment, capped; sailing against a segment's direction costs LEG_DIR_NM.
-LEG_JUMP_NM = float(os.environ.get("DEV_LEG_JUMP_NM", "0.5"))
+# cross-track. A point further along (or back) the track from last poll's than the boat could
+# have sailed since costs that excess, capped; sailing against a segment's direction costs
+# LEG_DIR_NM.
 LEG_JUMP_CAP_NM = float(os.environ.get("DEV_LEG_JUMP_CAP_NM", "1.0"))
+LEG_REACH_SLACK_NM = float(os.environ.get("DEV_LEG_REACH_SLACK_NM", "0.3"))
 LEG_DIR_NM = float(os.environ.get("DEV_LEG_DIR_NM", "1.0"))
 LEG_MEMORY_S = float(os.environ.get("DEV_LEG_MEMORY_S", "600"))   # older history is ignored
 
@@ -90,7 +91,7 @@ def _seg_len_nm(a, b):
     return _hav_nm(a["lat"], a["lon"], b["lat"], b["lon"])
 
 
-def _project(blat, blon, path, prev_idx=None, now=None, cog=None, sog=None):
+def _project(blat, blon, path, prev_along=None, reach_nm=None, now=None, cog=None, sog=None):
     """Project the boat onto the frozen route polyline. Returns the chosen segment's fix: signed
     cross-track (nm, + side), cumulative along-track distance (nm), the interpolated plan time `t`
     at that point, the local segment bearing + the plan's along-track speed there, and `idx`.
@@ -98,8 +99,9 @@ def _project(blat, blon, path, prev_idx=None, now=None, cog=None, sog=None):
 
     Which segment (#183-10): the globally nearest one jumps legs where the track doubles back
     (out-and-back, a windward-leeward), since both legs are about as close. Each segment's
-    cross-track gets extra nm costs: a jump of more than one segment from `prev_idx` (last
-    poll's segment), capped; sailing against the segment's direction (COG, when moving); and,
+    cross-track gets extra nm costs: how far its along-track point is from `prev_along` (last
+    poll's) beyond `reach_nm` (what the boat could have sailed since), capped; sailing against
+    the segment's direction (COG, when moving); and,
     with no history, the distance between this point and where the plan put us at `now`
     (capped). Lowest total wins. Called with none of these, it is the plain nearest segment."""
     if not path or len(path) < 2:
@@ -137,8 +139,8 @@ def _project(blat, blon, path, prev_idx=None, now=None, cog=None, sog=None):
 
     def _cost(c):
         k = c["perp"]
-        if prev_idx is not None:
-            k += min(LEG_JUMP_CAP_NM, LEG_JUMP_NM * max(0, abs(c["idx"] - prev_idx) - 1))
+        if prev_along is not None:
+            k += min(LEG_JUMP_CAP_NM, max(0.0, abs(c["along"] - prev_along) - (reach_nm or 0.0)))
         elif now is not None and c["t_here"] is not None and c["seg_speed"]:
             k += min(LEG_JUMP_CAP_NM, abs(c["t_here"] - now) / 3600.0 * c["seg_speed"])
         if moving and abs(_wrap180(cog - c["seg_bearing"])) > 90:
@@ -248,12 +250,19 @@ def get_deviation(route=None, variant=None, since=None):
     now = time.time()
     key = f"{route or navigator.active_route()}|{vid}"
     st = _state.get(key, {})
-    fresh = st.get("at") is not None and 0 <= now - st["at"] <= LEG_MEMORY_S
+    fresh = (st.get("at") is not None and st.get("along") is not None
+             and 0 <= now - st["at"] <= LEG_MEMORY_S)
+    reach = None
+    if fresh:
+        # how far the boat could have sailed since last poll: 1.5 × the faster of its SOG and
+        # the plan's pace there, plus slack
+        v = max(s.get("sog") or 0.0, st.get("plan_kn") or 0.0)
+        reach = 1.5 * v * (now - st["at"]) / 3600.0 + LEG_REACH_SLACK_NM
     # the plan's clock: re-anchored to the real gun when `since` is given
     t0_plan = path[0].get("t")
     plan_now = (now - since + t0_plan) if (since is not None and t0_plan is not None) else now
-    fix = _project(blat, blon, path, prev_idx=st.get("seg_idx") if fresh else None, now=plan_now,
-                   cog=s.get("cog"), sog=s.get("sog"))
+    fix = _project(blat, blon, path, prev_along=st.get("along") if fresh else None,
+                   reach_nm=reach, now=plan_now, cog=s.get("cog"), sog=s.get("sog"))
     if fix is None:
         return _na("Track too short to measure.", base_extra)
 
@@ -304,7 +313,7 @@ def get_deviation(route=None, variant=None, since=None):
             trend = "converging"
     hist = (hist + [(now, xte_nm)])[-500:]
     _state[key] = {"xte_band": xb, "behind_band": bb, "xte_hist": hist, "at": now,
-                   "seg_idx": fix["idx"]}
+                   "along": fix["along"], "plan_kn": fix["seg_speed"]}
 
     band = max(xb, bb)
     status = _BANDS[band]
