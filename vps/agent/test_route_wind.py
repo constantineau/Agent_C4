@@ -26,6 +26,7 @@ os.environ["ENGINE_DB"] = os.path.join(tempfile.mkdtemp(), "engine", "engine.db"
 
 from app import deviation, reoptimize, routing, weather
 from app import navigator as NAV
+weather.BACKGROUND = False      # no refresh thread: the test drives weather._refresh_once() (#42)
 
 NO_WIND = "No wind data. Can't route."
 FCST_GAP = "Forecast incomplete. Can't route."
@@ -268,7 +269,7 @@ expired(15.0, 90.0, 3 * 86400)
 fc = weather.get_forecast(44.0, -82.0)
 check("/forecast says unavailable on the first (failing) read too", fc.get("available") is False)
 
-print("#157 drift: an expired cache + no link reads as 'No forecast right now.', never 'holding'")
+print("#157 drift: an expired cache + no link reads as old, never 'holding'")
 from app import drift  # noqa: E402
 fp_t = time.time()
 pts = [{"lat": 44.0 + i * 0.1, "lon": -82.0, "t": fp_t + (i + 2) * 3600, "twd": 90.0, "tws": 15.0}
@@ -283,11 +284,15 @@ drift.reset_state()
 d = drift.get_drift()
 deviation._load_playbook = _saved_pb
 check(f"drift is not available ({d.get('sub')!r})", d.get("available") is False
-      and d.get("sub") == "No forecast right now.")
-# control: the same plan with a fresh forecast is compared (so the check above can fail)
+      and d.get("sub") == "Forecast is old. No new one yet.")
+# control: the same plan with a fresh forecast is compared (so the check above can fail).
+# drift reads the cache only (#42): the background refresh fetches the forecast first
 net({"*": (15.0, 90.0)})
+weather._link.update(fails=0, failed_at=0.0)
 deviation._load_playbook = lambda: _bundle
 drift.reset_state()
+drift.get_drift()
+weather._refresh_once()
 d = drift.get_drift()
 deviation._load_playbook = _saved_pb
 check(f"control: with a fresh forecast drift is available ({d.get('status')})", d.get("available") is not False)

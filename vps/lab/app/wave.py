@@ -31,6 +31,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.parse
 
 import numpy as np
@@ -55,6 +56,11 @@ WAVE_CACHE = os.environ.get("GRIB_CACHE", "/srv/gribcache")
 # Great-Lakes bounding box (s, n, w, e) — quick reject for non-Great-Lakes races.
 _DOMAIN = (41.0, 49.5, -93.0, -76.0)
 
+# Built fields, reused only for the same dataset cycle, area, full time span and processing (#44.2).
+# key -> (field, built_at, exact); `exact` = built from the cycle it was keyed on, not a fallback.
+CACHE_VERSION = 1      # bump when the processing changes: a field built by older code is not reused
+CACHE_MAX_H = float(os.environ.get("WAVES_CACHE_MAX_H", "6"))   # secondary time limit
+FALLBACK_RETRY_S = 3600   # a field from an older cycle (the newest wasn't posted yet) is retried after this
 _cache = {}
 
 # Child that parses the GLWU GRIB in isolation (a native eccodes crash kills only this process).
@@ -85,8 +91,7 @@ for k in range(len(vt)):
     if last is not None and (e - last) < step_h * 3600.0 - 1.0:
         continue
     keep.append(k); last = e
-if not keep:
-    keep = list(range(min(len(vt), max_slices)))
+# no frame in the window: keep none (the caller steps back a cycle), never the earliest frames (#44.2b)
 keep = keep[:max_slices]
 np.savez(out, lat=lat, lon=lon, ep=vt[list(keep)], hs=arr[list(keep)])
 print("OK")
@@ -269,6 +274,26 @@ def _parse_isolated(path, t_lo, t_hi, log):
             pass
 
 
+def _cache_get(key, now):
+    """The cached field for `key`, or None when absent or past its limit: CACHE_MAX_H, or
+    FALLBACK_RETRY_S for a field built from an older cycle than the key's."""
+    hit = _cache.get(key)
+    if hit is None:
+        return None
+    field, built, exact = hit
+    if now - built < (CACHE_MAX_H * 3600 if exact else min(FALLBACK_RETRY_S, CACHE_MAX_H * 3600)):
+        return field
+    _cache.pop(key, None)
+    return None
+
+
+def _cache_put(key, field, exact, now):
+    for k, (_f, built, _e) in list(_cache.items()):    # drop expired entries: keys change by cycle
+        if now - built >= CACHE_MAX_H * 3600:
+            _cache.pop(k, None)
+    _cache[key] = (field, now, exact)
+
+
 def _build_glwu(bbox, t_start, t_end, log):
     """Best-effort GLWU significant-wave-height field over the course bbox + window. Returns a
     `GLWUWave` or None (→ caller falls back to `ZeroWave`)."""
@@ -283,15 +308,19 @@ def _build_glwu(bbox, t_start, t_end, log):
         return None
     sub = (s - 0.1, n + 0.1, w - 0.1, e + 0.1)  # (s, n, w, e) with a small margin
 
-    key = (round(s, 2), round(n, 2), round(w, 2), round(e, 2), int(t_start // 3600), int(STEP_H))
-    if key in _cache:
+    area = (round(s, 2), round(n, 2), round(w, 2), round(e, 2))
+    want = _cycle_for(t_start)              # the newest posted cycle: a new one is a new key
+    key = (CACHE_VERSION, want.strftime("%Y%m%d%H"), *area, int(t_start), int(t_end), STEP_H,
+           MAX_SLICES)
+    hit = _cache_get(key, time.time())
+    if hit is not None:
         log("waves: GLWU field (cached)")
-        return _cache[key]
+        return hit
 
     for back in range(CYCLE_FALLBACKS + 1):
-        cyc = _cycle_for(t_start, back)
+        cyc = want - datetime.timedelta(hours=6 * back)     # the cycles are 6 h apart
         url = _grib_filter_url(cyc, sub)
-        path = _cache_path(cyc, key)
+        path = _cache_path(cyc, area)       # the download holds every hour: one file per cycle + area
         try:
             grib.http_download(url, path, timeout=int(FETCH_TIMEOUT))
         except Exception as ex:                 # not yet posted / no egress → step back a cycle
@@ -308,7 +337,7 @@ def _build_glwu(bbox, t_start, t_end, log):
         slices = [(int(epochs[i]), hs[i]) for i in range(len(epochs))]
         meta = {"cycle": cyc.strftime("%Y-%m-%d %HZ"), "product": GLWU_PRODUCT, "domain": "great_lakes"}
         field = GLWUWave(lat2d, lon2d, slices, meta)
-        _cache[key] = field
+        _cache_put(key, field, back == 0, time.time())
         log(f"waves: GLWU {len(slices)} frames from {cyc:%Y-%m-%d %HZ} (peak {field.peak_hs():.1f} m)")
         return field
     log("waves: no GLWU data for the window — flat water")

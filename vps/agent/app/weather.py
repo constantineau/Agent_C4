@@ -8,16 +8,25 @@ back to the live measured wind so routing still runs on the bench.
 Note: this is 10 m model wind (not heeled masthead true wind) — guidance-grade for routing,
 not trimming. Spatial resolution is the model's; we cache by ~0.1° cell.
 """
+import collections
 import json
 import math
 import os
+import threading
 import time
 import urllib.parse
 import urllib.request
 
 API = "https://api.open-meteo.com/v1/forecast"
 TTL_S = 1800
-RETRY_S = 60           # after a failed refresh, serve the old forecast this long before trying again
+RETRY_S = 60           # after a failed fetch, wait this long before the next one ...
+RETRY_MAX_S = float(os.environ.get("C4_FORECAST_RETRY_MAX_S", "1800"))   # ... doubling up to this
+# the background refresh (#42): at most FETCH_BUDGET network fetches per BUDGET_WINDOW_S
+FETCH_BUDGET = int(os.environ.get("C4_FORECAST_FETCH_BUDGET", "30"))
+BUDGET_WINDOW_S = 600
+WANT_TTL_S = 3600      # a cell nobody asked about for this long drops off the refresh list
+TICK_S = 10
+BACKGROUND = True      # tests set False and drive _refresh_once() themselves
 # a route refuses a forecast older than this (h), and fills a hole only from a cell this close (nm)
 MAX_AGE_S = float(os.environ.get("C4_FORECAST_MAX_AGE_H", "6")) * 3600
 FILL_NM = float(os.environ.get("C4_FORECAST_FILL_NM", "10"))
@@ -34,16 +43,23 @@ def _unavailable(c):
     return {"fetched": c["fetched"], "hours": [], "error": c.get("error"), "stale": True}
 
 
-def fetch_point(lat, lon):
-    """Hourly wind forecast at the nearest ~0.1° cell, cached. Returns the cache entry, or no
-    hours when the forecast has expired and its refresh failed (never old wind as current)."""
-    key = _cell(lat, lon)
-    now = time.time()
+def _backoff_s(fails):
+    """Wait after `fails` failed fetches in a row: RETRY_S, doubling, capped at RETRY_MAX_S."""
+    return min(RETRY_MAX_S, RETRY_S * 2 ** (max(1, fails) - 1))
+
+
+def _due(c, now):
+    """True when this cell needs a network fetch now: no fresh forecast, and not inside the
+    back-off after a failed one."""
+    if _fresh(c, now):
+        return False
+    return not (c and c.get("failed_at") and now - c["failed_at"] < _backoff_s(c.get("fails", 1)))
+
+
+def _fetch(key, now):
+    """One network fetch for a cell; stores and returns the cache entry. A failure keeps any old
+    hours (with `fetched` left old, so they read as stale, #157) and counts toward the back-off."""
     c = _cache.get(key)
-    if c and now - c["fetched"] < TTL_S:
-        return c
-    if c and c.get("hours") and now - c.get("failed_at", 0) < RETRY_S:
-        return _unavailable(c)        # a refresh just failed: no new timeout yet
     q = urllib.parse.urlencode({
         "latitude": key[0], "longitude": key[1],
         "hourly": "wind_speed_10m,wind_direction_10m",
@@ -58,13 +74,98 @@ def fetch_point(lat, lon):
                  zip(h["time"], h["wind_speed_10m"], h["wind_direction_10m"])]
         c = {"fetched": now, "hours": hours}
     except Exception as exc:
-        if c and c.get("hours"):
-            # keep the old forecast, marked: `fetched` stays old so it reads as stale (#157)
-            _cache[key] = c = dict(c, error=str(exc), failed_at=now)
-            return _unavailable(c)
-        c = c or {"fetched": now, "hours": [], "error": str(exc)}
+        base = c if c and c.get("hours") else {"fetched": now, "hours": []}
+        c = dict(base, error=str(exc), failed_at=now, fails=(c or {}).get("fails", 0) + 1)
     _cache[key] = c
     return c
+
+
+def fetch_point(lat, lon):
+    """Hourly wind forecast at the nearest ~0.1° cell, cached. Returns the cache entry, or no
+    hours when the forecast has expired and its refresh failed (never old wind as current).
+    May block on the network (10 s timeout): not for a request path that must stay fast; those
+    use `wind_now`. After a failure the cell waits out a doubling back-off before the next try."""
+    key = _cell(lat, lon)
+    now = time.time()
+    c = _cache.get(key)
+    if not _due(c, now):
+        return c if _fresh(c, now) or not c.get("hours") else _unavailable(c)
+    c = _fetch(key, now)
+    return _unavailable(c) if c.get("hours") and not _fresh(c, now) else c
+
+
+# --- background refresh (#42): /strategy never waits on the network --------------------------
+_want = {}             # cell -> last time someone asked for it
+_spent = collections.deque()   # times of recent background fetches (the request budget)
+_link = {"fails": 0, "failed_at": 0.0}   # back-off for the whole worker after a failed fetch
+_lock = threading.Lock()
+_wake = threading.Event()
+_worker = []
+
+
+def request_refresh(key):
+    """Queue a cell for the background refresh. Never blocks."""
+    _want[key] = time.time()
+    if BACKGROUND:
+        with _lock:
+            if not _worker or not _worker[0].is_alive():
+                t = threading.Thread(target=_run, name="forecast-refresh", daemon=True)
+                _worker[:] = [t]
+                t.start()
+        _wake.set()
+
+
+def _refresh_once(now=None):
+    """One pass of the refresh: fetch the asked-for cells that are due, within the request budget,
+    and stop at the first failure (the link is likely down; the worker backs off). Returns the
+    number of network fetches made."""
+    now = time.time() if now is None else now
+    if _link["fails"] and now - _link["failed_at"] < _backoff_s(_link["fails"]):
+        return 0
+    while _spent and now - _spent[0] > BUDGET_WINDOW_S:
+        _spent.popleft()
+    n = 0
+    for key, asked in list(_want.items()):
+        c = _cache.get(key)
+        if now - asked > WANT_TTL_S or _fresh(c, now):
+            _want.pop(key, None)
+            continue
+        if not _due(c, now):
+            continue
+        if len(_spent) >= FETCH_BUDGET:
+            break
+        _spent.append(now)
+        n += 1
+        c = _fetch(key, now)
+        if not _fresh(c, now):
+            _link.update(fails=_link["fails"] + 1, failed_at=now)
+            break
+        _link.update(fails=0, failed_at=0.0)
+        _want.pop(key, None)
+    return n
+
+
+def _run():
+    while True:
+        try:
+            _refresh_once()
+        except Exception:      # a bad pass must not kill the worker
+            pass
+        _wake.wait(TICK_S)
+        _wake.clear()
+
+
+def wind_now(lat, lon, epoch):
+    """Fresh forecast (tws_kn, twd_deg) at a place and time, from the cache only, or None. Never
+    touches the network, so it is safe inside /strategy: a cell with no fresh forecast is queued
+    for the background refresh. Also None outside the forecast's hours (past its last hour, or
+    before its first), never the end hour held over (#42). `cell_status` says why it was None."""
+    key = _cell(lat, lon)
+    c = _cache.get(key)
+    if not _fresh(c, time.time()):
+        request_refresh(key)
+        return None
+    return _interp(c["hours"], epoch, hold=False)
 
 
 def _circ_interp(a, b, f):
@@ -136,9 +237,12 @@ def nearest_cached_wind(lat, lon, epoch, max_nm=None):
     return None, False, too_old
 
 
-def _interp(hrs, epoch):
-    """(tws, twd) from an hourly series at `epoch` (held at either end), or None if empty."""
+def _interp(hrs, epoch, hold=True):
+    """(tws, twd) from an hourly series at `epoch`, or None if empty. Outside the series it holds
+    the end hour, or with hold=False returns None."""
     if not hrs:
+        return None
+    if not hold and not hrs[0][0] <= epoch <= hrs[-1][0]:
         return None
     if epoch <= hrs[0][0]:
         return (hrs[0][1], hrs[0][2])

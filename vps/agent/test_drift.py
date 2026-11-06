@@ -29,7 +29,7 @@ def use_bundle(fp):
     deviation.datasource.active = lambda: type("S", (), {"get_playbook": lambda self: b})()
 
 def set_live(tws, twd):
-    weather.wind_at = lambda lat, lon, epoch: (tws, twd)
+    weather.wind_now = lambda lat, lon, epoch: (tws, twd)
 
 # --- no drift: live == reference → ok, ~0° ----------------------------------------------------
 print("no drift:")
@@ -82,7 +82,7 @@ for twd, want in [(235, "act"), (222, "act"), (214, "watch"), (203, "ok")]:
 
 # --- horizon guard: live None for all → na, not a bogus 0 -------------------------------------
 print("na paths:")
-drift.reset_state(); use_bundle(fp_points()); weather.wind_at = lambda *a: None
+drift.reset_state(); use_bundle(fp_points()); weather.wind_now = lambda *a: None
 check("forecast unreachable → na", drift.get_drift()["status"] == "na")
 # all waypoints in the past → na
 drift.reset_state(); set_live(12, 240)

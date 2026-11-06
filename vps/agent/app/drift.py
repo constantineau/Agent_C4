@@ -3,7 +3,7 @@
 Lab-3 onboard executor, branch trigger (b) — the companion to route-deviation (a, `deviation.py`).
 The frozen bundle carries a `forecast_fingerprint`: the Open-Meteo forecast the plan was built on,
 sampled along the route at each waypoint's ETA (see `vps/lab/app/forecast_ref.py`). Onboard, this
-re-samples the SAME common source (Open-Meteo via `weather.wind_at` — the legal common-data forecast
+re-samples the SAME common source (Open-Meteo via `weather.wind_now` — the legal common-data forecast
 already served at `/forecast`) for the SAME (place, target-time) and reports how far the forecast has
 DRIFTED: the directional shift (veered/backed) + the speed change, aggregated over the still-future
 waypoints, with fuzzy Schmitt consider/commit bands (perflab §5). A large sustained drift means the
@@ -67,14 +67,21 @@ def get_drift(route=None):
     now = time.time()
     diffs = []          # (dtwd_signed, dtws_signed)
     n_future = 0
+    n_stale = 0         # future points whose cell holds only an old forecast (refresh failing)
+    n_past = 0          # future points past the end of a fresh forecast
     worst = None
     for p in pts:
         t = p.get("t")
         if t is None or t < now + MIN_LEAD_S:      # spent / imminent — the plan for it is done
             continue
         n_future += 1
-        live = weather.wind_at(p["lat"], p["lon"], t)
-        if live is None:                            # beyond horizon / no network
+        # cache only: /strategy never waits on the network (#42); a missing or expired cell is
+        # refreshed in the background, and a time past the forecast's end is None, not held
+        live = weather.wind_now(p["lat"], p["lon"], t)
+        if live is None:                            # beyond horizon / no fresh forecast
+            st = weather.cell_status(p["lat"], p["lon"])
+            n_stale += st == "stale"
+            n_past += st == "fresh"                 # fresh forecast, but this time is past its end
             continue
         dtwd = _ang(p["twd"], live[1])          # live = (tws_kn, twd_deg)
         dtws = live[0] - p["tws"]
@@ -90,6 +97,10 @@ def get_drift(route=None):
     if not diffs:
         if n_future == 0:
             return _na("Gameplan forecast has run out.", base)
+        if n_stale:
+            return _na("Forecast is old. No new one yet.", dict(base, stale=True))
+        if n_past == n_future:
+            return _na("Plan runs past the forecast.", base)
         return _na("No forecast right now.", base)
 
     mean_abs_twd = sum(abs(d[0]) for d in diffs) / len(diffs)
