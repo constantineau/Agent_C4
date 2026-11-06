@@ -351,6 +351,18 @@ check("/watch quick edit still taken in race mode",
 race_mode.racing = lambda: False
 check("/watch whole plan taken in practice mode", cloud.watch_set(PLAN) == {"edited": PLAN})
 
+print("the copilot approval is durable before it goes live (#152):")
+_calls, _fs, _rp = [], os.fsync, os.replace
+os.fsync = lambda fd: (_calls.append(("fsync", os.path.isdir(f"/proc/self/fd/{fd}"))), _fs(fd))[1]
+os.replace = lambda a, b: (_calls.append(("replace", b == engine_app._approved_path())), _rp(a, b))[1]
+try:
+    engine_app.approve_copilot_playbook("ab" * 32)
+finally:
+    os.fsync, os.replace = _fs, _rp
+check("file fsynced, replaced, directory fsynced",
+      _calls == [("fsync", False), ("replace", True), ("fsync", True)])
+check("…and readable", client.get("/playbook/copilot").json() == {"hash": "ab" * 32})
+
 print("short text:")
 check("the refusal is ≤ 6 words", len(racegate.RACING.split()) <= 6)
 

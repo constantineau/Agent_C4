@@ -33,8 +33,10 @@ def check(name, cond):
 print("push is recorded:")
 check("nothing on record at first", D.last_push() == {"last": None, "last_ok": None})
 
-BUNDLE = {"race_id": "r1", "start_epoch": 100, "variants": [{"id": "a"}], "plays": [],
-          "signature": {"value": "ab" * 32}}
+from app import synthesis  # noqa: E402
+# signed for real: Deploy refuses a locked bundle that fails its signature (#152)
+BUNDLE = synthesis.sign_bundle({"race_id": "r1", "start_epoch": 100, "variants": [{"id": "a"}],
+                                "plays": []})
 posted = []
 
 
@@ -48,7 +50,7 @@ def fake_post(url, body, timeout=25):
     return True, {"loaded": True, "marks": 3, "skipped": []}
 
 
-D.package = lambda rid, course_id=None: {"race_name": "Race One", "course_load": {}, "fleet_load": {},
+D.package = lambda rid, course_id=None, **kw: {"race_name": "Race One", "course_load": {}, "fleet_load": {},
                                          "checklist_load": {"items": []}, "watch_load": None}
 D.pbstore.get = lambda pid: BUNDLE if pid == "r1__100" else None
 # the lock's signature is stale on purpose (a re-freeze under the same id): the record must carry
@@ -63,7 +65,8 @@ lp = D.last_push()
 check("push still returns per-step results", res["ok"] and len(res["steps"]) == 5)
 check("last push recorded with race, name, playbook, signature",
       lp["last"] and lp["last"]["race_id"] == "r1" and lp["last"]["race_name"] == "Race One"
-      and lp["last"]["playbook_id"] == "r1__100" and lp["last"]["signature"] == "ab" * 8)
+      and lp["last"]["playbook_id"] == "r1__100"
+      and lp["last"]["signature"] == BUNDLE["signature"]["value"][:16])
 check("per-step ok kept", [s["ok"] for s in lp["last"]["steps"]] == [True] * 5
       and [s["step"] for s in lp["last"]["steps"]] == ["course", "orin assets", "fleet", "playbook",
                                                        "playbook"])

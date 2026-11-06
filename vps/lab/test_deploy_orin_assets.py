@@ -188,7 +188,7 @@ def fake_post(url, body, timeout=25):
 
 
 D._post_json = fake_post
-D.package = lambda rid, course_id=None: {"race_name": "Race", "course_id": "c",
+D.package = lambda rid, course_id=None, **kw: {"race_name": "Race", "course_id": "c",
                                          "course_load": {"definition": DEF, "course_id": "c"},
                                          "fleet_load": {}, "checklist_load": {"items": []},
                                          "watch_load": None}
@@ -219,8 +219,10 @@ check("no chart built → sent (old one dropped), but the step is not green",
       not st["ok"] and st["detail"]["error"] == OA.NO_LAND and posted[-2][1]["chart"] is None)
 
 PI["assets"] = {"loaded": True, "chart": False}
-D.pbstore.get = lambda pid: {"race_id": "r1", "variants": [{"id": "a"}],
-                             "boat_model": {"boat_id": "ghost"}} if pid == "pb1" else None
+from app import synthesis  # noqa: E402
+GHOST = synthesis.sign_bundle({"race_id": "r1", "variants": [{"id": "a"}],
+                               "boat_model": {"boat_id": "ghost"}})   # Deploy checks it (#152)
+D.pbstore.get = lambda pid: GHOST if pid == "pb1" else None
 labstate.set("deploy:r1", {"playbook_id": "pb1"})
 posted.clear()
 res = D.push("r1")

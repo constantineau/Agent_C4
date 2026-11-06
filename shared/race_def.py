@@ -419,6 +419,31 @@ def marks_with_side(definition: dict, course_id: str = None):
     return out
 
 
+_PROSE_KEYS = frozenset({"note", "notes", "ref", "coords_source", "source"})
+
+
+def _no_prose(v):
+    if isinstance(v, dict):
+        return {k: _no_prose(x) for k, x in v.items() if k not in _PROSE_KEYS}
+    if isinstance(v, list):
+        return [_no_prose(x) for x in v]
+    return v
+
+
+def course_hash(definition: dict, course_id: str = None) -> str:
+    """What a playbook was routed on (#150): the course (start, marks, rounding sides, islands,
+    finish) and the race's zones, minus the prose (notes, SI refs). Frozen into the bundle at
+    synthesis; Deploy refuses a push when today's race hashes differently. Same course pick as
+    `course_to_marks`."""
+    import hashlib
+    courses = (definition or {}).get("courses", []) or []
+    course = next((c for c in courses if c.get("id") == course_id), None) or \
+        (courses[0] if courses else None)
+    payload = json.dumps(_no_prose({"course": course, "zones": (definition or {}).get("zones") or []}),
+                         sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode()).hexdigest()[:16]
+
+
 def _gun_epoch(v, tz_name=""):
     """A division gun as epoch seconds. Accepts an epoch number (the Lab guns card) or an ISO
     local datetime string (the SI extraction), interpreted in the race venue's timezone when the

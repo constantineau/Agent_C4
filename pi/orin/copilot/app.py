@@ -163,10 +163,23 @@ _STAGED: dict = {}                       # the one staged load: {nonce, bundle, 
 
 
 def _write_tmp(path, bundle):
+    """The bundle, whole and on disk (fsynced), beside PLAYBOOK_PATH. The caller os.replaces it
+    over the live file and then syncs the directory (_sync_dir), so a power cut leaves the old
+    playbook or the new one, never an empty file (#152)."""
     tmp = path + ".tmp"
     with open(tmp, "w") as f:
         json.dump(bundle, f)
+        f.flush()
+        os.fsync(f.fileno())
     return tmp
+
+
+def _sync_dir(path):
+    fd = os.open(os.path.dirname(os.path.abspath(path)), os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
 @app.post("/playbook/stage")
@@ -216,6 +229,7 @@ def playbook_commit(body: dict, request: Request):
             os.remove(tmp)
             return {"loaded": False, "detail": TOO_LATE}
         os.replace(tmp, path)
+        _sync_dir(path)
     copilot.reset_narration()            # new homework → clear the show-once dedup
     playbook_mod._pin["at"] = None       # re-ask the Pi which playbook is approved
     pb = playbook_mod.load(confirm=False)    # the Pi approves it once this answer reaches it
