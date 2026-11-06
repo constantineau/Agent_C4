@@ -67,10 +67,15 @@ def _tws_predicates(scale, ctx):
 
 
 def _timing_predicates(hours, ctx):
-    """The forecast evolution is running early/late — detected as sustained drift whose SIGN flips
-    with where the boat is relative to the frozen timeline; the narrative (LLM side) carries the
-    nuance, the predicate arms on material sustained drift either way."""
-    return [{"signal": "drift_twd_deg", "op": ">=", "value": 15, "sustain_min": 30}]
+    """Timing plays (system early/late) are MANUAL-ONLY: no machine predicates (#153).
+
+    No live signal can tell early from late yet. Wind drift vs the frozen forecast is the same
+    evidence either way, so any drift predicate arms "early" and "late" together (opposite
+    advice, at once). With no predicates the matcher never auto-arms them; the crew points to the
+    play, and the Tier-2 copilot can still match its narrative. Add predicates back only with a
+    phase signal (e.g. a forecast feature seen before/after its frozen time) whose sign differs
+    between the two."""
+    return []
 
 
 def _wave_predicates(_factor, ctx):

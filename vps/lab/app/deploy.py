@@ -54,6 +54,7 @@ def _post_json(url, body, timeout=25):
 # our gun, else the first minute of the start date). With no start known it sends, and the boat
 # decides.
 RACE_STARTED = "Race started. Not sent."
+MISSING_MARKS = "Missing positions: {names}. Not sent."
 _clock = time.time                    # the real clock (tests swap it)
 
 
@@ -61,6 +62,44 @@ def race_start(definition):
     """The race's start by the plume's rule, or None when nothing is known."""
     from . import plume
     return plume.race_start_of({"definition": definition or {}})
+
+
+# ---- the locked playbook must be there and whole (#152) -----------------------------------------
+# A lock names a frozen bundle by id. If that file is gone, unreadable or fails its signature, a
+# push must not go ahead without it: the boat would keep the previous race's playbook while every
+# other step shows green.
+PB_MISSING = "Locked playbook is missing. Lock one in again."
+PB_BROKEN = "Locked playbook fails its check. Freeze it again."
+NOT_SENT = " Not sent."
+# ... and routed on today's course (#150): the bundle carries the course hash it was routed on
+# (race_def.course_hash, signed with it). An SI amendment saved after the freeze changes the hash.
+PB_COURSE = "Course changed since this playbook. Freeze a new one."
+PB_UNCHECKED = "Frozen before course checks. Freeze again to check it."
+
+
+def locked_bundle(race_id, lock=None):
+    """(bundle, problem) for the race's locked playbook, checked against today's race: (None, None)
+    when none is locked, (None, text) when it is missing, damaged or routed on another course."""
+    lock = (labstate.get(_lock_key(race_id)) or {}) if lock is None else lock
+    pid = lock.get("playbook_id")
+    if not pid:
+        return None, None
+    b = pbstore.get(pid)
+    return (None, p) if (p := bundle_problem(race_id, b, store.get_race(race_id) or {})) else (b, None)
+
+
+def bundle_problem(race_id, b, definition):
+    """Why a locked bundle `b` can't go out beside `definition`, or None. Push passes the exact
+    definition it sends, so the check and the send can't see two different reads (#150)."""
+    if not isinstance(b, dict) or b.get("race_id") != race_id:
+        return PB_MISSING
+    from . import synthesis
+    if not synthesis.verify_bundle(b):
+        return PB_BROKEN
+    want = b.get("course_hash")
+    if want and want != race_def.course_hash(definition or {}, b.get("course_id")):
+        return PB_COURSE
+    return None
 
 
 def push(race_id):
@@ -73,15 +112,29 @@ def push(race_id):
     Returns per-step results ({target, step, ok, detail}); None if the race is unknown.
     Frozen at the gun: the start is checked before EVERY post; once it is reached the remaining
     steps are not sent (they show "Race started. Not sent.")."""
-    pkg = package(race_id)
+    # ONE read of the lock and its bundle, and the package built from that same selection: the
+    # course sent, the course checked and the playbook sent all come from these reads (#150)
+    lock = labstate.get(_lock_key(race_id)) or {}
+    bundle = pbstore.get(lock["playbook_id"]) if lock.get("playbook_id") else None
+    pkg = package(race_id, lock=lock, bundle=bundle)
     if not pkg:
         return None
-    rs = race_start(store.get_race(race_id))
+    sent_def = (pkg.get("course_load") or {}).get("definition")
+    rs = race_start(sent_def)
     if rs is not None and _clock() >= rs:
         return {"race_id": race_id, "ok": False, "refused": True, "race_start": int(rs),
                 "detail": RACE_STARTED, "steps": []}
-    lock = labstate.get(_lock_key(race_id)) or {}
-    bundle = pbstore.get(lock.get("playbook_id")) if lock.get("playbook_id") else None
+    # #151: never send a course (or a playbook routed on one) with marks dropped for no position
+    from . import coursecheck
+    missing = (coursecheck.missing(sent_def, pkg.get("course_id"))
+               or (bundle.get("skipped_marks") if isinstance(bundle, dict) else None))
+    if missing:
+        return {"race_id": race_id, "ok": False, "refused": True, "steps": [],
+                "detail": MISSING_MARKS.format(names=", ".join(map(str, missing)))}
+    problem = bundle_problem(race_id, bundle, sent_def) if lock.get("playbook_id") else None
+    if problem:                          # before any post: never a push that skips the playbook
+        return {"race_id": race_id, "playbook_id": lock.get("playbook_id"), "ok": False,
+                "refused": True, "detail": problem + NOT_SENT, "steps": []}
     eng = os.environ.get("DEPLOY_PI_ENGINE_URL", "http://100.79.180.102:8200").rstrip("/")
     steps = []
     stopped = []
@@ -263,13 +316,15 @@ def boat_status(get=None):
             "reachable": engine["reachable"] or copilot["reachable"]}
 
 
-def _course_for(d: dict, race_id: str, course_id=None):
+def _course_for(d: dict, race_id: str, course_id=None, bundle=False):
     """The course to deploy: the locked playbook's course if one is locked, else the requested/first.
-    Returns (marks, skipped, course_id)."""
+    `bundle` is the locked bundle already read (push), else it is read here. Returns
+    (marks, skipped, course_id)."""
     if course_id is None:
-        lock = labstate.get(_lock_key(race_id)) or {}
-        pb = pbstore.get(lock.get("playbook_id")) if lock.get("playbook_id") else None
-        course_id = (pb or {}).get("course_id")
+        if bundle is False:
+            lock = labstate.get(_lock_key(race_id)) or {}
+            bundle = pbstore.get(lock.get("playbook_id")) if lock.get("playbook_id") else None
+        course_id = bundle.get("course_id") if isinstance(bundle, dict) else None
     return race_def.course_to_marks(d, course_id)
 
 
@@ -287,6 +342,7 @@ def readiness(race_id, course_id=None):
     pbs = [b for b in pbstore.list_bundles() if b.get("race_id") == race_id]
 
     lock = labstate.get(_lock_key(race_id)) or None
+    lock_b, lock_problem = locked_bundle(race_id, lock or {})
     if lock and not any(b["id"] == lock.get("playbook_id") for b in pbs):
         lock = None                              # the locked bundle was deleted/superseded
 
@@ -305,6 +361,9 @@ def readiness(race_id, course_id=None):
                   "ready": bool((d.get("watch_plan") or {}).get("blocks"))},
         "playbooks": pbs,
         "lock_in": lock,
+        "lock_problem": lock_problem,            # Push refuses while this is set
+        # a bundle from before #150 can't say what course it was routed on: pushed, with a note
+        "lock_note": PB_UNCHECKED if lock_b and not lock_b.get("course_hash") else None,
         "targets": targets(),
         "last_push": last_push(),
     }
@@ -323,7 +382,7 @@ def lock_in(race_id, playbook_id):
     return state
 
 
-def package(race_id, course_id=None):
+def package(race_id, course_id=None, lock=None, bundle=False):
     """The combined homework package the crew loads onto the Pi engine: ready-to-POST `course_load`
     and `fleet_load` bodies + the iPad checklist subset. The signed PLAYBOOK is downloaded separately
     (byte-exact, for the Orin) and referenced here by id — embedding it would change its bytes and
@@ -331,8 +390,8 @@ def package(race_id, course_id=None):
     d = store.get_race(race_id)
     if not d:
         return None
-    marks, skipped, cid = _course_for(d, race_id, course_id)
-    lock = labstate.get(_lock_key(race_id)) or {}
+    marks, skipped, cid = _course_for(d, race_id, course_id, bundle)    # push passes its own reads
+    lock = (labstate.get(_lock_key(race_id)) or {}) if lock is None else lock
     ipad = [r for r in (d.get("requirements") or []) if r.get("deliver_to_ipad")]
     return {
         "schema": "c4.homework/v1",

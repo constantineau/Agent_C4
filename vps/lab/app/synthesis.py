@@ -85,7 +85,9 @@ def sign_bundle(bundle: dict, signed_by: str = SIGNED_BY) -> dict:
 
 
 def verify_bundle(bundle: dict) -> bool:
-    sig = bundle.get("signature") or {}
+    sig = bundle.get("signature") if isinstance(bundle, dict) else None
+    if not isinstance(sig, dict):        # a damaged file: a failed check, never a crash
+        return False
     if sig.get("alg") != "sha256" or not sig.get("value"):
         return False
     return hashlib.sha256(canonical_bytes(bundle)).hexdigest() == sig["value"]
@@ -475,15 +477,16 @@ def _thin_route(route, obstacles=None, max_pts=200, leg_obstacles=None):
     return out
 
 
-def _play_obstacles(definition, course_id):
-    """The same (cached) per-leg obstacle fields the playbook routes were built through — for the
-    downsample's shortcut check → (base, [field per course leg]). (None, []) on any failure: the
-    downsample then keeps marks but can't check land."""
+def _play_obstacles(definition, course_id, chart=None):
+    """The same (cached) per-leg obstacle fields the playbook routes were built through (same
+    chart and depth, #149) — for the downsample's shortcut check → (base, [field per course leg]).
+    (None, []) on any failure: the downsample then keeps marks but can't check land."""
     try:
         from . import optimizer
         from .geo import build_leg_fields
         bbox = optimizer.course_bbox(definition, course_id)
-        return build_leg_fields(definition, course_id, bbox) if bbox else (None, [])
+        return (build_leg_fields(definition, course_id, bbox, **(chart or {})) if bbox
+                else (None, []))
     except Exception:
         return None, []
 
@@ -652,7 +655,7 @@ def _reef_guidance_plays(consensus, sail_config):
 
 
 def _build_plays(playbook, definition, course_id, venue_stats=None, jib_crossovers=None,
-                 sail_config=None):
+                 sail_config=None, chart=None):
     """The v2 plays: the external scenario fan + the internal fan (pace/gear-loss routes) + the
     sail GUIDANCE plays; registry predicates resolved against the route context + the venue's
     fleet-normal stats (percentile-framed, locked input #3); frontier narratives with the
@@ -689,7 +692,7 @@ def _build_plays(playbook, definition, course_id, venue_stats=None, jib_crossove
         route = dict(p.get("route") or {}) or None
         if route:
             if len(route.get("path") or []) > 200 and not _obs:
-                _obs.append(_play_obstacles(definition, course_id))
+                _obs.append(_play_obstacles(definition, course_id, chart))
             base, leg_fields = _obs[0] if _obs else (None, [])
             # a pace play routes the rest of the course from its mark: its leg 0 is that course leg
             first = int((p.get("params") or {}).get("mark") or 0) if p.get("kind") == "pace" else 0
@@ -737,15 +740,23 @@ def _build_plays(playbook, definition, course_id, venue_stats=None, jib_crossove
 
 def synthesize(definition, course_id, start_epoch, models, ensemble_members=0, time_budget_s=200,
                jib_crossovers=None, sail_config=None, helm_factor=1.0, use_waves=True,
-               polar_adjustments=None, wave_coeffs=None, fan_depth="standard"):
+               polar_adjustments=None, wave_coeffs=None, fan_depth="standard", chart=None):
     """Lab-2a fan-out → Lab-2b synthesized bundle (UNSIGNED draft). Freeze (`sign_bundle`) before
-    it's relied on / deployed onboard. Passes through the not-available case from 2a unchanged."""
+    it's relied on / deployed onboard. Passes through the not-available case from 2a unchanged.
+    `chart` = {"source", "safety_depth"} snapshot when the job starts (#149): every route uses it,
+    and the bundle records it."""
+    routed_on = race_def.course_hash(definition, course_id)    # before routing touches anything
+    from .geo import obstacles as _obs_mod
+    chart = dict(chart or {})          # unset → the defaults the obstacle builder would use
+    chart = {"source": (chart.get("source") or _obs_mod.COASTLINE_SOURCE).strip().lower(),
+             "safety_depth": (chart["safety_depth"] if chart.get("safety_depth") is not None
+                              else _obs_mod.safety_depth_m())}
     playbook = pb.build_playbook(definition, course_id, start_epoch, models,
                                  ensemble_members=ensemble_members, time_budget_s=time_budget_s,
                                  jib_crossovers=jib_crossovers, sail_config=sail_config,
                                  helm_factor=helm_factor, use_waves=use_waves,
                                  polar_adjustments=polar_adjustments, wave_coeffs=wave_coeffs,
-                                 fan_depth=fan_depth)
+                                 fan_depth=fan_depth, chart=chart)
     if not playbook.get("available"):
         return playbook
 
@@ -772,7 +783,7 @@ def synthesize(definition, course_id, start_epoch, models, ensemble_members=0, t
     venue_stats = _venue_stats()
     plays, v2meta, play_note = _build_plays(playbook, definition, course_id,
                                             venue_stats=venue_stats, jib_crossovers=jib_crossovers,
-                                            sail_config=sail_config)
+                                            sail_config=sail_config, chart=chart)
     corridor = (v2meta.get("corridor") or {}) if v2meta else {}
     headline = syn.get("headline", "")
     if corridor.get("note"):
@@ -783,6 +794,7 @@ def synthesize(definition, course_id, start_epoch, models, ensemble_members=0, t
         "race_id": definition.get("race_id"),
         "race_name": definition.get("name"),
         "course_id": playbook.get("course_id") or course_id,
+        "course_hash": routed_on,      # the course + zones this was routed on; Deploy checks it (#150)
         "start_epoch": playbook.get("start_epoch"),
         "generated_at": round(time.time()),
         "headline": headline,
@@ -806,6 +818,8 @@ def synthesize(definition, course_id, start_epoch, models, ensemble_members=0, t
         "degraded": bool(playbook.get("degraded")),
         "warnings": list(playbook.get("warnings") or []),
         "boat_model": _boat_model(),      # polars/sail crossovers + draft frozen into the homework
+        # the chart and no-go depth every route above was built on (#149); Deploy sends this chart
+        "chart": {"source": chart["source"], "safety_depth_m": chart["safety_depth"]},
         # the common forecast the plan was built on → the onboard forecast-drift branch trigger
         "forecast_fingerprint": _fingerprint(variants, syn.get("recommended")),
         # compact race obstacles (island disks + zones) → the onboard re-optimizer avoids land

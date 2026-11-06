@@ -148,7 +148,7 @@ def _bisect_param(kind, sign, mag):
 def _scenario_fan(definition, course_id, start_epoch, wf, consensus, cur, waves, marks_finish,
                   jib_crossovers=None, sail_config=None, helm_factor=1.0, polar_adjustments=None,
                   wave_coeffs=None, max_scenarios=None, per_budget_s=90, deep=False,
-                  log=None):
+                  log=None, chart=None):
     """Playbook-v2 EXTERNAL scenario fan (docs/PLAYBOOK_V2.md §3, §8): route the course through
     perturbed views of the SAME blended field. A scenario whose route sticks to the nominal is
     ROBUSTNESS EVIDENCE, not a play; one that diverges is a play candidate. Priority order is
@@ -175,7 +175,8 @@ def _scenario_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
                                       jib_crossovers=jib_crossovers, sail_config=sail_config,
                                       emit_exploration=False,
                                       cur=cur, waves=waves, helm_factor=helm_factor,
-                                      polar_adjustments=polar_adjustments, wave_coeffs=wc)
+                                      polar_adjustments=polar_adjustments, wave_coeffs=wc,
+                                      **(chart or {}))
         why = _truncated(r, marks_finish)
         if why:
             say(f"scenario {s['id']}: incomplete route ({why}) — skipped "
@@ -275,7 +276,7 @@ _GEAR_SAILS = ("A3", "S1")           # kites we author a loss play for when they
 
 def _internal_fan(definition, course_id, start_epoch, wf, consensus, cur, waves, marks,
                   jib_crossovers=None, sail_config=None, helm_factor=1.0, polar_adjustments=None,
-                  wave_coeffs=None, per_budget_s=90, log=None):
+                  wave_coeffs=None, per_budget_s=90, log=None, chart=None):
     """Phase-C INTERNAL plays that need routes (docs/PLAYBOOK_V2.md §3): PACE re-routes — reach an
     intermediate mark N hours late/early and the weather you meet downstream is different, so the
     optimal remainder can flip — and GEAR-LOSS re-runs (route the whole course without a kite that's
@@ -300,7 +301,7 @@ def _internal_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
                                                  emit_exploration=False, cur=cur, waves=waves,
                                                  helm_factor=helm_factor,
                                                  polar_adjustments=polar_adjustments,
-                                                 wave_coeffs=wave_coeffs)
+                                                 wave_coeffs=wave_coeffs, **(chart or {}))
 
             tag = f"{abs(dh)}h {'behind' if dh > 0 else 'ahead'}"
             sid = f"pace_{'behind' if dh > 0 else 'ahead'}_{abs(dh)}h_{k}"
@@ -353,7 +354,7 @@ def _internal_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
                                              emit_exploration=False, cur=cur, waves=waves,
                                              helm_factor=helm_factor,
                                              polar_adjustments=polar_adjustments,
-                                             wave_coeffs=wave_coeffs)
+                                             wave_coeffs=wave_coeffs, **(chart or {}))
 
         r = _route_without(per_budget_s)
         if _truncated(r, finish_pt):
@@ -391,7 +392,8 @@ def _internal_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
                                   resolution="fast", jib_crossovers=jib_crossovers, sail_config=sail_config,
                                   emit_exploration=False, cur=cur, waves=waves,
                                   helm_factor=helm_factor,
-                                  polar_adjustments=polar_adjustments, wave_coeffs=wave_coeffs)
+                                  polar_adjustments=polar_adjustments, wave_coeffs=wave_coeffs,
+                                  **(chart or {}))
     why = _truncated(r, finish_pt)
     if why:
         say(f"low-maneuver: incomplete route ({why}) — skipped")
@@ -433,7 +435,8 @@ def _internal_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
     off_nm = round(min(8.0, max(2.0, float(vs.get("xte_p90_nm") or 6.0))), 1)
     tab = _rejoin_tab(definition, course_id, wf, consensus, cur, waves, marks, off_nm,
                       jib_crossovers=jib_crossovers, sail_config=sail_config, helm_factor=helm_factor,
-                      polar_adjustments=polar_adjustments, wave_coeffs=wave_coeffs, log=log)
+                      polar_adjustments=polar_adjustments, wave_coeffs=wave_coeffs, log=log,
+                      chart=chart)
     if tab:
         parts = []
         for row in tab:
@@ -491,7 +494,7 @@ _REJOIN_LEG_TIMEOUT_S = 25.0   # per-isochrone budget for a tabulation cell
 
 def _rejoin_tab(definition, course_id, wf, consensus, cur, waves, marks, off_nm,
                 jib_crossovers=None, sail_config=None, helm_factor=1.0, polar_adjustments=None,
-                wave_coeffs=None, log=None):
+                wave_coeffs=None, log=None, chart=None):
     """Phase-C REJOIN-VS-CONTINUE tabulation (docs/PLAYBOOK_V2.md §3): from a representative
     off-track position on each leg (offset `off_nm` = the venue's commit-band XTE, both sides),
     is it faster to sail back to the optimizer's line or to press on to the mark from where you
@@ -516,7 +519,7 @@ def _rejoin_tab(definition, course_id, wf, consensus, cur, waves, marks, off_nm,
         from .geo import build_leg_fields
         bbox = optimizer.course_bbox(definition, course_id)
         if bbox:   # cache-shared with the scenario fan's optimize_course builds
-            base, leg_fields = build_leg_fields(definition, course_id, bbox)
+            base, leg_fields = build_leg_fields(definition, course_id, bbox, **(chart or {}))
     except Exception:
         base, leg_fields = None, []
     rp = optimizer._resolution("fast")
@@ -589,17 +592,33 @@ def _rejoin_tab(definition, course_id, wf, consensus, cur, waves, marks, off_nm,
     return rows
 
 
+MISSING_MARKS = "Missing positions: {names}. Fix them in Course & Marks."
+
+
 def build_playbook(definition, course_id, start_epoch, models, ensemble_members=0,
                    time_budget_s=200, jib_crossovers=None, sail_config=None, helm_factor=1.0, use_waves=True,
                    polar_adjustments=None, wave_coeffs=None, v2_scenarios=True,
                    scenario_budget_s=None, max_scenarios=None, fan_depth="standard",
-                   model_skill=True):
+                   model_skill=True, chart=None):
     """Multi-scenario playbook: route the course through the blended field (consensus) and through
     each model's sub-field (scenarios), cluster by favored side into variants. The field is
-    weighted by the venue's model skill exactly like the Lab route (`routerun.venue_skill`)."""
+    weighted by the venue's model skill exactly like the Lab route (`routerun.venue_skill`).
+
+    `chart` = {"source", "safety_depth"}: the Lab's chart and the active boat's no-go depth,
+    snapshot once by the caller (#149). Every route and obstacle field in the playbook uses it, so
+    the frozen plan sails the same water as the Gameplan and the chart Deploy sends. None → the
+    env defaults (COASTLINE_SOURCE, SAFETY_DEPTH_M)."""
     bbox = optimizer.course_bbox(definition, course_id)
     if not bbox:
         return {"available": False, "note": "No mark positions yet. Fix them in Course & Marks."}
+    # #151: a mark or finish with no position (or a gate with one end) is dropped or misplaced in
+    # the routed course, so the plan would be frozen for the wrong course and its completeness
+    # check run against the wrong finish
+    from . import coursecheck
+    skipped = coursecheck.missing(definition, course_id)
+    if skipped:
+        return {"available": False, "skipped_marks": skipped,
+                "note": MISSING_MARKS.format(names=", ".join(skipped))}
     hours = optimizer.estimate_hours(definition, course_id)
     # the v2 pace plays re-route the remainder after a +4h-late mark arrival — the field must
     # reach past the nominal window or those runs fall onto fallback wind
@@ -665,7 +684,7 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
                                          sail_config=sail_config, emit_exploration=False, cur=cur,
                                          waves=waves, helm_factor=helm_factor,
                                          polar_adjustments=polar_adjustments,
-                                         wave_coeffs=wave_coeffs)
+                                         wave_coeffs=wave_coeffs, **(chart or {}))
 
     # consensus = the blended field (all models) — the baseline "best guess". It anchors every
     # number in the bundle, so an incomplete one gets one retry at double budget and otherwise
@@ -753,14 +772,14 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
             jib_crossovers=jib_crossovers, sail_config=sail_config, helm_factor=helm_factor,
             polar_adjustments=polar_adjustments, wave_coeffs=wave_coeffs,
             max_scenarios=n_scen, per_budget_s=max(60, int(budget / n_scen)), deep=_deep,
-            log=log)
+            log=log, chart=chart)
         # Phase C INTERNAL plays — pace + gear-loss (the retro study ranked these the
         # highest-value play types; user priority)
         i_routes, i_robust = _internal_fan(
             definition, course_id, start_epoch, wf, consensus, cur, waves, marks,
             jib_crossovers=jib_crossovers, sail_config=sail_config, helm_factor=helm_factor,
             polar_adjustments=polar_adjustments, wave_coeffs=wave_coeffs,
-            per_budget_s=max(60, int(budget / n_scen)), log=log)
+            per_budget_s=max(60, int(budget / n_scen)), log=log, chart=chart)
         v2 = {"pos_profile": profile, "scenario_routes": s_routes + i_routes,
               "robustness": s_robust + i_robust, "corridor": corridor}
 

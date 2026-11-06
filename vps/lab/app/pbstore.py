@@ -67,7 +67,10 @@ def list_bundles():
                 b = json.load(fh)
         except (OSError, ValueError):
             continue
-        sig = b.get("signature") or {}
+        if not isinstance(b, dict):
+            continue
+        sig = b.get("signature")
+        sig = sig if isinstance(sig, dict) else {}      # a damaged file lists as unsigned, no crash
         out.append({
             "id": os.path.splitext(os.path.basename(f))[0],
             "race_id": b.get("race_id"), "race_name": b.get("race_name"),

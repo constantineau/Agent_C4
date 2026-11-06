@@ -248,21 +248,33 @@ def get_sail_advice(tws: float = None, twa: float = None, hoisted: str = None, b
     wrong = (hoisted_fam is not None and optimal is not None
              and hoisted_fam != optimal and not hoisted_ok_tossup)
 
+    # ONE decision drives both the console tile and this text (#113): the fit of the crew-set
+    # sail. The angle check alone passes an overpowered J1, so the text used to say "J1 is right"
+    # under a tile saying "change to J2".
+    fit, change_to = _fit_and_change(crew_sail, a_twa, tws, optimal, wrong,
+                                     hoisted_ok_tossup, boat_model)
+    change_now = fit in ("overpowered", "underpowered", "wrong_angle")
+    if change_now and not change_to:
+        change_to = optimal              # the tile's fallback, made explicit so both agree
+    # the crew's own jib when it is the right family and fits (J2 up: say J2, not "J1 is right")
+    best = crew_sail if (fit == "in_range" and _CERT_EQUIV.get(crew_sail) == optimal) else optimal
+
     _lbl = lambda s: SAIL_LABEL.get(s, s)
-    if wrong:
+    why = {"overpowered": "Too much wind for {}.", "underpowered": "Not enough wind for {}.",
+           "wrong_angle": "{} is wrong for this angle."}
+    if change_now:
+        rec = f"Change to {_lbl(change_to)}. " + why[fit].format(_lbl(crew_sail))
+    elif wrong:
         rec = f"Change to {_lbl(optimal)}. {_lbl(hoisted_fam)} is up."
     elif hoisted_ok_tossup:
         rec = f"{_lbl(hoisted_fam)} is fine. {_lbl(optimal)} is equal here, no need to change."
     elif next_xover and next_xover["deg_away"] <= 8:
-        rec = (f"{_lbl(optimal)} is right. {next_xover['to_sail']} at "
+        rec = (f"{_lbl(best)} is right. {next_xover['to_sail']} at "
                f"{next_xover['at_twa']}° TWA ({next_xover['deg_away']}° away).")
     elif tossup_with:
-        rec = f"{_lbl(optimal)} or {', '.join(_lbl(s) for s in tossup_with)}. Either works here."
+        rec = f"{_lbl(best)} or {', '.join(_lbl(s) for s in tossup_with)}. Either works here."
     else:
-        rec = f"{_lbl(optimal)} for {round(a_twa)}° TWA, {round(tws)} kts."
-
-    fit, change_to = _fit_and_change(crew_sail, a_twa, tws, optimal, wrong,
-                                     hoisted_ok_tossup, boat_model)
+        rec = f"{_lbl(best)} for {round(a_twa)}° TWA, {round(tws)} kts."
 
     return {
         "available": True,
