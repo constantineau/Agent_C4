@@ -117,8 +117,8 @@ with tempfile.TemporaryDirectory() as d:
     state["drained_at"] = time.monotonic()  # the flusher has drained the buffer since
     check("once trusted and drained, housekeeping allows the prune",
           archiver._clock_housekeeping(state) is True)
-    check("the untrusted stretch is closed with its time span",
-          archiver.clock_keep_windows(conn) == [(iso(stale), iso(stale + 20 * 60))])
+    check("the untrusted stretch is closed as an id range (ids 21..41)",
+          archiver.clock_keep_ids(conn) == [[21, 41]])
     archiver.prune(conn, engine_db=eng, retain_days=7)
     check("rows written before trust (stale date), including the late one, are KEPT",
           count(conn, stale, stale + 20 * 60) == 21)
@@ -126,6 +126,24 @@ with tempfile.TemporaryDirectory() as d:
                                                                  real_old + 19 * 60) == 0)
     doc = archiver.write_status(state, path=os.path.join(d, "status.json"))
     check("status file says clock_trusted", doc.get("clock_trusted") is True)
+
+print("#184-9 a stretch holding stale AND corrected times does not shield other history:")
+with tempfile.TemporaryDirectory() as d:
+    conn, eng = archive(d), engine(d)
+    unrelated = NOW - 400 * 86400          # a real, old, out-of-session row: prunable
+    add(conn, unrelated, 3)
+    state = {"conn": conn, "clock": FakeClock(False)}
+    archiver.open_clock_window(conn)
+    state["clock_open_gen"], state["clock_saved"] = 0, True
+    add(conn, NOW - 2000 * 86400, 2)       # stale clock: years ago
+    add(conn, NOW - 60, 2)                 # NTP stepped it before the stretch was closed
+    state["clock"].source = "ntp"
+    state["drained_at"] = time.monotonic() + 1
+    archiver._clock_housekeeping(state)
+    archiver.prune(conn, engine_db=eng, retain_days=7)
+    check("the unrelated old rows are pruned", count(conn, unrelated, unrelated + 180) == 0)
+    check("the stale rows of the stretch are kept",
+          count(conn, NOW - 2001 * 86400, NOW - 1999 * 86400) == 2)
 
 print("#184-9 a rotation while untrusted: the fresh file's stretch starts at row 1:")
 with tempfile.TemporaryDirectory() as d:

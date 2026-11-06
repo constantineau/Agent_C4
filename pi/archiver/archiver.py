@@ -1528,9 +1528,10 @@ class _PruneStopped(Exception):
 # it woke up with. Recording goes on regardless; the prune waits until the clock is trusted
 # (see `pruner`). And because those rows carry a stale date that a later prune would read as
 # "old", the stretch is remembered by ROW ID while it is being written (ids do not depend on the
-# clock) and, once the clock is trusted, turned into a time window the prune always keeps.
-# sync_state['untrusted_clock'] = JSON list of {boot, from_id, to_id, t0, t1}; to_id is null
-# while the stretch is still open.
+# clock), and the prune never deletes those ids. Not as a time window: a stretch can hold both
+# stale and corrected times, and its min..max time would shield unrelated history in between.
+# sync_state['untrusted_clock'] = JSON list of {boot, from_id, to_id}; to_id is null while the
+# stretch is still open.
 _CLOCK_KEY = "untrusted_clock"
 
 
@@ -1558,15 +1559,12 @@ def clock_window_open(conn):
 
 
 def _close_clock_windows(conn, wins):
-    """Close every open stretch at the archive's current top id and record its time span."""
+    """Close every open stretch at the archive's current top id."""
     with _WRITE_LOCK:
         top = conn.execute("SELECT max(id) FROM readings").fetchone()[0] or 0
-        for w in wins:
-            if w.get("to_id") is None:
-                w["to_id"] = max(top, int(w["from_id"]) - 1)
-                w["t0"], w["t1"] = conn.execute(
-                    "SELECT min(time), max(time) FROM readings WHERE id BETWEEN ? AND ?",
-                    (int(w["from_id"]), w["to_id"])).fetchone()
+    for w in wins:
+        if w.get("to_id") is None:
+            w["to_id"] = max(top, int(w["from_id"]) - 1)
     return wins
 
 
@@ -1579,7 +1577,7 @@ def open_clock_window(conn, from_id=None):
         with _WRITE_LOCK:
             from_id = (conn.execute("SELECT max(id) FROM readings").fetchone()[0] or 0) + 1
     wins.append({"boot": clock_trust.boot_id() if clock_trust else "", "from_id": int(from_id),
-                 "to_id": None, "t0": None, "t1": None})
+                 "to_id": None})
     _save_clock_windows(conn, wins)
     return wins
 
@@ -1592,10 +1590,11 @@ def close_clock_windows(conn):
     return wins
 
 
-def clock_keep_windows(conn):
-    """The closed untrusted-clock stretches, as kept (start_iso, end_iso) windows."""
-    return [(w["t0"], w["t1"]) for w in _clock_windows(conn)
-            if w.get("to_id") is not None and w.get("t0") and w.get("t1")]
+def clock_keep_ids(conn):
+    """The closed untrusted-clock stretches, as [from_id, to_id] ranges the prune never
+    deletes."""
+    return [[int(w["from_id"]), int(w["to_id"])] for w in _clock_windows(conn)
+            if w.get("to_id") is not None and int(w["to_id"]) >= int(w["from_id"])]
 
 
 def _prune_gaps(wins, cutoff):
@@ -1664,7 +1663,12 @@ def _prune(conn, engine_db=None, retain_days=None, chunk_rows=None, pause_s=None
     if clock_window_open(conn):
         print("[archive] prune SKIPPED — an untrusted-clock stretch is still open", flush=True)
         return None
-    wins = wins + clock_keep_windows(conn)
+    keep_ids = clock_keep_ids(conn)
+    # Rows inside a kept id range are skipped; everything a chunk SELECTS is still deleted, so
+    # `since` keeps advancing past them.
+    id_keep = (" AND NOT EXISTS (SELECT 1 FROM json_each(?) k WHERE readings.id BETWEEN "
+               "json_extract(k.value, '$[0]') AND json_extract(k.value, '$[1]'))"
+               if keep_ids else "")
     cutoff = _iso(datetime.now(timezone.utc).timestamp() - days * 86400)
     # Delete only inside the GAPS between kept windows, never filtering windows row by row: a
     # LIMIT bounds the rows a query returns, not the rows it scans, so a filter over a big kept
@@ -1682,8 +1686,9 @@ def _prune(conn, engine_db=None, retain_days=None, chunk_rows=None, pause_s=None
             with _WRITE_LOCK:
                 sel = conn.execute(
                     f"SELECT id, time FROM readings WHERE time {'>=' if lo_incl else '>'} ? "
-                    f"AND time >= ? AND time < ?{id_cap} ORDER BY time LIMIT ?",
-                    (lo, since, hi, *((through,) if id_cap else ()), chunk)).fetchall()
+                    f"AND time >= ? AND time < ?{id_cap}{id_keep} ORDER BY time LIMIT ?",
+                    (lo, since, hi, *((through,) if id_cap else ()),
+                     *((json.dumps(keep_ids),) if id_keep else ()), chunk)).fetchall()
                 if not sel:
                     break
                 conn.execute("DELETE FROM readings WHERE id IN "
