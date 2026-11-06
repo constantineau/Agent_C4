@@ -80,6 +80,19 @@ for (const order of ["B first, A late", "B's list, then all of A, then the rest 
   });
 }
 
+test("a debrief with no recording left still opens (G65)", async () => {
+  const h = harness();
+  h.ctx.renderDebrief();
+  for (let n = 0; n < 40; n++) {
+    await h.flush();
+    if (!h.pending.length) break;
+    const p = h.pending[0];
+    const body = p.url.includes("/recordings") ? { recordings: [], debriefs: [{ id: 11, created_at: 50 }] } : reply(p.url, "A");
+    h.answer((u) => u === p.url, body);
+  }
+  assert.equal(h.ctx.Deb.viewing, 11);
+});
+
 test("the newest debrief opens on load (G65)", async () => {
   const h = harness();
   h.ctx.renderDebrief();

@@ -3172,11 +3172,11 @@ async function retroLoad() {
   } catch (e) { /* card renders without job state */ }
 }
 
-// The newest archived debrief across this race's recordings, or null.
+// The newest archived debrief for this race, or null. Taken from the race's whole archive, so a
+// debrief whose recording or track is gone still opens.
 function debLatestId() {
   let best = null;
-  (Deb.recordings || []).forEach((x) => {
-    const d = x.debrief;
+  (Deb.debriefs || []).concat((Deb.recordings || []).map((x) => x.debrief)).forEach((d) => {
     if (d && d.id != null && (!best || (d.created_at || 0) > (best.created_at || 0))) best = d;
   });
   return best ? best.id : null;
@@ -3221,15 +3221,15 @@ function debWinRange(w) {
 async function debLoadRecordings() {
   // answers for a race the user has since left are dropped, never stored under the new one
   const race = Deb.raceId;
-  let recs, agent, track;
+  let recs, agent, track, debs;
   try {
     const r = await (await apiGet("/api/debrief/recordings?race_id=" + encodeURIComponent(race))).json();
-    recs = r.recordings || []; agent = r.agent || null;
-  } catch (e) { recs = []; agent = { available: false, note: "the Lab could not list recordings" }; }
+    recs = r.recordings || []; agent = r.agent || null; debs = r.debriefs || [];
+  } catch (e) { debs = []; recs = []; agent = { available: false, note: "the Lab could not list recordings" }; }
   try { track = await (await apiGet("/api/debrief/track?race_id=" + encodeURIComponent(race))).json(); }
   catch (e) { track = null; }
   if (Deb.raceId !== race) return;
-  Deb.recordings = recs; Deb.agent = agent; Deb.track = track;
+  Deb.recordings = recs; Deb.agent = agent; Deb.track = track; Deb.debriefs = debs;
 }
 
 // One button per recording: the job fetches the boat log for that session (if it isn't loaded
