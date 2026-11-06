@@ -88,7 +88,7 @@ with tempfile.TemporaryDirectory() as d:
     add(conn, real_old, 20)
     state = {"conn": conn, "clock": FakeClock(False)}
     archiver.open_clock_window(conn)       # what run() does before the first row
-    state["clock_open_gen"] = 0
+    state["clock_open_gen"], state["clock_saved"] = 0, True
     add(conn, stale, 20)                   # recording goes on with the stale date
     check("while untrusted, housekeeping says do not prune",
           archiver._clock_housekeeping(state) is False)
@@ -108,13 +108,20 @@ with tempfile.TemporaryDirectory() as d:
     check("the pruner never prunes while the clock is untrusted", pruned == [])
 
     state["clock"].source = "ntp"          # NTP synced (or a GNSS fix agreed)
-    check("once trusted, housekeeping allows the prune",
+    check("trusted, but rows collected before may still be in the RAM buffer: wait",
+          archiver._clock_housekeeping(state) is False and archiver.clock_window_open(conn))
+    check("a prune with the stretch still open deletes nothing",
+          archiver.prune(conn, engine_db=eng, retain_days=7) is None
+          and count(conn, real_old, real_old + 19 * 60) == 20)
+    add(conn, stale + 20 * 60, 1)          # the last stale row the flusher still held
+    state["drained_at"] = time.monotonic()  # the flusher has drained the buffer since
+    check("once trusted and drained, housekeeping allows the prune",
           archiver._clock_housekeeping(state) is True)
     check("the untrusted stretch is closed with its time span",
-          archiver.clock_keep_windows(conn) == [(iso(stale), iso(stale + 19 * 60))])
+          archiver.clock_keep_windows(conn) == [(iso(stale), iso(stale + 20 * 60))])
     archiver.prune(conn, engine_db=eng, retain_days=7)
-    check("rows written before trust (stale date) are KEPT by the first prune",
-          count(conn, stale, stale + 19 * 60) == 20)
+    check("rows written before trust (stale date), including the late one, are KEPT",
+          count(conn, stale, stale + 20 * 60) == 21)
     check("real old out-of-session rows are still pruned", count(conn, real_old,
                                                                  real_old + 19 * 60) == 0)
     doc = archiver.write_status(state, path=os.path.join(d, "status.json"))
@@ -127,6 +134,8 @@ with tempfile.TemporaryDirectory() as d:
     add(conn, NOW - 40 * 86400, 5)          # written to the fresh file before the pruner looked
     archiver._clock_housekeeping(state)
     state["clock"].source = "gnss"
+    archiver._clock_housekeeping(state)
+    state["drained_at"] = time.monotonic()
     archiver._clock_housekeeping(state)
     wins = archiver._clock_windows(conn)
     check("one closed window covering ids 1..5", len(wins) == 1 and wins[0]["from_id"] == 1
@@ -141,6 +150,39 @@ with tempfile.TemporaryDirectory() as d:
     wins = archiver._clock_windows(conn)
     check("first closed at the top id, second open after it",
           [(w["from_id"], w["to_id"]) for w in wins] == [(1, 3), (4, None)])
+
+print("#184-9 a stretch that cannot be saved stops the prune, not the record:")
+
+
+class FailingConn:
+    """Reads fine, every write fails (a full or read-only card)."""
+    def __init__(self, real):
+        self.real = real
+
+    def execute(self, sql, *a):
+        if sql.lstrip().upper().startswith(("INSERT", "DELETE", "UPDATE")):
+            raise sqlite3.OperationalError("disk I/O error")
+        return self.real.execute(sql, *a)
+
+    def commit(self):
+        return self.real.commit()
+
+
+with tempfile.TemporaryDirectory() as d:
+    real = archive(d)
+    state = {"conn": FailingConn(real), "clock": FakeClock(False), "clock_open_gen": 0,
+             "clock_from_id": 1, "clock_saved": False}
+    raised = False
+    try:
+        archiver._clock_housekeeping(state)
+    except sqlite3.OperationalError:
+        raised = True
+    check("housekeeping raises (the pruner skips this pass) instead of carrying on",
+          raised and state["clock_saved"] is False)
+    state["conn"] = real                    # the card recovers
+    archiver._clock_housekeeping(state)
+    check("the next pass saves the stretch", state["clock_saved"] is True
+          and archiver.clock_window_open(real))
 
 print("#184-12 the prune stops between window derivations when a rotation starts:")
 with tempfile.TemporaryDirectory() as d:
