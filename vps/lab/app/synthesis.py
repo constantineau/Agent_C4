@@ -85,7 +85,9 @@ def sign_bundle(bundle: dict, signed_by: str = SIGNED_BY) -> dict:
 
 
 def verify_bundle(bundle: dict) -> bool:
-    sig = bundle.get("signature") or {}
+    sig = bundle.get("signature") if isinstance(bundle, dict) else None
+    if not isinstance(sig, dict):        # a damaged file: a failed check, never a crash
+        return False
     if sig.get("alg") != "sha256" or not sig.get("value"):
         return False
     return hashlib.sha256(canonical_bytes(bundle)).hexdigest() == sig["value"]
@@ -743,6 +745,7 @@ def synthesize(definition, course_id, start_epoch, models, ensemble_members=0, t
     it's relied on / deployed onboard. Passes through the not-available case from 2a unchanged.
     `chart` = {"source", "safety_depth"} snapshot when the job starts (#149): every route uses it,
     and the bundle records it."""
+    routed_on = race_def.course_hash(definition, course_id)    # before routing touches anything
     from .geo import obstacles as _obs_mod
     chart = dict(chart or {})          # unset → the defaults the obstacle builder would use
     chart = {"source": (chart.get("source") or _obs_mod.COASTLINE_SOURCE).strip().lower(),
@@ -791,6 +794,7 @@ def synthesize(definition, course_id, start_epoch, models, ensemble_members=0, t
         "race_id": definition.get("race_id"),
         "race_name": definition.get("name"),
         "course_id": playbook.get("course_id") or course_id,
+        "course_hash": routed_on,      # the course + zones this was routed on; Deploy checks it (#150)
         "start_epoch": playbook.get("start_epoch"),
         "generated_at": round(time.time()),
         "headline": headline,

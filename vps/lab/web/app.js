@@ -2231,6 +2231,8 @@ function paintDeploy() {
         </div>
         ${pbWarnings(selPb)}` : `<div class="muted">No frozen playbook yet. Build one in <a href="#gameplan">Gameplan</a> and freeze it. Then lock it in here.</div>`}
       ${lock ? `<div class="banner ok" style="margin-top:10px">🔒 Locked in: <code>${esc(lock.playbook_id)}</code>${lock.signed ? ` · signature <code>${esc(lock.signature)}…</code>` : " · <b>unsigned</b>"} · ${esc(fmtDate(lock.locked_at))}</div>` : ""}
+      ${r.lock_problem ? `<div class="banner warn" style="margin-top:10px">⚠ ${esc(r.lock_problem)}</div>` : ""}
+      ${r.lock_note && !r.lock_problem ? `<div class="banner warn" style="margin-top:10px">⚠ ${esc(r.lock_note)}</div>` : ""}
     </div>
 
     <div class="card" id="depBoat">${boatPanelInner()}</div>
@@ -2361,7 +2363,7 @@ function deployPanel(lock, t) {
     <h3>Send to the boat</h3>
     <div class="muted" style="font-size:12px;margin-bottom:8px">Sends course, fleet, checklist, watch plan and playbook to the boat. Replaces what's there. If the boat is offline, use the downloads below.</div>
     <div class="dep-actions">
-      <button id="depPush" onclick="depPush()" ${Dep.busy ? "disabled" : ""}>🚀 Push to boat</button>
+      <button id="depPush" onclick="depPush()" ${Dep.busy || (Dep.ready || {}).lock_problem ? "disabled" : ""}>🚀 Push to boat</button>
       <button onclick="downloadPlaybook('${esc(pid)}')">⬇ Playbook file</button>
       <button onclick="downloadHomework('${esc(rid)}')">⬇ Race prep file (Pi)</button>
     </div>

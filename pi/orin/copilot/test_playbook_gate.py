@@ -42,6 +42,11 @@ def check(name, cond):
     print(f"  [{'OK ' if cond else 'FAIL'}] {name}")
 
 
+# The timing cases below use a 0.5 s window; a real fsync on a busy CI disk can take seconds.
+# The write's ORDER (fsync, replace, fsync dir) is pinned near the end; the disk itself isn't tested.
+SYNCED = []
+os.fsync = lambda fd: SYNCED.append(("fsync", os.path.isdir(f"/proc/self/fd/{fd}")))
+
 PATH = os.path.join(tempfile.mkdtemp(), "playbook.json")
 config.PLAYBOOK_PATH = PATH
 A = {"race_id": "r1", "variants": [{"id": "a"}], "plays": []}
@@ -187,6 +192,25 @@ pbm.load()
 check("an approval is cached a few seconds (not a Pi call per read)", PIN["asks"] == n)
 check("the commit itself answers with what it wrote, before the Pi approves it",
       pbm.load(confirm=False).race_id == "r2")
+
+print("the write is durable before it goes live (#152: a power cut keeps one whole file):")
+SYNCED.clear()
+real_replace = os.replace
+
+
+def spy_replace(a, b):
+    SYNCED.append(("replace", b == PATH))
+    real_replace(a, b)
+
+
+os.replace = spy_replace
+try:
+    st, cm = load(A, "nonce-0100")
+finally:
+    os.replace = real_replace
+check("loaded", cm.json().get("loaded") is True and on_disk() == "r1")
+check("file fsynced, then replaced, then the directory fsynced",
+      SYNCED == [("fsync", False), ("replace", True), ("fsync", True)])
 
 print("short text:")
 for s in (REFUSED["detail"], TOO_LATE["detail"]):

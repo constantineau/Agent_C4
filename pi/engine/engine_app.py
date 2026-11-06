@@ -451,7 +451,14 @@ def approve_copilot_playbook(h):
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".cpb-", suffix=".tmp")
     with os.fdopen(fd, "w") as f:
         _json.dump({"hash": h, "at": int(time.time())}, f)
+        f.flush()
+        os.fsync(f.fileno())             # durable before it goes live: a power cut keeps one whole
     os.replace(tmp, path)
+    dfd = os.open(os.path.dirname(path), os.O_RDONLY)
+    try:
+        os.fsync(dfd)
+    finally:
+        os.close(dfd)
 
 
 @app.get("/playbook/copilot")

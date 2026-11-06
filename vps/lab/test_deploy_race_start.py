@@ -44,7 +44,7 @@ RACE = {"race_id": "r1", "name": "Race", "timezone": "America/Detroit",
 GUN = racestart.race_start(RACE)["epoch"]
 RACES = {"r1": RACE}
 D.store.get_race = lambda rid: RACES.get(rid)
-D.package = lambda rid, course_id=None: {
+D.package = lambda rid, course_id=None, **kw: {
     "race_name": "Race", "course_id": "c", "course_load": {"definition": RACES[rid], "course_id": "c"},
     "fleet_load": {"definition": RACES[rid]}, "checklist_load": {"items": [{"id": "x"}]},
     "watch_load": {"plan": {"blocks": [{"start": 1, "end": 2, "on": "A"}]}}}
@@ -129,7 +129,9 @@ check("the push is not ok and says why", res["ok"] is False and res["detail"] ==
 TICK["step"] = 0
 
 print("the playbook: the Lab never posts to the Orin; the Pi forwards it:")
-D.pbstore.get = lambda pid: {"race_id": "r1", "variants": [{"id": "a"}]} if pid == "pb1" else None
+from app import synthesis  # noqa: E402
+PB1 = synthesis.sign_bundle({"race_id": "r1", "variants": [{"id": "a"}]})   # Deploy checks it (#152)
+D.pbstore.get = lambda pid: PB1 if pid == "pb1" else None
 labstate.set("deploy:r1", {"playbook_id": "pb1"})
 CLOCK["t"] = GUN - 3600
 posted.clear()
