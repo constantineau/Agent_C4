@@ -188,7 +188,7 @@ REFROZEN = dict(BUNDLE, signature={"alg": "sha256", "value": "bb" * 32})
 pbstore.get = lambda pid: REFROZEN if pid == "r1__100" else None
 sp = P.resolve_target(NOW)
 check("re-frozen since the push → not followed as the boat's route, holds at the start",
-      sp["basis"] == "point" and sp["path"][0]["lat"] == 43.0)
+      sp["basis"] == "point" and sp["path"][0]["lat"] == 43.0 and sp["course_id"] == "c1")
 P.set_target("r1", playbook_id="r1__100")
 sp = P.resolve_target(NOW)
 check("pinned to the re-frozen bundle → its own history, not the old one's",

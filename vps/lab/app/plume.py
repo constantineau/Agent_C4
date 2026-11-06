@@ -343,7 +343,9 @@ def resolve_target(now=None):
     sig = str((sig.get("value") if isinstance(sig, dict) else "") or "")
     if bundle and pushed_sig and not sig.startswith(pushed_sig):
         # re-frozen since the push (#182-6): the file under that id is no longer what the boat
-        # holds, so its route isn't the boat's plan — hold at the race start instead
+        # holds, so its route isn't the boat's plan — hold at the race start instead (its course
+        # is still the best guess at the boat's: a re-freeze is usually the same course)
+        tgt = dict(tgt, course_id=tgt.get("course_id") or bundle.get("course_id"))
         bundle = None
     course_id = (bundle or {}).get("course_id") or tgt.get("course_id")
     path, variant = (clean_path(tgt["path"]), tgt.get("variant")) if tgt.get("path") \
