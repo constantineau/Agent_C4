@@ -1715,12 +1715,17 @@ def _prune(conn, engine_db=None, retain_days=None, chunk_rows=None, pause_s=None
                     sel = conn.execute(
                         f"SELECT id, time FROM readings WHERE time = ? AND id > ?{id_cap} "
                         f"ORDER BY id LIMIT ?", (since, since_id, *cap, chunk)).fetchall()
-                if len(sel) < chunk:
+                if len(sel) < chunk and since_id is None:
                     sel += conn.execute(
                         f"SELECT id, time FROM readings WHERE time {'>=' if lo_incl else '>'} ? "
-                        f"AND time {'>' if since_id is not None else '>='} ? AND time < ?"
-                        f"{id_cap} ORDER BY time, id LIMIT ?",
-                        (lo, since, hi, *cap, chunk - len(sel))).fetchall()
+                        f"AND time < ?{id_cap} ORDER BY time, id LIMIT ?",
+                        (lo, hi, *cap, chunk - len(sel))).fetchall()
+                elif len(sel) < chunk:
+                    # `since` is past `lo` already; no `lo` bound, or the planner seeks from it
+                    sel += conn.execute(
+                        f"SELECT id, time FROM readings WHERE time > ? AND time < ?{id_cap} "
+                        f"ORDER BY time, id LIMIT ?",
+                        (since, hi, *cap, chunk - len(sel))).fetchall()
                 if not sel:
                     break
                 gone = [r[0] for r in sel if not kept(r[0])]

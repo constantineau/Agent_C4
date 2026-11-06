@@ -189,6 +189,33 @@ with tempfile.TemporaryDirectory() as d:
     check(f"no chunk re-read the rows before it (max {max(per_chunk) * 100} VM steps/chunk "
           f"over {len(per_chunk)} chunks)", per_chunk and max(per_chunk) * 100 < 50000)
 
+print("#184-9 many kept rows on DISTINCT timestamps: each chunk's scan stays bounded:")
+with tempfile.TemporaryDirectory() as d:
+    conn, eng = archive(d), engine(d)
+    add(conn, NOW - 300 * 86400, 20000, step=1)
+    archiver._save_clock_windows(conn, [{"boot": "b", "from_id": 1, "to_id": 19990}])
+    steps, per_chunk = [0], []
+
+    def tick2():
+        steps[0] += 1
+        return 0
+
+    def between2(_s):
+        per_chunk.append(steps[0])
+        steps[0] = 0
+    conn.set_progress_handler(tick2, 100)
+    real_sleep = archiver.time.sleep
+    archiver.time.sleep = between2
+    try:
+        deleted = archiver.prune(conn, engine_db=eng, retain_days=7, chunk_rows=500,
+                                 pause_s=0.001)
+    finally:
+        archiver.time.sleep = real_sleep
+        conn.set_progress_handler(None, 0)
+    check(f"10 rows deleted (got {deleted})", deleted == 10)
+    check(f"bounded per chunk (max {max(per_chunk) * 100} VM steps over {len(per_chunk)} "
+          f"chunks)", per_chunk and max(per_chunk) * 100 < 50000)
+
 print("#184-9 a rotation while untrusted saves the fresh file's stretch before any row:")
 with tempfile.TemporaryDirectory() as d:
     db = Path(d) / "archive.db"

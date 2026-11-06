@@ -170,10 +170,10 @@ def _enqueue(batch):
     _write_atomic(QUEUE_DIR, name, batch)
 
 
-def hold(readings):
+def hold(readings, mono=None):
     """Keep a batch collected before the clock was trusted, undated (#240: collection goes
     on, timestamped publishing waits). It is dated from the monotonic clock once trust comes."""
-    mono = time.monotonic()
+    mono = time.monotonic() if mono is None else mono
     batch = {"boat_id": BOAT_ID, "readings": readings, "mono": mono,
              "boot": clock_trust.boot_id() if clock_trust else ""}
     _write_atomic(UNDATED_DIR, f"{int(mono * 1e9):020d}.json", batch)
@@ -294,9 +294,22 @@ def send_ais(targets):
               flush=True)
 
 
-async def flusher(window, loop):
+async def flusher(window, loop, retry=None):
+    # A batch whose hand-off raised (disk full or an I/O error while holding or queueing it)
+    # is kept here and tried again first on the next tick, so the task never dies and the batch
+    # is not lost. Held batches keep their original monotonic stamp.
+    retry = [] if retry is None else retry
     while True:
         await asyncio.sleep(AGG_SECONDS)
+        while retry:
+            fn, args = retry[0]
+            try:
+                await loop.run_in_executor(None, fn, *args)
+            except Exception as exc:
+                print(f"[uplink] still cannot hand off {len(retry)} batch(es) ({exc})",
+                      flush=True)
+                break
+            retry.pop(0)
         if not window:
             continue
         trusted = clock_trusted()
@@ -307,7 +320,16 @@ async def flusher(window, loop):
             r["value" if kind == "num" else "str_value"] = val
             readings.append(r)
         window.clear()
-        await loop.run_in_executor(None, send if trusted else hold, readings)
+        job = (send, (readings,)) if trusted else (hold, (readings, time.monotonic()))
+        if retry:
+            retry.append(job)           # keep the order behind the ones still failing
+            continue
+        try:
+            await loop.run_in_executor(None, job[0], *job[1])
+        except Exception as exc:
+            print(f"[uplink] could not hand off {len(readings)} readings ({exc}); "
+                  f"will retry", flush=True)
+            retry.append(job)
 
 
 async def ais_flusher(ais_window, loop):

@@ -249,3 +249,31 @@ def test_ais_is_not_sent_while_the_clock_is_untrusted(q):
         task.cancel()
     asyncio.run(go())
     assert sent == []
+
+
+def test_a_failing_hold_does_not_kill_the_flusher_or_lose_the_batch(q):
+    import asyncio
+    up = _load_uplink(q)
+    up.CLOCK = _Clock(False)
+    up.AGG_SECONDS = 0.01
+    real_hold, calls = up.hold, {"n": 0}
+
+    def flaky_hold(readings, mono=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError(28, "No space left on device")
+        return real_hold(readings, mono)
+    up.hold = flaky_hold
+
+    async def go():
+        win = {("gps", "navigation.speedOverGround"): ("num", 3.0)}
+        task = asyncio.create_task(up.flusher(win, asyncio.get_running_loop()))
+        await asyncio.sleep(0.2)
+        alive = not task.done()
+        task.cancel()
+        return alive
+    alive = asyncio.run(go())
+    assert alive
+    held = _names(q / "undated")
+    assert len(held) == 1
+    assert json.loads((q / "undated" / held[0]).read_text())["readings"][0]["value"] == 3.0
