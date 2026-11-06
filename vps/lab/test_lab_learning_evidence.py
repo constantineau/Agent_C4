@@ -201,6 +201,20 @@ pool = sum(r["seconds"] for r in art["curve"])
 check(f"overlapping windows: each race keeps all its seconds ({per}), the pool counts "
       f"the overlap once ({pool} s)", per == {T0: 120, T0 + 60: 120} and pool == 180)
 
+SAME = {"sessions": [
+    {"id": 1, "name": "short", "race_id": "x",
+     "window": {"start_ts": T0, "end_ts": T0 + 59, "hours": 0.02, "provenance": []}},
+    {"id": 2, "name": "long", "race_id": "x",
+     "window": {"start_ts": T0, "end_ts": T0 + 119, "hours": 0.03, "provenance": []}}]}
+OVL = SAME
+monitor.agent_json = overlap_agent
+try:
+    art = OP.compute(min_seconds=60)
+finally:
+    monitor.agent_json = _ag
+per = {r["recording"]: r["seconds"] for r in art["race_curves"]}
+check(f"same start, different ends: one recording, 120 unique seconds ({per})", per == {T0: 120})
+
 # ---- 5) judge: scoring fields cover the recording's own time ---------------------------------
 print("5) debrief: current and sea state over the recording's own time")
 calls = []

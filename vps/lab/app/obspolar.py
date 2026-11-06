@@ -123,7 +123,8 @@ def compute(min_seconds=MIN_SECONDS):
     raw, names_by_cell, strides = {}, {}, {}
     pooled = {}          # raw minus seconds an earlier overlapping window already counted
     race_meta = []
-    by_window, counted = {}, []        # (start, end) -> its race_meta row; intervals already read
+    by_window = {}       # (start, end) -> its race_meta row
+    seen_rec, seen_pool = {}, set()    # accepted fix seconds, per recording and pooled
     for s in monitor.agent_json("/racelog/sessions")["sessions"]:
         w = s.get("window") or {}
         if not w.get("hours"):
@@ -145,12 +146,13 @@ def compute(min_seconds=MIN_SECONDS):
         trust = monitor.agent_json(f"/racelog/trust?start={w['start_ts']}&end={w['end_ts']}",
                                    timeout=180)
         fixes, refused = _gate(r["fixes"], trust)
-        # ...and a window that only OVERLAPS one already read keeps every second for its own
-        # per-race views, but adds only its new seconds to the pooled ones
-        prior = list(counted)
-        counted.append(wkey)
+        # ...and a window that only OVERLAPS one already read: evidence is de-duplicated by the
+        # second of each ACCEPTED fix. A race keeps every second it has for its own views; the
+        # pooled views count a second once; two windows with the same start (one recording key)
+        # never count a second twice under it.
         already = 0
-        strides[rec] = _stride_s(r["fixes"])
+        mine = seen_rec.setdefault(rec, set())
+        strides.setdefault(rec, _stride_s(r["fixes"]))
         sail_log = r.get("sail_log") or []
         n, not_sailing = 0, 0
         for f in fixes:
@@ -170,10 +172,16 @@ def compute(min_seconds=MIN_SECONDS):
                 cfg = None                                    # a douse nobody tapped
             key = (round(tws / TWS_STEP_KN) * TWS_STEP_KN,
                    round(twa / TWA_STEP_DEG) * TWA_STEP_DEG, cfg, rec)
+            sec = int(round(f["t"]))
+            if sec in mine:
+                already += 1
+                continue
+            mine.add(sec)
             raw.setdefault(key, []).append(stw)
-            if any(a <= f["t"] <= b for a, b in prior):
+            if sec in seen_pool:
                 already += 1
             else:
+                seen_pool.add(sec)
                 pooled.setdefault(key, []).append(stw)
                 names_by_cell.setdefault(key[:3], set()).add(s["name"])
             n += 1
