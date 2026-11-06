@@ -339,9 +339,12 @@ SCHEMA_BRIEF = """Produce ONE RaceDefinition JSON object. Field meanings:
   Capture safety/SER equipment, registration, navigation, and procedural items. Set
   deliver_to_ipad=true for race-time ACTION items the crew must do at a moment (e.g. nav lights at
   sunset, gate GPS photo, finish procedure / displaying numbers) and give them a trigger.
-- division_starts: [{division, gun}] — the division's WARNING/START gun as an ISO local datetime
-  "YYYY-MM-DDTHH:MM" (the race venue's local time) — ONLY when the SIs/NOR state the per-division
-  start times; else an empty list. These drive corrected-time standings.
+- division_starts: [{division, gun}] — the division's START signal (the gun the race clock starts
+  from), never the warning or preparatory signal before it, as an ISO local datetime
+  "YYYY-MM-DDTHH:MM" (the race venue's local time). When the documents give only the warning
+  signal time, add the stated interval to the start (usually 5 minutes) and list it as uncertain
+  in provenance.review_status. ONLY when the SIs/NOR state the per-division start times; else an
+  empty list. These drive corrected-time standings.
 - rules_profile: {rrs_edition, info_available_to_all_permitted (bool),
   customized_advice_while_underway_prohibited (bool), appendix_wp (bool), tracker_permitted
   (true/false only when the documents say; else null), modifications:[{ref,rule,summary}],
