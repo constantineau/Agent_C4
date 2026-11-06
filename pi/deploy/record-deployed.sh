@@ -65,11 +65,11 @@ for x in "${files[@]}" "${services[@]}"; do
   [[ $x =~ ^[A-Za-z0-9._/@+-]+$ ]] || { echo "unsafe name (spaces or shell characters): $x" >&2; exit 2; }
 done
 
+script=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")   # before the cd below changes "."
 cd "$(git rev-parse --show-toplevel)"
 commit=$(git rev-parse --short HEAD)
 if [[ ${#files[@]} -gt 0 && -n $(git status --porcelain -- "${files[@]}") ]]; then commit+="+uncommitted"; fi
 
-script=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
 out=$(ssh -o ConnectTimeout=15 "$host" bash -s -- --box "$stamp" "$label" "$commit" \
         "${REMOTE_REPO:-Agent_C4}" "${BACKUPS:-deploy-backups}" "${COMPOSE_PROJECT:-sr33-pi}" \
         "${files[@]}" -- "${services[@]}" < "$script") \

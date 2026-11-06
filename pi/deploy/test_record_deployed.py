@@ -89,6 +89,12 @@ r = run("pi", "20261106T040000Z", "w5", FILE, "--", "engine", RUNNING="sha256:ol
 check("a container still on the old image fails",
       r.returncode == 1 and "does not run the image just built" in r.stdout)
 
+e = {**os.environ, "PATH": f"{bin_}:{os.environ['PATH']}"}
+r = subprocess.run(["bash", "./record-deployed.sh", "pi", "20261106T045000Z", "w5b", FILE],
+                   cwd=HERE, env=e, capture_output=True, text=True)
+check(f"works when run as ./record-deployed.sh from pi/deploy (rc {r.returncode})",
+      r.returncode == 0)
+
 r = run("pi", "20261106T050000Z", "w6", "a file; rm -rf ~")
 check("names with shell characters are refused", r.returncode == 2)
 
