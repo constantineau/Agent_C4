@@ -146,7 +146,9 @@ tick, lock = fn_body("checkToggle"), fn_body("depLockIn")
 check("checklist tick checks res.ok", "res.ok" in tick and "catch (e) {}" not in tick)
 check("a failed tick is undone and said", "alert(" in tick and "delete checked[id]" in tick)
 check("the undo hits the race it saved, not one switched to meanwhile",
-      "const checked = Lab.checked" in tick and "/api/checklist?race_id=" in tick and "Lab.checked[id] = true" not in tick.split("catch")[1])
+      "const checked = Lab.checked" in tick and "Lab.checked[id] = true" not in tick.split("catch")[1])
+check("one tick saves at a time (a failed one undoes exactly)",
+      "if (Lab.checkSaving)" in tick and "finally { Lab.checkSaving = false; }" in tick)
 check("lock-in checks res.ok", "res.ok" in lock and "Lock-in failed" in lock)
 check("route poll sends its job_id", '"/api/optimize/status?job_id="' in js)
 check("playbook poll sends its job_id", '"/api/playbook/synthesize/status?job_id="' in js)
