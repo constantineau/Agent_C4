@@ -102,6 +102,39 @@ r = deviation.get_deviation()
 check("time_behind negative (ahead)", r["time_behind_s"] < 0)
 check("status ok when ahead + on line", r["status"] == "ok")
 
+# --- the two bands are exported separately: time behind alone has no side (#43) ---------------
+print("bands exported separately (#43):")
+deviation.reset_state()
+set_boat(nm_north(3), LON0, sog=5.0, cog=0.0)
+set_now(T0 + (3 / SPEED) * 3600 + 400)               # 400 s behind, on the line
+r = deviation.get_deviation()
+check("status act from time behind", r["status"] == "act")
+check("…but the XTE band is ok", r["xte_status"] == "ok" and r["behind_status"] == "act")
+
+# --- xte trend compares to a sample ≥ TREND_MIN_AGE_S old, not the last call (#43) -------------
+print("xte trend over a real interval (#43):")
+deviation.reset_state()
+t = T0 + (3 / SPEED) * 3600
+set_boat(nm_north(3), LON0 + nm_east(0.2), sog=SPEED, cog=0.0)
+set_now(t)
+deviation.get_deviation()
+set_boat(nm_north(3), LON0 + nm_east(0.5), sog=SPEED, cog=0.0)
+set_now(t + 61)
+a = deviation.get_deviation()["xte_trend"]
+b = deviation.get_deviation()["xte_trend"]           # a second caller in the same poll
+check("drifting out over a minute → diverging", a == "diverging")
+check("…and a back-to-back second call says the same (was 'steady')", b == "diverging")
+set_now(t + 61 + 30)                                 # 30 s later, still 0.5 nm out
+check("compared to the ≥60 s old sample, not the latest one", deviation.get_deviation()["xte_trend"] == "diverging")
+deviation.reset_state()
+set_now(t)
+deviation.get_deviation()
+set_boat(nm_north(3), LON0 + nm_east(0.2), sog=SPEED, cog=0.0)
+set_now(t + 10)
+check("no sample old enough yet → steady", deviation.get_deviation()["xte_trend"] == "steady")
+set_now(t + 65)
+check("closing in → converging", deviation.get_deviation()["xte_trend"] == "converging")
+
 # --- graceful na paths ------------------------------------------------------------------------
 print("na paths:")
 use_bundle({})

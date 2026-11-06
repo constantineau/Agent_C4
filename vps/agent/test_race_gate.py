@@ -114,6 +114,13 @@ print("before the race (no session): every load is taken")
 for name, (url, body) in LOADS.items():
     check(f"{name} loads", loaded(client.post(url, json=body)))
 
+print("a playbook load forgets the selector's held verdict (#40)")
+engine_app.selector._SETTLE["r"] = {"key": ("act", "switch", "left")}
+engine_app.selector._CONFIRM[("r", "left")] = {"first": NOW, "lapsed": None}
+check("playbook loads", loaded(client.post("/playbook/load", json=BUNDLE)))
+check("…and the settle latch + downwind clock are cleared",
+      not engine_app.selector._SETTLE and not engine_app.selector._CONFIRM)
+
 print("homework aboard: a LOG start with no kind is a RACE; Race is pre-selected")
 check("/session says homework is aboard (from the stores)", client.get("/session").json()["homework_aboard"] is True)
 r = client.post("/session/start", json={}).json()

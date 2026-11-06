@@ -93,6 +93,21 @@ _CONFIRM = {}      # (route, favored) -> {"first": epoch, "lapsed": epoch|None}
 SETTLE_S = float(os.environ.get("SEL_SETTLE_S", "120"))
 _SETTLE = {}       # route -> {key, shown, cand, cand_since}
 
+# What the settle holds back while a change waits: the VERDICT and its wording, nothing else (#40).
+# Everything else (`signals`, the agreement `rows`) is always this instant's read. Holding the
+# whole old dict used to hand /strategy signals frozen at the last agreeing poll, and it built its
+# concordance and picture from readings that were no longer there.
+_VERDICT_KEYS = ("action", "status", "tier", "target_variant", "target_label", "value",
+                 "driven_by", "confidence", "confidence_label", "why", "consider", "clears",
+                 "based", "what_flips_it", "reoptimize_hint", "confirming")
+
+
+def reset_state():
+    """Forget the settle latch and the downwind confirmation clock. `/playbook/load` calls this:
+    a new gameplan must not inherit the old one's held verdict (#40)."""
+    _SETTLE.clear()
+    _CONFIRM.clear()
+
 
 def _variant_for_side(bundle, side):
     """The pre-authored variant for a first-beat side. Variant ids ARE the side (left|middle|right;
@@ -145,6 +160,18 @@ def _na(note):
 _DRIFT_SIGN = {"right": 1, "left": -1, "veered": 1, "backed": -1}
 
 
+def _forecast_moved(dft):
+    """'shifted right ~10°' from drift's own SIGNED mean shift, not its direction times its mean
+    |shift| (#43, the bug #231 fixed in the matcher): +40°/-20° is 10° right, not 30°. Inside
+    drift's steady band there is no direction to name, so it says how far it moved, no side."""
+    d = dft.get("drift_dir")
+    signed = dft.get("drift_twd_signed_deg")
+    if d in _DRIFT_SIGN:
+        deg = abs(signed) if signed is not None else (dft.get("drift_twd_deg") or 0)
+        return f"shifted {d} ~{round(deg)}°"
+    return f"moved ~{round(dft.get('drift_twd_deg') or 0)}°"
+
+
 def get_selector(route=None, now=None):
     """The unified branch recommendation, SETTLED — what the crew is actually shown.
 
@@ -180,7 +207,8 @@ def get_selector(route=None, now=None):
     if held >= SETTLE_S:
         _SETTLE[route] = {"key": key, "shown": out, "cand": None, "cand_since": now}
         return out
-    shown = dict(st["shown"])
+    shown = {k: v for k, v in out.items() if k not in _VERDICT_KEYS}
+    shown.update({k: v for k, v in st["shown"].items() if k in _VERDICT_KEYS})
     shown["settling"] = {"to_value": out.get("value"), "to_status": out.get("status"),
                          "to_action": out.get("action"), "why": out.get("why"),
                          "held_s": round(held), "need_s": SETTLE_S}
@@ -208,7 +236,8 @@ def _decide(route=None, now=None):
     tac = tactics.get_tactics(route)
 
     wind = (tac.get("wind") or {}) if tac.get("available") else {}
-    persistent = bool(wind.get("persistent"))
+    # None, not False, with no wind read: "no lasting shift" is a claim about wind we don't have
+    persistent = bool(wind.get("persistent")) if tac.get("available") else None
     favored = tac.get("favored_side") if tac.get("available") else None    # left | right | either
     pos = tac.get("point_of_sail", "upwind") if tac.get("available") else "upwind"
 
@@ -229,11 +258,13 @@ def _decide(route=None, now=None):
                   "tack": tac.get("tack") if tac.get("available") else None,
                   "oscillation_deg": wind.get("oscillation_deg")},
         "deviation": {"status": dev_status, "side": dev.get("xte_side") if dev_ok else None,
+                      "xte_status": dev.get("xte_status") if dev_ok else None,
                       "variant": dev.get("variant") if dev_ok else None,
                       "xte_nm": dev.get("xte_nm") if dev_ok else None,
                       "time_behind_s": dev.get("time_behind_s") if dev_ok else None},
         "drift": {"status": dft_status, "dir": dft.get("drift_dir") if dft_ok else None,
                   "deg": dft.get("drift_twd_deg") if dft_ok else None,
+                  "signed_deg": dft.get("drift_twd_signed_deg") if dft_ok else None,
                   "tws_kn": dft.get("drift_tws_kn") if dft_ok else None,
                   "ref_twd": drift_ref, "now_twd": drift_now, "pos": pos, "favored": drift_favored},
     }
@@ -256,6 +287,21 @@ def _decide(route=None, now=None):
                 rec["lapsed"] = now
             elif now - rec["lapsed"] > SWITCH_GRACE_S:
                 _CONFIRM.pop(k, None)
+    # ---- no wind read at all: say so, never an all-clear (#46) ---------------------------------
+    # With the wind sensor down the default branch below used to say "No lasting shift, forecast
+    # unchanged" in green. Without our own wind there is no way to check the plan. `available`
+    # stays True: the gameplan IS loaded, and /strategy must not drop to its no-gameplan mode.
+    if not tac.get("available"):
+        return {**base, "action": "na", "status": "na", "tier": 0,
+                "target_variant": None, "target_label": None,
+                "value": "No wind read", "driven_by": [],
+                "confidence": 0.3, "confidence_label": "low",
+                # tactics says why (no live wind/position, or not enough history yet): a healthy
+                # sensor early in the session must not be told to check the sensor
+                "why": f"{tac.get('note') or 'No wind read.'} Can't check the plan.",
+                "consider": "Hold the plan on your own read until it's back.",
+                "clears": "wind read back", "based": []}
+
     if decisive:
         # locked input #5 — downwind, the pivot must CONFIRM before the verdict escalates to a
         # SWITCH; a different favored side restarts its own clock (the old one is dropped
@@ -289,7 +335,8 @@ def _decide(route=None, now=None):
         if dft_status in ("watch", "act") and drift_favored == favored:
             driven.append("get_drift"); concur += 1
         # route-deviation concurs if we're ALREADY set up to that side (XTE on the favoured hand)
-        if dev_status in ("watch", "act") and dev.get("xte_side") == favored:
+        # — the XTE band only (#43): being minutes behind plan says nothing about which side
+        if dev.get("xte_status") in ("watch", "act") and dev.get("xte_side") == favored:
             driven.append("get_deviation"); concur += 1
         confidence = min(0.95, 0.55 + 0.15 * concur + (0.1 if dft_status == "act" else 0))
 
@@ -298,7 +345,7 @@ def _decide(route=None, now=None):
             flip = target.get("what_flips_it") or ""
             extra = []
             if "get_drift" in driven:
-                extra.append(f"forecast shifted {dft.get('drift_dir')} ~{round(dft.get('drift_twd_deg', 0))}° too")
+                extra.append(f"forecast {_forecast_moved(dft)} too")
             if "get_deviation" in driven:
                 extra.append(f"you're already {dev.get('xte_nm')} nm {favored}")
             why = (f"Lasting shift favours the {favored}, not '{rec_label}'."
@@ -341,8 +388,8 @@ def _decide(route=None, now=None):
                 "target_variant": rec_id, "target_label": rec_label,
                 "value": f"Hold · reassess: {rec_label}", "driven_by": ["get_drift"],
                 "confidence": 0.5, "confidence_label": "medium",
-                "why": (f"Hold '{rec_label}'. Forecast shifted {dft.get('drift_dir')} "
-                        f"~{round(dft.get('drift_twd_deg', 0))}°, wind hasn't followed yet."),
+                "why": (f"Hold '{rec_label}'. Forecast {_forecast_moved(dft)}, "
+                        "wind hasn't followed yet."),
                 "consider": "Hold the gameplan. Watch for the wind to follow the forecast.",
                 "clears": "forecast settles, or a lasting shift appears",
                 "based": ["get_drift"]}

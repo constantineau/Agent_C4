@@ -108,8 +108,10 @@ def _reroute_suggestion(rec, conc, sig, plan_gap):
                     "why": "plan_gap"}
     dft = sig.get("drift") or {}
     side = _SIDE.get(dft.get("dir") or "")
-    if dft.get("status") == "act" and side and dft.get("deg") is not None:
-        return {"reason": f"Forecast shifted {round(abs(dft['deg']))}° {side} since the plan.",
+    # the signed mean shift, not the mean |shift| (#43): +40°/-20° moved it 10°, not 30°
+    deg = dft.get("signed_deg") if dft.get("signed_deg") is not None else dft.get("deg")
+    if dft.get("status") == "act" and side and deg is not None:
+        return {"reason": f"Forecast shifted {round(abs(deg))}° {side} since the plan.",
                 "why": "forecast"}
     return None
 
@@ -221,4 +223,8 @@ def get_strategy_signals(route=None):
     sug = _reroute_suggestion(rec, conc, sig, pg if (pg or {}).get("available") else None)
     if sug:
         out["reroute_suggest"] = sug
+    # A changed verdict waiting out the selector's settle (#40): the recommendation above is still
+    # the one on screen, and this says what it is moving to. Passed through for the iPad/copilot.
+    if sel.get("settling"):
+        out["settling"] = sel["settling"]
     return out

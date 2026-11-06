@@ -188,6 +188,7 @@ def engine_reads(sig, rng):
     xte, behind_s = sig["xte_nm"], round(sig["time_behind_min"] * 60)
     vband = max(_band(xte, 0.4, 1.0), _band(behind_s, 120, 300))
     deviation = {"available": True, "status": _STATUS[vband],
+                 "xte_status": _STATUS[_band(xte, 0.4, 1.0)],   # only XTE votes a side (#43)
                  "xte_side": rng.choice(["left", "right"]), "xte_nm": xte,
                  "time_behind_s": behind_s, "variant": None}
 

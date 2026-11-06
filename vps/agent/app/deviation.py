@@ -46,6 +46,10 @@ BEHIND_CONSIDER_S = float(os.environ.get("DEV_BEHIND_CONSIDER_S", "120"))   # sl
 BEHIND_COMMIT_S = float(os.environ.get("DEV_BEHIND_COMMIT_S", "300"))
 HYST = float(os.environ.get("DEV_HYST", "0.7"))       # drop-edge = enter-edge × this (no chatter)
 TREND_EPS_NM = float(os.environ.get("DEV_TREND_EPS_NM", "0.05"))       # XTE change to call a trend
+# The trend compares against a sample at least this old (#43). It used to compare against the
+# previous CALL, and the selector and the matcher call back to back, so the gap was milliseconds
+# and the trend read "steady" almost always.
+TREND_MIN_AGE_S = float(os.environ.get("DEV_TREND_MIN_AGE_S", "60"))
 
 _BANDS = {0: "ok", 1: "watch", 2: "act"}
 
@@ -251,15 +255,23 @@ def get_deviation(route=None, variant=None, since=None):
     bb = 0
     if time_behind is not None and time_behind > 0:
         bb = _band(time_behind, st.get("behind_band", 0), BEHIND_CONSIDER_S, BEHIND_COMMIT_S)
-    # XTE trend vs the last poll (converging back / drifting further out)
-    last_xte = st.get("last_xte")
+    # XTE trend (converging back / drifting further out) against the newest sample that is at
+    # least TREND_MIN_AGE_S old. Older samples than that one are dropped; a clock that went
+    # backwards (a replay restarted) starts the history again.
+    hist = [h for h in (st.get("xte_hist") or []) if h[0] <= now]
+    ref = None
+    for i in range(len(hist) - 1, -1, -1):
+        if now - hist[i][0] >= TREND_MIN_AGE_S:
+            ref, hist = hist[i][1], hist[i:]
+            break
     trend = "steady"
-    if last_xte is not None:
-        if xte_nm > last_xte + TREND_EPS_NM:
+    if ref is not None:
+        if xte_nm > ref + TREND_EPS_NM:
             trend = "diverging"
-        elif xte_nm < last_xte - TREND_EPS_NM:
+        elif xte_nm < ref - TREND_EPS_NM:
             trend = "converging"
-    _state[key] = {"xte_band": xb, "behind_band": bb, "last_xte": xte_nm, "at": now}
+    hist = (hist + [(now, xte_nm)])[-500:]
+    _state[key] = {"xte_band": xb, "behind_band": bb, "xte_hist": hist, "at": now}
 
     band = max(xb, bb)
     status = _BANDS[band]
@@ -322,6 +334,9 @@ def get_deviation(route=None, variant=None, since=None):
         "variant": vid, "variant_label": vlabel, "what_flips_it": what_flips,
         "recommended": bundle.get("recommended"), "race_id": bundle.get("race_id"),
         "xte_nm": xte_nm, "xte_side": side, "xte_trend": trend,
+        # the two bands behind `status`, separately (#43): only the XTE band says which SIDE we
+        # are on; time behind alone must not vote for a side in the selector or the concordance
+        "xte_status": _BANDS[xb], "behind_status": _BANDS[bb],
         "along_nm": round(along_nm, 1), "route_nm": round(route_nm, 1), "along_pct": along_pct,
         "time_behind_s": (round(time_behind) if time_behind is not None else None),
         "vmc_kn": vmc, "vmc_optimal_kn": vmc_opt, "vmc_deficit_kn": vmc_def,
