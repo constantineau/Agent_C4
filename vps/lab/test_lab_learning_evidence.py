@@ -215,6 +215,33 @@ finally:
 per = {r["recording"]: r["seconds"] for r in art["race_curves"]}
 check(f"same start, different ends: one recording, 120 unique seconds ({per})", per == {T0: 120})
 
+THIN = {"sessions": [
+    {"id": 1, "name": "even", "race_id": "x",
+     "window": {"start_ts": T0, "end_ts": T0 + 78, "hours": 0.02, "provenance": []}},
+    {"id": 2, "name": "odd", "race_id": "x",
+     "window": {"start_ts": T0 + 1, "end_ts": T0 + 79, "hours": 0.02, "provenance": []}}]}
+
+
+def thin_agent(path, timeout=None):
+    if path.startswith("/racelog/sessions"):
+        return THIN
+    if path.startswith("/racelog/track"):
+        a = float(path.split("start=")[1].split("&")[0])
+        b = float(path.split("end=")[1].split("&")[0])
+        return {"fixes": [{"t": a + i, "lat": 45.0, "lon": -83.0, "tws": 10.0, "twa": 90.0,
+                           "stw": 6.0} for i in range(0, int(b - a) + 1, 2)], "sail_log": []}
+    return {"danger": {}, "summary": {"line": "ok", "danger_s": 0}}
+
+
+monitor.agent_json = thin_agent
+try:
+    art = OP.compute(min_seconds=60)
+finally:
+    monitor.agent_json = _ag
+pool = sum(r["seconds"] for r in art["curve"])
+check(f"thinned windows sampled at offset seconds credit the shared record once ({pool} s)",
+      78 <= pool <= 82)
+
 # ---- 5) judge: scoring fields cover the recording's own time ---------------------------------
 print("5) debrief: current and sea state over the recording's own time")
 calls = []

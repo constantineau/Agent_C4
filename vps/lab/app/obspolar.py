@@ -15,6 +15,7 @@ The build talks to the agent and walks two races of fixes (~30 s), so it caches 
 refresh is a button, not a page load.
 """
 import json
+import math
 import os
 import time
 
@@ -74,13 +75,27 @@ def _stride_s(fixes):
     return max(1.0, float(d[len(d) // 2]))
 
 
-def _rows(raw, keyfn, min_seconds, strides, names=None):
+def _cover(seen, t, stride):
+    """Claim the whole seconds a fix stands for ([t - stride/2, t + stride/2)) in `seen`; return
+    how many were new. Overlapping windows are de-duplicated on the TIME each fix represents,
+    not its timestamp, so two thinned windows sampled at offset seconds cannot both credit the
+    same stretch of record."""
+    a = int(math.floor(t - stride / 2.0))
+    new = [x for x in range(a, a + max(1, int(round(stride)))) if x not in seen]
+    seen.update(new)
+    return len(new)
+
+
+def _rows(raw, keyfn, min_seconds, strides, names=None, credit=None):
     """Aggregate the raw per-sample lists into polar points under a coarser key.
 
     Every view of this polar is a p80 over the samples that belong to it, re-pooled from the raw
     lists — NOT a p80 of p80s. Filtering to one race and pooling all races are therefore both
     exact, and they are the same code, so the per-race curve and the all-race curve can never
     drift apart (a percentile does not average).
+
+    `credit` (key -> seconds), when given, is the de-duplicated time each raw key stands for;
+    otherwise every sample is worth its race's stride.
 
     Returns `(rows, refused)` — the cells that cleared `min_seconds`, and the ones that did not,
     each with the evidence it had. Every gate in this module says what it refused.
@@ -89,7 +104,8 @@ def _rows(raw, keyfn, min_seconds, strides, names=None):
     for k, stws in raw.items():
         kk = keyfn(k)
         pool.setdefault(kk, []).extend(stws)
-        secs[kk] = secs.get(kk, 0.0) + len(stws) * strides.get(k[3], 1.0)
+        secs[kk] = secs.get(kk, 0.0) + (credit[k] if credit is not None
+                                        else len(stws) * strides.get(k[3], 1.0))
     out, refused = [], []
     for k, stws in pool.items():
         if secs[k] < min_seconds:
@@ -121,7 +137,8 @@ def compute(min_seconds=MIN_SECONDS):
     track and the learning archive use, so a race means the same thing on every surface.
     """
     raw, names_by_cell, strides = {}, {}, {}
-    pooled = {}          # raw minus seconds an earlier overlapping window already counted
+    raw_secs = {}        # key -> seconds of record its samples stand for (de-duplicated)
+    pooled, pooled_secs = {}, {}   # the same, counting each second once across all races
     race_meta = []
     by_window = {}       # (start, end) -> its race_meta row
     seen_rec, seen_pool = {}, set()    # accepted fix seconds, per recording and pooled
@@ -153,6 +170,7 @@ def compute(min_seconds=MIN_SECONDS):
         already = 0
         mine = seen_rec.setdefault(rec, set())
         strides.setdefault(rec, _stride_s(r["fixes"]))
+        stride = _stride_s(r["fixes"])
         sail_log = r.get("sail_log") or []
         n, not_sailing = 0, 0
         for f in fixes:
@@ -172,17 +190,18 @@ def compute(min_seconds=MIN_SECONDS):
                 cfg = None                                    # a douse nobody tapped
             key = (round(tws / TWS_STEP_KN) * TWS_STEP_KN,
                    round(twa / TWA_STEP_DEG) * TWA_STEP_DEG, cfg, rec)
-            sec = int(round(f["t"]))
-            if sec in mine:
+            got = _cover(mine, f["t"], stride)
+            if not got:
                 already += 1
                 continue
-            mine.add(sec)
             raw.setdefault(key, []).append(stw)
-            if sec in seen_pool:
+            raw_secs[key] = raw_secs.get(key, 0) + got
+            got = _cover(seen_pool, f["t"], stride)
+            if not got:
                 already += 1
             else:
-                seen_pool.add(sec)
                 pooled.setdefault(key, []).append(stw)
+                pooled_secs[key] = pooled_secs.get(key, 0) + got
                 names_by_cell.setdefault(key[:3], set()).add(s["name"])
             n += 1
         race_meta.append({"recording": rec, "race_id": s.get("race_id"), "session_id": s.get("id"),
@@ -201,13 +220,15 @@ def compute(min_seconds=MIN_SECONDS):
 
     cells, thin_cells = _rows(
         pooled, lambda k: (("tws", k[0]), ("twa", k[1]), ("config", k[2])), min_seconds, strides,
-        names={(k[0], k[1], k[2]): v for k, v in names_by_cell.items()})
+        names={(k[0], k[1], k[2]): v for k, v in names_by_cell.items()}, credit=pooled_secs)
     race_cells, thin_race_cells = _rows(
         raw, lambda k: (("tws", k[0]), ("twa", k[1]), ("config", k[2]), ("recording", k[3])),
-        min_seconds, strides)
+        min_seconds, strides, credit=raw_secs)
     race_curves, thin_race_curves = _rows(
-        raw, lambda k: (("tws", k[0]), ("twa", k[1]), ("recording", k[3])), min_seconds, strides)
-    curve, thin_curve = _rows(pooled, lambda k: (("tws", k[0]), ("twa", k[1])), min_seconds, strides)
+        raw, lambda k: (("tws", k[0]), ("twa", k[1]), ("recording", k[3])), min_seconds, strides,
+        credit=raw_secs)
+    curve, thin_curve = _rows(pooled, lambda k: (("tws", k[0]), ("twa", k[1])), min_seconds, strides,
+                               credit=pooled_secs)
     for m in race_meta:
         if m.get("skipped"):       # a skipped session contributed nothing; saying "0 cells" would
             continue               # read as a race that sailed badly rather than one not counted
