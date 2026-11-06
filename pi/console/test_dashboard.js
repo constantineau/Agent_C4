@@ -290,7 +290,19 @@ test("#56 a tap whose answer and re-read both fail drops the queued taps instead
   };
   await Promise.all([T.ctx.toggleFlying("J1"), T.ctx.toggleFlying("A3")]);
   ok(posted.length === 1, "a queued tap was sent built on unknown state: " + JSON.stringify(posted));
-  ok(T.D.App.sailQ === null && T.D.App.sailLost === false, "queue not reset for the next tap");
+  ok(T.D.App.sailQ === null, "queue not released");
+  // a later tap, still with no way to read the state, is dropped too ...
+  await T.ctx.toggleFlying("S1");
+  ok(posted.length === 1, "a later tap was sent built on unknown state: " + JSON.stringify(posted));
+  // ... and once a read works, it builds on what the engine really has
+  T.ctx.fetchImpl = (url, opts) => {
+    if (url === "/api/sails/state" && opts.method === "POST") { posted.push(JSON.parse(opts.body)); return json(JSON.parse(opts.body)); }
+    if (url === "/api/sails/state") return json({ flying: ["J1"], out_of_service: [], reef: "" });
+    return Promise.reject(new Error("down"));
+  };
+  await T.ctx.toggleFlying("A3");
+  const last = posted[posted.length - 1].flying;
+  ok(last.indexOf("J1") >= 0 && last.indexOf("A3") >= 0, "tap after recovery: " + JSON.stringify(last));
 });
 test("#56 a sail-state read started during a tap never overwrites it", async () => {
   const T = load();

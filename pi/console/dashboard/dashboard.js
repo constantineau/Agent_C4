@@ -1410,22 +1410,26 @@
     const seq = App.sailSeq;
     const r = await fetchJSON("/sails/state", 8000);
     // a sail tap posted while this read was in flight wins: this answer predates it (#56)
-    if (r && seq === App.sailSeq && !App.sailQ) { App.sailState = r; renderSailsBar(); }
+    if (r && seq === App.sailSeq && !App.sailQ) { App.sailState = r; App.sailLost = false; renderSailsBar(); }
   }
   /* Sail taps go to the engine ONE AT A TIME (#56). Each POST sends the whole set, so two quick
      taps that both built it from the same App.sailState lost one sail: the second POST overwrote
      the first. Queued, each tap builds its body from the state the previous POST returned.
      Each POST (body included) has a deadline, so a stalled one can't hold the queue; when one
      fails, the state is read back before the next queued tap builds on it. If that read fails
-     too, the state is unknown and the rest of the queued taps are dropped rather than sent
-     built on a guess (a lost answer may hide a POST that did land). The bar re-syncs on the
-     next poll and shows what the engine really has. */
+     too, the state is unknown (a lost answer may hide a POST that did land), and it stays
+     unknown until a read succeeds: every later tap first reads the state, and is dropped
+     rather than sent built on a guess if it can't. */
   const SAIL_POST_MS = 8000;
   function sailPost(build) {
     App.sailSeq++;
     const run = async () => {
-      if (App.sailLost) return;
       try {
+        if (App.sailLost) {
+          const known = await fetchJSON("/sails/state", 5000);
+          if (!known) return;
+          App.sailState = known; App.sailLost = false; renderSailsBar();
+        }
         const r = await COL.fetchJsonWithin(API + "/sails/state", { method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(build(App.sailState || {})) }, SAIL_POST_MS);
@@ -1436,7 +1440,7 @@
     };
     const q = (App.sailQ || Promise.resolve()).then(run);
     App.sailQ = q;
-    return q.then(() => { if (App.sailQ === q) { App.sailQ = null; App.sailLost = false; } });
+    return q.then(() => { if (App.sailQ === q) App.sailQ = null; });
   }
   window.toggleFlying = function (sail) {
     return sailPost((st) => {
