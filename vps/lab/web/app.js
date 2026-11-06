@@ -3144,19 +3144,20 @@ async function renderDebrief() {
     if (stale("debrief")) return;
     return paintDebrief();
   }
-  try { Deb.playbooks = ((await (await apiGet("/api/playbooks")).json()).playbooks || []).filter((b) => b.race_id === Deb.raceId); }
-  catch (e) { Deb.playbooks = []; }
-  if (stale("debrief")) return;
+  const race = Deb.raceId, left = () => stale("debrief") || Deb.raceId !== race;
+  let pbs;
+  try { pbs = ((await (await apiGet("/api/playbooks")).json()).playbooks || []).filter((b) => b.race_id === race); }
+  catch (e) { pbs = []; }
+  if (left()) return;     // a newer render for the race now picked owns the page
+  Deb.playbooks = pbs;
   if (!Deb.playbookId || !Deb.playbooks.some((b) => b.id === Deb.playbookId)) Deb.playbookId = (Deb.playbooks[0] || {}).id || null;
-  try { Deb.track = await (await apiGet("/api/debrief/track?race_id=" + encodeURIComponent(Deb.raceId))).json(); }
-  catch (e) { Deb.track = null; }
   await debLoadRecordings();
-  if (stale("debrief")) return;
+  if (left()) return;
   try { Deb.job = await (await apiGet("/api/debrief/run/status")).json(); }
   catch (e) { Deb.job = null; }
   if (Deb.job && Deb.job.state === "running" && !Deb.poll) Deb.poll = setInterval(debPoll, 4000);
   await retroLoad();
-  if (stale("debrief")) return;
+  if (left()) return;
   paintDebrief();
   // G65: open the newest archived debrief so the tab never lands on nothing
   const latest = debLatestId();
@@ -3218,12 +3219,17 @@ function debWinRange(w) {
 
 // ---- the recordings surface: what the boat sailed, and what has been debriefed ----------------
 async function debLoadRecordings() {
+  // answers for a race the user has since left are dropped, never stored under the new one
+  const race = Deb.raceId;
+  let recs, agent, track;
   try {
-    const r = await (await apiGet("/api/debrief/recordings?race_id=" + encodeURIComponent(Deb.raceId))).json();
-    Deb.recordings = r.recordings || []; Deb.agent = r.agent || null;
-  } catch (e) { Deb.recordings = []; Deb.agent = { available: false, note: "the Lab could not list recordings" }; }
-  try { Deb.track = await (await apiGet("/api/debrief/track?race_id=" + encodeURIComponent(Deb.raceId))).json(); }
-  catch (e) { Deb.track = null; }
+    const r = await (await apiGet("/api/debrief/recordings?race_id=" + encodeURIComponent(race))).json();
+    recs = r.recordings || []; agent = r.agent || null;
+  } catch (e) { recs = []; agent = { available: false, note: "the Lab could not list recordings" }; }
+  try { track = await (await apiGet("/api/debrief/track?race_id=" + encodeURIComponent(race))).json(); }
+  catch (e) { track = null; }
+  if (Deb.raceId !== race) return;
+  Deb.recordings = recs; Deb.agent = agent; Deb.track = track;
 }
 
 // One button per recording: the job fetches the boat log for that session (if it isn't loaded
