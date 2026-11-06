@@ -85,6 +85,7 @@ print("#103 Polar chart:")
 svg = fn("polSvg")
 check("G39 tips open on tap, not only mouse hover", "onclick=\"polTipTap(" in svg and "onmousemove" not in svg)
 check("G39 hit area is about 22 (finger size)", re.search(r'class="pol-hit"[^>]*r="22"', svg))
+check("G39 overlapping hit areas pick the nearest point", "polNearest(ev, i)" in fn("polTipTap"))
 check("G39 a tap elsewhere closes the tip", re.search(r'addEventListener\("pointerdown"[^\n]*\n[^\n]*pol-hit', JS))
 check("G40 no inline curve labels (the legend names every line)", "esc(sr.label)" not in svg)
 check("G88 ring speeds are no longer printed on the 90° spoke", "${CY - 4}" not in svg

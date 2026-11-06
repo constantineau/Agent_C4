@@ -4191,7 +4191,7 @@ function polSvg() {
     }
     for (const p of sr.pts) {
       const [x, y] = XY(p.twa, p.stw);
-      const i = Pol._pts.push({ ...p, label: sr.label, mode: Pol.split }) - 1;
+      const i = Pol._pts.push({ ...p, label: sr.label, mode: Pol.split, x, y }) - 1;
       out.push(`<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4" fill="${sr.color}" stroke="${sr.color2 || "var(--panel)"}" stroke-width="2"/>`);
       // a finger-sized hit area; tap toggles the details, a mouse can also hover (G39)
       out.push(`<circle class="pol-hit" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="22" fill="transparent" style="cursor:pointer"
@@ -4220,9 +4220,20 @@ function polTip(ev, i) {
     `${c.seconds != null ? c.seconds : c.samples} s of data (${c.samples} fixes) · ${src}`;
 }
 let polTipPinned = null;           // the point whose details were opened by a tap/click
-function polTipHover(ev, i) { if (ev.pointerType === "mouse" && polTipPinned == null) polTip(ev, i); }
+// Hit circles overlap where points sit close, so the tap goes to the NEAREST point, not to
+// whichever circle was drawn last.
+function polNearest(ev, i) {
+  const svg = ev.target && ev.target.ownerSVGElement, m = svg && svg.getScreenCTM && svg.getScreenCTM();
+  if (!m || typeof DOMPoint === "undefined") return i;
+  const q = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(m.inverse());
+  let best = i, bd = Infinity;
+  (Pol._pts || []).forEach((p, j) => { const d = (p.x - q.x) ** 2 + (p.y - q.y) ** 2; if (d < bd) { bd = d; best = j; } });
+  return best;
+}
+function polTipHover(ev, i) { if (ev.pointerType === "mouse" && polTipPinned == null) polTip(ev, polNearest(ev, i)); }
 function polTipLeave(ev) { if (ev.pointerType === "mouse" && polTipPinned == null) polTipHide(); }
 function polTipTap(ev, i) {
+  i = polNearest(ev, i);
   if (polTipPinned === i) { polTipHide(); return; }
   polTip(ev, i); polTipPinned = i;
 }
