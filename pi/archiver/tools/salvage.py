@@ -11,7 +11,12 @@ archive into that one's output). Three things it adds, all learned the hard way:
 
   --resume     picks up at max(id) already in the destination. `id` is the PRIMARY KEY and
                inserts are INSERT OR IGNORE, so re-running a range is idempotent; a 46 M-row
-               salvage that dies at 80% should not start over.
+               salvage that dies at 80% should not start over. That is only sound if what is in
+               the destination is a clean prefix of the salvage, so the destination is written
+               in WAL mode with real commits (a kill or power cut rolls back to the last commit,
+               never tears the file), and --resume refuses a destination that fails
+               quick_check. It used to run journal OFF / synchronous OFF, where a crash can
+               leave a torn file whose max(id) points past rows that were never written.
   --min-free-g aborts before writing when the filesystem is nearly full. Local `/` is 96 G and
                these files are ~9 GB each; the drain guardian earned this check the hard way.
   --lost       lost rowid ranges are written incrementally, not only at the end, so a killed
@@ -82,8 +87,17 @@ def main(argv=None):
 
     src = sqlite3.connect(f"file:{a.src}?mode=ro&immutable=1", uri=True)
     dst = sqlite3.connect(a.dst)
-    dst.execute("PRAGMA journal_mode=OFF")     # the destination is disposable; speed over safety
-    dst.execute("PRAGMA synchronous=OFF")
+    if a.resume and os.path.exists(a.dst):
+        try:
+            verdict = [r[0] for r in dst.execute("PRAGMA quick_check(5)").fetchall()]
+        except sqlite3.DatabaseError as exc:
+            verdict = [str(exc)]
+        if verdict != ["ok"]:
+            raise SystemExit(f"--resume refused: {a.dst} fails quick_check ({'; '.join(verdict)}). "
+                             f"Start a fresh destination.")
+    # WAL + NORMAL: each commit is atomic, so --resume always finds a clean prefix (#184-11).
+    dst.execute("PRAGMA journal_mode=WAL")
+    dst.execute("PRAGMA synchronous=NORMAL")
     dst.execute(CREATE)
 
     hi = a.hi or probe_hi(src)
@@ -159,6 +173,8 @@ def main(argv=None):
     print(f"time span: {span[0]}  ->  {span[1]}")
     print(f"dst rows : {span[2]:,}   file {os.path.getsize(a.dst) / 1e9:.2f} GB")
     print(f"elapsed  : {time.time() - t0:.0f}s")
+    dst.close()
+    src.close()
     return 0
 
 

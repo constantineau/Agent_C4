@@ -104,8 +104,8 @@ def test_http_4xx_is_permanent_and_quarantined(q, code):
     assert _names(q / "quarantine") == ["a.json", "b.json"]
 
 
-@pytest.mark.parametrize("code", [500, 502, 503])
-def test_http_5xx_is_transient_and_retained(q, code):
+@pytest.mark.parametrize("code", [408, 429, 500, 502, 503])
+def test_http_retry_later_and_5xx_are_transient_and_retained(q, code):
     """Server-side errors are the VPS's problem, not the batch's — keep the data."""
     up = _load_uplink(q)
     _write(q, "a.json", _batch("2026-07-19T07:20:00Z", 1))
@@ -142,3 +142,110 @@ def test_enqueued_batch_survives_a_round_trip_through_the_queue(q):
 
     assert posted == [original]
     assert _names(q) == []
+
+
+def test_two_overlapping_sends_post_a_queued_file_once(q):
+    """One sender at a time: overlapping sends must not both read and post the same queued
+    file (it is only unlinked after its POST returns)."""
+    import threading
+    import time as _t
+    up = _load_uplink(q)
+    _write(q, "a.json", _batch("2026-07-19T07:20:00Z", 1))
+    posted, lock = [], threading.Lock()
+
+    def slow_post(batch):
+        _t.sleep(0.2)                   # both senders are inside the queue walk at once
+        with lock:
+            posted.append(batch["readings"][0]["value"])
+
+    up._post = slow_post
+    ts = [threading.Thread(target=up.send, args=([{"time": "t", "source": "s", "path": "p",
+                                                    "value": v}],)) for v in (10, 11)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    assert posted.count(1) == 1, posted
+
+
+class _Clock:
+    def __init__(self, trusted):
+        self.trusted = trusted
+        self.seen = []
+
+    def note_gnss(self, value):
+        self.seen.append(value)
+
+
+def test_untrusted_clock_holds_batches_undated_then_dates_them(q, monkeypatch):
+    """#184-9 / #240: before the clock is trusted nothing timestamped is posted, but nothing
+    is lost either; once trusted the held batch goes out with a date from the monotonic clock."""
+    import asyncio
+    up = _load_uplink(q)
+    monkeypatch.setattr(up.clock_trust, "boot_id", lambda: "boot-1")
+    up.CLOCK = _Clock(False)
+    up.AGG_SECONDS = 0.01
+    posted = []
+    up._post = posted.append
+
+    async def one_window(win):
+        loop = asyncio.get_running_loop()
+        task = asyncio.create_task(up.flusher(win, loop))
+        for _ in range(200):
+            await asyncio.sleep(0.01)
+            if not win:
+                break
+        await asyncio.sleep(0.05)
+        task.cancel()
+
+    asyncio.run(one_window({("gps", "navigation.speedOverGround"): ("num", 3.0)}))
+    assert posted == []
+    held = _names(q / "undated")
+    assert len(held) == 1 and _names(q) == []
+    assert json.loads((q / "undated" / held[0]).read_text())["readings"][0]["time"] is None
+
+    up.CLOCK.trusted = True
+    asyncio.run(one_window({("gps", "navigation.speedOverGround"): ("num", 4.0)}))
+    vals = [b["readings"][0]["value"] for b in posted]
+    assert sorted(vals) == [3.0, 4.0]
+    times = [b["readings"][0]["time"] for b in posted]
+    assert all(t and t.endswith("Z") for t in times)
+    assert _names(q / "undated") == []
+
+
+def test_batches_held_in_an_earlier_boot_are_kept_not_sent(q, monkeypatch):
+    up = _load_uplink(q)
+    monkeypatch.setattr(up.clock_trust, "boot_id", lambda: "boot-2")
+    (q / "undated").mkdir()
+    _write(q / "undated", "00000000000000000001.json",
+           {"boat_id": "sr33", "mono": 1.0, "boot": "boot-1",
+            "readings": [{"time": None, "source": "s", "path": "p", "value": 1}]})
+    up._date_held()
+    assert _names(q / "undated") == ["00000000000000000001.json"]
+    assert _names(q) == []
+
+
+def test_gnss_datetime_is_offered_to_the_clock(q):
+    up = _load_uplink(q)
+    clock = _Clock(False)
+    msg = json.dumps({"updates": [{"$source": "gps", "values": [
+        {"path": "navigation.datetime", "value": "2026-11-06T12:00:00.000Z"}]}]})
+    up.parse_delta(msg, {}, {}, {"self": None, "clock": clock})
+    assert clock.seen == ["2026-11-06T12:00:00.000Z"]
+
+
+def test_ais_is_not_sent_while_the_clock_is_untrusted(q):
+    import asyncio
+    up = _load_uplink(q)
+    up.CLOCK = _Clock(False)
+    up.AGG_SECONDS = 0.01
+    sent = []
+    up._post_ais = sent.append
+
+    async def go():
+        win = {1: {"lat": 1.0, "lon": 2.0}}
+        task = asyncio.create_task(up.ais_flusher(win, asyncio.get_running_loop()))
+        await asyncio.sleep(0.1)
+        task.cancel()
+    asyncio.run(go())
+    assert sent == []
