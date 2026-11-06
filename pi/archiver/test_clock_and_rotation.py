@@ -21,6 +21,7 @@ import sys
 import tempfile
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -144,6 +145,40 @@ with tempfile.TemporaryDirectory() as d:
     check("the unrelated old rows are pruned", count(conn, unrelated, unrelated + 180) == 0)
     check("the stale rows of the stretch are kept",
           count(conn, NOW - 2001 * 86400, NOW - 1999 * 86400) == 2)
+
+print("#184-9 kept stretch rows are stepped over in bounded chunks:")
+with tempfile.TemporaryDirectory() as d:
+    conn, eng = archive(d), engine(d)
+    base = NOW - 300 * 86400
+    add(conn, base, 50, step=1)            # ids 1..50: a kept stretch (same era, interleaved)
+    add(conn, base + 10, 10, step=1)       # ids 51..60: prunable, timestamps inside the stretch
+    archiver._save_clock_windows(conn, [{"boot": "b", "from_id": 1, "to_id": 50}])
+    deleted = archiver.prune(conn, engine_db=eng, retain_days=7, chunk_rows=5, pause_s=0)
+    left = {r[0] for r in conn.execute("SELECT id FROM readings")}
+    check(f"only the 10 unprotected rows went (deleted {deleted})",
+          deleted == 10 and left == set(range(1, 51)))
+    plan = " ".join(str(r) for r in conn.execute(
+        "EXPLAIN QUERY PLAN SELECT id, time FROM readings WHERE time >= ? AND time >= ? "
+        "AND (? IS NULL OR time > ? OR id > ?) AND time < ? ORDER BY time, id LIMIT ?",
+        ("", "", None, "", None, "z", 5)))
+    check(f"the chunk query walks the time index with no sort ({plan})",
+          "readings_time_idx" in plan and "TEMP B-TREE" not in plan)
+
+print("#184-9 a rotation while untrusted saves the fresh file's stretch before any row:")
+with tempfile.TemporaryDirectory() as d:
+    db = Path(d) / "archive.db"
+    old = archiver.open_db(db)
+    state = {"conn": old, "clock": FakeClock(False), "clock_open_gen": 0, "clock_saved": True,
+             "generation": 0, "rotate_pending": True}
+
+    async def recover():
+        return await archiver._recover([], asyncio.get_running_loop(), state, db)
+    got = asyncio.run(recover())
+    wins = archiver._clock_windows(state["conn"])
+    check("fresh file has an open stretch from row 1, saved",
+          got is True and wins and wins[-1]["from_id"] == 1 and wins[-1]["to_id"] is None
+          and state["clock_saved"] and state["clock_open_gen"] == 1)
+    state["conn"].close()
 
 print("#184-9 a rotation while untrusted: the fresh file's stretch starts at row 1:")
 with tempfile.TemporaryDirectory() as d:

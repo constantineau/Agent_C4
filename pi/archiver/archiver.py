@@ -1271,6 +1271,17 @@ async def _recover(buf, loop, state, path):
     state["rotate_pending"] = False
     state["rotations"] = state.get("rotations", 0) + 1
     state["generation"] = state.get("generation", 0) + 1   # a new file: older verdicts are moot
+    if state.get("clock_open_gen") is not None:
+        # Clock still untrusted (stretch open): the fresh file's stretch starts at row 1, and
+        # is saved BEFORE the first row lands, so a crash right after cannot lose it.
+        state["clock_open_gen"], state["clock_from_id"] = state["generation"], 1
+        try:
+            await loop.run_in_executor(None, open_clock_window, state["conn"], 1)
+            state["clock_saved"] = True
+        except Exception as exc:          # the pruner retries; nothing is pruned meanwhile
+            state["clock_saved"] = False
+            print(f"[archive] could not record the untrusted-clock stretch on the fresh "
+                  f"file ({exc})", flush=True)
     state["_status_dirty"] = True
     return True
 
@@ -1664,11 +1675,9 @@ def _prune(conn, engine_db=None, retain_days=None, chunk_rows=None, pause_s=None
         print("[archive] prune SKIPPED — an untrusted-clock stretch is still open", flush=True)
         return None
     keep_ids = clock_keep_ids(conn)
-    # Rows inside a kept id range are skipped; everything a chunk SELECTS is still deleted, so
-    # `since` keeps advancing past them.
-    id_keep = (" AND NOT EXISTS (SELECT 1 FROM json_each(?) k WHERE readings.id BETWEEN "
-               "json_extract(k.value, '$[0]') AND json_extract(k.value, '$[1]'))"
-               if keep_ids else "")
+
+    def kept(i):
+        return any(a <= i <= b for a, b in keep_ids)
     cutoff = _iso(datetime.now(timezone.utc).timestamp() - days * 86400)
     # Delete only inside the GAPS between kept windows, never filtering windows row by row: a
     # LIMIT bounds the rows a query returns, not the rows it scans, so a filter over a big kept
@@ -1677,7 +1686,10 @@ def _prune(conn, engine_db=None, retain_days=None, chunk_rows=None, pause_s=None
     # chunk scans exactly the rows it deletes; kept rows are never read.
     total, chunks = 0, 0
     for lo, lo_incl, hi in _prune_gaps(wins, cutoff):
-        since = lo
+        # A (time, id) cursor: rows of an untrusted-clock stretch are selected (so each chunk
+        # scans at most `chunk` rows, never a whole kept stretch under the write lock) but not
+        # deleted, and the cursor still moves past them.
+        since, since_id = lo, None
         while True:
             if _ROTATING.is_set():
                 print(f"[archive] prune stopped after {total} rows — the archive is being "
@@ -1686,18 +1698,20 @@ def _prune(conn, engine_db=None, retain_days=None, chunk_rows=None, pause_s=None
             with _WRITE_LOCK:
                 sel = conn.execute(
                     f"SELECT id, time FROM readings WHERE time {'>=' if lo_incl else '>'} ? "
-                    f"AND time >= ? AND time < ?{id_cap}{id_keep} ORDER BY time LIMIT ?",
-                    (lo, since, hi, *((through,) if id_cap else ()),
-                     *((json.dumps(keep_ids),) if id_keep else ()), chunk)).fetchall()
+                    f"AND time >= ? AND (? IS NULL OR time > ? OR id > ?) "
+                    f"AND time < ?{id_cap} ORDER BY time, id LIMIT ?",
+                    (lo, since, since_id, since, since_id, hi,
+                     *((through,) if id_cap else ()), chunk)).fetchall()
                 if not sel:
                     break
-                conn.execute("DELETE FROM readings WHERE id IN "
-                             "(SELECT value FROM json_each(?))",
-                             (json.dumps([r[0] for r in sel]),))
-                conn.commit()
-            total += len(sel)
+                gone = [r[0] for r in sel if not kept(r[0])]
+                if gone:
+                    conn.execute("DELETE FROM readings WHERE id IN "
+                                 "(SELECT value FROM json_each(?))", (json.dumps(gone),))
+                    conn.commit()
+            total += len(gone)
             chunks += 1
-            since = sel[-1][1]            # everything selected was deleted: always progresses
+            since, since_id = sel[-1][1], sel[-1][0]
             if pause > 0:
                 time.sleep(pause)         # outside the write lock: the flusher's turn
     if total:
