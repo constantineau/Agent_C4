@@ -3138,7 +3138,12 @@ async function renderDebrief() {
     catch (e) { view.innerHTML = '<div class="placeholder">Failed to load.</div>'; return; }
   }
   if (!Deb.raceId) Deb.raceId = Lab.sel || (Lab.races[0] && Lab.races[0].race_id) || null;
-  if (!Deb.raceId) { view.innerHTML = '<div class="placeholder">No race yet. Add one in the Races tab.</div>'; return; }
+  if (!Deb.raceId) {
+    // Fleet retro needs no race of ours, so it still shows (G66)
+    await retroLoad();
+    if (stale("debrief")) return;
+    return paintDebrief();
+  }
   try { Deb.playbooks = ((await (await apiGet("/api/playbooks")).json()).playbooks || []).filter((b) => b.race_id === Deb.raceId); }
   catch (e) { Deb.playbooks = []; }
   if (stale("debrief")) return;
@@ -3150,14 +3155,34 @@ async function renderDebrief() {
   try { Deb.job = await (await apiGet("/api/debrief/run/status")).json(); }
   catch (e) { Deb.job = null; }
   if (Deb.job && Deb.job.state === "running" && !Deb.poll) Deb.poll = setInterval(debPoll, 4000);
+  await retroLoad();
+  if (stale("debrief")) return;
+  paintDebrief();
+  // G65: open the newest archived debrief so the tab never lands on nothing
+  const latest = debLatestId();
+  if (latest != null && !Deb.report && Deb.viewing == null && (Deb.job || {}).state !== "running") debOpenDebrief(latest);
+}
+
+async function retroLoad() {
   await retroRefresh();
   try {
     Retro.job = await (await apiGet("/api/retro/run/status")).json();
     if (Retro.job.state === "running" && !Retro.poll) Retro.poll = setInterval(retroPoll, 8000);
   } catch (e) { /* card renders without job state */ }
-  if (stale("debrief")) return;
-  paintDebrief();
 }
+
+// The newest archived debrief across this race's recordings, or null.
+function debLatestId() {
+  let best = null;
+  (Deb.recordings || []).forEach((x) => {
+    const d = x.debrief;
+    if (d && d.id != null && (!best || (d.created_at || 0) > (best.created_at || 0))) best = d;
+  });
+  return best ? best.id : null;
+}
+
+// Dates as YYYY-MM-DD, like the recording times beside them (G64).
+function isoDate(ts) { return new Date(ts * 1000).toISOString().slice(0, 10); }
 
 // Boat-track card: upload a GPX or fetch our YB track, then "Run debrief" scores helm vs optimal.
 // Tracks that DON'T come off the boat's own log — a GPX export or the public YB feed. The boat's
@@ -3206,6 +3231,12 @@ async function debLoadRecordings() {
 async function debRunRecording(i) {
   const x = (Deb.recordings || [])[i];
   if (!x) return;
+  if (x.debrief) {
+    const go = await askModal("Run this debrief again?",
+      "This adds a new run. The old one stays in the archive. To see it again, tap <b>Open</b>.",
+      [{ c: "no", label: "Cancel", cls: "ghost" }, { c: "yes", label: "Run again", cls: "primary" }], "no", "no");
+    if (go !== "yes") return;
+  }
   Deb.msg = ""; Deb.report = null; Deb.viewing = null;
   const body = { race_id: Deb.raceId, playbook_id: Deb.playbookId || undefined,
                  recording: x.recording };
@@ -3243,7 +3274,7 @@ async function debOpenDebrief(id) {
                                  archived_at: d.created_at }, rep);
     if (Deb.report.actual_track && d.perf_bins) Deb.report.actual_track.n_bins = d.perf_bins.length;
   } catch (e) { Deb.msg = "could not open that debrief"; Deb.viewing = null; }
-  paintDebrief();
+  if (!stale("debrief")) paintDebrief();
 }
 
 function debRecordingsCard() {
@@ -3257,18 +3288,20 @@ function debRecordingsCard() {
     const d = x.debrief;
     const when = x.start_ts ? new Date(x.start_ts * 1000).toISOString().slice(0, 16).replace("T", " ") + "Z" : "—";
     const grew = x.marker_hours != null && x.hours != null && x.hours - x.marker_hours > 0.05
-      ? ` <span class="muted" title="The ⏺ LOG button stopped early. The recording runs longer.">(button said ${x.marker_hours} h)</span>` : "";
+      ? `<div class="muted" style="font-size:11px">LOG button stopped at ${x.marker_hours} h</div>` : "";
     const state = d
-      ? `<span class="pill ok">debriefed</span> <span class="muted">${new Date(d.created_at * 1000).toLocaleDateString()}${d.polar_pct != null ? " · " + d.polar_pct + "% of polar" : ""}${d.n_bins ? " · " + d.n_bins + " measured cells" : ""}${x.n_debriefs > 1 ? " · " + x.n_debriefs + " runs" : ""}</span>`
+      ? `<span class="pill ok">debriefed</span> <span class="muted">${isoDate(d.created_at)}${d.polar_pct != null ? " · " + d.polar_pct + "% of polar" : ""}${d.n_bins ? " · " + d.n_bins + " measured cells" : ""}${x.n_debriefs > 1 ? " · " + x.n_debriefs + " runs" : ""}</span>`
       : (x.track ? `<span class="pill">track loaded</span> <span class="muted">${x.track.n} fixes</span>`
                  : `<span class="muted">not debriefed yet</span>`);
     const isThis = running && j.recording != null && x.recording != null
       && Math.abs(j.recording - x.recording) < 1;
+    const onScreen = !running && d && Deb.viewing != null && Deb.viewing === d.id;
     const btns = running
       ? (isThis ? '<span class="muted">running…</span>' : "")
       : `<button class="mini" onclick="debRunRecording(${i})">${d ? "Re-run" : "Debrief"}</button>`
-        + (d ? ` <button class="mini" onclick="debOpenDebrief(${d.id})">Open</button>` : "");
-    return `<tr${isThis ? ' class="winrow"' : ""}>
+        + (d ? (onScreen ? ' <span class="pill ok" style="margin-left:8px">showing</span>'
+                         : ` <button class="mini" style="margin-left:8px" onclick="debOpenDebrief(${d.id})">Open</button>`) : "");
+    return `<tr${isThis || onScreen ? ' class="winrow"' : ""}>
       <td><b>${esc(x.name || "recording")}</b><div class="muted" style="font-size:11px">${when}${x.kind ? " · " + esc(x.kind) : ""}</div></td>
       <td>${x.hours != null ? x.hours + " h" : "—"}${grew}</td>
       <td>${state}</td>
@@ -3337,11 +3370,25 @@ async function debApply() {
   } catch (e) { if (msg) msg.textContent = "Failed: " + e.message; }
 }
 
+// Cut at a word near n characters and say so with an ellipsis (G62).
+function clipText(s, n) {
+  s = String(s || "");
+  if (s.length <= n) return s;
+  const cut = s.slice(0, n - 1), sp = cut.lastIndexOf(" ");
+  return (sp > n * 0.6 ? cut.slice(0, sp) : cut).replace(/[\s,;:·-]+$/, "") + "…";
+}
+
 function paintDebrief() {
   const r = Deb.report;
   const running = (Deb.job || {}).state === "running";
-  const pbOpts = (Deb.playbooks || []).map((b) => `<option value="${attr(b.id)}" ${b.id === Deb.playbookId ? "selected" : ""}>${esc((b.signed ? "🔒 " : "") + (b.headline || b.id).slice(0, 56))} · ${b.n_variants} var</option>`).join("");
+  const pbOpts = (Deb.playbooks || []).map((b) => `<option value="${attr(b.id)}" ${b.id === Deb.playbookId ? "selected" : ""}>${esc((b.signed ? "🔒 " : "") + clipText(b.headline || b.id, 90))} · ${b.n_variants} var</option>`).join("");
   let body = "";
+  if (!Deb.raceId) {
+    document.getElementById("view").innerHTML = `<div class="opt">
+      <div class="card"><div class="placeholder">No race yet. <a href="#races">Add one in Races</a>.</div></div>
+      ${retroCard()}</div>`;
+    return;
+  }
   if (r && r.available) body = debReport(r);
   else if (r && !r.available) body = `<div class="card"><div class="placeholder">${esc(r.note || "debrief unavailable")}</div></div>`;
 
@@ -3383,7 +3430,7 @@ function retroCard() {
     <h3>Fleet retro <span class="muted" style="font-weight:400">— how every boat sailed a past race</span></h3>
     <div style="margin:4px 0 8px">${archived}</div>
     <div class="opt-controls">
-      <label>YB race id <input id="retroYb" value="${attr(Retro.ybId)}" style="width:170px"></label>
+      <label>YB race id <input type="text" id="retroYb" value="${attr(Retro.ybId)}" style="width:170px"></label>
       <button class="mini" onclick="retroIngest()" ${Retro.busy ? "disabled" : ""}>1 · Get race</button>
       <button class="mini" onclick="retroPolars()" ${Retro.busy ? "disabled" : ""}>2 · Find ORC polars</button>
       <button class="mini" onclick="retroRun()" ${Retro.busy || running ? "disabled" : ""}>${running ? "Scoring…" : "3 · Score the fleet"}</button>
@@ -3755,7 +3802,7 @@ function learnTrendCard() {
     return `<span class="tbar"><span class="tbar-fill ${cls}" style="width:${Math.round(f * 100)}%"></span></span>`;
   };
   const rows = s.map((d) => `<tr>
-    <td>${d.created_at ? new Date(d.created_at * 1000).toLocaleDateString() : ""}</td>
+    <td>${d.created_at ? isoDate(d.created_at) : ""}</td>
     <td>${esc(d.race_name || d.race_id || "")}</td>
     <td>${d.helm_pct != null ? d.helm_pct + "%" : "—"} ${bar(d.helm_pct, 70, 105, "ok")}</td>
     <td>${d.polar_pct != null ? d.polar_pct + "%" : "—"}</td>
@@ -3765,7 +3812,7 @@ function learnTrendCard() {
   const ms = (t.milestones || []).map((m) => {
     const a = m.applied || {};
     const what = a.wave_coeffs ? "wave model" : (a.helm_factor != null ? `helm ${a.helm_factor}` + ((a.polar_adjustments || []).length ? ` + ${a.polar_adjustments.length} polar cells` : "") : "refinement");
-    const when = m.decided_at ? new Date(m.decided_at * 1000).toLocaleDateString() : "";
+    const when = m.decided_at ? isoDate(m.decided_at) : "";
     return `<li>${when} — approved <b>${esc(what)}</b></li>`;
   }).join("");
   return `<div class="card">
@@ -3781,7 +3828,7 @@ function learnArchiveCard() {
   const dbs = (Lab.learning || {}).debriefs || [];
   if (!dbs.length) return `<div class="card"><h3>Performance archive</h3><div class="muted" style="font-size:12px">No debriefs yet. Run one in the <a href="#debrief">Debrief</a> tab.</div></div>`;
   const rows = dbs.map((d) => `<tr>
-    <td>${d.created_at ? new Date(d.created_at * 1000).toLocaleDateString() : ""}</td>
+    <td>${d.created_at ? isoDate(d.created_at) : ""}</td>
     <td>${esc(d.race_name || d.race_id || "")}${d.window_start ? `<div class="muted" style="font-size:11px">recording ${new Date(d.window_start * 1000).toISOString().slice(0, 16).replace("T", " ")}Z${d.elapsed_hours != null ? " · " + d.elapsed_hours + " h" : ""}</div>` : ""}</td>
     <td>${d.regret_min != null ? d.regret_min + " min" : "—"}</td>
     <td>${d.time_behind_min != null ? d.time_behind_min + " min" : "—"}</td>
@@ -3904,23 +3951,48 @@ function optObstacleNote(r) {
 const Pol = { data: null, tws: null, config: "all", race: "all", split: "config",
   busy: false, proposals: null, sources: null, use: null, msg: "", _maxV: null };
 
-// Fixed hue order — color follows the sail, never the filter (dataviz rule). Validated for CVD +
-// contrast on this app's panel surface (#141418), 7 slots, 2026-09-09. Unattributed = muted.
-const POL_ORDER = ["J1", "J1+J3", "A3", "A3+J1", "A3+SS", "S2", "S2+SS"];
-const POL_HUES = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9"];
+// Colour follows the sail, never the filter: each sail wears its SAIL_COLORS colour, the same one
+// as the crossover chart and its legend (#240). A two-sail set is drawn in its first sail's colour
+// with the second sail's colour dashed over it. Older sail logs call the kite "S2" (its cert id);
+// the crew word is S1, so the tab shows S1 and the logged keys stay as they are.
+const POL_ORDER = ["J1", "J1+J3", "A3", "A3+J1", "A3+SS", "S1", "S1+SS"];
+const POL_SS = "#f28cc4";             // the staysail's colour, until SAIL_COLORS carries SS (#259)
+const POL_SPARE = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9"];
+// The crew word for a logged sail config: "S2+SS" -> "S1+SS". Display only.
+function polSailName(cfg) {
+  return cfg ? String(cfg).split("+").map((t) => (t === "S2" ? "S1" : t)).join("+") : cfg;
+}
+function polSailHex(t) {
+  if (typeof SAIL_COLORS !== "undefined" && SAIL_COLORS[t]) return SAIL_COLORS[t];
+  return t === "SS" ? POL_SS : null;
+}
 // Race instances are ORDERED (they happened in sequence), so they get a sequential ramp rather
 // than a categorical palette: oldest lightest, newest darkest. It encodes which race AND when,
 // and it can never be mistaken for the sail colors above — the two modes mean different things
 // and must not share a vocabulary.
 const POL_RACE_RAMP = ["#a5e0ef", "#6cc6e0", "#38a8cc", "#2a86ab", "#1f6485"];
 
-function polColor(cfg) {
-  if (!cfg) return "#9a9aa6";
-  const known = POL_ORDER.indexOf(cfg);
-  if (known >= 0) return POL_HUES[known];
-  // a config outside the known order gets a stable slot from the artifact's sorted config list
-  const extras = ((Pol.data || {}).configs || []).filter((c) => !POL_ORDER.includes(c));
-  return POL_HUES[(POL_ORDER.length + extras.indexOf(cfg)) % POL_HUES.length];
+// [first sail colour, second sail colour or null]. Reef tokens (R1…) carry no colour.
+function polColors(cfg) {
+  if (!cfg) return ["#9a9aa6", null];
+  const hex = polSailName(cfg).split("+").map(polSailHex).filter(Boolean);
+  if (hex.length) return [hex[0], hex[1] && hex[1] !== hex[0] ? hex[1] : null];
+  // a sail with no colour of its own gets a stable spare slot from the sorted config list
+  const extras = ((Pol.data || {}).configs || []).filter((c) => !polSailHex(polSailName(c).split("+")[0]));
+  return [POL_SPARE[Math.max(0, extras.indexOf(cfg)) % POL_SPARE.length], null];
+}
+function polColor(cfg) { return polColors(cfg)[0]; }
+// The legend/table swatch: one colour, or the two sails split diagonally.
+function polSwatch(cfg) {
+  const [a, b] = polColors(cfg);
+  const bg = b ? `linear-gradient(135deg, ${a} 50%, ${b} 50%)` : a;
+  return `<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${bg};margin-right:4px"></span>`;
+}
+// The configs as the crew names them, one entry per name ("S2" and "S1" logs are the same sail).
+function polConfigNames() {
+  const out = [];
+  ((Pol.data || {}).configs || []).forEach((c) => { const n = polSailName(c); if (!out.includes(n)) out.push(n); });
+  return out.sort((x, y) => (POL_ORDER.indexOf(x) + 1 || 99) - (POL_ORDER.indexOf(y) + 1 || 99) || x.localeCompare(y));
 }
 
 // the race instances that carry measured cells, oldest first (the ramp's order)
@@ -3984,7 +4056,7 @@ function polCells(tws, config) {
   const src = Pol.race === "all" ? (d.cells || [])
     : (d.race_cells || []).filter((c) => polSameRec(c.recording, Pol.race));
   return src.filter((c) => (tws == null || c.tws === tws)
-    && (config === "all" || (c.config || "—") === config));
+    && (config === "all" || (polSailName(c.config) || "—") === config));
 }
 
 // The cells the evidence gate REFUSED, under the same filters as polCells — so the card can say
@@ -3995,7 +4067,7 @@ function polThin(tws, config) {
   const src = Pol.race === "all" ? (d.refused_thin || [])
     : (d.refused_thin_race || []).filter((c) => polSameRec(c.recording, Pol.race));
   return src.filter((c) => (tws == null || c.tws === tws)
-    && (config === "all" || (c.config || "—") === config));
+    && (config === "all" || (polSailName(c.config) || "—") === config));
 }
 
 // ONE radial scale for the whole tab. Cole, 2026-09-16: the chart must not rescale between the
@@ -4035,11 +4107,14 @@ function polSeries() {
   }
   const cells = polCells(Pol.tws, Pol.config);
   const by = {};
-  cells.forEach((c) => (by[c.config || "—"] = by[c.config || "—"] || []).push(c));
+  cells.forEach((c) => { const k = polSailName(c.config) || "—"; (by[k] = by[k] || []).push(c); });
   return Object.keys(by)
     .sort((x, y) => (POL_ORDER.indexOf(x) + 1 || 99) - (POL_ORDER.indexOf(y) + 1 || 99) || x.localeCompare(y))
-    .map((name) => ({ key: name, label: name, color: polColor(name === "—" ? null : name),
-                      pts: by[name].slice().sort((m, n) => m.twa - n.twa) }));
+    .map((name) => {
+      const [color, color2] = polColors(name === "—" ? null : name);
+      return { key: name, label: name === "—" ? "unknown sails" : name, color, color2,
+               pts: by[name].slice().sort((m, n) => m.twa - n.twa) };
+    });
 }
 
 function polCertCurve(tws) {
@@ -4057,7 +4132,7 @@ function polSvg() {
   const series = polSeries();
   const cert = polCertCurve(Pol.tws);
   const maxV = polMaxV();     // fixed across every TWS chip and every filter — see polMaxV()
-  const CX = 70, CY = 320, R = 268;
+  const CX = 70, CY = 320, R = 268;   // the plot is a half circle right of CX; the viewBox crops to it
   const rr = (v) => R * v / maxV;
   const XY = (twa, v) => [CX + rr(v) * Math.sin(twa * Math.PI / 180), CY - rr(v) * Math.cos(twa * Math.PI / 180)];
   let out = [];
@@ -4066,7 +4141,8 @@ function polSvg() {
   for (let v = 2; v <= maxV + 1e-9; v += 2) {
     const [x0, y0] = XY(0, v), [x1, y1] = XY(180, v);
     out.push(`<path d="M ${x0} ${y0} A ${rr(v)} ${rr(v)} 0 0 1 ${x1} ${y1}" fill="none" stroke="var(--line)" stroke-width="1"/>`);
-    out.push(`<text x="${CX + rr(v) + 3}" y="${CY - 4}" fill="var(--muted)" font-size="10">${v}</text>`);
+    // ring speeds sit left of the 0° spoke, clear of every angle label (G88)
+    out.push(`<text x="${CX - 4}" y="${CY - rr(v) + 4}" fill="var(--muted)" font-size="10" text-anchor="end">${v}</text>`);
   }
   for (let a = 0; a <= 180; a += 30) {
     const [x, y] = XY(a, maxV);
@@ -4085,21 +4161,20 @@ function polSvg() {
     if (sr.pts.length > 1) {
       const d = sr.pts.map((p, i) => (i ? "L" : "M") + XY(p.twa, p.stw).map((n) => n.toFixed(1)).join(" ")).join(" ");
       out.push(`<path d="${d}" fill="none" stroke="${sr.color}" stroke-width="2"/>`);
+      if (sr.color2) out.push(`<path d="${d}" fill="none" stroke="${sr.color2}" stroke-width="2" stroke-dasharray="7 7"/>`);
     }
     for (const p of sr.pts) {
       const [x, y] = XY(p.twa, p.stw);
       const i = Pol._pts.push({ ...p, label: sr.label, mode: Pol.split }) - 1;
-      out.push(`<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4" fill="${sr.color}" stroke="var(--panel)" stroke-width="2"/>`);
-      out.push(`<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="11" fill="transparent" style="cursor:pointer"
-        onmousemove="polTip(event,${i})" onmouseleave="polTipHide()"/>`);
+      out.push(`<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4" fill="${sr.color}" stroke="${sr.color2 || "var(--panel)"}" stroke-width="2"/>`);
+      // a finger-sized hit area; tap toggles the details, a mouse can also hover (G39)
+      out.push(`<circle class="pol-hit" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="22" fill="transparent" style="cursor:pointer"
+        onclick="polTipTap(event,${i})" onpointerenter="polTipHover(event,${i})" onpointerleave="polTipLeave(event)"/>`);
     }
-    // direct label at the curve's FASTEST point, pushed radially outward — curve ends converge
-    // in the deep sector and labels there collide (seen on the first render)
-    const top = sr.pts.reduce((a, b) => (b.stw > a.stw ? b : a));
-    const [ex, ey] = XY(top.twa, top.stw + 0.55);
-    out.push(`<text x="${ex}" y="${ey + 4}" fill="var(--ink)" font-size="11" font-weight="600" text-anchor="middle">${esc(sr.label)}</text>`);
+    // no label on the curve: they piled on each other and on the ring numbers; the legend names
+    // every line (G40)
   }
-  return `<svg viewBox="0 0 640 660" style="width:100%;max-width:620px" role="img"
+  return `<svg viewBox="30 16 350 600" style="width:100%;max-width:440px;max-height:80vh;display:block" role="img"
     aria-label="Observed polar, TWS ${Pol.tws} kn, by ${Pol.split === "race" ? "race instance" : "sail configuration"}">${out.join("")}</svg>`;
 }
 
@@ -4115,10 +4190,22 @@ function polTip(ev, i) {
     : (c.races ? `${c.races.length} race(s): ${esc(c.races.join(", "))}`
                : esc(polRaceName(c.recording)));
   tip.innerHTML = `<b>${esc(c.label)}</b> · TWS ${c.tws} · TWA ${c.twa}°<br>` +
-    `Speed <b>${c.stw}</b> kn (best held) · typical ${c.median_stw}<br>` +
+    `Speed <b>${kn2(c.stw)}</b> kn (best held) · typical ${kn2(c.median_stw)} kn<br>` +
     `${c.seconds != null ? c.seconds : c.samples} s of data (${c.samples} fixes) · ${src}`;
 }
-function polTipHide() { const t = document.getElementById("polTipEl"); if (t) t.remove(); }
+let polTipPinned = null;           // the point whose details were opened by a tap/click
+function polTipHover(ev, i) { if (ev.pointerType === "mouse" && polTipPinned == null) polTip(ev, i); }
+function polTipLeave(ev) { if (ev.pointerType === "mouse" && polTipPinned == null) polTipHide(); }
+function polTipTap(ev, i) {
+  if (polTipPinned === i) { polTipHide(); return; }
+  polTip(ev, i); polTipPinned = i;
+}
+function polTipHide() { polTipPinned = null; const t = document.getElementById("polTipEl"); if (t) t.remove(); }
+document.addEventListener("pointerdown", (e) => {
+  if (polTipPinned != null && !(e.target.closest && e.target.closest(".pol-hit"))) polTipHide();
+});
+// Boat speeds always with two decimals, so a column lines up (G91).
+function kn2(v) { return v == null || v === "" || isNaN(Number(v)) ? "—" : Number(v).toFixed(2); }
 
 function polUseKey(rec) { return rec == null ? "none" : String(Math.round(Number(rec))); }
 function polToggleUse(key, on) { Pol.use[key] = on; paintPolar(); }
@@ -4193,7 +4280,8 @@ function paintPolar() {
   const minS = Math.round((d.grid || {}).min_seconds || 60);
   const thin = polThin(Pol.tws, Pol.config);
   const allTws = d.tws_buckets || [];
-  const cfgs = ["all", ...((d.configs || [])), "—"];
+  polTipHide();                       // the chart is redrawn; an open tip would point at nothing
+  const cfgs = ["all", ...polConfigNames(), "—"];
   const races = polRaces();
   const byRace = Pol.split === "race";
   const chips = allTws.map((t) =>
@@ -4210,15 +4298,13 @@ function paintPolar() {
       onchange="Pol.split='${k}';paintPolar()"> ${k === "config" ? "sails" : "race"}</label>`).join("");
   const legend = byRace
     ? races.map((r) => `<span style="white-space:nowrap"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${polRaceColor(r.recording)};margin-right:4px"></span>${esc(r.name)}</span>`).join(" &nbsp; ")
-    : (d.configs || []).map((c) =>
-        `<span style="white-space:nowrap"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${polColor(c)};margin-right:4px"></span>${esc(c)}</span>`
-      ).join(" &nbsp; ") + ` &nbsp; <span style="white-space:nowrap"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#9a9aa6;margin-right:4px"></span>unknown sails</span>`;
+    : polConfigNames().map((c) => `<span style="white-space:nowrap">${polSwatch(c)}${esc(c)}</span>`).join(" &nbsp; ") + ` &nbsp; <span style="white-space:nowrap"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#9a9aa6;margin-right:4px"></span>unknown sails</span>`;
   const legendTail = ` &nbsp; <span style="white-space:nowrap;color:var(--muted)"><svg width="22" height="8"><line x1="0" y1="4" x2="22" y2="4" stroke="#9a9aa6" stroke-width="2" stroke-dasharray="5 4"/></svg> ORC rating (for reference)</span>`;
   const tbl = cells.length ? `<div class="pg-wrap"><table class="pg">
-    <tr><th>TWA</th><th>sails</th><th>best held</th><th>typical</th><th>data (s)</th><th>${Pol.race === "all" ? "races" : "race"}</th></tr>
+    <tr><th>TWA</th><th>sails</th><th>best held (kn)</th><th>typical (kn)</th><th>data (s)</th><th>${Pol.race === "all" ? "races" : "race"}</th></tr>
     ${cells.slice().sort((a, b) => a.twa - b.twa || String(a.config).localeCompare(String(b.config))).map((c) =>
-      `<tr><td>${c.twa}°</td><td><span style="color:${polColor(c.config)}">●</span> ${esc(c.config || "unknown")}</td>
-       <td><b>${c.stw}</b></td><td>${c.median_stw}</td><td>${c.seconds != null ? c.seconds : c.samples}</td><td>${esc(c.races ? c.races.join(", ") : polRaceName(c.recording))}</td></tr>`).join("")}
+      `<tr><td>${c.twa}°</td><td>${polSwatch(c.config)}${esc(polSailName(c.config) || "unknown")}</td>
+       <td><b>${kn2(c.stw)}</b></td><td>${kn2(c.median_stw)}</td><td>${c.seconds != null ? c.seconds : c.samples}</td><td>${esc(c.races ? c.races.join(", ") : polRaceName(c.recording))}</td></tr>`).join("")}
   </table></div>` : '<div class="placeholder">No measured cells at this TWS for this race.</div>';
   document.getElementById("view").innerHTML = `<div class="opt">
     ${polDangerBanner(d.races || [])}
@@ -4241,7 +4327,7 @@ function paintPolar() {
       <div class="muted" style="font-size:11px;margin-top:4px">Rings every 2 kn, up to ${polMaxV()} kn. The scale never changes, so a longer line is a faster boat.</div>
     </div>
     <div class="card"><h3>Cells at ${Pol.tws} kn${Pol.race === "all" ? "" : " · " + esc(polRaceName(Pol.race))} <span class="muted" style="font-weight:400">— best speed held, at least ${minS} s of data each</span></h3>${tbl}
-      ${thin.length ? `<div class="muted" style="font-size:11px;margin-top:6px">Not shown: <b>${thin.length}</b> cell(s) with under ${minS} s of data (${thin.slice().sort((x, y) => y.seconds - x.seconds).slice(0, 6).map((c) => `${c.twa}°${c.config ? " " + esc(c.config) : ""} ${c.seconds}s`).join(", ")}${thin.length > 6 ? `, +${thin.length - 6} more` : ""}). Too short to trust.</div>` : ""}</div>
+      ${thin.length ? `<div class="muted" style="font-size:11px;margin-top:6px">Not shown: <b>${thin.length}</b> cell(s) with under ${minS} s of data (${thin.slice().sort((x, y) => y.seconds - x.seconds).slice(0, 6).map((c) => `${c.twa}°${c.config ? " " + esc(polSailName(c.config)) : ""} ${c.seconds}s`).join(", ")}${thin.length > 6 ? `, +${thin.length - 6} more` : ""}). Too short to trust.</div>` : ""}</div>
     ${polDecisionsCard()}
   </div>`;
 }
