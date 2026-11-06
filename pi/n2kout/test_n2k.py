@@ -263,5 +263,48 @@ s3.send(*n2k.encode_129283(1.0))
 check("a send after the retry interval sends the pending claim first",
       fsock.frames == [(60928, 129), (129283, 129)])
 
+print("after an address move, ordinary traffic waits 250 ms (#184-13):")
+
+
+class SettleSock:
+    def __init__(self, clk):
+        self.clk, self.frames = clk, []
+
+    def send(self, raw):
+        cid = struct.unpack("<I", raw[:4])[0] & 0x1FFFFFFF
+        self.frames.append((n2k.pgn_of(cid), cid & 0xFF, round(self.clk[0], 3)))
+
+    def close(self):
+        pass
+
+
+clk = [100.0]
+s4 = n2k.N2kSender("fake")
+s4._sock = SettleSock(clk)
+s4._clock = lambda: clk[0]
+slept = []
+
+
+def fake_sleep(t):
+    slept.append(round(t, 3))
+    clk[0] += t
+
+
+s4._sleep = fake_sleep
+s4.change_address(128, n2k.encode_60928())
+n = s4.send(*n2k.encode_129283(1.0))
+check(f"a nav frame right after the claim is held 250 ms, then sent [{s4._sock.frames}]",
+      n == 1 and slept == [0.25]
+      and s4._sock.frames == [(60928, 128, 100.0), (129283, 128, 100.25)])
+check("…and it is not counted as an error", s4.send_errors == 0)
+s4.change_address(129, n2k.encode_60928())
+slept.clear()
+s4.send(*n2k.encode_60928())
+check("a claim (defend / answer a request) is not held", slept == []
+      and s4._sock.frames[-1][:2] == (60928, 129))
+clk[0] += 0.3
+s4.send(*n2k.encode_129283(1.0))
+check("past the settle → no wait", slept == [] and s4._sock.frames[-1][:2] == (129283, 129))
+
 print("PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)
