@@ -96,11 +96,16 @@ test("a debrief with no recording left still opens (G65)", async () => {
 test("the newest debrief opens on load (G65)", async () => {
   const h = harness();
   h.ctx.renderDebrief();
+  // three debriefs, the newest in the middle of both lists
+  const list = { recordings: [{ recording: 1, debrief: { id: 5, created_at: 100 } },
+                              { recording: 2, debrief: { id: 11, created_at: 300 } },
+                              { recording: 3, debrief: { id: 7, created_at: 200 } }],
+                 debriefs: [{ id: 5, created_at: 100 }, { id: 11, created_at: 300 }, { id: 7, created_at: 200 }] };
   for (let n = 0; n < 40; n++) {
     await h.flush();
     if (!h.pending.length) break;
     const p = h.pending[0];
-    h.answer((u) => u === p.url, reply(p.url, "A"));
+    h.answer((u) => u === p.url, p.url.includes("/recordings") ? list : reply(p.url, "A"));
   }
   assert.equal(h.ctx.Deb.viewing, 11);
   assert.equal(h.ctx.Deb.report && h.ctx.Deb.report.race_name, "A");
