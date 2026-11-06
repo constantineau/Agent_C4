@@ -70,7 +70,7 @@ LEAKS = [
 # Plus the ones the keyword list already caught, to keep them caught.
 OLD_CAUGHT = ["which side is favoured?", "when do we peel to the a3", "eta to the finish",
               "how tired is the helm", "are we on target", "best route home"]
-ALLOWED = ["any alerts?", "ais traffic near us", "forecast?", "which sensor sources are up",
+ALLOWED = ["any alerts?", "ais traffic near us", "ais collision risk with a competitor", "forecast?", "which sensor sources are up",
            "how windy is it"]
 
 print("racing — every gated question refused, no gated call reached:")

@@ -49,7 +49,9 @@ GATED_FALLBACK_ACTIONS = GATED_TOOLS | frozenset({"make_summary", "make_debrief"
 # Keyword groups for the no-LLM fallback path: if a question matches one of these while racing,
 # it would route to a gated tool, so refuse instead. (Mirrors the routing in agent._fallback.)
 # This is the first line only: agent._fallback also checks `withheld()` right before every gated
-# call, so a question that slips past these words still cannot reach a gated tool.
+# call, so a question that slips past these words still cannot reach a gated tool. Fleet words
+# (fleet/competitor/rival/...) are deliberately NOT here: the fallback routes AIS before fleet, and
+# a safety question like "AIS collision risk with a competitor" must still reach AIS while racing.
 _GATED_INTENT_KEYWORDS = (
     "tactic", "favored", "favoured", "which side", "which way", "lifted", "headed", "shift", "leverage",
     "route", "routing", "best way", "weather route", "fastest", "which tack first",
@@ -57,7 +59,6 @@ _GATED_INTENT_KEYWORDS = (
     "sail", "peel", "kite", "spinnaker", "jib", "hoist", "change up", "change down",
     "fatigue", "tired", "rotate", "helm change", "driver", "shift change",
     "mark", "finish", "eta", "distance", "layline", "lay ", "next leg",
-    "fleet", "competitor", "rival", "corrected", "handicap", "who am i racing", "who are we racing",
     "debrief", "recap", "how did we do", "how'd we do", "summarize", "summary", "session report",
 )
 
