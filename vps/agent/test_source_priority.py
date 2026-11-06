@@ -151,14 +151,27 @@ check("an unranked path yields no matchers",
       source_policy.matchers_for("navigation.gnss.satellites") == [])
 
 # --- selection: _prefer, without touching a database ------------------------
-print("OnboardSource._prefer (failover, passthrough, replay-safe freshness):")
+print("OnboardSource._prefer (failover, passthrough, wall-clock freshness):")
 os.environ.setdefault("ONBOARD_LIVE_WS", "false")
 from app.datasource_onboard import OnboardSource   # noqa: E402
 
 prefer = OnboardSource._prefer.__get__(object.__new__(OnboardSource))
 ORCA, GPS, PILOT, GHC = ("n2k-socketcan.15", "n2k-socketcan.3",
                          "n2k-socketcan.1", "n2k-socketcan.6")
-T = 1_752_000_000.0     # any fixed epoch; only differences matter
+T = 1_752_000_000.0     # any fixed epoch; the policy's clock is pinned to it below
+
+
+class _Clock:
+    """Stands in for `source_policy._time`: ages are judged against the wall clock (#221), so the
+    fixtures pin it rather than race the real one."""
+    at = T
+
+    @classmethod
+    def time(cls):
+        return cls.at
+
+
+_real_clock, source_policy._time = source_policy._time, _Clock
 
 check("no candidates -> None", prefer("heel", []) is None)
 check("lead source wins even when a lower rank is fresher",
@@ -176,14 +189,43 @@ check("unranked path -> freshest wins",
 check("apparent wind takes the masthead over the Orca",
       prefer("environment.wind.speedApparent", [(ORCA, T, 9.0), ("n2k-socketcan.0", T, 8.0)])[2]
       == 8.0)
-# the replay trap: a decade-old archive must still select by priority
+check("exactly 45 s old still counts as fresh (boundary is inclusive)",
+      prefer("heel", [(ORCA, T - 45, 1.0), (GPS, T, 2.0)])[2] == 1.0)
+
+# #221: ONE freshness rule. `/conditions` judges a 45 s age on the wall clock; this pick used to
+# judge it against the newest sample, so the two named different leads for the same readings.
+print("one freshness rule with /conditions (#221):")
+from app import onboard_conditions as oc   # noqa: E402
+TWD_P, DERIVED = "environment.wind.directionTrue", "derived-data"
+cands = [(ORCA, T - 90, 200.0), (DERIVED, T - 60, 210.0)]   # Codex's repro: both quiet
+pick = prefer(TWD_P, cands)
+check("Orca 90 s + derived 60 s: both stale, so the freshest (derived) leads, not the Orca",
+      pick[0] == DERIVED)
+oc._age = lambda epoch: round(T - epoch, 1)
+best, _why, _fb = oc._choose_preferred("twd", [{"source": s, "value": v, "age_s": T - t}
+                                               for s, t, v in cands])
+check("...the same lead `/conditions` names", best["source"] == pick[0])
+check("a lead 30 s behind a newer rank-2 sample but 50 s old is stale, not 'current'",
+      prefer("heel", [(ORCA, T - 50, 1.0), (GPS, T - 20, 2.0)])[2] == 2.0)
+check("an explicit `now` overrides the clock",
+      source_policy.preferred("heel", [(ORCA, T - 50, 1.0), (GPS, T - 20, 2.0)], DEV,
+                              now=T - 10)[2] == 1.0)
+check("the window pick follows the same rule (series_publisher)",
+      source_policy.series_publisher(TWD_P, [(ORCA, T - 300 + i, 0.0) for i in range(211)]
+                                     + [(DERIVED, T - 120 + i, 0.0) for i in range(61)],
+                                     DEV) == DERIVED)
+
+# replay: the rig freezes the process clock at the frame's time, so priority still holds there
 OLD = 1_405_000_000.0   # 2014, the bench sample log's era
-check("freshness is relative, so a 2014 archive still honours priority",
+_Clock.at = OLD
+check("a 2014 archive replayed with the clock at its time still honours priority",
       prefer("heel", [(ORCA, OLD - 3, 1.0), (GPS, OLD, 2.0)])[2] == 1.0)
 check("...and its failover still fires on a 45 s gap",
       prefer("heel", [(ORCA, OLD - 60, 1.0), (GPS, OLD, 2.0)])[2] == 2.0)
-check("exactly 45 s old still counts as fresh (boundary is inclusive)",
-      prefer("heel", [(ORCA, T - 45, 1.0), (GPS, T, 2.0)])[2] == 1.0)
+_Clock.at = T
+check("read against today's clock, the same 2014 rows are all stale -> freshest, never dropped",
+      prefer("heel", [(ORCA, OLD - 3, 1.0), (GPS, OLD, 2.0)])[2] == 2.0)
+source_policy._time = _real_clock
 
 print("\n" + ("PASS" if ok else "FAIL"))
 raise SystemExit(0 if ok else 1)
