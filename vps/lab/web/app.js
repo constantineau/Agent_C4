@@ -2785,16 +2785,17 @@ function reqRemove(i) { Lab.editDef.requirements.splice(i, 1); paintRules(); }
 
 async function checkToggle(id, on) {
   Lab.checked = Lab.checked || {};
-  if (on) Lab.checked[id] = true; else delete Lab.checked[id];
+  const checked = Lab.checked;     // this race's ticks: the user may switch races while it saves
+  if (on) checked[id] = true; else delete checked[id];
   // persist progress (labstate-backed, separate from the RaceDefinition)
   try {
-    const res = await apiPost("/api/checklist", { race_id: Lab.sel, checked: Lab.checked });
+    const res = await apiPost("/api/checklist", { race_id: Lab.sel, checked });
     if (!res.ok) throw new Error("error " + res.status);
   } catch (e) {                    // not saved: undo the tick so the box shows what's stored
-    if (on) delete Lab.checked[id]; else Lab.checked[id] = true;
+    if (on) delete checked[id]; else checked[id] = true;
     alert("Couldn't save that tick. Try again.");
   }
-  paintRules();
+  if (Lab.checked === checked) paintRules();
 }
 
 async function rulesSave() {

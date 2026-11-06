@@ -144,7 +144,9 @@ def fn_body(name):
 
 tick, lock = fn_body("checkToggle"), fn_body("depLockIn")
 check("checklist tick checks res.ok", "res.ok" in tick and "catch (e) {}" not in tick)
-check("a failed tick is undone and said", "alert(" in tick and "delete Lab.checked[id]" in tick)
+check("a failed tick is undone and said", "alert(" in tick and "delete checked[id]" in tick)
+check("the undo hits the race it saved, not one switched to meanwhile",
+      "const checked = Lab.checked" in tick and "Lab.checked[id] = true" not in tick.split("catch")[1])
 check("lock-in checks res.ok", "res.ok" in lock and "Lock-in failed" in lock)
 check("route poll sends its job_id", '"/api/optimize/status?job_id="' in js)
 check("playbook poll sends its job_id", '"/api/playbook/synthesize/status?job_id="' in js)
