@@ -1305,6 +1305,16 @@ async def _flush_once(buf, loop, state, path, guard):
             return
     if not buf:
         return
+    if state.get("clock_open_gen") is not None and not state.get("clock_saved") \
+            and state.get("conn") is not None:
+        # The untrusted-clock stretch failed to save earlier: try again before these
+        # stale-dated rows land (recording is never held up for it).
+        try:
+            await loop.run_in_executor(None, open_clock_window, state["conn"],
+                                       state.get("clock_from_id"))
+            state["clock_saved"] = True
+        except Exception:
+            pass
     taken = time.monotonic()
     rows, buf[:] = buf[:], []
     # Two attempts: a corruption error on the first rotates and writes the same batch into the
@@ -1695,13 +1705,22 @@ def _prune(conn, engine_db=None, retain_days=None, chunk_rows=None, pause_s=None
                 print(f"[archive] prune stopped after {total} rows — the archive is being "
                       f"rotated", flush=True)
                 return total
+            cap = (through,) if id_cap else ()
             with _WRITE_LOCK:
-                sel = conn.execute(
-                    f"SELECT id, time FROM readings WHERE time {'>=' if lo_incl else '>'} ? "
-                    f"AND time >= ? AND (? IS NULL OR time > ? OR id > ?) "
-                    f"AND time < ?{id_cap} ORDER BY time, id LIMIT ?",
-                    (lo, since, since_id, since, since_id, hi,
-                     *((through,) if id_cap else ()), chunk)).fetchall()
+                # Two seeks, so a chunk never re-reads rows it has passed, even when many share
+                # one timestamp: the rest of the cursor's timestamp (index seek on time =, id >),
+                # then later timestamps.
+                sel = []
+                if since_id is not None:
+                    sel = conn.execute(
+                        f"SELECT id, time FROM readings WHERE time = ? AND id > ?{id_cap} "
+                        f"ORDER BY id LIMIT ?", (since, since_id, *cap, chunk)).fetchall()
+                if len(sel) < chunk:
+                    sel += conn.execute(
+                        f"SELECT id, time FROM readings WHERE time {'>=' if lo_incl else '>'} ? "
+                        f"AND time {'>' if since_id is not None else '>='} ? AND time < ?"
+                        f"{id_cap} ORDER BY time, id LIMIT ?",
+                        (lo, since, hi, *cap, chunk - len(sel))).fetchall()
                 if not sel:
                     break
                 gone = [r[0] for r in sel if not kept(r[0])]

@@ -157,12 +157,37 @@ with tempfile.TemporaryDirectory() as d:
     left = {r[0] for r in conn.execute("SELECT id FROM readings")}
     check(f"only the 10 unprotected rows went (deleted {deleted})",
           deleted == 10 and left == set(range(1, 51)))
-    plan = " ".join(str(r) for r in conn.execute(
-        "EXPLAIN QUERY PLAN SELECT id, time FROM readings WHERE time >= ? AND time >= ? "
-        "AND (? IS NULL OR time > ? OR id > ?) AND time < ? ORDER BY time, id LIMIT ?",
-        ("", "", None, "", None, "z", 5)))
-    check(f"the chunk query walks the time index with no sort ({plan})",
-          "readings_time_idx" in plan and "TEMP B-TREE" not in plan)
+
+print("#184-9 many kept rows on ONE timestamp: each chunk's scan stays bounded:")
+with tempfile.TemporaryDirectory() as d:
+    conn, eng = archive(d), engine(d)
+    t = iso(NOW - 300 * 86400)
+    conn.executemany("INSERT INTO readings (time, boat_id, source, path, value) "
+                     "VALUES (?, 'sr33', 's', 'p', 1.0)", [(t,)] * 20000)
+    conn.commit()
+    archiver._save_clock_windows(conn, [{"boot": "b", "from_id": 1, "to_id": 19990}])
+    steps, worst = [0], [0]
+
+    def tick():
+        steps[0] += 1
+        return 0
+    conn.set_progress_handler(tick, 100)
+    per_chunk = []
+    real_sleep = archiver.time.sleep
+
+    def between_chunks(_s):
+        per_chunk.append(steps[0])
+        steps[0] = 0
+    archiver.time.sleep = between_chunks
+    try:
+        deleted = archiver.prune(conn, engine_db=eng, retain_days=7, chunk_rows=500,
+                                 pause_s=0.001)
+    finally:
+        archiver.time.sleep = real_sleep
+        conn.set_progress_handler(None, 0)
+    check(f"10 rows deleted (got {deleted})", deleted == 10)
+    check(f"no chunk re-read the rows before it (max {max(per_chunk) * 100} VM steps/chunk "
+          f"over {len(per_chunk)} chunks)", per_chunk and max(per_chunk) * 100 < 50000)
 
 print("#184-9 a rotation while untrusted saves the fresh file's stretch before any row:")
 with tempfile.TemporaryDirectory() as d:
