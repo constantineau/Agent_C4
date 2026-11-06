@@ -280,6 +280,35 @@ test("#56 a stalled sail POST can't hold the queue; the next tap builds on the r
   ok(last.indexOf("J1") >= 0 && last.indexOf("A3") >= 0, "second tap didn't build on the re-read state: " + JSON.stringify(posted[1]));
   ok(T.D.App.sailQ === null, "queue not released");
 });
+test("#56 a tap whose answer and re-read both fail drops the queued taps instead of guessing", async () => {
+  const T = load();
+  T.D.App.sailState = { flying: [], out_of_service: [], reef: "" };
+  const posted = [];
+  T.ctx.fetchImpl = (url, opts) => {
+    if (url === "/api/sails/state" && opts.method === "POST") { posted.push(JSON.parse(opts.body)); return Promise.reject(new Error("lost")); }
+    return Promise.reject(new Error("down"));
+  };
+  await Promise.all([T.ctx.toggleFlying("J1"), T.ctx.toggleFlying("A3")]);
+  ok(posted.length === 1, "a queued tap was sent built on unknown state: " + JSON.stringify(posted));
+  ok(T.D.App.sailQ === null && T.D.App.sailLost === false, "queue not reset for the next tap");
+});
+test("#56 a sail-state read started during a tap never overwrites it", async () => {
+  const T = load();
+  T.D.App.sailState = { flying: [], out_of_service: [], reef: "" };
+  let releaseGet = null;
+  T.ctx.fetchImpl = (url, opts) => {
+    if (url === "/api/sails/state" && opts.method === "POST")
+      return new Promise((res) => setImmediate(() => res({ ok: true, status: 200, json: () => Promise.resolve({ flying: ["J1"], out_of_service: [], reef: "" }) })));
+    if (url === "/api/sails/state") return new Promise((res) => { releaseGet = () => res({ ok: true, status: 200, json: () => Promise.resolve({ flying: [], out_of_service: [], reef: "" }) }); });
+    return Promise.reject(new Error("down"));
+  };
+  const tap = T.ctx.toggleFlying("J1");
+  const get = T.D.fetchSailState();      // started while the POST is in flight
+  await tap;
+  if (releaseGet) releaseGet();
+  await get;
+  ok((T.D.App.sailState.flying || []).indexOf("J1") >= 0, "an old read overwrote the tap: " + JSON.stringify(T.D.App.sailState));
+});
 test("#56 a sail-state read in flight during a tap does not undo the tap", async () => {
   const T = load();
   T.D.App.sailState = { flying: [], out_of_service: [], reef: "" };

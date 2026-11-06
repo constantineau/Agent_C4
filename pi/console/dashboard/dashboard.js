@@ -1406,7 +1406,7 @@
      (C0/J2/J3/SS aren't in the ORC cert; the boat flies COMBINATIONS, so chips multi-select) */
   const SAILS_INV = ["J1", "J2", "J3", "C0", "SS", "A3", "S1"];
   async function fetchSailState() {
-    if (App.src !== "live") return;
+    if (App.src !== "live" || App.sailQ) return;   // a tap is in flight: its answer is the state
     const seq = App.sailSeq;
     const r = await fetchJSON("/sails/state", 8000);
     // a sail tap posted while this read was in flight wins: this answer predates it (#56)
@@ -1416,23 +1416,27 @@
      taps that both built it from the same App.sailState lost one sail: the second POST overwrote
      the first. Queued, each tap builds its body from the state the previous POST returned.
      Each POST (body included) has a deadline, so a stalled one can't hold the queue; when one
-     fails, the state is read back before the next queued tap builds on it. */
+     fails, the state is read back before the next queued tap builds on it. If that read fails
+     too, the state is unknown and the rest of the queued taps are dropped rather than sent
+     built on a guess (a lost answer may hide a POST that did land). The bar re-syncs on the
+     next poll and shows what the engine really has. */
   const SAIL_POST_MS = 8000;
   function sailPost(build) {
     App.sailSeq++;
     const run = async () => {
+      if (App.sailLost) return;
       try {
         const r = await COL.fetchJsonWithin(API + "/sails/state", { method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(build(App.sailState || {})) }, SAIL_POST_MS);
         const st = r || await fetchJSON("/sails/state", 5000);   // failed: re-sync before the next tap
-        if (st) { App.sailState = st; renderSailsBar(); }
+        if (st) { App.sailState = st; renderSailsBar(); } else App.sailLost = true;
         fetchPlays();
       } catch (e) { /* engine unreachable — the next poll re-syncs */ }
     };
     const q = (App.sailQ || Promise.resolve()).then(run);
     App.sailQ = q;
-    return q.then(() => { if (App.sailQ === q) App.sailQ = null; });
+    return q.then(() => { if (App.sailQ === q) { App.sailQ = null; App.sailLost = false; } });
   }
   window.toggleFlying = function (sail) {
     return sailPost((st) => {
@@ -2078,7 +2082,7 @@
     plangap: null, trend: null, briefBusy: {}, gps: null, gpsBusy: false, gpsNote: "",
     checklist: null, chkTimer: null,
     plume: null, plumeAt: 0, plumeWait: "", plumeTimer: null, plumeView: { field: "tws", only: null },
-    detailStreamKey: null, detailAbort: null, pollGen: 0, at: {}, sailQ: null, sailSeq: 0,
+    detailStreamKey: null, detailAbort: null, pollGen: 0, at: {}, sailQ: null, sailSeq: 0, sailLost: false,
     lastOkAt: 0, lastPollOk: false, graceUntil: 0, startedAt: Date.now(),
   };
   function currentData() {
