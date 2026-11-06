@@ -172,7 +172,7 @@ def recommendation(sel, conc, flt):
 
     if action == "na":
         # the gameplan is aboard but there's no wind read to check it against (#46): no all-clear
-        return {"action": sel.get("why") or "No wind data. Can't check the plan.",
+        return {"action": "No wind read. Can't check the plan.",
                 "vs_playbook": "on-plan", "target_variant": sel.get("recommended"),
                 "rationale": sel.get("why", ""), "grounded_in": ["get_selector"],
                 "urgency": "monitor", "confidence": "low"}, 0.3

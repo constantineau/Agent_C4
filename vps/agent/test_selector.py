@@ -276,7 +276,10 @@ stub()                                                                  # tactic
 r = selector.get_selector(now=T0)
 print("  ", r["status"], "|", r["value"], "|", r["why"])
 check("status na, not ok", r["status"] == "na" and r["action"] == "na")
-check("says there's no wind data", "No wind data" in r["why"])
+check("says it can't check the plan", "Can't check the plan" in r["why"])
+stub(tac={"available": False, "note": "Not enough wind history yet."})
+check("…and passes on tactics' reason (not 'check the sensor')",
+      "Not enough wind history yet." in selector.get_selector(now=T0)["why"])
 check("the gameplan is still aboard (available)", r["available"] is True)
 check("no 'no lasting shift' claim", "lasting" not in r["why"].lower())
 check("shift.persistent is unknown, not False", r["signals"]["shift"]["persistent"] is None)

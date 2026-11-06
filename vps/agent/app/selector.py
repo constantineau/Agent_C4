@@ -294,10 +294,13 @@ def _decide(route=None, now=None):
     if not tac.get("available"):
         return {**base, "action": "na", "status": "na", "tier": 0,
                 "target_variant": None, "target_label": None,
-                "value": "No wind data", "driven_by": [],
+                "value": "No wind read", "driven_by": [],
                 "confidence": 0.3, "confidence_label": "low",
-                "why": "No wind data. Can't check the plan.",
-                "consider": "Check the wind sensor.", "clears": "wind data back", "based": []}
+                # tactics says why (no live wind/position, or not enough history yet): a healthy
+                # sensor early in the session must not be told to check the sensor
+                "why": f"{tac.get('note') or 'No wind read.'} Can't check the plan.",
+                "consider": "Hold the plan on your own read until it's back.",
+                "clears": "wind read back", "based": []}
 
     if decisive:
         # locked input #5 — downwind, the pivot must CONFIRM before the verdict escalates to a

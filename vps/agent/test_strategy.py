@@ -310,7 +310,7 @@ stub()
 r = strategy.get_strategy_signals()
 print("  ", r["assessment"], "|", [p["read"] for p in r["picture"]])
 check("not a Hold recommendation", not r["recommendation"]["action"].startswith("Hold"))
-check("says there's no wind data", "No wind data" in r["assessment"])
+check("says there's no wind read", "No wind read" in r["assessment"])
 check("no shift row describing 0°", not any(p["signal"] == "shift" for p in r["picture"]))
 check("not in no-gameplan mode", r["recommendation"]["vs_playbook"] == "on-plan")
 
