@@ -192,7 +192,14 @@ def apply_n2k_payload(payload, state=None, boat_id=None, now=None):
                   if (a in live and key(live[a]) != key(d))
                   or (key(d) in where and where[key(d)] != a)}
     state["disproved"] = disproved
-    state["moved"] = n2k_sources.moved(seen, static)
+    moved = n2k_sources.moved(seen, static)
+    # a device that moved once and is now not seen anywhere is missing, even with its first
+    # address silent: drift() can't see that (it needs the address to answer)
+    listed = {m["source"] for m in moved}
+    moved += [{"source": a, "expected": static[a].get("model"),
+               "found": (live.get(a) or {}).get("model"), "now_at": None}
+              for a in sorted(disproved) if a not in listed and key(static[a]) not in where]
+    state["moved"] = moved
     base = {a: d for a, d in static.items() if a not in disproved}
     n2k_sources.set_verified(boat_id, n2k_sources.verified(seen, base))
     state.update(checked_at=now or time.time(), error=None)
@@ -245,7 +252,8 @@ def n2k_check(state, now=None):
     age = max(0.0, now - state["checked_at"])
     row = {"status": "warn" if lost else "ok", "moved": mv, "checked_at": state["checked_at"],
            "age_s": round(age, 1), "error": state.get("error")}
-    row["reason"] = ("; ".join(f"{m['expected']} not found, {m['source']} is now {m['found']}"
+    row["reason"] = ("; ".join(f"{m['expected']} not found"
+                               + (f", {m['source']} is now {m['found']}" if m.get("found") else "")
                                for m in lost)
                      if lost else "sensor addresses as expected")
     row["note"] = ("; ".join(f"{m['expected']} moved to {m['now_at']}, still used" for m in found)

@@ -131,6 +131,9 @@ engine_app.check_n2k_once(st5, fetch=lambda: flat(only20))
 engine_app.check_n2k_once(st5, fetch=lambda: flat({"n2k-socketcan.20": STATIC["n2k-socketcan.4"]}))
 check("a disproved address never falls back to its static device",
       "n2k-socketcan.3" not in ns.devices_for("sr33"))
+r5 = engine_app.n2k_check(st5)
+check("...and the device that moved away and vanished is still a warning",
+      r5["status"] == "warn" and "GPS24xd-NMEA2000 not found" in r5["reason"])
 
 kept = ns.devices_for("sr33")
 check("a failed read keeps the last good map",
