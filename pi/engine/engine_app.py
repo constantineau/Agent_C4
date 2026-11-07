@@ -174,10 +174,9 @@ def apply_n2k_payload(payload, state=None, boat_id=None, now=None):
     # What has been SEEN, carried across reads: a later list that omits a device (not yet
     # re-announced) must not restore an identity an earlier read disproved. A fresh answer
     # wins; a device seen at a new address drops its old one.
-    key = lambda d: (d.get("model"), d.get("serial"))
-    keys = {key(d) for d in fresh.values()}
+    same, find = n2k_sources.same_device, n2k_sources.find
     live = {a: d for a, d in (state.get("live") or {}).items()
-            if a not in fresh and key(d) not in keys}
+            if a not in fresh and not any(same(d, f) for f in fresh.values())}
     live.update(fresh)
     state["live"] = live
     seen = {a: {"updates": [{"source": {"manufacturerCode": d.get("manufacturer"),
@@ -186,11 +185,10 @@ def apply_n2k_payload(payload, state=None, boat_id=None, now=None):
             for a, d in live.items()}
     # A static address once disproved (its device seen elsewhere, or another device seen on
     # it) never falls back to its static identity, even after the evidence is overwritten.
-    where = {key(d): a for a, d in live.items()}
     disproved = set(state.get("disproved") or ())
     disproved |= {a for a, d in static.items()
-                  if (a in live and key(live[a]) != key(d))
-                  or (key(d) in where and where[key(d)] != a)}
+                  if (a in live and not same(live[a], d))
+                  or find(d, live, prefer=a) not in (None, a)}
     state["disproved"] = disproved
     moved = n2k_sources.moved(seen, static)
     # a device that moved once and is now not seen anywhere is missing, even with its first
@@ -198,7 +196,7 @@ def apply_n2k_payload(payload, state=None, boat_id=None, now=None):
     listed = {m["source"] for m in moved}
     moved += [{"source": a, "expected": static[a].get("model"),
                "found": (live.get(a) or {}).get("model"), "now_at": None}
-              for a in sorted(disproved) if a not in listed and key(static[a]) not in where]
+              for a in sorted(disproved) if a not in listed and find(static[a], live) is None]
     state["moved"] = moved
     base = {a: d for a, d in static.items() if a not in disproved}
     n2k_sources.set_verified(boat_id, n2k_sources.verified(seen, base))

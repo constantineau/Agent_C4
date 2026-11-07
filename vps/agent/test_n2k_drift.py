@@ -135,6 +135,11 @@ r5 = engine_app.n2k_check(st5)
 check("...and the device that moved away and vanished is still a warning",
       r5["status"] == "warn" and "GPS24xd-NMEA2000 not found" in r5["reason"])
 
+st6 = {"checked_at": None, "error": None, "moved": [], "static": None}
+engine_app.check_n2k_once(st6, fetch=lambda: {"n2k-socketcan": {"3": {"n2k": {"modelId": "GPS24xd-NMEA2000"}}}})
+check("a list without serials doesn't disprove an unchanged device",
+      engine_app.n2k_check(st6)["status"] == "ok" and not st6["moved"])
+
 kept = ns.devices_for("sr33")
 check("a failed read keeps the last good map",
       not engine_app.check_n2k_once(st2, fetch=lambda: (_ for _ in ()).throw(OSError("down")))

@@ -90,8 +90,21 @@ def set_verified(boat_id, devices):
         _VERIFIED.pop(boat_id, None)
 
 
-def _key(d):
-    return ((d or {}).get("model"), (d or {}).get("serial"))
+def same_device(a, b):
+    """Two device records name the same unit: same model, and the same serial when BOTH carry
+    one (a list without serials must not disprove an unchanged device)."""
+    a, b = a or {}, b or {}
+    if a.get("model") != b.get("model"):
+        return False
+    return not (a.get("serial") and b.get("serial")) or a["serial"] == b["serial"]
+
+
+def find(device, live, prefer=None):
+    """The address in `live` answering as `device` (`prefer` when it does), or None."""
+    hits = sorted(s for s, d in (live or {}).items() if same_device(d, device))
+    if prefer in hits:
+        return prefer
+    return hits[0] if hits else None
 
 
 def verified(payload, devices):
@@ -99,11 +112,10 @@ def verified(payload, devices):
 
     Every address that answers with product info is taken as it answers NOW. A mapped address
     that does not answer keeps its static entry (the device may just be off), unless its device
-    now answers at another address, in which case the stale address is dropped. The device key
-    is (model, serial): the GPSMAP 943 and its virtual input handler share a serial."""
+    now answers at another address, in which case the stale address is dropped. A device is its
+    model plus serial: the GPSMAP 943 and its virtual input handler share a serial."""
     live = build_from_signalk(payload)
-    seen = {_key(d) for d in live.values()}
-    out = {s: d for s, d in (devices or {}).items() if s not in live and _key(d) not in seen}
+    out = {s: d for s, d in (devices or {}).items() if s not in live and find(d, live) is None}
     out.update(live)
     return out
 
@@ -114,15 +126,13 @@ def moved(payload, devices):
     when it is not on the bus). Also a mapped device that answers at a NEW address while its old
     one is silent (`found` None): not drift, but still a move."""
     live = build_from_signalk(payload)
-    where = {_key(d): s for s, d in live.items()}
     out = []
     for source, _want, _got in drift(payload, devices):
         exp = devices[source]
         out.append({"source": source, "expected": exp.get("model"),
-                    "found": live[source].get("model"),
-                    "now_at": where.get(_key(exp))})
+                    "found": live[source].get("model"), "now_at": find(exp, live)})
     for source, exp in sorted((devices or {}).items()):
-        new = where.get(_key(exp))
+        new = find(exp, live)
         if source not in live and new and new != source:
             out.append({"source": source, "expected": exp.get("model"), "found": None,
                         "now_at": new})
