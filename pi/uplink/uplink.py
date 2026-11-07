@@ -18,12 +18,19 @@ import asyncio
 import json
 import math
 import os
+import threading
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
 import websockets
+
+try:
+    from shared import clock_trust
+except ImportError:                     # pragma: no cover - image without shared/
+    clock_trust = None
 
 _MS_TO_KN = 1.943844
 
@@ -39,6 +46,24 @@ QUEUE_DIR = Path(os.environ.get("QUEUE_DIR", "/var/lib/sr33/queue"))
 # Sits inside QUEUE_DIR but out of its `*.json` glob, so quarantined files stay on the
 # boat for inspection without ever being retried.
 QUARANTINE_DIR = QUEUE_DIR / "quarantine"
+# Batches collected before the wall clock was trusted (#184-9, #240): stamped with the monotonic
+# clock and this boot's id instead of a date, and moved into the queue with a real date once the
+# clock is trusted. Also out of the queue's glob, so nothing undated is ever posted.
+UNDATED_DIR = QUEUE_DIR / "undated"
+# 408 Request Timeout and 429 Too Many Requests say "try again later", not "this payload is
+# bad": quarantining them parked good telemetry for ever (#184-7).
+_RETRY_LATER = {408, 429}
+# One sender at a time: two overlapping sends would each read the same queued file and post it
+# twice (the file is only removed after its POST returns).
+_SEND_LOCK = threading.Lock()
+# Batches kept in RAM after a failed hand-off (disk full / I/O error) before the flusher stops
+# cutting new ones: 240 x 15 s = an hour.
+RETRY_MAX = int(os.environ.get("UPLINK_RETRY_MAX", "240"))
+CLOCK = clock_trust.ClockTrust(QUEUE_DIR / "clock-trusted") if clock_trust else None
+
+
+def clock_trusted():
+    return CLOCK is None or CLOCK.trusted
 
 
 def record(window, source, path, value):
@@ -114,6 +139,8 @@ def parse_delta(msg, window, ais_window, state):
                 record_ais(ais_window, mmsi, path, v.get("value"))
             else:
                 record(window, source, path, v.get("value"))
+                if path == "navigation.datetime" and state.get("clock") is not None:
+                    state["clock"].note_gnss(v.get("value"))
 
 
 # --- cloud POST with store-and-forward ---------------------------------------
@@ -127,15 +154,80 @@ def _post(batch):
     urllib.request.urlopen(req, timeout=20).read()
 
 
-def _enqueue(batch):
-    QUEUE_DIR.mkdir(parents=True, exist_ok=True)
-    stamp = batch["readings"][0]["time"].replace(":", "").replace("-", "")
+def _write_atomic(d, name, batch):
     # Write to a temp name and rename into place: rename is atomic, so a power cut can
     # never leave a truncated `.json` in the queue. 17 zero-byte files got in this way
     # during the 2026-07-19 outage, and one of them then blocked the queue for six weeks.
-    tmp = QUEUE_DIR / f".{stamp}.json.tmp"
+    d.mkdir(parents=True, exist_ok=True)
+    tmp = d / f".{name}.tmp"
     tmp.write_text(json.dumps(batch))
-    os.replace(tmp, QUEUE_DIR / f"{stamp}.json")
+    os.replace(tmp, d / name)
+
+
+def _enqueue(batch):
+    stamp = batch["readings"][0]["time"].replace(":", "").replace("-", "")
+    name, n = f"{stamp}.json", 0
+    while (QUEUE_DIR / name).exists():     # a re-dated batch can land on a queued second
+        n += 1
+        name = f"{stamp}-{n}.json"
+    _write_atomic(QUEUE_DIR, name, batch)
+
+
+def hold(readings, mono=None):
+    """Keep a batch collected before the clock was trusted, undated (#240: collection goes
+    on, timestamped publishing waits). It is dated from the monotonic clock once trust comes."""
+    mono = time.monotonic() if mono is None else mono
+    batch = {"boat_id": BOAT_ID, "readings": readings, "mono": mono,
+             "boot": clock_trust.boot_id() if clock_trust else ""}
+    _write_atomic(UNDATED_DIR, f"{int(mono * 1e9):020d}.json", batch)
+    print(f"[uplink] clock not trusted yet, held {len(readings)} readings undated", flush=True)
+
+
+_other_boot_warned = set()
+
+
+def _date_held():
+    """Once the clock is trusted: give every batch held in this boot its real time (now minus
+    the monotonic time since it was held) and move it into the queue, oldest first. A batch
+    held in an EARLIER boot cannot be dated (the monotonic clock restarted); it is left where
+    it is, untouched, and said once.
+
+    Two steps, each atomic, so a crash or a failed step can never queue a batch twice: the held
+    file is first rewritten in place as the dated batch, then MOVED (one rename) into the queue
+    under a name fixed by its held name. A held file found already dated is just moved."""
+    if not UNDATED_DIR.exists():
+        return
+    boot = clock_trust.boot_id() if clock_trust else ""
+    for f in sorted(UNDATED_DIR.glob("*.json")):
+        try:
+            batch = json.loads(f.read_text())
+            dated = batch["readings"][0]["time"]
+            mono = None if dated else float(batch["mono"])
+        except (OSError, ValueError, KeyError, TypeError, IndexError) as exc:
+            _quarantine(f, f"unreadable held batch ({exc})")
+            continue
+        if dated:
+            _promote(f, dated)
+            continue
+        if not boot or batch.get("boot") != boot:
+            if f.name not in _other_boot_warned:
+                _other_boot_warned.add(f.name)
+                print(f"[uplink] held batch {f.name} is from an earlier boot; it cannot be "
+                      f"dated, left in {UNDATED_DIR}", flush=True)
+            continue
+        t = time.time() - max(0.0, time.monotonic() - mono)
+        stamp = datetime.fromtimestamp(t, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        for r in batch["readings"]:
+            r["time"] = stamp
+        _write_atomic(UNDATED_DIR, f.name,
+                      {"boat_id": batch.get("boat_id", BOAT_ID), "readings": batch["readings"]})
+        _promote(f, stamp)
+
+
+def _promote(f, stamp):
+    """Move a dated held file into the queue: one rename, same filesystem."""
+    QUEUE_DIR.mkdir(parents=True, exist_ok=True)
+    os.replace(f, QUEUE_DIR / f"{stamp.replace(':', '').replace('-', '')}-h{f.stem}.json")
 
 
 def _quarantine(f, why):
@@ -169,16 +261,32 @@ def _flush_queue():
         try:
             _post(batch)
         except urllib.error.HTTPError as exc:
-            if 400 <= exc.code < 500:
+            if 400 <= exc.code < 500 and exc.code not in _RETRY_LATER:
                 _quarantine(f, f"rejected HTTP {exc.code}")
                 continue
-            return  # 5xx — server-side and probably transient; keep the rest queued
+            return  # 408/429/5xx — try again later; keep the rest queued
         except Exception:
             return  # link still down — leave the rest queued
         f.unlink(missing_ok=True)
 
 
 def send(readings):
+    with _SEND_LOCK:
+        _send(readings)
+
+
+def drain_held():
+    """Date and queue the held batches, then try the queue, with no live batch to send."""
+    with _SEND_LOCK:
+        _date_held()
+        _flush_queue()
+
+
+def _send(readings):
+    try:
+        _date_held()
+    except Exception as exc:          # never let the held batches stop the live one
+        print(f"[uplink] could not date held batches ({exc})", flush=True)
     batch = {"boat_id": BOAT_ID, "readings": readings}
     try:
         _post(batch)
@@ -211,25 +319,67 @@ def send_ais(targets):
               flush=True)
 
 
-async def flusher(window, loop):
+async def flusher(window, loop, retry=None):
+    # A batch whose hand-off raised (disk full or an I/O error while holding or queueing it)
+    # is kept here and tried again first on the next tick, so the task never dies and the batch
+    # is not lost. Held batches keep their original monotonic stamp.
+    retry = [] if retry is None else retry
     while True:
         await asyncio.sleep(AGG_SECONDS)
+        while retry:
+            fn, args = retry[0]
+            try:
+                await loop.run_in_executor(None, fn, *args)
+            except Exception as exc:
+                print(f"[uplink] still cannot hand off {len(retry)} batch(es) ({exc})",
+                      flush=True)
+                break
+            retry.pop(0)
         if not window:
+            # A quiet bus: still deliver batches held before the clock was trusted, and keep
+            # retrying queued ones (a post that failed once would otherwise wait for traffic).
+            if not retry and (any(UNDATED_DIR.glob("*.json")) or any(QUEUE_DIR.glob("*.json"))) \
+                    and clock_trusted():
+                try:
+                    await loop.run_in_executor(None, drain_held)
+                except Exception as exc:
+                    print(f"[uplink] could not drain held batches ({exc})", flush=True)
             continue
-        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        if len(retry) >= RETRY_MAX:
+            # The disk has refused every hand-off for a long while. Stop cutting new batches
+            # (RAM would grow until the process is killed and every pending batch is lost);
+            # the window keeps the latest value of every reading until a hand-off works.
+            continue
+        trusted = clock_trusted()
+        now = (datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") if trusted else None)
         readings = []
         for (source, path), (kind, val) in list(window.items()):
             r = {"time": now, "source": source, "path": path}
             r["value" if kind == "num" else "str_value"] = val
             readings.append(r)
         window.clear()
-        await loop.run_in_executor(None, send, readings)
+        job = (send, (readings,)) if trusted else (hold, (readings, time.monotonic()))
+        if retry:
+            retry.append(job)           # keep the order behind the ones still failing
+            continue
+        try:
+            await loop.run_in_executor(None, job[0], *job[1])
+        except Exception as exc:
+            print(f"[uplink] could not hand off {len(readings)} readings ({exc}); "
+                  f"will retry", flush=True)
+            retry.append(job)
 
 
 async def ais_flusher(ais_window, loop):
     while True:
         await asyncio.sleep(AGG_SECONDS)
         if not ais_window:
+            continue
+        if not clock_trusted():
+            # AIS is real-time only and already dropped rather than queued on a link failure;
+            # a target held until the clock is trusted would be stale by then, and one sent
+            # with an untrusted date would be wrong. Same rule: not sent.
+            ais_window.clear()
             continue
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         targets = []
@@ -250,7 +400,7 @@ async def run():
           flush=True)
     window = {}
     ais_window = {}
-    state = {"self": None}
+    state = {"self": None, "clock": CLOCK}
     loop = asyncio.get_running_loop()
     asyncio.create_task(flusher(window, loop))
     asyncio.create_task(ais_flusher(ais_window, loop))
