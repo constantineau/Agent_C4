@@ -248,6 +248,7 @@ tr.needrow { background: rgba(245,196,81,.07); }
 .ein.ta { width: 100%; min-height: 38px; resize: vertical; line-height: 1.35; box-sizing: border-box; }
 .dhead h2 .ein { font-size: 20px; font-weight: 700; min-width: 320px; }
 .dmeta .ein { font-size: 12px; }
+.ein.wide { min-width: 220px; }   /* organizer, start area, region, scoring method: don't clip (#104 G44) */
 .esel { background: var(--panel2); color: var(--ink); border: 1px solid var(--line);
   border-radius: 6px; padding: 4px; font-size: 12px; }
 .echk { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
@@ -544,6 +545,14 @@ body:not(.is-dirty) .if-dirty, body.is-dirty .if-clean { display: none; }
 .modal p b { color: var(--ink); }
 .modal-btns { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
 .modal button.danger { color: var(--bad); border-color: var(--bad); }
+/* "Removed X · Undo" after a ✕ (app.js undoToast): above the Save bar, which shows once a row is removed */
+.undo-toast { position: fixed; z-index: 45; left: 50%; transform: translateX(-50%);
+  bottom: calc(84px + env(safe-area-inset-bottom)); display: flex; align-items: center; gap: 12px;
+  padding: 6px 6px 6px 16px; border-radius: 12px; background: var(--panel); border: 1px solid var(--line);
+  box-shadow: 0 6px 24px rgba(0,0,0,.55); font-size: 15px; color: var(--ink); max-width: calc(100vw - 32px); }
+.undo-toast[hidden] { display: none; }
+.undo-toast button { min-height: 44px; padding: 0 18px; border-radius: 9px; font-weight: 700; color: var(--accent2); }
+@media (max-width: 600px) { .undo-toast { bottom: calc(136px + env(safe-area-inset-bottom)); } }
 
 /* "?" detail toggle (app.js qhelp): a small round "?" with a 44px touch target that doesn't grow
    the line; tap shows/hides the detail text below it. */
