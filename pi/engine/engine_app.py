@@ -21,8 +21,11 @@ Cloud counterpart for parity: `vps/agent/app/main.py`. Differences: no /auth, no
 alerts/summarizer/polar-analysis (those are cloud / C4 Performance Lab), no race-mode gate on
 reads.
 """
+import json
 import os
+import threading
 import time
+import urllib.request
 
 os.environ.setdefault("DATA_SOURCE", "onboard")  # this service is always the onboard backend
 
@@ -30,7 +33,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from shared import archiver_status
+from shared import archiver_status, n2k_sources
 from app import (navigator, tactics, routing, weather, sails, fatigue, onboard_conditions,
                  datasource, ais, fleet, deviation, drift, selector, reoptimize, strategy,
                  matcher, buoys, racelog, watches, trend, plangap, gpsout, checklist,
@@ -100,6 +103,153 @@ def sensor_health_ep():
     # citing itself as the evidence for citing itself.
     if h.get("status") in ("ok", "warn", "danger") and not h.get("held"):
         _LAST_HEADING_STATUS, _LAST_HEADING_AT = h["status"], now
+    return with_n2k_check(out, _N2K)
+
+
+# ---- N2K address drift (#185-4) ------------------------------------------------------------
+# N2K addresses are claimed at power-up and can move. The static address→device map in
+# shared/n2k_sources was taken from one boat pull; if an address is re-claimed, priority would
+# silently bind to whatever device now sits there. So the engine reads Signal K's own sources
+# list at start (and again every few minutes, since a device can power up late or re-claim):
+#   * source priority follows the VERIFIED map (`n2k_sources.verified`): the device, not the
+#     address;
+#   * the result rides /health/sensors as provenance.checks.n2k_addresses, so the DATA tile
+#     shows it.
+# A device that moved and was found again is a note (priority followed it). A mapped device
+# that is no longer on the bus while something else holds its address is a warning. Never
+# having read the list is "not checked": a note, never a pass and never a warning.
+BOAT_ID = os.environ.get("BOAT_ID", "sr33")
+N2K_RECHECK_S = 300.0       # after a good read
+N2K_RETRY_S = 30.0          # until the first good read (Signal K may start after the engine)
+_N2K = {"checked_at": None, "error": None, "moved": [], "static": None}
+
+
+def _signalk_sources_url():
+    explicit = os.environ.get("SIGNALK_SOURCES_URL")
+    if explicit:
+        return explicit
+    ws = os.environ.get("SIGNALK_WS", "ws://localhost:3010/signalk/v1/stream?subscribe=all")
+    base = ws.split("/signalk/", 1)[0]
+    base = "https://" + base[6:] if base.startswith("wss://") else "http://" + base.split("://", 1)[-1]
+    return base + "/signalk/v1/api/sources"
+
+
+def flatten_sources(payload):
+    """Signal K's REST `/signalk/v1/api/sources` nests N2K devices by provider then address
+    (`{"n2k-socketcan": {"15": {"n2k": {...}}}}`); `sources-cache.json`, which the map was built
+    from, is flat by `$source` label with the product info under `updates[].source`. Accept
+    both: nested entries become the flat shape under their `$source` label (`n2k-socketcan.15`)."""
+    out = {}
+    for label, entry in (payload or {}).items():
+        if not isinstance(entry, dict):
+            continue
+        if "updates" in entry:
+            out[label] = entry
+            continue
+        for addr, dev in entry.items():
+            if isinstance(dev, dict) and isinstance(dev.get("n2k"), dict):
+                n = dict(dev["n2k"])
+                n.setdefault("manufacturerCode", n.get("manufacturerName"))
+                out[f"{label}.{addr}"] = {"updates": [{"source": n}]}
+    return out
+
+
+def apply_n2k_payload(payload, state=None, boat_id=None, now=None):
+    """One check against a Signal K sources payload: install the verified map for priority and
+    record what moved. Pure apart from `n2k_sources.set_verified` and `state`."""
+    state = _N2K if state is None else state
+    boat_id = boat_id or BOAT_ID
+    payload = flatten_sources(payload)
+    static = n2k_sources.DEVICES_BY_BOAT.get(boat_id, {})
+    state["static"] = bool(static)
+    if not static:                  # no map for this boat: nothing to verify, label matching
+        state.update(checked_at=now or time.time(), error=None, moved=[])
+        return state
+    if not n2k_sources.build_from_signalk(payload):
+        # nothing to compare against: that is "not checked", never "as expected"
+        raise ValueError("no N2K product info in the sources list")
+    state["moved"] = n2k_sources.moved(payload, static)
+    n2k_sources.set_verified(boat_id, n2k_sources.verified(payload, static))
+    state.update(checked_at=now or time.time(), error=None)
+    return state
+
+
+def check_n2k_once(state=None, fetch=None):
+    """Read Signal K's sources and apply them. A failed read keeps the last good map."""
+    state = _N2K if state is None else state
+    try:
+        if fetch is None:
+            with urllib.request.urlopen(_signalk_sources_url(), timeout=5) as r:
+                payload = json.loads(r.read().decode("utf-8"))
+        else:
+            payload = fetch()
+        if not isinstance(payload, dict) or not payload:
+            raise ValueError("empty sources list")
+        apply_n2k_payload(payload, state)
+        return True
+    except Exception as exc:        # a health check must never take the engine down
+        state["error"] = str(exc)[:200]
+        return False
+
+
+def _n2k_loop():
+    while True:
+        good = check_n2k_once()
+        time.sleep(N2K_RECHECK_S if good else N2K_RETRY_S)
+
+
+@app.on_event("startup")
+def _start_n2k_check():
+    if os.environ.get("N2K_CHECK", "1") != "0":
+        threading.Thread(target=_n2k_loop, name="n2k-check", daemon=True).start()
+
+
+def n2k_check(state, now=None):
+    """The provenance check row for the DATA tile."""
+    now = now or time.time()
+    if state.get("static") is False:
+        return {"status": "ok", "moved": [], "checked_at": state.get("checked_at"),
+                "reason": "no sensor map for this boat", "note": None}
+    if not state.get("checked_at"):
+        return {"status": "unknown", "moved": [], "checked_at": None, "error": state.get("error"),
+                "reason": "sensor addresses not checked",
+                "note": "sensor addresses not checked"}
+    mv = state.get("moved") or []
+    lost = [m for m in mv if not m.get("now_at")]
+    found = [m for m in mv if m.get("now_at")]
+    age = max(0.0, now - state["checked_at"])
+    row = {"status": "warn" if lost else "ok", "moved": mv, "checked_at": state["checked_at"],
+           "age_s": round(age, 1), "error": state.get("error")}
+    row["reason"] = ("; ".join(f"{m['expected']} not found, {m['source']} is now {m['found']}"
+                               for m in lost)
+                     if lost else "sensor addresses as expected")
+    row["note"] = ("; ".join(f"{m['expected']} moved to {m['now_at']}, still used" for m in found)
+                   if found else None)
+    return row
+
+
+def with_n2k_check(out, state, now=None):
+    """Add the N2K address check to a /health/sensors payload. A warning raises the chip (a
+    known warning always wins, even over "unknown"); "not checked" and moves are notes only."""
+    if not isinstance(out, dict):
+        return out
+    row = n2k_check(state, now)
+    prov = out.get("provenance")
+    if isinstance(prov, dict):
+        prov.setdefault("checks", {})["n2k_addresses"] = row
+    if row["status"] == "warn":
+        out.setdefault("flags", []).append(row["reason"])
+        if isinstance(prov, dict):
+            prov.setdefault("flags", []).append(row["reason"])
+            if prov.get("status") != "danger":
+                prov["status"] = "warn"
+        if out.get("status") != "danger" and out.get("available"):
+            out["status"] = "warn"
+        out["reason"] = "; ".join(out["flags"])
+    if row.get("note"):
+        out.setdefault("notes", []).append(row["note"])
+        if isinstance(prov, dict):
+            prov.setdefault("notes", []).append(row["note"])
     return out
 
 

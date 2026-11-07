@@ -69,9 +69,64 @@ AIS_MARKER_PATHS = ("sensors.ais.class", "atonType.id", "design.aisShipType.id",
                     "navigation.specialManeuver", "offPosition")
 
 
+# A live-verified map per boat, set by the onboard engine after it reads Signal K's sources
+# (`set_verified`). When present it wins over the static map, so source priority follows the
+# DEVICE when an N2K address is re-claimed. Nothing else sets it: the cloud and the replay keep
+# the static map.
+_VERIFIED = {}
+
+
 def devices_for(boat_id):
-    """The address→device map for a boat, or {} when we have none (label-only matching)."""
-    return DEVICES_BY_BOAT.get(boat_id, {})
+    """The address→device map for a boat, or {} when we have none (label-only matching).
+    The live-verified map when the engine has one (`set_verified`), else the static map."""
+    return _VERIFIED.get(boat_id) or DEVICES_BY_BOAT.get(boat_id, {})
+
+
+def set_verified(boat_id, devices):
+    """Install (or, with None/{}, clear) the live-verified map `devices_for` returns."""
+    if devices:
+        _VERIFIED[boat_id] = dict(devices)
+    else:
+        _VERIFIED.pop(boat_id, None)
+
+
+def _key(d):
+    return ((d or {}).get("model"), (d or {}).get("serial"))
+
+
+def verified(payload, devices):
+    """The address→device map priority should bind to, given a live sources payload.
+
+    Every address that answers with product info is taken as it answers NOW. A mapped address
+    that does not answer keeps its static entry (the device may just be off), unless its device
+    now answers at another address, in which case the stale address is dropped. The device key
+    is (model, serial): the GPSMAP 943 and its virtual input handler share a serial."""
+    live = build_from_signalk(payload)
+    seen = {_key(d) for d in live.values()}
+    out = {s: d for s, d in (devices or {}).items() if s not in live and _key(d) not in seen}
+    out.update(live)
+    return out
+
+
+def moved(payload, devices):
+    """The `drift()` findings, explained: for each re-claimed address, which device the map
+    expected, which answers now, and where the expected device went (its new address, or None
+    when it is not on the bus). Also a mapped device that answers at a NEW address while its old
+    one is silent (`found` None): not drift, but still a move."""
+    live = build_from_signalk(payload)
+    where = {_key(d): s for s, d in live.items()}
+    out = []
+    for source, _want, _got in drift(payload, devices):
+        exp = devices[source]
+        out.append({"source": source, "expected": exp.get("model"),
+                    "found": live[source].get("model"),
+                    "now_at": where.get(_key(exp))})
+    for source, exp in sorted((devices or {}).items()):
+        new = where.get(_key(exp))
+        if source not in live and new and new != source:
+            out.append({"source": source, "expected": exp.get("model"), "found": None,
+                        "now_at": new})
+    return out
 
 
 def resolve(source, devices):
@@ -121,13 +176,19 @@ def unresolved(matchers, devices, labels=()):
 def drift(payload, devices):
     """[(source, expected_serial, found_serial)] where a live sources payload disagrees with
     the map — an N2K address that has been re-claimed by another device. Sources absent from
-    the payload are not reported (a device can simply be powered off)."""
+    the payload are not reported (a device can simply be powered off). A different MODEL counts
+    too, not only a different serial: the GPSMAP 943 and its virtual input handler share one."""
     live = build_from_signalk(payload)
     out = []
     for source, want in (devices or {}).items():
         got = live.get(source)
-        if got and got.get("serial") and want.get("serial") and got["serial"] != want["serial"]:
-            out.append((source, want["serial"], got["serial"]))
+        if not got:
+            continue
+        other_model = bool(want.get("model")) and got.get("model") != want.get("model")
+        other_serial = (bool(got.get("serial")) and bool(want.get("serial"))
+                        and got["serial"] != want["serial"])
+        if other_model or other_serial:
+            out.append((source, want.get("serial"), got.get("serial")))
     return sorted(out)
 
 
