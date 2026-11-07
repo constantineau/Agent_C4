@@ -136,9 +136,13 @@ def get_strip():
         return c["preferred"]["value"] if c else None
 
     ages = [c["freshest_age_s"] for c in ch.values()]
-    heading = best("heading_true")
+    # True heading wins; a magnetic one is only a stand-in and says so (#183-8): on Lake Huron
+    # variation is ~7-9°, so a bare "heading" that is really magnetic points the bow wrong.
+    heading, heading_ref = best("heading_true"), "true"
     if heading is None:
-        heading = best("heading_mag")
+        heading, heading_ref = best("heading_mag"), "magnetic"
+    if heading is None:
+        heading_ref = None
     fi = fatigue.compute_fatigue_index()
     return {
         "available": True, "as_of": cc["as_of"],
@@ -149,6 +153,7 @@ def get_strip():
         "ages": {name: c["preferred"]["age_s"] for name, c in ch.items()},
         "stw": best("stw"), "sog": best("sog"), "tws": best("tws"), "twa": best("twa"),
         "twd": best("twd"), "aws": best("aws"), "awa": best("awa"), "heading": heading,
+        "heading_ref": heading_ref,
         "heel": best("heel"), "depth": best("depth"),
         "cog": best("cog"), "lat": best("lat"), "lon": best("lon"),
         "fatigue": fi.get("index"), "fatigue_level": fi.get("level"),

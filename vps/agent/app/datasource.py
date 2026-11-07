@@ -119,7 +119,9 @@ class CloudSource:
         """(value, epoch) of the priority-preferred publisher's latest sample, from ONE row, or None
         — the same pick as `series()` (and the onboard read), so the live value and the window
         agree on which device they read (#167). Candidates are each publisher's latest sample
-        within FAILOVER_AGE_S of the newest, judged against the data, not the wall clock."""
+        within FAILOVER_AGE_S of the newest row (a bound on the query); the pick then judges each
+        one's freshness by the wall clock (age = now - sample time, at most 45 s), the same test
+        as `/conditions` (#221-2)."""
         # Two queries on purpose: with the newest time as a subquery bound, TimescaleDB cannot
         # exclude chunks and the read ran past 60 s on the dev DB; a literal bound takes ~10 ms.
         # AIS-bearing sources are someone else's boat (#45.2b): backfilled rows from the AIS

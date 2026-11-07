@@ -206,9 +206,13 @@ def get_strip():
         return c["preferred"]["value"]   # priority-ranked lead source (with failover)
 
     ages = [c["freshest_age_s"] for c in ch.values()]
-    heading = best("heading_true")
+    # True heading wins; a magnetic one is only a stand-in and says so (#183-8): on Lake Huron
+    # variation is ~7-9°, so a bare "heading" that is really magnetic points the bow wrong.
+    heading, heading_ref = best("heading_true"), "true"
     if heading is None:
-        heading = best("heading_mag")
+        heading, heading_ref = best("heading_mag"), "magnetic"
+    if heading is None:
+        heading_ref = None
     # Fatigue is performance advice: the cloud withholds it while racing (DESIGN.md, ADR-0001;
     # /fatigue is 403 then, and this ungated strip used to hand out the same number, #48.2).
     # The Pi's own tile is not affected — that is `onboard_conditions.get_strip`.
@@ -224,6 +228,7 @@ def get_strip():
         "ages": {name: c["preferred"]["age_s"] for name, c in ch.items()},
         "stw": best("stw"), "sog": best("sog"), "tws": best("tws"), "twa": best("twa"),
         "twd": best("twd"), "aws": best("aws"), "awa": best("awa"), "heading": heading,
+        "heading_ref": heading_ref,
         "heel": best("heel"), "depth": best("depth"),
         "cog": best("cog"), "lat": best("lat"), "lon": best("lon"),
         # Helm fatigue index (0–100) for the strip; null while warming up / unavailable.
@@ -457,5 +462,12 @@ DISPATCH = {
 def dispatch(name: str, args: dict):
     fn = DISPATCH.get(name)
     if fn is None:
-        return {"error": f"unknown tool '{name}'"}
-    return fn(**(args or {}))
+        return {"error": f"unknown tool '{name}'", "tool_failed": True}
+    # One failing tool must not abort the whole chat turn (#183-9): the model gets an error result
+    # for that call (agent.py marks it is_error) and can answer from the rest. The detail stays in
+    # the server log; the model sees only the tool name and error type.
+    try:
+        return fn(**(args or {}))
+    except Exception as exc:
+        print(f"[tools] {name} failed: {exc!r}", flush=True)
+        return {"error": f"{name} failed ({type(exc).__name__})", "tool_failed": True}
