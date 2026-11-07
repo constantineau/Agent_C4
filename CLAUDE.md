@@ -109,8 +109,9 @@ develop on `dev`, ff-merge to `main`, deploy `main`. The only bench↔boat diffe
 ```bash
 cd ~/Agent_C4
 docker compose -f compose.dev.yml up -d --build          # cloud dev stack
-python3 vps/db/seed/fake_telemetry.py                    # fake raw readings → /ingest/raw → telemetry_raw
-python3 vps/db/seed/ais_inject.py                        # deterministic AIS scenario (own ship + closing target)
+python3 vps/db/seed/fake_telemetry.py                    # fake raw readings → /ingest/raw (boat id demo-boat)
+python3 vps/db/seed/ais_inject.py                        # deterministic AIS scenario (demo-boat; own ship + closing target)
+# seeds refuse a real boat id or a non-local URL without --allow-real; BOAT_ID=demo-boat to see them
 # web http://localhost:8090 (pw sr33-dev) · lab http://localhost:8103 (pw lab-dev)
 ```
 
@@ -124,11 +125,14 @@ docker compose -f compose.pi.yml -f compose.pi.sample.yml down            # take
 ```
 
 **Deploys.** Cloud prod: `deploy/deploy_prod.sh` (gated on a prod `.env` + domain; TLS via
-`deploy/init_tls.sh`, nginx+certbot scaffolding is built). **Pi:** ssh over Tailscale
-(`sr33-pi@100.79.180.102`) → `cd ~/Agent_C4 && git pull && docker compose -f compose.pi.yml
-up -d --build <changed services>`. **Orin:** `agent-c4@100.70.110.72` → git pull +
-`systemctl restart sr33-orin-copilot` (runtime as-built: `pi/orin/DEPLOYMENT.md`).
-Tailscale SSH may require a fresh browser check-mode approval (~12 h validity).
+`deploy/init_tls.sh`, nginx+certbot scaffolding is built). **Pi** (ssh over Tailscale,
+`sr33-pi@100.79.180.102`): never pull or reset there. Copy single files after a diff and a
+backup, rebuild only the changed services (`build` + `up -d --no-deps`), keep the rollback:
+`pi/deploy/README.md` (archiver/uplink: `pi/deploy/deploy-data-path.sh`). **Orin**
+(`agent-c4@100.70.110.72`): tag the old HEAD, `git merge --ff-only origin/main`, restart
+`sr33-orin-copilot` (runtime as-built: `pi/orin/DEPLOYMENT.md`; rules: `docs/REMOTE_OPS.md`).
+Every deploy ends with `pi/deploy/record-deployed.sh`, which writes what landed to the box's
+`~/DEPLOYED`. Tailscale SSH may require a fresh browser check-mode approval (~12 h validity).
 
 **Migrations auto-run only on first DB init.** Apply to a running DB by hand:
 `docker compose -f compose.dev.yml exec -T timescaledb psql -U sr33 -d sr33_dev < vps/db/migrations/<file>.sql`

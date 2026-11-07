@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Deploy the data path (archiver + its shared/ modules; uplink only if its files changed) from
-# THIS checkout to the boat's Pi, the way CLAUDE.md says a Pi deploy works: diff, back up, copy
-# single files, rebuild only the changed services. Never `git pull` on the Pi — its clone sits
-# on `main` and a pull there switches what every other service runs.
+# THIS checkout to the boat's Pi, the way pi/deploy/README.md says a Pi deploy works: diff, back
+# up, copy single files, rebuild only the changed services, record what landed in ~/DEPLOYED.
+# Never `git pull` on the Pi — its clone sits on `main` and a pull there switches what every
+# other service runs.
 #
 # DRY RUN BY DEFAULT: inventories the Pi and shows the exact diff, changes nothing.
 #
@@ -36,7 +37,7 @@ while [[ $# -gt 0 ]]; do
     --expect-rotation) expect_rotation=1 ;;
     --allow-open-session) allow_open=1 ;;
     --rollback) rollback=${2:?--rollback needs the backup STAMP}; shift ;;
-    -h|--help) sed -n 2,23p "$0"; exit 0 ;;
+    -h|--help) sed -n 2,24p "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
   shift
@@ -124,7 +125,8 @@ if [[ -n $rollback ]]; then
     && if [ -s ~/$bdir/new-files.txt ]; then xargs -r rm -f < ~/$bdir/new-files.txt; fi \
     && docker tag sr33-pi-archiver:pre-$rollback sr33-pi-archiver \
     && if docker image inspect sr33-pi-uplink:pre-$rollback >/dev/null 2>&1 && grep -q '^uplink$' ~/$bdir/rebuilt.txt; then docker tag sr33-pi-uplink:pre-$rollback sr33-pi-uplink && $COMPOSE up -d --no-deps --no-build uplink; fi \
-    && $COMPOSE up -d --no-deps --no-build archiver"
+    && $COMPOSE up -d --no-deps --no-build archiver \
+    && { echo \"rollback \$(date -u +%FT%TZ): restored ~/$bdir (files + :pre-$rollback images), undoing deploy $rollback\"; echo; } >> ~/DEPLOYED"
   if [[ $apply -eq 1 ]]; then pi "$cmd"; restart_engine || true
   else echo "(dry run) would run on the Pi: $cmd"; echo "(dry run) would restart the engine (no rebuild) and check /health"; fi
   cat <<'EOF'
@@ -271,6 +273,17 @@ fi
 say "Rebuild and restart ONLY: ${rebuild[*]}"
 restart="set -e; cd ~/$PI_REPO && $COMPOSE build ${rebuild[*]} && $COMPOSE up -d --no-deps ${rebuild[*]}"
 if [[ $apply -eq 1 ]]; then pi "$restart"; else echo "(dry run) would run on the Pi: $restart"; fi
+
+# Record on the Pi what landed: file hashes as they sit there and the images now running
+# (~/DEPLOYED, plus a copy in the backup folder). A mismatch is loud but doesn't undo the deploy.
+say "Record the deploy in the Pi's ~/DEPLOYED"
+if [[ $apply -eq 1 ]]; then
+  REMOTE_REPO=$PI_REPO BACKUPS=$BACKUPS pi/deploy/record-deployed.sh "$PI_HOST" "$stamp" data-path \
+    "${changed[@]}" "${new[@]}" -- "${rebuild[@]}" \
+    || echo "!! the record shows a mismatch (or could not be written) — read it above before going on"
+else
+  echo "(dry run) would run: pi/deploy/record-deployed.sh $PI_HOST $stamp data-path <files> -- ${rebuild[*]}"
+fi
 
 if [[ $apply -eq 0 ]]; then
   say "Dry run done — nothing on the Pi was changed. Re-run with --apply (Cole's go) to deploy."

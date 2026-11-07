@@ -10,12 +10,15 @@ as raw SI (source,path,value) rows — the collect-everything model every reader
 Usage:
     python3 vps/db/seed/fake_telemetry.py [--minutes 120] [--url http://localhost:8101]
                                           [--token dev-ingest-token]
+                                          [--boat-id demo-boat] [--allow-real]
 """
 import argparse
 import json
 import math
 import urllib.request
 from datetime import datetime, timedelta, timezone
+
+import seed_guard  # sibling module: keeps fake data off a real boat (#39)
 
 PORT_HURON = (43.00, -82.42)
 KN = 0.514444          # kn -> m/s
@@ -76,8 +79,9 @@ def main():
     ap.add_argument("--minutes", type=int, default=120)
     ap.add_argument("--url", default="http://localhost:8101")
     ap.add_argument("--token", default="dev-ingest-token")
-    ap.add_argument("--boat-id", default="sr33")
+    seed_guard.add_args(ap)
     args = ap.parse_args()
+    seed_guard.check(ap, args)
 
     rows = make_readings(args.minutes)
     total = 0
