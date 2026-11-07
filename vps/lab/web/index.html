@@ -13,13 +13,19 @@
 <body>
   <!-- shared team login -->
   <div id="gate" class="gate">
-    <div class="gatebox">
+    <!-- a real form so Return / Go on the iPad keyboard signs in -->
+    <form class="gatebox" onsubmit="event.preventDefault(); unlock();">
       <h1>C4 Performance Lab</h1>
       <p class="sub">Race prep and debrief. Team login.</p>
-      <input id="pw" type="password" placeholder="Team password" autocomplete="current-password">
-      <button onclick="unlock()">Enter</button>
-      <div id="gateErr" class="err"></div>
-    </div>
+      <div class="pw-row">
+        <input id="pw" type="password" placeholder="Team password" autocomplete="current-password"
+          autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="go">
+        <button type="button" id="pwShow" class="ghost" aria-pressed="false" aria-controls="pw"
+          onclick="pwToggle()">Show</button>
+      </div>
+      <button type="submit">Enter</button>
+      <div id="gateErr" class="err" role="alert"></div>
+    </form>
   </div>
 
   <header class="topbar">
@@ -54,6 +60,7 @@
   <script src="/vendor/leaflet.js"></script>
   <script src="/mapview.js"></script>
   <script src="/plume.js"></script>
+  <script src="/monitor-geo.js"></script>
   <script src="/app.js"></script>
   <script>window.FEEDBACK_CFG = { endpoint: "/api/feedback", source: "lab" };</script>
   <script src="/feedback.js"></script>

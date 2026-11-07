@@ -14,6 +14,8 @@ import os
 import time
 import urllib.request
 
+from shared import race_def
+
 _TIMEOUT = float(os.environ.get("MONITOR_TIMEOUT_S", "8"))
 _AGENT_URL = os.environ.get("AGENT_URL", "http://agent:8000").rstrip("/")
 _BOAT_PASSWORD = os.environ.get("BOAT_PASSWORD", "")
@@ -116,7 +118,10 @@ def _fleet(definition, demo=False):
     cfg = (definition or {}).get("tracker") or {}
     rp = (definition or {}).get("rules_profile") or {}
     base = {"fixes": [], "provider": (cfg.get("provider") or None), "delay_min": cfg.get("delay_min"),
-            "onboard_permitted": bool(rp.get("tracker_permitted")), "reason": ""}
+            # the race rule, tri-state: True / False / None (not set in the rules yet)
+            "onboard_permitted": (rp.get("tracker_permitted")
+                                  if isinstance(rp.get("tracker_permitted"), bool) else None),
+            "reason": ""}
     if demo or (cfg.get("provider") or "").lower() == "sample":
         base.update(fixes=_sample_fleet(), provider="sample", reason="demo fixture")
         return base
@@ -179,11 +184,60 @@ def own():
         return {"available": False, "reason": f"agent unreachable: {type(e).__name__}"}
     if not c.get("available") or c.get("lat") is None:
         return {"available": False, "reason": "no live position from the boat yet"}
-    return {"available": True, "lat": c.get("lat"), "lon": c.get("lon"), "sog": c.get("sog"),
-            "cog": c.get("cog"), "heading": c.get("heading"), "stw": c.get("stw"),
-            "tws": c.get("tws"), "twd": c.get("twd"), "as_of": c.get("as_of"),
-            "age_s": c.get("data_age_seconds"), "stale": c.get("stale")}
+    out = {"available": True, "lat": c.get("lat"), "lon": c.get("lon"), "sog": c.get("sog"),
+           "cog": c.get("cog"), "heading": c.get("heading"), "stw": c.get("stw"),
+           "tws": c.get("tws"), "twd": c.get("twd"), "as_of": c.get("as_of"),
+           "age_s": c.get("data_age_seconds"), "stale": c.get("stale"),
+           "heading_ref": None, "heading_age_s": None, "cog_age_s": None}
+    out.update(_heading_detail(tok))
+    return out
+
+
+def _heading_detail(tok):
+    """Which compass the heading came from (true / magnetic) and how old heading and COG are.
+
+    /conditions folds heading_true and heading_mag into one bare `heading`, and gives one age for
+    the whole strip. The map may only point the hull along a heading that is fresh and whose
+    reference is known (#240), so read the per-channel view and take the heading from the same
+    channel we name. Best-effort: on any failure the reference stays unknown (neutral symbol)."""
+    try:
+        full = _http_json(_AGENT_URL + "/conditions/full", headers={"Authorization": "Bearer " + tok})
+    except Exception:
+        return {}
+    ch = (full or {}).get("channels") or {}
+    out = {}
+    for name, ref in (("heading_true", "true"), ("heading_mag", "magnetic")):   # strip's order
+        p = (ch.get(name) or {}).get("preferred") or {}
+        if p.get("value") is not None:
+            out.update(heading=p["value"], heading_ref=ref, heading_age_s=p.get("age_s"))
+            break
+    p = (ch.get("cog") or {}).get("preferred") or {}
+    if p.get("value") is not None:
+        out.update(cog=p["value"], cog_age_s=p.get("age_s"))
+    return out
+
+
+def course_marks(definition):
+    """Every positioned mark of every course in the race, in sailing order (start, marks,
+    gate/finish midpoints), tagged with its course's index so the map can rebuild each course's
+    legs. The Monitor map fits to these plus our boat, so a stray tracker fix far inland can't zoom
+    the view out to the whole lake (#102 G86)."""
+    out, done = [], set()
+    for i, c in enumerate((definition or {}).get("courses") or []):
+        if not isinstance(c, dict):
+            continue
+        marks, _skipped, cid = race_def.course_to_marks(definition, c.get("id"))
+        if cid in done:            # two courses without an id both resolve to the first
+            continue
+        done.add(cid)
+        for _seq, name, lat, lon in marks:
+            out.append({"name": name, "lat": float(lat), "lon": float(lon), "course": i})
+    return out
 
 
 def snapshot(definition, demo=False):
-    return {"fleet": fleet(definition, demo=demo), "own": own()}
+    try:
+        marks = course_marks(definition)
+    except Exception:
+        marks = []
+    return {"fleet": fleet(definition, demo=demo), "own": own(), "marks": marks}
