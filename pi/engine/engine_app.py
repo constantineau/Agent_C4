@@ -149,7 +149,8 @@ def flatten_sources(payload):
         for addr, dev in entry.items():
             if isinstance(dev, dict) and isinstance(dev.get("n2k"), dict):
                 n = dict(dev["n2k"])
-                n.setdefault("manufacturerCode", n.get("manufacturerName"))
+                if n.get("manufacturerName"):          # the name, never the numeric code
+                    n["manufacturerCode"] = n["manufacturerName"]
                 out[f"{label}.{addr}"] = {"updates": [{"source": n}]}
     return out
 

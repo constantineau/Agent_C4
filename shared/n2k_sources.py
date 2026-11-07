@@ -210,7 +210,12 @@ def build_from_signalk(payload):
         model = src.get("modelId")
         if not model:
             continue
-        out[label] = {"manufacturer": src.get("manufacturerCode"), "model": model,
+        # REST payloads can carry the numeric N2K manufacturer code; identity() joins strings,
+        # so never let a number through (a crash there takes every priority read down).
+        maker = src.get("manufacturerCode")
+        if maker is not None and not isinstance(maker, str):
+            maker = src.get("manufacturerName") or str(maker)
+        out[label] = {"manufacturer": maker, "model": str(model),
                       "serial": str(src.get("modelSerialCode") or "") or None}
     return out
 

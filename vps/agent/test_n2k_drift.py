@@ -128,6 +128,21 @@ check("a list with no product info is 'not checked'",
       not engine_app.check_n2k_once(st3, fetch=lambda: {"derived-data": {"type": "plugin"}})
       and engine_app.n2k_check(st3)["status"] == "unknown")
 
+numeric = {"n2k-socketcan": {"20": {"n2k": {"src": "20", "manufacturerCode": 229,
+                                             "modelId": "GPS24xd-NMEA2000",
+                                             "modelSerialCode": "3479803194"}}}}
+st4 = {"checked_at": None, "error": None, "moved": [], "static": None}
+engine_app.check_n2k_once(st4, fetch=lambda: numeric)
+try:
+    pick = source_policy.preferred("sog", rows, ns.devices_for("sr33"))
+    check("a numeric manufacturer code can't crash priority reads", pick[0] == "n2k-socketcan.20")
+except Exception as exc:
+    check(f"a numeric manufacturer code can't crash priority reads ({exc})", False)
+both = {"n2k-socketcan": {"20": {"n2k": {"manufacturerCode": 229, "manufacturerName": "Garmin",
+                                          "modelId": "GST10", "modelSerialCode": "1"}}}}
+check("the manufacturer NAME is kept over the numeric code",
+      ns.build_from_signalk(engine_app.flatten_sources(both))["n2k-socketcan.20"]["manufacturer"] == "Garmin")
+
 check("the sources URL comes from SIGNALK_WS",
       engine_app._signalk_sources_url() == "http://localhost:3010/signalk/v1/api/sources")
 
