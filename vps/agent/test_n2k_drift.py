@@ -119,6 +119,12 @@ check("the warning raises the chip even over unknown", h["status"] == "warn")
 check("the flag names the missing device and who holds its address",
       any("GPS24xd-NMEA2000 not found" in f and "GST10" in f for f in h["flags"]))
 
+partial = {s: d for s, d in gone.items() if s not in ("n2k-socketcan.3",)}
+engine_app.check_n2k_once(st2, fetch=lambda: flat(partial))
+check("a later list that omits the device keeps what an earlier read proved",
+      ns.devices_for("sr33")["n2k-socketcan.3"]["model"] == "GST10"
+      and engine_app.n2k_check(st2)["status"] == "warn")
+
 kept = ns.devices_for("sr33")
 check("a failed read keeps the last good map",
       not engine_app.check_n2k_once(st2, fetch=lambda: (_ for _ in ()).throw(OSError("down")))

@@ -121,7 +121,7 @@ def sensor_health_ep():
 BOAT_ID = os.environ.get("BOAT_ID", "sr33")
 N2K_RECHECK_S = 300.0       # after a good read
 N2K_RETRY_S = 30.0          # until the first good read (Signal K may start after the engine)
-_N2K = {"checked_at": None, "error": None, "moved": [], "static": None}
+_N2K = {"checked_at": None, "error": None, "moved": [], "static": None, "live": {}}
 
 
 def _signalk_sources_url():
@@ -166,11 +166,25 @@ def apply_n2k_payload(payload, state=None, boat_id=None, now=None):
     if not static:                  # no map for this boat: nothing to verify, label matching
         state.update(checked_at=now or time.time(), error=None, moved=[])
         return state
-    if not n2k_sources.build_from_signalk(payload):
+    fresh = n2k_sources.build_from_signalk(payload)
+    if not fresh and not state.get("live"):
         # nothing to compare against: that is "not checked", never "as expected"
         raise ValueError("no N2K product info in the sources list")
-    state["moved"] = n2k_sources.moved(payload, static)
-    n2k_sources.set_verified(boat_id, n2k_sources.verified(payload, static))
+    # What has been SEEN, carried across reads: a later list that omits a device (not yet
+    # re-announced) must not restore an identity an earlier read disproved. A fresh answer
+    # wins; a device seen at a new address drops its old one.
+    key = lambda d: (d.get("model"), d.get("serial"))
+    keys = {key(d) for d in fresh.values()}
+    live = {a: d for a, d in (state.get("live") or {}).items()
+            if a not in fresh and key(d) not in keys}
+    live.update(fresh)
+    state["live"] = live
+    seen = {a: {"updates": [{"source": {"manufacturerCode": d.get("manufacturer"),
+                                        "modelId": d.get("model"),
+                                        "modelSerialCode": d.get("serial")}}]}
+            for a, d in live.items()}
+    state["moved"] = n2k_sources.moved(seen, static)
+    n2k_sources.set_verified(boat_id, n2k_sources.verified(seen, static))
     state.update(checked_at=now or time.time(), error=None)
     return state
 
