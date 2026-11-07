@@ -160,6 +160,38 @@ check("a session the record can't attribute to this boat is skipped and said, no
 check("the skipped session contributes nothing to any view",
       not any(r["recording"] == 5.0 for r in art["race_cells"]))
 
+print("\n2c. logged S2 is the kite the crew calls S1: one cell, not two:")
+# Older sail logs carry the kite's cert id "S2"; newer ones the crew name "S1". Pooled apart, one
+# angle showed two kite cells and neither cleared the gate on its own.
+SESSIONS["sessions"][:] = [
+    {"id": 20, "name": "Old log", "race_id": "r", "window": {"start_ts": 700000.0, "end_ts": 703600.0, "hours": 1.0}},
+    {"id": 21, "name": "New log", "race_id": "r", "window": {"start_ts": 800000.0, "end_ts": 803600.0, "hours": 1.0}}]
+
+
+def kites(path, timeout=None):
+    start = float(path.split("start=")[1].split("&")[0]) if "start=" in path else 0
+    if path.startswith("/racelog/sessions"):
+        return SESSIONS
+    if path.startswith("/racelog/trust"):
+        return {"danger": {}, "summary": {"line": "no danger windows"}}
+    flying = ["S2", "SS"] if start == 700000.0 else ["SS", "S1"]
+    return {"fixes": [{"t": start + i, "tws": 12.0, "twa": 140.0, "stw": 7.0} for i in range(40)],
+            "sail_log": [{"t": start - 10, "flying": flying}]}
+
+
+monitor.agent_json = kites
+art5 = OP.compute(min_seconds=60)
+monitor.agent_json = fake_agent
+kc = [c for c in art5["cells"] if c["twa"] == 140.0]
+check("40 s of S2+SS and 40 s of S1+SS pool into one S1+SS cell that clears a 60 s gate",
+      [(c["config"], c["seconds"]) for c in kc] == [("S1+SS", 80)])
+check("...each race alone is 40 s (under the gate), counted under the crew name",
+      sorted(c["config"] for c in art5["refused_thin_race"] if c["twa"] == 140.0) == ["S1+SS", "S1+SS"])
+check("no S2 left in the config list", art5["configs"] == ["S1+SS"])
+check("_crew_config: names only, reef kept, None stays None",
+      OP._crew_config("A3+S2+R1") == "A3+S1+R1" and OP._crew_config(None) is None
+      and OP._crew_config("S1+S2") == "S1")
+
 print("\n3. picking which races teach the optimizer:")
 LN.LEARNING_DB = os.path.join(tempfile.mkdtemp(), "learning.db")
 

@@ -50,7 +50,23 @@ PCTILE = 80.0
 MAX_POINTS = 20000
 # Bumped when a fix changes what a build means, so an older cache is a miss, not served as current.
 # 2: stitched sessions' shared window read once (#49).
-BUILD_VERSION = 2
+# 3: logged "S2" pooled with "S1" (the same kite under its crew name).
+BUILD_VERSION = 3
+# The crew calls the kite S1 (agent `sails.CREW_SAILS`); older sail logs call it S2, its cert id.
+# They are one sail, so the polar pools them under the crew name. The stored logs are not changed.
+CREW_NAME = {"S2": "S1"}
+
+
+def _crew_config(cfg):
+    """A logged config under the crew's sail names: 'S2+SS' -> 'S1+SS'. None stays None."""
+    if not cfg:
+        return cfg
+    out = []
+    for t in cfg.split("+"):
+        t = CREW_NAME.get(t, t)
+        if t not in out:
+            out.append(t)
+    return "+".join(out)
 
 
 def _gate(fixes, trust):
@@ -185,7 +201,7 @@ def compute(min_seconds=MIN_SECONDS):
             if twa < MIN_TWA_DEG:            # head to wind / motoring — not a polar point
                 not_sailing += 1
                 continue
-            cfg = T.config_at(sail_log, f["t"])
+            cfg = _crew_config(T.config_at(sail_log, f["t"]))
             if not T._config_plausible(cfg, twa):
                 cfg = None                                    # a douse nobody tapped
             key = (round(tws / TWS_STEP_KN) * TWS_STEP_KN,

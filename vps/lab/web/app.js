@@ -155,6 +155,9 @@ async function route() {
     if (!ok) { history.replaceState(null, "", routeHash); return; }
     history.replaceState(null, "", target);
   }
+  // The Undo toast belongs to the tab it was offered on: hide it once we really leave, not when
+  // a click is answered with Stay (#270).
+  if (target !== routeHash) hideUndoToast();
   routeHash = target;
   const sec = target.slice(1);
   activeSec = sec;
@@ -297,13 +300,17 @@ function undoToast(text, undo) {
     el = document.createElement("div");
     el.id = "undoToast"; el.className = "undo-toast"; el.setAttribute("role", "status");
     document.body.appendChild(el);
-    window.addEventListener("hashchange", () => { el.hidden = true; });
   }
   el.innerHTML = `<span>${esc(text)}</span><button type="button" class="ghost">Undo</button>`;
   el.hidden = false;
   clearTimeout(undoTimer);
   undoTimer = setTimeout(() => { el.hidden = true; }, 8000);
   el.querySelector("button").onclick = () => { el.hidden = true; clearTimeout(undoTimer); undo(); };
+}
+function hideUndoToast() {
+  const el = document.getElementById("undoToast");
+  if (el) el.hidden = true;
+  clearTimeout(undoTimer);
 }
 // Empty state for the tabs that need a race: links to Races (#96 G60, #97 G66, #104 G94).
 function noRaceYet() { return '<div class="placeholder">No race yet. <a href="#races">Add one in Races</a>.</div>'; }
@@ -4173,14 +4180,10 @@ const Pol = { data: null, tws: null, config: "all", race: "all", split: "config"
 // Colour follows the sail, never the filter: each sail wears its SAIL_COLORS colour, the same one
 // as the crossover chart and its legend (#240). A two-sail set is drawn in its first sail's colour
 // with the second sail's colour dashed over it. Older sail logs call the kite "S2" (its cert id);
-// the crew word is S1, so the tab shows S1 and the logged keys stay as they are.
+// the server pools those under the crew name S1 (app/obspolar.py), so the tab only ever sees S1.
 const POL_ORDER = ["J1", "J1+J3", "A3", "A3+J1", "A3+SS", "S1", "S1+SS"];
 const POL_SS = "#f28cc4";             // the staysail's colour, until SAIL_COLORS carries SS (#259)
 const POL_SPARE = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9"];
-// The crew word for a logged sail config: "S2+SS" -> "S1+SS". Display only.
-function polSailName(cfg) {
-  return cfg ? String(cfg).split("+").map((t) => (t === "S2" ? "S1" : t)).join("+") : cfg;
-}
 function polSailHex(t) {
   if (typeof SAIL_COLORS !== "undefined" && SAIL_COLORS[t]) return SAIL_COLORS[t];
   return t === "SS" ? POL_SS : null;
@@ -4194,10 +4197,10 @@ const POL_RACE_RAMP = ["#a5e0ef", "#6cc6e0", "#38a8cc", "#2a86ab", "#1f6485"];
 // [first sail colour, second sail colour or null]. Reef tokens (R1…) carry no colour.
 function polColors(cfg) {
   if (!cfg) return ["#9a9aa6", null];
-  const hex = polSailName(cfg).split("+").map(polSailHex).filter(Boolean);
+  const hex = String(cfg).split("+").map(polSailHex).filter(Boolean);
   if (hex.length) return [hex[0], hex[1] && hex[1] !== hex[0] ? hex[1] : null];
   // a sail with no colour of its own gets a stable spare slot from the sorted config list
-  const extras = ((Pol.data || {}).configs || []).filter((c) => !polSailHex(polSailName(c).split("+")[0]));
+  const extras = ((Pol.data || {}).configs || []).filter((c) => !polSailHex(String(c).split("+")[0]));
   return [POL_SPARE[Math.max(0, extras.indexOf(cfg)) % POL_SPARE.length], null];
 }
 function polColor(cfg) { return polColors(cfg)[0]; }
@@ -4207,22 +4210,9 @@ function polSwatch(cfg) {
   const bg = b ? `linear-gradient(135deg, ${a} 50%, ${b} 50%)` : a;
   return `<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${bg};margin-right:4px"></span>`;
 }
-// The line through one series: one point per TWA. Logs that call the kite S2 and logs that call it
-// S1 are cells built apart, so one angle can carry two; the line takes the one with more data and
-// both still show as dots and table rows.
-function polLinePts(pts) {
-  const best = {};
-  pts.forEach((p) => {
-    const b = best[p.twa], w = (q) => (q.seconds != null ? q.seconds : q.samples) || 0;
-    if (!b || w(p) > w(b)) best[p.twa] = p;
-  });
-  return pts.filter((p) => best[p.twa] === p);
-}
-// The configs as the crew names them, one entry per name ("S2" and "S1" logs are the same sail).
+// The logged configs in the crossover chart's order.
 function polConfigNames() {
-  const out = [];
-  ((Pol.data || {}).configs || []).forEach((c) => { const n = polSailName(c); if (!out.includes(n)) out.push(n); });
-  return out.sort((x, y) => (POL_ORDER.indexOf(x) + 1 || 99) - (POL_ORDER.indexOf(y) + 1 || 99) || x.localeCompare(y));
+  return ((Pol.data || {}).configs || []).slice().sort((x, y) => (POL_ORDER.indexOf(x) + 1 || 99) - (POL_ORDER.indexOf(y) + 1 || 99) || x.localeCompare(y));
 }
 
 // the race instances that carry measured cells, oldest first (the ramp's order)
@@ -4286,7 +4276,7 @@ function polCells(tws, config) {
   const src = Pol.race === "all" ? (d.cells || [])
     : (d.race_cells || []).filter((c) => polSameRec(c.recording, Pol.race));
   return src.filter((c) => (tws == null || c.tws === tws)
-    && (config === "all" || (polSailName(c.config) || "—") === config));
+    && (config === "all" || (c.config || "—") === config));
 }
 
 // The cells the evidence gate REFUSED, under the same filters as polCells — so the card can say
@@ -4297,7 +4287,7 @@ function polThin(tws, config) {
   const src = Pol.race === "all" ? (d.refused_thin || [])
     : (d.refused_thin_race || []).filter((c) => polSameRec(c.recording, Pol.race));
   return src.filter((c) => (tws == null || c.tws === tws)
-    && (config === "all" || (polSailName(c.config) || "—") === config));
+    && (config === "all" || (c.config || "—") === config));
 }
 
 // ONE radial scale for the whole tab. Cole, 2026-09-16: the chart must not rescale between the
@@ -4337,14 +4327,13 @@ function polSeries() {
   }
   const cells = polCells(Pol.tws, Pol.config);
   const by = {};
-  cells.forEach((c) => { const k = polSailName(c.config) || "—"; (by[k] = by[k] || []).push(c); });
+  cells.forEach((c) => { const k = c.config || "—"; (by[k] = by[k] || []).push(c); });
   return Object.keys(by)
     .sort((x, y) => (POL_ORDER.indexOf(x) + 1 || 99) - (POL_ORDER.indexOf(y) + 1 || 99) || x.localeCompare(y))
     .map((name) => {
       const [color, color2] = polColors(name === "—" ? null : name);
       const pts = by[name].slice().sort((m, n) => m.twa - n.twa);
-      return { key: name, label: name === "—" ? "unknown sails" : name, color, color2, pts,
-               line: polLinePts(pts) };
+      return { key: name, label: name === "—" ? "unknown sails" : name, color, color2, pts };
     });
 }
 
@@ -4389,9 +4378,8 @@ function polSvg() {
     // observed labels live, and the reference must never crowd the record
   }
   for (const sr of series) {
-    const line = sr.line || sr.pts;
-    if (line.length > 1) {
-      const d = line.map((p, i) => (i ? "L" : "M") + XY(p.twa, p.stw).map((n) => n.toFixed(1)).join(" ")).join(" ");
+    if (sr.pts.length > 1) {
+      const d = sr.pts.map((p, i) => (i ? "L" : "M") + XY(p.twa, p.stw).map((n) => n.toFixed(1)).join(" ")).join(" ");
       out.push(`<path d="${d}" fill="none" stroke="${sr.color}" stroke-width="2"/>`);
       if (sr.color2) out.push(`<path d="${d}" fill="none" stroke="${sr.color2}" stroke-width="2" stroke-dasharray="7 7"/>`);
     }
@@ -4546,7 +4534,7 @@ function paintPolar() {
   const tbl = cells.length ? `<div class="pg-wrap"><table class="pg">
     <tr><th>TWA</th><th>sails</th><th>best held (kn)</th><th>typical (kn)</th><th>data (s)</th><th>${Pol.race === "all" ? "races" : "race"}</th></tr>
     ${cells.slice().sort((a, b) => a.twa - b.twa || String(a.config).localeCompare(String(b.config))).map((c) =>
-      `<tr><td>${c.twa}°</td><td>${polSwatch(c.config)}${esc(polSailName(c.config) || "unknown")}${c.config && polSailName(c.config) !== c.config ? ` <span class="muted" style="font-size:11px">(logged ${esc(c.config)})</span>` : ""}</td>
+      `<tr><td>${c.twa}°</td><td>${polSwatch(c.config)}${esc(c.config || "unknown")}</td>
        <td><b>${kn2(c.stw)}</b></td><td>${kn2(c.median_stw)}</td><td>${c.seconds != null ? c.seconds : c.samples}</td><td>${esc(c.races ? c.races.join(", ") : polRaceName(c.recording))}</td></tr>`).join("")}
   </table></div>` : '<div class="placeholder">No measured cells at this TWS for this race.</div>';
   document.getElementById("view").innerHTML = `<div class="opt">
@@ -4570,7 +4558,7 @@ function paintPolar() {
       <div class="muted" style="font-size:11px;margin-top:4px">Rings every 2 kn, up to ${polMaxV()} kn. The scale never changes, so a longer line is a faster boat.</div>
     </div>
     <div class="card"><h3>Cells at ${Pol.tws} kn${Pol.race === "all" ? "" : " · " + esc(polRaceName(Pol.race))} <span class="muted" style="font-weight:400">— best speed held, at least ${minS} s of data each</span></h3>${tbl}
-      ${thin.length ? `<div class="muted" style="font-size:11px;margin-top:6px">Not shown: <b>${thin.length}</b> cell(s) with under ${minS} s of data (${thin.slice().sort((x, y) => y.seconds - x.seconds).slice(0, 6).map((c) => `${c.twa}°${c.config ? " " + esc(polSailName(c.config)) : ""} ${c.seconds}s`).join(", ")}${thin.length > 6 ? `, +${thin.length - 6} more` : ""}). Too short to trust.</div>` : ""}</div>
+      ${thin.length ? `<div class="muted" style="font-size:11px;margin-top:6px">Not shown: <b>${thin.length}</b> cell(s) with under ${minS} s of data (${thin.slice().sort((x, y) => y.seconds - x.seconds).slice(0, 6).map((c) => `${c.twa}°${c.config ? " " + esc(c.config) : ""} ${c.seconds}s`).join(", ")}${thin.length > 6 ? `, +${thin.length - 6} more` : ""}). Too short to trust.</div>` : ""}</div>
     ${polDecisionsCard()}
   </div>`;
 }
