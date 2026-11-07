@@ -183,3 +183,49 @@ test("watch-plan date boxes use the dark field style (G93)", () => {
   assert.equal(dt.length, 3);
   for (const i of dt) assert.match(i, /class="ein"/);
 });
+
+// #270 follow-up: Remove a row, click another tab, choose Stay. The Undo toast must stay up,
+// because nothing was left. It hides only once route() really changes tab.
+function routeHarness(answer) {
+  const h = harness(["routeHash", "route", ...(/\nfunction hideUndoToast\(/.test(src) ? ["hideUndoToast"] : [])]);
+  const loc = { hash: "#course" }, rendered = [];
+  Object.assign(h.ctx, {
+    location: loc,
+    history: { replaceState: (_s, _t, url) => { loc.hash = url; } },
+    confirmLeave: async () => answer,
+    syncDirty: () => {}, keepTabVisible: () => {},
+  });
+  h.ctx.document.querySelector = () => null;
+  Object.assign(h.ctx, {
+  });
+  for (const t of ["Races", "Course", "Gameplan", "Deploy", "Fleet", "Rules", "Learnings", "Monitor", "Debrief", "Polar"])
+    h.ctx["render" + t] = () => rendered.push(t);
+  // a tab click: the browser sets the hash and fires hashchange (route() is one of the listeners)
+  const click = async (hash) => {
+    loc.hash = hash;
+    for (const f of h.listeners.hashchange || []) f();
+    await h.ctx.route();
+  };
+  return { ...h, loc, rendered, click };
+}
+
+test("Undo stays up when a tab click is answered with Stay (#270)", async () => {
+  const { ctx, byId, loc, rendered, click } = routeHarness(false);
+  await ctx.route();                                  // on Course
+  ctx.Lab.editDef = { courses: [{ marks: [{ seq: 1, name: "A" }] }] }; ctx.activeSec = "course";
+  ctx.removeMark(0, 0);
+  await click("#rules");                              // another tab, answered with Stay
+  assert.equal(loc.hash, "#course");
+  assert.deepEqual(rendered, ["Course"]);
+  assert.ok(!byId.undoToast.hidden, "toast still up after Stay");
+});
+
+test("Undo hides once the tab really changes (#270)", async () => {
+  const { ctx, byId, loc, click } = routeHarness(true);
+  await ctx.route();
+  ctx.Lab.editDef = { courses: [{ marks: [{ seq: 1, name: "A" }] }] }; ctx.activeSec = "course";
+  ctx.removeMark(0, 0);
+  await click("#rules");                              // Save or Discard: we leave
+  assert.equal(loc.hash, "#rules");
+  assert.ok(byId.undoToast.hidden, "toast hidden on the new tab");
+});
