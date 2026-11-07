@@ -231,9 +231,13 @@ def _latest_bins_per_race(c, boat_id):
     """The perf_bins from the LATEST debrief of each RECORDING (race id + boat-log window start;
     SQLite groups the NULL window of GPX/YB tracks as one, so those still key on the race alone)
     for this boat — repeated runs of one recording don't double-count, and two recordings of one
-    race both count. Returns (bins[], race_ids set)."""
+    race both count. Returns (bins[], race_ids set).
+
+    "Latest" is the latest DEBRIEF of the recording, read from `debriefs` (as `trend()` does),
+    not the newest debrief that happens to have bins (#49): a re-run that yields zero bins must
+    retire the old run's bins, not bring them back."""
     rows = c.execute("""SELECT pb.* FROM perf_bins pb JOIN (
-                          SELECT race_id, window_start, MAX(debrief_id) AS did FROM perf_bins
+                          SELECT race_id, window_start, MAX(id) AS did FROM debriefs
                           WHERE boat_id IS ? GROUP BY race_id, window_start) latest
                         ON pb.debrief_id = latest.did""", (boat_id,)).fetchall()
     return [dict(r) for r in rows], {r["race_id"] for r in rows}
@@ -247,15 +251,15 @@ def config_polars(boat_id=None):
     kite+staysail…) accumulate their own curves here over time. Read-only."""
     c = _conn()
     try:
-        rows = c.execute(
-            "SELECT config, tws, twa, point_of_sail, best_stw, target_stw, pct, samples, race_id "
-            "FROM perf_bins WHERE config IS NOT NULL AND boat_id IS ? ORDER BY config, tws, twa",
-            (boat_id,)).fetchall()
+        # the latest run of each recording, measured cells only (#49): superseded runs would count
+        # one sail twice, and a forecast- or SOG-based cell is not an observed polar
+        bins, _races = _latest_bins_per_race(c, boat_id)
     finally:
         c.close()
+    rows = sorted((b for b in bins if b.get("config") and b.get("wind_source") == "measured"),
+                  key=lambda b: (b["config"], b["tws"], b["twa"]))
     configs = {}
     for r in rows:
-        r = dict(r)
         g = configs.setdefault(r["config"], {"config": r["config"], "cells": {}, "samples": 0,
                                              "races": set()})
         g["samples"] += r["samples"] or 0
@@ -357,15 +361,24 @@ def propose(boat_id, recordings=None):
         # measured wind speed. GRIB-derived bins — including every bin archived before wind_source
         # existed, all of which were forecast-based — are excluded and the exclusion is REPORTED.
         # A polar taught by a forecast's idea of the wind is the phantom-bin failure at scale.
+        # A cell is "inferred" when the paddlewheel was out and SOG stood in for STW (#49): the
+        # tide is in it, so it is left out the same way.
         excluded = [b for b in bins if b.get("wind_source") != "measured"]
+        inferred = sum(1 for b in excluded if b.get("wind_source") == "inferred")
+        mixed = sum(1 for b in excluded if b.get("wind_source") == "mixed")
+        forecast = len(excluded) - inferred - mixed
         bins = [b for b in bins if b.get("wind_source") == "measured"]
         races = {b["race_id"] for b in bins}
         used = sorted({_rec(b) for b in bins}, key=lambda k: (k[0], k[1] or 0))
         if not bins:
             return {"ok": False,
-                    "note": f"No measured-wind data yet ({len(excluded)} from forecasts left "
-                            f"out). Debrief from the boat's log. The boat model only learns "
-                            f"from the instruments."}
+                    "note": "No measured data yet ("
+                            + ", ".join(x for x in (
+                                f"{forecast} from forecasts" if forecast else "",
+                                f"{inferred} from GPS speed" if inferred else "",
+                                f"{mixed} partly measured" if mixed else "") if x)
+                            + " left out). Debrief from the boat's log. The boat model only "
+                              "learns from the instruments."}
         # Refine off the FLAT-WATER-equivalent % (pct_flat = raw pct with the sea-state loss removed)
         # so helm_factor stays a flat-water number and doesn't double-count waves; older bins with no
         # pct_flat fall back to the raw pct (== flat when there was no sea-state field).
@@ -418,7 +431,9 @@ def propose(boat_id, recordings=None):
                                         for k, x in by_pos.items()},
                    "races": sorted(races), "wind_source": "measured",
                    "recordings": [{"race_id": r, "window_start": w} for r, w in used],
-                   "excluded_forecast_bins": len(excluded),
+                   "excluded_forecast_bins": forecast,
+                   "excluded_inferred_bins": inferred,
+                   "excluded_mixed_bins": mixed,
                    "thin_cells_skipped": thin, "min_cell_samples": _MIN_SAMPLES_FOR_CELL}
         row = c.execute(
             """INSERT INTO proposals (created_at,boat_id,status,helm_current,helm_proposed,overall_pct,
@@ -629,10 +644,18 @@ def calibrate_waves(boat_id):
         bins, races = _latest_bins_per_race(c, boat_id)
     finally:
         c.close()
-    have_hs = [b for b in bins if b.get("hs_mean") is not None and b.get("pct") is not None]
+    # Same provenance rule as `propose()` (#49, #240): the wave slope is fit off measured wind and
+    # measured STW only. A forecast-wind or SOG-inferred cell would set the coefficients the
+    # optimizer routes on from evidence the polar refinement already refuses.
+    with_hs = [b for b in bins if b.get("hs_mean") is not None and b.get("pct") is not None]
+    have_hs = [b for b in with_hs if b.get("wind_source") == "measured"]
+    left_out = len(with_hs) - len(have_hs)
+    races = {b["race_id"] for b in have_hs}
     if not have_hs:
-        return {"ok": False, "note": "No wave data yet. Debrief races sailed in real waves "
-                "first."}
+        return {"ok": False, "note": "No measured wave data yet. Debrief races sailed in real "
+                "waves from the boat's log first."
+                + (f" {left_out} cell(s) from forecasts or GPS speed left out." if left_out else ""),
+                "excluded_not_measured": left_out}
     # raw (hs, ratio, samples) per point of sail — keep raw Hs so the deadband knee can be searched
     by_pos_raw = {}
     for b in have_hs:
@@ -677,9 +700,11 @@ def calibrate_waves(boat_id):
     if not fitted_any and db_source != "fit":
         return {"ok": False, "note": "Not enough range of wave heights yet. Needs races sailed "
                 "in different wave heights.", "by_point_of_sail": detail,
-                "deadband": db_info, "current_coeffs": {k: round(v, 4) for k, v in cur.items()}}
+                "deadband": db_info, "current_coeffs": {k: round(v, 4) for k, v in cur.items()},
+                "excluded_not_measured": left_out}
     summary = {"by_point_of_sail": detail, "deadband": db_info,
-               "current_coeffs": {k: round(v, 4) for k, v in cur.items()}, "races": sorted(races)}
+               "current_coeffs": {k: round(v, 4) for k, v in cur.items()}, "races": sorted(races),
+               "excluded_not_measured": left_out}
     c = _conn()
     try:
         row = c.execute(
@@ -705,7 +730,8 @@ def trend(boat_id, limit=50):
             """SELECT d.* FROM debriefs d JOIN (
                  SELECT race_id, window_start, MAX(id) AS mid FROM debriefs
                  WHERE boat_id IS ? GROUP BY race_id, window_start) latest
-               ON d.id = latest.mid ORDER BY d.created_at ASC LIMIT ?""", (boat_id, limit)).fetchall()
+               ON d.id = latest.mid ORDER BY d.created_at DESC LIMIT ?""", (boat_id, limit)).fetchall()
+        rows = list(reversed(rows))     # the NEWEST `limit` races, served oldest → newest (#49)
         series = []
         for r in rows:
             d = dict(r)

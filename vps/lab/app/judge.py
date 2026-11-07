@@ -130,6 +130,10 @@ def run_judge(race_id, playbook_id=None, models=None, on_progress=None, recordin
         reported unavailable BY NAME and everything else runs.
     """
     log = on_progress or (lambda *_: None)
+    # The boat this debrief is FOR, read once at the start: a job runs minutes, and switching the
+    # active boat meanwhile must not file the result (or score it) under the other one (#49).
+    boat = boats.active_boat() or {}
+    wave_coeffs = boats.wave_coeffs(boat)        # None = the optimizer's env priors
     d = store.get_race(race_id)
     if not d:
         return {"available": False, "note": "unknown race"}
@@ -153,9 +157,13 @@ def run_judge(race_id, playbook_id=None, models=None, on_progress=None, recordin
     # scored on its own clock either way (`track.absolute_clock`), and this is what a relative
     # (YB) track anchors on.
     start = tac.get("start_epoch") or ((t or {}).get("window") or {}).get("start_ts") or 0
+    gun = None
+    if pb and tac.get("start_epoch"):
+        gun = (start, start + optimizer.estimate_hours(d, pb.get("course_id")) * 3600)
+    cur, wv = _own_speed_fields(t, tac, gun, start, log)
     log("scoring the boat's track…")
     scored = _score_actual_track(t, tac.get("oracle") or {}, tac.get("marks") or [], start,
-                                 tac.get("wf"), tac.get("cur"), tac.get("wave"))
+                                 tac.get("wf"), cur, wv, wave_coeffs=wave_coeffs)
     report = {
         "available": True, "race_id": race_id, "race_name": d.get("name"),
         "playbook_id": pid if pb else None, "course_id": tac.get("course_id"),
@@ -172,11 +180,69 @@ def run_judge(race_id, playbook_id=None, models=None, on_progress=None, recordin
     log("writing the critique…")
     report["critique"] = _critique(report) or _deterministic_critique(report)
     try:                                   # archive to the ongoing learning DB (best-effort)
-        bid = (boats.active_boat() or {}).get("boat_id")
+        bid = boat.get("boat_id")
         report["archived_id"] = learning.archive_debrief(report, bid)
     except Exception:
         pass
     return report
+
+
+def _track_span(t, start_epoch):
+    """(first, last) epoch the recording covers, or None when its fixes carry no clock. Same clock
+    rule as `track.score_track`: a wall clock as is, a race-relative (YB) one anchored on the gun."""
+    t = t or {}
+    w = t.get("window") or {}
+    if w.get("start_ts") is not None and w.get("end_ts") is not None:
+        return float(w["start_ts"]), float(w["end_ts"])
+    ts = [f["t"] for f in (t.get("fixes") or []) if f.get("t") is not None]
+    if len(ts) < 2:
+        return None
+    a, b = min(ts), max(ts)
+    if track.absolute_clock(a):
+        return a, b
+    if not start_epoch:
+        return None
+    return start_epoch, start_epoch + (b - a)
+
+
+def _track_bbox(t, pad=0.1):
+    pts = [(f["lat"], f["lon"]) for f in ((t or {}).get("fixes") or [])
+           if f.get("lat") is not None and f.get("lon") is not None]
+    if not pts:
+        return None
+    lats, lons = [p[0] for p in pts], [p[1] for p in pts]
+    return (max(lats) + pad, min(lats) - pad, min(lons) - pad, max(lons) + pad)
+
+
+def _own_speed_fields(t, tac, gun, start_epoch, log):
+    """The current and sea-state fields the boat's OWN speed is scored on → (cur, wave).
+
+    They must cover the time the recording was sailed. The tactics half builds them over the
+    playbook's gun window; those are reused only when the recording lies inside that window. A
+    recording from another day (Bayview carries the Jul 15 practice sail) would otherwise read
+    race-day Hs by end-clamping (#49), and a debrief with no playbook had no fields at all, so
+    a fair tide read as overspeed and the seaway as a helm loss (#68). Otherwise they are built
+    over the recording's own span and the track's own area."""
+    span = _track_span(t, start_epoch)
+    if span is None:
+        return tac.get("cur"), tac.get("wave")
+    if gun and ("cur" in tac or "wave" in tac) and gun[0] - 60 <= span[0] and span[1] <= gun[1] + 60:
+        return tac.get("cur"), tac.get("wave")
+    bbox = _track_bbox(t)
+    if not bbox:
+        return None, None
+    log("building the current and sea state for this recording's own time…")
+    try:
+        from .current import build_currentfield
+        cur = build_currentfield(bbox, span[0], span[1], on_progress=log)
+    except Exception:
+        cur = None
+    try:
+        from .wave import build_wavefield
+        wv = build_wavefield(bbox, span[0], span[1], on_progress=log)
+    except Exception:
+        wv = None
+    return cur, wv
 
 
 def _tactics(d, race_id, pb, models, log):
@@ -267,7 +333,11 @@ def _tactics(d, race_id, pb, models, log):
     }
 
 
-def _score_actual_track(t, oracle, marks, start_epoch, wf=None, cur=None, wave=None):
+_ACTIVE = object()     # "read the active boat now" (callers that did not capture it at start)
+
+
+def _score_actual_track(t, oracle, marks, start_epoch, wf=None, cur=None, wave=None,
+                        wave_coeffs=_ACTIVE):
     """Score the recording against the oracle line (helm execution) — and, with no oracle at all,
     against the boat's own polar alone. `cur` (the actual-current field) lets the polar%/bins use
     speed-through-water, so a measured >100% reflects real boat speed rather than a fair tide.
@@ -279,7 +349,9 @@ def _score_actual_track(t, oracle, marks, start_epoch, wf=None, cur=None, wave=N
     try:
         from . import polars as POL
         scored = track.score_track(t, oracle, marks, start_epoch, wf=wf, polars=POL.polars_stw(),
-                                   cur=cur, wave=wave, wave_coeffs=boats.active_wave_coeffs())
+                                   cur=cur, wave=wave,
+                                   wave_coeffs=(boats.active_wave_coeffs()
+                                                if wave_coeffs is _ACTIVE else wave_coeffs))
         # Boat-log tracks know the window they were cut to (derived vs the ⏺ LOG button). Every
         # number above is a number ABOUT that window, so it travels with them.
         if t.get("window"):

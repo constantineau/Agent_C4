@@ -15,6 +15,7 @@ The build talks to the agent and walks two races of fixes (~30 s), so it caches 
 refresh is a button, not a page load.
 """
 import json
+import math
 import os
 import time
 
@@ -47,6 +48,9 @@ MIN_SECONDS = float(os.environ.get("POLAR_MIN_SECONDS", "60"))
 MIN_TWA_DEG = float(os.environ.get("POLAR_MIN_TWA_DEG", "30"))
 PCTILE = 80.0
 MAX_POINTS = 20000
+# Bumped when a fix changes what a build means, so an older cache is a miss, not served as current.
+# 2: stitched sessions' shared window read once (#49).
+BUILD_VERSION = 2
 
 
 def _gate(fixes, trust):
@@ -71,13 +75,27 @@ def _stride_s(fixes):
     return max(1.0, float(d[len(d) // 2]))
 
 
-def _rows(raw, keyfn, min_seconds, strides, names=None):
+def _cover(seen, t, stride):
+    """Claim the whole seconds a fix stands for ([t - stride/2, t + stride/2)) in `seen`; return
+    how many were new. Overlapping windows are de-duplicated on the TIME each fix represents,
+    not its timestamp, so two thinned windows sampled at offset seconds cannot both credit the
+    same stretch of record."""
+    a = int(math.floor(t - stride / 2.0))
+    new = [x for x in range(a, a + max(1, int(round(stride)))) if x not in seen]
+    seen.update(new)
+    return len(new)
+
+
+def _rows(raw, keyfn, min_seconds, strides, names=None, credit=None):
     """Aggregate the raw per-sample lists into polar points under a coarser key.
 
     Every view of this polar is a p80 over the samples that belong to it, re-pooled from the raw
     lists — NOT a p80 of p80s. Filtering to one race and pooling all races are therefore both
     exact, and they are the same code, so the per-race curve and the all-race curve can never
     drift apart (a percentile does not average).
+
+    `credit` (key -> seconds), when given, is the de-duplicated time each raw key stands for;
+    otherwise every sample is worth its race's stride.
 
     Returns `(rows, refused)` — the cells that cleared `min_seconds`, and the ones that did not,
     each with the evidence it had. Every gate in this module says what it refused.
@@ -86,7 +104,8 @@ def _rows(raw, keyfn, min_seconds, strides, names=None):
     for k, stws in raw.items():
         kk = keyfn(k)
         pool.setdefault(kk, []).extend(stws)
-        secs[kk] = secs.get(kk, 0.0) + len(stws) * strides.get(k[3], 1.0)
+        secs[kk] = secs.get(kk, 0.0) + (credit[k] if credit is not None
+                                        else len(stws) * strides.get(k[3], 1.0))
     out, refused = [], []
     for k, stws in pool.items():
         if secs[k] < min_seconds:
@@ -118,7 +137,11 @@ def compute(min_seconds=MIN_SECONDS):
     track and the learning archive use, so a race means the same thing on every surface.
     """
     raw, names_by_cell, strides = {}, {}, {}
+    raw_secs = {}        # key -> seconds of record its samples stand for (de-duplicated)
+    pooled, pooled_secs = {}, {}   # the same, counting each second once across all races
     race_meta = []
+    by_window = {}       # (start, end) -> its race_meta row
+    seen_rec, seen_pool = {}, set()    # accepted fix seconds, per recording and pooled
     for s in monitor.agent_json("/racelog/sessions")["sessions"]:
         w = s.get("window") or {}
         if not w.get("hours"):
@@ -128,12 +151,26 @@ def compute(min_seconds=MIN_SECONDS):
             race_meta.append({"recording": rec, "name": s["name"], "skipped":
                               "window derived from a source that is not this boat"})
             continue
+        # Stitched sessions share ONE derived window (#49). Reading it once per session counted
+        # every second twice, so a 30-second cell passed the 60-second gate and the race was
+        # listed twice. The window is read once; the other session is named on its row.
+        wkey = (round(float(w["start_ts"]), 3), round(float(w["end_ts"]), 3))
+        if wkey in by_window:
+            by_window[wkey].setdefault("also_sessions", []).append(s["name"])
+            continue
         r = monitor.agent_json(f"/racelog/track?start={w['start_ts']}&end={w['end_ts']}"
                                f"&max_points={MAX_POINTS}", timeout=180)
         trust = monitor.agent_json(f"/racelog/trust?start={w['start_ts']}&end={w['end_ts']}",
                                    timeout=180)
         fixes, refused = _gate(r["fixes"], trust)
-        strides[rec] = _stride_s(r["fixes"])
+        # ...and a window that only OVERLAPS one already read: evidence is de-duplicated by the
+        # second of each ACCEPTED fix. A race keeps every second it has for its own views; the
+        # pooled views count a second once; two windows with the same start (one recording key)
+        # never count a second twice under it.
+        already = 0
+        mine = seen_rec.setdefault(rec, set())
+        strides.setdefault(rec, _stride_s(r["fixes"]))
+        stride = _stride_s(r["fixes"])
         sail_log = r.get("sail_log") or []
         n, not_sailing = 0, 0
         for f in fixes:
@@ -153,13 +190,25 @@ def compute(min_seconds=MIN_SECONDS):
                 cfg = None                                    # a douse nobody tapped
             key = (round(tws / TWS_STEP_KN) * TWS_STEP_KN,
                    round(twa / TWA_STEP_DEG) * TWA_STEP_DEG, cfg, rec)
+            got = _cover(mine, f["t"], stride)
+            if not got:
+                already += 1
+                continue
             raw.setdefault(key, []).append(stw)
-            names_by_cell.setdefault(key[:3], set()).add(s["name"])
+            raw_secs[key] = raw_secs.get(key, 0) + got
+            got = _cover(seen_pool, f["t"], stride)
+            if not got:
+                already += 1
+            else:
+                pooled.setdefault(key, []).append(stw)
+                pooled_secs[key] = pooled_secs.get(key, 0) + got
+                names_by_cell.setdefault(key[:3], set()).add(s["name"])
             n += 1
         race_meta.append({"recording": rec, "race_id": s.get("race_id"), "session_id": s.get("id"),
                           "name": s["name"], "hours": w.get("hours"),
                           "start_ts": w.get("start_ts"), "end_ts": w.get("end_ts"),
                           "fixes": len(r["fixes"]), "refused_by_trust": refused,
+                          "already_counted": already,
                           "measured_samples": n, "refused_below_min_twa": not_sailing,
                           "sec_per_fix": round(strides[rec], 2),
                           "trust_line": (trust.get("summary") or {}).get("line"),
@@ -167,16 +216,19 @@ def compute(min_seconds=MIN_SECONDS):
                           # rather than parsing the human line
                           "trust_danger_s": (trust.get("summary") or {}).get("danger_s"),
                           "sail_changes": len(sail_log)})
+        by_window[wkey] = race_meta[-1]
 
     cells, thin_cells = _rows(
-        raw, lambda k: (("tws", k[0]), ("twa", k[1]), ("config", k[2])), min_seconds, strides,
-        names={(k[0], k[1], k[2]): v for k, v in names_by_cell.items()})
+        pooled, lambda k: (("tws", k[0]), ("twa", k[1]), ("config", k[2])), min_seconds, strides,
+        names={(k[0], k[1], k[2]): v for k, v in names_by_cell.items()}, credit=pooled_secs)
     race_cells, thin_race_cells = _rows(
         raw, lambda k: (("tws", k[0]), ("twa", k[1]), ("config", k[2]), ("recording", k[3])),
-        min_seconds, strides)
+        min_seconds, strides, credit=raw_secs)
     race_curves, thin_race_curves = _rows(
-        raw, lambda k: (("tws", k[0]), ("twa", k[1]), ("recording", k[3])), min_seconds, strides)
-    curve, thin_curve = _rows(raw, lambda k: (("tws", k[0]), ("twa", k[1])), min_seconds, strides)
+        raw, lambda k: (("tws", k[0]), ("twa", k[1]), ("recording", k[3])), min_seconds, strides,
+        credit=raw_secs)
+    curve, thin_curve = _rows(pooled, lambda k: (("tws", k[0]), ("twa", k[1])), min_seconds, strides,
+                               credit=pooled_secs)
     for m in race_meta:
         if m.get("skipped"):       # a skipped session contributed nothing; saying "0 cells" would
             continue               # read as a race that sailed badly rather than one not counted
@@ -186,7 +238,7 @@ def compute(min_seconds=MIN_SECONDS):
         m["thin_cells"] = sum(1 for r in thin_race_cells if r["recording"] == m.get("recording"))
         m["thin_seconds"] = round(sum(r["seconds"] for r in thin_race_cells
                                       if r["recording"] == m.get("recording")))
-    return {"generated_at": time.time(), "wind_source": "measured",
+    return {"generated_at": time.time(), "wind_source": "measured", "build_version": BUILD_VERSION,
             "grid": {"tws_step_kn": TWS_STEP_KN, "twa_step_deg": TWA_STEP_DEG,
                      "pctile": PCTILE, "min_seconds": min_seconds, "min_twa_deg": MIN_TWA_DEG},
             "races": race_meta, "cells": cells, "race_cells": race_cells,
@@ -211,7 +263,8 @@ def build(force=False):
             # are seconds — the failure this project keeps meeting: present, wired, silently not
             # in force. Treat it as a miss.
             if all(k in art for k in ("race_cells", "race_curves", "curve", "refused_thin")) \
-                    and "min_seconds" in (art.get("grid") or {}):
+                    and "min_seconds" in (art.get("grid") or {}) \
+                    and art.get("build_version") == BUILD_VERSION:
                 return art
         except (OSError, ValueError):
             pass
