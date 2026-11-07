@@ -149,6 +149,13 @@ check("a list with only non-N2K sources after a good read is not a fresh check",
       not engine_app.check_n2k_once(st6, fetch=lambda: {"derived-data": {"type": "plugin"}})
       and st6["checked_at"] == t_before)
 
+st7 = {"checked_at": None, "error": None, "moved": [], "static": None}
+engine_app.check_n2k_once(st7, fetch=lambda: flat({"n2k-socketcan.20": STATIC["n2k-socketcan.8"]}))
+engine_app.check_n2k_once(st7, fetch=lambda: gnx)
+check("a serial-less display elsewhere doesn't evict a verified one",
+      (ns.devices_for("sr33").get("n2k-socketcan.20") or {}).get("serial") == STATIC["n2k-socketcan.8"]["serial"]
+      and engine_app.n2k_check(st7)["status"] == "ok")
+
 kept = ns.devices_for("sr33")
 check("a failed read keeps the last good map",
       not engine_app.check_n2k_once(st2, fetch=lambda: (_ for _ in ()).throw(OSError("down")))

@@ -177,7 +177,8 @@ def apply_n2k_payload(payload, state=None, boat_id=None, now=None):
     # wins; a device seen at a new address drops its old one.
     same, find = n2k_sources.same_device, n2k_sources.find
     live = {a: d for a, d in (state.get("live") or {}).items()
-            if a not in fresh and not any(same(d, f) for f in fresh.values())}
+            if a not in fresh and not any(same(d, f) and d.get("serial") and f.get("serial")
+                                          for f in fresh.values())}
     live.update(fresh)
     state["live"] = live
     seen = {a: {"updates": [{"source": {"manufacturerCode": d.get("manufacturer"),
