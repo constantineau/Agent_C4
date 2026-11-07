@@ -168,8 +168,9 @@ def apply_n2k_payload(payload, state=None, boat_id=None, now=None):
         state.update(checked_at=now or time.time(), error=None, moved=[])
         return state
     fresh = n2k_sources.build_from_signalk(payload)
-    if not fresh and not state.get("live"):
-        # nothing to compare against: that is "not checked", never "as expected"
+    if not fresh:
+        # nothing to compare against: that is "not checked", never "as expected" (and never a
+        # fresh timestamp on old evidence)
         raise ValueError("no N2K product info in the sources list")
     # What has been SEEN, carried across reads: a later list that omits a device (not yet
     # re-announced) must not restore an identity an earlier read disproved. A fresh answer
@@ -196,7 +197,8 @@ def apply_n2k_payload(payload, state=None, boat_id=None, now=None):
     listed = {m["source"] for m in moved}
     moved += [{"source": a, "expected": static[a].get("model"),
                "found": (live.get(a) or {}).get("model"), "now_at": None}
-              for a in sorted(disproved) if a not in listed and find(static[a], live) is None]
+              for a in sorted(disproved)
+              if a not in listed and find(static[a], live, prefer=a) is None]
     state["moved"] = moved
     base = {a: d for a, d in static.items() if a not in disproved}
     n2k_sources.set_verified(boat_id, n2k_sources.verified(seen, base))

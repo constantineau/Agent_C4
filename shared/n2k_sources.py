@@ -100,8 +100,12 @@ def same_device(a, b):
 
 
 def find(device, live, prefer=None):
-    """The address in `live` answering as `device` (`prefer` when it does), or None."""
-    hits = sorted(s for s, d in (live or {}).items() if same_device(d, device))
+    """The address in `live` answering as `device` (`prefer` when it does), or None. Only at
+    `prefer` may a record without a serial match on model alone: elsewhere it takes serials on
+    both sides, or one serial-less GNX120 would 'be' all three displays."""
+    serial = (device or {}).get("serial")
+    hits = sorted(s for s, d in (live or {}).items() if same_device(d, device)
+                  and (s == prefer or (serial and d.get("serial"))))
     if prefer in hits:
         return prefer
     return hits[0] if hits else None

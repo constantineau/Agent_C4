@@ -140,6 +140,15 @@ engine_app.check_n2k_once(st6, fetch=lambda: {"n2k-socketcan": {"3": {"n2k": {"m
 check("a list without serials doesn't disprove an unchanged device",
       engine_app.n2k_check(st6)["status"] == "ok" and not st6["moved"])
 
+gnx = {"n2k-socketcan.7": {"updates": [{"source": {"modelId": "GNX120"}}]}}
+vg = ns.verified(gnx, STATIC)
+check("one serial-less GNX120 doesn't swallow the other two displays",
+      "n2k-socketcan.8" in vg and "n2k-socketcan.9" in vg and ns.moved(gnx, STATIC) == [])
+t_before = st6["checked_at"]
+check("a list with only non-N2K sources after a good read is not a fresh check",
+      not engine_app.check_n2k_once(st6, fetch=lambda: {"derived-data": {"type": "plugin"}})
+      and st6["checked_at"] == t_before)
+
 kept = ns.devices_for("sr33")
 check("a failed read keeps the last good map",
       not engine_app.check_n2k_once(st2, fetch=lambda: (_ for _ in ()).throw(OSError("down")))
