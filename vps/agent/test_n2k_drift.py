@@ -125,6 +125,13 @@ check("a later list that omits the device keeps what an earlier read proved",
       ns.devices_for("sr33")["n2k-socketcan.3"]["model"] == "GST10"
       and engine_app.n2k_check(st2)["status"] == "warn")
 
+st5 = {"checked_at": None, "error": None, "moved": [], "static": None}
+only20 = {"n2k-socketcan.20": STATIC["n2k-socketcan.3"]}          # GPS24xd seen at .20
+engine_app.check_n2k_once(st5, fetch=lambda: flat(only20))
+engine_app.check_n2k_once(st5, fetch=lambda: flat({"n2k-socketcan.20": STATIC["n2k-socketcan.4"]}))
+check("a disproved address never falls back to its static device",
+      "n2k-socketcan.3" not in ns.devices_for("sr33"))
+
 kept = ns.devices_for("sr33")
 check("a failed read keeps the last good map",
       not engine_app.check_n2k_once(st2, fetch=lambda: (_ for _ in ()).throw(OSError("down")))

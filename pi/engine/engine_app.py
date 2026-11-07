@@ -121,7 +121,8 @@ def sensor_health_ep():
 BOAT_ID = os.environ.get("BOAT_ID", "sr33")
 N2K_RECHECK_S = 300.0       # after a good read
 N2K_RETRY_S = 30.0          # until the first good read (Signal K may start after the engine)
-_N2K = {"checked_at": None, "error": None, "moved": [], "static": None, "live": {}}
+_N2K = {"checked_at": None, "error": None, "moved": [], "static": None, "live": {},
+        "disproved": set()}
 
 
 def _signalk_sources_url():
@@ -183,8 +184,17 @@ def apply_n2k_payload(payload, state=None, boat_id=None, now=None):
                                         "modelId": d.get("model"),
                                         "modelSerialCode": d.get("serial")}}]}
             for a, d in live.items()}
+    # A static address once disproved (its device seen elsewhere, or another device seen on
+    # it) never falls back to its static identity, even after the evidence is overwritten.
+    where = {key(d): a for a, d in live.items()}
+    disproved = set(state.get("disproved") or ())
+    disproved |= {a for a, d in static.items()
+                  if (a in live and key(live[a]) != key(d))
+                  or (key(d) in where and where[key(d)] != a)}
+    state["disproved"] = disproved
     state["moved"] = n2k_sources.moved(seen, static)
-    n2k_sources.set_verified(boat_id, n2k_sources.verified(seen, static))
+    base = {a: d for a, d in static.items() if a not in disproved}
+    n2k_sources.set_verified(boat_id, n2k_sources.verified(seen, base))
     state.update(checked_at=now or time.time(), error=None)
     return state
 
