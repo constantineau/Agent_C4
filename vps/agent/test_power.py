@@ -259,8 +259,9 @@ print("assess() through a datasource:")
 
 
 class FakeSource:
-    def __init__(self, rows=None, latest=None, raises=None):
+    def __init__(self, rows=None, latest=None, raises=None, latest_at=None):
         self.rows, self.latest, self.raises, self.asked = rows, latest, raises, []
+        self.latest_at = latest_at
 
     def series(self, path, minutes):
         self.asked.append((path, minutes))
@@ -270,6 +271,9 @@ class FakeSource:
 
     def latest_value(self, path):
         return self.latest
+
+    def latest_sample(self, path):
+        return None if self.latest is None else (self.latest, self.latest_at)
 
 
 src = FakeSource(rows=[r for r in SERIES if r[0] <= T0 + 460 * 60])
@@ -282,10 +286,23 @@ down = power.assess(FakeSource(raises=RuntimeError("archive locked")), now=T0)
 check("a read that raises is 'unknown', never an exception into the engine",
       down["status"] == "unknown" and down["available"] is False
       and "archive locked" in down["note"])
-lone = power.assess(FakeSource(rows=[], latest=12.41), now=T0)
+lone = power.assess(FakeSource(rows=[], latest=12.41, latest_at=T0 - 120), now=T0)
 check("an empty window falls back to the latest value (one sample, shown, no alarm)",
       lone["available"] is True and lone["volts"] == 12.41 and lone["samples"] == 1
       and lone["status"] == "ok")
+check(f"...and keeps the sample's own time, not now (age {lone.get('age_s')} s)",
+      lone.get("age_s") == 120)
+# #45.1: the fallback took `latest_value` and stamped it time.time(), so yesterday's 12.8 V
+# came back as a fresh "ok". Older than the trend window it is unknown, with its age.
+old = power.assess(FakeSource(rows=[], latest=12.8, latest_at=T0 - 6 * 3600), now=T0)
+check(f"a 6-hour-old voltage is unknown, not ok ({old['status']})",
+      old["status"] == "unknown" and old["available"] is False)
+check(f"...and says how old it is ({old.get('age_s')} s, {old.get('note')!r})",
+      old.get("age_s") == 6 * 3600 and "360 min ago" in old.get("note", ""))
+import time as _t   # noqa: E402
+live = power.assess(FakeSource(rows=[(_t.time() - 600, 12.5), (_t.time() - 590, 12.5)]))
+check(f"a live read (no `now`) ages its newest sample by the wall clock ({live.get('age_s')} s)",
+      live.get("age_s") is not None and 585 <= live["age_s"] <= 600)
 none = power.assess(FakeSource(rows=[], latest=None), now=T0)
 check("no window and no latest value -> unknown", none["status"] == "unknown"
       and none["available"] is False)

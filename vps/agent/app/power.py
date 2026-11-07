@@ -242,6 +242,7 @@ def assess_series(rows, now=None):
         "volts": round(level, 2),
         "volts_decided": round(decided, 2),   # the figure the status was actually taken on
         "volts_last": round(window[-1][1], 2),
+        "age_s": round(max(0.0, now - window[-1][0])),   # age of the newest sample used
         "volts_min": round(min(v for _, v in window), 2),
         "trend_v_per_h": None if slope is None else round(slope, 3),
         "hours_to_floor": None if hours_to_floor is None else round(hours_to_floor, 2),
@@ -271,11 +272,28 @@ def assess(source=None, now=None):
     except Exception as exc:                  # a power read must never take the engine down
         return {"available": False, "status": "unknown", "note": f"{PATH} unreadable: {exc}"}
     if not rows:
+        # Fallback to the latest sample WITH its own time (#45.1). This used to take
+        # `latest_value` and stamp it `time.time()`, so a 12.8 V reading from yesterday came back
+        # as a fresh "ok". Older than the trend window it is no reading at all: unknown, with
+        # the age, so the tile can say how long the bank has been silent.
         latest = None
         try:
-            latest = src.latest_value(PATH)
+            latest = src.latest_sample(PATH)
         except Exception:
             pass
-        if latest is not None:
-            rows = [(_time.time() if now is None else now, float(latest))]
-    return assess_series(rows, now=now)
+        if latest is not None and latest[0] is not None and latest[1] is not None:
+            t_now = _time.time() if now is None else now
+            age = t_now - float(latest[1])
+            if age > WINDOW_MIN * 60.0:
+                return {"available": False, "status": "unknown",
+                        "volts_last": round(float(latest[0]), 2), "age_s": round(age),
+                        "note": f"no {PATH} in the last {WINDOW_MIN:g} min "
+                                f"(last {float(latest[0]):.2f} V, {age / 60.0:.0f} min ago)"}
+            rows = [(float(latest[1]), float(latest[0]))]
+            now = t_now
+    out = assess_series(rows, now=now)
+    if now is None and rows and out.get("available"):
+        # assess_series without `now` takes the newest sample as now (replay semantics), so its
+        # age would always read 0; the live read reports age against the wall clock.
+        out["age_s"] = round(max(0.0, _time.time() - max(t for t, _ in rows)))
+    return out

@@ -56,6 +56,7 @@ the first replay read it:
 import bisect
 import math
 import os
+import time
 
 from shared import n2k_sources
 from shared import source_policy
@@ -517,8 +518,10 @@ def assess(source=None, minutes=None, conditions=None, previous=None, previous_a
     except Exception:
         pass
     try:
-        roll = src.latest_value("navigation.attitude.roll")
-        pitch = src.latest_value("navigation.attitude.pitch")
+        # Samples WITH their time (#45.1): `latest_value` onboard falls back to the archive's last
+        # row of any age, so an hours-old roll could raise (or clear) the range check now.
+        roll_s = src.latest_sample("navigation.attitude.roll")
+        pitch_s = src.latest_sample("navigation.attitude.pitch")
         # `series_by_source`, never `series` — see `choose_source`. One device per series or the
         # spread statistic measures the gap between two devices instead of the fault.
         hdg_rows = src.series_by_source("navigation.headingTrue", minutes)
@@ -550,8 +553,22 @@ def assess(source=None, minutes=None, conditions=None, previous=None, previous_a
            "independent": bool(hdg_src and cog_src and independent)}
 
     deg = 57.29577951308232
+    # Older than this check's own window is no reading (unknown), the same window the heading
+    # check judges over; the age of what was used rides along.
+    t_now = time.time()
+
+    def recent(sample):
+        if not sample or sample[0] is None or sample[1] is None:
+            return None, None
+        age = t_now - float(sample[1])
+        return (sample[0], age) if age <= minutes * 60.0 else (None, age)
+
+    roll, roll_age = recent(roll_s)
+    pitch, pitch_age = recent(pitch_s)
     att = attitude_plausible(None if roll is None else roll * deg,
                              None if pitch is None else pitch * deg)
+    att["age_s"] = {"roll": None if roll_age is None else round(roll_age, 1),
+                    "pitch": None if pitch_age is None else round(pitch_age, 1)}
     # align the three series on the heading timestamps — nearest sample within
     # HEADING_PAIR_TOL_S, no interpolation. Nothing that close means no reference (#164).
     def nearest(rows, times, t):
