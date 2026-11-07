@@ -165,7 +165,8 @@
       const t = now - m * 60, x = X(t).toFixed(1);
       gridv += '<line class="ax-grid" x1="' + x + '" y1="' + padT + '" x2="' + x + '" y2="' + (ht - padB) + '"/>';
       if (m % 60 === 0)          // hourly labels only — the 30-min gridlines + arrows mark the rest
-        ticks += '<text class="ax-lab" x="' + x + '" y="' + (ht - 3) + '" text-anchor="middle">' +
+        // "now" sits on the right edge: anchored at its end so it isn't cut off (#95 G53)
+        ticks += '<text class="ax-lab" x="' + x + '" y="' + (ht - 3) + '" text-anchor="' + (m === 0 ? "end" : "middle") + '">' +
                  (m === 0 ? "now" : "−" + (m / 60) + "h") + '</text>';
       let best = null;
       for (const p of h) if (best === null || Math.abs(p.t - t) < Math.abs(best.t - t)) best = p;
@@ -408,9 +409,9 @@
   }
 
   /* ---- rolling buffers fed by the poll loop ---- */
-  function pushWind(c) {
+  function pushWind(c, at) {
     if (!c || !c.available || c.tws == null || c.twd == null) return;
-    const now = Date.now() / 1000;
+    const now = at != null ? at : Date.now() / 1000;
     App.windHist.push({ t: now, tws: c.tws, twd: c.twd });
     const cut = now - WIND_WIN_S;
     while (App.windHist.length && App.windHist[0].t < cut) App.windHist.shift();
@@ -482,13 +483,14 @@
   function esc2(s) { return String(s == null ? "" : s).replace(/[<>&"]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" }[c])); }
   /* ============ COURSE MAP (Time-to-Mark detail): the plan course to scale + the boat ============
      Equirectangular nm projection (x = lon·cos(midlat)·60, y = −lat·60) — plenty accurate at
-     course scale, zero tiles/network. Marks + legs come from the loaded course (/course, memoized
-     until the next homework push), the boat is the live /navigator position; the leg being sailed
-     is highlighted and the dashed line is boat → next mark. Redraws with the 3-s poll. */
+     course scale, zero tiles/network. Marks + legs come from the loaded course (/course, read
+     again each time the detail opens: a homework push mid-day replaces it, #184-5), the boat is
+     the live /navigator position; the leg being sailed is highlighted and the dashed line is
+     boat → next mark. Redraws with the 3-s poll. */
   async function fetchCourse() {
-    if (App.courseMap) return;
     const r = await fetchJSON("/course", 8000);
-    if (r && r.available && (r.marks || []).length >= 2) App.courseMap = r;
+    if (!r) return;                       // no answer: keep the map we have
+    App.courseMap = r.available && (r.marks || []).length >= 2 ? r : null;
   }
   async function fetchTrack() {   // NOT memoized — a mid-day re-push replaces the playbook
     const r = await fetchJSON("/playbook/track", 8000);
@@ -513,7 +515,10 @@
     const s = Math.min((W - 2 * PAD) / spanX, (H - 2 * PAD) / spanY);
     const ox = (W - s * spanX) / 2, oy = (H - s * spanY) / 2;
     const P = (lat, lon) => { const q = nm(lat, lon); return [ox + (q[0] - minX) * s, oy + (q[1] - minY) * s]; };
-    const ni = (nav.next_mark && nav.next_mark.index) || 0;           // active leg = marks[ni-1]→[ni]
+    // active leg = marks[ni-1]→[ni]. The navigator and /course can disagree for a moment after a
+    // course change; an index past this course's marks draws no leg rather than throwing (#184-5).
+    const rawNi = (nav.next_mark && nav.next_mark.index) || 0;
+    const ni = rawNi >= 0 && rawNi < marks.length ? rawNi : -1;
     let svg = "";
     for (let i = 1; i < marks.length; i++) {
       const a = P(marks[i - 1].lat, marks[i - 1].lon), b = P(marks[i].lat, marks[i].lon);
@@ -527,7 +532,7 @@
       svg += '<polyline points="' + pts + '" style="fill:none;stroke:var(--accent);stroke-width:2.5;stroke-linejoin:round" />';
     }
     const bp = P(boat.lat, boat.lon);
-    if (nav.next_mark) {                                              // dashed: us → the next mark
+    if (nav.next_mark && ni >= 0) {                                   // dashed: us → the next mark
       const t = P(marks[ni].lat, marks[ni].lon);
       svg += '<line x1="' + bp[0].toFixed(1) + '" y1="' + bp[1].toFixed(1) + '" x2="' + t[0].toFixed(1) +
         '" y2="' + t[1].toFixed(1) + '" style="stroke:var(--text);stroke-width:1.5;stroke-dasharray:5 4;opacity:.7" />';
@@ -552,7 +557,8 @@
     // foot line: engine-computed range/bearing + our planar offset from the active leg line
     let foot = "";
     if (nav.next_mark && nav.next_mark.distance_nm != null)
-      foot = r1(nav.next_mark.distance_nm) + " nm @ " + r0(nav.next_mark.bearing_deg) + "° to " + esc2(marks[ni].name);
+      foot = r1(nav.next_mark.distance_nm) + " nm @ " + r0(nav.next_mark.bearing_deg) + "° to " +
+        esc2(ni >= 0 ? marks[ni].name : nav.next_mark.name || "next mark");
     if (ni >= 1) {
       const a = nm(marks[ni - 1].lat, marks[ni - 1].lon), b = nm(marks[ni].lat, marks[ni].lon), q = nm(boat.lat, boat.lon);
       const dx = b[0] - a[0], dy = b[1] - a[1], len = Math.hypot(dx, dy) || 1;
@@ -584,14 +590,17 @@
     const cut = now - FCST_WIN_S;
     while (App.fcstHist.length && App.fcstHist[0].t < cut) App.fcstHist.shift();
   }
-  /* observed wind nearest a point `agoSec` in the past (0 = latest); null if history too short */
+  /* observed wind nearest a point `agoSec` in the past (0 = latest); null when no sample lies
+     within OBS_TOL_S of it. "Now" gets the same bound as the lookbacks (#45.5a): the newest sample
+     of a history that stopped two hours ago is not "now", and nor is a lookback point that falls
+     in a gap. */
+  const OBS_TOL_S = 60;
   function observedAt(agoSec) {
     const h = raceData(); if (!h.length) return null;
     const now = Date.now() / 1000, target = now - agoSec;
-    if (agoSec > 0 && h[0].t > target + 60) return null;
     let best = null, bd = 1e9;
     for (const p of h) { const d = Math.abs(p.t - target); if (d < bd) { bd = d; best = p; } }
-    return best ? { tws: best.tws, twd: best.twd } : null;
+    return best && bd <= OBS_TOL_S ? { tws: best.tws, twd: best.twd } : null;
   }
   /* interpolate a forecast series (ascending in_h) to a given hours-ahead value */
   function fcstAt(hours, h) {
@@ -932,7 +941,7 @@
         : null;
       const o = { status: st,
         energy: chg, level: lvl,      // the detail's CREW ENERGY section reads these explicitly
-        value: (hasF ? String(chg) : "—") + (teamLine ? '<div class="t-val2">' + teamLine + "</div>" : ""),
+        value: (hasF ? chg + "%" : "—") + (teamLine ? '<div class="t-val2">' + teamLine + "</div>" : ""),
         sub: [countdown, lvl].filter(Boolean).join(" · "),
         why: (hasF ? "Crew energy " + chg + "% (" + lvl + "). " : "No helm data yet. ") +
              (wSet ? (w.active ? (w.all_hands ? "ALL HANDS" : teamTxt(w, w.on) + " on deck") +
@@ -961,10 +970,10 @@
       const hSt = noHealth ? "na" : h.status === "danger" ? "act"
         : h.status === "warn" ? "watch" : "ok";
       // The link's own state still wins when the engine has gone quiet — a health verdict
-      // computed from data we can no longer see is not a reassurance. But an *absent* health
-      // read must not blank a perfectly good source count either (SEV ranks "na" alongside
-      // "act"), so it falls through to the link state and says so on the face instead.
-      const st = noHealth ? linkSt : (SEV[linkSt] >= SEV[hSt] ? linkSt : hSt);
+      // computed from data we can no longer see is not a reassurance. Checks that did not run
+      // (no read, offline, or "unknown") mean NOT CHECKED: grey, never green (#46.1, settled in
+      // #240). They never hide a known warning, so a stale or dead link still shows its colour.
+      const st = noHealth ? (linkSt === "ok" ? "na" : linkSt) : (SEV[linkSt] >= SEV[hSt] ? linkSt : hSt);
       const flags = (h && h.flags) || [];
       const notes = (h && h.notes) || [];
       const chans = ((h || {}).provenance || {}).channels || {};
@@ -977,7 +986,7 @@
       const sub = chips.length
         ? "⚑ " + chips.slice(0, 2).join(", ") + (chips.length > 2 ? " +" + (chips.length - 2) : "")
         : (count + " source" + (count === 1 ? "" : "s") + " live"
-           + (noHealth ? " · checks offline"
+           + (noHealth ? " · not checked"
               : backups.length ? " · " + backups.length + " on backup" : ""));
       // No provenance rows on the FACE: at half height the device names truncate to "GPS24…"
       // and the label column collapses, which is noise, not information. The full table is one
@@ -987,16 +996,18 @@
         why: (!c || !c.available ? "No live data from the boat. " :
               count + " sensor group" + (count === 1 ? "" : "s") + " reporting"
               + (anyStale ? ", one stale. " : ". "))
-          + (!h || !h.available ? "Sensor checks offline."
+          + (!h || !h.available ? "Sensor checks offline. Not checked."
              : flags.length ? "Check failed: " + flags.join("; ") + "."
+             : noHealth ? "Sensors not checked yet."
              : "All sensor checks pass.")
           + (notes.length ? " Note: " + notes.join("; ") + "." : ""),
         consider: flags.length ? "Don't trust the flagged reading. Check another instrument first."
           : st === "ok" ? "Instruments agree. Safe to use."
           : "Check a second instrument before trusting one reading.",
-        clears: flags.length ? "the check passes again" : st === "ok" ? "—" : "all sources fresh",
+        clears: flags.length ? "the check passes again" : st === "ok" ? "—"
+          : noHealth && linkSt === "ok" ? "the sensor checks run" : "all sources fresh",
         based: [count + " sources",
-                h && h.available ? "checks: " + h.reason : "checks: offline"]
+                !h || !h.available ? "checks: offline" : noHealth ? "checks: not run" : "checks: " + h.reason]
           .concat(provLine("data") ? [provLine("data")] : []), conf: "engine" };
     },
     /* HOUSE BANK — the tile that did not exist on 2026-07-18. `/power` decides on a smoothed
@@ -1057,11 +1068,13 @@
       if (synOff) status = "act";
       else if (armed && status === "ok") status = "watch";
       const bits = [(act === "switch" ? "branch fired" : act === "off_script" ? "off the playbook" : "on plan")];
+      if (s.settling) bits.unshift("may " + (SEL_WORD[s.settling.to_action] || "change"));
       if (armed) bits.push(armed + " play" + (armed === 1 ? "" : "s") + " ARMED");
       if (synOff) bits.push("off plan");
       if (conf) bits.push(conf);
       return { status: status, value: s.value || "—", sub: bits.join(" · "), rows: s.rows || [],
-        why: s.why || "", consider: s.consider || "—", clears: s.clears || "—",
+        why: (s.why || "") + (s.settling ? (s.why ? " " : "") + settleTxt(s) : ""),
+        consider: s.consider || "—", clears: s.clears || "—",
         based: s.based || [], conf: "engine" };
     },
   };
@@ -1124,6 +1137,7 @@
       }
       App.data.focus = "Reconnecting…"; App.data.link = "reconnecting"; render();
     }
+    App.polling = false;   // a poll frozen mid-await by the sleep must not swallow this one
     poll();
     fetchReroute();
   }
@@ -1191,8 +1205,9 @@
      available in-race. A failure leaves the last good read (or a clear na on the first failure). */
   async function fetchDeviation() {
     if (App.src !== "live") return;
+    const askedAt = Date.now();
     const r = await fetchJSON("/deviation", 8000);
-    if (r) App.deviation = r;
+    if (r) { App.deviation = r; App.at.deviation = answeredAt(askedAt, 8000); }
     else if (!App.deviation) App.deviation = { available: false, status: "na", value: "—",
       why: "Can't reach the boat. No track check." };
     if (App.src === "live") render();
@@ -1266,8 +1281,9 @@
      Engine-computed, deterministic; polled slowly (it moves slowly + Open-Meteo is cached). */
   async function fetchDrift() {
     if (App.src !== "live") return;
+    const askedAt = Date.now();
     const r = await fetchJSON("/drift", 9000);
-    if (r) App.forecastDrift = r;
+    if (r) { App.forecastDrift = r; App.at.drift = answeredAt(askedAt, 9000); }
     if (App.src === "live") render();
   }
   function currentDrift() {
@@ -1277,8 +1293,9 @@
   /* PLAN GAP — own observed wind vs the frozen promise (the read drift can't make); engine /plangap */
   async function fetchPlangap() {
     if (App.src !== "live") return;
+    const askedAt = Date.now();
     const r = await fetchJSON("/plangap", 9000);
-    if (r) App.plangap = r;
+    if (r) { App.plangap = r; App.at.plangap = answeredAt(askedAt, 9000); }
     if (App.src === "live") render();
   }
   function currentPlangap() {
@@ -1288,8 +1305,9 @@
   /* TREND — 1h/3h build/walk rates of own observed wind; engine /trend (sail-detail read) */
   async function fetchTrend() {
     if (App.src !== "live") return;
+    const askedAt = Date.now();
     const r = await fetchJSON("/trend", 9000);
-    if (r) App.trend = r;
+    if (r) { App.trend = r; App.at.trend = answeredAt(askedAt, 9000); }
   }
   /* ---- HOUSE BANK + INSTRUMENT HEALTH (engine /power, /health/sensors) ----
      Both endpoints existed before this surface did, and that was the whole problem: on Jul 18
@@ -1298,12 +1316,16 @@
      engine shows a held value with its age rather than a blank tile. */
   async function fetchPower() {
     if (App.src !== "live") return;
-    App.power = hold("power", await fetchJSON("/power", 8000), Date.now());
+    const askedAt = Date.now();
+    const r = await fetchJSON("/power", 8000);
+    App.power = hold("power", r, Date.now(), answeredAt(askedAt, 8000));
     if (App.src === "live") render();
   }
   async function fetchHealth() {
     if (App.src !== "live") return;
-    App.health = hold("health", await fetchJSON("/health/sensors", 8000), Date.now());
+    const askedAt = Date.now();
+    const r = await fetchJSON("/health/sensors", 8000);
+    App.health = hold("health", r, Date.now(), answeredAt(askedAt, 8000));
     if (App.src === "live") render();
   }
   function currentPower() {
@@ -1371,8 +1393,9 @@
      out of service (the gear-loss plays' arming signal — no instrument for a blown sail). */
   async function fetchPlays() {
     if (App.src !== "live") return;
+    const askedAt = Date.now();
     const r = await fetchJSON("/plays", 9000);
-    if (r) App.plays = r;
+    if (r) { App.plays = r; App.at.plays = answeredAt(askedAt, 9000); }
     if (App.src === "live") render();
   }
   function currentPlays() {
@@ -1383,28 +1406,51 @@
      (C0/J2/J3/SS aren't in the ORC cert; the boat flies COMBINATIONS, so chips multi-select) */
   const SAILS_INV = ["J1", "J2", "J3", "C0", "SS", "A3", "S1"];
   async function fetchSailState() {
-    if (App.src !== "live") return;
+    if (App.src !== "live" || App.sailQ) return;   // a tap is in flight: its answer is the state
+    const seq = App.sailSeq;
     const r = await fetchJSON("/sails/state", 8000);
-    if (r) { App.sailState = r; renderSailsBar(); }
+    // a sail tap posted while this read was in flight wins: this answer predates it (#56)
+    if (r && seq === App.sailSeq && !App.sailQ) { App.sailState = r; App.sailLost = false; renderSailsBar(); }
   }
-  window.toggleFlying = async function (sail) {
-    const fly = new Set(((App.sailState || {}).flying) || []);
-    if (fly.has(sail)) fly.delete(sail); else fly.add(sail);
-    try {
-      const resp = await fetch(API + "/sails/state", { method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ flying: [...fly] }) });
-      if (resp.ok) { App.sailState = await resp.json(); renderSailsBar(); fetchPlays(); }
-    } catch (e) { /* engine unreachable — the next poll re-syncs */ }
+  /* Sail taps go to the engine ONE AT A TIME (#56). Each POST sends the whole set, so two quick
+     taps that both built it from the same App.sailState lost one sail: the second POST overwrote
+     the first. Queued, each tap builds its body from the state the previous POST returned.
+     Each POST (body included) has a deadline, so a stalled one can't hold the queue; when one
+     fails, the state is read back before the next queued tap builds on it. If that read fails
+     too, the state is unknown (a lost answer may hide a POST that did land), and it stays
+     unknown until a read succeeds: every later tap first reads the state, and is dropped
+     rather than sent built on a guess if it can't. */
+  const SAIL_POST_MS = 8000;
+  function sailPost(build) {
+    App.sailSeq++;
+    const run = async () => {
+      try {
+        if (App.sailLost) {
+          const known = await fetchJSON("/sails/state", 5000);
+          if (!known) return;
+          App.sailState = known; App.sailLost = false; renderSailsBar();
+        }
+        const r = await COL.fetchJsonWithin(API + "/sails/state", { method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(build(App.sailState || {})) }, SAIL_POST_MS);
+        const st = r || await fetchJSON("/sails/state", 5000);   // failed: re-sync before the next tap
+        if (st) { App.sailState = st; renderSailsBar(); } else App.sailLost = true;
+        fetchPlays();
+      } catch (e) { /* engine unreachable — the next poll re-syncs */ }
+    };
+    const q = (App.sailQ || Promise.resolve()).then(run);
+    App.sailQ = q;
+    return q.then(() => { if (App.sailQ === q) App.sailQ = null; });
+  }
+  window.toggleFlying = function (sail) {
+    return sailPost((st) => {
+      const fly = new Set(st.flying || []);
+      if (fly.has(sail)) fly.delete(sail); else fly.add(sail);
+      return { flying: [...fly] };
+    });
   };
-  window.toggleReef = async function () {
-    const cur = ((App.sailState || {}).reef) || "";
-    try {
-      const resp = await fetch(API + "/sails/state", { method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ reef: cur ? "" : "R1" }) });
-      if (resp.ok) { App.sailState = await resp.json(); renderSailsBar(); fetchPlays(); }
-    } catch (e) { /* re-sync on next poll */ }
+  window.toggleReef = function () {
+    return sailPost((st) => ({ reef: st.reef ? "" : "R1" }));
   };
   /* RACE LOG (sessions). Start: tap LOG, then Race or Practice (one extra tap; Race is
      pre-selected when Deploy homework is aboard). A RACE session is what makes the boat refuse
@@ -1515,24 +1561,21 @@
       ? "flying " + [...fly].join(" + ") + (st.reef ? " · reef 1 in" : "")
       : "Tap what's flying. Changes are logged.";
   }
-  window.toggleGear = async function (sail) {
-    const st = App.sailState || ((currentPlays() || {}).sail_state) || {};
-    const out = new Set(st.out_of_service || []);
-    if (out.has(sail)) out.delete(sail); else out.add(sail);
-    try {
-      const resp = await fetch(API + "/sails/state", { method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ out_of_service: [...out] }) });
-      if (resp.ok) { App.sailState = await resp.json(); renderSailsBar(); }
-      fetchPlays();
-    } catch (e) { /* engine unreachable — the next poll re-syncs */ }
+  window.toggleGear = function (sail) {
+    return sailPost(() => {
+      const st = App.sailState || ((currentPlays() || {}).sail_state) || {};
+      const out = new Set(st.out_of_service || []);
+      if (out.has(sail)) out.delete(sail); else out.add(sail);
+      return { out_of_service: [...out] };
+    });
   };
   /* the branch SELECTOR: the executor's unified call — hold / switch to a pre-authored variant /
      off-script. Engine-computed (unifies wind-shift + deviation + drift over the frozen bundle). */
   async function fetchSelector() {
     if (App.src !== "live") return;
+    const askedAt = Date.now();
     const r = await fetchJSON("/selector", 9000);
-    if (r) App.selector = r;
+    if (r) { App.selector = r; App.at.selector = answeredAt(askedAt, 9000); }
     if (App.src === "live") render();
   }
   function currentSelector() {
@@ -1685,13 +1728,14 @@
      Own ~15 s cadence — it's a synthesis of the slower reads, no need to poll it fast. */
   async function fetchSynthesis() {
     if (App.src !== "live") return;
+    const askedAt = Date.now();
     let r = null;
     // 1) the copilot (LLM phrasing) — absent on the bench; the deadline covers the body too
     r = await COL.fetchJsonWithin(COPILOT + "/strategy", { method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({}) }, 15000);
     if (!r) r = await fetchJSON("/strategy", 12000);  // 2) engine deterministic digest (Tier-1 fallback)
-    if (r) { App.synthesis = r; App.synAt = Date.now(); }
+    if (r) { App.synthesis = r; App.synAt = Date.now(); App.at.synthesis = answeredAt(askedAt, 27000); }
     if (App.src === "live") render();
   }
   function currentSynthesis() {
@@ -1736,19 +1780,35 @@
       (off ? '<span class="st-syn-badge">OFF-BOOK</span>' : "") +
       '<span class="st-spacer"></span>' +
       '<span class="st-syn-mode">' + (s.mode === "llm" ? "AI" : "AUTO") + '</span>' +
-      (conf ? '<span class="st-syn-conf">' + conf + ' conf</span>' : "") + "</div>" +
+      (conf ? '<span class="st-syn-conf">' + conf + ' conf</span>' : "") + oldTag("synthesis") + "</div>" +
       '<p class="st-syn-assess">' + stripTags(s.assessment || rec.action || "") + "</p>" +
       (note ? '<p class="st-syn-conc">' + stripTags(note) + "</p>" : "") + pmHtml + "</div>";
+  }
+  const SEL_PILL = { hold: "HOLD", switch: "SWITCH", off_script: "OFF-BOOK" };
+  const SEL_WORD = { hold: "go back to hold", switch: "switch", off_script: "go off plan" };
+  const secTxt = (s) => { const t = Math.max(0, Math.round(s)), ss = t % 60; return Math.floor(t / 60) + ":" + (ss < 10 ? "0" : "") + ss; };
+  /* The selector holds a changed verdict for its settle window before showing it (#40); while it
+     waits, the card still shows the old call and `settling` says what is coming. One short line:
+     "May switch. Confirming: 0:45 of 2:00." */
+  function settleTxt(s) {
+    const st = s && s.settling;
+    if (!st) return "";
+    const word = SEL_WORD[st.to_action] || "change";
+    return "May " + word + ". Confirming: " + secTxt(st.held_s || 0) + " of " + secTxt(st.need_s || 0) + ".";
   }
   function selectorHtml() {
     const s = currentSelector();
     if (!s || s.available === false || s.action === "na") return "";
-    const pill = { hold: "HOLD", switch: "SWITCH", off_script: "OFF-BOOK" }[s.action] || "—";
+    const pill = SEL_PILL[s.action] || "—";
+    const st = s.settling;
     return '<div class="st-rec sr-' + (s.status || "ok") + '">' +
       '<span class="sr-pill">' + pill + '</span>' +
       '<span class="sr-val">' + stripTags(s.value || s.target_label || "") + '</span>' +
       (s.confidence_label ? '<span class="sr-conf">' + s.confidence_label + ' conf</span>' : "") +
-      (s.why ? '<span class="sr-why">' + stripTags(s.why) + '</span>' : "") + "</div>";
+      oldTag("selector") +
+      (s.why ? '<span class="sr-why">' + stripTags(s.why) + '</span>' : "") +
+      (st ? '<span class="sr-settle sr-' + (["watch", "act"].indexOf(st.to_status) >= 0 ? st.to_status : "ok") + '">' + settleTxt(s) +
+        (st.to_value ? " " + stripTags(st.to_value) : "") + "</span>" : "") + "</div>";
   }
   function deviationHtml() {
     const d = currentDeviation();
@@ -1773,7 +1833,7 @@
     const prog = pct != null
       ? '<div class="st-progress"><div class="st-fill" style="width:' + pct + '%"></div><div class="st-boat" style="left:' + pct + '%"></div></div>' : "";
     return '<div class="st-dev" style="--c:var(--' + (status === "na" ? "na" : status) + ')">' +
-      '<div class="st-dev-head">TRACK · ' + stripTags(d.variant_label || d.variant || "—") + "</div>" +
+      '<div class="st-dev-head">TRACK · ' + stripTags(d.variant_label || d.variant || "—") + oldTag("deviation") + "</div>" +
       prog + (m.length ? '<div class="st-metrics">' + m.join("") + "</div>" : "") +
       (d.why || d.sub ? '<p class="st-why">' + stripTags(d.why || d.sub) + "</p>" : "") +
       (d.what_flips_it ? '<p class="st-flip">Switch if: <b>' + stripTags(d.what_flips_it) + "</b></p>" : "") + "</div>";
@@ -1795,7 +1855,7 @@
       body = 'Forecast <b>' + (side ? "shifted " + deg + "° " + side : "moved " + deg + "°") + '</b>' + tws +
         ' <span class="sd-tag">' + tag + '</span>';
     }
-    return '<p class="st-drift sd-' + status + '"><span class="sd-dot"></span><span>' + body + '</span></p>';
+    return '<p class="st-drift sd-' + status + '"><span class="sd-dot"></span><span>' + body + oldTag("drift") + '</span></p>';
   }
   /* PLAN GAP — promised vs actual breeze, one stack line, only when straying (in its band) */
   function plangapHtml() {
@@ -1805,7 +1865,7 @@
     const body = 'Plan <b>' + pg.plan_twd + "°/" + pg.plan_tws_kn + ' kts</b> · now <b>' +
       pg.obs_twd + "°/" + pg.obs_tws_kn + ' kts</b> <span class="sd-tag">' + tag + '</span>';
     return '<p class="st-drift sd-' + pg.status + '" title="Our wind vs the plan forecast here">' +
-      '<span class="sd-dot"></span><span>' + body + '</span></p>';
+      '<span class="sd-dot"></span><span>' + body + oldTag("plangap") + '</span></p>';
   }
   function playsHtml() {
     const pl = currentPlays();
@@ -1947,25 +2007,57 @@
    * surfaced, because silently showing minutes-old wind is its own way to lose a race. Past
    * HOLD_MS the endpoint really is absent and NA is the honest answer.
    */
-  function hold(key, val, now) {
+  /* When an answer can be trusted to be from (#184-4). Normally that is now: the request's own
+     timeout bounds how long it can have taken. Longer than that means Safari froze the page with
+     the request in flight (an iPad that slept), and the answer may be from before the sleep: the
+     only safe stamp is when it was asked for. Unstamped, an hour's sleep woke to pre-sleep
+     numbers shown as current. */
+  const frozenSince = (askedAt, timeoutMs) => Date.now() - askedAt > timeoutMs + 1000;
+  function answeredAt(askedAt, timeoutMs) {
+    return frozenSince(askedAt, timeoutMs) ? askedAt : Date.now();
+  }
+  function hold(key, val, now, at) {
     const f = App.fresh[key];
-    if (val != null) { App.fresh[key] = { v: val, t: now }; App.ages[key] = 0; return val; }
+    if (val != null) {
+      const t = at != null ? Math.min(at, now) : now;
+      App.fresh[key] = { v: val, t: t }; App.ages[key] = now - t; return val;
+    }
     if (f && (now - f.t <= HOLD_MS || now < App.graceUntil)) { App.ages[key] = now - f.t; return f.v; }
     App.ages[key] = Infinity;
     return null;
   }
-  /* which poll endpoints each tile is built from — a tile is only as fresh as its slowest one */
+  /* which poll endpoints each tile is built from — a tile is only as fresh as its slowest one.
+     PLAYBOOK is built from the selector, the synthesis and the plays, not /tactics (#45.5c). */
   const TILE_SRC = {
-    wind: ["conditions"], playbook: ["tactics"], forecast: ["forecast"],
+    wind: ["conditions"], playbook: ["selector", "synthesis", "plays"], forecast: ["forecast"],
     sail: ["sail", "conditions"], eta: ["navigator"], ais: ["fleet"],
     charge: ["fatigue", "watch"], data: ["sources", "health"], bank: ["power"],
   };
+  /* The slower pollers keep their last good read after a failed poll (they always have; when that
+     read should be withdrawn is #247, not decided here). What they must not do is pass it off as
+     current (#45.5b, #45.7): each one's age counts from when it was asked for, and it is "old"
+     past two missed polls of its own cadence, the bar the 3 s main poll uses (STALE_AFTER_MS). */
+  const SRC_EVERY = { selector: DEV_EVERY, deviation: DEV_EVERY, synthesis: SYN_EVERY, plays: SYN_EVERY,
+    drift: DRIFT_EVERY, plangap: DRIFT_EVERY, trend: 60000 };
+  const staleBar = (src) => (SRC_EVERY[src] ? 2 * SRC_EVERY[src] + 1000 : STALE_AFTER_MS);
+  function srcAge(src, now) {
+    if (!SRC_EVERY[src]) return App.ages[src];
+    return App.at[src] ? (now || Date.now()) - App.at[src] : 0;   // never answered: nothing shown yet
+  }
+  /* " · 3m old" tag for a slow read's line in a detail; "" while it is current */
+  function oldTag(src) {
+    if (App.src !== "live") return "";
+    const a = srcAge(src);
+    return a >= staleBar(src) ? ' <span class="st-old">⏱ ' + fmtAge(a) + " old</span>" : "";
+  }
+  /* the oldest of a tile's inputs that is past its own bar (0 if none is); Infinity = one is gone */
   function tileAge(key) {
     let worst = 0;
+    const now = Date.now();
     for (const src of TILE_SRC[key] || []) {
-      const a = App.ages[src];
+      const a = srcAge(src, now);
       if (a === Infinity) return Infinity;
-      if (a > worst) worst = a;
+      if (a >= staleBar(src) && a > worst) worst = a;
     }
     return worst;
   }
@@ -1994,7 +2086,7 @@
     plangap: null, trend: null, briefBusy: {}, gps: null, gpsBusy: false, gpsNote: "",
     checklist: null, chkTimer: null,
     plume: null, plumeAt: 0, plumeWait: "", plumeTimer: null, plumeView: { field: "tws", only: null },
-    detailStreamKey: null, detailAbort: null,
+    detailStreamKey: null, detailAbort: null, pollGen: 0, at: {}, sailQ: null, sailSeq: 0, sailLost: false,
     lastOkAt: 0, lastPollOk: false, graceUntil: 0, startedAt: Date.now(),
   };
   function currentData() {
@@ -2287,6 +2379,14 @@
      that would have answered "which wind are we looking at?" — the GND10 masthead and the Orca's
      computed apparent wind disagreed by up to 5.9 kn on Jul 18 and the dashboard showed whichever
      had written last, unlabelled. */
+  /* one provenance value as the crew reads it (#95 G14, G52): rounded for its unit, kts not kn */
+  const PROV_LABEL = { lat: "lat", lon: "lon" };   // the face's "position" line merges them; the table can't
+  function provValue(k, v, unit) {
+    if (v == null || typeof v !== "number" || !isFinite(v)) return v == null ? "—" : esc2(v);
+    const u = unit === "kn" ? "kts" : (unit || "");
+    const dp = k === "lat" || k === "lon" ? 4 : u === "V" ? 2 : u === "°" ? 0 : 1;
+    return v.toFixed(dp) + (u ? (u.charAt(0) === "°" ? "" : " ") + esc2(u) : "");
+  }
   function provenanceTableHtml() {
     const p = (currentHealth() || {}).provenance || {};
     const chans = p.channels || {};
@@ -2297,15 +2397,15 @@
                    "water_temp", "rudder_angle", "bank_voltage"];
     keys.sort((a, b) => (order.indexOf(a) + 1 || 99) - (order.indexOf(b) + 1 || 99));
     let out = '<div class="rc-title" style="margin-top:10px">Where each number comes from</div>' +
-      '<div class="t-rows"><div class="t-row hdr"><span class="rl"></span>' +
+      '<div class="t-rows prov-tab"><div class="t-row hdr"><span class="rl"></span>' +
       '<span class="rc">value</span><span class="rc">device</span><span class="rc">age</span></div>';
     for (const k of keys) {
       const e = chans[k];
       const marks = (e.fell_back ? " ⚑" : "") + (e.measured === false ? " ƒ" : "") +
         (e.disagreement ? " ≠" : "");
       out += '<div class="t-row' + (e.fell_back ? " emph" : "") + '">' +
-        '<span class="rl">' + (CH_LABEL[k] || k) + '</span>' +
-        '<span class="rc">' + (e.value == null ? "—" : e.value) + " " + esc2(e.unit || "") + '</span>' +
+        '<span class="rl">' + (PROV_LABEL[k] || CH_LABEL[k] || k) + '</span>' +
+        '<span class="rc">' + provValue(k, e.value, e.unit) + '</span>' +
         '<span class="rc">' + esc2(e.device || e.source || "?") +
         (e.rank ? " #" + e.rank : "") + marks + '</span>' +
         '<span class="rc">' + (e.age_s == null ? "—" : Math.max(0, Math.round(e.age_s)) + "s") +
@@ -2536,13 +2636,13 @@
     if (key === "sail" && App.trend && App.trend.available && App.trend.read) {
       // the observed wind trend (the full threshold clock lives in the handover brief)
       g.insertAdjacentHTML("beforeend", '<div class="dc-foot">Trend: ' +
-        escapeHtml(App.trend.read) + '</div>');
+        escapeHtml(App.trend.read) + oldTag("trend") + '</div>');
     }
     if (key === "forecast") {
       const pg = currentPlangap();
       if (pg && pg.available) {   // did the promised breeze show up on deck?
         g.insertAdjacentHTML("beforeend", '<div class="dc-foot" title="Our wind vs the plan forecast here">' + escapeHtml(pg.value || "") +
-          (pg.sub ? " · " + escapeHtml(pg.sub) : "") + '</div>');
+          (pg.sub ? " · " + escapeHtml(pg.sub) : "") + oldTag("plangap") + '</div>');
       }
     }
     if (key === "eta") {
@@ -2619,22 +2719,37 @@
   async function poll() {
     if (App.polling) return;
     App.polling = true;
+    // A wake (onWake) starts a new generation: a poll still awaiting from before the sleep can
+    // no longer block the wake poll, and its answers are dropped when they land (#184-4).
+    const gen = ++App.pollGen;
+    const askedAt = Date.now();
     try {
       const eps = ["/conditions", "/sail", "/navigator", "/tactics", "/fatigue", "/forecast?hours=6", "/sources", "/fleet", "/watch"];
       const keys = ["conditions", "sail", "navigator", "tactics", "fatigue", "forecast", "sources", "fleet", "watch"];
       const ms   = [5000, 5000, 5000, 5000, 5000, 9000, 5000, 6000, 5000];
-      const res = await Promise.all(eps.map((e, i) => fetchJSON(e, ms[i])));
+      // Each answer is judged as it lands, so one slow endpoint can't make the others look old.
+      // Normally waiting for the slowest is bounded by its timeout, and the batch counts as current
+      // when it completes, as it always has. Past that bound the page froze, either with the
+      // request in flight (dated to when it was asked) or after the answer landed (dated to then).
+      const landed = [], frozenIn = [];
+      const res = await Promise.all(eps.map((e, i) => fetchJSON(e, ms[i]).then((r) => {
+        landed[i] = Date.now(); frozenIn[i] = frozenSince(askedAt, ms[i]); return r; })));
+      if (gen !== App.pollGen) return;   // superseded by a wake poll
       const now = Date.now();
+      const waitMax = Math.max.apply(null, ms) + 1000;
+      const at = keys.map((k, i) => (frozenIn[i] ? askedAt : now - landed[i] > waitMax ? landed[i] : now));
       App.lastPollOk = res.some((r) => r != null);
-      if (App.lastPollOk) App.lastOkAt = now;
-      const p = {}; keys.forEach((k, i) => (p[k] = hold(k, res[i], now)));
+      if (App.lastPollOk) App.lastOkAt = Math.max.apply(null, at.filter((t, i) => res[i] != null));
+      const p = {}; keys.forEach((k, i) => (p[k] = hold(k, res[i], now, at[i])));
       App.watch = p.watch;               // the CREW detail panel + quick actions read it
       App.nav = p.navigator;             // the eta-detail course map reads position live
-      pushWind(p.conditions);
+      // the wind history takes only a reading THIS poll got, at the time it is from: a held value
+      // is the old reading again, not a new one (#184-4)
+      if (res[0] != null) pushWind(res[0], at[0] / 1000);
       pushForecast(p.forecast);
       App.data = buildLive(p);
       if (App.src === "live") render();
-    } finally { App.polling = false; }
+    } finally { if (gen === App.pollGen) App.polling = false; }
   }
   function startPolling() { poll(); if (!App.pollTimer) App.pollTimer = setInterval(poll, 3000); }
   document.addEventListener("visibilitychange", () => { if (!document.hidden) onWake(); });
@@ -2791,6 +2906,14 @@
     document.getElementById("detAsk").addEventListener("keydown", (e) => { if (e.key === "Enter") ask(); });
     setInterval(() => { if (App.theme === "auto") applyTheme(); }, 25000);
   }
+  // Test seam: pi/console/test_dashboard.js defines this hook before loading the file, to reach
+  // the parts it pins. Nothing on the iPad defines it.
+  if (typeof window.__C4DashTest === "function")
+    window.__C4DashTest({ App: App, BUILD: BUILD, observedAt: observedAt, hold: hold, tileAge: tileAge,
+      oldTag: oldTag, poll: poll, onWake: onWake, courseMapHtml: courseMapHtml, selectorHtml: selectorHtml,
+      provenanceTableHtml: provenanceTableHtml, twsTrendTile: twsTrendTile, fetchSailState: fetchSailState,
+      fetchCourse: fetchCourse, fetchSelector: fetchSelector, fetchDeviation: fetchDeviation,
+      deviationHtml: deviationHtml, currentData: currentData });
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
   else init();
 })();
