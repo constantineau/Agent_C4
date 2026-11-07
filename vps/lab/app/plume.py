@@ -328,22 +328,37 @@ def resolve_target(now=None):
     from . import deploy, pbstore, store
     now = time.time() if now is None else now
     tgt = _labstate_get(_KEY_TARGET)
+    pushed_sig = None
     if not tgt:
         lp = (deploy.last_push() or {}).get("last_ok") or {}
         if lp.get("race_id"):
             tgt = {"race_id": lp["race_id"], "playbook_id": lp.get("playbook_id")}
+            pushed_sig = lp.get("signature") or None
     if not tgt or not tgt.get("race_id"):
         return None
     race_id = tgt["race_id"]
     d = store.get_race(race_id) or {}
     bundle = pbstore.get(tgt["playbook_id"]) if tgt.get("playbook_id") else None
+    sig = (bundle or {}).get("signature")
+    sig = str((sig.get("value") if isinstance(sig, dict) else "") or "")
+    if bundle and pushed_sig and not sig.startswith(pushed_sig):
+        # re-frozen since the push (#182-6): the file under that id is no longer what the boat
+        # holds, so its route isn't the boat's plan — hold at the race start instead (its course
+        # is still the best guess at the boat's: a re-freeze is usually the same course)
+        tgt = dict(tgt, course_id=tgt.get("course_id") or bundle.get("course_id"))
+        bundle = None
     course_id = (bundle or {}).get("course_id") or tgt.get("course_id")
     path, variant = (clean_path(tgt["path"]), tgt.get("variant")) if tgt.get("path") \
         else _recommended_path(bundle)
     spec = {"race_id": race_id, "course_id": course_id, "definition": d}
     if path and path[-1]["t"] >= now - BACK_H * 3600:
-        tag = tgt.get("playbook_id") or ("path-" + hashlib.md5(
-            json.dumps([path[0], path[-1], len(path)]).encode()).hexdigest()[:8])
+        # the bundle's signature in the key: a re-freeze under the same id starts its own history
+        # instead of mixing runs sampled along two different routes (#182-6)
+        if tgt.get("playbook_id"):
+            tag = tgt["playbook_id"] + ("-" + sig[:8] if bundle and sig else "")
+        else:
+            tag = "path-" + hashlib.md5(
+                json.dumps([path[0], path[-1], len(path)]).encode()).hexdigest()[:8]
         spec.update(key=f"{race_id}__{tag}", basis="route", path=path,
                     label=f"along the {variant or 'planned'} route")
         return spec

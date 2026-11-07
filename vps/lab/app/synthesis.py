@@ -480,7 +480,7 @@ def _thin_route(route, obstacles=None, max_pts=200, leg_obstacles=None):
 def _play_obstacles(definition, course_id, chart=None):
     """The same (cached) per-leg obstacle fields the playbook routes were built through (same
     chart and depth, #149) — for the downsample's shortcut check → (base, [field per course leg]).
-    (None, []) on any failure: the downsample then keeps marks but can't check land."""
+    (None, []) on any failure: the play route is then kept whole, never thinned unchecked."""
     try:
         from . import optimizer
         from .geo import build_leg_fields
@@ -696,7 +696,10 @@ def _build_plays(playbook, definition, course_id, venue_stats=None, jib_crossove
             base, leg_fields = _obs[0] if _obs else (None, [])
             # a pace play routes the rest of the course from its mark: its leg 0 is that course leg
             first = int((p.get("params") or {}).get("mark") or 0) if p.get("kind") == "pace" else 0
-            route = _thin_route(route, base, leg_obstacles=leg_fields[first:])
+            # no obstacle field (the build failed) → nothing can check a shortcut for land, so the
+            # route ships whole rather than thinned blind (#182-2); the boat thins it on its own
+            if base is not None:
+                route = _thin_route(route, base, leg_obstacles=leg_fields[first:])
         guidance = p.get("guidance")
         # Leg convention (matcher-enforced): leg N is the leg ARRIVING at course marks[N] — the
         # navigator's next-mark index onboard. Pace plays are HARD-gated (the response is a
@@ -746,6 +749,9 @@ def synthesize(definition, course_id, start_epoch, models, ensemble_members=0, t
     `chart` = {"source", "safety_depth"} snapshot when the job starts (#149): every route uses it,
     and the bundle records it."""
     routed_on = race_def.course_hash(definition, course_id)    # before routing touches anything
+    # the boat the job STARTED on (#182-8): switching the Lab's active boat mid-run must not relabel
+    # the bundle or change the boat profile Deploy sends with it
+    boat_model = _boat_model()
     from .geo import obstacles as _obs_mod
     chart = dict(chart or {})          # unset → the defaults the obstacle builder would use
     chart = {"source": (chart.get("source") or _obs_mod.COASTLINE_SOURCE).strip().lower(),
@@ -817,7 +823,7 @@ def synthesize(definition, course_id, start_epoch, models, ensemble_members=0, t
         # the routes' own warnings (forecast ended, shoreline, …): the Lab shows them before Deploy
         "degraded": bool(playbook.get("degraded")),
         "warnings": list(playbook.get("warnings") or []),
-        "boat_model": _boat_model(),      # polars/sail crossovers + draft frozen into the homework
+        "boat_model": boat_model,      # polars/sail crossovers + draft frozen into the homework
         # the chart and no-go depth every route above was built on (#149); Deploy sends this chart
         "chart": {"source": chart["source"], "safety_depth_m": chart["safety_depth"]},
         # the common forecast the plan was built on → the onboard forecast-drift branch trigger
