@@ -165,6 +165,12 @@ check("a serial-less re-announce keeps the serial, so a later move still evicts 
       "n2k-socketcan.20" not in ns.devices_for("sr33")
       and ns.devices_for("sr33")["n2k-socketcan.21"]["model"] == gps["model"])
 
+st9 = {"checked_at": None, "error": None, "moved": [], "static": None}
+engine_app.check_n2k_once(st9, fetch=lambda: flat({"n2k-socketcan.20": gps}))
+engine_app.check_n2k_once(st9, fetch=lambda: {"n2k-socketcan.3": {"updates": [{"source": {"modelId": gps["model"]}}]}})
+check("a serial-less announce on a disproved address can't take the static serial",
+      ns.devices_for("sr33").get("n2k-socketcan.20", {}).get("serial") == gps["serial"])
+
 kept = ns.devices_for("sr33")
 check("a failed read keeps the last good map",
       not engine_app.check_n2k_once(st2, fetch=lambda: (_ for _ in ()).throw(OSError("down")))

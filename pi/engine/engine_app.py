@@ -178,7 +178,7 @@ def apply_n2k_payload(payload, state=None, boat_id=None, now=None):
     same, find = n2k_sources.same_device, n2k_sources.find
     prev = state.get("live") or {}
     for a, f in fresh.items():          # a serial-less re-announce keeps the serial we knew
-        known = prev.get(a) or static.get(a) or {}
+        known = prev.get(a) or ({} if a in (state.get("disproved") or ()) else static.get(a)) or {}
         if not f.get("serial") and known.get("serial") and same(known, f):
             f["serial"] = known["serial"]
     live = {a: d for a, d in prev.items()
