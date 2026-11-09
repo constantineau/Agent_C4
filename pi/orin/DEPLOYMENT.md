@@ -102,6 +102,16 @@ Runs as **`agent-c4`** (not the stock `ollama` user — that user can't see the 
 > box is still at 2048, either apply this unit or set `LLM_NUM_CTX=2048` in
 > `/etc/sr33/copilot.env` (then most LLM passes fall back, honestly). KV cost of 6144 on the 7B
 > q4 is ~350 MB (2048: ~120 MB).
+>
+> **Prompt cache cap (#280).** Ollama runs llama.cpp's `llama-server`, which keeps a host-RAM cache
+> of past prompts. Its default cap is 8192 MiB, more than this 7.5 GB box with no swap. On
+> 2026-11-09, after ~150 strategy calls, llama-server reached 6.6 GB; the box thrashed for ~20 min
+> (SSH, Tailscale, copilot all unresponsive) until the kernel OOM-killed it. Ollama passes
+> `LLAMA_ARG_*` through to llama-server, so `LLAMA_ARG_CACHE_RAM=512` caps it (the journal shows
+> `limits: 512.000 MiB`). Measured with the cap over the full blind eval: llama-server rises to
+> ~5.6 GB as the cache fills, then stays flat; ~1 GB stays available. Don't raise it: model +
+> 6144 KV + compute already take ~5.1 GB. A cgroup `MemoryMax` is not a substitute: most of the
+> model sits in GPU (nvmap) memory the service's cgroup doesn't count.
 ```ini
 [Unit]
 Description=Ollama (from-source GPU build, cuda_v13 sm_87)
@@ -117,6 +127,7 @@ RestartSec=3
 Environment="HOME=/home/agent-c4"
 Environment="OLLAMA_HOST=127.0.0.1:11434"
 Environment="OLLAMA_CONTEXT_LENGTH=6144"
+Environment="LLAMA_ARG_CACHE_RAM=512"
 Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 [Install]
