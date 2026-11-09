@@ -840,10 +840,13 @@ async def playbook_gpx(pid: str, variants: str = "recommended"):
         return JSONResponse({"detail": "unknown playbook id"}, status_code=404)
     from . import routesafety
     why = routesafety.refusal(b)               # #242: no GPX of a route not proven safe
+    d = store.get_race(b.get("race_id") or "")
+    if not why and b.get("course_hash") and \
+            b["course_hash"] != race_def.course_hash(d or {}, b.get("course_id")):
+        why = deploy.PB_COURSE                 # the course (or a chart override) changed since
     if why:
         return JSONResponse({"detail": why}, status_code=409)
     marks = []
-    d = store.get_race(b.get("race_id") or "")
     if d:
         try:
             rows, _sk, _cid = race_def.course_to_marks(d, b.get("course_id"))

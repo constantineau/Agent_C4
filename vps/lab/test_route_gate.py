@@ -110,6 +110,20 @@ check("GPX of a failed route: refused", r.status_code == 409, r.text[:120])
 r = client.get(f"/api/playbooks/{good_id}/gpx")
 check("GPX of a route that passed: sent", r.status_code == 200 and "<gpx" in r.text)
 
+import copy  # noqa: E402
+
+from shared import race_def  # noqa: E402
+
+built("j-hash", dict(bundle(GOOD, start=400), course_hash=race_def.course_hash(RACE, "c")))
+hid = client.post("/api/playbook/freeze", json={"job_id": "j-hash"}).json().get("id")
+r = client.get(f"/api/playbooks/{hid}/gpx")
+check("GPX of a playbook routed on today's course: sent", r.status_code == 200, r.text[:120])
+_saved = copy.deepcopy(RACE)
+RACE["courses"][0]["chart_overrides"] = {"Finish": {"by": "C", "at": 1, "why": "x"}}
+r = client.get(f"/api/playbooks/{hid}/gpx")
+check("GPX after the course (an override) changed: refused", r.status_code == 409, r.text[:120])
+RACE.clear(); RACE.update(_saved)
+
 print("chart override:")
 r = client.post("/api/races/r1/chart-override",
                 json={"course_id": "c", "mark": "Finish", "by": "Cole", "why": "harbour charted as land"})
