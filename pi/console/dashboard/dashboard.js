@@ -2588,7 +2588,8 @@
     }
     const st = b.stale ? "na" : b.status === "danger" ? "act" : b.status === "warn" ? "watch" : "ok";
     const rows = [
-      ["now", b.volts != null ? b.volts.toFixed(2) + " V" : "—", "5-min smoothed"],
+      b.stale ? ["last reading", (b.volts_last != null ? Number(b.volts_last).toFixed(2) + " V " : "— ") + deadAge(b.age_s || 0), "no fresh reading"]
+        : ["now", b.volts != null ? b.volts.toFixed(2) + " V" : "—", "5-min smoothed"],
       ["status uses", b.volts_decided != null ? b.volts_decided.toFixed(2) + " V" : "—",
        r0(b.sustain_min) + "-min smoothed"],
       ["last sample", b.volts_last != null ? b.volts_last + " V" : "—", "raw"],
