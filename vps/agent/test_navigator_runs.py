@@ -160,6 +160,21 @@ r = client.post("/course/load", json={"definition": DEF, "course_id": "c"}).json
 check("a course load whose run can't be reset is not reported loaded", r.get("loaded") is False)
 _ds.save_nav_progress = _real_save
 check("the stored mark is unchanged", idx(fix(44.004)) == 3)
+_real_get = _ds.get_nav_progress
+
+
+def _read_boom(route):
+    raise OSError("db locked")
+
+
+_ds.get_nav_progress = _read_boom
+r = client.post("/navigator/start").json()
+check(f"a Start while the run can't be read is refused ({r.get('note')})", r.get("ok") is False)
+nav = fix(44.0041)
+check("a poll while the run can't be read still answers", nav.get("available") is True)
+_ds.get_nav_progress = _real_get
+check("... and the run, with its Undo history, is intact", idx(fix(44.0042)) == 3
+      and (fix(44.0043).get("progress") or {}).get("can_undo") is True)
 # race 1 done: sail to the finish
 client.post("/navigator/mark", json={"index": 4})
 check("at the finish", idx(fix(43.999)) == 4)

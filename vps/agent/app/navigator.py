@@ -200,10 +200,7 @@ def _load_progress(ds, route, marks):
     """This run's progress for `route`: {fp, i, run, hist, hold}. A record for other course
     geometry (a new course under the same name) is void: a fresh run at the first mark."""
     fp = _course_fp(marks)
-    try:
-        rec = ds.get_nav_progress(route) or {}
-    except Exception:
-        rec = {}
+    rec = ds.get_nav_progress(route) or {}      # a read failure raises: never taken as "no run"
     if rec.get("fp") != fp:
         return {"fp": fp, "i": 0, "run": None, "hist": [], "hold": None}
     n = len(marks)
@@ -244,7 +241,13 @@ def _advance(route, marks, lat, lon, fix):
     if ds is None:
         return _next_index(marks, lat, lon, 0), None
     with _PROGRESS_LOCK:
-        rec = _load_progress(ds, route, marks)
+        try:
+            rec = _load_progress(ds, route, marks)
+        except Exception as exc:  # noqa: BLE001
+            # can't read the run right now: answer from geometry, write nothing
+            print(f"[navigator] progress unreadable for {route!r}: {type(exc).__name__}: {exc}",
+                  flush=True)
+            return _next_index(marks, lat, lon, 0), None
         floor = rec["i"]
         if rec["hold"] is not None:
             if rec["hold"] == floor and _passed(marks, floor, lat, lon):
@@ -273,16 +276,25 @@ def _advance(route, marks, lat, lon, fix):
 def _set_progress(route, change):
     """Run `change(rec, marks) -> (ok, note)` on `route`'s progress under the lock and save it.
     Returns the result dict the crew's controls show."""
-    route = route or active_route()
-    marks = _marks(route)
-    if not marks:
-        return {"ok": False, "note": "No course loaded."}
+    from . import orinroute
     ds = _store()
     if ds is None:
         return {"ok": False, "no_store": True, "note": "Marks can't be changed here."}
     saved_failed = False
-    with _PROGRESS_LOCK:
-        rec = _load_progress(ds, route, marks)
+    # COURSE_LOCK first (the order everywhere): a course load can't swap the marks between this
+    # read and the write, so a pick never lands on another course's run
+    with orinroute.COURSE_LOCK, _PROGRESS_LOCK:
+        route = route or active_route()
+        marks = _marks(route)
+        if not marks:
+            return {"ok": False, "note": "No course loaded."}
+        try:
+            rec = _load_progress(ds, route, marks)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[navigator] progress unreadable for {route!r}: {type(exc).__name__}: {exc}",
+                  flush=True)
+            return {"ok": False, "save_failed": True, "route": route,
+                    "note": "Couldn't read the marks. Try again."}
         ok, note = change(rec, marks)
         if ok:
             _pending.pop(route, None)
