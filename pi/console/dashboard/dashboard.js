@@ -765,8 +765,12 @@
       }
       const pts = [["Now", 0], ["−60 min", 3600], ["−120 min", 7200]];
       const samples = pts.map(([lbl, ago]) => [lbl, observedAt(ago)]);
-      const nowS = samples[0][1] || (p.conditions && p.conditions.available ? { tws: p.conditions.tws, twd: p.conditions.twd } : null);
-      if (!nowS) return NA("collecting wind history…");
+      // only a REAL current reading: past 30 min the engine drops dead wind from `raw` too, and a
+      // null tws/twd is "no wind", not a steady breeze (#247)
+      const live = p.conditions && p.conditions.available && p.conditions.tws != null && p.conditions.twd != null
+        ? { tws: p.conditions.tws, twd: p.conditions.twd } : null;
+      const nowS = samples[0][1] || live;
+      if (!nowS) return NA(p.conditions && p.conditions.available ? "no live wind" : "collecting wind history…");
       if (!samples[0][1]) samples[0][1] = nowS;
       const rows = samples.map(([lbl, s], i) => ({ label: lbl, emph: i === 0, cols: [s ? arrowKts(s.twd, s.tws) : "—"] }));
       let oldest = null;
@@ -2534,9 +2538,20 @@
     const dp = k === "lat" || k === "lon" ? 4 : u === "V" ? 2 : u === "°" ? 0 : 1;
     return v.toFixed(dp) + (u ? (u.charAt(0) === "°" ? "" : " ") + esc2(u) : "");
   }
+  /* display unit per channel, for rows the health read no longer has (#247) */
+  const RAW_UNIT = { tws: "kn", aws: "kn", stw: "kn", sog: "kn", twd: "°", twa: "°", awa: "°",
+    cog: "°", heading_true: "°", heading_mag: "°", heel: "°", pitch: "°", rudder_angle: "°",
+    rate_of_turn: "°/s", depth: "m", water_temp: "°C", bank_voltage: "V" };
   function provenanceTableHtml() {
     const p = (currentHealth() || {}).provenance || {};
-    const chans = p.channels || {};
+    const chans = Object.assign({}, p.channels || {});
+    // The health read looks back 5 min; a reading stays on screen for 30 (#247). Channels it has
+    // dropped come from /conditions `raw`, with their red age, until the engine drops them too.
+    const raw = (App.cond && App.cond.available && App.cond.raw) || {};
+    for (const k of Object.keys(raw)) {
+      if (!chans[k] && raw[k] && raw[k].value != null)
+        chans[k] = { value: raw[k].value, unit: RAW_UNIT[k] || "", age_s: raw[k].age_s, device: "last reading" };
+    }
     const keys = Object.keys(chans);
     if (!keys.length) return "";
     const order = ["tws", "twd", "twa", "aws", "awa", "stw", "sog", "cog", "heading_true",

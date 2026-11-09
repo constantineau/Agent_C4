@@ -511,6 +511,20 @@ test("#247 dead wind: the last number stays with a red age, no trend call", () =
   ok(/12 kts/.test(t.value), "the last number is gone: " + t.value);
   ok(/no fresh wind/.test(t.sub), "sub: " + t.sub);
 });
+test("#247 wind silent over 30 min (gone from raw): no number, no 'Steady' advice", () => {
+  const T = load();
+  const t = T.D.BUILD.wind({ conditions: { available: true, tws: null, twd: null, raw: { depth: { value: 9, age_s: 1, state: "ok" } } } });
+  ok(t.status === "na" && !/Steady/.test(t.consider || "") && !/kts/.test(t.value || ""), JSON.stringify(t));
+});
+test("#247 the provenance table keeps a reading the 5-min health read dropped, with its red age", () => {
+  const T = load();
+  T.D.App.health = { available: true, provenance: { channels: {
+    sog: { value: 6.1, unit: "kn", age_s: 1, device: "GPS24xd" } } } };
+  T.D.App.cond = { available: true, raw: { sog: { value: 6.1, age_s: 1, state: "ok" },
+    depth: { value: 12.4, age_s: 400, state: "dead" } } };
+  const h = T.D.provenanceTableHtml();
+  ok(/12.4 m/.test(h) && /age-dead">400s/.test(h), h);
+});
 test("#247 a stale bank: grey, last volts with a red age, no verdict", () => {
   const T = load();
   T.D.App.power = { available: true, status: "unknown", stale: true, volts_last: 12.31, age_s: 90,
