@@ -438,7 +438,7 @@ def build_for_course(definition: dict, course_id, bbox, *, coastline_on=True, zo
                 field.depth_error = f"{type(exc).__name__}: {exc}"[:200]
                 print(f"[obstacles] ENC did not load: {field.depth_error}", flush=True)
             _fill_global_backstop(field, cache_dir)          # global land union backstop (incl. Canada)
-            if layers.get("land") or layers.get("shoal"):
+            if layers.get("land") or layers.get("shoal") or layers.get("depth_areas"):
                 field.safety_depth = depth
                 # depths were checked only if ENC depth areas (DEPARE, deep or shallow) came
                 # back: land alone isn't depth. Charted coverage per route segment is not checked

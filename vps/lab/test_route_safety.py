@@ -234,6 +234,10 @@ try:
                                                                        "depth_areas": 12}
         fd = OB.build_for_course(course("port"), "c", BBOX, use_cache=False, source="enc")
         check("ENC depth areas, all deep: depth ok", fd.depth == "ok", fd.depth)
+        enc.layers_in_bbox = lambda bbox, cache_dir=None, depth=None: {"land": [], "shoal": [],
+                                                                       "depth_areas": 5}
+        fw = OB.build_for_course(course("port"), "c", BBOX, use_cache=False, source="enc")
+        check("ENC open deep water, no land in the box: depth ok", fw.depth == "ok", fw.depth)
         enc.layers_in_bbox = lambda bbox, cache_dir=None, depth=None: {"land": [LAND], "shoal": [LAND]}
         fs = OB.build_for_course(course("port"), "c", BBOX, use_cache=False, source="enc")
         check("ENC with depth areas: depth ok", fs.depth == "ok", fs.depth)
