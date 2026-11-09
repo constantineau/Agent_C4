@@ -824,6 +824,11 @@ def synthesize(definition, course_id, start_epoch, models, ensemble_members=0, t
         "degraded": bool(playbook.get("degraded")),
         "warnings": list(playbook.get("warnings") or []),
         "boat_model": boat_model,      # polars/sail crossovers + draft frozen into the homework
+        # the speed-model inputs every route above was built with, so the debrief's best route can
+        # be sailed by the same boat (#244) even after the boat's settings change
+        "routing": {"helm_factor": helm_factor, "polar_adjustments": polar_adjustments or [],
+                    "wave_coeffs": wave_coeffs, "jib_crossovers": jib_crossovers or [],
+                    "sail_config": sail_config, "use_waves": bool(use_waves)},
         # the chart and no-go depth every route above was built on (#149); Deploy sends this chart
         "chart": {"source": chart["source"], "safety_depth_m": chart["safety_depth"]},
         # the common forecast the plan was built on → the onboard forecast-drift branch trigger

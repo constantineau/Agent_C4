@@ -22,3 +22,18 @@ kept long-term and backfilled; everything else prunes locally) rather than filte
 the source. Readers must be explicitly skeptical: cross-check redundant sources, flag
 staleness and disagreement, never trust a lone value. Any code that converts units or
 collapses sources belongs on the read path, never the write path.
+
+## What may be lost, and what proof comes first (Cole, 2026-11-09, #243)
+
+- **The uplink queue has no cap and never evicts.** In an outage every batch waits on disk until
+  the VPS accepts it (or rejects it for good: then it is quarantined, still on disk). Replay is
+  paged so a big backlog never holds up the live data. In a very long outage the archiver's disk
+  guard is the backstop, not a drop-oldest rule.
+- **Nothing is deleted locally until the off-boat copy is proven:** its sha256 matches the local
+  file AND a restore of it checks out (the copy is read back and hashed). `copyoff.py` (receiver
+  re-hashes and re-reads every row) and `tools/backup/delete_archived.sh` (full restore, hashed)
+  both work this way.
+  **Not yet true of the archiver's retention prune:** it is gated on the copy-off ledger only
+  when `ARCHIVE_OFFBOAT_LEDGER` is set (spring deploy step 5 in `pi/archiver/README.md`). Until
+  then, readings outside a race session are still pruned after `ARCHIVE_RETAIN_DAYS` with no
+  off-boat copy.

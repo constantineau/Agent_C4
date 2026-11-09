@@ -5,7 +5,8 @@
 // quick sail taps keep both sails; #184-4 a reading is stamped when asked for, a wake poll is never
 // swallowed, a held wind is not logged again; #184-5 the course map follows a new course and
 // survives a stale mark index; #40 the selector's `settling` is on screen; #95 G14/G52/G53/G55/G56;
-// #185-4 a sensor missing from the N2K bus is on the DATA tile; FLEET claims no lead without a ranking.
+// #185-4 a sensor missing from the N2K bus is on the DATA tile; FLEET claims no lead without a ranking;
+// #246 the navigator card's Start / Undo last mark / next-mark picker.
 //
 // dashboard.js is a browser IIFE. It is loaded here in a vm with a do-nothing DOM and a scripted
 // fetch; it hands its parts to `window.__C4DashTest` (a hook nothing on the iPad defines).
@@ -359,6 +360,45 @@ test("#184-5 a next-mark index past the course's marks doesn't break the map", (
   let html;
   try { html = T.D.courseMapHtml(); } catch (e) { throw new Error("courseMapHtml threw: " + e.message); }
   ok(/svg/.test(html) && /Mark 6/.test(html), "map missing or foot lost the mark name");
+});
+
+/* ---------------- #246 navigator Start / Undo / pick ---------------- */
+const WL = Object.assign(COURSE(["Start", "Windward", "Leeward", "Windward", "Finish"]), { route: "wl" });
+const NAVR = (progress, index) => ({ available: true, route: "wl", progress: progress,
+  next_mark: { index: index, name: "Windward", distance_nm: 0.4, bearing_deg: 10 } });
+test("#246 no controls where the engine can't change marks (cloud: progress null)", () => {
+  const T = load();
+  T.D.App.courseMap = WL;
+  T.D.App.nav = NAVR(null, 1);
+  ok(T.D.navControlsHtml() === "", "controls shown without progress");
+});
+test("#246 Start, Undo and the mark picker on the navigator card; lap 2 is its own mark", () => {
+  const T = load();
+  T.D.App.courseMap = WL;
+  T.D.App.nav = NAVR({ can_undo: false }, 3);
+  const h = T.D.navControlsHtml();
+  ok(/>Start</.test(h), "no Start: " + h);
+  ok(/data-nav="undo" disabled>Undo last mark</.test(h), "Undo not disabled with nothing to undo: " + h);
+  ok(/<option value="3" selected>4\. Windward<\/option>/.test(h), "lap 2's Windward not picked: " + h);
+  T.D.App.nav = NAVR({ can_undo: true }, 1);
+  ok(/data-nav="undo">Undo last mark</.test(T.D.navControlsHtml()), "Undo disabled with something to undo");
+});
+test("#246 Start takes two taps; Undo and a pick post to the engine", async () => {
+  const T = load();
+  T.D.App.courseMap = WL;
+  T.D.App.nav = NAVR({ can_undo: true }, 1);
+  T.ctx.fetchImpl = (url) => json(url.indexOf("/navigator/") >= 0 ? { ok: true, index: 0, next_mark: "Start" } : NAVR({ can_undo: true }, 0));
+  await T.D.navAction("start");
+  ok(!T.ctx.fetchLog.some((f) => /navigator\/start/.test(f.url)), "one tap started a new run");
+  ok(/Tap again to start/.test(T.D.navControlsHtml()), "first tap doesn't ask for the second");
+  await T.D.navAction("start");
+  ok(T.ctx.fetchLog.some((f) => /\/navigator\/start$/.test(f.url) && f.opts.method === "POST"), "second tap didn't post Start");
+  ok(/Next mark: Start/.test(T.D.navControlsHtml()), "no confirmation line");
+  await T.D.navAction("undo");
+  ok(T.ctx.fetchLog.some((f) => /\/navigator\/undo$/.test(f.url) && f.opts.method === "POST"), "Undo didn't post");
+  await T.D.navAction("mark", 3);
+  const m = T.ctx.fetchLog.find((f) => /\/navigator\/mark$/.test(f.url));
+  ok(m && JSON.parse(m.opts.body).index === 3, "pick didn't post index 3");
 });
 
 /* ---------------- #40 settling ---------------- */

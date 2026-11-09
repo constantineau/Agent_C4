@@ -53,21 +53,26 @@ check("interpolates between angles", 6.8 < NAV._polar_speed(BY, 12.0, 71.0) < 7.
 check("interpolates between wind speeds", 5.2 < NAV._polar_speed(BY, 16.0, 90.0) < 8.8)
 check("no-go zone below the smallest angle is ZERO, not close-hauled speed",
       NAV._polar_speed(BY, 12.0, 20.0) == 0.0)
-check("below the lightest curve clamps, does not extrapolate to nothing",
-      NAV._polar_speed(BY, 2.0, 90.0) == 5.2)
+# #64: below the lightest curve the speed scales toward 0 in no wind, as the routers read it
+# (shared/polar.py). It used to clamp: 2 kn of breeze read the 6 kn curve's full 5.2 kn.
+check("below the lightest curve scales by tws/tws_min (#64)",
+      abs(NAV._polar_speed(BY, 2.0, 90.0) - 5.2 * 2.0 / 6.0) < 1e-9)
+check("no wind, no speed (#64)", NAV._polar_speed(BY, 0.0, 90.0) == 0.0)
+check("at the lightest curve, its own speed", abs(NAV._polar_speed(BY, 6.0, 90.0) - 5.2) < 1e-9)
 check("above the strongest curve clamps", NAV._polar_speed(BY, 40.0, 90.0) == 8.8)
 
 # continuity in the wind axis: no step bigger than a small epsilon across the grid boundaries
 print("continuity (the property the old estimator lacked):")
 worst, at = 0.0, None
 prev = None
-for i in range(40, 241):                       # 4.0 -> 24.0 kn in 0.1 kn steps
-    t = i / 10.0
+for i in range(100, 2401):                     # 1.0 -> 24.0 kn in 0.01 kn steps
+    t = i / 100.0
     v = NAV._polar_speed(BY, t, 75.0)
     if prev is not None and abs(v - prev) > worst:
         worst, at = abs(v - prev), t
     prev = v
-check(f"speed is continuous in TWS (max 0.1 kn step {worst:.4f} at {at})", worst < 0.05)
+check(f"speed is continuous in TWS, incl. under the lightest curve (max 0.01 kn step {worst:.4f} at {at})",
+      worst < 0.01)
 
 worst, at, prev = 0.0, None, None
 for a in range(0, 1801):                       # 0 -> 180 deg in 0.1 deg steps
@@ -87,6 +92,15 @@ up = NAV._polar_vmg_to_mark(12.0, 0.0)
 check("dead upwind still makes progress (tacking), but slower than a reach", 0 < up < beam)
 check("dead upwind VMG is close-hauled speed x cos(beat angle)",
       abs(up - 5.6 * 0.766) < 0.35)
+# #41.4: a mark inside the no-go zone is reached on two boards, so the speed made good toward it
+# is the upwind VMG / cos(angle to the mark). One board's best VMG toward it (the old answer)
+# read 20-30% fast on this polar: you can't sail 52 deg forever and arrive.
+up20 = NAV._polar_vmg_to_mark(12.0, 20.0)
+check(f"mark 20 deg off the wind: upwind VMG / cos 20 ({up20:.2f} vs {up / 0.9397:.2f}) (#41.4)",
+      abs(up20 - up / 0.9397) < 0.05)
+check("... not one board's best VMG toward it (6.8 x cos 32 = 5.77)", up20 < 5.0)
+check("a mark the boat can lay is sailed straight at: beam reach = boat speed",
+      abs(NAV._polar_vmg_to_mark(12.0, 90.0) - 7.9) < 1e-6)
 check("sign of the angle does not matter", NAV._polar_vmg_to_mark(12.0, -60.0)
       == NAV._polar_vmg_to_mark(12.0, 60.0))
 check("more wind makes good more speed",

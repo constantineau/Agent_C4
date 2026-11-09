@@ -145,7 +145,7 @@ def run_judge(race_id, playbook_id=None, models=None, on_progress=None, recordin
         return {"available": False, "playbooks": pbs,
                 "note": "Nothing to debrief yet. Upload a GPX above, or load the boat's log for "
                         "a race."}
-    tac = _tactics(d, race_id, pb, models, log) if pb else {
+    tac = _tactics(d, race_id, pb, models, log, boat=boat) if pb else {
         "available": False,
         "note": "No frozen playbook for this race, so this checks speed only. Freeze a playbook "
                 "in Gameplan next time to check tactics too."}
@@ -245,10 +245,72 @@ def _own_speed_fields(t, tac, gun, start_epoch, log):
     return cur, wv
 
 
-def _tactics(d, race_id, pb, models, log):
+def _regret_basis(cur, wv, boat_from="plan", plan_waves=True):
+    """Which sea-state fields the oracle routed through (#244). Regret measures the strategy call
+    only, so the oracle sails the same current and waves as the boat. When a field could not be
+    built for the race time (outside the model domain, or the cycle is no longer served), the
+    regret is still shown but says plainly what it leaves out."""
+    has_cur, has_wv = bool(getattr(cur, "loaded", False)), bool(getattr(wv, "loaded", False))
+    missing = [n for n, ok in (("current", has_cur), ("waves", has_wv)) if not ok]
+    notes = []
+    if not plan_waves:
+        # a plan routed on flat water is compared with a flat-water oracle: otherwise the seaway
+        # alone would read as "time lost" (Codex on #282)
+        has_wv = False
+        missing = [n for n in missing if n != "waves"]
+        notes.append("Time lost is without waves: the plan didn't use them.")
+    if missing:
+        notes.append(f"Time lost is without {' and '.join(missing)}: no data for the race time.")
+    if boat_from != "plan":
+        notes.append("Boat settings are today's: this plan didn't save its own.")
+    return {"current": has_cur, "waves": has_wv, "boat": boat_from,
+            "current_source": getattr(cur, "source", None) if has_cur else None,
+            "waves_source": getattr(wv, "source", None) if has_wv else None,
+            "note": " ".join(notes) or None}
+
+
+def _oracle_boat_kwargs(boat, pb):
+    """The same achievable boat the plan was routed on (#244) → (kwargs, "plan" | "now"): helm
+    factor, approved polar and sea-state calibration, jib bands, sail config, and the chart the
+    bundle was frozen with. The playbook routes with all of these (`main.playbook_synthesize`), so
+    an oracle without them would turn boat-model differences into "regret". A bundle frozen since
+    #244 carries its own (`routing`); an older one falls back to the debrief's boat, and says so."""
+    r = pb.get("routing")
+    if isinstance(r, dict):
+        kw = {"helm_factor": boats.helm_factor(r),
+              "polar_adjustments": boats.polar_adjustments(r) or None,
+              "wave_coeffs": boats.wave_coeffs(r),
+              "jib_crossovers": r.get("jib_crossovers") or None,
+              "sail_config": r.get("sail_config") or None}
+        boat_from = "plan"
+    else:
+        kw = {"helm_factor": boats.helm_factor(boat),
+              "polar_adjustments": boats.polar_adjustments(boat) or None,
+              "wave_coeffs": boats.wave_coeffs(boat),
+              "jib_crossovers": (boat or {}).get("jib_crossovers") or None,
+              "sail_config": boats.sail_config(boat)}
+        boat_from = "now"
+    chart = pb.get("chart") or {}
+    if chart.get("source"):
+        kw["source"] = chart["source"]
+    if chart.get("safety_depth_m") is not None:
+        kw["safety_depth"] = chart["safety_depth_m"]
+    return kw, boat_from
+
+
+def _tactics(d, race_id, pb, models, log, boat=None):
     """The tactics half: the hindsight-optimal route on the wind that actually blew, vs the frozen
     plan. Every refusal names itself and carries `start_epoch` where it knows it, so the caller can
-    still score the boat's own speed."""
+    still score the boat's own speed.
+
+    REGRET MEASURES THE STRATEGY CALL ONLY (Cole, #244). The oracle routes through the same current
+    and sea-state fields the boat's own speed is scored on, with the same boat model the playbook
+    was routed on, so sea-state and helm losses are not blamed on route choice. The plan's predicted
+    hours were routed by the playbook WITH its forecast current and waves and that boat model, so
+    both sides of the gap are on the same speed basis. Helm and sea-state losses get their own
+    lines once the actual track is scored."""
+    if boat is None:
+        boat = boats.active_boat() or {}
     course_id = pb.get("course_id")
     start = float(pb.get("start_epoch") or 0)
     if not start:
@@ -283,7 +345,16 @@ def _tactics(d, race_id, pb, models, log):
                 "windfield": {**wf.status(), "basis": wind_basis},
                 "note": "No wind data for the race time, so tactics can't be checked."}
     log("routing the hindsight-optimal (oracle) course…")
-    oracle = optimizer.optimize_course(d, course_id, start, wf, avoid=True)
+    boat_kw, boat_from = _oracle_boat_kwargs(boat, pb)
+    plan_waves = (pb.get("routing") or {}).get("use_waves", True) is not False
+    if plan_waves:
+        oracle_wv = wv
+    else:
+        from .wave import ZeroWave
+        oracle_wv = ZeroWave()     # the boat's own speed is still scored on `wv`
+    oracle = optimizer.optimize_course(d, course_id, start, wf, avoid=True, cur=cur,
+                                       waves=oracle_wv, **boat_kw)
+    basis = _regret_basis(cur, wv, boat_from, plan_waves)
     if not oracle.get("available", True) and oracle.get("note"):
         return {"available": False, "start_epoch": start, "wf": wf, "cur": cur, "wave": wv,
                 "windfield": {**wf.status(), "basis": wind_basis},
@@ -323,13 +394,14 @@ def _tactics(d, race_id, pb, models, log):
         "regret": {"hours": regret_h,
                    "minutes": (round(regret_h * 60) if regret_h is not None else None),
                    "side_paid": side_paid, "recommended_side": rec_side,
-                   "side_matched": (rec_side == side_paid), "winning_variant": winning},
+                   "side_matched": (rec_side == side_paid), "winning_variant": winning,
+                   "basis": basis},
         "windfield": {**wf.status(), "basis": wind_basis},
         "caveat": ("The best route uses the forecast from the start, not the wind that really "
                    "blew. Speed scores use the boat's own instruments."
                    if wind_basis == "archive" else
                    "The best route uses the best forecast available, not the wind that really "
-                   "blew."),
+                   "blew.") + (" " + basis["note"] if basis["note"] else ""),
     }
 
 
@@ -422,8 +494,12 @@ def _deterministic_critique(r):
     else:
         assess = (f"The plan recommended {rec} but the wind favored {side_paid}. The pre-race forecast "
                   "pointed the other way" + (f" — about {abs(mins)} min of regret vs perfect foresight." if mins is not None else "."))
+        if mins is not None and (reg.get("basis") or {}).get("note"):
+            assess += " " + reg["basis"]["note"]
         lesson = (f"{side_paid} paid, not the recommended {rec}. Watch the first-beat trigger more "
                   "aggressively next time; the branch to {side_paid} should have fired.")
+    _b = reg.get("basis")              # older reports carry no basis: say nothing about it
+    _lacks = [n for n in ("current", "waves") if _b and not _b.get(n)]
     at = r.get("actual_track") or {}
     note = ""
     if at.get("available"):
@@ -447,7 +523,12 @@ def _deterministic_critique(r):
     return {"assessment": assess, "key_lesson": lesson,
             "proposed_learnings": f"[{r['race_name']}] First beat: {side_paid} paid"
                                   + (f" (recommended {rec})" if not matched else "")
-                                  + (f"; regret ~{mins} min vs optimal." if mins is not None else ".")
+                                  + (f"; regret ~{mins} min vs optimal" if mins is not None else "")
+                                  + (f" (without {' and '.join(_lacks)})"
+                                     if mins is not None and _lacks else "")
+                                  + (" (today's boat settings)"
+                                     if mins is not None and _b and _b.get("boat") == "now" else "")
+                                  + "."
                                   + (f" Sailed {at['extra_distance_pct']}% over optimal at {at.get('polar_pct','?')}% of polar."
                                      if at.get("available") and at.get("extra_distance_pct") is not None else ""),
             "brain_edit": ("Tighten the first-beat side trigger — bias toward switching when early "
@@ -500,7 +581,11 @@ def _critique(r):
         "You are an expert yacht-racing coach running a POST-RACE DEBRIEF (the judge loop). You are "
         "given the frozen pre-race PLAYBOOK we carried (recommended first-beat side + variants) and the "
         "ORACLE result — the hindsight-optimal route on the wind that actually blew (which side paid, "
-        "the optimal time) — plus the REGRET (plan vs perfect foresight). When ACTUAL_TRACK is present "
+        "the optimal time) — plus the REGRET (plan vs perfect foresight). The oracle sails the same boat model and "
+        "the same current and waves as the boat did, so regret carries no sea-state-model or boat-model "
+        "difference. It still compares the plan's FORECAST time with the oracle's ACTUAL-wind time, so "
+        "it includes forecast error: a big or negative regret can be the forecast being wrong, not the "
+        "call. If regret.basis.note is set, say what it says when you use the regret number. When ACTUAL_TRACK is present "
         "you also have the boat's REAL sailed track scored vs the oracle line: time_behind_optimal_min, "
         "extra_distance_pct (oversail), XTE off the optimal route, the first-beat side the boat actually "
         "WORKED (vs the side that paid / we recommended), and polar_pct (% of the flat-water polar the "
