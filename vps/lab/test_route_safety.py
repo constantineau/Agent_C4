@@ -324,11 +324,17 @@ with _tf.TemporaryDirectory() as cd:
         return {"type": "Feature", "properties": props, "geometry": {
             "type": "Polygon", "coordinates": [[[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]]}}
     with open(_os.path.join(cd, "cell_index.json"), "w") as fh:
-        _json.dump({"US4AA01M": {"bbox": [45, 43, -83, -81], "url": "x", "band": "4"},
-                    "US4AA02M": {"bbox": [45, 43, -83, -81], "url": "x", "band": "4"}}, fh)
-    _os.makedirs(_os.path.join(cd, "cells", "ENC_ROOT", "US4AA01M"))
-    open(_os.path.join(cd, "cells", "ENC_ROOT", "US4AA01M", "US4AA01M.000"), "w").close()
+        _json.dump({f"US4AA0{k}M": {"bbox": [45, 43, -83, -81], "url": "x", "band": "4"}
+                    for k in (1, 2, 3, 4)}, fh)
     _os.makedirs(_os.path.join(cd, "extract"))
+    for k in (1, 3, 4):                       # downloaded; 2 never was
+        _os.makedirs(_os.path.join(cd, "cells", "ENC_ROOT", f"US4AA0{k}M"))
+        open(_os.path.join(cd, "cells", "ENC_ROOT", f"US4AA0{k}M", f"US4AA0{k}M.000"), "w").close()
+        for lyr in enc.LAYERS:                # the S-57 driver's empty file: a layer it hasn't
+            open(_os.path.join(cd, "extract", f"US4AA0{k}M_{lyr}.json"), "w").close()
+    _os.remove(_os.path.join(cd, "extract", "US4AA03M_DEPARE.json"))      # extract failed
+    with open(_os.path.join(cd, "extract", "US4AA04M_DEPARE.json"), "w") as fh:
+        fh.write('{"type": "FeatureColl')                                  # cut short
     _gj(_os.path.join(cd, "extract", "US4AA01M_DEPARE.json"),
         [_sq(-82.5, 43.5, -82.4, 43.6, DRVAL1=10.0), _sq(-82.4, 43.5, -82.3, 43.6, DRVAL1=1.0)])
     _gj(_os.path.join(cd, "extract", "US4AA01M_DRGARE.json"),
@@ -337,7 +343,9 @@ with _tf.TemporaryDirectory() as cd:
     check("deep, shallow and dredged areas all count as depth cover", len(L["depth_cover"]) == 3,
           len(L["depth_cover"]))
     check("only the shallow one is a shoal", len(L["shoal"]) == 1, len(L["shoal"]))
-    check("a cell that never downloaded is named", L["missing"] == ["US4AA02M"], L["missing"])
+    check("a cell that never downloaded, one whose depths didn't extract and one whose depth "
+          "file won't read are all named", L["missing"] == ["US4AA02M", "US4AA03M", "US4AA04M"],
+          L["missing"])
 
 print("9) #221-3 a closing board on borrowed wind counts")
 

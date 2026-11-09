@@ -240,15 +240,18 @@ def _disk_ring(lon, lat, radius_nm, sides=8) -> list:
               lat + rlat * math.sin(2 * math.pi * k / sides)) for k in range(sides)]]
 
 
-def _load_polys_props(path: str) -> list:
-    """Load a cached GeoJSON into [(polygon, properties)]: one read, filtered by the caller."""
-    if not path or not os.path.exists(path):
-        return []
+def _load_polys_props(path: str):
+    """Load a cached GeoJSON into [(polygon, properties)]: one read, filtered by the caller.
+    An empty file (a layer the cell doesn't have) is []; a file that won't read is None."""
     try:
+        if os.path.getsize(path) == 0:
+            return []
         with open(path) as f:
             gj = json.load(f)
+        if not isinstance(gj, dict):
+            return None
     except Exception:
-        return []
+        return None
     out = []
     for ft in gj.get("features", []):
         props = ft.get("properties") or {}
@@ -316,8 +319,8 @@ def layers_in_bbox(bbox, cache_dir: str = None, safety_depth_m: float = 3.0) -> 
 
     `depth_cover` is every depth area (DEPARE + DRGARE, deep or shallow): where the chart says how
     deep the water is. Outside it (Canadian water: NOAA ENC is US-only) depths were never checked,
-    and the route says so (#242). `missing` names the cells that cover the box but never downloaded
-    (or had nothing extracted): their water would read as uncharted, so the caller counts the ENC load as failed."""
+    and the route says so (#242). `missing` names the cells that cover the box but never downloaded,
+    are missing a layer's extract, or have a depth extract that won't read: their water would read as uncharted, so the caller counts the ENC load as failed."""
     cache_dir = cache_dir or CACHE
     cells = cells_for_bbox(bbox, cache_dir)
     ed = _extract_dir(cache_dir)
@@ -326,14 +329,20 @@ def layers_in_bbox(bbox, cache_dir: str = None, safety_depth_m: float = 3.0) -> 
     hazard_keep = _hazard_keep(safety_depth_m)
     for cell in cells:
         name = cell["name"]
-        # never downloaded, or nothing extracted from it (no GDAL): its water isn't "uncharted"
+        # never downloaded, or a layer that didn't extract: its water isn't "uncharted". The
+        # S-57 driver writes an EMPTY file for a layer the cell doesn't have; a failed extract
+        # leaves no file (`_extract_layer`), and a depth file that won't parse is a failure too
         if not os.path.exists(os.path.join(_cell_dir(cache_dir), "ENC_ROOT", name, f"{name}.000")) \
-                or not any(os.path.exists(os.path.join(ed, f"{name}_{lyr}.json")) for lyr in LAYERS):
+                or not all(os.path.exists(os.path.join(ed, f"{name}_{lyr}.json")) for lyr in LAYERS):
+            missing.append(name)
+            continue
+        depth = [_load_polys_props(os.path.join(ed, f"{name}_{lyr}.json"))
+                 for lyr in ("DEPARE", "DRGARE")]
+        if any(a is None for a in depth):
             missing.append(name)
             continue
         land += _load_polys(os.path.join(ed, f"{name}_LNDARE.json"))
-        for lyr in ("DEPARE", "DRGARE"):
-            areas = _load_polys_props(os.path.join(ed, f"{name}_{lyr}.json"))
+        for areas in depth:
             cover += [p for p, _props in areas]
             shoal += [p for p, props in areas if shoal_keep(props)]
         for lyr in ("OBSTRN", "UWTROC"):
