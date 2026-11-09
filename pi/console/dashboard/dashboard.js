@@ -1567,11 +1567,15 @@
   /* RACE OVER (#241): racing (no shore loading) is its own state, ended only here, with two taps
      (like Start in the navigator card). The boat may ask "Race over?" after a long stop. */
   let raceOverUntil = 0;
+  let raceOverArmedSince = null;   // the race the first tap was for; a different race disarms
+  function raceOverArmed(race) {
+    return Date.now() < raceOverUntil && !!race && race.since === raceOverArmedSince;
+  }
   function renderRaceOver() {
     const b = document.getElementById("raceOverBtn"), l = document.getElementById("raceOverLbl");
     if (!b || !l) return;
     const race = (App.session || {}).race;
-    const armed = Date.now() < raceOverUntil;
+    const armed = raceOverArmed(race);
     const text = window.C4RecLog.raceOverLabel(race, { armed: armed });
     b.hidden = text === null;
     if (text === null) return;
@@ -1585,13 +1589,16 @@
   async function tapRaceOver() {
     const race = (App.session || {}).race;
     if (!race || !race.racing) return;
-    if (Date.now() >= raceOverUntil) {
+    if (!raceOverArmed(race)) {
+      // first tap: arm for THIS race only (a newer race showing up meanwhile disarms it)
       raceOverUntil = Date.now() + window.C4RecLog.OVER_ARM_MS;
+      raceOverArmedSince = race.since;
       renderRaceOver();
       setTimeout(renderRaceOver, window.C4RecLog.OVER_ARM_MS + 200);
       return;
     }
     raceOverUntil = 0;
+    raceOverArmedSince = null;
     try {
       // the race start this button shows: a newer race is never ended by this tap
       await fetch(API + "/race/over", { method: "POST",

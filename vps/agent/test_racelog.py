@@ -368,6 +368,14 @@ check("LOG end before the first racing read: still racing", racegate.racing())
 ds = legacy()
 racelog.start(name="Sail", kind="practice")
 check("practice start before the first racing read: still racing", racegate.racing())
+ds = legacy()
+ds.save_race_state = lambda *a, **k: (_ for _ in ()).throw(OSError("disk full"))
+try:
+    racelog.end()
+except OSError:
+    pass
+check("racing state can't be written: LOG end does NOT close the race session",
+      ds.session_current() is not None)
 ds = legacy(parked(underway_h=20, still_h=13))
 st = racelog.status()
 check("auto-close on the first poll (13 h stopped): session closed, still racing",

@@ -75,7 +75,10 @@ test("index.html has the Race over button, hidden by default, 48 px+", () => {
 });
 test("dashboard.js: Race over takes two taps and posts /race/over with the shown race start", () => {
   assert.match(js, /getElementById\("raceOverBtn"\)\.addEventListener\("click", tapRaceOver\)/);
-  assert.match(js, /function tapRaceOver[\s\S]{0,300}raceOverUntil = Date\.now\(\) \+[\s\S]{0,200}return;/);
+  assert.match(js, /function tapRaceOver[\s\S]{0,400}raceOverUntil = Date\.now\(\) \+[\s\S]{0,300}return;/);
+  // the arm is bound to the race it was for: a newer race showing up disarms it
+  assert.match(js, /raceOverArmedSince = race\.since/);
+  assert.match(js, /function raceOverArmed\(race\)[\s\S]{0,120}race\.since === raceOverArmedSince/);
   assert.match(js, /race\/over[\s\S]{0,200}C4RecLog\.raceOverBody\(race\)/);
 });
 

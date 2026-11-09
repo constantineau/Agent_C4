@@ -153,13 +153,11 @@ def _src():
 def _settle_race_state(s):
     """Write down the racing state BEFORE any session is closed or replaced. A boat upgraded with
     a race session open has no racing state yet; it is read from that session (race_state), so
-    the session must still be open when that happens. Call under SESSION_LOCK. Never raises: an
-    unreadable state already reads as racing in the gate."""
-    try:
-        if hasattr(s, "race_state"):
-            race_state(s)
-    except Exception:  # noqa: BLE001
-        pass
+    the session must still be open when that happens. Call under SESSION_LOCK. Raises if the
+    state can't be read or written: the caller must then NOT close the session (closing it would
+    lose the only record that the boat is racing)."""
+    if hasattr(s, "race_state"):
+        race_state(s)
 
 
 def start(name=None, race_id=None, kind=None):
