@@ -158,5 +158,6 @@ def get_tactics(route: str = None):
         "favored_side": favored, "favored_reason": fav_reason,
         "leverage": leverage,
         "recommendation": " ".join(bits),
+        "side_unknown": bool(persistent and hdg is None),     # #247: the selector withdraws
         "caveat": "Practice use only. May count as outside help in a race (RRS 41).",
     }

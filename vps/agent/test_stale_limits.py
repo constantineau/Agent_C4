@@ -168,6 +168,19 @@ navigator.get_navigator = lambda route=None: {"available": False}
 t = tactics.get_tactics()
 check("lasting shift with heading and COG 20 s old → no favoured side (point of sail unknown)",
       t.get("available") is True and t.get("favored_side") == "either")
+from app import selector  # noqa: E402
+_real = (selector.deviation._load_playbook, tactics.get_tactics,
+         selector.deviation.get_deviation, selector.drift_mod.get_drift)
+selector.deviation._load_playbook = lambda: {"race_id": "u", "recommended": "middle", "variants": [
+    {"id": "middle", "name": "Middle start"}, {"id": "left", "name": "Left start"}]}
+tactics.get_tactics = lambda route=None: t
+selector.deviation.get_deviation = lambda route=None: {"available": False, "status": "na"}
+selector.drift_mod.get_drift = lambda route=None: {"available": False, "status": "na"}
+sel = selector._decide()
+(selector.deviation._load_playbook, tactics.get_tactics,
+ selector.deviation.get_deviation, selector.drift_mod.get_drift) = _real
+check("…and the selector withdraws (no green 'Hold, no lasting shift')",
+      sel.get("status") == "na" and "heading" in (sel.get("why") or ""))
 check("…and the sentence names no side", "favored" not in t.get("recommendation", "")
       and "side of the" not in t.get("recommendation", "") and "no side call" in t.get("recommendation", ""))
 
