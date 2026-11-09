@@ -323,7 +323,10 @@ def race_status(now=None, force=False):
         still_h = snap["still_h"]       # cached for THIS race (checked above)
     out["still_h"] = round(still_h, 2)
     if RACE_OVER_FALLBACK_H > 0 and still_h >= RACE_OVER_FALLBACK_H:
-        r = race_over(since=since, by="auto", now=now)
+        try:
+            r = race_over(since=since, by="auto", now=now)
+        except Exception:  # noqa: BLE001
+            r = {"ok": False}           # couldn't end it: still racing (fail closed)
         if r.get("ok"):
             return {"racing": False, "since": since, "name": st.get("name"),
                     "suggest_over": False, "ended_ts": now, "ended_by": "auto"}

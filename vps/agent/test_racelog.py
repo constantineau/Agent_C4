@@ -320,6 +320,10 @@ ds = racing_ds(parked(underway_h=26, still_h=25), race_h_ago=30)
 st = racelog.race_status(now=NOW)
 check("stopped 25 h unbroken -> the boat ends racing itself, and says so",
       st["racing"] is False and st["ended_by"] == "auto" and not racegate.racing())
+ds = racing_ds(parked(underway_h=26, still_h=25), race_h_ago=30)
+ds.save_race_state = lambda *a, **k: (_ for _ in ()).throw(OSError("disk full"))
+st = racelog.race_status(now=NOW)
+check("24 h fallback can't write: no error, still racing", st["racing"] is True)
 long_hole = [(31 + m / 60.0, 6.0) for m in range(60, 0, -1)]
 long_hole += [(30 - m / 60.0, 0.1) for m in range(14 * 60)]
 long_hole += [(15 - m / 60.0, 0.1) for m in range(15 * 60)]     # 1 h hole at 16..15 h ago
