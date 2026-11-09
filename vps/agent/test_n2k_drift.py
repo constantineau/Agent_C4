@@ -89,7 +89,7 @@ print("engine check + priority:")
 import engine_app  # noqa: E402
 
 rows = [("n2k-socketcan.20", 100.0, 1.0), ("n2k-socketcan.3", 100.0, 2.0)]
-before = source_policy.preferred("sog", rows, ns.devices_for("sr33"))
+before = source_policy.preferred("sog", rows, ns.devices_for("sr33"), now=100.0)
 check("static map: SOG binds to whatever holds .3 (the bug)", before[0] == "n2k-socketcan.3")
 
 st = {"checked_at": None, "error": None, "moved": [], "static": None}
@@ -102,7 +102,7 @@ check("never read: the chip status is untouched", h["status"] == "ok" and not h[
 
 good = engine_app.check_n2k_once(st, fetch=lambda: nested(MOVED))
 check("a good read of the nested REST shape", good and st["checked_at"])
-after = source_policy.preferred("sog", rows, ns.devices_for("sr33"))
+after = source_policy.preferred("sog", rows, ns.devices_for("sr33"), now=100.0)
 check("verified map: SOG follows the GPS24xd to .20", after[0] == "n2k-socketcan.20")
 row = engine_app.n2k_check(st)
 check("a followed move is a note, status ok", row["status"] == "ok" and "moved to" in (row["note"] or ""))
@@ -186,7 +186,7 @@ numeric = {"n2k-socketcan": {"20": {"n2k": {"src": "20", "manufacturerCode": 229
 st4 = {"checked_at": None, "error": None, "moved": [], "static": None}
 engine_app.check_n2k_once(st4, fetch=lambda: numeric)
 try:
-    pick = source_policy.preferred("sog", rows, ns.devices_for("sr33"))
+    pick = source_policy.preferred("sog", rows, ns.devices_for("sr33"), now=100.0)
     check("a numeric manufacturer code can't crash priority reads", pick[0] == "n2k-socketcan.20")
 except Exception as exc:
     check(f"a numeric manufacturer code can't crash priority reads ({exc})", False)
