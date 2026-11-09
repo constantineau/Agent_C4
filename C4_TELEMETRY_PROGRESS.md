@@ -9,7 +9,8 @@ Deletion from the boat is allowed only *after* an off-boat copy is sha256-verifi
 - VPS Lab + agent recreated, rollback `:pre-20261109c` (Lab-only `:pre-20261109b` after #282). Both 200.
 - Pi (stamp 20261109T185612Z, `~/deploy-backups/w8-20261109T185612Z`): 5 files, all matched a91e0c9 first; engine + console + uplink rebuilt, images `:pre-20261109T185612Z`. All endpoints 200 incl /navigator, recording true, uplink sending, undated 0, 0 restarts. record-deployed: 5 files, 3 images.
 - Orin: git ff to edbd10e (doc only, no restart).
-**Open:** #242 optimizer-safe agent still running (worktree optimizer-safe). nav-start-line agent running (Cole OK: boat must cross the start line, not come within 110 m). #283 left for spring: archiver 7-day prune of non-session data needs ARCHIVE_OFFBOAT_LEDGER + copy-off aboard (archiver deploy). #286: stale limits 30 s onboard / 120 s cloud for position/wind are a proposal for Cole (decision 7 table). Matcher: DEFERRED (Cole will evaluate the tuning in detail).
+**#288 merged + deployed ~19:40Z** (main 34cc94e): leave the start only by crossing the line (90 m past the perpendicular through the start point; no pin in race defs). Pi engine (backup ~/deploy-backups/startline-*, image :pre-*), VPS agent rollback :pre-20261109d.
+**Open:** #242 optimizer-safe agent still running. race-over agent (#241) and drafts agent (#247 table, #250 checklist) running. #283 left for spring: archiver 7-day prune of non-session data needs ARCHIVE_OFFBOAT_LEDGER + copy-off aboard (archiver deploy). #286: stale limits 30 s onboard / 120 s cloud for position/wind are a proposal for Cole (decision 7 table). Matcher: DEFERRED (Cole will evaluate the tuning in detail).
 **Next wave:** #241 Race over (console now free), #247 stale table draft, #250 race-ready checklist draft, #245 re-score, #248 shed order.
 
 ## ⏸ PICK UP HERE — 2026-11-09 (session root-f0; dev = main @ a91e0c9)
