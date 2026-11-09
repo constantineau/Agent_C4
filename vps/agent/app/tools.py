@@ -195,6 +195,25 @@ def get_current_conditions(max_age_minutes: int = 5):
     }
 
 
+def _alert_ages(have):
+    """{channel: age_s} for alert-group key channels missing from the strip's 30-min window, from
+    their last reading within ALERT_HOLD_S (24 h), so a dead sensor's alert outlives its number
+    ("—" after 30 min). One bounded query, only when such a channel is missing."""
+    missing = [CHANNEL_TO_PATH[c] for c in staleness.alert_channels()
+               if c not in have and c in CHANNEL_TO_PATH]
+    if not missing:
+        return {}
+    out = {}
+    try:                        # a failed read here must never break the strip
+        for r in _latest_per_source(missing, staleness.ALERT_HOLD_S // 60):
+            ch = PRESENT[r["path"]][0]
+            age = _age(r["time"])
+            out[ch] = min(out.get(ch, age), age)
+    except Exception:
+        return {}
+    return out
+
+
 def get_strip():
     """Compact best-value-per-channel for the web instrument strip (freshest source wins)."""
     # Raw readings stay up to RAW_CAP_S (30 min) with their age; past each channel's DEAD limit
@@ -241,7 +260,8 @@ def get_strip():
                 for name, c in ch.items()},
         "dead": sorted(n for n, a in ages_by_ch.items() if staleness.is_dead(n, a)),
         # The per-channel stale alert (#247): one entry per sensor group whose key channel is dead.
-        "dead_groups": staleness.dead_groups(ages_by_ch),
+        # (a channel gone from the screen after 30 min keeps its alert up to ALERT_HOLD_S)
+        "dead_groups": staleness.dead_groups({**_alert_ages(set(ch)), **ages_by_ch}),
         "stw": best("stw"), "sog": best("sog"), "tws": best("tws"), "twa": best("twa"),
         "twd": best("twd"), "aws": best("aws"), "awa": best("awa"), "heading": heading,
         "heading_ref": heading_ref,

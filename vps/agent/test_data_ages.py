@@ -271,7 +271,7 @@ onboard_conditions.get_current_conditions = lambda max_age_minutes=5: CC
 onboard_conditions.fatigue.compute_fatigue_index = lambda: {"index": 55, "level": "watch"}
 # channels silent > 5 min come from the active datasource (#247, test_stale_limits.py); here the
 # archive left over from the checks above would add its own, so none
-onboard_conditions._older_readings = lambda have: {}
+onboard_conditions._older_readings = lambda have: ({}, {})
 s = onboard_conditions.get_strip()
 check("the Pi strip keeps fatigue (its own tile stays) and carries per-channel ages",
       s["fatigue"] == 55 and s.get("ages") == {"bank_voltage": 0.4, "tws": 240.0})

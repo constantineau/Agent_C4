@@ -45,6 +45,11 @@ _DEFAULT = {"onboard": (10, 10, 60), "cloud": (60, 60, 300)}
 # Past this the raw number is gone too: "—" (decided: 30 min).
 RAW_CAP_S = 30 * 60
 
+# A dead sensor keeps its alert after its number has gone ("—" at 30 min), up to this long since
+# its last reading. Not forever: a masthead unplugged for the winter must not alarm for months.
+# 24 h covers the longest race day.
+ALERT_HOLD_S = 24 * 3600
+
 # The stale alert per channel: warn at the dead limit, danger past this (decided: per channel).
 ALERT_DANGER_S = {"onboard": 60, "cloud": 300}
 
@@ -113,16 +118,23 @@ ALERT_GROUPS = (
 )
 
 
+def alert_channels():
+    """Every key channel of the alert groups."""
+    return sorted({c for _g, _l, keys in ALERT_GROUPS for c in keys})
+
+
 def dead_groups(ages, at=None):
     """[{group, label, channels, age_s, severity}] for every alert group with a key channel past
     its dead limit; `ages` is {channel: seconds old}. Severity is 'warn' at the dead limit and
     'danger' past ALERT_DANGER_S (or twice the dead limit, for the slow bank voltage). A group none of whose key channels is reporting is left out:
-    the strip's `available` and the whole-boat alert cover a boat that stopped talking."""
+    the strip's `available` and the whole-boat alert cover a boat that stopped talking. Ages
+    past ALERT_HOLD_S are ignored."""
     at = at or where()
     out = []
     for gid, label, keys in ALERT_GROUPS:
         dead = [(ch, ages[ch]) for ch in keys
-                if ages.get(ch) is not None and is_dead(ch, ages[ch], at)]
+                if ages.get(ch) is not None and is_dead(ch, ages[ch], at)
+                and ages[ch] <= ALERT_HOLD_S]
         if not dead:
             continue
         age = max(a for _c, a in dead)

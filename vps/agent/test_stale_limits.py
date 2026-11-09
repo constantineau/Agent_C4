@@ -8,7 +8,8 @@ reading stays. Every one of these failed on the code before #247:
 - strip / sail call: a 20 s old TWS/TWA was handed out as current (5-min window), so /sail
   picked a sail from it; the strip now nulls it and keeps it in `raw` with state "dead"
 - strip: a 20 s old depth with a live GPS raised no per-channel flag; now `dead_groups`
-- raw readings stay until 30 min (they vanished at 5 min), then go
+- raw readings stay until 30 min (they vanished at 5 min), then go; the alert stays up to 24 h
+- tactics: 6 samples (0.6 s of a 10 Hz channel) were enough for a call; now half the window
 - navigator: a 12 s old fix aboard was used for ETA/laylines (30 s limit)
 - collision watch: own fix 10 s aboard (was 30 s), link 10 s (was 30 s)
 - failover: a 6 s quiet lead aboard is passed over (was 45 s); the cloud keeps 45 s
@@ -128,6 +129,21 @@ use(FRESH)
 t = tactics.get_tactics()
 check("fresh TWD → a call", t.get("available") is True)
 
+
+
+class Short(Stub):
+    """Fresh wind, but only the last 60 s of it (a restart, or a sensor just back)."""
+
+    def series(self, path, minutes):
+        return [(t, v) for t, v in super().series(path, minutes) if t >= self.now - 60]
+
+
+st = Short(FRESH)
+datasource.active = lambda: st
+t = tactics.get_tactics()
+check("60 s of wind in the 12-min window → no call yet (6 samples were enough before)",
+      t.get("available") is False and "history" in t.get("note", ""))
+
 print("plan gap:")
 use(dict(FRESH, **{TWS: 20.0, TWD: 20.0}))
 check("20 s old wind aboard → no observed wind", plangap._observed_wind() == (None, None, 0))
@@ -152,6 +168,12 @@ check("depth 10 min old: still on screen (raw), danger", s["raw"].get("depth", {
 use(dict(FRESH, **{DEPTH: 31 * 60.0}))
 s = onboard_conditions.get_strip()
 check("depth 31 min old: gone ('—')", "depth" not in s["raw"])
+check("…but its alert stays (danger)", any(g["group"] == "depth" and g["severity"] == "danger"
+                                           for g in s["dead_groups"]))
+use(dict(FRESH, **{DEPTH: 25 * 3600.0}))
+s = onboard_conditions.get_strip()
+check("depth 25 h old (a sounder off for the winter): no alert", not any(
+    g["group"] == "depth" for g in s["dead_groups"]))
 
 print("navigator:")
 use(dict(FRESH, **{LAT: 12.0, LON: 12.0}))

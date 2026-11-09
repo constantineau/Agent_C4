@@ -16,12 +16,29 @@ from . import navigator as NAV
 from . import datasource
 
 WINDOW_MIN = 12
+# At least this share of the window must hold wind (#247): 6 samples were enough before, which
+# for a 10 Hz channel is 0.6 s of data in 12 min, so a shift and a favoured side were called
+# straight after a restart or a sensor coming back. Counted in 30 s buckets, so the cloud's 15 s
+# aggregates fill every bucket.
+MIN_COVERAGE = 0.5
+_BUCKET_S = 30.0
 SR33_LEN_FT = 33.0      # ~10 m → boatlengths of leverage
 
 
 def _twd_series(minutes):
     series = datasource.active().series("environment.wind.directionTrue", minutes)
     return [(t, math.degrees(v) % 360) for t, v in series]
+
+
+def _coverage(series, newest_age_s=None):
+    """Share of the WINDOW_MIN window (ending now) that has at least one sample per 30 s bucket.
+    The window's end is the newest sample plus its age when known, else the newest sample."""
+    if not series:
+        return 0.0
+    end = series[-1][0] + (newest_age_s or 0.0)
+    n = int(WINDOW_MIN * 60 / _BUCKET_S)
+    filled = {int((end - t) // _BUCKET_S) for t, _v in series if 0 <= end - t < n * _BUCKET_S}
+    return len(filled) / n
 
 
 def _circ_mean(degs):
@@ -60,7 +77,7 @@ def get_tactics(route: str = None):
     if s["twd"] is None or s["lat"] is None:
         return {"available": False, "note": "Need live wind and position."}
     series = _twd_series(WINDOW_MIN)
-    if len(series) < 6:
+    if len(series) < 6 or _coverage(series, s.get("ages", {}).get("twd")) < MIN_COVERAGE:
         return {"available": False, "note": "Not enough wind history yet."}
 
     twds = [v for _, v in series]

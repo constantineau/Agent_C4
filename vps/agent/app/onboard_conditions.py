@@ -126,13 +126,16 @@ def get_current_conditions(max_age_minutes: int = 5):
 
 
 def _older_readings(have):
-    """{channel: {"preferred": {...}, "freshest_age_s"}} for channels absent from the 5-min
-    conditions whose last sample is at most RAW_CAP_S old (raw stays on screen until then)."""
-    out = {}
+    """Channels absent from the 5-min conditions, from each path's last sample (two
+    index-bounded queries per path). Returns ({channel: {"preferred", "freshest_age_s"}} for
+    those at most RAW_CAP_S old, which stay on screen, and {channel: age} for alert-group key
+    channels at most ALERT_HOLD_S old, so a dead sensor's alert outlives its number)."""
+    raw, alert = {}, {}
     src = datasource.active()
     sample = getattr(src, "latest_sample", None)
     if sample is None:
-        return out
+        return raw, alert
+    keys = set(staleness.alert_channels())
     for path, (name, _unit, conv) in PRESENT.items():
         if name in have:
             continue
@@ -143,11 +146,13 @@ def _older_readings(have):
         if not smp or smp[0] is None or smp[1] is None:
             continue
         age = _age(float(smp[1]))
-        if age > staleness.RAW_CAP_S:
-            continue
-        out[name] = {"preferred": {"source": None, "value": round(conv(smp[0]), 3), "age_s": age},
-                     "freshest_age_s": age}
-    return out
+        if name in keys and age <= staleness.ALERT_HOLD_S:
+            alert[name] = age
+        if age <= staleness.RAW_CAP_S:
+            raw[name] = {"preferred": {"source": None, "value": round(conv(smp[0]), 3),
+                                       "age_s": age},
+                         "freshest_age_s": age}
+    return raw, alert
 
 
 def get_strip():
@@ -161,8 +166,8 @@ def get_strip():
     # A channel silent for over 5 min: its last sample from `latest_sample` (two index-bounded
     # queries per path) rather than widening the window to 30 min, which would aggregate 30 min
     # of 10 Hz archive rows on the Pi whenever the live cache misses a path.
-    for name, entry in _older_readings(set(ch)).items():
-        ch[name] = entry
+    older, alert_ages = _older_readings(set(ch))
+    ch.update(older)
     if not ch:
         return {"available": False}
     if not cc.get("available"):
@@ -199,7 +204,8 @@ def get_strip():
                 for name, c in ch.items()},
         "dead": sorted(n for n, a in ages_by_ch.items() if staleness.is_dead(n, a)),
         # The per-channel stale alert (#247): one entry per sensor group whose key channel is dead.
-        "dead_groups": staleness.dead_groups(ages_by_ch),
+        # (a channel gone from the screen after 30 min keeps its alert up to ALERT_HOLD_S)
+        "dead_groups": staleness.dead_groups({**alert_ages, **ages_by_ch}),
         "stw": best("stw"), "sog": best("sog"), "tws": best("tws"), "twa": best("twa"),
         "twd": best("twd"), "aws": best("aws"), "awa": best("awa"), "heading": heading,
         "heading_ref": heading_ref,

@@ -84,7 +84,7 @@ Aboard that is 5 s for the fast channels and 10 s for the slow ones; the cloud k
 | Heading, heel, STW | Fatigue (8 / 40-min windows) (#291) | newest ≤ 30 / 120 | **window only** (`fatigue.py:39-44`) | fatigue index, rotate call | – | windows thin out instead of stopping |
 | Bank voltage | Battery alarm (bank tile) | late 10, dead 60 / late 60, dead 300 | **45 min**, then "unknown" with last volts and age (`power.py:287`) | warn/act status, hours-to-11.0 V | last volts with age | voltage arrives every 1.5 s, worst gap 1.9 s |
 | Depth | Depth alarm | 15 / 120; an active shoal alarm holds while blind | **5 min** (strip window) | a new alarm can't be raised or cleared on old depth; "Depth lost" instead | depth with age | worst gap 3.8 s; a 4-min-old depth must not clear an alarm |
-| Every channel | Stale-data alert | per sensor group (wind, heading, GPS, heel, boat speed, depth, bank): warn at dead, danger at 60 / warn 120, danger 300 (bank: twice its dead limit); keep 30 s debounce. Aboard it is the DATA tile; in the cloud an alert per group. The whole-boat "data stale" alert stays | **freshest of all channels**, warn 60, danger 180 (`alerts.py:38`, `onboard_conditions.py:149`) | – (this is the alert) | – | today one live GPS hides a dead depth or wind |
+| Every channel | Stale-data alert | per sensor group (wind, heading, GPS, heel, boat speed, depth, bank): warn at dead, danger at 60 / warn 120, danger 300 (bank: twice its dead limit); keep 30 s debounce. Aboard it is the DATA tile; in the cloud an alert per group. The whole-boat "data stale" alert stays. A group's alert outlives its number ("—" at 30 min) for up to 24 h since its last reading | **freshest of all channels**, warn 60, danger 180 (`alerts.py:38`, `onboard_conditions.py:149`) | – (this is the alert) | – | today one live GPS hides a dead depth or wind |
 | Every channel | iPad number tiles | age red at dead; "—" after 30 min (wind tile, bank tile, the "where each number comes from" table). Age shown at late: (#291) | **only the poll age shows** (7 s, `dashboard.js:96`); a reading older than 5 min vanishes from the strip | nothing on the number tiles (raw) | the number and its age | Cole's rule: raw stays with its age |
 | Every channel | iPad data / sensor-health tile ("went silent") | follows failover: 5 / 45 (10 for slow channels). "Went silent" is built; the tile's own "one stale" source rule: (#291) | **45** (`dashboard.js:1025`, `source_policy.py:33`) | – | source list | 45 s onboard is ~60× the worst fast gap |
 | Ranked channels | Source failover | 5 (fast), 10 (slow) / 45 | **45 / 45** (`source_policy.py:33`, `tools.py:66`) | the lead source is passed over | the next rank's reading | a dead masthead leaves TWD on a dead sensor for 45 s today |
@@ -130,7 +130,8 @@ tracker 45 min (`tracker.py:42`).
 - The strip (`/conditions`) nulls a value past its dead limit, so everything built on it (the sail
   call, the depth alarm, the copilot's "Now:" line) stops using it. The raw value, its age and
   `ok` / `late` / `dead` are in `raw`; `dead_groups` drives the per-group alert. A channel
-  silent for over 30 min leaves the strip ("—").
+  silent for over 30 min leaves the strip ("—"); its group's alert stays up to 24 h.
+- Tactics also needs half of its 12-min window filled (30 s buckets) before it calls a shift.
 - One test per built row feeds an old input and checks the advice disappears and the raw value
   stays (`vps/agent/test_stale_limits.py`, `pi/console/test_dashboard.js`).
 - Checked on the water in the spring sensor-loss test (`docs/RACE_READY.md`).
