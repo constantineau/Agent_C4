@@ -144,9 +144,9 @@ def test_enqueued_batch_survives_a_round_trip_through_the_queue(q):
     assert _names(q) == []
 
 
-def test_two_overlapping_sends_post_a_queued_file_once(q):
-    """One sender at a time: overlapping sends must not both read and post the same queued
-    file (it is only unlinked after its POST returns)."""
+def test_two_overlapping_replay_passes_post_a_queued_file_once(q):
+    """One replay pass at a time: overlapping passes must not both read and post the same
+    queued file (it is only unlinked after its POST returns)."""
     import threading
     import time as _t
     up = _load_uplink(q)
@@ -154,18 +154,27 @@ def test_two_overlapping_sends_post_a_queued_file_once(q):
     posted, lock = [], threading.Lock()
 
     def slow_post(batch):
-        _t.sleep(0.2)                   # both senders are inside the queue walk at once
+        _t.sleep(0.2)                   # both passes are inside the queue walk at once
         with lock:
             posted.append(batch["readings"][0]["value"])
 
     up._post = slow_post
-    ts = [threading.Thread(target=up.send, args=([{"time": "t", "source": "s", "path": "p",
-                                                    "value": v}],)) for v in (10, 11)]
+    ts = [threading.Thread(target=up.drain_held) for _ in range(2)]
     for t in ts:
         t.start()
     for t in ts:
         t.join()
-    assert posted.count(1) == 1, posted
+    assert posted == [1], posted
+
+
+def test_a_live_send_never_replays_the_queue(q):
+    """The live path posts its own batch only; the replayer owns the backlog (#184-8)."""
+    up = _load_uplink(q)
+    _write(q, "a.json", _batch("2026-07-19T07:20:00Z", 1))
+    posted = []
+    up._post = lambda b: posted.append(b["readings"][0]["value"])
+    up.send([{"time": "2026-11-09T12:00:00Z", "source": "s", "path": "p", "value": 5}])
+    assert posted == [5] and _names(q) == ["a.json"]
 
 
 class _Clock:
@@ -368,3 +377,122 @@ def test_queued_batches_are_retried_on_a_quiet_bus(q):
     asyncio.run(go())
     assert [b["readings"][0]["value"] for b in posted] == [8]
     assert _names(q) == []
+
+
+def test_replay_is_paged_so_a_backlog_never_holds_up_the_live_window(q):
+    """#184-8: the queue has no cap, so after a long outage it can hold ~170k batches. Replaying
+    them all in one pass blocks the flusher for hours, and meanwhile the window keeps only the
+    latest value per reading: hours of windows would fold into one. A pass stops after its time
+    budget; the rest stays queued, in order, for the next pass."""
+    up = _load_uplink(q)
+    for k in range(50):
+        _write(q, f"20261106T12{k:04d}Z.json", _batch("2026-11-06T12:00:00Z", k))
+    now = [0.0]
+    up._clock = lambda: now[0]
+    up.REPLAY_BUDGET_S = 5.0
+    posted = []
+
+    def post(batch):                                  # each POST takes one "second"
+        now[0] += 1.0
+        posted.append(batch["readings"][0]["value"])
+    up._post = post
+    up._flush_queue()
+    assert posted == [0, 1, 2, 3, 4]
+    assert len(_names(q)) == 45                       # the rest is still queued, not dropped
+    for _ in range(20):
+        up._flush_queue()
+    assert posted == list(range(50)) and _names(q) == []
+
+
+def test_a_long_outage_keeps_every_batch_no_cap(q):
+    """Cole on #243: no cap on the queue, nothing evicted. A link down for a long stretch keeps
+    every batch on disk, and every one goes out, oldest first, when it comes back."""
+    up = _load_uplink(q)
+    up.CLOCK = _Clock(True)
+
+    def down(batch):
+        raise urllib.error.URLError("no route")
+    up._post = down
+    for k in range(3000):                             # one batch a minute, ~2 days
+        up.send([{"time": f"2026-10-{1 + k // 1440:02d}T{k % 1440 // 60:02d}:{k % 60:02d}:00Z",
+                  "source": "s", "path": "p", "value": k}])
+    assert len(_names(q)) == 3000
+    posted = []
+    up._post = lambda b: posted.append(b["readings"][0]["value"])
+    up.REPLAY_BUDGET_S = 1e9
+    up._flush_queue()
+    assert posted == list(range(3000))
+    assert _names(q) == [] and _names(q / "quarantine") == []
+
+
+def test_live_windows_keep_their_cadence_while_a_backlog_replays(q):
+    """Codex on #283: replay that spends its budget must not stretch the live window. Windows
+    are cut on a fixed cadence; with a big backlog each pass replays for up to its budget and
+    the next window is still cut on time."""
+    import asyncio
+    import time as _time
+    up = _load_uplink(q)
+    for k in range(5000):
+        _write(q, f"20261001T{k:06d}Z.json", _batch("2026-10-01T00:00:00Z", -1 - k))
+    up.CLOCK = _Clock(True)
+    up.AGG_SECONDS = 0.1
+    up.REPLAY_BUDGET_S = 0.06
+    live = []
+
+    def post(batch):
+        v = batch["readings"][0]["value"]
+        if v >= 0:
+            live.append(v)
+        else:
+            _time.sleep(0.01)                         # a queued batch takes a while to send
+    up._post = post
+
+    async def go():
+        win = {}
+        task = asyncio.create_task(up.flusher(win, asyncio.get_running_loop()))
+        t0 = _time.monotonic()
+        k = 0
+        while _time.monotonic() - t0 < 1.55:
+            win[("gps", "p")] = ("num", float(k))
+            k += 1
+            await asyncio.sleep(0.005)
+        task.cancel()
+    asyncio.run(go())
+    # 1.55 s at a 0.1 s cadence is ~15 windows; stretched by the 0.06 s budget it was ~9.
+    assert len(live) >= 12, live
+    assert len(_names(q)) < 5000                      # and the backlog did drain meanwhile
+
+
+def test_a_slow_live_link_does_not_strand_the_backlog(q):
+    """Codex on #283: with every live POST longer than a window and a busy bus, the backlog
+    must still drain (the replayer runs beside the live flusher, not after it)."""
+    import asyncio
+    import time as _time
+    up = _load_uplink(q)
+    for k in range(20):
+        _write(q, f"20261001T{k:06d}Z.json", _batch("2026-10-01T00:00:00Z", -1 - k))
+    up.CLOCK = _Clock(True)
+    up.AGG_SECONDS = 0.05
+    replayed = []
+
+    def post(batch):
+        v = batch["readings"][0]["value"]
+        if v >= 0:
+            _time.sleep(0.08)                         # live POSTs slower than a window
+        else:
+            replayed.append(v)
+    up._post = post
+
+    async def go():
+        win = {}
+        task = asyncio.create_task(up.flusher(win, asyncio.get_running_loop()))
+        t0 = _time.monotonic()
+        k = 0
+        while _time.monotonic() - t0 < 0.6:
+            win[("gps", "p")] = ("num", float(k))
+            k += 1
+            await asyncio.sleep(0.005)
+        task.cancel()
+        await asyncio.sleep(0.1)
+    asyncio.run(go())
+    assert replayed == [-1 - k for k in range(20)] and _names(q) == []
