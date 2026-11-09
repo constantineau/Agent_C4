@@ -35,6 +35,20 @@ test("idle, picking, confirming", () => {
   assert.equal(RL.label({ kind: "race", start_ts: 0 }, { confirming: true, nowS: 60 }), "TAP AGAIN TO END");
 });
 
+// #241: racing is its own state; the crew ends it on a separate "Race over" button
+test("Race over: hidden unless racing", () => {
+  assert.equal(RL.raceOverLabel(null), null);
+  assert.equal(RL.raceOverLabel({ racing: false }), null);
+  assert.equal(RL.raceOverLabel({ racing: true, since: null }), null);   // which race? unknown
+});
+test("Race over: plain, asked by the boat, armed", () => {
+  assert.equal(RL.raceOverLabel({ racing: true, since: 5 }), "Race over");
+  assert.equal(RL.raceOverLabel({ racing: true, since: 5, suggest_over: true }), "Race over?");
+  assert.equal(RL.raceOverLabel({ racing: true, since: 5, suggest_over: true }, { armed: true }), "Tap again to end");
+});
+test("Race over sends the race start it shows", () =>
+  assert.deepEqual(RL.raceOverBody({ racing: true, since: 1234.5 }), { since: 1234.5 }));
+
 const dir = path.join(__dirname, "dashboard");
 const html = fs.readFileSync(path.join(dir, "index.html"), "utf8");
 const js = fs.readFileSync(path.join(dir, "dashboard.js"), "utf8");
@@ -53,6 +67,24 @@ test("ending the log sends the id the button shows", () =>
 test("the pick buttons are at least 48 px", () => {
   const m = css.match(/\.ctl\.rp\s*\{[^}]*min-height:\s*(\d+)px/);
   assert.ok(m && Number(m[1]) >= 48);
+});
+
+test("index.html has the Race over button, hidden by default, 48 px+", () => {
+  assert.match(html, /id="raceOverBtn"[^>]*hidden/);
+  const m = css.match(/\.ctl\.raceover\s*\{[^}]*min-height:\s*(\d+)px/);
+  assert.ok(m && Number(m[1]) >= 48);
+});
+test("dashboard.js: Race over takes two taps and posts /race/over with the shown race start", () => {
+  assert.match(js, /getElementById\("raceOverBtn"\)\.addEventListener\("click", tapRaceOver\)/);
+  assert.match(js, /function tapRaceOver[\s\S]{0,400}raceOverUntil = Date\.now\(\) \+[\s\S]{0,300}return;/);
+  // the arm is bound to the race it was for: a newer race showing up disarms it
+  assert.match(js, /raceOverArmedSince = race\.since/);
+  // live only: never from DEMO (it would end the real race on simulated data)
+  assert.match(js, /function tapRaceOver[\s\S]{0,200}App\.src !== "live"/);
+  assert.match(js, /function renderRaceOver[\s\S]{0,300}App\.src === "live" \?/);
+  assert.match(js, /function cycleSource[\s\S]{0,400}renderRaceOver\(\)/);
+  assert.match(js, /function raceOverArmed\(race\)[\s\S]{0,120}race\.since === raceOverArmedSince/);
+  assert.match(js, /race\/over[\s\S]{0,200}C4RecLog\.raceOverBody\(race\)/);
 });
 
 console.log(failed ? "FAILED" : "ALL OK");

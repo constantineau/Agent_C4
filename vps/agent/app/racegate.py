@@ -3,11 +3,14 @@
 Everything the shore computes for the boat (course, fleet, playbook, checklist, watch plan, the
 forecast plume, the re-route chart and boat profile) is pre-start homework. Once the boat is
 racing, none of it may land. The boat is the authority: its own race log says whether it is
-racing. The crew taps a race session on at the gun and off at the finish on the iPad.
+racing. Starting a race session on the iPad (the gun tap) starts racing; only "Race over" on the
+iPad ends it, or 24 h of unbroken stopped readings (racelog.race_status). Racing is its own
+persisted state (#241): ending or auto-closing the recording session does not end it, and an
+engine restart keeps it.
 
 Rules (shared by every load endpoint that takes shore content):
-  * a running session of kind "race" means racing (a practice session doesn't);
-  * a race log that can't be read counts as racing (fail closed);
+  * racing means the race log's racing state is on (a practice session never turns it on);
+  * a racing state that can't be read counts as racing (fail closed);
   * the check and the write happen under racelog.SESSION_LOCK, so a session can't start in
     between.
 
@@ -27,15 +30,20 @@ RACING = "Racing now. Not loaded."
 
 
 def race_session():
-    """The boat's own race log: the running session if it is a RACE, else None. If the log can't
-    be read, fail closed (treated as racing)."""
+    """The boat's racing state: {kind: "race", start_ts, name, race_id} while racing, else None.
+    Racing, not recording: a race session that was closed (LOG end, auto-close) still counts
+    until the crew taps "Race over". If the state can't be read, fail closed (treated as racing).
+    Never takes the session lock (hold() already holds it)."""
     try:
         from . import racelog
         src = racelog._src()
         if src is None:
             return None                # no onboard race log (cloud): nothing to consult
-        cur = src.session_current()
-        return cur if cur and str(cur.get("kind") or "").lower() == "race" else None
+        st = racelog.race_state(src)
+        if not st.get("racing"):
+            return None
+        return {"kind": "race", "start_ts": st.get("since"), "name": st.get("name"),
+                "race_id": st.get("race_id")}
     except Exception:  # noqa: BLE001
         return {"kind": "race", "start_ts": None, "note": "race log unreadable"}
 

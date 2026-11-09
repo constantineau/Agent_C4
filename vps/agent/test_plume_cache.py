@@ -119,7 +119,7 @@ _rl._src = lambda: (_ for _ in ()).throw(OSError("db locked"))
 check("race log unreadable → treated as racing (fail closed)", bool(_ORIG_RS()))
 _rl._src = _saved_src
 check("the real race_session() ignores practice and reads race",
-      _real_rs({"kind": "practice"}) is None and _real_rs({"kind": "race", "id": 1})["id"] == 1)
+      _real_rs({"kind": "practice"}) is None and _real_rs({"kind": "race", "start_ts": 5.0})["start_ts"] == 5.0)
 SESSION["cur"] = {"id": 9, "kind": "race", "start_ts": NOW - 60}
 g = plume.get(NOW)
 check("cached plume shows frozen while a race session runs, at the session's start",

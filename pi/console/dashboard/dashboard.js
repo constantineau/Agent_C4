@@ -1519,13 +1519,13 @@
     return sailPost((st) => ({ reef: st.reef ? "" : "R1" }));
   };
   /* RACE LOG (sessions). Start: tap LOG, then Race or Practice (one extra tap; Race is
-     pre-selected when Deploy homework is aboard). A RACE session is what makes the boat refuse
+     pre-selected when Deploy homework is aboard). A RACE start also starts racing: the boat refuses
      shore homework (frozen at the gun), so the kind is always sent. The engine still defaults the
      name to the date and picks up the playbook's race_id. Pure parts: reclog.js. */
   async function fetchSession() {
     if (App.src !== "live") return;
     const r = await fetchJSON("/session", 8000);
-    if (r) { App.session = r; renderRec(); }
+    if (r) { App.session = r; renderRec(); renderRaceOver(); }
   }
   let recConfirmUntil = 0;   // two-step end: first tap arms this window, second tap ends
   let recPickUntil = 0;      // start: the Race / Practice choice is open until this time
@@ -1563,6 +1563,50 @@
     // quiet: not recording with no session, and housekeeping notes ("Archive check overdue")
     if (down && !a) b.title += " " + arch.text + ".";
     if (arch && arch.note && !down) b.title += " " + arch.note + ".";
+  }
+  /* RACE OVER (#241): racing (no shore loading) is its own state, ended only here, with two taps
+     (like Start in the navigator card). The boat may ask "Race over?" after a long stop. */
+  let raceOverUntil = 0;
+  let raceOverArmedSince = null;   // the race the first tap was for; a different race disarms
+  function raceOverArmed(race) {
+    return Date.now() < raceOverUntil && !!race && race.since === raceOverArmedSince;
+  }
+  function renderRaceOver() {
+    const b = document.getElementById("raceOverBtn"), l = document.getElementById("raceOverLbl");
+    if (!b || !l) return;
+    // live only: in DEMO the button would end the REAL race on simulated data
+    const race = App.src === "live" ? (App.session || {}).race : null;
+    const armed = raceOverArmed(race);
+    const text = window.C4RecLog.raceOverLabel(race, { armed: armed });
+    b.hidden = text === null;
+    if (text === null) return;
+    l.textContent = text;
+    b.classList.toggle("ask", !!race.suggest_over && !armed);
+    b.classList.toggle("confirm", armed);
+    b.title = armed ? "Tap again to end the race. Shore loading opens again."
+      : race.suggest_over ? "Stopped a while. Race over? Tap twice."
+      : "Racing: no shore loading. Tap twice when the race is over.";
+  }
+  async function tapRaceOver() {
+    const race = (App.session || {}).race;
+    if (App.src !== "live" || !race || !race.racing || race.since == null) return;
+    if (!raceOverArmed(race)) {
+      // first tap: arm for THIS race only (a newer race showing up meanwhile disarms it)
+      raceOverUntil = Date.now() + window.C4RecLog.OVER_ARM_MS;
+      raceOverArmedSince = race.since;
+      renderRaceOver();
+      setTimeout(renderRaceOver, window.C4RecLog.OVER_ARM_MS + 200);
+      return;
+    }
+    raceOverUntil = 0;
+    raceOverArmedSince = null;
+    try {
+      // the race start this button shows: a newer race is never ended by this tap
+      await fetch(API + "/race/over", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(window.C4RecLog.raceOverBody(race)) });
+    } catch (e) { /* engine unreachable: re-sync restores the true state */ }
+    fetchSession();
   }
   async function startRec(kind) {
     recPickUntil = 0;
@@ -2886,6 +2930,9 @@
     else { App.src = "live"; }
     document.getElementById("srcLbl").textContent = App.src === "live" ? "LIVE" : "DEMO·" + App.demoScn;
     renderSailsBar();
+    raceOverUntil = 0;
+    renderRaceOver();
+    if (App.src === "live") fetchSession();
     if (!document.getElementById("detail").hidden) closeDetail();
     render();
   }
@@ -2950,6 +2997,7 @@
     document.getElementById("recBtn").addEventListener("click", toggleRec);
     document.getElementById("recRace").addEventListener("click", () => startRec("race"));
     document.getElementById("recPractice").addEventListener("click", () => startRec("practice"));
+    document.getElementById("raceOverBtn").addEventListener("click", tapRaceOver);
     document.getElementById("alertBtn").addEventListener("click", toggleSound);
     // reflect a persisted armed state, and re-unlock iOS audio on the first interaction after a reload
     document.getElementById("alertLbl").textContent = Sound.on ? "ON" : "OFF";

@@ -7,7 +7,7 @@ boat's own computer crunching its own sensors (Expedition-class), not an "outsid
 under RRS 41. There is **no LLM and no tool-loop** here: every read endpoint is a direct
 deterministic response and legal while racing. The one gate is on the WRITES that take shore
 homework (course, fleet, playbook, checklist, a whole watch plan, plume, re-route assets): frozen
-at the gun, refused while a race session runs (`app.racegate`). The Orin copilot's playbook goes
+at the gun, refused while racing (`app.racegate`; racing ends only on the iPad's "Race over"). The Orin copilot's playbook goes
 through here too (POST /playbook/load forwards it under the same lock). Crew inputs from the iPad (sail
 state, checklist acks, watch quick edits, the race log, re-route buttons) are never gated.
 
@@ -894,6 +894,19 @@ def session_end(body: dict = None):
     """End the running session: {id?}. The iPad sends the id it shows; if another session is
     running now (one started in between), nothing is ended: "Already ended"."""
     return racelog.end(session_id=(body or {}).get("id"))
+
+
+@app.post("/race/over")
+def race_over(body: dict = None):
+    """The crew ends the race: {since?}. Racing (RRS 41, no shore loading) is its own state; this
+    is the one way the crew ends it (an abandoned race too). The iPad sends the race start it
+    shows; if a newer race is running now, nothing is ended: "Already ended". The recording
+    session (LOG) is not touched. `since` is required: without it the boat can't tell which race
+    the crew meant, so nothing is ended."""
+    since = (body or {}).get("since")
+    if since is None:
+        return {"ok": False, "note": "Which race?"}
+    return racelog.race_over(since=since)
 
 
 @app.get("/sails/log")
