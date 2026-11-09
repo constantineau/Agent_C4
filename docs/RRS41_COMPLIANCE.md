@@ -357,6 +357,7 @@ the race log's session lock, so a session can't start in between. A refusal is
 | POST /sails/state | iPad | Taken | The crew's own sail state. |
 | POST /session/start, /session/end | iPad | Taken | The race log itself. |
 | POST /course/practice | iPad | Taken | Built onboard from live position + wind. |
+| POST /navigator/start, /navigator/undo, /navigator/mark | iPad | Taken | The crew's own navigation: a new run, undo a mark, pick the next mark. |
 | POST /gps/show, /gps/clear | iPad | Taken | Sends what's aboard to the plotter; computes nothing ashore. |
 | POST /reoptimize/run, /reroute/run | iPad | Taken | Onboard re-routes (Pi / Orin) on public data. |
 

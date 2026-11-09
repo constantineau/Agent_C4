@@ -10,6 +10,8 @@ shifts, leverage in 5.3) is what the race/practice toggle gates for RRS 41.
 """
 import math
 import os
+import threading
+import time
 
 from . import datasource
 
@@ -114,13 +116,27 @@ PASS_NM = 0.05             # distance beyond a mark's plane that counts as passe
 # The ratchet is persistent, so a single bad fix could latch us onto the wrong mark for the rest
 # of the race. That is not hypothetical: the Jul 18 archive shows own-ship position contaminated
 # by the AIS receiver channel (see pi/archiver — AIS contexts were archived under boat_id), so
-# 17% of position reads were some other vessel. Geometry alone is self-correcting and still
-# answers immediately; only the WRITE waits for the advance to be seen twice running.
+# 17% of position reads were some other vessel. An advance therefore counts only once
+# PROGRESS_CONFIRM DISTINCT fixes (by fix time) agree on it, and a fix that does not advance
+# clears the count (#41). One /strategy poll reads the navigator 4-5 times on the same sample;
+# those are one fix, not five. Until the advance is confirmed the navigator keeps answering with
+# the confirmed mark, so the chartplotter (gpsout) never steers to a mark seen on one fix (#246).
 PROGRESS_CONFIRM = 2
-_pending = {}              # route -> [index, consecutive observations]
+_pending = {}              # route -> {"i": index, "fixes": [distinct fix keys]}
+HIST_MAX = 50              # how many earlier marks Undo can step back through
+# Progress reads and writes (the poll, Start, Undo, a mark pick) are read-modify-write on one kv
+# blob, from several request threads: one lock. Never take COURSE_LOCK while holding it.
+_PROGRESS_LOCK = threading.RLock()
 # Set false to ignore the stored ratchet and run on geometry alone (the replay rig does this so
 # a frame depends only on its own timestamp, never on which frames were computed before it).
 PROGRESS_LATCH = os.environ.get("NAV_PROGRESS_LATCH", "true").strip().lower() != "false"
+# A reading older than this (wall clock) is not "now" (#45.1): an old position is no position,
+# old wind is no wind. Onboard the GPS writes several times a second; the cloud sees the boat
+# through the uplink and gets more slack (the same limits as the collision watch's own fix).
+# 0 turns the check off.
+NAV_MAX_AGE_S = float(os.environ.get(
+    "NAV_MAX_AGE_S",
+    "30" if os.environ.get("DATA_SOURCE", "cloud").strip().lower() == "onboard" else "120"))
 
 
 def _beyond_nm(lat, lon, m, axis_deg):
@@ -133,19 +149,37 @@ def _beyond_nm(lat, lon, m, axis_deg):
     return d * math.cos(math.radians(_bearing(m["lat"], m["lon"], lat, lon) - axis_deg))
 
 
+def _plane_axis(marks, i):
+    """Bearing of the axis marks[i]'s plane is normal to: the leg INTO it, or for the start the
+    leg OUT of it. None on a one-mark course."""
+    m = marks[i]
+    if i > 0:
+        return _bearing(marks[i - 1]["lat"], marks[i - 1]["lon"], m["lat"], m["lon"])
+    if len(marks) > 1:
+        return _bearing(m["lat"], m["lon"], marks[i + 1]["lat"], marks[i + 1]["lon"])
+    return None
+
+
 def _passed(marks, i, lat, lon):
     """Has the boat passed marks[i]? Pure — no I/O and no stored state, so it is unit-testable
     and gives the same answer for a moment however you arrive at it."""
     m = marks[i]
     if _hav_nm(lat, lon, m["lat"], m["lon"]) <= ROUND_NM:
         return True                                                   # close aboard: a rounding
-    if i > 0:                                                          # axis = the leg INTO it
-        axis = _bearing(marks[i - 1]["lat"], marks[i - 1]["lon"], m["lat"], m["lon"])
-    elif len(marks) > 1:                                               # start line: leg OUT of it
-        axis = _bearing(m["lat"], m["lon"], marks[i + 1]["lat"], marks[i + 1]["lon"])
-    else:
+    axis = _plane_axis(marks, i)
+    if axis is None:
         return False                                                   # a one-mark course
     return _beyond_nm(lat, lon, m, axis) >= PASS_NM
+
+
+def _short_of(marks, i, lat, lon):
+    """Is the boat on the near side of marks[i]'s plane? What releases a hold (Undo, a pick, a
+    Start). By the plane alone: close aboard but behind the line is short of it, so a Start tapped
+    near the start line releases as soon as the boat is behind it."""
+    axis = _plane_axis(marks, i)
+    if axis is None:
+        return True
+    return _beyond_nm(lat, lon, marks[i], axis) < PASS_NM
 
 
 def _next_index(marks, lat, lon, floor=0):
@@ -166,43 +200,182 @@ def _course_fp(marks):
     return hashlib.sha1(body.encode()).hexdigest()[:16]
 
 
-def _progress_floor(route, marks):
-    """Lowest index the ratchet allows: 0 when disabled, unsupported, or the course changed."""
+def _store():
+    """The datasource when it keeps course progress (the onboard kv), else None: the replay rig
+    (latch off) and the cloud (no kv) run on geometry alone, which is still correct."""
     if not PROGRESS_LATCH:
-        return 0
+        return None
     try:
         ds = datasource.active()
-        if not hasattr(ds, "get_nav_progress"):
-            return 0                       # CloudSource has no kv — geometry alone, still correct
-        rec = ds.get_nav_progress(route) or {}
-        return int(rec.get("i", 0)) if rec.get("fp") == _course_fp(marks) else 0
     except Exception:
-        return 0
+        return None
+    if not (hasattr(ds, "get_nav_progress") and hasattr(ds, "save_nav_progress")):
+        return None
+    return ds
 
 
-def _confirm_progress(route, marks, i):
-    """Persist an advance only once it has been observed PROGRESS_CONFIRM times running.
+def _load_progress(ds, route, marks):
+    """This run's progress for `route`: {fp, i, run, hist, hold}. A record for other course
+    geometry (a new course under the same name) is void: a fresh run at the first mark."""
+    fp = _course_fp(marks)
+    rec = ds.get_nav_progress(route) or {}      # a read failure raises: never taken as "no run"
+    if rec.get("fp") != fp:
+        return {"fp": fp, "i": 0, "run": None, "hist": [], "hold": None}
+    n = len(marks)
+    clamp = lambda v: max(0, min(int(v), n - 1))          # noqa: E731
+    hold = rec.get("hold")
+    return {"fp": fp, "i": clamp(rec.get("i", 0)), "run": rec.get("run"),
+            "hist": [clamp(v) for v in (rec.get("hist") or [])][-HIST_MAX:],
+            "hold": None if hold is None else clamp(hold)}
 
-    A one-off wild fix advances the returned index for that call (geometry is recomputed every
-    time, so the next good fix undoes it), but never reaches the durable ratchet."""
-    p = _pending.get(route)
-    if not p or p[0] != i:
-        _pending[route] = [i, 1]
-    else:
-        p[1] += 1
-    if _pending[route][1] >= PROGRESS_CONFIRM:
-        _save_progress(route, marks, i)
 
-
-def _save_progress(route, marks, i):
-    if not PROGRESS_LATCH:
-        return
+def _save_progress(ds, route, rec):
+    """True when the progress is on disk. A failed write (disk full, DB locked) is said out loud:
+    the crew's controls report it rather than claiming a change the next poll won't show."""
     try:
-        ds = datasource.active()
-        if hasattr(ds, "save_nav_progress"):
-            ds.save_nav_progress(route, {"fp": _course_fp(marks), "i": int(i)})
-    except Exception:
-        pass
+        ds.save_nav_progress(route, rec)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        print(f"[navigator] progress not saved for {route!r}: {type(exc).__name__}: {exc}", flush=True)
+        return False
+
+
+def _fix_key(s):
+    """What makes two reads the SAME fix: its time when the source says, else its position."""
+    t = s.get("fix_t")
+    if t is not None:
+        return ("t", round(float(t), 3))
+    return ("p", round(s["lat"], 7), round(s["lon"], 7))
+
+
+def _advance(route, marks, lat, lon, fix):
+    """(index of the mark being sailed to, progress record or None). Geometry proposes, the
+    stored run decides: an advance is kept once PROGRESS_CONFIRM distinct fixes agree on it.
+
+    After Undo or a mark pick the chosen mark is HELD: geometry can't move past it until a fix
+    shows the boat short of it again. Otherwise an Undo of an advance that geometry made (a course
+    that doubles back) would be re-made on the next fix."""
+    ds = _store()
+    if ds is None:
+        return _next_index(marks, lat, lon, 0), None
+    with _PROGRESS_LOCK:
+        try:
+            # the marks again, now under the lock: a course load that replaced them since this
+            # poll read them has (or will have) reset the run for the new marks, and this stale
+            # snapshot must not write its own run over that one
+            if _course_fp(_marks(route) or []) != _course_fp(marks):
+                return _next_index(marks, lat, lon, 0), None
+            rec = _load_progress(ds, route, marks)
+        except Exception as exc:  # noqa: BLE001
+            # can't read the run right now: answer from geometry, write nothing
+            print(f"[navigator] progress unreadable for {route!r}: {type(exc).__name__}: {exc}",
+                  flush=True)
+            return _next_index(marks, lat, lon, 0), None
+        floor = rec["i"]
+        if rec["hold"] is not None:
+            if rec["hold"] == floor and not _short_of(marks, floor, lat, lon):
+                _pending.pop(route, None)
+                return floor, rec                      # still held: wait for a fix short of it
+            rec["hold"] = None                         # released: normal advance from here
+            _save_progress(ds, route, rec)
+        idx = _next_index(marks, lat, lon, floor)
+        if idx == floor:
+            _pending.pop(route, None)                  # a fix that doesn't advance resets the count
+            return floor, rec
+        p = _pending.get(route)
+        if not p or p["i"] != idx or p.get("fp") != rec["fp"]:
+            p = _pending[route] = {"i": idx, "fp": rec["fp"], "fixes": []}
+        if fix not in p["fixes"]:
+            p["fixes"].append(fix)
+        if len(p["fixes"]) < PROGRESS_CONFIRM:
+            return floor, rec                          # seen on one fix: not yet
+        _pending.pop(route, None)
+        new = dict(rec, hist=(rec["hist"] + [floor])[-HIST_MAX:], i=idx)
+        if not _save_progress(ds, route, new):
+            return floor, rec                          # not stored: answer what is stored
+        return idx, new
+
+
+def _set_progress(route, change):
+    """Run `change(rec, marks) -> (ok, note)` on `route`'s progress under the lock and save it.
+    Returns the result dict the crew's controls show."""
+    from . import orinroute
+    ds = _store()
+    if ds is None:
+        return {"ok": False, "no_store": True, "note": "Marks can't be changed here."}
+    saved_failed = False
+    # COURSE_LOCK first (the order everywhere): a course load can't swap the marks between this
+    # read and the write, so a pick never lands on another course's run
+    with orinroute.COURSE_LOCK, _PROGRESS_LOCK:
+        route = route or active_route()
+        marks = _marks(route)
+        if not marks:
+            return {"ok": False, "note": "No course loaded."}
+        try:
+            rec = _load_progress(ds, route, marks)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[navigator] progress unreadable for {route!r}: {type(exc).__name__}: {exc}",
+                  flush=True)
+            return {"ok": False, "save_failed": True, "route": route,
+                    "note": "Couldn't read the marks. Try again."}
+        ok, note = change(rec, marks)
+        if ok:
+            _pending.pop(route, None)
+            if not _save_progress(ds, route, rec):
+                ok, note = False, "Couldn't save. Try again."
+                saved_failed = True
+    out = {"ok": ok, "route": route}
+    if saved_failed:
+        out["save_failed"] = True
+    if note:
+        out["note"] = note
+    if ok:
+        m = marks[rec["i"]]
+        out.update({"index": rec["i"], "next_mark": m["name"], "can_undo": bool(rec["hist"])})
+    return out
+
+
+def start_run(route=None, keep_undo=True):
+    """A new navigation run (#246): the next mark is the first one again. Called on a course load
+    (keep_undo False: a new course has nothing to go back to) and on the crew's Start tap. The
+    tap keeps the old position for Undo and HOLDS the start until the boat is seen behind the
+    line: otherwise a stray tap mid-race would advance on its own over the next fixes, and one
+    Undo would land on the start instead of the mark the boat was sailing to."""
+    def change(rec, marks):
+        rec["hist"] = (rec["hist"] + [rec["i"]])[-HIST_MAX:] if keep_undo else []
+        rec.update({"i": 0, "hold": 0 if keep_undo else None, "run": int(time.time())})
+        return True, None
+    return _set_progress(route, change)
+
+
+def undo_mark(route=None):
+    """Undo the last mark change (an advance, a pick, or a Start): back to the mark before it,
+    held there until the boat is seen short of it."""
+    def change(rec, marks):
+        if not rec["hist"]:
+            return False, "Nothing to undo."
+        rec["i"] = rec["hist"].pop()
+        rec["hold"] = rec["i"]
+        return True, None
+    return _set_progress(route, change)
+
+
+def pick_mark(index, route=None):
+    """The crew sets the next mark by its place in the course: the right one of a repeated mark
+    (lap 2's Windward, not lap 1's). Held there until the boat is seen short of it."""
+    def change(rec, marks):
+        try:
+            k = int(index)
+        except (TypeError, ValueError):
+            return False, "Pick a mark."
+        if not 0 <= k < len(marks):
+            return False, "No such mark."
+        if k != rec["i"]:
+            rec["hist"] = (rec["hist"] + [rec["i"]])[-HIST_MAX:]
+        rec["i"] = k
+        rec["hold"] = k
+        return True, None
+    return _set_progress(route, change)
 
 
 # --- live state -------------------------------------------------------------
@@ -215,9 +388,20 @@ _PATHS = {
 
 
 def _latest():
-    """Freshest value (any source) for the navigation/wind paths we need, in SI."""
+    """Freshest value (any source) for the navigation/wind paths we need, converted to degrees and
+    knots. Also `ages` ({key: seconds old, or None when the source can't say}) and `fix_t` (the
+    position's time), from the same priority pick as each value (`latest_sample`). The values are
+    returned whatever their age; get_navigator judges them with `_fresh` (#45.1)."""
     src = datasource.active()
-    out = {key: src.latest_value(path) for key, path in _PATHS.items()}
+    sample = getattr(src, "latest_sample", None)
+    out, at = {}, {}
+    for key, path in _PATHS.items():
+        if sample is None:
+            out[key], at[key] = src.latest_value(path), None
+            continue
+        smp = sample(path)
+        out[key] = smp[0] if smp else None
+        at[key] = float(smp[1]) if smp and smp[0] is not None and smp[1] is not None else None
     # convert
     for k in ("cog", "heading", "twd"):
         if out[k] is not None:
@@ -226,6 +410,27 @@ def _latest():
         out["sog"] *= 1.943844
     if out["tws"] is not None:
         out["tws"] *= 1.943844
+    now = time.time()
+    out["ages"] = {k: (None if e is None else now - e) for k, e in at.items()}
+    out["fix_t"] = (min(at["lat"], at["lon"])
+                    if at.get("lat") is not None and at.get("lon") is not None else None)
+    return out
+
+
+def _fresh(s):
+    """`s` with every reading older than NAV_MAX_AGE_S set to None (a position counts as one
+    reading: lat and lon go together). Readings whose age is unknown are kept."""
+    ages = s.get("ages") or {}
+    if NAV_MAX_AGE_S <= 0 or not ages:
+        return s
+    old = lambda k: ages.get(k) is not None and ages[k] > NAV_MAX_AGE_S     # noqa: E731
+    out = dict(s)
+    for k in ("cog", "heading", "sog", "tws", "twd"):
+        if old(k):
+            out[k] = None
+    if old("lat") or old("lon"):
+        out["lat"] = out["lon"] = None
+        out["fix_age_s"] = max(ages.get("lat") or 0, ages.get("lon") or 0)
     return out
 
 
@@ -305,7 +510,9 @@ def _polar_speed(by, tws_kn, twa):
         return row[-1][1]
 
     if tws_kn <= speeds[0]:
-        return on_curve(speeds[0])
+        # below the lightest curve: scaled toward 0 in no wind, as the routers read it
+        # (shared/polar.py, #64) — never that curve's full speed in a drifter
+        return on_curve(speeds[0]) * (max(0.0, tws_kn) / speeds[0] if speeds[0] > 0 else 1.0)
     if tws_kn >= speeds[-1]:
         return on_curve(speeds[-1])
     for t0, t1 in zip(speeds, speeds[1:]):
@@ -318,10 +525,12 @@ def _polar_speed(by, tws_kn, twa):
 def _polar_vmg_to_mark(tws_kn, twa_to_mark):
     """Best speed made good toward a mark lying `twa_to_mark` off the wind, in kn.
 
-    Maximises target boat speed x cos(sailing angle - angle to the mark) over sailable headings.
-    Continuous through the close-hauled boundary by construction: when the mark is fetchable the
-    maximum sits at the direct angle, and when it is inside the no-go zone the maximum slides to
-    close-hauled on its own — there is no branch to jump across."""
+    The boat must actually GET there, so a heading off the mark has to be paid back on the other
+    board: the answer is the best mix of two headings either side of the mark (one heading when
+    it points straight at it) — the polar's convex hull in the mark's direction. For a mark inside
+    the no-go zone that is the upwind VMG / cos(angle to the mark), not one board's VMG, which
+    read ~13-17% fast (#41). Tacking time is not modelled. Continuous through the close-hauled
+    boundary by construction: no branch to jump across."""
     try:
         pts = datasource.active().polars_stw()          # [(tws, twa, target_stw)]
     except Exception:
@@ -329,14 +538,28 @@ def _polar_vmg_to_mark(tws_kn, twa_to_mark):
     by = _polar_curves(pts)
     if not by:
         return None
-    target, best = abs(twa_to_mark), 0.0
-    for a in range(0, 181, 2):
-        stw = _polar_speed(by, tws_kn, float(a))
+    t = abs(_wrap180(twa_to_mark))
+    left, right = [], []                    # (made good, across) for headings each side of the mark
+    for h in range(-180, 181, 2):
+        stw = _polar_speed(by, tws_kn, float(abs(h)))
         if not stw:
             continue
-        v = stw * math.cos(math.radians(a - target))
-        if v > best:
-            best = v
+        r = math.radians(h - t)
+        p, q = stw * math.cos(r), stw * math.sin(r)
+        if p <= 0:
+            continue
+        if q <= 1e-9:
+            left.append((p, q))
+        if q >= -1e-9:
+            right.append((p, q))
+    best = 0.0
+    for p1, q1 in left:
+        for p2, q2 in right:
+            d = q2 - q1
+            # the mix whose resultant points at the mark (both on it: either one)
+            v = max(p1, p2) if d <= 1e-9 else (q2 * p1 - q1 * p2) / d
+            if v > best:
+                best = v
     return best or None
 
 
@@ -354,7 +577,12 @@ def _next_rounding(marks, nxt, twd, beat, run, twa_to_mark):
     Pure function (no I/O) so it's unit-testable. Returns the exit course (bearing from the
     next mark to the one after it), the TWA the boat will sail once round, that leg's type
     (beat/reach/run), and the maneuver implied by the angle change — or None when the next mark
-    is the finish (nothing to prep after it) or the wind is unknown (can't resolve a TWA)."""
+    is the finish (nothing to prep after it) or the wind is unknown (can't resolve a TWA).
+
+    `twa_to_mark` is SIGNED (bearing to the mark minus TWD, -180..180) so the side of the wind is
+    known: in and out on opposite sides with the turn through head to wind is a tack, through
+    dead downwind a gybe (#183-2). Unsigned angles called 315 -> 045 with wind north "hold
+    course"."""
     if twd is None:
         return None
     try:
@@ -367,15 +595,24 @@ def _next_rounding(marks, nxt, twd, beat, run, twa_to_mark):
     exit_course = _bearing(nxt["lat"], nxt["lon"], after["lat"], after["lon"])
     exit_twa = _adiff(exit_course, twd)   # 0..180, angle off the wind on the next leg
     exit_type = "beat" if exit_twa < beat else "run" if exit_twa > run else "reach"
-    # Maneuver implied by how much the TWA opens (bear away) or closes (head up) at the mark.
+    # Maneuver implied by how much the TWA opens (bear away) or closes (head up) at the mark,
+    # and whether the wind changes side (tack or gybe).
     if twa_to_mark is None:
         maneuver = "round"
-    elif exit_twa > twa_to_mark + 12:
-        maneuver = "bear away"
-    elif exit_twa < twa_to_mark - 12:
-        maneuver = "head up"
     else:
-        maneuver = "hold course"
+        s_in = _wrap180(twa_to_mark)
+        s_out = _wrap180(exit_course - twd)
+        a_in = abs(s_in)
+        turn = ("bear away" if exit_twa > a_in + 12 else
+                "head up" if exit_twa < a_in - 12 else None)
+        if s_in * s_out < 0 and a_in + exit_twa < 180:          # through head to wind
+            maneuver = {"head up": "head up and tack",
+                        "bear away": "tack and bear away"}.get(turn, "tack")
+        elif s_in * s_out < 0:                                   # through dead downwind
+            maneuver = {"bear away": "bear away and gybe",
+                        "head up": "gybe and head up"}.get(turn, "gybe")
+        else:
+            maneuver = turn or "hold course"
     return {
         "exit_mark": after["name"],
         "exit_course_deg": round(exit_course, 1),
@@ -387,6 +624,34 @@ def _next_rounding(marks, nxt, twd, beat, run, twa_to_mark):
 
 def _marks(route):
     return datasource.active().marks(route)
+
+
+def _age_text(sec):
+    sec = int(round(sec))
+    return f"{sec} s" if sec < 120 else f"{sec // 60} min" if sec < 7200 else f"{sec // 3600} h"
+
+
+def _current_tack(s, twd):
+    """'starboard' / 'port' from the heading (else COG): wind over the starboard side is
+    starboard tack. None when neither is known, or the boat is head to wind or dead downwind."""
+    hdg = s.get("heading") if s.get("heading") is not None else s.get("cog")
+    if hdg is None or twd is None:
+        return None
+    rel = _wrap180(twd - hdg)               # where the wind comes from, off the bow (+ = starboard)
+    if abs(rel) < 5 or abs(rel) > 175:
+        return None
+    return "starboard" if rel > 0 else "port"
+
+
+def _layline_text(layline, tack, leg_type, mark):
+    """The call when the boat is ON a layline (#183-3). It used to say "Tack to lay" always, even
+    to a boat already sailing the layline. On that tack: laying the mark. On the other tack:
+    tack (gybe on a run) to lay it. Tack unknown: just where we are."""
+    if tack is None:
+        return f"On the {layline} layline to {mark}."
+    if tack == layline:
+        return f"On the {layline} layline. Laying {mark}."
+    return f"On the {layline} layline. {'Tack' if leg_type == 'beat' else 'Gybe'} to lay {mark}."
 
 
 def get_course(route: str = None):
@@ -412,16 +677,17 @@ def get_navigator(route: str = None):
     marks = _marks(route)
     if not marks:
         return {"available": False, "note": f"No course loaded for '{route}'."}
-    s = _latest()
+    s = _fresh(_latest())
     if s["lat"] is None or s["lon"] is None:
+        if s.get("fix_age_s") is not None:
+            return {"available": False, "position_age_s": round(s["fix_age_s"]),
+                    "note": f"No fresh position (last fix {_age_text(s['fix_age_s'])} ago)."}
         return {"available": False, "note": "No position yet."}
     lat, lon = s["lat"], s["lon"]
 
-    # next mark = the first one we have not passed (plane crossing, then the kv ratchet)
-    floor = _progress_floor(route, marks)
-    idx = _next_index(marks, lat, lon, floor)
-    if idx != floor:
-        _confirm_progress(route, marks, idx)
+    # next mark = the first one we have not passed (plane crossing), as far as this run has
+    # confirmed it on distinct fixes, or where the crew put it
+    idx, rec = _advance(route, marks, lat, lon, _fix_key(s))
     nxt = marks[idx]
     dist = _hav_nm(lat, lon, nxt["lat"], nxt["lon"])
     brg = _bearing(lat, lon, nxt["lat"], nxt["lon"])
@@ -434,16 +700,18 @@ def get_navigator(route: str = None):
         twa_to_mark = _adiff(brg, twd)          # angle off the wind if we aimed at the mark
         if twa_to_mark < beat:                   # mark is above close-hauled -> must beat
             leg["type"] = "beat"
-            stbd = (twd + beat) % 360             # close-hauled headings
-            port = (twd - beat) % 360
+            angle = beat
         elif twa_to_mark > run:                  # mark is below optimal run -> must gybe
             leg["type"] = "run"
-            stbd = (twd + run) % 360
-            port = (twd - run) % 360
+            angle = run
         else:
             leg["type"] = "reach"
-            stbd = port = None
-        if stbd is not None:
+            angle = None
+        if angle is not None:
+            # Starboard tack has the wind over the starboard side: heading = TWD - TWA (as in
+            # tactics, routing and windphrase). It was TWD + TWA, which named every tack wrong (#41).
+            stbd = (twd - angle) % 360
+            port = (twd + angle) % 360
             # layline bearings from the mark = reciprocal of the courses sailed toward it
             leg["laylines"] = {
                 "starboard_course": round(stbd, 1), "port_course": round(port, 1),
@@ -453,7 +721,7 @@ def get_navigator(route: str = None):
             ds, dp = _adiff(brg, stbd), _adiff(brg, port)
             near, name = (ds, "starboard") if ds < dp else (dp, "port")
             if near <= LAYLINE_TOL_DEG:
-                layline_call = f"On the {name} layline. {'Tack' if leg['type']=='beat' else 'Gybe'} to lay {nxt['name']}."
+                layline_call = _layline_text(name, _current_tack(s, twd), leg["type"], nxt["name"])
             else:
                 layline_call = f"{round(near)}° below the {name} layline to {nxt['name']}."
 
@@ -472,7 +740,7 @@ def get_navigator(route: str = None):
             eta_min, eta_basis = round(dist / vmc * 60, 1), "made-good"
 
     # The leg after the next mark — homework for the upcoming rounding (None at the finish).
-    twa_to_mark = _adiff(brg, twd) if twd is not None else None
+    twa_to_mark = _wrap180(brg - twd) if twd is not None else None       # signed: side of the wind
     next_rounding = _next_rounding(marks, nxt, twd, beat, run, twa_to_mark)
 
     return {
@@ -491,6 +759,10 @@ def get_navigator(route: str = None):
                  "tws": None if tws is None else round(tws, 1),
                  "beat_twa": round(beat, 1), "run_twa": round(run, 1)},
         "marks_total": len(marks),
+        # the crew's Start / Undo / pick controls (#246): None where marks can't be changed
+        "progress": None if rec is None else {"can_undo": bool(rec["hist"]),
+                                              "run_started": rec.get("run"),
+                                              "held": rec.get("hold") is not None},
         "remaining_nm": round(sum(
             _hav_nm(marks[i]["lat"], marks[i]["lon"], marks[i+1]["lat"], marks[i+1]["lon"])
             for i in range(idx, len(marks) - 1)) + dist, 1),
@@ -500,10 +772,13 @@ def get_navigator(route: str = None):
 def make_practice_course(leg_nm: float = 1.0):
     """Drop a windward/leeward practice course from the live position + wind, stored as route
     'practice'. Leeward mark at the boat, windward mark leg_nm straight upwind (toward TWD)."""
-    s = _latest()
+    s = _fresh(_latest())
     if s["lat"] is None or s["lon"] is None:
         return {"available": False, "note": "No position yet."}
-    twd = s["twd"] if s["twd"] is not None else 0.0
+    if s["twd"] is None:
+        # it used to lay the windward mark due north (TWD 0) and report success (#183-4)
+        return {"available": False, "note": "No wind direction yet."}
+    twd = s["twd"]
     lat, lon = s["lat"], s["lon"]
     # offset leg_nm in bearing twd (upwind) — simple equirectangular step
     d_rad = (leg_nm / 60.0)  # nm -> deg latitude
@@ -516,5 +791,8 @@ def make_practice_course(leg_nm: float = 1.0):
         datasource.active().save_practice_course(marks)
         set_active("practice")
         _course_changed("practice")      # new marks under the same name: always a new course
+        run = start_run("practice", keep_undo=False)     # a new course is a new run (#246)
+    if run.get("save_failed"):
+        return {"available": False, "note": "Couldn't reset the marks. Try again."}
     return {"available": True, "route": "practice", "leg_nm": leg_nm,
             "twd": round(twd, 1), "marks": len(marks)}
