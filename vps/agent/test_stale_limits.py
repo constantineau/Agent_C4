@@ -168,6 +168,8 @@ navigator.get_navigator = lambda route=None: {"available": False}
 t = tactics.get_tactics()
 check("lasting shift with heading and COG 20 s old → no favoured side (point of sail unknown)",
       t.get("available") is True and t.get("favored_side") == "either")
+check("…and the sentence names no side", "favored" not in t.get("recommendation", "")
+      and "side of the" not in t.get("recommendation", "") and "no side call" in t.get("recommendation", ""))
 
 print("plan gap:")
 use(dict(FRESH, **{TWS: 20.0, TWD: 20.0}))

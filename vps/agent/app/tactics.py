@@ -139,8 +139,13 @@ def get_tactics(route: str = None):
 
     # recommendation — the shared, racer-native shift phrasing (boat-frame first, baseline→now, then
     # the point-of-sail-aware favoured side), plus leverage.
-    bits = [wp.describe_shift(mean, cur, tack=tack if tack in ("port", "starboard") else None,
-                              pos=pos, persistent=persistent, oscillation_deg=osc)]
+    if persistent and hdg is None:
+        # no point of sail: say what the wind did, never which side (see favored above)
+        bits = [f"wind shifted {wp.shift_word(sign)}, from {round(mean) % 360}° to "
+                f"{round(cur) % 360}°. No live heading, so no side call."]
+    else:
+        bits = [wp.describe_shift(mean, cur, tack=tack if tack in ("port", "starboard") else None,
+                                  pos=pos, persistent=persistent, oscillation_deg=osc)]
     if leverage and leverage["nm"] >= 0.02:
         bits.append(f"{leverage['boatlengths']} BL {leverage['side']} leverage.")
 

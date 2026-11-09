@@ -179,10 +179,12 @@ def _conditions(blind=None):
         if tac.get("available"):
             w = tac.get("wind", {})
             if w.get("persistent") and abs(w.get("shift_deg", 0)) >= SHIFT_DEG:
+                side = tac.get("favored_side")
                 out.append({"key": "wind_shift", "kind": "wind_shift", "severity": "warn",
                             "message": f"Wind shifted {w.get('trend')} "
-                                       f"{abs(round(w['shift_deg']))}°. Favour the "
-                                       f"{tac.get('favored_side')} side."})
+                                       f"{abs(round(w['shift_deg']))}°."
+                                       + (f" Favour the {side} side."
+                                          if side in ("left", "right") else "")})
     except Exception:
         pass
 
