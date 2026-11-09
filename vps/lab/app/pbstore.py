@@ -178,11 +178,12 @@ def list_bundles():
             "_mtime": _mtime_ns(f),
         })
     # freeze order: signed_at is whole seconds, so the file's own write time breaks ties
-    order = lambda x: (x.get("signed_at") or 0, x["_mtime"], x["id"])  # noqa: E731
+    num = lambda v: v if isinstance(v, (int, float)) and not isinstance(v, bool) else 0  # noqa: E731
+    order = lambda x: (num(x.get("signed_at")), x["_mtime"], x["id"])  # noqa: E731
     seen = {}
     for x in sorted(out, key=order):
         k = (x.get("race_id"), x.get("course_id"))
         seen[k] = x["rev"] = seen.get(k, 0) + 1
         del x["_mtime"]
-    out.sort(key=lambda x: x.get("generated_at") or 0, reverse=True)
+    out.sort(key=lambda x: num(x.get("generated_at")), reverse=True)
     return out

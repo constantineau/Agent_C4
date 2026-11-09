@@ -177,5 +177,15 @@ revs = {b["id"]: b["rev"] for b in pbstore.list_bundles()}
 check("a repaired revision keeps its number", revs[ra[0][0]] == 1 and revs[ra[1][0]] == 2
       and synthesis.verify_bundle(pbstore.get(ra[0][0])))
 
+print("a damaged timestamp never breaks the list:")
+bad = synthesis.sign_bundle({"race_id": "r1", "course_id": "odd", "variants": [{"id": "q"}],
+                             "generated_at": "x"})
+bad["signature"]["signed_at"] = "broken"
+pbstore.save(bad)
+try:
+    check("listed", any(b["course_id"] == "odd" for b in pbstore.list_bundles()))
+except TypeError as exc:
+    check(f"listed ({exc})", False)
+
 print("ok" if ok else "FAILED")
 sys.exit(0 if ok else 1)
