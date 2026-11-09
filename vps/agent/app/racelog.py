@@ -327,6 +327,9 @@ def race_status(now=None, force=False):
             r = race_over(since=since, by="auto", now=now)
         except Exception:  # noqa: BLE001
             r = {"ok": False}           # couldn't end it: still racing (fail closed)
+        if not r.get("ok"):
+            with _RACE_CHECK_LOCK:      # a retry needs fresh evidence, never this cached value
+                _race_check.update(t=0.0, since=None, still_h=0.0)
         if r.get("ok"):
             return {"racing": False, "since": since, "name": st.get("name"),
                     "suggest_over": False, "ended_ts": now, "ended_by": "auto"}
