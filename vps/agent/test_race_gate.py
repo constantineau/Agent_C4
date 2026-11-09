@@ -204,7 +204,13 @@ r = client.post("/race/over", json={"since": st["since"]}).json()
 check("Race over (the race the iPad shows) ends racing", r["ok"] and not racegate.racing())
 check("…and shore loads are taken again", loaded(client.post("/playbook/load", json=BUNDLE)))
 check("Race over when not racing: 'Not racing'",
-      client.post("/race/over", json={}).json() == {"ok": False, "note": "Not racing"})
+      client.post("/race/over", json={"since": st["since"]}).json()
+      == {"ok": False, "note": "Not racing"})
+racelog.start(name="Race", kind="race")
+check("Race over without the race start: nothing ended ('Which race?')",
+      client.post("/race/over", json={}).json() == {"ok": False, "note": "Which race?"}
+      and racegate.racing())
+finish()
 racelog.start(name="Practice", kind="practice")
 check("a practice session never starts racing", not racegate.racing())
 racelog.end()

@@ -41,7 +41,9 @@
   const OVER_ARM_MS = 5000;    // the second tap must come within this
   function raceOverLabel(race, opts) {
     const o = opts || {};
-    if (!race || !race.racing) return null;          // hidden
+    // hidden when not racing, and when the boat can't say which race (since unknown): a tap
+    // without the race start could end a newer race
+    if (!race || !race.racing || race.since == null) return null;
     if (o.armed) return "Tap again to end";
     return race.suggest_over ? "Race over?" : "Race over";
   }

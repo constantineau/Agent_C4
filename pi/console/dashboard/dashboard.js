@@ -1588,7 +1588,7 @@
   }
   async function tapRaceOver() {
     const race = (App.session || {}).race;
-    if (!race || !race.racing) return;
+    if (!race || !race.racing || race.since == null) return;
     if (!raceOverArmed(race)) {
       // first tap: arm for THIS race only (a newer race showing up meanwhile disarms it)
       raceOverUntil = Date.now() + window.C4RecLog.OVER_ARM_MS;

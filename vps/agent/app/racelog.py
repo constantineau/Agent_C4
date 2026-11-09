@@ -226,6 +226,7 @@ RACE_OVER_FALLBACK_H = float(os.environ.get("RACE_OVER_FALLBACK_H", "24"))
 RACE_OVER_CHECK_EVERY_S = float(os.environ.get("RACE_OVER_CHECK_EVERY_S", "300"))
 NOT_RACING = "Not racing"
 _race_check = {"t": 0.0, "since": None, "still_h": 0.0}
+_RACE_CHECK_LOCK = threading.Lock()     # the cache above, between concurrent /session polls
 
 
 def race_state(s=None):
@@ -301,8 +302,10 @@ def race_status(now=None, force=False):
             out["ended_ts"], out["ended_by"] = st.get("ended_ts"), st.get("ended_by")
         return out
     since = st.get("since")
-    fresh = _race_check["since"] is not None and _same_race(_race_check["since"], since)
-    if force or not fresh or now - _race_check["t"] >= RACE_OVER_CHECK_EVERY_S:
+    with _RACE_CHECK_LOCK:
+        snap = dict(_race_check)        # a local copy: another poll may replace it meanwhile
+    fresh = snap["since"] is not None and _same_race(snap["since"], since)
+    if force or not fresh or now - snap["t"] >= RACE_OVER_CHECK_EVERY_S:
         still_h = 0.0
         try:
             look_h = RACE_OVER_FALLBACK_H + 1.0
@@ -314,8 +317,10 @@ def race_status(now=None, force=False):
             still_h = (now - st_ts) / 3600.0 if st_ts is not None else 0.0
         except Exception:  # noqa: BLE001
             still_h = 0.0          # no evidence: never a reason to end a race
-        _race_check.update(t=now, since=since, still_h=still_h)
-    still_h = _race_check["still_h"]
+        with _RACE_CHECK_LOCK:
+            _race_check.update(t=now, since=since, still_h=still_h)
+    else:
+        still_h = snap["still_h"]       # cached for THIS race (checked above)
     out["still_h"] = round(still_h, 2)
     if RACE_OVER_FALLBACK_H > 0 and still_h >= RACE_OVER_FALLBACK_H:
         r = race_over(since=since, by="auto", now=now)

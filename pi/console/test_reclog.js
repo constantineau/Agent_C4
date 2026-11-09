@@ -39,6 +39,7 @@ test("idle, picking, confirming", () => {
 test("Race over: hidden unless racing", () => {
   assert.equal(RL.raceOverLabel(null), null);
   assert.equal(RL.raceOverLabel({ racing: false }), null);
+  assert.equal(RL.raceOverLabel({ racing: true, since: null }), null);   // which race? unknown
 });
 test("Race over: plain, asked by the boat, armed", () => {
   assert.equal(RL.raceOverLabel({ racing: true, since: 5 }), "Race over");

@@ -901,8 +901,12 @@ def race_over(body: dict = None):
     """The crew ends the race: {since?}. Racing (RRS 41, no shore loading) is its own state; this
     is the one way the crew ends it (an abandoned race too). The iPad sends the race start it
     shows; if a newer race is running now, nothing is ended: "Already ended". The recording
-    session (LOG) is not touched."""
-    return racelog.race_over(since=(body or {}).get("since"))
+    session (LOG) is not touched. `since` is required: without it the boat can't tell which race
+    the crew meant, so nothing is ended."""
+    since = (body or {}).get("since")
+    if since is None:
+        return {"ok": False, "note": "Which race?"}
+    return racelog.race_over(since=since)
 
 
 @app.get("/sails/log")
