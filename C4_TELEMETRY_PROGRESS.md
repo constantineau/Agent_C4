@@ -3,8 +3,16 @@
 Goal (Cole): **lose no telemetry**, and **copy all telemetry off the Pi to the VPS**.
 Deletion from the boat is allowed only *after* an off-boat copy is sha256-verified.
 
-## ⏸ 2026-11-09 — matcher blind eval RUNNING on the Orin (session root-f0)
-Decision 25 (re-run matcher blind eval on the Orin). Full 240 examples, idle box, tuned (qwen2.5-matcher) then stock (qwen2.5:7b-instruct), corpus from 4ea52e8 (= Orin HEAD) gen_corpus --seed 7. Detached on the Orin: `~/eval-20261109/` (run.log, log-*.txt, eval-*.json; `--resume` safe). Started 14:53Z, ~1.6 h. Nov 6 partial (96, under load): tuned F1 0.35, top-1 0.45 — FAIL. Copilot answers queue behind it while it runs (boat on the hard).
+## ⏸ PICK UP HERE — 2026-11-09 (session root-f0; dev = main @ a91e0c9)
+
+**#271–#278 MERGED (Cole "merge 271-278")**, then dev CI went red: #277's test fixture (epoch-100 samples) vs #274's wall-clock freshness. **#279** (test passes now=100.0) merged on Cole's "merge 279"; dev CI green.
+**DEPLOYED ~15:45Z (fix waves 6-7, #259–#279), main a91e0c9:**
+- VPS: Lab + agent recreated, rollback `:pre-20261109`, both 200.
+- Pi (stamp 20261109T154209Z, `~/deploy-backups/w67-20261109T154209Z`: files.tgz, new-files.txt, sk_config.tgz, ps-before.txt): 32 files (2 new: pi/signalk/install-derived.sh, shared/clock_trust.py); every Pi copy matched 4ea52e8 first. Rebuilt engine, console, archiver, uplink (images `:pre-20261109T154209Z`); `up -d signalk` ran signalk-init/derived (1.45.0 already installed, patch already there; signalk itself not recreated). Checks: archiver recording + `clock_trusted: true` (ntp), uplink `wall clock trusted (gnss)` + sent, queue/undated 0, engine GET access log 0, console /api/health 200, 0 restarts. `record-deployed.sh`: 32 files match, 4 images running as built.
+- **Orin NOT deployed yet** (still 4ea52e8): waiting for the eval below.
+**Matcher blind eval (decision 25) RUNNING on the Orin**: full 240, tuned then stock, corpus from 4ea52e8 seed 7, `~/eval-20261109/` (run.log, log-*.txt, eval-*.json, --resume). Started 14:53Z.
+**#280 FILED — Orin OOM:** at ~150 calls llama-server hit 6.58 GB RSS, box thrashed ~20 min (load 56, SSH/Tailscale down), kernel OOM-killed llama-server 15:50Z, recovered by itself. Stopgap for the eval only: `~/eval-20261109/memwatch.sh` restarts ollama at MemAvailable < 900 MB, exits with the eval. If Tailscale is down, reach the Orin via the Pi: `ssh sr33-pi@… then ssh agent-c4@10.10.10.2`.
+Next: eval results → Cole; then Orin ff to a91e0c9 + copilot restart + record-deployed (files only); then #280 fix.
 
 ## ⏸ PICK UP HERE — 2026-11-06 evening (main 4ea52e8, DEPLOYED)
 
