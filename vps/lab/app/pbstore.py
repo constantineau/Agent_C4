@@ -150,6 +150,11 @@ def _mtime_ns(path):
         return 0
 
 
+def _num(v):
+    """A timestamp the list can sort and the page can format, or None (a damaged file)."""
+    return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
 def list_bundles():
     """Summaries for the frozen-playbook list, newest first. `rev` numbers the revisions of each
     race + course in freeze order (1 = first)."""
@@ -169,21 +174,20 @@ def list_bundles():
             "id": pid, "legacy": is_legacy(pid),
             "race_id": b.get("race_id"), "race_name": b.get("race_name"),
             "course_id": b.get("course_id"), "start_epoch": b.get("start_epoch"),
-            "generated_at": b.get("generated_at"), "headline": b.get("headline"),
+            "generated_at": _num(b.get("generated_at")), "headline": b.get("headline"),
             "recommended": b.get("recommended"), "n_variants": len(b.get("variants", [])),
             "degraded": bool(b.get("degraded")), "warnings": list(b.get("warnings") or []),
-            "signed": bool(sig.get("value")), "signed_at": sig.get("signed_at"),
+            "signed": bool(sig.get("value")), "signed_at": _num(sig.get("signed_at")),
             "signature": str(sig.get("value") or "")[:16],
             "synth_model": (b.get("provenance") or {}).get("synth_model"),
             "_mtime": _mtime_ns(f),
         })
     # freeze order: signed_at is whole seconds, so the file's own write time breaks ties
-    num = lambda v: v if isinstance(v, (int, float)) and not isinstance(v, bool) else 0  # noqa: E731
-    order = lambda x: (num(x.get("signed_at")), x["_mtime"], x["id"])  # noqa: E731
+    order = lambda x: (x.get("signed_at") or 0, x["_mtime"], x["id"])  # noqa: E731
     seen = {}
     for x in sorted(out, key=order):
         k = (x.get("race_id"), x.get("course_id"))
         seen[k] = x["rev"] = seen.get(k, 0) + 1
         del x["_mtime"]
-    out.sort(key=lambda x: num(x.get("generated_at")), reverse=True)
+    out.sort(key=lambda x: x.get("generated_at") or 0, reverse=True)
     return out

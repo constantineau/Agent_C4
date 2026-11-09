@@ -183,7 +183,9 @@ bad = synthesis.sign_bundle({"race_id": "r1", "course_id": "odd", "variants": [{
 bad["signature"]["signed_at"] = "broken"
 pbstore.save(bad)
 try:
-    check("listed", any(b["course_id"] == "odd" for b in pbstore.list_bundles()))
+    row = next(b for b in pbstore.list_bundles() if b["course_id"] == "odd")
+    check("listed, its times blank (the page formats them)",
+          row["signed_at"] is None and row["generated_at"] is None)
 except TypeError as exc:
     check(f"listed ({exc})", False)
 
