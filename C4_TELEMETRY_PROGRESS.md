@@ -3,6 +3,9 @@
 Goal (Cole): **lose no telemetry**, and **copy all telemetry off the Pi to the VPS**.
 Deletion from the boat is allowed only *after* an off-boat copy is sha256-verified.
 
+## ⏸ 2026-11-09 — matcher blind eval RUNNING on the Orin (session root-f0)
+Decision 25 (re-run matcher blind eval on the Orin). Full 240 examples, idle box, tuned (qwen2.5-matcher) then stock (qwen2.5:7b-instruct), corpus from 4ea52e8 (= Orin HEAD) gen_corpus --seed 7. Detached on the Orin: `~/eval-20261109/` (run.log, log-*.txt, eval-*.json; `--resume` safe). Started 14:53Z, ~1.6 h. Nov 6 partial (96, under load): tuned F1 0.35, top-1 0.45 — FAIL. Copilot answers queue behind it while it runs (boat on the hard).
+
 ## ⏸ PICK UP HERE — 2026-11-06 evening (main 4ea52e8, DEPLOYED)
 
 **Fix waves 4-5 MERGED + DEPLOYED ~20:40Z** (Cole: "merge 230-238 go deploy"): #230 chat race-gate leak (#48.1), #231 matcher drift sign/night key/polar cache (#43, #44.4), #232 copilot notes vs tiles + off-boat fallback + tool args + recap fleet (Fixes #53; #185-1/3), #233 GPS push course hash + n2kout claim settle (#183-11, #184-13), #234 selector settle/reset, deviation off-line band, drift sign, no-wind tile N/A (#40, #43, #46.7), #235 interpolated polar in fatigue/polar mining (#67.3-4), #236 Lab run ids, one push at a time, checklist tick save check, import START signal (#182-5/9/10/11), #237 pace plays name marks + same-sails check (#52), #238 restore drill exact paths + atomic GRIB/wave temp (#202-3/7).
