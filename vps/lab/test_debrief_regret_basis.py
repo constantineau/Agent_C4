@@ -145,8 +145,11 @@ try:
     oldrep = {"tactics_available": True, "race_name": "Test",
               "regret": {**old["regret"], "side_matched": False, "recommended_side": "left"},
               "actual_track": {}}
-    check("...and the Learnings bullet doesn't print an empty 'without ()'",
-          "without" not in JD._deterministic_critique(oldrep)["proposed_learnings"])
+    _pl = JD._deterministic_critique(oldrep)["proposed_learnings"]
+    print(f"     {_pl}")
+    check("...and the Learnings bullet doesn't print an empty 'without ()'", "without" not in _pl)
+    check("...but keeps the today's-boat qualifier with the regret number",
+          "(today's boat settings)." in _pl)
 
     # ---- 4) no data: say so plainly ------------------------------------------------------------
     print("4) no current/wave data for the race time is said plainly")

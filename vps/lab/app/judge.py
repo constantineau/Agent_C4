@@ -524,8 +524,11 @@ def _deterministic_critique(r):
             "proposed_learnings": f"[{r['race_name']}] First beat: {side_paid} paid"
                                   + (f" (recommended {rec})" if not matched else "")
                                   + (f"; regret ~{mins} min vs optimal" if mins is not None else "")
-                                  + (f" (without {' and '.join(_lacks)})."
-                                     if mins is not None and _lacks else ".")
+                                  + (f" (without {' and '.join(_lacks)})"
+                                     if mins is not None and _lacks else "")
+                                  + (" (today's boat settings)"
+                                     if mins is not None and _b and _b.get("boat") == "now" else "")
+                                  + "."
                                   + (f" Sailed {at['extra_distance_pct']}% over optimal at {at.get('polar_pct','?')}% of polar."
                                      if at.get("available") and at.get("extra_distance_pct") is not None else ""),
             "brain_edit": ("Tighten the first-beat side trigger — bias toward switching when early "
