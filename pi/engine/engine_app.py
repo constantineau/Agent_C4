@@ -364,6 +364,33 @@ def nav(route: str | None = None):
     return navigator.get_navigator(route)
 
 
+def _nav_changed(out):
+    """After the crew moved the next mark: the plotter's next-mark index is read fresh, not
+    from the few-second cache."""
+    if out.get("ok"):
+        gpsout._NEXT_MARK["at"] = None
+    return out
+
+
+@app.post("/navigator/start")
+def nav_start():
+    """The crew's Start tap (#246): a new run, next mark = the first one. Undo puts it back."""
+    return _nav_changed(navigator.start_run())
+
+
+@app.post("/navigator/undo")
+def nav_undo():
+    """Undo the last mark change (an advance, a pick or a Start)."""
+    return _nav_changed(navigator.undo_mark())
+
+
+@app.post("/navigator/mark")
+def nav_mark(body: dict):
+    """The crew picks the next mark by its place in the course ({index}): the right one of a
+    repeated mark."""
+    return _nav_changed(navigator.pick_mark((body or {}).get("index")))
+
+
 @app.post("/course/practice")
 def practice_course(leg_nm: float = 1.0):
     """Drop a windward/leeward practice course from the live position + wind (route 'practice')."""
@@ -395,6 +422,7 @@ def course_load(body: dict):
             tmp = orinroute.prepare_definition(definition, cid, route, load_id)
             datasource.active().save_course(route, marks)
             navigator.set_active(route)
+            navigator.start_run(route, keep_undo=False)    # a course load is a new run (#246)
             orinroute.set_load_id(route, load_id)
             if tmp:
                 orinroute.commit_definition(tmp)

@@ -546,6 +546,11 @@ body {
   cursor: pointer; background: var(--panel2); color: inherit; border: 1px solid var(--line); }
 .cw-btn.busy { opacity: 0.55; }
 .cw-btn.cw-inline { margin: 6px 0; display: inline-block; }
+.nav-ctl { margin: 8px 0 2px; align-items: center; }
+.cw-btn:disabled { opacity: 0.45; cursor: default; }
+.cw-btn.armed { border-color: var(--watch); color: var(--watch); }
+.nav-pick { font: inherit; font-size: 12px; padding: 5px 8px; border-radius: 7px;
+  background: var(--panel2); color: inherit; border: 1px solid var(--line); max-width: 100%; }
 .cw-card { border: 1px solid var(--line); border-radius: 8px; background: var(--panel2);
   padding: 7px 10px; margin: 6px 0; }
 .cw-card-head { display: flex; align-items: baseline; gap: 8px; font-size: 11px;

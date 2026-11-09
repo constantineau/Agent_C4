@@ -32,7 +32,8 @@ alerting/summarizer/polar-analysis (those are cloud / C4 Performance Lab), and *
 
 `/health` · `/conditions` · `/conditions/full` · `/sources` · `/series` · `/fatigue` · `/sail` ·
 `/sails/state` (GET+POST — crew-set hoisted sail + out-of-service gear) · `/course` ·
-`POST /course/practice` · `POST /course/load` · `/navigator` · `/tactics` · `/forecast` · `/route` ·
+`POST /course/practice` · `POST /course/load` · `/navigator` · `POST /navigator/start` ·
+`POST /navigator/undo` · `POST /navigator/mark {index}` (the crew's Start / Undo / pick-a-mark) · `/tactics` · `/forecast` · `/route` ·
 `/ais` · `POST /fleet/load` · `/fleet` · `POST /playbook/load` · `/deviation` · `/drift` ·
 `/selector` · `/reoptimize` · `/strategy` (the cross-signal synthesis digest) · `/plays` (the
 Playbook-v2 matcher: armed/arming plays vs live signals) · `/buoys` (live NDBC + the up-course

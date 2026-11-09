@@ -571,6 +571,55 @@
       '<svg viewBox="0 0 ' + W + " " + H + '" style="width:100%;height:auto;display:block;background:var(--panel2);border-radius:8px">' + svg + "</svg>" +
       (foot ? '<div class="dc-foot">' + foot + "</div>" : "");
   }
+  /* ============ NAVIGATOR CONTROLS (Time-to-Mark detail, #246) ============
+     Start = a new run from the first mark (tap twice: a stray tap mid-race costs nothing, and
+     Undo puts it back anyway). Undo last mark = back one mark change. The picker sets the next
+     mark by its place in the course, so lap 2's Windward is not lap 1's. Shown only where the
+     engine says marks can be changed (`progress`). */
+  let navStartUntil = 0;
+  function navControlsHtml() {
+    const nav = App.nav;
+    if (App.src !== "live" || !nav || !nav.available || !nav.progress) return "";
+    const pr = nav.progress, armed = Date.now() < navStartUntil;
+    const c = App.courseMap;
+    const ni = nav.next_mark ? nav.next_mark.index : null;
+    let pick = "";
+    if (c && c.route === nav.route && (c.marks || []).length) {
+      pick = '<select class="nav-pick" aria-label="Next mark">' + c.marks.map((m, i) =>
+        '<option value="' + i + '"' + (i === ni ? " selected" : "") + ">" + (i + 1) + ". " +
+        esc2(m.name) + "</option>").join("") + "</select>";
+    }
+    return '<div class="cw-btns nav-ctl">' +
+      '<button class="cw-btn nav-btn' + (armed ? " armed" : "") + '" data-nav="start">' +
+      (armed ? "Tap again to start" : "Start") + "</button>" +
+      '<button class="cw-btn nav-btn" data-nav="undo"' + (pr.can_undo ? "" : " disabled") +
+      ">Undo last mark</button>" + pick + "</div>" +
+      (App.navNote ? '<div class="dc-foot">' + esc2(App.navNote) + "</div>" : "");
+  }
+  async function navAction(kind, index) {
+    if (kind === "start" && Date.now() >= navStartUntil) {
+      navStartUntil = Date.now() + 5000;
+      if (App.openTile === "eta") populateDetail("eta", false);
+      setTimeout(() => { if (App.openTile === "eta") populateDetail("eta", false); }, 5200);
+      return null;
+    }
+    navStartUntil = 0;
+    const path = kind === "start" ? "/navigator/start" : kind === "undo" ? "/navigator/undo" : "/navigator/mark";
+    const r = await postJSON(path, kind === "mark" ? { index: index } : {}, 8000);
+    App.navNote = !r ? "No answer from the boat. Try again." : r.ok ? "Next mark: " + r.next_mark + "." : r.note || "Not changed.";
+    const nav = await fetchJSON("/navigator", 8000);
+    if (nav) App.nav = nav;
+    if (App.openTile === "eta") populateDetail("eta", false);
+    return r;
+  }
+  document.addEventListener("click", (e) => {
+    const b = e.target.closest && e.target.closest(".nav-btn[data-nav]");
+    if (b && !b.disabled) navAction(b.dataset.nav);
+  });
+  document.addEventListener("change", (e) => {
+    const sel = e.target.closest && e.target.closest(".nav-pick");
+    if (sel) navAction("mark", parseInt(sel.value, 10));
+  });
   /* best available race history: the engine archive (authoritative) + the live tail not yet archived;
      falls back to the client buffer when the archive is empty (e.g. on the bench). */
   function raceData() {
@@ -2284,6 +2333,7 @@
     }
     if ((key === "playbook" || key === "route") && App.src === "live") fetchGps();   // the GARMIN 943 row's live state
     if (key === "eta" && App.src === "live") {
+      App.navNote = null;
       fetchCourse().then(() => { if (App.openTile === "eta") populateDetail("eta", false); });
       fetchTrack().then(() => { if (App.openTile === "eta") populateDetail("eta", false); });
     }
@@ -2522,6 +2572,9 @@
       '</div>').join("");
   }
   function populateDetail(key, stream) {
+    // a re-render while the crew has the mark picker open would close it under their finger
+    const ae = document.activeElement;
+    if (key === "eta" && !stream && ae && ae.classList && ae.classList.contains("nav-pick")) return;
     // the checklist and coach windows ARE their list — it leads; every tile leads with the text
     document.getElementById("detail").classList.toggle("gauge-first", key === "checklist" || key === "coach" || key === "route");
     if (key === "checklist") {
@@ -2663,6 +2716,7 @@
       }
     }
     if (key === "eta") {
+      g.insertAdjacentHTML("beforeend", navControlsHtml());
       g.insertAdjacentHTML("beforeend", '<button class="cw-btn cw-inline" ' +
         'onclick="openCoachBrief(\'mark\')">Mark pre-brief ↻</button>');
     }
@@ -2929,7 +2983,8 @@
     window.__C4DashTest({ App: App, BUILD: BUILD, observedAt: observedAt, hold: hold, tileAge: tileAge,
       oldTag: oldTag, poll: poll, onWake: onWake, courseMapHtml: courseMapHtml, selectorHtml: selectorHtml,
       provenanceTableHtml: provenanceTableHtml, twsTrendTile: twsTrendTile, fetchSailState: fetchSailState,
-      fetchCourse: fetchCourse, fetchSelector: fetchSelector, fetchDeviation: fetchDeviation,
+      fetchCourse: fetchCourse, fetchSelector: fetchSelector, navControlsHtml: navControlsHtml,
+      navAction: navAction, fetchDeviation: fetchDeviation,
       deviationHtml: deviationHtml, currentData: currentData });
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
   else init();
