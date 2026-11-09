@@ -919,7 +919,8 @@ def _corner_speed(wf, P, lat, lon, t, hdg, helm=1.0):
     sp = _polar_speed(P, tws, twa)
     if sp < 0.3:
         beat = _vmg_twa(P, tws, "beat")
-        sp = (_polar_speed(P, tws, beat) * math.cos(math.radians(beat - twa))
+        # both tacks together: the upwind VMG, stretched onto a course `twa` off the wind
+        sp = (_polar_speed(P, tws, beat) * math.cos(math.radians(beat)) / math.cos(math.radians(twa))
               if beat is not None and twa < beat else 0.0)
     sp *= helm
     return sp if sp >= 0.3 else None

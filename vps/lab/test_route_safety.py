@@ -102,6 +102,9 @@ up = O._corner_speed(Steady(8.5, 0.0), P, LAT0, LON0, 0, 340.0)     # 20° off: 
 reach = O._corner_speed(Steady(8.5, 0.0), P, LAT0, LON0, 0, 270.0)
 check("a corner step into the wind is tacked through at the beat VMG (slower than a reach)",
       up is not None and reach is not None and 0.3 <= up < reach, f"{up} vs {reach}")
+b8 = O._vmg_twa(P, 8.5, "beat")
+want = O._polar_speed(P, 8.5, b8) * math.cos(math.radians(b8)) / math.cos(math.radians(20.0))
+check("...at the two-tack speed made good", up is not None and abs(up - want) < 0.01, f"{up} vs {want}")
 check("a corner step with no wind anywhere near: no speed",
       O._corner_speed(NoWind(8.5, 0.0), P, LAT0, LON0, 0, 270.0) is None)
 
