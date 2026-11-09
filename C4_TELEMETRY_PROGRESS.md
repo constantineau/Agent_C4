@@ -9,9 +9,11 @@ Deletion from the boat is allowed only *after* an off-boat copy is sha256-verifi
 **DEPLOYED ~15:45Z (fix waves 6-7, #259–#279), main a91e0c9:**
 - VPS: Lab + agent recreated, rollback `:pre-20261109`, both 200.
 - Pi (stamp 20261109T154209Z, `~/deploy-backups/w67-20261109T154209Z`: files.tgz, new-files.txt, sk_config.tgz, ps-before.txt): 32 files (2 new: pi/signalk/install-derived.sh, shared/clock_trust.py); every Pi copy matched 4ea52e8 first. Rebuilt engine, console, archiver, uplink (images `:pre-20261109T154209Z`); `up -d signalk` ran signalk-init/derived (1.45.0 already installed, patch already there; signalk itself not recreated). Checks: archiver recording + `clock_trusted: true` (ntp), uplink `wall clock trusted (gnss)` + sent, queue/undated 0, engine GET access log 0, console /api/health 200, 0 restarts. `record-deployed.sh`: 32 files match, 4 images running as built.
-- **Orin NOT deployed yet** (still 4ea52e8): waiting for the eval below.
-**Matcher blind eval (decision 25) RUNNING on the Orin**: full 240, tuned then stock, corpus from 4ea52e8 seed 7, `~/eval-20261109/` (run.log, log-*.txt, eval-*.json, --resume). Started 14:53Z.
-**#280 FILED — Orin OOM:** at ~150 calls llama-server hit 6.58 GB RSS, box thrashed ~20 min (load 56, SSH/Tailscale down), kernel OOM-killed llama-server 15:50Z, recovered by itself. Stopgap for the eval only: `~/eval-20261109/memwatch.sh` restarts ollama at MemAvailable < 900 MB, exits with the eval. If Tailscale is down, reach the Orin via the Pi: `ssh sr33-pi@… then ssh agent-c4@10.10.10.2`.
+- **Orin deployed 17:55Z**: ff 4ea52e8 → a91e0c9 (tag `pre-deploy-20261109`), copilot + reroute restarted, health ok, playbook push-test-2026-11 loaded + signed; record-deployed 4 files.
+**#280 fixed live**: ollama.service `LLAMA_ARG_CACHE_RAM=512` (backup `~/pre-pull-backup/ollama.service.20261109-cacheram`), llama-server flat ~5.6 GB, ~1 GB free. PR #281 (DEPLOYMENT.md), Codex clean, awaiting Cole's merge.
+**Matcher blind eval DONE** (numbers on #54): tuned F1 0.298 / top-1 0.475, stock F1 0.317 / top-1 0.468 — both FAIL vs 0.9. LLM play matches are shown on the iPad OVERALL card. Decision for Cole: hide them / retrain / keep.
+**Cole's decisions 2026-11-09 on #241–#250** (all recorded on the issues): 1-3, 6-10 the recommendations; #244 regret = strategy only (oracle with sailed current + waves); #245 keep refinements, re-score, Cole approves.
+**Agents running (worktrees /mnt/data/c4-wt/):** navigator-runs (#246), optimizer-safe (#242 + #256-258), debrief-regret (#244), telemetry-noloss (#243), playbook-immutable (#249). Next wave: #241 Race over (after navigator — shares dashboard.js), #247 stale table draft, #250 checklist draft, #245 re-score after learning fixes, #248 shed order.
 Next: eval results → Cole; then Orin ff to a91e0c9 + copilot restart + record-deployed (files only); then #280 fix.
 
 ## ⏸ PICK UP HERE — 2026-11-06 evening (main 4ea52e8, DEPLOYED)
