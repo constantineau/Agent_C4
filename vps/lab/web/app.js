@@ -1746,6 +1746,8 @@ async function runOptimize() {
       const p = document.getElementById("optProg");
       if (p && st.progress && st.progress.length) p.textContent = st.progress[st.progress.length - 1];
     }
+    // the race this route was asked for: its override buttons use it, whatever race is picked now
+    if (r && typeof r === "object") r.race_id = r.race_id || body.race_id;
     Opt.result = r; Opt.running = false;
     renderGameplan();
   } catch (e) {
@@ -1787,7 +1789,7 @@ function renderOptResult(r) {
         <button id="shareBtn" onclick="shareGameplan(this)" title="A view-only link to the route player. No login needed.">🔗 Share player</button></div>
       ${r.start && r.start.note ? `<div class="opt-start-note">${esc(r.start.note)}</div>` : ""}
       ${optDegradedBanner(r)}
-      ${safetyPanel(r.safety, "route", { race: Opt.raceId, course: r.course_id })}
+      ${safetyPanel(r.safety, "route", { race: r.race_id, course: r.course_id })}
       ${r.timed_out ? '<div class="pill warn">Routing ran out of time. The route may be incomplete.</div>' : ""}
       <details class="rail-sec" open><summary>Legs</summary>
         <div class="legs-head"><span class="muted" style="font-size:11px">Tap a leg to show it on the map.</span>
@@ -2156,8 +2158,8 @@ function safetyPanel(s, what, ctx) {
 }
 
 async function chartOverride(mark, remove, race, course) {
-  const rid = race || Opt.raceId, cid = course || null;   // the result's own race + course
-  if (!rid) return;
+  const rid = race, cid = course || null;   // the result's own race + course, never the picked one
+  if (!rid) { alert("Not saved: run the route again."); return; }
   let by = "", why = "";
   if (!remove) {
     by = (prompt(`Chart override at ${mark}: opens the chart there. Only for a chart error.\nYour name:`) || "").trim();
