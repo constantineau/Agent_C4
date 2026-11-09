@@ -453,7 +453,7 @@ with open(job.chart_path("near", "c"), "w") as fh:
                    fingerprint=geo.course_fingerprint(NEAR, "c", DEPTH)), fh)
 fZ2, nZ2 = job.load_obstacles(dZ, cZ, NEAR, "c", job._get_boat())
 check("chart path: same", nZ2 is None and fZ2.blocked(44.001, -81.994))
-check("(the Lab's own build still opens its start pocket: unchanged)", not geo.build_for_course(
+check("the Lab's own build keeps the zone in its start pocket too (#148)", geo.build_for_course(
     dict(NEAR, courses=[dict(NEAR["courses"][0], start={"lat": 44.0, "lon": -82.0})]), "c",
     (45.6, 42.9, -83.1, -80.9), coastline_on=False, use_cache=False).blocked(44.001, -81.994))
 # …nor around a mark (Codex repro): the next buoy 0.4 nm from the boat, beside the same zone
@@ -462,7 +462,7 @@ NEARM = dict(NEAR, race_id="nearm", courses=[dict(NEAR["courses"][0], marks=[
 dM, cM, _n = job.remaining_definition(NEARM, "c", 1, 44.0, -82.0)
 fM, _ = job.load_obstacles(dM, cM, None, None, job._get_boat())
 check("a mark's pocket doesn't open the zone either", fM.blocked(44.001, -81.994))
-check("(the Lab's default build does open it: unchanged)", not geo.build_for_course(
+check("the Lab's default build keeps it too (#148)", geo.build_for_course(
     NEARM, "c", (45.6, 42.9, -83.1, -80.9), coastline_on=False, use_cache=False).blocked(44.001, -81.994))
 INZ = dict(NEAR, race_id="inz", courses=[dict(NEAR["courses"][0], marks=[
     {"name": "Buoy", "type": "buoy", "lat": 44.0, "lon": -81.994, "rounding": "none"}])])

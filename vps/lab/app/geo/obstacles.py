@@ -173,7 +173,8 @@ class ObstacleField:
 
         Race finishes and marks are deliberately set near shore/islands; ENC will flag that water as
         shallow/land. You can't route AROUND your own destination, so open a navigable pocket at each
-        real waypoint while leaving every other obstacle intact."""
+        real waypoint. This clears EVERY cell in the disk, so call it on a mask that holds only the
+        shoreline layers, before zones, island disks or barriers are drawn (#148)."""
         rlat = _nm_to_dlat(radius_nm)
         iy0 = max(0, self._iy(lat - rlat))
         iy1 = min(self.ny - 1, self._iy(lat + rlat))
@@ -438,6 +439,20 @@ def build_for_course(definition: dict, course_id, bbox, *, coastline_on=True, zo
             _fill_global_backstop(field, cache_dir)
             field.source = coastline.active_source()         # honest provenance (gshhg | natural_earth)
 
+    # 1b) open a navigable pocket at every real course waypoint (start/gate/finish) so the route can
+    #    always REACH its marks: finishes/marks are set near shore/islands and ENC blocks that water.
+    #    The pocket is cut in the shoreline layers ONLY (land, shoal, obstruction), BEFORE the race's
+    #    zones, island disks and barriers go on, so none of those is ever cleared (#148). Before,
+    #    it ran after them and a 0.5 nm pocket opened every zone and island disk at each mark.
+    #    `carve_waypoints=False` skips this step: the Orin's re-route builds its race layer that
+    #    way and opens the same pockets in its own land mask (#124).
+    if field.active and carve_waypoints:
+        from shared import race_def
+        marks, _skip, _cid = race_def.course_to_marks(definition, course_id)
+        for _seq, _name, mlat, mlon in marks:
+            if mlat is not None and mlon is not None:
+                field._carve_disk(mlat, mlon, MARK_CARVE_NM)
+
     # 2) the race's exclusion / hazard / tss zones (per race)
     if zones_on:
         for z in definition.get("zones", []) or []:
@@ -460,19 +475,7 @@ def build_for_course(definition: dict, course_id, bbox, *, coastline_on=True, zo
             field._fill_disk(isl["lat"], isl["lon"], isl["radius_nm"], "islands")
             field.geometry["islands"].append(isl)
 
-    # 4) open a navigable pocket at every real course waypoint (start/gate/finish) so the route can
-    #    always REACH its marks — finishes/marks are set near shore/islands and ENC blocks that water.
-    #    `carve_waypoints=False` skips this step entirely: the Orin's re-route builds its race layer
-    #    (zones, island disks, barriers) that way and opens pockets in its LAND mask only, so no
-    #    zone or island disk is ever cleared for the boat or a mark (#124).
-    if field.active and carve_waypoints:
-        from shared import race_def
-        marks, _skip, _cid = race_def.course_to_marks(definition, course_id)
-        for _seq, _name, mlat, mlon in marks:
-            if mlat is not None and mlon is not None:
-                field._carve_disk(mlat, mlon, MARK_CARVE_NM)
-
-    # 5) island ROUNDING-SIDE enforcement (after the carve, so it can't be re-opened): for an island
+    # 4) island ROUNDING-SIDE enforcement (after the carve, so it can't be re-opened): for an island
     #    that is a MARK OF THE RACE (rounding port/starboard) block the illegal side so the route passes
     #    on the legal hand. Source-independent (ENC or backstop) — it's a race rule, not an obstacle —
     #    and scoped to marked islands only (plain hazards stay avoided either side).
