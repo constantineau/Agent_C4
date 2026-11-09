@@ -69,17 +69,18 @@ check("G66 the empty state links to Races and keeps the retro card",
 print("#240 Polar sails use the crew names and the chart's colours:")
 check("the kite is S1 in the display order, never S2",
       re.search(r'const POL_ORDER = \[[^\]]*"S1"', JS) and not re.search(r'const POL_ORDER = \[[^\]]*"S2"', JS))
-check("S2 in a logged config is shown as S1 (display only)", re.search(r't === "S2" \? "S1"', fn("polSailName")))
+check("logged S2 is pooled as S1 on the server, so the page has no S2 rename of its own",
+      "polSailName" not in JS and "(logged " not in JS)
 check("sail colours come from SAIL_COLORS (one colour per sail across the Lab)",
       "SAIL_COLORS[t]" in fn("polSailHex") and "POL_HUES" not in JS)
 check("SS falls back to the staysail pink until SAIL_COLORS has it", 'POL_SS = "#f28cc4"' in JS)
 check("a two-sail set draws its second sail dashed in that sail's colour",
       "sr.color2" in fn("polSvg") and "stroke-dasharray" in fn("polSvg"))
-check("S1 and S2 cells at one angle make one line point, not a radial zigzag",
-      "polLinePts(pts)" in fn("polSeries") and "sr.line || sr.pts" in fn("polSvg"))
+check("one cell per sail and angle, so the line goes through every point (no pick-the-bigger)",
+      "polLinePts" not in JS and "sr.pts.map(" in fn("polSvg"))
 paintp = fn("paintPolar")
-check("legend, table and filter use the crew names", "polConfigNames()" in paintp
-      and "polSailName(c.config)" in paintp and "d.configs || []" not in paintp)
+check("legend and filter list the sails in the crossover chart's order", "polConfigNames()" in paintp
+      and "d.configs || []" not in paintp)
 
 print("#103 Polar chart:")
 svg = fn("polSvg")
