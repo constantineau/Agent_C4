@@ -160,7 +160,9 @@ def _ensure_cell_s57(cell: dict, cache_dir: str) -> str | None:
 def _extract_layer(s57_path: str, layer: str, out_path: str) -> bool:
     """Run ogr2ogr (S-57 driver) to dump one object class to GeoJSON. True if `out_path` now exists.
 
-    Missing layers are normal (not every cell has every class) → returns False without raising."""
+    A layer the cell doesn't have extracts as an empty file (exit 0) → True. A failed run (no
+    GDAL, a timeout, a non-zero exit) keeps nothing → False, and `layers_in_bbox` counts the
+    cell as missing."""
     if os.path.exists(out_path):
         return True
     env = dict(os.environ)
@@ -173,11 +175,11 @@ def _extract_layer(s57_path: str, layer: str, out_path: str) -> bool:
             env=env, capture_output=True, timeout=180)
     except (FileNotFoundError, subprocess.TimeoutExpired):
         r = None
-    # Same outcomes as before: exit 0 keeps whatever was written; a non-zero exit keeps a
-    # non-empty file (-skipfailures) and drops an empty one.
-    failed_empty = (r is not None and r.returncode != 0 and os.path.exists(tmp)
-                    and os.path.getsize(tmp) < 2)
-    if r is None or not os.path.exists(tmp) or failed_empty:
+    # exit 0 keeps whatever was written (an EMPTY file for a layer the cell doesn't have). A
+    # non-zero exit is a failed extract, never kept: a partial file would drop rocks or shoals
+    # while the route reads as checked (#242, Codex on #287). Every layer of the 72 Bayview
+    # cells extracts with exit 0.
+    if r is None or r.returncode != 0 or not os.path.exists(tmp):
         try:
             os.remove(tmp)
         except OSError:

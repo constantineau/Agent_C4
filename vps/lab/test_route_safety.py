@@ -398,6 +398,28 @@ with _tf.TemporaryDirectory() as cd:
         [_sq(-82.5, 43.5, -82.4, 43.6, DRVAL1=10.0), _sq(-82.4, 43.5, -82.3, 43.6, DRVAL1=1.0)])
     _gj(_os.path.join(cd, "extract", "US4AA01M_DRGARE.json"),
         [_sq(-82.3, 43.5, -82.2, 43.6, DRVAL1=8.0)])
+    # a failed ogr2ogr run that still wrote part of a file: never kept (Codex on #287)
+    import subprocess as _sp
+    _run = enc.subprocess.run
+
+    def _gdal(rc, body):
+        def run(cmd, **k):
+            with open(cmd[4], "w") as fh:                  # ogr2ogr -f GeoJSON -skipfailures OUT
+                fh.write(body)
+            return _sp.CompletedProcess(cmd, rc)
+        return run
+    try:
+        out_p = _os.path.join(cd, "extract", "US4AA09M_UWTROC.json")
+        enc.subprocess.run = _gdal(1, '{"type": "FeatureCollection", "features": []}')
+        check("a failed extract (non-zero exit, part of a file) is not kept",
+              enc._extract_layer("x.000", "UWTROC", out_p) is False and not _os.path.exists(out_p))
+        enc.subprocess.run = _gdal(0, "")
+        check("a layer the cell doesn't have (exit 0, empty file) is kept",
+              enc._extract_layer("x.000", "UWTROC", out_p) is True and _os.path.getsize(out_p) == 0)
+    finally:
+        enc.subprocess.run = _run
+        if _os.path.exists(out_p):
+            _os.remove(out_p)
     _cfb, asked = enc.cells_for_bbox, []
     enc.cells_for_bbox = lambda *a, **k: asked.append(k.get("max_cells", "cap")) or _cfb(*a, **k)
     try:
