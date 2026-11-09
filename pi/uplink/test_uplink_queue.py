@@ -452,3 +452,23 @@ def test_live_windows_keep_their_cadence_while_a_backlog_replays(q):
     # 1.55 s at a 0.1 s cadence is ~15 windows; stretched by the 0.06 s budget it was ~9.
     assert len(live) >= 12, live
     assert len(_names(q)) < 5000                      # and the backlog did drain meanwhile
+
+
+def test_a_slow_live_post_that_spends_the_budget_skips_the_replay(q):
+    """Codex on #283: if the live POST already used the pass's budget, no queued POST is
+    started (it would merge the next live windows); the backlog waits, still queued."""
+    up = _load_uplink(q)
+    _write(q, "20261001T000000Z.json", _batch("2026-10-01T00:00:00Z", -1))
+    now = [0.0]
+    up._clock = lambda: now[0]
+    up.REPLAY_BUDGET_S = 9.0
+    posted = []
+
+    def post(batch):
+        now[0] += 19.0
+        posted.append(batch["readings"][0]["value"])
+    up._post = post
+    up.send([{"time": "2026-11-09T12:00:00Z", "source": "s", "path": "p", "value": 5}])
+    assert posted == [5] and len(_names(q)) == 1
+    up._flush_queue()                                 # a standalone pass still makes progress
+    assert posted == [5, -1] and _names(q) == []

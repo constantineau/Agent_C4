@@ -262,16 +262,19 @@ def _flush_queue(deadline=None):
     permanent failure has to be moved aside or it blocks every newer batch behind it
     forever.
 
-    Paged by time: at `deadline` (default REPLAY_BUDGET_S from now) it stops (at least one batch
-    is always tried) and the rest waits, still queued and in order, for the next pass (#184-8).
-    The deadline is checked between POSTs, so one slow POST (20 s timeout) can overrun it once.
+    Paged by time: at `deadline` it stops and the rest waits, still queued and in order, for the next pass (#184-8).
+    With no deadline given (a standalone replay) it is REPLAY_BUDGET_S from now and at least one
+    batch is always tried; a deadline given by `_send` (already partly spent on the live POST) is
+    honoured before the first one too, so a slow link favours the live window and the backlog
+    waits, on disk. The deadline is checked between POSTs, so one slow POST (20 s timeout) can overrun it once.
     """
     if not QUEUE_DIR.exists():
         return
     queued = sorted(QUEUE_DIR.glob("*.json"))
+    first_free = deadline is None
     deadline = _clock() + REPLAY_BUDGET_S if deadline is None else deadline
     for i, f in enumerate(queued):
-        if i and _clock() >= deadline:
+        if (i or not first_free) and _clock() >= deadline:
             print(f"[uplink] replayed {i} queued batch(es), {len(queued) - i} still queued",
                   flush=True)
             return
