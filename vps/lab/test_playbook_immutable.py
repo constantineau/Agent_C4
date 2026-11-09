@@ -141,5 +141,11 @@ check("Deploy says so before Push", D.readiness("r1")["lock_problem"] == D.PB_CH
 D.lock_in("r1", lid)
 check("activating it again clears it", D.readiness("r1")["lock_problem"] is None)
 
+print("a damaged revision is repaired by freezing the same content again:")
+with open(pbstore._path(p1), "w") as f:
+    f.write('{"race_id": "r1", "varia')
+pb_, _ = freeze()
+check("same id, whole and verified again", pb_ == p1 and synthesis.verify_bundle(pbstore.get(p1) or {}))
+
 print("ok" if ok else "FAILED")
 sys.exit(0 if ok else 1)

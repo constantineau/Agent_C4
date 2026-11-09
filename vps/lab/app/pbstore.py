@@ -20,6 +20,8 @@ import os
 import re
 import tempfile
 
+from . import atomicio
+
 PLAYBOOK_DIR = os.environ.get("PLAYBOOK_DIR", "/srv/playbooks")
 DIGEST_LEN = 12                          # hex chars of the content digest in the id
 
@@ -92,7 +94,12 @@ def save(bundle: dict) -> str:
     os.makedirs(PLAYBOOK_DIR, exist_ok=True)
     pid = bundle_id(bundle)
     data = json.dumps(bundle, indent=2).encode("utf-8")
-    _write_new(_path(pid), data)
+    if not _write_new(_path(pid), data):
+        old = get(pid)
+        if not isinstance(old, dict) or content_digest(old) != content_digest(bundle):
+            # the file under this id is damaged (it no longer holds the content its id names):
+            # put the named content back, the one case a file is replaced
+            atomicio.write_bytes(_path(pid), data)
     return pid
 
 
