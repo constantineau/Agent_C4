@@ -818,6 +818,27 @@ check("no finish time, no total", out4["finish_eta"] is None and out4["total_hou
       and out4["complete"] is False)
 check("no gain vs the plan", out4["vs_plan"] == {"available": False, "note": "Route incomplete."})
 check("said plainly, first", out4["warnings"][0] == "Route incomplete.")
+
+
+
+def wrong_side(*a, **k):
+    r = _orig(*a, **k)
+    r["safety"] = {"ok": False, "problems": [
+        {"code": "depth", "mark": None, "text": "No depth chart. Depths not checked."},
+        {"code": "side", "mark": "Gate", "text": "Route leaves Gate on the wrong side."}]}
+    return r
+
+
+# #242 (Codex on #287): a route the verdict says leaves a mark on the wrong side isn't finished
+job.routerun.run_course = wrong_side
+out5 = job.run(REQ, now=NOW, is_online=lambda: False)
+job.routerun.run_course = _orig
+check("a mark on the wrong side: not complete, no finish claim", out5["complete"] is False
+      and out5["finish_eta"] is None and out5["vs_plan"]["available"] is False)
+check("…said plainly, first", out5["warnings"][:2] == ["Route incomplete.",
+                                                       "Route leaves Gate on the wrong side."])
+check("(depth not checked is not a reason on its own)",
+      "No depth chart. Depths not checked." not in out5["warnings"])
 try:
     job.run(dict(REQ, position={}), now=NOW, is_online=lambda: False)
     check("no position → refused", False)

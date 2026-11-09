@@ -464,6 +464,15 @@ def run(req, now=None, on_progress=None, on_phase=None, is_online=None):
         if weather.get("missing"):
             warnings.append("No forecast from " + ", ".join(weather["missing"]) + ".")
         complete = bool(res.get("complete"))
+        # #242: the route's own verdict. A mark left on the wrong side (the corner round it was
+        # blocked) or a route off the chart is never a finished route, whatever the legs say
+        # (Codex on #287). Land and depth "not checked" are the chart notes above, not these.
+        bad = [p.get("text") for p in (res.get("safety") or {}).get("problems") or []
+               if p.get("code") in ("side", "box") and p.get("text")]
+        if bad:
+            complete = False
+            for t in reversed(bad):
+                warnings.insert(0, t)
         if not complete:
             warnings.insert(0, INCOMPLETE)
         out.update({
