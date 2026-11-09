@@ -1574,7 +1574,8 @@
   function renderRaceOver() {
     const b = document.getElementById("raceOverBtn"), l = document.getElementById("raceOverLbl");
     if (!b || !l) return;
-    const race = (App.session || {}).race;
+    // live only: in DEMO the button would end the REAL race on simulated data
+    const race = App.src === "live" ? (App.session || {}).race : null;
     const armed = raceOverArmed(race);
     const text = window.C4RecLog.raceOverLabel(race, { armed: armed });
     b.hidden = text === null;
@@ -1588,7 +1589,7 @@
   }
   async function tapRaceOver() {
     const race = (App.session || {}).race;
-    if (!race || !race.racing || race.since == null) return;
+    if (App.src !== "live" || !race || !race.racing || race.since == null) return;
     if (!raceOverArmed(race)) {
       // first tap: arm for THIS race only (a newer race showing up meanwhile disarms it)
       raceOverUntil = Date.now() + window.C4RecLog.OVER_ARM_MS;
@@ -2929,6 +2930,9 @@
     else { App.src = "live"; }
     document.getElementById("srcLbl").textContent = App.src === "live" ? "LIVE" : "DEMO·" + App.demoScn;
     renderSailsBar();
+    raceOverUntil = 0;
+    renderRaceOver();
+    if (App.src === "live") fetchSession();
     if (!document.getElementById("detail").hidden) closeDetail();
     render();
   }

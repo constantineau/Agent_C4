@@ -79,6 +79,10 @@ test("dashboard.js: Race over takes two taps and posts /race/over with the shown
   assert.match(js, /function tapRaceOver[\s\S]{0,400}raceOverUntil = Date\.now\(\) \+[\s\S]{0,300}return;/);
   // the arm is bound to the race it was for: a newer race showing up disarms it
   assert.match(js, /raceOverArmedSince = race\.since/);
+  // live only: never from DEMO (it would end the real race on simulated data)
+  assert.match(js, /function tapRaceOver[\s\S]{0,200}App\.src !== "live"/);
+  assert.match(js, /function renderRaceOver[\s\S]{0,300}App\.src === "live" \?/);
+  assert.match(js, /function cycleSource[\s\S]{0,400}renderRaceOver\(\)/);
   assert.match(js, /function raceOverArmed\(race\)[\s\S]{0,120}race\.since === raceOverArmedSince/);
   assert.match(js, /race\/over[\s\S]{0,200}C4RecLog\.raceOverBody\(race\)/);
 });
