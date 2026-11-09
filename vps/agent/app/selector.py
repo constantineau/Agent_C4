@@ -302,6 +302,17 @@ def _decide(route=None, now=None):
                 "consider": "Hold the plan on your own read until it's back.",
                 "clears": "wind read back", "based": []}
 
+    # ---- a lasting shift, but no live heading/COG to tell the point of sail (#247) ------------
+    # Tactics withholds the side; a green "Hold, no lasting shift" would contradict it.
+    if tac.get("side_unknown"):
+        return {**base, "action": "na", "status": "na", "tier": 0,
+                "target_variant": None, "target_label": None,
+                "value": "No heading", "driven_by": ["get_tactics"],
+                "confidence": 0.3, "confidence_label": "low",
+                "why": "Wind shift is lasting, but no live heading to tell which side. Can't check the plan.",
+                "consider": "Hold the plan on your own read until heading is back.",
+                "clears": "heading back", "based": ["get_tactics"]}
+
     if decisive:
         # locked input #5 — downwind, the pivot must CONFIRM before the verdict escalates to a
         # SWITCH; a different favored side restarts its own clock (the old one is dropped

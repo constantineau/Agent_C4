@@ -117,6 +117,9 @@ body {
 .sr-settle.sr-watch { color:var(--watch); } .sr-settle.sr-act { color:var(--act); }
 /* a slow read held after failed polls says how old it is (#45.5b, #45.7) */
 .st-old { font-size:11px; font-weight:700; color:var(--watch); white-space:nowrap; }
+/* #247: a reading past its dead limit — the number stays, its age is red */
+.age-dead { font-size:.55em; font-weight:800; color:var(--act); white-space:nowrap; }
+.rc.age-dead { font-size:inherit; }
 .st-body { margin-top:8px; }
 .st-progress { position:relative; height:8px; border-radius:6px; background:var(--panel2);
   border:1px solid var(--line); overflow:hidden; }

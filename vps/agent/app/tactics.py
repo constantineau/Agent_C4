@@ -16,12 +16,29 @@ from . import navigator as NAV
 from . import datasource
 
 WINDOW_MIN = 12
+# At least this share of the window must hold wind (#247): 6 samples were enough before, which
+# for a 10 Hz channel is 0.6 s of data in 12 min, so a shift and a favoured side were called
+# straight after a restart or a sensor coming back. Counted in 30 s buckets, so the cloud's 15 s
+# aggregates fill every bucket.
+MIN_COVERAGE = 0.5
+_BUCKET_S = 30.0
 SR33_LEN_FT = 33.0      # ~10 m → boatlengths of leverage
 
 
 def _twd_series(minutes):
     series = datasource.active().series("environment.wind.directionTrue", minutes)
     return [(t, math.degrees(v) % 360) for t, v in series]
+
+
+def _coverage(series, newest_age_s=None):
+    """Share of the WINDOW_MIN window (ending now) that has at least one sample per 30 s bucket.
+    The window's end is the newest sample plus its age when known, else the newest sample."""
+    if not series:
+        return 0.0
+    end = series[-1][0] + (newest_age_s or 0.0)
+    n = int(WINDOW_MIN * 60 / _BUCKET_S)
+    filled = {int((end - t) // _BUCKET_S) for t, _v in series if 0 <= end - t < n * _BUCKET_S}
+    return len(filled) / n
 
 
 def _circ_mean(degs):
@@ -48,11 +65,19 @@ def _cross_track_nm(a, b, plat, plon):
 
 
 def get_tactics(route: str = None):
-    s = NAV._latest()
+    # Every input judged against its channel's dead limit (#247): aboard 15 s for wind and
+    # heading, 10 s for the fix. Until then the newest TWD had no age check at all, so a dead
+    # masthead kept making shift calls off its last reading.
+    raw = NAV._latest()
+    s = NAV._fresh(raw)
+    if raw.get("twd") is not None and s["twd"] is None:
+        age = (raw.get("ages") or {}).get("twd")
+        return {"available": False, "note": "Wind too old for a shift call.",
+                "wind_age_s": None if age is None else round(age)}
     if s["twd"] is None or s["lat"] is None:
         return {"available": False, "note": "Need live wind and position."}
     series = _twd_series(WINDOW_MIN)
-    if len(series) < 6:
+    if len(series) < 6 or _coverage(series, s.get("ages", {}).get("twd")) < MIN_COVERAGE:
         return {"available": False, "note": "Not enough wind history yet."}
 
     twds = [v for _, v in series]
@@ -86,7 +111,12 @@ def get_tactics(route: str = None):
         phase = wp.phase_on_tack(sign, tack, pos) if persistent else "even"
 
     # favored side — POINT-OF-SAIL aware (a right shift favours the right of a beat, the left of a run)
-    if persistent:
+    if persistent and hdg is None:
+        # No live heading or COG (both past their dead limit, #247): the point of sail is a
+        # guess, and a right shift favours opposite sides upwind and downwind. No side call.
+        favored = "either"
+        fav_reason = "lasting shift, but no live heading to tell which side"
+    elif persistent:
         favored = wp.favored_side(sign, pos) or "either"
         fav_reason = f"lasting shift {abs(round(slope, 1))}°/min"
     else:
@@ -109,8 +139,13 @@ def get_tactics(route: str = None):
 
     # recommendation — the shared, racer-native shift phrasing (boat-frame first, baseline→now, then
     # the point-of-sail-aware favoured side), plus leverage.
-    bits = [wp.describe_shift(mean, cur, tack=tack if tack in ("port", "starboard") else None,
-                              pos=pos, persistent=persistent, oscillation_deg=osc)]
+    if persistent and hdg is None:
+        # no point of sail: say what the wind did, never which side (see favored above)
+        bits = [f"wind shifted {wp.shift_word(sign)}, from {round(mean) % 360}° to "
+                f"{round(cur) % 360}°. No live heading, so no side call."]
+    else:
+        bits = [wp.describe_shift(mean, cur, tack=tack if tack in ("port", "starboard") else None,
+                                  pos=pos, persistent=persistent, oscillation_deg=osc)]
     if leverage and leverage["nm"] >= 0.02:
         bits.append(f"{leverage['boatlengths']} BL {leverage['side']} leverage.")
 
@@ -123,5 +158,6 @@ def get_tactics(route: str = None):
         "favored_side": favored, "favored_reason": fav_reason,
         "leverage": leverage,
         "recommendation": " ".join(bits),
+        "side_unknown": bool(persistent and hdg is None),     # #247: the selector withdraws
         "caveat": "Practice use only. May count as outside help in a race (RRS 41).",
     }

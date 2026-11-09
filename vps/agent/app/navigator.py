@@ -13,6 +13,8 @@ import os
 import threading
 import time
 
+from shared import staleness
+
 from . import datasource
 
 BOAT_ID = os.environ.get("BOAT_ID", "sr33")
@@ -131,13 +133,20 @@ _PROGRESS_LOCK = threading.RLock()
 # Set false to ignore the stored ratchet and run on geometry alone (the replay rig does this so
 # a frame depends only on its own timestamp, never on which frames were computed before it).
 PROGRESS_LATCH = os.environ.get("NAV_PROGRESS_LATCH", "true").strip().lower() != "false"
-# A reading older than this (wall clock) is not "now" (#45.1): an old position is no position,
-# old wind is no wind. Onboard the GPS writes several times a second; the cloud sees the boat
-# through the uplink and gets more slack (the same limits as the collision watch's own fix).
-# 0 turns the check off.
-NAV_MAX_AGE_S = float(os.environ.get(
-    "NAV_MAX_AGE_S",
-    "30" if os.environ.get("DATA_SOURCE", "cloud").strip().lower() == "onboard" else "120"))
+# A reading older than its channel's DEAD limit (wall clock) is not "now" (#45.1, #247): an old
+# position is no position, old wind is no wind. The limits are the one per-channel table,
+# `shared/staleness.py`: aboard 10 s for the GPS fix, COG and SOG, 15 s for heading and wind; in
+# the cloud 120 s (it sees the boat through the uplink). NAV_MAX_AGE_S, when set, overrides every
+# channel with one number; 0 turns the check off.
+_NAV_MAX_AGE_ENV = os.environ.get("NAV_MAX_AGE_S")
+NAV_MAX_AGE_S = None if _NAV_MAX_AGE_ENV in (None, "") else float(_NAV_MAX_AGE_ENV)
+
+
+def _max_age(key):
+    """Dead limit (s) for one `_PATHS` key; NAV_MAX_AGE_S overrides it when set."""
+    if NAV_MAX_AGE_S is not None:
+        return NAV_MAX_AGE_S
+    return staleness.dead_s(_PATHS[key])
 
 
 def _beyond_nm(lat, lon, m, axis_deg):
@@ -432,12 +441,12 @@ def _latest():
 
 
 def _fresh(s):
-    """`s` with every reading older than NAV_MAX_AGE_S set to None (a position counts as one
-    reading: lat and lon go together). Readings whose age is unknown are kept."""
+    """`s` with every reading older than its channel's dead limit set to None (a position counts
+    as one reading: lat and lon go together). Readings whose age is unknown are kept."""
     ages = s.get("ages") or {}
-    if NAV_MAX_AGE_S <= 0 or not ages:
+    if (NAV_MAX_AGE_S is not None and NAV_MAX_AGE_S <= 0) or not ages:
         return s
-    old = lambda k: ages.get(k) is not None and ages[k] > NAV_MAX_AGE_S     # noqa: E731
+    old = lambda k: ages.get(k) is not None and ages[k] > _max_age(k)     # noqa: E731
     out = dict(s)
     for k in ("cog", "heading", "sog", "tws", "twd"):
         if old(k):

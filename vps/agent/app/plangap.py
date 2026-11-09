@@ -27,6 +27,8 @@ import math
 import os
 import time
 
+from shared import staleness
+
 from . import datasource, deviation, navigator
 
 TWD_CONSIDER = float(os.environ.get("PLANGAP_TWD_CONSIDER_DEG", "15"))
@@ -65,10 +67,29 @@ def _na(note, extra=None):
     return out
 
 
+def _wind_dead(src):
+    """True when the newest TWS or TWD is past its dead limit (#247: 15 s aboard, 120 s in the
+    cloud). A window of old wind reads as a steady wind, so the gap is withheld instead."""
+    try:
+        w = src.latest_sample("environment.wind.speedTrue")
+        d = src.latest_sample("environment.wind.directionTrue")
+    except Exception:
+        return False                    # can't tell: the window rules below still apply
+    now = time.time()
+    for path, smp in (("environment.wind.speedTrue", w), ("environment.wind.directionTrue", d)):
+        if smp and smp[0] is not None and smp[1] is not None:
+            if staleness.is_dead(path, now - float(smp[1])):
+                return True
+    return False
+
+
 def _observed_wind():
     """(tws_kn, twd_deg, n_samples) — windowed mean of own instruments, TWD circular;
-    instantaneous fallback. (None, None, 0) when the boat has no wind data at all."""
+    instantaneous fallback. (None, None, 0) when the boat has no wind data at all, or when its
+    newest wind is past the dead limit (#247)."""
     src = datasource.active()
+    if _wind_dead(src):
+        return (None, None, 0)
     try:
         tws_rows = src.series("environment.wind.speedTrue", WINDOW_MIN) or []
         twd_rows = src.series("environment.wind.directionTrue", WINDOW_MIN) or []
@@ -140,7 +161,7 @@ def get_plangap(route=None):
 
     obs_tws, obs_twd, n = _observed_wind()
     if obs_tws is None:
-        return _na("No wind data yet.", base)
+        return _na("No live wind.", base)
 
     gap_twd = _ang(promise["twd"], obs_twd)         # + = observed RIGHT of the promise
     gap_tws = obs_tws - promise["tws"]

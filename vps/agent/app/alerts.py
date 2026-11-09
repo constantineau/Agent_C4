@@ -92,6 +92,12 @@ HOLD_WHEN_BLIND = frozenset({"depth_shoaling"})
 NO_LIVE_DATA = {"key": "stale_telemetry", "kind": "stale_telemetry", "severity": "danger",
                 "message": "No live data. Link or sensors down."}
 
+def _ago(sec):
+    """'45 s' / '3 min' for an alert message."""
+    sec = round(sec or 0)
+    return f"{sec} s" if sec < 120 else f"{round(sec / 60)} min"
+
+
 # key -> monotonic time the condition was first seen (continuously) true
 _pending = {}
 
@@ -135,6 +141,14 @@ def _conditions(blind=None):
                 sev = "danger" if age > STALE_S * 3 else "warn"
                 out.append({"key": "stale_telemetry", "kind": "stale_telemetry", "severity": sev,
                             "message": f"Data stale: newest is {round(age)} s old."})
+            else:
+                # Per sensor group (#247, decided 2026-11-09): a dead depth or GPS alone raises its
+                # own alert. Before, the alert used the FRESHEST channel's age, so one live sensor
+                # hid every dead one. Left out while the whole boat is quiet: that is the alert above.
+                for g in s.get("dead_groups") or ():
+                    out.append({"key": f"stale:{g['group']}", "kind": "stale_telemetry",
+                                "severity": g["severity"],
+                                "message": f"{g['label']}: no reading for {_ago(g['age_s'])}."})
 
             depth = s.get("depth")
             if depth is None:
@@ -165,10 +179,12 @@ def _conditions(blind=None):
         if tac.get("available"):
             w = tac.get("wind", {})
             if w.get("persistent") and abs(w.get("shift_deg", 0)) >= SHIFT_DEG:
+                side = tac.get("favored_side")
                 out.append({"key": "wind_shift", "kind": "wind_shift", "severity": "warn",
                             "message": f"Wind shifted {w.get('trend')} "
-                                       f"{abs(round(w['shift_deg']))}°. Favour the "
-                                       f"{tac.get('favored_side')} side."})
+                                       f"{abs(round(w['shift_deg']))}°."
+                                       + (f" Favour the {side} side."
+                                          if side in ("left", "right") else "")})
     except Exception:
         pass
 

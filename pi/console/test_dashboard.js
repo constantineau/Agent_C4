@@ -491,6 +491,49 @@ test("FLEET: a real lead still says so", () => {
   ok(/Leading on corrected/.test(t.consider), "consider: " + t.consider);
 });
 
+/* ---------------- #247 per-channel stale limits ---------------- */
+test("#247 a dead depth with every other sensor fresh turns the DATA tile, with a chip", () => {
+  const g = [{ group: "depth", label: "Depth", channels: ["depth"], age_s: 20, severity: "warn" }];
+  const t = dataTile({ available: true, status: "ok", flags: [], notes: [], reason: "ok" },
+    { conditions: { available: true, dead_groups: g } });
+  ok(t.status === "watch", "status " + t.status);
+  ok(/depth 20s old/.test(t.sub), "sub: " + t.sub);
+  ok(/Depth: no reading for 20s/.test(t.why) && /Don't trust depth/.test(t.consider), t.why + " | " + t.consider);
+  const d = dataTile({ available: true, status: "ok", flags: [], notes: [], reason: "ok" },
+    { conditions: { available: true, dead_groups: [Object.assign({}, g[0], { age_s: 90, severity: "danger" })] } });
+  ok(d.status === "act", "past 60 s: " + d.status);
+});
+test("#247 dead wind: the last number stays with a red age, no trend call", () => {
+  const T = load();
+  const t = T.D.BUILD.wind({ conditions: { available: true, tws: null, twd: null,
+    raw: { tws: { value: 12, age_s: 20, state: "dead" }, twd: { value: 220, age_s: 20, state: "dead" } } } });
+  ok(t.status === "watch" && /age-dead/.test(t.value) && /20s old/.test(t.value), JSON.stringify(t));
+  ok(/12 kts/.test(t.value), "the last number is gone: " + t.value);
+  ok(/no fresh wind/.test(t.sub), "sub: " + t.sub);
+});
+test("#247 wind silent over 30 min (gone from raw): no number, no 'Steady' advice", () => {
+  const T = load();
+  const t = T.D.BUILD.wind({ conditions: { available: true, tws: null, twd: null, raw: { depth: { value: 9, age_s: 1, state: "ok" } } } });
+  ok(t.status === "na" && !/Steady/.test(t.consider || "") && !/kts/.test(t.value || ""), JSON.stringify(t));
+});
+test("#247 the provenance table keeps a reading the 5-min health read dropped, with its red age", () => {
+  const T = load();
+  T.D.App.health = { available: true, provenance: { channels: {
+    sog: { value: 6.1, unit: "kn", age_s: 1, device: "GPS24xd" } } } };
+  T.D.App.cond = { available: true, raw: { sog: { value: 6.1, age_s: 1, state: "ok" },
+    depth: { value: 12.4, age_s: 400, state: "dead" } } };
+  const h = T.D.provenanceTableHtml();
+  ok(/12.4 m/.test(h) && /age-dead">400s/.test(h), h);
+});
+test("#247 a stale bank: grey, last volts with a red age, no verdict", () => {
+  const T = load();
+  T.D.App.power = { available: true, status: "unknown", stale: true, volts_last: 12.31, age_s: 90,
+    volts: 12.3, trend_v_per_h: -0.1, thresholds: { floor_v: 11, danger_v: 11.3 } };
+  const t = T.D.BUILD.bank({});
+  ok(t.status === "na" && /12.31 V/.test(t.value) && /age-dead/.test(t.value), JSON.stringify(t));
+  ok(!/healthy/i.test(t.consider), "consider: " + t.consider);
+});
+
 (async () => {
   let fails = 0;
   for (const [name, fn] of cases) {
