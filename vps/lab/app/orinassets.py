@@ -54,7 +54,8 @@ def build_chart(definition, course_id, boat, open_water=False, source=None):
     zones, island disks and rounding barriers are rebuilt on the Orin from what's left of the
     course, so the barrier of an island already rounded can't block a later leg. No waypoint
     pockets either: a pocket at a near-shore mark would clear that shore for every later leg; the
-    Orin opens pockets for the boat and the marks still to sail, each run."""
+    Orin opens the boat's pocket each run, and a mark's only with the chart override signed into
+    the frozen playbook (#242)."""
     bbox = optimizer.course_bbox(definition, course_id)
     if not bbox:
         return None, NO_MARKS

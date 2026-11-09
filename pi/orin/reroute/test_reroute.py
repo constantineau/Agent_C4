@@ -484,8 +484,37 @@ with open(job.chart_path("huron", "c"), "w") as fh:
     json.dump(dict(geo.field_to_dict(f_gate), kind=job.CHART_KIND,
                    fingerprint=geo.course_fingerprint(DEF, "c", DEPTH)), fh)
 fG, nG = lo(DEF)
-check("the land under a remaining mark is opened (pocket), the rest stays", nG is None
-      and not fG.blocked(44.9, -82.25) and fG.blocked(44.94, -82.17))
+# #242 (Cole): at marks the Orin uses only the Lab's signed chart overrides, never its own pocket
+check("no chart override: the land under a remaining mark stays land", nG is None
+      and fG.blocked(44.9, -82.25))
+dG, cG, _n = job.remaining_definition(DEF, "c", 2, 44.2, -82.2)
+fG2, nG2 = job.load_obstacles(dG, cG, DEF, "c", job._get_boat(),
+                              overrides=job.override_names({"overrides": [
+                                  {"mark": "Gate", "by": "Cole", "at": 5, "why": "chart"}]}))
+check("the Lab's signed override on that mark: opened (pocket), the rest stays", nG2 is None
+      and not fG2.blocked(44.9, -82.25) and fG2.blocked(44.94, -82.17))
+check("an override on another mark opens nothing here", job.load_obstacles(
+    dG, cG, DEF, "c", job._get_boat(),
+    overrides=job.override_names({"overrides": [{"mark": "North"}]}))[0].blocked(44.9, -82.25))
+check("bad overrides in the request: none", job.override_names({"overrides": "Gate"}) == frozenset()
+      and job.override_names({"overrides": [{"by": "x"}, "Gate"]}) == frozenset())
+# end to end: the request's `overrides` (from the Pi) reach the mask. The gate sits 0.2 nm
+# inside a land block's south edge, so only a pocket lets the route get to it at all.
+f_edge = geo.build_for_course(DEF, "c", (46.0, 42.5, -83.5, -81.5), coastline_on=False,
+                              use_cache=False, zones_on=False, islands_on=False)
+f_edge._fill_polygon([[(-82.35, 44.8967), (-82.15, 44.8967), (-82.15, 44.95), (-82.35, 44.95)]], 1,
+                     "coastline")
+f_edge.active = True
+with open(job.chart_path("huron", "c"), "w") as fh:
+    json.dump(dict(geo.field_to_dict(f_edge), kind=job.CHART_KIND,
+                   fingerprint=geo.course_fingerprint(DEF, "c", DEPTH)), fh)
+outG = job.run(dict(REQ, overrides=[{"mark": "Gate", "by": "Cole", "at": 5, "why": "chart"}]),
+               now=NOW, is_online=lambda: False)
+outN = job.run(REQ, now=NOW, is_online=lambda: False)
+check("a run with the override reaches the gate",
+      outG["available"] and outG["legs"] and outG["legs"][0]["reached"])
+check("…and without it, it doesn't (no pocket of its own)",
+      outN["available"] and not (outN["legs"] and outN["legs"][0]["reached"]))
 write_chart(DEF)
 REQ_Z = {"device": "iPad 1", "position": {"lat": 44.0, "lon": -81.994}, "next_index": 1,
          "definition": NEAR, "course_id": "c", "models": ["gfs"]}

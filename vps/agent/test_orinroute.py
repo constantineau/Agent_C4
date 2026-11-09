@@ -4,7 +4,8 @@ Pins:
   * POST /reroute/run refuses, in a short sentence, when the Orin can't be reached (a real
     connection to a closed port), when there's no position, and when there's no course;
   * the run request carries the position, the next mark, the deployed definition (when it is the
-    course the navigator holds), the plan's track and who asked;
+    course the navigator holds), the plan's track, who asked, and the chart overrides signed into
+    the frozen playbook (only one routed on this course, #242);
   * busy passes through with the Orin's progress; started → 202;
   * GET /reroute fetches a finished route once, stores it (label "Off the playbook"), and still
     serves it with the Orin off;
@@ -110,6 +111,23 @@ check("who asked (cleaned)", req["device"] == "iPad 1")
 check("the definition rides along (same course as the navigator)",
       (req["definition"] or {}).get("race_id") == "r1" and req["course_id"] == "c")
 check("the plan's track", req["plan"]["variant"] == "left" and len(req["plan"]["points"]) == 2)
+check("no playbook routed on this course: no chart overrides", req["overrides"] == [])
+# #242: the chart overrides ride along only from the frozen playbook routed on this exact course
+from shared.race_def import course_hash  # noqa: E402
+OV = [{"mark": "Finish", "by": "Cole", "at": 5, "why": "chart artefact"}]
+DEF_OV = json.loads(json.dumps(DEF))
+DEF_OV["courses"][0]["chart_overrides"] = {"Finish": {"by": "Cole", "at": 5, "why": "chart artefact"}}
+orinroute.save_definition(DEF_OV, "c", "r1")
+deviation._load_playbook = lambda: dict(BUNDLE, race_id="r1", course_hash=course_hash(DEF_OV, "c"),
+                                        safety={"ok": True, "problems": [], "overrides": OV})
+orinroute.run("x", call=orin({("POST", "/run"): (202, {"ok": True, "job_id": "j1b"})}))
+check("the playbook's signed overrides ride along", SENT[-1][2]["overrides"] == OV)
+deviation._load_playbook = lambda: dict(BUNDLE, race_id="r1", course_hash=course_hash(DEF, "c"),
+                                        safety={"ok": True, "problems": [], "overrides": OV})
+orinroute.run("x", call=orin({("POST", "/run"): (202, {"ok": True, "job_id": "j1c"})}))
+check("a playbook routed on another course (other overrides): none", SENT[-1][2]["overrides"] == [])
+deviation._load_playbook = lambda: BUNDLE
+orinroute.save_definition(DEF, "c", "r1")
 NAV._marks = lambda route: MARKS[:2]
 orinroute.run("x", call=orin({("POST", "/run"): (202, {"ok": True, "job_id": "j2"})}))
 check("a different course aboard → no definition, marks only",

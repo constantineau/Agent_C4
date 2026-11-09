@@ -85,6 +85,7 @@ Run request (Pi → Orin):
  "definition": {"race_id": "...", "courses": ["the deployed course"], "zones": []},
  "course_id": "cove_island",
  "plan": {"variant": "left", "variant_label": "Left side", "points": [{"lat": 0, "lon": 0, "t": 0}]},
+ "overrides": [{"mark": "Finish", "by": "Cole", "at": 1793500000, "why": "chart artefact"}],
  "models": ["gfs", "hrrr"],
  "assets": {"chart": {"kind": "land-v2", "fingerprint": "...", "...": "the land mask"},
             "boat": {"boat_id": "sr33", "helm_factor": 0.931, "...": "the reviewed profile"},
@@ -176,7 +177,7 @@ docker exec -i sr33-dev-lab-1 python - bayview-mackinac-2026 cove_island \
 
 The file is LAND ONLY (`"kind": "land-v2"`): shoreline, shoals, rocks, with no pockets at the
 marks (a pocket at a near-shore mark would clear that shore for every later leg; the Orin opens
-pockets for the boat and the marks still to sail, each run). Files from older builds count as out
+the boat's pocket, and a mark's only with the Lab's signed override, each run). Files from older builds count as out
 of date. The race's zones, island
 disks and rounding-side barriers are rebuilt on the Orin from what's left of the course, so the
 barrier of an island already rounded never blocks a later leg (pure Python, no shoreline data).
@@ -186,7 +187,11 @@ the shore."). The Deploy never flags open water; `prep_chart.py --open-water` ca
 
 The boat is a new start point, so the run opens the Lab's usual start pocket (0.5 nm) around it in
 the land mask before the race layer goes on: a boat close to shore is never boxed in by a
-shoreline cell. The same land-only pocket opens at every mark still to sail. Zones, island disks
+shoreline cell. At a mark the Orin never opens land itself (#242): a mark still to sail gets the
+same land-only pocket only when the Lab signed a chart override for it. Those come from the frozen
+playbook aboard (`safety.overrides`); the Pi sends them as the request's `overrides`, and only from
+a playbook routed on this exact course (its course hash matches). No playbook, or another
+course's: no mark pockets. Zones, island disks
 and rounding barriers are never opened, for the boat or any mark, however close (the race layer
 is built with `carve_waypoints=False`). If the boat is inside an exclusion zone or an island's
 disk, the run doesn't route: "Boat is inside an exclusion zone. Re-route not run." (or "…inside an
