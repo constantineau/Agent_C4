@@ -180,8 +180,11 @@ check("a repaired revision keeps its number", revs[ra[0][0]] == 1 and revs[ra[1]
 print("a damaged timestamp never breaks the list:")
 bad = synthesis.sign_bundle({"race_id": "r1", "course_id": "odd", "variants": [{"id": "q"}],
                              "generated_at": "x"})
-bad["signature"]["signed_at"] = "broken"
+bad["signature"]["signed_at"] = 1e20                   # past what a browser can show as a date
 pbstore.save(bad)
+bad2 = synthesis.sign_bundle({"race_id": "r1", "course_id": "odd2", "variants": [{"id": "q"}]})
+bad2["signature"]["signed_at"] = "broken"
+pbstore.save(bad2)
 try:
     row = next(b for b in pbstore.list_bundles() if b["course_id"] == "odd")
     check("listed, its times blank (the page formats them)",

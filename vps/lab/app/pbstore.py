@@ -152,7 +152,8 @@ def _mtime_ns(path):
 
 def _num(v):
     """A timestamp the list can sort and the page can format, or None (a damaged file)."""
-    return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+    ok = isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= v < 8.64e12   # JS Date range
+    return v if ok else None
 
 
 def list_bundles():

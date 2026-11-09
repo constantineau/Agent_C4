@@ -157,6 +157,8 @@ B["courses"][0]["marks"][0]["lat"] = 45.4                         # the SI amend
 PB_A = synthesis.sign_bundle(dict(signed, course_hash=race_def.course_hash(A, "c"), signature=None))
 PB_B = synthesis.sign_bundle(dict(signed, course_hash=race_def.course_hash(B, "c"), signature=None))
 reads = {"race": 0, "pb": 0}
+# the lock names PB_A's bytes (else Push refuses on the signature first, #249, and this proves nothing)
+D.labstate.set("deploy:r1", dict(D.labstate.get("deploy:r1"), signature=PB_A["signature"]["value"][:16]))
 
 
 def race_then_edit(rid):                 # the first read sees the old race, later ones the new
@@ -179,6 +181,7 @@ sent_course = (bodies.get("course/load") or {}).get("definition")
 sent_pb = bodies.get("playbook/load")
 check("either refused, or the course sent is the one the sent playbook was routed on",
       res.get("refused") or (sent_pb and race_def.course_hash(sent_course, "c") == sent_pb["course_hash"]))
+check("(it was sent: the check above ran on a real push)", not res.get("refused") and sent_pb)
 
 print("short text:")
 for s in (D.PB_COURSE, D.PB_UNCHECKED):
