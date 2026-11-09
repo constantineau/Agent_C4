@@ -144,9 +144,9 @@ def test_enqueued_batch_survives_a_round_trip_through_the_queue(q):
     assert _names(q) == []
 
 
-def test_two_overlapping_sends_post_a_queued_file_once(q):
-    """One sender at a time: overlapping sends must not both read and post the same queued
-    file (it is only unlinked after its POST returns)."""
+def test_two_overlapping_replay_passes_post_a_queued_file_once(q):
+    """One replay pass at a time: overlapping passes must not both read and post the same
+    queued file (it is only unlinked after its POST returns)."""
     import threading
     import time as _t
     up = _load_uplink(q)
@@ -154,18 +154,27 @@ def test_two_overlapping_sends_post_a_queued_file_once(q):
     posted, lock = [], threading.Lock()
 
     def slow_post(batch):
-        _t.sleep(0.2)                   # both senders are inside the queue walk at once
+        _t.sleep(0.2)                   # both passes are inside the queue walk at once
         with lock:
             posted.append(batch["readings"][0]["value"])
 
     up._post = slow_post
-    ts = [threading.Thread(target=up.send, args=([{"time": "t", "source": "s", "path": "p",
-                                                    "value": v}],)) for v in (10, 11)]
+    ts = [threading.Thread(target=up.drain_held) for _ in range(2)]
     for t in ts:
         t.start()
     for t in ts:
         t.join()
-    assert posted.count(1) == 1, posted
+    assert posted == [1], posted
+
+
+def test_a_live_send_never_replays_the_queue(q):
+    """The live path posts its own batch only; the replayer owns the backlog (#184-8)."""
+    up = _load_uplink(q)
+    _write(q, "a.json", _batch("2026-07-19T07:20:00Z", 1))
+    posted = []
+    up._post = lambda b: posted.append(b["readings"][0]["value"])
+    up.send([{"time": "2026-11-09T12:00:00Z", "source": "s", "path": "p", "value": 5}])
+    assert posted == [5] and _names(q) == ["a.json"]
 
 
 class _Clock:
@@ -454,21 +463,36 @@ def test_live_windows_keep_their_cadence_while_a_backlog_replays(q):
     assert len(_names(q)) < 5000                      # and the backlog did drain meanwhile
 
 
-def test_a_slow_live_post_that_spends_the_budget_skips_the_replay(q):
-    """Codex on #283: if the live POST already used the pass's budget, no queued POST is
-    started (it would merge the next live windows); the backlog waits, still queued."""
+def test_a_slow_live_link_does_not_strand_the_backlog(q):
+    """Codex on #283: with every live POST longer than a window and a busy bus, the backlog
+    must still drain (the replayer runs beside the live flusher, not after it)."""
+    import asyncio
+    import time as _time
     up = _load_uplink(q)
-    _write(q, "20261001T000000Z.json", _batch("2026-10-01T00:00:00Z", -1))
-    now = [0.0]
-    up._clock = lambda: now[0]
-    up.REPLAY_BUDGET_S = 9.0
-    posted = []
+    for k in range(20):
+        _write(q, f"20261001T{k:06d}Z.json", _batch("2026-10-01T00:00:00Z", -1 - k))
+    up.CLOCK = _Clock(True)
+    up.AGG_SECONDS = 0.05
+    replayed = []
 
     def post(batch):
-        now[0] += 19.0
-        posted.append(batch["readings"][0]["value"])
+        v = batch["readings"][0]["value"]
+        if v >= 0:
+            _time.sleep(0.08)                         # live POSTs slower than a window
+        else:
+            replayed.append(v)
     up._post = post
-    up.send([{"time": "2026-11-09T12:00:00Z", "source": "s", "path": "p", "value": 5}])
-    assert posted == [5] and len(_names(q)) == 1
-    up._flush_queue()                                 # a standalone pass still makes progress
-    assert posted == [5, -1] and _names(q) == []
+
+    async def go():
+        win = {}
+        task = asyncio.create_task(up.flusher(win, asyncio.get_running_loop()))
+        t0 = _time.monotonic()
+        k = 0
+        while _time.monotonic() - t0 < 0.6:
+            win[("gps", "p")] = ("num", float(k))
+            k += 1
+            await asyncio.sleep(0.005)
+        task.cancel()
+        await asyncio.sleep(0.1)
+    asyncio.run(go())
+    assert replayed == [-1 - k for k in range(20)] and _names(q) == []

@@ -14,9 +14,10 @@ paths. A disk-backed queue replays batches if the cloud link (Starlink) drops.
 The queue has NO size cap and never evicts (Cole, #243; ADR-0004): a batch leaves it only when
 the VPS has accepted it, or into quarantine (kept on disk) when the VPS rejects it for good. In a
 very long outage the archiver's disk guard is the backstop, not a drop-oldest rule here. Replay
-is paged by time (UPLINK_REPLAY_BUDGET_S per pass) so a big backlog never holds up the live
-window: while a send runs, the window only keeps the latest value per reading, so an hour-long
-replay in one go would fold an hour of windows into one (#184-8).
+runs in its own task, beside the live flusher, paged by time (UPLINK_REPLAY_BUDGET_S per pass),
+so a big backlog never holds up the live window: while a send runs, the window only keeps the
+latest value per reading, so an hour-long replay in the flusher's path would fold an hour of
+windows into one (#184-8).
 
 Identical on bench and boat; the only difference is CAN_IFACE (vcan0 vs can0), upstream of
 Signal K.
@@ -60,15 +61,14 @@ UNDATED_DIR = QUEUE_DIR / "undated"
 # 408 Request Timeout and 429 Too Many Requests say "try again later", not "this payload is
 # bad": quarantining them parked good telemetry for ever (#184-7).
 _RETRY_LATER = {408, 429}
-# One sender at a time: two overlapping sends would each read the same queued file and post it
-# twice (the file is only removed after its POST returns).
+# One replay pass at a time: two overlapping passes would each read the same queued file and post
+# it twice (the file is only removed after its POST returns), or date a held batch twice.
 _SEND_LOCK = threading.Lock()
 # Batches kept in RAM after a failed hand-off (disk full / I/O error) before the flusher stops
 # cutting new ones: 240 x 15 s = an hour.
 RETRY_MAX = int(os.environ.get("UPLINK_RETRY_MAX", "240"))
-# Longest one pass may spend replaying the queue before handing back to the flusher. Under the
-# aggregation window, so the next live window is cut on time; what is left stays queued, in order,
-# for the next pass.
+# Longest one replay pass runs before it lets go of the queue and looks again (held batches to
+# date, the clock). What is left stays queued, in order, for the next pass, which starts at once.
 REPLAY_BUDGET_S = float(os.environ.get("UPLINK_REPLAY_BUDGET_S", str(AGG_SECONDS * 0.6)))
 _clock = time.monotonic
 CLOCK = clock_trust.ClockTrust(QUEUE_DIR / "clock-trusted") if clock_trust else None
@@ -252,8 +252,9 @@ def _quarantine(f, why):
     print(f"[uplink] quarantined {f.name}: {why}", flush=True)
 
 
-def _flush_queue(deadline=None):
-    """Replay queued batches oldest-first.
+def _flush_queue():
+    """Replay queued batches oldest-first. Returns True when it stopped only because its time
+    budget ran out (the link works and more is queued), else False.
 
     Two failure modes have to be told apart, because treating them alike is what stalled
     the queue for six weeks: a *transient* failure (link down, server 5xx) means stop and
@@ -262,22 +263,19 @@ def _flush_queue(deadline=None):
     permanent failure has to be moved aside or it blocks every newer batch behind it
     forever.
 
-    Paged by time: at `deadline` it stops and the rest waits, still queued and in order, for the next pass (#184-8).
-    With no deadline given (a standalone replay) it is REPLAY_BUDGET_S from now and at least one
-    batch is always tried; a deadline given by `_send` (already partly spent on the live POST) is
-    honoured before the first one too, so a slow link favours the live window and the backlog
-    waits, on disk. The deadline is checked between POSTs, so one slow POST (20 s timeout) can overrun it once.
+    Paged by time (#184-8): after REPLAY_BUDGET_S it stops (at least one batch is always tried)
+    and the rest waits, still queued and in order, for the next pass. Checked between POSTs, so
+    one slow POST (20 s timeout) can overrun it.
     """
     if not QUEUE_DIR.exists():
-        return
+        return False
     queued = sorted(QUEUE_DIR.glob("*.json"))
-    first_free = deadline is None
-    deadline = _clock() + REPLAY_BUDGET_S if deadline is None else deadline
+    deadline = _clock() + REPLAY_BUDGET_S
     for i, f in enumerate(queued):
-        if (i or not first_free) and _clock() >= deadline:
+        if i and _clock() >= deadline:
             print(f"[uplink] replayed {i} queued batch(es), {len(queued) - i} still queued",
                   flush=True)
-            return
+            return True
         try:
             batch = json.loads(f.read_text())
         except (OSError, ValueError) as exc:
@@ -289,39 +287,52 @@ def _flush_queue(deadline=None):
             if 400 <= exc.code < 500 and exc.code not in _RETRY_LATER:
                 _quarantine(f, f"rejected HTTP {exc.code}")
                 continue
-            return  # 408/429/5xx — try again later; keep the rest queued
+            return False  # 408/429/5xx — try again later; keep the rest queued
         except Exception:
-            return  # link still down — leave the rest queued
+            return False  # link still down — leave the rest queued
         f.unlink(missing_ok=True)
+    return False
 
 
 def send(readings):
-    with _SEND_LOCK:
-        _send(readings)
-
-
-def drain_held():
-    """Date and queue the held batches, then try the queue, with no live batch to send."""
-    with _SEND_LOCK:
-        _date_held()
-        _flush_queue()
-
-
-def _send(readings):
-    deadline = _clock() + REPLAY_BUDGET_S     # the whole pass, live POST included
-    try:
-        _date_held()
-    except Exception as exc:          # never let the held batches stop the live one
-        print(f"[uplink] could not date held batches ({exc})", flush=True)
+    """Post one live batch; on any failure queue it. Never touches the queue's older batches:
+    the replayer owns those, so a backlog never slows the live windows (#184-8)."""
     batch = {"boat_id": BOAT_ID, "readings": readings}
     try:
         _post(batch)
-        _flush_queue(deadline)
         srcs = len({r["source"] for r in readings})
         print(f"[uplink] sent {len(readings)} readings from {srcs} source(s)", flush=True)
     except Exception as exc:
         _enqueue(batch)
         print(f"[uplink] link down, queued {len(readings)} readings ({exc})", flush=True)
+
+
+def drain_held():
+    """One replay pass: date and queue the held batches, then replay the queue for up to
+    REPLAY_BUDGET_S. Returns True when more is queued and the link works."""
+    with _SEND_LOCK:
+        try:
+            _date_held()
+        except Exception as exc:      # never let the held batches stop the replay
+            print(f"[uplink] could not date held batches ({exc})", flush=True)
+        return _flush_queue()
+
+
+def _pending():
+    return any(UNDATED_DIR.glob("*.json")) or any(QUEUE_DIR.glob("*.json"))
+
+
+async def replayer(loop):
+    """Replays the queue beside the live flusher, on its own executor thread: back to back
+    while the link works and a backlog remains, else once a window."""
+    while True:
+        more = False
+        try:
+            if clock_trusted() and _pending():
+                more = await loop.run_in_executor(None, drain_held)
+        except Exception as exc:
+            print(f"[uplink] replay pass failed ({exc})", flush=True)
+        await asyncio.sleep(0 if more else AGG_SECONDS)
 
 
 def _post_ais(targets):
@@ -350,9 +361,18 @@ async def flusher(window, loop, retry=None):
     # is kept here and tried again first on the next tick, so the task never dies and the batch
     # is not lost. Held batches keep their original monotonic stamp.
     retry = [] if retry is None else retry
-    # Windows are cut on a fixed cadence, not "AGG_SECONDS after the last send returned": a pass
-    # that spends its replay budget would otherwise stretch every window by that much, and the
-    # window keeps only the latest value per reading, so the values in between would be lost.
+    # Windows are cut on a fixed cadence, not "AGG_SECONDS after the last send returned": a slow
+    # POST would otherwise stretch every window by that much, and the window keeps only the
+    # latest value per reading, so the values in between would be lost.
+    # The queue is replayed by its own task, beside this one, so a backlog never delays a window.
+    replay = asyncio.create_task(replayer(loop))
+    try:
+        await _cut_windows(window, loop, retry)
+    finally:
+        replay.cancel()
+
+
+async def _cut_windows(window, loop, retry):
     next_tick = loop.time()
     while True:
         next_tick += AGG_SECONDS
@@ -370,15 +390,7 @@ async def flusher(window, loop, retry=None):
                 break
             retry.pop(0)
         if not window:
-            # A quiet bus: still deliver batches held before the clock was trusted, and keep
-            # retrying queued ones (a post that failed once would otherwise wait for traffic).
-            if not retry and (any(UNDATED_DIR.glob("*.json")) or any(QUEUE_DIR.glob("*.json"))) \
-                    and clock_trusted():
-                try:
-                    await loop.run_in_executor(None, drain_held)
-                except Exception as exc:
-                    print(f"[uplink] could not drain held batches ({exc})", flush=True)
-            continue
+            continue                    # a quiet bus; the replayer still drains the queue
         if len(retry) >= RETRY_MAX:
             # The disk has refused every hand-off for a long while. Stop cutting new batches
             # (RAM would grow until the process is killed and every pending batch is lost);
