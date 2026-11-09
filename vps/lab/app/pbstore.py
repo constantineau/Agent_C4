@@ -87,6 +87,11 @@ def _write_new(path: str, data: bytes) -> bool:
             os.remove(tmp)
 
 
+def _sig_value(b):
+    sig = b.get("signature")
+    return sig.get("value") if isinstance(sig, dict) else None
+
+
 def save(bundle: dict) -> str:
     """Persist a (signed) bundle as a new revision; returns its id. The file IS the onboard-loadable
     artifact. Never overwrites: the same content frozen again keeps the first file's bytes (its
@@ -95,9 +100,11 @@ def save(bundle: dict) -> str:
     pid = bundle_id(bundle)
     data = json.dumps(bundle, indent=2).encode("utf-8")
     if not _write_new(_path(pid), data):
-        old = get(pid)
-        if not isinstance(old, dict) or content_digest(old) != content_digest(bundle):
-            # the file under this id is damaged (it no longer holds the content its id names):
+        old, digest = get(pid), content_digest(bundle)
+        if not isinstance(old, dict) or content_digest(old) != digest \
+                or (_sig_value(bundle) == digest and _sig_value(old) != digest):
+            # the file under this id is damaged (it no longer holds the content its id names, or
+            # its signature no longer matches it while this one does):
             # put the named content back, the one case a file is replaced
             atomicio.write_bytes(_path(pid), data)
     return pid
