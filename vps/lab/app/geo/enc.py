@@ -112,7 +112,8 @@ def _touches(bbox, cell_bbox) -> bool:
 
 
 def cells_for_bbox(bbox, cache_dir: str = None, bands=None, max_cells: int = MAX_CELLS) -> list:
-    """Active ENC cells whose footprint intersects bbox=(n,s,w,e), filtered to `bands`.
+    """Active ENC cells whose footprint intersects bbox=(n,s,w,e), filtered to `bands`. At most
+    `max_cells` (None = all of them).
 
     Falls back to the next band(s) only if the preferred band yields nothing for the bbox."""
     bands = bands or ENC_BANDS
@@ -323,7 +324,9 @@ def layers_in_bbox(bbox, cache_dir: str = None, safety_depth_m: float = 3.0) -> 
     and the route says so (#242). `missing` names the cells that cover the box but never downloaded,
     are missing a layer's extract, or have an extract that won't read: their water would read as uncharted, so the caller counts the ENC load as failed."""
     cache_dir = cache_dir or CACHE
-    cells = cells_for_bbox(bbox, cache_dir)
+    # every cell that covers the box, past the download cap too: a cell `ensure_bbox` skipped for
+    # the cap is missing, never silently left out (Codex on #287)
+    cells = cells_for_bbox(bbox, cache_dir, max_cells=None)
     ed = _extract_dir(cache_dir)
     land, shoal, obstr, cover, missing = [], [], [], [], []
     shoal_keep = _shoal_keep(safety_depth_m)

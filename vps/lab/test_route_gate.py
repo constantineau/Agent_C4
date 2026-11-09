@@ -43,7 +43,8 @@ RACE = {"race_id": "r1", "name": "Race", "courses": [{"id": "c",
 store.get_race = lambda rid: RACE if rid == "r1" else None
 M.store.get_race = store.get_race
 written = []
-M._write_race = lambda d, draft=False: written.append(d) or d.get("race_id")
+_real_write_race = M._write_race
+M._write_race = lambda d, draft=False, overrides=False: written.append((d, overrides)) or d.get("race_id")
 
 GOOD = {"ok": True, "problems": [], "overrides": []}
 BAD = {"ok": False, "problems": [{"code": "blocked", "mark": "Finish", "route": "Main route",
@@ -130,7 +131,8 @@ r = client.post("/api/races/r1/chart-override",
 ov = (RACE["courses"][0].get("chart_overrides") or {}).get("Finish") or {}
 check("recorded on the course: who, when, why", r.status_code == 200 and ov.get("by") == "Cole"
       and ov.get("why") == "harbour charted as land" and isinstance(ov.get("at"), int), r.text[:120])
-check("saved", written and written[-1]["race_id"] == "r1")
+check("saved, as the override route (the only writer of overrides)",
+      written and written[-1][0]["race_id"] == "r1" and written[-1][1] is True)
 check("the answer carries the course's overrides as saved (the Lab merges them, Codex on #287)",
       r.json().get("course_id") == "c" and r.json().get("chart_overrides", {}).get("Finish") == ov)
 r = client.post("/api/races/r1/chart-override", json={"course_id": "c", "mark": "Nowhere", "by": "C", "why": "x"})
@@ -140,6 +142,31 @@ check("no name: refused", r.status_code == 400)
 r = client.post("/api/races/r1/chart-override", json={"course_id": "c", "mark": "Finish", "by": "", "why": ""})
 check("empty why removes it", r.status_code == 200 and "chart_overrides" not in RACE["courses"][0]
       and r.json().get("chart_overrides") == {})
+
+print("chart overrides survive any other save of the race (Codex on #287)")
+import copy  # noqa: E402
+import json  # noqa: E402
+STORED = copy.deepcopy(RACE)
+STORED["courses"][0]["chart_overrides"] = {"Finish": {"by": "Cole", "at": 5, "why": "chart"}}
+store.get_race = M.store.get_race = lambda rid: STORED if rid == "r1" else None
+M.INGESTED_DIR = _tmp
+stale = copy.deepcopy(RACE)                      # a tab's copy from before the override
+stale["name"] = "Race renamed"
+_real_write_race(stale)
+on_disk = json.load(open(os.path.join(_tmp, "r1.json")))
+check("a stale copy without it: the override is kept",
+      on_disk["courses"][0].get("chart_overrides") == STORED["courses"][0]["chart_overrides"]
+      and on_disk["name"] == "Race renamed")
+STORED["courses"][0].pop("chart_overrides")      # removed since
+back = copy.deepcopy(RACE)
+back["courses"][0]["chart_overrides"] = {"Finish": {"by": "Cole", "at": 5, "why": "chart"}}
+_real_write_race(back)
+check("a stale copy with a removed one: not brought back",
+      "chart_overrides" not in json.load(open(os.path.join(_tmp, "r1.json")))["courses"][0])
+back["courses"][0]["chart_overrides"] = {"Finish": {"by": "Cole", "at": 5, "why": "chart"}}
+_real_write_race(back, overrides=True)
+check("the override route itself writes them",
+      json.load(open(os.path.join(_tmp, "r1.json")))["courses"][0].get("chart_overrides"))
 
 print("ALL OK" if ok else "SOME FAILED")
 raise SystemExit(0 if ok else 1)

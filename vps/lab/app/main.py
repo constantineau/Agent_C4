@@ -812,7 +812,7 @@ async def chart_override(rid: str, body: dict):
                                       body.get("by"), body.get("why"))
     if err:
         return JSONResponse({"detail": err}, status_code=400)
-    _write_race(d)
+    _write_race(d, overrides=True)
     # the course's overrides as saved: the Lab merges them into the race it holds in memory, so
     # a later save of another tab can't put the old list back (Codex on #287)
     courses = d.get("courses") or []
@@ -1547,12 +1547,26 @@ def _prep_empty(key, value):
     return False
 
 
-def _write_race(definition, draft=False):
+def _write_race(definition, draft=False, overrides=False):
     """Persist a RaceDefinition. A preserved field is restored from the stored copy when the save
     omits the key, or — for a re-ingest `draft` only — sends it empty. An ordinary save that sends
-    an empty value (the user cleared the notes / emptied the roster) is stored as sent."""
+    an empty value (the user cleared the notes / emptied the roster) is stored as sent.
+
+    A course's chart overrides (#242) are only ever changed by the chart-override route
+    (`overrides=True`). Every other save keeps the stored ones, whatever it sends: a tab saving a
+    copy of the race from before an override (or a removal) can't undo it (Codex on #287)."""
     rid = re.sub(r"[^a-z0-9_-]", "", str(definition.get("race_id", "")).lower())
     prior = store.get_race(rid)
+    if not overrides:
+        kept = {c.get("id"): c.get("chart_overrides") for c in (prior or {}).get("courses") or []
+                if isinstance(c, dict) and c.get("chart_overrides")}
+        for c in definition.get("courses") or []:
+            if not isinstance(c, dict):
+                continue
+            if kept.get(c.get("id")):
+                c["chart_overrides"] = kept[c.get("id")]
+            else:
+                c.pop("chart_overrides", None)
     if prior:
         for k in _PRESERVE_ON_SAVE:
             if not prior.get(k):

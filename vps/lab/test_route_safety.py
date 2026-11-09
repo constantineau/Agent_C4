@@ -368,7 +368,14 @@ with _tf.TemporaryDirectory() as cd:
         [_sq(-82.5, 43.5, -82.4, 43.6, DRVAL1=10.0), _sq(-82.4, 43.5, -82.3, 43.6, DRVAL1=1.0)])
     _gj(_os.path.join(cd, "extract", "US4AA01M_DRGARE.json"),
         [_sq(-82.3, 43.5, -82.2, 43.6, DRVAL1=8.0)])
-    L = enc.layers_in_bbox((44.5, 43.2, -82.8, -82.0), cd, 2.6)
+    _cfb, asked = enc.cells_for_bbox, []
+    enc.cells_for_bbox = lambda *a, **k: asked.append(k.get("max_cells", "cap")) or _cfb(*a, **k)
+    try:
+        L = enc.layers_in_bbox((44.5, 43.2, -82.8, -82.0), cd, 2.6)
+    finally:
+        enc.cells_for_bbox = _cfb
+    check("every cell over the box is looked at, past the download cap (Codex on #287)",
+          asked == [None] and len(_cfb((44.5, 43.2, -82.8, -82.0), cd, max_cells=2)) == 2, asked)
     check("deep, shallow and dredged areas all count as depth cover", len(L["depth_cover"]) == 3,
           len(L["depth_cover"]))
     check("only the shallow one is a shoal", len(L["shoal"]) == 1, len(L["shoal"]))

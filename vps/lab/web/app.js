@@ -206,8 +206,24 @@ const EDIT_SAVE = {
 // snap = the JSON a save actually sent (taken before the await), so an edit typed while the request
 // is in flight stays dirty; omitted = the editor as it is now (right after a load).
 function markClean(snap) {
-  Lab.cleanDef = snap !== undefined ? snap : (Lab.editDef ? JSON.stringify(Lab.editDef) : null);
+  Lab.cleanDef = snap !== undefined ? withOverrides(snap) : (Lab.editDef ? JSON.stringify(Lab.editDef) : null);
   syncDirty();
+}
+// Chart overrides are the server's (only its chart-override route changes them; every other save
+// keeps the stored ones, #242): a save sent before an override landed mustn't make it look unsaved.
+function withOverrides(snap) {
+  if (!snap || !Lab.editDef) return snap;
+  try {
+    const b = JSON.parse(snap);
+    if (b.race_id !== Lab.editDef.race_id) return snap;
+    const have = {};
+    for (const c of Lab.editDef.courses || []) have[c.id] = c.chart_overrides;
+    for (const c of b.courses || []) {
+      if (!(c.id in have)) continue;
+      if (have[c.id]) c.chart_overrides = have[c.id]; else delete c.chart_overrides;
+    }
+    return JSON.stringify(b);
+  } catch (e) { return snap; }
 }
 // After a save resolves: only re-baseline if the same definition is still in the editor (the user
 // may have switched race or discarded while the request was in flight).
