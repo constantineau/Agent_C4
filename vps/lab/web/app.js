@@ -2139,13 +2139,40 @@ async function chartOverride(mark, remove) {
     why = (prompt("Why is the chart wrong here?") || "").trim();
     if (!why) return;
   } else if (!confirm(`Remove the chart override at ${mark}?`)) return;
+  const rid = Opt.raceId;
   try {
-    const res = await apiPost("/api/races/" + encodeURIComponent(Opt.raceId) + "/chart-override",
-      { course_id: Opt.courseId, mark, by, why });
-    const r = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(r.detail || "error " + res.status);
+    // through the race-definition save queue, so it can't interleave with a tab's own save
+    const r = await queueDef(async () => {
+      const res = await apiPost("/api/races/" + encodeURIComponent(rid) + "/chart-override",
+        { course_id: Opt.courseId, mark, by, why });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j.detail || "error " + res.status);
+      return j;
+    });
+    syncOverrides(rid, r.course_id, r.chart_overrides);
     alert("Saved. Run the route again.");
   } catch (e) { alert("Not saved: " + e.message); }
+}
+
+// The saved overrides into every copy of the race the Lab holds: the editor's (and its clean
+// baseline, so they don't read as an unsaved edit, and a later save of another tab can't put the
+// old list back) and the Gameplan's.
+function syncOverrides(rid, courseId, ov) {
+  const apply = (d) => {
+    if (!d || d.race_id !== rid) return;
+    const cs = d.courses || [];
+    const c = cs.find((x) => x.id === courseId) || (courseId == null ? cs[0] : null);
+    if (!c) return;
+    if (ov && Object.keys(ov).length) c.chart_overrides = ov; else delete c.chart_overrides;
+  };
+  if (Lab.editDef && Lab.editDef.race_id === rid) {
+    apply(Lab.editDef);
+    if (Lab.cleanDef) {
+      try { const b = JSON.parse(Lab.cleanDef); apply(b); Lab.cleanDef = JSON.stringify(b); } catch (e) {}
+    }
+    syncDirty();
+  }
+  if (window.Opt && Opt.def !== Lab.editDef) apply(Opt.def);
 }
 
 // the routes' own warnings (forecast ended, shoreline, …), plain, before anything is deployed (#51)

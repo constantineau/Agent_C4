@@ -813,7 +813,13 @@ async def chart_override(rid: str, body: dict):
     if err:
         return JSONResponse({"detail": err}, status_code=400)
     _write_race(d)
-    return {"saved": True, "race_id": rid}
+    # the course's overrides as saved: the Lab merges them into the race it holds in memory, so
+    # a later save of another tab can't put the old list back (Codex on #287)
+    courses = d.get("courses") or []
+    course = next((c for c in courses if c.get("id") == body.get("course_id")), None) or \
+        (courses[0] if courses else {})
+    return {"saved": True, "race_id": rid, "course_id": course.get("id"),
+            "chart_overrides": course.get("chart_overrides") or {}}
 
 
 @app.get("/api/playbooks")

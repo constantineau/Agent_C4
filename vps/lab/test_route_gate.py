@@ -131,12 +131,15 @@ ov = (RACE["courses"][0].get("chart_overrides") or {}).get("Finish") or {}
 check("recorded on the course: who, when, why", r.status_code == 200 and ov.get("by") == "Cole"
       and ov.get("why") == "harbour charted as land" and isinstance(ov.get("at"), int), r.text[:120])
 check("saved", written and written[-1]["race_id"] == "r1")
+check("the answer carries the course's overrides as saved (the Lab merges them, Codex on #287)",
+      r.json().get("course_id") == "c" and r.json().get("chart_overrides", {}).get("Finish") == ov)
 r = client.post("/api/races/r1/chart-override", json={"course_id": "c", "mark": "Nowhere", "by": "C", "why": "x"})
 check("unknown mark: refused", r.status_code == 400)
 r = client.post("/api/races/r1/chart-override", json={"course_id": "c", "mark": "A", "by": "", "why": "x"})
 check("no name: refused", r.status_code == 400)
 r = client.post("/api/races/r1/chart-override", json={"course_id": "c", "mark": "Finish", "by": "", "why": ""})
-check("empty why removes it", r.status_code == 200 and "chart_overrides" not in RACE["courses"][0])
+check("empty why removes it", r.status_code == 200 and "chart_overrides" not in RACE["courses"][0]
+      and r.json().get("chart_overrides") == {})
 
 print("ALL OK" if ok else "SOME FAILED")
 raise SystemExit(0 if ok else 1)
