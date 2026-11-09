@@ -351,6 +351,28 @@ ds = RaceDS([])
 racelog.datasource.active = lambda: ds
 check("no session, no state: not racing", not racegate.racing())
 
+
+def legacy(plan=()):
+    """An upgraded boat: a race session open 30 h, no racing state written yet, nothing read."""
+    ds = RaceDS(list(plan))
+    racelog.datasource.active = lambda: ds
+    ds.session_start("Old race", None, "race", NOW - 30 * 3600)
+    racelog._last_check[0] = 0.0
+    racelog._race_check.update(t=0.0, since=None, still_h=0.0)
+    return ds
+
+
+ds = legacy()
+racelog.end()
+check("LOG end before the first racing read: still racing", racegate.racing())
+ds = legacy()
+racelog.start(name="Sail", kind="practice")
+check("practice start before the first racing read: still racing", racegate.racing())
+ds = legacy(parked(underway_h=20, still_h=13))
+st = racelog.status()
+check("auto-close on the first poll (13 h stopped): session closed, still racing",
+      st["active"] is None and st["race"]["racing"] and racegate.racing())
+
 print("2) archiver retention prune — sessions kept, day sails erased, fail-safe")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "pi", "archiver"))
 os.environ.setdefault("ARCHIVE_DB", os.path.join(tempfile.mkdtemp(), "archive.db"))

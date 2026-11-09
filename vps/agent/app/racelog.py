@@ -121,6 +121,7 @@ def autoclose(now=None, force=False):
         # under the session lock, re-check that the same session is still the open one and that
         # the end is after its start, and close only that id.
         with SESSION_LOCK:
+            _settle_race_state(s)
             now_cur = s.session_current()
             if not now_cur or now_cur.get("id") != cur.get("id") \
                     or end_ts <= float(now_cur["start_ts"]):
@@ -149,6 +150,18 @@ def _src():
     return s
 
 
+def _settle_race_state(s):
+    """Write down the racing state BEFORE any session is closed or replaced. A boat upgraded with
+    a race session open has no racing state yet; it is read from that session (race_state), so
+    the session must still be open when that happens. Call under SESSION_LOCK. Never raises: an
+    unreadable state already reads as racing in the gate."""
+    try:
+        if hasattr(s, "race_state"):
+            race_state(s)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def start(name=None, race_id=None, kind=None):
     """Start a session. Everything is optional: race_id defaults to the loaded playbook's (if
     any), name to '<Race|Sail> <UTC date HH:MM>'. kind is race|practice; with no kind it is a
@@ -170,6 +183,7 @@ def start(name=None, race_id=None, kind=None):
         if not name:
             stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
             name = f"{'Race' if kind == 'race' else 'Sail'} {stamp}Z"
+        _settle_race_state(s)          # session_start closes the open one
         ts = time.time()
         if kind == "race" and hasattr(s, "save_race_state"):
             # racing first: if the session write then fails, the boat is racing with no session
@@ -192,6 +206,7 @@ def end(session_id=None):
     if s is None:
         return {"ok": False, "note": "race log is onboard-only"}
     with SESSION_LOCK:
+        _settle_race_state(s)
         cur = s.session_current()
         if not cur:
             return {"ok": False, "note": "no session running"}
