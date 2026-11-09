@@ -1,13 +1,13 @@
 """#148 — a waypoint's pocket opens land only, never a zone or an island disk.
 
-The Lab opens a 0.5 nm pocket of water at every course waypoint (start, marks, gate, finish) so
-the route can reach a mark set close to shore. Before, the pocket was cut after the race's zones
+Since #242 the Lab opens a 0.5 nm pocket of water only at a waypoint with a reviewed chart
+override (the course's `chart_overrides`), never by default: land is never opened for a route. Before, the pocket was cut after the race's zones
 and island disks were drawn and cleared every layer, so a start or mark on a zone's edge opened
 a 0.5 nm hole into the zone. Pinned here (no network: the shoreline is a stub polygon):
   1) the issue's repro: a zone cell inside the start's pocket stays blocked;
   2) an island disk cell inside a mark's pocket stays blocked;
-  3) the pocket still opens the shoreline: a start inside land is water with the pocket, land
-     without it (carve_waypoints=False);
+  3) the pocket opens the shoreline only with an override: a start inside land stays land
+     without one (#242), is water with one, and stays land with carve_waypoints=False;
   4) a zone drawn over that land stays blocked inside the pocket;
   5) the Orin's build (carve_waypoints=False) is unchanged.
 """
@@ -26,11 +26,16 @@ def check(name, cond, detail=""):
 BBOX = (45.5, 44.5, -84.5, -83.5)
 
 
-def race(zones=(), marks=(), start=(45.0, -84.0)):
-    return {"race_id": "t148", "zones": list(zones),
-            "courses": [{"id": "c", "start": {"lat": start[0], "lon": start[1]},
-                         "marks": list(marks),
-                         "finish": {"points": [{"lat": 45.3, "lon": -84.0}]}}]}
+OVERRIDE = {"Start": {"by": "Cole", "at": 1762700000, "why": "chart artefact"},
+            "M1": {"by": "Cole", "at": 1762700000, "why": "chart artefact"}}
+
+
+def race(zones=(), marks=(), start=(45.0, -84.0), overrides=OVERRIDE):
+    c = {"id": "c", "start": {"lat": start[0], "lon": start[1]}, "marks": list(marks),
+         "finish": {"points": [{"lat": 45.3, "lon": -84.0}]}}
+    if overrides:
+        c["chart_overrides"] = dict(overrides)
+    return {"race_id": "t148", "zones": list(zones), "courses": [c]}
 
 
 ZONE = {"name": "box", "type": "exclusion",
@@ -59,11 +64,14 @@ coastline.active_source = lambda: "stub"
 try:
     f = OB.build_for_course(race(), "c", BBOX, use_cache=False, source="natural_earth")
     check("shoreline loaded", f.land == "ok" and f.layers["coastline"] > 0, f.land)
-    check("the pocket opens land at the start", not f.blocked(45.0, -84.0))
+    check("the override's pocket opens land at the start", not f.blocked(45.0, -84.0))
     check("land outside the pocket stays blocked", f.blocked(45.0, -83.9))
     f0 = OB.build_for_course(race(), "c", BBOX, use_cache=False, source="natural_earth",
                              carve_waypoints=False)
     check("no pocket: the start is land", f0.blocked(45.0, -84.0))
+    f1 = OB.build_for_course(race(overrides=None), "c", BBOX, use_cache=False,
+                             source="natural_earth")
+    check("#242: no override, no pocket: the start stays land", f1.blocked(45.0, -84.0))
 
     f = OB.build_for_course(race([ZONE]), "c", BBOX, use_cache=False, source="natural_earth")
     check("zone over land inside the pocket stays blocked", f.blocked(45.01, -84.0))

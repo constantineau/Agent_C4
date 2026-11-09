@@ -29,7 +29,7 @@ from . import enc
 
 RES_DEG = float(os.environ.get("GEO_RES_DEG", "0.005"))      # mask cell size (~0.005° ≈ 550 m)
 ISLAND_DEFAULT_NM = float(os.environ.get("GEO_ISLAND_NM", "1.5"))   # default island buffer radius
-MARK_CARVE_NM = float(os.environ.get("GEO_MARK_CARVE_NM", "0.5"))   # navigable pocket around each mark
+MARK_CARVE_NM = float(os.environ.get("GEO_MARK_CARVE_NM", "0.5"))   # pocket around an overridden mark
 NM_PER_DEG_LAT = 60.0
 # Island rounding-SIDE enforcement: only for an island that is a MARK OF THE RACE (its `rounding` is
 # port/starboard) — a plain hazard island (rounding 'none') is still avoided either side. We rasterize a
@@ -82,6 +82,10 @@ class ObstacleField:
         # "failed" (couldn't load: the mask has NO land in it, and must never pass as checked, #51)
         self.land = "off"
         self.land_error = None
+        # the depth no-go (#242): "ok" (ENC depth areas drawn), "failed" (ENC asked for, didn't
+        # load) or "none" (no depth chart: GSHHG / Natural Earth, or no ENC cell in the box)
+        self.depth = "none"
+        self.depth_error = None
 
     # --- cell <-> coord ------------------------------------------------------
     def _ix(self, lon):
@@ -90,20 +94,28 @@ class ObstacleField:
     def _iy(self, lat):
         return int((lat - self.s) / self.res)
 
+    def inside(self, lat, lon) -> bool:
+        """Is (lat, lon) inside the box this field was built over?"""
+        n, s, w, e = self.bbox
+        return s <= lat <= n and w <= lon <= e
+
     def blocked(self, lat, lon) -> bool:
         if not self.active:
             return False
-        ix, iy = self._ix(lon), self._iy(lat)
-        if ix < 0 or iy < 0 or ix >= self.nx or iy >= self.ny:
-            return False                                   # outside the (padded) bbox = open water
+        if not self.inside(lat, lon):
+            return True                # outside the box nothing was checked: never open water (#258)
+        ix, iy = min(self._ix(lon), self.nx - 1), min(self._iy(lat), self.ny - 1)
         return self.mask[iy * self.nx + ix] == 1
 
     def crosses(self, lat1, lon1, lat2, lon2) -> bool:
         """True if the straight segment touches any blocked cell. Exact (shared/gridwalk.py, a
         supercover): a step that clips a cell's corner is caught, which half-cell sampling missed
-        (#145). Outside the grid is open water, as in `blocked`."""
+        (#145). A step with an end outside the box counts as blocked, as in `blocked`: land was
+        never checked out there (#258). The box is convex, so two ends inside keep the step in."""
         if not self.active:
             return False
+        if not (self.inside(lat1, lon1) and self.inside(lat2, lon2)):
+            return True
         return gridwalk.any_set(self.mask, self.nx, self.ny,
                                 (lon1 - self.w) / self.res, (lat1 - self.s) / self.res,
                                 (lon2 - self.w) / self.res, (lat2 - self.s) / self.res)
@@ -231,6 +243,7 @@ class ObstacleField:
         return {
             "active": self.active,
             "land": self.land,
+            "depth": self.depth,
             "bbox": self.bbox,
             "res_deg": self.res,
             "grid": [self.nx, self.ny],
@@ -419,11 +432,15 @@ def build_for_course(definition: dict, course_id, bbox, *, coastline_on=True, zo
             try:
                 enc.ensure_bbox(bbox, cache_dir)
                 layers = enc.layers_in_bbox(bbox, cache_dir, depth)
-            except Exception:
+            except Exception as exc:  # noqa: BLE001 — reported: depths were not checked (#242)
                 layers = {}
+                field.depth = "failed"
+                field.depth_error = f"{type(exc).__name__}: {exc}"[:200]
+                print(f"[obstacles] ENC did not load: {field.depth_error}", flush=True)
             _fill_global_backstop(field, cache_dir)          # global land union backstop (incl. Canada)
             if layers.get("land") or layers.get("shoal"):
                 field.safety_depth = depth
+                field.depth = "ok"
                 for poly in layers.get("land", []):          # ENC's sharper US land on top
                     field._fill_polygon(poly, 1, "coastline")
                 for poly in layers.get("shoal", []):         # DEPARE shallower than the safety depth
@@ -439,19 +456,17 @@ def build_for_course(definition: dict, course_id, bbox, *, coastline_on=True, zo
             _fill_global_backstop(field, cache_dir)
             field.source = coastline.active_source()         # honest provenance (gshhg | natural_earth)
 
-    # 1b) open a navigable pocket at every real course waypoint (start/gate/finish) so the route can
-    #    always REACH its marks: finishes/marks are set near shore/islands and ENC blocks that water.
-    #    The pocket is cut in the shoreline layers ONLY (land, shoal, obstruction), BEFORE the race's
-    #    zones, island disks and barriers go on, so none of those is ever cleared (#148). Before,
-    #    it ran after them and a 0.5 nm pocket opened every zone and island disk at each mark.
-    #    `carve_waypoints=False` skips this step: the Orin's re-route builds its race layer that
-    #    way and opens the same pockets in its own land mask (#124).
+    # 1b) land is never opened for a route (#242): a mark the chart puts on land or in shallow
+    #    water is unreachable, and the route is refused. The one exception is a mark with a
+    #    reviewed chart override (the course's `chart_overrides`: who, when, why), for a chart
+    #    artefact: it gets a pocket of open water. The pocket is cut in the shoreline layers ONLY
+    #    (land, shoal, obstruction), BEFORE the race's zones, island disks and barriers go on, so
+    #    none of those is ever cleared (#148). Before, every waypoint got a pocket, which opened
+    #    land at the Mackinac finish (#52). `carve_waypoints=False` skips this step: the Orin's
+    #    re-route builds its race layer that way and opens its pockets in its own land mask (#124).
     if field.active and carve_waypoints:
-        from shared import race_def
-        marks, _skip, _cid = race_def.course_to_marks(definition, course_id)
-        for _seq, _name, mlat, mlon in marks:
-            if mlat is not None and mlon is not None:
-                field._carve_disk(mlat, mlon, MARK_CARVE_NM)
+        for _name, mlat, mlon in override_marks(definition, course_id):
+            field._carve_disk(mlat, mlon, MARK_CARVE_NM)
 
     # 2) the race's exclusion / hazard / tss zones (per race)
     if zones_on:
@@ -485,6 +500,25 @@ def build_for_course(definition: dict, course_id, bbox, *, coastline_on=True, zo
     if ck is not None and field.land != "failed":            # a failed load is retried next run
         _cache_put(ck, field)
     return field
+
+
+def chart_overrides(definition, course_id):
+    """The course's reviewed chart overrides: {nav mark name: {"by", "at", "why"}} (#242)."""
+    course = _course(definition, course_id) or {}
+    ov = course.get("chart_overrides")
+    return {str(k): v for k, v in ov.items() if isinstance(v, dict)} if isinstance(ov, dict) else {}
+
+
+def override_marks(definition, course_id):
+    """[(name, lat, lon)] for every nav mark (start, marks, gate/finish midpoints) that has a chart
+    override: the only marks that get a pocket of open water."""
+    ov = chart_overrides(definition, course_id)
+    if not ov:
+        return []
+    from shared import race_def
+    marks, _skip, _cid = race_def.course_to_marks(definition, course_id)
+    return [(n, la, lo) for _s, n, la, lo in marks
+            if n in ov and la is not None and lo is not None]
 
 
 def _add_barriers(field, rounds):
@@ -558,7 +592,7 @@ def build_leg_fields(definition, course_id, bbox, *, source=None, safety_depth=N
                      res_deg=RES_DEG, cache_dir=None):
     """One ObstacleField per leg of the course → (base, [field per leg]).
 
-    `base` is land, zones and island disks with the waypoint pockets (`build_for_course` without
+    `base` is land, zones and island disks, plus any overridden mark's pocket (`build_for_course` without
     barriers, cached). A leg that rounds no island routes on `base` itself; a leg that rounds one
     gets a copy of `base` plus only that leg's barriers, cached by the base and those barriers. So
     a course that rounds the same island twice, once each way, never has both walls at once, and a
@@ -601,6 +635,7 @@ def _copy_field(field):
     f.geometry = dict(field.geometry, rounding_barriers=list(field.geometry["rounding_barriers"]))
     f.source, f.safety_depth, f.active = field.source, field.safety_depth, field.active
     f.land, f.land_error = field.land, field.land_error
+    f.depth, f.depth_error = field.depth, field.depth_error
     return f
 
 
@@ -627,6 +662,8 @@ def legs_summary(base, legs):
     s["active"] = any(f.active for f in fields)
     if any(getattr(f, "land", None) == "failed" for f in fields):
         s["land"] = "failed"
+    if any(getattr(f, "depth", None) == "failed" for f in fields):
+        s["depth"] = "failed"
     return s
 
 
@@ -671,15 +708,18 @@ def _overlay(field, key, polys, cap=300):
 
 def cache_key(definition, course_id, bbox, res_deg=RES_DEG, *, source=None, safety_depth=None) -> str:
     """Stable hash so an identical obstacle build can be cached/reused. Source- and draft-aware:
-    switching coastline source or the boat draft (ENC depth no-go) yields a different mask."""
+    switching coastline source or the boat draft (ENC depth no-go) yields a different mask. The
+    pockets (where and how big) are in it too: a moved overridden mark, or a new override, must
+    never get the old mask from the cache (#44)."""
     z = [(z.get("name"), z.get("type"), z.get("geometry")) for z in definition.get("zones", []) or []]
     isl = _course_islands(definition, course_id)
+    pockets = [(n, round(la, 6), round(lo, 6)) for n, la, lo in override_marks(definition, course_id)]
     src = (source or COASTLINE_SOURCE).strip().lower()
     dv = enc.DATA_VERSION if src == "enc" else coastline.DATA_VERSION
     depth = safety_depth if safety_depth is not None else safety_depth_m()
     depth = round(depth, 3) if src == "enc" else None
     payload = repr((src, dv, depth, course_id, tuple(round(b, 4) for b in bbox),
-                    round(res_deg, 5), z, isl))
+                    round(res_deg, 5), z, isl, pockets, round(MARK_CARVE_NM, 4)))
     return hashlib.sha1(payload.encode()).hexdigest()[:16]
 
 

@@ -734,6 +734,7 @@ def _build_plays(playbook, definition, course_id, venue_stats=None, jib_crossove
             "stakes_min": stakes,
             "favored_side": p.get("favored_side"),
             "degraded": bool(p.get("degraded")), "warnings": list(p.get("warnings") or []),
+            "safety": p.get("safety"),
             **({"table": p["table"]} if p.get("table") else {}),   # rejoin-vs-continue rows
             **({"boundary": p["boundary"]} if p.get("boundary") else {}),   # located flip threshold
         })
@@ -783,6 +784,7 @@ def synthesize(definition, course_id, start_epoch, models, ensemble_members=0, t
             "sail_plan": (v.get("route") or {}).get("sail_plan"),
             "route": v.get("route"),
             "degraded": bool(v.get("degraded")), "warnings": list(v.get("warnings") or []),
+            "safety": v.get("safety"),
         })
 
     # ---- Playbook v2: the play library from the scenario fan (docs/PLAYBOOK_V2.md) --------------
@@ -849,4 +851,10 @@ def synthesize(definition, course_id, start_epoch, models, ensemble_members=0, t
         "skipped_marks": playbook.get("skipped_marks", []),
         "signature": None,            # unsigned draft until frozen
     }
+    # #242: one verdict over every route above, and the reviewed chart overrides they were routed
+    # with (who, when, why), signed with the rest. Freeze, Deploy and GPX refuse unless it's ok.
+    from . import routesafety
+    bundle["safety"] = routesafety.bundle_verdict(
+        bundle, [dict(o, mark=n) for n, o in
+                 _obs_mod.chart_overrides(definition, playbook.get("course_id") or course_id).items()])
     return bundle

@@ -101,14 +101,36 @@ used to 504 the old synchronous request at the gateway) + `GET /api/models` driv
 **Gameplan → Optimizer** tab; the `lab_gribcache` volume makes re-runs / ensemble members
 cheap.
 - **Degraded-field honesty:** a coverage gate + route-sanity guard flag `degraded` + warnings when
-  the field is thin (the router falls back to a constant wind where nothing loaded — trust the
-  flags). Tunables `GRIB_MIN_FRAME_FRAC` / `GRIB_COVERAGE_MIN` / `GRIB_CYCLE_FALLBACK`.
+  the field is thin. There is no made-up wind (#203, #220): where no forecast reaches, the router
+  borrows the nearest covered point's wind within `C4_FORECAST_FILL_NM` (10 nm) and says so ("Forecast
+  gaps filled from nearby."; `wind_filled` per leg counts the path nodes and the closing board that
+  borrowed); past that it doesn't sail there, and a leg that needs it comes back incomplete.
+  Tunables `GRIB_MIN_FRAME_FRAC` / `GRIB_COVERAGE_MIN` / `GRIB_CYCLE_FALLBACK`.
 - **Incomplete routes stop, never teleport (#31):** a leg that doesn't reach its mark (time budget
   out, or every heading blocked) ends the course there — `complete: false`, `incomplete` names the
   leg and how far short, `degraded: true`. `optimizer.incomplete_reason()` (that flag, or a path
   ending > 3 nm from the finish) is the one check the playbook (consensus retried then refused,
   per-model candidates dropped into `dropped_scenarios`, fan plays retried/skipped) and the
   debrief oracle (tactics half refused by name) use. The onboard re-router refuses the same way.
+- **Route acceptance (#242):** every route carries `safety` = `{ok, problems, overrides}`
+  (`optimizer.route_safety`). It is `ok` only when land and depths were checked over the whole route
+  (shoreline loaded, ENC depth areas loaded, the route inside the chart box), every mark was reached,
+  and every port/starboard mark and island was left on its side (a string test on the path). A
+  playbook bundle carries one verdict over its main route, options and route plays
+  (`routesafety.bundle_verdict`); **freeze, lock-in, Deploy push and GPX refuse** unless it is ok, and
+  so do bundles built before this check. Land is never opened for a route: a mark the chart puts on
+  land or in shallow water stops the route at once. For a chart artefact the crew can record a
+  reviewed **chart override** on that mark (`POST /api/races/{id}/chart-override` {course_id, mark,
+  by, why}; empty why removes it). It is saved in the course (`chart_overrides`), opens a pocket of
+  water (`GEO_MARK_CARVE_NM`, land/shoal only, never zones or islands) at that mark, is listed in the
+  bundle's `safety.overrides` (who, when, why) and signed with it. It never waives a problem.
+- **Mark roundings (#52):** a port/starboard mark is rounded on a small circle
+  (`ROUTE_ROUND_OFFSET_NM`): in at the inbound standoff, round the legal way, out at the exit standoff
+  90° off the outbound leg. Before, the next leg started from the inbound standoff, and any turn over
+  90° left the mark on the wrong side. The layline/overstand gate applies only within
+  `ROUTE_OVERSTAND_RADIUS_NM` (1 nm) of the mark (#256): farther off it shut the channel up to the
+  Mackinac finish in a NNE wind. The run layline commit compares the run layline (180° − run VMG TWA) with the angle off dead
+  downwind (#65), and the beat commit keeps only headings the boat can sail (#257).
 - **Parse crash isolation (`GRIB_ISOLATE_PARSE`, default ON):** cfgrib/eccodes can intermittently
   SEGFAULT (uncatchable), so the parse runs in a persistent child process (`_grib_parser.py`);
   a crash/hang respawns + retries, then skips the frame — a skipped frame, not a dead optimize.
@@ -126,6 +148,7 @@ scenarios share a mask); `POST /api/optimize` takes `avoid_land` (default true) 
 `obstacles` summary; the Gameplan map overlays coast/islands/zones. Rounding **side** is enforced
 for islands that are marks of the race (2f below); plain hazards stay avoided either side.
 Tunables `GEO_RES_DEG` / `GEO_ISLAND_NM` / `GEO_MARK_CARVE_NM`.
+Outside the mask's box nothing was checked, so a step that leaves it counts as blocked (#258).
 Each route step is checked against the mask exactly (`shared/gridwalk.py`: every cell the segment
 touches, corners included; #145), the same walk the Pi's GPS export uses.
 **A shoreline that doesn't load is never open water (#51):** the field is marked
@@ -175,8 +198,9 @@ and is imprecise at the shoreline). Three pieces fix it (all on `dev`, live at t
   chart source, persisted in `app/labstate.py`). The Gameplan tab gains a boat selector + editable
   draft + a Charts toggle; the optimizer reads the **active boat's** draft. *Also fixes a real
   routing bug ENC surfaced:* a finish/mark set near shore is correctly flagged shoal/land, but you
-  can't route AROUND your own destination → `build_for_course` carves a small navigable pocket
-  (`GEO_MARK_CARVE_NM=0.5`) at each waypoint. Without it the Mackinac finish was blocked and the
+  can't route AROUND your own destination → `build_for_course` carved a small navigable pocket
+  (`GEO_MARK_CARVE_NM=0.5`) at each waypoint (since #242 only at a mark with a reviewed chart
+  override, see route acceptance above). Without it the Mackinac finish was blocked and the
   router thrashed to 1406 nm / 148 tacks; with it the same ENC route is 278 nm / 6 tacks.
 - **[C] GRIB-on-ENC slippy map** (`web/mapview.js`, Leaflet vendored in `web/vendor/`). The Gameplan
   route canvas is now a real **Leaflet** map — a layer stack [OSM basemap (+ OpenSeaMap seamarks) +
@@ -361,7 +385,7 @@ the island is a MARK OF THE RACE** — its `rounding` is `port`/`starboard`; a p
 (`geo/obstacles.py`): `_island_rounding_marks()` finds the island's leg (transit bearing prev-nav →
 next-nav, islands skipped, gate/finish→midpoints); `_fill_wrong_side_barrier()` blocks the illegal side
 (perpendicular wall within |along| ≤ radius + `ROUTE_ROUNDSIDE_BAND_NM`) so only the legal hand is open.
-Source-independent (ENC or GSHHG/NE), applied after the waypoint carve; provenance →
+Source-independent (ENC or GSHHG/NE), applied after any override pocket; provenance →
 `obstacles.geometry.rounding_barriers`, drawn as a P/S marker on the Gameplan map. Verified
 (`test_routing_2f.py`): scoping (hazard island gets no side), a controlled open-water flip (natural
 route takes the wrong side → barrier flips it, both port and starboard, still reaching the mark), and

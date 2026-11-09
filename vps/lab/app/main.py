@@ -770,12 +770,35 @@ async def playbook_freeze(body: dict):
         if not bundle.get("variants"):
             return JSONResponse({"detail": "nothing to freeze — no variants",
                                  "bundle": bundle}, status_code=422)
+    from . import routesafety
+    why = routesafety.refusal(bundle)          # #242: never freeze a route not proven safe
+    if why:
+        return JSONResponse({"detail": why, "frozen": False}, status_code=409)
     bundle = synthesis.sign_bundle(bundle)
     pid = pbstore.save(bundle)
     # a new revision (#249), or the same content frozen before: then the first file's bytes stand
     bundle = pbstore.get(pid) or bundle
     return {"frozen": True, "id": pid, "signature": bundle["signature"],
             "verified": synthesis.verify_bundle(bundle), "bundle": bundle}
+
+
+@app.post("/api/races/{rid}/chart-override")
+async def chart_override(rid: str, body: dict):
+    """#242: record a reviewed chart override on one nav mark of a course (a chart artefact: the
+    chart puts the mark on land or in shallow water). Body: {course_id, mark, by, why}; an empty
+    `why` removes it. The mark then gets a pocket of open water in the chart; the route still has
+    to pass every check. Build the playbook again after."""
+    d = store.get_race(rid)
+    if not d:
+        return JSONResponse({"detail": "unknown race"}, status_code=404)
+    from . import routesafety
+    body = body or {}
+    d, err = routesafety.set_override(d, body.get("course_id"), str(body.get("mark") or ""),
+                                      body.get("by"), body.get("why"))
+    if err:
+        return JSONResponse({"detail": err}, status_code=400)
+    _write_race(d)
+    return {"saved": True, "race_id": rid}
 
 
 @app.get("/api/playbooks")
@@ -800,6 +823,10 @@ async def playbook_gpx(pid: str, variants: str = "recommended"):
     b = pbstore.get(pid)
     if not b:
         return JSONResponse({"detail": "unknown playbook id"}, status_code=404)
+    from . import routesafety
+    why = routesafety.refusal(b)               # #242: no GPX of a route not proven safe
+    if why:
+        return JSONResponse({"detail": why}, status_code=409)
     marks = []
     d = store.get_race(b.get("race_id") or "")
     if d:
@@ -1419,6 +1446,11 @@ async def deploy_lock_in(body: dict):
     playbook_id = (body or {}).get("playbook_id")
     if not race_id or not playbook_id:
         return JSONResponse({"detail": "race_id and playbook_id required"}, status_code=400)
+    from . import routesafety
+    b = pbstore.get(playbook_id)
+    why = routesafety.refusal(b) if b else None    # #242: never lock in a route not proven safe
+    if why:
+        return JSONResponse({"detail": why}, status_code=409)
     state = deploy.lock_in(race_id, playbook_id)
     if state is None:
         return JSONResponse({"detail": "playbook not found for this race"}, status_code=404)

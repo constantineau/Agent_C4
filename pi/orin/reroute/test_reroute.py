@@ -558,7 +558,10 @@ check("(found water blocked only by Rock's barrier)", len(rock) > 0)
 check("chart path: a rounded island's barrier no longer blocks", not any(
     field.blocked(la, lo) for la, lo in rock))
 fb, note = job.load_obstacles(d4, c4, None, None, job._get_boat())
-check("fallback path: the same", note == job.NO_CHART and not any(fb.blocked(la, lo) for la, lo in rock))
+# (inside the fallback's own box, the remaining course: outside it nothing was checked, so it
+# reads blocked since #258)
+check("fallback path: the same", note == job.NO_CHART
+      and not any(fb.blocked(la, lo) for la, lo in rock if fb.inside(la, lo)))
 d5, c5, _n = job.remaining_definition(BAR, "c", 1, 43.2, -82.4)
 field5, _ = job.load_obstacles(d5, c5, BAR, "c", job._get_boat())
 check("before rounding Rock its barrier still applies", field5.layers["rounding_barrier"] > 0

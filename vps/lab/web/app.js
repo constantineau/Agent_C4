@@ -1771,6 +1771,7 @@ function renderOptResult(r) {
         <button id="shareBtn" onclick="shareGameplan(this)" title="A view-only link to the route player. No login needed.">🔗 Share player</button></div>
       ${r.start && r.start.note ? `<div class="opt-start-note">${esc(r.start.note)}</div>` : ""}
       ${optDegradedBanner(r)}
+      ${safetyPanel(r.safety, "route")}
       ${r.timed_out ? '<div class="pill warn">Routing ran out of time. The route may be incomplete.</div>' : ""}
       <details class="rail-sec" open><summary>Legs</summary>
         <div class="legs-head"><span class="muted" style="font-size:11px">Tap a leg to show it on the map.</span>
@@ -2038,9 +2039,11 @@ async function synthPlaybook() {
 function renderPbResult(b) {
   const out = document.getElementById("pbOut"); if (!out) return;
   if (b.available === false || !b.variants) {
-    out.innerHTML = `<div class="placeholder" style="margin-top:10px">No playbook: ${esc(b.note || b.detail || "unavailable")}</div>`;
+    out.innerHTML = `<div class="placeholder" style="margin-top:10px">No playbook: ${esc(b.note || b.detail || "unavailable")}</div>
+      ${safetyPanel(b.safety, "playbook")}`;
     return;
   }
+  const safe = !!(b.safety && b.safety.ok);
   const agree = b.agreement == null ? "—" : Math.round(b.agreement * 100) + "%";
   const rec = (b.variants.find((v) => v.id === b.recommended) || {}).name || b.recommended || "—";
   const sig = b.signature;
@@ -2055,14 +2058,15 @@ function renderPbResult(b) {
       </div>
       ${pbBoatModelNote(b)}
       ${pbWarnings(b)}
+      ${safetyPanel(b.safety || { ok: false, problems: [{ text: "Built before route checks. Build the playbook again." }] }, "playbook")}
     </div>
     <div class="pb-variants">${b.variants.map((v) => pbVariantCard(v, v.id === b.recommended)).join("")}</div>
     ${pbPlaysSection(b)}
     ${pbDecisionTree(b)}
     <div class="pb-freeze">
       ${sig ? pbSigBox(b) :
-        `<button id="pbFreeze" onclick="freezePlaybook()" ${Pb.freezing ? "disabled" : ""}>${Pb.freezing ? "Freezing…" : "🔒 Freeze for the boat"}</button>
-         <span class="muted" style="font-size:12px">Saves a locked copy to send to the boat. No changes after the start.</span>`}
+        `<button id="pbFreeze" onclick="freezePlaybook()" ${Pb.freezing || !safe ? "disabled" : ""}>${Pb.freezing ? "Freezing…" : "🔒 Freeze for the boat"}</button>
+         <span class="muted" style="font-size:12px">${safe ? "Saves a locked copy to send to the boat. No changes after the start." : "Can't freeze until the route checks pass."}</span>`}
     </div></div>`;
 }
 
@@ -2106,6 +2110,39 @@ function pbPlayCard(p) {
     ${p.boundary ? `<div class="pb-row"><span class="pb-lbl">Switch point</span><span>plan holds at ${p.boundary.holds}, changes by ${p.boundary.diverges}. Switch at <b>${p.boundary.threshold}</b>.</span></div>` : ""}
     ${(p.table || []).length ? `<div class="pb-row"><span class="pb-lbl">Per leg</span><span class="mono" style="font-size:11px">${p.table.map((r) => `${esc(r.to || `leg ${r.leg + 1}`)} · ${esc(r.side)} ${r.off_nm}nm: <b>${esc(r.verdict)}</b> (continue ${r.continue_min}m / rejoin ${r.rejoin_min}m)`).join("<br>")}</span></div>` : ""}
   </details>`;
+}
+
+// #242: the route checks. A route that fails one can't be frozen, deployed or sent as GPX. A mark the
+// chart puts on land or shallow water can get a reviewed chart override (who + why), which opens the
+// chart at that mark only; then build again.
+function safetyPanel(s, what) {
+  if (!s) return "";
+  const ov = (s.overrides || []).map((o) => `<li>${esc(o.mark)}: chart override by ${esc(o.by)}${o.at ? ", " + esc(fmtDate(o.at)) : ""}. ${esc(o.why)}
+      <button class="mini" data-mark="${esc(o.mark)}" onclick="chartOverride(this.dataset.mark, true)">Remove</button></li>`).join("");
+  if (s.ok) return ov ? `<div class="muted" style="font-size:12px;margin-top:6px">Route checks passed.<ul style="margin:2px 0 0 16px;padding:0">${ov}</ul></div>` : "";
+  const items = (s.problems || []).map((p) => `<li>${p.route ? esc(p.route) + ": " : ""}${esc(p.text || p.code)}
+      ${p.mark && (p.code === "blocked" || p.code === "unreached") ? `<button class="mini" data-mark="${esc(p.mark)}" onclick="chartOverride(this.dataset.mark)">Chart wrong here?</button>` : ""}</li>`).join("");
+  return `<div class="pill bad" style="display:block;margin-top:8px;text-align:left">
+    <b>⛔ Route checks failed. No freeze, Deploy or GPX${what === "route" ? " from this route" : ""}.</b>
+    <ul style="margin:4px 0 0 16px;padding:0">${items}</ul>
+    ${ov ? `<div style="font-weight:400;margin-top:4px">Chart overrides:<ul style="margin:2px 0 0 16px;padding:0">${ov}</ul></div>` : ""}</div>`;
+}
+
+async function chartOverride(mark, remove) {
+  let by = "", why = "";
+  if (!remove) {
+    by = (prompt(`Chart override at ${mark}: opens the chart there. Only for a chart error.\nYour name:`) || "").trim();
+    if (!by) return;
+    why = (prompt("Why is the chart wrong here?") || "").trim();
+    if (!why) return;
+  } else if (!confirm(`Remove the chart override at ${mark}?`)) return;
+  try {
+    const res = await apiPost("/api/races/" + encodeURIComponent(Opt.raceId) + "/chart-override",
+      { course_id: Opt.courseId, mark, by, why });
+    const r = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(r.detail || "error " + res.status);
+    alert("Saved. Run the route again.");
+  } catch (e) { alert("Not saved: " + e.message); }
 }
 
 // the routes' own warnings (forecast ended, shoreline, …), plain, before anything is deployed (#51)
@@ -2190,7 +2227,7 @@ async function downloadPlaybook(pid) {
 async function downloadPlaybookGpx(pid) {
   try {
     const res = await apiGet("/api/playbooks/" + encodeURIComponent(pid) + "/gpx?variants=all");
-    if (!res.ok) throw new Error("download failed (" + res.status + ")");
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || "download failed (" + res.status + ")");
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -2208,6 +2245,7 @@ async function freezePlaybook() {
     const res = await apiPost("/api/playbook/freeze", { bundle: Pb.result });
     const r = await res.json();
     if (r.frozen) { Pb.result = r.bundle; Pb.frozenId = r.id; }
+    else if (r.detail) alert("Not frozen. " + r.detail);    // #242: refused, and why
   } catch (e) { /* leave the draft; user can retry */ }
   Pb.freezing = false; renderGameplan();
 }

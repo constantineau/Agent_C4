@@ -221,6 +221,7 @@ check("no chart built → sent (old one dropped), but the step is not green",
 PI["assets"] = {"loaded": True, "chart": False}
 from app import synthesis  # noqa: E402
 GHOST = synthesis.sign_bundle({"race_id": "r1", "variants": [{"id": "a"}],
+                               "safety": {"ok": True, "problems": [], "overrides": []},   # route checks passed (#242)
                                "boat_model": {"boat_id": "ghost"}})   # Deploy checks it (#152)
 D.pbstore.get = lambda pid: GHOST if pid == "pb1" else None
 labstate.set("deploy:r1", {"playbook_id": "pb1"})
