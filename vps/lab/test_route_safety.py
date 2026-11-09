@@ -94,6 +94,25 @@ for side in ("port", "starboard"):
     check(f"{side}: no wrong-side problem in the verdict",
           not any(p["code"] == "side" for p in (r.get("safety") or {}).get("problems", [{"code": "side"}])))
 
+# Codex on #287: thinning a play's route keeps the way round each mark (the verdict it carries
+# is the whole route's)
+from app import synthesis as SY  # noqa: E402
+# a long beat up the mark's east side, the corner over its top, a long run back down the west
+WLAT, R_ = LAT0 + 3 / 60.0, 0.1
+_up = [(LAT0 + (WLAT - LAT0) * k / 496, LON0 + R_ * DLON) for k in range(497)]
+_corner = [(WLAT + R_ / 60.0, LON0), (WLAT, LON0 - R_ * DLON)]           # top, then exit standoff
+_down = [(WLAT - (WLAT - LAT0) * k / 500, LON0 - R_ * DLON) for k in range(1, 501)]
+_pts = _up + _corner + _down
+_path = [{"lat": la, "lon": lo, "t": 60 * k} for k, (la, lo) in enumerate(_pts)]
+_lend = [len(_up) + len(_corner) - 1, len(_pts) - 1]
+check("(the whole route leaves the mark on its side)",
+      not O._wrong_side(_pts, WLAT, LON0, "port", touch=True))
+thin = SY._thin_route({"path": _path, "leg_end_idx": _lend}, max_pts=200)
+tp = [(p["lat"], p["lon"]) for p in thin["path"]]
+check("a thinned play route still leaves the mark on its side",
+      not O._wrong_side(tp, WLAT, LON0, "port", touch=True), f"{len(_pts)} → {len(tp)}")
+
+
 class NoWind(Steady):
     def wind_at(self, lat, lon, t):
         return None

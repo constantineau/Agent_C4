@@ -35,6 +35,7 @@ NO_MARKS = "Course has no mark positions. No chart built."
 NO_LAND = "No land in the chart. The shoreline didn't load."
 NO_BOAT = "No boat profile for {boat}. Chart and profile not sent."
 BUILD_FAILED = "Chart build failed. Try again."
+NO_DEPTHS = "Depth chart didn't load. No chart built. Try again."
 DRAFT_CHANGED = "Boat draft changed since this playbook. Build it again."
 
 
@@ -69,6 +70,10 @@ def build_chart(definition, course_id, boat, open_water=False, source=None):
     land_cells = sum(field.layers.get(k, 0) for k in LAND_LAYERS)
     if getattr(field, "land", None) == "failed":     # #51: some US ENC land is not the whole shore
         return None, NO_LAND
+    if getattr(field, "depth", None) == "failed":
+        # #242: ENC asked for and not (all) loaded: its shoals and rocks are missing from the mask,
+        # which the Orin would take as checked (Codex on #287)
+        return None, NO_DEPTHS
     if not land_cells and not open_water:
         return None, NO_LAND
     out = geo.field_to_dict(field)

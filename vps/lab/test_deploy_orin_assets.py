@@ -67,6 +67,8 @@ def fake_build(definition, course_id, bbox, **k):
         n, s, w, e = bbox
         f._fill_polygon([[(w, s), (w + 0.2, s), (w + 0.2, s + 0.2), (w, s + 0.2)]], 1, "coastline")
     f.source = k.get("source")
+    if LAND.get("depth_failed"):
+        f.depth = "failed"
     return f
 
 
@@ -97,6 +99,11 @@ LAND["on"], LAND["raise"] = True, True
 p3, problems3 = OA.build(DEF, "c")
 check("build error → chart null, said", p3["chart"] is None and problems3 == [OA.BUILD_FAILED])
 LAND["raise"] = False
+LAND["depth_failed"] = True       # ENC asked for, not all loaded: shoals/rocks missing (#242)
+p4, problems4 = OA.build(DEF, "c")
+check("ENC depths didn't load → chart null, said (Codex on #287)", p4["chart"] is None
+      and problems4 == [OA.NO_DEPTHS])
+LAND["depth_failed"] = False
 os.environ["DEPLOY_BOAT_ID"] = "nope"
 p4, problems4 = OA.build(DEF, "c")
 os.environ.pop("DEPLOY_BOAT_ID")
@@ -240,7 +247,7 @@ res = D.push("r1")
 check("course not saved on the Pi → the course step fails (it used to pass)", not res["steps"][0]["ok"]
       and not res["ok"])
 
-for s in (OA.NO_LAND, OA.NO_MARKS, OA.NO_BOAT.format(boat="sr33"), OA.BUILD_FAILED):
+for s in (OA.NO_LAND, OA.NO_MARKS, OA.NO_BOAT.format(boat="sr33"), OA.BUILD_FAILED, OA.NO_DEPTHS):
     check(f"short: {s!r}", len(s.split()) <= 12)
 
 print("ALL OK" if ok else "FAILED")
