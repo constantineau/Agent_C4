@@ -211,6 +211,18 @@ try:
                             emit_exploration=False, time_budget_s=60)
     check("ENC failure: depths not checked",
           any(p["text"] == O.SAFE_DEPTH_FAILED for p in (re_.get("safety") or {}).get("problems", [])))
+    # ENC loaded land but no depth areas: depths were not checked (Codex on #287)
+    _orig_l = enc.layers_in_bbox
+    enc.ensure_bbox = lambda bbox, cache_dir=None: None
+    enc.layers_in_bbox = lambda bbox, cache_dir=None, depth=None: {"land": [LAND], "shoal": []}
+    try:
+        fl = OB.build_for_course(course("port"), "c", BBOX, use_cache=False, source="enc")
+        check("ENC land without depth areas: depth not ok", fl.depth == "none", fl.depth)
+        enc.layers_in_bbox = lambda bbox, cache_dir=None, depth=None: {"land": [LAND], "shoal": [LAND]}
+        fs = OB.build_for_course(course("port"), "c", BBOX, use_cache=False, source="enc")
+        check("ENC with depth areas: depth ok", fs.depth == "ok", fs.depth)
+    finally:
+        enc.layers_in_bbox = _orig_l
 
     print("8) #44.1b an override pocket moves with its mark")
     # the start sits on the stub land strip; an override opens it. Move the start (and its

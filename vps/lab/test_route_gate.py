@@ -55,6 +55,7 @@ def bundle(safety, start=100):
          "plays": []}
     if safety is not None:
         b["safety"] = safety
+        b["consensus"] = {"safety": safety}
     return b
 
 
@@ -67,6 +68,10 @@ check("a bundle built before the checks: refused", r.status_code == 409, r.text[
 r = client.post("/api/playbook/freeze", json={"bundle": bundle(GOOD)})
 check("a bundle that passed: frozen", r.status_code == 200 and r.json().get("frozen"), r.text[:120])
 good_id = r.json().get("id")
+
+r = client.post("/api/playbook/freeze", json={"bundle": dict(bundle(GOOD, start=150),
+                                                       consensus={"safety": BAD})})
+check("a forged top-level ok over a failed route: refused", r.status_code == 409, r.text[:120])
 
 print("lock-in, Deploy, GPX:")
 bad_frozen = synthesis.sign_bundle(bundle(BAD, start=200))    # e.g. frozen before this check

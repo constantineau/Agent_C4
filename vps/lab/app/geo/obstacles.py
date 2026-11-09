@@ -440,7 +440,8 @@ def build_for_course(definition: dict, course_id, bbox, *, coastline_on=True, zo
             _fill_global_backstop(field, cache_dir)          # global land union backstop (incl. Canada)
             if layers.get("land") or layers.get("shoal"):
                 field.safety_depth = depth
-                field.depth = "ok"
+                # depths were checked only if ENC depth areas came back: land alone isn't depth
+                field.depth = "ok" if layers.get("shoal") else "none"
                 for poly in layers.get("land", []):          # ENC's sharper US land on top
                     field._fill_polygon(poly, 1, "coastline")
                 for poly in layers.get("shoal", []):         # DEPARE shallower than the safety depth

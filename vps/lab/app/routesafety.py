@@ -50,10 +50,13 @@ def refusal(bundle):
     s = bundle.get("safety")
     if not isinstance(s, dict) or "ok" not in s:
         return OLD_BUNDLE
-    if s.get("ok") and not s.get("problems"):
+    # never trust the top-level verdict alone (a draft comes back from the browser): every route's
+    # own verdict must pass too
+    again = bundle_verdict(bundle)
+    if s.get("ok") and not s.get("problems") and again["ok"]:
         return None
     texts = []
-    for p in s.get("problems") or []:
+    for p in (s.get("problems") or []) + again["problems"]:
         t = p.get("text") or p.get("code") or "?"
         if t not in texts:
             texts.append(t)

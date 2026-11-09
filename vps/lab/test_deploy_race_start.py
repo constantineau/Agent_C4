@@ -130,7 +130,7 @@ TICK["step"] = 0
 
 print("the playbook: the Lab never posts to the Orin; the Pi forwards it:")
 from app import synthesis  # noqa: E402
-PB1 = synthesis.sign_bundle({"race_id": "r1", "variants": [{"id": "a"}], "safety": {"ok": True, "problems": [], "overrides": []}})   # Deploy checks it (#152)
+PB1 = synthesis.sign_bundle({"race_id": "r1", "variants": [{"id": "a"}], "safety": {"ok": True, "problems": [], "overrides": []}, "consensus": {"safety": {"ok": True, "problems": [], "overrides": []}}})   # Deploy checks it (#152)
 D.pbstore.get = lambda pid: PB1 if pid == "pb1" else None
 labstate.set("deploy:r1", {"playbook_id": "pb1"})
 CLOCK["t"] = GUN - 3600

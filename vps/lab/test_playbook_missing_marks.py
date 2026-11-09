@@ -108,7 +108,7 @@ def push(definition, bundle=None):
     labstate.set(D._lock_key("m"), {})
     if bundle is not None:
         # a real, signed bundle (#152) whose route checks passed (#242)
-        BUNDLES["pb1"] = synthesis.sign_bundle(dict({"safety": {"ok": True, "problems": [], "overrides": []}}, **bundle))
+        BUNDLES["pb1"] = synthesis.sign_bundle(dict({"safety": {"ok": True, "problems": [], "overrides": []}, "consensus": {"safety": {"ok": True, "problems": [], "overrides": []}}}, **bundle))
         labstate.set(D._lock_key("m"), {"playbook_id": "pb1", "course_id": "c"})
     posted.clear()
     return D.push("m")
