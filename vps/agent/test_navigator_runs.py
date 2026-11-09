@@ -148,6 +148,10 @@ check("... and one Undo goes back to the mark it was sailing to", r.get("ok") an
 client.post("/navigator/start")
 nav = fix(43.9997)                       # ~30 m behind the start, before the gun
 check("Start near the line: Start is next", idx(nav) == 0 and not (nav.get("progress") or {}).get("held"))
+# milling there on more DISTINCT fixes (inside the old 110 m radius) must not start the run: the
+# start is left by crossing the line, not by being near it (#246 follow-up, Codex repro on #286)
+nav = fix(43.9997); nav = fix(43.9996, -82.0005); nav = fix(43.9998, -81.9995)
+check("milling close behind the line on several fixes: still the start", idx(nav) == 0)
 fix(44.002); nav = fix(44.003)
 check("... and crossing the line advances to Windward", idx(nav) == 1)
 client.post("/navigator/mark", json={"index": 3})

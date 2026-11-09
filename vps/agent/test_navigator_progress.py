@@ -73,8 +73,13 @@ print("plane geometry:")
 # Axis due north from the start; a boat well off to the side is still 'past' if it is north.
 check("passed is about along-track distance, not proximity",
       NAV._passed(MACK, 0, 43.20, -82.90) is True)
-check("sitting on the mark counts as a rounding (the close-aboard rule)",
-      NAV._passed(MACK, 0, 43.06625, -82.4175) is True)
+# This used to say "sitting on the mark counts as a rounding": the close-aboard rule applied to
+# the start too, so a boat milling within ~110 m of the start mark before the gun counted as
+# started and jumped to the next mark (#246 follow-up). The start is now left only by crossing it.
+check("sitting on the START mark is not passed (the start is crossed, not rounded)",
+      NAV._passed(MACK, 0, 43.06625, -82.4175) is False)
+check("close aboard still counts as a rounding for a mark that is not the start",
+      NAV._passed(MACK, 1, 45.33566665, -81.8386) is True)
 check("off to the side and short of the plane is not passed",
       NAV._passed(MACK, 0, 43.0500, -82.3000) is False)
 check("_beyond_nm is positive past the plane",
@@ -83,6 +88,24 @@ check("_beyond_nm is negative short of the plane",
       NAV._beyond_nm(43.00, -82.4175, MACK[0], 10.2) < 0)
 check("tacking well off the rhumb line does not un-pass a mark",
       NAV._next_index(MACK, 43.33858, -83.20) == 1)
+
+# --- the start is crossed, not approached (#246 follow-up) ---------------------
+# Milling inside the old 110 m close-aboard radius, behind the line, before the gun: never past
+# the start. Crossing the line (the plane through the start, normal to the leg out) is.
+print("start line:")
+S = MACK[0]
+behind = [(S["lat"] - 0.0003, S["lon"]),            # ~33 m behind the start
+          (S["lat"] - 0.0008, S["lon"] + 0.0005),   # ~100 m, behind and to one side
+          (S["lat"] - 0.0001, S["lon"] - 0.0010),   # ~80 m off along the line, just behind
+          (S["lat"], S["lon"])]                     # right on the start mark
+for la, lo in behind:
+    d_m = NAV._hav_nm(la, lo, S["lat"], S["lon"]) * 1852
+    check(f"milling {d_m:.0f} m from the start, not across: Start is still next",
+          NAV._next_index(MACK, la, lo) == 0)
+check("across the line (~170 m beyond it) -> Cove Island is next",
+      NAV._next_index(MACK, S["lat"] + 0.0015, S["lon"]) == 1)
+check("a course with no Start: close aboard its first mark still rounds it",
+      NAV._next_index(MACK[1:], 45.33566665, -81.8386) == 1)
 
 # --- the ratchet -------------------------------------------------------------
 print("ratchet:")
