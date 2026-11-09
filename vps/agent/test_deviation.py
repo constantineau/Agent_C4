@@ -136,6 +136,84 @@ set_now(t + 65)
 check("closing in → converging", deviation.get_deviation()["xte_trend"] == "converging")
 
 # --- graceful na paths ------------------------------------------------------------------------
+# --- #183-10: out-and-back — the boat stays on its own leg ------------------------------------
+print("out-and-back (#183-10):")
+# 5 nm north in 1 nm points, then back south on a line 0.2 nm east. Every point 10 min apart.
+OB = ([{"lat": nm_north(i), "lon": LON0, "t": T0 + i * 600} for i in range(6)]
+      + [{"lat": nm_north(5 - i), "lon": LON0 + nm_east(0.2), "t": T0 + (6 + i) * 600}
+         for i in range(6)])
+use_bundle({"race_id": "ob", "recommended": "ob",
+            "variants": [{"id": "ob", "name": "Out and back", "route": {"path": OB}}]})
+deviation.reset_state()
+# outbound, 2 nm up, 0.12 nm east: nearer the RETURN line (0.08) than its own (0.12)
+set_boat(nm_north(2), LON0 + nm_east(0.12), cog=0.0)
+set_now(T0 + 2 * 600)
+r = deviation.get_deviation()
+check(f"first read sits on the outbound leg (along {r['along_nm']} nm)", r["along_nm"] < 3.0)
+check("time behind ~0, not a leg's worth", abs(r["time_behind_s"] or 0) < 120)
+set_boat(nm_north(2.5), LON0 + nm_east(0.13), cog=0.0)
+set_now(T0 + 2.5 * 600)
+r = deviation.get_deviation()
+check(f"next poll stays outbound (along {r['along_nm']} nm)", r["along_nm"] < 3.5)
+# just before the turn, still northbound, nearer the return line: not the return leg yet
+for k, n in enumerate((3.5, 4.5)):
+    set_boat(nm_north(n), LON0 + nm_east(0.13), cog=0.0)
+    set_now(T0 + (3 + k) * 600)
+    r = deviation.get_deviation()
+check(f"pre-turn, northbound, still outbound (along {r['along_nm']} nm)", r["along_nm"] < 5.0)
+# round the top and come back down southbound: the return leg is picked up
+for k, (n, e, c) in enumerate([(5.0, 0.1, 90.0), (4.5, 0.15, 180.0), (3.0, 0.15, 180.0)]):
+    set_boat(nm_north(n), LON0 + nm_east(e), cog=c)
+    set_now(T0 + (5 + k) * 600)
+    r = deviation.get_deviation()
+check(f"after the turn it reads the return leg (along {r['along_nm']} nm)", r["along_nm"] > 6.5)
+# a fresh read (no history) on the return leg, heading south, lands on the return leg
+deviation.reset_state()
+set_boat(nm_north(3.0), LON0 + nm_east(0.08), cog=180.0)
+set_now(T0 + 8 * 600)
+r = deviation.get_deviation()
+check(f"no history, southbound: return leg (along {r['along_nm']} nm)", r["along_nm"] > 6.5)
+# no COG, polled every minute: still outbound just before the turn
+deviation.reset_state()
+for k in range(0, 11):
+    n = 3.5 + k * 0.1
+    navigator._latest = (lambda n=n: {"lat": nm_north(n), "lon": LON0 + nm_east(0.13), "sog": None,
+                                      "cog": None, "tws": None, "twd": None, "heading": None})
+    set_now(T0 + n * 600)
+    r = deviation.get_deviation()
+check(f"no COG, 1-min polls, pre-turn: outbound (along {r['along_nm']} nm)", r["along_nm"] < 5.0)
+# a densely sampled straight route: no false deviation from a poll gap
+DENSE = [{"lat": nm_north(0.1 * i), "lon": LON0, "t": T0 + i * 60} for i in range(60)]
+use_bundle({"race_id": "d", "recommended": "d",
+            "variants": [{"id": "d", "name": "Dense", "route": {"path": DENSE}}]})
+deviation.reset_state()
+set_boat(nm_north(0.05), LON0, sog=6.0, cog=0.0)
+set_now(T0 + 30)
+deviation.get_deviation()
+set_boat(nm_north(0.55), LON0, sog=6.0, cog=0.0)
+set_now(T0 + 330)
+r = deviation.get_deviation()
+check(f"dense straight route after a 5-min gap: on the line (xte {r['xte_nm']}, behind {r['time_behind_s']})",
+      r["xte_nm"] < 0.05 and abs(r["time_behind_s"] or 0) < 30)
+# first read, on the line but 8 min behind plan: no pull toward the plan's position
+deviation.reset_state()
+set_boat(nm_north(3.0), LON0, sog=6.0, cog=0.0)
+set_now(T0 + 30 * 60 + 8 * 60)
+r = deviation.get_deviation()
+check(f"dense route, 8 min behind, no history: on the line (xte {r['xte_nm']}, along {r['along_nm']})",
+      r["xte_nm"] < 0.05 and abs(r["along_nm"] - 3.0) < 0.15)
+use_bundle({"race_id": "ob", "recommended": "ob",
+            "variants": [{"id": "ob", "name": "Out and back", "route": {"path": OB}}]})
+# a late gun (since = 70 min after the plan start): the leg comes from the plan's clock
+deviation.reset_state()
+set_boat(nm_north(2.0), LON0, sog=0.0, cog=0.0)
+set_now(T0 + 70 * 60 + 2 * 600)
+r = deviation.get_deviation(since=T0 + 70 * 60)
+check(f"late gun, no history: outbound, on pace (along {r['along_nm']}, behind {r['time_behind_s']})",
+      r["along_nm"] < 3.0 and abs(r["time_behind_s"] or 0) < 120)
+use_bundle(BUNDLE)
+deviation.reset_state()
+
 print("na paths:")
 use_bundle({})
 check("no playbook → na", deviation.get_deviation()["status"] == "na")

@@ -87,6 +87,23 @@ def _allowance_s_per_nm(entry):
     return g if g else None
 
 
+_TOD_RE = re.compile(r"time[- ]on[- ]distance|\btod\b")
+_TOT_RE = re.compile(r"time[- ]on[- ]time|\btot\b")
+
+
+def _scoring_kind(method):
+    """'tot' | 'tod' | None (unsupported) from the race's scoring text. Empty text keeps the old
+    default (ToT, with a gap note). Anything else must name ToT or ToD, and only one of them:
+    an unknown method (performance curve, PHRF, one-design) used to be scored as ToT silently."""
+    m = (method or "").strip().lower()
+    if not m:
+        return "tot"
+    tod, tot = bool(_TOD_RE.search(m)), bool(_TOT_RE.search(m))
+    if tod == tot:
+        return None
+    return "tod" if tod else "tot"
+
+
 # --- course geometry (flat-plane nm; matches ais.py / navigator scale) -------
 def _nm(lat0, lon0, lat, lon):
     """(east, north) of (lat,lon) relative to (lat0,lon0), in nm."""
@@ -189,13 +206,20 @@ def get_fleet(max_range_nm: float = 40.0):
     roster = blob.get("fleet") or []
     own_cfg = blob.get("own") or {}
     scoring = blob.get("scoring") or {}
-    method = (scoring.get("method") or scoring.get("system") or "").lower()
-    is_tod = "distance" in method or "tod" in method        # else default ToT
+    method = (scoring.get("method") or "").lower()
+    if not method.strip() and _scoring_kind(scoring.get("system")) in ("tot", "tod"):
+        method = (scoring.get("system") or "").lower()     # a system field that names the method
+    kind = _scoring_kind(method)
+    is_tod = kind == "tod"
 
     gaps = []
     if not roster:
         return {"available": False, "note": "No fleet list loaded.", "fleet": [], "traffic": []}
-    if not scoring:
+    if kind is None:
+        # an unsupported method (performance curve, one-design, PHRF ToD+ToT mix, ...) must not
+        # be scored as ToT behind the crew's back: no corrected gaps at all, and say so.
+        gaps.append(f"scoring '{scoring.get('method')}' not supported, no corrected gaps")
+    elif not method.strip():
         gaps.append("no scoring set, using Time-on-Time")
 
     own = ais._own_ship()
@@ -214,8 +238,19 @@ def get_fleet(max_range_nm: float = 40.0):
 
     # own progress
     own_dtf = own_lev = own_leg = None
-    own_tot = _tot_coeff(own_cfg, method) or 1.0
+    # No own rating = no corrected gaps (#240). Assuming 1.0 made every delta wrong by the
+    # rating ratio and nothing said so. None flows through _corrected_delta, which withholds.
+    own_tot = _tot_coeff(own_cfg, method)
     own_alw = _allowance_s_per_nm(own_cfg)
+    corrected_withheld = True
+    if kind is None:
+        own_tot = own_alw = None
+    elif is_tod and own_alw is None:
+        gaps.append("own GPH missing, no corrected gaps")
+    elif not is_tod and own_tot is None:
+        gaps.append("own rating missing, no corrected gaps")
+    else:
+        corrected_withheld = False
     if pts and own.get("lat") is not None:
         oe, on = _nm(origin[0], origin[1], own["lat"], own["lon"])
         own_dtf, own_lev, own_leg = _course_progress(oe, on, pts)
@@ -257,7 +292,8 @@ def get_fleet(max_range_nm: float = 40.0):
     fleet.sort(key=lambda x: (abs(x.get("corrected_delta_s", 1e9)),
                               _SRC_RANK.get(x.get("source"), 9), x.get("range_nm", 1e9)))
     standings, own_rank = _standings(roster, fleet, own_cfg, own_dtf, own.get("sog"),
-                                     method, is_tod, own_tot, own_alw, corr=corr)
+                                     method, is_tod, own_tot, own_alw, corr=corr,
+                                     withheld=corrected_withheld)
     return {
         "available": True,
         "scoring_method": scoring.get("method") or ("Time-on-Distance" if is_tod else "Time-on-Time"),
@@ -281,7 +317,7 @@ def get_fleet(max_range_nm: float = 40.0):
 
 
 def _standings(roster, fleet_rows, own_cfg, own_dtf, own_sog, method, is_tod,
-               own_tot, own_alw, corr=None):
+               own_tot, own_alw, corr=None, withheld=False):
     """WHOLE-FLEET ranked standings estimate (the FLEET tile's view). Every roster boat gets its
     best-available position (own AIS live · public-tracker fix aged · DEAD-RECKONED forward from
     that fix at its observed pace, falling back to our pace scaled by the handicap ratio) and a
@@ -343,10 +379,12 @@ def _standings(roster, fleet_rows, own_cfg, own_dtf, own_sog, method, is_tod,
                         "note": "not seen on AIS or tracker yet"})
         out.append(row)
     # our own boat rides in the ranking at delta 0
+    # with corrected time withheld (no own rating / unsupported scoring) we are not ranked
+    # either: "1st of 1" would read as leading.
     own_row = {"boat": own_cfg.get("boat") or "US", "division": own_div, "our_division": True,
-               "source": "own", "corrected_delta_s": 0, "dtf_nm":
+               "source": "own", "corrected_delta_s": None if withheld else 0, "dtf_nm":
                round(own_dtf, 2) if own_dtf is not None else None, "confidence": 1.0}
-    ranked = sorted([r for r in out if r.get("corrected_delta_s") is not None] + [own_row],
+    ranked = sorted([r for r in out + [own_row] if r.get("corrected_delta_s") is not None],
                     key=lambda r: r["corrected_delta_s"])
     unranked = [r for r in out if r.get("corrected_delta_s") is None]
     for i, r in enumerate(ranked):
@@ -357,7 +395,7 @@ def _standings(roster, fleet_rows, own_cfg, own_dtf, own_sog, method, is_tod,
     own_rank = {"overall": own_row.get("rank"), "of": len(ranked),
                 "division": own_row.get("division_rank"), "division_of": len(div_rows),
                 "unranked": len(unranked)}
-    return ranked + unranked, own_rank
+    return ranked + unranked + ([own_row] if withheld else []), own_rank
 
 
 def _session_gun():
@@ -431,8 +469,8 @@ def _merge_tracker(blob, roster, fleet, unmatched, pts, origin, own, own_dtf,
         resolved = None
         if r.get("lat") is not None:
             for e, fx in tk_matched:
-                if _norm(e["boat"]) in have:
-                    continue
+                if _norm(e["boat"]) in have or fx.get("age_unknown"):
+                    continue          # a fix of unknown age can't vouch for a live position
                 de, dn = ais._enu_nm(r["lat"], r["lon"], fx["lat"], fx["lon"])
                 if math.hypot(de, dn) <= _TRACKER_MATCH_NM:
                     resolved = e
@@ -458,6 +496,13 @@ def _merge_tracker(blob, roster, fleet, unmatched, pts, origin, own, own_dtf,
                "mmsi": None, "_posconf": fx["confidence"]}
         row, _ = _fleet_row(e, obj, "tracker_name", 0.7, "tracker", pts, origin, own, own_dtf,
                             method, is_tod, own_tot, own_alw, age_s=fx["age_s"], corr=corr)
+        if fx.get("age_unknown"):
+            # position of unknown age: show it, but don't score or rank off it
+            row.pop("corrected_delta_s", None)
+            row.pop("corrected_basis", None)
+            row["tag"] = _tag(row)
+            row["age_unknown"] = True
+            row["note"] = "tracker fix time unknown"
         fleet.append(row)
         have.add(_norm(e["boat"]))
     return status
@@ -498,7 +543,7 @@ def _corrected_delta(entry, method, is_tod, dtf, own_dtf, sog, own_sog, own_tot,
         # remaining miles cancels a real lead at equal GPH (#161): 1 nm ahead scored as a tie.
         return (ttf_them - ttf_us) - (alw - own_alw) * own_dtf, "remaining", 0.6
     tot_them = _tot_coeff(entry, method)
-    if tot_them is None:
+    if tot_them is None or own_tot is None:
         return None, None, 0.0
     if full:
         return (e_them + ttf_them) * tot_them - (e_us + ttf_us) * own_tot, "full", 0.65
