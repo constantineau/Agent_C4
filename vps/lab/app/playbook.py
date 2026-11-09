@@ -58,7 +58,8 @@ _LABELS = {"left": "Left side", "right": "Right side", "middle": "Up the middle 
 
 def _health(r):
     """A route's own health, kept on every playbook entry built from it (#51)."""
-    return {"degraded": bool((r or {}).get("degraded")), "warnings": list((r or {}).get("warnings") or [])}
+    return {"degraded": bool((r or {}).get("degraded")), "warnings": list((r or {}).get("warnings") or []),
+            "safety": (r or {}).get("safety")}     # #242: the route's own acceptance verdict
 
 
 def _v2_entries(v2):
@@ -718,10 +719,12 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
     if (consensus.get("obstacles") or {}).get("land") == "failed":
         # #51: a playbook routed without the shoreline is frozen aboard: never build one
         return {"available": False, "windfield": wf.status(), "log": log,
+                "safety": consensus.get("safety"),
                 "note": optimizer.LAND_FAILED.replace("Don't use it.", "No playbook built. Try again.")}
     why = _truncated(consensus, finish_pt)
     if why:
         return {"available": False, "windfield": wf.status(), "log": log,
+                "safety": consensus.get("safety"),    # #242: which mark, so the Lab can say
                 "note": f"The main route didn't finish the course ({why}). Run it again, or "
                         "check the marks and any land near them."}
     consensus_side = _favored_side(definition, course_id, consensus)
@@ -763,6 +766,7 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
             "route_confidence": rep.get("route_confidence"),
             # the route's own health (forecast ended, shoreline, …): shown before Deploy (#51)
             "degraded": bool(rep.get("degraded")), "warnings": list(rep.get("warnings") or []),
+            "safety": rep.get("safety"),
             "route": {"legs": rep.get("legs"), "path": rep.get("path"),
                       "leg_end_idx": rep.get("leg_end_idx"),
                       "total_sailed_nm": rep.get("total_sailed_nm"),
@@ -818,6 +822,7 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
             "leg_end_idx": consensus.get("leg_end_idx"),
             "degraded": bool(consensus.get("degraded")),
             "warnings": list(consensus.get("warnings") or []),
+            "safety": consensus.get("safety"),
         },
         # every route's warnings, once each: what the Lab shows on the playbook and on Deploy
         "degraded": (bool(consensus.get("degraded")) or any(v["degraded"] for v in variants)

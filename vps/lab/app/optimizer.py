@@ -40,6 +40,11 @@ LAYLINE_NM = float(os.environ.get("ROUTE_LAYLINE_NM", "10"))       # max layline
 # mark then south then around" zig-zag), and leave port/starboard marks on the legal side:
 LAYLINE_GATE = os.environ.get("ROUTE_LAYLINE_GATE", "1").strip().lower() in ("1", "true", "yes", "on")
 OVERSTAND_NM = float(os.environ.get("ROUTE_OVERSTAND_NM", "0.5"))   # reject candidates this far PAST the mark on the up/down-wind axis
+# ...but only this close to the mark (#256): the gate is for the final approach (no orbiting past
+# the mark). Farther off, "past the mark" along the wind axis can be the only way in: Bayview Shore,
+# wind 016, the Mackinac finish is reached up the channel from the east, and the gate shut it (no
+# route at any wind speed). At 3 nm it still did; at 1 nm every Shore/016 case finishes.
+OVERSTAND_RADIUS_NM = float(os.environ.get("ROUTE_OVERSTAND_RADIUS_NM", "1.0"))
 ROUND_OFFSET_NM = float(os.environ.get("ROUTE_ROUND_OFFSET_NM", "0.10"))  # standoff to the correct side at a port/stbd rounding mark (nm)
 # --- finish/mark over-tack ("scramble") fixes (routing fidelity 2e) — each env-flagged for A/B ---
 def _flag(name, default="1"):
@@ -406,6 +411,35 @@ def _layline_pair(P, tws, twd, pos, mlat, mlon, length_nm):
     return out
 
 
+def _layline_fan(P, tws, twd, pos, bmark, fan):
+    """The layline commit (#1) for one node: when the mark (bearing `bmark`) is on or past the
+    layline (more than the VMG angle off the wind axis: dead upwind on a beat, dead downwind on a
+    run), keep only the headings of the board that lays it. Otherwise `fan` unchanged."""
+    half = _vmg_twa(P, tws, pos)
+    if half is None:
+        return fan
+    axis = twd if pos == "beat" else (twd + 180.0)
+    if pos == "run":
+        # the run VMG angle is a TWA (off the wind, ~150°); `off` below is measured from dead
+        # DOWNWIND, so the run layline sits 180 - TWA off the axis. Compared as a TWA it never
+        # fired (#65).
+        half = 180.0 - half
+    off = _wrap180(bmark - axis)
+    if abs(off) < half - LAYLINE_COMMIT_EPS:
+        return fan
+    side = 1.0 if off > 0 else -1.0
+    committed = [h for h in fan if (1.0 if _wrap180(h - axis) >= 0 else -1.0) == side]
+    if pos == "beat" and committed:
+        # …and don't FOOT below the mark: a heading lower than the bearing to the mark drops the
+        # boat under the layline and costs a tack back (#30 — the honest no-go zone stopped the old
+        # lookup "fetching" the mark at 30°). Only headings the boat can sail (#257): a mark just
+        # inside the beat angle left only no-go headings, all at speed 0, and the leg stranded.
+        above = [h for h in committed if abs(_wrap180(h - axis)) <= abs(off) + 1.0
+                 and _polar_speed(P, tws, abs(_wrap180(h - twd))) >= 0.3]
+        committed = above + [bmark] if above else committed
+    return committed or [bmark]   # never strand the node — keep the fetch heading
+
+
 # --- one leg -----------------------------------------------------------------
 def _nearby_wind(wf, lat, lon, epoch, max_nm=None):
     """The wind of the nearest point the forecast covers, within `max_nm` (default FILL_NM), or
@@ -527,6 +561,13 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, deadline=None,
         return all(wind(lat0 + (lat1 - lat0) * k / n, lon0 + (lon1 - lon0) * k / n,
                         t_a + (t_b - t_a) * k / n) for k in range(1, n + 1))
 
+    def board_borrowed(lat0, lon0, t_a, lat1, lon1, t_b):
+        """Did any of `wind_along`'s samples on this board borrow nearby wind (no forecast there)?
+        The closing board isn't a path node, so `wind_filled` counts it from this (#221)."""
+        n = max(1, int(math.ceil(_hav_nm(lat0, lon0, lat1, lon1) / 2.0)))
+        return not all(wf.wind_at(lat0 + (lat1 - lat0) * k / n, lon0 + (lon1 - lon0) * k / n,
+                                  t_a + (t_b - t_a) * k / n) for k in range(1, n + 1))
+
     # Overstand axis (#2 layline gate): on a beat the mark is to windward, on a run to leeward — in
     # both cases sailing PAST the mark along the wind axis is overstanding (the "go past then double
     # back" the user sees near a mark). Classify the leg from the wind AT THE MARK (which sets the
@@ -600,15 +641,16 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, deadline=None,
             if obstacles and obstacles.crosses(node["lat"], node["lon"], nlat, nlon):
                 blocked += 1
                 continue
-            # layline gate: drop a candidate that has sailed PAST the mark along the wind axis.
-            if leg_axis is not None:
+            dmark_new = _hav_nm(nlat, nlon, dlat, dlon)
+            # layline gate: drop a candidate near the mark that has sailed PAST it along the wind
+            # axis. Only near it (#256): farther off that can be the only way round an island.
+            if leg_axis is not None and dmark_new <= OVERSTAND_RADIUS_NM:
                 wp = (nlat - dlat) * 60.0 * leg_axis[0] + (nlon - dlon) * 60.0 * coslat * leg_axis[1]
                 if wp > OVERSTAND_NM:
                     blocked += 1
                     continue
             # MONOTONE loop gate: never give back more than BACKTRACK_NM of this path's best
             # progress toward the mark — kills the light-air rotating-wind loops/scribbles.
-            dmark_new = _hav_nm(nlat, nlon, dlat, dlon)
             dmin = min(node.get("dmin", direct), dmark_new)
             if monotone and MONOTONE and dmark_new > node.get("dmin", direct) + BACKTRACK_NM:
                 back += 1
@@ -711,7 +753,9 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, deadline=None,
                     node["lat"], node["lon"], node["t"], dlat, dlon, t_arr):
                 reached = {"lat": dlat, "lon": dlon, "t": t_arr,
                            "parent": node, "hdg": lay["hdg"], "sail": lay["sail"],
-                           "pl": node.get("pl", 0) + (1 if is_peel else 0)}
+                           "pl": node.get("pl", 0) + (1 if is_peel else 0),
+                           "board_filled": board_borrowed(node["lat"], node["lon"], node["t"],
+                                                          dlat, dlon, t_arr)}
         if reached:
             break
         for node, tws, twd, dmark, bmark in local:
@@ -728,21 +772,7 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, deadline=None,
             # strategic side choice is preserved). Re-evaluated every generation against the node-local
             # wind, so a genuine shift re-opens the layline rather than locking a stale one.
             if LAYLINE_COMMIT and _pos0 in ("beat", "run") and dmark <= LAYLINE_COMMIT_NM:
-                half = _vmg_twa(P, tws, _pos0)
-                if half is not None:
-                    axis = twd if _pos0 == "beat" else (twd + 180.0)
-                    off = _wrap180(bmark - axis)
-                    if abs(off) >= half - LAYLINE_COMMIT_EPS:
-                        side = 1.0 if off > 0 else -1.0
-                        committed = [h for h in fan
-                                     if (1.0 if _wrap180(h - axis) >= 0 else -1.0) == side]
-                        if _pos0 == "beat" and committed:
-                            # …and don't FOOT below the mark: a heading lower than the bearing to the
-                            # mark drops the boat under the layline and costs a tack back (#30 — the
-                            # honest no-go zone stopped the old lookup "fetching" the mark at 30°).
-                            above = [h for h in committed if abs(_wrap180(h - axis)) <= abs(off) + 1.0]
-                            committed = above + [bmark] if above else committed
-                        fan = committed or [bmark]   # never strand the node — keep the fetch heading
+                fan = _layline_fan(P, tws, twd, _pos0, bmark, fan)
             placed, blocked, back = expand(node, fan, tws, twd, gen_dt, cand)
             if placed == 0 and blocked > 0 and obstacles is not None:
                 placed, blocked, back = expand(node, headings + vmg, tws, twd, gen_dt, cand)
@@ -835,8 +865,10 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, deadline=None,
             "blocked_steps": blocked_hits, "isochrones": isochrones,
             "sail_track": sail_track, "peels": peels, "sail_end": sail_end,
             "realized_factor": realized_mean, "hs_mean": hs_mean,
-            # path nodes sailed from on borrowed nearby wind (the forecast itself had none there)
-            "wind_filled": sum(1 for p in path[:-1] if not wf.wind_at(p["lat"], p["lon"], p["t"]))}
+            # path nodes sailed from on borrowed nearby wind (the forecast itself had none there),
+            # plus the closing board when it borrowed on the way to the mark (#221)
+            "wind_filled": (sum(1 for p in path[:-1] if not wf.wind_at(p["lat"], p["lon"], p["t"]))
+                            + (1 if arrived and reached.get("board_filled") else 0))}
 
 
 def _rounding_offset(plat, plon, mlat, mlon, side, nm=None):
@@ -851,6 +883,114 @@ def _rounding_offset(plat, plon, mlat, mlon, side, nm=None):
     b_in = _bearing(plat, plon, mlat, mlon)
     off = (b_in + 90.0) if side == "port" else (b_in - 90.0)
     return _advance(mlat, mlon, off, nm)
+
+
+def _rounding_corner(plat, plon, mlat, mlon, nlat, nlon, side, nm=None):
+    """The way round a port/starboard mark after the inbound standoff (#52): points on the same
+    small circle, turning the legal way (port = counter-clockwise), ending at the EXIT standoff
+    (90° off the outbound bearing to the next point, same side). Each step turns at most 90°, so no
+    straight step cuts across the mark. Before, the next leg started from the inbound standoff, and
+    on any turn over 90° the route left the mark on the wrong side. [] when there's nothing to turn,
+    or when the course bends less than 90° AWAY from the mark side (a port mark on a slight right
+    bend is passed, not looped)."""
+    if side not in ("port", "starboard"):
+        return []
+    nm = ROUND_OFFSET_NM if nm is None else nm
+    b_in = _bearing(plat, plon, mlat, mlon)
+    b_out = _bearing(mlat, mlon, nlat, nlon)
+    if side == "port":
+        a0, turn = b_in + 90.0, -((b_in - b_out) % 360.0)        # turn left: bearings fall
+    else:
+        a0, turn = b_in - 90.0, (b_out - b_in) % 360.0           # turn right: bearings rise
+    if abs(turn) < 1.0 or abs(turn) > 270.0:
+        return []              # straight on, or the course bends away from the mark: just pass it
+    n = max(1, int(math.ceil(abs(turn) / 90.0)))
+    return [_advance(mlat, mlon, (a0 + turn * k / n) % 360.0, nm) for k in range(1, n + 1)]
+
+
+def _corner_speed(wf, P, lat, lon, t, hdg, helm=1.0):
+    """Speed (kn) for one step round a mark on heading `hdg`: the polar at the wind there, or the
+    beat VMG made good along `hdg` when it points inside the no-go zone. None: no wind, no speed."""
+    w = wf.wind_at(lat, lon, t) or _nearby_wind(wf, lat, lon, t)
+    if not w:
+        return None
+    tws, twd = w
+    twa = abs(_wrap180(hdg - twd))
+    sp = _polar_speed(P, tws, twa)
+    if sp < 0.3:
+        beat = _vmg_twa(P, tws, "beat")
+        # both tacks together: the upwind VMG, stretched onto a course `twa` off the wind
+        sp = (_polar_speed(P, tws, beat) * math.cos(math.radians(beat)) / math.cos(math.radians(twa))
+              if beat is not None and twa < beat else 0.0)
+    sp *= helm
+    return sp if sp >= 0.3 else None
+
+
+def _corner_tacks(wf, P, a, b, t):
+    """The two ways to tack from `a` to `b` round a mark when the step points inside the no-go
+    zone: [(a, c, b)] with c the tack point (one tack first, or the other), or None when the step
+    is sailed straight (or there's no wind: `_corner_speed` refuses that step anyway). The route
+    sails one of them: its two boards are checked, priced and put in the path, not the chord."""
+    w = wf.wind_at(a[0], a[1], t) or _nearby_wind(wf, a[0], a[1], t)
+    if not w:
+        return None
+    tws, twd = w
+    if _polar_speed(P, tws, abs(_wrap180(_bearing(*a, *b) - twd))) >= 0.3:
+        return None
+    beat = _vmg_twa(P, tws, "beat")
+    if beat is None:
+        return None
+    k = math.cos(math.radians(a[0]))
+    ve, vn = (b[1] - a[1]) * 60.0 * k, (b[0] - a[0]) * 60.0        # a → b, nm east / north
+    u = [(math.sin(math.radians(h)), math.cos(math.radians(h))) for h in (twd + beat, twd - beat)]
+    det = u[0][0] * u[1][1] - u[0][1] * u[1][0]
+    if abs(det) < 1e-9:
+        return None
+    s1 = (ve * u[1][1] - vn * u[1][0]) / det                         # v = s1·u0 + s2·u1
+    s2 = (u[0][0] * vn - u[0][1] * ve) / det
+    out = []
+    for d, (ue, un) in ((s1, u[0]), (s2, u[1])):
+        out.append((a, (a[0] + d * un / 60.0, a[1] + d * ue / (60.0 * max(0.1, k))), b))
+    return out
+
+
+def _sweep(pts, mlat, mlon):
+    """Signed angle (deg) the bearing from the mark to the boat turns through along `pts`
+    [(lat, lon)]: negative = the boat went counter-clockwise round it (mark on its left)."""
+    tot, prev = 0.0, None
+    for la, lo in pts:
+        if _hav_nm(la, lo, mlat, mlon) < 1e-4:
+            continue
+        b = _bearing(mlat, mlon, la, lo)
+        if prev is not None:
+            tot += _wrap180(b - prev)
+        prev = b
+    return tot
+
+
+def _wrong_side(pts, mlat, mlon, side, touch=True):
+    """Did the path `pts` (the leg(s) around a mark) leave the mark on the wrong side? (#52, #242)
+    The string test: the taut path from its first point to its last must lie on the `side`
+    hand of the mark. A rounding mark (`touch`) must also be touched, so the ideal path bends
+    round it; an island only has to be on the right hand. Extra loops the legal way are fine."""
+    if side not in ("port", "starboard") or len(pts) < 2:
+        return False
+    (alat, alon), (blat, blon) = pts[0], pts[-1]
+    if _hav_nm(alat, alon, mlat, mlon) < 1e-4 or _hav_nm(blat, blon, mlat, mlon) < 1e-4:
+        return False
+    sw = _sweep(pts, mlat, mlon)
+    sgn = -1.0 if side == "port" else 1.0
+    b_in, b_out = _bearing(alat, alon, mlat, mlon), _bearing(mlat, mlon, blat, blon)
+    turn = ((b_in - b_out) if side == "port" else (b_out - b_in)) % 360.0
+    if touch and turn <= 270.0:
+        ideal = sgn * (turn + 180.0)
+    else:
+        # an island, or a mark the course bends less than 90° away from: on the right hand only
+        # (the same rule `_rounding_corner` passes it by)
+        st = _sweep([pts[0], pts[-1]], mlat, mlon)
+        ideal = st if st * sgn >= 0 else st + sgn * 360.0
+    k = round((sw - ideal) / 360.0)
+    return k * sgn < 0
 
 
 # --- sparse-GRIB coverage gate + route-sanity guard --------------------------
@@ -1063,18 +1203,84 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
     incomplete = None         # #31: set when a leg never reaches its mark — the course stops there
     leg_end_idx = []          # full_path index where each REACHED leg ends — the mark vertices,
                               # known at construction (gpsout/synthesis keep them; no proximity guess)
-    for seq, name, dlat, dlon in marks[1:]:
+    for mi, (seq, name, dlat, dlon) in enumerate(marks[1:], 1):
         # #3 rounding side: route to a small standoff on the legal side of a port/starboard mark (the
         # real mark is still displayed + recorded). Gates pass between, finish/none unchanged.
-        rlat, rlon = _rounding_offset(slat, slon, dlat, dlon, roundings.get(name, "none"))
+        side = roundings.get(name, "none")
+        rlat, rlon = _rounding_offset(slat, slon, dlat, dlon, side)
         leg_obs = (leg_obstacles[len(legs)] if leg_obstacles and len(legs) < len(leg_obstacles)
                    else obstacles)
+        # #242: a start or mark the chart puts on land, in shallow water or a zone can't be
+        # reached: stop here at once and say so, instead of searching the whole time budget
+        on_chart = None
+        blk = getattr(leg_obs, "blocked", None)
+        if blk is not None:
+            if not legs and blk(slat, slon):
+                on_chart = marks[0][1]
+            elif blk(dlat, dlon) or blk(rlat, rlon):
+                on_chart = name
+        if on_chart:
+            incomplete = {"leg": len(legs), "to": name, "short_nm": round(_hav_nm(slat, slon, dlat, dlon), 2),
+                          "reason": f"{on_chart} is on land, shallow water or a no-go zone on the chart",
+                          "blocked_mark": on_chart,
+                          "legs_not_routed": [n for _s, n, _a, _o in marks[1:]][len(legs):]}
+            break
         leg = route_leg(wf, P, slat, slon, t, rlat, rlon, deadline=deadline, obstacles=leg_obs,
                         capture=emit_exploration, hstep=rp["hstep"], dt_cap=rp["dt_cap"], cur=cur,
                         sail_polars=SP, jib_crossovers=jib_crossovers, start_sail=cur_sail,
                         waves=waves, helm_factor=helm_factor, wave_coeffs=wave_coeffs,
                         wave_uniform_hs=wave_uniform_hs, maneuver_prune_mult=maneuver_prune_mult,
                         sail_config=sail_config)
+        # #52: round the mark the legal way and leave from the EXIT standoff, not the inbound one
+        nxt = marks[mi + 1] if mi + 1 < len(marks) else None
+        corner = (_rounding_corner(slat, slon, dlat, dlon, nxt[2], nxt[3], side)
+                  if leg.get("reached", True) and nxt is not None and leg["path"] else [])
+        if corner:
+            last = leg["path"][-1]
+            pts = [(last["lat"], last["lon"])] + corner
+            # the straight boards actually sailed: a step that points inside the no-go zone is
+            # tacked, and its two boards (not the chord) are what's checked, priced and drawn
+            # (Codex on #287). Steps are a 0.1 nm circle's chords, so the boards stay close.
+            boards, n_tacks = [], 0
+            for a, b in zip(pts, pts[1:]):
+                if leg_obs is not None and leg_obs.crosses(*a, *b):
+                    boards = None
+                    break
+                tk = _corner_tacks(wf, P, a, b, leg["eta"])
+                if tk is None:
+                    boards.append((a, b))
+                    continue
+                clear = [o for o in tk if leg_obs is None or not (
+                    leg_obs.crosses(*o[0], *o[1]) or leg_obs.crosses(*o[1], *o[2]))]
+                if not clear:
+                    boards = None
+                    break
+                # the tack point farther from the mark: the boards stay outside the circle
+                _p, c, _q = max(clear, key=lambda o: _hav_nm(*o[1], dlat, dlon))
+                boards += [(a, c), (c, b)]
+                n_tacks += 1
+            if boards is None:
+                corner = []            # no clean way round at the standoff: the side check judges
+            else:
+                # priced like any step: the polar at the wind there (forecast, or borrowed within
+                # the fill limit), helm included. No wind or no speed: no corner, and the side
+                # check judges.
+                tt, extra, steps = leg["eta"], 0.0, []
+                for a, b in boards:
+                    d = _hav_nm(*a, *b)
+                    kn = _corner_speed(wf, P, a[0], a[1], tt, _bearing(*a, *b), helm_factor)
+                    if kn is None:
+                        steps = None
+                        break
+                    tt += d / kn * 3600.0
+                    extra += d
+                    steps.append({"lat": round(b[0], 5), "lon": round(b[1], 5), "t": tt})
+                if steps:
+                    leg = dict(leg, path=list(leg["path"]) + steps, eta=tt,
+                               sailed_nm=round(leg["sailed_nm"] + extra, 2),
+                               tacks=leg["tacks"] + n_tacks)
+                else:
+                    corner = []
         # sample wind + confidence at the leg's midpoint and end (for the briefing)
         mid = leg["path"][len(leg["path"]) // 2] if leg["path"] else {"lat": dlat, "lon": dlon}
         det = wf.detail_at(mid["lat"], mid["lon"], (t + leg["eta"]) / 2.0)
@@ -1131,13 +1337,20 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
                           "legs_not_routed": [n for _s, n, _a, _o in marks[1:]][len(legs):]}
             t = leg["eta"]
             break
-        slat, slon, t = rlat, rlon, leg["eta"]   # continue from the rounding standoff (≈ the mark)
+        # continue from the exit standoff (or the inbound one when there's no corner) ≈ the mark
+        slat, slon, t = leg["path"][-1]["lat"], leg["path"][-1]["lon"], leg["eta"]
+        if not corner:
+            slat, slon = rlat, rlon
 
     total_min = round((t - float(start_epoch)) / 60.0, 1)
     timed_out = time.time() > deadline
     coverage = _wind_coverage(wf, full_path)
     warnings, degraded = _route_sanity(wf, legs, coverage, P, timed_out)
-    if incomplete:
+    if incomplete and incomplete.get("blocked_mark"):
+        degraded = True
+        warnings.insert(0, f"No route: {incomplete['blocked_mark']} is on land, in shallow water or "
+                           "in a no-go zone on the chart. Check the mark.")
+    elif incomplete:
         degraded = True
         rest = incomplete["legs_not_routed"]
         warnings.insert(0, f"Route INCOMPLETE. The leg to {incomplete['to']} stopped "
@@ -1201,8 +1414,11 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
                                            wave_coeffs=wave_coeffs, polar=polar,
                                            polar_adjustments=polar_adjustments, sail_config=sail_config,
                                            exclude_sails=exclude_sails)
+    safety = route_safety(definition, cid or course_id, marks, full_path, leg_end_idx, incomplete,
+                          obstacles, leg_obstacles, land_failed, from_mark=int(from_mark or 0))
     return {
         "available": True, "course_id": cid,
+        "safety": safety,                  # #242: can this route be frozen, deployed, sent as GPX?
         "start_epoch": round(float(start_epoch)), "finish_epoch": round(t),
         "total_minutes": total_min, "total_hours": round(total_min / 60.0, 1),
         "total_sailed_nm": round(sum(l["sailed_nm"] for l in legs), 1),
@@ -1236,6 +1452,101 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
         "obstacle_steps_avoided": sum(l.get("blocked_steps", 0) for l in legs),
         "timed_out": timed_out,
     }
+
+
+# --- route acceptance (#242) -------------------------------------------------------------------
+# The Lab refuses a route it can't prove safe and complete: no freeze, no Deploy, no GPX. The
+# problems, in the crew's words. A chart override (reviewed, per mark) only opens the chart at that
+# mark; it never waives a problem.
+SAFE_LAND_OFF = "Land not checked."
+SAFE_LAND_FAILED = "Shoreline didn't load. Land not checked."
+SAFE_DEPTH_NONE = "No depth chart. Depths not checked."
+SAFE_DEPTH_FAILED = "Depth chart didn't load. Depths not checked."
+SAFE_BOX = "Route leaves the chart area."
+SAFE_BLOCKED = "{mark} is on land, in shallow water or in a no-go zone on the chart."
+SAFE_UNREACHED = "Route doesn't reach {mark}."
+SAFE_SIDE = "Route leaves {mark} on the wrong side."
+# not a problem (Cole's decision on #242): water no ENC chart gives a depth for (Canada; NOAA ENC
+# is US-only). The route isn't refused there; the verdict marks the legs and the Lab shows this.
+SAFE_NO_DEPTH = "No depth data: check the paper chart."
+
+
+def route_safety(definition, course_id, marks, full_path, leg_end_idx, incomplete, obstacles,
+                 leg_obstacles, land_failed, from_mark=0):
+    """{ok, problems: [{code, mark, text}], notes: [{code, text, legs}], overrides: [{mark, by, at,
+    why}]} for a routed course. `ok` only when land was checked over the whole route, the ENC
+    depth chart loaded, every mark was reached and every port/starboard mark and island was left
+    on its side. Depths are checked wherever ENC charts them; a leg through water it doesn't
+    chart (Canada) isn't refused but listed in `notes` ("no depth data")."""
+    from .geo import obstacles as geo
+    problems = []
+
+    def add(code, text, mark=None):
+        if not any(p["code"] == code and p.get("mark") == mark for p in problems):
+            problems.append({"code": code, "mark": mark, "text": text})
+
+    fields = [f for f in [obstacles] + list(leg_obstacles or []) if f is not None]
+    if land_failed:
+        add("land", SAFE_LAND_FAILED)
+    elif not fields or all(getattr(f, "land", "off") == "off" for f in fields):
+        add("land", SAFE_LAND_OFF)
+    depths = {getattr(f, "depth", "none") for f in fields}
+    if "failed" in depths:
+        add("depth", SAFE_DEPTH_FAILED)
+    elif not fields or depths != {"ok"}:
+        add("depth", SAFE_DEPTH_NONE)
+    if incomplete:
+        if incomplete.get("blocked_mark"):
+            m = incomplete["blocked_mark"]
+            add("blocked", SAFE_BLOCKED.format(mark=m), m)
+        else:
+            add("unreached", SAFE_UNREACHED.format(mark=incomplete.get("to")), incomplete.get("to"))
+
+    pts = [(p["lat"], p["lon"]) for p in full_path]
+
+    def leg_pts(k):                         # the path of routed leg k, or None if not reached
+        if k < 0 or k >= len(leg_end_idx):
+            return None
+        a = 0 if k == 0 else leg_end_idx[k - 1]
+        return pts[a:leg_end_idx[k] + 1]
+
+    no_depth_legs = []
+    for k in range(len(leg_end_idx)):       # every reached leg inside its own field's box (#258)
+        f = (leg_obstacles[k] if leg_obstacles and k < len(leg_obstacles) else obstacles)
+        lp = leg_pts(k)
+        if f is not None and hasattr(f, "inside") and not all(f.inside(*p) for p in lp):
+            add("box", SAFE_BOX)
+        # depths checked over the whole route: a leg through water no ENC chart covers is marked
+        nd = getattr(f, "no_depth", None)
+        if "depth" not in {p["code"] for p in problems} and nd is not None and \
+                any(nd(*lp[i], *lp[i + 1]) for i in range(len(lp) - 1)):
+            a = marks[k][1] if k < len(marks) else "?"
+            b = marks[k + 1][1] if k + 1 < len(marks) else "?"
+            no_depth_legs.append(f"{a} → {b}")
+
+    roundings = race_def.course_roundings(definition, course_id)
+    for j in range(1, len(marks) - 1):      # a nav mark: the legs either side of it, touched
+        _s, name, mla, mlo = marks[j]
+        a, b = leg_pts(j - 1), leg_pts(j)
+        if a and b and _wrong_side(a + b[1:], mla, mlo, roundings.get(name, "none"), touch=True):
+            add("side", SAFE_SIDE.format(mark=name), name)
+    course = geo._course(definition, course_id) or {}
+    cmarks = course.get("marks") or []
+    for ci, leg in geo.island_legs(definition, course_id).items():   # an island: on its own leg
+        m = cmarks[ci]
+        seg = leg_pts(leg - from_mark)
+        if seg and m.get("lat") is not None and \
+                _wrong_side(seg, m["lat"], m["lon"], m.get("rounding", "none"), touch=False):
+            name = m.get("name", "island")
+            add("side", SAFE_SIDE.format(mark=name), name)
+
+    names = {n for _s, n, _a, _o in marks}
+    overrides = [{"mark": n, "by": str(o.get("by") or ""), "at": o.get("at"),
+                  "why": str(o.get("why") or "")}
+                 for n, o in geo.chart_overrides(definition, course_id).items() if n in names]
+    notes = ([{"code": "no_depth", "text": SAFE_NO_DEPTH, "legs": no_depth_legs}]
+             if no_depth_legs else [])
+    return {"ok": not problems, "problems": problems, "notes": notes, "overrides": overrides}
 
 
 # #51: the shoreline didn't load. Shown first on the route; the route is marked degraded.

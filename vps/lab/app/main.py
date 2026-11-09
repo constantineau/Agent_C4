@@ -749,12 +749,27 @@ async def playbook_synthesize_status(job_id: str = ""):
 
 @app.post("/api/playbook/freeze")
 async def playbook_freeze(body: dict):
-    """Sign + persist a playbook bundle — the frozen-at-the-gun homework deployed onboard. Pass a
-    `bundle` already synthesized (the common path: review then freeze), or race params to synthesize
-    and freeze in one shot. Returns the id + signature; the file IS the onboard-loadable artifact."""
+    """Sign + persist a playbook bundle — the frozen-at-the-gun homework deployed onboard. Pass the
+    `job_id` of the synthesis run (the common path: review then freeze; the server freezes its own
+    result, never a bundle sent back by the browser, #242), or race params to synthesize and freeze
+    in one shot. Returns the id + signature; the file IS the onboard-loadable artifact."""
     from . import synthesis
     body = body or {}
-    bundle = body.get("bundle")
+    bundle = None
+    if body.get("job_id"):
+        # #242: freeze what the server built (the synthesis job's own result), never a bundle the
+        # browser sends back: its route verdicts would be the browser's word
+        from . import jobs
+        st = jobs.status("synthesis", job_id=str(body["job_id"]))
+        bundle = st.get("bundle") if st.get("state") == "done" else None
+        if not isinstance(bundle, dict) or not bundle.get("variants"):
+            return JSONResponse({"detail": "That playbook is gone. Build it again, then freeze.",
+                                 "frozen": False}, status_code=409)
+        import copy
+        bundle = copy.deepcopy(bundle)
+    elif body.get("bundle"):
+        return JSONResponse({"detail": "Freeze from the playbook you built. Build it again, then freeze.",
+                             "frozen": False}, status_code=409)
     if not bundle:
         d, course_id, start_epoch, model_names, ens = _playbook_params(body)
         if not d:
@@ -770,12 +785,41 @@ async def playbook_freeze(body: dict):
         if not bundle.get("variants"):
             return JSONResponse({"detail": "nothing to freeze — no variants",
                                  "bundle": bundle}, status_code=422)
+    from . import routesafety
+    why = routesafety.refusal(bundle)          # #242: never freeze a route not proven safe
+    if why:
+        return JSONResponse({"detail": why, "frozen": False}, status_code=409)
     bundle = synthesis.sign_bundle(bundle)
     pid = pbstore.save(bundle)
     # a new revision (#249), or the same content frozen before: then the first file's bytes stand
     bundle = pbstore.get(pid) or bundle
     return {"frozen": True, "id": pid, "signature": bundle["signature"],
             "verified": synthesis.verify_bundle(bundle), "bundle": bundle}
+
+
+@app.post("/api/races/{rid}/chart-override")
+async def chart_override(rid: str, body: dict):
+    """#242: record a reviewed chart override on one nav mark of a course (a chart artefact: the
+    chart puts the mark on land or in shallow water). Body: {course_id, mark, by, why}; an empty
+    `why` removes it. The mark then gets a pocket of open water in the chart; the route still has
+    to pass every check. Build the playbook again after."""
+    d = store.get_race(rid)
+    if not d:
+        return JSONResponse({"detail": "unknown race"}, status_code=404)
+    from . import routesafety
+    body = body or {}
+    d, err = routesafety.set_override(d, body.get("course_id"), str(body.get("mark") or ""),
+                                      body.get("by"), body.get("why"))
+    if err:
+        return JSONResponse({"detail": err}, status_code=400)
+    _write_race(d, overrides=True)
+    # the course's overrides as saved: the Lab merges them into the race it holds in memory, so
+    # a later save of another tab can't put the old list back (Codex on #287)
+    courses = d.get("courses") or []
+    course = next((c for c in courses if c.get("id") == body.get("course_id")), None) or \
+        (courses[0] if courses else {})
+    return {"saved": True, "race_id": rid, "course_id": course.get("id"),
+            "chart_overrides": course.get("chart_overrides") or {}}
 
 
 @app.get("/api/playbooks")
@@ -800,8 +844,15 @@ async def playbook_gpx(pid: str, variants: str = "recommended"):
     b = pbstore.get(pid)
     if not b:
         return JSONResponse({"detail": "unknown playbook id"}, status_code=404)
-    marks = []
+    from . import routesafety
+    why = routesafety.refusal(b)               # #242: no GPX of a route not proven safe
     d = store.get_race(b.get("race_id") or "")
+    if not why and b.get("course_hash") and \
+            b["course_hash"] != race_def.course_hash(d or {}, b.get("course_id")):
+        why = deploy.PB_COURSE                 # the course (or a chart override) changed since
+    if why:
+        return JSONResponse({"detail": why}, status_code=409)
+    marks = []
     if d:
         try:
             rows, _sk, _cid = race_def.course_to_marks(d, b.get("course_id"))
@@ -1419,6 +1470,11 @@ async def deploy_lock_in(body: dict):
     playbook_id = (body or {}).get("playbook_id")
     if not race_id or not playbook_id:
         return JSONResponse({"detail": "race_id and playbook_id required"}, status_code=400)
+    from . import routesafety
+    b = pbstore.get(playbook_id)
+    why = routesafety.refusal(b) if b else None    # #242: never lock in a route not proven safe
+    if why:
+        return JSONResponse({"detail": why}, status_code=409)
     state = deploy.lock_in(race_id, playbook_id)
     if state is None:
         return JSONResponse({"detail": "playbook not found for this race"}, status_code=404)
@@ -1491,12 +1547,26 @@ def _prep_empty(key, value):
     return False
 
 
-def _write_race(definition, draft=False):
+def _write_race(definition, draft=False, overrides=False):
     """Persist a RaceDefinition. A preserved field is restored from the stored copy when the save
     omits the key, or — for a re-ingest `draft` only — sends it empty. An ordinary save that sends
-    an empty value (the user cleared the notes / emptied the roster) is stored as sent."""
+    an empty value (the user cleared the notes / emptied the roster) is stored as sent.
+
+    A course's chart overrides (#242) are only ever changed by the chart-override route
+    (`overrides=True`). Every other save keeps the stored ones, whatever it sends: a tab saving a
+    copy of the race from before an override (or a removal) can't undo it (Codex on #287)."""
     rid = re.sub(r"[^a-z0-9_-]", "", str(definition.get("race_id", "")).lower())
     prior = store.get_race(rid)
+    if not overrides:
+        kept = {c.get("id"): c.get("chart_overrides") for c in (prior or {}).get("courses") or []
+                if isinstance(c, dict) and c.get("chart_overrides")}
+        for c in definition.get("courses") or []:
+            if not isinstance(c, dict):
+                continue
+            if kept.get(c.get("id")):
+                c["chart_overrides"] = kept[c.get("id")]
+            else:
+                c.pop("chart_overrides", None)
     if prior:
         for k in _PRESERVE_ON_SAVE:
             if not prior.get(k):

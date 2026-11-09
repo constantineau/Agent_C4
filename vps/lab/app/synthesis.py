@@ -410,6 +410,9 @@ def _mean_tws(consensus):
     return round(sum(ws) / len(ws), 1) if ws else None
 
 
+CORNER_KEEP = 8      # path vertices kept before each mark vertex: the inbound standoff + the corner
+
+
 def _downsample_idx(path, max_pts=200, legs=None, obstacles=None, leg_end_idx=None,
                     leg_obstacles=None):
     """Indices of the vertices a play's route keeps in the bundle. Keeps the endpoints and every MARK
@@ -429,7 +432,10 @@ def _downsample_idx(path, max_pts=200, legs=None, obstacles=None, leg_end_idx=No
         etas = {round(float(l["eta_epoch"])) for l in (legs or []) if l.get("eta_epoch") is not None}
         marks = {i for i, p in enumerate(path)
                  if p.get("t") is not None and round(float(p["t"])) in etas}
-    keep = {0, n - 1} | marks
+    # the way round each mark too: the router's rounding corner (inbound standoff, up to 3 steps
+    # on the standoff circle, each maybe two boards) ends the leg. Thinning it away can leave the
+    # mark on the wrong side, while the play keeps the verdict of the whole route (Codex on #287)
+    keep = {0, n - 1} | marks | {i - k for i in marks for k in range(1, CORNER_KEEP + 1) if i - k > 0}
     room = max(2, max_pts - len(keep) + 2)
     stride = (n - 1) / (room - 1)
     idx = sorted(keep | {round(i * stride) for i in range(room)})
@@ -734,6 +740,7 @@ def _build_plays(playbook, definition, course_id, venue_stats=None, jib_crossove
             "stakes_min": stakes,
             "favored_side": p.get("favored_side"),
             "degraded": bool(p.get("degraded")), "warnings": list(p.get("warnings") or []),
+            "safety": p.get("safety"),
             **({"table": p["table"]} if p.get("table") else {}),   # rejoin-vs-continue rows
             **({"boundary": p["boundary"]} if p.get("boundary") else {}),   # located flip threshold
         })
@@ -783,6 +790,7 @@ def synthesize(definition, course_id, start_epoch, models, ensemble_members=0, t
             "sail_plan": (v.get("route") or {}).get("sail_plan"),
             "route": v.get("route"),
             "degraded": bool(v.get("degraded")), "warnings": list(v.get("warnings") or []),
+            "safety": v.get("safety"),
         })
 
     # ---- Playbook v2: the play library from the scenario fan (docs/PLAYBOOK_V2.md) --------------
@@ -849,4 +857,10 @@ def synthesize(definition, course_id, start_epoch, models, ensemble_members=0, t
         "skipped_marks": playbook.get("skipped_marks", []),
         "signature": None,            # unsigned draft until frozen
     }
+    # #242: one verdict over every route above, and the reviewed chart overrides they were routed
+    # with (who, when, why), signed with the rest. Freeze, Deploy and GPX refuse unless it's ok.
+    from . import routesafety
+    bundle["safety"] = routesafety.bundle_verdict(
+        bundle, [dict(o, mark=n) for n, o in
+                 _obs_mod.chart_overrides(definition, playbook.get("course_id") or course_id).items()])
     return bundle

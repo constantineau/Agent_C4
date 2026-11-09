@@ -161,7 +161,9 @@ def _race_obstacles(definition, course_id, bbox, res_deg, depth, leg=None):
     configured coastline source: under "enc" the builder skips the island disks (it expects ENC
     land polygons, which this build doesn't load), and an island must never read as open water."""
     # carve_waypoints=False: no zone or island disk is ever opened, for the boat or any mark (the
-    # pockets go in the land mask only, see load_obstacles). `leg`: only that leg's barriers.
+    # pockets go in the land mask only, see load_obstacles; never from the course's own
+    # chart_overrides, only the playbook's signed ones the request carries). `leg`: only that
+    # leg's barriers.
     if leg is not None:
         definition = geo.only_leg_barriers(definition, course_id, leg)
     return geo.build_for_course(definition, course_id, bbox, res_deg=res_deg, coastline_on=False,
@@ -218,15 +220,26 @@ def _disk_chart(full_definition, full_course_id):
         return None
 
 
+def override_names(req):
+    """The marks the Lab signed a chart override for (`safety.overrides` of the frozen playbook,
+    sent by the Pi as the request's `overrides`, #242): the only marks that get a pocket."""
+    ov = (req or {}).get("overrides")
+    return frozenset(str(o["mark"]) for o in (ov if isinstance(ov, list) else [])
+                     if isinstance(o, dict) and o.get("mark"))
+
+
 def load_obstacles(definition, course_id, full_definition, full_course_id, boat, leg=None,
-                   chart=_ON_DISK):
+                   chart=_ON_DISK, overrides=frozenset()):
     """The obstacle mask for the remaining course `definition` → (ObstacleField, chart note or
     None). Land: the Lab's land-only mask for the course, when it was built from this course and
     covers what's left of it, boat included. `chart` is the one the Lab's Deploy push carried (the
     Pi sends it with the request; None = the push had none); left out, the file in CHART_DIR is
     read (a Pi engine from before the Deploy carried it). On top, always, the race's
     zones/islands/barriers rebuilt from the remaining course. No usable land mask: those alone,
-    and the result warns that land isn't checked."""
+    and the result warns that land isn't checked.
+
+    Pockets (#242): the boat always gets one (it is where it is). A mark gets one only when it is
+    in `overrides`, the Lab's signed chart overrides: the Orin never opens land at a mark itself."""
     depth = boats.safety_depth_m(boat)
     need = optimizer.course_bbox(definition, course_id)      # the boat + the marks left, padded
     note = NO_CHART
@@ -248,11 +261,12 @@ def load_obstacles(definition, course_id, full_definition, full_course_id, boat,
                     # an empty mask = the shoreline never loaded when it was built: not "checked"
                     note = NO_LAND
                 elif land is not None and need and W._contains(land.bbox, need):
-                    # open the Lab's waypoint pockets in the land mask only, BEFORE the race
-                    # layer goes on, so zones, island disks and barriers are never cleared
-                    # the boat and every mark left get the Lab's pocket, in LAND only
-                    for _s, _n, mla, mlo in race_def.course_to_marks(definition, course_id)[0]:
-                        if mla is not None and mlo is not None:
+                    # open the pockets in the land mask only, BEFORE the race layer goes on, so
+                    # zones, island disks and barriers are never cleared: the boat's own (the
+                    # first nav point), and a mark's only with the Lab's signed override (#242)
+                    for i, (_s, nm, mla, mlo) in enumerate(
+                            race_def.course_to_marks(definition, course_id)[0]):
+                        if mla is not None and mlo is not None and (i == 0 or nm in overrides):
                             land._carve_disk(mla, mlo, geo.MARK_CARVE_NM)
                     race = _race_obstacles(definition, course_id, land.bbox, land.res, depth,
                                            leg)
@@ -372,6 +386,7 @@ def run(req, now=None, on_progress=None, on_phase=None, is_online=None):
     carried = req.get("assets") if isinstance(req.get("assets"), dict) else None
     boat, boat_info, boat_note = pick_boat(carried)
     chart_kw = {"chart": carried.get("chart")} if carried is not None else {}
+    chart_kw["overrides"] = override_names(req)      # the Lab's signed chart overrides (#242)
     why_not = boat_in_no_go(d, cid, lat, lon)
     if why_not:
         raise RunError(why_not)
@@ -449,6 +464,15 @@ def run(req, now=None, on_progress=None, on_phase=None, is_online=None):
         if weather.get("missing"):
             warnings.append("No forecast from " + ", ".join(weather["missing"]) + ".")
         complete = bool(res.get("complete"))
+        # #242: the route's own verdict. A mark left on the wrong side (the corner round it was
+        # blocked) or a route off the chart is never a finished route, whatever the legs say
+        # (Codex on #287). Land and depth "not checked" are the chart notes above, not these.
+        bad = [p.get("text") for p in (res.get("safety") or {}).get("problems") or []
+               if p.get("code") in ("side", "box") and p.get("text")]
+        if bad:
+            complete = False
+            for t in reversed(bad):
+                warnings.insert(0, t)
         if not complete:
             warnings.insert(0, INCOMPLETE)
         out.update({

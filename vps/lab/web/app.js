@@ -206,8 +206,24 @@ const EDIT_SAVE = {
 // snap = the JSON a save actually sent (taken before the await), so an edit typed while the request
 // is in flight stays dirty; omitted = the editor as it is now (right after a load).
 function markClean(snap) {
-  Lab.cleanDef = snap !== undefined ? snap : (Lab.editDef ? JSON.stringify(Lab.editDef) : null);
+  Lab.cleanDef = snap !== undefined ? withOverrides(snap) : (Lab.editDef ? JSON.stringify(Lab.editDef) : null);
   syncDirty();
+}
+// Chart overrides are the server's (only its chart-override route changes them; every other save
+// keeps the stored ones, #242): a save sent before an override landed mustn't make it look unsaved.
+function withOverrides(snap) {
+  if (!snap || !Lab.editDef) return snap;
+  try {
+    const b = JSON.parse(snap);
+    if (b.race_id !== Lab.editDef.race_id) return snap;
+    const have = {};
+    for (const c of Lab.editDef.courses || []) have[c.id] = c.chart_overrides;
+    for (const c of b.courses || []) {
+      if (!(c.id in have)) continue;
+      if (have[c.id]) c.chart_overrides = have[c.id]; else delete c.chart_overrides;
+    }
+    return JSON.stringify(b);
+  } catch (e) { return snap; }
 }
 // After a save resolves: only re-baseline if the same definition is still in the editor (the user
 // may have switched race or discarded while the request was in flight).
@@ -1730,6 +1746,8 @@ async function runOptimize() {
       const p = document.getElementById("optProg");
       if (p && st.progress && st.progress.length) p.textContent = st.progress[st.progress.length - 1];
     }
+    // the race this route was asked for: its override buttons use it, whatever race is picked now
+    if (r && typeof r === "object") r.race_id = r.race_id || body.race_id;
     Opt.result = r; Opt.running = false;
     renderGameplan();
   } catch (e) {
@@ -1771,6 +1789,7 @@ function renderOptResult(r) {
         <button id="shareBtn" onclick="shareGameplan(this)" title="A view-only link to the route player. No login needed.">🔗 Share player</button></div>
       ${r.start && r.start.note ? `<div class="opt-start-note">${esc(r.start.note)}</div>` : ""}
       ${optDegradedBanner(r)}
+      ${safetyPanel(r.safety, "route", { race: r.race_id, course: r.course_id })}
       ${r.timed_out ? '<div class="pill warn">Routing ran out of time. The route may be incomplete.</div>' : ""}
       <details class="rail-sec" open><summary>Legs</summary>
         <div class="legs-head"><span class="muted" style="font-size:11px">Tap a leg to show it on the map.</span>
@@ -2015,7 +2034,8 @@ async function synthPlaybook() {
     fan_depth: (document.getElementById("pbFan") || {}).value || "standard" };
   const startEpoch = optStartEpoch();
   if (startEpoch != null) body.start_epoch = startEpoch;
-  Pb.running = true; Pb.result = null;
+  Pb.running = true; Pb.result = null; Pb.jobId = null;
+  Pb.ctx = { race: body.race_id, course: body.course_id };   // what this playbook is built on
   const b = document.getElementById("pbRun"); if (b) { b.disabled = true; b.textContent = "Building… (about 10 min)"; }
   out.innerHTML = '<div class="loading" style="margin-top:10px">Routing each forecast scenario and writing the playbook. About 10 min. You can keep working.</div>';
   try {
@@ -2025,7 +2045,7 @@ async function synthPlaybook() {
     while (true) {
       await new Promise((r) => setTimeout(r, 10000));
       const st = await (await apiGet("/api/playbook/synthesize/status?job_id=" + encodeURIComponent(start.job_id || ""))).json();
-      if (st.state === "done") { Pb.result = st.bundle; break; }
+      if (st.state === "done") { Pb.result = st.bundle; Pb.jobId = start.job_id; break; }
       if (st.state === "error") { Pb.result = { available: false, note: st.error }; break; }
       if (st.state === "idle") { Pb.result = { available: false, note: "the playbook job stopped. Run it again." }; break; }
     }
@@ -2038,9 +2058,11 @@ async function synthPlaybook() {
 function renderPbResult(b) {
   const out = document.getElementById("pbOut"); if (!out) return;
   if (b.available === false || !b.variants) {
-    out.innerHTML = `<div class="placeholder" style="margin-top:10px">No playbook: ${esc(b.note || b.detail || "unavailable")}</div>`;
+    out.innerHTML = `<div class="placeholder" style="margin-top:10px">No playbook: ${esc(b.note || b.detail || "unavailable")}</div>
+      ${safetyPanel(b.safety, "playbook", pbCtx(b))}`;
     return;
   }
+  const safe = !!(b.safety && b.safety.ok);
   const agree = b.agreement == null ? "—" : Math.round(b.agreement * 100) + "%";
   const rec = (b.variants.find((v) => v.id === b.recommended) || {}).name || b.recommended || "—";
   const sig = b.signature;
@@ -2055,14 +2077,15 @@ function renderPbResult(b) {
       </div>
       ${pbBoatModelNote(b)}
       ${pbWarnings(b)}
+      ${safetyPanel(b.safety || { ok: false, problems: [{ text: "Built before route checks. Build the playbook again." }] }, "playbook", pbCtx(b))}
     </div>
     <div class="pb-variants">${b.variants.map((v) => pbVariantCard(v, v.id === b.recommended)).join("")}</div>
     ${pbPlaysSection(b)}
     ${pbDecisionTree(b)}
     <div class="pb-freeze">
       ${sig ? pbSigBox(b) :
-        `<button id="pbFreeze" onclick="freezePlaybook()" ${Pb.freezing ? "disabled" : ""}>${Pb.freezing ? "Freezing…" : "🔒 Freeze for the boat"}</button>
-         <span class="muted" style="font-size:12px">Saves a locked copy to send to the boat. No changes after the start.</span>`}
+        `<button id="pbFreeze" onclick="freezePlaybook()" ${Pb.freezing || !safe ? "disabled" : ""}>${Pb.freezing ? "Freezing…" : "🔒 Freeze for the boat"}</button>
+         <span class="muted" style="font-size:12px">${safe ? "Saves a locked copy to send to the boat. No changes after the start." : "Can't freeze until the route checks pass."}</span>`}
     </div></div>`;
 }
 
@@ -2106,6 +2129,77 @@ function pbPlayCard(p) {
     ${p.boundary ? `<div class="pb-row"><span class="pb-lbl">Switch point</span><span>plan holds at ${p.boundary.holds}, changes by ${p.boundary.diverges}. Switch at <b>${p.boundary.threshold}</b>.</span></div>` : ""}
     ${(p.table || []).length ? `<div class="pb-row"><span class="pb-lbl">Per leg</span><span class="mono" style="font-size:11px">${p.table.map((r) => `${esc(r.to || `leg ${r.leg + 1}`)} · ${esc(r.side)} ${r.off_nm}nm: <b>${esc(r.verdict)}</b> (continue ${r.continue_min}m / rejoin ${r.rejoin_min}m)`).join("<br>")}</span></div>` : ""}
   </details>`;
+}
+
+// #242: the route checks. A route that fails one can't be frozen, deployed or sent as GPX. A mark the
+// chart puts on land or shallow water can get a reviewed chart override (who + why), which opens the
+// chart at that mark only; then build again.
+// The race + course a playbook result was built on: its own, else what the build asked for.
+function pbCtx(b) {
+  return { race: (b && b.race_id) || (Pb.ctx && Pb.ctx.race), course: (b && b.course_id) || (Pb.ctx && Pb.ctx.course) };
+}
+// `ctx` = {race, course}: the race and course THIS result was routed on. The override buttons carry
+// them, so a click never lands on whichever course is selected now (Codex on #287).
+function safetyPanel(s, what, ctx) {
+  if (!s) return "";
+  const at = `data-race="${esc((ctx && ctx.race) || "")}" data-course="${esc((ctx && ctx.course) || "")}"`;
+  const ov = (s.overrides || []).map((o) => `<li>${esc(o.mark)}: chart override by ${esc(o.by)}${o.at ? ", " + esc(fmtDate(o.at)) : ""}. ${esc(o.why)}
+      <button class="mini" data-mark="${esc(o.mark)}" ${at} onclick="chartOverride(this.dataset.mark, true, this.dataset.race, this.dataset.course)">Remove</button></li>`).join("");
+  // Cole on #242: no ENC depths (Canada) never fails a route; those legs are named here
+  const notes = (s.notes || []).map((n) => `<div class="pill warn" style="display:block;margin-top:6px;text-align:left">
+    ${esc(n.text || "No depth data: check the paper chart.")}${(n.legs || []).length ? `<br><span style="font-weight:400">${(n.legs || []).map(esc).join(", ")}</span>` : ""}</div>`).join("");
+  if (s.ok) return (ov ? `<div class="muted" style="font-size:12px;margin-top:6px">Route checks passed.<ul style="margin:2px 0 0 16px;padding:0">${ov}</ul></div>` : "") + notes;
+  const items = (s.problems || []).map((p) => `<li>${p.route ? esc(p.route) + ": " : ""}${esc(p.text || p.code)}
+      ${p.mark && (p.code === "blocked" || p.code === "unreached") ? `<button class="mini" data-mark="${esc(p.mark)}" ${at} onclick="chartOverride(this.dataset.mark, false, this.dataset.race, this.dataset.course)">Chart wrong here?</button>` : ""}</li>`).join("");
+  return `<div class="pill bad" style="display:block;margin-top:8px;text-align:left">
+    <b>⛔ Route checks failed. No freeze, Deploy or GPX${what === "route" ? " from this route" : ""}.</b>
+    <ul style="margin:4px 0 0 16px;padding:0">${items}</ul>
+    ${ov ? `<div style="font-weight:400;margin-top:4px">Chart overrides:<ul style="margin:2px 0 0 16px;padding:0">${ov}</ul></div>` : ""}</div>${notes}`;
+}
+
+async function chartOverride(mark, remove, race, course) {
+  const rid = race, cid = course || null;   // the result's own race + course, never the picked one
+  if (!rid) { alert("Not saved: run the route again."); return; }
+  let by = "", why = "";
+  if (!remove) {
+    by = (prompt(`Chart override at ${mark}: opens the chart there. Only for a chart error.\nYour name:`) || "").trim();
+    if (!by) return;
+    why = (prompt("Why is the chart wrong here?") || "").trim();
+    if (!why) return;
+  } else if (!confirm(`Remove the chart override at ${mark}?`)) return;
+  try {
+    // through the race-definition save queue, so it can't interleave with a tab's own save
+    const r = await queueDef(async () => {
+      const res = await apiPost("/api/races/" + encodeURIComponent(rid) + "/chart-override",
+        { course_id: cid, mark, by, why });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j.detail || "error " + res.status);
+      return j;
+    });
+    syncOverrides(rid, r.course_id, r.chart_overrides);
+    alert("Saved. Run the route again.");
+  } catch (e) { alert("Not saved: " + e.message); }
+}
+
+// The saved overrides into every copy of the race the Lab holds: the editor's (and its clean
+// baseline, so they don't read as an unsaved edit, and a later save of another tab can't put the
+// old list back) and the Gameplan's.
+function syncOverrides(rid, courseId, ov) {
+  const apply = (d) => {
+    if (!d || d.race_id !== rid) return;
+    const cs = d.courses || [];
+    const c = cs.find((x) => x.id === courseId) || (courseId == null ? cs[0] : null);
+    if (!c) return;
+    if (ov && Object.keys(ov).length) c.chart_overrides = ov; else delete c.chart_overrides;
+  };
+  if (Lab.editDef && Lab.editDef.race_id === rid) {
+    apply(Lab.editDef);
+    if (Lab.cleanDef) {
+      try { const b = JSON.parse(Lab.cleanDef); apply(b); Lab.cleanDef = JSON.stringify(b); } catch (e) {}
+    }
+    syncDirty();
+  }
+  if (window.Opt && Opt.def !== Lab.editDef) apply(Opt.def);
 }
 
 // the routes' own warnings (forecast ended, shoreline, …), plain, before anything is deployed (#51)
@@ -2190,7 +2284,7 @@ async function downloadPlaybook(pid) {
 async function downloadPlaybookGpx(pid) {
   try {
     const res = await apiGet("/api/playbooks/" + encodeURIComponent(pid) + "/gpx?variants=all");
-    if (!res.ok) throw new Error("download failed (" + res.status + ")");
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || "download failed (" + res.status + ")");
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -2205,9 +2299,11 @@ async function freezePlaybook() {
   Pb.freezing = true;
   const b = document.getElementById("pbFreeze"); if (b) { b.disabled = true; b.textContent = "Freezing…"; }
   try {
-    const res = await apiPost("/api/playbook/freeze", { bundle: Pb.result });
+    // #242: the server freezes the playbook it built (by job), not the copy in the browser
+    const res = await apiPost("/api/playbook/freeze", { job_id: Pb.jobId });
     const r = await res.json();
     if (r.frozen) { Pb.result = r.bundle; Pb.frozenId = r.id; }
+    else if (r.detail) alert("Not frozen. " + r.detail);    // #242: refused, and why
   } catch (e) { /* leave the draft; user can retry */ }
   Pb.freezing = false; renderGameplan();
 }

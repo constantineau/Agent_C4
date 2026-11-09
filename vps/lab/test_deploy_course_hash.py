@@ -97,7 +97,9 @@ synthesis._fingerprint = lambda *a, **k: None
 synthesis._boat_model = lambda *a, **k: {}
 b = synthesis.synthesize(copy.deepcopy(BASE), "c", 100, ["gfs"])
 check("bundle carries course_hash of the race as given", b.get("course_hash") == H)
-signed = synthesis.sign_bundle(dict(b, variants=[{"id": "a"}]))
+signed = synthesis.sign_bundle(dict(b, variants=[{"id": "a"}],
+                                    safety={"ok": True, "problems": [], "overrides": []},
+                                    consensus={"safety": {"ok": True, "problems": [], "overrides": []}}))   # route checks passed (#242)
 check("…inside the signed content", synthesis.verify_bundle(signed)
       and not synthesis.verify_bundle(dict(signed, course_hash="0" * 16)))
 

@@ -36,7 +36,7 @@ check("nothing on record at first", D.last_push() == {"last": None, "last_ok": N
 from app import synthesis  # noqa: E402
 # signed for real: Deploy refuses a locked bundle that fails its signature (#152)
 BUNDLE = synthesis.sign_bundle({"race_id": "r1", "start_epoch": 100, "variants": [{"id": "a"}],
-                                "plays": []})
+                                "plays": [], "safety": {"ok": True, "problems": [], "overrides": []}, "consensus": {"safety": {"ok": True, "problems": [], "overrides": []}}})   # route checks passed (#242)
 posted = []
 
 

@@ -4,7 +4,8 @@ The boat's Orin runs the Lab's full multi-model optimizer (pi/orin/reroute). Thi
 the Pi asks for one and keeps the answer:
 
   * `run(device)` — POST /reroute/run. Builds the run request from what the Pi knows (position,
-    the deployed course and which mark is next, the plan's track) and hands it to the Orin over
+    the deployed course and which mark is next, the plan's track, the chart overrides signed into
+    the frozen playbook) and hands it to the Orin over
     the direct cable. Refuses, in a short sentence, when there's no position or course, when the
     Orin can't be reached, or when a run is already going (with its progress).
   * `get()` — GET /reroute. The Orin's run status + progress, and the last route. A finished route
@@ -280,6 +281,29 @@ def _plan_track():
             "variant_label": v.get("name") or str(v.get("id") or "the plan"), "points": pts}
 
 
+def _overrides(definition, course_id):
+    """The chart overrides the Lab signed into the frozen playbook aboard (`safety.overrides`, #242):
+    [{mark, by, at, why}], the only marks the Orin may open a pocket of water at. Only from a
+    playbook routed on THIS course (its course hash, which covers the overrides too, matches the
+    definition aboard); otherwise [] (no mark pockets at all, never the course's own list)."""
+    if not definition:
+        return []
+    bundle = deviation._load_playbook()
+    want = (bundle or {}).get("course_hash")
+    if not want or bundle.get("race_id") != definition.get("race_id"):
+        return []
+    try:
+        from shared.race_def import course_hash
+        if want != course_hash(definition, course_id):
+            return []
+    except Exception:  # noqa: BLE001 — can't tell it's this course: no pockets
+        return []
+    ov = (bundle.get("safety") or {}).get("overrides")
+    return [{"mark": str(o["mark"])[:60], "by": str(o.get("by") or "")[:60], "at": o.get("at"),
+             "why": str(o.get("why") or "")[:300]}
+            for o in (ov if isinstance(ov, list) else []) if isinstance(o, dict) and o.get("mark")]
+
+
 def _device(raw):
     s = "".join(ch for ch in str(raw or "") if ch.isprintable()).strip()[:40]
     return s or None
@@ -311,6 +335,8 @@ def _build_request(device):
            "marks": [{"seq": m.get("seq"), "name": m.get("name"), "lat": m.get("lat"),
                       "lon": m.get("lon")} for m in marks],
            "definition": definition, "course_id": cid, "plan": _plan_track(),
+           # the Lab's signed chart overrides: the only marks the Orin opens a pocket at (#242)
+           "overrides": _overrides(definition, cid),
            "course_hash": course_hash(nav["route"], marks)}
     assets = orinassets.for_run(definition, cid)     # the chart + boat profile from Deploy
     if assets is not None:
