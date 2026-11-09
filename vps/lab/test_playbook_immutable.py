@@ -95,6 +95,15 @@ check("same id, bytes untouched (first signed_at kept)", pa == p1 and raw(p1) ==
 print("revisions numbered per race + course:")
 revs = {b["id"]: b["rev"] for b in pbstore.list_bundles()}
 check(f"north 1, 2; south 1 ({revs})", revs == {p1: 1, p3: 2, p2: 1})
+tie = []
+for v in ("y", "x"):                                   # frozen in the same second, y first
+    t = synthesis.sign_bundle({"race_id": "r1", "course_id": "tie", "variants": [{"id": v}]})
+    t["signature"]["signed_at"] = 5
+    tie.append(pbstore.save(t))
+os.utime(pbstore._path(tie[0]), ns=(10**9, 10**9))
+os.utime(pbstore._path(tie[1]), ns=(2 * 10**9, 2 * 10**9))
+revs = {b["id"]: b["rev"] for b in pbstore.list_bundles()}
+check("ties in the same second go by write order", revs[tie[0]] == 1 and revs[tie[1]] == 2)
 
 print("a re-freeze changes nothing on the boat until it is activated:")
 D.lock_in("r1", p1)

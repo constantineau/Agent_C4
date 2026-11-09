@@ -133,6 +133,13 @@ def get_raw(pid: str):
         return None
 
 
+def _mtime_ns(path):
+    try:
+        return os.stat(path).st_mtime_ns
+    except OSError:
+        return 0
+
+
 def list_bundles():
     """Summaries for the frozen-playbook list, newest first. `rev` numbers the revisions of each
     race + course in freeze order (1 = first)."""
@@ -158,11 +165,14 @@ def list_bundles():
             "signed": bool(sig.get("value")), "signed_at": sig.get("signed_at"),
             "signature": str(sig.get("value") or "")[:16],
             "synth_model": (b.get("provenance") or {}).get("synth_model"),
+            "_mtime": _mtime_ns(f),
         })
-    order = lambda x: (x.get("signed_at") or 0, x.get("generated_at") or 0, x["id"])  # noqa: E731
+    # freeze order: signed_at is whole seconds, so the file's own write time breaks ties
+    order = lambda x: (x.get("signed_at") or 0, x["_mtime"], x["id"])  # noqa: E731
     seen = {}
     for x in sorted(out, key=order):
         k = (x.get("race_id"), x.get("course_id"))
         seen[k] = x["rev"] = seen.get(k, 0) + 1
+        del x["_mtime"]
     out.sort(key=lambda x: x.get("generated_at") or 0, reverse=True)
     return out
