@@ -252,7 +252,7 @@ def _quarantine(f, why):
     print(f"[uplink] quarantined {f.name}: {why}", flush=True)
 
 
-def _flush_queue():
+def _flush_queue(deadline=None):
     """Replay queued batches oldest-first.
 
     Two failure modes have to be told apart, because treating them alike is what stalled
@@ -262,13 +262,14 @@ def _flush_queue():
     permanent failure has to be moved aside or it blocks every newer batch behind it
     forever.
 
-    Paged by time: after REPLAY_BUDGET_S it stops (at least one batch is always tried) and the
-    rest waits, still queued and in order, for the next pass (#184-8).
+    Paged by time: at `deadline` (default REPLAY_BUDGET_S from now) it stops (at least one batch
+    is always tried) and the rest waits, still queued and in order, for the next pass (#184-8).
+    The deadline is checked between POSTs, so one slow POST (20 s timeout) can overrun it once.
     """
     if not QUEUE_DIR.exists():
         return
     queued = sorted(QUEUE_DIR.glob("*.json"))
-    deadline = _clock() + REPLAY_BUDGET_S
+    deadline = _clock() + REPLAY_BUDGET_S if deadline is None else deadline
     for i, f in enumerate(queued):
         if i and _clock() >= deadline:
             print(f"[uplink] replayed {i} queued batch(es), {len(queued) - i} still queued",
@@ -304,6 +305,7 @@ def drain_held():
 
 
 def _send(readings):
+    deadline = _clock() + REPLAY_BUDGET_S     # the whole pass, live POST included
     try:
         _date_held()
     except Exception as exc:          # never let the held batches stop the live one
@@ -311,7 +313,7 @@ def _send(readings):
     batch = {"boat_id": BOAT_ID, "readings": readings}
     try:
         _post(batch)
-        _flush_queue()
+        _flush_queue(deadline)
         srcs = len({r["source"] for r in readings})
         print(f"[uplink] sent {len(readings)} readings from {srcs} source(s)", flush=True)
     except Exception as exc:
@@ -345,8 +347,16 @@ async def flusher(window, loop, retry=None):
     # is kept here and tried again first on the next tick, so the task never dies and the batch
     # is not lost. Held batches keep their original monotonic stamp.
     retry = [] if retry is None else retry
+    # Windows are cut on a fixed cadence, not "AGG_SECONDS after the last send returned": a pass
+    # that spends its replay budget would otherwise stretch every window by that much, and the
+    # window keeps only the latest value per reading, so the values in between would be lost.
+    next_tick = loop.time()
     while True:
-        await asyncio.sleep(AGG_SECONDS)
+        next_tick += AGG_SECONDS
+        late = loop.time() - next_tick
+        if late > AGG_SECONDS:
+            next_tick += late                 # far behind (a long stall): restart, don't burst
+        await asyncio.sleep(max(0.0, next_tick - loop.time()))
         while retry:
             fn, args = retry[0]
             try:

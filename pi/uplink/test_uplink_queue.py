@@ -414,3 +414,41 @@ def test_a_long_outage_keeps_every_batch_no_cap(q):
     up._flush_queue()
     assert posted == list(range(3000))
     assert _names(q) == [] and _names(q / "quarantine") == []
+
+
+def test_live_windows_keep_their_cadence_while_a_backlog_replays(q):
+    """Codex on #283: replay that spends its budget must not stretch the live window. Windows
+    are cut on a fixed cadence; with a big backlog each pass replays for up to its budget and
+    the next window is still cut on time."""
+    import asyncio
+    import time as _time
+    up = _load_uplink(q)
+    for k in range(5000):
+        _write(q, f"20261001T{k:06d}Z.json", _batch("2026-10-01T00:00:00Z", -1 - k))
+    up.CLOCK = _Clock(True)
+    up.AGG_SECONDS = 0.1
+    up.REPLAY_BUDGET_S = 0.06
+    live = []
+
+    def post(batch):
+        v = batch["readings"][0]["value"]
+        if v >= 0:
+            live.append(v)
+        else:
+            _time.sleep(0.01)                         # a queued batch takes a while to send
+    up._post = post
+
+    async def go():
+        win = {}
+        task = asyncio.create_task(up.flusher(win, asyncio.get_running_loop()))
+        t0 = _time.monotonic()
+        k = 0
+        while _time.monotonic() - t0 < 1.55:
+            win[("gps", "p")] = ("num", float(k))
+            k += 1
+            await asyncio.sleep(0.005)
+        task.cancel()
+    asyncio.run(go())
+    # 1.55 s at a 0.1 s cadence is ~15 windows; stretched by the 0.06 s budget it was ~9.
+    assert len(live) >= 12, live
+    assert len(_names(q)) < 5000                      # and the backlog did drain meanwhile
