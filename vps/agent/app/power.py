@@ -43,6 +43,8 @@ import os
 import statistics
 import time as _time
 
+from shared import staleness
+
 from . import datasource
 
 PATH = os.environ.get("POWER_VOLTAGE_PATH", "electrical.batteries.0.voltage")
@@ -267,6 +269,7 @@ def assess_series(rows, now=None):
 def assess(source=None, now=None):
     """Bank state read through the active datasource (onboard archive + live cache, or cloud)."""
     src = source or datasource.active()
+    live = now is None
     try:
         rows = src.series(PATH, WINDOW_MIN)
     except Exception as exc:                  # a power read must never take the engine down
@@ -296,4 +299,28 @@ def assess(source=None, now=None):
         # assess_series without `now` takes the newest sample as now (replay semantics), so its
         # age would always read 0; the live read reports age against the wall clock.
         out["age_s"] = round(max(0.0, _time.time() - max(t for t, _ in rows)))
+    if live and out.get("available"):
+        out = _judge_age(out)
+    return out
+
+
+def _judge_age(out):
+    """Past the bank's dead limit (60 s aboard, 300 s in the cloud; #247) the verdict goes: no
+    warn/danger/charging and no hours-to-floor from a voltage the bank is no longer sending. The
+    last volts stay with their age (`stale`). Past RAW_CAP_S (30 min) the number goes too.
+
+    Until #247 the tile judged a voltage up to the 45-min trend window old as current: the
+    window is how much history the trend needs, not how old the newest reading may be."""
+    age = out.get("age_s")
+    if age is None or not staleness.is_dead(PATH, age):
+        return out
+    if age > staleness.RAW_CAP_S:
+        return {"available": False, "status": "unknown", "volts_last": out.get("volts_last"),
+                "age_s": age,
+                "note": f"No bank reading for {age / 60.0:.0f} min."}
+    out = dict(out, status="unknown", stale=True, hours_to_floor=None, dark_at_epoch=None,
+               charging=False)
+    out["reason"] = (f"no bank reading for {age:.0f} s, last {out.get('volts_last')} V"
+                     if age < 120 else
+                     f"no bank reading for {age / 60.0:.0f} min, last {out.get('volts_last')} V")
     return out

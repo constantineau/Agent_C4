@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 
 from shared import n2k_sources
 from shared import polar as shared_polar
+from shared import staleness
 from shared import units
 
 from .db import pool
@@ -62,8 +63,9 @@ PRESENT = {
 CHANNEL_TO_PATH = {ch: p for p, (ch, _, _) in PRESENT.items()}
 # "sensors disagree" threshold by display unit (spread beyond expected noise)
 DISAGREE = {"°": 6.0, "kn": 0.6, "m": 1.0, "°C": 2.0, "°/s": 5.0, "V": 0.5}
-# A ranked source must be fresher than this to be used before falling back to the next.
-FAILOVER_AGE_S = 45
+# A ranked source must be fresher than this to be used before falling back to the next. The cloud
+# value of the channel table (`shared/staleness.py`, #247); every channel is 45 s here.
+FAILOVER_AGE_S = staleness.failover_s("tws", "cloud")
 
 
 def _load_priority():
@@ -116,7 +118,8 @@ def _choose_preferred(channel, readings, prio):
     matchers = prio.get(channel, [])
     for i, m in enumerate(matchers):
         fresh = [r for r in readings
-                 if n2k_sources.matches(r["source"], m, devices) and r["age_s"] <= FAILOVER_AGE_S]
+                 if n2k_sources.matches(r["source"], m, devices)
+                 and r["age_s"] <= staleness.failover_s(channel)]
         if fresh:
             best = min(fresh, key=lambda r: r["age_s"])
             return best, f"priority rank {i+1} ({m})", i > 0
@@ -194,14 +197,19 @@ def get_current_conditions(max_age_minutes: int = 5):
 
 def get_strip():
     """Compact best-value-per-channel for the web instrument strip (freshest source wins)."""
-    cc = get_current_conditions(max_age_minutes=5)
+    # Raw readings stay up to RAW_CAP_S (30 min) with their age; past each channel's DEAD limit
+    # the value fields below go null, so nothing built on the strip (the sail call, the depth
+    # alarm, the polar-deficit alert, the copilot's "Now:" line) uses it (#247). The raw number
+    # and its state are in `raw` for the screens.
+    cc = get_current_conditions(max_age_minutes=staleness.RAW_CAP_S // 60)
     if not cc.get("available"):
         return {"available": False}
     ch = cc["channels"]
+    ages_by_ch = {name: c["preferred"]["age_s"] for name, c in ch.items()}
 
     def best(name):
         c = ch.get(name)
-        if not c:
+        if not c or staleness.is_dead(name, c["preferred"]["age_s"]):
             return None
         return c["preferred"]["value"]   # priority-ranked lead source (with failover)
 
@@ -225,7 +233,15 @@ def get_strip():
         # Age of each value shown (the lead source's sample), per channel (#45.3). The two
         # fields above are the FRESHEST channel's age, so a fresh bank voltage keeps them near 0
         # while wind is minutes old; read the channel you use from here.
-        "ages": {name: c["preferred"]["age_s"] for name, c in ch.items()},
+        "ages": ages_by_ch,
+        # Per channel (#247): the lead's raw value, its age and ok/late/dead against that
+        # channel's limits. A dead value is still shown (red age); past 30 min it is gone.
+        "raw": {name: {"value": c["preferred"]["value"], "age_s": c["preferred"]["age_s"],
+                       "state": staleness.state(name, c["preferred"]["age_s"])}
+                for name, c in ch.items()},
+        "dead": sorted(n for n, a in ages_by_ch.items() if staleness.is_dead(n, a)),
+        # The per-channel stale alert (#247): one entry per sensor group whose key channel is dead.
+        "dead_groups": staleness.dead_groups(ages_by_ch),
         "stw": best("stw"), "sog": best("sog"), "tws": best("tws"), "twa": best("twa"),
         "twd": best("twd"), "aws": best("aws"), "awa": best("awa"), "heading": heading,
         "heading_ref": heading_ref,

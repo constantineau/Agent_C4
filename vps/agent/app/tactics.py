@@ -48,7 +48,15 @@ def _cross_track_nm(a, b, plat, plon):
 
 
 def get_tactics(route: str = None):
-    s = NAV._latest()
+    # Every input judged against its channel's dead limit (#247): aboard 15 s for wind and
+    # heading, 10 s for the fix. Until then the newest TWD had no age check at all, so a dead
+    # masthead kept making shift calls off its last reading.
+    raw = NAV._latest()
+    s = NAV._fresh(raw)
+    if raw.get("twd") is not None and s["twd"] is None:
+        age = (raw.get("ages") or {}).get("twd")
+        return {"available": False, "note": "Wind too old for a shift call.",
+                "wind_age_s": None if age is None else round(age)}
     if s["twd"] is None or s["lat"] is None:
         return {"available": False, "note": "Need live wind and position."}
     series = _twd_series(WINDOW_MIN)

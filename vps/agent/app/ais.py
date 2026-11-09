@@ -45,6 +45,8 @@ import os
 import threading
 import time as _time
 
+from shared import staleness
+
 from . import datasource
 
 BOAT_ID = os.environ.get("BOAT_ID", "sr33")
@@ -61,11 +63,11 @@ def _envf(name, default):
         return float(default)
 
 
-# Own position older than this (wall clock) is not a fix. Onboard the GPS writes several times a
-# second; the cloud sees it through the uplink, so it gets more slack. 0 = no age check (replay).
-OWN_FIX_MAX_AGE_S = _envf("AIS_OWN_FIX_MAX_AGE_S",
-                          30 if os.environ.get("DATA_SOURCE", "cloud").strip().lower() == "onboard"
-                          else 120)
+# Own position older than this (wall clock) is not a fix. Onboard the GPS writes ten times a
+# second and never gapped more than 0.6 s in 79 h, so 10 s; the cloud sees it through the uplink
+# (worst ~36 s plus lag), so 60 s. Decided 2026-11-09 (#247, `shared/staleness.py`); 30 s at a
+# 20 kn closing speed was ~300 m of CPA error. 0 = no age check (replay).
+OWN_FIX_MAX_AGE_S = _envf("AIS_OWN_FIX_MAX_AGE_S", staleness.COLLISION_FIX_S[staleness.where()])
 # Nothing heard on AIS for this long while under way → the feed is called silent.
 AIS_SILENT_MIN = _envf("AIS_SILENT_MIN", 15)
 # When this process started watching: never-heard only counts as silent once we have listened
@@ -75,7 +77,8 @@ UNDERWAY_KN = _envf("AIS_UNDERWAY_KN", 2.0)
 # A fix stamped more than this into the future is invalid (a clock step), not "age 0".
 FUTURE_SKEW_S = _envf("AIS_FUTURE_SKEW_S", 5)
 # The engine's live Signal K link (its only AIS input onboard) silent this long → AIS link down.
-AIS_LINK_STALE_S = _envf("AIS_LINK_STALE_S", 30)
+# The socket carries 100+ messages a second: 10 s silent is already ~1000 missed (#247).
+AIS_LINK_STALE_S = _envf("AIS_LINK_STALE_S", 10)
 # The own-echo hint: a target this close that moves with us may be us. A hint only, never a filter.
 ECHO_RANGE_M = _envf("AIS_ECHO_RANGE_M", 50)
 ECHO_REL_KN = _envf("AIS_ECHO_REL_KN", 1.5)

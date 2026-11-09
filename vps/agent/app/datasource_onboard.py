@@ -520,15 +520,16 @@ class OnboardSource:
     # `source_priority` table; this one never did — it took whichever source wrote last, which
     # is how the boat spent a race on the sensor its own policy marks "non-racing only".
     #
-    # Freshness is judged against the WALL CLOCK (age = now - sample time, at most
-    # FAILOVER_AGE_S = 45 s), the same test `/conditions` applies (#221-2). A lead sensor that went
+    # Freshness is judged against the WALL CLOCK (age = now - sample time, at most the channel's
+    # `staleness.failover_s`: 5 s for the fast channels aboard, #247), the same test
+    # `/conditions` applies (#221-2). A lead sensor that went
     # quiet loses even when every other sensor went quiet with it. A replay still honours the
     # priority because the replay rig freezes the clock at the frame's time.
     def _prefer(self, path, candidates):
         """Pick one (source, epoch, value) by priority with failover.
 
-        Freshest wins when the path is unranked, or when no ranked source has a sample at most
-        FAILOVER_AGE_S old by the clock — an unranked source is still real data and must never
+        Freshest wins when the path is unranked, or when no ranked source has a sample within
+        the channel's failover limit by the clock — an unranked source is still real data and must never
         be dropped for want of an opinion about it."""
         # One rule for live and window picks (`source_policy.preferred`/`series_publisher`).
         return source_policy.preferred(path, candidates, n2k_sources.devices_for(BOAT_ID))

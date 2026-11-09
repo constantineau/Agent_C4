@@ -17,9 +17,12 @@ which is indistinguishable from a policy that is being honoured.
 import time as _time
 
 from . import n2k_sources
+from . import staleness
 
-# A ranked source must be fresher than this to be used before falling back to the next rank.
-# Mirrors tools.FAILOVER_AGE_S; the same 45 s applies onboard.
+# A ranked source must be fresher than its channel's failover limit to be used before falling back
+# to the next rank: `staleness.failover_s` (#247, decided 2026-11-09): 5 s aboard for the fast
+# channels, 10 s for the slow ones, 45 s in the cloud (its 15 s buckets). FAILOVER_AGE_S is the
+# LONGEST of those, kept as the bound archive and cloud queries read candidates within.
 #
 # "Fresher" means age against the WALL CLOCK (`now - sample_time`), the same test `/conditions`
 # applies (`tools._choose_preferred`, `onboard_conditions._choose_preferred`, both on `age_s`).
@@ -31,6 +34,10 @@ from . import n2k_sources
 # tools/replay/harness.py), so the wall clock is the replay's clock too. Onboard, a lead that has
 # gone quiet must lose even when every other publisher went quiet with it.
 FAILOVER_AGE_S = 45
+
+
+def _failover(path_or_channel, failover_s):
+    return staleness.failover_s(path_or_channel) if failover_s is None else failover_s
 
 # channel -> device matchers, best first. Keep in lockstep with source_priority.sql.
 DEFAULT_PRIORITY = {
@@ -110,7 +117,7 @@ def rank_for(path_or_channel, source, devices, priority=None):
 
 
 def series_publisher(path_or_channel, rows, devices, priority=None,
-                     failover_s=FAILOVER_AGE_S, now=None):
+                     failover_s=None, now=None):
     """Name the ONE publisher a window series should follow, or None when `rows` is empty.
 
     `rows` is a `series_by_source` result: [(source, epoch, value)]. A window read that keeps
@@ -120,7 +127,8 @@ def series_publisher(path_or_channel, rows, devices, priority=None,
 
     The pick mirrors the live reads (`OnboardSource._prefer`, `tools._choose_preferred`): the
     best-ranked source that is still current wins, current meaning its last sample is within
-    `failover_s` of `now` (the wall clock unless given; see FAILOVER_AGE_S). A ranked lead that went quiet mid-window is passed over for the whole window,
+    `failover_s` of `now` (the wall clock unless given; default: the channel's
+    `staleness.failover_s`). A ranked lead that went quiet mid-window is passed over for the whole window,
     which removes the handover step. Within the winning rank — or among all current sources when
     none is ranked — the one with the latest sample wins, label breaking a tie: exactly the
     `preferred()` live pick, so the window and the live value never name different devices
@@ -135,11 +143,11 @@ def series_publisher(path_or_channel, rows, devices, priority=None,
 
 
 def preferred(path_or_channel, candidates, devices, priority=None,
-              failover_s=FAILOVER_AGE_S, now=None):
+              failover_s=None, now=None):
     """The live pick: one (source, epoch, value) from each publisher's latest sample, or None.
 
     Same rule as `OnboardSource._prefer`, `series_publisher` and `/conditions`: the best-ranked
-    source whose sample is at most `failover_s` old wins (freshest within that rank), else the
+    source whose sample is at most `failover_s` (default: the channel's limit) old wins (freshest within that rank), else the
     freshest of all. Age is `now - epoch`; `now` defaults to the wall clock (see FAILOVER_AGE_S)
     and is a parameter so a caller holding a better-trusted time can pass it. A live read that took "whoever wrote last" disagreed with the window read
     whenever two publishers differ, and tactics reported the gap as a current shift (#167).
@@ -148,6 +156,7 @@ def preferred(path_or_channel, candidates, devices, priority=None,
         return None
     if now is None:
         now = _time.time()
+    failover_s = _failover(path_or_channel, failover_s)
     latest = lambda r: (r[1], r[0])
     freshest = max(candidates, key=latest)
     for m in matchers_for(path_or_channel, priority):

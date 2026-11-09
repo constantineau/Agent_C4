@@ -342,14 +342,21 @@ def sail(tws: float | None = None, twa: float | None = None, hoisted: str | None
     values; `hoisted` defaults to the CREW-SET sail (the sails bar / /sails/state — the primary
     driver of the flying combination), so the read is about the sail actually up. The frozen
     boat model (jib TWS bands, the Code-0 envelope) refines the fit when a bundle is aboard."""
+    old_wind = False
     if tws is None or twa is None:
+        # The strip's tws/twa are null past the wind's dead limit (15 s aboard, #247): no sail
+        # pick on old wind. Until then this read trusted wind up to the strip's 5-min window.
         s = onboard_conditions.get_strip()
         tws = tws if tws is not None else s.get("tws")
         twa = twa if twa is not None else s.get("twa")
+        old_wind = bool({"tws", "twa"} & set(s.get("dead") or ()))
     if hoisted is None:
         hoisted = (matcher.get_sail_state() or {}).get("hoisted")
     bm = (deviation._load_playbook() or {}).get("boat_model")
-    return sails.get_sail_advice(tws, twa, hoisted, boat_model=bm)
+    out = sails.get_sail_advice(tws, twa, hoisted, boat_model=bm)
+    if old_wind and not out.get("available"):
+        out = dict(out, note="Wind too old for a sail call.", wind_old=True)
+    return out
 
 
 @app.get("/course")
@@ -467,8 +474,13 @@ def forecast_ep(lat: float | None = None, lon: float | None = None, hours: int =
     """Wind forecast (Open-Meteo — common public data) for a position; defaults to live."""
     if lat is None or lon is None:
         s = onboard_conditions.get_strip()
-        lat = lat if lat is not None else s.get("lat")
-        lon = lon if lon is not None else s.get("lon")
+        # a forecast is for an area: the last fix within 30 min will do, even past the GPS's
+        # 10 s dead limit (#247), so the raw position is the fallback
+        raw = s.get("raw") or {}
+        lat = lat if lat is not None else (s.get("lat") if s.get("lat") is not None
+                                           else (raw.get("lat") or {}).get("value"))
+        lon = lon if lon is not None else (s.get("lon") if s.get("lon") is not None
+                                           else (raw.get("lon") or {}).get("value"))
     if lat is None or lon is None:
         return {"available": False, "note": "No position yet."}
     return weather.get_forecast(lat, lon, hours)

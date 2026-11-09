@@ -1,6 +1,7 @@
 # Spring race-ready checklist (#250)
 
-**Status: DRAFT for Cole's approval.**
+**Status: decided by Cole, 2026-11-09.** This checklist is public. The filled-in results are not:
+they go in the private ops folder (below).
 
 ## The rule (Cole, 2026-11-09)
 
@@ -10,11 +11,11 @@ backups.
 
 ## How results are recorded
 
-- Each run fills one row of the **Results** table at the bottom of this file: date, PASS / FAIL,
-  one line of what was seen, and where the evidence is. One commit per result
-  (`race-ready: <item> PASS`).
-- Evidence (logs, `candump` files, photos, screenshots) goes in `/root/c4-ops/race-ready-2027/<item>/`.
-  Not in the repo: it is public, and logs carry addresses and hostnames.
+- Results live in the private ops folder on the VPS, `/root/c4-ops/race-ready-2027/`, never in
+  this repo: it is public, and results carry boat details, addresses and hostnames.
+- Each run fills one row of the results table in `results.md` there: date, PASS / FAIL, one line
+  of what was seen, and where the evidence is. Cole's sign-off goes at the bottom of that file.
+- Evidence (logs, `candump` files, photos, screenshots) goes in `<item>/` next to it.
 - A FAIL gets an issue and the item is run again after the fix. The row keeps both results.
 - Owner: **Cole** = needs hands on the boat or his decision. **Agent** = can be run from shore.
   Most boat items are both: Cole does the physical step, an agent watches and records.
@@ -94,8 +95,8 @@ The Pi has no clock battery. After power-up its clock is wrong until NTP or a GP
 
 ### 2. Sensor loss
 
-What the crew sees when one sensor dies. Limits per `docs/STALENESS.md` (#247). If #247 isn't
-built yet, record today's behaviour against that table instead.
+What the crew sees when one sensor dies. Limits per `docs/STALENESS.md` (#247, built in #289;
+the rest in #291). For a row not built yet, record what the boat does against that table.
 
 - **Do:** at the dock, mast up, everything on. Unplug one device at a time for 2 min, then plug it
   back: masthead wind (GND10), GPS24xd, depth (Intelliducer), speed (GST10), Orca.
@@ -207,29 +208,7 @@ The only integrated test with real wind. Run it as a race.
   - nothing restarted that shouldn't (`docker ps` uptimes, Orin `journalctl`).
 - **Owner:** Cole (sail), agent (debrief, logs).
 
-## Results
+## Results and sign-off
 
-| # | Item | Date | Result | What was seen | Evidence | Run by |
-|---|---|---|---|---|---|---|
-| S1 | SD card swap | | | | | |
-| S2 | Copy-off + gated prune | | | | | |
-| S3 | Boat on current code | | | | | |
-| S4 | Lab Deploy push | | | | | |
-| 1 | Cold boot without UTC | | | | | |
-| 2 | Sensor loss | | | | | |
-| 3 | iPad wake | | | | | |
-| 4 | Repeat-course race | | | | | |
-| 5 | Long outage | | | | | |
-| 6 | Orin under load | | | | | |
-| 7 | Route legality | | | | | |
-| 8 | Backup restore drill | | | | | |
-| 9 | Dockside Garmin check | | | | | |
-| 10 | Practice sail | | | | | |
-
-## Sign-off
-
-Race-ready: all rows PASS, or a FAIL Cole accepts in writing below with the reason.
-
-| Signed | Date | Accepted exceptions |
-|---|---|---|
-| Cole | | |
+In `/root/c4-ops/race-ready-2027/results.md` (private). Race-ready means every item there is PASS,
+or a FAIL Cole accepts in writing with the reason, and Cole has signed it.
