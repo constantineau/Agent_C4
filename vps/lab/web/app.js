@@ -3827,7 +3827,7 @@ function debTacticsCard(r) {
       <div class="dep-grid">
         <div class="dep-row"><b style="min-width:130px;display:inline-block">Side that paid</b> <b>${esc(reg.side_paid)}</b> · recommended <b>${esc(reg.recommended_side || "—")}</b> ${reg.side_matched ? "(matched)" : "(missed)"}</div>
         <div class="dep-row"><b style="min-width:130px;display:inline-block">Best route</b> ${o.total_hours != null ? o.total_hours.toFixed(1) + " h" : "—"} · plan predicted ${pb.predicted_hours != null ? pb.predicted_hours.toFixed(1) + " h" : "—"}</div>
-        <div class="dep-row"><b style="min-width:130px;display:inline-block">Time lost</b> ${esc(regMin)}</div>
+        <div class="dep-row"><b style="min-width:130px;display:inline-block">Time lost</b> ${esc(regMin)}${reg.basis && reg.basis.note ? ` <span class="muted">· ${esc(reg.basis.note)}</span>` : ""}</div>
       </div>
       <table class="fleet-tbl" style="margin-top:8px"><thead><tr><th>Option</th><th>Predicted</th><th>Forecasts</th><th>Outcome</th></tr></thead><tbody>${vrows}</tbody></table>
       <div class="muted" style="font-size:11px;margin-top:6px">★ = recommended · highlighted = the side that paid. ${esc(r.caveat || "")}</div>
