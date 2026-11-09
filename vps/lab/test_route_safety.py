@@ -14,7 +14,8 @@ Pins:
      wind axis, far off, to get round an island finishes;
   6) #258 outside the obstacle map's box is never open water;
   7) #242 a mark the chart blocks stops the route at once and names the mark; an ENC failure is
-     "depths not checked"; land off is "land not checked";
+     "depths not checked"; land off is "land not checked"; water no ENC depth area covers
+     (Canada) passes but the verdict names those legs ("No depth data: check the paper chart");
   8) #44.1b an override pocket moves with its mark (the cache key has it);
   9) #221-3 a closing board on borrowed wind counts in `wind_filled`;
  10) #242 the bundle verdict and the refusal text Freeze, Deploy and GPX use.
@@ -229,24 +230,64 @@ try:
                             emit_exploration=False, time_budget_s=60)
     check("ENC failure: depths not checked",
           any(p["text"] == O.SAFE_DEPTH_FAILED for p in (re_.get("safety") or {}).get("problems", [])))
-    # ENC loaded land but no depth areas: depths were not checked (Codex on #287)
+    # Cole's decision on #242: depths are checked wherever ENC charts them. Water no ENC depth
+    # area covers (Canada: NOAA ENC is US-only) never fails the route; the verdict names the legs
+    # ("No depth data: check the paper chart"). Before, any depth area anywhere in the box made
+    # the whole route "depths ok" (Codex on #287).
     _orig_l = enc.layers_in_bbox
     enc.ensure_bbox = lambda bbox, cache_dir=None: None
-    enc.layers_in_bbox = lambda bbox, cache_dir=None, depth=None: {"land": [LAND], "shoal": []}
+
+    def box(s_nm, n_nm):                      # a depth area over the whole box's width
+        return [[(LON0 - 0.7, LAT0 + s_nm / 60.0), (LON0 + 0.9, LAT0 + s_nm / 60.0),
+                 (LON0 + 0.9, LAT0 + n_nm / 60.0), (LON0 - 0.7, LAT0 + n_nm / 60.0)]]
     try:
+        enc.layers_in_bbox = lambda bbox, cache_dir=None, depth=None: {"land": [LAND], "shoal": []}
         fl = OB.build_for_course(course("port"), "c", BBOX, use_cache=False, source="enc")
-        check("ENC land without depth areas: depth not ok", fl.depth == "none", fl.depth)
-        enc.layers_in_bbox = lambda bbox, cache_dir=None, depth=None: {"land": [LAND], "shoal": [],
-                                                                       "depth_areas": 12}
-        fd = OB.build_for_course(course("port"), "c", BBOX, use_cache=False, source="enc")
-        check("ENC depth areas, all deep: depth ok", fd.depth == "ok", fd.depth)
-        enc.layers_in_bbox = lambda bbox, cache_dir=None, depth=None: {"land": [], "shoal": [],
-                                                                       "depth_areas": 5}
-        fw = OB.build_for_course(course("port"), "c", BBOX, use_cache=False, source="enc")
-        check("ENC open deep water, no land in the box: depth ok", fw.depth == "ok", fw.depth)
-        enc.layers_in_bbox = lambda bbox, cache_dir=None, depth=None: {"land": [LAND], "shoal": [LAND]}
-        fs = OB.build_for_course(course("port"), "c", BBOX, use_cache=False, source="enc")
-        check("ENC with depth areas: depth ok", fs.depth == "ok", fs.depth)
+        check("ENC loaded, no depth areas: loaded, but every step is 'no depth data'",
+              fl.depth == "ok" and fl.no_depth(LAT0, LON0, LAT0 + 0.01, LON0), fl.depth)
+        check("...ENC land counts as charted", not fl.no_depth(LAT0 - 0.48, LON0, LAT0 - 0.47, LON0))
+        half = box(-30, 1.5)                  # charted up to 1.5 nm north of the start only
+        enc.layers_in_bbox = lambda bbox, cache_dir=None, depth=None: {
+            "land": [LAND], "shoal": [], "depth_cover": [half]}
+        fh = OB.build_for_course(course("port"), "c", BBOX, use_cache=False, source="enc")
+        check("a step inside the depth area: depths checked",
+              not fh.no_depth(LAT0, LON0, LAT0 + 1 / 60.0, LON0))
+        check("a step past it: no depth data", fh.no_depth(LAT0, LON0, LAT0 + 2 / 60.0, LON0))
+        check("a step leaving the box: no depth data",
+              fh.no_depth(LAT0 + 0.45, LON0, LAT0 + 0.55, LON0))
+        rh = O.optimize_course(course("port"), "c", 0, Steady(8.5, 0.0), polar=P, obstacles=fh,
+                               emit_exploration=False, time_budget_s=60)
+        sh = rh.get("safety") or {}
+        check("route half outside ENC depths: passes", sh.get("ok") is True, sh.get("problems"))
+        check("...and is marked: both legs named",
+              [n.get("code") for n in sh.get("notes", [])] == ["no_depth"]
+              and sh["notes"][0]["text"] == O.SAFE_NO_DEPTH
+              and sh["notes"][0]["legs"] == ["Start → W", "W → Finish"], sh.get("notes"))
+        enc.layers_in_bbox = lambda bbox, cache_dir=None, depth=None: {
+            "land": [LAND], "shoal": [], "depth_cover": [box(-30, 30)]}
+        ff = OB.build_for_course(course("port"), "c", BBOX, use_cache=False, source="enc")
+        rf = O.optimize_course(course("port"), "c", 0, Steady(8.5, 0.0), polar=P, obstacles=ff,
+                               emit_exploration=False, time_budget_s=60)
+        sf = rf.get("safety") or {}
+        check("route all inside ENC depths: passes, no note", sf.get("ok") is True
+              and not sf.get("notes"), sf)
+        enc.layers_in_bbox = lambda bbox, cache_dir=None, depth=None: {
+            "land": [LAND], "shoal": [], "depth_cover": [box(-30, 30)], "missing": ["US4MI99M"]}
+        fm = OB.build_for_course(course("port"), "c", BBOX, use_cache=False, source="enc")
+        check("an ENC cell that didn't download: depths failed, not 'no data'",
+              fm.depth == "failed" and "US4MI99M" in (fm.depth_error or ""), fm.depth_error)
+        rn = O.optimize_course(course("port"), "c", 0, Steady(8.5, 0.0), polar=P, obstacles=fl,
+                               emit_exploration=False, time_budget_s=60)
+        check("no ENC depth anywhere on the route: passes, marked",
+              (rn.get("safety") or {}).get("ok") is True and (rn["safety"].get("notes") or [{}])[0]
+              .get("code") == "no_depth", rn.get("safety"))
+        rg = O.optimize_course(course("port"), "c", 0, Steady(8.5, 0.0), polar=P,
+                               obstacles=OB.build_for_course(course("port"), "c", BBOX,
+                                                             use_cache=False,
+                                                             source="natural_earth"),
+                               emit_exploration=False, time_budget_s=60)
+        check("ENC not asked for at all: still refused (no depth chart)",
+              any(p["text"] == O.SAFE_DEPTH_NONE for p in (rg.get("safety") or {}).get("problems", [])))
     finally:
         enc.layers_in_bbox = _orig_l
 
@@ -268,6 +309,35 @@ try:
     check("no override: the start on land stays land (#242)", a3.blocked(LAT0 - 0.47, LON0))
 finally:
     coastline.ensure_global, coastline.layers_in_bbox, coastline.active_source, enc.ensure_bbox = _orig
+
+print("8b) #242 ENC depth cover from the chart files: deep and dredged areas, missing cells")
+import json as _json
+import os as _os
+import tempfile as _tf
+
+with _tf.TemporaryDirectory() as cd:
+    def _gj(path, feats):
+        with open(path, "w") as fh:
+            _json.dump({"type": "FeatureCollection", "features": feats}, fh)
+
+    def _sq(x0, y0, x1, y1, **props):
+        return {"type": "Feature", "properties": props, "geometry": {
+            "type": "Polygon", "coordinates": [[[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]]}}
+    with open(_os.path.join(cd, "cell_index.json"), "w") as fh:
+        _json.dump({"US4AA01M": {"bbox": [45, 43, -83, -81], "url": "x", "band": "4"},
+                    "US4AA02M": {"bbox": [45, 43, -83, -81], "url": "x", "band": "4"}}, fh)
+    _os.makedirs(_os.path.join(cd, "cells", "ENC_ROOT", "US4AA01M"))
+    open(_os.path.join(cd, "cells", "ENC_ROOT", "US4AA01M", "US4AA01M.000"), "w").close()
+    _os.makedirs(_os.path.join(cd, "extract"))
+    _gj(_os.path.join(cd, "extract", "US4AA01M_DEPARE.json"),
+        [_sq(-82.5, 43.5, -82.4, 43.6, DRVAL1=10.0), _sq(-82.4, 43.5, -82.3, 43.6, DRVAL1=1.0)])
+    _gj(_os.path.join(cd, "extract", "US4AA01M_DRGARE.json"),
+        [_sq(-82.3, 43.5, -82.2, 43.6, DRVAL1=8.0)])
+    L = enc.layers_in_bbox((44.5, 43.2, -82.8, -82.0), cd, 2.6)
+    check("deep, shallow and dredged areas all count as depth cover", len(L["depth_cover"]) == 3,
+          len(L["depth_cover"]))
+    check("only the shallow one is a shoal", len(L["shoal"]) == 1, len(L["shoal"]))
+    check("a cell that never downloaded is named", L["missing"] == ["US4AA02M"], L["missing"])
 
 print("9) #221-3 a closing board on borrowed wind counts")
 
@@ -308,6 +378,14 @@ check("...and refused under a top-level ok", RS.refusal(dict(b_empty, safety=goo
 check("refusal: none when ok", RS.refusal(dict(b_ok, safety=v)) is None)
 check("refusal: old bundle", RS.refusal({"variants": []}) == RS.OLD_BUNDLE)
 check("refusal: says why", "wrong side" in (RS.refusal(dict(b_bad, safety=vb)) or ""))
+nd = dict(good, notes=[{"code": "no_depth", "text": O.SAFE_NO_DEPTH, "legs": ["A → B"]}])
+nd2 = dict(good, notes=[{"code": "no_depth", "text": O.SAFE_NO_DEPTH, "legs": ["A → B", "B → C"]}])
+b_nd = dict(b_ok, consensus={"safety": nd}, variants=[{"id": "left", "route": {"path": []}, "safety": nd2}])
+vn = RS.bundle_verdict(b_nd)
+check("no depth data on some legs: bundle passes, the legs listed once",
+      vn["ok"] and vn["notes"] == [{"code": "no_depth", "text": O.SAFE_NO_DEPTH,
+                                    "legs": ["A → B", "B → C"]}], vn)
+check("...and isn't refused", RS.refusal(dict(b_nd, safety=vn)) is None)
 
 d_ov = course("port")
 d_ov, err = RS.set_override(d_ov, "c", "W", "Cole", "chart shows rock that isn't there", now=5)

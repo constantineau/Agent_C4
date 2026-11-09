@@ -2119,13 +2119,16 @@ function safetyPanel(s, what) {
   if (!s) return "";
   const ov = (s.overrides || []).map((o) => `<li>${esc(o.mark)}: chart override by ${esc(o.by)}${o.at ? ", " + esc(fmtDate(o.at)) : ""}. ${esc(o.why)}
       <button class="mini" data-mark="${esc(o.mark)}" onclick="chartOverride(this.dataset.mark, true)">Remove</button></li>`).join("");
-  if (s.ok) return ov ? `<div class="muted" style="font-size:12px;margin-top:6px">Route checks passed.<ul style="margin:2px 0 0 16px;padding:0">${ov}</ul></div>` : "";
+  // Cole on #242: no ENC depths (Canada) never fails a route; those legs are named here
+  const notes = (s.notes || []).map((n) => `<div class="pill warn" style="display:block;margin-top:6px;text-align:left">
+    ${esc(n.text || "No depth data: check the paper chart.")}${(n.legs || []).length ? `<br><span style="font-weight:400">${(n.legs || []).map(esc).join(", ")}</span>` : ""}</div>`).join("");
+  if (s.ok) return (ov ? `<div class="muted" style="font-size:12px;margin-top:6px">Route checks passed.<ul style="margin:2px 0 0 16px;padding:0">${ov}</ul></div>` : "") + notes;
   const items = (s.problems || []).map((p) => `<li>${p.route ? esc(p.route) + ": " : ""}${esc(p.text || p.code)}
       ${p.mark && (p.code === "blocked" || p.code === "unreached") ? `<button class="mini" data-mark="${esc(p.mark)}" onclick="chartOverride(this.dataset.mark)">Chart wrong here?</button>` : ""}</li>`).join("");
   return `<div class="pill bad" style="display:block;margin-top:8px;text-align:left">
     <b>⛔ Route checks failed. No freeze, Deploy or GPX${what === "route" ? " from this route" : ""}.</b>
     <ul style="margin:4px 0 0 16px;padding:0">${items}</ul>
-    ${ov ? `<div style="font-weight:400;margin-top:4px">Chart overrides:<ul style="margin:2px 0 0 16px;padding:0">${ov}</ul></div>` : ""}</div>`;
+    ${ov ? `<div style="font-weight:400;margin-top:4px">Chart overrides:<ul style="margin:2px 0 0 16px;padding:0">${ov}</ul></div>` : ""}</div>${notes}`;
 }
 
 async function chartOverride(mark, remove) {

@@ -1,8 +1,10 @@
 """Route acceptance for what leaves the Lab (#242): a playbook's routes must be proven safe and
 complete before it is frozen, locked in, pushed to the boat or exported as GPX.
 
-Each route carries the optimizer's own verdict (`optimizer.route_safety`: land and depths checked
-over the whole route, every mark reached, every port/starboard mark and island left on its side).
+Each route carries the optimizer's own verdict (`optimizer.route_safety`: land checked over the
+whole route, depths wherever ENC charts them, every mark reached, every port/starboard mark and
+island left on its side). Legs through water no ENC chart covers (Canada) are listed as notes
+("No depth data: check the paper chart"), never refused.
 A playbook bundle gets one verdict over every route it carries (the main route, the options and the
 plays with a route) and the chart overrides it was routed with. This module reads that verdict and
 records the overrides: a reviewed, per-mark exception for a chart artefact (a mark the chart puts
@@ -30,9 +32,11 @@ def _route_entries(bundle):
 
 
 def bundle_verdict(bundle, overrides=None):
-    """{ok, problems: [{route, code, mark, text}], overrides} over every route in `bundle`. A route
-    with no verdict at all counts as not proven."""
-    problems = []
+    """{ok, problems: [{route, code, mark, text}], notes: [{code, text, legs}], overrides} over
+    every route in `bundle`. A route with no verdict at all counts as not proven. `notes` never
+    fail it: the legs through water no ENC chart gives a depth for (#242), once each over all
+    the routes."""
+    problems, notes = [], {}
     for label, s in _route_entries(bundle):
         if not isinstance(s, dict) or (s.get("ok") is not True and not s.get("problems")):
             problems.append({"route": label, "code": "unchecked", "mark": None,
@@ -40,7 +44,13 @@ def bundle_verdict(bundle, overrides=None):
             continue
         for p in s.get("problems") or []:
             problems.append(dict(p, route=label))
-    return {"ok": not problems, "problems": problems, "overrides": list(overrides or [])}
+        for n in s.get("notes") or []:
+            if isinstance(n, dict) and n.get("code"):
+                got = notes.setdefault(n["code"], {"code": n["code"], "text": n.get("text"),
+                                                   "legs": []})
+                got["legs"] += [lg for lg in n.get("legs") or [] if lg not in got["legs"]]
+    return {"ok": not problems, "problems": problems, "notes": list(notes.values()),
+            "overrides": list(overrides or [])}
 
 
 def refusal(bundle):

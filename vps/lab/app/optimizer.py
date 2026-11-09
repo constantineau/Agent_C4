@@ -1416,13 +1416,18 @@ SAFE_BOX = "Route leaves the chart area."
 SAFE_BLOCKED = "{mark} is on land, in shallow water or in a no-go zone on the chart."
 SAFE_UNREACHED = "Route doesn't reach {mark}."
 SAFE_SIDE = "Route leaves {mark} on the wrong side."
+# not a problem (Cole's decision on #242): water no ENC chart gives a depth for (Canada; NOAA ENC
+# is US-only). The route isn't refused there; the verdict marks the legs and the Lab shows this.
+SAFE_NO_DEPTH = "No depth data: check the paper chart."
 
 
 def route_safety(definition, course_id, marks, full_path, leg_end_idx, incomplete, obstacles,
                  leg_obstacles, land_failed, from_mark=0):
-    """{ok, problems: [{code, mark, text}], overrides: [{mark, by, at, why}]} for a routed course.
-    `ok` only when land and depths were checked over the whole route, every mark was reached
-    and every port/starboard mark and island was left on its side."""
+    """{ok, problems: [{code, mark, text}], notes: [{code, text, legs}], overrides: [{mark, by, at,
+    why}]} for a routed course. `ok` only when land was checked over the whole route, the ENC
+    depth chart loaded, every mark was reached and every port/starboard mark and island was left
+    on its side. Depths are checked wherever ENC charts them; a leg through water it doesn't
+    chart (Canada) isn't refused but listed in `notes` ("no depth data")."""
     from .geo import obstacles as geo
     problems = []
 
@@ -1455,10 +1460,19 @@ def route_safety(definition, course_id, marks, full_path, leg_end_idx, incomplet
         a = 0 if k == 0 else leg_end_idx[k - 1]
         return pts[a:leg_end_idx[k] + 1]
 
+    no_depth_legs = []
     for k in range(len(leg_end_idx)):       # every reached leg inside its own field's box (#258)
         f = (leg_obstacles[k] if leg_obstacles and k < len(leg_obstacles) else obstacles)
-        if f is not None and hasattr(f, "inside") and not all(f.inside(*p) for p in leg_pts(k)):
+        lp = leg_pts(k)
+        if f is not None and hasattr(f, "inside") and not all(f.inside(*p) for p in lp):
             add("box", SAFE_BOX)
+        # depths checked over the whole route: a leg through water no ENC chart covers is marked
+        nd = getattr(f, "no_depth", None)
+        if "depth" not in {p["code"] for p in problems} and nd is not None and \
+                any(nd(*lp[i], *lp[i + 1]) for i in range(len(lp) - 1)):
+            a = marks[k][1] if k < len(marks) else "?"
+            b = marks[k + 1][1] if k + 1 < len(marks) else "?"
+            no_depth_legs.append(f"{a} → {b}")
 
     roundings = race_def.course_roundings(definition, course_id)
     for j in range(1, len(marks) - 1):      # a nav mark: the legs either side of it, touched
@@ -1480,7 +1494,9 @@ def route_safety(definition, course_id, marks, full_path, leg_end_idx, incomplet
     overrides = [{"mark": n, "by": str(o.get("by") or ""), "at": o.get("at"),
                   "why": str(o.get("why") or "")}
                  for n, o in geo.chart_overrides(definition, course_id).items() if n in names]
-    return {"ok": not problems, "problems": problems, "overrides": overrides}
+    notes = ([{"code": "no_depth", "text": SAFE_NO_DEPTH, "legs": no_depth_legs}]
+             if no_depth_legs else [])
+    return {"ok": not problems, "problems": problems, "notes": notes, "overrides": overrides}
 
 
 # #51: the shoreline didn't load. Shown first on the route; the route is marked degraded.

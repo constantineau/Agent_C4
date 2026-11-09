@@ -42,7 +42,7 @@ from .. import atomicio
 CACHE = os.environ.get("ENC_CACHE", "/srv/enc")
 CATALOG_URL = "https://charts.noaa.gov/ENCs/ENCProdCat.xml"
 DOWNLOAD_BASE = "https://www.charts.noaa.gov/ENCs"
-DATA_VERSION = "noaa_enc_v1"                 # bump when the extraction logic changes (cache + mask keys)
+DATA_VERSION = "noaa_enc_v2"                 # bump when the extraction logic changes (cache + mask keys)
 
 # Usage bands to pull, in preference order. Great Lakes: 4 = approach (islands + shoals), 5 = harbor.
 ENC_BANDS = [b.strip() for b in os.environ.get("ENC_BANDS", "4").split(",") if b.strip()]
@@ -50,7 +50,9 @@ MAX_CELLS = int(os.environ.get("ENC_MAX_CELLS", "80"))      # safety cap on a si
 CATALOG_TTL_DAYS = float(os.environ.get("ENC_CATALOG_TTL_DAYS", "14"))
 
 # Layers we extract from each S-57 cell, and the geometry-bearing object classes.
-LAYERS = ("LNDARE", "DEPARE", "OBSTRN", "UWTROC")
+# DRGARE (dredged areas) is charted water with a depth too, cut out of DEPARE: without it a dredged
+# channel would read as "no depth data" and its depth would never be checked (#242).
+LAYERS = ("LNDARE", "DEPARE", "DRGARE", "OBSTRN", "UWTROC")
 OBSTRUCTION_NM = float(os.environ.get("GEO_OBSTRUCTION_NM", "0.1"))   # buffer for point rocks/obstrs
 
 _HDRS = {"User-Agent": "Agent_C4-lab/1.0"}
@@ -238,6 +240,24 @@ def _disk_ring(lon, lat, radius_nm, sides=8) -> list:
               lat + rlat * math.sin(2 * math.pi * k / sides)) for k in range(sides)]]
 
 
+def _load_polys_props(path: str) -> list:
+    """Load a cached GeoJSON into [(polygon, properties)]: one read, filtered by the caller."""
+    if not path or not os.path.exists(path):
+        return []
+    try:
+        with open(path) as f:
+            gj = json.load(f)
+    except Exception:
+        return []
+    out = []
+    for ft in gj.get("features", []):
+        props = ft.get("properties") or {}
+        for poly in _feature_polys(ft):
+            if poly and poly[0]:
+                out.append((poly, props))
+    return out
+
+
 def _load_polys(path: str, keep=None) -> list:
     """Load a cached GeoJSON into [polygon]; `keep(props)->bool` filters features (e.g. by depth)."""
     if not path or not os.path.exists(path):
@@ -287,27 +307,35 @@ def _hazard_keep(safety_depth_m):
 def layers_in_bbox(bbox, cache_dir: str = None, safety_depth_m: float = 3.0) -> dict:
     """ENC obstacle polygons by role, clipped to bbox=(n,s,w,e). Mirrors `coastline.layers_in_bbox`.
 
-    Returns {"land":[poly], "shoal":[poly], "obstruction":[poly], "depth_areas": n} — every polygon is
-    BLOCKED water
+    Returns {"land":[poly], "shoal":[poly], "obstruction":[poly], "depth_cover":[poly],
+    "missing":[cell]} — land/shoal/obstruction polygons are BLOCKED water
     (no `lakes`/`islands` carve: ENC LNDARE is land-only, water is everything else). `shoal` and
     `obstruction` are filtered by `safety_depth_m` (= boat draft + under-keel margin), so a different
     boat/draft re-filters the same cached GeoJSON without re-running GDAL. Empty if ENC isn't prepped
-    (caller falls back to the global coastline)."""
+    (caller falls back to the global coastline).
+
+    `depth_cover` is every depth area (DEPARE + DRGARE, deep or shallow): where the chart says how
+    deep the water is. Outside it (Canadian water: NOAA ENC is US-only) depths were never checked,
+    and the route says so (#242). `missing` names the cells that cover the box but never downloaded
+    (or had nothing extracted): their water would read as uncharted, so the caller counts the ENC load as failed."""
     cache_dir = cache_dir or CACHE
     cells = cells_for_bbox(bbox, cache_dir)
     ed = _extract_dir(cache_dir)
-    land, shoal, obstr = [], [], []
+    land, shoal, obstr, cover, missing = [], [], [], [], []
     shoal_keep = _shoal_keep(safety_depth_m)
     hazard_keep = _hazard_keep(safety_depth_m)
-    depth_areas = [0]       # every DEPARE read, deep or shallow: were depths charted at all (#242)
-
-    def _depare(props):
-        depth_areas[0] += 1
-        return shoal_keep(props)
     for cell in cells:
         name = cell["name"]
+        # never downloaded, or nothing extracted from it (no GDAL): its water isn't "uncharted"
+        if not os.path.exists(os.path.join(_cell_dir(cache_dir), "ENC_ROOT", name, f"{name}.000")) \
+                or not any(os.path.exists(os.path.join(ed, f"{name}_{lyr}.json")) for lyr in LAYERS):
+            missing.append(name)
+            continue
         land += _load_polys(os.path.join(ed, f"{name}_LNDARE.json"))
-        shoal += _load_polys(os.path.join(ed, f"{name}_DEPARE.json"), keep=_depare)
+        for lyr in ("DEPARE", "DRGARE"):
+            areas = _load_polys_props(os.path.join(ed, f"{name}_{lyr}.json"))
+            cover += [p for p, _props in areas]
+            shoal += [p for p, props in areas if shoal_keep(props)]
         for lyr in ("OBSTRN", "UWTROC"):
             obstr += _load_polys(os.path.join(ed, f"{name}_{lyr}.json"), keep=hazard_keep)
     # clip to polygons whose extent actually touches the bbox (cells overlap their neighbours)
@@ -321,7 +349,8 @@ def layers_in_bbox(bbox, cache_dir: str = None, safety_depth_m: float = 3.0) -> 
     return {"land": [p for p in land if _in(p)],
             "shoal": [p for p in shoal if _in(p)],
             "obstruction": [p for p in obstr if _in(p)],
-            "depth_areas": depth_areas[0]}
+            "depth_cover": [p for p in cover if _in(p)],
+            "missing": missing}
 
 
 def available(cache_dir: str = None) -> bool:

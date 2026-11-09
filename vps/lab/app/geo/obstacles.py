@@ -82,10 +82,14 @@ class ObstacleField:
         # "failed" (couldn't load: the mask has NO land in it, and must never pass as checked, #51)
         self.land = "off"
         self.land_error = None
-        # the depth no-go (#242): "ok" (ENC depth areas drawn), "failed" (ENC asked for, didn't
-        # load) or "none" (no depth chart: GSHHG / Natural Earth, or no ENC cell in the box)
+        # the depth no-go (#242): "ok" (ENC loaded: depths checked wherever it charts them, see
+        # `nodepth`), "failed" (ENC asked for, didn't load) or "none" (no depth chart asked for:
+        # GSHHG / Natural Earth)
         self.depth = "none"
         self.depth_error = None
+        # with depth "ok": 1 = a cell no ENC depth area covers (Canadian water: NOAA ENC is
+        # US-only). A route through one isn't refused; the verdict marks it (#242)
+        self.nodepth = None
 
     # --- cell <-> coord ------------------------------------------------------
     def _ix(self, lon):
@@ -120,11 +124,25 @@ class ObstacleField:
                                 (lon1 - self.w) / self.res, (lat1 - self.s) / self.res,
                                 (lon2 - self.w) / self.res, (lat2 - self.s) / self.res)
 
+    def no_depth(self, lat1, lon1, lat2, lon2) -> bool:
+        """Does this step touch water whose depth no chart gave (#242)? Every cell it touches,
+        as in `crosses`; a step leaving the box counts. Without ENC depths at all, every step."""
+        if self.depth != "ok" or self.nodepth is None:
+            return True
+        if not (self.inside(lat1, lon1) and self.inside(lat2, lon2)):
+            return True
+        return gridwalk.any_set(self.nodepth, self.nx, self.ny,
+                                (lon1 - self.w) / self.res, (lat1 - self.s) / self.res,
+                                (lon2 - self.w) / self.res, (lat2 - self.s) / self.res)
+
     # --- rasterization -------------------------------------------------------
-    def _fill_polygon(self, rings, value: int, layer: str):
+    def _fill_polygon(self, rings, value: int, layer: str, mask=None):
         """Scanline-fill a polygon (even-odd over ALL its rings → holes work) into the mask.
 
-        rings = [ring], ring = [(lon, lat)]. value 1 sets (blocks), 0 clears (carves water)."""
+        rings = [ring], ring = [(lon, lat)]. value 1 sets (blocks), 0 clears (carves water).
+        `mask` fills another grid of the same shape instead (no layer counts, no `active`)."""
+        own = mask is None
+        mask = self.mask if own else mask
         if not rings:
             return
         edges = []                       # (ylo, yhi, x_at_ylo, slope)
@@ -142,7 +160,13 @@ class ObstacleField:
         if not edges:
             return
         touched = 0
-        for iy in range(self.ny):
+        # only the rows the polygon spans: a row outside it has no crossings (a box full of small
+        # ENC depth areas would otherwise scan every row once per area)
+        ymin = min(e[0] for e in edges)
+        ymax = max(e[1] for e in edges)
+        iy0 = max(0, int(math.floor((ymin - self.s) / self.res - 0.5)))
+        iy1 = min(self.ny - 1, int(math.ceil((ymax - self.s) / self.res - 0.5)))
+        for iy in range(iy0, iy1 + 1):
             lat = self.s + (iy + 0.5) * self.res
             xs = [x0 + slope * (lat - ylo) for ylo, yhi, x0, slope in edges if ylo <= lat < yhi]
             if not xs:
@@ -153,10 +177,10 @@ class ObstacleField:
                 ixa = max(0, self._ix(xs[k]))
                 ixb = min(self.nx - 1, self._ix(xs[k + 1]))
                 for ix in range(ixa, ixb + 1):
-                    if self.mask[row + ix] != value:
-                        self.mask[row + ix] = value
+                    if mask[row + ix] != value:
+                        mask[row + ix] = value
                         touched += 1
-        if value == 1:
+        if value == 1 and own:
             self.layers[layer] = self.layers.get(layer, 0) + touched
             self.active = True
 
@@ -432,18 +456,25 @@ def build_for_course(definition: dict, course_id, bbox, *, coastline_on=True, zo
             try:
                 enc.ensure_bbox(bbox, cache_dir)
                 layers = enc.layers_in_bbox(bbox, cache_dir, depth)
+                if layers.get("missing"):
+                    raise OSError("ENC cells not downloaded: " + ", ".join(layers["missing"][:5]))
             except Exception as exc:  # noqa: BLE001 — reported: depths were not checked (#242)
                 layers = {}
                 field.depth = "failed"
                 field.depth_error = f"{type(exc).__name__}: {exc}"[:200]
                 print(f"[obstacles] ENC did not load: {field.depth_error}", flush=True)
             _fill_global_backstop(field, cache_dir)          # global land union backstop (incl. Canada)
-            if layers.get("land") or layers.get("shoal") or layers.get("depth_areas"):
+            if field.depth != "failed":
+                # depths are checked wherever an ENC depth area (DEPARE / DRGARE, deep or shallow)
+                # covers the water. Everywhere else (Canada: NOAA ENC is US-only) a route isn't
+                # refused but marked "no depth data" (Cole's decision on #242). ENC land counts as
+                # covered: it is charted, and a route never crosses it (bar an override pocket).
+                field.depth = "ok"
+                field.nodepth = bytearray(b"\x01") * (field.nx * field.ny)
+                for poly in layers.get("depth_cover", []) + layers.get("land", []):
+                    field._fill_polygon(poly, 0, "depth", mask=field.nodepth)
+            if layers.get("land") or layers.get("shoal") or layers.get("depth_cover"):
                 field.safety_depth = depth
-                # depths were checked only if ENC depth areas (DEPARE, deep or shallow) came
-                # back: land alone isn't depth. Charted coverage per route segment is not checked
-                # (ENC is US-only; see #242)
-                field.depth = "ok" if (layers.get("depth_areas") or layers.get("shoal")) else "none"
                 for poly in layers.get("land", []):          # ENC's sharper US land on top
                     field._fill_polygon(poly, 1, "coastline")
                 for poly in layers.get("shoal", []):         # DEPARE shallower than the safety depth
@@ -641,6 +672,7 @@ def _copy_field(field):
     f.source, f.safety_depth, f.active = field.source, field.safety_depth, field.active
     f.land, f.land_error = field.land, field.land_error
     f.depth, f.depth_error = field.depth, field.depth_error
+    f.nodepth = field.nodepth                  # read-only once built: shared, not copied
     return f
 
 

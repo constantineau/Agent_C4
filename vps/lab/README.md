@@ -112,10 +112,15 @@ cheap.
   ending > 3 nm from the finish) is the one check the playbook (consensus retried then refused,
   per-model candidates dropped into `dropped_scenarios`, fan plays retried/skipped) and the
   debrief oracle (tactics half refused by name) use. The onboard re-router refuses the same way.
-- **Route acceptance (#242):** every route carries `safety` = `{ok, problems, overrides}`
-  (`optimizer.route_safety`). It is `ok` only when land and depths were checked over the whole route
-  (shoreline loaded, ENC depth areas loaded, the route inside the chart box), every mark was reached,
-  and every port/starboard mark and island was left on its side (a string test on the path). A
+- **Route acceptance (#242):** every route carries `safety` = `{ok, problems, notes, overrides}`
+  (`optimizer.route_safety`). It is `ok` only when land was checked over the whole route
+  (shoreline loaded, the route inside the chart box), the ENC depth chart loaded (every cell that
+  covers the box downloaded), every mark was reached, and every port/starboard mark and island was
+  left on its side (a string test on the path). Depths are checked wherever an ENC depth area
+  (DEPARE or DRGARE, deep or shallow) covers the water. NOAA ENC is US-only, so Canadian water has
+  none: a leg through water no depth area covers is NOT refused (Cole's decision) but listed in
+  `notes` (`no_depth`, with the legs), and the Lab shows "No depth data: check the paper chart."
+  Routing on Natural Earth / GSHHG alone (no ENC asked for) is still refused. A
   playbook bundle carries one verdict over its main route, options and route plays
   (`routesafety.bundle_verdict`); **freeze, lock-in, Deploy push and GPX refuse** unless it is ok, and
   so do bundles built before this check. Land is never opened for a route: a mark the chart puts on
