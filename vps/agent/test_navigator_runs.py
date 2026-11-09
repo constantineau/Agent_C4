@@ -175,6 +175,17 @@ check("a poll while the run can't be read still answers", nav.get("available") i
 _ds.get_nav_progress = _real_get
 check("... and the run, with its Undo history, is intact", idx(fix(44.0042)) == 3
       and (fix(44.0043).get("progress") or {}).get("can_undo") is True)
+# a poll that read the marks before a course load replaced them must not write over the new run
+_real_marks = NAV._marks
+_stale = [dict(m) for m in marks]
+_new = [dict(m, lat=m["lat"] + 0.001) for m in marks]          # the course moved under it
+_store_before = dict(datasource.active().get_nav_progress(NAV.active_route()))
+NAV._marks = lambda route: _new
+NAV._advance(NAV.active_route(), _stale, 44.0095, -82.0, ("t", -1.0))   # past lap 2's Windward,
+idx_stale, rec_stale = NAV._advance(NAV.active_route(), _stale, 44.0096, -82.0, ("t", -2.0))  # twice
+check("a stale poll writes nothing", rec_stale is None
+      and datasource.active().get_nav_progress(NAV.active_route()) == _store_before)
+NAV._marks = _real_marks
 # race 1 done: sail to the finish
 client.post("/navigator/mark", json={"index": 4})
 check("at the finish", idx(fix(43.999)) == 4)

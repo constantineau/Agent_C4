@@ -242,6 +242,11 @@ def _advance(route, marks, lat, lon, fix):
         return _next_index(marks, lat, lon, 0), None
     with _PROGRESS_LOCK:
         try:
+            # the marks again, now under the lock: a course load that replaced them since this
+            # poll read them has (or will have) reset the run for the new marks, and this stale
+            # snapshot must not write its own run over that one
+            if _course_fp(_marks(route) or []) != _course_fp(marks):
+                return _next_index(marks, lat, lon, 0), None
             rec = _load_progress(ds, route, marks)
         except Exception as exc:  # noqa: BLE001
             # can't read the run right now: answer from geometry, write nothing
