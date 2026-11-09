@@ -149,19 +149,37 @@ def _beyond_nm(lat, lon, m, axis_deg):
     return d * math.cos(math.radians(_bearing(m["lat"], m["lon"], lat, lon) - axis_deg))
 
 
+def _plane_axis(marks, i):
+    """Bearing of the axis marks[i]'s plane is normal to: the leg INTO it, or for the start the
+    leg OUT of it. None on a one-mark course."""
+    m = marks[i]
+    if i > 0:
+        return _bearing(marks[i - 1]["lat"], marks[i - 1]["lon"], m["lat"], m["lon"])
+    if len(marks) > 1:
+        return _bearing(m["lat"], m["lon"], marks[i + 1]["lat"], marks[i + 1]["lon"])
+    return None
+
+
 def _passed(marks, i, lat, lon):
     """Has the boat passed marks[i]? Pure — no I/O and no stored state, so it is unit-testable
     and gives the same answer for a moment however you arrive at it."""
     m = marks[i]
     if _hav_nm(lat, lon, m["lat"], m["lon"]) <= ROUND_NM:
         return True                                                   # close aboard: a rounding
-    if i > 0:                                                          # axis = the leg INTO it
-        axis = _bearing(marks[i - 1]["lat"], marks[i - 1]["lon"], m["lat"], m["lon"])
-    elif len(marks) > 1:                                               # start line: leg OUT of it
-        axis = _bearing(m["lat"], m["lon"], marks[i + 1]["lat"], marks[i + 1]["lon"])
-    else:
+    axis = _plane_axis(marks, i)
+    if axis is None:
         return False                                                   # a one-mark course
     return _beyond_nm(lat, lon, m, axis) >= PASS_NM
+
+
+def _short_of(marks, i, lat, lon):
+    """Is the boat on the near side of marks[i]'s plane? What releases a hold (Undo, a pick, a
+    Start). By the plane alone: close aboard but behind the line is short of it, so a Start tapped
+    near the start line releases as soon as the boat is behind it."""
+    axis = _plane_axis(marks, i)
+    if axis is None:
+        return True
+    return _beyond_nm(lat, lon, marks[i], axis) < PASS_NM
 
 
 def _next_index(marks, lat, lon, floor=0):
@@ -255,7 +273,7 @@ def _advance(route, marks, lat, lon, fix):
             return _next_index(marks, lat, lon, 0), None
         floor = rec["i"]
         if rec["hold"] is not None:
-            if rec["hold"] == floor and _passed(marks, floor, lat, lon):
+            if rec["hold"] == floor and not _short_of(marks, floor, lat, lon):
                 _pending.pop(route, None)
                 return floor, rec                      # still held: wait for a fix short of it
             rec["hold"] = None                         # released: normal advance from here

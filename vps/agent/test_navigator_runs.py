@@ -144,6 +144,13 @@ fix(44.0042); fix(44.0043); nav = fix(44.0044)
 check("after a stray Start the start is held while the boat is beyond the line", idx(nav) == 0)
 r = client.post("/navigator/undo").json()
 check("... and one Undo goes back to the mark it was sailing to", r.get("ok") and r.get("index") == 3)
+# Start tapped close behind the start mark (inside the close-aboard radius), then a normal start
+client.post("/navigator/start")
+nav = fix(43.9997)                       # ~30 m behind the start, before the gun
+check("Start near the line: Start is next", idx(nav) == 0 and not (nav.get("progress") or {}).get("held"))
+fix(44.002); nav = fix(44.003)
+check("... and crossing the line advances to Windward", idx(nav) == 1)
+client.post("/navigator/mark", json={"index": 3})
 # a progress write that fails is reported, not claimed
 _ds = datasource.active()
 _real_save = _ds.save_nav_progress
