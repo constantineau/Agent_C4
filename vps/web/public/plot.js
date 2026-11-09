@@ -244,7 +244,10 @@ const Plot = (function () {
   window.addEventListener("sr33:conditions", (e) => {
     const c = e.detail;
     if (typeof c.lat === "number" && typeof c.lon === "number") {
-      boat = { lat: c.lat, lon: c.lon, hdg: (c.heading ?? c.cog ?? 0) };
+      // A magnetic heading is ~7-9° off true here: point the arrow along it only when it is true,
+      // else along COG (#183-8).
+      const hdg = c.heading_ref === "true" ? c.heading : null;
+      boat = { lat: c.lat, lon: c.lon, hdg: (hdg ?? c.cog ?? 0) };
       const last = track[track.length - 1];
       if (!last || Math.abs(last.lat - c.lat) > 1e-5 || Math.abs(last.lon - c.lon) > 1e-5) {
         track.push({ lat: c.lat, lon: c.lon }); if (track.length > 400) track.shift();

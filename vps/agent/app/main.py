@@ -584,7 +584,14 @@ async def ws(websocket: WebSocket):
     async def reader():
         while True:
             msg = await websocket.receive_text()
-            reply = await run_in_threadpool(agent.answer, msg, history)
+            # One bad turn must not end the session (#183-9): the crew gets a plain line and the
+            # socket stays open for the next question.
+            try:
+                reply = await run_in_threadpool(agent.answer, msg, history)
+            except Exception as exc:
+                print(f"[ws] answer failed: {exc!r}", flush=True)
+                q.put_nowait({"role": "system", "text": agent.UNAVAILABLE})
+                continue
             history.append({"role": "user", "content": msg})
             history.append({"role": "assistant", "content": reply})
             history[:] = history[-20:]  # cap thread memory
@@ -599,7 +606,17 @@ async def ws(websocket: WebSocket):
     rt = asyncio.create_task(reader())
     wt = asyncio.create_task(writer())
     try:
-        await asyncio.wait({rt, wt}, return_when=asyncio.FIRST_COMPLETED)
+        done, _ = await asyncio.wait({rt, wt}, return_when=asyncio.FIRST_COMPLETED)
+        # A task that died on anything but the client leaving used to close the chat silently
+        # (#183-9). Say so before closing, so the crew knows to reconnect.
+        exc = next((t.exception() for t in done if not t.cancelled() and t.exception()), None)
+        if exc is not None and not isinstance(exc, WebSocketDisconnect):
+            print(f"[ws] chat session ended: {exc!r}", flush=True)
+            try:
+                await websocket.send_json({"role": "system", "text": agent.UNAVAILABLE})
+                await websocket.close(code=1011)
+            except Exception:
+                pass
     finally:
         rt.cancel()
         wt.cancel()
