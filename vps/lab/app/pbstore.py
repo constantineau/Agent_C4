@@ -187,7 +187,7 @@ def list_bundles():
     order = lambda x: (x.get("signed_at") or 0, x["_mtime"], x["id"])  # noqa: E731
     seen = {}
     for x in sorted(out, key=order):
-        k = (x.get("race_id"), x.get("course_id"))
+        k = json.dumps([x.get("race_id"), x.get("course_id")], sort_keys=True, default=str)
         seen[k] = x["rev"] = seen.get(k, 0) + 1
         del x["_mtime"]
     out.sort(key=lambda x: x.get("generated_at") or 0, reverse=True)

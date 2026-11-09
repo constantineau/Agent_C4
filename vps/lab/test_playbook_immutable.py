@@ -185,11 +185,12 @@ pbstore.save(bad)
 bad2 = synthesis.sign_bundle({"race_id": "r1", "course_id": "odd2", "variants": [{"id": "q"}]})
 bad2["signature"]["signed_at"] = "broken"
 pbstore.save(bad2)
+pbstore.save({"race_id": "r1", "course_id": [], "variants": []})      # a malformed freeze
 try:
     row = next(b for b in pbstore.list_bundles() if b["course_id"] == "odd")
     check("listed, its times blank (the page formats them)",
           row["signed_at"] is None and row["generated_at"] is None)
-except TypeError as exc:
+except (TypeError, StopIteration) as exc:
     check(f"listed ({exc})", False)
 
 print("ok" if ok else "FAILED")
