@@ -287,7 +287,8 @@ def _hazard_keep(safety_depth_m):
 def layers_in_bbox(bbox, cache_dir: str = None, safety_depth_m: float = 3.0) -> dict:
     """ENC obstacle polygons by role, clipped to bbox=(n,s,w,e). Mirrors `coastline.layers_in_bbox`.
 
-    Returns {"land":[poly], "shoal":[poly], "obstruction":[poly]} — every polygon is BLOCKED water
+    Returns {"land":[poly], "shoal":[poly], "obstruction":[poly], "depth_areas": n} — every polygon is
+    BLOCKED water
     (no `lakes`/`islands` carve: ENC LNDARE is land-only, water is everything else). `shoal` and
     `obstruction` are filtered by `safety_depth_m` (= boat draft + under-keel margin), so a different
     boat/draft re-filters the same cached GeoJSON without re-running GDAL. Empty if ENC isn't prepped
@@ -298,10 +299,15 @@ def layers_in_bbox(bbox, cache_dir: str = None, safety_depth_m: float = 3.0) -> 
     land, shoal, obstr = [], [], []
     shoal_keep = _shoal_keep(safety_depth_m)
     hazard_keep = _hazard_keep(safety_depth_m)
+    depth_areas = [0]       # every DEPARE read, deep or shallow: were depths charted at all (#242)
+
+    def _depare(props):
+        depth_areas[0] += 1
+        return shoal_keep(props)
     for cell in cells:
         name = cell["name"]
         land += _load_polys(os.path.join(ed, f"{name}_LNDARE.json"))
-        shoal += _load_polys(os.path.join(ed, f"{name}_DEPARE.json"), keep=shoal_keep)
+        shoal += _load_polys(os.path.join(ed, f"{name}_DEPARE.json"), keep=_depare)
         for lyr in ("OBSTRN", "UWTROC"):
             obstr += _load_polys(os.path.join(ed, f"{name}_{lyr}.json"), keep=hazard_keep)
     # clip to polygons whose extent actually touches the bbox (cells overlap their neighbours)
@@ -314,7 +320,8 @@ def layers_in_bbox(bbox, cache_dir: str = None, safety_depth_m: float = 3.0) -> 
 
     return {"land": [p for p in land if _in(p)],
             "shoal": [p for p in shoal if _in(p)],
-            "obstruction": [p for p in obstr if _in(p)]}
+            "obstruction": [p for p in obstr if _in(p)],
+            "depth_areas": depth_areas[0]}
 
 
 def available(cache_dir: str = None) -> bool:

@@ -34,7 +34,7 @@ def bundle_verdict(bundle, overrides=None):
     with no verdict at all counts as not proven."""
     problems = []
     for label, s in _route_entries(bundle):
-        if not isinstance(s, dict):
+        if not isinstance(s, dict) or (s.get("ok") is not True and not s.get("problems")):
             problems.append({"route": label, "code": "unchecked", "mark": None,
                              "text": "Not checked."})
             continue

@@ -230,6 +230,10 @@ try:
     try:
         fl = OB.build_for_course(course("port"), "c", BBOX, use_cache=False, source="enc")
         check("ENC land without depth areas: depth not ok", fl.depth == "none", fl.depth)
+        enc.layers_in_bbox = lambda bbox, cache_dir=None, depth=None: {"land": [LAND], "shoal": [],
+                                                                       "depth_areas": 12}
+        fd = OB.build_for_course(course("port"), "c", BBOX, use_cache=False, source="enc")
+        check("ENC depth areas, all deep: depth ok", fd.depth == "ok", fd.depth)
         enc.layers_in_bbox = lambda bbox, cache_dir=None, depth=None: {"land": [LAND], "shoal": [LAND]}
         fs = OB.build_for_course(course("port"), "c", BBOX, use_cache=False, source="enc")
         check("ENC with depth areas: depth ok", fs.depth == "ok", fs.depth)
@@ -287,6 +291,10 @@ vb = RS.bundle_verdict(b_bad)
 check("one play on the wrong side: not ok, named", not vb["ok"] and vb["problems"][0]["route"] == "Late")
 b_none = dict(b_ok, variants=[{"id": "left", "route": {"path": []}}])
 check("a route with no verdict: not ok", not RS.bundle_verdict(b_none)["ok"])
+b_empty = dict(b_ok, variants=[{"id": "left", "route": {"path": []}, "safety": {}}],
+               consensus={"safety": {"ok": False}})
+check("verdicts that aren't ok, with no problems listed: not ok", not RS.bundle_verdict(b_empty)["ok"])
+check("...and refused under a top-level ok", RS.refusal(dict(b_empty, safety=good)) is not None)
 check("refusal: none when ok", RS.refusal(dict(b_ok, safety=v)) is None)
 check("refusal: old bundle", RS.refusal({"variants": []}) == RS.OLD_BUNDLE)
 check("refusal: says why", "wrong side" in (RS.refusal(dict(b_bad, safety=vb)) or ""))
