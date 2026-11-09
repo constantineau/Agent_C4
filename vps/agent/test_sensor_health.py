@@ -725,7 +725,7 @@ check(f"a stale course is not paired with fresh headings ({h_lost['status']}: {h
 check("...and the reason says the course is missing, not that the boat is slow",
       "no GPS course" in h_lost["reason"])
 check("a course 1 s away still pairs (the uplink and the archive are both whole seconds)",
-      sh.assess(GpsLost(gap_s=-599), conditions={"channels": HEALTHY})["heading"]["samples"] >= 1)
+      sh.assess(GpsLost(gap_s=1), conditions={"channels": HEALTHY})["heading"]["samples"] >= 1)
 
 print("\n" + ("PASS" if ok else "FAIL"))
 raise SystemExit(0 if ok else 1)
