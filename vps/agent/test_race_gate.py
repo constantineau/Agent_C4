@@ -86,6 +86,12 @@ def aboard():
             "checklist": ds.get_checklist(), "watch": ds.get_watch_plan()}
 
 
+def finish():
+    """End the recording session AND racing (two switches since #241: LOG, then "Race over")."""
+    racelog.end()
+    racelog.race_over()
+
+
 def loaded(r):
     return r.status_code == 200 and r.json().get("loaded") is not False
 
@@ -98,7 +104,7 @@ print("LOG start with no kind (old clients) is always a race")
 check("nothing in the stores → no pre-selection of Race", client.get("/session").json()["homework_aboard"] is False)
 r = client.post("/session/start", json={}).json()
 check("nothing aboard, no kind → RACE (fails closed)", r["active"]["kind"] == "race")
-racelog.end()
+finish()
 check("an unknown kind is refused", client.post("/session/start", json={"kind": "regatta"}).json()["ok"] is False)
 
 print("the engine has no file way in for a playbook (only /playbook/load, through the gate)")
@@ -126,10 +132,10 @@ check("/session says homework is aboard (from the stores)", client.get("/session
 r = client.post("/session/start", json={}).json()
 check("no kind → race", r["active"]["kind"] == "race")
 check("…and the gate is closed", refused(client.post("/fleet/load", json={"fleet": []})))
-racelog.end()
+finish()
 r = client.post("/session/start", json={"kind": "practice"}).json()
 check("the crew's explicit Practice is kept", r["active"]["kind"] == "practice")
-racelog.end()
+finish()
 check("the pre-selection reads the stores: course, fleet and playbook all aboard",
       engine_app.racegate.homework_aboard_detail() == {"course": True, "fleet": True, "playbook": True})
 check("no marker file: an upgraded boat with homework in its stores is right",
@@ -182,9 +188,40 @@ check("tap-a-block edit (set_on) taken while racing", r.status_code == 200
 r = client.post("/sails/state", json={"hoisted": "J1"})
 check("sail state taken", r.status_code == 200)
 
-print("race session ended → loads taken again")
+print("#241: recording and racing are separate; only 'Race over' ends racing")
 racelog.end()
-check("playbook loads after the finish", loaded(client.post("/playbook/load", json=BUNDLE)))
+check("LOG end (the recording session) does NOT end racing: loads still refused",
+      refused(client.post("/playbook/load", json=BUNDLE)))
+st = client.get("/session").json()["race"]
+check("/session says racing, with the race start the iPad sends back",
+      st["racing"] is True and st["since"] and st["suggest_over"] is False)
+check("engine restart mid-race: a fresh store on the same DB is still racing (persisted)",
+      racelog.race_state(type(datasource.active())())["racing"] is True)
+r = client.post("/race/over", json={"since": st["since"] - 3600}).json()
+check("Race over for an older race start: 'Already ended', still racing",
+      r == {"ok": False, "note": "Already ended"} and racegate.racing())
+r = client.post("/race/over", json={"since": st["since"]}).json()
+check("Race over (the race the iPad shows) ends racing", r["ok"] and not racegate.racing())
+check("…and shore loads are taken again", loaded(client.post("/playbook/load", json=BUNDLE)))
+check("Race over when not racing: 'Not racing'",
+      client.post("/race/over", json={}).json() == {"ok": False, "note": "Not racing"})
+racelog.start(name="Practice", kind="practice")
+check("a practice session never starts racing", not racegate.racing())
+racelog.end()
+racelog.start(name="Race", kind="race")
+racelog.start(name="Practice", kind="practice")       # auto-ends the race session
+check("a practice LOG start after a race session doesn't end racing", racegate.racing())
+finish()
+
+print("#241: a boat upgraded mid-race (open race session, no racing state yet) stays racing")
+_ds = datasource.active()
+_ds.session_start("Old race", None, "race", time.time())
+with _ds._store() as db:
+    db.execute("DELETE FROM kv WHERE key = 'race_state'")
+check("the open race session reads as racing", racegate.racing())
+racelog.end()
+check("…and is written down, so closing that session doesn't end racing", racegate.racing())
+finish()
 
 print("race log unreadable → treated as racing (fail closed)")
 saved_src = racelog._src
@@ -206,7 +243,7 @@ check("lock held inside the gate", held["lock"] and not racing)
 check("a race start waits for the load to finish", held["blocked"])
 check("…then starts, and the next load is refused",
       refused(client.post("/playbook/load", json=BUNDLE)))
-racelog.end()
+finish()
 
 print("the playbook goes on to the Orin from inside the gate")
 FORWARDS.clear()

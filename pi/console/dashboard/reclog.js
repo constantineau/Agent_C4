@@ -2,7 +2,8 @@
    Loaded by index.html ahead of dashboard.js (window.C4RecLog) and required by
    pi/console/test_reclog.js under node.
 
-   Frozen at the gun: a RACE session is what makes the boat refuse shore homework. So starting the
+   Frozen at the gun: starting a RACE session starts racing (the boat refuses shore homework until
+   the crew taps Race over, #241). So starting the
    log asks Race or Practice (one extra tap, two big buttons), pre-selecting Race when Deploy
    homework (a course, fleet or playbook) is aboard, and always sends the kind it got. */
 (function (root) {
@@ -34,7 +35,23 @@
     return { kind: kind };
   }
 
-  const api = { preselect: preselect, label: label, startBody: startBody, PICK_MS: PICK_MS };
+  /* RACE OVER button (#241). Racing (no shore loading) is its own state, apart from LOG: only
+     this button ends it. Hidden unless racing. The boat may ask "Race over?" after a long stop;
+     it is still the crew's two taps that end it. */
+  const OVER_ARM_MS = 5000;    // the second tap must come within this
+  function raceOverLabel(race, opts) {
+    const o = opts || {};
+    if (!race || !race.racing) return null;          // hidden
+    if (o.armed) return "Tap again to end";
+    return race.suggest_over ? "Race over?" : "Race over";
+  }
+  /* the /race/over body: the race start this button shows, so a newer race is never ended */
+  function raceOverBody(race) {
+    return { since: race && race.since != null ? race.since : null };
+  }
+
+  const api = { preselect: preselect, label: label, startBody: startBody, PICK_MS: PICK_MS,
+    raceOverLabel: raceOverLabel, raceOverBody: raceOverBody, OVER_ARM_MS: OVER_ARM_MS };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.C4RecLog = api;
 })(typeof window !== "undefined" ? window : this);

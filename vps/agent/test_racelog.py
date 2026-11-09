@@ -149,7 +149,7 @@ class MotionDS(StubDS):
 def parked(underway_h, still_h, kn=6.0):
     """Under way until `underway_h` ago, then stopped, one sample a minute."""
     rows = [(underway_h + m / 60.0, kn) for m in range(240, 0, -1)]
-    rows += [(h, 0.1) for h in [still_h * (1 - i / 200.0) for i in range(200)]]
+    rows += [(still_h - m / 60.0, 0.1) for m in range(int(still_h * 60))]
     return sorted(rows, key=lambda r: -r[0])
 
 
@@ -176,7 +176,7 @@ r = racelog.autoclose(now=NOW)
 check("a nearly-silent bus is NOT read as a parked boat — silence is not evidence",
       r["closed"] is False and "not closing" in r["note"] and ds.session_current() is not None)
 
-ds = fresh(MotionDS([(h / 10.0, 0.1) for h in range(1, 400)]))  # plenty of samples, never moved
+ds = fresh(MotionDS([(m / 60.0, 0.1) for m in range(1, 2400)]))  # plenty of samples, never moved
 r = racelog.autoclose(now=NOW)
 check("no under-way moment anywhere in the look-back -> refuses, and says a human must close it",
       r["closed"] is False and "from the iPad" in r["note"])
@@ -226,6 +226,130 @@ ds = fresh(MotionDS(parked(underway_h=20, still_h=19)))
 check("RACELOG_AUTOCLOSE_IDLE_H=0 disables it entirely",
       racelog.autoclose(now=NOW)["closed"] is False and ds.session_current() is not None)
 racelog.AUTOCLOSE_IDLE_H = 12.0
+
+print("1c) #241: a hole in the record never counts toward closing")
+# Under way until 20 h ago, stopped 19 h..13 h ago, NOTHING for 11 h (bus down), stopped again
+# for the last 2 h. The old rule (30+ readings in the last 12 h, none under way) closed this.
+holed = [(20 + m / 60.0, 6.0) for m in range(240, 0, -1)]
+holed += [(19 - m / 60.0, 0.1) for m in range(6 * 60)]
+holed += [(2 - m / 60.0, 0.1) for m in range(2 * 60)]
+ds = fresh(MotionDS(holed))
+r = racelog.autoclose(now=NOW)
+check("stopped 19 h on paper, but with an 11 h hole: NOT closed (only 2 h unbroken)",
+      r["closed"] is False and ds.session_current() is not None)
+check("still_since: the newest reading under way -> None",
+      racelog.still_since([(NOW - 60, 0.1), (NOW - 1, 5.0)], NOW) is None)
+check("still_since: the newest reading older than the max gap -> None (no evidence now)",
+      racelog.still_since([(NOW - 3600, 0.1)], NOW) is None)
+check("still_since: a hole restarts the stretch",
+      racelog.still_since([(NOW - 4000, 0.1), (NOW - 100, 0.1), (NOW - 10, 0.1)], NOW) == NOW - 100)
+
+
+class RaceDS(MotionDS):
+    """MotionDS + the persisted racing state (the engine kv)."""
+
+    def __init__(self, plan):
+        super().__init__(plan)
+        self.race = None
+
+    def race_state(self):
+        return dict(self.race) if self.race is not None else None
+
+    def save_race_state(self, blob, only_if_absent=False):
+        if only_if_absent and self.race is not None:
+            return
+        self.race = dict(blob)
+
+
+def racing_ds(plan, race_h_ago):
+    """A race started `race_h_ago` (the gun tap), with an SOG record `plan`."""
+    ds = RaceDS(plan)
+    racelog.datasource.active = lambda: ds
+    racelog.deviation._load_playbook = lambda: None
+    racelog.start(name="Race", kind="race")
+    ds.race["since"] = NOW - race_h_ago * 3600.0
+    ds.rows[-1]["start_ts"] = ds.race["since"]
+    racelog._race_check.update(t=0.0, since=None, still_h=0.0)
+    racelog._last_check[0] = 0.0
+    return ds
+
+
+from app import racegate  # noqa: E402
+
+print("1d) #241: racing is its own state; the crew ends it")
+ds = racing_ds(parked(underway_h=20, still_h=19), race_h_ago=30)
+check("a race LOG start starts racing", racegate.racing() and ds.race["racing"] is True)
+r = racelog.autoclose(now=NOW)
+check("the recording session auto-closes (retention) ...", r["closed"] and ds.session_current() is None)
+check("... but racing does NOT end with it (shore loading stays closed)", racegate.racing())
+racelog.end()
+check("LOG end doesn't end racing either", racegate.racing())
+r = racelog.race_over(since=ds.race["since"] - 1)
+check("Race over for another race start: 'Already ended'", r == {"ok": False, "note": "Already ended"}
+      and racegate.racing())
+r = racelog.race_over(since=ds.race["since"])
+check("Race over ends racing", r["ok"] and not racegate.racing() and ds.race["ended_by"] == "crew")
+check("Race over twice: 'Not racing'", racelog.race_over() == {"ok": False, "note": "Not racing"})
+ds = racing_ds([], race_h_ago=1)
+check("abandoned race (no movement record at all): Race over still ends it",
+      racelog.race_over()["ok"] and not racegate.racing())
+ds = racing_ds([], race_h_ago=1)
+ds.race_state = lambda: (_ for _ in ()).throw(OSError("db locked"))
+check("racing state unreadable -> racing (fail closed), in the gate and on the iPad",
+      racegate.racing() and racelog.race_status(now=NOW)["racing"] is True)
+
+print("1e) #241: 'Race over?' is only a suggestion; 24 h of unbroken stillness is the fallback")
+ds = racing_ds(parked(underway_h=3, still_h=2), race_h_ago=6)
+st = racelog.race_status(now=NOW)
+check("stopped 2 h -> the iPad asks 'Race over?', still racing",
+      st["racing"] and st["suggest_over"] and racegate.racing())
+ds = racing_ds(parked(underway_h=1, still_h=0.5), race_h_ago=6)
+st = racelog.race_status(now=NOW)
+check("stopped 30 min -> no question yet", st["racing"] and not st["suggest_over"])
+calm = [(4 + m / 60.0, 5.0) for m in range(60, 0, -1)]
+calm += [(4 - m / 60.0, 0.1) for m in range(30)] + [(0.5 - m / 60.0, 0.1) for m in range(30)]
+ds = racing_ds(calm, race_h_ago=6)
+st = racelog.race_status(now=NOW)
+check("30 min stopped, a 3 h hole, 30 min stopped -> no question (the hole doesn't count)",
+      st["racing"] and not st["suggest_over"] and st["still_h"] < 1)
+ds = racing_ds([(h, 0.1) for h in (3.0, 2.5, 2.0)], race_h_ago=6)
+st = racelog.race_status(now=NOW)
+check("boat powered down (no recent readings) -> no question, still racing",
+      st["racing"] and not st["suggest_over"])
+ds = racing_ds(parked(underway_h=26, still_h=25), race_h_ago=30)
+st = racelog.race_status(now=NOW)
+check("stopped 25 h unbroken -> the boat ends racing itself, and says so",
+      st["racing"] is False and st["ended_by"] == "auto" and not racegate.racing())
+long_hole = [(31 + m / 60.0, 6.0) for m in range(60, 0, -1)]
+long_hole += [(30 - m / 60.0, 0.1) for m in range(14 * 60)]
+long_hole += [(15 - m / 60.0, 0.1) for m in range(15 * 60)]     # 1 h hole at 16..15 h ago
+ds = racing_ds(long_hole, race_h_ago=32)
+st = racelog.race_status(now=NOW)
+check("30 h 'stopped' with a 1 h hole -> NOT ended (15 h unbroken), only asked",
+      st["racing"] and st["suggest_over"] and racegate.racing())
+ds = racing_ds(parked(underway_h=40, still_h=39), race_h_ago=10)
+st = racelog.race_status(now=NOW)
+check("stillness before the gun doesn't count (raced 10 h, all stopped): asked, not ended",
+      st["racing"] and 9 < st["still_h"] <= 10.1)
+ds = racing_ds(parked(underway_h=26, still_h=25), race_h_ago=30)
+racelog.RACE_OVER_FALLBACK_H = 0.0
+st = racelog.race_status(now=NOW)
+check("RACE_OVER_FALLBACK_H=0 turns the fallback off", st["racing"] and racegate.racing())
+racelog.RACE_OVER_FALLBACK_H = 24.0
+ds = racing_ds(parked(underway_h=3, still_h=2), race_h_ago=6)
+check("status() carries the racing state for the iPad",
+      racelog.status()["race"]["suggest_over"] is True)
+
+print("1f) #241: upgraded boat — an open race session with no racing state yet")
+ds = RaceDS([])
+racelog.datasource.active = lambda: ds
+ds.session_start("Old race", None, "race", NOW - 3600)
+check("reads as racing, and is written down", racegate.racing() and ds.race["racing"] is True)
+racelog.end()
+check("closing that session doesn't end racing", racegate.racing())
+ds = RaceDS([])
+racelog.datasource.active = lambda: ds
+check("no session, no state: not racing", not racegate.racing())
 
 print("2) archiver retention prune — sessions kept, day sails erased, fail-safe")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "pi", "archiver"))

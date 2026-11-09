@@ -861,6 +861,24 @@ class OnboardSource:
             return [{"id": r[0], "name": r[1], "race_id": r[2], "kind": r[3],
                      "start_ts": r[4], "end_ts": r[5]} for r in rows]
 
+    # --- racing (RRS 41), kept apart from the recording sessions above ------
+    def race_state(self):
+        """The persisted racing state ({racing, since, ...}) from the engine kv, or None if it has
+        never been written (a boat upgraded from the one-switch race log)."""
+        import json
+        with self._store() as db:
+            row = db.execute("SELECT value FROM kv WHERE key = 'race_state'").fetchone()
+            return json.loads(row["value"]) if row else None
+
+    def save_race_state(self, blob, only_if_absent=False):
+        """Persist the racing state. `only_if_absent` writes only when no state exists yet (the
+        one-time upgrade), so it can never overwrite a crew tap."""
+        import json
+        tail = "DO NOTHING" if only_if_absent else "DO UPDATE SET value = excluded.value"
+        with self._store() as db:
+            db.execute("INSERT INTO kv (key, value) VALUES ('race_state', ?) "
+                       "ON CONFLICT(key) " + tail, (json.dumps(blob),))
+
     def sail_log(self, since=None, until=None):
         """[{ts, flying, reef, out_of_service}] time-ordered — the crew sail history."""
         import json
