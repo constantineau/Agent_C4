@@ -108,6 +108,29 @@ want = O._polar_speed(P, 8.5, b8) * math.cos(math.radians(b8)) / math.cos(math.r
 check("...at the two-tack speed made good", up is not None and abs(up - want) < 0.01, f"{up} vs {want}")
 check("a corner step with no wind anywhere near: no speed",
       O._corner_speed(NoWind(8.5, 0.0), P, LAT0, LON0, 0, 270.0) is None)
+# Codex on #287: the boards a tacked corner step assumes are obstacle-checked, not just the chord
+a_ = (LAT0, LON0)
+b_ = (LAT0 + 0.1 / 60.0, LON0)                                   # 0.1 nm dead upwind
+tk = O._corner_tacks(Steady(8.5, 0.0), P, a_, b_, 0)
+check("a step dead upwind: two ways to tack it", tk is not None and len(tk) == 2)
+if tk:
+    c1, c2 = tk[0][1], tk[1][1]
+    check("...one tack point each side of the chord",
+          (c1[1] - LON0) * (c2[1] - LON0) < 0 and abs(abs(c1[1] - LON0) - abs(c2[1] - LON0)) < 1e-9)
+    check("...on the beat angle from the start",
+          abs(abs(O._wrap180(O._bearing(*a_, *c1))) - b8) < 0.5
+          and abs(O._wrap180(O._bearing(*c1, *b_)) + O._wrap180(O._bearing(*a_, *c1))) < 0.5,
+          f"{O._bearing(*a_, *c1):.1f} then {O._bearing(*c1, *b_):.1f}, beat {b8}")
+check("a reaching step: sailed straight, no tacks",
+      O._corner_tacks(Steady(8.5, 0.0), P, a_, (LAT0, LON0 + 0.1 * DLON), 0) is None)
+# rock both sides of the chord, the chord itself clear: both boards hit, so the corner is refused
+fine = OB.ObstacleField((LAT0 + 0.01, LAT0 - 0.01, LON0 - 0.01, LON0 + 0.01), res_deg=0.0002)
+for x0, x1 in ((-0.002, -0.0004), (0.0004, 0.002)):
+    fine._fill_polygon([[(LON0 + x0, LAT0), (LON0 + x1, LAT0), (LON0 + x1, LAT0 + 0.002),
+                         (LON0 + x0, LAT0 + 0.002)]], 1, "coastline")
+check("(the chord alone is clear)", not fine.crosses(*a_, *b_))
+check("...but every way of tacking it is blocked",
+      tk and all(fine.crosses(*p, *c) or fine.crosses(*c, *q) for p, c, q in tk))
 
 print("2) the string test on hand-made paths")
 M = (0.0, 0.0)

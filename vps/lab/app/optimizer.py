@@ -926,6 +926,35 @@ def _corner_speed(wf, P, lat, lon, t, hdg, helm=1.0):
     return sp if sp >= 0.3 else None
 
 
+def _corner_tacks(wf, P, a, b, t):
+    """The two ways to tack from `a` to `b` round a mark when the step points inside the no-go
+    zone: [(a, c, b)] with c the tack point (one tack first, or the other), or None when the step
+    is sailed straight (or there's no wind: `_corner_speed` refuses that step anyway). `_corner_speed`
+    prices the step at the beat VMG; these are the boards that price assumes, so they get the
+    obstacle check too, not just the straight chord."""
+    w = wf.wind_at(a[0], a[1], t) or _nearby_wind(wf, a[0], a[1], t)
+    if not w:
+        return None
+    tws, twd = w
+    if _polar_speed(P, tws, abs(_wrap180(_bearing(*a, *b) - twd))) >= 0.3:
+        return None
+    beat = _vmg_twa(P, tws, "beat")
+    if beat is None:
+        return None
+    k = math.cos(math.radians(a[0]))
+    ve, vn = (b[1] - a[1]) * 60.0 * k, (b[0] - a[0]) * 60.0        # a → b, nm east / north
+    u = [(math.sin(math.radians(h)), math.cos(math.radians(h))) for h in (twd + beat, twd - beat)]
+    det = u[0][0] * u[1][1] - u[0][1] * u[1][0]
+    if abs(det) < 1e-9:
+        return None
+    s1 = (ve * u[1][1] - vn * u[1][0]) / det                         # v = s1·u0 + s2·u1
+    s2 = (u[0][0] * vn - u[0][1] * ve) / det
+    out = []
+    for d, (ue, un) in ((s1, u[0]), (s2, u[1])):
+        out.append((a, (a[0] + d * un / 60.0, a[1] + d * ue / (60.0 * max(0.1, k))), b))
+    return out
+
+
 def _sweep(pts, mlat, mlon):
     """Signed angle (deg) the bearing from the mark to the boat turns through along `pts`
     [(lat, lon)]: negative = the boat went counter-clockwise round it (mark on its left)."""
@@ -1210,7 +1239,16 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
         if corner:
             last = leg["path"][-1]
             pts = [(last["lat"], last["lon"])] + corner
-            if leg_obs is not None and any(leg_obs.crosses(*a, *b) for a, b in zip(pts, pts[1:])):
+            def _blocked(a, b, tt):
+                if leg_obs.crosses(*a, *b):
+                    return True
+                # a step tacked through (into the wind): at least one way of tacking it must be
+                # clear too, not just the chord (Codex on #287). Steps are a 0.1 nm circle's
+                # chords, so the boards stay within about that of it.
+                tk = _corner_tacks(wf, P, a, b, tt)
+                return tk is not None and all(leg_obs.crosses(*p, *c) or leg_obs.crosses(*c, *q)
+                                              for p, c, q in tk)
+            if leg_obs is not None and any(_blocked(a, b, leg["eta"]) for a, b in zip(pts, pts[1:])):
                 corner = []            # no clean way round at the standoff: the side check judges
             else:
                 # priced like any step: the polar at the wind there (forecast, or borrowed within
