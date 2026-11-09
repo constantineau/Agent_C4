@@ -12,10 +12,16 @@ calls (the Opus critique is never reached; the deterministic one is checked):
      jib bands) and the chart the bundle was frozen with;
   3) the fields really move the oracle (a fair current shortens it in the real optimizer);
   4) with no current/wave data for the race time, regret says so plainly (report, caveat,
-     deterministic critique) instead of silently comparing different things.
+     deterministic critique) instead of silently comparing different things;
+  5) the boat model is the PLAN's: a new bundle saves its routing inputs, the oracle uses them
+     even after the boat's settings change, and an older bundle says it used today's boat.
 """
 import os
+import tempfile
 
+_tmp = tempfile.mkdtemp()
+os.environ["INGESTED_DIR"] = _tmp
+os.environ["PLAYBOOK_DIR"] = os.path.join(_tmp, "playbooks")
 HERE = os.path.dirname(os.path.abspath(__file__))
 for _seed in (os.path.join(HERE, "..", "db", "seed"), "/srv"):
     if os.path.exists(os.path.join(_seed, "polars_sr33.sql")):
@@ -63,11 +69,16 @@ ORACLE = {"available": True, "complete": True, "total_hours": 1.0, "path": PATH,
 PB = {"course_id": "x", "start_epoch": T0, "recommended": "middle",
       "variants": [{"id": "middle", "total_hours": 1.25}],
       "chart": {"source": "enc", "safety_depth_m": 3.1}}
-BOAT = {"boat_id": "c4", "helm_factor": 0.9,
-        "polar_adjustments": [{"tws": 12, "twa": 90, "mult": 1.03}],
-        "wave_coeffs": {"hs_deadband": 0.3, "k_up": 0.1, "k_reach": 0.05, "k_down": 0.02,
-                        "floor": 0.6},
-        "jib_crossovers": [{"sail": "J2", "tws_min": 14}]}
+ROUTING = {"helm_factor": 0.9,
+           "polar_adjustments": [{"tws": 12, "twa": 90, "mult": 1.03}],
+           "wave_coeffs": {"hs_deadband": 0.3, "k_up": 0.1, "k_reach": 0.05, "k_down": 0.02,
+                           "floor": 0.6},
+           "jib_crossovers": [{"sail": "J2", "tws_min": 14}],
+           "sail_config": {"code0": {"enabled": True}}}
+PB["routing"] = ROUTING
+# the boat as it is at debrief time: settings changed since the plan was frozen
+BOAT = {"boat_id": "c4", "helm_factor": 0.7, "polar_adjustments": [],
+        "jib_crossovers": [{"sail": "J3", "tws_min": 18}]}
 
 _saved = (JD._oracle_windfield, JD.optimizer.optimize_course, CURMOD.build_currentfield,
           WAVEMOD.build_wavefield)
@@ -101,16 +112,19 @@ try:
     check("oracle got the very wave field the boat is scored on",
           k.get("waves") is wv and tac.get("wave") is wv)
 
-    print("2) ...on the same boat model and chart the playbook routes on")
-    check(f"helm factor 0.9 (got {k.get('helm_factor')})", k.get("helm_factor") == 0.9)
-    check("approved polar adjustments", k.get("polar_adjustments") == BOAT["polar_adjustments"])
-    check("approved wave calibration", k.get("wave_coeffs") == BOAT["wave_coeffs"])
-    check("jib bands", k.get("jib_crossovers") == BOAT["jib_crossovers"])
+    print("2) ...on the plan's boat model and chart, not today's boat")
+    check(f"the plan's helm factor 0.9, not today's 0.7 (got {k.get('helm_factor')})",
+          k.get("helm_factor") == 0.9)
+    check("the plan's polar adjustments", k.get("polar_adjustments") == ROUTING["polar_adjustments"])
+    check("the plan's wave calibration", k.get("wave_coeffs") == ROUTING["wave_coeffs"])
+    check("the plan's jib bands", k.get("jib_crossovers") == ROUTING["jib_crossovers"])
+    check("the plan's sail config", k.get("sail_config") == ROUTING["sail_config"])
     check("the chart the bundle was frozen with",
           k.get("source") == "enc" and k.get("safety_depth") == 3.1)
     b = tac["regret"].get("basis") or {}
-    check("regret basis says current and waves are in",
-          b.get("current") is True and b.get("waves") is True and not b.get("note"))
+    check("regret basis says current, waves and the plan's boat are in",
+          b.get("current") is True and b.get("waves") is True and b.get("boat") == "plan"
+          and not b.get("note"))
     check("no 'without' line when both are in", "without" not in tac.get("caveat", ""))
     check("regret is plan minus oracle (15 min)", tac["regret"]["minutes"] == 15)
 
@@ -118,6 +132,21 @@ try:
     run(cur, wv, pb={k_: v for k_, v in PB.items() if k_ != "chart"})
     check("no chart snapshot: optimizer defaults, not None forced in",
           "source" not in calls[-1] and "safety_depth" not in calls[-1])
+
+    print("5) an older bundle with no saved routing uses today's boat, and says so")
+    old = run(cur, wv, pb={k_: v for k_, v in PB.items() if k_ != "routing"})
+    k = calls[-1]
+    ob = old["regret"]["basis"]
+    check("today's helm factor 0.7", k.get("helm_factor") == 0.7)
+    check("today's jib bands", k.get("jib_crossovers") == BOAT["jib_crossovers"])
+    print(f"     {ob.get('note')}")
+    check("basis says the boat is today's, with a plain note",
+          ob.get("boat") == "now" and "today's" in (ob.get("note") or ""))
+    oldrep = {"tactics_available": True, "race_name": "Test",
+              "regret": {**old["regret"], "side_matched": False, "recommended_side": "left"},
+              "actual_track": {}}
+    check("...and the Learnings bullet doesn't print an empty 'without ()'",
+          "without" not in JD._deterministic_critique(oldrep)["proposed_learnings"])
 
     # ---- 4) no data: say so plainly ------------------------------------------------------------
     print("4) no current/wave data for the race time is said plainly")
@@ -151,12 +180,54 @@ try:
     JD.optimizer.optimize_course = lambda *a, **k: _real_opt(
         *a, **{**k, "avoid": False, "emit_exploration": False,
                **{n: None for n in ("source", "safety_depth")}})
-    still = run(CURMOD.ZeroCurrent(), WAVEMOD.ZeroWave(), boat={})
-    fair = run(CURMOD.ConstantCurrent(0.0, 2.0), WAVEMOD.ZeroWave(), boat={})
+    bare = {**PB, "routing": {}}
+    still = run(CURMOD.ZeroCurrent(), WAVEMOD.ZeroWave(), boat={}, pb=bare)
+    fair = run(CURMOD.ConstantCurrent(0.0, 2.0), WAVEMOD.ZeroWave(), boat={}, pb=bare)
     h0 = (still.get("oracle_summary") or {}).get("total_hours")
     h1 = (fair.get("oracle_summary") or {}).get("total_hours")
     print(f"     still water {h0} h, 2 kn fair current {h1} h")
     check("fair current makes the oracle faster", h0 and h1 and h1 < h0 - 0.05)
+finally:
+    (JD._oracle_windfield, JD.optimizer.optimize_course, CURMOD.build_currentfield,
+     WAVEMOD.build_wavefield) = _saved
+
+# ---- 5b) a new bundle saves the inputs it was routed with -------------------------------------
+print("5b) synthesis saves the routing inputs in the bundle")
+from app import synthesis as SYN   # noqa: E402
+SYN.API_KEY = None
+seen = {}
+
+
+def fake_build(*a, **k):
+    seen.update(k)
+    return {"available": True, "course_id": "c", "start_epoch": 100, "variants": [],
+            "consensus": {}, "windfield": {"models": []}}
+
+
+SYN.pb.build_playbook = fake_build
+SYN.race_def.course_hash = lambda *a, **k: "h"
+SYN._boat_model = lambda: {"boat_id": "c4"}
+SYN._opus_synthesis = lambda *a, **k: None
+SYN._deterministic_synthesis = lambda *a, **k: {"variants": {}, "recommended": None,
+                                                "decision_tree": [], "headline": ""}
+SYN._venue_stats = lambda *a, **k: None
+SYN._build_plays = lambda *a, **k: ([], None, None)
+SYN._buoy_stations = lambda *a, **k: []
+SYN._fingerprint = lambda *a, **k: None
+SYN.first_beat_rhumb = lambda *a, **k: None
+bnd = SYN.synthesize({"race_id": "r1", "name": "Race"}, "c", 100, ["gfs"], **ROUTING)
+rt = bnd.get("routing") or {}
+check("bundle.routing holds exactly what the routes were built with",
+      all(rt.get(n) == ROUTING[n] == seen.get(n) for n in ROUTING))
+JD.optimizer.optimize_course = lambda *a, **k: calls.append(k) or dict(ORACLE)
+JD._oracle_windfield = lambda *a, **k: (WF(), "archive")
+try:
+    calls.clear()
+    CURMOD.build_currentfield = lambda *a, **k: CURMOD.ConstantCurrent(0.0, 1.0)
+    WAVEMOD.build_wavefield = lambda *a, **k: WAVEMOD.ConstantWave(1.0)
+    t5 = JD._tactics(NS, "r", {**PB, "routing": rt}, None, lambda *_: None, boat=BOAT)
+    check("the debrief's oracle reads it back (helm 0.9 from the bundle)",
+          calls and calls[-1].get("helm_factor") == 0.9 and t5["regret"]["basis"]["boat"] == "plan")
 finally:
     (JD._oracle_windfield, JD.optimizer.optimize_course, CURMOD.build_currentfield,
      WAVEMOD.build_wavefield) = _saved
