@@ -11,6 +11,7 @@ Pins:
 
 No network: the posts are faked. Run in-container (make ci): python3 /repo/vps/lab/test_deploy_locked_playbook.py
 """
+import json
 import os
 import sys
 import tempfile
@@ -72,7 +73,7 @@ posted.clear()
 res = D.push("r1")
 check("refused before any post", posted == [] and res["ok"] is False and res["refused"] is True
       and res["steps"] == [])
-check("says why, plainly", res["detail"] == "Locked playbook is missing. Lock one in again. Not sent.")
+check("says why, plainly", res["detail"] == "Active playbook is missing. Activate one again. Not sent.")
 check("readiness says so before Push", D.readiness("r1")["lock_problem"] == D.PB_MISSING)
 check("nothing recorded as a push (nothing reached the boat)", (D.last_push()["last"] or {}).get("ok"))
 
@@ -85,7 +86,8 @@ check("refused before any post", posted == [] and res["refused"]
       and res["detail"] == D.PB_MISSING + D.NOT_SENT)
 
 print("the locked bundle fails its signature (edited after the freeze):")
-pbstore.save(dict(bundle, variants=[{"id": "a"}, {"id": "b"}]))
+with open(pbstore._path(pid), "w") as f:   # saves never overwrite (#249): edit the file itself
+    json.dump(dict(bundle, variants=[{"id": "a"}, {"id": "b"}]), f)
 posted.clear()
 res = D.push("r1")
 check("refused before any post", posted == [] and res["refused"]
@@ -93,7 +95,8 @@ check("refused before any post", posted == [] and res["refused"]
 check("readiness says so", D.readiness("r1")["lock_problem"] == D.PB_BROKEN)
 
 print("a damaged signature field (not a dict):")
-pbstore.save(dict(bundle, signature="broken"))
+with open(pbstore._path(pid), "w") as f:
+    json.dump(dict(bundle, signature="broken"), f)
 posted.clear()
 try:
     res = D.push("r1")

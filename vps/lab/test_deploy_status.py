@@ -53,9 +53,10 @@ def fake_post(url, body, timeout=25):
 D.package = lambda rid, course_id=None, **kw: {"race_name": "Race One", "course_load": {}, "fleet_load": {},
                                          "checklist_load": {"items": []}, "watch_load": None}
 D.pbstore.get = lambda pid: BUNDLE if pid == "r1__100" else None
-# the lock's signature is stale on purpose (a re-freeze under the same id): the record must carry
-# the signature of the bundle actually sent
-labstate.set("deploy:r1", {"playbook_id": "r1__100", "signature": "cd" * 8, "locked_at": 50})
+# the record must carry the signature of the bundle actually sent (a lock whose signature no
+# longer matches its bundle is refused instead: test_playbook_immutable.py, #249)
+labstate.set("deploy:r1", {"playbook_id": "r1__100", "signature": BUNDLE["signature"]["value"][:16],
+                           "locked_at": 50})
 D._post_json = fake_post
 # the Orin assets step (chart + boat profile) is pinned in test_deploy_orin_assets.py
 D.orinassets.build = lambda d, cid, bundle=None: ({"schema": "c4.orin-assets/v1"}, [])

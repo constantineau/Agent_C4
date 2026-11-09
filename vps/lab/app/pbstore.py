@@ -1,37 +1,98 @@
 """Frozen-playbook store — persist the signed Lab-2b bundles on a writable volume.
 
 A frozen bundle is the pre-race homework deployed onboard (posted to the Pi engine's
-`/playbook/load`, which passes it to the copilot). One file per freeze, id = `<race_id>__<start_epoch>` so re-freezing the same race
-+ start overwrites (re-running the gameplan supersedes the old one). The raw bytes are the signed
-artifact — `get_raw` returns them verbatim so a download preserves the signature.
+`/playbook/load`, which passes it to the copilot). A frozen bundle is IMMUTABLE BYTES (#249): its id
+is `<race_id>__<course_id>__<digest>`, the digest being the sha256 of its signed content (the same
+bytes its signature covers), and a file, once written, is never written again. Re-freezing makes a
+new REVISION under a new id; Deploy pushes only the revision activated there (deploy.lock_in), so a
+re-freeze changes nothing on the boat until someone activates it.
+
+Old ids (`<race_id>__<start_epoch>`, before #249) still resolve: those files stay where they are,
+byte for byte, and are listed as revisions like any other. Nothing writes to that name any more, so
+an old lock keeps pointing at the bytes it had. The raw bytes are the signed artifact — `get_raw`
+returns them verbatim so a download preserves the signature.
 """
+import contextlib
 import glob
+import hashlib
 import json
 import os
 import re
-
-from . import atomicio
+import tempfile
 
 PLAYBOOK_DIR = os.environ.get("PLAYBOOK_DIR", "/srv/playbooks")
+DIGEST_LEN = 12                          # hex chars of the content digest in the id
 
 
 def _safe(s) -> str:
     return re.sub(r"[^a-z0-9_-]", "", str(s or "").lower())
 
 
+def content_digest(bundle: dict) -> str:
+    """sha256 over the bundle minus its `signature` — for a signed bundle this IS its signature
+    value (synthesis.canonical_bytes), so the id names exactly the bytes the boat verifies."""
+    content = {k: v for k, v in bundle.items() if k != "signature"}
+    return hashlib.sha256(json.dumps(content, sort_keys=True, separators=(",", ":"),
+                                     ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
 def bundle_id(bundle: dict) -> str:
+    """`<race>__<course>__<digest>`: one id per distinct content, never reused for other bytes."""
+    return (f"{_safe(bundle.get('race_id')) or 'race'}__{_safe(bundle.get('course_id')) or 'course'}"
+            f"__{content_digest(bundle)[:DIGEST_LEN]}")
+
+
+def legacy_id(bundle: dict) -> str:
+    """The pre-#249 id (`<race>__<start_epoch>`), which re-freezing used to overwrite."""
     return f"{_safe(bundle.get('race_id')) or 'race'}__{int(bundle.get('start_epoch') or 0)}"
+
+
+def is_legacy(pid: str) -> bool:
+    return not re.fullmatch(r".+__.+__[0-9a-f]{%d}" % DIGEST_LEN, str(pid or ""))
 
 
 def _path(pid: str) -> str:
     return os.path.join(PLAYBOOK_DIR, f"{_safe(pid)}.json")
 
 
+def _fsync_dir(d):
+    fd = os.open(d, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _write_new(path: str, data: bytes) -> bool:
+    """Create `path` with `data` atomically, never replacing an existing file: the bytes go to a
+    temp file, are fsynced, then hard-linked into place (fails if the name exists). A reader sees
+    no file or the whole file. True if written, False if the file was already there."""
+    d = os.path.dirname(path)
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=f".{os.path.basename(path)}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        try:
+            os.link(tmp, path)
+        except FileExistsError:
+            return False
+        _fsync_dir(d)
+        return True
+    finally:
+        with contextlib.suppress(OSError):
+            os.remove(tmp)
+
+
 def save(bundle: dict) -> str:
-    """Persist a (signed) bundle; returns its id. The file IS the onboard-loadable artifact."""
+    """Persist a (signed) bundle as a new revision; returns its id. The file IS the onboard-loadable
+    artifact. Never overwrites: the same content frozen again keeps the first file's bytes (its
+    signature stays the one any lock or push recorded)."""
     os.makedirs(PLAYBOOK_DIR, exist_ok=True)
     pid = bundle_id(bundle)
-    atomicio.write_json(_path(pid), bundle, indent=2)
+    data = json.dumps(bundle, indent=2).encode("utf-8")
+    _write_new(_path(pid), data)
     return pid
 
 
@@ -59,7 +120,8 @@ def get_raw(pid: str):
 
 
 def list_bundles():
-    """Summaries for the frozen-playbook list, newest first."""
+    """Summaries for the frozen-playbook list, newest first. `rev` numbers the revisions of each
+    race + course in freeze order (1 = first)."""
     out = []
     for f in sorted(glob.glob(os.path.join(PLAYBOOK_DIR, "*.json"))):
         try:
@@ -71,15 +133,22 @@ def list_bundles():
             continue
         sig = b.get("signature")
         sig = sig if isinstance(sig, dict) else {}      # a damaged file lists as unsigned, no crash
+        pid = os.path.splitext(os.path.basename(f))[0]
         out.append({
-            "id": os.path.splitext(os.path.basename(f))[0],
+            "id": pid, "legacy": is_legacy(pid),
             "race_id": b.get("race_id"), "race_name": b.get("race_name"),
             "course_id": b.get("course_id"), "start_epoch": b.get("start_epoch"),
             "generated_at": b.get("generated_at"), "headline": b.get("headline"),
             "recommended": b.get("recommended"), "n_variants": len(b.get("variants", [])),
             "degraded": bool(b.get("degraded")), "warnings": list(b.get("warnings") or []),
             "signed": bool(sig.get("value")), "signed_at": sig.get("signed_at"),
+            "signature": str(sig.get("value") or "")[:16],
             "synth_model": (b.get("provenance") or {}).get("synth_model"),
         })
+    order = lambda x: (x.get("signed_at") or 0, x.get("generated_at") or 0, x["id"])  # noqa: E731
+    seen = {}
+    for x in sorted(out, key=order):
+        k = (x.get("race_id"), x.get("course_id"))
+        seen[k] = x["rev"] = seen.get(k, 0) + 1
     out.sort(key=lambda x: x.get("generated_at") or 0, reverse=True)
     return out

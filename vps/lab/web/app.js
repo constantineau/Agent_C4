@@ -2160,10 +2160,11 @@ function pbDecisionTree(b) {
 
 function pbSigBox(b) {
   const sig = b.signature;
-  const pid = (b.race_id || "race") + "__" + Math.round(b.start_epoch || 0);
+  const pid = Pb.frozenId || "";        // the server's id (race, course, content digest: #249)
   return `<div class="pb-sig">
     <span class="pill ok">🔒 Frozen</span>
     <code title="sha256">${esc((sig.value || "").slice(0, 16))}…</code>
+    <span class="muted" style="font-size:12px">New revision. Activate it in <a href="#deploy">Deploy</a> to send it.</span>
     <button class="mini" onclick="downloadPlaybook('${esc(pid)}')">Download playbook</button>
     <button class="mini" onclick="downloadPlaybookGpx('${esc(pid)}')" title="Marks, route and options for the chartplotter. Load it with ActiveCaptain or a memory card.">⤓ GPX for chartplotter</button>
   </div>`;
@@ -2206,7 +2207,7 @@ async function freezePlaybook() {
   try {
     const res = await apiPost("/api/playbook/freeze", { bundle: Pb.result });
     const r = await res.json();
-    if (r.frozen) Pb.result = r.bundle;
+    if (r.frozen) { Pb.result = r.bundle; Pb.frozenId = r.id; }
   } catch (e) { /* leave the draft; user can retry */ }
   Pb.freezing = false; renderGameplan();
 }
@@ -2279,7 +2280,7 @@ function plumePanelInner() {
   const ctl = `<div class="opt-controls">
       <button onclick="plumeRefresh()" ${Plume.busy ? "disabled" : ""}>${Plume.busy ? "Checking…" : "Check for new runs now"}</button>
       ${tgt && tgt.race_id === Dep.raceId ? `<button class="ghost" onclick="plumeFollow(false)">Follow the boat's race</button>`
-        : `<button class="ghost" onclick="plumeFollow(true)">Pin to this race${(Dep.ready.lock_in || {}).playbook_id ? " + locked playbook" : ""}</button>`}
+        : `<button class="ghost" onclick="plumeFollow(true)">Pin to this race${(Dep.ready.lock_in || {}).playbook_id ? " + active playbook" : ""}</button>`}
       <span class="muted">${follows}${d.recorder ? " · recorder on (hourly)" : " · recorder off (PLUME_RECORDER)"}</span>
     </div>${Plume.note ? `<div class="muted" style="font-size:12px">${esc(Plume.note)}</div>` : ""}`;
   const push = lp ? `<div class="muted" style="font-size:12px;margin-top:6px">Last push to the boat: ${esc(depStamp(lp.at))} (${esc(depAgo(lp.at))}) · ${lp.ok ? "✓ loaded" : "✗ " + esc(lp.error || "failed")}</div>` : `<div class="muted" style="font-size:12px;margin-top:6px">Not pushed to the boat yet.</div>`;
@@ -2325,12 +2326,15 @@ function paintDeploy() {
   const c = r.course, fl = r.fleet, ck = r.checklists;
   const pbReady = pbs.length > 0;
   const fmtDate = (e) => e ? new Date(e * 1000).toISOString().slice(0, 16).replace("T", " ") + "Z" : "—";
-  const pbOpt = (b) => `<option value="${esc(b.id)}" ${b.id === Dep.sel ? "selected" : ""}>${
-    esc((b.degraded ? "⚠ " : "") + (b.signed ? "🔒 " : "draft ") + (b.headline || b.id).slice(0, 60))} · ${b.n_variants} options · ${esc(fmtDate(b.generated_at))}</option>`;
+  // each freeze is its own revision (#249); only the ACTIVE one (the lock) is pushed
+  const isActive = (b) => !!lock && b.id === lock.playbook_id && !r.lock_problem
+    && !((b.signed_at || 0) > (lock.locked_at || 0));
+  const pbRow = (b) => `<div class="dep-row"${b.id === Dep.sel ? ' style="font-weight:600"' : ""}>${isActive(b)
+      ? `<span class="pill ok">● Active</span>`
+      : `<button class="mini" onclick="depActivate('${esc(b.id)}')" ${Dep.busy ? "disabled" : ""}>Activate</button>`}
+    <span><a href="javascript:void 0" onclick="Dep.sel='${esc(b.id)}'; paintDeploy()">Rev ${b.rev || "?"}</a> · ${esc(b.course_id || "—")} · ${esc(fmtDate(b.signed_at || b.generated_at))} · ${
+      esc((b.degraded ? "⚠ " : "") + (b.signed ? "" : "draft · ") + (b.headline || "").slice(0, 60))} · ${b.n_variants} options${b.signature ? ` · <code>${esc(b.signature)}…</code>` : ""}${b.legacy ? ` <span class="muted">(old id)</span>` : ""}</span></div>`;
   const selPb = pbs.find((b) => b.id === Dep.sel) || {};
-  // the selection IS the lock (and the file wasn't re-signed since): nothing to re-lock (#98 G70)
-  const isLocked = !!lock && Dep.sel === lock.playbook_id && !r.lock_problem
-    && !((selPb.signed_at || 0) > (lock.locked_at || 0));
 
   document.getElementById("view").innerHTML = `<div class="opt">
     <div class="card">
@@ -2352,14 +2356,12 @@ function paintDeploy() {
     </div>
 
     <div class="card">
-      <h3>Lock in the playbook</h3>
+      <h3>Playbook revisions</h3>
       ${pbReady ? `
-        <div class="opt-controls">
-          <label>Playbook <select id="depPb" onchange="Dep.sel=this.value; paintDeploy()" style="min-width:340px">${pbs.map(pbOpt).join("")}</select></label>
-          <button id="depLock" class="${lock ? "mini" : ""}" onclick="depLockIn()" ${Dep.busy || isLocked ? "disabled" : ""}>${isLocked ? "✓ Locked in" : lock ? "Re-lock selected" : "🔒 Lock in selected playbook"}</button>
-        </div>
-        ${pbWarnings(selPb)}` : `<div class="muted">No frozen playbook yet. Build one in <a href="#gameplan">Gameplan</a> and freeze it. Then lock it in here.</div>`}
-      ${lock ? `<div class="banner ok" style="margin-top:10px">🔒 Locked in: <code>${esc(lock.playbook_id)}</code>${lock.signed ? ` · signature <code>${esc(lock.signature)}…</code>` : " · <b>unsigned</b>"} · ${esc(fmtDate(lock.locked_at))}</div>` : ""}
+        <div class="muted" style="font-size:12px;margin-bottom:6px">Each freeze is a new revision. Only the active one is sent.</div>
+        <div class="dep-grid" id="depPbs">${pbs.map(pbRow).join("")}</div>
+        ${pbWarnings(selPb)}` : `<div class="muted">No frozen playbook yet. Build one in <a href="#gameplan">Gameplan</a> and freeze it. Then activate it here.</div>`}
+      ${lock ? `<div class="banner ok" style="margin-top:10px">● Active: <code>${esc(lock.playbook_id)}</code>${lock.signed ? ` · signature <code>${esc(lock.signature)}…</code>` : " · <b>unsigned</b>"} · ${esc(fmtDate(lock.locked_at))}</div>` : `${pbReady ? `<div class="banner warn" style="margin-top:10px">No active revision. Activate one to send it.</div>` : ""}`}
       ${r.lock_problem ? `<div class="banner warn" style="margin-top:10px">⚠ ${esc(r.lock_problem)}</div>` : ""}
       ${r.lock_note && !r.lock_problem ? `<div class="banner warn" style="margin-top:10px">⚠ ${esc(r.lock_note)}</div>` : ""}
     </div>
@@ -2418,11 +2420,10 @@ function boatPanelInner() {
       warns.push(`The Pi engine has <b>${esc(epb.race_id)}</b> but the Orin copilot has <b>${esc(cpb.race_id)}</b>. Push again so both match.`);
     if (liveRace && liveRace !== rid) {
       warns.push(`The boat is loaded for <b>${esc(liveRace)}</b>, not this race.`);
-    } else if (lock && epb && epb.id && (epb.id !== lock.playbook_id ||
-               (epb.signature || "") !== (lock.signature || "")))
-      warns.push(epb.id === lock.playbook_id
-        ? `The boat has a different version of <code>${esc(epb.id)}</code> than the one locked in. Re-lock and push.`
-        : `The boat's playbook (<code>${esc(epb.id)}</code>) is not the one locked in here (<code>${esc(lock.playbook_id)}</code>). Push to replace it.`);
+    } else if (lock && epb && epb.id && (epb.signature || "") !== (lock.signature || ""))
+      // compared by signature: the engine names a bundle by race + start (the pre-#249 id), the
+      // Lab by race + course + digest; the signature is what both agree on
+      warns.push(`The boat's playbook (<code>${esc(epb.signature || epb.id)}</code>) is not the active one here (<code>${esc(lock.signature || lock.playbook_id)}</code>). Push to replace it.`);
     if ((epb && epb.loaded === false) || (cop.reachable && cpb && !cpb.loaded))
       warns.push(`${epb && epb.loaded === false ? "The Pi engine" : "The Orin copilot"} has no playbook loaded.`);
   }
@@ -2451,9 +2452,9 @@ function boatPanelInner() {
     const ref = (last && last.ok) ? last : lastOk;
     if (ref && ref.race_id !== rid) { if (!liveRace) warns.push(`The last complete push was for <b>${esc(ref.race_name || ref.race_id)}</b>, not this race. This race's prep hasn't gone to the boat.`); }
     else if (lock && ref && ref.playbook_id === lock.playbook_id && (ref.signature || "") !== (lock.signature || ""))
-      warns.push(`The last push sent a different version of <code>${esc(lock.playbook_id)}</code> than the one locked in. Re-lock and push.`);
-    else if (lock && ref && ref.playbook_id !== lock.playbook_id) warns.push(`The locked playbook <code>${esc(lock.playbook_id)}</code> hasn't reached the boat. The last full push (${esc(depAgo(ref.at))}) ${ref.playbook_id ? `sent <code>${esc(ref.playbook_id)}</code>` : "sent no playbook"}.`);
-    else if (lock && ref && ref.at < lock.locked_at) warns.push("You re-locked after the last push. Push again to be sure the boat matches.");
+      warns.push(`The last push sent a different version of <code>${esc(lock.playbook_id)}</code> than the active one. Activate it again and push.`);
+    else if (lock && ref && ref.playbook_id !== lock.playbook_id) warns.push(`The active playbook <code>${esc(lock.playbook_id)}</code> hasn't reached the boat. The last full push (${esc(depAgo(ref.at))}) ${ref.playbook_id ? `sent <code>${esc(ref.playbook_id)}</code>` : "sent no playbook"}.`);
+    else if (lock && ref && ref.at < lock.locked_at) warns.push("You activated a revision after the last push. Push again to be sure the boat matches.");
   }
 
   return `<h3>On the boat <span class="muted" style="font-weight:400">— what's loaded now</span>
@@ -2535,13 +2536,14 @@ async function depPush() {
   depCheckBoat();                 // the push is now on record — re-read what the boat holds
 }
 
-async function depLockIn() {
-  if (!Dep.sel) return;
-  Dep.busy = true;
+// Activate a frozen revision (#249): the lock is the one revision Push sends.
+async function depActivate(pid) {
+  if (!pid) return;
+  Dep.sel = pid; Dep.busy = true;
   try {
-    const res = await apiPost("/api/deploy/lock-in", { race_id: Dep.raceId, playbook_id: Dep.sel });
+    const res = await apiPost("/api/deploy/lock-in", { race_id: Dep.raceId, playbook_id: pid });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || "error " + res.status);
-  } catch (e) { alert("Lock-in failed: " + e.message); }
+  } catch (e) { alert("Couldn't activate: " + e.message); }
   Dep.busy = false; renderDeploy();
 }
 

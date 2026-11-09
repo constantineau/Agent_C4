@@ -142,7 +142,7 @@ RACE["r1"] = copy.deepcopy(BASE)
 print("a bundle frozen before this check (no course_hash):")
 old = {k: v for k, v in signed.items() if k not in ("course_hash", "signature")}
 old = synthesis.sign_bundle(old)
-pbstore.save(old)
+D.lock_in("r1", pbstore.save(old))       # a new revision (#249), activated
 RACE["r1"]["courses"][0]["marks"][0]["lat"] = 45.3                 # can't tell: not refused
 posted.clear()
 res = D.push("r1")
