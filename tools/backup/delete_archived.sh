@@ -34,7 +34,7 @@ for rel in "$@"; do
     [ -f "$f" ] || { skip "not on disk"; continue; }
     want=$(awk -v r="$rel" '$2 == r {print $1}' "$MAN" | head -1)
     [ -n "$want" ] || { skip "no manifest entry — never archived"; continue; }
-    before=$(stat -c '%s %Y %i' "$f")
+    before=$(stat -c '%s %y %z %i' "$f")
     got=$(sha256sum "$f" | awk '{print $1}')
     [ "$want" = "$got" ] || { skip "local file no longer matches the archived hash"; continue; }
     # The restore: the whole object, decompressed, hashed. pipefail makes a failed read or a
@@ -43,7 +43,9 @@ for rel in "$@"; do
     rc=$?
     [ "$rc" -eq 0 ] || { skip "could not restore $rel.zst from GCS (rc $rc)"; continue; }
     [ "$restored" = "$got" ] || { skip "restored copy hashes to $restored, not $got"; continue; }
-    [ "$(stat -c '%s %Y %i' "$f")" = "$before" ] \
+    # Size, nanosecond mtime, ctime (any write moves it, and it cannot be set back) and inode.
+    # These are closed archive files with no writer; this catches a mistake, it is not a lock.
+    [ "$(stat -c '%s %y %z %i' "$f")" = "$before" ] \
         || { skip "local file changed while it was being checked"; continue; }
     bytes=$(stat -c %s "$f")
     rm -f "$f"
