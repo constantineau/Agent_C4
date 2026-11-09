@@ -69,8 +69,12 @@ def race_start(definition):
 # A lock names a frozen bundle by id. If that file is gone, unreadable or fails its signature, a
 # push must not go ahead without it: the boat would keep the previous race's playbook while every
 # other step shows green.
-PB_MISSING = "Locked playbook is missing. Lock one in again."
-PB_BROKEN = "Locked playbook fails its check. Freeze it again."
+PB_MISSING = "Active playbook is missing. Activate one again."
+PB_BROKEN = "Active playbook fails its check. Freeze it again."
+# A lock (the ACTIVE revision, #249) records the signature it was activated with. The bytes under
+# an id never change any more, but a lock from before #249 may name an old `<race>__<start>` file
+# that a re-freeze overwrote after it was activated: never push bytes nobody activated.
+PB_CHANGED = "Playbook changed since it was activated. Activate it again."
 NOT_SENT = " Not sent."
 # ... and routed on today's course (#150): the bundle carries the course hash it was routed on
 # (race_def.course_hash, signed with it). An SI amendment saved after the freeze changes the hash.
@@ -86,10 +90,11 @@ def locked_bundle(race_id, lock=None):
     if not pid:
         return None, None
     b = pbstore.get(pid)
-    return (None, p) if (p := bundle_problem(race_id, b, store.get_race(race_id) or {})) else (b, None)
+    p = bundle_problem(race_id, b, store.get_race(race_id) or {}, lock)
+    return (None, p) if p else (b, None)
 
 
-def bundle_problem(race_id, b, definition):
+def bundle_problem(race_id, b, definition, lock=None):
     """Why a locked bundle `b` can't go out beside `definition`, or None. Push passes the exact
     definition it sends, so the check and the send can't see two different reads (#150)."""
     if not isinstance(b, dict) or b.get("race_id") != race_id:
@@ -97,6 +102,9 @@ def bundle_problem(race_id, b, definition):
     from . import synthesis
     if not synthesis.verify_bundle(b):
         return PB_BROKEN
+    want_sig = (lock or {}).get("signature")
+    if want_sig and not str(b["signature"]["value"]).startswith(want_sig):
+        return PB_CHANGED
     want = b.get("course_hash")
     if want and want != race_def.course_hash(definition or {}, b.get("course_id")):
         return PB_COURSE
@@ -149,7 +157,7 @@ def _push(race_id):
     if missing:
         return {"race_id": race_id, "ok": False, "refused": True, "steps": [],
                 "detail": MISSING_MARKS.format(names=", ".join(map(str, missing)))}
-    problem = bundle_problem(race_id, bundle, sent_def) if lock.get("playbook_id") else None
+    problem = bundle_problem(race_id, bundle, sent_def, lock) if lock.get("playbook_id") else None
     if problem:                          # before any post: never a push that skips the playbook
         return {"race_id": race_id, "playbook_id": lock.get("playbook_id"), "ok": False,
                 "refused": True, "detail": problem + NOT_SENT, "steps": []}
@@ -388,8 +396,9 @@ def readiness(race_id, course_id=None):
 
 
 def lock_in(race_id, playbook_id):
-    """Record the chosen frozen playbook as this race's deploy homework. Returns the lock state, or
-    None if the playbook isn't a bundle for this race."""
+    """ACTIVATE a frozen revision (#249): record it as this race's deploy homework, the only one
+    Push sends. A re-freeze makes a new revision and changes nothing until it is activated here.
+    Returns the lock state, or None if the playbook isn't a bundle for this race."""
     b = pbstore.get(playbook_id)
     if not b or b.get("race_id") != race_id:
         return None

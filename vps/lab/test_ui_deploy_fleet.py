@@ -40,14 +40,14 @@ print("#98 G68 only Push to boat is the red button:")
 check("both downloads are mini buttons",
       '<button class="mini" onclick="downloadPlaybook(' in panel
       and '<button class="mini" onclick="downloadHomework(' in panel)
-check("Re-lock is a mini button", 'id="depLock" class="${lock ? "mini" : ""}"' in deploy)
+check("Activate is a mini button", '<button class="mini" onclick="depActivate(' in deploy)
 check("Push to boat stays a bare (red) button", '<button id="depPush" onclick="depPush()"' in panel)
 
-print("#98 G70 Re-lock is off when the selection is already locked:")
-check("isLocked compares the selection with the lock", "Dep.sel === lock.playbook_id" in deploy)
-check("a lock problem or a newer signature keeps Re-lock on",
-      "!r.lock_problem" in deploy and "selPb.signed_at" in deploy)
-check("the button is disabled and says so", "Dep.busy || isLocked" in deploy and "✓ Locked in" in deploy)
+print("#98 G70 / #249 the active revision shows as Active, the others offer Activate:")
+check("active = the lock's revision", "b.id === lock.playbook_id" in deploy)
+check("a lock problem or a newer signature offers Activate again",
+      "!r.lock_problem" in deploy and "b.signed_at" in deploy)
+check("the active one says so", "● Active" in deploy and "isActive(b)" in deploy)
 
 guns, glance, fleet = fn("fleetGunsCard"), fn("fleetGlance"), fn("paintFleet")
 print("#99 G25 the roster isn't pushed below the fold:")

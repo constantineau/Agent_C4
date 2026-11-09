@@ -772,6 +772,8 @@ async def playbook_freeze(body: dict):
                                  "bundle": bundle}, status_code=422)
     bundle = synthesis.sign_bundle(bundle)
     pid = pbstore.save(bundle)
+    # a new revision (#249), or the same content frozen before: then the first file's bytes stand
+    bundle = pbstore.get(pid) or bundle
     return {"frozen": True, "id": pid, "signature": bundle["signature"],
             "verified": synthesis.verify_bundle(bundle), "bundle": bundle}
 

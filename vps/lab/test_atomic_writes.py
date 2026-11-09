@@ -50,34 +50,36 @@ check("the previous playbook is still there, whole", pbstore.get(pid) == good)
 check("no temp file left behind", sorted(os.listdir(_tmp)) == [f"{pid}.json"])
 
 print("a reader never sees a half-written playbook")
-bundles = [dict(good, steps=[c * 50] * 4000) for c in "xyz"]
+# saves never overwrite (#249): each new content is a new file, which must appear whole or not at all
+bundles = [dict(good, steps=[c * 50] * 4000, n=i) for i, c in enumerate("xyz" * 50)]
 stop, seen, bad_reads = threading.Event(), [0], []
 
 
 def reader():
-    p = pbstore._path(pid)
     while not stop.is_set():
-        try:
-            with open(p) as f:
-                txt = f.read()
-        except FileNotFoundError:
-            bad_reads.append("missing")
-            continue
-        try:
-            json.loads(txt)
-            seen[0] += 1
-        except ValueError:
-            bad_reads.append(len(txt))
+        for p in [os.path.join(_tmp, n) for n in os.listdir(_tmp) if n.endswith(".json")]:
+            try:
+                with open(p) as f:
+                    txt = f.read()
+            except FileNotFoundError:
+                bad_reads.append("vanished")
+                continue
+            try:
+                json.loads(txt)
+                seen[0] += 1
+            except ValueError:
+                bad_reads.append(len(txt))
 
 
 t = threading.Thread(target=reader)
 t.start()
-for i in range(150):
-    pbstore.save(bundles[i % 3])
+for b in bundles:
+    pbstore.save(b)
 stop.set()
 t.join()
-check(f"{seen[0]} reads during 150 rewrites, none empty, partial or missing "
-      f"({len(bad_reads)} bad)", seen[0] > 0 and not bad_reads)
+check(f"{seen[0]} reads during 150 saves, none partial ({len(bad_reads)} bad)",
+      seen[0] > 0 and not bad_reads)
+check("no temp file left behind", not [n for n in os.listdir(_tmp) if n.endswith(".tmp")])
 
 print("atomicio itself")
 p = os.path.join(_tmp, "sub", "x.json")
