@@ -20,4 +20,6 @@ COPY vps/db/seed/sr33_crossovers.json ./knowledge/sr33_crossovers.json
 COPY pi/engine/engine_app.py ./engine_app.py
 
 EXPOSE 8200
-CMD ["uvicorn", "engine_app:app", "--host", "0.0.0.0", "--port", "8200"]
+# No access log (#184-1): the iPad polls every few seconds, so it is one line per poll on the
+# archive's SD card and drowns the real errors. Errors and warnings still log.
+CMD ["uvicorn", "engine_app:app", "--host", "0.0.0.0", "--port", "8200", "--no-access-log"]

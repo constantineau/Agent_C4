@@ -18,6 +18,10 @@
 #
 # Idempotent: safe to re-run, and re-runs on every `signalk-derived` boot so a plugin
 # reinstall into a fresh sk_config volume gets patched too.
+#
+# Exits non-zero when it cannot patch, including when windGround.js is missing (#171): a missing
+# target means the plugin is absent or its layout changed, and saying "nothing to do" hid that.
+# install-derived.sh catches the failure and turns off only the groundWind calc.
 set -e
 
 PLUGIN_DIR="${1:-/home/node/.signalk/node_modules/signalk-derived-data}"
@@ -25,8 +29,8 @@ F="$PLUGIN_DIR/dist/calcs/windGround.js"
 NEW_PATH="environment.wind.directionTrueGround"
 
 if [ ! -f "$F" ]; then
-  echo "[patch] $F not found — plugin not installed yet, nothing to do"
-  exit 0
+  echo "[patch] FAILED — $F not found (plugin missing, or its file layout changed)" >&2
+  exit 1
 fi
 
 if grep -q "$NEW_PATH" "$F"; then
