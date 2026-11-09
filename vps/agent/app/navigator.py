@@ -215,10 +215,14 @@ def _load_progress(ds, route, marks):
 
 
 def _save_progress(ds, route, rec):
+    """True when the progress is on disk. A failed write (disk full, DB locked) is said out loud:
+    the crew's controls report it rather than claiming a change the next poll won't show."""
     try:
         ds.save_nav_progress(route, rec)
-    except Exception:
-        pass
+        return True
+    except Exception as exc:  # noqa: BLE001
+        print(f"[navigator] progress not saved for {route!r}: {type(exc).__name__}: {exc}", flush=True)
+        return False
 
 
 def _fix_key(s):
@@ -260,10 +264,10 @@ def _advance(route, marks, lat, lon, fix):
         if len(p["fixes"]) < PROGRESS_CONFIRM:
             return floor, rec                          # seen on one fix: not yet
         _pending.pop(route, None)
-        rec["hist"] = (rec["hist"] + [floor])[-HIST_MAX:]
-        rec["i"] = idx
-        _save_progress(ds, route, rec)
-        return idx, rec
+        new = dict(rec, hist=(rec["hist"] + [floor])[-HIST_MAX:], i=idx)
+        if not _save_progress(ds, route, new):
+            return floor, rec                          # not stored: answer what is stored
+        return idx, new
 
 
 def _set_progress(route, change):
@@ -275,14 +279,19 @@ def _set_progress(route, change):
         return {"ok": False, "note": "No course loaded."}
     ds = _store()
     if ds is None:
-        return {"ok": False, "note": "Marks can't be changed here."}
+        return {"ok": False, "no_store": True, "note": "Marks can't be changed here."}
+    saved_failed = False
     with _PROGRESS_LOCK:
         rec = _load_progress(ds, route, marks)
         ok, note = change(rec, marks)
         if ok:
             _pending.pop(route, None)
-            _save_progress(ds, route, rec)
+            if not _save_progress(ds, route, rec):
+                ok, note = False, "Couldn't save. Try again."
+                saved_failed = True
     out = {"ok": ok, "route": route}
+    if saved_failed:
+        out["save_failed"] = True
     if note:
         out["note"] = note
     if ok:
@@ -293,11 +302,13 @@ def _set_progress(route, change):
 
 def start_run(route=None, keep_undo=True):
     """A new navigation run (#246): the next mark is the first one again. Called on a course load
-    (keep_undo False: a new course has nothing to go back to) and on the crew's Start tap (the
-    old position is kept for Undo, so a stray tap mid-race is one tap to put right)."""
+    (keep_undo False: a new course has nothing to go back to) and on the crew's Start tap. The
+    tap keeps the old position for Undo and HOLDS the start until the boat is seen behind the
+    line: otherwise a stray tap mid-race would advance on its own over the next fixes, and one
+    Undo would land on the start instead of the mark the boat was sailing to."""
     def change(rec, marks):
         rec["hist"] = (rec["hist"] + [rec["i"]])[-HIST_MAX:] if keep_undo else []
-        rec.update({"i": 0, "hold": None, "run": int(time.time())})
+        rec.update({"i": 0, "hold": 0 if keep_undo else None, "run": int(time.time())})
         return True, None
     return _set_progress(route, change)
 
@@ -745,6 +756,8 @@ def make_practice_course(leg_nm: float = 1.0):
         datasource.active().save_practice_course(marks)
         set_active("practice")
         _course_changed("practice")      # new marks under the same name: always a new course
-        start_run("practice", keep_undo=False)       # a new course is a new run (#246)
+        run = start_run("practice", keep_undo=False)     # a new course is a new run (#246)
+    if run.get("save_failed"):
+        return {"available": False, "note": "Couldn't reset the marks. Try again."}
     return {"available": True, "route": "practice", "leg_nm": leg_nm,
             "twd": round(twd, 1), "marks": len(marks)}

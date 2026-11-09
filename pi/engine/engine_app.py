@@ -422,7 +422,9 @@ def course_load(body: dict):
             tmp = orinroute.prepare_definition(definition, cid, route, load_id)
             datasource.active().save_course(route, marks)
             navigator.set_active(route)
-            navigator.start_run(route, keep_undo=False)    # a course load is a new run (#246)
+            run = navigator.start_run(route, keep_undo=False)   # a course load is a new run (#246)
+            if run.get("save_failed"):
+                raise RuntimeError(f"navigator run not reset: {run.get('note')}")
             orinroute.set_load_id(route, load_id)
             if tmp:
                 orinroute.commit_definition(tmp)

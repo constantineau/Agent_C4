@@ -136,6 +136,30 @@ check("Start -> first mark again", r.get("ok") and r.get("index") == 0)
 check("navigator says Start is next (south of the line)", idx(fix(43.99)) == 0)
 r = client.post("/navigator/undo").json()
 check("a stray Start is one Undo to put right", r.get("ok") and r.get("index") == 2)
+# a stray Start mid-race, then the boat sails on beyond the start: one Undo still puts it right
+client.post("/navigator/mark", json={"index": 3})
+idx(fix(44.004)); idx(fix(44.0041))
+client.post("/navigator/start")
+fix(44.0042); fix(44.0043); nav = fix(44.0044)
+check("after a stray Start the start is held while the boat is beyond the line", idx(nav) == 0)
+r = client.post("/navigator/undo").json()
+check("... and one Undo goes back to the mark it was sailing to", r.get("ok") and r.get("index") == 3)
+# a progress write that fails is reported, not claimed
+_ds = datasource.active()
+_real_save = _ds.save_nav_progress
+
+
+def _boom(route, blob):
+    raise OSError("disk full")
+
+
+_ds.save_nav_progress = _boom
+r = client.post("/navigator/mark", json={"index": 1}).json()
+check(f"a pick that can't be saved says so ({r.get('note')})", r.get("ok") is False and r.get("note"))
+r = client.post("/course/load", json={"definition": DEF, "course_id": "c"}).json()
+check("a course load whose run can't be reset is not reported loaded", r.get("loaded") is False)
+_ds.save_nav_progress = _real_save
+check("the stored mark is unchanged", idx(fix(44.004)) == 3)
 # race 1 done: sail to the finish
 client.post("/navigator/mark", json={"index": 4})
 check("at the finish", idx(fix(43.999)) == 4)
