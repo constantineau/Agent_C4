@@ -308,7 +308,7 @@ def race_status(now=None, force=False):
     if force or not fresh or now - snap["t"] >= RACE_OVER_CHECK_EVERY_S:
         still_h = 0.0
         try:
-            look_h = RACE_OVER_FALLBACK_H + 1.0
+            look_h = max(RACE_OVER_FALLBACK_H, RACE_OVER_SUGGEST_H) + 1.0
             if since is not None:
                 look_h = min(look_h, max(0.0, (now - float(since)) / 3600.0) + 0.1)
             rows = [(t, v * _MS_TO_KN) for t, v in
