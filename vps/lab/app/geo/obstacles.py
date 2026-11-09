@@ -500,7 +500,8 @@ def build_for_course(definition: dict, course_id, bbox, *, coastline_on=True, zo
     if islands_on and ROUNDSIDE_ISLANDS and barriers:
         _add_barriers(field, _island_rounding_marks(definition, course_id))
 
-    if ck is not None and field.land != "failed":            # a failed load is retried next run
+    # a failed load (shoreline or ENC depths) is retried next run, never served from the cache
+    if ck is not None and field.land != "failed" and field.depth != "failed":
         _cache_put(ck, field)
     return field
 
@@ -617,11 +618,12 @@ def build_leg_fields(definition, course_id, bbox, *, source=None, safety_depth=N
             out.append(base)
             continue
         key = bkey + "|leg" + hashlib.sha1(repr(_barrier_sig(mine)).encode()).hexdigest()[:12]
-        f = _cache_get(key) if base.land != "failed" else None
+        failed = base.land == "failed" or base.depth == "failed"
+        f = _cache_get(key) if not failed else None
         if f is None:
             f = _copy_field(base)
             _add_barriers(f, mine)
-            if base.land != "failed":
+            if not failed:
                 _cache_put(key, f)
         out.append(f)
     return base, out

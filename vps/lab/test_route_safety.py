@@ -219,6 +219,9 @@ enc.ensure_bbox = _enc_down
 try:
     fe = OB.build_for_course(course("port"), "c", BBOX, use_cache=False, source="enc")
     check("ENC failure is recorded on the field", getattr(fe, "depth", None) == "failed")
+    OB._FIELD_CACHE.clear()
+    OB.build_for_course(course("port"), "c", BBOX, source="enc")
+    check("an ENC failure is never cached (retried next run)", not OB._FIELD_CACHE)
     re_ = O.optimize_course(course("port"), "c", 0, Steady(8.5, 0.0), polar=P, obstacles=fe,
                             emit_exploration=False, time_budget_s=60)
     check("ENC failure: depths not checked",
