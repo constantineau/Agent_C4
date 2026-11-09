@@ -191,6 +191,25 @@ finally:
     (JD._oracle_windfield, JD.optimizer.optimize_course, CURMOD.build_currentfield,
      WAVEMOD.build_wavefield) = _saved
 
+# ---- 6) a flat-water plan is compared with a flat-water oracle -----------------------------------
+print("6) a plan built without waves gets an oracle without waves, and says so")
+try:
+    JD._oracle_windfield = lambda *a, **k: (WF(), "archive")
+    JD.optimizer.optimize_course = _spy
+    sea = WAVEMOD.ConstantWave(1.5)
+    t6 = run(CURMOD.ConstantCurrent(0.0, 1.0), sea,
+             pb={**PB, "routing": {**ROUTING, "use_waves": False}})
+    b6 = t6["regret"]["basis"]
+    print(f"     {b6.get('note')}")
+    check("oracle routed on flat water", not getattr(calls[-1].get("waves"), "loaded", True))
+    check("the boat's own speed still gets the real sea state", t6.get("wave") is sea)
+    check("basis: waves out, with the reason",
+          b6.get("waves") is False and "plan didn't use them" in (b6.get("note") or "")
+          and "no data" not in (b6.get("note") or ""))
+finally:
+    (JD._oracle_windfield, JD.optimizer.optimize_course, CURMOD.build_currentfield,
+     WAVEMOD.build_wavefield) = _saved
+
 # ---- 5b) a new bundle saves the inputs it was routed with -------------------------------------
 print("5b) synthesis saves the routing inputs in the bundle")
 from app import synthesis as SYN   # noqa: E402
@@ -215,10 +234,13 @@ SYN._build_plays = lambda *a, **k: ([], None, None)
 SYN._buoy_stations = lambda *a, **k: []
 SYN._fingerprint = lambda *a, **k: None
 SYN.first_beat_rhumb = lambda *a, **k: None
-bnd = SYN.synthesize({"race_id": "r1", "name": "Race"}, "c", 100, ["gfs"], **ROUTING)
+bnd = SYN.synthesize({"race_id": "r1", "name": "Race"}, "c", 100, ["gfs"], use_waves=False,
+                     **ROUTING)
 rt = bnd.get("routing") or {}
 check("bundle.routing holds exactly what the routes were built with",
-      all(rt.get(n) == ROUTING[n] == seen.get(n) for n in ROUTING))
+      all(rt.get(n) == ROUTING[n] == seen.get(n) for n in ROUTING)
+      and rt.get("use_waves") is False and seen.get("use_waves") is False)
+rt = {**rt, "use_waves": True}
 JD.optimizer.optimize_course = lambda *a, **k: calls.append(k) or dict(ORACLE)
 JD._oracle_windfield = lambda *a, **k: (WF(), "archive")
 try:

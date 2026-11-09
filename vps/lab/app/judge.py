@@ -245,7 +245,7 @@ def _own_speed_fields(t, tac, gun, start_epoch, log):
     return cur, wv
 
 
-def _regret_basis(cur, wv, boat_from="plan"):
+def _regret_basis(cur, wv, boat_from="plan", plan_waves=True):
     """Which sea-state fields the oracle routed through (#244). Regret measures the strategy call
     only, so the oracle sails the same current and waves as the boat. When a field could not be
     built for the race time (outside the model domain, or the cycle is no longer served), the
@@ -253,6 +253,12 @@ def _regret_basis(cur, wv, boat_from="plan"):
     has_cur, has_wv = bool(getattr(cur, "loaded", False)), bool(getattr(wv, "loaded", False))
     missing = [n for n, ok in (("current", has_cur), ("waves", has_wv)) if not ok]
     notes = []
+    if not plan_waves:
+        # a plan routed on flat water is compared with a flat-water oracle: otherwise the seaway
+        # alone would read as "time lost" (Codex on #282)
+        has_wv = False
+        missing = [n for n in missing if n != "waves"]
+        notes.append("Time lost is without waves: the plan didn't use them.")
     if missing:
         notes.append(f"Time lost is without {' and '.join(missing)}: no data for the race time.")
     if boat_from != "plan":
@@ -340,9 +346,15 @@ def _tactics(d, race_id, pb, models, log, boat=None):
                 "note": "No wind data for the race time, so tactics can't be checked."}
     log("routing the hindsight-optimal (oracle) course…")
     boat_kw, boat_from = _oracle_boat_kwargs(boat, pb)
-    oracle = optimizer.optimize_course(d, course_id, start, wf, avoid=True, cur=cur, waves=wv,
-                                       **boat_kw)
-    basis = _regret_basis(cur, wv, boat_from)
+    plan_waves = (pb.get("routing") or {}).get("use_waves", True) is not False
+    if plan_waves:
+        oracle_wv = wv
+    else:
+        from .wave import ZeroWave
+        oracle_wv = ZeroWave()     # the boat's own speed is still scored on `wv`
+    oracle = optimizer.optimize_course(d, course_id, start, wf, avoid=True, cur=cur,
+                                       waves=oracle_wv, **boat_kw)
+    basis = _regret_basis(cur, wv, boat_from, plan_waves)
     if not oracle.get("available", True) and oracle.get("note"):
         return {"available": False, "start_epoch": start, "wf": wf, "cur": cur, "wave": wv,
                 "windfield": {**wf.status(), "basis": wind_basis},
