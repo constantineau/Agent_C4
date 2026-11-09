@@ -128,6 +128,17 @@ fine = OB.ObstacleField((LAT0 + 0.01, LAT0 - 0.01, LON0 - 0.01, LON0 + 0.01), re
 for x0, x1 in ((-0.002, -0.0004), (0.0004, 0.002)):
     fine._fill_polygon([[(LON0 + x0, LAT0), (LON0 + x1, LAT0), (LON0 + x1, LAT0 + 0.002),
                          (LON0 + x0, LAT0 + 0.002)]], 1, "coastline")
+# end to end: wind from 330 makes a step round the port windward mark point into the wind. The
+# path must sail it as two boards, never a heading inside the no-go zone (Codex on #287)
+rw = O.optimize_course(course("port"), "c", 0, Steady(8.5, 330.0), polar=P, avoid=False,
+                       emit_exploration=False, time_budget_s=60)
+pw = [(p["lat"], p["lon"]) for p in rw["path"]]
+near = [(a, b) for a, b in zip(pw, pw[1:])
+        if min(O._hav_nm(*a, LAT0 + 3 / 60.0, LON0), O._hav_nm(*b, LAT0 + 3 / 60.0, LON0)) < 0.3
+        and O._hav_nm(*a, *b) > 1e-4]
+worst = min((abs(O._wrap180(O._bearing(*a, *b) - 330.0)) for a, b in near), default=None)
+check("round the mark every step is a heading the boat can sail",
+      rw.get("complete") and worst is not None and worst >= b8 - 1.0, f"closest to the wind {worst}°")
 check("(the chord alone is clear)", not fine.crosses(*a_, *b_))
 check("...but every way of tacking it is blocked",
       tk and all(fine.crosses(*p, *c) or fine.crosses(*c, *q) for p, c, q in tk))
